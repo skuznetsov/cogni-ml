@@ -50,6 +50,7 @@ constrained_gemma_tool_finite_call = false
 tools_json = ENV["GEMMA4_TOOLS_JSON"]?
 literal_force_single = true
 literal_force_span = true
+literal_stop_after_complete = false
 
 OptionParser.parse(ARGV) do |p|
   p.banner = "usage: gemma4_metal_decode_profile [--tokens 42,43] [--generate 8] [--max-seq 1024] [--runs 3]"
@@ -122,6 +123,7 @@ OptionParser.parse(ARGV) do |p|
   end
   p.on("--literal-force-single-off", "Disable forced single-token literal frontier elimination") { literal_force_single = false }
   p.on("--literal-force-span-off", "Disable batched forced literal spans") { literal_force_span = false }
+  p.on("--literal-stop-after-complete", "Stop measured generation when a constrained literal corridor completes") { literal_stop_after_complete = true }
   p.on("-h", "--help", "Show help") { puts p; exit }
 end
 
@@ -408,7 +410,8 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
              literal_index : Gemma4LiteralTokenIndex? = nil,
              literal_remaining_start : Array(String) = [] of String,
              literal_force_single : Bool = true,
-             literal_force_span : Bool = true) : NamedTuple(prefill_ms: Float64, decode_ms: Float64, first_id: Int32, last_id: Int32, token_trace: Array(Int32), cache_route: String, cache_restore_ms: Float64, literal_forced_single: Int32, literal_allowed_head: Int32, literal_forced_span_batches: Int32, literal_forced_span_tokens: Int32)
+             literal_force_span : Bool = true,
+             literal_stop_after_complete : Bool = false) : NamedTuple(prefill_ms: Float64, decode_ms: Float64, decode_tokens: Int32, first_id: Int32, last_id: Int32, token_trace: Array(Int32), cache_route: String, cache_restore_ms: Float64, literal_forced_single: Int32, literal_allowed_head: Int32, literal_forced_span_batches: Int32, literal_forced_span_tokens: Int32)
   state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
 
   ML::GGUF::Qwen35Metal::Profile.reset if profile
@@ -504,7 +507,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
   cur = prefill_head ? next_id : synthetic_decode_token(0)
   token_trace = [cur]
   i = 0
-  while i < generate
+  while i < generate && !(literal_stop_after_complete && decode_mode == "literal" && literal_remaining.empty?)
     pos = decode_only_seed ? i.to_i32 : (prompt.size + i).to_i32
     decode_layer_count = stop_layer || weights.hparams.n_layer
     if start_step = decode_stop_layer_after_step
@@ -562,6 +565,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
           literal_forced_span_batches += 1
           literal_forced_span_tokens += emitted_ids.size
           i += emitted_ids.size
+          break if literal_stop_after_complete && literal_remaining.empty?
           next
         end
       end
@@ -607,6 +611,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
       end
     end
     token_trace << cur
+    break if literal_stop_after_complete && decode_mode == "literal" && literal_remaining.empty?
   end
   decode_ms = (Time.instant - decode_t0).total_milliseconds
 
@@ -615,7 +620,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
     puts ML::GGUF::Qwen35Metal::Profile.report_io
   end
 
-  {prefill_ms: prefill_ms, decode_ms: decode_ms, first_id: next_id, last_id: cur, token_trace: token_trace, cache_route: cache_route, cache_restore_ms: cache_restore_ms, literal_forced_single: literal_forced_single, literal_allowed_head: literal_allowed_head, literal_forced_span_batches: literal_forced_span_batches, literal_forced_span_tokens: literal_forced_span_tokens}
+  {prefill_ms: prefill_ms, decode_ms: decode_ms, decode_tokens: i, first_id: next_id, last_id: cur, token_trace: token_trace, cache_route: cache_route, cache_restore_ms: cache_restore_ms, literal_forced_single: literal_forced_single, literal_allowed_head: literal_allowed_head, literal_forced_span_batches: literal_forced_span_batches, literal_forced_span_tokens: literal_forced_span_tokens}
 end
 
 started = Time.instant
@@ -700,7 +705,7 @@ if root = prompt_cache_root
 end
 
 decode_schedule = decode_stop_layer_after_step ? "#{decode_stop_layer_after_step}:#{decode_stop_layer_after_layer}" : ""
-puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} prompt_text_mode=#{chat_user ? "chat_user" : (prompt_text ? "raw_text" : "token_ids")} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} top1_chain=#{top1_chain} body_chain=#{body_chain} body_chain_note=#{body_chain == 1 ? "llama_bench_parity" : "graph_chunk_known_tokens"} allowed_ids=#{allowed_ids.join(',')} constrained_literal_prefix=#{constrained_literal_prefix || ""} constrained_tool_call_prefix=#{constrained_tool_call_prefix} constrained_tool_required_param_prefix=#{constrained_tool_required_param_prefix} constrained_tool_finite_call=#{constrained_tool_finite_call} constrained_gemma_tool_finite_call=#{constrained_gemma_tool_finite_call} tool_names=#{tool_names.join(',')} literal_options=#{literal_remaining_start.size} literal_force_single=#{literal_force_single} literal_force_span=#{literal_force_span} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} decode_stop_layer_after=#{decode_schedule} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_min_free_mib=#{prompt_cache_snapshot_min_free_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
+puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} prompt_text_mode=#{chat_user ? "chat_user" : (prompt_text ? "raw_text" : "token_ids")} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} top1_chain=#{top1_chain} body_chain=#{body_chain} body_chain_note=#{body_chain == 1 ? "llama_bench_parity" : "graph_chunk_known_tokens"} allowed_ids=#{allowed_ids.join(',')} constrained_literal_prefix=#{constrained_literal_prefix || ""} constrained_tool_call_prefix=#{constrained_tool_call_prefix} constrained_tool_required_param_prefix=#{constrained_tool_required_param_prefix} constrained_tool_finite_call=#{constrained_tool_finite_call} constrained_gemma_tool_finite_call=#{constrained_gemma_tool_finite_call} tool_names=#{tool_names.join(',')} literal_options=#{literal_remaining_start.size} literal_force_single=#{literal_force_single} literal_force_span=#{literal_force_span} literal_stop_after_complete=#{literal_stop_after_complete} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} decode_stop_layer_after=#{decode_schedule} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_min_free_mib=#{prompt_cache_snapshot_min_free_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
 
 warmups.times do
   run_once(
@@ -722,11 +727,13 @@ warmups.times do
     literal_remaining_start: literal_remaining_start,
     literal_force_single: literal_force_single,
     literal_force_span: literal_force_span,
+    literal_stop_after_complete: literal_stop_after_complete,
   )
 end
 
 prefill_samples = [] of Float64
 decode_samples = [] of Float64
+decode_token_counts = [] of Int32
 cache_restore_samples = [] of Float64
 cache_route_counts = Hash(String, Int32).new(0)
 literal_forced_single_total = 0
@@ -756,9 +763,11 @@ runs.times do
     literal_remaining_start: literal_remaining_start,
     literal_force_single: literal_force_single,
     literal_force_span: literal_force_span,
+    literal_stop_after_complete: literal_stop_after_complete,
   )
   prefill_samples << result[:prefill_ms]
   decode_samples << result[:decode_ms]
+  decode_token_counts << result[:decode_tokens]
   cache_route_counts[result[:cache_route]] += 1
   literal_forced_single_total += result[:literal_forced_single]
   literal_allowed_head_total += result[:literal_allowed_head]
@@ -771,10 +780,12 @@ runs.times do
 end
 
 summarize("prefill", prefill_samples, prompt.size)
-summarize("decode", decode_samples, generate)
+decode_rate_tokens = decode_token_counts.empty? ? generate : decode_token_counts.sort[decode_token_counts.size // 2]
+decode_rate_tokens = 1 if decode_rate_tokens <= 0
+summarize("decode", decode_samples, decode_rate_tokens)
 summarize("cache_restore", cache_restore_samples, prompt.size) unless cache_restore_samples.empty?
 decode_p50 = percentile(decode_samples.sort, 0.50)
-puts "decode_ms_per_token_p50=#{(decode_p50 / generate).round(3)} first_id=#{first_id} last_id=#{last_id}"
+puts "decode_ms_per_token_p50=#{(decode_p50 / decode_rate_tokens).round(3)} decode_tokens=#{decode_token_counts.join(',')} first_id=#{first_id} last_id=#{last_id}"
 puts "literal_summary=forced_single:#{literal_forced_single_total},allowed_head:#{literal_allowed_head_total},span_batches:#{literal_forced_span_batches_total},span_tokens:#{literal_forced_span_tokens_total}" if decode_mode == "literal"
 puts "token_trace=#{last_token_trace.join(',')}" if print_generated_ids
 if print_generated_text

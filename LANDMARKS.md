@@ -22844,3 +22844,34 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: tool-declared Gemma prompt plus finite native call frontier. Transport: OpenAI/CrystalBall-style tool schema -> Gemma prompt declarations -> tokenizer frontier -> resident allowed-head native call -> adapter-normalized JSON response. Legal move: carry the same schema through prompt, constrained decode, and parser boundaries without switching syntax frames. Potential descends in `(prompt_tool_mismatch, wrong_syntax_risk, full_head_filter_tax, adapter_gap, remaining_controller_work)`.
 **boundary:** This is still a profiler route, not a CrystalBall provider. It also continues unconstrained text after the tool call because there is no product stop-at-close controller yet. Next product step is a stop-at-native-tool-call controller/harness route that terminates or hands off immediately after `<tool_call|>`.
+
+#### [LM-COGNIGRAPH-053] Gemma-native constrained tool calls can stop exactly at close boundary
+**context:** ml / CogniGraph / Gemma4 / native structured decoding / stop-at-tool-call / controller boundary / LTP-WBA
+**state:** profiler supports stop-at-literal-complete; product-shaped smoke verified
+
+- claim: "`bin/gemma4_metal_decode_profile.cr` now supports `--literal-stop-after-complete`, and reports actual `decode_tokens` so early-stop runs do not divide decode timing by the requested `--generate` length."
+  source: `scripts/run_safe.sh crystal 180 8192 build --no-codegen bin/gemma4_metal_decode_profile.cr --error-trace` on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: profiler decode-loop rewrite, summary accounting rewrite, or literal-controller rewrite
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "On the same tool-declared Gemma prompt as LM-052, `--literal-stop-after-complete` stopped both resident and fallback routes exactly at `<tool_call|>` with identical token trace and generated text `<|tool_call>call:set_mode{mode:<|\"|>write<|\"|>}<tool_call|>`. Both runs decoded `28` loop tokens rather than the requested `48`."
+  source: `/tmp/gemma4_native_tool_stop_1780748023/{resident.log,fallback.log}` on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: prompt/model change, tokenizer change, resident allowed-head rewrite, literal-stop rewrite, or product controller integration
+  trust: {F:0.80,G:0.12,R:0.78}
+
+- claim: "The stopped resident output normalized to `{"content":null,"tool_calls":[{"name":"set_mode","arguments":{"mode":"write"}}]}` through `bin/gemma4_tool_json_adapter.cr --parse-output`."
+  source: `/tmp/gemma4_native_tool_stop_response.json` on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: Gemma4Chat parser rewrite, adapter rewrite, or product stop/handoff policy change
+  trust: {F:0.82,G:0.18,R:0.80}
+
+- claim: "Resident allowed-head remained faster than fallback on this stopped prompt-shaped diagnostic: resident `33.187 ms/tok`, fallback `36.038 ms/tok` p50 over two measured runs. This is still diagnostic evidence, not public benchmark evidence."
+  source: `/tmp/gemma4_native_tool_stop_1780748023/{resident.log,fallback.log}` on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: quiet-host contradiction, larger tool prompt suite, run-count increase, or product serving integration
+  trust: {F:0.72,G:0.08,R:0.70}
+
+**LTP/WBA:** Window: native tool-call close boundary. Transport: constrained literal frontier -> exact close token -> stop/handoff boundary -> adapter JSON. Legal move: terminate the decode corridor immediately when the certified literal completes, preventing unconstrained suffix generation while preserving exact emitted tokens and parser compatibility. Potential descends in `(unconstrained_suffix_risk, wasted_decode_tokens, adapter_content_noise, remaining_product_controller_work)`.
+**boundary:** This is a profiler/controller diagnostic. The next product step is wiring the same stop-at-close behavior into a real Gemma generation/CrystalBall provider route, plus a broader prompt/tool suite.
