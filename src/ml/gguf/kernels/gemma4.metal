@@ -1160,6 +1160,278 @@ kernel void gemma4_attn_context_rows_swa256_vec_gqa2(
     }
 }
 
+kernel void gemma4_attn_context_rows_swa256_vec_tile16(
+    device const float* q             [[buffer(0)]],
+    device const float* k_cache       [[buffer(1)]],
+    device const float* v_cache       [[buffer(2)]],
+    device       float* out           [[buffer(3)]],
+    constant     uint&  base_pos      [[buffer(4)]],
+    constant     uint&  n_tokens      [[buffer(5)]],
+    constant     uint&  n_head        [[buffer(6)]],
+    constant     uint&  n_head_kv     [[buffer(7)]],
+    constant     uint&  head_dim      [[buffer(8)]],
+    constant     uint&  heads_per_group [[buffer(9)]],
+    constant     uint&  sliding_window [[buffer(10)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tid   [[thread_index_in_threadgroup]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{
+    const uint h = tgpig.x;
+    const uint t = tgpig.y;
+    if (h >= n_head || t >= n_tokens || head_dim != 256 || sliding_window == 0) return;
+    if (sgitg >= 8) return;
+
+    const uint kv_h = h / heads_per_group;
+    if (kv_h >= n_head_kv) return;
+
+    const uint row_pos = base_pos + t;
+    const uint start_pos = (row_pos + 1 <= sliding_window) ? 0 : row_pos + 1 - sliding_window;
+    const uint len = row_pos - start_pos + 1;
+    const uint kv_dim = n_head_kv * 256;
+
+    threadgroup float q_tg[256];
+    threadgroup float scores[16];
+    threadgroup float probs[16];
+    threadgroup float corr_tg;
+    threadgroup float inv_l_tg;
+
+    if (tid < 256) {
+        q_tg[tid] = q[(t * n_head + h) * 256 + tid];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    float m = -INFINITY;
+    float l = 0.0f;
+    float o = 0.0f;
+
+    for (uint tile_start = 0; tile_start < len; tile_start += 16) {
+        const uint local_j0 = tile_start + uint(sgitg);
+        const uint local_j1 = local_j0 + 8;
+        float dot0 = 0.0f;
+        float dot1 = 0.0f;
+        if (local_j0 < len) {
+            const uint pos0 = start_pos + local_j0;
+            for (uint d = uint(tiisg); d < 256; d += 32) {
+                dot0 += q_tg[d] * k_cache[pos0 * kv_dim + kv_h * 256 + d];
+            }
+        } else {
+            dot0 = -INFINITY;
+        }
+        if (local_j1 < len) {
+            const uint pos1 = start_pos + local_j1;
+            for (uint d = uint(tiisg); d < 256; d += 32) {
+                dot1 += q_tg[d] * k_cache[pos1 * kv_dim + kv_h * 256 + d];
+            }
+        } else {
+            dot1 = -INFINITY;
+        }
+        dot0 = simd_sum(dot0);
+        dot1 = simd_sum(dot1);
+        if (tiisg == 0) {
+            scores[sgitg] = dot0;
+            scores[8 + sgitg] = dot1;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tid == 0) {
+            float tile_max = -INFINITY;
+            const uint tile_len = min(uint(16), len - tile_start);
+            for (uint s = 0; s < tile_len; ++s) {
+                tile_max = max(tile_max, scores[s]);
+            }
+            const float m_new = max(m, tile_max);
+            const float correction = exp(m - m_new);
+            float l_new = l * correction;
+            for (uint s = 0; s < 16; ++s) {
+                const float p = (s < tile_len) ? exp(scores[s] - m_new) : 0.0f;
+                probs[s] = p;
+                l_new += p;
+            }
+            corr_tg = correction;
+            m = m_new;
+            l = l_new;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tid < 256) {
+            const uint tile_len = min(uint(16), len - tile_start);
+            float acc = 0.0f;
+            for (uint s = 0; s < tile_len; ++s) {
+                const uint ppos = start_pos + tile_start + s;
+                acc += probs[s] * v_cache[ppos * kv_dim + kv_h * 256 + tid];
+            }
+            o = o * corr_tg + acc;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    if (tid == 0) {
+        inv_l_tg = (l > 0.0f) ? 1.0f / l : 0.0f;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (tid < 256) {
+        out[(t * n_head + h) * 256 + tid] = o * inv_l_tg;
+    }
+}
+
+kernel void gemma4_attn_context_rows_swa256_vec_gqa2_tile16(
+    device const float* q             [[buffer(0)]],
+    device const float* k_cache       [[buffer(1)]],
+    device const float* v_cache       [[buffer(2)]],
+    device       float* out           [[buffer(3)]],
+    constant     uint&  base_pos      [[buffer(4)]],
+    constant     uint&  n_tokens      [[buffer(5)]],
+    constant     uint&  n_head        [[buffer(6)]],
+    constant     uint&  n_head_kv     [[buffer(7)]],
+    constant     uint&  head_dim      [[buffer(8)]],
+    constant     uint&  heads_per_group [[buffer(9)]],
+    constant     uint&  sliding_window [[buffer(10)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tid   [[thread_index_in_threadgroup]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{
+    const uint pair_idx = tgpig.x;
+    const uint t = tgpig.y;
+    const uint h0 = pair_idx * 2;
+    const uint h1 = h0 + 1;
+    if (h1 >= n_head || t >= n_tokens || head_dim != 256 || sliding_window == 0) return;
+    if (sgitg >= 8 || heads_per_group < 2 || (heads_per_group & 1) != 0) return;
+
+    const uint kv_h = h0 / heads_per_group;
+    if (kv_h >= n_head_kv || (h1 / heads_per_group) != kv_h) return;
+
+    const uint row_pos = base_pos + t;
+    const uint start_pos = (row_pos + 1 <= sliding_window) ? 0 : row_pos + 1 - sliding_window;
+    const uint len = row_pos - start_pos + 1;
+    const uint kv_dim = n_head_kv * 256;
+
+    threadgroup float q0_tg[256];
+    threadgroup float q1_tg[256];
+    threadgroup float scores0[16];
+    threadgroup float scores1[16];
+    threadgroup float probs0[16];
+    threadgroup float probs1[16];
+    threadgroup float corr0_tg;
+    threadgroup float corr1_tg;
+    threadgroup float inv_l0_tg;
+    threadgroup float inv_l1_tg;
+
+    if (tid < 256) {
+        q0_tg[tid] = q[(t * n_head + h0) * 256 + tid];
+        q1_tg[tid] = q[(t * n_head + h1) * 256 + tid];
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    float m0 = -INFINITY;
+    float l0 = 0.0f;
+    float o0 = 0.0f;
+    float m1 = -INFINITY;
+    float l1 = 0.0f;
+    float o1 = 0.0f;
+
+    for (uint tile_start = 0; tile_start < len; tile_start += 16) {
+        const uint local_j0 = tile_start + uint(sgitg);
+        const uint local_j1 = local_j0 + 8;
+        float dot00 = 0.0f;
+        float dot01 = 0.0f;
+        float dot10 = 0.0f;
+        float dot11 = 0.0f;
+        if (local_j0 < len) {
+            const uint pos0 = start_pos + local_j0;
+            for (uint d = uint(tiisg); d < 256; d += 32) {
+                const float kv = k_cache[pos0 * kv_dim + kv_h * 256 + d];
+                dot00 += q0_tg[d] * kv;
+                dot10 += q1_tg[d] * kv;
+            }
+        } else {
+            dot00 = -INFINITY;
+            dot10 = -INFINITY;
+        }
+        if (local_j1 < len) {
+            const uint pos1 = start_pos + local_j1;
+            for (uint d = uint(tiisg); d < 256; d += 32) {
+                const float kv = k_cache[pos1 * kv_dim + kv_h * 256 + d];
+                dot01 += q0_tg[d] * kv;
+                dot11 += q1_tg[d] * kv;
+            }
+        } else {
+            dot01 = -INFINITY;
+            dot11 = -INFINITY;
+        }
+        dot00 = simd_sum(dot00);
+        dot01 = simd_sum(dot01);
+        dot10 = simd_sum(dot10);
+        dot11 = simd_sum(dot11);
+        if (tiisg == 0) {
+            scores0[sgitg] = dot00;
+            scores0[8 + sgitg] = dot01;
+            scores1[sgitg] = dot10;
+            scores1[8 + sgitg] = dot11;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tid == 0) {
+            float tile_max0 = -INFINITY;
+            float tile_max1 = -INFINITY;
+            const uint tile_len = min(uint(16), len - tile_start);
+            for (uint s = 0; s < tile_len; ++s) {
+                tile_max0 = max(tile_max0, scores0[s]);
+                tile_max1 = max(tile_max1, scores1[s]);
+            }
+            const float m0_new = max(m0, tile_max0);
+            const float m1_new = max(m1, tile_max1);
+            const float correction0 = exp(m0 - m0_new);
+            const float correction1 = exp(m1 - m1_new);
+            float l0_new = l0 * correction0;
+            float l1_new = l1 * correction1;
+            for (uint s = 0; s < 16; ++s) {
+                const float p0 = (s < tile_len) ? exp(scores0[s] - m0_new) : 0.0f;
+                const float p1 = (s < tile_len) ? exp(scores1[s] - m1_new) : 0.0f;
+                probs0[s] = p0;
+                probs1[s] = p1;
+                l0_new += p0;
+                l1_new += p1;
+            }
+            corr0_tg = correction0;
+            corr1_tg = correction1;
+            m0 = m0_new;
+            m1 = m1_new;
+            l0 = l0_new;
+            l1 = l1_new;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tid < 256) {
+            const uint tile_len = min(uint(16), len - tile_start);
+            float acc0 = 0.0f;
+            float acc1 = 0.0f;
+            for (uint s = 0; s < tile_len; ++s) {
+                const uint ppos = start_pos + tile_start + s;
+                const float vv = v_cache[ppos * kv_dim + kv_h * 256 + tid];
+                acc0 += probs0[s] * vv;
+                acc1 += probs1[s] * vv;
+            }
+            o0 = o0 * corr0_tg + acc0;
+            o1 = o1 * corr1_tg + acc1;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    if (tid == 0) {
+        inv_l0_tg = (l0 > 0.0f) ? 1.0f / l0 : 0.0f;
+        inv_l1_tg = (l1 > 0.0f) ? 1.0f / l1 : 0.0f;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (tid < 256) {
+        out[(t * n_head + h0) * 256 + tid] = o0 * inv_l0_tg;
+        out[(t * n_head + h1) * 256 + tid] = o1 * inv_l1_tg;
+    }
+}
+
 kernel void gemma4_attn_context_rows_gqa4(
     device const float* q             [[buffer(0)]],
     device const float* k_cache       [[buffer(1)]],

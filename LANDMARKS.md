@@ -23745,3 +23745,23 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: benchmark gap under llama `-fa 1`. Transport: attention context corridor across prompt/decode rows. Legal move: compare against the dual frame `LLAMA_FA=0` before blaming FFN/GEMV. Potential recomputation shows the gap largely moves with FA, while B64/Q4/GEMV tweaks do not collapse it. This redirects the active window to attention/FA parity.
 
 **decision:** Next exact speed branch should study and port/improve the relevant llama.cpp FA attention path for Gemma, or build an equivalent CogniGraph fused attention corridor. Stop prioritizing standalone Q4/Q6 tile retunes until attention parity is addressed.
+
+#### [LM-GEMMA4-SWA256-TILE16-895] Nomic barrier insight transfers to Gemma as an opt-in SWA tile16 probe, not blind barrier deletion
+**context:** ml / CogniGemma / Metal / attention / LTP-WBA / Nomic-MoE
+**state:** useful opt-in probe; default promotion blocked by mixed ABBA
+
+- claim: "Nomic MoE's zero-barrier win is graph/ownership-level, not a license to remove all intra-kernel barriers."
+  source: `src/ml/gguf/metal_backend.cr` Nomic MoE graph section groups independent expert UPs before one barrier, independent DOWNs before one barrier, and uses batched indirect expert dispatch plus single atomic scatter; `src/ml/metal/compute_graph.cr` computes waves from buffer conflicts and emits barriers only between waves. Gemma SWA attention still needs barriers for softmax score/probability sharing unless ownership is reformulated.
+  verified_at: 2026-06-06
+  decay_trigger: Nomic graph rewrite, ComputeGraph semantics change, or new Gemma attention ownership proof
+  trust: {F:0.84,G:0.54,R:0.82}
+
+- claim: "Gemma row-prefill SWA256 tile16 is correctness-safe in tested boundaries but not a current default pp win."
+  source: added default-off `gemma4_attn_context_rows_swa256_vec_tile16` and `gemma4_attn_context_rows_swa256_vec_gqa2_tile16`; build passed. Top1 boundary matched default on pp256/gen4 (`first_id=254632`, `last_id=208669`, `/tmp/gemma4_tile16_top1_pair_20260606184206`). Initial warm pp256 ABBA improved both pairs: default `279.932/289.748 tok/s`, tile16 `293.425/291.567 tok/s` (`/tmp/gemma4_tile16_min128_pp256_abba_20260606184430`), and pp512 improved `267.629 -> 279.320 tok/s` (`/tmp/gemma4_tile16_pp64_512_gate_20260606184511`). Final default-vs-off ABBA was mixed: default/tile16 `297.199/290.250 tok/s` versus off `295.562/295.486 tok/s` (`/tmp/gemma4_tile16_default_vs_off_final_20260606185003`). Explicit decode tile16 ABBA was also mixed, so tile16 remains opt-in only.
+  verified_at: 2026-06-06
+  decay_trigger: Gemma attention kernel rewrite, llama FA port, quiet-host contradiction, or changed batch threshold
+  trust: {F:0.78,G:0.36,R:0.76}
+
+**LTP/WBA:** Window: llama `-fa 1` points at the attention corridor; Gemma SWA256 vec used 8-token softmax tiles with repeated barriers. Transport: row-prefill SWA K/V span with head_dim 256 and GQA sharing. Legal move tested: reduce barrier frequency from tile8 to tile16 while preserving online-softmax state. Potential did not robustly descend after recomputation because final ABBA was mixed; therefore default promotion is blocked.
+
+**decision:** Keep tile16 as an opt-in probe via `GEMMA4_ROW_PREFILL_ATTN_SWA256_VEC_TILE16=1`, with min-batch override. Next branch may test tile32 or a direct llama FA vector port, but only as a separate opt-in with ABBA and parity gates.

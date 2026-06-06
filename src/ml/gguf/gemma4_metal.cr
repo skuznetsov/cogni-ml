@@ -168,6 +168,13 @@ module ML::GGUF
         batch >= min_batch && attn_swa256_vec_enabled?(batch)
       end
 
+      private def attn_swa256_vec_tile16_enabled?(batch : Int32) : Bool
+        return false if ENV["GEMMA4_ROW_PREFILL_ATTN_SWA256_VEC_TILE16_OFF"]? == "1"
+        return false unless ENV["GEMMA4_ROW_PREFILL_ATTN_SWA256_VEC_TILE16"]? == "1"
+        min_batch = (ENV["GEMMA4_ROW_PREFILL_ATTN_SWA256_VEC_TILE16_MIN_BATCH"]? || "128").to_i32
+        batch >= min_batch && attn_swa256_vec_enabled?(batch)
+      end
+
       private def attn_splitk_enabled?(batch : Int32, sliding_window : Int32) : Bool
         return false if ENV["GEMMA4_ROW_PREFILL_ATTN_SPLITK_OFF"]? == "1"
         return false unless sliding_window == 0
@@ -2717,12 +2724,19 @@ module ML::GGUF
         enc.set_value(heads_per_group.to_u32, 9)
         enc.set_value(sliding_window.to_u32, 10)
         use_swa256_vec = attn_swa256_vec_enabled?(rows) && head_dim == 256 && sliding_window > 0
+        use_swa256_vec_tile16 = attn_swa256_vec_tile16_enabled?(rows) && head_dim == 256 && sliding_window > 0
         use_swa256_vec_gqa2 = attn_swa256_vec_gqa2_enabled?(rows) && head_dim == 256 && sliding_window > 0 &&
           heads_per_group >= 2 && heads_per_group.even? && n_head.even?
         use_gqa4 = attn_gqa4_enabled?(rows) && heads_per_group >= 4 && (heads_per_group % 4 == 0) && (n_head % 4 == 0)
         use_gqa_pair = attn_gqa2_enabled? &&
           (heads_per_group == 2 || (attn_gqa_pair_full_enabled? && heads_per_group > 2 && heads_per_group.even?))
-        if use_swa256_vec_gqa2
+        if use_swa256_vec_tile16 && use_swa256_vec_gqa2
+          enc.set_pipeline(attn_context_rows_swa256_vec_gqa2_tile16_pipeline)
+          enc.dispatch_threadgroups({n_head // 2, rows, 1}, {256, 1, 1})
+        elsif use_swa256_vec_tile16
+          enc.set_pipeline(attn_context_rows_swa256_vec_tile16_pipeline)
+          enc.dispatch_threadgroups({n_head, rows, 1}, {256, 1, 1})
+        elsif use_swa256_vec_gqa2
           enc.set_pipeline(attn_context_rows_swa256_vec_gqa2_pipeline)
           enc.dispatch_threadgroups({n_head // 2, rows, 1}, {256, 1, 1})
         elsif use_swa256_vec
@@ -3147,6 +3161,18 @@ module ML::GGUF
       private def attn_context_rows_swa256_vec_gqa2_pipeline : ML::Metal::ComputePipeline
         @@attn_context_rows_swa256_vec_gqa2_pipeline ||= ML::Metal::PipelineCache.get("gemma4_attn_context_rows_swa256_vec_gqa2") {
           ML::Metal::ComputePipeline.new("gemma4_attn_context_rows_swa256_vec_gqa2", GEMMA4_SOURCE)
+        }
+      end
+
+      private def attn_context_rows_swa256_vec_tile16_pipeline : ML::Metal::ComputePipeline
+        @@attn_context_rows_swa256_vec_tile16_pipeline ||= ML::Metal::PipelineCache.get("gemma4_attn_context_rows_swa256_vec_tile16") {
+          ML::Metal::ComputePipeline.new("gemma4_attn_context_rows_swa256_vec_tile16", GEMMA4_SOURCE)
+        }
+      end
+
+      private def attn_context_rows_swa256_vec_gqa2_tile16_pipeline : ML::Metal::ComputePipeline
+        @@attn_context_rows_swa256_vec_gqa2_tile16_pipeline ||= ML::Metal::PipelineCache.get("gemma4_attn_context_rows_swa256_vec_gqa2_tile16") {
+          ML::Metal::ComputePipeline.new("gemma4_attn_context_rows_swa256_vec_gqa2_tile16", GEMMA4_SOURCE)
         }
       end
 
