@@ -22386,3 +22386,59 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This was a Diamond repair on the measurement graph. The window was a parser/report-format conflict; the corridor was grouped command-buffer wait attribution; the legal move restored evidence without changing inference. Potential descends as `(missing_dominant_wait_bucket, parser_conflict_count, remaining_manual_inspection)`. This is tooling evidence, not a speed claim.
 **boundary:** Use repaired atlas rows to choose experiments. Do not infer per-phase wait from all-in-one `layers_head`; for phase-specific wait, run explicit phase profiling or add finer production-safe markers.
+
+#### [LM-COGNIGRAPH-035] Gemma exact-decode graph tweaks need recomputed-wall promotion gates
+**context:** ml / CogniGraph / Gemma4 / exact decode / Metal / LTP-WBA
+**state:** simple head-tile and graph-chain retunes refuted; attn-prep fuse remains opt-in/pending, not default
+
+- claim: "A standalone Gemma lm-head top1 rows-per-threadgroup sweep found the existing default `HEAD_TOP1_ROWS_PER_TG=12` best among the simple tested values. Results for rows `4,8,12,16,20,24,32` were p50 waits `3.485, 3.210, 2.856, 3.405, 3.299, 2.923, 3.018 ms`; rows12 is the current low point."
+  source: `/tmp/gemma4_op_attribution --warmup=1 --runs=3 --limit=0 --head-top1-rows-sweep=4,8,12,16,20,24,32 --exclude-output-head` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Q6_K top1 kernel rewrite, Gemma output-head route rewrite, Metal compiler change, or quiet-host contradiction
+  trust: {F:0.78,G:0.18,R:0.76}
+
+- claim: "A short mixed ABBA over exact top1-chain scheduling showed `--top1-chain 4` reduces sync count (`392 -> 386`) and sometimes grouped wait, but wall was mixed/near-flat versus chain1, so it is not a default promotion."
+  source: `/tmp/gemma4_abba_1780711091` rows on 2026-06-05: base `38.762/38.694/38.520 ms/tok`, chain4 `38.580/38.770 ms/tok`, identical token ids.
+  verified_at: 2026-06-05
+  decay_trigger: top1-chain scheduler rewrite, command-buffer grouping rewrite, or larger quiet-host ABBA contradiction
+  trust: {F:0.74,G:0.14,R:0.72}
+
+- claim: "`GEMMA4_ATTN_PREP_FUSE=1` showed a promising gen8 median gain (`38.915 -> 38.027 ms/tok`, grouped wait `288.74 -> 281.73 ms`) with identical first/last ids, but a gen16 recompute failed promotion: base/fuse medians were `34.993/35.174 ms/tok` and grouped waits `516.32/519.63 ms`; the third fuse row regressed hard (`34.993 -> 39.998 ms/tok` paired against adjacent base)."
+  source: gen8 `/tmp/gemma4_attnfuse_abba_1780711198`; gen16 `/tmp/gemma4_attnfuse_gen16_abba_1780711422`, sequential `scripts/run_safe.sh` rows on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host ABBA contradiction, fused attn-prep kernel rewrite, K/V copy-elision rewrite, or benchmark harness timing boundary rewrite
+  trust: {F:0.78,G:0.16,R:0.76}
+
+- claim: "`GEMMA4_FFN_IN_RESIDUAL_NORM_FUSE=1` also failed a gen16 promotion gate. Base/ffn-in medians were `34.765/34.629 ms/tok` and grouped waits `509.77/507.94 ms`, but only one of three paired rows improved while two regressed; mean decode worsened (`34.504 -> 34.822 ms/tok`)."
+  source: `/tmp/gemma4_ffnin_gen16_abba_1780711567`, sequential `scripts/run_safe.sh` rows on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host ABBA contradiction, residual-norm fusion kernel rewrite, or Gemma layer-tail route rewrite
+  trust: {F:0.76,G:0.14,R:0.74}
+
+**LTP/WBA:** These candidates each reduced a local component, but only local reduction is insufficient. The recomputed promotion potential is `(dominant grouped wait, route ties, sync/conflict count, remaining token work)`. Head row retune did not lower the local head potential versus default. Top1-chain lowered sync/conflict count but did not consistently lower dominant wall. Attn-prep fuse lowered wall in smaller rows but failed recompute safety at gen16 due a regression row.
+**boundary:** Keep `GEMMA4_ATTN_PREP_FUSE=1`, `GEMMA4_FFN_IN_RESIDUAL_NORM_FUSE=1`, `--top1-chain N`, and head-row retuning as explicit probes. Do not default-promote or stack them without a quiet-host ABBA where wall, grouped wait, token parity, and CPU-fallback checks all descend together.
+
+#### [LM-COGNIGRAPH-036] Current Gemma body-only parity is ahead of llama.cpp; real generation gap is top1/sampling-specific
+**context:** ml / CogniGraph / Gemma4 / llama.cpp comparison / benchmark accounting / LTP-WBA
+**state:** current branch-selection benchmark recorded; not a quiet-host public claim
+
+- claim: "On the current relaxed host, CogniGemma body-only throughput is ahead of local llama.cpp for the matched Gemma4 12B Q4_K_M body benchmark at pp256/tg32: llama.cpp `pp=320.358 tok/s`, `tg_body=28.991 tok/s`; CogniGemma `pp=338.408 tok/s`, `tg_body=30.460 tok/s`; ratios `1.056x` and `1.051x`."
+  source: `OUT_DIR=/tmp/gemma4_vs_llama_body_current_1780711824 scripts/gemma4_vs_llama_body_bench.sh --prompt 256 --gen 32 --reps 2 --warmups 1 --max-seq 512 --body-chain 1` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host rerun contradiction, llama.cpp update, Gemma profile binary rewrite, or model/codec change
+  trust: {F:0.78,G:0.16,R:0.74}
+
+- claim: "A separate product-shaped native top1 diagnostic also reported native ahead in that harness (`21.21 tok/s` vs llama.cpp `17.3 tok/s`, pp `334.55 tok/s` vs `129.5 tok/s`), but this is not an apples-to-apples top1 comparison because llama-bench tg does not compute logits/top1 and the llama row was slower than the body-bench script's llama row."
+  source: `scripts/run_safe.sh crystal 300 24576 run bin/benchmark_gemma4_vs_llama.cr -- --native-bin=/tmp/gemma4_metal_decode_profile_body_bench --prompt=256 --gen=32 --reps=2 --warmups=1 --native-mode=top1 --prefill-chunk=512 --native-top1-chain=1 --wait-quiet-ms=0 --load-warning-threshold=0 --load-total-warning-threshold=0` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: product top1 harness rewrite, llama-bench generation semantics change, or quiet-host contradiction
+  trust: {F:0.70,G:0.12,R:0.66}
+
+- claim: "The local Gemma4 12B Q4_K_M GGUF does not contain the per-layer embedding tensors from llama.cpp's generic Gemma4 graph path: `embedding_length_per_layer_input=0`, and `per_layer_token_embd.weight`, `per_layer_model_proj.weight`, and `blk.0.per_layer_*` tensors are absent."
+  source: read-only `crystal eval` over `Gemma4Hparams` and GGUF tensor inventory on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: model file replacement, Gemma4 GGUF variant change, or Gemma4 weight loader rewrite
+  trust: {F:0.86,G:0.18,R:0.84}
+
+**LTP/WBA:** The benchmark Diamond separates three corridors: body-only llama-bench parity, product top1 generation, and session-cache replay. Body-only parity currently descends versus llama.cpp, so the active first-run speed window is not generic ubatch scheduling. Product top1/sampling still needs its own corridor because logits/top-k/function-calling routes add work outside llama-bench tg.
+**boundary:** Do not claim a broad public Gemma win from relaxed rows. For optimization, prioritize product-shaped top1/top-k/sampling overhead and session-cache integration over another generic body-only ubatch rewrite unless a quiet-host body benchmark contradicts this row.
