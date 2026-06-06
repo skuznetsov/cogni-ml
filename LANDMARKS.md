@@ -22694,3 +22694,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: finite tool-call syntax before free-form parameter/value generation. Transport: schema-derived function-name options -> tokenizer frontier -> resident allowed-head corridor -> remaining literal suffix. Legal move: constrain only certified finite prefix tokens while preserving the decode state boundary and exact unconstrained fallback after the corridor ends. Potential descends locally in `(invalid_tool_prefix_area, frontier_vocab_rows, full_head_filter_tax, remaining_literal_suffix)`; global speed promotion still needs ABBA because body work dominates short spans.
 **boundary:** This is a diagnostic bridge toward structured function calling, not a full JSON/function-call parser. Product support still needs grammar states for parameter names, values, close tags, rejection/fallback behavior, and integration with the `crystal_ball` harness.
+
+#### [LM-COGNIGRAPH-047] Gemma schema-derived required-parameter prefix extends the finite tool corridor
+**context:** ml / CogniGraph / Gemma4 / structured decoding / tool required parameters / constrained frontier / LTP-WBA
+**state:** implemented in diagnostic profiler; resident/fallback trace parity verified; free-form values and close tags remain out of scope
+
+- claim: "`bin/gemma4_metal_decode_profile.cr` now supports `--constrained-tool-required-param-prefix`, which derives finite literal options from tool function names plus required parameter-open tags. For a tool with required `path`, the diagnostic corridor includes `<tool_call>\n<function=read_file>\n<parameter=path>\n`. Tools without required parameters fall back to the function-prefix corridor."
+  source: `scripts/run_safe.sh crystal 180 8192 build --no-codegen bin/gemma4_metal_decode_profile.cr --error-trace` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma profiler option rewrite, Qwen35Constraints required-parameter parsing change, tokenizer change, or tool-call grammar change
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "Two-tool required-parameter smoke preserved resident/fallback output for `gen=48`. Resident and fallback both logged `constrained_tool_required_param_prefix=true`, `tool_names=read_file,get_weather`, `literal_options=2`, identical token trace, and generated text `<tool_call>\n<function=read_file>\n<parameter=path>\n<parame=pat>`."
+  source: `/tmp/gemma4_tool_param_prefix_1780714835/{resident.log,fallback.log}` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: prompt/model change, tokenizer change, resident allowed-head rewrite, required-parameter option rewrite, or full grammar-controller integration
+  trust: {F:0.82,G:0.12,R:0.78}
+
+- claim: "On this short diagnostic, resident allowed-head was faster than fallback full-head filtering: resident `30.869 ms/tok`, fallback `33.012 ms/tok` p50 over two measured runs. This is still not promotion-grade public benchmark evidence because generation enters an unconstrained suffix after the finite prefix and the run count is small."
+  source: `/tmp/gemma4_tool_param_prefix_1780714835/{resident.log,fallback.log}` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host contradiction, larger schema suite, run-count increase, or full grammar-controller timing
+  trust: {F:0.72,G:0.08,R:0.70}
+
+**LTP/WBA:** Window: schema-required parameter-open syntax after a selected function name. Transport: tool schema -> finite literal prefix set -> tokenizer frontier -> resident allowed-head corridor. Legal move: reduce the grammar frontier to schema-certified rows while preserving exact decoder state and letting the unconstrained dual frame take over after the prefix. Potential descends locally in `(invalid_required_param_area, frontier_vocab_rows, full_head_filter_tax, remaining_prefix_suffix)`; promotion needs a full controller so the suffix does not re-enter unconstrained invalid XML.
+**boundary:** This improves the structured diagnostic and gives a longer certified corridor for future CogniGemma function-calling, but product support still needs value-span handling, close-tag states, failure recovery, and `crystal_ball` integration.
