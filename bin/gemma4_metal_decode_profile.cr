@@ -38,6 +38,7 @@ prompt_cache_snapshot_mib = 0
 prompt_cache_snapshot_min_free_mib = (ENV["GEMMA4_PROMPT_CACHE_SNAPSHOT_MIN_FREE_MIB"]? || "4096").to_i
 prompt_cache_snapshot_entries = 1
 decode_only_seed = nil.as(Int32?)
+allowed_ids = [] of Int32
 
 OptionParser.parse(ARGV) do |p|
   p.banner = "usage: gemma4_metal_decode_profile [--tokens 42,43] [--generate 8] [--max-seq 1024] [--runs 3]"
@@ -80,6 +81,10 @@ OptionParser.parse(ARGV) do |p|
   p.on("--body-only", "During measured generation, update resident state from fixed synthetic tokens without final logits/top1") { decode_mode = "body" }
   p.on("--top1", "During measured generation, run exact greedy top1 chain (default)") { decode_mode = "top1" }
   p.on("--top2", "Diagnostic: compute resident top2 each token and continue with top1") { decode_mode = "top2" }
+  p.on("--allowed-ids IDS", "Diagnostic: constrain measured decode head to these comma-separated token ids") do |v|
+    allowed_ids = v.split(',').reject(&.empty?).map(&.to_i)
+    decode_mode = "allowed"
+  end
   p.on("-h", "--help", "Show help") { puts p; exit }
 end
 
@@ -169,6 +174,38 @@ def forward_top2_top1(weights : ML::GGUF::Gemma4Weights, token_id : Int32, pos :
   top2[0].to_i32
 end
 
+def forward_allowed_top1(weights : ML::GGUF::Gemma4Weights, token_id : Int32, pos : Int32,
+                         state : ML::GGUF::Gemma4Metal::ResidentState,
+                         allowed_ids : Array(Int32),
+                         decode_wave : Bool = false,
+                         top1_wave_resident : Bool = false,
+                         stop_layer : Int32? = nil) : Int32
+  layer_count = stop_layer || weights.hparams.n_layer
+  if decode_wave && top1_wave_resident
+    if top1 = ML::GGUF::Gemma4Metal.forward_top1_allowed_resident_cache_wave(weights, token_id, pos, allowed_ids, state, layer_count)
+      return top1[0].to_i32
+    end
+  end
+
+  hidden = if decode_wave
+             ML::GGUF::Gemma4Metal.forward_hidden_resident_cache_wave(weights, token_id, pos, state, layer_count).not_nil!
+           else
+             ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(weights, token_id, pos, state, layer_count).not_nil!
+           end
+  normed = ML::GGUF::Gemma4CPU.rms_norm(hidden, weights.output_norm, weights.hparams.rms_eps)
+  logits = ML::GGUF::Qwen35Metal.matmul(weights.token_embd, normed, 1).not_nil!
+  best_id = allowed_ids[0]
+  best = logits[best_id]
+  allowed_ids.each do |id|
+    value = logits[id]
+    if value > best
+      best = value
+      best_id = id
+    end
+  end
+  best_id.to_i32
+end
+
 def synthetic_decode_token(i : Int32) : Int32
   ((i * 13 + 11751) % 32000).to_i32
 end
@@ -210,7 +247,8 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
              prompt_cache_model_id : String = "",
              prompt_cache_tokenizer_id : String = "synthetic-token-ids",
              prompt_cache_session_id : String = "profile",
-             decode_only_seed : Int32? = nil) : NamedTuple(prefill_ms: Float64, decode_ms: Float64, first_id: Int32, last_id: Int32, token_trace: Array(Int32), cache_route: String, cache_restore_ms: Float64)
+             decode_only_seed : Int32? = nil,
+             allowed_ids : Array(Int32) = [] of Int32) : NamedTuple(prefill_ms: Float64, decode_ms: Float64, first_id: Int32, last_id: Int32, token_trace: Array(Int32), cache_route: String, cache_restore_ms: Float64)
   state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
 
   ML::GGUF::Qwen35Metal::Profile.reset if profile
@@ -328,6 +366,8 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
       else
         cur = if decode_mode == "top2"
                 forward_top2_top1(weights, cur, pos, state, decode_wave, top1_wave_resident, decode_layer_count)
+              elsif decode_mode == "allowed"
+                forward_allowed_top1(weights, cur, pos, state, allowed_ids, decode_wave, top1_wave_resident, decode_layer_count)
               else
                 forward_top1(weights, cur, pos, state, decode_wave, top1_wave_resident, decode_layer_count)
               end
@@ -363,7 +403,11 @@ end
 raise "prompt tokens must not be empty" if prompt.empty?
 raise "max-seq too small" if max_seq < prompt.size + generate
 
-raise "decode mode must be top1, top2, or body" unless {"top1", "top2", "body"}.includes?(decode_mode)
+raise "decode mode must be top1, top2, allowed, or body" unless {"top1", "top2", "allowed", "body"}.includes?(decode_mode)
+raise "--allowed-ids must not be empty" if decode_mode == "allowed" && allowed_ids.empty?
+allowed_ids.each do |id|
+  raise "--allowed-ids token #{id} out of range" if id < 0 || id >= weights.token_embd.out_dim
+end
 raise "prefill mode must be serial or rows" unless {"serial", "rows"}.includes?(prefill_mode)
 raise "prefill chunk must be positive" unless prefill_chunk > 0
 raise "--top1-chain must be positive" unless top1_chain > 0
@@ -411,7 +455,7 @@ if root = prompt_cache_root
 end
 
 decode_schedule = decode_stop_layer_after_step ? "#{decode_stop_layer_after_step}:#{decode_stop_layer_after_layer}" : ""
-puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} prompt_text_mode=#{chat_user ? "chat_user" : (prompt_text ? "raw_text" : "token_ids")} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} top1_chain=#{top1_chain} body_chain=#{body_chain} body_chain_note=#{body_chain == 1 ? "llama_bench_parity" : "graph_chunk_known_tokens"} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} decode_stop_layer_after=#{decode_schedule} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_min_free_mib=#{prompt_cache_snapshot_min_free_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
+puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} prompt_text_mode=#{chat_user ? "chat_user" : (prompt_text ? "raw_text" : "token_ids")} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} top1_chain=#{top1_chain} body_chain=#{body_chain} body_chain_note=#{body_chain == 1 ? "llama_bench_parity" : "graph_chunk_known_tokens"} allowed_ids=#{allowed_ids.join(',')} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} decode_stop_layer_after=#{decode_schedule} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_min_free_mib=#{prompt_cache_snapshot_min_free_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
 
 warmups.times do
   run_once(
@@ -428,6 +472,7 @@ warmups.times do
     prompt_cache_tokenizer_id: cache_tokenizer_id,
     prompt_cache_session_id: prompt_cache_session,
     decode_only_seed: decode_only_seed,
+    allowed_ids: allowed_ids,
   )
 end
 
@@ -453,6 +498,7 @@ runs.times do
     prompt_cache_tokenizer_id: cache_tokenizer_id,
     prompt_cache_session_id: prompt_cache_session,
     decode_only_seed: decode_only_seed,
+    allowed_ids: allowed_ids,
   )
   prefill_samples << result[:prefill_ms]
   decode_samples << result[:decode_ms]

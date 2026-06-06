@@ -22498,3 +22498,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The window is grammar/function-calling constrained decoding where the valid frontier is a small allowed token set. The corridor is resident hidden -> output RMSNorm -> allowed lm-head rows -> one-id certificate. The legal move preserves exact model state and grammar boundary while replacing full-vocab head materialization with allowed-row scanning. Candidate potential is `(vocab_rows_scanned, readback_bytes, grammar_frontier_conflicts, remaining_route_work)`; only correctness is verified so far, not wall-time descent.
 **boundary:** This is a primitive for structured decoding and controller routes, not a default generation speed claim. Next evidence must wire it into a real grammar/JSON controller and compare full-head vs allowed-head wall time with identical constrained outputs.
+
+#### [LM-COGNIGRAPH-039] Gemma allowed-token head diagnostic shows a constrained-route wall win on trace-matched rows
+**context:** ml / CogniGraph / Gemma4 / constrained decoding / product head route / LTP-WBA
+**state:** diagnostic CLI added; speed-positive on oracle/static allowed set; not yet a grammar-controller claim
+
+- claim: "`bin/gemma4_metal_decode_profile.cr` now supports `--allowed-ids IDS`, a diagnostic constrained-head mode that uses Gemma's resident allowed-token top1 primitive during measured decode and falls back to a full head only if the resident route is unavailable."
+  source: `scripts/run_safe.sh crystal 180 8192 build --no-codegen bin/gemma4_metal_decode_profile.cr --error-trace` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma decode profiler option rewrite or resident allowed-head helper rewrite
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "On a trace-matched static allowed set (`1,2,3,236761,84750`) for the synthetic Gemma prompt, a short sequential gen32 ABBA showed allowed-head decode faster than full resident top1 with identical token trace. Top1-chain1 rows were `44.858` and `44.170 ms/tok`; allowed rows were `38.507` and `39.149 ms/tok`."
+  source: `/tmp/gemma4_allowed_abba_1780713120` from sequential `scripts/run_safe.sh /tmp/gemma4_allowed_diag ... --generate 32 --warmups 1 --runs 1 --decode-wave --top1-wave-resident --top1-chain 1 --prefill-mode rows --prefill-chunk 4 --print-generated-ids` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host ABBA contradiction, allowed-frontier controller integration, top1-chain rewrite, or Gemma head-kernel rewrite
+  trust: {F:0.78,G:0.12,R:0.74}
+
+- claim: "A profiled gen8 trace-matched row attributes the diagnostic win to head work elimination: full resident top1 reported `head_top1_no_norm_resident Q6_K 3840x262144 b1`, `6300.00 MiB logical weights`, grouped wait `362.15 ms`, while allowed-5 reported `head_top1_allowed5_resident`, `0.12 MiB logical weights`, grouped wait `289.29 ms`; both emitted the same token trace."
+  source: `/tmp/gemma4_allowed_profile_1780713170/{top1_profile.log,allowed_profile.log}` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: profile accounting rewrite, quiet-host contradiction, allowed-token kernel rewrite, or controller integration changing allowed-set sizes
+  trust: {F:0.80,G:0.12,R:0.76}
+
+**LTP/WBA:** This is a valid Spike only for grammar/product windows where the allowed frontier is already certified by an external controller. Window: small allowed token set. Transport: resident hidden state through output norm into selected lm-head rows. Legal move: scan only allowed rows while preserving exact state and constrained-token semantics. Recomputed diagnostic potential descends as `(vocab_rows_scanned, grouped_wait_ms, readback_bytes, remaining_decode_steps)` for the static frontier.
+**boundary:** Do not promote this as ordinary greedy speed. The diagnostic used an oracle/static allowed set chosen to preserve the known token trace. Product promotion requires a real JSON/tool grammar frontier, same constrained output, ABBA wall evidence, and fail-closed fallback when the frontier is empty or too large.
