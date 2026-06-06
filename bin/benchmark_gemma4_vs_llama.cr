@@ -230,7 +230,11 @@ llama_decode = run_llama_bench(llama_bench, model, 0, gen_tokens, reps, n_gpu_la
 puts "Gemma4 benchmark vs llama.cpp"
 puts "model: #{model}"
 puts "settings: prompt=#{prompt_tokens} gen=#{gen_tokens} reps=#{reps} warmups=#{warmups} native_mode=#{mode} prefill_chunk=#{prefill_chunk} decode_wave=#{decode_wave} top1_resident=#{top1_resident} native_top1_chain=#{top1_chain} native_body_chain=#{body_chain} native_decode_only_seed=#{decode_only_seed} ngl=#{n_gpu_layers} threads=#{threads} flash_attn=#{flash_attn} llama_extra_args=#{llama_extra_args.inspect}"
-puts "note: native pp is measured body-only; native tg defaults to body_chain=1 with empty KV to match llama-bench per-token synchronization. Use --native-body-chain=N only for graph-chunk experiments."
+if mode == "body"
+  puts "note: native pp is measured body-only; native tg uses body_chain=#{body_chain} with empty KV. body_chain=1 matches llama-bench per-token synchronization; larger values are graph-chunk experiments."
+else
+  puts "note: native pp is measured body-only; native tg is product-shaped #{mode} decode. llama-bench tg is body-only and does not compute logits/top1, so decode rows are diagnostic rather than apples-to-apples."
+end
 puts
 puts "Prefill"
 puts "  cogni-ml:  p50=#{native_prefill.prefill_ms.round(2)} ms  p50=#{native_prefill.prefill_tok_s.round(2)} tok/s"
