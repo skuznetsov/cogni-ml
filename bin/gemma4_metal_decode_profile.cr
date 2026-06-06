@@ -39,6 +39,7 @@ prompt_cache_snapshot_min_free_mib = (ENV["GEMMA4_PROMPT_CACHE_SNAPSHOT_MIN_FREE
 prompt_cache_snapshot_entries = 1
 decode_only_seed = nil.as(Int32?)
 allowed_ids = [] of Int32
+constrained_literal_prefix = nil.as(String?)
 
 OptionParser.parse(ARGV) do |p|
   p.banner = "usage: gemma4_metal_decode_profile [--tokens 42,43] [--generate 8] [--max-seq 1024] [--runs 3]"
@@ -85,6 +86,10 @@ OptionParser.parse(ARGV) do |p|
     allowed_ids = v.split(',').reject(&.empty?).map(&.to_i)
     decode_mode = "allowed"
   end
+  p.on("--constrained-literal-prefix TEXT", "Diagnostic: tokenizer-derived literal frontier after the initial seed token") do |v|
+    constrained_literal_prefix = v
+    decode_mode = "literal"
+  end
   p.on("-h", "--help", "Show help") { puts p; exit }
 end
 
@@ -117,6 +122,68 @@ def summarize(label : String, samples : Array(Float64), tokens : Int32) : Nil
   tok_s = p50 > 0.0 ? tokens.to_f64 / (p50 / 1000.0) : 0.0
   puts "#{label}_runs=#{samples.map { |v| v.round(3) }.join(',')}"
   puts "#{label}_mean_ms=#{mean.round(3)} #{label}_p50_ms=#{p50.round(3)} #{label}_p90_ms=#{p90.round(3)} #{label}_p50_tok_s=#{tok_s.round(3)}"
+end
+
+class Gemma4LiteralTokenIndex
+  @texts : Array(String)
+  @by_first : Hash(Char, Array({Int32, String}))
+
+  def initialize(tokenizer : ML::GGUF::Gemma4Tokenizer)
+    @texts = Array(String).new(tokenizer.vocab.size, "")
+    @by_first = Hash(Char, Array({Int32, String})).new { |h, k| h[k] = [] of {Int32, String} }
+    tokenizer.vocab.each_index do |id|
+      text = begin
+        tokenizer.decode_single(id.to_i32)
+      rescue
+        ""
+      end
+      @texts[id] = text
+      next if text.empty?
+
+      @by_first[text[0]] << {id.to_i32, text}
+    end
+  end
+
+  def text_for_id(id : Int32) : String
+    return "" if id < 0 || id >= @texts.size
+
+    @texts[id]
+  end
+
+  def literal_frontier_ids(remaining_literals : Array(String)) : Array(Int32)
+    return [] of Int32 if remaining_literals.empty?
+
+    allowed = [] of Int32
+    seen = Set(Int32).new
+    remaining_literals.each do |literal|
+      next if literal.empty?
+
+      bucket = @by_first[literal[0]]?
+      next unless bucket
+
+      bucket.each do |id, decoded|
+        next if seen.includes?(id)
+        next unless literal.starts_with?(decoded)
+
+        allowed << id
+        seen << id
+      end
+    end
+    allowed
+  end
+end
+
+def gemma4_advance_literal_options(remaining_literals : Array(String), emitted : String) : Array(String)
+  return remaining_literals if emitted.empty?
+
+  next_literals = [] of String
+  remaining_literals.each do |literal|
+    next unless literal.starts_with?(emitted)
+
+    suffix = literal[emitted.size..]
+    next_literals << suffix if suffix && !suffix.empty?
+  end
+  next_literals
 end
 
 def top1_id(logits : Array(Float32)) : Int32
@@ -248,7 +315,9 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
              prompt_cache_tokenizer_id : String = "synthetic-token-ids",
              prompt_cache_session_id : String = "profile",
              decode_only_seed : Int32? = nil,
-             allowed_ids : Array(Int32) = [] of Int32) : NamedTuple(prefill_ms: Float64, decode_ms: Float64, first_id: Int32, last_id: Int32, token_trace: Array(Int32), cache_route: String, cache_restore_ms: Float64)
+             allowed_ids : Array(Int32) = [] of Int32,
+             literal_index : Gemma4LiteralTokenIndex? = nil,
+             literal_remaining_start : Array(String) = [] of String) : NamedTuple(prefill_ms: Float64, decode_ms: Float64, first_id: Int32, last_id: Int32, token_trace: Array(Int32), cache_route: String, cache_restore_ms: Float64)
   state = ML::GGUF::Gemma4Metal::ResidentState.new(weights.hparams, max_seq)
 
   ML::GGUF::Qwen35Metal::Profile.reset if profile
@@ -323,6 +392,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
   decode_t0 = Time.instant
   cur = prefill_head ? next_id : synthetic_decode_token(0)
   token_trace = [cur]
+  literal_remaining = literal_remaining_start.dup
   i = 0
   while i < generate
     pos = decode_only_seed ? i.to_i32 : (prompt.size + i).to_i32
@@ -368,6 +438,14 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
                 forward_top2_top1(weights, cur, pos, state, decode_wave, top1_wave_resident, decode_layer_count)
               elsif decode_mode == "allowed"
                 forward_allowed_top1(weights, cur, pos, state, allowed_ids, decode_wave, top1_wave_resident, decode_layer_count)
+              elsif decode_mode == "literal" && !literal_remaining.empty?
+                index = literal_index.not_nil!
+                dynamic_allowed = index.literal_frontier_ids(literal_remaining)
+                raise "literal frontier is empty for #{literal_remaining.inspect}" if dynamic_allowed.empty?
+                id = forward_allowed_top1(weights, cur, pos, state, dynamic_allowed, decode_wave, top1_wave_resident, decode_layer_count)
+                emitted = index.text_for_id(id)
+                literal_remaining = gemma4_advance_literal_options(literal_remaining, emitted)
+                id
               else
                 forward_top1(weights, cur, pos, state, decode_wave, top1_wave_resident, decode_layer_count)
               end
@@ -392,7 +470,7 @@ load_ms = (Time.instant - started).total_milliseconds
 raise "Metal not available" unless ML::GGUF::Gemma4Metal.available?
 
 tokenizer = nil.as(ML::GGUF::Gemma4Tokenizer?)
-if prompt_text || print_generated_text
+if prompt_text || print_generated_text || constrained_literal_prefix
   g = ML::GGUF::GGUFFile.new(model)
   tokenizer = ML::GGUF::Gemma4Tokenizer.from_gguf(g, model, llama_tokenize_bin)
   g.close
@@ -403,8 +481,12 @@ end
 raise "prompt tokens must not be empty" if prompt.empty?
 raise "max-seq too small" if max_seq < prompt.size + generate
 
-raise "decode mode must be top1, top2, allowed, or body" unless {"top1", "top2", "allowed", "body"}.includes?(decode_mode)
+raise "decode mode must be top1, top2, allowed, literal, or body" unless {"top1", "top2", "allowed", "literal", "body"}.includes?(decode_mode)
 raise "--allowed-ids must not be empty" if decode_mode == "allowed" && allowed_ids.empty?
+if decode_mode == "literal"
+  prefix = constrained_literal_prefix
+  raise "--constrained-literal-prefix must not be empty" if prefix.nil? || prefix.empty?
+end
 allowed_ids.each do |id|
   raise "--allowed-ids token #{id} out of range" if id < 0 || id >= weights.token_embd.out_dim
 end
@@ -445,6 +527,8 @@ raise "--decode-only-seed cannot be combined with --prompt-cache-root" if decode
 cache_store = nil.as(ML::GGUF::Gemma4PromptCache::Store?)
 cache_model_id = File.basename(model)
 cache_tokenizer_id = prompt_text ? "gemma4-llama-tokenize-oracle" : "synthetic-token-ids"
+literal_index = constrained_literal_prefix ? Gemma4LiteralTokenIndex.new(tokenizer.not_nil!) : nil
+literal_remaining_start = constrained_literal_prefix ? [constrained_literal_prefix.not_nil!] : [] of String
 if root = prompt_cache_root
   cache_store = ML::GGUF::Gemma4PromptCache::Store.new(
     root,
@@ -455,7 +539,7 @@ if root = prompt_cache_root
 end
 
 decode_schedule = decode_stop_layer_after_step ? "#{decode_stop_layer_after_step}:#{decode_stop_layer_after_layer}" : ""
-puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} prompt_text_mode=#{chat_user ? "chat_user" : (prompt_text ? "raw_text" : "token_ids")} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} top1_chain=#{top1_chain} body_chain=#{body_chain} body_chain_note=#{body_chain == 1 ? "llama_bench_parity" : "graph_chunk_known_tokens"} allowed_ids=#{allowed_ids.join(',')} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} decode_stop_layer_after=#{decode_schedule} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_min_free_mib=#{prompt_cache_snapshot_min_free_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
+puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} prompt_text_mode=#{chat_user ? "chat_user" : (prompt_text ? "raw_text" : "token_ids")} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} top1_chain=#{top1_chain} body_chain=#{body_chain} body_chain_note=#{body_chain == 1 ? "llama_bench_parity" : "graph_chunk_known_tokens"} allowed_ids=#{allowed_ids.join(',')} constrained_literal_prefix=#{constrained_literal_prefix || ""} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} decode_stop_layer_after=#{decode_schedule} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_min_free_mib=#{prompt_cache_snapshot_min_free_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
 
 warmups.times do
   run_once(
@@ -473,6 +557,8 @@ warmups.times do
     prompt_cache_session_id: prompt_cache_session,
     decode_only_seed: decode_only_seed,
     allowed_ids: allowed_ids,
+    literal_index: literal_index,
+    literal_remaining_start: literal_remaining_start,
   )
 end
 
@@ -499,6 +585,8 @@ runs.times do
     prompt_cache_session_id: prompt_cache_session,
     decode_only_seed: decode_only_seed,
     allowed_ids: allowed_ids,
+    literal_index: literal_index,
+    literal_remaining_start: literal_remaining_start,
   )
   prefill_samples << result[:prefill_ms]
   decode_samples << result[:decode_ms]

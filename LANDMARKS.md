@@ -22525,3 +22525,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **boundary:** Do not promote this as ordinary greedy speed. The diagnostic used an oracle/static allowed set chosen to preserve the known token trace. Product promotion requires a real JSON/tool grammar frontier, same constrained output, ABBA wall evidence, and fail-closed fallback when the frontier is empty or too large.
 
 **LM-COGNIGRAPH-039 addendum (2026-06-05):** Same constrained-semantics fallback check also supports the resident allowed-head primitive. With identical static allowed ids and token trace, disabling resident allowed-head via `--no-top1-wave-resident` forced the hidden-readback/full-head/filter fallback and measured `42.502 ms/tok` p50 on gen16 (`decode_runs=680.034,710.038`). The resident allowed-head rows from the same diagnostic family were lower (`37.313 ms/tok` gen16 before trace completion; `29.364 ms/tok` when including both greedy ids; gen32 ABBA `38.507/39.149 ms/tok`). Boundary remains: static/oracle frontier, not yet real grammar.
+
+#### [LM-COGNIGRAPH-040] Gemma dynamic literal-frontier diagnostic reuses allowed-head route
+**context:** ml / CogniGraph / Gemma4 / constrained literal frontier / tokenizer-derived grammar / LTP-WBA
+**state:** diagnostic implemented; speed-positive on a tiny literal corridor; not production JSON/tool calling
+
+- claim: "`bin/gemma4_metal_decode_profile.cr` now supports `--constrained-literal-prefix TEXT`, which builds a Gemma tokenizer-derived literal frontier after the initial seed token and feeds that dynamic allowed-token set into the measured decode route."
+  source: `scripts/run_safe.sh crystal 180 8192 build --no-codegen bin/gemma4_metal_decode_profile.cr --error-trace` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma tokenizer decode rewrite, profiler decode-loop rewrite, or constrained-frontier rewrite
+  trust: {F:0.82,G:0.20,R:0.80}
+
+- claim: "A literal-prefix smoke for ` hello` produced identical constrained output through resident allowed-head and fallback full-head filtering. For `gen=8`, both emitted token trace `236761,236743,499,236752,844,236770,236770,236770,236770` and text `. hello1111`; resident measured `35.511 ms/tok`, fallback measured `40.550 ms/tok`."
+  source: `/tmp/gemma4_literal_diag_1780713419/{resident.log,fallback.log}` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host contradiction, tokenizer frontier rewrite, or prompt/model change
+  trust: {F:0.78,G:0.10,R:0.74}
+
+- claim: "When isolated to the literal corridor with `gen=4`, both routes emitted `. hello` with identical token trace `236761,236743,499,236752,844`; resident allowed-head measured p50 `34.669 ms/tok`, fallback full-head filtering measured p50 `37.748 ms/tok` over three sequential runs."
+  source: `/tmp/gemma4_literal_diag_1780713419/{resident_gen4.log,fallback_gen4.log}` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host ABBA contradiction, literal text/tokenization change, or controller integration
+  trust: {F:0.78,G:0.10,R:0.74}
+
+**LTP/WBA:** This is the first non-oracle dynamic frontier for Gemma. Window: a finite literal corridor. Transport: remaining literal suffix -> tokenizer frontier ids -> resident allowed lm-head -> emitted token text -> recomputed suffix. Legal move: scan only the dynamic frontier while preserving exact constrained output. Diagnostic potential descends as `(frontier_vocab_rows, full_head_filter_tax, literal_suffix_remaining, decode_steps)`, with recompute safety checked by identical emitted token traces.
+**boundary:** The profiler still seeds with an unconstrained prompt-next token, so this is a measured decode-corridor diagnostic, not a complete product constrained-generation implementation. Next promotion step is a real JSON/tool grammar controller or a prefill-head constrained first-token path.
