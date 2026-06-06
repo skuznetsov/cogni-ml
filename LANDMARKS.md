@@ -23513,3 +23513,147 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: Gemma-tagged Q4_K decode weights, where prior global x16 evidence was positive for Gemma but risky for shared Qwen routes. Transport: quant-weight route tag -> Q4 x16 kernel frame -> unchanged output buffers -> exact Gemma top1 token trace. Legal Diamond: separate Gemma and Qwen by route tag instead of globally changing Q4 dispatch. Legal Spike: use the x16 row/reduction frame for Gemma weights only. Boundary safety: explicit env kill switches restore the old route; Qwen weights lack the `gemma4:` tag and keep their existing dispatch. Potential descends in `(dominant_Q4_GEMV_wait, model_route_conflict_count, exact_decode_wall, remaining_tokens)` on the current Gemma real-prompt ABBA without increasing token divergence.
 **decision:** Treat this as a modest product decode improvement, not a complete llama.cpp victory. Next performance work should rerun the body/top1 vs llama.cpp benchmark with this default, then focus on remaining FFN/head byte traffic or structured known-token corridors.
+
+#### [LM-COGNIGRAPH-INTROSPECT-LLAMA-VLLM-001] Fresh llama.cpp/vLLM inspection reframes next speed work as corridor selection
+**context:** ml / CogniGraph / Gemma4 / Qwen3.5 / llama.cpp / vLLM / LTP-WBA / performance
+**state:** analysis anchor / next-action ledger
+
+- claim: "Fresh local inspection of `llama.cpp` and `vLLM` shows the next high-leverage speed work is not more blind micro-fusion, but selecting exact bounded corridors where work can be legally eliminated or transported."
+  source: local source inspection on 2026-06-06: `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-metal/ggml-metal-common.cpp` shows Metal graph reorder plus limited norm/add fusion; `/Users/sergey/SrcArchives/AI/llama.cpp/tools/llama-bench/llama-bench.cpp` confirms `llama-bench tg` is body decode with random tokens and per-token sync, not full greedy top1; `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-cuda/ggml-cuda.cu` and `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-cuda/mmvq.cu` show real CUDA fused `gate+up+GLU` quantized MMVQ; `/Users/sergey/SrcArchives/AI/vllm/vllm/config/scheduler.py`, `/Users/sergey/SrcArchives/AI/vllm/vllm/config/compilation.py`, and `/Users/sergey/SrcArchives/AI/vllm/vllm/v1/core/kv_cache_manager.py` show chunked prefill, cudagraph dispatch, prefix cache, and MTP/EAGLE cache-boundary handling; `/Users/sergey/SrcArchives/AI/vllm/vllm/v1/spec_decode/gemma4.py` shows Gemma4 MTP KV sharing, per-group metadata, constant draft positions, and centroids CUDA graphs.
+  verified_at: 2026-06-06
+  decay_trigger: llama.cpp/vLLM source update, CogniGemma/Qwen graph rewrite, MTP/cache boundary rewrite, or new benchmark evidence contradicting the ranking
+  trust: {F:0.78,G:0.55,R:0.82}
+
+**Cassandra:** Recurring pattern is `LOCAL_OPTIMIZATION`: standalone fusions often look plausible, then fail after recomputing whole decode wall. Prior verified wins were legal corridor changes: decode wave, route-tagged Q4 x16, row-prefill known literal spans, CUDA split-K long-context attention, prompt/session cache, and structured literal forcing.
+
+**Daedalus:** Frame shift from "which kernel can be fused" to "which work is legally unnecessary in this active corridor". For product speed, finite structured spans and exact session cache are stronger than generic tg micro-optimizations. For apples-to-apples llama race, normalize body-only vs real greedy top1 before conclusions.
+
+**Maieutic:** Do not assume llama.cpp's remaining advantage is a magical graph scheduler. Metal graph optimization is fairly simple; CUDA fused quant FFN is concrete. Do not assume MTP helps unless acceptance, rollback tax, verifier wall, and cache boundaries lower the recomputed potential. Do not assume vLLM server-throughput machinery maps directly to single-user Metal runs.
+
+**Adversary:** Do not claim broad llama.cpp/vLLM victory without refreshed same-quant/same-prompt rows. Do not globally enable route changes across Qwen/Gemma; keep model route tags and kill switches. Do not lower CUDA split-K threshold below ctx1024 until state parity drift is repaired. Do not graph-promote cache/state-mutating decode without explicit boundary certificates.
+
+**LTP/WBA:** Active potential is `Phi = (dominant_wait_bucket, tied_routes, sync_or_boundary_conflicts, remaining_bytes_or_tokens)`. Legal moves must lower this after recomputing the whole corridor. Spike: known-token structured spans eliminate head scans and serial forced-token update area. Diamond: route-specific kernel atlas prevents Qwen/Gemma route conflicts. Ladder: CUDA long-context split-K transports KV context through stable softmax summaries. Diamond/Ladder: MTP+self-draft hybrid only if proposal/verifier/cache boundaries reduce rollback tax. Collapse: exact session/prefix cache changes product latency by removing repeated prompt area entirely.
+
+**decision:** Next work order: (1) rerun apples-to-apples Gemma/Qwen body/top1 benchmarks after Q4 x16 default, (2) build Gemma route atlas for x16/on-off and dominant Q4/Q6 shapes, (3) port llama.cpp-style CUDA fused quant FFN `gate+up+GLU` as opt-in probe, (4) integrate finite known-token structured corridors into product harness, (5) revisit MTP/self-draft as a hybrid proposal controller using cache-boundary rules from vLLM and our LTP/WBA potential.
+
+#### [LM-GEMMA4-METAL-PARITY-REFRESH-879] CogniGemma body decode is near llama-bench parity; pp remains the main exact gap
+**context:** ml / CogniGemma / Metal / llama.cpp / CogniGraph / LTP-WBA / performance
+**state:** verified benchmark and attribution anchor / next-action ledger
+
+- claim: "After separating route markers from real syncs, CogniGemma 12B Q4_K_M Metal body decode is near llama.cpp body tg parity, while pp256 remains about 11% behind on the current host."
+  source: `/tmp/gemma4_body_chain1_vs_llama_marker_fix_20260606170145.log` measured native body decode `33.81 tok/s` vs llama.cpp `34.11 tok/s` (`-0.87%`) and native prefill `341.83 tok/s` vs llama.cpp `385.11 tok/s` (`-11.24%`); `/tmp/gemma4_top1_chain8_vs_llama_marker_fix_20260606170106.log` measured product-shaped top1 `30.99 tok/s` vs llama-bench body-only `34.52 tok/s` (`-10.21%`, stricter because native computes top1); `/tmp/gemma4_body_chain8_vs_llama_marker_fix_20260606170219.log` measured body-chain8 diagnostic `+1.01%` vs llama-bench body tg, but this is known-token graph-chunk mode, not product greedy.
+  verified_at: 2026-06-06
+  decay_trigger: Gemma Metal route rewrite, benchmark harness rewrite, llama.cpp update, host thermal/power/memory-pressure change, or new same-quant ABBA evidence
+  trust: {F:0.80,G:0.42,R:0.78}
+
+- claim: "The previous `total metal syncs` report could be wrong for Gemma profiles because route markers were counted as grouped command buffers."
+  source: code fix in `src/ml/gguf/qwen35_metal.cr` adds `Profile.bump_route_marker`; `src/ml/gguf/gemma4_metal.cr` now uses it for `profile_route_marker`; verification profile `/tmp/gemma4_decode_wave_profile_marker_fix_20260606165738.log` reports `gemma4.decode_wave.layers 8 calls`, route marker `gemma4.rows.ffn_route.generic 384 hits`, and `total metal syncs: 8`.
+  verified_at: 2026-06-06
+  decay_trigger: Profile report rewrite or Gemma route-marker rewrite
+  trust: {F:0.88,G:0.65,R:0.86}
+
+- claim: "Existing pp256 opt-in routes do not close the Gemma prefill gap."
+  source: sequential `scripts/gemma4_prefill_ab.sh` run with modes `default,tensor,sharedh16,q4pair,fullpair,normh16`; default was fastest at `747.844ms / 342.317 tok/s`, while opt-ins regressed to `887.681/870.133/1004.253/1005.501/1059.981ms`. Logs in `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-prefill-ab.tWpiwN`.
+  verified_at: 2026-06-06
+  decay_trigger: new pp kernel route, changed model quant, changed prompt length, or quiet-host ABBA contradiction
+  trust: {F:0.78,G:0.38,R:0.75}
+
+**LTP/WBA:** Window: recomputed Gemma corridors after marker fix. Transport: profile/benchmark rows -> dominant waits -> exact route decisions. Legal Diamond: split marker hits from real command-buffer syncs before optimizing. Spike rejected: parked pp toggles do not lower `Phi` and are not legal promotions. Ladder retained: resident top1/body chain batching gives small stable native-only wins but does not remove the dominant weight corridor. Current `Phi`: for pp `(gemma4.rows.layers, 1, 2, row-prefill body bytes)`, for tg `(gemma4.decode_wave.layers, 1, 8, ~49.9GiB/8 tokens)`, for product top1 `(gemma4.decode_wave_top1.chain, 1, 1, body+head bytes)`.
+
+**decision:** Do not claim broad Gemma victory. Treat body tg as near-parity/slightly positive under known-token chunking, product top1 as still behind, and pp as the primary exact gap. Next branch should target actual row-prefill body attribution or structured known-token elimination, not already-refuted pp toggles.
+
+#### [LM-GEMMA4-PP-ATTR-PURE-883] Gemma pp attribution now supports pure prefill without decode-row contamination
+**context:** ml / CogniGemma / Metal / CogniGraph / prefill / attribution / LTP-WBA
+**state:** verified harness fix / active pp optimization anchor
+
+- claim: "Gemma pp_body profile rows must use `--generate 0`; otherwise one decode body token contaminates prefill attribution with `b1` GEMV shapes."
+  source: `bin/gemma4_metal_decode_profile.cr` now accepts non-negative `--generate` and reports zero-token decode rates as `0`; `scripts/cognigraph_gemma_profile_matrix.sh` pp_body now passes `--generate 0`; `/tmp/gemma4_pp_body_generate0_verify_20260606170645.log` pure pp256 profile reports only row-prefill `b256` matmul shapes; `/tmp/gemma4_pp_body_generate0_summary_verify_20260606170742.log` reports `decode_tokens=0`, `decode_p50_tok_s=0.0`, `decode_ms_per_token_p50=0.0`.
+  verified_at: 2026-06-06
+  decay_trigger: Gemma profile harness rewrite, matrix script rewrite, or changed profiling semantics
+  trust: {F:0.90,G:0.70,R:0.88}
+
+**LTP/WBA:** Window: pp attribution profile. Transport: prefill-only rows -> CogniGraph atlas -> dominant shape. Legal Spike: eliminate synthetic decode row from pp profile by allowing `generate=0`. Boundary safety: product generation remains unchanged; zero-token mode is a harness/profiling path. Potential descends from mixed `Phi` with false `b1` route ties to pure pp `Phi=(gemma4.rows.layers, 1, 1, 8189.91MiB)` at pp256.
+
+**decision:** Use only pure `generate=0` pp profiles for Gemma prefill optimization. Current dominant exact pp target is `q4_h16_gemm Q4_K 3840x15360 b256` (`3037.50 MiB`, `48.73%` of matmul traffic); conversion is secondary (`1956.00 MiB`, `23.88%` of total logical traffic).
+
+#### [LM-GEMMA4-PP-FFN-UPGATE-885] Pure pp phase attribution makes FFN upgate the primary Gemma exact prefill target
+**context:** ml / CogniGemma / Metal / prefill / FFN / LTP-WBA
+**state:** verified bottleneck/refutation anchor
+
+- claim: "For pure Gemma pp256 row-prefill, FFN up/gate is the real dominant wait family."
+  source: diagnostics-only phase profile `/tmp/gemma4_pp256_pure_phase_profile_20260606170905.log`; `scripts/cognigraph_profile_atlas.cr` aggregation reports `ffn_upgate=387.98ms`, `ffn_down=223.22ms`, `attn_qkv=120.28ms`, `attn_out=76.78ms`, `attn_ctx=74.91ms`, total profiled wait `972.71ms`.
+  verified_at: 2026-06-06
+  decay_trigger: Gemma row-prefill layer encoder rewrite, FFN kernel rewrite, or new quiet-host phase contradiction
+  trust: {F:0.84,G:0.48,R:0.80}
+
+- claim: "Existing pp256 env-gated routes do not solve this window."
+  source: sequential pp256 A/B rows: `tensor/sharedh16/q4pair/fullpair/normh16` all regressed in `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-prefill-ab.tWpiwN`; `q4_gelu` was neutral/slower in `/tmp/gemma4-prefill-q4gelu-20260606170936`; `sharedoff` regressed in `/var/folders/60/brlfc95s5db3jl5_pbcl3tmr0000gn/T//gemma4-prefill-ab.QeBYVD`.
+  verified_at: 2026-06-06
+  decay_trigger: new kernel implementation, changed prompt length, changed host condition, or ABBA contradiction
+  trust: {F:0.76,G:0.36,R:0.75}
+
+**LTP/WBA:** Window: `ffn_upgate` row-prefill phase family. Transport: 48 layer-local FFN up/gate phases over the pp chunk. Legal moves tested and rejected: parked `tensor/sharedh16/sharedoff/q4pair/fullpair/normh16/q4_gelu` toggles. Potential did not descend for these moves, so they are not legal promotions. Dual frame: either create a new FFN-upgate kernel/corridor or switch to exact structured/session corridors that avoid paying the repeated FFN-upgate area.
+
+**decision:** Stop env-toggle retesting at pp256. The next exact pp optimization must change the FFN-upgate algorithm/kernel or avoid the repeated work at a higher level.
+
+#### [LM-GEMMA4-Q4GELU-ATTR-886] q4_gelu fused FFN route does not remove the dominant Q4 weight-read corridor
+**context:** ml / CogniGemma / Metal / FFN / q4_gelu / attribution
+**state:** verified instrumentation correction / refutation anchor
+
+- claim: "The q4_gelu fused route previously under-reported FFN-upgate logical matmul traffic; it does not halve the dominant Q4_K weight-read corridor."
+  source: `src/ml/gguf/qwen35_metal.cr` now bumps `q4_h16_gemm ...` for gate and `q4_h16_gemm_gelu_mul ...` for fused up/GELU inside `encode_q4k_gemm_h16_pair_b64_gelu_mul`; verification atlas `/tmp/gemma4_pp256_q4gelu_attr_fixed_20260606171454.log` reports total matmul `6233.91 MiB`, with gate and fused up/GELU each `1518.75 MiB` for `3840x15360 b256`.
+  verified_at: 2026-06-06
+  decay_trigger: fused FFN route rewrite, profile report rewrite, or new q4_gelu benchmark contradiction
+  trust: {F:0.88,G:0.62,R:0.86}
+
+**LTP/WBA:** Window: q4_gelu fused FFN-upgate route. Legal Diamond: separate activation/materialization savings from weight-read corridor cost. Potential recomputation shows the dominant weight-read area remains; q4_gelu is not a legal promotion from byte-attribution evidence.
+
+**decision:** Keep q4_gelu default-off. Next exact pp work must reduce or avoid the two Q4_K FFN-upgate matrix reads, not only fuse GELU/materialization.
+
+#### [LM-GEMMA4-GELU-H16-DOWN-887] Gemma GELU-H16 activation carry reduces conversion bytes but not pp wall
+**context:** ml / CogniGemma / Metal / prefill / GELU / H16 / LTP-WBA
+**state:** refuted promotion candidate; experimental code removed
+
+- claim: "Writing `GELU(gate) * up` as H16 before FFN-down can preserve a short Gemma top1 trace, but does not produce a stable pp256 wall-time win on M2 Max."
+  source: temporary default-off `GEMMA4_ROW_PREFILL_GELU_H16_DOWN=1` route; pp256/gen4 default and H16 runs both emitted `token_trace=236761,236761,236770,236761,236770`; pure pp256 route profile reduced conversion traffic from `1956.00 MiB` to `876.00 MiB`; ABBA p50s were mixed: default `762.946/760.702ms`, H16 `757.485/762.339ms`.
+  verified_at: 2026-06-06
+  decay_trigger: redesigned FFN-down consumer, new activation/down fused kernel, different GPU architecture, or quiet-host ABBA contradiction
+  trust: {F:0.76,G:0.34,R:0.74}
+
+- claim: "Fusing Q4 up-projection plus GELU directly to H16 also failed promotion."
+  source: temporary `GEMMA4_ROW_PREFILL_Q4_GELU_FUSE=1 GEMMA4_ROW_PREFILL_GELU_H16_DOWN=1` route; fused-H16 profile activated `gemma4.rows.ffn_route.q4_gelu_h16`; pp-head ABBA means were default `769.404/774.372ms` versus fused-H16 `770.525/774.481ms`; pp256 pair was mixed (`default mean 769.536ms`, fused-H16 mean `771.356ms`, p50 noise favored fused once). The temporary code was removed.
+  verified_at: 2026-06-06
+  decay_trigger: Q4 B64 GELU kernel rewrite, downstream consumer fusion, or larger prompt/host ABBA contradiction
+  trust: {F:0.72,G:0.30,R:0.72}
+
+**LTP/WBA:** Window: Gemma row-prefill FFN activation/down producer-consumer seam. Transport: `gate/up -> GELU*up -> FFN-down` across one layer-local row chunk. Legal move shrank activation/conversion area and preserved the observed token boundary, but recomputed `Phi` did not descend because the dominant wait bucket remains FFN weight GEMM, especially the two Q4_K up/gate matrix reads. This is the same Diamond conflict as prior small FFN fusions: local buffer traffic shrinks while register/ALU/kernel scheduling or dominant weight reads keep global wall flat.
+
+**decision:** Do not keep or promote standalone GELU-H16-down code. Future exact pp work should target the FFN-upgate weight corridor itself or a larger graph/product corridor that removes repeated FFN work.
+
+#### [LM-GEMMA4-Q6-B64-888] Fixed Q6 B64 geometry is correct but not a Gemma pp promotion path
+**context:** ml / CogniGemma / Metal / prefill / Q6_K / FFN-down / LTP-WBA
+**state:** refuted promotion candidate; experimental code removed
+
+- claim: "A direct Q6_K f32-output B64 FFN-down route can preserve a short Gemma top1 boundary after fixing B64 input-tile geometry, but it does not produce a stable pp256 wall-time win on M2 Max."
+  source: temporary `QWEN35_Q6K_F32_B64=1` branch; initial top1 drift exposed an invalid mixed B32/B64 layout, corrected to the proven B64 geometry (`sb + 64*(8*sx+sy)`, `lsmb += 8*64`) and narrowed to `in_dim >= 8192`; corrected pp256/gen4 default and Q6-B64 both emitted `first_id=236761` and `last_id=236770`; body-only ABBA mean p50 was default `762.46ms` vs Q6-B64 `763.76ms`; pp-head ABBA was noise-level positive only (`875.61ms` vs `872.98ms`). The temporary code was removed.
+  verified_at: 2026-06-06
+  decay_trigger: redesigned Q6 FFN-down kernel body, different GPU architecture, larger downstream fusion, or quiet-host ABBA contradiction
+  trust: {F:0.78,G:0.34,R:0.76}
+
+**LTP/WBA:** Window: Q6 FFN-down row-prefill tile. Transport: `GELU/activation rows -> Q6 FFN-down -> residual` over pp256 chunks. Legal move after geometry fix preserved the observed token boundary, but recomputed potential did not descend: `Phi=(ffn_upgate wait, ffn_down wait, conversion/scheduling conflicts, remaining bytes)` still has FFN-upgate as the dominant bucket and Q6 retile only touches a secondary bucket. The route is therefore not a legal Collapse.
+
+**decision:** Do not keep direct Q6 B64 FFN-down code. The reusable invariant is that B64 simdgroup GEMM input tiles use the `8*sx` shared-memory layout and `lsmb += 8*64`; future B64 variants must validate this before timing.
+
+#### [LM-GEMMA4-FFN-IN-FUSE-889] Gemma row-prefill FFN-in residual-norm fusion is a small pp128+ default win
+**context:** ml / CogniGemma / Metal / prefill / graph fusion / LTP-WBA
+**state:** promoted with thresholded default and rollback gate
+
+- claim: "Defaulting `gemma4_rmsnorm_add_rows` for the FFN-in residual-norm seam improves larger row-prefill batches modestly while preserving exact token boundaries."
+  source: `src/ml/gguf/gemma4_metal.cr` now makes `ffn_in_residual_norm_fuse_enabled?(batch)` default true for `batch >= 128`, with `GEMMA4_FFN_IN_RESIDUAL_NORM_FUSE_OFF=1` rollback and `GEMMA4_FFN_IN_RESIDUAL_NORM_FUSE_MIN_BATCH` tuning. pp256 body ABBA measured default/old path p50 mean `766.96ms` vs ffn-in fused `760.83ms`; pp-head ABBA was noisy but mean-positive (`1025.86ms` old vs `1007.90ms` fused) and preserved `first_id=236761`, `last_id=236770`; pp64 was flat/slightly negative, motivating the `128` threshold; pp512 was small-positive (`2172.61ms` off vs `2165.72ms` default). Focused Gemma Metal spec passed (`17 examples, 0 failures`).
+  verified_at: 2026-06-06
+  decay_trigger: Gemma row-prefill encoder rewrite, residual-norm kernel rewrite, changed batch/chunk policy, or quiet-host ABBA contradiction
+  trust: {F:0.84,G:0.46,R:0.80}
+
+**LTP/WBA:** Window: row-prefill FFN-in seam after attention output projection. Transport: `attn_projected + residual -> FFN input` over batch rows. Legal move: fuse RMSNorm and residual add into one row kernel only when the batch corridor is large enough. Boundary safety: decode/batch1 remains unchanged because default threshold is `128`; rollback/env override is explicit. Recomputed potential descends modestly for pp256/pp512 and does not promote for pp64.
+
+**decision:** Keep this as a thresholded exact default. Do not overclaim; the dominant pp bottleneck remains the Q4 FFN-upgate weight corridor.

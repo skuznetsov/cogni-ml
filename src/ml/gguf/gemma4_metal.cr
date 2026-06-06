@@ -230,10 +230,12 @@ module ML::GGUF
           ENV["GEMMA4_RESIDUAL_NORM_FUSE_OFF"]? != "1"
       end
 
-      private def ffn_in_residual_norm_fuse_enabled? : Bool
+      private def ffn_in_residual_norm_fuse_enabled?(batch : Int32) : Bool
         return false if ENV["GEMMA4_FFN_IN_RESIDUAL_NORM_FUSE_OFF"]? == "1"
+        return true if ENV["GEMMA4_FFN_IN_RESIDUAL_NORM_FUSE"]? == "1"
 
-        residual_norm_fuse_enabled? || ENV["GEMMA4_FFN_IN_RESIDUAL_NORM_FUSE"]? == "1"
+        min_batch = (ENV["GEMMA4_FFN_IN_RESIDUAL_NORM_FUSE_MIN_BATCH"]? || "128").to_i32
+        residual_norm_fuse_enabled? || batch >= min_batch
       end
 
       private def ffn_out_residual_norm_fuse_enabled? : Bool
@@ -859,7 +861,7 @@ module ML::GGUF
 
         cmd = ML::Metal::CommandBuffer.new
         enc = ML::Metal::ComputeEncoder.new(cmd)
-        if ffn_in_residual_norm_fuse_enabled?
+        if ffn_in_residual_norm_fuse_enabled?(batch)
           encode_rmsnorm_add_rows(enc, attn_buf, post_attn_w, x_buf, attn_out_buf, hidden_dim, batch, hp.rms_eps)
         else
           encode_rmsnorm_rows_weighted_out(enc, attn_buf, post_attn_w, attn_normed_buf, hidden_dim, batch, hp.rms_eps)
@@ -1062,7 +1064,7 @@ module ML::GGUF
         end
 
         return false unless profile_rows_phase("#{prefix}.ffn_in") do |enc|
-          if ffn_in_residual_norm_fuse_enabled?
+          if ffn_in_residual_norm_fuse_enabled?(batch)
             encode_rmsnorm_add_rows(enc, attn_projected_buf, post_attn_w, x_buf, attn_out_buf, hidden_dim, batch, hp.rms_eps)
           else
             encode_rmsnorm_rows_weighted_out(enc, attn_projected_buf, post_attn_w, attn_normed_buf, hidden_dim, batch, hp.rms_eps)
@@ -1238,7 +1240,7 @@ module ML::GGUF
           return false unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.attn_output_qw, ctx_buf, attn_projected_buf, batch)
         end
 
-        if ffn_in_residual_norm_fuse_enabled?
+        if ffn_in_residual_norm_fuse_enabled?(batch)
           encode_rmsnorm_add_rows(enc, attn_projected_buf, post_attn_w, x_buf, attn_out_buf, hidden_dim, batch, hp.rms_eps)
         else
           encode_rmsnorm_rows_weighted_out(enc, attn_projected_buf, post_attn_w, attn_normed_buf, hidden_dim, batch, hp.rms_eps)
