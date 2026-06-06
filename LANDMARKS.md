@@ -23123,3 +23123,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LM-CUDA-LONGCTX-SPLITK-001 addendum (2026-06-06):** Retuned default split-K chunk from `512` to `256` after sequential A/B showed `chunk=256` best at ctx1024 and essentially tied/noisy at ctx4096. Remote default-policy verification after retune: ctx1024 `32.166ms/token`, `phase_layer3_kv_attn_decode_ms=0.233`, `ok=true`; ctx4096 `34.466ms/token`, `phase_layer3_kv_attn_decode_ms=0.502`, `ok=true`. Keep `QWEN_CUDA_FULL_ATTN_SPLITK_CHUNK` override for future host/model-specific tuning.
 
 **LM-CUDA-LONGCTX-SPLITK-001 refutation addendum (2026-06-06):** Do not lower the default split-K threshold below ctx1024 yet. Forced split-K at ctx512 and ctx768 improved wall/top1, but strict state parity failed: ctx512 full all-layer read-logits had `top1_ok=true` but `ok=false` due later conv-state max diff around `2e-5` (`layer28/30_conv_state_ok=false`); ctx768 had `top1_ok=true` but `layer30_conv_state_ok=false`, `ok=false`. Keep default `QWEN_CUDA_FULL_ATTN_SPLITK_MIN_SEQ=1024`; lower thresholds remain an approximate/top1-only experiment unless the numerical boundary is repaired.
+
+#### [LM-COGNIGEMMA-CUDA-001] CogniGemma needs a CUDA productization track
+**context:** ml / CogniGemma / CUDA / productization
+**state:** planned; not yet implemented
+
+- claim: "CogniGemma CUDA support remains a required productization track, separate from the existing CogniGemma Metal path and the Qwen CUDA speed branch."
+  source: user direction on 2026-06-06 after CUDA Qwen split-K work: keep in scope that CogniGemma must also run on CUDA.
+  verified_at: 2026-06-06
+  decay_trigger: CogniGemma CUDA runner implementation, explicit project reprioritization, or Gemma backend architecture rewrite
+  trust: {F:0.60,G:0.40,R:0.70}
+
+**LTP/WBA:** Window: existing CogniGemma Metal resident/decode-wave knowledge plus Qwen CUDA mixed-stack infrastructure. Transport: Gemma4 verified semantics (K-as-V full layers, ungated GQA, SWA/full cadence, GELU FFN, tied Q6 head) -> CUDA runner/kernels -> CLI/session harness. Legal moves must preserve Gemma4 parity first, then port only proven resident/wave scheduling patterns from Metal and split/context scheduling from Qwen CUDA where the geometry matches. Dual frame: keep Metal CogniGemma as the correctness oracle and llama.cpp CUDA as the performance oracle until native CUDA parity exists.
+**decision:** Do not let Qwen CUDA optimization consume the entire CUDA roadmap. After the current Qwen short-context body/head frontier, start a bounded CogniGemma CUDA scaffold: metadata/weights reuse, CPU/Metal parity oracle, CUDA embedding/head/projection primitives, then one-layer and resident decode gates.
