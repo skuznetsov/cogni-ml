@@ -51,12 +51,53 @@ UNGATED_ATTENTION           = GATED_ATTENTION
     st.global.f32 [%rd21], %f17;))
 raise "ungated attention rewrite failed" unless UNGATED_ATTENTION.includes?("gemma4_ungated_attn_decode_cache_probe") && !UNGATED_ATTENTION.includes?("gate_in")
 
+SPLITK_ATTENTION_START       = "// Split-K long-context GQA attention decode, stage 1."
+SPLITK_ATTENTION_END         = "// Parallel exact GQA attention decode over a resident KV cache."
+SPLITK_ATTENTION_START_INDEX = FULL_ATTN_PTX.index(SPLITK_ATTENTION_START) || raise "split-K attention kernel start not found"
+SPLITK_ATTENTION_END_INDEX   = FULL_ATTN_PTX.index(SPLITK_ATTENTION_END) || raise "split-K attention kernel end not found"
+SPLITK_ATTENTION             = FULL_ATTN_PTX[SPLITK_ATTENTION_START_INDEX, SPLITK_ATTENTION_END_INDEX - SPLITK_ATTENTION_START_INDEX]
+UNGATED_SPLITK_ATTENTION     = SPLITK_ATTENTION
+  .gsub("full_attn_decode_cache_splitk_part_probe", "gemma4_swa_ungated_attn_splitk_part_probe")
+  .gsub("full_attn_decode_cache_splitk_reduce_probe", "gemma4_swa_ungated_attn_splitk_reduce_probe")
+  .gsub("    .param .f32 scale,\n    .param .u32 chunk_size,", "    .param .u32 window_size,\n    .param .f32 scale,\n    .param .u32 chunk_size,")
+  .gsub("    ld.param.u32 %r6, [max_seq];\n    ld.param.f32 %f1, [scale];", "    ld.param.u32 %r6, [max_seq];\n    ld.param.u32 %r55, [window_size];\n    ld.param.f32 %f1, [scale];")
+  .gsub("    add.u32 %r12, %r11, 1;      // cache_len", "    add.u32 %r12, %r11, 1;      // cache_len\n    mov.u32 %r56, 0;            // SWA attention start\n    setp.eq.u32 %p30, %r55, 0;\n    @%p30 bra SK_START_DONE;\n    setp.lt.u32 %p30, %r11, %r55;\n    @%p30 bra SK_START_DONE;\n    sub.u32 %r56, %r11, %r55;\n    add.u32 %r56, %r56, 1;\nSK_START_DONE:")
+  .gsub("    mul.lo.u32 %r53, %r52, %r50; // chunk_start", "    mul.lo.u32 %r53, %r52, %r50; // chunk_start\n    add.u32 %r53, %r53, %r56;    // window-relative chunk_start")
+  .gsub("stable log-sum-exp and applies the attention gate.", "stable log-sum-exp without an attention gate.")
+  .gsub("    .param .u64 gate_in,\n", "")
+  .gsub("    ld.param.u64 %rd1, [gate_in];\n", "")
+  .gsub("    mul.lo.u32 %r14, %r12, %r2; // gate/out base", "    mul.lo.u32 %r14, %r12, %r2; // out base")
+  .gsub(%(SKR_GATE_WRITE:
+    mul.rn.f32 %f24, %f17, %f16;
+    add.u32 %r28, %r14, %r23;
+    mul.wide.u32 %rd28, %r28, 4;
+    add.s64 %rd29, %rd1, %rd28;
+    ld.global.f32 %f25, [%rd29];
+    neg.f32 %f26, %f25;
+    mov.f32 %f27, 0f3FB8AA3B;
+    mul.rn.f32 %f28, %f26, %f27;
+    ex2.approx.ftz.f32 %f29, %f28;
+    mov.f32 %f30, 0f3F800000;
+    add.rn.f32 %f31, %f30, %f29;
+    rcp.approx.ftz.f32 %f32, %f31;
+    mul.rn.f32 %f33, %f24, %f32;
+    add.s64 %rd30, %rd5, %rd28;
+    st.global.f32 [%rd30], %f33;), %(SKR_GATE_WRITE:
+    mul.rn.f32 %f24, %f17, %f16;
+    add.u32 %r28, %r14, %r23;
+    mul.wide.u32 %rd28, %r28, 4;
+    add.s64 %rd30, %rd5, %rd28;
+    st.global.f32 [%rd30], %f24;))
+raise "ungated split-K rewrite failed" unless UNGATED_SPLITK_ATTENTION.includes?("gemma4_swa_ungated_attn_splitk_part_probe") && UNGATED_SPLITK_ATTENTION.includes?("window_size") && !UNGATED_SPLITK_ATTENTION.includes?("gate_in")
+
 ATTN_PTX = <<-PTX
 .version 8.0
 .target sm_80
 .address_size 64
 
 #{UNGATED_ATTENTION}
+
+#{UNGATED_SPLITK_ATTENTION}
 PTX
 KV_WRITE_PTX = <<-PTX
 .version 8.0
@@ -149,6 +190,7 @@ model = DEFAULT_MODEL
 layer = 0
 tokens = 4
 base_pos = 0
+splitk_chunk = 0
 seed = 23_u64
 reps = 20
 warmup = 3
@@ -159,6 +201,7 @@ OptionParser.parse do |p|
   p.on("--layer N", "Gemma4 SWA layer index") { |v| layer = v.to_i }
   p.on("--tokens N", "Short context length; must fit inside SWA window") { |v| tokens = v.to_i }
   p.on("--base-pos N", "Absolute start position for the synthetic token span") { |v| base_pos = v.to_i }
+  p.on("--splitk-chunk N", "Use split-K attention with this context chunk size; 0 keeps serial attention") { |v| splitk_chunk = v.to_i }
   p.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
   p.on("--reps N", "Timed launches") { |v| reps = v.to_i }
   p.on("--warmup N", "Untimed warmup launches") { |v| warmup = v.to_i }
@@ -168,6 +211,7 @@ end
 raise "model not found: #{model}" unless File.exists?(model)
 raise "tokens must be positive" unless tokens > 0
 raise "base-pos must be non-negative" unless base_pos >= 0
+raise "splitk-chunk must be non-negative" unless splitk_chunk >= 0
 raise "reps must be positive" unless reps > 0
 raise "warmup must be non-negative" unless warmup >= 0
 
@@ -217,6 +261,8 @@ begin
   attn_mod = ML::CUDA::CUDAModule.load(ATTN_PTX, "gemma4_context_attn")
   kv_mod = ML::CUDA::CUDAModule.load(KV_WRITE_PTX, "gemma4_context_kv")
   attn_fn = attn_mod.function("gemma4_ungated_attn_decode_cache_probe")
+  splitk_part_fn = attn_mod.function("gemma4_swa_ungated_attn_splitk_part_probe")
+  splitk_reduce_fn = attn_mod.function("gemma4_swa_ungated_attn_splitk_reduce_probe")
   kv_write_fn = kv_mod.function("gemma4_kv_cache_write_probe")
 
   q_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(q.size)); buffers << q_buf
@@ -226,6 +272,13 @@ begin
   v_cache_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(max_seq * kv_dim)); buffers << v_cache_buf
   scores_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * n_head * max_seq)); buffers << scores_buf
   out_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * q_dim)); buffers << out_buf
+  active_window_len = Math.min(max_seq, hp.sliding_window)
+  splitk_chunks = splitk_chunk > 0 ? ((active_window_len + splitk_chunk - 1) // splitk_chunk) : 1
+  splitk_meta_count = splitk_chunk > 0 ? tokens * n_head * splitk_chunks : 1
+  splitk_o_count = splitk_chunk > 0 ? splitk_meta_count * head_dim : 1
+  splitk_m_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(splitk_meta_count)); buffers << splitk_m_buf
+  splitk_l_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(splitk_meta_count)); buffers << splitk_l_buf
+  splitk_o_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(splitk_o_count)); buffers << splitk_o_buf
   start_pos_buf = ML::CUDA::DeviceBuffer.new(sizeof(UInt32).to_u64); buffers << start_pos_buf
   start_pos_value = base_pos.to_u32
 
@@ -276,9 +329,49 @@ begin
   attn_params[11] = pointerof(window_size_u32).as(Void*)
   attn_params[12] = pointerof(scale).as(Void*)
 
+  d_splitk_m = splitk_m_buf.ptr
+  d_splitk_l = splitk_l_buf.ptr
+  d_splitk_o = splitk_o_buf.ptr
+  splitk_chunk_u32 = Math.max(splitk_chunk, 1).to_u32
+  splitk_chunks_u32 = splitk_chunks.to_u32
+  splitk_part_params = Pointer(Void*).malloc(17)
+  splitk_part_params[0] = pointerof(d_q).as(Void*)
+  splitk_part_params[1] = pointerof(d_kc).as(Void*)
+  splitk_part_params[2] = pointerof(d_vc).as(Void*)
+  splitk_part_params[3] = pointerof(d_scores).as(Void*)
+  splitk_part_params[4] = pointerof(d_splitk_m).as(Void*)
+  splitk_part_params[5] = pointerof(d_splitk_l).as(Void*)
+  splitk_part_params[6] = pointerof(d_splitk_o).as(Void*)
+  splitk_part_params[7] = pointerof(n_head_u32).as(Void*)
+  splitk_part_params[8] = pointerof(n_head_kv_u32).as(Void*)
+  splitk_part_params[9] = pointerof(head_dim_u32).as(Void*)
+  splitk_part_params[10] = pointerof(hpg_u32).as(Void*)
+  splitk_part_params[11] = pointerof(d_start_pos).as(Void*)
+  splitk_part_params[12] = pointerof(max_seq_u32).as(Void*)
+  splitk_part_params[13] = pointerof(window_size_u32).as(Void*)
+  splitk_part_params[14] = pointerof(scale).as(Void*)
+  splitk_part_params[15] = pointerof(splitk_chunk_u32).as(Void*)
+  splitk_part_params[16] = pointerof(splitk_chunks_u32).as(Void*)
+
+  splitk_reduce_params = Pointer(Void*).malloc(9)
+  splitk_reduce_params[0] = pointerof(d_splitk_m).as(Void*)
+  splitk_reduce_params[1] = pointerof(d_splitk_l).as(Void*)
+  splitk_reduce_params[2] = pointerof(d_splitk_o).as(Void*)
+  splitk_reduce_params[3] = pointerof(d_out).as(Void*)
+  splitk_reduce_params[4] = pointerof(n_head_u32).as(Void*)
+  splitk_reduce_params[5] = pointerof(head_dim_u32).as(Void*)
+  splitk_reduce_params[6] = pointerof(d_start_pos).as(Void*)
+  splitk_reduce_params[7] = pointerof(max_seq_u32).as(Void*)
+  splitk_reduce_params[8] = pointerof(splitk_chunks_u32).as(Void*)
+
   run_once = -> {
     ML::CUDA.launch!(kv_write_fn, tokens.to_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, kv_params, "kv_write")
-    ML::CUDA.launch!(attn_fn, tokens.to_u32, n_head.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, attn_params, "gemma4_ungated_attn_context")
+    if splitk_chunk > 0
+      ML::CUDA.launch!(splitk_part_fn, tokens.to_u32, n_head.to_u32, splitk_chunks_u32, 256_u32, 1_u32, 1_u32, splitk_part_params, "gemma4_swa_splitk_part")
+      ML::CUDA.launch!(splitk_reduce_fn, tokens.to_u32, n_head.to_u32, 1_u32, 256_u32, 1_u32, 1_u32, splitk_reduce_params, "gemma4_swa_splitk_reduce")
+    else
+      ML::CUDA.launch!(attn_fn, tokens.to_u32, n_head.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, attn_params, "gemma4_ungated_attn_context")
+    end
   }
 
   warmup.times { run_once.call }
@@ -301,6 +394,9 @@ begin
   puts "tokens=#{tokens}"
   puts "base_pos=#{base_pos}"
   puts "sliding_window=#{hp.sliding_window}"
+  puts "active_window_len=#{active_window_len}"
+  puts "splitk_chunk=#{splitk_chunk}"
+  puts "splitk_chunks=#{splitk_chunks}"
   puts "head_dim=#{head_dim}"
   puts "n_head=#{n_head}"
   puts "n_head_kv=#{n_head_kv}"

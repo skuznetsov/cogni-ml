@@ -23290,3 +23290,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **decision:** CogniGemma CUDA now has verified SWA projection+norm, full K-as-V projection+norm, RoPE, FFN, RMSNorm, and true ungated SWA cache-backed context corridors. Next slice should verify SWA sliding-window rollover or compose the first one-layer CUDA runner with explicit boundary checks.
 
 **LM-COGNIGEMMA-CUDA-SWA-CONTEXT-001 addendum (2026-06-06):** The same probe now supports nonzero absolute `--base-pos` and rewrites the ungated CUDA attention kernel to start at `max(0, pos - sliding_window + 1)` instead of always scanning from zero. Local typecheck passed again. Remote RTX 5060 Ti checks: `layer=0,tokens=4,base_pos=0` stayed green at `cuda_ms=0.0686`, `ok=true`; `layer=0,tokens=4,base_pos=1024` forced `sliding_window=1024` nonzero start and reported `cuda_ms=16.1358`, `cos=1.0`, `max_diff=2.9802322e-8`, `ok=true`; adversary run `layer=2,tokens=2,base_pos=1100` reported `cuda_ms=16.1226`, `cos=1.0`, `max_diff=4.656613e-8`, `ok=true`. Trust for SWA start semantics rises to `{F:0.88,G:0.30,R:0.86}`. This is a semantic certificate, not a performance kernel: the 1024-window serial attention path is intentionally slow and must be replaced by split-K/parallel attention before product use.
+
+#### [LM-COGNIGEMMA-CUDA-SWA-PARALLEL-CONTEXT-001] Window-relative one-chunk parallel SWA attention is exact and much faster than serial
+**context:** ml / CogniGemma / CUDA / SWA attention / parallel context / LTP-WBA
+**state:** implemented as opt-in probe route
+
+- claim: "The Gemma4 SWA context probe can use a window-relative parallel attention route (`--splitk-chunk 1024`) that preserves CPU-reference parity while replacing the slow serial 1024-window context scan."
+  source: local typecheck on 2026-06-06: `crystal build bin/gemma4_cuda_swa_context_probe.cr --no-codegen -Dcpu_only --error-trace` exited 0. Remote RTX 5060 Ti runs after adding window-relative chunk starts: `layer=0,tokens=4,base_pos=0,splitk_chunk=1024` reported `cuda_ms=0.0094`, `splitk_chunks=1`, `cos=1.0`, `max_diff=4.4703484e-8`, `ok=true`; `layer=0,tokens=4,base_pos=1024,splitk_chunk=1024` reported `cuda_ms=0.6173`, `splitk_chunks=1`, `cos=1.0`, `max_diff=3.3527613e-8`, `ok=true`; `layer=2,tokens=2,base_pos=1100,splitk_chunk=1024` reported `cuda_ms=0.5879`, `cos=1.0`, `max_diff=5.2154064e-8`, `ok=true`.
+  verified_at: 2026-06-06
+  decay_trigger: split-K/PTX rewrite, Gemma4 SWA window size/layout change, CPU SWA context reference rewrite, or composing this route into full-layer decode
+  trust: {F:0.88,G:0.32,R:0.86}
+
+- refutation: "Naive multi-chunk split-K is not currently promotion-safe for exact Gemma SWA context parity."
+  source: remote sweep at `layer=0,tokens=4,base_pos=1024`: split chunks `64/128/256/512/1024` before the one-window-chunk pivot all failed the strict probe gate with `cos≈0.998-0.999` and `max_diff≈0.00097-0.00124`, while one chunk over the whole active window preserved `cos=1.0` and `max_diff≈3e-8`. This is likely hierarchical softmax/rescale numerical drift, not a boundary-index bug.
+  verified_at: 2026-06-06
+  trust: {F:0.76,G:0.22,R:0.78}
+
+**LTP/WBA:** Window: SWA context corridor after semantic start-position certification. Transport: active SWA window -> one parallel CTA per `(token, q_head)` -> cache-backed context certificate. Legal Spike: shift from serial per-head scan to a single-window parallel reduction without changing the softmax frame. Legal Diamond/refutation: multi-chunk split-K reduces wall time locally but changes the numerical frame enough to fail the strict context certificate, so it is not promoted. Potential descends in `(dominant_wait_bucket, semantic_conflict_count, remaining_full_layer_work)`: the dominant `base_pos=1024` context wall fell from about `16.16ms` serial to `0.617ms` exact parallel with `splitk_chunks=1`, while semantic conflict count stayed zero.
+**decision:** Use the one-window parallel route as the next CogniGemma CUDA product attention candidate for SWA. Do not promote multi-chunk SWA split-K without either a relaxed quality gate plus end-to-end logits evidence or a more exact reduction scheme. Next slice: compose SWA projection+norm+RoPE+KV-write+parallel-context+output projection into a one-layer CUDA runner.
