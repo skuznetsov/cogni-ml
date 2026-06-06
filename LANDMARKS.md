@@ -23223,3 +23223,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: attention projection GEMV, intentionally before norm/RoPE/KV semantics. Transport: real SWA/full projection tensors -> CPU `QuantMatmul` -> CUDA Q4/Q6 GEMV -> parity certificate. Legal Ladder: extend primitive coverage from FFN/head to representative attention shapes without crossing the Gemma-specific semantic boundary. Potential descends in `(projection_layout_uncertainty, one_layer_cuda_risk, remaining_semantic_glue)`. Recompute safety: full layer5 has no V tensor, so `--include-attn` checks Q/K/output only and does not fake the K-as-V rule.
 **decision:** One-layer CogniGemma CUDA can reuse quant GEMV for all major projection shapes. Next required slice is semantic glue: RMSNorm kernels for full vectors and per-head Q/K/V, RoPE for SWA/full dims, K-as-V full-layer handling, attention context/KV write, residual/post norms, and layer-output scale.
+
+#### [LM-COGNIGEMMA-CUDA-NORM-001] Existing CUDA RMSNorm kernel covers Gemma4 full and per-head norms
+**context:** ml / CogniGemma / CUDA / RMSNorm / semantic glue / LTP-WBA
+**state:** implemented as bounded smoke probe
+
+- claim: "The existing CUDA `rmsnorm_vec_parallel_batched_probe` kernel covers Gemma4 full-vector weighted RMSNorm, per-head weighted Q/K norms, and plain V RMSNorm represented with an all-ones weight vector."
+  source: remote RTX 5060 Ti run on 2026-06-06 using `bin/gemma4_cuda_norm_probe.cr --model /build/persisten/models/gemma4/gemma-4-12B-it-Q4_K_M.gguf --reps 20 --warmup 3 --tokens 4`. Results: `full_attn_input_norm` dim3840 `0.0052ms`, `cos=1.0`, `max_diff=1.5258789e-5`, `ok=true`; `swa_q_head_norm` dim256 `0.0019ms`, `max_diff=1.1920929e-7`, `ok=true`; `swa_v_plain_norm` dim256 `0.0021ms`, `max_diff=1.1920929e-7`, `ok=true`; `full_q_head_norm` dim512 `0.0019ms`, `max_diff=2.3841858e-7`, `ok=true`; `full_v_plain_norm` dim512 `0.0021ms`, `max_diff=1.1920929e-7`, `ok=true`; `output_norm` dim3840 `0.0052ms`, `max_diff=6.1035156e-5`, `ok=true`; `summary_ok=true`.
+  verified_at: 2026-06-06
+  decay_trigger: RMSNorm PTX rewrite, Gemma4 norm tensor layout change, CPU RMSNorm reference rewrite, or CUDA driver/runtime replacement
+  trust: {F:0.84,G:0.32,R:0.82}
+
+**LTP/WBA:** Window: Gemma semantic glue after projection/FFN primitive parity. Transport: random Gemma-shaped vectors -> CPU RMSNorm reference -> CUDA batched RMSNorm -> numerical certificate. Legal Spike: reuse existing weighted RMSNorm kernel, modeling plain V norms with an all-ones weight vector, instead of adding PTX. Potential descends in `(norm_kernel_uncertainty, semantic_glue_work, one_layer_cuda_risk)`. Recompute safety: full-vector norms use a `1e-4` max-diff tolerance because reduction order differs; per-head norms are much tighter. This is sufficient for primitive promotion but final one-layer/logit parity remains the next boundary.
+**decision:** CogniGemma CUDA now has verified projection GEMV, FFN GELU corridor, and RMSNorm primitives. Next slice should combine `input RMSNorm -> attention Q/K/V projection -> per-head Q/K/V norm` before adding RoPE and KV cache writes.
