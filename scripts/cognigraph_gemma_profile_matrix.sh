@@ -85,7 +85,7 @@ run_profile() {
 }
 
 GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 run_profile pp_body \
-  --tokens "$TOKENS" --generate 1 --max-seq "$MAX_SEQ" --runs 1 --warmups "$WARMUPS" \
+  --tokens "$TOKENS" --generate 0 --max-seq "$MAX_SEQ" --runs 1 --warmups "$WARMUPS" \
   --prefill-mode rows --prefill-chunk "$PREFILL_CHUNK" --body-only --prefill-no-head --profile
 
 run_profile tg_body \

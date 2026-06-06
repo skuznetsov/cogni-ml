@@ -173,7 +173,7 @@ if user = chat_user
                   ML::GGUF::Gemma4Chat.render_user_prompt(user, tools: tools)
                 end
 end
-raise "generate must be positive" unless generate > 0
+raise "generate must be non-negative" unless generate >= 0
 raise "runs must be positive" unless runs > 0
 raise "prompt-cache snapshot MiB must be non-negative" unless prompt_cache_snapshot_mib >= 0
 raise "prompt-cache snapshot min-free MiB must be non-negative" unless prompt_cache_snapshot_min_free_mib >= 0
@@ -190,7 +190,7 @@ def summarize(label : String, samples : Array(Float64), tokens : Int32) : Nil
   mean = samples.sum / samples.size
   p50 = percentile(sorted, 0.50)
   p90 = percentile(sorted, 0.90)
-  tok_s = p50 > 0.0 ? tokens.to_f64 / (p50 / 1000.0) : 0.0
+  tok_s = p50 > 0.0 && tokens > 0 ? tokens.to_f64 / (p50 / 1000.0) : 0.0
   puts "#{label}_runs=#{samples.map { |v| v.round(3) }.join(',')}"
   puts "#{label}_mean_ms=#{mean.round(3)} #{label}_p50_ms=#{p50.round(3)} #{label}_p90_ms=#{p90.round(3)} #{label}_p50_tok_s=#{tok_s.round(3)}"
 end
@@ -914,11 +914,11 @@ end
 
 summarize("prefill", prefill_samples, prompt.size)
 decode_rate_tokens = decode_token_counts.empty? ? generate : decode_token_counts.sort[decode_token_counts.size // 2]
-decode_rate_tokens = 1 if decode_rate_tokens <= 0
 summarize("decode", decode_samples, decode_rate_tokens)
 summarize("cache_restore", cache_restore_samples, prompt.size) unless cache_restore_samples.empty?
 decode_p50 = percentile(decode_samples.sort, 0.50)
-puts "decode_ms_per_token_p50=#{(decode_p50 / decode_rate_tokens).round(3)} decode_tokens=#{decode_token_counts.join(',')} first_id=#{first_id} last_id=#{last_id}"
+decode_ms_per_token = decode_rate_tokens > 0 ? decode_p50 / decode_rate_tokens : 0.0
+puts "decode_ms_per_token_p50=#{decode_ms_per_token.round(3)} decode_tokens=#{decode_token_counts.join(',')} first_id=#{first_id} last_id=#{last_id}"
 puts "literal_summary=forced_single:#{literal_forced_single_total},allowed_head:#{literal_allowed_head_total},span_batches:#{literal_forced_span_batches_total},span_tokens:#{literal_forced_span_tokens_total}" if decode_mode == "literal"
 puts "token_trace=#{last_token_trace.join(',')}" if print_generated_ids
 generated_text_for_output = if decode_mode == "literal" && literal_direct_ids_start.size > 0 && literal_remaining_start.size == 1
