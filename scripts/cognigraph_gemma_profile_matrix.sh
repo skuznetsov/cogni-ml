@@ -93,4 +93,5 @@ run_profile top1 \
   --tokens 42 --decode-only-seed 42 --generate "$GEN" --max-seq "$MAX_SEQ" --runs 1 --warmups 0 \
   --prefill-mode rows --prefill-chunk "$PREFILL_CHUNK" --profile --profile-decode-only
 
+echo "body_chain=$BODY_CHAIN (tg_body; 1 matches llama-bench tg)" >&2
 echo "logs=$OUT_DIR" >&2

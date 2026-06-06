@@ -98,9 +98,9 @@ COGNI_RUN_SAFE_MIN_FREE_PCT=12 "$RUN_SAFE" "$PROFILE_BIN" "$TIMEOUT_SEC" "$RUN_T
   --prefill-mode rows --prefill-chunk "$PREFILL_CHUNK" --body-only --body-chain "$BODY_CHAIN" \
   > "$cogni_tg_log" 2>&1
 
-python3 - "$llama_log" "$cogni_pp_log" "$cogni_tg_log" <<'PY'
+python3 - "$llama_log" "$cogni_pp_log" "$cogni_tg_log" "$BODY_CHAIN" <<'PY'
 import json, re, sys
-llama_log, cogni_pp_log, cogni_tg_log = sys.argv[1:]
+llama_log, cogni_pp_log, cogni_tg_log, body_chain = sys.argv[1:]
 
 def read(path):
     with open(path, 'r', encoding='utf-8', errors='replace') as f:
@@ -132,6 +132,7 @@ llama_pp = float(pp['avg_ts']) if pp else float('nan')
 llama_tg = float(tg['avg_ts']) if tg else float('nan')
 cogni_pp = metric(cogni_pp_log, 'prefill_p50_tok_s')
 cogni_tg = metric(cogni_tg_log, 'decode_p50_tok_s')
+print(f'settings\tbody_chain={body_chain}\t# 1 matches llama-bench tg; >1 is graph-chunk mode')
 print('engine\tpp_tok_s\ttg_body_tok_s')
 print(f'llama.cpp\t{llama_pp:.3f}\t{llama_tg:.3f}')
 print(f'CogniGemma\t{cogni_pp:.3f}\t{cogni_tg:.3f}')

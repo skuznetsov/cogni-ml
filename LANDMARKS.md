@@ -22273,3 +22273,15 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   trust: {F:0.84,G:0.28,R:0.84}
 
 **boundary:** Profile atlases labeled `tg_body` should be generated with chain=1 unless the experiment explicitly studies chunked graph scheduling. Older implicit chain=8 `tg_body` matrices are graph-chunk evidence, not llama-bench-parity evidence.
+
+#### [LM-COGNIGRAPH-029B] Gemma body-chain mode is now printed in comparison summaries
+**context:** ml / CogniGraph / Gemma4 / benchmark accounting / log hygiene
+**state:** harness output clarified
+
+- claim: "Gemma comparison/profile scripts now expose the active body-chain mode in their output: `scripts/gemma4_vs_llama_body_bench.sh` prints `settings body_chain=N`, and `scripts/cognigraph_gemma_profile_matrix.sh` prints `body_chain=N` for `tg_body`."
+  source: `bash -n scripts/gemma4_vs_llama_body_bench.sh`; `bash -n scripts/cognigraph_gemma_profile_matrix.sh` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: benchmark script output rewrite
+  trust: {F:0.82,G:0.24,R:0.82}
+
+**boundary:** This is log hygiene only. It does not establish performance; it prevents confusing chain=1 apples-to-apples rows with chain>1 graph-chunk rows.
