@@ -27,8 +27,8 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `scripts/qwen35_profile_atlas.cr:145-208`; `README.md:792-806`
   verified_at: 2026-05-31
   decay_trigger: profiler output schema or atlas semantics changed
-**caveat:**
-- `crystal build --no-codegen test_graph.cr --error-trace` currently fails because `OpBuilder#buffer` passes `access` into the `BufBinding.length` positional slot. Do not use `test_graph.cr` as release evidence until the public `add_op` builder smoke is repaired.
+**caveat resolved 2026-06-06:**
+- Public `ComputeGraph#add_op` builder smoke was repaired: `OpBuilder#buffer` now constructs `BufBinding` with named fields, and the CPU-only stub has the same public signature. Evidence: `crystal build --no-codegen test_graph.cr --error-trace` passed; `scripts/run_safe.sh /opt/homebrew/bin/crystal 120 4000 spec spec/compute_graph_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` passed with `2 examples, 0 failures`.
 **paper_boundary:** Use cogni-ml as companion-artifact evidence for operational LTP/WBA in inference-engine kernel scheduling. Avoid claiming formal proof of speedup from this artifact; public claims need frozen commit, quiet-host ABBA logs, and a repaired ComputeGraph smoke/spec.
 
 ### [LM-claude-1] Qwen 3.6 27B architecture verified

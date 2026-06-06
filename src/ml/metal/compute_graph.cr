@@ -18,7 +18,8 @@ module ML
       end
 
       struct OpBuilder
-        def buffer(buf : MetalBuffer, index : Int32, access : BufferAccess = :read, offset : Int64 = 0) : OpBuilder
+        def buffer(buf : MetalBuffer, index : Int32, access : BufferAccess = BufferAccess::Read,
+                   offset : Int64 = 0, length : Int64 = -1, partition : Int32 = -1) : OpBuilder
           raise "Metal disabled (cpu_only)"
         end
 
@@ -145,8 +146,15 @@ module ML
         protected def initialize(@op)
         end
 
-        def buffer(buf : MetalBuffer, index : Int32, access : BufferAccess = BufferAccess::Read, offset : Int64 = 0) : OpBuilder
-          @op.buffers << BufBinding.new(buf, index, offset, access)
+        def buffer(buf : MetalBuffer, index : Int32, access : BufferAccess = BufferAccess::Read,
+                   offset : Int64 = 0, length : Int64 = -1, partition : Int32 = -1) : OpBuilder
+          @op.buffers << BufBinding.new(
+            buffer: buf,
+            index: index,
+            offset: offset,
+            length: length,
+            access: access,
+            partition: partition)
           self
         end
 
