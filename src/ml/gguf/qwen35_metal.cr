@@ -11351,6 +11351,8 @@ module ML
           up_w_buf, up_w_off = weight_slot(up_qw)
           x16_buf = Scratch.get(:mm4_pair_gelu_x16, (batch * gate_qw.in_dim).to_i64 * 2_i64)
 
+          Profile.bump_matmul_shape("q4_h16_gemm #{gate_qw.type.name} #{gate_qw.in_dim}x#{gate_qw.out_dim} b#{batch}", gate_qw.raw.size.to_i64)
+          Profile.bump_matmul_shape("q4_h16_gemm_gelu_mul #{up_qw.type.name} #{up_qw.in_dim}x#{up_qw.out_dim} b#{batch}", up_qw.raw.size.to_i64)
           Profile.bump_conversion("f32_to_f16 q4_pair_gelu_input #{gate_qw.in_dim} b#{batch}", (batch * gate_qw.in_dim).to_i64 * 6_i64)
           enc.set_pipeline(f32_to_f16_pipeline)
           enc.set_buffer(x_buf, 0)
