@@ -126,20 +126,22 @@ if constrained_tool_call_prefix && constrained_literal_prefix
 end
 tools = [] of JSON::Any
 tool_names = [] of String
-tool_required_params = {} of String => Array(String)
-tool_finite_values = {} of String => Hash(String, Array(String))
+tool_literal_options = [] of String
 if constrained_tool_call_prefix
   raw_tools = tools_json
   raise "--constrained-tool-call-prefix requires --tools-json or GEMMA4_TOOLS_JSON" if raw_tools.nil? || raw_tools.empty?
   parsed_tools = JSON.parse(raw_tools)
   tools = parsed_tools.as_a? || raise "--tools-json must be a JSON array"
   tool_names = ML::GGUF::Qwen35Constraints.tool_function_names(tools)
-  tool_required_params = ML::GGUF::Qwen35Constraints.tool_required_parameters(tools)
-  tool_finite_values = ML::GGUF::Qwen35Constraints.tool_finite_parameter_value_options(tools)
   raise "--constrained-tool-call-prefix found no function names" if tool_names.empty?
-  if constrained_tool_finite_call && tool_finite_values.empty?
-    raise "--constrained-tool-finite-call found no finite enum/boolean/integer parameter values"
-  end
+  tool_literal_options = if constrained_tool_finite_call
+                           ML::GGUF::Qwen35Constraints.qwen_tool_finite_call_options(tools)
+                         elsif constrained_tool_required_param_prefix
+                           ML::GGUF::Qwen35Constraints.qwen_tool_required_parameter_prefix_options(tools)
+                         else
+                           ML::GGUF::Qwen35Constraints.qwen_tool_call_prefix_options(tool_names)
+                         end
+  raise "--constrained-tool-call-prefix found no literal options" if tool_literal_options.empty?
 end
 if file = prompt_file
   prompt_text = File.read(file)
@@ -665,36 +667,7 @@ cache_model_id = File.basename(model)
 cache_tokenizer_id = prompt_text ? "gemma4-llama-tokenize-oracle" : "synthetic-token-ids"
 literal_index = structured_literal_enabled ? Gemma4LiteralTokenIndex.new(tokenizer.not_nil!) : nil
 literal_remaining_start = if constrained_tool_call_prefix
-                            if constrained_tool_finite_call
-                              options = [] of String
-                              tool_names.each do |name|
-                                parameter_values = tool_finite_values[name]?
-                                next unless parameter_values
-
-                                parameter_values.each do |parameter_name, values|
-                                  values.each do |value|
-                                    options << "<tool_call>\n<function=#{name}>\n<parameter=#{parameter_name}>\n#{value}</parameter>\n</function>\n</tool_call>"
-                                  end
-                                end
-                              end
-                              raise "--constrained-tool-finite-call found no finite literal options" if options.empty?
-                              options
-                            elsif constrained_tool_required_param_prefix
-                              options = [] of String
-                              tool_names.each do |name|
-                                required = tool_required_params[name]? || [] of String
-                                if required.empty?
-                                  options << "<tool_call>\n<function=#{name}>\n"
-                                else
-                                  required.each do |parameter_name|
-                                    options << "<tool_call>\n<function=#{name}>\n<parameter=#{parameter_name}>\n"
-                                  end
-                                end
-                              end
-                              options
-                            else
-                              ML::GGUF::Qwen35Constraints.qwen_tool_call_prefix_options(tool_names)
-                            end
+                            tool_literal_options
                           elsif constrained_literal_prefix
                             [constrained_literal_prefix.not_nil!]
                           else

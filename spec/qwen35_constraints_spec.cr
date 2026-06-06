@@ -77,9 +77,14 @@ describe ML::GGUF::Qwen35Constraints do
 
     required = ML::GGUF::Qwen35Constraints.tool_required_parameters(tools)
     options = ML::GGUF::Qwen35Constraints.qwen_parameter_open_options(required["read_file"])
+    prefixes = ML::GGUF::Qwen35Constraints.qwen_tool_required_parameter_prefix_options(tools)
 
     required["read_file"].should eq(["path", "limit"])
     options.should eq(["<parameter=path>\n", "<parameter=limit>\n"])
+    prefixes.should eq([
+      "<tool_call>\n<function=read_file>\n<parameter=path>\n",
+      "<tool_call>\n<function=read_file>\n<parameter=limit>\n",
+    ])
   end
 
   it "renders single-parameter close options" do
@@ -110,8 +115,12 @@ describe ML::GGUF::Qwen35Constraints do
     ]))
 
     options = ML::GGUF::Qwen35Constraints.tool_finite_parameter_value_options(tools)
+    calls = ML::GGUF::Qwen35Constraints.qwen_tool_finite_call_options(tools)
+
     options["edit_mode"]["mode"].should eq(["fast\n", "safe\n"])
     options["edit_mode"]["dry_run"].should eq(["true\n", "false\n"])
+    calls.should contain("<tool_call>\n<function=edit_mode>\n<parameter=mode>\nfast\n</parameter>\n</function>\n</tool_call>")
+    calls.should contain("<tool_call>\n<function=edit_mode>\n<parameter=dry_run>\nfalse\n</parameter>\n</function>\n</tool_call>")
   end
 
   it "extracts bounded integer parameter value options" do
@@ -145,5 +154,6 @@ describe ML::GGUF::Qwen35Constraints do
     ]))
 
     ML::GGUF::Qwen35Constraints.tool_finite_parameter_value_options(tools).should be_empty
+    ML::GGUF::Qwen35Constraints.qwen_tool_finite_call_options(tools).should be_empty
   end
 end

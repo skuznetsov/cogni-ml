@@ -188,6 +188,38 @@ module ML::GGUF
       end
     end
 
+    def self.qwen_tool_required_parameter_prefix_options(tools : Array(JSON::Any)) : Array(String)
+      required_by_name = tool_required_parameters(tools)
+      options = [] of String
+      tool_function_names(tools).each do |name|
+        required = required_by_name[name]? || [] of String
+        if required.empty?
+          options << "<tool_call>\n<function=#{name}>\n"
+        else
+          required.each do |parameter_name|
+            options << "<tool_call>\n<function=#{name}>\n<parameter=#{parameter_name}>\n"
+          end
+        end
+      end
+      options
+    end
+
+    def self.qwen_tool_finite_call_options(tools : Array(JSON::Any)) : Array(String)
+      finite_by_name = tool_finite_parameter_value_options(tools)
+      options = [] of String
+      tool_function_names(tools).each do |name|
+        parameter_values = finite_by_name[name]?
+        next unless parameter_values
+
+        parameter_values.each do |parameter_name, values|
+          values.each do |value|
+            options << "<tool_call>\n<function=#{name}>\n<parameter=#{parameter_name}>\n#{value}</parameter>\n</function>\n</tool_call>"
+          end
+        end
+      end
+      options
+    end
+
     def self.qwen_parameter_open_options(parameter_names : Array(String)) : Array(String)
       parameter_names.reject(&.empty?).uniq.map do |name|
         "<parameter=#{name}>\n"

@@ -22750,3 +22750,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: finite schema value alternatives where the entire tool call can be certified locally. Transport: schema finite values -> complete literal options -> tokenizer frontier -> resident allowed-head corridor -> close-tag boundary. Legal move: constrain all syntax/value tokens in the finite corridor while preserving exact state updates; after the corridor ends, control switches to the unconstrained dual frame. Potential descends locally in `(invalid_tool_call_area, frontier_vocab_rows, full_head_filter_tax, remaining_complete_call_suffix)`.
 **boundary:** This is the first complete-call diagnostic for finite-valued tools, but not general JSON/function-calling. String/free-form parameters still need a value-span controller or exact fallback policy, and product promotion needs `crystal_ball` integration plus ABBA timing on real tool workloads.
+
+#### [LM-COGNIGRAPH-049] Tool-call literal construction is now a shared constraints primitive
+**context:** ml / CogniGraph / Gemma4 / Qwen35Constraints / structured decoding / productization
+**state:** shared helpers implemented and profiler refactored to use them
+
+- claim: "`Qwen35Constraints` now exposes shared helpers for schema-derived tool literal corridors: `qwen_tool_required_parameter_prefix_options(tools)` and `qwen_tool_finite_call_options(tools)`. The Gemma4 decode profiler uses those helpers instead of local schema-to-literal construction."
+  source: `scripts/run_safe.sh crystal 180 8192 spec spec/qwen35_constraints_spec.cr --error-trace` and `scripts/run_safe.sh crystal 180 8192 build --no-codegen bin/gemma4_metal_decode_profile.cr --error-trace` on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: Qwen35Constraints rewrite, tool-call grammar change, or Gemma profiler option rewrite
+  trust: {F:0.86,G:0.34,R:0.84}
+
+- claim: "After the helper refactor, a bounded Gemma finite-call smoke still builds four finite literal options and reaches the expected `set_flag/enabled/true` prefix through the resident allowed-head route."
+  source: `/tmp/gemma4_tool_finite_helper_* /resident.log` on 2026-06-06; command used `--constrained-tool-finite-call` with enum and boolean tools.
+  verified_at: 2026-06-06
+  decay_trigger: prompt/model change, tokenizer change, resident allowed-head rewrite, or helper behavior rewrite
+  trust: {F:0.76,G:0.10,R:0.72}
+
+**LTP/WBA:** This is a Collapse after the diagnostic Ladder: the local schema-to-literal construction was duplicated inside the profiler, so the legal move transports it into the shared constraints boundary while preserving emitted literal corridors. Potential descends in `(duplicated_schema_logic, product_integration_area, grammar_drift_risk, remaining_controller_work)`.
+**boundary:** Shared helpers support finite XML-style Qwen/Gemma tool-call corridors. They are not yet a full controller for free-form string spans, multiple required parameters in one call, or CrystalBall product routing.
