@@ -23765,3 +23765,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: llama `-fa 1` points at the attention corridor; Gemma SWA256 vec used 8-token softmax tiles with repeated barriers. Transport: row-prefill SWA K/V span with head_dim 256 and GQA sharing. Legal move tested: reduce barrier frequency from tile8 to tile16 while preserving online-softmax state. Potential did not robustly descend after recomputation because final ABBA was mixed; therefore default promotion is blocked.
 
 **decision:** Keep tile16 as an opt-in probe via `GEMMA4_ROW_PREFILL_ATTN_SWA256_VEC_TILE16=1`, with min-batch override. Next branch may test tile32 or a direct llama FA vector port, but only as a separate opt-in with ABBA and parity gates.
+
+#### [LM-GEMMA4-SWA256-TILE32-896] Larger SWA tile32 barrier reduction is refuted
+**context:** ml / CogniGemma / Metal / attention / LTP-WBA / barrier-frequency
+**state:** refuted; temporary code removed
+
+- claim: "Gemma SWA256 tile32 preserves the tested token boundary but does not improve pp256 wall time."
+  source: temporary opt-in `GEMMA4_ROW_PREFILL_ATTN_SWA256_VEC_TILE32=1` build passed; pp256/gen4 top1 boundary matched default (`first_id=254632`, `last_id=208669`, `/tmp/gemma4_tile32_top1_pair_20260606185517`). pp256 ABBA: tile8/default `329.105/290.263 tok/s`, tile16 `324.274/279.504 tok/s`, tile32 `289.806/281.499 tok/s` (`/tmp/gemma4_tile8_16_32_pp256_abba_20260606185540`).
+  verified_at: 2026-06-06
+  decay_trigger: new lane-ownership design, llama FA vector port, quiet-host contradiction, or different GPU architecture
+  trust: {F:0.80,G:0.36,R:0.78}
+
+**LTP/WBA:** Window: reduce repeated SWA softmax tile barriers. Tile16 was mixed/promising; tile32 tried a larger transport chunk. Potential recomputation failed because `dominant_wait_bucket` worsened despite fewer barrier iterations, likely due to per-tile serial dot/register pressure. This is a Diamond boundary: ownership must change, not just tile size.
+
+**decision:** Do not retry simple tile32. Next branch should port or emulate llama-style FA vector/block ownership rather than growing the current SWA tile.
