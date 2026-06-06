@@ -19,8 +19,15 @@ UNGATED_ATTENTION           = GATED_ATTENTION
   .gsub("gated GQA attention decode", "ungated GQA attention decode")
   .gsub("full_attn_decode_cache_probe", "gemma4_ungated_attn_decode_cache_probe")
   .gsub("    .param .u64 gate_in,\n", "")
+  .gsub("    .param .u32 max_seq,\n    .param .f32 scale", "    .param .u32 max_seq,\n    .param .u32 window_size,\n    .param .f32 scale")
+  .gsub("    .reg .pred %p<9>;", "    .reg .pred %p<10>;")
   .gsub("    ld.param.u64 %rd2, [gate_in];\n", "")
+  .gsub("    ld.param.u32 %r6, [max_seq];\n    ld.param.f32 %f1, [scale];", "    ld.param.u32 %r6, [max_seq];\n    ld.param.u32 %r40, [window_size];\n    ld.param.f32 %f1, [scale];")
   .gsub("    mul.lo.u32 %r16, %r15, %r3; // q/gate/out base", "    mul.lo.u32 %r16, %r15, %r3; // q/out base")
+  .gsub("    add.u32 %r11, %r10, 1;      // cache_len = pos + 1", "    add.u32 %r11, %r10, 1;      // cache_len = pos + 1\n    mov.u32 %r41, 0;            // SWA attention start\n    setp.eq.u32 %p9, %r40, 0;\n    @%p9 bra A_START_DONE;\n    setp.lt.u32 %p9, %r10, %r40;\n    @%p9 bra A_START_DONE;\n    sub.u32 %r41, %r10, %r40;\n    add.u32 %r41, %r41, 1;\nA_START_DONE:")
+  .gsub("    mov.u32 %r18, 0;            // p", "    mov.u32 %r18, %r41;         // p")
+  .gsub("    mov.u32 %r25, 0;", "    mov.u32 %r25, %r41;")
+  .gsub("    mov.u32 %r28, 0;", "    mov.u32 %r28, %r41;")
   .gsub(%(A_GATE_WRITE:
     mul.rn.f32 %f17, %f14, %f13;
     add.u32 %r33, %r16, %r27;
@@ -141,6 +148,7 @@ end
 model = DEFAULT_MODEL
 layer = 0
 tokens = 4
+base_pos = 0
 seed = 23_u64
 reps = 20
 warmup = 3
@@ -150,6 +158,7 @@ OptionParser.parse do |p|
   p.on("--model PATH", "Gemma4 GGUF path") { |v| model = v }
   p.on("--layer N", "Gemma4 SWA layer index") { |v| layer = v.to_i }
   p.on("--tokens N", "Short context length; must fit inside SWA window") { |v| tokens = v.to_i }
+  p.on("--base-pos N", "Absolute start position for the synthetic token span") { |v| base_pos = v.to_i }
   p.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
   p.on("--reps N", "Timed launches") { |v| reps = v.to_i }
   p.on("--warmup N", "Untimed warmup launches") { |v| warmup = v.to_i }
@@ -158,6 +167,7 @@ end
 
 raise "model not found: #{model}" unless File.exists?(model)
 raise "tokens must be positive" unless tokens > 0
+raise "base-pos must be non-negative" unless base_pos >= 0
 raise "reps must be positive" unless reps > 0
 raise "warmup must be non-negative" unless warmup >= 0
 
@@ -171,23 +181,28 @@ n_head_kv = hp.n_head_kv(layer)
 heads_per_group = n_head // n_head_kv
 q_dim = n_head * head_dim
 kv_dim = n_head_kv * head_dim
-max_seq = tokens
+max_seq = base_pos + tokens
 
 rng = Random.new(seed)
 q = Array(Float32).new(tokens * q_dim) { rng.rand(-0.25_f32..0.25_f32) }
 k = Array(Float32).new(tokens * kv_dim) { rng.rand(-0.25_f32..0.25_f32) }
 v = Array(Float32).new(tokens * kv_dim) { rng.rand(-0.25_f32..0.25_f32) }
+initial_k_cache = Array(Float32).new(max_seq * kv_dim) { rng.rand(-0.25_f32..0.25_f32) }
+initial_v_cache = Array(Float32).new(max_seq * kv_dim) { rng.rand(-0.25_f32..0.25_f32) }
 
 state = ML::GGUF::Gemma4CPU::LayerState.new
+state.k_cache = initial_k_cache.dup
+state.v_cache = initial_v_cache.dup
 cpu = Array(Float32).new(tokens * q_dim, 0.0_f32)
 cpu_t0 = Time.instant
 tokens.times do |tok|
+  abs_pos = base_pos + tok
   proj = ML::GGUF::Gemma4CPU::AttentionProjection.new(
     q[tok * q_dim, q_dim],
     k[tok * kv_dim, kv_dim],
     v[tok * kv_dim, kv_dim],
     false)
-  out = ML::GGUF::Gemma4CPU.attention_context_from_projection!(proj, hp, layer, tok, state, max_seq)
+  out = ML::GGUF::Gemma4CPU.attention_context_from_projection!(proj, hp, layer, abs_pos, state, max_seq)
   q_dim.times { |i| cpu[tok * q_dim + i] = out[i] }
 end
 cpu_ms = (Time.instant - cpu_t0).total_milliseconds
@@ -212,15 +227,17 @@ begin
   scores_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * n_head * max_seq)); buffers << scores_buf
   out_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * q_dim)); buffers << out_buf
   start_pos_buf = ML::CUDA::DeviceBuffer.new(sizeof(UInt32).to_u64); buffers << start_pos_buf
-  zero_start = 0_u32
+  start_pos_value = base_pos.to_u32
 
   ML::CUDA.copy_htod!(q_buf.ptr, q.to_unsafe.as(Void*), bytesize_f32(q.size), "q")
   ML::CUDA.copy_htod!(k_buf.ptr, k.to_unsafe.as(Void*), bytesize_f32(k.size), "k")
   ML::CUDA.copy_htod!(v_buf.ptr, v.to_unsafe.as(Void*), bytesize_f32(v.size), "v")
-  ML::CUDA.copy_htod!(start_pos_buf.ptr, pointerof(zero_start).as(Void*), sizeof(UInt32).to_u64, "start_pos")
+  ML::CUDA.copy_htod!(k_cache_buf.ptr, initial_k_cache.to_unsafe.as(Void*), bytesize_f32(initial_k_cache.size), "k_cache_init")
+  ML::CUDA.copy_htod!(v_cache_buf.ptr, initial_v_cache.to_unsafe.as(Void*), bytesize_f32(initial_v_cache.size), "v_cache_init")
+  ML::CUDA.copy_htod!(start_pos_buf.ptr, pointerof(start_pos_value).as(Void*), sizeof(UInt32).to_u64, "start_pos")
 
   kv_dim_u32 = kv_dim.to_u32
-  start_u32 = 0_u32
+  start_u32 = base_pos.to_u32
   d_k = k_buf.ptr
   d_v = v_buf.ptr
   d_kc = k_cache_buf.ptr
@@ -242,8 +259,9 @@ begin
   head_dim_u32 = head_dim.to_u32
   hpg_u32 = heads_per_group.to_u32
   max_seq_u32 = max_seq.to_u32
+  window_size_u32 = hp.sliding_window.to_u32
   scale = 1.0_f32
-  attn_params = Pointer(Void*).malloc(12)
+  attn_params = Pointer(Void*).malloc(13)
   attn_params[0] = pointerof(d_q).as(Void*)
   attn_params[1] = pointerof(d_kc).as(Void*)
   attn_params[2] = pointerof(d_vc).as(Void*)
@@ -255,7 +273,8 @@ begin
   attn_params[8] = pointerof(hpg_u32).as(Void*)
   attn_params[9] = pointerof(d_start_pos).as(Void*)
   attn_params[10] = pointerof(max_seq_u32).as(Void*)
-  attn_params[11] = pointerof(scale).as(Void*)
+  attn_params[11] = pointerof(window_size_u32).as(Void*)
+  attn_params[12] = pointerof(scale).as(Void*)
 
   run_once = -> {
     ML::CUDA.launch!(kv_write_fn, tokens.to_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, kv_params, "kv_write")
@@ -280,6 +299,8 @@ begin
   puts "model=#{model}"
   puts "layer=#{layer}"
   puts "tokens=#{tokens}"
+  puts "base_pos=#{base_pos}"
+  puts "sliding_window=#{hp.sliding_window}"
   puts "head_dim=#{head_dim}"
   puts "n_head=#{n_head}"
   puts "n_head_kv=#{n_head_kv}"
