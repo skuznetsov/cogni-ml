@@ -22550,3 +22550,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This is the first non-oracle dynamic frontier for Gemma. Window: a finite literal corridor. Transport: remaining literal suffix -> tokenizer frontier ids -> resident allowed lm-head -> emitted token text -> recomputed suffix. Legal move: scan only the dynamic frontier while preserving exact constrained output. Diagnostic potential descends as `(frontier_vocab_rows, full_head_filter_tax, literal_suffix_remaining, decode_steps)`, with recompute safety checked by identical emitted token traces.
 **boundary:** The profiler still seeds with an unconstrained prompt-next token, so this is a measured decode-corridor diagnostic, not a complete product constrained-generation implementation. Next promotion step is a real JSON/tool grammar controller or a prefill-head constrained first-token path.
+
+#### [LM-COGNIGRAPH-041] Gemma4 multimodal is a separate mmproj/vision corridor, not part of current text-decode speed work
+**context:** ml / CogniGraph / Gemma4 / multimodal / llama.cpp oracle / LTP-WBA
+**state:** read-only discovery; implementation pending after Metal text acceleration
+
+- claim: "Local LM Studio cache contains both Gemma4 text GGUFs and matching multimodal projector GGUFs for 12B and 31B: `gemma-4-12B-it-Q4_K_M.gguf`, `mmproj-gemma-4-12B-it-BF16.gguf`, `gemma-4-31B-it-Q4_K_M.gguf`, and `mmproj-gemma-4-31B-it-BF16.gguf`."
+  source: `find ~/.cache/lm-studio/models -iname '*gemma*4*gguf' -o -iname '*mmproj*gemma*'` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: local model cache changes or file replacement
+  trust: {F:0.86,G:0.18,R:0.84}
+
+- claim: "Local llama.cpp documentation lists Gemma4 in the multimodal model section, and its GGUF tensor mapping contains Gemma4-specific vision encoder/projector tensor names such as `model.vision_tower.patch_embedder.input_proj`, `model.vision_tower.patch_embedder.position_embedding_table`, `vision_model.model.layers.{bid}.self_attn.q_proj.linear`, Q/K norms, MLP gate/up/down, post norms, and layer scalar."
+  source: `/Users/sergey/SrcArchives/AI/llama.cpp/docs/multimodal.md`; `/Users/sergey/SrcArchives/AI/llama.cpp/gguf-py/gguf/tensor_mapping.py` inspected on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: llama.cpp multimodal implementation update, Gemma4 GGUF format change, or mmproj conversion change
+  trust: {F:0.82,G:0.24,R:0.80}
+
+**LTP/WBA:** Treat multimodal support as a separate corridor from current text pp/tg optimization. Window: image input placeholder / mmproj file. Transport: image preprocessing -> Gemma4 vision encoder/projector -> injected embedding span -> existing text decoder. Legal move for CogniGemma is to preserve the text decoder boundary and add a verified embedding-injection lane, not to entangle MM work with current text-decode head/FFN scheduling. Potential should be `(missing_oracle_parity, projector_embedding_error, injection_boundary_conflict, remaining_MM_steps)` until text output matches llama.cpp on a small image prompt.
+**boundary:** Do not claim CogniGemma multimodal support yet. First gate is a local llama.cpp MM smoke with the 12B text GGUF plus `mmproj-gemma-4-12B-it-BF16.gguf`; second gate is inventory/loading of mmproj tensors; third gate is projector embedding parity and decoder injection.
