@@ -816,6 +816,10 @@ module ML::GGUF
         true
       end
 
+      private def self.profile_route_marker(label : String) : Nil
+        Qwen35Metal::Profile.bump_group(label, 0_i64, 0_i64, 0_i64) if Qwen35Metal::Profile.enabled?
+      end
+
       private def self.forward_layer_resident_cache_rows_profile_phases_to_buffer(weights : Gemma4Weights,
                                                                                   il : Int32,
                                                                                   x_buf : ML::MetalBuffer,
@@ -969,16 +973,20 @@ module ML::GGUF
         return false unless profile_rows_phase("#{prefix}.ffn_upgate") do |enc|
           fused_gelu = q4_gelu_fuse_enabled? &&
             Qwen35Metal.encode_q4k_gemm_h16_pair_b64_gelu_mul(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, combined_buf, batch)
+          profile_route_marker("#{prefix}.ffn_route.q4_gelu") if fused_gelu
           unless fused_gelu
+            route = "generic"
             ok = if ffn16 = ffn_in_h16_buf
+                   route = "h16_pair"
                    Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.ffn_gate_qw, ffn16, gate_buf, batch) &&
                      Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.ffn_up_qw, ffn16, up_buf, batch)
                  else
                    (q4_pair_ffn_enabled? &&
-                     Qwen35Metal.encode_q4k_gemm_h16_pair_to_buffers(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, up_buf, batch)) ||
-                     Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], batch)
+                     Qwen35Metal.encode_q4k_gemm_h16_pair_to_buffers(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, up_buf, batch).tap { |success| route = "q4_pair" if success }) ||
+                     Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], batch).tap { |success| route = "generic" if success }
                  end
             next false unless ok
+            profile_route_marker("#{prefix}.ffn_route.#{route}")
             encode_gelu_mul(enc, gate_buf, up_buf, combined_buf, batch * ffn_dim)
           end
           true
@@ -1135,16 +1143,21 @@ module ML::GGUF
         end
         fused_gelu = q4_gelu_fuse_enabled? &&
           Qwen35Metal.encode_q4k_gemm_h16_pair_b64_gelu_mul(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, combined_buf, batch)
+        profile_route_marker("gemma4.rows.ffn_route.q4_gelu") if fused_gelu
         unless fused_gelu
+          route = "generic"
           ok = if ffn16 = ffn_in_h16_buf
+                 route = "h16_pair"
                  Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.ffn_gate_qw, ffn16, gate_buf, batch) &&
                    Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.ffn_up_qw, ffn16, up_buf, batch)
                else
                  pair_q4 = q4_pair_ffn_enabled? &&
                    Qwen35Metal.encode_q4k_gemm_h16_pair_to_buffers(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, up_buf, batch)
+                 route = "q4_pair" if pair_q4
                  pair_q4 || Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], batch)
                end
           return false unless ok
+          profile_route_marker("gemma4.rows.ffn_route.#{route}")
           encode_gelu_mul(enc, gate_buf, up_buf, combined_buf, batch * ffn_dim)
         end
         return false unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.ffn_down_qw, combined_buf, ffn_buf, batch)

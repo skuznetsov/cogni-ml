@@ -22329,3 +22329,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The window is a valid Gemma direct-output certificate for a repeated session/prompt span. The corridor is bounded by prompt text, session id, tokenizer id, output token count, and exact-known-span hashes. The legal Spike is direct token emission with no model work; if the certificate is absent, the route can only emit via exact metadata fallback. Continuation state remains a dual-frame fallback to normal decode until a validated Gemma state replay corridor exists.
 **boundary:** This is the reusable consumer substrate. It still needs CogniGemma/crystal_ball or CLI integration before it changes end-user latency.
+
+#### [LM-COGNIGRAPH-032] Gemma FFN route markers expose why Q4 pair/GELU is not a decode-b1 win
+**context:** ml / CogniGraph / Gemma4 / FFN route attribution / LTP-WBA
+**state:** instrumentation implemented; Q4 pair/GELU decode-b1 refuted for current kernels
+
+- claim: "Gemma phase/profile output now records FFN up/gate route markers (`ffn_route.generic`, `ffn_route.h16_pair`, `ffn_route.q4_pair`, `ffn_route.q4_gelu`) when profiling is enabled, without changing inference semantics."
+  source: `scripts/run_safe.sh crystal 180 8192 build --no-codegen bin/gemma4_metal_decode_profile.cr --error-trace`; guarded profile smoke `/tmp/gemma4_profile_route_smoke` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma FFN route rewrite, Qwen Q4 pair helper rewrite, or profile report rewrite
+  trust: {F:0.84,G:0.28,R:0.82}
+
+- claim: "On Gemma4 12B Q4_K_M decode b1, the current FFN route is generic for all 48 layers. Setting `GEMMA4_ROW_PREFILL_Q4_PAIR_FFN=1` or `GEMMA4_ROW_PREFILL_Q4_GELU_FUSE=1` still left `gemma4.rows.ffn_route.generic` at 48 calls because the shared Q4 pair/GELU helpers are batch-64 GEMM routes, not decode-b1 routes."
+  source: guarded route smokes with `GEMMA4_DECODE_PROFILE_PHASES=1` and one generated token on 2026-06-05; source inspection of `q4_pair_h16_gemm_candidate?` and `q4_h16_b64_swiglu_batch_candidate?`.
+  verified_at: 2026-06-05
+  decay_trigger: Q4 pair min-batch rewrite or new decode-b1 pair kernel
+  trust: {F:0.82,G:0.20,R:0.78}
+
+**LTP/WBA:** The window was the FFN up/gate route ambiguity. The legal Diamond was adding profile-only route markers before stacking env gates. Potential descends from `(route_uncertainty, tied_candidate_routes, env_conflict_count, remaining_measurement_work)` to a single active decode route: generic GEMV. The dual frame for first-run decode is now Q4/Q6 GEMV/head-kernel attribution, not batch-GEMM FFN fusion.
+**boundary:** Do not default-enable Gemma Q4 pair/GELU for decode based on FFN logical traffic. It remains a high-batch prefill/approximate corridor only unless a new decode-b1 pair kernel is implemented and ABBA-verified.
