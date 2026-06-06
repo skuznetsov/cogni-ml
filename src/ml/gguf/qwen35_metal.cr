@@ -331,6 +331,7 @@ module ML
           @@group_read_ns = Hash(String, Int64).new(0_i64)
           @@group_upload_bytes = Hash(String, Int64).new(0_i64)
           @@group_read_bytes = Hash(String, Int64).new(0_i64)
+          @@route_counts = Hash(String, Int64).new(0_i64)
           @@matmul_counts = Hash(String, Int64).new(0_i64)
           @@matmul_weight_bytes = Hash(String, Int64).new(0_i64)
           @@conversion_counts = Hash(String, Int64).new(0_i64)
@@ -358,6 +359,7 @@ module ML
             @@group_read_ns.clear
             @@group_upload_bytes.clear
             @@group_read_bytes.clear
+            @@route_counts.clear
             @@matmul_counts.clear
             @@matmul_weight_bytes.clear
             @@conversion_counts.clear
@@ -428,6 +430,11 @@ module ML
             return unless @@enabled
             @@group_upload_bytes[label] += upload_bytes
             @@group_read_bytes[label] += read_bytes
+          end
+
+          def self.bump_route_marker(label : String) : Nil
+            return unless @@enabled
+            @@route_counts[label] += 1
           end
 
           def self.bump_cpu_fallback : Nil
@@ -519,6 +526,12 @@ module ML
                                @@group_read_ns[name] / 1_000_000.0,
                                @@group_upload_bytes[name] / 1_048_576.0,
                                @@group_read_bytes[name] / 1_048_576.0)
+                end
+              end
+              unless @@route_counts.empty?
+                s << "  route markers:\n"
+                @@route_counts.keys.sort_by { |name| {-@@route_counts[name], name} }.each do |name|
+                  s << sprintf("    %-34s %4d hits\n", name, @@route_counts[name])
                 end
               end
               unless @@matmul_counts.empty?

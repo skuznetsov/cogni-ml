@@ -9,6 +9,7 @@ MODEL="${GEMMA4_MODEL:-$HOME/.cache/lm-studio/models/lmstudio-community/gemma-4-
 OUT_DIR="${OUT_DIR:-/tmp/cognigraph_gemma_matrix_$(date +%Y%m%d%H%M%S)}"
 PROMPT=256
 GEN=8
+WARMUPS=1
 MAX_SEQ=512
 PREFILL_CHUNK=512
 TIMEOUT_SEC=420
@@ -28,6 +29,7 @@ Generate CogniGraph profile atlases for three Gemma4 corridors:
 Options:
   --prompt N         Prompt tokens for pp_body (default: 256)
   --gen N            Decode tokens for tg_body/top1 (default: 8)
+  --warmups N        Warmup runs per corridor before the profiled run (default: 1)
   --max-seq N        KV max sequence length (default: 512)
   --prefill-chunk N  Row-prefill chunk (default: 512)
   --body-chain N     Body-chain chunk for tg_body; default 1 for llama-bench parity
@@ -41,6 +43,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --prompt) PROMPT="$2"; shift 2 ;;
     --gen) GEN="$2"; shift 2 ;;
+    --warmups) WARMUPS="$2"; shift 2 ;;
     --max-seq) MAX_SEQ="$2"; shift 2 ;;
     --prefill-chunk) PREFILL_CHUNK="$2"; shift 2 ;;
     --body-chain) BODY_CHAIN="$2"; shift 2 ;;
@@ -82,15 +85,15 @@ run_profile() {
 }
 
 GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 run_profile pp_body \
-  --tokens "$TOKENS" --generate 1 --max-seq "$MAX_SEQ" --runs 1 --warmups 0 \
+  --tokens "$TOKENS" --generate 1 --max-seq "$MAX_SEQ" --runs 1 --warmups "$WARMUPS" \
   --prefill-mode rows --prefill-chunk "$PREFILL_CHUNK" --body-only --prefill-no-head --profile
 
 run_profile tg_body \
-  --tokens 42 --decode-only-seed 42 --generate "$GEN" --max-seq "$MAX_SEQ" --runs 1 --warmups 0 \
+  --tokens 42 --decode-only-seed 42 --generate "$GEN" --max-seq "$MAX_SEQ" --runs 1 --warmups "$WARMUPS" \
   --prefill-mode rows --prefill-chunk "$PREFILL_CHUNK" --body-only --body-chain "$BODY_CHAIN" --profile --profile-decode-only
 
 run_profile top1 \
-  --tokens 42 --decode-only-seed 42 --generate "$GEN" --max-seq "$MAX_SEQ" --runs 1 --warmups 0 \
+  --tokens 42 --decode-only-seed 42 --generate "$GEN" --max-seq "$MAX_SEQ" --runs 1 --warmups "$WARMUPS" \
   --prefill-mode rows --prefill-chunk "$PREFILL_CHUNK" --profile --profile-decode-only
 
 echo "body_chain=$BODY_CHAIN (tg_body; 1 matches llama-bench tg)" >&2

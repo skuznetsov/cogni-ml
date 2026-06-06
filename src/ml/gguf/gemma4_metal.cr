@@ -923,7 +923,7 @@ module ML::GGUF
       end
 
       private def self.profile_route_marker(label : String) : Nil
-        Qwen35Metal::Profile.bump_group(label, 0_i64, 0_i64, 0_i64) if Qwen35Metal::Profile.enabled?
+        Qwen35Metal::Profile.bump_route_marker(label) if Qwen35Metal::Profile.enabled?
       end
 
       private def self.forward_layer_resident_cache_rows_profile_phases_to_buffer(weights : Gemma4Weights,
