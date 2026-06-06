@@ -23323,3 +23323,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: first cross-boundary SWA attention corridor after individual projection, norm, RoPE, KV, context, and output-GEMV landmarks. Transport: hidden rows -> input RMSNorm -> Q/K/V GEMV -> Q/K/V norms -> RoPE -> resident KV cache -> one-window parallel SWA context -> attn_output GEMV -> CPU certificate. Legal Ladder: compose certified primitives while stopping before residual/post-norm/FFN so the boundary remains falsifiable. Potential descends in `(composition_uncertainty, semantic_conflict_count, remaining_full_layer_work)`: composition uncertainty fell because the full attention-output corridor passed both short and nonzero-window-start runs; semantic conflict count stayed zero.
 **decision:** CogniGemma CUDA has a verified SWA attention-output corridor. Next legal slice is full SWA layer composition: add residual add + post-attention norm + FFN input norm + GELU FFN + post-FFW norm + final residual/layer scale, with CPU `forward_layer` parity as the gate.
+
+#### [LM-COGNIGEMMA-CUDA-SWA-LAYER-001] CUDA full SWA layer composition matches Gemma4 CPU reference
+**context:** ml / CogniGemma / CUDA / SWA layer / residual tail / FFN / LTP-WBA
+**state:** implemented as bounded composition probe
+
+- claim: "A composed CUDA corridor for one Gemma4 SWA layer can match CPU `Gemma4CPU.forward_layer` through attention projection, post-attention norm/residual, FFN input norm, GELU FFN, post-FFW norm, final residual, and layer-output scale."
+  source: local typecheck on 2026-06-06: `crystal build bin/gemma4_cuda_swa_layer_probe.cr --no-codegen -Dcpu_only --error-trace` exited 0. Remote RTX 5060 Ti runs on `/build/persisten/models/gemma4/gemma-4-12B-it-Q4_K_M.gguf`: `layer=0,tokens=4,base_pos=0,splitk_chunk=1024` reported `cuda_ms=2.3131`, `cuda_ms_per_token=0.5783`, `attn_cos=1.0`, `attn_max_diff=1.9073486e-6`, `cos=1.0`, `max_diff=8.106232e-6`, `ok=true`; `layer=0,tokens=4,base_pos=1024,splitk_chunk=1024` reported `cuda_ms=3.185`, `cuda_ms_per_token=0.7962`, `attn_cos=1.0`, `attn_max_diff=4.917383e-7`, `cos=1.0`, `max_diff=5.2452087e-6`, `ok=true`; adversary run `layer=2,tokens=2,base_pos=1100,splitk_chunk=1024` reported `cuda_ms=2.1184`, `cuda_ms_per_token=1.0592`, `attn_cos=1.0`, `attn_max_diff=4.7683716e-6`, `cos=1.0`, `max_diff=5.722046e-6`, `ok=true`.
+  verified_at: 2026-06-06
+  decay_trigger: Gemma4 layer-tail formula change, CUDA RMSNorm/GELU/add/GEMV PTX rewrite, shared SWA context PTX rewrite, CPU `forward_layer` reference change, or moving from probe composition into production runner scheduling
+  trust: {F:0.90,G:0.34,R:0.88}
+
+- refutation: "A hand-written rational/tanh GELU approximation is not promotion-safe for the Gemma4 CUDA FFN tail."
+  source: the first full-layer remote run preserved the attention boundary (`attn_cos=1.0`, `attn_max_diff=1.9073486e-6`) but failed final parity with `cos=0.83669502`, `max_diff=8.255607`, `ok=false`. Replacing that GELU PTX with the previously verified exp2-based `gelu_mul_f32` from `bin/cuda_ffn_sequence_probe.cr` restored full-layer parity.
+  verified_at: 2026-06-06
+  trust: {F:0.84,G:0.28,R:0.84}
+
+**LTP/WBA:** Window: SWA attention-output corridor stopped before Gemma's residual/FFN tail. Transport: hidden rows -> certified attention-output corridor -> post-attention norm/residual -> FFN corridor -> post-FFW norm/final scale -> CPU full-layer certificate. Legal Ladder: extend the certified SWA corridor only one semantic boundary at a time, with an internal `attn_projected` certificate to localize failures. Legal Diamond: when final parity failed while attention parity held, normalize the conflict at the GELU frame instead of retuning attention/context. Potential descends in `(full_layer_composition_uncertainty, semantic_conflict_count, remaining_runner_work)`: full-layer uncertainty fell to zero for the tested SWA slices, and the GELU semantic conflict is now recorded as a refuted branch.
+**decision:** The next promotion-safe CogniGemma CUDA slice is a reusable SWA-layer runner path that carries this full-layer composition with production scheduling/scratch reuse. Do not generalize this landmark to full-attention K-as-V layers until their attention-context and full-layer corridors are separately certified.
