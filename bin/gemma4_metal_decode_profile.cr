@@ -394,6 +394,29 @@ def prefill_prompt_hidden(weights : ML::GGUF::Gemma4Weights,
   end
 end
 
+def update_known_tokens_resident(weights : ML::GGUF::Gemma4Weights,
+                                 token_ids : Array(Int32),
+                                 pos : Int32,
+                                 state : ML::GGUF::Gemma4Metal::ResidentState,
+                                 decode_layer_count : Int32,
+                                 prefill_chunk : Int32) : Nil
+  if ENV["GEMMA4_LITERAL_ROW_PREFILL_OFF"]? == "1"
+    unless ML::GGUF::Gemma4Metal.forward_resident_cache_body_chain(weights, token_ids, pos, state, decode_layer_count)
+      raise "Gemma4 known-token body chain failed"
+    end
+  else
+    ML::GGUF::Gemma4Metal.prefill_tokens_last_hidden_resident_rows(
+      weights,
+      token_ids,
+      pos,
+      state,
+      chunk_size: prefill_chunk,
+      stop_layer: decode_layer_count,
+      read_last_hidden: false
+    ).not_nil!
+  end
+end
+
 def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate : Int32,
              max_seq : Int32, decode_mode : String, prefill_mode : String, prefill_chunk : Int32,
              prefill_head : Bool = true,
@@ -554,9 +577,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
         emitted_ids = literal_direct_remaining[0, span]
         consumed_tokens = [cur]
         consumed_tokens.concat(emitted_ids[0, emitted_ids.size - 1]) if emitted_ids.size > 1
-        unless ML::GGUF::Gemma4Metal.forward_resident_cache_body_chain(weights, consumed_tokens, pos, state, decode_layer_count)
-          raise "Gemma4 literal direct-token body chain failed"
-        end
+        update_known_tokens_resident(weights, consumed_tokens, pos, state, decode_layer_count, prefill_chunk)
         emitted_ids.size.times { literal_direct_remaining.shift }
         token_trace.concat(emitted_ids)
         cur = emitted_ids.last
@@ -585,9 +606,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
         if emitted_ids.size >= 2
           consumed_tokens = [cur]
           consumed_tokens.concat(emitted_ids[0, emitted_ids.size - 1])
-          unless ML::GGUF::Gemma4Metal.forward_resident_cache_body_chain(weights, consumed_tokens, pos, state, decode_layer_count)
-            raise "Gemma4 literal forced span body chain failed"
-          end
+          update_known_tokens_resident(weights, consumed_tokens, pos, state, decode_layer_count, prefill_chunk)
           token_trace.concat(emitted_ids)
           cur = emitted_ids.last
           literal_remaining = probe_remaining

@@ -23460,3 +23460,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **decision:** Promote this as a structured-output/product-harness optimization, not as generic decode acceleration. Next step is to make parser/display preserve Gemma tool-call control markers or parse from the forced literal string/token trace, because conservative detokenized display skips special markers and currently yields `tool_calls=[]` even when the forced token sequence is the intended tool call.
 
 **LM-COGNIGEMMA-METAL-DIRECT-LITERAL-001 addendum (2026-06-06):** Fixed the profile harness to use the authoritative forced literal string for display/tool parsing when `literal_direct_ids` is active. Reverified real-prompt forced Gemma tool call: `literal_direct_ids=14`, `allowed_head=0`, `decode_ms_per_token_p50=33.034`, generated text preserved control markers (`<|tool_call>...<tool_call|>`), and simple tool JSON returned `{"tool_calls":[{"name":"set_color","arguments":{"color":"red"}}]}`. This closes the earlier display/parser caveat for single-option direct literals.
+
+#### [LM-COGNIGEMMA-METAL-LITERAL-ROWPREFILL-001] Forced Gemma literal spans can update KV through exact row-prefill
+**context:** ml / CogniGemma / Metal / constrained decode / row-prefill / LTP-WBA
+**state:** implemented as default forced-span state-update route with env fallback
+
+- claim: "Known forced literal token spans can replace serial decode body-chain state updates with Gemma resident row-prefill while preserving the forced token trace and structured tool JSON."
+  source: local sequential `run_safe` A/B on 2026-06-06 using `/tmp/gemma4_metal_decode_profile_direct_literal`, real `set_color(color=red)` chat prompt, `literal_direct_ids=14`, `allowed_head=0`, same generated forced literal and parsed tool JSON. Old fallback with `GEMMA4_LITERAL_ROW_PREFILL_OFF=1` reported `decode_ms_per_token_p50=33.47`, `decode_p50_tok_s=29.877`; row-prefill forced span route reported `decode_ms_per_token_p50=20.08`, `decode_p50_tok_s=49.802`.
+  verified_at: 2026-06-06
+  decay_trigger: Gemma row-prefill cache semantics change, literal direct-token forcing rewrite, forced span body update route change, or enabling approximate row-GEMM drift without a separate gate
+  trust: {F:0.86,G:0.28,R:0.82}
+
+**LTP/WBA:** Window: a forced literal span after the first forced token is known exactly. Transport: consumed known token IDs -> resident row-prefill corridor -> KV/session state update -> final forced token trace. Legal Ladder: use exact row-prefill for known tokens instead of serial decode body-chain; fallback is `GEMMA4_LITERAL_ROW_PREFILL_OFF=1`. Boundary safety: token IDs are externally constrained, but model body still runs over every consumed token, so cache/session state is not skipped. Potential descends in `(head_scan_count, serial_decode_body_area, remaining_forced_span_tokens)`: head scan count stays zero and serial forced-span update time drops by ~1.67x in the tested single-option tool corridor.
+**decision:** This is now the strongest Gemma exact structured-output acceleration path: direct literal token forcing plus row-prefill state update. Next product step is to integrate the same known-span corridor into the Crystal Ball function-calling harness and compare real structured tasks against plain top1 and llama.cpp.
