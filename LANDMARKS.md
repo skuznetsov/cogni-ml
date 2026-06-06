@@ -22122,3 +22122,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This is a legal experimental Spike/Ladder on the `attn_prep` corridor: the window is verified phase wait, transport is q/k/v head rows into resident KV cache, boundary is exact Q/K/V normalization/RoPE/cache semantics, and the local potential descends in warm phase attribution. Recompute safety is not yet proven for normal decode wall time, so the move remains opt-in and cannot be collapsed into default.
 **boundary:** Do not promote `GEMMA4_ATTN_PREP_FUSE=1` until a quiet-host ABBA or ABBA/ABAB run shows stable wall descent on normal decode. The next Diamond should check whether fused kernels reduce launch count but increase occupancy/register pressure enough to hurt long decode under load.
+
+### [LM-COGNIGRAPH-023] Gemma residual-norm fusion needs split controls; ffn_in is the only surviving candidate
+**context:** ml / CogniGraph / Gemma4 / residual RMSNorm fusion / Metal / LTP-WBA
+**state:** implemented as opt-in split controls; no default promotion
+
+- claim: "Gemma row tail paths now expose opt-in residual fusion controls: `GEMMA4_FFN_IN_RESIDUAL_NORM_FUSE=1` for `RMSNorm(attn_projected)+residual add`, `GEMMA4_FFN_OUT_RESIDUAL_NORM_FUSE=1` for `RMSNorm(ffn_buf)+(residual add scaled)`, and `GEMMA4_RESIDUAL_NORM_FUSE=1` for both. The existing default path is unchanged."
+  source: `src/ml/gguf/gemma4_metal.cr` and `src/ml/gguf/kernels/gemma4.metal`; `crystal build bin/gemma4_metal_decode_profile.cr --no-codegen` passed on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma layer-tail rewrite, add-scaled semantics rewrite, or residual fusion env policy rewrite
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "Short decode-only token parity held for default, `ffn_in` only, `ffn_out` only, and both residual fusions: all produced `token_trace=42,236761,236761,236761,236761,236761,236761,236761,236761`."
+  source: guarded logs `/tmp/gemma4_resnorm_split_{default,in_only,out_only,both}_ids.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: larger parity contradiction, residual fusion kernel rewrite, or Gemma decode route rewrite
+  trust: {F:0.84,G:0.12,R:0.82}
+
+- claim: "A split warm phase run showed `ffn_in` only as the best residual-fusion candidate: default total wait `189.98ms`, `ffn_in` only `152.16ms`, `ffn_out` only `175.64ms`, and both `213.14ms`. Local phase waits were noisy, but combining both routes failed recompute safety."
+  source: guarded logs and atlas files `/tmp/gemma4_resnorm_split_{default,in_only,out_only,both}.atlas.txt` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host ABBA/phase contradiction, profile accounting rewrite, or host-load-contaminated rerun
+  trust: {F:0.74,G:0.10,R:0.68}
+
+**LTP/WBA:** The Diamond split was necessary: two individually plausible local fusions shared the residual boundary and conflicted when stacked. The combined route increased recomputed potential, so it is not legal for promotion. `ffn_in` remains a candidate corridor because it reduced the measured phase potential in the split run and preserved token parity.
+**boundary:** Do not default any residual-norm fusion yet. Future quiet-host ABBA should test `GEMMA4_FFN_IN_RESIDUAL_NORM_FUSE=1` first, then test composition with `GEMMA4_ATTN_PREP_FUSE=1`. Treat `GEMMA4_RESIDUAL_NORM_FUSE=1` as a conflict probe, not a candidate default.

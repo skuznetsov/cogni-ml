@@ -220,6 +220,23 @@ module ML::GGUF
           ENV["GEMMA4_ATTN_PREP_FUSE_OFF"]? != "1"
       end
 
+      private def residual_norm_fuse_enabled? : Bool
+        ENV["GEMMA4_RESIDUAL_NORM_FUSE"]? == "1" &&
+          ENV["GEMMA4_RESIDUAL_NORM_FUSE_OFF"]? != "1"
+      end
+
+      private def ffn_in_residual_norm_fuse_enabled? : Bool
+        return false if ENV["GEMMA4_FFN_IN_RESIDUAL_NORM_FUSE_OFF"]? == "1"
+
+        residual_norm_fuse_enabled? || ENV["GEMMA4_FFN_IN_RESIDUAL_NORM_FUSE"]? == "1"
+      end
+
+      private def ffn_out_residual_norm_fuse_enabled? : Bool
+        return false if ENV["GEMMA4_FFN_OUT_RESIDUAL_NORM_FUSE_OFF"]? == "1"
+
+        residual_norm_fuse_enabled? || ENV["GEMMA4_FFN_OUT_RESIDUAL_NORM_FUSE"]? == "1"
+      end
+
       @@rmsnorm_weighted_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_vec_weighted_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_rows_weighted_pipeline : ML::Metal::ComputePipeline?
@@ -252,6 +269,8 @@ module ML::GGUF
       @@add_scaled_vec_pipeline : ML::Metal::ComputePipeline?
       @@gelu_mul_pipeline : ML::Metal::ComputePipeline?
       @@softcap_pipeline : ML::Metal::ComputePipeline?
+      @@rmsnorm_add_rows_pipeline : ML::Metal::ComputePipeline?
+      @@rmsnorm_add_scaled_rows_pipeline : ML::Metal::ComputePipeline?
 
       class ResidentLayerState
         getter k_cache_buf : ML::MetalBuffer
@@ -736,8 +755,12 @@ module ML::GGUF
 
         cmd = ML::Metal::CommandBuffer.new
         enc = ML::Metal::ComputeEncoder.new(cmd)
-        encode_rmsnorm_rows_weighted_out(enc, attn_buf, post_attn_w, attn_normed_buf, hidden_dim, batch, hp.rms_eps)
-        encode_add_vec(enc, x_buf, attn_normed_buf, attn_out_buf, batch * hidden_dim)
+        if ffn_in_residual_norm_fuse_enabled?
+          encode_rmsnorm_add_rows(enc, attn_buf, post_attn_w, x_buf, attn_out_buf, hidden_dim, batch, hp.rms_eps)
+        else
+          encode_rmsnorm_rows_weighted_out(enc, attn_buf, post_attn_w, attn_normed_buf, hidden_dim, batch, hp.rms_eps)
+          encode_add_vec(enc, x_buf, attn_normed_buf, attn_out_buf, batch * hidden_dim)
+        end
         encode_rmsnorm_rows_weighted_out(enc, attn_out_buf, ffn_w, ffn_in_buf, hidden_dim, batch, hp.rms_eps)
         fused_gelu = q4_gelu_fuse_enabled? &&
           Qwen35Metal.encode_q4k_gemm_h16_pair_b64_gelu_mul(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, combined_buf, batch)
@@ -755,8 +778,12 @@ module ML::GGUF
           return nil
         end
         scale = lw.layer_output_scale.first? || 1.0_f32
-        encode_rmsnorm_rows_weighted_out(enc, ffn_buf, post_ffw_w, ffn_normed_buf, hidden_dim, batch, hp.rms_eps)
-        encode_add_scaled_vec(enc, attn_out_buf, ffn_normed_buf, out_buf, batch * hidden_dim, scale)
+        if ffn_out_residual_norm_fuse_enabled?
+          encode_rmsnorm_add_scaled_rows(enc, ffn_buf, post_ffw_w, attn_out_buf, out_buf, hidden_dim, batch, hp.rms_eps, scale)
+        else
+          encode_rmsnorm_rows_weighted_out(enc, ffn_buf, post_ffw_w, ffn_normed_buf, hidden_dim, batch, hp.rms_eps)
+          encode_add_scaled_vec(enc, attn_out_buf, ffn_normed_buf, out_buf, batch * hidden_dim, scale)
+        end
         enc.end_encoding
         cmd.commit
         cmd.wait
@@ -922,8 +949,12 @@ module ML::GGUF
         end
 
         return false unless profile_rows_phase("#{prefix}.ffn_in") do |enc|
-          encode_rmsnorm_rows_weighted_out(enc, attn_projected_buf, post_attn_w, attn_normed_buf, hidden_dim, batch, hp.rms_eps)
-          encode_add_vec(enc, x_buf, attn_normed_buf, attn_out_buf, batch * hidden_dim)
+          if ffn_in_residual_norm_fuse_enabled?
+            encode_rmsnorm_add_rows(enc, attn_projected_buf, post_attn_w, x_buf, attn_out_buf, hidden_dim, batch, hp.rms_eps)
+          else
+            encode_rmsnorm_rows_weighted_out(enc, attn_projected_buf, post_attn_w, attn_normed_buf, hidden_dim, batch, hp.rms_eps)
+            encode_add_vec(enc, x_buf, attn_normed_buf, attn_out_buf, batch * hidden_dim)
+          end
           if ffn16 = ffn_in_h16_buf
             Qwen35Metal.encode_rmsnorm_rows_f32_h16_to_buffers(enc, attn_out_buf, ffn_w, ffn_in_buf, ffn16, hidden_dim, batch, hp.rms_eps)
           else
@@ -956,8 +987,12 @@ module ML::GGUF
 
         scale = lw.layer_output_scale.first? || 1.0_f32
         profile_rows_phase("#{prefix}.ffn_out") do |enc|
-          encode_rmsnorm_rows_weighted_out(enc, ffn_buf, post_ffw_w, ffn_normed_buf, hidden_dim, batch, hp.rms_eps)
-          encode_add_scaled_vec(enc, attn_out_buf, ffn_normed_buf, out_buf, batch * hidden_dim, scale)
+          if ffn_out_residual_norm_fuse_enabled?
+            encode_rmsnorm_add_scaled_rows(enc, ffn_buf, post_ffw_w, attn_out_buf, out_buf, hidden_dim, batch, hp.rms_eps, scale)
+          else
+            encode_rmsnorm_rows_weighted_out(enc, ffn_buf, post_ffw_w, ffn_normed_buf, hidden_dim, batch, hp.rms_eps)
+            encode_add_scaled_vec(enc, attn_out_buf, ffn_normed_buf, out_buf, batch * hidden_dim, scale)
+          end
           true
         end
       end
@@ -1081,8 +1116,12 @@ module ML::GGUF
           return false unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.attn_output_qw, ctx_buf, attn_projected_buf, batch)
         end
 
-        encode_rmsnorm_rows_weighted_out(enc, attn_projected_buf, post_attn_w, attn_normed_buf, hidden_dim, batch, hp.rms_eps)
-        encode_add_vec(enc, x_buf, attn_normed_buf, attn_out_buf, batch * hidden_dim)
+        if ffn_in_residual_norm_fuse_enabled?
+          encode_rmsnorm_add_rows(enc, attn_projected_buf, post_attn_w, x_buf, attn_out_buf, hidden_dim, batch, hp.rms_eps)
+        else
+          encode_rmsnorm_rows_weighted_out(enc, attn_projected_buf, post_attn_w, attn_normed_buf, hidden_dim, batch, hp.rms_eps)
+          encode_add_vec(enc, x_buf, attn_normed_buf, attn_out_buf, batch * hidden_dim)
+        end
         if ffn16 = ffn_in_h16_buf
           Qwen35Metal.encode_rmsnorm_rows_f32_h16_to_buffers(enc, attn_out_buf, ffn_w, ffn_in_buf, ffn16, hidden_dim, batch, hp.rms_eps)
         else
@@ -1104,8 +1143,12 @@ module ML::GGUF
         end
         return false unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.ffn_down_qw, combined_buf, ffn_buf, batch)
         scale = lw.layer_output_scale.first? || 1.0_f32
-        encode_rmsnorm_rows_weighted_out(enc, ffn_buf, post_ffw_w, ffn_normed_buf, hidden_dim, batch, hp.rms_eps)
-        encode_add_scaled_vec(enc, attn_out_buf, ffn_normed_buf, out_buf, batch * hidden_dim, scale)
+        if ffn_out_residual_norm_fuse_enabled?
+          encode_rmsnorm_add_scaled_rows(enc, ffn_buf, post_ffw_w, attn_out_buf, out_buf, hidden_dim, batch, hp.rms_eps, scale)
+        else
+          encode_rmsnorm_rows_weighted_out(enc, ffn_buf, post_ffw_w, ffn_normed_buf, hidden_dim, batch, hp.rms_eps)
+          encode_add_scaled_vec(enc, attn_out_buf, ffn_normed_buf, out_buf, batch * hidden_dim, scale)
+        end
         true
       end
 
@@ -2604,6 +2647,44 @@ module ML::GGUF
         enc.dispatch_1d(count, 256)
       end
 
+      private def encode_rmsnorm_add_rows(enc : ML::Metal::ComputeEncoder,
+                                          x_buf : ML::MetalBuffer,
+                                          weight_buf : ML::MetalBuffer,
+                                          residual_buf : ML::MetalBuffer,
+                                          out_buf : ML::MetalBuffer,
+                                          row_dim : Int32,
+                                          rows : Int32,
+                                          eps : Float32) : Nil
+        enc.set_pipeline(rmsnorm_add_rows_pipeline)
+        enc.set_buffer(x_buf, 0)
+        enc.set_buffer(weight_buf, 1)
+        enc.set_buffer(residual_buf, 2)
+        enc.set_buffer(out_buf, 3, ML::Metal::BufferAccess::Write)
+        enc.set_value(row_dim.to_u32, 4)
+        enc.set_value(eps, 5)
+        enc.dispatch_threadgroups({rows, 1, 1}, {256, 1, 1})
+      end
+
+      private def encode_rmsnorm_add_scaled_rows(enc : ML::Metal::ComputeEncoder,
+                                                 x_buf : ML::MetalBuffer,
+                                                 weight_buf : ML::MetalBuffer,
+                                                 residual_buf : ML::MetalBuffer,
+                                                 out_buf : ML::MetalBuffer,
+                                                 row_dim : Int32,
+                                                 rows : Int32,
+                                                 eps : Float32,
+                                                 scale : Float32) : Nil
+        enc.set_pipeline(rmsnorm_add_scaled_rows_pipeline)
+        enc.set_buffer(x_buf, 0)
+        enc.set_buffer(weight_buf, 1)
+        enc.set_buffer(residual_buf, 2)
+        enc.set_buffer(out_buf, 3, ML::Metal::BufferAccess::Write)
+        enc.set_value(row_dim.to_u32, 4)
+        enc.set_value(eps, 5)
+        enc.set_value(scale, 6)
+        enc.dispatch_threadgroups({rows, 1, 1}, {256, 1, 1})
+      end
+
       private def encode_gelu_mul(enc : ML::Metal::ComputeEncoder,
                                   gate_buf : ML::MetalBuffer,
                                   up_buf : ML::MetalBuffer,
@@ -2811,6 +2892,18 @@ module ML::GGUF
       private def gelu_mul_pipeline : ML::Metal::ComputePipeline
         @@gelu_mul_pipeline ||= ML::Metal::PipelineCache.get("gemma4_gelu_mul") {
           ML::Metal::ComputePipeline.new("gemma4_gelu_mul", GEMMA4_SOURCE)
+        }
+      end
+
+      private def rmsnorm_add_rows_pipeline : ML::Metal::ComputePipeline
+        @@rmsnorm_add_rows_pipeline ||= ML::Metal::PipelineCache.get("gemma4_rmsnorm_add_rows") {
+          ML::Metal::ComputePipeline.new("gemma4_rmsnorm_add_rows", GEMMA4_SOURCE)
+        }
+      end
+
+      private def rmsnorm_add_scaled_rows_pipeline : ML::Metal::ComputePipeline
+        @@rmsnorm_add_scaled_rows_pipeline ||= ML::Metal::PipelineCache.get("gemma4_rmsnorm_add_scaled_rows") {
+          ML::Metal::ComputePipeline.new("gemma4_rmsnorm_add_scaled_rows", GEMMA4_SOURCE)
         }
       end
 
