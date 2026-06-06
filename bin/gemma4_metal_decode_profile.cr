@@ -414,6 +414,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
              allowed_ids : Array(Int32) = [] of Int32,
              literal_index : Gemma4LiteralTokenIndex? = nil,
              literal_remaining_start : Array(String) = [] of String,
+             literal_direct_ids_start : Array(Int32) = [] of Int32,
              literal_force_single : Bool = true,
              literal_force_span : Bool = true,
              literal_stop_after_complete : Bool = false) : NamedTuple(prefill_ms: Float64, decode_ms: Float64, decode_tokens: Int32, first_id: Int32, last_id: Int32, token_trace: Array(Int32), cache_route: String, cache_restore_ms: Float64, literal_forced_single: Int32, literal_allowed_head: Int32, literal_forced_span_batches: Int32, literal_forced_span_tokens: Int32)
@@ -428,7 +429,9 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
   cache_route = prompt_cache_store ? "miss" : "none"
   cache_restore_ms = 0.0
   save_cache_after_head = false
-  literal_remaining = literal_remaining_start.dup
+  literal_direct_remaining = literal_direct_ids_start.dup
+  literal_remaining = literal_direct_remaining.empty? ? literal_remaining_start.dup : [] of String
+  literal_complete = ->{ literal_remaining.empty? && literal_direct_remaining.empty? }
   literal_forced_single = 0
   literal_allowed_head = 0
   literal_forced_span_batches = 0
@@ -472,7 +475,10 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
     hidden = prefill_prompt_hidden(weights, prompt, state, prefill_mode, prefill_chunk, stop_layer, prefill_head)
   end
   if prefill_head && next_id < 0
-    if decode_mode == "literal" && !literal_remaining.empty?
+    if decode_mode == "literal" && !literal_direct_remaining.empty?
+      next_id = literal_direct_remaining.shift
+      literal_forced_single += 1
+    elsif decode_mode == "literal" && !literal_remaining.empty?
       index = literal_index.not_nil!
       dynamic_allowed = index.literal_frontier_ids(literal_remaining)
       raise "literal first-token frontier is empty for #{literal_remaining.inspect}" if dynamic_allowed.empty?
@@ -512,7 +518,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
   cur = prefill_head ? next_id : synthetic_decode_token(0)
   token_trace = [cur]
   i = 0
-  while i < generate && !(literal_stop_after_complete && decode_mode == "literal" && literal_remaining.empty?)
+  while i < generate && !(literal_stop_after_complete && decode_mode == "literal" && literal_complete.call)
     pos = decode_only_seed ? i.to_i32 : (prompt.size + i).to_i32
     decode_layer_count = stop_layer || weights.hparams.n_layer
     if start_step = decode_stop_layer_after_step
@@ -543,6 +549,24 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
         i += 1
       end
     else
+      if decode_mode == "literal" && literal_force_span && decode_wave && !literal_direct_remaining.empty?
+        span = Math.min(generate - i, literal_direct_remaining.size)
+        emitted_ids = literal_direct_remaining[0, span]
+        consumed_tokens = [cur]
+        consumed_tokens.concat(emitted_ids[0, emitted_ids.size - 1]) if emitted_ids.size > 1
+        unless ML::GGUF::Gemma4Metal.forward_resident_cache_body_chain(weights, consumed_tokens, pos, state, decode_layer_count)
+          raise "Gemma4 literal direct-token body chain failed"
+        end
+        emitted_ids.size.times { literal_direct_remaining.shift }
+        token_trace.concat(emitted_ids)
+        cur = emitted_ids.last
+        literal_forced_span_batches += 1
+        literal_forced_span_tokens += emitted_ids.size
+        i += emitted_ids.size
+        break if literal_stop_after_complete && literal_complete.call
+        next
+      end
+
       if decode_mode == "literal" && literal_force_span && decode_wave && !literal_remaining.empty?
         index = literal_index.not_nil!
         probe_remaining = literal_remaining
@@ -570,7 +594,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
           literal_forced_span_batches += 1
           literal_forced_span_tokens += emitted_ids.size
           i += emitted_ids.size
-          break if literal_stop_after_complete && literal_remaining.empty?
+          break if literal_stop_after_complete && literal_complete.call
           next
         end
       end
@@ -616,7 +640,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
       end
     end
     token_trace << cur
-    break if literal_stop_after_complete && decode_mode == "literal" && literal_remaining.empty?
+    break if literal_stop_after_complete && decode_mode == "literal" && literal_complete.call
   end
   decode_ms = (Time.instant - decode_t0).total_milliseconds
 
@@ -700,6 +724,11 @@ literal_remaining_start = if constrained_tool_call_prefix
                           else
                             [] of String
                           end
+literal_direct_ids_start = if literal_remaining_start.size == 1
+                             tokenizer.not_nil!.encode(literal_remaining_start[0], add_bos: false, parse_special: true)
+                           else
+                             [] of Int32
+                           end
 if root = prompt_cache_root
   cache_store = ML::GGUF::Gemma4PromptCache::Store.new(
     root,
@@ -710,7 +739,7 @@ if root = prompt_cache_root
 end
 
 decode_schedule = decode_stop_layer_after_step ? "#{decode_stop_layer_after_step}:#{decode_stop_layer_after_layer}" : ""
-puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} prompt_text_mode=#{chat_user ? "chat_user" : (prompt_text ? "raw_text" : "token_ids")} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} top1_chain=#{top1_chain} body_chain=#{body_chain} body_chain_note=#{body_chain == 1 ? "llama_bench_parity" : "graph_chunk_known_tokens"} allowed_ids=#{allowed_ids.join(',')} constrained_literal_prefix=#{constrained_literal_prefix || ""} constrained_tool_call_prefix=#{constrained_tool_call_prefix} constrained_tool_required_param_prefix=#{constrained_tool_required_param_prefix} constrained_tool_finite_call=#{constrained_tool_finite_call} constrained_gemma_tool_finite_call=#{constrained_gemma_tool_finite_call} tool_names=#{tool_names.join(',')} literal_options=#{literal_remaining_start.size} literal_force_single=#{literal_force_single} literal_force_span=#{literal_force_span} literal_stop_after_complete=#{literal_stop_after_complete} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} decode_stop_layer_after=#{decode_schedule} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_min_free_mib=#{prompt_cache_snapshot_min_free_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
+puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} prompt_text_mode=#{chat_user ? "chat_user" : (prompt_text ? "raw_text" : "token_ids")} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} top1_chain=#{top1_chain} body_chain=#{body_chain} body_chain_note=#{body_chain == 1 ? "llama_bench_parity" : "graph_chunk_known_tokens"} allowed_ids=#{allowed_ids.join(',')} constrained_literal_prefix=#{constrained_literal_prefix || ""} constrained_tool_call_prefix=#{constrained_tool_call_prefix} constrained_tool_required_param_prefix=#{constrained_tool_required_param_prefix} constrained_tool_finite_call=#{constrained_tool_finite_call} constrained_gemma_tool_finite_call=#{constrained_gemma_tool_finite_call} tool_names=#{tool_names.join(',')} literal_options=#{literal_remaining_start.size} literal_direct_ids=#{literal_direct_ids_start.size} literal_force_single=#{literal_force_single} literal_force_span=#{literal_force_span} literal_stop_after_complete=#{literal_stop_after_complete} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} decode_stop_layer_after=#{decode_schedule} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_min_free_mib=#{prompt_cache_snapshot_min_free_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
 
 warmups.times do
   run_once(
@@ -730,6 +759,7 @@ warmups.times do
     allowed_ids: allowed_ids,
     literal_index: literal_index,
     literal_remaining_start: literal_remaining_start,
+    literal_direct_ids_start: literal_direct_ids_start,
     literal_force_single: literal_force_single,
     literal_force_span: literal_force_span,
     literal_stop_after_complete: literal_stop_after_complete,
@@ -766,6 +796,7 @@ runs.times do
     allowed_ids: allowed_ids,
     literal_index: literal_index,
     literal_remaining_start: literal_remaining_start,
+    literal_direct_ids_start: literal_direct_ids_start,
     literal_force_single: literal_force_single,
     literal_force_span: literal_force_span,
     literal_stop_after_complete: literal_stop_after_complete,
