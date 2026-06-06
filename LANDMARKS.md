@@ -22619,3 +22619,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This is a valid Spike for singleton grammar windows: the local trigger is a frontier of size one, transport is current-token body state to the next forced token, and the legal move eliminates lm-head ranking without changing constrained output. Recomputed potential descends locally in `(head_calls, allowed_rows_scanned)`, but global decode wall barely descends because body work remains dominant.
 **boundary:** Keep default-on for diagnostics because it is semantically safe in finite literal corridors, but do not treat it as a major Gemma speed lever. The next structured-decoding leverage is larger grammar spans plus batching/chaining body-only forced tokens, or product routes where constrained spans are long enough to amortize body/head boundaries.
+
+#### [LM-COGNIGRAPH-044] Gemma literal forced-span batching works but is a small lever on short tool syntax
+**context:** ml / CogniGraph / Gemma4 / constrained literal frontier / body-chain batching / LTP-WBA
+**state:** implemented in diagnostic profiler; correctness verified; modest speed win on short literal
+
+- claim: "`bin/gemma4_metal_decode_profile.cr --constrained-literal-prefix` now has default-on forced-span batching. When two or more consecutive singleton frontiers are available, it runs one resident body-chain over the consumed token span and emits the forced tokens without lm-head ranking. `--literal-force-span-off` disables this while keeping forced-single elimination available."
+  source: `scripts/run_safe.sh crystal 180 8192 build --no-codegen bin/gemma4_metal_decode_profile.cr --error-trace` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma body-chain rewrite, literal frontier rewrite, or profiler decode-loop rewrite
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "Forced-span batching preserves output on `<tool_call>` gen10. Head-only, forced-single-only, and span-batched modes all emitted token trace `236820,236745,236748,551,236779,236755,236746,236752,236752,236813,236761` and text `<tool_call>.`."
+  source: `/tmp/gemma4_literal_span_1780714245/{all_forced_off.log,span_off.log,span_on.log}` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: tokenizer changes, prompt/model change, or forced-span route rewrite
+  trust: {F:0.82,G:0.12,R:0.78}
+
+- claim: "On the same short literal, span batching was only modestly faster. Decode p50: all forced off `30.460 ms/tok` (`allowed_head:30`), forced-single only `29.526 ms/tok` (`forced_single:12, allowed_head:18`), span-batched `29.323 ms/tok` (`span_batches:3, span_tokens:6`, plus `forced_single:6, allowed_head:18`) across three measured runs."
+  source: `/tmp/gemma4_literal_span_1780714245` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host contradiction, longer grammar-literal suite, body-chain scheduler rewrite, or timing-boundary rewrite
+  trust: {F:0.78,G:0.10,R:0.74}
+
+**LTP/WBA:** This is the correct Ladder form for finite grammar literals: singleton-token windows are transported as a contiguous body-state corridor, and the legal move batches body updates while carrying exact token/KV boundaries. Potential descends in `(head_calls, command_buffers, singleton_suffix_area, remaining_literal_tokens)`, but on short tool syntax the dominant body work still limits wall improvement.
+**boundary:** Keep as a diagnostic/default-on literal optimization. Do not claim broad Gemma decode acceleration. The next higher-leverage structured route needs longer deterministic spans, real JSON/tool grammar frontiers, and possibly body-chain integration into product constrained generation rather than one-off profiler literals.
