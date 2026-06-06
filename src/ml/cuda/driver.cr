@@ -32,7 +32,7 @@ lib LibCUDADriver
   fun cuStreamSynchronize(stream : CUstream) : Int32
   fun cuStreamBeginCapture(stream : CUstream, mode : Int32) : Int32
   fun cuStreamEndCapture(stream : CUstream, graph : CUgraph*) : Int32
-  fun cuGraphInstantiate(exec : CUgraphExec*, graph : CUgraph, flags : UInt64) : Int32
+  fun cuGraphInstantiateWithFlags(exec : CUgraphExec*, graph : CUgraph, flags : UInt64) : Int32
   fun cuGraphInstantiateWithParams(exec : CUgraphExec*, graph : CUgraph, params : CUGraphInstantiateParams*) : Int32
   fun cuGraphUpload(exec : CUgraphExec, stream : CUstream) : Int32
   fun cuGraphLaunch(exec : CUgraphExec, stream : CUstream) : Int32
@@ -204,7 +204,7 @@ module ML::CUDA
 
     def instantiate : CUDAGraphExec
       exec = Pointer(Void).null
-      ML::CUDA.check! LibCUDADriver.cuGraphInstantiate(pointerof(exec), @handle, 0_u64), "cuGraphInstantiate"
+      ML::CUDA.check! LibCUDADriver.cuGraphInstantiateWithFlags(pointerof(exec), @handle, 0_u64), "cuGraphInstantiateWithFlags"
       CUDAGraphExec.new(exec)
     end
 

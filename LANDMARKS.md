@@ -23026,3 +23026,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: broad CrystalBall tool surface previously forced huge Gemma prompts and accidental finite-tool controller conflicts. Transport: CrystalBall tool registry -> CogniGemma provider-local active-tool subset -> Gemma wrapper prompt -> parsed tool call -> CrystalBall executor. Legal Spike: remove unsupported/high-tax tools from the Gemma transport boundary while preserving the external harness tool registry and exact tool executor boundary. Potential descends in `(prompt_tokens, max_seq_pressure, finite_controller_conflict_count, sticky_full_tool_runs, remaining_harness_work)`. Recompute safety: broad harness still owns 16 tools, but CogniGemma's active transport is bounded; full-tool experiments remain available only through explicit overrides.
 **decision:** Use the default diet for product harness smokes. Treat full 16-tool Gemma ReAct as an experiment requiring `CB_COGNI_GEMMA_FULL_TOOLS=1` plus separate max-seq and memory-pressure guards.
+
+#### [LM-CUDA-GRAPH-ABI-001] CUDA graph instantiation must use `cuGraphInstantiateWithFlags`
+**context:** ml / CUDA / Qwen3.5 mixed-stack / CUDA Graph replay / reefy RTX 5060 Ti
+**state:** ABI crash fixed and remote reproducer verified
+
+- claim: "The CUDA driver on the current reefy RTX 5060 Ti host exports both legacy/ambiguous `cuGraphInstantiate` and `cuGraphInstantiateWithFlags`. Calling `cuGraphInstantiate` through the previous three-argument FFI crashed inside `libcuda.so.1` during `--steady-graph-reps`, while routing simple graph instantiation through `cuGraphInstantiateWithFlags(exec, graph, flags)` avoids the ABI mismatch."
+  source: remote symbol inspection `nm -D /usr/lib/libcuda.so.1 | grep cuGraphInstantiate` and failing `cuda_mixed_stack_probe --steady-graph-reps=8` before the fix on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: CUDA driver ABI wrapper rewrite, driver downgrade/upgrade, or graph wrapper refactor
+  trust: {F:0.86,G:0.32,R:0.84}
+
+- claim: "After changing `ML::CUDA::CUDAGraph#instantiate` to call `cuGraphInstantiateWithFlags`, the remote full-Qwen3.5-9B graph reproducer completed with exit 0: `--all-layers --tokens=1 --perf-only --skip-debug-readback --steady-graph-reps=8 --start-pos=63 --max-seq=128`, `ok=true`, `cuda_ms_per_token=23.125`."
+  source: remote rebuild and run on `app-dev-fedora@gputer--ssh--6be20df04dd5.reefy.ai`, 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: graph replay code change, CUDA host/container replacement, or Qwen mixed-stack runner graph route rewrite
+  trust: {F:0.86,G:0.22,R:0.84}
+
+- claim: "Current CUDA baseline after remote re-sync remains near the prior frontier: full Qwen3.5-9B semantic greedy loop at ctx64/gen16 measured `23.807 ms/token`; direct steady all-layer replay measured `23.293 ms/token`; graph steady replay measured `23.125 ms/token`. This confirms graph replay is valid but still a small speed lever, not the dominant optimization target."
+  source: sequential remote runs on 2026-06-06 with `/build/persisten/models/qwen35/Qwen3.5-9B-Q4_K_M.gguf`.
+  verified_at: 2026-06-06
+  decay_trigger: host load changes, driver update, runner changes, qtype kernel changes, or model path change
+  trust: {F:0.78,G:0.18,R:0.76}
+
+**LTP/WBA:** Window: CUDA graph replay crash at the graph-instantiation boundary. Transport: captured stream graph -> graph exec object -> replayed mixed-stack wave. Legal Spike: replace the ambiguous legacy symbol with the explicit flags API without touching kernel launch semantics. Potential descends in `(graph_crash_risk, ABI_ambiguity, replay_infra_blocker, remaining_cuda_productization_work)`. Recompute safety: normal direct launches and non-graph CUDA kernels are untouched; graph replay remains opt-in and empirically only a small wall-time improvement.
+**decision:** Keep CUDA Graph as infrastructure, not the next speed frontier. Next CUDA speed work should target body GEMV/FFN bandwidth or long-context attention, using phase attribution before kernel rewrites.
