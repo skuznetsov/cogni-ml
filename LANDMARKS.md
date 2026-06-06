@@ -22769,3 +22769,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This is a Collapse after the diagnostic Ladder: the local schema-to-literal construction was duplicated inside the profiler, so the legal move transports it into the shared constraints boundary while preserving emitted literal corridors. Potential descends in `(duplicated_schema_logic, product_integration_area, grammar_drift_risk, remaining_controller_work)`.
 **boundary:** Shared helpers support finite XML-style Qwen/Gemma tool-call corridors. They are not yet a full controller for free-form string spans, multiple required parameters in one call, or CrystalBall product routing.
+
+#### [LM-COGNIGRAPH-050] Gemma4 native tool-call adapter is separate from Qwen XML diagnostics
+**context:** ml / CogniGraph / Gemma4 / structured function calling / CrystalBall adapter / llama.cpp template parity
+**state:** Gemma-native chat/tool adapter implemented; generation/controller wiring remains separate
+
+- claim: "`Gemma4Chat` now renders Gemma4-native turn prompts and tool declarations using the local llama.cpp template shape: `<|turn>...<turn|>`, `<|tool>declaration:...<tool|>`, and generation prompt `<|turn>model\n<|channel>thought\n<channel|>` for non-thinking mode."
+  source: `scripts/run_safe.sh crystal 180 8192 spec spec/gemma4_chat_spec.cr --error-trace` on 2026-06-06; local source anchor `/Users/sergey/SrcArchives/AI/llama.cpp/models/templates/google-gemma-4-31B-it-interleaved.jinja` inspected same day.
+  verified_at: 2026-06-06
+  decay_trigger: llama.cpp Gemma4 template update, Gemma4 tokenizer chat_template change, or Gemma4Chat renderer rewrite
+  trust: {F:0.84,G:0.34,R:0.82}
+
+- claim: "`Gemma4Chat` parses Gemma4-native tool calls of the form `<|tool_call>call:name{arg:value}<tool_call|>` and normalizes them through the existing typed JSON response path. A regression spec and CLI smoke confirm comma-containing Gemma string arguments are not split incorrectly."
+  source: `spec/gemma4_chat_spec.cr`; `printf '<|tool_call>call:note{body:<|\"|>alpha,beta<|\"|>,enabled:true}<tool_call|>' | crystal run bin/gemma4_tool_json_adapter.cr -- --parse-output` on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: parser rewrite, Gemma native tool syntax change, or typed response adapter rewrite
+  trust: {F:0.84,G:0.22,R:0.82}
+
+- claim: "`bin/gemma4_tool_json_adapter.cr` provides a repo-local render/parse CLI analogous to the Qwen adapter: OpenAI/CrystalBall-style request JSON can be rendered to a Gemma4 prompt, and generated Gemma4-native tool calls can be normalized to simple or OpenAI-style JSON responses."
+  source: `scripts/run_safe.sh crystal 180 8192 build --no-codegen bin/gemma4_tool_json_adapter.cr --error-trace` plus render/parse smokes on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: adapter CLI rewrite, CrystalBall provider contract change, or Gemma4Chat renderer/parser rewrite
+  trust: {F:0.82,G:0.22,R:0.80}
+
+**LTP/WBA:** Window: product structured-calling boundary for Gemma, where Qwen XML diagnostics would be the wrong final frame. Transport: OpenAI/CrystalBall request schema -> Gemma native tool declarations -> Gemma native generated call -> typed JSON response. Legal move: introduce a model-specific adapter while reusing the existing typed normalization boundary. Potential descends in `(wrong_tool_syntax_risk, adapter_gap, parser_edge_cases, remaining_controller_work)`.
+**boundary:** This does not yet make CogniGemma generate constrained tool calls. It gives the correct Gemma-native request/response boundary; next work is wiring generation/controller code to this adapter and using constrained frontiers in the Gemma-native syntax instead of Qwen XML.
