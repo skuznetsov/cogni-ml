@@ -142,7 +142,7 @@ module ML::GGUF
       end
     end
 
-    def self.native_tool_finite_call_options(tools : Array(JSON::Any)) : Array(String)
+    def self.native_tool_finite_call_options(tools : Array(JSON::Any), max_options_per_tool : Int32 = 256) : Array(String)
       options = [] of String
       tools.each do |tool|
         function = tool.as_h?.try { |obj| obj["function"]?.try(&.as_h?) }
@@ -152,14 +152,51 @@ module ML::GGUF
         parameters = function["parameters"]?.try(&.as_h?)
         properties = parameters.try { |p| p["properties"]?.try(&.as_h?) }
         next unless properties
+        required_names = parameters.try { |p| p["required"]?.try(&.as_a?).try { |items| items.compact_map(&.as_s?) } } || [] of String
 
-        properties.each do |parameter_name, raw_schema|
-          schema = raw_schema.as_h?
-          next unless schema
-          finite_gemma_values(schema).each do |value_literal|
-            options << "<|tool_call>call:#{name}{#{parameter_name}:#{value_literal}}<tool_call|>"
+        if required_names.empty?
+          tool_options = [] of String
+          properties.each do |parameter_name, raw_schema|
+            schema = raw_schema.as_h?
+            next unless schema
+            finite_gemma_values(schema).each do |value_literal|
+              break if tool_options.size >= max_options_per_tool
+              tool_options << native_tool_call_literal(name, [{parameter_name, value_literal}])
+            end
+            break if tool_options.size >= max_options_per_tool
           end
+          options.concat(tool_options)
+          next
         end
+
+        required_sets = [] of NamedTuple(name: String, values: Array(String))
+        missing_or_open = false
+        product = 1_i64
+        required_names.each do |parameter_name|
+          schema = properties[parameter_name]?.try(&.as_h?)
+          unless schema
+            missing_or_open = true
+            break
+          end
+
+          values = finite_gemma_values(schema)
+          if values.empty?
+            missing_or_open = true
+            break
+          end
+
+          product *= values.size
+          if product > max_options_per_tool
+            missing_or_open = true
+            break
+          end
+          required_sets << {name: parameter_name, values: values}
+        end
+        next if missing_or_open
+
+        tool_options = [] of String
+        build_required_finite_call_options(tool_options, name, required_sets, 0, [] of Tuple(String, String), max_options_per_tool)
+        options.concat(tool_options)
       end
       options
     end
@@ -347,6 +384,38 @@ module ML::GGUF
       end
 
       [] of String
+    end
+
+    private def self.native_tool_call_literal(name : String, args : Array(Tuple(String, String))) : String
+      String.build do |io|
+        io << "<|tool_call>call:" << name << '{'
+        args.each_with_index do |arg, i|
+          io << ',' if i > 0
+          io << arg[0] << ':' << arg[1]
+        end
+        io << "}<tool_call|>"
+      end
+    end
+
+    private def self.build_required_finite_call_options(output : Array(String),
+                                                        function_name : String,
+                                                        sets : Array(NamedTuple(name: String, values: Array(String))),
+                                                        idx : Int32,
+                                                        args : Array(Tuple(String, String)),
+                                                        max_options : Int32) : Nil
+      return if output.size >= max_options
+      if idx >= sets.size
+        output << native_tool_call_literal(function_name, args)
+        return
+      end
+
+      set = sets[idx]
+      set[:values].each do |value_literal|
+        break if output.size >= max_options
+        next_args = args.dup
+        next_args << {set[:name], value_literal}
+        build_required_finite_call_options(output, function_name, sets, idx + 1, next_args, max_options)
+      end
     end
 
     private def self.parse_tool_call_body(body : String) : ToolCall?

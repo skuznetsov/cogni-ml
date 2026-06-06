@@ -77,6 +77,40 @@ describe ML::GGUF::Gemma4Chat do
     options.should contain("<|tool_call>call:set_mode{limit:2}<tool_call|>")
   end
 
+  it "builds only complete Gemma4 finite calls for required parameter schemas" do
+    tools = ML::GGUF::Gemma4Chat.parse_tools_json(%([
+      {"type":"function","function":{"name":"set_mode","parameters":{"type":"object","properties":{
+        "mode":{"type":"string","enum":["fast","safe"]},
+        "enabled":{"type":"boolean"}
+      },"required":["mode","enabled"]}}}
+    ]))
+
+    options = ML::GGUF::Gemma4Chat.native_tool_finite_call_options(tools)
+    options.should eq([
+      "<|tool_call>call:set_mode{mode:<|\"|>fast<|\"|>,enabled:true}<tool_call|>",
+      "<|tool_call>call:set_mode{mode:<|\"|>fast<|\"|>,enabled:false}<tool_call|>",
+      "<|tool_call>call:set_mode{mode:<|\"|>safe<|\"|>,enabled:true}<tool_call|>",
+      "<|tool_call>call:set_mode{mode:<|\"|>safe<|\"|>,enabled:false}<tool_call|>",
+    ])
+  end
+
+  it "does not build finite Gemma4 calls when a required parameter is open-ended or too broad" do
+    open_tools = ML::GGUF::Gemma4Chat.parse_tools_json(%([
+      {"type":"function","function":{"name":"read_file","parameters":{"type":"object","properties":{
+        "path":{"type":"string"},
+        "limit":{"type":"integer","minimum":1,"maximum":2}
+      },"required":["path","limit"]}}}
+    ]))
+    broad_tools = ML::GGUF::Gemma4Chat.parse_tools_json(%([
+      {"type":"function","function":{"name":"pick","parameters":{"type":"object","properties":{
+        "value":{"type":"integer","minimum":1,"maximum":300}
+      },"required":["value"]}}}
+    ]))
+
+    ML::GGUF::Gemma4Chat.native_tool_finite_call_options(open_tools).should be_empty
+    ML::GGUF::Gemma4Chat.native_tool_finite_call_options(broad_tools).should be_empty
+  end
+
   it "tracks token-option corridors through singleton spans and branch points" do
     corridor = ML::GGUF::Gemma4Chat::TokenOptionCorridor.from_options([
       [10, 20, 30],
