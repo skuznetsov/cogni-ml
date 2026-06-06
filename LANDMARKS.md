@@ -23813,3 +23813,23 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: llama `-fa 1` still points at attention, but this legal move moved the transport through a global partial-O corridor. Recomputed potential worsened: fewer local softmax tile dependencies were offset by extra launch plus large global partial traffic. This is a Diamond conflict between FA decomposition and Metal memory bandwidth/launch cost.
 
 **decision:** Do not retry global-partial-O SWA1024 FA for Gemma Metal. Future FA work must either keep O accumulation inside a tighter ownership frame, reduce only scalars plus recompute values, or import a closer llama.cpp ownership pattern without materializing `(rows * heads * blocks * dim)` partial outputs.
+
+#### [LM-GEMMA4-SWA-LANE32-GQA2-899] Gemma SWA1024 GQA2 lane32 ownership improves Metal row-prefill
+**context:** ml / CogniGemma / Metal / attention / SWA1024 / GQA2 / LTP-WBA
+**state:** promoted exact speed path with rollback env
+
+- claim: "Gemma row-prefill SWA layers benefit from llama-inspired single-SIMD-group lane ownership when preserving GQA2 K/V reuse."
+  source: implemented `gemma4_attn_context_rows_swa256_lane32_gqa2`, enabled by default for `batch >= 128` with rollback `GEMMA4_ROW_PREFILL_ATTN_SWA256_LANE32_OFF=1`. Linked profile build passed. pp256/gen4 and pp256/gen64 top1 boundaries matched default (`first_id=254632`, `last_id=208669`; logs `/tmp/gemma4_lane32_gqa2_top1_pair_20260606191622`, `/tmp/gemma4_lane32_gqa2_top1_gen64_pair_20260606191801`). Body pp256 ABBA improved default `343.733/343.317 tok/s` to lane32 `349.383/349.152 tok/s` (`/tmp/gemma4_lane32_gqa2_pp256_abba_20260606191639`). Body pp512 ABBA improved default `339.487/339.069 tok/s` to lane32 `351.020/352.049 tok/s` (`/tmp/gemma4_lane32_gqa2_pp512_abba_20260606191714`). Product pp-head pp256 ABBA improved default `339.732/339.014 tok/s` to lane32 `346.888/345.520 tok/s` (`/tmp/gemma4_lane32_gqa2_pphead256_abba_20260606191826`). Default-vs-off gate after promotion: pp256 `346.626` vs off `340.062`, pp512 `349.797` vs off `336.779`, matching ids (`/tmp/gemma4_lane32_default_gate_20260606191947`).
+  verified_at: 2026-06-06
+  decay_trigger: Gemma attention rewrite, changed SWA/GQA hparams, quiet-host ABBA contradiction, or Metal compiler behavior change
+  trust: {F:0.86,G:0.42,R:0.84}
+
+- claim: "The speedup comes from ownership, not just larger tiles."
+  source: earlier tile32 with 256-thread ownership was refuted, and the first single-head lane32 probe was neutral/slower on ABBA because it lost GQA2 K reuse. The promoted route uses one SIMD-group per row/GQA pair, one lane per 32-token tile item, shared K dot for two query heads, and lane-owned output vector groups.
+  verified_at: 2026-06-06
+  decay_trigger: new counterexample kernel or different hardware behavior
+  trust: {F:0.80,G:0.46,R:0.78}
+
+**LTP/WBA:** Window: llama `-fa 1` attention gap and failed global partial-O route. Transport: SWA1024 GQA2 K/V corridor. Legal move: change local ownership to a one-SIMD-group lane32 GQA2 pair while preserving exact KV/session boundaries and top1 trace. Potential recomputation descends for pp256 and pp512 product/body rows. The Diamond was preserving GQA2 reuse; single-head lane32 was not sufficient.
+
+**decision:** Keep lane32-GQA2 default-on for row-prefill `batch >= 128`. Do not generalize to non-GQA2/head_dim variants without separate gates. Next attention work should target remaining full-attention layers or compare deeper llama FA simdgroup-matrix mechanics only after attribution shows attention remains dominant.
