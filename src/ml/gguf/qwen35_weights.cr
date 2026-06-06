@@ -170,7 +170,7 @@ module ML::GGUF
       # GGUF convention: dims=[in_dim, out_dim], row-major with out_dim rows.
       in_dim = info.dims[0].to_i32
       out_dim = info.dims.size >= 2 ? info.dims[1].to_i32 : 1
-      QuantWeight.new(raw, info.type, out_dim, in_dim)
+      QuantWeight.new(raw, info.type, out_dim, in_dim, "qwen35:#{name}")
     end
 
     private def load_f32(g : GGUFFile, name : String) : Array(Float32)

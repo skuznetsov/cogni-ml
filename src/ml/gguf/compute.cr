@@ -22,10 +22,11 @@ module ML::GGUF
     getter type : TensorType
     getter out_dim : Int32
     getter in_dim : Int32
+    getter route_tag : String?
 
     @metal_buf : ML::MetalBuffer? = nil
 
-    def initialize(@raw, @type, @out_dim, @in_dim)
+    def initialize(@raw, @type, @out_dim, @in_dim, @route_tag = nil)
     end
 
     {% unless flag?(:cpu_only) %}

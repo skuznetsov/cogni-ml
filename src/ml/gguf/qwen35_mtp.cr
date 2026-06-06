@@ -263,7 +263,7 @@ module ML::GGUF
       raw = g.read_tensor_raw(info)
       in_dim = info.dims[0].to_i32
       out_dim = info.dims.size >= 2 ? info.dims[1].to_i32 : 1
-      QuantWeight.new(raw, info.type, out_dim, in_dim)
+      QuantWeight.new(raw, info.type, out_dim, in_dim, "qwen35_mtp:#{name}")
     end
 
     private def load_qw?(g : GGUFFile, name : String) : QuantWeight?

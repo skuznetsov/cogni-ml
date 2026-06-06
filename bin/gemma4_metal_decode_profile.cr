@@ -39,16 +39,6 @@ prompt_cache_snapshot_min_free_mib = (ENV["GEMMA4_PROMPT_CACHE_SNAPSHOT_MIN_FREE
 prompt_cache_snapshot_entries = 1
 decode_only_seed = nil.as(Int32?)
 
-def apply_gemma4_q4_layout_default! : Nil
-  return if ENV.has_key?("QWEN35_Q4K_GEMV_SHAPE_LAYOUT")
-  return if ENV.has_key?("QWEN35_Q4K_GEMV_SHAPE_LAYOUT_OFF")
-
-  # Gemma4 decode measurements currently favor the baseline Q4_K GEMV route over
-  # the older shared shape-layout table. Keep Qwen defaults untouched, but make
-  # this Gemma profile surface choose the measured Gemma corridor by default.
-  ENV["QWEN35_Q4K_GEMV_SHAPE_LAYOUT_OFF"] = "1"
-end
-
 OptionParser.parse(ARGV) do |p|
   p.banner = "usage: gemma4_metal_decode_profile [--tokens 42,43] [--generate 8] [--max-seq 1024] [--runs 3]"
   p.on("--model PATH", "Gemma4 GGUF path") { |v| model = v }
@@ -106,8 +96,6 @@ raise "runs must be positive" unless runs > 0
 raise "prompt-cache snapshot MiB must be non-negative" unless prompt_cache_snapshot_mib >= 0
 raise "prompt-cache snapshot min-free MiB must be non-negative" unless prompt_cache_snapshot_min_free_mib >= 0
 raise "prompt-cache snapshot entries must be non-negative" unless prompt_cache_snapshot_entries >= 0
-
-apply_gemma4_q4_layout_default!
 
 def percentile(sorted : Array(Float64), p : Float64) : Float64
   return 0.0 if sorted.empty?

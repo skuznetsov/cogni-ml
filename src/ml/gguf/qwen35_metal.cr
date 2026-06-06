@@ -966,9 +966,19 @@ module ML
           end
         end
 
-        private def self.q4_gemv_shape_layout_enabled? : Bool
-          ENV["QWEN35_Q4K_GEMV_SHAPE_LAYOUT_OFF"]? != "1" &&
-            ENV["QWEN35_Q4K_GEMV_SHAPE_LAYOUT"]? != "0"
+        private def self.q4_gemv_shape_layout_enabled?(qw : QuantWeight?) : Bool
+          return false if ENV["QWEN35_Q4K_GEMV_SHAPE_LAYOUT_OFF"]? == "1"
+          if value = ENV["QWEN35_Q4K_GEMV_SHAPE_LAYOUT"]?
+            return value != "0"
+          end
+
+          # Gemma4 decode corridors benchmark faster on the baseline Q4_K GEMV
+          # route than on the older shared shape-layout table. Keep Qwen's
+          # historic default while avoiding a hidden process-wide env mutation
+          # in Gemma profile/benchmark surfaces.
+          return false if qw.try(&.route_tag).try(&.starts_with?("gemma4:"))
+
+          true
         end
 
         private def self.q4_gemv_shape_layout(in_dim : Int32, out_dim : Int32) : {Int32, Int32}?
@@ -1745,7 +1755,8 @@ module ML
                                      in_dim : Int32,
                                      out_dim : Int32,
                                      batch : Int32 = 1,
-                                     profile_shape : Bool = true) : Nil
+                                     profile_shape : Bool = true,
+                                     route_qw : QuantWeight? = nil) : Nil
           if profile_shape
             quant_name, block_bytes, block_elems = gemv_profile_quant(pipeline)
             blocks_per_row = (in_dim + block_elems - 1) // block_elems
@@ -1759,7 +1770,7 @@ module ML
             actual_pipeline = mv_q4_x16_pipeline
             rows_per_tg = MV_Q4_NSG * 2
             threads_per_tg = MV_Q4_NSG * 32
-          elsif q4_gemv_shape_layout_enabled? && batch <= GEMM_BATCH_THRESHOLD && pipeline.same?(mv_pipeline)
+          elsif q4_gemv_shape_layout_enabled?(route_qw) && batch <= GEMM_BATCH_THRESHOLD && pipeline.same?(mv_pipeline)
             if layout = q4_gemv_shape_layout(in_dim, out_dim)
               nsg, nr0 = layout
               actual_pipeline = mv_q4_layout_pipeline(nsg, nr0)
@@ -2427,7 +2438,7 @@ module ML
           elsif q56_batch_gemm_enabled? && qw.type.q6_k? && batch > GEMM_BATCH_THRESHOLD
             encode_q56k_gemm_f32(enc, mm6_f32out_pipeline, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
           else
-            encode_gemv(enc, gemv_pipeline, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch, profile_shape: false)
+            encode_gemv(enc, gemv_pipeline, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch, profile_shape: false, route_qw: qw)
           end
         end
 

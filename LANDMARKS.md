@@ -21990,3 +21990,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The trigger was a cross-model conflict in the Q4 route table. A broad Spike against the shared shape-layout table would lower Gemma's local area but risks increasing Qwen's recomputed potential. The legal Diamond is scope separation: keep the shared Qwen35Metal boundary unchanged, and transport Gemma profile/benchmark work through the measured baseline Q4 corridor by setting `QWEN35_Q4K_GEMV_SHAPE_LAYOUT_OFF=1` inside the Gemma profile process unless the user explicitly chooses another Q4 route.
 **boundary:** `QWEN35_Q4K_GEMV_X16=1` and `QWEN35_Q4K_GEMV_SHAPE_LAYOUT=1` remain explicit override lanes. Revisit model-aware Q4 routing only with quiet-host ABBA and a route key that can distinguish Gemma from Qwen without hidden global side effects.
+
+### [LM-COGNIGRAPH-017] QuantWeight route tags replace Gemma Q4 env workaround
+**context:** ml / CogniGraph / QuantWeight / Gemma4 / Qwen35 / model-aware routing / LTP-WBA Diamond
+**state:** implemented; route metadata carries model/tensor identity without changing Qwen defaults
+
+- claim: "`QuantWeight` now carries an optional `route_tag`. Gemma weights are tagged as `gemma4:<tensor>`, Qwen base weights as `qwen35:<tensor>`, and Qwen MTP weights as `qwen35_mtp:<tensor>`. Existing callers that do not pass a tag keep `nil`, preserving Nomic/test compatibility."
+  source: `src/ml/gguf/compute.cr`, `src/ml/gguf/gemma4_weights.cr`, `src/ml/gguf/qwen35_weights.cr`, and `src/ml/gguf/qwen35_mtp.cr`; no-codegen builds passed on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: QuantWeight constructor rewrite, GGUF loader rewrite, or route-dispatch API rewrite
+  trust: {F:0.86,G:0.38,R:0.84}
+
+- claim: "Q4 shape-layout dispatch now uses route metadata instead of Gemma profile env mutation: if no explicit Q4 layout env is set, `gemma4:*` Q4_K weights skip the stale shape-layout table, while Qwen weights keep the historical default. Explicit `QWEN35_Q4K_GEMV_SHAPE_LAYOUT=1` and `QWEN35_Q4K_GEMV_SHAPE_LAYOUT_OFF=1` still override."
+  source: `src/ml/gguf/qwen35_metal.cr`; previous `bin/gemma4_metal_decode_profile.cr` env mutation was removed on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: q4 GEMV route rewrite, route-tag policy rewrite, or hidden untagged Gemma path discovery
+  trust: {F:0.86,G:0.30,R:0.84}
+
+- claim: "Runtime route checks passed. Gemma body-chain gen32 default route measured `30.806 tok/s` versus explicit shape-on `30.543 tok/s`. Qwen3.5-9B default and explicit shape-on remained effectively equivalent for `pp128/tg32 top1`: default p50 tok/s `479.11 / 44.74`, explicit shape-on `478.60 / 43.98`."
+  source: guarded logs `/tmp/gemma4_routetag_{default,shape_on}.log` and `/tmp/qwen9_routetag_{default,shape_on}.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host contradiction, Q4 route rewrite, or larger Qwen/Gemma ABBA contradiction
+  trust: {F:0.84,G:0.20,R:0.82}
+
+**LTP/WBA:** The earlier Gemma env workaround reduced local area but had a sticky boundary: route policy was process-global rather than attached to the transported weight corridor. The legal Diamond is to carry a local route certificate (`route_tag`) with each quantized tensor. Potential descends in `(route_conflict_scope, hidden_global_env_side_effects, Gemma_decode_wall, remaining_Q4_calls)` while preserving Qwen's recomputed default boundary.
+**boundary:** Route tags are metadata only; they are not a license for shape-only global heuristics. Any future x16/model-aware promotion must use these tags plus ABBA evidence per model/op corridor.
