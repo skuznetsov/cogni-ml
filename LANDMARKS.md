@@ -23409,3 +23409,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: after mixed-layer semantic handoff was certified, the next local trigger was unknown dominant wait bucket. Transport: one selected-layer prefix -> synchronized per-layer timing rows -> parity-preserving final hidden certificate. Legal Ladder: add diagnostic syncs after each layer without changing the unprofiled run path. Potential descends in `(unknown_dominant_wait_bucket, tied_layer_type_count, remaining_attribution_work)`: the first short-context profile refutes a large SWA-vs-full layer-type outlier and points to shared per-layer body/GEMV work as the next likely window.
 **decision:** Next CUDA Gemma optimization should phase-split inside one layer runner (projection/context/output/FFN/head later) or move directly to scratch/weight reuse if attribution remains uniform. Do not optimize full-attention context first based on this short-context profile alone.
+
+#### [LM-COGNIGEMMA-METAL-GRAPH-TAIL-001] Stateless Gemma4 Metal layer tail can be encoded as a CogniGraph corridor
+**context:** ml / CogniGemma / Metal / ComputeGraph / LTP-WBA
+**state:** implemented as bounded stateless graph route
+
+- claim: "Gemma4's post-attention residual + FFN tail can be encoded through `ML::Metal::ComputeGraph` when inputs are already resident Metal buffers, preserving the existing resident-buffer tail output for the tested 12B Q4_K_M layer-0 slice."
+  source: local focused run on 2026-06-06: `CRYSTAL_CACHE_DIR=/tmp/cogni_ml_gemma4_graph_layer_tail COGNI_RUN_SAFE_MIN_FREE_PCT=8 scripts/run_safe.sh /opt/homebrew/bin/crystal 180 16000 spec spec/gemma4_metal_buffer_spec.cr:98 --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` exited 0 and reported `[gemma4_graph_layer_tail] max|d|=0.0`. Supporting checks: no-codegen passed for `src/ml/gguf/gemma4_metal.cr`, `src/ml/gguf/qwen35_metal.cr`, `spec/gemma4_metal_buffer_spec.cr`, and `test_graph.cr`; `spec/compute_graph_spec.cr` passed 3 examples; `git diff --check` passed.
+  verified_at: 2026-06-06
+  decay_trigger: Gemma4 tail formula change, Qwen/Gemma quantized GEMV encoder rewrite, ComputeGraph/GraphEncoder API rewrite, or enabling broad graph promotion across cache/state-mutating ops
+  trust: {F:0.86,G:0.24,R:0.84}
+
+- caveat: "This is not yet a product decode/prefill speed claim."
+  source: `scripts/cognigraph_readiness_audit.cr` still reports many heuristic graph-unsafe Qwen/Gemma `set_buffer` candidates (`qwen35: candidates=281`) after this slice, so broad runtime graph promotion remains blocked pending state/cache boundary certification.
+  verified_at: 2026-06-06
+  trust: {F:0.80,G:0.40,R:0.78}
+
+**LTP/WBA:** Window: stateless Gemma layer-tail work after attention has produced resident `x` and `attn_projected` buffers. Transport: resident hidden/attention buffers -> post-attention norm/add -> FFN gate/up/down -> post-FFW norm/final scaled add -> resident output buffer. Legal Ladder: graph-encode only this bounded stateless corridor and reuse the existing resident helper as certificate. Boundary safety: no KV/session mutation, no prompt/decode cursor mutation, and fallback remains `layer_tail_resident_buffer_inputs`. Potential descends in `(graph_promotion_uncertainty, state_boundary_conflict_count, remaining_tail_launch_area)` for this corridor; broad graph promotion keeps a nonzero boundary-conflict count and is not promoted.
+**decision:** Next Metal CogniGraph work should either compose this tail corridor with a separately certified stateless producer or add phase/timing attribution around graph-vs-resident tail. Do not graph-promote full Gemma/Qwen decode until cache/state writes have explicit boundary certificates.
