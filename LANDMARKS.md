@@ -22719,3 +22719,34 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: schema-required parameter-open syntax after a selected function name. Transport: tool schema -> finite literal prefix set -> tokenizer frontier -> resident allowed-head corridor. Legal move: reduce the grammar frontier to schema-certified rows while preserving exact decoder state and letting the unconstrained dual frame take over after the prefix. Potential descends locally in `(invalid_required_param_area, frontier_vocab_rows, full_head_filter_tax, remaining_prefix_suffix)`; promotion needs a full controller so the suffix does not re-enter unconstrained invalid XML.
 **boundary:** This improves the structured diagnostic and gives a longer certified corridor for future CogniGemma function-calling, but product support still needs value-span handling, close-tag states, failure recovery, and `crystal_ball` integration.
+
+#### [LM-COGNIGRAPH-048] Gemma finite-valued tool-call diagnostic reaches complete constrained calls
+**context:** ml / CogniGraph / Gemma4 / structured decoding / finite schema values / constrained frontier / LTP-WBA
+**state:** implemented in diagnostic profiler; resident/fallback parity verified for finite tool-call corridor; complete close-tag reach verified resident-only
+
+- claim: "`bin/gemma4_metal_decode_profile.cr` now supports `--constrained-tool-finite-call`, which builds complete finite literal tool-call options for schema parameters with enum, boolean, or bounded integer values. The route fails closed when no finite parameter values exist."
+  source: `scripts/run_safe.sh crystal 180 8192 build --no-codegen bin/gemma4_metal_decode_profile.cr --error-trace` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma profiler option rewrite, Qwen35Constraints finite-value parser change, tokenizer change, or tool-call grammar change
+  trust: {F:0.84,G:0.26,R:0.82}
+
+- claim: "Two-tool finite schema smoke preserved resident/fallback output for `gen=80`. Resident and fallback both logged `constrained_tool_finite_call=true`, `tool_names=set_mode,set_flag`, `literal_options=4`, identical token trace, and generated text `<tool_call>\n<function=set_flag>\n<parameter=enabled>\ntrue\n</parameter>\n</function>\n</tool_ca`."
+  source: `/tmp/gemma4_tool_finite_call_1780715025/{resident.log,fallback.log}` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: prompt/model change, tokenizer change, resident allowed-head rewrite, finite-value option rewrite, or controller integration
+  trust: {F:0.82,G:0.12,R:0.78}
+
+- claim: "A one-run resident `gen=96` smoke reached a complete finite call before entering the unconstrained dual frame: `<tool_call>\n<function=set_flag>\n<parameter=enabled>\ntrue\n</parameter>\n</function>\n</tool_call>\n...`."
+  source: `/tmp/gemma4_tool_finite_call_1780715025/resident_gen96.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: prompt/model change, tokenizer change, finite-value option rewrite, or full grammar-controller timing
+  trust: {F:0.76,G:0.10,R:0.72}
+
+- claim: "On the `gen=80` parity smoke, resident allowed-head was faster than fallback full-head filtering: resident `31.130 ms/tok`, fallback `34.257 ms/tok` p50 over two measured runs. This is diagnostic speed evidence only, not a public product benchmark."
+  source: `/tmp/gemma4_tool_finite_call_1780715025/{resident.log,fallback.log}` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host contradiction, larger finite-schema suite, run-count increase, or product serving integration
+  trust: {F:0.72,G:0.08,R:0.70}
+
+**LTP/WBA:** Window: finite schema value alternatives where the entire tool call can be certified locally. Transport: schema finite values -> complete literal options -> tokenizer frontier -> resident allowed-head corridor -> close-tag boundary. Legal move: constrain all syntax/value tokens in the finite corridor while preserving exact state updates; after the corridor ends, control switches to the unconstrained dual frame. Potential descends locally in `(invalid_tool_call_area, frontier_vocab_rows, full_head_filter_tax, remaining_complete_call_suffix)`.
+**boundary:** This is the first complete-call diagnostic for finite-valued tools, but not general JSON/function-calling. String/free-form parameters still need a value-span controller or exact fallback policy, and product promotion needs `crystal_ball` integration plus ABBA timing on real tool workloads.
