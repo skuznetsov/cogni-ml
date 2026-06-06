@@ -1,0 +1,717 @@
+# CogniGemma CUDA full-attention layer composition smoke.
+#
+# Composes one Gemma4 full-attention K-as-V layer through attention,
+# residual/norm, GELU FFN, post-FFW norm, final residual, and layer-output scale.
+
+require "option_parser"
+require "../src/ml/gguf/gemma4_cpu"
+require "../src/ml/cuda/driver"
+require "../src/ml/cuda/gemma4_swa_context_ptx"
+
+NORM_PTX = {{ read_file("src/ml/cuda/kernels/deltanet_step_probe.ptx") }}
+Q4K_PTX  = {{ read_file("src/ml/cuda/kernels/q4k_gemv_probe.ptx") }}
+Q6K_PTX  = {{ read_file("src/ml/cuda/kernels/q6k_gemv_probe.ptx") }}
+ROPE_PTX = <<-PTX
+.version 8.0
+.target sm_80
+.address_size 64
+
+.visible .entry rope_neox_apply_batched_probe(
+    .param .u64 x,
+    .param .u64 cos_t,
+    .param .u64 sin_t,
+    .param .u32 head_dim,
+    .param .u32 n_rot
+)
+{
+    .reg .pred %p<4>;
+    .reg .b32 %r<18>;
+    .reg .b64 %rd<18>;
+    .reg .f32 %f<9>;
+
+    ld.param.u64 %rd1, [x];
+    ld.param.u64 %rd2, [cos_t];
+    ld.param.u64 %rd3, [sin_t];
+    ld.param.u32 %r1, [head_dim];
+    ld.param.u32 %r2, [n_rot];
+
+    mov.u32 %r3, %ctaid.x;       // row
+    mov.u32 %r4, %tid.x;         // i
+    shr.u32 %r5, %r2, 1;         // half
+    setp.ge.u32 %p1, %r4, %r5;
+    @%p1 bra DONE;
+
+    mul.lo.u32 %r6, %r3, %r1;
+    add.u32 %r7, %r6, %r4;       // a
+    add.u32 %r8, %r7, %r5;       // b
+
+    mul.wide.u32 %rd4, %r7, 4;
+    add.s64 %rd5, %rd1, %rd4;
+    mul.wide.u32 %rd6, %r8, 4;
+    add.s64 %rd7, %rd1, %rd6;
+    mul.wide.u32 %rd8, %r4, 4;
+    add.s64 %rd9, %rd2, %rd8;
+    add.s64 %rd10, %rd3, %rd8;
+
+    ld.global.f32 %f1, [%rd5];
+    ld.global.f32 %f2, [%rd7];
+    ld.global.f32 %f3, [%rd9];
+    ld.global.f32 %f4, [%rd10];
+
+    mul.rn.f32 %f5, %f1, %f3;
+    neg.f32 %f7, %f4;
+    fma.rn.f32 %f5, %f2, %f7, %f5;
+    mul.rn.f32 %f6, %f1, %f4;
+    fma.rn.f32 %f6, %f2, %f3, %f6;
+    st.global.f32 [%rd5], %f5;
+    st.global.f32 [%rd7], %f6;
+
+DONE:
+    ret;
+}
+PTX
+
+GELU_ADD_PTX = <<-PTX
+.version 8.0
+.target sm_80
+.address_size 64
+
+.visible .entry gelu_mul_f32(
+    .param .u64 gate,
+    .param .u64 up,
+    .param .u64 out,
+    .param .u32 n
+)
+{
+    .reg .pred %p;
+    .reg .b32 %r<8>;
+    .reg .b64 %rd<12>;
+    .reg .f32 %f<24>;
+
+    ld.param.u64 %rd1, [gate];
+    ld.param.u64 %rd2, [up];
+    ld.param.u64 %rd3, [out];
+    ld.param.u32 %r1, [n];
+
+    mov.u32 %r2, %tid.x;
+    mov.u32 %r3, %ctaid.x;
+    mov.u32 %r4, %ntid.x;
+    mad.lo.s32 %r5, %r3, %r4, %r2;
+    setp.ge.u32 %p, %r5, %r1;
+    @%p bra GELU_DONE;
+
+    mul.wide.u32 %rd4, %r5, 4;
+    add.s64 %rd5, %rd1, %rd4;
+    add.s64 %rd6, %rd2, %rd4;
+    add.s64 %rd7, %rd3, %rd4;
+    ld.global.f32 %f1, [%rd5];        // x = gate
+    ld.global.f32 %f2, [%rd6];        // up
+
+    mul.rn.f32 %f3, %f1, %f1;         // x^2
+    mov.f32 %f4, 0f3D372713;          // 0.044715
+    mul.rn.f32 %f5, %f3, %f4;
+    add.rn.f32 %f6, %f5, 0f3F800000;  // 1 + 0.044715*x^2
+    mul.rn.f32 %f7, %f1, %f6;
+    mov.f32 %f8, 0f3F4C422A;          // sqrt(2/pi)
+    mul.rn.f32 %f9, %f7, %f8;         // z
+
+    // tanh(z) = 2/(1 + exp(-2z)) - 1, using exp2 approximation.
+    mov.f32 %f10, 0fC0000000;         // -2
+    mul.rn.f32 %f11, %f9, %f10;
+    mov.f32 %f12, 0f3FB8AA3B;         // log2(e)
+    mul.rn.f32 %f13, %f11, %f12;
+    ex2.approx.ftz.f32 %f14, %f13;
+    add.rn.f32 %f15, %f14, 0f3F800000;
+    rcp.approx.ftz.f32 %f16, %f15;
+    mov.f32 %f17, 0f40000000;         // 2
+    mul.rn.f32 %f18, %f17, %f16;
+    add.rn.f32 %f19, %f18, 0fBF800000; // tanh(z)
+
+    add.rn.f32 %f20, %f19, 0f3F800000;
+    mov.f32 %f21, 0f3F000000;         // 0.5
+    mul.rn.f32 %f22, %f21, %f1;
+    mul.rn.f32 %f22, %f22, %f20;      // gelu(x)
+    mul.rn.f32 %f23, %f22, %f2;
+    st.global.f32 [%rd7], %f23;
+
+GELU_DONE:
+    ret;
+}
+.visible .entry add_f32(
+    .param .u64 a,
+    .param .u64 b,
+    .param .u64 out,
+    .param .u32 n
+)
+{
+    .reg .pred %p;
+    .reg .b32 %r<8>;
+    .reg .b64 %rd<12>;
+    .reg .f32 %f<4>;
+    ld.param.u64 %rd1, [a];
+    ld.param.u64 %rd2, [b];
+    ld.param.u64 %rd3, [out];
+    ld.param.u32 %r1, [n];
+    mov.u32 %r2, %tid.x;
+    mov.u32 %r3, %ctaid.x;
+    mov.u32 %r4, %ntid.x;
+    mad.lo.s32 %r5, %r3, %r4, %r2;
+    setp.ge.u32 %p, %r5, %r1;
+    @%p bra ADD_DONE;
+    mul.wide.u32 %rd4, %r5, 4;
+    add.s64 %rd5, %rd1, %rd4;
+    add.s64 %rd6, %rd2, %rd4;
+    add.s64 %rd7, %rd3, %rd4;
+    ld.global.f32 %f1, [%rd5];
+    ld.global.f32 %f2, [%rd6];
+    add.rn.f32 %f3, %f1, %f2;
+    st.global.f32 [%rd7], %f3;
+ADD_DONE:
+    ret;
+}
+
+.visible .entry add_scale_f32(
+    .param .u64 a,
+    .param .u64 b,
+    .param .u64 out,
+    .param .u32 n,
+    .param .f32 scale
+)
+{
+    .reg .pred %p;
+    .reg .b32 %r<8>;
+    .reg .b64 %rd<12>;
+    .reg .f32 %f<5>;
+    ld.param.u64 %rd1, [a];
+    ld.param.u64 %rd2, [b];
+    ld.param.u64 %rd3, [out];
+    ld.param.u32 %r1, [n];
+    ld.param.f32 %f4, [scale];
+    mov.u32 %r2, %tid.x;
+    mov.u32 %r3, %ctaid.x;
+    mov.u32 %r4, %ntid.x;
+    mad.lo.s32 %r5, %r3, %r4, %r2;
+    setp.ge.u32 %p, %r5, %r1;
+    @%p bra ADDS_DONE;
+    mul.wide.u32 %rd4, %r5, 4;
+    add.s64 %rd5, %rd1, %rd4;
+    add.s64 %rd6, %rd2, %rd4;
+    add.s64 %rd7, %rd3, %rd4;
+    ld.global.f32 %f1, [%rd5];
+    ld.global.f32 %f2, [%rd6];
+    add.rn.f32 %f3, %f1, %f2;
+    mul.rn.f32 %f3, %f3, %f4;
+    st.global.f32 [%rd7], %f3;
+ADDS_DONE:
+    ret;
+}
+PTX
+
+DEFAULT_MODEL = ENV["GEMMA4_MODEL"]? || "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/gemma-4-12B-it-GGUF/gemma-4-12B-it-Q4_K_M.gguf"
+
+def bytesize_f32(elements : Int32) : LibC::SizeT
+  (elements * sizeof(Float32)).to_u64
+end
+
+def max_abs_diff(a : Array(Float32), b : Array(Float32)) : Float32
+  raise ArgumentError.new("size mismatch") unless a.size == b.size
+  max = 0.0_f32
+  a.each_with_index do |v, i|
+    diff = (v - b[i]).abs
+    max = diff if diff > max
+  end
+  max
+end
+
+def cosine(a : Array(Float32), b : Array(Float32)) : Float64
+  dot = 0.0_f64
+  na = 0.0_f64
+  nb = 0.0_f64
+  a.each_with_index do |v, i|
+    av = v.to_f64
+    bv = b[i].to_f64
+    dot += av * bv
+    na += av * av
+    nb += bv * bv
+  end
+  dot / Math.sqrt(na * nb)
+end
+
+def rope_tables(pos : Int32, n_rot : Int32, freq_base : Float32, factors : Array(Float32)?) : {Array(Float32), Array(Float32)}
+  half = n_rot // 2
+  cos = Array(Float32).new(half, 0.0_f32)
+  sin = Array(Float32).new(half, 0.0_f32)
+  half.times do |i|
+    i0 = 2 * i
+    factor = factors ? factors.not_nil![i] : 1.0_f32
+    theta = pos.to_f32 * (freq_base ** (-i0.to_f32 / n_rot.to_f32)) / factor
+    cos[i] = Math.cos(theta).to_f32
+    sin[i] = Math.sin(theta).to_f32
+  end
+  {cos, sin}
+end
+
+def launch_norm(fn : ML::CUDA::KernelFunction,
+                x_ptr : ML::CUDA::DevicePtr,
+                norm_ptr : ML::CUDA::DevicePtr,
+                out_ptr : ML::CUDA::DevicePtr,
+                rows : Int32,
+                dim : Int32,
+                eps : Float32,
+                label : String) : Nil
+  d_x = x_ptr
+  d_norm = norm_ptr
+  d_out = out_ptr
+  dim_u32 = dim.to_u32
+  eps_f32 = eps
+  params = Pointer(Void*).malloc(5)
+  params[0] = pointerof(d_x).as(Void*)
+  params[1] = pointerof(d_norm).as(Void*)
+  params[2] = pointerof(d_out).as(Void*)
+  params[3] = pointerof(dim_u32).as(Void*)
+  params[4] = pointerof(eps_f32).as(Void*)
+  ML::CUDA.launch!(fn, rows.to_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, params, label)
+end
+
+def launch_rope(fn : ML::CUDA::KernelFunction,
+                x_ptr : ML::CUDA::DevicePtr,
+                cos_ptr : ML::CUDA::DevicePtr,
+                sin_ptr : ML::CUDA::DevicePtr,
+                rows : Int32,
+                head_dim : Int32,
+                n_rot : Int32,
+                label : String) : Nil
+  d_x = x_ptr
+  d_cos = cos_ptr
+  d_sin = sin_ptr
+  head_dim_u32 = head_dim.to_u32
+  n_rot_u32 = n_rot.to_u32
+  params = Pointer(Void*).malloc(5)
+  params[0] = pointerof(d_x).as(Void*)
+  params[1] = pointerof(d_cos).as(Void*)
+  params[2] = pointerof(d_sin).as(Void*)
+  params[3] = pointerof(head_dim_u32).as(Void*)
+  params[4] = pointerof(n_rot_u32).as(Void*)
+  block = {n_rot // 2, 256}.min.to_u32
+  ML::CUDA.launch!(fn, rows.to_u32, 1_u32, 1_u32, block, 1_u32, 1_u32, params, label)
+end
+
+def launch_gemv(fn : ML::CUDA::KernelFunction,
+                d_w : ML::CUDA::DevicePtr,
+                d_x : ML::CUDA::DevicePtr,
+                d_out : ML::CUDA::DevicePtr,
+                in_dim : Int32,
+                out_dim : Int32,
+                label : String) : Nil
+  in_dim_u32 = in_dim.to_u32
+  out_dim_u32 = out_dim.to_u32
+  params = Pointer(Void*).malloc(5)
+  params[0] = pointerof(d_w).as(Void*)
+  params[1] = pointerof(d_x).as(Void*)
+  params[2] = pointerof(d_out).as(Void*)
+  params[3] = pointerof(in_dim_u32).as(Void*)
+  params[4] = pointerof(out_dim_u32).as(Void*)
+  grid = ((out_dim + 3) // 4).to_u32
+  ML::CUDA.launch!(fn, grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, params, label)
+end
+
+def launch_q4_batched(fn : ML::CUDA::KernelFunction,
+                      w_ptr : ML::CUDA::DevicePtr,
+                      x_ptr : ML::CUDA::DevicePtr,
+                      out_ptr : ML::CUDA::DevicePtr,
+                      tokens : Int32,
+                      in_dim : Int32,
+                      out_dim : Int32,
+                      label : String) : Nil
+  d_w = w_ptr
+  d_x = x_ptr
+  d_out = out_ptr
+  in_dim_u32 = in_dim.to_u32
+  out_dim_u32 = out_dim.to_u32
+  params = Pointer(Void*).malloc(5)
+  params[0] = pointerof(d_w).as(Void*)
+  params[1] = pointerof(d_x).as(Void*)
+  params[2] = pointerof(d_out).as(Void*)
+  params[3] = pointerof(in_dim_u32).as(Void*)
+  params[4] = pointerof(out_dim_u32).as(Void*)
+  grid = (((out_dim + 3) // 4) * tokens).to_u32
+  ML::CUDA.launch!(fn, grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32, params, label)
+end
+
+def launch_gelu(fn : ML::CUDA::KernelFunction,
+                gate_ptr : ML::CUDA::DevicePtr,
+                up_ptr : ML::CUDA::DevicePtr,
+                out_ptr : ML::CUDA::DevicePtr,
+                n : Int32,
+                label : String) : Nil
+  d_gate = gate_ptr
+  d_up = up_ptr
+  d_out = out_ptr
+  n_u32 = n.to_u32
+  params = Pointer(Void*).malloc(4)
+  params[0] = pointerof(d_gate).as(Void*)
+  params[1] = pointerof(d_up).as(Void*)
+  params[2] = pointerof(d_out).as(Void*)
+  params[3] = pointerof(n_u32).as(Void*)
+  grid = ((n + 255) // 256).to_u32
+  ML::CUDA.launch!(fn, grid, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, params, label)
+end
+
+def launch_add(fn : ML::CUDA::KernelFunction,
+               a_ptr : ML::CUDA::DevicePtr,
+               b_ptr : ML::CUDA::DevicePtr,
+               out_ptr : ML::CUDA::DevicePtr,
+               n : Int32,
+               label : String) : Nil
+  d_a = a_ptr
+  d_b = b_ptr
+  d_out = out_ptr
+  n_u32 = n.to_u32
+  params = Pointer(Void*).malloc(4)
+  params[0] = pointerof(d_a).as(Void*)
+  params[1] = pointerof(d_b).as(Void*)
+  params[2] = pointerof(d_out).as(Void*)
+  params[3] = pointerof(n_u32).as(Void*)
+  grid = ((n + 255) // 256).to_u32
+  ML::CUDA.launch!(fn, grid, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, params, label)
+end
+
+def launch_add_scale(fn : ML::CUDA::KernelFunction,
+                     a_ptr : ML::CUDA::DevicePtr,
+                     b_ptr : ML::CUDA::DevicePtr,
+                     out_ptr : ML::CUDA::DevicePtr,
+                     n : Int32,
+                     scale : Float32,
+                     label : String) : Nil
+  d_a = a_ptr
+  d_b = b_ptr
+  d_out = out_ptr
+  n_u32 = n.to_u32
+  scale_f32 = scale
+  params = Pointer(Void*).malloc(5)
+  params[0] = pointerof(d_a).as(Void*)
+  params[1] = pointerof(d_b).as(Void*)
+  params[2] = pointerof(d_out).as(Void*)
+  params[3] = pointerof(n_u32).as(Void*)
+  params[4] = pointerof(scale_f32).as(Void*)
+  grid = ((n + 255) // 256).to_u32
+  ML::CUDA.launch!(fn, grid, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, params, label)
+end
+
+model = DEFAULT_MODEL
+layer = 0
+tokens = 4
+base_pos = 0
+splitk_chunk = 4096
+seed = 23_u64
+reps = 10
+warmup = 2
+
+OptionParser.parse do |p|
+  p.banner = "Usage: gemma4_cuda_full_attn_layer_probe [--model PATH] [--layer N] [--tokens N] [--base-pos N] [--splitk-chunk N] [--reps N] [--warmup N] [--seed N]"
+  p.on("--model PATH", "Gemma4 GGUF path") { |v| model = v }
+  p.on("--layer N", "Gemma4 full-attention layer index without explicit V") { |v| layer = v.to_i }
+  p.on("--tokens N", "Synthetic token span length") { |v| tokens = v.to_i }
+  p.on("--base-pos N", "Absolute start position for the synthetic span") { |v| base_pos = v.to_i }
+  p.on("--splitk-chunk N", "Parallel context chunk; use 1024 for exact one-window route") { |v| splitk_chunk = v.to_i }
+  p.on("--reps N", "Timed launches") { |v| reps = v.to_i }
+  p.on("--warmup N", "Untimed warmup launches") { |v| warmup = v.to_i }
+  p.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
+  p.on("-h", "--help", "Show help") { puts p; exit 0 }
+end
+
+raise "model not found: #{model}" unless File.exists?(model)
+raise "tokens must be positive" unless tokens > 0
+raise "base-pos must be non-negative" unless base_pos >= 0
+raise "splitk-chunk must be positive" unless splitk_chunk > 0
+raise "reps must be positive" unless reps > 0
+raise "warmup must be non-negative" unless warmup >= 0
+
+weights = ML::GGUF::Gemma4Weights.from_gguf(model)
+hp = weights.hparams
+raise "layer #{layer} is not full-attention" unless hp.full_attention?(layer)
+lw = weights.layers[layer]
+raise "full-attention layer #{layer} unexpectedly has explicit V" if lw.attn_v_qw
+raise "expected Q4_K ffn gate/up" unless lw.ffn_gate_qw.type.q4_k? && lw.ffn_up_qw.type.q4_k?
+raise "expected Q4_K/Q6_K ffn down" unless lw.ffn_down_qw.type.q4_k? || lw.ffn_down_qw.type.q6_k?
+head_dim = hp.head_dim_for_layer(layer)
+n_head = hp.n_head
+n_head_kv = hp.n_head_kv(layer)
+heads_per_group = n_head // n_head_kv
+hidden = hp.n_embd
+ffn_dim = lw.ffn_gate_qw.out_dim
+q_dim = n_head * head_dim
+kv_dim = n_head_kv * head_dim
+max_seq = base_pos + tokens
+active_window_len = max_seq
+splitk_chunks = (active_window_len + splitk_chunk - 1) // splitk_chunk
+
+rng = Random.new(seed)
+xs = Array(Float32).new(tokens * hidden) { rng.rand(-1.0_f32..1.0_f32) }
+initial_k_cache = Array(Float32).new(max_seq * kv_dim) { rng.rand(-0.25_f32..0.25_f32) }
+initial_v_cache = Array(Float32).new(max_seq * kv_dim) { rng.rand(-0.25_f32..0.25_f32) }
+
+state = ML::GGUF::Gemma4CPU::State.new(hp, max_seq)
+state.layers[layer].k_cache = initial_k_cache.dup
+state.layers[layer].v_cache = initial_v_cache.dup
+attn_state = ML::GGUF::Gemma4CPU::State.new(hp, max_seq)
+attn_state.layers[layer].k_cache = initial_k_cache.dup
+attn_state.layers[layer].v_cache = initial_v_cache.dup
+cpu = Array(Float32).new(tokens * hidden, 0.0_f32)
+cpu_attn = Array(Float32).new(tokens * hidden, 0.0_f32)
+cpu_t0 = Time.instant
+tokens.times do |tok|
+  abs_pos = base_pos + tok
+  row = xs[tok * hidden, hidden]
+  attn = ML::GGUF::Gemma4CPU.attention_projected_output(weights, layer, row, abs_pos, attn_state)
+  hidden.times { |i| cpu_attn[tok * hidden + i] = attn[i] }
+  out = ML::GGUF::Gemma4CPU.forward_layer(weights, layer, row, abs_pos, state)
+  hidden.times { |i| cpu[tok * hidden + i] = out[i] }
+end
+cpu_ms = (Time.instant - cpu_t0).total_milliseconds
+
+ctx = nil.as(ML::CUDA::Context?)
+norm_mod = nil.as(ML::CUDA::CUDAModule?)
+rope_mod = nil.as(ML::CUDA::CUDAModule?)
+attn_mod = nil.as(ML::CUDA::CUDAModule?)
+kv_mod = nil.as(ML::CUDA::CUDAModule?)
+q4_mod = nil.as(ML::CUDA::CUDAModule?)
+q6_mod = nil.as(ML::CUDA::CUDAModule?)
+gelu_mod = nil.as(ML::CUDA::CUDAModule?)
+buffers = [] of ML::CUDA::DeviceBuffer
+
+begin
+  ctx = ML::CUDA::Context.create
+  norm_mod = ML::CUDA::CUDAModule.load(NORM_PTX, "gemma4_full_attn_out_norm")
+  rope_mod = ML::CUDA::CUDAModule.load(ROPE_PTX, "gemma4_full_attn_out_rope")
+  attn_mod = ML::CUDA::CUDAModule.load(ML::CUDA::Gemma4SWAContextPTX::ATTN_PTX, "gemma4_full_attn_out_context")
+  kv_mod = ML::CUDA::CUDAModule.load(ML::CUDA::Gemma4SWAContextPTX::KV_WRITE_PTX, "gemma4_full_attn_out_kv")
+  q4_mod = ML::CUDA::CUDAModule.load(Q4K_PTX, "gemma4_full_attn_out_q4")
+  q6_mod = ML::CUDA::CUDAModule.load(Q6K_PTX, "gemma4_full_attn_out_q6")
+  gelu_mod = ML::CUDA::CUDAModule.load(GELU_ADD_PTX, "gemma4_full_layer_elem")
+
+  norm_fn = norm_mod.function("rmsnorm_vec_parallel_batched_probe")
+  rope_fn = rope_mod.function("rope_neox_apply_batched_probe")
+  kv_write_fn = kv_mod.function("gemma4_kv_cache_write_probe")
+  splitk_part_fn = attn_mod.function("gemma4_swa_ungated_attn_splitk_part_probe")
+  splitk_reduce_fn = attn_mod.function("gemma4_swa_ungated_attn_splitk_reduce_probe")
+  q4_fn = q4_mod.function("q4_k_gemv_warp4_f32")
+  q4_batched_fn = q4_mod.function("q4_k_gemv_warp4_f32_batched")
+  q6_fn = q6_mod.function("q6_k_gemv_warp4_f32")
+  gelu_fn = gelu_mod.function("gelu_mul_f32")
+  add_fn = gelu_mod.function("add_f32")
+  add_scale_fn = gelu_mod.function("add_scale_f32")
+  out_fn = lw.attn_output_qw.type.q4_k? ? q4_fn : q6_fn
+  ffn_down_fn = lw.ffn_down_qw.type.q4_k? ? q4_fn : q6_fn
+
+  x_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(xs.size)); buffers << x_buf
+  input_norm_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(lw.attn_norm.size)); buffers << input_norm_buf
+  x_norm_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(xs.size)); buffers << x_norm_buf
+  q_w_buf = ML::CUDA::DeviceBuffer.new(lw.attn_q_qw.raw.size.to_u64); buffers << q_w_buf
+  k_w_buf = ML::CUDA::DeviceBuffer.new(lw.attn_k_qw.raw.size.to_u64); buffers << k_w_buf
+  q_raw_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * q_dim)); buffers << q_raw_buf
+  k_raw_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * kv_dim)); buffers << k_raw_buf
+  q_norm_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(lw.attn_q_norm.size)); buffers << q_norm_buf
+  k_norm_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(lw.attn_k_norm.size)); buffers << k_norm_buf
+  ones_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(head_dim)); buffers << ones_buf
+  post_attn_norm_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(lw.post_attention_norm.size)); buffers << post_attn_norm_buf
+  ffn_norm_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(lw.ffn_norm.size)); buffers << ffn_norm_buf
+  post_ffw_norm_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(lw.post_ffw_norm.size)); buffers << post_ffw_norm_buf
+  q_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * q_dim)); buffers << q_buf
+  k_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * kv_dim)); buffers << k_buf
+  v_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * kv_dim)); buffers << v_buf
+  cos_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(hp.rope_dim_for_layer(layer) // 2)); buffers << cos_buf
+  sin_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(hp.rope_dim_for_layer(layer) // 2)); buffers << sin_buf
+  k_cache_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(max_seq * kv_dim)); buffers << k_cache_buf
+  v_cache_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(max_seq * kv_dim)); buffers << v_cache_buf
+  scores_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * n_head * max_seq)); buffers << scores_buf
+  ctx_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * q_dim)); buffers << ctx_buf
+  splitk_meta_count = tokens * n_head * splitk_chunks
+  splitk_o_count = splitk_meta_count * head_dim
+  splitk_m_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(splitk_meta_count)); buffers << splitk_m_buf
+  splitk_l_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(splitk_meta_count)); buffers << splitk_l_buf
+  splitk_o_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(splitk_o_count)); buffers << splitk_o_buf
+  start_pos_buf = ML::CUDA::DeviceBuffer.new(sizeof(UInt32).to_u64); buffers << start_pos_buf
+  out_w_buf = ML::CUDA::DeviceBuffer.new(lw.attn_output_qw.raw.size.to_u64); buffers << out_w_buf
+  attn_projected_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * hidden)); buffers << attn_projected_buf
+  attn_normed_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * hidden)); buffers << attn_normed_buf
+  attn_residual_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * hidden)); buffers << attn_residual_buf
+  ffn_in_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * hidden)); buffers << ffn_in_buf
+  ffn_gate_w_buf = ML::CUDA::DeviceBuffer.new(lw.ffn_gate_qw.raw.size.to_u64); buffers << ffn_gate_w_buf
+  ffn_up_w_buf = ML::CUDA::DeviceBuffer.new(lw.ffn_up_qw.raw.size.to_u64); buffers << ffn_up_w_buf
+  ffn_down_w_buf = ML::CUDA::DeviceBuffer.new(lw.ffn_down_qw.raw.size.to_u64); buffers << ffn_down_w_buf
+  ffn_gate_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * ffn_dim)); buffers << ffn_gate_buf
+  ffn_up_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * ffn_dim)); buffers << ffn_up_buf
+  ffn_comb_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * ffn_dim)); buffers << ffn_comb_buf
+  ffn_raw_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * hidden)); buffers << ffn_raw_buf
+  ffn_normed_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * hidden)); buffers << ffn_normed_buf
+  out_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * hidden)); buffers << out_buf
+
+  ones = Array(Float32).new(head_dim, 1.0_f32)
+  start_pos_value = base_pos.to_u32
+  ML::CUDA.copy_htod!(x_buf.ptr, xs.to_unsafe.as(Void*), bytesize_f32(xs.size), "xs")
+  ML::CUDA.copy_htod!(input_norm_buf.ptr, lw.attn_norm.to_unsafe.as(Void*), bytesize_f32(lw.attn_norm.size), "input_norm")
+  ML::CUDA.copy_htod!(q_w_buf.ptr, lw.attn_q_qw.raw.to_unsafe.as(Void*), lw.attn_q_qw.raw.size.to_u64, "q_w")
+  ML::CUDA.copy_htod!(k_w_buf.ptr, lw.attn_k_qw.raw.to_unsafe.as(Void*), lw.attn_k_qw.raw.size.to_u64, "k_w")
+  ML::CUDA.copy_htod!(q_norm_buf.ptr, lw.attn_q_norm.to_unsafe.as(Void*), bytesize_f32(lw.attn_q_norm.size), "q_norm")
+  ML::CUDA.copy_htod!(k_norm_buf.ptr, lw.attn_k_norm.to_unsafe.as(Void*), bytesize_f32(lw.attn_k_norm.size), "k_norm")
+  ML::CUDA.copy_htod!(ones_buf.ptr, ones.to_unsafe.as(Void*), bytesize_f32(ones.size), "plain_v_norm")
+  ML::CUDA.copy_htod!(post_attn_norm_buf.ptr, lw.post_attention_norm.to_unsafe.as(Void*), bytesize_f32(lw.post_attention_norm.size), "post_attention_norm")
+  ML::CUDA.copy_htod!(ffn_norm_buf.ptr, lw.ffn_norm.to_unsafe.as(Void*), bytesize_f32(lw.ffn_norm.size), "ffn_norm")
+  ML::CUDA.copy_htod!(post_ffw_norm_buf.ptr, lw.post_ffw_norm.to_unsafe.as(Void*), bytesize_f32(lw.post_ffw_norm.size), "post_ffw_norm")
+  ML::CUDA.copy_htod!(k_cache_buf.ptr, initial_k_cache.to_unsafe.as(Void*), bytesize_f32(initial_k_cache.size), "k_cache_init")
+  ML::CUDA.copy_htod!(v_cache_buf.ptr, initial_v_cache.to_unsafe.as(Void*), bytesize_f32(initial_v_cache.size), "v_cache_init")
+  ML::CUDA.copy_htod!(start_pos_buf.ptr, pointerof(start_pos_value).as(Void*), sizeof(UInt32).to_u64, "start_pos")
+  ML::CUDA.copy_htod!(out_w_buf.ptr, lw.attn_output_qw.raw.to_unsafe.as(Void*), lw.attn_output_qw.raw.size.to_u64, "attn_output_w")
+  ML::CUDA.copy_htod!(ffn_gate_w_buf.ptr, lw.ffn_gate_qw.raw.to_unsafe.as(Void*), lw.ffn_gate_qw.raw.size.to_u64, "ffn_gate_w")
+  ML::CUDA.copy_htod!(ffn_up_w_buf.ptr, lw.ffn_up_qw.raw.to_unsafe.as(Void*), lw.ffn_up_qw.raw.size.to_u64, "ffn_up_w")
+  ML::CUDA.copy_htod!(ffn_down_w_buf.ptr, lw.ffn_down_qw.raw.to_unsafe.as(Void*), lw.ffn_down_qw.raw.size.to_u64, "ffn_down_w")
+
+  kv_dim_u32 = kv_dim.to_u32
+  start_u32 = base_pos.to_u32
+  d_k = k_buf.ptr
+  d_v = v_buf.ptr
+  d_kc = k_cache_buf.ptr
+  d_vc = v_cache_buf.ptr
+  kv_params = Pointer(Void*).malloc(6)
+  kv_params[0] = pointerof(d_k).as(Void*)
+  kv_params[1] = pointerof(d_v).as(Void*)
+  kv_params[2] = pointerof(d_kc).as(Void*)
+  kv_params[3] = pointerof(d_vc).as(Void*)
+  kv_params[4] = pointerof(kv_dim_u32).as(Void*)
+  kv_params[5] = pointerof(start_u32).as(Void*)
+
+  d_q = q_buf.ptr
+  d_scores = scores_buf.ptr
+  d_ctx = ctx_buf.ptr
+  d_start_pos = start_pos_buf.ptr
+  d_splitk_m = splitk_m_buf.ptr
+  d_splitk_l = splitk_l_buf.ptr
+  d_splitk_o = splitk_o_buf.ptr
+  n_head_u32 = n_head.to_u32
+  n_head_kv_u32 = n_head_kv.to_u32
+  head_dim_u32 = head_dim.to_u32
+  hpg_u32 = heads_per_group.to_u32
+  max_seq_u32 = max_seq.to_u32
+  window_size_u32 = active_window_len.to_u32
+  scale = 1.0_f32
+  splitk_chunk_u32 = splitk_chunk.to_u32
+  splitk_chunks_u32 = splitk_chunks.to_u32
+  part_params = Pointer(Void*).malloc(17)
+  part_params[0] = pointerof(d_q).as(Void*)
+  part_params[1] = pointerof(d_kc).as(Void*)
+  part_params[2] = pointerof(d_vc).as(Void*)
+  part_params[3] = pointerof(d_scores).as(Void*)
+  part_params[4] = pointerof(d_splitk_m).as(Void*)
+  part_params[5] = pointerof(d_splitk_l).as(Void*)
+  part_params[6] = pointerof(d_splitk_o).as(Void*)
+  part_params[7] = pointerof(n_head_u32).as(Void*)
+  part_params[8] = pointerof(n_head_kv_u32).as(Void*)
+  part_params[9] = pointerof(head_dim_u32).as(Void*)
+  part_params[10] = pointerof(hpg_u32).as(Void*)
+  part_params[11] = pointerof(d_start_pos).as(Void*)
+  part_params[12] = pointerof(max_seq_u32).as(Void*)
+  part_params[13] = pointerof(window_size_u32).as(Void*)
+  part_params[14] = pointerof(scale).as(Void*)
+  part_params[15] = pointerof(splitk_chunk_u32).as(Void*)
+  part_params[16] = pointerof(splitk_chunks_u32).as(Void*)
+
+  reduce_params = Pointer(Void*).malloc(9)
+  reduce_params[0] = pointerof(d_splitk_m).as(Void*)
+  reduce_params[1] = pointerof(d_splitk_l).as(Void*)
+  reduce_params[2] = pointerof(d_splitk_o).as(Void*)
+  reduce_params[3] = pointerof(d_ctx).as(Void*)
+  reduce_params[4] = pointerof(n_head_u32).as(Void*)
+  reduce_params[5] = pointerof(head_dim_u32).as(Void*)
+  reduce_params[6] = pointerof(d_start_pos).as(Void*)
+  reduce_params[7] = pointerof(max_seq_u32).as(Void*)
+  reduce_params[8] = pointerof(splitk_chunks_u32).as(Void*)
+
+  run_once = -> {
+    launch_norm(norm_fn, x_buf.ptr, input_norm_buf.ptr, x_norm_buf.ptr, tokens, hidden, hp.rms_eps, "input_norm")
+    launch_q4_batched(q4_batched_fn, q_w_buf.ptr, x_norm_buf.ptr, q_raw_buf.ptr, tokens, hidden, q_dim, "q_proj")
+    launch_q4_batched(q4_batched_fn, k_w_buf.ptr, x_norm_buf.ptr, k_raw_buf.ptr, tokens, hidden, kv_dim, "k_proj")
+    launch_norm(norm_fn, q_raw_buf.ptr, q_norm_buf.ptr, q_buf.ptr, tokens * n_head, head_dim, hp.rms_eps, "q_head_norm")
+    launch_norm(norm_fn, k_raw_buf.ptr, k_norm_buf.ptr, k_buf.ptr, tokens * n_head_kv, head_dim, hp.rms_eps, "k_head_norm")
+    launch_norm(norm_fn, k_raw_buf.ptr, ones_buf.ptr, v_buf.ptr, tokens * n_head_kv, head_dim, hp.rms_eps, "v_plain_from_k")
+
+    tokens.times do |tok|
+      abs_pos = base_pos + tok
+      cos, sin = rope_tables(abs_pos, hp.rope_dim_for_layer(layer), hp.rope_freq_base_for_layer(layer), weights.rope_freqs)
+      ML::CUDA.copy_htod!(cos_buf.ptr, cos.to_unsafe.as(Void*), bytesize_f32(cos.size), "rope_cos")
+      ML::CUDA.copy_htod!(sin_buf.ptr, sin.to_unsafe.as(Void*), bytesize_f32(sin.size), "rope_sin")
+      launch_rope(rope_fn, q_buf.ptr + bytesize_f32(tok * q_dim), cos_buf.ptr, sin_buf.ptr, n_head, head_dim, hp.rope_dim_for_layer(layer), "q_rope")
+      launch_rope(rope_fn, k_buf.ptr + bytesize_f32(tok * kv_dim), cos_buf.ptr, sin_buf.ptr, n_head_kv, head_dim, hp.rope_dim_for_layer(layer), "k_rope")
+    end
+
+    ML::CUDA.launch!(kv_write_fn, tokens.to_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, kv_params, "kv_write")
+    ML::CUDA.launch!(splitk_part_fn, tokens.to_u32, n_head.to_u32, splitk_chunks_u32, 256_u32, 1_u32, 1_u32, part_params, "swa_attn_part")
+    ML::CUDA.launch!(splitk_reduce_fn, tokens.to_u32, n_head.to_u32, 1_u32, 256_u32, 1_u32, 1_u32, reduce_params, "swa_attn_reduce")
+    tokens.times do |tok|
+      launch_gemv(out_fn, out_w_buf.ptr, ctx_buf.ptr + bytesize_f32(tok * q_dim), attn_projected_buf.ptr + bytesize_f32(tok * hidden), q_dim, hidden, "attn_output")
+      launch_norm(norm_fn, attn_projected_buf.ptr + bytesize_f32(tok * hidden), post_attn_norm_buf.ptr, attn_normed_buf.ptr + bytesize_f32(tok * hidden), 1, hidden, hp.rms_eps, "post_attn_norm")
+      launch_add(add_fn, x_buf.ptr + bytesize_f32(tok * hidden), attn_normed_buf.ptr + bytesize_f32(tok * hidden), attn_residual_buf.ptr + bytesize_f32(tok * hidden), hidden, "attn_residual")
+      launch_norm(norm_fn, attn_residual_buf.ptr + bytesize_f32(tok * hidden), ffn_norm_buf.ptr, ffn_in_buf.ptr + bytesize_f32(tok * hidden), 1, hidden, hp.rms_eps, "ffn_norm")
+      launch_gemv(q4_fn, ffn_gate_w_buf.ptr, ffn_in_buf.ptr + bytesize_f32(tok * hidden), ffn_gate_buf.ptr + bytesize_f32(tok * ffn_dim), hidden, ffn_dim, "ffn_gate")
+      launch_gemv(q4_fn, ffn_up_w_buf.ptr, ffn_in_buf.ptr + bytesize_f32(tok * hidden), ffn_up_buf.ptr + bytesize_f32(tok * ffn_dim), hidden, ffn_dim, "ffn_up")
+    end
+    launch_gelu(gelu_fn, ffn_gate_buf.ptr, ffn_up_buf.ptr, ffn_comb_buf.ptr, tokens * ffn_dim, "gelu_mul")
+    tokens.times do |tok|
+      launch_gemv(ffn_down_fn, ffn_down_w_buf.ptr, ffn_comb_buf.ptr + bytesize_f32(tok * ffn_dim), ffn_raw_buf.ptr + bytesize_f32(tok * hidden), ffn_dim, hidden, "ffn_down")
+      launch_norm(norm_fn, ffn_raw_buf.ptr + bytesize_f32(tok * hidden), post_ffw_norm_buf.ptr, ffn_normed_buf.ptr + bytesize_f32(tok * hidden), 1, hidden, hp.rms_eps, "post_ffw_norm")
+      layer_scale = lw.layer_output_scale.first? || 1.0_f32
+      launch_add_scale(add_scale_fn, attn_residual_buf.ptr + bytesize_f32(tok * hidden), ffn_normed_buf.ptr + bytesize_f32(tok * hidden), out_buf.ptr + bytesize_f32(tok * hidden), hidden, layer_scale, "layer_output")
+    end
+  }
+
+  warmup.times { run_once.call }
+  ML::CUDA.synchronize!("warmup")
+  t0 = Time.instant
+  reps.times { run_once.call }
+  ML::CUDA.synchronize!("timed")
+  cuda_ms = (Time.instant - t0).total_milliseconds / reps
+
+  gpu = Array(Float32).new(tokens * hidden, 0.0_f32)
+  gpu_attn = Array(Float32).new(tokens * hidden, 0.0_f32)
+  ML::CUDA.copy_dtoh!(gpu.to_unsafe.as(Void*), out_buf.ptr, bytesize_f32(gpu.size), "attn_projected")
+  ML::CUDA.copy_dtoh!(gpu_attn.to_unsafe.as(Void*), attn_projected_buf.ptr, bytesize_f32(gpu_attn.size), "attn_projected")
+  attn_cos_v = cosine(gpu_attn, cpu_attn)
+  attn_diff = max_abs_diff(gpu_attn, cpu_attn)
+  cos_v = cosine(gpu, cpu)
+  diff = max_abs_diff(gpu, cpu)
+  ok = cos_v >= 0.99999 && diff <= 1.0e-3_f32
+
+  puts "device=#{ctx.device_name}"
+  puts "compute_capability=#{ctx.compute_capability_major}.#{ctx.compute_capability_minor}"
+  puts "model=#{model}"
+  puts "layer=#{layer}"
+  puts "tokens=#{tokens}"
+  puts "base_pos=#{base_pos}"
+  puts "attention_window=full"
+  puts "active_window_len=#{active_window_len}"
+  puts "splitk_chunk=#{splitk_chunk}"
+  puts "splitk_chunks=#{splitk_chunks}"
+  puts "hidden=#{hidden}"
+  puts "ffn_dim=#{ffn_dim}"
+  puts "q_dim=#{q_dim}"
+  puts "kv_dim=#{kv_dim}"
+  puts "cuda_ms=#{cuda_ms.round(4)}"
+  puts "cuda_ms_per_token=#{(cuda_ms / tokens).round(4)}"
+  puts "cpu_ms=#{cpu_ms.round(4)}"
+  puts "attn_cos=#{attn_cos_v.round(8)}"
+  puts "attn_max_diff=#{attn_diff}"
+  puts "cos=#{cos_v.round(8)}"
+  puts "max_diff=#{diff}"
+  puts "ok=#{ok}"
+  exit(ok ? 0 : 1)
+ensure
+  buffers.each(&.close)
+  gelu_mod.try(&.close)
+  q6_mod.try(&.close)
+  q4_mod.try(&.close)
+  kv_mod.try(&.close)
+  attn_mod.try(&.close)
+  rope_mod.try(&.close)
+  norm_mod.try(&.close)
+  ctx.try(&.close)
+end
