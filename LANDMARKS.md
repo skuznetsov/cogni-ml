@@ -22242,3 +22242,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The active window is Gemma FFN gate/up/down logical-weight traffic. The corridor is per-layer decode/prefill FFN body rows. Legal moves are producer-consumer fusions, staged-type preservation, or weight/body prepacking only if they lower the recomputed potential `(dominant_weight_mib, tied_routes, sync/conflict_count, remaining_work)` under parity and paired wall checks. The dual frame is profile-only/no-promotion if quiet-host ABBA is unavailable.
 **boundary:** Do not claim Gemma speed parity from atlas output alone. Use it to choose the next experiment: FFN body/gate-up-down corridor first; attention/GQA/static graph branches need stronger fresh evidence before revisiting.
+
+### [LM-COGNIGRAPH-029] Gemma llama-bench body tg comparisons must default to body_chain=1
+**context:** ml / CogniGraph / Gemma4 / llama.cpp comparison / benchmark accounting / LTP-WBA
+**state:** benchmark wrappers corrected; graph-chunk mode remains opt-in
+
+- claim: "llama.cpp `llama-bench` text-generation mode calls `llama_decode(ctx, llama_batch_get_one(&token, 1))` and `llama_synchronize(ctx)` for every generated token, with `.logits = nullptr`. Therefore native body-only tg is apples-to-apples only when the native comparison path also defaults to one known body token per sync."
+  source: `/Users/sergey/SrcArchives/AI/llama.cpp/tools/llama-bench/llama-bench.cpp` lines around `test_gen`; `/Users/sergey/SrcArchives/AI/llama.cpp/src/llama-batch.cpp` `llama_batch_get_one` source inspection on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: llama.cpp llama-bench tg implementation changes, or native benchmark semantics rewrite
+  trust: {F:0.88,G:0.30,R:0.86}
+
+- claim: "`bin/benchmark_gemma4_vs_llama.cr` now defaults `native_body_chain=1` and documents that `--native-body-chain=N` is a graph-chunk experiment. `scripts/gemma4_vs_llama_body_bench.sh` now passes `--body-chain "$BODY_CHAIN"` with default `GEMMA4_BODY_CHAIN:-1`."
+  source: `crystal build --no-codegen bin/benchmark_gemma4_vs_llama.cr --error-trace`; `bash -n scripts/gemma4_vs_llama_body_bench.sh`; `scripts/gemma4_vs_llama_body_bench.sh --help` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: benchmark wrapper rewrite or profile CLI body-chain default rewrite
+  trust: {F:0.86,G:0.34,R:0.84}
+
+**LTP/WBA:** The window is a benchmark-accounting mismatch: a local graph-chain corridor reduced host syncs, but crossed the llama-bench boundary. The legal move is a Diamond normalization: default comparison route preserves per-token sync; chunked body-chain remains an explicit graph experiment. Potential descends as `(apples_mismatch, benchmark_claim_risk, sync_boundary_conflict, remaining_measurement_work)`.
+**boundary:** Treat prior Gemma tg rows with implicit `body_chain=8` as graph-chunk experiments, not apples-to-apples llama-bench tg promotion evidence. Re-run key Gemma pp/tg comparisons with default `native_body_chain=1` before public claims.

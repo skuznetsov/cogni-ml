@@ -19,6 +19,7 @@ MAX_RSS_MB=8000
 RUN_TIMEOUT_MS=80000
 LLAMA_THREADS=8
 LLAMA_FA=1
+BODY_CHAIN="${GEMMA4_BODY_CHAIN:-1}"
 
 usage() {
   cat <<'USAGE'
@@ -34,6 +35,7 @@ Options:
   --warmups N        Cogni warmups (default: 1)
   --max-seq N        Cogni max sequence (default: 512)
   --prefill-chunk N  Cogni row-prefill chunk (default: 512)
+  --body-chain N     Cogni body-chain chunk; default 1 for llama-bench tg parity
   --model PATH       Gemma4 GGUF path
   --profile-bin PATH Cogni profile binary path
   --llama-bench PATH llama-bench path
@@ -49,6 +51,7 @@ while [[ $# -gt 0 ]]; do
     --warmups) WARMUPS="$2"; shift 2 ;;
     --max-seq) MAX_SEQ="$2"; shift 2 ;;
     --prefill-chunk) PREFILL_CHUNK="$2"; shift 2 ;;
+    --body-chain) BODY_CHAIN="$2"; shift 2 ;;
     --model) MODEL="$2"; shift 2 ;;
     --profile-bin) PROFILE_BIN="$2"; shift 2 ;;
     --llama-bench) LLAMA_BENCH="$2"; shift 2 ;;
@@ -92,7 +95,7 @@ COGNI_RUN_SAFE_MIN_FREE_PCT=12 GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 "$RUN_SAFE" "$PRO
 
 COGNI_RUN_SAFE_MIN_FREE_PCT=12 "$RUN_SAFE" "$PROFILE_BIN" "$TIMEOUT_SEC" "$RUN_TIMEOUT_MS" \
   --model "$MODEL" --tokens 42 --decode-only-seed 42 --generate "$GEN" --max-seq "$MAX_SEQ" --runs "$REPS" --warmups "$WARMUPS" \
-  --prefill-mode rows --prefill-chunk "$PREFILL_CHUNK" --body-only \
+  --prefill-mode rows --prefill-chunk "$PREFILL_CHUNK" --body-only --body-chain "$BODY_CHAIN" \
   > "$cogni_tg_log" 2>&1
 
 python3 - "$llama_log" "$cogni_pp_log" "$cogni_tg_log" <<'PY'

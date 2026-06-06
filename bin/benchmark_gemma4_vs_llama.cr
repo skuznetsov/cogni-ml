@@ -162,7 +162,7 @@ prefill_chunk = 0
 decode_wave = true
 top1_resident = true
 top1_chain = (ENV["GEMMA4_TOP1_CHAIN"]? || "8").to_i
-body_chain = (ENV["GEMMA4_BODY_CHAIN"]? || "8").to_i
+body_chain = (ENV["GEMMA4_BODY_CHAIN"]? || "1").to_i
 decode_only_seed = 11751
 llama_extra_args = [] of String
 load_warning_threshold = 50.0
@@ -192,7 +192,7 @@ OptionParser.parse do |p|
   p.on("--top1-wave-resident", "Use native resident top1 wave in top1 mode (default)") { top1_resident = true }
   p.on("--no-top1-wave-resident", "Use legacy hidden-readback + separate top1 head path") { top1_resident = false }
   p.on("--native-top1-chain=N", "Use exact GPU-resident native top1 chain chunks in native top1 mode") { |v| top1_chain = v.to_i }
-  p.on("--native-body-chain=N", "Use exact GPU-resident native body chunks in native body mode") { |v| body_chain = v.to_i }
+  p.on("--native-body-chain=N", "Use exact GPU-resident native body chunks in native body mode; default 1 to match llama-bench tg synchronization") { |v| body_chain = v.to_i }
   p.on("--load-warning-threshold=PCT", "Warn if a process exceeds PCT CPU") { |v| load_warning_threshold = v.to_f }
   p.on("--load-total-warning-threshold=PCT", "Warn if total observed CPU exceeds PCT") { |v| load_total_warning_threshold = v.to_f }
   p.on("--wait-quiet-ms=N", "Wait up to N ms for quiet host") { |v| wait_quiet_ms = v.to_i }
@@ -230,7 +230,7 @@ llama_decode = run_llama_bench(llama_bench, model, 0, gen_tokens, reps, n_gpu_la
 puts "Gemma4 benchmark vs llama.cpp"
 puts "model: #{model}"
 puts "settings: prompt=#{prompt_tokens} gen=#{gen_tokens} reps=#{reps} warmups=#{warmups} native_mode=#{mode} prefill_chunk=#{prefill_chunk} decode_wave=#{decode_wave} top1_resident=#{top1_resident} native_top1_chain=#{top1_chain} native_body_chain=#{body_chain} native_decode_only_seed=#{decode_only_seed} ngl=#{n_gpu_layers} threads=#{threads} flash_attn=#{flash_attn} llama_extra_args=#{llama_extra_args.inspect}"
-puts "note: native pp is measured body-only; native tg is measured decode-only with empty KV to match llama-bench tg semantics."
+puts "note: native pp is measured body-only; native tg defaults to body_chain=1 with empty KV to match llama-bench per-token synchronization. Use --native-body-chain=N only for graph-chunk experiments."
 puts
 puts "Prefill"
 puts "  cogni-ml:  p50=#{native_prefill.prefill_ms.round(2)} ms  p50=#{native_prefill.prefill_tok_s.round(2)} tok/s"
