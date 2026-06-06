@@ -22367,3 +22367,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The window was Gemma b1 FFN gate/up duplicate Q4 GEMV dispatches. The corridor was `ffn_in -> gate/up Q4_K GEMV -> gelu_mul`, preserving F32 gate/up buffers. The legal move reduced route calls (`192` single gate/up GEMVs to `96` dual calls for gen2) and input rereads, but after recomputing the active window the dominant wall potential did not descend. This is a failed Spike for promotion, not a failed instrumentation asset.
 **boundary:** Keep `GEMMA4_DECODE_Q4_DUAL_GEMV` opt-in only. Do not combine it blindly with GELU folding or x16 tags; next Gemma exact decode work should pivot to either a different Q4/Q6 kernel family, head/top1 route, or a larger graph-level scheduler move with ABBA evidence.
+
+#### [LM-COGNIGRAPH-034] Gemma profile atlas now parses grouped waits with transfer fields
+**context:** ml / CogniGraph / Gemma4 / profile atlas / LTP-WBA tooling
+**state:** parser repaired; grouped wait buckets restored
+
+- claim: "`scripts/gemma4_profile_atlas.cr` now parses grouped command-buffer rows that include trailing `upload` and `readback` fields, restoring grouped wait visibility for current Gemma profile logs."
+  source: `scripts/run_safe.sh crystal 120 4096 build --no-codegen scripts/gemma4_profile_atlas.cr --error-trace`; `scripts/run_safe.sh crystal 120 4096 run scripts/gemma4_profile_atlas.cr -- /tmp/gemma4_current_phase_default.log --top=8` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: profile report format rewrite or atlas grouped-row parser rewrite
+  trust: {F:0.86,G:0.30,R:0.86}
+
+- claim: "On the current one-token Gemma top1-wave log, the repaired atlas reports `grouped_wait_ms=31.32` and the hot group `gemma4.decode_wave_top1.layers_head` at `100%` of grouped wait, instead of silently reporting zero grouped wait."
+  source: `/tmp/gemma4_current_phase_default.log` parsed by the repaired atlas on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host rerun contradiction, profile timing format rewrite, or profile mode change
+  trust: {F:0.82,G:0.18,R:0.80}
+
+**LTP/WBA:** This was a Diamond repair on the measurement graph. The window was a parser/report-format conflict; the corridor was grouped command-buffer wait attribution; the legal move restored evidence without changing inference. Potential descends as `(missing_dominant_wait_bucket, parser_conflict_count, remaining_manual_inspection)`. This is tooling evidence, not a speed claim.
+**boundary:** Use repaired atlas rows to choose experiments. Do not infer per-phase wait from all-in-one `layers_head`; for phase-specific wait, run explicit phase profiling or add finer production-safe markers.

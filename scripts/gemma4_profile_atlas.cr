@@ -126,7 +126,7 @@ text.each_line do |line|
   else
     case section
     when :groups
-      if line =~ /^\s{4}(.+?)\s+(\d+) calls\s+encode\s+([0-9.]+) ms\s+wait\s+([0-9.]+) ms\s+read\s+([0-9.]+) ms\s*$/
+      if line =~ /^\s{4}(.+?)\s+(\d+) calls\s+encode\s+([0-9.]+) ms\s+wait\s+([0-9.]+) ms\s+read\s+([0-9.]+) ms(?:\s+.*)?$/
         atlas.groups << CounterRow.new($1.strip, $2.to_i, $3.to_f, $4.to_f, $5.to_f)
       end
     when :matmuls
