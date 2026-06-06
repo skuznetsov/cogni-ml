@@ -22147,3 +22147,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The Diamond split was necessary: two individually plausible local fusions shared the residual boundary and conflicted when stacked. The combined route increased recomputed potential, so it is not legal for promotion. `ffn_in` remains a candidate corridor because it reduced the measured phase potential in the split run and preserved token parity.
 **boundary:** Do not default any residual-norm fusion yet. Future quiet-host ABBA should test `GEMMA4_FFN_IN_RESIDUAL_NORM_FUSE=1` first, then test composition with `GEMMA4_ATTN_PREP_FUSE=1`. Treat `GEMMA4_RESIDUAL_NORM_FUSE=1` as a conflict probe, not a candidate default.
+
+### [LM-COGNIGRAPH-024] Gemma fused attn_prep can elide K-to-V copy for tied K/V projection
+**context:** ml / CogniGraph / Gemma4 / attn_prep / copy elimination / Metal / LTP-WBA
+**state:** implemented inside opt-in `GEMMA4_ATTN_PREP_FUSE=1`; default unchanged
+
+- claim: "When Gemma has no separate V projection and the `copy_k_to_v` route is active, the fused F32 `attn_prep` path skips the explicit `k_buf -> v_buf` copy and normalizes/writes V directly from raw `k_buf` before the K RMSNorm+RoPE kernel mutates K. Fallback and non-fused paths still materialize `v_buf` as before."
+  source: `src/ml/gguf/gemma4_metal.cr`; `crystal build bin/gemma4_metal_decode_profile.cr --no-codegen` passed on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma Q/K/V projection rewrite, separate V projection becoming default, fused attn_prep rewrite, or copy_k_to_v policy change
+  trust: {F:0.84,G:0.18,R:0.82}
+
+- claim: "Short decode-only parity held after copy elision: default, `GEMMA4_ATTN_PREP_FUSE=1`, and `GEMMA4_ATTN_PREP_FUSE=1 GEMMA4_FFN_IN_RESIDUAL_NORM_FUSE=1` all produced `token_trace=42,236761,236761,236761,236761,236761,236761,236761,236761`."
+  source: guarded logs `/tmp/gemma4_copyelide_{default,attnprep,attnprep_ffnin}_ids.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: larger parity contradiction, model with separate V projection, or fused prep rewrite
+  trust: {F:0.84,G:0.12,R:0.82}
+
+**LTP/WBA:** This is a Spike on a redundant materialization window. The corridor is raw K projection -> V RMSNorm/cache write and K RMSNorm/RoPE/cache write. Boundary safety depends on ordering: V must consume raw K before K is mutated. The lexicographic potential decreases in explicit copy kernels and scratch traffic inside the opt-in fused corridor, but whole-wall promotion still requires quiet ABBA.
+**boundary:** This optimization is only legal inside `GEMMA4_ATTN_PREP_FUSE=1` and only when the V source is tied to K. Do not generalize to models/layers with separate V weights.

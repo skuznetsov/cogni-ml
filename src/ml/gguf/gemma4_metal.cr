@@ -882,6 +882,7 @@ module ML::GGUF
         ffn_normed_buf = scratch.get("rows.ffn_normed", hidden_bytes)
 
         prefix = "gemma4.rows.layer#{il}"
+        v_from_k_buf = false
         return false unless profile_rows_phase("#{prefix}.attn_qkv") do |enc|
           if x16 = x_norm_h16_buf
             Qwen35Metal.encode_rmsnorm_rows_f32_h16_to_buffers(enc, x_buf, attn_norm_w, x_norm_buf, x16, hidden_dim, batch, hp.rms_eps)
@@ -892,7 +893,8 @@ module ML::GGUF
                         elsif copy_k_to_v_enabled?
                           ok = Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_q_qw, x16, q_buf, batch) &&
                             Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_k_qw, x16, k_buf, batch)
-                          encode_copy_f32(enc, k_buf, v_buf, batch * kv_dim) if ok
+                          v_from_k_buf = ok && attn_prep_fuse_enabled? && !kv_h16_cache
+                          encode_copy_f32(enc, k_buf, v_buf, batch * kv_dim) if ok && !v_from_k_buf
                           ok
                         else
                           Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_q_qw, x16, q_buf, batch) &&
@@ -906,7 +908,8 @@ module ML::GGUF
               Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, v_qw], x_norm_buf, [q_buf, k_buf, v_buf], batch)
             elsif copy_k_to_v_enabled?
               ok = Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw], x_norm_buf, [q_buf, k_buf], batch)
-              encode_copy_f32(enc, k_buf, v_buf, batch * kv_dim) if ok
+              v_from_k_buf = ok && attn_prep_fuse_enabled? && !kv_h16_cache
+              encode_copy_f32(enc, k_buf, v_buf, batch * kv_dim) if ok && !v_from_k_buf
               ok
             else
               Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, lw.attn_k_qw], x_norm_buf, [q_buf, k_buf, v_buf], batch)
@@ -916,7 +919,7 @@ module ML::GGUF
 
         return false unless profile_rows_phase("#{prefix}.attn_prep") do |enc|
           encode_attn_prep_rows(enc, q_buf, k_buf, v_buf, q_weight, k_weight, factor_buf, lstate,
-            head_dim, rope_dim, base_pos, base, use_factors, hp.n_head, hp.n_head_kv(il), kv_dim, batch, hp.rms_eps, kv_h16_cache)
+            head_dim, rope_dim, base_pos, base, use_factors, hp.n_head, hp.n_head_kv(il), kv_dim, batch, hp.rms_eps, kv_h16_cache, v_from_k_buf)
           true
         end
 
@@ -1063,6 +1066,7 @@ module ML::GGUF
         ffn_buf = scratch.get("rows.ffn", hidden_bytes)
         ffn_normed_buf = scratch.get("rows.ffn_normed", hidden_bytes)
 
+        v_from_k_buf = false
         if x16 = x_norm_h16_buf
           Qwen35Metal.encode_rmsnorm_rows_f32_h16_to_buffers(enc, x_buf, attn_norm_w, x_norm_buf, x16, hidden_dim, batch, hp.rms_eps)
           projected = if v_qw = lw.attn_v_qw
@@ -1072,7 +1076,8 @@ module ML::GGUF
                       elsif copy_k_to_v_enabled?
                         ok = Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_q_qw, x16, q_buf, batch) &&
                           Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_k_qw, x16, k_buf, batch)
-                        encode_copy_f32(enc, k_buf, v_buf, batch * kv_dim) if ok
+                        v_from_k_buf = ok && attn_prep_fuse_enabled? && !kv_h16_cache
+                        encode_copy_f32(enc, k_buf, v_buf, batch * kv_dim) if ok && !v_from_k_buf
                         ok
                       else
                         Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.attn_q_qw, x16, q_buf, batch) &&
@@ -1086,14 +1091,15 @@ module ML::GGUF
             Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, v_qw], x_norm_buf, [q_buf, k_buf, v_buf], batch)
           elsif copy_k_to_v_enabled?
             ok = Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw], x_norm_buf, [q_buf, k_buf], batch)
-            encode_copy_f32(enc, k_buf, v_buf, batch * kv_dim) if ok
+            v_from_k_buf = ok && attn_prep_fuse_enabled? && !kv_h16_cache
+            encode_copy_f32(enc, k_buf, v_buf, batch * kv_dim) if ok && !v_from_k_buf
             ok
           else
             Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, lw.attn_k_qw], x_norm_buf, [q_buf, k_buf, v_buf], batch)
           end
         end
         encode_attn_prep_rows(enc, q_buf, k_buf, v_buf, q_weight, k_weight, factor_buf, lstate,
-          head_dim, rope_dim, base_pos, base, use_factors, hp.n_head, hp.n_head_kv(il), kv_dim, batch, hp.rms_eps, kv_h16_cache)
+          head_dim, rope_dim, base_pos, base, use_factors, hp.n_head, hp.n_head_kv(il), kv_dim, batch, hp.rms_eps, kv_h16_cache, v_from_k_buf)
         if kv_h16_cache && attn_splitk_enabled?(batch, sliding_window)
           encode_attention_context_rows_splitk_kv_h16(enc, scratch, q_buf, lstate.k_cache_h16_buf.not_nil!, lstate.v_cache_h16_buf.not_nil!, ctx_buf,
             base_pos, batch, hp.n_head, hp.n_head_kv(il), head_dim, heads_per_group)
@@ -2279,11 +2285,16 @@ module ML::GGUF
                                         kv_dim : Int32,
                                         rows : Int32,
                                         eps : Float32,
-                                        kv_h16_cache : Bool) : Nil
+                                        kv_h16_cache : Bool,
+                                        v_from_k_buf : Bool = false) : Nil
         if attn_prep_fuse_enabled? && !kv_h16_cache
           encode_q_norm_rope_rows(enc, q_buf, q_weight, factor_buf, head_dim, rope_dim, base_pos, eps, base, use_factors, n_head, rows)
+          if v_from_k_buf
+            encode_v_norm_write_rows(enc, k_buf, lstate.v_cache_buf, head_dim, base_pos, eps, n_head_kv, rows)
+          else
+            encode_v_norm_write_rows(enc, v_buf, lstate.v_cache_buf, head_dim, base_pos, eps, n_head_kv, rows)
+          end
           encode_k_norm_rope_write_rows(enc, k_buf, k_weight, factor_buf, lstate.k_cache_buf, head_dim, rope_dim, base_pos, eps, base, use_factors, n_head_kv, rows)
-          encode_v_norm_write_rows(enc, v_buf, lstate.v_cache_buf, head_dim, base_pos, eps, n_head_kv, rows)
         else
           encode_rmsnorm_weighted_rows(enc, q_buf, q_weight, head_dim, eps, n_head, rows)
           encode_rmsnorm_weighted_rows(enc, k_buf, k_weight, head_dim, eps, n_head_kv, rows)
