@@ -23779,3 +23779,23 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: reduce repeated SWA softmax tile barriers. Tile16 was mixed/promising; tile32 tried a larger transport chunk. Potential recomputation failed because `dominant_wait_bucket` worsened despite fewer barrier iterations, likely due to per-tile serial dot/register pressure. This is a Diamond boundary: ownership must change, not just tile size.
 
 **decision:** Do not retry simple tile32. Next branch should port or emulate llama-style FA vector/block ownership rather than growing the current SWA tile.
+
+#### [LM-GEMMA4-FA-OWNERSHIP-897] Gemma FA port must target SWA1024 with llama-style vector/reduce ownership
+**context:** ml / CogniGemma / Metal / FlashAttention / llama.cpp / hparams
+**state:** verified framing correction
+
+- claim: "Gemma4 12B SWA window is 1024; `swa256` in local route names means head_dim 256, not window length."
+  source: local hparams probe built with bridge flags on 2026-06-06 reported `sliding_window=1024`; SWA layers have `head_dim=256`, `n_head=16`, `n_kv=8`; full-attention layers every 6th layer have `head_dim=512`, `n_kv=1`.
+  verified_at: 2026-06-06
+  decay_trigger: different Gemma GGUF, hparams parser rewrite, or model architecture update
+  trust: {F:0.88,G:0.44,R:0.86}
+
+- claim: "The next attention branch should port llama-style FA vector/reduce ownership, not grow the current SWA tile."
+  source: `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-metal/ggml-metal-ops.cpp` uses FA vector `NQPSG=1`, `NCPSG=32`, normally `nwg=32` plus reduce; the local tile32 experiment preserved boundary but lost pp256 wall. llama's disabled `nwg=1,nsg=4` path is noted in source as not significantly improving.
+  verified_at: 2026-06-06
+  decay_trigger: llama.cpp FA implementation change, local FA port, or contradictory ABBA
+  trust: {F:0.82,G:0.40,R:0.80}
+
+**LTP/WBA:** Window: attention gap follows llama `-fa 1`. Transport: SWA1024 K/V corridor with DK/DV 256 and GQA 2. Tile growth preserved semantics but failed potential; ownership must move to a vector/reduce frame like llama's FA path. Boundary: exact token trace and pp/tg ABBA before promotion.
+
+**decision:** Stage future work as a default-off `swa1024/dk256` FA-vector/reduce probe. Do not retry simple tile-size growth.
