@@ -45,6 +45,7 @@ base_pos = 0
 seed = 23_u64
 reps = 3
 warmup = 1
+profile_phases = false
 
 OptionParser.parse do |p|
   p.banner = "Usage: gemma4_cuda_mixed_stack_probe [--model PATH] [--layers LIST] [--tokens N] [--base-pos N] [--reps N] [--warmup N] [--seed N]"
@@ -54,6 +55,7 @@ OptionParser.parse do |p|
   p.on("--base-pos N", "Absolute start position for the synthetic span") { |v| base_pos = v.to_i }
   p.on("--reps N", "Timed launches") { |v| reps = v.to_i }
   p.on("--warmup N", "Untimed warmup launches") { |v| warmup = v.to_i }
+  p.on("--profile-phases", "Run one synchronized per-layer diagnostic pass") { profile_phases = true }
   p.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
@@ -120,6 +122,28 @@ begin
   ML::CUDA.synchronize!("timed")
   cuda_ms = (Time.instant - t0).total_milliseconds / reps
 
+  phase_lines = [] of String
+  if profile_phases
+    ML::CUDA.synchronize!("profile pre-sync")
+    previous = 0_u64
+    runners.each_with_index do |runner, idx|
+      if idx == 0
+        runner.reset_sequence
+      else
+        runner.use_device_sequence_input(previous)
+        runner.reset_sequence
+      end
+      t_layer = Time.instant
+      runner.run_sequence
+      ML::CUDA.synchronize!("profile layer #{layers[idx]}")
+      layer_ms = (Time.instant - t_layer).total_milliseconds
+      layer_kind = hp.full_attention?(layers[idx]) ? "full" : "swa"
+      phase_lines << "phase_layer#{layers[idx]}_kind=#{layer_kind}"
+      phase_lines << "phase_layer#{layers[idx]}_ms=#{layer_ms.round(4)}"
+      previous = runner.output_device_ptr
+    end
+  end
+
   last = runners.last
   last.read_outputs
   gpu = last.final_gpu_all
@@ -142,6 +166,7 @@ begin
   puts "cuda_ms=#{cuda_ms.round(4)}"
   puts "cuda_ms_per_token=#{(cuda_ms / tokens).round(4)}"
   puts "cpu_ms=#{cpu_ms.round(4)}"
+  phase_lines.each { |line| puts line }
   puts "cos=#{cos_v.round(8)}"
   puts "max_diff=#{diff}"
   puts "ok=#{ok}"

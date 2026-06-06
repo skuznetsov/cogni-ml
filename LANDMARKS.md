@@ -23367,3 +23367,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: after separate SWA and full-attention full-layer certificates, the remaining uncertainty was the boundary between layer types. Transport: selected hidden rows -> SWA runner output device pointer -> full-attention runner input pointer -> final hidden CPU certificate. Legal Ladder: carry hidden state across the runner boundary without CPU readback, while preserving each layer's exact cache/attention semantics. Legal Diamond: full-attention K-as-V and SWA explicit-V are kept as two certified frames inside one runner instead of forcing either abstraction globally. Potential descends in `(missing_mixed_boundary_certificate, device_handoff_conflict_count, remaining_production_runner_work)`: mixed-boundary uncertainty drops to zero for the tested selected-layer prefixes, while production-runner work remains nonzero because this scaffold still owns per-layer buffers and is not yet scratch-pooled or phase-attributed.
 **decision:** Next CUDA Gemma speed work should add phase attribution and scratch/weight reuse on top of this mixed-stack scaffold, then compare apples-to-apples against llama.cpp. Do not claim product tg speed from these rows; they are semantic and handoff certificates.
+
+#### [LM-COGNIGEMMA-CUDA-MIXED-PHASE-001] First CUDA mixed-stack phase attribution shows no short-context layer-type outlier
+**context:** ml / CogniGemma / CUDA / phase attribution / LTP-WBA
+**state:** implemented as diagnostics-only mixed-stack option
+
+- claim: "`bin/gemma4_cuda_mixed_stack_probe.cr --profile-phases` provides a synchronized per-layer timing certificate while preserving selected-layer CPU parity."
+  source: local typecheck on 2026-06-06: `crystal build bin/gemma4_cuda_mixed_stack_probe.cr --no-codegen -Dcpu_only --error-trace` exited 0. Remote RTX 5060 Ti run: `--layers 0,1,2,3,4,5 --tokens 1 --base-pos 0 --reps 2 --warmup 1 --profile-phases` reported `cuda_ms=3.8472`, `cos=1.0`, `max_diff=1.424551e-5`, `ok=true`, with SWA layer timings `0.6348/0.6376/0.6389/0.6316/0.6376ms` and full-attention layer5 timing `0.6863ms`.
+  verified_at: 2026-06-06
+  decay_trigger: Gemma4 CUDA layer runner scheduling rewrite, phase profiler sync placement change, CUDA PTX rewrite, host/GPU thermal state, or moving from probe-grade buffers to production scratch pooling
+  trust: {F:0.84,G:0.24,R:0.80}
+
+**LTP/WBA:** Window: after mixed-layer semantic handoff was certified, the next local trigger was unknown dominant wait bucket. Transport: one selected-layer prefix -> synchronized per-layer timing rows -> parity-preserving final hidden certificate. Legal Ladder: add diagnostic syncs after each layer without changing the unprofiled run path. Potential descends in `(unknown_dominant_wait_bucket, tied_layer_type_count, remaining_attribution_work)`: the first short-context profile refutes a large SWA-vs-full layer-type outlier and points to shared per-layer body/GEMV work as the next likely window.
+**decision:** Next CUDA Gemma optimization should phase-split inside one layer runner (projection/context/output/FFN/head later) or move directly to scratch/weight reuse if attribution remains uniform. Do not optimize full-attention context first based on this short-context profile alone.
