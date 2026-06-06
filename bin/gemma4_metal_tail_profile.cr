@@ -11,7 +11,7 @@ runs = 5
 mode = "both"
 
 OptionParser.parse(ARGV) do |p|
-  p.banner = "usage: gemma4_metal_tail_profile [--layer 0] [--runs 5] [--mode host|resident|both]"
+  p.banner = "usage: gemma4_metal_tail_profile [--layer 0] [--runs 5] [--mode host|resident|resident_inputs|graph|graph_plan|both|all]"
   p.on("--model PATH", "Gemma4 GGUF path") { |v| model = v }
   p.on("--layer N", "Layer index") { |v| layer = v.to_i }
   p.on("--warmups N", "Warmup iterations") { |v| warmups = v.to_i }
@@ -22,7 +22,8 @@ end
 
 raise "model not found: #{model}" unless File.exists?(model)
 raise "runs must be positive" unless runs > 0
-raise "mode must be host, resident, or both" unless {"host", "resident", "both"}.includes?(mode)
+valid_modes = {"host", "resident", "resident_inputs", "graph", "graph_plan", "both", "all"}
+raise "mode must be one of: #{valid_modes.join(", ")}" unless valid_modes.includes?(mode)
 
 weights = ML::GGUF::Gemma4Weights.from_gguf(model)
 raise "layer out of range" if layer < 0 || layer >= weights.layers.size
@@ -60,12 +61,21 @@ end
 
 expected = ML::GGUF::Gemma4Metal.layer_tail(x, attn_projected, lw, weights.hparams).not_nil!
 actual = ML::GGUF::Gemma4Metal.layer_tail_resident_buffers(x, attn_projected, lw, weights.hparams).not_nil!
-puts "model=#{File.basename(model)} layer=#{layer} warmups=#{warmups} runs=#{runs} mode=#{mode} parity_max_abs=#{max_abs_diff(expected, actual)}"
+x_buf = ML::MetalBuffer.from_array(x)
+attn_buf = ML::MetalBuffer.from_array(attn_projected)
+resident_input_buf = ML::GGUF::Gemma4Metal.layer_tail_resident_buffer_inputs(x_buf, attn_buf, lw, weights.hparams).not_nil!
+graph_buf = ML::GGUF::Gemma4Metal.layer_tail_resident_buffer_inputs_graph(x_buf, attn_buf, lw, weights.hparams).not_nil!
+resident_input = resident_input_buf.read(weights.hparams.n_embd)
+graph = graph_buf.read(weights.hparams.n_embd)
+puts "model=#{File.basename(model)} layer=#{layer} warmups=#{warmups} runs=#{runs} mode=#{mode} parity_max_abs=#{max_abs_diff(expected, actual)} resident_inputs_max_abs=#{max_abs_diff(actual, resident_input)} graph_max_abs=#{max_abs_diff(resident_input, graph)}"
 
 host_samples = [] of Float64
 resident_samples = [] of Float64
+resident_input_samples = [] of Float64
+graph_samples = [] of Float64
+graph_plan_samples = [] of Float64
 
-if mode == "host" || mode == "both"
+if mode == "host" || mode == "both" || mode == "all"
   warmups.times { ML::GGUF::Gemma4Metal.layer_tail(x, attn_projected, lw, weights.hparams).not_nil! }
   runs.times do
     t0 = Time.instant
@@ -75,7 +85,7 @@ if mode == "host" || mode == "both"
   summarize("host", host_samples)
 end
 
-if mode == "resident" || mode == "both"
+if mode == "resident" || mode == "both" || mode == "all"
   warmups.times { ML::GGUF::Gemma4Metal.layer_tail_resident_buffers(x, attn_projected, lw, weights.hparams).not_nil! }
   runs.times do
     t0 = Time.instant
@@ -85,6 +95,48 @@ if mode == "resident" || mode == "both"
   summarize("resident", resident_samples)
 end
 
+if mode == "resident_inputs" || mode == "all"
+  scratch = ML::GGUF::Gemma4Metal::ResidentScratch.new
+  warmups.times { ML::GGUF::Gemma4Metal.layer_tail_resident_buffer_inputs(x_buf, attn_buf, lw, weights.hparams, scratch).not_nil! }
+  runs.times do
+    t0 = Time.instant
+    ML::GGUF::Gemma4Metal.layer_tail_resident_buffer_inputs(x_buf, attn_buf, lw, weights.hparams, scratch).not_nil!
+    resident_input_samples << (Time.instant - t0).total_milliseconds
+  end
+  summarize("resident_inputs", resident_input_samples)
+end
+
+if mode == "graph" || mode == "all"
+  scratch = ML::GGUF::Gemma4Metal::ResidentScratch.new
+  warmups.times { ML::GGUF::Gemma4Metal.layer_tail_resident_buffer_inputs_graph(x_buf, attn_buf, lw, weights.hparams, scratch).not_nil! }
+  runs.times do
+    t0 = Time.instant
+    ML::GGUF::Gemma4Metal.layer_tail_resident_buffer_inputs_graph(x_buf, attn_buf, lw, weights.hparams, scratch).not_nil!
+    graph_samples << (Time.instant - t0).total_milliseconds
+  end
+  summarize("graph", graph_samples)
+end
+
+if mode == "graph_plan" || mode == "all"
+  scratch = ML::GGUF::Gemma4Metal::ResidentScratch.new
+  plan = ML::GGUF::Gemma4Metal::LayerTailGraphPlan.new(x_buf, attn_buf, lw, weights.hparams, scratch)
+  warmups.times { plan.run! }
+  runs.times do
+    t0 = Time.instant
+    plan.run!
+    graph_plan_samples << (Time.instant - t0).total_milliseconds
+  end
+  plan_actual = plan.read(weights.hparams.n_embd)
+  puts "graph_plan_max_abs=#{max_abs_diff(resident_input, plan_actual)} graph_plan_ops=#{plan.graph.size} graph_plan_waves=#{plan.graph.stats.n_waves} graph_plan_barriers=#{plan.graph.stats.n_barriers} graph_plan_max_wave_width=#{plan.graph.stats.max_wave_width}"
+  summarize("graph_plan", graph_plan_samples)
+end
+
 if mode == "both"
   puts "resident_vs_host_p50_speedup=#{(percentile(host_samples.sort, 0.50) / percentile(resident_samples.sort, 0.50)).round(4)}"
+end
+
+if mode == "all"
+  puts "resident_vs_host_p50_speedup=#{(percentile(host_samples.sort, 0.50) / percentile(resident_samples.sort, 0.50)).round(4)}"
+  puts "graph_vs_resident_inputs_p50_speedup=#{(percentile(resident_input_samples.sort, 0.50) / percentile(graph_samples.sort, 0.50)).round(4)}"
+  puts "graph_plan_vs_resident_inputs_p50_speedup=#{(percentile(resident_input_samples.sort, 0.50) / percentile(graph_plan_samples.sort, 0.50)).round(4)}"
 end

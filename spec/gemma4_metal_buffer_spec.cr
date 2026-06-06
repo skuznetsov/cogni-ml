@@ -115,6 +115,28 @@ describe "Gemma4 resident Metal matmul buffers" do
     diff.should be <= 1.0e-5_f32
   end
 
+  it "replays the Gemma4 layer-tail graph plan like resident buffers" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    lw = w.layers[0]
+    x = ML::GGUF::Gemma4CPU.embedding_lookup(w.token_embd, 42)
+    scale = Math.sqrt(w.hparams.n_embd.to_f64).to_f32
+    x.size.times { |i| x[i] *= scale }
+    attn_projected = Array(Float32).new(w.hparams.n_embd) { |i| Math.sin(i.to_f32 * 0.017_f32).to_f32 * 0.125_f32 }
+
+    x_buf = ML::MetalBuffer.from_array(x)
+    attn_buf = ML::MetalBuffer.from_array(attn_projected)
+    expected_buf = ML::GGUF::Gemma4Metal.layer_tail_resident_buffer_inputs(x_buf, attn_buf, lw, w.hparams).not_nil!
+    plan = ML::GGUF::Gemma4Metal::LayerTailGraphPlan.new(x_buf, attn_buf, lw, w.hparams)
+    actual_buf = plan.run!
+
+    expected = expected_buf.read(w.hparams.n_embd)
+    actual = actual_buf.read(w.hparams.n_embd)
+    diff = gemma4_buffer_max_abs_diff(expected, actual)
+    puts "  [gemma4_graph_layer_tail_plan] max|d|=#{diff} ops=#{plan.graph.size} waves=#{plan.graph.stats.n_waves}"
+    diff.should be <= 1.0e-5_f32
+    plan.graph.size.should be > 0
+  end
+
   it "runs the Gemma4 layer tail over prompt rows like serial resident tails" do
     w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
     lw = w.layers[0]

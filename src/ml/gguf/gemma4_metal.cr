@@ -354,6 +354,39 @@ module ML::GGUF
         end
       end
 
+      class LayerTailGraphPlan
+        getter out_buf : ML::MetalBuffer
+        getter graph : ML::Metal::ComputeGraph
+
+        def initialize(x_buf : ML::MetalBuffer,
+                       attn_projected_buf : ML::MetalBuffer,
+                       lw : Gemma4LayerWeights,
+                       hp : Gemma4Hparams,
+                       scratch : ResidentScratch? = nil)
+          raise "Metal not available" unless Gemma4Metal.available?
+
+          hidden_dim = hp.n_embd
+          @out_buf = ML::MetalBuffer.new(hidden_dim.to_i64 * sizeof(Float32))
+          @graph = ML::Metal::ComputeGraph.new
+          enc = ML::Metal::GraphEncoder.new(@graph)
+          ok = Gemma4Metal.encode_layer_tail_resident_buffer_inputs_graph(enc, x_buf, attn_projected_buf, @out_buf, lw, hp, scratch)
+          raise "failed to encode Gemma4 layer-tail graph" unless ok
+          @graph.compile!
+        end
+
+        def run! : ML::MetalBuffer
+          cmd = ML::Metal::CommandBuffer.new
+          @graph.encode(cmd)
+          cmd.commit
+          cmd.wait
+          @out_buf
+        end
+
+        def read(count : Int32) : Array(Float32)
+          @out_buf.read(count)
+        end
+      end
+
       def available? : Bool
         ML::Metal::Device.init!
       end
@@ -662,13 +695,13 @@ module ML::GGUF
         out_buf.read(hidden_dim)
       end
 
-      private def encode_layer_tail_resident_buffer_inputs_graph(enc : ML::Metal::GraphEncoder,
-                                                                 x_buf : ML::MetalBuffer,
-                                                                 attn_projected_buf : ML::MetalBuffer,
-                                                                 out_buf : ML::MetalBuffer,
-                                                                 lw : Gemma4LayerWeights,
-                                                                 hp : Gemma4Hparams,
-                                                                 scratch : ResidentScratch? = nil) : Bool
+      def encode_layer_tail_resident_buffer_inputs_graph(enc : ML::Metal::GraphEncoder,
+                                                         x_buf : ML::MetalBuffer,
+                                                         attn_projected_buf : ML::MetalBuffer,
+                                                         out_buf : ML::MetalBuffer,
+                                                         lw : Gemma4LayerWeights,
+                                                         hp : Gemma4Hparams,
+                                                         scratch : ResidentScratch? = nil) : Bool
         hidden_dim = hp.n_embd
         raise ArgumentError.new("graph layer_tail x buffer too small") if x_buf.size < hidden_dim.to_i64 * sizeof(Float32)
         raise ArgumentError.new("graph layer_tail attn_projected buffer too small") if attn_projected_buf.size < hidden_dim.to_i64 * sizeof(Float32)
