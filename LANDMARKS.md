@@ -22465,5 +22465,11 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   decay_trigger: larger full-depth top2 contradiction, Gemma state route rewrite, or Qwen top2 kernel rewrite
   trust: {F:0.86,G:0.18,R:0.84}
 
+- claim: "`bin/gemma4_metal_decode_profile.cr --top2` now measures the resident top2 diagnostic route while continuing generation with top1. A short sequential smoke preserved the top1 token trace and showed top2 tax on this row: top1 `38.481 ms/tok`, top2 `40.479 ms/tok`, both `first_id=236761`, `last_id=236761`, `cpu_fallback=0`, `total metal syncs=392`."
+  source: `/tmp/gemma4_top2_diag_1780712512/{top1,top2}.log` from `/tmp/gemma4_top2_diag_profile --generate 8 --profile --profile-decode-only --decode-wave --top1-wave-resident --top1-chain 1` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: top2 diagnostic CLI rewrite, resident top2 rewrite, host-noise quiet rerun contradiction, or structured controller integration
+  trust: {F:0.78,G:0.12,R:0.74}
+
 **LTP/WBA:** The window is product-route controllers needing a second candidate without paying full-logit materialization or a second host-visible head pass. The corridor is resident hidden -> output RMSNorm -> top2 head tiles -> two-id certificate. The legal move preserves exact state updates and only changes the readback boundary. Potential descends in `(product_head_materialization, readback bytes, controller_candidate_gap, remaining routing work)` for future structured/self-draft routes.
 **boundary:** This is a primitive, not a speed promotion. Next evidence must wire it into a real controller or benchmark mode and compare top1/top2/structured-route wall time with identical token outputs or exact verification.

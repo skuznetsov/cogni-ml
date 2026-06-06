@@ -79,6 +79,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--decode-only-seed N", "Skip prompt prefill and start decode from this token id with empty KV state") { |v| decode_only_seed = v.to_i }
   p.on("--body-only", "During measured generation, update resident state from fixed synthetic tokens without final logits/top1") { decode_mode = "body" }
   p.on("--top1", "During measured generation, run exact greedy top1 chain (default)") { decode_mode = "top1" }
+  p.on("--top2", "Diagnostic: compute resident top2 each token and continue with top1") { decode_mode = "top2" }
   p.on("-h", "--help", "Show help") { puts p; exit }
 end
 
@@ -144,6 +145,28 @@ def forward_top1(weights : ML::GGUF::Gemma4Weights, token_id : Int32, pos : Int3
            end
   logits = ML::GGUF::Gemma4Metal.forward_logits_from_hidden(weights, hidden).not_nil!
   top1_id(logits)
+end
+
+def forward_top2_top1(weights : ML::GGUF::Gemma4Weights, token_id : Int32, pos : Int32,
+                      state : ML::GGUF::Gemma4Metal::ResidentState,
+                      decode_wave : Bool = false,
+                      top1_wave_resident : Bool = false,
+                      stop_layer : Int32? = nil) : Int32
+  layer_count = stop_layer || weights.hparams.n_layer
+  if decode_wave && top1_wave_resident
+    if top2 = ML::GGUF::Gemma4Metal.forward_top2_resident_cache_wave(weights, token_id, pos, state, layer_count)
+      return top2[0].to_i32
+    end
+  end
+
+  hidden = if decode_wave
+             ML::GGUF::Gemma4Metal.forward_hidden_resident_cache_wave(weights, token_id, pos, state, layer_count).not_nil!
+           else
+             ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(weights, token_id, pos, state, layer_count).not_nil!
+           end
+  normed = ML::GGUF::Gemma4CPU.rms_norm(hidden, weights.output_norm, weights.hparams.rms_eps)
+  top2 = ML::GGUF::Qwen35Metal.project_top2_no_norm(weights.token_embd, normed).not_nil!
+  top2[0].to_i32
 end
 
 def synthetic_decode_token(i : Int32) : Int32
@@ -303,7 +326,11 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
         i += ids.not_nil!.size
         next
       else
-        cur = forward_top1(weights, cur, pos, state, decode_wave, top1_wave_resident, decode_layer_count)
+        cur = if decode_mode == "top2"
+                forward_top2_top1(weights, cur, pos, state, decode_wave, top1_wave_resident, decode_layer_count)
+              else
+                forward_top1(weights, cur, pos, state, decode_wave, top1_wave_resident, decode_layer_count)
+              end
         i += 1
       end
     end
@@ -336,7 +363,7 @@ end
 raise "prompt tokens must not be empty" if prompt.empty?
 raise "max-seq too small" if max_seq < prompt.size + generate
 
-raise "decode mode must be top1 or body" unless {"top1", "body"}.includes?(decode_mode)
+raise "decode mode must be top1, top2, or body" unless {"top1", "top2", "body"}.includes?(decode_mode)
 raise "prefill mode must be serial or rows" unless {"serial", "rows"}.includes?(prefill_mode)
 raise "prefill chunk must be positive" unless prefill_chunk > 0
 raise "--top1-chain must be positive" unless top1_chain > 0
