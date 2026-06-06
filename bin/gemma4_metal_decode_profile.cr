@@ -824,13 +824,17 @@ decode_p50 = percentile(decode_samples.sort, 0.50)
 puts "decode_ms_per_token_p50=#{(decode_p50 / decode_rate_tokens).round(3)} decode_tokens=#{decode_token_counts.join(',')} first_id=#{first_id} last_id=#{last_id}"
 puts "literal_summary=forced_single:#{literal_forced_single_total},allowed_head:#{literal_allowed_head_total},span_batches:#{literal_forced_span_batches_total},span_tokens:#{literal_forced_span_tokens_total}" if decode_mode == "literal"
 puts "token_trace=#{last_token_trace.join(',')}" if print_generated_ids
+generated_text_for_output = if decode_mode == "literal" && literal_direct_ids_start.size > 0 && literal_remaining_start.size == 1
+                              literal_remaining_start[0]
+                            else
+                              tokenizer.try(&.decode(last_token_trace)) || ""
+                            end
 if print_generated_text
-  puts "generated_text=#{tokenizer.not_nil!.decode(last_token_trace).inspect}"
+  puts "generated_text=#{generated_text_for_output.inspect}"
 end
 unless tool_response_json_format.empty?
-  generated_text = tokenizer.not_nil!.decode(last_token_trace)
-  calls = ML::GGUF::Gemma4Chat.parse_tool_calls(generated_text)
-  content = ML::GGUF::Gemma4Chat.content_without_tool_calls(generated_text)
+  calls = ML::GGUF::Gemma4Chat.parse_tool_calls(generated_text_for_output)
+  content = ML::GGUF::Gemma4Chat.content_without_tool_calls(generated_text_for_output)
   puts "\n=== Tool response JSON ==="
   if tool_response_json_format == "openai"
     puts ML::GGUF::Gemma4Chat.tool_response_to_openai_json(calls, content, tools)
