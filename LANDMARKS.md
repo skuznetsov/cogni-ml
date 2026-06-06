@@ -23172,3 +23172,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   trust: {F:0.82,G:0.20,R:0.80}
 
 **LTP/WBA:** Window: raw-Q8 proposal body is locally faster (`~21.66ms/raw-token` vs exact `~23.82ms/token`). Transport: proposed token chunk through snapshot/restore into exact verifier. Boundary safety holds, but potential worsens because verifier work does not descend: raw proposal cost is added on top of `~24ms/verify-token`. This is a Diamond conflict between fast approximate proposal and exact boundary certification. Legal next moves are (1) a real known-span/sublinear verifier, (2) a no-validator/draft-quality lane with explicit quality gates, or (3) deeper fused raw-Q8 proposal only if verifier cost is simultaneously reduced. Do not promote the current restore+full-verify chunk controller as a speed feature.
+
+#### [LM-COGNIGEMMA-CUDA-PRIMITIVES-001] Gemma4 Q4/Q6 GGUF tensors can reuse existing CUDA quant GEMV kernels
+**context:** ml / CogniGemma / CUDA / primitive parity / productization
+**state:** implemented as bounded smoke probe
+
+- claim: "CogniGemma's Gemma4 Q4_K_M GGUF quantized matrices are layout-compatible with the existing CUDA Q4_K and Q6_K GEMV kernels, so the first CUDA port does not require new primitive quant kernels."
+  source: remote RTX 5060 Ti run on 2026-06-06 using `bin/gemma4_cuda_primitive_probe.cr --model /build/persisten/models/gemma4/gemma-4-12B-it-Q4_K_M.gguf --reps 20 --warmup 3 --include-head`. `blk.0.ffn_gate.weight` Q4_K `3840x15360` measured `0.129ms`, `cos=1.0`, `max_diff=7.748604e-7`, `ok=true`; `blk.0.ffn_down.weight` Q6_K `15360x3840` measured `0.151ms`, `cos=1.0`, `max_diff=1.758337e-6`, `ok=true`; tied `token_embd.weight` Q6_K `3840x262144` measured `2.196ms`, `cos=1.0`, `max_diff=1.9073486e-6`, `ok=true`.
+  verified_at: 2026-06-06
+  decay_trigger: CUDA Q4/Q6 PTX rewrite, Gemma4 GGUF tensor layout change, quant matmul CPU reference rewrite, or CUDA driver/runtime replacement
+  trust: {F:0.86,G:0.30,R:0.84}
+
+- claim: "Gemma4 metadata parsing and CPU/weights compile path are valid on the remote Linux CUDA host when built with `-Dcpu_only`."
+  source: remote `gemma4_inventory --model ... --tensors` printed `arch=gemma4`, `layers=48`, `embd=3840`, `ffn=15360`, `vocab=262144`, SWA/full cadence `40/8`; remote `crystal build spec/gemma4_cpu_spec.cr -Dcpu_only ...` plus `GEMMA4_MODEL=... ./build/gemma4_cpu_spec` completed `15 examples, 0 failures, 9 pending`.
+  verified_at: 2026-06-06
+  decay_trigger: Gemma4 metadata/weights rewrite, Linux build flag change, GGUF model replacement, or Crystal toolchain replacement
+  trust: {F:0.80,G:0.26,R:0.80}
+
+**LTP/WBA:** Window: CogniGemma CUDA productization was blocked at the primitive boundary. Transport: real Gemma4 GGUF tensor -> CPU `QuantMatmul` reference -> CUDA Q4/Q6 GEMV kernel -> parity certificate. Legal Spike: reuse existing quant kernels only after direct Gemma tensor parity, avoiding a premature primitive rewrite. Potential descends in `(unknown_backend_boundary, primitive_kernel_work, CUDA_port_risk, remaining_runner_work)`: the active frontier moves from quant layout uncertainty to Gemma-specific graph/state scheduling.
+**decision:** Next CogniGemma CUDA work should start from a one-layer runner using these proven primitives. Required Gemma-specific CUDA pieces remain: GELU FFN body, layer-output scale, split Q/K/V norms, full-layer K-as-V semantics, SWA/full attention cadence, KV cache/state allocation, and then resident decode-wave scheduling. Keep llama.cpp CUDA as the performance oracle and local Metal/CPU as correctness oracles.
