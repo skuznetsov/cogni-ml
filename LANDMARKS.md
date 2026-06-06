@@ -31,12 +31,12 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Public `ComputeGraph#add_op` builder smoke was repaired: `OpBuilder#buffer` now constructs `BufBinding` with named fields, and the CPU-only stub has the same public signature. Evidence: `crystal build --no-codegen test_graph.cr --error-trace` passed; `scripts/run_safe.sh /opt/homebrew/bin/crystal 120 4000 spec spec/compute_graph_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` passed with `2 examples, 0 failures`.
 **paper_boundary:** Use cogni-ml as companion-artifact evidence for operational LTP/WBA in inference-engine kernel scheduling. Avoid claiming formal proof of speedup from this artifact; public claims need frozen commit, quiet-host ABBA logs, and a repaired ComputeGraph smoke/spec.
 
-### [LM-COGNIGRAPH-QWEN-GEMMA-2026-06-06] CogniGraph is explicit in Nomic, not yet in Qwen/Gemma
-**status:** verified
+### [LM-COGNIGRAPH-QWEN-GEMMA-2026-06-06] CogniGraph is explicit in Nomic; Qwen/Gemma have a tiny stateless head probe
+**status:** updated
 **trust:** {F:0.86, G:medium, R:0.84}
 **context:** ml (graph scheduling / Qwen / Gemma)
 **evidence:**
-- claim: "The explicit `ML::Metal::ComputeGraph` / `GraphEncoder` runtime is currently used by the Nomic Metal backend and not by Qwen35 or Gemma4 runtime paths."
+- claim: "Before 2026-06-06, the explicit `ML::Metal::ComputeGraph` / `GraphEncoder` runtime was used by the Nomic Metal backend and not by Qwen35 or Gemma4 runtime paths."
   source: `scripts/cognigraph_readiness_audit.cr`; output on 2026-06-06 reported `nomic_backend: ComputeGraph=12 GraphEncoder=3`, `qwen35 graph_refs=0`, `gemma4 graph_refs=0`.
   verified_at: 2026-06-06
   decay_trigger: Qwen/Gemma runtime paths add `ComputeGraph` or `GraphEncoder` references
@@ -53,6 +53,9 @@ Rich landmarks include full State/Relations/Evidence structure.
   verified_at: 2026-06-06
   decay_trigger: GraphEncoder or ComputeEncoder scalar binding APIs change
 **decision:** Next legal graph work should be a debug/default-off graph path over a tiny stateless helper or an access-annotation audit patch, not a blanket Qwen/Gemma wave replacement.
+**update 2026-06-06:**
+- The first tiny stateless Qwen/Gemma-adjacent graph path landed: `Qwen35Metal.project_top1_no_norm_graph` routes the no-norm output-head top1 tile+reduce pair through `ComputeGraph`/`GraphEncoder`. Gemma4 uses the same Qwen head helper for token-embedding logits, and the focused Gemma spec proves graph-backed top1 matches the existing head path. Evidence: `spec/gemma4_metal_buffer_spec.cr:218`; focused run `scripts/run_safe.sh ... crystal spec spec/gemma4_metal_buffer_spec.cr:218 ...` passed with `1 examples, 0 failures`.
+- Boundary remains: this is a stateless head probe only. Full Qwen/Gemma decode/prefill waves still need access-annotation review before GraphEncoder promotion; the audit still flags `qwen35: 281`, `gemma4: 34` heuristic candidates.
 
 ### [LM-claude-1] Qwen 3.6 27B architecture verified
 **status:** verified

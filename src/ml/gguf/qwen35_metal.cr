@@ -13,6 +13,7 @@ require "./qwen35_weights"
 {% unless flag?(:cpu_only) %}
   require "../metal/device"
   require "../metal/dispatch"
+  require "../metal/compute_graph"
   require "../core/buffer"
 {% end %}
 
@@ -126,6 +127,11 @@ module ML
 
         def self.project_top1_no_norm(out_qw : QuantWeight,
                                       x : Array(Float32)) : Array(Float32)?
+          nil
+        end
+
+        def self.project_top1_no_norm_graph(out_qw : QuantWeight,
+                                            x : Array(Float32)) : Array(Float32)?
           nil
         end
 
@@ -8878,7 +8884,51 @@ module ML
           result
         end
 
-        def self.encode_head_top1_no_norm_to_buffers(enc : ML::Metal::ComputeEncoder,
+        def self.project_top1_no_norm_graph(out_qw : QuantWeight,
+                                            x : Array(Float32)) : Array(Float32)?
+          return nil unless can_use_head_top1_fused?(out_qw)
+          raise "project_top1_no_norm_graph input mismatch: expected #{out_qw.in_dim}, got #{x.size}" unless x.size == out_qw.in_dim
+
+          ML::Metal::Device.init!
+
+          tile_count = head_top1_tile_count(out_qw)
+          x_buf = Scratch.get(:head_top1_nonorm_graph_x, out_qw.in_dim.to_i64 * sizeof(Float32))
+          tile_values_buf = Scratch.get(:head_top1_nonorm_graph_tile_values, tile_count.to_i64 * sizeof(Float32))
+          tile_ids_buf = Scratch.get(:head_top1_nonorm_graph_tile_ids, tile_count.to_i64 * sizeof(UInt32))
+          top1_id_buf = Scratch.get(:head_top1_nonorm_graph_id, sizeof(UInt32).to_i64)
+          top1_value_buf = Scratch.get(:head_top1_nonorm_graph_value, sizeof(Float32).to_i64)
+          x_buf.write(x)
+
+          t0 = Time.instant if Profile.enabled?
+          graph = ML::Metal::ComputeGraph.new
+          enc = ML::Metal::GraphEncoder.new(graph)
+          return nil unless encode_head_top1_no_norm_to_buffers(enc, out_qw, x_buf, tile_values_buf, tile_ids_buf, top1_id_buf, top1_value_buf)
+          graph.compile!
+          t_compile = Time.instant if Profile.enabled?
+
+          cmd = ML::Metal::CommandBuffer.new
+          graph.encode(cmd)
+          t_enc = Time.instant if Profile.enabled?
+          cmd.commit
+          cmd.wait
+          t_wait = Time.instant if Profile.enabled?
+          result = read_shared_top1(top1_id_buf, top1_value_buf)
+          if Profile.enabled?
+            t_read = Time.instant
+            Profile.bump_gemv(
+              (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
+              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
+              (t_read - t_wait.not_nil!).total_nanoseconds.to_i64,
+            )
+            Profile.bump_group("head_top1_no_norm_graph.compile",
+              (t_compile.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
+              0_i64,
+              0_i64)
+          end
+          result
+        end
+
+        def self.encode_head_top1_no_norm_to_buffers(enc : ML::Metal::ComputeEncoder | ML::Metal::GraphEncoder,
                                                      out_qw : QuantWeight,
                                                      x_buf : ML::MetalBuffer,
                                                      tile_values_buf : ML::MetalBuffer,

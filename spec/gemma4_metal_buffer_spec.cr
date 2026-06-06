@@ -215,6 +215,21 @@ describe "Gemma4 resident Metal matmul buffers" do
     (actual[3] - expected[3]).abs.should be <= 1.0e-5_f32
   end
 
+  it "keeps the graph-backed no-norm top1 head aligned with the existing head path" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    hidden_state = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 8)
+    token_id = 42
+    stop_layer = 6
+
+    hidden = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache_wave(w, token_id, 0, hidden_state, stop_layer).not_nil!
+    normed = ML::GGUF::Gemma4CPU.rms_norm(hidden, w.output_norm, w.hparams.rms_eps)
+    expected = ML::GGUF::Qwen35Metal.project_top1_no_norm(w.token_embd, normed).not_nil!
+    actual = ML::GGUF::Qwen35Metal.project_top1_no_norm_graph(w.token_embd, normed).not_nil!
+
+    actual[0].to_i.should eq(expected[0].to_i)
+    (actual[1] - expected[1]).abs.should be <= 1.0e-5_f32
+  end
+
   it "keeps resident allowed-token top1 aligned with full hidden-wave top2 projection" do
     w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
     hidden_state = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 8)
