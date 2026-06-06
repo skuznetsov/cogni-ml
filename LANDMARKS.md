@@ -22819,3 +22819,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: Gemma-native finite tool-call literals, not the older Qwen XML diagnostic frame. Transport: finite schema values -> Gemma native literal options -> tokenizer frontier -> resident allowed-head corridor. Legal move: constrain only certified finite native call tokens while preserving exact decoder state and falling back to the unconstrained dual frame after the literal corridor. Potential descends in `(wrong_syntax_risk, frontier_vocab_rows, full_head_filter_tax, remaining_native_call_suffix)`.
 **boundary:** The current finite option builder enumerates any finite parameter value, not only required parameters and not multi-parameter full calls. Product structured calling still needs a Gemma-native grammar state machine for required/optional parameter sequencing, free-form string values, stop-at-close behavior, and CrystalBall provider integration.
+
+#### [LM-COGNIGRAPH-052] Gemma-native constrained tool calls work from a tool-declared prompt
+**context:** ml / CogniGraph / Gemma4 / native structured decoding / tool prompt / CrystalBall boundary / LTP-WBA
+**state:** profiler prompt path now uses Gemma4Chat when `--chat-user` and `--tools-json` are combined; product-shaped smoke verified
+
+- claim: "`bin/gemma4_metal_decode_profile.cr` now renders `--chat-user` prompts through `Gemma4Chat.render_user_prompt` when `--tools-json`/`GEMMA4_TOOLS_JSON` is present, so Gemma-native tool declarations are included in the prompt instead of using the older bare user/model turn format."
+  source: `scripts/run_safe.sh crystal 180 8192 build --no-codegen bin/gemma4_metal_decode_profile.cr --error-trace` on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: profiler prompt formatting rewrite, Gemma4Chat renderer rewrite, or llama.cpp Gemma4 template update
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "A product-shaped Gemma-native finite constrained smoke with tool declarations in the prompt preserved resident/fallback trace parity. Both routes emitted `<|tool_call>call:set_mode{mode:<|\"|>write<|\"|>}<tool_call|>...`; resident p50 was `34.592 ms/tok`, fallback p50 was `37.975 ms/tok` over two measured runs."
+  source: `/tmp/gemma4_native_tool_prompt_1780747768/{resident.log,fallback.log}` on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: quiet-host contradiction, prompt/model change, tokenizer change, resident allowed-head rewrite, or full controller integration
+  trust: {F:0.78,G:0.12,R:0.74}
+
+- claim: "The generated Gemma-native tool call from the resident route normalized through `bin/gemma4_tool_json_adapter.cr --parse-output` to `{"name":"set_mode","arguments":{"mode":"write"}}` with residual content after the tool call preserved separately."
+  source: `/tmp/gemma4_native_tool_prompt_response.json` on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: Gemma4Chat parser rewrite, adapter rewrite, or product stop-at-tool-call policy change
+  trust: {F:0.82,G:0.18,R:0.80}
+
+**LTP/WBA:** Window: tool-declared Gemma prompt plus finite native call frontier. Transport: OpenAI/CrystalBall-style tool schema -> Gemma prompt declarations -> tokenizer frontier -> resident allowed-head native call -> adapter-normalized JSON response. Legal move: carry the same schema through prompt, constrained decode, and parser boundaries without switching syntax frames. Potential descends in `(prompt_tool_mismatch, wrong_syntax_risk, full_head_filter_tax, adapter_gap, remaining_controller_work)`.
+**boundary:** This is still a profiler route, not a CrystalBall provider. It also continues unconstrained text after the tool call because there is no product stop-at-close controller yet. Next product step is a stop-at-native-tool-call controller/harness route that terminates or hands off immediately after `<tool_call|>`.

@@ -134,29 +134,37 @@ end
 tools = [] of JSON::Any
 tool_names = [] of String
 tool_literal_options = [] of String
-if constrained_tool_call_prefix
+parse_tools_for_prompt = !chat_user.nil? && !tools_json.nil? && !tools_json.not_nil!.empty?
+if constrained_tool_call_prefix || parse_tools_for_prompt
   raw_tools = tools_json
-  raise "--constrained-tool-call-prefix requires --tools-json or GEMMA4_TOOLS_JSON" if raw_tools.nil? || raw_tools.empty?
+  raise "--constrained-tool-call-prefix requires --tools-json or GEMMA4_TOOLS_JSON" if constrained_tool_call_prefix && (raw_tools.nil? || raw_tools.empty?)
+  raise "--tools-json must not be empty" if raw_tools.nil? || raw_tools.empty?
   parsed_tools = JSON.parse(raw_tools)
   tools = parsed_tools.as_a? || raise "--tools-json must be a JSON array"
   tool_names = ML::GGUF::Qwen35Constraints.tool_function_names(tools)
-  raise "--constrained-tool-call-prefix found no function names" if tool_names.empty?
-  tool_literal_options = if constrained_gemma_tool_finite_call
-                           ML::GGUF::Gemma4Chat.native_tool_finite_call_options(tools)
-                         elsif constrained_tool_finite_call
-                           ML::GGUF::Qwen35Constraints.qwen_tool_finite_call_options(tools)
-                         elsif constrained_tool_required_param_prefix
-                           ML::GGUF::Qwen35Constraints.qwen_tool_required_parameter_prefix_options(tools)
-                         else
-                           ML::GGUF::Qwen35Constraints.qwen_tool_call_prefix_options(tool_names)
-                         end
-  raise "--constrained-tool-call-prefix found no literal options" if tool_literal_options.empty?
+  if constrained_tool_call_prefix
+    raise "--constrained-tool-call-prefix found no function names" if tool_names.empty?
+    tool_literal_options = if constrained_gemma_tool_finite_call
+                             ML::GGUF::Gemma4Chat.native_tool_finite_call_options(tools)
+                           elsif constrained_tool_finite_call
+                             ML::GGUF::Qwen35Constraints.qwen_tool_finite_call_options(tools)
+                           elsif constrained_tool_required_param_prefix
+                             ML::GGUF::Qwen35Constraints.qwen_tool_required_parameter_prefix_options(tools)
+                           else
+                             ML::GGUF::Qwen35Constraints.qwen_tool_call_prefix_options(tool_names)
+                           end
+    raise "--constrained-tool-call-prefix found no literal options" if tool_literal_options.empty?
+  end
 end
 if file = prompt_file
   prompt_text = File.read(file)
 end
 if user = chat_user
-  prompt_text = "<|turn>user\n#{user}<turn|>\n<|turn>model\n"
+  prompt_text = if tools.empty?
+                  "<|turn>user\n#{user}<turn|>\n<|turn>model\n"
+                else
+                  ML::GGUF::Gemma4Chat.render_user_prompt(user, tools: tools)
+                end
 end
 raise "generate must be positive" unless generate > 0
 raise "runs must be positive" unless runs > 0
