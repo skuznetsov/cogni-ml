@@ -22015,3 +22015,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The earlier Gemma env workaround reduced local area but had a sticky boundary: route policy was process-global rather than attached to the transported weight corridor. The legal Diamond is to carry a local route certificate (`route_tag`) with each quantized tensor. Potential descends in `(route_conflict_scope, hidden_global_env_side_effects, Gemma_decode_wall, remaining_Q4_calls)` while preserving Qwen's recomputed default boundary.
 **boundary:** Route tags are metadata only; they are not a license for shape-only global heuristics. Any future x16/model-aware promotion must use these tags plus ABBA evidence per model/op corridor.
+
+### [LM-COGNIGRAPH-018] Route-tagged profile atlas exposes Gemma op corridors
+**context:** ml / CogniGraph / route-tag profile / Gemma4 / Q4-Q6 GEMV attribution / LTP-WBA
+**state:** implemented as opt-in profile label suffix via `QWEN35_PROFILE_ROUTE_TAGS=1`
+
+- claim: "Matmul profile labels can now include normalized `QuantWeight.route_tag` suffixes when `QWEN35_PROFILE_ROUTE_TAGS=1`; numeric layer indices are collapsed to `*`, so `gemma4:blk.17.ffn_gate.weight` groups as `gemma4:blk.*.ffn_gate.weight`. Normal profile output is unchanged unless the env flag is set."
+  source: `src/ml/gguf/qwen35_metal.cr`; no-codegen builds for Gemma profile and Qwen benchmark passed on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: profile label rewrite, route-tag policy rewrite, or atlas parser format change
+  trust: {F:0.86,G:0.34,R:0.84}
+
+- claim: "A tiny tagged Gemma body profile produced op-level corridors: `gemv Q4_K 3840x15360 b1 tag=gemma4:blk.*.ffn_gate.weight` and `...ffn_up.weight` each had `96 calls`, `3037.50 MiB`, `24.36%`; Q6 `ffn_down` had `48 calls`, `2214.84 MiB`, `17.76%`; Q4 `ffn_down` had `48 calls`, `1518.75 MiB`, `12.18%`."
+  source: guarded log `/tmp/gemma4_route_tags_profile2.log` and atlas `/tmp/gemma4_route_tags_profile2.atlas.txt` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma profile route rewrite, quant mix change, larger profile contradiction, or profile accounting rewrite
+  trust: {F:0.86,G:0.18,R:0.84}
+
+**LTP/WBA:** The active window is no longer only a shape (`3840x15360`) but an op corridor (`ffn_gate`, `ffn_up`, `ffn_down`, attention projections). The route tag is a local certificate carried with the quantized tensor, letting future moves test op-specific Q4/Q6 routes without global shape side effects. Potential becomes `(dominant_op_corridor, tied_op_routes, route_conflicts, remaining_logical_bytes)`.
+**boundary:** This is attribution only, not an optimizer. Do not promote a kernel route because a tagged corridor is large; require ABBA wall descent for the tagged op/model route.

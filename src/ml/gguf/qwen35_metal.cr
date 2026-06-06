@@ -1010,6 +1010,12 @@ module ML
           end
         end
 
+        private def self.profile_route_tag(qw : QuantWeight?) : String
+          return "" unless ENV["QWEN35_PROFILE_ROUTE_TAGS"]? == "1"
+          tag = qw.try(&.route_tag) || "untagged"
+          " tag=#{tag.gsub(/\.\d+\./, ".*.")}"
+        end
+
         private def self.mv_add_pipeline : ML::Metal::ComputePipeline
           @@mv_add_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q4k_f32_add") {
             ML::Metal::ComputePipeline.new("simd_mv_q4k_f32_add", GEMM_Q4K_SOURCE)
@@ -1761,7 +1767,7 @@ module ML
             quant_name, block_bytes, block_elems = gemv_profile_quant(pipeline)
             blocks_per_row = (in_dim + block_elems - 1) // block_elems
             weight_bytes = out_dim.to_i64 * blocks_per_row.to_i64 * block_bytes.to_i64
-            Profile.bump_matmul_shape("gemv #{quant_name} #{in_dim}x#{out_dim} b#{batch}", weight_bytes)
+            Profile.bump_matmul_shape("gemv #{quant_name} #{in_dim}x#{out_dim} b#{batch}#{profile_route_tag(route_qw)}", weight_bytes)
           end
           actual_pipeline = pipeline
           rows_per_tg = gemv_rows_per_tg_for(pipeline)
@@ -2427,7 +2433,7 @@ module ML
                   else
                     "gemv"
                   end
-          Profile.bump_matmul_shape("#{route} #{qw.type.name} #{in_dim}x#{out_dim} b#{batch}", qw.raw.size.to_i64)
+          Profile.bump_matmul_shape("#{route} #{qw.type.name} #{in_dim}x#{out_dim} b#{batch}#{profile_route_tag(qw)}", qw.raw.size.to_i64)
 
           if use_q4_h16
             encode_q4k_gemm_h16(enc, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
@@ -2460,7 +2466,7 @@ module ML
                   else
                     return false
                   end
-          Profile.bump_matmul_shape("#{route} #{qw.type.name} #{in_dim}x#{out_dim} b#{batch}", qw.raw.size.to_i64)
+          Profile.bump_matmul_shape("#{route} #{qw.type.name} #{in_dim}x#{out_dim} b#{batch}#{profile_route_tag(qw)}", qw.raw.size.to_i64)
 
           if q56_batch_gemm_enabled? && qw.type.q6_k? && batch > GEMM_BATCH_THRESHOLD
             encode_q56k_gemm_f32_add(enc, mm6_f32out_add_pipeline, x_buf, residual_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
