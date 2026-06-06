@@ -3349,7 +3349,7 @@ begin
   puts "full_attn_output_tbatch4=#{ENV["QWEN_CUDA_FULL_ATTN_OUTPUT_TBATCH4_OFF"]? != "1"}"
   puts "full_attn_batched_norms=#{ENV["QWEN_CUDA_FULL_ATTN_BATCHED_NORMS_OFF"]? != "1"}"
   puts "full_attn_splitk_policy=#{ENV["QWEN_CUDA_FULL_ATTN_SPLITK_OFF"]? != "1" && ENV["QWEN_CUDA_FULL_ATTN_SPLITK"]? != "0"}"
-  puts "full_attn_splitk_chunk=#{ENV["QWEN_CUDA_FULL_ATTN_SPLITK_CHUNK"]? || "512"}"
+  puts "full_attn_splitk_chunk=#{ENV["QWEN_CUDA_FULL_ATTN_SPLITK_CHUNK"]? || "256"}"
   puts "full_attn_splitk_min_seq=#{ENV["QWEN_CUDA_FULL_ATTN_SPLITK_MIN_SEQ"]? || "1024"}"
   puts "hidden=#{hidden}"
   puts "vocab=#{head_weights.vocab}"

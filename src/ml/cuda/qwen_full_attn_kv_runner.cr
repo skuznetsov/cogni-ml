@@ -333,7 +333,7 @@ module ML::CUDA
       out_proj_tbatch4_fn = @output_type.q4_k? ? q4_tbatch4_fn : q6_tbatch4_fn
       ffn_down_add_fn = @ffn_down_type.q4_k? ? q4_add_fn : q6_add_fn
       ffn_down_add_batched_fn = @ffn_down_type.q4_k? ? q4_add_batched_fn : q6_add_batched_fn
-      splitk_chunk = (ENV["QWEN_CUDA_FULL_ATTN_SPLITK_CHUNK"]? || "512").to_i
+      splitk_chunk = (ENV["QWEN_CUDA_FULL_ATTN_SPLITK_CHUNK"]? || "256").to_i
       raise "QWEN_CUDA_FULL_ATTN_SPLITK_CHUNK must be positive" unless splitk_chunk > 0
       splitk_min_seq = (ENV["QWEN_CUDA_FULL_ATTN_SPLITK_MIN_SEQ"]? || "1024").to_i
       splitk_chunks = ((@max_seq + splitk_chunk - 1) // splitk_chunk)
