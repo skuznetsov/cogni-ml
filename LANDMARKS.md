@@ -23799,3 +23799,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: attention gap follows llama `-fa 1`. Transport: SWA1024 K/V corridor with DK/DV 256 and GQA 2. Tile growth preserved semantics but failed potential; ownership must move to a vector/reduce frame like llama's FA path. Boundary: exact token trace and pp/tg ABBA before promotion.
 
 **decision:** Stage future work as a default-off `swa1024/dk256` FA-vector/reduce probe. Do not retry simple tile-size growth.
+
+#### [LM-GEMMA4-FA-PARTIAL-O-898] Global-partial FA-vector/reduce SWA1024 probe is refuted for Gemma Metal
+**context:** ml / CogniGemma / Metal / FlashAttention / SWA1024 / LTP-WBA
+**state:** refuted; temporary code removed
+
+- claim: "A two-stage SWA1024 FA-style row-prefill route that materializes partial O/S/M to global memory preserves the tested token boundary but does not improve wall time."
+  source: temporary default-off `GEMMA4_ROW_PREFILL_ATTN_FA_SWA1024=1` implemented `gemma4_attn_context_rows_fa_swa1024_gqa2_stage1` and reduce stage for SWA layers (`head_dim=256`, GQA2). Build passed. pp256/gen4 top1 boundary matched default (`first_id=254632`, `last_id=208669`, `/tmp/gemma4_fa_swa1024_top1_pair_20260606190615`). Pure pp256 ABBA was slightly slower: default `340.801/340.775 tok/s` vs FA `337.972/337.963 tok/s` (`/tmp/gemma4_fa_swa1024_pp256_abba_20260606190655`). Pure pp512 ABBA was clearly slower: default `339.097/338.951 tok/s` vs FA `329.117/329.872 tok/s` (`/tmp/gemma4_fa_swa1024_pp512_abba_20260606190731`). The temporary Crystal/Metal code was removed.
+  verified_at: 2026-06-06
+  decay_trigger: new in-kernel/ICB FA ownership without global partial-O materialization, different GPU architecture, or quiet-host contradictory ABBA
+  trust: {F:0.82,G:0.38,R:0.80}
+
+**LTP/WBA:** Window: llama `-fa 1` still points at attention, but this legal move moved the transport through a global partial-O corridor. Recomputed potential worsened: fewer local softmax tile dependencies were offset by extra launch plus large global partial traffic. This is a Diamond conflict between FA decomposition and Metal memory bandwidth/launch cost.
+
+**decision:** Do not retry global-partial-O SWA1024 FA for Gemma Metal. Future FA work must either keep O accumulation inside a tighter ownership frame, reduce only scalars plus recompute values, or import a closer llama.cpp ownership pattern without materializing `(rows * heads * blocks * dim)` partial outputs.
