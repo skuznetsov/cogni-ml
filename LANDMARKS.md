@@ -23063,3 +23063,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   trust: {F:0.82,G:0.24,R:0.80}
 
 **LTP/WBA:** Window was the recurrent FFN gate/up pair reading the same activation. Transport attempted to carry one activation corridor into a dual-output Q4 kernel. Boundary safety held, but recomputed potential worsened in `(register_pressure_or_occupancy, wall_time, remaining_work)`. The local launch/activation-read reduction did not descend global wall. The experiment was removed; do not retry simple dual gate/up fusion without also changing the reduction geometry or fusing into SwiGLU/down.
+
+#### [LM-CUDA-LONGCTX-ATTN-001] CUDA long-context decode shifts the active window to full-attention context
+**context:** ml / CUDA / Qwen3.5 mixed-stack / long-context decode / phase attribution / LTP-WBA
+**state:** current frontier measured after graph ABI fix and FFN-dual refutation
+
+- claim: "At ctx64, CUDA full-Qwen3.5-9B semantic greedy decode remains near the prior frontier: `23.807ms/token` for gen16 on RTX 5060 Ti after remote re-sync. The active short-context wall is still mostly body GEMV/FFN, not graph launch."
+  source: remote `cuda_mixed_stack_probe --all-layers --greedy-loop-tokens=16 --perf-only --skip-debug-readback --start-pos=63 --max-seq=128` on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: kernel rewrite, host load change, driver update, model path change, or benchmark harness rewrite
+  trust: {F:0.78,G:0.18,R:0.76}
+
+- claim: "At ctx1024, full-attention decode becomes significant but not dominant: full-attn layers report about `0.868ms` each (`~6.9ms` total), while FFN remains around `0.40ms/layer` across all layers. Full profile wall was `37.345ms/token`, `ok=true`."
+  source: remote `--profile-phases --start-pos=1023 --max-seq=1024` filtered attribution on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: attention kernel rewrite, FFN qtype kernel rewrite, or context-length benchmark change
+  trust: {F:0.80,G:0.20,R:0.78}
+
+- claim: "At ctx4096, full-attention context is the active long-context window: each of the eight full-attn layers reports about `3.45ms` attention decode, or roughly `27.6ms` of the `57.973ms/token` profile wall. Head stays around `2.34ms`; recurrent FFN remains about `0.405ms/layer`."
+  source: remote `--profile-phases --start-pos=4095 --max-seq=4096` filtered attribution on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: attention kernel rewrite, KV cache format change, CUDA host/driver change, or long-context benchmark harness change
+  trust: {F:0.80,G:0.22,R:0.78}
+
+**LTP/WBA:** Short-context window remains GEMV/FFN bytes. Long-context window shifts to full-attention KV context transport. Legal next moves must be context-span aware: for ctx4096, reduce `(full_attn_context_reads, softmax/reduction_barriers, wall_time)` without increasing FFN/head/body regressions. Dual frame remains the current parallel full-attn kernel. Do not spend another branch on graph launch or simple recurrent FFN dual fusion for speed; current evidence marks those as low-leverage/refuted.
+**decision:** Next CUDA speed branch should split by context regime: (1) short ctx: new Q4/Q6 GEMV/FFN bandwidth idea only if it changes dataflow materially; (2) long ctx: inspect llama.cpp/vLLM attention kernels and design a CUDA full-attn decode kernel that reduces KV/context transport at ctx1024+.
