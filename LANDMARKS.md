@@ -22663,3 +22663,34 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This is a recompute-safety failure for the forced-span Ladder. Local potential components (`head_calls`, `allowed_rows_scanned`) descend, but recomputed wall does not. The likely reason is that the resident allowed-head over small frontiers is already cheap, while forced body-chain scheduling adds enough overhead or loses favorable wave shape.
 **boundary:** Keep forced-single/span controls for diagnostics, but do not product-promote forced-span batching as a speed path on Gemma without a new ABBA showing global descent. The better structured route is likely resident allowed-head with certified frontiers, not head elimination via body-chain, unless future kernel fusion makes body-chain cheaper.
+
+#### [LM-COGNIGRAPH-046] Gemma schema-derived tool-prefix diagnostic preserves resident/fallback output
+**context:** ml / CogniGraph / Gemma4 / structured decoding / tool-call prefix / constrained frontier / LTP-WBA
+**state:** implemented in diagnostic profiler; correctness smoke verified; product JSON/function-calling remains out of scope
+
+- claim: "`bin/gemma4_metal_decode_profile.cr` now supports `--tools-json JSON`/`GEMMA4_TOOLS_JSON` plus `--constrained-tool-call-prefix`. It parses OpenAI/Qwen-style function schemas, extracts function names with `Qwen35Constraints.tool_function_names`, and constructs finite XML-style prefix options such as `<tool_call>\n<function=read_file>\n`."
+  source: `scripts/run_safe.sh crystal 180 8192 build --no-codegen bin/gemma4_metal_decode_profile.cr --error-trace` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma profiler option rewrite, Qwen35Constraints API change, tokenizer change, or tool-call grammar change
+  trust: {F:0.84,G:0.22,R:0.82}
+
+- claim: "Two-tool schema smoke preserved resident/fallback output for `gen=16`. Resident and fallback both logged `tool_names=read_file,get_weather`, `literal_options=2`, identical token trace `236820,236745,236748,551,236779,236755,236746,236752,236752,236813,107,236820,236760,602,236755,236745,526`, and generated text `<tool_call>\n<function`."
+  source: `/tmp/gemma4_tool_prefix_1780714620/{resident.log,fallback.log}` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: prompt/model change, tokenizer change, resident allowed-head rewrite, or finite-prefix controller rewrite
+  trust: {F:0.82,G:0.12,R:0.78}
+
+- claim: "The same diagnostic reaches a function-name branch on a longer `gen=32` run: generated text `<tool_call>\n<function=read_file>\n>>#>#>#>#>`, with `literal_summary=forced_single:3,allowed_head:16,span_batches:3,span_tokens:8`. The suffix after the finite prefix is unconstrained by design."
+  source: `/tmp/gemma4_tool_prefix_1780714620/resident_gen32.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: prompt/model change, tokenizer change, schema name set change, or transition from diagnostic prefix to full grammar controller
+  trust: {F:0.78,G:0.10,R:0.74}
+
+- claim: "On this short prefix smoke, resident allowed-head was faster than fallback full-head filtering but this is not promotion-grade speed evidence: resident `28.871 ms/tok`, fallback `30.505 ms/tok` p50 over two measured runs with high fixed-overhead sensitivity."
+  source: `/tmp/gemma4_tool_prefix_1780714620/{resident.log,fallback.log}` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host contradiction, larger schema suite, run-count increase, or timing-boundary rewrite
+  trust: {F:0.72,G:0.08,R:0.70}
+
+**LTP/WBA:** Window: finite tool-call syntax before free-form parameter/value generation. Transport: schema-derived function-name options -> tokenizer frontier -> resident allowed-head corridor -> remaining literal suffix. Legal move: constrain only certified finite prefix tokens while preserving the decode state boundary and exact unconstrained fallback after the corridor ends. Potential descends locally in `(invalid_tool_prefix_area, frontier_vocab_rows, full_head_filter_tax, remaining_literal_suffix)`; global speed promotion still needs ABBA because body work dominates short spans.
+**boundary:** This is a diagnostic bridge toward structured function calling, not a full JSON/function-call parser. Product support still needs grammar states for parameter names, values, close tags, rejection/fallback behavior, and integration with the `crystal_ball` harness.
