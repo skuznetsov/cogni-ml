@@ -463,9 +463,31 @@ module ML
         self
       end
 
+      def set_value(val : Int32, index : Int32) : self
+        bytes = Bytes.new(4)
+        IO::ByteFormat::LittleEndian.encode(val, bytes)
+        @values << ValBinding.new(bytes, index)
+        self
+      end
+
       def set_value(val : Float32, index : Int32) : self
         bytes = Bytes.new(4)
         IO::ByteFormat::LittleEndian.encode(val, bytes)
+        @values << ValBinding.new(bytes, index)
+        self
+      end
+
+      def set_value(val : StaticArray(Float32, 3), index : Int32) : self
+        set_bytes(val.to_unsafe.as(Pointer(Void)), sizeof(Float32) * 3, index)
+      end
+
+      def set_value(val : StaticArray(Float32, 4), index : Int32) : self
+        set_bytes(val.to_unsafe.as(Pointer(Void)), sizeof(Float32) * 4, index)
+      end
+
+      def set_bytes(data : Pointer(Void), length : Int32, index : Int32) : self
+        bytes = Bytes.new(length)
+        bytes.to_unsafe.copy_from(data.as(Pointer(UInt8)), length)
         @values << ValBinding.new(bytes, index)
         self
       end

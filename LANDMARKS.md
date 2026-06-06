@@ -31,6 +31,29 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Public `ComputeGraph#add_op` builder smoke was repaired: `OpBuilder#buffer` now constructs `BufBinding` with named fields, and the CPU-only stub has the same public signature. Evidence: `crystal build --no-codegen test_graph.cr --error-trace` passed; `scripts/run_safe.sh /opt/homebrew/bin/crystal 120 4000 spec spec/compute_graph_spec.cr --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` passed with `2 examples, 0 failures`.
 **paper_boundary:** Use cogni-ml as companion-artifact evidence for operational LTP/WBA in inference-engine kernel scheduling. Avoid claiming formal proof of speedup from this artifact; public claims need frozen commit, quiet-host ABBA logs, and a repaired ComputeGraph smoke/spec.
 
+### [LM-COGNIGRAPH-QWEN-GEMMA-2026-06-06] CogniGraph is explicit in Nomic, not yet in Qwen/Gemma
+**status:** verified
+**trust:** {F:0.86, G:medium, R:0.84}
+**context:** ml (graph scheduling / Qwen / Gemma)
+**evidence:**
+- claim: "The explicit `ML::Metal::ComputeGraph` / `GraphEncoder` runtime is currently used by the Nomic Metal backend and not by Qwen35 or Gemma4 runtime paths."
+  source: `scripts/cognigraph_readiness_audit.cr`; output on 2026-06-06 reported `nomic_backend: ComputeGraph=12 GraphEncoder=3`, `qwen35 graph_refs=0`, `gemma4 graph_refs=0`.
+  verified_at: 2026-06-06
+  decay_trigger: Qwen/Gemma runtime paths add `ComputeGraph` or `GraphEncoder` references
+- claim: "Qwen/Gemma use manual resident command-buffer waves/chains instead: Qwen has `46` typed `ComputeEncoder` helper params and `325` `ComputeEncoder.new` sites; Gemma has `30` typed params and `28` `ComputeEncoder.new` sites."
+  source: `scripts/cognigraph_readiness_audit.cr`
+  verified_at: 2026-06-06
+  decay_trigger: encoder API refactor, generic encoder alias, or graph-backed Qwen/Gemma route lands
+- claim: "A direct `GraphEncoder` graft is not yet legal for stateful Qwen/Gemma corridors because access metadata must be audited first; the readiness audit flagged heuristic graph-unsafe buffer bindings (`qwen35: 281`, `gemma4: 34`)."
+  source: `scripts/cognigraph_readiness_audit.cr`
+  verified_at: 2026-06-06
+  decay_trigger: Qwen/Gemma set_buffer access annotations are reviewed/fixed or audit heuristic changes
+- claim: "The first API mismatch blocker is removed: `GraphEncoder` now accepts `Int32`, raw `set_bytes`, and `StaticArray(Float32, 3/4)` scalar bindings like `ComputeEncoder`."
+  source: `src/ml/metal/compute_graph.cr`; `spec/compute_graph_spec.cr`
+  verified_at: 2026-06-06
+  decay_trigger: GraphEncoder or ComputeEncoder scalar binding APIs change
+**decision:** Next legal graph work should be a debug/default-off graph path over a tiny stateless helper or an access-annotation audit patch, not a blanket Qwen/Gemma wave replacement.
+
 ### [LM-claude-1] Qwen 3.6 27B architecture verified
 **status:** verified
 **trust:** {F:0.95, G:high, R:0.95}
