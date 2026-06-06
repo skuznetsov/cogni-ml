@@ -22185,3 +22185,35 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The window is contaminated benchmark launch, the transport is a guarded benchmark command, and the legal move is wait-or-fail before model load. The potential decreases in `(host_noise, contaminated_runs, wasted_model_loads, remaining_benchmarks)`. This is not a speed optimization itself; it is a certification tool for future speed claims.
 **boundary:** Use this for promotion-grade ABBA. It does not replace in-binary `BenchLoadGuard` when a benchmark already needs internal per-phase quiet checks.
+
+### [LM-COGNIGRAPH-026] Gemma fusion promotion now has a quiet-host ABBA harness
+**context:** ml / CogniGraph / Gemma4 / benchmark tooling / LTP-WBA
+**state:** implemented as `scripts/gemma4_fusion_abba.sh`
+
+- claim: "`scripts/gemma4_fusion_abba.sh` builds or reuses `gemma4_metal_decode_profile`, then runs a sequential quiet-host schedule over `default`, `attnprep`, `ffnin`, and `attnprep_ffnin` modes. It emits TSV rows with `ms_per_token`, `tok_s`, and log path."
+  source: `scripts/gemma4_fusion_abba.sh`; shell syntax check passed on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma fusion env rewrite, profile CLI option rewrite, or run_safe quiet-guard rewrite
+  trust: {F:0.84,G:0.36,R:0.82}
+
+- claim: "On the current noisy host, `GEMMA4_FUSION_ABBA_BIN=/usr/bin/true COGNI_RUN_SAFE_WAIT_QUIET_SEC=1 COGNI_RUN_SAFE_REQUIRE_QUIET=1 scripts/gemma4_fusion_abba.sh` failed closed with exit `75` before model work. The first row log recorded busy `WindowServer`, `syspolicyd`, and Codex processes."
+  source: `/tmp/gemma4_fusion_abba_20260605205012/01_default.log` smoke on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: host quiet-guard rewrite or script schedule rewrite
+  trust: {F:0.80,G:0.22,R:0.80}
+
+**LTP/WBA:** The harness is the certification corridor for Gemma fusion promotion. It lowers `(host_noise, contaminated_rows, manual_command_variance, remaining_candidate_uncertainty)` by making noisy runs fail closed and preserving per-row logs. It is not itself performance evidence.
+**boundary:** Use this for promotion-grade Gemma fusion ABBA once the host is quiet. Do not use relaxed/manual rows to promote `GEMMA4_ATTN_PREP_FUSE` or `GEMMA4_FFN_IN_RESIDUAL_NORM_FUSE`.
+
+### [LM-COGNIGRAPH-027] Fusing output RMSNorm into LM-head top1 is a static anti-candidate
+**context:** ml / CogniGraph / Gemma4 / Qwen35Metal / LM head / static refutation
+**state:** refuted before implementation
+
+- claim: "Current Gemma top1 decode materializes the output RMSNorm vector once, then `simd_mv_q6k_top1_tiles_f32` / `simd_mv_q8_0_top1_tiles_f32` scan that vector across vocab rows. Directly folding `x[d] * norm_weight[d] * inv_rms` into the head top1 dot product would repeat the norm-weight multiply for every output row, trading one small vector materialization for extra work in the dominant vocab GEMV."
+  source: source inspection of `src/ml/gguf/gemma4_metal.cr`, `src/ml/gguf/qwen35_metal.cr`, and `src/ml/gguf/kernels/gemm_q56k.metal` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: new head kernel with shared preweighted tile cache, different output-head layout, or measured contradiction from an implemented fused-head prototype
+  trust: {F:0.70,G:0.22,R:0.70}
+
+**LTP/WBA:** This branch fails the recompute-safety precheck. A local kernel-count reduction would likely increase the earlier potential component: dominant head work. The correct legal move is to keep output RMSNorm materialized unless a new head kernel can share preweighted hidden tiles across many rows without repeating the multiply.
+**boundary:** Do not implement naive output-norm-in-head fusion as a speed candidate. A future viable frame would be a tiled shared-memory/preweighted hidden cache inside the head kernel, not per-row repeated weighting.
