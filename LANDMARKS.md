@@ -23249,3 +23249,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: first real Gemma4 CUDA semantic corridor after isolated projection and RMSNorm primitive checks. Transport: hidden rows -> input RMSNorm -> Q/K/V GEMV -> per-head Q/K/V RMSNorm -> CPU Q/K/V certificate. Legal Ladder: compose already verified primitives along a bounded SWA corridor without crossing into RoPE, KV-cache writes, or attention context. Potential descends in `(semantic_composition_uncertainty, one_layer_cuda_risk, remaining_attention_work)`. Recompute safety: this only proves SWA layers with explicit V; full-attention K-as-V layers remain a separate boundary.
 **decision:** Next exact CogniGemma CUDA slice should add RoPE and KV-cache write for SWA Q/K/V, then separately build the full-attention K-as-V projection+norm corridor. Do not generalize this SWA result to full layers without the K-as-V test.
+
+#### [LM-COGNIGEMMA-CUDA-FULL-ATTN-NORM-001] CUDA full-attention K-as-V projection plus norms matches Gemma4 CPU reference
+**context:** ml / CogniGemma / CUDA / full attention / K-as-V / projection-norm corridor / LTP-WBA
+**state:** implemented as bounded combined probe
+
+- claim: "A CUDA corridor for Gemma4 full-attention layers without `attn_v.weight` can reuse the raw K projection as V, then apply learned K RMSNorm and plain V RMSNorm, matching the CPU reference before RoPE/KV writes."
+  source: remote RTX 5060 Ti run on 2026-06-06 using `bin/gemma4_cuda_full_attn_norm_probe.cr --model /build/persisten/models/gemma4/gemma-4-12B-it-Q4_K_M.gguf --layer 5 --tokens 4 --reps 20 --warmup 3`. Output: `cuda_ms=0.3009`, `cuda_ms_per_token=0.0752`, `cpu_ms=132.131`, `q_cos=1.0`, `q_max_diff=3.9339066e-6`, `q_ok=true`, `k_cos=1.0`, `k_max_diff=8.940697e-8`, `k_ok=true`, `v_cos=1.0`, `v_max_diff=1.4305115e-6`, `v_ok=true`, `ok=true`.
+  verified_at: 2026-06-06
+  decay_trigger: Gemma4 full-attention tensor layout change, K-as-V semantic rewrite, CUDA Q4/RMSNorm PTX rewrite, CPU attention projection/norm reference rewrite, or CUDA driver/runtime replacement
+  trust: {F:0.86,G:0.24,R:0.84}
+
+**LTP/WBA:** Window: Gemma full-attention projection+norm semantic trap. Transport: hidden rows -> input RMSNorm -> Q/K Q4 GEMV -> fork raw K into weighted K norm and plain V norm -> CPU Q/K/V certificate. Legal Diamond: normalize the missing-V conflict locally instead of faking an `attn_v` tensor or treating full layers like SWA layers. Potential descends in `(K_as_V_uncertainty, semantic_conflict_count, one_layer_cuda_risk, remaining_attention_work)`. Recompute safety: this stops before RoPE and cache writes, so it certifies only the projection+norm boundary.
+**decision:** CogniGemma CUDA has verified SWA and full-attention projection+norm corridors. Next exact slice should add RoPE for Q/K and KV-cache writes, then attention context. The first one-layer runner can branch by `hp.sliding_window?` only after both RoPE/cache paths are verified.
