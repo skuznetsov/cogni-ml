@@ -23671,3 +23671,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: apparent long-generation resident-chain wait spike. Transport: resident greedy/top1 chain chunks across gen128. Legal move considered: switch to legacy/smaller-chain dual frame for long generations. Recomputed potential under guarded runs did not show the spike; chain8 reduced the dominant wait versus legacy. Therefore the fallback patch is not a legal Collapse; it would optimize a non-reproduced window.
 
 **decision:** Keep resident chain8 default. If the spike returns, require guarded ABBA with memory-pressure notes before changing policy.
+
+#### [LM-GEMMA4-Q4-B128-891] Wider Q4_K B128 row-prefill tile preserves parity but regresses pp256 wall
+**context:** ml / CogniGemma / Metal / prefill / Q4_K / tile geometry / LTP-WBA
+**state:** refuted promotion candidate; experimental code removed
+
+- claim: "A 128-row Q4_K H16 batch tile is not a current Gemma pp256 promotion path on M2 Max."
+  source: temporary opt-in `QWEN35_Q4K_H16_B128=1` branch with `512` threads and `32KiB` threadgroup memory; linked build passed and lazy Metal pipeline creation succeeded. Short pp256/gen4 top1 parity matched default (`token_trace=254632,208669,208669,208669,208669`). Pure pp256 body ABBA `/tmp/gemma4_b128_pp256_abba_20260606182017` measured default `342.708/341.315 tok/s` versus B128 `323.028/324.747 tok/s`.
+  verified_at: 2026-06-06
+  decay_trigger: new B128 kernel with lower register pressure, different GPU architecture, direct llama.cpp kernel import, or quiet-host contradiction
+  trust: {F:0.80,G:0.34,R:0.78}
+
+**LTP/WBA:** Window: dominant row-prefill Q4 FFN-upgate batch-tile corridor. Transport: reuse one dequantized Q4 weight tile across more prompt rows. Legal boundary: opt-in only, exact top1 boundary preserved, source removed after refutation. Potential recomputation failed: despite reducing theoretical reread area, the earlier component `dominant_wait_bucket` increased due to likely occupancy/register/threadgroup-memory pressure. Therefore B128 is not a legal Collapse.
+
+**decision:** Do not widen B64 to B128 blindly. Next kernel-level branch must compare against llama.cpp's actual `kernel_mul_mm_q4_K_f32` or change the occupancy/reuse tradeoff, not just increase rows per threadgroup.
