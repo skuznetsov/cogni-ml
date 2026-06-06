@@ -264,35 +264,6 @@ def gemma4_literal_token_options(tokenizer : ML::GGUF::Gemma4Tokenizer,
   end.reject(&.empty?)
 end
 
-def gemma4_literal_token_options_complete?(options : Array(Array(Int32))) : Bool
-  !options.empty? && options.all?(&.empty?)
-end
-
-def gemma4_literal_token_next_ids(options : Array(Array(Int32))) : Array(Int32)
-  seen = Set(Int32).new
-  ids = [] of Int32
-  options.each do |option|
-    next if option.empty?
-
-    id = option[0]
-    next if seen.includes?(id)
-
-    seen << id
-    ids << id
-  end
-  ids
-end
-
-def gemma4_literal_token_advance(options : Array(Array(Int32)), emitted_id : Int32) : Array(Array(Int32))
-  advanced = [] of Array(Int32)
-  options.each do |option|
-    next if option.empty? || option[0] != emitted_id
-
-    advanced << option[1..]
-  end
-  advanced
-end
-
 def top1_id(logits : Array(Float32)) : Int32
   best_id = 0
   best = logits[0]
@@ -490,12 +461,12 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
   cache_restore_ms = 0.0
   save_cache_after_head = false
   literal_direct_remaining = literal_direct_ids_start.dup
-  literal_token_options = literal_token_options_start.map(&.dup)
+  literal_token_options = ML::GGUF::Gemma4Chat::TokenOptionCorridor.from_options(literal_token_options_start)
   literal_remaining = (literal_direct_remaining.empty? && literal_token_options.empty?) ? literal_remaining_start.dup : [] of String
   literal_complete = ->{
     literal_remaining.empty? &&
       literal_direct_remaining.empty? &&
-      (literal_token_options.empty? || gemma4_literal_token_options_complete?(literal_token_options))
+      (literal_token_options.empty? || literal_token_options.complete?)
   }
   literal_forced_single = 0
   literal_allowed_head = 0
@@ -544,7 +515,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
       next_id = literal_direct_remaining.shift
       literal_forced_single += 1
     elsif decode_mode == "literal" && !literal_token_options.empty?
-      option_ids = gemma4_literal_token_next_ids(literal_token_options)
+      option_ids = literal_token_options.next_ids
       raise "literal token-option frontier is empty" if option_ids.empty?
       if literal_force_single && option_ids.size == 1
         next_id = option_ids[0]
@@ -553,7 +524,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
         next_id = top1_allowed_from_hidden(weights, hidden, option_ids, top1_wave_resident)
         literal_allowed_head += 1
       end
-      literal_token_options = gemma4_literal_token_advance(literal_token_options, next_id)
+      literal_token_options = literal_token_options.advance(next_id)
     elsif decode_mode == "literal" && !literal_remaining.empty?
       index = literal_index.not_nil!
       dynamic_allowed = index.literal_frontier_ids(literal_remaining)
@@ -641,17 +612,17 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
         next
       end
 
-      if decode_mode == "literal" && literal_force_span && decode_wave && !literal_token_options.empty? && !gemma4_literal_token_options_complete?(literal_token_options)
+      if decode_mode == "literal" && literal_force_span && decode_wave && !literal_token_options.empty? && !literal_token_options.complete?
         emitted_ids = [] of Int32
-        probe_options = literal_token_options.map(&.dup)
+        probe_options = literal_token_options
         max_span = generate - i
-        while emitted_ids.size < max_span && !gemma4_literal_token_options_complete?(probe_options)
-          option_ids = gemma4_literal_token_next_ids(probe_options)
+        while emitted_ids.size < max_span && !probe_options.complete?
+          option_ids = probe_options.next_ids
           break unless option_ids.size == 1
 
           id = option_ids[0]
           emitted_ids << id
-          probe_options = gemma4_literal_token_advance(probe_options, id)
+          probe_options = probe_options.advance(id)
         end
 
         if emitted_ids.size >= 1
@@ -712,8 +683,8 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
                 forward_top2_top1(weights, cur, pos, state, decode_wave, top1_wave_resident, decode_layer_count)
               elsif decode_mode == "allowed"
                 forward_allowed_top1(weights, cur, pos, state, allowed_ids, decode_wave, top1_wave_resident, decode_layer_count)
-              elsif decode_mode == "literal" && !literal_token_options.empty? && !gemma4_literal_token_options_complete?(literal_token_options)
-                option_ids = gemma4_literal_token_next_ids(literal_token_options)
+              elsif decode_mode == "literal" && !literal_token_options.empty? && !literal_token_options.complete?
+                option_ids = literal_token_options.next_ids
                 raise "literal token-option frontier is empty" if option_ids.empty?
                 id = if literal_force_single && option_ids.size == 1
                        if decode_wave
@@ -729,7 +700,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
                        literal_allowed_head += 1
                        forward_allowed_top1(weights, cur, pos, state, option_ids, decode_wave, top1_wave_resident, decode_layer_count)
                      end
-                literal_token_options = gemma4_literal_token_advance(literal_token_options, id)
+                literal_token_options = literal_token_options.advance(id)
                 id
               elsif decode_mode == "literal" && !literal_remaining.empty?
                 index = literal_index.not_nil!
@@ -954,12 +925,8 @@ generated_text_for_output = if decode_mode == "literal" && literal_direct_ids_st
                               literal_remaining_start[0]
                             elsif decode_mode == "literal" && literal_token_options_start.size > 0
                               selected_literal = nil.as(String?)
-                              literal_token_options_start.each_with_index do |ids, idx|
-                                next unless ids.size <= last_token_trace.size
-                                next unless last_token_trace[0, ids.size] == ids
-
+                              if idx = ML::GGUF::Gemma4Chat::TokenOptionCorridor.selected_literal_index?(literal_token_options_start, last_token_trace)
                                 selected_literal = literal_remaining_start[idx]
-                                break
                               end
                               selected_literal || tokenizer.try(&.decode(last_token_trace)) || ""
                             else

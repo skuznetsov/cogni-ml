@@ -76,4 +76,32 @@ describe ML::GGUF::Gemma4Chat do
     options.should contain("<|tool_call>call:set_mode{enabled:true}<tool_call|>")
     options.should contain("<|tool_call>call:set_mode{limit:2}<tool_call|>")
   end
+
+  it "tracks token-option corridors through singleton spans and branch points" do
+    corridor = ML::GGUF::Gemma4Chat::TokenOptionCorridor.from_options([
+      [10, 20, 30],
+      [10, 20, 40],
+      [10, 50],
+    ])
+
+    corridor.next_ids.should eq([10])
+    corridor = corridor.advance(10)
+    corridor.next_ids.should eq([20, 50])
+    corridor = corridor.advance(20)
+    corridor.next_ids.should eq([30, 40])
+    corridor = corridor.advance(30)
+    corridor.complete?.should be_true
+  end
+
+  it "maps an emitted token trace back to the selected finite literal option" do
+    options = [
+      [1, 2, 3],
+      [1, 2, 4],
+      [1, 2, 4, 5],
+    ]
+
+    ML::GGUF::Gemma4Chat::TokenOptionCorridor.selected_literal_index?(options, [1, 2, 4]).should eq(1)
+    ML::GGUF::Gemma4Chat::TokenOptionCorridor.selected_literal_index?(options, [1, 2, 4, 5]).should eq(2)
+    ML::GGUF::Gemma4Chat::TokenOptionCorridor.selected_literal_index?(options, [1, 9]).should be_nil
+  end
 end
