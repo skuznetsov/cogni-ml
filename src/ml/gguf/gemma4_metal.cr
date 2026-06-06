@@ -126,6 +126,11 @@ module ML::GGUF
         ENV["GEMMA4_ROW_PREFILL_Q4_PAIR_FFN"]? == "1"
       end
 
+      private def q4_decode_dual_ffn_enabled? : Bool
+        ENV["GEMMA4_DECODE_Q4_DUAL_GEMV"]? == "1" &&
+          ENV["GEMMA4_DECODE_Q4_DUAL_GEMV_OFF"]? != "1"
+      end
+
       private def rmsnorm_h16_proj_enabled?(batch : Int32) : Bool
         return false if ENV["GEMMA4_ROW_PREFILL_RMSNORM_H16_PROJ_OFF"]? == "1"
         return false unless ENV["GEMMA4_ROW_PREFILL_RMSNORM_H16_PROJ"]? == "1"
@@ -692,7 +697,9 @@ module ML::GGUF
         encode_rmsnorm_weighted_out(enc, attn_projected_buf, post_attn_w, attn_normed_buf, hidden_dim, hp.rms_eps)
         encode_add_vec(enc, x_buf, attn_normed_buf, attn_out_buf, hidden_dim)
         encode_rmsnorm_weighted_out(enc, attn_out_buf, ffn_w, ffn_in_buf, hidden_dim, hp.rms_eps)
-        return false unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], 1)
+        projected = q4_decode_dual_ffn_enabled? &&
+          Qwen35Metal.encode_q4k_gemv_dual_to_buffers(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, up_buf, 1)
+        return false unless projected || Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], 1)
         encode_gelu_mul(enc, gate_buf, up_buf, combined_buf, lw.ffn_down_qw.in_dim)
         return false unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.ffn_down_qw, combined_buf, ffn_buf, 1)
         scale = lw.layer_output_scale.first? || 1.0_f32
@@ -765,9 +772,11 @@ module ML::GGUF
         fused_gelu = q4_gelu_fuse_enabled? &&
           Qwen35Metal.encode_q4k_gemm_h16_pair_b64_gelu_mul(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, combined_buf, batch)
         unless fused_gelu
-          pair_q4 = q4_pair_ffn_enabled? &&
+          dual_q4 = q4_decode_dual_ffn_enabled? &&
+            Qwen35Metal.encode_q4k_gemv_dual_to_buffers(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, up_buf, batch)
+          pair_q4 = !dual_q4 && q4_pair_ffn_enabled? &&
             Qwen35Metal.encode_q4k_gemm_h16_pair_to_buffers(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, up_buf, batch)
-          unless pair_q4 || Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], batch)
+          unless dual_q4 || pair_q4 || Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], batch)
             enc.end_encoding
             return nil
           end
@@ -981,6 +990,8 @@ module ML::GGUF
                    Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.ffn_gate_qw, ffn16, gate_buf, batch) &&
                      Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.ffn_up_qw, ffn16, up_buf, batch)
                  else
+                   (q4_decode_dual_ffn_enabled? &&
+                     Qwen35Metal.encode_q4k_gemv_dual_to_buffers(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, up_buf, batch).tap { |success| route = "q4_dual" if success }) ||
                    (q4_pair_ffn_enabled? &&
                      Qwen35Metal.encode_q4k_gemm_h16_pair_to_buffers(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, up_buf, batch).tap { |success| route = "q4_pair" if success }) ||
                      Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], batch).tap { |success| route = "generic" if success }
@@ -1151,10 +1162,13 @@ module ML::GGUF
                  Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.ffn_gate_qw, ffn16, gate_buf, batch) &&
                    Qwen35Metal.encode_matmul_from_h16_to_buffer(enc, lw.ffn_up_qw, ffn16, up_buf, batch)
                else
-                 pair_q4 = q4_pair_ffn_enabled? &&
+                 dual_q4 = q4_decode_dual_ffn_enabled? &&
+                   Qwen35Metal.encode_q4k_gemv_dual_to_buffers(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, up_buf, batch)
+                 pair_q4 = !dual_q4 && q4_pair_ffn_enabled? &&
                    Qwen35Metal.encode_q4k_gemm_h16_pair_to_buffers(enc, lw.ffn_gate_qw, lw.ffn_up_qw, ffn_in_buf, gate_buf, up_buf, batch)
+                 route = "q4_dual" if dual_q4
                  route = "q4_pair" if pair_q4
-                 pair_q4 || Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], batch)
+                 dual_q4 || pair_q4 || Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_gate_qw, lw.ffn_up_qw], ffn_in_buf, [gate_buf, up_buf], batch)
                end
           return false unless ok
           profile_route_marker("gemma4.rows.ffn_route.#{route}")

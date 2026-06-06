@@ -188,6 +188,7 @@ module ML
 
         @@mv_pipeline   : ML::Metal::ComputePipeline?
         @@mv_q4_x16_pipeline : ML::Metal::ComputePipeline?
+        @@mv_q4_dual_pipeline : ML::Metal::ComputePipeline?
         @@mv_add_pipeline : ML::Metal::ComputePipeline?
         @@embed_q4k_pipeline : ML::Metal::ComputePipeline?
         @@embed_q6k_pipeline : ML::Metal::ComputePipeline?
@@ -946,6 +947,12 @@ module ML
         private def self.mv_q4_x16_pipeline : ML::Metal::ComputePipeline
           @@mv_q4_x16_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q4k_f32_x16") {
             ML::Metal::ComputePipeline.new("simd_mv_q4k_f32_x16", GEMM_Q4K_SOURCE)
+          }
+        end
+
+        private def self.mv_q4_dual_pipeline : ML::Metal::ComputePipeline
+          @@mv_q4_dual_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q4k_dual_f32") {
+            ML::Metal::ComputePipeline.new("simd_mv_q4k_dual_f32", GEMM_Q4K_SOURCE)
           }
         end
 
@@ -1896,6 +1903,37 @@ module ML
           rows_per_tg = MV_Q8_NSG * MV_Q8_NR0
           grid = {(out_dim + rows_per_tg - 1) // rows_per_tg, batch, 1}
           enc.dispatch_threadgroups(grid, {MV_Q8_NSG * 32, 1, 1})
+        end
+
+        private def self.encode_gemv_q4_dual(enc : ML::Metal::ComputeEncoder,
+                                             x_buf : ML::MetalBuffer,
+                                             gate_out_buf : ML::MetalBuffer,
+                                             up_out_buf : ML::MetalBuffer,
+                                             gate_w_buf : ML::MetalBuffer,
+                                             gate_w_offset : Int64,
+                                             up_w_buf : ML::MetalBuffer,
+                                             up_w_offset : Int64,
+                                             in_dim : Int32,
+                                             out_dim : Int32,
+                                             batch : Int32 = 1,
+                                             profile_shape : Bool = true) : Nil
+          if profile_shape
+            blocks_per_row = (in_dim + QK_K - 1) // QK_K
+            weight_bytes = 2_i64 * out_dim.to_i64 * blocks_per_row.to_i64 * Q4K_BLOCK_BYTES.to_i64
+            Profile.bump_matmul_shape("gemv Q4_K dual #{in_dim}x#{out_dim} b#{batch}", weight_bytes)
+          end
+          enc.set_pipeline(mv_q4_dual_pipeline)
+          enc.set_buffer(gate_w_buf, 0, ML::Metal::BufferAccess::Read, offset: gate_w_offset)
+          enc.set_buffer(up_w_buf, 1, ML::Metal::BufferAccess::Read, offset: up_w_offset)
+          enc.set_buffer(x_buf, 2)
+          enc.set_buffer(gate_out_buf, 3, ML::Metal::BufferAccess::Write)
+          enc.set_buffer(up_out_buf, 4, ML::Metal::BufferAccess::Write)
+          enc.set_value(in_dim.to_u32, 5)
+          enc.set_value(out_dim.to_u32, 6)
+          enc.set_value(batch.to_u32, 7)
+          rows_per_tg = MV_Q4_NSG * MV_Q4_NR0
+          grid = {(out_dim + rows_per_tg - 1) // rows_per_tg, batch, 1}
+          enc.dispatch_threadgroups(grid, {MV_Q4_NSG * 32, 1, 1})
         end
 
         private def self.encode_gemv_input_offset(enc : ML::Metal::ComputeEncoder,
@@ -2879,6 +2917,36 @@ module ML
             gate_qw.type.q8_0? && up_qw.type.q8_0? &&
             gate_qw.in_dim == up_qw.in_dim &&
             gate_qw.out_dim == up_qw.out_dim
+        end
+
+        private def self.q4_dual_gemv_candidate?(gate_qw : QuantWeight,
+                                                 up_qw : QuantWeight,
+                                                 batch : Int32 = 1) : Bool
+          batch == 1 &&
+            gate_qw.type.q4_k? && up_qw.type.q4_k? &&
+            gate_qw.in_dim == up_qw.in_dim &&
+            gate_qw.out_dim == up_qw.out_dim &&
+            gate_qw.in_dim % QK_K == 0
+        end
+
+        def self.encode_q4k_gemv_dual_to_buffers(enc : ML::Metal::ComputeEncoder,
+                                                  gate_qw : QuantWeight,
+                                                  up_qw : QuantWeight,
+                                                  x_buf : ML::MetalBuffer,
+                                                  gate_buf : ML::MetalBuffer,
+                                                  up_buf : ML::MetalBuffer,
+                                                  batch : Int32 = 1) : Bool
+          return false unless q4_dual_gemv_candidate?(gate_qw, up_qw, batch)
+          return false if x_buf.size < batch.to_i64 * gate_qw.in_dim * sizeof(Float32)
+          return false if gate_buf.size < batch.to_i64 * gate_qw.out_dim * sizeof(Float32)
+          return false if up_buf.size < batch.to_i64 * up_qw.out_dim * sizeof(Float32)
+
+          gate_w_buf, gate_w_off = weight_slot(gate_qw)
+          up_w_buf, up_w_off = weight_slot(up_qw)
+          encode_gemv_q4_dual(enc, x_buf, gate_buf, up_buf,
+            gate_w_buf, gate_w_off, up_w_buf, up_w_off,
+            gate_qw.in_dim, gate_qw.out_dim, batch)
+          true
         end
 
         private def self.q8_alpha_beta_dual_gemv_candidate?(alpha_qw : QuantWeight,

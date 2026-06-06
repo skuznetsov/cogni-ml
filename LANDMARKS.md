@@ -22348,3 +22348,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The window was the FFN up/gate route ambiguity. The legal Diamond was adding profile-only route markers before stacking env gates. Potential descends from `(route_uncertainty, tied_candidate_routes, env_conflict_count, remaining_measurement_work)` to a single active decode route: generic GEMV. The dual frame for first-run decode is now Q4/Q6 GEMV/head-kernel attribution, not batch-GEMM FFN fusion.
 **boundary:** Do not default-enable Gemma Q4 pair/GELU for decode based on FFN logical traffic. It remains a high-batch prefill/approximate corridor only unless a new decode-b1 pair kernel is implemented and ABBA-verified.
+
+#### [LM-COGNIGRAPH-033] Gemma Q4 dual-GEMV b1 is an opt-in refutation substrate, not a speed promotion
+**context:** ml / CogniGraph / Gemma4 / Q4_K dual GEMV / decode-b1 / LTP-WBA
+**state:** guarded kernel implemented; route verified; speed promotion refuted on short warmed smoke
+
+- claim: "A default-off Q4_K decode-b1 dual GEMV kernel (`simd_mv_q4k_dual_f32`) now exists and Gemma can opt into it with `GEMMA4_DECODE_Q4_DUAL_GEMV=1`. The route preserves the materialized `gate_buf` and `up_buf` boundary and changes `gemma4.rows.ffn_route.generic` to `gemma4.rows.ffn_route.q4_dual` when selected."
+  source: `scripts/run_safe.sh crystal 180 8192 build --no-codegen bin/gemma4_metal_decode_profile.cr --error-trace`; `/tmp/gemma4_q4dual_profile` route smokes with and without `GEMMA4_DECODE_Q4_DUAL_GEMV=1` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Q4 GEMV kernel rewrite, Gemma FFN route rewrite, or profile route marker rewrite
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "The first warmed short decode comparison did not show a wall-time win: default route measured `decode_ms_per_token_p50=34.487` while opt-in Q4 dual measured `35.302` on the same token-id prompt, `generate=2`, `warmups=1`, `runs=1`, with matching first/last generated id `236761`."
+  source: sequential `scripts/run_safe.sh /tmp/gemma4_q4dual_profile ... --generate 2 --warmups 1 --runs 1 --profile --profile-decode-only --decode-wave --top1-wave-resident --top1-chain 1 --prefill-mode rows --prefill-chunk 4`, default vs `GEMMA4_DECODE_Q4_DUAL_GEMV=1`, on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host ABBA contradiction, kernel retune, GELU consumer fusion rewrite, or larger gen benchmark contradiction
+  trust: {F:0.74,G:0.16,R:0.72}
+
+**LTP/WBA:** The window was Gemma b1 FFN gate/up duplicate Q4 GEMV dispatches. The corridor was `ffn_in -> gate/up Q4_K GEMV -> gelu_mul`, preserving F32 gate/up buffers. The legal move reduced route calls (`192` single gate/up GEMVs to `96` dual calls for gen2) and input rereads, but after recomputing the active window the dominant wall potential did not descend. This is a failed Spike for promotion, not a failed instrumentation asset.
+**boundary:** Keep `GEMMA4_DECODE_Q4_DUAL_GEMV` opt-in only. Do not combine it blindly with GELU folding or x16 tags; next Gemma exact decode work should pivot to either a different Q4/Q6 kernel family, head/top1 route, or a larger graph-level scheduler move with ABBA evidence.

@@ -221,6 +221,143 @@ kernel void simd_mv_q4k_f32(
     }
 }
 
+// Same arithmetic as two simd_mv_q4k_f32 launches over matching Q4_K matrices,
+// but shares the input-vector loads and dispatch for decode batch=1 FFN gate/up.
+kernel void simd_mv_q4k_dual_f32(
+    device const uint8_t* gate_w_raw [[buffer(0)]],
+    device const uint8_t* up_w_raw   [[buffer(1)]],
+    device const float*   x          [[buffer(2)]],
+    device       float*   gate_out   [[buffer(3)]],
+    device       float*   up_out     [[buffer(4)]],
+    constant     uint&    in_dim     [[buffer(5)]],
+    constant     uint&    out_dim    [[buffer(6)]],
+    constant     uint&    batch      [[buffer(7)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{
+    constexpr uint16_t kmask1 = 0x3f3f;
+    constexpr uint16_t kmask2 = 0x0f0f;
+    constexpr uint16_t kmask3 = 0xc0c0;
+
+    const short ix = tiisg / 8;
+    const short it = tiisg % 8;
+    const short iq = it / 4;
+    const short ir = it % 4;
+
+    const uint nb = in_dim / QK_K;
+
+    const uint first_row = (tgpig.x * MV_NSG + sgitg) * MV_NR0;
+    const uint n = tgpig.y;
+    if (first_row >= out_dim || n >= batch) return;
+
+    const uint row_bytes = nb * 144;
+
+    device const float * y_base = x + n * in_dim;
+    device const float * y4 = y_base + ix * QK_K + 64 * iq + 8 * ir;
+
+    float yl[16];
+    float yh[16];
+    float gate_sum[MV_NR0] = {0.f};
+    float up_sum[MV_NR0] = {0.f};
+
+    uint16_t sc16[4];
+    thread const uint8_t * sc8 = (thread const uint8_t *)sc16;
+
+    for (uint ib = ix; ib < nb; ib += 4) {
+        float4 sumy = {0.f, 0.f, 0.f, 0.f};
+        for (short i = 0; i < 8; ++i) {
+            yl[i+0] = y4[i+  0]; sumy[0] += yl[i+0];
+            yl[i+8] = y4[i+ 32]; sumy[1] += yl[i+8];
+            yh[i+0] = y4[i+128]; sumy[2] += yh[i+0];
+            yh[i+8] = y4[i+160]; sumy[3] += yh[i+8];
+        }
+
+        for (short row = 0; row < MV_NR0; ++row) {
+            device const block_q4_K * gate_blk =
+                (device const block_q4_K *)(gate_w_raw + (first_row + row) * row_bytes) + ib;
+            device const block_q4_K * up_blk =
+                (device const block_q4_K *)(up_w_raw + (first_row + row) * row_bytes) + ib;
+
+            device const uint16_t * gate_sc = (device const uint16_t *)gate_blk->scales + iq;
+            device const uint16_t * gate_q1 = (device const uint16_t *)gate_blk->qs + 16 * iq + 4 * ir;
+            device const half     * gate_dh = &gate_blk->d;
+
+            sc16[0] = gate_sc[0] & kmask1;
+            sc16[1] = gate_sc[2] & kmask1;
+            sc16[2] = ((gate_sc[4] >> 0) & kmask2) | ((gate_sc[0] & kmask3) >> 2);
+            sc16[3] = ((gate_sc[4] >> 4) & kmask2) | ((gate_sc[2] & kmask3) >> 2);
+
+            device const uint16_t * gate_q2 = gate_q1 + 32;
+
+            float4 gate_acc1 = {0.f, 0.f, 0.f, 0.f};
+            float4 gate_acc2 = {0.f, 0.f, 0.f, 0.f};
+
+            FOR_UNROLL for (short i = 0; i < 4; ++i) {
+                gate_acc1[0] += yl[2*i + 0] * (gate_q1[i] & 0x000F);
+                gate_acc1[1] += yl[2*i + 1] * (gate_q1[i] & 0x0F00);
+                gate_acc1[2] += yl[2*i + 8] * (gate_q1[i] & 0x00F0);
+                gate_acc1[3] += yl[2*i + 9] * (gate_q1[i] & 0xF000);
+                gate_acc2[0] += yh[2*i + 0] * (gate_q2[i] & 0x000F);
+                gate_acc2[1] += yh[2*i + 1] * (gate_q2[i] & 0x0F00);
+                gate_acc2[2] += yh[2*i + 8] * (gate_q2[i] & 0x00F0);
+                gate_acc2[3] += yh[2*i + 9] * (gate_q2[i] & 0xF000);
+            }
+
+            gate_sum[row] += gate_dh[0] * ((gate_acc1[0] + (1.f/256.f) * gate_acc1[1]) * sc8[0] +
+                                           (gate_acc1[2] + (1.f/256.f) * gate_acc1[3]) * sc8[1] * (1.f/16.f) +
+                                           (gate_acc2[0] + (1.f/256.f) * gate_acc2[1]) * sc8[4] +
+                                           (gate_acc2[2] + (1.f/256.f) * gate_acc2[3]) * sc8[5] * (1.f/16.f)) -
+                             gate_dh[1] * (sumy[0] * sc8[2] + sumy[1] * sc8[3] +
+                                           sumy[2] * sc8[6] + sumy[3] * sc8[7]);
+
+            device const uint16_t * up_sc = (device const uint16_t *)up_blk->scales + iq;
+            device const uint16_t * up_q1 = (device const uint16_t *)up_blk->qs + 16 * iq + 4 * ir;
+            device const half     * up_dh = &up_blk->d;
+
+            sc16[0] = up_sc[0] & kmask1;
+            sc16[1] = up_sc[2] & kmask1;
+            sc16[2] = ((up_sc[4] >> 0) & kmask2) | ((up_sc[0] & kmask3) >> 2);
+            sc16[3] = ((up_sc[4] >> 4) & kmask2) | ((up_sc[2] & kmask3) >> 2);
+
+            device const uint16_t * up_q2 = up_q1 + 32;
+
+            float4 up_acc1 = {0.f, 0.f, 0.f, 0.f};
+            float4 up_acc2 = {0.f, 0.f, 0.f, 0.f};
+
+            FOR_UNROLL for (short i = 0; i < 4; ++i) {
+                up_acc1[0] += yl[2*i + 0] * (up_q1[i] & 0x000F);
+                up_acc1[1] += yl[2*i + 1] * (up_q1[i] & 0x0F00);
+                up_acc1[2] += yl[2*i + 8] * (up_q1[i] & 0x00F0);
+                up_acc1[3] += yl[2*i + 9] * (up_q1[i] & 0xF000);
+                up_acc2[0] += yh[2*i + 0] * (up_q2[i] & 0x000F);
+                up_acc2[1] += yh[2*i + 1] * (up_q2[i] & 0x0F00);
+                up_acc2[2] += yh[2*i + 8] * (up_q2[i] & 0x00F0);
+                up_acc2[3] += yh[2*i + 9] * (up_q2[i] & 0xF000);
+            }
+
+            up_sum[row] += up_dh[0] * ((up_acc1[0] + (1.f/256.f) * up_acc1[1]) * sc8[0] +
+                                       (up_acc1[2] + (1.f/256.f) * up_acc1[3]) * sc8[1] * (1.f/16.f) +
+                                       (up_acc2[0] + (1.f/256.f) * up_acc2[1]) * sc8[4] +
+                                       (up_acc2[2] + (1.f/256.f) * up_acc2[3]) * sc8[5] * (1.f/16.f)) -
+                           up_dh[1] * (sumy[0] * sc8[2] + sumy[1] * sc8[3] +
+                                       sumy[2] * sc8[6] + sumy[3] * sc8[7]);
+        }
+
+        y4 += 4 * QK_K;
+    }
+
+    for (short row = 0; row < MV_NR0 && first_row + row < out_dim; ++row) {
+        const float gate_tot = simd_sum(gate_sum[row]);
+        const float up_tot = simd_sum(up_sum[row]);
+        if (tiisg == 0) {
+            const uint out_idx = n * out_dim + first_row + row;
+            gate_out[out_idx] = gate_tot;
+            up_out[out_idx] = up_tot;
+        }
+    }
+}
+
 // Q4_K GEMV variant that splits each simdgroup into two independent
 // 16-lane reductions. This mirrors llama.cpp's useful b1 shape at a local
 // buffer-contract level: two output rows per simdgroup, fewer lanes per row.
