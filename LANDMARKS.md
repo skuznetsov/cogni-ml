@@ -23685,3 +23685,23 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: dominant row-prefill Q4 FFN-upgate batch-tile corridor. Transport: reuse one dequantized Q4 weight tile across more prompt rows. Legal boundary: opt-in only, exact top1 boundary preserved, source removed after refutation. Potential recomputation failed: despite reducing theoretical reread area, the earlier component `dominant_wait_bucket` increased due to likely occupancy/register/threadgroup-memory pressure. Therefore B128 is not a legal Collapse.
 
 **decision:** Do not widen B64 to B128 blindly. Next kernel-level branch must compare against llama.cpp's actual `kernel_mul_mm_q4_K_f32` or change the occupancy/reuse tradeoff, not just increase rows per threadgroup.
+
+#### [LM-GEMMA4-VS-LLAMA-GEN0-892] Gemma body benchmark now uses pure prefill and shows a current pp/tg gap
+**context:** ml / CogniGemma / benchmark / llama.cpp / measurement discipline
+**state:** verified harness fix and current comparison anchor
+
+- claim: "`scripts/gemma4_vs_llama_body_bench.sh` now measures CogniGemma pp without an extra decode token."
+  source: script changed Cogni pp run from `--generate 1` to `--generate 0`; `bash -n scripts/gemma4_vs_llama_body_bench.sh` passed; `/tmp/gemma4_vs_llama_generate0_script_20260606182329/cogni_pp256_body.log` reports `decode_tokens=0,0`.
+  verified_at: 2026-06-06
+  decay_trigger: benchmark script rewrite or profile CLI semantics change
+  trust: {F:0.90,G:0.72,R:0.88}
+
+- claim: "On the current guarded run, CogniGemma body pp/tg trails llama.cpp by about 10-12% at pp256/gen128."
+  source: `/tmp/gemma4_vs_llama_generate0_script_20260606182329.summary`: llama.cpp `385.342 pp tok/s`, `34.024 tg tok/s`; CogniGemma `341.216 pp tok/s`, `30.489 tg tok/s`; ratios `0.885x`, `0.896x`.
+  verified_at: 2026-06-06
+  decay_trigger: quiet-host ABBA contradiction, llama.cpp update, CogniGraph scheduler/kernel rewrite, or different prompt/gen/chunk shape
+  trust: {F:0.78,G:0.36,R:0.76}
+
+**LTP/WBA:** Window: benchmark evidence boundary. Legal move: remove unrelated decode work from the pp measurement before using it as a potential term. Potential now has cleaner components: `Phi=(pp/tg body gap vs llama, tied q4/q6 routes, measurement contamination, remaining exact work)`, with measurement contamination reduced to zero for pp.
+
+**decision:** Use this script for future body apples-to-apples rows. Do not cite older `--generate 1` pp rows as pure pp evidence without caveat.

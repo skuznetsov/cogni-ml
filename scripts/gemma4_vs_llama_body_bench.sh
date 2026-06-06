@@ -89,7 +89,7 @@ COGNI_RUN_SAFE_MIN_FREE_PCT=12 "$RUN_SAFE" "$LLAMA_BENCH" "$TIMEOUT_SEC" "$RUN_T
   > "$llama_log" 2>&1
 
 COGNI_RUN_SAFE_MIN_FREE_PCT=12 GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 "$RUN_SAFE" "$PROFILE_BIN" "$TIMEOUT_SEC" "$RUN_TIMEOUT_MS" \
-  --model "$MODEL" --tokens "$TOKENS" --generate 1 --max-seq "$MAX_SEQ" --runs "$REPS" --warmups "$WARMUPS" \
+  --model "$MODEL" --tokens "$TOKENS" --generate 0 --max-seq "$MAX_SEQ" --runs "$REPS" --warmups "$WARMUPS" \
   --prefill-mode rows --prefill-chunk "$PREFILL_CHUNK" --body-only --prefill-no-head \
   > "$cogni_pp_log" 2>&1
 
