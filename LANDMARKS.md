@@ -23429,3 +23429,19 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **decision:** Next Metal CogniGraph work should either compose this tail corridor with a separately certified stateless producer or add phase/timing attribution around graph-vs-resident tail. Do not graph-promote full Gemma/Qwen decode until cache/state writes have explicit boundary certificates.
 
 **LM-COGNIGEMMA-METAL-GRAPH-TAIL-001 addendum (2026-06-06):** Added `Gemma4Metal::LayerTailGraphPlan`, a reusable compiled graph for the same stateless layer-tail corridor. Focused spec `spec/gemma4_metal_buffer_spec.cr:118` passed under `run_safe`, reporting `max|d|=0.0`, `ops=9`, `waves=8`. Directional microbench via `/tmp/gemma4_metal_tail_profile_graph --warmups 5 --runs 20 --mode all` showed `resident_inputs_p50_ms=0.646` and `graph_plan_p50_ms=0.616` (`graph_plan_vs_resident_inputs_p50_speedup=1.0497`). Treat this as a narrow replay/encoding-area win, not an end-to-end decode claim; graph one-shot without plan remained slower/noisy (`graph_vs_resident_inputs_p50_speedup=0.9655`).
+
+#### [LM-COGNIGEMMA-METAL-DECODE-RETUNE-REFUTES-001] Gemma4 decode retunes show small or route-specific gains, not a breakthrough path
+**context:** ml / CogniGemma / Metal / decode / FFN route tuning / LTP-WBA
+**state:** refutation ledger
+
+- claim: "Gemma4 decode chain-size retuning is not the current high-leverage product bottleneck on the local M2 Max short decode smoke."
+  source: local sequential `run_safe` sweep on 2026-06-06 using `/tmp/gemma4_metal_decode_profile_cognigraph_matrix`, `--decode-only-seed 42 --generate 16 --max-seq 256 --runs 2 --warmups 1`. Body-only `--body-chain 1` reported `decode_p50_tok_s=32.76`; body-only `--body-chain 8` reported `33.32`. Top1 `--top1-chain 1` reported `25.466`; top1 `--top1-chain 8` reported `26.331`. Same-day paired top1 baseline later varied up to `31.007`, confirming background/thermal variance, but chain-size uplift remained small in paired runs.
+  verified_at: 2026-06-06
+  trust: {F:0.72,G:0.20,R:0.68}
+
+- claim: "Defaulting `GEMMA4_DECODE_Q4_DUAL_GEMV` is not promotion-safe from current evidence."
+  source: body-only A/B (`--body-chain 8`, `gen=16`, `runs=2`) improved from `decode_p50_tok_s=32.666` baseline to `33.279` with `GEMMA4_DECODE_Q4_DUAL_GEMV=1`, while paired top1 A/B (`--top1-chain 8`) regressed from `31.007` baseline to `26.551` with the same env gate. `GEMMA4_ROW_PREFILL_Q4_GELU_FUSE=1` alone was worse for body-only (`32.828`).
+  verified_at: 2026-06-06
+  trust: {F:0.74,G:0.18,R:0.70}
+
+**LTP/WBA:** Window: decode slowdown after graph-tail replay showed only a narrow tail-area win. Transport: retune candidates along chain-size and FFN Q4 route gates. Legal Diamond: compare route effects in paired body/top1 contexts before promoting a local body-only gain. Potential did not descend globally because earlier components (`dominant_wait_bucket` and route conflict) stayed nonzero or worsened for top1. **decision:** Do not spend more effort on blind chain-size or Q4-dual default retunes. Next exact performance window should target FFN/head byte reduction, better quantized GEMV kernels, or proposal/verifier paths where total accepted-token work descends, not merely local encoding-area shrinkage.
