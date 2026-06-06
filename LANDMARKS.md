@@ -23191,3 +23191,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: CogniGemma CUDA productization was blocked at the primitive boundary. Transport: real Gemma4 GGUF tensor -> CPU `QuantMatmul` reference -> CUDA Q4/Q6 GEMV kernel -> parity certificate. Legal Spike: reuse existing quant kernels only after direct Gemma tensor parity, avoiding a premature primitive rewrite. Potential descends in `(unknown_backend_boundary, primitive_kernel_work, CUDA_port_risk, remaining_runner_work)`: the active frontier moves from quant layout uncertainty to Gemma-specific graph/state scheduling.
 **decision:** Next CogniGemma CUDA work should start from a one-layer runner using these proven primitives. Required Gemma-specific CUDA pieces remain: GELU FFN body, layer-output scale, split Q/K/V norms, full-layer K-as-V semantics, SWA/full attention cadence, KV cache/state allocation, and then resident decode-wave scheduling. Keep llama.cpp CUDA as the performance oracle and local Metal/CPU as correctness oracles.
+
+#### [LM-COGNIGEMMA-CUDA-FFN-001] Gemma4 CUDA FFN corridor preserves CPU-reference output
+**context:** ml / CogniGemma / CUDA / FFN / GELU / LTP-WBA
+**state:** implemented as reusable probe support
+
+- claim: "The existing CUDA FFN sequence probe can run Gemma4's `Q4_K gate + Q4_K up + GELU multiply + Q6_K down` corridor with CPU-reference parity after adding an explicit `--activation gelu` path."
+  source: remote RTX 5060 Ti run on 2026-06-06 after extending `bin/cuda_ffn_sequence_probe.cr`. Command `./build/cuda_ffn_sequence_probe --model /build/persisten/models/gemma4/gemma-4-12B-it-Q4_K_M.gguf --layer 0 --activation gelu --reps 20 --warmup 3 --tokens 1` reported `cuda_ms=0.43`, `cpu_ms=193.033`, `cos=1.0`, `max_diff=2.3841858e-6`, `ok=true`.
+  verified_at: 2026-06-06
+  decay_trigger: GELU PTX rewrite, Gemma4 FFN qtype/layout change, CPU GELU reference change, or CUDA Q4/Q6 kernel rewrite
+  trust: {F:0.84,G:0.26,R:0.82}
+
+- claim: "The same Gemma4 CUDA GELU FFN corridor also preserves parity in a four-row known-span/batched launch."
+  source: remote command `./build/cuda_ffn_sequence_probe --model /build/persisten/models/gemma4/gemma-4-12B-it-Q4_K_M.gguf --layer 0 --activation gelu --reps 20 --warmup 3 --tokens 4 --batched` reported `cuda_ms=1.635`, `cpu_ms=770.099`, `cos=1.0`, `max_diff=2.3841858e-6`, `ok=true`.
+  verified_at: 2026-06-06
+  decay_trigger: batched Q4/Q6 kernel rewrite, known-span scheduler rewrite, or Gemma4 FFN qtype/layout change
+  trust: {F:0.84,G:0.24,R:0.82}
+
+**LTP/WBA:** Window: Gemma FFN body after primitive GEMV compatibility was verified. Transport: normalized hidden row(s) -> Q4 gate/up GEMV -> GELU multiply -> Q6 down GEMV -> CPU parity certificate. Legal Diamond: share the existing Qwen FFN probe but make activation explicit (`silu|gelu`) so Qwen and Gemma corridors do not silently alias different math. Potential descends in `(activation_boundary_uncertainty, FFN_runner_work, remaining_full_layer_work)`. Recompute safety: default activation remains `silu`, so Qwen probe behavior is preserved unless `--activation gelu` is requested.
+**decision:** CogniGemma CUDA can build its first one-layer runner around this FFN corridor. The remaining next-layer work is attention/projection/norm/KV semantics plus residual/layer-scale wiring; do not rewrite FFN quant primitives before a full-layer attribution says FFN is the active CUDA bottleneck.

@@ -1,6 +1,6 @@
 # GPU-resident CUDA FFN sequence probe for Qwen GGUF weights.
 #
-# Runs: Q4_K gate GEMV + Q4_K up GEMV -> SwiGLU activation -> Q6_K down GEMV.
+# Runs: Q4_K gate GEMV + Q4_K up GEMV -> activation -> Q6_K down GEMV.
 # Only the final output is copied back for CPU-reference comparison.
 
 require "option_parser"
@@ -88,6 +88,68 @@ SWIGLU_PTX = <<-PTX
 DONE:
     ret;
 }
+
+.visible .entry gelu_mul_f32(
+    .param .u64 gate,
+    .param .u64 up,
+    .param .u64 out,
+    .param .u32 n
+)
+{
+    .reg .pred %p;
+    .reg .b32 %r<8>;
+    .reg .b64 %rd<12>;
+    .reg .f32 %f<24>;
+
+    ld.param.u64 %rd1, [gate];
+    ld.param.u64 %rd2, [up];
+    ld.param.u64 %rd3, [out];
+    ld.param.u32 %r1, [n];
+
+    mov.u32 %r2, %tid.x;
+    mov.u32 %r3, %ctaid.x;
+    mov.u32 %r4, %ntid.x;
+    mad.lo.s32 %r5, %r3, %r4, %r2;
+    setp.ge.u32 %p, %r5, %r1;
+    @%p bra GELU_DONE;
+
+    mul.wide.u32 %rd4, %r5, 4;
+    add.s64 %rd5, %rd1, %rd4;
+    add.s64 %rd6, %rd2, %rd4;
+    add.s64 %rd7, %rd3, %rd4;
+    ld.global.f32 %f1, [%rd5];        // x = gate
+    ld.global.f32 %f2, [%rd6];        // up
+
+    mul.rn.f32 %f3, %f1, %f1;         // x^2
+    mov.f32 %f4, 0f3D372713;          // 0.044715
+    mul.rn.f32 %f5, %f3, %f4;
+    add.rn.f32 %f6, %f5, 0f3F800000;  // 1 + 0.044715*x^2
+    mul.rn.f32 %f7, %f1, %f6;
+    mov.f32 %f8, 0f3F4C422A;          // sqrt(2/pi)
+    mul.rn.f32 %f9, %f7, %f8;         // z
+
+    // tanh(z) = 2/(1 + exp(-2z)) - 1, using exp2 approximation.
+    mov.f32 %f10, 0fC0000000;         // -2
+    mul.rn.f32 %f11, %f9, %f10;
+    mov.f32 %f12, 0f3FB8AA3B;         // log2(e)
+    mul.rn.f32 %f13, %f11, %f12;
+    ex2.approx.ftz.f32 %f14, %f13;
+    add.rn.f32 %f15, %f14, 0f3F800000;
+    rcp.approx.ftz.f32 %f16, %f15;
+    mov.f32 %f17, 0f40000000;         // 2
+    mul.rn.f32 %f18, %f17, %f16;
+    add.rn.f32 %f19, %f18, 0fBF800000; // tanh(z)
+
+    add.rn.f32 %f20, %f19, 0f3F800000;
+    mov.f32 %f21, 0f3F000000;         // 0.5
+    mul.rn.f32 %f22, %f21, %f1;
+    mul.rn.f32 %f22, %f22, %f20;      // gelu(x)
+    mul.rn.f32 %f23, %f22, %f2;
+    st.global.f32 [%rd7], %f23;
+
+GELU_DONE:
+    ret;
+}
 PTX
 
 DEFAULT_MODEL = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
@@ -128,6 +190,10 @@ def silu(x : Float32) : Float32
   x / (1.0_f32 + Math.exp(-x).to_f32)
 end
 
+def gelu(x : Float32) : Float32
+  0.5_f32 * x * (1.0_f32 + Math.tanh(0.7978845608028654_f32 * x * (1.0_f32 + 0.044715_f32 * x * x)))
+end
+
 model = ENV["QWEN35_MODEL"]? || DEFAULT_MODEL
 layer = 0
 seed = 23_u64
@@ -137,15 +203,17 @@ tokens = 1
 batched = false
 residual_add = false
 q6_tbatch4 = false
+activation = "silu"
 
 OptionParser.parse do |p|
-  p.banner = "Usage: cuda_ffn_sequence_probe [--model PATH] [--layer N] [--seed N] [--reps N] [--warmup N] [--tokens N] [--batched] [--residual-add] [--q6-tbatch4]"
+  p.banner = "Usage: cuda_ffn_sequence_probe [--model PATH] [--layer N] [--seed N] [--reps N] [--warmup N] [--tokens N] [--activation silu|gelu] [--batched] [--residual-add] [--q6-tbatch4]"
   p.on("--model PATH", "Qwen Q4_K_M GGUF model path") { |v| model = v }
   p.on("--layer N", "Layer index") { |v| layer = v.to_i }
   p.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
   p.on("--reps N", "Timed FFN sequence launches") { |v| reps = v.to_i }
   p.on("--warmup N", "Untimed warmup FFN sequence launches") { |v| warmup = v.to_i }
   p.on("--tokens N", "Number of independent FFN rows to run") { |v| tokens = v.to_i }
+  p.on("--activation NAME", "FFN activation: silu for Qwen, gelu for Gemma4") { |v| activation = v }
   p.on("--batched", "Use batched Q4/Q6 GEMV kernels for all rows") { batched = true }
   p.on("--residual-add", "Use down+residual add kernels to mirror the recurrent runner FFN tail") { residual_add = true }
   p.on("--q6-tbatch4", "Use the experimental weight-stationary 4-token Q6 down+add kernel") { q6_tbatch4 = true }
@@ -157,6 +225,7 @@ raise "layer must be non-negative" unless layer >= 0
 raise "reps must be positive" unless reps > 0
 raise "warmup must be non-negative" unless warmup >= 0
 raise "tokens must be positive" unless tokens > 0
+raise "activation must be silu or gelu, got #{activation.inspect}" unless {"silu", "gelu"}.includes?(activation)
 raise "--q6-tbatch4 requires --batched --residual-add" if q6_tbatch4 && !(batched && residual_add)
 raise "--q6-tbatch4 requires --tokens to be a multiple of 4" if q6_tbatch4 && tokens % 4 != 0
 
@@ -188,7 +257,11 @@ tokens.times do |tok|
   x_row = x[tok * hidden, hidden]
   gate_cpu = ML::GGUF::QuantMatmul.matmul_add(x_row, 1, hidden, gate_raw, ML::GGUF::TensorType::Q4_K, ffn_dim, zero_ffn)
   up_cpu = ML::GGUF::QuantMatmul.matmul_add(x_row, 1, hidden, up_raw, ML::GGUF::TensorType::Q4_K, ffn_dim, zero_ffn)
-  combined_cpu = Array(Float32).new(ffn_dim) { |i| silu(gate_cpu[i]) * up_cpu[i] }
+  combined_cpu = if activation == "gelu"
+                   Array(Float32).new(ffn_dim) { |i| gelu(gate_cpu[i]) * up_cpu[i] }
+                 else
+                   Array(Float32).new(ffn_dim) { |i| silu(gate_cpu[i]) * up_cpu[i] }
+                 end
   residual_row = residual_add ? residual[tok * hidden, hidden] : zero_hidden
   out_row = ML::GGUF::QuantMatmul.matmul_add(combined_cpu, 1, ffn_dim, down_raw, ML::GGUF::TensorType::Q6_K, hidden, residual_row)
   hidden.times { |i| out_cpu[tok * hidden + i] = out_row[i] }
@@ -235,7 +308,8 @@ begin
   cuda! LibCUDAFFN.cuModuleGetFunction(pointerof(q6_add_fn), q6_mod, "q6_k_gemv_add_warp4_f32"), "cuModuleGetFunction(q6 add)"
   cuda! LibCUDAFFN.cuModuleGetFunction(pointerof(q6_add_batched_fn), q6_mod, "q6_k_gemv_add_warp4_f32_batched"), "cuModuleGetFunction(q6 add batched)"
   cuda! LibCUDAFFN.cuModuleGetFunction(pointerof(q6_add_tbatch4_fn), q6_mod, "q6_k_gemv_add_warp4_f32_tbatch4"), "cuModuleGetFunction(q6 add tbatch4)" if q6_tbatch4
-  cuda! LibCUDAFFN.cuModuleGetFunction(pointerof(act_fn), act_mod, "swiglu_f32"), "cuModuleGetFunction(swiglu)"
+  act_kernel = activation == "gelu" ? "gelu_mul_f32" : "swiglu_f32"
+  cuda! LibCUDAFFN.cuModuleGetFunction(pointerof(act_fn), act_mod, act_kernel), "cuModuleGetFunction(#{act_kernel})"
 
   d_x = d_gate_w = d_up_w = d_down_w = d_gate = d_up = d_combined = d_residual = d_out = 0_u64
   {bytesize_f32(tokens * hidden), gate_raw.size.to_u64, up_raw.size.to_u64, down_raw.size.to_u64,
@@ -319,7 +393,7 @@ begin
       cuda! LibCUDAFFN.cuLaunchKernel(q4_batched_fn, q4_grid * tokens_u32, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
         0_u32, Pointer(Void).null, q4_up_params, Pointer(Void*).null), "q4 up batched"
       cuda! LibCUDAFFN.cuLaunchKernel(act_fn, act_grid_all, 1_u32, 1_u32, act_block, 1_u32, 1_u32,
-        0_u32, Pointer(Void).null, act_params, Pointer(Void*).null), "swiglu batched"
+        0_u32, Pointer(Void).null, act_params, Pointer(Void*).null), "#{activation} batched"
       if residual_add
         if q6_tbatch4
           groups = tokens // 4
@@ -352,7 +426,7 @@ begin
         cuda! LibCUDAFFN.cuLaunchKernel(q4_fn, q4_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
           0_u32, Pointer(Void).null, q4_up_params, Pointer(Void*).null), "q4 up"
         cuda! LibCUDAFFN.cuLaunchKernel(act_fn, act_grid, 1_u32, 1_u32, act_block, 1_u32, 1_u32,
-          0_u32, Pointer(Void).null, act_params, Pointer(Void*).null), "swiglu"
+          0_u32, Pointer(Void).null, act_params, Pointer(Void*).null), activation
         if residual_add
           cuda! LibCUDAFFN.cuLaunchKernel(q6_add_fn, q6_grid, 1_u32, 1_u32, 128_u32, 1_u32, 1_u32,
             0_u32, Pointer(Void).null, q6_add_params, Pointer(Void*).null), "q6 down add"
@@ -384,6 +458,7 @@ begin
   puts "hidden=#{hidden}"
   puts "ffn_dim=#{ffn_dim}"
   puts "tokens=#{tokens}"
+  puts "activation=#{activation}"
   puts "batched=#{batched}"
   puts "residual_add=#{residual_add}"
   puts "q6_tbatch4=#{q6_tbatch4}"
