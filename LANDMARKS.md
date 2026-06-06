@@ -22938,3 +22938,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: cross-repo provider boundary where prior fake-wrapper specs could still hide real wrapper/profile integration defects. Transport: CrystalBall messages/tools -> CogniGemma env contract -> `gemma4_generate` wrapper -> profiler native Gemma tool corridor -> sentinel JSON -> `ToolResponse`. Legal move: validate the whole corridor sequentially without changing model kernels or touching unrelated CrystalBall state. Potential descends in `(cross_repo_contract_gap, fake_spec_only_risk, sentinel_parse_risk, remaining_product_integration_work)`. Recompute safety: process errors remain fail-closed in the provider; the smoke proves only the finite tool path, not broad tool grammar or TUI UX.
 **boundary:** This is a structured-tool integration smoke, not a performance or quality benchmark. The next product gate is running the real `crystal_ball` text harness/ReAct flow with `--provider cogni-gemma`, then measuring cold/hot pp/tg through the provider path separately.
+
+#### [LM-COGNIGRAPH-057] Full CrystalBall CogniGemma harness needs context sizing and tool-surface control
+**context:** ml / CogniGraph / Gemma4 / CrystalBall harness / structured tools / prompt-shape / LTP-WBA
+**state:** provider max-seq bug fixed; full 16-tool harness smoke refuted as unsafe default gate
+
+- claim: "The first real CrystalBall harness smoke with `--provider cogni-gemma` failed before generation because the provider relied on the Gemma profiler's `max_seq=1024` default. CrystalBall's system prompt plus tool declarations exceed that boundary."
+  source: `/tmp/cb_cogni_gemma_harness_smoke.log` and `/tmp/cb_cogni_gemma_harness_smoke2.log` on 2026-06-06, both showing `Unhandled exception: max-seq too small` from `gemma4_metal_decode_profile.cr:659`.
+  verified_at: 2026-06-06
+  decay_trigger: CrystalBall prompt/tool surface rewrite, provider env contract rewrite, or profiler max-seq default change
+  trust: {F:0.84,G:0.20,R:0.82}
+
+- claim: "CrystalBall commit `310bb6b fix: size CogniGemma provider context` now forwards `GEMMA4_MAX_SEQ` from the provider, defaulting to `8192`, with fake-wrapper spec coverage and root no-codegen build coverage."
+  source: `/Users/sergey/Projects/Crystal/crystal_ball` commit `310bb6b`; checks `../cogni-ml/scripts/run_safe.sh crystal 180 8192 spec spec/llm/cogni_gemma_spec.cr --error-trace` and `../cogni-ml/scripts/run_safe.sh crystal 240 12288 build --no-codegen src/crystal_ball.cr --error-trace`.
+  verified_at: 2026-06-06
+  decay_trigger: CogniGemma provider env contract rewrite or wrapper max-seq CLI rewrite
+  trust: {F:0.86,G:0.26,R:0.84}
+
+- claim: "A full 16-tool ReAct harness smoke with explicit `CB_COGNI_GEMMA_MAX_SEQ=16384` reached the profiler with `--max-seq 16384`, but the prompt was extremely large and the run was terminated to avoid memory-pressure risk. The process command showed all 16 tool declarations and `--constrained-gemma-tool-finite-call`, confirming this is now a prompt/tool-surface and controller-policy issue, not just max-seq forwarding."
+  source: process inspection during `/tmp/cb_cogni_gemma_harness_smoke4.log` run on 2026-06-06; run was killed intentionally after sustained activity and memory-pressure concern.
+  verified_at: 2026-06-06
+  decay_trigger: CrystalBall tool registry shrink, Gemma provider tool filtering, free-form string controller implementation, or prompt-cache/session prompt strategy change
+  trust: {F:0.76,G:0.16,R:0.74}
+
+**LTP/WBA:** Window: full CrystalBall harness prompt with broad tool schemas. Transport: system prompt + 16 tool declarations -> Gemma native prompt -> profiler max-seq/KV allocation corridor -> tool-controller route. The legal Spike was fixing the too-small provider max-seq boundary. The attempted Ladder to full 16-tool harness is sticky: it increases memory pressure and forces the finite-tool corridor when broad tools contain incidental enum/bool parameters. Potential after recompute is worse in `(memory_pressure, prompt_tokens, controller_conflict_count, remaining_work)`, so promotion is illegal.
+**decision:** Keep `8192` provider default as a safe boundary fix. Do not use full 16-tool ReAct as the next smoke until we add either (1) a tool-surface diet for CogniGemma, (2) a free-form string/path tool grammar corridor, or (3) a prompt-cache/session strategy that makes the large system+tool prefix cheap. Use small direct-provider finite-tool smokes for structured-call correctness meanwhile.
