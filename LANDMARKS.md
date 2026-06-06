@@ -23001,3 +23001,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: near-valid Gemma tool syntax missing sentinel wrappers. Transport: generated content -> bare-call recognizer -> CrystalBall `FunctionCall` -> tool executor. Legal Spike: parse only bounded `call:name{...}` shapes against the active tool allowlist, instead of retrying generation or broadening the prompt. Potential descends in `(sentinel_parse_gap, missed_tool_call_count, extra_generation_turns, remaining_tool_harness_work)`. Boundary safety: strict sentinel JSON remains primary; fallback only activates when parsed calls are empty and tool names match the active tools.
 **decision:** This gives CogniGemma a practical single-tool CrystalBall path. Full broad-tool ReAct still needs a tool-surface diet and safer multi-argument/free-form grammar, but `read_file` with compact prompt is now a verified useful corridor.
+
+#### [LM-COGNIGRAPH-060] CogniGemma tool diet makes broad CrystalBall harness prompts bounded
+**context:** ml / CogniGraph / Gemma4 / CrystalBall harness / tool-surface diet / LTP-WBA
+**state:** provider-local default diet implemented and smoke-tested
+
+- claim: "`CrystalBall::LLM::CogniGemma` now filters broad CrystalBall tool lists before sending them to Gemma. The default provider-local diet is read-only/free-form: `read_file`, `grep`, `glob`, and `list_directory`. The CrystalBall registry and other providers are unchanged."
+  source: `/Users/sergey/Projects/Crystal/crystal_ball` focused spec `../cogni-ml/scripts/run_safe.sh crystal 180 8192 spec spec/llm/cogni_gemma_spec.cr --error-trace` on 2026-06-06 (`10 examples, 0 failures`).
+  verified_at: 2026-06-06
+  decay_trigger: CogniGemma provider tool adaptation rewrite, CrystalBall tool schema rewrite, or Gemma native tool grammar/controller rewrite
+  trust: {F:0.86,G:0.26,R:0.84}
+
+- claim: "The tool diet has explicit escape hatches: constructor-level `tool_allowlist` / `tool_diet_enabled`, plus env-level `CB_COGNI_GEMMA_TOOL_ALLOWLIST`, `CB_COGNI_GEMMA_TOOL_DIET_OFF=1`, or `CB_COGNI_GEMMA_FULL_TOOLS=1`."
+  source: focused provider specs covering default diet, explicit allowlist, and disabled diet on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: provider initializer/env contract rewrite
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "A broad CrystalBall harness smoke without `--allow-tools` no longer requires the old full-tool prompt workaround. The harness still reported 16 internal tools, but CogniGemma produced a valid `read_file({path: docs/cogni_qwen_harness.md})` call and CrystalBall executed it, then finished with `Done.`"
+  source: `GEMMA4_PROFILE_BIN=/tmp/gemma4_native_tool_diag ../cogni-ml/scripts/run_safe.sh crystal 600 32768 run src/harness.cr -- --provider cogni-gemma --max-turns 1 --llm-max-tokens 64 --no-rehydration --auto-approve-safe "Use read_file to inspect docs/cogni_qwen_harness.md, then stop."` on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: CrystalBall harness prompt/tool policy rewrite, CogniGemma compact prompt rewrite, Gemma profile binary/model change, or provider tool-diet disabled
+  trust: {F:0.82,G:0.18,R:0.80}
+
+**LTP/WBA:** Window: broad CrystalBall tool surface previously forced huge Gemma prompts and accidental finite-tool controller conflicts. Transport: CrystalBall tool registry -> CogniGemma provider-local active-tool subset -> Gemma wrapper prompt -> parsed tool call -> CrystalBall executor. Legal Spike: remove unsupported/high-tax tools from the Gemma transport boundary while preserving the external harness tool registry and exact tool executor boundary. Potential descends in `(prompt_tokens, max_seq_pressure, finite_controller_conflict_count, sticky_full_tool_runs, remaining_harness_work)`. Recompute safety: broad harness still owns 16 tools, but CogniGemma's active transport is bounded; full-tool experiments remain available only through explicit overrides.
+**decision:** Use the default diet for product harness smokes. Treat full 16-tool Gemma ReAct as an experiment requiring `CB_COGNI_GEMMA_FULL_TOOLS=1` plus separate max-seq and memory-pressure guards.
