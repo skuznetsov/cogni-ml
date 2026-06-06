@@ -22316,3 +22316,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The window is a repeated/known Gemma output span. The corridor is a session+prompt certificate carrying prompt ids, output ids, generated text, and exact-known-span validation. The legal move is to skip model work or later replay a known body-chain only when the certificate validates. Potential descends as `(known_span_wall_work, cache_miss_count, sync_boundary_count, remaining_output_tokens)` without crossing exactness boundaries. The dual frame is normal Gemma decode when the certificate is absent or invalid.
 **boundary:** This does not yet accelerate first-run Gemma tg/pp. It enables the exact product-cache path and future known-token body-chain wiring; fresh timing is required after generation harness integration.
+
+#### [LM-COGNIGRAPH-031] Gemma direct-output certificates have a reusable serving route
+**context:** ml / CogniGraph / Gemma4 / serving route / session cache / LTP-WBA
+**state:** direct-output consumer implemented; continuation-state route intentionally unsupported
+
+- claim: "`Gemma4ServingRoute.serve_exact_cached_span` consumes Gemma direct-output certificates before metadata fallback, validates exact-known-span metadata when no direct certificate exists, and fails closed on token mismatch or unsupported continuation-state requests."
+  source: `scripts/run_safe.sh crystal 120 4096 build --no-codegen spec/gemma4_serving_route_spec.cr --error-trace`; `scripts/run_safe.sh crystal 180 4096 spec spec/gemma4_serving_route_spec.cr --error-trace` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma serving route rewrite, prompt-cache certificate rewrite, or CogniGemma integration changes
+  trust: {F:0.86,G:0.28,R:0.86}
+
+**LTP/WBA:** The window is a valid Gemma direct-output certificate for a repeated session/prompt span. The corridor is bounded by prompt text, session id, tokenizer id, output token count, and exact-known-span hashes. The legal Spike is direct token emission with no model work; if the certificate is absent, the route can only emit via exact metadata fallback. Continuation state remains a dual-frame fallback to normal decode until a validated Gemma state replay corridor exists.
+**boundary:** This is the reusable consumer substrate. It still needs CogniGemma/crystal_ball or CLI integration before it changes end-user latency.
