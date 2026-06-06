@@ -23262,3 +23262,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: Gemma full-attention projection+norm semantic trap. Transport: hidden rows -> input RMSNorm -> Q/K Q4 GEMV -> fork raw K into weighted K norm and plain V norm -> CPU Q/K/V certificate. Legal Diamond: normalize the missing-V conflict locally instead of faking an `attn_v` tensor or treating full layers like SWA layers. Potential descends in `(K_as_V_uncertainty, semantic_conflict_count, one_layer_cuda_risk, remaining_attention_work)`. Recompute safety: this stops before RoPE and cache writes, so it certifies only the projection+norm boundary.
 **decision:** CogniGemma CUDA has verified SWA and full-attention projection+norm corridors. Next exact slice should add RoPE for Q/K and KV-cache writes, then attention context. The first one-layer runner can branch by `hp.sliding_window?` only after both RoPE/cache paths are verified.
+
+#### [LM-COGNIGEMMA-CUDA-ROPE-001] CUDA precomputed-table RoPE matches Gemma4 CPU reference
+**context:** ml / CogniGemma / CUDA / RoPE / SWA and full attention / LTP-WBA
+**state:** implemented as bounded primitive probe
+
+- claim: "A CUDA NeoX RoPE kernel using precomputed F32 cos/sin tables matches Gemma4 CPU RoPE for SWA Q/K and full-attention Q/K, including Gemma4 full-layer frequency-factor tables."
+  source: remote RTX 5060 Ti run on 2026-06-06 using `bin/gemma4_cuda_rope_probe.cr --model /build/persisten/models/gemma4/gemma-4-12B-it-Q4_K_M.gguf --tokens 4 --pos 7 --reps 20 --warmup 3`. Results: `swa_q_rope` rows64 dim256 `0.0155ms`, `max_diff=1.1920929e-7`, `ok=true`; `swa_k_rope` rows32 dim256 `0.0106ms`, `ok=true`; `full_q_rope` rows64 dim512 with factor table `0.0256ms`, `ok=true`; `full_k_rope` rows4 dim512 with factor table `0.0068ms`, `ok=true`; `summary_ok=true`.
+  verified_at: 2026-06-06
+  decay_trigger: Gemma4 RoPE formula/frequency tensor rewrite, CUDA RoPE PTX rewrite, CPU RoPE reference rewrite, or full/SWA layer cadence change
+  trust: {F:0.86,G:0.30,R:0.84}
+
+**LTP/WBA:** Window: Gemma RoPE boundary after projection+norm corridors. Transport: normalized Q/K rows -> precomputed cos/sin table -> in-place NeoX rotation -> CPU RoPE certificate. Legal Spike: precompute trigonometric tables on the host/runner side and keep PTX to a simple local rotation, avoiding invalid/slow per-element transcendental work. Potential descends in `(RoPE_math_uncertainty, invalid_PTX_risk, semantic_glue_work, remaining_KV_work)`. Recompute safety: V remains outside this corridor because Gemma4 does not RoPE V.
+**decision:** CogniGemma CUDA now has verified projection, RMSNorm, K-as-V, GELU FFN, and RoPE primitives/corridors. Next exact slice is KV-cache write/read and attention context for SWA first, then full attention.
