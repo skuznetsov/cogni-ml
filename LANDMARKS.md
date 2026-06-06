@@ -22875,3 +22875,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: native tool-call close boundary. Transport: constrained literal frontier -> exact close token -> stop/handoff boundary -> adapter JSON. Legal move: terminate the decode corridor immediately when the certified literal completes, preventing unconstrained suffix generation while preserving exact emitted tokens and parser compatibility. Potential descends in `(unconstrained_suffix_risk, wasted_decode_tokens, adapter_content_noise, remaining_product_controller_work)`.
 **boundary:** This is a profiler/controller diagnostic. The next product step is wiring the same stop-at-close behavior into a real Gemma generation/CrystalBall provider route, plus a broader prompt/tool suite.
+
+#### [LM-COGNIGRAPH-054] Gemma profiler can emit harness-readable tool response JSON
+**context:** ml / CogniGraph / Gemma4 / structured function calling / harness integration / CrystalBall boundary
+**state:** opt-in JSON response emission implemented in profiler
+
+- claim: "`bin/gemma4_metal_decode_profile.cr` now supports `--tool-response-json simple|openai` and `GEMMA4_TOOL_RESPONSE_JSON`, emitting a `=== Tool response JSON ===` block by parsing generated Gemma-native tool calls through `Gemma4Chat`. Invalid formats fail closed."
+  source: `scripts/run_safe.sh crystal 180 8192 build --no-codegen bin/gemma4_metal_decode_profile.cr --error-trace`; invalid-format smoke `/tmp/gemma4_bad_tool_json.log` on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: profiler output contract rewrite, Gemma4Chat parser rewrite, or CrystalBall provider parser change
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "A stopped Gemma-native finite tool-call smoke emitted both the exact generated native call and harness-readable simple JSON: `{"content":null,"tool_calls":[{"name":"set_mode","arguments":{"mode":"write"}}]}`."
+  source: `/tmp/gemma4_tool_response_json_*/resident.log` on 2026-06-06; command used `--constrained-gemma-tool-finite-call --literal-stop-after-complete --tool-response-json simple`.
+  verified_at: 2026-06-06
+  decay_trigger: prompt/model change, tokenizer change, native tool syntax change, or adapter/parser rewrite
+  trust: {F:0.80,G:0.14,R:0.78}
+
+**LTP/WBA:** Window: stopped native tool-call output that previously required external log parsing. Transport: generated token trace -> Gemma native text -> `Gemma4Chat` parser -> typed JSON response block. Legal move: expose the existing parser boundary as opt-in machine-readable output while preserving diagnostic logs. Potential descends in `(harness_parse_gap, adapter_duplication, invalid_format_risk, remaining_provider_work)`.
+**boundary:** This still runs through the profiler binary. The next product step is a thin Gemma provider/CLI path that consumes this contract directly, plus broader tool prompts beyond one finite smoke.

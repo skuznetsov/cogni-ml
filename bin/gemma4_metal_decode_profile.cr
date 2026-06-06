@@ -21,6 +21,7 @@ profile = false
 profile_decode_only = false
 print_generated_ids = false
 print_generated_text = false
+tool_response_json_format = (ENV["GEMMA4_TOOL_RESPONSE_JSON"]? || "").downcase
 llama_tokenize_bin = ENV["LLAMA_TOKENIZE_BIN"]? || "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp/build/bin/llama-tokenize"
 decode_mode = "top1"
 decode_wave = ENV["GEMMA4_DECODE_WAVE_OFF"]? != "1"
@@ -68,6 +69,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--profile-decode-only", "Reset profile counters after prefill and report only generated-token work") { profile_decode_only = true }
   p.on("--print-generated-ids", "Print seed + generated token ids for parity diagnostics") { print_generated_ids = true }
   p.on("--print-generated-text", "Print conservative detokenized generated text; requires text tokenizer metadata") { print_generated_text = true }
+  p.on("--tool-response-json FORMAT", "Emit Gemma4 parsed tool response JSON: simple or openai") { |v| tool_response_json_format = v.downcase }
   p.on("--decode-wave", "Use one command buffer per decode token instead of one wait per layer (default)") { decode_wave = true }
   p.on("--decode-layerwise", "Use legacy one-wait-per-layer decode path") { decode_wave = false }
   p.on("--top1-wave-resident", "Fuse decode wave, output RMSNorm, and top1 head into one resident command buffer (default)") { top1_wave_resident = true }
@@ -128,6 +130,9 @@ OptionParser.parse(ARGV) do |p|
 end
 
 raise "model not found: #{model}" unless File.exists?(model)
+unless tool_response_json_format.empty? || tool_response_json_format == "simple" || tool_response_json_format == "openai"
+  raise "--tool-response-json must be simple or openai"
+end
 text_modes = [prompt_text, prompt_file, chat_user].count { |v| !v.nil? }
 raise "--prompt, --prompt-file, and --chat-user are mutually exclusive" if text_modes > 1
 if constrained_tool_call_prefix && constrained_literal_prefix
@@ -630,7 +635,7 @@ raise "Metal not available" unless ML::GGUF::Gemma4Metal.available?
 
 tokenizer = nil.as(ML::GGUF::Gemma4Tokenizer?)
 structured_literal_enabled = !constrained_literal_prefix.nil? || constrained_tool_call_prefix
-if prompt_text || print_generated_text || structured_literal_enabled
+if prompt_text || print_generated_text || structured_literal_enabled || !tool_response_json_format.empty?
   g = ML::GGUF::GGUFFile.new(model)
   tokenizer = ML::GGUF::Gemma4Tokenizer.from_gguf(g, model, llama_tokenize_bin)
   g.close
@@ -790,6 +795,17 @@ puts "literal_summary=forced_single:#{literal_forced_single_total},allowed_head:
 puts "token_trace=#{last_token_trace.join(',')}" if print_generated_ids
 if print_generated_text
   puts "generated_text=#{tokenizer.not_nil!.decode(last_token_trace).inspect}"
+end
+unless tool_response_json_format.empty?
+  generated_text = tokenizer.not_nil!.decode(last_token_trace)
+  calls = ML::GGUF::Gemma4Chat.parse_tool_calls(generated_text)
+  content = ML::GGUF::Gemma4Chat.content_without_tool_calls(generated_text)
+  puts "\n=== Tool response JSON ==="
+  if tool_response_json_format == "openai"
+    puts ML::GGUF::Gemma4Chat.tool_response_to_openai_json(calls, content, tools)
+  else
+    puts ML::GGUF::Gemma4Chat.tool_response_to_json(calls, content, tools)
+  end
 end
 unless cache_route_counts.empty?
   route_summary = cache_route_counts.map { |route, count| "#{route}:#{count}" }.join(",")
