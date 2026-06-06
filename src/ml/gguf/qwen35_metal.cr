@@ -968,9 +968,15 @@ module ML
         end
 
         private def self.q4_gemv_x16_enabled?(qw : QuantWeight?) : Bool
-          return true if ENV["QWEN35_Q4K_GEMV_X16"]? == "1"
-          return false unless patterns = ENV["QWEN35_Q4K_GEMV_X16_TAGS"]?
+          if value = ENV["QWEN35_Q4K_GEMV_X16"]?
+            return true if value == "1"
+            return false if value == "0"
+          end
+          return false if ENV["QWEN35_Q4K_GEMV_X16_OFF"]? == "1"
+          return false if ENV["GEMMA4_Q4K_GEMV_X16_OFF"]? == "1"
           tag = normalized_route_tag(qw)
+          return true if tag.try(&.starts_with?("gemma4:"))
+          return false unless patterns = ENV["QWEN35_Q4K_GEMV_X16_TAGS"]?
           return false unless tag
 
           patterns.split(',').any? do |pattern|
