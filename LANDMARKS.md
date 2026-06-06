@@ -22053,3 +22053,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The tag selector made the local window precise, and recomputation showed the proposed `ffn_gate/up` x16 move does not lower the corridor potential. This is a useful refutation because it separates the tool from the route: route-tag transport is legal, but this specific move is not promotable.
 **boundary:** Do not default x16 for Gemma `ffn_gate/up` based on logical dominance. Future route-tag experiments should test `ffn_down`, attention projections, or composite graph routes separately with ABBA wall checks.
+
+### [LM-COGNIGRAPH-020] Gemma ffn_down-only Q4 x16 is not a stable decode win
+**context:** ml / CogniGraph / Gemma4 / Q4_K x16 / route-tag selector / ffn_down / LTP-WBA refutation
+**state:** refuted for promotion; keep only as experimental selector lane
+
+- claim: "After rejecting a contaminated run where default Gemma body decode collapsed to ~11 tok/s, a quiet-host ABBA recovered the normal corridor and showed only near-flat short-run behavior for `QWEN35_Q4K_GEMV_X16_TAGS=gemma4:blk.*.ffn_down.weight`: default/down/default/down p50 tok/s was `30.017 / 30.032 / 29.740 / 30.399`."
+  source: guarded logs `/tmp/gemma4_x16down_quiet_{default1,down1,default2,down2}.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host rerun contradiction, Q4 x16 kernel rewrite, Gemma body-chain scheduler rewrite, or route-tag policy rewrite
+  trust: {F:0.82,G:0.14,R:0.80}
+
+- claim: "A longer quiet-host gen128 confirmation refuted ffn_down-only Q4 x16 as a stable speed route: default `29.094 tok/s` versus ffn_down-tagged x16 `24.458 tok/s`."
+  source: guarded logs `/tmp/gemma4_x16down_quiet_g128_{default,down}.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host ABBA contradiction, Q4 x16 kernel rewrite, or model/op-specific Q4 repack rewrite
+  trust: {F:0.84,G:0.18,R:0.82}
+
+**LTP/WBA:** The local ffn_down window was large enough to test, but longer-corridor recomputation increased wall time. This fails recompute safety: a short near-flat move did not descend under larger area. The legal outcome is a refutation, not a promotion.
+**boundary:** Do not default x16 for Gemma `ffn_down`. Future work should pivot from per-op x16 lane retunes to graph-level scheduling/fusion or a different Q4/Q6 kernel family with whole-corridor ABBA.
