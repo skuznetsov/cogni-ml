@@ -23210,3 +23210,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: Gemma FFN body after primitive GEMV compatibility was verified. Transport: normalized hidden row(s) -> Q4 gate/up GEMV -> GELU multiply -> Q6 down GEMV -> CPU parity certificate. Legal Diamond: share the existing Qwen FFN probe but make activation explicit (`silu|gelu`) so Qwen and Gemma corridors do not silently alias different math. Potential descends in `(activation_boundary_uncertainty, FFN_runner_work, remaining_full_layer_work)`. Recompute safety: default activation remains `silu`, so Qwen probe behavior is preserved unless `--activation gelu` is requested.
 **decision:** CogniGemma CUDA can build its first one-layer runner around this FFN corridor. The remaining next-layer work is attention/projection/norm/KV semantics plus residual/layer-scale wiring; do not rewrite FFN quant primitives before a full-layer attribution says FFN is the active CUDA bottleneck.
+
+#### [LM-COGNIGEMMA-CUDA-ATTN-PROJ-001] Gemma4 CUDA attention projection tensors preserve CPU-reference GEMV parity
+**context:** ml / CogniGemma / CUDA / attention projection / primitive parity
+**state:** implemented as optional primitive probe coverage
+
+- claim: "Representative Gemma4 SWA and full-attention projection tensors are layout-compatible with the existing CUDA Q4_K/Q6_K GEMV kernels."
+  source: remote RTX 5060 Ti run on 2026-06-06 using `bin/gemma4_cuda_primitive_probe.cr --model /build/persisten/models/gemma4/gemma-4-12B-it-Q4_K_M.gguf --reps 10 --warmup 2 --include-attn`. SWA layer0 results: `attn_q` Q4_K `3840x4096` `0.037ms`, `ok=true`; `attn_k` Q4_K `3840x2048` `0.021ms`, `ok=true`; `attn_v` Q6_K `3840x2048` `0.019ms`, `ok=true`; `attn_output` Q4_K `4096x3840` `0.037ms`, `ok=true`. Full layer5 results: `attn_q` Q4_K `3840x8192` `0.070ms`, `ok=true`; `attn_k` Q4_K `3840x512` `0.007ms`, `ok=true`; `attn_output` Q4_K `8192x3840` `0.072ms`, `ok=true`. All cosine checks were `1.0` with max diffs below `3e-6`.
+  verified_at: 2026-06-06
+  decay_trigger: Gemma4 projection qtype/layout change, CUDA Q4/Q6 PTX rewrite, CPU quant matmul reference rewrite, or Gemma4 full/SWA layer cadence rewrite
+  trust: {F:0.86,G:0.32,R:0.84}
+
+**LTP/WBA:** Window: attention projection GEMV, intentionally before norm/RoPE/KV semantics. Transport: real SWA/full projection tensors -> CPU `QuantMatmul` -> CUDA Q4/Q6 GEMV -> parity certificate. Legal Ladder: extend primitive coverage from FFN/head to representative attention shapes without crossing the Gemma-specific semantic boundary. Potential descends in `(projection_layout_uncertainty, one_layer_cuda_risk, remaining_semantic_glue)`. Recompute safety: full layer5 has no V tensor, so `--include-attn` checks Q/K/output only and does not fake the K-as-V rule.
+**decision:** One-layer CogniGemma CUDA can reuse quant GEMV for all major projection shapes. Next required slice is semantic glue: RMSNorm kernels for full vectors and per-head Q/K/V, RoPE for SWA/full dims, K-as-V full-layer handling, attention context/KV write, residual/post norms, and layer-output scale.

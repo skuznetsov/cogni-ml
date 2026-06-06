@@ -136,13 +136,15 @@ seed = 23_u64
 reps = 20
 warmup = 3
 include_head = false
+include_attn = false
 
 OptionParser.parse do |p|
-  p.banner = "Usage: gemma4_cuda_primitive_probe [--model PATH] [--seed N] [--reps N] [--warmup N] [--include-head]"
+  p.banner = "Usage: gemma4_cuda_primitive_probe [--model PATH] [--seed N] [--reps N] [--warmup N] [--include-attn] [--include-head]"
   p.on("--model PATH", "Gemma4 GGUF path") { |v| model = v }
   p.on("--seed N", "Random seed") { |v| seed = v.to_u64 }
   p.on("--reps N", "Timed kernel launches per tensor") { |v| reps = v.to_i }
   p.on("--warmup N", "Untimed warmup launches per tensor") { |v| warmup = v.to_i }
+  p.on("--include-attn", "Also run representative SWA/full attention projection tensors") { include_attn = true }
   p.on("--include-head", "Also run the large Q6_K tied embedding/head tensor") { include_head = true }
   p.on("-h", "--help", "Show help") { puts p; exit 0 }
 end
@@ -177,6 +179,19 @@ begin
     TensorCase.new("blk.0.ffn_gate.weight", ML::GGUF::TensorType::Q4_K, reps, warmup),
     TensorCase.new("blk.0.ffn_down.weight", ML::GGUF::TensorType::Q6_K, reps, warmup),
   ]
+  if include_attn
+    # SWA layer 0 has explicit V. Full-attention layer 5 has no V tensor and
+    # reuses K before divergent normalization, so only Q/K/output are checked.
+    cases.concat([
+      TensorCase.new("blk.0.attn_q.weight", ML::GGUF::TensorType::Q4_K, reps, warmup),
+      TensorCase.new("blk.0.attn_k.weight", ML::GGUF::TensorType::Q4_K, reps, warmup),
+      TensorCase.new("blk.0.attn_v.weight", ML::GGUF::TensorType::Q6_K, reps, warmup),
+      TensorCase.new("blk.0.attn_output.weight", ML::GGUF::TensorType::Q4_K, reps, warmup),
+      TensorCase.new("blk.5.attn_q.weight", ML::GGUF::TensorType::Q4_K, reps, warmup),
+      TensorCase.new("blk.5.attn_k.weight", ML::GGUF::TensorType::Q4_K, reps, warmup),
+      TensorCase.new("blk.5.attn_output.weight", ML::GGUF::TensorType::Q4_K, reps, warmup),
+    ])
+  end
   if include_head
     # This is the real tied LM-head corridor for Gemma4 Q4_K_M; keep it opt-in
     # because it uploads ~826MB of raw weights.
