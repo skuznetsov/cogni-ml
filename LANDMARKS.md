@@ -22894,3 +22894,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: stopped native tool-call output that previously required external log parsing. Transport: generated token trace -> Gemma native text -> `Gemma4Chat` parser -> typed JSON response block. Legal move: expose the existing parser boundary as opt-in machine-readable output while preserving diagnostic logs. Potential descends in `(harness_parse_gap, adapter_duplication, invalid_format_risk, remaining_provider_work)`.
 **boundary:** This still runs through the profiler binary. The next product step is a thin Gemma provider/CLI path that consumes this contract directly, plus broader tool prompts beyond one finite smoke.
+
+#### [LM-COGNIGRAPH-055] Gemma generation wrapper exposes the structured-tool profiler contract
+**context:** ml / CogniGraph / Gemma4 / structured function calling / harness integration / CrystalBall boundary / LTP-WBA
+**state:** thin CLI wrapper implemented and smoke-tested
+
+- claim: "`bin/gemma4_generate.cr` now provides a harness-facing wrapper around a compiled `gemma4_metal_decode_profile` binary. It accepts positional prompt/generation arguments plus `GEMMA4_MESSAGES_JSON`, `GEMMA4_TOOLS_JSON`, `GEMMA4_TOOL_RESPONSE_JSON`, and `GEMMA4_PROFILE_BIN`, then forwards to the profiler with row prefill, decode wave, resident top1, printed generated text, and the existing `=== Tool response JSON ===` sentinel."
+  source: `scripts/run_safe.sh crystal 180 8192 build --no-codegen bin/gemma4_generate.cr --error-trace` on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: profiler CLI contract rewrite, Gemma4Chat renderer/parser rewrite, or CrystalBall provider parser change
+  trust: {F:0.84,G:0.26,R:0.82}
+
+- claim: "Dry-run smokes prove the wrapper maps finite tool schemas to `--constrained-gemma-tool-finite-call --literal-stop-after-complete`, while free-form string tools are rendered as native Gemma declarations without falsely enabling the finite constrained corridor."
+  source: guarded dry-run commands on 2026-06-06 using `set_mode(enum/bool)` and `read_file(path:string)` tools.
+  verified_at: 2026-06-06
+  decay_trigger: wrapper argument builder rewrite or Gemma finite-option builder rewrite
+  trust: {F:0.82,G:0.22,R:0.80}
+
+- claim: "A sequential model smoke through the wrapper and `/tmp/gemma4_native_tool_diag` emitted the stopped native Gemma tool call and harness-readable JSON `{"content":null,"tool_calls":[{"name":"set_mode","arguments":{"mode":"write"}}]}` with exit code 0. Measured row on the non-quiet host: prefill `2391.841ms`, decode `32.914ms/token`, decoded tokens `28`."
+  source: `/tmp/gemma4_generate_wrapper_smoke.log` on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: model/prompt/tokenizer change, profile binary rebuild, native tool syntax change, or quiet-host contradiction
+  trust: {F:0.78,G:0.12,R:0.76}
+
+**LTP/WBA:** Window: verified Gemma-native tool-call profiler contract that was still too diagnostic for harness use. Transport: OpenAI/CrystalBall messages/tools/env -> Gemma prompt/native finite frontier -> profiler sentinel JSON -> provider-readable output. Legal move: wrap and normalize the command boundary without changing kernel semantics or parser behavior. Potential descends in `(provider_contract_gap, wrong_syntax_risk, finite_controller_tax, harness_parse_gap, remaining_provider_work)`. Recompute safety: finite tools reduce the corridor; free-form tools stay in the unconstrained dual frame instead of forcing an invalid finite path.
+**boundary:** This is a CLI/provider contract slice, not a public performance claim. The wrapper still depends on a separately compiled profiler binary and keeps diagnostic profiler output. Next step is a CrystalBall `CogniGemma` provider or a cleaner native Gemma generation binary that owns the same contract without diagnostic noise.
