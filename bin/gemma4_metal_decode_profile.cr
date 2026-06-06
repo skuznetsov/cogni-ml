@@ -273,6 +273,31 @@ def forward_allowed_top1(weights : ML::GGUF::Gemma4Weights, token_id : Int32, po
   best_id.to_i32
 end
 
+def top1_allowed_from_hidden(weights : ML::GGUF::Gemma4Weights,
+                             hidden : Array(Float32),
+                             allowed_ids : Array(Int32),
+                             resident_allowed_head : Bool = false) : Int32
+  raise "top1_allowed_from_hidden requires at least one allowed id" if allowed_ids.empty?
+  if resident_allowed_head
+    if top1 = ML::GGUF::Qwen35Metal.rmsnorm_project_top1_allowed_ids(
+         hidden, weights.output_norm, weights.token_embd, weights.hparams.rms_eps, allowed_ids)
+      return top1[0].to_i32
+    end
+  end
+
+  logits = ML::GGUF::Gemma4Metal.forward_logits_from_hidden(weights, hidden).not_nil!
+  best_id = allowed_ids[0]
+  best = logits[best_id]
+  allowed_ids.each do |id|
+    value = logits[id]
+    if value > best
+      best = value
+      best_id = id
+    end
+  end
+  best_id.to_i32
+end
+
 def synthetic_decode_token(i : Int32) : Int32
   ((i * 13 + 11751) % 32000).to_i32
 end
@@ -329,6 +354,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
   cache_route = prompt_cache_store ? "miss" : "none"
   cache_restore_ms = 0.0
   save_cache_after_head = false
+  literal_remaining = literal_remaining_start.dup
   if seed = decode_only_seed
     next_id = seed.to_i32
     cache_route = "decode_only"
@@ -368,8 +394,17 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
     hidden = prefill_prompt_hidden(weights, prompt, state, prefill_mode, prefill_chunk, stop_layer, prefill_head)
   end
   if prefill_head && next_id < 0
-    logits = ML::GGUF::Gemma4Metal.forward_logits_from_hidden(weights, hidden).not_nil!
-    next_id = top1_id(logits)
+    if decode_mode == "literal" && !literal_remaining.empty?
+      index = literal_index.not_nil!
+      dynamic_allowed = index.literal_frontier_ids(literal_remaining)
+      raise "literal first-token frontier is empty for #{literal_remaining.inspect}" if dynamic_allowed.empty?
+      next_id = top1_allowed_from_hidden(weights, hidden, dynamic_allowed, top1_wave_resident)
+      emitted = index.text_for_id(next_id)
+      literal_remaining = gemma4_advance_literal_options(literal_remaining, emitted)
+    else
+      logits = ML::GGUF::Gemma4Metal.forward_logits_from_hidden(weights, hidden).not_nil!
+      next_id = top1_id(logits)
+    end
   end
   if save_cache_after_head
     prompt_cache_store.not_nil!.save_resident_state(
@@ -392,7 +427,6 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
   decode_t0 = Time.instant
   cur = prefill_head ? next_id : synthetic_decode_token(0)
   token_trace = [cur]
-  literal_remaining = literal_remaining_start.dup
   i = 0
   while i < generate
     pos = decode_only_seed ? i.to_i32 : (prompt.size + i).to_i32

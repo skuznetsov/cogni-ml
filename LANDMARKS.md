@@ -22569,3 +22569,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Treat multimodal support as a separate corridor from current text pp/tg optimization. Window: image input placeholder / mmproj file. Transport: image preprocessing -> Gemma4 vision encoder/projector -> injected embedding span -> existing text decoder. Legal move for CogniGemma is to preserve the text decoder boundary and add a verified embedding-injection lane, not to entangle MM work with current text-decode head/FFN scheduling. Potential should be `(missing_oracle_parity, projector_embedding_error, injection_boundary_conflict, remaining_MM_steps)` until text output matches llama.cpp on a small image prompt.
 **boundary:** Do not claim CogniGemma multimodal support yet. First gate is a local llama.cpp MM smoke with the 12B text GGUF plus `mmproj-gemma-4-12B-it-BF16.gguf`; second gate is inventory/loading of mmproj tensors; third gate is projector embedding parity and decoder injection.
+
+#### [LM-COGNIGRAPH-042] Gemma literal diagnostic now constrains the first generated token
+**context:** ml / CogniGraph / Gemma4 / constrained literal frontier / first-token boundary / LTP-WBA
+**state:** diagnostic boundary repaired; speed-positive decode span, prefill neutral/noisy
+
+- claim: "`bin/gemma4_metal_decode_profile.cr --constrained-literal-prefix` now constrains the first generated token from the prompt hidden state instead of starting the literal corridor only after an unconstrained seed token. The route uses tokenizer-derived frontier ids and either resident allowed-head selection or fallback full-head filtering from the prompt hidden."
+  source: `scripts/run_safe.sh crystal 180 8192 build --no-codegen bin/gemma4_metal_decode_profile.cr --error-trace` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma decode profiler prefill-head rewrite, literal frontier rewrite, or resident allowed-head helper rewrite
+  trust: {F:0.84,G:0.22,R:0.82}
+
+- claim: "For literal prefix ` hello`, both resident and fallback routes now start with constrained token `236743` and emit ` hello` for `gen=3`, rather than the previous unconstrained `. hello` shape. Token trace matched exactly: `236743,499,236752,844`."
+  source: `/tmp/gemma4_literal_first_1780713720/{resident_gen3.log,fallback_gen3.log}` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: tokenizer changes, prompt/model change, or constrained first-token rewrite
+  trust: {F:0.82,G:0.12,R:0.78}
+
+- claim: "On the isolated `gen=3` literal span, resident allowed-head decode p50 was `36.806 ms/tok` vs fallback full-head filtering `40.804 ms/tok`, with identical text. Prefill p50 was neutral/noisy because first-token selection is included in prefill timing (`resident` roughly `193.795 ms`, fallback roughly `192.304 ms` p50 from the printed rows)."
+  source: `/tmp/gemma4_literal_first_1780713720/{resident_gen3.log,fallback_gen3.log}` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host contradiction, literal-prefix length change, controller integration, or timing-boundary rewrite
+  trust: {F:0.78,G:0.10,R:0.74}
+
+**LTP/WBA:** This repairs the boundary safety of LM-COGNIGRAPH-040. Window: finite literal prefix before any generated token. Transport: prompt hidden -> first-token frontier -> selected token -> remaining literal suffix -> decode frontier. Legal move: constrain first token without mutating KV state, then continue resident allowed-head decode. Potential descends in `(unconstrained_seed_conflict, frontier_vocab_rows, full_head_filter_tax, literal_suffix_remaining)`; the first component is now removed for the diagnostic.
+**boundary:** Still diagnostic, not production JSON/function-calling. Product promotion needs a grammar state machine that supplies certified frontiers for tool syntax and value spans, plus total wall timing with prefill/head boundaries separated.
