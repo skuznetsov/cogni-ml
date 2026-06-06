@@ -23148,3 +23148,15 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   trust: {F:0.82,G:0.18,R:0.80}
 
 **LTP/WBA:** Window was short-context Q4 GEMV row-lane utilization. Transport tried to carry each row through a half-warp corridor, doubling rows per CTA. Boundary safety held, but recomputed potential worsened: wall time increased even though local row grouping looked denser. The failed legal move indicates the dominant conflict is not simply rows-per-CTA; lane work, memory coalescing, and reduction overhead are earlier potential components. Do not retry half-warp Q4 with shared-memory reduction; only revisit if the reducer becomes warp-shuffle/native and ABBA shows global descent.
+
+#### [LM-CUDA-Q4-DUAL-SWIGLU-PIVOT-001] llama.cpp fusion suggests true dual-SwiGLU, not packed dual rows
+**context:** ml / CUDA / Qwen3.5 mixed-stack / FFN fusion / llama.cpp comparison / LTP-WBA
+**state:** active hypothesis; not implemented
+
+- claim: "The earlier recurrent FFN dual-kernel refutation does not cover llama.cpp-style `gate + up + GLU` fusion. Our `q4_k_dual_gemv_warp4_f32` packs gate/up rows into one larger output grid, so each row still computes one projection, does not reuse the activation vector across gate/up, and still materializes both `ffn_gate` and `ffn_up` before a separate `swiglu_probe`. llama.cpp's CUDA MMVQ path supports fusion arguments for `gate` and `glu_op`, allowing the quantized matvec corridor to emit the GLU result directly."
+  source: local source inspection on 2026-06-06: `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-cuda/ggml-cuda.cu` fusion caller around `gate + up + GLU`; `/Users/sergey/SrcArchives/AI/llama.cpp/ggml/src/ggml-cuda/mmvq.cu` fused `mul_mat_vec_q`; current project `src/ml/cuda/kernels/q4k_dual_gemv_probe.ptx` row-selection code and `src/ml/cuda/kernels/deltanet_step_probe.ptx` separate `swiglu_probe`.
+  verified_at: 2026-06-06
+  decay_trigger: FFN runner rewrite, true dual-SwiGLU kernel implementation, llama.cpp CUDA fusion rewrite, or Qwen weight layout change
+  trust: {F:0.74,G:0.32,R:0.74}
+
+**LTP/WBA:** Window: FFN gate/up/SwiGLU corridor, currently `q4 gate GEMV -> q4 up GEMV -> swiglu -> q6/q4 down`. Transport candidate: carry one normalized activation row through a true paired gate/up dot-product lane and emit `ffn_comb` directly. Legal move must preserve exact SwiGLU approximation already used by `swiglu_probe`, avoid materializing `ffn_gate`/`ffn_up`, and reduce recomputed wall rather than just kernel count. Prior packed-dual refutation remains valid only for the packed-row corridor; it does not refute true dual-SwiGLU.
