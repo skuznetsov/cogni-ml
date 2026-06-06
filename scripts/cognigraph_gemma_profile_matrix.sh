@@ -14,6 +14,7 @@ PREFILL_CHUNK=512
 TIMEOUT_SEC=420
 MAX_RSS_MB=8000
 RUN_TIMEOUT_MS=80000
+BODY_CHAIN="${GEMMA4_BODY_CHAIN:-1}"
 
 usage() {
   cat <<'USAGE'
@@ -29,6 +30,7 @@ Options:
   --gen N            Decode tokens for tg_body/top1 (default: 8)
   --max-seq N        KV max sequence length (default: 512)
   --prefill-chunk N  Row-prefill chunk (default: 512)
+  --body-chain N     Body-chain chunk for tg_body; default 1 for llama-bench parity
   --model PATH       Gemma4 GGUF path
   --profile-bin PATH Existing or output profile binary path
   --out-dir PATH     Output directory
@@ -41,6 +43,7 @@ while [[ $# -gt 0 ]]; do
     --gen) GEN="$2"; shift 2 ;;
     --max-seq) MAX_SEQ="$2"; shift 2 ;;
     --prefill-chunk) PREFILL_CHUNK="$2"; shift 2 ;;
+    --body-chain) BODY_CHAIN="$2"; shift 2 ;;
     --model) MODEL="$2"; shift 2 ;;
     --profile-bin) PROFILE_BIN="$2"; shift 2 ;;
     --out-dir) OUT_DIR="$2"; shift 2 ;;
@@ -84,7 +87,7 @@ GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 run_profile pp_body \
 
 run_profile tg_body \
   --tokens 42 --decode-only-seed 42 --generate "$GEN" --max-seq "$MAX_SEQ" --runs 1 --warmups 0 \
-  --prefill-mode rows --prefill-chunk "$PREFILL_CHUNK" --body-only --profile --profile-decode-only
+  --prefill-mode rows --prefill-chunk "$PREFILL_CHUNK" --body-only --body-chain "$BODY_CHAIN" --profile --profile-decode-only
 
 run_profile top1 \
   --tokens 42 --decode-only-seed 42 --generate "$GEN" --max-seq "$MAX_SEQ" --runs 1 --warmups 0 \

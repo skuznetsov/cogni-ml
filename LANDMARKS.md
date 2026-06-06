@@ -22261,3 +22261,15 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The window is a benchmark-accounting mismatch: a local graph-chain corridor reduced host syncs, but crossed the llama-bench boundary. The legal move is a Diamond normalization: default comparison route preserves per-token sync; chunked body-chain remains an explicit graph experiment. Potential descends as `(apples_mismatch, benchmark_claim_risk, sync_boundary_conflict, remaining_measurement_work)`.
 **boundary:** Treat prior Gemma tg rows with implicit `body_chain=8` as graph-chunk experiments, not apples-to-apples llama-bench tg promotion evidence. Re-run key Gemma pp/tg comparisons with default `native_body_chain=1` before public claims.
+
+#### [LM-COGNIGRAPH-029A] Gemma profile-matrix tg_body also uses body_chain=1 by default
+**context:** ml / CogniGraph / Gemma4 / profile matrix / benchmark accounting
+**state:** harness corrected
+
+- claim: "`scripts/cognigraph_gemma_profile_matrix.sh` now defaults its `tg_body` corridor to `BODY_CHAIN=${GEMMA4_BODY_CHAIN:-1}` and passes `--body-chain "$BODY_CHAIN"`; `--body-chain N` remains available for explicit graph-chunk profiling."
+  source: `bash -n scripts/cognigraph_gemma_profile_matrix.sh`; `scripts/cognigraph_gemma_profile_matrix.sh --help` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: profile-matrix rewrite or Gemma body-chain CLI rewrite
+  trust: {F:0.84,G:0.28,R:0.84}
+
+**boundary:** Profile atlases labeled `tg_body` should be generated with chain=1 unless the experiment explicitly studies chunked graph scheduling. Older implicit chain=8 `tg_body` matrices are graph-chunk evidence, not llama-bench-parity evidence.
