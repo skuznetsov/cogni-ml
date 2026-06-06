@@ -22644,3 +22644,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This is the correct Ladder form for finite grammar literals: singleton-token windows are transported as a contiguous body-state corridor, and the legal move batches body updates while carrying exact token/KV boundaries. Potential descends in `(head_calls, command_buffers, singleton_suffix_area, remaining_literal_tokens)`, but on short tool syntax the dominant body work still limits wall improvement.
 **boundary:** Keep as a diagnostic/default-on literal optimization. Do not claim broad Gemma decode acceleration. The next higher-leverage structured route needs longer deterministic spans, real JSON/tool grammar frontiers, and possibly body-chain integration into product constrained generation rather than one-off profiler literals.
+
+#### [LM-COGNIGRAPH-045] Longer Gemma tool-literal span refutes forced-span as a product-speed lever for current kernels
+**context:** ml / CogniGraph / Gemma4 / constrained tool syntax / forced spans / refutation / LTP-WBA
+**state:** refuted for current implementation on a longer deterministic tool prefix
+
+- claim: "A longer deterministic tool-call prefix did not benefit from forced-single or forced-span elimination under the current Gemma kernels. For prefix `<tool_call>\n<function=read_file>\n<parameter=path>\n` with `gen=32`, all three routes emitted identical token traces, but decode p50 was best with all forced optimizations off."
+  source: `/tmp/gemma4_literal_longspan_1780714306/{all_forced_off.log,span_off.log,span_on.log}` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: body-chain scheduler rewrite, allowed-head kernel rewrite, real grammar controller integration, or quiet-host contradiction
+  trust: {F:0.78,G:0.12,R:0.74}
+
+- claim: "Measured rows for the longer prefix: all forced off `29.510 ms/tok` (`allowed_head:66`), forced-single only `29.866 ms/tok` (`forced_single:24, allowed_head:42`), span-batched `29.985 ms/tok` (`span_batches:6, span_tokens:18`, plus `forced_single:6, allowed_head:42`)."
+  source: same logs under `/tmp/gemma4_literal_longspan_1780714306` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: same as above
+  trust: {F:0.78,G:0.12,R:0.74}
+
+**LTP/WBA:** This is a recompute-safety failure for the forced-span Ladder. Local potential components (`head_calls`, `allowed_rows_scanned`) descend, but recomputed wall does not. The likely reason is that the resident allowed-head over small frontiers is already cheap, while forced body-chain scheduling adds enough overhead or loses favorable wave shape.
+**boundary:** Keep forced-single/span controls for diagnostics, but do not product-promote forced-span batching as a speed path on Gemma without a new ABBA showing global descent. The better structured route is likely resident allowed-head with certified frontiers, not head elimination via body-chain, unless future kernel fusion makes body-chain cheaper.
