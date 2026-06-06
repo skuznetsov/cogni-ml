@@ -23088,3 +23088,34 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Short-context window remains GEMV/FFN bytes. Long-context window shifts to full-attention KV context transport. Legal next moves must be context-span aware: for ctx4096, reduce `(full_attn_context_reads, softmax/reduction_barriers, wall_time)` without increasing FFN/head/body regressions. Dual frame remains the current parallel full-attn kernel. Do not spend another branch on graph launch or simple recurrent FFN dual fusion for speed; current evidence marks those as low-leverage/refuted.
 **decision:** Next CUDA speed branch should split by context regime: (1) short ctx: new Q4/Q6 GEMV/FFN bandwidth idea only if it changes dataflow materially; (2) long ctx: inspect llama.cpp/vLLM attention kernels and design a CUDA full-attn decode kernel that reduces KV/context transport at ctx1024+.
+
+#### [LM-CUDA-LONGCTX-SPLITK-001] Split-K partial-softmax CUDA attention accelerates Qwen3.5 long-context decode
+**context:** ml / CUDA / Qwen3.5 mixed-stack / long-context full-attention decode / LTP-WBA
+**state:** implemented default-on for long context with kill switch
+
+- claim: "A split-K full-attention decode path that partitions the KV context, writes per-partition `(max, denom, partial V)` summaries, and combines them with stable log-sum-exp preserves Qwen3.5-9B top1 parity on CUDA."
+  source: remote RTX 5060 Ti runs on 2026-06-06. Forced split-K small-context five-layer read-logits preserved `ok=true`, `top1_gpu=top1_cpu=100253`; all-layer ctx1024 read-logits preserved `ok=true`, `top1_gpu=top1_cpu=47141` with logit values matching within float noise (`8.710705` vs `8.710712`).
+  verified_at: 2026-06-06
+  decay_trigger: full-attn PTX rewrite, KV cache layout change, q/gate layout change, CUDA driver/runtime change, or Qwen runner scheduling rewrite
+  trust: {F:0.84,G:0.22,R:0.82}
+
+- claim: "At ctx1024, split-K reduces full-Qwen3.5-9B CUDA profile wall from `37.303ms/token` to `32.172ms/token` with `chunk=256`, and reduces each full-attn decode phase from about `0.87ms` to about `0.232ms`."
+  source: sequential remote A/B on 2026-06-06: `--all-layers --tokens=1 --perf-only --skip-debug-readback --profile-phases --start-pos=1023 --max-seq=1024`, default vs `QWEN_CUDA_FULL_ATTN_SPLITK=1 QWEN_CUDA_FULL_ATTN_SPLITK_CHUNK=256`, both `ok=true`.
+  verified_at: 2026-06-06
+  decay_trigger: host load change, attention kernel rewrite, model qtype change, or benchmark harness rewrite
+  trust: {F:0.82,G:0.18,R:0.80}
+
+- claim: "At ctx4096, split-K reduces full-Qwen3.5-9B CUDA profile wall from `57.967ms/token` to `34.378ms/token` with `chunk=256`, and reduces each full-attn decode phase from about `3.45ms` to about `0.50ms`. Default-on policy with `chunk=512` measured `34.405ms/token`; kill switch `QWEN_CUDA_FULL_ATTN_SPLITK_OFF=1` restored `57.904ms/token`."
+  source: sequential remote A/B on 2026-06-06: `--all-layers --tokens=1 --perf-only --skip-debug-readback --profile-phases --start-pos=4095 --max-seq=4096`, split chunks `256/512/1024`, plus default-on and kill-switch checks, all `ok=true`.
+  verified_at: 2026-06-06
+  decay_trigger: host load change, attention kernel rewrite, model qtype change, long-context benchmark harness rewrite, or split-K default threshold/chunk change
+  trust: {F:0.84,G:0.20,R:0.82}
+
+- claim: "Semantic greedy gen16 at ctx1024 keeps the same generated top1 token sequence under split-K and improves wall from `30.203ms/token` to `25.126ms/token`."
+  source: remote sequential greedy loop A/B on 2026-06-06: `--all-layers --tokens=1 --perf-only --skip-debug-readback --greedy-loop-tokens=16 --greedy-loop-no-graph --start-pos=1023 --max-seq=2048`; both produced identical `top1_gpu=198,410,45736,6005,410,198,49732,220,10819,315,40409,198,12512,28743,28529,5205`, `ok=true`.
+  verified_at: 2026-06-06
+  decay_trigger: greedy-loop harness rewrite, decode scheduling rewrite, split-K threshold/chunk change, or model path change
+  trust: {F:0.82,G:0.18,R:0.80}
+
+**LTP/WBA:** Window: ctx1024+ full-attention KV corridor. Transport: context chunk -> per-chunk softmax certificate `(m_i, l_i, o_i)` -> stable reducer -> gated attention output. Legal Ladder: split the long KV span into bounded partitions while preserving exact q/gate/KV boundary and log-sum-exp semantics. Potential descends after recompute: at ctx4096 `(dominant_wait_bucket=full_attn_decode, tied_routes=8 full-attn layers, sync/conflict_count, remaining_ctx_rows)` fell from `57.967ms/token`/`~3.45ms per full-attn layer` to `34.378ms/token`/`~0.50ms per full-attn layer`. Recompute safety: short ctx remains on old path by threshold; `QWEN_CUDA_FULL_ATTN_SPLITK_OFF=1` is the dual-frame kill switch and restores old timing.
+**decision:** Keep split-K default-on for CUDA full-attn decode when `cache_len >= 1024`; tune chunk size and reduce scratch/score traffic next. Do not claim this solves short-context tg; short ctx remains a GEMV/FFN/head frontier.

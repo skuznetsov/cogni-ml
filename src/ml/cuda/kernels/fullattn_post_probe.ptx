@@ -521,6 +521,455 @@ A_DONE:
     ret;
 }
 
+
+// Split-K long-context GQA attention decode, stage 1.
+// Launch: grid=(tokens, n_head, num_chunks), block=(256).
+// Each CTA processes one context chunk and writes a numerically-stable partial
+// softmax summary: max, denom, and unnormalized weighted V output.
+.visible .entry full_attn_decode_cache_splitk_part_probe(
+    .param .u64 q_in,
+    .param .u64 k_cache,
+    .param .u64 v_cache,
+    .param .u64 scores,
+    .param .u64 partial_m,
+    .param .u64 partial_l,
+    .param .u64 partial_o,
+    .param .u32 n_head,
+    .param .u32 n_kv_head,
+    .param .u32 head_dim,
+    .param .u32 heads_per_group,
+    .param .u64 start_pos_ptr,
+    .param .u32 max_seq,
+    .param .f32 scale,
+    .param .u32 chunk_size,
+    .param .u32 num_chunks
+)
+{
+    .reg .pred %p<32>;
+    .reg .b32 %r<128>;
+    .reg .b64 %rd<128>;
+    .reg .f32 %f<56>;
+    .shared .align 4 .b8 SK_SH[1024];
+
+    ld.param.u64 %rd1, [q_in];
+    ld.param.u64 %rd3, [k_cache];
+    ld.param.u64 %rd4, [v_cache];
+    ld.param.u64 %rd5, [scores];
+    ld.param.u64 %rd6, [partial_m];
+    ld.param.u64 %rd7, [partial_l];
+    ld.param.u64 %rd8, [partial_o];
+    ld.param.u32 %r1, [n_head];
+    ld.param.u32 %r2, [n_kv_head];
+    ld.param.u32 %r3, [head_dim];
+    ld.param.u32 %r4, [heads_per_group];
+    ld.param.u64 %rd95, [start_pos_ptr];
+    ld.global.u32 %r5, [%rd95];
+    ld.param.u32 %r6, [max_seq];
+    ld.param.f32 %f1, [scale];
+    ld.param.u32 %r50, [chunk_size];
+    ld.param.u32 %r51, [num_chunks];
+
+    mov.u32 %r7, %ctaid.x;      // tok
+    mov.u32 %r8, %ctaid.y;      // q head
+    mov.u32 %r52, %ctaid.z;     // chunk
+    mov.u32 %r9, %tid.x;
+    mov.u32 %r10, %ntid.x;
+    setp.ge.u32 %p1, %r8, %r1;
+    @%p1 bra SK_DONE;
+    setp.ge.u32 %p2, %r52, %r51;
+    @%p2 bra SK_DONE;
+
+    add.u32 %r11, %r5, %r7;     // absolute position
+    setp.ge.u32 %p3, %r11, %r6;
+    @%p3 bra SK_DONE;
+    add.u32 %r12, %r11, 1;      // cache_len
+    mul.lo.u32 %r13, %r2, %r3;  // kv_dim
+    div.u32 %r14, %r8, %r4;     // kv_h
+    mul.lo.u32 %r15, %r7, %r1;
+    add.u32 %r16, %r15, %r8;    // token/head index
+    mul.lo.u32 %r17, %r16, %r3; // q/out base
+    mul.lo.u32 %r18, %r16, %r6; // scores base
+    mul.lo.u32 %r53, %r52, %r50; // chunk_start
+    add.u32 %r54, %r53, %r50;    // chunk_end candidate
+    setp.le.u32 %p4, %r54, %r12;
+    @%p4 bra SK_END_OK;
+    mov.u32 %r54, %r12;
+SK_END_OK:
+    mul.lo.u32 %r60, %r16, %r51;
+    add.u32 %r61, %r60, %r52;   // partial index
+    mul.lo.u32 %r62, %r61, %r3; // partial_o base
+    cvta.shared.u64 %rd9, SK_SH;
+
+    setp.lt.u32 %p5, %r53, %r12;
+    @%p5 bra SK_NONEMPTY;
+    setp.ne.u32 %p6, %r9, 0;
+    @%p6 bra SK_EMPTY_ZERO_O;
+    mul.wide.u32 %rd10, %r61, 4;
+    add.s64 %rd11, %rd6, %rd10;
+    add.s64 %rd12, %rd7, %rd10;
+    mov.f32 %f2, 0fFF7FFFFF;
+    mov.f32 %f3, 0f00000000;
+    st.global.f32 [%rd11], %f2;
+    st.global.f32 [%rd12], %f3;
+SK_EMPTY_ZERO_O:
+    mov.u32 %r63, %r9;
+SK_EMPTY_ZERO_LOOP:
+    setp.ge.u32 %p7, %r63, %r3;
+    @%p7 bra SK_DONE;
+    add.u32 %r64, %r62, %r63;
+    mul.wide.u32 %rd13, %r64, 4;
+    add.s64 %rd14, %rd8, %rd13;
+    mov.f32 %f4, 0f00000000;
+    st.global.f32 [%rd14], %f4;
+    add.u32 %r63, %r63, %r10;
+    bra SK_EMPTY_ZERO_LOOP;
+
+SK_NONEMPTY:
+    mov.f32 %f5, 0fFF7FFFFF;    // local max, thread 0 only
+    mov.u32 %r19, %r53;         // p
+SK_SCORE_P_LOOP:
+    setp.ge.u32 %p8, %r19, %r54;
+    @%p8 bra SK_SCORE_DONE;
+
+    mov.f32 %f6, 0f00000000;
+    mov.u32 %r20, %r9;
+SK_DOT_D_LOOP:
+    setp.ge.u32 %p9, %r20, %r3;
+    @%p9 bra SK_DOT_STORE;
+    add.u32 %r21, %r17, %r20;
+    mul.lo.u32 %r22, %r19, %r13;
+    mad.lo.u32 %r23, %r14, %r3, %r22;
+    add.u32 %r24, %r23, %r20;
+    mul.wide.u32 %rd15, %r21, 4;
+    mul.wide.u32 %rd16, %r24, 4;
+    add.s64 %rd17, %rd1, %rd15;
+    add.s64 %rd18, %rd3, %rd16;
+    ld.global.f32 %f7, [%rd17];
+    ld.global.f32 %f8, [%rd18];
+    fma.rn.f32 %f6, %f7, %f8, %f6;
+    add.u32 %r20, %r20, %r10;
+    bra SK_DOT_D_LOOP;
+
+SK_DOT_STORE:
+    mul.wide.u32 %rd19, %r9, 4;
+    add.s64 %rd20, %rd9, %rd19;
+    st.shared.f32 [%rd20], %f6;
+    bar.sync 0;
+
+    mov.u32 %r25, 128;
+SK_DOT_REDUCE_LOOP:
+    setp.lt.u32 %p10, %r9, %r25;
+    @!%p10 bra SK_DOT_REDUCE_SKIP;
+    add.u32 %r26, %r9, %r25;
+    mul.wide.u32 %rd21, %r9, 4;
+    mul.wide.u32 %rd22, %r26, 4;
+    add.s64 %rd23, %rd9, %rd21;
+    add.s64 %rd24, %rd9, %rd22;
+    ld.shared.f32 %f9, [%rd23];
+    ld.shared.f32 %f10, [%rd24];
+    add.rn.f32 %f9, %f9, %f10;
+    st.shared.f32 [%rd23], %f9;
+SK_DOT_REDUCE_SKIP:
+    bar.sync 0;
+    shr.u32 %r25, %r25, 1;
+    setp.gt.u32 %p11, %r25, 0;
+    @%p11 bra SK_DOT_REDUCE_LOOP;
+
+    setp.ne.u32 %p12, %r9, 0;
+    @%p12 bra SK_SCORE_NEXT;
+    ld.shared.f32 %f11, [%rd9];
+    mul.rn.f32 %f12, %f11, %f1;
+    max.ftz.f32 %f5, %f5, %f12;
+    add.u32 %r27, %r18, %r19;
+    mul.wide.u32 %rd25, %r27, 4;
+    add.s64 %rd26, %rd5, %rd25;
+    st.global.f32 [%rd26], %f12;
+
+SK_SCORE_NEXT:
+    bar.sync 0;
+    add.u32 %r19, %r19, 1;
+    bra SK_SCORE_P_LOOP;
+
+SK_SCORE_DONE:
+    setp.ne.u32 %p13, %r9, 0;
+    @%p13 bra SK_MAX_WAIT;
+    st.shared.f32 [%rd9], %f5;
+SK_MAX_WAIT:
+    bar.sync 0;
+    ld.shared.f32 %f13, [%rd9]; // chunk max
+
+    mov.f32 %f14, 0f00000000;
+    mov.u32 %r28, %r53;
+    add.u32 %r28, %r28, %r9;
+SK_DENOM_LOOP:
+    setp.ge.u32 %p14, %r28, %r54;
+    @%p14 bra SK_DENOM_STORE;
+    add.u32 %r29, %r18, %r28;
+    mul.wide.u32 %rd27, %r29, 4;
+    add.s64 %rd28, %rd5, %rd27;
+    ld.global.f32 %f15, [%rd28];
+    sub.rn.f32 %f16, %f15, %f13;
+    mov.f32 %f17, 0f3FB8AA3B;
+    mul.rn.f32 %f18, %f16, %f17;
+    ex2.approx.ftz.f32 %f19, %f18;
+    add.rn.f32 %f14, %f14, %f19;
+    st.global.f32 [%rd28], %f19;
+    add.u32 %r28, %r28, %r10;
+    bra SK_DENOM_LOOP;
+
+SK_DENOM_STORE:
+    mul.wide.u32 %rd29, %r9, 4;
+    add.s64 %rd30, %rd9, %rd29;
+    st.shared.f32 [%rd30], %f14;
+    bar.sync 0;
+
+    mov.u32 %r30, 128;
+SK_DENOM_REDUCE_LOOP:
+    setp.lt.u32 %p15, %r9, %r30;
+    @!%p15 bra SK_DENOM_REDUCE_SKIP;
+    add.u32 %r31, %r9, %r30;
+    mul.wide.u32 %rd31, %r9, 4;
+    mul.wide.u32 %rd32, %r31, 4;
+    add.s64 %rd33, %rd9, %rd31;
+    add.s64 %rd34, %rd9, %rd32;
+    ld.shared.f32 %f20, [%rd33];
+    ld.shared.f32 %f21, [%rd34];
+    add.rn.f32 %f20, %f20, %f21;
+    st.shared.f32 [%rd33], %f20;
+SK_DENOM_REDUCE_SKIP:
+    bar.sync 0;
+    shr.u32 %r30, %r30, 1;
+    setp.gt.u32 %p16, %r30, 0;
+    @%p16 bra SK_DENOM_REDUCE_LOOP;
+
+    setp.ne.u32 %p17, %r9, 0;
+    @%p17 bra SK_PARTIAL_META_WAIT;
+    ld.shared.f32 %f22, [%rd9];
+    mul.wide.u32 %rd35, %r61, 4;
+    add.s64 %rd36, %rd6, %rd35;
+    add.s64 %rd37, %rd7, %rd35;
+    st.global.f32 [%rd36], %f13;
+    st.global.f32 [%rd37], %f22;
+SK_PARTIAL_META_WAIT:
+    bar.sync 0;
+
+    mov.u32 %r32, %r9;
+SK_OUT_D_LOOP:
+    setp.ge.u32 %p18, %r32, %r3;
+    @%p18 bra SK_DONE;
+    mov.f32 %f23, 0f00000000;
+    mov.u32 %r33, %r53;
+SK_VALUE_LOOP:
+    setp.ge.u32 %p19, %r33, %r54;
+    @%p19 bra SK_PARTIAL_WRITE;
+    add.u32 %r34, %r18, %r33;
+    mul.wide.u32 %rd38, %r34, 4;
+    add.s64 %rd39, %rd5, %rd38;
+    ld.global.f32 %f24, [%rd39];
+    mul.lo.u32 %r35, %r33, %r13;
+    mad.lo.u32 %r36, %r14, %r3, %r35;
+    add.u32 %r37, %r36, %r32;
+    mul.wide.u32 %rd40, %r37, 4;
+    add.s64 %rd41, %rd4, %rd40;
+    ld.global.f32 %f25, [%rd41];
+    fma.rn.f32 %f23, %f24, %f25, %f23;
+    add.u32 %r33, %r33, 1;
+    bra SK_VALUE_LOOP;
+
+SK_PARTIAL_WRITE:
+    add.u32 %r38, %r62, %r32;
+    mul.wide.u32 %rd42, %r38, 4;
+    add.s64 %rd43, %rd8, %rd42;
+    st.global.f32 [%rd43], %f23;
+    add.u32 %r32, %r32, %r10;
+    bra SK_OUT_D_LOOP;
+
+SK_DONE:
+    ret;
+}
+
+// Split-K long-context GQA attention decode, stage 2.
+// Launch: grid=(tokens, n_head), block=(256). Combines partial summaries with
+// stable log-sum-exp and applies the attention gate.
+.visible .entry full_attn_decode_cache_splitk_reduce_probe(
+    .param .u64 gate_in,
+    .param .u64 partial_m,
+    .param .u64 partial_l,
+    .param .u64 partial_o,
+    .param .u64 attn_out,
+    .param .u32 n_head,
+    .param .u32 head_dim,
+    .param .u64 start_pos_ptr,
+    .param .u32 max_seq,
+    .param .u32 num_chunks
+)
+{
+    .reg .pred %p<24>;
+    .reg .b32 %r<96>;
+    .reg .b64 %rd<96>;
+    .reg .f32 %f<56>;
+    .shared .align 4 .b8 SKR_SH[1024];
+
+    ld.param.u64 %rd1, [gate_in];
+    ld.param.u64 %rd2, [partial_m];
+    ld.param.u64 %rd3, [partial_l];
+    ld.param.u64 %rd4, [partial_o];
+    ld.param.u64 %rd5, [attn_out];
+    ld.param.u32 %r1, [n_head];
+    ld.param.u32 %r2, [head_dim];
+    ld.param.u64 %rd90, [start_pos_ptr];
+    ld.global.u32 %r3, [%rd90];
+    ld.param.u32 %r4, [max_seq];
+    ld.param.u32 %r5, [num_chunks];
+
+    mov.u32 %r6, %ctaid.x;      // tok
+    mov.u32 %r7, %ctaid.y;      // q head
+    mov.u32 %r8, %tid.x;
+    mov.u32 %r9, %ntid.x;
+    setp.ge.u32 %p1, %r7, %r1;
+    @%p1 bra SKR_DONE;
+    add.u32 %r10, %r3, %r6;
+    setp.ge.u32 %p2, %r10, %r4;
+    @%p2 bra SKR_DONE;
+    mul.lo.u32 %r11, %r6, %r1;
+    add.u32 %r12, %r11, %r7;    // token/head index
+    mul.lo.u32 %r13, %r12, %r5; // partial base
+    mul.lo.u32 %r14, %r12, %r2; // gate/out base
+    cvta.shared.u64 %rd6, SKR_SH;
+
+    mov.f32 %f1, 0fFF7FFFFF;
+    mov.u32 %r15, %r8;
+SKR_MAX_LOOP:
+    setp.ge.u32 %p3, %r15, %r5;
+    @%p3 bra SKR_MAX_STORE;
+    add.u32 %r16, %r13, %r15;
+    mul.wide.u32 %rd7, %r16, 4;
+    add.s64 %rd8, %rd2, %rd7;
+    ld.global.f32 %f2, [%rd8];
+    max.ftz.f32 %f1, %f1, %f2;
+    add.u32 %r15, %r15, %r9;
+    bra SKR_MAX_LOOP;
+SKR_MAX_STORE:
+    mul.wide.u32 %rd9, %r8, 4;
+    add.s64 %rd10, %rd6, %rd9;
+    st.shared.f32 [%rd10], %f1;
+    bar.sync 0;
+
+    mov.u32 %r17, 128;
+SKR_MAX_REDUCE_LOOP:
+    setp.lt.u32 %p4, %r8, %r17;
+    @!%p4 bra SKR_MAX_REDUCE_SKIP;
+    add.u32 %r18, %r8, %r17;
+    mul.wide.u32 %rd11, %r8, 4;
+    mul.wide.u32 %rd12, %r18, 4;
+    add.s64 %rd13, %rd6, %rd11;
+    add.s64 %rd14, %rd6, %rd12;
+    ld.shared.f32 %f3, [%rd13];
+    ld.shared.f32 %f4, [%rd14];
+    max.ftz.f32 %f3, %f3, %f4;
+    st.shared.f32 [%rd13], %f3;
+SKR_MAX_REDUCE_SKIP:
+    bar.sync 0;
+    shr.u32 %r17, %r17, 1;
+    setp.gt.u32 %p5, %r17, 0;
+    @%p5 bra SKR_MAX_REDUCE_LOOP;
+
+    ld.shared.f32 %f5, [%rd6]; // global max
+    mov.f32 %f6, 0f00000000;
+    mov.u32 %r19, %r8;
+SKR_DENOM_LOOP:
+    setp.ge.u32 %p6, %r19, %r5;
+    @%p6 bra SKR_DENOM_STORE;
+    add.u32 %r20, %r13, %r19;
+    mul.wide.u32 %rd15, %r20, 4;
+    add.s64 %rd16, %rd2, %rd15;
+    add.s64 %rd17, %rd3, %rd15;
+    ld.global.f32 %f7, [%rd16];
+    ld.global.f32 %f8, [%rd17];
+    sub.rn.f32 %f9, %f7, %f5;
+    mov.f32 %f10, 0f3FB8AA3B;
+    mul.rn.f32 %f11, %f9, %f10;
+    ex2.approx.ftz.f32 %f12, %f11;
+    fma.rn.f32 %f6, %f8, %f12, %f6;
+    add.u32 %r19, %r19, %r9;
+    bra SKR_DENOM_LOOP;
+SKR_DENOM_STORE:
+    mul.wide.u32 %rd18, %r8, 4;
+    add.s64 %rd19, %rd6, %rd18;
+    st.shared.f32 [%rd19], %f6;
+    bar.sync 0;
+
+    mov.u32 %r21, 128;
+SKR_DENOM_REDUCE_LOOP:
+    setp.lt.u32 %p7, %r8, %r21;
+    @!%p7 bra SKR_DENOM_REDUCE_SKIP;
+    add.u32 %r22, %r8, %r21;
+    mul.wide.u32 %rd20, %r8, 4;
+    mul.wide.u32 %rd21, %r22, 4;
+    add.s64 %rd22, %rd6, %rd20;
+    add.s64 %rd23, %rd6, %rd21;
+    ld.shared.f32 %f13, [%rd22];
+    ld.shared.f32 %f14, [%rd23];
+    add.rn.f32 %f13, %f13, %f14;
+    st.shared.f32 [%rd22], %f13;
+SKR_DENOM_REDUCE_SKIP:
+    bar.sync 0;
+    shr.u32 %r21, %r21, 1;
+    setp.gt.u32 %p8, %r21, 0;
+    @%p8 bra SKR_DENOM_REDUCE_LOOP;
+
+    ld.shared.f32 %f15, [%rd6]; // denom
+    rcp.approx.ftz.f32 %f16, %f15;
+
+    mov.u32 %r23, %r8;
+SKR_OUT_D_LOOP:
+    setp.ge.u32 %p9, %r23, %r2;
+    @%p9 bra SKR_DONE;
+    mov.f32 %f17, 0f00000000;
+    mov.u32 %r24, 0;
+SKR_CHUNK_LOOP:
+    setp.ge.u32 %p10, %r24, %r5;
+    @%p10 bra SKR_GATE_WRITE;
+    add.u32 %r25, %r13, %r24;
+    mul.wide.u32 %rd24, %r25, 4;
+    add.s64 %rd25, %rd2, %rd24;
+    ld.global.f32 %f18, [%rd25];
+    sub.rn.f32 %f19, %f18, %f5;
+    mov.f32 %f20, 0f3FB8AA3B;
+    mul.rn.f32 %f21, %f19, %f20;
+    ex2.approx.ftz.f32 %f22, %f21;
+    mul.lo.u32 %r26, %r25, %r2;
+    add.u32 %r27, %r26, %r23;
+    mul.wide.u32 %rd26, %r27, 4;
+    add.s64 %rd27, %rd4, %rd26;
+    ld.global.f32 %f23, [%rd27];
+    fma.rn.f32 %f17, %f23, %f22, %f17;
+    add.u32 %r24, %r24, 1;
+    bra SKR_CHUNK_LOOP;
+
+SKR_GATE_WRITE:
+    mul.rn.f32 %f24, %f17, %f16;
+    add.u32 %r28, %r14, %r23;
+    mul.wide.u32 %rd28, %r28, 4;
+    add.s64 %rd29, %rd1, %rd28;
+    ld.global.f32 %f25, [%rd29];
+    neg.f32 %f26, %f25;
+    mov.f32 %f27, 0f3FB8AA3B;
+    mul.rn.f32 %f28, %f26, %f27;
+    ex2.approx.ftz.f32 %f29, %f28;
+    mov.f32 %f30, 0f3F800000;
+    add.rn.f32 %f31, %f30, %f29;
+    rcp.approx.ftz.f32 %f32, %f31;
+    mul.rn.f32 %f33, %f24, %f32;
+    add.s64 %rd30, %rd5, %rd28;
+    st.global.f32 [%rd30], %f33;
+    add.u32 %r23, %r23, %r9;
+    bra SKR_OUT_D_LOOP;
+
+SKR_DONE:
+    ret;
+}
+
 // Parallel exact GQA attention decode over a resident KV cache.
 // Launch: grid=(tokens, n_head), block=(256).
 // One CTA owns one (token, q_head). It parallelizes each Q.K dot over head_dim,
