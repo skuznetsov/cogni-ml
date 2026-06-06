@@ -22442,3 +22442,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The benchmark Diamond separates three corridors: body-only llama-bench parity, product top1 generation, and session-cache replay. Body-only parity currently descends versus llama.cpp, so the active first-run speed window is not generic ubatch scheduling. Product top1/sampling still needs its own corridor because logits/top-k/function-calling routes add work outside llama-bench tg.
 **boundary:** Do not claim a broad public Gemma win from relaxed rows. For optimization, prioritize product-shaped top1/top-k/sampling overhead and session-cache integration over another generic body-only ubatch rewrite unless a quiet-host body benchmark contradicts this row.
+
+#### [LM-COGNIGRAPH-037] Gemma has a resident top2 decode primitive for product-route controllers
+**context:** ml / CogniGraph / Gemma4 / resident top2 / structured decoding / self-draft
+**state:** implemented and correctness-checked; no speed claim yet
+
+- claim: "Qwen35Metal now exposes buffer-level `encode_head_top2_no_norm_to_buffers` and `read_head_top2_buffers`, allowing callers to append top2 head projection/reduction inside an existing command buffer without full logits materialization."
+  source: `src/ml/gguf/qwen35_metal.cr`; `scripts/run_safe.sh crystal 180 8192 spec spec/qwen35_decode_top2_spec.cr --error-trace --link-flags=...` passed (`2 examples, 0 failures`) on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Qwen top2 kernel rewrite, output-head route rewrite, or Metal buffer-helper rewrite
+  trust: {F:0.86,G:0.30,R:0.84}
+
+- claim: "Gemma4Metal now exposes `forward_top2_resident_cache_wave`, which runs embedding, decode layers, output RMSNorm, and top2 head inside one resident command buffer and reads back only two ids plus two values."
+  source: `src/ml/gguf/gemma4_metal.cr`; `scripts/run_safe.sh crystal 180 8192 build --no-codegen spec/gemma4_metal_buffer_spec.cr --error-trace` passed on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma resident decode wave rewrite, output norm/head rewrite, or top2 helper rewrite
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "Focused Gemma parity holds for the resident top2 primitive: `forward_top2_resident_cache_wave` matches hidden-wave + standalone `project_top2_no_norm` on the same stop-layer hidden, and the broader Gemma Metal buffer spec passed (`10 examples, 0 failures`)."
+  source: `scripts/run_safe.sh crystal 300 24576 spec spec/gemma4_metal_buffer_spec.cr --error-trace --link-flags=...` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: larger full-depth top2 contradiction, Gemma state route rewrite, or Qwen top2 kernel rewrite
+  trust: {F:0.86,G:0.18,R:0.84}
+
+**LTP/WBA:** The window is product-route controllers needing a second candidate without paying full-logit materialization or a second host-visible head pass. The corridor is resident hidden -> output RMSNorm -> top2 head tiles -> two-id certificate. The legal move preserves exact state updates and only changes the readback boundary. Potential descends in `(product_head_materialization, readback bytes, controller_candidate_gap, remaining routing work)` for future structured/self-draft routes.
+**boundary:** This is a primitive, not a speed promotion. Next evidence must wire it into a real controller or benchmark mode and compare top1/top2/structured-route wall time with identical token outputs or exact verification.

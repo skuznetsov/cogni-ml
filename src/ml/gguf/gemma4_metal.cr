@@ -1931,6 +1931,80 @@ module ML::GGUF
         end
       end
 
+      def forward_top2_resident_cache_wave(weights : Gemma4Weights,
+                                           token_id : Int32,
+                                           pos : Int32,
+                                           state : ResidentState,
+                                           stop_layer : Int32? = nil) : Array(Float32)?
+        return nil unless available?
+
+        hp = weights.hparams
+        hidden_dim = hp.n_embd
+        hidden_bytes = hidden_dim.to_i64 * sizeof(Float32)
+        raise ArgumentError.new("position #{pos} exceeds max_seq #{state.max_seq}") if pos < 0 || pos >= state.max_seq
+
+        scale = Math.sqrt(hidden_dim.to_f64).to_f32
+        scratch = state.scratch
+        in_buf = scratch.get("decode.top2.in", hidden_bytes)
+        out_buf = scratch.get("decode.top2.out", hidden_bytes)
+        token_buf = scratch.get("decode.top2.token", sizeof(UInt32).to_i64)
+        token_buf.contents.as(Pointer(UInt32)).value = token_id.to_u32
+
+        layer_count = stop_layer ? Math.min(stop_layer.not_nil!, weights.layers.size) : weights.layers.size
+        norm_w_buf = write_scratch_f32(scratch, "decode.top2.output_norm", weights.output_norm)
+        normed_buf = scratch.get("decode.top2.normed", hidden_bytes)
+        tile_count = Qwen35Metal.head_top1_tile_count(weights.token_embd)
+        tile_values_buf = scratch.get("decode.top2.tile_values", tile_count.to_i64 * sizeof(Float32))
+        tile_ids_buf = scratch.get("decode.top2.tile_ids", tile_count.to_i64 * sizeof(UInt32))
+        second_tile_values_buf = scratch.get("decode.top2.second_tile_values", tile_count.to_i64 * sizeof(Float32))
+        second_tile_ids_buf = scratch.get("decode.top2.second_tile_ids", tile_count.to_i64 * sizeof(UInt32))
+        top1_id_buf = scratch.get("decode.top2.id", sizeof(UInt32).to_i64)
+        top1_value_buf = scratch.get("decode.top2.value", sizeof(Float32).to_i64)
+        second_id_buf = scratch.get("decode.top2.second_id", sizeof(UInt32).to_i64)
+        second_value_buf = scratch.get("decode.top2.second_value", sizeof(Float32).to_i64)
+
+        t0 = Time.instant if Qwen35Metal::Profile.enabled?
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        Qwen35Metal.encode_embedding_q6k_rows_scaled_to_buffer(enc, weights.token_embd, token_buf, in_buf, 1, scale)
+        layer_count.times do |il|
+          ok = encode_forward_layer_resident_cache_rows_to_buffer(enc, weights, il, in_buf, out_buf, pos, 1, state)
+          unless ok
+            enc.end_encoding
+            return nil
+          end
+          in_buf, out_buf = out_buf, in_buf
+        end
+        encode_rmsnorm_weighted_out(enc, in_buf, norm_w_buf, normed_buf, hidden_dim, hp.rms_eps)
+        unless Qwen35Metal.encode_head_top2_no_norm_to_buffers(enc, weights.token_embd, normed_buf,
+          tile_values_buf, tile_ids_buf, second_tile_values_buf, second_tile_ids_buf,
+          top1_id_buf, top1_value_buf, second_id_buf, second_value_buf)
+          enc.end_encoding
+          return nil
+        end
+        enc.end_encoding
+        t_enc = Time.instant if Qwen35Metal::Profile.enabled?
+        cmd.commit
+        cmd.wait
+        t_wait = Time.instant if Qwen35Metal::Profile.enabled?
+        top2 = Qwen35Metal.read_head_top2_buffers(top1_id_buf, top1_value_buf, second_id_buf, second_value_buf)
+        if Qwen35Metal::Profile.enabled?
+          t_read = Time.instant
+          Qwen35Metal::Profile.bump_group("gemma4.decode_wave_top2.layers_head",
+            (t_enc.not_nil! - t0.not_nil!).total_nanoseconds.to_i64,
+            (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
+            (t_read - t_wait.not_nil!).total_nanoseconds.to_i64)
+          Qwen35Metal::Profile.bump_group_transfer("gemma4.decode_wave_top2.layers_head", 0_i64, (2_i64 * sizeof(UInt32).to_i64) + (2_i64 * sizeof(Float32).to_i64))
+        end
+        top2
+      rescue ex
+        if ENV["GEMMA4_RESIDENT_LAYER_STRICT"]? == "1"
+          raise ex
+        else
+          nil
+        end
+      end
+
       def forward_top1_resident_cache_chain(weights : Gemma4Weights,
                                             token_id : Int32,
                                             pos : Int32,
