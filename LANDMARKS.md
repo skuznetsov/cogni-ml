@@ -22072,3 +22072,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The local ffn_down window was large enough to test, but longer-corridor recomputation increased wall time. This fails recompute safety: a short near-flat move did not descend under larger area. The legal outcome is a refutation, not a promotion.
 **boundary:** Do not default x16 for Gemma `ffn_down`. Future work should pivot from per-op x16 lane retunes to graph-level scheduling/fusion or a different Q4/Q6 kernel family with whole-corridor ABBA.
+
+### [LM-COGNIGRAPH-021] Gemma phase profile pivots target from byte-dominant GEMV to wait-dominant attn_prep
+**context:** ml / CogniGraph / Gemma4 / phase attribution / route tags / LTP-WBA Daedalus pivot
+**state:** verified measurement; next optimization should target graph/elementwise phase fusion, not another blind GEMV retune
+
+- claim: "A tiny `GEMMA4_DECODE_PROFILE_PHASES=1 QWEN35_PROFILE_ROUTE_TAGS=1` Gemma body profile split decode into 384 phase command buffers and showed phase-family wait dominance: `attn_prep` `38.07ms`, `ffn_upgate` `35.86ms`, `ffn_down` `26.90ms`, `attn_qkv` `23.64ms`, `attn_ctx` `18.46ms`, `ffn_out` `17.54ms`, `ffn_in` `14.98ms`, `attn_out` `12.82ms` for one generated body token."
+  source: guarded log `/tmp/gemma4_phase_tags_g1.log` and atlas `/tmp/gemma4_phase_tags_g1.atlas.txt` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: phase-profile implementation rewrite, Gemma decode graph rewrite, or larger phase profile contradiction
+  trust: {F:0.84,G:0.16,R:0.82}
+
+- claim: "The same profile still showed logical-byte dominance in `ffn_gate/up`, but the wait-dominant phase included `attn_prep`, which is mostly small normalization/RoPE/KV-write work rather than a large GEMV. This explains why repeated GEMV lane/layout retunes can be locally plausible yet fail whole-corridor wall recomputation."
+  source: `/tmp/gemma4_phase_tags_g1.atlas.txt` top phase-family and top matmul sections on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: phase wait contradiction, atlas parser bug, or decode route rewrite
+  trust: {F:0.82,G:0.18,R:0.80}
+
+**LTP/WBA:** Daedalus pivot: the active window changed from byte-dominant GEMV shape to wait-dominant phase corridor. Legal next moves should target `attn_prep` and other small-kernel phase families through fusion/graph scheduling, while using tagged GEMV data only as secondary evidence. Potential becomes `(dominant_phase_wait, tied_phase_families, sync_count, remaining_logical_bytes)`.
+**boundary:** Phase profiling itself adds many command buffers and is not a production timing path. Use it for attribution only; promotion still requires normal decode ABBA wall checks.
