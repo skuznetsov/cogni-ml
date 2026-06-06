@@ -142,6 +142,28 @@ module ML::GGUF
       end
     end
 
+    def self.native_tool_finite_call_options(tools : Array(JSON::Any)) : Array(String)
+      options = [] of String
+      tools.each do |tool|
+        function = tool.as_h?.try { |obj| obj["function"]?.try(&.as_h?) }
+        next unless function
+        name = function["name"]?.try(&.as_s?)
+        next unless name && !name.empty?
+        parameters = function["parameters"]?.try(&.as_h?)
+        properties = parameters.try { |p| p["properties"]?.try(&.as_h?) }
+        next unless properties
+
+        properties.each do |parameter_name, raw_schema|
+          schema = raw_schema.as_h?
+          next unless schema
+          finite_gemma_values(schema).each do |value_literal|
+            options << "<|tool_call>call:#{name}{#{parameter_name}:#{value_literal}}<tool_call|>"
+          end
+        end
+      end
+      options
+    end
+
     private def self.emit_message(io : IO, message : Message) : Nil
       role = case message.role
              when "assistant"
@@ -229,6 +251,40 @@ module ML::GGUF
 
     private def self.emit_gemma_string(io : IO, value : String) : Nil
       io << "<|\"|>" << value << "<|\"|>"
+    end
+
+    private def self.gemma_string_literal(value : String) : String
+      String.build { |io| emit_gemma_string(io, value) }
+    end
+
+    private def self.finite_gemma_values(schema : Hash(String, JSON::Any)) : Array(String)
+      enum_values = schema["enum"]?.try(&.as_a?)
+      if enum_values
+        return enum_values.compact_map do |value|
+          if str = value.as_s?
+            gemma_string_literal(str)
+          elsif bool = value.as_bool?
+            bool ? "true" : "false"
+          elsif int = value.as_i64?
+            int.to_s
+          elsif float = value.as_f?
+            float.to_s
+          end
+        end
+      end
+
+      type_name = schema["type"]?.try(&.as_s?).try(&.downcase)
+      return ["true", "false"] if type_name == "boolean"
+
+      if type_name == "integer"
+        minimum = schema["minimum"]?.try(&.as_i64?)
+        maximum = schema["maximum"]?.try(&.as_i64?)
+        if minimum && maximum && maximum >= minimum && (maximum - minimum) < 256
+          return (minimum..maximum).map(&.to_s)
+        end
+      end
+
+      [] of String
     end
 
     private def self.parse_tool_call_body(body : String) : ToolCall?

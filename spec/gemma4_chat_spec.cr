@@ -61,4 +61,19 @@ describe ML::GGUF::Gemma4Chat do
     rendered = ML::GGUF::Gemma4Chat.render([message], add_generation_prompt: false)
     rendered.should eq("<|turn>model\n<|tool_call>call:set_flag{enabled:<|\"|>true<|\"|>,mode:<|\"|>safe<|\"|>}<tool_call|><turn|>\n")
   end
+
+  it "builds Gemma4 native finite tool-call options from schemas" do
+    tools = ML::GGUF::Gemma4Chat.parse_tools_json(%([
+      {"type":"function","function":{"name":"set_mode","parameters":{"type":"object","properties":{
+        "mode":{"type":"string","enum":["fast","safe"]},
+        "enabled":{"type":"boolean"},
+        "limit":{"type":"integer","minimum":1,"maximum":2}
+      }}}}
+    ]))
+
+    options = ML::GGUF::Gemma4Chat.native_tool_finite_call_options(tools)
+    options.should contain("<|tool_call>call:set_mode{mode:<|\"|>fast<|\"|>}<tool_call|>")
+    options.should contain("<|tool_call>call:set_mode{enabled:true}<tool_call|>")
+    options.should contain("<|tool_call>call:set_mode{limit:2}<tool_call|>")
+  end
 end

@@ -3,6 +3,7 @@ require "json"
 require "../src/ml/gguf/gemma4_metal"
 require "../src/ml/gguf/gemma4_prompt_cache"
 require "../src/ml/gguf/gemma4_tokenizer"
+require "../src/ml/gguf/gemma4_chat"
 require "../src/ml/gguf/qwen35_constraints"
 
 DEFAULT_MODEL = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/gemma-4-12B-it-GGUF/gemma-4-12B-it-Q4_K_M.gguf"
@@ -45,6 +46,7 @@ constrained_literal_prefix = nil.as(String?)
 constrained_tool_call_prefix = false
 constrained_tool_required_param_prefix = false
 constrained_tool_finite_call = false
+constrained_gemma_tool_finite_call = false
 tools_json = ENV["GEMMA4_TOOLS_JSON"]?
 literal_force_single = true
 literal_force_span = true
@@ -113,6 +115,11 @@ OptionParser.parse(ARGV) do |p|
     constrained_tool_finite_call = true
     decode_mode = "literal"
   end
+  p.on("--constrained-gemma-tool-finite-call", "Diagnostic: constrain a complete Gemma-native tool call for finite enum/boolean/integer parameter values from --tools-json/GEMMA4_TOOLS_JSON") do
+    constrained_tool_call_prefix = true
+    constrained_gemma_tool_finite_call = true
+    decode_mode = "literal"
+  end
   p.on("--literal-force-single-off", "Disable forced single-token literal frontier elimination") { literal_force_single = false }
   p.on("--literal-force-span-off", "Disable batched forced literal spans") { literal_force_span = false }
   p.on("-h", "--help", "Show help") { puts p; exit }
@@ -134,7 +141,9 @@ if constrained_tool_call_prefix
   tools = parsed_tools.as_a? || raise "--tools-json must be a JSON array"
   tool_names = ML::GGUF::Qwen35Constraints.tool_function_names(tools)
   raise "--constrained-tool-call-prefix found no function names" if tool_names.empty?
-  tool_literal_options = if constrained_tool_finite_call
+  tool_literal_options = if constrained_gemma_tool_finite_call
+                           ML::GGUF::Gemma4Chat.native_tool_finite_call_options(tools)
+                         elsif constrained_tool_finite_call
                            ML::GGUF::Qwen35Constraints.qwen_tool_finite_call_options(tools)
                          elsif constrained_tool_required_param_prefix
                            ML::GGUF::Qwen35Constraints.qwen_tool_required_parameter_prefix_options(tools)
@@ -683,7 +692,7 @@ if root = prompt_cache_root
 end
 
 decode_schedule = decode_stop_layer_after_step ? "#{decode_stop_layer_after_step}:#{decode_stop_layer_after_layer}" : ""
-puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} prompt_text_mode=#{chat_user ? "chat_user" : (prompt_text ? "raw_text" : "token_ids")} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} top1_chain=#{top1_chain} body_chain=#{body_chain} body_chain_note=#{body_chain == 1 ? "llama_bench_parity" : "graph_chunk_known_tokens"} allowed_ids=#{allowed_ids.join(',')} constrained_literal_prefix=#{constrained_literal_prefix || ""} constrained_tool_call_prefix=#{constrained_tool_call_prefix} constrained_tool_required_param_prefix=#{constrained_tool_required_param_prefix} constrained_tool_finite_call=#{constrained_tool_finite_call} tool_names=#{tool_names.join(',')} literal_options=#{literal_remaining_start.size} literal_force_single=#{literal_force_single} literal_force_span=#{literal_force_span} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} decode_stop_layer_after=#{decode_schedule} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_min_free_mib=#{prompt_cache_snapshot_min_free_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
+puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} prompt_text_mode=#{chat_user ? "chat_user" : (prompt_text ? "raw_text" : "token_ids")} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} top1_chain=#{top1_chain} body_chain=#{body_chain} body_chain_note=#{body_chain == 1 ? "llama_bench_parity" : "graph_chunk_known_tokens"} allowed_ids=#{allowed_ids.join(',')} constrained_literal_prefix=#{constrained_literal_prefix || ""} constrained_tool_call_prefix=#{constrained_tool_call_prefix} constrained_tool_required_param_prefix=#{constrained_tool_required_param_prefix} constrained_tool_finite_call=#{constrained_tool_finite_call} constrained_gemma_tool_finite_call=#{constrained_gemma_tool_finite_call} tool_names=#{tool_names.join(',')} literal_options=#{literal_remaining_start.size} literal_force_single=#{literal_force_single} literal_force_span=#{literal_force_span} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} decode_stop_layer_after=#{decode_schedule} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_min_free_mib=#{prompt_cache_snapshot_min_free_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
 
 warmups.times do
   run_once(

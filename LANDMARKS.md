@@ -22794,3 +22794,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: product structured-calling boundary for Gemma, where Qwen XML diagnostics would be the wrong final frame. Transport: OpenAI/CrystalBall request schema -> Gemma native tool declarations -> Gemma native generated call -> typed JSON response. Legal move: introduce a model-specific adapter while reusing the existing typed normalization boundary. Potential descends in `(wrong_tool_syntax_risk, adapter_gap, parser_edge_cases, remaining_controller_work)`.
 **boundary:** This does not yet make CogniGemma generate constrained tool calls. It gives the correct Gemma-native request/response boundary; next work is wiring generation/controller code to this adapter and using constrained frontiers in the Gemma-native syntax instead of Qwen XML.
+
+#### [LM-COGNIGRAPH-051] Gemma-native finite tool-call frontiers work with resident allowed-head decode
+**context:** ml / CogniGraph / Gemma4 / native structured decoding / constrained frontier / resident allowed-head / LTP-WBA
+**state:** Gemma-native finite-call literal options implemented and wired into profiler diagnostic
+
+- claim: "`Gemma4Chat.native_tool_finite_call_options(tools)` builds Gemma-native complete tool-call literals for finite enum, boolean, and bounded integer schema values, e.g. `<|tool_call>call:set_mode{enabled:true}<tool_call|>`."
+  source: `scripts/run_safe.sh crystal 180 8192 spec spec/gemma4_chat_spec.cr --error-trace` on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: Gemma native tool syntax change, Gemma4Chat finite-option builder rewrite, or schema finite-value policy change
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "`bin/gemma4_metal_decode_profile.cr --constrained-gemma-tool-finite-call` feeds those Gemma-native finite literals through the existing tokenizer frontier and resident allowed-head machinery."
+  source: `scripts/run_safe.sh crystal 180 8192 build --no-codegen bin/gemma4_metal_decode_profile.cr --error-trace` on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: profiler option rewrite, resident allowed-head rewrite, or Gemma4Chat finite-option builder rewrite
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "Gemma-native finite-call smoke preserved resident/fallback output for `gen=48`: both routes emitted identical token trace and generated `<|tool_call>call:set_mode{enabled:true}<tool_call|>..`. Resident p50 was `30.695 ms/tok`; fallback p50 was `33.918 ms/tok` over two measured runs."
+  source: `/tmp/gemma4_native_tool_finite_1780747588/{resident.log,fallback.log}` on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: quiet-host contradiction, prompt/model change, tokenizer change, resident allowed-head rewrite, or product controller integration
+  trust: {F:0.78,G:0.10,R:0.74}
+
+**LTP/WBA:** Window: Gemma-native finite tool-call literals, not the older Qwen XML diagnostic frame. Transport: finite schema values -> Gemma native literal options -> tokenizer frontier -> resident allowed-head corridor. Legal move: constrain only certified finite native call tokens while preserving exact decoder state and falling back to the unconstrained dual frame after the literal corridor. Potential descends in `(wrong_syntax_risk, frontier_vocab_rows, full_head_filter_tax, remaining_native_call_suffix)`.
+**boundary:** The current finite option builder enumerates any finite parameter value, not only required parameters and not multi-parameter full calls. Product structured calling still needs a Gemma-native grammar state machine for required/optional parameter sequencing, free-form string values, stop-at-close behavior, and CrystalBall provider integration.
