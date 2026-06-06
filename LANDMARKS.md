@@ -22285,3 +22285,15 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   trust: {F:0.82,G:0.24,R:0.82}
 
 **boundary:** This is log hygiene only. It does not establish performance; it prevents confusing chain=1 apples-to-apples rows with chain>1 graph-chunk rows.
+
+#### [LM-COGNIGRAPH-029C] Gemma profile CLI labels body-chain semantics
+**context:** ml / CogniGraph / Gemma4 / profile CLI / benchmark accounting
+**state:** CLI output clarified
+
+- claim: "`bin/gemma4_metal_decode_profile.cr` now documents `--body-chain 1` as the llama-bench tg parity mode and prints `body_chain_note=llama_bench_parity` or `graph_chunk_known_tokens` in its run header."
+  source: `crystal build --no-codegen bin/gemma4_metal_decode_profile.cr --error-trace` and source inspection on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: profile CLI header or body-chain default rewrite
+  trust: {F:0.84,G:0.28,R:0.84}
+
+**boundary:** This is accounting/traceability only. It preserves existing defaults but makes direct profile logs self-identifying.

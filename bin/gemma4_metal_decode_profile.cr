@@ -60,7 +60,7 @@ OptionParser.parse(ARGV) do |p|
   p.on("--top1-wave-resident", "Fuse decode wave, output RMSNorm, and top1 head into one resident command buffer (default)") { top1_wave_resident = true }
   p.on("--no-top1-wave-resident", "Use legacy hidden-readback + separate top1 head path") { top1_wave_resident = false }
   p.on("--top1-chain N", "Generate exact greedy top1 in GPU-resident chunks of N; requires --decode-wave and --top1-wave-resident") { |v| top1_chain = v.to_i; top1_chain_explicit = true }
-  p.on("--body-chain N", "Run body-only decode in GPU-resident chunks of N known synthetic tokens") { |v| body_chain = v.to_i; body_chain_explicit = true }
+  p.on("--body-chain N", "Run body-only decode in GPU-resident chunks of N known synthetic tokens; use 1 for llama-bench tg parity") { |v| body_chain = v.to_i; body_chain_explicit = true }
   p.on("--prefill-mode MODE", "Prompt prefill mode: serial or rows (default: serial)") { |v| prefill_mode = v }
   p.on("--prefill-chunk N", "Row prefill chunk size; exact path clamps above 8; GEMMA4_ROW_PREFILL_ALLOW_GEMM=1 defaults cap to 512") { |v| prefill_chunk = v.to_i }
   p.on("--prefill-no-head", "Measure pure prompt body only; requires --body-only because no next-token seed is computed") { prefill_head = false }
@@ -384,7 +384,7 @@ if root = prompt_cache_root
 end
 
 decode_schedule = decode_stop_layer_after_step ? "#{decode_stop_layer_after_step}:#{decode_stop_layer_after_layer}" : ""
-puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} prompt_text_mode=#{chat_user ? "chat_user" : (prompt_text ? "raw_text" : "token_ids")} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} top1_chain=#{top1_chain} body_chain=#{body_chain} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} decode_stop_layer_after=#{decode_schedule} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_min_free_mib=#{prompt_cache_snapshot_min_free_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
+puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} prompt_text_mode=#{chat_user ? "chat_user" : (prompt_text ? "raw_text" : "token_ids")} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} top1_chain=#{top1_chain} body_chain=#{body_chain} body_chain_note=#{body_chain == 1 ? "llama_bench_parity" : "graph_chunk_known_tokens"} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} decode_stop_layer_after=#{decode_schedule} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_min_free_mib=#{prompt_cache_snapshot_min_free_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
 
 warmups.times do
   run_once(
