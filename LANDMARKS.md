@@ -22217,3 +22217,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This branch fails the recompute-safety precheck. A local kernel-count reduction would likely increase the earlier potential component: dominant head work. The correct legal move is to keep output RMSNorm materialized unless a new head kernel can share preweighted hidden tiles across many rows without repeating the multiply.
 **boundary:** Do not implement naive output-norm-in-head fusion as a speed candidate. A future viable frame would be a tiled shared-memory/preweighted hidden cache inside the head kernel, not per-row repeated weighting.
+
+### [LM-COGNIGRAPH-028] Gemma needs an atlas-driven FFN-body branch before more blind graph tuning
+**context:** ml / CogniGraph / Gemma4 / profile atlas / LTP-WBA / llama.cpp comparison
+**state:** tooling implemented; no runtime speed claim
+
+- claim: "`scripts/gemma4_profile_atlas.cr` parses Gemma/Qwen-style profile logs and ranks wait buckets, grouped command-buffer waits, logical matmul traffic, conversion traffic, and LTP/WBA candidate windows without changing inference behavior. It emits both human-readable and TSV output."
+  source: `crystal build --no-codegen scripts/gemma4_profile_atlas.cr --error-trace`; synthetic parser smoke on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: profile report format rewrite, Gemma benchmark harness rewrite, or atlas parser rewrite
+  trust: {F:0.84,G:0.34,R:0.84}
+
+- claim: "The atlas is robust to accidental binary inputs: passing a compiled `/tmp/gemma4_metal_decode_profile_copyelide` artifact no longer crashes on invalid UTF-8 and instead yields an empty/no-candidate atlas."
+  source: `scripts/gemma4_profile_atlas.cr /tmp/gemma4_metal_decode_profile_copyelide --top=3` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: parser input sanitization rewrite
+  trust: {F:0.78,G:0.22,R:0.78}
+
+- claim: "Parsing the existing real log `/tmp/gemma4_attnprep_phase_default.log` shows the current Gemma decode logical traffic is dominated by FFN body reads: Q4 `ffn_gate` and Q4 `ffn_up` each account for `1518.75 MiB` / `24.4%`, followed by FFN-down rows totaling about `30%`. This makes the next exact Gemma branch an FFN producer-consumer/body-economics branch, not another blind attention grouping or graph-scheduling claim."
+  source: `scripts/gemma4_profile_atlas.cr /tmp/gemma4_attnprep_phase_default.log --top=6` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host profile contradiction, Gemma qtype/model change, or FFN kernel rewrite
+  trust: {F:0.74,G:0.12,R:0.70}
+
+**LTP/WBA:** The active window is Gemma FFN gate/up/down logical-weight traffic. The corridor is per-layer decode/prefill FFN body rows. Legal moves are producer-consumer fusions, staged-type preservation, or weight/body prepacking only if they lower the recomputed potential `(dominant_weight_mib, tied_routes, sync/conflict_count, remaining_work)` under parity and paired wall checks. The dual frame is profile-only/no-promotion if quiet-host ABBA is unavailable.
+**boundary:** Do not claim Gemma speed parity from atlas output alone. Use it to choose the next experiment: FFN body/gate-up-down corridor first; attention/GQA/static graph branches need stronger fresh evidence before revisiting.
