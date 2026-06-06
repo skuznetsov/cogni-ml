@@ -22919,3 +22919,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: verified Gemma-native tool-call profiler contract that was still too diagnostic for harness use. Transport: OpenAI/CrystalBall messages/tools/env -> Gemma prompt/native finite frontier -> profiler sentinel JSON -> provider-readable output. Legal move: wrap and normalize the command boundary without changing kernel semantics or parser behavior. Potential descends in `(provider_contract_gap, wrong_syntax_risk, finite_controller_tax, harness_parse_gap, remaining_provider_work)`. Recompute safety: finite tools reduce the corridor; free-form tools stay in the unconstrained dual frame instead of forcing an invalid finite path.
 **boundary:** This is a CLI/provider contract slice, not a public performance claim. The wrapper still depends on a separately compiled profiler binary and keeps diagnostic profiler output. Next step is a CrystalBall `CogniGemma` provider or a cleaner native Gemma generation binary that owns the same contract without diagnostic noise.
+
+#### [LM-COGNIGRAPH-056] CrystalBall CogniGemma provider consumes the Gemma wrapper contract
+**context:** ml / CogniGraph / Gemma4 / CrystalBall integration / structured function calling / LTP-WBA
+**state:** real provider smoke verified after CrystalBall provider commit
+
+- claim: "`CrystalBall::LLM::CogniGemma` can call the committed `bin/gemma4_generate.cr` wrapper through `ProviderFactory.provider_for_model(\"cogni-gemma\")` and parse the `=== Tool response JSON ===` sentinel into a CrystalBall `ToolResponse`."
+  source: `/Users/sergey/Projects/Crystal/crystal_ball/tmp/cogni_gemma_real_smoke.cr` run with `GEMMA4_PROFILE_BIN=/tmp/gemma4_native_tool_diag ../cogni-ml/scripts/run_safe.sh crystal 420 24576 tmp/cogni_gemma_real_smoke.cr --error-trace` on 2026-06-06; output `provider=cogni-gemma`, `tool_calls=1`, `call=set_mode args={"mode":"write"}`.
+  verified_at: 2026-06-06
+  decay_trigger: CrystalBall provider contract rewrite, `gemma4_generate` CLI rewrite, profiler sentinel rewrite, Gemma native tool syntax change, or profile binary rebuild
+  trust: {F:0.86,G:0.18,R:0.84}
+
+- claim: "The first failed real smoke was a transient Crystal require-path issue in the ad-hoc script, not a provider/runtime failure. The repo-relative smoke under `crystal_ball/tmp/` passed without code changes."
+  source: failed `/tmp/cogni_gemma_real_smoke.cr` absolute-require attempts followed by successful `tmp/cogni_gemma_real_smoke.cr` repo-relative run on 2026-06-06.
+  verified_at: 2026-06-06
+  decay_trigger: Crystal compiler require semantics change or smoke harness rewrite
+  trust: {F:0.78,G:0.12,R:0.78}
+
+**LTP/WBA:** Window: cross-repo provider boundary where prior fake-wrapper specs could still hide real wrapper/profile integration defects. Transport: CrystalBall messages/tools -> CogniGemma env contract -> `gemma4_generate` wrapper -> profiler native Gemma tool corridor -> sentinel JSON -> `ToolResponse`. Legal move: validate the whole corridor sequentially without changing model kernels or touching unrelated CrystalBall state. Potential descends in `(cross_repo_contract_gap, fake_spec_only_risk, sentinel_parse_risk, remaining_product_integration_work)`. Recompute safety: process errors remain fail-closed in the provider; the smoke proves only the finite tool path, not broad tool grammar or TUI UX.
+**boundary:** This is a structured-tool integration smoke, not a performance or quality benchmark. The next product gate is running the real `crystal_ball` text harness/ReAct flow with `--provider cogni-gemma`, then measuring cold/hot pp/tg through the provider path separately.
