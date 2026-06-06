@@ -22166,3 +22166,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This is a Spike on a redundant materialization window. The corridor is raw K projection -> V RMSNorm/cache write and K RMSNorm/RoPE/cache write. Boundary safety depends on ordering: V must consume raw K before K is mutated. The lexicographic potential decreases in explicit copy kernels and scratch traffic inside the opt-in fused corridor, but whole-wall promotion still requires quiet ABBA.
 **boundary:** This optimization is only legal inside `GEMMA4_ATTN_PREP_FUSE=1` and only when the V source is tied to K. Do not generalize to models/layers with separate V weights.
+
+### [LM-COGNIGRAPH-025] run_safe has a generic quiet-host preflight for perf runs
+**context:** ml / tooling / benchmarks / run_safe / LTP-WBA
+**state:** implemented as opt-in environment guard; default behavior unchanged
+
+- claim: "`scripts/run_safe.sh` now supports a pre-launch CPU quiet guard: `COGNI_RUN_SAFE_WAIT_QUIET_SEC=N`, `COGNI_RUN_SAFE_REQUIRE_QUIET=1`, `COGNI_RUN_SAFE_QUIET_PROC_PCT`, `COGNI_RUN_SAFE_QUIET_TOTAL_PCT`, and `COGNI_RUN_SAFE_QUIET_POLL_SEC`. The guard waits before launching the child and never kills or modifies unrelated user processes."
+  source: `scripts/run_safe.sh`; default `/usr/bin/true` smoke exited `0` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: run_safe rewrite, benchmark harness replacement, or shell portability change
+  trust: {F:0.84,G:0.46,R:0.84}
+
+- claim: "On a deliberately noisy host, `COGNI_RUN_SAFE_WAIT_QUIET_SEC=1 COGNI_RUN_SAFE_REQUIRE_QUIET=1 scripts/run_safe.sh /bin/true ...` failed closed before launch with exit `75` and reported busy CPU processes. The `/bin/true` path itself is absent on this macOS image, but the quiet abort happened before child launch; default behavior was separately checked with `/usr/bin/true`."
+  source: shell smoke output on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet guard threshold rewrite or host ps format change
+  trust: {F:0.78,G:0.30,R:0.78}
+
+**LTP/WBA:** The window is contaminated benchmark launch, the transport is a guarded benchmark command, and the legal move is wait-or-fail before model load. The potential decreases in `(host_noise, contaminated_runs, wasted_model_loads, remaining_benchmarks)`. This is not a speed optimization itself; it is a certification tool for future speed claims.
+**boundary:** Use this for promotion-grade ABBA. It does not replace in-binary `BenchLoadGuard` when a benchmark already needs internal per-phase quiet checks.

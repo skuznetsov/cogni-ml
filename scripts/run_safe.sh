@@ -12,6 +12,12 @@
 # kills the process tree if `memory_pressure -Q` reports free memory at or
 # below the threshold. This catches unified-memory/Metal/compressor pressure
 # that is not always visible in the child RSS alone.
+#
+# Optional benchmark-noise preflight:
+#   COGNI_RUN_SAFE_WAIT_QUIET_SEC=600 COGNI_RUN_SAFE_REQUIRE_QUIET=1
+# waits for other-process CPU load to fall below thresholds before launching
+# the child. This is fail-closed for perf runs: it does not kill or modify
+# user processes, it only waits and optionally aborts before model load.
 set -u
 set -m 2>/dev/null || true
 
@@ -34,6 +40,11 @@ STDERR_TMP=$(mktemp /tmp/run_safe_stderr.XXXXXX)
 WATCHDOG_PID=""
 PASSTHROUGH_STDIO="${RUN_SAFE_PASSTHROUGH_STDIO:-0}"
 MIN_FREE_PCT="${COGNI_RUN_SAFE_MIN_FREE_PCT:-0}"
+WAIT_QUIET_SEC="${COGNI_RUN_SAFE_WAIT_QUIET_SEC:-0}"
+QUIET_POLL_SEC="${COGNI_RUN_SAFE_QUIET_POLL_SEC:-1}"
+QUIET_PROC_PCT="${COGNI_RUN_SAFE_QUIET_PROC_PCT:-50}"
+QUIET_TOTAL_PCT="${COGNI_RUN_SAFE_QUIET_TOTAL_PCT:-100}"
+REQUIRE_QUIET="${COGNI_RUN_SAFE_REQUIRE_QUIET:-0}"
 PID=""
 PGID=""
 CAN_KILL_PGID=0
@@ -46,6 +57,66 @@ log_line() {
     echo "$@" >&2
   else
     echo "$@"
+  fi
+}
+
+busy_report() {
+  ps -Ao pid=,pcpu=,comm= 2>/dev/null | awk \
+    -v self="$$" \
+    -v proc_thr="$QUIET_PROC_PCT" \
+    -v total_thr="$QUIET_TOTAL_PCT" '
+      $1 == self { next }
+      {
+        pid=$1
+        cpu=$2 + 0
+        $1=""; $2=""
+        sub(/^  */, "", $0)
+        cmd=$0
+        total += cpu
+        if (cpu >= proc_thr && proc_thr > 0) {
+          busy_count += 1
+          busy = busy sprintf(" pid=%s cpu=%.1f cmd=%s\n", pid, cpu, cmd)
+        }
+      }
+      END {
+        total_busy = (total_thr > 0 && total >= total_thr)
+        if (busy_count > 0 || total_busy) {
+          printf("busy total_cpu=%.1f proc_threshold=%.1f total_threshold=%.1f\n", total, proc_thr, total_thr)
+          if (busy != "") printf("%s", busy)
+        }
+      }'
+}
+
+wait_for_quiet_host() {
+  local waited=0
+  local report=""
+  if [ "$WAIT_QUIET_SEC" -le 0 ] && [ "$REQUIRE_QUIET" != "1" ]; then
+    return 0
+  fi
+  if [ "$QUIET_POLL_SEC" -le 0 ]; then
+    QUIET_POLL_SEC=1
+  fi
+  while :; do
+    report=$(busy_report)
+    if [ -z "$report" ]; then
+      return 0
+    fi
+    if [ "$WAIT_QUIET_SEC" -le 0 ] || [ "$waited" -ge "$WAIT_QUIET_SEC" ]; then
+      break
+    fi
+    log_line "[WAIT] Host busy before run_safe launch (${waited}/${WAIT_QUIET_SEC}s):"
+    printf '%s\n' "$report" >&2
+    sleep "$QUIET_POLL_SEC"
+    waited=$((waited + QUIET_POLL_SEC))
+  done
+  if [ "$REQUIRE_QUIET" = "1" ]; then
+    log_line "[ABORT] Host still busy before run_safe launch:"
+    printf '%s\n' "$report" >&2
+    exit 75
+  fi
+  if [ -n "$report" ]; then
+    log_line "[WARN] Host busy before run_safe launch:"
+    printf '%s\n' "$report" >&2
   fi
 }
 
@@ -208,8 +279,10 @@ kill_tree_briefly() {
 }
 
 if [ "$PASSTHROUGH_STDIO" = "1" ]; then
+  wait_for_quiet_host
   "$BINARY" "$@" <&0 >&1 2> "$STDERR_TMP" &
 else
+  wait_for_quiet_host
   "$BINARY" "$@" > "$STDOUT_TMP" 2> "$STDERR_TMP" &
 fi
 PID=$!
