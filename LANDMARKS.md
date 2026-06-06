@@ -23705,3 +23705,29 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: benchmark evidence boundary. Legal move: remove unrelated decode work from the pp measurement before using it as a potential term. Potential now has cleaner components: `Phi=(pp/tg body gap vs llama, tied q4/q6 routes, measurement contamination, remaining exact work)`, with measurement contamination reduced to zero for pp.
 
 **decision:** Use this script for future body apples-to-apples rows. Do not cite older `--generate 1` pp rows as pure pp evidence without caveat.
+
+#### [LM-GEMMA4-GAP-TRIAGE-893] Current Gemma gap is not explained by B64-off, Q4 constants, or command-buffer sync alone
+**context:** ml / CogniGemma / Metal / llama.cpp / pp / tg / LTP-WBA
+**state:** verified triage anchor
+
+- claim: "B64 row-prefill routing remains beneficial at pp256."
+  source: guarded ABBA `/tmp/gemma4_b64off_pp256_abba_20260606182547`: default `342.175/341.545 tok/s`; `QWEN35_Q4K_H16_B64_OFF=1` `333.601/333.095 tok/s`.
+  verified_at: 2026-06-06
+  decay_trigger: row-prefill kernel rewrite, changed chunk policy, or quiet-host contradiction
+  trust: {F:0.82,G:0.42,R:0.80}
+
+- claim: "Decode command-buffer grouping helps but does not close the llama.cpp tg body gap."
+  source: guarded chain sweep `/tmp/gemma4_body_chain_sweep_current_20260606182655`: chain1 `30.611 tok/s`, chain2 `31.077`, chain4 `31.490`, chain8 `31.803`, chain16 `30.757`; current llama.cpp body tg anchor was about `34.0 tok/s` from `/tmp/gemma4_vs_llama_generate0_script_20260606182329.summary`.
+  verified_at: 2026-06-06
+  decay_trigger: decode scheduler rewrite, chain implementation rewrite, or llama.cpp benchmark update
+  trust: {F:0.80,G:0.38,R:0.78}
+
+- claim: "The obvious llama.cpp Q4/Q6 constant differences are not open promotion branches."
+  source: local inspection shows Q4_K GEMV constants match llama.cpp non-tensor Metal (`N_R0=2`, `N_SG=2`); current code already defaults Q4 x16 for Gemma routes; repo refutation ledger already covers Q6 `NR0=2` and Q6 shape-layout variants.
+  verified_at: 2026-06-06
+  decay_trigger: llama.cpp kernel update, local GEMV rewrite, or stale landmark contradiction
+  trust: {F:0.74,G:0.36,R:0.74}
+
+**LTP/WBA:** Window: remaining Gemma pp/tg body gap. Legal moves tested: disable B64, increase body-chain corridor, inspect Q4/Q6 constants. Potential did not collapse: B64-off worsened pp; body-chain reduces sync conflict but leaves dominant GEMV wait; Q4 constants are already aligned and Q6 alternatives are refuted. Dual frame should switch from local tile retuning to direct active-kernel import/comparison or graph/product-level work elimination.
+
+**decision:** Stop local constant/tile retries unless a new kernel body is imported or a new attribution bucket appears. Next branch should be either llama.cpp active-kernel parity at source level or CogniGraph known-token/session corridors.
