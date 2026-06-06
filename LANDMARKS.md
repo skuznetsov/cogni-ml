@@ -23160,3 +23160,15 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   trust: {F:0.74,G:0.32,R:0.74}
 
 **LTP/WBA:** Window: FFN gate/up/SwiGLU corridor, currently `q4 gate GEMV -> q4 up GEMV -> swiglu -> q6/q4 down`. Transport candidate: carry one normalized activation row through a true paired gate/up dot-product lane and emit `ffn_comb` directly. Legal move must preserve exact SwiGLU approximation already used by `swiglu_probe`, avoid materializing `ffn_gate`/`ffn_up`, and reduce recomputed wall rather than just kernel count. Prior packed-dual refutation remains valid only for the packed-row corridor; it does not refute true dual-SwiGLU.
+
+#### [LM-CUDA-RAWQ8-CHUNK-PROBE-REFUTE-001] Raw-Q8 chunk proposal is not profitable with full per-token verifier
+**context:** ml / CUDA / Qwen3.5 mixed-stack / raw-Q8 proposal / verifier economics / LTP-WBA
+**state:** refuted for current controller; proposal ingredient remains useful
+
+- claim: "The current raw-Q8 chunk proposal controller preserves exact output parity but is slower than exact greedy because it still pays full exact verification for every generated token after paying raw proposal cost."
+  source: remote RTX 5060 Ti current binary on 2026-06-06. Exact gen16 ctx64 measured `23.822ms/tok`. Raw-Q8 chunk probe with `gamma=2, margin=0.30` measured `50.802ms/tok`, `accepted_tokens=9/18`; `gamma=4, margin=0.30` measured `54.654ms/tok`, `accepted_tokens=7/21`. Lowering to `margin=0.03` improved acceptance to `14/17` raw tokens for both gamma2 and gamma4, but wall remained `48.777ms/tok` and `48.264ms/tok`. All runs kept the exact top1 sequence and `ok=true`.
+  verified_at: 2026-06-06
+  decay_trigger: known-span verifier rewrite, active-verifier route promotion, chunk verification becoming sublinear, raw-Q8 proposal kernel fusion, or controller scheduling rewrite
+  trust: {F:0.82,G:0.20,R:0.80}
+
+**LTP/WBA:** Window: raw-Q8 proposal body is locally faster (`~21.66ms/raw-token` vs exact `~23.82ms/token`). Transport: proposed token chunk through snapshot/restore into exact verifier. Boundary safety holds, but potential worsens because verifier work does not descend: raw proposal cost is added on top of `~24ms/verify-token`. This is a Diamond conflict between fast approximate proposal and exact boundary certification. Legal next moves are (1) a real known-span/sublinear verifier, (2) a no-validator/draft-quality lane with explicit quality gates, or (3) deeper fused raw-Q8 proposal only if verifier cost is simultaneously reduced. Do not promote the current restore+full-verify chunk controller as a speed feature.
