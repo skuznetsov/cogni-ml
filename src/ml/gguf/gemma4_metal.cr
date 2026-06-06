@@ -215,6 +215,11 @@ module ML::GGUF
         ENV["GEMMA4_COPY_K_TO_V_OFF"]? != "1"
       end
 
+      private def attn_prep_fuse_enabled? : Bool
+        ENV["GEMMA4_ATTN_PREP_FUSE"]? == "1" &&
+          ENV["GEMMA4_ATTN_PREP_FUSE_OFF"]? != "1"
+      end
+
       @@rmsnorm_weighted_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_vec_weighted_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_rows_weighted_pipeline : ML::Metal::ComputePipeline?
@@ -223,6 +228,9 @@ module ML::GGUF
       @@rmsnorm_heads_plain_rows_pipeline : ML::Metal::ComputePipeline?
       @@rope_pipeline : ML::Metal::ComputePipeline?
       @@rope_rows_pipeline : ML::Metal::ComputePipeline?
+      @@q_norm_rope_rows_pipeline : ML::Metal::ComputePipeline?
+      @@k_norm_rope_write_rows_pipeline : ML::Metal::ComputePipeline?
+      @@v_norm_write_rows_pipeline : ML::Metal::ComputePipeline?
       @@kv_write_pipeline : ML::Metal::ComputePipeline?
       @@kv_write_rows_pipeline : ML::Metal::ComputePipeline?
       @@kv_write_rows_h16_pipeline : ML::Metal::ComputePipeline?
@@ -880,15 +888,8 @@ module ML::GGUF
         end
 
         return false unless profile_rows_phase("#{prefix}.attn_prep") do |enc|
-          encode_rmsnorm_weighted_rows(enc, q_buf, q_weight, head_dim, hp.rms_eps, hp.n_head, batch)
-          encode_rmsnorm_weighted_rows(enc, k_buf, k_weight, head_dim, hp.rms_eps, hp.n_head_kv(il), batch)
-          encode_rmsnorm_plain_rows(enc, v_buf, head_dim, hp.rms_eps, hp.n_head_kv(il), batch)
-          encode_rope_rows(enc, q_buf, factor_buf, head_dim, rope_dim, base_pos, base, use_factors, hp.n_head, batch)
-          encode_rope_rows(enc, k_buf, factor_buf, head_dim, rope_dim, base_pos, base, use_factors, hp.n_head_kv(il), batch)
-          encode_kv_write_rows(enc, k_buf, v_buf, lstate.k_cache_buf, lstate.v_cache_buf, base_pos, kv_dim, batch)
-          if kv_h16_cache
-            encode_kv_write_rows_h16(enc, k_buf, v_buf, lstate.k_cache_h16_buf.not_nil!, lstate.v_cache_h16_buf.not_nil!, base_pos, kv_dim, batch)
-          end
+          encode_attn_prep_rows(enc, q_buf, k_buf, v_buf, q_weight, k_weight, factor_buf, lstate,
+            head_dim, rope_dim, base_pos, base, use_factors, hp.n_head, hp.n_head_kv(il), kv_dim, batch, hp.rms_eps, kv_h16_cache)
           true
         end
 
@@ -1056,15 +1057,8 @@ module ML::GGUF
             Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.attn_q_qw, lw.attn_k_qw, lw.attn_k_qw], x_norm_buf, [q_buf, k_buf, v_buf], batch)
           end
         end
-        encode_rmsnorm_weighted_rows(enc, q_buf, q_weight, head_dim, hp.rms_eps, hp.n_head, batch)
-        encode_rmsnorm_weighted_rows(enc, k_buf, k_weight, head_dim, hp.rms_eps, hp.n_head_kv(il), batch)
-        encode_rmsnorm_plain_rows(enc, v_buf, head_dim, hp.rms_eps, hp.n_head_kv(il), batch)
-        encode_rope_rows(enc, q_buf, factor_buf, head_dim, rope_dim, base_pos, base, use_factors, hp.n_head, batch)
-        encode_rope_rows(enc, k_buf, factor_buf, head_dim, rope_dim, base_pos, base, use_factors, hp.n_head_kv(il), batch)
-        encode_kv_write_rows(enc, k_buf, v_buf, lstate.k_cache_buf, lstate.v_cache_buf, base_pos, kv_dim, batch)
-        if kv_h16_cache
-          encode_kv_write_rows_h16(enc, k_buf, v_buf, lstate.k_cache_h16_buf.not_nil!, lstate.v_cache_h16_buf.not_nil!, base_pos, kv_dim, batch)
-        end
+        encode_attn_prep_rows(enc, q_buf, k_buf, v_buf, q_weight, k_weight, factor_buf, lstate,
+          head_dim, rope_dim, base_pos, base, use_factors, hp.n_head, hp.n_head_kv(il), kv_dim, batch, hp.rms_eps, kv_h16_cache)
         if kv_h16_cache && attn_splitk_enabled?(batch, sliding_window)
           encode_attention_context_rows_splitk_kv_h16(enc, scratch, q_buf, lstate.k_cache_h16_buf.not_nil!, lstate.v_cache_h16_buf.not_nil!, ctx_buf,
             base_pos, batch, hp.n_head, hp.n_head_kv(il), head_dim, heads_per_group)
@@ -2149,6 +2143,117 @@ module ML::GGUF
         enc.dispatch_threadgroups({n_heads, rows, 1}, {32, 1, 1})
       end
 
+      private def encode_q_norm_rope_rows(enc : ML::Metal::ComputeEncoder,
+                                          q_buf : ML::MetalBuffer,
+                                          weight_buf : ML::MetalBuffer,
+                                          factors_buf : ML::MetalBuffer,
+                                          head_dim : Int32,
+                                          rope_dim : Int32,
+                                          base_pos : Int32,
+                                          eps : Float32,
+                                          freq_base : Float32,
+                                          use_factors : UInt32,
+                                          n_heads : Int32,
+                                          rows : Int32) : Nil
+        enc.set_pipeline(q_norm_rope_rows_pipeline)
+        enc.set_buffer(q_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+        enc.set_buffer(weight_buf, 1)
+        enc.set_buffer(factors_buf, 2)
+        enc.set_value(head_dim.to_u32, 3)
+        enc.set_value(rope_dim.to_u32, 4)
+        enc.set_value(base_pos.to_u32, 5)
+        enc.set_value(eps, 6)
+        enc.set_value(freq_base, 7)
+        enc.set_value(use_factors, 8)
+        enc.set_value(n_heads.to_u32, 9)
+        enc.set_value(rows.to_u32, 10)
+        enc.dispatch_threadgroups({n_heads, rows, 1}, {32, 1, 1})
+      end
+
+      private def encode_k_norm_rope_write_rows(enc : ML::Metal::ComputeEncoder,
+                                                k_buf : ML::MetalBuffer,
+                                                weight_buf : ML::MetalBuffer,
+                                                factors_buf : ML::MetalBuffer,
+                                                k_cache_buf : ML::MetalBuffer,
+                                                head_dim : Int32,
+                                                rope_dim : Int32,
+                                                base_pos : Int32,
+                                                eps : Float32,
+                                                freq_base : Float32,
+                                                use_factors : UInt32,
+                                                n_heads : Int32,
+                                                rows : Int32) : Nil
+        enc.set_pipeline(k_norm_rope_write_rows_pipeline)
+        enc.set_buffer(k_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+        enc.set_buffer(weight_buf, 1)
+        enc.set_buffer(factors_buf, 2)
+        enc.set_buffer(k_cache_buf, 3, ML::Metal::BufferAccess::ReadWrite)
+        enc.set_value(head_dim.to_u32, 4)
+        enc.set_value(rope_dim.to_u32, 5)
+        enc.set_value(base_pos.to_u32, 6)
+        enc.set_value(eps, 7)
+        enc.set_value(freq_base, 8)
+        enc.set_value(use_factors, 9)
+        enc.set_value(n_heads.to_u32, 10)
+        enc.set_value(rows.to_u32, 11)
+        enc.dispatch_threadgroups({n_heads, rows, 1}, {32, 1, 1})
+      end
+
+      private def encode_v_norm_write_rows(enc : ML::Metal::ComputeEncoder,
+                                           v_buf : ML::MetalBuffer,
+                                           v_cache_buf : ML::MetalBuffer,
+                                           head_dim : Int32,
+                                           base_pos : Int32,
+                                           eps : Float32,
+                                           n_heads : Int32,
+                                           rows : Int32) : Nil
+        enc.set_pipeline(v_norm_write_rows_pipeline)
+        enc.set_buffer(v_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+        enc.set_buffer(v_cache_buf, 1, ML::Metal::BufferAccess::ReadWrite)
+        enc.set_value(head_dim.to_u32, 2)
+        enc.set_value(base_pos.to_u32, 3)
+        enc.set_value(eps, 4)
+        enc.set_value(n_heads.to_u32, 5)
+        enc.set_value(rows.to_u32, 6)
+        enc.dispatch_threadgroups({n_heads, rows, 1}, {32, 1, 1})
+      end
+
+      private def encode_attn_prep_rows(enc : ML::Metal::ComputeEncoder,
+                                        q_buf : ML::MetalBuffer,
+                                        k_buf : ML::MetalBuffer,
+                                        v_buf : ML::MetalBuffer,
+                                        q_weight : ML::MetalBuffer,
+                                        k_weight : ML::MetalBuffer,
+                                        factor_buf : ML::MetalBuffer,
+                                        lstate : ResidentLayerState,
+                                        head_dim : Int32,
+                                        rope_dim : Int32,
+                                        base_pos : Int32,
+                                        base : Float32,
+                                        use_factors : UInt32,
+                                        n_head : Int32,
+                                        n_head_kv : Int32,
+                                        kv_dim : Int32,
+                                        rows : Int32,
+                                        eps : Float32,
+                                        kv_h16_cache : Bool) : Nil
+        if attn_prep_fuse_enabled? && !kv_h16_cache
+          encode_q_norm_rope_rows(enc, q_buf, q_weight, factor_buf, head_dim, rope_dim, base_pos, eps, base, use_factors, n_head, rows)
+          encode_k_norm_rope_write_rows(enc, k_buf, k_weight, factor_buf, lstate.k_cache_buf, head_dim, rope_dim, base_pos, eps, base, use_factors, n_head_kv, rows)
+          encode_v_norm_write_rows(enc, v_buf, lstate.v_cache_buf, head_dim, base_pos, eps, n_head_kv, rows)
+        else
+          encode_rmsnorm_weighted_rows(enc, q_buf, q_weight, head_dim, eps, n_head, rows)
+          encode_rmsnorm_weighted_rows(enc, k_buf, k_weight, head_dim, eps, n_head_kv, rows)
+          encode_rmsnorm_plain_rows(enc, v_buf, head_dim, eps, n_head_kv, rows)
+          encode_rope_rows(enc, q_buf, factor_buf, head_dim, rope_dim, base_pos, base, use_factors, n_head, rows)
+          encode_rope_rows(enc, k_buf, factor_buf, head_dim, rope_dim, base_pos, base, use_factors, n_head_kv, rows)
+          encode_kv_write_rows(enc, k_buf, v_buf, lstate.k_cache_buf, lstate.v_cache_buf, base_pos, kv_dim, rows)
+          if kv_h16_cache
+            encode_kv_write_rows_h16(enc, k_buf, v_buf, lstate.k_cache_h16_buf.not_nil!, lstate.v_cache_h16_buf.not_nil!, base_pos, kv_dim, rows)
+          end
+        end
+      end
+
       private def encode_kv_write_one(enc : ML::Metal::ComputeEncoder,
                                       k_buf : ML::MetalBuffer,
                                       v_buf : ML::MetalBuffer,
@@ -2568,6 +2673,24 @@ module ML::GGUF
       private def rope_rows_pipeline : ML::Metal::ComputePipeline
         @@rope_rows_pipeline ||= ML::Metal::PipelineCache.get("gemma4_rope_neox_rows") {
           ML::Metal::ComputePipeline.new("gemma4_rope_neox_rows", GEMMA4_SOURCE)
+        }
+      end
+
+      private def q_norm_rope_rows_pipeline : ML::Metal::ComputePipeline
+        @@q_norm_rope_rows_pipeline ||= ML::Metal::PipelineCache.get("gemma4_q_norm_rope_rows") {
+          ML::Metal::ComputePipeline.new("gemma4_q_norm_rope_rows", GEMMA4_SOURCE)
+        }
+      end
+
+      private def k_norm_rope_write_rows_pipeline : ML::Metal::ComputePipeline
+        @@k_norm_rope_write_rows_pipeline ||= ML::Metal::PipelineCache.get("gemma4_k_norm_rope_write_rows") {
+          ML::Metal::ComputePipeline.new("gemma4_k_norm_rope_write_rows", GEMMA4_SOURCE)
+        }
+      end
+
+      private def v_norm_write_rows_pipeline : ML::Metal::ComputePipeline
+        @@v_norm_write_rows_pipeline ||= ML::Metal::PipelineCache.get("gemma4_v_norm_write_rows") {
+          ML::Metal::ComputePipeline.new("gemma4_v_norm_write_rows", GEMMA4_SOURCE)
         }
       end
 

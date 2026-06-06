@@ -22091,3 +22091,34 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Daedalus pivot: the active window changed from byte-dominant GEMV shape to wait-dominant phase corridor. Legal next moves should target `attn_prep` and other small-kernel phase families through fusion/graph scheduling, while using tagged GEMV data only as secondary evidence. Potential becomes `(dominant_phase_wait, tied_phase_families, sync_count, remaining_logical_bytes)`.
 **boundary:** Phase profiling itself adds many command buffers and is not a production timing path. Use it for attribution only; promotion still requires normal decode ABBA wall checks.
+
+### [LM-COGNIGRAPH-022] Gemma attn_prep F32 fusion is parity-safe but not yet promotable
+**context:** ml / CogniGraph / Gemma4 / attn_prep / Metal fusion / LTP-WBA
+**state:** implemented as opt-in `GEMMA4_ATTN_PREP_FUSE=1`; default remains old exact path
+
+- claim: "`GEMMA4_ATTN_PREP_FUSE=1` replaces the F32 KV-cache `attn_prep` corridor with three fused kernels: Q RMSNorm+RoPE, K RMSNorm+RoPE+K-cache write, and V RMSNorm+V-cache write. H16 KV cache remains on the old path. Both phase-profile and normal decode paths call the same `encode_attn_prep_rows` helper."
+  source: `src/ml/gguf/gemma4_metal.cr` and `src/ml/gguf/kernels/gemma4.metal`; `crystal build bin/gemma4_metal_decode_profile.cr --no-codegen` passed on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma attention prep rewrite, H16 KV default change, RoPE/norm kernel rewrite, or resident cache layout change
+  trust: {F:0.84,G:0.22,R:0.82}
+
+- claim: "Short runtime parity held for decode-only Gemma generation: default and fused traces both produced `token_trace=42,236761,236761,236761,236761,236761,236761,236761,236761` for `--decode-wave --generate=8 --decode-only-seed=42 --print-generated-ids`."
+  source: guarded logs `/tmp/gemma4_attnprep_default_ids.log` and `/tmp/gemma4_attnprep_fused_ids.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma top1 route rewrite, fused prep rewrite, tokenizer/model change, or larger parity contradiction
+  trust: {F:0.84,G:0.12,R:0.82}
+
+- claim: "Warm phase attribution showed a local `attn_prep` descent: default warm `attn_prep` wait `37.24ms`, fused warm `27.74ms` across 48 layer phases; total profiled wait was `212.2ms -> 180.49ms`."
+  source: guarded logs `/tmp/gemma4_attnprep_phase_default_warm.log`, `/tmp/gemma4_attnprep_phase_fused_warm.log` and atlas files on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host phase rerun contradiction, profile accounting rewrite, or fused kernel rewrite
+  trust: {F:0.80,G:0.12,R:0.78}
+
+- claim: "Whole-corridor normal decode speed is not promotable yet. A short ABBA was mixed (`52.074/49.649/45.662/46.725 ms/tok` default/fused/default/fused). A longer warm run was contaminated by unrelated CPU load (`crystal spec spec/sim/ --order random`, syspolicyd, WindowServer), with default range `78.14..128.134 ms/tok` and fused range `93.787..139.801 ms/tok`; median favored fused but variance is too high for a default."
+  source: guarded logs `/tmp/gemma4_attnprep_{default1,fused1,default2,fused2}.log`, `/tmp/gemma4_attnprep_g128_*.log`, and `ps` output on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host ABBA with stable baseline, scheduler rewrite, or fused kernel retune
+  trust: {F:0.74,G:0.10,R:0.66}
+
+**LTP/WBA:** This is a legal experimental Spike/Ladder on the `attn_prep` corridor: the window is verified phase wait, transport is q/k/v head rows into resident KV cache, boundary is exact Q/K/V normalization/RoPE/cache semantics, and the local potential descends in warm phase attribution. Recompute safety is not yet proven for normal decode wall time, so the move remains opt-in and cannot be collapsed into default.
+**boundary:** Do not promote `GEMMA4_ATTN_PREP_FUSE=1` until a quiet-host ABBA or ABBA/ABAB run shows stable wall descent on normal decode. The next Diamond should check whether fused kernels reduce launch count but increase occupancy/register pressure enough to hurt long decode under load.

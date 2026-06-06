@@ -229,6 +229,142 @@ kernel void gemma4_rope_neox_rows(
     }
 }
 
+kernel void gemma4_q_norm_rope_rows(
+    device       float* q            [[buffer(0)]],
+    device const float* weight       [[buffer(1)]],
+    device const float* freq_factors [[buffer(2)]],
+    constant     uint&  head_dim     [[buffer(3)]],
+    constant     uint&  rope_dim     [[buffer(4)]],
+    constant     uint&  base_pos     [[buffer(5)]],
+    constant     float& eps          [[buffer(6)]],
+    constant     float& freq_base    [[buffer(7)]],
+    constant     uint&  use_factors  [[buffer(8)]],
+    constant     uint&  n_head       [[buffer(9)]],
+    constant     uint&  n_tokens     [[buffer(10)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]])
+{
+    const uint h = tgpig.x;
+    const uint t = tgpig.y;
+    if (h >= n_head || t >= n_tokens) return;
+
+    device float* head = q + (t * n_head + h) * head_dim;
+    float ss = 0.0f;
+    for (uint d = tiisg; d < head_dim; d += 32) {
+        const float v = head[d];
+        ss += v * v;
+    }
+    const float sum = simd_sum(ss);
+    const float inv = rsqrt(sum / float(head_dim) + eps);
+
+    const uint half_dim = rope_dim / 2;
+    const uint pos = base_pos + t;
+    for (uint i = tiisg; i < half_dim; i += 32) {
+        const float factor = use_factors == 0 ? 1.0f : freq_factors[i];
+        const float freq = pow(freq_base, -2.0f * float(i) / float(rope_dim)) / factor;
+        const float theta = float(pos) * freq;
+        const float c = cos(theta);
+        const float s = sin(theta);
+        const float x0 = head[i] * inv * weight[i];
+        const float x1 = head[i + half_dim] * inv * weight[i + half_dim];
+        head[i] = x0 * c - x1 * s;
+        head[i + half_dim] = x0 * s + x1 * c;
+    }
+    for (uint d = rope_dim + tiisg; d < head_dim; d += 32) {
+        head[d] = head[d] * inv * weight[d];
+    }
+}
+
+kernel void gemma4_k_norm_rope_write_rows(
+    device       float* k            [[buffer(0)]],
+    device const float* weight       [[buffer(1)]],
+    device const float* freq_factors [[buffer(2)]],
+    device       float* k_cache      [[buffer(3)]],
+    constant     uint&  head_dim     [[buffer(4)]],
+    constant     uint&  rope_dim     [[buffer(5)]],
+    constant     uint&  base_pos     [[buffer(6)]],
+    constant     float& eps          [[buffer(7)]],
+    constant     float& freq_base    [[buffer(8)]],
+    constant     uint&  use_factors  [[buffer(9)]],
+    constant     uint&  n_head       [[buffer(10)]],
+    constant     uint&  n_tokens     [[buffer(11)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]])
+{
+    const uint h = tgpig.x;
+    const uint t = tgpig.y;
+    if (h >= n_head || t >= n_tokens) return;
+
+    const uint kv_dim = n_head * head_dim;
+    const uint cache_base = (base_pos + t) * kv_dim + h * head_dim;
+    device float* head = k + (t * n_head + h) * head_dim;
+
+    float ss = 0.0f;
+    for (uint d = tiisg; d < head_dim; d += 32) {
+        const float v = head[d];
+        ss += v * v;
+    }
+    const float sum = simd_sum(ss);
+    const float inv = rsqrt(sum / float(head_dim) + eps);
+
+    const uint half_dim = rope_dim / 2;
+    const uint pos = base_pos + t;
+    for (uint i = tiisg; i < half_dim; i += 32) {
+        const float factor = use_factors == 0 ? 1.0f : freq_factors[i];
+        const float freq = pow(freq_base, -2.0f * float(i) / float(rope_dim)) / factor;
+        const float theta = float(pos) * freq;
+        const float c = cos(theta);
+        const float s = sin(theta);
+        const float x0 = head[i] * inv * weight[i];
+        const float x1 = head[i + half_dim] * inv * weight[i + half_dim];
+        const float y0 = x0 * c - x1 * s;
+        const float y1 = x0 * s + x1 * c;
+        head[i] = y0;
+        head[i + half_dim] = y1;
+        k_cache[cache_base + i] = y0;
+        k_cache[cache_base + i + half_dim] = y1;
+    }
+    for (uint d = rope_dim + tiisg; d < head_dim; d += 32) {
+        const float y = head[d] * inv * weight[d];
+        head[d] = y;
+        k_cache[cache_base + d] = y;
+    }
+}
+
+kernel void gemma4_v_norm_write_rows(
+    device       float* v            [[buffer(0)]],
+    device       float* v_cache      [[buffer(1)]],
+    constant     uint&  head_dim     [[buffer(2)]],
+    constant     uint&  base_pos     [[buffer(3)]],
+    constant     float& eps          [[buffer(4)]],
+    constant     uint&  n_head       [[buffer(5)]],
+    constant     uint&  n_tokens     [[buffer(6)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]])
+{
+    const uint h = tgpig.x;
+    const uint t = tgpig.y;
+    if (h >= n_head || t >= n_tokens) return;
+
+    const uint kv_dim = n_head * head_dim;
+    const uint cache_base = (base_pos + t) * kv_dim + h * head_dim;
+    device float* head = v + (t * n_head + h) * head_dim;
+
+    float ss = 0.0f;
+    for (uint d = tiisg; d < head_dim; d += 32) {
+        const float x = head[d];
+        ss += x * x;
+    }
+    const float sum = simd_sum(ss);
+    const float inv = rsqrt(sum / float(head_dim) + eps);
+
+    for (uint d = tiisg; d < head_dim; d += 32) {
+        const float y = head[d] * inv;
+        head[d] = y;
+        v_cache[cache_base + d] = y;
+    }
+}
+
 constant uint GEMMA4_ATTN_SG = 32;
 constant uint GEMMA4_ATTN_MAX_HD = 512;
 
