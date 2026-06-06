@@ -22982,3 +22982,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: oversized CrystalBall system prompt causing slow/sticky Gemma harness startup. Transport: system message -> compact CogniGemma frame -> Gemma wrapper prompt -> prompt-only decode. Legal Spike: replace only the provider-local system body while preserving task/user messages and key dynamic context. Legal cleanup: strip trailing line-only channel artifacts after generation. Potential descends in `(prompt_tokens, max_seq_pressure, first_run_pp_wall, content_noise, harness_timeout_risk)`. Recompute evidence: no-tool harness smoke moved from stalled/terminated large-prompt run to a bounded clean output.
 **boundary:** This verifies prompt-only CogniGemma harness startup with tools denied. Full ReAct with broad tools remains blocked by tool-surface size and free-form string/path tool grammar. Next productive branch is a CogniGemma tool diet plus a native grammar corridor for common string arguments (`read_file.path`, `grep.pattern/path`) or prompt-cache reuse of the system/tool prefix.
+
+#### [LM-COGNIGRAPH-059] CogniGemma can drive a real CrystalBall read_file tool call
+**context:** ml / CogniGraph / Gemma4 / CrystalBall harness / bare tool-call fallback / ReAct tools / LTP-WBA
+**state:** single-tool harness smoke verified after provider fallback parser
+
+- claim: "Gemma4 often emits practical bare call syntax such as `call:read_file{path:docs/cogni_qwen_harness.md}` without native `<|tool_call>` sentinels. CrystalBall commit `06ec4c7 fix: parse bare Gemma tool calls` adds a provider fallback parser for `call:name{arg:value}` when the strict sentinel JSON path returns no tool calls."
+  source: `/Users/sergey/Projects/Crystal/crystal_ball` commit `06ec4c7`; focused spec `../cogni-ml/scripts/run_safe.sh crystal 180 8192 spec spec/llm/cogni_gemma_spec.cr --error-trace` passed (`7 examples, 0 failures`); root no-codegen build passed.
+  verified_at: 2026-06-06
+  decay_trigger: Gemma output syntax change, provider parser rewrite, tool schema parser rewrite, or native sentinel parser becoming sufficient
+  trust: {F:0.86,G:0.22,R:0.84}
+
+- claim: "A compact CrystalBall harness run with only `read_file` allowed executed the real tool through CogniGemma. The LLM produced a parsed `read_file({path: docs/cogni_qwen_harness.md})` call, CrystalBall read 243 lines from the file, and the agent finished with `Done.`"
+  source: `/tmp/cb_cogni_gemma_harness_readfile2.log` on 2026-06-06; command used `GEMMA4_PROFILE_BIN=/tmp/gemma4_native_tool_diag`, `--provider cogni-gemma`, `--max-turns 1`, `--allow-tools read_file`, and `--auto-approve-safe`.
+  verified_at: 2026-06-06
+  decay_trigger: CrystalBall tool prompt wording change, CogniGemma compact prompt change, Gemma model/profile binary change, or provider bare-call parser rewrite
+  trust: {F:0.84,G:0.16,R:0.82}
+
+**LTP/WBA:** Window: near-valid Gemma tool syntax missing sentinel wrappers. Transport: generated content -> bare-call recognizer -> CrystalBall `FunctionCall` -> tool executor. Legal Spike: parse only bounded `call:name{...}` shapes against the active tool allowlist, instead of retrying generation or broadening the prompt. Potential descends in `(sentinel_parse_gap, missed_tool_call_count, extra_generation_turns, remaining_tool_harness_work)`. Boundary safety: strict sentinel JSON remains primary; fallback only activates when parsed calls are empty and tool names match the active tools.
+**decision:** This gives CogniGemma a practical single-tool CrystalBall path. Full broad-tool ReAct still needs a tool-surface diet and safer multi-argument/free-form grammar, but `read_file` with compact prompt is now a verified useful corridor.
