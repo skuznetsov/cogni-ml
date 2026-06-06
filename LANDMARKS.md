@@ -23657,3 +23657,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: row-prefill FFN-in seam after attention output projection. Transport: `attn_projected + residual -> FFN input` over batch rows. Legal move: fuse RMSNorm and residual add into one row kernel only when the batch corridor is large enough. Boundary safety: decode/batch1 remains unchanged because default threshold is `128`; rollback/env override is explicit. Recomputed potential descends modestly for pp256/pp512 and does not promote for pp64.
 
 **decision:** Keep this as a thresholded exact default. Do not overclaim; the dominant pp bottleneck remains the Q4 FFN-upgate weight corridor.
+
+#### [LM-GEMMA4-TOP1-CHAIN8-890] Gemma resident top1 chain8 gen128 regression was not reproducible under guarded ABBA
+**context:** ml / CogniGemma / Metal / decode / top1 / measurement discipline
+**state:** verified measurement refutation; no code patch promoted
+
+- claim: "Resident top1 `top1_chain=8` should not be disabled for gen128 based on the earlier single bad row."
+  source: guarded sequential chain sweep `/tmp/gemma4_top1_chain128_sweep_20260606180730` preserved `first_id=42`, `last_id=236770` for chain1/2/4/8/16 and legacy; timing favored chain8 (`34.430ms/tok`) over chain16 (`35.312ms/tok`), chain4 (`37.491ms/tok`), chain2 (`38.841ms/tok`), chain1 (`42.106ms/tok`), and legacy (`39.766ms/tok`). Guarded ABBA `/tmp/gemma4_top1_chain8_legacy_abba_20260606180900` measured chain8 `36.140/37.726ms/tok` versus legacy `39.992/39.982ms/tok`, same ids.
+  verified_at: 2026-06-06
+  decay_trigger: repeated quiet-host gen128/gen256 ABBA contradiction, resident-chain implementation rewrite, or Metal scheduling/runtime change
+  trust: {F:0.82,G:0.38,R:0.80}
+
+**LTP/WBA:** Window: apparent long-generation resident-chain wait spike. Transport: resident greedy/top1 chain chunks across gen128. Legal move considered: switch to legacy/smaller-chain dual frame for long generations. Recomputed potential under guarded runs did not show the spike; chain8 reduced the dominant wait versus legacy. Therefore the fallback patch is not a legal Collapse; it would optimize a non-reproduced window.
+
+**decision:** Keep resident chain8 default. If the spike returns, require guarded ABBA with memory-pressure notes before changing policy.
