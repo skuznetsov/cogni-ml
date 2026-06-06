@@ -23136,3 +23136,15 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: existing CogniGemma Metal resident/decode-wave knowledge plus Qwen CUDA mixed-stack infrastructure. Transport: Gemma4 verified semantics (K-as-V full layers, ungated GQA, SWA/full cadence, GELU FFN, tied Q6 head) -> CUDA runner/kernels -> CLI/session harness. Legal moves must preserve Gemma4 parity first, then port only proven resident/wave scheduling patterns from Metal and split/context scheduling from Qwen CUDA where the geometry matches. Dual frame: keep Metal CogniGemma as the correctness oracle and llama.cpp CUDA as the performance oracle until native CUDA parity exists.
 **decision:** Do not let Qwen CUDA optimization consume the entire CUDA roadmap. After the current Qwen short-context body/head frontier, start a bounded CogniGemma CUDA scaffold: metadata/weights reuse, CPU/Metal parity oracle, CUDA embedding/head/projection primitives, then one-layer and resident decode gates.
+
+#### [LM-CUDA-Q4-HALFWARP-REFUTE-001] Half-warp Q4 row-lane geometry preserves parity but regresses CUDA decode
+**context:** ml / CUDA / Qwen3.5 mixed-stack / short-context GEMV / LTP-WBA
+**state:** refuted and removed
+
+- claim: "A default-off `q4_k_gemv_hwarp8_f32` experiment that mapped 16 lanes per output row and 8 rows per CTA preserved semantic top1 parity but worsened short-context Qwen3.5-9B CUDA decode wall time, so it is not a legal optimization."
+  source: remote RTX 5060 Ti ABBA on 2026-06-06 after building the gated kernel. Baseline gen16 ctx64 measured `23.814ms/tok` and `23.841ms/tok`; half-warp measured `27.686ms/tok` and `27.668ms/tok`; all four runs kept identical `top1_gpu=198,2,220,16,13,27416,198,760,2614,369,264,11782,314,279,1328,3387`, `ok=true`.
+  verified_at: 2026-06-06
+  decay_trigger: Q4 reduction rewrite, warp-shuffle half-warp reducer replacing shared-memory reducer, GPU architecture change, or different row grouping that also changes memory coalescing/occupancy
+  trust: {F:0.82,G:0.18,R:0.80}
+
+**LTP/WBA:** Window was short-context Q4 GEMV row-lane utilization. Transport tried to carry each row through a half-warp corridor, doubling rows per CTA. Boundary safety held, but recomputed potential worsened: wall time increased even though local row grouping looked denser. The failed legal move indicates the dominant conflict is not simply rows-per-CTA; lane work, memory coalescing, and reduction overhead are earlier potential components. Do not retry half-warp Q4 with shared-memory reduction; only revisit if the reducer becomes warp-shuffle/native and ABBA shows global descent.
