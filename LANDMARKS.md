@@ -23051,3 +23051,15 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: CUDA graph replay crash at the graph-instantiation boundary. Transport: captured stream graph -> graph exec object -> replayed mixed-stack wave. Legal Spike: replace the ambiguous legacy symbol with the explicit flags API without touching kernel launch semantics. Potential descends in `(graph_crash_risk, ABI_ambiguity, replay_infra_blocker, remaining_cuda_productization_work)`. Recompute safety: normal direct launches and non-graph CUDA kernels are untouched; graph replay remains opt-in and empirically only a small wall-time improvement.
 **decision:** Keep CUDA Graph as infrastructure, not the next speed frontier. Next CUDA speed work should target body GEMV/FFN bandwidth or long-context attention, using phase attribution before kernel rewrites.
+
+#### [LM-CUDA-FFN-DUAL-REFUTE-001] Recurrent FFN gate/up dual Q4 kernel is correctness-safe but slower
+**context:** ml / CUDA / Qwen3.5 mixed-stack / recurrent FFN / LTP-WBA refutation
+**state:** tested and removed
+
+- claim: "Routing recurrent FFN gate+up through the existing `q4_k_dual_gemv_warp4_f32` kernel preserved correctness but worsened wall time, so it is not a legal default optimization."
+  source: remote RTX 5060 Ti A/B on 2026-06-06. Five-layer full-logit correctness stayed exact (`ok=true`, `top1_gpu=top1_cpu=100253`), but timing was neutral/negative: five-layer `8.259ms` dual vs `8.227ms` kill-switch; full 9B steady `23.472ms/tok` dual vs `23.272ms/tok` kill-switch; full 9B semantic gen16 `23.995ms/tok` dual vs `23.809ms/tok` kill-switch.
+  verified_at: 2026-06-06
+  decay_trigger: dual Q4 kernel rewrite, FFN activation layout change, gate/up tensor packing change, or a new fused dual+SwiGLU/down corridor
+  trust: {F:0.82,G:0.24,R:0.80}
+
+**LTP/WBA:** Window was the recurrent FFN gate/up pair reading the same activation. Transport attempted to carry one activation corridor into a dual-output Q4 kernel. Boundary safety held, but recomputed potential worsened in `(register_pressure_or_occupancy, wall_time, remaining_work)`. The local launch/activation-read reduction did not descend global wall. The experiment was removed; do not retry simple dual gate/up fusion without also changing the reduction geometry or fusing into SwiGLU/down.
