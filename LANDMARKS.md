@@ -23731,3 +23731,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: remaining Gemma pp/tg body gap. Legal moves tested: disable B64, increase body-chain corridor, inspect Q4/Q6 constants. Potential did not collapse: B64-off worsened pp; body-chain reduces sync conflict but leaves dominant GEMV wait; Q4 constants are already aligned and Q6 alternatives are refuted. Dual frame should switch from local tile retuning to direct active-kernel import/comparison or graph/product-level work elimination.
 
 **decision:** Stop local constant/tile retries unless a new kernel body is imported or a new attribution bucket appears. Next branch should be either llama.cpp active-kernel parity at source level or CogniGraph known-token/session corridors.
+
+#### [LM-GEMMA4-FA-GAP-894] llama.cpp FlashAttention is the leading remaining Gemma Metal gap source
+**context:** ml / CogniGemma / Metal / llama.cpp / FlashAttention / LTP-WBA
+**state:** verified benchmark pivot anchor
+
+- claim: "The current Gemma body gap changes substantially when llama.cpp FlashAttention is disabled."
+  source: `LLAMA_FA=0` guarded body-chain8 comparison `/tmp/gemma4_vs_llama_fa0_p256_g128_20260606183111`: llama.cpp `353.860 pp tok/s`, `27.725 tg tok/s`; CogniGemma `341.793 pp tok/s`, `31.856 tg tok/s`; ratios `0.966x`, `1.149x`. Strict chain1 comparison `/tmp/gemma4_vs_llama_fa0_p256_g128_chain1_20260606183210`: llama.cpp `381.486 pp`, `31.416 tg`; CogniGemma `342.923 pp`, `30.722 tg`; ratios `0.899x`, `0.978x`.
+  verified_at: 2026-06-06
+  decay_trigger: llama.cpp FA implementation update, CogniGemma attention rewrite, quiet-host ABBA contradiction, or different pp/gen/context shape
+  trust: {F:0.80,G:0.42,R:0.78}
+
+**LTP/WBA:** Window: benchmark gap under llama `-fa 1`. Transport: attention context corridor across prompt/decode rows. Legal move: compare against the dual frame `LLAMA_FA=0` before blaming FFN/GEMV. Potential recomputation shows the gap largely moves with FA, while B64/Q4/GEMV tweaks do not collapse it. This redirects the active window to attention/FA parity.
+
+**decision:** Next exact speed branch should study and port/improve the relevant llama.cpp FA attention path for Gemma, or build an equivalent CogniGraph fused attention corridor. Stop prioritizing standalone Q4/Q6 tile retunes until attention parity is addressed.
