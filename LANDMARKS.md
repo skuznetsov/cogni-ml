@@ -22034,3 +22034,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The active window is no longer only a shape (`3840x15360`) but an op corridor (`ffn_gate`, `ffn_up`, `ffn_down`, attention projections). The route tag is a local certificate carried with the quantized tensor, letting future moves test op-specific Q4/Q6 routes without global shape side effects. Potential becomes `(dominant_op_corridor, tied_op_routes, route_conflicts, remaining_logical_bytes)`.
 **boundary:** This is attribution only, not an optimizer. Do not promote a kernel route because a tagged corridor is large; require ABBA wall descent for the tagged op/model route.
+
+### [LM-COGNIGRAPH-019] Route-tagged Q4 x16 selector refutes Gemma ffn_gate/up-only promotion
+**context:** ml / CogniGraph / Gemma4 / Q4_K x16 / route-tag selector / LTP-WBA refutation
+**state:** selector implemented opt-in; tested ffn_gate/up-only route is refuted for promotion
+
+- claim: "`QWEN35_Q4K_GEMV_X16_TAGS` now selects the Q4 x16 GEMV route by comma-separated normalized route-tag substrings, while `QWEN35_Q4K_GEMV_X16=1` remains the explicit global override. This lets route experiments target corridors such as `gemma4:blk.*.ffn_gate.weight` without changing defaults."
+  source: `src/ml/gguf/qwen35_metal.cr`; no-codegen builds for Gemma profile and Qwen benchmark passed on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Q4 GEMV route rewrite, route-tag matching rewrite, or env policy rewrite
+  trust: {F:0.86,G:0.30,R:0.84}
+
+- claim: "Tag-selecting only Gemma `ffn_gate` and `ffn_up` for x16 was not a speed win. Matched body-chain gen64 run measured default/tags/global/default/tags/global p50 tok/s `30.964 / 30.580 / 32.439 / 30.733 / 30.581 / 26.246`. The targeted route was consistently slightly worse than default; global x16 remained unstable in this run."
+  source: guarded logs `/tmp/gemma4_x16tags_{default1,tags1,global1,default2,tags2,global2}.log` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host rerun contradiction, Q4 x16 kernel rewrite, body-chain scheduler rewrite, or route-tag policy rewrite
+  trust: {F:0.84,G:0.18,R:0.82}
+
+**LTP/WBA:** The tag selector made the local window precise, and recomputation showed the proposed `ffn_gate/up` x16 move does not lower the corridor potential. This is a useful refutation because it separates the tool from the route: route-tag transport is legal, but this specific move is not promotable.
+**boundary:** Do not default x16 for Gemma `ffn_gate/up` based on logical dominance. Future route-tag experiments should test `ffn_down`, attention projections, or composite graph routes separately with ABBA wall checks.

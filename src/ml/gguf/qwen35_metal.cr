@@ -949,8 +949,21 @@ module ML
           }
         end
 
-        private def self.q4_gemv_x16_enabled? : Bool
-          ENV["QWEN35_Q4K_GEMV_X16"]? == "1"
+        private def self.normalized_route_tag(qw : QuantWeight?) : String?
+          tag = qw.try(&.route_tag)
+          tag.try { |value| value.gsub(/\.\d+\./, ".*.") }
+        end
+
+        private def self.q4_gemv_x16_enabled?(qw : QuantWeight?) : Bool
+          return true if ENV["QWEN35_Q4K_GEMV_X16"]? == "1"
+          return false unless patterns = ENV["QWEN35_Q4K_GEMV_X16_TAGS"]?
+          tag = normalized_route_tag(qw)
+          return false unless tag
+
+          patterns.split(',').any? do |pattern|
+            needle = pattern.strip
+            !needle.empty? && tag.includes?(needle)
+          end
         end
 
         private def self.mv_q4_layout_pipeline(nsg : Int32, nr0 : Int32) : ML::Metal::ComputePipeline
@@ -1012,8 +1025,7 @@ module ML
 
         private def self.profile_route_tag(qw : QuantWeight?) : String
           return "" unless ENV["QWEN35_PROFILE_ROUTE_TAGS"]? == "1"
-          tag = qw.try(&.route_tag) || "untagged"
-          " tag=#{tag.gsub(/\.\d+\./, ".*.")}"
+          " tag=#{normalized_route_tag(qw) || "untagged"}"
         end
 
         private def self.mv_add_pipeline : ML::Metal::ComputePipeline
@@ -1772,7 +1784,7 @@ module ML
           actual_pipeline = pipeline
           rows_per_tg = gemv_rows_per_tg_for(pipeline)
           threads_per_tg = gemv_threads_per_tg_for(pipeline)
-          if q4_gemv_x16_enabled? && batch <= GEMM_BATCH_THRESHOLD && pipeline.same?(mv_pipeline) && (in_dim % QK_K == 0)
+          if q4_gemv_x16_enabled?(route_qw) && batch <= GEMM_BATCH_THRESHOLD && pipeline.same?(mv_pipeline) && (in_dim % QK_K == 0)
             actual_pipeline = mv_q4_x16_pipeline
             rows_per_tg = MV_Q4_NSG * 2
             threads_per_tg = MV_Q4_NSG * 32
