@@ -22594,3 +22594,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This repairs the boundary safety of LM-COGNIGRAPH-040. Window: finite literal prefix before any generated token. Transport: prompt hidden -> first-token frontier -> selected token -> remaining literal suffix -> decode frontier. Legal move: constrain first token without mutating KV state, then continue resident allowed-head decode. Potential descends in `(unconstrained_seed_conflict, frontier_vocab_rows, full_head_filter_tax, literal_suffix_remaining)`; the first component is now removed for the diagnostic.
 **boundary:** Still diagnostic, not production JSON/function-calling. Product promotion needs a grammar state machine that supplies certified frontiers for tool syntax and value spans, plus total wall timing with prefill/head boundaries separated.
+
+#### [LM-COGNIGRAPH-043] Gemma literal forced-single elimination is correct but only mildly positive
+**context:** ml / CogniGraph / Gemma4 / constrained literal frontier / forced spans / LTP-WBA
+**state:** implemented in diagnostic profiler; correctness verified; speed effect small on tested literal
+
+- claim: "`bin/gemma4_metal_decode_profile.cr --constrained-literal-prefix` now has default-on forced-single elimination: if the tokenizer frontier has exactly one legal token, the profiler skips lm-head ranking, updates the body state for the current token, and emits the forced token. `--literal-force-single-off` disables this for A/B."
+  source: `scripts/run_safe.sh crystal 180 8192 build --no-codegen bin/gemma4_metal_decode_profile.cr --error-trace` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: literal frontier rewrite, Gemma body-chain/wave rewrite, or profiler decode-loop rewrite
+  trust: {F:0.84,G:0.24,R:0.82}
+
+- claim: "The forced-single route preserves constrained output. For literal `<tool_call>` and `gen=10`, forced-on and forced-off emitted identical token trace `236820,236745,236748,551,236779,236755,236746,236752,236752,236813,236761` and text `<tool_call>.`."
+  source: `/tmp/gemma4_literal_forced_1780713975/{tool_forced_on_gen10.log,tool_forced_off_gen10.log}` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: tokenizer changes, prompt/model change, or forced-single route rewrite
+  trust: {F:0.82,G:0.12,R:0.78}
+
+- claim: "On the same `<tool_call>` gen10 diagnostic, forced-single was only mildly positive: forced-off decode p50 `37.125 ms/tok` with `allowed_head:30`; forced-on decode p50 `36.799 ms/tok` with `forced_single:12, allowed_head:18` across three measured runs. A shorter gen6 row was effectively neutral (`35.652 -> 35.316 ms/tok`)."
+  source: `/tmp/gemma4_literal_forced_1780713975/{tool_forced_on_gen6.log,tool_forced_off_gen6.log,tool_forced_on_gen10.log,tool_forced_off_gen10.log}` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: quiet-host contradiction, larger grammar-literal suite, or body/head timing-boundary rewrite
+  trust: {F:0.78,G:0.10,R:0.74}
+
+**LTP/WBA:** This is a valid Spike for singleton grammar windows: the local trigger is a frontier of size one, transport is current-token body state to the next forced token, and the legal move eliminates lm-head ranking without changing constrained output. Recomputed potential descends locally in `(head_calls, allowed_rows_scanned)`, but global decode wall barely descends because body work remains dominant.
+**boundary:** Keep default-on for diagnostics because it is semantically safe in finite literal corridors, but do not treat it as a major Gemma speed lever. The next structured-decoding leverage is larger grammar spans plus batching/chaining body-only forced tokens, or product routes where constrained spans are long enough to amortize body/head boundaries.
