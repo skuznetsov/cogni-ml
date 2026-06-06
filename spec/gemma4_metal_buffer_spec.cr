@@ -32,6 +32,20 @@ describe "Gemma4 resident Metal matmul buffers" do
   pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_METAL_BUFFER_12B_Q4KM)
   pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
 
+  it "keeps the graph-backed FFN elementwise tail aligned with existing helpers" do
+    gate = Array(Float32).new(128) { |i| Math.sin(i.to_f32 * 0.031_f32).to_f32 }
+    up = Array(Float32).new(128) { |i| Math.cos(i.to_f32 * 0.017_f32).to_f32 }
+    residual = Array(Float32).new(128) { |i| (i % 7).to_f32 * 0.125_f32 - 0.4_f32 }
+    scale = 0.75_f32
+
+    combined = ML::GGUF::Gemma4Metal.gelu_mul(gate, up).not_nil!
+    expected = ML::GGUF::Gemma4Metal.add_scaled_vec(residual, combined, scale).not_nil!
+    actual = ML::GGUF::Gemma4Metal.gelu_mul_add_scaled_graph(gate, up, residual, scale).not_nil!
+
+    diff = gemma4_buffer_max_abs_diff(expected, actual)
+    diff.should be <= 1.0e-6_f32
+  end
+
   it "embeds Q6 token-id batches like the existing per-token Metal path" do
     w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
     token_ids = [42_i32, 43_i32, 44_i32, 45_i32]

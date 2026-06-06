@@ -56,6 +56,9 @@ Rich landmarks include full State/Relations/Evidence structure.
 **update 2026-06-06:**
 - The first tiny stateless Qwen/Gemma-adjacent graph path landed: `Qwen35Metal.project_top1_no_norm_graph` routes the no-norm output-head top1 tile+reduce pair through `ComputeGraph`/`GraphEncoder`. Gemma4 uses the same Qwen head helper for token-embedding logits, and the focused Gemma spec proves graph-backed top1 matches the existing head path. Evidence: `spec/gemma4_metal_buffer_spec.cr:218`; focused run `scripts/run_safe.sh ... crystal spec spec/gemma4_metal_buffer_spec.cr:218 ...` passed with `1 examples, 0 failures`.
 - Boundary remains: this is a stateless head probe only. Full Qwen/Gemma decode/prefill waves still need access-annotation review before GraphEncoder promotion; the audit still flags `qwen35: 281`, `gemma4: 34` heuristic candidates.
+**update 2026-06-06b:**
+- Gemma4 now has a direct stateless `ComputeGraph` probe: `Gemma4Metal.gelu_mul_add_scaled_graph` encodes a producer-consumer FFN-tail corridor (`gelu_mul -> add_scaled`) through `GraphEncoder`. Evidence: focused run `scripts/run_safe.sh ... crystal spec spec/gemma4_metal_buffer_spec.cr:35 ...` passed with `1 examples, 0 failures`; `scripts/cognigraph_readiness_audit.cr` reports `gemma4: ComputeGraph=1 GraphEncoder=3`.
+- Boundary remains: this is a model-free elementwise graph probe. It proves GraphEncoder can carry a Gemma producer-consumer corridor, not that Gemma decode/prefill should be graph-promoted yet.
 
 ### [LM-claude-1] Qwen 3.6 27B architecture verified
 **status:** verified

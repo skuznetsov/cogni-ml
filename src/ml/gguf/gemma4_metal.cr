@@ -2224,6 +2224,32 @@ module ML::GGUF
         out_buf.read(gate.size)
       end
 
+      def gelu_mul_add_scaled_graph(gate : Array(Float32),
+                                    up : Array(Float32),
+                                    residual : Array(Float32),
+                                    scale : Float32) : Array(Float32)?
+        return nil unless available?
+        raise ArgumentError.new("gelu_mul_add_scaled_graph size mismatch") unless gate.size == up.size && gate.size == residual.size
+
+        gate_buf = ML::MetalBuffer.from_array(gate)
+        up_buf = ML::MetalBuffer.from_array(up)
+        residual_buf = ML::MetalBuffer.from_array(residual)
+        combined_buf = ML::MetalBuffer.new(gate.size.to_i64 * sizeof(Float32))
+        out_buf = ML::MetalBuffer.new(gate.size.to_i64 * sizeof(Float32))
+
+        graph = ML::Metal::ComputeGraph.new
+        enc = ML::Metal::GraphEncoder.new(graph)
+        encode_gelu_mul(enc, gate_buf, up_buf, combined_buf, gate.size)
+        encode_add_scaled_vec(enc, residual_buf, combined_buf, out_buf, gate.size, scale)
+        graph.compile!
+
+        cmd = ML::Metal::CommandBuffer.new
+        graph.encode(cmd)
+        cmd.commit
+        cmd.wait
+        out_buf.read(gate.size)
+      end
+
       def softcap!(x : Array(Float32), cap : Float32) : Nil
         return if cap <= 0.0_f32
         return unless available?
@@ -2822,7 +2848,7 @@ module ML::GGUF
         enc.dispatch_1d(count, 256)
       end
 
-      private def encode_add_scaled_vec(enc : ML::Metal::ComputeEncoder,
+      private def encode_add_scaled_vec(enc : ML::Metal::ComputeEncoder | ML::Metal::GraphEncoder,
                                         a_buf : ML::MetalBuffer,
                                         b_buf : ML::MetalBuffer,
                                         out_buf : ML::MetalBuffer,
@@ -2875,7 +2901,7 @@ module ML::GGUF
         enc.dispatch_threadgroups({rows, 1, 1}, {256, 1, 1})
       end
 
-      private def encode_gelu_mul(enc : ML::Metal::ComputeEncoder,
+      private def encode_gelu_mul(enc : ML::Metal::ComputeEncoder | ML::Metal::GraphEncoder,
                                   gate_buf : ML::MetalBuffer,
                                   up_buf : ML::MetalBuffer,
                                   out_buf : ML::MetalBuffer,
