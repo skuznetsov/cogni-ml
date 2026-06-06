@@ -22297,3 +22297,22 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   trust: {F:0.84,G:0.28,R:0.84}
 
 **boundary:** This is accounting/traceability only. It preserves existing defaults but makes direct profile logs self-identifying.
+
+#### [LM-COGNIGRAPH-030] Gemma now has exact direct-output fast-forward certificates
+**context:** ml / CogniGraph / Gemma4 / session cache / known-token corridors / LTP-WBA
+**state:** metadata and validation implemented; product generation wiring remains follow-up
+
+- claim: "`Gemma4PromptCache` now supports Qwen-style direct-output fast-forward certificates: exact-known-span validation metadata on resident cache entries, output certificate save/lookup helpers, terminal-at-most lookup, prompt/token/generated-text hashes, and clone-safe return values."
+  source: `scripts/run_safe.sh crystal 120 8192 build --no-codegen spec/gemma4_prompt_cache_spec.cr --error-trace`; `scripts/run_safe.sh crystal 180 8192 spec spec/gemma4_prompt_cache_spec.cr --error-trace --link-flags="$PWD/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma prompt-cache schema rewrite, direct-output certificate rewrite, or generation harness wiring changes
+  trust: {F:0.86,G:0.30,R:0.84}
+
+- claim: "The certificate path is fail-closed for tokenizer mismatch, prompt mismatch, generated-text hash mutation, incomplete validation metadata, terminal-token mismatch, and caller mutation of returned arrays."
+  source: focused `spec/gemma4_prompt_cache_spec.cr` assertions on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: validation helper rewrite or JSON cache path rewrite
+  trust: {F:0.84,G:0.26,R:0.84}
+
+**LTP/WBA:** The window is a repeated/known Gemma output span. The corridor is a session+prompt certificate carrying prompt ids, output ids, generated text, and exact-known-span validation. The legal move is to skip model work or later replay a known body-chain only when the certificate validates. Potential descends as `(known_span_wall_work, cache_miss_count, sync_boundary_count, remaining_output_tokens)` without crossing exactness boundaries. The dual frame is normal Gemma decode when the certificate is absent or invalid.
+**boundary:** This does not yet accelerate first-run Gemma tg/pp. It enables the exact product-cache path and future known-token body-chain wiring; fresh timing is required after generation harness integration.

@@ -8,7 +8,9 @@ module ML::GGUF
   module Gemma4PromptCache
     extend self
 
-    RUNTIME_ID = "cogni-ml/gemma4-state-v1"
+    RUNTIME_ID                       = "cogni-ml/gemma4-state-v1"
+    OUTPUT_FAST_FORWARD_RUNTIME_ID   = "cogni-ml/gemma4-output-fast-forward-v1"
+    EXACT_KNOWN_SPAN_VALIDATION_KIND = "exact-known-span-v1"
 
     class Entry
       include JSON::Serializable
@@ -31,6 +33,9 @@ module ML::GGUF
       property created_at_unix : Int64
       property prompt_preview : String?
       property next_token_id : Int32? = nil
+      property artifact_validation_kind : String? = nil
+      property artifact_validation_steps : Int32? = nil
+      property artifact_validation_hash : String? = nil
 
       def initialize(@runtime_id : String,
                      @session_id : String,
@@ -49,7 +54,63 @@ module ML::GGUF
                      @state_byte_size : Int64,
                      @created_at_unix : Int64,
                      @prompt_preview : String?,
-                     @next_token_id : Int32? = nil)
+                     @next_token_id : Int32? = nil,
+                     @artifact_validation_kind : String? = nil,
+                     @artifact_validation_steps : Int32? = nil,
+                     @artifact_validation_hash : String? = nil)
+      end
+    end
+
+    class OutputFastForwardEntry
+      include JSON::Serializable
+
+      property runtime_id : String
+      property session_id : String
+      property turn_id : String?
+      property model_id : String
+      property tokenizer_id : String
+      property prompt_text_hash : String
+      property prompt_token_hash : String
+      property prompt_token_count : Int32
+      property prompt_token_ids : Array(Int32)
+      property output_token_hash : String
+      property output_token_count : Int32
+      property output_token_ids : Array(Int32)
+      property full_history_hash : String
+      property generated_text : String
+      property generated_text_hash : String
+      property artifact_validation_kind : String
+      property artifact_validation_steps : Int32
+      property artifact_validation_hash : String
+      property artifact_prefix_len : Int32
+      property artifact_token_hash : String
+      property artifact_next_token_id : Int32
+      property terminal_token_id : Int32? = nil
+      property created_at_unix : Int64
+
+      def initialize(@runtime_id : String,
+                     @session_id : String,
+                     @turn_id : String?,
+                     @model_id : String,
+                     @tokenizer_id : String,
+                     @prompt_text_hash : String,
+                     @prompt_token_hash : String,
+                     @prompt_token_count : Int32,
+                     @prompt_token_ids : Array(Int32),
+                     @output_token_hash : String,
+                     @output_token_count : Int32,
+                     @output_token_ids : Array(Int32),
+                     @full_history_hash : String,
+                     @generated_text : String,
+                     @generated_text_hash : String,
+                     @artifact_validation_kind : String,
+                     @artifact_validation_steps : Int32,
+                     @artifact_validation_hash : String,
+                     @artifact_prefix_len : Int32,
+                     @artifact_token_hash : String,
+                     @artifact_next_token_id : Int32,
+                     @created_at_unix : Int64,
+                     @terminal_token_id : Int32? = nil)
       end
     end
 
@@ -65,12 +126,14 @@ module ML::GGUF
       getter snapshot_cache_bytes : Int64
       getter snapshot_cache_hits : Int64
       getter snapshot_cache_misses : Int64
+      getter output_fast_forward_dir : String
 
       @entry_manifest_fingerprint : ManifestFingerprint?
       @entry_manifest_cache : Array(Entry)
       @entry_exact_index : Hash(Tuple(String, String, String, Int32), Array(Entry))
       @entry_prefix_index : Hash(Tuple(String, String, Int32, String), Array(Entry))
       @snapshot_cache : Hash(String, CachedSnapshot)
+      @output_fast_forward_cache : Hash(String, Tuple(ManifestFingerprint, OutputFastForwardEntry))
 
       private class CachedSnapshot
         property fingerprint : ArtifactFingerprint
@@ -100,11 +163,13 @@ module ML::GGUF
           @snapshot_cache_min_free_bytes,
         )
         @manifest_path = File.join(@root, "manifest.jsonl")
+        @output_fast_forward_dir = File.join(@root, "output_fast_forward")
         @entry_manifest_fingerprint = nil
         @entry_manifest_cache = [] of Entry
         @entry_exact_index = {} of Tuple(String, String, String, Int32) => Array(Entry)
         @entry_prefix_index = {} of Tuple(String, String, Int32, String) => Array(Entry)
         @snapshot_cache = {} of String => CachedSnapshot
+        @output_fast_forward_cache = {} of String => Tuple(ManifestFingerprint, OutputFastForwardEntry)
         @snapshot_cache_bytes = 0_i64
         @snapshot_cache_hits = 0_i64
         @snapshot_cache_misses = 0_i64
@@ -119,7 +184,10 @@ module ML::GGUF
                               session_id : String = "default",
                               turn_id : String? = nil,
                               prompt_preview : String? = nil,
-                              next_token_id : Int32? = nil) : Entry
+                              next_token_id : Int32? = nil,
+                              artifact_validation_kind : String? = nil,
+                              artifact_validation_steps : Int32? = nil,
+                              artifact_validation_hash : String? = nil) : Entry
         snapshot = Gemma4StateSnapshot.capture(state, prefix_len: token_ids.size.to_i32)
         prompt_hash = Gemma4PromptCache.prompt_hash(token_ids, prompt_text)
         token_hash = Gemma4PromptCache.token_hash(token_ids)
@@ -146,6 +214,9 @@ module ML::GGUF
           created_at_unix: Time.utc.to_unix,
           prompt_preview: prompt_preview,
           next_token_id: next_token_id,
+          artifact_validation_kind: artifact_validation_kind,
+          artifact_validation_steps: artifact_validation_steps,
+          artifact_validation_hash: artifact_validation_hash,
         )
         append_manifest(entry)
         entry
@@ -244,6 +315,155 @@ module ML::GGUF
         @snapshot_cache_bytes = 0_i64
         @snapshot_cache_hits = 0_i64
         @snapshot_cache_misses = 0_i64
+      end
+
+      def save_output_fast_forward(session_id : String,
+                                   model_id : String,
+                                   tokenizer_id : String,
+                                   prompt_text : String,
+                                   prompt_token_ids : Array(Int32),
+                                   output_token_ids : Array(Int32),
+                                   generated_text : String,
+                                   exact_entry : Entry,
+                                   terminal_token_id : Int32? = nil,
+                                   turn_id : String? = nil) : OutputFastForwardEntry
+        raise ArgumentError.new("output_token_ids must not be empty") if output_token_ids.empty?
+        raise ArgumentError.new("terminal_token_id must match final output token") if terminal_token_id && terminal_token_id != output_token_ids[-1]
+        tmp = nil.as(String?)
+
+        full_history_len = prompt_token_ids.size + output_token_ids.size
+        full_history_hash = Gemma4PromptCache.token_hash_concat(prompt_token_ids, output_token_ids)
+        artifact_steps = exact_entry.artifact_validation_steps
+        artifact_hash = exact_entry.artifact_validation_hash
+        artifact_next = exact_entry.next_token_id
+        raise ArgumentError.new("exact_entry is not an exact-known-span artifact") unless exact_entry.artifact_validation_kind == EXACT_KNOWN_SPAN_VALIDATION_KIND
+        raise ArgumentError.new("exact_entry validation steps mismatch") unless artifact_steps == output_token_ids.size
+        raise ArgumentError.new("exact_entry validation hash mismatch") unless artifact_hash == full_history_hash
+        raise ArgumentError.new("exact_entry prefix mismatch") unless exact_entry.prefix_len == full_history_len - 1
+        raise ArgumentError.new("exact_entry prefix token hash mismatch") unless exact_entry.token_hash == Gemma4PromptCache.token_hash_concat(prompt_token_ids, output_token_ids, exact_entry.prefix_len)
+        raise ArgumentError.new("exact_entry next token mismatch") unless artifact_next == output_token_ids[-1]
+
+        entry = OutputFastForwardEntry.new(
+          runtime_id: OUTPUT_FAST_FORWARD_RUNTIME_ID,
+          session_id: session_id,
+          turn_id: turn_id,
+          model_id: model_id,
+          tokenizer_id: tokenizer_id,
+          prompt_text_hash: Gemma4PromptCache.prompt_text_hash(prompt_text),
+          prompt_token_hash: Gemma4PromptCache.token_hash(prompt_token_ids),
+          prompt_token_count: prompt_token_ids.size.to_i32,
+          prompt_token_ids: prompt_token_ids.dup,
+          output_token_hash: Gemma4PromptCache.token_hash(output_token_ids),
+          output_token_count: output_token_ids.size.to_i32,
+          output_token_ids: output_token_ids.dup,
+          full_history_hash: full_history_hash,
+          generated_text: generated_text,
+          generated_text_hash: Gemma4PromptCache.generated_text_hash(generated_text),
+          artifact_validation_kind: exact_entry.artifact_validation_kind.not_nil!,
+          artifact_validation_steps: artifact_steps.not_nil!,
+          artifact_validation_hash: artifact_hash.not_nil!,
+          artifact_prefix_len: exact_entry.prefix_len,
+          artifact_token_hash: exact_entry.token_hash,
+          artifact_next_token_id: artifact_next.not_nil!,
+          created_at_unix: Time.utc.to_unix,
+          terminal_token_id: terminal_token_id,
+        )
+        path = output_fast_forward_path(model_id, session_id, turn_id, entry.prompt_text_hash, output_token_ids.size)
+        FileUtils.mkdir_p(File.dirname(path))
+        tmp = "#{path}.tmp-#{Process.pid}-#{Random::Secure.hex(4)}"
+        File.open(tmp, "w") do |file|
+          entry.to_json(file)
+          file << '\n'
+        end
+        File.rename(tmp, path)
+        @output_fast_forward_cache.delete(path)
+        clone_output_fast_forward_entry(entry)
+      ensure
+        File.delete(tmp) if tmp && File.exists?(tmp)
+      end
+
+      def lookup_output_fast_forward(model_id : String,
+                                     session_id : String,
+                                     prompt_text : String,
+                                     output_token_count : Int32,
+                                     tokenizer_id : String? = nil,
+                                     turn_id : String? = nil) : OutputFastForwardEntry?
+        return nil if output_token_count <= 0
+
+        prompt_text_hash = Gemma4PromptCache.prompt_text_hash(prompt_text)
+        path = output_fast_forward_path(model_id, session_id, turn_id, prompt_text_hash, output_token_count)
+        unless fingerprint = manifest_fingerprint(path)
+          @output_fast_forward_cache.delete(path)
+          return nil
+        end
+
+        cached = @output_fast_forward_cache[path]?
+        entry = if cached && cached[0] == fingerprint
+                  cached[1]
+                else
+                  begin
+                    parsed = OutputFastForwardEntry.from_json(File.read(path))
+                    @output_fast_forward_cache[path] = {fingerprint, parsed}
+                    parsed
+                  rescue JSON::ParseException | KeyError
+                    @output_fast_forward_cache.delete(path)
+                    return nil
+                  end
+                end
+        return nil unless Gemma4PromptCache.output_fast_forward_entry_valid?(
+                            entry,
+                            model_id,
+                            session_id,
+                            prompt_text,
+                            output_token_count,
+                            tokenizer_id: tokenizer_id,
+                            turn_id: turn_id,
+                          )
+
+        clone_output_fast_forward_entry(entry)
+      end
+
+      def lookup_output_fast_forward_at_most(model_id : String,
+                                             session_id : String,
+                                             prompt_text : String,
+                                             max_output_token_count : Int32,
+                                             terminal_token_id : Int32? = nil,
+                                             tokenizer_id : String? = nil,
+                                             turn_id : String? = nil) : OutputFastForwardEntry?
+        return nil if max_output_token_count <= 0
+
+        if exact = lookup_output_fast_forward(model_id, session_id, prompt_text, max_output_token_count, tokenizer_id: tokenizer_id, turn_id: turn_id)
+          return exact
+        end
+        return nil unless eos = terminal_token_id
+
+        (max_output_token_count - 1).downto(1) do |count|
+          next unless hit = lookup_output_fast_forward(model_id, session_id, prompt_text, count, tokenizer_id: tokenizer_id, turn_id: turn_id)
+          return hit if hit.output_token_ids.last? == eos
+        end
+
+        nil
+      end
+
+      def lookup_terminal_output_fast_forward_at_most(model_id : String,
+                                                      session_id : String,
+                                                      prompt_text : String,
+                                                      max_output_token_count : Int32,
+                                                      tokenizer_id : String? = nil,
+                                                      turn_id : String? = nil) : OutputFastForwardEntry?
+        return nil if max_output_token_count <= 0
+
+        if exact = lookup_output_fast_forward(model_id, session_id, prompt_text, max_output_token_count, tokenizer_id: tokenizer_id, turn_id: turn_id)
+          return exact
+        end
+
+        (max_output_token_count - 1).downto(1) do |count|
+          next unless hit = lookup_output_fast_forward(model_id, session_id, prompt_text, count, tokenizer_id: tokenizer_id, turn_id: turn_id)
+          terminal = hit.terminal_token_id
+          return hit if terminal && hit.output_token_ids.last? == terminal
+        end
+
+        nil
       end
 
       private def append_manifest(entry : Entry) : Nil
@@ -427,7 +647,47 @@ module ML::GGUF
           created_at_unix: entry.created_at_unix,
           prompt_preview: entry.prompt_preview,
           next_token_id: entry.next_token_id,
+          artifact_validation_kind: entry.artifact_validation_kind,
+          artifact_validation_steps: entry.artifact_validation_steps,
+          artifact_validation_hash: entry.artifact_validation_hash,
         )
+      end
+
+      private def clone_output_fast_forward_entry(entry : OutputFastForwardEntry) : OutputFastForwardEntry
+        OutputFastForwardEntry.new(
+          runtime_id: entry.runtime_id,
+          session_id: entry.session_id,
+          turn_id: entry.turn_id,
+          model_id: entry.model_id,
+          tokenizer_id: entry.tokenizer_id,
+          prompt_text_hash: entry.prompt_text_hash,
+          prompt_token_hash: entry.prompt_token_hash,
+          prompt_token_count: entry.prompt_token_count,
+          prompt_token_ids: entry.prompt_token_ids.dup,
+          output_token_hash: entry.output_token_hash,
+          output_token_count: entry.output_token_count,
+          output_token_ids: entry.output_token_ids.dup,
+          full_history_hash: entry.full_history_hash,
+          generated_text: entry.generated_text,
+          generated_text_hash: entry.generated_text_hash,
+          artifact_validation_kind: entry.artifact_validation_kind,
+          artifact_validation_steps: entry.artifact_validation_steps,
+          artifact_validation_hash: entry.artifact_validation_hash,
+          artifact_prefix_len: entry.artifact_prefix_len,
+          artifact_token_hash: entry.artifact_token_hash,
+          artifact_next_token_id: entry.artifact_next_token_id,
+          created_at_unix: entry.created_at_unix,
+          terminal_token_id: entry.terminal_token_id,
+        )
+      end
+
+      private def output_fast_forward_path(model_id : String,
+                                           session_id : String,
+                                           turn_id : String?,
+                                           prompt_text_hash : String,
+                                           output_token_count : Int32) : String
+        key = Gemma4PromptCache.output_fast_forward_key(model_id, session_id, turn_id, prompt_text_hash, output_token_count)
+        File.join(@output_fast_forward_dir, key[0, 2], key[2, 2], "#{key}.json")
       end
     end
 
@@ -454,6 +714,106 @@ module ML::GGUF
       Digest::SHA256.hexdigest(io.to_slice)
     end
 
+    def token_hash_concat(left_ids : Array(Int32),
+                          right_ids : Array(Int32),
+                          prefix_len : Int32 = left_ids.size + right_ids.size) : String
+      total = left_ids.size + right_ids.size
+      raise ArgumentError.new("prefix_len out of range: #{prefix_len}") if prefix_len < 0 || prefix_len > total
+
+      io = IO::Memory.new
+      io.write("gemma4-token-v1\0".to_slice)
+      io.write_bytes(prefix_len.to_u32, IO::ByteFormat::LittleEndian)
+      left_count = prefix_len < left_ids.size ? prefix_len : left_ids.size
+      left_count.times do |i|
+        io.write_bytes(left_ids[i], IO::ByteFormat::LittleEndian)
+      end
+      right_count = prefix_len - left_count
+      right_count.times do |i|
+        io.write_bytes(right_ids[i], IO::ByteFormat::LittleEndian)
+      end
+      Digest::SHA256.hexdigest(io.to_slice)
+    end
+
+    def prompt_text_hash(prompt_text : String) : String
+      Digest::SHA256.hexdigest("gemma4-prompt-text-v1\0#{prompt_text}")
+    end
+
+    def generated_text_hash(generated_text : String) : String
+      Digest::SHA256.hexdigest("gemma4-generated-text-v1\0#{generated_text}")
+    end
+
+    def output_fast_forward_key(model_id : String,
+                                session_id : String,
+                                turn_id : String?,
+                                prompt_text_hash : String,
+                                output_token_count : Int32) : String
+      io = IO::Memory.new
+      io.write("gemma4-output-fast-forward-key-v1\0".to_slice)
+      io.write(model_id.to_slice)
+      io.write_byte(0_u8)
+      io.write(session_id.to_slice)
+      io.write_byte(0_u8)
+      io.write((turn_id || "").to_slice)
+      io.write_byte(0_u8)
+      io.write(prompt_text_hash.to_slice)
+      io.write_byte(0_u8)
+      io.write_bytes(output_token_count.to_u32, IO::ByteFormat::LittleEndian)
+      Digest::SHA256.hexdigest(io.to_slice)
+    end
+
+    def output_fast_forward_entry_valid?(entry : OutputFastForwardEntry,
+                                         model_id : String,
+                                         session_id : String,
+                                         prompt_text : String,
+                                         expected_output_tokens : Int32,
+                                         tokenizer_id : String? = nil,
+                                         turn_id : String? = nil) : Bool
+      return false unless expected_output_tokens > 0
+      return false unless entry.runtime_id == OUTPUT_FAST_FORWARD_RUNTIME_ID
+      return false unless entry.model_id == model_id
+      return false unless entry.session_id == session_id
+      return false if tokenizer_id && entry.tokenizer_id != tokenizer_id
+      return false if turn_id && entry.turn_id != turn_id
+      return false unless entry.prompt_text_hash == prompt_text_hash(prompt_text)
+      return false unless entry.prompt_token_count == entry.prompt_token_ids.size
+      return false unless entry.prompt_token_hash == token_hash(entry.prompt_token_ids)
+      return false unless entry.output_token_count == expected_output_tokens
+      return false unless entry.output_token_count == entry.output_token_ids.size
+      return false unless entry.output_token_hash == token_hash(entry.output_token_ids)
+      return false unless entry.generated_text_hash == generated_text_hash(entry.generated_text)
+
+      full_history_len = entry.prompt_token_ids.size + entry.output_token_ids.size
+      full_hash = token_hash_concat(entry.prompt_token_ids, entry.output_token_ids)
+      return false unless entry.full_history_hash == full_hash
+      return false unless entry.artifact_validation_kind == EXACT_KNOWN_SPAN_VALIDATION_KIND
+      return false unless entry.artifact_validation_steps == entry.output_token_count
+      return false unless entry.artifact_validation_hash == full_hash
+      return false unless entry.artifact_prefix_len == full_history_len - 1
+      return false unless entry.artifact_token_hash == token_hash_concat(entry.prompt_token_ids, entry.output_token_ids, entry.artifact_prefix_len)
+      return false unless entry.artifact_next_token_id == entry.output_token_ids[-1]
+      return false if entry.terminal_token_id && entry.terminal_token_id != entry.output_token_ids[-1]
+
+      true
+    end
+
+    def exact_known_span_entry_valid?(entry : Entry,
+                                      full_history : Array(Int32),
+                                      emitted_steps : Int32,
+                                      full_history_len : Int32 = full_history.size) : Bool
+      return false if full_history_len <= 0
+      return false if full_history_len > full_history.size
+      return false unless emitted_steps > 0
+      return false unless full_history_len >= emitted_steps
+      return false unless entry.artifact_validation_kind == EXACT_KNOWN_SPAN_VALIDATION_KIND
+      return false unless entry.artifact_validation_steps == emitted_steps
+      return false unless entry.artifact_validation_hash == token_hash(full_history, full_history_len)
+      return false unless entry.prefix_len == full_history_len - 1
+      return false unless entry.token_hash == token_hash(full_history, entry.prefix_len)
+      return false unless entry.next_token_id == full_history[full_history_len - 1]
+
+      true
+    end
+
     def artifact_trust_metadata_valid?(entry : Entry) : Bool
       return false unless entry.runtime_id == RUNTIME_ID
       return false unless entry.prefix_len >= 0 && entry.prefix_len <= entry.max_seq
@@ -463,6 +823,17 @@ module ML::GGUF
       return false unless entry.artifact_byte_size >= 0 && entry.state_byte_size >= 0
       return false unless entry.prompt_hash.size == 64 && entry.token_hash.size == 64
       return false if entry.next_token_id.try { |token_id| token_id < 0 }
+      validation_fields = {
+        entry.artifact_validation_kind,
+        entry.artifact_validation_steps,
+        entry.artifact_validation_hash,
+      }.count { |field| !field.nil? }
+      if validation_fields > 0
+        return false unless entry.artifact_validation_kind == EXACT_KNOWN_SPAN_VALIDATION_KIND
+        return false unless entry.artifact_validation_steps.try { |steps| steps > 0 }
+        return false unless entry.artifact_validation_hash.try { |hash| hash.size == 64 }
+        return false unless entry.next_token_id
+      end
 
       true
     end
