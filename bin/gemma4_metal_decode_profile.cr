@@ -257,6 +257,42 @@ def gemma4_advance_literal_options(remaining_literals : Array(String), emitted :
   next_literals
 end
 
+def gemma4_literal_token_options(tokenizer : ML::GGUF::Gemma4Tokenizer,
+                                 literals : Array(String)) : Array(Array(Int32))
+  literals.map do |literal|
+    tokenizer.encode(literal, add_bos: false, parse_special: true)
+  end.reject(&.empty?)
+end
+
+def gemma4_literal_token_options_complete?(options : Array(Array(Int32))) : Bool
+  !options.empty? && options.all?(&.empty?)
+end
+
+def gemma4_literal_token_next_ids(options : Array(Array(Int32))) : Array(Int32)
+  seen = Set(Int32).new
+  ids = [] of Int32
+  options.each do |option|
+    next if option.empty?
+
+    id = option[0]
+    next if seen.includes?(id)
+
+    seen << id
+    ids << id
+  end
+  ids
+end
+
+def gemma4_literal_token_advance(options : Array(Array(Int32)), emitted_id : Int32) : Array(Array(Int32))
+  advanced = [] of Array(Int32)
+  options.each do |option|
+    next if option.empty? || option[0] != emitted_id
+
+    advanced << option[1..]
+  end
+  advanced
+end
+
 def top1_id(logits : Array(Float32)) : Int32
   best_id = 0
   best = logits[0]
@@ -438,6 +474,7 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
              literal_index : Gemma4LiteralTokenIndex? = nil,
              literal_remaining_start : Array(String) = [] of String,
              literal_direct_ids_start : Array(Int32) = [] of Int32,
+             literal_token_options_start : Array(Array(Int32)) = [] of Array(Int32),
              literal_force_single : Bool = true,
              literal_force_span : Bool = true,
              literal_stop_after_complete : Bool = false) : NamedTuple(prefill_ms: Float64, decode_ms: Float64, decode_tokens: Int32, first_id: Int32, last_id: Int32, token_trace: Array(Int32), cache_route: String, cache_restore_ms: Float64, literal_forced_single: Int32, literal_allowed_head: Int32, literal_forced_span_batches: Int32, literal_forced_span_tokens: Int32)
@@ -453,8 +490,13 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
   cache_restore_ms = 0.0
   save_cache_after_head = false
   literal_direct_remaining = literal_direct_ids_start.dup
-  literal_remaining = literal_direct_remaining.empty? ? literal_remaining_start.dup : [] of String
-  literal_complete = ->{ literal_remaining.empty? && literal_direct_remaining.empty? }
+  literal_token_options = literal_token_options_start.map(&.dup)
+  literal_remaining = (literal_direct_remaining.empty? && literal_token_options.empty?) ? literal_remaining_start.dup : [] of String
+  literal_complete = ->{
+    literal_remaining.empty? &&
+      literal_direct_remaining.empty? &&
+      (literal_token_options.empty? || gemma4_literal_token_options_complete?(literal_token_options))
+  }
   literal_forced_single = 0
   literal_allowed_head = 0
   literal_forced_span_batches = 0
@@ -501,6 +543,17 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
     if decode_mode == "literal" && !literal_direct_remaining.empty?
       next_id = literal_direct_remaining.shift
       literal_forced_single += 1
+    elsif decode_mode == "literal" && !literal_token_options.empty?
+      option_ids = gemma4_literal_token_next_ids(literal_token_options)
+      raise "literal token-option frontier is empty" if option_ids.empty?
+      if literal_force_single && option_ids.size == 1
+        next_id = option_ids[0]
+        literal_forced_single += 1
+      else
+        next_id = top1_allowed_from_hidden(weights, hidden, option_ids, top1_wave_resident)
+        literal_allowed_head += 1
+      end
+      literal_token_options = gemma4_literal_token_advance(literal_token_options, next_id)
     elsif decode_mode == "literal" && !literal_remaining.empty?
       index = literal_index.not_nil!
       dynamic_allowed = index.literal_frontier_ids(literal_remaining)
@@ -588,6 +641,34 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
         next
       end
 
+      if decode_mode == "literal" && literal_force_span && decode_wave && !literal_token_options.empty? && !gemma4_literal_token_options_complete?(literal_token_options)
+        emitted_ids = [] of Int32
+        probe_options = literal_token_options.map(&.dup)
+        max_span = generate - i
+        while emitted_ids.size < max_span && !gemma4_literal_token_options_complete?(probe_options)
+          option_ids = gemma4_literal_token_next_ids(probe_options)
+          break unless option_ids.size == 1
+
+          id = option_ids[0]
+          emitted_ids << id
+          probe_options = gemma4_literal_token_advance(probe_options, id)
+        end
+
+        if emitted_ids.size >= 1
+          consumed_tokens = [cur]
+          consumed_tokens.concat(emitted_ids[0, emitted_ids.size - 1]) if emitted_ids.size > 1
+          update_known_tokens_resident(weights, consumed_tokens, pos, state, decode_layer_count, prefill_chunk)
+          token_trace.concat(emitted_ids)
+          cur = emitted_ids.last
+          literal_token_options = probe_options
+          literal_forced_span_batches += 1
+          literal_forced_span_tokens += emitted_ids.size
+          i += emitted_ids.size
+          break if literal_stop_after_complete && literal_complete.call
+          next
+        end
+      end
+
       if decode_mode == "literal" && literal_force_span && decode_wave && !literal_remaining.empty?
         index = literal_index.not_nil!
         probe_remaining = literal_remaining
@@ -631,6 +712,25 @@ def run_once(weights : ML::GGUF::Gemma4Weights, prompt : Array(Int32), generate 
                 forward_top2_top1(weights, cur, pos, state, decode_wave, top1_wave_resident, decode_layer_count)
               elsif decode_mode == "allowed"
                 forward_allowed_top1(weights, cur, pos, state, allowed_ids, decode_wave, top1_wave_resident, decode_layer_count)
+              elsif decode_mode == "literal" && !literal_token_options.empty? && !gemma4_literal_token_options_complete?(literal_token_options)
+                option_ids = gemma4_literal_token_next_ids(literal_token_options)
+                raise "literal token-option frontier is empty" if option_ids.empty?
+                id = if literal_force_single && option_ids.size == 1
+                       if decode_wave
+                         unless ML::GGUF::Gemma4Metal.forward_resident_cache_wave_no_read(weights, cur, pos, state, decode_layer_count)
+                           raise "Gemma4 literal token-option forced body wave failed"
+                         end
+                       else
+                         ML::GGUF::Gemma4Metal.forward_hidden_resident_cache(weights, cur, pos, state, decode_layer_count).not_nil!
+                       end
+                       literal_forced_single += 1
+                       option_ids[0]
+                     else
+                       literal_allowed_head += 1
+                       forward_allowed_top1(weights, cur, pos, state, option_ids, decode_wave, top1_wave_resident, decode_layer_count)
+                     end
+                literal_token_options = gemma4_literal_token_advance(literal_token_options, id)
+                id
               elsif decode_mode == "literal" && !literal_remaining.empty?
                 index = literal_index.not_nil!
                 dynamic_allowed = index.literal_frontier_ids(literal_remaining)
@@ -748,6 +848,11 @@ literal_direct_ids_start = if literal_remaining_start.size == 1
                            else
                              [] of Int32
                            end
+literal_token_options_start = if literal_remaining_start.size > 1
+                                gemma4_literal_token_options(tokenizer.not_nil!, literal_remaining_start)
+                              else
+                                [] of Array(Int32)
+                              end
 if root = prompt_cache_root
   cache_store = ML::GGUF::Gemma4PromptCache::Store.new(
     root,
@@ -758,7 +863,7 @@ if root = prompt_cache_root
 end
 
 decode_schedule = decode_stop_layer_after_step ? "#{decode_stop_layer_after_step}:#{decode_stop_layer_after_layer}" : ""
-puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} prompt_text_mode=#{chat_user ? "chat_user" : (prompt_text ? "raw_text" : "token_ids")} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} top1_chain=#{top1_chain} body_chain=#{body_chain} body_chain_note=#{body_chain == 1 ? "llama_bench_parity" : "graph_chunk_known_tokens"} allowed_ids=#{allowed_ids.join(',')} constrained_literal_prefix=#{constrained_literal_prefix || ""} constrained_tool_call_prefix=#{constrained_tool_call_prefix} constrained_tool_required_param_prefix=#{constrained_tool_required_param_prefix} constrained_tool_finite_call=#{constrained_tool_finite_call} constrained_gemma_tool_finite_call=#{constrained_gemma_tool_finite_call} tool_names=#{tool_names.join(',')} literal_options=#{literal_remaining_start.size} literal_direct_ids=#{literal_direct_ids_start.size} literal_force_single=#{literal_force_single} literal_force_span=#{literal_force_span} literal_stop_after_complete=#{literal_stop_after_complete} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} decode_stop_layer_after=#{decode_schedule} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_min_free_mib=#{prompt_cache_snapshot_min_free_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
+puts "model=#{File.basename(model)} prompt_tokens=#{prompt.join(',')} prompt_len=#{prompt.size} prompt_text_mode=#{chat_user ? "chat_user" : (prompt_text ? "raw_text" : "token_ids")} generate=#{generate} max_seq=#{max_seq} warmups=#{warmups} runs=#{runs} mode=#{decode_mode} decode_wave=#{decode_wave} top1_wave_resident=#{top1_wave_resident} top1_chain=#{top1_chain} body_chain=#{body_chain} body_chain_note=#{body_chain == 1 ? "llama_bench_parity" : "graph_chunk_known_tokens"} allowed_ids=#{allowed_ids.join(',')} constrained_literal_prefix=#{constrained_literal_prefix || ""} constrained_tool_call_prefix=#{constrained_tool_call_prefix} constrained_tool_required_param_prefix=#{constrained_tool_required_param_prefix} constrained_tool_finite_call=#{constrained_tool_finite_call} constrained_gemma_tool_finite_call=#{constrained_gemma_tool_finite_call} tool_names=#{tool_names.join(',')} literal_options=#{literal_remaining_start.size} literal_direct_ids=#{literal_direct_ids_start.size} literal_token_options=#{literal_token_options_start.size} literal_force_single=#{literal_force_single} literal_force_span=#{literal_force_span} literal_stop_after_complete=#{literal_stop_after_complete} prefill_mode=#{prefill_mode} prefill_chunk=#{prefill_chunk} prefill_head=#{prefill_head} stop_layer=#{stop_layer || weights.hparams.n_layer} decode_stop_layer_after=#{decode_schedule} profile=#{profile} profile_decode_only=#{profile_decode_only} decode_only_seed=#{decode_only_seed || ""} prompt_cache_enabled=#{!cache_store.nil?} prompt_cache_root=#{prompt_cache_root || ""} prompt_cache_snapshot_mib=#{prompt_cache_snapshot_mib} prompt_cache_snapshot_min_free_mib=#{prompt_cache_snapshot_min_free_mib} prompt_cache_snapshot_entries=#{prompt_cache_snapshot_entries} load_ms=#{load_ms.round(3)}"
 
 warmups.times do
   run_once(
@@ -779,6 +884,7 @@ warmups.times do
     literal_index: literal_index,
     literal_remaining_start: literal_remaining_start,
     literal_direct_ids_start: literal_direct_ids_start,
+    literal_token_options_start: literal_token_options_start,
     literal_force_single: literal_force_single,
     literal_force_span: literal_force_span,
     literal_stop_after_complete: literal_stop_after_complete,
@@ -816,6 +922,7 @@ runs.times do
     literal_index: literal_index,
     literal_remaining_start: literal_remaining_start,
     literal_direct_ids_start: literal_direct_ids_start,
+    literal_token_options_start: literal_token_options_start,
     literal_force_single: literal_force_single,
     literal_force_span: literal_force_span,
     literal_stop_after_complete: literal_stop_after_complete,
@@ -845,6 +952,16 @@ puts "literal_summary=forced_single:#{literal_forced_single_total},allowed_head:
 puts "token_trace=#{last_token_trace.join(',')}" if print_generated_ids
 generated_text_for_output = if decode_mode == "literal" && literal_direct_ids_start.size > 0 && literal_remaining_start.size == 1
                               literal_remaining_start[0]
+                            elsif decode_mode == "literal" && literal_token_options_start.size > 0
+                              selected_literal = nil.as(String?)
+                              literal_token_options_start.each_with_index do |ids, idx|
+                                next unless ids.size <= last_token_trace.size
+                                next unless last_token_trace[0, ids.size] == ids
+
+                                selected_literal = literal_remaining_start[idx]
+                                break
+                              end
+                              selected_literal || tokenizer.try(&.decode(last_token_trace)) || ""
                             else
                               tokenizer.try(&.decode(last_token_trace)) || ""
                             end
