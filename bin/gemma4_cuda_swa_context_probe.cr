@@ -1,15 +1,56 @@
 # CogniGemma CUDA SWA KV-cache + attention-context smoke.
 #
 # Uses already-normalized/RoPE'd synthetic Q/K/V rows. A tiny CUDA copy kernel
-# appends K/V rows into resident caches, then the existing serial CUDA GQA
-# attention kernel reads the cache with scale=1 and a saturated gate to emulate
-# Gemma4's ungated attention. This stops before attn_output projection.
+# appends K/V rows into resident caches, then a Gemma-specific ungated serial
+# CUDA GQA attention kernel reads the cache. This stops before attn_output
+# projection.
 
 require "option_parser"
 require "../src/ml/gguf/gemma4_cpu"
 require "../src/ml/cuda/driver"
 
-ATTN_PTX     = {{ read_file("src/ml/cuda/kernels/fullattn_post_probe.ptx") }}
+FULL_ATTN_PTX               = {{ read_file("src/ml/cuda/kernels/fullattn_post_probe.ptx") }}
+GATED_ATTENTION_START       = "// Correctness-first gated GQA attention decode over a resident KV cache."
+GATED_ATTENTION_END         = "// Split-K long-context GQA attention decode, stage 1."
+GATED_ATTENTION_START_INDEX = FULL_ATTN_PTX.index(GATED_ATTENTION_START) || raise "gated attention kernel start not found"
+GATED_ATTENTION_END_INDEX   = FULL_ATTN_PTX.index(GATED_ATTENTION_END) || raise "gated attention kernel end not found"
+GATED_ATTENTION             = FULL_ATTN_PTX[GATED_ATTENTION_START_INDEX, GATED_ATTENTION_END_INDEX - GATED_ATTENTION_START_INDEX]
+UNGATED_ATTENTION           = GATED_ATTENTION
+  .gsub("gated GQA attention decode", "ungated GQA attention decode")
+  .gsub("full_attn_decode_cache_probe", "gemma4_ungated_attn_decode_cache_probe")
+  .gsub("    .param .u64 gate_in,\n", "")
+  .gsub("    ld.param.u64 %rd2, [gate_in];\n", "")
+  .gsub("    mul.lo.u32 %r16, %r15, %r3; // q/gate/out base", "    mul.lo.u32 %r16, %r15, %r3; // q/out base")
+  .gsub(%(A_GATE_WRITE:
+    mul.rn.f32 %f17, %f14, %f13;
+    add.u32 %r33, %r16, %r27;
+    mul.wide.u32 %rd19, %r33, 4;
+    add.s64 %rd20, %rd2, %rd19;
+    ld.global.f32 %f18, [%rd20]; // gate
+    neg.f32 %f19, %f18;
+    mov.f32 %f20, 0f3FB8AA3B;   // log2(e)
+    mul.rn.f32 %f21, %f19, %f20;
+    ex2.approx.ftz.f32 %f22, %f21;
+    mov.f32 %f23, 0f3F800000;   // 1.0
+    add.rn.f32 %f24, %f23, %f22;
+    rcp.approx.ftz.f32 %f25, %f24;
+    mul.rn.f32 %f26, %f17, %f25;
+    add.s64 %rd21, %rd6, %rd19;
+    st.global.f32 [%rd21], %f26;), %(A_GATE_WRITE:
+    mul.rn.f32 %f17, %f14, %f13;
+    add.u32 %r33, %r16, %r27;
+    mul.wide.u32 %rd19, %r33, 4;
+    add.s64 %rd21, %rd6, %rd19;
+    st.global.f32 [%rd21], %f17;))
+raise "ungated attention rewrite failed" unless UNGATED_ATTENTION.includes?("gemma4_ungated_attn_decode_cache_probe") && !UNGATED_ATTENTION.includes?("gate_in")
+
+ATTN_PTX = <<-PTX
+.version 8.0
+.target sm_80
+.address_size 64
+
+#{UNGATED_ATTENTION}
+PTX
 KV_WRITE_PTX = <<-PTX
 .version 8.0
 .target sm_80
@@ -160,7 +201,7 @@ begin
   ctx = ML::CUDA::Context.create
   attn_mod = ML::CUDA::CUDAModule.load(ATTN_PTX, "gemma4_context_attn")
   kv_mod = ML::CUDA::CUDAModule.load(KV_WRITE_PTX, "gemma4_context_kv")
-  attn_fn = attn_mod.function("full_attn_decode_cache_probe")
+  attn_fn = attn_mod.function("gemma4_ungated_attn_decode_cache_probe")
   kv_write_fn = kv_mod.function("gemma4_kv_cache_write_probe")
 
   q_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(q.size)); buffers << q_buf
@@ -168,17 +209,14 @@ begin
   v_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(v.size)); buffers << v_buf
   k_cache_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(max_seq * kv_dim)); buffers << k_cache_buf
   v_cache_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(max_seq * kv_dim)); buffers << v_cache_buf
-  gate_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * q_dim)); buffers << gate_buf
   scores_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * n_head * max_seq)); buffers << scores_buf
   out_buf = ML::CUDA::DeviceBuffer.new(bytesize_f32(tokens * q_dim)); buffers << out_buf
   start_pos_buf = ML::CUDA::DeviceBuffer.new(sizeof(UInt32).to_u64); buffers << start_pos_buf
-  gate = Array(Float32).new(tokens * q_dim, 100.0_f32)
   zero_start = 0_u32
 
   ML::CUDA.copy_htod!(q_buf.ptr, q.to_unsafe.as(Void*), bytesize_f32(q.size), "q")
   ML::CUDA.copy_htod!(k_buf.ptr, k.to_unsafe.as(Void*), bytesize_f32(k.size), "k")
   ML::CUDA.copy_htod!(v_buf.ptr, v.to_unsafe.as(Void*), bytesize_f32(v.size), "v")
-  ML::CUDA.copy_htod!(gate_buf.ptr, gate.to_unsafe.as(Void*), bytesize_f32(gate.size), "gate")
   ML::CUDA.copy_htod!(start_pos_buf.ptr, pointerof(zero_start).as(Void*), sizeof(UInt32).to_u64, "start_pos")
 
   kv_dim_u32 = kv_dim.to_u32
@@ -196,7 +234,6 @@ begin
   kv_params[5] = pointerof(start_u32).as(Void*)
 
   d_q = q_buf.ptr
-  d_gate = gate_buf.ptr
   d_scores = scores_buf.ptr
   d_out = out_buf.ptr
   d_start_pos = start_pos_buf.ptr
@@ -206,24 +243,23 @@ begin
   hpg_u32 = heads_per_group.to_u32
   max_seq_u32 = max_seq.to_u32
   scale = 1.0_f32
-  attn_params = Pointer(Void*).malloc(13)
+  attn_params = Pointer(Void*).malloc(12)
   attn_params[0] = pointerof(d_q).as(Void*)
-  attn_params[1] = pointerof(d_gate).as(Void*)
-  attn_params[2] = pointerof(d_kc).as(Void*)
-  attn_params[3] = pointerof(d_vc).as(Void*)
-  attn_params[4] = pointerof(d_scores).as(Void*)
-  attn_params[5] = pointerof(d_out).as(Void*)
-  attn_params[6] = pointerof(n_head_u32).as(Void*)
-  attn_params[7] = pointerof(n_head_kv_u32).as(Void*)
-  attn_params[8] = pointerof(head_dim_u32).as(Void*)
-  attn_params[9] = pointerof(hpg_u32).as(Void*)
-  attn_params[10] = pointerof(d_start_pos).as(Void*)
-  attn_params[11] = pointerof(max_seq_u32).as(Void*)
-  attn_params[12] = pointerof(scale).as(Void*)
+  attn_params[1] = pointerof(d_kc).as(Void*)
+  attn_params[2] = pointerof(d_vc).as(Void*)
+  attn_params[3] = pointerof(d_scores).as(Void*)
+  attn_params[4] = pointerof(d_out).as(Void*)
+  attn_params[5] = pointerof(n_head_u32).as(Void*)
+  attn_params[6] = pointerof(n_head_kv_u32).as(Void*)
+  attn_params[7] = pointerof(head_dim_u32).as(Void*)
+  attn_params[8] = pointerof(hpg_u32).as(Void*)
+  attn_params[9] = pointerof(d_start_pos).as(Void*)
+  attn_params[10] = pointerof(max_seq_u32).as(Void*)
+  attn_params[11] = pointerof(scale).as(Void*)
 
   run_once = -> {
     ML::CUDA.launch!(kv_write_fn, tokens.to_u32, 1_u32, 1_u32, 256_u32, 1_u32, 1_u32, kv_params, "kv_write")
-    ML::CUDA.launch!(attn_fn, tokens.to_u32, n_head.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, attn_params, "attn_context")
+    ML::CUDA.launch!(attn_fn, tokens.to_u32, n_head.to_u32, 1_u32, 1_u32, 1_u32, 1_u32, attn_params, "gemma4_ungated_attn_context")
   }
 
   warmup.times { run_once.call }
