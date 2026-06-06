@@ -8968,6 +8968,50 @@ module ML
           true
         end
 
+        def self.encode_head_top1_allowed_no_norm_to_buffers(enc : ML::Metal::ComputeEncoder,
+                                                             out_qw : QuantWeight,
+                                                             x_buf : ML::MetalBuffer,
+                                                             allowed_ids_buf : ML::MetalBuffer,
+                                                             allowed_n : Int32,
+                                                             tile_values_buf : ML::MetalBuffer,
+                                                             tile_ids_buf : ML::MetalBuffer,
+                                                             top1_id_buf : ML::MetalBuffer,
+                                                             top1_value_buf : ML::MetalBuffer) : Bool
+          return false unless head_top1_fused_enabled? && out_qw.type.q6_k? && out_qw.in_dim % QK_K == 0
+          return false if allowed_n <= 0
+          return false if x_buf.size < out_qw.in_dim.to_i64 * sizeof(Float32)
+          return false if allowed_ids_buf.size < allowed_n.to_i64 * sizeof(UInt32)
+
+          tile_count = (allowed_n + HEAD_TOP1_ROWS_PER_TG - 1) // HEAD_TOP1_ROWS_PER_TG
+          return false if tile_values_buf.size < tile_count.to_i64 * sizeof(Float32)
+          return false if tile_ids_buf.size < tile_count.to_i64 * sizeof(UInt32)
+          return false if top1_id_buf.size < sizeof(UInt32)
+          return false if top1_value_buf.size < sizeof(Float32)
+
+          out_w_buf, out_w_off = weight_slot(out_qw)
+
+          enc.set_pipeline(mv6_top1_allowed_tiles_pipeline)
+          profile_bump_head_top1_shape("head_top1_allowed#{allowed_n}_resident", out_qw, rows: allowed_n)
+          enc.set_buffer(out_w_buf, 0, ML::Metal::BufferAccess::Read, offset: out_w_off)
+          enc.set_buffer(x_buf, 1)
+          enc.set_buffer(allowed_ids_buf, 2)
+          enc.set_buffer(tile_values_buf, 3, ML::Metal::BufferAccess::Write)
+          enc.set_buffer(tile_ids_buf, 4, ML::Metal::BufferAccess::Write)
+          enc.set_value(out_qw.in_dim.to_u32, 5)
+          enc.set_value(out_qw.out_dim.to_u32, 6)
+          enc.set_value(allowed_n.to_u32, 7)
+          enc.dispatch_threadgroups({tile_count, 1, 1}, {64, 1, 1})
+
+          enc.set_pipeline(top1_reduce_tiles_pipeline)
+          enc.set_buffer(tile_values_buf, 0)
+          enc.set_buffer(tile_ids_buf, 1)
+          enc.set_buffer(top1_id_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_buffer(top1_value_buf, 3, ML::Metal::BufferAccess::Write)
+          enc.set_value(tile_count.to_u32, 4)
+          enc.dispatch_threadgroups({1, 1, 1}, {256, 1, 1})
+          true
+        end
+
         def self.project_top2_no_norm(out_qw : QuantWeight,
                                       x : Array(Float32)) : Array(Float32)?
           return nil unless can_use_head_top1_fused?(out_qw)

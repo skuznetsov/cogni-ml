@@ -22473,3 +22473,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** The window is product-route controllers needing a second candidate without paying full-logit materialization or a second host-visible head pass. The corridor is resident hidden -> output RMSNorm -> top2 head tiles -> two-id certificate. The legal move preserves exact state updates and only changes the readback boundary. Potential descends in `(product_head_materialization, readback bytes, controller_candidate_gap, remaining routing work)` for future structured/self-draft routes.
 **boundary:** This is a primitive, not a speed promotion. Next evidence must wire it into a real controller or benchmark mode and compare top1/top2/structured-route wall time with identical token outputs or exact verification.
+
+#### [LM-COGNIGRAPH-038] Gemma has a resident allowed-token top1 primitive for constrained decoding
+**context:** ml / CogniGraph / Gemma4 / resident constrained head / structured decoding / LTP-WBA
+**state:** implemented and correctness-checked; no speed claim yet
+
+- claim: "Qwen35Metal now exposes buffer-level `encode_head_top1_allowed_no_norm_to_buffers`, letting callers append a Q6_K lm-head argmax over a bounded allowed-token set inside an existing command buffer without materializing full logits."
+  source: `src/ml/gguf/qwen35_metal.cr`; compiled through `scripts/run_safe.sh crystal 180 8192 build --no-codegen spec/gemma4_metal_buffer_spec.cr --error-trace` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Qwen head-top1 allowed kernel rewrite, output-head route rewrite, or Metal buffer-helper rewrite
+  trust: {F:0.84,G:0.28,R:0.82}
+
+- claim: "Gemma4Metal now exposes `forward_top1_allowed_resident_cache_wave`, which runs embedding, decode layers, output RMSNorm, and allowed-token top1 head selection in one resident command buffer, reading back only the selected id/value."
+  source: `src/ml/gguf/gemma4_metal.cr`; `scripts/run_safe.sh crystal 300 24576 spec spec/gemma4_metal_buffer_spec.cr --error-trace --link-flags=...` passed (`11 examples, 0 failures`) on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: Gemma resident decode wave rewrite, output norm/head rewrite, or allowed-token helper rewrite
+  trust: {F:0.86,G:0.22,R:0.84}
+
+- claim: "Focused Gemma parity holds for the resident allowed-token primitive on the real Gemma4 12B Q4_K_M GGUF: when the allowed set includes the full-head top1, the resident route returns that id/value; when the set excludes top1 but includes full-head top2, it returns the top2 id/value."
+  source: `spec/gemma4_metal_buffer_spec.cr`; `scripts/run_safe.sh crystal 300 24576 spec spec/gemma4_metal_buffer_spec.cr --error-trace --link-flags=...` on 2026-06-05.
+  verified_at: 2026-06-05
+  decay_trigger: larger full-depth allowed-head contradiction, Gemma state route rewrite, Qwen allowed-head kernel rewrite, or constrained-controller integration
+  trust: {F:0.86,G:0.18,R:0.84}
+
+**LTP/WBA:** The window is grammar/function-calling constrained decoding where the valid frontier is a small allowed token set. The corridor is resident hidden -> output RMSNorm -> allowed lm-head rows -> one-id certificate. The legal move preserves exact model state and grammar boundary while replacing full-vocab head materialization with allowed-row scanning. Candidate potential is `(vocab_rows_scanned, readback_bytes, grammar_frontier_conflicts, remaining_route_work)`; only correctness is verified so far, not wall-time descent.
+**boundary:** This is a primitive for structured decoding and controller routes, not a default generation speed claim. Next evidence must wire it into a real grammar/JSON controller and compare full-head vs allowed-head wall time with identical constrained outputs.

@@ -215,6 +215,36 @@ describe "Gemma4 resident Metal matmul buffers" do
     (actual[3] - expected[3]).abs.should be <= 1.0e-5_f32
   end
 
+  it "keeps resident allowed-token top1 aligned with full hidden-wave top2 projection" do
+    w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
+    hidden_state = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 8)
+    allowed_state = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 8)
+    token_id = 42
+    stop_layer = 6
+
+    hidden = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache_wave(w, token_id, 0, hidden_state, stop_layer).not_nil!
+    normed = ML::GGUF::Gemma4CPU.rms_norm(hidden, w.output_norm, w.hparams.rms_eps)
+    top2 = ML::GGUF::Qwen35Metal.project_top2_no_norm(w.token_embd, normed).not_nil!
+    best_id = top2[0].to_i
+    second_id = top2[2].to_i
+    allowed_ids = [1_i32, second_id.to_i32, 2_i32, best_id.to_i32, 3_i32]
+
+    actual = ML::GGUF::Gemma4Metal.forward_top1_allowed_resident_cache_wave(w, token_id, 0, allowed_ids, allowed_state, stop_layer).not_nil!
+    actual[0].to_i.should eq(best_id)
+    (actual[1] - top2[1]).abs.should be <= 1.0e-5_f32
+
+    hidden_state2 = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 8)
+    allowed_state2 = ML::GGUF::Gemma4Metal::ResidentState.new(w.hparams, 8)
+    hidden2 = ML::GGUF::Gemma4Metal.forward_hidden_resident_cache_wave(w, token_id, 0, hidden_state2, stop_layer).not_nil!
+    normed2 = ML::GGUF::Gemma4CPU.rms_norm(hidden2, w.output_norm, w.hparams.rms_eps)
+    top2_b = ML::GGUF::Qwen35Metal.project_top2_no_norm(w.token_embd, normed2).not_nil!
+    allowed_without_top1 = [1_i32, top2_b[2].to_i32, 2_i32, 3_i32]
+
+    actual2 = ML::GGUF::Gemma4Metal.forward_top1_allowed_resident_cache_wave(w, token_id, 0, allowed_without_top1, allowed_state2, stop_layer).not_nil!
+    actual2[0].to_i.should eq(top2_b[2].to_i)
+    (actual2[1] - top2_b[3]).abs.should be <= 1.0e-5_f32
+  end
+
   it "keeps full-attention K-as-V semantics aligned in the resident hidden path" do
     w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
     host_state = ML::GGUF::Gemma4Metal::State.new(w.hparams, 8)
