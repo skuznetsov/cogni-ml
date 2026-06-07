@@ -23889,3 +23889,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: finite grammar still exposes deterministic literal spans under multi-tool and optional-schema variants. Transport: branch-head corridor plus literal-token spans. Legal move remains certified forcing, but recomputed potential shows `M`/branch ties matter: the multi-tool row keeps more active branch heads, so speedup drops to `1.18x` even though the trace is exact. This is a Diamond compatibility rule for productization: reduce branch ambiguity first, then force spans.
 
 **decision:** Structured forced-span acceleration is ready for harness/product integration as a finite-grammar path, with branch-density counters surfaced. It should prefer schemas/prompts that collapse tool/argument ambiguity early; otherwise it remains correct but less fast.
+
+#### [LM-GEMMA4-STRUCTURED-HARNESS-INTEGRATION-904] CogniGemma structured forced-span counters are visible to CrystalBall
+**context:** ml / CogniGemma / crystal_ball / structured function calling / LTP-WBA
+**state:** implemented and focused-spec verified
+
+- claim: "The Gemma wrapper and CrystalBall CogniGemma provider now expose enough structure to A/B finite forced spans through the harness boundary."
+  source: `bin/gemma4_generate.cr` supports `GEMMA4_LITERAL_FORCE_SINGLE_OFF=1` and `GEMMA4_LITERAL_FORCE_SPAN_OFF=1`; dry-run verification showed both flags forwarded after `--constrained-gemma-tool-finite-call --literal-stop-after-complete` for a finite enum tool schema. CrystalBall `CogniGemma` now parses OpenAI-style nested tool-call sentinels and extracts `decode_ms_per_token_p50`, `decode_tokens`, and `literal_summary` into `perf_summary`; `Harness::Runner` labels CogniGemma perf separately. Focused verification: `crystal spec spec/llm/cogni_gemma_spec.cr spec/harness_spec.cr` in `/Users/sergey/Projects/Crystal/crystal_ball` passed `28 examples, 0 failures`.
+  verified_at: 2026-06-06
+  decay_trigger: wrapper CLI contract change, CrystalBall provider/harness rewrite, or real harness smoke contradiction
+  trust: {F:0.86,G:0.44,R:0.84}
+
+**LTP/WBA:** Window: structured forced-span speed corridor needs a product boundary certificate, not only CLI logs. Transport: profiler stdout counters through `gemma4_generate` into CrystalBall provider metadata and harness display. Legal move: expose counters and forced-off env flags without changing tool semantics. Boundary safety: generated content and normalized `ToolResponse` remain separate from perf metadata; simple sentinel parsing remains covered.
+
+**decision:** Next real-product gate can run CrystalBall CogniGemma finite-tool tasks with forced spans on/off and compare `CogniGemma perf` summaries. This should be sequential and safe-wrapped because it loads the 12B model.

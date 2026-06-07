@@ -86,6 +86,8 @@ if !tools.empty? && ENV["GEMMA4_CONSTRAINED_TOOLS_OFF"]? != "1"
   if !finite_options.empty?
     argv << "--constrained-gemma-tool-finite-call"
     argv << "--literal-stop-after-complete"
+    argv << "--literal-force-single-off" if ENV["GEMMA4_LITERAL_FORCE_SINGLE_OFF"]? == "1"
+    argv << "--literal-force-span-off" if ENV["GEMMA4_LITERAL_FORCE_SPAN_OFF"]? == "1"
   end
 end
 
