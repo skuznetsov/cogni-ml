@@ -23861,3 +23861,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: constrained grammar reaches deterministic literal spans inside a tool call. Transport: token-span corridor from the grammar cursor through known literal bytes/tokens. Legal move: batch-force certified literal spans and only invoke model head/body at choice boundaries. Boundary safety: exact token trace is preserved and the forced route remains inside the finite grammar; fallback is normal constrained decoding. Potential descends for this product corridor: `Phi=(allowed-head/model-decision count, span-boundary conflicts, forced-token area, remaining literal tokens)` went from `42` allowed-head decisions to `3` allowed-head decisions plus `6` forced span batches.
 
 **decision:** Treat forced spans as a product-level work-elimination lever for structured/function calling, not as raw pp/tg parity. Next checks should broaden to multiple tool schemas, required/optional parameters, OpenAI-style tool-response JSON, and crystal_ball harness tasks before default promotion outside the finite Gemma tool-call path.
+
+#### [LM-GEMMA4-STRUCTURED-FORCED-SPAN-SUITE-902] Gemma forced-span corridor generalizes across small finite tool schemas
+**context:** ml / CogniGemma / structured output / tool calling / OpenAI JSON / LTP-WBA
+**state:** verified small-suite product corridor
+
+- claim: "The constrained literal forced-span corridor preserves exact token traces and OpenAI-style parsed tool JSON across enum, boolean, and enum+integer finite schemas."
+  source: guarded sequential suite `/tmp/gemma4_structured_forced_span_suite_20260606234406` used three schemas with `--tool-response-json openai`. `set_mode(mode=safe)`: forced span `22.503ms/token`, no-force `32.91ms/token`, same trace, `1.462x`. `set_light(enabled=true)`: forced span `21.975ms/token`, no-force `33.085ms/token`, same trace, `1.506x`. `configure_retry(mode=safe,level=2)`: forced span `24.464ms/token`, no-force `33.418ms/token`, same trace, `1.366x`. Parsed OpenAI tool JSON matched the intended calls in all three rows.
+  verified_at: 2026-06-06
+  decay_trigger: tool-call grammar rewrite, Gemma tokenizer/template change, forced-span scheduler rewrite, or broader schema suite contradiction
+  trust: {F:0.86,G:0.42,R:0.84}
+
+**LTP/WBA:** Window: deterministic literal spans recur across finite enum/boolean/integer tool schemas. Transport: grammar-token corridor through Gemma-native tool-call literals into parsed OpenAI-compatible JSON. Legal move: force certified singleton/span literal tokens and leave model decisions only at branch heads. Recomputed potential descends on all three rows: allowed-head work drops from `28/24/36` decisions to `2/2/4`, with identical traces and parsed calls.
+
+**decision:** Promote forced-span structured decoding from one-off evidence to a small-suite product speed path. Next productization gate should move from synthetic CLI prompts to crystal_ball harness tasks and multiple-tool schemas; raw pp/tg kernel work remains separate.
