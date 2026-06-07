@@ -23951,3 +23951,23 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: open-string tool call with externally certified finite candidate values. Transport: hint JSON -> tool schema enum overlay -> Gemma finite literal corridor -> CrystalBall normalized tool execution. Legal move: only use caller-supplied hints; default open-string schemas remain unconstrained. Boundary safety: if no hint exists, behavior is unchanged; if a hint is supplied, it is an explicit product certificate and must contain the intended legal values. Potential descends strongly for hinted `read_file`: branch decisions collapse to zero and forced spans reduce generated-token area from the 64-token cap to 15 tokens.
 
 **decision:** This is the next practical LTP/WBA product lever. Use it for known-path/session/shortlist corridors, not as automatic guessing. Next work should derive hints from explicit task context or session cache with a visible certificate, and keep a forced-off A/B env for regressions.
+
+#### [LM-GEMMA4-CRYSTALBALL-AUTO-PATH-HINT-908] CrystalBall CogniGemma derives certified read_file hints from explicit existing paths
+**context:** ml / CogniGemma / crystal_ball / read_file / auto hints / LTP-WBA
+**state:** implemented and verified
+
+- claim: "CrystalBall CogniGemma can derive a conservative finite `read_file.path` hint from the latest user message when it explicitly names an existing file."
+  source: `CrystalBall::LLM::CogniGemma` now emits `GEMMA4_TOOL_STRING_ENUM_HINTS_JSON` for `read_file.path` only when the latest user message contains file-like tokens that exist as files in the current working directory; `CB_COGNI_GEMMA_AUTO_STRING_HINTS_OFF=1` disables this. Focused fake-wrapper specs passed: `/Users/sergey/Projects/Crystal/crystal_ball` `crystal spec spec/llm/cogni_gemma_spec.cr` (`13 examples, 0 failures`).
+  verified_at: 2026-06-07
+  decay_trigger: provider hint extraction rewrite, CrystalBall cwd semantics change, tool schema change, or prompt formats that invalidate latest-user extraction
+  trust: {F:0.86,G:0.42,R:0.84}
+
+- claim: "The auto-derived `TODO.md` hint engages the same real harness forced-span corridor without manually setting hint JSON."
+  source: real harness smoke `/tmp/cb_gemma_harness_readfile_autohint_20260607001059.log` used `--provider cogni-gemma --llm-max-tokens 64 --max-turns 1 --auto-deny --allow-tools read_file` and prompt `Read TODO.md using the available tool, then stop.` without `GEMMA4_TOOL_STRING_ENUM_HINTS_JSON`. It executed `read_file({path: TODO.md})` and reported `CogniGemma perf: decode_ms_per_token_p50=23.069,decode_tokens=15,15,literal=forced_single:2,allowed_head:0,span_batches:2,span_tokens:30`.
+  verified_at: 2026-06-07
+  decay_trigger: real harness contradiction, model/template update, or changed prompt/path extraction
+  trust: {F:0.86,G:0.36,R:0.84}
+
+**LTP/WBA:** Window: explicit existing file path in the latest user turn. Transport: user text -> cwd file existence certificate -> `read_file.path` enum hint -> Gemma finite literal corridor -> tool execution. Legal move: constrain only a value already explicit and locally verified; no hint is emitted for non-existing paths, parent traversal, or non-`read_file` string params. Boundary safety: kill-switch env exists, and open-string tools remain open unless a certificate is present. Potential descends by eliminating branch decisions and token area for the known path.
+
+**decision:** Use auto path hints as the default first product hint producer. Next candidates require their own certificates: recent file lists for `list_directory.path`, explicit literal pattern shortlists for `grep/glob`, or session-cache known paths. Do not generalize to arbitrary strings.
