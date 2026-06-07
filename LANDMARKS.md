@@ -23917,3 +23917,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: real product boundary around finite structured function calling. Transport: Gemma profiler counters and OpenAI-style tool-call JSON through the CrystalBall provider. Legal move: force certified literal spans while preserving normalized `FunctionCall`. Recomputed potential descends at the provider boundary: allowed-head work `28 -> 2`, decode p50 `32.353 -> 22.629ms/token`, same normalized call.
 
 **decision:** The forced-span corridor is ready for a full text-harness task that uses finite tools. Keep the claim scoped: this accelerates structured/known-token spans, not arbitrary free-form tg.
+
+#### [LM-GEMMA4-CRYSTALBALL-HARNESS-FINITE-TOOL-906] CrystalBall text harness engages Gemma forced spans on finite set_phase tool
+**context:** ml / CogniGemma / crystal_ball / text harness / structured function calling / LTP-WBA
+**state:** verified full text-harness finite-tool gate
+
+- claim: "CrystalBall's text harness can exercise the CogniGemma finite forced-span corridor with a real builtin tool when the tool schema is finite."
+  source: harness A/B `/tmp/cb_gemma_harness_set_phase_ab3_20260606235932` used `--provider cogni-gemma --llm-max-tokens 64 --max-turns 1 --auto-deny --allow-tools set_phase` with the real Gemma 12B model. Forced route executed `set_phase({phase: execution})` and reported `CogniGemma perf: decode_ms_per_token_p50=27.701,decode_tokens=13,13,literal=forced_single:2,allowed_head:2,span_batches:4,span_tokens:24`. Forced-off route executed the same tool and reported `decode_ms_per_token_p50=37.114,decode_tokens=13,13,literal=forced_single:0,allowed_head:28,span_batches:0,span_tokens:0`. After adding `set_phase` to CogniGemma's default safe diet, default-allowlist smoke `/tmp/cb_gemma_harness_set_phase_default_allow_20260607000123.log` also executed `set_phase` and reported `decode_ms_per_token_p50=27.947` with forced spans engaged.
+  verified_at: 2026-06-07
+  decay_trigger: CrystalBall builtin tool schema change, CogniGemma tool diet rewrite, wrapper constrained-tool rewrite, or wider harness contradiction
+  trust: {F:0.88,G:0.42,R:0.86}
+
+**LTP/WBA:** Window: text-harness finite tool call (`set_phase.phase` enum). Transport: builtin tool schema through Registry -> CogniGemma tool diet -> Gemma finite literal corridor -> normalized tool execution. Legal move: include the safe phase-control tool in CogniGemma's default diet and force certified literal spans. Boundary safety: `set_phase` changes only harness phase state; destructive/write/shell tools remain outside the default CogniGemma diet. Potential descends at full harness boundary: allowed-head work `28 -> 2`, decode p50 `37.114 -> 27.701ms/token`, same tool execution.
+
+**decision:** The structured forced-span path is product-ready for finite builtin/tool schemas. Next work should identify other safe finite schemas or add schema-specialized finite modes for common CrystalBall actions; open-string tools such as `read_file` cannot use this corridor until a finite shortlist/grammar is supplied.
