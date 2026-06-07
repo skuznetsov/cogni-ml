@@ -23971,3 +23971,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: explicit existing file path in the latest user turn. Transport: user text -> cwd file existence certificate -> `read_file.path` enum hint -> Gemma finite literal corridor -> tool execution. Legal move: constrain only a value already explicit and locally verified; no hint is emitted for non-existing paths, parent traversal, or non-`read_file` string params. Boundary safety: kill-switch env exists, and open-string tools remain open unless a certificate is present. Potential descends by eliminating branch decisions and token area for the known path.
 
 **decision:** Use auto path hints as the default first product hint producer. Next candidates require their own certificates: recent file lists for `list_directory.path`, explicit literal pattern shortlists for `grep/glob`, or session-cache known paths. Do not generalize to arbitrary strings.
+
+#### [LM-GEMMA4-AUTO-HINT-KILLSWITCH-909] CogniGemma auto path hints fail open to unconstrained harness behavior
+**context:** ml / CogniGemma / crystal_ball / auto hints / rollback / LTP-WBA
+**state:** verified rollback control
+
+- claim: "`CB_COGNI_GEMMA_AUTO_STRING_HINTS_OFF=1` disables automatic read_file path hints at the real harness boundary without breaking the tool call."
+  source: `/tmp/cb_gemma_harness_readfile_autohint_off_20260607001231.log` used the same `Read TODO.md` harness task with the auto-hint kill-switch enabled. It still executed `read_file({path: TODO.md})`, but reported no `literal_summary` and ran to `decode_tokens=64,64` with `decode_ms_per_token_p50=39.013`, matching the expected unconstrained fallback pattern.
+  verified_at: 2026-06-07
+  decay_trigger: provider env handling rewrite, wrapper hint handling rewrite, or harness behavior change
+  trust: {F:0.86,G:0.36,R:0.84}
+
+**LTP/WBA:** Window: rollback/fallback boundary for auto hints. Legal move: disable the certificate producer while preserving normal open-string tool semantics. Recomputed potential returns to the unconstrained corridor, proving the hint path is reversible and not fused into core tool behavior.
+
+**decision:** Keep the kill-switch documented and use it in ABBA/regression runs whenever an auto-hint row looks suspicious.
