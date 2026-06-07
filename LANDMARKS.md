@@ -23847,3 +23847,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: recomputed post-lane32 dominant bucket is `ffn_upgate`, not attention. Transport: Q4_K gate/up FFN corridor over row-prefill chunks. Tested legal moves either preserved the two dominant Q4 weight reads or worsened occupancy/register pressure, so recomputed `Phi=(dominant_wait_bucket, route_ties, sync/register-conflicts, remaining_bytes)` did not descend. The failed true-dual kernel is a Diamond result: sharing input tile/launch is insufficient when doubled accumulators increase pressure and weight bytes remain dominant.
 
 **decision:** Do not retry B64-off, q4_pair, q4_gelu, h16-proj, tensor, chunk-size, or true-dual-output B64 as local Gemma pp levers without a new boundary proof. Next exact speed work should either import a materially different llama/MLX FFN algorithm, use CogniGraph/session/known-token corridors to avoid FFN work, or target product top1/structured forced-span corridors where work can be certified away.
+
+#### [LM-GEMMA4-STRUCTURED-FORCED-SPAN-901] Gemma constrained tool-call forced spans remove certified literal work
+**context:** ml / CogniGemma / structured output / tool calling / LTP-WBA / product corridor
+**state:** verified narrow product speed corridor
+
+- claim: "For a finite Gemma-native tool-call output, literal forced spans can preserve the exact token trace while reducing decode wall time."
+  source: guarded sequential run `/tmp/gemma4_structured_forced_span_20260606234039` compared constrained tool calling with and without literal span forcing. Forced-span route: `decode_ms_per_token_p50=22.543`, `decode_tokens=13,13,13`, `literal_summary=forced_single:3,allowed_head:3,span_batches:6,span_tokens:36`. No-force route: `decode_ms_per_token_p50=33.35`, `decode_tokens=13,13,13`, `literal_summary=forced_single:0,allowed_head:42,span_batches:0,span_tokens:0`. Both produced identical `token_trace=48,6639,236787,1025,236779,9074,236782,9074,236787,52,12977,52,236783,49`.
+  verified_at: 2026-06-06
+  decay_trigger: Gemma tool grammar rewrite, literal-forcing scheduler rewrite, tokenizer/template change, or broader multi-tool gate contradiction
+  trust: {F:0.84,G:0.30,R:0.82}
+
+**LTP/WBA:** Window: constrained grammar reaches deterministic literal spans inside a tool call. Transport: token-span corridor from the grammar cursor through known literal bytes/tokens. Legal move: batch-force certified literal spans and only invoke model head/body at choice boundaries. Boundary safety: exact token trace is preserved and the forced route remains inside the finite grammar; fallback is normal constrained decoding. Potential descends for this product corridor: `Phi=(allowed-head/model-decision count, span-boundary conflicts, forced-token area, remaining literal tokens)` went from `42` allowed-head decisions to `3` allowed-head decisions plus `6` forced span batches.
+
+**decision:** Treat forced spans as a product-level work-elimination lever for structured/function calling, not as raw pp/tg parity. Next checks should broaden to multiple tool schemas, required/optional parameters, OpenAI-style tool-response JSON, and crystal_ball harness tasks before default promotion outside the finite Gemma tool-call path.
