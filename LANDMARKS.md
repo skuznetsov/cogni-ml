@@ -23985,3 +23985,23 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: rollback/fallback boundary for auto hints. Legal move: disable the certificate producer while preserving normal open-string tool semantics. Recomputed potential returns to the unconstrained corridor, proving the hint path is reversible and not fused into core tool behavior.
 
 **decision:** Keep the kill-switch documented and use it in ABBA/regression runs whenever an auto-hint row looks suspicious.
+
+#### [LM-GEMMA4-AUTO-DIR-HINT-910] CogniGemma derives finite list_directory hints from quoted existing directories
+**context:** ml / CogniGemma / crystal_ball / list_directory / auto hints / LTP-WBA
+**state:** implemented and verified
+
+- claim: "CrystalBall CogniGemma can derive conservative finite `list_directory.path` hints from quoted/backticked existing directories."
+  source: `CrystalBall::LLM::CogniGemma` now extracts explicit existing paths from backticks/quotes plus path-like tokens, splits file hints for `read_file.path` and directory hints for `list_directory.path`, and does not infer directory hints from ordinary unquoted words. Focused specs passed in `/Users/sergey/Projects/Crystal/crystal_ball`: `crystal spec spec/llm/cogni_gemma_spec.cr` (`15 examples, 0 failures`).
+  verified_at: 2026-06-07
+  decay_trigger: provider hint extraction rewrite, CrystalBall cwd semantics change, tool schema change, or prompt formats that invalidate explicit path extraction
+  trust: {F:0.86,G:0.42,R:0.84}
+
+- claim: "The auto-derived `src` directory hint engages the real harness forced-span corridor for `list_directory`."
+  source: `/tmp/cb_gemma_harness_listdir_autohint_20260607001556.log` used `--provider cogni-gemma --llm-max-tokens 64 --max-turns 1 --auto-deny --allow-tools list_directory` and a prompt with backticked `src`. It executed `list_directory({path: src})` and reported `CogniGemma perf: decode_ms_per_token_p50=22.724,decode_tokens=13,13,literal=forced_single:2,allowed_head:0,span_batches:2,span_tokens:26`.
+  verified_at: 2026-06-07
+  decay_trigger: real harness contradiction, model/template update, or changed prompt/path extraction
+  trust: {F:0.86,G:0.36,R:0.84}
+
+**LTP/WBA:** Window: quoted/backticked existing directory in the latest user turn. Transport: user text -> cwd directory existence certificate -> `list_directory.path` enum hint -> Gemma finite literal corridor -> tool execution. Legal move: constrain only explicit verified directory values. Boundary safety: unquoted ordinary words do not generate directory hints; open-string behavior remains available with the kill-switch.
+
+**decision:** Auto hints now cover the two safest path tools: `read_file` for explicit existing files and `list_directory` for quoted/backticked existing directories. Next candidates need separate certificates; do not auto-constrain `grep`/`glob` patterns yet.
