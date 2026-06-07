@@ -23903,3 +23903,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: structured forced-span speed corridor needs a product boundary certificate, not only CLI logs. Transport: profiler stdout counters through `gemma4_generate` into CrystalBall provider metadata and harness display. Legal move: expose counters and forced-off env flags without changing tool semantics. Boundary safety: generated content and normalized `ToolResponse` remain separate from perf metadata; simple sentinel parsing remains covered.
 
 **decision:** Next real-product gate can run CrystalBall CogniGemma finite-tool tasks with forced spans on/off and compare `CogniGemma perf` summaries. This should be sequential and safe-wrapped because it loads the 12B model.
+
+#### [LM-GEMMA4-CRYSTALBALL-STRUCTURED-SMOKE-905] CrystalBall CogniGemma real-model structured A/B preserves tool call and exposes speed delta
+**context:** ml / CogniGemma / crystal_ball / real model smoke / structured function calling
+**state:** verified real-provider smoke
+
+- claim: "CrystalBall's CogniGemma provider can run the finite structured forced-span corridor on the real Gemma 12B model and expose the same speed/counter pattern as the CLI gates."
+  source: real provider smoke `/tmp/cb_gemma_structured_smoke_20260606235511.log` used actual `gemma-4-12B-it-Q4_K_M.gguf`, `GEMMA4_PROFILE_BIN=/tmp/gemma4_metal_decode_profile_lane32_default`, finite `set_mode(mode=safe)` schema, and `tool_response_format=openai`. Forced route returned normalized `tool_calls=[{"id":"call_0","name":"set_mode","arguments":{"mode":"safe"}}]` and `perf=decode_ms_per_token_p50=22.629,decode_tokens=13,13,literal=forced_single:2,allowed_head:2,span_batches:4,span_tokens:24`. Forced-off route returned the same normalized tool call and `perf=decode_ms_per_token_p50=32.353,decode_tokens=13,13,literal=forced_single:0,allowed_head:28,span_batches:0,span_tokens:0`.
+  verified_at: 2026-06-06
+  decay_trigger: provider/wrapper contract change, model/template change, CrystalBall tool adapter rewrite, or full harness contradiction
+  trust: {F:0.88,G:0.38,R:0.86}
+
+**LTP/WBA:** Window: real product boundary around finite structured function calling. Transport: Gemma profiler counters and OpenAI-style tool-call JSON through the CrystalBall provider. Legal move: force certified literal spans while preserving normalized `FunctionCall`. Recomputed potential descends at the provider boundary: allowed-head work `28 -> 2`, decode p50 `32.353 -> 22.629ms/token`, same normalized call.
+
+**decision:** The forced-span corridor is ready for a full text-harness task that uses finite tools. Keep the claim scoped: this accelerates structured/known-token spans, not arbitrary free-form tg.
