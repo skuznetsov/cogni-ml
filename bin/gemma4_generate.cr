@@ -2,6 +2,48 @@ require "json"
 require "option_parser"
 require "../src/ml/gguf/gemma4_chat"
 
+def apply_tool_string_enum_hints(tools : Array(JSON::Any), raw_hints : String?) : Array(JSON::Any)
+  return tools if raw_hints.nil? || raw_hints.empty? || tools.empty?
+
+  hints = JSON.parse(raw_hints).as_h
+  tools.map do |tool|
+    tool_obj = tool.as_h?
+    function = tool_obj.try { |obj| obj["function"]?.try(&.as_h?) }
+    name = function.try { |fn| fn["name"]?.try(&.as_s?) }
+    tool_hints = name.try { |n| hints[n]?.try(&.as_h?) }
+    parameters = function.try { |fn| fn["parameters"]?.try(&.as_h?) }
+    properties = parameters.try { |params| params["properties"]?.try(&.as_h?) }
+    next tool unless tool_obj && function && tool_hints && parameters && properties
+
+    changed = false
+    new_properties = properties.dup
+    tool_hints.each do |param_name, raw_values|
+      values = raw_values.as_a?.try { |arr| arr.compact_map(&.as_s?) } || [] of String
+      values = values.uniq
+      next if values.empty?
+
+      schema = properties[param_name]?.try(&.as_h?)
+      next unless schema
+      type_name = schema["type"]?.try(&.as_s?).try(&.downcase)
+      next unless type_name.nil? || type_name == "string"
+
+      new_schema = schema.dup
+      new_schema["enum"] = JSON::Any.new(values.map { |value| JSON::Any.new(value) })
+      new_properties[param_name] = JSON::Any.new(new_schema)
+      changed = true
+    end
+    next tool unless changed
+
+    new_parameters = parameters.dup
+    new_parameters["properties"] = JSON::Any.new(new_properties)
+    new_function = function.dup
+    new_function["parameters"] = JSON::Any.new(new_parameters)
+    new_tool = tool_obj.dup
+    new_tool["function"] = JSON::Any.new(new_function)
+    JSON::Any.new(new_tool)
+  end
+end
+
 DEFAULT_PROFILE_BIN = "#{Dir.current}/build/gemma4_metal_decode_profile"
 
 profile_bin = ENV["GEMMA4_PROFILE_BIN"]? || ENV["GEMMA4_GENERATE_PROFILE_BIN"]? || DEFAULT_PROFILE_BIN
@@ -58,6 +100,8 @@ tools = if raw = tools_json
         else
           [] of JSON::Any
         end
+tools = apply_tool_string_enum_hints(tools, ENV["GEMMA4_TOOL_STRING_ENUM_HINTS_JSON"]?)
+profile_tools_json = tools.empty? ? nil : tools.to_json
 
 argv = [] of String
 argv << profile_bin
@@ -68,7 +112,7 @@ argv.concat(["--tool-response-json", tool_response_format])
 argv.concat(["--max-seq", max_seq.not_nil!.to_s]) if max_seq
 argv.concat(["--model", model.not_nil!]) if model
 
-if raw_tools = tools_json
+if raw_tools = profile_tools_json
   argv.concat(["--tools-json", raw_tools]) unless raw_tools.empty?
 end
 

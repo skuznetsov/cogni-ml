@@ -23931,3 +23931,23 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: text-harness finite tool call (`set_phase.phase` enum). Transport: builtin tool schema through Registry -> CogniGemma tool diet -> Gemma finite literal corridor -> normalized tool execution. Legal move: include the safe phase-control tool in CogniGemma's default diet and force certified literal spans. Boundary safety: `set_phase` changes only harness phase state; destructive/write/shell tools remain outside the default CogniGemma diet. Potential descends at full harness boundary: allowed-head work `28 -> 2`, decode p50 `37.114 -> 27.701ms/token`, same tool execution.
 
 **decision:** The structured forced-span path is product-ready for finite builtin/tool schemas. Next work should identify other safe finite schemas or add schema-specialized finite modes for common CrystalBall actions; open-string tools such as `read_file` cannot use this corridor until a finite shortlist/grammar is supplied.
+
+#### [LM-GEMMA4-HINTED-STRING-ENUM-907] Explicit string enum hints unlock forced spans for open-string CrystalBall tools
+**context:** ml / CogniGemma / crystal_ball / read_file / structured hints / LTP-WBA
+**state:** implemented opt-in corridor and verified on real harness read_file
+
+- claim: "A default-off string-enum hint overlay can turn selected open-string tool arguments into finite constrained Gemma calls without changing default behavior."
+  source: `bin/gemma4_generate.cr` supports `GEMMA4_TOOL_STRING_ENUM_HINTS_JSON`, e.g. `{"read_file":{"path":["TODO.md","LANDMARKS.md"]}}`, by overlaying enum values onto string tool schemas before finite option generation. Verification: wrapper no-codegen build passed; hinted dry-run showed `read_file.path` enum and `--constrained-gemma-tool-finite-call --literal-stop-after-complete`; unhinted dry-run stayed unconstrained (`NO_HINTS_UNCONSTRAINED_OK`).
+  verified_at: 2026-06-07
+  decay_trigger: wrapper tool schema handling rewrite, Gemma finite option generation rewrite, or hint JSON contract change
+  trust: {F:0.86,G:0.44,R:0.84}
+
+- claim: "With a certified `read_file.path=TODO.md` hint, full CrystalBall text harness executes the same read_file call much faster through the forced-span corridor."
+  source: `/tmp/cb_gemma_harness_readfile_hint_ab_20260607000553`: forced hinted route executed `read_file({path: TODO.md})`, reported `decode_ms_per_token_p50=22.981`, `decode_tokens=15,15`, `literal=forced_single:2,allowed_head:0,span_batches:2,span_tokens:30`; span+single forced-off route executed the same tool but ran to `decode_tokens=64,64` with `decode_ms_per_token_p50=40.643`. Span-off-only isolation `/tmp/cb_gemma_harness_readfile_hint_spanoff_20260607000715.log` also ran to `64` tokens at `40.538ms/token`, confirming batched span forcing is the completion lever for this corridor.
+  verified_at: 2026-06-07
+  decay_trigger: real harness contradiction, read_file schema change, tool-call parser rewrite, or prompt/context mismatch where the supplied hint is not the intended path
+  trust: {F:0.86,G:0.36,R:0.84}
+
+**LTP/WBA:** Window: open-string tool call with externally certified finite candidate values. Transport: hint JSON -> tool schema enum overlay -> Gemma finite literal corridor -> CrystalBall normalized tool execution. Legal move: only use caller-supplied hints; default open-string schemas remain unconstrained. Boundary safety: if no hint exists, behavior is unchanged; if a hint is supplied, it is an explicit product certificate and must contain the intended legal values. Potential descends strongly for hinted `read_file`: branch decisions collapse to zero and forced spans reduce generated-token area from the 64-token cap to 15 tokens.
+
+**decision:** This is the next practical LTP/WBA product lever. Use it for known-path/session/shortlist corridors, not as automatic guessing. Next work should derive hints from explicit task context or session cache with a visible certificate, and keep a forced-off A/B env for regressions.
