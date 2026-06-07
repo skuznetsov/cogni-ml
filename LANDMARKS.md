@@ -23875,3 +23875,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: deterministic literal spans recur across finite enum/boolean/integer tool schemas. Transport: grammar-token corridor through Gemma-native tool-call literals into parsed OpenAI-compatible JSON. Legal move: force certified singleton/span literal tokens and leave model decisions only at branch heads. Recomputed potential descends on all three rows: allowed-head work drops from `28/24/36` decisions to `2/2/4`, with identical traces and parsed calls.
 
 **decision:** Promote forced-span structured decoding from one-off evidence to a small-suite product speed path. Next productization gate should move from synthetic CLI prompts to crystal_ball harness tasks and multiple-tool schemas; raw pp/tg kernel work remains separate.
+
+#### [LM-GEMMA4-STRUCTURED-FORCED-SPAN-BOUNDARIES-903] Forced spans pass multi-tool and optional-schema boundaries, with branch-density caveat
+**context:** ml / CogniGemma / structured output / tool calling / boundary tests / LTP-WBA
+**state:** verified boundary extension with caveat
+
+- claim: "Finite literal forced spans preserve exact token traces on multi-tool and no-required optional-parameter schemas, but the speedup falls as branch-head density increases."
+  source: guarded sequential boundary suite `/tmp/gemma4_structured_forced_span_boundaries_20260606234638`. Multi-tool schema (`calculator` vs `set_mode`) preserved exact trace `48,6639,236787,47552,236782,19217,236787,52,1282,52,236783,49` and emitted `calculator(operation=add)`; forced span `29.206ms/token`, no-force `34.459ms/token`, `1.180x`, with allowed-head work `24 -> 4`. Optional/no-required schema (`notify(urgent=true)`) preserved exact trace `48,6639,236787,50772,236782,148436,236787,3397,236783,49`; forced span `22.649ms/token`, no-force `32.23ms/token`, `1.423x`, with allowed-head work `20 -> 2`.
+  verified_at: 2026-06-06
+  decay_trigger: grammar/options construction rewrite, optional-parameter semantics change, multi-tool routing change, or wider boundary-suite contradiction
+  trust: {F:0.86,G:0.48,R:0.84}
+
+**LTP/WBA:** Window: finite grammar still exposes deterministic literal spans under multi-tool and optional-schema variants. Transport: branch-head corridor plus literal-token spans. Legal move remains certified forcing, but recomputed potential shows `M`/branch ties matter: the multi-tool row keeps more active branch heads, so speedup drops to `1.18x` even though the trace is exact. This is a Diamond compatibility rule for productization: reduce branch ambiguity first, then force spans.
+
+**decision:** Structured forced-span acceleration is ready for harness/product integration as a finite-grammar path, with branch-density counters surfaced. It should prefer schemas/prompts that collapse tool/argument ambiguity early; otherwise it remains correct but less fast.
