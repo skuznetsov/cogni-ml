@@ -1,0 +1,103 @@
+#version 450
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer WBuffer {
+  uint w[];
+};
+
+layout(set = 0, binding = 1) readonly buffer XBuffer {
+  float x[];
+};
+
+layout(set = 0, binding = 2) writeonly buffer YBuffer {
+  float y[];
+};
+
+layout(push_constant) uniform Push {
+  uint out_dim;
+  uint in_dim;
+  uint row_bytes;
+  uint repeats;
+} pc;
+
+uint byte_at(uint off) {
+  uint word = w[off >> 2];
+  return (word >> ((off & 3u) * 8u)) & 0xffu;
+}
+
+uint u16_at(uint off) {
+  return byte_at(off) | (byte_at(off + 1u) << 8u);
+}
+
+float f16_to_f32(uint h) {
+  uint sign = (h >> 15u) & 1u;
+  uint exp = (h >> 10u) & 31u;
+  uint frac = h & 1023u;
+  float v;
+  if (exp == 0u) {
+    v = frac == 0u ? 0.0 : ldexp(float(frac), -24);
+  } else if (exp == 31u) {
+    v = frac == 0u ? uintBitsToFloat(0x7f800000u) : uintBitsToFloat(0x7fc00000u);
+  } else {
+    v = ldexp(1.0 + float(frac) / 1024.0, int(exp) - 15);
+  }
+  return sign == 0u ? v : -v;
+}
+
+uvec2 scale_min_k4(uint j, uint scales_off) {
+  if (j < 4u) {
+    return uvec2(byte_at(scales_off + j) & 63u, byte_at(scales_off + j + 4u) & 63u);
+  }
+  uint a = byte_at(scales_off + j + 4u);
+  uint b0 = byte_at(scales_off + j - 4u);
+  uint b1 = byte_at(scales_off + j);
+  return uvec2((a & 0x0fu) | ((b0 >> 6u) << 4u),
+               (a >> 4u) | ((b1 >> 6u) << 4u));
+}
+
+void main() {
+  uint row = gl_GlobalInvocationID.x;
+  if (row >= pc.out_dim) {
+    return;
+  }
+
+  uint blocks = pc.in_dim / 256u;
+  uint row_off = row * pc.row_bytes;
+  float sum = 0.0;
+
+  for (uint blk = 0u; blk < blocks; blk++) {
+    uint blk_off = row_off + blk * 144u;
+    float d = f16_to_f32(u16_at(blk_off));
+    float dmin = f16_to_f32(u16_at(blk_off + 2u));
+    uint scales_off = blk_off + 4u;
+    uint qs_off = blk_off + 16u;
+    uint base_j = blk * 256u;
+
+    uint is = 0u;
+    uint qoff = 0u;
+    for (uint group = 0u; group < 4u; group++) {
+      uvec2 sm1 = scale_min_k4(is, scales_off);
+      uvec2 sm2 = scale_min_k4(is + 1u, scales_off);
+      float d1 = d * float(sm1.x);
+      float m1 = dmin * float(sm1.y);
+      float d2 = d * float(sm2.x);
+      float m2 = dmin * float(sm2.y);
+
+      uint j0 = base_j + (is / 2u) * 64u;
+      for (uint l = 0u; l < 32u; l++) {
+        uint q = byte_at(qs_off + qoff + l);
+        sum += x[j0 + l] * (d1 * float(q & 0x0fu) - m1);
+      }
+      for (uint l = 0u; l < 32u; l++) {
+        uint q = byte_at(qs_off + qoff + l);
+        sum += x[j0 + 32u + l] * (d2 * float(q >> 4u) - m2);
+      }
+
+      qoff += 32u;
+      is += 2u;
+    }
+  }
+
+  y[row] = sum;
+}

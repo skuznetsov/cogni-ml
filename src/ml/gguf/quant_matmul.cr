@@ -35,6 +35,45 @@ module ML::GGUF
       end
     end
 
+    def self.row_bytes(w_type : TensorType, in_dim : Int32) : Int32
+      case w_type
+      when .f32?
+        in_dim * 4
+      when .f16?
+        in_dim * 2
+      else
+        blocks = (in_dim + w_type.block_elements - 1) // w_type.block_elements
+        blocks * w_type.block_bytes
+      end
+    end
+
+    def self.top1_allowed(
+      x : Array(Float32), in_dim : Int32,
+      w_raw : Bytes, w_type : TensorType, out_dim : Int32,
+      allowed_ids : Array(Int32),
+    ) : {Int32, Float32}
+      raise ArgumentError.new("allowed_ids must not be empty") if allowed_ids.empty?
+      raise ArgumentError.new("x size #{x.size} is smaller than in_dim #{in_dim}") if x.size < in_dim
+
+      rb = row_bytes(w_type, in_dim)
+      best_id = -1
+      best_logit = -Float32::INFINITY
+      allowed_ids.each do |id|
+        raise ArgumentError.new("allowed token id #{id} out of range 0...#{out_dim}") if id < 0 || id >= out_dim
+
+        offset = id * rb
+        raise ArgumentError.new("allowed token id #{id} row exceeds raw tensor bytes") if offset + rb > w_raw.size
+
+        row_raw = Bytes.new(w_raw.to_unsafe + offset, rb, read_only: true)
+        logit = matmul_add(x, 1, in_dim, row_raw, w_type, 1, [0.0_f32])[0]
+        if best_id < 0 || logit > best_logit || (logit == best_logit && id < best_id)
+          best_id = id
+          best_logit = logit
+        end
+      end
+      {best_id, best_logit}
+    end
+
     # Q4_K fused matmul: for each output neuron, walk through Q4_K blocks
     # and accumulate dot product with dequantized values.
     # Block layout: [d:f16][dmin:f16][scales:12B][qs:128B] = 144 B

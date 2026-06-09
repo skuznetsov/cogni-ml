@@ -1513,6 +1513,14 @@ module ML::GGUF
       {% end %}
     end
 
+    private def allowed_head_cpu_max : Int32
+      raw = ENV["QWEN35_ALLOWED_HEAD_CPU_MAX"]?
+      return 0 unless raw
+
+      value = raw.to_i? || 0
+      value > 0 ? value : 0
+    end
+
     # ─────────────────────────────────────────────────────────────────────
     # Full-attention layer forward (single-token decode)
     # ─────────────────────────────────────────────────────────────────────
@@ -1965,6 +1973,19 @@ module ML::GGUF
       {logits.index(maxv).not_nil!.to_i32, maxv}
     end
 
+    def hidden_top1_allowed(weights : Qwen35Weights,
+                            hidden : Array(Float32),
+                            allowed_ids : Array(Int32)) : {Int32, Float32}
+      raise ArgumentError.new("hidden_top1_allowed requires at least one allowed id") if allowed_ids.empty?
+
+      hp = weights.hparams
+      x = hidden.dup
+      rms_norm!(x, weights.output_norm, hp.rms_eps)
+      QuantMatmul.top1_allowed(
+        x, weights.output.in_dim, weights.output.raw, weights.output.type, weights.output.out_dim, allowed_ids
+      )
+    end
+
     # Probe helper: run one token through the decoder and project the hidden
     # after each layer. This mutates `state` exactly like normal decode for the
     # consumed token, but it is intentionally diagnostic rather than hot-path.
@@ -2082,13 +2103,32 @@ module ML::GGUF
         raise ArgumentError.new("allowed token id #{id} out of range 0...#{weights.output.out_dim}") if id < 0 || id >= weights.output.out_dim
       end
 
-      if packed = forward_decode_wave_routed(weights, token_id, pos, state, top1: true, top1_allowed_ids: allowed_ids)
-        return {packed[0].to_i32, packed[1]} if packed.size == 2
-        return top1_from_allowed_logits(packed, allowed_ids)
+      if weights.output.type.q6_k? && allowed_ids.size > allowed_head_cpu_max
+        if packed = forward_decode_wave_routed(weights, token_id, pos, state, top1: true, top1_allowed_ids: allowed_ids)
+          {% unless flag?(:cpu_only) %}
+            Qwen35Metal::Profile.bump_route_marker("allowed_head.metal_q6")
+          {% end %}
+          if packed.size == 2
+            id = packed[0].to_i32
+            raise "allowed top1 route returned token id #{id} outside allowed set" unless allowed_ids.includes?(id)
+            return {id, packed[1]}
+          end
+          return top1_from_allowed_logits(packed, allowed_ids)
+        end
       end
 
-      logits = forward(weights, token_id, pos, state)
-      top1_from_allowed_logits(logits, allowed_ids)
+      hidden = if routed = forward_decode_wave_routed(weights, token_id, pos, state, emit_head: false, emit_hidden: true)
+                 {% unless flag?(:cpu_only) %}
+                   Qwen35Metal::Profile.bump_route_marker("allowed_head.cpu_selected_metal_hidden")
+                 {% end %}
+                 routed
+               else
+                 {% unless flag?(:cpu_only) %}
+                   Qwen35Metal::Profile.bump_route_marker("allowed_head.cpu_selected_cpu_hidden")
+                 {% end %}
+                 forward_hidden(weights, token_id, pos, state)
+               end
+      hidden_top1_allowed(weights, hidden, allowed_ids)
     end
 
     # Greedy exact decode suffix with token handoff kept on the GPU.
@@ -3177,9 +3217,10 @@ module ML::GGUF
                                            top1 : Bool = false,
                                            top2 : Bool = false,
                                            emit_head : Bool = true,
+                                           emit_hidden : Bool = false,
                                            top1_allowed_ids : Array(Int32)? = nil) : Array(Float32)?
       {% unless flag?(:cpu_only) %}
-        if submission = forward_decode_wave_routed_async(weights, token_id, pos, state, top1: top1, top2: top2, emit_head: emit_head, top1_allowed_ids: top1_allowed_ids)
+        if submission = forward_decode_wave_routed_async(weights, token_id, pos, state, top1: top1, top2: top2, emit_head: emit_head, emit_hidden: emit_hidden, top1_allowed_ids: top1_allowed_ids)
           return Qwen35Metal.wait_forward_decode_wave(submission)
         end
       {% end %}
@@ -3193,6 +3234,7 @@ module ML::GGUF
                                                  top1 : Bool = false,
                                                  top2 : Bool = false,
                                                  emit_head : Bool = true,
+                                                 emit_hidden : Bool = false,
                                                  top1_allowed_ids : Array(Int32)? = nil,
                                                  fresh_scratch : Bool = false,
                                                  scratch_namespace : String? = nil,
@@ -3300,6 +3342,7 @@ module ML::GGUF
           emb, weights.layers,
           k_cache_bufs, v_cache_bufs, conv_state_bufs, ssm_state_bufs,
           weights.output_norm, weights.output, hp, pos, top1: top1, emit_head: emit_head,
+          emit_hidden: emit_hidden,
           top2: top2,
           top1_allowed_ids: top1_allowed_ids,
           fresh_scratch: fresh_scratch, scratch_namespace: scratch_namespace,

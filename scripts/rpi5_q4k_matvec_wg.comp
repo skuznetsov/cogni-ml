@@ -1,0 +1,102 @@
+#version 450
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer WBuffer {
+  uint w[];
+};
+
+layout(set = 0, binding = 1) readonly buffer XBuffer {
+  float x[];
+};
+
+layout(set = 0, binding = 2) writeonly buffer YBuffer {
+  float y[];
+};
+
+layout(push_constant) uniform Push {
+  uint out_dim;
+  uint in_dim;
+  uint row_bytes;
+  uint repeats;
+} pc;
+
+shared float partial[64];
+
+uint byte_at(uint off) {
+  uint word = w[off >> 2];
+  return (word >> ((off & 3u) * 8u)) & 0xffu;
+}
+
+uint u16_at(uint off) {
+  return byte_at(off) | (byte_at(off + 1u) << 8u);
+}
+
+float f16_to_f32(uint h) {
+  uint sign = (h >> 15u) & 1u;
+  uint exp = (h >> 10u) & 31u;
+  uint frac = h & 1023u;
+  float v;
+  if (exp == 0u) {
+    v = frac == 0u ? 0.0 : ldexp(float(frac), -24);
+  } else if (exp == 31u) {
+    v = frac == 0u ? uintBitsToFloat(0x7f800000u) : uintBitsToFloat(0x7fc00000u);
+  } else {
+    v = ldexp(1.0 + float(frac) / 1024.0, int(exp) - 15);
+  }
+  return sign == 0u ? v : -v;
+}
+
+uvec2 scale_min_k4(uint j, uint scales_off) {
+  if (j < 4u) {
+    return uvec2(byte_at(scales_off + j) & 63u, byte_at(scales_off + j + 4u) & 63u);
+  }
+  uint a = byte_at(scales_off + j + 4u);
+  uint b0 = byte_at(scales_off + j - 4u);
+  uint b1 = byte_at(scales_off + j);
+  return uvec2((a & 0x0fu) | ((b0 >> 6u) << 4u),
+               (a >> 4u) | ((b1 >> 6u) << 4u));
+}
+
+float q4k_value(uint row_off, uint j) {
+  uint blk = j / 256u;
+  uint within = j - blk * 256u;
+  uint group = within / 64u;
+  uint rem = within - group * 64u;
+  uint lane = rem & 31u;
+  uint scale_idx = group * 2u + (rem >= 32u ? 1u : 0u);
+  uint blk_off = row_off + blk * 144u;
+  float d = f16_to_f32(u16_at(blk_off));
+  float dmin = f16_to_f32(u16_at(blk_off + 2u));
+  uvec2 sm = scale_min_k4(scale_idx, blk_off + 4u);
+  uint q = byte_at(blk_off + 16u + group * 32u + lane);
+  float qv = rem < 32u ? float(q & 0x0fu) : float(q >> 4u);
+  return d * float(sm.x) * qv - dmin * float(sm.y);
+}
+
+void main() {
+  uint row = gl_WorkGroupID.x;
+  uint lid = gl_LocalInvocationID.x;
+  if (row >= pc.out_dim) {
+    return;
+  }
+
+  uint row_off = row * pc.row_bytes;
+  float sum = 0.0;
+  for (uint j = lid; j < pc.in_dim; j += 64u) {
+    sum += x[j] * q4k_value(row_off, j);
+  }
+  partial[lid] = sum;
+  barrier();
+
+  for (uint stride = 32u; stride > 0u; stride >>= 1u) {
+    if (lid < stride) {
+      partial[lid] += partial[lid + stride];
+    }
+    barrier();
+  }
+
+  if (lid == 0u) {
+    y[row] = partial[0];
+  }
+}

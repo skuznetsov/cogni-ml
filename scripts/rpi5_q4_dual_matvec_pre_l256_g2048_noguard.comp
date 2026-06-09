@@ -1,0 +1,64 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer WGateBuffer {
+  uint w_gate[];
+};
+
+layout(set = 0, binding = 1) readonly buffer WUpBuffer {
+  uint w_up[];
+};
+
+layout(set = 0, binding = 2) readonly buffer XBuffer {
+  float x[];
+};
+
+layout(set = 0, binding = 3) writeonly buffer GateBuffer {
+  float gate[];
+};
+
+layout(set = 0, binding = 4) writeonly buffer UpBuffer {
+  float up[];
+};
+
+layout(push_constant) uniform Push {
+  uint out_dim;
+  uint in_dim;
+  uint row_bytes;
+  uint repeats;
+} pc;
+
+float q4_lane_to_f32(uint word, uint lane) {
+  return float((word >> (lane * 4u)) & 0x0fu);
+}
+
+void main() {
+  // Safe only when the host dispatch covers exactly the valid rows.
+  uint row = gl_GlobalInvocationID.x;
+
+  const uint groups = 64u;
+  uint row_word_off = row * 384u;
+  float gate_sum = 0.0;
+  float up_sum = 0.0;
+  for (uint g = 0u; g < groups; g++) {
+    uint block_word = row_word_off + g * 6u;
+    float gate_scale = uintBitsToFloat(w_gate[block_word]);
+    float gate_minv = uintBitsToFloat(w_gate[block_word + 1u]);
+    float up_scale = uintBitsToFloat(w_up[block_word]);
+    float up_minv = uintBitsToFloat(w_up[block_word + 1u]);
+    uint x_base = g * 32u;
+    for (uint q = 0u; q < 4u; q++) {
+      uint gate_qw = w_gate[block_word + 2u + q];
+      uint up_qw = w_up[block_word + 2u + q];
+      uint xb = x_base + q * 8u;
+      for (uint lane = 0u; lane < 8u; lane++) {
+        float xv = x[xb + lane];
+        gate_sum += xv * (gate_scale * q4_lane_to_f32(gate_qw, lane) - gate_minv);
+        up_sum += xv * (up_scale * q4_lane_to_f32(up_qw, lane) - up_minv);
+      }
+    }
+  }
+  gate[row] = gate_sum;
+  up[row] = up_sum;
+}

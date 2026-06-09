@@ -1,0 +1,33 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer WBuffer {
+  uint w[];
+};
+
+layout(set = 0, binding = 1) readonly buffer XBuffer {
+  float x[];
+};
+
+layout(set = 0, binding = 2) writeonly buffer YBuffer {
+  float y[];
+};
+
+void main() {
+  uint row = gl_GlobalInvocationID.x;
+
+  const uint groups = 64u;
+  uint row_word_off = row * 2176u;
+  float sum = 0.0;
+  for (uint g = 0u; g < groups; g++) {
+    uint block_word = row_word_off + g * 34u;
+    float scale = uintBitsToFloat(w[block_word]);
+    float minv = uintBitsToFloat(w[block_word + 1u]);
+    uint x_base = g * 32u;
+    for (uint lane = 0u; lane < 32u; lane++) {
+      sum += x[x_base + lane] * (scale * float(w[block_word + 2u + lane]) - minv);
+    }
+  }
+  y[row] = sum;
+}

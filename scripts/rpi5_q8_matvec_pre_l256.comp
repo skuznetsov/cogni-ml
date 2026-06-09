@@ -1,0 +1,56 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer WBuffer {
+  uint w[];
+};
+
+layout(set = 0, binding = 1) readonly buffer XBuffer {
+  float x[];
+};
+
+layout(set = 0, binding = 2) writeonly buffer YBuffer {
+  float y[];
+};
+
+layout(push_constant) uniform Push {
+  uint out_dim;
+  uint in_dim;
+  uint row_bytes;
+  uint repeats;
+} pc;
+
+float i8_lane_to_f32(uint word, uint lane) {
+  uint b = (word >> (lane * 8u)) & 0xffu;
+  int v = int(b);
+  if (v >= 128) {
+    v -= 256;
+  }
+  return float(v);
+}
+
+void main() {
+  uint row = gl_GlobalInvocationID.x;
+  if (row >= pc.out_dim) {
+    return;
+  }
+
+  uint blocks = pc.in_dim / 32u;
+  uint row_word_off = (row * pc.row_bytes) >> 2u;
+  float sum = 0.0;
+  for (uint blk = 0u; blk < blocks; blk++) {
+    uint block_word = row_word_off + blk * 9u;
+    float d = uintBitsToFloat(w[block_word]);
+    uint x_base = blk * 32u;
+    for (uint q = 0u; q < 8u; q++) {
+      uint qw = w[block_word + 1u + q];
+      uint xb = x_base + q * 4u;
+      sum += x[xb + 0u] * d * i8_lane_to_f32(qw, 0u);
+      sum += x[xb + 1u] * d * i8_lane_to_f32(qw, 1u);
+      sum += x[xb + 2u] * d * i8_lane_to_f32(qw, 2u);
+      sum += x[xb + 3u] * d * i8_lane_to_f32(qw, 3u);
+    }
+  }
+  y[row] = sum;
+}

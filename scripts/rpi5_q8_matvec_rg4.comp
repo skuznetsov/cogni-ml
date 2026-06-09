@@ -1,0 +1,90 @@
+#version 450
+
+layout(local_size_x = 32, local_size_y = 4, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer WBuffer {
+  uint w[];
+};
+
+layout(set = 0, binding = 1) readonly buffer XBuffer {
+  float x[];
+};
+
+layout(set = 0, binding = 2) writeonly buffer YBuffer {
+  float y[];
+};
+
+layout(push_constant) uniform Push {
+  uint out_dim;
+  uint in_dim;
+  uint row_bytes;
+  uint repeats;
+} pc;
+
+shared float partial[4][32];
+
+uint byte_at(uint off) {
+  uint word = w[off >> 2];
+  return (word >> ((off & 3u) * 8u)) & 0xffu;
+}
+
+uint u16_at(uint off) {
+  return byte_at(off) | (byte_at(off + 1u) << 8u);
+}
+
+float f16_to_f32(uint h) {
+  uint sign = (h >> 15u) & 1u;
+  uint exp = (h >> 10u) & 31u;
+  uint frac = h & 1023u;
+  float v;
+  if (exp == 0u) {
+    v = frac == 0u ? 0.0 : ldexp(float(frac), -24);
+  } else if (exp == 31u) {
+    v = frac == 0u ? uintBitsToFloat(0x7f800000u) : uintBitsToFloat(0x7fc00000u);
+  } else {
+    v = ldexp(1.0 + float(frac) / 1024.0, int(exp) - 15);
+  }
+  return sign == 0u ? v : -v;
+}
+
+float i8_to_f32(uint b) {
+  int v = int(b);
+  if (v >= 128) {
+    v -= 256;
+  }
+  return float(v);
+}
+
+void main() {
+  uint lane = gl_LocalInvocationID.x;
+  uint row_lane = gl_LocalInvocationID.y;
+  uint row = gl_WorkGroupID.x * 4u + row_lane;
+  if (row >= pc.out_dim) {
+    return;
+  }
+
+  uint blocks = pc.in_dim / 32u;
+  uint row_off = row * pc.row_bytes;
+  float sum = 0.0;
+
+  for (uint blk = 0u; blk < blocks; blk++) {
+    uint blk_off = row_off + blk * 34u;
+    float d = f16_to_f32(u16_at(blk_off));
+    uint q = byte_at(blk_off + 2u + lane);
+    sum += x[blk * 32u + lane] * d * i8_to_f32(q);
+  }
+
+  partial[row_lane][lane] = sum;
+  barrier();
+
+  for (uint stride = 16u; stride > 0u; stride >>= 1u) {
+    if (lane < stride) {
+      partial[row_lane][lane] += partial[row_lane][lane + stride];
+    }
+    barrier();
+  }
+
+  if (lane == 0u) {
+    y[row] = partial[row_lane][0];
+  }
+}

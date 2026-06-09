@@ -1,0 +1,66 @@
+#version 450
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer WBuffer {
+  uint w[];
+};
+
+layout(set = 0, binding = 1) readonly buffer XBuffer {
+  float x[];
+};
+
+layout(set = 0, binding = 2) writeonly buffer YBuffer {
+  float y[];
+};
+
+layout(push_constant) uniform Push {
+  uint out_dim;
+  uint in_dim;
+  uint row_bytes;
+  uint repeats;
+} pc;
+
+float q4_lane_to_f32(uint word, uint lane) {
+  return float((word >> (lane * 4u)) & 0x0fu);
+}
+
+void main() {
+  uint row0 = gl_GlobalInvocationID.x * 2u;
+  if (row0 >= pc.out_dim) {
+    return;
+  }
+
+  uint groups = pc.in_dim / 32u;
+  uint row0_word_off = (row0 * pc.row_bytes) >> 2u;
+  uint row1 = row0 + 1u;
+  uint row1_word_off = (row1 * pc.row_bytes) >> 2u;
+  bool has_row1 = row1 < pc.out_dim;
+  float sum0 = 0.0;
+  float sum1 = 0.0;
+
+  for (uint g = 0u; g < groups; g++) {
+    uint block0 = row0_word_off + g * 6u;
+    uint block1 = row1_word_off + g * 6u;
+    float scale0 = uintBitsToFloat(w[block0]);
+    float min0 = uintBitsToFloat(w[block0 + 1u]);
+    float scale1 = has_row1 ? uintBitsToFloat(w[block1]) : 0.0;
+    float min1 = has_row1 ? uintBitsToFloat(w[block1 + 1u]) : 0.0;
+    uint x_base = g * 32u;
+    for (uint q = 0u; q < 4u; q++) {
+      uint qw0 = w[block0 + 2u + q];
+      uint qw1 = has_row1 ? w[block1 + 2u + q] : 0u;
+      uint xb = x_base + q * 8u;
+      for (uint lane = 0u; lane < 8u; lane++) {
+        float xv = x[xb + lane];
+        sum0 += xv * (scale0 * q4_lane_to_f32(qw0, lane) - min0);
+        sum1 += xv * (scale1 * q4_lane_to_f32(qw1, lane) - min1);
+      }
+    }
+  }
+
+  y[row0] = sum0;
+  if (has_row1) {
+    y[row1] = sum1;
+  }
+}

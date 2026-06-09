@@ -1,0 +1,69 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer WBuffer { uint w[]; };
+layout(set = 0, binding = 1) readonly buffer XBuffer { float x[]; };
+layout(set = 0, binding = 2) writeonly buffer YBuffer { float y[]; };
+
+layout(push_constant) uniform Push {
+  uint out_dim;
+  uint in_dim;
+  uint row_bytes;
+  uint repeats;
+} pc;
+
+float q4_lane_to_f32(uint word, uint lane) {
+  return float((word >> (lane * 4u)) & 0x0fu);
+}
+
+void main() {
+  uint row = gl_GlobalInvocationID.x;
+  uint tok0 = gl_GlobalInvocationID.y * 2u;
+  uint tok1 = tok0 + 1u;
+
+  const uint groups = 192u;
+  uint row_word_off = row * 1152u;
+  uint x0_tok_off = tok0 * 6144u;
+  uint x1_tok_off = tok1 * 6144u;
+  uint y0_tok_off = tok0 * pc.out_dim;
+  uint y1_tok_off = tok1 * pc.out_dim;
+  float sum0 = 0.0;
+  float sum1 = 0.0;
+  for (uint g = 0u; g < groups; g++) {
+    uint block_word = row_word_off + g * 6u;
+    float scale = uintBitsToFloat(w[block_word]);
+    float minv = uintBitsToFloat(w[block_word + 1u]);
+    uint x_base = g * 32u;
+    for (uint q = 0u; q < 4u; q++) {
+      uint qw = w[block_word + 2u + q];
+      uint xb = x_base + q * 8u;
+      float q0 = scale * q4_lane_to_f32(qw, 0u) - minv;
+      float q1 = scale * q4_lane_to_f32(qw, 1u) - minv;
+      float q2 = scale * q4_lane_to_f32(qw, 2u) - minv;
+      float q3 = scale * q4_lane_to_f32(qw, 3u) - minv;
+      float q4v = scale * q4_lane_to_f32(qw, 4u) - minv;
+      float q5 = scale * q4_lane_to_f32(qw, 5u) - minv;
+      float q6 = scale * q4_lane_to_f32(qw, 6u) - minv;
+      float q7 = scale * q4_lane_to_f32(qw, 7u) - minv;
+      sum0 += x[x0_tok_off + xb + 0u] * q0;
+      sum0 += x[x0_tok_off + xb + 1u] * q1;
+      sum0 += x[x0_tok_off + xb + 2u] * q2;
+      sum0 += x[x0_tok_off + xb + 3u] * q3;
+      sum0 += x[x0_tok_off + xb + 4u] * q4v;
+      sum0 += x[x0_tok_off + xb + 5u] * q5;
+      sum0 += x[x0_tok_off + xb + 6u] * q6;
+      sum0 += x[x0_tok_off + xb + 7u] * q7;
+      sum1 += x[x1_tok_off + xb + 0u] * q0;
+      sum1 += x[x1_tok_off + xb + 1u] * q1;
+      sum1 += x[x1_tok_off + xb + 2u] * q2;
+      sum1 += x[x1_tok_off + xb + 3u] * q3;
+      sum1 += x[x1_tok_off + xb + 4u] * q4v;
+      sum1 += x[x1_tok_off + xb + 5u] * q5;
+      sum1 += x[x1_tok_off + xb + 6u] * q6;
+      sum1 += x[x1_tok_off + xb + 7u] * q7;
+    }
+  }
+  y[y0_tok_off + row] = sum0;
+  y[y1_tok_off + row] = sum1;
+}

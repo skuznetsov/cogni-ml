@@ -1,0 +1,53 @@
+#version 450
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) readonly buffer WBuffer {
+  uint w[];
+};
+
+layout(set = 0, binding = 1) readonly buffer XBuffer {
+  float x[];
+};
+
+layout(set = 0, binding = 2) writeonly buffer YBuffer {
+  float y[];
+};
+
+layout(set = 0, binding = 3) readonly buffer SumXBuffer {
+  float sumx[];
+};
+
+float q4_lane_to_f32(uint word, uint lane) {
+  return float((word >> (lane * 4u)) & 0x0fu);
+}
+
+void main() {
+  // Safe only when the host dispatch covers exactly the valid rows.
+  uint row = gl_GlobalInvocationID.x;
+
+  const uint groups = 64u;
+  uint row_word_off = row * 384u;
+  float sum = 0.0;
+  for (uint g = 0u; g < groups; g++) {
+    uint block_word = row_word_off + g * 6u;
+    float scale = uintBitsToFloat(w[block_word]);
+    float minv = uintBitsToFloat(w[block_word + 1u]);
+    uint x_base = g * 32u;
+    float qx = 0.0;
+    for (uint q = 0u; q < 4u; q++) {
+      uint qw = w[block_word + 2u + q];
+      uint xb = x_base + q * 8u;
+      qx += x[xb + 0u] * q4_lane_to_f32(qw, 0u);
+      qx += x[xb + 1u] * q4_lane_to_f32(qw, 1u);
+      qx += x[xb + 2u] * q4_lane_to_f32(qw, 2u);
+      qx += x[xb + 3u] * q4_lane_to_f32(qw, 3u);
+      qx += x[xb + 4u] * q4_lane_to_f32(qw, 4u);
+      qx += x[xb + 5u] * q4_lane_to_f32(qw, 5u);
+      qx += x[xb + 6u] * q4_lane_to_f32(qw, 6u);
+      qx += x[xb + 7u] * q4_lane_to_f32(qw, 7u);
+    }
+    sum += scale * qx - minv * sumx[g];
+  }
+  y[row] = sum;
+}

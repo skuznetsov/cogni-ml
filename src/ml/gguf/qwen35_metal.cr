@@ -3089,6 +3089,8 @@ module ML
           top1_value_buf : ML::MetalBuffer?,
           second_id_buf : ML::MetalBuffer?,
           second_value_buf : ML::MetalBuffer?,
+          hidden_buf : ML::MetalBuffer?,
+          hidden_dim : Int32,
           output_dim : Int32,
           retained_bufs : Array(ML::MetalBuffer),
           profile_t0 : Time::Instant?,
@@ -3107,6 +3109,8 @@ module ML
                      else
                        read_shared_f32(submission.logits_buf.not_nil!, submission.output_dim)
                      end
+                   elsif hidden_buf = submission.hidden_buf
+                     read_shared_f32(hidden_buf, submission.hidden_dim)
                    else
                      [] of Float32
                    end
@@ -9447,6 +9451,7 @@ module ML
                                      pos : Int32,
                                      top1 : Bool = false,
                                      emit_head : Bool = true,
+                                     emit_hidden : Bool = false,
                                      top1_allowed_ids : Array(Int32)? = nil,
                                      lowrank_layer_indices : Set(Int32)? = nil,
                                      lowrank_state_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
@@ -9456,6 +9461,7 @@ module ML
                emb, layers,
                k_cache_bufs, v_cache_bufs, conv_state_bufs, ssm_state_bufs,
                output_norm, output_qw, hp, pos, top1: top1, emit_head: emit_head,
+               emit_hidden: emit_hidden,
                top1_allowed_ids: top1_allowed_ids,
                lowrank_layer_indices: lowrank_layer_indices,
                lowrank_state_bufs: lowrank_state_bufs,
@@ -9478,6 +9484,7 @@ module ML
                                            top1 : Bool = false,
                                            top2 : Bool = false,
                                            emit_head : Bool = true,
+                                           emit_hidden : Bool = false,
                                            top1_allowed_ids : Array(Int32)? = nil,
                                            fresh_scratch : Bool = false,
                                            scratch_namespace : String? = nil,
@@ -9514,7 +9521,7 @@ module ML
                 emb, layers,
                 k_cache_bufs, v_cache_bufs, conv_state_bufs, ssm_state_bufs,
                 output_norm, output_qw, hp, pos,
-                top1: top1, top2: top2, emit_head: emit_head, top1_allowed_ids: top1_allowed_ids,
+                top1: top1, top2: top2, emit_head: emit_head, emit_hidden: emit_hidden, top1_allowed_ids: top1_allowed_ids,
                 fresh_scratch: false, retained_scratch: retained,
                 lowrank_layer_indices: lowrank_layer_indices,
                 lowrank_state_bufs: lowrank_state_bufs,
@@ -9548,7 +9555,7 @@ module ML
                 emb, layers,
                 k_cache_bufs, v_cache_bufs, conv_state_bufs, ssm_state_bufs,
                 output_norm, output_qw, hp, pos,
-                top1: top1, top2: top2, emit_head: emit_head, top1_allowed_ids: top1_allowed_ids,
+                top1: top1, top2: top2, emit_head: emit_head, emit_hidden: emit_hidden, top1_allowed_ids: top1_allowed_ids,
                 scratch_namespace: nil, retained_scratch: retained_scratch,
                 lowrank_layer_indices: lowrank_layer_indices,
                 lowrank_state_bufs: lowrank_state_bufs,
@@ -10442,7 +10449,9 @@ module ML
           cmd.commit unless append_command_buffer
           DecodeWaveSubmission.new(
             cmd, pending_cmds, emit_head, use_head_top1, use_head_top2,
-            logits_buf, top1_id_buf, top1_value_buf, second_id_buf, second_value_buf, output_qw.out_dim,
+            logits_buf, top1_id_buf, top1_value_buf, second_id_buf, second_value_buf,
+            (!emit_head && emit_hidden) ? src_buf : nil, hidden_dim,
+            output_qw.out_dim,
             retained_scratch || [] of ML::MetalBuffer, t0, t_enc)
         end
 
