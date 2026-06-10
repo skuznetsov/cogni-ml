@@ -100,6 +100,7 @@ root="$HOME/cogni-vulkan-runtime/root"
 if [[ "$remote_dir" == "~/"* ]]; then
   remote_dir="$HOME/${remote_dir#~/}"
 fi
+trap 'rm -f "$remote_dir/$x_f32_load"' EXIT
 export VK_ICD_FILENAMES="$HOME/cogni-vulkan-runtime/icd/broadcom_icd.user.json"
 export LD_LIBRARY_PATH="$root/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH:-}"
 export RPI5_Q6_PREPACK_LOAD="qwen35_2b_token_embd_q6.pre20"
@@ -111,7 +112,6 @@ export RPI5_RESIDENT_ROW_IDS_CSV_BATCH="$ids_groups"
 
 cd "$remote_dir"
 ./rpi5_vulkan_q4k_probe rpi5_q6_matvec_pre_idx_l256.spv file qwen35_2b_token_embd_q6.cvgp "$repeats" "$mode"
-rm -f "$x_f32_load"
 vcgencmd get_throttled || true
 REMOTE
 )"

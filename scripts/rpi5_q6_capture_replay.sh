@@ -72,7 +72,8 @@ run_replay() {
   scp -q "$local_f32" "$host:$remote_dir/$remote_base"
   rm -f "$local_f32"
 
-  local output
+  local output status
+  set +e
   output="$(
     RAW_OUTPUT=1 \
     RPI5_WARMUPS="$warmups" \
@@ -82,7 +83,13 @@ run_replay() {
     RPI5_X_F32_LOAD="$remote_base" \
     bash "$probe" "capture_replay:${tag}" "$first_ids" "$repeats"
   )"
-  ssh "$host" "rm -f $remote_dir/$remote_base"
+  status=$?
+  set -e
+  ssh "$host" "rm -f $remote_dir/$remote_base" || true
+  if (( status != 0 )); then
+    printf "%s\n" "$output" >&2
+    return "$status"
+  fi
 
   if [[ "$raw_output" != "0" ]]; then
     printf "%s\n" "$output"
