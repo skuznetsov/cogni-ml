@@ -66,6 +66,8 @@ Use `scripts/rpi5_q6_multi_frontier_sweep.sh MODEL.gguf` to group several tokeni
 
 Use `scripts/estimate_rpi5_allowed_batch_plan.cr MODEL.gguf` to plan grouped frontier submits from the estimator output. It is a planning model over measured probe anchors, not a product benchmark.
 
+Use `scripts/plan_rpi5_from_frontier_trace.cr TRACE.log` to parse real `QWEN35_CONSTRAINT_FRONTIER_TRACE=1` generation logs into CPU/V3D grouping candidates.
+
 Actual row-id probe:
 
 - `tool_call_prefix:start`, ids `27,60638,248058`: `0.174ms`, top1 matched CPU.
@@ -80,6 +82,7 @@ Actual row-id probe:
 - Multi-frontier batch proof with `RAW_OUTPUT=1 RPI5_WARMUPS=3 MAX_FRONTIERS=3 REPEATS=30 scripts/rpi5_q6_multi_frontier_sweep.sh MODEL.gguf` grouped `tool_call_prefix:start` (`allowed=3`), `read_file.limit` (`allowed=8`), and `edit_mode.mode` (`allowed=13`) into one `q6idx13_l256` submit. It measured `gpu_ms=0.393`, `cpu_ms=0.915`, `gpu_ms_per_frontier=0.131`, `speedup=2.326x`, `max_abs_diff=2.98e-7`, `throttled=0x0`.
 - Batch planner with default labels estimates the same `3/8/13` group at `grouped_v3d_ms=0.393`, `grouped_vs_cpu=2.237x`, and `grouped_vs_unbatched_v3d=1.412x`.
 - Tool frontier trace for `edit_mode` has six ranked frontier corridors. Blind V3D grouping estimates `0.786ms`, but hybrid routing with `CPU_TINY_MAX=3` leaves four tiny `allowed<=3` corridors on CPU and groups the two finite-value corridors (`allowed=13/8`) on V3D. The measured two-frontier Pi run reported `gpu_ms=0.281`, `cpu_ms=0.802`, `speedup=2.852x`, `max_abs_diff=1.94e-7`, `throttled=0x0`; the trace planner estimates hybrid total `0.596ms` vs all-CPU `1.089ms`.
+- Runtime trace parser smoke on a short Qwen3.5-0.8B `edit_mode` run parsed four prefix-stage rows (`allowed=3/4/5/1`) and emitted one weak V3D candidate group (`allowed=4/5`) with estimated `hybrid_vs_cpu=1.108x`. This confirms the parser path and also shows why tiny/near-tiny frontiers should stay policy-gated.
 
 ## Route Policy
 
