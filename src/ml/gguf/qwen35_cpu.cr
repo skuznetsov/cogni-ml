@@ -1521,6 +1521,50 @@ module ML::GGUF
       value > 0 ? value : 0
     end
 
+    private def allowed_head_capture_path : String?
+      raw = ENV["QWEN35_ALLOWED_HEAD_CAPTURE_PATH"]?
+      return nil unless raw
+      raw.empty? ? nil : raw
+    end
+
+    private def write_json_int_array(io : IO, values : Array(Int32))
+      io << '['
+      values.each_with_index do |value, i|
+        io << ',' if i > 0
+        io << value
+      end
+      io << ']'
+    end
+
+    private def write_json_float_array(io : IO, values : Array(Float32))
+      io << '['
+      values.each_with_index do |value, i|
+        io << ',' if i > 0
+        value.to_s(io)
+      end
+      io << ']'
+    end
+
+    private def capture_allowed_head_hidden(path : String,
+                                            token_id : Int32,
+                                            pos : Int32,
+                                            allowed_ids : Array(Int32),
+                                            hidden : Array(Float32),
+                                            source : String)
+      File.open(path, "a") do |io|
+        io << "{\"kind\":\"qwen35_allowed_head_hidden\""
+        io << ",\"pos\":" << pos
+        io << ",\"input_token_id\":" << token_id
+        io << ",\"source\":\"" << source << '"'
+        io << ",\"allowed_ids\":"
+        write_json_int_array(io, allowed_ids)
+        io << ",\"hidden_dim\":" << hidden.size
+        io << ",\"hidden\":"
+        write_json_float_array(io, hidden)
+        io << "}\n"
+      end
+    end
+
     # ─────────────────────────────────────────────────────────────────────
     # Full-attention layer forward (single-token decode)
     # ─────────────────────────────────────────────────────────────────────
@@ -2103,7 +2147,9 @@ module ML::GGUF
         raise ArgumentError.new("allowed token id #{id} out of range 0...#{weights.output.out_dim}") if id < 0 || id >= weights.output.out_dim
       end
 
-      if weights.output.type.q6_k? && allowed_ids.size > allowed_head_cpu_max
+      capture_path = allowed_head_capture_path
+
+      if !capture_path && weights.output.type.q6_k? && allowed_ids.size > allowed_head_cpu_max
         if packed = forward_decode_wave_routed(weights, token_id, pos, state, top1: true, top1_allowed_ids: allowed_ids)
           {% unless flag?(:cpu_only) %}
             Qwen35Metal::Profile.bump_route_marker("allowed_head.metal_q6")
@@ -2117,10 +2163,12 @@ module ML::GGUF
         end
       end
 
+      hidden_source = "cpu_hidden"
       hidden = if routed = forward_decode_wave_routed(weights, token_id, pos, state, emit_head: false, emit_hidden: true)
                  {% unless flag?(:cpu_only) %}
                    Qwen35Metal::Profile.bump_route_marker("allowed_head.cpu_selected_metal_hidden")
                  {% end %}
+                 hidden_source = "metal_hidden"
                  routed
                else
                  {% unless flag?(:cpu_only) %}
@@ -2128,6 +2176,7 @@ module ML::GGUF
                  {% end %}
                  forward_hidden(weights, token_id, pos, state)
                end
+      capture_allowed_head_hidden(capture_path, token_id, pos, allowed_ids, hidden, hidden_source) if capture_path
       hidden_top1_allowed(weights, hidden, allowed_ids)
     end
 

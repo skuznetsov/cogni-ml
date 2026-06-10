@@ -37,8 +37,12 @@ describe ML::GGUF::Qwen35CPU, "allowed lm-head route" do
 
     old_wave = ENV["QWEN35_DECODE_WAVE_OFF"]?
     old_head = ENV["QWEN35_HEAD_TOP1_FUSED"]?
+    old_capture = ENV["QWEN35_ALLOWED_HEAD_CAPTURE_PATH"]?
+    capture_path = "/tmp/qwen35_allowed_head_capture_spec_#{Process.pid}.jsonl"
+    File.delete(capture_path) if File.exists?(capture_path)
     ENV.delete("QWEN35_DECODE_WAVE_OFF")
     ENV["QWEN35_HEAD_TOP1_FUSED"] = "1"
+    ENV["QWEN35_ALLOWED_HEAD_CAPTURE_PATH"] = capture_path
     begin
       full_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
       full_logits = ML::GGUF::Qwen35CPU.forward(weights, 0, 0, full_state)
@@ -51,6 +55,12 @@ describe ML::GGUF::Qwen35CPU, "allowed lm-head route" do
       actual_id, actual_logit = ML::GGUF::Qwen35CPU.forward_top1_allowed(weights, 0, 0, allowed_state, allowed)
       actual_id.should eq(expected_id)
       actual_logit.should be_close(expected_logit, 1.0e-3_f32)
+      capture = File.read(capture_path)
+      capture.should contain("\"kind\":\"qwen35_allowed_head_hidden\"")
+      capture.should contain("\"pos\":0")
+      capture.should contain("\"input_token_id\":0")
+      capture.should contain("\"allowed_ids\":[#{allowed.join(",")}]")
+      capture.should contain("\"hidden_dim\":#{hp.n_embd}")
 
       full_next = ML::GGUF::Qwen35CPU.forward_top1(weights, 100, 1, full_state)
       allowed_next = ML::GGUF::Qwen35CPU.forward_top1(weights, 100, 1, allowed_state)
@@ -59,6 +69,8 @@ describe ML::GGUF::Qwen35CPU, "allowed lm-head route" do
     ensure
       spec_restore_env("QWEN35_DECODE_WAVE_OFF", old_wave)
       spec_restore_env("QWEN35_HEAD_TOP1_FUSED", old_head)
+      spec_restore_env("QWEN35_ALLOWED_HEAD_CAPTURE_PATH", old_capture)
+      File.delete(capture_path) if File.exists?(capture_path)
     end
   end
 
