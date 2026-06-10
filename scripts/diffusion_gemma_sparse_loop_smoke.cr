@@ -137,6 +137,8 @@ cache_ms = (Time.instant - cache_t0).total_milliseconds
 
 sample_us = ML::GGUF::DiffusionGemmaCPU.sample_u_steps(seed, steps, 1)
 result_rows = [] of Array(Tuple(String, String))
+baseline_loop_ms = nil.as(Float64?)
+baseline_candidate_tokens_per_ms = nil.as(Float64?)
 candidate_sets.each do |candidate_ids|
   loop_samples = [] of Float64
   loop = nil.as(ML::GGUF::DiffusionGemmaCPU::BoundedDenoiseLoopResult?)
@@ -184,6 +186,10 @@ candidate_sets.each do |candidate_ids|
   loop_ms_max = loop_samples.max
   loop_candidate_tokens_per_ms = loop_ms_median > 0.0 ? summary.total_candidate_tokens.to_f64 / loop_ms_median : 0.0
   loop_predictions_per_ms = loop_ms_median > 0.0 ? summary.prediction_count.to_f64 / loop_ms_median : 0.0
+  baseline_loop_ms ||= loop_ms_median
+  baseline_candidate_tokens_per_ms ||= loop_candidate_tokens_per_ms
+  loop_ms_ratio_vs_first = baseline_loop_ms.not_nil! > 0.0 ? loop_ms_median / baseline_loop_ms.not_nil! : 0.0
+  candidate_tokens_per_ms_ratio_vs_first = baseline_candidate_tokens_per_ms.not_nil! > 0.0 ? loop_candidate_tokens_per_ms / baseline_candidate_tokens_per_ms.not_nil! : 0.0
 
   result_rows << [
     {"status", "ok"},
@@ -217,6 +223,8 @@ candidate_sets.each do |candidate_ids|
     {"loop_ms_samples", loop_samples.map { |v| v.round(3) }.join(",")},
     {"loop_candidate_tokens_per_ms", loop_candidate_tokens_per_ms.round(6).to_s},
     {"loop_predictions_per_ms", loop_predictions_per_ms.round(6).to_s},
+    {"loop_ms_ratio_vs_first", loop_ms_ratio_vs_first.round(6).to_s},
+    {"candidate_tokens_per_ms_ratio_vs_first", candidate_tokens_per_ms_ratio_vs_first.round(6).to_s},
   ]
 end
 

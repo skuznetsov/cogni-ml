@@ -299,6 +299,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Sparse-loop smoke output now includes derived normalized throughput fields: `loop_candidate_tokens_per_ms` and `loop_predictions_per_ms`, computed from the median measured loop time and the loop summary work counts.
 - Verification: no-codegen build passed; wrapper syntax passed; `scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_smoke.sh 300 6000 --candidate-counts 1,4 --steps 1 --warmups 1 --repeats 2 --format tsv` exited 0. An awk guard verified both derived fields are positive and the width-4 candidate-token throughput exceeds width-1 throughput under the same one-row smoke.
 - Boundary: these are normalized smoke metrics for sparse work accounting, not quiet-host benchmark evidence or a semantic candidate-quality claim.
+**update 2026-06-10bf:**
+- Sparse-loop smoke output now includes sweep-relative fields `loop_ms_ratio_vs_first` and `candidate_tokens_per_ms_ratio_vs_first`, using the first emitted candidate-width row as the baseline.
+- Verification: no-codegen build passed; wrapper syntax passed; `scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_smoke.sh 300 6000 --candidate-counts 1,4 --steps 1 --warmups 1 --repeats 2 --format tsv` exited 0. An awk guard verified the first row ratios are `1.0` and the second row ratios are positive.
+- Boundary: these ratios make sparse-width sweeps easier to read; they do not prove a speedup, quality, or semantic sufficiency of wider candidate sets.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified
