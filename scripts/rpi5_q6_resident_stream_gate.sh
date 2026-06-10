@@ -10,6 +10,7 @@ resident requests remain correct and faster than the CPU selected-row oracle.
 
 Environment:
   MIN_STREAM_SPEEDUP=1.20  Required cpu_selected/resident_stream speedup.
+  MIN_REPEATS=10           Minimum REPEATS allowed for this timing gate.
   MAX_ABS_DIFF=0.0001      Maximum allowed CPU/GPU absolute diff.
   REPEATS=30
 USAGE
@@ -21,7 +22,18 @@ min_allowed="${2:-${MIN_ALLOWED:-4}}"
 [[ -n "$capture" && -f "$capture" ]] || usage
 
 min_speedup="${MIN_STREAM_SPEEDUP:-1.20}"
+min_repeats="${MIN_REPEATS:-10}"
 max_abs_diff="${MAX_ABS_DIFF:-0.0001}"
+repeats="${REPEATS:-30}"
+
+[[ "$min_repeats" =~ ^[0-9]+$ && "$repeats" =~ ^[0-9]+$ ]] || {
+  echo "MIN_REPEATS and REPEATS must be non-negative integers" >&2
+  exit 2
+}
+if (( repeats < min_repeats )); then
+  printf "REPEATS=%s below resident stream gate minimum %s\n" "$repeats" "$min_repeats" >&2
+  exit 2
+fi
 
 output="$(RAW_OUTPUT=0 scripts/rpi5_q6_resident_stream_bench.sh "$capture" "$min_allowed")"
 printf "%s\n" "$output"

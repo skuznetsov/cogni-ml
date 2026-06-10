@@ -86,7 +86,7 @@ Use `scripts/rpi5_q6_resident_budget_gate.sh CAPTURE.jsonl 4` as a fail-closed r
 
 Use `scripts/rpi5_q6_resident_stream_bench.sh CAPTURE.jsonl 4` to replay captured rows as a resident per-step request stream: one Vulkan setup, one prepacked Q6 head load, then one hidden/row-id upload and submit per captured constrained step. This is the closest current probe to a product worker boundary, but it still runs outside the real decode loop.
 
-Use `scripts/rpi5_q6_resident_stream_gate.sh CAPTURE.jsonl 4` as a fail-closed resident stream gate. It requires per-step resident stream speedup over CPU selected-row fallback, bounded `max_abs_diff`, zero top1 mismatches, and clean throttle state.
+Use `scripts/rpi5_q6_resident_stream_gate.sh CAPTURE.jsonl 4` as a fail-closed resident stream gate. It requires per-step resident stream speedup over CPU selected-row fallback, bounded `max_abs_diff`, zero top1 mismatches, clean throttle state, and at least `MIN_REPEATS=10` timing repeats by default.
 
 Actual row-id probe:
 
@@ -116,6 +116,7 @@ Actual row-id probe:
 - Resident stream bench with `RAW_OUTPUT=0 REPEATS=30 scripts/rpi5_q6_resident_stream_bench.sh /tmp/qwen35_2b_allowed_head_capture_20260609_223005.jsonl 4` replayed the filtered `16` rows as independent per-step requests inside one resident probe process. It measured `resident_stream_ms=0.160` per request vs CPU selected-row `0.212ms` (`1.326x`), with `max_abs_diff=8.58307e-06`, `top1_mismatches=0`, one-time `prepack_load_ms=127.349`, and `throttled=0x0`. Boundary: this removes SSH/process/Vulkan setup from the per-request path, but still uses a probe-side worker rather than the product decode runtime.
 - Full regression gate now also runs the resident stream gate when `FULL_REPLAY=1`. Smoke `FULL_REPLAY=1 RAW_OUTPUT=0 REPEATS=5 RPI5_WARMUPS=2 scripts/rpi5_q6_allowed_head_regression.sh` preserved marker smokes and parsed `edit_mode(mode=safe,dry_run=true)`, produced a fresh `31` row capture, replayed filtered rows at `gpu_ms=1.844`, `cpu_ms=3.255`, passed resident budget gate with `upload_request_speedup=1.745`, then passed resident stream gate with `stream_speedup=1.342`, `max_abs_diff=8.58307e-06`, `top1_mismatches=0`, and `throttled=0x0`.
 - Remote temp cleanup is fail-safe for the capture replay and resident stream wrappers. The capture replay wrapper now removes remote `.f32` artifacts even if the probe exits non-zero, and resident stream uses a remote `EXIT` trap. Adversary check: after short replay and one fail-closed `REPEATS=2` stream gate attempt, `ssh raspberrypi.local 'ls ~/cogni-ml-vulkan-probe/rpi5_resident_stream_*.f32 ~/cogni-ml-vulkan-probe/rpi5_allowed_head_*.f32 2>/dev/null || true'` printed no files.
+- Resident stream timing gate now rejects undersampled runs before contacting the Pi: `REPEATS=2 scripts/rpi5_q6_resident_stream_gate.sh ...` exits `2` with `REPEATS=2 below resident stream gate minimum 10`. The normal `REPEATS=30` gate still passes on the same capture with `stream_speedup=1.326`, `max_abs_diff=8.58307e-06`, `top1_mismatches=0`, and `throttled=0x0`.
 
 ## Route Policy
 
