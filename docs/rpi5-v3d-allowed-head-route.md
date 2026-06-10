@@ -76,6 +76,8 @@ Use `scripts/export_allowed_head_capture_replay.cr CAPTURE.jsonl OUT.f32 [MAX_RO
 
 Use `scripts/rpi5_q6_capture_replay.sh CAPTURE.jsonl 4` to automate the conversion, copy, all-row replay, filtered replay, and hybrid estimate.
 
+Use `scripts/rpi5_q6_capture_smoke.sh` to run the full local 2B `edit_mode` constrained capture smoke and then replay it on the Pi.
+
 Actual row-id probe:
 
 - `tool_call_prefix:start`, ids `27,60638,248058`: `0.174ms`, top1 matched CPU.
@@ -96,6 +98,7 @@ Actual row-id probe:
 - Runtime capture smoke with `QWEN35_ALLOWED_HEAD_CAPTURE_PATH=/tmp/qwen35_allowed_head_capture_20260609_220135.jsonl` on the same `edit_mode` prompt emitted `31` capture rows for `31` trace rows, kept the parsed tool call as `edit_mode(mode=safe,dry_run=true)`, and wrote rows with `source=metal_hidden`, `allowed_ids`, `hidden_dim=1024`, and the pre-output-norm hidden vector. This validates local capture of real hidden rows; replay on Pi is still pending.
 - Real-hidden 2B replay: Qwen3.5-2B capture on the same prompt emitted `31` rows with `hidden_dim=2048`, matching the resident 2B Q6 tied head on the Pi. All-V3D replay of those rows as one `q6idx8_l256` batch measured `gpu_ms=3.521`, `cpu_ms=4.231`, `speedup=1.202x`, `max_abs_diff=1.14e-5`, `throttled=0x0`; this is positive but confirms tiny-frontier dilution. Filtering with `MIN_ALLOWED=4` exported `16` V3D rows and measured `gpu_ms=1.847`, `cpu_ms=3.205`, `speedup=1.735x`, `max_abs_diff=8.58e-6`, `throttled=0x0`. Combining that with the all-vs-filter CPU delta for the `15` tiny rows gives a replay hybrid estimate of about `2.873ms` vs all-CPU `4.231ms` (`1.47x`).
 - Capture replay wrapper check with `RAW_OUTPUT=0 REPEATS=30 RPI5_WARMUPS=3 bash scripts/rpi5_q6_capture_replay.sh /tmp/qwen35_2b_allowed_head_capture_20260609_220934.jsonl 4` reproduced the same shape: all rows `gpu_ms=3.517`, `cpu_ms=4.259`, `speedup=1.211x`; filtered rows `gpu_ms=1.846`, `cpu_ms=3.223`, `speedup=1.746x`; hybrid estimate `2.882ms` vs all-CPU `4.259ms` (`1.478x`).
+- End-to-end capture smoke wrapper check with `RAW_OUTPUT=0 REPEATS=30 RPI5_WARMUPS=3 scripts/rpi5_q6_capture_smoke.sh` produced a fresh 2B structured capture (`31` trace rows, `31` capture rows), preserved parsed `edit_mode(mode=safe,dry_run=true)`, then replayed on Pi. Results: all rows `gpu_ms=3.520`, `cpu_ms=4.250`, `speedup=1.207x`; filtered rows `gpu_ms=1.845`, `cpu_ms=3.233`, `speedup=1.753x`; hybrid estimate `2.862ms` vs all-CPU `4.250ms` (`1.485x`), `throttled=0x0`.
 
 ## Route Policy
 
