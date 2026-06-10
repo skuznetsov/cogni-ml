@@ -37,20 +37,5 @@ done
   -o "$out" \
   --link-flags="$bridge_o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"
 
-tmp_dir="$(mktemp -d /tmp/diffusion_gemma_sparse_sweep.XXXXXX)"
-cleanup() {
-  rm -rf "$tmp_dir"
-}
-trap cleanup EXIT
-
-printed_header=0
-for count in "${counts[@]}"; do
-  row_file="$tmp_dir/count_${count}.tsv"
-  "$out" --candidate-count "$count" --format tsv "$@" >"$row_file"
-  if [[ "$printed_header" -eq 0 ]]; then
-    cat "$row_file"
-    printed_header=1
-  else
-    tail -n +2 "$row_file"
-  fi
-done
+counts_csv="$(IFS=,; echo "${counts[*]}")"
+exec "$out" --candidate-counts "$counts_csv" --format tsv "$@"

@@ -287,6 +287,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - `scripts/diffusion_gemma_sparse_loop_smoke.cr` now supports in-process multi-width sweeps via `--candidate-counts LIST --format tsv`. Multiple candidate widths share one GGUF load and one prompt-cache build, and TSV rows now include `candidate_count`.
 - Verification: no-codegen build passed; wrapper syntax passed; `--candidate-counts 1,4` without TSV fails closed; `scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_smoke.sh 300 6000 --candidate-counts 1,4 --steps 1 --repeats 1 --format tsv` exited 0 with two rows. An awk guard verified `candidate_count=1/4`, `candidate_ids=0` / `0,1,2,3`, and identical `load_ms` plus `prompt_cache_ms` across both rows.
 - Boundary: this removes process reload from candidate-width sweeps, but still measures the one-row token-id sparse smoke, not full-vocabulary candidate discovery, full-route MoE, or quiet-host benchmark evidence.
+**update 2026-06-10bc:**
+- `scripts/diffusion_gemma_sparse_loop_candidate_sweep.sh` now delegates to the in-process `--candidate-counts` runner instead of launching one process per candidate width. The wrapper still builds the smoke binary once and preserves `COUNTS`.
+- Verification: shell syntax passed; no-codegen build passed; `COUNTS='1 4' scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_candidate_sweep.sh 300 6000 --steps 1 --repeats 1` exited 0. An awk guard verified two rows, `candidate_count=1/4`, `candidate_ids=0` / `0,1,2,3`, and identical `load_ms` plus `prompt_cache_ms` across rows.
+- Boundary: this fixes the sweep wrapper's process-reload artifact, but it is still a token-id sparse-loop smoke and not quiet-host benchmark evidence.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified
