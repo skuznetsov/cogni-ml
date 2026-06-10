@@ -49,7 +49,7 @@ Actual Qwen tokenizer frontiers:
 - Bounded integer `1..8`: `allowed=8`.
 - Enum `fast/safe/minimal`: `allowed=13`.
 
-`scripts/estimate_qwen35_allowed_frontiers.cr MODEL.gguf` prints each frontier with `route`, estimated `est_v3d_ms` / `est_cpu_ms`, and an `ids_csv` field that can be passed directly to the Pi probe as `RPI5_ROW_IDS_CSV`.
+`scripts/estimate_qwen35_allowed_frontiers.cr MODEL.gguf` prints each frontier with `route`, estimated `est_v3d_ms` / `est_cpu_ms`, and an `ids_csv` field that can be passed directly to the Pi probe as `RPI5_ROW_IDS_CSV`. Its default `policy_cpu_max_allowed=12` is conservative for unbatched real frontiers; set `QWEN35_ALLOWED_HEAD_CPU_MAX=7` to re-enable near-boundary `allowed=8` V3D route experiments.
 
 Use `scripts/rpi5_q6_frontier_probe.sh LABEL IDS_CSV [REPEATS]` from the local checkout to run one of those frontiers through `ssh raspberrypi.local` without hand-writing the remote Vulkan environment.
 

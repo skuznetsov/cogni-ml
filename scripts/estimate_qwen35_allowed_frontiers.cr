@@ -14,7 +14,11 @@ gguf = ML::GGUF::GGUFFile.new(model_path)
 tokenizer = ML::GGUF::Qwen35Tokenizer.from_gguf(gguf, model_path)
 index = ML::GGUF::Qwen35Constraints::TokenTextIndex.new(tokenizer)
 
-PI_ROUTE_CPU_MAX = (ENV["QWEN35_ALLOWED_HEAD_CPU_MAX"]? || "7").to_i
+# Conservative unbatched default from real-frontier Pi calibration:
+# allowed=8 is V3D_NEAR, allowed=13 is V3D_CLEAR. Override with
+# QWEN35_ALLOWED_HEAD_CPU_MAX=7 when intentionally accepting near-boundary
+# V3D routes or testing batching/amortization.
+PI_ROUTE_CPU_MAX = (ENV["QWEN35_ALLOWED_HEAD_CPU_MAX"]? || "12").to_i
 PI_ALLOWED_ROUTE_POINTS = [
   {3, 0.180, 0.105},
   {8, 0.186, 0.299},

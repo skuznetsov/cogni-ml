@@ -35,7 +35,10 @@ first_v3d = points.find { |_, v3d, cpu| v3d < cpu }
 if first_v3d
   puts "policy_threshold_min_v3d_allowed=#{first_v3d[0]}"
   puts "recommended_QWEN35_ALLOWED_HEAD_CPU_MAX=#{first_v3d[0] - 1}"
+  puts "synthetic_threshold_note=near-boundary; real-frontier calibration currently prefers clear V3D at allowed>=13"
+  puts "conservative_unbatched_QWEN35_ALLOWED_HEAD_CPU_MAX=12"
 else
   puts "policy_threshold_min_v3d_allowed=none"
   puts "recommended_QWEN35_ALLOWED_HEAD_CPU_MAX=disabled"
+  puts "conservative_unbatched_QWEN35_ALLOWED_HEAD_CPU_MAX=disabled"
 end
