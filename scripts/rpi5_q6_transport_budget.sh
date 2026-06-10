@@ -43,7 +43,7 @@ converter="scripts/export_allowed_head_capture_replay.cr"
 metric_from_output() {
   local key="$1"
   awk -v key="$key" '
-    /^max_abs_diff=/ || /^prepack_load_ms=/ || /^remote_wall_ms=/ {
+    /^max_abs_diff=/ || /^prepack_load_ms=/ || /^remote_wall_ms=/ || /^resident_upload_ms_avg=/ {
       for (i = 1; i <= NF; i++) {
         split($i, kv, "=")
         if (kv[1] == key) print kv[2]
@@ -98,6 +98,7 @@ export RPI5_ROW_IDS_CSV_BATCH="$ids_groups"
 export RPI5_WARMUPS="$warmups"
 export RPI5_BATCH="$rows"
 export RPI5_X_F32_LOAD="$x_f32_load"
+export RPI5_RESIDENT_UPLOAD_BENCH=1
 
 cd "$remote_dir"
 t0="$(date +%s%N)"
@@ -119,20 +120,23 @@ speedup="$(metric_from_output speedup <<<"$output")"
 diff="$(metric_from_output max_abs_diff <<<"$output")"
 prepack_load="$(metric_from_output prepack_load_ms <<<"$output")"
 remote_wall="$(metric_from_output remote_wall_ms <<<"$output")"
+resident_upload="$(metric_from_output resident_upload_ms_avg <<<"$output")"
 throttled="$(awk '/^throttled=/ {print $1}' <<<"$output" | tail -1)"
 
 awk -v rows="$rows" -v min="$min_allowed" -v max_allowed="$max_allowed" \
     -v repeats="$repeats" -v warmups="$warmups" -v gpu="$gpu" -v cpu="$cpu" \
     -v speedup="$speedup" -v diff="$diff" -v prepack="$prepack_load" \
-    -v remote_wall="$remote_wall" -v throttled="$throttled" '
+    -v remote_wall="$remote_wall" -v resident_upload="$resident_upload" -v throttled="$throttled" '
   BEGIN {
     dispatch_ms = gpu * (repeats + warmups)
     setup_ms = remote_wall - prepack - dispatch_ms - cpu
     overhead_vs_gpu = gpu > 0 ? setup_ms / gpu : 0
     gpu_per_row = rows > 0 ? gpu / rows : 0
     cpu_per_row = rows > 0 ? cpu / rows : 0
+    upload_per_row = rows > 0 ? resident_upload / rows : 0
+    upload_speedup = resident_upload > 0 ? cpu / resident_upload : 0
     printf "transport_budget_result\tmin_allowed=%s\tbatch=%s\tmax_allowed=%s\trepeats=%s\twarmups=%s\tgpu_ms=%s\tcpu_ms=%s\tspeedup=%s\tmax_abs_diff=%s\tprepack_load_ms=%.3f\tdispatch_total_ms=%.3f\tremote_wall_ms=%.3f\tsetup_overhead_ms=%.3f\tsetup_overhead_vs_gpu_avg=%.1fx\t%s\n",
       min, rows, max_allowed, repeats, warmups, gpu, cpu, speedup, diff, prepack, dispatch_ms, remote_wall, setup_ms, overhead_vs_gpu, throttled
-    printf "resident_budget_result\tmin_allowed=%s\tbatch=%s\tmax_allowed=%s\tresident_request_ms=%s\tresident_request_ms_per_row=%.6f\tcpu_selected_ms=%s\tcpu_selected_ms_per_row=%.6f\trequest_speedup=%s\tone_time_prepack_load_ms=%.3f\tnonresident_remote_wall_ms=%.3f\t%s\n",
-      min, rows, max_allowed, gpu, gpu_per_row, cpu, cpu_per_row, speedup, prepack, remote_wall, throttled
+    printf "resident_budget_result\tmin_allowed=%s\tbatch=%s\tmax_allowed=%s\tresident_kernel_ms=%s\tresident_kernel_ms_per_row=%.6f\tresident_upload_request_ms=%s\tresident_upload_request_ms_per_row=%.6f\tcpu_selected_ms=%s\tcpu_selected_ms_per_row=%.6f\tkernel_speedup=%s\tupload_request_speedup=%.3fx\tone_time_prepack_load_ms=%.3f\tnonresident_remote_wall_ms=%.3f\t%s\n",
+      min, rows, max_allowed, gpu, gpu_per_row, resident_upload, upload_per_row, cpu, cpu_per_row, speedup, upload_speedup, prepack, remote_wall, throttled
   }'

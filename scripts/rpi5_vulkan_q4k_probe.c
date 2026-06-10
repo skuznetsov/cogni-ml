@@ -929,6 +929,19 @@ int main(int argc, char **argv) {
       sx[g] = s;
     }
   }
+  uint8_t *x_shadow = NULL;
+  uint8_t *rowid_shadow = NULL;
+  uint8_t *rowmeta_shadow = NULL;
+  uint32_t resident_upload_bench = env_u32("RPI5_RESIDENT_UPLOAD_BENCH", 0u);
+  if (resident_upload_bench && q6_idx_mode) {
+    x_shadow = (uint8_t *)malloc(x_bytes);
+    rowid_shadow = (uint8_t *)malloc((size_t)batch * out_dim * sizeof(uint32_t));
+    rowmeta_shadow = (uint8_t *)malloc((size_t)batch * 2u * sizeof(uint32_t));
+    if (!x_shadow || !rowid_shadow || !rowmeta_shadow) die("resident upload shadow alloc failed");
+    memcpy(x_shadow, xb.mapped, x_bytes);
+    memcpy(rowid_shadow, rowidb.mapped, (size_t)batch * out_dim * sizeof(uint32_t));
+    memcpy(rowmeta_shadow, rowmetab.mapped, (size_t)batch * 2u * sizeof(uint32_t));
+  }
   memset(yb.mapped, 0, y_bytes);
 
   size_t spv_size;
@@ -1059,6 +1072,18 @@ int main(int argc, char **argv) {
     VK_CHECK(vkQueueWaitIdle(queue));
     gpu_total += now_ms() - t0;
   }
+  double resident_upload_total = 0.0;
+  if (resident_upload_bench && q6_idx_mode) {
+    for (uint32_t r = 0; r < repeats; r++) {
+      double rt0 = now_ms();
+      memcpy(xb.mapped, x_shadow, x_bytes);
+      memcpy(rowidb.mapped, rowid_shadow, (size_t)batch * out_dim * sizeof(uint32_t));
+      memcpy(rowmetab.mapped, rowmeta_shadow, (size_t)batch * 2u * sizeof(uint32_t));
+      VK_CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
+      VK_CHECK(vkQueueWaitIdle(queue));
+      resident_upload_total += now_ms() - rt0;
+    }
+  }
 
   double t0 = now_ms();
   if (file_mode && q6_idx_mode) {
@@ -1131,6 +1156,7 @@ int main(int argc, char **argv) {
 #endif
   double ops = 2.0 * (double)batch * (double)out_dim * (double)in_dim;
   double gpu_ms = gpu_total / (double)repeats;
+  double resident_upload_ms = resident_upload_total > 0.0 ? resident_upload_total / (double)repeats : 0.0;
   double q_bytes = (double)w_bytes + (double)x_bytes + (double)y_bytes;
 
   printf("device=%s %s mode=%s batch=%u out=%u src_out=%u in=%u weight_mib=%.3f repeats=%u warmups=%u\n",
@@ -1140,6 +1166,10 @@ int main(int argc, char **argv) {
   printf("max_abs_diff=%g gpu_ms_avg=%.3f gpu_gops=%.3f approx_stream_gib_s=%.3f cpu_ms=%.3f cpu_gops=%.3f speedup=%.3fx\n",
          diff, gpu_ms, ops / (gpu_ms / 1000.0) / 1e9, q_bytes / (gpu_ms / 1000.0) / 1073741824.0,
          cpu_ms, ops / (cpu_ms / 1000.0) / 1e9, cpu_ms / gpu_ms);
+  if (resident_upload_ms > 0.0) {
+    printf("resident_upload_ms_avg=%.3f resident_upload_over_gpu=%.3fx resident_upload_speedup=%.3fx\n",
+           resident_upload_ms, resident_upload_ms / gpu_ms, cpu_ms / resident_upload_ms);
+  }
   if (q6_idx_mode && batch == 1u && out_dim > 0u) {
     printf("top1_match=%s gpu_top1_pos=%u gpu_top1_src=%u cpu_top1_pos=%u cpu_top1_src=%u top1_scan_ms=%.6f\n",
            top1_match ? "true" : "false", gpu_top1, gpu_top1_src, cpu_top1, cpu_top1_src, top1_scan_ms);
@@ -1155,6 +1185,9 @@ int main(int argc, char **argv) {
   }
 #endif
 
+  free(x_shadow);
+  free(rowid_shadow);
+  free(rowmeta_shadow);
   free(cpu);
   vkDeviceWaitIdle(dev);
   vkDestroyCommandPool(dev, cp, NULL);
