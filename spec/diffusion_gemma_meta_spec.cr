@@ -864,6 +864,16 @@ describe ML::GGUF::DiffusionGemmaCPU do
     candidate_steps[1][0].should eq([5])
     ML::GGUF::DiffusionGemmaCPU.merge_candidate_steps([1], [[[3]], [[2, 1]]], 10).should eq([[[1, 3]], [[1, 2]]])
 
+    proposal_pred = ML::GGUF::DiffusionGemmaCPU.bounded_candidate_prediction([2, 4, 6], [0.0_f32, 2.0_f32, 2.0_f32])
+    ML::GGUF::DiffusionGemmaCPU.top_k_prediction_tokens(proposal_pred, 2).should eq([4, 6])
+    ML::GGUF::DiffusionGemmaCPU.top_k_prediction_tokens(proposal_pred, 10).should eq([4, 6, 2])
+    ML::GGUF::DiffusionGemmaCPU.prediction_proposal_rows([proposal_pred], 2).should eq([[4, 6]])
+    ML::GGUF::DiffusionGemmaCPU.next_candidate_rows_from_predictions([5], [proposal_pred], 10, 2).should eq([[4, 5, 6]])
+    repeated = ML::GGUF::DiffusionGemmaCPU.repeated_candidate_steps_from_predictions([5], [proposal_pred], 10, 2, 2)
+    repeated.should eq([[[4, 5, 6]], [[4, 5, 6]]])
+    repeated[0][0] << 7
+    repeated[1][0].should eq([4, 5, 6])
+
     first = ML::GGUF::DiffusionGemmaCPU.bounded_candidate_prediction([10, 20], [0.0_f32, 0.0_f32], sample_u: 0.75_f32)
     second = ML::GGUF::DiffusionGemmaCPU.bounded_candidate_prediction([30, 40], [0.0_f32, 0.0_f32], sample_u: 0.75_f32)
     sampled_update = ML::GGUF::DiffusionGemmaCPU.apply_entropy_bound_predictions([0, 0], [first, second], 0.0_f32)
@@ -906,6 +916,15 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
     expect_raises(ArgumentError, /proposal steps/) do
       ML::GGUF::DiffusionGemmaCPU.merge_candidate_steps([1], [] of Array(Array(Int32)), 10)
+    end
+    expect_raises(ArgumentError, /top-k/) do
+      ML::GGUF::DiffusionGemmaCPU.top_k_prediction_tokens(proposal_pred, 0)
+    end
+    expect_raises(ArgumentError, /proposal rows/) do
+      ML::GGUF::DiffusionGemmaCPU.prediction_proposal_rows([] of ML::GGUF::DiffusionGemmaCPU::BoundedDenoisePrediction, 1)
+    end
+    expect_raises(ArgumentError, /prediction rows/) do
+      ML::GGUF::DiffusionGemmaCPU.next_candidate_rows_from_predictions([1, 2], [proposal_pred], 10, 1)
     end
     expect_raises(ArgumentError, /prediction steps/) do
       ML::GGUF::DiffusionGemmaCPU.apply_entropy_bound_prediction_steps([0], [] of Array(ML::GGUF::DiffusionGemmaCPU::BoundedDenoisePrediction), 0.0_f32, 1)

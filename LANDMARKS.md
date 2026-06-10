@@ -237,6 +237,11 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Focused specs verify current-only rows/steps, proposal merge ordering, per-step deep-copy safety, proposal size/range failures, and the real-GGUF one-step loop now uses `current_token_candidate_steps` instead of a hand-written `[[[token]]]` literal.
 - Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `29 examples, 0 failures`.
 - Boundary: this schedules caller-supplied sparse candidates only. It does not choose proposals from logits or replace full-vocabulary candidate generation.
+**update 2026-06-10ar:**
+- Added previous-prediction proposal extraction helpers: `top_k_prediction_tokens`, `prediction_proposal_rows`, `next_candidate_rows_from_predictions`, and `repeated_candidate_steps_from_predictions`. They rank bounded prediction candidates by probability with token-id tie-breaks, cap top-k to available candidates, merge proposals with current canvas tokens, and deep-copy repeated schedules.
+- Focused specs verify ranking/tie behavior, top-k cap behavior, proposal row extraction, next-row merge/sort semantics, repeated-step deep-copy safety, and fail-fast invalid top-k/empty/mismatched prediction inputs.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `29 examples, 0 failures`.
+- Boundary: this extracts proposals from already bounded sparse predictions. It still does not discover candidates outside the current sparse support or run a full-vocabulary proposal head.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified

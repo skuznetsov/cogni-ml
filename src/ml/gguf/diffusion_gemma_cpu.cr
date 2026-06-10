@@ -812,6 +812,41 @@ module ML::GGUF
       end
     end
 
+    def top_k_prediction_tokens(prediction : BoundedDenoisePrediction,
+                                k : Int32) : Array(Int32)
+      raise ArgumentError.new("prediction top-k must be positive") unless k > 0
+      order = (0...prediction.candidate_token_ids.size).to_a
+      order.sort! do |a, b|
+        cmp = prediction.probabilities[b] <=> prediction.probabilities[a]
+        cmp == 0 ? prediction.candidate_token_ids[a] <=> prediction.candidate_token_ids[b] : cmp
+      end
+      order[0, Math.min(k, order.size)].map { |i| prediction.candidate_token_ids[i] }
+    end
+
+    def prediction_proposal_rows(predictions : Array(BoundedDenoisePrediction),
+                                 top_k : Int32) : Array(Array(Int32))
+      raise ArgumentError.new("prediction proposal rows must not be empty") if predictions.empty?
+      predictions.map { |prediction| top_k_prediction_tokens(prediction, top_k) }
+    end
+
+    def next_candidate_rows_from_predictions(canvas_tokens : Array(Int32),
+                                             predictions : Array(BoundedDenoisePrediction),
+                                             vocab_size : Int32,
+                                             top_k : Int32) : Array(Array(Int32))
+      raise ArgumentError.new("prediction rows size mismatch") unless predictions.size == canvas_tokens.size
+      merge_candidate_rows(canvas_tokens, prediction_proposal_rows(predictions, top_k), vocab_size)
+    end
+
+    def repeated_candidate_steps_from_predictions(canvas_tokens : Array(Int32),
+                                                  predictions : Array(BoundedDenoisePrediction),
+                                                  vocab_size : Int32,
+                                                  top_k : Int32,
+                                                  steps : Int32) : Array(Array(Array(Int32)))
+      raise ArgumentError.new("candidate steps must be positive") unless steps > 0
+      rows = next_candidate_rows_from_predictions(canvas_tokens, predictions, vocab_size, top_k)
+      Array(Array(Array(Int32))).new(steps) { rows.map(&.dup) }
+    end
+
     def decode_canvas_bounded_predictions(weights : DiffusionGemmaWeights,
                                           canvas_rows : Array(Float32),
                                           mask : DiffusionGemmaAttentionMask,
