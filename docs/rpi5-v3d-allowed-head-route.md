@@ -72,6 +72,8 @@ Use `scripts/rpi5_q6_probe_trace_groups.sh TRACE.log` to run the planned V3D gro
 
 Use `QWEN35_ALLOWED_HEAD_CAPTURE_PATH=/tmp/allowed_head.jsonl` during a constrained structured run to capture the real pre-output-norm hidden vector paired with each runtime `allowed_ids` set. This forces the exact hidden-readback/selected-row path and is intended for replaying real hidden rows through the Pi probe; it is not a product route by itself.
 
+Use `scripts/export_allowed_head_capture_replay.cr CAPTURE.jsonl OUT.f32 [MAX_ROWS]` to convert captured hidden rows into a raw little-endian Float32 batch and print the matching `ids_groups`. Set `MIN_ALLOWED=4` to export only rows above the current tiny-CPU policy. Copy `OUT.f32` to the Pi probe directory and pass it through `RPI5_X_F32_LOAD=OUT.f32` with `RPI5_ROW_IDS_CSV_BATCH`.
+
 Actual row-id probe:
 
 - `tool_call_prefix:start`, ids `27,60638,248058`: `0.174ms`, top1 matched CPU.
@@ -90,6 +92,7 @@ Actual row-id probe:
 - Trace-log-to-Pi probe wrapper on the same short log ran the planned `allowed=4/5` group as `q6idx5_l256`, measured `gpu_ms=0.273`, `cpu_ms=0.359`, `speedup=1.316x`, `max_abs_diff=2.09e-7`, `throttled=0x0`. This confirms end-to-end trace extraction and probe execution, while keeping the near-tiny route classified as marginal.
 - Longer runtime trace on Qwen3.5-0.8B with `QWEN35_CONSTRAINED_TOOL_CALL_PREFIX=1`, `QWEN35_CONSTRAINT_FRONTIER_TRACE=1`, one `edit_mode` tool, and `n_gen=64` reached real value-literal rows and emitted a valid parsed `edit_mode(mode=safe,dry_run=true)` tool call. The trace had `31` constrained frontier rows, including two `value_literal allowed=8` rows. `scripts/plan_rpi5_from_frontier_trace.cr` planned six V3D groups with `hybrid_total_ms=3.1624` vs all-CPU `4.1306` (`1.306x`). Live `scripts/rpi5_q6_probe_trace_groups.sh` on the same log measured grouped Pi probe speedups of `1.424x`, `1.519x`, `1.794x`, `1.787x`, `1.455x`, and `1.326x`, with `max_abs_diff<=3.58e-7` and `throttled=0x0`.
 - Runtime capture smoke with `QWEN35_ALLOWED_HEAD_CAPTURE_PATH=/tmp/qwen35_allowed_head_capture_20260609_220135.jsonl` on the same `edit_mode` prompt emitted `31` capture rows for `31` trace rows, kept the parsed tool call as `edit_mode(mode=safe,dry_run=true)`, and wrote rows with `source=metal_hidden`, `allowed_ids`, `hidden_dim=1024`, and the pre-output-norm hidden vector. This validates local capture of real hidden rows; replay on Pi is still pending.
+- Real-hidden 2B replay: Qwen3.5-2B capture on the same prompt emitted `31` rows with `hidden_dim=2048`, matching the resident 2B Q6 tied head on the Pi. All-V3D replay of those rows as one `q6idx8_l256` batch measured `gpu_ms=3.521`, `cpu_ms=4.231`, `speedup=1.202x`, `max_abs_diff=1.14e-5`, `throttled=0x0`; this is positive but confirms tiny-frontier dilution. Filtering with `MIN_ALLOWED=4` exported `16` V3D rows and measured `gpu_ms=1.847`, `cpu_ms=3.205`, `speedup=1.735x`, `max_abs_diff=8.58e-6`, `throttled=0x0`. Combining that with the all-vs-filter CPU delta for the `15` tiny rows gives a replay hybrid estimate of about `2.873ms` vs all-CPU `4.231ms` (`1.47x`).
 
 ## Route Policy
 
@@ -106,7 +109,7 @@ When several constrained steps can share one resident submit, batching improves 
 
 The longer runtime trace confirms that finite value-literal frontiers occur in the real structured decode path, not only in the offline frontier estimator. It does not yet prove product RPi5 speedup because the Pi probe consumes the real row-id groups but still generates synthetic hidden vectors.
 
-`QWEN35_ALLOWED_HEAD_CAPTURE_PATH` closes the local capture side of that gap by writing real hidden vectors and row-id sets during constrained decode. The remaining adapter step is a Pi/V3D replay/probe mode that consumes those capture rows instead of synthesizing hidden vectors.
+`QWEN35_ALLOWED_HEAD_CAPTURE_PATH` plus `RPI5_X_F32_LOAD` closes the probe-side synthetic hidden gap for offline replay. The remaining product adapter step is resident transport of real hidden rows to the Pi/V3D allowed-head path without JSONL files, SSH process boundaries, or per-run prepack reloads.
 
 Use `QWEN35_ALLOWED_HEAD_CPU_MAX=7` as the Pi-oriented policy override for warmed resident Q6 allowed-head experiments. A conservative unbatched policy can still prefer `QWEN35_ALLOWED_HEAD_CPU_MAX=12` until the product V3D adapter reproduces the warmed corridor. Keep it configurable: cold process startup, grammar row locality, and future V3D kernels can move the cutoff.
 

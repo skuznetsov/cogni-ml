@@ -916,6 +916,10 @@ int main(int argc, char **argv) {
   } else {
     fill_q4k((uint8_t *)wb.mapped, (float *)xb.mapped, out_dim, in_dim);
   }
+  const char *x_f32_load = getenv("RPI5_X_F32_LOAD");
+  if (x_f32_load && x_f32_load[0]) {
+    read_file_exact(x_f32_load, xb.mapped, x_bytes);
+  }
   if (sumx_mode) {
     float *sx = (float *)sumxb.mapped;
     const float *xv = (const float *)xb.mapped;

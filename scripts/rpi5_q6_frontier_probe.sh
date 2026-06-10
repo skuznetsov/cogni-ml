@@ -21,6 +21,7 @@ Environment:
   RPI5_BATCH       Hidden rows per submit for q6idx probe, default 1
   RPI5_ROW_IDS_CSV_BATCH
                    Colon-separated per-batch row-id frontiers.
+  RPI5_X_F32_LOAD  Optional remote raw Float32 hidden batch file.
 USAGE
   exit 2
 }
@@ -46,13 +47,14 @@ mode="${RPI5_MODE:-q6idx${allowed_count}_l256}"
 warmups="${RPI5_WARMUPS:-0}"
 batch="${RPI5_BATCH:-1}"
 batch_ids_csv="${RPI5_ROW_IDS_CSV_BATCH:-}"
+x_f32_load="${RPI5_X_F32_LOAD:-}"
 
 printf "label=%s allowed=%s mode=%s host=%s repeats=%s warmups=%s batch=%s ids_csv=%s\n" "$label" "$allowed_count" "$mode" "$host" "$repeats" "$warmups" "$batch" "$ids_csv"
 if [[ -n "$batch_ids_csv" ]]; then
   printf "batch_ids_csv=%s\n" "$batch_ids_csv"
 fi
 
-ssh "$host" bash -s -- "$remote_dir_arg" "$spv" "$tensor" "$prepack" "$repeats" "$mode" "$ids_csv" "$warmups" "$batch" "$batch_ids_csv" <<'REMOTE'
+ssh "$host" bash -s -- "$remote_dir_arg" "$spv" "$tensor" "$prepack" "$repeats" "$mode" "$ids_csv" "$warmups" "$batch" "$batch_ids_csv" "$x_f32_load" <<'REMOTE'
 set -euo pipefail
 remote_dir="$1"
 spv="$2"
@@ -64,6 +66,7 @@ ids_csv="$7"
 warmups="$8"
 batch="$9"
 batch_ids_csv="${10:-}"
+x_f32_load="${11:-}"
 
 root="$HOME/cogni-vulkan-runtime/root"
 if [[ "$remote_dir" == "__DEFAULT__" ]]; then
@@ -78,6 +81,7 @@ export RPI5_ROW_IDS_CSV="$ids_csv"
 export RPI5_ROW_IDS_CSV_BATCH="$batch_ids_csv"
 export RPI5_WARMUPS="$warmups"
 export RPI5_BATCH="$batch"
+export RPI5_X_F32_LOAD="$x_f32_load"
 
 cd "$remote_dir"
 ./rpi5_vulkan_q4k_probe "$spv" file "$tensor" "$repeats" "$mode"
