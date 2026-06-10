@@ -2174,7 +2174,7 @@ module ML::GGUF
       capture_path = allowed_head_capture_path
       q6_enabled = allowed_head_q6_enabled?
 
-      if !capture_path && q6_enabled && weights.output.type.q6_k? && allowed_ids.size > allowed_head_cpu_max
+      if !capture_path && q6_enabled && weights.output.type.q6_k? && allowed_ids.size > allowed_head_cpu_max && !allowed_head_resident_transport
         if packed = forward_decode_wave_routed(weights, token_id, pos, state, top1: true, top1_allowed_ids: allowed_ids)
           {% unless flag?(:cpu_only) %}
             Qwen35Metal::Profile.bump_route_marker("allowed_head.metal_q6")
