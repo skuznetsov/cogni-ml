@@ -64,6 +64,8 @@ Use `scripts/rpi5_q6_batch_sweep.sh MODEL.gguf` to run a proxy batching sweep ov
 
 Use `scripts/rpi5_q6_multi_frontier_sweep.sh MODEL.gguf` to group several tokenizer-derived frontiers into one `q6idx` submit with per-row frontier offsets/counts.
 
+Use `scripts/estimate_rpi5_allowed_batch_plan.cr MODEL.gguf` to plan grouped frontier submits from the estimator output. It is a planning model over measured probe anchors, not a product benchmark.
+
 Actual row-id probe:
 
 - `tool_call_prefix:start`, ids `27,60638,248058`: `0.174ms`, top1 matched CPU.
@@ -76,6 +78,7 @@ Actual row-id probe:
 - Warmed policy repeat sweep with `RAW_OUTPUT=0 RPI5_WARMUPS=3 REPEAT_COUNTS='20 40' scripts/rpi5_q6_policy_repeat_sweep.sh MODEL.gguf` emitted stable `V3D_CLEAR` for both `read_file.limit` (`allowed=8`, `gpu_ms=0.144/0.143`, `cpu_ms=0.289/0.289`) and `edit_mode.mode` (`allowed=13`, `gpu_ms=0.147/0.147`, `cpu_ms=0.488/0.481`), all with `top1_match=true` and `throttled=0x0`.
 - Batch proxy sweep with `RAW_OUTPUT=0 RPI5_WARMUPS=3 BATCH_COUNTS='1 2 4 8' scripts/rpi5_q6_batch_sweep.sh MODEL.gguf` preserved CPU/GPU parity across all rows (`max_abs_diff<=4.47e-7`, `throttled=0x0`). `read_file.limit` (`allowed=8`) improved from `0.168ms/row` at batch 1 to `0.126ms/row` at batch 8, with speedup rising `1.719x -> 2.398x`; `edit_mode.mode` (`allowed=13`) improved from `0.169ms/row` to `0.1265ms/row`, with speedup `2.967x -> 3.828x`. A follow-up `allowed=8` sweep through batch 32 saturated near `0.1215ms/row`.
 - Multi-frontier batch proof with `RAW_OUTPUT=1 RPI5_WARMUPS=3 MAX_FRONTIERS=3 REPEATS=30 scripts/rpi5_q6_multi_frontier_sweep.sh MODEL.gguf` grouped `tool_call_prefix:start` (`allowed=3`), `read_file.limit` (`allowed=8`), and `edit_mode.mode` (`allowed=13`) into one `q6idx13_l256` submit. It measured `gpu_ms=0.393`, `cpu_ms=0.915`, `gpu_ms_per_frontier=0.131`, `speedup=2.326x`, `max_abs_diff=2.98e-7`, `throttled=0x0`.
+- Batch planner with default labels estimates the same `3/8/13` group at `grouped_v3d_ms=0.393`, `grouped_vs_cpu=2.237x`, and `grouped_vs_unbatched_v3d=1.412x`.
 
 ## Route Policy
 
