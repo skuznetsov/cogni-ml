@@ -82,6 +82,7 @@ run_replay() {
     RPI5_X_F32_LOAD="$remote_base" \
     bash "$probe" "capture_replay:${tag}" "$first_ids" "$repeats"
   )"
+  ssh "$host" "rm -f $remote_dir/$remote_base"
 
   if [[ "$raw_output" != "0" ]]; then
     printf "%s\n" "$output"
