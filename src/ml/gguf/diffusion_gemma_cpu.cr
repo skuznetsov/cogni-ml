@@ -53,6 +53,23 @@ module ML::GGUF
       end
     end
 
+    struct BoundedDenoiseLoopResult
+      getter final_canvas_tokens : Array(Int32)
+      getter final_canvas_rows : Array(Float32)?
+      getter updates : Array(BoundedCanvasUpdate)
+      getter stable_counts : Array(Int32)
+      getter steps_run : Int32
+      getter converged : Bool
+
+      def initialize(@final_canvas_tokens,
+                     @final_canvas_rows,
+                     @updates,
+                     @stable_counts,
+                     @steps_run,
+                     @converged)
+      end
+    end
+
     struct PromptLayerCache
       getter final_rows : Array(Float32)
       getter projections_by_layer : Array(Array(AttentionProjection))
@@ -810,6 +827,86 @@ module ML::GGUF
       BoundedCanvasUpdate.new(update.updated_canvas_tokens, update.accepted, update.predictions, updated_rows)
     end
 
+    def decode_canvas_bounded_loop(weights : DiffusionGemmaWeights,
+                                   canvas_tokens : Array(Int32),
+                                   canvas_rows : Array(Float32),
+                                   mask : DiffusionGemmaAttentionMask,
+                                   prompt_cache : PromptLayerCache,
+                                   candidate_token_ids_by_step_by_canvas_row : Array(Array(Array(Int32))),
+                                   entropy_bound : Float32,
+                                   stability_threshold : Int32,
+                                   max_layers : Int32 = prompt_cache.layers,
+                                   temp_inv : Float32 = 1.0_f32,
+                                   sample_us_by_step_by_canvas_row : Array(Array(Float32))? = nil,
+                                   routes_by_layer_by_canvas_row : Array(Array(Array(ExpertRoute)))? = nil,
+                                   use_sampled_token : Bool = true) : BoundedDenoiseLoopResult
+      raise ArgumentError.new("denoise steps must not be empty") if candidate_token_ids_by_step_by_canvas_row.empty?
+      raise ArgumentError.new("stability_threshold must be positive") unless stability_threshold > 0
+      if supplied_sample_us = sample_us_by_step_by_canvas_row
+        raise ArgumentError.new("sample_us step count mismatch") unless supplied_sample_us.size == candidate_token_ids_by_step_by_canvas_row.size
+      end
+
+      tokens = canvas_tokens.dup
+      rows = canvas_rows.dup
+      stable_counts = Array(Int32).new(canvas_tokens.size, 0)
+      updates = [] of BoundedCanvasUpdate
+      converged = false
+
+      candidate_token_ids_by_step_by_canvas_row.each_with_index do |candidate_rows, step|
+        sample_us = sample_us_by_step_by_canvas_row ? sample_us_by_step_by_canvas_row.not_nil![step] : nil
+        update = decode_canvas_bounded_step(
+          weights: weights,
+          canvas_tokens: tokens,
+          canvas_rows: rows,
+          mask: mask,
+          prompt_cache: prompt_cache,
+          candidate_token_ids_by_canvas_row: candidate_rows,
+          entropy_bound: entropy_bound,
+          max_layers: max_layers,
+          temp_inv: temp_inv,
+          sample_us: sample_us,
+          routes_by_layer_by_canvas_row: routes_by_layer_by_canvas_row,
+          use_sampled_token: use_sampled_token,
+        )
+        stable_counts = advance_stability_counts(tokens, update.updated_canvas_tokens, update.accepted, stable_counts)
+        tokens = update.updated_canvas_tokens
+        rows = update.updated_canvas_rows || rows
+        updates << update
+        if stable_counts.all? { |count| count >= stability_threshold }
+          converged = true
+          break
+        end
+      end
+
+      BoundedDenoiseLoopResult.new(tokens, rows, updates, stable_counts, updates.size, converged)
+    end
+
+    def apply_entropy_bound_prediction_steps(canvas_tokens : Array(Int32),
+                                             predictions_by_step : Array(Array(BoundedDenoisePrediction)),
+                                             entropy_bound : Float32,
+                                             stability_threshold : Int32,
+                                             use_sampled_token : Bool = true) : BoundedDenoiseLoopResult
+      raise ArgumentError.new("prediction steps must not be empty") if predictions_by_step.empty?
+      raise ArgumentError.new("stability_threshold must be positive") unless stability_threshold > 0
+
+      tokens = canvas_tokens.dup
+      stable_counts = Array(Int32).new(canvas_tokens.size, 0)
+      updates = [] of BoundedCanvasUpdate
+      converged = false
+      predictions_by_step.each do |predictions|
+        update = apply_entropy_bound_predictions(tokens, predictions, entropy_bound, use_sampled_token: use_sampled_token)
+        stable_counts = advance_stability_counts(tokens, update.updated_canvas_tokens, update.accepted, stable_counts)
+        tokens = update.updated_canvas_tokens
+        updates << update
+        if stable_counts.all? { |count| count >= stability_threshold }
+          converged = true
+          break
+        end
+      end
+
+      BoundedDenoiseLoopResult.new(tokens, nil, updates, stable_counts, updates.size, converged)
+    end
+
     def apply_entropy_bound_predictions(canvas_tokens : Array(Int32),
                                         predictions : Array(BoundedDenoisePrediction),
                                         entropy_bound : Float32,
@@ -824,6 +921,23 @@ module ML::GGUF
         updated[i] = use_sampled_token ? pred.sampled_token_id : pred.argmax_token_id
       end
       BoundedCanvasUpdate.new(updated, accepted, predictions)
+    end
+
+    def advance_stability_counts(previous_tokens : Array(Int32),
+                                 updated_tokens : Array(Int32),
+                                 accepted : Array(Bool),
+                                 previous_counts : Array(Int32)) : Array(Int32)
+      raise ArgumentError.new("stability token size mismatch") unless previous_tokens.size == updated_tokens.size
+      raise ArgumentError.new("stability accepted size mismatch") unless accepted.size == previous_tokens.size
+      raise ArgumentError.new("stability count size mismatch") unless previous_counts.size == previous_tokens.size
+
+      Array(Int32).new(previous_tokens.size) do |i|
+        if accepted[i] && updated_tokens[i] == previous_tokens[i]
+          previous_counts[i] + 1
+        else
+          0
+        end
+      end
     end
 
     def update_canvas_token(canvas_tokens : Array(Int32),

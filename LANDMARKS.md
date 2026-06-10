@@ -222,6 +222,11 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Focused real-GGUF specs verify zero-SC row regeneration equals `zero_sc_canvas_embedding`, sparse SC row regeneration equals `canvas_embedding_with_self_conditioning`, paired SC row validation fails fast, and the bounded step returns regenerated rows for the accepted sampled token.
 - Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `29 examples, 0 failures`.
 - Boundary: regenerated rows are available for the next sparse step, but this is not yet a multi-step EB loop and does not yet transport full previous-step `[canvas,vocab]` logits.
+**update 2026-06-10ao:**
+- Added `BoundedDenoiseLoopResult`, `decode_canvas_bounded_loop`, `apply_entropy_bound_prediction_steps`, and `advance_stability_counts`. The sparse loop runs repeated bounded canvas steps over candidate sets, carries regenerated canvas rows forward, tracks per-position stability, and stops only when accepted tokens remain unchanged for the requested threshold.
+- Focused real-GGUF spec verifies a one-step model-backed loop over a single-candidate row converges and returns regenerated rows. Synthetic adversary checks verify that changed accepted tokens reset stability, unchanged accepted tokens increment it, rejected tokens reset it, empty step lists fail, and invalid stability thresholds fail.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `29 examples, 0 failures`.
+- Boundary: this is a sparse/candidate EB loop, not the full DiffusionGemma entropy-bound loop. Candidate generation/full-vocab logits, full previous-step self-conditioning logits, and performance measurement remain open.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified

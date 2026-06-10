@@ -669,6 +669,23 @@ describe ML::GGUF::DiffusionGemmaCPU do
     step.updated_canvas_tokens.should eq([expected.sampled_token_id])
     step.updated_canvas_rows.not_nil![0, hp.n_embd].should eq(ML::GGUF::DiffusionGemmaCPU.zero_sc_canvas_embedding(w, expected.sampled_token_id))
 
+    loop = ML::GGUF::DiffusionGemmaCPU.decode_canvas_bounded_loop(
+      w,
+      [0],
+      canvas_row,
+      mask,
+      prompt_cache,
+      [[[0]]],
+      entropy_bound: 0.0_f32,
+      stability_threshold: 1,
+      max_layers: 1,
+      routes_by_layer_by_canvas_row: [[canvas_route]],
+    )
+    loop.steps_run.should eq(1)
+    loop.converged.should be_true
+    loop.final_canvas_tokens.should eq([0])
+    loop.final_canvas_rows.not_nil![0, hp.n_embd].should eq(ML::GGUF::DiffusionGemmaCPU.zero_sc_canvas_embedding(w, 0))
+
     expect_raises(ArgumentError, /candidate rows size mismatch/) do
       ML::GGUF::DiffusionGemmaCPU.decode_canvas_bounded_predictions(w, canvas_row, mask, prompt_cache, [] of Array(Int32), max_layers: 1)
     end
@@ -825,6 +842,17 @@ describe ML::GGUF::DiffusionGemmaCPU do
     argmax_update = ML::GGUF::DiffusionGemmaCPU.apply_entropy_bound_predictions([0], [first], 0.0_f32, use_sampled_token: false)
     argmax_update.updated_canvas_tokens.should eq([10])
 
+    first_step = ML::GGUF::DiffusionGemmaCPU.bounded_candidate_prediction([10, 20], [0.0_f32, 0.0_f32], sample_u: 0.75_f32)
+    stable_step = ML::GGUF::DiffusionGemmaCPU.bounded_candidate_prediction([20, 30], [2.0_f32, 0.0_f32], sample_u: 0.0_f32)
+    loop = ML::GGUF::DiffusionGemmaCPU.apply_entropy_bound_prediction_steps([0], [[first_step], [stable_step]], 10.0_f32, 1)
+    loop.final_canvas_tokens.should eq([20])
+    loop.stable_counts.should eq([1])
+    loop.steps_run.should eq(2)
+    loop.converged.should be_true
+    ML::GGUF::DiffusionGemmaCPU.advance_stability_counts([1], [2], [true], [7]).should eq([0])
+    ML::GGUF::DiffusionGemmaCPU.advance_stability_counts([1], [1], [false], [7]).should eq([0])
+    ML::GGUF::DiffusionGemmaCPU.advance_stability_counts([1], [1], [true], [7]).should eq([8])
+
     expect_raises(ArgumentError, /strictly increasing/) do
       ML::GGUF::DiffusionGemmaCPU.bounded_candidate_prediction([2, 1], [0.0_f32, 0.0_f32])
     end
@@ -836,6 +864,12 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
     expect_raises(ArgumentError, /canvas prediction count/) do
       ML::GGUF::DiffusionGemmaCPU.apply_entropy_bound_predictions([0], [first, second], 0.0_f32)
+    end
+    expect_raises(ArgumentError, /prediction steps/) do
+      ML::GGUF::DiffusionGemmaCPU.apply_entropy_bound_prediction_steps([0], [] of Array(ML::GGUF::DiffusionGemmaCPU::BoundedDenoisePrediction), 0.0_f32, 1)
+    end
+    expect_raises(ArgumentError, /stability_threshold/) do
+      ML::GGUF::DiffusionGemmaCPU.apply_entropy_bound_prediction_steps([0], [[first]], 0.0_f32, 0)
     end
   end
 
