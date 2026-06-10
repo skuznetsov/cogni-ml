@@ -205,6 +205,22 @@ module ML::GGUF
       result
     end
 
+    def canvas_rows_from_prediction_self_conditioning(weights : DiffusionGemmaWeights,
+                                                      canvas_tokens : Array(Int32),
+                                                      predictions : Array(BoundedDenoisePrediction),
+                                                      sc_temp_inv : Float32 = 1.0_f32,
+                                                      sc_use : Float32 = 1.0_f32) : Array(Float32)
+      raise ArgumentError.new("prediction self-conditioning count mismatch") unless predictions.size == canvas_tokens.size
+      canvas_rows_from_tokens(
+        weights,
+        canvas_tokens,
+        sc_token_ids_by_canvas_row: predictions.map(&.candidate_token_ids),
+        sc_logits_by_canvas_row: predictions.map(&.logits),
+        sc_temp_inv: sc_temp_inv,
+        sc_use: sc_use,
+      )
+    end
+
     def attention_project_pre_norm(lw : DiffusionGemmaLayerWeights, x_norm : Array(Float32)) : AttentionProjection
       q = Gemma4CPU.matmul(lw.attn_q_qw, x_norm)
       k = Gemma4CPU.matmul(lw.attn_k_qw, x_norm)
@@ -839,7 +855,10 @@ module ML::GGUF
                                    temp_inv : Float32 = 1.0_f32,
                                    sample_us_by_step_by_canvas_row : Array(Array(Float32))? = nil,
                                    routes_by_layer_by_canvas_row : Array(Array(Array(ExpertRoute)))? = nil,
-                                   use_sampled_token : Bool = true) : BoundedDenoiseLoopResult
+                                   use_sampled_token : Bool = true,
+                                   use_sparse_self_conditioning : Bool = false,
+                                   sc_temp_inv : Float32 = 1.0_f32,
+                                   sc_use : Float32 = 1.0_f32) : BoundedDenoiseLoopResult
       raise ArgumentError.new("denoise steps must not be empty") if candidate_token_ids_by_step_by_canvas_row.empty?
       raise ArgumentError.new("stability_threshold must be positive") unless stability_threshold > 0
       if supplied_sample_us = sample_us_by_step_by_canvas_row
@@ -870,7 +889,12 @@ module ML::GGUF
         )
         stable_counts = advance_stability_counts(tokens, update.updated_canvas_tokens, update.accepted, stable_counts)
         tokens = update.updated_canvas_tokens
-        rows = update.updated_canvas_rows || rows
+        if use_sparse_self_conditioning
+          rows = canvas_rows_from_prediction_self_conditioning(weights, tokens, update.predictions, sc_temp_inv, sc_use)
+          update = BoundedCanvasUpdate.new(update.updated_canvas_tokens, update.accepted, update.predictions, rows)
+        else
+          rows = update.updated_canvas_rows || rows
+        end
         updates << update
         if stable_counts.all? { |count| count >= stability_threshold }
           converged = true

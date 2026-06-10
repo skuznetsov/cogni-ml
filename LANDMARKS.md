@@ -227,6 +227,11 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Focused real-GGUF spec verifies a one-step model-backed loop over a single-candidate row converges and returns regenerated rows. Synthetic adversary checks verify that changed accepted tokens reset stability, unchanged accepted tokens increment it, rejected tokens reset it, empty step lists fail, and invalid stability thresholds fail.
 - Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `29 examples, 0 failures`.
 - Boundary: this is a sparse/candidate EB loop, not the full DiffusionGemma entropy-bound loop. Candidate generation/full-vocab logits, full previous-step self-conditioning logits, and performance measurement remain open.
+**update 2026-06-10ap:**
+- Added `canvas_rows_from_prediction_self_conditioning` and an opt-in `use_sparse_self_conditioning` mode for `decode_canvas_bounded_loop`. When enabled, each loop step rebuilds the next canvas rows from the current bounded predictions' candidate ids/logits instead of the default zero-SC row path.
+- Focused real-GGUF specs verify prediction-derived SC rows match `canvas_embedding_with_self_conditioning`, count mismatches fail fast, and model-backed one-step loops return SC rows that differ from the zero-SC loop while matching the current prediction logits.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `29 examples, 0 failures`.
+- Boundary: this transports sparse candidate logits only. It is not equivalent to full previous-step `[canvas,vocab]` self-conditioning unless the candidate set is a certified sufficient support.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified

@@ -252,6 +252,8 @@ describe ML::GGUF::DiffusionGemmaCPU do
     zero_rows.should eq(zero_sc)
     sc_rows = ML::GGUF::DiffusionGemmaCPU.canvas_rows_from_tokens(w, [token_id], [[token_id]], [[0.0_f32]])
     sc_rows.should eq(with_sc)
+    sc_pred = ML::GGUF::DiffusionGemmaCPU.bounded_candidate_prediction([token_id], [0.0_f32])
+    ML::GGUF::DiffusionGemmaCPU.canvas_rows_from_prediction_self_conditioning(w, [token_id], [sc_pred]).should eq(with_sc)
 
     expect_raises(ArgumentError, /logits size mismatch/) do
       ML::GGUF::DiffusionGemmaCPU.self_conditioning_soft_embedding(w, [token_id], [] of Float32)
@@ -261,6 +263,9 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
     expect_raises(ArgumentError, /supplied together/) do
       ML::GGUF::DiffusionGemmaCPU.canvas_rows_from_tokens(w, [token_id], [[token_id]])
+    end
+    expect_raises(ArgumentError, /prediction self-conditioning/) do
+      ML::GGUF::DiffusionGemmaCPU.canvas_rows_from_prediction_self_conditioning(w, [token_id], [] of ML::GGUF::DiffusionGemmaCPU::BoundedDenoisePrediction)
     end
   end
 
@@ -685,6 +690,24 @@ describe ML::GGUF::DiffusionGemmaCPU do
     loop.converged.should be_true
     loop.final_canvas_tokens.should eq([0])
     loop.final_canvas_rows.not_nil![0, hp.n_embd].should eq(ML::GGUF::DiffusionGemmaCPU.zero_sc_canvas_embedding(w, 0))
+
+    sc_loop = ML::GGUF::DiffusionGemmaCPU.decode_canvas_bounded_loop(
+      w,
+      [0],
+      canvas_row,
+      mask,
+      prompt_cache,
+      [[[0]]],
+      entropy_bound: 0.0_f32,
+      stability_threshold: 1,
+      max_layers: 1,
+      routes_by_layer_by_canvas_row: [[canvas_route]],
+      use_sparse_self_conditioning: true,
+    )
+    sc_pred = sc_loop.updates[0].predictions[0]
+    expected_sc_row = ML::GGUF::DiffusionGemmaCPU.canvas_rows_from_prediction_self_conditioning(w, [0], [sc_pred])
+    sc_loop.final_canvas_rows.not_nil!.should eq(expected_sc_row)
+    sc_loop.final_canvas_rows.not_nil!.should_not eq(loop.final_canvas_rows.not_nil!)
 
     expect_raises(ArgumentError, /candidate rows size mismatch/) do
       ML::GGUF::DiffusionGemmaCPU.decode_canvas_bounded_predictions(w, canvas_row, mask, prompt_cache, [] of Array(Int32), max_layers: 1)
