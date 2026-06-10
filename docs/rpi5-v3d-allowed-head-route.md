@@ -160,7 +160,7 @@ Fallbacks:
 Kill switch:
 
 - `QWEN35_ALLOWED_HEAD_CPU_MAX=0` disables the CPU-threshold override.
-- A future V3D product adapter should still expose a direct V3D kill switch such as `QWEN35_RPI5_V3D_ALLOWED_HEAD_OFF=1`.
+- `QWEN35_ALLOWED_HEAD_Q6_OFF=1` disables the Q6 allowed-head fast route and forces the exact hidden-readback/CPU selected-row fallback.
 
 ## Definition of Done
 

@@ -111,4 +111,45 @@ describe ML::GGUF::Qwen35CPU, "allowed lm-head route" do
       spec_restore_env("QWEN35_ALLOWED_HEAD_CPU_MAX", old_cpu_max)
     end
   end
+
+  it "honors the Q6 allowed-head kill switch" do
+    pending!("2B model not present") unless File.exists?(QWEN_2B_ALLOWED)
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    weights = ML::GGUF::Qwen35Weights.from_gguf(QWEN_2B_ALLOWED)
+    weights.output.type.q6_k?.should be_true
+    hp = weights.hparams
+
+    old_wave = ENV["QWEN35_DECODE_WAVE_OFF"]?
+    old_head = ENV["QWEN35_HEAD_TOP1_FUSED"]?
+    old_cpu_max = ENV["QWEN35_ALLOWED_HEAD_CPU_MAX"]?
+    old_q6_off = ENV["QWEN35_ALLOWED_HEAD_Q6_OFF"]?
+    ENV.delete("QWEN35_DECODE_WAVE_OFF")
+    ENV["QWEN35_HEAD_TOP1_FUSED"] = "1"
+    ENV["QWEN35_ALLOWED_HEAD_CPU_MAX"] = "0"
+    ENV["QWEN35_ALLOWED_HEAD_Q6_OFF"] = "1"
+    begin
+      full_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      full_logits = ML::GGUF::Qwen35CPU.forward(weights, 0, 0, full_state)
+      full_top = full_logits.index(full_logits.max).not_nil!.to_i32
+
+      allowed = [0_i32, 1_i32, 2_i32, 198_i32, 606_i32, 1000_i32, 2000_i32, 3000_i32].reject { |id| id == full_top }
+      expected_id, expected_logit = spec_restricted_top1(full_logits, allowed)
+
+      allowed_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      actual_id, actual_logit = ML::GGUF::Qwen35CPU.forward_top1_allowed(weights, 0, 0, allowed_state, allowed)
+      actual_id.should eq(expected_id)
+      actual_logit.should be_close(expected_logit, 1.0e-3_f32)
+
+      full_next = ML::GGUF::Qwen35CPU.forward_top1(weights, 100, 1, full_state)
+      allowed_next = ML::GGUF::Qwen35CPU.forward_top1(weights, 100, 1, allowed_state)
+      allowed_next[0].should eq(full_next[0])
+      allowed_next[1].should be_close(full_next[1], 1.0e-3_f32)
+    ensure
+      spec_restore_env("QWEN35_DECODE_WAVE_OFF", old_wave)
+      spec_restore_env("QWEN35_HEAD_TOP1_FUSED", old_head)
+      spec_restore_env("QWEN35_ALLOWED_HEAD_CPU_MAX", old_cpu_max)
+      spec_restore_env("QWEN35_ALLOWED_HEAD_Q6_OFF", old_q6_off)
+    end
+  end
 end
