@@ -80,6 +80,8 @@ Use `scripts/rpi5_q6_capture_smoke.sh` to run the full local 2B `edit_mode` cons
 
 Use `scripts/rpi5_q6_allowed_head_regression.sh` as the default local pre-adapter gate. It runs marker smoke plus capture smoke without Pi replay; set `FULL_REPLAY=1` to include the Pi replay step.
 
+Use `scripts/rpi5_q6_transport_budget.sh CAPTURE.jsonl 4` to measure the current non-product transport envelope around the remote Pi probe. This separates the resident-kernel opportunity from SSH/process/Vulkan setup and prepack-load tax.
+
 Actual row-id probe:
 
 - `tool_call_prefix:start`, ids `27,60638,248058`: `0.174ms`, top1 matched CPU.
@@ -102,6 +104,7 @@ Actual row-id probe:
 - Capture replay wrapper check with `RAW_OUTPUT=0 REPEATS=30 RPI5_WARMUPS=3 bash scripts/rpi5_q6_capture_replay.sh /tmp/qwen35_2b_allowed_head_capture_20260609_220934.jsonl 4` reproduced the same shape: all rows `gpu_ms=3.517`, `cpu_ms=4.259`, `speedup=1.211x`; filtered rows `gpu_ms=1.846`, `cpu_ms=3.223`, `speedup=1.746x`; hybrid estimate `2.882ms` vs all-CPU `4.259ms` (`1.478x`).
 - End-to-end capture smoke wrapper check with `RAW_OUTPUT=0 REPEATS=30 RPI5_WARMUPS=3 scripts/rpi5_q6_capture_smoke.sh` produced a fresh 2B structured capture (`31` trace rows, `31` capture rows), preserved parsed `edit_mode(mode=safe,dry_run=true)`, then replayed on Pi. Results: all rows `gpu_ms=3.520`, `cpu_ms=4.250`, `speedup=1.207x`; filtered rows `gpu_ms=1.845`, `cpu_ms=3.233`, `speedup=1.753x`; hybrid estimate `2.862ms` vs all-CPU `4.250ms` (`1.485x`), `throttled=0x0`.
 - Full regression gate with `FULL_REPLAY=1 RAW_OUTPUT=0 REPEATS=30 RPI5_WARMUPS=3 scripts/rpi5_q6_allowed_head_regression.sh` passed marker checks, produced a fresh 2B capture (`31` trace rows, `31` capture rows), and replayed on Pi. Results: all rows `gpu_ms=3.517`, `cpu_ms=4.220`, `speedup=1.200x`; filtered rows `gpu_ms=1.844`, `cpu_ms=3.227`, `speedup=1.750x`; hybrid estimate `2.837ms` vs all-CPU `4.220ms` (`1.487x`), `throttled=0x0`.
+- Transport budget check with `RAW_OUTPUT=0 REPEATS=30 RPI5_WARMUPS=3 scripts/rpi5_q6_transport_budget.sh /tmp/qwen35_2b_allowed_head_capture_20260609_223005.jsonl 4` replayed the filtered `16` real-hidden rows with `gpu_ms=1.843`, `cpu_ms=3.207`, `speedup=1.740x`, and `max_abs_diff=8.58307e-06`, but the current remote probe envelope measured `remote_wall_ms=602.092`, including `prepack_load_ms=126.549` and estimated setup overhead `411.517ms` (`223.3x` one averaged GPU dispatch). This is a falsifier for SSH/process-per-call product routing and a target for the resident adapter.
 
 ## Route Policy
 
