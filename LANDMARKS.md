@@ -232,6 +232,11 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Focused real-GGUF specs verify prediction-derived SC rows match `canvas_embedding_with_self_conditioning`, count mismatches fail fast, and model-backed one-step loops return SC rows that differ from the zero-SC loop while matching the current prediction logits.
 - Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `29 examples, 0 failures`.
 - Boundary: this transports sparse candidate logits only. It is not equivalent to full previous-step `[canvas,vocab]` self-conditioning unless the candidate set is a certified sufficient support.
+**update 2026-06-10aq:**
+- Added sparse candidate scheduling helpers: `current_token_candidate_rows`, `merge_candidate_rows`, `current_token_candidate_steps`, and `merge_candidate_steps`. They validate token ranges, keep the current canvas token in each row, sort/dedupe explicit proposals, and deep-copy repeated current-token rows across steps.
+- Focused specs verify current-only rows/steps, proposal merge ordering, per-step deep-copy safety, proposal size/range failures, and the real-GGUF one-step loop now uses `current_token_candidate_steps` instead of a hand-written `[[[token]]]` literal.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `29 examples, 0 failures`.
+- Boundary: this schedules caller-supplied sparse candidates only. It does not choose proposals from logits or replace full-vocabulary candidate generation.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified

@@ -680,7 +680,7 @@ describe ML::GGUF::DiffusionGemmaCPU do
       canvas_row,
       mask,
       prompt_cache,
-      [[[0]]],
+      ML::GGUF::DiffusionGemmaCPU.current_token_candidate_steps([0], hp.vocab_size, 1),
       entropy_bound: 0.0_f32,
       stability_threshold: 1,
       max_layers: 1,
@@ -697,7 +697,7 @@ describe ML::GGUF::DiffusionGemmaCPU do
       canvas_row,
       mask,
       prompt_cache,
-      [[[0]]],
+      ML::GGUF::DiffusionGemmaCPU.current_token_candidate_steps([0], hp.vocab_size, 1),
       entropy_bound: 0.0_f32,
       stability_threshold: 1,
       max_layers: 1,
@@ -856,6 +856,13 @@ describe ML::GGUF::DiffusionGemmaCPU do
 
     ML::GGUF::DiffusionGemmaCPU.entropy_bound_accept([0.2_f32, 0.05_f32, 0.3_f32], 0.1_f32).should eq([true, true, false])
     ML::GGUF::DiffusionGemmaCPU.update_canvas_token([7, 8, 9], 1, 20).should eq([7, 20, 9])
+    ML::GGUF::DiffusionGemmaCPU.current_token_candidate_rows([3, 1], 10).should eq([[3], [1]])
+    ML::GGUF::DiffusionGemmaCPU.merge_candidate_rows([3, 1], [[4, 3, 2], [1, 9]], 10).should eq([[2, 3, 4], [1, 9]])
+    candidate_steps = ML::GGUF::DiffusionGemmaCPU.current_token_candidate_steps([5], 10, 2)
+    candidate_steps.should eq([[[5]], [[5]]])
+    candidate_steps[0][0] << 6
+    candidate_steps[1][0].should eq([5])
+    ML::GGUF::DiffusionGemmaCPU.merge_candidate_steps([1], [[[3]], [[2, 1]]], 10).should eq([[[1, 3]], [[1, 2]]])
 
     first = ML::GGUF::DiffusionGemmaCPU.bounded_candidate_prediction([10, 20], [0.0_f32, 0.0_f32], sample_u: 0.75_f32)
     second = ML::GGUF::DiffusionGemmaCPU.bounded_candidate_prediction([30, 40], [0.0_f32, 0.0_f32], sample_u: 0.75_f32)
@@ -887,6 +894,18 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
     expect_raises(ArgumentError, /canvas prediction count/) do
       ML::GGUF::DiffusionGemmaCPU.apply_entropy_bound_predictions([0], [first, second], 0.0_f32)
+    end
+    expect_raises(ArgumentError, /candidate token id/) do
+      ML::GGUF::DiffusionGemmaCPU.current_token_candidate_rows([10], 10)
+    end
+    expect_raises(ArgumentError, /proposal rows/) do
+      ML::GGUF::DiffusionGemmaCPU.merge_candidate_rows([1], [] of Array(Int32), 10)
+    end
+    expect_raises(ArgumentError, /candidate steps/) do
+      ML::GGUF::DiffusionGemmaCPU.current_token_candidate_steps([1], 10, 0)
+    end
+    expect_raises(ArgumentError, /proposal steps/) do
+      ML::GGUF::DiffusionGemmaCPU.merge_candidate_steps([1], [] of Array(Array(Int32)), 10)
     end
     expect_raises(ArgumentError, /prediction steps/) do
       ML::GGUF::DiffusionGemmaCPU.apply_entropy_bound_prediction_steps([0], [] of Array(ML::GGUF::DiffusionGemmaCPU::BoundedDenoisePrediction), 0.0_f32, 1)

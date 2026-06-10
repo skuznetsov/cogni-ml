@@ -773,6 +773,45 @@ module ML::GGUF
       bounded_candidate_prediction(candidate_token_ids, raw_logits, temp_inv, sample_u)
     end
 
+    def current_token_candidate_rows(canvas_tokens : Array(Int32),
+                                     vocab_size : Int32) : Array(Array(Int32))
+      validate_candidate_tokens!(canvas_tokens, vocab_size)
+      canvas_tokens.map { |token_id| [token_id] }
+    end
+
+    def merge_candidate_rows(canvas_tokens : Array(Int32),
+                             proposal_token_ids_by_canvas_row : Array(Array(Int32)),
+                             vocab_size : Int32) : Array(Array(Int32))
+      raise ArgumentError.new("proposal rows size mismatch") unless proposal_token_ids_by_canvas_row.size == canvas_tokens.size
+      validate_candidate_tokens!(canvas_tokens, vocab_size)
+
+      canvas_tokens.map_with_index do |token_id, row|
+        merged = proposal_token_ids_by_canvas_row[row].dup
+        validate_candidate_tokens!(merged, vocab_size)
+        merged << token_id
+        merged.uniq!
+        merged.sort!
+        merged
+      end
+    end
+
+    def current_token_candidate_steps(canvas_tokens : Array(Int32),
+                                      vocab_size : Int32,
+                                      steps : Int32) : Array(Array(Array(Int32)))
+      raise ArgumentError.new("candidate steps must be positive") unless steps > 0
+      rows = current_token_candidate_rows(canvas_tokens, vocab_size)
+      Array(Array(Array(Int32))).new(steps) { rows.map(&.dup) }
+    end
+
+    def merge_candidate_steps(canvas_tokens : Array(Int32),
+                              proposal_token_ids_by_step_by_canvas_row : Array(Array(Array(Int32))),
+                              vocab_size : Int32) : Array(Array(Array(Int32)))
+      raise ArgumentError.new("proposal steps must not be empty") if proposal_token_ids_by_step_by_canvas_row.empty?
+      proposal_token_ids_by_step_by_canvas_row.map do |proposal_rows|
+        merge_candidate_rows(canvas_tokens, proposal_rows, vocab_size)
+      end
+    end
+
     def decode_canvas_bounded_predictions(weights : DiffusionGemmaWeights,
                                           canvas_rows : Array(Float32),
                                           mask : DiffusionGemmaAttentionMask,
@@ -1112,6 +1151,13 @@ module ML::GGUF
       end
       raw_logits.each do |logit|
         raise ArgumentError.new("candidate logits must be finite") unless logit.finite?
+      end
+    end
+
+    private def validate_candidate_tokens!(token_ids : Array(Int32), vocab_size : Int32) : Nil
+      raise ArgumentError.new("candidate vocab_size must be positive") unless vocab_size > 0
+      token_ids.each do |token_id|
+        raise ArgumentError.new("candidate token id out of range") if token_id < 0 || token_id >= vocab_size
       end
     end
 
