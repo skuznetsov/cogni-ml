@@ -153,4 +153,5 @@ Continue the default-off runtime adapter:
 4. Use the implemented hidden/head split to avoid full-head logits when routing to CPU selected rows.
 5. Behind the V3D gate, replace CPU row-dot with resident indexed Q6 head.
 6. Replace synthetic probe hidden rows with product decode hidden rows for grouped constrained steps.
+7. Use `QWEN35_CONSTRAINT_FRONTIER_TRACE=1` on short structured smokes to capture the real runtime allowed-head frontier rows that an RPi5 adapter should group.
 6. Verify exact generated token parity on constrained tool-call smokes.

@@ -157,6 +157,7 @@ constrained_tool_call_prefix_enabled = ENV["QWEN35_CONSTRAINED_TOOL_CALL_PREFIX"
 structured_constraint_enabled = (constrained_literal_prefix && !constrained_literal_prefix.not_nil!.empty?) || constrained_tool_call_prefix_enabled
 constrained_force_single_literal = ENV["QWEN35_CONSTRAINED_FORCE_SINGLE"]? == "1"
 constrained_force_literal_span = ENV["QWEN35_CONSTRAINED_FORCE_SPAN_OFF"]? != "1"
+constraint_frontier_trace_enabled = ENV["QWEN35_CONSTRAINT_FRONTIER_TRACE"]? == "1"
 
 raise "QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN must be non-negative" unless prompt_cache_full_hit_min_gen >= 0
 raise "QWEN35_PROMPT_CACHE_ARTIFACT_CODEC_BLOCK must be positive" unless prompt_cache_artifact_codec_block > 0
@@ -332,6 +333,21 @@ def forced_literal_span(token_index : ML::GGUF::Qwen35Constraints::TokenTextInde
   end
 
   {ids, pieces, cursor}
+end
+
+def emit_constraint_frontier_trace(enabled : Bool,
+                                   token_index : ML::GGUF::Qwen35Constraints::TokenTextIndex,
+                                   stage : String,
+                                   pos : Int32,
+                                   remaining : Array(String)) : Int32
+  return 0 unless enabled
+  return 0 if literal_constraint_complete?(remaining)
+
+  allowed = ML::GGUF::Qwen35Constraints.literal_frontier_ids(token_index, remaining).sort
+  return 0 if allowed.empty?
+
+  STDOUT << "  constraint frontier trace: stage=#{stage} pos=#{pos} allowed=#{allowed.size} ids_csv=#{allowed.join(",")}\n"
+  allowed.size
 end
 
 def advance_tool_literal_stage(stage : String,
@@ -811,6 +827,7 @@ tool_parameter_index = 0
 tool_literal_stage_counts = Hash(String, Int32).new(0)
 tool_freeform_value_steps = 0
 tool_value_boundary_hits = 0
+constraint_frontier_trace_steps = 0
 unless literal_remaining.empty?
   label = constrained_tool_call_prefix_enabled ? "tool-call prefix options=#{literal_remaining.size}" : constrained_literal_prefix.not_nil!.inspect
   STDOUT << "Constrained literal prefix enabled: #{label}\n"
@@ -1003,6 +1020,8 @@ if output_ids.empty?
       end
     else
       constrained_stage = tool_literal_stage
+      constraint_frontier_trace_steps += 1 if emit_constraint_frontier_trace(
+        constraint_frontier_trace_enabled, constraint_token_index.not_nil!, constrained_stage, pos, literal_remaining) > 0
       top, top_logit, literal_remaining, emitted_piece, constrained, forced_single = advance_next_maybe_literal_constrained(
         w, tok, constraint_token_index.not_nil!, final_id, pos, state, literal_remaining, constrained_force_single_literal)
       constrained_generated = constrained
@@ -1821,6 +1840,8 @@ else
       top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, prev, pos, state)
     else
       constrained_stage = tool_literal_stage
+      constraint_frontier_trace_steps += 1 if emit_constraint_frontier_trace(
+        constraint_frontier_trace_enabled, constraint_token_index.not_nil!, constrained_stage, pos, literal_remaining) > 0
       top, top_logit, literal_remaining, emitted_piece, constrained, forced_single = advance_next_maybe_literal_constrained(
         w, tok, constraint_token_index.not_nil!, prev, pos, state, literal_remaining, constrained_force_single_literal)
       constrained_generated = constrained
@@ -1932,7 +1953,7 @@ if constrained_tool_call_prefix_enabled
   stage_steps = tool_literal_stage_counts.to_a.sort_by { |entry| entry[0] }.map { |stage, count| "#{stage}:#{count}" }.join(",")
   stage_steps = "none" if stage_steps.empty?
   finite_value_params = tool_value_options_by_parameter.size
-  STDOUT << "  tool constraint summary: final_stage=#{tool_literal_stage} stage_steps=#{stage_steps} forced_single_steps=#{literal_forced_single_steps} forced_span_steps=#{literal_forced_span_steps} freeform_value_steps=#{tool_freeform_value_steps} value_boundary_hits=#{tool_value_boundary_hits} finite_value_params=#{finite_value_params}\n"
+  STDOUT << "  tool constraint summary: final_stage=#{tool_literal_stage} stage_steps=#{stage_steps} forced_single_steps=#{literal_forced_single_steps} forced_span_steps=#{literal_forced_span_steps} freeform_value_steps=#{tool_freeform_value_steps} value_boundary_hits=#{tool_value_boundary_hits} finite_value_params=#{finite_value_params} frontier_trace_steps=#{constraint_frontier_trace_steps}\n"
 end
 STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{model_load_ms.round(1)} draft_load_ms=#{draft_load_ms.round(1)} tokenize_ms=#{tokenize_ms.round(1)} token_cache_hit=#{token_cache_hit} cache_route=#{cache_route} state_prepare_ms=#{state_prepare_ms.round(1)} source_history_lookup_ms=#{source_history_lookup_ms.round(1)} cache_restore_ms=#{cache_restore_ms.round(1)} prefill_ms=#{prefill_ms.round(1)} decode_ms=#{decode_ms.round(1)} source_history_save_ms=#{source_history_save_ms.round(1)} prompt_tokens=#{ids.size} output_tokens=#{output_ids.size}\n"
 
