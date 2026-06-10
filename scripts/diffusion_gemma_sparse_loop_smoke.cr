@@ -182,6 +182,8 @@ candidate_sets.each do |candidate_ids|
   loop_ms_min = loop_samples.min
   loop_ms_median = median(loop_samples)
   loop_ms_max = loop_samples.max
+  loop_candidate_tokens_per_ms = loop_ms_median > 0.0 ? summary.total_candidate_tokens.to_f64 / loop_ms_median : 0.0
+  loop_predictions_per_ms = loop_ms_median > 0.0 ? summary.prediction_count.to_f64 / loop_ms_median : 0.0
 
   result_rows << [
     {"status", "ok"},
@@ -213,6 +215,8 @@ candidate_sets.each do |candidate_ids|
     {"loop_ms_median", loop_ms_median.round(3).to_s},
     {"loop_ms_max", loop_ms_max.round(3).to_s},
     {"loop_ms_samples", loop_samples.map { |v| v.round(3) }.join(",")},
+    {"loop_candidate_tokens_per_ms", loop_candidate_tokens_per_ms.round(6).to_s},
+    {"loop_predictions_per_ms", loop_predictions_per_ms.round(6).to_s},
   ]
 end
 

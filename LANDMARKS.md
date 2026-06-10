@@ -295,6 +295,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - `scripts/diffusion_gemma_sparse_loop_smoke.cr` now supports `--warmups N`, running sparse-loop warmups before measured repeats while keeping warmup timings out of `loop_ms_samples`. TSV/key-value output includes `warmups`.
 - Verification: no-codegen build passed; wrapper syntax passed; invalid `--warmups -1` fails closed; `scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_smoke.sh 300 6000 --candidate-counts 1,4 --steps 1 --warmups 1 --repeats 2 --format tsv` exited 0. An awk guard verified two rows, `warmups=1`, `repeats=2`, and exactly two measured `loop_ms_samples` per row.
 - Boundary: warmups improve repeat timing hygiene for the native token-id sparse-loop smoke, but they do not provide quiet-host benchmark evidence or change sparse-loop semantics.
+**update 2026-06-10be:**
+- Sparse-loop smoke output now includes derived normalized throughput fields: `loop_candidate_tokens_per_ms` and `loop_predictions_per_ms`, computed from the median measured loop time and the loop summary work counts.
+- Verification: no-codegen build passed; wrapper syntax passed; `scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_smoke.sh 300 6000 --candidate-counts 1,4 --steps 1 --warmups 1 --repeats 2 --format tsv` exited 0. An awk guard verified both derived fields are positive and the width-4 candidate-token throughput exceeds width-1 throughput under the same one-row smoke.
+- Boundary: these are normalized smoke metrics for sparse work accounting, not quiet-host benchmark evidence or a semantic candidate-quality claim.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified
