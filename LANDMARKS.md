@@ -279,6 +279,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - `scripts/diffusion_gemma_sparse_loop_smoke.cr` now supports `--candidate-count N`, generating a reproducible sparse candidate set starting at the current canvas token and wrapping within the vocab. It is mutually exclusive with explicit `--candidate-ids`.
 - Verification: no-codegen build passed; wrapper syntax passed; `--candidate-ids 0,1 --candidate-count 2` fails closed; `scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_smoke.sh 240 6000 --steps 1 --candidate-count 4 --repeats 2 --format tsv` exited 0 and emitted `candidate_ids=0,1,2,3`, `max_candidate_tokens=4`, and `mean_candidate_tokens=4.0`. An awk guard verified those TSV fields.
 - Boundary: this is candidate-width control for sparse-loop measurement. It does not discover high-probability candidates, run a full-vocabulary head, or prove a wider sparse support is semantically sufficient.
+**update 2026-06-10ba:**
+- Added `scripts/diffusion_gemma_sparse_loop_candidate_sweep.sh`, which builds the native sparse-loop smoke binary once, runs it over `COUNTS` candidate widths, and stitches stable TSV output with one header and one row per width.
+- Verification: shell syntax passed; no-codegen build passed; `COUNTS='1 4' scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_candidate_sweep.sh 300 6000 --steps 1 --repeats 1` exited 0. An awk guard verified exactly two data rows, matching field counts, `mean_candidate_tokens=1.0/4.0`, and `candidate_ids=0` / `0,1,2,3`.
+- Boundary: this is a candidate-width sweep harness. Each width still runs in a separate process and reloads the GGUF, so compare `loop_ms`/candidate metrics, not total process wall, and do not treat this as quiet-host benchmark evidence.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified
