@@ -101,6 +101,45 @@ describe ML::GGUF::Qwen35Rpi5AllowedHeadClient do
     end
   end
 
+  it "wraps a single resident transport request as an optional top1 tuple" do
+    seen_request = nil
+    transport = ML::GGUF::Qwen35Rpi5AllowedHeadClient::Transport.new do |request|
+      seen_request = request
+      "resident_stdin_result\trequest=0\tallowed=2\tgpu_ms=0.1\tcpu_ms=0.2\tspeedup=2.0x\tmax_abs_diff=0\ttop1_match=true\tgpu_top1_src=7\tcpu_top1_src=7\tgpu_top1_logit=4.5\tcpu_top1_logit=4.5\n"
+    end
+
+    result = ML::GGUF::Qwen35Rpi5AllowedHeadClient.top1_allowed?(
+      [1.0_f32, 2.0_f32],
+      [3_i32, 7_i32],
+      vocab_rows: 10,
+      transport: transport,
+    )
+
+    result.should eq({7_i32, 4.5_f32})
+    seen_request.not_nil!.hidden.should eq([1.0_f32, 2.0_f32])
+    seen_request.not_nil!.allowed_ids.should eq([3_i32, 7_i32])
+  end
+
+  it "returns nil instead of promoting invalid resident transport rows" do
+    missing_transport = ML::GGUF::Qwen35Rpi5AllowedHeadClient.top1_allowed?(
+      [1.0_f32],
+      [1_i32],
+      vocab_rows: 10,
+    )
+    missing_transport.should be_nil
+
+    bad_transport = ML::GGUF::Qwen35Rpi5AllowedHeadClient::Transport.new do |_request|
+      "resident_stdin_result\trequest=0\tallowed=1\tgpu_ms=0.1\tcpu_ms=0.2\tspeedup=2.0x\tmax_abs_diff=0\ttop1_match=true\tgpu_top1_src=9\tcpu_top1_src=9\tgpu_top1_logit=4.5\tcpu_top1_logit=4.5\n"
+    end
+    bad = ML::GGUF::Qwen35Rpi5AllowedHeadClient.top1_allowed?(
+      [1.0_f32],
+      [1_i32],
+      vocab_rows: 10,
+      transport: bad_transport,
+    )
+    bad.should be_nil
+  end
+
   it "exports capture replay batches as resident stdin frames" do
     with_frame_tmp do |dir|
       f32_path = File.join(dir, "x.f32")

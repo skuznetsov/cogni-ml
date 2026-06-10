@@ -9,6 +9,8 @@ module ML::GGUF
       hidden : Array(Float32),
       allowed_ids : Array(Int32)
 
+    alias Transport = Request -> String
+
     record Result,
       request : Int32,
       allowed : Int32,
@@ -95,6 +97,22 @@ module ML::GGUF
         end
       end
       results
+    end
+
+    def top1_allowed?(hidden : Array(Float32),
+                      allowed_ids : Array(Int32),
+                      vocab_rows : Int32? = nil,
+                      transport : Transport? = nil) : {Int32, Float32}?
+      return nil unless transport
+
+      validate_allowed_ids(allowed_ids, vocab_rows)
+      output = transport.call(Request.new(hidden, allowed_ids))
+      results = parse_results(output)
+      return nil unless results.size == 1
+
+      results[0].top1_tuple!(allowed_ids)
+    rescue
+      nil
     end
 
     private def validate_allowed_ids(allowed_ids : Array(Int32),
