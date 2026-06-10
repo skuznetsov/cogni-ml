@@ -82,6 +82,8 @@ Use `scripts/rpi5_q6_allowed_head_regression.sh` as the default local pre-adapte
 
 Use `scripts/rpi5_q6_transport_budget.sh CAPTURE.jsonl 4` to measure the current non-product transport envelope around the remote Pi probe. This separates the resident-kernel opportunity from SSH/process/Vulkan setup and prepack-load tax, and prints a `resident_budget_result` row that includes mapped hidden/row-id upload before each resident submit.
 
+Use `scripts/rpi5_q6_resident_budget_gate.sh CAPTURE.jsonl 4` as a fail-closed resident-budget gate. It requires resident upload request speedup over CPU selected-row fallback, bounded `max_abs_diff`, and clean throttle state.
+
 Actual row-id probe:
 
 - `tool_call_prefix:start`, ids `27,60638,248058`: `0.174ms`, top1 matched CPU.
@@ -105,6 +107,7 @@ Actual row-id probe:
 - End-to-end capture smoke wrapper check with `RAW_OUTPUT=0 REPEATS=30 RPI5_WARMUPS=3 scripts/rpi5_q6_capture_smoke.sh` produced a fresh 2B structured capture (`31` trace rows, `31` capture rows), preserved parsed `edit_mode(mode=safe,dry_run=true)`, then replayed on Pi. Results: all rows `gpu_ms=3.520`, `cpu_ms=4.250`, `speedup=1.207x`; filtered rows `gpu_ms=1.845`, `cpu_ms=3.233`, `speedup=1.753x`; hybrid estimate `2.862ms` vs all-CPU `4.250ms` (`1.485x`), `throttled=0x0`.
 - Full regression gate with `FULL_REPLAY=1 RAW_OUTPUT=0 REPEATS=30 RPI5_WARMUPS=3 scripts/rpi5_q6_allowed_head_regression.sh` passed marker checks, produced a fresh 2B capture (`31` trace rows, `31` capture rows), and replayed on Pi. Results: all rows `gpu_ms=3.517`, `cpu_ms=4.220`, `speedup=1.200x`; filtered rows `gpu_ms=1.844`, `cpu_ms=3.227`, `speedup=1.750x`; hybrid estimate `2.837ms` vs all-CPU `4.220ms` (`1.487x`), `throttled=0x0`.
 - Transport budget check with `RAW_OUTPUT=0 REPEATS=30 RPI5_WARMUPS=3 scripts/rpi5_q6_transport_budget.sh /tmp/qwen35_2b_allowed_head_capture_20260609_223005.jsonl 4` replayed the filtered `16` real-hidden rows with `gpu_ms=1.844`, `cpu_ms=3.332`, `speedup=1.807x`, and `max_abs_diff=8.58307e-06`, but the current remote probe envelope measured `remote_wall_ms=656.856`, including `prepack_load_ms=127.827` and estimated setup overhead `464.845ms` (`252.1x` one averaged GPU dispatch). The same run emitted `resident_budget_result` with `resident_kernel_ms=1.844`, `resident_upload_request_ms=1.854`, `resident_upload_request_ms_per_row=0.115875`, `cpu_selected_ms_per_row=0.208250`, and `upload_request_speedup=1.797x`. This is a falsifier for SSH/process-per-call product routing and a target for the resident adapter: mapped hidden/row-id upload is not the dominant remaining tax.
+- Resident budget gate with `REPEATS=30 RPI5_WARMUPS=3 scripts/rpi5_q6_resident_budget_gate.sh /tmp/qwen35_2b_allowed_head_capture_20260609_223005.jsonl 4` passed with `upload_request_speedup=1.792`, `max_abs_diff=8.58307e-06`, threshold `MIN_UPLOAD_SPEEDUP=1.25`, and `throttled=0x0`.
 
 ## Route Policy
 
