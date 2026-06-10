@@ -979,6 +979,72 @@ module ML::GGUF
       BoundedDenoiseLoopResult.new(tokens, rows, updates, stable_counts, updates.size, converged)
     end
 
+    def decode_canvas_adaptive_bounded_loop(weights : DiffusionGemmaWeights,
+                                            canvas_tokens : Array(Int32),
+                                            canvas_rows : Array(Float32),
+                                            mask : DiffusionGemmaAttentionMask,
+                                            prompt_cache : PromptLayerCache,
+                                            initial_candidate_token_ids_by_canvas_row : Array(Array(Int32)),
+                                            entropy_bound : Float32,
+                                            stability_threshold : Int32,
+                                            max_steps : Int32,
+                                            proposal_top_k : Int32,
+                                            max_layers : Int32 = prompt_cache.layers,
+                                            temp_inv : Float32 = 1.0_f32,
+                                            sample_us_by_step_by_canvas_row : Array(Array(Float32))? = nil,
+                                            routes_by_layer_by_canvas_row : Array(Array(Array(ExpertRoute)))? = nil,
+                                            use_sampled_token : Bool = true,
+                                            use_sparse_self_conditioning : Bool = false,
+                                            sc_temp_inv : Float32 = 1.0_f32,
+                                            sc_use : Float32 = 1.0_f32) : BoundedDenoiseLoopResult
+      raise ArgumentError.new("max_steps must be positive") unless max_steps > 0
+      raise ArgumentError.new("proposal_top_k must be positive") unless proposal_top_k > 0
+      if supplied_sample_us = sample_us_by_step_by_canvas_row
+        raise ArgumentError.new("sample_us step count mismatch") unless supplied_sample_us.size == max_steps
+      end
+
+      tokens = canvas_tokens.dup
+      rows = canvas_rows.dup
+      candidate_rows = initial_candidate_token_ids_by_canvas_row
+      stable_counts = Array(Int32).new(canvas_tokens.size, 0)
+      updates = [] of BoundedCanvasUpdate
+      converged = false
+
+      max_steps.times do |step|
+        sample_us = sample_us_by_step_by_canvas_row ? sample_us_by_step_by_canvas_row.not_nil![step] : nil
+        update = decode_canvas_bounded_step(
+          weights: weights,
+          canvas_tokens: tokens,
+          canvas_rows: rows,
+          mask: mask,
+          prompt_cache: prompt_cache,
+          candidate_token_ids_by_canvas_row: candidate_rows,
+          entropy_bound: entropy_bound,
+          max_layers: max_layers,
+          temp_inv: temp_inv,
+          sample_us: sample_us,
+          routes_by_layer_by_canvas_row: routes_by_layer_by_canvas_row,
+          use_sampled_token: use_sampled_token,
+        )
+        stable_counts = advance_stability_counts(tokens, update.updated_canvas_tokens, update.accepted, stable_counts)
+        tokens = update.updated_canvas_tokens
+        if use_sparse_self_conditioning
+          rows = canvas_rows_from_prediction_self_conditioning(weights, tokens, update.predictions, sc_temp_inv, sc_use)
+          update = BoundedCanvasUpdate.new(update.updated_canvas_tokens, update.accepted, update.predictions, rows)
+        else
+          rows = update.updated_canvas_rows || rows
+        end
+        updates << update
+        if stable_counts.all? { |count| count >= stability_threshold }
+          converged = true
+          break
+        end
+        candidate_rows = next_candidate_rows_from_predictions(tokens, update.predictions, weights.hparams.vocab_size, proposal_top_k)
+      end
+
+      BoundedDenoiseLoopResult.new(tokens, rows, updates, stable_counts, updates.size, converged)
+    end
+
     def apply_entropy_bound_prediction_steps(canvas_tokens : Array(Int32),
                                              predictions_by_step : Array(Array(BoundedDenoisePrediction)),
                                              entropy_bound : Float32,

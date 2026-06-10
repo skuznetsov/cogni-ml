@@ -691,6 +691,25 @@ describe ML::GGUF::DiffusionGemmaCPU do
     loop.final_canvas_tokens.should eq([0])
     loop.final_canvas_rows.not_nil![0, hp.n_embd].should eq(ML::GGUF::DiffusionGemmaCPU.zero_sc_canvas_embedding(w, 0))
 
+    adaptive = ML::GGUF::DiffusionGemmaCPU.decode_canvas_adaptive_bounded_loop(
+      w,
+      [0],
+      canvas_row,
+      mask,
+      prompt_cache,
+      ML::GGUF::DiffusionGemmaCPU.current_token_candidate_rows([0], hp.vocab_size),
+      entropy_bound: 0.0_f32,
+      stability_threshold: 1,
+      max_steps: 1,
+      proposal_top_k: 1,
+      max_layers: 1,
+      routes_by_layer_by_canvas_row: [[canvas_route]],
+    )
+    adaptive.steps_run.should eq(1)
+    adaptive.converged.should be_true
+    adaptive.final_canvas_tokens.should eq(loop.final_canvas_tokens)
+    adaptive.final_canvas_rows.not_nil!.should eq(loop.final_canvas_rows.not_nil!)
+
     sc_loop = ML::GGUF::DiffusionGemmaCPU.decode_canvas_bounded_loop(
       w,
       [0],
@@ -717,6 +736,15 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
     expect_raises(ArgumentError, /canvas token count/) do
       ML::GGUF::DiffusionGemmaCPU.decode_canvas_bounded_step(w, [] of Int32, canvas_row, mask, prompt_cache, candidate_rows, entropy_bound: 0.0_f32, max_layers: 1)
+    end
+    expect_raises(ArgumentError, /max_steps/) do
+      ML::GGUF::DiffusionGemmaCPU.decode_canvas_adaptive_bounded_loop(w, [0], canvas_row, mask, prompt_cache, candidate_rows, entropy_bound: 0.0_f32, stability_threshold: 1, max_steps: 0, proposal_top_k: 1, max_layers: 1)
+    end
+    expect_raises(ArgumentError, /proposal_top_k/) do
+      ML::GGUF::DiffusionGemmaCPU.decode_canvas_adaptive_bounded_loop(w, [0], canvas_row, mask, prompt_cache, candidate_rows, entropy_bound: 0.0_f32, stability_threshold: 1, max_steps: 1, proposal_top_k: 0, max_layers: 1)
+    end
+    expect_raises(ArgumentError, /sample_us step/) do
+      ML::GGUF::DiffusionGemmaCPU.decode_canvas_adaptive_bounded_loop(w, [0], canvas_row, mask, prompt_cache, candidate_rows, entropy_bound: 0.0_f32, stability_threshold: 1, max_steps: 2, proposal_top_k: 1, max_layers: 1, sample_us_by_step_by_canvas_row: [[0.0_f32]])
     end
   end
 

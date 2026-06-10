@@ -242,6 +242,11 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Focused specs verify ranking/tie behavior, top-k cap behavior, proposal row extraction, next-row merge/sort semantics, repeated-step deep-copy safety, and fail-fast invalid top-k/empty/mismatched prediction inputs.
 - Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `29 examples, 0 failures`.
 - Boundary: this extracts proposals from already bounded sparse predictions. It still does not discover candidates outside the current sparse support or run a full-vocabulary proposal head.
+**update 2026-06-10as:**
+- Added `decode_canvas_adaptive_bounded_loop`, which starts from explicit initial sparse candidates, runs bounded canvas steps, and after each non-converged step builds the next candidate rows from the previous predictions' top-k probabilities plus the current canvas token.
+- Focused real-GGUF spec verifies the one-step adaptive loop converges identically to the current-token scheduled loop, and guard checks cover invalid `max_steps`, invalid `proposal_top_k`, and mismatched per-step sampling rows.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `29 examples, 0 failures`.
+- Boundary: adaptive scheduling only recycles sparse support from previous bounded predictions. It still cannot discover candidates that were not present in the initial/proposed sparse support.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified
