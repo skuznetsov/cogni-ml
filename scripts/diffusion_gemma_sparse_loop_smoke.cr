@@ -15,6 +15,7 @@ stability_threshold = 1
 seed = 7
 adaptive = true
 single_route = true
+format = "keyvalue"
 
 OptionParser.parse do |p|
   p.banner = "Usage: diffusion_gemma_sparse_loop_smoke [options]"
@@ -30,6 +31,7 @@ OptionParser.parse do |p|
   p.on("--seed N", "Deterministic sampling seed (default: 7)") { |v| seed = v.to_i }
   p.on("--fixed", "Use fixed candidate steps instead of adaptive proposals") { adaptive = false }
   p.on("--full-routes", "Use full top-k MoE routing instead of the single-route smoke shortcut") { single_route = false }
+  p.on("--format FORMAT", "Output format: keyvalue or tsv (default: keyvalue)") { |v| format = v.downcase }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -49,6 +51,7 @@ raise "--steps must be positive" unless steps > 0
 raise "--proposal-top-k must be positive" unless proposal_top_k > 0
 raise "--stability-threshold must be positive" unless stability_threshold > 0
 raise "--entropy-bound must be finite and non-negative" unless entropy_bound.finite? && entropy_bound >= 0.0_f32
+raise "--format must be keyvalue or tsv" unless {"keyvalue", "tsv"}.includes?(format)
 raise "single-route smoke currently supports --max-layers 1; pass --full-routes for deeper smoke" if single_route && max_layers != 1
 
 candidate_ids = parse_candidate_ids(candidate_ids_arg, canvas_token)
@@ -124,25 +127,41 @@ loop = if adaptive
 loop_ms = (Time.instant - loop_t0).total_milliseconds
 summary = loop.summary
 
-puts "diffusion_gemma_sparse_loop_smoke_result status=ok"
-puts "model=#{model}"
-puts "mode=#{adaptive ? "adaptive" : "fixed"}"
-puts "max_layers=#{max_layers}"
-puts "steps_budget=#{steps}"
-puts "steps_run=#{summary.steps_run}"
-puts "converged=#{summary.converged}"
-puts "stop_reason=#{summary.stop_reason}"
-puts "prompt_token=#{prompt_token}"
-puts "initial_canvas_token=#{canvas_token}"
-puts "final_canvas_token=#{loop.final_canvas_tokens[0]}"
-puts "candidate_ids=#{candidate_ids.join(",")}"
-puts "prediction_count=#{summary.prediction_count}"
-puts "accepted_count=#{summary.accepted_count}"
-puts "acceptance_rate=#{summary.acceptance_rate}"
-puts "total_candidate_tokens=#{summary.total_candidate_tokens}"
-puts "max_candidate_tokens=#{summary.max_candidate_tokens}"
-puts "mean_candidate_tokens=#{summary.mean_candidate_tokens}"
-puts "mean_entropy=#{summary.mean_entropy}"
-puts "load_ms=#{load_ms.round(3)}"
-puts "prompt_cache_ms=#{cache_ms.round(3)}"
-puts "loop_ms=#{loop_ms.round(3)}"
+rows = {
+  {"status", "ok"},
+  {"model", model},
+  {"mode", adaptive ? "adaptive" : "fixed"},
+  {"max_layers", max_layers.to_s},
+  {"steps_budget", steps.to_s},
+  {"steps_run", summary.steps_run.to_s},
+  {"converged", summary.converged.to_s},
+  {"stop_reason", summary.stop_reason},
+  {"prompt_token", prompt_token.to_s},
+  {"initial_canvas_token", canvas_token.to_s},
+  {"final_canvas_token", loop.final_canvas_tokens[0].to_s},
+  {"candidate_ids", candidate_ids.join(",")},
+  {"prediction_count", summary.prediction_count.to_s},
+  {"accepted_count", summary.accepted_count.to_s},
+  {"acceptance_rate", summary.acceptance_rate.to_s},
+  {"total_candidate_tokens", summary.total_candidate_tokens.to_s},
+  {"max_candidate_tokens", summary.max_candidate_tokens.to_s},
+  {"mean_candidate_tokens", summary.mean_candidate_tokens.to_s},
+  {"mean_entropy", summary.mean_entropy.to_s},
+  {"load_ms", load_ms.round(3).to_s},
+  {"prompt_cache_ms", cache_ms.round(3).to_s},
+  {"loop_ms", loop_ms.round(3).to_s},
+}
+
+case format
+when "keyvalue"
+  puts "diffusion_gemma_sparse_loop_smoke_result status=ok"
+  rows.each do |key, value|
+    next if key == "status"
+    puts "#{key}=#{value}"
+  end
+when "tsv"
+  puts rows.map(&.[0]).join('\t')
+  puts rows.map(&.[1]).join('\t')
+else
+  raise "unreachable output format: #{format}"
+end
