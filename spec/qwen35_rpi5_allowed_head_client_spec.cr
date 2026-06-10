@@ -41,7 +41,7 @@ describe ML::GGUF::Qwen35Rpi5AllowedHeadClient do
   end
 
   it "parses resident stdin result rows" do
-    line = "resident_stdin_result\trequest=1\tallowed=5\tgpu_ms=0.243\tcpu_ms=0.219\tspeedup=0.900x\tmax_abs_diff=2.38419e-06\ttop1_match=true\tgpu_top1_src=13042\tcpu_top1_src=13042"
+    line = "resident_stdin_result\trequest=1\tallowed=5\tgpu_ms=0.243\tcpu_ms=0.219\tspeedup=0.900x\tmax_abs_diff=2.38419e-06\ttop1_match=true\tgpu_top1_src=13042\tcpu_top1_src=13042\tgpu_top1_logit=1.25\tcpu_top1_logit=1.24999"
     result = ML::GGUF::Qwen35Rpi5AllowedHeadClient.parse_result_line?(line).not_nil!
 
     result.request.should eq(1)
@@ -53,6 +53,18 @@ describe ML::GGUF::Qwen35Rpi5AllowedHeadClient do
     result.top1_match.should be_true
     result.gpu_top1_src.should eq(13042)
     result.cpu_top1_src.should eq(13042)
+    result.gpu_top1_logit.should eq(1.25)
+    result.cpu_top1_logit.should eq(1.24999)
+  end
+
+  it "keeps old resident stdin result rows parseable while the remote probe rolls forward" do
+    line = "resident_stdin_result\trequest=1\tallowed=5\tgpu_ms=0.243\tcpu_ms=0.219\tspeedup=0.900x\tmax_abs_diff=2.38419e-06\ttop1_match=true\tgpu_top1_src=13042\tcpu_top1_src=13042"
+    result = ML::GGUF::Qwen35Rpi5AllowedHeadClient.parse_result_line?(line).not_nil!
+
+    result.gpu_top1_src.should eq(13042)
+    result.cpu_top1_src.should eq(13042)
+    result.gpu_top1_logit.should be_nil
+    result.cpu_top1_logit.should be_nil
   end
 
   it "ignores non-result lines and rejects malformed result rows" do

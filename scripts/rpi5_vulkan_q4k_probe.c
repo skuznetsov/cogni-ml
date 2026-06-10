@@ -1113,9 +1113,11 @@ int main(int argc, char **argv) {
       uint32_t cpu_pos = argmax_f32(cpu, count);
       uint32_t gpu_src = ids[gpu_pos];
       uint32_t cpu_src = ids[cpu_pos];
-      printf("resident_stdin_result\trequest=%u\tallowed=%u\tgpu_ms=%.3f\tcpu_ms=%.3f\tspeedup=%.3fx\tmax_abs_diff=%g\ttop1_match=%s\tgpu_top1_src=%u\tcpu_top1_src=%u\n",
+      float gpu_logit = ((const float *)yb.mapped)[gpu_pos];
+      float cpu_logit = cpu[cpu_pos];
+      printf("resident_stdin_result\trequest=%u\tallowed=%u\tgpu_ms=%.3f\tcpu_ms=%.3f\tspeedup=%.3fx\tmax_abs_diff=%g\ttop1_match=%s\tgpu_top1_src=%u\tcpu_top1_src=%u\tgpu_top1_logit=%g\tcpu_top1_logit=%g\n",
              request_index, count, request_ms, cpu_req_ms, cpu_req_ms / request_ms, d,
-             gpu_src == cpu_src ? "true" : "false", gpu_src, cpu_src);
+             gpu_src == cpu_src ? "true" : "false", gpu_src, cpu_src, gpu_logit, cpu_logit);
       fflush(stdout);
       request_index++;
     }

@@ -6,7 +6,8 @@ usage() {
 usage: scripts/rpi5_q6_resident_stdin_gate.sh CAPTURE.jsonl [MIN_ALLOWED]
 
 Runs the RPi5 Q6 resident stdin smoke and fails unless the binary stdin request
-protocol preserves top1 parity, diff bounds, and clean throttle state.
+protocol preserves top1 parity, logit fields, diff bounds, and clean throttle
+state.
 
 Environment:
   MAX_ABS_DIFF=0.0001  Maximum allowed CPU/GPU absolute diff.
@@ -55,8 +56,14 @@ awk -F '\t' -v max_abs_diff="$max_abs_diff" '
       seen++
       diff = field(lines[li], "max_abs_diff")
       top1_ok = field(lines[li], "top1_match")
-      if (diff == "" || top1_ok == "") {
+      gpu_logit = field(lines[li], "gpu_top1_logit")
+      cpu_logit = field(lines[li], "cpu_top1_logit")
+      if (diff == "" || top1_ok == "" || gpu_logit == "" || cpu_logit == "") {
         print "resident stdin row parse failed" > "/dev/stderr"
+        exit 1
+      }
+      if ((gpu_logit + 0.0) != gpu_logit || (cpu_logit + 0.0) != cpu_logit) {
+        print "resident stdin logit parse failed" > "/dev/stderr"
         exit 1
       }
       if ((diff + 0.0) > max_diff_seen) max_diff_seen = diff + 0.0

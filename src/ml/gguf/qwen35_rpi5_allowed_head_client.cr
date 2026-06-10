@@ -18,7 +18,9 @@ module ML::GGUF
       max_abs_diff : Float64,
       top1_match : Bool,
       gpu_top1_src : Int32,
-      cpu_top1_src : Int32
+      cpu_top1_src : Int32,
+      gpu_top1_logit : Float64?,
+      cpu_top1_logit : Float64?
 
     def write_binary_frame(io : IO,
                            hidden : Array(Float32),
@@ -66,6 +68,8 @@ module ML::GGUF
         bool_field(fields, "top1_match"),
         int_field(fields, "gpu_top1_src"),
         int_field(fields, "cpu_top1_src"),
+        optional_float_field(fields, "gpu_top1_logit"),
+        optional_float_field(fields, "cpu_top1_logit"),
       )
     end
 
@@ -97,6 +101,13 @@ module ML::GGUF
 
     private def float_field(fields : Hash(String, String), key : String) : Float64
       raw = required_field(fields, key)
+      raw.to_f64? || raise ArgumentError.new("resident stdin field #{key} is not a float: #{raw}")
+    end
+
+    private def optional_float_field(fields : Hash(String, String), key : String) : Float64?
+      raw = fields[key]?
+      return nil unless raw
+
       raw.to_f64? || raise ArgumentError.new("resident stdin field #{key} is not a float: #{raw}")
     end
 
