@@ -120,6 +120,21 @@ Sort allowed token ids for medium/broad finite sets. Sorting was neutral at `102
 
 Runtime smoke on Qwen3.5-2B Q4_K_M with `QWEN35_CONSTRAINED_TOOL_CALL_PREFIX=1`, `QWEN35_ALLOWED_HEAD_CPU_MAX=7`, and `QWEN35_METAL_PROFILE=1` produced a valid parsed `edit_mode(mode=safe,dry_run=true)` tool call. Profile route markers showed `allowed_head.cpu_selected_metal_hidden=28` for tiny frontiers and `allowed_head.metal_q6=2` for finite value frontiers; the Q6 allowed-head matmul shapes were `head_top1_allowed8` and `head_top1_allowed13`.
 
+## Stateful Boundary
+
+Constrained decode is causal and state-mutating: each `forward_top1_allowed` consumes the previous token, mutates KV/DeltaNet state, and only then reveals the next hidden row. A product V3D adapter must therefore treat the normal greedy path as a per-step resident call, not as a blind batch of future constrained decisions.
+
+Legal batching frames:
+
+- Offline replay from captured hidden rows, as implemented by `QWEN35_ALLOWED_HEAD_CAPTURE_PATH` plus `scripts/rpi5_q6_capture_replay.sh`.
+- Independent requests or externally supplied hidden rows where state mutation has already happened.
+- A future speculative corridor that checkpoints state, computes proposal hidden rows, verifies exact accepted tokens, and rolls back on rejection.
+
+Illegal promotion:
+
+- Grouping future constrained decode steps before their predecessor token is known.
+- Treating replay-batch speedup as end-to-end decode speedup without transport, state, and rollback accounting.
+
 ## Product Boundary
 
 Inputs:
@@ -171,7 +186,7 @@ Continue the default-off runtime adapter:
 2. For literal/tool states, compute `allowed_token_ids`.
 3. Apply the route policy threshold (`QWEN35_ALLOWED_HEAD_CPU_MAX=12` for conservative unbatched Pi resident-Q6 experiments; lower only when accepting near-boundary routes or after fresh calibration).
 4. Use the implemented hidden/head split to avoid full-head logits when routing to CPU selected rows.
-5. Behind the V3D gate, replace CPU row-dot with resident indexed Q6 head.
-6. Replace synthetic probe hidden rows with product decode hidden rows for grouped constrained steps.
-7. Use `QWEN35_CONSTRAINT_FRONTIER_TRACE=1` on short structured smokes to capture the real runtime allowed-head frontier rows that an RPi5 adapter should group.
-6. Verify exact generated token parity on constrained tool-call smokes.
+5. Behind the V3D gate, replace CPU row-dot with a per-step resident indexed Q6 head call.
+6. Keep CPU selected-row fallback for `allowed <= QWEN35_ALLOWED_HEAD_CPU_MAX`, missing V3D runtime, transport errors, and kill-switch activation.
+7. Verify exact generated token parity on constrained tool-call smokes.
+8. Only introduce multi-row batching under an explicit replay/independent-request/speculative-corridor frame.
