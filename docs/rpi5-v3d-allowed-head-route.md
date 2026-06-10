@@ -88,6 +88,8 @@ Use `scripts/rpi5_q6_resident_stream_bench.sh CAPTURE.jsonl 4` to replay capture
 
 Use `scripts/rpi5_q6_resident_stream_gate.sh CAPTURE.jsonl 4` as a fail-closed resident stream gate. It requires per-step resident stream speedup over CPU selected-row fallback, bounded `max_abs_diff`, zero top1 mismatches, clean throttle state, and at least `MIN_REPEATS=10` timing repeats by default.
 
+Use `scripts/rpi5_q6_resident_stdin_smoke.sh CAPTURE.jsonl 4` to test the daemon-like stdin request boundary. The C probe keeps Vulkan/prepack resident, then accepts one `hidden.f32<TAB>ids_csv` request per line and returns `resident_stdin_result` rows.
+
 Actual row-id probe:
 
 - `tool_call_prefix:start`, ids `27,60638,248058`: `0.174ms`, top1 matched CPU.
@@ -117,6 +119,7 @@ Actual row-id probe:
 - Full regression gate now also runs the resident stream gate when `FULL_REPLAY=1`. Smoke `FULL_REPLAY=1 RAW_OUTPUT=0 REPEATS=5 RPI5_WARMUPS=2 scripts/rpi5_q6_allowed_head_regression.sh` preserved marker smokes and parsed `edit_mode(mode=safe,dry_run=true)`, produced a fresh `31` row capture, replayed filtered rows at `gpu_ms=1.844`, `cpu_ms=3.255`, passed resident budget gate with `upload_request_speedup=1.745`, then passed resident stream gate with `stream_speedup=1.342`, `max_abs_diff=8.58307e-06`, `top1_mismatches=0`, and `throttled=0x0`.
 - Remote temp cleanup is fail-safe for the capture replay and resident stream wrappers. The capture replay wrapper now removes remote `.f32` artifacts even if the probe exits non-zero, and resident stream uses a remote `EXIT` trap. Adversary check: after short replay and one fail-closed `REPEATS=2` stream gate attempt, `ssh raspberrypi.local 'ls ~/cogni-ml-vulkan-probe/rpi5_resident_stream_*.f32 ~/cogni-ml-vulkan-probe/rpi5_allowed_head_*.f32 2>/dev/null || true'` printed no files.
 - Resident stream timing gate now rejects undersampled runs before contacting the Pi: `REPEATS=2 scripts/rpi5_q6_resident_stream_gate.sh ...` exits `2` with `REPEATS=2 below resident stream gate minimum 10`. The normal `REPEATS=30` gate still passes on the same capture with `stream_speedup=1.326`, `max_abs_diff=8.58307e-06`, `top1_mismatches=0`, and `throttled=0x0`.
+- Resident stdin smoke with `MAX_ROWS=2 RPI5_WARMUPS=3 scripts/rpi5_q6_resident_stdin_smoke.sh /tmp/qwen35_2b_allowed_head_capture_20260609_223005.jsonl 4` sent two independent hidden/frontier requests through one resident probe process. It emitted `resident_stdin_result` rows with `top1_match=true`, `max_abs_diff<=2.86102e-06`, warmed request times `0.167ms/0.174ms`, and `throttled=0x0`; remote temp cleanup was empty. Boundary: this is a daemon-protocol proof using request file paths over stdin, not the final product IPC or Crystal runtime adapter.
 
 ## Route Policy
 

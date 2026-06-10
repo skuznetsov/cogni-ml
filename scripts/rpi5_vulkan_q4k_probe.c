@@ -713,6 +713,11 @@ static uint32_t argmax_f32(const float *v, uint32_t n) {
   return best;
 }
 
+static void chomp(char *s) {
+  size_t n = strlen(s);
+  while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r')) s[--n] = '\0';
+}
+
 int main(int argc, char **argv) {
   const char *spv_path = argc > 1 ? argv[1] : "rpi5_q4k_matvec.spv";
   int file_mode = argc > 2 && strcmp(argv[2], "file") == 0;
@@ -1064,6 +1069,53 @@ int main(int argc, char **argv) {
     VK_CHECK(vkQueueWaitIdle(queue));
   }
 
+  uint32_t resident_stdin = env_u32("RPI5_RESIDENT_STDIN", 0u);
+  if (resident_stdin) {
+    if (!q6_idx_mode || batch != 1u) die("resident stdin requires q6idx mode with RPI5_BATCH=1");
+    char line[65536];
+    uint32_t request_index = 0u;
+    while (fgets(line, sizeof(line), stdin)) {
+      chomp(line);
+      if (line[0] == '\0') continue;
+      char *ids_csv = strchr(line, '\t');
+      if (!ids_csv) die("resident stdin expects hidden_f32_path<TAB>ids_csv");
+      *ids_csv++ = '\0';
+      if (line[0] == '\0' || ids_csv[0] == '\0') die("resident stdin empty path or ids");
+
+      read_file_exact(line, xb.mapped, x_bytes);
+      uint32_t count = 0u;
+      parse_row_ids_group(ids_csv, (uint32_t *)rowidb.mapped, &count, out_dim, src_out_dim);
+      uint32_t *meta = (uint32_t *)rowmetab.mapped;
+      meta[0] = 0u;
+      meta[1] = count;
+      uint32_t *ids = (uint32_t *)rowidb.mapped;
+      for (uint32_t i = count; i < out_dim; i++) ids[i] = 0u;
+
+      memset(yb.mapped, 0, y_bytes);
+      double rt0 = now_ms();
+      VK_CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
+      VK_CHECK(vkQueueWaitIdle(queue));
+      double request_ms = now_ms() - rt0;
+
+      double ct0 = now_ms();
+      cpu_q6_prepacked_indexed_meta(cpu, (const uint8_t *)wb.mapped, (const float *)xb.mapped,
+                                    (const uint32_t *)rowidb.mapped, (const uint32_t *)rowmetab.mapped,
+                                    1u, out_dim, in_dim);
+      double cpu_req_ms = now_ms() - ct0;
+      float d = max_abs_diff(cpu, (const float *)yb.mapped, out_dim);
+      uint32_t gpu_pos = argmax_f32((const float *)yb.mapped, count);
+      uint32_t cpu_pos = argmax_f32(cpu, count);
+      uint32_t gpu_src = ids[gpu_pos];
+      uint32_t cpu_src = ids[cpu_pos];
+      printf("resident_stdin_result\trequest=%u\tallowed=%u\tgpu_ms=%.3f\tcpu_ms=%.3f\tspeedup=%.3fx\tmax_abs_diff=%g\ttop1_match=%s\tgpu_top1_src=%u\tcpu_top1_src=%u\n",
+             request_index, count, request_ms, cpu_req_ms, cpu_req_ms / request_ms, d,
+             gpu_src == cpu_src ? "true" : "false", gpu_src, cpu_src);
+      fflush(stdout);
+      request_index++;
+    }
+    goto cleanup;
+  }
+
   double gpu_total = 0.0;
   for (uint32_t r = 0; r < repeats; r++) {
     memset(yb.mapped, 0, y_bytes);
@@ -1249,6 +1301,7 @@ int main(int argc, char **argv) {
   }
 #endif
 
+cleanup:
   free(x_shadow);
   free(rowid_shadow);
   free(rowmeta_shadow);
