@@ -6,8 +6,8 @@ usage() {
 usage: scripts/rpi5_q6_resident_stdin_smoke.sh CAPTURE.jsonl [MIN_ALLOWED]
 
 Runs a small stdin-driven resident probe smoke on the Raspberry Pi 5. The probe
-keeps Vulkan objects and the prepacked Q6 head alive, then handles one
-hidden-vector + row-id frontier per stdin line.
+keeps Vulkan objects and the prepacked Q6 head alive, then handles binary
+hidden-vector + row-id frontier frames on stdin.
 
 Environment:
   RPI5_HOST        SSH host, default raspberrypi.local
@@ -94,7 +94,7 @@ root="$HOME/cogni-vulkan-runtime/root"
 if [[ "$remote_dir" == "~/"* ]]; then
   remote_dir="$HOME/${remote_dir#~/}"
 fi
-trap 'rm -f "$remote_dir"/rpi5_resident_stdin_req_*.f32 "$remote_dir/$x_f32_load"' EXIT
+trap 'rm -f "$remote_dir/$x_f32_load"' EXIT
 export VK_ICD_FILENAMES="$HOME/cogni-vulkan-runtime/icd/broadcom_icd.user.json"
 export LD_LIBRARY_PATH="$root/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH:-}"
 export RPI5_Q6_PREPACK_LOAD="qwen35_2b_token_embd_q6.pre20"
@@ -105,17 +105,14 @@ export RPI5_WARMUPS="$warmups"
 
 cd "$remote_dir"
 row_bytes=$((hidden_dim * 4))
-stdin_path="/tmp/rpi5_resident_stdin_$$.tsv"
-: >"$stdin_path"
 IFS=':' read -r -a groups <<<"$ids_groups"
-for ((i = 0; i < rows; i++)); do
-  req="rpi5_resident_stdin_req_$$_${i}.f32"
-  dd if="$x_f32_load" of="$req" bs="$row_bytes" skip="$i" count=1 status=none
-  printf "%s\t%s\n" "$req" "${groups[$i]}" >>"$stdin_path"
-done
-
-./rpi5_vulkan_q4k_probe rpi5_q6_matvec_pre_idx_l256.spv file qwen35_2b_token_embd_q6.cvgp 1 "$mode" <"$stdin_path"
-rm -f "$stdin_path"
+{
+  for ((i = 0; i < rows; i++)); do
+    printf "bin\t%s\n" "${groups[$i]}"
+    dd if="$x_f32_load" bs="$row_bytes" skip="$i" count=1 status=none
+    printf "\n"
+  done
+} | ./rpi5_vulkan_q4k_probe rpi5_q6_matvec_pre_idx_l256.spv file qwen35_2b_token_embd_q6.cvgp 1 "$mode"
 vcgencmd get_throttled || true
 REMOTE
 )"

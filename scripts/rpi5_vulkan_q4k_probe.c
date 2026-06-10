@@ -1078,11 +1078,17 @@ int main(int argc, char **argv) {
       chomp(line);
       if (line[0] == '\0') continue;
       char *ids_csv = strchr(line, '\t');
-      if (!ids_csv) die("resident stdin expects hidden_f32_path<TAB>ids_csv");
+      if (!ids_csv) die("resident stdin expects hidden_f32_path<TAB>ids_csv or bin<TAB>ids_csv");
       *ids_csv++ = '\0';
       if (line[0] == '\0' || ids_csv[0] == '\0') die("resident stdin empty path or ids");
 
-      read_file_exact(line, xb.mapped, x_bytes);
+      if (strcmp(line, "bin") == 0) {
+        if (fread(xb.mapped, 1, x_bytes, stdin) != x_bytes) die("resident stdin binary hidden fread failed");
+        int sep = fgetc(stdin);
+        if (sep != '\n' && sep != EOF) die("resident stdin binary hidden separator must be newline");
+      } else {
+        read_file_exact(line, xb.mapped, x_bytes);
+      }
       uint32_t count = 0u;
       parse_row_ids_group(ids_csv, (uint32_t *)rowidb.mapped, &count, out_dim, src_out_dim);
       uint32_t *meta = (uint32_t *)rowmetab.mapped;
