@@ -7,6 +7,7 @@ model = ENV["DIFFUSION_GEMMA_MODEL"]? || DEFAULT_MODEL
 prompt_token = 1
 canvas_token = 0
 candidate_ids_arg = nil.as(String?)
+candidate_count = nil.as(Int32?)
 max_layers = 1
 steps = 1
 proposal_top_k = 1
@@ -24,6 +25,7 @@ OptionParser.parse do |p|
   p.on("--prompt-token ID", "Prompt token id (default: 1)") { |v| prompt_token = v.to_i }
   p.on("--canvas-token ID", "Initial canvas token id (default: 0)") { |v| canvas_token = v.to_i }
   p.on("--candidate-ids CSV", "Sparse candidate token ids for the canvas row (default: canvas token)") { |v| candidate_ids_arg = v }
+  p.on("--candidate-count N", "Generate N sparse candidate ids starting at the canvas token") { |v| candidate_count = v.to_i }
   p.on("--max-layers N", "Bounded decode layers (default: 1)") { |v| max_layers = v.to_i }
   p.on("--steps N", "Sparse denoise steps / adaptive budget (default: 1)") { |v| steps = v.to_i }
   p.on("--proposal-top-k N", "Adaptive proposal top-k (default: 1)") { |v| proposal_top_k = v.to_i }
@@ -47,6 +49,12 @@ def parse_candidate_ids(raw : String?, default_token : Int32) : Array(Int32)
   ids.sort.uniq
 end
 
+def generated_candidate_ids(default_token : Int32, count : Int32, vocab_size : Int32) : Array(Int32)
+  raise "--candidate-count must be positive" unless count > 0
+  raise "--candidate-count exceeds vocab size" if count > vocab_size
+  Array(Int32).new(count) { |i| (default_token + i) % vocab_size }.sort
+end
+
 def median(values : Array(Float64)) : Float64
   raise "median requires at least one value" if values.empty?
   sorted = values.sort
@@ -61,9 +69,8 @@ raise "--stability-threshold must be positive" unless stability_threshold > 0
 raise "--entropy-bound must be finite and non-negative" unless entropy_bound.finite? && entropy_bound >= 0.0_f32
 raise "--format must be keyvalue or tsv" unless {"keyvalue", "tsv"}.includes?(format)
 raise "--repeats must be positive" unless repeats > 0
+raise "--candidate-ids and --candidate-count are mutually exclusive" if candidate_ids_arg && candidate_count
 raise "single-route smoke currently supports --max-layers 1; pass --full-routes for deeper smoke" if single_route && max_layers != 1
-
-candidate_ids = parse_candidate_ids(candidate_ids_arg, canvas_token)
 
 load_t0 = Time.instant
 weights = ML::GGUF::DiffusionGemmaWeights.from_gguf(model)
@@ -72,6 +79,11 @@ hp = weights.hparams
 
 raise "--prompt-token out of range" if prompt_token < 0 || prompt_token >= hp.vocab_size
 raise "--canvas-token out of range" if canvas_token < 0 || canvas_token >= hp.vocab_size
+candidate_ids = if count = candidate_count
+                  generated_candidate_ids(canvas_token, count, hp.vocab_size)
+                else
+                  parse_candidate_ids(candidate_ids_arg, canvas_token)
+                end
 candidate_ids.each do |candidate_id|
   raise "--candidate-ids contains out-of-range id #{candidate_id}" if candidate_id < 0 || candidate_id >= hp.vocab_size
 end

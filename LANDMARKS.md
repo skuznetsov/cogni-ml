@@ -275,6 +275,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - `scripts/diffusion_gemma_sparse_loop_smoke.cr` now supports `--repeats N`, repeating the sparse loop after one model load and one prompt-cache build. Output adds `repeats`, `loop_ms_min`, `loop_ms_median`, `loop_ms_max`, and `loop_ms_samples`; the existing `loop_ms` field remains the median.
 - Verification: no-codegen build passed; wrapper syntax passed; invalid `--repeats 0` fails closed; `scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_smoke.sh 240 6000 --steps 1 --candidate-ids 0,1,2 --repeats 2 --format tsv` exited 0 and emitted two loop samples. An awk guard verified matching TSV field counts, `repeats=2`, comma-separated `loop_ms_samples`, and `loop_ms == loop_ms_median`.
 - Boundary: this is repeat timing plumbing for the native sparse-loop smoke. It is not quiet-host benchmark evidence, ABBA comparison, full-route MoE timing, or a speed claim.
+**update 2026-06-10az:**
+- `scripts/diffusion_gemma_sparse_loop_smoke.cr` now supports `--candidate-count N`, generating a reproducible sparse candidate set starting at the current canvas token and wrapping within the vocab. It is mutually exclusive with explicit `--candidate-ids`.
+- Verification: no-codegen build passed; wrapper syntax passed; `--candidate-ids 0,1 --candidate-count 2` fails closed; `scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_smoke.sh 240 6000 --steps 1 --candidate-count 4 --repeats 2 --format tsv` exited 0 and emitted `candidate_ids=0,1,2,3`, `max_candidate_tokens=4`, and `mean_candidate_tokens=4.0`. An awk guard verified those TSV fields.
+- Boundary: this is candidate-width control for sparse-loop measurement. It does not discover high-probability candidates, run a full-vocabulary head, or prove a wider sparse support is semantically sufficient.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified
