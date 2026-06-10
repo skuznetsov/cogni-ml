@@ -721,6 +721,15 @@ describe ML::GGUF::DiffusionGemmaCPU do
     loop.step_traces[0].total_candidate_tokens.should eq(1)
     loop.step_traces[0].max_candidate_tokens.should eq(1)
     loop.step_traces[0].mean_candidate_tokens.should eq(1.0_f32)
+    loop.summary.steps_run.should eq(1)
+    loop.summary.converged.should be_true
+    loop.summary.stop_reason.should eq("converged")
+    loop.summary.prediction_count.should eq(1)
+    loop.summary.accepted_count.should eq(1)
+    loop.summary.total_candidate_tokens.should eq(1)
+    loop.summary.max_candidate_tokens.should eq(1)
+    loop.summary.mean_candidate_tokens.should eq(1.0_f32)
+    loop.summary.acceptance_rate.should eq(1.0_f32)
     loop.final_canvas_tokens.should eq([0])
     loop.final_canvas_rows.not_nil![0, hp.n_embd].should eq(ML::GGUF::DiffusionGemmaCPU.zero_sc_canvas_embedding(w, 0))
 
@@ -963,11 +972,42 @@ describe ML::GGUF::DiffusionGemmaCPU do
     loop.step_traces.map(&.max_candidate_tokens).should eq([2, 2])
     loop.step_traces[0].mean_candidate_tokens.should eq(2.0_f32)
     loop.step_traces[0].mean_entropy.should be_close(first_step.entropy, 1e-6)
+    loop.summary.prediction_count.should eq(2)
+    loop.summary.accepted_count.should eq(2)
+    loop.summary.total_candidate_tokens.should eq(4)
+    loop.summary.max_candidate_tokens.should eq(2)
+    loop.summary.mean_candidate_tokens.should eq(2.0_f32)
+    loop.summary.mean_entropy.should be_close((first_step.entropy + stable_step.entropy) / 2.0_f32, 1e-6)
+    loop.summary.acceptance_rate.should eq(1.0_f32)
 
     exhausted_loop = ML::GGUF::DiffusionGemmaCPU.apply_entropy_bound_prediction_steps([0], [[first_step]], 0.0_f32, 2)
     exhausted_loop.converged.should be_false
     exhausted_loop.stop_reason.should eq("prediction_budget")
     exhausted_loop.step_traces[0].accepted_count.should eq(1)
+    exhausted_loop.summary.stop_reason.should eq("prediction_budget")
+    exhausted_loop.summary.acceptance_rate.should eq(1.0_f32)
+
+    weighted_loop = ML::GGUF::DiffusionGemmaCPU::BoundedDenoiseLoopResult.new(
+      [0],
+      nil,
+      [] of ML::GGUF::DiffusionGemmaCPU::BoundedCanvasUpdate,
+      [] of Int32,
+      2,
+      false,
+      [
+        ML::GGUF::DiffusionGemmaCPU::BoundedDenoiseStepTrace.new(0, 1, 1, 2, 2, 2.0_f32, 1.0_f32),
+        ML::GGUF::DiffusionGemmaCPU::BoundedDenoiseStepTrace.new(1, 3, 1, 12, 5, 4.0_f32, 3.0_f32),
+      ],
+      "step_budget",
+    )
+    weighted_loop.summary.prediction_count.should eq(4)
+    weighted_loop.summary.accepted_count.should eq(2)
+    weighted_loop.summary.total_candidate_tokens.should eq(14)
+    weighted_loop.summary.max_candidate_tokens.should eq(5)
+    weighted_loop.summary.mean_candidate_tokens.should eq(3.5_f32)
+    weighted_loop.summary.mean_entropy.should eq(2.5_f32)
+    weighted_loop.summary.acceptance_rate.should eq(0.5_f32)
+
     ML::GGUF::DiffusionGemmaCPU.advance_stability_counts([1], [2], [true], [7]).should eq([0])
     ML::GGUF::DiffusionGemmaCPU.advance_stability_counts([1], [1], [false], [7]).should eq([0])
     ML::GGUF::DiffusionGemmaCPU.advance_stability_counts([1], [1], [true], [7]).should eq([8])

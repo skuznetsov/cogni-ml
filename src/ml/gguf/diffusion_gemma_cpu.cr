@@ -72,6 +72,31 @@ module ML::GGUF
       end
     end
 
+    struct BoundedDenoiseLoopSummary
+      getter steps_run : Int32
+      getter converged : Bool
+      getter stop_reason : String
+      getter prediction_count : Int32
+      getter accepted_count : Int32
+      getter total_candidate_tokens : Int32
+      getter max_candidate_tokens : Int32
+      getter mean_candidate_tokens : Float32
+      getter mean_entropy : Float32
+      getter acceptance_rate : Float32
+
+      def initialize(@steps_run,
+                     @converged,
+                     @stop_reason,
+                     @prediction_count,
+                     @accepted_count,
+                     @total_candidate_tokens,
+                     @max_candidate_tokens,
+                     @mean_candidate_tokens,
+                     @mean_entropy,
+                     @acceptance_rate)
+      end
+    end
+
     struct BoundedDenoiseLoopResult
       getter final_canvas_tokens : Array(Int32)
       getter final_canvas_rows : Array(Float32)?
@@ -98,6 +123,38 @@ module ML::GGUF
         total = 0
         @step_traces.each { |trace| total += trace.accepted_count }
         total
+      end
+
+      def summary : BoundedDenoiseLoopSummary
+        prediction_count = 0
+        accepted_count = 0
+        total_candidate_tokens = 0
+        max_candidate_tokens = 0
+        entropy_weighted_sum = 0.0_f32
+        @step_traces.each do |trace|
+          prediction_count += trace.prediction_count
+          accepted_count += trace.accepted_count
+          total_candidate_tokens += trace.total_candidate_tokens
+          max_candidate_tokens = trace.max_candidate_tokens if trace.max_candidate_tokens > max_candidate_tokens
+          entropy_weighted_sum += trace.mean_entropy * trace.prediction_count.to_f32
+        end
+
+        mean_candidate_tokens = prediction_count == 0 ? 0.0_f32 : total_candidate_tokens.to_f32 / prediction_count.to_f32
+        mean_entropy = prediction_count == 0 ? 0.0_f32 : entropy_weighted_sum / prediction_count.to_f32
+        acceptance_rate = prediction_count == 0 ? 0.0_f32 : accepted_count.to_f32 / prediction_count.to_f32
+
+        BoundedDenoiseLoopSummary.new(
+          steps_run: @steps_run,
+          converged: @converged,
+          stop_reason: @stop_reason,
+          prediction_count: prediction_count,
+          accepted_count: accepted_count,
+          total_candidate_tokens: total_candidate_tokens,
+          max_candidate_tokens: max_candidate_tokens,
+          mean_candidate_tokens: mean_candidate_tokens,
+          mean_entropy: mean_entropy,
+          acceptance_rate: acceptance_rate,
+        )
       end
     end
 

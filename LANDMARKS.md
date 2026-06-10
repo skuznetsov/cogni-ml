@@ -257,6 +257,11 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Focused real-GGUF specs verify one-step fixed and adaptive loops expose converged stop reasons and candidate/acceptance trace counts. Synthetic adversary checks verify multi-step trace ordering, accepted-token aggregation, prediction-budget stop reason, mean entropy, invalid trace step rejection, and accepted/prediction size mismatch rejection.
 - Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `29 examples, 0 failures`.
 - Boundary: this is measurement plumbing for the sparse native loop. It does not claim a speedup, full-vocabulary EB parity, or Metal residency.
+**update 2026-06-10av:**
+- Added `BoundedDenoiseLoopSummary` and `BoundedDenoiseLoopResult#summary` so sparse EB loop traces have a stable aggregate view: steps, convergence/stop reason, total predictions, accepted predictions, total/max/mean candidate width, weighted mean entropy, and acceptance rate.
+- Focused specs verify real-GGUF loop summaries for fixed/adaptive one-step loops and synthetic weighted summaries where prediction counts differ across steps. This guards against the common bug of averaging entropy per step instead of per prediction.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `29 examples, 0 failures`.
+- Boundary: this is an API for measuring the sparse loop. It does not yet add a runner, benchmark gate, candidate discovery, or performance promotion.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified
