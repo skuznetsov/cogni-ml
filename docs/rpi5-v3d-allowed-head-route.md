@@ -84,6 +84,8 @@ Use `scripts/rpi5_q6_transport_budget.sh CAPTURE.jsonl 4` to measure the current
 
 Use `scripts/rpi5_q6_resident_budget_gate.sh CAPTURE.jsonl 4` as a fail-closed resident-budget gate. It requires resident upload request speedup over CPU selected-row fallback, bounded `max_abs_diff`, and clean throttle state.
 
+Use `scripts/rpi5_q6_resident_stream_bench.sh CAPTURE.jsonl 4` to replay captured rows as a resident per-step request stream: one Vulkan setup, one prepacked Q6 head load, then one hidden/row-id upload and submit per captured constrained step. This is the closest current probe to a product worker boundary, but it still runs outside the real decode loop.
+
 Actual row-id probe:
 
 - `tool_call_prefix:start`, ids `27,60638,248058`: `0.174ms`, top1 matched CPU.
@@ -109,6 +111,7 @@ Actual row-id probe:
 - Transport budget check with `RAW_OUTPUT=0 REPEATS=30 RPI5_WARMUPS=3 scripts/rpi5_q6_transport_budget.sh /tmp/qwen35_2b_allowed_head_capture_20260609_223005.jsonl 4` replayed the filtered `16` real-hidden rows with `gpu_ms=1.844`, `cpu_ms=3.332`, `speedup=1.807x`, and `max_abs_diff=8.58307e-06`, but the current remote probe envelope measured `remote_wall_ms=656.856`, including `prepack_load_ms=127.827` and estimated setup overhead `464.845ms` (`252.1x` one averaged GPU dispatch). The same run emitted `resident_budget_result` with `resident_kernel_ms=1.844`, `resident_upload_request_ms=1.854`, `resident_upload_request_ms_per_row=0.115875`, `cpu_selected_ms_per_row=0.208250`, and `upload_request_speedup=1.797x`. This is a falsifier for SSH/process-per-call product routing and a target for the resident adapter: mapped hidden/row-id upload is not the dominant remaining tax.
 - Resident budget gate with `REPEATS=30 RPI5_WARMUPS=3 scripts/rpi5_q6_resident_budget_gate.sh /tmp/qwen35_2b_allowed_head_capture_20260609_223005.jsonl 4` passed with `upload_request_speedup=1.792`, `max_abs_diff=8.58307e-06`, threshold `MIN_UPLOAD_SPEEDUP=1.25`, and `throttled=0x0`.
 - Full regression gate now runs the resident budget gate when `FULL_REPLAY=1`. Smoke `FULL_REPLAY=1 RAW_OUTPUT=0 REPEATS=10 RPI5_WARMUPS=3 scripts/rpi5_q6_allowed_head_regression.sh` produced a fresh `31` row capture, replayed all rows at `gpu_ms=3.517`, `cpu_ms=4.405`, replayed filtered rows at `gpu_ms=1.846`, `cpu_ms=3.330`, estimated hybrid `2.921ms` vs all-CPU `4.405ms` (`1.508x`), then passed `resident_budget_gate_result` with `upload_request_speedup=1.866`, `max_abs_diff=8.58307e-06`, and `throttled=0x0`.
+- Resident stream bench with `RAW_OUTPUT=0 REPEATS=30 scripts/rpi5_q6_resident_stream_bench.sh /tmp/qwen35_2b_allowed_head_capture_20260609_223005.jsonl 4` replayed the filtered `16` rows as independent per-step requests inside one resident probe process. It measured `resident_stream_ms=0.160` per request vs CPU selected-row `0.212ms` (`1.326x`), with `max_abs_diff=8.58307e-06`, `top1_mismatches=0`, one-time `prepack_load_ms=127.349`, and `throttled=0x0`. Boundary: this removes SSH/process/Vulkan setup from the per-request path, but still uses a probe-side worker rather than the product decode runtime.
 
 ## Route Policy
 

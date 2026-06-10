@@ -1085,6 +1085,62 @@ int main(int argc, char **argv) {
     }
   }
 
+  uint32_t resident_requests = env_u32("RPI5_RESIDENT_REQUESTS", 0u);
+  const char *resident_x_load = getenv("RPI5_RESIDENT_STREAM_X_F32_LOAD");
+  const char *resident_ids_csv = getenv("RPI5_RESIDENT_ROW_IDS_CSV_BATCH");
+  double resident_stream_total = 0.0;
+  double resident_stream_cpu_total = 0.0;
+  float resident_stream_max_diff = 0.0f;
+  uint32_t resident_stream_top1_mismatches = 0u;
+  if (resident_requests > 0u) {
+    if (!q6_idx_mode || batch != 1u) die("resident stream requires q6idx mode with RPI5_BATCH=1");
+    if (!resident_x_load || !resident_x_load[0]) die("resident stream requires RPI5_RESIDENT_STREAM_X_F32_LOAD");
+    if (!resident_ids_csv || !resident_ids_csv[0]) die("resident stream requires RPI5_RESIDENT_ROW_IDS_CSV_BATCH");
+    size_t stream_x_bytes = (size_t)resident_requests * in_dim * sizeof(float);
+    size_t stream_ids_bytes = (size_t)resident_requests * out_dim * sizeof(uint32_t);
+    size_t stream_meta_bytes = (size_t)resident_requests * 2u * sizeof(uint32_t);
+    uint8_t *stream_x = (uint8_t *)malloc(stream_x_bytes);
+    uint32_t *stream_ids = (uint32_t *)malloc(stream_ids_bytes);
+    uint32_t *stream_meta = (uint32_t *)malloc(stream_meta_bytes);
+    float *stream_cpu = (float *)malloc(y_bytes);
+    if (!stream_x || !stream_ids || !stream_meta || !stream_cpu) die("resident stream alloc failed");
+    read_file_exact(resident_x_load, stream_x, stream_x_bytes);
+    parse_row_id_groups_csv(resident_ids_csv, stream_ids, stream_meta, resident_requests, out_dim, src_out_dim);
+
+    for (uint32_t rep = 0; rep < repeats; rep++) {
+      for (uint32_t req = 0; req < resident_requests; req++) {
+        uint32_t count = stream_meta[req * 2u + 1u];
+        memcpy(xb.mapped, stream_x + (size_t)req * in_dim * sizeof(float), in_dim * sizeof(float));
+        memcpy(rowidb.mapped, stream_ids + (size_t)req * out_dim, out_dim * sizeof(uint32_t));
+        ((uint32_t *)rowmetab.mapped)[0] = 0u;
+        ((uint32_t *)rowmetab.mapped)[1] = count;
+        memset(yb.mapped, 0, y_bytes);
+        double rt0 = now_ms();
+        VK_CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
+        VK_CHECK(vkQueueWaitIdle(queue));
+        resident_stream_total += now_ms() - rt0;
+
+        double ct0 = now_ms();
+        cpu_q6_prepacked_indexed_meta(stream_cpu, (const uint8_t *)wb.mapped, (const float *)xb.mapped,
+                                      (const uint32_t *)rowidb.mapped, (const uint32_t *)rowmetab.mapped,
+                                      1u, out_dim, in_dim);
+        resident_stream_cpu_total += now_ms() - ct0;
+        float d = max_abs_diff(stream_cpu, (const float *)yb.mapped, out_dim);
+        if (d > resident_stream_max_diff) resident_stream_max_diff = d;
+        if (count > 0u) {
+          uint32_t gpu_pos = argmax_f32((const float *)yb.mapped, count);
+          uint32_t cpu_pos = argmax_f32(stream_cpu, count);
+          const uint32_t *ids = (const uint32_t *)rowidb.mapped;
+          if (ids[gpu_pos] != ids[cpu_pos]) resident_stream_top1_mismatches++;
+        }
+      }
+    }
+    free(stream_cpu);
+    free(stream_meta);
+    free(stream_ids);
+    free(stream_x);
+  }
+
   double t0 = now_ms();
   if (file_mode && q6_idx_mode) {
     cpu_q6_prepacked_indexed_meta(cpu, (const uint8_t *)wb.mapped, (const float *)xb.mapped,
@@ -1169,6 +1225,14 @@ int main(int argc, char **argv) {
   if (resident_upload_ms > 0.0) {
     printf("resident_upload_ms_avg=%.3f resident_upload_over_gpu=%.3fx resident_upload_speedup=%.3fx\n",
            resident_upload_ms, resident_upload_ms / gpu_ms, cpu_ms / resident_upload_ms);
+  }
+  if (resident_requests > 0u) {
+    double resident_stream_request_count = (double)resident_requests * (double)repeats;
+    double resident_stream_ms = resident_stream_total / resident_stream_request_count;
+    double resident_stream_cpu_ms = resident_stream_cpu_total / resident_stream_request_count;
+    printf("resident_stream_ms_avg=%.3f resident_stream_cpu_ms_avg=%.3f resident_stream_speedup=%.3fx resident_stream_requests=%u resident_stream_repeats=%u resident_stream_max_abs_diff=%g resident_stream_top1_mismatches=%u\n",
+           resident_stream_ms, resident_stream_cpu_ms, resident_stream_cpu_ms / resident_stream_ms,
+           resident_requests, repeats, resident_stream_max_diff, resident_stream_top1_mismatches);
   }
   if (q6_idx_mode && batch == 1u && out_dim > 0u) {
     printf("top1_match=%s gpu_top1_pos=%u gpu_top1_src=%u cpu_top1_pos=%u cpu_top1_src=%u top1_scan_ms=%.6f\n",
