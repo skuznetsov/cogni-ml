@@ -43,6 +43,15 @@ static double now_ms(void) {
   return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
 }
 
+static uint32_t env_u32(const char *name, uint32_t fallback) {
+  const char *s = getenv(name);
+  if (!s || !*s) return fallback;
+  char *end = NULL;
+  unsigned long v = strtoul(s, &end, 10);
+  if (end == s || *end != '\0' || v > UINT32_MAX) die("invalid unsigned integer environment value");
+  return (uint32_t)v;
+}
+
 static char *read_file(const char *path, size_t *size_out) {
   FILE *f = fopen(path, "rb");
   if (!f) die("cannot open SPIR-V file");
@@ -648,6 +657,7 @@ int main(int argc, char **argv) {
   int workgroup_per_row = 0;
   int prepacked = 0;
   uint32_t dispatch_local_size = 64u;
+  uint32_t warmups = env_u32("RPI5_WARMUPS", 0u);
   const char *mode = "raw";
   if (file_mode) {
     if (argc < 6) die("usage: probe SPV file TENSOR.cvgp REPEATS raw|pre|pre_lN|wg");
@@ -942,6 +952,12 @@ int main(int argc, char **argv) {
   si.commandBufferCount = 1;
   si.pCommandBuffers = &cmd;
 
+  for (uint32_t r = 0; r < warmups; r++) {
+    memset(yb.mapped, 0, y_bytes);
+    VK_CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
+    VK_CHECK(vkQueueWaitIdle(queue));
+  }
+
   double gpu_total = 0.0;
   for (uint32_t r = 0; r < repeats; r++) {
     memset(yb.mapped, 0, y_bytes);
@@ -1025,8 +1041,8 @@ int main(int argc, char **argv) {
   double gpu_ms = gpu_total / (double)repeats;
   double q_bytes = (double)w_bytes + (double)x_bytes + (double)y_bytes;
 
-  printf("device=%s %s mode=%s batch=%u out=%u src_out=%u in=%u weight_mib=%.3f repeats=%u\n",
-         props.deviceName, (q6_pre_mode || q6_idx_mode) ? "q6_matvec" : "q4_matvec", prepacked ? mode : (workgroup_per_row ? "wg64" : "row1"), batch, out_dim, src_out_dim, in_dim, (double)w_bytes / 1048576.0, repeats);
+  printf("device=%s %s mode=%s batch=%u out=%u src_out=%u in=%u weight_mib=%.3f repeats=%u warmups=%u\n",
+         props.deviceName, (q6_pre_mode || q6_idx_mode) ? "q6_matvec" : "q4_matvec", prepacked ? mode : (workgroup_per_row ? "wg64" : "row1"), batch, out_dim, src_out_dim, in_dim, (double)w_bytes / 1048576.0, repeats, warmups);
   if (prepack_ms > 0.0) printf("prepack_ms=%.3f\n", prepack_ms);
   if (prepack_ms < 0.0) printf("prepack_load_ms=%.3f\n", -prepack_ms);
   printf("max_abs_diff=%g gpu_ms_avg=%.3f gpu_gops=%.3f approx_stream_gib_s=%.3f cpu_ms=%.3f cpu_gops=%.3f speedup=%.3fx\n",

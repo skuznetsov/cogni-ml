@@ -51,12 +51,14 @@ Actual Qwen tokenizer frontiers:
 
 `scripts/estimate_qwen35_allowed_frontiers.cr MODEL.gguf` prints each frontier with `route`, estimated `est_v3d_ms` / `est_cpu_ms`, and an `ids_csv` field that can be passed directly to the Pi probe as `RPI5_ROW_IDS_CSV`. Its default `policy_cpu_max_allowed=12` is conservative for unbatched real frontiers; set `QWEN35_ALLOWED_HEAD_CPU_MAX=7` to re-enable near-boundary `allowed=8` V3D route experiments.
 
-Use `scripts/rpi5_q6_frontier_probe.sh LABEL IDS_CSV [REPEATS]` from the local checkout to run one of those frontiers through `ssh raspberrypi.local` without hand-writing the remote Vulkan environment.
+Use `scripts/rpi5_q6_frontier_probe.sh LABEL IDS_CSV [REPEATS]` from the local checkout to run one of those frontiers through `ssh raspberrypi.local` without hand-writing the remote Vulkan environment. Set `RPI5_WARMUPS=N` for untimed dispatches before measurement.
 
 Use `scripts/rpi5_q6_frontier_suite.sh MODEL.gguf [MAX_FRONTIERS]` to run estimator-selected frontiers. It defaults to `ROUTE_FILTER=V3D`; use `LABEL_REGEX=...`, `REPEATS=...`, and `DRY_RUN=1` to narrow or preview the run.
 Set `RAW_OUTPUT=0` to suppress the full probe log; the suite still emits a machine-readable `frontier_result` row with a measured `verdict`, estimated and measured `gpu_ms` / `cpu_ms`, estimate ratios, `speedup`, `top1_match`, and throttle state. `MIN_SPEEDUP` controls the `V3D_CLEAR` cutoff; default is `1.25`.
 
-Use `scripts/rpi5_q6_policy_calibrate.sh MODEL.gguf` to run the current policy frontiers and emit `calibration_policy`. The default labels cover `tool_call_prefix:start` (`allowed=3`), `read_file.limit` (`allowed=8`), and `edit_mode.mode` (`allowed=13`).
+Use `scripts/rpi5_q6_policy_calibrate.sh MODEL.gguf` to run the current policy frontiers and emit `calibration_policy`. The default labels cover `tool_call_prefix:start` (`allowed=3`), `read_file.limit` (`allowed=8`), and `edit_mode.mode` (`allowed=13`). Calibration defaults to `RPI5_WARMUPS=3` so first-submit latency is excluded from the averaged GPU time.
+
+Use `scripts/rpi5_q6_policy_repeat_sweep.sh MODEL.gguf` to rerun calibration across `REPEAT_COUNTS` and expose near-boundary stability. This is a measurement stability check for the current one-frontier submit path, not command-buffer batching.
 
 Actual row-id probe:
 
@@ -67,6 +69,7 @@ Actual row-id probe:
 - Summary-only wrapper check with `RAW_OUTPUT=0 LABEL_REGEX='finite_values:read_file\.limit' REPEATS=30` emitted `verdict=V3D_NEAR`, `gpu_ms=0.261`, `cpu_ms=0.283`, `speedup=1.083x`, `v3d_est_ratio=1.403`, and `top1_match=true`, confirming `allowed=8` is positive but close to the CPU/V3D boundary.
 - Summary-only wrapper check with `RAW_OUTPUT=0 LABEL_REGEX='finite_values:edit_mode\.mode' REPEATS=30` emitted `verdict=V3D_CLEAR`, `gpu_ms=0.267`, `cpu_ms=0.487`, `speedup=1.822x`, and `top1_match=true`, giving the current clean example for `allowed=13`.
 - Policy calibration with `RAW_OUTPUT=0 REPEATS=40 scripts/rpi5_q6_policy_calibrate.sh MODEL.gguf` emitted `policy_cpu_max_allowed=3`, `v3d_clear_min_allowed=13`, `near_boundary_allowed=8`. The measured rows were `allowed=3 verdict=CPU_WINS`, `allowed=8 verdict=V3D_NEAR`, and `allowed=13 verdict=V3D_CLEAR`.
+- Warmed policy repeat sweep with `RAW_OUTPUT=0 RPI5_WARMUPS=3 REPEAT_COUNTS='20 40' scripts/rpi5_q6_policy_repeat_sweep.sh MODEL.gguf` emitted stable `V3D_CLEAR` for both `read_file.limit` (`allowed=8`, `gpu_ms=0.144/0.143`, `cpu_ms=0.289/0.289`) and `edit_mode.mode` (`allowed=13`, `gpu_ms=0.147/0.147`, `cpu_ms=0.488/0.481`), all with `top1_match=true` and `throttled=0x0`.
 
 ## Route Policy
 
@@ -74,13 +77,13 @@ Use CPU for singleton/tiny frontiers unless the GPU path is already batched or r
 
 Use V3D when:
 
-- `allowed_count >= 13` under current real-frontier calibration, or
+- `allowed_count >= 8` under warmed resident-probe calibration, or
 - multiple constrained steps can be grouped/amortized, or
 - logits/top1 already stay on the GPU side.
 
-Treat `allowed=8` as near-boundary under current measurements: route to V3D only with batching/amortization or when runtime calibration reports `V3D_CLEAR`.
+Treat `allowed=8` as sensitive to measurement corridor until the product adapter owns a warmed resident command path. Without warmups it has shown near-boundary/noisy results; with `RPI5_WARMUPS=3` it measured as `V3D_CLEAR`.
 
-Use `QWEN35_ALLOWED_HEAD_CPU_MAX=7` as the older Pi-oriented policy override for resident Q6 allowed-head experiments only when accepting near-boundary V3D routes. A conservative unbatched policy should prefer `QWEN35_ALLOWED_HEAD_CPU_MAX=12` until fresh calibration says otherwise. Keep it configurable: cold process startup, grammar row locality, and future V3D kernels can move the cutoff.
+Use `QWEN35_ALLOWED_HEAD_CPU_MAX=7` as the Pi-oriented policy override for warmed resident Q6 allowed-head experiments. A conservative unbatched policy can still prefer `QWEN35_ALLOWED_HEAD_CPU_MAX=12` until the product V3D adapter reproduces the warmed corridor. Keep it configurable: cold process startup, grammar row locality, and future V3D kernels can move the cutoff.
 
 Sort allowed token ids for medium/broad finite sets. Sorting was neutral at `1024` rows but improved `4096` rows from `10.550ms` to `8.617ms`.
 

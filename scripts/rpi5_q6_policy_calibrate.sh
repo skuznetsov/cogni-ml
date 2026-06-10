@@ -11,6 +11,7 @@ tokenizer-derived frontiers from estimate_qwen35_allowed_frontiers.cr.
 Environment:
   LABEL_REGEX='REGEX'   Frontier labels to calibrate.
   REPEATS=40            Probe repeats per frontier.
+  RPI5_WARMUPS=3        Untimed GPU dispatches before measurement.
   MIN_SPEEDUP=1.25      Minimum measured V3D speedup for V3D_CLEAR.
   RAW_OUTPUT=0          Suppress full probe output; keep result rows.
   DRY_RUN=1             Print selected frontiers without SSH probes.
@@ -28,6 +29,7 @@ model_path="${1:-}"
 
 label_regex="${LABEL_REGEX:-^(tool_call_prefix:start|finite_values:read_file\\.limit|finite_values:edit_mode\\.mode)$}"
 repeats="${REPEATS:-40}"
+warmups="${RPI5_WARMUPS:-3}"
 min_speedup="${MIN_SPEEDUP:-1.25}"
 raw_output="${RAW_OUTPUT:-0}"
 dry_run="${DRY_RUN:-0}"
@@ -71,8 +73,8 @@ fi
 tmp_results="$(mktemp)"
 trap 'rm -f "$tmp_results"' EXIT
 
-printf "calibration_begin\tmodel=%s\tmin_speedup=%s\trepeats=%s\tlabel_regex=%s\n" \
-  "$model_path" "$min_speedup" "$repeats" "$label_regex"
+printf "calibration_begin\tmodel=%s\tmin_speedup=%s\trepeats=%s\twarmups=%s\tlabel_regex=%s\n" \
+  "$model_path" "$min_speedup" "$repeats" "$warmups" "$label_regex"
 
 while IFS=$'\t' read -r label allowed route est_v3d_ms est_cpu_ms ids_csv; do
   [[ -n "$label" ]] || continue
@@ -82,7 +84,7 @@ while IFS=$'\t' read -r label allowed route est_v3d_ms est_cpu_ms ids_csv; do
     continue
   fi
 
-  probe_output="$(bash "$probe" "$label" "$ids_csv" "$repeats")"
+  probe_output="$(RPI5_WARMUPS="$warmups" bash "$probe" "$label" "$ids_csv" "$repeats")"
   if [[ "$raw_output" != "0" ]]; then
     printf "%s\n" "$probe_output"
   fi
