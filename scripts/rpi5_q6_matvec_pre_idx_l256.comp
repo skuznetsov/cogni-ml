@@ -32,6 +32,7 @@ float q6_lane_to_f32(uint word, uint lane) {
 
 void main() {
   uint out_row = gl_GlobalInvocationID.x;
+  uint batch_id = gl_GlobalInvocationID.y;
   if (out_row >= pc.out_dim) {
     return;
   }
@@ -39,11 +40,13 @@ void main() {
   uint src_row = row_ids[out_row];
   uint groups = pc.in_dim / 16u;
   uint row_word_off = (src_row * pc.row_bytes) >> 2u;
+  uint x_row_off = batch_id * pc.in_dim;
+  uint y_row_off = batch_id * pc.out_dim;
   float sum = 0.0;
   for (uint g = 0u; g < groups; g++) {
     uint block_word = row_word_off + g * 5u;
     float dscale = uintBitsToFloat(w[block_word]);
-    uint x_base = g * 16u;
+    uint x_base = x_row_off + g * 16u;
     for (uint q = 0u; q < 4u; q++) {
       uint qw = w[block_word + 1u + q];
       uint xb = x_base + q * 4u;
@@ -53,5 +56,5 @@ void main() {
       sum += x[xb + 3u] * dscale * q6_lane_to_f32(qw, 3u);
     }
   }
-  y[out_row] = sum;
+  y[y_row_off + out_row] = sum;
 }

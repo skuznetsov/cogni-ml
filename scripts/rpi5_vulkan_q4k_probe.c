@@ -709,6 +709,7 @@ int main(int argc, char **argv) {
     allowed_count = (uint32_t)strtoul(mode + (q6_idx_sorted_mode ? 6 : 5), &end, 10);
     if (!end || strncmp(end, "_l", 2) != 0) die("invalid q6idx mode; expected q6idxN_lM");
     dispatch_local_size = (uint32_t)strtoul(end + 2, NULL, 10);
+    batch = env_u32("RPI5_BATCH", batch);
   }
   if (batch == 0u) die("invalid batch mode");
   if (token_pack == 0u) die("invalid token-pack mode");
