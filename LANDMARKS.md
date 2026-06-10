@@ -6,6 +6,223 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-DIFFUSIONGEMMA-GGUF-STRUCTURAL-2026-06-10] DiffusionGemma GGUF metadata and structural tensor mapping are verified
+**status:** verified
+**trust:** {F:0.86, G:narrow, R:0.84}
+**context:** ml (DiffusionGemma / GGUF / structural loader)
+**evidence:**
+- claim: "The local Unsloth DiffusionGemma GGUF uses `general.architecture=diffusion-gemma`, `diffusion.canvas_length=256`, 30 layers, hidden size 2816, MoE metadata `expert_count=128` and `expert_used_count=8`, plus non-causal attention metadata."
+  source: `crystal run scripts/diffusion_gemma_inventory.cr -- --tensors` in worktree `/Users/sergey/Projects/Crystal/cogni-ml-diffusiongemma-explore`.
+  verified_at: 2026-06-10
+  decay_trigger: local GGUF replacement, GGUF metadata rewrite, or upstream DiffusionGemma conversion changes
+- claim: "The first Cogni-ML structural loader slice maps DiffusionGemma core tensors, self-conditioning tensors, encoder/decoder layer scales, and MoE expert tensors without dequantizing large weights."
+  source: `scripts/run_safe.sh /opt/homebrew/bin/crystal 240 6000 spec spec/diffusion_gemma_meta_spec.cr --error-trace --link-flags="/Users/sergey/Projects/Crystal/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` passed with `2 examples, 0 failures`.
+  verified_at: 2026-06-10
+  decay_trigger: tensor naming changes, `QuantWeight` shape semantics changes, or bridge/reader ABI changes
+**boundary:** This is a file-format and mmap structural checkpoint, not an inference claim. Runtime support still needs region-aware prompt/canvas masks, entropy-bound sampling, self-conditioning logits, and prefix-KV cache semantics.
+
+### [LM-DIFFUSIONGEMMA-PR-RUNNER-2026-06-10] DiffusionGemma has a working local prototype through the llama.cpp PR runtime, and prefix KV cache is faster
+**status:** verified
+**trust:** {F:0.82, G:narrow, R:0.80}
+**context:** ml (DiffusionGemma / llama.cpp PR / entropy-bound prototype)
+**evidence:**
+- claim: "The updated main local llama.cpp checkout at `/Users/sergey/SrcArchives/AI/llama.cpp` does not yet include DiffusionGemma support, while `/Users/sergey/SrcArchives/AI/llama.cpp-diffusiongemma-pr` built PR `c84e85af6` with `llama-diffusion-cli`, `llama-diffusion-gemma-server`, and `llama-diffusion-gemma-eval`."
+  source: local `rg diffusion-gemma`/`ls build/bin/llama-diffusion-gemma-*` checks and `cmake --build build-dg --target llama-diffusion-cli llama-diffusion-gemma-server llama-diffusion-gemma-eval`.
+  verified_at: 2026-06-10
+  decay_trigger: local llama.cpp checkout changes, PR rebases, or build directory replacement
+- claim: "The prototype script `scripts/diffusion_gemma_proto.sh` runs the local Unsloth Q4_K_M GGUF end-to-end through entropy-bound denoising and parses timing."
+  source: `STEPS=16 KV_CACHE=on N_PREDICT=32 PROMPT='Write one concise sentence about why local verification matters.' scripts/diffusion_gemma_proto.sh` exited 0, emitted coherent draft text, and reported `total_ms=13590.98`, `step_ms=849.44`, `steps=16`.
+  verified_at: 2026-06-10
+  decay_trigger: model file, llama.cpp PR runtime, sampler defaults, or script arguments change
+- claim: "Prefix KV cache is a measured acceleration on the bounded local smoke."
+  source: `STEPS=4 SEQUENCE='off on on off' scripts/diffusion_gemma_kv_abba.sh` reported `off_median_ms=2907.35`, `on_median_ms=2458.50`, `on_over_off=0.8456`, `speedup=1.1826x`.
+  verified_at: 2026-06-10
+  decay_trigger: host load, PR runtime, prompt length, denoise step count, or Metal backend changes
+**boundary:** The generated text still exposes `<|channel>thought`/draft traces at low step counts; this is a working prototype and a local speed signal, not a polished product sampler or native Cogni-ML runtime.
+**update 2026-06-10b:**
+- `scripts/diffusion_gemma_proto.sh` now fails closed if the PR runner logs Metal backend errors or reports fewer denoise steps than requested. This blocked a false-success run where the CLI exited 0 after `ggml_metal_graph_compute: backend is in error state` and only `4/16` requested steps.
+- `scripts/diffusion_gemma_extract_answer.py` extracts a conservative answer candidate from raw logs, but returns no clean answer for under-denoised thought traces instead of surfacing the whole trace.
+- Refuted shortcut: `--override-kv diffusion.canvas_length=int:64` did not change the logged DiffusionGemma `canvas_length=256` in the tested CLI path and was slower (`step_ms=1094.14` for `STEPS=16`), so do not use it as a canvas-shortening acceleration route.
+- Stability boundary: after a Metal command-buffer recovery, repeated FA-on `STEPS=8/16` runs failed closed around step `4-5`; FA-off `STEPS=4` completed but was much slower (`~21.3s` total for 4 steps). Treat FA-on long-step timings as unstable until the PR runtime or host Metal state is isolated.
+**update 2026-06-10c:**
+- `scripts/diffusion_gemma_proto.sh` now defaults to `N_PREDICT=-1`, `BLOCKS=1`, `CTX=512`, and `UBATCH=512`. This avoids the PR CLI auto-growth path where any positive `-n` computes `needed = blocks * canvas_length + 2048` and silently raises short-prompt runs to `n_ctx=n_ubatch=2304`.
+- `scripts/diffusion_gemma_proto.sh` now has explicit modes: `MODE=smoke` defaults to `STEPS=4`, while `MODE=quality` defaults to `STEPS=16` and remains fail-closed under Metal backend errors.
+- Small-context KV-on smoke (`STEPS=4 KV_CACHE=on FA=on N_PREDICT=-1 CTX=512 UBATCH=512`) completed and reported `total_ms=9885.12`, `step_ms=2471.28`; the comparable prior sequential positive-`-n` run reported `total_ms=11528.16`, `step_ms=2882.04`. Boundary: this is a host-contaminated smoke while Chrome/WindowServer/Crystal were busy, but the direction is enough to set the safer default.
+- KV-off under the same small-context settings hit the Metal backend error by step 3 in the parallel test; do not use KV-off as a reliability fallback without a fresh quiet sequential check.
+**update 2026-06-10d:**
+- Default `MODE=smoke` command (`scripts/diffusion_gemma_proto.sh`) completed with `n_ctx_seq=512`, `kv_cache=on`, `STEPS=4`, and reported `total_ms=5418.13`, `step_ms=1354.53`. It still produced no clean answer at 4 steps, which is expected for a stability smoke.
+**update 2026-06-10e:**
+- `scripts/diffusion_gemma_kv_abba.sh` now has an opt-in quiet-host gate before each ABBA run via `REQUIRE_QUIET=1`, `QUIET_MS`, `QUIET_POLL_MS`, `LOAD_THRESHOLD`, and `TOTAL_THRESHOLD`. Default behavior remains unchanged when the gate is not required.
+- Adversary check: `REQUIRE_QUIET=1 QUIET_MS=0 LOAD_THRESHOLD=0.001 TOTAL_THRESHOLD=0.001 SEQUENCE=on scripts/diffusion_gemma_kv_abba.sh` exited before launching the model with `quiet_gate_result status=fail`, proving the gate fails closed instead of emitting contaminated timing rows.
+- Verification after the harness edit: `bash -n` passed for `scripts/diffusion_gemma_proto.sh` and `scripts/diffusion_gemma_kv_abba.sh`; `python3 -m py_compile scripts/diffusion_gemma_extract_answer.py` passed; no-codegen builds for DiffusionGemma meta/weights/spec passed; focused spec passed with `2 examples, 0 failures`; `git diff --check` passed.
+**update 2026-06-10f:**
+- `scripts/diffusion_gemma_proto.sh` now exposes existing llama.cpp runtime knobs without patching the PR runner: optional `BATCH`, `CACHE_TYPE_K`, `CACHE_TYPE_V`, `SWA_FULL=1`, `NO_HOST=1`, and `REPACK=off`. The default keeps llama.cpp's batch selection (`batch=auto`) because paired smoke refuted `BATCH=512` as a reliable improvement.
+- Refuted shortcut: paired smoke with the same prompt and `STEPS=4` measured `BATCH=512` at `total_ms=2763.70`, while `BATCH=2048` measured `total_ms=2438.58`; do not change the default batch to `CTX`.
+- Weak candidate only: manual smoke ABBA for KV dtype (`auto, q8_0/q4_0, q8_0/q4_0, auto`) produced `auto_median_ms=2575.98`, `quant_median_ms=2538.34`, `speedup=1.0148x`. This is below promotion threshold and host-contaminated, but keeps quantized KV cache as a quiet-gate candidate.
+**update 2026-06-10g:**
+- `scripts/diffusion_gemma_variant_abba.sh` adds a generic fail-closed ABBA harness for existing `diffusion_gemma_proto.sh` env knobs. It validates `BASE_ENV`, `VARIANT_ENV`, and all `SEQUENCE` arms before model launch, and reuses the quiet-host gate before each row.
+- Adversary checks: invalid env tokens exit with code `2` before launch; invalid `SEQUENCE='base nope'` now exits before `variant_abba_run`; impossible quiet thresholds with `REQUIRE_QUIET=1` exit before launch with `quiet_gate_result status=fail`.
+- `NO_HOST=1` is not a promotion candidate from the first ABBA: `base_median_ms=2307.03`, `variant_median_ms=2288.34`, `speedup=1.0082x`, while the host showed `syspolicyd`, `WindowServer`, and `photoanalysisd` noise. Treat it as neutral until quiet-gate evidence says otherwise.
+**update 2026-06-10h:**
+- `SWA_FULL=1` produced a contradictory smoke pair and is refuted-for-now. First noisy ABBA (`base variant variant base`) suggested `speedup=1.1416x`, but the reversed order (`variant base base variant`) measured `base_median_ms=2439.81`, `variant_median_ms=2492.28`, `speedup=0.9789x`.
+- Decision: do not stack `SWA_FULL=1` with other weak knobs and do not promote it without a quiet-gated repeated ABBA. The current strongest supported runtime optimization remains prefix KV cache plus the safer small-context defaults; `BATCH=512`, quantized KV dtype, `NO_HOST=1`, and `SWA_FULL=1` are neutral or weak under current evidence.
+**update 2026-06-10i:**
+- `scripts/diffusion_gemma_proto.sh` now exposes entropy-bound controls (`DIFFUSION_ALGORITHM`, `EB_T_MIN`, `EB_T_MAX`, `EB_ENTROPY_BOUND`, `EB_STABILITY`, `EB_CONFIDENCE`) and adds `MODE=fast-quality` with default `STEPS=10`. Existing modes remain `smoke=4` and `quality=16`.
+- Quality frontier on the fixed prompt/seed: `STEPS=8` completed quickly (`total_ms=5087.79`) but produced `diffusion_gemma_answer_status=no_clean_answer`; `STEPS=10` produced a clean extracted answer (`total_ms=8371.58` in the first run, `7937.52` through `MODE=fast-quality`); `STEPS=12` and `STEPS=16` also produced clean answers but are not consistently faster under noisy host conditions.
+- Extractor hardening: `scripts/diffusion_gemma_extract_answer.py` now rejects candidates with residual quote characters after cleanup, preventing malformed mixed draft/final lines from being reported as clean answers. Rechecks kept the 12/16-step answers clean, kept 8-step no-clean, and extracted a shorter clean 10-step candidate.
+- `EB_CONFIDENCE=0.02` did not trigger early stop in the tested 16-step run; it still ran all 16 steps and produced a clean answer. Treat entropy-bound threshold tuning as unproven until a paired quality/step-count sweep shows earlier termination without extractor fallback artifacts.
+**update 2026-06-10j:**
+- `scripts/diffusion_gemma_variant_abba.sh` no longer forces `STEPS=4` when `STEPS` is unset, so mode defaults from `diffusion_gemma_proto.sh` are preserved. `VARIANT_ENV` can now compare modes such as `MODE=fast-quality` against `MODE=quality`.
+- The variant ABBA summary now reports answer quality counts (`diffusion_gemma_variant_abba_quality base_clean=N/M variant_clean=N/M`) so timing rows cannot hide no-clean output.
+- Paired local ABBA comparing `BASE_ENV='MODE=quality'` (16 steps) to `VARIANT_ENV='MODE=fast-quality'` (10 steps) produced clean extracted answers in both arms (`base_clean=2/2`, `variant_clean=2/2`) and measured `base_median_ms=15511.39`, `variant_median_ms=9791.81`, `speedup=1.5841x`. Boundary: host was noisy and this is fixed prompt/seed evidence, but it is enough to make `MODE=fast-quality` the practical prototype mode while keeping `MODE=quality` as the conservative fallback.
+**update 2026-06-10k:**
+- `scripts/diffusion_gemma_proto.sh` now supports `RAW_OUTPUT=0`, which keeps the full PR-runner generation trace in the log file but prints only the compact run metadata, parsed timing row, and extracted answer status to stdout. `RAW_OUTPUT=1` remains the default debugging behavior.
+- Adversary check: `RAW_OUTPUT=bad scripts/diffusion_gemma_proto.sh` exits with code `2` before the llama.cpp invocation. Demo check: `MODE=fast-quality RAW_OUTPUT=0 scripts/diffusion_gemma_proto.sh` completed with `total_ms=8581.46`, `steps=10`, `diffusion_gemma_answer_status=ok`, and printed only the clean answer summary while `/tmp/diffusiongemma_proto_on_steps10_20260610160407.log` retained the raw draft trace and timing.
+- `scripts/diffusion_gemma_demo.sh` is a thin executable wrapper for the practical prototype command. It defaults to `MODE=fast-quality` and `RAW_OUTPUT=0`; positional arguments become `PROMPT`. Syntax check passed with the other DiffusionGemma scripts.
+**update 2026-06-10l:**
+- `scripts/diffusion_gemma_server_smoke.sh` verifies the PR `llama-diffusion-gemma-server` resident-load boundary without implementing a new sampler loop. It starts the server with `NGL=99`, `FA=1`, `MAXTOK=512`, waits for `READY`, sends `QUIT`, and preserves stderr logs.
+- Adversary check: an invalid `LLAMA_DIFFUSION_GEMMA_SERVER` path exits with code `2` before model load. Live smoke `READY_TIMEOUT=180 scripts/diffusion_gemma_server_smoke.sh` returned `server_line=READY 262144` and `diffusion_gemma_server_smoke_result ready=1`; stderr confirmed `flash_attn = enabled`, `n_ctx_seq (512)`, `Apple M2 Max`, and `diffusion-gemma-server ready (n_vocab=262144, MAXTOK=512, NGL=99)`.
+- Boundary: this server is a synchronous logits/forward server, not an HTTP chat/demo server. It can remove repeated model-load cost only after a driver implements the entropy-bound denoise loop over its request-file protocol.
+**update 2026-06-10m:**
+- `scripts/diffusion_gemma_server_budget.cr` quantifies the resident server transport boundary from GGUF metadata. On the local model, `canvas=256` and `vocab=262144`, so the server's full-logits file response is `268435456` bytes (`256.0 MiB`) per denoise step.
+- For `MODE=fast-quality` (`10` steps), a naive driver would move `2.5 GiB` of logits through request response files before any Python-side sampling work. This refutes a full-logits Python driver as the next speed path unless sampling/top-k/reveal selection moves server-side or the protocol stops exporting full vocab rows.
+- Verification: no-codegen build passed; `/opt/homebrew/bin/crystal run scripts/diffusion_gemma_server_budget.cr -- --steps 10` printed the byte budget above; `--steps 0` fails closed with `--steps must be positive`.
+**update 2026-06-10n:**
+- `docs/diffusion_gemma_resident_server_plan.md` records the server-side resident generation route: link the existing PR server against `llama-diffusion`/`llama-common`, add a `TEXT` request mode, call `diffusion_generate_entropy_bound(...)` in-process, and return compact text/timing instead of full logits.
+- The plan's DoD explicitly rejects any protocol that still writes full logits and requires a text-mode response below `16 KiB`, two requests over one resident model load, clean extracted text, and preserved server load smoke.
+**update 2026-06-10o:**
+- Implemented the plan in the llama.cpp PR worktree `/Users/sergey/SrcArchives/AI/llama.cpp-diffusiongemma-pr`: `llama-diffusion-gemma-server` now links `llama-diffusion`/`llama-common` and accepts `TEXT\t<prompt>` requests. It applies the model chat template, calls `diffusion_generate_entropy_bound(...)` in-process, extracts a conservative clean answer, and returns compact `TEXT_OK`/`TEXT_NO_CLEAN` lines without full logits.
+- Build verification: `cmake --build build-dg --config Release -j 8 --target llama-diffusion-gemma-server` passed after the C++/CMake patch.
+- Backward compatibility: `READY_TIMEOUT=180 scripts/diffusion_gemma_server_smoke.sh` still returned `READY 262144`.
+- Resident text smoke: `READY_TIMEOUT=180 TEXT_TIMEOUT=180 scripts/diffusion_gemma_text_server_smoke.sh` sent two prompts to one resident process and returned `text_ok=2/2`, `trace_rows=0`, `large_rows=0`, `server_ready_count=1`. The two compact responses were `85` and `109` text bytes, with step times around `6006.63ms` and `5930.55ms`.
+- Boundary: this is a local PR-worktree prototype, not upstreamed llama.cpp behavior. The clean-answer extractor is conservative heuristic code in the server example; keep the CLI/wrapper path as fallback while broad prompt coverage is untested.
+**update 2026-06-10p:**
+- `scripts/diffusion_gemma_validate_text_replies.py` validates compact resident `TEXT_OK` reply logs: required fields, escaped text decoding, declared byte count, max response size, no trace/draft markers, no residual quotes/stars, no repeated-word stutter, and sentence-like termination.
+- `scripts/diffusion_gemma_text_server_smoke.sh` now runs the validator after confirming one resident `READY` and all rows are `TEXT_OK`.
+- Fixture adversary checks passed without loading the model: a clean synthetic `TEXT_OK` row passed, while a row containing `<|channel>thought Draft bad` plus a wrong byte count failed with validator errors.
+**update 2026-06-10q:**
+- Reverified the full resident text path after validator integration: `READY_TIMEOUT=180 TEXT_TIMEOUT=180 scripts/diffusion_gemma_text_server_smoke.sh` returned one `READY`, two `TEXT_OK` rows, compact text byte counts `85` and `109`, and `text_reply_validation rows_ok=2 errors=0`. The measured in-server generation times were `6591.58ms` and `6435.28ms`.
+**update 2026-06-10r:**
+- The PR resident server now accepts backward-compatible per-request denoise steps via `TEXT\tsteps=N\t<prompt>`; plain `TEXT\t<prompt>` still uses the process `TEXT_STEPS` default.
+- `scripts/diffusion_gemma_text_server_smoke.sh` can send per-request steps through `REQUEST_STEPS`, and fails closed before model load when the step count does not match the prompt count or contains invalid values.
+- `scripts/diffusion_gemma_text_steps_sweep.sh` runs a resident per-request steps sweep and uses validator `--allow-no-clean` so low-step quality failures are recorded as `TEXT_NO_CLEAN` rather than hidden transport failures.
+- Local sweep evidence on the fixed verification prompt in one resident process: `STEPS_LIST='8 10 12' scripts/diffusion_gemma_text_steps_sweep.sh` returned `TEXT_OK` for all three rows with `steps=8/10/12` at `6436.92/8133.77/9762.17ms`.
+- Boundary/adversary: strict `REQUEST_STEPS='8 8' scripts/diffusion_gemma_text_server_smoke.sh` produced `TEXT_OK` for the first prompt but `TEXT_NO_CLEAN` for the resident-inference prompt, so 8 steps is not a global default. Mixed `REQUEST_STEPS='8 10'` passed strict validation for the two default prompts, showing a usable adaptive scheduling corridor under the current prompt pair.
+**update 2026-06-10s:**
+- `scripts/diffusion_gemma_text_steps_calibrate.sh` calibrates minimum clean denoise steps for a prompt suite in one resident server load. It supports default prompts or `PROMPTS_FILE` lines as `NAME::TEXT`, rejects empty suites and tab-bearing prompts before model load, and emits both full reply logs and a compact TSV summary.
+- Default calibration with `STEPS_LIST='8 10 12'` selected `verify -> 8` and `resident -> 10` with `clean=2/2`, `attempts=3`, and `server_ready_count=1`. The quality pattern matches the prior strict adversary check: `resident@8` returned `TEXT_NO_CLEAN`, then `resident@10` returned `TEXT_OK`.
+- Boundary: this calibration run was host-noisy (`verify@8=10256.20ms`, `resident@8=12880.99ms`, `resident@10=16582.97ms`), so it is a prompt-step quality classifier, not a fresh public speed row.
+**update 2026-06-10t:**
+- Pivoted the implementation path back to native Cogni-ML. The llama.cpp PR worktree remains an oracle/harness, not the product runtime.
+- `DiffusionGemmaHparams` now exposes oracle-compatible entropy-bound defaults (`max_steps=48`, `t_min=0.4`, `t_max=0.8`, `entropy_bound=0.1`, `stability=1`, `confidence=0.005`) because the local GGUF only stores `diffusion.canvas_length`.
+- Added `src/ml/gguf/diffusion_gemma_runtime.cr`, the first native runtime substrate: denoise params, prompt/canvas request validation, packed token split, region-aware unified/decode attention-mask predicates, self-conditioning logits byte budget, KV dimension lookup, and prompt-vs-canvas layer-scalar selection.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_runtime.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused `scripts/run_safe.sh /opt/homebrew/bin/crystal 240 6000 spec spec/diffusion_gemma_meta_spec.cr --error-trace --link-flags="/Users/sergey/Projects/Crystal/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` passed with `8 examples, 0 failures`.
+- Boundary: this is not yet math forward. It is the fail-fast semantic substrate required before implementing embeddings, self-conditioning projection, attention, MoE FFN, and entropy-bound denoise in Cogni-ML.
+**update 2026-06-10u:**
+- Added `src/ml/gguf/diffusion_gemma_cpu.cr`, the first native zero-self-conditioning math primitive. It reuses Gemma4 row dequantization for token embeddings, applies DiffusionGemma `sqrt(n_embd)` scaling, and builds region embeddings where prompt rows remain scaled embeddings while canvas rows are no-scale RMSNormed scaled embeddings.
+- Focused spec now checks that region row 0 matches `scaled_embedding_lookup`, row `canvas_start` matches `zero_sc_canvas_embedding`, canvas RMS is approximately 1.0, prompt RMS remains larger than 1.0, and invalid token ids fail before forward.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused real-GGUF spec passed with `10 examples, 0 failures`.
+- Boundary: this covers input-region math only. Self-conditioning soft embeddings, attention, MoE FFN, output head, and entropy-bound denoise remain unimplemented natively.
+**update 2026-06-10v:**
+- Extended `DiffusionGemmaCPU` with native attention projection primitives for one layer: attention input RMSNorm, Q/K/V matmul, Q/K learned RMSNorm, V plain RMSNorm, K-as-V reuse for full-attention layers with no explicit V tensor, and RoPE application through the Gemma4 CPU helper.
+- Focused spec now verifies SWA layer 0 projection sizes (`q=16*256`, `k/v=8*256`) with explicit V, full layer 5 projection sizes (`q=16*512`, `k/v=2*512`) with K-as-V reuse, learned Q/K norm RMS matching the learned norm weights, and plain V RMS near 1.0.
+- Adversary correction: an initial spec incorrectly expected Q/K head RMS to be exactly 1.0. The real semantics use learned Q/K norm weights, so the invariant is learned-weight RMS; only V plain norm is unit RMS.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused real-GGUF spec passed with `11 examples, 0 failures`.
+- Boundary: this is projection-only. Region-aware attention scoring/softmax, output projection, MoE FFN, layer scaling through a full block, and denoise scheduling remain open.
+**update 2026-06-10w:**
+- Added native CPU/reference attention context helpers for DiffusionGemma: `attention_context_unified` for the square `[prompt|canvas]` forward and `attention_context_decode` for prompt-KV decode over cached prompt projections plus fresh canvas projections.
+- The implementation applies the region-aware mask substrate before softmax: prompt queries are causal over prompt only; canvas queries are bidirectional over canvas and the permitted prompt range, with SWA using the last `n_swa-1` prompt positions.
+- Synthetic projection spec uses zero Q/K scores and constant V rows so outputs directly certify which key rows were visible. It verifies prompt query 0 sees only key 0, prompt query 1 averages keys 0/1, canvas query under SWA averages prompt keys 2/3 plus canvas keys 4/5, and decode mode matches the same canvas visibility.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused real-GGUF/synthetic spec passed with `12 examples, 0 failures`.
+- Boundary: this is attention context before the attention output projection. It does not yet include the layer residual, post-attention norm, MoE FFN, region layer scaling, or final logits.
+**update 2026-06-10x:**
+- Added native CPU/reference attention tail primitives: `attention_output_project` runs the real `attn_output_qw @ context` projection and `attention_residual_from_context` applies post-attention RMSNorm then adds the residual input row.
+- Focused real-GGUF spec verifies SWA and full-attention zero-context output projection shapes, exact zero projected outputs, residual identity on zero context, and fail-fast context-size validation.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `13 examples, 0 failures`.
+- Boundary: native attention half-block is now structurally covered through residual. MoE FFN, region layer scaling, multi-row layer execution, self-conditioning, and denoise scheduling remain open.
+**update 2026-06-10y:**
+- Added native CPU/reference FFN substrate pieces: `shared_dense_ffn` computes the dense shared FFN branch (`ffn_norm -> up/gate GELU product -> down -> post_ffw_norm_1`) and `ffn_residual_from_parts` combines shared dense plus optional MoE branch, applies final `post_ffw_norm`, and adds the residual.
+- Boundary is explicit: this is not a full DiffusionGemma FFN parity claim until router/top-k experts are implemented. It exposes the shared branch and the final residual combiner that the MoE path will feed.
+- Focused real-GGUF spec runs the real quantized dense FFN branch on a zero row, verifies exact zero output/residual identity, and checks fail-fast size validation.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `14 examples, 0 failures`.
+**update 2026-06-10z:**
+- Added native CPU/reference MoE router substrate: `router_input` applies plain RMSNorm, `1/sqrt(n_embd)`, and `ffn_gate_inp.scale`; `router_logits` runs the real `ffn_gate_inp.weight`; `softmax`, `top_k_experts`, and `route_experts` expose llama.cpp-compatible softmax-before-top-k routing weights without top-k renormalization.
+- Focused real-GGUF spec verifies router input/logit sizes, softmax sum near 1.0, top-8 expert ids in range sorted by probability, raw top-k probability sum below 1.0, deterministic zero-input tie routing to experts `0..7`, and fail-fast invalid input size handling.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `15 examples, 0 failures`.
+- Boundary: this is routing only. Full MoE parity still needs per-expert gate/up/down slicing, expert output scaling, MoE branch norm, and integration into a full layer/block forward.
+**update 2026-06-10aa:**
+- Added native CPU/reference MoE expert branch and FFN residual integration. `moe_expert_output` slices mmap-backed quantized expert rows for fused `ffn_gate_up_exps` and `ffn_down_exps`, applies GEGLU, per-expert `ffn_down_exps.scale`, and returns one expert output. `moe_ffn` applies `pre_ffw_norm_2`, weighted routed expert aggregation, and `post_ffw_norm_2`. `ffn_residual` combines shared dense FFN plus routed MoE and feeds the existing final residual combiner.
+- Focused real-GGUF spec verifies zero-input MoE identity, real quantized expert slice nonzero finite output on one selected route, invalid expert/empty-route failures, full FFN residual identity on zero input, and finite non-identity output on a nonzero single-route row.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `17 examples, 0 failures`.
+- Boundary: FFN is now covered for one row at CPU/reference granularity. Native runtime still lacks self-conditioning soft embeddings, multi-row layer scheduling with prompt/canvas layer scales, final output logits, entropy-bound denoise iteration, and Metal acceleration.
+**update 2026-06-10ab:**
+- Added one-row native layer-tail composition: `layer_output_from_context` runs attention residual from a supplied attention context, full FFN residual, then applies the region-aware layer scalar; `scale_layer_output` selects `encoder_layer_output_scale` for prompt rows and `layer_output_scale` for canvas rows.
+- Focused real-GGUF spec verifies zero-context/zero-row identity, explicit multiplication by the selected scale tensor, and finite one-row layer-tail output with a single routed expert.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `18 examples, 0 failures`.
+- Refuted assumption: prompt and canvas scalar values are not guaranteed to differ on a given layer; layer 0 made `canvas_scaled == prompt_scaled`, so tests must assert selection semantics against the actual tensor value rather than inequality.
+- Boundary: this is not yet multi-row/full-layer parity. It assumes a precomputed attention context and does not yet schedule QKV/context for every prompt/canvas row, self-conditioning, final logits, or denoise iteration.
+**update 2026-06-10ac:**
+- Added native self-conditioning substrate and the missing CPU `Q5_0` fused matmul support needed by `self_cond_down.weight`. `self_conditioning_soft_embedding` computes a testable subset softmax over token logits and weighted scaled embeddings; `self_conditioning_signal` runs `pre_norm -> gate/up GEGLU -> down`; `canvas_embedding_with_self_conditioning` applies the runtime `sc_use` gate, adds the signal to the scaled canvas embedding, and plain-RMSNorms the canvas row.
+- Focused real-GGUF spec verifies single-token SC soft embedding equals the scaled token embedding, real SC signal is finite/nonzero through `Q4_K` + `Q5_0` tensors, `sc_use=0` exactly matches the zero-SC canvas path, `sc_use=1` changes the row while preserving RMS near 1.0, and invalid SC logits/temp inputs fail before forward.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `19 examples, 0 failures`.
+- Boundary: this is not a full previous-step logits scheduler. The current API supports a bounded/subset logits corridor for verification and later top-k SC acceleration; full DiffusionGemma canvas SC still needs `[canvas, vocab]` logits transport or a certified sparse/top-k equivalent.
+**update 2026-06-10ad:**
+- Added bounded native output-head helpers. `output_hidden_norm` applies the final output RMSNorm; `output_logits_for_tokens` slices selected rows from the tied token embedding, runs quantized row matmuls, and applies DiffusionGemma's optional final logit softcap.
+- Focused real-GGUF spec verifies zero hidden produces exact zero logits for selected token ids, nonzero canvas hidden produces finite/nonzero bounded logits, empty token lists fail, and out-of-range token ids fail before row slicing.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `20 examples, 0 failures`.
+- Boundary: this is a sparse/debug output corridor, not full vocabulary logits for all 256 canvas rows. It is enough for bounded denoise experiments, top-k probes, and exact small-candidate checks before implementing a full or Metal-backed vocab head.
+**update 2026-06-10ae:**
+- Added bounded denoise candidate primitives. `bounded_candidate_prediction` turns raw logits over a strictly increasing candidate-token set into temperature-scaled probabilities, entropy, argmax token, and deterministic multinomial sample for a supplied `sample_u`. `bounded_denoise_prediction` backs that with the sparse output head. `entropy_bound_accept` mirrors the oracle's lowest-entropy cumulative acceptance rule over a small entropy vector, and `update_canvas_token` provides a pure canvas update helper.
+- Focused spec verifies non-uniform and uniform candidate distributions, entropy values, deterministic sampling, entropy-bound acceptance ordering, canvas-token update immutability, invalid candidate order/randomness/bounds, and model-backed zero/nonzero bounded predictions through the real GGUF.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `22 examples, 0 failures`.
+- Boundary: this is a candidate-set denoise corridor, not full entropy-bound generation. Full native EB still needs multi-row canvas forward, full or certified sparse vocab rows per canvas position, renoise RNG scheduling, previous-step SC logits transport, and stability/mean-entropy stopping across the whole canvas.
+**update 2026-06-10af:**
+- Added the first native multi-row layer scheduler: `layer_forward_unified_rows` validates packed `[prompt|canvas]` rows, projects all row QKV states, applies the region-aware unified attention mask per query row, then runs the existing attention tail + FFN/MoE + prompt/canvas layer scale composition for each row.
+- Focused real-GGUF spec runs layer 0 over a small two-row `[prompt|canvas]` window with one preselected expert route per row, verifies finite non-identity outputs, compares both result rows exactly against explicit helper composition, and checks fail-fast invalid rows/routes sizing.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `23 examples, 0 failures`.
+- Boundary: this is a small-window CPU/reference layer scheduler. It is not yet a full 30-layer denoise loop, prompt-KV cached decode scheduler, full-vocab canvas head, or Metal-resident fast path.
+**update 2026-06-10ag:**
+- Added `layer_forward_decode_canvas_rows`, a native prompt-KV decode layer helper. It validates prompt/canvas row buffers separately, projects prompt rows and canvas rows into distinct keyspaces, uses the existing decode attention mask, and returns only updated canvas rows through the same attention tail + FFN/MoE + canvas layer scale composition.
+- Focused real-GGUF spec verifies the one-prompt/one-canvas decode output exactly matches the canvas slice from `layer_forward_unified_rows` under the same routes, and checks fail-fast prompt rows, canvas rows, and route-count validation.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `24 examples, 0 failures`.
+- Boundary: this is a one-layer CPU/reference prompt-KV equivalence helper. It does not yet cache projections across denoise steps, run all 30 layers, or keep KV/hidden state resident on Metal.
+**update 2026-06-10ah:**
+- Split prompt projection construction into `prompt_attention_projections` and added `layer_forward_decode_canvas_rows_with_prompt_projections` so decode-layer canvas rows can reuse an externally cached prompt keyspace instead of recomputing prompt QKV inside the canvas path.
+- Focused real-GGUF spec verifies cached decode output exactly matches uncached decode output with the same route, and checks fail-fast invalid prompt-row size and prompt-projection cache count.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `25 examples, 0 failures`.
+- Boundary: this is the one-layer projection-cache boundary only. It does not yet persist per-layer prompt hidden states/projections across a full 30-layer stack or denoise iteration.
+**update 2026-06-10ai:**
+- Added prompt-only native layer helpers. `attention_context_prompt` applies the prompt causal/SWA window without constructing an invalid zero-canvas mask, and `layer_forward_prompt_rows` runs prompt rows through the same attention tail + FFN/MoE + prompt layer scale path used by unified forward.
+- Focused real-GGUF spec verifies a two-prompt/one-canvas setup where prompt-only layer output exactly matches the prompt slice from `layer_forward_unified_rows`, and checks fail-fast prompt-row and route-count validation.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `26 examples, 0 failures`.
+- Boundary: this is still one-layer CPU/reference prompt scheduling. It enables later full prompt-cache construction, but does not yet compute or store all 30 per-layer prompt states/projections.
+**update 2026-06-10aj:**
+- Added `PromptLayerCache` and `build_prompt_layer_cache`. The builder records per-layer prompt projections before each prompt-only layer update, returns final prompt rows, accepts a bounded `max_layers`, and can use supplied routes so tests and future sparse routing experiments avoid full top-8 expert cost.
+- Added `layer_forward_prompt_rows_with_projections` so cache construction uses the same saved projections that later canvas decode will consume instead of recomputing a hidden prompt projection boundary.
+- Focused real-GGUF spec verifies `max_layers: 1` cache projections and final rows match the explicit prompt projection + prompt-only layer helpers, and checks fail-fast invalid layer count and route-layer shape.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `27 examples, 0 failures`.
+- Boundary: the cache API is ready for the full stack, but the current verification is intentionally bounded to one layer. Full 30-layer prompt-cache timing and canvas decode integration remain separate performance gates.
+**update 2026-06-10ak:**
+- Added `decode_canvas_rows_with_prompt_cache`, the first native canvas decode stack helper over a cached prompt projection stack. It validates canvas rows, prompt-cache final row shape, requested layer count, cache depth, and optional per-layer canvas routes, then updates canvas rows layer-by-layer through `layer_forward_decode_canvas_rows_with_prompt_projections`.
+- Focused real-GGUF spec verifies the bounded `max_layers: 1` stack output exactly matches the direct one-layer cached decode helper, and checks fail-fast invalid canvas rows, insufficient prompt-cache depth, and route-layer shape.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `28 examples, 0 failures`.
+- Boundary: this is a CPU/reference decode-stack API with a one-layer correctness gate. Full 30-layer timing, exact route generation per layer, self-conditioning canvas updates, and Metal residency remain open.
+**update 2026-06-10al:**
+- Added `decode_canvas_bounded_predictions`, which runs bounded canvas decode through a `PromptLayerCache`, slices each decoded canvas hidden row, and produces `BoundedDenoisePrediction` over caller-supplied candidate token sets. It validates candidate-row count and optional per-row sampling values before the decode.
+- Focused real-GGUF spec verifies the helper matches explicit `decode_canvas_rows_with_prompt_cache` plus `bounded_denoise_prediction` for one canvas row and a three-token candidate set, including deterministic `sample_u`, and checks fail-fast candidate/sample shape validation.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `29 examples, 0 failures`.
+- Boundary: this is a sparse/candidate-set denoise bridge, not full-vocabulary canvas logits. Full EB still needs candidate generation or full vocab head, entropy-bound canvas updates, self-conditioning logits transport, and measured multi-step scheduling.
+**update 2026-06-10am:**
+- Added `BoundedCanvasUpdate`, `apply_entropy_bound_predictions`, and `decode_canvas_bounded_step`. The step helper runs cached canvas decode over candidate token sets, applies the entropy-bound acceptance rule, and returns immutable updated canvas tokens plus accepted flags and predictions.
+- Focused spec extends the real-GGUF cached prediction gate to verify `decode_canvas_bounded_step` matches the explicit prediction path and updates the accepted canvas token. Synthetic adversary checks verify sampled-token vs argmax update semantics, entropy-bound acceptance ordering, prediction-count validation, and canvas-token count validation.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `29 examples, 0 failures`.
+- Boundary: this is one sparse denoise update step. It does not yet regenerate canvas rows after token updates, transport previous-step self-conditioning logits, iterate until EB stopping criteria, or use a full-vocabulary head.
+**update 2026-06-10an:**
+- Added `canvas_rows_from_tokens` and extended `BoundedCanvasUpdate` with optional regenerated canvas rows. `decode_canvas_bounded_step` now returns rows rebuilt from accepted token updates, using zero-SC by default and supporting caller-supplied sparse self-conditioning token/logit rows.
+- Focused real-GGUF specs verify zero-SC row regeneration equals `zero_sc_canvas_embedding`, sparse SC row regeneration equals `canvas_embedding_with_self_conditioning`, paired SC row validation fails fast, and the bounded step returns regenerated rows for the accepted sampled token.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `29 examples, 0 failures`.
+- Boundary: regenerated rows are available for the next sparse step, but this is not yet a multi-step EB loop and does not yet transport full previous-step `[canvas,vocab]` logits.
+
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified
 **trust:** {F:0.86, G:narrow, R:0.84}

@@ -5,14 +5,14 @@
 # This matches llama.cpp's approach and gives higher precision than
 # bulk dequant→F32→matmul because intermediate values stay in registers.
 #
-# Supports: Q4_K, Q5_K, Q6_K, Q8_0, IQ4_NL, F32, F16
+# Supports: Q5_0, Q4_K, Q5_K, Q6_K, Q8_0, IQ4_NL, F32, F16
 
 require "./reader" # for TensorType
 
 module ML::GGUF
   module QuantMatmul
-    QK_K = 256
-    QK4_NL = 32
+    QK_K   = 256
+    QK4_NL =  32
 
     # Fused matmul: result[o] = Σ_j x[j] * dequant(W_raw[o, j]) + bias[o]
     # W_raw is quantized weight data as raw bytes, row-major [out_dim rows, in_dim cols].
@@ -23,13 +23,14 @@ module ML::GGUF
       bias : Array(Float32),
     ) : Array(Float32)
       case w_type
-      when .q4_k? then matmul_add_q4k(x, rows, in_dim, w_raw, out_dim, bias)
-      when .q5_k? then matmul_add_q5k(x, rows, in_dim, w_raw, out_dim, bias)
-      when .q6_k? then matmul_add_q6k(x, rows, in_dim, w_raw, out_dim, bias)
-      when .q8_0? then matmul_add_q8_0(x, rows, in_dim, w_raw, out_dim, bias)
+      when .q5_0?   then matmul_add_q5_0(x, rows, in_dim, w_raw, out_dim, bias)
+      when .q4_k?   then matmul_add_q4k(x, rows, in_dim, w_raw, out_dim, bias)
+      when .q5_k?   then matmul_add_q5k(x, rows, in_dim, w_raw, out_dim, bias)
+      when .q6_k?   then matmul_add_q6k(x, rows, in_dim, w_raw, out_dim, bias)
+      when .q8_0?   then matmul_add_q8_0(x, rows, in_dim, w_raw, out_dim, bias)
       when .iq4_nl? then matmul_add_iq4_nl(x, rows, in_dim, w_raw, out_dim, bias)
-      when .f32?  then matmul_add_f32(x, rows, in_dim, w_raw, out_dim, bias)
-      when .f16?  then matmul_add_f16(x, rows, in_dim, w_raw, out_dim, bias)
+      when .f32?    then matmul_add_f32(x, rows, in_dim, w_raw, out_dim, bias)
+      when .f16?    then matmul_add_f16(x, rows, in_dim, w_raw, out_dim, bias)
       else
         raise "Unsupported quant type for fused matmul: #{w_type.name}"
       end
@@ -72,6 +73,57 @@ module ML::GGUF
         end
       end
       {best_id, best_logit}
+    end
+
+    # Q5_0 fused matmul.
+    # Block layout: [d:f16][qh:u8[4]][qs:u8[16]] = 22 B.
+    private def self.matmul_add_q5_0(
+      x : Array(Float32), rows : Int32, in_dim : Int32,
+      w_raw : Bytes, out_dim : Int32, bias : Array(Float32),
+    ) : Array(Float32)
+      block_elems = 32
+      block_size = 22
+      blocks_per_row = (in_dim + block_elems - 1) // block_elems
+      row_bytes = blocks_per_row * block_size
+      result = Array(Float32).new(rows * out_dim, 0.0_f32)
+      w_ptr = w_raw.to_unsafe
+
+      rows.times do |r|
+        x_off = r * in_dim
+        r_off = r * out_dim
+
+        out_dim.times do |o|
+          sum = bias[o].to_f64
+          w_row = w_ptr + o * row_bytes
+
+          blocks_per_row.times do |blk|
+            blk_ptr = w_row + blk * block_size
+            d = Dequant.fp16_to_f32(Bytes.new(blk_ptr, 2)).to_f64
+            qh = IO::ByteFormat::LittleEndian.decode(UInt32, Bytes.new(blk_ptr + 2, 4))
+            qs_ptr = blk_ptr + 6
+            base_j = blk * block_elems
+
+            first_count = Math.min(block_elems // 2, in_dim - base_j)
+            first_count.times do |j|
+              xh = ((qh >> j) << 4) & 0x10
+              q = ((qs_ptr[j] & 0x0F).to_u32 | xh).to_i32 - 16
+              sum += x[x_off + base_j + j].to_f64 * (d * q)
+            end
+
+            second_base = base_j + block_elems // 2
+            second_count = Math.min(block_elems // 2, in_dim - second_base)
+            second_count.times do |j|
+              xh = (qh >> (j + 12)) & 0x10
+              q = ((qs_ptr[j] >> 4).to_u32 | xh).to_i32 - 16
+              sum += x[x_off + second_base + j].to_f64 * (d * q)
+            end
+          end
+
+          result[r_off + o] = sum.to_f32
+        end
+      end
+
+      result
     end
 
     # Q4_K fused matmul: for each output neuron, walk through Q4_K blocks

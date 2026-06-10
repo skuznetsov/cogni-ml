@@ -1,0 +1,1015 @@
+require "./diffusion_gemma_runtime"
+require "./gemma4_cpu"
+
+module ML::GGUF
+  module DiffusionGemmaCPU
+    extend self
+
+    struct AttentionProjection
+      getter q : Array(Float32)
+      getter k : Array(Float32)
+      getter v : Array(Float32)
+      getter reused_k_as_v : Bool
+
+      def initialize(@q, @k, @v, @reused_k_as_v)
+      end
+    end
+
+    struct ExpertRoute
+      getter expert : Int32
+      getter weight : Float32
+
+      def initialize(@expert, @weight)
+      end
+    end
+
+    struct BoundedDenoisePrediction
+      getter candidate_token_ids : Array(Int32)
+      getter logits : Array(Float32)
+      getter probabilities : Array(Float32)
+      getter argmax_token_id : Int32
+      getter sampled_token_id : Int32
+      getter entropy : Float32
+
+      def initialize(@candidate_token_ids,
+                     @logits,
+                     @probabilities,
+                     @argmax_token_id,
+                     @sampled_token_id,
+                     @entropy)
+      end
+    end
+
+    struct BoundedCanvasUpdate
+      getter updated_canvas_tokens : Array(Int32)
+      getter accepted : Array(Bool)
+      getter predictions : Array(BoundedDenoisePrediction)
+      getter updated_canvas_rows : Array(Float32)?
+
+      def initialize(@updated_canvas_tokens,
+                     @accepted,
+                     @predictions,
+                     @updated_canvas_rows = nil)
+      end
+    end
+
+    struct PromptLayerCache
+      getter final_rows : Array(Float32)
+      getter projections_by_layer : Array(Array(AttentionProjection))
+
+      def initialize(@final_rows, @projections_by_layer)
+      end
+
+      def layers : Int32
+        @projections_by_layer.size
+      end
+    end
+
+    def embedding_lookup(weights : DiffusionGemmaWeights, token_id : Int32) : Array(Float32)
+      Gemma4CPU.embedding_lookup(weights.token_embd, token_id)
+    end
+
+    def scaled_embedding_lookup(weights : DiffusionGemmaWeights, token_id : Int32) : Array(Float32)
+      x = embedding_lookup(weights, token_id)
+      scale = Math.sqrt(weights.hparams.n_embd.to_f64).to_f32
+      x.size.times { |i| x[i] *= scale }
+      x
+    end
+
+    # Canvas rows use no-scale RMSNorm after the shared scaled token embedding.
+    # Self-conditioning is intentionally excluded here; this is the zero-SC
+    # exactness path and the first native boundary for oracle comparison.
+    def zero_sc_canvas_embedding(weights : DiffusionGemmaWeights, token_id : Int32) : Array(Float32)
+      x = scaled_embedding_lookup(weights, token_id)
+      Gemma4CPU.rms_norm_plain!(x, weights.hparams.rms_eps)
+      x
+    end
+
+    def self_conditioning_soft_embedding(weights : DiffusionGemmaWeights,
+                                         token_ids : Array(Int32),
+                                         logits : Array(Float32),
+                                         temp_inv : Float32 = 1.0_f32) : Array(Float32)
+      hp = weights.hparams
+      raise ArgumentError.new("self-conditioning token_ids must not be empty") if token_ids.empty?
+      raise ArgumentError.new("self-conditioning logits size mismatch") unless logits.size == token_ids.size
+      raise ArgumentError.new("self-conditioning temp_inv must be finite and positive") unless temp_inv.finite? && temp_inv > 0.0_f32
+
+      scaled_logits = logits.map { |v| v * temp_inv }
+      probs = softmax(scaled_logits)
+      result = Array(Float32).new(hp.n_embd, 0.0_f32)
+      token_ids.each_with_index do |token_id, i|
+        emb = scaled_embedding_lookup(weights, token_id)
+        weight = probs[i]
+        hp.n_embd.times { |j| result[j] += weight * emb[j] }
+      end
+      result
+    end
+
+    def self_conditioning_signal(weights : DiffusionGemmaWeights,
+                                 soft_embedding : Array(Float32)) : Array(Float32)
+      hp = weights.hparams
+      sc = weights.self_conditioning
+      raise ArgumentError.new("self-conditioning embedding size mismatch") unless soft_embedding.size == hp.n_embd
+
+      normed = Gemma4CPU.rms_norm(soft_embedding, sc.pre_norm, hp.rms_eps)
+      gate = Gemma4CPU.matmul(sc.gate_qw, normed)
+      up = Gemma4CPU.matmul(sc.up_qw, normed)
+      raise ArgumentError.new("self-conditioning gate/up size mismatch") unless gate.size == hp.n_ff && up.size == hp.n_ff
+      gate.size.times { |i| gate[i] = Gemma4CPU.gelu(gate[i]) * up[i] }
+      signal = Gemma4CPU.matmul(sc.down_qw, gate)
+      raise ArgumentError.new("self-conditioning signal size mismatch") unless signal.size == hp.n_embd
+      signal
+    end
+
+    def canvas_embedding_with_self_conditioning(weights : DiffusionGemmaWeights,
+                                                token_id : Int32,
+                                                sc_token_ids : Array(Int32),
+                                                sc_logits : Array(Float32),
+                                                temp_inv : Float32 = 1.0_f32,
+                                                sc_use : Float32 = 1.0_f32) : Array(Float32)
+      hp = weights.hparams
+      raise ArgumentError.new("self-conditioning use gate must be finite") unless sc_use.finite?
+
+      canvas = scaled_embedding_lookup(weights, token_id)
+      if sc_use != 0.0_f32
+        soft = self_conditioning_soft_embedding(weights, sc_token_ids, sc_logits, temp_inv)
+        signal = self_conditioning_signal(weights, soft)
+        hp.n_embd.times { |i| canvas[i] += sc_use * signal[i] }
+      end
+      Gemma4CPU.rms_norm_plain!(canvas, hp.rms_eps)
+      canvas
+    end
+
+    def region_embeddings(weights : DiffusionGemmaWeights,
+                          request : DiffusionGemmaRequest) : Array(Float32)
+      hp = weights.hparams
+      result = Array(Float32).new(request.total_tokens * hp.n_embd, 0.0_f32)
+      row = 0
+      request.prompt_tokens.each do |token_id|
+        copy_row!(result, row, hp.n_embd, scaled_embedding_lookup(weights, token_id))
+        row += 1
+      end
+      request.canvas_tokens.each do |token_id|
+        copy_row!(result, row, hp.n_embd, zero_sc_canvas_embedding(weights, token_id))
+        row += 1
+      end
+      result
+    end
+
+    def canvas_rows_from_tokens(weights : DiffusionGemmaWeights,
+                                canvas_tokens : Array(Int32),
+                                sc_token_ids_by_canvas_row : Array(Array(Int32))? = nil,
+                                sc_logits_by_canvas_row : Array(Array(Float32))? = nil,
+                                sc_temp_inv : Float32 = 1.0_f32,
+                                sc_use : Float32 = 1.0_f32) : Array(Float32)
+      hp = weights.hparams
+      if sc_token_ids_by_canvas_row || sc_logits_by_canvas_row
+        raise ArgumentError.new("self-conditioning token/logit rows must be supplied together") unless sc_token_ids_by_canvas_row && sc_logits_by_canvas_row
+        raise ArgumentError.new("self-conditioning token rows size mismatch") unless sc_token_ids_by_canvas_row.not_nil!.size == canvas_tokens.size
+        raise ArgumentError.new("self-conditioning logit rows size mismatch") unless sc_logits_by_canvas_row.not_nil!.size == canvas_tokens.size
+      end
+
+      result = Array(Float32).new(canvas_tokens.size * hp.n_embd, 0.0_f32)
+      canvas_tokens.each_with_index do |token_id, row|
+        values = if sc_token_ids_by_canvas_row && sc_logits_by_canvas_row
+                   canvas_embedding_with_self_conditioning(
+                     weights,
+                     token_id,
+                     sc_token_ids_by_canvas_row.not_nil![row],
+                     sc_logits_by_canvas_row.not_nil![row],
+                     temp_inv: sc_temp_inv,
+                     sc_use: sc_use,
+                   )
+                 else
+                   zero_sc_canvas_embedding(weights, token_id)
+                 end
+        copy_row!(result, row, hp.n_embd, values)
+      end
+      result
+    end
+
+    def attention_project_pre_norm(lw : DiffusionGemmaLayerWeights, x_norm : Array(Float32)) : AttentionProjection
+      q = Gemma4CPU.matmul(lw.attn_q_qw, x_norm)
+      k = Gemma4CPU.matmul(lw.attn_k_qw, x_norm)
+      if v_qw = lw.attn_v_qw
+        v = Gemma4CPU.matmul(v_qw, x_norm)
+        AttentionProjection.new(q, k, v, false)
+      else
+        AttentionProjection.new(q, k, k.dup, true)
+      end
+    end
+
+    def attention_project_normed(weights : DiffusionGemmaWeights,
+                                 il : Int32,
+                                 x : Array(Float32),
+                                 pos : Int32) : AttentionProjection
+      hp = weights.hparams
+      lw = weights.layers[il]
+      raise ArgumentError.new("attention_project input size mismatch") unless x.size == hp.n_embd
+      x_norm = Gemma4CPU.rms_norm(x, lw.attn_norm, hp.rms_eps)
+      proj = attention_project_pre_norm(lw, x_norm)
+      normalize_attention_projection!(proj, lw, hp, il)
+      apply_rope_to_qk!(proj, hp, il, pos, weights.rope_freqs)
+      proj
+    end
+
+    def normalize_attention_projection!(proj : AttentionProjection,
+                                        lw : DiffusionGemmaLayerWeights,
+                                        hp : DiffusionGemmaHparams,
+                                        il : Int32) : Nil
+      head_dim = hp.head_dim_for_layer(il)
+      n_head = hp.n_head
+      n_head_kv = hp.n_head_kv(il)
+
+      raise ArgumentError.new("q projection size mismatch at layer #{il}") unless proj.q.size == n_head * head_dim
+      raise ArgumentError.new("k projection size mismatch at layer #{il}") unless proj.k.size == n_head_kv * head_dim
+      raise ArgumentError.new("v projection size mismatch at layer #{il}") unless proj.v.size == n_head_kv * head_dim
+
+      n_head.times do |h|
+        Gemma4CPU.rms_norm_slice!(proj.q, h * head_dim, head_dim, lw.attn_q_norm, hp.rms_eps)
+      end
+      n_head_kv.times do |h|
+        off = h * head_dim
+        Gemma4CPU.rms_norm_slice!(proj.k, off, head_dim, lw.attn_k_norm, hp.rms_eps)
+        Gemma4CPU.rms_norm_plain_slice!(proj.v, off, head_dim, hp.rms_eps)
+      end
+    end
+
+    def apply_rope_to_qk!(proj : AttentionProjection,
+                          hp : DiffusionGemmaHparams,
+                          il : Int32,
+                          pos : Int32,
+                          rope_freqs : Array(Float32)? = nil) : Nil
+      head_dim = hp.head_dim_for_layer(il)
+      n_rot = hp.rope_dim_for_layer(il)
+      base = hp.rope_freq_base_for_layer(il)
+      freqs = hp.full_attention?(il) ? rope_freqs : nil
+
+      hp.n_head.times do |h|
+        Gemma4CPU.rope_neox_slice!(proj.q, h * head_dim, n_rot, head_dim, pos, base, freqs)
+      end
+      hp.n_head_kv(il).times do |h|
+        Gemma4CPU.rope_neox_slice!(proj.k, h * head_dim, n_rot, head_dim, pos, base, freqs)
+      end
+    end
+
+    def attention_context_unified(projections : Array(AttentionProjection),
+                                  hp : DiffusionGemmaHparams,
+                                  il : Int32,
+                                  query_pos : Int32,
+                                  mask : DiffusionGemmaAttentionMask) : Array(Float32)
+      raise ArgumentError.new("projection count #{projections.size} != total tokens #{mask.total_tokens}") unless projections.size == mask.total_tokens
+      raise ArgumentError.new("query_pos out of bounds") if query_pos < 0 || query_pos >= projections.size
+
+      attention_context_from_keyspace(
+        query: projections[query_pos],
+        keyspace: projections,
+        hp: hp,
+        il: il,
+        allowed: ->(key_pos : Int32) { mask.allow_unified?(query_pos, key_pos, hp.sliding_window?(il)) },
+      )
+    end
+
+    def attention_context_decode(prompt_projections : Array(AttentionProjection),
+                                 canvas_projections : Array(AttentionProjection),
+                                 hp : DiffusionGemmaHparams,
+                                 il : Int32,
+                                 canvas_query_index : Int32,
+                                 mask : DiffusionGemmaAttentionMask) : Array(Float32)
+      raise ArgumentError.new("prompt projection count mismatch") unless prompt_projections.size == mask.prompt_len
+      raise ArgumentError.new("canvas projection count mismatch") unless canvas_projections.size == mask.canvas_len
+      raise ArgumentError.new("canvas_query_index out of bounds") if canvas_query_index < 0 || canvas_query_index >= canvas_projections.size
+
+      keyspace = prompt_projections + canvas_projections
+      attention_context_from_keyspace(
+        query: canvas_projections[canvas_query_index],
+        keyspace: keyspace,
+        hp: hp,
+        il: il,
+        allowed: ->(key_pos : Int32) { mask.allow_decode?(canvas_query_index, key_pos, hp.sliding_window?(il)) },
+      )
+    end
+
+    def attention_context_prompt(projections : Array(AttentionProjection),
+                                 hp : DiffusionGemmaHparams,
+                                 il : Int32,
+                                 query_pos : Int32,
+                                 sliding_window : Int32) : Array(Float32)
+      raise ArgumentError.new("prompt projections must not be empty") if projections.empty?
+      raise ArgumentError.new("query_pos out of bounds") if query_pos < 0 || query_pos >= projections.size
+      raise ArgumentError.new("sliding_window must be positive") unless sliding_window > 0
+
+      low = hp.sliding_window?(il) ? Math.max(0, query_pos - sliding_window + 1) : 0
+      attention_context_from_keyspace(
+        query: projections[query_pos],
+        keyspace: projections,
+        hp: hp,
+        il: il,
+        allowed: ->(key_pos : Int32) { key_pos >= low && key_pos <= query_pos },
+      )
+    end
+
+    def attention_output_project(weights : DiffusionGemmaWeights,
+                                 il : Int32,
+                                 context : Array(Float32)) : Array(Float32)
+      hp = weights.hparams
+      expected = hp.n_head * hp.head_dim_for_layer(il)
+      raise ArgumentError.new("attention context size mismatch at layer #{il}: #{context.size} != #{expected}") unless context.size == expected
+
+      Gemma4CPU.matmul(weights.layers[il].attn_output_qw, context)
+    end
+
+    def attention_residual_from_context(weights : DiffusionGemmaWeights,
+                                        il : Int32,
+                                        x : Array(Float32),
+                                        context : Array(Float32)) : Array(Float32)
+      hp = weights.hparams
+      lw = weights.layers[il]
+      raise ArgumentError.new("attention residual input size mismatch") unless x.size == hp.n_embd
+
+      projected = attention_output_project(weights, il, context)
+      normed = Gemma4CPU.rms_norm(projected, lw.post_attention_norm, hp.rms_eps)
+      Array(Float32).new(hp.n_embd) { |i| x[i] + normed[i] }
+    end
+
+    # Dense shared FFN branch inside DiffusionGemma's Gemma4-MoE block. This is
+    # only one branch of the oracle `dense + MoE -> post_ffw_norm -> residual`
+    # path; expert routing is deliberately separate.
+    def shared_dense_ffn(weights : DiffusionGemmaWeights,
+                         il : Int32,
+                         attn_out : Array(Float32)) : Array(Float32)
+      hp = weights.hparams
+      lw = weights.layers[il]
+      raise ArgumentError.new("shared_dense_ffn input size mismatch") unless attn_out.size == hp.n_embd
+
+      ffn_in = Gemma4CPU.rms_norm(attn_out, lw.ffn_norm, hp.rms_eps)
+      up = Gemma4CPU.matmul(lw.ffn_up_qw, ffn_in)
+      gate = Gemma4CPU.matmul(lw.ffn_gate_qw, ffn_in)
+      gate.size.times { |i| gate[i] = Gemma4CPU.gelu(gate[i]) * up[i] }
+      down = Gemma4CPU.matmul(lw.ffn_down_qw, gate)
+      Gemma4CPU.rms_norm(down, lw.post_ffw_norm_1, hp.rms_eps)
+    end
+
+    def router_input(weights : DiffusionGemmaWeights,
+                     il : Int32,
+                     attn_out : Array(Float32)) : Array(Float32)
+      hp = weights.hparams
+      lw = weights.layers[il]
+      raise ArgumentError.new("router input size mismatch") unless attn_out.size == hp.n_embd
+      raise ArgumentError.new("router scale size mismatch") unless lw.ffn_gate_inp_scale.size == hp.n_embd
+
+      result = Gemma4CPU.rms_norm_plain(attn_out, hp.rms_eps)
+      inv_sqrt_dim = (1.0_f64 / Math.sqrt(hp.n_embd.to_f64)).to_f32
+      hp.n_embd.times { |i| result[i] *= inv_sqrt_dim * lw.ffn_gate_inp_scale[i] }
+      result
+    end
+
+    def router_logits(weights : DiffusionGemmaWeights,
+                      il : Int32,
+                      attn_out : Array(Float32)) : Array(Float32)
+      hp = weights.hparams
+      logits = Gemma4CPU.matmul(weights.layers[il].ffn_gate_inp_qw, router_input(weights, il, attn_out))
+      raise ArgumentError.new("router logits size mismatch") unless logits.size == hp.expert_count
+      logits
+    end
+
+    def softmax(values : Array(Float32)) : Array(Float32)
+      probs = values.dup
+      Gemma4CPU.softmax_slice!(probs, 0, probs.size)
+      probs
+    end
+
+    def top_k_experts(weights : Array(Float32), k : Int32) : Array(ExpertRoute)
+      raise ArgumentError.new("top_k_experts k must be positive") unless k > 0
+      raise ArgumentError.new("top_k_experts k exceeds weights") if k > weights.size
+
+      best = [] of ExpertRoute
+      weights.each_with_index do |weight, expert|
+        route = ExpertRoute.new(expert.to_i32, weight)
+        if best.size < k
+          best << route
+          sort_routes!(best)
+        elsif better_route?(route, best[-1])
+          best[-1] = route
+          sort_routes!(best)
+        end
+      end
+      best
+    end
+
+    def route_experts(weights : DiffusionGemmaWeights,
+                      il : Int32,
+                      attn_out : Array(Float32)) : Array(ExpertRoute)
+      hp = weights.hparams
+      probs = softmax(router_logits(weights, il, attn_out))
+      top_k_experts(probs, hp.expert_used_count)
+    end
+
+    def moe_expert_output(weights : DiffusionGemmaWeights,
+                          il : Int32,
+                          expert : Int32,
+                          ffn_in : Array(Float32)) : Array(Float32)
+      hp = weights.hparams
+      raise ArgumentError.new("expert id out of range") if expert < 0 || expert >= hp.expert_count
+      raise ArgumentError.new("expert input size mismatch") unless ffn_in.size == hp.n_embd
+
+      gate_up_qw = expert_gate_up_qw(weights.layers[il], hp, expert)
+      gate_up = Gemma4CPU.matmul(gate_up_qw, ffn_in)
+      raise ArgumentError.new("expert gate_up size mismatch") unless gate_up.size == hp.expert_ff * 2
+
+      gate = gate_up[0, hp.expert_ff]
+      up = gate_up[hp.expert_ff, hp.expert_ff]
+      hidden = Array(Float32).new(hp.expert_ff) { |i| Gemma4CPU.gelu(gate[i]) * up[i] }
+
+      down = Gemma4CPU.matmul(expert_down_qw(weights.layers[il], hp, expert), hidden)
+      raise ArgumentError.new("expert down size mismatch") unless down.size == hp.n_embd
+
+      scale = weights.layers[il].ffn_down_exps_scale[expert]
+      down.size.times { |i| down[i] *= scale }
+      down
+    end
+
+    def moe_ffn(weights : DiffusionGemmaWeights,
+                il : Int32,
+                attn_out : Array(Float32),
+                routes : Array(ExpertRoute)? = nil) : Array(Float32)
+      hp = weights.hparams
+      lw = weights.layers[il]
+      raise ArgumentError.new("moe_ffn input size mismatch") unless attn_out.size == hp.n_embd
+      raise ArgumentError.new("down expert scale size mismatch") unless lw.ffn_down_exps_scale.size == hp.expert_count
+
+      selected = routes || route_experts(weights, il, attn_out)
+      raise ArgumentError.new("moe_ffn routes must not be empty") if selected.empty?
+
+      ffn_in = Gemma4CPU.rms_norm(attn_out, lw.pre_ffw_norm_2, hp.rms_eps)
+      combined = Array(Float32).new(hp.n_embd, 0.0_f32)
+      selected.each do |route|
+        expert_out = moe_expert_output(weights, il, route.expert, ffn_in)
+        hp.n_embd.times { |i| combined[i] += route.weight * expert_out[i] }
+      end
+      Gemma4CPU.rms_norm(combined, lw.post_ffw_norm_2, hp.rms_eps)
+    end
+
+    def ffn_residual(weights : DiffusionGemmaWeights,
+                     il : Int32,
+                     attn_out : Array(Float32),
+                     routes : Array(ExpertRoute)? = nil) : Array(Float32)
+      shared = shared_dense_ffn(weights, il, attn_out)
+      moe = moe_ffn(weights, il, attn_out, routes)
+      ffn_residual_from_parts(weights, il, attn_out, shared, moe)
+    end
+
+    def layer_output_from_context(weights : DiffusionGemmaWeights,
+                                  il : Int32,
+                                  x : Array(Float32),
+                                  context : Array(Float32),
+                                  canvas : Bool,
+                                  routes : Array(ExpertRoute)? = nil) : Array(Float32)
+      attn_out = attention_residual_from_context(weights, il, x, context)
+      ffn_out = ffn_residual(weights, il, attn_out, routes)
+      scale_layer_output(weights, il, ffn_out, canvas)
+    end
+
+    def scale_layer_output(weights : DiffusionGemmaWeights,
+                           il : Int32,
+                           x : Array(Float32),
+                           canvas : Bool) : Array(Float32)
+      hp = weights.hparams
+      lw = weights.layers[il]
+      raise ArgumentError.new("layer scale input size mismatch") unless x.size == hp.n_embd
+      scale = canvas ? lw.layer_output_scale[0] : lw.encoder_layer_output_scale[0]
+      Array(Float32).new(hp.n_embd) { |i| x[i] * scale }
+    end
+
+    def layer_forward_prompt_rows(weights : DiffusionGemmaWeights,
+                                  il : Int32,
+                                  prompt_rows : Array(Float32),
+                                  mask : DiffusionGemmaAttentionMask,
+                                  routes_by_prompt_row : Array(Array(ExpertRoute))? = nil) : Array(Float32)
+      projections = prompt_attention_projections(weights, il, prompt_rows, mask)
+      layer_forward_prompt_rows_with_projections(weights, il, prompt_rows, projections, mask, routes_by_prompt_row)
+    end
+
+    def layer_forward_prompt_rows_with_projections(weights : DiffusionGemmaWeights,
+                                                   il : Int32,
+                                                   prompt_rows : Array(Float32),
+                                                   prompt_projections : Array(AttentionProjection),
+                                                   mask : DiffusionGemmaAttentionMask,
+                                                   routes_by_prompt_row : Array(Array(ExpertRoute))? = nil) : Array(Float32)
+      hp = weights.hparams
+      prompt_size = mask.prompt_len * hp.n_embd
+      raise ArgumentError.new("prompt rows size mismatch: #{prompt_rows.size} != #{prompt_size}") unless prompt_rows.size == prompt_size
+      raise ArgumentError.new("prompt projection count mismatch") unless prompt_projections.size == mask.prompt_len
+      if supplied_routes = routes_by_prompt_row
+        raise ArgumentError.new("routes_by_prompt_row size mismatch: #{supplied_routes.size} != #{mask.prompt_len}") unless supplied_routes.size == mask.prompt_len
+      end
+
+      result = Array(Float32).new(prompt_size, 0.0_f32)
+      mask.prompt_len.times do |pos|
+        x = prompt_rows[pos * hp.n_embd, hp.n_embd]
+        context = attention_context_prompt(prompt_projections, hp, il, query_pos: pos, sliding_window: mask.sliding_window)
+        layer_row = if supplied_routes = routes_by_prompt_row
+                      layer_output_from_context(weights, il, x, context, canvas: false, routes: supplied_routes[pos])
+                    else
+                      layer_output_from_context(weights, il, x, context, canvas: false)
+                    end
+        copy_row!(result, pos, hp.n_embd, layer_row)
+      end
+      result
+    end
+
+    def build_prompt_layer_cache(weights : DiffusionGemmaWeights,
+                                 prompt_rows : Array(Float32),
+                                 mask : DiffusionGemmaAttentionMask,
+                                 max_layers : Int32 = weights.hparams.n_layer,
+                                 routes_by_layer_by_prompt_row : Array(Array(Array(ExpertRoute)))? = nil) : PromptLayerCache
+      hp = weights.hparams
+      prompt_size = mask.prompt_len * hp.n_embd
+      raise ArgumentError.new("prompt rows size mismatch: #{prompt_rows.size} != #{prompt_size}") unless prompt_rows.size == prompt_size
+      raise ArgumentError.new("max_layers out of range") if max_layers <= 0 || max_layers > hp.n_layer
+      if supplied_routes = routes_by_layer_by_prompt_row
+        raise ArgumentError.new("routes_by_layer_by_prompt_row size mismatch") unless supplied_routes.size == max_layers
+      end
+
+      rows = prompt_rows.dup
+      projections_by_layer = [] of Array(AttentionProjection)
+      max_layers.times do |il|
+        projections = prompt_attention_projections(weights, il, rows, mask)
+        projections_by_layer << projections
+        routes = routes_by_layer_by_prompt_row ? routes_by_layer_by_prompt_row.not_nil![il] : nil
+        rows = layer_forward_prompt_rows_with_projections(weights, il, rows, projections, mask, routes)
+      end
+
+      PromptLayerCache.new(rows, projections_by_layer)
+    end
+
+    def decode_canvas_rows_with_prompt_cache(weights : DiffusionGemmaWeights,
+                                             canvas_rows : Array(Float32),
+                                             mask : DiffusionGemmaAttentionMask,
+                                             prompt_cache : PromptLayerCache,
+                                             max_layers : Int32 = prompt_cache.layers,
+                                             routes_by_layer_by_canvas_row : Array(Array(Array(ExpertRoute)))? = nil) : Array(Float32)
+      hp = weights.hparams
+      canvas_size = mask.canvas_len * hp.n_embd
+      prompt_size = mask.prompt_len * hp.n_embd
+      raise ArgumentError.new("canvas rows size mismatch: #{canvas_rows.size} != #{canvas_size}") unless canvas_rows.size == canvas_size
+      raise ArgumentError.new("prompt cache final rows size mismatch") unless prompt_cache.final_rows.size == prompt_size
+      raise ArgumentError.new("max_layers out of range") if max_layers <= 0 || max_layers > hp.n_layer
+      raise ArgumentError.new("prompt cache has fewer layers than requested") if prompt_cache.layers < max_layers
+      if supplied_routes = routes_by_layer_by_canvas_row
+        raise ArgumentError.new("routes_by_layer_by_canvas_row size mismatch") unless supplied_routes.size == max_layers
+      end
+
+      rows = canvas_rows.dup
+      max_layers.times do |il|
+        routes = routes_by_layer_by_canvas_row ? routes_by_layer_by_canvas_row.not_nil![il] : nil
+        rows = layer_forward_decode_canvas_rows_with_prompt_projections(
+          weights: weights,
+          il: il,
+          prompt_projections: prompt_cache.projections_by_layer[il],
+          canvas_rows: rows,
+          mask: mask,
+          routes_by_canvas_row: routes,
+        )
+      end
+      rows
+    end
+
+    def layer_forward_unified_rows(weights : DiffusionGemmaWeights,
+                                   il : Int32,
+                                   rows : Array(Float32),
+                                   mask : DiffusionGemmaAttentionMask,
+                                   routes_by_row : Array(Array(ExpertRoute))? = nil) : Array(Float32)
+      hp = weights.hparams
+      total_tokens = mask.total_tokens
+      expected_size = total_tokens * hp.n_embd
+      raise ArgumentError.new("layer rows size mismatch: #{rows.size} != #{expected_size}") unless rows.size == expected_size
+      if supplied_routes = routes_by_row
+        raise ArgumentError.new("routes_by_row size mismatch: #{supplied_routes.size} != #{total_tokens}") unless supplied_routes.size == total_tokens
+      end
+
+      projections = Array(AttentionProjection).new(total_tokens) do |pos|
+        x = rows[pos * hp.n_embd, hp.n_embd]
+        attention_project_normed(weights, il, x, pos)
+      end
+
+      result = Array(Float32).new(expected_size, 0.0_f32)
+      total_tokens.times do |pos|
+        x = rows[pos * hp.n_embd, hp.n_embd]
+        context = attention_context_unified(projections, hp, il, query_pos: pos, mask: mask)
+        canvas = pos >= mask.prompt_len
+        layer_row = if supplied_routes = routes_by_row
+                      layer_output_from_context(weights, il, x, context, canvas: canvas, routes: supplied_routes[pos])
+                    else
+                      layer_output_from_context(weights, il, x, context, canvas: canvas)
+                    end
+        copy_row!(result, pos, hp.n_embd, layer_row)
+      end
+      result
+    end
+
+    def layer_forward_decode_canvas_rows(weights : DiffusionGemmaWeights,
+                                         il : Int32,
+                                         prompt_rows : Array(Float32),
+                                         canvas_rows : Array(Float32),
+                                         mask : DiffusionGemmaAttentionMask,
+                                         routes_by_canvas_row : Array(Array(ExpertRoute))? = nil) : Array(Float32)
+      prompt_projections = prompt_attention_projections(weights, il, prompt_rows, mask)
+      layer_forward_decode_canvas_rows_with_prompt_projections(
+        weights: weights,
+        il: il,
+        prompt_projections: prompt_projections,
+        canvas_rows: canvas_rows,
+        mask: mask,
+        routes_by_canvas_row: routes_by_canvas_row,
+      )
+    end
+
+    def layer_forward_decode_canvas_rows_with_prompt_projections(weights : DiffusionGemmaWeights,
+                                                                 il : Int32,
+                                                                 prompt_projections : Array(AttentionProjection),
+                                                                 canvas_rows : Array(Float32),
+                                                                 mask : DiffusionGemmaAttentionMask,
+                                                                 routes_by_canvas_row : Array(Array(ExpertRoute))? = nil) : Array(Float32)
+      hp = weights.hparams
+      canvas_size = mask.canvas_len * hp.n_embd
+      raise ArgumentError.new("prompt projection count mismatch") unless prompt_projections.size == mask.prompt_len
+      raise ArgumentError.new("canvas rows size mismatch: #{canvas_rows.size} != #{canvas_size}") unless canvas_rows.size == canvas_size
+      if supplied_routes = routes_by_canvas_row
+        raise ArgumentError.new("routes_by_canvas_row size mismatch: #{supplied_routes.size} != #{mask.canvas_len}") unless supplied_routes.size == mask.canvas_len
+      end
+
+      canvas_projections = Array(AttentionProjection).new(mask.canvas_len) do |pos|
+        x = canvas_rows[pos * hp.n_embd, hp.n_embd]
+        attention_project_normed(weights, il, x, mask.prompt_len + pos)
+      end
+      result = Array(Float32).new(canvas_size, 0.0_f32)
+      mask.canvas_len.times do |canvas_pos|
+        x = canvas_rows[canvas_pos * hp.n_embd, hp.n_embd]
+        context = attention_context_decode(prompt_projections, canvas_projections, hp, il, canvas_query_index: canvas_pos, mask: mask)
+        layer_row = if supplied_routes = routes_by_canvas_row
+                      layer_output_from_context(weights, il, x, context, canvas: true, routes: supplied_routes[canvas_pos])
+                    else
+                      layer_output_from_context(weights, il, x, context, canvas: true)
+                    end
+        copy_row!(result, canvas_pos, hp.n_embd, layer_row)
+      end
+      result
+    end
+
+    def prompt_attention_projections(weights : DiffusionGemmaWeights,
+                                     il : Int32,
+                                     prompt_rows : Array(Float32),
+                                     mask : DiffusionGemmaAttentionMask) : Array(AttentionProjection)
+      hp = weights.hparams
+      prompt_size = mask.prompt_len * hp.n_embd
+      raise ArgumentError.new("prompt rows size mismatch: #{prompt_rows.size} != #{prompt_size}") unless prompt_rows.size == prompt_size
+
+      Array(AttentionProjection).new(mask.prompt_len) do |pos|
+        x = prompt_rows[pos * hp.n_embd, hp.n_embd]
+        attention_project_normed(weights, il, x, pos)
+      end
+    end
+
+    def output_hidden_norm(weights : DiffusionGemmaWeights,
+                           hidden : Array(Float32)) : Array(Float32)
+      hp = weights.hparams
+      raise ArgumentError.new("output hidden size mismatch") unless hidden.size == hp.n_embd
+      Gemma4CPU.rms_norm(hidden, weights.output_norm, hp.rms_eps)
+    end
+
+    def output_logits_for_tokens(weights : DiffusionGemmaWeights,
+                                 hidden : Array(Float32),
+                                 token_ids : Array(Int32)) : Array(Float32)
+      hp = weights.hparams
+      raise ArgumentError.new("output token_ids must not be empty") if token_ids.empty?
+      normed = output_hidden_norm(weights, hidden)
+      logits = Array(Float32).new(token_ids.size, 0.0_f32)
+      token_ids.each_with_index do |token_id, i|
+        raise ArgumentError.new("output token id out of range") if token_id < 0 || token_id >= hp.vocab_size
+        row = quant_row_slice(weights.token_embd, token_id, 1, hp.n_embd)
+        logits[i] = Gemma4CPU.matmul(row, normed)[0]
+      end
+      Gemma4CPU.logit_softcap!(logits, hp.final_logit_softcapping)
+      logits
+    end
+
+    def bounded_candidate_prediction(candidate_token_ids : Array(Int32),
+                                     raw_logits : Array(Float32),
+                                     temp_inv : Float32 = 1.0_f32,
+                                     sample_u : Float32 = 0.0_f32) : BoundedDenoisePrediction
+      validate_candidate_prediction_inputs!(candidate_token_ids, raw_logits, temp_inv, sample_u)
+
+      logits = raw_logits.map { |v| v * temp_inv }
+      probs = softmax(logits)
+      entropy = categorical_entropy(probs)
+
+      best = 0
+      probs.each_with_index do |p, i|
+        if p > probs[best] || (p == probs[best] && candidate_token_ids[i] < candidate_token_ids[best])
+          best = i
+        end
+      end
+
+      sampled = probs.size - 1
+      cum = 0.0_f32
+      probs.each_with_index do |p, i|
+        cum += p
+        if cum >= sample_u
+          sampled = i
+          break
+        end
+      end
+
+      BoundedDenoisePrediction.new(
+        candidate_token_ids: candidate_token_ids.dup,
+        logits: logits,
+        probabilities: probs,
+        argmax_token_id: candidate_token_ids[best],
+        sampled_token_id: candidate_token_ids[sampled],
+        entropy: entropy,
+      )
+    end
+
+    def bounded_denoise_prediction(weights : DiffusionGemmaWeights,
+                                   hidden : Array(Float32),
+                                   candidate_token_ids : Array(Int32),
+                                   temp_inv : Float32 = 1.0_f32,
+                                   sample_u : Float32 = 0.0_f32) : BoundedDenoisePrediction
+      raw_logits = output_logits_for_tokens(weights, hidden, candidate_token_ids)
+      bounded_candidate_prediction(candidate_token_ids, raw_logits, temp_inv, sample_u)
+    end
+
+    def decode_canvas_bounded_predictions(weights : DiffusionGemmaWeights,
+                                          canvas_rows : Array(Float32),
+                                          mask : DiffusionGemmaAttentionMask,
+                                          prompt_cache : PromptLayerCache,
+                                          candidate_token_ids_by_canvas_row : Array(Array(Int32)),
+                                          max_layers : Int32 = prompt_cache.layers,
+                                          temp_inv : Float32 = 1.0_f32,
+                                          sample_us : Array(Float32)? = nil,
+                                          routes_by_layer_by_canvas_row : Array(Array(Array(ExpertRoute)))? = nil) : Array(BoundedDenoisePrediction)
+      hp = weights.hparams
+      raise ArgumentError.new("candidate rows size mismatch") unless candidate_token_ids_by_canvas_row.size == mask.canvas_len
+      if supplied_sample_us = sample_us
+        raise ArgumentError.new("sample_us size mismatch") unless supplied_sample_us.size == mask.canvas_len
+      end
+
+      hidden_rows = decode_canvas_rows_with_prompt_cache(
+        weights: weights,
+        canvas_rows: canvas_rows,
+        mask: mask,
+        prompt_cache: prompt_cache,
+        max_layers: max_layers,
+        routes_by_layer_by_canvas_row: routes_by_layer_by_canvas_row,
+      )
+      Array(BoundedDenoisePrediction).new(mask.canvas_len) do |canvas_pos|
+        hidden = hidden_rows[canvas_pos * hp.n_embd, hp.n_embd]
+        sample_u = sample_us ? sample_us.not_nil![canvas_pos] : 0.0_f32
+        bounded_denoise_prediction(weights, hidden, candidate_token_ids_by_canvas_row[canvas_pos], temp_inv, sample_u)
+      end
+    end
+
+    def decode_canvas_bounded_step(weights : DiffusionGemmaWeights,
+                                   canvas_tokens : Array(Int32),
+                                   canvas_rows : Array(Float32),
+                                   mask : DiffusionGemmaAttentionMask,
+                                   prompt_cache : PromptLayerCache,
+                                   candidate_token_ids_by_canvas_row : Array(Array(Int32)),
+                                   entropy_bound : Float32,
+                                   max_layers : Int32 = prompt_cache.layers,
+                                   temp_inv : Float32 = 1.0_f32,
+                                   sample_us : Array(Float32)? = nil,
+                                   routes_by_layer_by_canvas_row : Array(Array(Array(ExpertRoute)))? = nil,
+                                   use_sampled_token : Bool = true,
+                                   sc_token_ids_by_canvas_row : Array(Array(Int32))? = nil,
+                                   sc_logits_by_canvas_row : Array(Array(Float32))? = nil,
+                                   sc_temp_inv : Float32 = 1.0_f32,
+                                   sc_use : Float32 = 1.0_f32) : BoundedCanvasUpdate
+      raise ArgumentError.new("canvas token count mismatch") unless canvas_tokens.size == mask.canvas_len
+      predictions = decode_canvas_bounded_predictions(
+        weights: weights,
+        canvas_rows: canvas_rows,
+        mask: mask,
+        prompt_cache: prompt_cache,
+        candidate_token_ids_by_canvas_row: candidate_token_ids_by_canvas_row,
+        max_layers: max_layers,
+        temp_inv: temp_inv,
+        sample_us: sample_us,
+        routes_by_layer_by_canvas_row: routes_by_layer_by_canvas_row,
+      )
+      update = apply_entropy_bound_predictions(canvas_tokens, predictions, entropy_bound, use_sampled_token: use_sampled_token)
+      updated_rows = canvas_rows_from_tokens(
+        weights,
+        update.updated_canvas_tokens,
+        sc_token_ids_by_canvas_row: sc_token_ids_by_canvas_row,
+        sc_logits_by_canvas_row: sc_logits_by_canvas_row,
+        sc_temp_inv: sc_temp_inv,
+        sc_use: sc_use,
+      )
+      BoundedCanvasUpdate.new(update.updated_canvas_tokens, update.accepted, update.predictions, updated_rows)
+    end
+
+    def apply_entropy_bound_predictions(canvas_tokens : Array(Int32),
+                                        predictions : Array(BoundedDenoisePrediction),
+                                        entropy_bound : Float32,
+                                        use_sampled_token : Bool = true) : BoundedCanvasUpdate
+      raise ArgumentError.new("canvas prediction count mismatch") unless predictions.size == canvas_tokens.size
+      accepted = entropy_bound_accept(predictions.map(&.entropy), entropy_bound)
+      updated = canvas_tokens.dup
+      accepted.each_with_index do |ok, i|
+        next unless ok
+
+        pred = predictions[i]
+        updated[i] = use_sampled_token ? pred.sampled_token_id : pred.argmax_token_id
+      end
+      BoundedCanvasUpdate.new(updated, accepted, predictions)
+    end
+
+    def update_canvas_token(canvas_tokens : Array(Int32),
+                            canvas_index : Int32,
+                            token_id : Int32) : Array(Int32)
+      raise ArgumentError.new("canvas_index out of bounds") if canvas_index < 0 || canvas_index >= canvas_tokens.size
+      result = canvas_tokens.dup
+      result[canvas_index] = token_id
+      result
+    end
+
+    def entropy_bound_accept(entropies : Array(Float32),
+                             entropy_bound : Float32) : Array(Bool)
+      raise ArgumentError.new("entropy_bound must be finite and non-negative") unless entropy_bound.finite? && entropy_bound >= 0.0_f32
+      raise ArgumentError.new("entropies must not be empty") if entropies.empty?
+      entropies.each { |entropy| raise ArgumentError.new("entropy must be finite and non-negative") unless entropy.finite? && entropy >= 0.0_f32 }
+
+      order = (0...entropies.size).to_a
+      order.sort! { |a, b| (entropies[a] <=> entropies[b]) == 0 ? a <=> b : entropies[a] <=> entropies[b] }
+      accepted = Array(Bool).new(entropies.size, false)
+      cum = 0.0_f64
+      order.each do |pos|
+        entropy = entropies[pos]
+        cum += entropy
+        accepted[pos] = true if cum - entropy <= entropy_bound
+      end
+      accepted
+    end
+
+    def ffn_residual_from_parts(weights : DiffusionGemmaWeights,
+                                il : Int32,
+                                attn_out : Array(Float32),
+                                shared_dense : Array(Float32),
+                                moe : Array(Float32)? = nil) : Array(Float32)
+      hp = weights.hparams
+      lw = weights.layers[il]
+      raise ArgumentError.new("ffn residual input size mismatch") unless attn_out.size == hp.n_embd
+      raise ArgumentError.new("shared_dense size mismatch") unless shared_dense.size == hp.n_embd
+      if moe_branch = moe
+        raise ArgumentError.new("moe size mismatch") unless moe_branch.size == hp.n_embd
+      end
+
+      combined = if moe_branch = moe
+                   Array(Float32).new(hp.n_embd) { |i| shared_dense[i] + moe_branch[i] }
+                 else
+                   shared_dense
+                 end
+      normed = Gemma4CPU.rms_norm(combined, lw.post_ffw_norm, hp.rms_eps)
+      Array(Float32).new(hp.n_embd) { |i| attn_out[i] + normed[i] }
+    end
+
+    def row_rms(x : Array(Float32), offset : Int32, len : Int32) : Float32
+      raise ArgumentError.new("row_rms out of bounds") if offset < 0 || len <= 0 || offset + len > x.size
+      ss = 0.0_f64
+      len.times do |i|
+        v = x[offset + i]
+        ss += v.to_f64 * v.to_f64
+      end
+      Math.sqrt(ss / len.to_f64).to_f32
+    end
+
+    private def attention_context_from_keyspace(query : AttentionProjection,
+                                                keyspace : Array(AttentionProjection),
+                                                hp : DiffusionGemmaHparams,
+                                                il : Int32,
+                                                allowed : Proc(Int32, Bool)) : Array(Float32)
+      head_dim = hp.head_dim_for_layer(il)
+      n_head = hp.n_head
+      n_head_kv = hp.n_head_kv(il)
+      q_dim = n_head * head_dim
+      kv_dim = n_head_kv * head_dim
+      heads_per_group = n_head // n_head_kv
+      raise ArgumentError.new("invalid GQA layout at layer #{il}") unless heads_per_group > 0 && n_head % n_head_kv == 0
+      validate_projection_shape!(query, q_dim, kv_dim, il)
+      keyspace.each { |proj| validate_projection_shape!(proj, q_dim, kv_dim, il) }
+
+      allowed_keys = [] of Int32
+      keyspace.size.times { |key_pos| allowed_keys << key_pos if allowed.call(key_pos) }
+      raise ArgumentError.new("attention has no allowed keys") if allowed_keys.empty?
+
+      result = Array(Float32).new(q_dim, 0.0_f32)
+      scores = Array(Float32).new(allowed_keys.size, 0.0_f32)
+      n_head.times do |h|
+        kvh = h // heads_per_group
+        q_off = h * head_dim
+        allowed_keys.each_with_index do |key_pos, i|
+          k_off = kvh * head_dim
+          scores[i] = dot(query.q, q_off, keyspace[key_pos].k, k_off, head_dim)
+        end
+        Gemma4CPU.softmax_slice!(scores, 0, scores.size)
+
+        out_off = h * head_dim
+        allowed_keys.each_with_index do |key_pos, i|
+          v_off = kvh * head_dim
+          weight = scores[i]
+          head_dim.times do |d|
+            result[out_off + d] += weight * keyspace[key_pos].v[v_off + d]
+          end
+        end
+      end
+      result
+    end
+
+    private def validate_projection_shape!(proj : AttentionProjection,
+                                           q_dim : Int32,
+                                           kv_dim : Int32,
+                                           il : Int32) : Nil
+      raise ArgumentError.new("q projection size mismatch at layer #{il}") unless proj.q.size == q_dim
+      raise ArgumentError.new("k projection size mismatch at layer #{il}") unless proj.k.size == kv_dim
+      raise ArgumentError.new("v projection size mismatch at layer #{il}") unless proj.v.size == kv_dim
+    end
+
+    private def dot(a : Array(Float32), a_off : Int32, b : Array(Float32), b_off : Int32, len : Int32) : Float32
+      sum = 0.0_f32
+      len.times { |i| sum += a[a_off + i] * b[b_off + i] }
+      sum
+    end
+
+    private def sort_routes!(routes : Array(ExpertRoute)) : Nil
+      routes.sort! do |a, b|
+        cmp = b.weight <=> a.weight
+        cmp == 0 ? a.expert <=> b.expert : cmp
+      end
+    end
+
+    private def better_route?(a : ExpertRoute, b : ExpertRoute) : Bool
+      a.weight > b.weight || (a.weight == b.weight && a.expert < b.expert)
+    end
+
+    private def categorical_entropy(probs : Array(Float32)) : Float32
+      entropy = 0.0_f64
+      probs.each do |p|
+        entropy -= p.to_f64 * Math.log(p.to_f64) if p > 0.0_f32
+      end
+      entropy.to_f32
+    end
+
+    private def validate_candidate_prediction_inputs!(candidate_token_ids : Array(Int32),
+                                                      raw_logits : Array(Float32),
+                                                      temp_inv : Float32,
+                                                      sample_u : Float32) : Nil
+      raise ArgumentError.new("candidate_token_ids must not be empty") if candidate_token_ids.empty?
+      raise ArgumentError.new("candidate logits size mismatch") unless raw_logits.size == candidate_token_ids.size
+      raise ArgumentError.new("candidate temp_inv must be finite and positive") unless temp_inv.finite? && temp_inv > 0.0_f32
+      raise ArgumentError.new("candidate sample_u must be in [0, 1)") unless sample_u.finite? && sample_u >= 0.0_f32 && sample_u < 1.0_f32
+      candidate_token_ids.each_cons_pair do |a, b|
+        raise ArgumentError.new("candidate_token_ids must be strictly increasing") unless a < b
+      end
+      raw_logits.each do |logit|
+        raise ArgumentError.new("candidate logits must be finite") unless logit.finite?
+      end
+    end
+
+    private def expert_gate_up_qw(lw : DiffusionGemmaLayerWeights,
+                                  hp : DiffusionGemmaHparams,
+                                  expert : Int32) : QuantWeight
+      qw = lw.ffn_gate_up_exps_qw || raise ArgumentError.new("combined gate_up experts are required")
+      raise ArgumentError.new("gate_up expert tensor shape mismatch") unless qw.in_dim == hp.n_embd && qw.out_dim == hp.expert_count * hp.expert_ff * 2
+      quant_row_slice(qw, expert * hp.expert_ff * 2, hp.expert_ff * 2, hp.n_embd)
+    end
+
+    private def expert_down_qw(lw : DiffusionGemmaLayerWeights,
+                               hp : DiffusionGemmaHparams,
+                               expert : Int32) : QuantWeight
+      qw = lw.ffn_down_exps_qw
+      raise ArgumentError.new("down expert tensor shape mismatch") unless qw.in_dim == hp.expert_ff && qw.out_dim == hp.expert_count * hp.n_embd
+      quant_row_slice(qw, expert * hp.n_embd, hp.n_embd, hp.expert_ff)
+    end
+
+    private def quant_row_slice(qw : QuantWeight,
+                                first_row : Int32,
+                                row_count : Int32,
+                                in_dim : Int32) : QuantWeight
+      row_bytes = QuantMatmul.row_bytes(qw.type, in_dim)
+      offset = first_row.to_i64 * row_bytes.to_i64
+      bytes = row_count.to_i64 * row_bytes.to_i64
+      raise ArgumentError.new("quant row slice out of bounds") if first_row < 0 || row_count <= 0 || offset + bytes > qw.raw.size
+
+      raw = Bytes.new(qw.raw.to_unsafe + offset, bytes.to_i32, read_only: true)
+      QuantWeight.new(raw, qw.type, row_count, in_dim, qw.route_tag)
+    end
+
+    private def copy_row!(result : Array(Float32), row : Int32, dim : Int32, values : Array(Float32)) : Nil
+      raise ArgumentError.new("row size mismatch") unless values.size == dim
+      offset = row * dim
+      dim.times { |i| result[offset + i] = values[i] }
+    end
+  end
+end

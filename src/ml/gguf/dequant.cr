@@ -1,29 +1,30 @@
 # Dequantization routines for GGUF quantized tensors.
 # Ported from llama.cpp ggml-quants.c
 #
-# Supports: F32, F16, Q4_K, Q5_K, Q6_K, Q8_0, IQ4_NL.
+# Supports: F32, F16, Q5_0, Q4_K, Q5_K, Q6_K, Q8_0, IQ4_NL.
 # QK_K = 256 elements per super-block; QK4_NL = 32 elements per IQ4_NL block.
 
 module ML::GGUF::Dequant
-  QK_K         = 256
-  QK4_NL       =  32
-  K_SCALE_SIZE =  12
+  QK_K          = 256
+  QK4_NL        =  32
+  K_SCALE_SIZE  =  12
   IQ4_NL_VALUES = StaticArray[
     -127_i8, -104_i8, -83_i8, -65_i8,
-     -49_i8,  -35_i8, -22_i8, -10_i8,
-       1_i8,   13_i8,  25_i8,  38_i8,
-      53_i8,   69_i8,  89_i8, 113_i8,
+    -49_i8, -35_i8, -22_i8, -10_i8,
+    1_i8, 13_i8, 25_i8, 38_i8,
+    53_i8, 69_i8, 89_i8, 113_i8,
   ]
 
   # Main entry: dequantize raw bytes to Float32 array
   def self.dequantize(data : Bytes, type : TensorType, n_elements : Int32) : Array(Float32)
     case type
-    when .f32?  then dequantize_f32(data, n_elements)
-    when .f16?  then dequantize_f16(data, n_elements)
-    when .q4_k? then dequantize_q4_k(data, n_elements)
-    when .q5_k? then dequantize_q5_k(data, n_elements)
-    when .q6_k? then dequantize_q6_k(data, n_elements)
-    when .q8_0? then dequantize_q8_0(data, n_elements)
+    when .f32?    then dequantize_f32(data, n_elements)
+    when .f16?    then dequantize_f16(data, n_elements)
+    when .q5_0?   then dequantize_q5_0(data, n_elements)
+    when .q4_k?   then dequantize_q4_k(data, n_elements)
+    when .q5_k?   then dequantize_q5_k(data, n_elements)
+    when .q6_k?   then dequantize_q6_k(data, n_elements)
+    when .q8_0?   then dequantize_q8_0(data, n_elements)
     when .iq4_nl? then dequantize_iq4_nl(data, n_elements)
     else
       raise "Unsupported dequantization type: #{type.name}"
@@ -45,6 +46,43 @@ module ML::GGUF::Dequant
     n.times do |i|
       result[i] = fp16_to_f32(data[i * 2, 2])
     end
+    result
+  end
+
+  # Q5_0: symmetric 5-bit quantization, 32 elements per block.
+  # Block layout: [d:f16][qh:u8[4]][qs:u8[16]]. Low nibbles encode
+  # elements 0..15, high nibbles encode elements 16..31; qh carries the
+  # fifth bit for both halves.
+  def self.dequantize_q5_0(data : Bytes, n : Int32) : Array(Float32)
+    block_size = 22
+    block_elems = 32
+    nb = (n + block_elems - 1) // block_elems
+    result = Array(Float32).new(n, 0.0_f32)
+
+    nb.times do |i|
+      off = i * block_size
+      d = fp16_to_f32(data[off, 2])
+      qh = IO::ByteFormat::LittleEndian.decode(UInt32, data[off + 2, 4])
+      qs_ptr = data.to_unsafe + off + 6
+      base = i * block_elems
+      half = block_elems // 2
+
+      first_count = Math.min(half, n - base)
+      first_count.times do |j|
+        xh = ((qh >> j) << 4) & 0x10
+        q = ((qs_ptr[j] & 0x0F).to_u32 | xh).to_i32 - 16
+        result[base + j] = d * q
+      end
+
+      second_base = base + half
+      second_count = Math.min(half, n - second_base)
+      second_count.times do |j|
+        xh = (qh >> (j + 12)) & 0x10
+        q = ((qs_ptr[j] >> 4).to_u32 | xh).to_i32 - 16
+        result[second_base + j] = d * q
+      end
+    end
+
     result
   end
 
