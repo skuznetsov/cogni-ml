@@ -74,6 +74,8 @@ Use `QWEN35_ALLOWED_HEAD_CAPTURE_PATH=/tmp/allowed_head.jsonl` during a constrai
 
 Use `scripts/export_allowed_head_capture_replay.cr CAPTURE.jsonl OUT.f32 [MAX_ROWS]` to convert captured hidden rows into a raw little-endian Float32 batch and print the matching `ids_groups`. Set `MIN_ALLOWED=4` to export only rows above the current tiny-CPU policy. Copy `OUT.f32` to the Pi probe directory and pass it through `RPI5_X_F32_LOAD=OUT.f32` with `RPI5_ROW_IDS_CSV_BATCH`.
 
+Use `scripts/rpi5_q6_capture_replay.sh CAPTURE.jsonl 4` to automate the conversion, copy, all-row replay, filtered replay, and hybrid estimate.
+
 Actual row-id probe:
 
 - `tool_call_prefix:start`, ids `27,60638,248058`: `0.174ms`, top1 matched CPU.
@@ -93,6 +95,7 @@ Actual row-id probe:
 - Longer runtime trace on Qwen3.5-0.8B with `QWEN35_CONSTRAINED_TOOL_CALL_PREFIX=1`, `QWEN35_CONSTRAINT_FRONTIER_TRACE=1`, one `edit_mode` tool, and `n_gen=64` reached real value-literal rows and emitted a valid parsed `edit_mode(mode=safe,dry_run=true)` tool call. The trace had `31` constrained frontier rows, including two `value_literal allowed=8` rows. `scripts/plan_rpi5_from_frontier_trace.cr` planned six V3D groups with `hybrid_total_ms=3.1624` vs all-CPU `4.1306` (`1.306x`). Live `scripts/rpi5_q6_probe_trace_groups.sh` on the same log measured grouped Pi probe speedups of `1.424x`, `1.519x`, `1.794x`, `1.787x`, `1.455x`, and `1.326x`, with `max_abs_diff<=3.58e-7` and `throttled=0x0`.
 - Runtime capture smoke with `QWEN35_ALLOWED_HEAD_CAPTURE_PATH=/tmp/qwen35_allowed_head_capture_20260609_220135.jsonl` on the same `edit_mode` prompt emitted `31` capture rows for `31` trace rows, kept the parsed tool call as `edit_mode(mode=safe,dry_run=true)`, and wrote rows with `source=metal_hidden`, `allowed_ids`, `hidden_dim=1024`, and the pre-output-norm hidden vector. This validates local capture of real hidden rows; replay on Pi is still pending.
 - Real-hidden 2B replay: Qwen3.5-2B capture on the same prompt emitted `31` rows with `hidden_dim=2048`, matching the resident 2B Q6 tied head on the Pi. All-V3D replay of those rows as one `q6idx8_l256` batch measured `gpu_ms=3.521`, `cpu_ms=4.231`, `speedup=1.202x`, `max_abs_diff=1.14e-5`, `throttled=0x0`; this is positive but confirms tiny-frontier dilution. Filtering with `MIN_ALLOWED=4` exported `16` V3D rows and measured `gpu_ms=1.847`, `cpu_ms=3.205`, `speedup=1.735x`, `max_abs_diff=8.58e-6`, `throttled=0x0`. Combining that with the all-vs-filter CPU delta for the `15` tiny rows gives a replay hybrid estimate of about `2.873ms` vs all-CPU `4.231ms` (`1.47x`).
+- Capture replay wrapper check with `RAW_OUTPUT=0 REPEATS=30 RPI5_WARMUPS=3 bash scripts/rpi5_q6_capture_replay.sh /tmp/qwen35_2b_allowed_head_capture_20260609_220934.jsonl 4` reproduced the same shape: all rows `gpu_ms=3.517`, `cpu_ms=4.259`, `speedup=1.211x`; filtered rows `gpu_ms=1.846`, `cpu_ms=3.223`, `speedup=1.746x`; hybrid estimate `2.882ms` vs all-CPU `4.259ms` (`1.478x`).
 
 ## Route Policy
 
