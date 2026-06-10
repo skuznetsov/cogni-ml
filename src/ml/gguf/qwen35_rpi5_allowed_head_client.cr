@@ -11,6 +11,57 @@ module ML::GGUF
 
     alias Transport = Request -> String
 
+    class ResidentProcessTransport
+      def initialize(@command : String,
+                     @args : Array(String) = [] of String,
+                     @error : Process::Redirect = Process::Redirect::Inherit)
+        @process = Process.new(
+          @command,
+          @args,
+          input: Process::Redirect::Pipe,
+          output: Process::Redirect::Pipe,
+          error: @error,
+        )
+        @mutex = Mutex.new
+        @closed = false
+      end
+
+      def transport : Transport
+        Transport.new { |request| call(request) }
+      end
+
+      def call(request : Request) : String
+        @mutex.synchronize do
+          return "" if @closed
+
+          Qwen35Rpi5AllowedHeadClient.write_binary_frame(@process.input, request.hidden, request.allowed_ids)
+          @process.input.flush
+
+          String.build do |output|
+            loop do
+              line = @process.output.gets
+              return "" unless line
+
+              output << line << '\n'
+              break if line.strip.starts_with?("resident_stdin_result\t")
+            end
+          end
+        end
+      rescue
+        close
+        ""
+      end
+
+      def close : Nil
+        return if @closed
+
+        @closed = true
+        @process.input.close rescue nil
+        @process.terminate rescue nil
+        @process.wait rescue nil
+      end
+    end
+
     record Result,
       request : Int32,
       allowed : Int32,

@@ -13,6 +13,28 @@ private def with_frame_tmp(&)
   end
 end
 
+private def with_fake_resident_worker(&)
+  with_frame_tmp do |dir|
+    script_path = File.join(dir, "fake_resident_worker.cr")
+    File.write(script_path, <<-CR)
+      request_index = 0
+      puts "resident_ready=1"
+      STDOUT.flush
+      while line = STDIN.gets
+        ids = line.chomp.split('\\t', 2)[1].split(',')
+        hidden = Bytes.new(8)
+        STDIN.read_fully(hidden)
+        STDIN.read_byte
+        top1 = ids[-1].to_i
+        puts "resident_stdin_result\\trequest=\#{request_index}\\tallowed=\#{ids.size}\\tgpu_ms=0.1\\tcpu_ms=0.2\\tspeedup=2.0x\\tmax_abs_diff=0\\ttop1_match=true\\tgpu_top1_src=\#{top1}\\tcpu_top1_src=\#{top1}\\tgpu_top1_logit=\#{10.0 + request_index}\\tcpu_top1_logit=\#{10.0 + request_index}"
+        STDOUT.flush
+        request_index += 1
+      end
+    CR
+    yield script_path
+  end
+end
+
 describe ML::GGUF::Qwen35Rpi5AllowedHeadClient do
   it "frames binary stdin requests with little-endian hidden rows" do
     bytes = ML::GGUF::Qwen35Rpi5AllowedHeadClient.frame_bytes(
@@ -139,6 +161,35 @@ describe ML::GGUF::Qwen35Rpi5AllowedHeadClient do
       transport: bad_transport,
     )
     bad.should be_nil
+  end
+
+  it "keeps a resident process alive across transport requests" do
+    with_fake_resident_worker do |script_path|
+      resident = ML::GGUF::Qwen35Rpi5AllowedHeadClient::ResidentProcessTransport.new(
+        "crystal",
+        [script_path],
+        error: Process::Redirect::Close,
+      )
+      begin
+        first = ML::GGUF::Qwen35Rpi5AllowedHeadClient.top1_allowed?(
+          [1.0_f32, 2.0_f32],
+          [3_i32, 7_i32],
+          vocab_rows: 10,
+          transport: resident.transport,
+        )
+        second = ML::GGUF::Qwen35Rpi5AllowedHeadClient.top1_allowed?(
+          [4.0_f32, 5.0_f32],
+          [1_i32, 8_i32],
+          vocab_rows: 10,
+          transport: resident.transport,
+        )
+
+        first.should eq({7_i32, 10.0_f32})
+        second.should eq({8_i32, 11.0_f32})
+      ensure
+        resident.close
+      end
+    end
   end
 
   it "scopes the Qwen35CPU resident transport hook" do
