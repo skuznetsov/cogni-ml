@@ -55,6 +55,7 @@ describe ML::GGUF::Qwen35Rpi5AllowedHeadClient do
     result.cpu_top1_src.should eq(13042)
     result.gpu_top1_logit.should eq(1.25)
     result.cpu_top1_logit.should eq(1.24999)
+    result.top1_tuple!([62_i32, 648_i32, 13042_i32, 23256_i32, 47933_i32]).should eq({13042_i32, 1.25_f32})
   end
 
   it "keeps old resident stdin result rows parseable while the remote probe rolls forward" do
@@ -65,6 +66,10 @@ describe ML::GGUF::Qwen35Rpi5AllowedHeadClient do
     result.cpu_top1_src.should eq(13042)
     result.gpu_top1_logit.should be_nil
     result.cpu_top1_logit.should be_nil
+
+    expect_raises(Exception, "resident stdin result missing gpu_top1_logit") do
+      result.top1_tuple!([13042_i32])
+    end
   end
 
   it "ignores non-result lines and rejects malformed result rows" do
@@ -75,6 +80,24 @@ describe ML::GGUF::Qwen35Rpi5AllowedHeadClient do
       ML::GGUF::Qwen35Rpi5AllowedHeadClient.parse_result_line?(
         "resident_stdin_result\trequest=0\tallowed=4\tgpu_ms=0.160\tcpu_ms=0.154\tspeedup=0.958x\tmax_abs_diff=0\ttop1_match=true\tgpu_top1_src=13766"
       )
+    end
+  end
+
+  it "fails closed when converting invalid resident rows to the forward_top1_allowed tuple" do
+    mismatch = ML::GGUF::Qwen35Rpi5AllowedHeadClient.parse_result_line?(
+      "resident_stdin_result\trequest=1\tallowed=2\tgpu_ms=0.1\tcpu_ms=0.1\tspeedup=1.0x\tmax_abs_diff=0\ttop1_match=false\tgpu_top1_src=1\tcpu_top1_src=2\tgpu_top1_logit=3.0\tcpu_top1_logit=4.0"
+    ).not_nil!
+
+    expect_raises(Exception, "resident stdin top1 mismatch") do
+      mismatch.top1_tuple!([1_i32, 2_i32])
+    end
+
+    outside = ML::GGUF::Qwen35Rpi5AllowedHeadClient.parse_result_line?(
+      "resident_stdin_result\trequest=1\tallowed=2\tgpu_ms=0.1\tcpu_ms=0.1\tspeedup=1.0x\tmax_abs_diff=0\ttop1_match=true\tgpu_top1_src=3\tcpu_top1_src=3\tgpu_top1_logit=3.0\tcpu_top1_logit=3.0"
+    ).not_nil!
+
+    expect_raises(Exception, "resident stdin top1 3 outside allowed set") do
+      outside.top1_tuple!([1_i32, 2_i32])
     end
   end
 

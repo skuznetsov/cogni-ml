@@ -20,7 +20,21 @@ module ML::GGUF
       gpu_top1_src : Int32,
       cpu_top1_src : Int32,
       gpu_top1_logit : Float64?,
-      cpu_top1_logit : Float64?
+      cpu_top1_logit : Float64? do
+      def top1_tuple!(allowed_ids : Array(Int32)? = nil) : {Int32, Float32}
+        raise "resident stdin top1 mismatch: gpu=#{gpu_top1_src} cpu=#{cpu_top1_src}" unless top1_match
+
+        logit = gpu_top1_logit
+        raise "resident stdin result missing gpu_top1_logit" unless logit
+
+        if ids = allowed_ids
+          raise "resident stdin allowed count #{allowed} does not match #{ids.size}" unless allowed == ids.size
+          raise "resident stdin top1 #{gpu_top1_src} outside allowed set" unless ids.includes?(gpu_top1_src)
+        end
+
+        {gpu_top1_src, logit.to_f32}
+      end
+    end
 
     def write_binary_frame(io : IO,
                            hidden : Array(Float32),
