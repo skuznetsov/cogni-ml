@@ -2152,8 +2152,9 @@ module ML::GGUF
       end
 
       capture_path = allowed_head_capture_path
+      q6_enabled = allowed_head_q6_enabled?
 
-      if !capture_path && allowed_head_q6_enabled? && weights.output.type.q6_k? && allowed_ids.size > allowed_head_cpu_max
+      if !capture_path && q6_enabled && weights.output.type.q6_k? && allowed_ids.size > allowed_head_cpu_max
         if packed = forward_decode_wave_routed(weights, token_id, pos, state, top1: true, top1_allowed_ids: allowed_ids)
           {% unless flag?(:cpu_only) %}
             Qwen35Metal::Profile.bump_route_marker("allowed_head.metal_q6")
@@ -2166,6 +2167,16 @@ module ML::GGUF
           return top1_from_allowed_logits(packed, allowed_ids)
         end
       end
+
+      {% unless flag?(:cpu_only) %}
+        if capture_path
+          Qwen35Metal::Profile.bump_route_marker("allowed_head.capture")
+        elsif weights.output.type.q6_k? && !q6_enabled
+          Qwen35Metal::Profile.bump_route_marker("allowed_head.q6_off")
+        elsif weights.output.type.q6_k? && allowed_ids.size <= allowed_head_cpu_max
+          Qwen35Metal::Profile.bump_route_marker("allowed_head.cpu_threshold")
+        end
+      {% end %}
 
       hidden_source = "cpu_hidden"
       hidden = if routed = forward_decode_wave_routed(weights, token_id, pos, state, emit_head: false, emit_hidden: true)

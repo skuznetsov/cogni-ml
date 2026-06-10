@@ -123,6 +123,8 @@ Sort allowed token ids for medium/broad finite sets. Sorting was neutral at `102
 
 Runtime smoke on Qwen3.5-2B Q4_K_M with `QWEN35_CONSTRAINED_TOOL_CALL_PREFIX=1`, `QWEN35_ALLOWED_HEAD_CPU_MAX=7`, and `QWEN35_METAL_PROFILE=1` produced a valid parsed `edit_mode(mode=safe,dry_run=true)` tool call. Profile route markers showed `allowed_head.cpu_selected_metal_hidden=28` for tiny frontiers and `allowed_head.metal_q6=2` for finite value frontiers; the Q6 allowed-head matmul shapes were `head_top1_allowed8` and `head_top1_allowed13`.
 
+With `QWEN35_METAL_PROFILE=1`, route markers distinguish the policy reason before the selected-row fallback: `allowed_head.cpu_threshold`, `allowed_head.q6_off`, or `allowed_head.capture`, followed by the hidden source marker such as `allowed_head.cpu_selected_metal_hidden`.
+
 ## Stateful Boundary
 
 Constrained decode is causal and state-mutating: each `forward_top1_allowed` consumes the previous token, mutates KV/DeltaNet state, and only then reveals the next hidden row. A product V3D adapter must therefore treat the normal greedy path as a per-step resident call, not as a blind batch of future constrained decisions.
