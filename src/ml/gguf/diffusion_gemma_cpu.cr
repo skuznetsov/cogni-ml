@@ -53,6 +53,25 @@ module ML::GGUF
       end
     end
 
+    struct BoundedDenoiseStepTrace
+      getter step : Int32
+      getter prediction_count : Int32
+      getter accepted_count : Int32
+      getter total_candidate_tokens : Int32
+      getter max_candidate_tokens : Int32
+      getter mean_candidate_tokens : Float32
+      getter mean_entropy : Float32
+
+      def initialize(@step,
+                     @prediction_count,
+                     @accepted_count,
+                     @total_candidate_tokens,
+                     @max_candidate_tokens,
+                     @mean_candidate_tokens,
+                     @mean_entropy)
+      end
+    end
+
     struct BoundedDenoiseLoopResult
       getter final_canvas_tokens : Array(Int32)
       getter final_canvas_rows : Array(Float32)?
@@ -60,13 +79,25 @@ module ML::GGUF
       getter stable_counts : Array(Int32)
       getter steps_run : Int32
       getter converged : Bool
+      getter step_traces : Array(BoundedDenoiseStepTrace)
+      getter stop_reason : String
 
       def initialize(@final_canvas_tokens,
                      @final_canvas_rows,
                      @updates,
                      @stable_counts,
                      @steps_run,
-                     @converged)
+                     @converged,
+                     step_traces = nil,
+                     stop_reason = nil)
+        @step_traces = step_traces || [] of BoundedDenoiseStepTrace
+        @stop_reason = stop_reason || (@converged ? "converged" : "exhausted")
+      end
+
+      def accepted_token_count : Int32
+        total = 0
+        @step_traces.each { |trace| total += trace.accepted_count }
+        total
       end
     end
 
@@ -963,6 +994,7 @@ module ML::GGUF
       rows = canvas_rows.dup
       stable_counts = Array(Int32).new(canvas_tokens.size, 0)
       updates = [] of BoundedCanvasUpdate
+      step_traces = [] of BoundedDenoiseStepTrace
       converged = false
 
       candidate_token_ids_by_step_by_canvas_row.each_with_index do |candidate_rows, step|
@@ -990,13 +1022,15 @@ module ML::GGUF
           rows = update.updated_canvas_rows || rows
         end
         updates << update
+        step_traces << bounded_denoise_step_trace(step, update)
         if stable_counts.all? { |count| count >= stability_threshold }
           converged = true
           break
         end
       end
 
-      BoundedDenoiseLoopResult.new(tokens, rows, updates, stable_counts, updates.size, converged)
+      stop_reason = converged ? "converged" : "step_budget"
+      BoundedDenoiseLoopResult.new(tokens, rows, updates, stable_counts, updates.size, converged, step_traces, stop_reason)
     end
 
     def decode_canvas_adaptive_bounded_loop(weights : DiffusionGemmaWeights,
@@ -1028,6 +1062,7 @@ module ML::GGUF
       candidate_rows = initial_candidate_token_ids_by_canvas_row
       stable_counts = Array(Int32).new(canvas_tokens.size, 0)
       updates = [] of BoundedCanvasUpdate
+      step_traces = [] of BoundedDenoiseStepTrace
       converged = false
 
       max_steps.times do |step|
@@ -1055,6 +1090,7 @@ module ML::GGUF
           rows = update.updated_canvas_rows || rows
         end
         updates << update
+        step_traces << bounded_denoise_step_trace(step, update)
         if stable_counts.all? { |count| count >= stability_threshold }
           converged = true
           break
@@ -1062,7 +1098,8 @@ module ML::GGUF
         candidate_rows = next_candidate_rows_from_predictions(tokens, update.predictions, weights.hparams.vocab_size, proposal_top_k)
       end
 
-      BoundedDenoiseLoopResult.new(tokens, rows, updates, stable_counts, updates.size, converged)
+      stop_reason = converged ? "converged" : "step_budget"
+      BoundedDenoiseLoopResult.new(tokens, rows, updates, stable_counts, updates.size, converged, step_traces, stop_reason)
     end
 
     def apply_entropy_bound_prediction_steps(canvas_tokens : Array(Int32),
@@ -1076,19 +1113,53 @@ module ML::GGUF
       tokens = canvas_tokens.dup
       stable_counts = Array(Int32).new(canvas_tokens.size, 0)
       updates = [] of BoundedCanvasUpdate
+      step_traces = [] of BoundedDenoiseStepTrace
       converged = false
-      predictions_by_step.each do |predictions|
+      predictions_by_step.each_with_index do |predictions, step|
         update = apply_entropy_bound_predictions(tokens, predictions, entropy_bound, use_sampled_token: use_sampled_token)
         stable_counts = advance_stability_counts(tokens, update.updated_canvas_tokens, update.accepted, stable_counts)
         tokens = update.updated_canvas_tokens
         updates << update
+        step_traces << bounded_denoise_step_trace(step, update)
         if stable_counts.all? { |count| count >= stability_threshold }
           converged = true
           break
         end
       end
 
-      BoundedDenoiseLoopResult.new(tokens, nil, updates, stable_counts, updates.size, converged)
+      stop_reason = converged ? "converged" : "prediction_budget"
+      BoundedDenoiseLoopResult.new(tokens, nil, updates, stable_counts, updates.size, converged, step_traces, stop_reason)
+    end
+
+    def bounded_denoise_step_trace(step : Int32,
+                                   update : BoundedCanvasUpdate) : BoundedDenoiseStepTrace
+      raise ArgumentError.new("trace step must be non-negative") unless step >= 0
+      raise ArgumentError.new("trace accepted size mismatch") unless update.accepted.size == update.predictions.size
+
+      accepted_count = update.accepted.count(true)
+      total_candidate_tokens = 0
+      max_candidate_tokens = 0
+      entropy_sum = 0.0_f32
+      update.predictions.each do |prediction|
+        width = prediction.candidate_token_ids.size
+        total_candidate_tokens += width
+        max_candidate_tokens = width if width > max_candidate_tokens
+        entropy_sum += prediction.entropy
+      end
+
+      prediction_count = update.predictions.size
+      mean_candidate_tokens = prediction_count == 0 ? 0.0_f32 : total_candidate_tokens.to_f32 / prediction_count.to_f32
+      mean_entropy = prediction_count == 0 ? 0.0_f32 : entropy_sum / prediction_count.to_f32
+
+      BoundedDenoiseStepTrace.new(
+        step: step,
+        prediction_count: prediction_count,
+        accepted_count: accepted_count,
+        total_candidate_tokens: total_candidate_tokens,
+        max_candidate_tokens: max_candidate_tokens,
+        mean_candidate_tokens: mean_candidate_tokens,
+        mean_entropy: mean_entropy,
+      )
     end
 
     def apply_entropy_bound_predictions(canvas_tokens : Array(Int32),

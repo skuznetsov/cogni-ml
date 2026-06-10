@@ -252,6 +252,11 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Focused specs verify same-seed reproducibility, different-seed divergence, bounds, row/step consistency, invalid shape guards, and the real-GGUF adaptive one-step loop now accepts generated `sample_us_by_step_by_canvas_row`.
 - Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `29 examples, 0 failures`.
 - Boundary: this only supplies deterministic sampling inputs for sparse candidate sets. It does not change candidate generation, entropy-bound acceptance, or full-vocabulary sampling semantics.
+**update 2026-06-10au:**
+- Added sparse EB loop observability through `BoundedDenoiseStepTrace`, `BoundedDenoiseLoopResult#step_traces`, `#stop_reason`, and `#accepted_token_count`. Each loop step now records prediction count, accepted count, total/max/mean sparse candidate width, and mean entropy.
+- Focused real-GGUF specs verify one-step fixed and adaptive loops expose converged stop reasons and candidate/acceptance trace counts. Synthetic adversary checks verify multi-step trace ordering, accepted-token aggregation, prediction-budget stop reason, mean entropy, invalid trace step rejection, and accepted/prediction size mismatch rejection.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `29 examples, 0 failures`.
+- Boundary: this is measurement plumbing for the sparse native loop. It does not claim a speedup, full-vocabulary EB parity, or Metal residency.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified
