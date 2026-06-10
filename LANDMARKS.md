@@ -271,6 +271,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - `scripts/diffusion_gemma_sparse_loop_smoke.cr` now supports `--format keyvalue|tsv`. The default key-value output stays backward-compatible, while TSV emits one stable header row and one data row for perf gates and sweeps.
 - Verification: no-codegen build passed; wrapper syntax passed; invalid `--format nope` fails closed before GGUF load; `scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_smoke.sh 240 6000 --steps 1 --candidate-ids 0,1,2 --format tsv` emitted parseable TSV; an awk guard verified matching field counts plus `status=ok`, `prediction_count=1`, and `mean_candidate_tokens=3.0`.
 - Boundary: TSV mode only stabilizes measurement output. It does not change sparse-loop behavior, add repeats/ABBA, or promote any speed claim.
+**update 2026-06-10ay:**
+- `scripts/diffusion_gemma_sparse_loop_smoke.cr` now supports `--repeats N`, repeating the sparse loop after one model load and one prompt-cache build. Output adds `repeats`, `loop_ms_min`, `loop_ms_median`, `loop_ms_max`, and `loop_ms_samples`; the existing `loop_ms` field remains the median.
+- Verification: no-codegen build passed; wrapper syntax passed; invalid `--repeats 0` fails closed; `scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_smoke.sh 240 6000 --steps 1 --candidate-ids 0,1,2 --repeats 2 --format tsv` exited 0 and emitted two loop samples. An awk guard verified matching TSV field counts, `repeats=2`, comma-separated `loop_ms_samples`, and `loop_ms == loop_ms_median`.
+- Boundary: this is repeat timing plumbing for the native sparse-loop smoke. It is not quiet-host benchmark evidence, ABBA comparison, full-route MoE timing, or a speed claim.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified

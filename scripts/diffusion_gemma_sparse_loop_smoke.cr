@@ -16,6 +16,7 @@ seed = 7
 adaptive = true
 single_route = true
 format = "keyvalue"
+repeats = 1
 
 OptionParser.parse do |p|
   p.banner = "Usage: diffusion_gemma_sparse_loop_smoke [options]"
@@ -32,6 +33,7 @@ OptionParser.parse do |p|
   p.on("--fixed", "Use fixed candidate steps instead of adaptive proposals") { adaptive = false }
   p.on("--full-routes", "Use full top-k MoE routing instead of the single-route smoke shortcut") { single_route = false }
   p.on("--format FORMAT", "Output format: keyvalue or tsv (default: keyvalue)") { |v| format = v.downcase }
+  p.on("--repeats N", "Repeat sparse loop after one model/cache load (default: 1)") { |v| repeats = v.to_i }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -45,6 +47,12 @@ def parse_candidate_ids(raw : String?, default_token : Int32) : Array(Int32)
   ids.sort.uniq
 end
 
+def median(values : Array(Float64)) : Float64
+  raise "median requires at least one value" if values.empty?
+  sorted = values.sort
+  sorted[sorted.size // 2]
+end
+
 raise "model not found: #{model}" unless File.exists?(model)
 raise "--max-layers must be positive" unless max_layers > 0
 raise "--steps must be positive" unless steps > 0
@@ -52,6 +60,7 @@ raise "--proposal-top-k must be positive" unless proposal_top_k > 0
 raise "--stability-threshold must be positive" unless stability_threshold > 0
 raise "--entropy-bound must be finite and non-negative" unless entropy_bound.finite? && entropy_bound >= 0.0_f32
 raise "--format must be keyvalue or tsv" unless {"keyvalue", "tsv"}.includes?(format)
+raise "--repeats must be positive" unless repeats > 0
 raise "single-route smoke currently supports --max-layers 1; pass --full-routes for deeper smoke" if single_route && max_layers != 1
 
 candidate_ids = parse_candidate_ids(candidate_ids_arg, canvas_token)
@@ -91,46 +100,55 @@ prompt_cache = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(
 cache_ms = (Time.instant - cache_t0).total_milliseconds
 
 sample_us = ML::GGUF::DiffusionGemmaCPU.sample_u_steps(seed, steps, 1)
-loop_t0 = Time.instant
-loop = if adaptive
-         ML::GGUF::DiffusionGemmaCPU.decode_canvas_adaptive_bounded_loop(
-           weights,
-           [canvas_token],
-           canvas_row,
-           mask,
-           prompt_cache,
-           [candidate_ids],
-           entropy_bound: entropy_bound,
-           stability_threshold: stability_threshold,
-           max_steps: steps,
-           proposal_top_k: proposal_top_k,
-           max_layers: max_layers,
-           sample_us_by_step_by_canvas_row: sample_us,
-           routes_by_layer_by_canvas_row: canvas_routes,
-         )
-       else
-         candidate_steps = Array(Array(Array(Int32))).new(steps) { [candidate_ids.dup] }
-         ML::GGUF::DiffusionGemmaCPU.decode_canvas_bounded_loop(
-           weights,
-           [canvas_token],
-           canvas_row,
-           mask,
-           prompt_cache,
-           candidate_steps,
-           entropy_bound: entropy_bound,
-           stability_threshold: stability_threshold,
-           max_layers: max_layers,
-           sample_us_by_step_by_canvas_row: sample_us,
-           routes_by_layer_by_canvas_row: canvas_routes,
-         )
-       end
-loop_ms = (Time.instant - loop_t0).total_milliseconds
+loop_samples = [] of Float64
+loop = nil.as(ML::GGUF::DiffusionGemmaCPU::BoundedDenoiseLoopResult?)
+repeats.times do
+  loop_t0 = Time.instant
+  loop = if adaptive
+           ML::GGUF::DiffusionGemmaCPU.decode_canvas_adaptive_bounded_loop(
+             weights,
+             [canvas_token],
+             canvas_row,
+             mask,
+             prompt_cache,
+             [candidate_ids],
+             entropy_bound: entropy_bound,
+             stability_threshold: stability_threshold,
+             max_steps: steps,
+             proposal_top_k: proposal_top_k,
+             max_layers: max_layers,
+             sample_us_by_step_by_canvas_row: sample_us,
+             routes_by_layer_by_canvas_row: canvas_routes,
+           )
+         else
+           candidate_steps = Array(Array(Array(Int32))).new(steps) { [candidate_ids.dup] }
+           ML::GGUF::DiffusionGemmaCPU.decode_canvas_bounded_loop(
+             weights,
+             [canvas_token],
+             canvas_row,
+             mask,
+             prompt_cache,
+             candidate_steps,
+             entropy_bound: entropy_bound,
+             stability_threshold: stability_threshold,
+             max_layers: max_layers,
+             sample_us_by_step_by_canvas_row: sample_us,
+             routes_by_layer_by_canvas_row: canvas_routes,
+           )
+         end
+  loop_samples << (Time.instant - loop_t0).total_milliseconds
+end
+loop = loop.not_nil!
 summary = loop.summary
+loop_ms_min = loop_samples.min
+loop_ms_median = median(loop_samples)
+loop_ms_max = loop_samples.max
 
 rows = {
   {"status", "ok"},
   {"model", model},
   {"mode", adaptive ? "adaptive" : "fixed"},
+  {"repeats", repeats.to_s},
   {"max_layers", max_layers.to_s},
   {"steps_budget", steps.to_s},
   {"steps_run", summary.steps_run.to_s},
@@ -149,7 +167,11 @@ rows = {
   {"mean_entropy", summary.mean_entropy.to_s},
   {"load_ms", load_ms.round(3).to_s},
   {"prompt_cache_ms", cache_ms.round(3).to_s},
-  {"loop_ms", loop_ms.round(3).to_s},
+  {"loop_ms", loop_ms_median.round(3).to_s},
+  {"loop_ms_min", loop_ms_min.round(3).to_s},
+  {"loop_ms_median", loop_ms_median.round(3).to_s},
+  {"loop_ms_max", loop_ms_max.round(3).to_s},
+  {"loop_ms_samples", loop_samples.map { |v| v.round(3) }.join(",")},
 }
 
 case format
