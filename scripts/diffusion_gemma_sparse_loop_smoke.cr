@@ -8,6 +8,7 @@ prompt_token = 1
 canvas_token = 0
 candidate_ids_arg = nil.as(String?)
 candidate_count = nil.as(Int32?)
+candidate_counts_arg = nil.as(String?)
 max_layers = 1
 steps = 1
 proposal_top_k = 1
@@ -26,6 +27,7 @@ OptionParser.parse do |p|
   p.on("--canvas-token ID", "Initial canvas token id (default: 0)") { |v| canvas_token = v.to_i }
   p.on("--candidate-ids CSV", "Sparse candidate token ids for the canvas row (default: canvas token)") { |v| candidate_ids_arg = v }
   p.on("--candidate-count N", "Generate N sparse candidate ids starting at the canvas token") { |v| candidate_count = v.to_i }
+  p.on("--candidate-counts LIST", "Generate multiple candidate-count rows, comma or space separated") { |v| candidate_counts_arg = v }
   p.on("--max-layers N", "Bounded decode layers (default: 1)") { |v| max_layers = v.to_i }
   p.on("--steps N", "Sparse denoise steps / adaptive budget (default: 1)") { |v| steps = v.to_i }
   p.on("--proposal-top-k N", "Adaptive proposal top-k (default: 1)") { |v| proposal_top_k = v.to_i }
@@ -49,6 +51,12 @@ def parse_candidate_ids(raw : String?, default_token : Int32) : Array(Int32)
   ids.sort.uniq
 end
 
+def parse_candidate_counts(raw : String) : Array(Int32)
+  counts = raw.split(/[,\s]+/).map(&.strip).reject(&.empty?).map(&.to_i)
+  raise "--candidate-counts must contain at least one count" if counts.empty?
+  counts
+end
+
 def generated_candidate_ids(default_token : Int32, count : Int32, vocab_size : Int32) : Array(Int32)
   raise "--candidate-count must be positive" unless count > 0
   raise "--candidate-count exceeds vocab size" if count > vocab_size
@@ -69,7 +77,12 @@ raise "--stability-threshold must be positive" unless stability_threshold > 0
 raise "--entropy-bound must be finite and non-negative" unless entropy_bound.finite? && entropy_bound >= 0.0_f32
 raise "--format must be keyvalue or tsv" unless {"keyvalue", "tsv"}.includes?(format)
 raise "--repeats must be positive" unless repeats > 0
-raise "--candidate-ids and --candidate-count are mutually exclusive" if candidate_ids_arg && candidate_count
+candidate_mode_count = 0
+candidate_mode_count += 1 if candidate_ids_arg
+candidate_mode_count += 1 if candidate_count
+candidate_mode_count += 1 if candidate_counts_arg
+raise "--candidate-ids, --candidate-count, and --candidate-counts are mutually exclusive" if candidate_mode_count > 1
+raise "--candidate-counts requires --format tsv" if candidate_counts_arg && format != "tsv"
 raise "single-route smoke currently supports --max-layers 1; pass --full-routes for deeper smoke" if single_route && max_layers != 1
 
 load_t0 = Time.instant
@@ -79,13 +92,21 @@ hp = weights.hparams
 
 raise "--prompt-token out of range" if prompt_token < 0 || prompt_token >= hp.vocab_size
 raise "--canvas-token out of range" if canvas_token < 0 || canvas_token >= hp.vocab_size
-candidate_ids = if count = candidate_count
-                  generated_candidate_ids(canvas_token, count, hp.vocab_size)
-                else
-                  parse_candidate_ids(candidate_ids_arg, canvas_token)
-                end
-candidate_ids.each do |candidate_id|
-  raise "--candidate-ids contains out-of-range id #{candidate_id}" if candidate_id < 0 || candidate_id >= hp.vocab_size
+
+candidate_sets = [] of Array(Int32)
+if raw_counts = candidate_counts_arg
+  parse_candidate_counts(raw_counts).each do |count|
+    candidate_sets << generated_candidate_ids(canvas_token, count, hp.vocab_size)
+  end
+elsif count = candidate_count
+  candidate_sets << generated_candidate_ids(canvas_token, count, hp.vocab_size)
+else
+  candidate_sets << parse_candidate_ids(candidate_ids_arg, canvas_token)
+end
+candidate_sets.each do |candidate_ids|
+  candidate_ids.each do |candidate_id|
+    raise "--candidate-ids contains out-of-range id #{candidate_id}" if candidate_id < 0 || candidate_id >= hp.vocab_size
+  end
 end
 
 prompt_row = ML::GGUF::DiffusionGemmaCPU.scaled_embedding_lookup(weights, prompt_token)
@@ -112,90 +133,96 @@ prompt_cache = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(
 cache_ms = (Time.instant - cache_t0).total_milliseconds
 
 sample_us = ML::GGUF::DiffusionGemmaCPU.sample_u_steps(seed, steps, 1)
-loop_samples = [] of Float64
-loop = nil.as(ML::GGUF::DiffusionGemmaCPU::BoundedDenoiseLoopResult?)
-repeats.times do
-  loop_t0 = Time.instant
-  loop = if adaptive
-           ML::GGUF::DiffusionGemmaCPU.decode_canvas_adaptive_bounded_loop(
-             weights,
-             [canvas_token],
-             canvas_row,
-             mask,
-             prompt_cache,
-             [candidate_ids],
-             entropy_bound: entropy_bound,
-             stability_threshold: stability_threshold,
-             max_steps: steps,
-             proposal_top_k: proposal_top_k,
-             max_layers: max_layers,
-             sample_us_by_step_by_canvas_row: sample_us,
-             routes_by_layer_by_canvas_row: canvas_routes,
-           )
-         else
-           candidate_steps = Array(Array(Array(Int32))).new(steps) { [candidate_ids.dup] }
-           ML::GGUF::DiffusionGemmaCPU.decode_canvas_bounded_loop(
-             weights,
-             [canvas_token],
-             canvas_row,
-             mask,
-             prompt_cache,
-             candidate_steps,
-             entropy_bound: entropy_bound,
-             stability_threshold: stability_threshold,
-             max_layers: max_layers,
-             sample_us_by_step_by_canvas_row: sample_us,
-             routes_by_layer_by_canvas_row: canvas_routes,
-           )
-         end
-  loop_samples << (Time.instant - loop_t0).total_milliseconds
-end
-loop = loop.not_nil!
-summary = loop.summary
-loop_ms_min = loop_samples.min
-loop_ms_median = median(loop_samples)
-loop_ms_max = loop_samples.max
+result_rows = [] of Array(Tuple(String, String))
+candidate_sets.each do |candidate_ids|
+  loop_samples = [] of Float64
+  loop = nil.as(ML::GGUF::DiffusionGemmaCPU::BoundedDenoiseLoopResult?)
+  repeats.times do
+    loop_t0 = Time.instant
+    loop = if adaptive
+             ML::GGUF::DiffusionGemmaCPU.decode_canvas_adaptive_bounded_loop(
+               weights,
+               [canvas_token],
+               canvas_row,
+               mask,
+               prompt_cache,
+               [candidate_ids],
+               entropy_bound: entropy_bound,
+               stability_threshold: stability_threshold,
+               max_steps: steps,
+               proposal_top_k: proposal_top_k,
+               max_layers: max_layers,
+               sample_us_by_step_by_canvas_row: sample_us,
+               routes_by_layer_by_canvas_row: canvas_routes,
+             )
+           else
+             candidate_steps = Array(Array(Array(Int32))).new(steps) { [candidate_ids.dup] }
+             ML::GGUF::DiffusionGemmaCPU.decode_canvas_bounded_loop(
+               weights,
+               [canvas_token],
+               canvas_row,
+               mask,
+               prompt_cache,
+               candidate_steps,
+               entropy_bound: entropy_bound,
+               stability_threshold: stability_threshold,
+               max_layers: max_layers,
+               sample_us_by_step_by_canvas_row: sample_us,
+               routes_by_layer_by_canvas_row: canvas_routes,
+             )
+           end
+    loop_samples << (Time.instant - loop_t0).total_milliseconds
+  end
+  loop = loop.not_nil!
+  summary = loop.summary
+  loop_ms_min = loop_samples.min
+  loop_ms_median = median(loop_samples)
+  loop_ms_max = loop_samples.max
 
-rows = {
-  {"status", "ok"},
-  {"model", model},
-  {"mode", adaptive ? "adaptive" : "fixed"},
-  {"repeats", repeats.to_s},
-  {"max_layers", max_layers.to_s},
-  {"steps_budget", steps.to_s},
-  {"steps_run", summary.steps_run.to_s},
-  {"converged", summary.converged.to_s},
-  {"stop_reason", summary.stop_reason},
-  {"prompt_token", prompt_token.to_s},
-  {"initial_canvas_token", canvas_token.to_s},
-  {"final_canvas_token", loop.final_canvas_tokens[0].to_s},
-  {"candidate_ids", candidate_ids.join(",")},
-  {"prediction_count", summary.prediction_count.to_s},
-  {"accepted_count", summary.accepted_count.to_s},
-  {"acceptance_rate", summary.acceptance_rate.to_s},
-  {"total_candidate_tokens", summary.total_candidate_tokens.to_s},
-  {"max_candidate_tokens", summary.max_candidate_tokens.to_s},
-  {"mean_candidate_tokens", summary.mean_candidate_tokens.to_s},
-  {"mean_entropy", summary.mean_entropy.to_s},
-  {"load_ms", load_ms.round(3).to_s},
-  {"prompt_cache_ms", cache_ms.round(3).to_s},
-  {"loop_ms", loop_ms_median.round(3).to_s},
-  {"loop_ms_min", loop_ms_min.round(3).to_s},
-  {"loop_ms_median", loop_ms_median.round(3).to_s},
-  {"loop_ms_max", loop_ms_max.round(3).to_s},
-  {"loop_ms_samples", loop_samples.map { |v| v.round(3) }.join(",")},
-}
+  result_rows << [
+    {"status", "ok"},
+    {"model", model},
+    {"mode", adaptive ? "adaptive" : "fixed"},
+    {"repeats", repeats.to_s},
+    {"max_layers", max_layers.to_s},
+    {"steps_budget", steps.to_s},
+    {"steps_run", summary.steps_run.to_s},
+    {"converged", summary.converged.to_s},
+    {"stop_reason", summary.stop_reason},
+    {"prompt_token", prompt_token.to_s},
+    {"initial_canvas_token", canvas_token.to_s},
+    {"final_canvas_token", loop.final_canvas_tokens[0].to_s},
+    {"candidate_count", candidate_ids.size.to_s},
+    {"candidate_ids", candidate_ids.join(",")},
+    {"prediction_count", summary.prediction_count.to_s},
+    {"accepted_count", summary.accepted_count.to_s},
+    {"acceptance_rate", summary.acceptance_rate.to_s},
+    {"total_candidate_tokens", summary.total_candidate_tokens.to_s},
+    {"max_candidate_tokens", summary.max_candidate_tokens.to_s},
+    {"mean_candidate_tokens", summary.mean_candidate_tokens.to_s},
+    {"mean_entropy", summary.mean_entropy.to_s},
+    {"load_ms", load_ms.round(3).to_s},
+    {"prompt_cache_ms", cache_ms.round(3).to_s},
+    {"loop_ms", loop_ms_median.round(3).to_s},
+    {"loop_ms_min", loop_ms_min.round(3).to_s},
+    {"loop_ms_median", loop_ms_median.round(3).to_s},
+    {"loop_ms_max", loop_ms_max.round(3).to_s},
+    {"loop_ms_samples", loop_samples.map { |v| v.round(3) }.join(",")},
+  ]
+end
 
 case format
 when "keyvalue"
   puts "diffusion_gemma_sparse_loop_smoke_result status=ok"
-  rows.each do |key, value|
+  result_rows[0].each do |key, value|
     next if key == "status"
     puts "#{key}=#{value}"
   end
 when "tsv"
-  puts rows.map(&.[0]).join('\t')
-  puts rows.map(&.[1]).join('\t')
+  puts result_rows[0].map(&.[0]).join('\t')
+  result_rows.each do |rows|
+    puts rows.map(&.[1]).join('\t')
+  end
 else
   raise "unreachable output format: #{format}"
 end
