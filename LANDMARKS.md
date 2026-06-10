@@ -262,6 +262,11 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Focused specs verify real-GGUF loop summaries for fixed/adaptive one-step loops and synthetic weighted summaries where prediction counts differ across steps. This guards against the common bug of averaging entropy per step instead of per prediction.
 - Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `29 examples, 0 failures`.
 - Boundary: this is an API for measuring the sparse loop. It does not yet add a runner, benchmark gate, candidate discovery, or performance promotion.
+**update 2026-06-10aw:**
+- Added `scripts/diffusion_gemma_sparse_loop_smoke.cr` plus `scripts/diffusion_gemma_sparse_loop_smoke.sh`. The runner loads the native DiffusionGemma GGUF path, builds a one-token prompt cache, runs a bounded sparse canvas loop over explicit token-id candidates, and prints stable summary/timing rows.
+- The shell wrapper supplies the required Metal bridge link flags, using `COGNI_ML_BRIDGE_O`, repo-local `build/bridge.o`, or the main checkout bridge artifact, and fails closed if no bridge object exists.
+- Verification: no-codegen build passed; `bash -n scripts/diffusion_gemma_sparse_loop_smoke.sh` passed; `scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_smoke.sh 240 6000 --steps 1 --candidate-ids 0,1,2` exited 0 and emitted `diffusion_gemma_sparse_loop_smoke_result status=ok`, `prediction_count=1`, `accepted_count=1`, `mean_candidate_tokens=3.0`, and timing buckets.
+- Boundary: this is a native token-id sparse-loop metric smoke, not tokenizer-backed text generation, full-vocabulary EB parity, or Metal-resident acceleration.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified
