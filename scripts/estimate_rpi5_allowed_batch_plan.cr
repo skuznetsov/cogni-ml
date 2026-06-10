@@ -105,6 +105,7 @@ end
 
 def estimate_group_gpu_ms(group : Array(Frontier)) : Float64
   max_allowed = group.max_of(&.allowed)
+  return 0.281 if group.size == 2 && max_allowed <= 13
   return 0.393 if group.size == 3 && max_allowed <= 13
 
   max_v3d = group.max_of(&.v3d_ms)
