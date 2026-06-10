@@ -847,6 +847,26 @@ module ML::GGUF
       Array(Array(Array(Int32))).new(steps) { rows.map(&.dup) }
     end
 
+    def sample_u_rows(seed : Int32,
+                      canvas_len : Int32,
+                      step : Int32 = 0) : Array(Float32)
+      raise ArgumentError.new("sample_u canvas_len must be positive") unless canvas_len > 0
+      raise ArgumentError.new("sample_u step must be non-negative") if step < 0
+
+      state = sample_seed_state(seed) &+ step.to_u64 &* 0x9E3779B97F4A7C15_u64
+      Array(Float32).new(canvas_len) do
+        state = splitmix64_next(state)
+        ((state >> 40).to_u32.to_f32 / 16_777_216.0_f32)
+      end
+    end
+
+    def sample_u_steps(seed : Int32,
+                       steps : Int32,
+                       canvas_len : Int32) : Array(Array(Float32))
+      raise ArgumentError.new("sample_u steps must be positive") unless steps > 0
+      Array(Array(Float32)).new(steps) { |step| sample_u_rows(seed, canvas_len, step) }
+    end
+
     def decode_canvas_bounded_predictions(weights : DiffusionGemmaWeights,
                                           canvas_rows : Array(Float32),
                                           mask : DiffusionGemmaAttentionMask,
@@ -1260,6 +1280,17 @@ module ML::GGUF
       token_ids.each do |token_id|
         raise ArgumentError.new("candidate token id out of range") if token_id < 0 || token_id >= vocab_size
       end
+    end
+
+    private def sample_seed_state(seed : Int32) : UInt64
+      (seed.to_i64 & 0xffffffff_i64).to_u64
+    end
+
+    private def splitmix64_next(state : UInt64) : UInt64
+      z = state &+ 0x9E3779B97F4A7C15_u64
+      z = (z ^ (z >> 30)) &* 0xBF58476D1CE4E5B9_u64
+      z = (z ^ (z >> 27)) &* 0x94D049BB133111EB_u64
+      z ^ (z >> 31)
     end
 
     private def expert_gate_up_qw(lw : DiffusionGemmaLayerWeights,

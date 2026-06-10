@@ -247,6 +247,11 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Focused real-GGUF spec verifies the one-step adaptive loop converges identically to the current-token scheduled loop, and guard checks cover invalid `max_steps`, invalid `proposal_top_k`, and mismatched per-step sampling rows.
 - Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `29 examples, 0 failures`.
 - Boundary: adaptive scheduling only recycles sparse support from previous bounded predictions. It still cannot discover candidates that were not present in the initial/proposed sparse support.
+**update 2026-06-10at:**
+- Added deterministic `sample_u_rows` and `sample_u_steps` helpers for sparse EB loop sampling. They derive reproducible `[step][canvas]` values in `[0,1)` from `DiffusionGemmaDenoiseParams.seed` using a SplitMix64-style schedule.
+- Focused specs verify same-seed reproducibility, different-seed divergence, bounds, row/step consistency, invalid shape guards, and the real-GGUF adaptive one-step loop now accepts generated `sample_us_by_step_by_canvas_row`.
+- Verification: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused spec passed with `29 examples, 0 failures`.
+- Boundary: this only supplies deterministic sampling inputs for sparse candidate sets. It does not change candidate generation, entropy-bound acceptance, or full-vocabulary sampling semantics.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified

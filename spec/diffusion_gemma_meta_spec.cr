@@ -84,6 +84,21 @@ describe ML::GGUF::DiffusionGemmaDenoiseParams do
       params.confidence_threshold.should eq(0.005_f32)
       params.kv_cache.should be_true
       params.seed.should eq(7)
+
+      sample_a = ML::GGUF::DiffusionGemmaCPU.sample_u_steps(params.seed, 2, 3)
+      sample_b = ML::GGUF::DiffusionGemmaCPU.sample_u_steps(params.seed, 2, 3)
+      sample_c = ML::GGUF::DiffusionGemmaCPU.sample_u_steps(params.seed + 1, 2, 3)
+      sample_a.should eq(sample_b)
+      sample_a.should_not eq(sample_c)
+      sample_a.size.should eq(2)
+      sample_a.each do |row|
+        row.size.should eq(3)
+        row.each do |v|
+          v.should be >= 0.0_f32
+          v.should be < 1.0_f32
+        end
+      end
+      ML::GGUF::DiffusionGemmaCPU.sample_u_rows(params.seed, 3, 1).should eq(sample_a[1])
     ensure
       g.close
     end
@@ -109,6 +124,15 @@ describe ML::GGUF::DiffusionGemmaDenoiseParams do
         stability_threshold: 1,
         confidence_threshold: 0.005_f32,
       )
+    end
+    expect_raises(ArgumentError, /sample_u steps/) do
+      ML::GGUF::DiffusionGemmaCPU.sample_u_steps(7, 0, 1)
+    end
+    expect_raises(ArgumentError, /canvas_len/) do
+      ML::GGUF::DiffusionGemmaCPU.sample_u_rows(7, 0)
+    end
+    expect_raises(ArgumentError, /step/) do
+      ML::GGUF::DiffusionGemmaCPU.sample_u_rows(7, 1, -1)
     end
   end
 end
@@ -703,6 +727,7 @@ describe ML::GGUF::DiffusionGemmaCPU do
       max_steps: 1,
       proposal_top_k: 1,
       max_layers: 1,
+      sample_us_by_step_by_canvas_row: ML::GGUF::DiffusionGemmaCPU.sample_u_steps(7, 1, 1),
       routes_by_layer_by_canvas_row: [[canvas_route]],
     )
     adaptive.steps_run.should eq(1)
