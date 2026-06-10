@@ -86,6 +86,7 @@ Actual row-id probe:
 - Tool frontier trace for `edit_mode` has six ranked frontier corridors. Blind V3D grouping estimates `0.786ms`, but hybrid routing with `CPU_TINY_MAX=3` leaves four tiny `allowed<=3` corridors on CPU and groups the two finite-value corridors (`allowed=13/8`) on V3D. The measured two-frontier Pi run reported `gpu_ms=0.281`, `cpu_ms=0.802`, `speedup=2.852x`, `max_abs_diff=1.94e-7`, `throttled=0x0`; the trace planner estimates hybrid total `0.596ms` vs all-CPU `1.089ms`.
 - Runtime trace parser smoke on a short Qwen3.5-0.8B `edit_mode` run parsed four prefix-stage rows (`allowed=3/4/5/1`) and emitted one weak V3D candidate group (`allowed=4/5`) with estimated `hybrid_vs_cpu=1.108x`. This confirms the parser path and also shows why tiny/near-tiny frontiers should stay policy-gated.
 - Trace-log-to-Pi probe wrapper on the same short log ran the planned `allowed=4/5` group as `q6idx5_l256`, measured `gpu_ms=0.273`, `cpu_ms=0.359`, `speedup=1.316x`, `max_abs_diff=2.09e-7`, `throttled=0x0`. This confirms end-to-end trace extraction and probe execution, while keeping the near-tiny route classified as marginal.
+- Longer runtime trace on Qwen3.5-0.8B with `QWEN35_CONSTRAINED_TOOL_CALL_PREFIX=1`, `QWEN35_CONSTRAINT_FRONTIER_TRACE=1`, one `edit_mode` tool, and `n_gen=64` reached real value-literal rows and emitted a valid parsed `edit_mode(mode=safe,dry_run=true)` tool call. The trace had `31` constrained frontier rows, including two `value_literal allowed=8` rows. `scripts/plan_rpi5_from_frontier_trace.cr` planned six V3D groups with `hybrid_total_ms=3.1624` vs all-CPU `4.1306` (`1.306x`). Live `scripts/rpi5_q6_probe_trace_groups.sh` on the same log measured grouped Pi probe speedups of `1.424x`, `1.519x`, `1.794x`, `1.787x`, `1.455x`, and `1.326x`, with `max_abs_diff<=3.58e-7` and `throttled=0x0`.
 
 ## Route Policy
 
@@ -99,6 +100,8 @@ Use V3D when:
 
 Treat `allowed=8` as sensitive to measurement corridor until the product adapter owns a warmed resident command path. Without warmups it has shown near-boundary/noisy results; with `RPI5_WARMUPS=3` it measured as `V3D_CLEAR`.
 When several constrained steps can share one resident submit, batching improves the margin. The probe now supports different frontiers per batch row, but it still uses synthetic hidden rows; product batching must wire real decode hidden states and grammar frontiers into the same resident command path before promotion.
+
+The longer runtime trace confirms that finite value-literal frontiers occur in the real structured decode path, not only in the offline frontier estimator. It does not yet prove product RPi5 speedup because the Pi probe consumes the real row-id groups but still generates synthetic hidden vectors.
 
 Use `QWEN35_ALLOWED_HEAD_CPU_MAX=7` as the Pi-oriented policy override for warmed resident Q6 allowed-head experiments. A conservative unbatched policy can still prefer `QWEN35_ALLOWED_HEAD_CPU_MAX=12` until the product V3D adapter reproduces the warmed corridor. Keep it configurable: cold process startup, grammar row locality, and future V3D kernels can move the cutoff.
 
