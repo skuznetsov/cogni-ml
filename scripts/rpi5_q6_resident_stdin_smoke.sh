@@ -28,7 +28,7 @@ min_allowed="${2:-${MIN_ALLOWED:-4}}"
 }
 
 host="${RPI5_HOST:-raspberrypi.local}"
-remote_dir="${RPI5_REMOTE_DIR:-~/cogni-ml-vulkan-probe}"
+remote_dir="${RPI5_REMOTE_DIR:-__DEFAULT__}"
 warmups="${RPI5_WARMUPS:-3}"
 max_rows="${MAX_ROWS:-2}"
 converter="scripts/export_allowed_head_capture_replay.cr"
@@ -42,7 +42,6 @@ converter="scripts/export_allowed_head_capture_replay.cr"
 }
 
 local_f32="/tmp/rpi5_resident_stdin_$$.f32"
-remote_base="$(basename "$local_f32")"
 cleanup() {
   rm -f "$local_f32"
 }
@@ -76,25 +75,19 @@ first_ids="$(
     }' <<<"$first_ids"
 )"
 
-scp -q "$local_f32" "$host:$remote_dir/$remote_base"
-
-output="$(
-  ssh "$host" bash -s -- "$remote_dir" "$mode" "$first_ids" "$ids_groups" "$remote_base" "$rows" "$hidden_dim" "$warmups" <<'REMOTE'
+remote_script='
 set -euo pipefail
-remote_dir="$1"
-mode="$2"
-ids_csv="$3"
-ids_groups="$4"
-x_f32_load="$5"
-rows="$6"
-hidden_dim="$7"
-warmups="$8"
+remote_dir="$REMOTE_DIR"
+mode="$MODE"
+ids_csv="$IDS_CSV"
+warmups="$WARMUPS"
 
 root="$HOME/cogni-vulkan-runtime/root"
-if [[ "$remote_dir" == "~/"* ]]; then
+if [[ "$remote_dir" == "__DEFAULT__" ]]; then
+  remote_dir="$HOME/cogni-ml-vulkan-probe"
+elif [[ "$remote_dir" == "~/"* ]]; then
   remote_dir="$HOME/${remote_dir#~/}"
 fi
-trap 'rm -f "$remote_dir/$x_f32_load"' EXIT
 export VK_ICD_FILENAMES="$HOME/cogni-vulkan-runtime/icd/broadcom_icd.user.json"
 export LD_LIBRARY_PATH="$root/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH:-}"
 export RPI5_Q6_PREPACK_LOAD="qwen35_2b_token_embd_q6.pre20"
@@ -104,17 +97,22 @@ export RPI5_RESIDENT_STDIN=1
 export RPI5_WARMUPS="$warmups"
 
 cd "$remote_dir"
-row_bytes=$((hidden_dim * 4))
-IFS=':' read -r -a groups <<<"$ids_groups"
-{
-  for ((i = 0; i < rows; i++)); do
-    printf "bin\t%s\n" "${groups[$i]}"
-    dd if="$x_f32_load" bs="$row_bytes" skip="$i" count=1 status=none
-    printf "\n"
-  done
-} | ./rpi5_vulkan_q4k_probe rpi5_q6_matvec_pre_idx_l256.spv file qwen35_2b_token_embd_q6.cvgp 1 "$mode"
+./rpi5_vulkan_q4k_probe rpi5_q6_matvec_pre_idx_l256.spv file qwen35_2b_token_embd_q6.cvgp 1 "$mode"
 vcgencmd get_throttled || true
-REMOTE
+'
+printf -v remote_cmd 'REMOTE_DIR=%q MODE=%q IDS_CSV=%q WARMUPS=%q bash -c %q' \
+  "$remote_dir" "$mode" "$first_ids" "$warmups" "$remote_script"
+
+output="$(
+  {
+    row_bytes=$((hidden_dim * 4))
+    IFS=':' read -r -a groups <<<"$ids_groups"
+    for ((i = 0; i < rows; i++)); do
+      printf "bin\t%s\n" "${groups[$i]}"
+      dd if="$local_f32" bs="$row_bytes" skip="$i" count=1 status=none
+      printf "\n"
+    done
+  } | ssh "$host" "$remote_cmd"
 )"
 
 printf "%s\n" "$output"
