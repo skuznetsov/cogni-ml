@@ -18,6 +18,8 @@ Environment:
   SKIP_REPLAY=1      Only generate capture; do not contact the Pi.
   RESIDENT_BUDGET_GATE=1
                     Also run resident upload budget gate after replay.
+  RESIDENT_STREAM_GATE=1
+                    Also run resident per-step stream gate after replay.
 USAGE
   exit 2
 }
@@ -37,6 +39,7 @@ repeats="${REPEATS:-30}"
 warmups="${RPI5_WARMUPS:-3}"
 skip_replay="${SKIP_REPLAY:-0}"
 resident_budget_gate="${RESIDENT_BUDGET_GATE:-0}"
+resident_stream_gate="${RESIDENT_STREAM_GATE:-0}"
 
 [[ -f "$model_path" ]] || {
   echo "model not found: $model_path" >&2
@@ -86,4 +89,9 @@ if [[ "$resident_budget_gate" == "1" ]]; then
   REPEATS="$repeats" \
   RPI5_WARMUPS="$warmups" \
   scripts/rpi5_q6_resident_budget_gate.sh "$capture_path" "$min_allowed"
+fi
+
+if [[ "$resident_stream_gate" == "1" ]]; then
+  REPEATS="$repeats" \
+  scripts/rpi5_q6_resident_stream_gate.sh "$capture_path" "$min_allowed"
 fi

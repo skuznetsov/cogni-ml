@@ -86,6 +86,8 @@ Use `scripts/rpi5_q6_resident_budget_gate.sh CAPTURE.jsonl 4` as a fail-closed r
 
 Use `scripts/rpi5_q6_resident_stream_bench.sh CAPTURE.jsonl 4` to replay captured rows as a resident per-step request stream: one Vulkan setup, one prepacked Q6 head load, then one hidden/row-id upload and submit per captured constrained step. This is the closest current probe to a product worker boundary, but it still runs outside the real decode loop.
 
+Use `scripts/rpi5_q6_resident_stream_gate.sh CAPTURE.jsonl 4` as a fail-closed resident stream gate. It requires per-step resident stream speedup over CPU selected-row fallback, bounded `max_abs_diff`, zero top1 mismatches, and clean throttle state.
+
 Actual row-id probe:
 
 - `tool_call_prefix:start`, ids `27,60638,248058`: `0.174ms`, top1 matched CPU.
@@ -112,6 +114,7 @@ Actual row-id probe:
 - Resident budget gate with `REPEATS=30 RPI5_WARMUPS=3 scripts/rpi5_q6_resident_budget_gate.sh /tmp/qwen35_2b_allowed_head_capture_20260609_223005.jsonl 4` passed with `upload_request_speedup=1.792`, `max_abs_diff=8.58307e-06`, threshold `MIN_UPLOAD_SPEEDUP=1.25`, and `throttled=0x0`.
 - Full regression gate now runs the resident budget gate when `FULL_REPLAY=1`. Smoke `FULL_REPLAY=1 RAW_OUTPUT=0 REPEATS=10 RPI5_WARMUPS=3 scripts/rpi5_q6_allowed_head_regression.sh` produced a fresh `31` row capture, replayed all rows at `gpu_ms=3.517`, `cpu_ms=4.405`, replayed filtered rows at `gpu_ms=1.846`, `cpu_ms=3.330`, estimated hybrid `2.921ms` vs all-CPU `4.405ms` (`1.508x`), then passed `resident_budget_gate_result` with `upload_request_speedup=1.866`, `max_abs_diff=8.58307e-06`, and `throttled=0x0`.
 - Resident stream bench with `RAW_OUTPUT=0 REPEATS=30 scripts/rpi5_q6_resident_stream_bench.sh /tmp/qwen35_2b_allowed_head_capture_20260609_223005.jsonl 4` replayed the filtered `16` rows as independent per-step requests inside one resident probe process. It measured `resident_stream_ms=0.160` per request vs CPU selected-row `0.212ms` (`1.326x`), with `max_abs_diff=8.58307e-06`, `top1_mismatches=0`, one-time `prepack_load_ms=127.349`, and `throttled=0x0`. Boundary: this removes SSH/process/Vulkan setup from the per-request path, but still uses a probe-side worker rather than the product decode runtime.
+- Full regression gate now also runs the resident stream gate when `FULL_REPLAY=1`. Smoke `FULL_REPLAY=1 RAW_OUTPUT=0 REPEATS=5 RPI5_WARMUPS=2 scripts/rpi5_q6_allowed_head_regression.sh` preserved marker smokes and parsed `edit_mode(mode=safe,dry_run=true)`, produced a fresh `31` row capture, replayed filtered rows at `gpu_ms=1.844`, `cpu_ms=3.255`, passed resident budget gate with `upload_request_speedup=1.745`, then passed resident stream gate with `stream_speedup=1.342`, `max_abs_diff=8.58307e-06`, `top1_mismatches=0`, and `throttled=0x0`.
 
 ## Route Policy
 
