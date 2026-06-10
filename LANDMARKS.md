@@ -303,6 +303,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Sparse-loop smoke output now includes sweep-relative fields `loop_ms_ratio_vs_first` and `candidate_tokens_per_ms_ratio_vs_first`, using the first emitted candidate-width row as the baseline.
 - Verification: no-codegen build passed; wrapper syntax passed; `scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_smoke.sh 300 6000 --candidate-counts 1,4 --steps 1 --warmups 1 --repeats 2 --format tsv` exited 0. An awk guard verified the first row ratios are `1.0` and the second row ratios are positive.
 - Boundary: these ratios make sparse-width sweeps easier to read; they do not prove a speedup, quality, or semantic sufficiency of wider candidate sets.
+**update 2026-06-10bg:**
+- `scripts/diffusion_gemma_sparse_loop_smoke.cr` now supports `--prompt-tokens CSV`, overriding the single `--prompt-token` and building a multi-token prompt cache. Output adds `prompt_len` and `prompt_tokens`.
+- Verification: no-codegen build passed; wrapper syntax passed; empty `--prompt-tokens ,` fails closed before model/Metal init; `scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_smoke.sh 300 6000 --prompt-tokens 1,2 --candidate-counts 1,4 --steps 1 --warmups 1 --repeats 2 --format tsv` exited 0. An awk guard verified two rows with `prompt_len=2`, `prompt_tokens=1,2`, and first prompt token `1`.
+- Boundary: this measures token-id prompt-cache length effects in the native sparse-loop smoke. It is not tokenizer-backed text prompting or full DiffusionGemma generation.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified

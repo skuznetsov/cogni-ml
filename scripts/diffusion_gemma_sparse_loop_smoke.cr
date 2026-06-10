@@ -5,6 +5,7 @@ DEFAULT_MODEL = "#{ENV["HOME"]}/.cache/lm-studio/models/unsloth/diffusiongemma-2
 
 model = ENV["DIFFUSION_GEMMA_MODEL"]? || DEFAULT_MODEL
 prompt_token = 1
+prompt_tokens_arg = nil.as(String?)
 canvas_token = 0
 candidate_ids_arg = nil.as(String?)
 candidate_count = nil.as(Int32?)
@@ -25,6 +26,7 @@ OptionParser.parse do |p|
   p.banner = "Usage: diffusion_gemma_sparse_loop_smoke [options]"
   p.on("--model PATH", "DiffusionGemma GGUF path") { |v| model = v }
   p.on("--prompt-token ID", "Prompt token id (default: 1)") { |v| prompt_token = v.to_i }
+  p.on("--prompt-tokens CSV", "Prompt token ids, overrides --prompt-token") { |v| prompt_tokens_arg = v }
   p.on("--canvas-token ID", "Initial canvas token id (default: 0)") { |v| canvas_token = v.to_i }
   p.on("--candidate-ids CSV", "Sparse candidate token ids for the canvas row (default: canvas token)") { |v| candidate_ids_arg = v }
   p.on("--candidate-count N", "Generate N sparse candidate ids starting at the canvas token") { |v| candidate_count = v.to_i }
@@ -46,9 +48,15 @@ OptionParser.parse do |p|
   end
 end
 
+def parse_token_ids(raw : String, label : String) : Array(Int32)
+  ids = raw.split(",").map(&.strip).reject(&.empty?).map(&.to_i)
+  raise "#{label} must contain at least one id" if ids.empty?
+  ids
+end
+
 def parse_candidate_ids(raw : String?, default_token : Int32) : Array(Int32)
   text = raw || default_token.to_s
-  ids = text.split(",").map(&.strip).reject(&.empty?).map(&.to_i)
+  ids = parse_token_ids(text, "--candidate-ids")
   raise "--candidate-ids must contain at least one id" if ids.empty?
   ids.sort.uniq
 end
@@ -87,13 +95,16 @@ candidate_mode_count += 1 if candidate_counts_arg
 raise "--candidate-ids, --candidate-count, and --candidate-counts are mutually exclusive" if candidate_mode_count > 1
 raise "--candidate-counts requires --format tsv" if candidate_counts_arg && format != "tsv"
 raise "single-route smoke currently supports --max-layers 1; pass --full-routes for deeper smoke" if single_route && max_layers != 1
+prompt_tokens = prompt_tokens_arg ? parse_token_ids(prompt_tokens_arg.not_nil!, "--prompt-tokens") : [prompt_token]
 
 load_t0 = Time.instant
 weights = ML::GGUF::DiffusionGemmaWeights.from_gguf(model)
 load_ms = (Time.instant - load_t0).total_milliseconds
 hp = weights.hparams
 
-raise "--prompt-token out of range" if prompt_token < 0 || prompt_token >= hp.vocab_size
+prompt_tokens.each do |token_id|
+  raise "--prompt-token out of range" if token_id < 0 || token_id >= hp.vocab_size
+end
 raise "--canvas-token out of range" if canvas_token < 0 || canvas_token >= hp.vocab_size
 
 candidate_sets = [] of Array(Int32)
@@ -112,23 +123,29 @@ candidate_sets.each do |candidate_ids|
   end
 end
 
-prompt_row = ML::GGUF::DiffusionGemmaCPU.scaled_embedding_lookup(weights, prompt_token)
+prompt_rows = [] of Float32
+prompt_tokens.each do |token_id|
+  prompt_rows.concat(ML::GGUF::DiffusionGemmaCPU.scaled_embedding_lookup(weights, token_id))
+end
 canvas_row = ML::GGUF::DiffusionGemmaCPU.zero_sc_canvas_embedding(weights, canvas_token)
-mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: 1, canvas_len: 1, sliding_window: hp.sliding_window)
+mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: prompt_tokens.size, canvas_len: 1, sliding_window: hp.sliding_window)
 
 prompt_routes = nil.as(Array(Array(Array(ML::GGUF::DiffusionGemmaCPU::ExpertRoute)))?)
 canvas_routes = nil.as(Array(Array(Array(ML::GGUF::DiffusionGemmaCPU::ExpertRoute)))?)
 if single_route
-  prompt_route = ML::GGUF::DiffusionGemmaCPU.route_experts(weights, 0, prompt_row)[0, 1]
+  prompt_route_rows = prompt_tokens.map_with_index do |_, i|
+    row = prompt_rows[i * hp.n_embd, hp.n_embd]
+    ML::GGUF::DiffusionGemmaCPU.route_experts(weights, 0, row)[0, 1]
+  end
   canvas_route = ML::GGUF::DiffusionGemmaCPU.route_experts(weights, 0, canvas_row)[0, 1]
-  prompt_routes = [[prompt_route]]
+  prompt_routes = [prompt_route_rows]
   canvas_routes = [[canvas_route]]
 end
 
 cache_t0 = Time.instant
 prompt_cache = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(
   weights,
-  prompt_row,
+  prompt_rows,
   mask,
   max_layers: max_layers,
   routes_by_layer_by_prompt_row: prompt_routes,
@@ -202,7 +219,9 @@ candidate_sets.each do |candidate_ids|
     {"steps_run", summary.steps_run.to_s},
     {"converged", summary.converged.to_s},
     {"stop_reason", summary.stop_reason},
-    {"prompt_token", prompt_token.to_s},
+    {"prompt_token", prompt_tokens[0].to_s},
+    {"prompt_len", prompt_tokens.size.to_s},
+    {"prompt_tokens", prompt_tokens.join(",")},
     {"initial_canvas_token", canvas_token.to_s},
     {"final_canvas_token", loop.final_canvas_tokens[0].to_s},
     {"candidate_count", candidate_ids.size.to_s},
