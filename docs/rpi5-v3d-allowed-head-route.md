@@ -56,6 +56,8 @@ Use `scripts/rpi5_q6_frontier_probe.sh LABEL IDS_CSV [REPEATS]` from the local c
 Use `scripts/rpi5_q6_frontier_suite.sh MODEL.gguf [MAX_FRONTIERS]` to run estimator-selected frontiers. It defaults to `ROUTE_FILTER=V3D`; use `LABEL_REGEX=...`, `REPEATS=...`, and `DRY_RUN=1` to narrow or preview the run.
 Set `RAW_OUTPUT=0` to suppress the full probe log; the suite still emits a machine-readable `frontier_result` row with a measured `verdict`, estimated and measured `gpu_ms` / `cpu_ms`, estimate ratios, `speedup`, `top1_match`, and throttle state. `MIN_SPEEDUP` controls the `V3D_CLEAR` cutoff; default is `1.25`.
 
+Use `scripts/rpi5_q6_policy_calibrate.sh MODEL.gguf` to run the current policy frontiers and emit `calibration_policy`. The default labels cover `tool_call_prefix:start` (`allowed=3`), `read_file.limit` (`allowed=8`), and `edit_mode.mode` (`allowed=13`).
+
 Actual row-id probe:
 
 - `tool_call_prefix:start`, ids `27,60638,248058`: `0.174ms`, top1 matched CPU.
@@ -64,18 +66,21 @@ Actual row-id probe:
 - Suite wrapper check with `LABEL_REGEX='finite_values:(read_file\.limit|edit_mode\.mode)' REPEATS=40`: `read_file.limit` measured `0.239ms` V3D vs `0.295ms` CPU, and `edit_mode.mode` measured `0.234ms` V3D vs `0.487ms` CPU; both matched CPU top1 and reported `throttled=0x0`.
 - Summary-only wrapper check with `RAW_OUTPUT=0 LABEL_REGEX='finite_values:read_file\.limit' REPEATS=30` emitted `verdict=V3D_NEAR`, `gpu_ms=0.261`, `cpu_ms=0.283`, `speedup=1.083x`, `v3d_est_ratio=1.403`, and `top1_match=true`, confirming `allowed=8` is positive but close to the CPU/V3D boundary.
 - Summary-only wrapper check with `RAW_OUTPUT=0 LABEL_REGEX='finite_values:edit_mode\.mode' REPEATS=30` emitted `verdict=V3D_CLEAR`, `gpu_ms=0.267`, `cpu_ms=0.487`, `speedup=1.822x`, and `top1_match=true`, giving the current clean example for `allowed=13`.
+- Policy calibration with `RAW_OUTPUT=0 REPEATS=40 scripts/rpi5_q6_policy_calibrate.sh MODEL.gguf` emitted `policy_cpu_max_allowed=3`, `v3d_clear_min_allowed=13`, `near_boundary_allowed=8`. The measured rows were `allowed=3 verdict=CPU_WINS`, `allowed=8 verdict=V3D_NEAR`, and `allowed=13 verdict=V3D_CLEAR`.
 
 ## Route Policy
 
-Use CPU for singleton/tiny frontiers unless the GPU path is already batched or resident in a command-buffer corridor.
+Use CPU for singleton/tiny frontiers unless the GPU path is already batched or resident in a command-buffer corridor. Current real-frontier calibration sets the conservative CPU clear zone at `allowed<=3`.
 
 Use V3D when:
 
-- `allowed_count >= 8` under warmed resident-prepack conditions, or
+- `allowed_count >= 13` under current real-frontier calibration, or
 - multiple constrained steps can be grouped/amortized, or
 - logits/top1 already stay on the GPU side.
 
-Use `QWEN35_ALLOWED_HEAD_CPU_MAX=7` as the current Pi-oriented policy override for resident Q6 allowed-head experiments. Keep it configurable: cold process startup, grammar row locality, and future V3D kernels can move the cutoff.
+Treat `allowed=8` as near-boundary under current measurements: route to V3D only with batching/amortization or when runtime calibration reports `V3D_CLEAR`.
+
+Use `QWEN35_ALLOWED_HEAD_CPU_MAX=7` as the older Pi-oriented policy override for resident Q6 allowed-head experiments only when accepting near-boundary V3D routes. A conservative unbatched policy should prefer `QWEN35_ALLOWED_HEAD_CPU_MAX=12` until fresh calibration says otherwise. Keep it configurable: cold process startup, grammar row locality, and future V3D kernels can move the cutoff.
 
 Sort allowed token ids for medium/broad finite sets. Sorting was neutral at `1024` rows but improved `4096` rows from `10.550ms` to `8.617ms`.
 
@@ -130,7 +135,7 @@ Continue the default-off runtime adapter:
 
 1. Build `TokenTextIndex` once per tokenizer.
 2. For literal/tool states, compute `allowed_token_ids`.
-3. Apply the route policy threshold (`QWEN35_ALLOWED_HEAD_CPU_MAX=7` for current Pi resident-Q6 experiments).
+3. Apply the route policy threshold (`QWEN35_ALLOWED_HEAD_CPU_MAX=12` for conservative unbatched Pi resident-Q6 experiments; lower only when accepting near-boundary routes or after fresh calibration).
 4. Use the implemented hidden/head split to avoid full-head logits when routing to CPU selected rows.
 5. Behind the V3D gate, replace CPU row-dot with resident indexed Q6 head.
 6. Verify exact generated token parity on constrained tool-call smokes.
