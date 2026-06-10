@@ -1,5 +1,16 @@
 require "./spec_helper"
+require "file_utils"
 require "../src/ml/gguf/qwen35_rpi5_allowed_head_client"
+
+private def with_frame_tmp(&)
+  dir = File.tempname("qwen35_rpi5_frames_spec")
+  Dir.mkdir(dir)
+  begin
+    yield dir
+  ensure
+    FileUtils.rm_rf(dir) if Dir.exists?(dir)
+  end
+end
 
 describe ML::GGUF::Qwen35Rpi5AllowedHeadClient do
   it "frames binary stdin requests with little-endian hidden rows" do
@@ -52,6 +63,57 @@ describe ML::GGUF::Qwen35Rpi5AllowedHeadClient do
       ML::GGUF::Qwen35Rpi5AllowedHeadClient.parse_result_line?(
         "resident_stdin_result\trequest=0\tallowed=4\tgpu_ms=0.160\tcpu_ms=0.154\tspeedup=0.958x\tmax_abs_diff=0\ttop1_match=true\tgpu_top1_src=13766"
       )
+    end
+  end
+
+  it "exports capture replay batches as resident stdin frames" do
+    with_frame_tmp do |dir|
+      f32_path = File.join(dir, "x.f32")
+      File.open(f32_path, "wb") do |io|
+        [1.0_f32, -2.5_f32, 0.25_f32, 4.0_f32].each do |value|
+          io.write_bytes(value, IO::ByteFormat::LittleEndian)
+        end
+      end
+
+      output = IO::Memory.new
+      error = IO::Memory.new
+      status = Process.run(
+        "crystal",
+        ["scripts/rpi5_q6_resident_stdin_frames.cr", f32_path, "2", "83,951:62", "2"],
+        output: output,
+        error: error,
+      )
+
+      status.success?.should be_true, error.to_s
+      bytes = output.to_slice
+      bytes[0, 11].should eq("bin\t83,951\n".to_slice)
+      bytes[11, 4].should eq(Bytes[0x00, 0x00, 0x80, 0x3f])
+      bytes[15, 4].should eq(Bytes[0x00, 0x00, 0x20, 0xc0])
+      bytes[19].should eq('\n'.ord)
+      bytes[20, 7].should eq("bin\t62\n".to_slice)
+      bytes[27, 4].should eq(Bytes[0x00, 0x00, 0x80, 0x3e])
+      bytes[31, 4].should eq(Bytes[0x00, 0x00, 0x80, 0x40])
+      bytes[35].should eq('\n'.ord)
+    end
+  end
+
+  it "fails closed when frame export metadata does not match the batch" do
+    with_frame_tmp do |dir|
+      f32_path = File.join(dir, "x.f32")
+      File.open(f32_path, "wb") do |io|
+        io.write_bytes(1.0_f32, IO::ByteFormat::LittleEndian)
+      end
+
+      error = IO::Memory.new
+      status = Process.run(
+        "crystal",
+        ["scripts/rpi5_q6_resident_stdin_frames.cr", f32_path, "2", "83", "1"],
+        output: Process::Redirect::Close,
+        error: error,
+      )
+
+      status.success?.should be_false
+      error.to_s.should contain("hidden batch byte size 4 does not match expected 8")
     end
   end
 end

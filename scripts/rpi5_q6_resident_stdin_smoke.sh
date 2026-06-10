@@ -103,17 +103,7 @@ vcgencmd get_throttled || true
 printf -v remote_cmd 'REMOTE_DIR=%q MODE=%q IDS_CSV=%q WARMUPS=%q bash -c %q' \
   "$remote_dir" "$mode" "$first_ids" "$warmups" "$remote_script"
 
-output="$(
-  {
-    row_bytes=$((hidden_dim * 4))
-    IFS=':' read -r -a groups <<<"$ids_groups"
-    for ((i = 0; i < rows; i++)); do
-      printf "bin\t%s\n" "${groups[$i]}"
-      dd if="$local_f32" bs="$row_bytes" skip="$i" count=1 status=none
-      printf "\n"
-    done
-  } | ssh "$host" "$remote_cmd"
-)"
+output="$(crystal scripts/rpi5_q6_resident_stdin_frames.cr "$local_f32" "$hidden_dim" "$ids_groups" "$rows" | ssh "$host" "$remote_cmd")"
 
 printf "%s\n" "$output"
 
