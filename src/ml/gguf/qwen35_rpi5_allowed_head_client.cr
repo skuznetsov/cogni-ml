@@ -1,3 +1,5 @@
+require "json"
+
 module ML::GGUF
   # Probe-side protocol helpers for the Raspberry Pi 5 resident Q6 allowed-head
   # worker. This module deliberately owns only framing and result parsing; it
@@ -10,6 +12,17 @@ module ML::GGUF
       allowed_ids : Array(Int32)
 
     alias Transport = Request -> String
+
+    def resident_process_argv_from_json(json : String) : Array(String)
+      any = JSON.parse(json)
+      raw = any.as_a? || raise ArgumentError.new("resident process command JSON must be an array")
+      argv = raw.map do |value|
+        value.as_s? || raise ArgumentError.new("resident process command JSON entries must be strings")
+      end
+      raise ArgumentError.new("resident process command JSON must not be empty") if argv.empty?
+
+      argv
+    end
 
     class ResidentProcessTransport
       def initialize(@command : String,

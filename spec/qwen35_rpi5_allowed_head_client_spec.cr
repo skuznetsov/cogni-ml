@@ -63,6 +63,26 @@ describe ML::GGUF::Qwen35Rpi5AllowedHeadClient do
     end
   end
 
+  it "parses resident process argv from JSON without shell splitting" do
+    argv = ML::GGUF::Qwen35Rpi5AllowedHeadClient.resident_process_argv_from_json(
+      %(["ssh","raspberrypi.local","REMOTE_DIR=~/cogni-ml-vulkan-probe bash -lc ./worker"])
+    )
+
+    argv.should eq([
+      "ssh",
+      "raspberrypi.local",
+      "REMOTE_DIR=~/cogni-ml-vulkan-probe bash -lc ./worker",
+    ])
+
+    expect_raises(ArgumentError, "resident process command JSON must not be empty") do
+      ML::GGUF::Qwen35Rpi5AllowedHeadClient.resident_process_argv_from_json("[]")
+    end
+
+    expect_raises(ArgumentError, "resident process command JSON entries must be strings") do
+      ML::GGUF::Qwen35Rpi5AllowedHeadClient.resident_process_argv_from_json(%(["ssh",1]))
+    end
+  end
+
   it "parses resident stdin result rows" do
     line = "resident_stdin_result\trequest=1\tallowed=5\tgpu_ms=0.243\tcpu_ms=0.219\tspeedup=0.900x\tmax_abs_diff=2.38419e-06\ttop1_match=true\tgpu_top1_src=13042\tcpu_top1_src=13042\tgpu_top1_logit=1.25\tcpu_top1_logit=1.24999"
     result = ML::GGUF::Qwen35Rpi5AllowedHeadClient.parse_result_line?(line).not_nil!

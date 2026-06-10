@@ -36,6 +36,7 @@ source_history_save_ms = 0.0
 token_cache_hit = false
 cache_route = "none"
 model_hidden_dim = nil.as(Int32?)
+rpi5_resident_transport_enabled = false
 
 prompt = ARGV[0]? || "The capital of France is"
 n_gen = (ARGV[1]? || "8").to_i
@@ -158,6 +159,9 @@ structured_constraint_enabled = (constrained_literal_prefix && !constrained_lite
 constrained_force_single_literal = ENV["QWEN35_CONSTRAINED_FORCE_SINGLE"]? == "1"
 constrained_force_literal_span = ENV["QWEN35_CONSTRAINED_FORCE_SPAN_OFF"]? != "1"
 constraint_frontier_trace_enabled = ENV["QWEN35_CONSTRAINT_FRONTIER_TRACE"]? == "1"
+rpi5_resident_command_argv = ENV["QWEN35_RPI5_RESIDENT_COMMAND_JSON"]?.try do |json|
+  ML::GGUF::Qwen35Rpi5AllowedHeadClient.resident_process_argv_from_json(json)
+end
 
 raise "QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN must be non-negative" unless prompt_cache_full_hit_min_gen >= 0
 raise "QWEN35_PROMPT_CACHE_ARTIFACT_CODEC_BLOCK must be positive" unless prompt_cache_artifact_codec_block > 0
@@ -791,6 +795,21 @@ load_mtp_gguf = -> : ML::GGUF::Qwen35GGUFMTPWeights do
     mtp_gguf = loaded_mtp
     loaded_mtp
   end
+end
+
+rpi5_resident_transport = nil.as(ML::GGUF::Qwen35Rpi5AllowedHeadClient::ResidentProcessTransport?)
+if argv = rpi5_resident_command_argv
+  rpi5_resident_transport = ML::GGUF::Qwen35Rpi5AllowedHeadClient::ResidentProcessTransport.new(
+    argv[0],
+    argv[1..],
+  )
+  ML::GGUF::Qwen35CPU.allowed_head_resident_transport = rpi5_resident_transport.not_nil!.transport
+  rpi5_resident_transport_enabled = true
+  at_exit do
+    ML::GGUF::Qwen35CPU.allowed_head_resident_transport = nil
+    rpi5_resident_transport.try(&.close)
+  end
+  STDOUT << "RPi5 allowed-head resident transport enabled: command=#{argv[0].inspect} args=#{argv.size - 1}\n"
 end
 
 max_seq = ids.size + n_gen + 8
@@ -1955,7 +1974,7 @@ if constrained_tool_call_prefix_enabled
   finite_value_params = tool_value_options_by_parameter.size
   STDOUT << "  tool constraint summary: final_stage=#{tool_literal_stage} stage_steps=#{stage_steps} forced_single_steps=#{literal_forced_single_steps} forced_span_steps=#{literal_forced_span_steps} freeform_value_steps=#{tool_freeform_value_steps} value_boundary_hits=#{tool_value_boundary_hits} finite_value_params=#{finite_value_params} frontier_trace_steps=#{constraint_frontier_trace_steps}\n"
 end
-STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{model_load_ms.round(1)} draft_load_ms=#{draft_load_ms.round(1)} tokenize_ms=#{tokenize_ms.round(1)} token_cache_hit=#{token_cache_hit} cache_route=#{cache_route} state_prepare_ms=#{state_prepare_ms.round(1)} source_history_lookup_ms=#{source_history_lookup_ms.round(1)} cache_restore_ms=#{cache_restore_ms.round(1)} prefill_ms=#{prefill_ms.round(1)} decode_ms=#{decode_ms.round(1)} source_history_save_ms=#{source_history_save_ms.round(1)} prompt_tokens=#{ids.size} output_tokens=#{output_ids.size}\n"
+STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{model_load_ms.round(1)} draft_load_ms=#{draft_load_ms.round(1)} tokenize_ms=#{tokenize_ms.round(1)} token_cache_hit=#{token_cache_hit} cache_route=#{cache_route} rpi5_resident_transport=#{rpi5_resident_transport_enabled} state_prepare_ms=#{state_prepare_ms.round(1)} source_history_lookup_ms=#{source_history_lookup_ms.round(1)} cache_restore_ms=#{cache_restore_ms.round(1)} prefill_ms=#{prefill_ms.round(1)} decode_ms=#{decode_ms.round(1)} source_history_save_ms=#{source_history_save_ms.round(1)} prompt_tokens=#{ids.size} output_tokens=#{output_ids.size}\n"
 
 puts "\n=== Generated token ids ==="
 puts output_ids.inspect
