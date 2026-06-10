@@ -2,6 +2,7 @@ require "./qwen35_meta"
 require "./qwen35_weights"
 require "./quant_matmul"
 require "./qwen35_metal"
+require "./qwen35_rpi5_allowed_head_client"
 
 # Qwen 3.5 / 3.6 CPU reference forward pass.
 #
@@ -24,6 +25,25 @@ module ML::GGUF
     GIB                         = 1024_u64 * 1024_u64 * 1024_u64
     @@default_prefill_chunk_size : Int32?
     @@prefill_gc_guard_active = false
+    @@allowed_head_resident_transport : Qwen35Rpi5AllowedHeadClient::Transport?
+
+    def allowed_head_resident_transport : Qwen35Rpi5AllowedHeadClient::Transport?
+      @@allowed_head_resident_transport
+    end
+
+    def allowed_head_resident_transport=(transport : Qwen35Rpi5AllowedHeadClient::Transport?) : Nil
+      @@allowed_head_resident_transport = transport
+    end
+
+    def with_allowed_head_resident_transport(transport : Qwen35Rpi5AllowedHeadClient::Transport?, &)
+      old = @@allowed_head_resident_transport
+      @@allowed_head_resident_transport = transport
+      begin
+        yield
+      ensure
+        @@allowed_head_resident_transport = old
+      end
+    end
 
     def prefill_chunk_size_for_memory(total_bytes : UInt64?) : Int32
       return FALLBACK_PREFILL_CHUNK_SIZE unless bytes = total_bytes
@@ -2190,8 +2210,21 @@ module ML::GGUF
                    Qwen35Metal::Profile.bump_route_marker("allowed_head.cpu_selected_cpu_hidden")
                  {% end %}
                  forward_hidden(weights, token_id, pos, state)
-               end
+      end
       capture_allowed_head_hidden(capture_path, token_id, pos, allowed_ids, hidden, hidden_source) if capture_path
+      if !capture_path && q6_enabled && weights.output.type.q6_k? && allowed_ids.size > allowed_head_cpu_max
+        if top1 = Qwen35Rpi5AllowedHeadClient.top1_allowed?(
+             hidden, allowed_ids, vocab_rows: weights.output.out_dim, transport: allowed_head_resident_transport)
+          {% unless flag?(:cpu_only) %}
+            Qwen35Metal::Profile.bump_route_marker("allowed_head.rpi5_resident")
+          {% end %}
+          return top1
+        elsif allowed_head_resident_transport
+          {% unless flag?(:cpu_only) %}
+            Qwen35Metal::Profile.bump_route_marker("allowed_head.rpi5_resident_fallback")
+          {% end %}
+        end
+      end
       hidden_top1_allowed(weights, hidden, allowed_ids)
     end
 

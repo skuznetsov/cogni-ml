@@ -1,6 +1,7 @@
 require "./spec_helper"
 require "file_utils"
 require "../src/ml/gguf/qwen35_rpi5_allowed_head_client"
+require "../src/ml/gguf/qwen35_cpu"
 
 private def with_frame_tmp(&)
   dir = File.tempname("qwen35_rpi5_frames_spec")
@@ -138,6 +139,21 @@ describe ML::GGUF::Qwen35Rpi5AllowedHeadClient do
       transport: bad_transport,
     )
     bad.should be_nil
+  end
+
+  it "scopes the Qwen35CPU resident transport hook" do
+    old = ML::GGUF::Qwen35CPU.allowed_head_resident_transport
+    transport = ML::GGUF::Qwen35Rpi5AllowedHeadClient::Transport.new do |_request|
+      ""
+    end
+
+    ML::GGUF::Qwen35CPU.with_allowed_head_resident_transport(transport) do
+      ML::GGUF::Qwen35CPU.allowed_head_resident_transport.should eq(transport)
+    end
+
+    ML::GGUF::Qwen35CPU.allowed_head_resident_transport.should eq(old)
+  ensure
+    ML::GGUF::Qwen35CPU.allowed_head_resident_transport = old
   end
 
   it "exports capture replay batches as resident stdin frames" do
