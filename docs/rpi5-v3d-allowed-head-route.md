@@ -78,6 +78,8 @@ Use `scripts/rpi5_q6_capture_replay.sh CAPTURE.jsonl 4` to automate the conversi
 
 Use `scripts/rpi5_q6_capture_smoke.sh` to run the full local 2B `edit_mode` constrained capture smoke and then replay it on the Pi.
 
+Use `scripts/rpi5_q6_allowed_head_regression.sh` as the default local pre-adapter gate. It runs marker smoke plus capture smoke without Pi replay; set `FULL_REPLAY=1` to include the Pi replay step.
+
 Actual row-id probe:
 
 - `tool_call_prefix:start`, ids `27,60638,248058`: `0.174ms`, top1 matched CPU.
