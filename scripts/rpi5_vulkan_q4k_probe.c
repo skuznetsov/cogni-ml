@@ -119,6 +119,44 @@ static void parse_row_ids_csv(const char *csv, uint32_t *ids, uint32_t count, ui
   if (*p != '\0') die("RPI5_ROW_IDS_CSV has too many entries");
 }
 
+static const char *parse_row_ids_group(const char *p, uint32_t *ids, uint32_t *count_out, uint32_t max_count, uint32_t max_row) {
+  uint32_t count = 0;
+  if (*p == '\0' || *p == ';' || *p == ':') die("empty RPI5_ROW_IDS_CSV_BATCH group");
+  while (*p != '\0' && *p != ';' && *p != ':') {
+    if (count >= max_count) die("RPI5_ROW_IDS_CSV_BATCH group exceeds q6idx max row count");
+    char *end = NULL;
+    unsigned long v = strtoul(p, &end, 10);
+    if (end == p) die("invalid RPI5_ROW_IDS_CSV_BATCH entry");
+    if (v >= max_row) die("RPI5_ROW_IDS_CSV_BATCH row id out of range");
+    ids[count++] = (uint32_t)v;
+    p = end;
+    if (*p == ',') {
+      p++;
+    } else if (*p != '\0' && *p != ';' && *p != ':') {
+      die("invalid RPI5_ROW_IDS_CSV_BATCH separator");
+    }
+  }
+  *count_out = count;
+  return p;
+}
+
+static void parse_row_id_groups_csv(const char *csv, uint32_t *ids, uint32_t *meta, uint32_t batch, uint32_t max_count, uint32_t max_row) {
+  const char *p = csv;
+  for (uint32_t b = 0; b < batch; b++) {
+    uint32_t offset = b * max_count;
+    uint32_t count = 0;
+    p = parse_row_ids_group(p, ids + offset, &count, max_count, max_row);
+    meta[b * 2u + 0u] = offset;
+    meta[b * 2u + 1u] = count;
+    for (uint32_t i = count; i < max_count; i++) ids[offset + i] = 0u;
+    if (b + 1u < batch) {
+      if (*p != ';' && *p != ':') die("RPI5_ROW_IDS_CSV_BATCH has too few groups");
+      p++;
+    }
+  }
+  if (*p != '\0') die("RPI5_ROW_IDS_CSV_BATCH has too many groups");
+}
+
 static TensorFile read_tensor_file(const char *path) {
   size_t n = 0;
   uint8_t *buf = (uint8_t *)read_file(path, &n);
@@ -585,6 +623,35 @@ static void cpu_q6_prepacked_indexed(float *y, const uint8_t *w, const float *x,
   }
 }
 
+static void cpu_q6_prepacked_indexed_meta(float *y, const uint8_t *w, const float *x, const uint32_t *row_ids,
+                                          const uint32_t *row_meta, uint32_t batch, uint32_t out_dim, uint32_t in_dim) {
+  uint32_t groups = in_dim / 16u;
+  uint32_t row_bytes = groups * 20u;
+  memset(y, 0, (size_t)batch * out_dim * sizeof(float));
+  for (uint32_t b = 0; b < batch; b++) {
+    uint32_t ids_off = row_meta[b * 2u + 0u];
+    uint32_t count = row_meta[b * 2u + 1u];
+    for (uint32_t out_row = 0; out_row < count; out_row++) {
+      uint32_t src_row = row_ids[ids_off + out_row];
+      double sum = 0.0;
+      const uint8_t *wr = w + src_row * row_bytes;
+      for (uint32_t g = 0; g < groups; g++) {
+        const uint32_t *bp = (const uint32_t *)(const void *)(wr + g * 20u);
+        float dscale;
+        memcpy(&dscale, &bp[0], sizeof(float));
+        for (uint32_t q = 0; q < 4u; q++) {
+          uint32_t word = bp[1u + q];
+          for (uint32_t lane = 0; lane < 4u; lane++) {
+            uint32_t v = (word >> (lane * 8u)) & 0x3fu;
+            sum += x[(size_t)b * in_dim + g * 16u + q * 4u + lane] * ((double)dscale * ((double)v - 32.0));
+          }
+        }
+      }
+      y[(size_t)b * out_dim + out_row] = (float)sum;
+    }
+  }
+}
+
 static void prepack_q4k_to_q4_inflated(uint8_t *dst, const uint8_t *src, uint32_t out_dim, uint32_t in_dim) {
   uint32_t src_blocks = in_dim / 256u;
   uint32_t src_row_bytes = src_blocks * 144u;
@@ -775,17 +842,35 @@ int main(int argc, char **argv) {
   Buf yb = make_buffer(dev, pd, y_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
   Buf sumxb = {0};
   Buf rowidb = {0};
+  Buf rowmetab = {0};
   if (sumx_mode) sumxb = make_buffer(dev, pd, sumx_bytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
   if (q6_idx_mode) {
-    rowidb = make_buffer(dev, pd, (size_t)out_dim * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    rowidb = make_buffer(dev, pd, (size_t)batch * out_dim * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    rowmetab = make_buffer(dev, pd, (size_t)batch * 2u * sizeof(uint32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     uint32_t *ids = (uint32_t *)rowidb.mapped;
+    uint32_t *meta = (uint32_t *)rowmetab.mapped;
+    const char *row_ids_batch_csv = getenv("RPI5_ROW_IDS_CSV_BATCH");
     const char *row_ids_csv = getenv("RPI5_ROW_IDS_CSV");
-    if (row_ids_csv && row_ids_csv[0]) {
+    if (row_ids_batch_csv && row_ids_batch_csv[0]) {
+      parse_row_id_groups_csv(row_ids_batch_csv, ids, meta, batch, out_dim, src_out_dim);
+    } else if (row_ids_csv && row_ids_csv[0]) {
       parse_row_ids_csv(row_ids_csv, ids, out_dim, src_out_dim);
+      if (q6_idx_sorted_mode) qsort(ids, out_dim, sizeof(uint32_t), cmp_u32);
+      for (uint32_t b = 0; b < batch; b++) {
+        uint32_t offset = b * out_dim;
+        if (b > 0) memcpy(ids + offset, ids, (size_t)out_dim * sizeof(uint32_t));
+        meta[b * 2u + 0u] = offset;
+        meta[b * 2u + 1u] = out_dim;
+      }
     } else {
-      for (uint32_t i = 0; i < out_dim; i++) ids[i] = (i * 241u + 17u) % src_out_dim;
+      for (uint32_t b = 0; b < batch; b++) {
+        uint32_t offset = b * out_dim;
+        for (uint32_t i = 0; i < out_dim; i++) ids[offset + i] = (i * 241u + 17u) % src_out_dim;
+        if (q6_idx_sorted_mode) qsort(ids + offset, out_dim, sizeof(uint32_t), cmp_u32);
+        meta[b * 2u + 0u] = offset;
+        meta[b * 2u + 1u] = out_dim;
+      }
     }
-    if (q6_idx_sorted_mode) qsort(ids, out_dim, sizeof(uint32_t), cmp_u32);
   }
   float *cpu = (float *)malloc(y_bytes);
   if (!cpu) die("cpu alloc failed");
@@ -852,8 +937,8 @@ int main(int argc, char **argv) {
   VK_CHECK(vkCreateShaderModule(dev, &smi, NULL, &shader));
   free(spv);
 
-  uint32_t descriptor_count = (sumx_mode || q6_idx_mode) ? 4u : 3u;
-  VkDescriptorSetLayoutBinding binds[4];
+  uint32_t descriptor_count = q6_idx_mode ? 5u : (sumx_mode ? 4u : 3u);
+  VkDescriptorSetLayoutBinding binds[5];
   memset(binds, 0, sizeof(binds));
   for (uint32_t i = 0; i < descriptor_count; i++) {
     binds[i].binding = i;
@@ -905,11 +990,14 @@ int main(int argc, char **argv) {
   dsai.pSetLayouts = &dsl;
   VkDescriptorSet ds;
   VK_CHECK(vkAllocateDescriptorSets(dev, &dsai, &ds));
-  VkDescriptorBufferInfo infos[4] = {
+  VkDescriptorBufferInfo infos[5] = {
     {wb.buffer, 0, w_bytes}, {xb.buffer, 0, x_bytes}, {yb.buffer, 0, y_bytes}, {sumxb.buffer, 0, sumx_bytes}
   };
-  if (q6_idx_mode) infos[3] = (VkDescriptorBufferInfo){rowidb.buffer, 0, (size_t)out_dim * sizeof(uint32_t)};
-  VkWriteDescriptorSet writes[4];
+  if (q6_idx_mode) {
+    infos[3] = (VkDescriptorBufferInfo){rowidb.buffer, 0, (size_t)batch * out_dim * sizeof(uint32_t)};
+    infos[4] = (VkDescriptorBufferInfo){rowmetab.buffer, 0, (size_t)batch * 2u * sizeof(uint32_t)};
+  }
+  VkWriteDescriptorSet writes[5];
   memset(writes, 0, sizeof(writes));
   for (uint32_t i = 0; i < descriptor_count; i++) {
     writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
@@ -970,10 +1058,9 @@ int main(int argc, char **argv) {
 
   double t0 = now_ms();
   if (file_mode && q6_idx_mode) {
-    for (uint32_t b = 0; b < batch; b++) {
-      cpu_q6_prepacked_indexed(cpu + (size_t)b * out_dim, (const uint8_t *)wb.mapped, (const float *)xb.mapped + (size_t)b * in_dim,
-                               (const uint32_t *)rowidb.mapped, out_dim, in_dim);
-    }
+    cpu_q6_prepacked_indexed_meta(cpu, (const uint8_t *)wb.mapped, (const float *)xb.mapped,
+                                  (const uint32_t *)rowidb.mapped, (const uint32_t *)rowmetab.mapped,
+                                  batch, out_dim, in_dim);
   } else if (file_mode && q6_pre_mode) {
     for (uint32_t b = 0; b < batch; b++) {
       cpu_q6_prepacked(cpu + (size_t)b * out_dim, (const uint8_t *)wb.mapped, (const float *)xb.mapped + (size_t)b * in_dim, out_dim, in_dim);
@@ -1076,6 +1163,7 @@ int main(int argc, char **argv) {
   free_buffer(dev, &xb);
   free_buffer(dev, &wb);
   free_buffer(dev, &rowidb);
+  free_buffer(dev, &rowmetab);
   vkDestroyDevice(dev, NULL);
   vkDestroyInstance(inst, NULL);
   free(tf.raw);

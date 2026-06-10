@@ -60,7 +60,9 @@ Use `scripts/rpi5_q6_policy_calibrate.sh MODEL.gguf` to run the current policy f
 
 Use `scripts/rpi5_q6_policy_repeat_sweep.sh MODEL.gguf` to rerun calibration across `REPEAT_COUNTS` and expose near-boundary stability. This is a measurement stability check for the current one-frontier submit path, not command-buffer batching.
 
-Use `scripts/rpi5_q6_batch_sweep.sh MODEL.gguf` to run a proxy batching sweep over `RPI5_BATCH`. Each batch row uses a distinct synthetic hidden vector with the same allowed-token frontier, so it measures command/dispatch amortization and shader batch indexing, not yet multiple different grammar states in one submit.
+Use `scripts/rpi5_q6_batch_sweep.sh MODEL.gguf` to run a proxy batching sweep over `RPI5_BATCH`. Each batch row uses a distinct synthetic hidden vector with the same allowed-token frontier, so it measures command/dispatch amortization and shader batch indexing.
+
+Use `scripts/rpi5_q6_multi_frontier_sweep.sh MODEL.gguf` to group several tokenizer-derived frontiers into one `q6idx` submit with per-row frontier offsets/counts.
 
 Actual row-id probe:
 
@@ -73,6 +75,7 @@ Actual row-id probe:
 - Policy calibration with `RAW_OUTPUT=0 REPEATS=40 scripts/rpi5_q6_policy_calibrate.sh MODEL.gguf` emitted `policy_cpu_max_allowed=3`, `v3d_clear_min_allowed=13`, `near_boundary_allowed=8`. The measured rows were `allowed=3 verdict=CPU_WINS`, `allowed=8 verdict=V3D_NEAR`, and `allowed=13 verdict=V3D_CLEAR`.
 - Warmed policy repeat sweep with `RAW_OUTPUT=0 RPI5_WARMUPS=3 REPEAT_COUNTS='20 40' scripts/rpi5_q6_policy_repeat_sweep.sh MODEL.gguf` emitted stable `V3D_CLEAR` for both `read_file.limit` (`allowed=8`, `gpu_ms=0.144/0.143`, `cpu_ms=0.289/0.289`) and `edit_mode.mode` (`allowed=13`, `gpu_ms=0.147/0.147`, `cpu_ms=0.488/0.481`), all with `top1_match=true` and `throttled=0x0`.
 - Batch proxy sweep with `RAW_OUTPUT=0 RPI5_WARMUPS=3 BATCH_COUNTS='1 2 4 8' scripts/rpi5_q6_batch_sweep.sh MODEL.gguf` preserved CPU/GPU parity across all rows (`max_abs_diff<=4.47e-7`, `throttled=0x0`). `read_file.limit` (`allowed=8`) improved from `0.168ms/row` at batch 1 to `0.126ms/row` at batch 8, with speedup rising `1.719x -> 2.398x`; `edit_mode.mode` (`allowed=13`) improved from `0.169ms/row` to `0.1265ms/row`, with speedup `2.967x -> 3.828x`. A follow-up `allowed=8` sweep through batch 32 saturated near `0.1215ms/row`.
+- Multi-frontier batch proof with `RAW_OUTPUT=1 RPI5_WARMUPS=3 MAX_FRONTIERS=3 REPEATS=30 scripts/rpi5_q6_multi_frontier_sweep.sh MODEL.gguf` grouped `tool_call_prefix:start` (`allowed=3`), `read_file.limit` (`allowed=8`), and `edit_mode.mode` (`allowed=13`) into one `q6idx13_l256` submit. It measured `gpu_ms=0.393`, `cpu_ms=0.915`, `gpu_ms_per_frontier=0.131`, `speedup=2.326x`, `max_abs_diff=2.98e-7`, `throttled=0x0`.
 
 ## Route Policy
 
@@ -85,7 +88,7 @@ Use V3D when:
 - logits/top1 already stay on the GPU side.
 
 Treat `allowed=8` as sensitive to measurement corridor until the product adapter owns a warmed resident command path. Without warmups it has shown near-boundary/noisy results; with `RPI5_WARMUPS=3` it measured as `V3D_CLEAR`.
-When several constrained steps can share one resident submit, proxy batching improves the `allowed=8` margin, but the current batch probe reuses one frontier across rows. Product batching still needs per-row frontier metadata before it can claim multiple grammar states in one dispatch.
+When several constrained steps can share one resident submit, batching improves the margin. The probe now supports different frontiers per batch row, but it still uses synthetic hidden rows; product batching must wire real decode hidden states and grammar frontiers into the same resident command path before promotion.
 
 Use `QWEN35_ALLOWED_HEAD_CPU_MAX=7` as the Pi-oriented policy override for warmed resident Q6 allowed-head experiments. A conservative unbatched policy can still prefer `QWEN35_ALLOWED_HEAD_CPU_MAX=12` until the product V3D adapter reproduces the warmed corridor. Keep it configurable: cold process startup, grammar row locality, and future V3D kernels can move the cutoff.
 
@@ -145,5 +148,5 @@ Continue the default-off runtime adapter:
 3. Apply the route policy threshold (`QWEN35_ALLOWED_HEAD_CPU_MAX=12` for conservative unbatched Pi resident-Q6 experiments; lower only when accepting near-boundary routes or after fresh calibration).
 4. Use the implemented hidden/head split to avoid full-head logits when routing to CPU selected rows.
 5. Behind the V3D gate, replace CPU row-dot with resident indexed Q6 head.
-6. Extend the batch proxy from one shared frontier to per-row frontier offsets, then retest grouped constrained steps.
+6. Replace synthetic probe hidden rows with product decode hidden rows for grouped constrained steps.
 6. Verify exact generated token parity on constrained tool-call smokes.

@@ -18,6 +18,10 @@ layout(set = 0, binding = 3) readonly buffer RowIds {
   uint row_ids[];
 };
 
+layout(set = 0, binding = 4) readonly buffer RowMeta {
+  uint row_meta[];
+};
+
 layout(push_constant) uniform Push {
   uint out_dim;
   uint in_dim;
@@ -37,7 +41,14 @@ void main() {
     return;
   }
 
-  uint src_row = row_ids[out_row];
+  uint meta_off = batch_id * 2u;
+  uint ids_off = row_meta[meta_off + 0u];
+  uint ids_count = row_meta[meta_off + 1u];
+  if (out_row >= ids_count) {
+    return;
+  }
+
+  uint src_row = row_ids[ids_off + out_row];
   uint groups = pc.in_dim / 16u;
   uint row_word_off = (src_row * pc.row_bytes) >> 2u;
   uint x_row_off = batch_id * pc.in_dim;
