@@ -291,6 +291,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - `scripts/diffusion_gemma_sparse_loop_candidate_sweep.sh` now delegates to the in-process `--candidate-counts` runner instead of launching one process per candidate width. The wrapper still builds the smoke binary once and preserves `COUNTS`.
 - Verification: shell syntax passed; no-codegen build passed; `COUNTS='1 4' scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_candidate_sweep.sh 300 6000 --steps 1 --repeats 1` exited 0. An awk guard verified two rows, `candidate_count=1/4`, `candidate_ids=0` / `0,1,2,3`, and identical `load_ms` plus `prompt_cache_ms` across rows.
 - Boundary: this fixes the sweep wrapper's process-reload artifact, but it is still a token-id sparse-loop smoke and not quiet-host benchmark evidence.
+**update 2026-06-10bd:**
+- `scripts/diffusion_gemma_sparse_loop_smoke.cr` now supports `--warmups N`, running sparse-loop warmups before measured repeats while keeping warmup timings out of `loop_ms_samples`. TSV/key-value output includes `warmups`.
+- Verification: no-codegen build passed; wrapper syntax passed; invalid `--warmups -1` fails closed; `scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_smoke.sh 300 6000 --candidate-counts 1,4 --steps 1 --warmups 1 --repeats 2 --format tsv` exited 0. An awk guard verified two rows, `warmups=1`, `repeats=2`, and exactly two measured `loop_ms_samples` per row.
+- Boundary: warmups improve repeat timing hygiene for the native token-id sparse-loop smoke, but they do not provide quiet-host benchmark evidence or change sparse-loop semantics.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified

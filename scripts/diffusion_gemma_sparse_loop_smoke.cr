@@ -19,6 +19,7 @@ adaptive = true
 single_route = true
 format = "keyvalue"
 repeats = 1
+warmups = 0
 
 OptionParser.parse do |p|
   p.banner = "Usage: diffusion_gemma_sparse_loop_smoke [options]"
@@ -38,6 +39,7 @@ OptionParser.parse do |p|
   p.on("--full-routes", "Use full top-k MoE routing instead of the single-route smoke shortcut") { single_route = false }
   p.on("--format FORMAT", "Output format: keyvalue or tsv (default: keyvalue)") { |v| format = v.downcase }
   p.on("--repeats N", "Repeat sparse loop after one model/cache load (default: 1)") { |v| repeats = v.to_i }
+  p.on("--warmups N", "Run sparse loop warmups before measured repeats (default: 0)") { |v| warmups = v.to_i }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -77,6 +79,7 @@ raise "--stability-threshold must be positive" unless stability_threshold > 0
 raise "--entropy-bound must be finite and non-negative" unless entropy_bound.finite? && entropy_bound >= 0.0_f32
 raise "--format must be keyvalue or tsv" unless {"keyvalue", "tsv"}.includes?(format)
 raise "--repeats must be positive" unless repeats > 0
+raise "--warmups must be non-negative" unless warmups >= 0
 candidate_mode_count = 0
 candidate_mode_count += 1 if candidate_ids_arg
 candidate_mode_count += 1 if candidate_count
@@ -137,7 +140,7 @@ result_rows = [] of Array(Tuple(String, String))
 candidate_sets.each do |candidate_ids|
   loop_samples = [] of Float64
   loop = nil.as(ML::GGUF::DiffusionGemmaCPU::BoundedDenoiseLoopResult?)
-  repeats.times do
+  (warmups + repeats).times do |run_index|
     loop_t0 = Time.instant
     loop = if adaptive
              ML::GGUF::DiffusionGemmaCPU.decode_canvas_adaptive_bounded_loop(
@@ -171,7 +174,8 @@ candidate_sets.each do |candidate_ids|
                routes_by_layer_by_canvas_row: canvas_routes,
              )
            end
-    loop_samples << (Time.instant - loop_t0).total_milliseconds
+    elapsed_ms = (Time.instant - loop_t0).total_milliseconds
+    loop_samples << elapsed_ms if run_index >= warmups
   end
   loop = loop.not_nil!
   summary = loop.summary
@@ -183,6 +187,7 @@ candidate_sets.each do |candidate_ids|
     {"status", "ok"},
     {"model", model},
     {"mode", adaptive ? "adaptive" : "fixed"},
+    {"warmups", warmups.to_s},
     {"repeats", repeats.to_s},
     {"max_layers", max_layers.to_s},
     {"steps_budget", steps.to_s},
