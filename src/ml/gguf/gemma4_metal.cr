@@ -218,6 +218,12 @@ module ML::GGUF
         batch >= min_batch && attn_swa256_vec_enabled?(batch)
       end
 
+      private def attn_fixed_swa256_vec_gqa2_enabled?(batch : Int32) : Bool
+        return false if ENV["GEMMA4_ROW_PREFILL_ATTN_FIXED_SWA256_VEC_GQA2_OFF"]? == "1"
+        return false unless ENV["GEMMA4_ROW_PREFILL_ATTN_FIXED_SWA256_VEC_GQA2"]? == "1"
+        batch >= 1 && attn_swa256_vec_enabled?(batch)
+      end
+
       private def attn_swa256_vec_tile16_enabled?(batch : Int32) : Bool
         return false if ENV["GEMMA4_ROW_PREFILL_ATTN_SWA256_VEC_TILE16_OFF"]? == "1"
         return false unless ENV["GEMMA4_ROW_PREFILL_ATTN_SWA256_VEC_TILE16"]? == "1"
@@ -325,6 +331,7 @@ module ML::GGUF
       @@attn_context_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_fixed_pipeline : ML::Metal::ComputePipeline?
+      @@attn_context_rows_fixed_swa256_vec_gqa2_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_kv_h16_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_gqa2_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_gqa4_pipeline : ML::Metal::ComputePipeline?
@@ -2980,7 +2987,9 @@ module ML::GGUF
                                                       head_dim : Int32,
                                                       heads_per_group : Int32,
                                                       sliding_window : Int32) : Nil
-        enc.set_pipeline(attn_context_rows_fixed_pipeline)
+        use_swa256_vec_gqa2 = attn_fixed_swa256_vec_gqa2_enabled?(rows) && head_dim == 256 && sliding_window > 0 &&
+          heads_per_group == 2 && n_head.even?
+        enc.set_pipeline(use_swa256_vec_gqa2 ? attn_context_rows_fixed_swa256_vec_gqa2_pipeline : attn_context_rows_fixed_pipeline)
         enc.set_buffer(q_buf, 0)
         enc.set_buffer(k_cache_buf, 1)
         enc.set_buffer(v_cache_buf, 2)
@@ -2992,7 +3001,11 @@ module ML::GGUF
         enc.set_value(head_dim.to_u32, 8)
         enc.set_value(heads_per_group.to_u32, 9)
         enc.set_value(sliding_window.to_u32, 10)
-        enc.dispatch_threadgroups({n_head, rows, 1}, {32, 1, 1})
+        if use_swa256_vec_gqa2
+          enc.dispatch_threadgroups({n_head // 2, rows, 1}, {256, 1, 1})
+        else
+          enc.dispatch_threadgroups({n_head, rows, 1}, {32, 1, 1})
+        end
       end
 
       private def encode_attention_context_rows_splitk(enc : ML::Metal::ComputeEncoder,
@@ -3379,6 +3392,12 @@ module ML::GGUF
       private def attn_context_rows_fixed_pipeline : ML::Metal::ComputePipeline
         @@attn_context_rows_fixed_pipeline ||= ML::Metal::PipelineCache.get("gemma4_attn_context_rows_fixed") {
           ML::Metal::ComputePipeline.new("gemma4_attn_context_rows_fixed", GEMMA4_SOURCE)
+        }
+      end
+
+      private def attn_context_rows_fixed_swa256_vec_gqa2_pipeline : ML::Metal::ComputePipeline
+        @@attn_context_rows_fixed_swa256_vec_gqa2_pipeline ||= ML::Metal::PipelineCache.get("gemma4_attn_context_rows_fixed_swa256_vec_gqa2") {
+          ML::Metal::ComputePipeline.new("gemma4_attn_context_rows_fixed_swa256_vec_gqa2", GEMMA4_SOURCE)
         }
       end
 

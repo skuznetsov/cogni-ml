@@ -872,6 +872,7 @@ describe ML::GGUF::DiffusionGemmaCPU do
     old_context_metal = ENV["DIFFUSION_GEMMA_CONTEXT_METAL"]?
     old_context_metal_off = ENV["DIFFUSION_GEMMA_CONTEXT_METAL_OFF"]?
     old_batch_rows_off = ENV["DIFFUSION_GEMMA_CONTEXT_METAL_BATCH_ROWS_OFF"]?
+    old_fixed_gqa2 = ENV["GEMMA4_ROW_PREFILL_ATTN_FIXED_SWA256_VEC_GQA2"]?
     begin
       il = 0
       prompt0 = ML::GGUF::DiffusionGemmaCPU.scaled_embedding_lookup(w, 1)
@@ -893,6 +894,11 @@ describe ML::GGUF::DiffusionGemmaCPU do
       metal_cache = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(w, prompt_rows, mask, max_layers: 1, materialize_final_rows: false)
       metal = ML::GGUF::DiffusionGemmaCPU.layer_forward_decode_canvas_rows_with_prompt_projections_timed(
         w, il, metal_cache.projections_by_layer[0], canvas_rows, mask, metal_cache.metal_cache_by_layer[0]?).rows
+      ENV["GEMMA4_ROW_PREFILL_ATTN_FIXED_SWA256_VEC_GQA2"] = "1"
+      metal_fixed_cache = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(w, prompt_rows, mask, max_layers: 1, materialize_final_rows: false)
+      metal_fixed = ML::GGUF::DiffusionGemmaCPU.layer_forward_decode_canvas_rows_with_prompt_projections_timed(
+        w, il, metal_fixed_cache.projections_by_layer[0], canvas_rows, mask, metal_fixed_cache.metal_cache_by_layer[0]?).rows
+      ENV.delete("GEMMA4_ROW_PREFILL_ATTN_FIXED_SWA256_VEC_GQA2")
       ENV["DIFFUSION_GEMMA_CONTEXT_METAL_BATCH_ROWS_OFF"] = "1"
       metal_unbatched_cache = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(w, prompt_rows, mask, max_layers: 1, materialize_final_rows: false)
       metal_unbatched = ML::GGUF::DiffusionGemmaCPU.layer_forward_decode_canvas_rows_with_prompt_projections_timed(
@@ -904,6 +910,12 @@ describe ML::GGUF::DiffusionGemmaCPU do
         max_diff = diff if diff > max_diff
       end
       max_diff.should be < 1.0e-3_f32
+      max_fixed_diff = 0.0_f32
+      base.size.times do |i|
+        diff = (base[i] - metal_fixed[i]).abs
+        max_fixed_diff = diff if diff > max_fixed_diff
+      end
+      max_fixed_diff.should be < 1.0e-3_f32
       max_unbatched_diff = 0.0_f32
       base.size.times do |i|
         diff = (base[i] - metal_unbatched[i]).abs
@@ -925,6 +937,11 @@ describe ML::GGUF::DiffusionGemmaCPU do
         ENV["DIFFUSION_GEMMA_CONTEXT_METAL_BATCH_ROWS_OFF"] = old_batch_rows_off
       else
         ENV.delete("DIFFUSION_GEMMA_CONTEXT_METAL_BATCH_ROWS_OFF")
+      end
+      if old_fixed_gqa2
+        ENV["GEMMA4_ROW_PREFILL_ATTN_FIXED_SWA256_VEC_GQA2"] = old_fixed_gqa2
+      else
+        ENV.delete("GEMMA4_ROW_PREFILL_ATTN_FIXED_SWA256_VEC_GQA2")
       end
     end
   end
