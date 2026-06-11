@@ -269,6 +269,8 @@ module ML::GGUF
       getter projection_rope_ms_by_layer : Array(Float64)
       getter projection_rope_table_ms_by_layer : Array(Float64)
       getter projection_rope_apply_ms_by_layer : Array(Float64)
+      getter projection_rope_q_apply_ms_by_layer : Array(Float64)
+      getter projection_rope_k_apply_ms_by_layer : Array(Float64)
       getter materialize_ms_by_layer : Array(Float64)
 
       def initialize(@final_rows,
@@ -285,6 +287,8 @@ module ML::GGUF
                      @projection_rope_ms_by_layer = [] of Float64,
                      @projection_rope_table_ms_by_layer = [] of Float64,
                      @projection_rope_apply_ms_by_layer = [] of Float64,
+                     @projection_rope_q_apply_ms_by_layer = [] of Float64,
+                     @projection_rope_k_apply_ms_by_layer = [] of Float64,
                      @materialize_ms_by_layer = [] of Float64)
       end
 
@@ -306,6 +310,8 @@ module ML::GGUF
       getter rope_ms : Float64
       getter rope_table_ms : Float64
       getter rope_apply_ms : Float64
+      getter rope_q_apply_ms : Float64
+      getter rope_k_apply_ms : Float64
 
       def initialize(@projections,
                      @norm_ms,
@@ -318,7 +324,9 @@ module ML::GGUF
                      @v_norm_ms,
                      @rope_ms,
                      @rope_table_ms,
-                     @rope_apply_ms)
+                     @rope_apply_ms,
+                     @rope_q_apply_ms,
+                     @rope_k_apply_ms)
       end
     end
 
@@ -564,7 +572,7 @@ module ML::GGUF
                                         hp : DiffusionGemmaHparams,
                                         il : Int32,
                                         pos : Int32,
-                                        rope_freqs : Array(Float32)? = nil) : {Float64, Float64}
+                                        rope_freqs : Array(Float32)? = nil) : {Float64, Float64, Float64, Float64}
       head_dim = hp.head_dim_for_layer(il)
       n_rot = hp.rope_dim_for_layer(il)
       base = hp.rope_freq_base_for_layer(il)
@@ -574,14 +582,18 @@ module ML::GGUF
       table_ms = (Time.instant - table_t0).total_milliseconds
 
       apply_t0 = Time.instant
+      q_apply_t0 = Time.instant
       hp.n_head.times do |h|
         fast_rope_neox_slice!(proj.q, h * head_dim, n_rot, head_dim, cos_table, sin_table)
       end
+      q_apply_ms = (Time.instant - q_apply_t0).total_milliseconds
+      k_apply_t0 = Time.instant
       hp.n_head_kv(il).times do |h|
         fast_rope_neox_slice!(proj.k, h * head_dim, n_rot, head_dim, cos_table, sin_table)
       end
+      k_apply_ms = (Time.instant - k_apply_t0).total_milliseconds
       apply_ms = (Time.instant - apply_t0).total_milliseconds
-      {table_ms, apply_ms}
+      {table_ms, apply_ms, q_apply_ms, k_apply_ms}
     end
 
     def attention_context_unified(projections : Array(AttentionProjection),
@@ -880,6 +892,8 @@ module ML::GGUF
       projection_rope_ms_by_layer = [] of Float64
       projection_rope_table_ms_by_layer = [] of Float64
       projection_rope_apply_ms_by_layer = [] of Float64
+      projection_rope_q_apply_ms_by_layer = [] of Float64
+      projection_rope_k_apply_ms_by_layer = [] of Float64
       materialize_ms_by_layer = [] of Float64
       max_layers.times do |il|
         projection_t0 = Time.instant
@@ -897,6 +911,8 @@ module ML::GGUF
         projection_rope_ms_by_layer << timed_projections.rope_ms
         projection_rope_table_ms_by_layer << timed_projections.rope_table_ms
         projection_rope_apply_ms_by_layer << timed_projections.rope_apply_ms
+        projection_rope_q_apply_ms_by_layer << timed_projections.rope_q_apply_ms
+        projection_rope_k_apply_ms_by_layer << timed_projections.rope_k_apply_ms
         projections_by_layer << projections
         break if !materialize_final_rows && il == max_layers - 1
 
@@ -921,6 +937,8 @@ module ML::GGUF
         projection_rope_ms_by_layer,
         projection_rope_table_ms_by_layer,
         projection_rope_apply_ms_by_layer,
+        projection_rope_q_apply_ms_by_layer,
+        projection_rope_k_apply_ms_by_layer,
         materialize_ms_by_layer,
       )
     end
@@ -1171,6 +1189,8 @@ module ML::GGUF
       rope_ms = 0.0
       rope_table_ms = 0.0
       rope_apply_ms = 0.0
+      rope_q_apply_ms = 0.0
+      rope_k_apply_ms = 0.0
       projections = Array(AttentionProjection).new(mask.prompt_len) do |pos|
         copy_t0 = Time.instant
         q = q_rows[pos * q_dim, q_dim]
@@ -1189,14 +1209,16 @@ module ML::GGUF
         head_norm_ms += head_norm_elapsed
         assemble_ms += copy_elapsed + head_norm_elapsed
         rope_t0 = Time.instant
-        table_elapsed, apply_elapsed = apply_rope_to_qk_timed!(proj, hp, il, pos, weights.rope_freqs)
+        table_elapsed, apply_elapsed, q_apply_elapsed, k_apply_elapsed = apply_rope_to_qk_timed!(proj, hp, il, pos, weights.rope_freqs)
         rope_elapsed = (Time.instant - rope_t0).total_milliseconds
         rope_table_ms += table_elapsed
         rope_apply_ms += apply_elapsed
+        rope_q_apply_ms += q_apply_elapsed
+        rope_k_apply_ms += k_apply_elapsed
         rope_ms += rope_elapsed
         proj
       end
-      PromptProjectionTiming.new(projections, norm_ms, matmul_ms, assemble_ms, copy_ms, head_norm_ms, q_norm_ms, k_norm_ms, v_norm_ms, rope_ms, rope_table_ms, rope_apply_ms)
+      PromptProjectionTiming.new(projections, norm_ms, matmul_ms, assemble_ms, copy_ms, head_norm_ms, q_norm_ms, k_norm_ms, v_norm_ms, rope_ms, rope_table_ms, rope_apply_ms, rope_q_apply_ms, rope_k_apply_ms)
     end
 
     def prompt_projection_metal_enabled? : Bool
