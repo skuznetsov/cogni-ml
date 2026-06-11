@@ -87,7 +87,9 @@ sequentially, and records `ok`, `timeout`, or `failed` rows so a slow long case
 does not discard earlier measurements. The main timing column for prompt-size
 work is `prompt_cache_ms`; `loop_ms_median` tracks the bounded sparse candidate
 loop after the prompt cache is built. `prompt_route_ms` exposes any prompt MoE
-route precompute work that happens before cache construction.
+route precompute work that happens before cache construction. The
+`prompt_projection_backend` column reports whether prompt Q/K/V projection
+matmuls used the default CPU path or the experimental Metal path.
 
 The sparse smoke defaults to a decode-only prompt cache: it stores the prompt
 attention projections needed by canvas decode but skips materializing final
@@ -95,3 +97,16 @@ prompt rows for the last requested layer. Use
 `--materialize-prompt-final-rows` on `scripts/diffusion_gemma_sparse_loop_smoke.sh`
 or `MATERIALIZE_PROMPT_FINAL_ROWS=1` on the perf probe when comparing against
 the conservative full-cache path.
+
+Experimental prompt projection acceleration is opt-in:
+
+```sh
+DIFFUSION_GEMMA_PROMPT_PROJ_METAL=1 TIMEOUT_SECONDS=45 scripts/diffusion_gemma_prompt_perf_probe.sh
+```
+
+Set `DIFFUSION_GEMMA_PROMPT_PROJ_METAL_OFF=1` to force the CPU route, or
+leave `DIFFUSION_GEMMA_PROMPT_PROJ_METAL` unset for the default CPU route. When
+the opt-in Metal route rejects a supported-call shape with an exception, the
+probe fails fast instead of hiding the error. The Metal route uses
+`DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH=16` by default so short prompts do
+not pay one-command-buffer-per-projection overhead.

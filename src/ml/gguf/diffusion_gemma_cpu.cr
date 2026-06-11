@@ -1,5 +1,6 @@
 require "./diffusion_gemma_runtime"
 require "./gemma4_cpu"
+require "./qwen35_metal"
 
 module ML::GGUF
   module DiffusionGemmaCPU
@@ -799,10 +800,10 @@ module ML::GGUF
       head_dim = hp.head_dim_for_layer(il)
       q_dim = hp.n_head * head_dim
       kv_dim = hp.n_head_kv(il) * head_dim
-      q_rows = Gemma4CPU.matmul(lw.attn_q_qw, normed_rows, mask.prompt_len)
-      k_rows = Gemma4CPU.matmul(lw.attn_k_qw, normed_rows, mask.prompt_len)
+      q_rows = prompt_projection_matmul(lw.attn_q_qw, normed_rows, mask.prompt_len)
+      k_rows = prompt_projection_matmul(lw.attn_k_qw, normed_rows, mask.prompt_len)
       v_rows = if v_qw = lw.attn_v_qw
-                 Gemma4CPU.matmul(v_qw, normed_rows, mask.prompt_len)
+                 prompt_projection_matmul(v_qw, normed_rows, mask.prompt_len)
                else
                  k_rows.dup
                end
@@ -817,6 +818,36 @@ module ML::GGUF
         apply_rope_to_qk!(proj, hp, il, pos, weights.rope_freqs)
         proj
       end
+    end
+
+    def prompt_projection_metal_enabled? : Bool
+      ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL"]? == "1" &&
+        ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_OFF"]? != "1"
+    end
+
+    def prompt_projection_metal_min_batch : Int32
+      (ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH"]? || "16").to_i
+    end
+
+    def prompt_projection_matmul(qw : QuantWeight,
+                                 x : Array(Float32),
+                                 batch : Int32) : Array(Float32)
+      if prompt_projection_metal_enabled? && batch >= prompt_projection_metal_min_batch
+        metal_rows = case qw.type
+                     when .q4_k?
+                       Qwen35Metal.matmul_q4k(x, qw.raw, qw.in_dim, qw.out_dim, batch)
+                     when .q5_k?
+                       Qwen35Metal.matmul_q5k(x, qw.raw, qw.in_dim, qw.out_dim, batch)
+                     when .q6_k?
+                       Qwen35Metal.matmul_q6k(x, qw.raw, qw.in_dim, qw.out_dim, batch)
+                     else
+                       Qwen35Metal.matmul(qw, x, batch)
+                     end
+        unless metal_rows.nil?
+          return metal_rows
+        end
+      end
+      Gemma4CPU.matmul(qw, x, batch)
     end
 
     def output_hidden_norm(weights : DiffusionGemmaWeights,

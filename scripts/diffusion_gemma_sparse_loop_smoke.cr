@@ -462,6 +462,7 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"last_candidate_probability_rows", format_prediction_f32_rows(last_predictions, &.probabilities)},
         {"load_ms", load_ms.round(3).to_s},
         {"prompt_route_ms", prompt_route_ms.round(3).to_s},
+        {"prompt_projection_backend", ML::GGUF::DiffusionGemmaCPU.prompt_projection_metal_enabled? && tokens.size >= ML::GGUF::DiffusionGemmaCPU.prompt_projection_metal_min_batch ? "metal" : "cpu"},
         {"prompt_cache_ms", cache_ms.round(3).to_s},
         {"prompt_cache_materialized_final_rows", materialize_prompt_final_rows.to_s},
         {"prompt_cache_ms_ratio_vs_first", prompt_cache_ms_ratio_vs_first.round(6).to_s},

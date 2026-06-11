@@ -107,6 +107,10 @@ module ML
           raise "Metal disabled (cpu_only)"
         end
 
+        def self.matmul(qw : QuantWeight, x : Array(Float32), batch : Int32) : Array(Float32)?
+          nil
+        end
+
         def self.bf16_gemv(w_raw : Bytes,
                            in_dim : Int32,
                            out_dim : Int32,
