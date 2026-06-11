@@ -363,6 +363,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - `scripts/diffusion_gemma_sparse_loop_smoke.cr` now emits `candidate_row_texts` when `--decode-canvas-text` is enabled, decoding every candidate row with row separators matching `candidate_rows`. This makes explicit-id/generated candidate sets inspectable without using `--candidate-texts`.
 - Verification: no-codegen build passed. A real GGUF smoke with `--candidate-ids 9259,12392 --decode-canvas-text` emitted `candidate_row_texts=Hello,world`; the same run without `--decode-canvas-text` kept `candidate_row_texts` empty, preserving default output cost.
 - Boundary: this is TSV/key-value inspection plumbing only. It does not change sparse-loop semantics, candidate selection, or tokenizer oracle boundaries.
+**update 2026-06-10bv:**
+- `scripts/diffusion_gemma_sparse_loop_smoke.cr` now emits last-step sparse candidate diagnostics: `last_argmax_tokens`, `last_sampled_tokens`, `last_argmax_probabilities`, `last_entropies`, and `last_candidate_probability_rows`. Probability rows follow the same canvas-row separator convention as `candidate_rows`.
+- Verification: no-codegen build passed. A real GGUF smoke with `--candidate-texts 'Hello|world'` emitted a two-entry probability row summing to `1.0` and an argmax token contained in `candidate_ids`. A multi-canvas adversary smoke with two canvas rows emitted two probability rows, each summing to `1.0`.
+- Boundary: this is diagnostics for the bounded sparse candidate distribution already computed by the native loop. It does not change acceptance semantics, candidate generation, or quality parity.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified

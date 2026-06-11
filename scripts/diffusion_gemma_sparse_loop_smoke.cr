@@ -153,6 +153,29 @@ def decode_candidate_rows(tokenizer : ML::GGUF::Gemma4Tokenizer, candidate_rows 
   end.join("|")
 end
 
+def format_f32(value : Float32) : String
+  value.round(6).to_s
+end
+
+def format_prediction_f32_rows(predictions : Array(ML::GGUF::DiffusionGemmaCPU::BoundedDenoisePrediction),
+                               &block : ML::GGUF::DiffusionGemmaCPU::BoundedDenoisePrediction -> Array(Float32)) : String
+  predictions.map do |prediction|
+    block.call(prediction).map { |value| format_f32(value) }.join(",")
+  end.join("|")
+end
+
+def format_prediction_i32s(predictions : Array(ML::GGUF::DiffusionGemmaCPU::BoundedDenoisePrediction),
+                           &block : ML::GGUF::DiffusionGemmaCPU::BoundedDenoisePrediction -> Int32) : String
+  predictions.map { |prediction| block.call(prediction).to_s }.join(",")
+end
+
+def format_argmax_probabilities(predictions : Array(ML::GGUF::DiffusionGemmaCPU::BoundedDenoisePrediction)) : String
+  predictions.map do |prediction|
+    index = prediction.candidate_token_ids.index(prediction.argmax_token_id)
+    index ? format_f32(prediction.probabilities[index]) : ""
+  end.join(",")
+end
+
 def parse_candidate_texts(model : String, llama_tokenize : String, raw : String) : Tuple(Array(Int32), Array(String))
   texts = raw.split('|')
   raise "--candidate-texts must contain at least one text" if texts.empty? || texts.any?(&.empty?)
@@ -374,6 +397,7 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
       loop_ms_max = loop_samples.max
       loop_candidate_tokens_per_ms = loop_ms_median > 0.0 ? summary.total_candidate_tokens.to_f64 / loop_ms_median : 0.0
       loop_predictions_per_ms = loop_ms_median > 0.0 ? summary.prediction_count.to_f64 / loop_ms_median : 0.0
+      last_predictions = loop.updates.last.predictions
       baseline_loop_ms ||= loop_ms_median
       baseline_candidate_tokens_per_ms ||= loop_candidate_tokens_per_ms
       loop_ms_ratio_vs_first = baseline_loop_ms.not_nil! > 0.0 ? loop_ms_median / baseline_loop_ms.not_nil! : 0.0
@@ -419,6 +443,11 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"max_candidate_tokens", summary.max_candidate_tokens.to_s},
         {"mean_candidate_tokens", summary.mean_candidate_tokens.to_s},
         {"mean_entropy", summary.mean_entropy.to_s},
+        {"last_argmax_tokens", format_prediction_i32s(last_predictions, &.argmax_token_id)},
+        {"last_sampled_tokens", format_prediction_i32s(last_predictions, &.sampled_token_id)},
+        {"last_argmax_probabilities", format_argmax_probabilities(last_predictions)},
+        {"last_entropies", last_predictions.map { |prediction| format_f32(prediction.entropy) }.join(",")},
+        {"last_candidate_probability_rows", format_prediction_f32_rows(last_predictions, &.probabilities)},
         {"load_ms", load_ms.round(3).to_s},
         {"prompt_cache_ms", cache_ms.round(3).to_s},
         {"prompt_cache_ms_ratio_vs_first", prompt_cache_ms_ratio_vs_first.round(6).to_s},
