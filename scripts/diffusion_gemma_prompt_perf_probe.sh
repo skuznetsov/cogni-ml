@@ -21,6 +21,7 @@ max_layers="${MAX_LAYERS:-1}"
 timeout_seconds="${TIMEOUT_SECONDS:-60}"
 materialize_prompt_final_rows="${MATERIALIZE_PROMPT_FINAL_ROWS:-0}"
 include_large_prompt="${INCLUDE_LARGE_PROMPT:-0}"
+synthetic_prompt_lengths="${SYNTHETIC_PROMPT_LENGTHS:-}"
 out="${OUT:-${TMPDIR:-/tmp}/diffusion_gemma_prompt_perf_$(date +%Y%m%d%H%M%S).tsv}"
 
 short_prompt="${SHORT_PROMPT:-Say:}"
@@ -71,6 +72,21 @@ case "$include_large_prompt" in
     exit 2
     ;;
 esac
+
+if [[ -n "$synthetic_prompt_lengths" ]]; then
+  read -r -a synthetic_lengths <<<"${synthetic_prompt_lengths//,/ }"
+  if [[ "${#synthetic_lengths[@]}" -eq 0 ]]; then
+    echo "SYNTHETIC_PROMPT_LENGTHS is empty" >&2
+    exit 2
+  fi
+  for length in "${synthetic_lengths[@]}"; do
+    if [[ ! "$length" =~ ^[1-9][0-9]*$ ]]; then
+      echo "invalid SYNTHETIC_PROMPT_LENGTHS entry: $length" >&2
+      exit 2
+    fi
+  done
+  synthetic_prompt_lengths="$(IFS=,; echo "${synthetic_lengths[*]}")"
+fi
 
 if [[ ! -x "$bin" ]]; then
   if [[ -z "$bridge_o" ]]; then
@@ -167,11 +183,70 @@ run_case() {
   fi
 }
 
-run_case short "$short_prompt"
-run_case medium "$medium_prompt"
-run_case long "$long_prompt"
-if [[ "$include_large_prompt" -eq 1 ]]; then
-  run_case large "$large_prompt"
+run_synthetic_lengths() {
+  local tmp err rc
+  local extra_args=()
+  tmp="$(mktemp "${TMPDIR:-/tmp}/dg_prompt_perf_synthetic.tsv.XXXXXX")"
+  err="$(mktemp "${TMPDIR:-/tmp}/dg_prompt_perf_synthetic.err.XXXXXX")"
+  if [[ "$materialize_prompt_final_rows" -eq 1 ]]; then
+    extra_args+=(--materialize-prompt-final-rows)
+  fi
+
+  set +e
+  "$timeout_bin" "$timeout_seconds" "$bin" \
+    --model "$model" \
+    --llama-tokenize "$tokenizer" \
+    --prompt-lengths "$synthetic_prompt_lengths" \
+    --canvas "$canvas" \
+    --candidate-texts "$candidates" \
+    --steps "$steps" \
+    --warmups "$warmups" \
+    --repeats "$repeats" \
+    --cache-warmups "$cache_warmups" \
+    --cache-repeats "$cache_repeats" \
+    --max-layers "$max_layers" \
+    --format tsv \
+    --decode-canvas-text \
+    "${extra_args[@]}" \
+    >"$tmp" 2>"$err"
+  rc=$?
+  set -e
+
+  if [[ "$rc" -eq 0 ]]; then
+    awk -F '\t' -v artifact="$tmp" -v err_artifact="$err" '
+      NR == 1 {
+        for (i = 1; i <= NF; i++) {
+          h[$i] = i
+        }
+        next
+      }
+      NR >= 2 {
+        found = 1
+        case_name = "synthetic_" $h["prompt_len"]
+        print "ok" "\t" case_name "\t" $h["prompt_text_bytes"] "\t" $h["prompt_len"] "\t" $h["canvas_len"] "\t" $h["candidate_count"] "\t" $h["load_ms"] "\t" $h["prompt_route_ms"] "\t" $h["prompt_projection_backend"] "\t" $h["prompt_cache_ms"] "\t" $h["prompt_projection_ms"] "\t" $h["prompt_projection_norm_ms"] "\t" $h["prompt_projection_matmul_ms"] "\t" $h["prompt_projection_assemble_ms"] "\t" $h["prompt_projection_copy_ms"] "\t" $h["prompt_projection_head_norm_ms"] "\t" $h["prompt_projection_q_norm_ms"] "\t" $h["prompt_projection_k_norm_ms"] "\t" $h["prompt_projection_v_norm_ms"] "\t" $h["prompt_projection_rope_ms"] "\t" $h["prompt_materialize_ms"] "\t" $h["prompt_cache_ms_samples"] "\t" $h["prompt_projection_ms_samples"] "\t" $h["prompt_projection_norm_ms_samples"] "\t" $h["prompt_projection_matmul_ms_samples"] "\t" $h["prompt_projection_assemble_ms_samples"] "\t" $h["prompt_projection_copy_ms_samples"] "\t" $h["prompt_projection_head_norm_ms_samples"] "\t" $h["prompt_projection_q_norm_ms_samples"] "\t" $h["prompt_projection_k_norm_ms_samples"] "\t" $h["prompt_projection_v_norm_ms_samples"] "\t" $h["prompt_projection_rope_ms_samples"] "\t" $h["prompt_materialize_ms_samples"] "\t" $h["prompt_cache_tokens_per_ms"] "\t" $h["loop_ms_median"] "\t" $h["loop_ms_samples"] "\t" $h["loop_prediction_ms"] "\t" $h["loop_decode_stack_ms"] "\t" $h["loop_decode_qkv_ms"] "\t" $h["loop_decode_context_ms"] "\t" $h["loop_decode_attention_out_ms"] "\t" $h["loop_decode_shared_ffn_ms"] "\t" $h["loop_decode_moe_ffn_ms"] "\t" $h["loop_decode_combine_scale_ms"] "\t" $h["loop_output_head_ms"] "\t" $h["loop_update_ms"] "\t" $h["loop_regenerate_ms"] "\t" $h["loop_proposal_ms"] "\t" $h["loop_prediction_ms_samples"] "\t" $h["loop_decode_stack_ms_samples"] "\t" $h["loop_decode_qkv_ms_samples"] "\t" $h["loop_decode_context_ms_samples"] "\t" $h["loop_decode_attention_out_ms_samples"] "\t" $h["loop_decode_shared_ffn_ms_samples"] "\t" $h["loop_decode_moe_ffn_ms_samples"] "\t" $h["loop_decode_combine_scale_ms_samples"] "\t" $h["loop_output_head_ms_samples"] "\t" $h["loop_update_ms_samples"] "\t" $h["loop_regenerate_ms_samples"] "\t" $h["loop_proposal_ms_samples"] "\t" $h["last_chosen_texts"] "\t" $h["last_argmax_probabilities"] "\t" artifact "\t" err_artifact
+      }
+      END {
+        if (!found) {
+          exit 3
+        }
+      }
+    ' "$tmp" >>"$out" || append_failed_row failed synthetic 0 "$tmp" "$err"
+  elif [[ "$rc" -eq 124 ]]; then
+    append_failed_row timeout synthetic 0 "$tmp" "$err"
+  else
+    append_failed_row failed synthetic 0 "$tmp" "$err"
+  fi
+}
+
+if [[ -n "$synthetic_prompt_lengths" ]]; then
+  run_synthetic_lengths
+else
+  run_case short "$short_prompt"
+  run_case medium "$medium_prompt"
+  run_case long "$long_prompt"
+  if [[ "$include_large_prompt" -eq 1 ]]; then
+    run_case large "$large_prompt"
+  fi
 fi
 
 cat "$out"
