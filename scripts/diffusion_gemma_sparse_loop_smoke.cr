@@ -99,6 +99,10 @@ def generated_candidate_ids(default_token : Int32, count : Int32, vocab_size : I
   generated_token_sequence(default_token, count, vocab_size, "--candidate-count").sort
 end
 
+def generated_candidate_rows(canvas_tokens : Array(Int32), count : Int32, vocab_size : Int32) : Array(Array(Int32))
+  canvas_tokens.map { |token_id| generated_candidate_ids(token_id, count, vocab_size) }
+end
+
 def median(values : Array(Float64)) : Float64
   raise "median requires at least one value" if values.empty?
   sorted = values.sort
@@ -192,17 +196,17 @@ prompt_sets.each do |prompt_set|
   end
 end
 
-candidate_sets = [] of Array(Int32)
+candidate_specs = [] of Tuple(Int32?, Array(Int32))
 if raw_counts = candidate_counts_arg
   parse_candidate_counts(raw_counts).each do |count|
-    candidate_sets << generated_candidate_ids(canvas_token, count, hp.vocab_size)
+    candidate_specs << {count, generated_candidate_ids(canvas_token, count, hp.vocab_size)}
   end
 elsif count = candidate_count
-  candidate_sets << generated_candidate_ids(canvas_token, count, hp.vocab_size)
+  candidate_specs << {count, generated_candidate_ids(canvas_token, count, hp.vocab_size)}
 else
-  candidate_sets << parse_candidate_ids(candidate_ids_arg, canvas_token)
+  candidate_specs << {nil, parse_candidate_ids(candidate_ids_arg, canvas_token)}
 end
-candidate_sets.each do |candidate_ids|
+candidate_specs.each do |_, candidate_ids|
   candidate_ids.each do |candidate_id|
     raise "--candidate-ids contains out-of-range id #{candidate_id}" if candidate_id < 0 || candidate_id >= hp.vocab_size
   end
@@ -253,8 +257,9 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
     prompt_cache_ms_ratio_vs_first = baseline_cache_ms.not_nil! > 0.0 ? cache_ms / baseline_cache_ms.not_nil! : 0.0
     prompt_cache_tokens_per_ms = cache_ms > 0.0 ? tokens.size.to_f64 / cache_ms : 0.0
 
-    candidate_sets.each_with_index do |candidate_ids, candidate_set_index|
-      candidate_rows = canvas_tokens.map { candidate_ids.dup }
+    candidate_specs.each_with_index do |candidate_spec, candidate_set_index|
+      generated_count, candidate_ids = candidate_spec
+      candidate_rows = generated_count ? generated_candidate_rows(canvas_tokens, generated_count.not_nil!, hp.vocab_size) : canvas_tokens.map { candidate_ids.dup }
       loop_samples = [] of Float64
       loop = nil.as(ML::GGUF::DiffusionGemmaCPU::BoundedDenoiseLoopResult?)
       (warmups + repeats).times do |run_index|
@@ -330,8 +335,9 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"final_canvas_token", loop.final_canvas_tokens[0].to_s},
         {"final_canvas_tokens", loop.final_canvas_tokens.join(",")},
         {"candidate_set_index", candidate_set_index.to_s},
-        {"candidate_count", candidate_ids.size.to_s},
-        {"candidate_ids", candidate_ids.join(",")},
+        {"candidate_count", candidate_rows.first.size.to_s},
+        {"candidate_ids", candidate_rows.first.join(",")},
+        {"candidate_rows", candidate_rows.map { |row| row.join(",") }.join("|")},
         {"prediction_count", summary.prediction_count.to_s},
         {"accepted_count", summary.accepted_count.to_s},
         {"acceptance_rate", summary.acceptance_rate.to_s},
