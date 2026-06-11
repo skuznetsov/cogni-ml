@@ -566,10 +566,10 @@ module ML::GGUF
       raise ArgumentError.new("shared_dense_ffn input size mismatch") unless attn_out.size == hp.n_embd
 
       ffn_in = Gemma4CPU.rms_norm(attn_out, lw.ffn_norm, hp.rms_eps)
-      up = Gemma4CPU.matmul(lw.ffn_up_qw, ffn_in)
-      gate = Gemma4CPU.matmul(lw.ffn_gate_qw, ffn_in)
+      up = prompt_projection_matmul(lw.ffn_up_qw, ffn_in, 1)
+      gate = prompt_projection_matmul(lw.ffn_gate_qw, ffn_in, 1)
       gate.size.times { |i| gate[i] = Gemma4CPU.gelu(gate[i]) * up[i] }
-      down = Gemma4CPU.matmul(lw.ffn_down_qw, gate)
+      down = prompt_projection_matmul(lw.ffn_down_qw, gate, 1)
       Gemma4CPU.rms_norm(down, lw.post_ffw_norm_1, hp.rms_eps)
     end
 
