@@ -20,6 +20,25 @@ def fake_diffusion_gemma_projection(hp : ML::GGUF::DiffusionGemmaHparams,
   )
 end
 
+def deterministic_diffusion_gemma_projection(hp : ML::GGUF::DiffusionGemmaHparams,
+                                             il : Int32) : ML::GGUF::DiffusionGemmaCPU::AttentionProjection
+  head_dim = hp.head_dim_for_layer(il)
+  q_dim = hp.n_head * head_dim
+  kv_dim = hp.n_head_kv(il) * head_dim
+  ML::GGUF::DiffusionGemmaCPU::AttentionProjection.new(
+    q: Array(Float32).new(q_dim) { |i| ((i % 97) - 48).to_f32 / 37.0_f32 },
+    k: Array(Float32).new(kv_dim) { |i| ((i % 53) - 26).to_f32 / 29.0_f32 },
+    v: Array(Float32).new(kv_dim) { |i| ((i % 31) - 15).to_f32 / 23.0_f32 },
+    reused_k_as_v: false,
+  )
+end
+
+def diffusion_gemma_rope_pair_energy(x : Array(Float32), offset : Int32, half : Int32, i : Int32) : Float64
+  x0 = x[offset + i].to_f64
+  x1 = x[offset + i + half].to_f64
+  x0 * x0 + x1 * x1
+end
+
 describe ML::GGUF::DiffusionGemmaHparams do
   it "parses the local DiffusionGemma 26B GGUF metadata" do
     pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
@@ -321,6 +340,55 @@ describe ML::GGUF::DiffusionGemmaCPU do
     ML::GGUF::DiffusionGemmaCPU.row_rms(full.q, 0, hp.head_dim).should be_close(full_q_norm_rms, 0.01_f32)
     ML::GGUF::DiffusionGemmaCPU.row_rms(full.k, 0, hp.head_dim).should be_close(full_k_norm_rms, 0.01_f32)
     ML::GGUF::DiffusionGemmaCPU.row_rms(full.v, 0, hp.head_dim).should be_close(1.0_f32, 0.01_f32)
+  end
+
+  it "applies RoPE only to Q/K while preserving per-head pair energy" do
+    pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
+
+    w = ML::GGUF::DiffusionGemmaWeights.from_gguf(DIFFUSION_GEMMA_26B_Q4KM)
+    hp = w.hparams
+
+    [0, 5].each do |il|
+      head_dim = hp.head_dim_for_layer(il)
+      n_rot = hp.rope_dim_for_layer(il)
+      half = n_rot // 2
+
+      no_op = deterministic_diffusion_gemma_projection(hp, il)
+      no_op_q = no_op.q.dup
+      no_op_k = no_op.k.dup
+      no_op_v = no_op.v.dup
+      ML::GGUF::DiffusionGemmaCPU.apply_rope_to_qk!(no_op, hp, il, pos: 0, rope_freqs: w.rope_freqs)
+      no_op.q.should eq(no_op_q)
+      no_op.k.should eq(no_op_k)
+      no_op.v.should eq(no_op_v)
+
+      proj = deterministic_diffusion_gemma_projection(hp, il)
+      q_before = proj.q.dup
+      k_before = proj.k.dup
+      v_before = proj.v.dup
+      ML::GGUF::DiffusionGemmaCPU.apply_rope_to_qk!(proj, hp, il, pos: 7, rope_freqs: w.rope_freqs)
+
+      proj.q.should_not eq(q_before)
+      proj.k.should_not eq(k_before)
+      proj.v.should eq(v_before)
+
+      hp.n_head.times do |h|
+        offset = h * head_dim
+        half.times do |i|
+          before = diffusion_gemma_rope_pair_energy(q_before, offset, half, i)
+          after = diffusion_gemma_rope_pair_energy(proj.q, offset, half, i)
+          after.should be_close(before, 0.00001)
+        end
+      end
+      hp.n_head_kv(il).times do |h|
+        offset = h * head_dim
+        half.times do |i|
+          before = diffusion_gemma_rope_pair_energy(k_before, offset, half, i)
+          after = diffusion_gemma_rope_pair_energy(proj.k, offset, half, i)
+          after.should be_close(before, 0.00001)
+        end
+      end
+    end
   end
 
   it "computes region-aware unified and decode attention context" do
