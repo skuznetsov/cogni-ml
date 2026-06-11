@@ -100,15 +100,18 @@ PY
 host_snapshot() {
   local label="$1"
   local out="$log_dir/host_snapshot_${label}.txt"
-  {
-    printf 'snapshot_label=%s\n' "$label"
-    date '+snapshot_time=%Y-%m-%dT%H:%M:%S%z'
-    printf '\n[top_cpu]\n'
-    ps -axo pid,pcpu,pmem,rss,comm | python3 -c '
+  local summary
+  summary="$(
+    python3 - "$label" "$out" <<'PY'
+import datetime
+import subprocess
 import sys
-lines = sys.stdin.readlines()
-if lines:
-    print(lines[0], end="")
+
+label = sys.argv[1]
+out_path = sys.argv[2]
+
+ps_out = subprocess.check_output(["ps", "-axo", "pid,pcpu,pmem,rss,comm"], text=True)
+lines = ps_out.splitlines()
 rows = []
 for line in lines[1:]:
     parts = line.split(None, 4)
@@ -119,13 +122,32 @@ for line in lines[1:]:
     except ValueError:
         continue
     rows.append((cpu, line))
-for _, line in sorted(rows, reverse=True)[:20]:
-    print(line, end="")
-'
-    printf '\n[vm_stat]\n'
-    vm_stat
-  } >"$out"
-  printf 'host_snapshot label=%s path=%s\n' "$label" "$out"
+
+rows.sort(reverse=True)
+total_cpu = sum(cpu for cpu, _ in rows)
+max_cpu = rows[0][0] if rows else 0.0
+max_process = rows[0][1].split(None, 4)[4] if rows else ""
+vm_out = subprocess.check_output(["vm_stat"], text=True)
+
+with open(out_path, "w", encoding="utf-8") as io:
+    now = datetime.datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M:%S%z")
+    io.write(f"snapshot_label={label}\n")
+    io.write(f"snapshot_time={now}\n")
+    io.write(f"max_process_cpu={max_cpu:.1f}\n")
+    io.write(f"total_cpu={total_cpu:.1f}\n")
+    io.write(f"max_process={max_process}\n")
+    io.write("\n[top_cpu]\n")
+    if lines:
+        io.write(lines[0] + "\n")
+    for _, line in rows[:20]:
+        io.write(line + "\n")
+    io.write("\n[vm_stat]\n")
+    io.write(vm_out)
+
+print(f"max_process_cpu={max_cpu:.1f} total_cpu={total_cpu:.1f} max_process={max_process}")
+PY
+  )"
+  printf 'host_snapshot label=%s %s path=%s\n' "$label" "$summary" "$out"
 }
 
 base_tokens=()
