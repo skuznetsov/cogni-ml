@@ -94,6 +94,22 @@ def dominant_phase(deltas: dict[str, float], reverse: bool) -> tuple[str, float]
     return key, candidates[key]
 
 
+def range_over_delta(base: list[dict[str, str]], variant: list[dict[str, str]], metric: str) -> float:
+    delta = abs(phase_delta(base, variant, metric))
+    combined_range = range_value(base, metric) + range_value(variant, metric)
+    if math.isnan(delta) or math.isnan(combined_range):
+        return float("nan")
+    if delta == 0.0:
+        return float("inf") if combined_range > 0.0 else 0.0
+    return combined_range / delta
+
+
+def delta_confidence(range_delta_ratio: float) -> str:
+    if math.isnan(range_delta_ratio) or math.isinf(range_delta_ratio):
+        return "unstable"
+    return "unstable" if range_delta_ratio > 1.0 else "range_bounded"
+
+
 def read_rows(root: Path) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for path in sorted(root.glob("run_*.tsv")):
@@ -211,6 +227,9 @@ def summarize(root: Path) -> list[dict[str, object]]:
         summary["dominant_positive_delta_ms"] = format_ms(positive_delta)
         summary["dominant_negative_phase"] = negative_phase
         summary["dominant_negative_delta_ms"] = format_ms(negative_delta)
+        loop_range_over_delta = range_over_delta(base, variant, "loop_ms_median")
+        summary["loop_range_over_delta"] = format_ratio(loop_range_over_delta)
+        summary["delta_confidence"] = delta_confidence(loop_range_over_delta)
         out.append(summary)
     return out
 
@@ -256,6 +275,8 @@ def main() -> None:
             "dominant_positive_delta_ms",
             "dominant_negative_phase",
             "dominant_negative_delta_ms",
+            "loop_range_over_delta",
+            "delta_confidence",
             "max_process_cpu",
             "max_total_cpu",
             "max_process",
