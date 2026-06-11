@@ -207,6 +207,23 @@ if not rows:
     print("diffusion_gemma_prompt_variant_abba_result parse_error=1")
     sys.exit(3)
 
+quiet_statuses = []
+for path in sorted(root.glob("run_*.log")):
+    with path.open(encoding="utf-8", errors="replace") as io:
+        for line in io:
+            if not line.startswith("quiet_gate_result "):
+                continue
+            fields = {}
+            for token in line.strip().split()[1:]:
+                key, _, value = token.partition("=")
+                if key:
+                    fields[key] = value
+            if fields:
+                fields["_source"] = path.name
+                quiet_statuses.append(fields)
+
+non_ok_quiet = [row for row in quiet_statuses if row.get("status") != "ok"]
+
 def as_float(row, key):
     try:
         return float(row.get(key, "") or "nan")
@@ -233,6 +250,24 @@ bad = [row for row in rows if row.get("status") != "ok"]
 if bad:
     print(f"diffusion_gemma_prompt_variant_abba_result non_ok_rows={len(bad)}")
     sys.exit(4)
+
+if quiet_statuses:
+    if non_ok_quiet:
+        offenders = ",".join(
+            f"{row.get('label', row['_source'])}:{row.get('status', 'unknown')}"
+            for row in non_ok_quiet
+        )
+        print(
+            "diffusion_gemma_prompt_variant_abba_result "
+            f"promotion_status=blocked_by_host_noise quiet_non_ok={len(non_ok_quiet)}/{len(quiet_statuses)} "
+            f"offenders={offenders}"
+        )
+    else:
+        print(
+            "diffusion_gemma_prompt_variant_abba_result "
+            f"promotion_status=quiet_gate_ok quiet_non_ok=0/{len(quiet_statuses)}"
+        )
+
 
 cases = sorted({row.get("case", "") for row in rows})
 for case in cases:
