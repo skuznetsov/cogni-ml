@@ -391,6 +391,8 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
       candidate_rows = generated_count ? ML::GGUF::DiffusionGemmaCPU.generated_candidate_rows(canvas_tokens, generated_count.not_nil!, hp.vocab_size) : canvas_tokens.map { candidate_ids.dup }
       loop_samples = [] of Float64
       loop_prediction_ms_samples = [] of Float64
+      loop_decode_stack_ms_samples = [] of Float64
+      loop_output_head_ms_samples = [] of Float64
       loop_update_ms_samples = [] of Float64
       loop_regenerate_ms_samples = [] of Float64
       loop_proposal_ms_samples = [] of Float64
@@ -434,6 +436,8 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
           loop = loop.not_nil!
           loop_samples << elapsed_ms
           loop_prediction_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.prediction_ms)
+          loop_decode_stack_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.decode_stack_ms)
+          loop_output_head_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.output_head_ms)
           loop_update_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.update_ms)
           loop_regenerate_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.regenerate_ms)
           loop_proposal_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.proposal_ms)
@@ -445,6 +449,8 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
       loop_ms_median = median(loop_samples)
       loop_ms_max = loop_samples.max
       loop_prediction_ms = median(loop_prediction_ms_samples)
+      loop_decode_stack_ms = median(loop_decode_stack_ms_samples)
+      loop_output_head_ms = median(loop_output_head_ms_samples)
       loop_update_ms = median(loop_update_ms_samples)
       loop_regenerate_ms = median(loop_regenerate_ms_samples)
       loop_proposal_ms = median(loop_proposal_ms_samples)
@@ -522,10 +528,14 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"loop_ms_max", loop_ms_max.round(3).to_s},
         {"loop_ms_samples", loop_samples.map { |v| v.round(3) }.join(",")},
         {"loop_prediction_ms", loop_prediction_ms.round(3).to_s},
+        {"loop_decode_stack_ms", loop_decode_stack_ms.round(3).to_s},
+        {"loop_output_head_ms", loop_output_head_ms.round(3).to_s},
         {"loop_update_ms", loop_update_ms.round(3).to_s},
         {"loop_regenerate_ms", loop_regenerate_ms.round(3).to_s},
         {"loop_proposal_ms", loop_proposal_ms.round(3).to_s},
         {"loop_prediction_ms_samples", loop_prediction_ms_samples.map { |v| v.round(3) }.join(",")},
+        {"loop_decode_stack_ms_samples", loop_decode_stack_ms_samples.map { |v| v.round(3) }.join(",")},
+        {"loop_output_head_ms_samples", loop_output_head_ms_samples.map { |v| v.round(3) }.join(",")},
         {"loop_update_ms_samples", loop_update_ms_samples.map { |v| v.round(3) }.join(",")},
         {"loop_regenerate_ms_samples", loop_regenerate_ms_samples.map { |v| v.round(3) }.join(",")},
         {"loop_proposal_ms_samples", loop_proposal_ms_samples.map { |v| v.round(3) }.join(",")},

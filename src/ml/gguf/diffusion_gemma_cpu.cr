@@ -63,6 +63,8 @@ module ML::GGUF
       getter mean_candidate_tokens : Float32
       getter mean_entropy : Float32
       getter prediction_ms : Float64
+      getter decode_stack_ms : Float64
+      getter output_head_ms : Float64
       getter update_ms : Float64
       getter regenerate_ms : Float64
       getter proposal_ms : Float64
@@ -75,6 +77,8 @@ module ML::GGUF
                      @mean_candidate_tokens,
                      @mean_entropy,
                      @prediction_ms = 0.0,
+                     @decode_stack_ms = 0.0,
+                     @output_head_ms = 0.0,
                      @update_ms = 0.0,
                      @regenerate_ms = 0.0,
                      @proposal_ms = 0.0)
@@ -106,14 +110,29 @@ module ML::GGUF
       end
     end
 
+    struct BoundedDenoisePredictionTiming
+      getter predictions : Array(BoundedDenoisePrediction)
+      getter decode_stack_ms : Float64
+      getter output_head_ms : Float64
+
+      def initialize(@predictions,
+                     @decode_stack_ms,
+                     @output_head_ms)
+      end
+    end
+
     struct BoundedDenoiseStepTiming
       getter update : BoundedCanvasUpdate
       getter prediction_ms : Float64
+      getter decode_stack_ms : Float64
+      getter output_head_ms : Float64
       getter update_ms : Float64
       getter regenerate_ms : Float64
 
       def initialize(@update,
                      @prediction_ms,
+                     @decode_stack_ms,
+                     @output_head_ms,
                      @update_ms,
                      @regenerate_ms)
       end
@@ -1065,12 +1084,35 @@ module ML::GGUF
                                           temp_inv : Float32 = 1.0_f32,
                                           sample_us : Array(Float32)? = nil,
                                           routes_by_layer_by_canvas_row : Array(Array(Array(ExpertRoute)))? = nil) : Array(BoundedDenoisePrediction)
+      decode_canvas_bounded_predictions_timed(
+        weights: weights,
+        canvas_rows: canvas_rows,
+        mask: mask,
+        prompt_cache: prompt_cache,
+        candidate_token_ids_by_canvas_row: candidate_token_ids_by_canvas_row,
+        max_layers: max_layers,
+        temp_inv: temp_inv,
+        sample_us: sample_us,
+        routes_by_layer_by_canvas_row: routes_by_layer_by_canvas_row,
+      ).predictions
+    end
+
+    def decode_canvas_bounded_predictions_timed(weights : DiffusionGemmaWeights,
+                                                canvas_rows : Array(Float32),
+                                                mask : DiffusionGemmaAttentionMask,
+                                                prompt_cache : PromptLayerCache,
+                                                candidate_token_ids_by_canvas_row : Array(Array(Int32)),
+                                                max_layers : Int32 = prompt_cache.layers,
+                                                temp_inv : Float32 = 1.0_f32,
+                                                sample_us : Array(Float32)? = nil,
+                                                routes_by_layer_by_canvas_row : Array(Array(Array(ExpertRoute)))? = nil) : BoundedDenoisePredictionTiming
       hp = weights.hparams
       raise ArgumentError.new("candidate rows size mismatch") unless candidate_token_ids_by_canvas_row.size == mask.canvas_len
       if supplied_sample_us = sample_us
         raise ArgumentError.new("sample_us size mismatch") unless supplied_sample_us.size == mask.canvas_len
       end
 
+      decode_t0 = Time.instant
       hidden_rows = decode_canvas_rows_with_prompt_cache(
         weights: weights,
         canvas_rows: canvas_rows,
@@ -1079,11 +1121,15 @@ module ML::GGUF
         max_layers: max_layers,
         routes_by_layer_by_canvas_row: routes_by_layer_by_canvas_row,
       )
-      Array(BoundedDenoisePrediction).new(mask.canvas_len) do |canvas_pos|
+      decode_stack_ms = (Time.instant - decode_t0).total_milliseconds
+
+      output_t0 = Time.instant
+      predictions = Array(BoundedDenoisePrediction).new(mask.canvas_len) do |canvas_pos|
         hidden = hidden_rows[canvas_pos * hp.n_embd, hp.n_embd]
         sample_u = sample_us ? sample_us.not_nil![canvas_pos] : 0.0_f32
         bounded_denoise_prediction(weights, hidden, candidate_token_ids_by_canvas_row[canvas_pos], temp_inv, sample_u)
       end
+      BoundedDenoisePredictionTiming.new(predictions, decode_stack_ms, (Time.instant - output_t0).total_milliseconds)
     end
 
     def decode_canvas_bounded_step(weights : DiffusionGemmaWeights,
@@ -1140,7 +1186,7 @@ module ML::GGUF
                                          sc_use : Float32 = 1.0_f32) : BoundedDenoiseStepTiming
       raise ArgumentError.new("canvas token count mismatch") unless canvas_tokens.size == mask.canvas_len
       prediction_t0 = Time.instant
-      predictions = decode_canvas_bounded_predictions(
+      prediction_timing = decode_canvas_bounded_predictions_timed(
         weights: weights,
         canvas_rows: canvas_rows,
         mask: mask,
@@ -1153,7 +1199,7 @@ module ML::GGUF
       )
       prediction_ms = (Time.instant - prediction_t0).total_milliseconds
       update_t0 = Time.instant
-      update = apply_entropy_bound_predictions(canvas_tokens, predictions, entropy_bound, use_sampled_token: use_sampled_token)
+      update = apply_entropy_bound_predictions(canvas_tokens, prediction_timing.predictions, entropy_bound, use_sampled_token: use_sampled_token)
       update_ms = (Time.instant - update_t0).total_milliseconds
       regenerate_t0 = Time.instant
       updated_rows = canvas_rows_from_tokens(
@@ -1166,7 +1212,7 @@ module ML::GGUF
       )
       regenerate_ms = (Time.instant - regenerate_t0).total_milliseconds
       timed_update = BoundedCanvasUpdate.new(update.updated_canvas_tokens, update.accepted, update.predictions, updated_rows)
-      BoundedDenoiseStepTiming.new(timed_update, prediction_ms, update_ms, regenerate_ms)
+      BoundedDenoiseStepTiming.new(timed_update, prediction_ms, prediction_timing.decode_stack_ms, prediction_timing.output_head_ms, update_ms, regenerate_ms)
     end
 
     def decode_canvas_bounded_loop(weights : DiffusionGemmaWeights,
@@ -1220,7 +1266,7 @@ module ML::GGUF
         if use_sparse_self_conditioning
           regenerate_t0 = Time.instant
           rows = canvas_rows_from_prediction_self_conditioning(weights, tokens, update.predictions, sc_temp_inv, sc_use)
-          timed = BoundedDenoiseStepTiming.new(update, timed.prediction_ms, timed.update_ms, (Time.instant - regenerate_t0).total_milliseconds)
+          timed = BoundedDenoiseStepTiming.new(update, timed.prediction_ms, timed.decode_stack_ms, timed.output_head_ms, timed.update_ms, (Time.instant - regenerate_t0).total_milliseconds)
           update = BoundedCanvasUpdate.new(update.updated_canvas_tokens, update.accepted, update.predictions, rows)
         else
           rows = update.updated_canvas_rows || rows
@@ -1291,7 +1337,7 @@ module ML::GGUF
         if use_sparse_self_conditioning
           regenerate_t0 = Time.instant
           rows = canvas_rows_from_prediction_self_conditioning(weights, tokens, update.predictions, sc_temp_inv, sc_use)
-          timed = BoundedDenoiseStepTiming.new(update, timed.prediction_ms, timed.update_ms, (Time.instant - regenerate_t0).total_milliseconds)
+          timed = BoundedDenoiseStepTiming.new(update, timed.prediction_ms, timed.decode_stack_ms, timed.output_head_ms, timed.update_ms, (Time.instant - regenerate_t0).total_milliseconds)
           update = BoundedCanvasUpdate.new(update.updated_canvas_tokens, update.accepted, update.predictions, rows)
         else
           rows = update.updated_canvas_rows || rows
@@ -1373,6 +1419,8 @@ module ML::GGUF
         mean_candidate_tokens: mean_candidate_tokens,
         mean_entropy: mean_entropy,
         prediction_ms: timing ? timing.not_nil!.prediction_ms : 0.0,
+        decode_stack_ms: timing ? timing.not_nil!.decode_stack_ms : 0.0,
+        output_head_ms: timing ? timing.not_nil!.output_head_ms : 0.0,
         update_ms: timing ? timing.not_nil!.update_ms : 0.0,
         regenerate_ms: timing ? timing.not_nil!.regenerate_ms : 0.0,
         proposal_ms: proposal_ms,
