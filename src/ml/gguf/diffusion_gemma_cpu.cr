@@ -20,13 +20,17 @@ module ML::GGUF
     class PromptLayerMetalCache
       getter k_cache_buf : ML::MetalBuffer
       getter v_cache_buf : ML::MetalBuffer
+      getter q_buf : ML::MetalBuffer
+      getter out_buf : ML::MetalBuffer
       getter prompt_len : Int32
       getter canvas_len : Int32
+      getter q_dim : Int32
       getter kv_dim : Int32
 
       def initialize(prompt_projections : Array(AttentionProjection),
                      @prompt_len : Int32,
                      @canvas_len : Int32,
+                     @q_dim : Int32,
                      @kv_dim : Int32)
         raise ArgumentError.new("prompt projection count mismatch") unless prompt_projections.size == @prompt_len
         total_tokens = @prompt_len + @canvas_len
@@ -39,6 +43,8 @@ module ML::GGUF
         end
         @k_cache_buf = ML::MetalBuffer.from_array(k_cache)
         @v_cache_buf = ML::MetalBuffer.from_array(v_cache)
+        @q_buf = ML::MetalBuffer.new(@q_dim.to_i64 * sizeof(Float32))
+        @out_buf = ML::MetalBuffer.new(@q_dim.to_i64 * sizeof(Float32))
       end
 
       def write_canvas!(canvas_projections : Array(AttentionProjection)) : Nil
@@ -50,6 +56,11 @@ module ML::GGUF
           (@k_cache_buf.contents.as(Pointer(Float32)) + offset).copy_from(proj.k.to_unsafe, @kv_dim)
           (@v_cache_buf.contents.as(Pointer(Float32)) + offset).copy_from(proj.v.to_unsafe, @kv_dim)
         end
+      end
+
+      def write_query!(query : AttentionProjection) : Nil
+        raise ArgumentError.new("query q size mismatch") unless query.q.size == @q_dim
+        @q_buf.write(query.q)
       end
 
       private def copy_projection_kv_to_rows!(proj : AttentionProjection,
@@ -1086,8 +1097,9 @@ module ML::GGUF
         projection_rope_k_apply_ms_by_layer << timed_projections.rope_k_apply_ms
         projections_by_layer << projections
         if context_metal_enabled? && Gemma4Metal.available?
+          q_dim = hp.n_head * hp.head_dim_for_layer(il)
           kv_dim = hp.n_head_kv(il) * hp.head_dim_for_layer(il)
-          metal_cache_by_layer << PromptLayerMetalCache.new(projections, mask.prompt_len, mask.canvas_len, kv_dim)
+          metal_cache_by_layer << PromptLayerMetalCache.new(projections, mask.prompt_len, mask.canvas_len, q_dim, kv_dim)
         else
           metal_cache_by_layer << nil
         end
@@ -2323,8 +2335,9 @@ module ML::GGUF
       validate_projection_shape!(query, q_dim, kv_dim, il)
 
       sliding_window = low == 0 ? 0 : high - low + 1
-      Gemma4Metal.attention_context_rows_resident(
-        query.q, cache.k_cache_buf, cache.v_cache_buf, high, 1, n_head, n_head_kv, head_dim, sliding_window)
+      cache.write_query!(query)
+      Gemma4Metal.attention_context_rows_resident_buffers(
+        cache.q_buf, cache.k_cache_buf, cache.v_cache_buf, cache.out_buf, high, 1, n_head, n_head_kv, head_dim, sliding_window)
     end
 
     private def attention_context_from_range_metal(query : AttentionProjection,

@@ -832,7 +832,7 @@ describe ML::GGUF::DiffusionGemmaCPU do
       actual = ML::GGUF::DiffusionGemmaCPU.attention_context_decode_timed(
         prompt_projections, canvas_projections, hp, il, canvas_query_index: 0, mask: mask).context
       resident_cache = ML::GGUF::DiffusionGemmaCPU::PromptLayerMetalCache.new(
-        prompt_projections, mask.prompt_len, mask.canvas_len, kv_dim)
+        prompt_projections, mask.prompt_len, mask.canvas_len, q_dim, kv_dim)
       resident_cache.write_canvas!(canvas_projections)
       resident = ML::GGUF::DiffusionGemmaCPU.attention_context_decode_timed(
         prompt_projections, canvas_projections, hp, il, canvas_query_index: 0, mask: mask, prompt_metal_cache: resident_cache).context
