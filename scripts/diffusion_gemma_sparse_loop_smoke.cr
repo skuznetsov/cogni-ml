@@ -114,7 +114,12 @@ end
 def median(values : Array(Float64)) : Float64
   raise "median requires at least one value" if values.empty?
   sorted = values.sort
-  sorted[sorted.size // 2]
+  mid = sorted.size // 2
+  if sorted.size.odd?
+    sorted[mid]
+  else
+    (sorted[mid - 1] + sorted[mid]) / 2.0
+  end
 end
 
 def encode_text_tokens(model : String, llama_tokenize : String, text : String, label : String, *, add_bos : Bool) : Array(Int32)
