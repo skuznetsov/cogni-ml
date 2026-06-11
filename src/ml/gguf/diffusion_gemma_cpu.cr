@@ -1,5 +1,6 @@
 require "./diffusion_gemma_runtime"
 require "./gemma4_cpu"
+require "./gemma4_metal"
 require "./qwen35_metal"
 
 module ML::GGUF
@@ -2171,6 +2172,11 @@ module ML::GGUF
       heads_per_group = n_head // n_head_kv
       raise ArgumentError.new("invalid GQA layout at layer #{il}") unless heads_per_group > 0 && n_head % n_head_kv == 0
       validate_projection_shape!(query, q_dim, kv_dim, il)
+      if context_metal_enabled?
+        if context = attention_context_from_range_metal(query, keyspace, q_dim, kv_dim, hp, il, low, high)
+          return AttentionContextTiming.new(context, 0.0, 0.0, 0.0)
+        end
+      end
 
       key_count = high - low + 1
       result = Array(Float32).new(q_dim, 0.0_f32)
@@ -2209,6 +2215,48 @@ module ML::GGUF
         value_ms += (Time.instant - value_t0).total_milliseconds
       end
       AttentionContextTiming.new(result, score_ms, softmax_ms, value_ms)
+    end
+
+    private def context_metal_enabled? : Bool
+      ENV["DIFFUSION_GEMMA_CONTEXT_METAL"]? == "1" &&
+        ENV["DIFFUSION_GEMMA_CONTEXT_METAL_OFF"]? != "1"
+    end
+
+    private def attention_context_from_range_metal(query : AttentionProjection,
+                                                   keyspace : Array(AttentionProjection),
+                                                   q_dim : Int32,
+                                                   kv_dim : Int32,
+                                                   hp : DiffusionGemmaHparams,
+                                                   il : Int32,
+                                                   low : Int32,
+                                                   high : Int32) : Array(Float32)?
+      return nil unless Gemma4Metal.available?
+      return nil unless high >= low
+      return nil unless high < keyspace.size
+
+      head_dim = hp.head_dim_for_layer(il)
+      n_head = hp.n_head
+      n_head_kv = hp.n_head_kv(il)
+      sliding_window = low == 0 ? 0 : high - low + 1
+      k_cache = Array(Float32).new((high + 1) * kv_dim, 0.0_f32)
+      v_cache = Array(Float32).new((high + 1) * kv_dim, 0.0_f32)
+      (0..high).each do |pos|
+        proj = keyspace[pos]
+        validate_projection_shape!(proj, q_dim, kv_dim, il)
+        k_dst = k_cache.to_unsafe + pos * kv_dim
+        v_dst = v_cache.to_unsafe + pos * kv_dim
+        k_src = proj.k.to_unsafe
+        v_src = proj.v.to_unsafe
+        d = 0
+        while d < kv_dim
+          k_dst[d] = k_src[d]
+          v_dst[d] = v_src[d]
+          d += 1
+        end
+      end
+
+      Gemma4Metal.attention_context_rows(
+        query.q, k_cache, v_cache, high, 1, n_head, n_head_kv, head_dim, sliding_window)
     end
 
     private def validate_projection_shape!(proj : AttentionProjection,

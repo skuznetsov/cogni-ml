@@ -797,6 +797,62 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
   end
 
+  it "keeps gated Metal decode attention context parity" do
+    pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
+    next unless ML::GGUF::Gemma4Metal.available?
+
+    g = ML::GGUF::GGUFFile.new(DIFFUSION_GEMMA_26B_Q4KM)
+    old_context_metal = ENV["DIFFUSION_GEMMA_CONTEXT_METAL"]?
+    old_context_metal_off = ENV["DIFFUSION_GEMMA_CONTEXT_METAL_OFF"]?
+    begin
+      hp = ML::GGUF::DiffusionGemmaHparams.new(g)
+      il = 0
+      head_dim = hp.head_dim_for_layer(il)
+      q_dim = hp.n_head * head_dim
+      kv_dim = hp.n_head_kv(il) * head_dim
+      make_proj = ->(seed : Int32) {
+        ML::GGUF::DiffusionGemmaCPU::AttentionProjection.new(
+          q: Array(Float32).new(q_dim) { |i| ((((i * 17 + seed) % 257) - 128).to_f32 / 512.0_f32) },
+          k: Array(Float32).new(kv_dim) { |i| ((((i * 13 + seed) % 251) - 125).to_f32 / 512.0_f32) },
+          v: Array(Float32).new(kv_dim) { |i| ((((i * 19 + seed) % 241) - 120).to_f32 / 512.0_f32) },
+          reused_k_as_v: false,
+        )
+      }
+      prompt_projections = (0...4).map { |i| make_proj.call(i + 1) }
+      canvas_projections = (0...2).map { |i| make_proj.call(i + 101) }
+      mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: 4, canvas_len: 2, sliding_window: 3)
+
+      ENV.delete("DIFFUSION_GEMMA_CONTEXT_METAL")
+      ENV["DIFFUSION_GEMMA_CONTEXT_METAL_OFF"] = "1"
+      expected = ML::GGUF::DiffusionGemmaCPU.attention_context_decode_timed(
+        prompt_projections, canvas_projections, hp, il, canvas_query_index: 0, mask: mask).context
+
+      ENV["DIFFUSION_GEMMA_CONTEXT_METAL"] = "1"
+      ENV.delete("DIFFUSION_GEMMA_CONTEXT_METAL_OFF")
+      actual = ML::GGUF::DiffusionGemmaCPU.attention_context_decode_timed(
+        prompt_projections, canvas_projections, hp, il, canvas_query_index: 0, mask: mask).context
+
+      max_diff = 0.0_f32
+      expected.size.times do |i|
+        diff = (expected[i] - actual[i]).abs
+        max_diff = diff if diff > max_diff
+      end
+      max_diff.should be < 1.0e-4_f32
+    ensure
+      g.close
+      if old_context_metal
+        ENV["DIFFUSION_GEMMA_CONTEXT_METAL"] = old_context_metal
+      else
+        ENV.delete("DIFFUSION_GEMMA_CONTEXT_METAL")
+      end
+      if old_context_metal_off
+        ENV["DIFFUSION_GEMMA_CONTEXT_METAL_OFF"] = old_context_metal_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_CONTEXT_METAL_OFF")
+      end
+    end
+  end
+
   it "decodes canvas rows through a bounded prompt layer cache" do
     pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
 
