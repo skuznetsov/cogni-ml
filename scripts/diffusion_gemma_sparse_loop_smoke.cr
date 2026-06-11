@@ -335,13 +335,15 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
     mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: tokens.size, canvas_len: canvas_tokens.size, sliding_window: hp.sliding_window)
 
     prompt_routes = nil.as(Array(Array(Array(ML::GGUF::DiffusionGemmaCPU::ExpertRoute)))?)
-    if single_route
+    prompt_route_t0 = Time.instant
+    if single_route && materialize_prompt_final_rows
       prompt_route_rows = tokens.map_with_index do |_, i|
         row = prompt_rows[i * hp.n_embd, hp.n_embd]
         ML::GGUF::DiffusionGemmaCPU.route_experts(weights, 0, row)[0, 1]
       end
       prompt_routes = [prompt_route_rows]
     end
+    prompt_route_ms = (Time.instant - prompt_route_t0).total_milliseconds
 
     cache_t0 = Time.instant
     prompt_cache = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(
@@ -459,6 +461,7 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"last_entropies", last_predictions.map { |prediction| format_f32(prediction.entropy) }.join(",")},
         {"last_candidate_probability_rows", format_prediction_f32_rows(last_predictions, &.probabilities)},
         {"load_ms", load_ms.round(3).to_s},
+        {"prompt_route_ms", prompt_route_ms.round(3).to_s},
         {"prompt_cache_ms", cache_ms.round(3).to_s},
         {"prompt_cache_materialized_final_rows", materialize_prompt_final_rows.to_s},
         {"prompt_cache_ms_ratio_vs_first", prompt_cache_ms_ratio_vs_first.round(6).to_s},

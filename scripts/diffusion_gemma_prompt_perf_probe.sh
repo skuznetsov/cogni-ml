@@ -80,7 +80,7 @@ if [[ ! -x "$bin" ]]; then
 fi
 
 mkdir -p "$(dirname "$out")"
-printf 'status\tcase\tprompt_bytes\tprompt_len\tcanvas_len\tcandidate_count\tload_ms\tprompt_cache_ms\tprompt_cache_tokens_per_ms\tloop_ms_median\tloop_ms_samples\tchosen\tprobs\tartifact\terr_artifact\n' >"$out"
+printf 'status\tcase\tprompt_bytes\tprompt_len\tcanvas_len\tcandidate_count\tload_ms\tprompt_route_ms\tprompt_cache_ms\tprompt_cache_tokens_per_ms\tloop_ms_median\tloop_ms_samples\tchosen\tprobs\tartifact\terr_artifact\n' >"$out"
 
 run_case() {
   local name="$1"
@@ -122,18 +122,18 @@ run_case() {
       }
       NR == 2 {
         found = 1
-        print "ok" "\t" case "\t" bytes "\t" $h["prompt_len"] "\t" $h["canvas_len"] "\t" $h["candidate_count"] "\t" $h["load_ms"] "\t" $h["prompt_cache_ms"] "\t" $h["prompt_cache_tokens_per_ms"] "\t" $h["loop_ms_median"] "\t" $h["loop_ms_samples"] "\t" $h["last_chosen_texts"] "\t" $h["last_argmax_probabilities"] "\t" artifact "\t" err_artifact
+        print "ok" "\t" case "\t" bytes "\t" $h["prompt_len"] "\t" $h["canvas_len"] "\t" $h["candidate_count"] "\t" $h["load_ms"] "\t" $h["prompt_route_ms"] "\t" $h["prompt_cache_ms"] "\t" $h["prompt_cache_tokens_per_ms"] "\t" $h["loop_ms_median"] "\t" $h["loop_ms_samples"] "\t" $h["last_chosen_texts"] "\t" $h["last_argmax_probabilities"] "\t" artifact "\t" err_artifact
       }
       END {
         if (!found) {
           exit 3
         }
       }
-    ' "$tmp" >>"$out" || printf 'failed\t%s\t%s\t\t\t\t\t\t\t\t\t\t\t%s\t%s\n' "$name" "$bytes" "$tmp" "$err" >>"$out"
+    ' "$tmp" >>"$out" || printf 'failed\t%s\t%s\t\t\t\t\t\t\t\t\t\t\t\t%s\t%s\n' "$name" "$bytes" "$tmp" "$err" >>"$out"
   elif [[ "$rc" -eq 124 ]]; then
-    printf 'timeout\t%s\t%s\t\t\t\t\t\t\t\t\t\t\t%s\t%s\n' "$name" "$bytes" "$tmp" "$err" >>"$out"
+    printf 'timeout\t%s\t%s\t\t\t\t\t\t\t\t\t\t\t\t%s\t%s\n' "$name" "$bytes" "$tmp" "$err" >>"$out"
   else
-    printf 'failed\t%s\t%s\t\t\t\t\t\t\t\t\t\t\t%s\t%s\n' "$name" "$bytes" "$tmp" "$err" >>"$out"
+    printf 'failed\t%s\t%s\t\t\t\t\t\t\t\t\t\t\t\t%s\t%s\n' "$name" "$bytes" "$tmp" "$err" >>"$out"
   fi
 }
 

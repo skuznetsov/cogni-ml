@@ -86,7 +86,8 @@ The probe builds or reuses `DIFFUSION_GEMMA_SPARSE_LOOP_BIN` once, runs cases
 sequentially, and records `ok`, `timeout`, or `failed` rows so a slow long case
 does not discard earlier measurements. The main timing column for prompt-size
 work is `prompt_cache_ms`; `loop_ms_median` tracks the bounded sparse candidate
-loop after the prompt cache is built.
+loop after the prompt cache is built. `prompt_route_ms` exposes any prompt MoE
+route precompute work that happens before cache construction.
 
 The sparse smoke defaults to a decode-only prompt cache: it stores the prompt
 attention projections needed by canvas decode but skips materializing final
