@@ -42,6 +42,19 @@ def format_float(value: float) -> str:
     return f"{value:.4f}" if not math.isnan(value) else "NA"
 
 
+def decision_reason(suite_decision: str) -> str:
+    reasons = {
+        "blocked_no_rows": "no_complete_summary_rows",
+        "blocked_by_host_noise": "one_or_more_rows_failed_quiet_gate",
+        "blocked_by_range": "one_or_more_rows_have_range_larger_than_delta",
+        "blocked_missing_delta": "one_or_more_rows_are_missing_loop_delta",
+        "reject_regression": "one_or_more_rows_regressed",
+        "neutral": "one_or_more_rows_are_neutral",
+        "candidate_speedup": "all_rows_are_quiet_range_bounded_speedups",
+    }
+    return reasons.get(suite_decision, "unknown_or_mixed_row_decisions")
+
+
 def summarize_rows(rows: list[dict[str, object]]) -> dict[str, object]:
     counts: dict[str, int] = {}
     loop_speedups: list[float] = []
@@ -59,8 +72,10 @@ def summarize_rows(rows: list[dict[str, object]]) -> dict[str, object]:
         if row.get("loop_decode_context_ms_delta_confidence") == "range_bounded":
             context_bounded += 1
 
+    suite_decision = choose_suite_decision(counts, len(rows))
     return {
-        "suite_decision": choose_suite_decision(counts, len(rows)),
+        "suite_decision": suite_decision,
+        "decision_reason": decision_reason(suite_decision),
         "rows": len(rows),
         "counts": counts,
         "min_loop_speedup": min(loop_speedups) if loop_speedups else float("nan"),
@@ -71,6 +86,7 @@ def summarize_rows(rows: list[dict[str, object]]) -> dict[str, object]:
 
 def print_key_values(summary: dict[str, object]) -> None:
     print(f"suite_decision={summary['suite_decision']}")
+    print(f"decision_reason={summary['decision_reason']}")
     print(f"rows={summary['rows']}")
     counts = summary["counts"]
     if isinstance(counts, dict):
