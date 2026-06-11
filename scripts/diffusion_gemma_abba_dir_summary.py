@@ -73,6 +73,21 @@ def format_ratio(value: float) -> str:
     return f"{value:.4f}" if not math.isnan(value) else "NA"
 
 
+def phase_delta(base: list[dict[str, str]], variant: list[dict[str, str]], metric: str) -> float:
+    return median_value(variant, metric) - median_value(base, metric)
+
+
+def dominant_phase(deltas: dict[str, float], reverse: bool) -> tuple[str, float]:
+    candidates = {key: value for key, value in deltas.items() if not math.isnan(value)}
+    if not candidates:
+        return "NA", float("nan")
+    if reverse:
+        key = max(candidates, key=lambda item: candidates[item])
+    else:
+        key = min(candidates, key=lambda item: candidates[item])
+    return key, candidates[key]
+
+
 def read_rows(root: Path) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for path in sorted(root.glob("run_*.tsv")):
@@ -177,13 +192,17 @@ def summarize(root: Path) -> list[dict[str, object]]:
             summary[f"{metric}_variant_ms"] = format_ms(variant_metric)
             summary[f"{metric}_delta_ms"] = format_ms(delta)
             summary[f"{metric}_speedup"] = format_ratio(1.0 / ratio) if ratio else "NA"
-        tracked_delta = sum(
-            median_value(variant, metric) - median_value(base, metric)
-            for metric in TRACKED_PHASE_METRICS
-        )
+        tracked_deltas = {metric: phase_delta(base, variant, metric) for metric in TRACKED_PHASE_METRICS}
+        tracked_delta = sum(tracked_deltas.values())
         loop_delta = median_value(variant, "loop_ms_median") - median_value(base, "loop_ms_median")
+        positive_phase, positive_delta = dominant_phase(tracked_deltas, reverse=True)
+        negative_phase, negative_delta = dominant_phase(tracked_deltas, reverse=False)
         summary["tracked_phase_delta_sum_ms"] = format_ms(tracked_delta)
         summary["untracked_delta_ms"] = format_ms(loop_delta - tracked_delta)
+        summary["dominant_positive_phase"] = positive_phase
+        summary["dominant_positive_delta_ms"] = format_ms(positive_delta)
+        summary["dominant_negative_phase"] = negative_phase
+        summary["dominant_negative_delta_ms"] = format_ms(negative_delta)
         out.append(summary)
     return out
 
@@ -223,6 +242,10 @@ def main() -> None:
         [
             "tracked_phase_delta_sum_ms",
             "untracked_delta_ms",
+            "dominant_positive_phase",
+            "dominant_positive_delta_ms",
+            "dominant_negative_phase",
+            "dominant_negative_delta_ms",
             "max_process_cpu",
             "max_total_cpu",
             "max_process",
