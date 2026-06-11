@@ -143,6 +143,16 @@ def output_safe_list_text(text : String) : String
   output_safe_text(text).gsub('|', "\\|")
 end
 
+def output_safe_nested_text(text : String) : String
+  output_safe_list_text(text).gsub(',', "\\,")
+end
+
+def decode_candidate_rows(tokenizer : ML::GGUF::Gemma4Tokenizer, candidate_rows : Array(Array(Int32))) : String
+  candidate_rows.map do |row|
+    row.map { |id| output_safe_nested_text(tokenizer.decode([id])) }.join(",")
+  end.join("|")
+end
+
 def parse_candidate_texts(model : String, llama_tokenize : String, raw : String) : Tuple(Array(Int32), Array(String))
   texts = raw.split('|')
   raise "--candidate-texts must contain at least one text" if texts.empty? || texts.any?(&.empty?)
@@ -401,6 +411,7 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"candidate_ids", candidate_rows.first.join(",")},
         {"candidate_texts", candidate_texts ? candidate_texts.not_nil!.map { |text| output_safe_list_text(text) }.join("|") : ""},
         {"candidate_rows", candidate_rows.map { |row| row.join(",") }.join("|")},
+        {"candidate_row_texts", canvas_decoder ? decode_candidate_rows(canvas_decoder.not_nil!, candidate_rows) : ""},
         {"prediction_count", summary.prediction_count.to_s},
         {"accepted_count", summary.accepted_count.to_s},
         {"acceptance_rate", summary.acceptance_rate.to_s},

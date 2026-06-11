@@ -359,6 +359,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - `scripts/diffusion_gemma_sparse_loop_smoke.cr` now supports `--candidate-texts LIST`, where `LIST` is pipe-separated text alternatives that must each tokenize to exactly one token without BOS. Output adds `candidate_texts` next to `candidate_ids`, so qualitative sparse candidate probes can be written without manually looking up token ids.
 - Verification: no-codegen build passed. A real GGUF smoke with `--prompt 'Say:' --canvas 'Hello' --candidate-texts 'Hello|world' --steps 1 --warmups 1 --repeats 2 --format tsv --decode-canvas-text` emitted `candidate_ids=9259,12392`, `candidate_texts=Hello|world`, and non-empty `final_canvas_text`. Adversary checks verified `--candidate-texts 'Hello world'` fails fast before Metal initialization because it encodes to two tokens, and `--candidate-texts` remains mutually exclusive with generated/explicit id candidate modes.
 - Boundary: this is a one-token sparse candidate adapter for local qualitative probes. It is not multi-token candidate generation, full-vocabulary discovery, or quality parity evidence.
+**update 2026-06-10bu:**
+- `scripts/diffusion_gemma_sparse_loop_smoke.cr` now emits `candidate_row_texts` when `--decode-canvas-text` is enabled, decoding every candidate row with row separators matching `candidate_rows`. This makes explicit-id/generated candidate sets inspectable without using `--candidate-texts`.
+- Verification: no-codegen build passed. A real GGUF smoke with `--candidate-ids 9259,12392 --decode-canvas-text` emitted `candidate_row_texts=Hello,world`; the same run without `--decode-canvas-text` kept `candidate_row_texts` empty, preserving default output cost.
+- Boundary: this is TSV/key-value inspection plumbing only. It does not change sparse-loop semantics, candidate selection, or tokenizer oracle boundaries.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified
