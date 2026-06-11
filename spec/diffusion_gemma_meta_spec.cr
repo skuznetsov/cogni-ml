@@ -747,6 +747,12 @@ describe ML::GGUF::DiffusionGemmaCPU do
     loop.step_traces[0].mean_candidate_tokens.should eq(1.0_f32)
     loop.step_traces[0].prediction_ms.should be > 0.0
     loop.step_traces[0].decode_stack_ms.should be > 0.0
+    loop.step_traces[0].decode_qkv_ms.should be >= 0.0
+    loop.step_traces[0].decode_context_ms.should be >= 0.0
+    loop.step_traces[0].decode_attention_out_ms.should be >= 0.0
+    loop.step_traces[0].decode_shared_ffn_ms.should be >= 0.0
+    loop.step_traces[0].decode_moe_ffn_ms.should be >= 0.0
+    loop.step_traces[0].decode_combine_scale_ms.should be >= 0.0
     loop.step_traces[0].output_head_ms.should be >= 0.0
     loop.step_traces[0].prediction_ms.should be >= loop.step_traces[0].decode_stack_ms + loop.step_traces[0].output_head_ms
     loop.step_traces[0].update_ms.should be >= 0.0

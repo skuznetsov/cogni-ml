@@ -99,7 +99,9 @@ those to `CACHE_WARMUPS` and `CACHE_REPEATS` and reports
 timings: `loop_prediction_ms`, `loop_update_ms`, `loop_regenerate_ms`, and
 `loop_proposal_ms`, plus matching sample columns, so prompt-cache work and
 canvas decode-loop work can be optimized separately. `loop_prediction_ms` is
-further split into `loop_decode_stack_ms` and `loop_output_head_ms`.
+further split into `loop_decode_stack_ms` and `loop_output_head_ms`; the decode
+stack is split again into Q/K/V projection, context, attention output, shared
+FFN, MoE FFN, and combine/scale timing columns.
 
 Use cache repeats when separating Metal cold-start effects from steady-state
 prompt projection timing:

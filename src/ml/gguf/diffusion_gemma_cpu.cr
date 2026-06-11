@@ -64,6 +64,12 @@ module ML::GGUF
       getter mean_entropy : Float32
       getter prediction_ms : Float64
       getter decode_stack_ms : Float64
+      getter decode_qkv_ms : Float64
+      getter decode_context_ms : Float64
+      getter decode_attention_out_ms : Float64
+      getter decode_shared_ffn_ms : Float64
+      getter decode_moe_ffn_ms : Float64
+      getter decode_combine_scale_ms : Float64
       getter output_head_ms : Float64
       getter update_ms : Float64
       getter regenerate_ms : Float64
@@ -78,6 +84,12 @@ module ML::GGUF
                      @mean_entropy,
                      @prediction_ms = 0.0,
                      @decode_stack_ms = 0.0,
+                     @decode_qkv_ms = 0.0,
+                     @decode_context_ms = 0.0,
+                     @decode_attention_out_ms = 0.0,
+                     @decode_shared_ffn_ms = 0.0,
+                     @decode_moe_ffn_ms = 0.0,
+                     @decode_combine_scale_ms = 0.0,
                      @output_head_ms = 0.0,
                      @update_ms = 0.0,
                      @regenerate_ms = 0.0,
@@ -113,10 +125,22 @@ module ML::GGUF
     struct BoundedDenoisePredictionTiming
       getter predictions : Array(BoundedDenoisePrediction)
       getter decode_stack_ms : Float64
+      getter decode_qkv_ms : Float64
+      getter decode_context_ms : Float64
+      getter decode_attention_out_ms : Float64
+      getter decode_shared_ffn_ms : Float64
+      getter decode_moe_ffn_ms : Float64
+      getter decode_combine_scale_ms : Float64
       getter output_head_ms : Float64
 
       def initialize(@predictions,
                      @decode_stack_ms,
+                     @decode_qkv_ms,
+                     @decode_context_ms,
+                     @decode_attention_out_ms,
+                     @decode_shared_ffn_ms,
+                     @decode_moe_ffn_ms,
+                     @decode_combine_scale_ms,
                      @output_head_ms)
       end
     end
@@ -125,6 +149,12 @@ module ML::GGUF
       getter update : BoundedCanvasUpdate
       getter prediction_ms : Float64
       getter decode_stack_ms : Float64
+      getter decode_qkv_ms : Float64
+      getter decode_context_ms : Float64
+      getter decode_attention_out_ms : Float64
+      getter decode_shared_ffn_ms : Float64
+      getter decode_moe_ffn_ms : Float64
+      getter decode_combine_scale_ms : Float64
       getter output_head_ms : Float64
       getter update_ms : Float64
       getter regenerate_ms : Float64
@@ -132,9 +162,34 @@ module ML::GGUF
       def initialize(@update,
                      @prediction_ms,
                      @decode_stack_ms,
+                     @decode_qkv_ms,
+                     @decode_context_ms,
+                     @decode_attention_out_ms,
+                     @decode_shared_ffn_ms,
+                     @decode_moe_ffn_ms,
+                     @decode_combine_scale_ms,
                      @output_head_ms,
                      @update_ms,
                      @regenerate_ms)
+      end
+    end
+
+    struct DecodeCanvasRowsTiming
+      getter rows : Array(Float32)
+      getter qkv_ms : Float64
+      getter context_ms : Float64
+      getter attention_out_ms : Float64
+      getter shared_ffn_ms : Float64
+      getter moe_ffn_ms : Float64
+      getter combine_scale_ms : Float64
+
+      def initialize(@rows,
+                     @qkv_ms,
+                     @context_ms,
+                     @attention_out_ms,
+                     @shared_ffn_ms,
+                     @moe_ffn_ms,
+                     @combine_scale_ms)
       end
     end
 
@@ -726,6 +781,22 @@ module ML::GGUF
                                              prompt_cache : PromptLayerCache,
                                              max_layers : Int32 = prompt_cache.layers,
                                              routes_by_layer_by_canvas_row : Array(Array(Array(ExpertRoute)))? = nil) : Array(Float32)
+      decode_canvas_rows_with_prompt_cache_timed(
+        weights: weights,
+        canvas_rows: canvas_rows,
+        mask: mask,
+        prompt_cache: prompt_cache,
+        max_layers: max_layers,
+        routes_by_layer_by_canvas_row: routes_by_layer_by_canvas_row,
+      ).rows
+    end
+
+    def decode_canvas_rows_with_prompt_cache_timed(weights : DiffusionGemmaWeights,
+                                                   canvas_rows : Array(Float32),
+                                                   mask : DiffusionGemmaAttentionMask,
+                                                   prompt_cache : PromptLayerCache,
+                                                   max_layers : Int32 = prompt_cache.layers,
+                                                   routes_by_layer_by_canvas_row : Array(Array(Array(ExpertRoute)))? = nil) : DecodeCanvasRowsTiming
       hp = weights.hparams
       canvas_size = mask.canvas_len * hp.n_embd
       prompt_size = mask.prompt_len * hp.n_embd
@@ -738,9 +809,15 @@ module ML::GGUF
       end
 
       rows = canvas_rows.dup
+      qkv_ms = 0.0
+      context_ms = 0.0
+      attention_out_ms = 0.0
+      shared_ffn_ms = 0.0
+      moe_ffn_ms = 0.0
+      combine_scale_ms = 0.0
       max_layers.times do |il|
         routes = routes_by_layer_by_canvas_row ? routes_by_layer_by_canvas_row.not_nil![il] : nil
-        rows = layer_forward_decode_canvas_rows_with_prompt_projections(
+        timed = layer_forward_decode_canvas_rows_with_prompt_projections_timed(
           weights: weights,
           il: il,
           prompt_projections: prompt_cache.projections_by_layer[il],
@@ -748,8 +825,15 @@ module ML::GGUF
           mask: mask,
           routes_by_canvas_row: routes,
         )
+        rows = timed.rows
+        qkv_ms += timed.qkv_ms
+        context_ms += timed.context_ms
+        attention_out_ms += timed.attention_out_ms
+        shared_ffn_ms += timed.shared_ffn_ms
+        moe_ffn_ms += timed.moe_ffn_ms
+        combine_scale_ms += timed.combine_scale_ms
       end
-      rows
+      DecodeCanvasRowsTiming.new(rows, qkv_ms, context_ms, attention_out_ms, shared_ffn_ms, moe_ffn_ms, combine_scale_ms)
     end
 
     def layer_forward_unified_rows(weights : DiffusionGemmaWeights,
@@ -808,7 +892,24 @@ module ML::GGUF
                                                                  canvas_rows : Array(Float32),
                                                                  mask : DiffusionGemmaAttentionMask,
                                                                  routes_by_canvas_row : Array(Array(ExpertRoute))? = nil) : Array(Float32)
+      layer_forward_decode_canvas_rows_with_prompt_projections_timed(
+        weights: weights,
+        il: il,
+        prompt_projections: prompt_projections,
+        canvas_rows: canvas_rows,
+        mask: mask,
+        routes_by_canvas_row: routes_by_canvas_row,
+      ).rows
+    end
+
+    def layer_forward_decode_canvas_rows_with_prompt_projections_timed(weights : DiffusionGemmaWeights,
+                                                                       il : Int32,
+                                                                       prompt_projections : Array(AttentionProjection),
+                                                                       canvas_rows : Array(Float32),
+                                                                       mask : DiffusionGemmaAttentionMask,
+                                                                       routes_by_canvas_row : Array(Array(ExpertRoute))? = nil) : DecodeCanvasRowsTiming
       hp = weights.hparams
+      lw = weights.layers[il]
       canvas_size = mask.canvas_len * hp.n_embd
       raise ArgumentError.new("prompt projection count mismatch") unless prompt_projections.size == mask.prompt_len
       raise ArgumentError.new("canvas rows size mismatch: #{canvas_rows.size} != #{canvas_size}") unless canvas_rows.size == canvas_size
@@ -816,22 +917,49 @@ module ML::GGUF
         raise ArgumentError.new("routes_by_canvas_row size mismatch: #{supplied_routes.size} != #{mask.canvas_len}") unless supplied_routes.size == mask.canvas_len
       end
 
+      qkv_t0 = Time.instant
       canvas_projections = Array(AttentionProjection).new(mask.canvas_len) do |pos|
         x = canvas_rows[pos * hp.n_embd, hp.n_embd]
         attention_project_normed(weights, il, x, mask.prompt_len + pos)
       end
+      qkv_ms = (Time.instant - qkv_t0).total_milliseconds
+      context_ms = 0.0
+      attention_out_ms = 0.0
+      shared_ffn_ms = 0.0
+      moe_ffn_ms = 0.0
+      combine_scale_ms = 0.0
       result = Array(Float32).new(canvas_size, 0.0_f32)
       mask.canvas_len.times do |canvas_pos|
         x = canvas_rows[canvas_pos * hp.n_embd, hp.n_embd]
+        context_t0 = Time.instant
         context = attention_context_decode(prompt_projections, canvas_projections, hp, il, canvas_query_index: canvas_pos, mask: mask)
-        layer_row = if supplied_routes = routes_by_canvas_row
-                      layer_output_from_context(weights, il, x, context, canvas: true, routes: supplied_routes[canvas_pos])
-                    else
-                      layer_output_from_context(weights, il, x, context, canvas: true)
-                    end
+        context_ms += (Time.instant - context_t0).total_milliseconds
+
+        attention_t0 = Time.instant
+        projected = attention_output_project(weights, il, context)
+        normed = Gemma4CPU.rms_norm(projected, lw.post_attention_norm, hp.rms_eps)
+        attn_out = Array(Float32).new(hp.n_embd) { |i| x[i] + normed[i] }
+        attention_out_ms += (Time.instant - attention_t0).total_milliseconds
+
+        shared_t0 = Time.instant
+        shared = shared_dense_ffn(weights, il, attn_out)
+        shared_ffn_ms += (Time.instant - shared_t0).total_milliseconds
+
+        moe_t0 = Time.instant
+        moe = if supplied_routes = routes_by_canvas_row
+                moe_ffn(weights, il, attn_out, supplied_routes[canvas_pos])
+              else
+                moe_ffn(weights, il, attn_out)
+              end
+        moe_ffn_ms += (Time.instant - moe_t0).total_milliseconds
+
+        combine_t0 = Time.instant
+        ffn_out = ffn_residual_from_parts(weights, il, attn_out, shared, moe)
+        layer_row = scale_layer_output(weights, il, ffn_out, canvas: true)
+        combine_scale_ms += (Time.instant - combine_t0).total_milliseconds
         copy_row!(result, canvas_pos, hp.n_embd, layer_row)
       end
-      result
+      DecodeCanvasRowsTiming.new(result, qkv_ms, context_ms, attention_out_ms, shared_ffn_ms, moe_ffn_ms, combine_scale_ms)
     end
 
     def prompt_attention_projections(weights : DiffusionGemmaWeights,
@@ -1113,7 +1241,7 @@ module ML::GGUF
       end
 
       decode_t0 = Time.instant
-      hidden_rows = decode_canvas_rows_with_prompt_cache(
+      decode_timing = decode_canvas_rows_with_prompt_cache_timed(
         weights: weights,
         canvas_rows: canvas_rows,
         mask: mask,
@@ -1125,11 +1253,21 @@ module ML::GGUF
 
       output_t0 = Time.instant
       predictions = Array(BoundedDenoisePrediction).new(mask.canvas_len) do |canvas_pos|
-        hidden = hidden_rows[canvas_pos * hp.n_embd, hp.n_embd]
+        hidden = decode_timing.rows[canvas_pos * hp.n_embd, hp.n_embd]
         sample_u = sample_us ? sample_us.not_nil![canvas_pos] : 0.0_f32
         bounded_denoise_prediction(weights, hidden, candidate_token_ids_by_canvas_row[canvas_pos], temp_inv, sample_u)
       end
-      BoundedDenoisePredictionTiming.new(predictions, decode_stack_ms, (Time.instant - output_t0).total_milliseconds)
+      BoundedDenoisePredictionTiming.new(
+        predictions,
+        decode_stack_ms,
+        decode_timing.qkv_ms,
+        decode_timing.context_ms,
+        decode_timing.attention_out_ms,
+        decode_timing.shared_ffn_ms,
+        decode_timing.moe_ffn_ms,
+        decode_timing.combine_scale_ms,
+        (Time.instant - output_t0).total_milliseconds,
+      )
     end
 
     def decode_canvas_bounded_step(weights : DiffusionGemmaWeights,
@@ -1212,7 +1350,20 @@ module ML::GGUF
       )
       regenerate_ms = (Time.instant - regenerate_t0).total_milliseconds
       timed_update = BoundedCanvasUpdate.new(update.updated_canvas_tokens, update.accepted, update.predictions, updated_rows)
-      BoundedDenoiseStepTiming.new(timed_update, prediction_ms, prediction_timing.decode_stack_ms, prediction_timing.output_head_ms, update_ms, regenerate_ms)
+      BoundedDenoiseStepTiming.new(
+        timed_update,
+        prediction_ms,
+        prediction_timing.decode_stack_ms,
+        prediction_timing.decode_qkv_ms,
+        prediction_timing.decode_context_ms,
+        prediction_timing.decode_attention_out_ms,
+        prediction_timing.decode_shared_ffn_ms,
+        prediction_timing.decode_moe_ffn_ms,
+        prediction_timing.decode_combine_scale_ms,
+        prediction_timing.output_head_ms,
+        update_ms,
+        regenerate_ms,
+      )
     end
 
     def decode_canvas_bounded_loop(weights : DiffusionGemmaWeights,
@@ -1266,7 +1417,7 @@ module ML::GGUF
         if use_sparse_self_conditioning
           regenerate_t0 = Time.instant
           rows = canvas_rows_from_prediction_self_conditioning(weights, tokens, update.predictions, sc_temp_inv, sc_use)
-          timed = BoundedDenoiseStepTiming.new(update, timed.prediction_ms, timed.decode_stack_ms, timed.output_head_ms, timed.update_ms, (Time.instant - regenerate_t0).total_milliseconds)
+          timed = BoundedDenoiseStepTiming.new(update, timed.prediction_ms, timed.decode_stack_ms, timed.decode_qkv_ms, timed.decode_context_ms, timed.decode_attention_out_ms, timed.decode_shared_ffn_ms, timed.decode_moe_ffn_ms, timed.decode_combine_scale_ms, timed.output_head_ms, timed.update_ms, (Time.instant - regenerate_t0).total_milliseconds)
           update = BoundedCanvasUpdate.new(update.updated_canvas_tokens, update.accepted, update.predictions, rows)
         else
           rows = update.updated_canvas_rows || rows
@@ -1337,7 +1488,7 @@ module ML::GGUF
         if use_sparse_self_conditioning
           regenerate_t0 = Time.instant
           rows = canvas_rows_from_prediction_self_conditioning(weights, tokens, update.predictions, sc_temp_inv, sc_use)
-          timed = BoundedDenoiseStepTiming.new(update, timed.prediction_ms, timed.decode_stack_ms, timed.output_head_ms, timed.update_ms, (Time.instant - regenerate_t0).total_milliseconds)
+          timed = BoundedDenoiseStepTiming.new(update, timed.prediction_ms, timed.decode_stack_ms, timed.decode_qkv_ms, timed.decode_context_ms, timed.decode_attention_out_ms, timed.decode_shared_ffn_ms, timed.decode_moe_ffn_ms, timed.decode_combine_scale_ms, timed.output_head_ms, timed.update_ms, (Time.instant - regenerate_t0).total_milliseconds)
           update = BoundedCanvasUpdate.new(update.updated_canvas_tokens, update.accepted, update.predictions, rows)
         else
           rows = update.updated_canvas_rows || rows
@@ -1420,6 +1571,12 @@ module ML::GGUF
         mean_entropy: mean_entropy,
         prediction_ms: timing ? timing.not_nil!.prediction_ms : 0.0,
         decode_stack_ms: timing ? timing.not_nil!.decode_stack_ms : 0.0,
+        decode_qkv_ms: timing ? timing.not_nil!.decode_qkv_ms : 0.0,
+        decode_context_ms: timing ? timing.not_nil!.decode_context_ms : 0.0,
+        decode_attention_out_ms: timing ? timing.not_nil!.decode_attention_out_ms : 0.0,
+        decode_shared_ffn_ms: timing ? timing.not_nil!.decode_shared_ffn_ms : 0.0,
+        decode_moe_ffn_ms: timing ? timing.not_nil!.decode_moe_ffn_ms : 0.0,
+        decode_combine_scale_ms: timing ? timing.not_nil!.decode_combine_scale_ms : 0.0,
         output_head_ms: timing ? timing.not_nil!.output_head_ms : 0.0,
         update_ms: timing ? timing.not_nil!.update_ms : 0.0,
         regenerate_ms: timing ? timing.not_nil!.regenerate_ms : 0.0,

@@ -392,6 +392,12 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
       loop_samples = [] of Float64
       loop_prediction_ms_samples = [] of Float64
       loop_decode_stack_ms_samples = [] of Float64
+      loop_decode_qkv_ms_samples = [] of Float64
+      loop_decode_context_ms_samples = [] of Float64
+      loop_decode_attention_out_ms_samples = [] of Float64
+      loop_decode_shared_ffn_ms_samples = [] of Float64
+      loop_decode_moe_ffn_ms_samples = [] of Float64
+      loop_decode_combine_scale_ms_samples = [] of Float64
       loop_output_head_ms_samples = [] of Float64
       loop_update_ms_samples = [] of Float64
       loop_regenerate_ms_samples = [] of Float64
@@ -437,6 +443,12 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
           loop_samples << elapsed_ms
           loop_prediction_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.prediction_ms)
           loop_decode_stack_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.decode_stack_ms)
+          loop_decode_qkv_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.decode_qkv_ms)
+          loop_decode_context_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.decode_context_ms)
+          loop_decode_attention_out_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.decode_attention_out_ms)
+          loop_decode_shared_ffn_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.decode_shared_ffn_ms)
+          loop_decode_moe_ffn_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.decode_moe_ffn_ms)
+          loop_decode_combine_scale_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.decode_combine_scale_ms)
           loop_output_head_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.output_head_ms)
           loop_update_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.update_ms)
           loop_regenerate_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.regenerate_ms)
@@ -450,6 +462,12 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
       loop_ms_max = loop_samples.max
       loop_prediction_ms = median(loop_prediction_ms_samples)
       loop_decode_stack_ms = median(loop_decode_stack_ms_samples)
+      loop_decode_qkv_ms = median(loop_decode_qkv_ms_samples)
+      loop_decode_context_ms = median(loop_decode_context_ms_samples)
+      loop_decode_attention_out_ms = median(loop_decode_attention_out_ms_samples)
+      loop_decode_shared_ffn_ms = median(loop_decode_shared_ffn_ms_samples)
+      loop_decode_moe_ffn_ms = median(loop_decode_moe_ffn_ms_samples)
+      loop_decode_combine_scale_ms = median(loop_decode_combine_scale_ms_samples)
       loop_output_head_ms = median(loop_output_head_ms_samples)
       loop_update_ms = median(loop_update_ms_samples)
       loop_regenerate_ms = median(loop_regenerate_ms_samples)
@@ -529,12 +547,24 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"loop_ms_samples", loop_samples.map { |v| v.round(3) }.join(",")},
         {"loop_prediction_ms", loop_prediction_ms.round(3).to_s},
         {"loop_decode_stack_ms", loop_decode_stack_ms.round(3).to_s},
+        {"loop_decode_qkv_ms", loop_decode_qkv_ms.round(3).to_s},
+        {"loop_decode_context_ms", loop_decode_context_ms.round(3).to_s},
+        {"loop_decode_attention_out_ms", loop_decode_attention_out_ms.round(3).to_s},
+        {"loop_decode_shared_ffn_ms", loop_decode_shared_ffn_ms.round(3).to_s},
+        {"loop_decode_moe_ffn_ms", loop_decode_moe_ffn_ms.round(3).to_s},
+        {"loop_decode_combine_scale_ms", loop_decode_combine_scale_ms.round(3).to_s},
         {"loop_output_head_ms", loop_output_head_ms.round(3).to_s},
         {"loop_update_ms", loop_update_ms.round(3).to_s},
         {"loop_regenerate_ms", loop_regenerate_ms.round(3).to_s},
         {"loop_proposal_ms", loop_proposal_ms.round(3).to_s},
         {"loop_prediction_ms_samples", loop_prediction_ms_samples.map { |v| v.round(3) }.join(",")},
         {"loop_decode_stack_ms_samples", loop_decode_stack_ms_samples.map { |v| v.round(3) }.join(",")},
+        {"loop_decode_qkv_ms_samples", loop_decode_qkv_ms_samples.map { |v| v.round(3) }.join(",")},
+        {"loop_decode_context_ms_samples", loop_decode_context_ms_samples.map { |v| v.round(3) }.join(",")},
+        {"loop_decode_attention_out_ms_samples", loop_decode_attention_out_ms_samples.map { |v| v.round(3) }.join(",")},
+        {"loop_decode_shared_ffn_ms_samples", loop_decode_shared_ffn_ms_samples.map { |v| v.round(3) }.join(",")},
+        {"loop_decode_moe_ffn_ms_samples", loop_decode_moe_ffn_ms_samples.map { |v| v.round(3) }.join(",")},
+        {"loop_decode_combine_scale_ms_samples", loop_decode_combine_scale_ms_samples.map { |v| v.round(3) }.join(",")},
         {"loop_output_head_ms_samples", loop_output_head_ms_samples.map { |v| v.round(3) }.join(",")},
         {"loop_update_ms_samples", loop_update_ms_samples.map { |v| v.round(3) }.join(",")},
         {"loop_regenerate_ms_samples", loop_regenerate_ms_samples.map { |v| v.round(3) }.join(",")},
