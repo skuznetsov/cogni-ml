@@ -261,6 +261,8 @@ module ML::GGUF
       getter projection_norm_ms_by_layer : Array(Float64)
       getter projection_matmul_ms_by_layer : Array(Float64)
       getter projection_assemble_ms_by_layer : Array(Float64)
+      getter projection_copy_ms_by_layer : Array(Float64)
+      getter projection_head_norm_ms_by_layer : Array(Float64)
       getter projection_rope_ms_by_layer : Array(Float64)
       getter materialize_ms_by_layer : Array(Float64)
 
@@ -270,6 +272,8 @@ module ML::GGUF
                      @projection_norm_ms_by_layer = [] of Float64,
                      @projection_matmul_ms_by_layer = [] of Float64,
                      @projection_assemble_ms_by_layer = [] of Float64,
+                     @projection_copy_ms_by_layer = [] of Float64,
+                     @projection_head_norm_ms_by_layer = [] of Float64,
                      @projection_rope_ms_by_layer = [] of Float64,
                      @materialize_ms_by_layer = [] of Float64)
       end
@@ -284,12 +288,16 @@ module ML::GGUF
       getter norm_ms : Float64
       getter matmul_ms : Float64
       getter assemble_ms : Float64
+      getter copy_ms : Float64
+      getter head_norm_ms : Float64
       getter rope_ms : Float64
 
       def initialize(@projections,
                      @norm_ms,
                      @matmul_ms,
                      @assemble_ms,
+                     @copy_ms,
+                     @head_norm_ms,
                      @rope_ms)
       end
     end
@@ -787,6 +795,8 @@ module ML::GGUF
       projection_norm_ms_by_layer = [] of Float64
       projection_matmul_ms_by_layer = [] of Float64
       projection_assemble_ms_by_layer = [] of Float64
+      projection_copy_ms_by_layer = [] of Float64
+      projection_head_norm_ms_by_layer = [] of Float64
       projection_rope_ms_by_layer = [] of Float64
       materialize_ms_by_layer = [] of Float64
       max_layers.times do |il|
@@ -797,6 +807,8 @@ module ML::GGUF
         projection_norm_ms_by_layer << timed_projections.norm_ms
         projection_matmul_ms_by_layer << timed_projections.matmul_ms
         projection_assemble_ms_by_layer << timed_projections.assemble_ms
+        projection_copy_ms_by_layer << timed_projections.copy_ms
+        projection_head_norm_ms_by_layer << timed_projections.head_norm_ms
         projection_rope_ms_by_layer << timed_projections.rope_ms
         projections_by_layer << projections
         break if !materialize_final_rows && il == max_layers - 1
@@ -814,6 +826,8 @@ module ML::GGUF
         projection_norm_ms_by_layer,
         projection_matmul_ms_by_layer,
         projection_assemble_ms_by_layer,
+        projection_copy_ms_by_layer,
+        projection_head_norm_ms_by_layer,
         projection_rope_ms_by_layer,
         materialize_ms_by_layer,
       )
@@ -1057,21 +1071,29 @@ module ML::GGUF
       reused_k_as_v = lw.attn_v_qw.nil?
 
       assemble_ms = 0.0
+      copy_ms = 0.0
+      head_norm_ms = 0.0
       rope_ms = 0.0
       projections = Array(AttentionProjection).new(mask.prompt_len) do |pos|
-        assemble_t0 = Time.instant
+        copy_t0 = Time.instant
         q = q_rows[pos * q_dim, q_dim]
         k = k_rows[pos * kv_dim, kv_dim]
         v = v_rows[pos * kv_dim, kv_dim]
         proj = AttentionProjection.new(q, k, v, reused_k_as_v)
+        copy_elapsed = (Time.instant - copy_t0).total_milliseconds
+        copy_ms += copy_elapsed
+
+        head_norm_t0 = Time.instant
         normalize_attention_projection!(proj, lw, hp, il)
-        assemble_ms += (Time.instant - assemble_t0).total_milliseconds
+        head_norm_elapsed = (Time.instant - head_norm_t0).total_milliseconds
+        head_norm_ms += head_norm_elapsed
+        assemble_ms += copy_elapsed + head_norm_elapsed
         rope_t0 = Time.instant
         apply_rope_to_qk!(proj, hp, il, pos, weights.rope_freqs)
         rope_ms += (Time.instant - rope_t0).total_milliseconds
         proj
       end
-      PromptProjectionTiming.new(projections, norm_ms, matmul_ms, assemble_ms, rope_ms)
+      PromptProjectionTiming.new(projections, norm_ms, matmul_ms, assemble_ms, copy_ms, head_norm_ms, rope_ms)
     end
 
     def prompt_projection_metal_enabled? : Bool
