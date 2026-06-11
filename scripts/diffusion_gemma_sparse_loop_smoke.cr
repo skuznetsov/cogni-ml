@@ -575,6 +575,7 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"load_ms", load_ms.round(3).to_s},
         {"prompt_route_ms", prompt_route_ms.round(3).to_s},
         {"prompt_projection_backend", ML::GGUF::DiffusionGemmaCPU.prompt_projection_metal_enabled? && tokens.size >= ML::GGUF::DiffusionGemmaCPU.prompt_projection_metal_min_batch ? "metal" : "cpu"},
+        {"prompt_projection_fused_norm_rope", ML::GGUF::DiffusionGemmaCPU.prompt_projection_fused_norm_rope_enabled?.to_s},
         {"prompt_cache_ms", cache_ms.round(3).to_s},
         {"prompt_projection_ms", prompt_projection_ms.round(3).to_s},
         {"prompt_projection_norm_ms", prompt_projection_norm_ms.round(3).to_s},

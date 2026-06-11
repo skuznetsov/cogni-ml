@@ -596,6 +596,47 @@ module ML::GGUF
       {table_ms, apply_ms, q_apply_ms, k_apply_ms}
     end
 
+    private def normalize_rope_attention_projection_timed!(proj : AttentionProjection,
+                                                           lw : DiffusionGemmaLayerWeights,
+                                                           hp : DiffusionGemmaHparams,
+                                                           il : Int32,
+                                                           pos : Int32,
+                                                           rope_freqs : Array(Float32)? = nil) : {Float64, Float64, Float64, Float64}
+      head_dim = hp.head_dim_for_layer(il)
+      n_head = hp.n_head
+      n_head_kv = hp.n_head_kv(il)
+      n_rot = hp.rope_dim_for_layer(il)
+      base = hp.rope_freq_base_for_layer(il)
+      freqs = hp.full_attention?(il) ? rope_freqs : nil
+
+      raise ArgumentError.new("q projection size mismatch at layer #{il}") unless proj.q.size == n_head * head_dim
+      raise ArgumentError.new("k projection size mismatch at layer #{il}") unless proj.k.size == n_head_kv * head_dim
+      raise ArgumentError.new("v projection size mismatch at layer #{il}") unless proj.v.size == n_head_kv * head_dim
+
+      table_t0 = Time.instant
+      cos_table, sin_table = rope_tables(pos, n_rot, base, freqs)
+      table_ms = (Time.instant - table_t0).total_milliseconds
+
+      q_t0 = Time.instant
+      n_head.times do |h|
+        fast_rms_norm_rope_neox_slice!(proj.q, h * head_dim, head_dim, lw.attn_q_norm, hp.rms_eps, n_rot, cos_table, sin_table)
+      end
+      q_ms = (Time.instant - q_t0).total_milliseconds
+
+      k_t0 = Time.instant
+      n_head_kv.times do |h|
+        fast_rms_norm_rope_neox_slice!(proj.k, h * head_dim, head_dim, lw.attn_k_norm, hp.rms_eps, n_rot, cos_table, sin_table)
+      end
+      k_ms = (Time.instant - k_t0).total_milliseconds
+
+      v_t0 = Time.instant
+      n_head_kv.times do |h|
+        fast_rms_norm_plain_slice!(proj.v, h * head_dim, head_dim, hp.rms_eps)
+      end
+      v_ms = (Time.instant - v_t0).total_milliseconds
+      {q_ms, k_ms, v_ms, table_ms}
+    end
+
     def attention_context_unified(projections : Array(AttentionProjection),
                                   hp : DiffusionGemmaHparams,
                                   il : Int32,
@@ -1200,25 +1241,42 @@ module ML::GGUF
         copy_elapsed = (Time.instant - copy_t0).total_milliseconds
         copy_ms += copy_elapsed
 
-        head_norm_t0 = Time.instant
-        q_elapsed, k_elapsed, v_elapsed = normalize_attention_projection_timed!(proj, lw, hp, il)
-        head_norm_elapsed = (Time.instant - head_norm_t0).total_milliseconds
-        q_norm_ms += q_elapsed
-        k_norm_ms += k_elapsed
-        v_norm_ms += v_elapsed
-        head_norm_ms += head_norm_elapsed
-        assemble_ms += copy_elapsed + head_norm_elapsed
-        rope_t0 = Time.instant
-        table_elapsed, apply_elapsed, q_apply_elapsed, k_apply_elapsed = apply_rope_to_qk_timed!(proj, hp, il, pos, weights.rope_freqs)
-        rope_elapsed = (Time.instant - rope_t0).total_milliseconds
-        rope_table_ms += table_elapsed
-        rope_apply_ms += apply_elapsed
-        rope_q_apply_ms += q_apply_elapsed
-        rope_k_apply_ms += k_apply_elapsed
-        rope_ms += rope_elapsed
+        if prompt_projection_fused_norm_rope_enabled?
+          head_norm_t0 = Time.instant
+          q_elapsed, k_elapsed, v_elapsed, table_elapsed = normalize_rope_attention_projection_timed!(proj, lw, hp, il, pos, weights.rope_freqs)
+          head_norm_elapsed = (Time.instant - head_norm_t0).total_milliseconds
+          q_norm_ms += q_elapsed
+          k_norm_ms += k_elapsed
+          v_norm_ms += v_elapsed
+          head_norm_ms += head_norm_elapsed
+          assemble_ms += copy_elapsed + head_norm_elapsed
+          rope_table_ms += table_elapsed
+          rope_ms += table_elapsed
+        else
+          head_norm_t0 = Time.instant
+          q_elapsed, k_elapsed, v_elapsed = normalize_attention_projection_timed!(proj, lw, hp, il)
+          head_norm_elapsed = (Time.instant - head_norm_t0).total_milliseconds
+          q_norm_ms += q_elapsed
+          k_norm_ms += k_elapsed
+          v_norm_ms += v_elapsed
+          head_norm_ms += head_norm_elapsed
+          assemble_ms += copy_elapsed + head_norm_elapsed
+          rope_t0 = Time.instant
+          table_elapsed, apply_elapsed, q_apply_elapsed, k_apply_elapsed = apply_rope_to_qk_timed!(proj, hp, il, pos, weights.rope_freqs)
+          rope_elapsed = (Time.instant - rope_t0).total_milliseconds
+          rope_table_ms += table_elapsed
+          rope_apply_ms += apply_elapsed
+          rope_q_apply_ms += q_apply_elapsed
+          rope_k_apply_ms += k_apply_elapsed
+          rope_ms += rope_elapsed
+        end
         proj
       end
       PromptProjectionTiming.new(projections, norm_ms, matmul_ms, assemble_ms, copy_ms, head_norm_ms, q_norm_ms, k_norm_ms, v_norm_ms, rope_ms, rope_table_ms, rope_apply_ms, rope_q_apply_ms, rope_k_apply_ms)
+    end
+
+    def prompt_projection_fused_norm_rope_enabled? : Bool
+      ENV["DIFFUSION_GEMMA_FUSED_QK_NORM_ROPE"]? == "1"
     end
 
     def prompt_projection_metal_enabled? : Bool
@@ -2129,6 +2187,46 @@ module ML::GGUF
         x1 = x_ptr[i + half]
         x_ptr[i] = x0 * cos_ptr[i] - x1 * sin_ptr[i]
         x_ptr[i + half] = x0 * sin_ptr[i] + x1 * cos_ptr[i]
+        i += 1
+      end
+    end
+
+    private def fast_rms_norm_rope_neox_slice!(x : Array(Float32), offset : Int32, len : Int32,
+                                               w : Array(Float32), eps : Float32,
+                                               n_rot : Int32,
+                                               cos_table : Array(Float32),
+                                               sin_table : Array(Float32)) : Nil
+      raise ArgumentError.new("rms_norm_rope weight size mismatch: #{w.size} != #{len}") unless w.size == len
+      raise ArgumentError.new("rope n_rot must be even") unless n_rot.even?
+      raise ArgumentError.new("rope n_rot #{n_rot} exceeds len #{len}") if n_rot > len
+      raise ArgumentError.new("rms_norm_rope slice out of bounds") if offset < 0 || len < 0 || offset + len > x.size
+      raise ArgumentError.new("rope table size mismatch") unless cos_table.size == n_rot // 2 && sin_table.size == n_rot // 2
+
+      x_ptr = x.to_unsafe + offset
+      ss = 0.0_f64
+      i = 0
+      while i < len
+        v = x_ptr[i]
+        ss += v.to_f64 * v.to_f64
+        i += 1
+      end
+      inv_rms = (1.0 / Math.sqrt(ss / len.to_f64 + eps.to_f64)).to_f32
+      w_ptr = w.to_unsafe
+      cos_ptr = cos_table.to_unsafe
+      sin_ptr = sin_table.to_unsafe
+      half = n_rot // 2
+      i = 0
+      while i < half
+        x0 = x_ptr[i] * inv_rms * w_ptr[i]
+        x1_idx = i + half
+        x1 = x_ptr[x1_idx] * inv_rms * w_ptr[x1_idx]
+        x_ptr[i] = x0 * cos_ptr[i] - x1 * sin_ptr[i]
+        x_ptr[x1_idx] = x0 * sin_ptr[i] + x1 * cos_ptr[i]
+        i += 1
+      end
+      i = n_rot
+      while i < len
+        x_ptr[i] = x_ptr[i] * inv_rms * w_ptr[i]
         i += 1
       end
     end

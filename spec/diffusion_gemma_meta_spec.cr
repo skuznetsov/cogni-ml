@@ -656,6 +656,56 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
   end
 
+  it "keeps fused prompt QK norm and RoPE projection parity" do
+    pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
+
+    w = ML::GGUF::DiffusionGemmaWeights.from_gguf(DIFFUSION_GEMMA_26B_Q4KM)
+    hp = w.hparams
+    prompt0 = ML::GGUF::DiffusionGemmaCPU.scaled_embedding_lookup(w, 1)
+    prompt1 = ML::GGUF::DiffusionGemmaCPU.scaled_embedding_lookup(w, 2)
+    prompt_rows = prompt0 + prompt1
+    mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: 2, canvas_len: 1, sliding_window: 3)
+    old_fused = ENV["DIFFUSION_GEMMA_FUSED_QK_NORM_ROPE"]?
+    old_metal_off = ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_OFF"]?
+
+    begin
+      ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_OFF"] = "1"
+      ENV.delete("DIFFUSION_GEMMA_FUSED_QK_NORM_ROPE")
+      base = [0, 5].map do |il|
+        ML::GGUF::DiffusionGemmaCPU.prompt_attention_projections(w, il, prompt_rows, mask)
+      end
+
+      ENV["DIFFUSION_GEMMA_FUSED_QK_NORM_ROPE"] = "1"
+      fused = [0, 5].map do |il|
+        ML::GGUF::DiffusionGemmaCPU.prompt_attention_projections(w, il, prompt_rows, mask)
+      end
+
+      base.each_with_index do |base_layer, layer_index|
+        fused_layer = fused[layer_index]
+        base_layer.each_with_index do |base_projection, pos|
+          fused_projection = fused_layer[pos]
+          fused_projection.q.should eq(base_projection.q)
+          fused_projection.k.should eq(base_projection.k)
+          fused_projection.v.should eq(base_projection.v)
+          fused_projection.reused_k_as_v.should eq(base_projection.reused_k_as_v)
+        end
+      end
+      hp.full_attention?(5).should be_true
+      hp.sliding_window?(0).should be_true
+    ensure
+      if old_fused
+        ENV["DIFFUSION_GEMMA_FUSED_QK_NORM_ROPE"] = old_fused
+      else
+        ENV.delete("DIFFUSION_GEMMA_FUSED_QK_NORM_ROPE")
+      end
+      if old_metal_off
+        ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_OFF"] = old_metal_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_PROMPT_PROJ_METAL_OFF")
+      end
+    end
+  end
+
   it "decodes canvas rows through a bounded prompt layer cache" do
     pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
 
