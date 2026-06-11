@@ -375,6 +375,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Added `scripts/diffusion_gemma_text_probe.sh`, a one-command text-first wrapper around the bounded sparse-loop smoke. It defaults to `PROMPT='Say:'`, `CANVAS='Hello'`, `CANDIDATES='Hello|world'`, TSV output, and `--decode-canvas-text`, while still passing through extra smoke flags.
 - Verification: shell syntax passed; invalid numeric env and empty pipe-separated candidate entries fail closed before model execution. A real default wrapper run on the local GGUF emitted `prompt_source=text`, `canvas_source=text`, `candidate_texts=Hello|world`, non-empty `last_chosen_texts`, and non-empty probability diagnostics.
 - Boundary: this is demo/workflow plumbing for the native bounded sparse prototype. It does not change model execution, sparse candidate semantics, or tokenizer oracle boundaries.
+**update 2026-06-10by:**
+- `scripts/diffusion_gemma_text_probe.sh` now supports `EXPECT_CHOSEN=TEXT`, validating the first TSV data row's `last_chosen_texts` after printing the smoke output. It also supports `SMOKE_RUNNER` override for wrapper-level harnessing.
+- Verification: shell syntax passed; `EXPECT_CHOSEN` with `FORMAT=keyvalue` and invalid numeric env values fail closed before model execution. A real GGUF wrapper run with `EXPECT_CHOSEN=Hello` emitted `status=ok`, `last_chosen_texts=Hello`, and passed the wrapper assertion; a mismatch run with `EXPECT_CHOSEN=world` failed with `expected last_chosen_texts=world, got Hello`.
+- Boundary: this is a regression gate for the text probe wrapper. It does not change model execution, candidate scoring, or the bounded sparse-loop output contract.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified

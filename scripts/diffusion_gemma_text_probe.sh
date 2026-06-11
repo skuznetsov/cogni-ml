@@ -10,6 +10,8 @@ steps="${STEPS:-1}"
 warmups="${WARMUPS:-1}"
 repeats="${REPEATS:-2}"
 format="${FORMAT:-tsv}"
+expect_chosen="${EXPECT_CHOSEN:-}"
+smoke_runner="${SMOKE_RUNNER:-$repo_root/scripts/diffusion_gemma_sparse_loop_smoke.sh}"
 
 case "$format" in
   keyvalue|tsv) ;;
@@ -52,13 +54,57 @@ if [[ "$repeats" -lt 1 ]]; then
   exit 2
 fi
 
-exec "$repo_root/scripts/diffusion_gemma_sparse_loop_smoke.sh" \
-  --prompt "$prompt" \
-  --canvas "$canvas" \
-  --candidate-texts "$candidates" \
-  --steps "$steps" \
-  --warmups "$warmups" \
-  --repeats "$repeats" \
-  --format "$format" \
-  --decode-canvas-text \
+if [[ -n "$expect_chosen" && "$format" != "tsv" ]]; then
+  echo "EXPECT_CHOSEN requires FORMAT=tsv" >&2
+  exit 2
+fi
+
+smoke_cmd=(
+  "$smoke_runner"
+  --prompt "$prompt"
+  --canvas "$canvas"
+  --candidate-texts "$candidates"
+  --steps "$steps"
+  --warmups "$warmups"
+  --repeats "$repeats"
+  --format "$format"
+  --decode-canvas-text
   "$@"
+)
+
+if [[ -z "$expect_chosen" ]]; then
+  exec "${smoke_cmd[@]}"
+fi
+
+tmp_out="$(mktemp "${TMPDIR:-/tmp}/diffusion_gemma_text_probe.XXXXXX.tsv")"
+trap 'rm -f "$tmp_out"' EXIT
+
+"${smoke_cmd[@]}" >"$tmp_out"
+cat "$tmp_out"
+
+awk -F '\t' -v expected="$expect_chosen" '
+  NR == 1 {
+    for (i = 1; i <= NF; i++) {
+      h[$i] = i
+    }
+    if (!("last_chosen_texts" in h)) {
+      print "last_chosen_texts column missing" > "/dev/stderr"
+      exit 2
+    }
+    next
+  }
+  NR == 2 {
+    found = 1
+    if ($h["last_chosen_texts"] != expected) {
+      printf("expected last_chosen_texts=%s, got %s\n", expected, $h["last_chosen_texts"]) > "/dev/stderr"
+      exit 2
+    }
+    next
+  }
+  END {
+    if (!found) {
+      print "no data row emitted" > "/dev/stderr"
+      exit 2
+    }
+  }
+' "$tmp_out"
