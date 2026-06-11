@@ -43,6 +43,14 @@ def unique_value(rows: list[dict[str, str]], key: str) -> str:
     return ",".join(values) if values else "NA"
 
 
+def format_ms(value: float) -> str:
+    return f"{value:.3f}" if not math.isnan(value) else "NA"
+
+
+def format_ratio(value: float) -> str:
+    return f"{value:.4f}" if not math.isnan(value) else "NA"
+
+
 def read_rows(root: Path) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for path in sorted(root.glob("run_*.tsv")):
@@ -142,9 +150,31 @@ def summarize(root: Path) -> list[dict[str, object]]:
             base_metric = median_value(base, metric)
             variant_metric = median_value(variant, metric)
             ratio = variant_metric / base_metric if base_metric else float("inf")
-            summary[f"{metric}_base_ms"] = f"{base_metric:.3f}" if not math.isnan(base_metric) else "NA"
-            summary[f"{metric}_variant_ms"] = f"{variant_metric:.3f}" if not math.isnan(variant_metric) else "NA"
-            summary[f"{metric}_speedup"] = f"{1.0 / ratio:.4f}" if ratio and not math.isnan(ratio) else "NA"
+            delta = variant_metric - base_metric
+            summary[f"{metric}_base_ms"] = format_ms(base_metric)
+            summary[f"{metric}_variant_ms"] = format_ms(variant_metric)
+            summary[f"{metric}_delta_ms"] = format_ms(delta)
+            summary[f"{metric}_speedup"] = format_ratio(1.0 / ratio) if ratio else "NA"
+        tracked_delta = sum(
+            variant - base
+            for base, variant in (
+                (
+                    median_value(base, "loop_decode_context_ms"),
+                    median_value(variant, "loop_decode_context_ms"),
+                ),
+                (
+                    median_value(base, "loop_decode_qkv_ms"),
+                    median_value(variant, "loop_decode_qkv_ms"),
+                ),
+                (
+                    median_value(base, "loop_decode_attention_out_ms"),
+                    median_value(variant, "loop_decode_attention_out_ms"),
+                ),
+            )
+        )
+        loop_delta = median_value(variant, "loop_ms_median") - median_value(base, "loop_ms_median")
+        summary["tracked_phase_delta_sum_ms"] = format_ms(tracked_delta)
+        summary["untracked_delta_ms"] = format_ms(loop_delta - tracked_delta)
         out.append(summary)
     return out
 
@@ -172,16 +202,22 @@ def main() -> None:
         "variant_fixed_gqa2",
         "loop_ms_median_base_ms",
         "loop_ms_median_variant_ms",
+        "loop_ms_median_delta_ms",
         "loop_ms_median_speedup",
         "loop_decode_context_ms_base_ms",
         "loop_decode_context_ms_variant_ms",
+        "loop_decode_context_ms_delta_ms",
         "loop_decode_context_ms_speedup",
         "loop_decode_qkv_ms_base_ms",
         "loop_decode_qkv_ms_variant_ms",
+        "loop_decode_qkv_ms_delta_ms",
         "loop_decode_qkv_ms_speedup",
         "loop_decode_attention_out_ms_base_ms",
         "loop_decode_attention_out_ms_variant_ms",
+        "loop_decode_attention_out_ms_delta_ms",
         "loop_decode_attention_out_ms_speedup",
+        "tracked_phase_delta_sum_ms",
+        "untracked_delta_ms",
         "max_process_cpu",
         "max_total_cpu",
         "max_process",
