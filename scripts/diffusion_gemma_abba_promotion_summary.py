@@ -7,6 +7,9 @@ import argparse
 import csv
 import math
 import sys
+from pathlib import Path
+
+import diffusion_gemma_abba_dir_summary as dir_summary
 
 
 def as_float(value: str) -> float:
@@ -59,6 +62,7 @@ def run_self_test() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--roots", nargs="+", type=Path, help="Summarize ABBA run directories directly.")
     parser.add_argument("summary_tsv", nargs="?", default="-")
     args = parser.parse_args()
 
@@ -66,7 +70,11 @@ def main() -> None:
         run_self_test()
         return
 
-    if args.summary_tsv == "-":
+    if args.roots:
+        rows = []
+        for root in args.roots:
+            rows.extend(dir_summary.summarize(root))
+    elif args.summary_tsv == "-":
         rows = list(csv.DictReader(sys.stdin, delimiter="\t"))
     else:
         with open(args.summary_tsv, newline="", encoding="utf-8") as io:
