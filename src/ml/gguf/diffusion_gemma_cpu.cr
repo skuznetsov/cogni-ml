@@ -1486,6 +1486,20 @@ module ML::GGUF
       (ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH"]? || "16").to_i
     end
 
+    def decode_context_metal_backend_enabled? : Bool
+      context_metal_enabled? && Gemma4Metal.available?
+    end
+
+    def decode_context_metal_batch_rows_enabled? : Bool
+      context_metal_batch_rows_enabled? && Gemma4Metal.available?
+    end
+
+    def decode_context_fixed_gqa2_enabled? : Bool
+      decode_context_metal_batch_rows_enabled? &&
+        ENV["GEMMA4_ROW_PREFILL_ATTN_FIXED_SWA256_VEC_GQA2"]? == "1" &&
+        ENV["GEMMA4_ROW_PREFILL_ATTN_FIXED_SWA256_VEC_GQA2_OFF"]? != "1"
+    end
+
     def prompt_projection_matmul(qw : QuantWeight,
                                  x : Array(Float32),
                                  batch : Int32) : Array(Float32)
