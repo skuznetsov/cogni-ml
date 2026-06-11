@@ -13,6 +13,7 @@ prompt_token = 1
 prompt_tokens_arg = nil.as(String?)
 prompt_lengths_arg = nil.as(String?)
 canvas_token = 0
+canvas_tokens_arg = nil.as(String?)
 candidate_ids_arg = nil.as(String?)
 candidate_count = nil.as(Int32?)
 candidate_counts_arg = nil.as(String?)
@@ -37,6 +38,7 @@ OptionParser.parse do |p|
   p.on("--prompt-tokens CSV", "Prompt token ids, overrides --prompt-token") { |v| prompt_tokens_arg = v }
   p.on("--prompt-lengths LIST", "Generate multiple synthetic prompt token lists, comma or space separated") { |v| prompt_lengths_arg = v }
   p.on("--canvas-token ID", "Initial canvas token id (default: 0)") { |v| canvas_token = v.to_i }
+  p.on("--canvas-tokens CSV", "Initial canvas token ids, overrides --canvas-token") { |v| canvas_tokens_arg = v }
   p.on("--candidate-ids CSV", "Sparse candidate token ids for the canvas row (default: canvas token)") { |v| candidate_ids_arg = v }
   p.on("--candidate-count N", "Generate N sparse candidate ids starting at the canvas token") { |v| candidate_count = v.to_i }
   p.on("--candidate-counts LIST", "Generate multiple candidate-count rows, comma or space separated") { |v| candidate_counts_arg = v }
@@ -134,6 +136,10 @@ raise "--prompt and --prompt-lengths are mutually exclusive" if prompt_text && p
 raise "--prompt-lengths requires --format tsv" if prompt_lengths_arg && format != "tsv"
 raise "single-route smoke currently supports --max-layers 1; pass --full-routes for deeper smoke" if single_route && max_layers != 1
 prompt_source = prompt_text ? "text" : (prompt_tokens_arg ? "token_ids" : (prompt_lengths_arg ? "synthetic_lengths" : "single_token"))
+canvas_tokens = canvas_tokens_arg ? parse_token_ids(canvas_tokens_arg.not_nil!, "--canvas-tokens") : [canvas_token]
+canvas_tokens.each do |token_id|
+  raise "--canvas-token must be non-negative" if token_id < 0
+end
 prompt_tokens = if text = prompt_text
                   encode_prompt_text(model, llama_tokenize, text)
                 else
@@ -149,19 +155,21 @@ hp = weights.hparams
 prompt_sets = [] of Array(Int32)
 if lengths = prompt_lengths
   lengths.each do |length|
-    raise "--prompt-lengths entry exceeds context length" if length + 1 > hp.context_length
+    raise "--prompt-lengths entry plus canvas exceeds context length" if length + canvas_tokens.size > hp.context_length
     prompt_sets << generated_token_sequence(prompt_token, length, hp.vocab_size, "--prompt-lengths entry")
   end
 else
   prompt_sets << prompt_tokens
 end
 prompt_sets.each do |tokens|
-  raise "prompt+canvas exceeds context_length" if tokens.size + 1 > hp.context_length
+  raise "prompt+canvas exceeds context_length" if tokens.size + canvas_tokens.size > hp.context_length
   tokens.each do |token_id|
     raise "--prompt-token out of range" if token_id < 0 || token_id >= hp.vocab_size
   end
 end
-raise "--canvas-token out of range" if canvas_token < 0 || canvas_token >= hp.vocab_size
+canvas_tokens.each do |token_id|
+  raise "--canvas-token out of range" if token_id < 0 || token_id >= hp.vocab_size
+end
 
 candidate_sets = [] of Array(Int32)
 if raw_counts = candidate_counts_arg
@@ -179,14 +187,17 @@ candidate_sets.each do |candidate_ids|
   end
 end
 
-canvas_row = ML::GGUF::DiffusionGemmaCPU.zero_sc_canvas_embedding(weights, canvas_token)
+canvas_rows = ML::GGUF::DiffusionGemmaCPU.canvas_rows_from_tokens(weights, canvas_tokens)
 canvas_routes = nil.as(Array(Array(Array(ML::GGUF::DiffusionGemmaCPU::ExpertRoute)))?)
 if single_route
-  canvas_route = ML::GGUF::DiffusionGemmaCPU.route_experts(weights, 0, canvas_row)[0, 1]
-  canvas_routes = [[canvas_route]]
+  canvas_route_rows = canvas_tokens.map_with_index do |_, i|
+    row = canvas_rows[i * hp.n_embd, hp.n_embd]
+    ML::GGUF::DiffusionGemmaCPU.route_experts(weights, 0, row)[0, 1]
+  end
+  canvas_routes = [canvas_route_rows]
 end
 
-sample_us = ML::GGUF::DiffusionGemmaCPU.sample_u_steps(seed, steps, 1)
+sample_us = ML::GGUF::DiffusionGemmaCPU.sample_u_steps(seed, steps, canvas_tokens.size)
 result_rows = [] of Array(Tuple(String, String))
 baseline_cache_ms = nil.as(Float64?)
 baseline_loop_ms = nil.as(Float64?)
@@ -196,7 +207,7 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
   tokens.each do |token_id|
     prompt_rows.concat(ML::GGUF::DiffusionGemmaCPU.scaled_embedding_lookup(weights, token_id))
   end
-  mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: tokens.size, canvas_len: 1, sliding_window: hp.sliding_window)
+  mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: tokens.size, canvas_len: canvas_tokens.size, sliding_window: hp.sliding_window)
 
   prompt_routes = nil.as(Array(Array(Array(ML::GGUF::DiffusionGemmaCPU::ExpertRoute)))?)
   if single_route
@@ -221,6 +232,7 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
   prompt_cache_tokens_per_ms = cache_ms > 0.0 ? tokens.size.to_f64 / cache_ms : 0.0
 
   candidate_sets.each_with_index do |candidate_ids, candidate_set_index|
+    candidate_rows = canvas_tokens.map { candidate_ids.dup }
     loop_samples = [] of Float64
     loop = nil.as(ML::GGUF::DiffusionGemmaCPU::BoundedDenoiseLoopResult?)
     (warmups + repeats).times do |run_index|
@@ -228,11 +240,11 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
       loop = if adaptive
                ML::GGUF::DiffusionGemmaCPU.decode_canvas_adaptive_bounded_loop(
                  weights,
-                 [canvas_token],
-                 canvas_row,
+                 canvas_tokens,
+                 canvas_rows,
                  mask,
                  prompt_cache,
-                 [candidate_ids],
+                 candidate_rows,
                  entropy_bound: entropy_bound,
                  stability_threshold: stability_threshold,
                  max_steps: steps,
@@ -242,11 +254,11 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
                  routes_by_layer_by_canvas_row: canvas_routes,
                )
              else
-               candidate_steps = Array(Array(Array(Int32))).new(steps) { [candidate_ids.dup] }
+               candidate_steps = Array(Array(Array(Int32))).new(steps) { candidate_rows.map(&.dup) }
                ML::GGUF::DiffusionGemmaCPU.decode_canvas_bounded_loop(
                  weights,
-                 [canvas_token],
-                 canvas_row,
+                 canvas_tokens,
+                 canvas_rows,
                  mask,
                  prompt_cache,
                  candidate_steps,
@@ -289,8 +301,11 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
       {"prompt_token", tokens[0].to_s},
       {"prompt_len", tokens.size.to_s},
       {"prompt_tokens", tokens.join(",")},
-      {"initial_canvas_token", canvas_token.to_s},
+      {"canvas_len", canvas_tokens.size.to_s},
+      {"initial_canvas_token", canvas_tokens[0].to_s},
+      {"initial_canvas_tokens", canvas_tokens.join(",")},
       {"final_canvas_token", loop.final_canvas_tokens[0].to_s},
+      {"final_canvas_tokens", loop.final_canvas_tokens.join(",")},
       {"candidate_set_index", candidate_set_index.to_s},
       {"candidate_count", candidate_ids.size.to_s},
       {"candidate_ids", candidate_ids.join(",")},
