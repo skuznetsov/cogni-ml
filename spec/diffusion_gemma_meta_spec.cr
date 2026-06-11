@@ -871,6 +871,7 @@ describe ML::GGUF::DiffusionGemmaCPU do
     w = ML::GGUF::DiffusionGemmaWeights.from_gguf(DIFFUSION_GEMMA_26B_Q4KM)
     old_context_metal = ENV["DIFFUSION_GEMMA_CONTEXT_METAL"]?
     old_context_metal_off = ENV["DIFFUSION_GEMMA_CONTEXT_METAL_OFF"]?
+    old_batch_rows_off = ENV["DIFFUSION_GEMMA_CONTEXT_METAL_BATCH_ROWS_OFF"]?
     begin
       il = 0
       prompt0 = ML::GGUF::DiffusionGemmaCPU.scaled_embedding_lookup(w, 1)
@@ -892,6 +893,10 @@ describe ML::GGUF::DiffusionGemmaCPU do
       metal_cache = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(w, prompt_rows, mask, max_layers: 1, materialize_final_rows: false)
       metal = ML::GGUF::DiffusionGemmaCPU.layer_forward_decode_canvas_rows_with_prompt_projections_timed(
         w, il, metal_cache.projections_by_layer[0], canvas_rows, mask, metal_cache.metal_cache_by_layer[0]?).rows
+      ENV["DIFFUSION_GEMMA_CONTEXT_METAL_BATCH_ROWS_OFF"] = "1"
+      metal_unbatched_cache = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(w, prompt_rows, mask, max_layers: 1, materialize_final_rows: false)
+      metal_unbatched = ML::GGUF::DiffusionGemmaCPU.layer_forward_decode_canvas_rows_with_prompt_projections_timed(
+        w, il, metal_unbatched_cache.projections_by_layer[0], canvas_rows, mask, metal_unbatched_cache.metal_cache_by_layer[0]?).rows
 
       max_diff = 0.0_f32
       base.size.times do |i|
@@ -899,6 +904,12 @@ describe ML::GGUF::DiffusionGemmaCPU do
         max_diff = diff if diff > max_diff
       end
       max_diff.should be < 1.0e-3_f32
+      max_unbatched_diff = 0.0_f32
+      base.size.times do |i|
+        diff = (base[i] - metal_unbatched[i]).abs
+        max_unbatched_diff = diff if diff > max_unbatched_diff
+      end
+      max_unbatched_diff.should be < 1.0e-3_f32
     ensure
       if old_context_metal
         ENV["DIFFUSION_GEMMA_CONTEXT_METAL"] = old_context_metal
@@ -909,6 +920,11 @@ describe ML::GGUF::DiffusionGemmaCPU do
         ENV["DIFFUSION_GEMMA_CONTEXT_METAL_OFF"] = old_context_metal_off
       else
         ENV.delete("DIFFUSION_GEMMA_CONTEXT_METAL_OFF")
+      end
+      if old_batch_rows_off
+        ENV["DIFFUSION_GEMMA_CONTEXT_METAL_BATCH_ROWS_OFF"] = old_batch_rows_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_CONTEXT_METAL_BATCH_ROWS_OFF")
       end
     end
   end

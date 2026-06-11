@@ -1307,7 +1307,7 @@ module ML::GGUF
       context_softmax_ms = 0.0
       context_value_ms = 0.0
       batch_context_t0 = Time.instant
-      batched_context = if prompt_metal_cache && context_metal_enabled?
+      batched_context = if prompt_metal_cache && context_metal_batch_rows_enabled?
                           attention_context_decode_batch_metal_resident(
                             canvas_projections,
                             prompt_metal_cache.not_nil!,
@@ -2345,6 +2345,11 @@ module ML::GGUF
     private def context_metal_enabled? : Bool
       ENV["DIFFUSION_GEMMA_CONTEXT_METAL"]? == "1" &&
         ENV["DIFFUSION_GEMMA_CONTEXT_METAL_OFF"]? != "1"
+    end
+
+    private def context_metal_batch_rows_enabled? : Bool
+      context_metal_enabled? &&
+        ENV["DIFFUSION_GEMMA_CONTEXT_METAL_BATCH_ROWS_OFF"]? != "1"
     end
 
     private def attention_context_decode_metal_resident(query : AttentionProjection,
