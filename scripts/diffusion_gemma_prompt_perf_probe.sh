@@ -15,6 +15,8 @@ candidates="${CANDIDATES:-Hello|world}"
 steps="${STEPS:-1}"
 warmups="${WARMUPS:-1}"
 repeats="${REPEATS:-2}"
+cache_warmups="${CACHE_WARMUPS:-0}"
+cache_repeats="${CACHE_REPEATS:-1}"
 max_layers="${MAX_LAYERS:-1}"
 timeout_seconds="${TIMEOUT_SECONDS:-60}"
 materialize_prompt_final_rows="${MATERIALIZE_PROMPT_FINAL_ROWS:-0}"
@@ -37,7 +39,7 @@ for path_var in model tokenizer; do
   fi
 done
 
-for numeric in steps warmups repeats max_layers timeout_seconds; do
+for numeric in steps warmups repeats cache_warmups cache_repeats max_layers timeout_seconds; do
   value="${!numeric}"
   if [[ ! "$value" =~ ^[0-9]+$ ]]; then
     echo "${numeric^^} must be a non-negative integer" >&2
@@ -45,8 +47,8 @@ for numeric in steps warmups repeats max_layers timeout_seconds; do
   fi
 done
 
-if [[ "$steps" -lt 1 || "$repeats" -lt 1 || "$max_layers" -lt 1 || "$timeout_seconds" -lt 1 ]]; then
-  echo "STEPS, REPEATS, MAX_LAYERS, and TIMEOUT_SECONDS must be positive" >&2
+if [[ "$steps" -lt 1 || "$repeats" -lt 1 || "$cache_repeats" -lt 1 || "$max_layers" -lt 1 || "$timeout_seconds" -lt 1 ]]; then
+  echo "STEPS, REPEATS, CACHE_REPEATS, MAX_LAYERS, and TIMEOUT_SECONDS must be positive" >&2
   exit 2
 fi
 
@@ -80,7 +82,22 @@ if [[ ! -x "$bin" ]]; then
 fi
 
 mkdir -p "$(dirname "$out")"
-printf 'status\tcase\tprompt_bytes\tprompt_len\tcanvas_len\tcandidate_count\tload_ms\tprompt_route_ms\tprompt_projection_backend\tprompt_cache_ms\tprompt_projection_ms\tprompt_materialize_ms\tprompt_cache_tokens_per_ms\tloop_ms_median\tloop_ms_samples\tchosen\tprobs\tartifact\terr_artifact\n' >"$out"
+printf 'status\tcase\tprompt_bytes\tprompt_len\tcanvas_len\tcandidate_count\tload_ms\tprompt_route_ms\tprompt_projection_backend\tprompt_cache_ms\tprompt_projection_ms\tprompt_materialize_ms\tprompt_cache_ms_samples\tprompt_projection_ms_samples\tprompt_materialize_ms_samples\tprompt_cache_tokens_per_ms\tloop_ms_median\tloop_ms_samples\tchosen\tprobs\tartifact\terr_artifact\n' >"$out"
+
+append_failed_row() {
+  local status="$1"
+  local name="$2"
+  local bytes="$3"
+  local artifact="$4"
+  local err_artifact="$5"
+  awk -v status="$status" -v case="$name" -v bytes="$bytes" -v artifact="$artifact" -v err_artifact="$err_artifact" 'BEGIN {
+    printf "%s\t%s\t%s", status, case, bytes
+    for (i = 4; i <= 20; i++) {
+      printf "\t"
+    }
+    printf "\t%s\t%s\n", artifact, err_artifact
+  }' >>"$out"
+}
 
 run_case() {
   local name="$1"
@@ -104,6 +121,8 @@ run_case() {
     --steps "$steps" \
     --warmups "$warmups" \
     --repeats "$repeats" \
+    --cache-warmups "$cache_warmups" \
+    --cache-repeats "$cache_repeats" \
     --max-layers "$max_layers" \
     --format tsv \
     --decode-canvas-text \
@@ -122,18 +141,18 @@ run_case() {
       }
       NR == 2 {
         found = 1
-        print "ok" "\t" case "\t" bytes "\t" $h["prompt_len"] "\t" $h["canvas_len"] "\t" $h["candidate_count"] "\t" $h["load_ms"] "\t" $h["prompt_route_ms"] "\t" $h["prompt_projection_backend"] "\t" $h["prompt_cache_ms"] "\t" $h["prompt_projection_ms"] "\t" $h["prompt_materialize_ms"] "\t" $h["prompt_cache_tokens_per_ms"] "\t" $h["loop_ms_median"] "\t" $h["loop_ms_samples"] "\t" $h["last_chosen_texts"] "\t" $h["last_argmax_probabilities"] "\t" artifact "\t" err_artifact
+        print "ok" "\t" case "\t" bytes "\t" $h["prompt_len"] "\t" $h["canvas_len"] "\t" $h["candidate_count"] "\t" $h["load_ms"] "\t" $h["prompt_route_ms"] "\t" $h["prompt_projection_backend"] "\t" $h["prompt_cache_ms"] "\t" $h["prompt_projection_ms"] "\t" $h["prompt_materialize_ms"] "\t" $h["prompt_cache_ms_samples"] "\t" $h["prompt_projection_ms_samples"] "\t" $h["prompt_materialize_ms_samples"] "\t" $h["prompt_cache_tokens_per_ms"] "\t" $h["loop_ms_median"] "\t" $h["loop_ms_samples"] "\t" $h["last_chosen_texts"] "\t" $h["last_argmax_probabilities"] "\t" artifact "\t" err_artifact
       }
       END {
         if (!found) {
           exit 3
         }
       }
-    ' "$tmp" >>"$out" || printf 'failed\t%s\t%s\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t%s\t%s\n' "$name" "$bytes" "$tmp" "$err" >>"$out"
+    ' "$tmp" >>"$out" || append_failed_row failed "$name" "$bytes" "$tmp" "$err"
   elif [[ "$rc" -eq 124 ]]; then
-    printf 'timeout\t%s\t%s\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t%s\t%s\n' "$name" "$bytes" "$tmp" "$err" >>"$out"
+    append_failed_row timeout "$name" "$bytes" "$tmp" "$err"
   else
-    printf 'failed\t%s\t%s\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t%s\t%s\n' "$name" "$bytes" "$tmp" "$err" >>"$out"
+    append_failed_row failed "$name" "$bytes" "$tmp" "$err"
   fi
 }
 

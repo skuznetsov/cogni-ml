@@ -91,7 +91,21 @@ route precompute work that happens before cache construction. The
 `prompt_projection_backend` column reports whether prompt Q/K/V projection
 matmuls used the default CPU path or the experimental Metal path.
 `prompt_projection_ms` and `prompt_materialize_ms` split prompt-cache time into
-Q/K/V projection and prompt-row materialization phases.
+Q/K/V projection and prompt-row materialization phases. The sparse-loop smoke
+also accepts `--cache-warmups N` and `--cache-repeats N`; the perf wrapper maps
+those to `CACHE_WARMUPS` and `CACHE_REPEATS` and reports
+`prompt_cache_ms_samples`, `prompt_projection_ms_samples`, and
+`prompt_materialize_ms_samples`.
+
+Use cache repeats when separating Metal cold-start effects from steady-state
+prompt projection timing:
+
+```sh
+DIFFUSION_GEMMA_PROMPT_PROJ_METAL=1 \
+CACHE_WARMUPS=1 CACHE_REPEATS=2 TIMEOUT_SECONDS=45 \
+OUT=/tmp/diffusion_gemma_prompt_perf_cache_repeats.tsv \
+scripts/diffusion_gemma_prompt_perf_probe.sh
+```
 
 The sparse smoke defaults to a decode-only prompt cache: it stores the prompt
 attention projections needed by canvas decode but skips materializing final

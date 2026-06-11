@@ -31,6 +31,8 @@ single_route = true
 format = "keyvalue"
 repeats = 1
 warmups = 0
+cache_repeats = 1
+cache_warmups = 0
 decode_canvas_text = false
 materialize_prompt_final_rows = false
 
@@ -62,6 +64,8 @@ OptionParser.parse do |p|
   p.on("--format FORMAT", "Output format: keyvalue or tsv (default: keyvalue)") { |v| format = v.downcase }
   p.on("--repeats N", "Repeat sparse loop after one model/cache load (default: 1)") { |v| repeats = v.to_i }
   p.on("--warmups N", "Run sparse loop warmups before measured repeats (default: 0)") { |v| warmups = v.to_i }
+  p.on("--cache-repeats N", "Repeat prompt-cache construction before sparse loop (default: 1)") { |v| cache_repeats = v.to_i }
+  p.on("--cache-warmups N", "Run prompt-cache warmups before measured cache repeats (default: 0)") { |v| cache_warmups = v.to_i }
   p.on("--decode-canvas-text", "Decode initial/final canvas token ids for qualitative probe output") { decode_canvas_text = true }
   p.on("-h", "--help", "Show help") do
     puts p
@@ -212,6 +216,8 @@ raise "--entropy-bound must be finite and non-negative" unless entropy_bound.fin
 raise "--format must be keyvalue or tsv" unless {"keyvalue", "tsv"}.includes?(format)
 raise "--repeats must be positive" unless repeats > 0
 raise "--warmups must be non-negative" unless warmups >= 0
+raise "--cache-repeats must be positive" unless cache_repeats > 0
+raise "--cache-warmups must be non-negative" unless cache_warmups >= 0
 candidate_mode_count = 0
 candidate_mode_count += 1 if candidate_ids_arg
 candidate_mode_count += 1 if candidate_texts_arg
@@ -345,21 +351,35 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
     end
     prompt_route_ms = (Time.instant - prompt_route_t0).total_milliseconds
 
-    cache_t0 = Time.instant
-    prompt_cache = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(
-      weights,
-      prompt_rows,
-      mask,
-      max_layers: max_layers,
-      routes_by_layer_by_prompt_row: prompt_routes,
-      materialize_final_rows: materialize_prompt_final_rows,
-    )
-    cache_ms = (Time.instant - cache_t0).total_milliseconds
+    prompt_cache = nil.as(ML::GGUF::DiffusionGemmaCPU::PromptLayerCache?)
+    cache_samples = [] of Float64
+    projection_samples = [] of Float64
+    materialize_samples = [] of Float64
+    (cache_warmups + cache_repeats).times do |run_index|
+      cache_t0 = Time.instant
+      prompt_cache = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(
+        weights,
+        prompt_rows,
+        mask,
+        max_layers: max_layers,
+        routes_by_layer_by_prompt_row: prompt_routes,
+        materialize_final_rows: materialize_prompt_final_rows,
+      )
+      elapsed_ms = (Time.instant - cache_t0).total_milliseconds
+      next if run_index < cache_warmups
+
+      cache = prompt_cache.not_nil!
+      cache_samples << elapsed_ms
+      projection_samples << cache.projection_ms_by_layer.sum
+      materialize_samples << cache.materialize_ms_by_layer.sum
+    end
+    prompt_cache = prompt_cache.not_nil!
+    cache_ms = median(cache_samples)
     baseline_cache_ms ||= cache_ms
     prompt_cache_ms_ratio_vs_first = baseline_cache_ms.not_nil! > 0.0 ? cache_ms / baseline_cache_ms.not_nil! : 0.0
     prompt_cache_tokens_per_ms = cache_ms > 0.0 ? tokens.size.to_f64 / cache_ms : 0.0
-    prompt_projection_ms = prompt_cache.projection_ms_by_layer.sum
-    prompt_materialize_ms = prompt_cache.materialize_ms_by_layer.sum
+    prompt_projection_ms = median(projection_samples)
+    prompt_materialize_ms = median(materialize_samples)
 
     candidate_specs.each_with_index do |candidate_spec, candidate_set_index|
       generated_count, candidate_ids, candidate_texts = candidate_spec
@@ -422,6 +442,8 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"mode", adaptive ? "adaptive" : "fixed"},
         {"warmups", warmups.to_s},
         {"repeats", repeats.to_s},
+        {"cache_warmups", cache_warmups.to_s},
+        {"cache_repeats", cache_repeats.to_s},
         {"max_layers", max_layers.to_s},
         {"steps_budget", steps.to_s},
         {"steps_run", summary.steps_run.to_s},
@@ -468,6 +490,9 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"prompt_cache_ms", cache_ms.round(3).to_s},
         {"prompt_projection_ms", prompt_projection_ms.round(3).to_s},
         {"prompt_materialize_ms", prompt_materialize_ms.round(3).to_s},
+        {"prompt_cache_ms_samples", cache_samples.map { |v| v.round(3) }.join(",")},
+        {"prompt_projection_ms_samples", projection_samples.map { |v| v.round(3) }.join(",")},
+        {"prompt_materialize_ms_samples", materialize_samples.map { |v| v.round(3) }.join(",")},
         {"prompt_cache_materialized_final_rows", materialize_prompt_final_rows.to_s},
         {"prompt_cache_ms_ratio_vs_first", prompt_cache_ms_ratio_vs_first.round(6).to_s},
         {"prompt_cache_tokens_per_ms", prompt_cache_tokens_per_ms.round(6).to_s},
