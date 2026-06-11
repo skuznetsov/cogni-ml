@@ -17,6 +17,7 @@ canvas_token = 0
 canvas_tokens_arg = nil.as(String?)
 canvas_lengths_arg = nil.as(String?)
 candidate_ids_arg = nil.as(String?)
+candidate_texts_arg = nil.as(String?)
 candidate_count = nil.as(Int32?)
 candidate_counts_arg = nil.as(String?)
 max_layers = 1
@@ -45,6 +46,7 @@ OptionParser.parse do |p|
   p.on("--canvas-tokens CSV", "Initial canvas token ids, overrides --canvas-token") { |v| canvas_tokens_arg = v }
   p.on("--canvas-lengths LIST", "Generate multiple synthetic canvas token lists, comma or space separated") { |v| canvas_lengths_arg = v }
   p.on("--candidate-ids CSV", "Sparse candidate token ids for the canvas row (default: canvas token)") { |v| candidate_ids_arg = v }
+  p.on("--candidate-texts LIST", "Pipe-separated one-token candidate texts, tokenized without BOS") { |v| candidate_texts_arg = v }
   p.on("--candidate-count N", "Generate N sparse candidate ids starting at the canvas token") { |v| candidate_count = v.to_i }
   p.on("--candidate-counts LIST", "Generate multiple candidate-count rows, comma or space separated") { |v| candidate_counts_arg = v }
   p.on("--max-layers N", "Bounded decode layers (default: 1)") { |v| max_layers = v.to_i }
@@ -137,6 +139,29 @@ def output_safe_text(text : String) : String
   text.gsub('\t', ' ').gsub('\n', "\\n").gsub('\r', "\\r")
 end
 
+def output_safe_list_text(text : String) : String
+  output_safe_text(text).gsub('|', "\\|")
+end
+
+def parse_candidate_texts(model : String, llama_tokenize : String, raw : String) : Tuple(Array(Int32), Array(String))
+  texts = raw.split('|')
+  raise "--candidate-texts must contain at least one text" if texts.empty? || texts.any?(&.empty?)
+
+  pairs = [] of Tuple(Int32, String)
+  texts.each do |text|
+    ids = encode_text_tokens(model, llama_tokenize, text, "--candidate-texts entry", add_bos: false)
+    raise "--candidate-texts entry #{text.inspect} encoded to #{ids.size} tokens; expected exactly one" unless ids.size == 1
+    pairs << {ids[0], text}
+  end
+
+  unique = {} of Int32 => String
+  pairs.each do |id, text|
+    unique[id] ||= text
+  end
+  sorted = unique.to_a.sort_by { |id, _| id }
+  {sorted.map(&.[0]), sorted.map { |_, text| text }}
+end
+
 raise "model not found: #{model}" unless File.exists?(model)
 raise "--max-layers must be positive" unless max_layers > 0
 raise "--steps must be positive" unless steps > 0
@@ -148,9 +173,10 @@ raise "--repeats must be positive" unless repeats > 0
 raise "--warmups must be non-negative" unless warmups >= 0
 candidate_mode_count = 0
 candidate_mode_count += 1 if candidate_ids_arg
+candidate_mode_count += 1 if candidate_texts_arg
 candidate_mode_count += 1 if candidate_count
 candidate_mode_count += 1 if candidate_counts_arg
-raise "--candidate-ids, --candidate-count, and --candidate-counts are mutually exclusive" if candidate_mode_count > 1
+raise "--candidate-ids, --candidate-texts, --candidate-count, and --candidate-counts are mutually exclusive" if candidate_mode_count > 1
 raise "--candidate-counts requires --format tsv" if candidate_counts_arg && format != "tsv"
 raise "--prompt-tokens and --prompt-lengths are mutually exclusive" if prompt_tokens_arg && prompt_lengths_arg
 raise "--prompt and --prompt-tokens are mutually exclusive" if prompt_text && prompt_tokens_arg
@@ -182,6 +208,11 @@ prompt_tokens = if text = prompt_text
                   prompt_tokens_arg ? parse_token_ids(prompt_tokens_arg.not_nil!, "--prompt-tokens") : [prompt_token]
                 end
 prompt_lengths = prompt_lengths_arg ? parse_positive_counts(prompt_lengths_arg.not_nil!, "--prompt-lengths") : nil
+candidate_text_spec = if raw_texts = candidate_texts_arg
+                        parse_candidate_texts(model, llama_tokenize, raw_texts)
+                      else
+                        nil
+                      end
 
 load_t0 = Time.instant
 weights = ML::GGUF::DiffusionGemmaWeights.from_gguf(model)
@@ -220,17 +251,20 @@ prompt_sets.each do |prompt_set|
   end
 end
 
-candidate_specs = [] of Tuple(Int32?, Array(Int32))
+candidate_specs = [] of Tuple(Int32?, Array(Int32), Array(String)?)
 if raw_counts = candidate_counts_arg
   parse_candidate_counts(raw_counts).each do |count|
-    candidate_specs << {count, generated_candidate_ids(canvas_token, count, hp.vocab_size)}
+    candidate_specs << {count, generated_candidate_ids(canvas_token, count, hp.vocab_size), nil}
   end
 elsif count = candidate_count
-  candidate_specs << {count, generated_candidate_ids(canvas_token, count, hp.vocab_size)}
+  candidate_specs << {count, generated_candidate_ids(canvas_token, count, hp.vocab_size), nil}
+elsif spec = candidate_text_spec
+  candidate_ids, candidate_texts = spec
+  candidate_specs << {nil, candidate_ids, candidate_texts}
 else
-  candidate_specs << {nil, parse_candidate_ids(candidate_ids_arg, canvas_token)}
+  candidate_specs << {nil, parse_candidate_ids(candidate_ids_arg, canvas_token), nil}
 end
-candidate_specs.each do |_, candidate_ids|
+candidate_specs.each do |_, candidate_ids, _|
   candidate_ids.each do |candidate_id|
     raise "--candidate-ids contains out-of-range id #{candidate_id}" if candidate_id < 0 || candidate_id >= hp.vocab_size
   end
@@ -282,7 +316,7 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
     prompt_cache_tokens_per_ms = cache_ms > 0.0 ? tokens.size.to_f64 / cache_ms : 0.0
 
     candidate_specs.each_with_index do |candidate_spec, candidate_set_index|
-      generated_count, candidate_ids = candidate_spec
+      generated_count, candidate_ids, candidate_texts = candidate_spec
       candidate_rows = generated_count ? ML::GGUF::DiffusionGemmaCPU.generated_candidate_rows(canvas_tokens, generated_count.not_nil!, hp.vocab_size) : canvas_tokens.map { candidate_ids.dup }
       loop_samples = [] of Float64
       loop = nil.as(ML::GGUF::DiffusionGemmaCPU::BoundedDenoiseLoopResult?)
@@ -365,6 +399,7 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"candidate_set_index", candidate_set_index.to_s},
         {"candidate_count", candidate_rows.first.size.to_s},
         {"candidate_ids", candidate_rows.first.join(",")},
+        {"candidate_texts", candidate_texts ? candidate_texts.not_nil!.map { |text| output_safe_list_text(text) }.join("|") : ""},
         {"candidate_rows", candidate_rows.map { |row| row.join(",") }.join("|")},
         {"prediction_count", summary.prediction_count.to_s},
         {"accepted_count", summary.accepted_count.to_s},
