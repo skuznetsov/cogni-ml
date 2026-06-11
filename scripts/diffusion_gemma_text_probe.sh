@@ -11,6 +11,7 @@ warmups="${WARMUPS:-1}"
 repeats="${REPEATS:-2}"
 format="${FORMAT:-tsv}"
 expect_chosen="${EXPECT_CHOSEN:-}"
+expect_min_prob="${EXPECT_MIN_PROB:-}"
 smoke_runner="${SMOKE_RUNNER:-$repo_root/scripts/diffusion_gemma_sparse_loop_smoke.sh}"
 
 case "$format" in
@@ -54,8 +55,19 @@ if [[ "$repeats" -lt 1 ]]; then
   exit 2
 fi
 
-if [[ -n "$expect_chosen" && "$format" != "tsv" ]]; then
-  echo "EXPECT_CHOSEN requires FORMAT=tsv" >&2
+if [[ -n "$expect_min_prob" ]]; then
+  if [[ ! "$expect_min_prob" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]]; then
+    echo "EXPECT_MIN_PROB must be a number in [0, 1]" >&2
+    exit 2
+  fi
+  if ! awk -v value="$expect_min_prob" 'BEGIN { exit !(value >= 0 && value <= 1) }'; then
+    echo "EXPECT_MIN_PROB must be a number in [0, 1]" >&2
+    exit 2
+  fi
+fi
+
+if [[ -n "$expect_chosen$expect_min_prob" && "$format" != "tsv" ]]; then
+  echo "EXPECT_CHOSEN/EXPECT_MIN_PROB require FORMAT=tsv" >&2
   exit 2
 fi
 
@@ -72,32 +84,45 @@ smoke_cmd=(
   "$@"
 )
 
-if [[ -z "$expect_chosen" ]]; then
+if [[ -z "$expect_chosen$expect_min_prob" ]]; then
   exec "${smoke_cmd[@]}"
 fi
 
-tmp_out="$(mktemp "${TMPDIR:-/tmp}/diffusion_gemma_text_probe.XXXXXX.tsv")"
+tmp_out="$(mktemp "${TMPDIR:-/tmp}/diffusion_gemma_text_probe.XXXXXX")"
 trap 'rm -f "$tmp_out"' EXIT
 
 "${smoke_cmd[@]}" >"$tmp_out"
 cat "$tmp_out"
 
-awk -F '\t' -v expected="$expect_chosen" '
+awk -F '\t' -v expected="$expect_chosen" -v min_prob="$expect_min_prob" '
   NR == 1 {
     for (i = 1; i <= NF; i++) {
       h[$i] = i
     }
-    if (!("last_chosen_texts" in h)) {
+    if (expected != "" && !("last_chosen_texts" in h)) {
       print "last_chosen_texts column missing" > "/dev/stderr"
+      exit 2
+    }
+    if (min_prob != "" && !("last_argmax_probabilities" in h)) {
+      print "last_argmax_probabilities column missing" > "/dev/stderr"
       exit 2
     }
     next
   }
   NR == 2 {
     found = 1
-    if ($h["last_chosen_texts"] != expected) {
+    if (expected != "" && $h["last_chosen_texts"] != expected) {
       printf("expected last_chosen_texts=%s, got %s\n", expected, $h["last_chosen_texts"]) > "/dev/stderr"
       exit 2
+    }
+    if (min_prob != "") {
+      count = split($h["last_argmax_probabilities"], probs, ",")
+      for (i = 1; i <= count; i++) {
+        if ((probs[i] + 0) < (min_prob + 0)) {
+          printf("expected every last_argmax_probability >= %s, got %s\n", min_prob, probs[i]) > "/dev/stderr"
+          exit 2
+        }
+      }
     }
     next
   }

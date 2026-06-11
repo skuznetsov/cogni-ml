@@ -379,6 +379,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - `scripts/diffusion_gemma_text_probe.sh` now supports `EXPECT_CHOSEN=TEXT`, validating the first TSV data row's `last_chosen_texts` after printing the smoke output. It also supports `SMOKE_RUNNER` override for wrapper-level harnessing.
 - Verification: shell syntax passed; `EXPECT_CHOSEN` with `FORMAT=keyvalue` and invalid numeric env values fail closed before model execution. A real GGUF wrapper run with `EXPECT_CHOSEN=Hello` emitted `status=ok`, `last_chosen_texts=Hello`, and passed the wrapper assertion; a mismatch run with `EXPECT_CHOSEN=world` failed with `expected last_chosen_texts=world, got Hello`.
 - Boundary: this is a regression gate for the text probe wrapper. It does not change model execution, candidate scoring, or the bounded sparse-loop output contract.
+**update 2026-06-10bz:**
+- `scripts/diffusion_gemma_text_probe.sh` now supports `EXPECT_MIN_PROB=F`, validating that every first-row `last_argmax_probabilities` value is at least the requested threshold. Expectation gates now require TSV output and use a macOS-compatible temporary file pattern.
+- Verification: shell syntax passed; invalid probability values and expectation gates with `FORMAT=keyvalue` fail closed before model execution. A real GGUF wrapper run with `EXPECT_CHOSEN=Hello EXPECT_MIN_PROB=0.9` passed with `last_argmax_probabilities=1.0`; a fake `SMOKE_RUNNER` TSV with probability `0.5` failed with `expected every last_argmax_probability >= 0.9, got 0.5`.
+- Boundary: this is wrapper-level regression gating for sparse candidate confidence. It does not change model execution, probability computation, or sparse candidate semantics.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified
