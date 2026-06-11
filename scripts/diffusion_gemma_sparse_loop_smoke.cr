@@ -14,6 +14,7 @@ prompt_tokens_arg = nil.as(String?)
 prompt_lengths_arg = nil.as(String?)
 canvas_token = 0
 canvas_tokens_arg = nil.as(String?)
+canvas_lengths_arg = nil.as(String?)
 candidate_ids_arg = nil.as(String?)
 candidate_count = nil.as(Int32?)
 candidate_counts_arg = nil.as(String?)
@@ -39,6 +40,7 @@ OptionParser.parse do |p|
   p.on("--prompt-lengths LIST", "Generate multiple synthetic prompt token lists, comma or space separated") { |v| prompt_lengths_arg = v }
   p.on("--canvas-token ID", "Initial canvas token id (default: 0)") { |v| canvas_token = v.to_i }
   p.on("--canvas-tokens CSV", "Initial canvas token ids, overrides --canvas-token") { |v| canvas_tokens_arg = v }
+  p.on("--canvas-lengths LIST", "Generate multiple synthetic canvas token lists, comma or space separated") { |v| canvas_lengths_arg = v }
   p.on("--candidate-ids CSV", "Sparse candidate token ids for the canvas row (default: canvas token)") { |v| candidate_ids_arg = v }
   p.on("--candidate-count N", "Generate N sparse candidate ids starting at the canvas token") { |v| candidate_count = v.to_i }
   p.on("--candidate-counts LIST", "Generate multiple candidate-count rows, comma or space separated") { |v| candidate_counts_arg = v }
@@ -134,11 +136,18 @@ raise "--prompt-tokens and --prompt-lengths are mutually exclusive" if prompt_to
 raise "--prompt and --prompt-tokens are mutually exclusive" if prompt_text && prompt_tokens_arg
 raise "--prompt and --prompt-lengths are mutually exclusive" if prompt_text && prompt_lengths_arg
 raise "--prompt-lengths requires --format tsv" if prompt_lengths_arg && format != "tsv"
+raise "--canvas-tokens and --canvas-lengths are mutually exclusive" if canvas_tokens_arg && canvas_lengths_arg
+raise "--canvas-lengths requires --format tsv" if canvas_lengths_arg && format != "tsv"
 raise "single-route smoke currently supports --max-layers 1; pass --full-routes for deeper smoke" if single_route && max_layers != 1
 prompt_source = prompt_text ? "text" : (prompt_tokens_arg ? "token_ids" : (prompt_lengths_arg ? "synthetic_lengths" : "single_token"))
-canvas_tokens = canvas_tokens_arg ? parse_token_ids(canvas_tokens_arg.not_nil!, "--canvas-tokens") : [canvas_token]
-canvas_tokens.each do |token_id|
-  raise "--canvas-token must be non-negative" if token_id < 0
+canvas_lengths = canvas_lengths_arg ? parse_positive_counts(canvas_lengths_arg.not_nil!, "--canvas-lengths") : nil
+canvas_sets = [] of Array(Int32)
+unless lengths = canvas_lengths
+  canvas_tokens = canvas_tokens_arg ? parse_token_ids(canvas_tokens_arg.not_nil!, "--canvas-tokens") : [canvas_token]
+  canvas_tokens.each do |token_id|
+    raise "--canvas-token must be non-negative" if token_id < 0
+  end
+  canvas_sets << canvas_tokens
 end
 prompt_tokens = if text = prompt_text
                   encode_prompt_text(model, llama_tokenize, text)
@@ -152,23 +161,35 @@ weights = ML::GGUF::DiffusionGemmaWeights.from_gguf(model)
 load_ms = (Time.instant - load_t0).total_milliseconds
 hp = weights.hparams
 
+if lengths = canvas_lengths
+  lengths.each do |length|
+    raise "--canvas-lengths entry exceeds context length" if length > hp.context_length
+    canvas_sets << generated_token_sequence(canvas_token, length, hp.vocab_size, "--canvas-lengths entry")
+  end
+end
+canvas_sets.each do |tokens|
+  tokens.each do |token_id|
+    raise "--canvas-token out of range" if token_id < 0 || token_id >= hp.vocab_size
+  end
+end
+
 prompt_sets = [] of Array(Int32)
 if lengths = prompt_lengths
   lengths.each do |length|
-    raise "--prompt-lengths entry plus canvas exceeds context length" if length + canvas_tokens.size > hp.context_length
     prompt_sets << generated_token_sequence(prompt_token, length, hp.vocab_size, "--prompt-lengths entry")
   end
 else
   prompt_sets << prompt_tokens
 end
 prompt_sets.each do |tokens|
-  raise "prompt+canvas exceeds context_length" if tokens.size + canvas_tokens.size > hp.context_length
   tokens.each do |token_id|
     raise "--prompt-token out of range" if token_id < 0 || token_id >= hp.vocab_size
   end
 end
-canvas_tokens.each do |token_id|
-  raise "--canvas-token out of range" if token_id < 0 || token_id >= hp.vocab_size
+prompt_sets.each do |prompt_set|
+  canvas_sets.each do |canvas_set|
+    raise "prompt+canvas exceeds context_length" if prompt_set.size + canvas_set.size > hp.context_length
+  end
 end
 
 candidate_sets = [] of Array(Int32)
@@ -187,149 +208,152 @@ candidate_sets.each do |candidate_ids|
   end
 end
 
-canvas_rows = ML::GGUF::DiffusionGemmaCPU.canvas_rows_from_tokens(weights, canvas_tokens)
-canvas_routes = nil.as(Array(Array(Array(ML::GGUF::DiffusionGemmaCPU::ExpertRoute)))?)
-if single_route
-  canvas_route_rows = canvas_tokens.map_with_index do |_, i|
-    row = canvas_rows[i * hp.n_embd, hp.n_embd]
-    ML::GGUF::DiffusionGemmaCPU.route_experts(weights, 0, row)[0, 1]
-  end
-  canvas_routes = [canvas_route_rows]
-end
-
-sample_us = ML::GGUF::DiffusionGemmaCPU.sample_u_steps(seed, steps, canvas_tokens.size)
 result_rows = [] of Array(Tuple(String, String))
 baseline_cache_ms = nil.as(Float64?)
 baseline_loop_ms = nil.as(Float64?)
 baseline_candidate_tokens_per_ms = nil.as(Float64?)
 prompt_sets.each_with_index do |tokens, prompt_set_index|
-  prompt_rows = [] of Float32
-  tokens.each do |token_id|
-    prompt_rows.concat(ML::GGUF::DiffusionGemmaCPU.scaled_embedding_lookup(weights, token_id))
-  end
-  mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: tokens.size, canvas_len: canvas_tokens.size, sliding_window: hp.sliding_window)
-
-  prompt_routes = nil.as(Array(Array(Array(ML::GGUF::DiffusionGemmaCPU::ExpertRoute)))?)
-  if single_route
-    prompt_route_rows = tokens.map_with_index do |_, i|
-      row = prompt_rows[i * hp.n_embd, hp.n_embd]
-      ML::GGUF::DiffusionGemmaCPU.route_experts(weights, 0, row)[0, 1]
+  canvas_sets.each_with_index do |canvas_tokens, canvas_set_index|
+    canvas_rows = ML::GGUF::DiffusionGemmaCPU.canvas_rows_from_tokens(weights, canvas_tokens)
+    canvas_routes = nil.as(Array(Array(Array(ML::GGUF::DiffusionGemmaCPU::ExpertRoute)))?)
+    if single_route
+      canvas_route_rows = canvas_tokens.map_with_index do |_, i|
+        row = canvas_rows[i * hp.n_embd, hp.n_embd]
+        ML::GGUF::DiffusionGemmaCPU.route_experts(weights, 0, row)[0, 1]
+      end
+      canvas_routes = [canvas_route_rows]
     end
-    prompt_routes = [prompt_route_rows]
-  end
 
-  cache_t0 = Time.instant
-  prompt_cache = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(
-    weights,
-    prompt_rows,
-    mask,
-    max_layers: max_layers,
-    routes_by_layer_by_prompt_row: prompt_routes,
-  )
-  cache_ms = (Time.instant - cache_t0).total_milliseconds
-  baseline_cache_ms ||= cache_ms
-  prompt_cache_ms_ratio_vs_first = baseline_cache_ms.not_nil! > 0.0 ? cache_ms / baseline_cache_ms.not_nil! : 0.0
-  prompt_cache_tokens_per_ms = cache_ms > 0.0 ? tokens.size.to_f64 / cache_ms : 0.0
-
-  candidate_sets.each_with_index do |candidate_ids, candidate_set_index|
-    candidate_rows = canvas_tokens.map { candidate_ids.dup }
-    loop_samples = [] of Float64
-    loop = nil.as(ML::GGUF::DiffusionGemmaCPU::BoundedDenoiseLoopResult?)
-    (warmups + repeats).times do |run_index|
-      loop_t0 = Time.instant
-      loop = if adaptive
-               ML::GGUF::DiffusionGemmaCPU.decode_canvas_adaptive_bounded_loop(
-                 weights,
-                 canvas_tokens,
-                 canvas_rows,
-                 mask,
-                 prompt_cache,
-                 candidate_rows,
-                 entropy_bound: entropy_bound,
-                 stability_threshold: stability_threshold,
-                 max_steps: steps,
-                 proposal_top_k: proposal_top_k,
-                 max_layers: max_layers,
-                 sample_us_by_step_by_canvas_row: sample_us,
-                 routes_by_layer_by_canvas_row: canvas_routes,
-               )
-             else
-               candidate_steps = Array(Array(Array(Int32))).new(steps) { candidate_rows.map(&.dup) }
-               ML::GGUF::DiffusionGemmaCPU.decode_canvas_bounded_loop(
-                 weights,
-                 canvas_tokens,
-                 canvas_rows,
-                 mask,
-                 prompt_cache,
-                 candidate_steps,
-                 entropy_bound: entropy_bound,
-                 stability_threshold: stability_threshold,
-                 max_layers: max_layers,
-                 sample_us_by_step_by_canvas_row: sample_us,
-                 routes_by_layer_by_canvas_row: canvas_routes,
-               )
-             end
-      elapsed_ms = (Time.instant - loop_t0).total_milliseconds
-      loop_samples << elapsed_ms if run_index >= warmups
+    sample_us = ML::GGUF::DiffusionGemmaCPU.sample_u_steps(seed, steps, canvas_tokens.size)
+    prompt_rows = [] of Float32
+    tokens.each do |token_id|
+      prompt_rows.concat(ML::GGUF::DiffusionGemmaCPU.scaled_embedding_lookup(weights, token_id))
     end
-    loop = loop.not_nil!
-    summary = loop.summary
-    loop_ms_min = loop_samples.min
-    loop_ms_median = median(loop_samples)
-    loop_ms_max = loop_samples.max
-    loop_candidate_tokens_per_ms = loop_ms_median > 0.0 ? summary.total_candidate_tokens.to_f64 / loop_ms_median : 0.0
-    loop_predictions_per_ms = loop_ms_median > 0.0 ? summary.prediction_count.to_f64 / loop_ms_median : 0.0
-    baseline_loop_ms ||= loop_ms_median
-    baseline_candidate_tokens_per_ms ||= loop_candidate_tokens_per_ms
-    loop_ms_ratio_vs_first = baseline_loop_ms.not_nil! > 0.0 ? loop_ms_median / baseline_loop_ms.not_nil! : 0.0
-    candidate_tokens_per_ms_ratio_vs_first = baseline_candidate_tokens_per_ms.not_nil! > 0.0 ? loop_candidate_tokens_per_ms / baseline_candidate_tokens_per_ms.not_nil! : 0.0
+    mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: tokens.size, canvas_len: canvas_tokens.size, sliding_window: hp.sliding_window)
 
-    result_rows << [
-      {"status", "ok"},
-      {"model", model},
-      {"mode", adaptive ? "adaptive" : "fixed"},
-      {"warmups", warmups.to_s},
-      {"repeats", repeats.to_s},
-      {"max_layers", max_layers.to_s},
-      {"steps_budget", steps.to_s},
-      {"steps_run", summary.steps_run.to_s},
-      {"converged", summary.converged.to_s},
-      {"stop_reason", summary.stop_reason},
-      {"prompt_set_index", prompt_set_index.to_s},
-      {"prompt_source", prompt_source},
-      {"prompt_text_bytes", prompt_text.try(&.bytesize).try(&.to_s) || "0"},
-      {"prompt_token", tokens[0].to_s},
-      {"prompt_len", tokens.size.to_s},
-      {"prompt_tokens", tokens.join(",")},
-      {"canvas_len", canvas_tokens.size.to_s},
-      {"initial_canvas_token", canvas_tokens[0].to_s},
-      {"initial_canvas_tokens", canvas_tokens.join(",")},
-      {"final_canvas_token", loop.final_canvas_tokens[0].to_s},
-      {"final_canvas_tokens", loop.final_canvas_tokens.join(",")},
-      {"candidate_set_index", candidate_set_index.to_s},
-      {"candidate_count", candidate_ids.size.to_s},
-      {"candidate_ids", candidate_ids.join(",")},
-      {"prediction_count", summary.prediction_count.to_s},
-      {"accepted_count", summary.accepted_count.to_s},
-      {"acceptance_rate", summary.acceptance_rate.to_s},
-      {"total_candidate_tokens", summary.total_candidate_tokens.to_s},
-      {"max_candidate_tokens", summary.max_candidate_tokens.to_s},
-      {"mean_candidate_tokens", summary.mean_candidate_tokens.to_s},
-      {"mean_entropy", summary.mean_entropy.to_s},
-      {"load_ms", load_ms.round(3).to_s},
-      {"prompt_cache_ms", cache_ms.round(3).to_s},
-      {"prompt_cache_ms_ratio_vs_first", prompt_cache_ms_ratio_vs_first.round(6).to_s},
-      {"prompt_cache_tokens_per_ms", prompt_cache_tokens_per_ms.round(6).to_s},
-      {"loop_ms", loop_ms_median.round(3).to_s},
-      {"loop_ms_min", loop_ms_min.round(3).to_s},
-      {"loop_ms_median", loop_ms_median.round(3).to_s},
-      {"loop_ms_max", loop_ms_max.round(3).to_s},
-      {"loop_ms_samples", loop_samples.map { |v| v.round(3) }.join(",")},
-      {"loop_candidate_tokens_per_ms", loop_candidate_tokens_per_ms.round(6).to_s},
-      {"loop_predictions_per_ms", loop_predictions_per_ms.round(6).to_s},
-      {"loop_ms_ratio_vs_first", loop_ms_ratio_vs_first.round(6).to_s},
-      {"candidate_tokens_per_ms_ratio_vs_first", candidate_tokens_per_ms_ratio_vs_first.round(6).to_s},
-    ]
+    prompt_routes = nil.as(Array(Array(Array(ML::GGUF::DiffusionGemmaCPU::ExpertRoute)))?)
+    if single_route
+      prompt_route_rows = tokens.map_with_index do |_, i|
+        row = prompt_rows[i * hp.n_embd, hp.n_embd]
+        ML::GGUF::DiffusionGemmaCPU.route_experts(weights, 0, row)[0, 1]
+      end
+      prompt_routes = [prompt_route_rows]
+    end
+
+    cache_t0 = Time.instant
+    prompt_cache = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(
+      weights,
+      prompt_rows,
+      mask,
+      max_layers: max_layers,
+      routes_by_layer_by_prompt_row: prompt_routes,
+    )
+    cache_ms = (Time.instant - cache_t0).total_milliseconds
+    baseline_cache_ms ||= cache_ms
+    prompt_cache_ms_ratio_vs_first = baseline_cache_ms.not_nil! > 0.0 ? cache_ms / baseline_cache_ms.not_nil! : 0.0
+    prompt_cache_tokens_per_ms = cache_ms > 0.0 ? tokens.size.to_f64 / cache_ms : 0.0
+
+    candidate_sets.each_with_index do |candidate_ids, candidate_set_index|
+      candidate_rows = canvas_tokens.map { candidate_ids.dup }
+      loop_samples = [] of Float64
+      loop = nil.as(ML::GGUF::DiffusionGemmaCPU::BoundedDenoiseLoopResult?)
+      (warmups + repeats).times do |run_index|
+        loop_t0 = Time.instant
+        loop = if adaptive
+                 ML::GGUF::DiffusionGemmaCPU.decode_canvas_adaptive_bounded_loop(
+                   weights,
+                   canvas_tokens,
+                   canvas_rows,
+                   mask,
+                   prompt_cache,
+                   candidate_rows,
+                   entropy_bound: entropy_bound,
+                   stability_threshold: stability_threshold,
+                   max_steps: steps,
+                   proposal_top_k: proposal_top_k,
+                   max_layers: max_layers,
+                   sample_us_by_step_by_canvas_row: sample_us,
+                   routes_by_layer_by_canvas_row: canvas_routes,
+                 )
+               else
+                 candidate_steps = Array(Array(Array(Int32))).new(steps) { candidate_rows.map(&.dup) }
+                 ML::GGUF::DiffusionGemmaCPU.decode_canvas_bounded_loop(
+                   weights,
+                   canvas_tokens,
+                   canvas_rows,
+                   mask,
+                   prompt_cache,
+                   candidate_steps,
+                   entropy_bound: entropy_bound,
+                   stability_threshold: stability_threshold,
+                   max_layers: max_layers,
+                   sample_us_by_step_by_canvas_row: sample_us,
+                   routes_by_layer_by_canvas_row: canvas_routes,
+                 )
+               end
+        elapsed_ms = (Time.instant - loop_t0).total_milliseconds
+        loop_samples << elapsed_ms if run_index >= warmups
+      end
+      loop = loop.not_nil!
+      summary = loop.summary
+      loop_ms_min = loop_samples.min
+      loop_ms_median = median(loop_samples)
+      loop_ms_max = loop_samples.max
+      loop_candidate_tokens_per_ms = loop_ms_median > 0.0 ? summary.total_candidate_tokens.to_f64 / loop_ms_median : 0.0
+      loop_predictions_per_ms = loop_ms_median > 0.0 ? summary.prediction_count.to_f64 / loop_ms_median : 0.0
+      baseline_loop_ms ||= loop_ms_median
+      baseline_candidate_tokens_per_ms ||= loop_candidate_tokens_per_ms
+      loop_ms_ratio_vs_first = baseline_loop_ms.not_nil! > 0.0 ? loop_ms_median / baseline_loop_ms.not_nil! : 0.0
+      candidate_tokens_per_ms_ratio_vs_first = baseline_candidate_tokens_per_ms.not_nil! > 0.0 ? loop_candidate_tokens_per_ms / baseline_candidate_tokens_per_ms.not_nil! : 0.0
+
+      result_rows << [
+        {"status", "ok"},
+        {"model", model},
+        {"mode", adaptive ? "adaptive" : "fixed"},
+        {"warmups", warmups.to_s},
+        {"repeats", repeats.to_s},
+        {"max_layers", max_layers.to_s},
+        {"steps_budget", steps.to_s},
+        {"steps_run", summary.steps_run.to_s},
+        {"converged", summary.converged.to_s},
+        {"stop_reason", summary.stop_reason},
+        {"prompt_set_index", prompt_set_index.to_s},
+        {"prompt_source", prompt_source},
+        {"prompt_text_bytes", prompt_text.try(&.bytesize).try(&.to_s) || "0"},
+        {"prompt_token", tokens[0].to_s},
+        {"prompt_len", tokens.size.to_s},
+        {"prompt_tokens", tokens.join(",")},
+        {"canvas_set_index", canvas_set_index.to_s},
+        {"canvas_len", canvas_tokens.size.to_s},
+        {"initial_canvas_token", canvas_tokens[0].to_s},
+        {"initial_canvas_tokens", canvas_tokens.join(",")},
+        {"final_canvas_token", loop.final_canvas_tokens[0].to_s},
+        {"final_canvas_tokens", loop.final_canvas_tokens.join(",")},
+        {"candidate_set_index", candidate_set_index.to_s},
+        {"candidate_count", candidate_ids.size.to_s},
+        {"candidate_ids", candidate_ids.join(",")},
+        {"prediction_count", summary.prediction_count.to_s},
+        {"accepted_count", summary.accepted_count.to_s},
+        {"acceptance_rate", summary.acceptance_rate.to_s},
+        {"total_candidate_tokens", summary.total_candidate_tokens.to_s},
+        {"max_candidate_tokens", summary.max_candidate_tokens.to_s},
+        {"mean_candidate_tokens", summary.mean_candidate_tokens.to_s},
+        {"mean_entropy", summary.mean_entropy.to_s},
+        {"load_ms", load_ms.round(3).to_s},
+        {"prompt_cache_ms", cache_ms.round(3).to_s},
+        {"prompt_cache_ms_ratio_vs_first", prompt_cache_ms_ratio_vs_first.round(6).to_s},
+        {"prompt_cache_tokens_per_ms", prompt_cache_tokens_per_ms.round(6).to_s},
+        {"loop_ms", loop_ms_median.round(3).to_s},
+        {"loop_ms_min", loop_ms_min.round(3).to_s},
+        {"loop_ms_median", loop_ms_median.round(3).to_s},
+        {"loop_ms_max", loop_ms_max.round(3).to_s},
+        {"loop_ms_samples", loop_samples.map { |v| v.round(3) }.join(",")},
+        {"loop_candidate_tokens_per_ms", loop_candidate_tokens_per_ms.round(6).to_s},
+        {"loop_predictions_per_ms", loop_predictions_per_ms.round(6).to_s},
+        {"loop_ms_ratio_vs_first", loop_ms_ratio_vs_first.round(6).to_s},
+        {"candidate_tokens_per_ms_ratio_vs_first", candidate_tokens_per_ms_ratio_vs_first.round(6).to_s},
+      ]
+    end
   end
 end
 

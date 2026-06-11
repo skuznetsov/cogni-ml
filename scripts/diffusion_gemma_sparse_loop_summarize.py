@@ -55,19 +55,21 @@ def read_rows(path: Path | None) -> list[dict[str, str]]:
 
 
 def summarize(rows: list[dict[str, str]]) -> list[dict[str, str]]:
-    groups: dict[int, list[dict[str, str]]] = defaultdict(list)
+    groups: dict[tuple[int, int | None], list[dict[str, str]]] = defaultdict(list)
     for row in rows:
-        groups[as_int(row, "prompt_len")].append(row)
+        canvas_len = as_int(row, "canvas_len") if "canvas_len" in row and row["canvas_len"] else None
+        groups[(as_int(row, "prompt_len"), canvas_len)].append(row)
 
     out = []
-    for prompt_len in sorted(groups):
-        group = groups[prompt_len]
+    for prompt_len, canvas_len in sorted(groups, key=lambda k: (k[0], -1 if k[1] is None else k[1])):
+        group = groups[(prompt_len, canvas_len)]
         cache_row = min(group, key=lambda r: as_float(r, "prompt_cache_ms"))
         best_loop = min(group, key=lambda r: as_float(r, "loop_ms_median"))
         best_throughput = max(group, key=lambda r: as_float(r, "loop_candidate_tokens_per_ms"))
         out.append(
             {
                 "prompt_len": str(prompt_len),
+                "canvas_len": "NA" if canvas_len is None else str(canvas_len),
                 "rows": str(len(group)),
                 "prompt_cache_ms": f"{as_float(cache_row, 'prompt_cache_ms'):.3f}",
                 "prompt_cache_ms_ratio_vs_first": f"{as_float(cache_row, 'prompt_cache_ms_ratio_vs_first'):.6f}",
