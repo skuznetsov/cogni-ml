@@ -539,7 +539,7 @@ module ML::GGUF
       expected = hp.n_head * hp.head_dim_for_layer(il)
       raise ArgumentError.new("attention context size mismatch at layer #{il}: #{context.size} != #{expected}") unless context.size == expected
 
-      Gemma4CPU.matmul(weights.layers[il].attn_output_qw, context)
+      prompt_projection_matmul(weights.layers[il].attn_output_qw, context, 1)
     end
 
     def attention_residual_from_context(weights : DiffusionGemmaWeights,
