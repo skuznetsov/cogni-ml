@@ -11,6 +11,7 @@ quiet_poll_ms="${QUIET_POLL_MS:-1000}"
 load_threshold="${LOAD_THRESHOLD:-50}"
 total_threshold="${TOTAL_THRESHOLD:-100}"
 require_quiet="${REQUIRE_QUIET:-0}"
+require_candidate="${REQUIRE_CANDIDATE:-0}"
 
 mkdir -p "$log_dir"
 
@@ -22,6 +23,7 @@ printf 'quiet_ms=%s\n' "$quiet_ms"
 printf 'load_threshold=%s\n' "$load_threshold"
 printf 'total_threshold=%s\n' "$total_threshold"
 printf 'require_quiet=%s\n' "$require_quiet"
+printf 'require_candidate=%s\n' "$require_candidate"
 
 env_tokens() {
   local raw="$1"
@@ -320,4 +322,8 @@ for case in cases:
         sys.exit(4)
 PY
 
-"$repo_root/scripts/diffusion_gemma_abba_promotion_summary.py" --roots "$log_dir"
+promotion_args=(--roots "$log_dir")
+if [[ "$require_candidate" == "1" ]]; then
+  promotion_args=(--require-candidate "${promotion_args[@]}")
+fi
+"$repo_root/scripts/diffusion_gemma_abba_promotion_summary.py" "${promotion_args[@]}"
