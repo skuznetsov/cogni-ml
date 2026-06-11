@@ -356,10 +356,10 @@ module ML::GGUF
     end
 
     def attention_project_pre_norm(lw : DiffusionGemmaLayerWeights, x_norm : Array(Float32)) : AttentionProjection
-      q = Gemma4CPU.matmul(lw.attn_q_qw, x_norm)
-      k = Gemma4CPU.matmul(lw.attn_k_qw, x_norm)
+      q = prompt_projection_matmul(lw.attn_q_qw, x_norm, 1)
+      k = prompt_projection_matmul(lw.attn_k_qw, x_norm, 1)
       if v_qw = lw.attn_v_qw
-        v = Gemma4CPU.matmul(v_qw, x_norm)
+        v = prompt_projection_matmul(v_qw, x_norm, 1)
         AttentionProjection.new(q, k, v, false)
       else
         AttentionProjection.new(q, k, k.dup, true)

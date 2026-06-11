@@ -130,3 +130,9 @@ the opt-in Metal route rejects a supported-call shape with an exception, the
 probe fails fast instead of hiding the error. The Metal route uses
 `DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH=16` by default so short prompts do
 not pay one-command-buffer-per-projection overhead.
+
+For focused local performance probes,
+`DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH=1` also lets single-row layer Q/K/V
+projections use the same opt-in Metal matmul helper. Keep this as an experiment
+gate: tiny Metal dispatches are noisier than the default CPU route, but they
+directly target the current one-canvas-row decode-stack bottleneck.
