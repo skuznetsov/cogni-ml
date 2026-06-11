@@ -90,6 +90,8 @@ loop after the prompt cache is built. `prompt_route_ms` exposes any prompt MoE
 route precompute work that happens before cache construction. The
 `prompt_projection_backend` column reports whether prompt Q/K/V projection
 matmuls used the default CPU path or the experimental Metal path.
+`prompt_projection_ms` and `prompt_materialize_ms` split prompt-cache time into
+Q/K/V projection and prompt-row materialization phases.
 
 The sparse smoke defaults to a decode-only prompt cache: it stores the prompt
 attention projections needed by canvas decode but skips materializing final

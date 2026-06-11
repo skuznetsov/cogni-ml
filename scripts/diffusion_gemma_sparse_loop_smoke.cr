@@ -358,6 +358,8 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
     baseline_cache_ms ||= cache_ms
     prompt_cache_ms_ratio_vs_first = baseline_cache_ms.not_nil! > 0.0 ? cache_ms / baseline_cache_ms.not_nil! : 0.0
     prompt_cache_tokens_per_ms = cache_ms > 0.0 ? tokens.size.to_f64 / cache_ms : 0.0
+    prompt_projection_ms = prompt_cache.projection_ms_by_layer.sum
+    prompt_materialize_ms = prompt_cache.materialize_ms_by_layer.sum
 
     candidate_specs.each_with_index do |candidate_spec, candidate_set_index|
       generated_count, candidate_ids, candidate_texts = candidate_spec
@@ -464,6 +466,8 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"prompt_route_ms", prompt_route_ms.round(3).to_s},
         {"prompt_projection_backend", ML::GGUF::DiffusionGemmaCPU.prompt_projection_metal_enabled? && tokens.size >= ML::GGUF::DiffusionGemmaCPU.prompt_projection_metal_min_batch ? "metal" : "cpu"},
         {"prompt_cache_ms", cache_ms.round(3).to_s},
+        {"prompt_projection_ms", prompt_projection_ms.round(3).to_s},
+        {"prompt_materialize_ms", prompt_materialize_ms.round(3).to_s},
         {"prompt_cache_materialized_final_rows", materialize_prompt_final_rows.to_s},
         {"prompt_cache_ms_ratio_vs_first", prompt_cache_ms_ratio_vs_first.round(6).to_s},
         {"prompt_cache_tokens_per_ms", prompt_cache_tokens_per_ms.round(6).to_s},

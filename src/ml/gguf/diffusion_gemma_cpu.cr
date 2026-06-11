@@ -162,8 +162,13 @@ module ML::GGUF
     struct PromptLayerCache
       getter final_rows : Array(Float32)
       getter projections_by_layer : Array(Array(AttentionProjection))
+      getter projection_ms_by_layer : Array(Float64)
+      getter materialize_ms_by_layer : Array(Float64)
 
-      def initialize(@final_rows, @projections_by_layer)
+      def initialize(@final_rows,
+                     @projections_by_layer,
+                     @projection_ms_by_layer = [] of Float64,
+                     @materialize_ms_by_layer = [] of Float64)
       end
 
       def layers : Int32
@@ -657,16 +662,22 @@ module ML::GGUF
 
       rows = prompt_rows.dup
       projections_by_layer = [] of Array(AttentionProjection)
+      projection_ms_by_layer = [] of Float64
+      materialize_ms_by_layer = [] of Float64
       max_layers.times do |il|
+        projection_t0 = Time.instant
         projections = prompt_attention_projections(weights, il, rows, mask)
+        projection_ms_by_layer << (Time.instant - projection_t0).total_milliseconds
         projections_by_layer << projections
         break if !materialize_final_rows && il == max_layers - 1
 
         routes = routes_by_layer_by_prompt_row ? routes_by_layer_by_prompt_row.not_nil![il] : nil
+        materialize_t0 = Time.instant
         rows = layer_forward_prompt_rows_with_projections(weights, il, rows, projections, mask, routes)
+        materialize_ms_by_layer << (Time.instant - materialize_t0).total_milliseconds
       end
 
-      PromptLayerCache.new(rows, projections_by_layer)
+      PromptLayerCache.new(rows, projections_by_layer, projection_ms_by_layer, materialize_ms_by_layer)
     end
 
     def decode_canvas_rows_with_prompt_cache(weights : DiffusionGemmaWeights,
