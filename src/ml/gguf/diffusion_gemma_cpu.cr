@@ -421,12 +421,13 @@ module ML::GGUF
       raise ArgumentError.new("sliding_window must be positive") unless sliding_window > 0
 
       low = hp.sliding_window?(il) ? Math.max(0, query_pos - sliding_window + 1) : 0
-      attention_context_from_keyspace(
+      attention_context_from_range(
         query: projections[query_pos],
         keyspace: projections,
         hp: hp,
         il: il,
-        allowed: ->(key_pos : Int32) { key_pos >= low && key_pos <= query_pos },
+        low: low,
+        high: query_pos,
       )
     end
 
@@ -643,7 +644,8 @@ module ML::GGUF
                                  prompt_rows : Array(Float32),
                                  mask : DiffusionGemmaAttentionMask,
                                  max_layers : Int32 = weights.hparams.n_layer,
-                                 routes_by_layer_by_prompt_row : Array(Array(Array(ExpertRoute)))? = nil) : PromptLayerCache
+                                 routes_by_layer_by_prompt_row : Array(Array(Array(ExpertRoute)))? = nil,
+                                 materialize_final_rows : Bool = true) : PromptLayerCache
       hp = weights.hparams
       prompt_size = mask.prompt_len * hp.n_embd
       raise ArgumentError.new("prompt rows size mismatch: #{prompt_rows.size} != #{prompt_size}") unless prompt_rows.size == prompt_size
@@ -657,6 +659,8 @@ module ML::GGUF
       max_layers.times do |il|
         projections = prompt_attention_projections(weights, il, rows, mask)
         projections_by_layer << projections
+        break if !materialize_final_rows && il == max_layers - 1
+
         routes = routes_by_layer_by_prompt_row ? routes_by_layer_by_prompt_row.not_nil![il] : nil
         rows = layer_forward_prompt_rows_with_projections(weights, il, rows, projections, mask, routes)
       end
@@ -1354,6 +1358,50 @@ module ML::GGUF
 
         out_off = h * head_dim
         allowed_keys.each_with_index do |key_pos, i|
+          v_off = kvh * head_dim
+          weight = scores[i]
+          head_dim.times do |d|
+            result[out_off + d] += weight * keyspace[key_pos].v[v_off + d]
+          end
+        end
+      end
+      result
+    end
+
+    private def attention_context_from_range(query : AttentionProjection,
+                                             keyspace : Array(AttentionProjection),
+                                             hp : DiffusionGemmaHparams,
+                                             il : Int32,
+                                             low : Int32,
+                                             high : Int32) : Array(Float32)
+      raise ArgumentError.new("attention has no allowed keys") if low > high
+      raise ArgumentError.new("attention range out of bounds") if low < 0 || high >= keyspace.size
+
+      head_dim = hp.head_dim_for_layer(il)
+      n_head = hp.n_head
+      n_head_kv = hp.n_head_kv(il)
+      q_dim = n_head * head_dim
+      kv_dim = n_head_kv * head_dim
+      heads_per_group = n_head // n_head_kv
+      raise ArgumentError.new("invalid GQA layout at layer #{il}") unless heads_per_group > 0 && n_head % n_head_kv == 0
+      validate_projection_shape!(query, q_dim, kv_dim, il)
+
+      key_count = high - low + 1
+      result = Array(Float32).new(q_dim, 0.0_f32)
+      scores = Array(Float32).new(key_count, 0.0_f32)
+      n_head.times do |h|
+        kvh = h // heads_per_group
+        q_off = h * head_dim
+        key_count.times do |i|
+          key_pos = low + i
+          k_off = kvh * head_dim
+          scores[i] = dot(query.q, q_off, keyspace[key_pos].k, k_off, head_dim)
+        end
+        Gemma4CPU.softmax_slice!(scores, 0, scores.size)
+
+        out_off = h * head_dim
+        key_count.times do |i|
+          key_pos = low + i
           v_off = kvh * head_dim
           weight = scores[i]
           head_dim.times do |d|

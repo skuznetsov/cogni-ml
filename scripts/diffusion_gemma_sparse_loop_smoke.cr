@@ -32,6 +32,7 @@ format = "keyvalue"
 repeats = 1
 warmups = 0
 decode_canvas_text = false
+materialize_prompt_final_rows = false
 
 OptionParser.parse do |p|
   p.banner = "Usage: diffusion_gemma_sparse_loop_smoke [options]"
@@ -57,6 +58,7 @@ OptionParser.parse do |p|
   p.on("--seed N", "Deterministic sampling seed (default: 7)") { |v| seed = v.to_i }
   p.on("--fixed", "Use fixed candidate steps instead of adaptive proposals") { adaptive = false }
   p.on("--full-routes", "Use full top-k MoE routing instead of the single-route smoke shortcut") { single_route = false }
+  p.on("--materialize-prompt-final-rows", "Materialize final prompt rows in the cache instead of decode-only projections") { materialize_prompt_final_rows = true }
   p.on("--format FORMAT", "Output format: keyvalue or tsv (default: keyvalue)") { |v| format = v.downcase }
   p.on("--repeats N", "Repeat sparse loop after one model/cache load (default: 1)") { |v| repeats = v.to_i }
   p.on("--warmups N", "Run sparse loop warmups before measured repeats (default: 0)") { |v| warmups = v.to_i }
@@ -348,6 +350,7 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
       mask,
       max_layers: max_layers,
       routes_by_layer_by_prompt_row: prompt_routes,
+      materialize_final_rows: materialize_prompt_final_rows,
     )
     cache_ms = (Time.instant - cache_t0).total_milliseconds
     baseline_cache_ms ||= cache_ms
@@ -457,6 +460,7 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"last_candidate_probability_rows", format_prediction_f32_rows(last_predictions, &.probabilities)},
         {"load_ms", load_ms.round(3).to_s},
         {"prompt_cache_ms", cache_ms.round(3).to_s},
+        {"prompt_cache_materialized_final_rows", materialize_prompt_final_rows.to_s},
         {"prompt_cache_ms_ratio_vs_first", prompt_cache_ms_ratio_vs_first.round(6).to_s},
         {"prompt_cache_tokens_per_ms", prompt_cache_tokens_per_ms.round(6).to_s},
         {"loop_ms", loop_ms_median.round(3).to_s},

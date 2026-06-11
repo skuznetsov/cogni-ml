@@ -599,6 +599,14 @@ describe ML::GGUF::DiffusionGemmaCPU do
       max_layers: 1,
       routes_by_layer_by_prompt_row: [[prompt_route]],
     )
+    decode_only_prompt_cache = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(
+      w,
+      prompt_row,
+      mask,
+      max_layers: 1,
+      routes_by_layer_by_prompt_row: [[prompt_route]],
+      materialize_final_rows: false,
+    )
 
     direct = ML::GGUF::DiffusionGemmaCPU.layer_forward_decode_canvas_rows_with_prompt_projections(
       w,
@@ -617,6 +625,16 @@ describe ML::GGUF::DiffusionGemmaCPU do
       routes_by_layer_by_canvas_row: [[canvas_route]],
     )
     cached_stack.should eq(direct)
+    decode_only_stack = ML::GGUF::DiffusionGemmaCPU.decode_canvas_rows_with_prompt_cache(
+      w,
+      canvas_row,
+      mask,
+      decode_only_prompt_cache,
+      max_layers: 1,
+      routes_by_layer_by_canvas_row: [[canvas_route]],
+    )
+    decode_only_stack.should eq(direct)
+    decode_only_prompt_cache.final_rows.should eq(prompt_row)
 
     expect_raises(ArgumentError, /canvas rows size mismatch/) do
       ML::GGUF::DiffusionGemmaCPU.decode_canvas_rows_with_prompt_cache(w, [0.0_f32], mask, prompt_cache, max_layers: 1)

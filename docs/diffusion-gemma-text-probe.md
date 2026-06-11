@@ -71,3 +71,26 @@ DIFFUSION_GEMMA_LLAMA_TOKENIZE=$HOME/SrcArchives/AI/llama.cpp-diffusiongemma-pr/
 Use `scripts/diffusion_gemma_sparse_loop_smoke.sh` directly when you need
 token-id, canvas-length, candidate-count, or TSV sweep controls that are outside
 the text-first wrapper.
+
+## Prompt Perf Probe
+
+`scripts/diffusion_gemma_prompt_perf_probe.sh` runs the same bounded sparse
+decode with short, medium, and long text prompts and writes one TSV row per
+case:
+
+```sh
+TIMEOUT_SECONDS=45 OUT=/tmp/diffusion_gemma_prompt_perf.tsv scripts/diffusion_gemma_prompt_perf_probe.sh
+```
+
+The probe builds or reuses `DIFFUSION_GEMMA_SPARSE_LOOP_BIN` once, runs cases
+sequentially, and records `ok`, `timeout`, or `failed` rows so a slow long case
+does not discard earlier measurements. The main timing column for prompt-size
+work is `prompt_cache_ms`; `loop_ms_median` tracks the bounded sparse candidate
+loop after the prompt cache is built.
+
+The sparse smoke defaults to a decode-only prompt cache: it stores the prompt
+attention projections needed by canvas decode but skips materializing final
+prompt rows for the last requested layer. Use
+`--materialize-prompt-final-rows` on `scripts/diffusion_gemma_sparse_loop_smoke.sh`
+or `MATERIALIZE_PROMPT_FINAL_ROWS=1` on the perf probe when comparing against
+the conservative full-cache path.
