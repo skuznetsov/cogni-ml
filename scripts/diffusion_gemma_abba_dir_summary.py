@@ -118,6 +118,20 @@ def delta_confidence(range_delta_ratio: float) -> str:
     return "unstable" if range_delta_ratio > 1.0 else "range_bounded"
 
 
+def promotion_decision(promotion_status: str, loop_delta: float, loop_confidence: str) -> str:
+    if promotion_status != "quiet_gate_ok":
+        return "blocked_by_host_noise"
+    if loop_confidence != "range_bounded":
+        return "blocked_by_range"
+    if math.isnan(loop_delta):
+        return "blocked_missing_delta"
+    if loop_delta < 0.0:
+        return "candidate_speedup"
+    if loop_delta == 0.0:
+        return "neutral"
+    return "reject_regression"
+
+
 def read_rows(root: Path) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for path in sorted(root.glob("run_*.tsv")):
@@ -236,8 +250,10 @@ def summarize(root: Path) -> list[dict[str, object]]:
         summary["dominant_negative_phase"] = negative_phase
         summary["dominant_negative_delta_ms"] = format_ms(negative_delta)
         loop_range_over_delta = range_over_delta(base, variant, "loop_ms_median")
+        loop_confidence = delta_confidence(loop_range_over_delta)
         summary["loop_range_over_delta"] = format_ratio(loop_range_over_delta)
-        summary["delta_confidence"] = delta_confidence(loop_range_over_delta)
+        summary["delta_confidence"] = loop_confidence
+        summary["promotion_decision"] = promotion_decision(promotion, loop_delta, loop_confidence)
         for metric in PHASE_CONFIDENCE_METRICS:
             metric_range_over_delta = range_over_delta(base, variant, metric)
             summary[f"{metric}_range_over_delta"] = format_ratio(metric_range_over_delta)
@@ -289,6 +305,7 @@ def main() -> None:
             "dominant_negative_delta_ms",
             "loop_range_over_delta",
             "delta_confidence",
+            "promotion_decision",
         ]
     )
     for metric in PHASE_CONFIDENCE_METRICS:
