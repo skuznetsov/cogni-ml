@@ -138,3 +138,51 @@ For focused local performance probes,
 projections use the same opt-in Metal matmul helper. Keep this as an experiment
 gate: tiny Metal dispatches are noisier than the default CPU route, but they
 directly target the current one-canvas-row decode-stack bottleneck.
+
+## ABBA Promotion Gate
+
+Use `scripts/diffusion_gemma_prompt_variant_abba.sh` for route A/B checks that
+need host snapshots, quiet gating, row summaries, and a suite-level promotion
+decision.
+
+Canonical quiet promotion command for the fixed-high context batch route:
+
+```sh
+LOG_DIR=/tmp/diffusiongemma_context_batch_quiet_abba \
+SEQUENCE='base variant variant base' \
+BASE_ENV='DIFFUSION_GEMMA_CONTEXT_METAL_BATCH_ROWS_OFF=1' \
+VARIANT_ENV='' \
+DIFFUSION_GEMMA_CONTEXT_METAL=1 \
+DIFFUSION_GEMMA_PROMPT_PROJ_METAL=1 \
+DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH=1 \
+DIFFUSION_GEMMA_FUSED_QK_NORM_ROPE=1 \
+SYNTHETIC_PROMPT_LENGTHS=64,128,256 \
+CANVAS='Hello world' \
+CACHE_WARMUPS=1 \
+CACHE_REPEATS=2 \
+TIMEOUT_SECONDS=90 \
+QUIET_MS=15000 \
+LOAD_THRESHOLD=30 \
+TOTAL_THRESHOLD=90 \
+REQUIRE_QUIET=1 \
+REQUIRE_CANDIDATE=1 \
+PROMOTION_FORMAT=json \
+scripts/diffusion_gemma_prompt_variant_abba.sh
+```
+
+Interpretation rules:
+
+- `REQUIRE_QUIET=1` fails before model work if the host is too noisy.
+- `REQUIRE_CANDIDATE=1` fails after summaries unless the whole suite is
+  `candidate_speedup`.
+- `PROMOTION_FORMAT=json` emits a structured suite decision with
+  `suite_decision`, `decision_reason`, and minimum loop/context speedups.
+- Treat rows with `blocked_by_host_noise` or `blocked_by_range` as branch
+  evidence only, not promotion evidence.
+
+Offline summaries for saved ABBA directories:
+
+```sh
+scripts/diffusion_gemma_abba_dir_summary.py /tmp/run64 /tmp/run128 /tmp/run256
+scripts/diffusion_gemma_abba_promotion_summary.py --format json --roots /tmp/run64 /tmp/run128 /tmp/run256
+```
