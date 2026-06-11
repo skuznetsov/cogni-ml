@@ -3,6 +3,7 @@ require "../src/ml/gguf/diffusion_gemma_meta"
 require "../src/ml/gguf/diffusion_gemma_weights"
 require "../src/ml/gguf/diffusion_gemma_runtime"
 require "../src/ml/gguf/diffusion_gemma_cpu"
+require "../src/ml/gguf/gemma4_metal"
 
 DIFFUSION_GEMMA_26B_Q4KM = "#{ENV["HOME"]}/.cache/lm-studio/models/unsloth/diffusiongemma-26B-A4B-it-GGUF/diffusiongemma-26B-A4B-it-Q4_K_M.gguf"
 
@@ -31,6 +32,60 @@ def deterministic_diffusion_gemma_projection(hp : ML::GGUF::DiffusionGemmaHparam
     v: Array(Float32).new(kv_dim) { |i| ((i % 31) - 15).to_f32 / 23.0_f32 },
     reused_k_as_v: false,
   )
+end
+
+def diffusion_gemma_attention_context_rows_reference(q_rows : Array(Float32),
+                                                     k_cache : Array(Float32),
+                                                     v_cache : Array(Float32),
+                                                     base_pos : Int32,
+                                                     rows : Int32,
+                                                     n_head : Int32,
+                                                     n_head_kv : Int32,
+                                                     head_dim : Int32,
+                                                     sliding_window : Int32) : Array(Float32)
+  q_dim = n_head * head_dim
+  kv_dim = n_head_kv * head_dim
+  heads_per_group = n_head // n_head_kv
+  out = Array(Float32).new(rows * q_dim, 0.0_f32)
+  scores = Array(Float32).new(base_pos + rows, 0.0_f32)
+
+  rows.times do |row|
+    row_pos = base_pos + row
+    start_pos = sliding_window == 0 || row_pos + 1 <= sliding_window ? 0 : row_pos + 1 - sliding_window
+    len = row_pos - start_pos + 1
+
+    n_head.times do |h|
+      kvh = h // heads_per_group
+      q_off = (row * n_head + h) * head_dim
+
+      max_score = -Float32::INFINITY
+      len.times do |i|
+        pos = start_pos + i
+        k_off = pos * kv_dim + kvh * head_dim
+        score = 0.0_f32
+        head_dim.times { |d| score += q_rows[q_off + d] * k_cache[k_off + d] }
+        scores[i] = score
+        max_score = score if score > max_score
+      end
+
+      sum = 0.0_f32
+      len.times do |i|
+        weight = Math.exp((scores[i] - max_score).to_f64).to_f32
+        scores[i] = weight
+        sum += weight
+      end
+
+      out_off = (row * n_head + h) * head_dim
+      len.times do |i|
+        pos = start_pos + i
+        v_off = pos * kv_dim + kvh * head_dim
+        weight = scores[i] / sum
+        head_dim.times { |d| out[out_off + d] += weight * v_cache[v_off + d] }
+      end
+    end
+  end
+
+  out
 end
 
 def diffusion_gemma_rope_pair_energy(x : Array(Float32), offset : Int32, half : Int32, i : Int32) : Float64
@@ -703,6 +758,42 @@ describe ML::GGUF::DiffusionGemmaCPU do
       else
         ENV.delete("DIFFUSION_GEMMA_PROMPT_PROJ_METAL_OFF")
       end
+    end
+  end
+
+  it "reuses Gemma4 Metal attention context rows on DiffusionGemma GQA shapes" do
+    next unless ML::GGUF::Gemma4Metal.available?
+
+    n_head = 16
+    n_head_kv = 8
+    head_dim = 256
+    q_dim = n_head * head_dim
+    kv_dim = n_head_kv * head_dim
+    base_pos = 64
+    sliding_window = 64
+
+    [1, 2].each do |rows|
+      q_rows = Array(Float32).new(rows * q_dim) do |i|
+        ((((i * 17 + rows * 23) % 257) - 128).to_f32 / 512.0_f32)
+      end
+      k_cache = Array(Float32).new((base_pos + rows) * kv_dim) do |i|
+        ((((i * 13 + rows * 11) % 251) - 125).to_f32 / 512.0_f32)
+      end
+      v_cache = Array(Float32).new((base_pos + rows) * kv_dim) do |i|
+        ((((i * 19 + rows * 7) % 241) - 120).to_f32 / 512.0_f32)
+      end
+
+      expected = diffusion_gemma_attention_context_rows_reference(
+        q_rows, k_cache, v_cache, base_pos, rows, n_head, n_head_kv, head_dim, sliding_window)
+      actual = ML::GGUF::Gemma4Metal.attention_context_rows(
+        q_rows, k_cache, v_cache, base_pos, rows, n_head, n_head_kv, head_dim, sliding_window).not_nil!
+
+      max_diff = 0.0_f32
+      expected.size.times do |i|
+        diff = (expected[i] - actual[i]).abs
+        max_diff = diff if diff > max_diff
+      end
+      max_diff.should be < 1.0e-4_f32
     end
   end
 

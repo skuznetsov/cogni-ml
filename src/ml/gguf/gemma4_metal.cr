@@ -57,6 +57,18 @@ module ML::GGUF
         nil
       end
 
+      def attention_context_rows(q_rows : Array(Float32),
+                                 k_cache : Array(Float32),
+                                 v_cache : Array(Float32),
+                                 base_pos : Int32,
+                                 rows : Int32,
+                                 n_head : Int32,
+                                 n_head_kv : Int32,
+                                 head_dim : Int32,
+                                 sliding_window : Int32) : Array(Float32)?
+        nil
+      end
+
       def layer_tail(x : Array(Float32),
                      attn_projected : Array(Float32),
                      lw : Gemma4LayerWeights,
@@ -578,6 +590,46 @@ module ML::GGUF
         cmd.wait
 
         out_buf.read(q_dim)
+      end
+
+      def attention_context_rows(q_rows : Array(Float32),
+                                 k_cache : Array(Float32),
+                                 v_cache : Array(Float32),
+                                 base_pos : Int32,
+                                 rows : Int32,
+                                 n_head : Int32,
+                                 n_head_kv : Int32,
+                                 head_dim : Int32,
+                                 sliding_window : Int32) : Array(Float32)?
+        return nil unless available?
+        raise ArgumentError.new("base_pos must be non-negative") if base_pos < 0
+        raise ArgumentError.new("rows must be positive") unless rows > 0
+        raise ArgumentError.new("head_dim must be positive") unless head_dim > 0
+        raise ArgumentError.new("unsupported head_dim #{head_dim}; max 512") if head_dim > 512
+        raise ArgumentError.new("invalid GQA layout") unless n_head_kv > 0 && n_head > 0 && n_head % n_head_kv == 0
+        raise ArgumentError.new("sliding_window must be non-negative") if sliding_window < 0
+
+        q_dim = n_head * head_dim
+        kv_dim = n_head_kv * head_dim
+        required_cache_rows = base_pos + rows
+        raise ArgumentError.new("q_rows size mismatch") unless q_rows.size == rows * q_dim
+        raise ArgumentError.new("k_cache size mismatch") unless k_cache.size >= required_cache_rows * kv_dim
+        raise ArgumentError.new("v_cache size mismatch") unless v_cache.size >= required_cache_rows * kv_dim
+
+        q_buf = ML::MetalBuffer.from_array(q_rows)
+        k_buf = ML::MetalBuffer.from_array(k_cache)
+        v_buf = ML::MetalBuffer.from_array(v_cache)
+        out_buf = ML::MetalBuffer.new((rows * q_dim).to_i64 * sizeof(Float32))
+
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        encode_attention_context_rows(enc, q_buf, k_buf, v_buf, out_buf,
+          base_pos, rows, n_head, n_head_kv, head_dim, n_head // n_head_kv, sliding_window)
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
+
+        out_buf.read(rows * q_dim)
       end
 
       def attention_context_from_projection_resident_buffers(q_buf : ML::MetalBuffer,
