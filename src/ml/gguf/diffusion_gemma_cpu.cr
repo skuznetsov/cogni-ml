@@ -43,8 +43,8 @@ module ML::GGUF
         end
         @k_cache_buf = ML::MetalBuffer.from_array(k_cache)
         @v_cache_buf = ML::MetalBuffer.from_array(v_cache)
-        @q_buf = ML::MetalBuffer.new(@q_dim.to_i64 * sizeof(Float32))
-        @out_buf = ML::MetalBuffer.new(@q_dim.to_i64 * sizeof(Float32))
+        @q_buf = ML::MetalBuffer.new(@canvas_len.to_i64 * @q_dim * sizeof(Float32))
+        @out_buf = ML::MetalBuffer.new(@canvas_len.to_i64 * @q_dim * sizeof(Float32))
       end
 
       def write_canvas!(canvas_projections : Array(AttentionProjection)) : Nil
@@ -61,6 +61,15 @@ module ML::GGUF
       def write_query!(query : AttentionProjection) : Nil
         raise ArgumentError.new("query q size mismatch") unless query.q.size == @q_dim
         @q_buf.write(query.q)
+      end
+
+      def write_queries!(queries : Array(AttentionProjection)) : Nil
+        raise ArgumentError.new("query count mismatch") unless queries.size == @canvas_len
+        q_ptr = @q_buf.contents.as(Pointer(Float32))
+        queries.each_with_index do |query, pos|
+          raise ArgumentError.new("query q size mismatch") unless query.q.size == @q_dim
+          (q_ptr + pos * @q_dim).copy_from(query.q.to_unsafe, @q_dim)
+        end
       end
 
       private def copy_projection_kv_to_rows!(proj : AttentionProjection,
@@ -1277,6 +1286,7 @@ module ML::GGUF
       hp = weights.hparams
       lw = weights.layers[il]
       canvas_size = mask.canvas_len * hp.n_embd
+      q_context_dim = hp.n_head * hp.head_dim_for_layer(il)
       raise ArgumentError.new("prompt projection count mismatch") unless prompt_projections.size == mask.prompt_len
       raise ArgumentError.new("canvas rows size mismatch: #{canvas_rows.size} != #{canvas_size}") unless canvas_rows.size == canvas_size
       if supplied_routes = routes_by_canvas_row
@@ -1296,6 +1306,20 @@ module ML::GGUF
       context_score_ms = 0.0
       context_softmax_ms = 0.0
       context_value_ms = 0.0
+      batch_context_t0 = Time.instant
+      batched_context = if prompt_metal_cache && context_metal_enabled?
+                          attention_context_decode_batch_metal_resident(
+                            canvas_projections,
+                            prompt_metal_cache.not_nil!,
+                            hp,
+                            il,
+                            low: hp.sliding_window?(il) ? mask.canvas_prompt_low : 0,
+                            high: mask.total_tokens - 1,
+                          )
+                        else
+                          nil
+                        end
+      context_ms += (Time.instant - batch_context_t0).total_milliseconds if batched_context
       attention_out_ms = 0.0
       shared_ffn_ms = 0.0
       moe_ffn_ms = 0.0
@@ -1304,12 +1328,19 @@ module ML::GGUF
       mask.canvas_len.times do |canvas_pos|
         x = canvas_rows[canvas_pos * hp.n_embd, hp.n_embd]
         context_t0 = Time.instant
-        context_timing = attention_context_decode_timed(prompt_projections, canvas_projections, hp, il, canvas_query_index: canvas_pos, mask: mask, prompt_metal_cache: prompt_metal_cache)
-        context = context_timing.context
+        context_timing = nil.as(AttentionContextTiming?)
+        context = if batched = batched_context
+                    batched[canvas_pos * q_context_dim, q_context_dim]
+                  else
+                    context_timing = attention_context_decode_timed(prompt_projections, canvas_projections, hp, il, canvas_query_index: canvas_pos, mask: mask, prompt_metal_cache: prompt_metal_cache)
+                    context_timing.not_nil!.context
+                  end
         context_ms += (Time.instant - context_t0).total_milliseconds
-        context_score_ms += context_timing.score_ms
-        context_softmax_ms += context_timing.softmax_ms
-        context_value_ms += context_timing.value_ms
+        if timing = context_timing
+          context_score_ms += timing.score_ms
+          context_softmax_ms += timing.softmax_ms
+          context_value_ms += timing.value_ms
+        end
 
         attention_t0 = Time.instant
         projected = attention_output_project(weights, il, context)
@@ -2338,6 +2369,31 @@ module ML::GGUF
       cache.write_query!(query)
       Gemma4Metal.attention_context_rows_resident_buffers(
         cache.q_buf, cache.k_cache_buf, cache.v_cache_buf, cache.out_buf, high, 1, n_head, n_head_kv, head_dim, sliding_window)
+    end
+
+    private def attention_context_decode_batch_metal_resident(queries : Array(AttentionProjection),
+                                                              cache : PromptLayerMetalCache,
+                                                              hp : DiffusionGemmaHparams,
+                                                              il : Int32,
+                                                              low : Int32,
+                                                              high : Int32) : Array(Float32)?
+      return nil unless Gemma4Metal.available?
+      return nil unless queries.size == cache.canvas_len
+      return nil unless high >= low
+      return nil unless high < cache.prompt_len + cache.canvas_len
+
+      head_dim = hp.head_dim_for_layer(il)
+      n_head = hp.n_head
+      n_head_kv = hp.n_head_kv(il)
+      q_dim = n_head * head_dim
+      kv_dim = n_head_kv * head_dim
+      return nil unless cache.q_dim == q_dim && cache.kv_dim == kv_dim
+      queries.each { |query| validate_projection_shape!(query, q_dim, kv_dim, il) }
+
+      sliding_window = low == 0 ? 0 : high - low + 1
+      cache.write_queries!(queries)
+      Gemma4Metal.attention_context_rows_fixed_resident_buffers(
+        cache.q_buf, cache.k_cache_buf, cache.v_cache_buf, cache.out_buf, high, queries.size, n_head, n_head_kv, head_dim, sliding_window)
     end
 
     private def attention_context_from_range_metal(query : AttentionProjection,

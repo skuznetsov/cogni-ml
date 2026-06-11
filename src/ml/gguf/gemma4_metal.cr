@@ -94,6 +94,19 @@ module ML::GGUF
         nil
       end
 
+      def attention_context_rows_fixed_resident_buffers(q_buf : ML::MetalBuffer,
+                                                        k_cache_buf : ML::MetalBuffer,
+                                                        v_cache_buf : ML::MetalBuffer,
+                                                        out_buf : ML::MetalBuffer,
+                                                        end_pos : Int32,
+                                                        rows : Int32,
+                                                        n_head : Int32,
+                                                        n_head_kv : Int32,
+                                                        head_dim : Int32,
+                                                        sliding_window : Int32) : Array(Float32)?
+        nil
+      end
+
       def layer_tail(x : Array(Float32),
                      attn_projected : Array(Float32),
                      lw : Gemma4LayerWeights,
@@ -311,6 +324,7 @@ module ML::GGUF
       @@kv_write_rows_h16_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_pipeline : ML::Metal::ComputePipeline?
+      @@attn_context_rows_fixed_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_kv_h16_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_gqa2_pipeline : ML::Metal::ComputePipeline?
       @@attn_context_rows_gqa4_pipeline : ML::Metal::ComputePipeline?
@@ -725,6 +739,43 @@ module ML::GGUF
         enc = ML::Metal::ComputeEncoder.new(cmd)
         encode_attention_context_rows(enc, q_buf, k_cache_buf, v_cache_buf, out_buf,
           base_pos, rows, n_head, n_head_kv, head_dim, n_head // n_head_kv, sliding_window)
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
+
+        out_buf.read(rows * q_dim)
+      end
+
+      def attention_context_rows_fixed_resident_buffers(q_buf : ML::MetalBuffer,
+                                                        k_cache_buf : ML::MetalBuffer,
+                                                        v_cache_buf : ML::MetalBuffer,
+                                                        out_buf : ML::MetalBuffer,
+                                                        end_pos : Int32,
+                                                        rows : Int32,
+                                                        n_head : Int32,
+                                                        n_head_kv : Int32,
+                                                        head_dim : Int32,
+                                                        sliding_window : Int32) : Array(Float32)?
+        return nil unless available?
+        raise ArgumentError.new("end_pos must be non-negative") if end_pos < 0
+        raise ArgumentError.new("rows must be positive") unless rows > 0
+        raise ArgumentError.new("head_dim must be positive") unless head_dim > 0
+        raise ArgumentError.new("unsupported head_dim #{head_dim}; max 512") if head_dim > 512
+        raise ArgumentError.new("invalid GQA layout") unless n_head_kv > 0 && n_head > 0 && n_head % n_head_kv == 0
+        raise ArgumentError.new("sliding_window must be non-negative") if sliding_window < 0
+
+        q_dim = n_head * head_dim
+        kv_dim = n_head_kv * head_dim
+        required_cache_rows = end_pos + 1
+        raise ArgumentError.new("q buffer too small") if q_buf.size < rows.to_i64 * q_dim * sizeof(Float32)
+        raise ArgumentError.new("out buffer too small") if out_buf.size < rows.to_i64 * q_dim * sizeof(Float32)
+        raise ArgumentError.new("k_cache buffer too small") if k_cache_buf.size < required_cache_rows.to_i64 * kv_dim * sizeof(Float32)
+        raise ArgumentError.new("v_cache buffer too small") if v_cache_buf.size < required_cache_rows.to_i64 * kv_dim * sizeof(Float32)
+
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        encode_attention_context_rows_fixed(enc, q_buf, k_cache_buf, v_cache_buf, out_buf,
+          end_pos, rows, n_head, n_head_kv, head_dim, n_head // n_head_kv, sliding_window)
         enc.end_encoding
         cmd.commit
         cmd.wait
@@ -2917,6 +2968,33 @@ module ML::GGUF
         end
       end
 
+      private def encode_attention_context_rows_fixed(enc : ML::Metal::ComputeEncoder,
+                                                      q_buf : ML::MetalBuffer,
+                                                      k_cache_buf : ML::MetalBuffer,
+                                                      v_cache_buf : ML::MetalBuffer,
+                                                      out_buf : ML::MetalBuffer,
+                                                      end_pos : Int32,
+                                                      rows : Int32,
+                                                      n_head : Int32,
+                                                      n_head_kv : Int32,
+                                                      head_dim : Int32,
+                                                      heads_per_group : Int32,
+                                                      sliding_window : Int32) : Nil
+        enc.set_pipeline(attn_context_rows_fixed_pipeline)
+        enc.set_buffer(q_buf, 0)
+        enc.set_buffer(k_cache_buf, 1)
+        enc.set_buffer(v_cache_buf, 2)
+        enc.set_buffer(out_buf, 3, ML::Metal::BufferAccess::Write)
+        enc.set_value(end_pos.to_u32, 4)
+        enc.set_value(rows.to_u32, 5)
+        enc.set_value(n_head.to_u32, 6)
+        enc.set_value(n_head_kv.to_u32, 7)
+        enc.set_value(head_dim.to_u32, 8)
+        enc.set_value(heads_per_group.to_u32, 9)
+        enc.set_value(sliding_window.to_u32, 10)
+        enc.dispatch_threadgroups({n_head, rows, 1}, {32, 1, 1})
+      end
+
       private def encode_attention_context_rows_splitk(enc : ML::Metal::ComputeEncoder,
                                                        scratch : ResidentScratch,
                                                        q_buf : ML::MetalBuffer,
@@ -3295,6 +3373,12 @@ module ML::GGUF
       private def attn_context_rows_pipeline : ML::Metal::ComputePipeline
         @@attn_context_rows_pipeline ||= ML::Metal::PipelineCache.get("gemma4_attn_context_rows") {
           ML::Metal::ComputePipeline.new("gemma4_attn_context_rows", GEMMA4_SOURCE)
+        }
+      end
+
+      private def attn_context_rows_fixed_pipeline : ML::Metal::ComputePipeline
+        @@attn_context_rows_fixed_pipeline ||= ML::Metal::PipelineCache.get("gemma4_attn_context_rows_fixed") {
+          ML::Metal::ComputePipeline.new("gemma4_attn_context_rows_fixed", GEMMA4_SOURCE)
         }
       end
 
