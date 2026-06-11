@@ -5,6 +5,15 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 crystal_bin="${CRYSTAL_BIN:-/opt/homebrew/bin/crystal}"
 out="${DIFFUSION_GEMMA_SPARSE_LOOP_BIN:-/tmp/diffusion_gemma_sparse_loop_smoke}"
 lengths_arg="${LENGTHS:-1 2 4 8}"
+summary="${SUMMARY:-0}"
+
+case "$summary" in
+  0|1) ;;
+  *)
+    echo "SUMMARY must be 0 or 1" >&2
+    exit 2
+    ;;
+esac
 
 bridge_o="${COGNI_ML_BRIDGE_O:-}"
 if [[ -z "$bridge_o" ]]; then
@@ -38,4 +47,19 @@ done
   --link-flags="$bridge_o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"
 
 lengths_csv="$(IFS=,; echo "${lengths[*]}")"
-exec "$out" --prompt-lengths "$lengths_csv" --format tsv "$@"
+if [[ "$summary" == "0" ]]; then
+  exec "$out" --prompt-lengths "$lengths_csv" --format tsv "$@"
+fi
+
+summary_dir="${SUMMARY_DIR:-${TMPDIR:-/tmp}}"
+mkdir -p "$summary_dir"
+stamp="$(date +%Y%m%d%H%M%S)"
+raw_tsv="${SUMMARY_RAW_TSV:-$summary_dir/diffusion_gemma_sparse_loop_prompt_sweep_${stamp}.tsv}"
+summary_tsv="${SUMMARY_TSV:-$summary_dir/diffusion_gemma_sparse_loop_prompt_sweep_${stamp}.summary.tsv}"
+
+"$out" --prompt-lengths "$lengths_csv" --format tsv "$@" >"$raw_tsv"
+"$repo_root/scripts/diffusion_gemma_sparse_loop_summarize.py" "$raw_tsv" >"$summary_tsv"
+
+printf 'raw_tsv=%s\n' "$raw_tsv"
+printf 'summary_tsv=%s\n' "$summary_tsv"
+cat "$summary_tsv"

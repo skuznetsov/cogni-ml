@@ -319,6 +319,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Added `scripts/diffusion_gemma_sparse_loop_summarize.py`, a stdin/file TSV summarizer for sparse-loop prompt/candidate sweeps. It groups by `prompt_len`, reports prompt-cache timing/ratio, and selects both the lowest median loop row and highest candidate-token throughput row.
 - Verification: `python3 -m py_compile` passed; missing-column, empty-data, and bad-numeric TSV inputs fail closed. A real `LENGTHS='1 2' scripts/diffusion_gemma_sparse_loop_prompt_sweep.sh --candidate-counts 1,4 --steps 1 --warmups 1 --repeats 2` matrix fed into the summarizer produced two prompt-length summary rows. An awk guard verified row counts, prompt lengths `1/2`, two source rows per prompt length, and valid best candidate-count fields.
 - Boundary: this is offline measurement summarization only. It does not change the sparse loop, add quality scoring, or provide quiet-host benchmark evidence.
+**update 2026-06-10bk:**
+- `scripts/diffusion_gemma_sparse_loop_prompt_sweep.sh` now supports `SUMMARY=1`, writing the raw TSV and summarizer TSV to `SUMMARY_DIR`/`SUMMARY_RAW_TSV`/`SUMMARY_TSV`, then printing the compact summary. Default `SUMMARY=0` behavior remains raw TSV stdout.
+- Verification: `bash -n` passed; invalid `SUMMARY` and invalid `LENGTHS` fail closed before compile/model load. `SUMMARY=1 LENGTHS='1 2' SUMMARY_DIR=/tmp scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_prompt_sweep.sh 300 6000 --candidate-counts 1,4 --steps 1 --warmups 1 --repeats 2` exited 0, emitted raw and summary paths, and printed two grouped prompt-length rows. Guards verified the raw TSV had four rows and summary TSV had two rows with `rows=2`.
+- Boundary: this is measurement workflow plumbing only. It does not change sparse-loop semantics or convert the smoke into quiet-host benchmark evidence.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified
