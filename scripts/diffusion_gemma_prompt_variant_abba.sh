@@ -97,6 +97,37 @@ while True:
 PY
 }
 
+host_snapshot() {
+  local label="$1"
+  local out="$log_dir/host_snapshot_${label}.txt"
+  {
+    printf 'snapshot_label=%s\n' "$label"
+    date '+snapshot_time=%Y-%m-%dT%H:%M:%S%z'
+    printf '\n[top_cpu]\n'
+    ps -axo pid,pcpu,pmem,rss,comm | python3 -c '
+import sys
+lines = sys.stdin.readlines()
+if lines:
+    print(lines[0], end="")
+rows = []
+for line in lines[1:]:
+    parts = line.split(None, 4)
+    if len(parts) < 5:
+        continue
+    try:
+        cpu = float(parts[1])
+    except ValueError:
+        continue
+    rows.append((cpu, line))
+for _, line in sorted(rows, reverse=True)[:20]:
+    print(line, end="")
+'
+    printf '\n[vm_stat]\n'
+    vm_stat
+  } >"$out"
+  printf 'host_snapshot label=%s path=%s\n' "$label" "$out"
+}
+
 base_tokens=()
 variant_tokens=()
 env_tokens "$base_env" base_tokens
@@ -109,6 +140,7 @@ for arm in $sequence; do
   esac
 done
 
+host_snapshot "before_all"
 idx=0
 for arm in $sequence; do
   case "$arm" in
@@ -120,9 +152,12 @@ for arm in $sequence; do
   run_tsv="$log_dir/run_${idx}_${arm}.tsv"
   run_log="$log_dir/run_${idx}_${arm}.log"
   printf 'prompt_variant_abba_run index=%d arm=%s out=%s\n' "$idx" "$arm" "$run_tsv"
+  host_snapshot "before_${idx}_${arm}" | tee -a "$run_log"
   wait_quiet "run_${idx}_${arm}" | tee -a "$run_log"
   env OUT="$run_tsv" "${tokens[@]}" "$repo_root/scripts/diffusion_gemma_prompt_perf_probe.sh" >>"$run_log" 2>&1
+  host_snapshot "after_${idx}_${arm}" | tee -a "$run_log"
 done
+host_snapshot "after_all"
 
 python3 - "$log_dir" <<'PY'
 import csv
