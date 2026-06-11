@@ -12,6 +12,7 @@ repeats="${REPEATS:-2}"
 format="${FORMAT:-tsv}"
 expect_chosen="${EXPECT_CHOSEN:-}"
 expect_min_prob="${EXPECT_MIN_PROB:-}"
+expect_canvas_len="${EXPECT_CANVAS_LEN:-}"
 smoke_runner="${SMOKE_RUNNER:-$repo_root/scripts/diffusion_gemma_sparse_loop_smoke.sh}"
 
 case "$format" in
@@ -55,6 +56,13 @@ if [[ "$repeats" -lt 1 ]]; then
   exit 2
 fi
 
+if [[ -n "$expect_canvas_len" ]]; then
+  if [[ ! "$expect_canvas_len" =~ ^[1-9][0-9]*$ ]]; then
+    echo "EXPECT_CANVAS_LEN must be a positive integer" >&2
+    exit 2
+  fi
+fi
+
 if [[ -n "$expect_min_prob" ]]; then
   if [[ ! "$expect_min_prob" =~ ^([0-9]+([.][0-9]*)?|[.][0-9]+)$ ]]; then
     echo "EXPECT_MIN_PROB must be a number in [0, 1]" >&2
@@ -66,8 +74,8 @@ if [[ -n "$expect_min_prob" ]]; then
   fi
 fi
 
-if [[ -n "$expect_chosen$expect_min_prob" && "$format" != "tsv" ]]; then
-  echo "EXPECT_CHOSEN/EXPECT_MIN_PROB require FORMAT=tsv" >&2
+if [[ -n "$expect_chosen$expect_min_prob$expect_canvas_len" && "$format" != "tsv" ]]; then
+  echo "EXPECT_CHOSEN/EXPECT_MIN_PROB/EXPECT_CANVAS_LEN require FORMAT=tsv" >&2
   exit 2
 fi
 
@@ -84,7 +92,7 @@ smoke_cmd=(
   "$@"
 )
 
-if [[ -z "$expect_chosen$expect_min_prob" ]]; then
+if [[ -z "$expect_chosen$expect_min_prob$expect_canvas_len" ]]; then
   exec "${smoke_cmd[@]}"
 fi
 
@@ -94,10 +102,14 @@ trap 'rm -f "$tmp_out"' EXIT
 "${smoke_cmd[@]}" >"$tmp_out"
 cat "$tmp_out"
 
-awk -F '\t' -v expected="$expect_chosen" -v min_prob="$expect_min_prob" '
+awk -F '\t' -v expected="$expect_chosen" -v min_prob="$expect_min_prob" -v expected_canvas_len="$expect_canvas_len" '
   NR == 1 {
     for (i = 1; i <= NF; i++) {
       h[$i] = i
+    }
+    if (expected_canvas_len != "" && !("canvas_len" in h)) {
+      print "canvas_len column missing" > "/dev/stderr"
+      exit 2
     }
     if (expected != "" && !("last_chosen_texts" in h)) {
       print "last_chosen_texts column missing" > "/dev/stderr"
@@ -111,6 +123,10 @@ awk -F '\t' -v expected="$expect_chosen" -v min_prob="$expect_min_prob" '
   }
   NR == 2 {
     found = 1
+    if (expected_canvas_len != "" && $h["canvas_len"] != expected_canvas_len) {
+      printf("expected canvas_len=%s, got %s\n", expected_canvas_len, $h["canvas_len"]) > "/dev/stderr"
+      exit 2
+    }
     if (expected != "" && $h["last_chosen_texts"] != expected) {
       printf("expected last_chosen_texts=%s, got %s\n", expected, $h["last_chosen_texts"]) > "/dev/stderr"
       exit 2

@@ -69,7 +69,7 @@ Run the text-first smoke with:
 
 ```sh
 scripts/diffusion_gemma_text_probe.sh
-EXPECT_CHOSEN=Hello EXPECT_MIN_PROB=0.9 scripts/diffusion_gemma_text_probe.sh
+EXPECT_CANVAS_LEN=1 EXPECT_CHOSEN=Hello EXPECT_MIN_PROB=0.9 scripts/diffusion_gemma_text_probe.sh
 ```
 
 This uses the local Unsloth DiffusionGemma GGUF and the DiffusionGemma-capable

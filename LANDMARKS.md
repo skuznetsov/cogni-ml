@@ -387,6 +387,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Added `docs/diffusion-gemma-text-probe.md` and a README anchor for the current native DiffusionGemma bounded sparse text probe. The doc records default wrapper inputs, expectation gates, model/tokenizer env overrides, and the explicit boundary that this is not full text generation.
 - Verification: README/doc references resolve locally; `bash -n scripts/diffusion_gemma_text_probe.sh` passed; the documented `EXPECT_CHOSEN=Hello EXPECT_MIN_PROB=0.9 scripts/diffusion_gemma_text_probe.sh` command passed on the local GGUF.
 - Boundary: this is usage documentation only. It does not change model execution, candidate scoring, tokenizer behavior, or benchmark status.
+**update 2026-06-10cb:**
+- `scripts/diffusion_gemma_text_probe.sh` now supports `EXPECT_CANVAS_LEN=N`, validating the first TSV data row's `canvas_len`. README and the text-probe doc now include this in the default regression gate example.
+- Verification: shell syntax passed; invalid `EXPECT_CANVAS_LEN=0` and expectation gates with key-value output fail closed before model execution. A real GGUF wrapper run with `EXPECT_CANVAS_LEN=1 EXPECT_CHOSEN=Hello EXPECT_MIN_PROB=0.9` passed, and a fake `SMOKE_RUNNER` TSV with `canvas_len=2` failed with `expected canvas_len=1, got 2`.
+- Boundary: this is wrapper-level shape regression gating. It does not change tokenization, model execution, candidate scoring, or sparse-loop semantics.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified

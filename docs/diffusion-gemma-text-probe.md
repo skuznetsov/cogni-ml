@@ -32,7 +32,7 @@ FORMAT=tsv
 Useful regression gate:
 
 ```sh
-EXPECT_CHOSEN=Hello EXPECT_MIN_PROB=0.9 scripts/diffusion_gemma_text_probe.sh
+EXPECT_CANVAS_LEN=1 EXPECT_CHOSEN=Hello EXPECT_MIN_PROB=0.9 scripts/diffusion_gemma_text_probe.sh
 ```
 
 Override the text probe:
@@ -50,6 +50,7 @@ Expectation gates require TSV output:
 
 - `EXPECT_CHOSEN=TEXT` checks the first data row's `last_chosen_texts`.
 - `EXPECT_MIN_PROB=F` checks every first-row `last_argmax_probabilities` value.
+- `EXPECT_CANVAS_LEN=N` checks the first data row's `canvas_len`.
 - `SMOKE_RUNNER=/path/to/runner` can replace the underlying smoke command for
   wrapper-level tests.
 
