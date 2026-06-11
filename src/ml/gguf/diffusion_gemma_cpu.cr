@@ -471,12 +471,12 @@ module ML::GGUF
       raise ArgumentError.new("v projection size mismatch at layer #{il}") unless proj.v.size == n_head_kv * head_dim
 
       n_head.times do |h|
-        Gemma4CPU.rms_norm_slice!(proj.q, h * head_dim, head_dim, lw.attn_q_norm, hp.rms_eps)
+        fast_rms_norm_slice!(proj.q, h * head_dim, head_dim, lw.attn_q_norm, hp.rms_eps)
       end
       n_head_kv.times do |h|
         off = h * head_dim
-        Gemma4CPU.rms_norm_slice!(proj.k, off, head_dim, lw.attn_k_norm, hp.rms_eps)
-        Gemma4CPU.rms_norm_plain_slice!(proj.v, off, head_dim, hp.rms_eps)
+        fast_rms_norm_slice!(proj.k, off, head_dim, lw.attn_k_norm, hp.rms_eps)
+        fast_rms_norm_plain_slice!(proj.v, off, head_dim, hp.rms_eps)
       end
     end
 
@@ -491,10 +491,10 @@ module ML::GGUF
       freqs = hp.full_attention?(il) ? rope_freqs : nil
 
       hp.n_head.times do |h|
-        Gemma4CPU.rope_neox_slice!(proj.q, h * head_dim, n_rot, head_dim, pos, base, freqs)
+        fast_rope_neox_slice!(proj.q, h * head_dim, n_rot, head_dim, pos, base, freqs)
       end
       hp.n_head_kv(il).times do |h|
-        Gemma4CPU.rope_neox_slice!(proj.k, h * head_dim, n_rot, head_dim, pos, base, freqs)
+        fast_rope_neox_slice!(proj.k, h * head_dim, n_rot, head_dim, pos, base, freqs)
       end
     end
 
@@ -1893,6 +1893,76 @@ module ML::GGUF
         i += 1
       end
       sum
+    end
+
+    private def fast_rms_norm_slice!(x : Array(Float32), offset : Int32, len : Int32,
+                                     w : Array(Float32), eps : Float32) : Nil
+      raise ArgumentError.new("rms_norm_slice weight size mismatch: #{w.size} != #{len}") unless w.size == len
+      raise ArgumentError.new("rms_norm_slice out of bounds") if offset < 0 || len < 0 || offset + len > x.size
+
+      x_ptr = x.to_unsafe + offset
+      ss = 0.0_f64
+      i = 0
+      while i < len
+        v = x_ptr[i]
+        ss += v.to_f64 * v.to_f64
+        i += 1
+      end
+      inv_rms = (1.0 / Math.sqrt(ss / len.to_f64 + eps.to_f64)).to_f32
+      w_ptr = w.to_unsafe
+      i = 0
+      while i < len
+        x_ptr[i] = x_ptr[i] * inv_rms * w_ptr[i]
+        i += 1
+      end
+    end
+
+    private def fast_rms_norm_plain_slice!(x : Array(Float32), offset : Int32, len : Int32,
+                                           eps : Float32) : Nil
+      raise ArgumentError.new("rms_norm_plain_slice out of bounds") if offset < 0 || len < 0 || offset + len > x.size
+
+      x_ptr = x.to_unsafe + offset
+      ss = 0.0_f64
+      i = 0
+      while i < len
+        v = x_ptr[i]
+        ss += v.to_f64 * v.to_f64
+        i += 1
+      end
+      inv_rms = (1.0 / Math.sqrt(ss / len.to_f64 + eps.to_f64)).to_f32
+      i = 0
+      while i < len
+        x_ptr[i] *= inv_rms
+        i += 1
+      end
+    end
+
+    private def fast_rope_neox_slice!(x : Array(Float32), offset : Int32, n_rot : Int32,
+                                      head_dim : Int32, pos : Int32, freq_base : Float32,
+                                      freq_factors : Array(Float32)? = nil) : Nil
+      raise ArgumentError.new("rope n_rot must be even") unless n_rot.even?
+      raise ArgumentError.new("rope n_rot #{n_rot} exceeds head_dim #{head_dim}") if n_rot > head_dim
+      raise ArgumentError.new("rope slice out of bounds") if offset < 0 || offset + head_dim > x.size
+      if factors = freq_factors
+        raise ArgumentError.new("rope freq_factors too small: #{factors.size} < #{n_rot // 2}") if factors.size < n_rot // 2
+      end
+
+      x_ptr = x.to_unsafe + offset
+      factors_ptr = freq_factors.try(&.to_unsafe)
+      half = n_rot // 2
+      i = 0
+      while i < half
+        i0 = 2 * i
+        freq_factor = factors_ptr ? factors_ptr[i] : 1.0_f32
+        theta = pos.to_f32 * (freq_base ** (-i0.to_f32 / n_rot.to_f32)) / freq_factor
+        cos_t = Math.cos(theta).to_f32
+        sin_t = Math.sin(theta).to_f32
+        x0 = x_ptr[i]
+        x1 = x_ptr[i + half]
+        x_ptr[i] = x0 * cos_t - x1 * sin_t
+        x_ptr[i + half] = x0 * sin_t + x1 * cos_t
+        i += 1
+      end
     end
 
     private def sort_routes!(routes : Array(ExpertRoute)) : Nil
