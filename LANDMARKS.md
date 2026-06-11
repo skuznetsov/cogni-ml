@@ -315,6 +315,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Added `scripts/diffusion_gemma_sparse_loop_prompt_sweep.sh`, a thin prompt-length sweep wrapper using `LENGTHS` and the same single-process `--prompt-lengths ... --format tsv` native runner. It builds the smoke binary once, validates positive prompt lengths before compile/model load, and preserves arbitrary extra smoke flags.
 - Verification: `bash -n` passed; `LENGTHS='1 nope'` and `LENGTHS='0'` fail closed with exit code `2`; `LENGTHS='1 2' scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_prompt_sweep.sh 300 6000 --candidate-count 1 --steps 1 --warmups 1 --repeats 2` exited 0. An awk guard verified two rows with prompt lengths `1/2`, synthetic prompt tokens `1` and `1,2`, `candidate_count=1`, and first-row prompt-cache ratio `1.0`.
 - Boundary: this is runner ergonomics for prompt-cache length sweeps. It does not add tokenizer-backed prompts, new sparse semantics, or quiet-host benchmark evidence.
+**update 2026-06-10bj:**
+- Added `scripts/diffusion_gemma_sparse_loop_summarize.py`, a stdin/file TSV summarizer for sparse-loop prompt/candidate sweeps. It groups by `prompt_len`, reports prompt-cache timing/ratio, and selects both the lowest median loop row and highest candidate-token throughput row.
+- Verification: `python3 -m py_compile` passed; missing-column, empty-data, and bad-numeric TSV inputs fail closed. A real `LENGTHS='1 2' scripts/diffusion_gemma_sparse_loop_prompt_sweep.sh --candidate-counts 1,4 --steps 1 --warmups 1 --repeats 2` matrix fed into the summarizer produced two prompt-length summary rows. An awk guard verified row counts, prompt lengths `1/2`, two source rows per prompt length, and valid best candidate-count fields.
+- Boundary: this is offline measurement summarization only. It does not change the sparse loop, add quality scoring, or provide quiet-host benchmark evidence.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified
