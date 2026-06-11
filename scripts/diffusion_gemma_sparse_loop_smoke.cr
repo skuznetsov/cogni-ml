@@ -359,6 +359,10 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
     prompt_cache = nil.as(ML::GGUF::DiffusionGemmaCPU::PromptLayerCache?)
     cache_samples = [] of Float64
     projection_samples = [] of Float64
+    projection_norm_samples = [] of Float64
+    projection_matmul_samples = [] of Float64
+    projection_assemble_samples = [] of Float64
+    projection_rope_samples = [] of Float64
     materialize_samples = [] of Float64
     (cache_warmups + cache_repeats).times do |run_index|
       cache_t0 = Time.instant
@@ -376,6 +380,10 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
       cache = prompt_cache.not_nil!
       cache_samples << elapsed_ms
       projection_samples << cache.projection_ms_by_layer.sum
+      projection_norm_samples << cache.projection_norm_ms_by_layer.sum
+      projection_matmul_samples << cache.projection_matmul_ms_by_layer.sum
+      projection_assemble_samples << cache.projection_assemble_ms_by_layer.sum
+      projection_rope_samples << cache.projection_rope_ms_by_layer.sum
       materialize_samples << cache.materialize_ms_by_layer.sum
     end
     prompt_cache = prompt_cache.not_nil!
@@ -384,6 +392,10 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
     prompt_cache_ms_ratio_vs_first = baseline_cache_ms.not_nil! > 0.0 ? cache_ms / baseline_cache_ms.not_nil! : 0.0
     prompt_cache_tokens_per_ms = cache_ms > 0.0 ? tokens.size.to_f64 / cache_ms : 0.0
     prompt_projection_ms = median(projection_samples)
+    prompt_projection_norm_ms = median(projection_norm_samples)
+    prompt_projection_matmul_ms = median(projection_matmul_samples)
+    prompt_projection_assemble_ms = median(projection_assemble_samples)
+    prompt_projection_rope_ms = median(projection_rope_samples)
     prompt_materialize_ms = median(materialize_samples)
 
     candidate_specs.each_with_index do |candidate_spec, candidate_set_index|
@@ -533,9 +545,17 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"prompt_projection_backend", ML::GGUF::DiffusionGemmaCPU.prompt_projection_metal_enabled? && tokens.size >= ML::GGUF::DiffusionGemmaCPU.prompt_projection_metal_min_batch ? "metal" : "cpu"},
         {"prompt_cache_ms", cache_ms.round(3).to_s},
         {"prompt_projection_ms", prompt_projection_ms.round(3).to_s},
+        {"prompt_projection_norm_ms", prompt_projection_norm_ms.round(3).to_s},
+        {"prompt_projection_matmul_ms", prompt_projection_matmul_ms.round(3).to_s},
+        {"prompt_projection_assemble_ms", prompt_projection_assemble_ms.round(3).to_s},
+        {"prompt_projection_rope_ms", prompt_projection_rope_ms.round(3).to_s},
         {"prompt_materialize_ms", prompt_materialize_ms.round(3).to_s},
         {"prompt_cache_ms_samples", cache_samples.map { |v| v.round(3) }.join(",")},
         {"prompt_projection_ms_samples", projection_samples.map { |v| v.round(3) }.join(",")},
+        {"prompt_projection_norm_ms_samples", projection_norm_samples.map { |v| v.round(3) }.join(",")},
+        {"prompt_projection_matmul_ms_samples", projection_matmul_samples.map { |v| v.round(3) }.join(",")},
+        {"prompt_projection_assemble_ms_samples", projection_assemble_samples.map { |v| v.round(3) }.join(",")},
+        {"prompt_projection_rope_ms_samples", projection_rope_samples.map { |v| v.round(3) }.join(",")},
         {"prompt_materialize_ms_samples", materialize_samples.map { |v| v.round(3) }.join(",")},
         {"prompt_cache_materialized_final_rows", materialize_prompt_final_rows.to_s},
         {"prompt_cache_ms_ratio_vs_first", prompt_cache_ms_ratio_vs_first.round(6).to_s},

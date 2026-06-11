@@ -258,16 +258,39 @@ module ML::GGUF
       getter final_rows : Array(Float32)
       getter projections_by_layer : Array(Array(AttentionProjection))
       getter projection_ms_by_layer : Array(Float64)
+      getter projection_norm_ms_by_layer : Array(Float64)
+      getter projection_matmul_ms_by_layer : Array(Float64)
+      getter projection_assemble_ms_by_layer : Array(Float64)
+      getter projection_rope_ms_by_layer : Array(Float64)
       getter materialize_ms_by_layer : Array(Float64)
 
       def initialize(@final_rows,
                      @projections_by_layer,
                      @projection_ms_by_layer = [] of Float64,
+                     @projection_norm_ms_by_layer = [] of Float64,
+                     @projection_matmul_ms_by_layer = [] of Float64,
+                     @projection_assemble_ms_by_layer = [] of Float64,
+                     @projection_rope_ms_by_layer = [] of Float64,
                      @materialize_ms_by_layer = [] of Float64)
       end
 
       def layers : Int32
         @projections_by_layer.size
+      end
+    end
+
+    struct PromptProjectionTiming
+      getter projections : Array(AttentionProjection)
+      getter norm_ms : Float64
+      getter matmul_ms : Float64
+      getter assemble_ms : Float64
+      getter rope_ms : Float64
+
+      def initialize(@projections,
+                     @norm_ms,
+                     @matmul_ms,
+                     @assemble_ms,
+                     @rope_ms)
       end
     end
 
@@ -760,11 +783,20 @@ module ML::GGUF
       rows = prompt_rows.dup
       projections_by_layer = [] of Array(AttentionProjection)
       projection_ms_by_layer = [] of Float64
+      projection_norm_ms_by_layer = [] of Float64
+      projection_matmul_ms_by_layer = [] of Float64
+      projection_assemble_ms_by_layer = [] of Float64
+      projection_rope_ms_by_layer = [] of Float64
       materialize_ms_by_layer = [] of Float64
       max_layers.times do |il|
         projection_t0 = Time.instant
-        projections = prompt_attention_projections(weights, il, rows, mask)
+        timed_projections = prompt_attention_projections_timed(weights, il, rows, mask)
+        projections = timed_projections.projections
         projection_ms_by_layer << (Time.instant - projection_t0).total_milliseconds
+        projection_norm_ms_by_layer << timed_projections.norm_ms
+        projection_matmul_ms_by_layer << timed_projections.matmul_ms
+        projection_assemble_ms_by_layer << timed_projections.assemble_ms
+        projection_rope_ms_by_layer << timed_projections.rope_ms
         projections_by_layer << projections
         break if !materialize_final_rows && il == max_layers - 1
 
@@ -774,7 +806,16 @@ module ML::GGUF
         materialize_ms_by_layer << (Time.instant - materialize_t0).total_milliseconds
       end
 
-      PromptLayerCache.new(rows, projections_by_layer, projection_ms_by_layer, materialize_ms_by_layer)
+      PromptLayerCache.new(
+        rows,
+        projections_by_layer,
+        projection_ms_by_layer,
+        projection_norm_ms_by_layer,
+        projection_matmul_ms_by_layer,
+        projection_assemble_ms_by_layer,
+        projection_rope_ms_by_layer,
+        materialize_ms_by_layer,
+      )
     end
 
     def decode_canvas_rows_with_prompt_cache(weights : DiffusionGemmaWeights,
@@ -968,19 +1009,29 @@ module ML::GGUF
                                      il : Int32,
                                      prompt_rows : Array(Float32),
                                      mask : DiffusionGemmaAttentionMask) : Array(AttentionProjection)
+      prompt_attention_projections_timed(weights, il, prompt_rows, mask).projections
+    end
+
+    def prompt_attention_projections_timed(weights : DiffusionGemmaWeights,
+                                           il : Int32,
+                                           prompt_rows : Array(Float32),
+                                           mask : DiffusionGemmaAttentionMask) : PromptProjectionTiming
       hp = weights.hparams
       lw = weights.layers[il]
       prompt_size = mask.prompt_len * hp.n_embd
       raise ArgumentError.new("prompt rows size mismatch: #{prompt_rows.size} != #{prompt_size}") unless prompt_rows.size == prompt_size
 
+      norm_t0 = Time.instant
       normed_rows = prompt_rows.dup
       mask.prompt_len.times do |pos|
         Gemma4CPU.rms_norm_slice!(normed_rows, pos * hp.n_embd, hp.n_embd, lw.attn_norm, hp.rms_eps)
       end
+      norm_ms = (Time.instant - norm_t0).total_milliseconds
 
       head_dim = hp.head_dim_for_layer(il)
       q_dim = hp.n_head * head_dim
       kv_dim = hp.n_head_kv(il) * head_dim
+      matmul_t0 = Time.instant
       q_rows, k_rows, v_rows = if v_qw = lw.attn_v_qw
                                  if rows = prompt_projection_many_matmul([lw.attn_q_qw, lw.attn_k_qw, v_qw], normed_rows, mask.prompt_len)
                                    {rows[0], rows[1], rows[2]}
@@ -1001,17 +1052,25 @@ module ML::GGUF
                                    k_rows.dup,
                                  }
                                end
+      matmul_ms = (Time.instant - matmul_t0).total_milliseconds
       reused_k_as_v = lw.attn_v_qw.nil?
 
-      Array(AttentionProjection).new(mask.prompt_len) do |pos|
+      assemble_ms = 0.0
+      rope_ms = 0.0
+      projections = Array(AttentionProjection).new(mask.prompt_len) do |pos|
+        assemble_t0 = Time.instant
         q = q_rows[pos * q_dim, q_dim]
         k = k_rows[pos * kv_dim, kv_dim]
         v = v_rows[pos * kv_dim, kv_dim]
         proj = AttentionProjection.new(q, k, v, reused_k_as_v)
         normalize_attention_projection!(proj, lw, hp, il)
+        assemble_ms += (Time.instant - assemble_t0).total_milliseconds
+        rope_t0 = Time.instant
         apply_rope_to_qk!(proj, hp, il, pos, weights.rope_freqs)
+        rope_ms += (Time.instant - rope_t0).total_milliseconds
         proj
       end
+      PromptProjectionTiming.new(projections, norm_ms, matmul_ms, assemble_ms, rope_ms)
     end
 
     def prompt_projection_metal_enabled? : Bool
