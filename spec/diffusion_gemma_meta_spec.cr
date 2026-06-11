@@ -831,6 +831,11 @@ describe ML::GGUF::DiffusionGemmaCPU do
       ENV.delete("DIFFUSION_GEMMA_CONTEXT_METAL_OFF")
       actual = ML::GGUF::DiffusionGemmaCPU.attention_context_decode_timed(
         prompt_projections, canvas_projections, hp, il, canvas_query_index: 0, mask: mask).context
+      resident_cache = ML::GGUF::DiffusionGemmaCPU::PromptLayerMetalCache.new(
+        prompt_projections, mask.prompt_len, mask.canvas_len, kv_dim)
+      resident_cache.write_canvas!(canvas_projections)
+      resident = ML::GGUF::DiffusionGemmaCPU.attention_context_decode_timed(
+        prompt_projections, canvas_projections, hp, il, canvas_query_index: 0, mask: mask, prompt_metal_cache: resident_cache).context
 
       max_diff = 0.0_f32
       expected.size.times do |i|
@@ -838,6 +843,12 @@ describe ML::GGUF::DiffusionGemmaCPU do
         max_diff = diff if diff > max_diff
       end
       max_diff.should be < 1.0e-4_f32
+      max_resident_diff = 0.0_f32
+      expected.size.times do |i|
+        diff = (expected[i] - resident[i]).abs
+        max_resident_diff = diff if diff > max_resident_diff
+      end
+      max_resident_diff.should be < 1.0e-4_f32
     ensure
       g.close
       if old_context_metal

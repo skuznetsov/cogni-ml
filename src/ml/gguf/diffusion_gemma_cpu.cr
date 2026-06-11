@@ -17,6 +17,59 @@ module ML::GGUF
       end
     end
 
+    class PromptLayerMetalCache
+      getter k_cache_buf : ML::MetalBuffer
+      getter v_cache_buf : ML::MetalBuffer
+      getter prompt_len : Int32
+      getter canvas_len : Int32
+      getter kv_dim : Int32
+
+      def initialize(prompt_projections : Array(AttentionProjection),
+                     @prompt_len : Int32,
+                     @canvas_len : Int32,
+                     @kv_dim : Int32)
+        raise ArgumentError.new("prompt projection count mismatch") unless prompt_projections.size == @prompt_len
+        total_tokens = @prompt_len + @canvas_len
+        k_cache = Array(Float32).new(total_tokens * @kv_dim, 0.0_f32)
+        v_cache = Array(Float32).new(total_tokens * @kv_dim, 0.0_f32)
+        prompt_projections.each_with_index do |proj, pos|
+          raise ArgumentError.new("prompt k size mismatch") unless proj.k.size == @kv_dim
+          raise ArgumentError.new("prompt v size mismatch") unless proj.v.size == @kv_dim
+          copy_projection_kv_to_rows!(proj, k_cache, v_cache, pos, @kv_dim)
+        end
+        @k_cache_buf = ML::MetalBuffer.from_array(k_cache)
+        @v_cache_buf = ML::MetalBuffer.from_array(v_cache)
+      end
+
+      def write_canvas!(canvas_projections : Array(AttentionProjection)) : Nil
+        raise ArgumentError.new("canvas projection count mismatch") unless canvas_projections.size == @canvas_len
+        canvas_projections.each_with_index do |proj, canvas_pos|
+          raise ArgumentError.new("canvas k size mismatch") unless proj.k.size == @kv_dim
+          raise ArgumentError.new("canvas v size mismatch") unless proj.v.size == @kv_dim
+          offset = (@prompt_len + canvas_pos) * @kv_dim
+          (@k_cache_buf.contents.as(Pointer(Float32)) + offset).copy_from(proj.k.to_unsafe, @kv_dim)
+          (@v_cache_buf.contents.as(Pointer(Float32)) + offset).copy_from(proj.v.to_unsafe, @kv_dim)
+        end
+      end
+
+      private def copy_projection_kv_to_rows!(proj : AttentionProjection,
+                                              k_rows : Array(Float32),
+                                              v_rows : Array(Float32),
+                                              pos : Int32,
+                                              kv_dim : Int32) : Nil
+        k_dst = k_rows.to_unsafe + pos * kv_dim
+        v_dst = v_rows.to_unsafe + pos * kv_dim
+        k_src = proj.k.to_unsafe
+        v_src = proj.v.to_unsafe
+        d = 0
+        while d < kv_dim
+          k_dst[d] = k_src[d]
+          v_dst[d] = v_src[d]
+          d += 1
+        end
+      end
+    end
+
     struct ExpertRoute
       getter expert : Int32
       getter weight : Float32
@@ -310,6 +363,7 @@ module ML::GGUF
       getter projection_rope_q_apply_ms_by_layer : Array(Float64)
       getter projection_rope_k_apply_ms_by_layer : Array(Float64)
       getter materialize_ms_by_layer : Array(Float64)
+      getter metal_cache_by_layer : Array(PromptLayerMetalCache?)
 
       def initialize(@final_rows,
                      @projections_by_layer,
@@ -327,7 +381,8 @@ module ML::GGUF
                      @projection_rope_apply_ms_by_layer = [] of Float64,
                      @projection_rope_q_apply_ms_by_layer = [] of Float64,
                      @projection_rope_k_apply_ms_by_layer = [] of Float64,
-                     @materialize_ms_by_layer = [] of Float64)
+                     @materialize_ms_by_layer = [] of Float64,
+                     @metal_cache_by_layer = [] of PromptLayerMetalCache?)
       end
 
       def layers : Int32
@@ -719,10 +774,24 @@ module ML::GGUF
                                        hp : DiffusionGemmaHparams,
                                        il : Int32,
                                        canvas_query_index : Int32,
-                                       mask : DiffusionGemmaAttentionMask) : AttentionContextTiming
+                                       mask : DiffusionGemmaAttentionMask,
+                                       prompt_metal_cache : PromptLayerMetalCache? = nil) : AttentionContextTiming
       raise ArgumentError.new("prompt projection count mismatch") unless prompt_projections.size == mask.prompt_len
       raise ArgumentError.new("canvas projection count mismatch") unless canvas_projections.size == mask.canvas_len
       raise ArgumentError.new("canvas_query_index out of bounds") if canvas_query_index < 0 || canvas_query_index >= canvas_projections.size
+
+      if context_metal_enabled? && prompt_metal_cache
+        if context = attention_context_decode_metal_resident(
+             query: canvas_projections[canvas_query_index],
+             cache: prompt_metal_cache.not_nil!,
+             hp: hp,
+             il: il,
+             high: mask.total_tokens - 1,
+             low: hp.sliding_window?(il) ? mask.canvas_prompt_low : 0,
+           )
+          return AttentionContextTiming.new(context, 0.0, 0.0, 0.0)
+        end
+      end
 
       keyspace = prompt_projections + canvas_projections
       low = hp.sliding_window?(il) ? mask.canvas_prompt_low : 0
@@ -996,6 +1065,7 @@ module ML::GGUF
       projection_rope_q_apply_ms_by_layer = [] of Float64
       projection_rope_k_apply_ms_by_layer = [] of Float64
       materialize_ms_by_layer = [] of Float64
+      metal_cache_by_layer = [] of PromptLayerMetalCache?
       max_layers.times do |il|
         projection_t0 = Time.instant
         timed_projections = prompt_attention_projections_timed(weights, il, rows, mask)
@@ -1015,6 +1085,12 @@ module ML::GGUF
         projection_rope_q_apply_ms_by_layer << timed_projections.rope_q_apply_ms
         projection_rope_k_apply_ms_by_layer << timed_projections.rope_k_apply_ms
         projections_by_layer << projections
+        if context_metal_enabled? && Gemma4Metal.available?
+          kv_dim = hp.n_head_kv(il) * hp.head_dim_for_layer(il)
+          metal_cache_by_layer << PromptLayerMetalCache.new(projections, mask.prompt_len, mask.canvas_len, kv_dim)
+        else
+          metal_cache_by_layer << nil
+        end
         break if !materialize_final_rows && il == max_layers - 1
 
         routes = routes_by_layer_by_prompt_row ? routes_by_layer_by_prompt_row.not_nil![il] : nil
@@ -1041,6 +1117,7 @@ module ML::GGUF
         projection_rope_q_apply_ms_by_layer,
         projection_rope_k_apply_ms_by_layer,
         materialize_ms_by_layer,
+        metal_cache_by_layer,
       )
     end
 
@@ -1095,6 +1172,7 @@ module ML::GGUF
           prompt_projections: prompt_cache.projections_by_layer[il],
           canvas_rows: rows,
           mask: mask,
+          prompt_metal_cache: prompt_cache.metal_cache_by_layer[il]?,
           routes_by_canvas_row: routes,
         )
         rows = timed.rows
@@ -1182,6 +1260,7 @@ module ML::GGUF
                                                                        prompt_projections : Array(AttentionProjection),
                                                                        canvas_rows : Array(Float32),
                                                                        mask : DiffusionGemmaAttentionMask,
+                                                                       prompt_metal_cache : PromptLayerMetalCache? = nil,
                                                                        routes_by_canvas_row : Array(Array(ExpertRoute))? = nil) : DecodeCanvasRowsTiming
       hp = weights.hparams
       lw = weights.layers[il]
@@ -1198,6 +1277,9 @@ module ML::GGUF
         attention_project_normed(weights, il, x, mask.prompt_len + pos)
       end
       qkv_ms = (Time.instant - qkv_t0).total_milliseconds
+      if prompt_metal_cache
+        prompt_metal_cache.not_nil!.write_canvas!(canvas_projections)
+      end
       context_ms = 0.0
       context_score_ms = 0.0
       context_softmax_ms = 0.0
@@ -1210,7 +1292,7 @@ module ML::GGUF
       mask.canvas_len.times do |canvas_pos|
         x = canvas_rows[canvas_pos * hp.n_embd, hp.n_embd]
         context_t0 = Time.instant
-        context_timing = attention_context_decode_timed(prompt_projections, canvas_projections, hp, il, canvas_query_index: canvas_pos, mask: mask)
+        context_timing = attention_context_decode_timed(prompt_projections, canvas_projections, hp, il, canvas_query_index: canvas_pos, mask: mask, prompt_metal_cache: prompt_metal_cache)
         context = context_timing.context
         context_ms += (Time.instant - context_t0).total_milliseconds
         context_score_ms += context_timing.score_ms
@@ -2220,6 +2302,29 @@ module ML::GGUF
     private def context_metal_enabled? : Bool
       ENV["DIFFUSION_GEMMA_CONTEXT_METAL"]? == "1" &&
         ENV["DIFFUSION_GEMMA_CONTEXT_METAL_OFF"]? != "1"
+    end
+
+    private def attention_context_decode_metal_resident(query : AttentionProjection,
+                                                        cache : PromptLayerMetalCache,
+                                                        hp : DiffusionGemmaHparams,
+                                                        il : Int32,
+                                                        low : Int32,
+                                                        high : Int32) : Array(Float32)?
+      return nil unless Gemma4Metal.available?
+      return nil unless high >= low
+      return nil unless high < cache.prompt_len + cache.canvas_len
+
+      head_dim = hp.head_dim_for_layer(il)
+      n_head = hp.n_head
+      n_head_kv = hp.n_head_kv(il)
+      q_dim = n_head * head_dim
+      kv_dim = n_head_kv * head_dim
+      return nil unless cache.kv_dim == kv_dim
+      validate_projection_shape!(query, q_dim, kv_dim, il)
+
+      sliding_window = low == 0 ? 0 : high - low + 1
+      Gemma4Metal.attention_context_rows_resident(
+        query.q, cache.k_cache_buf, cache.v_cache_buf, high, 1, n_head, n_head_kv, head_dim, sliding_window)
     end
 
     private def attention_context_from_range_metal(query : AttentionProjection,
