@@ -347,6 +347,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Row-local generated candidate semantics are now covered below the CLI layer. Added `DiffusionGemmaCPU.generated_candidate_rows`, and `scripts/diffusion_gemma_sparse_loop_smoke.cr` calls it for generated `--candidate-count` modes.
 - Verification: no-codegen build and wrapper syntax passed. Focused real-GGUF spec `scripts/run_safe.sh /opt/homebrew/bin/crystal 300 18000 spec spec/diffusion_gemma_meta_spec.cr --error-trace --link-flags="/Users/sergey/Projects/Crystal/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` passed (`29 examples, 0 failures`). Targeted smoke guard still verified `candidate_rows=0|1`, `prediction_count=2`, and `final_canvas_tokens=0,1`.
 - Boundary: this is correctness hardening for sparse candidate-row construction, not candidate quality or full-vocabulary EB.
+**update 2026-06-10br:**
+- `scripts/diffusion_gemma_sparse_loop_smoke.cr` now supports `--decode-canvas-text`, adding TSV/key-value `initial_canvas_text` and `final_canvas_text` fields for qualitative inspection of canvas token ids. Decoding uses existing Gemma4 tokenizer metadata and does not require the external `llama-tokenize` binary unless `--prompt TEXT` is also used.
+- Verification: no-codegen build passed. A real text-prompt smoke with `--prompt 'Hello, world' --canvas-tokens 9259 --candidate-count 1 --steps 1 --warmups 1 --repeats 2 --format tsv --decode-canvas-text` emitted `initial_canvas_text=Hello` and `final_canvas_text=Hello`. An adversary smoke with special tokens `--canvas-tokens 0,1`, missing `--llama-tokenize`, and `--decode-canvas-text` preserved 48 TSV columns and produced empty decoded text fields without failing.
+- Boundary: this is qualitative output for the bounded sparse-loop prototype. It is not native text encoding, full text generation, or DiffusionGemma quality parity.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified

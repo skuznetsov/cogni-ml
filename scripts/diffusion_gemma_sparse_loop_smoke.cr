@@ -29,6 +29,7 @@ single_route = true
 format = "keyvalue"
 repeats = 1
 warmups = 0
+decode_canvas_text = false
 
 OptionParser.parse do |p|
   p.banner = "Usage: diffusion_gemma_sparse_loop_smoke [options]"
@@ -55,6 +56,7 @@ OptionParser.parse do |p|
   p.on("--format FORMAT", "Output format: keyvalue or tsv (default: keyvalue)") { |v| format = v.downcase }
   p.on("--repeats N", "Repeat sparse loop after one model/cache load (default: 1)") { |v| repeats = v.to_i }
   p.on("--warmups N", "Run sparse loop warmups before measured repeats (default: 0)") { |v| warmups = v.to_i }
+  p.on("--decode-canvas-text", "Decode initial/final canvas token ids for qualitative probe output") { decode_canvas_text = true }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -117,6 +119,19 @@ def encode_prompt_text(model : String, llama_tokenize : String, text : String) :
   ids
 end
 
+def load_gemma4_tokenizer(model : String, llama_tokenize : String) : ML::GGUF::Gemma4Tokenizer
+  g = ML::GGUF::GGUFFile.new(model)
+  begin
+    ML::GGUF::Gemma4Tokenizer.from_gguf(g, model, llama_tokenize)
+  ensure
+    g.close
+  end
+end
+
+def output_safe_text(text : String) : String
+  text.gsub('\t', ' ').gsub('\n', "\\n").gsub('\r', "\\r")
+end
+
 raise "model not found: #{model}" unless File.exists?(model)
 raise "--max-layers must be positive" unless max_layers > 0
 raise "--steps must be positive" unless steps > 0
@@ -160,6 +175,7 @@ load_t0 = Time.instant
 weights = ML::GGUF::DiffusionGemmaWeights.from_gguf(model)
 load_ms = (Time.instant - load_t0).total_milliseconds
 hp = weights.hparams
+canvas_decoder = decode_canvas_text ? load_gemma4_tokenizer(model, llama_tokenize) : nil
 
 if lengths = canvas_lengths
   lengths.each do |length|
@@ -328,8 +344,10 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"canvas_len", canvas_tokens.size.to_s},
         {"initial_canvas_token", canvas_tokens[0].to_s},
         {"initial_canvas_tokens", canvas_tokens.join(",")},
+        {"initial_canvas_text", canvas_decoder ? output_safe_text(canvas_decoder.not_nil!.decode(canvas_tokens)) : ""},
         {"final_canvas_token", loop.final_canvas_tokens[0].to_s},
         {"final_canvas_tokens", loop.final_canvas_tokens.join(",")},
+        {"final_canvas_text", canvas_decoder ? output_safe_text(canvas_decoder.not_nil!.decode(loop.final_canvas_tokens)) : ""},
         {"candidate_set_index", candidate_set_index.to_s},
         {"candidate_count", candidate_rows.first.size.to_s},
         {"candidate_ids", candidate_rows.first.join(",")},
