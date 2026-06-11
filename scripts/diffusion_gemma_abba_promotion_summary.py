@@ -103,6 +103,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--format", choices=("kv", "json"), default="kv")
+    parser.add_argument("--require-candidate", action="store_true", help="Exit nonzero unless the suite is a candidate speedup.")
     parser.add_argument("--roots", nargs="+", type=Path, help="Summarize ABBA run directories directly.")
     parser.add_argument("summary_tsv", nargs="?", default="-")
     args = parser.parse_args()
@@ -126,6 +127,8 @@ def main() -> None:
         print(json.dumps(summary, sort_keys=True))
     else:
         print_key_values(summary)
+    if args.require_candidate and summary["suite_decision"] != "candidate_speedup":
+        raise SystemExit(3)
 
 
 if __name__ == "__main__":
