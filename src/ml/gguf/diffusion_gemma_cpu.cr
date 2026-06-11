@@ -503,12 +503,14 @@ module ML::GGUF
       raise ArgumentError.new("canvas_query_index out of bounds") if canvas_query_index < 0 || canvas_query_index >= canvas_projections.size
 
       keyspace = prompt_projections + canvas_projections
-      attention_context_from_keyspace(
+      low = hp.sliding_window?(il) ? mask.canvas_prompt_low : 0
+      attention_context_from_range(
         query: canvas_projections[canvas_query_index],
         keyspace: keyspace,
         hp: hp,
         il: il,
-        allowed: ->(key_pos : Int32) { mask.allow_decode?(canvas_query_index, key_pos, hp.sliding_window?(il)) },
+        low: low,
+        high: keyspace.size - 1,
       )
     end
 
@@ -1710,8 +1712,12 @@ module ML::GGUF
         allowed_keys.each_with_index do |key_pos, i|
           v_off = kvh * head_dim
           weight = scores[i]
-          head_dim.times do |d|
-            result[out_off + d] += weight * keyspace[key_pos].v[v_off + d]
+          result_ptr = result.to_unsafe + out_off
+          value_ptr = keyspace[key_pos].v.to_unsafe + v_off
+          d = 0
+          while d < head_dim
+            result_ptr[d] += weight * value_ptr[d]
+            d += 1
           end
         end
       end
@@ -1754,8 +1760,12 @@ module ML::GGUF
           key_pos = low + i
           v_off = kvh * head_dim
           weight = scores[i]
-          head_dim.times do |d|
-            result[out_off + d] += weight * keyspace[key_pos].v[v_off + d]
+          result_ptr = result.to_unsafe + out_off
+          value_ptr = keyspace[key_pos].v.to_unsafe + v_off
+          d = 0
+          while d < head_dim
+            result_ptr[d] += weight * value_ptr[d]
+            d += 1
           end
         end
       end
@@ -1773,7 +1783,13 @@ module ML::GGUF
 
     private def dot(a : Array(Float32), a_off : Int32, b : Array(Float32), b_off : Int32, len : Int32) : Float32
       sum = 0.0_f32
-      len.times { |i| sum += a[a_off + i] * b[b_off + i] }
+      a_ptr = a.to_unsafe + a_off
+      b_ptr = b.to_unsafe + b_off
+      i = 0
+      while i < len
+        sum += a_ptr[i] * b_ptr[i]
+        i += 1
+      end
       sum
     end
 
