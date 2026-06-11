@@ -12,6 +12,7 @@ load_threshold="${LOAD_THRESHOLD:-50}"
 total_threshold="${TOTAL_THRESHOLD:-100}"
 require_quiet="${REQUIRE_QUIET:-0}"
 require_candidate="${REQUIRE_CANDIDATE:-0}"
+promotion_format="${PROMOTION_FORMAT:-kv}"
 
 mkdir -p "$log_dir"
 
@@ -24,6 +25,7 @@ printf 'load_threshold=%s\n' "$load_threshold"
 printf 'total_threshold=%s\n' "$total_threshold"
 printf 'require_quiet=%s\n' "$require_quiet"
 printf 'require_candidate=%s\n' "$require_candidate"
+printf 'promotion_format=%s\n' "$promotion_format"
 
 env_tokens() {
   local raw="$1"
@@ -322,7 +324,7 @@ for case in cases:
         sys.exit(4)
 PY
 
-promotion_args=(--roots "$log_dir")
+promotion_args=(--format "$promotion_format" --roots "$log_dir")
 if [[ "$require_candidate" == "1" ]]; then
   promotion_args=(--require-candidate "${promotion_args[@]}")
 fi
