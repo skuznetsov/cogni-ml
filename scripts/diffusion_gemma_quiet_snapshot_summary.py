@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 from pathlib import Path
 
@@ -30,18 +31,12 @@ def format_float(value: float) -> str:
     return f"{value:.1f}" if not math.isnan(value) else "NA"
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("root", type=Path)
-    parser.add_argument("--load-threshold", type=float, default=30.0)
-    parser.add_argument("--total-threshold", type=float, default=90.0)
-    args = parser.parse_args()
-
+def summarize(root: Path, load_threshold: float, total_threshold: float) -> dict[str, object]:
     max_process_cpu = float("nan")
     max_total_cpu = float("nan")
     max_process = "NA"
     snapshots = 0
-    for path in sorted(args.root.glob("host_snapshot_*.txt")):
+    for path in sorted(root.glob("host_snapshot_*.txt")):
         fields = snapshot_fields(path)
         process_cpu = as_float(fields.get("max_process_cpu", "nan"))
         total_cpu = as_float(fields.get("total_cpu", "nan"))
@@ -56,18 +51,45 @@ def main() -> None:
         snapshots > 0
         and not math.isnan(max_process_cpu)
         and not math.isnan(max_total_cpu)
-        and max_process_cpu < args.load_threshold
-        and max_total_cpu < args.total_threshold
+        and max_process_cpu < load_threshold
+        and max_total_cpu < total_threshold
     )
-    blocker = "none" if quiet_candidate else max_process
-    print(f"quiet_candidate={'true' if quiet_candidate else 'false'}")
-    print(f"snapshots={snapshots}")
-    print(f"max_process_cpu={format_float(max_process_cpu)}")
-    print(f"max_total_cpu={format_float(max_total_cpu)}")
-    print(f"max_process={max_process}")
-    print(f"blocker={blocker}")
-    print(f"load_threshold={args.load_threshold:.1f}")
-    print(f"total_threshold={args.total_threshold:.1f}")
+    return {
+        "quiet_candidate": quiet_candidate,
+        "snapshots": snapshots,
+        "max_process_cpu": max_process_cpu,
+        "max_total_cpu": max_total_cpu,
+        "max_process": max_process,
+        "blocker": "none" if quiet_candidate else max_process,
+        "load_threshold": load_threshold,
+        "total_threshold": total_threshold,
+    }
+
+
+def print_key_values(summary: dict[str, object]) -> None:
+    print(f"quiet_candidate={'true' if summary['quiet_candidate'] else 'false'}")
+    print(f"snapshots={summary['snapshots']}")
+    print(f"max_process_cpu={format_float(float(summary['max_process_cpu']))}")
+    print(f"max_total_cpu={format_float(float(summary['max_total_cpu']))}")
+    print(f"max_process={summary['max_process']}")
+    print(f"blocker={summary['blocker']}")
+    print(f"load_threshold={float(summary['load_threshold']):.1f}")
+    print(f"total_threshold={float(summary['total_threshold']):.1f}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("root", type=Path)
+    parser.add_argument("--load-threshold", type=float, default=30.0)
+    parser.add_argument("--total-threshold", type=float, default=90.0)
+    parser.add_argument("--format", choices=("kv", "json"), default="kv")
+    args = parser.parse_args()
+
+    summary = summarize(args.root, args.load_threshold, args.total_threshold)
+    if args.format == "json":
+        print(json.dumps(summary, sort_keys=True))
+    else:
+        print_key_values(summary)
 
 
 if __name__ == "__main__":
