@@ -187,4 +187,5 @@ Offline summaries for saved ABBA directories:
 ```sh
 scripts/diffusion_gemma_abba_dir_summary.py /tmp/run64 /tmp/run128 /tmp/run256
 scripts/diffusion_gemma_abba_promotion_summary.py --format json --roots /tmp/run64 /tmp/run128 /tmp/run256
+scripts/diffusion_gemma_quiet_snapshot_summary.py /tmp/diffusiongemma_quiet_check_only_current
 ```
