@@ -156,6 +156,10 @@ def as_float(row, key):
     except ValueError:
         return float("nan")
 
+def unique_value(rows, key):
+    values = sorted({row.get(key, "") for row in rows if row.get(key, "") != ""})
+    return ",".join(values) if values else "NA"
+
 for row in rows:
     print(
         "row "
@@ -193,6 +197,16 @@ for case in cases:
             f"variant_over_base_cache={cache_ratio:.4f} cache_speedup={1 / cache_ratio if cache_ratio else 0.0:.4f}x "
             f"base_projection_ms={base_projection:.3f} variant_projection_ms={variant_projection:.3f} "
             f"variant_over_base_projection={projection_ratio:.4f} projection_speedup={1 / projection_ratio if projection_ratio else 0.0:.4f}x"
+        )
+        print(
+            "diffusion_gemma_prompt_variant_abba_route "
+            f"case={case} "
+            f"base_backend={unique_value(by_arm['base'], 'loop_context_backend')} "
+            f"variant_backend={unique_value(by_arm['variant'], 'loop_context_backend')} "
+            f"base_batch_rows={unique_value(by_arm['base'], 'loop_context_batch_rows')} "
+            f"variant_batch_rows={unique_value(by_arm['variant'], 'loop_context_batch_rows')} "
+            f"base_fixed_gqa2={unique_value(by_arm['base'], 'loop_context_fixed_gqa2')} "
+            f"variant_fixed_gqa2={unique_value(by_arm['variant'], 'loop_context_fixed_gqa2')}"
         )
         for metric in (
             "loop_ms_median",
