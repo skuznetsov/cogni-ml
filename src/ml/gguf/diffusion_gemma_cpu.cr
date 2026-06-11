@@ -637,14 +637,14 @@ module ML::GGUF
       raise ArgumentError.new("expert input size mismatch") unless ffn_in.size == hp.n_embd
 
       gate_up_qw = expert_gate_up_qw(weights.layers[il], hp, expert)
-      gate_up = Gemma4CPU.matmul(gate_up_qw, ffn_in)
+      gate_up = prompt_projection_matmul(gate_up_qw, ffn_in, 1)
       raise ArgumentError.new("expert gate_up size mismatch") unless gate_up.size == hp.expert_ff * 2
 
       gate = gate_up[0, hp.expert_ff]
       up = gate_up[hp.expert_ff, hp.expert_ff]
       hidden = Array(Float32).new(hp.expert_ff) { |i| Gemma4CPU.gelu(gate[i]) * up[i] }
 
-      down = Gemma4CPU.matmul(expert_down_qw(weights.layers[il], hp, expert), hidden)
+      down = prompt_projection_matmul(expert_down_qw(weights.layers[il], hp, expert), hidden, 1)
       raise ArgumentError.new("expert down size mismatch") unless down.size == hp.n_embd
 
       scale = weights.layers[il].ffn_down_exps_scale[expert]
