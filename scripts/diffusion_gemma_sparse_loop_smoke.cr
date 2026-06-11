@@ -99,10 +99,6 @@ def generated_candidate_ids(default_token : Int32, count : Int32, vocab_size : I
   generated_token_sequence(default_token, count, vocab_size, "--candidate-count").sort
 end
 
-def generated_candidate_rows(canvas_tokens : Array(Int32), count : Int32, vocab_size : Int32) : Array(Array(Int32))
-  canvas_tokens.map { |token_id| generated_candidate_ids(token_id, count, vocab_size) }
-end
-
 def median(values : Array(Float64)) : Float64
   raise "median requires at least one value" if values.empty?
   sorted = values.sort
@@ -259,7 +255,7 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
 
     candidate_specs.each_with_index do |candidate_spec, candidate_set_index|
       generated_count, candidate_ids = candidate_spec
-      candidate_rows = generated_count ? generated_candidate_rows(canvas_tokens, generated_count.not_nil!, hp.vocab_size) : canvas_tokens.map { candidate_ids.dup }
+      candidate_rows = generated_count ? ML::GGUF::DiffusionGemmaCPU.generated_candidate_rows(canvas_tokens, generated_count.not_nil!, hp.vocab_size) : canvas_tokens.map { candidate_ids.dup }
       loop_samples = [] of Float64
       loop = nil.as(ML::GGUF::DiffusionGemmaCPU::BoundedDenoiseLoopResult?)
       (warmups + repeats).times do |run_index|

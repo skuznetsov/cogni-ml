@@ -867,6 +867,17 @@ module ML::GGUF
       canvas_tokens.map { |token_id| [token_id] }
     end
 
+    def generated_candidate_rows(canvas_tokens : Array(Int32),
+                                 count : Int32,
+                                 vocab_size : Int32) : Array(Array(Int32))
+      raise ArgumentError.new("candidate count must be positive") unless count > 0
+      raise ArgumentError.new("candidate count exceeds vocab size") if count > vocab_size
+      validate_candidate_tokens!(canvas_tokens, vocab_size)
+      canvas_tokens.map do |token_id|
+        Array(Int32).new(count) { |i| (token_id + i) % vocab_size }.sort
+      end
+    end
+
     def merge_candidate_rows(canvas_tokens : Array(Int32),
                              proposal_token_ids_by_canvas_row : Array(Array(Int32)),
                              vocab_size : Int32) : Array(Array(Int32))

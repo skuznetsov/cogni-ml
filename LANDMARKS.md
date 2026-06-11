@@ -343,6 +343,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - Generated candidate-count modes are now row-local for multi-canvas smoke: `--candidate-count N` / `--candidate-counts LIST` generate each canvas row's candidate list from that row's current token, while explicit `--candidate-ids` remains a shared candidate row. TSV output adds `candidate_rows` using `|` between canvas rows.
 - Verification: no-codegen build and wrapper syntax passed. Real `--prompt-tokens 1,2 --canvas-tokens 0,1 --candidate-count 1 --steps 1 --warmups 1 --repeats 2 --format tsv` emitted `candidate_rows=0|1`, `prediction_count=2`, and `final_canvas_tokens=0,1`; an explicit `--candidate-ids 0` adversary row still emitted `candidate_rows=0|0` and `final_canvas_tokens=0,0`. The sparse-loop summarizer accepted the new TSV.
 - Boundary: this fixes generated sparse candidate semantics for multi-canvas measurement. It does not add full-vocabulary candidate discovery or prove candidate quality.
+**update 2026-06-10bq:**
+- Row-local generated candidate semantics are now covered below the CLI layer. Added `DiffusionGemmaCPU.generated_candidate_rows`, and `scripts/diffusion_gemma_sparse_loop_smoke.cr` calls it for generated `--candidate-count` modes.
+- Verification: no-codegen build and wrapper syntax passed. Focused real-GGUF spec `scripts/run_safe.sh /opt/homebrew/bin/crystal 300 18000 spec spec/diffusion_gemma_meta_spec.cr --error-trace --link-flags="/Users/sergey/Projects/Crystal/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` passed (`29 examples, 0 failures`). Targeted smoke guard still verified `candidate_rows=0|1`, `prediction_count=2`, and `final_canvas_tokens=0,1`.
+- Boundary: this is correctness hardening for sparse candidate-row construction, not candidate quality or full-vocabulary EB.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified

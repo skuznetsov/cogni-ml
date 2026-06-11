@@ -931,6 +931,7 @@ describe ML::GGUF::DiffusionGemmaCPU do
     ML::GGUF::DiffusionGemmaCPU.entropy_bound_accept([0.2_f32, 0.05_f32, 0.3_f32], 0.1_f32).should eq([true, true, false])
     ML::GGUF::DiffusionGemmaCPU.update_canvas_token([7, 8, 9], 1, 20).should eq([7, 20, 9])
     ML::GGUF::DiffusionGemmaCPU.current_token_candidate_rows([3, 1], 10).should eq([[3], [1]])
+    ML::GGUF::DiffusionGemmaCPU.generated_candidate_rows([8, 9], 3, 10).should eq([[0, 8, 9], [0, 1, 9]])
     ML::GGUF::DiffusionGemmaCPU.merge_candidate_rows([3, 1], [[4, 3, 2], [1, 9]], 10).should eq([[2, 3, 4], [1, 9]])
     candidate_steps = ML::GGUF::DiffusionGemmaCPU.current_token_candidate_steps([5], 10, 2)
     candidate_steps.should eq([[[5]], [[5]]])
