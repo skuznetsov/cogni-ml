@@ -323,6 +323,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - `scripts/diffusion_gemma_sparse_loop_prompt_sweep.sh` now supports `SUMMARY=1`, writing the raw TSV and summarizer TSV to `SUMMARY_DIR`/`SUMMARY_RAW_TSV`/`SUMMARY_TSV`, then printing the compact summary. Default `SUMMARY=0` behavior remains raw TSV stdout.
 - Verification: `bash -n` passed; invalid `SUMMARY` and invalid `LENGTHS` fail closed before compile/model load. `SUMMARY=1 LENGTHS='1 2' SUMMARY_DIR=/tmp scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_prompt_sweep.sh 300 6000 --candidate-counts 1,4 --steps 1 --warmups 1 --repeats 2` exited 0, emitted raw and summary paths, and printed two grouped prompt-length rows. Guards verified the raw TSV had four rows and summary TSV had two rows with `rows=2`.
 - Boundary: this is measurement workflow plumbing only. It does not change sparse-loop semantics or convert the smoke into quiet-host benchmark evidence.
+**update 2026-06-10bl:**
+- `scripts/diffusion_gemma_sparse_loop_candidate_sweep.sh` now supports `SUMMARY=1`, matching the prompt sweep wrapper: it writes raw and summary TSV files, then prints the compact sparse-loop summary. Default `SUMMARY=0` remains raw TSV stdout.
+- Verification: `bash -n` passed; invalid `SUMMARY` and invalid `COUNTS` fail closed before compile/model load. `SUMMARY=1 COUNTS='1 4' SUMMARY_DIR=/tmp scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_candidate_sweep.sh 300 6000 --steps 1 --warmups 1 --repeats 2` exited 0, emitted raw and summary paths, and printed one prompt-length summary row. Guards verified the raw TSV had two candidate rows and the summary row had `rows=2`.
+- Boundary: this is measurement workflow plumbing for candidate-width sweeps only. It does not change sparse-loop semantics, candidate quality, or quiet-host benchmark status.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified
