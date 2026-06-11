@@ -371,6 +371,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - `scripts/diffusion_gemma_sparse_loop_smoke.cr` now emits `last_chosen_texts` when `--decode-canvas-text` is enabled, decoding each row's last-step argmax token. This gives a compact chosen-candidate view without parsing `candidate_row_texts` plus probability rows.
 - Verification: no-codegen build passed. A real GGUF smoke with `--candidate-texts 'Hello|world' --decode-canvas-text` emitted `last_argmax_tokens=9259`, `last_chosen_texts=Hello`, and a non-negative argmax probability. A two-row canvas adversary smoke emitted two chosen texts matching `canvas_len=2`; the same one-row smoke without `--decode-canvas-text` kept `last_chosen_texts` empty.
 - Boundary: this is output-only qualitative diagnostics for the bounded sparse loop. It does not change argmax/sample selection, candidate sets, or tokenizer oracle boundaries.
+**update 2026-06-10bx:**
+- Added `scripts/diffusion_gemma_text_probe.sh`, a one-command text-first wrapper around the bounded sparse-loop smoke. It defaults to `PROMPT='Say:'`, `CANVAS='Hello'`, `CANDIDATES='Hello|world'`, TSV output, and `--decode-canvas-text`, while still passing through extra smoke flags.
+- Verification: shell syntax passed; invalid numeric env and empty pipe-separated candidate entries fail closed before model execution. A real default wrapper run on the local GGUF emitted `prompt_source=text`, `canvas_source=text`, `candidate_texts=Hello|world`, non-empty `last_chosen_texts`, and non-empty probability diagnostics.
+- Boundary: this is demo/workflow plumbing for the native bounded sparse prototype. It does not change model execution, sparse candidate semantics, or tokenizer oracle boundaries.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified
