@@ -20,11 +20,13 @@ cache_repeats="${CACHE_REPEATS:-1}"
 max_layers="${MAX_LAYERS:-1}"
 timeout_seconds="${TIMEOUT_SECONDS:-60}"
 materialize_prompt_final_rows="${MATERIALIZE_PROMPT_FINAL_ROWS:-0}"
+include_large_prompt="${INCLUDE_LARGE_PROMPT:-0}"
 out="${OUT:-${TMPDIR:-/tmp}/diffusion_gemma_prompt_perf_$(date +%Y%m%d%H%M%S).tsv}"
 
 short_prompt="${SHORT_PROMPT:-Say:}"
 medium_prompt="${MEDIUM_PROMPT:-You are testing the native DiffusionGemma bounded sparse denoising prototype. Pick the best one-token continuation from the supplied candidates.}"
 long_prompt="${LONG_PROMPT:-You are testing the native DiffusionGemma bounded sparse denoising prototype with a larger prompt. The prompt is intentionally longer than the default smoke so that prompt-cache construction, attention cache reuse, and sparse canvas update timings can be separated. We want a practical local engineering signal, not a quality claim.}"
+large_prompt="${LARGE_PROMPT:-You are testing the native DiffusionGemma bounded sparse denoising prototype with a substantially larger prompt for local performance attribution. This case repeats the same engineering constraints in plain text: preserve exact prompt-cache semantics, measure prompt projection subphases, avoid product-quality claims, and keep the sparse canvas row small enough for safe local runs. The goal is to expose scaling behavior in prompt-cache construction after the short, medium, and long smoke cases no longer show a single dominant bucket. The benchmark should identify whether prompt projection matmul, per-row normalization, projection assembly, RoPE application, materialization, or decode context becomes dominant as the prompt grows. This is a bounded probe on one layer and one canvas row, not a full generation benchmark.}"
 
 if [[ -z "$timeout_bin" ]]; then
   echo "timeout command not found; set TIMEOUT_BIN=/path/to/timeout" >&2
@@ -57,6 +59,15 @@ case "$materialize_prompt_final_rows" in
   1|true|yes) materialize_prompt_final_rows=1 ;;
   *)
     echo "MATERIALIZE_PROMPT_FINAL_ROWS must be 0 or 1" >&2
+    exit 2
+    ;;
+esac
+
+case "$include_large_prompt" in
+  0|false|no) include_large_prompt=0 ;;
+  1|true|yes) include_large_prompt=1 ;;
+  *)
+    echo "INCLUDE_LARGE_PROMPT must be 0 or 1" >&2
     exit 2
     ;;
 esac
@@ -159,5 +170,8 @@ run_case() {
 run_case short "$short_prompt"
 run_case medium "$medium_prompt"
 run_case long "$long_prompt"
+if [[ "$include_large_prompt" -eq 1 ]]; then
+  run_case large "$large_prompt"
+fi
 
 cat "$out"
