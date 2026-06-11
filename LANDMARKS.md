@@ -367,6 +367,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - `scripts/diffusion_gemma_sparse_loop_smoke.cr` now emits last-step sparse candidate diagnostics: `last_argmax_tokens`, `last_sampled_tokens`, `last_argmax_probabilities`, `last_entropies`, and `last_candidate_probability_rows`. Probability rows follow the same canvas-row separator convention as `candidate_rows`.
 - Verification: no-codegen build passed. A real GGUF smoke with `--candidate-texts 'Hello|world'` emitted a two-entry probability row summing to `1.0` and an argmax token contained in `candidate_ids`. A multi-canvas adversary smoke with two canvas rows emitted two probability rows, each summing to `1.0`.
 - Boundary: this is diagnostics for the bounded sparse candidate distribution already computed by the native loop. It does not change acceptance semantics, candidate generation, or quality parity.
+**update 2026-06-10bw:**
+- `scripts/diffusion_gemma_sparse_loop_smoke.cr` now emits `last_chosen_texts` when `--decode-canvas-text` is enabled, decoding each row's last-step argmax token. This gives a compact chosen-candidate view without parsing `candidate_row_texts` plus probability rows.
+- Verification: no-codegen build passed. A real GGUF smoke with `--candidate-texts 'Hello|world' --decode-canvas-text` emitted `last_argmax_tokens=9259`, `last_chosen_texts=Hello`, and a non-negative argmax probability. A two-row canvas adversary smoke emitted two chosen texts matching `canvas_len=2`; the same one-row smoke without `--decode-canvas-text` kept `last_chosen_texts` empty.
+- Boundary: this is output-only qualitative diagnostics for the bounded sparse loop. It does not change argmax/sample selection, candidate sets, or tokenizer oracle boundaries.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified

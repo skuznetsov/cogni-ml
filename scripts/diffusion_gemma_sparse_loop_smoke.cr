@@ -176,6 +176,12 @@ def format_argmax_probabilities(predictions : Array(ML::GGUF::DiffusionGemmaCPU:
   end.join(",")
 end
 
+def format_chosen_texts(predictions : Array(ML::GGUF::DiffusionGemmaCPU::BoundedDenoisePrediction),
+                        tokenizer : ML::GGUF::Gemma4Tokenizer?) : String
+  return "" unless tok = tokenizer
+  predictions.map { |prediction| output_safe_list_text(tok.decode([prediction.argmax_token_id])) }.join("|")
+end
+
 def parse_candidate_texts(model : String, llama_tokenize : String, raw : String) : Tuple(Array(Int32), Array(String))
   texts = raw.split('|')
   raise "--candidate-texts must contain at least one text" if texts.empty? || texts.any?(&.empty?)
@@ -445,6 +451,7 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"mean_entropy", summary.mean_entropy.to_s},
         {"last_argmax_tokens", format_prediction_i32s(last_predictions, &.argmax_token_id)},
         {"last_sampled_tokens", format_prediction_i32s(last_predictions, &.sampled_token_id)},
+        {"last_chosen_texts", format_chosen_texts(last_predictions, canvas_decoder)},
         {"last_argmax_probabilities", format_argmax_probabilities(last_predictions)},
         {"last_entropies", last_predictions.map { |prediction| format_f32(prediction.entropy) }.join(",")},
         {"last_candidate_probability_rows", format_prediction_f32_rows(last_predictions, &.probabilities)},
