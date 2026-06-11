@@ -60,6 +60,12 @@ def median_value(rows: list[dict[str, str]], key: str) -> float:
     return statistics.median(values) if values else float("nan")
 
 
+def range_value(rows: list[dict[str, str]], key: str) -> float:
+    values = [as_float(row, key) for row in rows]
+    values = [value for value in values if not math.isnan(value)]
+    return max(values) - min(values) if values else float("nan")
+
+
 def unique_value(rows: list[dict[str, str]], key: str) -> str:
     values = sorted({row.get(key, "") for row in rows if row.get(key, "") != ""})
     return ",".join(values) if values else "NA"
@@ -192,6 +198,8 @@ def summarize(root: Path) -> list[dict[str, object]]:
             summary[f"{metric}_variant_ms"] = format_ms(variant_metric)
             summary[f"{metric}_delta_ms"] = format_ms(delta)
             summary[f"{metric}_speedup"] = format_ratio(1.0 / ratio) if ratio else "NA"
+            summary[f"{metric}_base_range_ms"] = format_ms(range_value(base, metric))
+            summary[f"{metric}_variant_range_ms"] = format_ms(range_value(variant, metric))
         tracked_deltas = {metric: phase_delta(base, variant, metric) for metric in TRACKED_PHASE_METRICS}
         tracked_delta = sum(tracked_deltas.values())
         loop_delta = median_value(variant, "loop_ms_median") - median_value(base, "loop_ms_median")
@@ -236,6 +244,8 @@ def main() -> None:
                 f"{metric}_variant_ms",
                 f"{metric}_delta_ms",
                 f"{metric}_speedup",
+                f"{metric}_base_range_ms",
+                f"{metric}_variant_range_ms",
             ]
         )
     fields.extend(
