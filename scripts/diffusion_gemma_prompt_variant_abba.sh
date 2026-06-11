@@ -319,3 +319,5 @@ for case in cases:
         print(f"diffusion_gemma_prompt_variant_abba_case case={case} incomplete_arms=1")
         sys.exit(4)
 PY
+
+"$repo_root/scripts/diffusion_gemma_abba_promotion_summary.py" --roots "$log_dir"
