@@ -307,6 +307,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - `scripts/diffusion_gemma_sparse_loop_smoke.cr` now supports `--prompt-tokens CSV`, overriding the single `--prompt-token` and building a multi-token prompt cache. Output adds `prompt_len` and `prompt_tokens`.
 - Verification: no-codegen build passed; wrapper syntax passed; empty `--prompt-tokens ,` fails closed before model/Metal init; `scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_smoke.sh 300 6000 --prompt-tokens 1,2 --candidate-counts 1,4 --steps 1 --warmups 1 --repeats 2 --format tsv` exited 0. An awk guard verified two rows with `prompt_len=2`, `prompt_tokens=1,2`, and first prompt token `1`.
 - Boundary: this measures token-id prompt-cache length effects in the native sparse-loop smoke. It is not tokenizer-backed text prompting or full DiffusionGemma generation.
+**update 2026-06-10bh:**
+- `scripts/diffusion_gemma_sparse_loop_smoke.cr` now supports `--prompt-lengths LIST --format tsv`, generating multiple synthetic prompt token-id lists from `--prompt-token` and measuring each prompt-cache length after one shared GGUF load. TSV output adds `prompt_set_index`, `candidate_set_index`, `prompt_cache_ms_ratio_vs_first`, and `prompt_cache_tokens_per_ms`.
+- Verification: no-codegen build passed; wrapper syntax passed; empty, zero, conflicting `--prompt-tokens`, and non-TSV `--prompt-lengths` modes fail closed before model/Metal init. `scripts/run_safe.sh scripts/diffusion_gemma_sparse_loop_smoke.sh 300 6000 --prompt-lengths 1,2 --candidate-counts 1,4 --steps 1 --warmups 1 --repeats 2 --format tsv` exited 0. An awk guard verified four rows covering prompt lengths `1/2` crossed with candidate counts `1/4`, expected synthetic prompt tokens `1` and `1,2`, and populated prompt-cache ratio fields.
+- Boundary: this removes model reload from prompt-length sweeps, but it still uses synthetic token ids and the one-row sparse canvas smoke. It is not tokenizer-backed prompting, full DiffusionGemma generation, or quiet-host benchmark evidence.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified
