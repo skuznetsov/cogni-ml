@@ -1,9 +1,14 @@
 require "option_parser"
 require "../src/ml/gguf/diffusion_gemma_cpu"
+require "../src/ml/gguf/gemma4_tokenizer"
+require "../src/ml/gguf/reader"
 
-DEFAULT_MODEL = "#{ENV["HOME"]}/.cache/lm-studio/models/unsloth/diffusiongemma-26B-A4B-it-GGUF/diffusiongemma-26B-A4B-it-Q4_K_M.gguf"
+DEFAULT_MODEL          = "#{ENV["HOME"]}/.cache/lm-studio/models/unsloth/diffusiongemma-26B-A4B-it-GGUF/diffusiongemma-26B-A4B-it-Q4_K_M.gguf"
+DEFAULT_LLAMA_TOKENIZE = "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp-diffusiongemma-pr/build-dg/bin/llama-tokenize"
 
 model = ENV["DIFFUSION_GEMMA_MODEL"]? || DEFAULT_MODEL
+llama_tokenize = ENV["DIFFUSION_GEMMA_LLAMA_TOKENIZE"]? || ENV["LLAMA_TOKENIZE"]? || DEFAULT_LLAMA_TOKENIZE
+prompt_text = nil.as(String?)
 prompt_token = 1
 prompt_tokens_arg = nil.as(String?)
 prompt_lengths_arg = nil.as(String?)
@@ -26,6 +31,8 @@ warmups = 0
 OptionParser.parse do |p|
   p.banner = "Usage: diffusion_gemma_sparse_loop_smoke [options]"
   p.on("--model PATH", "DiffusionGemma GGUF path") { |v| model = v }
+  p.on("--llama-tokenize PATH", "llama-tokenize binary for --prompt text") { |v| llama_tokenize = v }
+  p.on("--prompt TEXT", "Text prompt, tokenized through the Gemma4 GGUF tokenizer") { |v| prompt_text = v }
   p.on("--prompt-token ID", "Prompt token id (default: 1)") { |v| prompt_token = v.to_i }
   p.on("--prompt-tokens CSV", "Prompt token ids, overrides --prompt-token") { |v| prompt_tokens_arg = v }
   p.on("--prompt-lengths LIST", "Generate multiple synthetic prompt token lists, comma or space separated") { |v| prompt_lengths_arg = v }
@@ -94,6 +101,18 @@ def median(values : Array(Float64)) : Float64
   sorted[sorted.size // 2]
 end
 
+def encode_prompt_text(model : String, llama_tokenize : String, text : String) : Array(Int32)
+  raise "--prompt must not be empty" if text.empty?
+  raise "--llama-tokenize not found: #{llama_tokenize}" unless File.exists?(llama_tokenize)
+
+  g = ML::GGUF::GGUFFile.new(model)
+  tokenizer = ML::GGUF::Gemma4Tokenizer.from_gguf(g, model, llama_tokenize)
+  ids = tokenizer.encode(text)
+  g.close
+  raise "--prompt produced no token ids" if ids.empty?
+  ids
+end
+
 raise "model not found: #{model}" unless File.exists?(model)
 raise "--max-layers must be positive" unless max_layers > 0
 raise "--steps must be positive" unless steps > 0
@@ -110,9 +129,16 @@ candidate_mode_count += 1 if candidate_counts_arg
 raise "--candidate-ids, --candidate-count, and --candidate-counts are mutually exclusive" if candidate_mode_count > 1
 raise "--candidate-counts requires --format tsv" if candidate_counts_arg && format != "tsv"
 raise "--prompt-tokens and --prompt-lengths are mutually exclusive" if prompt_tokens_arg && prompt_lengths_arg
+raise "--prompt and --prompt-tokens are mutually exclusive" if prompt_text && prompt_tokens_arg
+raise "--prompt and --prompt-lengths are mutually exclusive" if prompt_text && prompt_lengths_arg
 raise "--prompt-lengths requires --format tsv" if prompt_lengths_arg && format != "tsv"
 raise "single-route smoke currently supports --max-layers 1; pass --full-routes for deeper smoke" if single_route && max_layers != 1
-prompt_tokens = prompt_tokens_arg ? parse_token_ids(prompt_tokens_arg.not_nil!, "--prompt-tokens") : [prompt_token]
+prompt_source = prompt_text ? "text" : (prompt_tokens_arg ? "token_ids" : (prompt_lengths_arg ? "synthetic_lengths" : "single_token"))
+prompt_tokens = if text = prompt_text
+                  encode_prompt_text(model, llama_tokenize, text)
+                else
+                  prompt_tokens_arg ? parse_token_ids(prompt_tokens_arg.not_nil!, "--prompt-tokens") : [prompt_token]
+                end
 prompt_lengths = prompt_lengths_arg ? parse_positive_counts(prompt_lengths_arg.not_nil!, "--prompt-lengths") : nil
 
 load_t0 = Time.instant
@@ -258,6 +284,8 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
       {"converged", summary.converged.to_s},
       {"stop_reason", summary.stop_reason},
       {"prompt_set_index", prompt_set_index.to_s},
+      {"prompt_source", prompt_source},
+      {"prompt_text_bytes", prompt_text.try(&.bytesize).try(&.to_s) || "0"},
       {"prompt_token", tokens[0].to_s},
       {"prompt_len", tokens.size.to_s},
       {"prompt_tokens", tokens.join(",")},
