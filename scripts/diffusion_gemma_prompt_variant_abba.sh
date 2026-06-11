@@ -194,6 +194,21 @@ for case in cases:
             f"base_projection_ms={base_projection:.3f} variant_projection_ms={variant_projection:.3f} "
             f"variant_over_base_projection={projection_ratio:.4f} projection_speedup={1 / projection_ratio if projection_ratio else 0.0:.4f}x"
         )
+        for metric in (
+            "loop_ms_median",
+            "loop_decode_context_ms",
+            "loop_decode_qkv_ms",
+            "loop_decode_attention_out_ms",
+        ):
+            base_metric = statistics.median(as_float(row, metric) for row in by_arm["base"])
+            variant_metric = statistics.median(as_float(row, metric) for row in by_arm["variant"])
+            metric_ratio = variant_metric / base_metric if base_metric else float("inf")
+            print(
+                "diffusion_gemma_prompt_variant_abba_metric "
+                f"case={case} metric={metric} "
+                f"base_ms={base_metric:.3f} variant_ms={variant_metric:.3f} "
+                f"variant_over_base={metric_ratio:.4f} speedup={1 / metric_ratio if metric_ratio else 0.0:.4f}x"
+            )
     else:
         print(f"diffusion_gemma_prompt_variant_abba_case case={case} incomplete_arms=1")
         sys.exit(4)
