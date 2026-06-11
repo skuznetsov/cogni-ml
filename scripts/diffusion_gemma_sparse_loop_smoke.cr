@@ -364,6 +364,9 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
     projection_assemble_samples = [] of Float64
     projection_copy_samples = [] of Float64
     projection_head_norm_samples = [] of Float64
+    projection_q_norm_samples = [] of Float64
+    projection_k_norm_samples = [] of Float64
+    projection_v_norm_samples = [] of Float64
     projection_rope_samples = [] of Float64
     materialize_samples = [] of Float64
     (cache_warmups + cache_repeats).times do |run_index|
@@ -387,6 +390,9 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
       projection_assemble_samples << cache.projection_assemble_ms_by_layer.sum
       projection_copy_samples << cache.projection_copy_ms_by_layer.sum
       projection_head_norm_samples << cache.projection_head_norm_ms_by_layer.sum
+      projection_q_norm_samples << cache.projection_q_norm_ms_by_layer.sum
+      projection_k_norm_samples << cache.projection_k_norm_ms_by_layer.sum
+      projection_v_norm_samples << cache.projection_v_norm_ms_by_layer.sum
       projection_rope_samples << cache.projection_rope_ms_by_layer.sum
       materialize_samples << cache.materialize_ms_by_layer.sum
     end
@@ -401,6 +407,9 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
     prompt_projection_assemble_ms = median(projection_assemble_samples)
     prompt_projection_copy_ms = median(projection_copy_samples)
     prompt_projection_head_norm_ms = median(projection_head_norm_samples)
+    prompt_projection_q_norm_ms = median(projection_q_norm_samples)
+    prompt_projection_k_norm_ms = median(projection_k_norm_samples)
+    prompt_projection_v_norm_ms = median(projection_v_norm_samples)
     prompt_projection_rope_ms = median(projection_rope_samples)
     prompt_materialize_ms = median(materialize_samples)
 
@@ -556,6 +565,9 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"prompt_projection_assemble_ms", prompt_projection_assemble_ms.round(3).to_s},
         {"prompt_projection_copy_ms", prompt_projection_copy_ms.round(3).to_s},
         {"prompt_projection_head_norm_ms", prompt_projection_head_norm_ms.round(3).to_s},
+        {"prompt_projection_q_norm_ms", prompt_projection_q_norm_ms.round(3).to_s},
+        {"prompt_projection_k_norm_ms", prompt_projection_k_norm_ms.round(3).to_s},
+        {"prompt_projection_v_norm_ms", prompt_projection_v_norm_ms.round(3).to_s},
         {"prompt_projection_rope_ms", prompt_projection_rope_ms.round(3).to_s},
         {"prompt_materialize_ms", prompt_materialize_ms.round(3).to_s},
         {"prompt_cache_ms_samples", cache_samples.map { |v| v.round(3) }.join(",")},
@@ -565,6 +577,9 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"prompt_projection_assemble_ms_samples", projection_assemble_samples.map { |v| v.round(3) }.join(",")},
         {"prompt_projection_copy_ms_samples", projection_copy_samples.map { |v| v.round(3) }.join(",")},
         {"prompt_projection_head_norm_ms_samples", projection_head_norm_samples.map { |v| v.round(3) }.join(",")},
+        {"prompt_projection_q_norm_ms_samples", projection_q_norm_samples.map { |v| v.round(3) }.join(",")},
+        {"prompt_projection_k_norm_ms_samples", projection_k_norm_samples.map { |v| v.round(3) }.join(",")},
+        {"prompt_projection_v_norm_ms_samples", projection_v_norm_samples.map { |v| v.round(3) }.join(",")},
         {"prompt_projection_rope_ms_samples", projection_rope_samples.map { |v| v.round(3) }.join(",")},
         {"prompt_materialize_ms_samples", materialize_samples.map { |v| v.round(3) }.join(",")},
         {"prompt_cache_materialized_final_rows", materialize_prompt_final_rows.to_s},
