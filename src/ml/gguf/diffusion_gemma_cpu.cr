@@ -981,13 +981,26 @@ module ML::GGUF
       head_dim = hp.head_dim_for_layer(il)
       q_dim = hp.n_head * head_dim
       kv_dim = hp.n_head_kv(il) * head_dim
-      q_rows = prompt_projection_matmul(lw.attn_q_qw, normed_rows, mask.prompt_len)
-      k_rows = prompt_projection_matmul(lw.attn_k_qw, normed_rows, mask.prompt_len)
-      v_rows = if v_qw = lw.attn_v_qw
-                 prompt_projection_matmul(v_qw, normed_rows, mask.prompt_len)
-               else
-                 k_rows.dup
-               end
+      q_rows, k_rows, v_rows = if v_qw = lw.attn_v_qw
+                                 if rows = prompt_projection_many_matmul([lw.attn_q_qw, lw.attn_k_qw, v_qw], normed_rows, mask.prompt_len)
+                                   {rows[0], rows[1], rows[2]}
+                                 else
+                                   {
+                                     prompt_projection_matmul(lw.attn_q_qw, normed_rows, mask.prompt_len),
+                                     prompt_projection_matmul(lw.attn_k_qw, normed_rows, mask.prompt_len),
+                                     prompt_projection_matmul(v_qw, normed_rows, mask.prompt_len),
+                                   }
+                                 end
+                               elsif rows = prompt_projection_many_matmul([lw.attn_q_qw, lw.attn_k_qw], normed_rows, mask.prompt_len)
+                                 {rows[0], rows[1], rows[1].dup}
+                               else
+                                 k_rows = prompt_projection_matmul(lw.attn_k_qw, normed_rows, mask.prompt_len)
+                                 {
+                                   prompt_projection_matmul(lw.attn_q_qw, normed_rows, mask.prompt_len),
+                                   k_rows,
+                                   k_rows.dup,
+                                 }
+                               end
       reused_k_as_v = lw.attn_v_qw.nil?
 
       Array(AttentionProjection).new(mask.prompt_len) do |pos|
@@ -1029,6 +1042,36 @@ module ML::GGUF
         end
       end
       Gemma4CPU.matmul(qw, x, batch)
+    end
+
+    def prompt_projection_many_matmul(qws : Array(QuantWeight),
+                                      x : Array(Float32),
+                                      batch : Int32) : Array(Array(Float32))?
+      {% if flag?(:cpu_only) %}
+        nil
+      {% else %}
+        return [] of Array(Float32) if qws.empty?
+        return nil unless prompt_projection_metal_enabled? && batch >= prompt_projection_metal_min_batch
+        in_dim = qws[0].in_dim
+        return nil unless x.size == batch * in_dim
+        return nil unless qws.all? { |qw| qw.in_dim == in_dim }
+
+        x_buf = ML::MetalBuffer.new((batch * in_dim).to_i64 * sizeof(Float32))
+        out_bufs = qws.map do |qw|
+          ML::MetalBuffer.new((batch * qw.out_dim).to_i64 * sizeof(Float32))
+        end
+        begin
+          x_buf.write(x)
+          return nil unless Qwen35Metal.matmul_many_to_buffers(qws, x_buf, out_bufs, batch)
+
+          qws.map_with_index do |qw, i|
+            out_bufs[i].read(batch * qw.out_dim)
+          end
+        ensure
+          x_buf.release
+          out_bufs.each(&.release)
+        end
+      {% end %}
     end
 
     def output_hidden_norm(weights : DiffusionGemmaWeights,
