@@ -1025,7 +1025,7 @@ module ML::GGUF
       norm_t0 = Time.instant
       normed_rows = prompt_rows.dup
       mask.prompt_len.times do |pos|
-        Gemma4CPU.rms_norm_slice!(normed_rows, pos * hp.n_embd, hp.n_embd, lw.attn_norm, hp.rms_eps)
+        fast_rms_norm_slice!(normed_rows, pos * hp.n_embd, hp.n_embd, lw.attn_norm, hp.rms_eps)
       end
       norm_ms = (Time.instant - norm_t0).total_milliseconds
 
