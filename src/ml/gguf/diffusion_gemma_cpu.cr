@@ -66,6 +66,9 @@ module ML::GGUF
       getter decode_stack_ms : Float64
       getter decode_qkv_ms : Float64
       getter decode_context_ms : Float64
+      getter decode_context_score_ms : Float64
+      getter decode_context_softmax_ms : Float64
+      getter decode_context_value_ms : Float64
       getter decode_attention_out_ms : Float64
       getter decode_shared_ffn_ms : Float64
       getter decode_moe_ffn_ms : Float64
@@ -86,6 +89,9 @@ module ML::GGUF
                      @decode_stack_ms = 0.0,
                      @decode_qkv_ms = 0.0,
                      @decode_context_ms = 0.0,
+                     @decode_context_score_ms = 0.0,
+                     @decode_context_softmax_ms = 0.0,
+                     @decode_context_value_ms = 0.0,
                      @decode_attention_out_ms = 0.0,
                      @decode_shared_ffn_ms = 0.0,
                      @decode_moe_ffn_ms = 0.0,
@@ -127,6 +133,9 @@ module ML::GGUF
       getter decode_stack_ms : Float64
       getter decode_qkv_ms : Float64
       getter decode_context_ms : Float64
+      getter decode_context_score_ms : Float64
+      getter decode_context_softmax_ms : Float64
+      getter decode_context_value_ms : Float64
       getter decode_attention_out_ms : Float64
       getter decode_shared_ffn_ms : Float64
       getter decode_moe_ffn_ms : Float64
@@ -141,7 +150,10 @@ module ML::GGUF
                      @decode_shared_ffn_ms,
                      @decode_moe_ffn_ms,
                      @decode_combine_scale_ms,
-                     @output_head_ms)
+                     @output_head_ms,
+                     @decode_context_score_ms = 0.0,
+                     @decode_context_softmax_ms = 0.0,
+                     @decode_context_value_ms = 0.0)
       end
     end
 
@@ -151,6 +163,9 @@ module ML::GGUF
       getter decode_stack_ms : Float64
       getter decode_qkv_ms : Float64
       getter decode_context_ms : Float64
+      getter decode_context_score_ms : Float64
+      getter decode_context_softmax_ms : Float64
+      getter decode_context_value_ms : Float64
       getter decode_attention_out_ms : Float64
       getter decode_shared_ffn_ms : Float64
       getter decode_moe_ffn_ms : Float64
@@ -170,7 +185,10 @@ module ML::GGUF
                      @decode_combine_scale_ms,
                      @output_head_ms,
                      @update_ms,
-                     @regenerate_ms)
+                     @regenerate_ms,
+                     @decode_context_score_ms = 0.0,
+                     @decode_context_softmax_ms = 0.0,
+                     @decode_context_value_ms = 0.0)
       end
     end
 
@@ -178,6 +196,9 @@ module ML::GGUF
       getter rows : Array(Float32)
       getter qkv_ms : Float64
       getter context_ms : Float64
+      getter context_score_ms : Float64
+      getter context_softmax_ms : Float64
+      getter context_value_ms : Float64
       getter attention_out_ms : Float64
       getter shared_ffn_ms : Float64
       getter moe_ffn_ms : Float64
@@ -189,7 +210,23 @@ module ML::GGUF
                      @attention_out_ms,
                      @shared_ffn_ms,
                      @moe_ffn_ms,
-                     @combine_scale_ms)
+                     @combine_scale_ms,
+                     @context_score_ms = 0.0,
+                     @context_softmax_ms = 0.0,
+                     @context_value_ms = 0.0)
+      end
+    end
+
+    struct AttentionContextTiming
+      getter context : Array(Float32)
+      getter score_ms : Float64
+      getter softmax_ms : Float64
+      getter value_ms : Float64
+
+      def initialize(@context,
+                     @score_ms,
+                     @softmax_ms,
+                     @value_ms)
       end
     end
 
@@ -676,6 +713,28 @@ module ML::GGUF
       )
     end
 
+    def attention_context_decode_timed(prompt_projections : Array(AttentionProjection),
+                                       canvas_projections : Array(AttentionProjection),
+                                       hp : DiffusionGemmaHparams,
+                                       il : Int32,
+                                       canvas_query_index : Int32,
+                                       mask : DiffusionGemmaAttentionMask) : AttentionContextTiming
+      raise ArgumentError.new("prompt projection count mismatch") unless prompt_projections.size == mask.prompt_len
+      raise ArgumentError.new("canvas projection count mismatch") unless canvas_projections.size == mask.canvas_len
+      raise ArgumentError.new("canvas_query_index out of bounds") if canvas_query_index < 0 || canvas_query_index >= canvas_projections.size
+
+      keyspace = prompt_projections + canvas_projections
+      low = hp.sliding_window?(il) ? mask.canvas_prompt_low : 0
+      attention_context_from_range_timed(
+        query: canvas_projections[canvas_query_index],
+        keyspace: keyspace,
+        hp: hp,
+        il: il,
+        low: low,
+        high: keyspace.size - 1,
+      )
+    end
+
     def attention_context_prompt(projections : Array(AttentionProjection),
                                  hp : DiffusionGemmaHparams,
                                  il : Int32,
@@ -1020,6 +1079,9 @@ module ML::GGUF
       rows = canvas_rows.dup
       qkv_ms = 0.0
       context_ms = 0.0
+      context_score_ms = 0.0
+      context_softmax_ms = 0.0
+      context_value_ms = 0.0
       attention_out_ms = 0.0
       shared_ffn_ms = 0.0
       moe_ffn_ms = 0.0
@@ -1037,12 +1099,15 @@ module ML::GGUF
         rows = timed.rows
         qkv_ms += timed.qkv_ms
         context_ms += timed.context_ms
+        context_score_ms += timed.context_score_ms
+        context_softmax_ms += timed.context_softmax_ms
+        context_value_ms += timed.context_value_ms
         attention_out_ms += timed.attention_out_ms
         shared_ffn_ms += timed.shared_ffn_ms
         moe_ffn_ms += timed.moe_ffn_ms
         combine_scale_ms += timed.combine_scale_ms
       end
-      DecodeCanvasRowsTiming.new(rows, qkv_ms, context_ms, attention_out_ms, shared_ffn_ms, moe_ffn_ms, combine_scale_ms)
+      DecodeCanvasRowsTiming.new(rows, qkv_ms, context_ms, attention_out_ms, shared_ffn_ms, moe_ffn_ms, combine_scale_ms, context_score_ms, context_softmax_ms, context_value_ms)
     end
 
     def layer_forward_unified_rows(weights : DiffusionGemmaWeights,
@@ -1133,6 +1198,9 @@ module ML::GGUF
       end
       qkv_ms = (Time.instant - qkv_t0).total_milliseconds
       context_ms = 0.0
+      context_score_ms = 0.0
+      context_softmax_ms = 0.0
+      context_value_ms = 0.0
       attention_out_ms = 0.0
       shared_ffn_ms = 0.0
       moe_ffn_ms = 0.0
@@ -1141,8 +1209,12 @@ module ML::GGUF
       mask.canvas_len.times do |canvas_pos|
         x = canvas_rows[canvas_pos * hp.n_embd, hp.n_embd]
         context_t0 = Time.instant
-        context = attention_context_decode(prompt_projections, canvas_projections, hp, il, canvas_query_index: canvas_pos, mask: mask)
+        context_timing = attention_context_decode_timed(prompt_projections, canvas_projections, hp, il, canvas_query_index: canvas_pos, mask: mask)
+        context = context_timing.context
         context_ms += (Time.instant - context_t0).total_milliseconds
+        context_score_ms += context_timing.score_ms
+        context_softmax_ms += context_timing.softmax_ms
+        context_value_ms += context_timing.value_ms
 
         attention_t0 = Time.instant
         projected = attention_output_project(weights, il, context)
@@ -1168,7 +1240,7 @@ module ML::GGUF
         combine_scale_ms += (Time.instant - combine_t0).total_milliseconds
         copy_row!(result, canvas_pos, hp.n_embd, layer_row)
       end
-      DecodeCanvasRowsTiming.new(result, qkv_ms, context_ms, attention_out_ms, shared_ffn_ms, moe_ffn_ms, combine_scale_ms)
+      DecodeCanvasRowsTiming.new(result, qkv_ms, context_ms, attention_out_ms, shared_ffn_ms, moe_ffn_ms, combine_scale_ms, context_score_ms, context_softmax_ms, context_value_ms)
     end
 
     def prompt_attention_projections(weights : DiffusionGemmaWeights,
@@ -1577,6 +1649,9 @@ module ML::GGUF
         decode_timing.moe_ffn_ms,
         decode_timing.combine_scale_ms,
         (Time.instant - output_t0).total_milliseconds,
+        decode_timing.context_score_ms,
+        decode_timing.context_softmax_ms,
+        decode_timing.context_value_ms,
       )
     end
 
@@ -1673,6 +1748,9 @@ module ML::GGUF
         prediction_timing.output_head_ms,
         update_ms,
         regenerate_ms,
+        prediction_timing.decode_context_score_ms,
+        prediction_timing.decode_context_softmax_ms,
+        prediction_timing.decode_context_value_ms,
       )
     end
 
@@ -1727,7 +1805,23 @@ module ML::GGUF
         if use_sparse_self_conditioning
           regenerate_t0 = Time.instant
           rows = canvas_rows_from_prediction_self_conditioning(weights, tokens, update.predictions, sc_temp_inv, sc_use)
-          timed = BoundedDenoiseStepTiming.new(update, timed.prediction_ms, timed.decode_stack_ms, timed.decode_qkv_ms, timed.decode_context_ms, timed.decode_attention_out_ms, timed.decode_shared_ffn_ms, timed.decode_moe_ffn_ms, timed.decode_combine_scale_ms, timed.output_head_ms, timed.update_ms, (Time.instant - regenerate_t0).total_milliseconds)
+          timed = BoundedDenoiseStepTiming.new(
+            update,
+            timed.prediction_ms,
+            timed.decode_stack_ms,
+            timed.decode_qkv_ms,
+            timed.decode_context_ms,
+            timed.decode_attention_out_ms,
+            timed.decode_shared_ffn_ms,
+            timed.decode_moe_ffn_ms,
+            timed.decode_combine_scale_ms,
+            timed.output_head_ms,
+            timed.update_ms,
+            (Time.instant - regenerate_t0).total_milliseconds,
+            timed.decode_context_score_ms,
+            timed.decode_context_softmax_ms,
+            timed.decode_context_value_ms,
+          )
           update = BoundedCanvasUpdate.new(update.updated_canvas_tokens, update.accepted, update.predictions, rows)
         else
           rows = update.updated_canvas_rows || rows
@@ -1798,7 +1892,23 @@ module ML::GGUF
         if use_sparse_self_conditioning
           regenerate_t0 = Time.instant
           rows = canvas_rows_from_prediction_self_conditioning(weights, tokens, update.predictions, sc_temp_inv, sc_use)
-          timed = BoundedDenoiseStepTiming.new(update, timed.prediction_ms, timed.decode_stack_ms, timed.decode_qkv_ms, timed.decode_context_ms, timed.decode_attention_out_ms, timed.decode_shared_ffn_ms, timed.decode_moe_ffn_ms, timed.decode_combine_scale_ms, timed.output_head_ms, timed.update_ms, (Time.instant - regenerate_t0).total_milliseconds)
+          timed = BoundedDenoiseStepTiming.new(
+            update,
+            timed.prediction_ms,
+            timed.decode_stack_ms,
+            timed.decode_qkv_ms,
+            timed.decode_context_ms,
+            timed.decode_attention_out_ms,
+            timed.decode_shared_ffn_ms,
+            timed.decode_moe_ffn_ms,
+            timed.decode_combine_scale_ms,
+            timed.output_head_ms,
+            timed.update_ms,
+            (Time.instant - regenerate_t0).total_milliseconds,
+            timed.decode_context_score_ms,
+            timed.decode_context_softmax_ms,
+            timed.decode_context_value_ms,
+          )
           update = BoundedCanvasUpdate.new(update.updated_canvas_tokens, update.accepted, update.predictions, rows)
         else
           rows = update.updated_canvas_rows || rows
@@ -1883,6 +1993,9 @@ module ML::GGUF
         decode_stack_ms: timing ? timing.not_nil!.decode_stack_ms : 0.0,
         decode_qkv_ms: timing ? timing.not_nil!.decode_qkv_ms : 0.0,
         decode_context_ms: timing ? timing.not_nil!.decode_context_ms : 0.0,
+        decode_context_score_ms: timing ? timing.not_nil!.decode_context_score_ms : 0.0,
+        decode_context_softmax_ms: timing ? timing.not_nil!.decode_context_softmax_ms : 0.0,
+        decode_context_value_ms: timing ? timing.not_nil!.decode_context_value_ms : 0.0,
         decode_attention_out_ms: timing ? timing.not_nil!.decode_attention_out_ms : 0.0,
         decode_shared_ffn_ms: timing ? timing.not_nil!.decode_shared_ffn_ms : 0.0,
         decode_moe_ffn_ms: timing ? timing.not_nil!.decode_moe_ffn_ms : 0.0,
@@ -2038,6 +2151,15 @@ module ML::GGUF
                                              il : Int32,
                                              low : Int32,
                                              high : Int32) : Array(Float32)
+      attention_context_from_range_timed(query, keyspace, hp, il, low, high).context
+    end
+
+    private def attention_context_from_range_timed(query : AttentionProjection,
+                                                   keyspace : Array(AttentionProjection),
+                                                   hp : DiffusionGemmaHparams,
+                                                   il : Int32,
+                                                   low : Int32,
+                                                   high : Int32) : AttentionContextTiming
       raise ArgumentError.new("attention has no allowed keys") if low > high
       raise ArgumentError.new("attention range out of bounds") if low < 0 || high >= keyspace.size
 
@@ -2053,17 +2175,25 @@ module ML::GGUF
       key_count = high - low + 1
       result = Array(Float32).new(q_dim, 0.0_f32)
       scores = Array(Float32).new(key_count, 0.0_f32)
+      score_ms = 0.0
+      softmax_ms = 0.0
+      value_ms = 0.0
       n_head.times do |h|
         kvh = h // heads_per_group
         q_off = h * head_dim
+        score_t0 = Time.instant
         key_count.times do |i|
           key_pos = low + i
           k_off = kvh * head_dim
           scores[i] = dot(query.q, q_off, keyspace[key_pos].k, k_off, head_dim)
         end
+        score_ms += (Time.instant - score_t0).total_milliseconds
+        softmax_t0 = Time.instant
         Gemma4CPU.softmax_slice!(scores, 0, scores.size)
+        softmax_ms += (Time.instant - softmax_t0).total_milliseconds
 
         out_off = h * head_dim
+        value_t0 = Time.instant
         key_count.times do |i|
           key_pos = low + i
           v_off = kvh * head_dim
@@ -2076,8 +2206,9 @@ module ML::GGUF
             d += 1
           end
         end
+        value_ms += (Time.instant - value_t0).total_milliseconds
       end
-      result
+      AttentionContextTiming.new(result, score_ms, softmax_ms, value_ms)
     end
 
     private def validate_projection_shape!(proj : AttentionProjection,

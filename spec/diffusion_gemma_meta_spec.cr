@@ -867,6 +867,14 @@ describe ML::GGUF::DiffusionGemmaCPU do
     loop.step_traces[0].decode_stack_ms.should be > 0.0
     loop.step_traces[0].decode_qkv_ms.should be >= 0.0
     loop.step_traces[0].decode_context_ms.should be >= 0.0
+    loop.step_traces[0].decode_context_score_ms.should be >= 0.0
+    loop.step_traces[0].decode_context_softmax_ms.should be >= 0.0
+    loop.step_traces[0].decode_context_value_ms.should be >= 0.0
+    (
+      loop.step_traces[0].decode_context_score_ms +
+        loop.step_traces[0].decode_context_softmax_ms +
+        loop.step_traces[0].decode_context_value_ms
+    ).should be <= loop.step_traces[0].decode_context_ms
     loop.step_traces[0].decode_attention_out_ms.should be >= 0.0
     loop.step_traces[0].decode_shared_ffn_ms.should be >= 0.0
     loop.step_traces[0].decode_moe_ffn_ms.should be >= 0.0

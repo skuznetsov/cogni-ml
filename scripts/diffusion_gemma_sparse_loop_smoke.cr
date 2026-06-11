@@ -438,6 +438,9 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
       loop_decode_stack_ms_samples = [] of Float64
       loop_decode_qkv_ms_samples = [] of Float64
       loop_decode_context_ms_samples = [] of Float64
+      loop_decode_context_score_ms_samples = [] of Float64
+      loop_decode_context_softmax_ms_samples = [] of Float64
+      loop_decode_context_value_ms_samples = [] of Float64
       loop_decode_attention_out_ms_samples = [] of Float64
       loop_decode_shared_ffn_ms_samples = [] of Float64
       loop_decode_moe_ffn_ms_samples = [] of Float64
@@ -489,6 +492,9 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
           loop_decode_stack_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.decode_stack_ms)
           loop_decode_qkv_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.decode_qkv_ms)
           loop_decode_context_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.decode_context_ms)
+          loop_decode_context_score_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.decode_context_score_ms)
+          loop_decode_context_softmax_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.decode_context_softmax_ms)
+          loop_decode_context_value_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.decode_context_value_ms)
           loop_decode_attention_out_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.decode_attention_out_ms)
           loop_decode_shared_ffn_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.decode_shared_ffn_ms)
           loop_decode_moe_ffn_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.decode_moe_ffn_ms)
@@ -508,6 +514,9 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
       loop_decode_stack_ms = median(loop_decode_stack_ms_samples)
       loop_decode_qkv_ms = median(loop_decode_qkv_ms_samples)
       loop_decode_context_ms = median(loop_decode_context_ms_samples)
+      loop_decode_context_score_ms = median(loop_decode_context_score_ms_samples)
+      loop_decode_context_softmax_ms = median(loop_decode_context_softmax_ms_samples)
+      loop_decode_context_value_ms = median(loop_decode_context_value_ms_samples)
       loop_decode_attention_out_ms = median(loop_decode_attention_out_ms_samples)
       loop_decode_shared_ffn_ms = median(loop_decode_shared_ffn_ms_samples)
       loop_decode_moe_ffn_ms = median(loop_decode_moe_ffn_ms_samples)
@@ -620,6 +629,9 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"loop_decode_stack_ms", loop_decode_stack_ms.round(3).to_s},
         {"loop_decode_qkv_ms", loop_decode_qkv_ms.round(3).to_s},
         {"loop_decode_context_ms", loop_decode_context_ms.round(3).to_s},
+        {"loop_decode_context_score_ms", loop_decode_context_score_ms.round(3).to_s},
+        {"loop_decode_context_softmax_ms", loop_decode_context_softmax_ms.round(3).to_s},
+        {"loop_decode_context_value_ms", loop_decode_context_value_ms.round(3).to_s},
         {"loop_decode_attention_out_ms", loop_decode_attention_out_ms.round(3).to_s},
         {"loop_decode_shared_ffn_ms", loop_decode_shared_ffn_ms.round(3).to_s},
         {"loop_decode_moe_ffn_ms", loop_decode_moe_ffn_ms.round(3).to_s},
@@ -632,6 +644,9 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"loop_decode_stack_ms_samples", loop_decode_stack_ms_samples.map { |v| v.round(3) }.join(",")},
         {"loop_decode_qkv_ms_samples", loop_decode_qkv_ms_samples.map { |v| v.round(3) }.join(",")},
         {"loop_decode_context_ms_samples", loop_decode_context_ms_samples.map { |v| v.round(3) }.join(",")},
+        {"loop_decode_context_score_ms_samples", loop_decode_context_score_ms_samples.map { |v| v.round(3) }.join(",")},
+        {"loop_decode_context_softmax_ms_samples", loop_decode_context_softmax_ms_samples.map { |v| v.round(3) }.join(",")},
+        {"loop_decode_context_value_ms_samples", loop_decode_context_value_ms_samples.map { |v| v.round(3) }.join(",")},
         {"loop_decode_attention_out_ms_samples", loop_decode_attention_out_ms_samples.map { |v| v.round(3) }.join(",")},
         {"loop_decode_shared_ffn_ms_samples", loop_decode_shared_ffn_ms_samples.map { |v| v.round(3) }.join(",")},
         {"loop_decode_moe_ffn_ms_samples", loop_decode_moe_ffn_ms_samples.map { |v| v.round(3) }.join(",")},
