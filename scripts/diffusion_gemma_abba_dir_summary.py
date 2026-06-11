@@ -46,6 +46,14 @@ TRACKED_PHASE_METRICS = (
     "loop_proposal_ms",
 )
 
+PHASE_CONFIDENCE_METRICS = (
+    "loop_decode_context_ms",
+    "loop_decode_qkv_ms",
+    "loop_decode_attention_out_ms",
+    "loop_decode_shared_ffn_ms",
+    "loop_decode_moe_ffn_ms",
+)
+
 
 def as_float(row: dict[str, str], key: str) -> float:
     try:
@@ -230,6 +238,10 @@ def summarize(root: Path) -> list[dict[str, object]]:
         loop_range_over_delta = range_over_delta(base, variant, "loop_ms_median")
         summary["loop_range_over_delta"] = format_ratio(loop_range_over_delta)
         summary["delta_confidence"] = delta_confidence(loop_range_over_delta)
+        for metric in PHASE_CONFIDENCE_METRICS:
+            metric_range_over_delta = range_over_delta(base, variant, metric)
+            summary[f"{metric}_range_over_delta"] = format_ratio(metric_range_over_delta)
+            summary[f"{metric}_delta_confidence"] = delta_confidence(metric_range_over_delta)
         out.append(summary)
     return out
 
@@ -277,6 +289,17 @@ def main() -> None:
             "dominant_negative_delta_ms",
             "loop_range_over_delta",
             "delta_confidence",
+        ]
+    )
+    for metric in PHASE_CONFIDENCE_METRICS:
+        fields.extend(
+            [
+                f"{metric}_range_over_delta",
+                f"{metric}_delta_confidence",
+            ]
+        )
+    fields.extend(
+        [
             "max_process_cpu",
             "max_total_cpu",
             "max_process",
