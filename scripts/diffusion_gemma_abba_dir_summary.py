@@ -19,9 +19,31 @@ from pathlib import Path
 
 METRICS = (
     "loop_ms_median",
+    "loop_prediction_ms",
+    "loop_decode_stack_ms",
     "loop_decode_context_ms",
     "loop_decode_qkv_ms",
     "loop_decode_attention_out_ms",
+    "loop_decode_shared_ffn_ms",
+    "loop_decode_moe_ffn_ms",
+    "loop_decode_combine_scale_ms",
+    "loop_output_head_ms",
+    "loop_update_ms",
+    "loop_regenerate_ms",
+    "loop_proposal_ms",
+)
+
+TRACKED_PHASE_METRICS = (
+    "loop_decode_context_ms",
+    "loop_decode_qkv_ms",
+    "loop_decode_attention_out_ms",
+    "loop_decode_shared_ffn_ms",
+    "loop_decode_moe_ffn_ms",
+    "loop_decode_combine_scale_ms",
+    "loop_output_head_ms",
+    "loop_update_ms",
+    "loop_regenerate_ms",
+    "loop_proposal_ms",
 )
 
 
@@ -156,21 +178,8 @@ def summarize(root: Path) -> list[dict[str, object]]:
             summary[f"{metric}_delta_ms"] = format_ms(delta)
             summary[f"{metric}_speedup"] = format_ratio(1.0 / ratio) if ratio else "NA"
         tracked_delta = sum(
-            variant - base
-            for base, variant in (
-                (
-                    median_value(base, "loop_decode_context_ms"),
-                    median_value(variant, "loop_decode_context_ms"),
-                ),
-                (
-                    median_value(base, "loop_decode_qkv_ms"),
-                    median_value(variant, "loop_decode_qkv_ms"),
-                ),
-                (
-                    median_value(base, "loop_decode_attention_out_ms"),
-                    median_value(variant, "loop_decode_attention_out_ms"),
-                ),
-            )
+            median_value(variant, metric) - median_value(base, metric)
+            for metric in TRACKED_PHASE_METRICS
         )
         loop_delta = median_value(variant, "loop_ms_median") - median_value(base, "loop_ms_median")
         summary["tracked_phase_delta_sum_ms"] = format_ms(tracked_delta)
@@ -200,28 +209,25 @@ def main() -> None:
         "variant_batch_rows",
         "base_fixed_gqa2",
         "variant_fixed_gqa2",
-        "loop_ms_median_base_ms",
-        "loop_ms_median_variant_ms",
-        "loop_ms_median_delta_ms",
-        "loop_ms_median_speedup",
-        "loop_decode_context_ms_base_ms",
-        "loop_decode_context_ms_variant_ms",
-        "loop_decode_context_ms_delta_ms",
-        "loop_decode_context_ms_speedup",
-        "loop_decode_qkv_ms_base_ms",
-        "loop_decode_qkv_ms_variant_ms",
-        "loop_decode_qkv_ms_delta_ms",
-        "loop_decode_qkv_ms_speedup",
-        "loop_decode_attention_out_ms_base_ms",
-        "loop_decode_attention_out_ms_variant_ms",
-        "loop_decode_attention_out_ms_delta_ms",
-        "loop_decode_attention_out_ms_speedup",
-        "tracked_phase_delta_sum_ms",
-        "untracked_delta_ms",
-        "max_process_cpu",
-        "max_total_cpu",
-        "max_process",
     ]
+    for metric in METRICS:
+        fields.extend(
+            [
+                f"{metric}_base_ms",
+                f"{metric}_variant_ms",
+                f"{metric}_delta_ms",
+                f"{metric}_speedup",
+            ]
+        )
+    fields.extend(
+        [
+            "tracked_phase_delta_sum_ms",
+            "untracked_delta_ms",
+            "max_process_cpu",
+            "max_total_cpu",
+            "max_process",
+        ]
+    )
     writer = csv.DictWriter(sys.stdout, fieldnames=fields, delimiter="\t", extrasaction="ignore")
     writer.writeheader()
     writer.writerows(rows)
