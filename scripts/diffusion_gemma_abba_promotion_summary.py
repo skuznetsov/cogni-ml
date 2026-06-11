@@ -38,10 +38,33 @@ def format_float(value: float) -> str:
     return f"{value:.4f}" if not math.isnan(value) else "NA"
 
 
+def run_self_test() -> None:
+    cases = [
+        ({}, 0, "blocked_no_rows"),
+        ({"blocked_by_host_noise": 1, "candidate_speedup": 2}, 3, "blocked_by_host_noise"),
+        ({"blocked_by_range": 1, "candidate_speedup": 2}, 3, "blocked_by_range"),
+        ({"blocked_missing_delta": 1, "candidate_speedup": 2}, 3, "blocked_missing_delta"),
+        ({"reject_regression": 1, "candidate_speedup": 2}, 3, "reject_regression"),
+        ({"neutral": 1, "candidate_speedup": 2}, 3, "neutral"),
+        ({"candidate_speedup": 3}, 3, "candidate_speedup"),
+        ({"missing": 1, "candidate_speedup": 2}, 3, "blocked_unknown"),
+    ]
+    for counts, rows, expected in cases:
+        actual = choose_suite_decision(counts, rows)
+        if actual != expected:
+            raise AssertionError(f"expected {expected}, got {actual} for counts={counts}, rows={rows}")
+    print("self_test=ok")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--self-test", action="store_true")
     parser.add_argument("summary_tsv", nargs="?", default="-")
     args = parser.parse_args()
+
+    if args.self_test:
+        run_self_test()
+        return
 
     if args.summary_tsv == "-":
         rows = list(csv.DictReader(sys.stdin, delimiter="\t"))
