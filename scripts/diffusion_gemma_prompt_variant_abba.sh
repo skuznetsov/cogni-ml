@@ -13,6 +13,7 @@ total_threshold="${TOTAL_THRESHOLD:-100}"
 require_quiet="${REQUIRE_QUIET:-0}"
 require_candidate="${REQUIRE_CANDIDATE:-0}"
 promotion_format="${PROMOTION_FORMAT:-kv}"
+check_quiet_only="${CHECK_QUIET_ONLY:-0}"
 
 mkdir -p "$log_dir"
 
@@ -26,6 +27,7 @@ printf 'total_threshold=%s\n' "$total_threshold"
 printf 'require_quiet=%s\n' "$require_quiet"
 printf 'require_candidate=%s\n' "$require_candidate"
 printf 'promotion_format=%s\n' "$promotion_format"
+printf 'check_quiet_only=%s\n' "$check_quiet_only"
 
 env_tokens() {
   local raw="$1"
@@ -167,6 +169,13 @@ for arm in $sequence; do
 done
 
 host_snapshot "before_all"
+if [[ "$check_quiet_only" == "1" ]]; then
+  quiet_rc=0
+  wait_quiet "check_quiet_only" || quiet_rc=$?
+  host_snapshot "after_check_quiet_only"
+  exit "$quiet_rc"
+fi
+
 idx=0
 for arm in $sequence; do
   case "$arm" in

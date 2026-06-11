@@ -177,6 +177,8 @@ Interpretation rules:
   `candidate_speedup`.
 - `PROMOTION_FORMAT=json` emits a structured suite decision with
   `suite_decision`, `decision_reason`, and minimum loop/context speedups.
+- `CHECK_QUIET_ONLY=1` runs the same host snapshot and quiet gate path without
+  building or running the model, even if the host is quiet.
 - Treat rows with `blocked_by_host_noise` or `blocked_by_range` as branch
   evidence only, not promotion evidence.
 
