@@ -489,12 +489,13 @@ module ML::GGUF
       n_rot = hp.rope_dim_for_layer(il)
       base = hp.rope_freq_base_for_layer(il)
       freqs = hp.full_attention?(il) ? rope_freqs : nil
+      cos_table, sin_table = rope_tables(pos, n_rot, base, freqs)
 
       hp.n_head.times do |h|
-        fast_rope_neox_slice!(proj.q, h * head_dim, n_rot, head_dim, pos, base, freqs)
+        fast_rope_neox_slice!(proj.q, h * head_dim, n_rot, head_dim, cos_table, sin_table)
       end
       hp.n_head_kv(il).times do |h|
-        fast_rope_neox_slice!(proj.k, h * head_dim, n_rot, head_dim, pos, base, freqs)
+        fast_rope_neox_slice!(proj.k, h * head_dim, n_rot, head_dim, cos_table, sin_table)
       end
     end
 
@@ -1937,30 +1938,50 @@ module ML::GGUF
       end
     end
 
-    private def fast_rope_neox_slice!(x : Array(Float32), offset : Int32, n_rot : Int32,
-                                      head_dim : Int32, pos : Int32, freq_base : Float32,
-                                      freq_factors : Array(Float32)? = nil) : Nil
+    private def rope_tables(pos : Int32,
+                            n_rot : Int32,
+                            freq_base : Float32,
+                            freq_factors : Array(Float32)? = nil) : {Array(Float32), Array(Float32)}
       raise ArgumentError.new("rope n_rot must be even") unless n_rot.even?
-      raise ArgumentError.new("rope n_rot #{n_rot} exceeds head_dim #{head_dim}") if n_rot > head_dim
-      raise ArgumentError.new("rope slice out of bounds") if offset < 0 || offset + head_dim > x.size
       if factors = freq_factors
         raise ArgumentError.new("rope freq_factors too small: #{factors.size} < #{n_rot // 2}") if factors.size < n_rot // 2
       end
 
-      x_ptr = x.to_unsafe + offset
-      factors_ptr = freq_factors.try(&.to_unsafe)
       half = n_rot // 2
+      cos_table = Array(Float32).new(half, 0.0_f32)
+      sin_table = Array(Float32).new(half, 0.0_f32)
+      factors_ptr = freq_factors.try(&.to_unsafe)
       i = 0
       while i < half
         i0 = 2 * i
         freq_factor = factors_ptr ? factors_ptr[i] : 1.0_f32
         theta = pos.to_f32 * (freq_base ** (-i0.to_f32 / n_rot.to_f32)) / freq_factor
-        cos_t = Math.cos(theta).to_f32
-        sin_t = Math.sin(theta).to_f32
+        cos_table[i] = Math.cos(theta).to_f32
+        sin_table[i] = Math.sin(theta).to_f32
+        i += 1
+      end
+      {cos_table, sin_table}
+    end
+
+    private def fast_rope_neox_slice!(x : Array(Float32), offset : Int32, n_rot : Int32,
+                                      head_dim : Int32,
+                                      cos_table : Array(Float32),
+                                      sin_table : Array(Float32)) : Nil
+      raise ArgumentError.new("rope n_rot must be even") unless n_rot.even?
+      raise ArgumentError.new("rope n_rot #{n_rot} exceeds head_dim #{head_dim}") if n_rot > head_dim
+      raise ArgumentError.new("rope slice out of bounds") if offset < 0 || offset + head_dim > x.size
+      raise ArgumentError.new("rope table size mismatch") unless cos_table.size == n_rot // 2 && sin_table.size == n_rot // 2
+
+      x_ptr = x.to_unsafe + offset
+      cos_ptr = cos_table.to_unsafe
+      sin_ptr = sin_table.to_unsafe
+      half = n_rot // 2
+      i = 0
+      while i < half
         x0 = x_ptr[i]
         x1 = x_ptr[i + half]
-        x_ptr[i] = x0 * cos_t - x1 * sin_t
-        x_ptr[i + half] = x0 * sin_t + x1 * cos_t
+        x_ptr[i] = x0 * cos_ptr[i] - x1 * sin_ptr[i]
+        x_ptr[i + half] = x0 * sin_ptr[i] + x1 * cos_ptr[i]
         i += 1
       end
     end
