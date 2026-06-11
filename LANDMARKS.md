@@ -383,6 +383,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - `scripts/diffusion_gemma_text_probe.sh` now supports `EXPECT_MIN_PROB=F`, validating that every first-row `last_argmax_probabilities` value is at least the requested threshold. Expectation gates now require TSV output and use a macOS-compatible temporary file pattern.
 - Verification: shell syntax passed; invalid probability values and expectation gates with `FORMAT=keyvalue` fail closed before model execution. A real GGUF wrapper run with `EXPECT_CHOSEN=Hello EXPECT_MIN_PROB=0.9` passed with `last_argmax_probabilities=1.0`; a fake `SMOKE_RUNNER` TSV with probability `0.5` failed with `expected every last_argmax_probability >= 0.9, got 0.5`.
 - Boundary: this is wrapper-level regression gating for sparse candidate confidence. It does not change model execution, probability computation, or sparse candidate semantics.
+**update 2026-06-10ca:**
+- Added `docs/diffusion-gemma-text-probe.md` and a README anchor for the current native DiffusionGemma bounded sparse text probe. The doc records default wrapper inputs, expectation gates, model/tokenizer env overrides, and the explicit boundary that this is not full text generation.
+- Verification: README/doc references resolve locally; `bash -n scripts/diffusion_gemma_text_probe.sh` passed; the documented `EXPECT_CHOSEN=Hello EXPECT_MIN_PROB=0.9 scripts/diffusion_gemma_text_probe.sh` command passed on the local GGUF.
+- Boundary: this is usage documentation only. It does not change model execution, candidate scoring, tokenizer behavior, or benchmark status.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified

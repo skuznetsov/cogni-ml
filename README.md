@@ -62,6 +62,21 @@ The developer CLIs default to local LM Studio / llama.cpp-style paths:
 
 Most benchmark/probe CLIs also accept `--model`, `--target`, `--draft`, `--tokenizer-bin`, or environment overrides. `bin/qwen35_generate.cr` is intentionally a small demo and currently uses its constants at the top of the file.
 
+## DiffusionGemma Text Probe
+
+The current native DiffusionGemma path is a bounded sparse candidate prototype.
+Run the text-first smoke with:
+
+```sh
+scripts/diffusion_gemma_text_probe.sh
+EXPECT_CHOSEN=Hello EXPECT_MIN_PROB=0.9 scripts/diffusion_gemma_text_probe.sh
+```
+
+This uses the local Unsloth DiffusionGemma GGUF and the DiffusionGemma-capable
+`llama-tokenize` oracle for text encoding. See
+[docs/diffusion-gemma-text-probe.md](docs/diffusion-gemma-text-probe.md) for the
+wrapper controls and current prototype boundaries.
+
 ### Build Qwen CLIs
 
 Build the CPU-only GGUF/Qwen metadata smoke on Linux, CUDA hosts, or any environment where Metal is unavailable:
