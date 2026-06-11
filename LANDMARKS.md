@@ -24546,3 +24546,15 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: quoted/backticked existing directory in the latest user turn. Transport: user text -> cwd directory existence certificate -> `list_directory.path` enum hint -> Gemma finite literal corridor -> tool execution. Legal move: constrain only explicit verified directory values. Boundary safety: unquoted ordinary words do not generate directory hints; open-string behavior remains available with the kill-switch.
 
 **decision:** Auto hints now cover the two safest path tools: `read_file` for explicit existing files and `list_directory` for quoted/backticked existing directories. Next candidates need separate certificates; do not auto-constrain `grep`/`glob` patterns yet.
+
+#### [LM-DIFFUSIONGEMMA-LOOP-PREDICTION-BOTTLENECK-911] Bounded sparse loop time is dominated by prediction/decode, not update or regeneration
+**context:** ml / DiffusionGemma / bounded sparse loop / performance / phase attribution
+**state:** instrumentation implemented and verified on real GGUF prompt perf probe
+
+- claim: "After prompt-cache Metal warmup, the active bounded-loop bottleneck is `decode_canvas_bounded_predictions`; entropy update, row regeneration, and adaptive proposal scheduling are negligible on the current one-canvas-row smoke."
+  source: `DIFFUSION_GEMMA_PROMPT_PROJ_METAL=1 CACHE_WARMUPS=1 CACHE_REPEATS=2 TIMEOUT_SECONDS=60 DIFFUSION_GEMMA_SPARSE_LOOP_BIN=/tmp/diffusion_gemma_sparse_loop_perf_loop_phases OUT=/tmp/diffusion_gemma_prompt_perf_loop_phases.tsv scripts/diffusion_gemma_prompt_perf_probe.sh` on 2026-06-10. Results: short `loop_ms_median=1113.916`, `loop_prediction_ms=1113.742`, `loop_update_ms=0.003`, `loop_regenerate_ms=0.164`, `loop_proposal_ms=0.0`; medium `loop_ms_median=1088.212`, `loop_prediction_ms=1088.018`; long `loop_ms_median=1186.27`, `loop_prediction_ms=1186.1`.
+  verified_at: 2026-06-10
+  decay_trigger: decode stack rewrite, candidate/canvas shape change, multi-layer/full-route promotion, or Metal decode fast path introduction
+  trust: {F:0.84,G:0.30,R:0.82}
+
+**decision:** Do not optimize entropy/update/regeneration/proposal paths for the next DiffusionGemma speed step. The next legal performance window is the prediction/decode corridor: `decode_canvas_rows_with_prompt_cache` plus sparse output head inside `decode_canvas_bounded_predictions`.

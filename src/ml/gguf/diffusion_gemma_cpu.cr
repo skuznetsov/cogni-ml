@@ -62,6 +62,10 @@ module ML::GGUF
       getter max_candidate_tokens : Int32
       getter mean_candidate_tokens : Float32
       getter mean_entropy : Float32
+      getter prediction_ms : Float64
+      getter update_ms : Float64
+      getter regenerate_ms : Float64
+      getter proposal_ms : Float64
 
       def initialize(@step,
                      @prediction_count,
@@ -69,7 +73,11 @@ module ML::GGUF
                      @total_candidate_tokens,
                      @max_candidate_tokens,
                      @mean_candidate_tokens,
-                     @mean_entropy)
+                     @mean_entropy,
+                     @prediction_ms = 0.0,
+                     @update_ms = 0.0,
+                     @regenerate_ms = 0.0,
+                     @proposal_ms = 0.0)
       end
     end
 
@@ -95,6 +103,19 @@ module ML::GGUF
                      @mean_candidate_tokens,
                      @mean_entropy,
                      @acceptance_rate)
+      end
+    end
+
+    struct BoundedDenoiseStepTiming
+      getter update : BoundedCanvasUpdate
+      getter prediction_ms : Float64
+      getter update_ms : Float64
+      getter regenerate_ms : Float64
+
+      def initialize(@update,
+                     @prediction_ms,
+                     @update_ms,
+                     @regenerate_ms)
       end
     end
 
@@ -1081,7 +1102,44 @@ module ML::GGUF
                                    sc_logits_by_canvas_row : Array(Array(Float32))? = nil,
                                    sc_temp_inv : Float32 = 1.0_f32,
                                    sc_use : Float32 = 1.0_f32) : BoundedCanvasUpdate
+      decode_canvas_bounded_step_timed(
+        weights: weights,
+        canvas_tokens: canvas_tokens,
+        canvas_rows: canvas_rows,
+        mask: mask,
+        prompt_cache: prompt_cache,
+        candidate_token_ids_by_canvas_row: candidate_token_ids_by_canvas_row,
+        entropy_bound: entropy_bound,
+        max_layers: max_layers,
+        temp_inv: temp_inv,
+        sample_us: sample_us,
+        routes_by_layer_by_canvas_row: routes_by_layer_by_canvas_row,
+        use_sampled_token: use_sampled_token,
+        sc_token_ids_by_canvas_row: sc_token_ids_by_canvas_row,
+        sc_logits_by_canvas_row: sc_logits_by_canvas_row,
+        sc_temp_inv: sc_temp_inv,
+        sc_use: sc_use,
+      ).update
+    end
+
+    def decode_canvas_bounded_step_timed(weights : DiffusionGemmaWeights,
+                                         canvas_tokens : Array(Int32),
+                                         canvas_rows : Array(Float32),
+                                         mask : DiffusionGemmaAttentionMask,
+                                         prompt_cache : PromptLayerCache,
+                                         candidate_token_ids_by_canvas_row : Array(Array(Int32)),
+                                         entropy_bound : Float32,
+                                         max_layers : Int32 = prompt_cache.layers,
+                                         temp_inv : Float32 = 1.0_f32,
+                                         sample_us : Array(Float32)? = nil,
+                                         routes_by_layer_by_canvas_row : Array(Array(Array(ExpertRoute)))? = nil,
+                                         use_sampled_token : Bool = true,
+                                         sc_token_ids_by_canvas_row : Array(Array(Int32))? = nil,
+                                         sc_logits_by_canvas_row : Array(Array(Float32))? = nil,
+                                         sc_temp_inv : Float32 = 1.0_f32,
+                                         sc_use : Float32 = 1.0_f32) : BoundedDenoiseStepTiming
       raise ArgumentError.new("canvas token count mismatch") unless canvas_tokens.size == mask.canvas_len
+      prediction_t0 = Time.instant
       predictions = decode_canvas_bounded_predictions(
         weights: weights,
         canvas_rows: canvas_rows,
@@ -1093,7 +1151,11 @@ module ML::GGUF
         sample_us: sample_us,
         routes_by_layer_by_canvas_row: routes_by_layer_by_canvas_row,
       )
+      prediction_ms = (Time.instant - prediction_t0).total_milliseconds
+      update_t0 = Time.instant
       update = apply_entropy_bound_predictions(canvas_tokens, predictions, entropy_bound, use_sampled_token: use_sampled_token)
+      update_ms = (Time.instant - update_t0).total_milliseconds
+      regenerate_t0 = Time.instant
       updated_rows = canvas_rows_from_tokens(
         weights,
         update.updated_canvas_tokens,
@@ -1102,7 +1164,9 @@ module ML::GGUF
         sc_temp_inv: sc_temp_inv,
         sc_use: sc_use,
       )
-      BoundedCanvasUpdate.new(update.updated_canvas_tokens, update.accepted, update.predictions, updated_rows)
+      regenerate_ms = (Time.instant - regenerate_t0).total_milliseconds
+      timed_update = BoundedCanvasUpdate.new(update.updated_canvas_tokens, update.accepted, update.predictions, updated_rows)
+      BoundedDenoiseStepTiming.new(timed_update, prediction_ms, update_ms, regenerate_ms)
     end
 
     def decode_canvas_bounded_loop(weights : DiffusionGemmaWeights,
@@ -1136,7 +1200,7 @@ module ML::GGUF
 
       candidate_token_ids_by_step_by_canvas_row.each_with_index do |candidate_rows, step|
         sample_us = sample_us_by_step_by_canvas_row ? sample_us_by_step_by_canvas_row.not_nil![step] : nil
-        update = decode_canvas_bounded_step(
+        timed = decode_canvas_bounded_step_timed(
           weights: weights,
           canvas_tokens: tokens,
           canvas_rows: rows,
@@ -1150,16 +1214,19 @@ module ML::GGUF
           routes_by_layer_by_canvas_row: routes_by_layer_by_canvas_row,
           use_sampled_token: use_sampled_token,
         )
+        update = timed.update
         stable_counts = advance_stability_counts(tokens, update.updated_canvas_tokens, update.accepted, stable_counts)
         tokens = update.updated_canvas_tokens
         if use_sparse_self_conditioning
+          regenerate_t0 = Time.instant
           rows = canvas_rows_from_prediction_self_conditioning(weights, tokens, update.predictions, sc_temp_inv, sc_use)
+          timed = BoundedDenoiseStepTiming.new(update, timed.prediction_ms, timed.update_ms, (Time.instant - regenerate_t0).total_milliseconds)
           update = BoundedCanvasUpdate.new(update.updated_canvas_tokens, update.accepted, update.predictions, rows)
         else
           rows = update.updated_canvas_rows || rows
         end
         updates << update
-        step_traces << bounded_denoise_step_trace(step, update)
+        step_traces << bounded_denoise_step_trace(step, update, timed)
         if stable_counts.all? { |count| count >= stability_threshold }
           converged = true
           break
@@ -1204,7 +1271,7 @@ module ML::GGUF
 
       max_steps.times do |step|
         sample_us = sample_us_by_step_by_canvas_row ? sample_us_by_step_by_canvas_row.not_nil![step] : nil
-        update = decode_canvas_bounded_step(
+        timed = decode_canvas_bounded_step_timed(
           weights: weights,
           canvas_tokens: tokens,
           canvas_rows: rows,
@@ -1218,21 +1285,28 @@ module ML::GGUF
           routes_by_layer_by_canvas_row: routes_by_layer_by_canvas_row,
           use_sampled_token: use_sampled_token,
         )
+        update = timed.update
         stable_counts = advance_stability_counts(tokens, update.updated_canvas_tokens, update.accepted, stable_counts)
         tokens = update.updated_canvas_tokens
         if use_sparse_self_conditioning
+          regenerate_t0 = Time.instant
           rows = canvas_rows_from_prediction_self_conditioning(weights, tokens, update.predictions, sc_temp_inv, sc_use)
+          timed = BoundedDenoiseStepTiming.new(update, timed.prediction_ms, timed.update_ms, (Time.instant - regenerate_t0).total_milliseconds)
           update = BoundedCanvasUpdate.new(update.updated_canvas_tokens, update.accepted, update.predictions, rows)
         else
           rows = update.updated_canvas_rows || rows
         end
         updates << update
-        step_traces << bounded_denoise_step_trace(step, update)
+        proposal_ms = 0.0
         if stable_counts.all? { |count| count >= stability_threshold }
+          step_traces << bounded_denoise_step_trace(step, update, timed, proposal_ms)
           converged = true
           break
         end
+        proposal_t0 = Time.instant
         candidate_rows = next_candidate_rows_from_predictions(tokens, update.predictions, weights.hparams.vocab_size, proposal_top_k)
+        proposal_ms = (Time.instant - proposal_t0).total_milliseconds
+        step_traces << bounded_denoise_step_trace(step, update, timed, proposal_ms)
       end
 
       stop_reason = converged ? "converged" : "step_budget"
@@ -1269,7 +1343,9 @@ module ML::GGUF
     end
 
     def bounded_denoise_step_trace(step : Int32,
-                                   update : BoundedCanvasUpdate) : BoundedDenoiseStepTrace
+                                   update : BoundedCanvasUpdate,
+                                   timing : BoundedDenoiseStepTiming? = nil,
+                                   proposal_ms : Float64 = 0.0) : BoundedDenoiseStepTrace
       raise ArgumentError.new("trace step must be non-negative") unless step >= 0
       raise ArgumentError.new("trace accepted size mismatch") unless update.accepted.size == update.predictions.size
 
@@ -1296,6 +1372,10 @@ module ML::GGUF
         max_candidate_tokens: max_candidate_tokens,
         mean_candidate_tokens: mean_candidate_tokens,
         mean_entropy: mean_entropy,
+        prediction_ms: timing ? timing.not_nil!.prediction_ms : 0.0,
+        update_ms: timing ? timing.not_nil!.update_ms : 0.0,
+        regenerate_ms: timing ? timing.not_nil!.regenerate_ms : 0.0,
+        proposal_ms: proposal_ms,
       )
     end
 

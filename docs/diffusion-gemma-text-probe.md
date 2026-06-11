@@ -95,7 +95,10 @@ Q/K/V projection and prompt-row materialization phases. The sparse-loop smoke
 also accepts `--cache-warmups N` and `--cache-repeats N`; the perf wrapper maps
 those to `CACHE_WARMUPS` and `CACHE_REPEATS` and reports
 `prompt_cache_ms_samples`, `prompt_projection_ms_samples`, and
-`prompt_materialize_ms_samples`.
+`prompt_materialize_ms_samples`. The wrapper also reports sparse-loop phase
+timings: `loop_prediction_ms`, `loop_update_ms`, `loop_regenerate_ms`, and
+`loop_proposal_ms`, plus matching sample columns, so prompt-cache work and
+canvas decode-loop work can be optimized separately.
 
 Use cache repeats when separating Metal cold-start effects from steady-state
 prompt projection timing:

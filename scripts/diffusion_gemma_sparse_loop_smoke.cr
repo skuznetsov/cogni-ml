@@ -182,6 +182,11 @@ def format_argmax_probabilities(predictions : Array(ML::GGUF::DiffusionGemmaCPU:
   end.join(",")
 end
 
+def trace_ms_sum(traces : Array(ML::GGUF::DiffusionGemmaCPU::BoundedDenoiseStepTrace),
+                 &block : ML::GGUF::DiffusionGemmaCPU::BoundedDenoiseStepTrace -> Float64) : Float64
+  traces.sum { |trace| block.call(trace) }
+end
+
 def format_chosen_texts(predictions : Array(ML::GGUF::DiffusionGemmaCPU::BoundedDenoisePrediction),
                         tokenizer : ML::GGUF::Gemma4Tokenizer?) : String
   return "" unless tok = tokenizer
@@ -385,6 +390,10 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
       generated_count, candidate_ids, candidate_texts = candidate_spec
       candidate_rows = generated_count ? ML::GGUF::DiffusionGemmaCPU.generated_candidate_rows(canvas_tokens, generated_count.not_nil!, hp.vocab_size) : canvas_tokens.map { candidate_ids.dup }
       loop_samples = [] of Float64
+      loop_prediction_ms_samples = [] of Float64
+      loop_update_ms_samples = [] of Float64
+      loop_regenerate_ms_samples = [] of Float64
+      loop_proposal_ms_samples = [] of Float64
       loop = nil.as(ML::GGUF::DiffusionGemmaCPU::BoundedDenoiseLoopResult?)
       (warmups + repeats).times do |run_index|
         loop_t0 = Time.instant
@@ -421,13 +430,24 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
                  )
                end
         elapsed_ms = (Time.instant - loop_t0).total_milliseconds
-        loop_samples << elapsed_ms if run_index >= warmups
+        if run_index >= warmups
+          loop = loop.not_nil!
+          loop_samples << elapsed_ms
+          loop_prediction_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.prediction_ms)
+          loop_update_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.update_ms)
+          loop_regenerate_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.regenerate_ms)
+          loop_proposal_ms_samples << trace_ms_sum(loop.not_nil!.step_traces, &.proposal_ms)
+        end
       end
       loop = loop.not_nil!
       summary = loop.summary
       loop_ms_min = loop_samples.min
       loop_ms_median = median(loop_samples)
       loop_ms_max = loop_samples.max
+      loop_prediction_ms = median(loop_prediction_ms_samples)
+      loop_update_ms = median(loop_update_ms_samples)
+      loop_regenerate_ms = median(loop_regenerate_ms_samples)
+      loop_proposal_ms = median(loop_proposal_ms_samples)
       loop_candidate_tokens_per_ms = loop_ms_median > 0.0 ? summary.total_candidate_tokens.to_f64 / loop_ms_median : 0.0
       loop_predictions_per_ms = loop_ms_median > 0.0 ? summary.prediction_count.to_f64 / loop_ms_median : 0.0
       last_predictions = loop.updates.last.predictions
@@ -501,6 +521,14 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"loop_ms_median", loop_ms_median.round(3).to_s},
         {"loop_ms_max", loop_ms_max.round(3).to_s},
         {"loop_ms_samples", loop_samples.map { |v| v.round(3) }.join(",")},
+        {"loop_prediction_ms", loop_prediction_ms.round(3).to_s},
+        {"loop_update_ms", loop_update_ms.round(3).to_s},
+        {"loop_regenerate_ms", loop_regenerate_ms.round(3).to_s},
+        {"loop_proposal_ms", loop_proposal_ms.round(3).to_s},
+        {"loop_prediction_ms_samples", loop_prediction_ms_samples.map { |v| v.round(3) }.join(",")},
+        {"loop_update_ms_samples", loop_update_ms_samples.map { |v| v.round(3) }.join(",")},
+        {"loop_regenerate_ms_samples", loop_regenerate_ms_samples.map { |v| v.round(3) }.join(",")},
+        {"loop_proposal_ms_samples", loop_proposal_ms_samples.map { |v| v.round(3) }.join(",")},
         {"loop_candidate_tokens_per_ms", loop_candidate_tokens_per_ms.round(6).to_s},
         {"loop_predictions_per_ms", loop_predictions_per_ms.round(6).to_s},
         {"loop_ms_ratio_vs_first", loop_ms_ratio_vs_first.round(6).to_s},

@@ -745,6 +745,10 @@ describe ML::GGUF::DiffusionGemmaCPU do
     loop.step_traces[0].total_candidate_tokens.should eq(1)
     loop.step_traces[0].max_candidate_tokens.should eq(1)
     loop.step_traces[0].mean_candidate_tokens.should eq(1.0_f32)
+    loop.step_traces[0].prediction_ms.should be > 0.0
+    loop.step_traces[0].update_ms.should be >= 0.0
+    loop.step_traces[0].regenerate_ms.should be >= 0.0
+    loop.step_traces[0].proposal_ms.should eq(0.0)
     loop.summary.steps_run.should eq(1)
     loop.summary.converged.should be_true
     loop.summary.stop_reason.should eq("converged")
@@ -777,6 +781,7 @@ describe ML::GGUF::DiffusionGemmaCPU do
     adaptive.stop_reason.should eq("converged")
     adaptive.step_traces[0].accepted_count.should eq(loop.step_traces[0].accepted_count)
     adaptive.step_traces[0].total_candidate_tokens.should eq(loop.step_traces[0].total_candidate_tokens)
+    adaptive.step_traces[0].prediction_ms.should be > 0.0
     adaptive.final_canvas_tokens.should eq(loop.final_canvas_tokens)
     adaptive.final_canvas_rows.not_nil!.should eq(loop.final_canvas_rows.not_nil!)
 
