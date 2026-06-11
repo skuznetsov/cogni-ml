@@ -560,7 +560,13 @@ describe ML::GGUF::DiffusionGemmaCPU do
       routes_by_layer_by_prompt_row: [prompt_routes],
     )
     expected_projections = ML::GGUF::DiffusionGemmaCPU.prompt_attention_projections(w, il, prompt_rows, mask)
+    scalar_projection0 = ML::GGUF::DiffusionGemmaCPU.attention_project_normed(w, il, prompt0, pos: 0)
+    scalar_projection1 = ML::GGUF::DiffusionGemmaCPU.attention_project_normed(w, il, prompt1, pos: 1)
     expected_rows = ML::GGUF::DiffusionGemmaCPU.layer_forward_prompt_rows(w, il, prompt_rows, mask, prompt_routes)
+    expected_projections[0].q.should eq(scalar_projection0.q)
+    expected_projections[0].k.should eq(scalar_projection0.k)
+    expected_projections[1].q.should eq(scalar_projection1.q)
+    expected_projections[1].k.should eq(scalar_projection1.k)
     cache.layers.should eq(1)
     cache.projections_by_layer[0].size.should eq(2)
     cache.projections_by_layer[0][0].q.should eq(expected_projections[0].q)

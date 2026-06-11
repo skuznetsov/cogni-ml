@@ -787,12 +787,35 @@ module ML::GGUF
                                      prompt_rows : Array(Float32),
                                      mask : DiffusionGemmaAttentionMask) : Array(AttentionProjection)
       hp = weights.hparams
+      lw = weights.layers[il]
       prompt_size = mask.prompt_len * hp.n_embd
       raise ArgumentError.new("prompt rows size mismatch: #{prompt_rows.size} != #{prompt_size}") unless prompt_rows.size == prompt_size
 
+      normed_rows = prompt_rows.dup
+      mask.prompt_len.times do |pos|
+        Gemma4CPU.rms_norm_slice!(normed_rows, pos * hp.n_embd, hp.n_embd, lw.attn_norm, hp.rms_eps)
+      end
+
+      head_dim = hp.head_dim_for_layer(il)
+      q_dim = hp.n_head * head_dim
+      kv_dim = hp.n_head_kv(il) * head_dim
+      q_rows = Gemma4CPU.matmul(lw.attn_q_qw, normed_rows, mask.prompt_len)
+      k_rows = Gemma4CPU.matmul(lw.attn_k_qw, normed_rows, mask.prompt_len)
+      v_rows = if v_qw = lw.attn_v_qw
+                 Gemma4CPU.matmul(v_qw, normed_rows, mask.prompt_len)
+               else
+                 k_rows.dup
+               end
+      reused_k_as_v = lw.attn_v_qw.nil?
+
       Array(AttentionProjection).new(mask.prompt_len) do |pos|
-        x = prompt_rows[pos * hp.n_embd, hp.n_embd]
-        attention_project_normed(weights, il, x, pos)
+        q = q_rows[pos * q_dim, q_dim]
+        k = k_rows[pos * kv_dim, kv_dim]
+        v = v_rows[pos * kv_dim, kv_dim]
+        proj = AttentionProjection.new(q, k, v, reused_k_as_v)
+        normalize_attention_projection!(proj, lw, hp, il)
+        apply_rope_to_qk!(proj, hp, il, pos, weights.rope_freqs)
+        proj
       end
     end
 
