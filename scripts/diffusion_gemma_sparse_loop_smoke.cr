@@ -12,6 +12,7 @@ prompt_text = nil.as(String?)
 prompt_token = 1
 prompt_tokens_arg = nil.as(String?)
 prompt_lengths_arg = nil.as(String?)
+canvas_text = nil.as(String?)
 canvas_token = 0
 canvas_tokens_arg = nil.as(String?)
 canvas_lengths_arg = nil.as(String?)
@@ -39,6 +40,7 @@ OptionParser.parse do |p|
   p.on("--prompt-token ID", "Prompt token id (default: 1)") { |v| prompt_token = v.to_i }
   p.on("--prompt-tokens CSV", "Prompt token ids, overrides --prompt-token") { |v| prompt_tokens_arg = v }
   p.on("--prompt-lengths LIST", "Generate multiple synthetic prompt token lists, comma or space separated") { |v| prompt_lengths_arg = v }
+  p.on("--canvas TEXT", "Initial canvas text, tokenized without BOS through the Gemma4 GGUF tokenizer") { |v| canvas_text = v }
   p.on("--canvas-token ID", "Initial canvas token id (default: 0)") { |v| canvas_token = v.to_i }
   p.on("--canvas-tokens CSV", "Initial canvas token ids, overrides --canvas-token") { |v| canvas_tokens_arg = v }
   p.on("--canvas-lengths LIST", "Generate multiple synthetic canvas token lists, comma or space separated") { |v| canvas_lengths_arg = v }
@@ -107,15 +109,18 @@ def median(values : Array(Float64)) : Float64
   sorted[sorted.size // 2]
 end
 
-def encode_prompt_text(model : String, llama_tokenize : String, text : String) : Array(Int32)
-  raise "--prompt must not be empty" if text.empty?
+def encode_text_tokens(model : String, llama_tokenize : String, text : String, label : String, *, add_bos : Bool) : Array(Int32)
+  raise "#{label} must not be empty" if text.empty?
   raise "--llama-tokenize not found: #{llama_tokenize}" unless File.exists?(llama_tokenize)
 
   g = ML::GGUF::GGUFFile.new(model)
-  tokenizer = ML::GGUF::Gemma4Tokenizer.from_gguf(g, model, llama_tokenize)
-  ids = tokenizer.encode(text)
-  g.close
-  raise "--prompt produced no token ids" if ids.empty?
+  ids = begin
+    tokenizer = ML::GGUF::Gemma4Tokenizer.from_gguf(g, model, llama_tokenize)
+    tokenizer.encode(text, add_bos: add_bos)
+  ensure
+    g.close
+  end
+  raise "#{label} produced no token ids" if ids.empty?
   ids
 end
 
@@ -151,21 +156,28 @@ raise "--prompt-tokens and --prompt-lengths are mutually exclusive" if prompt_to
 raise "--prompt and --prompt-tokens are mutually exclusive" if prompt_text && prompt_tokens_arg
 raise "--prompt and --prompt-lengths are mutually exclusive" if prompt_text && prompt_lengths_arg
 raise "--prompt-lengths requires --format tsv" if prompt_lengths_arg && format != "tsv"
+raise "--canvas and --canvas-tokens are mutually exclusive" if canvas_text && canvas_tokens_arg
+raise "--canvas and --canvas-lengths are mutually exclusive" if canvas_text && canvas_lengths_arg
 raise "--canvas-tokens and --canvas-lengths are mutually exclusive" if canvas_tokens_arg && canvas_lengths_arg
 raise "--canvas-lengths requires --format tsv" if canvas_lengths_arg && format != "tsv"
 raise "single-route smoke currently supports --max-layers 1; pass --full-routes for deeper smoke" if single_route && max_layers != 1
 prompt_source = prompt_text ? "text" : (prompt_tokens_arg ? "token_ids" : (prompt_lengths_arg ? "synthetic_lengths" : "single_token"))
+canvas_source = canvas_text ? "text" : (canvas_tokens_arg ? "token_ids" : (canvas_lengths_arg ? "synthetic_lengths" : "single_token"))
 canvas_lengths = canvas_lengths_arg ? parse_positive_counts(canvas_lengths_arg.not_nil!, "--canvas-lengths") : nil
 canvas_sets = [] of Array(Int32)
 unless lengths = canvas_lengths
-  canvas_tokens = canvas_tokens_arg ? parse_token_ids(canvas_tokens_arg.not_nil!, "--canvas-tokens") : [canvas_token]
+  canvas_tokens = if text = canvas_text
+                    encode_text_tokens(model, llama_tokenize, text, "--canvas", add_bos: false)
+                  else
+                    canvas_tokens_arg ? parse_token_ids(canvas_tokens_arg.not_nil!, "--canvas-tokens") : [canvas_token]
+                  end
   canvas_tokens.each do |token_id|
     raise "--canvas-token must be non-negative" if token_id < 0
   end
   canvas_sets << canvas_tokens
 end
 prompt_tokens = if text = prompt_text
-                  encode_prompt_text(model, llama_tokenize, text)
+                  encode_text_tokens(model, llama_tokenize, text, "--prompt", add_bos: true)
                 else
                   prompt_tokens_arg ? parse_token_ids(prompt_tokens_arg.not_nil!, "--prompt-tokens") : [prompt_token]
                 end
@@ -341,6 +353,8 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"prompt_len", tokens.size.to_s},
         {"prompt_tokens", tokens.join(",")},
         {"canvas_set_index", canvas_set_index.to_s},
+        {"canvas_source", canvas_source},
+        {"canvas_text_bytes", canvas_text.try(&.bytesize).try(&.to_s) || "0"},
         {"canvas_len", canvas_tokens.size.to_s},
         {"initial_canvas_token", canvas_tokens[0].to_s},
         {"initial_canvas_tokens", canvas_tokens.join(",")},

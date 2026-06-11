@@ -351,6 +351,10 @@ Rich landmarks include full State/Relations/Evidence structure.
 - `scripts/diffusion_gemma_sparse_loop_smoke.cr` now supports `--decode-canvas-text`, adding TSV/key-value `initial_canvas_text` and `final_canvas_text` fields for qualitative inspection of canvas token ids. Decoding uses existing Gemma4 tokenizer metadata and does not require the external `llama-tokenize` binary unless `--prompt TEXT` is also used.
 - Verification: no-codegen build passed. A real text-prompt smoke with `--prompt 'Hello, world' --canvas-tokens 9259 --candidate-count 1 --steps 1 --warmups 1 --repeats 2 --format tsv --decode-canvas-text` emitted `initial_canvas_text=Hello` and `final_canvas_text=Hello`. An adversary smoke with special tokens `--canvas-tokens 0,1`, missing `--llama-tokenize`, and `--decode-canvas-text` preserved 48 TSV columns and produced empty decoded text fields without failing.
 - Boundary: this is qualitative output for the bounded sparse-loop prototype. It is not native text encoding, full text generation, or DiffusionGemma quality parity.
+**update 2026-06-10bs:**
+- `scripts/diffusion_gemma_sparse_loop_smoke.cr` now supports `--canvas TEXT`, tokenizing initial canvas text without BOS through the Gemma4 tokenizer bridge. Output adds `canvas_source` and `canvas_text_bytes`, so text-prompt/text-canvas sparse smokes no longer require manual canvas token ids.
+- Verification: no-codegen build passed. A real GGUF smoke with `--prompt 'Say:' --canvas 'Hello' --candidate-count 1 --steps 1 --warmups 1 --repeats 2 --format tsv --decode-canvas-text` emitted `canvas_source=text`, `canvas_text_bytes=5`, `canvas_len=1`, `initial_canvas_text=Hello`, and `final_canvas_text=Hello`. A conflict adversary check verified `--canvas` plus `--canvas-tokens` fails closed before model execution.
+- Boundary: this is an oracle-backed text adapter for the native bounded sparse-loop prototype, not a native tokenizer implementation, full DiffusionGemma generation, or parity evidence.
 
 ### [LM-RPI5-VULKAN-V3DV-2026-06-08] Raspberry Pi 5 Vulkan compute works through user-space V3DV runtime
 **status:** verified
