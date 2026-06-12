@@ -22,6 +22,7 @@ timeout_seconds="${TIMEOUT_SECONDS:-60}"
 materialize_prompt_final_rows="${MATERIALIZE_PROMPT_FINAL_ROWS:-0}"
 include_large_prompt="${INCLUDE_LARGE_PROMPT:-0}"
 synthetic_prompt_lengths="${SYNTHETIC_PROMPT_LENGTHS:-}"
+synthetic_canvas_lengths="${SYNTHETIC_CANVAS_LENGTHS:-}"
 out="${OUT:-${TMPDIR:-/tmp}/diffusion_gemma_prompt_perf_$(date +%Y%m%d%H%M%S).tsv}"
 
 short_prompt="${SHORT_PROMPT:-Say:}"
@@ -86,6 +87,25 @@ if [[ -n "$synthetic_prompt_lengths" ]]; then
     fi
   done
   synthetic_prompt_lengths="$(IFS=,; echo "${synthetic_lengths[*]}")"
+fi
+
+if [[ -n "$synthetic_canvas_lengths" ]]; then
+  if [[ -z "$synthetic_prompt_lengths" ]]; then
+    echo "SYNTHETIC_CANVAS_LENGTHS requires SYNTHETIC_PROMPT_LENGTHS" >&2
+    exit 2
+  fi
+  read -r -a synthetic_lengths <<<"${synthetic_canvas_lengths//,/ }"
+  if [[ "${#synthetic_lengths[@]}" -eq 0 ]]; then
+    echo "SYNTHETIC_CANVAS_LENGTHS is empty" >&2
+    exit 2
+  fi
+  for length in "${synthetic_lengths[@]}"; do
+    if [[ ! "$length" =~ ^[1-9][0-9]*$ ]]; then
+      echo "invalid SYNTHETIC_CANVAS_LENGTHS entry: $length" >&2
+      exit 2
+    fi
+  done
+  synthetic_canvas_lengths="$(IFS=,; echo "${synthetic_lengths[*]}")"
 fi
 
 if [[ ! -x "$bin" ]]; then
@@ -191,13 +211,17 @@ run_synthetic_lengths() {
   if [[ "$materialize_prompt_final_rows" -eq 1 ]]; then
     extra_args+=(--materialize-prompt-final-rows)
   fi
+  if [[ -n "$synthetic_canvas_lengths" ]]; then
+    extra_args+=(--canvas-lengths "$synthetic_canvas_lengths")
+  else
+    extra_args+=(--canvas "$canvas")
+  fi
 
   set +e
   "$timeout_bin" "$timeout_seconds" "$bin" \
     --model "$model" \
     --llama-tokenize "$tokenizer" \
     --prompt-lengths "$synthetic_prompt_lengths" \
-    --canvas "$canvas" \
     --candidate-texts "$candidates" \
     --steps "$steps" \
     --warmups "$warmups" \
@@ -222,7 +246,7 @@ run_synthetic_lengths() {
       }
       NR >= 2 {
         found = 1
-        case_name = "synthetic_" $h["prompt_len"]
+        case_name = "synthetic_p" $h["prompt_len"] "_c" $h["canvas_len"]
         print "ok" "\t" case_name "\t" $h["prompt_text_bytes"] "\t" $h["prompt_len"] "\t" $h["canvas_len"] "\t" $h["candidate_count"] "\t" $h["load_ms"] "\t" $h["prompt_route_ms"] "\t" $h["prompt_projection_backend"] "\t" $h["prompt_projection_fused_norm_rope"] "\t" $h["prompt_cache_ms"] "\t" $h["prompt_projection_ms"] "\t" $h["prompt_projection_norm_ms"] "\t" $h["prompt_projection_matmul_ms"] "\t" $h["prompt_projection_assemble_ms"] "\t" $h["prompt_projection_copy_ms"] "\t" $h["prompt_projection_head_norm_ms"] "\t" $h["prompt_projection_q_norm_ms"] "\t" $h["prompt_projection_k_norm_ms"] "\t" $h["prompt_projection_v_norm_ms"] "\t" $h["prompt_projection_rope_ms"] "\t" $h["prompt_projection_rope_table_ms"] "\t" $h["prompt_projection_rope_apply_ms"] "\t" $h["prompt_projection_rope_q_apply_ms"] "\t" $h["prompt_projection_rope_k_apply_ms"] "\t" $h["prompt_materialize_ms"] "\t" $h["prompt_cache_ms_samples"] "\t" $h["prompt_projection_ms_samples"] "\t" $h["prompt_projection_norm_ms_samples"] "\t" $h["prompt_projection_matmul_ms_samples"] "\t" $h["prompt_projection_assemble_ms_samples"] "\t" $h["prompt_projection_copy_ms_samples"] "\t" $h["prompt_projection_head_norm_ms_samples"] "\t" $h["prompt_projection_q_norm_ms_samples"] "\t" $h["prompt_projection_k_norm_ms_samples"] "\t" $h["prompt_projection_v_norm_ms_samples"] "\t" $h["prompt_projection_rope_ms_samples"] "\t" $h["prompt_projection_rope_table_ms_samples"] "\t" $h["prompt_projection_rope_apply_ms_samples"] "\t" $h["prompt_projection_rope_q_apply_ms_samples"] "\t" $h["prompt_projection_rope_k_apply_ms_samples"] "\t" $h["prompt_materialize_ms_samples"] "\t" $h["prompt_cache_tokens_per_ms"] "\t" $h["loop_ms_median"] "\t" $h["loop_ms_samples"] "\t" $h["loop_prediction_ms"] "\t" $h["loop_decode_stack_ms"] "\t" $h["loop_context_backend"] "\t" $h["loop_context_batch_rows"] "\t" $h["loop_context_fixed_gqa2"] "\t" $h["loop_decode_qkv_ms"] "\t" $h["loop_decode_context_ms"] "\t" $h["loop_decode_context_score_ms"] "\t" $h["loop_decode_context_softmax_ms"] "\t" $h["loop_decode_context_value_ms"] "\t" $h["loop_decode_attention_out_ms"] "\t" $h["loop_decode_shared_ffn_ms"] "\t" $h["loop_decode_moe_ffn_ms"] "\t" $h["loop_decode_combine_scale_ms"] "\t" $h["loop_output_head_ms"] "\t" $h["loop_update_ms"] "\t" $h["loop_regenerate_ms"] "\t" $h["loop_proposal_ms"] "\t" $h["loop_prediction_ms_samples"] "\t" $h["loop_decode_stack_ms_samples"] "\t" $h["loop_decode_qkv_ms_samples"] "\t" $h["loop_decode_context_ms_samples"] "\t" $h["loop_decode_context_score_ms_samples"] "\t" $h["loop_decode_context_softmax_ms_samples"] "\t" $h["loop_decode_context_value_ms_samples"] "\t" $h["loop_decode_attention_out_ms_samples"] "\t" $h["loop_decode_shared_ffn_ms_samples"] "\t" $h["loop_decode_moe_ffn_ms_samples"] "\t" $h["loop_decode_combine_scale_ms_samples"] "\t" $h["loop_output_head_ms_samples"] "\t" $h["loop_update_ms_samples"] "\t" $h["loop_regenerate_ms_samples"] "\t" $h["loop_proposal_ms_samples"] "\t" $h["last_chosen_texts"] "\t" $h["last_argmax_probabilities"] "\t" artifact "\t" err_artifact
       }
       END {
