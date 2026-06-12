@@ -1294,10 +1294,14 @@ module ML::GGUF
       end
 
       qkv_t0 = Time.instant
-      canvas_projections = Array(AttentionProjection).new(mask.canvas_len) do |pos|
-        x = canvas_rows[pos * hp.n_embd, hp.n_embd]
-        attention_project_normed(weights, il, x, mask.prompt_len + pos)
-      end
+      canvas_projections = attention_projections_timed(
+        weights,
+        il,
+        canvas_rows,
+        mask.canvas_len,
+        mask.prompt_len,
+        "canvas",
+      ).projections
       qkv_ms = (Time.instant - qkv_t0).total_milliseconds
       if prompt_metal_cache
         prompt_metal_cache.not_nil!.write_canvas!(canvas_projections)
@@ -1380,14 +1384,23 @@ module ML::GGUF
                                            il : Int32,
                                            prompt_rows : Array(Float32),
                                            mask : DiffusionGemmaAttentionMask) : PromptProjectionTiming
+      attention_projections_timed(weights, il, prompt_rows, mask.prompt_len, 0, "prompt")
+    end
+
+    private def attention_projections_timed(weights : DiffusionGemmaWeights,
+                                            il : Int32,
+                                            rows : Array(Float32),
+                                            row_count : Int32,
+                                            start_pos : Int32,
+                                            label : String) : PromptProjectionTiming
       hp = weights.hparams
       lw = weights.layers[il]
-      prompt_size = mask.prompt_len * hp.n_embd
-      raise ArgumentError.new("prompt rows size mismatch: #{prompt_rows.size} != #{prompt_size}") unless prompt_rows.size == prompt_size
+      rows_size = row_count * hp.n_embd
+      raise ArgumentError.new("#{label} rows size mismatch: #{rows.size} != #{rows_size}") unless rows.size == rows_size
 
       norm_t0 = Time.instant
-      normed_rows = prompt_rows.dup
-      mask.prompt_len.times do |pos|
+      normed_rows = rows.dup
+      row_count.times do |pos|
         fast_rms_norm_slice!(normed_rows, pos * hp.n_embd, hp.n_embd, lw.attn_norm, hp.rms_eps)
       end
       norm_ms = (Time.instant - norm_t0).total_milliseconds
@@ -1397,21 +1410,21 @@ module ML::GGUF
       kv_dim = hp.n_head_kv(il) * head_dim
       matmul_t0 = Time.instant
       q_rows, k_rows, v_rows = if v_qw = lw.attn_v_qw
-                                 if rows = prompt_projection_many_matmul([lw.attn_q_qw, lw.attn_k_qw, v_qw], normed_rows, mask.prompt_len)
-                                   {rows[0], rows[1], rows[2]}
+                                 if projected = prompt_projection_many_matmul([lw.attn_q_qw, lw.attn_k_qw, v_qw], normed_rows, row_count)
+                                   {projected[0], projected[1], projected[2]}
                                  else
                                    {
-                                     prompt_projection_matmul(lw.attn_q_qw, normed_rows, mask.prompt_len),
-                                     prompt_projection_matmul(lw.attn_k_qw, normed_rows, mask.prompt_len),
-                                     prompt_projection_matmul(v_qw, normed_rows, mask.prompt_len),
+                                     prompt_projection_matmul(lw.attn_q_qw, normed_rows, row_count),
+                                     prompt_projection_matmul(lw.attn_k_qw, normed_rows, row_count),
+                                     prompt_projection_matmul(v_qw, normed_rows, row_count),
                                    }
                                  end
-                               elsif rows = prompt_projection_many_matmul([lw.attn_q_qw, lw.attn_k_qw], normed_rows, mask.prompt_len)
-                                 {rows[0], rows[1], rows[1].dup}
+                               elsif projected = prompt_projection_many_matmul([lw.attn_q_qw, lw.attn_k_qw], normed_rows, row_count)
+                                 {projected[0], projected[1], projected[1].dup}
                                else
-                                 k_rows = prompt_projection_matmul(lw.attn_k_qw, normed_rows, mask.prompt_len)
+                                 k_rows = prompt_projection_matmul(lw.attn_k_qw, normed_rows, row_count)
                                  {
-                                   prompt_projection_matmul(lw.attn_q_qw, normed_rows, mask.prompt_len),
+                                   prompt_projection_matmul(lw.attn_q_qw, normed_rows, row_count),
                                    k_rows,
                                    k_rows.dup,
                                  }
@@ -1430,7 +1443,7 @@ module ML::GGUF
       rope_apply_ms = 0.0
       rope_q_apply_ms = 0.0
       rope_k_apply_ms = 0.0
-      projections = Array(AttentionProjection).new(mask.prompt_len) do |pos|
+      projections = Array(AttentionProjection).new(row_count) do |pos|
         copy_t0 = Time.instant
         q = q_rows[pos * q_dim, q_dim]
         k = k_rows[pos * kv_dim, kv_dim]
@@ -1438,10 +1451,11 @@ module ML::GGUF
         proj = AttentionProjection.new(q, k, v, reused_k_as_v)
         copy_elapsed = (Time.instant - copy_t0).total_milliseconds
         copy_ms += copy_elapsed
+        projection_pos = start_pos + pos
 
         if prompt_projection_fused_norm_rope_enabled?
           head_norm_t0 = Time.instant
-          q_elapsed, k_elapsed, v_elapsed, table_elapsed = normalize_rope_attention_projection_timed!(proj, lw, hp, il, pos, weights.rope_freqs)
+          q_elapsed, k_elapsed, v_elapsed, table_elapsed = normalize_rope_attention_projection_timed!(proj, lw, hp, il, projection_pos, weights.rope_freqs)
           head_norm_elapsed = (Time.instant - head_norm_t0).total_milliseconds
           q_norm_ms += q_elapsed
           k_norm_ms += k_elapsed
@@ -1460,7 +1474,7 @@ module ML::GGUF
           head_norm_ms += head_norm_elapsed
           assemble_ms += copy_elapsed + head_norm_elapsed
           rope_t0 = Time.instant
-          table_elapsed, apply_elapsed, q_apply_elapsed, k_apply_elapsed = apply_rope_to_qk_timed!(proj, hp, il, pos, weights.rope_freqs)
+          table_elapsed, apply_elapsed, q_apply_elapsed, k_apply_elapsed = apply_rope_to_qk_timed!(proj, hp, il, projection_pos, weights.rope_freqs)
           rope_elapsed = (Time.instant - rope_t0).total_milliseconds
           rope_table_ms += table_elapsed
           rope_apply_ms += apply_elapsed
