@@ -6,6 +6,26 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-DIFFUSIONGEMMA-FFN-FUSED-SUM-NORM-2026-06-13] FFN resident final sum+norm fusion reduces the graph barrier shape
+**status:** completed; quiet promotion pending
+**trust:** {F:0.82, G:narrow, R:0.78}
+**context:** ml / DiffusionGemma / Metal / GraphEncoder / LTP-WBA
+**evidence:**
+- claim: "The full FFN-resident graph can remove the standalone `shared_out + moe_out` add buffer and dispatch by fusing that sum into the final RMSNorm+residual+scale kernel."
+  source: `gemma4_rmsnorm_sum_add_scaled_rows` plus `Gemma4Metal.encode_rmsnorm_sum_add_scaled_rows_to_buffer`; `crystal build --no-codegen spec/diffusion_gemma_meta_spec.cr --error-trace` passed; `crystal build --no-codegen spec/gemma4_metal_buffer_spec.cr --error-trace` passed; bridge-linked focused `spec/diffusion_gemma_meta_spec.cr:1105` passed with `1 examples, 0 failures`; `git diff --check` passed.
+  verified_at: 2026-06-13
+  decay_trigger: FFN resident graph buffer layout, final FFN residual math, GraphEncoder access semantics, or Metal RMSNorm kernels change
+- claim: "The fused route reduces the full FFN-resident graph from the prior c8 shape `161 ops / 10 waves / 9 barriers` to `160 ops / 9 waves / 8 barriers` on the bounded layer0 c8 stats smoke."
+  source: `DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_STATS=1 /tmp/diffusion_gemma_phase_abba_fused_sum ... --full-routes --sequence variant` emitted `diffusion_gemma_ffn_resident_graph layer=0 rows=8 active_experts=25 route_slots=64 ops=160 waves=9 barriers=8 max_wave_width=51`.
+  verified_at: 2026-06-13
+  decay_trigger: route distribution, graph compile strategy, full-routes setting, or c8 canvas shape changes
+- claim: "Relaxed in-process ABBA keeps the full FFN-resident candidate positive after fusion, but quiet-host promotion is still pending."
+  source: `IN_PROCESS_MIRROR=1 REQUIRE_QUIET=0 REPEATS=20 TRIM_PER_ARM=2` reported `candidate_speedup_position_paired`, total speedup `1.069754x`, min position speedup `1.053970x`, and checksum ok. A strict quiet attempt failed before launch because `iTerm2` exceeded the `40%` per-process threshold, so this is branch-selection evidence only.
+  verified_at: 2026-06-13
+  decay_trigger: host load, Metal driver state, phase runner rebuild, route shape, or quiet-gate thresholds change
+**LTP/WBA:** Window: final full FFN-resident `shared_out + moe_out -> post_ffw_norm -> residual add -> layer scale`. Transport: the two resident branch outputs and attention residual stay on GPU through one fused kernel. Legal move: Spike removes the separate add buffer/op while preserving the same final normalized vector and residual boundary. Potential descends from `(dominant_barrier_bucket=10 waves, tied_routes=1, sync_count=9 barriers, ops=161)` to `(9 waves, 1, 8 barriers, 160 ops)` on the recomputed graph stats smoke. Dual frame remains the previous shared-FFN resident route plus default-off full FFN-resident gate if quiet ABBA refutes the fused path.
+**decision:** Keep the fused kernel as part of the default-off full FFN-resident candidate. Do not update public performance claims until a quiet-host in-process ABBA passes the position-paired gate.
+
 ### [LM-DIFFUSIONGEMMA-COGNIGRAPH-MOE-PLAN-2026-06-13] Grouped MoE has a CogniGraph dry-plan boundary certificate
 **status:** verified
 **trust:** {F:0.82, G:narrow, R:0.86}

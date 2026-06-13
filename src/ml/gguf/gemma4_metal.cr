@@ -412,6 +412,7 @@ module ML::GGUF
       @@weighted_route_reduce_rows_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_add_rows_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_add_scaled_rows_pipeline : ML::Metal::ComputePipeline?
+      @@rmsnorm_sum_add_scaled_rows_pipeline : ML::Metal::ComputePipeline?
 
       class ResidentLayerState
         getter k_cache_buf : ML::MetalBuffer
@@ -3552,6 +3553,28 @@ module ML::GGUF
         enc.dispatch_threadgroups({rows, 1, 1}, {256, 1, 1})
       end
 
+      private def encode_rmsnorm_sum_add_scaled_rows(enc : ML::Metal::ComputeEncoder | ML::Metal::GraphEncoder,
+                                                     a_buf : ML::MetalBuffer,
+                                                     b_buf : ML::MetalBuffer,
+                                                     weight_buf : ML::MetalBuffer,
+                                                     residual_buf : ML::MetalBuffer,
+                                                     out_buf : ML::MetalBuffer,
+                                                     row_dim : Int32,
+                                                     rows : Int32,
+                                                     eps : Float32,
+                                                     scale : Float32) : Nil
+        enc.set_pipeline(rmsnorm_sum_add_scaled_rows_pipeline)
+        enc.set_buffer(a_buf, 0)
+        enc.set_buffer(b_buf, 1)
+        enc.set_buffer(weight_buf, 2)
+        enc.set_buffer(residual_buf, 3)
+        enc.set_buffer(out_buf, 4, ML::Metal::BufferAccess::Write)
+        enc.set_value(row_dim.to_u32, 5)
+        enc.set_value(eps, 6)
+        enc.set_value(scale, 7)
+        enc.dispatch_threadgroups({rows, 1, 1}, {256, 1, 1})
+      end
+
       private def encode_gelu_mul(enc : ML::Metal::ComputeEncoder | ML::Metal::GraphEncoder,
                                   gate_buf : ML::MetalBuffer,
                                   up_buf : ML::MetalBuffer,
@@ -3611,6 +3634,28 @@ module ML::GGUF
         return false if out_buf.size < bytes
 
         encode_rmsnorm_add_scaled_rows(enc, x_buf, weight_buf, residual_buf, out_buf, dim, row_count, eps, scale)
+        true
+      end
+
+      def encode_rmsnorm_sum_add_scaled_rows_to_buffer(enc : ML::Metal::ComputeEncoder | ML::Metal::GraphEncoder,
+                                                       a_buf : ML::MetalBuffer,
+                                                       b_buf : ML::MetalBuffer,
+                                                       weight_buf : ML::MetalBuffer,
+                                                       residual_buf : ML::MetalBuffer,
+                                                       out_buf : ML::MetalBuffer,
+                                                       row_count : Int32,
+                                                       dim : Int32,
+                                                       eps : Float32,
+                                                       scale : Float32) : Bool
+        return false unless row_count > 0 && dim > 0
+        bytes = row_count.to_i64 * dim * sizeof(Float32)
+        return false if a_buf.size < bytes
+        return false if b_buf.size < bytes
+        return false if weight_buf.size < dim.to_i64 * sizeof(Float32)
+        return false if residual_buf.size < bytes
+        return false if out_buf.size < bytes
+
+        encode_rmsnorm_sum_add_scaled_rows(enc, a_buf, b_buf, weight_buf, residual_buf, out_buf, dim, row_count, eps, scale)
         true
       end
 
@@ -3937,6 +3982,12 @@ module ML::GGUF
       private def rmsnorm_add_scaled_rows_pipeline : ML::Metal::ComputePipeline
         @@rmsnorm_add_scaled_rows_pipeline ||= ML::Metal::PipelineCache.get("gemma4_rmsnorm_add_scaled_rows") {
           ML::Metal::ComputePipeline.new("gemma4_rmsnorm_add_scaled_rows", GEMMA4_SOURCE)
+        }
+      end
+
+      private def rmsnorm_sum_add_scaled_rows_pipeline : ML::Metal::ComputePipeline
+        @@rmsnorm_sum_add_scaled_rows_pipeline ||= ML::Metal::PipelineCache.get("gemma4_rmsnorm_sum_add_scaled_rows") {
+          ML::Metal::ComputePipeline.new("gemma4_rmsnorm_sum_add_scaled_rows", GEMMA4_SOURCE)
         }
       end
 

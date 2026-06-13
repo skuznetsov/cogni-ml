@@ -1243,7 +1243,6 @@ module ML::GGUF
       route_weights_buf = ML::MetalBuffer.from_array(route_weights)
       moe_reduced_buf = ML::MetalBuffer.new(expected.to_i64 * sizeof(Float32))
       moe_out_buf = ML::MetalBuffer.new(expected.to_i64 * sizeof(Float32))
-      combined_buf = ML::MetalBuffer.new(expected.to_i64 * sizeof(Float32))
       out_buf = ML::MetalBuffer.new(expected.to_i64 * sizeof(Float32))
 
       owned_buffers.concat([
@@ -1266,7 +1265,6 @@ module ML::GGUF
         route_weights_buf,
         moe_reduced_buf,
         moe_out_buf,
-        combined_buf,
         out_buf,
       ])
 
@@ -1318,9 +1316,8 @@ module ML::GGUF
 
       return nil unless Gemma4Metal.encode_weighted_route_reduce_rows_to_buffer(enc, route_rows_buf, route_offsets_buf, route_counts_buf, route_weights_buf, moe_reduced_buf, row_count, route_slot_count, hp.n_embd)
       return nil unless Gemma4Metal.encode_rmsnorm_rows_weighted_to_buffer(enc, moe_reduced_buf, moe_post_weight_buf, moe_out_buf, row_count, hp.n_embd, hp.rms_eps)
-      return nil unless Gemma4Metal.encode_add_vec_to_buffer(enc, shared_out_buf, moe_out_buf, combined_buf, expected)
       scale = canvas ? lw.layer_output_scale[0] : lw.encoder_layer_output_scale[0]
-      return nil unless Gemma4Metal.encode_rmsnorm_add_scaled_rows_to_buffer(enc, combined_buf, ffn_post_weight_buf, attn_out_buf, out_buf, row_count, hp.n_embd, hp.rms_eps, scale)
+      return nil unless Gemma4Metal.encode_rmsnorm_sum_add_scaled_rows_to_buffer(enc, shared_out_buf, moe_out_buf, ffn_post_weight_buf, attn_out_buf, out_buf, row_count, hp.n_embd, hp.rms_eps, scale)
 
       graph.compile!
       if ENV["DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_STATS"]? == "1"
