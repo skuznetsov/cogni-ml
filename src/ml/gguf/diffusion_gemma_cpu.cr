@@ -886,6 +886,37 @@ module ML::GGUF
       Gemma4CPU.rms_norm(down, lw.post_ffw_norm_1, hp.rms_eps)
     end
 
+    def shared_dense_ffn_rows(weights : DiffusionGemmaWeights,
+                              il : Int32,
+                              attn_out_rows : Array(Float32),
+                              row_count : Int32) : Array(Float32)
+      hp = weights.hparams
+      lw = weights.layers[il]
+      expected = row_count * hp.n_embd
+      raise ArgumentError.new("shared_dense_ffn_rows row_count must be positive") unless row_count > 0
+      raise ArgumentError.new("shared_dense_ffn_rows input size mismatch") unless attn_out_rows.size == expected
+
+      ffn_in_rows = attn_out_rows.dup
+      row_count.times do |row|
+        fast_rms_norm_slice!(ffn_in_rows, row * hp.n_embd, hp.n_embd, lw.ffn_norm, hp.rms_eps)
+      end
+
+      up_rows, gate_rows = if projected = prompt_projection_many_matmul([lw.ffn_up_qw, lw.ffn_gate_qw], ffn_in_rows, row_count)
+                             {projected[0], projected[1]}
+                           else
+                             {
+                               prompt_projection_matmul(lw.ffn_up_qw, ffn_in_rows, row_count),
+                               prompt_projection_matmul(lw.ffn_gate_qw, ffn_in_rows, row_count),
+                             }
+                           end
+      gate_rows.size.times { |i| gate_rows[i] = Gemma4CPU.gelu(gate_rows[i]) * up_rows[i] }
+      down_rows = prompt_projection_matmul(lw.ffn_down_qw, gate_rows, row_count)
+      row_count.times do |row|
+        fast_rms_norm_slice!(down_rows, row * hp.n_embd, hp.n_embd, lw.post_ffw_norm_1, hp.rms_eps)
+      end
+      down_rows
+    end
+
     def router_input(weights : DiffusionGemmaWeights,
                      il : Int32,
                      attn_out : Array(Float32)) : Array(Float32)
@@ -1329,6 +1360,7 @@ module ML::GGUF
       moe_ffn_ms = 0.0
       combine_scale_ms = 0.0
       result = Array(Float32).new(canvas_size, 0.0_f32)
+      attn_out_rows = Array(Float32).new(canvas_size, 0.0_f32)
       mask.canvas_len.times do |canvas_pos|
         x = canvas_rows[canvas_pos * hp.n_embd, hp.n_embd]
         context_t0 = Time.instant
@@ -1351,10 +1383,27 @@ module ML::GGUF
         normed = Gemma4CPU.rms_norm(projected, lw.post_attention_norm, hp.rms_eps)
         attn_out = Array(Float32).new(hp.n_embd) { |i| x[i] + normed[i] }
         attention_out_ms += (Time.instant - attention_t0).total_milliseconds
+        copy_row!(attn_out_rows, canvas_pos, hp.n_embd, attn_out)
+      end
 
+      shared_rows = nil.as(Array(Float32)?)
+      if shared_ffn_batch_rows_enabled? && mask.canvas_len > 1
         shared_t0 = Time.instant
-        shared = shared_dense_ffn(weights, il, attn_out)
+        shared_rows = shared_dense_ffn_rows(weights, il, attn_out_rows, mask.canvas_len)
         shared_ffn_ms += (Time.instant - shared_t0).total_milliseconds
+      end
+
+      mask.canvas_len.times do |canvas_pos|
+        attn_out = attn_out_rows[canvas_pos * hp.n_embd, hp.n_embd]
+
+        shared = if batched_shared = shared_rows
+                   batched_shared[canvas_pos * hp.n_embd, hp.n_embd]
+                 else
+                   shared_t0 = Time.instant
+                   row_shared = shared_dense_ffn(weights, il, attn_out)
+                   shared_ffn_ms += (Time.instant - shared_t0).total_milliseconds
+                   row_shared
+                 end
 
         moe_t0 = Time.instant
         moe = if supplied_routes = routes_by_canvas_row
@@ -1489,6 +1538,11 @@ module ML::GGUF
 
     def prompt_projection_fused_norm_rope_enabled? : Bool
       ENV["DIFFUSION_GEMMA_FUSED_QK_NORM_ROPE"]? == "1"
+    end
+
+    def shared_ffn_batch_rows_enabled? : Bool
+      ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS"]? == "1" &&
+        ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS_OFF"]? != "1"
     end
 
     def prompt_projection_metal_enabled? : Bool

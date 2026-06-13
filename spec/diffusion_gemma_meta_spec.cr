@@ -527,6 +527,34 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
   end
 
+  it "keeps batched shared dense FFN rows equivalent to row-by-row shared FFN" do
+    pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
+
+    w = ML::GGUF::DiffusionGemmaWeights.from_gguf(DIFFUSION_GEMMA_26B_Q4KM)
+    hp = w.hparams
+    row0 = ML::GGUF::DiffusionGemmaCPU.zero_sc_canvas_embedding(w, 0)
+    row1 = ML::GGUF::DiffusionGemmaCPU.zero_sc_canvas_embedding(w, 1)
+    rows = row0 + row1
+
+    expected = ML::GGUF::DiffusionGemmaCPU.shared_dense_ffn(w, 0, row0) +
+               ML::GGUF::DiffusionGemmaCPU.shared_dense_ffn(w, 0, row1)
+    actual = ML::GGUF::DiffusionGemmaCPU.shared_dense_ffn_rows(w, 0, rows, 2)
+    actual.size.should eq(2 * hp.n_embd)
+    max_diff = 0.0_f32
+    expected.size.times do |i|
+      diff = (expected[i] - actual[i]).abs
+      max_diff = diff if diff > max_diff
+    end
+    max_diff.should be < 1.0e-4_f32
+
+    expect_raises(ArgumentError, /row_count must be positive/) do
+      ML::GGUF::DiffusionGemmaCPU.shared_dense_ffn_rows(w, 0, rows, 0)
+    end
+    expect_raises(ArgumentError, /shared_dense_ffn_rows input size mismatch/) do
+      ML::GGUF::DiffusionGemmaCPU.shared_dense_ffn_rows(w, 0, [0.0_f32], 2)
+    end
+  end
+
   it "computes softmax router probabilities and deterministic top-k expert routes" do
     pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
 
