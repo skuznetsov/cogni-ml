@@ -142,6 +142,22 @@ module ML::GGUF
         nil
       end
 
+      def gather_rows_by_map(rows : Array(Float32),
+                             gather_map : Array(Int32),
+                             row_count : Int32,
+                             dim : Int32) : Array(Float32)?
+        nil
+      end
+
+      def weighted_route_reduce_rows(route_rows : Array(Float32),
+                                     route_offsets : Array(Int32),
+                                     route_counts : Array(Int32),
+                                     route_weights : Array(Float32),
+                                     row_count : Int32,
+                                     dim : Int32) : Array(Float32)?
+        nil
+      end
+
       def layer_tail(x : Array(Float32),
                      attn_projected : Array(Float32),
                      lw : Gemma4LayerWeights,
@@ -384,6 +400,8 @@ module ML::GGUF
       @@add_scaled_vec_pipeline : ML::Metal::ComputePipeline?
       @@gelu_mul_pipeline : ML::Metal::ComputePipeline?
       @@softcap_pipeline : ML::Metal::ComputePipeline?
+      @@gather_rows_f32_pipeline : ML::Metal::ComputePipeline?
+      @@weighted_route_reduce_rows_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_add_rows_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_add_scaled_rows_pipeline : ML::Metal::ComputePipeline?
 
@@ -2690,6 +2708,48 @@ module ML::GGUF
         out_buf.read(gate.size)
       end
 
+      def gather_rows_by_map(rows : Array(Float32),
+                             gather_map : Array(Int32),
+                             row_count : Int32,
+                             dim : Int32) : Array(Float32)?
+        return nil unless available?
+        validate_gather_rows_by_map!(rows, gather_map, row_count, dim)
+
+        rows_buf = ML::MetalBuffer.from_array(rows)
+        map_buf = int32_buffer(gather_map)
+        out_buf = ML::MetalBuffer.new(gather_map.size.to_i64 * dim * sizeof(Float32))
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        encode_gather_rows_by_map(enc, rows_buf, map_buf, out_buf, gather_map.size, dim)
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
+        out_buf.read(gather_map.size * dim)
+      end
+
+      def weighted_route_reduce_rows(route_rows : Array(Float32),
+                                     route_offsets : Array(Int32),
+                                     route_counts : Array(Int32),
+                                     route_weights : Array(Float32),
+                                     row_count : Int32,
+                                     dim : Int32) : Array(Float32)?
+        return nil unless available?
+        route_slots = validate_weighted_route_reduce_rows!(route_rows, route_offsets, route_counts, route_weights, row_count, dim)
+
+        rows_buf = ML::MetalBuffer.from_array(route_rows)
+        offsets_buf = int32_buffer(route_offsets)
+        counts_buf = int32_buffer(route_counts)
+        weights_buf = ML::MetalBuffer.from_array(route_weights)
+        out_buf = ML::MetalBuffer.new(row_count.to_i64 * dim * sizeof(Float32))
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        encode_weighted_route_reduce_rows(enc, rows_buf, offsets_buf, counts_buf, weights_buf, out_buf, row_count, route_slots, dim)
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
+        out_buf.read(row_count * dim)
+      end
+
       def gelu_mul_add_scaled_graph(gate : Array(Float32),
                                     up : Array(Float32),
                                     residual : Array(Float32),
@@ -3373,6 +3433,43 @@ module ML::GGUF
         enc.dispatch_1d(count, 256)
       end
 
+      private def encode_gather_rows_by_map(enc : ML::Metal::ComputeEncoder | ML::Metal::GraphEncoder,
+                                            rows_buf : ML::MetalBuffer,
+                                            map_buf : ML::MetalBuffer,
+                                            out_buf : ML::MetalBuffer,
+                                            route_slots : Int32,
+                                            dim : Int32) : Nil
+        enc.set_pipeline(gather_rows_f32_pipeline)
+        enc.set_buffer(rows_buf, 0)
+        enc.set_buffer(map_buf, 1)
+        enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+        enc.set_value(dim.to_u32, 3)
+        enc.set_value(route_slots.to_u32, 4)
+        enc.dispatch_1d(route_slots * dim, 256)
+      end
+
+      private def encode_weighted_route_reduce_rows(enc : ML::Metal::ComputeEncoder | ML::Metal::GraphEncoder,
+                                                    route_rows_buf : ML::MetalBuffer,
+                                                    route_offsets_buf : ML::MetalBuffer,
+                                                    route_counts_buf : ML::MetalBuffer,
+                                                    route_weights_buf : ML::MetalBuffer,
+                                                    out_buf : ML::MetalBuffer,
+                                                    row_count : Int32,
+                                                    route_slots : Int32,
+                                                    dim : Int32) : Nil
+        raise ArgumentError.new("weighted route reduce has no route slots") unless route_slots > 0
+
+        enc.set_pipeline(weighted_route_reduce_rows_pipeline)
+        enc.set_buffer(route_rows_buf, 0)
+        enc.set_buffer(route_offsets_buf, 1)
+        enc.set_buffer(route_counts_buf, 2)
+        enc.set_buffer(route_weights_buf, 3)
+        enc.set_buffer(out_buf, 4, ML::Metal::BufferAccess::Write)
+        enc.set_value(dim.to_u32, 5)
+        enc.set_value(row_count.to_u32, 6)
+        enc.dispatch_1d(row_count * dim, 256)
+      end
+
       private def encode_rmsnorm_add_rows(enc : ML::Metal::ComputeEncoder,
                                           x_buf : ML::MetalBuffer,
                                           weight_buf : ML::MetalBuffer,
@@ -3653,6 +3750,18 @@ module ML::GGUF
         }
       end
 
+      private def gather_rows_f32_pipeline : ML::Metal::ComputePipeline
+        @@gather_rows_f32_pipeline ||= ML::Metal::PipelineCache.get("gemma4_gather_rows_f32") {
+          ML::Metal::ComputePipeline.new("gemma4_gather_rows_f32", GEMMA4_SOURCE)
+        }
+      end
+
+      private def weighted_route_reduce_rows_pipeline : ML::Metal::ComputePipeline
+        @@weighted_route_reduce_rows_pipeline ||= ML::Metal::PipelineCache.get("gemma4_weighted_route_reduce_rows") {
+          ML::Metal::ComputePipeline.new("gemma4_weighted_route_reduce_rows", GEMMA4_SOURCE)
+        }
+      end
+
       private def add_scaled_vec_pipeline : ML::Metal::ComputePipeline
         @@add_scaled_vec_pipeline ||= ML::Metal::PipelineCache.get("gemma4_add_scaled_vec") {
           ML::Metal::ComputePipeline.new("gemma4_add_scaled_vec", GEMMA4_SOURCE)
@@ -3681,6 +3790,53 @@ module ML::GGUF
         @@softcap_pipeline ||= ML::Metal::PipelineCache.get("gemma4_logit_softcap") {
           ML::Metal::ComputePipeline.new("gemma4_logit_softcap", GEMMA4_SOURCE)
         }
+      end
+
+      private def int32_buffer(values : Array(Int32)) : ML::MetalBuffer
+        buf = ML::MetalBuffer.new(values.size.to_i64 * sizeof(Int32))
+        buf.write_bytes(values.to_unsafe.as(Pointer(UInt8)), values.size * sizeof(Int32)) unless values.empty?
+        buf
+      end
+
+      private def validate_gather_rows_by_map!(rows : Array(Float32),
+                                               gather_map : Array(Int32),
+                                               row_count : Int32,
+                                               dim : Int32) : Nil
+        raise ArgumentError.new("gather row_count must be positive") unless row_count > 0
+        raise ArgumentError.new("gather dim must be positive") unless dim > 0
+        raise ArgumentError.new("gather map must not be empty") if gather_map.empty?
+        raise ArgumentError.new("gather rows size mismatch") unless rows.size.to_i64 == row_count.to_i64 * dim
+        gather_map.each do |row|
+          raise ArgumentError.new("gather map row out of range") unless row >= 0 && row < row_count
+        end
+      end
+
+      private def validate_weighted_route_reduce_rows!(route_rows : Array(Float32),
+                                                       route_offsets : Array(Int32),
+                                                       route_counts : Array(Int32),
+                                                       route_weights : Array(Float32),
+                                                       row_count : Int32,
+                                                       dim : Int32) : Int32
+        raise ArgumentError.new("weighted route row_count must be positive") unless row_count > 0
+        raise ArgumentError.new("weighted route dim must be positive") unless dim > 0
+        raise ArgumentError.new("weighted route offsets size mismatch") unless route_offsets.size == row_count
+        raise ArgumentError.new("weighted route counts size mismatch") unless route_counts.size == row_count
+        raise ArgumentError.new("weighted route rows size must be divisible by dim") unless route_rows.size % dim == 0
+        route_slots = route_rows.size // dim
+        raise ArgumentError.new("weighted route slots must be positive") unless route_slots > 0
+        raise ArgumentError.new("weighted route weights size mismatch") unless route_weights.size == route_slots
+
+        next_offset = 0
+        row_count.times do |row|
+          offset = route_offsets[row]
+          count = route_counts[row]
+          raise ArgumentError.new("weighted route offsets must be contiguous") unless offset == next_offset
+          raise ArgumentError.new("weighted route counts must be positive") unless count > 0
+          next_offset += count
+          raise ArgumentError.new("weighted route metadata exceeds route slots") if next_offset > route_slots
+        end
+        raise ArgumentError.new("weighted route metadata must cover all route slots") unless next_offset == route_slots
+        route_slots
       end
     {% end %}
   end

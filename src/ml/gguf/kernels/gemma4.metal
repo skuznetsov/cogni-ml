@@ -2409,6 +2409,44 @@ kernel void gemma4_copy_f32(
     dst[gid] = src[gid];
 }
 
+kernel void gemma4_gather_rows_f32(
+    device const float* rows        [[buffer(0)]],
+    device const int*   gather_map  [[buffer(1)]],
+    device       float* out         [[buffer(2)]],
+    constant     uint&  dim         [[buffer(3)]],
+    constant     uint&  route_slots [[buffer(4)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid >= route_slots * dim) return;
+    const uint slot = gid / dim;
+    const uint j = gid - slot * dim;
+    const uint row = uint(gather_map[slot]);
+    out[gid] = rows[row * dim + j];
+}
+
+kernel void gemma4_weighted_route_reduce_rows(
+    device const float* route_rows    [[buffer(0)]],
+    device const int*   route_offsets [[buffer(1)]],
+    device const int*   route_counts  [[buffer(2)]],
+    device const float* route_weights [[buffer(3)]],
+    device       float* out           [[buffer(4)]],
+    constant     uint&  dim           [[buffer(5)]],
+    constant     uint&  rows          [[buffer(6)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid >= rows * dim) return;
+    const uint row = gid / dim;
+    const uint j = gid - row * dim;
+    const int start = route_offsets[row];
+    const int count = route_counts[row];
+    float sum = 0.0f;
+    for (int r = 0; r < count; ++r) {
+        const uint slot = uint(start + r);
+        sum += route_weights[slot] * route_rows[slot * dim + j];
+    }
+    out[gid] = sum;
+}
+
 kernel void gemma4_add_scaled_vec(
     device const float* a      [[buffer(0)]],
     device const float* b      [[buffer(1)]],

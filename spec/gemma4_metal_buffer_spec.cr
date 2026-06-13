@@ -28,6 +28,77 @@ def gemma4_expect_resident_matmul_matches(label : String,
   diff.should be <= 1.0e-6_f32
 end
 
+private def gemma4_route_gather_reference(rows : Array(Float32), gather_map : Array(Int32), dim : Int32) : Array(Float32)
+  out = [] of Float32
+  gather_map.each do |row|
+    out.concat(rows[row * dim, dim])
+  end
+  out
+end
+
+private def gemma4_route_reduce_reference(route_rows : Array(Float32),
+                                          route_offsets : Array(Int32),
+                                          route_counts : Array(Int32),
+                                          route_weights : Array(Float32),
+                                          row_count : Int32,
+                                          dim : Int32) : Array(Float32)
+  out = Array(Float32).new(row_count * dim, 0.0_f32)
+  row_count.times do |row|
+    start = route_offsets[row]
+    route_counts[row].times do |r|
+      slot = start + r
+      weight = route_weights[slot]
+      dim.times do |j|
+        out[row * dim + j] += route_rows[slot * dim + j] * weight
+      end
+    end
+  end
+  out
+end
+
+describe "Gemma4 route-map Metal helpers" do
+  pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+  it "gathers repeated row routes by compact GPU map" do
+    dim = 5
+    row_count = 4
+    rows = Array(Float32).new(row_count * dim) { |i| i.to_f32 * 0.25_f32 - 1.0_f32 }
+    gather_map = [2_i32, 0_i32, 2_i32, 3_i32, 1_i32]
+    expected = gemma4_route_gather_reference(rows, gather_map, dim)
+
+    actual = ML::GGUF::Gemma4Metal.gather_rows_by_map(rows, gather_map, row_count, dim).not_nil!
+    diff = gemma4_buffer_max_abs_diff(expected, actual)
+    diff.should be <= 1.0e-6_f32
+  end
+
+  it "reduces weighted route rows in deterministic row-local slot order" do
+    dim = 4
+    row_count = 3
+    route_rows = Array(Float32).new(5 * dim) { |i| Math.sin(i.to_f32 * 0.19_f32).to_f32 }
+    route_offsets = [0_i32, 2_i32, 3_i32]
+    route_counts = [2_i32, 1_i32, 2_i32]
+    route_weights = [0.25_f32, 0.75_f32, 1.5_f32, -0.5_f32, 2.0_f32]
+    expected = gemma4_route_reduce_reference(route_rows, route_offsets, route_counts, route_weights, row_count, dim)
+
+    actual = ML::GGUF::Gemma4Metal.weighted_route_reduce_rows(route_rows, route_offsets, route_counts, route_weights, row_count, dim).not_nil!
+    diff = gemma4_buffer_max_abs_diff(expected, actual)
+    diff.should be <= 1.0e-6_f32
+  end
+
+  it "rejects route metadata that would cross the GPU corridor boundary" do
+    rows = Array(Float32).new(4) { |i| i.to_f32 }
+    expect_raises(ArgumentError, /gather map row out of range/) do
+      ML::GGUF::Gemma4Metal.gather_rows_by_map(rows, [2_i32], 2, 2)
+    end
+
+    route_rows = Array(Float32).new(4) { |i| i.to_f32 }
+    route_weights = [1.0_f32, 1.0_f32]
+    expect_raises(ArgumentError, /weighted route offsets must be contiguous/) do
+      ML::GGUF::Gemma4Metal.weighted_route_reduce_rows(route_rows, [0_i32, 0_i32], [1_i32, 1_i32], route_weights, 2, 2)
+    end
+  end
+end
+
 describe "Gemma4 resident Metal matmul buffers" do
   pending!("Gemma4 12B GGUF not found") unless File.exists?(GEMMA4_METAL_BUFFER_12B_Q4KM)
   pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
