@@ -20,6 +20,7 @@ cache_repeats="${CACHE_REPEATS:-1}"
 max_layers="${MAX_LAYERS:-1}"
 timeout_seconds="${TIMEOUT_SECONDS:-60}"
 materialize_prompt_final_rows="${MATERIALIZE_PROMPT_FINAL_ROWS:-0}"
+full_routes="${DIFFUSION_GEMMA_FULL_ROUTES:-0}"
 include_large_prompt="${INCLUDE_LARGE_PROMPT:-0}"
 synthetic_prompt_lengths="${SYNTHETIC_PROMPT_LENGTHS:-}"
 synthetic_canvas_lengths="${SYNTHETIC_CANVAS_LENGTHS:-}"
@@ -61,6 +62,15 @@ case "$materialize_prompt_final_rows" in
   1|true|yes) materialize_prompt_final_rows=1 ;;
   *)
     echo "MATERIALIZE_PROMPT_FINAL_ROWS must be 0 or 1" >&2
+    exit 2
+    ;;
+esac
+
+case "$full_routes" in
+  0|false|no) full_routes=0 ;;
+  1|true|yes) full_routes=1 ;;
+  *)
+    echo "DIFFUSION_GEMMA_FULL_ROUTES must be 0 or 1" >&2
     exit 2
     ;;
 esac
@@ -157,6 +167,9 @@ run_case() {
   if [[ "$materialize_prompt_final_rows" -eq 1 ]]; then
     extra_args+=(--materialize-prompt-final-rows)
   fi
+  if [[ "$full_routes" -eq 1 ]]; then
+    extra_args+=(--full-routes)
+  fi
 
   set +e
   "$timeout_bin" "$timeout_seconds" "$bin" \
@@ -210,6 +223,9 @@ run_synthetic_lengths() {
   err="$(mktemp "${TMPDIR:-/tmp}/dg_prompt_perf_synthetic.err.XXXXXX")"
   if [[ "$materialize_prompt_final_rows" -eq 1 ]]; then
     extra_args+=(--materialize-prompt-final-rows)
+  fi
+  if [[ "$full_routes" -eq 1 ]]; then
+    extra_args+=(--full-routes)
   fi
   if [[ -n "$synthetic_canvas_lengths" ]]; then
     extra_args+=(--canvas-lengths "$synthetic_canvas_lengths")
