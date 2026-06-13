@@ -613,6 +613,41 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
   end
 
+  it "keeps batched MoE FFN rows equivalent to row-by-row MoE FFN" do
+    pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
+
+    w = ML::GGUF::DiffusionGemmaWeights.from_gguf(DIFFUSION_GEMMA_26B_Q4KM)
+    hp = w.hparams
+    row0 = ML::GGUF::DiffusionGemmaCPU.zero_sc_canvas_embedding(w, 0)
+    row1 = ML::GGUF::DiffusionGemmaCPU.zero_sc_canvas_embedding(w, 1)
+    rows = row0 + row1
+    routes_by_row = [
+      ML::GGUF::DiffusionGemmaCPU.route_experts(w, 0, row0),
+      ML::GGUF::DiffusionGemmaCPU.route_experts(w, 0, row1),
+    ]
+
+    expected = ML::GGUF::DiffusionGemmaCPU.moe_ffn(w, 0, row0, routes_by_row[0]) +
+               ML::GGUF::DiffusionGemmaCPU.moe_ffn(w, 0, row1, routes_by_row[1])
+    actual = ML::GGUF::DiffusionGemmaCPU.moe_ffn_rows(w, 0, rows, 2, routes_by_row)
+    actual.size.should eq(2 * hp.n_embd)
+    max_diff = 0.0_f32
+    expected.size.times do |i|
+      diff = (expected[i] - actual[i]).abs
+      max_diff = diff if diff > max_diff
+    end
+    max_diff.should be < 1.0e-4_f32
+
+    expect_raises(ArgumentError, /row_count must be positive/) do
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_rows(w, 0, rows, 0)
+    end
+    expect_raises(ArgumentError, /moe_ffn_rows input size mismatch/) do
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_rows(w, 0, [0.0_f32], 2)
+    end
+    expect_raises(ArgumentError, /route row count mismatch/) do
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_rows(w, 0, rows, 2, [routes_by_row[0]])
+    end
+  end
+
   it "combines dense and routed MoE FFN branches into the residual output" do
     pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
 

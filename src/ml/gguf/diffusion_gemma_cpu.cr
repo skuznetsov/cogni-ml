@@ -1017,6 +1017,49 @@ module ML::GGUF
       Gemma4CPU.rms_norm(combined, lw.post_ffw_norm_2, hp.rms_eps)
     end
 
+    def moe_ffn_rows(weights : DiffusionGemmaWeights,
+                     il : Int32,
+                     attn_out_rows : Array(Float32),
+                     row_count : Int32,
+                     routes_by_row : Array(Array(ExpertRoute))? = nil) : Array(Float32)
+      hp = weights.hparams
+      lw = weights.layers[il]
+      expected = row_count * hp.n_embd
+      raise ArgumentError.new("moe_ffn_rows row_count must be positive") unless row_count > 0
+      raise ArgumentError.new("moe_ffn_rows input size mismatch") unless attn_out_rows.size == expected
+      if supplied_routes = routes_by_row
+        raise ArgumentError.new("moe_ffn_rows route row count mismatch") unless supplied_routes.size == row_count
+      end
+      raise ArgumentError.new("down expert scale size mismatch") unless lw.ffn_down_exps_scale.size == hp.expert_count
+
+      ffn_in_rows = attn_out_rows.dup
+      row_count.times do |row|
+        fast_rms_norm_slice!(ffn_in_rows, row * hp.n_embd, hp.n_embd, lw.pre_ffw_norm_2, hp.rms_eps)
+      end
+
+      result = Array(Float32).new(expected, 0.0_f32)
+      row_count.times do |row|
+        row_offset = row * hp.n_embd
+        attn_out = attn_out_rows[row_offset, hp.n_embd]
+        ffn_in = ffn_in_rows[row_offset, hp.n_embd]
+        selected = if supplied_routes = routes_by_row
+                     supplied_routes[row]
+                   else
+                     route_experts(weights, il, attn_out)
+                   end
+        raise ArgumentError.new("moe_ffn_rows routes must not be empty") if selected.empty?
+
+        combined = Array(Float32).new(hp.n_embd, 0.0_f32)
+        selected.each do |route|
+          expert_out = moe_expert_output(weights, il, route.expert, ffn_in)
+          hp.n_embd.times { |i| combined[i] += route.weight * expert_out[i] }
+        end
+        normed = Gemma4CPU.rms_norm(combined, lw.post_ffw_norm_2, hp.rms_eps)
+        copy_row!(result, row, hp.n_embd, normed)
+      end
+      result
+    end
+
     def ffn_residual(weights : DiffusionGemmaWeights,
                      il : Int32,
                      attn_out : Array(Float32),
@@ -1393,6 +1436,13 @@ module ML::GGUF
         shared_ffn_ms += (Time.instant - shared_t0).total_milliseconds
       end
 
+      moe_rows = nil.as(Array(Float32)?)
+      if moe_ffn_batch_rows_enabled? && mask.canvas_len > 1
+        moe_t0 = Time.instant
+        moe_rows = moe_ffn_rows(weights, il, attn_out_rows, mask.canvas_len, routes_by_canvas_row)
+        moe_ffn_ms += (Time.instant - moe_t0).total_milliseconds
+      end
+
       mask.canvas_len.times do |canvas_pos|
         attn_out = attn_out_rows[canvas_pos * hp.n_embd, hp.n_embd]
 
@@ -1405,13 +1455,18 @@ module ML::GGUF
                    row_shared
                  end
 
-        moe_t0 = Time.instant
-        moe = if supplied_routes = routes_by_canvas_row
-                moe_ffn(weights, il, attn_out, supplied_routes[canvas_pos])
+        moe = if batched_moe = moe_rows
+                batched_moe[canvas_pos * hp.n_embd, hp.n_embd]
               else
-                moe_ffn(weights, il, attn_out)
+                moe_t0 = Time.instant
+                row_moe = if supplied_routes = routes_by_canvas_row
+                            moe_ffn(weights, il, attn_out, supplied_routes[canvas_pos])
+                          else
+                            moe_ffn(weights, il, attn_out)
+                          end
+                moe_ffn_ms += (Time.instant - moe_t0).total_milliseconds
+                row_moe
               end
-        moe_ffn_ms += (Time.instant - moe_t0).total_milliseconds
 
         combine_t0 = Time.instant
         ffn_out = ffn_residual_from_parts(weights, il, attn_out, shared, moe)
@@ -1543,6 +1598,11 @@ module ML::GGUF
     def shared_ffn_batch_rows_enabled? : Bool
       ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS"]? == "1" &&
         ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS_OFF"]? != "1"
+    end
+
+    def moe_ffn_batch_rows_enabled? : Bool
+      ENV["DIFFUSION_GEMMA_MOE_FFN_BATCH_ROWS"]? == "1" &&
+        ENV["DIFFUSION_GEMMA_MOE_FFN_BATCH_ROWS_OFF"]? != "1"
     end
 
     def prompt_projection_metal_enabled? : Bool
