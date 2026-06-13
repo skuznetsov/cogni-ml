@@ -149,6 +149,13 @@ module ML::GGUF
         nil
       end
 
+      def scatter_rows_by_map(rows : Array(Float32),
+                              scatter_map : Array(Int32),
+                              out_row_count : Int32,
+                              dim : Int32) : Array(Float32)?
+        nil
+      end
+
       def weighted_route_reduce_rows(route_rows : Array(Float32),
                                      route_offsets : Array(Int32),
                                      route_counts : Array(Int32),
@@ -401,6 +408,7 @@ module ML::GGUF
       @@gelu_mul_pipeline : ML::Metal::ComputePipeline?
       @@softcap_pipeline : ML::Metal::ComputePipeline?
       @@gather_rows_f32_pipeline : ML::Metal::ComputePipeline?
+      @@scatter_rows_f32_pipeline : ML::Metal::ComputePipeline?
       @@weighted_route_reduce_rows_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_add_rows_pipeline : ML::Metal::ComputePipeline?
       @@rmsnorm_add_scaled_rows_pipeline : ML::Metal::ComputePipeline?
@@ -2727,6 +2735,25 @@ module ML::GGUF
         out_buf.read(gather_map.size * dim)
       end
 
+      def scatter_rows_by_map(rows : Array(Float32),
+                              scatter_map : Array(Int32),
+                              out_row_count : Int32,
+                              dim : Int32) : Array(Float32)?
+        return nil unless available?
+        row_count = validate_scatter_rows_by_map!(rows, scatter_map, out_row_count, dim)
+
+        rows_buf = ML::MetalBuffer.from_array(rows)
+        map_buf = int32_buffer(scatter_map)
+        out_buf = ML::MetalBuffer.new(out_row_count.to_i64 * dim * sizeof(Float32))
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        encode_scatter_rows_by_map(enc, rows_buf, map_buf, out_buf, row_count, out_row_count, dim)
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
+        out_buf.read(out_row_count * dim)
+      end
+
       def weighted_route_reduce_rows(route_rows : Array(Float32),
                                      route_offsets : Array(Int32),
                                      route_counts : Array(Int32),
@@ -3448,6 +3475,22 @@ module ML::GGUF
         enc.dispatch_1d(route_slots * dim, 256)
       end
 
+      private def encode_scatter_rows_by_map(enc : ML::Metal::ComputeEncoder | ML::Metal::GraphEncoder,
+                                             rows_buf : ML::MetalBuffer,
+                                             map_buf : ML::MetalBuffer,
+                                             out_buf : ML::MetalBuffer,
+                                             row_count : Int32,
+                                             out_row_count : Int32,
+                                             dim : Int32) : Nil
+        enc.set_pipeline(scatter_rows_f32_pipeline)
+        enc.set_buffer(rows_buf, 0)
+        enc.set_buffer(map_buf, 1)
+        enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::ReadWrite)
+        enc.set_value(dim.to_u32, 3)
+        enc.set_value(row_count.to_u32, 4)
+        enc.dispatch_1d(row_count * dim, 256)
+      end
+
       private def encode_weighted_route_reduce_rows(enc : ML::Metal::ComputeEncoder | ML::Metal::GraphEncoder,
                                                     route_rows_buf : ML::MetalBuffer,
                                                     route_offsets_buf : ML::MetalBuffer,
@@ -3548,6 +3591,22 @@ module ML::GGUF
         return false if out_buf.size < route_slots.to_i64 * dim * sizeof(Float32)
 
         encode_gather_rows_by_map(enc, rows_buf, map_buf, out_buf, route_slots, dim)
+        true
+      end
+
+      def encode_scatter_rows_by_map_to_buffer(enc : ML::Metal::ComputeEncoder | ML::Metal::GraphEncoder,
+                                               rows_buf : ML::MetalBuffer,
+                                               map_buf : ML::MetalBuffer,
+                                               out_buf : ML::MetalBuffer,
+                                               row_count : Int32,
+                                               out_row_count : Int32,
+                                               dim : Int32) : Bool
+        return false unless row_count > 0 && out_row_count > 0 && dim > 0
+        return false if rows_buf.size < row_count.to_i64 * dim * sizeof(Float32)
+        return false if map_buf.size < row_count.to_i64 * sizeof(Int32)
+        return false if out_buf.size < out_row_count.to_i64 * dim * sizeof(Float32)
+
+        encode_scatter_rows_by_map(enc, rows_buf, map_buf, out_buf, row_count, out_row_count, dim)
         true
       end
 
@@ -3792,6 +3851,12 @@ module ML::GGUF
         }
       end
 
+      private def scatter_rows_f32_pipeline : ML::Metal::ComputePipeline
+        @@scatter_rows_f32_pipeline ||= ML::Metal::PipelineCache.get("gemma4_scatter_rows_f32") {
+          ML::Metal::ComputePipeline.new("gemma4_scatter_rows_f32", GEMMA4_SOURCE)
+        }
+      end
+
       private def weighted_route_reduce_rows_pipeline : ML::Metal::ComputePipeline
         @@weighted_route_reduce_rows_pipeline ||= ML::Metal::PipelineCache.get("gemma4_weighted_route_reduce_rows") {
           ML::Metal::ComputePipeline.new("gemma4_weighted_route_reduce_rows", GEMMA4_SOURCE)
@@ -3845,6 +3910,26 @@ module ML::GGUF
         gather_map.each do |row|
           raise ArgumentError.new("gather map row out of range") unless row >= 0 && row < row_count
         end
+      end
+
+      private def validate_scatter_rows_by_map!(rows : Array(Float32),
+                                                scatter_map : Array(Int32),
+                                                out_row_count : Int32,
+                                                dim : Int32) : Int32
+        raise ArgumentError.new("scatter out_row_count must be positive") unless out_row_count > 0
+        raise ArgumentError.new("scatter dim must be positive") unless dim > 0
+        raise ArgumentError.new("scatter map must not be empty") if scatter_map.empty?
+        raise ArgumentError.new("scatter rows size must be divisible by dim") unless rows.size % dim == 0
+        row_count = rows.size // dim
+        raise ArgumentError.new("scatter map size mismatch") unless scatter_map.size == row_count
+        raise ArgumentError.new("scatter full output row count mismatch") unless row_count == out_row_count
+        seen = Array(Bool).new(out_row_count, false)
+        scatter_map.each do |row|
+          raise ArgumentError.new("scatter map row out of range") unless row >= 0 && row < out_row_count
+          raise ArgumentError.new("scatter map row duplicate") if seen[row]
+          seen[row] = true
+        end
+        row_count
       end
 
       private def validate_weighted_route_reduce_rows!(route_rows : Array(Float32),

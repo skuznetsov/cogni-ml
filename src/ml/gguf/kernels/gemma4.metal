@@ -2424,6 +2424,21 @@ kernel void gemma4_gather_rows_f32(
     out[gid] = rows[row * dim + j];
 }
 
+kernel void gemma4_scatter_rows_f32(
+    device const float* rows        [[buffer(0)]],
+    device const int*   scatter_map [[buffer(1)]],
+    device       float* out         [[buffer(2)]],
+    constant     uint&  dim         [[buffer(3)]],
+    constant     uint&  row_count   [[buffer(4)]],
+    uint gid [[thread_position_in_grid]])
+{
+    if (gid >= row_count * dim) return;
+    const uint row = gid / dim;
+    const uint j = gid - row * dim;
+    const uint dst_row = uint(scatter_map[row]);
+    out[dst_row * dim + j] = rows[gid];
+}
+
 kernel void gemma4_weighted_route_reduce_rows(
     device const float* route_rows    [[buffer(0)]],
     device const int*   route_offsets [[buffer(1)]],

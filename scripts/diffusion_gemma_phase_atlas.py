@@ -39,6 +39,7 @@ ROUTE_FLAGS = [
     "moe_rows",
     "grouped_moe",
     "moe_gpu_gather",
+    "moe_gpu_reduce",
     "attention_out_rows",
     "attention_residual_metal_rows",
     "attention_residual_context_buffer",

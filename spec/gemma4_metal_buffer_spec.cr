@@ -36,6 +36,16 @@ private def gemma4_route_gather_reference(rows : Array(Float32), gather_map : Ar
   out
 end
 
+private def gemma4_route_scatter_reference(rows : Array(Float32), scatter_map : Array(Int32), out_row_count : Int32, dim : Int32) : Array(Float32)
+  out = Array(Float32).new(out_row_count * dim, 0.0_f32)
+  scatter_map.each_with_index do |row, src_row|
+    dim.times do |j|
+      out[row * dim + j] = rows[src_row * dim + j]
+    end
+  end
+  out
+end
+
 private def gemma4_route_reduce_reference(route_rows : Array(Float32),
                                           route_offsets : Array(Int32),
                                           route_counts : Array(Int32),
@@ -77,6 +87,18 @@ describe "Gemma4 route-map Metal helpers" do
     diff.should be <= 1.0e-6_f32
   end
 
+  it "scatters compact row routes by GPU map" do
+    dim = 5
+    out_row_count = 4
+    rows = Array(Float32).new(out_row_count * dim) { |i| Math.cos(i.to_f32 * 0.11_f32).to_f32 }
+    scatter_map = [2_i32, 0_i32, 3_i32, 1_i32]
+    expected = gemma4_route_scatter_reference(rows, scatter_map, out_row_count, dim)
+
+    actual = ML::GGUF::Gemma4Metal.scatter_rows_by_map(rows, scatter_map, out_row_count, dim).not_nil!
+    diff = gemma4_buffer_max_abs_diff(expected, actual)
+    diff.should be <= 1.0e-6_f32
+  end
+
   it "reduces weighted route rows in deterministic row-local slot order" do
     dim = 4
     row_count = 3
@@ -95,6 +117,9 @@ describe "Gemma4 route-map Metal helpers" do
     rows = Array(Float32).new(4) { |i| i.to_f32 }
     expect_raises(ArgumentError, /gather map row out of range/) do
       ML::GGUF::Gemma4Metal.gather_rows_by_map(rows, [2_i32], 2, 2)
+    end
+    expect_raises(ArgumentError, /scatter map row duplicate/) do
+      ML::GGUF::Gemma4Metal.scatter_rows_by_map(rows, [0_i32, 0_i32], 2, 2)
     end
 
     route_rows = Array(Float32).new(4) { |i| i.to_f32 }
@@ -135,6 +160,53 @@ describe "Gemma4 route-map Metal helpers" do
     cmd.commit_and_wait
 
     actual = reduced_buf.read(reduce_rows * dim)
+    diff = gemma4_buffer_max_abs_diff(expected, actual)
+    diff.should be <= 1.0e-6_f32
+  end
+
+  it "encodes subset scatter and route reduce into one graph" do
+    dim = 4
+    row_count = 3
+    route_slots = 5
+    expert0 = Array(Float32).new(2 * dim) { |i| Math.sin(i.to_f32 * 0.17_f32).to_f32 }
+    expert1 = Array(Float32).new(3 * dim) { |i| Math.cos(i.to_f32 * 0.23_f32).to_f32 }
+    expert0_map = [0_i32, 3_i32]
+    expert1_map = [1_i32, 2_i32, 4_i32]
+    route_offsets = [0_i32, 2_i32, 3_i32]
+    route_counts = [2_i32, 1_i32, 2_i32]
+    route_weights = [0.25_f32, 0.75_f32, 1.5_f32, -0.5_f32, 2.0_f32]
+
+    route_rows = Array(Float32).new(route_slots * dim, 0.0_f32)
+    gemma4_route_scatter_reference(expert0, expert0_map, route_slots, dim).each_with_index do |value, i|
+      route_rows[i] = value unless value == 0.0_f32
+    end
+    gemma4_route_scatter_reference(expert1, expert1_map, route_slots, dim).each_with_index do |value, i|
+      route_rows[i] = value unless value == 0.0_f32
+    end
+    expected = gemma4_route_reduce_reference(route_rows, route_offsets, route_counts, route_weights, row_count, dim)
+
+    expert0_buf = ML::MetalBuffer.from_array(expert0)
+    expert1_buf = ML::MetalBuffer.from_array(expert1)
+    expert0_map_buf = gemma4_int32_buffer(expert0_map)
+    expert1_map_buf = gemma4_int32_buffer(expert1_map)
+    offsets_buf = gemma4_int32_buffer(route_offsets)
+    counts_buf = gemma4_int32_buffer(route_counts)
+    weights_buf = ML::MetalBuffer.from_array(route_weights)
+    route_rows_buf = ML::MetalBuffer.new(route_slots.to_i64 * dim * sizeof(Float32))
+    reduced_buf = ML::MetalBuffer.new(row_count.to_i64 * dim * sizeof(Float32))
+
+    graph = ML::Metal::ComputeGraph.new
+    enc = ML::Metal::GraphEncoder.new(graph)
+    ML::GGUF::Gemma4Metal.encode_scatter_rows_by_map_to_buffer(enc, expert0_buf, expert0_map_buf, route_rows_buf, 2, route_slots, dim).should be_true
+    ML::GGUF::Gemma4Metal.encode_scatter_rows_by_map_to_buffer(enc, expert1_buf, expert1_map_buf, route_rows_buf, 3, route_slots, dim).should be_true
+    ML::GGUF::Gemma4Metal.encode_weighted_route_reduce_rows_to_buffer(enc, route_rows_buf, offsets_buf, counts_buf, weights_buf, reduced_buf, row_count, route_slots, dim).should be_true
+    graph.compile!
+
+    cmd = ML::Metal::CommandBuffer.new
+    graph.encode(cmd)
+    cmd.commit_and_wait
+
+    actual = reduced_buf.read(row_count * dim)
     diff = gemma4_buffer_max_abs_diff(expected, actual)
     diff.should be <= 1.0e-6_f32
   end

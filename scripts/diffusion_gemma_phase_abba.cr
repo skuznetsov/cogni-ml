@@ -49,6 +49,7 @@ struct PhaseSample
   getter moe_rows : Bool
   getter grouped_moe : Bool
   getter moe_gpu_gather : Bool
+  getter moe_gpu_reduce : Bool
   getter attention_out_rows : Bool
   getter attention_residual_metal_rows : Bool
   getter attention_residual_context_buffer : Bool
@@ -60,8 +61,8 @@ struct PhaseSample
                  @moe_grouped_gate_up_ms, @moe_grouped_activation_ms,
                  @moe_grouped_down_ms, @moe_grouped_scatter_combine_norm_ms,
                  @combine_scale_ms, @checksum, @shared_rows,
-                 @moe_rows, @grouped_moe, @moe_gpu_gather, @attention_out_rows,
-                 @attention_residual_metal_rows,
+                 @moe_rows, @grouped_moe, @moe_gpu_gather, @moe_gpu_reduce,
+                 @attention_out_rows, @attention_residual_metal_rows,
                  @attention_residual_context_buffer)
   end
 
@@ -102,6 +103,7 @@ TSV_HEADER = [
   "moe_rows",
   "grouped_moe",
   "moe_gpu_gather",
+  "moe_gpu_reduce",
   "attention_out_rows",
   "attention_residual_metal_rows",
   "attention_residual_context_buffer",
@@ -257,6 +259,7 @@ def run_arm(weights : ML::GGUF::DiffusionGemmaWeights,
     grouped_moe: ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows_enabled?(mask.canvas_len),
     moe_gpu_gather: ML::GGUF::DiffusionGemmaCPU.moe_grouped_gpu_gather_enabled?(mask.canvas_len) &&
                     ML::GGUF::DiffusionGemmaCPU.moe_grouped_resident_batch_graph_enabled?(mask.canvas_len),
+    moe_gpu_reduce: ML::GGUF::DiffusionGemmaCPU.moe_grouped_gpu_reduce_enabled?(mask.canvas_len),
     attention_out_rows: ML::GGUF::DiffusionGemmaCPU.attention_out_batch_rows_enabled?(mask.canvas_len),
     attention_residual_metal_rows: ML::GGUF::DiffusionGemmaCPU.attention_residual_metal_rows_enabled?(mask.canvas_len),
     attention_residual_context_buffer: timed.attention_residual_context_buffer,
@@ -278,6 +281,7 @@ def print_sample(sample : PhaseSample, prompt_len : Int32, canvas_len : Int32, m
     sample.moe_rows.to_s,
     sample.grouped_moe.to_s,
     sample.moe_gpu_gather.to_s,
+    sample.moe_gpu_reduce.to_s,
     sample.attention_out_rows.to_s,
     sample.attention_residual_metal_rows.to_s,
     sample.attention_residual_context_buffer.to_s,
