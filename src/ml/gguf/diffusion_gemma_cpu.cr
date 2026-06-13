@@ -1280,6 +1280,7 @@ module ML::GGUF
 
       graph = ML::Metal::ComputeGraph.new
       enc = ML::Metal::GraphEncoder.new(graph)
+      combined_gate_up_enabled = ffn_resident_combined_gate_up_enabled? && !lw.ffn_gate_up_exps_qw.nil?
       return nil unless ffn_resident_step_ok?(Gemma4Metal.encode_rmsnorm_rows_weighted_to_buffer(enc, attn_out_buf, shared_norm_weight_buf, shared_in_buf, row_count, hp.n_embd, hp.rms_eps), il, "shared_norm")
       return nil unless ffn_resident_step_ok?(Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_up_qw, lw.ffn_gate_qw], shared_in_buf, [shared_up_buf, shared_gate_buf], row_count), il, "shared_up_gate", "batch=#{row_count}")
       return nil unless ffn_resident_step_ok?(Gemma4Metal.encode_gelu_mul_to_buffer(enc, shared_gate_buf, shared_up_buf, shared_hidden_buf, row_count * shared_ff), il, "shared_gelu")
@@ -1318,20 +1319,29 @@ module ML::GGUF
           gather_map_buf = ffn_resident_upload_i32_buffer("#{expert_prefix}.gather_map", gather_map, scratch_enabled)
           scatter_map_buf = ffn_resident_upload_i32_buffer("#{expert_prefix}.scatter_map", scatter_map, scratch_enabled)
           input_buf = ffn_resident_scratch_buffer("#{expert_prefix}.input", batch.to_i64 * hp.n_embd * sizeof(Float32), scratch_enabled)
-          gate_buf = ffn_resident_scratch_buffer("#{expert_prefix}.gate", batch.to_i64 * hp.expert_ff * sizeof(Float32), scratch_enabled)
-          up_buf = ffn_resident_scratch_buffer("#{expert_prefix}.up", batch.to_i64 * hp.expert_ff * sizeof(Float32), scratch_enabled)
           hidden_buf = ffn_resident_scratch_buffer("#{expert_prefix}.hidden", batch.to_i64 * hp.expert_ff * sizeof(Float32), scratch_enabled)
           down_buf = ffn_resident_scratch_buffer("#{expert_prefix}.down", batch.to_i64 * hp.n_embd * sizeof(Float32), scratch_enabled)
-          owned_buffers.concat([gather_map_buf, scatter_map_buf, input_buf, gate_buf, up_buf, hidden_buf, down_buf])
+          owned_buffers.concat([gather_map_buf, scatter_map_buf, input_buf, hidden_buf, down_buf])
 
           chunk_detail = "expert=#{expert} chunk=#{chunk_index} batch=#{batch}"
           return nil unless ffn_resident_step_ok?(Gemma4Metal.encode_gather_rows_by_map_to_buffer(enc, moe_in_buf, gather_map_buf, input_buf, row_count, batch, hp.n_embd), il, "expert_gather", chunk_detail)
 
-          gate_qw = expert_gate_qw(lw, hp, expert)
-          up_qw = expert_up_qw(lw, hp, expert)
           down_qw = expert_down_qw(lw, hp, expert)
-          return nil unless ffn_resident_step_ok?(Qwen35Metal.encode_matmul_many_to_buffers(enc, [gate_qw, up_qw], input_buf, [gate_buf, up_buf], batch), il, "expert_gate_up", chunk_detail)
-          return nil unless ffn_resident_step_ok?(Gemma4Metal.encode_gelu_mul_to_buffer(enc, gate_buf, up_buf, hidden_buf, batch * hp.expert_ff), il, "expert_gelu", chunk_detail)
+          if combined_gate_up_enabled
+            gate_up_qw = expert_gate_up_qw(lw, hp, expert)
+            gate_up_buf = ffn_resident_scratch_buffer("#{expert_prefix}.gate_up", batch.to_i64 * hp.expert_ff * 2_i64 * sizeof(Float32), scratch_enabled)
+            owned_buffers << gate_up_buf
+            return nil unless ffn_resident_step_ok?(Qwen35Metal.encode_matmul_to_buffer(enc, gate_up_qw, input_buf, gate_up_buf, batch), il, "expert_gate_up_combined", chunk_detail)
+            return nil unless ffn_resident_step_ok?(Gemma4Metal.encode_gelu_mul_split_to_buffer(enc, gate_up_buf, hidden_buf, batch, hp.expert_ff), il, "expert_gelu_split", chunk_detail)
+          else
+            gate_buf = ffn_resident_scratch_buffer("#{expert_prefix}.gate", batch.to_i64 * hp.expert_ff * sizeof(Float32), scratch_enabled)
+            up_buf = ffn_resident_scratch_buffer("#{expert_prefix}.up", batch.to_i64 * hp.expert_ff * sizeof(Float32), scratch_enabled)
+            owned_buffers.concat([gate_buf, up_buf])
+            gate_qw = expert_gate_qw(lw, hp, expert)
+            up_qw = expert_up_qw(lw, hp, expert)
+            return nil unless ffn_resident_step_ok?(Qwen35Metal.encode_matmul_many_to_buffers(enc, [gate_qw, up_qw], input_buf, [gate_buf, up_buf], batch), il, "expert_gate_up", chunk_detail)
+            return nil unless ffn_resident_step_ok?(Gemma4Metal.encode_gelu_mul_to_buffer(enc, gate_buf, up_buf, hidden_buf, batch * hp.expert_ff), il, "expert_gelu", chunk_detail)
+          end
           return nil unless ffn_resident_step_ok?(Qwen35Metal.encode_matmul_to_buffer(enc, down_qw, hidden_buf, down_buf, batch), il, "expert_down", chunk_detail)
           return nil unless ffn_resident_step_ok?(Gemma4Metal.encode_scatter_rows_by_map_to_buffer(enc, down_buf, scatter_map_buf, route_rows_buf, batch, route_slot_count, hp.n_embd, partition: expert), il, "expert_scatter", chunk_detail)
 
@@ -3055,6 +3065,11 @@ module ML::GGUF
 
     def ffn_resident_graph_expert_chunk_size : Int32
       env_i32("DIFFUSION_GEMMA_FFN_RESIDENT_EXPERT_CHUNK", Qwen35Metal::GEMM_BATCH_THRESHOLD)
+    end
+
+    def ffn_resident_combined_gate_up_enabled? : Bool
+      ENV["DIFFUSION_GEMMA_FFN_RESIDENT_COMBINED_GATE_UP"]? == "1" &&
+        ENV["DIFFUSION_GEMMA_FFN_RESIDENT_COMBINED_GATE_UP_OFF"]? != "1"
     end
 
     def ffn_resident_debug_enabled? : Bool

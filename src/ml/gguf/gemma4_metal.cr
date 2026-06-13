@@ -406,6 +406,7 @@ module ML::GGUF
       @@copy_f32_pipeline : ML::Metal::ComputePipeline?
       @@add_scaled_vec_pipeline : ML::Metal::ComputePipeline?
       @@gelu_mul_pipeline : ML::Metal::ComputePipeline?
+      @@gelu_mul_split_pipeline : ML::Metal::ComputePipeline?
       @@softcap_pipeline : ML::Metal::ComputePipeline?
       @@gather_rows_f32_pipeline : ML::Metal::ComputePipeline?
       @@scatter_rows_f32_pipeline : ML::Metal::ComputePipeline?
@@ -3588,6 +3589,19 @@ module ML::GGUF
         enc.dispatch_1d(count, 256)
       end
 
+      private def encode_gelu_mul_split(enc : ML::Metal::ComputeEncoder | ML::Metal::GraphEncoder,
+                                        gate_up_buf : ML::MetalBuffer,
+                                        out_buf : ML::MetalBuffer,
+                                        batch : Int32,
+                                        ff_dim : Int32) : Nil
+        enc.set_pipeline(gelu_mul_split_pipeline)
+        enc.set_buffer(gate_up_buf, 0)
+        enc.set_buffer(out_buf, 1, ML::Metal::BufferAccess::Write)
+        enc.set_value(ff_dim.to_u32, 2)
+        enc.set_value(batch.to_u32, 3)
+        enc.dispatch_1d(batch * ff_dim, 256)
+      end
+
       def encode_gelu_mul_to_buffer(enc : ML::Metal::ComputeEncoder | ML::Metal::GraphEncoder,
                                     gate_buf : ML::MetalBuffer,
                                     up_buf : ML::MetalBuffer,
@@ -3599,6 +3613,19 @@ module ML::GGUF
         return false if out_buf.size < count.to_i64 * sizeof(Float32)
 
         encode_gelu_mul(enc, gate_buf, up_buf, out_buf, count)
+        true
+      end
+
+      def encode_gelu_mul_split_to_buffer(enc : ML::Metal::ComputeEncoder | ML::Metal::GraphEncoder,
+                                          gate_up_buf : ML::MetalBuffer,
+                                          out_buf : ML::MetalBuffer,
+                                          batch : Int32,
+                                          ff_dim : Int32) : Bool
+        return false unless batch > 0 && ff_dim > 0
+        return false if gate_up_buf.size < batch.to_i64 * ff_dim * 2_i64 * sizeof(Float32)
+        return false if out_buf.size < batch.to_i64 * ff_dim * sizeof(Float32)
+
+        encode_gelu_mul_split(enc, gate_up_buf, out_buf, batch, ff_dim)
         true
       end
 
@@ -3970,6 +3997,12 @@ module ML::GGUF
       private def gelu_mul_pipeline : ML::Metal::ComputePipeline
         @@gelu_mul_pipeline ||= ML::Metal::PipelineCache.get("gemma4_gelu_mul") {
           ML::Metal::ComputePipeline.new("gemma4_gelu_mul", GEMMA4_SOURCE)
+        }
+      end
+
+      private def gelu_mul_split_pipeline : ML::Metal::ComputePipeline
+        @@gelu_mul_split_pipeline ||= ML::Metal::PipelineCache.get("gemma4_gelu_mul_split") {
+          ML::Metal::ComputePipeline.new("gemma4_gelu_mul_split", GEMMA4_SOURCE)
         }
       end
 

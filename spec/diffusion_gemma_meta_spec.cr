@@ -1117,6 +1117,8 @@ describe ML::GGUF::DiffusionGemmaCPU do
     old_ffn_resident_off = ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_OFF"]?
     old_ffn_resident_min = ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MIN_CANVAS"]?
     old_ffn_resident_max = ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MAX_CANVAS"]?
+    old_ffn_combined_gate_up = ENV["DIFFUSION_GEMMA_FFN_RESIDENT_COMBINED_GATE_UP"]?
+    old_ffn_combined_gate_up_off = ENV["DIFFUSION_GEMMA_FFN_RESIDENT_COMBINED_GATE_UP_OFF"]?
     begin
       ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH"] = "1"
       ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MIN_CANVAS"] = "2"
@@ -1135,6 +1137,17 @@ describe ML::GGUF::DiffusionGemmaCPU do
         max_diff = diff if diff > max_diff
       end
       max_diff.should be < 1.0e-3_f32
+
+      ENV["DIFFUSION_GEMMA_FFN_RESIDENT_COMBINED_GATE_UP"] = "1"
+      combined_resident = ML::GGUF::DiffusionGemmaCPU.ffn_residual_rows_resident_graph(w, 0, rows, 2, routes, canvas: true)
+      combined_resident.should_not be_nil
+      combined_actual = combined_resident.not_nil!
+      combined_max_diff = 0.0_f32
+      expected.size.times do |i|
+        diff = (expected[i] - combined_actual[i]).abs
+        combined_max_diff = diff if diff > combined_max_diff
+      end
+      combined_max_diff.should be < 1.0e-3_f32
 
       overfull_rows = rows
       overfull_count = 2
@@ -1196,6 +1209,16 @@ describe ML::GGUF::DiffusionGemmaCPU do
         ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MAX_CANVAS"] = old_ffn_resident_max
       else
         ENV.delete("DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MAX_CANVAS")
+      end
+      if old_ffn_combined_gate_up
+        ENV["DIFFUSION_GEMMA_FFN_RESIDENT_COMBINED_GATE_UP"] = old_ffn_combined_gate_up
+      else
+        ENV.delete("DIFFUSION_GEMMA_FFN_RESIDENT_COMBINED_GATE_UP")
+      end
+      if old_ffn_combined_gate_up_off
+        ENV["DIFFUSION_GEMMA_FFN_RESIDENT_COMBINED_GATE_UP_OFF"] = old_ffn_combined_gate_up_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_FFN_RESIDENT_COMBINED_GATE_UP_OFF")
       end
     end
   end

@@ -2601,6 +2601,25 @@ kernel void gemma4_gelu_mul(
     out[gid] = gelu * up[gid];
 }
 
+kernel void gemma4_gelu_mul_split(
+    device const float* gate_up [[buffer(0)]],
+    device       float* out     [[buffer(1)]],
+    constant     uint&  ff_dim  [[buffer(2)]],
+    constant     uint&  batch   [[buffer(3)]],
+    uint gid [[thread_position_in_grid]])
+{
+    const uint count = ff_dim * batch;
+    if (gid >= count) return;
+    const uint row = gid / ff_dim;
+    const uint col = gid - row * ff_dim;
+    const uint base = row * ff_dim * 2;
+    const float x = gate_up[base + col];
+    const float up = gate_up[base + ff_dim + col];
+    const float arg = clamp(0.7978845608028654f * x * (1.0f + 0.044715f * x * x), -10.0f, 10.0f);
+    const float gelu = 0.5f * x * (1.0f + tanh(arg));
+    out[gid] = gelu * up;
+}
+
 kernel void gemma4_logit_softcap(
     device       float* x     [[buffer(0)]],
     constant     uint&  count [[buffer(1)]],

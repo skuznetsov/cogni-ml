@@ -243,6 +243,34 @@ describe "Gemma4 resident Metal matmul buffers" do
     diff.should be <= 1.0e-6_f32
   end
 
+  it "splits combined gate/up rows before GELU multiply" do
+    batch = 2
+    ff_dim = 64
+    gate = Array(Float32).new(batch * ff_dim) { |i| Math.sin(i.to_f32 * 0.021_f32).to_f32 }
+    up = Array(Float32).new(batch * ff_dim) { |i| Math.cos(i.to_f32 * 0.037_f32).to_f32 }
+    combined = Array(Float32).new(batch * ff_dim * 2, 0.0_f32)
+    batch.times do |row|
+      ff_dim.times do |col|
+        combined[row * ff_dim * 2 + col] = gate[row * ff_dim + col]
+        combined[row * ff_dim * 2 + ff_dim + col] = up[row * ff_dim + col]
+      end
+    end
+
+    expected = ML::GGUF::Gemma4Metal.gelu_mul(gate, up).not_nil!
+    cmd = ML::Metal::CommandBuffer.new
+    enc = ML::Metal::ComputeEncoder.new(cmd)
+    combined_buf = ML::MetalBuffer.from_array(combined)
+    out_buf = ML::MetalBuffer.new(batch.to_i64 * ff_dim * sizeof(Float32))
+    ML::GGUF::Gemma4Metal.encode_gelu_mul_split_to_buffer(enc, combined_buf, out_buf, batch, ff_dim).should be_true
+    enc.end_encoding
+    cmd.commit
+    cmd.wait
+    actual = out_buf.read(batch * ff_dim)
+
+    diff = gemma4_buffer_max_abs_diff(expected, actual)
+    diff.should be <= 1.0e-6_f32
+  end
+
   it "embeds Q6 token-id batches like the existing per-token Metal path" do
     w = ML::GGUF::Gemma4Weights.from_gguf(GEMMA4_METAL_BUFFER_12B_Q4KM)
     token_ids = [42_i32, 43_i32, 44_i32, 45_i32]
