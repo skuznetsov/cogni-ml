@@ -1706,7 +1706,7 @@ module ML::GGUF
       end
 
       moe_rows = nil.as(Array(Float32)?)
-      if moe_ffn_batch_rows_enabled? && mask.canvas_len > 1
+      if moe_ffn_batch_rows_enabled?(mask.canvas_len) && mask.canvas_len > 1
         moe_t0 = Time.instant
         moe_rows = if moe_ffn_grouped_expert_rows_enabled?(mask.canvas_len)
                      moe_ffn_grouped_expert_rows(weights, il, attn_out_rows, mask.canvas_len, routes_by_canvas_row)
@@ -1925,12 +1925,32 @@ module ML::GGUF
       env_i32("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MAX_CANVAS", 0)
     end
 
-    def shared_ffn_batch_rows_enabled?(canvas_len : Int32) : Bool
-      return false unless ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS"]? == "1"
-      return false if ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS_OFF"]? == "1"
-      return false if canvas_len < shared_ffn_batch_min_canvas
-      max_canvas = shared_ffn_batch_max_canvas
+    def grouped_moe_policy_enabled?(canvas_len : Int32) : Bool
+      return false unless ENV["DIFFUSION_GEMMA_GROUPED_MOE_POLICY"]? == "1"
+      return false if ENV["DIFFUSION_GEMMA_GROUPED_MOE_POLICY_OFF"]? == "1"
+      return false if canvas_len < grouped_moe_policy_min_canvas
+      max_canvas = grouped_moe_policy_max_canvas
       return false if max_canvas > 0 && canvas_len > max_canvas
+      true
+    end
+
+    def grouped_moe_policy_min_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_GROUPED_MOE_POLICY_MIN_CANVAS", 4)
+    end
+
+    def grouped_moe_policy_max_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_GROUPED_MOE_POLICY_MAX_CANVAS", 16)
+    end
+
+    def shared_ffn_batch_rows_enabled?(canvas_len : Int32) : Bool
+      return false if ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS_OFF"]? == "1"
+      if ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS"]? == "1"
+        return false if canvas_len < shared_ffn_batch_min_canvas
+        max_canvas = shared_ffn_batch_max_canvas
+        return false if max_canvas > 0 && canvas_len > max_canvas
+        return true
+      end
+      return false unless grouped_moe_policy_enabled?(canvas_len)
       true
     end
 
@@ -1947,12 +1967,21 @@ module ML::GGUF
         ENV["DIFFUSION_GEMMA_MOE_FFN_BATCH_ROWS_OFF"]? != "1"
     end
 
+    def moe_ffn_batch_rows_enabled?(canvas_len : Int32) : Bool
+      return false if ENV["DIFFUSION_GEMMA_MOE_FFN_BATCH_ROWS_OFF"]? == "1"
+      return true if ENV["DIFFUSION_GEMMA_MOE_FFN_BATCH_ROWS"]? == "1"
+      grouped_moe_policy_enabled?(canvas_len)
+    end
+
     def moe_ffn_grouped_expert_rows_enabled?(canvas_len : Int32) : Bool
-      return false unless ENV["DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_ROWS"]? == "1"
       return false if ENV["DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_ROWS_OFF"]? == "1"
-      return false if canvas_len < moe_ffn_grouped_expert_min_canvas
-      max_canvas = moe_ffn_grouped_expert_max_canvas
-      return false if max_canvas > 0 && canvas_len > max_canvas
+      if ENV["DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_ROWS"]? == "1"
+        return false if canvas_len < moe_ffn_grouped_expert_min_canvas
+        max_canvas = moe_ffn_grouped_expert_max_canvas
+        return false if max_canvas > 0 && canvas_len > max_canvas
+        return true
+      end
+      return false unless grouped_moe_policy_enabled?(canvas_len)
       true
     end
 

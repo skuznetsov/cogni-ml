@@ -676,6 +676,85 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
   end
 
+  it "gates the grouped MoE full-route policy bundle by canvas length" do
+    keys = [
+      "DIFFUSION_GEMMA_GROUPED_MOE_POLICY",
+      "DIFFUSION_GEMMA_GROUPED_MOE_POLICY_OFF",
+      "DIFFUSION_GEMMA_GROUPED_MOE_POLICY_MIN_CANVAS",
+      "DIFFUSION_GEMMA_GROUPED_MOE_POLICY_MAX_CANVAS",
+      "DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS",
+      "DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS_OFF",
+      "DIFFUSION_GEMMA_SHARED_FFN_BATCH_MIN_CANVAS",
+      "DIFFUSION_GEMMA_SHARED_FFN_BATCH_MAX_CANVAS",
+      "DIFFUSION_GEMMA_MOE_FFN_BATCH_ROWS",
+      "DIFFUSION_GEMMA_MOE_FFN_BATCH_ROWS_OFF",
+      "DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_ROWS",
+      "DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_ROWS_OFF",
+      "DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_MIN_CANVAS",
+      "DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_MAX_CANVAS",
+    ]
+    old_env = keys.to_h { |key| {key, ENV[key]?} }
+    begin
+      keys.each { |key| ENV.delete(key) }
+
+      ML::GGUF::DiffusionGemmaCPU.grouped_moe_policy_enabled?(8).should be_false
+      ML::GGUF::DiffusionGemmaCPU.shared_ffn_batch_rows_enabled?(8).should be_false
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_batch_rows_enabled?(8).should be_false
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows_enabled?(8).should be_false
+
+      ENV["DIFFUSION_GEMMA_GROUPED_MOE_POLICY"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.grouped_moe_policy_enabled?(2).should be_false
+      ML::GGUF::DiffusionGemmaCPU.grouped_moe_policy_enabled?(4).should be_true
+      ML::GGUF::DiffusionGemmaCPU.grouped_moe_policy_enabled?(16).should be_true
+      ML::GGUF::DiffusionGemmaCPU.grouped_moe_policy_enabled?(32).should be_false
+      ML::GGUF::DiffusionGemmaCPU.shared_ffn_batch_rows_enabled?(8).should be_true
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_batch_rows_enabled?(8).should be_true
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows_enabled?(8).should be_true
+
+      ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.shared_ffn_batch_rows_enabled?(8).should be_false
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_batch_rows_enabled?(8).should be_true
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows_enabled?(8).should be_true
+      ENV.delete("DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS_OFF")
+
+      ENV["DIFFUSION_GEMMA_MOE_FFN_BATCH_ROWS_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_batch_rows_enabled?(8).should be_false
+      ENV.delete("DIFFUSION_GEMMA_MOE_FFN_BATCH_ROWS_OFF")
+
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_ROWS_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows_enabled?(8).should be_false
+      ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_ROWS_OFF")
+
+      ENV["DIFFUSION_GEMMA_GROUPED_MOE_POLICY_MIN_CANVAS"] = "8"
+      ENV["DIFFUSION_GEMMA_GROUPED_MOE_POLICY_MAX_CANVAS"] = "8"
+      ML::GGUF::DiffusionGemmaCPU.grouped_moe_policy_enabled?(4).should be_false
+      ML::GGUF::DiffusionGemmaCPU.grouped_moe_policy_enabled?(8).should be_true
+      ML::GGUF::DiffusionGemmaCPU.grouped_moe_policy_enabled?(16).should be_false
+
+      ENV["DIFFUSION_GEMMA_GROUPED_MOE_POLICY_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.grouped_moe_policy_enabled?(8).should be_false
+      ML::GGUF::DiffusionGemmaCPU.shared_ffn_batch_rows_enabled?(8).should be_false
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_batch_rows_enabled?(8).should be_false
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows_enabled?(8).should be_false
+
+      ENV.delete("DIFFUSION_GEMMA_GROUPED_MOE_POLICY")
+      ENV.delete("DIFFUSION_GEMMA_GROUPED_MOE_POLICY_OFF")
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_ROWS"] = "1"
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_MIN_CANVAS"] = "2"
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_MAX_CANVAS"] = "2"
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows_enabled?(2).should be_true
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows_enabled?(4).should be_false
+    ensure
+      old_env.each do |key, value|
+        if value
+          ENV[key] = value.not_nil!
+        else
+          ENV.delete(key)
+        end
+      end
+    end
+  end
+
   it "gates prompt materialization row batching by prompt length env policy" do
     old_enabled = ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS"]?
     old_off = ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS_OFF"]?
