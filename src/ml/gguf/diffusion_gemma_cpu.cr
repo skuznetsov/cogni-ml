@@ -1241,7 +1241,7 @@ module ML::GGUF
           row = assignment[0]
           src_offset = row * hp.n_embd
           dst_offset = batch_row * hp.n_embd
-          hp.n_embd.times { |i| ffn_inputs[dst_offset + i] = ffn_in_rows[src_offset + i] }
+          (ffn_inputs.to_unsafe + dst_offset).copy_from(ffn_in_rows.to_unsafe + src_offset, hp.n_embd)
         end
         prep_ms += (Time.instant - gather_t0).total_milliseconds
 
