@@ -3481,11 +3481,12 @@ module ML::GGUF
                                              out_buf : ML::MetalBuffer,
                                              row_count : Int32,
                                              out_row_count : Int32,
-                                             dim : Int32) : Nil
+                                             dim : Int32,
+                                             partition : Int32 = -1) : Nil
         enc.set_pipeline(scatter_rows_f32_pipeline)
         enc.set_buffer(rows_buf, 0)
         enc.set_buffer(map_buf, 1)
-        enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::ReadWrite)
+        enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::ReadWrite, partition: partition)
         enc.set_value(dim.to_u32, 3)
         enc.set_value(row_count.to_u32, 4)
         enc.dispatch_1d(row_count * dim, 256)
@@ -3635,13 +3636,14 @@ module ML::GGUF
                                                out_buf : ML::MetalBuffer,
                                                row_count : Int32,
                                                out_row_count : Int32,
-                                               dim : Int32) : Bool
+                                               dim : Int32,
+                                               partition : Int32 = -1) : Bool
         return false unless row_count > 0 && out_row_count > 0 && dim > 0
         return false if rows_buf.size < row_count.to_i64 * dim * sizeof(Float32)
         return false if map_buf.size < row_count.to_i64 * sizeof(Int32)
         return false if out_buf.size < out_row_count.to_i64 * dim * sizeof(Float32)
 
-        encode_scatter_rows_by_map(enc, rows_buf, map_buf, out_buf, row_count, out_row_count, dim)
+        encode_scatter_rows_by_map(enc, rows_buf, map_buf, out_buf, row_count, out_row_count, dim, partition)
         true
       end
 

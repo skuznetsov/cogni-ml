@@ -1313,7 +1313,7 @@ module ML::GGUF
         return nil unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [gate_qw, up_qw], input_buf, [gate_buf, up_buf], batch)
         return nil unless Gemma4Metal.encode_gelu_mul_to_buffer(enc, gate_buf, up_buf, hidden_buf, batch * hp.expert_ff)
         return nil unless Qwen35Metal.encode_matmul_to_buffer(enc, down_qw, hidden_buf, down_buf, batch)
-        return nil unless Gemma4Metal.encode_scatter_rows_by_map_to_buffer(enc, down_buf, scatter_map_buf, route_rows_buf, batch, route_slot_count, hp.n_embd)
+        return nil unless Gemma4Metal.encode_scatter_rows_by_map_to_buffer(enc, down_buf, scatter_map_buf, route_rows_buf, batch, route_slot_count, hp.n_embd, partition: expert)
       end
 
       return nil unless Gemma4Metal.encode_weighted_route_reduce_rows_to_buffer(enc, route_rows_buf, route_offsets_buf, route_counts_buf, route_weights_buf, moe_reduced_buf, row_count, route_slot_count, hp.n_embd)
@@ -1972,7 +1972,7 @@ module ML::GGUF
         return nil unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [gate_qw, up_qw], input_buf, [gate_buf, up_buf], batch)
         return nil unless Gemma4Metal.encode_gelu_mul_to_buffer(enc, gate_buf, up_buf, hidden_buf, batch * hp.expert_ff)
         return nil unless Qwen35Metal.encode_matmul_to_buffer(enc, down_qw, hidden_buf, down_buf, batch)
-        return nil unless Gemma4Metal.encode_scatter_rows_by_map_to_buffer(enc, down_buf, scatter_map_buf, route_rows_buf, batch, route_slot_count, hp.n_embd)
+        return nil unless Gemma4Metal.encode_scatter_rows_by_map_to_buffer(enc, down_buf, scatter_map_buf, route_rows_buf, batch, route_slot_count, hp.n_embd, partition: expert)
       end
       return nil unless Gemma4Metal.encode_weighted_route_reduce_rows_to_buffer(enc, route_rows_buf, route_offsets_buf, route_counts_buf, route_weights_buf, reduced_buf, row_count, route_slot_count, hp.n_embd)
 
