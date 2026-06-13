@@ -502,8 +502,29 @@ describe ML::GGUF::DiffusionGemmaCPU do
     full_projected.all?(&.zero?).should be_true
     ML::GGUF::DiffusionGemmaCPU.attention_residual_from_context(w, 5, x, full_context).should eq(x)
 
+    swa_context_rows = swa_context + swa_context
+    swa_projected_rows = ML::GGUF::DiffusionGemmaCPU.attention_output_project_rows(w, 0, swa_context_rows, 2)
+    swa_projected_rows.size.should eq(2 * hp.n_embd)
+    swa_projected_rows.all?(&.zero?).should be_true
+    ML::GGUF::DiffusionGemmaCPU.attention_residual_from_context_rows(w, 0, x + x, swa_context_rows, 2).should eq(x + x)
+
+    full_context_rows = full_context + full_context
+    full_projected_rows = ML::GGUF::DiffusionGemmaCPU.attention_output_project_rows(w, 5, full_context_rows, 2)
+    full_projected_rows.size.should eq(2 * hp.n_embd)
+    full_projected_rows.all?(&.zero?).should be_true
+    ML::GGUF::DiffusionGemmaCPU.attention_residual_from_context_rows(w, 5, x + x, full_context_rows, 2).should eq(x + x)
+
     expect_raises(ArgumentError, /attention context size mismatch/) do
       ML::GGUF::DiffusionGemmaCPU.attention_output_project(w, 0, [0.0_f32])
+    end
+    expect_raises(ArgumentError, /row_count must be positive/) do
+      ML::GGUF::DiffusionGemmaCPU.attention_output_project_rows(w, 0, swa_context_rows, 0)
+    end
+    expect_raises(ArgumentError, /attention context rows size mismatch/) do
+      ML::GGUF::DiffusionGemmaCPU.attention_output_project_rows(w, 0, [0.0_f32], 2)
+    end
+    expect_raises(ArgumentError, /attention residual rows input size mismatch/) do
+      ML::GGUF::DiffusionGemmaCPU.attention_residual_from_context_rows(w, 0, x, swa_context_rows, 2)
     end
   end
 

@@ -855,6 +855,19 @@ module ML::GGUF
       prompt_projection_matmul(weights.layers[il].attn_output_qw, context, 1)
     end
 
+    def attention_output_project_rows(weights : DiffusionGemmaWeights,
+                                      il : Int32,
+                                      context_rows : Array(Float32),
+                                      row_count : Int32) : Array(Float32)
+      hp = weights.hparams
+      context_dim = hp.n_head * hp.head_dim_for_layer(il)
+      expected = row_count * context_dim
+      raise ArgumentError.new("attention_output_project_rows row_count must be positive") unless row_count > 0
+      raise ArgumentError.new("attention context rows size mismatch at layer #{il}: #{context_rows.size} != #{expected}") unless context_rows.size == expected
+
+      prompt_projection_matmul(weights.layers[il].attn_output_qw, context_rows, row_count)
+    end
+
     def attention_residual_from_context(weights : DiffusionGemmaWeights,
                                         il : Int32,
                                         x : Array(Float32),
@@ -866,6 +879,26 @@ module ML::GGUF
       projected = attention_output_project(weights, il, context)
       normed = Gemma4CPU.rms_norm(projected, lw.post_attention_norm, hp.rms_eps)
       Array(Float32).new(hp.n_embd) { |i| x[i] + normed[i] }
+    end
+
+    def attention_residual_from_context_rows(weights : DiffusionGemmaWeights,
+                                             il : Int32,
+                                             x_rows : Array(Float32),
+                                             context_rows : Array(Float32),
+                                             row_count : Int32) : Array(Float32)
+      hp = weights.hparams
+      lw = weights.layers[il]
+      expected = row_count * hp.n_embd
+      raise ArgumentError.new("attention_residual_from_context_rows row_count must be positive") unless row_count > 0
+      raise ArgumentError.new("attention residual rows input size mismatch") unless x_rows.size == expected
+
+      result = attention_output_project_rows(weights, il, context_rows, row_count)
+      row_count.times do |row|
+        offset = row * hp.n_embd
+        fast_rms_norm_slice!(result, offset, hp.n_embd, lw.post_attention_norm, hp.rms_eps)
+        hp.n_embd.times { |i| result[offset + i] += x_rows[offset + i] }
+      end
+      result
     end
 
     # Dense shared FFN branch inside DiffusionGemma's Gemma4-MoE block. This is
@@ -1404,6 +1437,7 @@ module ML::GGUF
       combine_scale_ms = 0.0
       result = Array(Float32).new(canvas_size, 0.0_f32)
       attn_out_rows = Array(Float32).new(canvas_size, 0.0_f32)
+      context_rows = attention_out_batch_rows_enabled? && mask.canvas_len > 1 ? Array(Float32).new(mask.canvas_len * q_context_dim, 0.0_f32) : nil
       mask.canvas_len.times do |canvas_pos|
         x = canvas_rows[canvas_pos * hp.n_embd, hp.n_embd]
         context_t0 = Time.instant
@@ -1421,12 +1455,22 @@ module ML::GGUF
           context_value_ms += timing.value_ms
         end
 
+        if batched_context_rows = context_rows
+          copy_row!(batched_context_rows, canvas_pos, q_context_dim, context)
+        else
+          attention_t0 = Time.instant
+          projected = attention_output_project(weights, il, context)
+          normed = Gemma4CPU.rms_norm(projected, lw.post_attention_norm, hp.rms_eps)
+          attn_out = Array(Float32).new(hp.n_embd) { |i| x[i] + normed[i] }
+          attention_out_ms += (Time.instant - attention_t0).total_milliseconds
+          copy_row!(attn_out_rows, canvas_pos, hp.n_embd, attn_out)
+        end
+      end
+
+      if batched_context_rows = context_rows
         attention_t0 = Time.instant
-        projected = attention_output_project(weights, il, context)
-        normed = Gemma4CPU.rms_norm(projected, lw.post_attention_norm, hp.rms_eps)
-        attn_out = Array(Float32).new(hp.n_embd) { |i| x[i] + normed[i] }
+        attn_out_rows = attention_residual_from_context_rows(weights, il, canvas_rows, batched_context_rows, mask.canvas_len)
         attention_out_ms += (Time.instant - attention_t0).total_milliseconds
-        copy_row!(attn_out_rows, canvas_pos, hp.n_embd, attn_out)
       end
 
       shared_rows = nil.as(Array(Float32)?)
@@ -1603,6 +1647,11 @@ module ML::GGUF
     def moe_ffn_batch_rows_enabled? : Bool
       ENV["DIFFUSION_GEMMA_MOE_FFN_BATCH_ROWS"]? == "1" &&
         ENV["DIFFUSION_GEMMA_MOE_FFN_BATCH_ROWS_OFF"]? != "1"
+    end
+
+    def attention_out_batch_rows_enabled? : Bool
+      ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS"]? == "1" &&
+        ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS_OFF"]? != "1"
     end
 
     def prompt_projection_metal_enabled? : Bool
