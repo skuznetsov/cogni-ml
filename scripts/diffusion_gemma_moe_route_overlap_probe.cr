@@ -92,6 +92,48 @@ def route_rows(weights : ML::GGUF::DiffusionGemmaWeights,
   routes
 end
 
+def attention_residual_rows(weights : ML::GGUF::DiffusionGemmaWeights,
+                            layer : Int32,
+                            prompt_projections : Array(ML::GGUF::DiffusionGemmaCPU::AttentionProjection),
+                            canvas_rows : Array(Float32),
+                            mask : ML::GGUF::DiffusionGemmaAttentionMask) : Array(Float32)
+  hp = weights.hparams
+  q_context_dim = hp.n_head * hp.head_dim_for_layer(layer)
+  canvas_projections = [] of ML::GGUF::DiffusionGemmaCPU::AttentionProjection
+  mask.canvas_len.times do |canvas_pos|
+    row = canvas_rows[canvas_pos * hp.n_embd, hp.n_embd]
+    canvas_projections << ML::GGUF::DiffusionGemmaCPU.attention_project_normed(
+      weights,
+      layer,
+      row,
+      mask.prompt_len + canvas_pos,
+    )
+  end
+
+  context_rows = Array(Float32).new(mask.canvas_len * q_context_dim, 0.0_f32)
+  mask.canvas_len.times do |canvas_pos|
+    context = ML::GGUF::DiffusionGemmaCPU.attention_context_decode_timed(
+      prompt_projections,
+      canvas_projections,
+      hp,
+      layer,
+      canvas_query_index: canvas_pos,
+      mask: mask,
+    ).context
+    context.size.times do |i|
+      context_rows[canvas_pos * q_context_dim + i] = context[i]
+    end
+  end
+
+  ML::GGUF::DiffusionGemmaCPU.attention_residual_from_context_rows(
+    weights,
+    layer,
+    canvas_rows,
+    context_rows,
+    mask.canvas_len,
+  )
+end
+
 def weighted_overlap(a : Array(ExpertRoute), b : Array(ExpertRoute)) : Float64
   by_expert = Hash(Int32, Float32).new
   a.each { |route| by_expert[route.expert] = route.weight }
@@ -252,7 +294,14 @@ prompt_lengths.each do |prompt_len|
 
     rows = canvas_rows
     max_layers.times do |layer|
-      stats = overlap_stats(route_rows(weights, layer, rows, canvas_len), layer, prompt_len, canvas_len)
+      attn_out_rows = attention_residual_rows(
+        weights,
+        layer,
+        prompt_cache.projections_by_layer[layer],
+        rows,
+        mask,
+      )
+      stats = overlap_stats(route_rows(weights, layer, attn_out_rows, canvas_len), layer, prompt_len, canvas_len)
       if format == "tsv"
         puts stats.values.join('\t')
       else
