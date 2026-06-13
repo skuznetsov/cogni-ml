@@ -4619,7 +4619,7 @@ module ML::GGUF
 
     private def ffn_resident_qw_supported?(qw : QuantWeight, il : Int32, step : String) : Bool
       ok = case qw.type
-           when .q4_k?, .q5_k?, .q6_k?, .q8_0?, .iq4_nl?, .f32?
+           when .q4_k?, .q5_0?, .q5_k?, .q6_k?, .q8_0?, .iq4_nl?, .f32?
              true
            else
              false

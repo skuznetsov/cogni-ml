@@ -23,9 +23,11 @@ module ML
       Q4K_BLOCK_BYTES    = 144
       Q5K_BLOCK_BYTES    = 176
       Q6K_BLOCK_BYTES    = 210
+      Q5_0_BLOCK_BYTES   =  22
       Q8_0_BLOCK_BYTES   =  34
       IQ4_NL_BLOCK_BYTES =  18
       QK_K               = 256
+      Q5_0_QK            =  32
       Q8_0_QK            =  32
       IQ4_NL_QK          =  32
 
@@ -36,6 +38,8 @@ module ML
       MV_Q5_NR0             =  1
       MV_Q6_NSG             =  2
       MV_Q6_NR0             =  1
+      MV_Q5_0_NSG           =  4
+      MV_Q5_0_NR0           =  1
       MV_Q8_NSG             =  4
       MV_Q8_NR0             =  1
       MV_IQ4_NL_NSG         =  2
@@ -222,6 +226,7 @@ module ML
         @@mv5_pipeline  : ML::Metal::ComputePipeline?
         @@mv6_pipeline  : ML::Metal::ComputePipeline?
         @@mv6_add_pipeline : ML::Metal::ComputePipeline?
+        @@mv_q5_0_pipeline : ML::Metal::ComputePipeline?
         @@mv8_pipeline  : ML::Metal::ComputePipeline?
         @@mv8_add_pipeline : ML::Metal::ComputePipeline?
         @@mv8_dual_pipeline : ML::Metal::ComputePipeline?
@@ -1221,6 +1226,12 @@ module ML
           }
         end
 
+        private def self.mv_q5_0_pipeline : ML::Metal::ComputePipeline
+          @@mv_q5_0_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q5_0_f32") {
+            ML::Metal::ComputePipeline.new("simd_mv_q5_0_f32", GEMM_Q56K_SOURCE)
+          }
+        end
+
         private def self.mv8_add_pipeline : ML::Metal::ComputePipeline
           @@mv8_add_pipeline ||= ML::Metal::PipelineCache.get("simd_mv_q8_0_f32_add") {
             ML::Metal::ComputePipeline.new("simd_mv_q8_0_f32_add", GEMM_Q56K_SOURCE)
@@ -1735,6 +1746,7 @@ module ML
         private def self.gemv_pipeline_for(qw : QuantWeight) : ML::Metal::ComputePipeline?
           case qw.type
           when .q4_k? then mv_pipeline
+          when .q5_0? then mv_q5_0_pipeline
           when .q5_k? then mv5_pipeline
           when .q6_k? then mv6_pipeline
           when .q8_0? then mv8_pipeline
@@ -1755,6 +1767,8 @@ module ML
 
         private def self.gemv_rows_per_tg_for(pipeline : ML::Metal::ComputePipeline) : Int32
           case pipeline
+          when .same?(mv_q5_0_pipeline)
+            MV_Q5_0_NSG * MV_Q5_0_NR0
           when .same?(mv5_pipeline)
             MV_Q5_NSG * MV_Q5_NR0
           when .same?(mv6_pipeline), .same?(mv6_add_pipeline)
@@ -1772,6 +1786,8 @@ module ML
 
         private def self.gemv_threads_per_tg_for(pipeline : ML::Metal::ComputePipeline) : Int32
           case pipeline
+          when .same?(mv_q5_0_pipeline)
+            MV_Q5_0_NSG * 32
           when .same?(mv8_pipeline), .same?(mv8_add_pipeline), .same?(mv8_top1_tiles_pipeline), .same?(mv8_top2_tiles_pipeline)
             MV_Q8_NSG * 32
           when .same?(mv_iq4_nl_pipeline)
@@ -1785,6 +1801,8 @@ module ML
 
         private def self.gemv_profile_quant(pipeline : ML::Metal::ComputePipeline) : {String, Int32, Int32}
           case pipeline
+          when .same?(mv_q5_0_pipeline)
+            {"Q5_0", Q5_0_BLOCK_BYTES, Q5_0_QK}
           when .same?(mv5_pipeline)
             {"Q5_K", Q5K_BLOCK_BYTES, QK_K}
           when .same?(mv6_pipeline), .same?(mv6_add_pipeline), .same?(mv6_top1_tiles_pipeline), .same?(mv6_top2_tiles_pipeline)
@@ -11029,6 +11047,20 @@ module ML
           matmul_gemv_buf(mv8_pipeline, x, buf, off, in_dim, out_dim, batch)
         end
 
+        def self.matmul_q5_0(x : Array(Float32),
+                             w_raw : Bytes,
+                             in_dim : Int32,
+                             out_dim : Int32,
+                             batch : Int32) : Array(Float32)
+          raise "in_dim must be multiple of #{Q5_0_QK}: got #{in_dim}" unless in_dim % Q5_0_QK == 0
+          raise "x size mismatch: expected #{batch * in_dim}, got #{x.size}" unless x.size == batch * in_dim
+          expected_w = (in_dim // Q5_0_QK) * Q5_0_BLOCK_BYTES * out_dim
+          raise "w_raw size mismatch: expected #{expected_w}, got #{w_raw.size}" unless w_raw.size == expected_w
+          ML::Metal::Device.init!
+          buf, off = weight_slot(w_raw)
+          matmul_gemv_buf(mv_q5_0_pipeline, x, buf, off, in_dim, out_dim, batch)
+        end
+
         def self.matmul_iq4_nl(x : Array(Float32),
                                w_raw : Bytes,
                                in_dim : Int32,
@@ -11096,6 +11128,7 @@ module ML
           qws.each do |qw|
             pipeline = case qw.type
                        when .q4_k? then mv_pipeline
+                       when .q5_0? then mv_q5_0_pipeline
                        when .q5_k? then mv5_pipeline
                        when .q6_k? then mv6_pipeline
                        when .q8_0? then mv8_pipeline
@@ -11394,6 +11427,8 @@ module ML
             else
               matmul_gemv_buf(mv_pipeline, x, buf, off, qw.in_dim, qw.out_dim, batch)
             end
+          when .q5_0?
+            matmul_gemv_buf(mv_q5_0_pipeline, x, buf, off, qw.in_dim, qw.out_dim, batch)
           when .q5_k?
             if q56_batch_gemm_enabled? && batch > GEMM_BATCH_THRESHOLD
               matmul_q56k_gemm_buf(mm5_pipeline, x, buf, off, qw.in_dim, qw.out_dim, batch)

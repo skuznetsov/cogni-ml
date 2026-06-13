@@ -1200,6 +1200,47 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
   end
 
+  it "projects DiffusionGemma Q5_0 FFN-down weights on Metal like the CPU oracle" do
+    pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
+    next unless ML::GGUF::Qwen35Metal.available?
+
+    w = ML::GGUF::DiffusionGemmaWeights.from_gguf(DIFFUSION_GEMMA_26B_Q4KM)
+    qw = w.layers[3].ffn_down_qw
+    qw.type.q5_0?.should be_true
+    batch = 2
+    x = Array(Float32).new(qw.in_dim * batch) do |i|
+      (Math.sin(i.to_f32 * 0.013_f32) * 0.35_f32 + Math.cos(i.to_f32 * 0.007_f32) * 0.11_f32).to_f32
+    end
+    zeros = Array(Float32).new(qw.out_dim, 0.0_f32)
+
+    expected = ML::GGUF::QuantMatmul.matmul_add(x, batch, qw.in_dim, qw.raw, qw.type, qw.out_dim, zeros)
+    actual = ML::GGUF::Qwen35Metal.matmul(qw, x, batch).not_nil!
+    actual.size.should eq(expected.size)
+    max_diff = 0.0_f32
+    max_rel = 0.0_f32
+    expected.size.times do |i|
+      diff = (expected[i] - actual[i]).abs
+      denom = expected[i].abs > 1.0_f32 ? expected[i].abs : 1.0_f32
+      rel = diff / denom
+      max_diff = diff if diff > max_diff
+      max_rel = rel if rel > max_rel
+    end
+    puts "  [diffusion_gemma_q5_0_ffn_down_metal] max|d|=#{max_diff} max_rel=#{max_rel}"
+    max_diff.should be <= 2.5e-2_f32
+    max_rel.should be <= 2.0e-3_f32
+
+    x_buf = ML::MetalBuffer.from_array(x)
+    out_buf = ML::MetalBuffer.new(batch.to_i64 * qw.out_dim * sizeof(Float32))
+    ML::GGUF::Qwen35Metal.matmul_to_buffer(qw, x_buf, out_buf, batch).should be_true
+    resident = out_buf.read(batch * qw.out_dim)
+    resident_diff = 0.0_f32
+    actual.size.times do |i|
+      diff = (actual[i] - resident[i]).abs
+      resident_diff = diff if diff > resident_diff
+    end
+    resident_diff.should be <= 1.0e-6_f32
+  end
+
   it "keeps Metal attention residual rows equivalent to the existing row path" do
     pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
     next unless ML::GGUF::Gemma4Metal.available?

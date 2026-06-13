@@ -14,6 +14,7 @@ using namespace metal;
 #define FOR_UNROLL _Pragma("clang loop unroll(full)")
 
 constant uint Q56K_QK_K = 256;
+constant uint Q5_0_QK = 32;
 constant uint Q8_0_QK = 32;
 constant uint IQ4_NL_QK = 32;
 
@@ -42,6 +43,8 @@ struct block_iq4_nl_56 {
 
 constant short MV8_NSG = 4;
 constant short MV8_NR0 = 1;
+constant short MV_Q5_0_NSG = 4;
+constant short MV_Q5_0_NR0 = 1;
 constant short MVF32_NSG = 4;
 constant short MVF32_NR0 = 1;
 
@@ -112,6 +115,58 @@ kernel void simd_mv_q8_0_f32(
     }
 
     for (short row = 0; row < MV8_NR0 && first_row + row < out_dim; ++row) {
+        float tot = simd_sum(sumf[row]);
+        if (tiisg == 0) {
+            output[n * out_dim + first_row + row] = tot;
+        }
+    }
+}
+
+kernel void simd_mv_q5_0_f32(
+    device const uint8_t* w_raw   [[buffer(0)]],
+    device const float*   x       [[buffer(1)]],
+    device       float*   output  [[buffer(2)]],
+    constant     uint&    in_dim  [[buffer(3)]],
+    constant     uint&    out_dim [[buffer(4)]],
+    constant     uint&    batch   [[buffer(5)]],
+    uint3  tgpig [[threadgroup_position_in_grid]],
+    ushort tiisg [[thread_index_in_simdgroup]],
+    ushort sgitg [[simdgroup_index_in_threadgroup]])
+{
+    const uint nb = in_dim / Q5_0_QK;
+    const uint first_row = (tgpig.x * MV_Q5_0_NSG + sgitg) * MV_Q5_0_NR0;
+    const uint n = tgpig.y;
+    if (first_row >= out_dim || n >= batch) return;
+
+    const uint row_bytes = nb * 22;
+    device const float * y_base = x + n * in_dim;
+    float sumf[MV_Q5_0_NR0] = {0.f};
+
+    const uint lane = (uint)tiisg;
+    const uint byte = lane & 15u;
+    const bool low_half = lane < 16u;
+
+    for (uint ib = 0; ib < nb; ++ib) {
+        const float y = y_base[ib * Q5_0_QK + lane];
+        for (short row = 0; row < MV_Q5_0_NR0; ++row) {
+            const uint row_id = first_row + row;
+            if (row_id >= out_dim) continue;
+            device const uint8_t * blk = w_raw + row_id * row_bytes + ib * 22;
+            const float d = (float)(*((device const half *)blk));
+            const uint qh =
+                ((uint)blk[2]) |
+                ((uint)blk[3] << 8) |
+                ((uint)blk[4] << 16) |
+                ((uint)blk[5] << 24);
+            const uint packed = (uint)blk[6 + byte];
+            const uint xh = low_half ? (((qh >> byte) << 4) & 0x10u) : ((qh >> (byte + 12u)) & 0x10u);
+            const uint qv = low_half ? ((packed & 0x0fu) | xh) : ((packed >> 4) | xh);
+            const int q = (int)qv - 16;
+            sumf[row] += d * y * (float)q;
+        }
+    }
+
+    for (short row = 0; row < MV_Q5_0_NR0 && first_row + row < out_dim; ++row) {
         float tot = simd_sum(sumf[row]);
         if (tiisg == 0) {
             output[n * out_dim + first_row + row] = tot;
