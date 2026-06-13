@@ -1310,6 +1310,10 @@ describe ML::GGUF::DiffusionGemmaCPU do
     old_off = ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH_OFF"]?
     old_batch_off = ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_BATCH_GRAPH_OFF"]?
     old_batch_max = ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_BATCH_GRAPH_MAX_CANVAS"]?
+    old_gpu_gather = ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER"]?
+    old_gpu_gather_off = ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER_OFF"]?
+    old_gpu_gather_min = ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER_MIN_CANVAS"]?
+    old_gpu_gather_max = ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER_MAX_CANVAS"]?
     begin
       w = ML::GGUF::DiffusionGemmaWeights.from_gguf(DIFFUSION_GEMMA_26B_Q4KM)
       hp = w.hparams
@@ -1331,12 +1335,34 @@ describe ML::GGUF::DiffusionGemmaCPU do
       end
       max_diff.should be < 1.0e-3_f32
 
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER"] = "1"
+      gpu_gather = ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows(w, 0, rows, rows_by_id.size, routes_by_row)
+      gpu_gather.size.should eq(actual.size)
+      max_diff = 0.0_f32
+      actual.size.times do |i|
+        diff = (actual[i] - gpu_gather[i]).abs
+        max_diff = diff if diff > max_diff
+      end
+      max_diff.should be < 1.0e-3_f32
+
       ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_BATCH_GRAPH_MAX_CANVAS"] = "8"
       ML::GGUF::DiffusionGemmaCPU.moe_grouped_resident_batch_graph_enabled?(4).should be_true
       ML::GGUF::DiffusionGemmaCPU.moe_grouped_resident_batch_graph_enabled?(8).should be_true
       ML::GGUF::DiffusionGemmaCPU.moe_grouped_resident_batch_graph_enabled?(16).should be_false
       ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_BATCH_GRAPH_MAX_CANVAS"] = "0"
       ML::GGUF::DiffusionGemmaCPU.moe_grouped_resident_batch_graph_enabled?(16).should be_true
+
+      ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER")
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_gpu_gather_enabled?(4).should be_false
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_gpu_gather_enabled?(4).should be_true
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER_MIN_CANVAS"] = "8"
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER_MAX_CANVAS"] = "8"
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_gpu_gather_enabled?(4).should be_false
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_gpu_gather_enabled?(8).should be_true
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_gpu_gather_enabled?(16).should be_false
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_gpu_gather_enabled?(8).should be_false
     ensure
       if old_enabled
         ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH"] = old_enabled
@@ -1357,6 +1383,26 @@ describe ML::GGUF::DiffusionGemmaCPU do
         ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_BATCH_GRAPH_MAX_CANVAS"] = old_batch_max
       else
         ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_BATCH_GRAPH_MAX_CANVAS")
+      end
+      if old_gpu_gather
+        ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER"] = old_gpu_gather
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER")
+      end
+      if old_gpu_gather_off
+        ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER_OFF"] = old_gpu_gather_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER_OFF")
+      end
+      if old_gpu_gather_min
+        ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER_MIN_CANVAS"] = old_gpu_gather_min
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER_MIN_CANVAS")
+      end
+      if old_gpu_gather_max
+        ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER_MAX_CANVAS"] = old_gpu_gather_max
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER_MAX_CANVAS")
       end
     end
   end
