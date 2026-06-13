@@ -1093,6 +1093,101 @@ module ML::GGUF
       result
     end
 
+    def moe_ffn_grouped_expert_rows(weights : DiffusionGemmaWeights,
+                                    il : Int32,
+                                    attn_out_rows : Array(Float32),
+                                    row_count : Int32,
+                                    routes_by_row : Array(Array(ExpertRoute))? = nil) : Array(Float32)
+      hp = weights.hparams
+      lw = weights.layers[il]
+      expected = row_count * hp.n_embd
+      raise ArgumentError.new("moe_ffn_grouped_expert_rows row_count must be positive") unless row_count > 0
+      raise ArgumentError.new("moe_ffn_grouped_expert_rows input size mismatch") unless attn_out_rows.size == expected
+      if supplied_routes = routes_by_row
+        raise ArgumentError.new("moe_ffn_grouped_expert_rows route row count mismatch") unless supplied_routes.size == row_count
+      end
+      raise ArgumentError.new("down expert scale size mismatch") unless lw.ffn_down_exps_scale.size == hp.expert_count
+
+      ffn_in_rows = attn_out_rows.dup
+      row_count.times do |row|
+        fast_rms_norm_slice!(ffn_in_rows, row * hp.n_embd, hp.n_embd, lw.pre_ffw_norm_2, hp.rms_eps)
+      end
+
+      selected_by_row = Array(Array(ExpertRoute)).new(row_count) do |row|
+        if supplied_routes = routes_by_row
+          supplied_routes[row]
+        else
+          row_offset = row * hp.n_embd
+          route_experts(weights, il, attn_out_rows[row_offset, hp.n_embd])
+        end
+      end
+      selected_by_row.each do |selected|
+        raise ArgumentError.new("moe_ffn_grouped_expert_rows routes must not be empty") if selected.empty?
+      end
+
+      assignments_by_expert = Hash(Int32, Array(Tuple(Int32, Int32, Float32))).new do |hash, expert|
+        hash[expert] = [] of Tuple(Int32, Int32, Float32)
+      end
+      selected_by_row.each_with_index do |selected, row|
+        selected.each_with_index do |route, route_index|
+          assignments_by_expert[route.expert] << {row, route_index, route.weight}
+        end
+      end
+
+      expert_outputs_by_row = selected_by_row.map do |selected|
+        Array(Array(Float32)?).new(selected.size, nil)
+      end
+
+      assignments_by_expert.each do |expert, assignments|
+        batch = assignments.size
+        ffn_inputs = Array(Float32).new(batch * hp.n_embd, 0.0_f32)
+        assignments.each_with_index do |assignment, batch_row|
+          row = assignment[0]
+          src_offset = row * hp.n_embd
+          dst_offset = batch_row * hp.n_embd
+          hp.n_embd.times { |i| ffn_inputs[dst_offset + i] = ffn_in_rows[src_offset + i] }
+        end
+
+        gate_up_qw = expert_gate_up_qw(lw, hp, expert)
+        gate_up_rows = prompt_projection_matmul(gate_up_qw, ffn_inputs, batch)
+        raise ArgumentError.new("expert gate_up rows size mismatch") unless gate_up_rows.size == batch * hp.expert_ff * 2
+
+        hidden_rows = Array(Float32).new(batch * hp.expert_ff, 0.0_f32)
+        batch.times do |batch_row|
+          gate_up_offset = batch_row * hp.expert_ff * 2
+          hidden_offset = batch_row * hp.expert_ff
+          hp.expert_ff.times do |i|
+            hidden_rows[hidden_offset + i] = Gemma4CPU.gelu(gate_up_rows[gate_up_offset + i]) *
+                                             gate_up_rows[gate_up_offset + hp.expert_ff + i]
+          end
+        end
+
+        down_rows = prompt_projection_matmul(expert_down_qw(lw, hp, expert), hidden_rows, batch)
+        raise ArgumentError.new("expert down rows size mismatch") unless down_rows.size == batch * hp.n_embd
+
+        scale = lw.ffn_down_exps_scale[expert]
+        assignments.each_with_index do |assignment, batch_row|
+          row = assignment[0]
+          route_index = assignment[1]
+          src_offset = batch_row * hp.n_embd
+          expert_out = Array(Float32).new(hp.n_embd) { |i| down_rows[src_offset + i] * scale }
+          expert_outputs_by_row[row][route_index] = expert_out
+        end
+      end
+
+      result = Array(Float32).new(expected, 0.0_f32)
+      row_count.times do |row|
+        combined = Array(Float32).new(hp.n_embd, 0.0_f32)
+        selected_by_row[row].each_with_index do |route, route_index|
+          expert_out = expert_outputs_by_row[row][route_index] || raise "missing grouped expert output"
+          hp.n_embd.times { |i| combined[i] += route.weight * expert_out[i] }
+        end
+        normed = Gemma4CPU.rms_norm(combined, lw.post_ffw_norm_2, hp.rms_eps)
+        copy_row!(result, row, hp.n_embd, normed)
+      end
+      result
+    end
+
     def ffn_residual(weights : DiffusionGemmaWeights,
                      il : Int32,
                      attn_out : Array(Float32),
@@ -1490,7 +1585,11 @@ module ML::GGUF
       moe_rows = nil.as(Array(Float32)?)
       if moe_ffn_batch_rows_enabled? && mask.canvas_len > 1
         moe_t0 = Time.instant
-        moe_rows = moe_ffn_rows(weights, il, attn_out_rows, mask.canvas_len, routes_by_canvas_row)
+        moe_rows = if moe_ffn_grouped_expert_rows_enabled?(mask.canvas_len)
+                     moe_ffn_grouped_expert_rows(weights, il, attn_out_rows, mask.canvas_len, routes_by_canvas_row)
+                   else
+                     moe_ffn_rows(weights, il, attn_out_rows, mask.canvas_len, routes_by_canvas_row)
+                   end
         moe_ffn_ms += (Time.instant - moe_t0).total_milliseconds
       end
 
@@ -1666,6 +1765,23 @@ module ML::GGUF
     def moe_ffn_batch_rows_enabled? : Bool
       ENV["DIFFUSION_GEMMA_MOE_FFN_BATCH_ROWS"]? == "1" &&
         ENV["DIFFUSION_GEMMA_MOE_FFN_BATCH_ROWS_OFF"]? != "1"
+    end
+
+    def moe_ffn_grouped_expert_rows_enabled?(canvas_len : Int32) : Bool
+      return false unless ENV["DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_ROWS"]? == "1"
+      return false if ENV["DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_ROWS_OFF"]? == "1"
+      return false if canvas_len < moe_ffn_grouped_expert_min_canvas
+      max_canvas = moe_ffn_grouped_expert_max_canvas
+      return false if max_canvas > 0 && canvas_len > max_canvas
+      true
+    end
+
+    def moe_ffn_grouped_expert_min_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_MIN_CANVAS", 1)
+    end
+
+    def moe_ffn_grouped_expert_max_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_MAX_CANVAS", 0)
     end
 
     def attention_out_batch_rows_enabled?(canvas_len : Int32) : Bool

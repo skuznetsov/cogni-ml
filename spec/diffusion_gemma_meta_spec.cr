@@ -628,6 +628,54 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
   end
 
+  it "gates grouped MoE expert row batching by canvas length env policy" do
+    old_enabled = ENV["DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_ROWS"]?
+    old_off = ENV["DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_ROWS_OFF"]?
+    old_min = ENV["DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_MIN_CANVAS"]?
+    old_max = ENV["DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_MAX_CANVAS"]?
+    begin
+      ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_ROWS")
+      ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_ROWS_OFF")
+      ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_MIN_CANVAS")
+      ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_MAX_CANVAS")
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows_enabled?(8).should be_false
+
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_ROWS"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows_enabled?(2).should be_true
+
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_MIN_CANVAS"] = "4"
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_MAX_CANVAS"] = "8"
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows_enabled?(2).should be_false
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows_enabled?(4).should be_true
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows_enabled?(8).should be_true
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows_enabled?(16).should be_false
+
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_ROWS_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows_enabled?(8).should be_false
+    ensure
+      if old_enabled
+        ENV["DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_ROWS"] = old_enabled
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_ROWS")
+      end
+      if old_off
+        ENV["DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_ROWS_OFF"] = old_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_ROWS_OFF")
+      end
+      if old_min
+        ENV["DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_MIN_CANVAS"] = old_min
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_MIN_CANVAS")
+      end
+      if old_max
+        ENV["DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_MAX_CANVAS"] = old_max
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_EXPERT_MAX_CANVAS")
+      end
+    end
+  end
+
   it "computes the shared dense FFN branch and residual combiner boundary" do
     pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
 
@@ -766,6 +814,39 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
     expect_raises(ArgumentError, /route row count mismatch/) do
       ML::GGUF::DiffusionGemmaCPU.moe_ffn_rows(w, 0, rows, 2, [routes_by_row[0]])
+    end
+  end
+
+  it "keeps grouped MoE expert rows equivalent to row-by-row MoE FFN" do
+    pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
+
+    w = ML::GGUF::DiffusionGemmaWeights.from_gguf(DIFFUSION_GEMMA_26B_Q4KM)
+    hp = w.hparams
+    rows_by_id = (0...4).map { |token_id| ML::GGUF::DiffusionGemmaCPU.zero_sc_canvas_embedding(w, token_id) }
+    rows = rows_by_id.flatten
+    routes_by_row = rows_by_id.map { |row| ML::GGUF::DiffusionGemmaCPU.route_experts(w, 0, row) }
+
+    expected = [] of Float32
+    rows_by_id.each_with_index do |row, i|
+      expected.concat(ML::GGUF::DiffusionGemmaCPU.moe_ffn(w, 0, row, routes_by_row[i]))
+    end
+    actual = ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows(w, 0, rows, rows_by_id.size, routes_by_row)
+    actual.size.should eq(rows_by_id.size * hp.n_embd)
+    max_diff = 0.0_f32
+    expected.size.times do |i|
+      diff = (expected[i] - actual[i]).abs
+      max_diff = diff if diff > max_diff
+    end
+    max_diff.should be < 1.0e-4_f32
+
+    expect_raises(ArgumentError, /row_count must be positive/) do
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows(w, 0, rows, 0)
+    end
+    expect_raises(ArgumentError, /input size mismatch/) do
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows(w, 0, [0.0_f32], rows_by_id.size)
+    end
+    expect_raises(ArgumentError, /route row count mismatch/) do
+      ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows(w, 0, rows, rows_by_id.size, [routes_by_row[0]])
     end
   end
 
