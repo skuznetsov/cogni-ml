@@ -1136,6 +1136,32 @@ describe ML::GGUF::DiffusionGemmaCPU do
       end
       max_diff.should be < 1.0e-3_f32
 
+      overfull_rows = rows
+      overfull_count = 2
+      duplicate_count = (ML::GGUF::Qwen35Metal::GEMM_BATCH_THRESHOLD // overfull_count) + 1
+      duplicate_weight = 1.0_f32 / duplicate_count.to_f32
+      overfull_routes = Array(Array(ML::GGUF::DiffusionGemmaCPU::ExpertRoute)).new(overfull_count) do
+        Array(ML::GGUF::DiffusionGemmaCPU::ExpertRoute).new(duplicate_count) do
+          ML::GGUF::DiffusionGemmaCPU::ExpertRoute.new(0, duplicate_weight)
+        end
+      end
+      ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MIN_CANVAS"] = overfull_count.to_s
+      ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MAX_CANVAS"] = overfull_count.to_s
+
+      overfull_shared = ML::GGUF::DiffusionGemmaCPU.shared_dense_ffn_rows(w, 0, overfull_rows, overfull_count)
+      overfull_moe = ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows(w, 0, overfull_rows, overfull_count, overfull_routes)
+      overfull_expected = ML::GGUF::DiffusionGemmaCPU.ffn_residual_from_parts_rows(w, 0, overfull_rows, overfull_shared, overfull_moe, overfull_count, canvas: true)
+      overfull_resident = ML::GGUF::DiffusionGemmaCPU.ffn_residual_rows_resident_graph(w, 0, overfull_rows, overfull_count, overfull_routes, canvas: true)
+      overfull_resident.should_not be_nil
+      overfull_actual = overfull_resident.not_nil!
+      overfull_actual.size.should eq(overfull_count * hp.n_embd)
+      overfull_max_diff = 0.0_f32
+      overfull_expected.size.times do |i|
+        diff = (overfull_expected[i] - overfull_actual[i]).abs
+        overfull_max_diff = diff if diff > overfull_max_diff
+      end
+      overfull_max_diff.should be < 1.0e-3_f32
+
       ENV.delete("DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH")
       ENV.delete("DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MIN_CANVAS")
       ENV.delete("DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MAX_CANVAS")

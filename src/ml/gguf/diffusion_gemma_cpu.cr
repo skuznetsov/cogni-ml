@@ -1185,6 +1185,14 @@ module ML::GGUF
       shared_ff = lw.ffn_up_qw.out_dim
       raise ArgumentError.new("shared dense ffn gate/up mismatch") unless shared_ff > 0 && lw.ffn_gate_qw.out_dim == shared_ff
       raise ArgumentError.new("shared dense ffn down mismatch") unless lw.ffn_down_qw.in_dim == shared_ff && lw.ffn_down_qw.out_dim == hp.n_embd
+      return nil unless ffn_resident_step_ok?(row_count <= Qwen35Metal::GEMM_BATCH_THRESHOLD, il, "row_batch", "batch=#{row_count}")
+      return nil unless ffn_resident_qw_supported?(lw.ffn_up_qw, il, "shared_up")
+      return nil unless ffn_resident_qw_supported?(lw.ffn_gate_qw, il, "shared_gate")
+      return nil unless ffn_resident_qw_supported?(lw.ffn_down_qw, il, "shared_down")
+      if gate_up_qw = lw.ffn_gate_up_exps_qw
+        return nil unless ffn_resident_qw_supported?(gate_up_qw, il, "expert_gate_up")
+      end
+      return nil unless ffn_resident_qw_supported?(lw.ffn_down_exps_qw, il, "expert_down")
 
       selected_by_row = routes_by_row || route_experts_rows(weights, il, attn_out_rows, row_count)
       selected_by_row.each do |selected|
@@ -1272,55 +1280,70 @@ module ML::GGUF
 
       graph = ML::Metal::ComputeGraph.new
       enc = ML::Metal::GraphEncoder.new(graph)
-      return nil unless Gemma4Metal.encode_rmsnorm_rows_weighted_to_buffer(enc, attn_out_buf, shared_norm_weight_buf, shared_in_buf, row_count, hp.n_embd, hp.rms_eps)
-      return nil unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_up_qw, lw.ffn_gate_qw], shared_in_buf, [shared_up_buf, shared_gate_buf], row_count)
-      return nil unless Gemma4Metal.encode_gelu_mul_to_buffer(enc, shared_gate_buf, shared_up_buf, shared_hidden_buf, row_count * shared_ff)
-      return nil unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.ffn_down_qw, shared_hidden_buf, shared_down_buf, row_count)
-      return nil unless Gemma4Metal.encode_rmsnorm_rows_weighted_to_buffer(enc, shared_down_buf, shared_post_weight_buf, shared_out_buf, row_count, hp.n_embd, hp.rms_eps)
+      return nil unless ffn_resident_step_ok?(Gemma4Metal.encode_rmsnorm_rows_weighted_to_buffer(enc, attn_out_buf, shared_norm_weight_buf, shared_in_buf, row_count, hp.n_embd, hp.rms_eps), il, "shared_norm")
+      return nil unless ffn_resident_step_ok?(Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_up_qw, lw.ffn_gate_qw], shared_in_buf, [shared_up_buf, shared_gate_buf], row_count), il, "shared_up_gate", "batch=#{row_count}")
+      return nil unless ffn_resident_step_ok?(Gemma4Metal.encode_gelu_mul_to_buffer(enc, shared_gate_buf, shared_up_buf, shared_hidden_buf, row_count * shared_ff), il, "shared_gelu")
+      return nil unless ffn_resident_step_ok?(Qwen35Metal.encode_matmul_to_buffer(enc, lw.ffn_down_qw, shared_hidden_buf, shared_down_buf, row_count), il, "shared_down", "batch=#{row_count}")
+      return nil unless ffn_resident_step_ok?(Gemma4Metal.encode_rmsnorm_rows_weighted_to_buffer(enc, shared_down_buf, shared_post_weight_buf, shared_out_buf, row_count, hp.n_embd, hp.rms_eps), il, "shared_post_norm")
 
-      return nil unless Gemma4Metal.encode_rmsnorm_rows_weighted_to_buffer(enc, attn_out_buf, moe_norm_weight_buf, moe_in_buf, row_count, hp.n_embd, hp.rms_eps)
+      return nil unless ffn_resident_step_ok?(Gemma4Metal.encode_rmsnorm_rows_weighted_to_buffer(enc, attn_out_buf, moe_norm_weight_buf, moe_in_buf, row_count, hp.n_embd, hp.rms_eps), il, "moe_norm")
+      max_expert_batch = {ffn_resident_graph_expert_chunk_size, Qwen35Metal::GEMM_BATCH_THRESHOLD}.min
+      max_expert_batch = 1 if max_expert_batch <= 0
+
       assignments_by_expert.keys.sort.each do |expert|
         assignments = assignments_by_expert[expert]
-        batch = batch_by_expert[expert]
-        raise ArgumentError.new("ffn_residual_rows_resident_graph expert batch mismatch") unless batch == assignments.size
+        raise ArgumentError.new("ffn_residual_rows_resident_graph expert batch mismatch") unless batch_by_expert[expert] == assignments.size
 
-        gather_map = Array(Int32).new(batch) do |i|
-          row = assignments[i][0]
-          raise ArgumentError.new("ffn_residual_rows_resident_graph gather row out of range") if row < 0 || row >= row_count
-          row
+        chunk_start = 0
+        chunk_index = 0
+        while chunk_start < assignments.size
+          chunk_size = {max_expert_batch, assignments.size - chunk_start}.min
+          chunk_assignments = assignments[chunk_start, chunk_size]
+          batch = chunk_assignments.size
+          raise ArgumentError.new("ffn_residual_rows_resident_graph expert chunk must not be empty") unless batch > 0
+
+          gather_map = Array(Int32).new(batch) do |i|
+            row = chunk_assignments[i][0]
+            raise ArgumentError.new("ffn_residual_rows_resident_graph gather row out of range") if row < 0 || row >= row_count
+            row
+          end
+          scatter_map = Array(Int32).new(batch) do |i|
+            row = chunk_assignments[i][0]
+            route_index = chunk_assignments[i][1]
+            raise ArgumentError.new("ffn_residual_rows_resident_graph route index out of range") if route_index < 0 || route_index >= selected_by_row[row].size
+            route_offsets_by_row[row] + route_index
+          end
+
+          expert_prefix = "#{scratch_prefix}.expert#{expert}.chunk#{chunk_index}.batch#{batch}"
+          gather_map_buf = ffn_resident_upload_i32_buffer("#{expert_prefix}.gather_map", gather_map, scratch_enabled)
+          scatter_map_buf = ffn_resident_upload_i32_buffer("#{expert_prefix}.scatter_map", scatter_map, scratch_enabled)
+          input_buf = ffn_resident_scratch_buffer("#{expert_prefix}.input", batch.to_i64 * hp.n_embd * sizeof(Float32), scratch_enabled)
+          gate_buf = ffn_resident_scratch_buffer("#{expert_prefix}.gate", batch.to_i64 * hp.expert_ff * sizeof(Float32), scratch_enabled)
+          up_buf = ffn_resident_scratch_buffer("#{expert_prefix}.up", batch.to_i64 * hp.expert_ff * sizeof(Float32), scratch_enabled)
+          hidden_buf = ffn_resident_scratch_buffer("#{expert_prefix}.hidden", batch.to_i64 * hp.expert_ff * sizeof(Float32), scratch_enabled)
+          down_buf = ffn_resident_scratch_buffer("#{expert_prefix}.down", batch.to_i64 * hp.n_embd * sizeof(Float32), scratch_enabled)
+          owned_buffers.concat([gather_map_buf, scatter_map_buf, input_buf, gate_buf, up_buf, hidden_buf, down_buf])
+
+          chunk_detail = "expert=#{expert} chunk=#{chunk_index} batch=#{batch}"
+          return nil unless ffn_resident_step_ok?(Gemma4Metal.encode_gather_rows_by_map_to_buffer(enc, moe_in_buf, gather_map_buf, input_buf, row_count, batch, hp.n_embd), il, "expert_gather", chunk_detail)
+
+          gate_qw = expert_gate_qw(lw, hp, expert)
+          up_qw = expert_up_qw(lw, hp, expert)
+          down_qw = expert_down_qw(lw, hp, expert)
+          return nil unless ffn_resident_step_ok?(Qwen35Metal.encode_matmul_many_to_buffers(enc, [gate_qw, up_qw], input_buf, [gate_buf, up_buf], batch), il, "expert_gate_up", chunk_detail)
+          return nil unless ffn_resident_step_ok?(Gemma4Metal.encode_gelu_mul_to_buffer(enc, gate_buf, up_buf, hidden_buf, batch * hp.expert_ff), il, "expert_gelu", chunk_detail)
+          return nil unless ffn_resident_step_ok?(Qwen35Metal.encode_matmul_to_buffer(enc, down_qw, hidden_buf, down_buf, batch), il, "expert_down", chunk_detail)
+          return nil unless ffn_resident_step_ok?(Gemma4Metal.encode_scatter_rows_by_map_to_buffer(enc, down_buf, scatter_map_buf, route_rows_buf, batch, route_slot_count, hp.n_embd, partition: expert), il, "expert_scatter", chunk_detail)
+
+          chunk_start += chunk_size
+          chunk_index += 1
         end
-        scatter_map = Array(Int32).new(batch) do |i|
-          row = assignments[i][0]
-          route_index = assignments[i][1]
-          raise ArgumentError.new("ffn_residual_rows_resident_graph route index out of range") if route_index < 0 || route_index >= selected_by_row[row].size
-          route_offsets_by_row[row] + route_index
-        end
-
-        expert_prefix = "#{scratch_prefix}.expert#{expert}.batch#{batch}"
-        gather_map_buf = ffn_resident_upload_i32_buffer("#{expert_prefix}.gather_map", gather_map, scratch_enabled)
-        scatter_map_buf = ffn_resident_upload_i32_buffer("#{expert_prefix}.scatter_map", scatter_map, scratch_enabled)
-        input_buf = ffn_resident_scratch_buffer("#{expert_prefix}.input", batch.to_i64 * hp.n_embd * sizeof(Float32), scratch_enabled)
-        gate_buf = ffn_resident_scratch_buffer("#{expert_prefix}.gate", batch.to_i64 * hp.expert_ff * sizeof(Float32), scratch_enabled)
-        up_buf = ffn_resident_scratch_buffer("#{expert_prefix}.up", batch.to_i64 * hp.expert_ff * sizeof(Float32), scratch_enabled)
-        hidden_buf = ffn_resident_scratch_buffer("#{expert_prefix}.hidden", batch.to_i64 * hp.expert_ff * sizeof(Float32), scratch_enabled)
-        down_buf = ffn_resident_scratch_buffer("#{expert_prefix}.down", batch.to_i64 * hp.n_embd * sizeof(Float32), scratch_enabled)
-        owned_buffers.concat([gather_map_buf, scatter_map_buf, input_buf, gate_buf, up_buf, hidden_buf, down_buf])
-
-        return nil unless Gemma4Metal.encode_gather_rows_by_map_to_buffer(enc, moe_in_buf, gather_map_buf, input_buf, row_count, batch, hp.n_embd)
-
-        gate_qw = expert_gate_qw(lw, hp, expert)
-        up_qw = expert_up_qw(lw, hp, expert)
-        down_qw = expert_down_qw(lw, hp, expert)
-        return nil unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [gate_qw, up_qw], input_buf, [gate_buf, up_buf], batch)
-        return nil unless Gemma4Metal.encode_gelu_mul_to_buffer(enc, gate_buf, up_buf, hidden_buf, batch * hp.expert_ff)
-        return nil unless Qwen35Metal.encode_matmul_to_buffer(enc, down_qw, hidden_buf, down_buf, batch)
-        return nil unless Gemma4Metal.encode_scatter_rows_by_map_to_buffer(enc, down_buf, scatter_map_buf, route_rows_buf, batch, route_slot_count, hp.n_embd, partition: expert)
       end
 
-      return nil unless Gemma4Metal.encode_weighted_route_reduce_rows_to_buffer(enc, route_rows_buf, route_offsets_buf, route_counts_buf, route_weights_buf, moe_reduced_buf, row_count, route_slot_count, hp.n_embd)
-      return nil unless Gemma4Metal.encode_rmsnorm_rows_weighted_to_buffer(enc, moe_reduced_buf, moe_post_weight_buf, moe_out_buf, row_count, hp.n_embd, hp.rms_eps)
+      return nil unless ffn_resident_step_ok?(Gemma4Metal.encode_weighted_route_reduce_rows_to_buffer(enc, route_rows_buf, route_offsets_buf, route_counts_buf, route_weights_buf, moe_reduced_buf, row_count, route_slot_count, hp.n_embd), il, "route_reduce")
+      return nil unless ffn_resident_step_ok?(Gemma4Metal.encode_rmsnorm_rows_weighted_to_buffer(enc, moe_reduced_buf, moe_post_weight_buf, moe_out_buf, row_count, hp.n_embd, hp.rms_eps), il, "moe_post_norm")
       scale = canvas ? lw.layer_output_scale[0] : lw.encoder_layer_output_scale[0]
-      return nil unless Gemma4Metal.encode_rmsnorm_sum_add_scaled_rows_to_buffer(enc, shared_out_buf, moe_out_buf, ffn_post_weight_buf, attn_out_buf, out_buf, row_count, hp.n_embd, hp.rms_eps, scale)
+      return nil unless ffn_resident_step_ok?(Gemma4Metal.encode_rmsnorm_sum_add_scaled_rows_to_buffer(enc, shared_out_buf, moe_out_buf, ffn_post_weight_buf, attn_out_buf, out_buf, row_count, hp.n_embd, hp.rms_eps, scale), il, "final_sum_norm")
 
       graph.compile!
       if ENV["DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_STATS"]? == "1"
@@ -3030,6 +3053,14 @@ module ML::GGUF
         ENV["DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH_OFF"]? != "1"
     end
 
+    def ffn_resident_graph_expert_chunk_size : Int32
+      env_i32("DIFFUSION_GEMMA_FFN_RESIDENT_EXPERT_CHUNK", Qwen35Metal::GEMM_BATCH_THRESHOLD)
+    end
+
+    def ffn_resident_debug_enabled? : Bool
+      ENV["DIFFUSION_GEMMA_FFN_RESIDENT_DEBUG"]? == "1"
+    end
+
     def moe_ffn_batch_rows_enabled? : Bool
       ENV["DIFFUSION_GEMMA_MOE_FFN_BATCH_ROWS"]? == "1" &&
         ENV["DIFFUSION_GEMMA_MOE_FFN_BATCH_ROWS_OFF"]? != "1"
@@ -4576,6 +4607,24 @@ module ML::GGUF
       else
         metal_int32_buffer(values)
       end
+    end
+
+    private def ffn_resident_step_ok?(ok : Bool, il : Int32, step : String, detail : String = "") : Bool
+      if !ok && ffn_resident_debug_enabled?
+        suffix = detail.empty? ? "" : " #{detail}"
+        STDERR.puts "diffusion_gemma_ffn_resident_fallback layer=#{il} step=#{step}#{suffix}"
+      end
+      ok
+    end
+
+    private def ffn_resident_qw_supported?(qw : QuantWeight, il : Int32, step : String) : Bool
+      ok = case qw.type
+           when .q4_k?, .q5_k?, .q6_k?, .q8_0?, .iq4_nl?, .f32?
+             true
+           else
+             false
+           end
+      ffn_resident_step_ok?(ok, il, step, "type=#{qw.type}")
     end
 
     private def expert_gate_up_qw(lw : DiffusionGemmaLayerWeights,
