@@ -755,6 +755,69 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
   end
 
+  it "builds a CogniGraph dry plan for grouped MoE expert waves" do
+    routes_by_row = [
+      [
+        ML::GGUF::DiffusionGemmaCPU::ExpertRoute.new(2, 0.4_f32),
+        ML::GGUF::DiffusionGemmaCPU::ExpertRoute.new(5, 0.3_f32),
+      ],
+      [
+        ML::GGUF::DiffusionGemmaCPU::ExpertRoute.new(5, 0.6_f32),
+        ML::GGUF::DiffusionGemmaCPU::ExpertRoute.new(7, 0.2_f32),
+      ],
+      [
+        ML::GGUF::DiffusionGemmaCPU::ExpertRoute.new(2, 0.8_f32),
+      ],
+    ]
+
+    plan = ML::GGUF::DiffusionGemmaCPU.grouped_moe_cognigraph_plan(
+      routes_by_row,
+      hidden_dim: 16,
+      expert_ff: 8,
+      expert_count: 8,
+    )
+    plan.row_count.should eq(3)
+    plan.active_experts.should eq(3)
+    plan.route_slots.should eq(5)
+    plan.n_ops.should eq(15)
+    plan.n_waves.should eq(5)
+    plan.n_barriers.should eq(4)
+    plan.max_wave_width.should eq(3)
+    plan.wave_widths.should eq([3, 3, 3, 3, 3])
+    plan.wave_names[0].should eq(["expert2.gather", "expert5.gather", "expert7.gather"])
+    plan.wave_names[3].should eq(["expert2.down", "expert5.down", "expert7.down"])
+    plan.wave_names[4].should eq(["row0.combine_norm", "row1.combine_norm", "row2.combine_norm"])
+    plan.phi.should eq("Phi=(moe_ffn,3,4,5)")
+
+    shared_expert_plan = ML::GGUF::DiffusionGemmaCPU.grouped_moe_cognigraph_plan(
+      [
+        [ML::GGUF::DiffusionGemmaCPU::ExpertRoute.new(1, 1.0_f32)],
+        [ML::GGUF::DiffusionGemmaCPU::ExpertRoute.new(1, 1.0_f32)],
+      ],
+      hidden_dim: 16,
+      expert_ff: 8,
+      expert_count: 8,
+    )
+    shared_expert_plan.wave_widths.should eq([1, 1, 1, 1, 2])
+    shared_expert_plan.max_wave_width.should eq(2)
+
+    expect_raises(ArgumentError, /routes must not be empty/) do
+      ML::GGUF::DiffusionGemmaCPU.grouped_moe_cognigraph_plan(
+        [[] of ML::GGUF::DiffusionGemmaCPU::ExpertRoute],
+        hidden_dim: 16,
+        expert_ff: 8,
+      )
+    end
+    expect_raises(ArgumentError, /expert id out of range/) do
+      ML::GGUF::DiffusionGemmaCPU.grouped_moe_cognigraph_plan(
+        [[ML::GGUF::DiffusionGemmaCPU::ExpertRoute.new(8, 1.0_f32)]],
+        hidden_dim: 16,
+        expert_ff: 8,
+        expert_count: 8,
+      )
+    end
+  end
+
   it "gates prompt materialization row batching by prompt length env policy" do
     old_enabled = ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS"]?
     old_off = ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS_OFF"]?

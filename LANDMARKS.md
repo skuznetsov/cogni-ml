@@ -6,6 +6,18 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-DIFFUSIONGEMMA-COGNIGRAPH-MOE-PLAN-2026-06-13] Grouped MoE has a CogniGraph dry-plan boundary certificate
+**status:** verified
+**trust:** {F:0.82, G:narrow, R:0.86}
+**context:** ml / DiffusionGemma / CogniGraph / grouped MoE / LTP-WBA
+**evidence:**
+- claim: "DiffusionGemma grouped-MoE route assignments can be projected into a CogniGraph-style read/write/partition dependency plan without changing the numeric MoE path."
+  source: `crystal build --no-codegen src/ml/gguf/diffusion_gemma_cpu.cr spec/diffusion_gemma_meta_spec.cr --error-trace` passed; focused `scripts/run_safe.sh /opt/homebrew/bin/crystal 120 4000 spec spec/diffusion_gemma_meta_spec.cr:758 --error-trace --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"` passed with `1 examples, 0 failures`.
+  verified_at: 2026-06-13
+  decay_trigger: DiffusionGemma grouped-MoE route assignment layout, `ComputeGraph` conflict semantics, or `ExpertRoute` representation changes
+**LTP/WBA:** Window: grouped-MoE `moe_ffn` route slots. Transport: per-expert gather -> gate/up -> activation -> down -> per-row combine/norm. Legal move: dry-plan only, default-off emission through `DIFFUSION_GEMMA_MOE_COGNIGRAPH_PLAN=1`; no math or scheduling promotion yet. Boundary safety: current CPU/Metal grouped MoE output remains the oracle path. Potential certificate for the synthetic test descends to `Phi=(moe_ffn,3,4,5)` with five waves and partition-safe independent experts.
+**decision:** Next step is to use this plan as the certificate for an actual resident GraphEncoder/CogniGraph grouped-MoE corridor. Do not claim runtime acceleration until ABBA total wall and phase attribution descend versus the current grouped path.
+
 ### [LM-DIFFUSIONGEMMA-GGUF-STRUCTURAL-2026-06-10] DiffusionGemma GGUF metadata and structural tensor mapping are verified
 **status:** verified
 **trust:** {F:0.86, G:narrow, R:0.84}

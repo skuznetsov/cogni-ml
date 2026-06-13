@@ -326,6 +326,64 @@ module ML::GGUF
       end
     end
 
+    enum CogniGraphPlanAccess
+      Read
+      Write
+      ReadWrite
+    end
+
+    record CogniGraphPlanBinding,
+      buffer : String,
+      access : CogniGraphPlanAccess,
+      offset : Int64 = 0_i64,
+      length : Int64 = -1_i64,
+      partition : Int32 = -1 do
+      def conflicts?(other : CogniGraphPlanBinding) : Bool
+        return false if @buffer != other.buffer
+        return false if @partition >= 0 && other.partition >= 0 && @partition != other.partition
+        return true if @length < 0 || other.length < 0
+
+        a_end = @offset + @length
+        b_end = other.offset + other.length
+        @offset < b_end && other.offset < a_end
+      end
+    end
+
+    struct CogniGraphPlanOp
+      getter name : String
+      getter bindings : Array(CogniGraphPlanBinding)
+
+      def initialize(@name, @bindings)
+      end
+    end
+
+    struct CogniGraphPlan
+      getter n_ops : Int32
+      getter n_waves : Int32
+      getter n_barriers : Int32
+      getter max_wave_width : Int32
+      getter active_experts : Int32
+      getter route_slots : Int32
+      getter row_count : Int32
+      getter wave_widths : Array(Int32)
+      getter wave_names : Array(Array(String))
+
+      def initialize(@n_ops,
+                     @n_waves,
+                     @n_barriers,
+                     @max_wave_width,
+                     @active_experts,
+                     @route_slots,
+                     @row_count,
+                     @wave_widths,
+                     @wave_names)
+      end
+
+      def phi : String
+        "Phi=(moe_ffn,#{@active_experts},#{@n_barriers},#{@route_slots})"
+      end
+    end
+
     struct AttentionContextTiming
       getter context : Array(Float32)
       getter score_ms : Float64
@@ -1179,6 +1237,89 @@ module ML::GGUF
       moe_ffn_grouped_expert_rows_timed(weights, il, attn_out_rows, row_count, routes_by_row).rows
     end
 
+    def grouped_moe_cognigraph_plan(routes_by_row : Array(Array(ExpertRoute)),
+                                    hidden_dim : Int32,
+                                    expert_ff : Int32,
+                                    expert_count : Int32? = nil) : CogniGraphPlan
+      raise ArgumentError.new("grouped_moe_cognigraph_plan rows must not be empty") if routes_by_row.empty?
+      raise ArgumentError.new("grouped_moe_cognigraph_plan hidden_dim must be positive") unless hidden_dim > 0
+      raise ArgumentError.new("grouped_moe_cognigraph_plan expert_ff must be positive") unless expert_ff > 0
+
+      assignments_by_expert = Hash(Int32, Array(Int32)).new do |hash, expert|
+        hash[expert] = [] of Int32
+      end
+      route_slots = 0
+      routes_by_row.each_with_index do |routes, row|
+        raise ArgumentError.new("grouped_moe_cognigraph_plan routes must not be empty") if routes.empty?
+        routes.each do |route|
+          raise ArgumentError.new("grouped_moe_cognigraph_plan expert id out of range") if route.expert < 0
+          if max_experts = expert_count
+            raise ArgumentError.new("grouped_moe_cognigraph_plan expert id out of range") unless route.expert < max_experts
+          end
+          assignments_by_expert[route.expert] << row
+          route_slots += 1
+        end
+      end
+
+      ops = [] of CogniGraphPlanOp
+      assignments_by_expert.keys.sort.each do |expert|
+        rows = assignments_by_expert[expert]
+        batch = rows.size
+        gather_bindings = rows.map do |row|
+          CogniGraphPlanBinding.new(
+            buffer: "ffn_in_rows",
+            access: CogniGraphPlanAccess::Read,
+            offset: row.to_i64 * hidden_dim,
+            length: hidden_dim.to_i64,
+            partition: row,
+          )
+        end
+        gather_bindings << CogniGraphPlanBinding.new(
+          buffer: "expert_inputs",
+          access: CogniGraphPlanAccess::Write,
+          offset: expert.to_i64 * hidden_dim,
+          length: batch.to_i64 * hidden_dim,
+          partition: expert,
+        )
+        ops << CogniGraphPlanOp.new("expert#{expert}.gather", gather_bindings)
+
+        ops << CogniGraphPlanOp.new("expert#{expert}.gate_up", [
+          CogniGraphPlanBinding.new("expert_inputs", CogniGraphPlanAccess::Read, expert.to_i64 * hidden_dim, batch.to_i64 * hidden_dim, expert),
+          CogniGraphPlanBinding.new("gate_up_rows", CogniGraphPlanAccess::Write, expert.to_i64 * expert_ff * 2_i64, batch.to_i64 * expert_ff * 2_i64, expert),
+        ])
+        ops << CogniGraphPlanOp.new("expert#{expert}.activation", [
+          CogniGraphPlanBinding.new("gate_up_rows", CogniGraphPlanAccess::Read, expert.to_i64 * expert_ff * 2_i64, batch.to_i64 * expert_ff * 2_i64, expert),
+          CogniGraphPlanBinding.new("hidden_rows", CogniGraphPlanAccess::Write, expert.to_i64 * expert_ff, batch.to_i64 * expert_ff, expert),
+        ])
+        ops << CogniGraphPlanOp.new("expert#{expert}.down", [
+          CogniGraphPlanBinding.new("hidden_rows", CogniGraphPlanAccess::Read, expert.to_i64 * expert_ff, batch.to_i64 * expert_ff, expert),
+          CogniGraphPlanBinding.new("expert_outputs", CogniGraphPlanAccess::Write, 0_i64, -1_i64, expert),
+        ])
+      end
+
+      routes_by_row.each_with_index do |routes, row|
+        bindings = routes.map do |route|
+          CogniGraphPlanBinding.new(
+            buffer: "expert_outputs",
+            access: CogniGraphPlanAccess::Read,
+            offset: 0_i64,
+            length: -1_i64,
+            partition: route.expert,
+          )
+        end
+        bindings << CogniGraphPlanBinding.new(
+          buffer: "moe_result_rows",
+          access: CogniGraphPlanAccess::Write,
+          offset: row.to_i64 * hidden_dim,
+          length: hidden_dim.to_i64,
+          partition: row,
+        )
+        ops << CogniGraphPlanOp.new("row#{row}.combine_norm", bindings)
+      end
+
+      compile_cognigraph_plan(ops, assignments_by_expert.size, route_slots, routes_by_row.size)
+    end
+
     def moe_ffn_grouped_expert_rows_timed(weights : DiffusionGemmaWeights,
                                           il : Int32,
                                           attn_out_rows : Array(Float32),
@@ -1216,6 +1357,11 @@ module ML::GGUF
       end
       selected_by_row.each do |selected|
         raise ArgumentError.new("moe_ffn_grouped_expert_rows routes must not be empty") if selected.empty?
+      end
+
+      if grouped_moe_cognigraph_plan_enabled?
+        plan = grouped_moe_cognigraph_plan(selected_by_row, hp.n_embd, hp.expert_ff, hp.expert_count)
+        emit_grouped_moe_cognigraph_plan(il, row_count, plan)
       end
 
       assignments_by_expert = Hash(Int32, Array(Tuple(Int32, Int32))).new do |hash, expert|
@@ -2093,6 +2239,99 @@ module ML::GGUF
 
     def prompt_projection_metal_min_batch : Int32
       (ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH"]? || "16").to_i
+    end
+
+    def grouped_moe_cognigraph_plan_enabled? : Bool
+      ENV["DIFFUSION_GEMMA_MOE_COGNIGRAPH_PLAN"]? == "1" &&
+        ENV["DIFFUSION_GEMMA_MOE_COGNIGRAPH_PLAN_OFF"]? != "1"
+    end
+
+    private record CogniGraphAccessRecord,
+      op_index : Int32,
+      binding : CogniGraphPlanBinding
+
+    private def compile_cognigraph_plan(ops : Array(CogniGraphPlanOp),
+                                        active_experts : Int32,
+                                        route_slots : Int32,
+                                        row_count : Int32) : CogniGraphPlan
+      writers = {} of String => Array(CogniGraphAccessRecord)
+      readers = {} of String => Array(CogniGraphAccessRecord)
+      wave_of = Array(Int32).new(ops.size, 0)
+
+      ops.each_with_index do |op, i|
+        max_dep_wave = -1
+        op.bindings.each do |binding|
+          case binding.access
+          when .read?
+            if ws = writers[binding.buffer]?
+              ws.each do |wr|
+                next unless binding.conflicts?(wr.binding)
+                w = wave_of[wr.op_index]
+                max_dep_wave = w if w > max_dep_wave
+              end
+            end
+            (readers[binding.buffer] ||= [] of CogniGraphAccessRecord) << CogniGraphAccessRecord.new(i, binding)
+          when .write?
+            if rs = readers[binding.buffer]?
+              rs.each do |rd|
+                next unless binding.conflicts?(rd.binding)
+                w = wave_of[rd.op_index]
+                max_dep_wave = w if w > max_dep_wave
+              end
+            end
+            if ws = writers[binding.buffer]?
+              ws.each do |wr|
+                next unless binding.conflicts?(wr.binding)
+                w = wave_of[wr.op_index]
+                max_dep_wave = w if w > max_dep_wave
+              end
+            end
+            (writers[binding.buffer] ||= [] of CogniGraphAccessRecord) << CogniGraphAccessRecord.new(i, binding)
+          when .read_write?
+            if ws = writers[binding.buffer]?
+              ws.each do |wr|
+                next unless binding.conflicts?(wr.binding)
+                w = wave_of[wr.op_index]
+                max_dep_wave = w if w > max_dep_wave
+              end
+            end
+            if rs = readers[binding.buffer]?
+              rs.each do |rd|
+                next unless binding.conflicts?(rd.binding)
+                w = wave_of[rd.op_index]
+                max_dep_wave = w if w > max_dep_wave
+              end
+            end
+            rec = CogniGraphAccessRecord.new(i, binding)
+            (writers[binding.buffer] ||= [] of CogniGraphAccessRecord) << rec
+            (readers[binding.buffer] ||= [] of CogniGraphAccessRecord) << rec
+          end
+        end
+        wave_of[i] = max_dep_wave + 1
+      end
+
+      max_wave = wave_of.max? || 0
+      wave_names = (0..max_wave).map do |w|
+        (0...ops.size).select { |i| wave_of[i] == w }.map { |i| ops[i].name }
+      end
+      wave_widths = wave_names.map(&.size.to_i32)
+      CogniGraphPlan.new(
+        n_ops: ops.size.to_i32,
+        n_waves: wave_names.size.to_i32,
+        n_barriers: {wave_names.size - 1, 0}.max.to_i32,
+        max_wave_width: (wave_widths.max? || 0).to_i32,
+        active_experts: active_experts,
+        route_slots: route_slots,
+        row_count: row_count,
+        wave_widths: wave_widths,
+        wave_names: wave_names,
+      )
+    end
+
+    private def emit_grouped_moe_cognigraph_plan(il : Int32,
+                                                 row_count : Int32,
+                                                 plan : CogniGraphPlan) : Nil
+      STDERR.puts "diffusion_gemma_moe_cognigraph_plan layer=#{il} rows=#{row_count} active_experts=#{plan.active_experts} route_slots=#{plan.route_slots} ops=#{plan.n_ops} waves=#{plan.n_waves} barriers=#{plan.n_barriers} max_wave_width=#{plan.max_wave_width} wave_widths=#{plan.wave_widths.join(",")} #{plan.phi}"
     end
 
     def env_i32(name : String, default : Int32) : Int32
