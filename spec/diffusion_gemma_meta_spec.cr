@@ -676,6 +676,55 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
   end
 
+  it "gates prompt materialization row batching by prompt length env policy" do
+    old_enabled = ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS"]?
+    old_off = ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS_OFF"]?
+    old_min = ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_MIN_PROMPT"]?
+    old_max = ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_MAX_PROMPT"]?
+    begin
+      ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS")
+      ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS_OFF")
+      ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_MIN_PROMPT")
+      ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_MAX_PROMPT")
+      ML::GGUF::DiffusionGemmaCPU.prompt_materialize_batch_rows_enabled?(8).should be_false
+
+      ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.prompt_materialize_batch_rows_enabled?(1).should be_false
+      ML::GGUF::DiffusionGemmaCPU.prompt_materialize_batch_rows_enabled?(2).should be_true
+
+      ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_MIN_PROMPT"] = "4"
+      ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_MAX_PROMPT"] = "8"
+      ML::GGUF::DiffusionGemmaCPU.prompt_materialize_batch_rows_enabled?(2).should be_false
+      ML::GGUF::DiffusionGemmaCPU.prompt_materialize_batch_rows_enabled?(4).should be_true
+      ML::GGUF::DiffusionGemmaCPU.prompt_materialize_batch_rows_enabled?(8).should be_true
+      ML::GGUF::DiffusionGemmaCPU.prompt_materialize_batch_rows_enabled?(16).should be_false
+
+      ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.prompt_materialize_batch_rows_enabled?(8).should be_false
+    ensure
+      if old_enabled
+        ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS"] = old_enabled
+      else
+        ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS")
+      end
+      if old_off
+        ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS_OFF"] = old_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS_OFF")
+      end
+      if old_min
+        ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_MIN_PROMPT"] = old_min
+      else
+        ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_MIN_PROMPT")
+      end
+      if old_max
+        ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_MAX_PROMPT"] = old_max
+      else
+        ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_MAX_PROMPT")
+      end
+    end
+  end
+
   it "computes the shared dense FFN branch and residual combiner boundary" do
     pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
 
@@ -973,6 +1022,122 @@ describe ML::GGUF::DiffusionGemmaCPU do
         max_layers: 1,
         routes_by_layer_by_prompt_row: [] of Array(Array(ML::GGUF::DiffusionGemmaCPU::ExpertRoute)),
       )
+    end
+  end
+
+  it "keeps batched prompt materialization cache parity" do
+    pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
+
+    w = ML::GGUF::DiffusionGemmaWeights.from_gguf(DIFFUSION_GEMMA_26B_Q4KM)
+    il = 0
+    prompt_rows_by_pos = [1, 2, 3, 4].map do |token_id|
+      ML::GGUF::DiffusionGemmaCPU.scaled_embedding_lookup(w, token_id)
+    end
+    prompt_rows = [] of Float32
+    prompt_rows_by_pos.each { |row| prompt_rows.concat(row) }
+    mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: 4, canvas_len: 1, sliding_window: 3)
+    prompt_routes = prompt_rows_by_pos.map do |row|
+      ML::GGUF::DiffusionGemmaCPU.route_experts(w, il, row)[0, 1]
+    end
+
+    old_batch = ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS"]?
+    old_batch_off = ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS_OFF"]?
+    old_batch_min = ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_MIN_PROMPT"]?
+    old_batch_max = ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_MAX_PROMPT"]?
+    old_grouped = ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE"]?
+    old_grouped_off = ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE_OFF"]?
+    old_proj_metal = ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL"]?
+    old_proj_metal_off = ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_OFF"]?
+    old_proj_metal_min = ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH"]?
+    begin
+      ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS")
+      ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS_OFF")
+      ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_MIN_PROMPT")
+      ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_MAX_PROMPT")
+      ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE")
+      ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE_OFF")
+      ENV.delete("DIFFUSION_GEMMA_PROMPT_PROJ_METAL")
+      ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_OFF"] = "1"
+      ENV.delete("DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH")
+      base = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(
+        w,
+        prompt_rows,
+        mask,
+        max_layers: 1,
+        routes_by_layer_by_prompt_row: [prompt_routes],
+      )
+
+      ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS"] = "1"
+      ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE"] = "1"
+      batched = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(
+        w,
+        prompt_rows,
+        mask,
+        max_layers: 1,
+        routes_by_layer_by_prompt_row: [prompt_routes],
+      )
+
+      batched.layers.should eq(base.layers)
+      batched.projections_by_layer.size.should eq(base.projections_by_layer.size)
+      batched.projections_by_layer[0].each_with_index do |projection, pos|
+        base_projection = base.projections_by_layer[0][pos]
+        projection.q.should eq(base_projection.q)
+        projection.k.should eq(base_projection.k)
+        projection.v.should eq(base_projection.v)
+      end
+      batched.final_rows.size.should eq(base.final_rows.size)
+      max_diff = 0.0_f32
+      base.final_rows.size.times do |i|
+        diff = (base.final_rows[i] - batched.final_rows[i]).abs
+        max_diff = diff if diff > max_diff
+      end
+      max_diff.should be < 1.0e-4_f32
+    ensure
+      if old_batch
+        ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS"] = old_batch
+      else
+        ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS")
+      end
+      if old_batch_off
+        ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS_OFF"] = old_batch_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS_OFF")
+      end
+      if old_batch_min
+        ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_MIN_PROMPT"] = old_batch_min
+      else
+        ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_MIN_PROMPT")
+      end
+      if old_batch_max
+        ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_MAX_PROMPT"] = old_batch_max
+      else
+        ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_MAX_PROMPT")
+      end
+      if old_grouped
+        ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE"] = old_grouped
+      else
+        ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE")
+      end
+      if old_grouped_off
+        ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE_OFF"] = old_grouped_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE_OFF")
+      end
+      if old_proj_metal
+        ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL"] = old_proj_metal
+      else
+        ENV.delete("DIFFUSION_GEMMA_PROMPT_PROJ_METAL")
+      end
+      if old_proj_metal_off
+        ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_OFF"] = old_proj_metal_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_PROMPT_PROJ_METAL_OFF")
+      end
+      if old_proj_metal_min
+        ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH"] = old_proj_metal_min
+      else
+        ENV.delete("DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH")
+      end
     end
   end
 

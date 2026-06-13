@@ -1243,6 +1243,17 @@ module ML::GGUF
         raise ArgumentError.new("routes_by_prompt_row size mismatch: #{supplied_routes.size} != #{mask.prompt_len}") unless supplied_routes.size == mask.prompt_len
       end
 
+      if prompt_materialize_batch_rows_enabled?(mask.prompt_len) && mask.prompt_len > 1
+        return layer_forward_prompt_rows_with_projections_batched(
+          weights,
+          il,
+          prompt_rows,
+          prompt_projections,
+          mask,
+          routes_by_prompt_row,
+        )
+      end
+
       result = Array(Float32).new(prompt_size, 0.0_f32)
       mask.prompt_len.times do |pos|
         x = prompt_rows[pos * hp.n_embd, hp.n_embd]
@@ -1255,6 +1266,37 @@ module ML::GGUF
         copy_row!(result, pos, hp.n_embd, layer_row)
       end
       result
+    end
+
+    def layer_forward_prompt_rows_with_projections_batched(weights : DiffusionGemmaWeights,
+                                                           il : Int32,
+                                                           prompt_rows : Array(Float32),
+                                                           prompt_projections : Array(AttentionProjection),
+                                                           mask : DiffusionGemmaAttentionMask,
+                                                           routes_by_prompt_row : Array(Array(ExpertRoute))? = nil) : Array(Float32)
+      hp = weights.hparams
+      prompt_size = mask.prompt_len * hp.n_embd
+      q_context_dim = hp.n_head * hp.head_dim_for_layer(il)
+      raise ArgumentError.new("prompt rows size mismatch: #{prompt_rows.size} != #{prompt_size}") unless prompt_rows.size == prompt_size
+      raise ArgumentError.new("prompt projection count mismatch") unless prompt_projections.size == mask.prompt_len
+      if supplied_routes = routes_by_prompt_row
+        raise ArgumentError.new("routes_by_prompt_row size mismatch: #{supplied_routes.size} != #{mask.prompt_len}") unless supplied_routes.size == mask.prompt_len
+      end
+
+      context_rows = Array(Float32).new(mask.prompt_len * q_context_dim, 0.0_f32)
+      mask.prompt_len.times do |pos|
+        context = attention_context_prompt(prompt_projections, hp, il, query_pos: pos, sliding_window: mask.sliding_window)
+        copy_row!(context_rows, pos, q_context_dim, context)
+      end
+
+      attn_out_rows = attention_residual_from_context_rows(weights, il, prompt_rows, context_rows, mask.prompt_len)
+      shared_rows = shared_dense_ffn_rows(weights, il, attn_out_rows, mask.prompt_len)
+      moe_rows = if prompt_materialize_grouped_moe_enabled?
+                   moe_ffn_grouped_expert_rows(weights, il, attn_out_rows, mask.prompt_len, routes_by_prompt_row)
+                 else
+                   moe_ffn_rows(weights, il, attn_out_rows, mask.prompt_len, routes_by_prompt_row)
+                 end
+      ffn_residual_from_parts_rows(weights, il, attn_out_rows, shared_rows, moe_rows, mask.prompt_len, canvas: false)
     end
 
     def build_prompt_layer_cache(weights : DiffusionGemmaWeights,
@@ -1744,6 +1786,28 @@ module ML::GGUF
 
     def prompt_projection_fused_norm_rope_enabled? : Bool
       ENV["DIFFUSION_GEMMA_FUSED_QK_NORM_ROPE"]? == "1"
+    end
+
+    def prompt_materialize_batch_rows_enabled?(prompt_len : Int32) : Bool
+      return false unless ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS"]? == "1"
+      return false if ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS_OFF"]? == "1"
+      return false if prompt_len < prompt_materialize_batch_min_prompt
+      max_prompt = prompt_materialize_batch_max_prompt
+      return false if max_prompt > 0 && prompt_len > max_prompt
+      true
+    end
+
+    def prompt_materialize_batch_min_prompt : Int32
+      env_i32("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_MIN_PROMPT", 2)
+    end
+
+    def prompt_materialize_batch_max_prompt : Int32
+      env_i32("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_MAX_PROMPT", 0)
+    end
+
+    def prompt_materialize_grouped_moe_enabled? : Bool
+      ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE"]? == "1" &&
+        ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE_OFF"]? != "1"
     end
 
     def shared_ffn_batch_rows_enabled?(canvas_len : Int32) : Bool
@@ -2557,6 +2621,39 @@ module ML::GGUF
                  end
       normed = Gemma4CPU.rms_norm(combined, lw.post_ffw_norm, hp.rms_eps)
       Array(Float32).new(hp.n_embd) { |i| attn_out[i] + normed[i] }
+    end
+
+    def ffn_residual_from_parts_rows(weights : DiffusionGemmaWeights,
+                                     il : Int32,
+                                     attn_out_rows : Array(Float32),
+                                     shared_dense_rows : Array(Float32),
+                                     moe_rows : Array(Float32)?,
+                                     row_count : Int32,
+                                     canvas : Bool) : Array(Float32)
+      hp = weights.hparams
+      lw = weights.layers[il]
+      expected = row_count * hp.n_embd
+      raise ArgumentError.new("ffn residual rows row_count must be positive") unless row_count > 0
+      raise ArgumentError.new("ffn residual rows input size mismatch") unless attn_out_rows.size == expected
+      raise ArgumentError.new("shared_dense rows size mismatch") unless shared_dense_rows.size == expected
+      if moe_branch = moe_rows
+        raise ArgumentError.new("moe rows size mismatch") unless moe_branch.size == expected
+      end
+
+      result = Array(Float32).new(expected, 0.0_f32)
+      scale = canvas ? lw.layer_output_scale[0] : lw.encoder_layer_output_scale[0]
+      moe_branch = moe_rows
+      row_count.times do |row|
+        offset = row * hp.n_embd
+        hp.n_embd.times do |i|
+          result[offset + i] = shared_dense_rows[offset + i] + (moe_branch ? moe_branch[offset + i] : 0.0_f32)
+        end
+        fast_rms_norm_slice!(result, offset, hp.n_embd, lw.post_ffw_norm, hp.rms_eps)
+        hp.n_embd.times do |i|
+          result[offset + i] = (attn_out_rows[offset + i] + result[offset + i]) * scale
+        end
+      end
+      result
     end
 
     def row_rms(x : Array(Float32), offset : Int32, len : Int32) : Float32
