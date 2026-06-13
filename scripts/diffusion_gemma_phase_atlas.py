@@ -36,6 +36,7 @@ PHASE_METRICS = [
 
 ROUTE_FLAGS = [
     "shared_rows",
+    "shared_resident",
     "moe_rows",
     "grouped_moe",
     "moe_router_batch",

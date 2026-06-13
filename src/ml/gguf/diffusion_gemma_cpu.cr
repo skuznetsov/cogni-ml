@@ -1087,6 +1087,11 @@ module ML::GGUF
       expected = row_count * hp.n_embd
       raise ArgumentError.new("shared_dense_ffn_rows row_count must be positive") unless row_count > 0
       raise ArgumentError.new("shared_dense_ffn_rows input size mismatch") unless attn_out_rows.size == expected
+      if shared_ffn_resident_graph_enabled?(row_count)
+        if resident = shared_dense_ffn_rows_resident_graph(weights, il, attn_out_rows, row_count)
+          return resident
+        end
+      end
 
       ffn_in_rows = attn_out_rows.dup
       row_count.times do |row|
@@ -1107,6 +1112,49 @@ module ML::GGUF
         fast_rms_norm_slice!(down_rows, row * hp.n_embd, hp.n_embd, lw.post_ffw_norm_1, hp.rms_eps)
       end
       down_rows
+    end
+
+    def shared_dense_ffn_rows_resident_graph(weights : DiffusionGemmaWeights,
+                                             il : Int32,
+                                             attn_out_rows : Array(Float32),
+                                             row_count : Int32) : Array(Float32)?
+      return nil unless Qwen35Metal.available?
+
+      hp = weights.hparams
+      lw = weights.layers[il]
+      expected = row_count * hp.n_embd
+      raise ArgumentError.new("shared_dense_ffn_rows_resident_graph row_count must be positive") unless row_count > 0
+      raise ArgumentError.new("shared_dense_ffn_rows_resident_graph input size mismatch") unless attn_out_rows.size == expected
+      raise ArgumentError.new("shared dense ffn norm size mismatch") unless lw.ffn_norm.size == hp.n_embd
+      raise ArgumentError.new("shared dense post norm size mismatch") unless lw.post_ffw_norm_1.size == hp.n_embd
+      shared_ff = lw.ffn_up_qw.out_dim
+      raise ArgumentError.new("shared dense ffn gate/up mismatch") unless shared_ff > 0 && lw.ffn_gate_qw.out_dim == shared_ff
+      raise ArgumentError.new("shared dense ffn down mismatch") unless lw.ffn_down_qw.in_dim == shared_ff && lw.ffn_down_qw.out_dim == hp.n_embd
+
+      attn_out_buf = ML::MetalBuffer.from_array(attn_out_rows)
+      norm_weight_buf = ML::MetalBuffer.from_array(lw.ffn_norm)
+      post_weight_buf = ML::MetalBuffer.from_array(lw.post_ffw_norm_1)
+      ffn_in_buf = ML::MetalBuffer.new(expected.to_i64 * sizeof(Float32))
+      up_buf = ML::MetalBuffer.new(row_count.to_i64 * shared_ff * sizeof(Float32))
+      gate_buf = ML::MetalBuffer.new(row_count.to_i64 * shared_ff * sizeof(Float32))
+      hidden_buf = ML::MetalBuffer.new(row_count.to_i64 * shared_ff * sizeof(Float32))
+      down_buf = ML::MetalBuffer.new(expected.to_i64 * sizeof(Float32))
+      out_buf = ML::MetalBuffer.new(expected.to_i64 * sizeof(Float32))
+
+      graph = ML::Metal::ComputeGraph.new
+      enc = ML::Metal::GraphEncoder.new(graph)
+      return nil unless Gemma4Metal.encode_rmsnorm_rows_weighted_to_buffer(enc, attn_out_buf, norm_weight_buf, ffn_in_buf, row_count, hp.n_embd, hp.rms_eps)
+      return nil unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_up_qw, lw.ffn_gate_qw], ffn_in_buf, [up_buf, gate_buf], row_count)
+      return nil unless Gemma4Metal.encode_gelu_mul_to_buffer(enc, gate_buf, up_buf, hidden_buf, row_count * shared_ff)
+      return nil unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.ffn_down_qw, hidden_buf, down_buf, row_count)
+      return nil unless Gemma4Metal.encode_rmsnorm_rows_weighted_to_buffer(enc, down_buf, post_weight_buf, out_buf, row_count, hp.n_embd, hp.rms_eps)
+
+      graph.compile!
+      cmd = ML::Metal::CommandBuffer.new
+      graph.encode(cmd)
+      cmd.commit
+      cmd.wait
+      out_buf.read(expected)
     end
 
     def router_input(weights : DiffusionGemmaWeights,
@@ -2752,6 +2800,23 @@ module ML::GGUF
 
     def shared_ffn_batch_max_canvas : Int32
       env_i32("DIFFUSION_GEMMA_SHARED_FFN_BATCH_MAX_CANVAS", 0)
+    end
+
+    def shared_ffn_resident_graph_enabled?(canvas_len : Int32) : Bool
+      return false unless ENV["DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH"]? == "1"
+      return false if ENV["DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH_OFF"]? == "1"
+      return false if canvas_len < shared_ffn_resident_graph_min_canvas
+      max_canvas = shared_ffn_resident_graph_max_canvas
+      return false if max_canvas > 0 && canvas_len > max_canvas
+      Qwen35Metal.available?
+    end
+
+    def shared_ffn_resident_graph_min_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH_MIN_CANVAS", 8)
+    end
+
+    def shared_ffn_resident_graph_max_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH_MAX_CANVAS", 8)
     end
 
     def moe_ffn_batch_rows_enabled? : Bool

@@ -1038,6 +1038,62 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
     max_diff.should be < 1.0e-4_f32
 
+    if ML::GGUF::Qwen35Metal.available?
+      old_shared_resident = ENV["DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH"]?
+      old_shared_resident_off = ENV["DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH_OFF"]?
+      old_shared_resident_min = ENV["DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH_MIN_CANVAS"]?
+      old_shared_resident_max = ENV["DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH_MAX_CANVAS"]?
+      begin
+        ENV["DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH"] = "1"
+        ENV["DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH_MIN_CANVAS"] = "2"
+        ENV["DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH_MAX_CANVAS"] = "2"
+        resident = ML::GGUF::DiffusionGemmaCPU.shared_dense_ffn_rows(w, 0, rows, 2)
+        resident.size.should eq(actual.size)
+        max_diff = 0.0_f32
+        actual.size.times do |i|
+          diff = (actual[i] - resident[i]).abs
+          max_diff = diff if diff > max_diff
+        end
+        max_diff.should be < 1.0e-3_f32
+
+        ENV.delete("DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH")
+        ENV.delete("DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH_MIN_CANVAS")
+        ENV.delete("DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH_MAX_CANVAS")
+        ML::GGUF::DiffusionGemmaCPU.shared_ffn_resident_graph_enabled?(8).should be_false
+        ENV["DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH"] = "1"
+        ML::GGUF::DiffusionGemmaCPU.shared_ffn_resident_graph_enabled?(4).should be_false
+        ML::GGUF::DiffusionGemmaCPU.shared_ffn_resident_graph_enabled?(8).should be_true
+        ENV["DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH_MIN_CANVAS"] = "8"
+        ENV["DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH_MAX_CANVAS"] = "8"
+        ML::GGUF::DiffusionGemmaCPU.shared_ffn_resident_graph_enabled?(4).should be_false
+        ML::GGUF::DiffusionGemmaCPU.shared_ffn_resident_graph_enabled?(8).should be_true
+        ML::GGUF::DiffusionGemmaCPU.shared_ffn_resident_graph_enabled?(16).should be_false
+        ENV["DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH_OFF"] = "1"
+        ML::GGUF::DiffusionGemmaCPU.shared_ffn_resident_graph_enabled?(8).should be_false
+      ensure
+        if old_shared_resident
+          ENV["DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH"] = old_shared_resident
+        else
+          ENV.delete("DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH")
+        end
+        if old_shared_resident_off
+          ENV["DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH_OFF"] = old_shared_resident_off
+        else
+          ENV.delete("DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH_OFF")
+        end
+        if old_shared_resident_min
+          ENV["DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH_MIN_CANVAS"] = old_shared_resident_min
+        else
+          ENV.delete("DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH_MIN_CANVAS")
+        end
+        if old_shared_resident_max
+          ENV["DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH_MAX_CANVAS"] = old_shared_resident_max
+        else
+          ENV.delete("DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH_MAX_CANVAS")
+        end
+      end
+    end
+
     expect_raises(ArgumentError, /row_count must be positive/) do
       ML::GGUF::DiffusionGemmaCPU.shared_dense_ffn_rows(w, 0, rows, 0)
     end

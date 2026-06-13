@@ -46,6 +46,7 @@ struct PhaseSample
   getter combine_scale_ms : Float64
   getter checksum : Float64
   getter shared_rows : Bool
+  getter shared_resident : Bool
   getter moe_rows : Bool
   getter grouped_moe : Bool
   getter moe_router_batch : Bool
@@ -63,7 +64,7 @@ struct PhaseSample
                  @moe_grouped_gate_up_ms, @moe_grouped_activation_ms,
                  @moe_grouped_down_ms, @moe_grouped_scatter_combine_norm_ms,
                  @combine_scale_ms, @checksum, @shared_rows,
-                 @moe_rows, @grouped_moe, @moe_router_batch,
+                 @shared_resident, @moe_rows, @grouped_moe, @moe_router_batch,
                  @moe_gpu_gather, @moe_gpu_prenorm, @moe_gpu_reduce,
                  @attention_out_rows, @attention_residual_metal_rows,
                  @attention_residual_context_buffer)
@@ -103,6 +104,7 @@ TSV_HEADER = [
   "max_layers",
   "single_route",
   "shared_rows",
+  "shared_resident",
   "moe_rows",
   "grouped_moe",
   "moe_router_batch",
@@ -260,6 +262,7 @@ def run_arm(weights : ML::GGUF::DiffusionGemmaWeights,
     combine_scale_ms: timed.combine_scale_ms,
     checksum: checksum_rows(timed.rows),
     shared_rows: ML::GGUF::DiffusionGemmaCPU.shared_ffn_batch_rows_enabled?(mask.canvas_len),
+    shared_resident: ML::GGUF::DiffusionGemmaCPU.shared_ffn_resident_graph_enabled?(mask.canvas_len),
     moe_rows: ML::GGUF::DiffusionGemmaCPU.moe_ffn_batch_rows_enabled?(mask.canvas_len),
     grouped_moe: ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows_enabled?(mask.canvas_len),
     moe_router_batch: ML::GGUF::DiffusionGemmaCPU.moe_grouped_router_batch_rows_enabled?(mask.canvas_len),
@@ -285,6 +288,7 @@ def print_sample(sample : PhaseSample, prompt_len : Int32, canvas_len : Int32, m
     max_layers.to_s,
     single_route.to_s,
     sample.shared_rows.to_s,
+    sample.shared_resident.to_s,
     sample.moe_rows.to_s,
     sample.grouped_moe.to_s,
     sample.moe_router_batch.to_s,
