@@ -44,12 +44,14 @@ struct PhaseSample
   getter moe_rows : Bool
   getter grouped_moe : Bool
   getter attention_out_rows : Bool
+  getter attention_residual_metal_rows : Bool
 
   def initialize(@arm, @cycle, @sequence_index, @measured, @total_ms, @qkv_ms,
                  @context_ms, @context_score_ms, @context_softmax_ms,
                  @context_value_ms, @attention_out_ms, @shared_ffn_ms,
                  @moe_ffn_ms, @combine_scale_ms, @checksum, @shared_rows,
-                 @moe_rows, @grouped_moe, @attention_out_rows)
+                 @moe_rows, @grouped_moe, @attention_out_rows,
+                 @attention_residual_metal_rows)
   end
 
   def value(metric : String) : Float64
@@ -84,6 +86,7 @@ TSV_HEADER = [
   "moe_rows",
   "grouped_moe",
   "attention_out_rows",
+  "attention_residual_metal_rows",
   "total_ms",
   "qkv_ms",
   "context_ms",
@@ -220,6 +223,7 @@ def run_arm(weights : ML::GGUF::DiffusionGemmaWeights,
     moe_rows: ML::GGUF::DiffusionGemmaCPU.moe_ffn_batch_rows_enabled?,
     grouped_moe: ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows_enabled?(mask.canvas_len),
     attention_out_rows: ML::GGUF::DiffusionGemmaCPU.attention_out_batch_rows_enabled?(mask.canvas_len),
+    attention_residual_metal_rows: ML::GGUF::DiffusionGemmaCPU.attention_residual_metal_rows_enabled?(mask.canvas_len),
   )
 end
 
@@ -238,6 +242,7 @@ def print_sample(sample : PhaseSample, prompt_len : Int32, canvas_len : Int32, m
     sample.moe_rows.to_s,
     sample.grouped_moe.to_s,
     sample.attention_out_rows.to_s,
+    sample.attention_residual_metal_rows.to_s,
     format_f64(sample.total_ms),
     format_f64(sample.qkv_ms),
     format_f64(sample.context_ms),
