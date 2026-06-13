@@ -381,6 +381,7 @@ warmups = 1
 repeats = 4
 trim_per_arm = 0
 sequence = "base variant variant base"
+mirror_sequence = nil.as(String?)
 base_env = ArmEnv.new("")
 variant_env = ArmEnv.new("")
 single_route = true
@@ -397,6 +398,7 @@ OptionParser.parse do |p|
   p.on("--repeats N", "Measured ABBA cycles (default: 4)") { |v| repeats = v.to_i }
   p.on("--trim-per-arm N", "Emit trimmed summaries after dropping N low/high values per arm and metric (default: 0)") { |v| trim_per_arm = v.to_i }
   p.on("--sequence LIST", "Arm sequence per cycle (default: base variant variant base)") { |v| sequence = v }
+  p.on("--mirror-sequence LIST", "Alternate this arm sequence on odd cycles, preserving sequence_index positions") { |v| mirror_sequence = v }
   p.on("--base-env ENV", "Whitespace-separated KEY=VALUE env for base arm") { |v| base_env = ArmEnv.new(v) }
   p.on("--variant-env ENV", "Whitespace-separated KEY=VALUE env for variant arm") { |v| variant_env = ArmEnv.new(v) }
   p.on("--full-routes", "Use model-computed full MoE routes instead of the top-1 smoke shortcut") { single_route = false }
@@ -416,6 +418,12 @@ raise "--trim-per-arm must be non-negative" unless trim_per_arm >= 0
 arms = sequence.split(/\s+/).reject(&.empty?)
 raise "--sequence must contain at least one arm" if arms.empty?
 arms.each { |arm| raise "--sequence arms must be base or variant, got #{arm.inspect}" unless {"base", "variant"}.includes?(arm) }
+mirror_arms = mirror_sequence.try { |raw| raw.split(/\s+/).reject(&.empty?) }
+if alt_arms = mirror_arms
+  raise "--mirror-sequence must contain at least one arm" if alt_arms.empty?
+  alt_arms.each { |arm| raise "--mirror-sequence arms must be base or variant, got #{arm.inspect}" unless {"base", "variant"}.includes?(arm) }
+  raise "--mirror-sequence must have the same length as --sequence" unless alt_arms.size == arms.size
+end
 raise "single-route smoke currently supports --max-layers 1; pass --full-routes for deeper runs" if single_route && max_layers != 1
 
 load_t0 = Time.instant
@@ -458,13 +466,20 @@ puts "# load_ms=#{format_f64(load_ms)}"
 puts "# prompt_cache_ms=#{format_f64(cache_ms)}"
 puts "# base_env=#{base_env.raw.empty? ? "<empty>" : base_env.raw}"
 puts "# variant_env=#{variant_env.raw.empty? ? "<empty>" : variant_env.raw}"
+puts "# sequence=#{sequence}"
+puts "# mirror_sequence=#{mirror_sequence || "<none>"}"
 puts TSV_HEADER.join('\t')
 
 samples = [] of PhaseSample
 total_cycles = warmups + repeats
 total_cycles.times do |cycle|
   measured = cycle >= warmups
-  arms.each_with_index do |arm, sequence_index|
+  cycle_arms = if (alt_arms = mirror_arms) && cycle.odd?
+                 alt_arms
+               else
+                 arms
+               end
+  cycle_arms.each_with_index do |arm, sequence_index|
     env = arm == "base" ? base_env : variant_env
     old = apply_env(env)
     begin

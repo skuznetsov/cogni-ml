@@ -21,6 +21,7 @@ repeats="${REPEATS:-8}"
 trim_per_arm="${TRIM_PER_ARM:-1}"
 full_routes="${FULL_ROUTES:-1}"
 require_quiet="${REQUIRE_QUIET:-0}"
+in_process_mirror="${IN_PROCESS_MIRROR:-0}"
 quiet_ms="${QUIET_MS:-15000}"
 load_threshold="${LOAD_THRESHOLD:-40}"
 total_threshold="${TOTAL_THRESHOLD:-90}"
@@ -124,6 +125,7 @@ print_config() {
   printf 'TRIM_PER_ARM=%s\n' "$trim_per_arm"
   printf 'FULL_ROUTES=%s\n' "$full_routes"
   printf 'REQUIRE_QUIET=%s\n' "$require_quiet"
+  printf 'IN_PROCESS_MIRROR=%s\n' "$in_process_mirror"
   printf 'MIN_SPEEDUP=%s\n' "$min_speedup"
   printf 'PHASE_RUNNER=%s\n' "${phase_runner:-<build>}"
   printf 'FORWARD_TSV=%s\n' "${forward_tsv:-<run>}"
@@ -181,6 +183,7 @@ quiet_gate() {
 run_sequence() {
   local label="$1"
   local sequence="$2"
+  local mirror_sequence_arg="${3:-}"
   local out_tsv="$log_dir/${label}.tsv"
   local atlas_out="$log_dir/${label}_atlas.txt"
   local -a args=(
@@ -201,7 +204,11 @@ run_sequence() {
   fi
 
   quiet_gate "$label"
-  "$phase_runner" "${args[@]}" --sequence "$sequence" --base-env "$base_env" --variant-env "$variant_env" >"$out_tsv"
+  if [[ -n "$mirror_sequence_arg" ]]; then
+    "$phase_runner" "${args[@]}" --sequence "$sequence" --mirror-sequence "$mirror_sequence_arg" --base-env "$base_env" --variant-env "$variant_env" >"$out_tsv"
+  else
+    "$phase_runner" "${args[@]}" --sequence "$sequence" --base-env "$base_env" --variant-env "$variant_env" >"$out_tsv"
+  fi
   python3 "$repo_root/scripts/diffusion_gemma_phase_atlas.py" "$out_tsv" >"$atlas_out"
   printf 'phase_mirror_abba_run label=%s tsv=%s atlas=%s\n' "$label" "$out_tsv" "$atlas_out"
 }
@@ -358,10 +365,13 @@ print(
 
 if not forward["checksum_ok"] or not mirror["checksum_ok"]:
     decision = "reject_checksum_mismatch"
-elif paired["valid"] and not paired["all_positive"]:
-    decision = "reject_position_paired_mixed"
-elif paired["valid"] and paired["min_speedup"] >= min_speedup:
-    decision = "candidate_speedup_position_paired"
+elif paired["valid"]:
+    if not paired["all_positive"]:
+        decision = "reject_position_paired_mixed"
+    elif paired["min_speedup"] < min_speedup:
+        decision = "weak_below_position_paired_min_speedup"
+    else:
+        decision = "candidate_speedup_position_paired"
 elif forward["position_warning"] or mirror["position_warning"]:
     decision = "blocked_by_sequence_position_bias"
 elif forward["delta"] <= 0.0 or mirror["delta"] <= 0.0:
@@ -402,6 +412,10 @@ if [[ "$require_quiet" != "0" && "$require_quiet" != "1" ]]; then
   printf 'REQUIRE_QUIET must be 0 or 1, got %s\n' "$require_quiet" >&2
   exit 2
 fi
+if [[ "$in_process_mirror" != "0" && "$in_process_mirror" != "1" ]]; then
+  printf 'IN_PROCESS_MIRROR must be 0 or 1, got %s\n' "$in_process_mirror" >&2
+  exit 2
+fi
 
 compare_only=0
 if [[ -n "$forward_tsv" || -n "$mirror_tsv" ]]; then
@@ -435,6 +449,11 @@ if (( compare_only == 1 )); then
 fi
 
 ensure_phase_runner
-run_sequence forward "$forward_sequence"
-run_sequence mirror "$mirror_sequence"
-compare_pair "$log_dir/forward.tsv" "$log_dir/mirror.tsv"
+if [[ "$in_process_mirror" == "1" ]]; then
+  run_sequence in_process "$forward_sequence" "$mirror_sequence"
+  compare_pair "$log_dir/in_process.tsv" "$log_dir/in_process.tsv"
+else
+  run_sequence forward "$forward_sequence"
+  run_sequence mirror "$mirror_sequence"
+  compare_pair "$log_dir/forward.tsv" "$log_dir/mirror.tsv"
+fi
