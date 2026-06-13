@@ -53,6 +53,19 @@ struct RouteOverlapStats
   end
 end
 
+def plan_values(plan : ML::GGUF::DiffusionGemmaCPU::CogniGraphPlan) : Array(String)
+  [
+    plan.n_ops.to_s,
+    plan.n_waves.to_s,
+    plan.n_barriers.to_s,
+    plan.max_wave_width.to_s,
+    plan.active_experts.to_s,
+    plan.route_slots.to_s,
+    plan.wave_widths.join(","),
+    plan.phi,
+  ]
+end
+
 def parse_positive_counts(raw : String, label : String) : Array(Int32)
   counts = raw.split(/[,\s]+/).map(&.strip).reject(&.empty?).map(&.to_i)
   raise "#{label} must contain at least one count" if counts.empty?
@@ -205,11 +218,16 @@ def format_float(value : Float64) : String
   "%.6f" % value
 end
 
-def print_keyvalue(stats : RouteOverlapStats) : Nil
+def print_keyvalue(stats : RouteOverlapStats, plan : ML::GGUF::DiffusionGemmaCPU::CogniGraphPlan? = nil) : Nil
   names = TSV_HEADER
   values = stats.values
   names.each_with_index do |name, i|
     puts "#{name}=#{values[i]}"
+  end
+  if plan
+    PLAN_TSV_HEADER.each_with_index do |name, i|
+      puts "#{name}=#{plan_values(plan)[i]}"
+    end
   end
 end
 
@@ -232,6 +250,17 @@ TSV_HEADER = [
   "pair_weight_overlap_mean",
 ]
 
+PLAN_TSV_HEADER = [
+  "plan_ops",
+  "plan_waves",
+  "plan_barriers",
+  "plan_max_wave_width",
+  "plan_active_experts",
+  "plan_route_slots",
+  "plan_wave_widths",
+  "plan_phi",
+]
+
 model = ENV["DIFFUSION_GEMMA_MODEL"]? || DEFAULT_MODEL
 prompt_token = 1
 canvas_token = 0
@@ -239,6 +268,7 @@ prompt_lengths_arg = "128"
 canvas_lengths_arg = "2,4,8"
 max_layers = 1
 format = "tsv"
+with_cognigraph_plan = false
 
 OptionParser.parse do |p|
   p.banner = "Usage: diffusion_gemma_moe_route_overlap_probe [options]"
@@ -249,6 +279,7 @@ OptionParser.parse do |p|
   p.on("--canvas-lengths LIST", "Synthetic canvas lengths, comma or space separated (default: 2,4,8)") { |v| canvas_lengths_arg = v }
   p.on("--max-layers N", "Collect route overlap before each of N decode layers (default: 1)") { |v| max_layers = v.to_i }
   p.on("--format FORMAT", "Output format: tsv or keyvalue (default: tsv)") { |v| format = v.downcase }
+  p.on("--with-cognigraph-plan", "Append CogniGraph dry-plan ops/waves/barriers columns") { with_cognigraph_plan = true }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -268,7 +299,7 @@ prompt_lengths = parse_positive_counts(prompt_lengths_arg, "--prompt-lengths")
 canvas_lengths = parse_positive_counts(canvas_lengths_arg, "--canvas-lengths")
 
 puts "load_ms=#{format_float(load_ms)}" if format == "keyvalue"
-puts TSV_HEADER.join('\t') if format == "tsv"
+puts((with_cognigraph_plan ? TSV_HEADER + PLAN_TSV_HEADER : TSV_HEADER).join('\t')) if format == "tsv"
 
 prompt_lengths.each do |prompt_len|
   prompt_tokens = generated_token_sequence(prompt_token, prompt_len, hp.vocab_size, "--prompt-lengths entry")
@@ -301,11 +332,13 @@ prompt_lengths.each do |prompt_len|
         rows,
         mask,
       )
-      stats = overlap_stats(route_rows(weights, layer, attn_out_rows, canvas_len), layer, prompt_len, canvas_len)
+      routes = route_rows(weights, layer, attn_out_rows, canvas_len)
+      stats = overlap_stats(routes, layer, prompt_len, canvas_len)
+      plan = with_cognigraph_plan ? ML::GGUF::DiffusionGemmaCPU.grouped_moe_cognigraph_plan(routes, hp.n_embd, hp.expert_ff, hp.expert_count) : nil
       if format == "tsv"
-        puts stats.values.join('\t')
+        puts((plan ? stats.values + plan_values(plan) : stats.values).join('\t'))
       else
-        print_keyvalue(stats)
+        print_keyvalue(stats, plan)
       end
 
       timed = ML::GGUF::DiffusionGemmaCPU.layer_forward_decode_canvas_rows_with_prompt_projections_timed(
