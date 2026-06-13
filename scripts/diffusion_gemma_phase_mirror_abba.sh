@@ -238,19 +238,22 @@ def median(values):
         return float("nan")
     return statistics.median(clean)
 
-def summarize(path):
+def load_rows(path):
     data_lines = [
         line
         for line in path.read_text(encoding="utf-8").splitlines()
         if line and not line.startswith("#")
     ]
-    rows = [
+    return [
         row
         for row in csv.DictReader(data_lines, delimiter="\t")
         if row.get("kind") == "sample"
         and row.get("measured") == "true"
         and row.get("arm") in {"base", "variant"}
     ]
+
+def summarize(path):
+    rows = load_rows(path)
     if not rows:
         raise SystemExit(f"no measured sample rows in {path}")
     base_values = [as_float(row, "total_ms") for row in rows if row.get("arm") == "base"]
@@ -283,6 +286,37 @@ def summarize(path):
         "sample_count": len(rows),
     }
 
+def position_paired_summary(rows):
+    positions = sorted({idx for row in rows if (idx := as_int(row, "sequence_index")) is not None})
+    paired = []
+    for idx in positions:
+        base = [as_float(row, "total_ms") for row in rows if row.get("arm") == "base" and as_int(row, "sequence_index") == idx]
+        variant = [as_float(row, "total_ms") for row in rows if row.get("arm") == "variant" and as_int(row, "sequence_index") == idx]
+        if not base or not variant:
+            continue
+        base_median = median(base)
+        variant_median = median(variant)
+        speedup = base_median / variant_median if variant_median > 0 else float("nan")
+        paired.append({
+            "position": idx,
+            "base": base_median,
+            "variant": variant_median,
+            "delta": base_median - variant_median,
+            "speedup": speedup,
+        })
+    valid = len(paired) == len(positions) and bool(paired)
+    deltas = [row["delta"] for row in paired]
+    speedups = [row["speedup"] for row in paired if math.isfinite(row["speedup"])]
+    return {
+        "valid": valid,
+        "positions": positions,
+        "paired": paired,
+        "delta": median(deltas),
+        "speedup": median(speedups),
+        "min_speedup": min(speedups) if speedups else float("nan"),
+        "all_positive": bool(deltas) and all(delta > 0.0 for delta in deltas),
+    }
+
 def fmt(value):
     if not math.isfinite(value):
         return "nan"
@@ -290,6 +324,7 @@ def fmt(value):
 
 forward = summarize(forward_path)
 mirror = summarize(mirror_path)
+paired = position_paired_summary(load_rows(forward_path) + load_rows(mirror_path))
 for label, row in (("forward", forward), ("mirror", mirror)):
     print(
         "phase_mirror_abba_summary "
@@ -304,8 +339,29 @@ for label, row in (("forward", forward), ("mirror", mirror)):
         f"checksum_ok={str(row['checksum_ok']).lower()}"
     )
 
+if paired["valid"]:
+    deltas = ",".join(f"{row['position']}:{fmt(row['delta'])}" for row in paired["paired"])
+    speedups = ",".join(f"{row['position']}:{fmt(row['speedup'])}" for row in paired["paired"])
+else:
+    deltas = "none"
+    speedups = "none"
+print(
+    "phase_mirror_abba_position_paired "
+    f"valid={str(paired['valid']).lower()} "
+    f"all_positive={str(paired['all_positive']).lower()} "
+    f"median_delta_ms={fmt(paired['delta'])} "
+    f"median_speedup={fmt(paired['speedup'])} "
+    f"min_speedup={fmt(paired['min_speedup'])} "
+    f"deltas={deltas} "
+    f"speedups={speedups}"
+)
+
 if not forward["checksum_ok"] or not mirror["checksum_ok"]:
     decision = "reject_checksum_mismatch"
+elif paired["valid"] and not paired["all_positive"]:
+    decision = "reject_position_paired_mixed"
+elif paired["valid"] and paired["min_speedup"] >= min_speedup:
+    decision = "candidate_speedup_position_paired"
 elif forward["position_warning"] or mirror["position_warning"]:
     decision = "blocked_by_sequence_position_bias"
 elif forward["delta"] <= 0.0 or mirror["delta"] <= 0.0:
