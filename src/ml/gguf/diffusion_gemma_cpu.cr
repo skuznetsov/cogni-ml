@@ -1170,6 +1170,8 @@ module ML::GGUF
       hp = weights.hparams
       lw = weights.layers[il]
       expected = row_count * hp.n_embd
+      timing_enabled = ffn_resident_timing_enabled?
+      timing_t0 = Time.instant if timing_enabled
       raise ArgumentError.new("ffn_residual_rows_resident_graph row_count must be positive") unless row_count > 0
       raise ArgumentError.new("ffn_residual_rows_resident_graph input size mismatch") unless attn_out_rows.size == expected
       if supplied_routes = routes_by_row
@@ -1278,6 +1280,7 @@ module ML::GGUF
         out_buf,
       ])
 
+      prep_done = Time.instant if timing_enabled
       graph = ML::Metal::ComputeGraph.new
       enc = ML::Metal::GraphEncoder.new(graph)
       combined_gate_up_enabled = ffn_resident_combined_gate_up_enabled? && !lw.ffn_gate_up_exps_qw.nil?
@@ -1355,16 +1358,30 @@ module ML::GGUF
       scale = canvas ? lw.layer_output_scale[0] : lw.encoder_layer_output_scale[0]
       return nil unless ffn_resident_step_ok?(Gemma4Metal.encode_rmsnorm_sum_add_scaled_rows_to_buffer(enc, shared_out_buf, moe_out_buf, ffn_post_weight_buf, attn_out_buf, out_buf, row_count, hp.n_embd, hp.rms_eps, scale), il, "final_sum_norm")
 
+      graph_build_done = Time.instant if timing_enabled
+      compile_t0 = Time.instant if timing_enabled
       graph.compile!
+      compile_done = Time.instant if timing_enabled
       if ENV["DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_STATS"]? == "1"
         stats = graph.stats
         STDERR.puts "diffusion_gemma_ffn_resident_graph layer=#{il} rows=#{row_count} active_experts=#{assignments_by_expert.size} route_slots=#{route_slot_count} ops=#{stats.n_ops} waves=#{stats.n_waves} barriers=#{stats.n_barriers} max_wave_width=#{stats.max_wave_width}"
       end
       cmd = ML::Metal::CommandBuffer.new
+      encode_t0 = Time.instant if timing_enabled
       graph.encode(cmd)
+      encode_done = Time.instant if timing_enabled
+      wait_t0 = Time.instant if timing_enabled
       cmd.commit
       cmd.wait
-      out_buf.read(expected)
+      wait_done = Time.instant if timing_enabled
+      read_t0 = Time.instant if timing_enabled
+      result = out_buf.read(expected)
+      if timing_enabled
+        read_done = Time.instant
+        stats = graph.stats
+        STDERR.puts "diffusion_gemma_ffn_resident_timing layer=#{il} rows=#{row_count} active_experts=#{assignments_by_expert.size} route_slots=#{route_slot_count} ops=#{stats.n_ops} waves=#{stats.n_waves} barriers=#{stats.n_barriers} prep_ms=#{(prep_done.not_nil! - timing_t0.not_nil!).total_milliseconds} graph_build_ms=#{(graph_build_done.not_nil! - prep_done.not_nil!).total_milliseconds} compile_ms=#{(compile_done.not_nil! - compile_t0.not_nil!).total_milliseconds} encode_ms=#{(encode_done.not_nil! - encode_t0.not_nil!).total_milliseconds} wait_ms=#{(wait_done.not_nil! - wait_t0.not_nil!).total_milliseconds} read_ms=#{(read_done - read_t0.not_nil!).total_milliseconds} total_ms=#{(read_done - timing_t0.not_nil!).total_milliseconds}"
+      end
+      result
     end
 
     def router_input(weights : DiffusionGemmaWeights,
@@ -3074,6 +3091,10 @@ module ML::GGUF
 
     def ffn_resident_debug_enabled? : Bool
       ENV["DIFFUSION_GEMMA_FFN_RESIDENT_DEBUG"]? == "1"
+    end
+
+    def ffn_resident_timing_enabled? : Bool
+      ENV["DIFFUSION_GEMMA_FFN_RESIDENT_TIMING"]? == "1"
     end
 
     def moe_ffn_batch_rows_enabled? : Bool
