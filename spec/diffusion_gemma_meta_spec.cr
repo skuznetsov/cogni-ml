@@ -1171,6 +1171,19 @@ describe ML::GGUF::DiffusionGemmaCPU do
     one_route_moe.all? { |v| v.finite? }.should be_true
     one_route_moe.any? { |v| v.abs > 0.000001_f32 }.should be_true
 
+    if ML::GGUF::Qwen35Metal.available?
+      expert = routes[0].expert
+      expected = ML::GGUF::DiffusionGemmaCPU.moe_expert_output(w, 0, expert, x)
+      actual = ML::GGUF::DiffusionGemmaCPU.moe_expert_output_resident_graph(w, 0, expert, x).not_nil!
+      actual.size.should eq(expected.size)
+      max_diff = 0.0_f32
+      expected.size.times do |i|
+        diff = (expected[i] - actual[i]).abs
+        max_diff = diff if diff > max_diff
+      end
+      max_diff.should be < 1.0e-3_f32
+    end
+
     expect_raises(ArgumentError, /expert id out of range/) do
       ML::GGUF::DiffusionGemmaCPU.moe_expert_output(w, 0, hp.expert_count, zero)
     end
