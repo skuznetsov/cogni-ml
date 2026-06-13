@@ -2565,7 +2565,7 @@ module ML::GGUF
     end
 
     def moe_grouped_gpu_gather_min_canvas : Int32
-      env_i32("DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER_MIN_CANVAS", 1)
+      env_i32("DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER_MIN_CANVAS", 8)
     end
 
     def moe_grouped_gpu_gather_max_canvas : Int32
