@@ -1222,28 +1222,30 @@ module ML::GGUF
       end
 
       owned_buffers = [] of ML::MetalBuffer
-      attn_out_buf = ML::MetalBuffer.from_array(attn_out_rows)
-      shared_norm_weight_buf = ML::MetalBuffer.from_array(lw.ffn_norm)
-      shared_post_weight_buf = ML::MetalBuffer.from_array(lw.post_ffw_norm_1)
-      moe_norm_weight_buf = ML::MetalBuffer.from_array(lw.pre_ffw_norm_2)
-      moe_post_weight_buf = ML::MetalBuffer.from_array(lw.post_ffw_norm_2)
-      ffn_post_weight_buf = ML::MetalBuffer.from_array(lw.post_ffw_norm)
+      scratch_enabled = ffn_resident_scratch_enabled?
+      scratch_prefix = "layer#{il}.rows#{row_count}"
+      attn_out_buf = ffn_resident_upload_f32_buffer("#{scratch_prefix}.attn_out", attn_out_rows, scratch_enabled)
+      shared_norm_weight_buf = ffn_resident_static_f32_buffer("layer#{il}.shared_norm", lw.ffn_norm, scratch_enabled)
+      shared_post_weight_buf = ffn_resident_static_f32_buffer("layer#{il}.shared_post_norm", lw.post_ffw_norm_1, scratch_enabled)
+      moe_norm_weight_buf = ffn_resident_static_f32_buffer("layer#{il}.moe_norm", lw.pre_ffw_norm_2, scratch_enabled)
+      moe_post_weight_buf = ffn_resident_static_f32_buffer("layer#{il}.moe_post_norm", lw.post_ffw_norm_2, scratch_enabled)
+      ffn_post_weight_buf = ffn_resident_static_f32_buffer("layer#{il}.ffn_post_norm", lw.post_ffw_norm, scratch_enabled)
 
-      shared_in_buf = ML::MetalBuffer.new(expected.to_i64 * sizeof(Float32))
-      shared_up_buf = ML::MetalBuffer.new(row_count.to_i64 * shared_ff * sizeof(Float32))
-      shared_gate_buf = ML::MetalBuffer.new(row_count.to_i64 * shared_ff * sizeof(Float32))
-      shared_hidden_buf = ML::MetalBuffer.new(row_count.to_i64 * shared_ff * sizeof(Float32))
-      shared_down_buf = ML::MetalBuffer.new(expected.to_i64 * sizeof(Float32))
-      shared_out_buf = ML::MetalBuffer.new(expected.to_i64 * sizeof(Float32))
+      shared_in_buf = ffn_resident_scratch_buffer("#{scratch_prefix}.shared_in", expected.to_i64 * sizeof(Float32), scratch_enabled)
+      shared_up_buf = ffn_resident_scratch_buffer("#{scratch_prefix}.shared_up", row_count.to_i64 * shared_ff * sizeof(Float32), scratch_enabled)
+      shared_gate_buf = ffn_resident_scratch_buffer("#{scratch_prefix}.shared_gate", row_count.to_i64 * shared_ff * sizeof(Float32), scratch_enabled)
+      shared_hidden_buf = ffn_resident_scratch_buffer("#{scratch_prefix}.shared_hidden", row_count.to_i64 * shared_ff * sizeof(Float32), scratch_enabled)
+      shared_down_buf = ffn_resident_scratch_buffer("#{scratch_prefix}.shared_down", expected.to_i64 * sizeof(Float32), scratch_enabled)
+      shared_out_buf = ffn_resident_scratch_buffer("#{scratch_prefix}.shared_out", expected.to_i64 * sizeof(Float32), scratch_enabled)
 
-      moe_in_buf = ML::MetalBuffer.new(expected.to_i64 * sizeof(Float32))
-      route_rows_buf = ML::MetalBuffer.new(route_slot_count.to_i64 * hp.n_embd * sizeof(Float32))
-      route_offsets_buf = metal_int32_buffer(route_offsets_by_row)
-      route_counts_buf = metal_int32_buffer(route_counts_by_row)
-      route_weights_buf = ML::MetalBuffer.from_array(route_weights)
-      moe_reduced_buf = ML::MetalBuffer.new(expected.to_i64 * sizeof(Float32))
-      moe_out_buf = ML::MetalBuffer.new(expected.to_i64 * sizeof(Float32))
-      out_buf = ML::MetalBuffer.new(expected.to_i64 * sizeof(Float32))
+      moe_in_buf = ffn_resident_scratch_buffer("#{scratch_prefix}.moe_in", expected.to_i64 * sizeof(Float32), scratch_enabled)
+      route_rows_buf = ffn_resident_scratch_buffer("#{scratch_prefix}.route_rows", route_slot_count.to_i64 * hp.n_embd * sizeof(Float32), scratch_enabled)
+      route_offsets_buf = ffn_resident_upload_i32_buffer("#{scratch_prefix}.route_offsets", route_offsets_by_row, scratch_enabled)
+      route_counts_buf = ffn_resident_upload_i32_buffer("#{scratch_prefix}.route_counts", route_counts_by_row, scratch_enabled)
+      route_weights_buf = ffn_resident_upload_f32_buffer("#{scratch_prefix}.route_weights", route_weights, scratch_enabled)
+      moe_reduced_buf = ffn_resident_scratch_buffer("#{scratch_prefix}.moe_reduced", expected.to_i64 * sizeof(Float32), scratch_enabled)
+      moe_out_buf = ffn_resident_scratch_buffer("#{scratch_prefix}.moe_out", expected.to_i64 * sizeof(Float32), scratch_enabled)
+      out_buf = ffn_resident_scratch_buffer("#{scratch_prefix}.out", expected.to_i64 * sizeof(Float32), scratch_enabled)
 
       owned_buffers.concat([
         attn_out_buf,
@@ -1294,13 +1296,14 @@ module ML::GGUF
           route_offsets_by_row[row] + route_index
         end
 
-        gather_map_buf = metal_int32_buffer(gather_map)
-        scatter_map_buf = metal_int32_buffer(scatter_map)
-        input_buf = ML::MetalBuffer.new(batch.to_i64 * hp.n_embd * sizeof(Float32))
-        gate_buf = ML::MetalBuffer.new(batch.to_i64 * hp.expert_ff * sizeof(Float32))
-        up_buf = ML::MetalBuffer.new(batch.to_i64 * hp.expert_ff * sizeof(Float32))
-        hidden_buf = ML::MetalBuffer.new(batch.to_i64 * hp.expert_ff * sizeof(Float32))
-        down_buf = ML::MetalBuffer.new(batch.to_i64 * hp.n_embd * sizeof(Float32))
+        expert_prefix = "#{scratch_prefix}.expert#{expert}.batch#{batch}"
+        gather_map_buf = ffn_resident_upload_i32_buffer("#{expert_prefix}.gather_map", gather_map, scratch_enabled)
+        scatter_map_buf = ffn_resident_upload_i32_buffer("#{expert_prefix}.scatter_map", scatter_map, scratch_enabled)
+        input_buf = ffn_resident_scratch_buffer("#{expert_prefix}.input", batch.to_i64 * hp.n_embd * sizeof(Float32), scratch_enabled)
+        gate_buf = ffn_resident_scratch_buffer("#{expert_prefix}.gate", batch.to_i64 * hp.expert_ff * sizeof(Float32), scratch_enabled)
+        up_buf = ffn_resident_scratch_buffer("#{expert_prefix}.up", batch.to_i64 * hp.expert_ff * sizeof(Float32), scratch_enabled)
+        hidden_buf = ffn_resident_scratch_buffer("#{expert_prefix}.hidden", batch.to_i64 * hp.expert_ff * sizeof(Float32), scratch_enabled)
+        down_buf = ffn_resident_scratch_buffer("#{expert_prefix}.down", batch.to_i64 * hp.n_embd * sizeof(Float32), scratch_enabled)
         owned_buffers.concat([gather_map_buf, scatter_map_buf, input_buf, gate_buf, up_buf, hidden_buf, down_buf])
 
         return nil unless Gemma4Metal.encode_gather_rows_by_map_to_buffer(enc, moe_in_buf, gather_map_buf, input_buf, row_count, batch, hp.n_embd)
@@ -3022,6 +3025,11 @@ module ML::GGUF
       env_i32("DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MAX_CANVAS", 8)
     end
 
+    def ffn_resident_scratch_enabled? : Bool
+      ENV["DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH"]? == "1" &&
+        ENV["DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH_OFF"]? != "1"
+    end
+
     def moe_ffn_batch_rows_enabled? : Bool
       ENV["DIFFUSION_GEMMA_MOE_FFN_BATCH_ROWS"]? == "1" &&
         ENV["DIFFUSION_GEMMA_MOE_FFN_BATCH_ROWS_OFF"]? != "1"
@@ -4530,6 +4538,44 @@ module ML::GGUF
       buf = ML::MetalBuffer.new(values.size.to_i64 * sizeof(Int32))
       buf.write_bytes(values.to_unsafe.as(Pointer(UInt8)), values.size * sizeof(Int32)) unless values.empty?
       buf
+    end
+
+    private def ffn_resident_scratch_buffer(name : String, byte_size : Int64, scratch_enabled : Bool) : ML::MetalBuffer
+      if scratch_enabled
+        Qwen35Metal::Scratch.get("diffusion_gemma.ffn_resident.#{name}", byte_size)
+      else
+        ML::MetalBuffer.new(byte_size)
+      end
+    end
+
+    private def ffn_resident_upload_f32_buffer(name : String, values : Array(Float32), scratch_enabled : Bool) : ML::MetalBuffer
+      if scratch_enabled
+        buf = Qwen35Metal::Scratch.get("diffusion_gemma.ffn_resident.#{name}", values.size.to_i64 * sizeof(Float32))
+        buf.write(values)
+        buf
+      else
+        ML::MetalBuffer.from_array(values)
+      end
+    end
+
+    private def ffn_resident_static_f32_buffer(name : String, values : Array(Float32), scratch_enabled : Bool) : ML::MetalBuffer
+      if scratch_enabled
+        buf = Qwen35Metal::Scratch.get("diffusion_gemma.ffn_resident.const.#{name}", values.size.to_i64 * sizeof(Float32))
+        Qwen35Metal::ConstCache.write_once("diffusion_gemma.ffn_resident.const.#{name}", buf, values)
+        buf
+      else
+        ML::MetalBuffer.from_array(values)
+      end
+    end
+
+    private def ffn_resident_upload_i32_buffer(name : String, values : Array(Int32), scratch_enabled : Bool) : ML::MetalBuffer
+      if scratch_enabled
+        buf = Qwen35Metal::Scratch.get("diffusion_gemma.ffn_resident.#{name}", values.size.to_i64 * sizeof(Int32))
+        buf.write_bytes(values.to_unsafe.as(Pointer(UInt8)), values.size * sizeof(Int32)) unless values.empty?
+        buf
+      else
+        metal_int32_buffer(values)
+      end
     end
 
     private def expert_gate_up_qw(lw : DiffusionGemmaLayerWeights,
