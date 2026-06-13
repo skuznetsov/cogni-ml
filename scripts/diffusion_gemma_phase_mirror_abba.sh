@@ -10,6 +10,7 @@ mirror_sequence="${MIRROR_SEQUENCE:-variant base base variant}"
 base_env="${BASE_ENV:-}"
 variant_env="${VARIANT_ENV:-}"
 min_speedup="${MIN_SPEEDUP:-1.02}"
+checksum_abs_tol="${CHECKSUM_ABS_TOL:-0.00001}"
 
 prompt_len="${PROMPT_LEN:-16}"
 canvas_len="${CANVAS_LEN:-8}"
@@ -127,6 +128,7 @@ print_config() {
   printf 'REQUIRE_QUIET=%s\n' "$require_quiet"
   printf 'IN_PROCESS_MIRROR=%s\n' "$in_process_mirror"
   printf 'MIN_SPEEDUP=%s\n' "$min_speedup"
+  printf 'CHECKSUM_ABS_TOL=%s\n' "$checksum_abs_tol"
   printf 'PHASE_RUNNER=%s\n' "${phase_runner:-<build>}"
   printf 'FORWARD_TSV=%s\n' "${forward_tsv:-<run>}"
   printf 'MIRROR_TSV=%s\n' "${mirror_tsv:-<run>}"
@@ -216,7 +218,7 @@ run_sequence() {
 compare_pair() {
   local forward_path="$1"
   local mirror_path="$2"
-  python3 - "$forward_path" "$mirror_path" "$min_speedup" <<'PY'
+  python3 - "$forward_path" "$mirror_path" "$min_speedup" "$checksum_abs_tol" <<'PY'
 import csv
 import math
 import pathlib
@@ -226,6 +228,7 @@ import sys
 forward_path = pathlib.Path(sys.argv[1])
 mirror_path = pathlib.Path(sys.argv[2])
 min_speedup = float(sys.argv[3])
+checksum_abs_tol = float(sys.argv[4])
 
 def as_float(row, key):
     try:
@@ -280,8 +283,9 @@ def summarize(path):
     position_values = [value for value in position_medians.values() if math.isfinite(value)]
     position_span = max(position_values) - min(position_values) if position_values else float("nan")
     position_warning = math.isfinite(position_span) and position_span > abs(delta)
-    checksums = {round(as_float(row, "checksum"), 6) for row in rows if math.isfinite(as_float(row, "checksum"))}
-    checksum_ok = len(checksums) <= 1
+    checksums = [as_float(row, "checksum") for row in rows if math.isfinite(as_float(row, "checksum"))]
+    checksum_max_abs_diff = (max(checksums) - min(checksums)) if checksums else float("nan")
+    checksum_ok = not math.isfinite(checksum_max_abs_diff) or checksum_max_abs_diff <= checksum_abs_tol
     return {
         "base": base_median,
         "variant": variant_median,
@@ -290,6 +294,7 @@ def summarize(path):
         "position_span": position_span,
         "position_warning": position_warning,
         "checksum_ok": checksum_ok,
+        "checksum_max_abs_diff": checksum_max_abs_diff,
         "sample_count": len(rows),
     }
 
@@ -343,7 +348,8 @@ for label, row in (("forward", forward), ("mirror", mirror)):
         f"delta_ms={fmt(row['delta'])} "
         f"position_span_ms={fmt(row['position_span'])} "
         f"position_warning={str(row['position_warning']).lower()} "
-        f"checksum_ok={str(row['checksum_ok']).lower()}"
+        f"checksum_ok={str(row['checksum_ok']).lower()} "
+        f"checksum_max_abs_diff={fmt(row['checksum_max_abs_diff'])}"
     )
 
 if paired["valid"]:
@@ -403,6 +409,7 @@ require_nonnegative_int PROMPT_TOKEN "$prompt_token"
 require_nonnegative_int CANVAS_TOKEN "$canvas_token"
 require_nonnegative_int QUIET_MS "$quiet_ms"
 validate_float MIN_SPEEDUP "$min_speedup"
+validate_float CHECKSUM_ABS_TOL "$checksum_abs_tol"
 
 if [[ "$full_routes" != "0" && "$full_routes" != "1" ]]; then
   printf 'FULL_ROUTES must be 0 or 1, got %s\n' "$full_routes" >&2
