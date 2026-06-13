@@ -38,6 +38,7 @@ ROUTE_FLAGS = [
     "shared_rows",
     "moe_rows",
     "grouped_moe",
+    "moe_router_batch",
     "moe_gpu_gather",
     "moe_gpu_reduce",
     "attention_out_rows",

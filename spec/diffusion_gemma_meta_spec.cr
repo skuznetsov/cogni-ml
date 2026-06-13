@@ -1151,6 +1151,46 @@ describe ML::GGUF::DiffusionGemmaCPU do
     expect_raises(ArgumentError, /router input size mismatch/) do
       ML::GGUF::DiffusionGemmaCPU.router_logits(w, 0, [0.0_f32])
     end
+
+    row1 = ML::GGUF::DiffusionGemmaCPU.zero_sc_canvas_embedding(w, 1)
+    rows = x + row1
+    old_prompt_projection_metal = ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL"]?
+    old_prompt_projection_min = ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH"]?
+    begin
+      ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL"] = "1"
+      ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH"] = "1"
+      batched_inputs = ML::GGUF::DiffusionGemmaCPU.router_input_rows(w, 0, rows, 2)
+      batched_inputs.size.should eq(2 * hp.n_embd)
+      batched_logits = ML::GGUF::DiffusionGemmaCPU.router_logits_rows(w, 0, rows, 2)
+      batched_logits.size.should eq(2 * hp.expert_count)
+      expected_routes = [x, row1].map { |row| ML::GGUF::DiffusionGemmaCPU.route_experts(w, 0, row) }
+      batched_routes = ML::GGUF::DiffusionGemmaCPU.route_experts_rows(w, 0, rows, 2)
+      batched_routes.size.should eq(expected_routes.size)
+      expected_routes.each_with_index do |expected, row|
+        batched_routes[row].map(&.expert).should eq(expected.map(&.expert))
+        expected.each_with_index do |route, i|
+          batched_routes[row][i].weight.should be_close(route.weight, 0.000001_f32)
+        end
+      end
+    ensure
+      if old_prompt_projection_metal
+        ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL"] = old_prompt_projection_metal
+      else
+        ENV.delete("DIFFUSION_GEMMA_PROMPT_PROJ_METAL")
+      end
+      if old_prompt_projection_min
+        ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH"] = old_prompt_projection_min
+      else
+        ENV.delete("DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH")
+      end
+    end
+
+    expect_raises(ArgumentError, /router input rows row_count must be positive/) do
+      ML::GGUF::DiffusionGemmaCPU.router_logits_rows(w, 0, rows, 0)
+    end
+    expect_raises(ArgumentError, /router input rows size mismatch/) do
+      ML::GGUF::DiffusionGemmaCPU.router_logits_rows(w, 0, [0.0_f32], 2)
+    end
   end
 
   it "computes the routed MoE expert branch with quantized expert slices" do
@@ -1243,6 +1283,10 @@ describe ML::GGUF::DiffusionGemmaCPU do
 
     old_inplace_combine_off = ENV["DIFFUSION_GEMMA_MOE_GROUPED_INPLACE_COMBINE_OFF"]?
     old_inplace_combine_max = ENV["DIFFUSION_GEMMA_MOE_GROUPED_INPLACE_COMBINE_MAX_CANVAS"]?
+    old_router_batch = ENV["DIFFUSION_GEMMA_MOE_ROUTER_BATCH_ROWS"]?
+    old_router_batch_off = ENV["DIFFUSION_GEMMA_MOE_ROUTER_BATCH_ROWS_OFF"]?
+    old_router_batch_min = ENV["DIFFUSION_GEMMA_MOE_ROUTER_BATCH_ROWS_MIN_CANVAS"]?
+    old_router_batch_max = ENV["DIFFUSION_GEMMA_MOE_ROUTER_BATCH_ROWS_MAX_CANVAS"]?
     w = ML::GGUF::DiffusionGemmaWeights.from_gguf(DIFFUSION_GEMMA_26B_Q4KM)
     hp = w.hparams
     rows_by_id = (0...4).map { |token_id| ML::GGUF::DiffusionGemmaCPU.zero_sc_canvas_embedding(w, token_id) }
@@ -1277,6 +1321,51 @@ describe ML::GGUF::DiffusionGemmaCPU do
         ENV["DIFFUSION_GEMMA_MOE_GROUPED_INPLACE_COMBINE_OFF"] = old_inplace_combine_off
       else
         ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_INPLACE_COMBINE_OFF")
+      end
+    end
+
+    begin
+      ENV["DIFFUSION_GEMMA_MOE_ROUTER_BATCH_ROWS"] = "1"
+      routed_batch = ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows(w, 0, rows, rows_by_id.size)
+      routed_batch.size.should eq(actual.size)
+      max_diff = 0.0_f32
+      actual.size.times do |i|
+        diff = (actual[i] - routed_batch[i]).abs
+        max_diff = diff if diff > max_diff
+      end
+      max_diff.should be < 1.0e-4_f32
+
+      ENV.delete("DIFFUSION_GEMMA_MOE_ROUTER_BATCH_ROWS")
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_router_batch_rows_enabled?(4).should be_false
+      ENV["DIFFUSION_GEMMA_MOE_ROUTER_BATCH_ROWS"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_router_batch_rows_enabled?(4).should be_true
+      ENV["DIFFUSION_GEMMA_MOE_ROUTER_BATCH_ROWS_MIN_CANVAS"] = "8"
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_router_batch_rows_enabled?(4).should be_false
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_router_batch_rows_enabled?(8).should be_true
+      ENV["DIFFUSION_GEMMA_MOE_ROUTER_BATCH_ROWS_MAX_CANVAS"] = "8"
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_router_batch_rows_enabled?(16).should be_false
+      ENV["DIFFUSION_GEMMA_MOE_ROUTER_BATCH_ROWS_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_router_batch_rows_enabled?(8).should be_false
+    ensure
+      if old_router_batch
+        ENV["DIFFUSION_GEMMA_MOE_ROUTER_BATCH_ROWS"] = old_router_batch
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_ROUTER_BATCH_ROWS")
+      end
+      if old_router_batch_off
+        ENV["DIFFUSION_GEMMA_MOE_ROUTER_BATCH_ROWS_OFF"] = old_router_batch_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_ROUTER_BATCH_ROWS_OFF")
+      end
+      if old_router_batch_min
+        ENV["DIFFUSION_GEMMA_MOE_ROUTER_BATCH_ROWS_MIN_CANVAS"] = old_router_batch_min
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_ROUTER_BATCH_ROWS_MIN_CANVAS")
+      end
+      if old_router_batch_max
+        ENV["DIFFUSION_GEMMA_MOE_ROUTER_BATCH_ROWS_MAX_CANVAS"] = old_router_batch_max
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_ROUTER_BATCH_ROWS_MAX_CANVAS")
       end
     end
 

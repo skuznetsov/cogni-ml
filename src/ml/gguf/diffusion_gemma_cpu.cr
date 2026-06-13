@@ -1132,6 +1132,43 @@ module ML::GGUF
       logits
     end
 
+    def router_input_rows(weights : DiffusionGemmaWeights,
+                          il : Int32,
+                          attn_out_rows : Array(Float32),
+                          row_count : Int32) : Array(Float32)
+      hp = weights.hparams
+      lw = weights.layers[il]
+      expected = row_count * hp.n_embd
+      raise ArgumentError.new("router input rows row_count must be positive") unless row_count > 0
+      raise ArgumentError.new("router input rows size mismatch") unless attn_out_rows.size == expected
+      raise ArgumentError.new("router scale size mismatch") unless lw.ffn_gate_inp_scale.size == hp.n_embd
+
+      result = attn_out_rows.dup
+      inv_sqrt_dim = (1.0_f64 / Math.sqrt(hp.n_embd.to_f64)).to_f32
+      row_count.times do |row|
+        offset = row * hp.n_embd
+        fast_rms_norm_plain_slice!(result, offset, hp.n_embd, hp.rms_eps)
+        hp.n_embd.times do |i|
+          result[offset + i] *= inv_sqrt_dim * lw.ffn_gate_inp_scale[i]
+        end
+      end
+      result
+    end
+
+    def router_logits_rows(weights : DiffusionGemmaWeights,
+                           il : Int32,
+                           attn_out_rows : Array(Float32),
+                           row_count : Int32) : Array(Float32)
+      hp = weights.hparams
+      logits = Gemma4CPU.matmul(
+        weights.layers[il].ffn_gate_inp_qw,
+        router_input_rows(weights, il, attn_out_rows, row_count),
+        row_count,
+      )
+      raise ArgumentError.new("router logits rows size mismatch") unless logits.size == row_count * hp.expert_count
+      logits
+    end
+
     def softmax(values : Array(Float32)) : Array(Float32)
       probs = values.dup
       Gemma4CPU.softmax_slice!(probs, 0, probs.size)
@@ -1162,6 +1199,20 @@ module ML::GGUF
       hp = weights.hparams
       probs = softmax(router_logits(weights, il, attn_out))
       top_k_experts(probs, hp.expert_used_count)
+    end
+
+    def route_experts_rows(weights : DiffusionGemmaWeights,
+                           il : Int32,
+                           attn_out_rows : Array(Float32),
+                           row_count : Int32) : Array(Array(ExpertRoute))
+      hp = weights.hparams
+      logits = router_logits_rows(weights, il, attn_out_rows, row_count)
+      Array(Array(ExpertRoute)).new(row_count) do |row|
+        offset = row * hp.expert_count
+        probs = logits[offset, hp.expert_count]
+        Gemma4CPU.softmax_slice!(probs, 0, probs.size)
+        top_k_experts(probs, hp.expert_used_count)
+      end
     end
 
     def moe_expert_output(weights : DiffusionGemmaWeights,
@@ -1694,14 +1745,16 @@ module ML::GGUF
         fast_rms_norm_slice!(ffn_in_rows, row * hp.n_embd, hp.n_embd, lw.pre_ffw_norm_2, hp.rms_eps)
       end
 
-      selected_by_row = Array(Array(ExpertRoute)).new(row_count) do |row|
-        if supplied_routes = routes_by_row
-          supplied_routes[row]
-        else
-          row_offset = row * hp.n_embd
-          route_experts(weights, il, attn_out_rows[row_offset, hp.n_embd])
-        end
-      end
+      selected_by_row = if supplied_routes = routes_by_row
+                          supplied_routes
+                        elsif moe_grouped_router_batch_rows_enabled?(row_count)
+                          route_experts_rows(weights, il, attn_out_rows, row_count)
+                        else
+                          Array(Array(ExpertRoute)).new(row_count) do |row|
+                            row_offset = row * hp.n_embd
+                            route_experts(weights, il, attn_out_rows[row_offset, hp.n_embd])
+                          end
+                        end
       selected_by_row.each do |selected|
         raise ArgumentError.new("moe_ffn_grouped_expert_rows routes must not be empty") if selected.empty?
       end
@@ -2610,6 +2663,23 @@ module ML::GGUF
 
     def grouped_moe_policy_max_canvas : Int32
       env_i32("DIFFUSION_GEMMA_GROUPED_MOE_POLICY_MAX_CANVAS", 16)
+    end
+
+    def moe_grouped_router_batch_rows_enabled?(canvas_len : Int32) : Bool
+      return false unless ENV["DIFFUSION_GEMMA_MOE_ROUTER_BATCH_ROWS"]? == "1"
+      return false if ENV["DIFFUSION_GEMMA_MOE_ROUTER_BATCH_ROWS_OFF"]? == "1"
+      return false if canvas_len < moe_grouped_router_batch_rows_min_canvas
+      max_canvas = moe_grouped_router_batch_rows_max_canvas
+      return false if max_canvas > 0 && canvas_len > max_canvas
+      true
+    end
+
+    def moe_grouped_router_batch_rows_min_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_MOE_ROUTER_BATCH_ROWS_MIN_CANVAS", 1)
+    end
+
+    def moe_grouped_router_batch_rows_max_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_MOE_ROUTER_BATCH_ROWS_MAX_CANVAS", 0)
     end
 
     def shared_ffn_batch_rows_enabled?(canvas_len : Int32) : Bool
