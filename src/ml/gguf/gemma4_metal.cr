@@ -3535,6 +3535,42 @@ module ML::GGUF
         true
       end
 
+      def encode_gather_rows_by_map_to_buffer(enc : ML::Metal::ComputeEncoder | ML::Metal::GraphEncoder,
+                                              rows_buf : ML::MetalBuffer,
+                                              map_buf : ML::MetalBuffer,
+                                              out_buf : ML::MetalBuffer,
+                                              row_count : Int32,
+                                              route_slots : Int32,
+                                              dim : Int32) : Bool
+        return false unless row_count > 0 && route_slots > 0 && dim > 0
+        return false if rows_buf.size < row_count.to_i64 * dim * sizeof(Float32)
+        return false if map_buf.size < route_slots.to_i64 * sizeof(Int32)
+        return false if out_buf.size < route_slots.to_i64 * dim * sizeof(Float32)
+
+        encode_gather_rows_by_map(enc, rows_buf, map_buf, out_buf, route_slots, dim)
+        true
+      end
+
+      def encode_weighted_route_reduce_rows_to_buffer(enc : ML::Metal::ComputeEncoder | ML::Metal::GraphEncoder,
+                                                      route_rows_buf : ML::MetalBuffer,
+                                                      route_offsets_buf : ML::MetalBuffer,
+                                                      route_counts_buf : ML::MetalBuffer,
+                                                      route_weights_buf : ML::MetalBuffer,
+                                                      out_buf : ML::MetalBuffer,
+                                                      row_count : Int32,
+                                                      route_slots : Int32,
+                                                      dim : Int32) : Bool
+        return false unless row_count > 0 && route_slots > 0 && dim > 0
+        return false if route_rows_buf.size < route_slots.to_i64 * dim * sizeof(Float32)
+        return false if route_offsets_buf.size < row_count.to_i64 * sizeof(Int32)
+        return false if route_counts_buf.size < row_count.to_i64 * sizeof(Int32)
+        return false if route_weights_buf.size < route_slots.to_i64 * sizeof(Float32)
+        return false if out_buf.size < row_count.to_i64 * dim * sizeof(Float32)
+
+        encode_weighted_route_reduce_rows(enc, route_rows_buf, route_offsets_buf, route_counts_buf, route_weights_buf, out_buf, row_count, route_slots, dim)
+        true
+      end
+
       private def encode_softcap(enc : ML::Metal::ComputeEncoder,
                                  x_buf : ML::MetalBuffer,
                                  count : Int32,

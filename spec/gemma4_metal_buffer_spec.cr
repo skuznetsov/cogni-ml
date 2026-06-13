@@ -56,6 +56,12 @@ private def gemma4_route_reduce_reference(route_rows : Array(Float32),
   out
 end
 
+private def gemma4_int32_buffer(values : Array(Int32)) : ML::MetalBuffer
+  buf = ML::MetalBuffer.new(values.size.to_i64 * sizeof(Int32))
+  buf.write_bytes(values.to_unsafe.as(Pointer(UInt8)), values.size * sizeof(Int32)) unless values.empty?
+  buf
+end
+
 describe "Gemma4 route-map Metal helpers" do
   pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
 
@@ -96,6 +102,54 @@ describe "Gemma4 route-map Metal helpers" do
     expect_raises(ArgumentError, /weighted route offsets must be contiguous/) do
       ML::GGUF::Gemma4Metal.weighted_route_reduce_rows(route_rows, [0_i32, 0_i32], [1_i32, 1_i32], route_weights, 2, 2)
     end
+  end
+
+  it "encodes route gather and reduce into one graph without intermediate reads" do
+    dim = 5
+    row_count = 4
+    rows = Array(Float32).new(row_count * dim) { |i| Math.cos(i.to_f32 * 0.13_f32).to_f32 }
+    gather_map = [2_i32, 0_i32, 2_i32, 3_i32, 1_i32]
+    reduce_rows = 3
+    route_offsets = [0_i32, 2_i32, 3_i32]
+    route_counts = [2_i32, 1_i32, 2_i32]
+    route_weights = [0.4_f32, -0.25_f32, 1.5_f32, 0.125_f32, 0.75_f32]
+    gathered_ref = gemma4_route_gather_reference(rows, gather_map, dim)
+    expected = gemma4_route_reduce_reference(gathered_ref, route_offsets, route_counts, route_weights, reduce_rows, dim)
+
+    rows_buf = ML::MetalBuffer.from_array(rows)
+    map_buf = gemma4_int32_buffer(gather_map)
+    offsets_buf = gemma4_int32_buffer(route_offsets)
+    counts_buf = gemma4_int32_buffer(route_counts)
+    weights_buf = ML::MetalBuffer.from_array(route_weights)
+    gathered_buf = ML::MetalBuffer.new(gather_map.size.to_i64 * dim * sizeof(Float32))
+    reduced_buf = ML::MetalBuffer.new(reduce_rows.to_i64 * dim * sizeof(Float32))
+
+    graph = ML::Metal::ComputeGraph.new
+    enc = ML::Metal::GraphEncoder.new(graph)
+    ML::GGUF::Gemma4Metal.encode_gather_rows_by_map_to_buffer(enc, rows_buf, map_buf, gathered_buf, row_count, gather_map.size, dim).should be_true
+    ML::GGUF::Gemma4Metal.encode_weighted_route_reduce_rows_to_buffer(enc, gathered_buf, offsets_buf, counts_buf, weights_buf, reduced_buf, reduce_rows, gather_map.size, dim).should be_true
+    graph.compile!
+
+    cmd = ML::Metal::CommandBuffer.new
+    graph.encode(cmd)
+    cmd.commit_and_wait
+
+    actual = reduced_buf.read(reduce_rows * dim)
+    diff = gemma4_buffer_max_abs_diff(expected, actual)
+    diff.should be <= 1.0e-6_f32
+  end
+
+  it "rejects undersized route buffers before graph encoding" do
+    dim = 4
+    row_count = 2
+    rows_buf = ML::MetalBuffer.from_array(Array(Float32).new(row_count * dim, 1.0_f32))
+    map_buf = gemma4_int32_buffer([0_i32, 1_i32])
+    out_buf = ML::MetalBuffer.new(sizeof(Float32).to_i64)
+
+    graph = ML::Metal::ComputeGraph.new
+    enc = ML::Metal::GraphEncoder.new(graph)
+    ML::GGUF::Gemma4Metal.encode_gather_rows_by_map_to_buffer(enc, rows_buf, map_buf, out_buf, row_count, 2, dim).should be_false
+    graph.size.should eq(0)
   end
 end
 
