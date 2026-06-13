@@ -40,6 +40,7 @@ ROUTE_FLAGS = [
     "grouped_moe",
     "moe_router_batch",
     "moe_gpu_gather",
+    "moe_gpu_prenorm",
     "moe_gpu_reduce",
     "attention_out_rows",
     "attention_residual_metal_rows",

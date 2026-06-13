@@ -1549,12 +1549,57 @@ module ML::GGUF
       outputs
     end
 
+    private def moe_ffn_pre_norm_rows(weights : DiffusionGemmaWeights,
+                                      il : Int32,
+                                      attn_out_rows : Array(Float32),
+                                      row_count : Int32) : Array(Float32)
+      hp = weights.hparams
+      lw = weights.layers[il]
+      expected = row_count * hp.n_embd
+      raise ArgumentError.new("moe_ffn_pre_norm_rows row_count must be positive") unless row_count > 0
+      raise ArgumentError.new("moe_ffn_pre_norm_rows input size mismatch") unless attn_out_rows.size == expected
+
+      ffn_in_rows = attn_out_rows.dup
+      row_count.times do |row|
+        fast_rms_norm_slice!(ffn_in_rows, row * hp.n_embd, hp.n_embd, lw.pre_ffw_norm_2, hp.rms_eps)
+      end
+      ffn_in_rows
+    end
+
+    private def maybe_encode_moe_pre_ffw_norm_rows(enc : ML::Metal::GraphEncoder,
+                                                   owned_buffers : Array(ML::MetalBuffer),
+                                                   weights : DiffusionGemmaWeights,
+                                                   il : Int32,
+                                                   rows_buf : ML::MetalBuffer,
+                                                   row_count : Int32,
+                                                   apply_pre_norm : Bool) : ML::MetalBuffer?
+      return rows_buf unless apply_pre_norm
+
+      hp = weights.hparams
+      lw = weights.layers[il]
+      return nil unless lw.pre_ffw_norm_2.size == hp.n_embd
+      norm_weight_buf = ML::MetalBuffer.from_array(lw.pre_ffw_norm_2)
+      normed_buf = ML::MetalBuffer.new(row_count.to_i64 * hp.n_embd * sizeof(Float32))
+      owned_buffers.concat([norm_weight_buf, normed_buf])
+      return nil unless Gemma4Metal.encode_rmsnorm_rows_weighted_to_buffer(
+                          enc,
+                          rows_buf,
+                          norm_weight_buf,
+                          normed_buf,
+                          row_count,
+                          hp.n_embd,
+                          hp.rms_eps,
+                        )
+      normed_buf
+    end
+
     def moe_expert_rows_by_expert_resident_graph_from_row_buffer(weights : DiffusionGemmaWeights,
                                                                  il : Int32,
                                                                  ffn_rows_buf : ML::MetalBuffer,
                                                                  row_count : Int32,
                                                                  assignments_by_expert : Hash(Int32, Array(Tuple(Int32, Int32))),
-                                                                 batch_by_expert : Hash(Int32, Int32)) : Hash(Int32, Array(Float32))?
+                                                                 batch_by_expert : Hash(Int32, Int32),
+                                                                 pre_norm_rows : Bool = false) : Hash(Int32, Array(Float32))?
       return nil unless Qwen35Metal.available?
       return nil if assignments_by_expert.empty?
 
@@ -1568,6 +1613,8 @@ module ML::GGUF
       down_buffers = {} of Int32 => ML::MetalBuffer
       graph = ML::Metal::ComputeGraph.new
       enc = ML::Metal::GraphEncoder.new(graph)
+      source_rows_buf = maybe_encode_moe_pre_ffw_norm_rows(enc, owned_buffers, weights, il, ffn_rows_buf, row_count, pre_norm_rows)
+      return nil unless source_rows_buf
       assignments_by_expert.keys.sort.each do |expert|
         assignments = assignments_by_expert[expert]
         batch = batch_by_expert[expert]
@@ -1589,7 +1636,7 @@ module ML::GGUF
         down_buf = ML::MetalBuffer.new(batch.to_i64 * hp.n_embd * sizeof(Float32))
         owned_buffers.concat([map_buf, input_buf, gate_buf, up_buf, hidden_buf, down_buf])
 
-        return nil unless Gemma4Metal.encode_gather_rows_by_map_to_buffer(enc, ffn_rows_buf, map_buf, input_buf, row_count, batch, hp.n_embd)
+        return nil unless Gemma4Metal.encode_gather_rows_by_map_to_buffer(enc, source_rows_buf, map_buf, input_buf, row_count, batch, hp.n_embd)
 
         gate_qw = expert_gate_qw(lw, hp, expert)
         up_qw = expert_up_qw(lw, hp, expert)
@@ -1624,7 +1671,8 @@ module ML::GGUF
                                                                 selected_by_row : Array(Array(ExpertRoute)),
                                                                 route_offsets_by_row : Array(Int32),
                                                                 assignments_by_expert : Hash(Int32, Array(Tuple(Int32, Int32))),
-                                                                batch_by_expert : Hash(Int32, Int32)) : Array(Float32)?
+                                                                batch_by_expert : Hash(Int32, Int32),
+                                                                pre_norm_rows : Bool = false) : Array(Float32)?
       return nil unless Qwen35Metal.available?
       return nil if assignments_by_expert.empty?
 
@@ -1665,6 +1713,8 @@ module ML::GGUF
 
       graph = ML::Metal::ComputeGraph.new
       enc = ML::Metal::GraphEncoder.new(graph)
+      source_rows_buf = maybe_encode_moe_pre_ffw_norm_rows(enc, owned_buffers, weights, il, ffn_rows_buf, row_count, pre_norm_rows)
+      return nil unless source_rows_buf
       assignments_by_expert.keys.sort.each do |expert|
         assignments = assignments_by_expert[expert]
         batch = batch_by_expert[expert]
@@ -1693,7 +1743,7 @@ module ML::GGUF
         down_buf = ML::MetalBuffer.new(batch.to_i64 * hp.n_embd * sizeof(Float32))
         owned_buffers.concat([gather_map_buf, scatter_map_buf, input_buf, gate_buf, up_buf, hidden_buf, down_buf])
 
-        return nil unless Gemma4Metal.encode_gather_rows_by_map_to_buffer(enc, ffn_rows_buf, gather_map_buf, input_buf, row_count, batch, hp.n_embd)
+        return nil unless Gemma4Metal.encode_gather_rows_by_map_to_buffer(enc, source_rows_buf, gather_map_buf, input_buf, row_count, batch, hp.n_embd)
 
         gate_qw = expert_gate_qw(lw, hp, expert)
         up_qw = expert_up_qw(lw, hp, expert)
@@ -1739,11 +1789,12 @@ module ML::GGUF
       down_ms = 0.0
       scatter_combine_norm_ms = 0.0
 
+      use_gpu_gather = moe_grouped_gpu_gather_enabled?(row_count) && moe_grouped_resident_batch_graph_enabled?(row_count)
+      use_gpu_prenorm = use_gpu_gather && moe_grouped_gpu_prenorm_enabled?(row_count)
+
       prep_t0 = Time.instant
-      ffn_in_rows = attn_out_rows.dup
-      row_count.times do |row|
-        fast_rms_norm_slice!(ffn_in_rows, row * hp.n_embd, hp.n_embd, lw.pre_ffw_norm_2, hp.rms_eps)
-      end
+      ffn_in_rows = nil.as(Array(Float32)?)
+      ffn_in_rows = moe_ffn_pre_norm_rows(weights, il, attn_out_rows, row_count) unless use_gpu_prenorm
 
       selected_by_row = if supplied_routes = routes_by_row
                           supplied_routes
@@ -1783,12 +1834,11 @@ module ML::GGUF
         batch_by_expert[expert] = assignments.size
       end
 
-      use_gpu_gather = moe_grouped_gpu_gather_enabled?(row_count) && moe_grouped_resident_batch_graph_enabled?(row_count)
       use_gpu_reduce = use_gpu_gather && moe_grouped_gpu_reduce_enabled?(row_count)
       expert_outputs_by_route_slot = use_gpu_reduce ? nil : Array(Float32).new(route_slot_count * hp.n_embd, 0.0_f32)
       ffn_inputs_by_expert = {} of Int32 => Array(Float32)
       unless use_gpu_gather
-        built = build_grouped_moe_inputs_by_expert(ffn_in_rows, assignments_by_expert, hp.n_embd)
+        built = build_grouped_moe_inputs_by_expert(ffn_in_rows.not_nil!, assignments_by_expert, hp.n_embd)
         ffn_inputs_by_expert = built[:inputs]
         prep_ms += built[:prep_ms]
       end
@@ -1797,7 +1847,7 @@ module ML::GGUF
       if moe_grouped_resident_batch_graph_enabled?(row_count)
         if use_gpu_reduce
           gate_up_t0 = Time.instant
-          ffn_rows_buf = ML::MetalBuffer.from_array(ffn_in_rows)
+          ffn_rows_buf = ML::MetalBuffer.from_array(use_gpu_prenorm ? attn_out_rows : ffn_in_rows.not_nil!)
           resident_reduced_rows = moe_grouped_route_reduce_resident_graph_from_row_buffer(
             weights,
             il,
@@ -1807,6 +1857,7 @@ module ML::GGUF
             route_offsets_by_row,
             assignments_by_expert,
             batch_by_expert,
+            pre_norm_rows: use_gpu_prenorm,
           )
           if resident_reduced_rows
             gate_up_ms += (Time.instant - gate_up_t0).total_milliseconds
@@ -1816,8 +1867,8 @@ module ML::GGUF
 
         gate_up_t0 = Time.instant
         resident_rows_by_expert = if use_gpu_gather
-                                    ffn_rows_buf = ML::MetalBuffer.from_array(ffn_in_rows)
-                                    moe_expert_rows_by_expert_resident_graph_from_row_buffer(weights, il, ffn_rows_buf, row_count, assignments_by_expert, batch_by_expert)
+                                    ffn_rows_buf = ML::MetalBuffer.from_array(use_gpu_prenorm ? attn_out_rows : ffn_in_rows.not_nil!)
+                                    moe_expert_rows_by_expert_resident_graph_from_row_buffer(weights, il, ffn_rows_buf, row_count, assignments_by_expert, batch_by_expert, pre_norm_rows: use_gpu_prenorm)
                                   else
                                     moe_expert_rows_by_expert_resident_graph(weights, il, ffn_inputs_by_expert, batch_by_expert)
                                   end
@@ -1825,7 +1876,8 @@ module ML::GGUF
       end
 
       if !resident_rows_by_expert && ffn_inputs_by_expert.empty?
-        built = build_grouped_moe_inputs_by_expert(ffn_in_rows, assignments_by_expert, hp.n_embd)
+        ffn_in_rows ||= moe_ffn_pre_norm_rows(weights, il, attn_out_rows, row_count)
+        built = build_grouped_moe_inputs_by_expert(ffn_in_rows.not_nil!, assignments_by_expert, hp.n_embd)
         ffn_inputs_by_expert = built[:inputs]
         prep_ms += built[:prep_ms]
       end
@@ -2782,6 +2834,25 @@ module ML::GGUF
 
     def moe_grouped_gpu_reduce_max_canvas : Int32
       env_i32("DIFFUSION_GEMMA_MOE_GROUPED_GPU_REDUCE_MAX_CANVAS", 8)
+    end
+
+    def moe_grouped_gpu_prenorm_enabled?(canvas_len : Int32) : Bool
+      return false unless ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM"]? == "1"
+      return false if ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM_OFF"]? == "1"
+      return false unless moe_grouped_gpu_gather_enabled?(canvas_len)
+      return false unless moe_grouped_resident_batch_graph_enabled?(canvas_len)
+      return false if canvas_len < moe_grouped_gpu_prenorm_min_canvas
+      max_canvas = moe_grouped_gpu_prenorm_max_canvas
+      return false if max_canvas > 0 && canvas_len > max_canvas
+      Qwen35Metal.available?
+    end
+
+    def moe_grouped_gpu_prenorm_min_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM_MIN_CANVAS", 8)
+    end
+
+    def moe_grouped_gpu_prenorm_max_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM_MAX_CANVAS", 8)
     end
 
     def grouped_moe_inplace_combine_enabled?(canvas_len : Int32) : Bool

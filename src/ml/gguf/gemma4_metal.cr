@@ -2847,7 +2847,7 @@ module ML::GGUF
         enc.dispatch_threadgroups({1, 1, 1}, {256, 1, 1})
       end
 
-      private def encode_rmsnorm_rows_weighted_out(enc : ML::Metal::ComputeEncoder,
+      private def encode_rmsnorm_rows_weighted_out(enc : ML::Metal::ComputeEncoder | ML::Metal::GraphEncoder,
                                                    x_buf : ML::MetalBuffer,
                                                    weight_buf : ML::MetalBuffer,
                                                    out_buf : ML::MetalBuffer,
@@ -3607,6 +3607,22 @@ module ML::GGUF
         return false if out_buf.size < out_row_count.to_i64 * dim * sizeof(Float32)
 
         encode_scatter_rows_by_map(enc, rows_buf, map_buf, out_buf, row_count, out_row_count, dim)
+        true
+      end
+
+      def encode_rmsnorm_rows_weighted_to_buffer(enc : ML::Metal::ComputeEncoder | ML::Metal::GraphEncoder,
+                                                 rows_buf : ML::MetalBuffer,
+                                                 weight_buf : ML::MetalBuffer,
+                                                 out_buf : ML::MetalBuffer,
+                                                 row_count : Int32,
+                                                 dim : Int32,
+                                                 eps : Float32) : Bool
+        return false unless row_count > 0 && dim > 0
+        return false if rows_buf.size < row_count.to_i64 * dim * sizeof(Float32)
+        return false if weight_buf.size < dim.to_i64 * sizeof(Float32)
+        return false if out_buf.size < row_count.to_i64 * dim * sizeof(Float32)
+
+        encode_rmsnorm_rows_weighted_out(enc, rows_buf, weight_buf, out_buf, dim, row_count, eps)
         true
       end
 

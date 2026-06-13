@@ -1407,6 +1407,10 @@ describe ML::GGUF::DiffusionGemmaCPU do
     old_gpu_reduce_off = ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_REDUCE_OFF"]?
     old_gpu_reduce_min = ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_REDUCE_MIN_CANVAS"]?
     old_gpu_reduce_max = ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_REDUCE_MAX_CANVAS"]?
+    old_gpu_prenorm = ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM"]?
+    old_gpu_prenorm_off = ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM_OFF"]?
+    old_gpu_prenorm_min = ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM_MIN_CANVAS"]?
+    old_gpu_prenorm_max = ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM_MAX_CANVAS"]?
     begin
       w = ML::GGUF::DiffusionGemmaWeights.from_gguf(DIFFUSION_GEMMA_26B_Q4KM)
       hp = w.hparams
@@ -1435,6 +1439,17 @@ describe ML::GGUF::DiffusionGemmaCPU do
       max_diff = 0.0_f32
       actual.size.times do |i|
         diff = (actual[i] - gpu_gather[i]).abs
+        max_diff = diff if diff > max_diff
+      end
+      max_diff.should be < 1.0e-3_f32
+
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM"] = "1"
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM_MIN_CANVAS"] = "4"
+      gpu_prenorm = ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows(w, 0, rows, rows_by_id.size, routes_by_row)
+      gpu_prenorm.size.should eq(gpu_gather.size)
+      max_diff = 0.0_f32
+      gpu_gather.size.times do |i|
+        diff = (gpu_gather[i] - gpu_prenorm[i]).abs
         max_diff = diff if diff > max_diff
       end
       max_diff.should be < 1.0e-3_f32
@@ -1485,6 +1500,21 @@ describe ML::GGUF::DiffusionGemmaCPU do
       ML::GGUF::DiffusionGemmaCPU.moe_grouped_gpu_reduce_enabled?(16).should be_false
       ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_REDUCE_OFF"] = "1"
       ML::GGUF::DiffusionGemmaCPU.moe_grouped_gpu_reduce_enabled?(8).should be_false
+
+      ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_GPU_REDUCE_OFF")
+      ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM")
+      ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM_MIN_CANVAS")
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_gpu_prenorm_enabled?(8).should be_false
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_gpu_prenorm_enabled?(4).should be_false
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_gpu_prenorm_enabled?(8).should be_true
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM_MIN_CANVAS"] = "8"
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM_MAX_CANVAS"] = "8"
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_gpu_prenorm_enabled?(4).should be_false
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_gpu_prenorm_enabled?(8).should be_true
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_gpu_prenorm_enabled?(16).should be_false
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_gpu_prenorm_enabled?(8).should be_false
     ensure
       if old_enabled
         ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH"] = old_enabled
@@ -1545,6 +1575,26 @@ describe ML::GGUF::DiffusionGemmaCPU do
         ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_REDUCE_MAX_CANVAS"] = old_gpu_reduce_max
       else
         ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_GPU_REDUCE_MAX_CANVAS")
+      end
+      if old_gpu_prenorm
+        ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM"] = old_gpu_prenorm
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM")
+      end
+      if old_gpu_prenorm_off
+        ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM_OFF"] = old_gpu_prenorm_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM_OFF")
+      end
+      if old_gpu_prenorm_min
+        ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM_MIN_CANVAS"] = old_gpu_prenorm_min
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM_MIN_CANVAS")
+      end
+      if old_gpu_prenorm_max
+        ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM_MAX_CANVAS"] = old_gpu_prenorm_max
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM_MAX_CANVAS")
       end
     end
   end
