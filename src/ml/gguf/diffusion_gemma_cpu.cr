@@ -1481,7 +1481,7 @@ module ML::GGUF
       end
 
       shared_rows = nil.as(Array(Float32)?)
-      if shared_ffn_batch_rows_enabled? && mask.canvas_len > 1
+      if shared_ffn_batch_rows_enabled?(mask.canvas_len) && mask.canvas_len > 1
         shared_t0 = Time.instant
         shared_rows = shared_dense_ffn_rows(weights, il, attn_out_rows, mask.canvas_len)
         shared_ffn_ms += (Time.instant - shared_t0).total_milliseconds
@@ -1646,9 +1646,21 @@ module ML::GGUF
       ENV["DIFFUSION_GEMMA_FUSED_QK_NORM_ROPE"]? == "1"
     end
 
-    def shared_ffn_batch_rows_enabled? : Bool
-      ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS"]? == "1" &&
-        ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS_OFF"]? != "1"
+    def shared_ffn_batch_rows_enabled?(canvas_len : Int32) : Bool
+      return false unless ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS"]? == "1"
+      return false if ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS_OFF"]? == "1"
+      return false if canvas_len < shared_ffn_batch_min_canvas
+      max_canvas = shared_ffn_batch_max_canvas
+      return false if max_canvas > 0 && canvas_len > max_canvas
+      true
+    end
+
+    def shared_ffn_batch_min_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_SHARED_FFN_BATCH_MIN_CANVAS", 1)
+    end
+
+    def shared_ffn_batch_max_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_SHARED_FFN_BATCH_MAX_CANVAS", 0)
     end
 
     def moe_ffn_batch_rows_enabled? : Bool

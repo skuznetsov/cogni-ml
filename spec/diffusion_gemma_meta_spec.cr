@@ -580,6 +580,54 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
   end
 
+  it "gates shared dense FFN row batching by canvas length env policy" do
+    old_enabled = ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS"]?
+    old_off = ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS_OFF"]?
+    old_min = ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_MIN_CANVAS"]?
+    old_max = ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_MAX_CANVAS"]?
+    begin
+      ENV.delete("DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS")
+      ENV.delete("DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS_OFF")
+      ENV.delete("DIFFUSION_GEMMA_SHARED_FFN_BATCH_MIN_CANVAS")
+      ENV.delete("DIFFUSION_GEMMA_SHARED_FFN_BATCH_MAX_CANVAS")
+      ML::GGUF::DiffusionGemmaCPU.shared_ffn_batch_rows_enabled?(4).should be_false
+
+      ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.shared_ffn_batch_rows_enabled?(2).should be_true
+
+      ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_MIN_CANVAS"] = "8"
+      ML::GGUF::DiffusionGemmaCPU.shared_ffn_batch_rows_enabled?(4).should be_false
+      ML::GGUF::DiffusionGemmaCPU.shared_ffn_batch_rows_enabled?(8).should be_true
+
+      ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_MAX_CANVAS"] = "8"
+      ML::GGUF::DiffusionGemmaCPU.shared_ffn_batch_rows_enabled?(16).should be_false
+
+      ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.shared_ffn_batch_rows_enabled?(8).should be_false
+    ensure
+      if old_enabled
+        ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS"] = old_enabled
+      else
+        ENV.delete("DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS")
+      end
+      if old_off
+        ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS_OFF"] = old_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_SHARED_FFN_BATCH_ROWS_OFF")
+      end
+      if old_min
+        ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_MIN_CANVAS"] = old_min
+      else
+        ENV.delete("DIFFUSION_GEMMA_SHARED_FFN_BATCH_MIN_CANVAS")
+      end
+      if old_max
+        ENV["DIFFUSION_GEMMA_SHARED_FFN_BATCH_MAX_CANVAS"] = old_max
+      else
+        ENV.delete("DIFFUSION_GEMMA_SHARED_FFN_BATCH_MAX_CANVAS")
+      end
+    end
+  end
+
   it "computes the shared dense FFN branch and residual combiner boundary" do
     pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
 
