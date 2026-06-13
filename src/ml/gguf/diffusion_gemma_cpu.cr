@@ -1443,6 +1443,61 @@ module ML::GGUF
       out
     end
 
+    def moe_expert_rows_by_expert_resident_graph(weights : DiffusionGemmaWeights,
+                                                 il : Int32,
+                                                 ffn_inputs_by_expert : Hash(Int32, Array(Float32)),
+                                                 batch_by_expert : Hash(Int32, Int32)) : Hash(Int32, Array(Float32))?
+      return nil unless Qwen35Metal.available?
+      return nil if ffn_inputs_by_expert.empty?
+
+      hp = weights.hparams
+      lw = weights.layers[il]
+      raise ArgumentError.new("down expert scale size mismatch") unless lw.ffn_down_exps_scale.size == hp.expert_count
+
+      owned_buffers = [] of ML::MetalBuffer
+      down_buffers = {} of Int32 => ML::MetalBuffer
+      graph = ML::Metal::ComputeGraph.new
+      enc = ML::Metal::GraphEncoder.new(graph)
+      ffn_inputs_by_expert.keys.sort.each do |expert|
+        batch = batch_by_expert[expert]
+        ffn_in_rows = ffn_inputs_by_expert[expert]
+        raise ArgumentError.new("expert id out of range") if expert < 0 || expert >= hp.expert_count
+        raise ArgumentError.new("expert row_count must be positive") unless batch > 0
+        raise ArgumentError.new("expert rows input size mismatch") unless ffn_in_rows.size == batch * hp.n_embd
+
+        input_buf = ML::MetalBuffer.from_array(ffn_in_rows)
+        gate_buf = ML::MetalBuffer.new(batch.to_i64 * hp.expert_ff * sizeof(Float32))
+        up_buf = ML::MetalBuffer.new(batch.to_i64 * hp.expert_ff * sizeof(Float32))
+        hidden_buf = ML::MetalBuffer.new(batch.to_i64 * hp.expert_ff * sizeof(Float32))
+        down_buf = ML::MetalBuffer.new(batch.to_i64 * hp.n_embd * sizeof(Float32))
+        owned_buffers.concat([input_buf, gate_buf, up_buf, hidden_buf, down_buf])
+
+        gate_qw = expert_gate_qw(lw, hp, expert)
+        up_qw = expert_up_qw(lw, hp, expert)
+        down_qw = expert_down_qw(lw, hp, expert)
+        return nil unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [gate_qw, up_qw], input_buf, [gate_buf, up_buf], batch)
+        return nil unless Gemma4Metal.encode_gelu_mul_to_buffer(enc, gate_buf, up_buf, hidden_buf, batch * hp.expert_ff)
+        return nil unless Qwen35Metal.encode_matmul_to_buffer(enc, down_qw, hidden_buf, down_buf, batch)
+        down_buffers[expert] = down_buf
+      end
+
+      graph.compile!
+      cmd = ML::Metal::CommandBuffer.new
+      graph.encode(cmd)
+      cmd.commit
+      cmd.wait
+
+      outputs = {} of Int32 => Array(Float32)
+      down_buffers.each do |expert, down_buf|
+        batch = batch_by_expert[expert]
+        out = down_buf.read(batch * hp.n_embd)
+        scale = lw.ffn_down_exps_scale[expert]
+        out.size.times { |i| out[i] *= scale }
+        outputs[expert] = out
+      end
+      outputs
+    end
+
     def moe_ffn_grouped_expert_rows_timed(weights : DiffusionGemmaWeights,
                                           il : Int32,
                                           attn_out_rows : Array(Float32),
@@ -1502,6 +1557,8 @@ module ML::GGUF
       expert_outputs_by_route_slot = Array(Float32).new(route_slot_count * hp.n_embd, 0.0_f32)
       prep_ms += (Time.instant - prep_t0).total_milliseconds
 
+      ffn_inputs_by_expert = {} of Int32 => Array(Float32)
+      batch_by_expert = {} of Int32 => Int32
       assignments_by_expert.each do |expert, assignments|
         batch = assignments.size
         gather_t0 = Time.instant
@@ -1513,14 +1570,21 @@ module ML::GGUF
           (ffn_inputs.to_unsafe + dst_offset).copy_from(ffn_in_rows.to_unsafe + src_offset, hp.n_embd)
         end
         prep_ms += (Time.instant - gather_t0).total_milliseconds
+        ffn_inputs_by_expert[expert] = ffn_inputs
+        batch_by_expert[expert] = batch
+      end
 
-        gate_up_qw = expert_gate_up_qw(lw, hp, expert)
+      resident_rows_by_expert = nil
+      if moe_grouped_resident_batch_graph_enabled?(row_count)
         gate_up_t0 = Time.instant
-        resident_rows = if moe_grouped_resident_graph_enabled?
-                          moe_expert_rows_resident_graph(weights, il, expert, ffn_inputs, batch)
-                        end
-        if resident_rows
-          gate_up_ms += (Time.instant - gate_up_t0).total_milliseconds
+        resident_rows_by_expert = moe_expert_rows_by_expert_resident_graph(weights, il, ffn_inputs_by_expert, batch_by_expert)
+        gate_up_ms += (Time.instant - gate_up_t0).total_milliseconds if resident_rows_by_expert
+      end
+
+      if resident_rows_by_expert
+        assignments_by_expert.each do |expert, assignments|
+          batch = batch_by_expert[expert]
+          resident_rows = resident_rows_by_expert[expert]
           raise ArgumentError.new("resident expert rows size mismatch") unless resident_rows.size == batch * hp.n_embd
 
           scatter_t0 = Time.instant
@@ -1532,7 +1596,32 @@ module ML::GGUF
             (expert_outputs_by_route_slot.to_unsafe + dst_offset).copy_from(resident_rows.to_unsafe + src_offset, hp.n_embd)
           end
           scatter_combine_norm_ms += (Time.instant - scatter_t0).total_milliseconds
-        else
+        end
+      else
+        assignments_by_expert.each do |expert, assignments|
+          batch = batch_by_expert[expert]
+          ffn_inputs = ffn_inputs_by_expert[expert]
+          gate_up_t0 = Time.instant
+          resident_rows = if moe_grouped_resident_graph_enabled?
+                            moe_expert_rows_resident_graph(weights, il, expert, ffn_inputs, batch)
+                          end
+          if resident_rows
+            gate_up_ms += (Time.instant - gate_up_t0).total_milliseconds
+            raise ArgumentError.new("resident expert rows size mismatch") unless resident_rows.size == batch * hp.n_embd
+
+            scatter_t0 = Time.instant
+            assignments.each_with_index do |assignment, batch_row|
+              row = assignment[0]
+              route_index = assignment[1]
+              src_offset = batch_row * hp.n_embd
+              dst_offset = (route_offsets_by_row[row] + route_index) * hp.n_embd
+              (expert_outputs_by_route_slot.to_unsafe + dst_offset).copy_from(resident_rows.to_unsafe + src_offset, hp.n_embd)
+            end
+            scatter_combine_norm_ms += (Time.instant - scatter_t0).total_milliseconds
+            next
+          end
+
+          gate_up_qw = expert_gate_up_qw(lw, hp, expert)
           gate_up_rows = prompt_projection_matmul(gate_up_qw, ffn_inputs, batch)
           gate_up_ms += (Time.instant - gate_up_t0).total_milliseconds
           raise ArgumentError.new("expert gate_up rows size mismatch") unless gate_up_rows.size == batch * hp.expert_ff * 2
@@ -2352,6 +2441,23 @@ module ML::GGUF
       ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH"]? == "1" &&
         ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH_OFF"]? != "1" &&
         Qwen35Metal.available?
+    end
+
+    def moe_grouped_resident_batch_graph_enabled?(canvas_len : Int32) : Bool
+      return false unless moe_grouped_resident_graph_enabled?
+      return false if ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_BATCH_GRAPH_OFF"]? == "1"
+      return false if canvas_len < moe_grouped_resident_batch_graph_min_canvas
+      max_canvas = moe_grouped_resident_batch_graph_max_canvas
+      return false if max_canvas > 0 && canvas_len > max_canvas
+      true
+    end
+
+    def moe_grouped_resident_batch_graph_min_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_BATCH_GRAPH_MIN_CANVAS", 1)
+    end
+
+    def moe_grouped_resident_batch_graph_max_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_BATCH_GRAPH_MAX_CANVAS", 8)
     end
 
     def moe_ffn_grouped_expert_min_canvas : Int32

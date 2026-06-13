@@ -1277,6 +1277,8 @@ describe ML::GGUF::DiffusionGemmaCPU do
 
     old_enabled = ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH"]?
     old_off = ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH_OFF"]?
+    old_batch_off = ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_BATCH_GRAPH_OFF"]?
+    old_batch_max = ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_BATCH_GRAPH_MAX_CANVAS"]?
     begin
       w = ML::GGUF::DiffusionGemmaWeights.from_gguf(DIFFUSION_GEMMA_26B_Q4KM)
       hp = w.hparams
@@ -1297,6 +1299,13 @@ describe ML::GGUF::DiffusionGemmaCPU do
         max_diff = diff if diff > max_diff
       end
       max_diff.should be < 1.0e-3_f32
+
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_BATCH_GRAPH_MAX_CANVAS"] = "8"
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_resident_batch_graph_enabled?(4).should be_true
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_resident_batch_graph_enabled?(8).should be_true
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_resident_batch_graph_enabled?(16).should be_false
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_BATCH_GRAPH_MAX_CANVAS"] = "0"
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_resident_batch_graph_enabled?(16).should be_true
     ensure
       if old_enabled
         ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH"] = old_enabled
@@ -1307,6 +1316,16 @@ describe ML::GGUF::DiffusionGemmaCPU do
         ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH_OFF"] = old_off
       else
         ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH_OFF")
+      end
+      if old_batch_off
+        ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_BATCH_GRAPH_OFF"] = old_batch_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_BATCH_GRAPH_OFF")
+      end
+      if old_batch_max
+        ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_BATCH_GRAPH_MAX_CANVAS"] = old_batch_max
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_BATCH_GRAPH_MAX_CANVAS")
       end
     end
   end
