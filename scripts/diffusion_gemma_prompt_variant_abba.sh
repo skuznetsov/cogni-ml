@@ -313,7 +313,9 @@ for case in cases:
             f"base_fixed_gqa2={unique_value(by_arm['base'], 'loop_context_fixed_gqa2')} "
             f"variant_fixed_gqa2={unique_value(by_arm['variant'], 'loop_context_fixed_gqa2')} "
             f"base_attention_residual_metal_rows={unique_value(by_arm['base'], 'loop_attention_residual_metal_rows')} "
-            f"variant_attention_residual_metal_rows={unique_value(by_arm['variant'], 'loop_attention_residual_metal_rows')}"
+            f"variant_attention_residual_metal_rows={unique_value(by_arm['variant'], 'loop_attention_residual_metal_rows')} "
+            f"base_attention_residual_context_buffer={unique_value(by_arm['base'], 'loop_attention_residual_context_buffer')} "
+            f"variant_attention_residual_context_buffer={unique_value(by_arm['variant'], 'loop_attention_residual_context_buffer')}"
         )
         for metric in (
             "loop_ms_median",

@@ -775,6 +775,87 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
   end
 
+  it "gates Metal attention residual context-buffer transport by canvas length env policy" do
+    old_residual = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS"]?
+    old_residual_off = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS_OFF"]?
+    old_residual_min = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MIN_ROWS"]?
+    old_residual_max = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MAX_ROWS"]?
+    old_enabled = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER"]?
+    old_off = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_OFF"]?
+    old_min = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MIN_CANVAS"]?
+    old_max = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MAX_CANVAS"]?
+    begin
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS_OFF")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MIN_ROWS")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MAX_ROWS")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_OFF")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MIN_CANVAS")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MAX_CANVAS")
+      ML::GGUF::DiffusionGemmaCPU.attention_residual_context_buffer_enabled?(8).should be_false
+
+      ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.attention_residual_context_buffer_enabled?(8).should be_false
+
+      ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS"] = "1"
+      if ML::GGUF::Gemma4Metal.available?
+        ML::GGUF::DiffusionGemmaCPU.attention_residual_context_buffer_enabled?(1).should be_true
+
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MIN_CANVAS"] = "4"
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MAX_CANVAS"] = "8"
+        ML::GGUF::DiffusionGemmaCPU.attention_residual_context_buffer_enabled?(2).should be_false
+        ML::GGUF::DiffusionGemmaCPU.attention_residual_context_buffer_enabled?(4).should be_true
+        ML::GGUF::DiffusionGemmaCPU.attention_residual_context_buffer_enabled?(8).should be_true
+        ML::GGUF::DiffusionGemmaCPU.attention_residual_context_buffer_enabled?(16).should be_false
+
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_OFF"] = "1"
+        ML::GGUF::DiffusionGemmaCPU.attention_residual_context_buffer_enabled?(8).should be_false
+      end
+    ensure
+      if old_residual
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS"] = old_residual
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS")
+      end
+      if old_residual_off
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS_OFF"] = old_residual_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS_OFF")
+      end
+      if old_residual_min
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MIN_ROWS"] = old_residual_min
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MIN_ROWS")
+      end
+      if old_residual_max
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MAX_ROWS"] = old_residual_max
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MAX_ROWS")
+      end
+      if old_enabled
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER"] = old_enabled
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER")
+      end
+      if old_off
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_OFF"] = old_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_OFF")
+      end
+      if old_min
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MIN_CANVAS"] = old_min
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MIN_CANVAS")
+      end
+      if old_max
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MAX_CANVAS"] = old_max
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MAX_CANVAS")
+      end
+    end
+  end
+
   it "computes the shared dense FFN branch and residual combiner boundary" do
     pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
 
@@ -1428,6 +1509,18 @@ describe ML::GGUF::DiffusionGemmaCPU do
     old_context_metal_off = ENV["DIFFUSION_GEMMA_CONTEXT_METAL_OFF"]?
     old_batch_rows_off = ENV["DIFFUSION_GEMMA_CONTEXT_METAL_BATCH_ROWS_OFF"]?
     old_fixed_gqa2 = ENV["GEMMA4_ROW_PREFILL_ATTN_FIXED_SWA256_VEC_GQA2"]?
+    old_attention_out = ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS"]?
+    old_attention_out_off = ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS_OFF"]?
+    old_attention_out_min = ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MIN_CANVAS"]?
+    old_attention_out_max = ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MAX_CANVAS"]?
+    old_residual = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS"]?
+    old_residual_off = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS_OFF"]?
+    old_residual_min = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MIN_ROWS"]?
+    old_residual_max = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MAX_ROWS"]?
+    old_context_buffer = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER"]?
+    old_context_buffer_off = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_OFF"]?
+    old_context_buffer_min = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MIN_CANVAS"]?
+    old_context_buffer_max = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MAX_CANVAS"]?
     begin
       il = 0
       prompt0 = ML::GGUF::DiffusionGemmaCPU.scaled_embedding_lookup(w, 1)
@@ -1454,6 +1547,33 @@ describe ML::GGUF::DiffusionGemmaCPU do
       metal_fixed = ML::GGUF::DiffusionGemmaCPU.layer_forward_decode_canvas_rows_with_prompt_projections_timed(
         w, il, metal_fixed_cache.projections_by_layer[0], canvas_rows, mask, metal_fixed_cache.metal_cache_by_layer[0]?).rows
       ENV.delete("GEMMA4_ROW_PREFILL_ATTN_FIXED_SWA256_VEC_GQA2")
+      ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS"] = "1"
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS_OFF")
+      ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MIN_CANVAS"] = "2"
+      ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MAX_CANVAS"] = "2"
+      ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS"] = "1"
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS_OFF")
+      ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MIN_ROWS"] = "2"
+      ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MAX_ROWS"] = "2"
+      ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER"] = "1"
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_OFF")
+      ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MIN_CANVAS"] = "2"
+      ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MAX_CANVAS"] = "2"
+      metal_context_buffer_cache = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(w, prompt_rows, mask, max_layers: 1, materialize_final_rows: false)
+      metal_context_buffer = ML::GGUF::DiffusionGemmaCPU.layer_forward_decode_canvas_rows_with_prompt_projections_timed(
+        w, il, metal_context_buffer_cache.projections_by_layer[0], canvas_rows, mask, metal_context_buffer_cache.metal_cache_by_layer[0]?).rows
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS_OFF")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MIN_CANVAS")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MAX_CANVAS")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS_OFF")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MIN_ROWS")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MAX_ROWS")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_OFF")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MIN_CANVAS")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MAX_CANVAS")
       ENV["DIFFUSION_GEMMA_CONTEXT_METAL_BATCH_ROWS_OFF"] = "1"
       metal_unbatched_cache = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(w, prompt_rows, mask, max_layers: 1, materialize_final_rows: false)
       metal_unbatched = ML::GGUF::DiffusionGemmaCPU.layer_forward_decode_canvas_rows_with_prompt_projections_timed(
@@ -1471,6 +1591,12 @@ describe ML::GGUF::DiffusionGemmaCPU do
         max_fixed_diff = diff if diff > max_fixed_diff
       end
       max_fixed_diff.should be < 1.0e-3_f32
+      max_context_buffer_diff = 0.0_f32
+      base.size.times do |i|
+        diff = (base[i] - metal_context_buffer[i]).abs
+        max_context_buffer_diff = diff if diff > max_context_buffer_diff
+      end
+      max_context_buffer_diff.should be < 1.0e-3_f32
       max_unbatched_diff = 0.0_f32
       base.size.times do |i|
         diff = (base[i] - metal_unbatched[i]).abs
@@ -1497,6 +1623,66 @@ describe ML::GGUF::DiffusionGemmaCPU do
         ENV["GEMMA4_ROW_PREFILL_ATTN_FIXED_SWA256_VEC_GQA2"] = old_fixed_gqa2
       else
         ENV.delete("GEMMA4_ROW_PREFILL_ATTN_FIXED_SWA256_VEC_GQA2")
+      end
+      if old_attention_out
+        ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS"] = old_attention_out
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS")
+      end
+      if old_attention_out_off
+        ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS_OFF"] = old_attention_out_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS_OFF")
+      end
+      if old_attention_out_min
+        ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MIN_CANVAS"] = old_attention_out_min
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MIN_CANVAS")
+      end
+      if old_attention_out_max
+        ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MAX_CANVAS"] = old_attention_out_max
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MAX_CANVAS")
+      end
+      if old_residual
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS"] = old_residual
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS")
+      end
+      if old_residual_off
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS_OFF"] = old_residual_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS_OFF")
+      end
+      if old_residual_min
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MIN_ROWS"] = old_residual_min
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MIN_ROWS")
+      end
+      if old_residual_max
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MAX_ROWS"] = old_residual_max
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MAX_ROWS")
+      end
+      if old_context_buffer
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER"] = old_context_buffer
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER")
+      end
+      if old_context_buffer_off
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_OFF"] = old_context_buffer_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_OFF")
+      end
+      if old_context_buffer_min
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MIN_CANVAS"] = old_context_buffer_min
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MIN_CANVAS")
+      end
+      if old_context_buffer_max
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MAX_CANVAS"] = old_context_buffer_max
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MAX_CANVAS")
       end
     end
   end

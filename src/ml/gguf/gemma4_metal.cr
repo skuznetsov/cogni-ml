@@ -107,6 +107,19 @@ module ML::GGUF
         nil
       end
 
+      def attention_context_rows_fixed_resident_buffers_no_read(q_buf : ML::MetalBuffer,
+                                                                k_cache_buf : ML::MetalBuffer,
+                                                                v_cache_buf : ML::MetalBuffer,
+                                                                out_buf : ML::MetalBuffer,
+                                                                end_pos : Int32,
+                                                                rows : Int32,
+                                                                n_head : Int32,
+                                                                n_head_kv : Int32,
+                                                                head_dim : Int32,
+                                                                sliding_window : Int32) : Bool
+        false
+      end
+
       def attention_residual_rows_from_context(context_rows : Array(Float32),
                                                residual_rows : Array(Float32),
                                                attn_output_qw : QuantWeight,
@@ -115,6 +128,17 @@ module ML::GGUF
                                                hidden_dim : Int32,
                                                context_dim : Int32,
                                                eps : Float32) : Array(Float32)?
+        nil
+      end
+
+      def attention_residual_rows_from_context_buffer(context_buf : ML::MetalBuffer,
+                                                      residual_rows : Array(Float32),
+                                                      attn_output_qw : QuantWeight,
+                                                      post_attention_norm : Array(Float32),
+                                                      rows : Int32,
+                                                      hidden_dim : Int32,
+                                                      context_dim : Int32,
+                                                      eps : Float32) : Array(Float32)?
         nil
       end
 
@@ -801,6 +825,42 @@ module ML::GGUF
         out_buf.read(rows * q_dim)
       end
 
+      def attention_context_rows_fixed_resident_buffers_no_read(q_buf : ML::MetalBuffer,
+                                                                k_cache_buf : ML::MetalBuffer,
+                                                                v_cache_buf : ML::MetalBuffer,
+                                                                out_buf : ML::MetalBuffer,
+                                                                end_pos : Int32,
+                                                                rows : Int32,
+                                                                n_head : Int32,
+                                                                n_head_kv : Int32,
+                                                                head_dim : Int32,
+                                                                sliding_window : Int32) : Bool
+        return false unless available?
+        raise ArgumentError.new("end_pos must be non-negative") if end_pos < 0
+        raise ArgumentError.new("rows must be positive") unless rows > 0
+        raise ArgumentError.new("head_dim must be positive") unless head_dim > 0
+        raise ArgumentError.new("unsupported head_dim #{head_dim}; max 512") if head_dim > 512
+        raise ArgumentError.new("invalid GQA layout") unless n_head_kv > 0 && n_head > 0 && n_head % n_head_kv == 0
+        raise ArgumentError.new("sliding_window must be non-negative") if sliding_window < 0
+
+        q_dim = n_head * head_dim
+        kv_dim = n_head_kv * head_dim
+        required_cache_rows = end_pos + 1
+        raise ArgumentError.new("q buffer too small") if q_buf.size < rows.to_i64 * q_dim * sizeof(Float32)
+        raise ArgumentError.new("out buffer too small") if out_buf.size < rows.to_i64 * q_dim * sizeof(Float32)
+        raise ArgumentError.new("k_cache buffer too small") if k_cache_buf.size < required_cache_rows.to_i64 * kv_dim * sizeof(Float32)
+        raise ArgumentError.new("v_cache buffer too small") if v_cache_buf.size < required_cache_rows.to_i64 * kv_dim * sizeof(Float32)
+
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        encode_attention_context_rows_fixed(enc, q_buf, k_cache_buf, v_cache_buf, out_buf,
+          end_pos, rows, n_head, n_head_kv, head_dim, n_head // n_head_kv, sliding_window)
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
+        true
+      end
+
       def attention_context_from_projection_resident_buffers(q_buf : ML::MetalBuffer,
                                                              k_buf : ML::MetalBuffer,
                                                              v_buf : ML::MetalBuffer,
@@ -951,6 +1011,41 @@ module ML::GGUF
         raise ArgumentError.new("attention residual norm size mismatch") unless post_attention_norm.size == hidden_dim
 
         context_buf = ML::MetalBuffer.from_array(context_rows)
+        residual_buf = ML::MetalBuffer.from_array(residual_rows)
+        weight_buf = ML::MetalBuffer.from_array(post_attention_norm)
+        projected_buf = ML::MetalBuffer.new(rows.to_i64 * hidden_dim * sizeof(Float32))
+        out_buf = ML::MetalBuffer.new(rows.to_i64 * hidden_dim * sizeof(Float32))
+
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        unless Qwen35Metal.encode_matmul_to_buffer(enc, attn_output_qw, context_buf, projected_buf, rows)
+          enc.end_encoding
+          return nil
+        end
+        encode_rmsnorm_add_rows(enc, projected_buf, weight_buf, residual_buf, out_buf, hidden_dim, rows, eps)
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
+        out_buf.read(rows * hidden_dim)
+      end
+
+      def attention_residual_rows_from_context_buffer(context_buf : ML::MetalBuffer,
+                                                      residual_rows : Array(Float32),
+                                                      attn_output_qw : QuantWeight,
+                                                      post_attention_norm : Array(Float32),
+                                                      rows : Int32,
+                                                      hidden_dim : Int32,
+                                                      context_dim : Int32,
+                                                      eps : Float32) : Array(Float32)?
+        return nil unless available?
+        raise ArgumentError.new("attention residual rows must be positive") unless rows > 0
+        raise ArgumentError.new("attention residual hidden_dim must be positive") unless hidden_dim > 0
+        raise ArgumentError.new("attention residual context_dim must be positive") unless context_dim > 0
+        raise ArgumentError.new("attention residual context buffer too small") if context_buf.size < rows.to_i64 * context_dim * sizeof(Float32)
+        raise ArgumentError.new("attention residual rows size mismatch") unless residual_rows.size == rows * hidden_dim
+        raise ArgumentError.new("attention residual projection shape mismatch") unless attn_output_qw.in_dim == context_dim && attn_output_qw.out_dim == hidden_dim
+        raise ArgumentError.new("attention residual norm size mismatch") unless post_attention_norm.size == hidden_dim
+
         residual_buf = ML::MetalBuffer.from_array(residual_rows)
         weight_buf = ML::MetalBuffer.from_array(post_attention_norm)
         projected_buf = ML::MetalBuffer.new(rows.to_i64 * hidden_dim * sizeof(Float32))

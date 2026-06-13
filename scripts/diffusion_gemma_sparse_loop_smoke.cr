@@ -631,6 +631,7 @@ prompt_sets.each_with_index do |tokens, prompt_set_index|
         {"loop_context_batch_rows", ML::GGUF::DiffusionGemmaCPU.decode_context_metal_batch_rows_enabled?.to_s},
         {"loop_context_fixed_gqa2", ML::GGUF::DiffusionGemmaCPU.decode_context_fixed_gqa2_enabled?.to_s},
         {"loop_attention_residual_metal_rows", ML::GGUF::DiffusionGemmaCPU.attention_residual_metal_rows_enabled?(canvas_tokens.size).to_s},
+        {"loop_attention_residual_context_buffer", loop.step_traces.any? { |trace| trace.decode_attention_residual_context_buffer }.to_s},
         {"loop_decode_qkv_ms", loop_decode_qkv_ms.round(3).to_s},
         {"loop_decode_context_ms", loop_decode_context_ms.round(3).to_s},
         {"loop_decode_context_score_ms", loop_decode_context_score_ms.round(3).to_s},

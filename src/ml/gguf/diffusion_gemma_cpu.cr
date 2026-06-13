@@ -151,6 +151,7 @@ module ML::GGUF
       getter update_ms : Float64
       getter regenerate_ms : Float64
       getter proposal_ms : Float64
+      getter decode_attention_residual_context_buffer : Bool
 
       def initialize(@step,
                      @prediction_count,
@@ -173,7 +174,8 @@ module ML::GGUF
                      @output_head_ms = 0.0,
                      @update_ms = 0.0,
                      @regenerate_ms = 0.0,
-                     @proposal_ms = 0.0)
+                     @proposal_ms = 0.0,
+                     @decode_attention_residual_context_buffer = false)
       end
     end
 
@@ -215,6 +217,7 @@ module ML::GGUF
       getter decode_moe_ffn_ms : Float64
       getter decode_combine_scale_ms : Float64
       getter output_head_ms : Float64
+      getter decode_attention_residual_context_buffer : Bool
 
       def initialize(@predictions,
                      @decode_stack_ms,
@@ -227,7 +230,8 @@ module ML::GGUF
                      @output_head_ms,
                      @decode_context_score_ms = 0.0,
                      @decode_context_softmax_ms = 0.0,
-                     @decode_context_value_ms = 0.0)
+                     @decode_context_value_ms = 0.0,
+                     @decode_attention_residual_context_buffer = false)
       end
     end
 
@@ -247,6 +251,7 @@ module ML::GGUF
       getter output_head_ms : Float64
       getter update_ms : Float64
       getter regenerate_ms : Float64
+      getter decode_attention_residual_context_buffer : Bool
 
       def initialize(@update,
                      @prediction_ms,
@@ -262,7 +267,8 @@ module ML::GGUF
                      @regenerate_ms,
                      @decode_context_score_ms = 0.0,
                      @decode_context_softmax_ms = 0.0,
-                     @decode_context_value_ms = 0.0)
+                     @decode_context_value_ms = 0.0,
+                     @decode_attention_residual_context_buffer = false)
       end
     end
 
@@ -277,6 +283,7 @@ module ML::GGUF
       getter shared_ffn_ms : Float64
       getter moe_ffn_ms : Float64
       getter combine_scale_ms : Float64
+      getter attention_residual_context_buffer : Bool
 
       def initialize(@rows,
                      @qkv_ms,
@@ -287,7 +294,8 @@ module ML::GGUF
                      @combine_scale_ms,
                      @context_score_ms = 0.0,
                      @context_softmax_ms = 0.0,
-                     @context_value_ms = 0.0)
+                     @context_value_ms = 0.0,
+                     @attention_residual_context_buffer = false)
       end
     end
 
@@ -919,6 +927,31 @@ module ML::GGUF
       result
     end
 
+    def attention_residual_from_context_buffer(weights : DiffusionGemmaWeights,
+                                               il : Int32,
+                                               x_rows : Array(Float32),
+                                               context_buf : ML::MetalBuffer,
+                                               row_count : Int32) : Array(Float32)?
+      hp = weights.hparams
+      lw = weights.layers[il]
+      expected = row_count * hp.n_embd
+      context_dim = hp.n_head * hp.head_dim_for_layer(il)
+      raise ArgumentError.new("attention_residual_from_context_buffer row_count must be positive") unless row_count > 0
+      raise ArgumentError.new("attention residual rows input size mismatch") unless x_rows.size == expected
+      raise ArgumentError.new("attention residual context buffer too small") if context_buf.size < row_count.to_i64 * context_dim * sizeof(Float32)
+
+      Gemma4Metal.attention_residual_rows_from_context_buffer(
+        context_buf,
+        x_rows,
+        lw.attn_output_qw,
+        lw.post_attention_norm,
+        row_count,
+        hp.n_embd,
+        context_dim,
+        hp.rms_eps,
+      )
+    end
+
     # Dense shared FFN branch inside DiffusionGemma's Gemma4-MoE block. This is
     # only one branch of the oracle `dense + MoE -> post_ffw_norm -> residual`
     # path; expert routing is deliberately separate.
@@ -1444,6 +1477,7 @@ module ML::GGUF
       context_score_ms = 0.0
       context_softmax_ms = 0.0
       context_value_ms = 0.0
+      attention_residual_context_buffer_hit = false
       attention_out_ms = 0.0
       shared_ffn_ms = 0.0
       moe_ffn_ms = 0.0
@@ -1465,12 +1499,13 @@ module ML::GGUF
         context_score_ms += timed.context_score_ms
         context_softmax_ms += timed.context_softmax_ms
         context_value_ms += timed.context_value_ms
+        attention_residual_context_buffer_hit ||= timed.attention_residual_context_buffer
         attention_out_ms += timed.attention_out_ms
         shared_ffn_ms += timed.shared_ffn_ms
         moe_ffn_ms += timed.moe_ffn_ms
         combine_scale_ms += timed.combine_scale_ms
       end
-      DecodeCanvasRowsTiming.new(rows, qkv_ms, context_ms, attention_out_ms, shared_ffn_ms, moe_ffn_ms, combine_scale_ms, context_score_ms, context_softmax_ms, context_value_ms)
+      DecodeCanvasRowsTiming.new(rows, qkv_ms, context_ms, attention_out_ms, shared_ffn_ms, moe_ffn_ms, combine_scale_ms, context_score_ms, context_softmax_ms, context_value_ms, attention_residual_context_buffer_hit)
     end
 
     def layer_forward_unified_rows(weights : DiffusionGemmaWeights,
@@ -1574,7 +1609,22 @@ module ML::GGUF
       context_softmax_ms = 0.0
       context_value_ms = 0.0
       batch_context_t0 = Time.instant
-      batched_context = if prompt_metal_cache && context_metal_batch_rows_enabled?
+      batched_context_buf = if prompt_metal_cache &&
+                               context_metal_batch_rows_enabled? &&
+                               attention_out_batch_rows_enabled?(mask.canvas_len) &&
+                               attention_residual_context_buffer_enabled?(mask.canvas_len)
+                              attention_context_decode_batch_metal_resident_buffer(
+                                canvas_projections,
+                                prompt_metal_cache.not_nil!,
+                                hp,
+                                il,
+                                low: hp.sliding_window?(il) ? mask.canvas_prompt_low : 0,
+                                high: mask.total_tokens - 1,
+                              )
+                            else
+                              nil
+                            end
+      batched_context = if batched_context_buf.nil? && prompt_metal_cache && context_metal_batch_rows_enabled?
                           attention_context_decode_batch_metal_resident(
                             canvas_projections,
                             prompt_metal_cache.not_nil!,
@@ -1587,6 +1637,8 @@ module ML::GGUF
                           nil
                         end
       context_ms += (Time.instant - batch_context_t0).total_milliseconds if batched_context
+      context_ms += (Time.instant - batch_context_t0).total_milliseconds if batched_context_buf
+      attention_residual_context_buffer_hit = false
       attention_out_ms = 0.0
       shared_ffn_ms = 0.0
       moe_ffn_ms = 0.0
@@ -1594,11 +1646,11 @@ module ML::GGUF
       result = Array(Float32).new(canvas_size, 0.0_f32)
       attn_out_rows = Array(Float32).new(canvas_size, 0.0_f32)
       context_rows = if attention_out_batch_rows_enabled?(mask.canvas_len) && mask.canvas_len > 1
-                       batched_context || Array(Float32).new(mask.canvas_len * q_context_dim, 0.0_f32)
+                       batched_context || (batched_context_buf ? nil : Array(Float32).new(mask.canvas_len * q_context_dim, 0.0_f32))
                      else
                        nil
                      end
-      skip_context_row_loop = !batched_context.nil? && !context_rows.nil?
+      skip_context_row_loop = !batched_context_buf.nil? || (!batched_context.nil? && !context_rows.nil?)
       unless skip_context_row_loop
         mask.canvas_len.times do |canvas_pos|
           x = canvas_rows[canvas_pos * hp.n_embd, hp.n_embd]
@@ -1633,6 +1685,16 @@ module ML::GGUF
       if batched_context_rows = context_rows
         attention_t0 = Time.instant
         attn_out_rows = attention_residual_from_context_rows(weights, il, canvas_rows, batched_context_rows, mask.canvas_len)
+        attention_out_ms += (Time.instant - attention_t0).total_milliseconds
+      elsif context_buf = batched_context_buf
+        attention_t0 = Time.instant
+        if metal_rows = attention_residual_from_context_buffer(weights, il, canvas_rows, context_buf, mask.canvas_len)
+          attn_out_rows = metal_rows
+          attention_residual_context_buffer_hit = true
+        else
+          context_rows_fallback = context_buf.read(mask.canvas_len * q_context_dim)
+          attn_out_rows = attention_residual_from_context_rows(weights, il, canvas_rows, context_rows_fallback, mask.canvas_len)
+        end
         attention_out_ms += (Time.instant - attention_t0).total_milliseconds
       end
 
@@ -1685,7 +1747,7 @@ module ML::GGUF
         combine_scale_ms += (Time.instant - combine_t0).total_milliseconds
         copy_row!(result, canvas_pos, hp.n_embd, layer_row)
       end
-      DecodeCanvasRowsTiming.new(result, qkv_ms, context_ms, attention_out_ms, shared_ffn_ms, moe_ffn_ms, combine_scale_ms, context_score_ms, context_softmax_ms, context_value_ms)
+      DecodeCanvasRowsTiming.new(result, qkv_ms, context_ms, attention_out_ms, shared_ffn_ms, moe_ffn_ms, combine_scale_ms, context_score_ms, context_softmax_ms, context_value_ms, attention_residual_context_buffer_hit)
     end
 
     def prompt_attention_projections(weights : DiffusionGemmaWeights,
@@ -1843,6 +1905,24 @@ module ML::GGUF
 
     def attention_residual_metal_max_rows : Int32
       env_i32("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MAX_ROWS", 0)
+    end
+
+    def attention_residual_context_buffer_enabled?(canvas_len : Int32) : Bool
+      return false unless ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER"]? == "1"
+      return false if ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_OFF"]? == "1"
+      return false unless attention_residual_metal_rows_enabled?(canvas_len)
+      return false if canvas_len < attention_residual_context_buffer_min_canvas
+      max_canvas = attention_residual_context_buffer_max_canvas
+      return false if max_canvas > 0 && canvas_len > max_canvas
+      Gemma4Metal.available?
+    end
+
+    def attention_residual_context_buffer_min_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MIN_CANVAS", 1)
+    end
+
+    def attention_residual_context_buffer_max_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MAX_CANVAS", 0)
     end
 
     def shared_ffn_batch_rows_enabled?(canvas_len : Int32) : Bool
@@ -2221,6 +2301,7 @@ module ML::GGUF
         decode_timing.context_score_ms,
         decode_timing.context_softmax_ms,
         decode_timing.context_value_ms,
+        decode_timing.attention_residual_context_buffer,
       )
     end
 
@@ -2320,6 +2401,7 @@ module ML::GGUF
         prediction_timing.decode_context_score_ms,
         prediction_timing.decode_context_softmax_ms,
         prediction_timing.decode_context_value_ms,
+        prediction_timing.decode_attention_residual_context_buffer,
       )
     end
 
@@ -2390,6 +2472,7 @@ module ML::GGUF
             timed.decode_context_score_ms,
             timed.decode_context_softmax_ms,
             timed.decode_context_value_ms,
+            timed.decode_attention_residual_context_buffer,
           )
           update = BoundedCanvasUpdate.new(update.updated_canvas_tokens, update.accepted, update.predictions, rows)
         else
@@ -2477,6 +2560,7 @@ module ML::GGUF
             timed.decode_context_score_ms,
             timed.decode_context_softmax_ms,
             timed.decode_context_value_ms,
+            timed.decode_attention_residual_context_buffer,
           )
           update = BoundedCanvasUpdate.new(update.updated_canvas_tokens, update.accepted, update.predictions, rows)
         else
@@ -2573,6 +2657,7 @@ module ML::GGUF
         update_ms: timing ? timing.not_nil!.update_ms : 0.0,
         regenerate_ms: timing ? timing.not_nil!.regenerate_ms : 0.0,
         proposal_ms: proposal_ms,
+        decode_attention_residual_context_buffer: timing ? timing.not_nil!.decode_attention_residual_context_buffer : false,
       )
     end
 
@@ -2875,6 +2960,32 @@ module ML::GGUF
       cache.write_queries!(queries)
       Gemma4Metal.attention_context_rows_fixed_resident_buffers(
         cache.q_buf, cache.k_cache_buf, cache.v_cache_buf, cache.out_buf, high, queries.size, n_head, n_head_kv, head_dim, sliding_window)
+    end
+
+    private def attention_context_decode_batch_metal_resident_buffer(queries : Array(AttentionProjection),
+                                                                     cache : PromptLayerMetalCache,
+                                                                     hp : DiffusionGemmaHparams,
+                                                                     il : Int32,
+                                                                     low : Int32,
+                                                                     high : Int32) : ML::MetalBuffer?
+      return nil unless Gemma4Metal.available?
+      return nil unless queries.size == cache.canvas_len
+      return nil unless high >= low
+      return nil unless high < cache.prompt_len + cache.canvas_len
+
+      head_dim = hp.head_dim_for_layer(il)
+      n_head = hp.n_head
+      n_head_kv = hp.n_head_kv(il)
+      q_dim = n_head * head_dim
+      kv_dim = n_head_kv * head_dim
+      return nil unless cache.q_dim == q_dim && cache.kv_dim == kv_dim
+      queries.each { |query| validate_projection_shape!(query, q_dim, kv_dim, il) }
+
+      sliding_window = low == 0 ? 0 : high - low + 1
+      cache.write_queries!(queries)
+      return cache.out_buf if Gemma4Metal.attention_context_rows_fixed_resident_buffers_no_read(
+                                cache.q_buf, cache.k_cache_buf, cache.v_cache_buf, cache.out_buf, high, queries.size, n_head, n_head_kv, head_dim, sliding_window)
+      nil
     end
 
     private def attention_context_from_range_metal(query : AttentionProjection,

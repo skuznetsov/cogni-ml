@@ -45,13 +45,15 @@ struct PhaseSample
   getter grouped_moe : Bool
   getter attention_out_rows : Bool
   getter attention_residual_metal_rows : Bool
+  getter attention_residual_context_buffer : Bool
 
   def initialize(@arm, @cycle, @sequence_index, @measured, @total_ms, @qkv_ms,
                  @context_ms, @context_score_ms, @context_softmax_ms,
                  @context_value_ms, @attention_out_ms, @shared_ffn_ms,
                  @moe_ffn_ms, @combine_scale_ms, @checksum, @shared_rows,
                  @moe_rows, @grouped_moe, @attention_out_rows,
-                 @attention_residual_metal_rows)
+                 @attention_residual_metal_rows,
+                 @attention_residual_context_buffer)
   end
 
   def value(metric : String) : Float64
@@ -87,6 +89,7 @@ TSV_HEADER = [
   "grouped_moe",
   "attention_out_rows",
   "attention_residual_metal_rows",
+  "attention_residual_context_buffer",
   "total_ms",
   "qkv_ms",
   "context_ms",
@@ -224,6 +227,7 @@ def run_arm(weights : ML::GGUF::DiffusionGemmaWeights,
     grouped_moe: ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows_enabled?(mask.canvas_len),
     attention_out_rows: ML::GGUF::DiffusionGemmaCPU.attention_out_batch_rows_enabled?(mask.canvas_len),
     attention_residual_metal_rows: ML::GGUF::DiffusionGemmaCPU.attention_residual_metal_rows_enabled?(mask.canvas_len),
+    attention_residual_context_buffer: timed.attention_residual_context_buffer,
   )
 end
 
@@ -243,6 +247,7 @@ def print_sample(sample : PhaseSample, prompt_len : Int32, canvas_len : Int32, m
     sample.grouped_moe.to_s,
     sample.attention_out_rows.to_s,
     sample.attention_residual_metal_rows.to_s,
+    sample.attention_residual_context_buffer.to_s,
     format_f64(sample.total_ms),
     format_f64(sample.qkv_ms),
     format_f64(sample.context_ms),
@@ -370,13 +375,18 @@ if single_route
 end
 
 cache_t0 = Time.instant
-prompt_cache = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(
-  weights,
-  prompt_rows,
-  mask,
-  max_layers: max_layers,
-  materialize_final_rows: false,
-)
+cache_old_env = apply_env(base_env)
+prompt_cache = begin
+  ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(
+    weights,
+    prompt_rows,
+    mask,
+    max_layers: max_layers,
+    materialize_final_rows: false,
+  )
+ensure
+  restore_env(cache_old_env)
+end
 cache_ms = (Time.instant - cache_t0).total_milliseconds
 
 puts "# load_ms=#{format_f64(load_ms)}"
