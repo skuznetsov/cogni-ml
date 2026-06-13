@@ -38,6 +38,11 @@ struct PhaseSample
   getter attention_out_ms : Float64
   getter shared_ffn_ms : Float64
   getter moe_ffn_ms : Float64
+  getter moe_grouped_prep_ms : Float64
+  getter moe_grouped_gate_up_ms : Float64
+  getter moe_grouped_activation_ms : Float64
+  getter moe_grouped_down_ms : Float64
+  getter moe_grouped_scatter_combine_norm_ms : Float64
   getter combine_scale_ms : Float64
   getter checksum : Float64
   getter shared_rows : Bool
@@ -50,7 +55,10 @@ struct PhaseSample
   def initialize(@arm, @cycle, @sequence_index, @measured, @total_ms, @qkv_ms,
                  @context_ms, @context_score_ms, @context_softmax_ms,
                  @context_value_ms, @attention_out_ms, @shared_ffn_ms,
-                 @moe_ffn_ms, @combine_scale_ms, @checksum, @shared_rows,
+                 @moe_ffn_ms, @moe_grouped_prep_ms,
+                 @moe_grouped_gate_up_ms, @moe_grouped_activation_ms,
+                 @moe_grouped_down_ms, @moe_grouped_scatter_combine_norm_ms,
+                 @combine_scale_ms, @checksum, @shared_rows,
                  @moe_rows, @grouped_moe, @attention_out_rows,
                  @attention_residual_metal_rows,
                  @attention_residual_context_buffer)
@@ -58,16 +66,21 @@ struct PhaseSample
 
   def value(metric : String) : Float64
     case metric
-    when "total_ms"           then total_ms
-    when "qkv_ms"             then qkv_ms
-    when "context_ms"         then context_ms
-    when "context_score_ms"   then context_score_ms
-    when "context_softmax_ms" then context_softmax_ms
-    when "context_value_ms"   then context_value_ms
-    when "attention_out_ms"   then attention_out_ms
-    when "shared_ffn_ms"      then shared_ffn_ms
-    when "moe_ffn_ms"         then moe_ffn_ms
-    when "combine_scale_ms"   then combine_scale_ms
+    when "total_ms"                            then total_ms
+    when "qkv_ms"                              then qkv_ms
+    when "context_ms"                          then context_ms
+    when "context_score_ms"                    then context_score_ms
+    when "context_softmax_ms"                  then context_softmax_ms
+    when "context_value_ms"                    then context_value_ms
+    when "attention_out_ms"                    then attention_out_ms
+    when "shared_ffn_ms"                       then shared_ffn_ms
+    when "moe_ffn_ms"                          then moe_ffn_ms
+    when "moe_grouped_prep_ms"                 then moe_grouped_prep_ms
+    when "moe_grouped_gate_up_ms"              then moe_grouped_gate_up_ms
+    when "moe_grouped_activation_ms"           then moe_grouped_activation_ms
+    when "moe_grouped_down_ms"                 then moe_grouped_down_ms
+    when "moe_grouped_scatter_combine_norm_ms" then moe_grouped_scatter_combine_norm_ms
+    when "combine_scale_ms"                    then combine_scale_ms
     else
       raise "unknown metric #{metric}"
     end
@@ -99,6 +112,11 @@ TSV_HEADER = [
   "attention_out_ms",
   "shared_ffn_ms",
   "moe_ffn_ms",
+  "moe_grouped_prep_ms",
+  "moe_grouped_gate_up_ms",
+  "moe_grouped_activation_ms",
+  "moe_grouped_down_ms",
+  "moe_grouped_scatter_combine_norm_ms",
   "combine_scale_ms",
   "checksum",
 ]
@@ -113,6 +131,11 @@ METRICS = [
   "attention_out_ms",
   "shared_ffn_ms",
   "moe_ffn_ms",
+  "moe_grouped_prep_ms",
+  "moe_grouped_gate_up_ms",
+  "moe_grouped_activation_ms",
+  "moe_grouped_down_ms",
+  "moe_grouped_scatter_combine_norm_ms",
   "combine_scale_ms",
 ]
 
@@ -220,6 +243,11 @@ def run_arm(weights : ML::GGUF::DiffusionGemmaWeights,
     attention_out_ms: timed.attention_out_ms,
     shared_ffn_ms: timed.shared_ffn_ms,
     moe_ffn_ms: timed.moe_ffn_ms,
+    moe_grouped_prep_ms: timed.moe_grouped_prep_ms,
+    moe_grouped_gate_up_ms: timed.moe_grouped_gate_up_ms,
+    moe_grouped_activation_ms: timed.moe_grouped_activation_ms,
+    moe_grouped_down_ms: timed.moe_grouped_down_ms,
+    moe_grouped_scatter_combine_norm_ms: timed.moe_grouped_scatter_combine_norm_ms,
     combine_scale_ms: timed.combine_scale_ms,
     checksum: checksum_rows(timed.rows),
     shared_rows: ML::GGUF::DiffusionGemmaCPU.shared_ffn_batch_rows_enabled?(mask.canvas_len),
@@ -257,6 +285,11 @@ def print_sample(sample : PhaseSample, prompt_len : Int32, canvas_len : Int32, m
     format_f64(sample.attention_out_ms),
     format_f64(sample.shared_ffn_ms),
     format_f64(sample.moe_ffn_ms),
+    format_f64(sample.moe_grouped_prep_ms),
+    format_f64(sample.moe_grouped_gate_up_ms),
+    format_f64(sample.moe_grouped_activation_ms),
+    format_f64(sample.moe_grouped_down_ms),
+    format_f64(sample.moe_grouped_scatter_combine_norm_ms),
     format_f64(sample.combine_scale_ms),
     format_f64(sample.checksum),
   ].join('\t')

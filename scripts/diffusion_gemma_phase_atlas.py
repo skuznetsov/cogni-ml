@@ -26,6 +26,11 @@ PHASE_METRICS = [
     "attention_out_ms",
     "shared_ffn_ms",
     "moe_ffn_ms",
+    "moe_grouped_prep_ms",
+    "moe_grouped_gate_up_ms",
+    "moe_grouped_activation_ms",
+    "moe_grouped_down_ms",
+    "moe_grouped_scatter_combine_norm_ms",
     "combine_scale_ms",
 ]
 
@@ -125,11 +130,27 @@ def print_tsv(summaries: dict[str, dict[str, float]], total_base: float) -> None
         ]))
 
 
+def dominant_grouped_subphase(phase_rows: dict[str, dict[str, float]]) -> tuple[str, dict[str, float]] | None:
+    grouped = {
+        metric: row for metric, row in phase_rows.items()
+        if metric.startswith("moe_grouped_") and row["base_median"] > 0.0
+    }
+    if not grouped:
+        return None
+    metric = max(grouped, key=lambda key: grouped[key]["base_median"])
+    return metric, grouped[metric]
+
+
 def candidate_text(dominant_metric: str, route_changes: list[str], noisy_delta_count: int) -> list[str]:
     rows: list[str] = []
     if dominant_metric == "moe_ffn_ms":
         rows.append(
             "Ladder: MoE FFN dominates. Window=expert FFN rows; corridor=canvas/expert batch; legal move=retain/fuse grouped expert work only if total_ms descends under ABBA."
+        )
+    elif dominant_metric.startswith("moe_grouped_"):
+        rows.append(
+            "Ladder: grouped-MoE subphase dominates. Window=%s; corridor=expert batch body; legal move=fuse or transport this exact subphase without increasing route/scatter conflict."
+            % dominant_metric
         )
     elif dominant_metric in {"qkv_ms", "context_ms", "attention_out_ms"}:
         rows.append(
@@ -177,6 +198,7 @@ def main() -> int:
     }
     dominant_metric = max(phase_rows, key=lambda metric: phase_rows[metric]["base_median"]) if phase_rows else "none"
     dominant_base = phase_rows[dominant_metric]["base_median"] if dominant_metric != "none" else 0.0
+    grouped_subphase = dominant_grouped_subphase(phase_rows)
     tied = sum(1 for row in phase_rows.values() if dominant_base > 0 and row["base_median"] >= dominant_base * 0.80)
     noisy_delta_count = sum(
         1 for row in phase_rows.values()
@@ -208,6 +230,14 @@ def main() -> int:
     )
     if route_changes:
         print("  route_changes=" + ",".join(route_changes))
+    if grouped_subphase:
+        subphase_metric, subphase_row = grouped_subphase
+        moe_base = summaries["moe_ffn_ms"]["base_median"]
+        pct_moe = subphase_row["base_median"] * 100.0 / moe_base if moe_base > 0 else float("nan")
+        print(
+            "  grouped_moe_subphase=%s base=%s ms pct_of_moe=%s%%"
+            % (subphase_metric, fmt(subphase_row["base_median"]), fmt(pct_moe))
+        )
 
     print("\nPhase buckets")
     for metric, row in sorted(phase_rows.items(), key=lambda item: (-item[1]["base_median"], item[0]))[:args.top]:

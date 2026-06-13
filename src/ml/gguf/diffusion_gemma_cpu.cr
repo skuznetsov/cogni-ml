@@ -282,6 +282,11 @@ module ML::GGUF
       getter attention_out_ms : Float64
       getter shared_ffn_ms : Float64
       getter moe_ffn_ms : Float64
+      getter moe_grouped_prep_ms : Float64
+      getter moe_grouped_gate_up_ms : Float64
+      getter moe_grouped_activation_ms : Float64
+      getter moe_grouped_down_ms : Float64
+      getter moe_grouped_scatter_combine_norm_ms : Float64
       getter combine_scale_ms : Float64
       getter attention_residual_context_buffer : Bool
 
@@ -295,7 +300,29 @@ module ML::GGUF
                      @context_score_ms = 0.0,
                      @context_softmax_ms = 0.0,
                      @context_value_ms = 0.0,
-                     @attention_residual_context_buffer = false)
+                     @attention_residual_context_buffer = false,
+                     @moe_grouped_prep_ms = 0.0,
+                     @moe_grouped_gate_up_ms = 0.0,
+                     @moe_grouped_activation_ms = 0.0,
+                     @moe_grouped_down_ms = 0.0,
+                     @moe_grouped_scatter_combine_norm_ms = 0.0)
+      end
+    end
+
+    struct GroupedMoeRowsTiming
+      getter rows : Array(Float32)
+      getter prep_ms : Float64
+      getter gate_up_ms : Float64
+      getter activation_ms : Float64
+      getter down_ms : Float64
+      getter scatter_combine_norm_ms : Float64
+
+      def initialize(@rows,
+                     @prep_ms,
+                     @gate_up_ms,
+                     @activation_ms,
+                     @down_ms,
+                     @scatter_combine_norm_ms)
       end
     end
 
@@ -1149,6 +1176,14 @@ module ML::GGUF
                                     attn_out_rows : Array(Float32),
                                     row_count : Int32,
                                     routes_by_row : Array(Array(ExpertRoute))? = nil) : Array(Float32)
+      moe_ffn_grouped_expert_rows_timed(weights, il, attn_out_rows, row_count, routes_by_row).rows
+    end
+
+    def moe_ffn_grouped_expert_rows_timed(weights : DiffusionGemmaWeights,
+                                          il : Int32,
+                                          attn_out_rows : Array(Float32),
+                                          row_count : Int32,
+                                          routes_by_row : Array(Array(ExpertRoute))? = nil) : GroupedMoeRowsTiming
       hp = weights.hparams
       lw = weights.layers[il]
       expected = row_count * hp.n_embd
@@ -1159,6 +1194,13 @@ module ML::GGUF
       end
       raise ArgumentError.new("down expert scale size mismatch") unless lw.ffn_down_exps_scale.size == hp.expert_count
 
+      prep_ms = 0.0
+      gate_up_ms = 0.0
+      activation_ms = 0.0
+      down_ms = 0.0
+      scatter_combine_norm_ms = 0.0
+
+      prep_t0 = Time.instant
       ffn_in_rows = attn_out_rows.dup
       row_count.times do |row|
         fast_rms_norm_slice!(ffn_in_rows, row * hp.n_embd, hp.n_embd, lw.pre_ffw_norm_2, hp.rms_eps)
@@ -1189,9 +1231,11 @@ module ML::GGUF
         end
       end
       expert_outputs_by_route_slot = Array(Float32).new(route_slot_count * hp.n_embd, 0.0_f32)
+      prep_ms += (Time.instant - prep_t0).total_milliseconds
 
       assignments_by_expert.each do |expert, assignments|
         batch = assignments.size
+        gather_t0 = Time.instant
         ffn_inputs = Array(Float32).new(batch * hp.n_embd, 0.0_f32)
         assignments.each_with_index do |assignment, batch_row|
           row = assignment[0]
@@ -1199,11 +1243,15 @@ module ML::GGUF
           dst_offset = batch_row * hp.n_embd
           hp.n_embd.times { |i| ffn_inputs[dst_offset + i] = ffn_in_rows[src_offset + i] }
         end
+        prep_ms += (Time.instant - gather_t0).total_milliseconds
 
         gate_up_qw = expert_gate_up_qw(lw, hp, expert)
+        gate_up_t0 = Time.instant
         gate_up_rows = prompt_projection_matmul(gate_up_qw, ffn_inputs, batch)
+        gate_up_ms += (Time.instant - gate_up_t0).total_milliseconds
         raise ArgumentError.new("expert gate_up rows size mismatch") unless gate_up_rows.size == batch * hp.expert_ff * 2
 
+        activation_t0 = Time.instant
         hidden_rows = Array(Float32).new(batch * hp.expert_ff, 0.0_f32)
         batch.times do |batch_row|
           gate_up_offset = batch_row * hp.expert_ff * 2
@@ -1213,10 +1261,14 @@ module ML::GGUF
                                              gate_up_rows[gate_up_offset + hp.expert_ff + i]
           end
         end
+        activation_ms += (Time.instant - activation_t0).total_milliseconds
 
+        down_t0 = Time.instant
         down_rows = prompt_projection_matmul(expert_down_qw(lw, hp, expert), hidden_rows, batch)
+        down_ms += (Time.instant - down_t0).total_milliseconds
         raise ArgumentError.new("expert down rows size mismatch") unless down_rows.size == batch * hp.n_embd
 
+        scatter_t0 = Time.instant
         scale = lw.ffn_down_exps_scale[expert]
         assignments.each_with_index do |assignment, batch_row|
           row = assignment[0]
@@ -1225,8 +1277,10 @@ module ML::GGUF
           dst_offset = (route_offsets_by_row[row] + route_index) * hp.n_embd
           hp.n_embd.times { |i| expert_outputs_by_route_slot[dst_offset + i] = down_rows[src_offset + i] * scale }
         end
+        scatter_combine_norm_ms += (Time.instant - scatter_t0).total_milliseconds
       end
 
+      combine_t0 = Time.instant
       result = Array(Float32).new(expected, 0.0_f32)
       row_count.times do |row|
         combined = Array(Float32).new(hp.n_embd, 0.0_f32)
@@ -1237,7 +1291,8 @@ module ML::GGUF
         normed = Gemma4CPU.rms_norm(combined, lw.post_ffw_norm_2, hp.rms_eps)
         copy_row!(result, row, hp.n_embd, normed)
       end
-      result
+      scatter_combine_norm_ms += (Time.instant - combine_t0).total_milliseconds
+      GroupedMoeRowsTiming.new(result, prep_ms, gate_up_ms, activation_ms, down_ms, scatter_combine_norm_ms)
     end
 
     def ffn_residual(weights : DiffusionGemmaWeights,
@@ -1481,6 +1536,11 @@ module ML::GGUF
       attention_out_ms = 0.0
       shared_ffn_ms = 0.0
       moe_ffn_ms = 0.0
+      moe_grouped_prep_ms = 0.0
+      moe_grouped_gate_up_ms = 0.0
+      moe_grouped_activation_ms = 0.0
+      moe_grouped_down_ms = 0.0
+      moe_grouped_scatter_combine_norm_ms = 0.0
       combine_scale_ms = 0.0
       max_layers.times do |il|
         routes = routes_by_layer_by_canvas_row ? routes_by_layer_by_canvas_row.not_nil![il] : nil
@@ -1503,9 +1563,14 @@ module ML::GGUF
         attention_out_ms += timed.attention_out_ms
         shared_ffn_ms += timed.shared_ffn_ms
         moe_ffn_ms += timed.moe_ffn_ms
+        moe_grouped_prep_ms += timed.moe_grouped_prep_ms
+        moe_grouped_gate_up_ms += timed.moe_grouped_gate_up_ms
+        moe_grouped_activation_ms += timed.moe_grouped_activation_ms
+        moe_grouped_down_ms += timed.moe_grouped_down_ms
+        moe_grouped_scatter_combine_norm_ms += timed.moe_grouped_scatter_combine_norm_ms
         combine_scale_ms += timed.combine_scale_ms
       end
-      DecodeCanvasRowsTiming.new(rows, qkv_ms, context_ms, attention_out_ms, shared_ffn_ms, moe_ffn_ms, combine_scale_ms, context_score_ms, context_softmax_ms, context_value_ms, attention_residual_context_buffer_hit)
+      DecodeCanvasRowsTiming.new(rows, qkv_ms, context_ms, attention_out_ms, shared_ffn_ms, moe_ffn_ms, combine_scale_ms, context_score_ms, context_softmax_ms, context_value_ms, attention_residual_context_buffer_hit, moe_grouped_prep_ms, moe_grouped_gate_up_ms, moe_grouped_activation_ms, moe_grouped_down_ms, moe_grouped_scatter_combine_norm_ms)
     end
 
     def layer_forward_unified_rows(weights : DiffusionGemmaWeights,
@@ -1642,6 +1707,11 @@ module ML::GGUF
       attention_out_ms = 0.0
       shared_ffn_ms = 0.0
       moe_ffn_ms = 0.0
+      moe_grouped_prep_ms = 0.0
+      moe_grouped_gate_up_ms = 0.0
+      moe_grouped_activation_ms = 0.0
+      moe_grouped_down_ms = 0.0
+      moe_grouped_scatter_combine_norm_ms = 0.0
       combine_scale_ms = 0.0
       result = Array(Float32).new(canvas_size, 0.0_f32)
       attn_out_rows = Array(Float32).new(canvas_size, 0.0_f32)
@@ -1709,7 +1779,13 @@ module ML::GGUF
       if moe_ffn_batch_rows_enabled?(mask.canvas_len) && mask.canvas_len > 1
         moe_t0 = Time.instant
         moe_rows = if moe_ffn_grouped_expert_rows_enabled?(mask.canvas_len)
-                     moe_ffn_grouped_expert_rows(weights, il, attn_out_rows, mask.canvas_len, routes_by_canvas_row)
+                     grouped_timing = moe_ffn_grouped_expert_rows_timed(weights, il, attn_out_rows, mask.canvas_len, routes_by_canvas_row)
+                     moe_grouped_prep_ms += grouped_timing.prep_ms
+                     moe_grouped_gate_up_ms += grouped_timing.gate_up_ms
+                     moe_grouped_activation_ms += grouped_timing.activation_ms
+                     moe_grouped_down_ms += grouped_timing.down_ms
+                     moe_grouped_scatter_combine_norm_ms += grouped_timing.scatter_combine_norm_ms
+                     grouped_timing.rows
                    else
                      moe_ffn_rows(weights, il, attn_out_rows, mask.canvas_len, routes_by_canvas_row)
                    end
@@ -1747,7 +1823,7 @@ module ML::GGUF
         combine_scale_ms += (Time.instant - combine_t0).total_milliseconds
         copy_row!(result, canvas_pos, hp.n_embd, layer_row)
       end
-      DecodeCanvasRowsTiming.new(result, qkv_ms, context_ms, attention_out_ms, shared_ffn_ms, moe_ffn_ms, combine_scale_ms, context_score_ms, context_softmax_ms, context_value_ms, attention_residual_context_buffer_hit)
+      DecodeCanvasRowsTiming.new(result, qkv_ms, context_ms, attention_out_ms, shared_ffn_ms, moe_ffn_ms, combine_scale_ms, context_score_ms, context_softmax_ms, context_value_ms, attention_residual_context_buffer_hit, moe_grouped_prep_ms, moe_grouped_gate_up_ms, moe_grouped_activation_ms, moe_grouped_down_ms, moe_grouped_scatter_combine_norm_ms)
     end
 
     def prompt_attention_projections(weights : DiffusionGemmaWeights,
