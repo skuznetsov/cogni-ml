@@ -1437,33 +1437,40 @@ module ML::GGUF
       combine_scale_ms = 0.0
       result = Array(Float32).new(canvas_size, 0.0_f32)
       attn_out_rows = Array(Float32).new(canvas_size, 0.0_f32)
-      context_rows = attention_out_batch_rows_enabled? && mask.canvas_len > 1 ? Array(Float32).new(mask.canvas_len * q_context_dim, 0.0_f32) : nil
-      mask.canvas_len.times do |canvas_pos|
-        x = canvas_rows[canvas_pos * hp.n_embd, hp.n_embd]
-        context_t0 = Time.instant
-        context_timing = nil.as(AttentionContextTiming?)
-        context = if batched = batched_context
-                    batched[canvas_pos * q_context_dim, q_context_dim]
-                  else
-                    context_timing = attention_context_decode_timed(prompt_projections, canvas_projections, hp, il, canvas_query_index: canvas_pos, mask: mask, prompt_metal_cache: prompt_metal_cache)
-                    context_timing.not_nil!.context
-                  end
-        context_ms += (Time.instant - context_t0).total_milliseconds
-        if timing = context_timing
-          context_score_ms += timing.score_ms
-          context_softmax_ms += timing.softmax_ms
-          context_value_ms += timing.value_ms
-        end
+      context_rows = if attention_out_batch_rows_enabled? && mask.canvas_len > 1
+                       batched_context || Array(Float32).new(mask.canvas_len * q_context_dim, 0.0_f32)
+                     else
+                       nil
+                     end
+      skip_context_row_loop = !batched_context.nil? && !context_rows.nil?
+      unless skip_context_row_loop
+        mask.canvas_len.times do |canvas_pos|
+          x = canvas_rows[canvas_pos * hp.n_embd, hp.n_embd]
+          context_t0 = Time.instant
+          context_timing = nil.as(AttentionContextTiming?)
+          context = if batched = batched_context
+                      batched[canvas_pos * q_context_dim, q_context_dim]
+                    else
+                      context_timing = attention_context_decode_timed(prompt_projections, canvas_projections, hp, il, canvas_query_index: canvas_pos, mask: mask, prompt_metal_cache: prompt_metal_cache)
+                      context_timing.not_nil!.context
+                    end
+          context_ms += (Time.instant - context_t0).total_milliseconds
+          if timing = context_timing
+            context_score_ms += timing.score_ms
+            context_softmax_ms += timing.softmax_ms
+            context_value_ms += timing.value_ms
+          end
 
-        if batched_context_rows = context_rows
-          copy_row!(batched_context_rows, canvas_pos, q_context_dim, context)
-        else
-          attention_t0 = Time.instant
-          projected = attention_output_project(weights, il, context)
-          normed = Gemma4CPU.rms_norm(projected, lw.post_attention_norm, hp.rms_eps)
-          attn_out = Array(Float32).new(hp.n_embd) { |i| x[i] + normed[i] }
-          attention_out_ms += (Time.instant - attention_t0).total_milliseconds
-          copy_row!(attn_out_rows, canvas_pos, hp.n_embd, attn_out)
+          if batched_context_rows = context_rows
+            copy_row!(batched_context_rows, canvas_pos, q_context_dim, context)
+          else
+            attention_t0 = Time.instant
+            projected = attention_output_project(weights, il, context)
+            normed = Gemma4CPU.rms_norm(projected, lw.post_attention_norm, hp.rms_eps)
+            attn_out = Array(Float32).new(hp.n_embd) { |i| x[i] + normed[i] }
+            attention_out_ms += (Time.instant - attention_t0).total_milliseconds
+            copy_row!(attn_out_rows, canvas_pos, hp.n_embd, attn_out)
+          end
         end
       end
 
