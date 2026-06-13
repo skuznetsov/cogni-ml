@@ -3424,6 +3424,20 @@ module ML::GGUF
         enc.dispatch_1d(count, 256)
       end
 
+      def encode_gelu_mul_to_buffer(enc : ML::Metal::ComputeEncoder | ML::Metal::GraphEncoder,
+                                    gate_buf : ML::MetalBuffer,
+                                    up_buf : ML::MetalBuffer,
+                                    out_buf : ML::MetalBuffer,
+                                    count : Int32) : Bool
+        return false unless count > 0
+        return false if gate_buf.size < count.to_i64 * sizeof(Float32)
+        return false if up_buf.size < count.to_i64 * sizeof(Float32)
+        return false if out_buf.size < count.to_i64 * sizeof(Float32)
+
+        encode_gelu_mul(enc, gate_buf, up_buf, out_buf, count)
+        true
+      end
+
       private def encode_softcap(enc : ML::Metal::ComputeEncoder,
                                  x_buf : ML::MetalBuffer,
                                  count : Int32,

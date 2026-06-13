@@ -384,6 +384,29 @@ module ML::GGUF
       end
     end
 
+    struct GroupedMoeResidentGraphStats
+      getter n_ops : Int32
+      getter n_waves : Int32
+      getter n_barriers : Int32
+      getter max_wave_width : Int32
+      getter active_experts : Int32
+      getter route_slots : Int32
+      getter row_count : Int32
+
+      def initialize(@n_ops,
+                     @n_waves,
+                     @n_barriers,
+                     @max_wave_width,
+                     @active_experts,
+                     @route_slots,
+                     @row_count)
+      end
+
+      def phi : String
+        "Phi=(resident_moe_matmul,#{@active_experts},#{@n_barriers},#{@route_slots})"
+      end
+    end
+
     struct AttentionContextTiming
       getter context : Array(Float32)
       getter score_ms : Float64
@@ -1318,6 +1341,58 @@ module ML::GGUF
       end
 
       compile_cognigraph_plan(ops, assignments_by_expert.size, route_slots, routes_by_row.size)
+    end
+
+    def grouped_moe_resident_matmul_graph_stats(weights : DiffusionGemmaWeights,
+                                                il : Int32,
+                                                routes_by_row : Array(Array(ExpertRoute))) : GroupedMoeResidentGraphStats?
+      return nil unless Qwen35Metal.available?
+
+      hp = weights.hparams
+      lw = weights.layers[il]
+      raise ArgumentError.new("grouped_moe_resident_matmul_graph_stats rows must not be empty") if routes_by_row.empty?
+      raise ArgumentError.new("down expert scale size mismatch") unless lw.ffn_down_exps_scale.size == hp.expert_count
+
+      assignments_by_expert = Hash(Int32, Int32).new(0)
+      route_slots = 0
+      routes_by_row.each do |routes|
+        raise ArgumentError.new("grouped_moe_resident_matmul_graph_stats routes must not be empty") if routes.empty?
+        routes.each do |route|
+          raise ArgumentError.new("grouped_moe_resident_matmul_graph_stats expert id out of range") if route.expert < 0 || route.expert >= hp.expert_count
+          assignments_by_expert[route.expert] += 1
+          route_slots += 1
+        end
+      end
+
+      graph = ML::Metal::ComputeGraph.new
+      enc = ML::Metal::GraphEncoder.new(graph)
+      assignments_by_expert.keys.sort.each do |expert|
+        batch = assignments_by_expert[expert]
+        ffn_in_buf = ML::MetalBuffer.new(batch.to_i64 * hp.n_embd * sizeof(Float32))
+        gate_buf = ML::MetalBuffer.new(batch.to_i64 * hp.expert_ff * sizeof(Float32))
+        up_buf = ML::MetalBuffer.new(batch.to_i64 * hp.expert_ff * sizeof(Float32))
+        hidden_buf = ML::MetalBuffer.new(batch.to_i64 * hp.expert_ff * sizeof(Float32))
+        down_buf = ML::MetalBuffer.new(batch.to_i64 * hp.n_embd * sizeof(Float32))
+
+        gate_qw = expert_gate_qw(lw, hp, expert)
+        up_qw = expert_up_qw(lw, hp, expert)
+        down_qw = expert_down_qw(lw, hp, expert)
+        return nil unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [gate_qw, up_qw], ffn_in_buf, [gate_buf, up_buf], batch)
+        return nil unless Gemma4Metal.encode_gelu_mul_to_buffer(enc, gate_buf, up_buf, hidden_buf, batch * hp.expert_ff)
+        return nil unless Qwen35Metal.encode_matmul_to_buffer(enc, down_qw, hidden_buf, down_buf, batch)
+      end
+
+      graph.compile!
+      stats = graph.stats
+      GroupedMoeResidentGraphStats.new(
+        n_ops: stats.n_ops,
+        n_waves: stats.n_waves,
+        n_barriers: stats.n_barriers,
+        max_wave_width: stats.max_wave_width,
+        active_experts: assignments_by_expert.size,
+        route_slots: route_slots,
+        row_count: routes_by_row.size,
+      )
     end
 
     def moe_ffn_grouped_expert_rows_timed(weights : DiffusionGemmaWeights,
@@ -3579,6 +3654,22 @@ module ML::GGUF
       qw = lw.ffn_gate_up_exps_qw || raise ArgumentError.new("combined gate_up experts are required")
       raise ArgumentError.new("gate_up expert tensor shape mismatch") unless qw.in_dim == hp.n_embd && qw.out_dim == hp.expert_count * hp.expert_ff * 2
       quant_row_slice(qw, expert * hp.expert_ff * 2, hp.expert_ff * 2, hp.n_embd)
+    end
+
+    private def expert_gate_qw(lw : DiffusionGemmaLayerWeights,
+                               hp : DiffusionGemmaHparams,
+                               expert : Int32) : QuantWeight
+      qw = lw.ffn_gate_up_exps_qw || raise ArgumentError.new("combined gate_up experts are required")
+      raise ArgumentError.new("gate expert tensor shape mismatch") unless qw.in_dim == hp.n_embd && qw.out_dim == hp.expert_count * hp.expert_ff * 2
+      quant_row_slice(qw, expert * hp.expert_ff * 2, hp.expert_ff, hp.n_embd)
+    end
+
+    private def expert_up_qw(lw : DiffusionGemmaLayerWeights,
+                             hp : DiffusionGemmaHparams,
+                             expert : Int32) : QuantWeight
+      qw = lw.ffn_gate_up_exps_qw || raise ArgumentError.new("combined gate_up experts are required")
+      raise ArgumentError.new("up expert tensor shape mismatch") unless qw.in_dim == hp.n_embd && qw.out_dim == hp.expert_count * hp.expert_ff * 2
+      quant_row_slice(qw, expert * hp.expert_ff * 2 + hp.expert_ff, hp.expert_ff, hp.n_embd)
     end
 
     private def expert_down_qw(lw : DiffusionGemmaLayerWeights,

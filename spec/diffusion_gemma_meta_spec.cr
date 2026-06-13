@@ -1247,6 +1247,40 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
   end
 
+  it "builds an actual GraphEncoder corridor for grouped MoE expert matmuls" do
+    pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    w = ML::GGUF::DiffusionGemmaWeights.from_gguf(DIFFUSION_GEMMA_26B_Q4KM)
+    routes_by_row = [
+      [
+        ML::GGUF::DiffusionGemmaCPU::ExpertRoute.new(0, 1.0_f32),
+        ML::GGUF::DiffusionGemmaCPU::ExpertRoute.new(1, 1.0_f32),
+      ],
+      [
+        ML::GGUF::DiffusionGemmaCPU::ExpertRoute.new(1, 1.0_f32),
+      ],
+    ]
+
+    stats = ML::GGUF::DiffusionGemmaCPU.grouped_moe_resident_matmul_graph_stats(w, 0, routes_by_row).not_nil!
+    stats.row_count.should eq(2)
+    stats.active_experts.should eq(2)
+    stats.route_slots.should eq(3)
+    stats.n_ops.should eq(8)
+    stats.n_waves.should eq(3)
+    stats.n_barriers.should eq(2)
+    stats.max_wave_width.should eq(4)
+    stats.phi.should eq("Phi=(resident_moe_matmul,2,2,3)")
+
+    expect_raises(ArgumentError, /routes must not be empty/) do
+      ML::GGUF::DiffusionGemmaCPU.grouped_moe_resident_matmul_graph_stats(
+        w,
+        0,
+        [[] of ML::GGUF::DiffusionGemmaCPU::ExpertRoute],
+      )
+    end
+  end
+
   it "combines dense and routed MoE FFN branches into the residual output" do
     pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
 

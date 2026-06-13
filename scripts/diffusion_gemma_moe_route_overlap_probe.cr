@@ -66,6 +66,21 @@ def plan_values(plan : ML::GGUF::DiffusionGemmaCPU::CogniGraphPlan) : Array(Stri
   ]
 end
 
+def resident_graph_values(stats : ML::GGUF::DiffusionGemmaCPU::GroupedMoeResidentGraphStats?) : Array(String)
+  return Array.new(8, "unsupported") unless stats
+
+  [
+    stats.n_ops.to_s,
+    stats.n_waves.to_s,
+    stats.n_barriers.to_s,
+    stats.max_wave_width.to_s,
+    stats.active_experts.to_s,
+    stats.route_slots.to_s,
+    stats.row_count.to_s,
+    stats.phi,
+  ]
+end
+
 def parse_positive_counts(raw : String, label : String) : Array(Int32)
   counts = raw.split(/[,\s]+/).map(&.strip).reject(&.empty?).map(&.to_i)
   raise "#{label} must contain at least one count" if counts.empty?
@@ -218,7 +233,10 @@ def format_float(value : Float64) : String
   "%.6f" % value
 end
 
-def print_keyvalue(stats : RouteOverlapStats, plan : ML::GGUF::DiffusionGemmaCPU::CogniGraphPlan? = nil) : Nil
+def print_keyvalue(stats : RouteOverlapStats,
+                   plan : ML::GGUF::DiffusionGemmaCPU::CogniGraphPlan? = nil,
+                   resident_stats : ML::GGUF::DiffusionGemmaCPU::GroupedMoeResidentGraphStats? = nil,
+                   print_resident_stats : Bool = false) : Nil
   names = TSV_HEADER
   values = stats.values
   names.each_with_index do |name, i|
@@ -227,6 +245,11 @@ def print_keyvalue(stats : RouteOverlapStats, plan : ML::GGUF::DiffusionGemmaCPU
   if plan
     PLAN_TSV_HEADER.each_with_index do |name, i|
       puts "#{name}=#{plan_values(plan)[i]}"
+    end
+  end
+  if print_resident_stats
+    RESIDENT_GRAPH_TSV_HEADER.each_with_index do |name, i|
+      puts "#{name}=#{resident_graph_values(resident_stats)[i]}"
     end
   end
 end
@@ -261,6 +284,17 @@ PLAN_TSV_HEADER = [
   "plan_phi",
 ]
 
+RESIDENT_GRAPH_TSV_HEADER = [
+  "resident_graph_ops",
+  "resident_graph_waves",
+  "resident_graph_barriers",
+  "resident_graph_max_wave_width",
+  "resident_graph_active_experts",
+  "resident_graph_route_slots",
+  "resident_graph_rows",
+  "resident_graph_phi",
+]
+
 model = ENV["DIFFUSION_GEMMA_MODEL"]? || DEFAULT_MODEL
 prompt_token = 1
 canvas_token = 0
@@ -269,6 +303,7 @@ canvas_lengths_arg = "2,4,8"
 max_layers = 1
 format = "tsv"
 with_cognigraph_plan = false
+with_resident_graph_stats = false
 
 OptionParser.parse do |p|
   p.banner = "Usage: diffusion_gemma_moe_route_overlap_probe [options]"
@@ -280,6 +315,7 @@ OptionParser.parse do |p|
   p.on("--max-layers N", "Collect route overlap before each of N decode layers (default: 1)") { |v| max_layers = v.to_i }
   p.on("--format FORMAT", "Output format: tsv or keyvalue (default: tsv)") { |v| format = v.downcase }
   p.on("--with-cognigraph-plan", "Append CogniGraph dry-plan ops/waves/barriers columns") { with_cognigraph_plan = true }
+  p.on("--with-resident-graph-stats", "Append actual GraphEncoder expert-matmul graph stats columns") { with_resident_graph_stats = true }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -299,7 +335,10 @@ prompt_lengths = parse_positive_counts(prompt_lengths_arg, "--prompt-lengths")
 canvas_lengths = parse_positive_counts(canvas_lengths_arg, "--canvas-lengths")
 
 puts "load_ms=#{format_float(load_ms)}" if format == "keyvalue"
-puts((with_cognigraph_plan ? TSV_HEADER + PLAN_TSV_HEADER : TSV_HEADER).join('\t')) if format == "tsv"
+header = TSV_HEADER
+header += PLAN_TSV_HEADER if with_cognigraph_plan
+header += RESIDENT_GRAPH_TSV_HEADER if with_resident_graph_stats
+puts(header.join('\t')) if format == "tsv"
 
 prompt_lengths.each do |prompt_len|
   prompt_tokens = generated_token_sequence(prompt_token, prompt_len, hp.vocab_size, "--prompt-lengths entry")
@@ -335,10 +374,14 @@ prompt_lengths.each do |prompt_len|
       routes = route_rows(weights, layer, attn_out_rows, canvas_len)
       stats = overlap_stats(routes, layer, prompt_len, canvas_len)
       plan = with_cognigraph_plan ? ML::GGUF::DiffusionGemmaCPU.grouped_moe_cognigraph_plan(routes, hp.n_embd, hp.expert_ff, hp.expert_count) : nil
+      resident_stats = with_resident_graph_stats ? ML::GGUF::DiffusionGemmaCPU.grouped_moe_resident_matmul_graph_stats(weights, layer, routes) : nil
       if format == "tsv"
-        puts((plan ? stats.values + plan_values(plan) : stats.values).join('\t'))
+        values = stats.values
+        values += plan_values(plan) if plan
+        values += resident_graph_values(resident_stats) if with_resident_graph_stats
+        puts(values.join('\t'))
       else
-        print_keyvalue(stats, plan)
+        print_keyvalue(stats, plan, resident_stats, with_resident_graph_stats)
       end
 
       timed = ML::GGUF::DiffusionGemmaCPU.layer_forward_decode_canvas_rows_with_prompt_projections_timed(
