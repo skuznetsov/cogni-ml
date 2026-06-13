@@ -1516,37 +1516,55 @@ module ML::GGUF
 
         gate_up_qw = expert_gate_up_qw(lw, hp, expert)
         gate_up_t0 = Time.instant
-        gate_up_rows = prompt_projection_matmul(gate_up_qw, ffn_inputs, batch)
-        gate_up_ms += (Time.instant - gate_up_t0).total_milliseconds
-        raise ArgumentError.new("expert gate_up rows size mismatch") unless gate_up_rows.size == batch * hp.expert_ff * 2
+        resident_rows = if moe_grouped_resident_graph_enabled?
+                          moe_expert_rows_resident_graph(weights, il, expert, ffn_inputs, batch)
+                        end
+        if resident_rows
+          gate_up_ms += (Time.instant - gate_up_t0).total_milliseconds
+          raise ArgumentError.new("resident expert rows size mismatch") unless resident_rows.size == batch * hp.n_embd
 
-        activation_t0 = Time.instant
-        hidden_rows = Array(Float32).new(batch * hp.expert_ff, 0.0_f32)
-        batch.times do |batch_row|
-          gate_up_offset = batch_row * hp.expert_ff * 2
-          hidden_offset = batch_row * hp.expert_ff
-          hp.expert_ff.times do |i|
-            hidden_rows[hidden_offset + i] = Gemma4CPU.gelu(gate_up_rows[gate_up_offset + i]) *
-                                             gate_up_rows[gate_up_offset + hp.expert_ff + i]
+          scatter_t0 = Time.instant
+          assignments.each_with_index do |assignment, batch_row|
+            row = assignment[0]
+            route_index = assignment[1]
+            src_offset = batch_row * hp.n_embd
+            dst_offset = (route_offsets_by_row[row] + route_index) * hp.n_embd
+            (expert_outputs_by_route_slot.to_unsafe + dst_offset).copy_from(resident_rows.to_unsafe + src_offset, hp.n_embd)
           end
-        end
-        activation_ms += (Time.instant - activation_t0).total_milliseconds
+          scatter_combine_norm_ms += (Time.instant - scatter_t0).total_milliseconds
+        else
+          gate_up_rows = prompt_projection_matmul(gate_up_qw, ffn_inputs, batch)
+          gate_up_ms += (Time.instant - gate_up_t0).total_milliseconds
+          raise ArgumentError.new("expert gate_up rows size mismatch") unless gate_up_rows.size == batch * hp.expert_ff * 2
 
-        down_t0 = Time.instant
-        down_rows = prompt_projection_matmul(expert_down_qw(lw, hp, expert), hidden_rows, batch)
-        down_ms += (Time.instant - down_t0).total_milliseconds
-        raise ArgumentError.new("expert down rows size mismatch") unless down_rows.size == batch * hp.n_embd
+          activation_t0 = Time.instant
+          hidden_rows = Array(Float32).new(batch * hp.expert_ff, 0.0_f32)
+          batch.times do |batch_row|
+            gate_up_offset = batch_row * hp.expert_ff * 2
+            hidden_offset = batch_row * hp.expert_ff
+            hp.expert_ff.times do |i|
+              hidden_rows[hidden_offset + i] = Gemma4CPU.gelu(gate_up_rows[gate_up_offset + i]) *
+                                               gate_up_rows[gate_up_offset + hp.expert_ff + i]
+            end
+          end
+          activation_ms += (Time.instant - activation_t0).total_milliseconds
 
-        scatter_t0 = Time.instant
-        scale = lw.ffn_down_exps_scale[expert]
-        assignments.each_with_index do |assignment, batch_row|
-          row = assignment[0]
-          route_index = assignment[1]
-          src_offset = batch_row * hp.n_embd
-          dst_offset = (route_offsets_by_row[row] + route_index) * hp.n_embd
-          hp.n_embd.times { |i| expert_outputs_by_route_slot[dst_offset + i] = down_rows[src_offset + i] * scale }
+          down_t0 = Time.instant
+          down_rows = prompt_projection_matmul(expert_down_qw(lw, hp, expert), hidden_rows, batch)
+          down_ms += (Time.instant - down_t0).total_milliseconds
+          raise ArgumentError.new("expert down rows size mismatch") unless down_rows.size == batch * hp.n_embd
+
+          scatter_t0 = Time.instant
+          scale = lw.ffn_down_exps_scale[expert]
+          assignments.each_with_index do |assignment, batch_row|
+            row = assignment[0]
+            route_index = assignment[1]
+            src_offset = batch_row * hp.n_embd
+            dst_offset = (route_offsets_by_row[row] + route_index) * hp.n_embd
+            hp.n_embd.times { |i| expert_outputs_by_route_slot[dst_offset + i] = down_rows[src_offset + i] * scale }
+          end
+          scatter_combine_norm_ms += (Time.instant - scatter_t0).total_milliseconds
         end
-        scatter_combine_norm_ms += (Time.instant - scatter_t0).total_milliseconds
       end
 
       combine_t0 = Time.instant
@@ -2328,6 +2346,12 @@ module ML::GGUF
       end
       return false unless grouped_moe_policy_enabled?(canvas_len)
       true
+    end
+
+    def moe_grouped_resident_graph_enabled? : Bool
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH"]? == "1" &&
+        ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH_OFF"]? != "1" &&
+        Qwen35Metal.available?
     end
 
     def moe_ffn_grouped_expert_min_canvas : Int32

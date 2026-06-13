@@ -1271,6 +1271,46 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
   end
 
+  it "can route grouped MoE expert batches through the resident graph path" do
+    pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    old_enabled = ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH"]?
+    old_off = ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH_OFF"]?
+    begin
+      w = ML::GGUF::DiffusionGemmaWeights.from_gguf(DIFFUSION_GEMMA_26B_Q4KM)
+      hp = w.hparams
+      rows_by_id = (0...4).map { |token_id| ML::GGUF::DiffusionGemmaCPU.zero_sc_canvas_embedding(w, token_id) }
+      rows = rows_by_id.flatten
+      routes_by_row = rows_by_id.map { |row| ML::GGUF::DiffusionGemmaCPU.route_experts(w, 0, row) }
+
+      ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH")
+      ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH_OFF")
+      expected = ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows(w, 0, rows, rows_by_id.size, routes_by_row)
+
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH"] = "1"
+      actual = ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows(w, 0, rows, rows_by_id.size, routes_by_row)
+      actual.size.should eq(rows_by_id.size * hp.n_embd)
+      max_diff = 0.0_f32
+      expected.size.times do |i|
+        diff = (expected[i] - actual[i]).abs
+        max_diff = diff if diff > max_diff
+      end
+      max_diff.should be < 1.0e-3_f32
+    ensure
+      if old_enabled
+        ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH"] = old_enabled
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH")
+      end
+      if old_off
+        ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH_OFF"] = old_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH_OFF")
+      end
+    end
+  end
+
   it "builds an actual GraphEncoder corridor for grouped MoE expert matmuls" do
     pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
     pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
