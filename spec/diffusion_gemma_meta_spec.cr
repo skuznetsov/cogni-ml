@@ -1241,6 +1241,8 @@ describe ML::GGUF::DiffusionGemmaCPU do
   it "keeps grouped MoE expert rows equivalent to row-by-row MoE FFN" do
     pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
 
+    old_inplace_combine_off = ENV["DIFFUSION_GEMMA_MOE_GROUPED_INPLACE_COMBINE_OFF"]?
+    old_inplace_combine_max = ENV["DIFFUSION_GEMMA_MOE_GROUPED_INPLACE_COMBINE_MAX_CANVAS"]?
     w = ML::GGUF::DiffusionGemmaWeights.from_gguf(DIFFUSION_GEMMA_26B_Q4KM)
     hp = w.hparams
     rows_by_id = (0...4).map { |token_id| ML::GGUF::DiffusionGemmaCPU.zero_sc_canvas_embedding(w, token_id) }
@@ -1259,6 +1261,35 @@ describe ML::GGUF::DiffusionGemmaCPU do
       max_diff = diff if diff > max_diff
     end
     max_diff.should be < 1.0e-4_f32
+
+    begin
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_INPLACE_COMBINE_OFF"] = "1"
+      allocation_combine = ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows(w, 0, rows, rows_by_id.size, routes_by_row)
+      allocation_combine.size.should eq(actual.size)
+      max_diff = 0.0_f32
+      actual.size.times do |i|
+        diff = (actual[i] - allocation_combine[i]).abs
+        max_diff = diff if diff > max_diff
+      end
+      max_diff.should be < 1.0e-6_f32
+    ensure
+      if old_inplace_combine_off
+        ENV["DIFFUSION_GEMMA_MOE_GROUPED_INPLACE_COMBINE_OFF"] = old_inplace_combine_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_INPLACE_COMBINE_OFF")
+      end
+    end
+
+    ML::GGUF::DiffusionGemmaCPU.grouped_moe_inplace_combine_enabled?(4).should be_true
+    ML::GGUF::DiffusionGemmaCPU.grouped_moe_inplace_combine_enabled?(8).should be_true
+    ML::GGUF::DiffusionGemmaCPU.grouped_moe_inplace_combine_enabled?(16).should be_false
+    ENV["DIFFUSION_GEMMA_MOE_GROUPED_INPLACE_COMBINE_MAX_CANVAS"] = "0"
+    ML::GGUF::DiffusionGemmaCPU.grouped_moe_inplace_combine_enabled?(16).should be_true
+    if old_inplace_combine_max
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_INPLACE_COMBINE_MAX_CANVAS"] = old_inplace_combine_max
+    else
+      ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_INPLACE_COMBINE_MAX_CANVAS")
+    end
 
     expect_raises(ArgumentError, /row_count must be positive/) do
       ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows(w, 0, rows, 0)

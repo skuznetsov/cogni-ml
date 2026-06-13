@@ -1658,14 +1658,34 @@ module ML::GGUF
 
       combine_t0 = Time.instant
       result = Array(Float32).new(expected, 0.0_f32)
-      row_count.times do |row|
-        combined = Array(Float32).new(hp.n_embd, 0.0_f32)
-        selected_by_row[row].each_with_index do |route, route_index|
-          src_offset = (route_offsets_by_row[row] + route_index) * hp.n_embd
-          hp.n_embd.times { |i| combined[i] += route.weight * expert_outputs_by_route_slot[src_offset + i] }
+      if grouped_moe_inplace_combine_enabled?(row_count)
+        result_ptr = result.to_unsafe
+        expert_outputs_ptr = expert_outputs_by_route_slot.to_unsafe
+        row_count.times do |row|
+          row_offset = row * hp.n_embd
+          row_ptr = result_ptr + row_offset
+          selected_by_row[row].each_with_index do |route, route_index|
+            src_offset = (route_offsets_by_row[row] + route_index) * hp.n_embd
+            src_ptr = expert_outputs_ptr + src_offset
+            weight = route.weight
+            i = 0
+            while i < hp.n_embd
+              row_ptr[i] += weight * src_ptr[i]
+              i += 1
+            end
+          end
+          fast_rms_norm_slice!(result, row_offset, hp.n_embd, lw.post_ffw_norm_2, hp.rms_eps)
         end
-        normed = Gemma4CPU.rms_norm(combined, lw.post_ffw_norm_2, hp.rms_eps)
-        copy_row!(result, row, hp.n_embd, normed)
+      else
+        row_count.times do |row|
+          combined = Array(Float32).new(hp.n_embd, 0.0_f32)
+          selected_by_row[row].each_with_index do |route, route_index|
+            src_offset = (route_offsets_by_row[row] + route_index) * hp.n_embd
+            hp.n_embd.times { |i| combined[i] += route.weight * expert_outputs_by_route_slot[src_offset + i] }
+          end
+          normed = Gemma4CPU.rms_norm(combined, lw.post_ffw_norm_2, hp.rms_eps)
+          copy_row!(result, row, hp.n_embd, normed)
+        end
       end
       scatter_combine_norm_ms += (Time.instant - combine_t0).total_milliseconds
       GroupedMoeRowsTiming.new(result, prep_ms, gate_up_ms, activation_ms, down_ms, scatter_combine_norm_ms)
@@ -2458,6 +2478,22 @@ module ML::GGUF
 
     def moe_grouped_resident_batch_graph_max_canvas : Int32
       env_i32("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_BATCH_GRAPH_MAX_CANVAS", 8)
+    end
+
+    def grouped_moe_inplace_combine_enabled?(canvas_len : Int32) : Bool
+      return false if ENV["DIFFUSION_GEMMA_MOE_GROUPED_INPLACE_COMBINE_OFF"]? == "1"
+      return false if canvas_len < grouped_moe_inplace_combine_min_canvas
+      max_canvas = grouped_moe_inplace_combine_max_canvas
+      return false if max_canvas > 0 && canvas_len > max_canvas
+      true
+    end
+
+    def grouped_moe_inplace_combine_min_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_MOE_GROUPED_INPLACE_COMBINE_MIN_CANVAS", 1)
+    end
+
+    def grouped_moe_inplace_combine_max_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_MOE_GROUPED_INPLACE_COMBINE_MAX_CANVAS", 8)
     end
 
     def moe_ffn_grouped_expert_min_canvas : Int32
