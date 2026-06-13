@@ -1125,18 +1125,19 @@ module ML::GGUF
         raise ArgumentError.new("moe_ffn_grouped_expert_rows routes must not be empty") if selected.empty?
       end
 
-      assignments_by_expert = Hash(Int32, Array(Tuple(Int32, Int32, Float32))).new do |hash, expert|
-        hash[expert] = [] of Tuple(Int32, Int32, Float32)
+      assignments_by_expert = Hash(Int32, Array(Tuple(Int32, Int32))).new do |hash, expert|
+        hash[expert] = [] of Tuple(Int32, Int32)
       end
+      route_offsets_by_row = Array(Int32).new(row_count, 0)
+      route_slot_count = 0
       selected_by_row.each_with_index do |selected, row|
+        route_offsets_by_row[row] = route_slot_count
+        route_slot_count += selected.size
         selected.each_with_index do |route, route_index|
-          assignments_by_expert[route.expert] << {row, route_index, route.weight}
+          assignments_by_expert[route.expert] << {row, route_index}
         end
       end
-
-      expert_outputs_by_row = selected_by_row.map do |selected|
-        Array(Array(Float32)?).new(selected.size, nil)
-      end
+      expert_outputs_by_route_slot = Array(Float32).new(route_slot_count * hp.n_embd, 0.0_f32)
 
       assignments_by_expert.each do |expert, assignments|
         batch = assignments.size
@@ -1170,8 +1171,8 @@ module ML::GGUF
           row = assignment[0]
           route_index = assignment[1]
           src_offset = batch_row * hp.n_embd
-          expert_out = Array(Float32).new(hp.n_embd) { |i| down_rows[src_offset + i] * scale }
-          expert_outputs_by_row[row][route_index] = expert_out
+          dst_offset = (route_offsets_by_row[row] + route_index) * hp.n_embd
+          hp.n_embd.times { |i| expert_outputs_by_route_slot[dst_offset + i] = down_rows[src_offset + i] * scale }
         end
       end
 
@@ -1179,8 +1180,8 @@ module ML::GGUF
       row_count.times do |row|
         combined = Array(Float32).new(hp.n_embd, 0.0_f32)
         selected_by_row[row].each_with_index do |route, route_index|
-          expert_out = expert_outputs_by_row[row][route_index] || raise "missing grouped expert output"
-          hp.n_embd.times { |i| combined[i] += route.weight * expert_out[i] }
+          src_offset = (route_offsets_by_row[row] + route_index) * hp.n_embd
+          hp.n_embd.times { |i| combined[i] += route.weight * expert_outputs_by_route_slot[src_offset + i] }
         end
         normed = Gemma4CPU.rms_norm(combined, lw.post_ffw_norm_2, hp.rms_eps)
         copy_row!(result, row, hp.n_embd, normed)
