@@ -725,6 +725,56 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
   end
 
+  it "gates Metal attention residual row batching by row count env policy" do
+    old_enabled = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS"]?
+    old_off = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS_OFF"]?
+    old_min = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MIN_ROWS"]?
+    old_max = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MAX_ROWS"]?
+    begin
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS_OFF")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MIN_ROWS")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MAX_ROWS")
+      ML::GGUF::DiffusionGemmaCPU.attention_residual_metal_rows_enabled?(8).should be_false
+
+      ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS"] = "1"
+      if ML::GGUF::Gemma4Metal.available?
+        ML::GGUF::DiffusionGemmaCPU.attention_residual_metal_rows_enabled?(1).should be_true
+
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MIN_ROWS"] = "4"
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MAX_ROWS"] = "8"
+        ML::GGUF::DiffusionGemmaCPU.attention_residual_metal_rows_enabled?(2).should be_false
+        ML::GGUF::DiffusionGemmaCPU.attention_residual_metal_rows_enabled?(4).should be_true
+        ML::GGUF::DiffusionGemmaCPU.attention_residual_metal_rows_enabled?(8).should be_true
+        ML::GGUF::DiffusionGemmaCPU.attention_residual_metal_rows_enabled?(16).should be_false
+
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS_OFF"] = "1"
+        ML::GGUF::DiffusionGemmaCPU.attention_residual_metal_rows_enabled?(8).should be_false
+      end
+    ensure
+      if old_enabled
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS"] = old_enabled
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS")
+      end
+      if old_off
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS_OFF"] = old_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS_OFF")
+      end
+      if old_min
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MIN_ROWS"] = old_min
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MIN_ROWS")
+      end
+      if old_max
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MAX_ROWS"] = old_max
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MAX_ROWS")
+      end
+    end
+  end
+
   it "computes the shared dense FFN branch and residual combiner boundary" do
     pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
 
@@ -770,6 +820,81 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
     expect_raises(ArgumentError, /shared_dense_ffn_rows input size mismatch/) do
       ML::GGUF::DiffusionGemmaCPU.shared_dense_ffn_rows(w, 0, [0.0_f32], 2)
+    end
+  end
+
+  it "keeps Metal attention residual rows equivalent to the existing row path" do
+    pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
+    next unless ML::GGUF::Gemma4Metal.available?
+
+    w = ML::GGUF::DiffusionGemmaWeights.from_gguf(DIFFUSION_GEMMA_26B_Q4KM)
+    hp = w.hparams
+    il = 0
+    row_count = 4
+    context_dim = hp.n_head * hp.head_dim_for_layer(il)
+    x_rows = [] of Float32
+    row_count.times do |row|
+      x_rows.concat(ML::GGUF::DiffusionGemmaCPU.zero_sc_canvas_embedding(w, row))
+    end
+    context_rows = Array(Float32).new(row_count * context_dim) do |i|
+      ((((i * 17) % 257) - 128).to_f32 / 512.0_f32)
+    end
+
+    old_enabled = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS"]?
+    old_off = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS_OFF"]?
+    old_min = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MIN_ROWS"]?
+    old_max = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MAX_ROWS"]?
+    old_proj_metal = ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL"]?
+    old_proj_metal_min = ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH"]?
+    begin
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS_OFF")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MIN_ROWS")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MAX_ROWS")
+      ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL"] = "1"
+      ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH"] = "1"
+      expected = ML::GGUF::DiffusionGemmaCPU.attention_residual_from_context_rows(w, il, x_rows, context_rows, row_count)
+
+      ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS"] = "1"
+      actual = ML::GGUF::DiffusionGemmaCPU.attention_residual_from_context_rows(w, il, x_rows, context_rows, row_count)
+      actual.size.should eq(expected.size)
+      max_diff = 0.0_f32
+      expected.size.times do |i|
+        diff = (expected[i] - actual[i]).abs
+        max_diff = diff if diff > max_diff
+      end
+      max_diff.should be < 1.0e-3_f32
+    ensure
+      if old_enabled
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS"] = old_enabled
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS")
+      end
+      if old_off
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS_OFF"] = old_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS_OFF")
+      end
+      if old_min
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MIN_ROWS"] = old_min
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MIN_ROWS")
+      end
+      if old_max
+        ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MAX_ROWS"] = old_max
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MAX_ROWS")
+      end
+      if old_proj_metal
+        ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL"] = old_proj_metal
+      else
+        ENV.delete("DIFFUSION_GEMMA_PROMPT_PROJ_METAL")
+      end
+      if old_proj_metal_min
+        ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH"] = old_proj_metal_min
+      else
+        ENV.delete("DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH")
+      end
     end
   end
 

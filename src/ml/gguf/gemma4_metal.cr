@@ -107,6 +107,17 @@ module ML::GGUF
         nil
       end
 
+      def attention_residual_rows_from_context(context_rows : Array(Float32),
+                                               residual_rows : Array(Float32),
+                                               attn_output_qw : QuantWeight,
+                                               post_attention_norm : Array(Float32),
+                                               rows : Int32,
+                                               hidden_dim : Int32,
+                                               context_dim : Int32,
+                                               eps : Float32) : Array(Float32)?
+        nil
+      end
+
       def layer_tail(x : Array(Float32),
                      attn_projected : Array(Float32),
                      lw : Gemma4LayerWeights,
@@ -920,6 +931,42 @@ module ML::GGUF
         cmd3.commit
         cmd3.wait
         out_buf.read(hidden_dim)
+      end
+
+      def attention_residual_rows_from_context(context_rows : Array(Float32),
+                                               residual_rows : Array(Float32),
+                                               attn_output_qw : QuantWeight,
+                                               post_attention_norm : Array(Float32),
+                                               rows : Int32,
+                                               hidden_dim : Int32,
+                                               context_dim : Int32,
+                                               eps : Float32) : Array(Float32)?
+        return nil unless available?
+        raise ArgumentError.new("attention residual rows must be positive") unless rows > 0
+        raise ArgumentError.new("attention residual hidden_dim must be positive") unless hidden_dim > 0
+        raise ArgumentError.new("attention residual context_dim must be positive") unless context_dim > 0
+        raise ArgumentError.new("attention residual context rows size mismatch") unless context_rows.size == rows * context_dim
+        raise ArgumentError.new("attention residual rows size mismatch") unless residual_rows.size == rows * hidden_dim
+        raise ArgumentError.new("attention residual projection shape mismatch") unless attn_output_qw.in_dim == context_dim && attn_output_qw.out_dim == hidden_dim
+        raise ArgumentError.new("attention residual norm size mismatch") unless post_attention_norm.size == hidden_dim
+
+        context_buf = ML::MetalBuffer.from_array(context_rows)
+        residual_buf = ML::MetalBuffer.from_array(residual_rows)
+        weight_buf = ML::MetalBuffer.from_array(post_attention_norm)
+        projected_buf = ML::MetalBuffer.new(rows.to_i64 * hidden_dim * sizeof(Float32))
+        out_buf = ML::MetalBuffer.new(rows.to_i64 * hidden_dim * sizeof(Float32))
+
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        unless Qwen35Metal.encode_matmul_to_buffer(enc, attn_output_qw, context_buf, projected_buf, rows)
+          enc.end_encoding
+          return nil
+        end
+        encode_rmsnorm_add_rows(enc, projected_buf, weight_buf, residual_buf, out_buf, hidden_dim, rows, eps)
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
+        out_buf.read(rows * hidden_dim)
       end
 
       def encode_layer_tail_resident_buffer_inputs_graph(enc : ML::Metal::GraphEncoder,

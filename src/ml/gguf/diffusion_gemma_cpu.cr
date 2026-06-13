@@ -889,8 +889,26 @@ module ML::GGUF
       hp = weights.hparams
       lw = weights.layers[il]
       expected = row_count * hp.n_embd
+      context_dim = hp.n_head * hp.head_dim_for_layer(il)
+      context_expected = row_count * context_dim
       raise ArgumentError.new("attention_residual_from_context_rows row_count must be positive") unless row_count > 0
       raise ArgumentError.new("attention residual rows input size mismatch") unless x_rows.size == expected
+      raise ArgumentError.new("attention residual context rows size mismatch") unless context_rows.size == context_expected
+
+      if attention_residual_metal_rows_enabled?(row_count)
+        if metal_rows = Gemma4Metal.attention_residual_rows_from_context(
+             context_rows,
+             x_rows,
+             lw.attn_output_qw,
+             lw.post_attention_norm,
+             row_count,
+             hp.n_embd,
+             context_dim,
+             hp.rms_eps,
+           )
+          return metal_rows
+        end
+      end
 
       result = attention_output_project_rows(weights, il, context_rows, row_count)
       row_count.times do |row|
@@ -1808,6 +1826,23 @@ module ML::GGUF
     def prompt_materialize_grouped_moe_enabled? : Bool
       ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE"]? == "1" &&
         ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE_OFF"]? != "1"
+    end
+
+    def attention_residual_metal_rows_enabled?(row_count : Int32) : Bool
+      return false unless ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS"]? == "1"
+      return false if ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS_OFF"]? == "1"
+      return false if row_count < attention_residual_metal_min_rows
+      max_rows = attention_residual_metal_max_rows
+      return false if max_rows > 0 && row_count > max_rows
+      Gemma4Metal.available?
+    end
+
+    def attention_residual_metal_min_rows : Int32
+      env_i32("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MIN_ROWS", 1)
+    end
+
+    def attention_residual_metal_max_rows : Int32
+      env_i32("DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_MAX_ROWS", 0)
     end
 
     def shared_ffn_batch_rows_enabled?(canvas_len : Int32) : Bool
