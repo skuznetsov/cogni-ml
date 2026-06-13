@@ -1323,6 +1323,10 @@ module ML::GGUF
       return nil unless Gemma4Metal.encode_rmsnorm_add_scaled_rows_to_buffer(enc, combined_buf, ffn_post_weight_buf, attn_out_buf, out_buf, row_count, hp.n_embd, hp.rms_eps, scale)
 
       graph.compile!
+      if ENV["DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_STATS"]? == "1"
+        stats = graph.stats
+        STDERR.puts "diffusion_gemma_ffn_resident_graph layer=#{il} rows=#{row_count} active_experts=#{assignments_by_expert.size} route_slots=#{route_slot_count} ops=#{stats.n_ops} waves=#{stats.n_waves} barriers=#{stats.n_barriers} max_wave_width=#{stats.max_wave_width}"
+      end
       cmd = ML::Metal::CommandBuffer.new
       graph.encode(cmd)
       cmd.commit
@@ -2693,8 +2697,9 @@ module ML::GGUF
 
       if ffn_residual_resident_graph_enabled?(mask.canvas_len) && mask.canvas_len > 1
         ffn_t0 = Time.instant
-        if resident_rows = ffn_residual_rows_resident_graph(weights, il, attn_out_rows, mask.canvas_len, routes_by_canvas_row, canvas: true)
-          ffn_resident_ms += (Time.instant - ffn_t0).total_milliseconds
+        resident_rows = ffn_residual_rows_resident_graph(weights, il, attn_out_rows, mask.canvas_len, routes_by_canvas_row, canvas: true)
+        ffn_resident_ms += (Time.instant - ffn_t0).total_milliseconds
+        if resident_rows
           return DecodeCanvasRowsTiming.new(resident_rows, qkv_ms, context_ms, attention_out_ms, shared_ffn_ms, moe_ffn_ms, combine_scale_ms, context_score_ms, context_softmax_ms, context_value_ms, attention_residual_context_buffer_hit, moe_grouped_prep_ms, moe_grouped_gate_up_ms, moe_grouped_activation_ms, moe_grouped_down_ms, moe_grouped_scatter_combine_norm_ms, ffn_resident_ms)
         end
       end
