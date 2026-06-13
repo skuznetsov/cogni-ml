@@ -135,6 +135,20 @@ def format_f64(value : Float64) : String
   "%.6f" % value
 end
 
+def format_sample_values(values : Array(Float64)) : String
+  values.map { |v| "%.3f" % v }.join(",")
+end
+
+def trimmed_values(values : Array(Float64), trim_per_side : Int32) : Array(Float64)
+  raise "trim_per_side must be non-negative" if trim_per_side < 0
+  return values if trim_per_side == 0
+
+  sorted = values.sort
+  return sorted if sorted.size <= trim_per_side * 2 + 1
+
+  sorted[trim_per_side, sorted.size - trim_per_side * 2]
+end
+
 def checksum_rows(rows : Array(Float32)) : Float64
   stride = Math.max(1, rows.size // 257)
   sum = 0.0
@@ -238,7 +252,31 @@ def print_sample(sample : PhaseSample, prompt_len : Int32, canvas_len : Int32, m
   ].join('\t')
 end
 
-def print_summary(samples : Array(PhaseSample)) : Nil
+def print_metric_summary(kind : String,
+                         metric : String,
+                         base_values : Array(Float64),
+                         variant_values : Array(Float64)) : Nil
+  base_median = median(base_values)
+  variant_median = median(variant_values)
+  delta = base_median - variant_median
+  combined_range = (base_values.max - base_values.min) + (variant_values.max - variant_values.min)
+  range_over_delta = delta.abs > 0.0 ? combined_range / delta.abs : Float64::INFINITY
+  speedup = variant_median > 0.0 ? base_median / variant_median : 0.0
+  puts [
+    kind,
+    metric,
+    format_f64(base_median),
+    format_f64(variant_median),
+    format_f64(speedup),
+    format_f64(delta),
+    format_f64(combined_range),
+    format_f64(range_over_delta),
+    format_sample_values(base_values),
+    format_sample_values(variant_values),
+  ].join('\t')
+end
+
+def print_summary(samples : Array(PhaseSample), trim_per_arm : Int32) : Nil
   measured = samples.select(&.measured)
   by_arm = measured.group_by(&.arm)
   return unless by_arm["base"]? && by_arm["variant"]?
@@ -246,24 +284,15 @@ def print_summary(samples : Array(PhaseSample)) : Nil
   METRICS.each do |metric|
     base_values = by_arm["base"].map { |sample| sample.value(metric) }
     variant_values = by_arm["variant"].map { |sample| sample.value(metric) }
-    base_median = median(base_values)
-    variant_median = median(variant_values)
-    delta = base_median - variant_median
-    combined_range = (base_values.max - base_values.min) + (variant_values.max - variant_values.min)
-    range_over_delta = delta.abs > 0.0 ? combined_range / delta.abs : Float64::INFINITY
-    speedup = variant_median > 0.0 ? base_median / variant_median : 0.0
-    puts [
-      "summary",
-      metric,
-      format_f64(base_median),
-      format_f64(variant_median),
-      format_f64(speedup),
-      format_f64(delta),
-      format_f64(combined_range),
-      format_f64(range_over_delta),
-      base_values.map { |v| "%.3f" % v }.join(","),
-      variant_values.map { |v| "%.3f" % v }.join(","),
-    ].join('\t')
+    print_metric_summary("summary", metric, base_values, variant_values)
+    if trim_per_arm > 0
+      print_metric_summary(
+        "trimmed_summary",
+        metric,
+        trimmed_values(base_values, trim_per_arm),
+        trimmed_values(variant_values, trim_per_arm),
+      )
+    end
   end
 end
 
@@ -275,6 +304,7 @@ canvas_token = 0
 max_layers = 1
 warmups = 1
 repeats = 4
+trim_per_arm = 0
 sequence = "base variant variant base"
 base_env = ArmEnv.new("")
 variant_env = ArmEnv.new("")
@@ -290,6 +320,7 @@ OptionParser.parse do |p|
   p.on("--max-layers N", "Decode layers (default: 1)") { |v| max_layers = v.to_i }
   p.on("--warmups N", "Unmeasured ABBA cycles before samples (default: 1)") { |v| warmups = v.to_i }
   p.on("--repeats N", "Measured ABBA cycles (default: 4)") { |v| repeats = v.to_i }
+  p.on("--trim-per-arm N", "Emit trimmed summaries after dropping N low/high values per arm and metric (default: 0)") { |v| trim_per_arm = v.to_i }
   p.on("--sequence LIST", "Arm sequence per cycle (default: base variant variant base)") { |v| sequence = v }
   p.on("--base-env ENV", "Whitespace-separated KEY=VALUE env for base arm") { |v| base_env = ArmEnv.new(v) }
   p.on("--variant-env ENV", "Whitespace-separated KEY=VALUE env for variant arm") { |v| variant_env = ArmEnv.new(v) }
@@ -306,6 +337,7 @@ raise "--canvas-len must be positive" unless canvas_len > 0
 raise "--max-layers must be positive" unless max_layers > 0
 raise "--warmups must be non-negative" unless warmups >= 0
 raise "--repeats must be positive" unless repeats > 0
+raise "--trim-per-arm must be non-negative" unless trim_per_arm >= 0
 arms = sequence.split(/\s+/).reject(&.empty?)
 raise "--sequence must contain at least one arm" if arms.empty?
 arms.each { |arm| raise "--sequence arms must be base or variant, got #{arm.inspect}" unless {"base", "variant"}.includes?(arm) }
@@ -375,4 +407,4 @@ total_cycles.times do |cycle|
     end
   end
 end
-print_summary(samples)
+print_summary(samples, trim_per_arm)
