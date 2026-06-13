@@ -3531,7 +3531,7 @@ module ML::GGUF
         enc.dispatch_threadgroups({rows, 1, 1}, {256, 1, 1})
       end
 
-      private def encode_rmsnorm_add_scaled_rows(enc : ML::Metal::ComputeEncoder,
+      private def encode_rmsnorm_add_scaled_rows(enc : ML::Metal::ComputeEncoder | ML::Metal::GraphEncoder,
                                                  x_buf : ML::MetalBuffer,
                                                  weight_buf : ML::MetalBuffer,
                                                  residual_buf : ML::MetalBuffer,
@@ -3575,6 +3575,41 @@ module ML::GGUF
         return false if out_buf.size < count.to_i64 * sizeof(Float32)
 
         encode_gelu_mul(enc, gate_buf, up_buf, out_buf, count)
+        true
+      end
+
+      def encode_add_vec_to_buffer(enc : ML::Metal::ComputeEncoder | ML::Metal::GraphEncoder,
+                                   a_buf : ML::MetalBuffer,
+                                   b_buf : ML::MetalBuffer,
+                                   out_buf : ML::MetalBuffer,
+                                   count : Int32) : Bool
+        return false unless count > 0
+        bytes = count.to_i64 * sizeof(Float32)
+        return false if a_buf.size < bytes
+        return false if b_buf.size < bytes
+        return false if out_buf.size < bytes
+
+        encode_add_vec(enc, a_buf, b_buf, out_buf, count)
+        true
+      end
+
+      def encode_rmsnorm_add_scaled_rows_to_buffer(enc : ML::Metal::ComputeEncoder | ML::Metal::GraphEncoder,
+                                                   x_buf : ML::MetalBuffer,
+                                                   weight_buf : ML::MetalBuffer,
+                                                   residual_buf : ML::MetalBuffer,
+                                                   out_buf : ML::MetalBuffer,
+                                                   row_count : Int32,
+                                                   dim : Int32,
+                                                   eps : Float32,
+                                                   scale : Float32) : Bool
+        return false unless row_count > 0 && dim > 0
+        bytes = row_count.to_i64 * dim * sizeof(Float32)
+        return false if x_buf.size < bytes
+        return false if weight_buf.size < dim.to_i64 * sizeof(Float32)
+        return false if residual_buf.size < bytes
+        return false if out_buf.size < bytes
+
+        encode_rmsnorm_add_scaled_rows(enc, x_buf, weight_buf, residual_buf, out_buf, dim, row_count, eps, scale)
         true
       end
 

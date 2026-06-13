@@ -31,12 +31,14 @@ PHASE_METRICS = [
     "moe_grouped_activation_ms",
     "moe_grouped_down_ms",
     "moe_grouped_scatter_combine_norm_ms",
+    "ffn_resident_ms",
     "combine_scale_ms",
 ]
 
 ROUTE_FLAGS = [
     "shared_rows",
     "shared_resident",
+    "ffn_resident",
     "moe_rows",
     "grouped_moe",
     "moe_router_batch",
@@ -166,6 +168,12 @@ def dominant_grouped_subphase(phase_rows: dict[str, dict[str, float]]) -> tuple[
     return metric, grouped[metric]
 
 
+def visible_median(row: dict[str, float]) -> float:
+    values = [row["base_median"], row["variant_median"]]
+    finite = [value for value in values if not math.isnan(value)]
+    return max(finite) if finite else float("nan")
+
+
 def candidate_text(dominant_metric: str, route_changes: list[str], noisy_delta_count: int) -> list[str]:
     rows: list[str] = []
     if dominant_metric == "moe_ffn_ms":
@@ -188,6 +196,10 @@ def candidate_text(dominant_metric: str, route_changes: list[str], noisy_delta_c
     elif dominant_metric == "combine_scale_ms":
         rows.append(
             "Spike: combine/scale dominates an otherwise tiny row. Window=post-FFN scalar tail; legal move=eliminate redundant scalar passes if total_ms proof is larger than noise."
+        )
+    elif dominant_metric == "ffn_resident_ms":
+        rows.append(
+            "Diamond: full resident FFN route dominates the variant. Window=shared+MoE+post-norm corridor; legal move=keep only if mirrored total_ms descends after sequence-position recomputation."
         )
     if route_changes:
         rows.append(
@@ -221,10 +233,10 @@ def main() -> int:
         for metric in PHASE_METRICS
         if not math.isnan(summaries[metric]["base_median"])
     }
-    dominant_metric = max(phase_rows, key=lambda metric: phase_rows[metric]["base_median"]) if phase_rows else "none"
-    dominant_base = phase_rows[dominant_metric]["base_median"] if dominant_metric != "none" else 0.0
+    dominant_metric = max(phase_rows, key=lambda metric: visible_median(phase_rows[metric])) if phase_rows else "none"
+    dominant_base = visible_median(phase_rows[dominant_metric]) if dominant_metric != "none" else 0.0
     grouped_subphase = dominant_grouped_subphase(phase_rows)
-    tied = sum(1 for row in phase_rows.values() if dominant_base > 0 and row["base_median"] >= dominant_base * 0.80)
+    tied = sum(1 for row in phase_rows.values() if dominant_base > 0 and visible_median(row) >= dominant_base * 0.80)
     noisy_delta_count = sum(
         1 for row in phase_rows.values()
         if row["range_over_delta"] > 2.0 and abs(row["delta"]) > 0.0
@@ -277,10 +289,11 @@ def main() -> int:
             print("  warning=position_span_exceeds_total_delta")
 
     print("\nPhase buckets")
-    for metric, row in sorted(phase_rows.items(), key=lambda item: (-item[1]["base_median"], item[0]))[:args.top]:
+    for metric, row in sorted(phase_rows.items(), key=lambda item: (-visible_median(item[1]), item[0]))[:args.top]:
         base_pct = row["base_median"] * 100.0 / total_base if total_base > 0 else float("nan")
+        visible_pct = visible_median(row) * 100.0 / total_base if total_base > 0 else float("nan")
         print(
-            "  %-22s base=%10s ms variant=%10s ms speedup=%8s delta=%10s pct_base=%6s%% rod=%s"
+            "  %-22s base=%10s ms variant=%10s ms speedup=%8s delta=%10s pct_base=%6s%% pct_visible=%6s%% rod=%s"
             % (
                 metric,
                 fmt(row["base_median"]),
@@ -288,6 +301,7 @@ def main() -> int:
                 fmt(row["speedup"]),
                 fmt(row["delta"]),
                 fmt(base_pct),
+                fmt(visible_pct),
                 fmt(row["range_over_delta"]),
             )
         )

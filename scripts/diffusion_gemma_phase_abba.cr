@@ -43,10 +43,12 @@ struct PhaseSample
   getter moe_grouped_activation_ms : Float64
   getter moe_grouped_down_ms : Float64
   getter moe_grouped_scatter_combine_norm_ms : Float64
+  getter ffn_resident_ms : Float64
   getter combine_scale_ms : Float64
   getter checksum : Float64
   getter shared_rows : Bool
   getter shared_resident : Bool
+  getter ffn_resident : Bool
   getter moe_rows : Bool
   getter grouped_moe : Bool
   getter moe_router_batch : Bool
@@ -63,8 +65,8 @@ struct PhaseSample
                  @moe_ffn_ms, @moe_grouped_prep_ms,
                  @moe_grouped_gate_up_ms, @moe_grouped_activation_ms,
                  @moe_grouped_down_ms, @moe_grouped_scatter_combine_norm_ms,
-                 @combine_scale_ms, @checksum, @shared_rows,
-                 @shared_resident, @moe_rows, @grouped_moe, @moe_router_batch,
+                 @ffn_resident_ms, @combine_scale_ms, @checksum, @shared_rows,
+                 @shared_resident, @ffn_resident, @moe_rows, @grouped_moe, @moe_router_batch,
                  @moe_gpu_gather, @moe_gpu_prenorm, @moe_gpu_reduce,
                  @attention_out_rows, @attention_residual_metal_rows,
                  @attention_residual_context_buffer)
@@ -86,6 +88,7 @@ struct PhaseSample
     when "moe_grouped_activation_ms"           then moe_grouped_activation_ms
     when "moe_grouped_down_ms"                 then moe_grouped_down_ms
     when "moe_grouped_scatter_combine_norm_ms" then moe_grouped_scatter_combine_norm_ms
+    when "ffn_resident_ms"                     then ffn_resident_ms
     when "combine_scale_ms"                    then combine_scale_ms
     else
       raise "unknown metric #{metric}"
@@ -105,6 +108,7 @@ TSV_HEADER = [
   "single_route",
   "shared_rows",
   "shared_resident",
+  "ffn_resident",
   "moe_rows",
   "grouped_moe",
   "moe_router_batch",
@@ -128,6 +132,7 @@ TSV_HEADER = [
   "moe_grouped_activation_ms",
   "moe_grouped_down_ms",
   "moe_grouped_scatter_combine_norm_ms",
+  "ffn_resident_ms",
   "combine_scale_ms",
   "checksum",
 ]
@@ -147,6 +152,7 @@ METRICS = [
   "moe_grouped_activation_ms",
   "moe_grouped_down_ms",
   "moe_grouped_scatter_combine_norm_ms",
+  "ffn_resident_ms",
   "combine_scale_ms",
 ]
 
@@ -259,10 +265,12 @@ def run_arm(weights : ML::GGUF::DiffusionGemmaWeights,
     moe_grouped_activation_ms: timed.moe_grouped_activation_ms,
     moe_grouped_down_ms: timed.moe_grouped_down_ms,
     moe_grouped_scatter_combine_norm_ms: timed.moe_grouped_scatter_combine_norm_ms,
+    ffn_resident_ms: timed.ffn_resident_ms,
     combine_scale_ms: timed.combine_scale_ms,
     checksum: checksum_rows(timed.rows),
     shared_rows: ML::GGUF::DiffusionGemmaCPU.shared_ffn_batch_rows_enabled?(mask.canvas_len),
     shared_resident: ML::GGUF::DiffusionGemmaCPU.shared_ffn_resident_graph_enabled?(mask.canvas_len),
+    ffn_resident: ML::GGUF::DiffusionGemmaCPU.ffn_residual_resident_graph_enabled?(mask.canvas_len),
     moe_rows: ML::GGUF::DiffusionGemmaCPU.moe_ffn_batch_rows_enabled?(mask.canvas_len),
     grouped_moe: ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows_enabled?(mask.canvas_len),
     moe_router_batch: ML::GGUF::DiffusionGemmaCPU.moe_grouped_router_batch_rows_enabled?(mask.canvas_len),
@@ -289,6 +297,7 @@ def print_sample(sample : PhaseSample, prompt_len : Int32, canvas_len : Int32, m
     single_route.to_s,
     sample.shared_rows.to_s,
     sample.shared_resident.to_s,
+    sample.ffn_resident.to_s,
     sample.moe_rows.to_s,
     sample.grouped_moe.to_s,
     sample.moe_router_batch.to_s,
@@ -312,6 +321,7 @@ def print_sample(sample : PhaseSample, prompt_len : Int32, canvas_len : Int32, m
     format_f64(sample.moe_grouped_activation_ms),
     format_f64(sample.moe_grouped_down_ms),
     format_f64(sample.moe_grouped_scatter_combine_norm_ms),
+    format_f64(sample.ffn_resident_ms),
     format_f64(sample.combine_scale_ms),
     format_f64(sample.checksum),
   ].join('\t')

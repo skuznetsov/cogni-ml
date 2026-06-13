@@ -1102,6 +1102,78 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
   end
 
+  it "keeps resident FFN residual rows equivalent to the existing grouped path" do
+    pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
+    next unless ML::GGUF::Qwen35Metal.available?
+
+    w = ML::GGUF::DiffusionGemmaWeights.from_gguf(DIFFUSION_GEMMA_26B_Q4KM)
+    hp = w.hparams
+    row0 = ML::GGUF::DiffusionGemmaCPU.zero_sc_canvas_embedding(w, 0)
+    row1 = ML::GGUF::DiffusionGemmaCPU.zero_sc_canvas_embedding(w, 1)
+    rows = row0 + row1
+    routes = ML::GGUF::DiffusionGemmaCPU.route_experts_rows(w, 0, rows, 2)
+
+    old_ffn_resident = ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH"]?
+    old_ffn_resident_off = ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_OFF"]?
+    old_ffn_resident_min = ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MIN_CANVAS"]?
+    old_ffn_resident_max = ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MAX_CANVAS"]?
+    begin
+      ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH"] = "1"
+      ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MIN_CANVAS"] = "2"
+      ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MAX_CANVAS"] = "2"
+
+      shared = ML::GGUF::DiffusionGemmaCPU.shared_dense_ffn_rows(w, 0, rows, 2)
+      moe = ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows(w, 0, rows, 2, routes)
+      expected = ML::GGUF::DiffusionGemmaCPU.ffn_residual_from_parts_rows(w, 0, rows, shared, moe, 2, canvas: true)
+      resident = ML::GGUF::DiffusionGemmaCPU.ffn_residual_rows_resident_graph(w, 0, rows, 2, routes, canvas: true)
+      resident.should_not be_nil
+      actual = resident.not_nil!
+      actual.size.should eq(2 * hp.n_embd)
+      max_diff = 0.0_f32
+      expected.size.times do |i|
+        diff = (expected[i] - actual[i]).abs
+        max_diff = diff if diff > max_diff
+      end
+      max_diff.should be < 1.0e-3_f32
+
+      ENV.delete("DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH")
+      ENV.delete("DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MIN_CANVAS")
+      ENV.delete("DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MAX_CANVAS")
+      ML::GGUF::DiffusionGemmaCPU.ffn_residual_resident_graph_enabled?(8).should be_false
+      ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.ffn_residual_resident_graph_enabled?(4).should be_false
+      ML::GGUF::DiffusionGemmaCPU.ffn_residual_resident_graph_enabled?(8).should be_true
+      ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MIN_CANVAS"] = "8"
+      ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MAX_CANVAS"] = "8"
+      ML::GGUF::DiffusionGemmaCPU.ffn_residual_resident_graph_enabled?(4).should be_false
+      ML::GGUF::DiffusionGemmaCPU.ffn_residual_resident_graph_enabled?(8).should be_true
+      ML::GGUF::DiffusionGemmaCPU.ffn_residual_resident_graph_enabled?(16).should be_false
+      ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.ffn_residual_resident_graph_enabled?(8).should be_false
+    ensure
+      if old_ffn_resident
+        ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH"] = old_ffn_resident
+      else
+        ENV.delete("DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH")
+      end
+      if old_ffn_resident_off
+        ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_OFF"] = old_ffn_resident_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_OFF")
+      end
+      if old_ffn_resident_min
+        ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MIN_CANVAS"] = old_ffn_resident_min
+      else
+        ENV.delete("DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MIN_CANVAS")
+      end
+      if old_ffn_resident_max
+        ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MAX_CANVAS"] = old_ffn_resident_max
+      else
+        ENV.delete("DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MAX_CANVAS")
+      end
+    end
+  end
+
   it "keeps Metal attention residual rows equivalent to the existing row path" do
     pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
     next unless ML::GGUF::Gemma4Metal.available?

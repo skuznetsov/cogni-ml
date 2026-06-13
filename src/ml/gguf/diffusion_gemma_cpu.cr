@@ -287,6 +287,7 @@ module ML::GGUF
       getter moe_grouped_activation_ms : Float64
       getter moe_grouped_down_ms : Float64
       getter moe_grouped_scatter_combine_norm_ms : Float64
+      getter ffn_resident_ms : Float64
       getter combine_scale_ms : Float64
       getter attention_residual_context_buffer : Bool
 
@@ -305,7 +306,8 @@ module ML::GGUF
                      @moe_grouped_gate_up_ms = 0.0,
                      @moe_grouped_activation_ms = 0.0,
                      @moe_grouped_down_ms = 0.0,
-                     @moe_grouped_scatter_combine_norm_ms = 0.0)
+                     @moe_grouped_scatter_combine_norm_ms = 0.0,
+                     @ffn_resident_ms = 0.0)
       end
     end
 
@@ -1148,6 +1150,177 @@ module ML::GGUF
       return nil unless Gemma4Metal.encode_gelu_mul_to_buffer(enc, gate_buf, up_buf, hidden_buf, row_count * shared_ff)
       return nil unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.ffn_down_qw, hidden_buf, down_buf, row_count)
       return nil unless Gemma4Metal.encode_rmsnorm_rows_weighted_to_buffer(enc, down_buf, post_weight_buf, out_buf, row_count, hp.n_embd, hp.rms_eps)
+
+      graph.compile!
+      cmd = ML::Metal::CommandBuffer.new
+      graph.encode(cmd)
+      cmd.commit
+      cmd.wait
+      out_buf.read(expected)
+    end
+
+    def ffn_residual_rows_resident_graph(weights : DiffusionGemmaWeights,
+                                         il : Int32,
+                                         attn_out_rows : Array(Float32),
+                                         row_count : Int32,
+                                         routes_by_row : Array(Array(ExpertRoute))? = nil,
+                                         canvas : Bool = true) : Array(Float32)?
+      return nil unless ffn_residual_resident_graph_enabled?(row_count)
+
+      hp = weights.hparams
+      lw = weights.layers[il]
+      expected = row_count * hp.n_embd
+      raise ArgumentError.new("ffn_residual_rows_resident_graph row_count must be positive") unless row_count > 0
+      raise ArgumentError.new("ffn_residual_rows_resident_graph input size mismatch") unless attn_out_rows.size == expected
+      if supplied_routes = routes_by_row
+        raise ArgumentError.new("ffn_residual_rows_resident_graph route row count mismatch") unless supplied_routes.size == row_count
+      end
+      raise ArgumentError.new("shared dense ffn norm size mismatch") unless lw.ffn_norm.size == hp.n_embd
+      raise ArgumentError.new("shared dense post norm size mismatch") unless lw.post_ffw_norm_1.size == hp.n_embd
+      raise ArgumentError.new("moe pre norm size mismatch") unless lw.pre_ffw_norm_2.size == hp.n_embd
+      raise ArgumentError.new("moe post norm size mismatch") unless lw.post_ffw_norm_2.size == hp.n_embd
+      raise ArgumentError.new("ffn post norm size mismatch") unless lw.post_ffw_norm.size == hp.n_embd
+      raise ArgumentError.new("down expert scale size mismatch") unless lw.ffn_down_exps_scale.size == hp.expert_count
+
+      shared_ff = lw.ffn_up_qw.out_dim
+      raise ArgumentError.new("shared dense ffn gate/up mismatch") unless shared_ff > 0 && lw.ffn_gate_qw.out_dim == shared_ff
+      raise ArgumentError.new("shared dense ffn down mismatch") unless lw.ffn_down_qw.in_dim == shared_ff && lw.ffn_down_qw.out_dim == hp.n_embd
+
+      selected_by_row = routes_by_row || route_experts_rows(weights, il, attn_out_rows, row_count)
+      selected_by_row.each do |selected|
+        raise ArgumentError.new("ffn_residual_rows_resident_graph routes must not be empty") if selected.empty?
+      end
+
+      assignments_by_expert = Hash(Int32, Array(Tuple(Int32, Int32))).new do |hash, expert|
+        hash[expert] = [] of Tuple(Int32, Int32)
+      end
+      route_offsets_by_row = Array(Int32).new(row_count, 0)
+      route_counts_by_row = Array(Int32).new(row_count, 0)
+      route_slot_count = 0
+      selected_by_row.each_with_index do |selected, row|
+        route_offsets_by_row[row] = route_slot_count
+        route_counts_by_row[row] = selected.size
+        route_slot_count += selected.size
+        selected.each_with_index do |route, route_index|
+          raise ArgumentError.new("ffn_residual_rows_resident_graph expert id out of range") if route.expert < 0 || route.expert >= hp.expert_count
+          assignments_by_expert[route.expert] << {row, route_index}
+        end
+      end
+      return nil if assignments_by_expert.empty?
+      raise ArgumentError.new("ffn_residual_rows_resident_graph route slots must be positive") unless route_slot_count > 0
+
+      batch_by_expert = {} of Int32 => Int32
+      assignments_by_expert.each do |expert, assignments|
+        batch_by_expert[expert] = assignments.size
+      end
+      route_weights = Array(Float32).new(route_slot_count, 0.0_f32)
+      selected_by_row.each_with_index do |selected, row|
+        selected.each_with_index do |route, route_index|
+          slot = route_offsets_by_row[row] + route_index
+          route_weights[slot] = route.weight * lw.ffn_down_exps_scale[route.expert]
+        end
+      end
+
+      owned_buffers = [] of ML::MetalBuffer
+      attn_out_buf = ML::MetalBuffer.from_array(attn_out_rows)
+      shared_norm_weight_buf = ML::MetalBuffer.from_array(lw.ffn_norm)
+      shared_post_weight_buf = ML::MetalBuffer.from_array(lw.post_ffw_norm_1)
+      moe_norm_weight_buf = ML::MetalBuffer.from_array(lw.pre_ffw_norm_2)
+      moe_post_weight_buf = ML::MetalBuffer.from_array(lw.post_ffw_norm_2)
+      ffn_post_weight_buf = ML::MetalBuffer.from_array(lw.post_ffw_norm)
+
+      shared_in_buf = ML::MetalBuffer.new(expected.to_i64 * sizeof(Float32))
+      shared_up_buf = ML::MetalBuffer.new(row_count.to_i64 * shared_ff * sizeof(Float32))
+      shared_gate_buf = ML::MetalBuffer.new(row_count.to_i64 * shared_ff * sizeof(Float32))
+      shared_hidden_buf = ML::MetalBuffer.new(row_count.to_i64 * shared_ff * sizeof(Float32))
+      shared_down_buf = ML::MetalBuffer.new(expected.to_i64 * sizeof(Float32))
+      shared_out_buf = ML::MetalBuffer.new(expected.to_i64 * sizeof(Float32))
+
+      moe_in_buf = ML::MetalBuffer.new(expected.to_i64 * sizeof(Float32))
+      route_rows_buf = ML::MetalBuffer.new(route_slot_count.to_i64 * hp.n_embd * sizeof(Float32))
+      route_offsets_buf = metal_int32_buffer(route_offsets_by_row)
+      route_counts_buf = metal_int32_buffer(route_counts_by_row)
+      route_weights_buf = ML::MetalBuffer.from_array(route_weights)
+      moe_reduced_buf = ML::MetalBuffer.new(expected.to_i64 * sizeof(Float32))
+      moe_out_buf = ML::MetalBuffer.new(expected.to_i64 * sizeof(Float32))
+      combined_buf = ML::MetalBuffer.new(expected.to_i64 * sizeof(Float32))
+      out_buf = ML::MetalBuffer.new(expected.to_i64 * sizeof(Float32))
+
+      owned_buffers.concat([
+        attn_out_buf,
+        shared_norm_weight_buf,
+        shared_post_weight_buf,
+        moe_norm_weight_buf,
+        moe_post_weight_buf,
+        ffn_post_weight_buf,
+        shared_in_buf,
+        shared_up_buf,
+        shared_gate_buf,
+        shared_hidden_buf,
+        shared_down_buf,
+        shared_out_buf,
+        moe_in_buf,
+        route_rows_buf,
+        route_offsets_buf,
+        route_counts_buf,
+        route_weights_buf,
+        moe_reduced_buf,
+        moe_out_buf,
+        combined_buf,
+        out_buf,
+      ])
+
+      graph = ML::Metal::ComputeGraph.new
+      enc = ML::Metal::GraphEncoder.new(graph)
+      return nil unless Gemma4Metal.encode_rmsnorm_rows_weighted_to_buffer(enc, attn_out_buf, shared_norm_weight_buf, shared_in_buf, row_count, hp.n_embd, hp.rms_eps)
+      return nil unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [lw.ffn_up_qw, lw.ffn_gate_qw], shared_in_buf, [shared_up_buf, shared_gate_buf], row_count)
+      return nil unless Gemma4Metal.encode_gelu_mul_to_buffer(enc, shared_gate_buf, shared_up_buf, shared_hidden_buf, row_count * shared_ff)
+      return nil unless Qwen35Metal.encode_matmul_to_buffer(enc, lw.ffn_down_qw, shared_hidden_buf, shared_down_buf, row_count)
+      return nil unless Gemma4Metal.encode_rmsnorm_rows_weighted_to_buffer(enc, shared_down_buf, shared_post_weight_buf, shared_out_buf, row_count, hp.n_embd, hp.rms_eps)
+
+      return nil unless Gemma4Metal.encode_rmsnorm_rows_weighted_to_buffer(enc, attn_out_buf, moe_norm_weight_buf, moe_in_buf, row_count, hp.n_embd, hp.rms_eps)
+      assignments_by_expert.keys.sort.each do |expert|
+        assignments = assignments_by_expert[expert]
+        batch = batch_by_expert[expert]
+        raise ArgumentError.new("ffn_residual_rows_resident_graph expert batch mismatch") unless batch == assignments.size
+
+        gather_map = Array(Int32).new(batch) do |i|
+          row = assignments[i][0]
+          raise ArgumentError.new("ffn_residual_rows_resident_graph gather row out of range") if row < 0 || row >= row_count
+          row
+        end
+        scatter_map = Array(Int32).new(batch) do |i|
+          row = assignments[i][0]
+          route_index = assignments[i][1]
+          raise ArgumentError.new("ffn_residual_rows_resident_graph route index out of range") if route_index < 0 || route_index >= selected_by_row[row].size
+          route_offsets_by_row[row] + route_index
+        end
+
+        gather_map_buf = metal_int32_buffer(gather_map)
+        scatter_map_buf = metal_int32_buffer(scatter_map)
+        input_buf = ML::MetalBuffer.new(batch.to_i64 * hp.n_embd * sizeof(Float32))
+        gate_buf = ML::MetalBuffer.new(batch.to_i64 * hp.expert_ff * sizeof(Float32))
+        up_buf = ML::MetalBuffer.new(batch.to_i64 * hp.expert_ff * sizeof(Float32))
+        hidden_buf = ML::MetalBuffer.new(batch.to_i64 * hp.expert_ff * sizeof(Float32))
+        down_buf = ML::MetalBuffer.new(batch.to_i64 * hp.n_embd * sizeof(Float32))
+        owned_buffers.concat([gather_map_buf, scatter_map_buf, input_buf, gate_buf, up_buf, hidden_buf, down_buf])
+
+        return nil unless Gemma4Metal.encode_gather_rows_by_map_to_buffer(enc, moe_in_buf, gather_map_buf, input_buf, row_count, batch, hp.n_embd)
+
+        gate_qw = expert_gate_qw(lw, hp, expert)
+        up_qw = expert_up_qw(lw, hp, expert)
+        down_qw = expert_down_qw(lw, hp, expert)
+        return nil unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [gate_qw, up_qw], input_buf, [gate_buf, up_buf], batch)
+        return nil unless Gemma4Metal.encode_gelu_mul_to_buffer(enc, gate_buf, up_buf, hidden_buf, batch * hp.expert_ff)
+        return nil unless Qwen35Metal.encode_matmul_to_buffer(enc, down_qw, hidden_buf, down_buf, batch)
+        return nil unless Gemma4Metal.encode_scatter_rows_by_map_to_buffer(enc, down_buf, scatter_map_buf, route_rows_buf, batch, route_slot_count, hp.n_embd)
+      end
+
+      return nil unless Gemma4Metal.encode_weighted_route_reduce_rows_to_buffer(enc, route_rows_buf, route_offsets_buf, route_counts_buf, route_weights_buf, moe_reduced_buf, row_count, route_slot_count, hp.n_embd)
+      return nil unless Gemma4Metal.encode_rmsnorm_rows_weighted_to_buffer(enc, moe_reduced_buf, moe_post_weight_buf, moe_out_buf, row_count, hp.n_embd, hp.rms_eps)
+      return nil unless Gemma4Metal.encode_add_vec_to_buffer(enc, shared_out_buf, moe_out_buf, combined_buf, expected)
+      scale = canvas ? lw.layer_output_scale[0] : lw.encoder_layer_output_scale[0]
+      return nil unless Gemma4Metal.encode_rmsnorm_add_scaled_rows_to_buffer(enc, combined_buf, ffn_post_weight_buf, attn_out_buf, out_buf, row_count, hp.n_embd, hp.rms_eps, scale)
 
       graph.compile!
       cmd = ML::Metal::CommandBuffer.new
@@ -2288,6 +2461,7 @@ module ML::GGUF
       moe_grouped_activation_ms = 0.0
       moe_grouped_down_ms = 0.0
       moe_grouped_scatter_combine_norm_ms = 0.0
+      ffn_resident_ms = 0.0
       combine_scale_ms = 0.0
       max_layers.times do |il|
         routes = routes_by_layer_by_canvas_row ? routes_by_layer_by_canvas_row.not_nil![il] : nil
@@ -2315,9 +2489,10 @@ module ML::GGUF
         moe_grouped_activation_ms += timed.moe_grouped_activation_ms
         moe_grouped_down_ms += timed.moe_grouped_down_ms
         moe_grouped_scatter_combine_norm_ms += timed.moe_grouped_scatter_combine_norm_ms
+        ffn_resident_ms += timed.ffn_resident_ms
         combine_scale_ms += timed.combine_scale_ms
       end
-      DecodeCanvasRowsTiming.new(rows, qkv_ms, context_ms, attention_out_ms, shared_ffn_ms, moe_ffn_ms, combine_scale_ms, context_score_ms, context_softmax_ms, context_value_ms, attention_residual_context_buffer_hit, moe_grouped_prep_ms, moe_grouped_gate_up_ms, moe_grouped_activation_ms, moe_grouped_down_ms, moe_grouped_scatter_combine_norm_ms)
+      DecodeCanvasRowsTiming.new(rows, qkv_ms, context_ms, attention_out_ms, shared_ffn_ms, moe_ffn_ms, combine_scale_ms, context_score_ms, context_softmax_ms, context_value_ms, attention_residual_context_buffer_hit, moe_grouped_prep_ms, moe_grouped_gate_up_ms, moe_grouped_activation_ms, moe_grouped_down_ms, moe_grouped_scatter_combine_norm_ms, ffn_resident_ms)
     end
 
     def layer_forward_unified_rows(weights : DiffusionGemmaWeights,
@@ -2459,6 +2634,7 @@ module ML::GGUF
       moe_grouped_activation_ms = 0.0
       moe_grouped_down_ms = 0.0
       moe_grouped_scatter_combine_norm_ms = 0.0
+      ffn_resident_ms = 0.0
       combine_scale_ms = 0.0
       result = Array(Float32).new(canvas_size, 0.0_f32)
       attn_out_rows = Array(Float32).new(canvas_size, 0.0_f32)
@@ -2513,6 +2689,14 @@ module ML::GGUF
           attn_out_rows = attention_residual_from_context_rows(weights, il, canvas_rows, context_rows_fallback, mask.canvas_len)
         end
         attention_out_ms += (Time.instant - attention_t0).total_milliseconds
+      end
+
+      if ffn_residual_resident_graph_enabled?(mask.canvas_len) && mask.canvas_len > 1
+        ffn_t0 = Time.instant
+        if resident_rows = ffn_residual_rows_resident_graph(weights, il, attn_out_rows, mask.canvas_len, routes_by_canvas_row, canvas: true)
+          ffn_resident_ms += (Time.instant - ffn_t0).total_milliseconds
+          return DecodeCanvasRowsTiming.new(resident_rows, qkv_ms, context_ms, attention_out_ms, shared_ffn_ms, moe_ffn_ms, combine_scale_ms, context_score_ms, context_softmax_ms, context_value_ms, attention_residual_context_buffer_hit, moe_grouped_prep_ms, moe_grouped_gate_up_ms, moe_grouped_activation_ms, moe_grouped_down_ms, moe_grouped_scatter_combine_norm_ms, ffn_resident_ms)
+        end
       end
 
       shared_rows = nil.as(Array(Float32)?)
@@ -2570,7 +2754,7 @@ module ML::GGUF
         combine_scale_ms += (Time.instant - combine_t0).total_milliseconds
         copy_row!(result, canvas_pos, hp.n_embd, layer_row)
       end
-      DecodeCanvasRowsTiming.new(result, qkv_ms, context_ms, attention_out_ms, shared_ffn_ms, moe_ffn_ms, combine_scale_ms, context_score_ms, context_softmax_ms, context_value_ms, attention_residual_context_buffer_hit, moe_grouped_prep_ms, moe_grouped_gate_up_ms, moe_grouped_activation_ms, moe_grouped_down_ms, moe_grouped_scatter_combine_norm_ms)
+      DecodeCanvasRowsTiming.new(result, qkv_ms, context_ms, attention_out_ms, shared_ffn_ms, moe_ffn_ms, combine_scale_ms, context_score_ms, context_softmax_ms, context_value_ms, attention_residual_context_buffer_hit, moe_grouped_prep_ms, moe_grouped_gate_up_ms, moe_grouped_activation_ms, moe_grouped_down_ms, moe_grouped_scatter_combine_norm_ms, ffn_resident_ms)
     end
 
     def prompt_attention_projections(weights : DiffusionGemmaWeights,
@@ -2817,6 +3001,23 @@ module ML::GGUF
 
     def shared_ffn_resident_graph_max_canvas : Int32
       env_i32("DIFFUSION_GEMMA_SHARED_FFN_RESIDENT_GRAPH_MAX_CANVAS", 8)
+    end
+
+    def ffn_residual_resident_graph_enabled?(canvas_len : Int32) : Bool
+      return false unless ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH"]? == "1"
+      return false if ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_OFF"]? == "1"
+      return false if canvas_len < ffn_residual_resident_graph_min_canvas
+      max_canvas = ffn_residual_resident_graph_max_canvas
+      return false if max_canvas > 0 && canvas_len > max_canvas
+      Qwen35Metal.available?
+    end
+
+    def ffn_residual_resident_graph_min_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MIN_CANVAS", 8)
+    end
+
+    def ffn_residual_resident_graph_max_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MAX_CANVAS", 8)
     end
 
     def moe_ffn_batch_rows_enabled? : Bool
