@@ -114,6 +114,26 @@ def route_status(samples: list[dict[str, str]], flag: str, arm: str) -> str:
     return ",".join(clean) if clean else "NA"
 
 
+def as_int(row: dict[str, str], key: str) -> int | None:
+    try:
+        return int(row.get(key, ""))
+    except ValueError:
+        return None
+
+
+def sequence_position_medians(samples: list[dict[str, str]], metric: str) -> dict[int, float]:
+    positions = sorted({idx for row in samples if (idx := as_int(row, "sequence_index")) is not None})
+    return {
+        idx: median(as_float(row, metric) for row in samples if as_int(row, "sequence_index") == idx)
+        for idx in positions
+    }
+
+
+def arm_positions(samples: list[dict[str, str]], arm: str) -> str:
+    positions = sorted({idx for row in samples if row.get("arm") == arm and (idx := as_int(row, "sequence_index")) is not None})
+    return ",".join(str(idx) for idx in positions) if positions else "NA"
+
+
 def print_tsv(summaries: dict[str, dict[str, float]], total_base: float) -> None:
     print("kind\tmetric\tbase_median_ms\tvariant_median_ms\tspeedup\tdelta_ms\tcombined_range_ms\trange_over_delta\tbase_pct")
     for metric, row in summaries.items():
@@ -239,6 +259,18 @@ def main() -> int:
             "  grouped_moe_subphase=%s base=%s ms pct_of_moe=%s%%"
             % (subphase_metric, fmt(subphase_row["base_median"]), fmt(pct_moe))
         )
+
+    position_medians = sequence_position_medians(samples, "total_ms")
+    if position_medians:
+        position_values = [value for value in position_medians.values() if not math.isnan(value)]
+        position_span = max(position_values) - min(position_values) if position_values else float("nan")
+        total_delta = abs(summaries["total_ms"]["delta"])
+        print("\nSequence position bias")
+        print("  total_ms_by_sequence_index=" + ", ".join(f"{idx}:{fmt(value)}" for idx, value in position_medians.items()))
+        print("  base_positions=%s variant_positions=%s" % (arm_positions(samples, "base"), arm_positions(samples, "variant")))
+        print("  position_span_ms=%s vs abs_total_delta_ms=%s" % (fmt(position_span), fmt(total_delta)))
+        if position_span > total_delta:
+            print("  warning=position_span_exceeds_total_delta")
 
     print("\nPhase buckets")
     for metric, row in sorted(phase_rows.items(), key=lambda item: (-item[1]["base_median"], item[0]))[:args.top]:
