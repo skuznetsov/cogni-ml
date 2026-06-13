@@ -1437,7 +1437,7 @@ module ML::GGUF
       combine_scale_ms = 0.0
       result = Array(Float32).new(canvas_size, 0.0_f32)
       attn_out_rows = Array(Float32).new(canvas_size, 0.0_f32)
-      context_rows = if attention_out_batch_rows_enabled? && mask.canvas_len > 1
+      context_rows = if attention_out_batch_rows_enabled?(mask.canvas_len) && mask.canvas_len > 1
                        batched_context || Array(Float32).new(mask.canvas_len * q_context_dim, 0.0_f32)
                      else
                        nil
@@ -1656,9 +1656,21 @@ module ML::GGUF
         ENV["DIFFUSION_GEMMA_MOE_FFN_BATCH_ROWS_OFF"]? != "1"
     end
 
-    def attention_out_batch_rows_enabled? : Bool
-      ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS"]? == "1" &&
-        ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS_OFF"]? != "1"
+    def attention_out_batch_rows_enabled?(canvas_len : Int32) : Bool
+      return false unless ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS"]? == "1"
+      return false if ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS_OFF"]? == "1"
+      return false if canvas_len < attention_out_batch_min_canvas
+      max_canvas = attention_out_batch_max_canvas
+      return false if max_canvas > 0 && canvas_len > max_canvas
+      true
+    end
+
+    def attention_out_batch_min_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MIN_CANVAS", 1)
+    end
+
+    def attention_out_batch_max_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MAX_CANVAS", 0)
     end
 
     def prompt_projection_metal_enabled? : Bool
@@ -1668,6 +1680,11 @@ module ML::GGUF
 
     def prompt_projection_metal_min_batch : Int32
       (ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH"]? || "16").to_i
+    end
+
+    def env_i32(name : String, default : Int32) : Int32
+      raw = ENV[name]? || return default
+      raw.to_i? || default
     end
 
     def decode_context_metal_backend_enabled? : Bool

@@ -528,6 +528,58 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
   end
 
+  it "gates attention-output row batching by canvas length env policy" do
+    old_enabled = ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS"]?
+    old_off = ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS_OFF"]?
+    old_min = ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MIN_CANVAS"]?
+    old_max = ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MAX_CANVAS"]?
+    begin
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS_OFF")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MIN_CANVAS")
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MAX_CANVAS")
+      ML::GGUF::DiffusionGemmaCPU.attention_out_batch_rows_enabled?(4).should be_false
+
+      ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.attention_out_batch_rows_enabled?(2).should be_true
+
+      ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MIN_CANVAS"] = "4"
+      ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MAX_CANVAS"] = "4"
+      ML::GGUF::DiffusionGemmaCPU.attention_out_batch_rows_enabled?(2).should be_false
+      ML::GGUF::DiffusionGemmaCPU.attention_out_batch_rows_enabled?(4).should be_true
+      ML::GGUF::DiffusionGemmaCPU.attention_out_batch_rows_enabled?(8).should be_false
+
+      ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.attention_out_batch_rows_enabled?(4).should be_false
+
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS_OFF")
+      ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MIN_CANVAS"] = "bad"
+      ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MAX_CANVAS"] = "bad"
+      ML::GGUF::DiffusionGemmaCPU.attention_out_batch_rows_enabled?(8).should be_true
+    ensure
+      if old_enabled
+        ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS"] = old_enabled
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS")
+      end
+      if old_off
+        ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS_OFF"] = old_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS_OFF")
+      end
+      if old_min
+        ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MIN_CANVAS"] = old_min
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MIN_CANVAS")
+      end
+      if old_max
+        ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MAX_CANVAS"] = old_max
+      else
+        ENV.delete("DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_MAX_CANVAS")
+      end
+    end
+  end
+
   it "computes the shared dense FFN branch and residual combiner boundary" do
     pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
 
