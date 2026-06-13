@@ -1182,6 +1182,17 @@ describe ML::GGUF::DiffusionGemmaCPU do
         max_diff = diff if diff > max_diff
       end
       max_diff.should be < 1.0e-3_f32
+
+      x1 = ML::GGUF::DiffusionGemmaCPU.zero_sc_canvas_embedding(w, 1)
+      expected_rows = expected + ML::GGUF::DiffusionGemmaCPU.moe_expert_output(w, 0, expert, x1)
+      actual_rows = ML::GGUF::DiffusionGemmaCPU.moe_expert_rows_resident_graph(w, 0, expert, x + x1, 2).not_nil!
+      actual_rows.size.should eq(expected_rows.size)
+      max_batch_diff = 0.0_f32
+      expected_rows.size.times do |i|
+        diff = (expected_rows[i] - actual_rows[i]).abs
+        max_batch_diff = diff if diff > max_batch_diff
+      end
+      max_batch_diff.should be < 1.0e-3_f32
     end
 
     expect_raises(ArgumentError, /expert id out of range/) do

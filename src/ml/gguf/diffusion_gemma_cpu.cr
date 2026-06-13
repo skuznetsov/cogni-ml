@@ -1399,28 +1399,37 @@ module ML::GGUF
                                          il : Int32,
                                          expert : Int32,
                                          ffn_in : Array(Float32)) : Array(Float32)?
+      moe_expert_rows_resident_graph(weights, il, expert, ffn_in, 1)
+    end
+
+    def moe_expert_rows_resident_graph(weights : DiffusionGemmaWeights,
+                                       il : Int32,
+                                       expert : Int32,
+                                       ffn_in_rows : Array(Float32),
+                                       row_count : Int32) : Array(Float32)?
       return nil unless Qwen35Metal.available?
 
       hp = weights.hparams
       lw = weights.layers[il]
       raise ArgumentError.new("expert id out of range") if expert < 0 || expert >= hp.expert_count
-      raise ArgumentError.new("expert input size mismatch") unless ffn_in.size == hp.n_embd
+      raise ArgumentError.new("expert row_count must be positive") unless row_count > 0
+      raise ArgumentError.new("expert rows input size mismatch") unless ffn_in_rows.size == row_count * hp.n_embd
       raise ArgumentError.new("down expert scale size mismatch") unless lw.ffn_down_exps_scale.size == hp.expert_count
 
-      input_buf = ML::MetalBuffer.from_array(ffn_in)
-      gate_buf = ML::MetalBuffer.new(hp.expert_ff.to_i64 * sizeof(Float32))
-      up_buf = ML::MetalBuffer.new(hp.expert_ff.to_i64 * sizeof(Float32))
-      hidden_buf = ML::MetalBuffer.new(hp.expert_ff.to_i64 * sizeof(Float32))
-      down_buf = ML::MetalBuffer.new(hp.n_embd.to_i64 * sizeof(Float32))
+      input_buf = ML::MetalBuffer.from_array(ffn_in_rows)
+      gate_buf = ML::MetalBuffer.new(row_count.to_i64 * hp.expert_ff * sizeof(Float32))
+      up_buf = ML::MetalBuffer.new(row_count.to_i64 * hp.expert_ff * sizeof(Float32))
+      hidden_buf = ML::MetalBuffer.new(row_count.to_i64 * hp.expert_ff * sizeof(Float32))
+      down_buf = ML::MetalBuffer.new(row_count.to_i64 * hp.n_embd * sizeof(Float32))
 
       graph = ML::Metal::ComputeGraph.new
       enc = ML::Metal::GraphEncoder.new(graph)
       gate_qw = expert_gate_qw(lw, hp, expert)
       up_qw = expert_up_qw(lw, hp, expert)
       down_qw = expert_down_qw(lw, hp, expert)
-      return nil unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [gate_qw, up_qw], input_buf, [gate_buf, up_buf], 1)
-      return nil unless Gemma4Metal.encode_gelu_mul_to_buffer(enc, gate_buf, up_buf, hidden_buf, hp.expert_ff)
-      return nil unless Qwen35Metal.encode_matmul_to_buffer(enc, down_qw, hidden_buf, down_buf, 1)
+      return nil unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [gate_qw, up_qw], input_buf, [gate_buf, up_buf], row_count)
+      return nil unless Gemma4Metal.encode_gelu_mul_to_buffer(enc, gate_buf, up_buf, hidden_buf, row_count * hp.expert_ff)
+      return nil unless Qwen35Metal.encode_matmul_to_buffer(enc, down_qw, hidden_buf, down_buf, row_count)
 
       graph.compile!
       cmd = ML::Metal::CommandBuffer.new
@@ -1428,7 +1437,7 @@ module ML::GGUF
       cmd.commit
       cmd.wait
 
-      out = down_buf.read(hp.n_embd)
+      out = down_buf.read(row_count * hp.n_embd)
       scale = lw.ffn_down_exps_scale[expert]
       out.size.times { |i| out[i] *= scale }
       out
