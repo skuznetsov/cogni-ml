@@ -228,3 +228,10 @@ to `LOG_DIR/route_plan.jsonl` by default for `gate` and `all` stages. Window
 rows use `selected_route=variant_fast` only for certified candidate windows;
 rejected windows use `selected_route=base_exact` while preserving the unsafe
 variant timing and artifact path for diagnostics.
+
+Product/runtime code should load this with
+`ML::GGUF::DiffusionGemmaMixedRoutePlan.from_jsonl(path)`. The loader fails
+closed for `audit_only` or `reject` summaries by default, rejects duplicate
+windows and count mismatches, and requires each `variant_fast` window to carry
+a `variant_route_artifact`. Use `variant_route_artifact_map` for certified fast
+windows and `exact_fallback_windows_spec` for explicit exact fallback windows.

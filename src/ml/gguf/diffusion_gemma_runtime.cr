@@ -1,3 +1,6 @@
+require "json"
+require "set"
+
 require "./diffusion_gemma_weights"
 
 module ML::GGUF
@@ -174,6 +177,218 @@ module ML::GGUF
       else
         layer.layer_output_scale[0]
       end
+    end
+  end
+
+  class DiffusionGemmaMixedRoutePlan
+    SUMMARY_KIND = "diffusion_gemma_mixed_route_plan_summary_v1"
+    WINDOW_KIND  = "diffusion_gemma_mixed_route_plan_window_v1"
+
+    getter decision : String
+    getter windows : Array(Window)
+    getter candidate_windows : Int32
+    getter fallback_windows : Int32
+    getter mixed_speedup : Float64
+
+    struct Window
+      getter prompt_token : Int32
+      getter canvas_token : Int32
+      getter selected_route : String
+      getter reason : String
+      getter base_ms : Float64
+      getter observed_variant_ms : Float64
+      getter mixed_variant_ms : Float64
+      getter observed_speedup : Float64
+      getter mixed_speedup : Float64
+      getter child_log : String
+      getter base_route_artifact : String
+      getter variant_route_artifact : String
+
+      def initialize(@prompt_token : Int32,
+                     @canvas_token : Int32,
+                     @selected_route : String,
+                     @reason : String,
+                     @base_ms : Float64,
+                     @observed_variant_ms : Float64,
+                     @mixed_variant_ms : Float64,
+                     @observed_speedup : Float64,
+                     @mixed_speedup : Float64,
+                     @child_log : String,
+                     @base_route_artifact : String,
+                     @variant_route_artifact : String)
+        unless variant_fast? || base_exact?
+          raise ArgumentError.new("unsupported DiffusionGemma mixed route: #{@selected_route}")
+        end
+        if variant_fast? && @variant_route_artifact.empty?
+          raise ArgumentError.new("variant_fast window #{@prompt_token}:#{@canvas_token} requires variant_route_artifact")
+        end
+      end
+
+      def key : Tuple(Int32, Int32)
+        {@prompt_token, @canvas_token}
+      end
+
+      def variant_fast? : Bool
+        @selected_route == "variant_fast"
+      end
+
+      def base_exact? : Bool
+        @selected_route == "base_exact"
+      end
+    end
+
+    def initialize(@decision : String,
+                   @windows : Array(Window),
+                   @candidate_windows : Int32,
+                   @fallback_windows : Int32,
+                   @mixed_speedup : Float64,
+                   require_candidate : Bool = true)
+      unless @decision == "candidate" || @decision == "mixed_candidate" || @decision == "audit_only" || @decision == "reject"
+        raise ArgumentError.new("unsupported DiffusionGemma route-plan decision: #{@decision}")
+      end
+      if require_candidate && !candidate?
+        raise ArgumentError.new("DiffusionGemma route plan is not promotable: decision=#{@decision}")
+      end
+      raise ArgumentError.new("DiffusionGemma route plan has no windows") if @windows.empty?
+
+      fast_count = @windows.count(&.variant_fast?)
+      exact_count = @windows.count(&.base_exact?)
+      if @candidate_windows != fast_count
+        raise ArgumentError.new("candidate window count mismatch: summary=#{@candidate_windows} rows=#{fast_count}")
+      end
+      if @fallback_windows != exact_count
+        raise ArgumentError.new("fallback window count mismatch: summary=#{@fallback_windows} rows=#{exact_count}")
+      end
+
+      seen = Set(Tuple(Int32, Int32)).new
+      @windows.each do |window|
+        unless seen.add?(window.key)
+          raise ArgumentError.new("duplicate DiffusionGemma route-plan window #{window.prompt_token}:#{window.canvas_token}")
+        end
+      end
+    end
+
+    def self.from_jsonl(path : String, require_candidate : Bool = true) : DiffusionGemmaMixedRoutePlan
+      summary = nil.as(JSON::Any?)
+      windows = [] of Window
+
+      File.each_line(path) do |line|
+        stripped = line.strip
+        next if stripped.empty?
+
+        row = JSON.parse(stripped)
+        kind = string_field(row, "kind")
+        case kind
+        when SUMMARY_KIND
+          raise ArgumentError.new("multiple DiffusionGemma route-plan summary rows") if summary
+          summary = row
+        when WINDOW_KIND
+          windows << parse_window(row)
+        else
+          raise ArgumentError.new("unsupported DiffusionGemma route-plan row kind: #{kind}")
+        end
+      end
+
+      summary_row = summary || raise ArgumentError.new("DiffusionGemma route plan missing summary row")
+      expected_windows = int_field(summary_row, "windows")
+      if expected_windows != windows.size
+        raise ArgumentError.new("route-plan window count mismatch: summary=#{expected_windows} rows=#{windows.size}")
+      end
+
+      DiffusionGemmaMixedRoutePlan.new(
+        decision: string_field(summary_row, "decision"),
+        windows: windows,
+        candidate_windows: int_field(summary_row, "candidate_windows"),
+        fallback_windows: int_field(summary_row, "fallback_windows"),
+        mixed_speedup: float_field(summary_row, "mixed_speedup"),
+        require_candidate: require_candidate,
+      )
+    end
+
+    def candidate? : Bool
+      @decision == "candidate" || @decision == "mixed_candidate"
+    end
+
+    def mixed_candidate? : Bool
+      @decision == "mixed_candidate"
+    end
+
+    def window(prompt_token : Int32, canvas_token : Int32) : Window?
+      @windows.find { |window| window.prompt_token == prompt_token && window.canvas_token == canvas_token }
+    end
+
+    def variant_route_artifact_map : String
+      @windows.select(&.variant_fast?).map do |window|
+        "#{window.prompt_token}:#{window.canvas_token}=#{window.variant_route_artifact}"
+      end.join(",")
+    end
+
+    def exact_fallback_windows_spec : String
+      @windows.select(&.base_exact?).map do |window|
+        "#{window.prompt_token}:#{window.canvas_token}"
+      end.join(",")
+    end
+
+    private def self.parse_window(row : JSON::Any) : Window
+      Window.new(
+        prompt_token: int_field(row, "prompt_token"),
+        canvas_token: int_field(row, "canvas_token"),
+        selected_route: string_field(row, "selected_route"),
+        reason: string_field(row, "reason"),
+        base_ms: float_field(row, "base_ms"),
+        observed_variant_ms: float_field(row, "observed_variant_ms"),
+        mixed_variant_ms: float_field(row, "mixed_variant_ms"),
+        observed_speedup: float_field(row, "observed_speedup"),
+        mixed_speedup: float_field(row, "mixed_speedup"),
+        child_log: string_field(row, "child_log"),
+        base_route_artifact: optional_string_field(row, "base_route_artifact"),
+        variant_route_artifact: optional_string_field(row, "variant_route_artifact"),
+      )
+    end
+
+    private def self.string_field(row : JSON::Any, key : String) : String
+      row[key]?.try(&.as_s?) || raise ArgumentError.new("DiffusionGemma route-plan field #{key} must be a string")
+    end
+
+    private def self.optional_string_field(row : JSON::Any, key : String) : String
+      row[key]?.try(&.as_s?) || ""
+    end
+
+    private def self.int_field(row : JSON::Any, key : String) : Int32
+      value = row[key]? || raise ArgumentError.new("DiffusionGemma route-plan field #{key} is missing")
+      if int_value = value.as_i?
+        return int_value.to_i32
+      end
+      if float_value = value.as_f?
+        rounded = float_value.round
+        return rounded.to_i32 if rounded == float_value
+      end
+      if string_value = value.as_s?
+        return string_value.to_i32
+      end
+      raise ArgumentError.new("DiffusionGemma route-plan field #{key} must be an integer")
+    rescue ex : ArgumentError
+      raise ex
+    rescue
+      raise ArgumentError.new("DiffusionGemma route-plan field #{key} must be an integer")
+    end
+
+    private def self.float_field(row : JSON::Any, key : String) : Float64
+      value = row[key]? || raise ArgumentError.new("DiffusionGemma route-plan field #{key} is missing")
+      if float_value = value.as_f?
+        return float_value
+      end
+      if int_value = value.as_i?
+        return int_value.to_f64
+      end
+      if string_value = value.as_s?
+        return string_value.to_f64
+      end
+      raise ArgumentError.new("DiffusionGemma route-plan field #{key} must be numeric")
+    rescue ex : ArgumentError
+      raise ex
+    rescue
+      raise ArgumentError.new("DiffusionGemma route-plan field #{key} must be numeric")
     end
   end
 end

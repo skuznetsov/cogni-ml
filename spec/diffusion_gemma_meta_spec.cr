@@ -254,6 +254,198 @@ describe ML::GGUF::DiffusionGemmaRequest do
   end
 end
 
+def write_diffusion_gemma_route_plan_jsonl(lines : Array(String)) : String
+  path = File.tempname("diffusion-gemma-route-plan", ".jsonl")
+  File.write(path, lines.join("\n") + "\n")
+  path
+end
+
+describe ML::GGUF::DiffusionGemmaMixedRoutePlan do
+  it "loads certified mixed fast/exact route plans for runtime selection" do
+    path = ""
+    path = write_diffusion_gemma_route_plan_jsonl([
+      {
+        "kind"                     => "diffusion_gemma_mixed_route_plan_summary_v1",
+        "decision"                 => "mixed_candidate",
+        "windows"                  => 3,
+        "candidate_windows"        => 2,
+        "fallback_windows"         => 1,
+        "mixed_speedup"            => 2.5,
+        "unsafe_speedup"           => 7.0,
+        "min_window_speedup"       => 1.0,
+        "min_total_speedup"        => 1.1,
+        "mixed_variant_ms"         => 120.0,
+        "unsafe_variant_ms"        => 40.0,
+        "window_min_total_speedup" => 1.0,
+      }.to_json,
+      {
+        "kind"                   => "diffusion_gemma_mixed_route_plan_window_v1",
+        "index"                  => 0,
+        "prompt_token"           => 1,
+        "canvas_token"           => 0,
+        "selected_route"         => "variant_fast",
+        "reason"                 => "accepted",
+        "timing_kind"            => "effective_summary",
+        "base_ms"                => 100.0,
+        "observed_variant_ms"    => 20.0,
+        "mixed_variant_ms"       => 20.0,
+        "observed_speedup"       => 5.0,
+        "mixed_speedup"          => 5.0,
+        "child_log"              => "/tmp/window_0/gate.stdout",
+        "base_route_artifact"    => "",
+        "variant_route_artifact" => "/tmp/variant_p1_c0.tsv",
+      }.to_json,
+      {
+        "kind"                   => "diffusion_gemma_mixed_route_plan_window_v1",
+        "index"                  => 1,
+        "prompt_token"           => 17,
+        "canvas_token"           => 100,
+        "selected_route"         => "variant_fast",
+        "reason"                 => "accepted",
+        "timing_kind"            => "effective_summary",
+        "base_ms"                => 100.0,
+        "observed_variant_ms"    => 25.0,
+        "mixed_variant_ms"       => 25.0,
+        "observed_speedup"       => 4.0,
+        "mixed_speedup"          => 4.0,
+        "child_log"              => "/tmp/window_1/gate.stdout",
+        "variant_route_artifact" => "/tmp/variant_p17_c100.tsv",
+      }.to_json,
+      {
+        "kind"                   => "diffusion_gemma_mixed_route_plan_window_v1",
+        "index"                  => 2,
+        "prompt_token"           => 4096,
+        "canvas_token"           => 8192,
+        "selected_route"         => "base_exact",
+        "reason"                 => "certificate_failed",
+        "timing_kind"            => "summary",
+        "base_ms"                => 100.0,
+        "observed_variant_ms"    => 10.0,
+        "mixed_variant_ms"       => 100.0,
+        "observed_speedup"       => 10.0,
+        "mixed_speedup"          => 1.0,
+        "child_log"              => "/tmp/window_2/gate.stdout",
+        "variant_route_artifact" => "/tmp/unsafe_variant_p4096_c8192.tsv",
+      }.to_json,
+    ])
+
+    plan = ML::GGUF::DiffusionGemmaMixedRoutePlan.from_jsonl(path)
+    plan.mixed_candidate?.should be_true
+    plan.candidate_windows.should eq(2)
+    plan.fallback_windows.should eq(1)
+    plan.variant_route_artifact_map.should eq("1:0=/tmp/variant_p1_c0.tsv,17:100=/tmp/variant_p17_c100.tsv")
+    plan.exact_fallback_windows_spec.should eq("4096:8192")
+    plan.window(4096, 8192).not_nil!.base_exact?.should be_true
+    plan.window(1, 0).not_nil!.variant_fast?.should be_true
+  ensure
+    File.delete(path) if path && File.exists?(path)
+  end
+
+  it "fails closed for non-promotable or ambiguous mixed route plans" do
+    audit_path = ""
+    missing_artifact_path = ""
+    duplicate_path = ""
+    audit_path = write_diffusion_gemma_route_plan_jsonl([
+      {
+        "kind"              => "diffusion_gemma_mixed_route_plan_summary_v1",
+        "decision"          => "audit_only",
+        "windows"           => 1,
+        "candidate_windows" => 0,
+        "fallback_windows"  => 1,
+        "mixed_speedup"     => 1.0,
+      }.to_json,
+      {
+        "kind"                => "diffusion_gemma_mixed_route_plan_window_v1",
+        "prompt_token"        => 4096,
+        "canvas_token"        => 8192,
+        "selected_route"      => "base_exact",
+        "reason"              => "audit",
+        "base_ms"             => 100.0,
+        "observed_variant_ms" => 50.0,
+        "mixed_variant_ms"    => 100.0,
+        "observed_speedup"    => 2.0,
+        "mixed_speedup"       => 1.0,
+        "child_log"           => "/tmp/a",
+      }.to_json,
+    ])
+    expect_raises(ArgumentError, /not promotable/) do
+      ML::GGUF::DiffusionGemmaMixedRoutePlan.from_jsonl(audit_path)
+    end
+    ML::GGUF::DiffusionGemmaMixedRoutePlan.from_jsonl(audit_path, require_candidate: false).candidate?.should be_false
+
+    missing_artifact_path = write_diffusion_gemma_route_plan_jsonl([
+      {
+        "kind"              => "diffusion_gemma_mixed_route_plan_summary_v1",
+        "decision"          => "mixed_candidate",
+        "windows"           => 1,
+        "candidate_windows" => 1,
+        "fallback_windows"  => 0,
+        "mixed_speedup"     => 2.0,
+      }.to_json,
+      {
+        "kind"                => "diffusion_gemma_mixed_route_plan_window_v1",
+        "prompt_token"        => 1,
+        "canvas_token"        => 0,
+        "selected_route"      => "variant_fast",
+        "reason"              => "accepted",
+        "base_ms"             => 100.0,
+        "observed_variant_ms" => 50.0,
+        "mixed_variant_ms"    => 50.0,
+        "observed_speedup"    => 2.0,
+        "mixed_speedup"       => 2.0,
+        "child_log"           => "/tmp/a",
+      }.to_json,
+    ])
+    expect_raises(ArgumentError, /requires variant_route_artifact/) do
+      ML::GGUF::DiffusionGemmaMixedRoutePlan.from_jsonl(missing_artifact_path)
+    end
+
+    duplicate_path = write_diffusion_gemma_route_plan_jsonl([
+      {
+        "kind"              => "diffusion_gemma_mixed_route_plan_summary_v1",
+        "decision"          => "mixed_candidate",
+        "windows"           => 2,
+        "candidate_windows" => 0,
+        "fallback_windows"  => 2,
+        "mixed_speedup"     => 1.2,
+      }.to_json,
+      {
+        "kind"                => "diffusion_gemma_mixed_route_plan_window_v1",
+        "prompt_token"        => 1,
+        "canvas_token"        => 0,
+        "selected_route"      => "base_exact",
+        "reason"              => "fallback",
+        "base_ms"             => 100.0,
+        "observed_variant_ms" => 50.0,
+        "mixed_variant_ms"    => 100.0,
+        "observed_speedup"    => 2.0,
+        "mixed_speedup"       => 1.0,
+        "child_log"           => "/tmp/a",
+      }.to_json,
+      {
+        "kind"                => "diffusion_gemma_mixed_route_plan_window_v1",
+        "prompt_token"        => 1,
+        "canvas_token"        => 0,
+        "selected_route"      => "base_exact",
+        "reason"              => "fallback",
+        "base_ms"             => 100.0,
+        "observed_variant_ms" => 50.0,
+        "mixed_variant_ms"    => 100.0,
+        "observed_speedup"    => 2.0,
+        "mixed_speedup"       => 1.0,
+        "child_log"           => "/tmp/b",
+      }.to_json,
+    ])
+    expect_raises(ArgumentError, /duplicate/) do
+      ML::GGUF::DiffusionGemmaMixedRoutePlan.from_jsonl(duplicate_path)
+    end
+  ensure
+    {audit_path, missing_artifact_path, duplicate_path}.each do |path|
+      File.delete(path) if path && File.exists?(path)
+    end
+  end
+end
+
 describe ML::GGUF::DiffusionGemmaAttentionMask do
   it "matches the oracle region-aware unified attention mask" do
     mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: 4, canvas_len: 3, sliding_window: 3)
