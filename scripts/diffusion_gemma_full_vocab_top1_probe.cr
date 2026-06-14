@@ -72,6 +72,7 @@ rows_arg = "0"
 env = ArmEnv.new(ENV["TOP1_ENV"]? || DEFAULT_ENV)
 metal_warmups = 1
 check_top2 = false
+batched_top1_metal = false
 
 OptionParser.parse do |p|
   p.banner = "Usage: diffusion_gemma_full_vocab_top1_probe [options]"
@@ -85,6 +86,7 @@ OptionParser.parse do |p|
   p.on("--env ENV", "Whitespace-separated KEY=VALUE env for prompt/decode route") { |v| env = ArmEnv.new(v) }
   p.on("--metal-warmups N", "Unmeasured Metal top1 calls on the first checked row (default: 1)") { |v| metal_warmups = v.to_i }
   p.on("--top2", "Compare CPU and Metal full-vocab top2 ids/logits instead of top1") { check_top2 = true }
+  p.on("--batched-top1-metal", "Use the row-batched Metal top1 helper for top1 checks") { batched_top1_metal = true }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -96,6 +98,7 @@ raise "--prompt-len must be positive" unless prompt_len > 0
 raise "--canvas-len must be positive" unless canvas_len > 0
 raise "--max-layers must be positive" unless max_layers > 0
 raise "--metal-warmups must be non-negative" if metal_warmups < 0
+raise "--batched-top1-metal is incompatible with --top2" if batched_top1_metal && check_top2
 rows = rows_arg.split(/[,\s]+/).reject(&.empty?).map(&.to_i)
 raise "--rows must contain at least one row" if rows.empty?
 
@@ -163,9 +166,20 @@ begin
   metal_warmups.times do
     if check_top2
       ML::GGUF::DiffusionGemmaCPU.output_top2_full_vocab_metal(weights, first_hidden)
+    elsif batched_top1_metal
+      ML::GGUF::DiffusionGemmaCPU.output_top1_full_vocab_rows_metal(weights, decode.rows, mask.canvas_len)
     else
       ML::GGUF::DiffusionGemmaCPU.output_top1_full_vocab_metal(weights, first_hidden)
     end
+  end
+
+  batched_top1s = nil.as(Array(ML::GGUF::DiffusionGemmaCPU::OutputTop1)?)
+  batched_top1_ms = 0.0
+  if batched_top1_metal
+    batched_t0 = Time.instant
+    batched_top1s = ML::GGUF::DiffusionGemmaCPU.output_top1_full_vocab_rows_metal(weights, decode.rows, mask.canvas_len)
+    batched_top1_ms = (Time.instant - batched_t0).total_milliseconds
+    raise "Metal full-vocab batched top1 unavailable" unless batched_top1s
   end
 
   rows.each do |row|
@@ -176,8 +190,12 @@ begin
     cpu_ms = (Time.instant - cpu_t0).total_milliseconds
 
     metal_t0 = Time.instant
-    metal = check_top2 ? ML::GGUF::DiffusionGemmaCPU.output_top2_full_vocab_metal(weights, hidden) : ML::GGUF::DiffusionGemmaCPU.output_top1_full_vocab_metal(weights, hidden)
-    metal_ms = (Time.instant - metal_t0).total_milliseconds
+    metal = if batched_top1s
+              batched_top1s.not_nil![row]
+            else
+              check_top2 ? ML::GGUF::DiffusionGemmaCPU.output_top2_full_vocab_metal(weights, hidden) : ML::GGUF::DiffusionGemmaCPU.output_top1_full_vocab_metal(weights, hidden)
+            end
+    metal_ms = batched_top1s && row != rows[0] ? 0.0 : (batched_top1s ? batched_top1_ms : (Time.instant - metal_t0).total_milliseconds)
     raise "Metal full-vocab #{check_top2 ? "top2" : "top1"} unavailable" unless metal
 
     metal_result = metal.not_nil!
@@ -221,6 +239,7 @@ begin
     "decode_ms=#{format_f64(decode_ms)}",
     "cpu_#{check_top2 ? "top2" : "top1"}_ms=#{format_f64(total_cpu_ms)}",
     "metal_#{check_top2 ? "top2" : "top1"}_ms=#{format_f64(total_metal_ms)}",
+    "metal_mode=#{batched_top1_metal ? "batched_rows" : "per_row"}",
     "#{check_top2 ? "top2" : "top1"}_speedup=#{format_f64(speedup)}",
     "max_logit_abs_delta=#{format_f64(max_logit_delta)}",
   ].join('\t')

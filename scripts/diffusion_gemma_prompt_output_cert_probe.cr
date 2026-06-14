@@ -331,16 +331,16 @@ def run_full_vocab_top1_arm(weights : ML::GGUF::DiffusionGemmaWeights,
 
     hp = weights.hparams
     output_t0 = Time.instant
-    top1s = Array(ML::GGUF::DiffusionGemmaCPU::OutputTop1).new(mask.canvas_len) do |canvas_pos|
-      hidden = decode.rows[canvas_pos * hp.n_embd, hp.n_embd]
-      if use_metal
-        top1 = ML::GGUF::DiffusionGemmaCPU.output_top1_full_vocab_metal(weights, hidden)
-        raise "Metal full-vocab top1 unavailable" unless top1
-        top1.not_nil!
-      else
-        ML::GGUF::DiffusionGemmaCPU.output_top1_full_vocab_cpu(weights, hidden)
-      end
-    end
+    top1s = if use_metal
+              rows_top1 = ML::GGUF::DiffusionGemmaCPU.output_top1_full_vocab_rows_metal(weights, decode.rows, mask.canvas_len)
+              raise "Metal full-vocab top1 rows unavailable" unless rows_top1
+              rows_top1.not_nil!
+            else
+              Array(ML::GGUF::DiffusionGemmaCPU::OutputTop1).new(mask.canvas_len) do |canvas_pos|
+                hidden = decode.rows[canvas_pos * hp.n_embd, hp.n_embd]
+                ML::GGUF::DiffusionGemmaCPU.output_top1_full_vocab_cpu(weights, hidden)
+              end
+            end
     output_head_ms = (Time.instant - output_t0).total_milliseconds
     predict_ms = (Time.instant - predict_t0).total_milliseconds
     FullVocabTop1ArmResult.new(cache, decode, top1s, cache_ms, predict_ms, output_head_ms)

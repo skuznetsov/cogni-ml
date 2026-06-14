@@ -4546,6 +4546,35 @@ module ML::GGUF
       OutputTop1.new(token_id, output_logit_softcap(raw_logit, hp.final_logit_softcapping))
     end
 
+    def output_top1_full_vocab_rows_metal(weights : DiffusionGemmaWeights,
+                                          hidden_rows : Array(Float32),
+                                          row_count : Int32) : Array(OutputTop1)?
+      return nil unless Qwen35Metal.available?
+      return nil unless weights.token_embd.type.q6_k?
+
+      hp = weights.hparams
+      expected = row_count * hp.n_embd
+      raise ArgumentError.new("output top1 rows row_count must be positive") unless row_count > 0
+      raise ArgumentError.new("output top1 rows hidden size mismatch") unless hidden_rows.size == expected
+
+      raw_top1s = nil.as(Array({Int32, Float32})?)
+      if ENV["DIFFUSION_GEMMA_OUTPUT_TOP1_FULL_ROWS_GUARDED"]? == "1" &&
+         ENV["DIFFUSION_GEMMA_OUTPUT_TOP1_FULL_ROWS_OFF"]? != "1"
+        raw_top1s = Qwen35Metal.rmsnorm_project_full_top1_rows_guarded(hidden_rows, row_count, weights.output_norm, weights.token_embd, hp.rms_eps)
+      end
+      if raw_top1s.nil? &&
+         ENV["DIFFUSION_GEMMA_OUTPUT_TOP1_FULL_ROWS"]? == "1" &&
+         ENV["DIFFUSION_GEMMA_OUTPUT_TOP1_FULL_ROWS_OFF"]? != "1"
+        raw_top1s = Qwen35Metal.rmsnorm_project_full_top1_rows(hidden_rows, row_count, weights.output_norm, weights.token_embd, hp.rms_eps)
+      end
+      raw_top1s ||= Qwen35Metal.rmsnorm_project_top1_rows(hidden_rows, row_count, weights.output_norm, weights.token_embd, hp.rms_eps)
+      return nil unless raw_top1s
+
+      raw_top1s.not_nil!.map do |token_id, raw_logit|
+        OutputTop1.new(token_id, output_logit_softcap(raw_logit, hp.final_logit_softcapping))
+      end
+    end
+
     def output_top2_full_vocab_metal(weights : DiffusionGemmaWeights,
                                      hidden : Array(Float32)) : OutputTop2?
       return nil unless Qwen35Metal.available?
