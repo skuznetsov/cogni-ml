@@ -499,6 +499,8 @@ module ML::GGUF
     @@ffn_resident_graph_cache_mutex = Mutex.new
     @@ffn_resident_graph_cache_hits = 0_i64
     @@ffn_resident_graph_cache_misses = 0_i64
+    @@moe_grouped_route_reduce_graph_cache = {} of String => FfnResidentGraphCacheEntry
+    @@moe_grouped_route_reduce_graph_cache_mutex = Mutex.new
 
     struct AttentionContextTiming
       getter context : Array(Float32)
@@ -2286,7 +2288,7 @@ module ML::GGUF
 
     def moe_grouped_route_reduce_resident_graph_from_row_buffer(weights : DiffusionGemmaWeights,
                                                                 il : Int32,
-                                                                ffn_rows_buf : ML::MetalBuffer,
+                                                                ffn_rows : Array(Float32),
                                                                 row_count : Int32,
                                                                 selected_by_row : Array(Array(ExpertRoute)),
                                                                 route_offsets_by_row : Array(Int32),
@@ -2301,11 +2303,12 @@ module ML::GGUF
       raise ArgumentError.new("gpu reduce row_count must be positive") unless row_count > 0
       raise ArgumentError.new("gpu reduce selected row count mismatch") unless selected_by_row.size == row_count
       raise ArgumentError.new("gpu reduce route offset count mismatch") unless route_offsets_by_row.size == row_count
-      raise ArgumentError.new("gpu reduce expert row buffer too small") if ffn_rows_buf.size < row_count.to_i64 * hp.n_embd * sizeof(Float32)
+      raise ArgumentError.new("gpu reduce expert row input size mismatch") unless ffn_rows.size == row_count * hp.n_embd
       raise ArgumentError.new("down expert scale size mismatch") unless lw.ffn_down_exps_scale.size == hp.expert_count
 
       timing_enabled = moe_grouped_resident_timing_enabled?
       timing_t0 = Time.instant if timing_enabled
+      scratch_enabled = ffn_resident_scratch_enabled?
       route_slot_count = 0
       route_counts_by_row = Array(Int32).new(row_count, 0)
       selected_by_row.each_with_index do |selected, row|
@@ -2330,23 +2333,28 @@ module ML::GGUF
       route_map_done = Time.instant if timing_enabled
 
       owned_buffers = [] of ML::MetalBuffer
-      route_rows_buf = ML::MetalBuffer.new(route_slot_count.to_i64 * hp.n_embd * sizeof(Float32))
-      route_offsets_buf = metal_int32_buffer(route_offsets_by_row)
-      route_counts_buf = metal_int32_buffer(route_counts_by_row)
-      route_weights_buf = ML::MetalBuffer.from_array(route_weights)
-      reduced_buf = ML::MetalBuffer.new(row_count.to_i64 * hp.n_embd * sizeof(Float32))
+      scratch_prefix = "route_reduce.layer#{il}.rows#{row_count}.slots#{route_slot_count}"
+      expected_bytes = row_count.to_i64 * hp.n_embd * sizeof(Float32)
+      ffn_rows_buf = ffn_resident_upload_f32_buffer("#{scratch_prefix}.ffn_rows", ffn_rows, scratch_enabled)
+      source_rows_buf = ffn_rows_buf
+      norm_weight_buf = nil.as(ML::MetalBuffer?)
+      if pre_norm_rows
+        return nil unless lw.pre_ffw_norm_2.size == hp.n_embd
+        norm_weight_buf = ffn_resident_static_f32_buffer("layer#{il}.moe_route_reduce_norm", lw.pre_ffw_norm_2, scratch_enabled)
+        normed_buf = ffn_resident_scratch_buffer("#{scratch_prefix}.pre_norm", expected_bytes, scratch_enabled)
+        owned_buffers.concat([norm_weight_buf, normed_buf])
+        source_rows_buf = normed_buf
+      end
+      route_rows_buf = ffn_resident_scratch_buffer("#{scratch_prefix}.route_rows", route_slot_count.to_i64 * hp.n_embd * sizeof(Float32), scratch_enabled)
+      route_offsets_buf = ffn_resident_upload_i32_buffer("#{scratch_prefix}.route_offsets", route_offsets_by_row, scratch_enabled)
+      route_counts_buf = ffn_resident_upload_i32_buffer("#{scratch_prefix}.route_counts", route_counts_by_row, scratch_enabled)
+      route_weights_buf = ffn_resident_upload_f32_buffer("#{scratch_prefix}.route_weights", route_weights, scratch_enabled)
+      reduced_buf = ffn_resident_scratch_buffer("#{scratch_prefix}.reduced", expected_bytes, scratch_enabled)
       owned_buffers.concat([route_rows_buf, route_offsets_buf, route_counts_buf, route_weights_buf, reduced_buf])
 
-      graph = ML::Metal::ComputeGraph.new
-      enc = ML::Metal::GraphEncoder.new(graph)
-      source_rows_buf = maybe_encode_moe_pre_ffw_norm_rows(enc, owned_buffers, weights, il, ffn_rows_buf, row_count, pre_norm_rows)
-      unless source_rows_buf
-        emit_moe_grouped_resident_fallback("route_reduce", il, row_count, "pre_norm", active_experts, route_slot_count, max_expert_batch, over_threshold_experts, timing_t0)
-        return nil
-      end
       max_expert_chunk = Qwen35Metal::GEMM_BATCH_THRESHOLD
       max_expert_chunk = 1 if max_expert_chunk <= 0
-      expert_chunk_count = 0
+      expert_chunks = [] of FfnResidentExpertChunk
       assignments_by_expert.keys.sort.each do |expert|
         assignments = assignments_by_expert[expert]
         expert_batch = batch_by_expert[expert]
@@ -2354,11 +2362,8 @@ module ML::GGUF
         raise ArgumentError.new("gpu reduce expert row_count must be positive") unless expert_batch > 0
         raise ArgumentError.new("gpu reduce expert batch assignment mismatch") unless expert_batch == assignments.size
 
-        gate_qw = expert_gate_qw(lw, hp, expert)
-        up_qw = expert_up_qw(lw, hp, expert)
-        down_qw = expert_down_qw(lw, hp, expert)
-
         chunk_start = 0
+        chunk_index = 0
         while chunk_start < assignments.size
           chunk_size = {max_expert_chunk, assignments.size - chunk_start}.min
           chunk_assignments = assignments[chunk_start, chunk_size]
@@ -2377,49 +2382,109 @@ module ML::GGUF
             route_offsets_by_row[row] + route_index
           end
 
-          gather_map_buf = metal_int32_buffer(gather_map)
-          scatter_map_buf = metal_int32_buffer(scatter_map)
-          input_buf = ML::MetalBuffer.new(batch.to_i64 * hp.n_embd * sizeof(Float32))
-          gate_buf = ML::MetalBuffer.new(batch.to_i64 * hp.expert_ff * sizeof(Float32))
-          up_buf = ML::MetalBuffer.new(batch.to_i64 * hp.expert_ff * sizeof(Float32))
-          hidden_buf = ML::MetalBuffer.new(batch.to_i64 * hp.expert_ff * sizeof(Float32))
-          down_buf = ML::MetalBuffer.new(batch.to_i64 * hp.n_embd * sizeof(Float32))
+          expert_prefix = "#{scratch_prefix}.expert#{expert}.chunk#{chunk_index}.batch#{batch}"
+          gather_map_buf = ffn_resident_upload_i32_buffer("#{expert_prefix}.gather_map", gather_map, scratch_enabled)
+          scatter_map_buf = ffn_resident_upload_i32_buffer("#{expert_prefix}.scatter_map", scatter_map, scratch_enabled)
+          input_buf = ffn_resident_scratch_buffer("#{expert_prefix}.input", batch.to_i64 * hp.n_embd * sizeof(Float32), scratch_enabled)
+          gate_buf = ffn_resident_scratch_buffer("#{expert_prefix}.gate", batch.to_i64 * hp.expert_ff * sizeof(Float32), scratch_enabled)
+          up_buf = ffn_resident_scratch_buffer("#{expert_prefix}.up", batch.to_i64 * hp.expert_ff * sizeof(Float32), scratch_enabled)
+          hidden_buf = ffn_resident_scratch_buffer("#{expert_prefix}.hidden", batch.to_i64 * hp.expert_ff * sizeof(Float32), scratch_enabled)
+          down_buf = ffn_resident_scratch_buffer("#{expert_prefix}.down", batch.to_i64 * hp.n_embd * sizeof(Float32), scratch_enabled)
           owned_buffers.concat([gather_map_buf, scatter_map_buf, input_buf, gate_buf, up_buf, hidden_buf, down_buf])
-          expert_chunk_count += 1
+          expert_chunks << FfnResidentExpertChunk.new(
+            expert,
+            chunk_index,
+            batch,
+            gather_map_buf,
+            scatter_map_buf,
+            input_buf,
+            hidden_buf,
+            down_buf,
+            nil,
+            gate_buf,
+            up_buf,
+          )
 
-          unless Gemma4Metal.encode_gather_rows_by_map_to_buffer(enc, source_rows_buf, gather_map_buf, input_buf, row_count, batch, hp.n_embd)
+          chunk_start += chunk_size
+          chunk_index += 1
+        end
+      end
+      expert_chunk_count = expert_chunks.size
+
+      graph_cache_status = "off"
+      graph_cache_key = if scratch_enabled && ffn_resident_graph_cache_enabled?
+                          moe_grouped_route_reduce_graph_cache_key(
+                            weights.object_id,
+                            il,
+                            row_count,
+                            hp.n_embd,
+                            hp.expert_ff,
+                            route_slot_count,
+                            max_expert_chunk,
+                            pre_norm_rows,
+                            assignments_by_expert,
+                          )
+                        else
+                          nil
+                        end
+      cached_graph_entry = graph_cache_key ? moe_grouped_route_reduce_graph_cache_lookup(graph_cache_key.not_nil!) : nil
+      graph = if cached = cached_graph_entry
+                graph_cache_status = "hit"
+                cached.graph
+              else
+                graph_cache_status = graph_cache_key ? "miss" : "off"
+                ML::Metal::ComputeGraph.new
+              end
+
+      unless cached_graph_entry
+        enc = ML::Metal::GraphEncoder.new(graph)
+        if pre_norm_rows
+          unless Gemma4Metal.encode_rmsnorm_rows_weighted_to_buffer(enc, ffn_rows_buf, norm_weight_buf.not_nil!, source_rows_buf, row_count, hp.n_embd, hp.rms_eps)
+            emit_moe_grouped_resident_fallback("route_reduce", il, row_count, "pre_norm", active_experts, route_slot_count, max_expert_batch, over_threshold_experts, timing_t0)
+            return nil
+          end
+        end
+        expert_chunks.each do |chunk|
+          expert = chunk.expert
+          batch = chunk.batch
+          gate_qw = expert_gate_qw(lw, hp, expert)
+          up_qw = expert_up_qw(lw, hp, expert)
+          down_qw = expert_down_qw(lw, hp, expert)
+          gate_buf = chunk.gate_buf || raise ArgumentError.new("gpu reduce gate buffer missing")
+          up_buf = chunk.up_buf || raise ArgumentError.new("gpu reduce up buffer missing")
+
+          unless Gemma4Metal.encode_gather_rows_by_map_to_buffer(enc, source_rows_buf, chunk.gather_map_buf, chunk.input_buf, row_count, batch, hp.n_embd)
             emit_moe_grouped_resident_fallback("route_reduce", il, row_count, "expert_gather", active_experts, route_slot_count, max_expert_batch, over_threshold_experts, timing_t0)
             return nil
           end
-          unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [gate_qw, up_qw], input_buf, [gate_buf, up_buf], batch)
+          unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [gate_qw, up_qw], chunk.input_buf, [gate_buf, up_buf], batch)
             emit_moe_grouped_resident_fallback("route_reduce", il, row_count, "expert_gate_up", active_experts, route_slot_count, max_expert_batch, over_threshold_experts, timing_t0)
             return nil
           end
-          unless Gemma4Metal.encode_gelu_mul_to_buffer(enc, gate_buf, up_buf, hidden_buf, batch * hp.expert_ff)
+          unless Gemma4Metal.encode_gelu_mul_to_buffer(enc, gate_buf, up_buf, chunk.hidden_buf, batch * hp.expert_ff)
             emit_moe_grouped_resident_fallback("route_reduce", il, row_count, "expert_gelu", active_experts, route_slot_count, max_expert_batch, over_threshold_experts, timing_t0)
             return nil
           end
-          unless Qwen35Metal.encode_matmul_to_buffer(enc, down_qw, hidden_buf, down_buf, batch)
+          unless Qwen35Metal.encode_matmul_to_buffer(enc, down_qw, chunk.hidden_buf, chunk.down_buf, batch)
             emit_moe_grouped_resident_fallback("route_reduce", il, row_count, "expert_down", active_experts, route_slot_count, max_expert_batch, over_threshold_experts, timing_t0)
             return nil
           end
-          unless Gemma4Metal.encode_scatter_rows_by_map_to_buffer(enc, down_buf, scatter_map_buf, route_rows_buf, batch, route_slot_count, hp.n_embd, partition: expert)
+          unless Gemma4Metal.encode_scatter_rows_by_map_to_buffer(enc, chunk.down_buf, chunk.scatter_map_buf, route_rows_buf, batch, route_slot_count, hp.n_embd, partition: expert)
             emit_moe_grouped_resident_fallback("route_reduce", il, row_count, "expert_scatter", active_experts, route_slot_count, max_expert_batch, over_threshold_experts, timing_t0)
             return nil
           end
-
-          chunk_start += chunk_size
         end
-      end
-      unless Gemma4Metal.encode_weighted_route_reduce_rows_to_buffer(enc, route_rows_buf, route_offsets_buf, route_counts_buf, route_weights_buf, reduced_buf, row_count, route_slot_count, hp.n_embd)
-        emit_moe_grouped_resident_fallback("route_reduce", il, row_count, "route_reduce", active_experts, route_slot_count, max_expert_batch, over_threshold_experts, timing_t0)
-        return nil
+        unless Gemma4Metal.encode_weighted_route_reduce_rows_to_buffer(enc, route_rows_buf, route_offsets_buf, route_counts_buf, route_weights_buf, reduced_buf, row_count, route_slot_count, hp.n_embd)
+          emit_moe_grouped_resident_fallback("route_reduce", il, row_count, "route_reduce", active_experts, route_slot_count, max_expert_batch, over_threshold_experts, timing_t0)
+          return nil
+        end
       end
 
       graph_build_done = Time.instant if timing_enabled
       compile_t0 = Time.instant if timing_enabled
-      graph.compile!
+      graph.compile! unless cached_graph_entry
       compile_done = Time.instant if timing_enabled
+      moe_grouped_route_reduce_graph_cache_store(graph_cache_key.not_nil!, graph) if graph_cache_key && cached_graph_entry.nil?
       cmd = ML::Metal::CommandBuffer.new
       encode_t0 = Time.instant if timing_enabled
       graph.encode(cmd)
@@ -2439,7 +2504,7 @@ module ML::GGUF
       if timing_enabled
         post_norm_done = Time.instant
         stats = graph.stats
-        STDERR.puts "diffusion_gemma_moe_grouped_resident_timing route=route_reduce layer=#{il} rows=#{row_count} active_experts=#{active_experts} route_slots=#{route_slot_count} max_expert_batch=#{max_expert_batch} over_threshold_experts=#{over_threshold_experts} expert_chunks=#{expert_chunk_count} ops=#{stats.n_ops} waves=#{stats.n_waves} barriers=#{stats.n_barriers} max_wave_width=#{stats.max_wave_width} pre_norm_rows=#{pre_norm_rows} route_map_ms=#{(route_map_done.not_nil! - timing_t0.not_nil!).total_milliseconds} graph_build_ms=#{(graph_build_done.not_nil! - route_map_done.not_nil!).total_milliseconds} compile_ms=#{(compile_done.not_nil! - compile_t0.not_nil!).total_milliseconds} encode_ms=#{(encode_done.not_nil! - encode_t0.not_nil!).total_milliseconds} wait_ms=#{(wait_done.not_nil! - wait_t0.not_nil!).total_milliseconds} read_ms=#{(read_done.not_nil! - read_t0.not_nil!).total_milliseconds} post_norm_ms=#{(post_norm_done - post_norm_t0.not_nil!).total_milliseconds} total_ms=#{(post_norm_done - timing_t0.not_nil!).total_milliseconds}"
+        STDERR.puts "diffusion_gemma_moe_grouped_resident_timing route=route_reduce layer=#{il} rows=#{row_count} active_experts=#{active_experts} route_slots=#{route_slot_count} max_expert_batch=#{max_expert_batch} over_threshold_experts=#{over_threshold_experts} expert_chunks=#{expert_chunk_count} ops=#{stats.n_ops} waves=#{stats.n_waves} barriers=#{stats.n_barriers} max_wave_width=#{stats.max_wave_width} pre_norm_rows=#{pre_norm_rows} graph_cache=#{graph_cache_status} route_map_ms=#{(route_map_done.not_nil! - timing_t0.not_nil!).total_milliseconds} graph_build_ms=#{(graph_build_done.not_nil! - route_map_done.not_nil!).total_milliseconds} compile_ms=#{(compile_done.not_nil! - compile_t0.not_nil!).total_milliseconds} encode_ms=#{(encode_done.not_nil! - encode_t0.not_nil!).total_milliseconds} wait_ms=#{(wait_done.not_nil! - wait_t0.not_nil!).total_milliseconds} read_ms=#{(read_done.not_nil! - read_t0.not_nil!).total_milliseconds} post_norm_ms=#{(post_norm_done - post_norm_t0.not_nil!).total_milliseconds} total_ms=#{(post_norm_done - timing_t0.not_nil!).total_milliseconds}"
       end
       result
     end
@@ -2527,11 +2592,11 @@ module ML::GGUF
       if moe_grouped_resident_batch_graph_enabled?(row_count)
         if use_gpu_reduce
           gate_up_t0 = Time.instant
-          ffn_rows_buf = ML::MetalBuffer.from_array(use_gpu_prenorm ? attn_out_rows : ffn_in_rows.not_nil!)
+          ffn_rows = use_gpu_prenorm ? attn_out_rows : ffn_in_rows.not_nil!
           resident_reduced_rows = moe_grouped_route_reduce_resident_graph_from_row_buffer(
             weights,
             il,
-            ffn_rows_buf,
+            ffn_rows,
             row_count,
             selected_by_row,
             route_offsets_by_row,
@@ -3713,6 +3778,9 @@ module ML::GGUF
         @@ffn_resident_graph_cache.clear
         @@ffn_resident_graph_cache_hits = 0_i64
         @@ffn_resident_graph_cache_misses = 0_i64
+      end
+      @@moe_grouped_route_reduce_graph_cache_mutex.synchronize do
+        @@moe_grouped_route_reduce_graph_cache.clear
       end
     end
 
@@ -5428,6 +5496,64 @@ module ML::GGUF
         else
           @@ffn_resident_graph_cache.clear if @@ffn_resident_graph_cache.size >= ffn_resident_graph_cache_max_entries
           @@ffn_resident_graph_cache[key] = entry
+        end
+      end
+    end
+
+    private def moe_grouped_route_reduce_graph_cache_key(model_id : UInt64,
+                                                         il : Int32,
+                                                         row_count : Int32,
+                                                         hidden_dim : Int32,
+                                                         expert_ff : Int32,
+                                                         route_slot_count : Int32,
+                                                         max_expert_batch : Int32,
+                                                         pre_norm_rows : Bool,
+                                                         assignments_by_expert : Hash(Int32, Array(Tuple(Int32, Int32)))) : String
+      String.build do |io|
+        io << "rr_v1"
+        io << "|model=" << model_id
+        io << "|l=" << il
+        io << "|rows=" << row_count
+        io << "|hidden=" << hidden_dim
+        io << "|expert_ff=" << expert_ff
+        io << "|slots=" << route_slot_count
+        io << "|chunk=" << max_expert_batch
+        io << "|pre_norm=" << (pre_norm_rows ? 1 : 0)
+        assignments_by_expert.keys.sort.each do |expert|
+          assignments = assignments_by_expert[expert]
+          io << "|e=" << expert << ":"
+          chunk_start = 0
+          while chunk_start < assignments.size
+            batch = {max_expert_batch, assignments.size - chunk_start}.min
+            io << batch << ","
+            chunk_start += batch
+          end
+        end
+      end
+    end
+
+    private def moe_grouped_route_reduce_graph_cache_max_entries : Int32
+      raw = ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH_CACHE_MAX_ENTRIES"]?
+      value = raw ? raw.to_i? : nil
+      max_entries = value || 64
+      max_entries < 1 ? 1 : max_entries
+    end
+
+    private def moe_grouped_route_reduce_graph_cache_lookup(key : String) : FfnResidentGraphCacheEntry?
+      @@moe_grouped_route_reduce_graph_cache_mutex.synchronize do
+        @@moe_grouped_route_reduce_graph_cache[key]?
+      end
+    end
+
+    private def moe_grouped_route_reduce_graph_cache_store(key : String,
+                                                           graph : ML::Metal::ComputeGraph) : FfnResidentGraphCacheEntry
+      entry = FfnResidentGraphCacheEntry.new(graph, graph.stats)
+      @@moe_grouped_route_reduce_graph_cache_mutex.synchronize do
+        if cached = @@moe_grouped_route_reduce_graph_cache[key]?
+          cached
+        else
+          @@moe_grouped_route_reduce_graph_cache.clear if @@moe_grouped_route_reduce_graph_cache.size >= moe_grouped_route_reduce_graph_cache_max_entries
+          @@moe_grouped_route_reduce_graph_cache[key] = entry
         end
       end
     end
