@@ -41,6 +41,7 @@ prompt_len = 16
 canvas_len = 8
 prompt_token = 1
 canvas_token = 0
+token_windows_arg = nil.as(String?)
 candidate_count = 64
 max_layers = 30
 seed = 7
@@ -48,6 +49,10 @@ temp_inv = 1.0_f32
 base_env = ArmEnv.new(DEFAULT_BASE_ENV)
 variant_env = ArmEnv.new(DEFAULT_VARIANT_ENV)
 require_argmax_match = false
+require_sampled_match = false
+min_base_logit_margin = nil.as(Float64?)
+min_variant_logit_margin = nil.as(Float64?)
+max_logit_delta = nil.as(Float64?)
 
 OptionParser.parse do |p|
   p.banner = "Usage: diffusion_gemma_prompt_output_cert_probe [options]"
@@ -56,6 +61,7 @@ OptionParser.parse do |p|
   p.on("--canvas-len N", "Synthetic canvas length (default: 8)") { |v| canvas_len = v.to_i }
   p.on("--prompt-token ID", "Synthetic prompt start token id (default: 1)") { |v| prompt_token = v.to_i }
   p.on("--canvas-token ID", "Synthetic canvas start token id (default: 0)") { |v| canvas_token = v.to_i }
+  p.on("--token-windows LIST", "Comma/space separated prompt:canvas token starts, e.g. 1:0,17:100") { |v| token_windows_arg = v }
   p.on("--candidate-count N", "Candidate ids per canvas row, generated from the row token (default: 64)") { |v| candidate_count = v.to_i }
   p.on("--max-layers N", "Prompt-cache/decode layer count (default: 30)") { |v| max_layers = v.to_i }
   p.on("--seed N", "Deterministic sample-u seed for sampled-token comparison (default: 7)") { |v| seed = v.to_i }
@@ -63,6 +69,10 @@ OptionParser.parse do |p|
   p.on("--base-env ENV", "Whitespace-separated KEY=VALUE env for base arm") { |v| base_env = ArmEnv.new(v) }
   p.on("--variant-env ENV", "Whitespace-separated KEY=VALUE env for variant arm") { |v| variant_env = ArmEnv.new(v) }
   p.on("--require-argmax-match", "Exit 4 when any canvas row changes bounded argmax") { require_argmax_match = true }
+  p.on("--require-sampled-match", "Exit 4 when any canvas row changes deterministic sampled token") { require_sampled_match = true }
+  p.on("--min-base-logit-margin F", "Exit 4 when the minimum base top1/top2 logit margin is below F") { |v| min_base_logit_margin = v.to_f64 }
+  p.on("--min-variant-logit-margin F", "Exit 4 when the minimum variant top1/top2 logit margin is below F") { |v| min_variant_logit_margin = v.to_f64 }
+  p.on("--max-logit-delta F", "Exit 4 when any candidate logit absolute delta exceeds F") { |v| max_logit_delta = v.to_f64 }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -92,6 +102,17 @@ def generated_token_sequence(default_token : Int32, count : Int32, vocab_size : 
   raise "#{label} must be positive" unless count > 0
   raise "#{label} exceeds vocab size" if count > vocab_size
   Array(Int32).new(count) { |i| (default_token + i) % vocab_size }
+end
+
+def parse_token_windows(raw : String) : Array(Tuple(Int32, Int32))
+  windows = [] of Tuple(Int32, Int32)
+  raw.split(/[,\s]+/).reject(&.empty?).each do |entry|
+    prompt_raw, canvas_raw = entry.split(":", 2)
+    raise "--token-windows entries must be prompt:canvas, got #{entry.inspect}" unless canvas_raw
+    windows << {prompt_raw.to_i, canvas_raw.to_i}
+  end
+  raise "--token-windows must contain at least one entry" if windows.empty?
+  windows
 end
 
 def prompt_rows_from_tokens(weights : ML::GGUF::DiffusionGemmaWeights, tokens : Array(Int32)) : Array(Float32)
@@ -208,12 +229,28 @@ def format_f64(value : Float64) : String
   "%.9f" % value
 end
 
+def median(values : Array(Float64)) : Float64
+  raise "median requires at least one value" if values.empty?
+  sorted = values.sort
+  mid = sorted.size // 2
+  sorted.size.odd? ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2.0
+end
+
 raise "model not found: #{model}" unless File.exists?(model)
 raise "--prompt-len must be positive" unless prompt_len > 0
 raise "--canvas-len must be positive" unless canvas_len > 0
 raise "--candidate-count must be positive" unless candidate_count > 0
 raise "--max-layers must be positive" unless max_layers > 0
 raise "--temp-inv must be finite and positive" unless temp_inv.finite? && temp_inv > 0.0_f32
+if threshold = min_base_logit_margin
+  raise "--min-base-logit-margin must be finite" unless threshold.finite?
+end
+if threshold = min_variant_logit_margin
+  raise "--min-variant-logit-margin must be finite" unless threshold.finite?
+end
+if threshold = max_logit_delta
+  raise "--max-logit-delta must be finite and non-negative" unless threshold.finite? && threshold >= 0.0
+end
 
 load_t0 = Time.instant
 weights = ML::GGUF::DiffusionGemmaWeights.from_gguf(model)
@@ -222,51 +259,22 @@ hp = weights.hparams
 raise "--max-layers exceeds model layer count" if max_layers > hp.n_layer
 raise "prompt+canvas exceeds context_length" if prompt_len + canvas_len > hp.context_length
 
-prompt_tokens = generated_token_sequence(prompt_token, prompt_len, hp.vocab_size, "--prompt-len")
-canvas_tokens = generated_token_sequence(canvas_token, canvas_len, hp.vocab_size, "--canvas-len")
-prompt_rows = prompt_rows_from_tokens(weights, prompt_tokens)
-canvas_rows = ML::GGUF::DiffusionGemmaCPU.canvas_rows_from_tokens(weights, canvas_tokens)
-candidate_rows = ML::GGUF::DiffusionGemmaCPU.generated_candidate_rows(canvas_tokens, candidate_count, hp.vocab_size)
-sample_us = ML::GGUF::DiffusionGemmaCPU.sample_u_rows(seed, canvas_len)
-mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: prompt_len, canvas_len: canvas_len, sliding_window: hp.sliding_window)
-
-base = run_arm(weights, prompt_rows, canvas_rows, mask, candidate_rows, sample_us, max_layers, temp_inv, base_env)
-variant = run_arm(weights, prompt_rows, canvas_rows, mask, candidate_rows, sample_us, max_layers, temp_inv, variant_env)
-hidden = diff_stats(base.cache.final_rows, variant.cache.final_rows)
+windows = token_windows_arg ? parse_token_windows(token_windows_arg.not_nil!) : [{prompt_token, canvas_token}]
+windows.each do |window|
+  p_start = window[0]
+  c_start = window[1]
+  raise "prompt token start out of range" if p_start < 0 || p_start >= hp.vocab_size
+  raise "canvas token start out of range" if c_start < 0 || c_start >= hp.vocab_size
+end
 
 puts "# load_ms=#{format_f64(load_ms)}"
 puts "# base_env=#{base_env.raw.empty? ? "<empty>" : base_env.raw}"
 puts "# variant_env=#{variant_env.raw.empty? ? "<empty>" : variant_env.raw}"
 puts [
-  "timing_summary",
-  "prompt_len=#{prompt_len}",
-  "canvas_len=#{canvas_len}",
-  "candidate_count=#{candidate_count}",
-  "max_layers=#{max_layers}",
-  "base_cache_ms=#{format_f64(base.cache_ms)}",
-  "variant_cache_ms=#{format_f64(variant.cache_ms)}",
-  "cache_speedup=#{format_f64(base.cache_ms / variant.cache_ms)}",
-  "base_predict_ms=#{format_f64(base.predict_ms)}",
-  "variant_predict_ms=#{format_f64(variant.predict_ms)}",
-  "predict_speedup=#{format_f64(base.predict_ms / variant.predict_ms)}",
-  "base_decode_stack_ms=#{format_f64(base.timing.decode_stack_ms)}",
-  "variant_decode_stack_ms=#{format_f64(variant.timing.decode_stack_ms)}",
-  "base_output_head_ms=#{format_f64(base.timing.output_head_ms)}",
-  "variant_output_head_ms=#{format_f64(variant.timing.output_head_ms)}",
-].join('\t')
-puts [
-  "hidden_summary",
-  "max_abs=#{format_f64(hidden[:max_abs])}",
-  "mean_abs=#{format_f64(hidden[:mean_abs])}",
-  "checksum_base=#{format_f64(hidden[:checksum_a])}",
-  "checksum_variant=#{format_f64(hidden[:checksum_b])}",
-  "checksum_delta=#{format_f64(hidden[:checksum_delta])}",
-  "sampled_checksum_base=#{format_f64(checksum_rows(base.cache.final_rows))}",
-  "sampled_checksum_variant=#{format_f64(checksum_rows(variant.cache.final_rows))}",
-].join('\t')
-
-puts [
   "kind",
+  "window",
+  "prompt_token",
+  "canvas_token",
   "row",
   "candidate_count",
   "base_argmax",
@@ -283,75 +291,187 @@ puts [
   "max_prob_abs_delta",
 ].join('\t')
 
-argmax_matches = 0
-sampled_matches = 0
-max_logit_abs_delta = 0.0
-max_prob_abs_delta = 0.0
-min_base_logit_margin = Float64::INFINITY
-min_variant_logit_margin = Float64::INFINITY
-min_base_prob_margin = Float64::INFINITY
-min_variant_prob_margin = Float64::INFINITY
+aggregate_rows = 0
+aggregate_argmax_matches = 0
+aggregate_sampled_matches = 0
+aggregate_max_logit_abs_delta = 0.0
+aggregate_max_prob_abs_delta = 0.0
+aggregate_min_base_logit_margin = Float64::INFINITY
+aggregate_min_variant_logit_margin = Float64::INFINITY
+aggregate_min_base_prob_margin = Float64::INFINITY
+aggregate_min_variant_prob_margin = Float64::INFINITY
+cache_speedups = [] of Float64
+predict_speedups = [] of Float64
 
-base.timing.predictions.each_with_index do |base_prediction, row|
-  variant_prediction = variant.timing.predictions[row]
-  base_order = rank_order(base_prediction)
-  variant_order = rank_order(variant_prediction)
-  deltas = prediction_delta(base_prediction, variant_prediction)
-  max_logit_abs_delta = deltas[:max_logit_abs] if deltas[:max_logit_abs] > max_logit_abs_delta
-  max_prob_abs_delta = deltas[:max_prob_abs] if deltas[:max_prob_abs] > max_prob_abs_delta
+windows.each_with_index do |window, window_index|
+  prompt_start = window[0]
+  canvas_start = window[1]
+  prompt_tokens = generated_token_sequence(prompt_start, prompt_len, hp.vocab_size, "--prompt-len")
+  canvas_tokens = generated_token_sequence(canvas_start, canvas_len, hp.vocab_size, "--canvas-len")
+  prompt_rows = prompt_rows_from_tokens(weights, prompt_tokens)
+  canvas_rows = ML::GGUF::DiffusionGemmaCPU.canvas_rows_from_tokens(weights, canvas_tokens)
+  candidate_rows = ML::GGUF::DiffusionGemmaCPU.generated_candidate_rows(canvas_tokens, candidate_count, hp.vocab_size)
+  sample_us = ML::GGUF::DiffusionGemmaCPU.sample_u_rows(seed, canvas_len)
+  mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: prompt_len, canvas_len: canvas_len, sliding_window: hp.sliding_window)
 
-  base_logit_margin = margin(base_prediction.logits, base_order)
-  variant_logit_margin = margin(variant_prediction.logits, variant_order)
-  base_prob_margin = margin(base_prediction.probabilities, base_order)
-  variant_prob_margin = margin(variant_prediction.probabilities, variant_order)
-  min_base_logit_margin = base_logit_margin if base_logit_margin < min_base_logit_margin
-  min_variant_logit_margin = variant_logit_margin if variant_logit_margin < min_variant_logit_margin
-  min_base_prob_margin = base_prob_margin if base_prob_margin < min_base_prob_margin
-  min_variant_prob_margin = variant_prob_margin if variant_prob_margin < min_variant_prob_margin
-
-  argmax_match = base_prediction.argmax_token_id == variant_prediction.argmax_token_id
-  sampled_match = base_prediction.sampled_token_id == variant_prediction.sampled_token_id
-  argmax_matches += 1 if argmax_match
-  sampled_matches += 1 if sampled_match
+  base = run_arm(weights, prompt_rows, canvas_rows, mask, candidate_rows, sample_us, max_layers, temp_inv, base_env)
+  variant = run_arm(weights, prompt_rows, canvas_rows, mask, candidate_rows, sample_us, max_layers, temp_inv, variant_env)
+  hidden = diff_stats(base.cache.final_rows, variant.cache.final_rows)
+  cache_speedup = base.cache_ms / variant.cache_ms
+  predict_speedup = base.predict_ms / variant.predict_ms
+  cache_speedups << cache_speedup
+  predict_speedups << predict_speedup
 
   puts [
-    "row",
-    row.to_s,
-    base_prediction.candidate_token_ids.size.to_s,
-    base_prediction.argmax_token_id.to_s,
-    variant_prediction.argmax_token_id.to_s,
-    argmax_match.to_s,
-    base_prediction.sampled_token_id.to_s,
-    variant_prediction.sampled_token_id.to_s,
-    sampled_match.to_s,
-    format_f64(base_logit_margin),
-    format_f64(variant_logit_margin),
-    format_f64(base_prob_margin),
-    format_f64(variant_prob_margin),
-    format_f64(deltas[:max_logit_abs]),
-    format_f64(deltas[:max_prob_abs]),
+    "timing_summary",
+    "window=#{window_index}",
+    "prompt_token=#{prompt_start}",
+    "canvas_token=#{canvas_start}",
+    "prompt_len=#{prompt_len}",
+    "canvas_len=#{canvas_len}",
+    "candidate_count=#{candidate_count}",
+    "max_layers=#{max_layers}",
+    "base_cache_ms=#{format_f64(base.cache_ms)}",
+    "variant_cache_ms=#{format_f64(variant.cache_ms)}",
+    "cache_speedup=#{format_f64(cache_speedup)}",
+    "base_predict_ms=#{format_f64(base.predict_ms)}",
+    "variant_predict_ms=#{format_f64(variant.predict_ms)}",
+    "predict_speedup=#{format_f64(predict_speedup)}",
+    "base_decode_stack_ms=#{format_f64(base.timing.decode_stack_ms)}",
+    "variant_decode_stack_ms=#{format_f64(variant.timing.decode_stack_ms)}",
+    "base_output_head_ms=#{format_f64(base.timing.output_head_ms)}",
+    "variant_output_head_ms=#{format_f64(variant.timing.output_head_ms)}",
+  ].join('\t')
+  puts [
+    "hidden_summary",
+    "window=#{window_index}",
+    "prompt_token=#{prompt_start}",
+    "canvas_token=#{canvas_start}",
+    "max_abs=#{format_f64(hidden[:max_abs])}",
+    "mean_abs=#{format_f64(hidden[:mean_abs])}",
+    "checksum_base=#{format_f64(hidden[:checksum_a])}",
+    "checksum_variant=#{format_f64(hidden[:checksum_b])}",
+    "checksum_delta=#{format_f64(hidden[:checksum_delta])}",
+    "sampled_checksum_base=#{format_f64(checksum_rows(base.cache.final_rows))}",
+    "sampled_checksum_variant=#{format_f64(checksum_rows(variant.cache.final_rows))}",
+  ].join('\t')
+
+  argmax_matches = 0
+  sampled_matches = 0
+  max_logit_abs_delta = 0.0
+  max_prob_abs_delta = 0.0
+  min_base_margin = Float64::INFINITY
+  min_variant_margin = Float64::INFINITY
+  min_base_prob_margin = Float64::INFINITY
+  min_variant_prob_margin = Float64::INFINITY
+
+  base.timing.predictions.each_with_index do |base_prediction, row|
+    variant_prediction = variant.timing.predictions[row]
+    base_order = rank_order(base_prediction)
+    variant_order = rank_order(variant_prediction)
+    deltas = prediction_delta(base_prediction, variant_prediction)
+    max_logit_abs_delta = deltas[:max_logit_abs] if deltas[:max_logit_abs] > max_logit_abs_delta
+    max_prob_abs_delta = deltas[:max_prob_abs] if deltas[:max_prob_abs] > max_prob_abs_delta
+    aggregate_max_logit_abs_delta = deltas[:max_logit_abs] if deltas[:max_logit_abs] > aggregate_max_logit_abs_delta
+    aggregate_max_prob_abs_delta = deltas[:max_prob_abs] if deltas[:max_prob_abs] > aggregate_max_prob_abs_delta
+
+    base_logit_margin = margin(base_prediction.logits, base_order)
+    variant_logit_margin = margin(variant_prediction.logits, variant_order)
+    base_prob_margin = margin(base_prediction.probabilities, base_order)
+    variant_prob_margin = margin(variant_prediction.probabilities, variant_order)
+    min_base_margin = base_logit_margin if base_logit_margin < min_base_margin
+    min_variant_margin = variant_logit_margin if variant_logit_margin < min_variant_margin
+    min_base_prob_margin = base_prob_margin if base_prob_margin < min_base_prob_margin
+    min_variant_prob_margin = variant_prob_margin if variant_prob_margin < min_variant_prob_margin
+    aggregate_min_base_logit_margin = base_logit_margin if base_logit_margin < aggregate_min_base_logit_margin
+    aggregate_min_variant_logit_margin = variant_logit_margin if variant_logit_margin < aggregate_min_variant_logit_margin
+    aggregate_min_base_prob_margin = base_prob_margin if base_prob_margin < aggregate_min_base_prob_margin
+    aggregate_min_variant_prob_margin = variant_prob_margin if variant_prob_margin < aggregate_min_variant_prob_margin
+
+    argmax_match = base_prediction.argmax_token_id == variant_prediction.argmax_token_id
+    sampled_match = base_prediction.sampled_token_id == variant_prediction.sampled_token_id
+    argmax_matches += 1 if argmax_match
+    sampled_matches += 1 if sampled_match
+    aggregate_argmax_matches += 1 if argmax_match
+    aggregate_sampled_matches += 1 if sampled_match
+    aggregate_rows += 1
+
+    puts [
+      "row",
+      window_index.to_s,
+      prompt_start.to_s,
+      canvas_start.to_s,
+      row.to_s,
+      base_prediction.candidate_token_ids.size.to_s,
+      base_prediction.argmax_token_id.to_s,
+      variant_prediction.argmax_token_id.to_s,
+      argmax_match.to_s,
+      base_prediction.sampled_token_id.to_s,
+      variant_prediction.sampled_token_id.to_s,
+      sampled_match.to_s,
+      format_f64(base_logit_margin),
+      format_f64(variant_logit_margin),
+      format_f64(base_prob_margin),
+      format_f64(variant_prob_margin),
+      format_f64(deltas[:max_logit_abs]),
+      format_f64(deltas[:max_prob_abs]),
+    ].join('\t')
+  end
+
+  puts [
+    "cert_summary",
+    "window=#{window_index}",
+    "prompt_token=#{prompt_start}",
+    "canvas_token=#{canvas_start}",
+    "argmax_matches=#{argmax_matches}/#{canvas_len}",
+    "sampled_matches=#{sampled_matches}/#{canvas_len}",
+    "all_argmax_match=#{argmax_matches == canvas_len}",
+    "all_sampled_match=#{sampled_matches == canvas_len}",
+    "min_base_logit_margin=#{format_f64(min_base_margin)}",
+    "min_variant_logit_margin=#{format_f64(min_variant_margin)}",
+    "min_base_prob_margin=#{format_f64(min_base_prob_margin)}",
+    "min_variant_prob_margin=#{format_f64(min_variant_prob_margin)}",
+    "max_logit_abs_delta=#{format_f64(max_logit_abs_delta)}",
+    "max_prob_abs_delta=#{format_f64(max_prob_abs_delta)}",
   ].join('\t')
 end
 
-all_argmax_match = argmax_matches == canvas_len
-all_sampled_match = sampled_matches == canvas_len
+all_argmax_match = aggregate_argmax_matches == aggregate_rows
+all_sampled_match = aggregate_sampled_matches == aggregate_rows
 puts [
-  "cert_summary",
-  "argmax_matches=#{argmax_matches}/#{canvas_len}",
-  "sampled_matches=#{sampled_matches}/#{canvas_len}",
+  "aggregate_summary",
+  "windows=#{windows.size}",
+  "rows=#{aggregate_rows}",
+  "argmax_matches=#{aggregate_argmax_matches}/#{aggregate_rows}",
+  "sampled_matches=#{aggregate_sampled_matches}/#{aggregate_rows}",
   "all_argmax_match=#{all_argmax_match}",
   "all_sampled_match=#{all_sampled_match}",
-  "min_base_logit_margin=#{format_f64(min_base_logit_margin)}",
-  "min_variant_logit_margin=#{format_f64(min_variant_logit_margin)}",
-  "min_base_prob_margin=#{format_f64(min_base_prob_margin)}",
-  "min_variant_prob_margin=#{format_f64(min_variant_prob_margin)}",
-  "max_logit_abs_delta=#{format_f64(max_logit_abs_delta)}",
-  "max_prob_abs_delta=#{format_f64(max_prob_abs_delta)}",
+  "min_base_logit_margin=#{format_f64(aggregate_min_base_logit_margin)}",
+  "min_variant_logit_margin=#{format_f64(aggregate_min_variant_logit_margin)}",
+  "min_base_prob_margin=#{format_f64(aggregate_min_base_prob_margin)}",
+  "min_variant_prob_margin=#{format_f64(aggregate_min_variant_prob_margin)}",
+  "max_logit_abs_delta=#{format_f64(aggregate_max_logit_abs_delta)}",
+  "max_prob_abs_delta=#{format_f64(aggregate_max_prob_abs_delta)}",
+  "median_cache_speedup=#{format_f64(median(cache_speedups))}",
+  "median_predict_speedup=#{format_f64(median(predict_speedups))}",
 ].join('\t')
 
-if require_argmax_match && !all_argmax_match
-  STDERR.puts "output_cert status=fail argmax_matches=#{argmax_matches}/#{canvas_len}"
+failures = [] of String
+failures << "argmax" if require_argmax_match && !all_argmax_match
+failures << "sampled" if require_sampled_match && !all_sampled_match
+if threshold = min_base_logit_margin
+  failures << "base_margin" if aggregate_min_base_logit_margin < threshold
+end
+if threshold = min_variant_logit_margin
+  failures << "variant_margin" if aggregate_min_variant_logit_margin < threshold
+end
+if threshold = max_logit_delta
+  failures << "logit_delta" if aggregate_max_logit_abs_delta > threshold
+end
+
+unless failures.empty?
+  STDERR.puts "output_cert status=fail failures=#{failures.join(",")} argmax_matches=#{aggregate_argmax_matches}/#{aggregate_rows} sampled_matches=#{aggregate_sampled_matches}/#{aggregate_rows}"
   exit 4
 end
 
-STDERR.puts "output_cert status=#{all_argmax_match ? "argmax_match" : "argmax_mismatch"} argmax_matches=#{argmax_matches}/#{canvas_len}"
+STDERR.puts "output_cert status=#{all_argmax_match ? "argmax_match" : "argmax_mismatch"} argmax_matches=#{aggregate_argmax_matches}/#{aggregate_rows} sampled_matches=#{aggregate_sampled_matches}/#{aggregate_rows}"
