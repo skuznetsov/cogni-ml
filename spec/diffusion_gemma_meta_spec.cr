@@ -1220,6 +1220,49 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
   end
 
+  it "gates prompt attention residual context buffers behind explicit env policy" do
+    keys = [
+      "DIFFUSION_GEMMA_CONTEXT_METAL",
+      "DIFFUSION_GEMMA_CONTEXT_METAL_OFF",
+      "DIFFUSION_GEMMA_PROMPT_CONTEXT_METAL_ROWS",
+      "DIFFUSION_GEMMA_PROMPT_CONTEXT_METAL_ROWS_OFF",
+      "DIFFUSION_GEMMA_PROMPT_ATTENTION_RESIDUAL_CONTEXT_BUFFER",
+      "DIFFUSION_GEMMA_PROMPT_ATTENTION_RESIDUAL_CONTEXT_BUFFER_OFF",
+      "DIFFUSION_GEMMA_PROMPT_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MIN_ROWS",
+      "DIFFUSION_GEMMA_PROMPT_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MAX_ROWS",
+    ]
+    old_env = keys.to_h { |key| {key, ENV[key]?} }
+    begin
+      keys.each { |key| ENV.delete(key) }
+      ML::GGUF::DiffusionGemmaCPU.prompt_attention_residual_context_buffer_enabled?(4).should be_false
+
+      ENV["DIFFUSION_GEMMA_PROMPT_ATTENTION_RESIDUAL_CONTEXT_BUFFER"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.prompt_attention_residual_context_buffer_enabled?(4).should be_false
+
+      ENV["DIFFUSION_GEMMA_PROMPT_CONTEXT_METAL_ROWS"] = "1"
+      ENV["DIFFUSION_GEMMA_CONTEXT_METAL"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.prompt_attention_residual_context_buffer_enabled?(4).should eq(ML::GGUF::Gemma4Metal.available?)
+
+      ENV["DIFFUSION_GEMMA_PROMPT_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MIN_ROWS"] = "5"
+      ML::GGUF::DiffusionGemmaCPU.prompt_attention_residual_context_buffer_enabled?(4).should be_false
+      ENV["DIFFUSION_GEMMA_PROMPT_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MIN_ROWS"] = "2"
+      ENV["DIFFUSION_GEMMA_PROMPT_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MAX_ROWS"] = "4"
+      ML::GGUF::DiffusionGemmaCPU.prompt_attention_residual_context_buffer_enabled?(4).should eq(ML::GGUF::Gemma4Metal.available?)
+      ML::GGUF::DiffusionGemmaCPU.prompt_attention_residual_context_buffer_enabled?(5).should be_false
+
+      ENV["DIFFUSION_GEMMA_PROMPT_ATTENTION_RESIDUAL_CONTEXT_BUFFER_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.prompt_attention_residual_context_buffer_enabled?(4).should be_false
+    ensure
+      old_env.each do |key, value|
+        if value
+          ENV[key] = value
+        else
+          ENV.delete(key)
+        end
+      end
+    end
+  end
+
   it "computes the shared dense FFN branch and residual combiner boundary" do
     pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
 

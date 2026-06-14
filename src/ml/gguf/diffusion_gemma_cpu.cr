@@ -390,6 +390,7 @@ module ML::GGUF
       getter rows : Array(Float32)
       getter context_ms : Float64
       getter context_metal_rows : Bool
+      getter context_buffer : Bool
       getter attention_out_ms : Float64
       getter shared_ffn_ms : Float64
       getter moe_ffn_ms : Float64
@@ -408,6 +409,7 @@ module ML::GGUF
       def initialize(@rows,
                      @context_ms,
                      @context_metal_rows,
+                     @context_buffer,
                      @attention_out_ms,
                      @shared_ffn_ms,
                      @moe_ffn_ms,
@@ -642,6 +644,7 @@ module ML::GGUF
       getter materialize_ms_by_layer : Array(Float64)
       getter materialize_context_ms_by_layer : Array(Float64)
       getter materialize_context_metal_rows_by_layer : Array(Bool)
+      getter materialize_context_buffer_by_layer : Array(Bool)
       getter materialize_attention_out_ms_by_layer : Array(Float64)
       getter materialize_shared_ffn_ms_by_layer : Array(Float64)
       getter materialize_moe_ffn_ms_by_layer : Array(Float64)
@@ -677,6 +680,7 @@ module ML::GGUF
                      @materialize_ms_by_layer = [] of Float64,
                      @materialize_context_ms_by_layer = [] of Float64,
                      @materialize_context_metal_rows_by_layer = [] of Bool,
+                     @materialize_context_buffer_by_layer = [] of Bool,
                      @materialize_attention_out_ms_by_layer = [] of Float64,
                      @materialize_shared_ffn_ms_by_layer = [] of Float64,
                      @materialize_moe_ffn_ms_by_layer = [] of Float64,
@@ -2966,7 +2970,7 @@ module ML::GGUF
                     end
         copy_row!(result, pos, hp.n_embd, layer_row)
       end
-      PromptMaterializeTiming.new(result, (Time.instant - t0).total_milliseconds, false, 0.0, 0.0, 0.0, 0.0)
+      PromptMaterializeTiming.new(result, (Time.instant - t0).total_milliseconds, false, false, 0.0, 0.0, 0.0, 0.0)
     end
 
     def layer_forward_prompt_rows_with_projections_batched(weights : DiffusionGemmaWeights,
@@ -2996,8 +3000,10 @@ module ML::GGUF
 
       context_t0 = Time.instant
       context_metal_rows = false
+      context_buffer = false
       context_rows = nil.as(Array(Float32)?)
-      if prompt_context_metal_rows_enabled? && prompt_metal_cache
+      deferred_context_buffer = prompt_attention_residual_context_buffer_enabled?(mask.prompt_len) && !prompt_metal_cache.nil?
+      if !deferred_context_buffer && prompt_context_metal_rows_enabled? && prompt_metal_cache
         if metal_rows = attention_context_prompt_batch_metal_resident(
              prompt_projections,
              prompt_metal_cache.not_nil!,
@@ -3009,7 +3015,7 @@ module ML::GGUF
           context_metal_rows = true
         end
       end
-      unless context_rows
+      unless context_rows || deferred_context_buffer
         cpu_context_rows = Array(Float32).new(mask.prompt_len * q_context_dim, 0.0_f32)
         mask.prompt_len.times do |pos|
           context = attention_context_prompt(prompt_projections, hp, il, query_pos: pos, sliding_window: mask.sliding_window)
@@ -3021,7 +3027,31 @@ module ML::GGUF
 
       force_gemv = prompt_materialize_exact_gemv_enabled?
       attention_out_t0 = Time.instant
-      attn_out_rows = attention_residual_from_context_rows(weights, il, prompt_rows, context_rows.not_nil!, mask.prompt_len, force_gemv: force_gemv)
+      attn_out_rows = nil.as(Array(Float32)?)
+      if deferred_context_buffer && prompt_metal_cache
+        if metal_rows = attention_context_prompt_batch_residual_metal_resident(
+             weights,
+             il,
+             prompt_rows,
+             prompt_projections,
+             prompt_metal_cache.not_nil!,
+             hp,
+             mask.sliding_window,
+             force_gemv,
+           )
+          attn_out_rows = metal_rows
+          context_metal_rows = true
+          context_buffer = true
+        else
+          cpu_context_rows = Array(Float32).new(mask.prompt_len * q_context_dim, 0.0_f32)
+          mask.prompt_len.times do |pos|
+            context = attention_context_prompt(prompt_projections, hp, il, query_pos: pos, sliding_window: mask.sliding_window)
+            copy_row!(cpu_context_rows, pos, q_context_dim, context)
+          end
+          context_rows = cpu_context_rows
+        end
+      end
+      attn_out_rows ||= attention_residual_from_context_rows(weights, il, prompt_rows, context_rows.not_nil!, mask.prompt_len, force_gemv: force_gemv)
       attention_out_ms = (Time.instant - attention_out_t0).total_milliseconds
       shared_t0 = Time.instant
       shared_rows = shared_dense_ffn_rows(weights, il, attn_out_rows, mask.prompt_len, force_gemv: force_gemv)
@@ -3057,7 +3087,7 @@ module ML::GGUF
       combine_t0 = Time.instant
       rows = ffn_residual_from_parts_rows(weights, il, attn_out_rows, shared_rows, moe_rows, mask.prompt_len, canvas: false)
       combine_ms = (Time.instant - combine_t0).total_milliseconds
-      PromptMaterializeTiming.new(rows, context_ms, context_metal_rows, attention_out_ms, shared_ms, moe_ms, combine_ms,
+      PromptMaterializeTiming.new(rows, context_ms, context_metal_rows, context_buffer, attention_out_ms, shared_ms, moe_ms, combine_ms,
         moe_grouped_prep_ms, moe_grouped_gate_up_ms, moe_grouped_activation_ms,
         moe_grouped_down_ms, moe_grouped_scatter_combine_norm_ms,
         moe_grouped_active_experts, moe_grouped_route_slots, moe_grouped_max_expert_batch,
@@ -3097,6 +3127,7 @@ module ML::GGUF
       materialize_ms_by_layer = [] of Float64
       materialize_context_ms_by_layer = [] of Float64
       materialize_context_metal_rows_by_layer = [] of Bool
+      materialize_context_buffer_by_layer = [] of Bool
       materialize_attention_out_ms_by_layer = [] of Float64
       materialize_shared_ffn_ms_by_layer = [] of Float64
       materialize_moe_ffn_ms_by_layer = [] of Float64
@@ -3148,6 +3179,7 @@ module ML::GGUF
         materialize_ms_by_layer << (Time.instant - materialize_t0).total_milliseconds
         materialize_context_ms_by_layer << timed_materialize.context_ms
         materialize_context_metal_rows_by_layer << timed_materialize.context_metal_rows
+        materialize_context_buffer_by_layer << timed_materialize.context_buffer
         materialize_attention_out_ms_by_layer << timed_materialize.attention_out_ms
         materialize_shared_ffn_ms_by_layer << timed_materialize.shared_ffn_ms
         materialize_moe_ffn_ms_by_layer << timed_materialize.moe_ffn_ms
@@ -3184,6 +3216,7 @@ module ML::GGUF
         materialize_ms_by_layer,
         materialize_context_ms_by_layer,
         materialize_context_metal_rows_by_layer,
+        materialize_context_buffer_by_layer,
         materialize_attention_out_ms_by_layer,
         materialize_shared_ffn_ms_by_layer,
         materialize_moe_ffn_ms_by_layer,
@@ -3696,6 +3729,25 @@ module ML::GGUF
       return false if ENV["DIFFUSION_GEMMA_PROMPT_CONTEXT_METAL_ROWS_OFF"]? == "1"
       return false unless ENV["DIFFUSION_GEMMA_PROMPT_CONTEXT_METAL_ROWS"]? == "1"
       context_metal_enabled? && Gemma4Metal.available?
+    end
+
+    def prompt_attention_residual_context_buffer_enabled?(row_count : Int32) : Bool
+      return false unless row_count > 0
+      return false unless prompt_context_metal_rows_enabled?
+      return false unless ENV["DIFFUSION_GEMMA_PROMPT_ATTENTION_RESIDUAL_CONTEXT_BUFFER"]? == "1"
+      return false if ENV["DIFFUSION_GEMMA_PROMPT_ATTENTION_RESIDUAL_CONTEXT_BUFFER_OFF"]? == "1"
+      return false if row_count < prompt_attention_residual_context_buffer_min_rows
+      max_rows = prompt_attention_residual_context_buffer_max_rows
+      return false if max_rows > 0 && row_count > max_rows
+      Gemma4Metal.available?
+    end
+
+    def prompt_attention_residual_context_buffer_min_rows : Int32
+      env_i32("DIFFUSION_GEMMA_PROMPT_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MIN_ROWS", 1)
+    end
+
+    def prompt_attention_residual_context_buffer_max_rows : Int32
+      env_i32("DIFFUSION_GEMMA_PROMPT_ATTENTION_RESIDUAL_CONTEXT_BUFFER_MAX_ROWS", 0)
     end
 
     def prompt_materialize_exact_gemv_enabled? : Bool
@@ -5312,6 +5364,55 @@ module ML::GGUF
       cache.write_prompt_queries!(queries)
       Gemma4Metal.attention_context_rows_resident_buffers(
         cache.q_buf, cache.k_cache_buf, cache.v_cache_buf, cache.out_buf, 0, queries.size, n_head, n_head_kv, head_dim, effective_window)
+    end
+
+    private def attention_context_prompt_batch_residual_metal_resident(weights : DiffusionGemmaWeights,
+                                                                       il : Int32,
+                                                                       prompt_rows : Array(Float32),
+                                                                       queries : Array(AttentionProjection),
+                                                                       cache : PromptLayerMetalCache,
+                                                                       hp : DiffusionGemmaHparams,
+                                                                       sliding_window : Int32,
+                                                                       force_gemv : Bool = false) : Array(Float32)?
+      return nil unless Gemma4Metal.available?
+      return nil unless queries.size == cache.prompt_len
+      return nil unless cache.prompt_len > 0
+
+      head_dim = hp.head_dim_for_layer(il)
+      n_head = hp.n_head
+      n_head_kv = hp.n_head_kv(il)
+      q_dim = n_head * head_dim
+      kv_dim = n_head_kv * head_dim
+      return nil unless cache.q_dim == q_dim && cache.kv_dim == kv_dim
+      return nil unless prompt_rows.size == queries.size * hp.n_embd
+      queries.each { |query| validate_projection_shape!(query, q_dim, kv_dim, il) }
+
+      lw = weights.layers[il]
+      effective_window = hp.sliding_window?(il) ? sliding_window : 0
+      cache.write_prompt_queries!(queries)
+      projected_rows = Gemma4Metal.attention_project_rows_from_context_buffers(
+        cache.q_buf,
+        cache.k_cache_buf,
+        cache.v_cache_buf,
+        cache.out_buf,
+        lw.attn_output_qw,
+        0,
+        queries.size,
+        n_head,
+        n_head_kv,
+        head_dim,
+        force_gemv: force_gemv,
+        sliding_window: effective_window,
+      )
+      return nil unless projected_rows
+
+      rows = projected_rows.not_nil!
+      queries.size.times do |row|
+        offset = row * hp.n_embd
+        fast_rms_norm_slice!(rows, offset, hp.n_embd, lw.post_attention_norm, hp.rms_eps)
+        hp.n_embd.times { |i| rows[offset + i] += prompt_rows[offset + i] }
+      end
+      rows
     end
 
     private def attention_context_from_range_metal(query : AttentionProjection,

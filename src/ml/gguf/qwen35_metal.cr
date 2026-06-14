@@ -11509,7 +11509,8 @@ module ML
                                          qw : QuantWeight,
                                          x_buf : ML::MetalBuffer,
                                          out_buf : ML::MetalBuffer,
-                                         batch : Int32 = 1) : Bool
+                                         batch : Int32 = 1,
+                                         force_gemv : Bool = false) : Bool
           return false if batch <= 0
           return false if x_buf.size < batch.to_i64 * qw.in_dim * sizeof(Float32)
           return false if out_buf.size < batch.to_i64 * qw.out_dim * sizeof(Float32)
@@ -11519,7 +11520,12 @@ module ML
           return false if pipeline.nil?
           w_buf, w_off = weight_slot(qw)
 
-          encode_matmul(enc, pipeline, qw, x_buf, out_buf, w_buf, w_off, qw.in_dim, qw.out_dim, batch)
+          if force_gemv
+            encode_gemv(enc, pipeline, x_buf, out_buf, w_buf, w_off, qw.in_dim, qw.out_dim, batch,
+              profile_shape: true, route_qw: qw)
+          else
+            encode_matmul(enc, pipeline, qw, x_buf, out_buf, w_buf, w_off, qw.in_dim, qw.out_dim, batch)
+          end
           true
         end
 

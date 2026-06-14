@@ -142,6 +142,21 @@ module ML::GGUF
         nil
       end
 
+      def attention_project_rows_from_context_buffers(q_buf : ML::MetalBuffer,
+                                                      k_cache_buf : ML::MetalBuffer,
+                                                      v_cache_buf : ML::MetalBuffer,
+                                                      context_buf : ML::MetalBuffer,
+                                                      attn_output_qw : QuantWeight,
+                                                      base_pos : Int32,
+                                                      rows : Int32,
+                                                      n_head : Int32,
+                                                      n_head_kv : Int32,
+                                                      head_dim : Int32,
+                                                      force_gemv : Bool = false,
+                                                      sliding_window : Int32 = 0) : Array(Float32)?
+        nil
+      end
+
       def gather_rows_by_map(rows : Array(Float32),
                              gather_map : Array(Int32),
                              row_count : Int32,
@@ -1090,6 +1105,52 @@ module ML::GGUF
         cmd.commit
         cmd.wait
         out_buf.read(rows * hidden_dim)
+      end
+
+      def attention_project_rows_from_context_buffers(q_buf : ML::MetalBuffer,
+                                                      k_cache_buf : ML::MetalBuffer,
+                                                      v_cache_buf : ML::MetalBuffer,
+                                                      context_buf : ML::MetalBuffer,
+                                                      attn_output_qw : QuantWeight,
+                                                      base_pos : Int32,
+                                                      rows : Int32,
+                                                      n_head : Int32,
+                                                      n_head_kv : Int32,
+                                                      head_dim : Int32,
+                                                      force_gemv : Bool = false,
+                                                      sliding_window : Int32 = 0) : Array(Float32)?
+        return nil unless available?
+        raise ArgumentError.new("base_pos must be non-negative") if base_pos < 0
+        raise ArgumentError.new("attention project rows must be positive") unless rows > 0
+        raise ArgumentError.new("head_dim must be positive") unless head_dim > 0
+        raise ArgumentError.new("unsupported head_dim #{head_dim}; max 512") if head_dim > 512
+        raise ArgumentError.new("invalid GQA layout") unless n_head_kv > 0 && n_head > 0 && n_head % n_head_kv == 0
+        raise ArgumentError.new("sliding_window must be non-negative") if sliding_window < 0
+
+        q_dim = n_head * head_dim
+        kv_dim = n_head_kv * head_dim
+        hidden_dim = attn_output_qw.out_dim
+        required_cache_rows = base_pos + rows
+        raise ArgumentError.new("q buffer too small") if q_buf.size < rows.to_i64 * q_dim * sizeof(Float32)
+        raise ArgumentError.new("context buffer too small") if context_buf.size < rows.to_i64 * q_dim * sizeof(Float32)
+        raise ArgumentError.new("k_cache buffer too small") if k_cache_buf.size < required_cache_rows.to_i64 * kv_dim * sizeof(Float32)
+        raise ArgumentError.new("v_cache buffer too small") if v_cache_buf.size < required_cache_rows.to_i64 * kv_dim * sizeof(Float32)
+        raise ArgumentError.new("attention projection shape mismatch") unless attn_output_qw.in_dim == q_dim && hidden_dim > 0
+
+        projected_buf = ML::MetalBuffer.new(rows.to_i64 * hidden_dim * sizeof(Float32))
+
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        encode_attention_context_rows(enc, q_buf, k_cache_buf, v_cache_buf, context_buf,
+          base_pos, rows, n_head, n_head_kv, head_dim, n_head // n_head_kv, sliding_window)
+        unless Qwen35Metal.encode_matmul_to_buffer(enc, attn_output_qw, context_buf, projected_buf, rows, force_gemv: force_gemv)
+          enc.end_encoding
+          return nil
+        end
+        enc.end_encoding
+        cmd.commit
+        cmd.wait
+        projected_buf.read(rows * hidden_dim)
       end
 
       def encode_layer_tail_resident_buffer_inputs_graph(enc : ML::Metal::GraphEncoder,

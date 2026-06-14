@@ -52,6 +52,7 @@ ROUTE_FLAGS = [
     "materialize_batch_rows",
     "materialize_grouped_moe",
     "prompt_context_metal_rows",
+    "prompt_attention_residual_context_buffer",
     "projection_backend",
     "fused_norm_rope",
 ]
