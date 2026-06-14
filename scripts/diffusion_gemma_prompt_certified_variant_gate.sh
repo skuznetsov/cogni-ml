@@ -177,6 +177,43 @@ extract_metric() {
   ' "$output"
 }
 
+extract_comment_value() {
+  local output="$1"
+  local key="$2"
+  awk -v prefix="# ${key}=" '
+    index($0, prefix) == 1 {
+      print substr($0, length(prefix) + 1)
+      found = 1
+    }
+    END { if (!found) exit 1 }
+  ' "$output"
+}
+
+break_even_uses() {
+  python3 - "$1" "$2" "$3" "$4" "$5" <<'PY'
+import math
+import sys
+
+base = float(sys.argv[1])
+variant = float(sys.argv[2])
+base_capture = float(sys.argv[3])
+variant_capture = float(sys.argv[4])
+threshold = float(sys.argv[5])
+
+rhs = threshold * variant_capture - base_capture
+denom = base - threshold * variant
+raw_speedup = base / variant if variant > 0 else math.inf
+
+if rhs <= 0:
+    print(f"status=already min_uses=1 raw_speedup={raw_speedup:.6f}")
+elif denom <= 0:
+    print(f"status=impossible min_uses=inf raw_speedup={raw_speedup:.6f}")
+else:
+    min_uses = max(1, math.ceil(rhs / denom))
+    print(f"status=finite min_uses={min_uses} raw_speedup={raw_speedup:.6f}")
+PY
+}
+
 print_metric_row() {
   local output="$1"
   local metric="$2"
@@ -373,6 +410,21 @@ print_metric_row "$abba_out" materialize_moe_grouped_gate_up_ms "$summary_kind" 
 print_metric_row "$abba_out" materialize_moe_grouped_down_ms "$summary_kind" || true
 grep -E '^checksum_summary' "$abba_out" | tail -1 || true
 
+break_even_row=""
+break_even_min_uses=""
+break_even_status=""
+if [[ "$route_replay_enabled" == "1" ]]; then
+  raw_total_values="$(extract_metric "$abba_out" total_ms "$summary_kind")" || reject "missing_raw_total_speedup" "summary_kind=$summary_kind" "abba_log=$abba_out"
+  IFS=$'\t' read -r raw_total_base_ms raw_total_variant_ms raw_total_speedup raw_total_delta_ms raw_total_range_over_delta <<<"$raw_total_values"
+  base_capture_ms="$(extract_comment_value "$abba_out" route_capture_base_ms || printf '0')"
+  variant_capture_ms="$(extract_comment_value "$abba_out" route_capture_variant_ms || printf '0')"
+  break_even_row="$(break_even_uses "$raw_total_base_ms" "$raw_total_variant_ms" "$base_capture_ms" "$variant_capture_ms" "$min_total_speedup")"
+  break_even_status="$(printf '%s\n' "$break_even_row" | sed -n 's/.*status=\([^ ]*\).*/\1/p')"
+  break_even_min_uses="$(printf '%s\n' "$break_even_row" | sed -n 's/.*min_uses=\([^ ]*\).*/\1/p')"
+  printf 'gate_reuse metric=total_ms threshold=%s base_capture_ms=%s variant_capture_ms=%s %s\n' \
+    "$min_total_speedup" "$base_capture_ms" "$variant_capture_ms" "$break_even_row"
+fi
+
 if (( cert_rc != 0 )); then
   reject "certificate_failed_after_abba" "cert_rc=$cert_rc" "cert_log=$cert_out" "cert_stderr=$cert_err" "abba_log=$abba_out"
 fi
@@ -388,6 +440,8 @@ if ! float_ge "$total_speedup" "$min_total_speedup"; then
     "total_summary_kind=$total_summary_kind" \
     "route_capture_amortize_uses=$abba_route_capture_amortize_uses" \
     "keep_route_capture_graph_cache=$abba_keep_route_capture_graph_cache" \
+    "break_even_status=${break_even_status:-n/a}" \
+    "break_even_uses=${break_even_min_uses:-n/a}" \
     "abba_log=$abba_out"
 fi
 
@@ -400,5 +454,5 @@ if [[ "$certificate_mode" == full-vocab-top1-* ]]; then
 elif [[ "$certificate_mode" == full-vocab-top2-* ]]; then
   decision="candidate_full_vocab_margin_argmax_only"
 fi
-printf 'certified_variant_gate decision=%s total_speedup=%s min_total_speedup=%s base_ms=%s variant_ms=%s total_summary_kind=%s route_capture_amortize_uses=%s keep_route_capture_graph_cache=%s cert_rc=%s abba_rc=%s log_dir=%s\n' \
-  "$decision" "$total_speedup" "$min_total_speedup" "$total_base_ms" "$total_variant_ms" "$total_summary_kind" "$abba_route_capture_amortize_uses" "$abba_keep_route_capture_graph_cache" "$cert_rc" "$abba_rc" "$log_dir"
+printf 'certified_variant_gate decision=%s total_speedup=%s min_total_speedup=%s base_ms=%s variant_ms=%s total_summary_kind=%s route_capture_amortize_uses=%s keep_route_capture_graph_cache=%s break_even_status=%s break_even_uses=%s cert_rc=%s abba_rc=%s log_dir=%s\n' \
+  "$decision" "$total_speedup" "$min_total_speedup" "$total_base_ms" "$total_variant_ms" "$total_summary_kind" "$abba_route_capture_amortize_uses" "$abba_keep_route_capture_graph_cache" "${break_even_status:-n/a}" "${break_even_min_uses:-n/a}" "$cert_rc" "$abba_rc" "$log_dir"
