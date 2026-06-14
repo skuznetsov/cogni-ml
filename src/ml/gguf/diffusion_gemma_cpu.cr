@@ -3028,12 +3028,15 @@ module ML::GGUF
 
     def prompt_projection_fused_norm_rope_enabled? : Bool
       ENV["DIFFUSION_GEMMA_FUSED_QK_NORM_ROPE"]? == "1" ||
+        prompt_cache_policy_requested? ||
         c8_resident_decode_policy_requested?
     end
 
     def prompt_materialize_batch_rows_enabled?(prompt_len : Int32) : Bool
-      return false unless ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS"]? == "1"
       return false if ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS_OFF"]? == "1"
+      unless prompt_cache_policy_requested?
+        return false unless ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS"]? == "1"
+      end
       return false if prompt_len < prompt_materialize_batch_min_prompt
       max_prompt = prompt_materialize_batch_max_prompt
       return false if max_prompt > 0 && prompt_len > max_prompt
@@ -3049,8 +3052,14 @@ module ML::GGUF
     end
 
     def prompt_materialize_grouped_moe_enabled? : Bool
-      ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE"]? == "1" &&
-        ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE_OFF"]? != "1"
+      return false if ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE_OFF"]? == "1"
+      prompt_cache_policy_requested? ||
+        ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE"]? == "1"
+    end
+
+    def prompt_cache_policy_requested? : Bool
+      ENV["DIFFUSION_GEMMA_PROMPT_CACHE_POLICY"]? == "1" &&
+        ENV["DIFFUSION_GEMMA_PROMPT_CACHE_POLICY_OFF"]? != "1"
     end
 
     def c8_resident_decode_policy_requested? : Bool
@@ -3386,13 +3395,14 @@ module ML::GGUF
     def prompt_projection_metal_enabled? : Bool
       return false if ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_OFF"]? == "1"
       ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL"]? == "1" ||
+        prompt_cache_policy_requested? ||
         c8_resident_decode_policy_requested?
     end
 
     def prompt_projection_metal_min_batch : Int32
       if raw = ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH"]?
         raw.to_i
-      elsif c8_resident_decode_policy_requested?
+      elsif prompt_cache_policy_requested? || c8_resident_decode_policy_requested?
         1
       else
         16
