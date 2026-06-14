@@ -2027,6 +2027,102 @@ module ML::GGUF
       outputs
     end
 
+    def moe_expert_down_reduce_rows_from_hidden_resident_command(weights : DiffusionGemmaWeights,
+                                                                 il : Int32,
+                                                                 hidden_rows_by_expert : Hash(Int32, Array(Float32)),
+                                                                 selected_by_row : Array(Array(ExpertRoute)),
+                                                                 route_offsets_by_row : Array(Int32),
+                                                                 assignments_by_expert : Hash(Int32, Array(Tuple(Int32, Int32))),
+                                                                 batch_by_expert : Hash(Int32, Int32),
+                                                                 row_count : Int32) : Array(Float32)?
+      return nil unless Qwen35Metal.available?
+      return nil if hidden_rows_by_expert.empty?
+
+      hp = weights.hparams
+      lw = weights.layers[il]
+      raise ArgumentError.new("down reduce row_count must be positive") unless row_count > 0
+      raise ArgumentError.new("down reduce selected row count mismatch") unless selected_by_row.size == row_count
+      raise ArgumentError.new("down reduce route offset count mismatch") unless route_offsets_by_row.size == row_count
+      raise ArgumentError.new("down expert scale size mismatch") unless lw.ffn_down_exps_scale.size == hp.expert_count
+
+      route_slot_count = 0
+      route_counts_by_row = Array(Int32).new(row_count, 0)
+      selected_by_row.each_with_index do |selected, row|
+        raise ArgumentError.new("down reduce routes must not be empty") if selected.empty?
+        raise ArgumentError.new("down reduce route offsets must be contiguous") unless route_offsets_by_row[row] == route_slot_count
+        route_counts_by_row[row] = selected.size
+        route_slot_count += selected.size
+      end
+      raise ArgumentError.new("down reduce route slots must be positive") unless route_slot_count > 0
+
+      route_weights = Array(Float32).new(route_slot_count, 0.0_f32)
+      selected_by_row.each_with_index do |selected, row|
+        selected.each_with_index do |route, route_index|
+          raise ArgumentError.new("down reduce route expert out of range") if route.expert < 0 || route.expert >= hp.expert_count
+          slot = route_offsets_by_row[row] + route_index
+          route_weights[slot] = route.weight * lw.ffn_down_exps_scale[route.expert]
+        end
+      end
+
+      scatter_maps_by_expert = {} of Int32 => Array(Int32)
+      hidden_rows_by_expert.keys.sort.each do |expert|
+        batch = batch_by_expert[expert]
+        hidden_rows = hidden_rows_by_expert[expert]
+        assignments = assignments_by_expert[expert]
+        raise ArgumentError.new("down reduce expert id out of range") if expert < 0 || expert >= hp.expert_count
+        raise ArgumentError.new("down reduce expert row_count must be positive") unless batch > 0
+        raise ArgumentError.new("down reduce expert hidden rows size mismatch") unless hidden_rows.size == batch * hp.expert_ff
+        raise ArgumentError.new("down reduce expert batch assignment mismatch") unless batch == assignments.size
+        return nil if batch > Qwen35Metal::GEMM_BATCH_THRESHOLD
+
+        scatter_maps_by_expert[expert] = Array(Int32).new(batch) do |i|
+          row = assignments[i][0]
+          route_index = assignments[i][1]
+          raise ArgumentError.new("down reduce scatter row out of range") if row < 0 || row >= row_count
+          raise ArgumentError.new("down reduce route index out of range") if route_index < 0 || route_index >= selected_by_row[row].size
+          route_offsets_by_row[row] + route_index
+        end
+      end
+
+      owned_buffers = [] of ML::MetalBuffer
+      route_rows_buf = ML::MetalBuffer.new(route_slot_count.to_i64 * hp.n_embd * sizeof(Float32))
+      route_offsets_buf = metal_int32_buffer(route_offsets_by_row)
+      route_counts_buf = metal_int32_buffer(route_counts_by_row)
+      route_weights_buf = ML::MetalBuffer.from_array(route_weights)
+      reduced_buf = ML::MetalBuffer.new(row_count.to_i64 * hp.n_embd * sizeof(Float32))
+      owned_buffers.concat([route_rows_buf, route_offsets_buf, route_counts_buf, route_weights_buf, reduced_buf])
+
+      cmd = ML::Metal::CommandBuffer.new
+      enc = ML::Metal::ComputeEncoder.new(cmd)
+      hidden_rows_by_expert.keys.sort.each do |expert|
+        batch = batch_by_expert[expert]
+        hidden_rows = hidden_rows_by_expert[expert]
+        scatter_map = scatter_maps_by_expert[expert]
+        hidden_buf = ML::MetalBuffer.from_array(hidden_rows)
+        scatter_map_buf = metal_int32_buffer(scatter_map)
+        down_buf = ML::MetalBuffer.new(batch.to_i64 * hp.n_embd * sizeof(Float32))
+        owned_buffers.concat([hidden_buf, scatter_map_buf, down_buf])
+
+        unless Qwen35Metal.encode_matmul_to_buffer(enc, expert_down_qw(lw, hp, expert), hidden_buf, down_buf, batch)
+          enc.end_encoding
+          return nil
+        end
+        unless Gemma4Metal.encode_scatter_rows_by_map_to_buffer(enc, down_buf, scatter_map_buf, route_rows_buf, batch, route_slot_count, hp.n_embd, partition: expert)
+          enc.end_encoding
+          return nil
+        end
+      end
+      unless Gemma4Metal.encode_weighted_route_reduce_rows_to_buffer(enc, route_rows_buf, route_offsets_buf, route_counts_buf, route_weights_buf, reduced_buf, row_count, route_slot_count, hp.n_embd)
+        enc.end_encoding
+        return nil
+      end
+
+      enc.end_encoding
+      cmd.commit
+      cmd.wait
+      reduced_buf.read(row_count * hp.n_embd)
+    end
+
     private def moe_ffn_pre_norm_rows(weights : DiffusionGemmaWeights,
                                       il : Int32,
                                       attn_out_rows : Array(Float32),
@@ -2380,7 +2476,8 @@ module ML::GGUF
           scatter_combine_norm_ms += (Time.instant - scatter_t0).total_milliseconds
         end
       else
-        use_resident_down_command = moe_grouped_resident_down_command_enabled?(row_count)
+        use_post_activation_reduce_command = moe_grouped_resident_post_activation_reduce_command_enabled?(row_count)
+        use_resident_down_command = !use_post_activation_reduce_command && moe_grouped_resident_down_command_enabled?(row_count)
         deferred_hidden_rows_by_expert = {} of Int32 => Array(Float32)
         assignments_by_expert.each do |expert, assignments|
           batch = batch_by_expert[expert]
@@ -2422,7 +2519,7 @@ module ML::GGUF
           end
           activation_ms += (Time.instant - activation_t0).total_milliseconds
 
-          if use_resident_down_command
+          if use_post_activation_reduce_command || use_resident_down_command
             deferred_hidden_rows_by_expert[expert] = hidden_rows
             next
           end
@@ -2445,6 +2542,29 @@ module ML::GGUF
         end
 
         unless deferred_hidden_rows_by_expert.empty?
+          if use_post_activation_reduce_command
+            down_t0 = Time.instant
+            reduced_rows = moe_expert_down_reduce_rows_from_hidden_resident_command(
+              weights,
+              il,
+              deferred_hidden_rows_by_expert,
+              selected_by_row,
+              route_offsets_by_row,
+              assignments_by_expert,
+              batch_by_expert,
+              row_count,
+            )
+            down_ms += (Time.instant - down_t0).total_milliseconds if reduced_rows
+            if reduced_rows
+              norm_t0 = Time.instant
+              row_count.times do |row|
+                fast_rms_norm_slice!(reduced_rows, row * hp.n_embd, hp.n_embd, lw.post_ffw_norm_2, hp.rms_eps)
+              end
+              scatter_combine_norm_ms += (Time.instant - norm_t0).total_milliseconds
+              return GroupedMoeRowsTiming.new(reduced_rows, prep_ms, gate_up_ms, activation_ms, down_ms, scatter_combine_norm_ms)
+            end
+          end
+
           down_t0 = Time.instant
           down_rows_by_expert = moe_expert_down_rows_by_expert_resident_command(weights, il, deferred_hidden_rows_by_expert, batch_by_expert)
           down_ms += (Time.instant - down_t0).total_milliseconds if down_rows_by_expert
@@ -3570,6 +3690,24 @@ module ML::GGUF
 
     def moe_grouped_resident_down_command_max_canvas : Int32
       env_i32("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_DOWN_COMMAND_MAX_CANVAS", 8)
+    end
+
+    def moe_grouped_resident_post_activation_reduce_command_enabled?(canvas_len : Int32) : Bool
+      return false unless ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_POST_ACT_REDUCE_COMMAND"]? == "1"
+      return false if ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_POST_ACT_REDUCE_COMMAND_OFF"]? == "1"
+      return false if moe_grouped_resident_graph_enabled?
+      return false if canvas_len < moe_grouped_resident_post_activation_reduce_command_min_canvas
+      max_canvas = moe_grouped_resident_post_activation_reduce_command_max_canvas
+      return false if max_canvas > 0 && canvas_len > max_canvas
+      Qwen35Metal.available?
+    end
+
+    def moe_grouped_resident_post_activation_reduce_command_min_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_POST_ACT_REDUCE_COMMAND_MIN_CANVAS", 8)
+    end
+
+    def moe_grouped_resident_post_activation_reduce_command_max_canvas : Int32
+      env_i32("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_POST_ACT_REDUCE_COMMAND_MAX_CANVAS", 8)
     end
 
     def moe_grouped_gpu_prenorm_enabled?(canvas_len : Int32) : Bool
