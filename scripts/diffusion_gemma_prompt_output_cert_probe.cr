@@ -1,0 +1,357 @@
+require "option_parser"
+require "../src/ml/gguf/diffusion_gemma_cpu"
+require "../src/ml/gguf/reader"
+
+DEFAULT_MODEL       = "#{ENV["HOME"]}/.cache/lm-studio/models/unsloth/diffusiongemma-26B-A4B-it-GGUF/diffusiongemma-26B-A4B-it-Q4_K_M.gguf"
+DEFAULT_BASE_ENV    = "DIFFUSION_GEMMA_C8_RESIDENT_DECODE_POLICY=1 DIFFUSION_GEMMA_PROMPT_CACHE_POLICY=1"
+DEFAULT_VARIANT_ENV = "#{DEFAULT_BASE_ENV} DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH=1 DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER=1 DIFFUSION_GEMMA_MOE_GROUPED_GPU_REDUCE=1 DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM=1 DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH=1 DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_CACHE=1"
+
+struct ArmEnv
+  getter raw : String
+  getter pairs : Array(Tuple(String, String))
+
+  def initialize(@raw)
+    @pairs = parse_pairs(raw)
+  end
+
+  private def parse_pairs(raw : String) : Array(Tuple(String, String))
+    pairs = [] of Tuple(String, String)
+    raw.split(/\s+/).reject(&.empty?).each do |token|
+      key, value = token.split("=", 2)
+      raise "env token must be KEY=VALUE, got #{token.inspect}" unless value
+      raise "env key must not be empty" if key.empty?
+      pairs << {key, value}
+    end
+    pairs
+  end
+end
+
+struct ArmResult
+  getter cache : ML::GGUF::DiffusionGemmaCPU::PromptLayerCache
+  getter timing : ML::GGUF::DiffusionGemmaCPU::BoundedDenoisePredictionTiming
+  getter cache_ms : Float64
+  getter predict_ms : Float64
+
+  def initialize(@cache, @timing, @cache_ms, @predict_ms)
+  end
+end
+
+model = ENV["DIFFUSION_GEMMA_MODEL"]? || DEFAULT_MODEL
+prompt_len = 16
+canvas_len = 8
+prompt_token = 1
+canvas_token = 0
+candidate_count = 64
+max_layers = 30
+seed = 7
+temp_inv = 1.0_f32
+base_env = ArmEnv.new(DEFAULT_BASE_ENV)
+variant_env = ArmEnv.new(DEFAULT_VARIANT_ENV)
+require_argmax_match = false
+
+OptionParser.parse do |p|
+  p.banner = "Usage: diffusion_gemma_prompt_output_cert_probe [options]"
+  p.on("--model PATH", "DiffusionGemma GGUF path") { |v| model = v }
+  p.on("--prompt-len N", "Synthetic prompt length (default: 16)") { |v| prompt_len = v.to_i }
+  p.on("--canvas-len N", "Synthetic canvas length (default: 8)") { |v| canvas_len = v.to_i }
+  p.on("--prompt-token ID", "Synthetic prompt start token id (default: 1)") { |v| prompt_token = v.to_i }
+  p.on("--canvas-token ID", "Synthetic canvas start token id (default: 0)") { |v| canvas_token = v.to_i }
+  p.on("--candidate-count N", "Candidate ids per canvas row, generated from the row token (default: 64)") { |v| candidate_count = v.to_i }
+  p.on("--max-layers N", "Prompt-cache/decode layer count (default: 30)") { |v| max_layers = v.to_i }
+  p.on("--seed N", "Deterministic sample-u seed for sampled-token comparison (default: 7)") { |v| seed = v.to_i }
+  p.on("--temp-inv F", "Inverse sampling temperature for bounded logits (default: 1.0)") { |v| temp_inv = v.to_f32 }
+  p.on("--base-env ENV", "Whitespace-separated KEY=VALUE env for base arm") { |v| base_env = ArmEnv.new(v) }
+  p.on("--variant-env ENV", "Whitespace-separated KEY=VALUE env for variant arm") { |v| variant_env = ArmEnv.new(v) }
+  p.on("--require-argmax-match", "Exit 4 when any canvas row changes bounded argmax") { require_argmax_match = true }
+  p.on("-h", "--help", "Show help") do
+    puts p
+    exit
+  end
+end
+
+def apply_env(arm_env : ArmEnv) : Hash(String, String?)
+  old = Hash(String, String?).new
+  arm_env.pairs.each do |key, value|
+    old[key] = ENV[key]?
+    ENV[key] = value
+  end
+  old
+end
+
+def restore_env(old : Hash(String, String?)) : Nil
+  old.each do |key, value|
+    if value
+      ENV[key] = value.not_nil!
+    else
+      ENV.delete(key)
+    end
+  end
+end
+
+def generated_token_sequence(default_token : Int32, count : Int32, vocab_size : Int32, label : String) : Array(Int32)
+  raise "#{label} must be positive" unless count > 0
+  raise "#{label} exceeds vocab size" if count > vocab_size
+  Array(Int32).new(count) { |i| (default_token + i) % vocab_size }
+end
+
+def prompt_rows_from_tokens(weights : ML::GGUF::DiffusionGemmaWeights, tokens : Array(Int32)) : Array(Float32)
+  rows = [] of Float32
+  tokens.each do |token_id|
+    rows.concat(ML::GGUF::DiffusionGemmaCPU.scaled_embedding_lookup(weights, token_id))
+  end
+  rows
+end
+
+def checksum_rows(rows : Array(Float32)) : Float64
+  stride = Math.max(1, rows.size // 257)
+  sum = 0.0
+  index = 0
+  while index < rows.size
+    sum += rows[index].to_f64
+    index += stride
+  end
+  sum
+end
+
+def diff_stats(a : Array(Float32), b : Array(Float32)) : NamedTuple(max_abs: Float64, mean_abs: Float64, checksum_a: Float64, checksum_b: Float64, checksum_delta: Float64)
+  raise "row size mismatch #{a.size} != #{b.size}" unless a.size == b.size
+  max_abs = 0.0
+  sum_abs = 0.0
+  checksum_a = 0.0
+  checksum_b = 0.0
+  a.size.times do |i|
+    av = a[i].to_f64
+    bv = b[i].to_f64
+    abs = (av - bv).abs
+    max_abs = abs if abs > max_abs
+    sum_abs += abs
+    checksum_a += av
+    checksum_b += bv
+  end
+  {
+    max_abs:        max_abs,
+    mean_abs:       a.empty? ? 0.0 : sum_abs / a.size,
+    checksum_a:     checksum_a,
+    checksum_b:     checksum_b,
+    checksum_delta: (checksum_a - checksum_b).abs,
+  }
+end
+
+def rank_order(prediction : ML::GGUF::DiffusionGemmaCPU::BoundedDenoisePrediction) : Array(Int32)
+  order = (0...prediction.candidate_token_ids.size).to_a
+  order.sort! do |a, b|
+    cmp = prediction.logits[b] <=> prediction.logits[a]
+    cmp == 0 ? prediction.candidate_token_ids[a] <=> prediction.candidate_token_ids[b] : cmp
+  end
+  order
+end
+
+def margin(values : Array(Float32), order : Array(Int32)) : Float64
+  return 0.0 if order.size < 2
+  values[order[0]].to_f64 - values[order[1]].to_f64
+end
+
+def prediction_delta(a : ML::GGUF::DiffusionGemmaCPU::BoundedDenoisePrediction,
+                     b : ML::GGUF::DiffusionGemmaCPU::BoundedDenoisePrediction) : NamedTuple(max_logit_abs: Float64, max_prob_abs: Float64)
+  raise "candidate row size mismatch" unless a.candidate_token_ids == b.candidate_token_ids
+  max_logit = 0.0
+  max_prob = 0.0
+  a.candidate_token_ids.size.times do |i|
+    logit_abs = (a.logits[i].to_f64 - b.logits[i].to_f64).abs
+    prob_abs = (a.probabilities[i].to_f64 - b.probabilities[i].to_f64).abs
+    max_logit = logit_abs if logit_abs > max_logit
+    max_prob = prob_abs if prob_abs > max_prob
+  end
+  {max_logit_abs: max_logit, max_prob_abs: max_prob}
+end
+
+def run_arm(weights : ML::GGUF::DiffusionGemmaWeights,
+            prompt_rows : Array(Float32),
+            canvas_rows : Array(Float32),
+            mask : ML::GGUF::DiffusionGemmaAttentionMask,
+            candidate_rows : Array(Array(Int32)),
+            sample_us : Array(Float32),
+            max_layers : Int32,
+            temp_inv : Float32,
+            env : ArmEnv) : ArmResult
+  old = apply_env(env)
+  begin
+    cache_t0 = Time.instant
+    cache = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(
+      weights,
+      prompt_rows,
+      mask,
+      max_layers: max_layers,
+      materialize_final_rows: true,
+    )
+    cache_ms = (Time.instant - cache_t0).total_milliseconds
+
+    predict_t0 = Time.instant
+    timing = ML::GGUF::DiffusionGemmaCPU.decode_canvas_bounded_predictions_timed(
+      weights: weights,
+      canvas_rows: canvas_rows,
+      mask: mask,
+      prompt_cache: cache,
+      candidate_token_ids_by_canvas_row: candidate_rows,
+      max_layers: max_layers,
+      temp_inv: temp_inv,
+      sample_us: sample_us,
+    )
+    predict_ms = (Time.instant - predict_t0).total_milliseconds
+    ArmResult.new(cache, timing, cache_ms, predict_ms)
+  ensure
+    restore_env(old)
+  end
+end
+
+def format_f64(value : Float64) : String
+  "%.9f" % value
+end
+
+raise "model not found: #{model}" unless File.exists?(model)
+raise "--prompt-len must be positive" unless prompt_len > 0
+raise "--canvas-len must be positive" unless canvas_len > 0
+raise "--candidate-count must be positive" unless candidate_count > 0
+raise "--max-layers must be positive" unless max_layers > 0
+raise "--temp-inv must be finite and positive" unless temp_inv.finite? && temp_inv > 0.0_f32
+
+load_t0 = Time.instant
+weights = ML::GGUF::DiffusionGemmaWeights.from_gguf(model)
+load_ms = (Time.instant - load_t0).total_milliseconds
+hp = weights.hparams
+raise "--max-layers exceeds model layer count" if max_layers > hp.n_layer
+raise "prompt+canvas exceeds context_length" if prompt_len + canvas_len > hp.context_length
+
+prompt_tokens = generated_token_sequence(prompt_token, prompt_len, hp.vocab_size, "--prompt-len")
+canvas_tokens = generated_token_sequence(canvas_token, canvas_len, hp.vocab_size, "--canvas-len")
+prompt_rows = prompt_rows_from_tokens(weights, prompt_tokens)
+canvas_rows = ML::GGUF::DiffusionGemmaCPU.canvas_rows_from_tokens(weights, canvas_tokens)
+candidate_rows = ML::GGUF::DiffusionGemmaCPU.generated_candidate_rows(canvas_tokens, candidate_count, hp.vocab_size)
+sample_us = ML::GGUF::DiffusionGemmaCPU.sample_u_rows(seed, canvas_len)
+mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: prompt_len, canvas_len: canvas_len, sliding_window: hp.sliding_window)
+
+base = run_arm(weights, prompt_rows, canvas_rows, mask, candidate_rows, sample_us, max_layers, temp_inv, base_env)
+variant = run_arm(weights, prompt_rows, canvas_rows, mask, candidate_rows, sample_us, max_layers, temp_inv, variant_env)
+hidden = diff_stats(base.cache.final_rows, variant.cache.final_rows)
+
+puts "# load_ms=#{format_f64(load_ms)}"
+puts "# base_env=#{base_env.raw.empty? ? "<empty>" : base_env.raw}"
+puts "# variant_env=#{variant_env.raw.empty? ? "<empty>" : variant_env.raw}"
+puts [
+  "timing_summary",
+  "prompt_len=#{prompt_len}",
+  "canvas_len=#{canvas_len}",
+  "candidate_count=#{candidate_count}",
+  "max_layers=#{max_layers}",
+  "base_cache_ms=#{format_f64(base.cache_ms)}",
+  "variant_cache_ms=#{format_f64(variant.cache_ms)}",
+  "cache_speedup=#{format_f64(base.cache_ms / variant.cache_ms)}",
+  "base_predict_ms=#{format_f64(base.predict_ms)}",
+  "variant_predict_ms=#{format_f64(variant.predict_ms)}",
+  "predict_speedup=#{format_f64(base.predict_ms / variant.predict_ms)}",
+  "base_decode_stack_ms=#{format_f64(base.timing.decode_stack_ms)}",
+  "variant_decode_stack_ms=#{format_f64(variant.timing.decode_stack_ms)}",
+  "base_output_head_ms=#{format_f64(base.timing.output_head_ms)}",
+  "variant_output_head_ms=#{format_f64(variant.timing.output_head_ms)}",
+].join('\t')
+puts [
+  "hidden_summary",
+  "max_abs=#{format_f64(hidden[:max_abs])}",
+  "mean_abs=#{format_f64(hidden[:mean_abs])}",
+  "checksum_base=#{format_f64(hidden[:checksum_a])}",
+  "checksum_variant=#{format_f64(hidden[:checksum_b])}",
+  "checksum_delta=#{format_f64(hidden[:checksum_delta])}",
+  "sampled_checksum_base=#{format_f64(checksum_rows(base.cache.final_rows))}",
+  "sampled_checksum_variant=#{format_f64(checksum_rows(variant.cache.final_rows))}",
+].join('\t')
+
+puts [
+  "kind",
+  "row",
+  "candidate_count",
+  "base_argmax",
+  "variant_argmax",
+  "argmax_match",
+  "base_sampled",
+  "variant_sampled",
+  "sampled_match",
+  "base_logit_margin",
+  "variant_logit_margin",
+  "base_prob_margin",
+  "variant_prob_margin",
+  "max_logit_abs_delta",
+  "max_prob_abs_delta",
+].join('\t')
+
+argmax_matches = 0
+sampled_matches = 0
+max_logit_abs_delta = 0.0
+max_prob_abs_delta = 0.0
+min_base_logit_margin = Float64::INFINITY
+min_variant_logit_margin = Float64::INFINITY
+min_base_prob_margin = Float64::INFINITY
+min_variant_prob_margin = Float64::INFINITY
+
+base.timing.predictions.each_with_index do |base_prediction, row|
+  variant_prediction = variant.timing.predictions[row]
+  base_order = rank_order(base_prediction)
+  variant_order = rank_order(variant_prediction)
+  deltas = prediction_delta(base_prediction, variant_prediction)
+  max_logit_abs_delta = deltas[:max_logit_abs] if deltas[:max_logit_abs] > max_logit_abs_delta
+  max_prob_abs_delta = deltas[:max_prob_abs] if deltas[:max_prob_abs] > max_prob_abs_delta
+
+  base_logit_margin = margin(base_prediction.logits, base_order)
+  variant_logit_margin = margin(variant_prediction.logits, variant_order)
+  base_prob_margin = margin(base_prediction.probabilities, base_order)
+  variant_prob_margin = margin(variant_prediction.probabilities, variant_order)
+  min_base_logit_margin = base_logit_margin if base_logit_margin < min_base_logit_margin
+  min_variant_logit_margin = variant_logit_margin if variant_logit_margin < min_variant_logit_margin
+  min_base_prob_margin = base_prob_margin if base_prob_margin < min_base_prob_margin
+  min_variant_prob_margin = variant_prob_margin if variant_prob_margin < min_variant_prob_margin
+
+  argmax_match = base_prediction.argmax_token_id == variant_prediction.argmax_token_id
+  sampled_match = base_prediction.sampled_token_id == variant_prediction.sampled_token_id
+  argmax_matches += 1 if argmax_match
+  sampled_matches += 1 if sampled_match
+
+  puts [
+    "row",
+    row.to_s,
+    base_prediction.candidate_token_ids.size.to_s,
+    base_prediction.argmax_token_id.to_s,
+    variant_prediction.argmax_token_id.to_s,
+    argmax_match.to_s,
+    base_prediction.sampled_token_id.to_s,
+    variant_prediction.sampled_token_id.to_s,
+    sampled_match.to_s,
+    format_f64(base_logit_margin),
+    format_f64(variant_logit_margin),
+    format_f64(base_prob_margin),
+    format_f64(variant_prob_margin),
+    format_f64(deltas[:max_logit_abs]),
+    format_f64(deltas[:max_prob_abs]),
+  ].join('\t')
+end
+
+all_argmax_match = argmax_matches == canvas_len
+all_sampled_match = sampled_matches == canvas_len
+puts [
+  "cert_summary",
+  "argmax_matches=#{argmax_matches}/#{canvas_len}",
+  "sampled_matches=#{sampled_matches}/#{canvas_len}",
+  "all_argmax_match=#{all_argmax_match}",
+  "all_sampled_match=#{all_sampled_match}",
+  "min_base_logit_margin=#{format_f64(min_base_logit_margin)}",
+  "min_variant_logit_margin=#{format_f64(min_variant_logit_margin)}",
+  "min_base_prob_margin=#{format_f64(min_base_prob_margin)}",
+  "min_variant_prob_margin=#{format_f64(min_variant_prob_margin)}",
+  "max_logit_abs_delta=#{format_f64(max_logit_abs_delta)}",
+  "max_prob_abs_delta=#{format_f64(max_prob_abs_delta)}",
+].join('\t')
+
+if require_argmax_match && !all_argmax_match
+  STDERR.puts "output_cert status=fail argmax_matches=#{argmax_matches}/#{canvas_len}"
+  exit 4
+end
+
+STDERR.puts "output_cert status=#{all_argmax_match ? "argmax_match" : "argmax_mismatch"} argmax_matches=#{argmax_matches}/#{canvas_len}"
