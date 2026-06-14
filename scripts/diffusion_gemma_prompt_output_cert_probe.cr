@@ -81,6 +81,8 @@ base_env = ArmEnv.new(DEFAULT_BASE_ENV)
 variant_env = ArmEnv.new(DEFAULT_VARIANT_ENV)
 base_route_artifact_path = nil.as(String?)
 variant_route_artifact_path = nil.as(String?)
+base_route_artifact_map_arg = nil.as(String?)
+variant_route_artifact_map_arg = nil.as(String?)
 require_argmax_match = false
 require_sampled_match = false
 min_base_logit_margin = nil.as(Float64?)
@@ -111,6 +113,8 @@ OptionParser.parse do |p|
   p.on("--variant-env ENV", "Whitespace-separated KEY=VALUE env for variant arm") { |v| variant_env = ArmEnv.new(v) }
   p.on("--base-route-artifact PATH", "Load base prompt MoE routes from an existing artifact") { |v| base_route_artifact_path = v }
   p.on("--variant-route-artifact PATH", "Load variant prompt MoE routes from an existing artifact") { |v| variant_route_artifact_path = v }
+  p.on("--base-route-artifact-map SPEC", "Load base routes per token window, e.g. 1:0=/tmp/a,17:100=/tmp/b") { |v| base_route_artifact_map_arg = v }
+  p.on("--variant-route-artifact-map SPEC", "Load variant routes per token window, e.g. 1:0=/tmp/a,17:100=/tmp/b") { |v| variant_route_artifact_map_arg = v }
   p.on("--require-argmax-match", "Exit 4 when any canvas row changes bounded argmax") { require_argmax_match = true }
   p.on("--require-sampled-match", "Exit 4 when any canvas row changes deterministic sampled token") { require_sampled_match = true }
   p.on("--min-base-logit-margin F", "Exit 4 when the minimum base top1/top2 logit margin is below F") { |v| min_base_logit_margin = v.to_f64 }
@@ -156,6 +160,32 @@ def parse_token_windows(raw : String) : Array(Tuple(Int32, Int32))
   end
   raise "--token-windows must contain at least one entry" if windows.empty?
   windows
+end
+
+def parse_route_artifact_map(raw : String, label : String) : Hash(Tuple(Int32, Int32), String)
+  map = {} of Tuple(Int32, Int32) => String
+  raw.split(/[,\s]+/).reject(&.empty?).each do |entry|
+    window_raw, path = entry.split("=", 2)
+    raise "#{label} entries must be prompt:canvas=PATH, got #{entry.inspect}" unless path && !path.empty?
+    prompt_raw, canvas_raw = window_raw.split(":", 2)
+    raise "#{label} entries must be prompt:canvas=PATH, got #{entry.inspect}" unless canvas_raw
+    window = {prompt_raw.to_i, canvas_raw.to_i}
+    raise "#{label} duplicate window #{window_raw}" if map.has_key?(window)
+    map[window] = path
+  end
+  raise "#{label} must contain at least one entry" if map.empty?
+  map
+end
+
+def validate_route_artifact_map!(map : Hash(Tuple(Int32, Int32), String),
+                                 windows : Array(Tuple(Int32, Int32)),
+                                 label : String) : Nil
+  map.each_key do |window|
+    raise "#{label} contains window #{window[0]}:#{window[1]} not present in --token-windows" unless windows.includes?(window)
+  end
+  windows.each do |window|
+    raise "#{label} missing window #{window[0]}:#{window[1]}" unless map.has_key?(window)
+  end
 end
 
 def parse_int_list(raw : String, label : String) : Array(Int32)
@@ -562,10 +592,22 @@ windows.each do |window|
   raise "prompt token start out of range" if p_start < 0 || p_start >= hp.vocab_size
   raise "canvas token start out of range" if c_start < 0 || c_start >= hp.vocab_size
 end
-route_artifact_requested = !base_route_artifact_path.nil? || !variant_route_artifact_path.nil?
-if route_artifact_requested && windows.size != 1
-  raise "route artifact certification currently supports exactly one token window"
+base_route_artifact_map = base_route_artifact_map_arg.try { |raw| parse_route_artifact_map(raw, "--base-route-artifact-map") } || {} of Tuple(Int32, Int32) => String
+variant_route_artifact_map = variant_route_artifact_map_arg.try { |raw| parse_route_artifact_map(raw, "--variant-route-artifact-map") } || {} of Tuple(Int32, Int32) => String
+if base_route_artifact_path && !base_route_artifact_map.empty?
+  raise "--base-route-artifact is incompatible with --base-route-artifact-map"
 end
+if variant_route_artifact_path && !variant_route_artifact_map.empty?
+  raise "--variant-route-artifact is incompatible with --variant-route-artifact-map"
+end
+if base_route_artifact_path && windows.size != 1
+  raise "--base-route-artifact requires exactly one token window; use --base-route-artifact-map for multi-window certification"
+end
+if variant_route_artifact_path && windows.size != 1
+  raise "--variant-route-artifact requires exactly one token window; use --variant-route-artifact-map for multi-window certification"
+end
+validate_route_artifact_map!(base_route_artifact_map, windows, "--base-route-artifact-map") unless base_route_artifact_map.empty?
+validate_route_artifact_map!(variant_route_artifact_map, windows, "--variant-route-artifact-map") unless variant_route_artifact_map.empty?
 base_env_sha256 = arm_env_fingerprint(base_env)
 variant_env_sha256 = arm_env_fingerprint(variant_env)
 model_sha256 = model_fingerprint(model)
@@ -574,8 +616,8 @@ puts "# load_ms=#{format_f64(load_ms)}"
 puts "# base_env=#{base_env.raw.empty? ? "<empty>" : base_env.raw}"
 puts "# variant_env=#{variant_env.raw.empty? ? "<empty>" : variant_env.raw}"
 puts "# certificate_mode=#{certificate_mode}"
-puts "# route_artifact_base=#{base_route_artifact_path || "<none>"}"
-puts "# route_artifact_variant=#{variant_route_artifact_path || "<none>"}"
+puts "# route_artifact_base=#{base_route_artifact_path || (base_route_artifact_map.empty? ? "<none>" : "map:#{base_route_artifact_map.size}")}"
+puts "# route_artifact_variant=#{variant_route_artifact_path || (variant_route_artifact_map.empty? ? "<none>" : "map:#{variant_route_artifact_map.size}")}"
 puts [
   "kind",
   "window",
@@ -617,10 +659,12 @@ if certificate_mode != "bounded"
     canvas_rows = ML::GGUF::DiffusionGemmaCPU.canvas_rows_from_tokens(weights, canvas_tokens)
     mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: prompt_len, canvas_len: canvas_len, sliding_window: hp.sliding_window)
     prompt_tokens_sha256 = prompt_tokens_fingerprint(prompt_tokens)
-    base_routes = base_route_artifact_path.try do |path|
+    base_artifact_path = base_route_artifact_path || base_route_artifact_map[window]?
+    variant_artifact_path = variant_route_artifact_path || variant_route_artifact_map[window]?
+    base_routes = base_artifact_path.try do |path|
       load_route_artifact(path, "base", prompt_len, max_layers, prompt_tokens_sha256, base_env_sha256, model_sha256)
     end
-    variant_routes = variant_route_artifact_path.try do |path|
+    variant_routes = variant_artifact_path.try do |path|
       load_route_artifact(path, "variant", prompt_len, max_layers, prompt_tokens_sha256, variant_env_sha256, model_sha256)
     end
 
@@ -821,10 +865,12 @@ windows.each_with_index do |window, window_index|
   sample_us = ML::GGUF::DiffusionGemmaCPU.sample_u_rows(seed, canvas_len)
   mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: prompt_len, canvas_len: canvas_len, sliding_window: hp.sliding_window)
   prompt_tokens_sha256 = prompt_tokens_fingerprint(prompt_tokens)
-  base_routes = base_route_artifact_path.try do |path|
+  base_artifact_path = base_route_artifact_path || base_route_artifact_map[window]?
+  variant_artifact_path = variant_route_artifact_path || variant_route_artifact_map[window]?
+  base_routes = base_artifact_path.try do |path|
     load_route_artifact(path, "base", prompt_len, max_layers, prompt_tokens_sha256, base_env_sha256, model_sha256)
   end
-  variant_routes = variant_route_artifact_path.try do |path|
+  variant_routes = variant_artifact_path.try do |path|
     load_route_artifact(path, "variant", prompt_len, max_layers, prompt_tokens_sha256, variant_env_sha256, model_sha256)
   end
 

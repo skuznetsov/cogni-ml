@@ -29,6 +29,8 @@ cert_require_sampled="${CERT_REQUIRE_SAMPLED:-0}"
 min_base_logit_margin="${MIN_BASE_LOGIT_MARGIN:-}"
 min_variant_logit_margin="${MIN_VARIANT_LOGIT_MARGIN:-}"
 max_logit_delta="${MAX_LOGIT_DELTA:-}"
+cert_base_route_artifact_map="${CERT_BASE_ROUTE_ARTIFACT_MAP:-}"
+cert_variant_route_artifact_map="${CERT_VARIANT_ROUTE_ARTIFACT_MAP:-}"
 
 abba_warmups="${ABBA_WARMUPS:-1}"
 abba_repeats="${ABBA_REPEATS:-3}"
@@ -76,6 +78,10 @@ Important environment knobs:
   MIN_BASE_LOGIT_MARGIN=F         optional certificate margin floor
   MIN_VARIANT_LOGIT_MARGIN=F      optional certificate margin floor
   MAX_LOGIT_DELTA=F               optional candidate-logit delta ceiling
+  CERT_BASE_ROUTE_ARTIFACT_MAP=SPEC
+                                    cert-only base routes per window, e.g. 1:0=/tmp/a,17:100=/tmp/b
+  CERT_VARIANT_ROUTE_ARTIFACT_MAP=SPEC
+                                    cert-only variant routes per window, e.g. 1:0=/tmp/a,17:100=/tmp/b
   MIN_TOTAL_SPEEDUP=F             ABBA total_ms speedup floor, default 1.10
   ABBA_BASE_REPLAY_ROUTES=1       pre-capture/replay base prompt MoE routes in ABBA
   ABBA_VARIANT_REPLAY_ROUTES=1    pre-capture/replay variant prompt MoE routes in ABBA
@@ -339,10 +345,16 @@ fi
 if [[ -n "$max_logit_delta" ]]; then
   cert_args+=(--max-logit-delta "$max_logit_delta")
 fi
-if [[ -n "$abba_base_route_artifact" ]]; then
+if [[ -n "$cert_base_route_artifact_map" ]]; then
+  cert_args+=(--base-route-artifact-map "$cert_base_route_artifact_map")
+fi
+if [[ -n "$cert_variant_route_artifact_map" ]]; then
+  cert_args+=(--variant-route-artifact-map "$cert_variant_route_artifact_map")
+fi
+if [[ -n "$abba_base_route_artifact" && -z "$cert_base_route_artifact_map" ]]; then
   cert_args+=(--base-route-artifact "$abba_base_route_artifact")
 fi
-if [[ -n "$abba_variant_route_artifact" ]]; then
+if [[ -n "$abba_variant_route_artifact" && -z "$cert_variant_route_artifact_map" ]]; then
   cert_args+=(--variant-route-artifact "$abba_variant_route_artifact")
 fi
 
