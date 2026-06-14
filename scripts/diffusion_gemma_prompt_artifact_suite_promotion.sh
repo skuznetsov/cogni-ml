@@ -15,6 +15,8 @@ canvas_len="${CANVAS_LEN:-8}"
 max_layers="${MAX_LAYERS:-30}"
 artifact_arms="${SUITE_ARTIFACT_ARMS:-variant}"
 overwrite="${SUITE_ARTIFACT_OVERWRITE:-0}"
+base_extra_env="${BASE_EXTRA_ENV:-}"
+variant_extra_env="${VARIANT_EXTRA_ENV:-}"
 
 check_quiet="${CHECK_QUIET:-1}"
 gate_check_quiet="${GATE_CHECK_QUIET:-$check_quiet}"
@@ -54,6 +56,7 @@ Important environment knobs:
   LOAD_TOTAL_THRESHOLD=240              total quiet threshold fallback
   SUITE_ARTIFACT_ARMS=variant           variant, base, or base,variant
   SUITE_ARTIFACT_OVERWRITE=1            allow prepare to overwrite artifacts
+  BASE_EXTRA_ENV / VARIANT_EXTRA_ENV    append profile envs to prepare and gate arms
   SUITE_*_ROUTE_ARTIFACT_MAP=SPEC       skip prepare and use existing maps
   SUITE_MIN_TOTAL_SPEEDUP=1.10          aggregate speedup floor
   SUITE_WINDOW_MIN_TOTAL_SPEEDUP=...    per-window speedup floor
@@ -132,6 +135,8 @@ manifest="$log_dir/promotion_manifest.env"
   printf 'canvas_len=%q\n' "$canvas_len"
   printf 'max_layers=%q\n' "$max_layers"
   printf 'artifact_arms=%q\n' "$artifact_arms"
+  printf 'base_extra_env=%q\n' "$base_extra_env"
+  printf 'variant_extra_env=%q\n' "$variant_extra_env"
   printf 'check_quiet=%q\n' "$check_quiet"
   printf 'gate_check_quiet=%q\n' "$gate_check_quiet"
   printf 'quiet_ms=%q\n' "$quiet_ms"
@@ -167,6 +172,8 @@ prepare_cmd=(
   MAX_LAYERS="$max_layers"
   SUITE_ARTIFACT_ARMS="$artifact_arms"
   SUITE_ARTIFACT_OVERWRITE="$overwrite"
+  BASE_EXTRA_ENV="$base_extra_env"
+  VARIANT_EXTRA_ENV="$variant_extra_env"
   "$repo_root/scripts/diffusion_gemma_prompt_artifact_suite_prepare.sh"
 )
 
@@ -191,6 +198,8 @@ gate_cmd=(
   LOAD_THRESHOLD="$load_threshold"
   TOTAL_THRESHOLD="$total_threshold"
   QUIET_MS="$quiet_ms"
+  BASE_EXTRA_ENV="$base_extra_env"
+  VARIANT_EXTRA_ENV="$variant_extra_env"
 )
 
 if [[ -n "$base_map" ]]; then

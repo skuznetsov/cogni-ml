@@ -14,6 +14,8 @@ log_dir="${LOG_DIR:-/tmp/diffusiongemma_prompt_certified_variant_gate_$(date +%Y
 
 base_env="${BASE_ENV:-$default_base_env}"
 variant_env="${VARIANT_ENV:-$default_variant_env}"
+base_extra_env="${BASE_EXTRA_ENV:-}"
+variant_extra_env="${VARIANT_EXTRA_ENV:-}"
 prompt_len="${PROMPT_LEN:-16}"
 canvas_len="${CANVAS_LEN:-8}"
 max_layers="${MAX_LAYERS:-30}"
@@ -67,6 +69,8 @@ Runs a fail-closed promotion gate for the approximate prompt-MoE route:
 
 Important environment knobs:
   BASE_ENV / VARIANT_ENV          arm envs passed to both probes
+  BASE_EXTRA_ENV / VARIANT_EXTRA_ENV
+                                    appended to the selected arm envs; later keys override earlier keys
   PROMPT_LEN / CANVAS_LEN         synthetic shape, defaults 16 / 8
   MAX_LAYERS                      full-depth default 30
   TOKEN_WINDOWS                   prompt:canvas starts, default four windows
@@ -271,6 +275,12 @@ validate_positive_uint ABBA_REPEATS "$abba_repeats"
 validate_uint ABBA_TRIM_PER_ARM "$abba_trim_per_arm"
 validate_uint ABBA_PROMPT_TOKEN "$abba_prompt_token"
 validate_positive_uint ABBA_ROUTE_CAPTURE_AMORTIZE_USES "$abba_route_capture_amortize_uses"
+if [[ -n "$base_extra_env" ]]; then
+  base_env="$base_env $base_extra_env"
+fi
+if [[ -n "$variant_extra_env" ]]; then
+  variant_env="$variant_env $variant_extra_env"
+fi
 if [[ -n "$max_break_even_uses" ]]; then
   validate_positive_uint MAX_BREAK_EVEN_USES "$max_break_even_uses"
   if ! bool_enabled "${ABBA_BASE_REPLAY_ROUTES:-0}" &&

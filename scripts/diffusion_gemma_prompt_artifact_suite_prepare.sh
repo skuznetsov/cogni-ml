@@ -15,6 +15,8 @@ artifact_dir="${SUITE_ARTIFACT_DIR:-$log_dir/artifacts}"
 
 base_env="${BASE_ENV:-$default_base_env}"
 variant_env="${VARIANT_ENV:-$default_variant_env}"
+base_extra_env="${BASE_EXTRA_ENV:-}"
+variant_extra_env="${VARIANT_EXTRA_ENV:-}"
 prompt_len="${PROMPT_LEN:-16}"
 canvas_len="${CANVAS_LEN:-8}"
 max_layers="${MAX_LAYERS:-30}"
@@ -40,9 +42,11 @@ Important environment knobs:
   SUITE_ARTIFACT_OVERWRITE=1       overwrite existing artifacts
 
 The usual DIFFUSION_GEMMA_MODEL, PROMPT_LEN, CANVAS_LEN, MAX_LAYERS,
-BASE_ENV, VARIANT_ENV, BIN_DIR, CRYSTAL_BIN, and COGNI_ML_BRIDGE_O knobs are
-honored. The canvas token is part of the emitted map key; route capture itself
-is bound to the prompt token, prompt length, arm env, and model fingerprint.
+  BASE_ENV, VARIANT_ENV, BASE_EXTRA_ENV, VARIANT_EXTRA_ENV, BIN_DIR,
+  CRYSTAL_BIN, and COGNI_ML_BRIDGE_O knobs are honored. Extra env strings are
+  appended after the selected arm envs. The canvas token is part of the emitted
+  map key; route capture itself is bound to the prompt token, prompt length, arm
+  env, and model fingerprint.
 EOF
 }
 
@@ -114,6 +118,12 @@ build_abba() {
 validate_positive_uint PROMPT_LEN "$prompt_len"
 validate_positive_uint CANVAS_LEN "$canvas_len"
 validate_positive_uint MAX_LAYERS "$max_layers"
+if [[ -n "$base_extra_env" ]]; then
+  base_env="$base_env $base_extra_env"
+fi
+if [[ -n "$variant_extra_env" ]]; then
+  variant_env="$variant_env $variant_extra_env"
+fi
 validate_env_tokens BASE_ENV "$base_env"
 validate_env_tokens VARIANT_ENV "$variant_env"
 [[ -n "$token_windows" ]] || die "TOKEN_WINDOWS is required"
