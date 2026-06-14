@@ -256,6 +256,21 @@ The helper checks that selected runtime artifacts exist by default and exits
 `SUITE_*`, because mixed runtime selection may have exact fallback windows while
 suite gates expect complete per-window maps.
 
+If base artifacts are prepared after the mixed plan already exists, attach them
+without hand-editing JSONL:
+
+```sh
+scripts/diffusion_gemma_attach_fallback_artifacts.py \
+  LOG_DIR/route_plan.jsonl \
+  --prepare-log PREPARE_LOG_WITH_SUITE_BASE_ROUTE_ARTIFACT_MAP \
+  --out LOG_DIR/route_plan_with_base_fallback.jsonl
+```
+
+The helper only accepts `base_exact` windows in the map, checks artifact files
+by default, and clears fallback `variant_route_artifact` fields unless
+`--keep-fallback-variant-artifacts` is passed. Use the derived plan as the
+single route authority for the next mixed gate.
+
 Before launching another heavy gate, inspect the mixed plan offline:
 
 ```sh
