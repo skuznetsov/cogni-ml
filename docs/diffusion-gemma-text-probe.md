@@ -206,6 +206,18 @@ unsafe all-fast throughput and the certified mixed throughput separately:
 scripts/diffusion_gemma_pp_tg_summary.py /tmp/diffusiongemma_full30_prompt_ffn_mixed_promotion_offline_20260614042452.stdout
 ```
 
+The same helper can summarize a mixed route-plan JSONL directly. Use explicit
+shape overrides when the plan is a promoted handoff artifact and does not carry
+child logs:
+
+```sh
+scripts/diffusion_gemma_pp_tg_summary.py \
+  --prompt-len 16 \
+  --canvas-len 8 \
+  --max-layers 30 \
+  LOG_DIR/route_plan.jsonl
+```
+
 The suite fields are still probe rates, not ordinary autoregressive pp/tg.
 Use `mixed_pp_like_tok_s`, `mixed_layers_s`, and
 `mixed_prompt_layer_rows_s` for the certified fast/exact route; use the unsafe
@@ -452,7 +464,10 @@ the required guard when `FALLBACK_COMPARE_REQUIRE_FOREIGN=1`. Required compare
 mode writes `fallback_replay_promoted_route_plan.jsonl` by default. Set
 `FALLBACK_COMPARE_WRITE_PROMOTED_ROUTE_PLAN=0` to keep the guard without writing
 that handoff plan, or set `FALLBACK_COMPARE_PROMOTED_ROUTE_PLAN=PATH` to choose
-the output path.
+the output path. When summaries are enabled, the wrapper also writes
+`fallback_replay_promoted_pp_tg.tsv` from that promoted route plan with the
+current `PROMPT_LEN`, `CANVAS_LEN`, and `MAX_LAYERS` values; override the path
+with `FALLBACK_COMPARE_PROMOTED_PP_TG=PATH`.
 
 Foreign fallback replay may execute the variant profile while loading a
 base/env-bound route artifact. Mixed route-plan window rows can represent that

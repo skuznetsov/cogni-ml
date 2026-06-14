@@ -288,6 +288,9 @@ if [[ "$replay_mode" == "foreign" || "$replay_mode" == "compare" ]]; then
   fi
 fi
 
+compare_promoted_route_plan="${FALLBACK_COMPARE_PROMOTED_ROUTE_PLAN:-$log_dir/fallback_replay_promoted_route_plan.jsonl}"
+compare_promoted_pp_tg="${FALLBACK_COMPARE_PROMOTED_PP_TG:-$log_dir/fallback_replay_promoted_pp_tg.tsv}"
+
 mkdir -p "$log_dir"
 manifest="$log_dir/fallback_replay_manifest.env"
 {
@@ -316,6 +319,8 @@ manifest="$log_dir/fallback_replay_manifest.env"
   printf 'fallback_compare_min_foreign_speedup=%q\n' "$fallback_compare_min_foreign_speedup"
   printf 'fallback_compare_require_foreign=%q\n' "$fallback_compare_require_foreign"
   printf 'fallback_compare_write_promoted_route_plan=%q\n' "$fallback_compare_write_promoted_route_plan"
+  printf 'compare_promoted_route_plan=%q\n' "$compare_promoted_route_plan"
+  printf 'compare_promoted_pp_tg=%q\n' "$compare_promoted_pp_tg"
   printf 'foreign_base_map_override=%q\n' "$foreign_base_map_override"
   printf 'foreign_base_map=%q\n' "$foreign_base_map"
 } >"$manifest"
@@ -381,7 +386,6 @@ selected_summary_route_plan="${FALLBACK_SELECTED_SUMMARY_ROUTE_PLAN:-$selected_r
 foreign_summary_route_plan="${FALLBACK_FOREIGN_SUMMARY_ROUTE_PLAN:-$foreign_runtime_gate_dir/route_plan.jsonl}"
 compare_summary="$log_dir/fallback_replay_compare_summary.txt"
 compare_summary_tsv="$log_dir/fallback_replay_compare_summary.tsv"
-compare_promoted_route_plan="${FALLBACK_COMPARE_PROMOTED_ROUTE_PLAN:-$log_dir/fallback_replay_promoted_route_plan.jsonl}"
 gate_cmd=(
   env
   LOG_DIR="$selected_runtime_gate_dir"
@@ -538,7 +542,28 @@ write_compare_summary() {
     return 0
   fi
   if bool_enabled "$fallback_compare_write_promoted_route_plan"; then
-    printf 'fallback_replay_compare_summary text=%s tsv=%s promoted_route_plan=%s\n' "$compare_summary" "$compare_summary_tsv" "$compare_promoted_route_plan"
+    if bool_enabled "$summary_enabled"; then
+      if [[ -f "$compare_promoted_route_plan" ]]; then
+        local promoted_pp_tg_cmd=(
+          python3
+          "$repo_root/scripts/diffusion_gemma_pp_tg_summary.py"
+          --prompt-len "$prompt_len"
+          --canvas-len "$canvas_len"
+          --max-layers "$max_layers"
+          "$compare_promoted_route_plan"
+        )
+        if "${promoted_pp_tg_cmd[@]}" >"$compare_promoted_pp_tg" 2>"$compare_promoted_pp_tg.stderr"; then
+          cat "$compare_promoted_pp_tg"
+        else
+          printf 'fallback_replay_compare_summary warning=promoted_pp_tg_failed promoted_route_plan=%s stderr=%s\n' \
+            "$compare_promoted_route_plan" "$compare_promoted_pp_tg.stderr"
+        fi
+      else
+        printf 'fallback_replay_compare_summary warning=missing_promoted_route_plan promoted_route_plan=%s\n' "$compare_promoted_route_plan"
+      fi
+    fi
+    printf 'fallback_replay_compare_summary text=%s tsv=%s promoted_route_plan=%s promoted_pp_tg=%s\n' \
+      "$compare_summary" "$compare_summary_tsv" "$compare_promoted_route_plan" "$compare_promoted_pp_tg"
   else
     printf 'fallback_replay_compare_summary text=%s tsv=%s\n' "$compare_summary" "$compare_summary_tsv"
   fi
@@ -581,6 +606,14 @@ if bool_enabled "$dry_run"; then
         fi
         print_cmd compare_summary_cmd "${compare_dry_cmd[@]}"
         print_cmd compare_summary_tsv_cmd "${compare_dry_tsv_cmd[@]}" --tsv
+        if bool_enabled "$fallback_compare_write_promoted_route_plan" && bool_enabled "$summary_enabled"; then
+          print_cmd compare_promoted_pp_tg_cmd \
+            python3 "$repo_root/scripts/diffusion_gemma_pp_tg_summary.py" \
+            --prompt-len "$prompt_len" \
+            --canvas-len "$canvas_len" \
+            --max-layers "$max_layers" \
+            "$compare_promoted_route_plan"
+        fi
       elif [[ "$replay_mode" == "foreign" ]]; then
         print_cmd summary_atlas_cmd python3 "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py" "$foreign_summary_route_plan"
         print_cmd summary_atlas_tsv_cmd python3 "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py" "$foreign_summary_route_plan" --tsv
