@@ -243,6 +243,18 @@ module ML::GGUF
       def selected_variant_route_artifact : String?
         variant_fast? ? @variant_route_artifact : nil
       end
+
+      def selected_runtime_route_artifact : String?
+        if variant_fast?
+          @variant_route_artifact.empty? ? nil : @variant_route_artifact
+        elsif base_exact?
+          @base_route_artifact.empty? ? nil : @base_route_artifact
+        end
+      end
+
+      def selected_runtime_route_artifact_arm : String
+        base_exact? ? "base" : "variant"
+      end
     end
 
     def initialize(@decision : String,
@@ -338,6 +350,29 @@ module ML::GGUF
       @windows.select(&.variant_fast?).map do |window|
         "#{window.prompt_token}:#{window.canvas_token}=#{window.variant_route_artifact}"
       end.join(",")
+    end
+
+    def exact_fallback_route_artifact_map : String
+      parts = [] of String
+      @windows.each do |window|
+        next unless window.base_exact?
+        artifact = window.selected_runtime_route_artifact
+        next unless artifact
+
+        parts << "#{window.prompt_token}:#{window.canvas_token}=#{artifact}"
+      end
+      parts.join(",")
+    end
+
+    def selected_runtime_route_artifact_map : String
+      parts = [] of String
+      @windows.each do |window|
+        artifact = window.selected_runtime_route_artifact
+        next unless artifact
+
+        parts << "#{window.prompt_token}:#{window.canvas_token}=#{artifact}"
+      end
+      parts.join(",")
     end
 
     def exact_fallback_windows_spec : String

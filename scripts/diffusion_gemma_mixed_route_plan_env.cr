@@ -30,17 +30,20 @@ plan = ML::GGUF::DiffusionGemmaMixedRoutePlan.from_jsonl(plan_path)
 
 if require_artifacts
   plan.windows.each do |window|
-    next unless window.variant_fast?
-    next if File.file?(window.variant_route_artifact)
+    artifact = window.selected_runtime_route_artifact
+    next unless artifact
+    next if File.file?(artifact)
 
-    STDERR.puts "error: variant_fast artifact missing for #{window.prompt_token}:#{window.canvas_token}: #{window.variant_route_artifact}"
+    STDERR.puts "error: selected route artifact missing for #{window.prompt_token}:#{window.canvas_token}: #{artifact}"
     exit 4
   end
 end
 
 fast_windows = plan.windows.select(&.variant_fast?).map { |window| "#{window.prompt_token}:#{window.canvas_token}" }.join(",")
 fallback_windows = plan.exact_fallback_windows_spec
-artifact_map = plan.variant_route_artifact_map
+fast_artifact_map = plan.variant_route_artifact_map
+fallback_artifact_map = plan.exact_fallback_route_artifact_map
+selected_artifact_map = plan.selected_runtime_route_artifact_map
 
 def shell_quote(value : String) : String
   return "''" if value.empty?
@@ -57,9 +60,11 @@ when "env"
   puts "DIFFUSION_GEMMA_MIXED_FALLBACK_WINDOWS=#{plan.fallback_windows}"
   puts "DIFFUSION_GEMMA_MIXED_FAST_WINDOWS=#{shell_quote(fast_windows)}"
   puts "DIFFUSION_GEMMA_MIXED_EXACT_FALLBACK_WINDOWS=#{shell_quote(fallback_windows)}"
-  puts "DIFFUSION_GEMMA_MIXED_FAST_ROUTE_ARTIFACT_MAP=#{shell_quote(artifact_map)}"
+  puts "DIFFUSION_GEMMA_MIXED_FAST_ROUTE_ARTIFACT_MAP=#{shell_quote(fast_artifact_map)}"
+  puts "DIFFUSION_GEMMA_MIXED_EXACT_FALLBACK_ROUTE_ARTIFACT_MAP=#{shell_quote(fallback_artifact_map)}"
+  puts "DIFFUSION_GEMMA_MIXED_SELECTED_ROUTE_ARTIFACT_MAP=#{shell_quote(selected_artifact_map)}"
 when "tsv"
-  puts "kind\tprompt_token\tcanvas_token\tselected_route\treason\tmixed_speedup\tvariant_route_artifact\tchild_log"
+  puts "kind\tprompt_token\tcanvas_token\tselected_route\treason\tmixed_speedup\tbase_route_artifact\tvariant_route_artifact\tselected_route_artifact\tselected_route_artifact_arm\tchild_log"
   plan.windows.each do |window|
     puts [
       "window",
@@ -68,7 +73,10 @@ when "tsv"
       window.selected_route,
       window.reason,
       window.mixed_speedup,
+      window.base_route_artifact,
       window.variant_route_artifact,
+      window.selected_runtime_route_artifact || "",
+      window.selected_runtime_route_artifact_arm,
       window.child_log,
     ].join('\t')
   end

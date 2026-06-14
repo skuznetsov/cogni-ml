@@ -441,6 +441,7 @@ describe ML::GGUF::DiffusionGemmaMixedRoutePlan do
         "observed_speedup"       => 10.0,
         "mixed_speedup"          => 1.0,
         "child_log"              => "/tmp/window_2/gate.stdout",
+        "base_route_artifact"    => "/tmp/base_p4096_c8192.tsv",
         "variant_route_artifact" => "/tmp/unsafe_variant_p4096_c8192.tsv",
       }.to_json,
     ])
@@ -450,16 +451,22 @@ describe ML::GGUF::DiffusionGemmaMixedRoutePlan do
     plan.candidate_windows.should eq(2)
     plan.fallback_windows.should eq(1)
     plan.variant_route_artifact_map.should eq("1:0=/tmp/variant_p1_c0.tsv,17:100=/tmp/variant_p17_c100.tsv")
+    plan.exact_fallback_route_artifact_map.should eq("4096:8192=/tmp/base_p4096_c8192.tsv")
+    plan.selected_runtime_route_artifact_map.should eq("1:0=/tmp/variant_p1_c0.tsv,17:100=/tmp/variant_p17_c100.tsv,4096:8192=/tmp/base_p4096_c8192.tsv")
     plan.exact_fallback_windows_spec.should eq("4096:8192")
     plan.window_keys.should eq([{1, 0}, {17, 100}, {4096, 8192}])
     fast = plan.require_window(1, 0)
     fast.variant_fast?.should be_true
     fast.variant_env_role.should eq("variant")
     fast.selected_variant_route_artifact.should eq("/tmp/variant_p1_c0.tsv")
+    fast.selected_runtime_route_artifact.should eq("/tmp/variant_p1_c0.tsv")
+    fast.selected_runtime_route_artifact_arm.should eq("variant")
     fallback = plan.require_window(4096, 8192)
     fallback.base_exact?.should be_true
     fallback.variant_env_role.should eq("base")
     fallback.selected_variant_route_artifact.should be_nil
+    fallback.selected_runtime_route_artifact.should eq("/tmp/base_p4096_c8192.tsv")
+    fallback.selected_runtime_route_artifact_arm.should eq("base")
     expect_raises(ArgumentError, /does not contain window 2:3/) do
       plan.require_window(2, 3)
     end

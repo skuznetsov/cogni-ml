@@ -234,7 +234,9 @@ Product/runtime code should load this with
 closed for `audit_only` or `reject` summaries by default, rejects duplicate
 windows and count mismatches, and requires each `variant_fast` window to carry
 a `variant_route_artifact`. Use `variant_route_artifact_map` for certified fast
-windows and `exact_fallback_windows_spec` for explicit exact fallback windows.
+windows, `exact_fallback_windows_spec` for explicit exact fallback windows, and
+`exact_fallback_route_artifact_map` when a route plan carries optional base
+artifacts for exact fallback replay.
 
 For shell/runtime handoff, `scripts/diffusion_gemma_mixed_route_plan_env.cr`
 loads the same JSONL and emits `DIFFUSION_GEMMA_MIXED_*` assignments:
@@ -243,11 +245,13 @@ loads the same JSONL and emits `DIFFUSION_GEMMA_MIXED_*` assignments:
 crystal scripts/diffusion_gemma_mixed_route_plan_env.cr --plan LOG_DIR/route_plan.jsonl
 ```
 
-The helper checks that selected fast-route artifacts exist by default and exits
-`4` if a selected artifact is missing. It intentionally emits
-`DIFFUSION_GEMMA_MIXED_FAST_ROUTE_ARTIFACT_MAP`, not `SUITE_*`, because mixed
-runtime selection has exact fallback windows while suite gates expect complete
-per-window maps.
+The helper checks that selected runtime artifacts exist by default and exits
+`4` if a selected artifact is missing. It emits separate
+`DIFFUSION_GEMMA_MIXED_FAST_ROUTE_ARTIFACT_MAP`,
+`DIFFUSION_GEMMA_MIXED_EXACT_FALLBACK_ROUTE_ARTIFACT_MAP`, and
+`DIFFUSION_GEMMA_MIXED_SELECTED_ROUTE_ARTIFACT_MAP` variables instead of
+`SUITE_*`, because mixed runtime selection may have exact fallback windows while
+suite gates expect complete per-window maps.
 
 Before launching another heavy gate, inspect the mixed plan offline:
 
@@ -310,7 +314,9 @@ crystal build scripts/diffusion_gemma_prompt_output_cert_probe.cr \
 ```
 
 For `variant_fast` windows, the probe runs the variant arm with the selected
-route artifact. For `base_exact` fallback windows, it runs the variant side
-through the base env and does not load the rejected/unsafe variant artifact.
+variant artifact. For `base_exact` fallback windows, it runs the variant side
+through the base env and never loads the rejected/unsafe variant artifact; if
+the route plan carries a `base_route_artifact`, that base artifact is loaded as
+the selected runtime artifact with `arm=base`.
 Explicit `--*-route-artifact*` options are rejected when `--mixed-route-plan` is
 set, so a mixed plan remains the single route authority.

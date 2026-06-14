@@ -337,6 +337,16 @@ def selected_variant_env(route_window : ML::GGUF::DiffusionGemmaMixedRoutePlan::
   route_window.variant_env_role == "base" ? base_env : variant_env
 end
 
+def selected_runtime_route_artifact(route_window : ML::GGUF::DiffusionGemmaMixedRoutePlan::Window?) : String?
+  return nil unless route_window
+
+  route_window.selected_runtime_route_artifact
+end
+
+def selected_runtime_route_artifact_arm(route_window : ML::GGUF::DiffusionGemmaMixedRoutePlan::Window?) : String
+  route_window.try(&.selected_runtime_route_artifact_arm) || "variant"
+end
+
 def format_sample_values(values : Array(Float64)) : String
   values.map { |v| "%.3f" % v }.join(",")
 end
@@ -829,7 +839,7 @@ if route_window = mixed_route_window
      capture_route_artifacts_only
     raise "--mixed-route-plan is incompatible with explicit route artifact load/write/replay/capture options"
   end
-  variant_route_artifact_path = route_window.selected_variant_route_artifact
+  variant_route_artifact_path = selected_runtime_route_artifact(route_window)
 end
 if dry_run_route_selection
   puts "# mixed_route_plan=#{mixed_route_plan_path || "<none>"}"
@@ -840,6 +850,8 @@ if dry_run_route_selection
     "selected_route=#{mixed_route_window.try(&.selected_route) || "variant"}",
     "variant_env_role=#{mixed_route_window.try(&.variant_env_role) || "variant"}",
     "variant_route_artifact=#{variant_route_artifact_path || "<none>"}",
+    "selected_route_artifact=#{variant_route_artifact_path || "<none>"}",
+    "selected_route_artifact_arm=#{selected_runtime_route_artifact_arm(mixed_route_window)}",
     "reason=#{mixed_route_window.try(&.reason) || "explicit_variant"}",
   ].join('\t')
   exit
@@ -951,7 +963,7 @@ base_replay_capture = if path = base_route_artifact_path
                         capture
                       end
 variant_replay_capture = if path = variant_route_artifact_path
-                           load_route_artifact(path, "variant", prompt_len, max_layers, prompt_tokens_sha256, variant_env_sha256, model_sha256)
+                           load_route_artifact(path, selected_runtime_route_artifact_arm(mixed_route_window), prompt_len, max_layers, prompt_tokens_sha256, variant_env_sha256, model_sha256)
                          elsif route_replay_variant
                            capture = capture_routes_for_arm(weights, prompt_rows, mask, max_layers, variant_run_env, "variant", keep_route_capture_graph_cache)
                            if path = write_variant_route_artifact_path
@@ -976,6 +988,9 @@ puts "# route_replay_base=#{route_replay_base}"
 puts "# route_replay_variant=#{route_replay_variant}"
 puts "# route_artifact_base=#{base_route_artifact_path || write_base_route_artifact_path || "<none>"}"
 puts "# route_artifact_variant=#{variant_route_artifact_path || write_variant_route_artifact_path || "<none>"}"
+puts "# route_artifact_variant_arm=#{variant_route_artifact_path ? selected_runtime_route_artifact_arm(mixed_route_window) : "variant"}"
+puts "# route_artifact_selected=#{variant_route_artifact_path || write_variant_route_artifact_path || "<none>"}"
+puts "# route_artifact_selected_arm=#{variant_route_artifact_path ? selected_runtime_route_artifact_arm(mixed_route_window) : "variant"}"
 puts "# route_capture_amortize_uses=#{route_capture_amortize_uses}"
 puts "# keep_route_capture_graph_cache=#{keep_route_capture_graph_cache}"
 puts "# route_capture_base_ms=#{format_f64(base_capture_ms)}"
