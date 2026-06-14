@@ -18,6 +18,7 @@ prompt_len="${PROMPT_LEN:-16}"
 canvas_len="${CANVAS_LEN:-8}"
 max_layers="${MAX_LAYERS:-30}"
 token_windows="${TOKEN_WINDOWS:-1:0,17:100,257:1000,4096:8192}"
+certificate_mode="${CERTIFICATE_MODE:-bounded}"
 candidate_count="${CANDIDATE_COUNT:-1024}"
 candidate_offsets="${CANDIDATE_OFFSETS:-0,1024,8192,32768,65536,131072}"
 candidate_stride="${CANDIDATE_STRIDE:-1}"
@@ -58,6 +59,7 @@ Important environment knobs:
   PROMPT_LEN / CANVAS_LEN         synthetic shape, defaults 16 / 8
   MAX_LAYERS                      full-depth default 30
   TOKEN_WINDOWS                   prompt:canvas starts, default four windows
+  CERTIFICATE_MODE                bounded, full-vocab-top1-metal, full-vocab-top1-cpu
   CANDIDATE_COUNT                 candidate ids per span, default 1024
   CANDIDATE_OFFSETS               span offsets from each canvas token, default six bands
   CANDIDATE_STRIDE                token stride inside each span, default 1
@@ -200,6 +202,10 @@ validate_uint MAX_CANDIDATE_ROW_SIZE "$max_candidate_row_size"
 validate_uint ABBA_WARMUPS "$abba_warmups"
 validate_positive_uint ABBA_REPEATS "$abba_repeats"
 validate_uint ABBA_TRIM_PER_ARM "$abba_trim_per_arm"
+case "$certificate_mode" in
+  bounded|full-vocab-top1-metal|full-vocab-top1-cpu) ;;
+  *) die "CERTIFICATE_MODE must be bounded, full-vocab-top1-metal, or full-vocab-top1-cpu" ;;
+esac
 validate_env_tokens BASE_ENV "$base_env"
 validate_env_tokens VARIANT_ENV "$variant_env"
 [[ -f "$model" ]] || die "model not found: $model"
@@ -212,6 +218,7 @@ printf 'prompt_len=%s\n' "$prompt_len"
 printf 'canvas_len=%s\n' "$canvas_len"
 printf 'max_layers=%s\n' "$max_layers"
 printf 'token_windows=%s\n' "$token_windows"
+printf 'certificate_mode=%s\n' "$certificate_mode"
 printf 'candidate_count=%s\n' "$candidate_count"
 printf 'candidate_offsets=%s\n' "$candidate_offsets"
 printf 'candidate_stride=%s\n' "$candidate_stride"
@@ -239,6 +246,7 @@ cert_args=(
   --prompt-len "$prompt_len"
   --canvas-len "$canvas_len"
   --max-layers "$max_layers"
+  --certificate-mode "$certificate_mode"
   --candidate-count "$candidate_count"
   --candidate-offsets "$candidate_offsets"
   --candidate-stride "$candidate_stride"
@@ -344,6 +352,9 @@ fi
 decision="candidate_argmax_only"
 if bool_enabled "$cert_require_sampled"; then
   decision="candidate_sampled"
+fi
+if [[ "$certificate_mode" == full-vocab-top1-* ]]; then
+  decision="candidate_full_vocab_argmax_only"
 fi
 printf 'certified_variant_gate decision=%s total_speedup=%s min_total_speedup=%s base_ms=%s variant_ms=%s cert_rc=%s abba_rc=%s log_dir=%s\n' \
   "$decision" "$total_speedup" "$min_total_speedup" "$total_base_ms" "$total_variant_ms" "$cert_rc" "$abba_rc" "$log_dir"

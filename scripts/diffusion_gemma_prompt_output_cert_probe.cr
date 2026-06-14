@@ -36,12 +36,25 @@ struct ArmResult
   end
 end
 
+struct FullVocabTop1ArmResult
+  getter cache : ML::GGUF::DiffusionGemmaCPU::PromptLayerCache
+  getter decode : ML::GGUF::DiffusionGemmaCPU::DecodeCanvasRowsTiming
+  getter top1s : Array(ML::GGUF::DiffusionGemmaCPU::OutputTop1)
+  getter cache_ms : Float64
+  getter predict_ms : Float64
+  getter output_head_ms : Float64
+
+  def initialize(@cache, @decode, @top1s, @cache_ms, @predict_ms, @output_head_ms)
+  end
+end
+
 model = ENV["DIFFUSION_GEMMA_MODEL"]? || DEFAULT_MODEL
 prompt_len = 16
 canvas_len = 8
 prompt_token = 1
 canvas_token = 0
 token_windows_arg = nil.as(String?)
+certificate_mode = "bounded"
 candidate_count = 64
 candidate_offsets_arg = "0"
 candidate_stride = 1
@@ -65,6 +78,9 @@ OptionParser.parse do |p|
   p.on("--prompt-token ID", "Synthetic prompt start token id (default: 1)") { |v| prompt_token = v.to_i }
   p.on("--canvas-token ID", "Synthetic canvas start token id (default: 0)") { |v| canvas_token = v.to_i }
   p.on("--token-windows LIST", "Comma/space separated prompt:canvas token starts, e.g. 1:0,17:100") { |v| token_windows_arg = v }
+  p.on("--certificate-mode MODE", "bounded, full-vocab-top1-metal, or full-vocab-top1-cpu (default: bounded)") { |v| certificate_mode = v }
+  p.on("--full-vocab-top1-metal", "Use Metal full-vocab top1 argmax certificate instead of bounded candidates") { certificate_mode = "full-vocab-top1-metal" }
+  p.on("--full-vocab-top1-cpu", "Use CPU full-vocab top1 argmax certificate instead of bounded candidates") { certificate_mode = "full-vocab-top1-cpu" }
   p.on("--candidate-count N", "Candidate ids per candidate span, generated from the row token plus each offset (default: 64)") { |v| candidate_count = v.to_i }
   p.on("--candidate-offsets LIST", "Comma/space separated candidate span offsets from each canvas token (default: 0)") { |v| candidate_offsets_arg = v }
   p.on("--candidate-stride N", "Token stride inside each candidate span (default: 1)") { |v| candidate_stride = v.to_i }
@@ -271,6 +287,54 @@ def run_arm(weights : ML::GGUF::DiffusionGemmaWeights,
   end
 end
 
+def run_full_vocab_top1_arm(weights : ML::GGUF::DiffusionGemmaWeights,
+                            prompt_rows : Array(Float32),
+                            canvas_rows : Array(Float32),
+                            mask : ML::GGUF::DiffusionGemmaAttentionMask,
+                            max_layers : Int32,
+                            env : ArmEnv,
+                            use_metal : Bool) : FullVocabTop1ArmResult
+  old = apply_env(env)
+  begin
+    cache_t0 = Time.instant
+    cache = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(
+      weights,
+      prompt_rows,
+      mask,
+      max_layers: max_layers,
+      materialize_final_rows: true,
+    )
+    cache_ms = (Time.instant - cache_t0).total_milliseconds
+
+    predict_t0 = Time.instant
+    decode = ML::GGUF::DiffusionGemmaCPU.decode_canvas_rows_with_prompt_cache_timed(
+      weights: weights,
+      canvas_rows: canvas_rows,
+      mask: mask,
+      prompt_cache: cache,
+      max_layers: max_layers,
+    )
+
+    hp = weights.hparams
+    output_t0 = Time.instant
+    top1s = Array(ML::GGUF::DiffusionGemmaCPU::OutputTop1).new(mask.canvas_len) do |canvas_pos|
+      hidden = decode.rows[canvas_pos * hp.n_embd, hp.n_embd]
+      if use_metal
+        top1 = ML::GGUF::DiffusionGemmaCPU.output_top1_full_vocab_metal(weights, hidden)
+        raise "Metal full-vocab top1 unavailable" unless top1
+        top1.not_nil!
+      else
+        ML::GGUF::DiffusionGemmaCPU.output_top1_full_vocab_cpu(weights, hidden)
+      end
+    end
+    output_head_ms = (Time.instant - output_t0).total_milliseconds
+    predict_ms = (Time.instant - predict_t0).total_milliseconds
+    FullVocabTop1ArmResult.new(cache, decode, top1s, cache_ms, predict_ms, output_head_ms)
+  ensure
+    restore_env(old)
+  end
+end
+
 def format_f64(value : Float64) : String
   "%.9f" % value
 end
@@ -285,11 +349,18 @@ end
 raise "model not found: #{model}" unless File.exists?(model)
 raise "--prompt-len must be positive" unless prompt_len > 0
 raise "--canvas-len must be positive" unless canvas_len > 0
+valid_certificate_modes = ["bounded", "full-vocab-top1-metal", "full-vocab-top1-cpu"]
+raise "--certificate-mode must be one of #{valid_certificate_modes.join(", ")}" unless valid_certificate_modes.includes?(certificate_mode)
 raise "--candidate-count must be positive" unless candidate_count > 0
 raise "--candidate-stride must be positive" unless candidate_stride > 0
 raise "--max-candidate-row-size must be non-negative" if max_candidate_row_size < 0
 raise "--max-layers must be positive" unless max_layers > 0
 raise "--temp-inv must be finite and positive" unless temp_inv.finite? && temp_inv > 0.0_f32
+if certificate_mode != "bounded"
+  raise "--require-sampled-match is incompatible with #{certificate_mode}" if require_sampled_match
+  raise "--min-base-logit-margin is incompatible with #{certificate_mode}" if min_base_logit_margin
+  raise "--min-variant-logit-margin is incompatible with #{certificate_mode}" if min_variant_logit_margin
+end
 if threshold = min_base_logit_margin
   raise "--min-base-logit-margin must be finite" unless threshold.finite?
 end
@@ -319,6 +390,7 @@ end
 puts "# load_ms=#{format_f64(load_ms)}"
 puts "# base_env=#{base_env.raw.empty? ? "<empty>" : base_env.raw}"
 puts "# variant_env=#{variant_env.raw.empty? ? "<empty>" : variant_env.raw}"
+puts "# certificate_mode=#{certificate_mode}"
 puts [
   "kind",
   "window",
@@ -339,6 +411,162 @@ puts [
   "max_logit_abs_delta",
   "max_prob_abs_delta",
 ].join('\t')
+
+if certificate_mode != "bounded"
+  use_metal = certificate_mode == "full-vocab-top1-metal"
+  aggregate_rows = 0
+  aggregate_argmax_matches = 0
+  aggregate_max_logit_abs_delta = 0.0
+  cache_speedups = [] of Float64
+  predict_speedups = [] of Float64
+
+  windows.each_with_index do |window, window_index|
+    prompt_start = window[0]
+    canvas_start = window[1]
+    prompt_tokens = generated_token_sequence(prompt_start, prompt_len, hp.vocab_size, "--prompt-len")
+    canvas_tokens = generated_token_sequence(canvas_start, canvas_len, hp.vocab_size, "--canvas-len")
+    prompt_rows = prompt_rows_from_tokens(weights, prompt_tokens)
+    canvas_rows = ML::GGUF::DiffusionGemmaCPU.canvas_rows_from_tokens(weights, canvas_tokens)
+    mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: prompt_len, canvas_len: canvas_len, sliding_window: hp.sliding_window)
+
+    base = run_full_vocab_top1_arm(weights, prompt_rows, canvas_rows, mask, max_layers, base_env, use_metal)
+    variant = run_full_vocab_top1_arm(weights, prompt_rows, canvas_rows, mask, max_layers, variant_env, use_metal)
+    hidden = diff_stats(base.cache.final_rows, variant.cache.final_rows)
+    cache_speedup = base.cache_ms / variant.cache_ms
+    predict_speedup = base.predict_ms / variant.predict_ms
+    cache_speedups << cache_speedup
+    predict_speedups << predict_speedup
+
+    puts [
+      "timing_summary",
+      "window=#{window_index}",
+      "prompt_token=#{prompt_start}",
+      "canvas_token=#{canvas_start}",
+      "prompt_len=#{prompt_len}",
+      "canvas_len=#{canvas_len}",
+      "certificate_mode=#{certificate_mode}",
+      "candidate_count=#{hp.vocab_size}",
+      "candidate_offsets=full_vocab",
+      "candidate_stride=1",
+      "min_candidate_row_size=#{hp.vocab_size}",
+      "max_candidate_row_size=#{hp.vocab_size}",
+      "max_layers=#{max_layers}",
+      "base_cache_ms=#{format_f64(base.cache_ms)}",
+      "variant_cache_ms=#{format_f64(variant.cache_ms)}",
+      "cache_speedup=#{format_f64(cache_speedup)}",
+      "base_predict_ms=#{format_f64(base.predict_ms)}",
+      "variant_predict_ms=#{format_f64(variant.predict_ms)}",
+      "predict_speedup=#{format_f64(predict_speedup)}",
+      "base_decode_stack_ms=#{format_f64(base.predict_ms - base.output_head_ms)}",
+      "variant_decode_stack_ms=#{format_f64(variant.predict_ms - variant.output_head_ms)}",
+      "base_output_head_ms=#{format_f64(base.output_head_ms)}",
+      "variant_output_head_ms=#{format_f64(variant.output_head_ms)}",
+    ].join('\t')
+    puts [
+      "hidden_summary",
+      "window=#{window_index}",
+      "prompt_token=#{prompt_start}",
+      "canvas_token=#{canvas_start}",
+      "max_abs=#{format_f64(hidden[:max_abs])}",
+      "mean_abs=#{format_f64(hidden[:mean_abs])}",
+      "checksum_base=#{format_f64(hidden[:checksum_a])}",
+      "checksum_variant=#{format_f64(hidden[:checksum_b])}",
+      "checksum_delta=#{format_f64(hidden[:checksum_delta])}",
+      "sampled_checksum_base=#{format_f64(checksum_rows(base.cache.final_rows))}",
+      "sampled_checksum_variant=#{format_f64(checksum_rows(variant.cache.final_rows))}",
+    ].join('\t')
+
+    argmax_matches = 0
+    max_logit_abs_delta = 0.0
+    base.top1s.each_with_index do |base_top1, row|
+      variant_top1 = variant.top1s[row]
+      argmax_match = base_top1.token_id == variant_top1.token_id
+      argmax_matches += 1 if argmax_match
+      aggregate_argmax_matches += 1 if argmax_match
+      aggregate_rows += 1
+      logit_delta = (base_top1.logit.to_f64 - variant_top1.logit.to_f64).abs
+      max_logit_abs_delta = logit_delta if logit_delta > max_logit_abs_delta
+      aggregate_max_logit_abs_delta = logit_delta if logit_delta > aggregate_max_logit_abs_delta
+
+      puts [
+        "row",
+        window_index.to_s,
+        prompt_start.to_s,
+        canvas_start.to_s,
+        row.to_s,
+        hp.vocab_size.to_s,
+        base_top1.token_id.to_s,
+        variant_top1.token_id.to_s,
+        argmax_match.to_s,
+        "n/a",
+        "n/a",
+        "n/a",
+        "n/a",
+        "n/a",
+        "n/a",
+        "n/a",
+        format_f64(logit_delta),
+        "n/a",
+      ].join('\t')
+    end
+
+    puts [
+      "cert_summary",
+      "window=#{window_index}",
+      "prompt_token=#{prompt_start}",
+      "canvas_token=#{canvas_start}",
+      "certificate_mode=#{certificate_mode}",
+      "argmax_matches=#{argmax_matches}/#{canvas_len}",
+      "sampled_matches=n/a",
+      "all_argmax_match=#{argmax_matches == canvas_len}",
+      "all_sampled_match=n/a",
+      "min_base_logit_margin=n/a",
+      "min_variant_logit_margin=n/a",
+      "min_base_prob_margin=n/a",
+      "min_variant_prob_margin=n/a",
+      "max_logit_abs_delta=#{format_f64(max_logit_abs_delta)}",
+      "max_prob_abs_delta=n/a",
+    ].join('\t')
+  end
+
+  all_argmax_match = aggregate_argmax_matches == aggregate_rows
+  puts [
+    "aggregate_summary",
+    "windows=#{windows.size}",
+    "rows=#{aggregate_rows}",
+    "argmax_matches=#{aggregate_argmax_matches}/#{aggregate_rows}",
+    "sampled_matches=n/a",
+    "candidate_offsets=full_vocab",
+    "candidate_stride=1",
+    "min_candidate_row_size=#{hp.vocab_size}",
+    "max_candidate_row_size=#{hp.vocab_size}",
+    "certificate_mode=#{certificate_mode}",
+    "all_argmax_match=#{all_argmax_match}",
+    "all_sampled_match=n/a",
+    "min_base_logit_margin=n/a",
+    "min_variant_logit_margin=n/a",
+    "min_base_prob_margin=n/a",
+    "min_variant_prob_margin=n/a",
+    "max_logit_abs_delta=#{format_f64(aggregate_max_logit_abs_delta)}",
+    "max_prob_abs_delta=n/a",
+    "median_cache_speedup=#{format_f64(median(cache_speedups))}",
+    "median_predict_speedup=#{format_f64(median(predict_speedups))}",
+  ].join('\t')
+
+  failures = [] of String
+  failures << "argmax" if require_argmax_match && !all_argmax_match
+  if threshold = max_logit_delta
+    failures << "logit_delta" if aggregate_max_logit_abs_delta > threshold
+  end
+
+  unless failures.empty?
+    STDERR.puts "output_cert status=fail certificate_mode=#{certificate_mode} failures=#{failures.join(",")} argmax_matches=#{aggregate_argmax_matches}/#{aggregate_rows} sampled_matches=n/a"
+    exit 4
+  end
+
+  STDERR.puts "output_cert status=#{all_argmax_match ? "argmax_match" : "argmax_mismatch"} certificate_mode=#{certificate_mode} argmax_matches=#{aggregate_argmax_matches}/#{aggregate_rows} sampled_matches=n/a"
+  exit
+end
 
 aggregate_rows = 0
 aggregate_argmax_matches = 0
