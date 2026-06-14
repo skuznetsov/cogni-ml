@@ -59,7 +59,7 @@ Important environment knobs:
   PROMPT_LEN / CANVAS_LEN         synthetic shape, defaults 16 / 8
   MAX_LAYERS                      full-depth default 30
   TOKEN_WINDOWS                   prompt:canvas starts, default four windows
-  CERTIFICATE_MODE                bounded, full-vocab-top1-metal, full-vocab-top1-cpu
+  CERTIFICATE_MODE                bounded, full-vocab-top1-metal/cpu, full-vocab-top2-metal/cpu
   CANDIDATE_COUNT                 candidate ids per span, default 1024
   CANDIDATE_OFFSETS               span offsets from each canvas token, default six bands
   CANDIDATE_STRIDE                token stride inside each span, default 1
@@ -203,8 +203,8 @@ validate_uint ABBA_WARMUPS "$abba_warmups"
 validate_positive_uint ABBA_REPEATS "$abba_repeats"
 validate_uint ABBA_TRIM_PER_ARM "$abba_trim_per_arm"
 case "$certificate_mode" in
-  bounded|full-vocab-top1-metal|full-vocab-top1-cpu) ;;
-  *) die "CERTIFICATE_MODE must be bounded, full-vocab-top1-metal, or full-vocab-top1-cpu" ;;
+  bounded|full-vocab-top1-metal|full-vocab-top1-cpu|full-vocab-top2-metal|full-vocab-top2-cpu) ;;
+  *) die "CERTIFICATE_MODE must be bounded, full-vocab-top1-metal/cpu, or full-vocab-top2-metal/cpu" ;;
 esac
 validate_env_tokens BASE_ENV "$base_env"
 validate_env_tokens VARIANT_ENV "$variant_env"
@@ -355,6 +355,8 @@ if bool_enabled "$cert_require_sampled"; then
 fi
 if [[ "$certificate_mode" == full-vocab-top1-* ]]; then
   decision="candidate_full_vocab_argmax_only"
+elif [[ "$certificate_mode" == full-vocab-top2-* ]]; then
+  decision="candidate_full_vocab_margin_argmax_only"
 fi
 printf 'certified_variant_gate decision=%s total_speedup=%s min_total_speedup=%s base_ms=%s variant_ms=%s cert_rc=%s abba_rc=%s log_dir=%s\n' \
   "$decision" "$total_speedup" "$min_total_speedup" "$total_base_ms" "$total_variant_ms" "$cert_rc" "$abba_rc" "$log_dir"

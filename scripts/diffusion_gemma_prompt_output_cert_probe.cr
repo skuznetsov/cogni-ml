@@ -48,6 +48,18 @@ struct FullVocabTop1ArmResult
   end
 end
 
+struct FullVocabTop2ArmResult
+  getter cache : ML::GGUF::DiffusionGemmaCPU::PromptLayerCache
+  getter decode : ML::GGUF::DiffusionGemmaCPU::DecodeCanvasRowsTiming
+  getter top2s : Array(ML::GGUF::DiffusionGemmaCPU::OutputTop2)
+  getter cache_ms : Float64
+  getter predict_ms : Float64
+  getter output_head_ms : Float64
+
+  def initialize(@cache, @decode, @top2s, @cache_ms, @predict_ms, @output_head_ms)
+  end
+end
+
 model = ENV["DIFFUSION_GEMMA_MODEL"]? || DEFAULT_MODEL
 prompt_len = 16
 canvas_len = 8
@@ -78,9 +90,11 @@ OptionParser.parse do |p|
   p.on("--prompt-token ID", "Synthetic prompt start token id (default: 1)") { |v| prompt_token = v.to_i }
   p.on("--canvas-token ID", "Synthetic canvas start token id (default: 0)") { |v| canvas_token = v.to_i }
   p.on("--token-windows LIST", "Comma/space separated prompt:canvas token starts, e.g. 1:0,17:100") { |v| token_windows_arg = v }
-  p.on("--certificate-mode MODE", "bounded, full-vocab-top1-metal, or full-vocab-top1-cpu (default: bounded)") { |v| certificate_mode = v }
+  p.on("--certificate-mode MODE", "bounded, full-vocab-top1-metal/cpu, or full-vocab-top2-metal/cpu (default: bounded)") { |v| certificate_mode = v }
   p.on("--full-vocab-top1-metal", "Use Metal full-vocab top1 argmax certificate instead of bounded candidates") { certificate_mode = "full-vocab-top1-metal" }
   p.on("--full-vocab-top1-cpu", "Use CPU full-vocab top1 argmax certificate instead of bounded candidates") { certificate_mode = "full-vocab-top1-cpu" }
+  p.on("--full-vocab-top2-metal", "Use Metal full-vocab top2 argmax+margin certificate instead of bounded candidates") { certificate_mode = "full-vocab-top2-metal" }
+  p.on("--full-vocab-top2-cpu", "Use CPU full-vocab top2 argmax+margin certificate instead of bounded candidates") { certificate_mode = "full-vocab-top2-cpu" }
   p.on("--candidate-count N", "Candidate ids per candidate span, generated from the row token plus each offset (default: 64)") { |v| candidate_count = v.to_i }
   p.on("--candidate-offsets LIST", "Comma/space separated candidate span offsets from each canvas token (default: 0)") { |v| candidate_offsets_arg = v }
   p.on("--candidate-stride N", "Token stride inside each candidate span (default: 1)") { |v| candidate_stride = v.to_i }
@@ -335,6 +349,54 @@ def run_full_vocab_top1_arm(weights : ML::GGUF::DiffusionGemmaWeights,
   end
 end
 
+def run_full_vocab_top2_arm(weights : ML::GGUF::DiffusionGemmaWeights,
+                            prompt_rows : Array(Float32),
+                            canvas_rows : Array(Float32),
+                            mask : ML::GGUF::DiffusionGemmaAttentionMask,
+                            max_layers : Int32,
+                            env : ArmEnv,
+                            use_metal : Bool) : FullVocabTop2ArmResult
+  old = apply_env(env)
+  begin
+    cache_t0 = Time.instant
+    cache = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(
+      weights,
+      prompt_rows,
+      mask,
+      max_layers: max_layers,
+      materialize_final_rows: true,
+    )
+    cache_ms = (Time.instant - cache_t0).total_milliseconds
+
+    predict_t0 = Time.instant
+    decode = ML::GGUF::DiffusionGemmaCPU.decode_canvas_rows_with_prompt_cache_timed(
+      weights: weights,
+      canvas_rows: canvas_rows,
+      mask: mask,
+      prompt_cache: cache,
+      max_layers: max_layers,
+    )
+
+    hp = weights.hparams
+    output_t0 = Time.instant
+    top2s = Array(ML::GGUF::DiffusionGemmaCPU::OutputTop2).new(mask.canvas_len) do |canvas_pos|
+      hidden = decode.rows[canvas_pos * hp.n_embd, hp.n_embd]
+      if use_metal
+        top2 = ML::GGUF::DiffusionGemmaCPU.output_top2_full_vocab_metal(weights, hidden)
+        raise "Metal full-vocab top2 unavailable" unless top2
+        top2.not_nil!
+      else
+        ML::GGUF::DiffusionGemmaCPU.output_top2_full_vocab_cpu(weights, hidden)
+      end
+    end
+    output_head_ms = (Time.instant - output_t0).total_milliseconds
+    predict_ms = (Time.instant - predict_t0).total_milliseconds
+    FullVocabTop2ArmResult.new(cache, decode, top2s, cache_ms, predict_ms, output_head_ms)
+  ensure
+    restore_env(old)
+  end
+end
+
 def format_f64(value : Float64) : String
   "%.9f" % value
 end
@@ -349,7 +411,7 @@ end
 raise "model not found: #{model}" unless File.exists?(model)
 raise "--prompt-len must be positive" unless prompt_len > 0
 raise "--canvas-len must be positive" unless canvas_len > 0
-valid_certificate_modes = ["bounded", "full-vocab-top1-metal", "full-vocab-top1-cpu"]
+valid_certificate_modes = ["bounded", "full-vocab-top1-metal", "full-vocab-top1-cpu", "full-vocab-top2-metal", "full-vocab-top2-cpu"]
 raise "--certificate-mode must be one of #{valid_certificate_modes.join(", ")}" unless valid_certificate_modes.includes?(certificate_mode)
 raise "--candidate-count must be positive" unless candidate_count > 0
 raise "--candidate-stride must be positive" unless candidate_stride > 0
@@ -358,8 +420,10 @@ raise "--max-layers must be positive" unless max_layers > 0
 raise "--temp-inv must be finite and positive" unless temp_inv.finite? && temp_inv > 0.0_f32
 if certificate_mode != "bounded"
   raise "--require-sampled-match is incompatible with #{certificate_mode}" if require_sampled_match
-  raise "--min-base-logit-margin is incompatible with #{certificate_mode}" if min_base_logit_margin
-  raise "--min-variant-logit-margin is incompatible with #{certificate_mode}" if min_variant_logit_margin
+  unless certificate_mode.starts_with?("full-vocab-top2-")
+    raise "--min-base-logit-margin is incompatible with #{certificate_mode}" if min_base_logit_margin
+    raise "--min-variant-logit-margin is incompatible with #{certificate_mode}" if min_variant_logit_margin
+  end
 end
 if threshold = min_base_logit_margin
   raise "--min-base-logit-margin must be finite" unless threshold.finite?
@@ -413,10 +477,13 @@ puts [
 ].join('\t')
 
 if certificate_mode != "bounded"
-  use_metal = certificate_mode == "full-vocab-top1-metal"
+  use_metal = certificate_mode.ends_with?("-metal")
+  use_top2 = certificate_mode.starts_with?("full-vocab-top2-")
   aggregate_rows = 0
   aggregate_argmax_matches = 0
   aggregate_max_logit_abs_delta = 0.0
+  aggregate_min_base_logit_margin = Float64::INFINITY
+  aggregate_min_variant_logit_margin = Float64::INFINITY
   cache_speedups = [] of Float64
   predict_speedups = [] of Float64
 
@@ -429,8 +496,21 @@ if certificate_mode != "bounded"
     canvas_rows = ML::GGUF::DiffusionGemmaCPU.canvas_rows_from_tokens(weights, canvas_tokens)
     mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: prompt_len, canvas_len: canvas_len, sliding_window: hp.sliding_window)
 
-    base = run_full_vocab_top1_arm(weights, prompt_rows, canvas_rows, mask, max_layers, base_env, use_metal)
-    variant = run_full_vocab_top1_arm(weights, prompt_rows, canvas_rows, mask, max_layers, variant_env, use_metal)
+    if use_top2
+      base_top2_result = run_full_vocab_top2_arm(weights, prompt_rows, canvas_rows, mask, max_layers, base_env, use_metal)
+      variant_top2_result = run_full_vocab_top2_arm(weights, prompt_rows, canvas_rows, mask, max_layers, variant_env, use_metal)
+      base_top1s = base_top2_result.top2s.map(&.top1)
+      variant_top1s = variant_top2_result.top2s.map(&.top1)
+      base = base_top2_result
+      variant = variant_top2_result
+    else
+      base_top1_result = run_full_vocab_top1_arm(weights, prompt_rows, canvas_rows, mask, max_layers, base_env, use_metal)
+      variant_top1_result = run_full_vocab_top1_arm(weights, prompt_rows, canvas_rows, mask, max_layers, variant_env, use_metal)
+      base_top1s = base_top1_result.top1s
+      variant_top1s = variant_top1_result.top1s
+      base = base_top1_result
+      variant = variant_top1_result
+    end
     hidden = diff_stats(base.cache.final_rows, variant.cache.final_rows)
     cache_speedup = base.cache_ms / variant.cache_ms
     predict_speedup = base.predict_ms / variant.predict_ms
@@ -478,13 +558,27 @@ if certificate_mode != "bounded"
 
     argmax_matches = 0
     max_logit_abs_delta = 0.0
-    base.top1s.each_with_index do |base_top1, row|
-      variant_top1 = variant.top1s[row]
+    min_base_margin = Float64::INFINITY
+    min_variant_margin = Float64::INFINITY
+    base_top1s.each_with_index do |base_top1, row|
+      variant_top1 = variant_top1s[row]
       argmax_match = base_top1.token_id == variant_top1.token_id
       argmax_matches += 1 if argmax_match
       aggregate_argmax_matches += 1 if argmax_match
       aggregate_rows += 1
       logit_delta = (base_top1.logit.to_f64 - variant_top1.logit.to_f64).abs
+      if use_top2
+        base_top2 = base.as(FullVocabTop2ArmResult).top2s[row]
+        variant_top2 = variant.as(FullVocabTop2ArmResult).top2s[row]
+        base_margin = base_top2.margin.to_f64
+        variant_margin = variant_top2.margin.to_f64
+        min_base_margin = base_margin if base_margin < min_base_margin
+        min_variant_margin = variant_margin if variant_margin < min_variant_margin
+        aggregate_min_base_logit_margin = base_margin if base_margin < aggregate_min_base_logit_margin
+        aggregate_min_variant_logit_margin = variant_margin if variant_margin < aggregate_min_variant_logit_margin
+        second_delta = (base_top2.second_logit.to_f64 - variant_top2.second_logit.to_f64).abs
+        logit_delta = second_delta if second_delta > logit_delta
+      end
       max_logit_abs_delta = logit_delta if logit_delta > max_logit_abs_delta
       aggregate_max_logit_abs_delta = logit_delta if logit_delta > aggregate_max_logit_abs_delta
 
@@ -501,8 +595,8 @@ if certificate_mode != "bounded"
         "n/a",
         "n/a",
         "n/a",
-        "n/a",
-        "n/a",
+        use_top2 ? format_f64(base.as(FullVocabTop2ArmResult).top2s[row].margin.to_f64) : "n/a",
+        use_top2 ? format_f64(variant.as(FullVocabTop2ArmResult).top2s[row].margin.to_f64) : "n/a",
         "n/a",
         "n/a",
         format_f64(logit_delta),
@@ -520,8 +614,8 @@ if certificate_mode != "bounded"
       "sampled_matches=n/a",
       "all_argmax_match=#{argmax_matches == canvas_len}",
       "all_sampled_match=n/a",
-      "min_base_logit_margin=n/a",
-      "min_variant_logit_margin=n/a",
+      "min_base_logit_margin=#{use_top2 ? format_f64(min_base_margin) : "n/a"}",
+      "min_variant_logit_margin=#{use_top2 ? format_f64(min_variant_margin) : "n/a"}",
       "min_base_prob_margin=n/a",
       "min_variant_prob_margin=n/a",
       "max_logit_abs_delta=#{format_f64(max_logit_abs_delta)}",
@@ -543,8 +637,8 @@ if certificate_mode != "bounded"
     "certificate_mode=#{certificate_mode}",
     "all_argmax_match=#{all_argmax_match}",
     "all_sampled_match=n/a",
-    "min_base_logit_margin=n/a",
-    "min_variant_logit_margin=n/a",
+    "min_base_logit_margin=#{use_top2 ? format_f64(aggregate_min_base_logit_margin) : "n/a"}",
+    "min_variant_logit_margin=#{use_top2 ? format_f64(aggregate_min_variant_logit_margin) : "n/a"}",
     "min_base_prob_margin=n/a",
     "min_variant_prob_margin=n/a",
     "max_logit_abs_delta=#{format_f64(aggregate_max_logit_abs_delta)}",
@@ -555,6 +649,12 @@ if certificate_mode != "bounded"
 
   failures = [] of String
   failures << "argmax" if require_argmax_match && !all_argmax_match
+  if threshold = min_base_logit_margin
+    failures << "base_margin" if aggregate_min_base_logit_margin < threshold
+  end
+  if threshold = min_variant_logit_margin
+    failures << "variant_margin" if aggregate_min_variant_logit_margin < threshold
+  end
   if threshold = max_logit_delta
     failures << "logit_delta" if aggregate_max_logit_abs_delta > threshold
   end

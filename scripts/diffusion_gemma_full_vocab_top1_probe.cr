@@ -71,6 +71,7 @@ max_layers = 30
 rows_arg = "0"
 env = ArmEnv.new(ENV["TOP1_ENV"]? || DEFAULT_ENV)
 metal_warmups = 1
+check_top2 = false
 
 OptionParser.parse do |p|
   p.banner = "Usage: diffusion_gemma_full_vocab_top1_probe [options]"
@@ -83,6 +84,7 @@ OptionParser.parse do |p|
   p.on("--rows LIST", "Comma/space separated canvas row indexes to check (default: 0)") { |v| rows_arg = v }
   p.on("--env ENV", "Whitespace-separated KEY=VALUE env for prompt/decode route") { |v| env = ArmEnv.new(v) }
   p.on("--metal-warmups N", "Unmeasured Metal top1 calls on the first checked row (default: 1)") { |v| metal_warmups = v.to_i }
+  p.on("--top2", "Compare CPU and Metal full-vocab top2 ids/logits instead of top1") { check_top2 = true }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -159,24 +161,35 @@ begin
   max_logit_delta = 0.0
   first_hidden = decode.rows[rows[0] * hp.n_embd, hp.n_embd]
   metal_warmups.times do
-    ML::GGUF::DiffusionGemmaCPU.output_top1_full_vocab_metal(weights, first_hidden)
+    if check_top2
+      ML::GGUF::DiffusionGemmaCPU.output_top2_full_vocab_metal(weights, first_hidden)
+    else
+      ML::GGUF::DiffusionGemmaCPU.output_top1_full_vocab_metal(weights, first_hidden)
+    end
   end
 
   rows.each do |row|
     hidden = decode.rows[row * hp.n_embd, hp.n_embd]
 
     cpu_t0 = Time.instant
-    cpu = ML::GGUF::DiffusionGemmaCPU.output_top1_full_vocab_cpu(weights, hidden)
+    cpu = check_top2 ? ML::GGUF::DiffusionGemmaCPU.output_top2_full_vocab_cpu(weights, hidden) : ML::GGUF::DiffusionGemmaCPU.output_top1_full_vocab_cpu(weights, hidden)
     cpu_ms = (Time.instant - cpu_t0).total_milliseconds
 
     metal_t0 = Time.instant
-    metal = ML::GGUF::DiffusionGemmaCPU.output_top1_full_vocab_metal(weights, hidden)
+    metal = check_top2 ? ML::GGUF::DiffusionGemmaCPU.output_top2_full_vocab_metal(weights, hidden) : ML::GGUF::DiffusionGemmaCPU.output_top1_full_vocab_metal(weights, hidden)
     metal_ms = (Time.instant - metal_t0).total_milliseconds
-    raise "Metal full-vocab top1 unavailable" unless metal
+    raise "Metal full-vocab #{check_top2 ? "top2" : "top1"} unavailable" unless metal
 
-    metal_top1 = metal.not_nil!
-    match = cpu.token_id == metal_top1.token_id
-    delta = (cpu.logit.to_f64 - metal_top1.logit.to_f64).abs
+    metal_result = metal.not_nil!
+    match = cpu.token_id == metal_result.token_id
+    delta = (cpu.logit.to_f64 - metal_result.logit.to_f64).abs
+    if check_top2
+      cpu_top2 = cpu.as(ML::GGUF::DiffusionGemmaCPU::OutputTop2)
+      metal_top2 = metal_result.as(ML::GGUF::DiffusionGemmaCPU::OutputTop2)
+      second_delta = (cpu_top2.second_logit.to_f64 - metal_top2.second_logit.to_f64).abs
+      delta = second_delta if second_delta > delta
+      match &&= cpu_top2.second_token_id == metal_top2.second_token_id
+    end
     max_logit_delta = delta if delta > max_logit_delta
     checked += 1
     matches += 1 if match
@@ -184,13 +197,13 @@ begin
     total_metal_ms += metal_ms
 
     puts [
-      "top1",
+      check_top2 ? "top2" : "top1",
       row.to_s,
       cpu.token_id.to_s,
-      metal_top1.token_id.to_s,
+      metal_result.token_id.to_s,
       match.to_s,
       format_f64(cpu.logit.to_f64),
-      format_f64(metal_top1.logit.to_f64),
+      format_f64(metal_result.logit.to_f64),
       format_f64(delta),
       format_f64(cpu_ms),
       format_f64(metal_ms),
@@ -206,18 +219,18 @@ begin
     "load_ms=#{format_f64(load_ms)}",
     "cache_ms=#{format_f64(cache_ms)}",
     "decode_ms=#{format_f64(decode_ms)}",
-    "cpu_top1_ms=#{format_f64(total_cpu_ms)}",
-    "metal_top1_ms=#{format_f64(total_metal_ms)}",
-    "top1_speedup=#{format_f64(speedup)}",
+    "cpu_#{check_top2 ? "top2" : "top1"}_ms=#{format_f64(total_cpu_ms)}",
+    "metal_#{check_top2 ? "top2" : "top1"}_ms=#{format_f64(total_metal_ms)}",
+    "#{check_top2 ? "top2" : "top1"}_speedup=#{format_f64(speedup)}",
     "max_logit_abs_delta=#{format_f64(max_logit_delta)}",
   ].join('\t')
 
   unless matches == checked
-    STDERR.puts "full_vocab_top1 status=fail matches=#{matches}/#{checked}"
+    STDERR.puts "full_vocab_#{check_top2 ? "top2" : "top1"} status=fail matches=#{matches}/#{checked}"
     exit 4
   end
 
-  STDERR.puts "full_vocab_top1 status=ok matches=#{matches}/#{checked}"
+  STDERR.puts "full_vocab_#{check_top2 ? "top2" : "top1"} status=ok matches=#{matches}/#{checked}"
 ensure
   restore_env(old)
 end

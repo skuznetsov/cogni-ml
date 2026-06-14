@@ -123,6 +123,34 @@ module ML::GGUF
       end
     end
 
+    struct OutputTop2
+      getter token_id : Int32
+      getter logit : Float32
+      getter second_token_id : Int32
+      getter second_logit : Float32
+      getter raw_logit : Float32
+      getter raw_second_logit : Float32
+
+      def initialize(@token_id, @logit, @second_token_id, @second_logit,
+                     raw_logit : Float32? = nil,
+                     raw_second_logit : Float32? = nil)
+        @raw_logit = raw_logit || @logit
+        @raw_second_logit = raw_second_logit || @second_logit
+      end
+
+      def margin : Float32
+        @raw_logit - @raw_second_logit
+      end
+
+      def softcapped_margin : Float32
+        @logit - @second_logit
+      end
+
+      def top1 : OutputTop1
+        OutputTop1.new(@token_id, @logit)
+      end
+    end
+
     struct BoundedCanvasUpdate
       getter updated_canvas_tokens : Array(Int32)
       getter accepted : Array(Bool)
@@ -4214,6 +4242,37 @@ module ML::GGUF
       OutputTop1.new(best_id, output_logit_softcap(best_logit, hp.final_logit_softcapping))
     end
 
+    def output_top2_full_vocab_cpu(weights : DiffusionGemmaWeights,
+                                   hidden : Array(Float32)) : OutputTop2
+      hp = weights.hparams
+      normed = output_hidden_norm(weights, hidden)
+      best_id = 0
+      best_logit = -Float32::INFINITY
+      second_id = 0
+      second_logit = -Float32::INFINITY
+      hp.vocab_size.times do |token_id|
+        row = quant_row_slice(weights.token_embd, token_id, 1, hp.n_embd)
+        logit = Gemma4CPU.matmul(row, normed)[0]
+        if logit > best_logit || (logit == best_logit && token_id < best_id)
+          second_id = best_id
+          second_logit = best_logit
+          best_id = token_id
+          best_logit = logit
+        elsif token_id != best_id && (logit > second_logit || (logit == second_logit && token_id < second_id))
+          second_id = token_id
+          second_logit = logit
+        end
+      end
+      OutputTop2.new(
+        best_id,
+        output_logit_softcap(best_logit, hp.final_logit_softcapping),
+        second_id,
+        output_logit_softcap(second_logit, hp.final_logit_softcapping),
+        best_logit,
+        second_logit,
+      )
+    end
+
     def output_top1_full_vocab_metal(weights : DiffusionGemmaWeights,
                                      hidden : Array(Float32)) : OutputTop1?
       return nil unless Qwen35Metal.available?
@@ -4227,6 +4286,30 @@ module ML::GGUF
       token_id = result[0].to_i32
       raw_logit = result[1]
       OutputTop1.new(token_id, output_logit_softcap(raw_logit, hp.final_logit_softcapping))
+    end
+
+    def output_top2_full_vocab_metal(weights : DiffusionGemmaWeights,
+                                     hidden : Array(Float32)) : OutputTop2?
+      return nil unless Qwen35Metal.available?
+      return nil unless weights.token_embd.type.q6_k?
+
+      hp = weights.hparams
+      normed = output_hidden_norm(weights, hidden)
+      result = Qwen35Metal.project_top2_no_norm(weights.token_embd, normed)
+      return nil unless result
+
+      token_id = result[0].to_i32
+      raw_logit = result[1]
+      second_token_id = result[2].to_i32
+      second_raw_logit = result[3]
+      OutputTop2.new(
+        token_id,
+        output_logit_softcap(raw_logit, hp.final_logit_softcapping),
+        second_token_id,
+        output_logit_softcap(second_raw_logit, hp.final_logit_softcapping),
+        raw_logit,
+        second_raw_logit,
+      )
     end
 
     def output_logits_for_tokens(weights : DiffusionGemmaWeights,
