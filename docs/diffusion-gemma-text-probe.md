@@ -261,6 +261,18 @@ LTP/WBA controller: if exact fallback dominates the recomputed mixed `Phi`,
 fix that certificate/fallback boundary before micro-tuning accepted fast
 windows.
 
+When a mixed-plan atlas points at one failing certificate window, inspect the
+row-level certificate:
+
+```sh
+scripts/diffusion_gemma_output_cert_atlas.py CHILD_LOG_DIR/output_cert.tsv
+```
+
+This reports argmax and sampled failures per canvas row and prints an
+optimistic row-local fallback lower bound. That bound is not a legal route by
+itself: row-local fallback is only promotable after the runtime proves the
+exact prompt-cache/hidden boundary can be narrowed or reused.
+
 `scripts/diffusion_gemma_prompt_output_cert_probe.cr` can also consume the same
 plan directly:
 
