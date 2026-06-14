@@ -310,7 +310,11 @@ The atlas ranks windows by certified mixed wall time and folds in child
 `gate_metric` phase rows when the child logs still exist. Treat it as an
 LTP/WBA controller: if exact fallback dominates the recomputed mixed `Phi`,
 fix that certificate/fallback boundary before micro-tuning accepted fast
-windows. For exact fallback windows, the atlas also reads the child
+windows. Atlas output labels each route window with a `route_owner` and each
+phase row with a `phase_owner` plus a bounded `next_move`; for example,
+`eliminated_or_replayed` buckets should be protected rather than micro-tuned,
+while `residual_materialize_boundary` points at a larger CPU-materialization or
+tail-fusion corridor. For exact fallback windows, the atlas also reads the child
 `output_cert_log` when available and prints a cert-derived dual-cache
 canvas-band fallback estimate. Compare it cautiously: `selected_route_ms` comes
 from route-plan ABBA timing, while `dual_cache_band_ms` comes from output-cert

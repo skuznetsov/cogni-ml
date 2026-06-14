@@ -196,6 +196,52 @@ def route_label(window: dict[str, Any]) -> str:
     return f"{window.get('prompt_token')}:{window.get('canvas_token')}"
 
 
+def route_owner(window: dict[str, Any]) -> str:
+    selected = str(window.get("selected_route", ""))
+    if selected == "base_exact":
+        return "exact_base_fallback"
+    artifact_arm = str(window.get("selected_route_artifact_arm", "variant") or "variant")
+    artifact_env = str(window.get("selected_route_artifact_env_role", "variant") or "variant")
+    variant_env = str(window.get("variant_env_role", "variant") or "variant")
+    if artifact_arm == "base" or artifact_env == "base":
+        return f"foreign_{artifact_arm}_artifact_{variant_env}_env"
+    return "certified_variant_replay"
+
+
+def phase_owner(metric: str, row: dict[str, float]) -> str:
+    base_ms = row["base_ms"]
+    variant_ms = row["variant_ms"]
+    if base_ms > 0.0 and variant_ms == 0.0:
+        return "eliminated_or_replayed"
+    if metric == "total_ms":
+        return "end_to_end_unsafe_variant"
+    if metric.startswith("materialize_moe_"):
+        return "moe_materialize_transport"
+    if metric.startswith("materialize"):
+        return "residual_materialize_boundary"
+    if "context" in metric:
+        return "attention_context_boundary"
+    if "qkv" in metric or "projection" in metric:
+        return "projection_boundary"
+    return "unknown_phase_boundary"
+
+
+def phase_next_move(owner: str) -> str:
+    if owner == "eliminated_or_replayed":
+        return "do_not_microtune; protect certificate/replay boundary"
+    if owner == "end_to_end_unsafe_variant":
+        return "diagnostic_only; recompute mixed route before promotion"
+    if owner == "moe_materialize_transport":
+        return "fuse_or_keep_resident_across_grouped_moe"
+    if owner == "residual_materialize_boundary":
+        return "remove_cpu_materialization_or_fuse_tail_corridor"
+    if owner == "attention_context_boundary":
+        return "keep_q_context_output_resident_or_batch_rows"
+    if owner == "projection_boundary":
+        return "resident_projection_or_batch_matmul"
+    return "measure_before_tuning"
+
+
 def cert_fallback_alternative(
     window: dict[str, Any],
     reuse_count: int,
@@ -313,10 +359,11 @@ def print_text(
     for row in sorted(windows, key=selected_window_cost, reverse=True)[:top]:
         pct = selected_window_cost(row) * 100.0 / mixed_total if mixed_total > 0 else float("nan")
         print(
-            "    %s route=%s status=%s mixed_ms=%s pct=%s%% observed_speedup=%s mixed_speedup=%s unsafe_saved_ms=%s mixed_saved_ms=%s"
+            "    %s route=%s owner=%s status=%s mixed_ms=%s pct=%s%% observed_speedup=%s mixed_speedup=%s unsafe_saved_ms=%s mixed_saved_ms=%s"
             % (
                 route_label(row),
                 row.get("selected_route", "NA"),
+                route_owner(row),
                 row.get("status", "NA"),
                 fmt(selected_window_cost(row)),
                 fmt(pct),
@@ -329,11 +376,14 @@ def print_text(
     if phases:
         print("  phase_deltas:")
         for (kind, metric), row in sorted(phases.items(), key=lambda item: (-abs(item[1]["delta_ms"]), item[0]))[:top]:
+            owner = phase_owner(metric, row)
             print(
-                "    kind=%s metric=%s windows=%d base_ms=%s variant_ms=%s speedup=%s delta_ms=%s max_range_over_delta=%s"
+                "    kind=%s metric=%s owner=%s next=%s windows=%d base_ms=%s variant_ms=%s speedup=%s delta_ms=%s max_range_over_delta=%s"
                 % (
                     kind,
                     metric,
+                    owner,
+                    phase_next_move(owner),
                     int(row["windows"]),
                     fmt(row["base_ms"]),
                     fmt(row["variant_ms"]),
@@ -389,6 +439,7 @@ def print_tsv(
         "prompt_token",
         "canvas_token",
         "selected_route",
+        "route_owner",
         "status",
         "reason",
         "base_ms",
@@ -409,6 +460,7 @@ def print_tsv(
             "prompt_token": row.get("prompt_token", ""),
             "canvas_token": row.get("canvas_token", ""),
             "selected_route": row.get("selected_route", ""),
+            "route_owner": route_owner(row),
             "status": row.get("status", ""),
             "reason": row.get("reason", ""),
             "base_ms": fmt(as_float(row, "base_ms")),
@@ -422,14 +474,17 @@ def print_tsv(
         }
         print("\t".join(str(values[field]) for field in fields))
 
-    phase_fields = ["kind", "source", "phase_kind", "metric", "windows", "base_ms", "variant_ms", "speedup", "delta_ms", "range_over_delta"]
+    phase_fields = ["kind", "source", "phase_kind", "metric", "phase_owner", "next_move", "windows", "base_ms", "variant_ms", "speedup", "delta_ms", "range_over_delta"]
     print("\t".join(phase_fields))
     for (kind, metric), row in sorted(aggregate_phase_rows(windows).items(), key=lambda item: (-abs(item[1]["delta_ms"]), item[0])):
+        owner = phase_owner(metric, row)
         values = {
             "kind": "phase",
             "source": str(path),
             "phase_kind": kind,
             "metric": metric,
+            "phase_owner": owner,
+            "next_move": phase_next_move(owner),
             "windows": int(row["windows"]),
             "base_ms": fmt(row["base_ms"]),
             "variant_ms": fmt(row["variant_ms"]),
