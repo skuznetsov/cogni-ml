@@ -297,6 +297,8 @@ def parse_gate_metric(line, log):
 def parse_route_artifacts(log):
     child_dir = os.path.dirname(log)
     paths = {"base": "", "variant": ""}
+    selected_artifact = ""
+    selected_artifact_arm = ""
     for name in ("prompt_cache_abba.tsv", "output_cert.tsv"):
         path = os.path.join(child_dir, name)
         if not os.path.isfile(path):
@@ -321,7 +323,19 @@ def parse_route_artifacts(log):
                 elif line.startswith("# route_artifact_variant="):
                     value = line.split("=", 1)[1]
                     if value != "<none>" and not value.startswith("map:"):
-                        paths["variant"] = value
+                        selected_artifact = value
+                elif line.startswith("# route_artifact_variant_arm="):
+                    selected_artifact_arm = line.split("=", 1)[1]
+                elif line.startswith("# route_artifact_selected="):
+                    value = line.split("=", 1)[1]
+                    if value != "<none>" and not value.startswith("map:"):
+                        selected_artifact = value
+                elif line.startswith("# route_artifact_selected_arm="):
+                    selected_artifact_arm = line.split("=", 1)[1]
+    if selected_artifact:
+        arm = selected_artifact_arm or "variant"
+        if arm in paths:
+            paths[arm] = selected_artifact
     return paths
 
 def choose_total_metric(text, log):

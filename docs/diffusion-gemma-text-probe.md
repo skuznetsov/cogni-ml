@@ -228,6 +228,9 @@ to `LOG_DIR/route_plan.jsonl` by default for `gate` and `all` stages. Window
 rows use `selected_route=variant_fast` only for certified candidate windows;
 rejected windows use `selected_route=base_exact` while preserving the unsafe
 variant timing and artifact path for diagnostics.
+When a mixed rerun selects a pre-cached exact fallback artifact, the suite
+writer records that artifact under `base_route_artifact` and leaves
+`variant_route_artifact` empty unless an actual variant artifact was loaded.
 
 Product/runtime code should load this with
 `ML::GGUF::DiffusionGemmaMixedRoutePlan.from_jsonl(path)`. The loader fails
