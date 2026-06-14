@@ -358,6 +358,44 @@ def run_arm(weights : ML::GGUF::DiffusionGemmaWeights,
   )
 end
 
+def capture_routes_for_arm(weights : ML::GGUF::DiffusionGemmaWeights,
+                           prompt_rows : Array(Float32),
+                           mask : ML::GGUF::DiffusionGemmaAttentionMask,
+                           max_layers : Int32,
+                           env : ArmEnv,
+                           arm : String) : Array(Array(Array(ML::GGUF::DiffusionGemmaCPU::ExpertRoute)))
+  old = apply_env(env)
+  begin
+    ML::GGUF::DiffusionGemmaCPU.clear_ffn_resident_graph_cache
+    t0 = Time.instant
+    cache = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(
+      weights,
+      prompt_rows,
+      mask,
+      max_layers: max_layers,
+      materialize_final_rows: true,
+    )
+    elapsed_ms = (Time.instant - t0).total_milliseconds
+    routes = cache.routes_by_layer_by_prompt_row
+    raise "route capture for #{arm} produced #{routes.size}/#{max_layers} layers" unless routes.size == max_layers
+    route_rows = routes.sum(&.size)
+    route_slots = routes.sum { |layer| layer.sum(&.size) }
+    puts [
+      "# route_capture",
+      arm,
+      "layers=#{routes.size}",
+      "rows=#{route_rows}",
+      "slots=#{route_slots}",
+      "elapsed_ms=#{format_f64(elapsed_ms)}",
+      "checksum=#{format_f64(checksum_rows(cache.final_rows))}",
+    ].join('\t')
+    routes
+  ensure
+    restore_env(old)
+    ML::GGUF::DiffusionGemmaCPU.clear_ffn_resident_graph_cache
+  end
+end
+
 def print_sample(sample : PromptCacheSample,
                  prompt_len : Int32,
                  canvas_len : Int32,
@@ -494,6 +532,8 @@ variant_env = ArmEnv.new("")
 single_route = true
 materialize_final_rows = false
 checksum_tolerance = nil.as(Float64?)
+route_replay_base = false
+route_replay_variant = false
 
 OptionParser.parse do |p|
   p.banner = "Usage: diffusion_gemma_prompt_cache_abba [options]"
@@ -512,12 +552,15 @@ OptionParser.parse do |p|
   p.on("--full-routes", "Use model-computed full MoE routes instead of the top-1 smoke shortcut") { single_route = false }
   p.on("--materialize-final-rows", "Materialize the final prompt-cache layer rows") { materialize_final_rows = true }
   p.on("--checksum-tolerance F", "Exit 4 when base/variant checksum median delta exceeds F") { |v| checksum_tolerance = v.to_f64 }
+  p.on("--base-replay-routes", "Pre-capture and replay base prompt MoE routes for base arm") { route_replay_base = true }
+  p.on("--variant-replay-routes", "Pre-capture and replay variant prompt MoE routes for variant arm") { route_replay_variant = true }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
   end
 end
 
+route_replay_requested = route_replay_base || route_replay_variant
 raise "model not found: #{model}" unless File.exists?(model)
 raise "--prompt-len must be positive" unless prompt_len > 0
 raise "--canvas-len must be positive" unless canvas_len > 0
@@ -535,6 +578,10 @@ if alt_arms = mirror_arms
   raise "--mirror-sequence must have the same length as --sequence" unless alt_arms.size == arms.size
 end
 raise "single-route smoke currently supports --max-layers 1; pass --full-routes for deeper runs" if single_route && max_layers != 1
+if route_replay_requested
+  raise "route replay requires --full-routes" if single_route
+  raise "route replay requires --materialize-final-rows" unless materialize_final_rows
+end
 
 load_t0 = Time.instant
 weights = ML::GGUF::DiffusionGemmaWeights.from_gguf(model)
@@ -551,12 +598,16 @@ routes_by_layer_by_prompt_row = if single_route && materialize_final_rows
                                 else
                                   nil
                                 end
+base_replay_routes = route_replay_base ? capture_routes_for_arm(weights, prompt_rows, mask, max_layers, base_env, "base") : nil
+variant_replay_routes = route_replay_variant ? capture_routes_for_arm(weights, prompt_rows, mask, max_layers, variant_env, "variant") : nil
 
 puts "# load_ms=#{format_f64(load_ms)}"
 puts "# base_env=#{base_env.raw.empty? ? "<empty>" : base_env.raw}"
 puts "# variant_env=#{variant_env.raw.empty? ? "<empty>" : variant_env.raw}"
 puts "# sequence=#{sequence}"
 puts "# mirror_sequence=#{mirror_sequence || "<none>"}"
+puts "# route_replay_base=#{route_replay_base}"
+puts "# route_replay_variant=#{route_replay_variant}"
 puts TSV_HEADER.join('\t')
 
 samples = [] of PromptCacheSample
@@ -570,6 +621,14 @@ total_cycles.times do |cycle|
                end
   cycle_arms.each_with_index do |arm, sequence_index|
     env = arm == "base" ? base_env : variant_env
+    arm_routes = case arm
+                 when "base"
+                   base_replay_routes || routes_by_layer_by_prompt_row
+                 when "variant"
+                   variant_replay_routes || routes_by_layer_by_prompt_row
+                 else
+                   routes_by_layer_by_prompt_row
+                 end
     old = apply_env(env)
     begin
       sample = run_arm(
@@ -578,7 +637,7 @@ total_cycles.times do |cycle|
         mask,
         max_layers,
         materialize_final_rows,
-        routes_by_layer_by_prompt_row,
+        arm_routes,
         arm,
         cycle,
         sequence_index,

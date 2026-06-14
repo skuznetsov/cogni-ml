@@ -69,6 +69,8 @@ Important environment knobs:
   MIN_VARIANT_LOGIT_MARGIN=F      optional certificate margin floor
   MAX_LOGIT_DELTA=F               optional candidate-logit delta ceiling
   MIN_TOTAL_SPEEDUP=F             ABBA total_ms speedup floor, default 1.10
+  ABBA_BASE_REPLAY_ROUTES=1       pre-capture/replay base prompt MoE routes in ABBA
+  ABBA_VARIANT_REPLAY_ROUTES=1    pre-capture/replay variant prompt MoE routes in ABBA
   RUN_ABBA_ON_CERT_FAIL=1         run ABBA even when certificate rejects
   CHECK_QUIET=1                   poll the existing quiet gate before running
 EOF
@@ -308,6 +310,12 @@ abba_args=(
 )
 if [[ -n "$checksum_tolerance" ]]; then
   abba_args+=(--checksum-tolerance "$checksum_tolerance")
+fi
+if bool_enabled "${ABBA_BASE_REPLAY_ROUTES:-0}"; then
+  abba_args+=(--base-replay-routes)
+fi
+if bool_enabled "${ABBA_VARIANT_REPLAY_ROUTES:-0}"; then
+  abba_args+=(--variant-replay-routes)
 fi
 
 set +e
