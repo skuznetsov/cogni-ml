@@ -249,6 +249,18 @@ The helper checks that selected fast-route artifacts exist by default and exits
 runtime selection has exact fallback windows while suite gates expect complete
 per-window maps.
 
+Before launching another heavy gate, inspect the mixed plan offline:
+
+```sh
+scripts/diffusion_gemma_mixed_route_plan_atlas.py LOG_DIR/route_plan.jsonl
+```
+
+The atlas ranks windows by certified mixed wall time and folds in child
+`gate_metric` phase rows when the child logs still exist. Treat it as an
+LTP/WBA controller: if exact fallback dominates the recomputed mixed `Phi`,
+fix that certificate/fallback boundary before micro-tuning accepted fast
+windows.
+
 `scripts/diffusion_gemma_prompt_output_cert_probe.cr` can also consume the same
 plan directly:
 
