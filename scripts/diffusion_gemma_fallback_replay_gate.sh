@@ -364,6 +364,8 @@ fi
 summary_route_plan="${FALLBACK_SUMMARY_ROUTE_PLAN:-$gate_dir/route_plan.jsonl}"
 selected_summary_route_plan="${FALLBACK_SELECTED_SUMMARY_ROUTE_PLAN:-$selected_runtime_gate_dir/route_plan.jsonl}"
 foreign_summary_route_plan="${FALLBACK_FOREIGN_SUMMARY_ROUTE_PLAN:-$foreign_runtime_gate_dir/route_plan.jsonl}"
+compare_summary="$log_dir/fallback_replay_compare_summary.txt"
+compare_summary_tsv="$log_dir/fallback_replay_compare_summary.tsv"
 gate_cmd=(
   env
   LOG_DIR="$selected_runtime_gate_dir"
@@ -466,6 +468,38 @@ write_summaries() {
     "$label" "$route_plan" "$summary_atlas" "$summary_atlas_tsv" "$summary_pp_tg"
 }
 
+write_compare_summary() {
+  if ! bool_enabled "$summary_enabled"; then
+    printf 'fallback_replay_compare_summary skipped reason=disabled\n'
+    return 0
+  fi
+  if [[ ! -f "$selected_summary_route_plan" || ! -f "$foreign_summary_route_plan" ]]; then
+    printf 'fallback_replay_compare_summary warning=missing_route_plan selected=%s foreign=%s\n' \
+      "$selected_summary_route_plan" "$foreign_summary_route_plan"
+    return 0
+  fi
+
+  local compare_cmd=(
+    python3
+    "$repo_root/scripts/diffusion_gemma_fallback_compare_summary.py"
+    --selected-route-plan "$selected_summary_route_plan"
+    --foreign-route-plan "$foreign_summary_route_plan"
+  )
+  if "${compare_cmd[@]}" >"$compare_summary" 2>"$compare_summary.stderr"; then
+    cat "$compare_summary"
+  else
+    printf 'fallback_replay_compare_summary warning=compare_failed stderr=%s\n' "$compare_summary.stderr"
+    return 0
+  fi
+  if "${compare_cmd[@]}" --tsv >"$compare_summary_tsv" 2>"$compare_summary_tsv.stderr"; then
+    :
+  else
+    printf 'fallback_replay_compare_summary warning=compare_tsv_failed stderr=%s\n' "$compare_summary_tsv.stderr"
+    return 0
+  fi
+  printf 'fallback_replay_compare_summary text=%s tsv=%s\n' "$compare_summary" "$compare_summary_tsv"
+}
+
 if bool_enabled "$dry_run"; then
   if bool_enabled "$check_quiet" && [[ "$stage" != "attach" ]]; then
     print_cmd quiet_cmd "${quiet_cmd[@]}"
@@ -493,6 +527,8 @@ if bool_enabled "$dry_run"; then
         print_cmd selected_summary_pp_tg_cmd python3 "$repo_root/scripts/diffusion_gemma_pp_tg_summary.py" "$selected_gate_stdout"
         print_cmd foreign_summary_atlas_cmd python3 "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py" "$foreign_summary_route_plan"
         print_cmd foreign_summary_pp_tg_cmd python3 "$repo_root/scripts/diffusion_gemma_pp_tg_summary.py" "$foreign_gate_stdout"
+        print_cmd compare_summary_cmd python3 "$repo_root/scripts/diffusion_gemma_fallback_compare_summary.py" --selected-route-plan "$selected_summary_route_plan" --foreign-route-plan "$foreign_summary_route_plan"
+        print_cmd compare_summary_tsv_cmd python3 "$repo_root/scripts/diffusion_gemma_fallback_compare_summary.py" --selected-route-plan "$selected_summary_route_plan" --foreign-route-plan "$foreign_summary_route_plan" --tsv
       elif [[ "$replay_mode" == "foreign" ]]; then
         print_cmd summary_atlas_cmd python3 "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py" "$foreign_summary_route_plan"
         print_cmd summary_atlas_tsv_cmd python3 "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py" "$foreign_summary_route_plan" --tsv
@@ -581,6 +617,7 @@ if [[ "$stage" == "all" || "$stage" == "gate" ]]; then
         "$selected_rc" "$foreign_rc" "$log_dir"
       exit 4
     fi
+    write_compare_summary
     printf 'fallback_replay decision=complete mode=compare stage=%s log_dir=%s selected_log=%s foreign_log=%s selected_decision=%q foreign_decision=%q\n' \
       "$stage" "$log_dir" "$selected_gate_stdout" "$foreign_gate_stdout" "$selected_decision" "$foreign_decision"
     exit 0

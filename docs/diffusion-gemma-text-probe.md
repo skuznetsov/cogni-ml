@@ -417,7 +417,9 @@ map, and `foreign_gate_cmd`.
 Use `FALLBACK_REPLAY_MODE=compare` when the next quiet window should measure
 both frames from the same prepared or reused base artifacts. It writes separate
 `gate_selected` and `gate_foreign` directories, plus separate atlas and pp/tg
-summary files:
+summary files. It also writes `fallback_replay_compare_summary.txt` and `.tsv`,
+which compare only common prompt:canvas windows so the full selected suite is
+not compared against a foreign fallback-only suite:
 
 ```sh
 FALLBACK_REPLAY_MODE=compare \
@@ -429,6 +431,14 @@ When reusing existing artifacts in compare mode, pass them through
 `FALLBACK_BASE_ROUTE_ARTIFACT_MAP` so selected and foreign replay use the same
 base map. `FALLBACK_FOREIGN_BASE_ROUTE_ARTIFACT_MAP` is foreign-only and is
 rejected for compare mode.
+
+The compare helper can also be run offline:
+
+```sh
+scripts/diffusion_gemma_fallback_compare_summary.py \
+  --selected-route-plan LOG_DIR/gate_selected/route_plan.jsonl \
+  --foreign-route-plan LOG_DIR/gate_foreign/route_plan.jsonl
+```
 
 The promotion wrapper records and forwards the same expected-metadata controls
 into its nested suite gate, so a dry-run `gate_cmd` is self-contained for
