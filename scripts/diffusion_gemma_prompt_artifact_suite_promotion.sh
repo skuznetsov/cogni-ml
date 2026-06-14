@@ -41,6 +41,18 @@ abba_mirror_sequence="${ABBA_MIRROR_SEQUENCE:-variant base base variant}"
 
 base_map="${SUITE_BASE_ROUTE_ARTIFACT_MAP:-${CERT_BASE_ROUTE_ARTIFACT_MAP:-}}"
 variant_map="${SUITE_VARIANT_ROUTE_ARTIFACT_MAP:-${CERT_VARIANT_ROUTE_ARTIFACT_MAP:-}}"
+shared_base_route_artifact_expected_arm="${BASE_ROUTE_ARTIFACT_EXPECTED_ARM:-base}"
+shared_variant_route_artifact_expected_arm="${VARIANT_ROUTE_ARTIFACT_EXPECTED_ARM:-variant}"
+shared_base_route_artifact_env_role="${BASE_ROUTE_ARTIFACT_ENV_ROLE:-base}"
+shared_variant_route_artifact_env_role="${VARIANT_ROUTE_ARTIFACT_ENV_ROLE:-variant}"
+cert_base_route_artifact_expected_arm="${CERT_BASE_ROUTE_ARTIFACT_EXPECTED_ARM:-$shared_base_route_artifact_expected_arm}"
+cert_variant_route_artifact_expected_arm="${CERT_VARIANT_ROUTE_ARTIFACT_EXPECTED_ARM:-$shared_variant_route_artifact_expected_arm}"
+cert_base_route_artifact_env_role="${CERT_BASE_ROUTE_ARTIFACT_ENV_ROLE:-$shared_base_route_artifact_env_role}"
+cert_variant_route_artifact_env_role="${CERT_VARIANT_ROUTE_ARTIFACT_ENV_ROLE:-$shared_variant_route_artifact_env_role}"
+abba_base_route_artifact_expected_arm="${ABBA_BASE_ROUTE_ARTIFACT_EXPECTED_ARM:-$shared_base_route_artifact_expected_arm}"
+abba_variant_route_artifact_expected_arm="${ABBA_VARIANT_ROUTE_ARTIFACT_EXPECTED_ARM:-$shared_variant_route_artifact_expected_arm}"
+abba_base_route_artifact_env_role="${ABBA_BASE_ROUTE_ARTIFACT_ENV_ROLE:-$shared_base_route_artifact_env_role}"
+abba_variant_route_artifact_env_role="${ABBA_VARIANT_ROUTE_ARTIFACT_ENV_ROLE:-$shared_variant_route_artifact_env_role}"
 promotion_prepare_log="${PROMOTION_PREPARE_LOG:-}"
 dry_run="${DRY_RUN:-0}"
 
@@ -72,6 +84,11 @@ Important environment knobs:
                                          chunk size for that profile, default 8
   BASE_EXTRA_ENV / VARIANT_EXTRA_ENV    append profile envs to prepare and gate arms
   SUITE_*_ROUTE_ARTIFACT_MAP=SPEC       skip prepare and use existing maps
+  BASE_ROUTE_ARTIFACT_EXPECTED_ARM=base|variant
+  VARIANT_ROUTE_ARTIFACT_EXPECTED_ARM=base|variant
+  BASE_ROUTE_ARTIFACT_ENV_ROLE=base|variant
+  VARIANT_ROUTE_ARTIFACT_ENV_ROLE=base|variant
+  CERT_* / ABBA_* prefixed variants     override cert/ABBA route-artifact metadata
   SUITE_MIN_TOTAL_SPEEDUP=1.10          aggregate speedup floor
   SUITE_WINDOW_MIN_TOTAL_SPEEDUP=...    per-window speedup floor
   SUITE_MIXED_FALLBACK_GATE=1           allow certified fast/exact fallback mixed_candidate gates
@@ -125,6 +142,32 @@ print_cmd() {
   printf '\n'
 }
 
+validate_route_artifact_role() {
+  local name="$1"
+  local value="$2"
+  case "$value" in
+    base|variant)
+      ;;
+    *)
+      die "$name must be base or variant"
+      ;;
+  esac
+}
+
+cert_expected_metadata_overridden() {
+  [[ "$cert_base_route_artifact_expected_arm" != "base" ||
+     "$cert_variant_route_artifact_expected_arm" != "variant" ||
+     "$cert_base_route_artifact_env_role" != "base" ||
+     "$cert_variant_route_artifact_env_role" != "variant" ]]
+}
+
+abba_expected_metadata_overridden() {
+  [[ "$abba_base_route_artifact_expected_arm" != "base" ||
+     "$abba_variant_route_artifact_expected_arm" != "variant" ||
+     "$abba_base_route_artifact_env_role" != "base" ||
+     "$abba_variant_route_artifact_env_role" != "variant" ]]
+}
+
 extract_map() {
   local key="$1"
   local file="$2"
@@ -140,6 +183,18 @@ bool_enabled "$gate_check_quiet" >/dev/null || true
 bool_enabled "$overwrite" >/dev/null || true
 bool_enabled "$dry_run" >/dev/null || true
 bool_enabled "$suite_mixed_fallback_gate" >/dev/null || true
+validate_route_artifact_role BASE_ROUTE_ARTIFACT_EXPECTED_ARM "$shared_base_route_artifact_expected_arm"
+validate_route_artifact_role VARIANT_ROUTE_ARTIFACT_EXPECTED_ARM "$shared_variant_route_artifact_expected_arm"
+validate_route_artifact_role BASE_ROUTE_ARTIFACT_ENV_ROLE "$shared_base_route_artifact_env_role"
+validate_route_artifact_role VARIANT_ROUTE_ARTIFACT_ENV_ROLE "$shared_variant_route_artifact_env_role"
+validate_route_artifact_role CERT_BASE_ROUTE_ARTIFACT_EXPECTED_ARM "$cert_base_route_artifact_expected_arm"
+validate_route_artifact_role CERT_VARIANT_ROUTE_ARTIFACT_EXPECTED_ARM "$cert_variant_route_artifact_expected_arm"
+validate_route_artifact_role CERT_BASE_ROUTE_ARTIFACT_ENV_ROLE "$cert_base_route_artifact_env_role"
+validate_route_artifact_role CERT_VARIANT_ROUTE_ARTIFACT_ENV_ROLE "$cert_variant_route_artifact_env_role"
+validate_route_artifact_role ABBA_BASE_ROUTE_ARTIFACT_EXPECTED_ARM "$abba_base_route_artifact_expected_arm"
+validate_route_artifact_role ABBA_VARIANT_ROUTE_ARTIFACT_EXPECTED_ARM "$abba_variant_route_artifact_expected_arm"
+validate_route_artifact_role ABBA_BASE_ROUTE_ARTIFACT_ENV_ROLE "$abba_base_route_artifact_env_role"
+validate_route_artifact_role ABBA_VARIANT_ROUTE_ARTIFACT_ENV_ROLE "$abba_variant_route_artifact_env_role"
 if [[ -z "$suite_window_min_total_speedup" ]]; then
   if bool_enabled "$suite_mixed_fallback_gate"; then
     suite_window_min_total_speedup="1.0"
@@ -179,6 +234,9 @@ fi
 if [[ -n "$suite_mixed_route_plan" ]]; then
   [[ -f "$suite_mixed_route_plan" ]] || die "SUITE_MIXED_ROUTE_PLAN not found: $suite_mixed_route_plan"
   [[ -z "$base_map" && -z "$variant_map" ]] || die "SUITE_MIXED_ROUTE_PLAN cannot be combined with route artifact maps"
+  if cert_expected_metadata_overridden || abba_expected_metadata_overridden; then
+    die "SUITE_MIXED_ROUTE_PLAN owns selected artifact arm/env role; expected metadata overrides require explicit route artifact map mode"
+  fi
 fi
 if [[ "$promotion_stage" == "gate" && -z "$base_map" && -z "$variant_map" && -z "$suite_mixed_route_plan" ]]; then
   die "PROMOTION_STAGE=gate requires route artifact maps or SUITE_MIXED_ROUTE_PLAN"
@@ -229,6 +287,18 @@ manifest="$log_dir/promotion_manifest.env"
   printf 'suite_route_plan_out=%q\n' "$suite_route_plan_out"
   printf 'suite_mixed_route_plan=%q\n' "$suite_mixed_route_plan"
   printf 'certificate_mode=%q\n' "$certificate_mode"
+  printf 'base_route_artifact_expected_arm=%q\n' "$shared_base_route_artifact_expected_arm"
+  printf 'variant_route_artifact_expected_arm=%q\n' "$shared_variant_route_artifact_expected_arm"
+  printf 'base_route_artifact_env_role=%q\n' "$shared_base_route_artifact_env_role"
+  printf 'variant_route_artifact_env_role=%q\n' "$shared_variant_route_artifact_env_role"
+  printf 'cert_base_route_artifact_expected_arm=%q\n' "$cert_base_route_artifact_expected_arm"
+  printf 'cert_variant_route_artifact_expected_arm=%q\n' "$cert_variant_route_artifact_expected_arm"
+  printf 'cert_base_route_artifact_env_role=%q\n' "$cert_base_route_artifact_env_role"
+  printf 'cert_variant_route_artifact_env_role=%q\n' "$cert_variant_route_artifact_env_role"
+  printf 'abba_base_route_artifact_expected_arm=%q\n' "$abba_base_route_artifact_expected_arm"
+  printf 'abba_variant_route_artifact_expected_arm=%q\n' "$abba_variant_route_artifact_expected_arm"
+  printf 'abba_base_route_artifact_env_role=%q\n' "$abba_base_route_artifact_env_role"
+  printf 'abba_variant_route_artifact_env_role=%q\n' "$abba_variant_route_artifact_env_role"
 } >"$manifest"
 
 printf 'artifact_suite_promotion_start log_dir=%s manifest=%s\n' "$log_dir" "$manifest"
@@ -287,6 +357,18 @@ gate_cmd=(
   QUIET_MS="$quiet_ms"
   BASE_EXTRA_ENV="$base_extra_env"
   VARIANT_EXTRA_ENV="$variant_extra_env"
+  BASE_ROUTE_ARTIFACT_EXPECTED_ARM="$shared_base_route_artifact_expected_arm"
+  VARIANT_ROUTE_ARTIFACT_EXPECTED_ARM="$shared_variant_route_artifact_expected_arm"
+  BASE_ROUTE_ARTIFACT_ENV_ROLE="$shared_base_route_artifact_env_role"
+  VARIANT_ROUTE_ARTIFACT_ENV_ROLE="$shared_variant_route_artifact_env_role"
+  CERT_BASE_ROUTE_ARTIFACT_EXPECTED_ARM="$cert_base_route_artifact_expected_arm"
+  CERT_VARIANT_ROUTE_ARTIFACT_EXPECTED_ARM="$cert_variant_route_artifact_expected_arm"
+  CERT_BASE_ROUTE_ARTIFACT_ENV_ROLE="$cert_base_route_artifact_env_role"
+  CERT_VARIANT_ROUTE_ARTIFACT_ENV_ROLE="$cert_variant_route_artifact_env_role"
+  ABBA_BASE_ROUTE_ARTIFACT_EXPECTED_ARM="$abba_base_route_artifact_expected_arm"
+  ABBA_VARIANT_ROUTE_ARTIFACT_EXPECTED_ARM="$abba_variant_route_artifact_expected_arm"
+  ABBA_BASE_ROUTE_ARTIFACT_ENV_ROLE="$abba_base_route_artifact_env_role"
+  ABBA_VARIANT_ROUTE_ARTIFACT_ENV_ROLE="$abba_variant_route_artifact_env_role"
 )
 
 if [[ -n "$base_map" ]]; then

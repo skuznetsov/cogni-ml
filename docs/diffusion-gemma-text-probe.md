@@ -413,3 +413,8 @@ scripts/diffusion_gemma_fallback_replay_gate.sh
 
 Use `DRY_RUN=1` first to inspect the derived fallback windows, base artifact
 map, and `foreign_gate_cmd`.
+
+The promotion wrapper records and forwards the same expected-metadata controls
+into its nested suite gate, so a dry-run `gate_cmd` is self-contained for
+foreign replay. Non-default expected metadata is still rejected when a mixed
+route plan is active, because the plan owns selected artifact semantics.
