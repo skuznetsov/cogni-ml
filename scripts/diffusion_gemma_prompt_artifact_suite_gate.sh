@@ -8,10 +8,11 @@ token_windows="${TOKEN_WINDOWS:-}"
 base_map="${SUITE_BASE_ROUTE_ARTIFACT_MAP:-${CERT_BASE_ROUTE_ARTIFACT_MAP:-}}"
 variant_map="${SUITE_VARIANT_ROUTE_ARTIFACT_MAP:-${CERT_VARIANT_ROUTE_ARTIFACT_MAP:-}}"
 suite_min_total_speedup="${SUITE_MIN_TOTAL_SPEEDUP:-${MIN_TOTAL_SPEEDUP:-1.10}}"
-window_min_total_speedup="${SUITE_WINDOW_MIN_TOTAL_SPEEDUP:-$suite_min_total_speedup}"
+window_min_total_speedup="${SUITE_WINDOW_MIN_TOTAL_SPEEDUP:-}"
 suite_child_logs="${SUITE_CHILD_LOGS:-}"
 suite_compatibility_audit="${SUITE_COMPATIBILITY_AUDIT:-0}"
-suite_run_abba_on_cert_fail="${SUITE_RUN_ABBA_ON_CERT_FAIL:-$suite_compatibility_audit}"
+suite_mixed_fallback_gate="${SUITE_MIXED_FALLBACK_GATE:-0}"
+suite_run_abba_on_cert_fail="${SUITE_RUN_ABBA_ON_CERT_FAIL:-}"
 
 usage() {
   cat <<'EOF'
@@ -27,8 +28,10 @@ Important environment knobs:
   SUITE_VARIANT_ROUTE_ARTIFACT_MAP=SPEC optional variant routes, prompt:canvas=PATH
   SUITE_CHILD_LOGS="A B ..."            aggregate existing child gate.stdout logs without rerun
   SUITE_MIN_TOTAL_SPEEDUP=F             aggregate speedup floor, default MIN_TOTAL_SPEEDUP or 1.10
-  SUITE_WINDOW_MIN_TOTAL_SPEEDUP=F      per-window child gate floor, default aggregate floor
+  SUITE_WINDOW_MIN_TOTAL_SPEEDUP=F      per-window child gate floor, default aggregate floor,
+                                        or 1.0 for explicit mixed fallback gates
   SUITE_COMPATIBILITY_AUDIT=1           continue through child rejects and report a mixed exact-fallback audit
+  SUITE_MIXED_FALLBACK_GATE=1           emit mixed_candidate when the certified fast/exact fallback policy passes
   SUITE_RUN_ABBA_ON_CERT_FAIL=1         in audit mode, collect timing even when output cert fails
 
 All ordinary diffusion_gemma_prompt_certified_variant_gate.sh environment knobs
@@ -56,12 +59,27 @@ bool_enabled() {
   esac
 }
 
-if bool_enabled "$suite_compatibility_audit"; then
+if bool_enabled "$suite_mixed_fallback_gate"; then
+  mixed_gate_enabled=1
+else
+  mixed_gate_enabled=0
+fi
+if bool_enabled "$suite_compatibility_audit" || [[ "$mixed_gate_enabled" == "1" ]]; then
   audit_enabled=1
 else
   audit_enabled=0
 fi
+if [[ -z "$suite_run_abba_on_cert_fail" ]]; then
+  suite_run_abba_on_cert_fail="$audit_enabled"
+fi
 bool_enabled "$suite_run_abba_on_cert_fail" >/dev/null || true
+if [[ -z "$window_min_total_speedup" ]]; then
+  if [[ "$mixed_gate_enabled" == "1" ]]; then
+    window_min_total_speedup="1.0"
+  else
+    window_min_total_speedup="$suite_min_total_speedup"
+  fi
+fi
 
 if [[ -z "$suite_child_logs" ]]; then
   [[ -n "$token_windows" ]] || die "TOKEN_WINDOWS is required"
@@ -142,6 +160,7 @@ printf 'suite_child_logs=%s\n' "${suite_child_logs:-<empty>}"
 printf 'suite_min_total_speedup=%s\n' "$suite_min_total_speedup"
 printf 'suite_window_min_total_speedup=%s\n' "$window_min_total_speedup"
 printf 'suite_compatibility_audit=%s\n' "$audit_enabled"
+printf 'suite_mixed_fallback_gate=%s\n' "$mixed_gate_enabled"
 printf 'suite_run_abba_on_cert_fail=%s\n' "$suite_run_abba_on_cert_fail"
 printf 'suite_spec=%s\n' "$suite_spec"
 
@@ -195,15 +214,16 @@ if [[ -z "$suite_child_logs" ]]; then
   done <"$suite_spec"
 fi
 
-python3 - "$audit_enabled" "$suite_min_total_speedup" "$window_min_total_speedup" "${child_logs[@]}" <<'PY'
+python3 - "$audit_enabled" "$mixed_gate_enabled" "$suite_min_total_speedup" "$window_min_total_speedup" "${child_logs[@]}" <<'PY'
 import math
 import re
 import sys
 
 audit_mode = sys.argv[1] == "1"
-aggregate_threshold = float(sys.argv[2])
-window_threshold = float(sys.argv[3])
-logs = sys.argv[4:]
+mixed_gate = sys.argv[2] == "1"
+aggregate_threshold = float(sys.argv[3])
+window_threshold = float(sys.argv[4])
+logs = sys.argv[5:]
 total_base = 0.0
 total_variant = 0.0
 mixed_variant_total = 0.0
@@ -363,6 +383,22 @@ if audit_mode:
         f"mixed_speedup={mixed_speedup:.6f} min_window_speedup={min_speedup:.6f} "
         f"min_total_speedup={aggregate_threshold:.6f} window_min_total_speedup={window_threshold:.6f}"
     )
+    if mixed_gate:
+        if mixed_decision == "candidate":
+            print(
+                "artifact_suite_gate decision=mixed_candidate "
+                f"mixed_speedup={mixed_speedup:.6f} unsafe_speedup={aggregate_speedup:.6f} "
+                f"candidate_windows={candidate_count} fallback_windows={fallback_count} "
+                f"min_total_speedup={aggregate_threshold:.6f} window_min_total_speedup={window_threshold:.6f}"
+            )
+            raise SystemExit(0)
+        print(
+            "artifact_suite_gate decision=reject reason=mixed_fallback_below_threshold "
+            f"mixed_speedup={mixed_speedup:.6f} min_total_speedup={aggregate_threshold:.6f} "
+            f"min_window_speedup={min_speedup:.6f} window_min_total_speedup={window_threshold:.6f} "
+            f"fallback_windows={fallback_count}"
+        )
+        raise SystemExit(4)
     print(
         "artifact_suite_gate decision=audit_only "
         f"mixed_decision={mixed_decision} mixed_speedup={mixed_speedup:.6f} "

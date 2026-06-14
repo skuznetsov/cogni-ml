@@ -28,7 +28,8 @@ load_threshold="${LOAD_THRESHOLD:-40}"
 total_threshold="${TOTAL_THRESHOLD:-${LOAD_TOTAL_THRESHOLD:-240}}"
 
 suite_min_total_speedup="${SUITE_MIN_TOTAL_SPEEDUP:-${MIN_TOTAL_SPEEDUP:-1.10}}"
-suite_window_min_total_speedup="${SUITE_WINDOW_MIN_TOTAL_SPEEDUP:-$suite_min_total_speedup}"
+suite_window_min_total_speedup="${SUITE_WINDOW_MIN_TOTAL_SPEEDUP:-}"
+suite_mixed_fallback_gate="${SUITE_MIXED_FALLBACK_GATE:-0}"
 certificate_mode="${CERTIFICATE_MODE:-full-vocab-top1-metal}"
 abba_warmups="${ABBA_WARMUPS:-1}"
 abba_repeats="${ABBA_REPEATS:-3}"
@@ -71,6 +72,7 @@ Important environment knobs:
   SUITE_*_ROUTE_ARTIFACT_MAP=SPEC       skip prepare and use existing maps
   SUITE_MIN_TOTAL_SPEEDUP=1.10          aggregate speedup floor
   SUITE_WINDOW_MIN_TOTAL_SPEEDUP=...    per-window speedup floor
+  SUITE_MIXED_FALLBACK_GATE=1           allow certified fast/exact fallback mixed_candidate gates
   CERTIFICATE_MODE=full-vocab-top1-metal
   DRY_RUN=1                             print commands without running model work
 EOF
@@ -133,6 +135,14 @@ bool_enabled "$check_quiet" >/dev/null || true
 bool_enabled "$gate_check_quiet" >/dev/null || true
 bool_enabled "$overwrite" >/dev/null || true
 bool_enabled "$dry_run" >/dev/null || true
+bool_enabled "$suite_mixed_fallback_gate" >/dev/null || true
+if [[ -z "$suite_window_min_total_speedup" ]]; then
+  if bool_enabled "$suite_mixed_fallback_gate"; then
+    suite_window_min_total_speedup="1.0"
+  else
+    suite_window_min_total_speedup="$suite_min_total_speedup"
+  fi
+fi
 [[ -n "$token_windows" ]] || die "TOKEN_WINDOWS is required"
 
 if [[ -n "$promotion_prepare_log" ]]; then
@@ -203,6 +213,7 @@ manifest="$log_dir/promotion_manifest.env"
   printf 'total_threshold=%q\n' "$total_threshold"
   printf 'suite_min_total_speedup=%q\n' "$suite_min_total_speedup"
   printf 'suite_window_min_total_speedup=%q\n' "$suite_window_min_total_speedup"
+  printf 'suite_mixed_fallback_gate=%q\n' "$suite_mixed_fallback_gate"
   printf 'certificate_mode=%q\n' "$certificate_mode"
 } >"$manifest"
 
@@ -248,6 +259,7 @@ gate_cmd=(
   CERTIFICATE_MODE="$certificate_mode"
   SUITE_MIN_TOTAL_SPEEDUP="$suite_min_total_speedup"
   SUITE_WINDOW_MIN_TOTAL_SPEEDUP="$suite_window_min_total_speedup"
+  SUITE_MIXED_FALLBACK_GATE="$suite_mixed_fallback_gate"
   ABBA_WARMUPS="$abba_warmups"
   ABBA_REPEATS="$abba_repeats"
   ABBA_TRIM_PER_ARM="$abba_trim_per_arm"
@@ -352,7 +364,12 @@ if (( gate_rc != 0 )); then
   printf 'artifact_suite_promotion decision=reject reason=gate_failed rc=%s log=%s stderr=%s child_decision=%q\n' "$gate_rc" "$gate_stdout" "$gate_stderr" "$decision"
   exit "$gate_rc"
 fi
-if [[ "$decision" != artifact_suite_gate\ decision=candidate* ]]; then
+promotion_decision="candidate"
+if [[ "$decision" == artifact_suite_gate\ decision=candidate* ]]; then
+  promotion_decision="candidate"
+elif [[ "$decision" == artifact_suite_gate\ decision=mixed_candidate* ]] && bool_enabled "$suite_mixed_fallback_gate"; then
+  promotion_decision="mixed_candidate"
+else
   printf 'artifact_suite_promotion decision=reject reason=gate_not_candidate log=%s stderr=%s child_decision=%q\n' "$gate_stdout" "$gate_stderr" "$decision"
   exit 4
 fi
@@ -361,4 +378,4 @@ prepare_log="<skipped>"
 if [[ "$promotion_stage" == "all" && -f "$prepare_stdout" ]]; then
   prepare_log="$prepare_stdout"
 fi
-printf 'artifact_suite_promotion decision=candidate stage=%s log_dir=%s prepare_log=%s gate_log=%s child_decision=%q\n' "$promotion_stage" "$log_dir" "$prepare_log" "$gate_stdout" "$decision"
+printf 'artifact_suite_promotion decision=%s stage=%s log_dir=%s prepare_log=%s gate_log=%s child_decision=%q\n' "$promotion_decision" "$promotion_stage" "$log_dir" "$prepare_log" "$gate_stdout" "$decision"
