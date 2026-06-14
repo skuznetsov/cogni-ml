@@ -2530,14 +2530,25 @@ module ML::GGUF
       activation_ms = 0.0
       down_ms = 0.0
       scatter_combine_norm_ms = 0.0
+      prep_pre_norm_ms = 0.0
+      prep_route_ms = 0.0
+      prep_validate_plan_ms = 0.0
+      prep_assignment_ms = 0.0
+      prep_input_build_ms = 0.0
 
       use_gpu_gather = moe_grouped_gpu_gather_enabled?(row_count) && moe_grouped_resident_batch_graph_enabled?(row_count)
       use_gpu_prenorm = use_gpu_gather && moe_grouped_gpu_prenorm_enabled?(row_count)
+      prep_timing_enabled = moe_grouped_prep_timing_enabled?
 
       prep_t0 = Time.instant
       ffn_in_rows = nil.as(Array(Float32)?)
-      ffn_in_rows = moe_ffn_pre_norm_rows(weights, il, attn_out_rows, row_count) unless use_gpu_prenorm
+      unless use_gpu_prenorm
+        pre_norm_t0 = Time.instant if prep_timing_enabled
+        ffn_in_rows = moe_ffn_pre_norm_rows(weights, il, attn_out_rows, row_count)
+        prep_pre_norm_ms += (Time.instant - pre_norm_t0.not_nil!).total_milliseconds if prep_timing_enabled
+      end
 
+      route_t0 = Time.instant if prep_timing_enabled
       selected_by_row = if supplied_routes = routes_by_row
                           supplied_routes
                         elsif moe_grouped_router_batch_rows_enabled?(row_count)
@@ -2548,6 +2559,8 @@ module ML::GGUF
                             route_experts(weights, il, attn_out_rows[row_offset, hp.n_embd])
                           end
                         end
+      prep_route_ms += (Time.instant - route_t0.not_nil!).total_milliseconds if prep_timing_enabled
+      validate_plan_t0 = Time.instant if prep_timing_enabled
       selected_by_row.each do |selected|
         raise ArgumentError.new("moe_ffn_grouped_expert_rows routes must not be empty") if selected.empty?
       end
@@ -2556,7 +2569,9 @@ module ML::GGUF
         plan = grouped_moe_cognigraph_plan(selected_by_row, hp.n_embd, hp.expert_ff, hp.expert_count)
         emit_grouped_moe_cognigraph_plan(il, row_count, plan)
       end
+      prep_validate_plan_ms += (Time.instant - validate_plan_t0.not_nil!).total_milliseconds if prep_timing_enabled
 
+      assignment_t0 = Time.instant if prep_timing_enabled
       assignments_by_expert = Hash(Int32, Array(Tuple(Int32, Int32))).new do |hash, expert|
         hash[expert] = [] of Tuple(Int32, Int32)
       end
@@ -2569,6 +2584,7 @@ module ML::GGUF
           assignments_by_expert[route.expert] << {row, route_index}
         end
       end
+      prep_assignment_ms += (Time.instant - assignment_t0.not_nil!).total_milliseconds if prep_timing_enabled
       prep_ms += (Time.instant - prep_t0).total_milliseconds
 
       batch_by_expert = {} of Int32 => Int32
@@ -2583,9 +2599,14 @@ module ML::GGUF
       expert_outputs_by_route_slot = use_gpu_reduce ? nil : Array(Float32).new(route_slot_count * hp.n_embd, 0.0_f32)
       ffn_inputs_by_expert = {} of Int32 => Array(Float32)
       unless use_gpu_gather
+        input_build_t0 = Time.instant if prep_timing_enabled
         built = build_grouped_moe_inputs_by_expert(ffn_in_rows.not_nil!, assignments_by_expert, hp.n_embd)
         ffn_inputs_by_expert = built[:inputs]
         prep_ms += built[:prep_ms]
+        prep_input_build_ms += (Time.instant - input_build_t0.not_nil!).total_milliseconds if prep_timing_enabled
+      end
+      if prep_timing_enabled
+        STDERR.puts "diffusion_gemma_moe_grouped_prep_timing layer=#{il} rows=#{row_count} use_gpu_gather=#{use_gpu_gather} use_gpu_prenorm=#{use_gpu_prenorm} router_batch=#{moe_grouped_router_batch_rows_enabled?(row_count)} supplied_routes=#{!routes_by_row.nil?} active_experts=#{active_experts} route_slots=#{route_slot_count} max_expert_batch=#{max_expert_batch} over_threshold_experts=#{over_threshold_experts} pre_norm_ms=#{prep_pre_norm_ms} route_ms=#{prep_route_ms} validate_plan_ms=#{prep_validate_plan_ms} assignment_ms=#{prep_assignment_ms} input_build_ms=#{prep_input_build_ms} prep_ms=#{prep_ms}"
       end
 
       resident_rows_by_expert = nil
@@ -3765,6 +3786,10 @@ module ML::GGUF
 
     def moe_grouped_resident_timing_enabled? : Bool
       ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_TIMING"]? == "1"
+    end
+
+    def moe_grouped_prep_timing_enabled? : Bool
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_PREP_TIMING"]? == "1"
     end
 
     def ffn_resident_graph_cache_enabled? : Bool
