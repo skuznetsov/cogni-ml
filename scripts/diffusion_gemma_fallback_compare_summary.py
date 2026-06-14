@@ -82,7 +82,7 @@ def load_windows(path: Path) -> dict[str, dict[str, Any]]:
     return windows
 
 
-def compare(selected_path: Path, foreign_path: Path) -> list[dict[str, Any]]:
+def compare(selected_path: Path, foreign_path: Path, min_foreign_speedup: float) -> list[dict[str, Any]]:
     selected = load_windows(selected_path)
     foreign = load_windows(foreign_path)
     common = sorted(set(selected) & set(foreign), key=lambda key: tuple(map(int, key.split(":"))))
@@ -111,6 +111,8 @@ def compare(selected_path: Path, foreign_path: Path) -> list[dict[str, Any]]:
                 "delta_ms": delta,
                 "selected_ms": selected_ms,
                 "foreign_ms": foreign_ms,
+                "min_foreign_speedup": min_foreign_speedup,
+                "threshold_pass": ratio >= min_foreign_speedup,
                 "selected_route": selected_row.get("selected_route", ""),
                 "foreign_route": foreign_row.get("selected_route", ""),
                 "selected_status": selected_row.get("status", ""),
@@ -124,7 +126,7 @@ def compare(selected_path: Path, foreign_path: Path) -> list[dict[str, Any]]:
     return rows
 
 
-def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
+def aggregate(rows: list[dict[str, Any]], min_foreign_speedup: float) -> dict[str, Any]:
     selected_ms = sum(float(row["selected_ms"]) for row in rows)
     foreign_ms = sum(float(row["foreign_ms"]) for row in rows)
     ratio = selected_ms / foreign_ms if foreign_ms > 0 else math.inf
@@ -141,6 +143,8 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "delta_ms": selected_ms - foreign_ms,
         "selected_ms": selected_ms,
         "foreign_ms": foreign_ms,
+        "min_foreign_speedup": min_foreign_speedup,
+        "threshold_pass": ratio >= min_foreign_speedup,
         "selected_route": "",
         "foreign_route": "",
         "selected_status": "",
@@ -159,6 +163,8 @@ FIELDS = [
     "delta_ms",
     "selected_ms",
     "foreign_ms",
+    "min_foreign_speedup",
+    "threshold_pass",
     "selected_route",
     "foreign_route",
     "selected_status",
@@ -183,18 +189,20 @@ def print_tsv(rows: list[dict[str, Any]]) -> None:
         print("\t".join(values))
 
 
-def print_text(rows: list[dict[str, Any]], selected_path: Path, foreign_path: Path) -> None:
-    total = aggregate(rows)
+def print_text(rows: list[dict[str, Any]], selected_path: Path, foreign_path: Path, min_foreign_speedup: float) -> None:
+    total = aggregate(rows, min_foreign_speedup)
     print("DiffusionGemma fallback replay compare")
     print(f"  selected_plan={selected_path}")
     print(f"  foreign_plan={foreign_path}")
     print(
         "  aggregate common_windows=%d winner=%s foreign_vs_selected=%s "
-        "selected_ms=%s foreign_ms=%s delta_ms=%s"
+        "min_foreign_speedup=%s threshold_pass=%s selected_ms=%s foreign_ms=%s delta_ms=%s"
         % (
             len(rows),
             total["winner"],
             fmt(float(total["foreign_vs_selected"])),
+            fmt(float(total["min_foreign_speedup"])),
+            str(total["threshold_pass"]).lower(),
             fmt(float(total["selected_ms"])),
             fmt(float(total["foreign_ms"])),
             fmt(float(total["delta_ms"])),
@@ -203,12 +211,13 @@ def print_text(rows: list[dict[str, Any]], selected_path: Path, foreign_path: Pa
     print("  windows:")
     for row in rows:
         print(
-            "    %s winner=%s foreign_vs_selected=%s selected=%sms(%s/%s) "
-            "foreign=%sms(%s/%s) delta_ms=%s"
+            "    %s winner=%s foreign_vs_selected=%s threshold_pass=%s "
+            "selected=%sms(%s/%s) foreign=%sms(%s/%s) delta_ms=%s"
             % (
                 row["window"],
                 row["winner"],
                 fmt(float(row["foreign_vs_selected"])),
+                str(row["threshold_pass"]).lower(),
                 fmt(float(row["selected_ms"])),
                 row["selected_route"],
                 row["selected_status"],
@@ -224,15 +233,27 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--selected-route-plan", required=True, type=Path)
     parser.add_argument("--foreign-route-plan", required=True, type=Path)
+    parser.add_argument("--min-foreign-speedup", type=float, default=1.0)
+    parser.add_argument("--require-foreign", "--require-foreign-pass", dest="require_foreign", action="store_true")
     parser.add_argument("--tsv", action="store_true")
     args = parser.parse_args(argv)
+    if not math.isfinite(args.min_foreign_speedup) or args.min_foreign_speedup <= 0.0:
+        die("--min-foreign-speedup must be a positive finite number")
 
-    rows = compare(args.selected_route_plan, args.foreign_route_plan)
-    output_rows = [aggregate(rows)] + rows
+    rows = compare(args.selected_route_plan, args.foreign_route_plan, args.min_foreign_speedup)
+    summary = aggregate(rows, args.min_foreign_speedup)
+    output_rows = [summary] + rows
     if args.tsv:
         print_tsv(output_rows)
     else:
-        print_text(rows, args.selected_route_plan, args.foreign_route_plan)
+        print_text(rows, args.selected_route_plan, args.foreign_route_plan, args.min_foreign_speedup)
+    if args.require_foreign and not summary["threshold_pass"]:
+        print(
+            "fallback compare rejected: foreign_vs_selected=%s below min_foreign_speedup=%s"
+            % (fmt(float(summary["foreign_vs_selected"])), fmt(float(args.min_foreign_speedup))),
+            file=sys.stderr,
+        )
+        return 4
     return 0
 
 

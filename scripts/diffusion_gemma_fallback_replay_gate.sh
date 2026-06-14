@@ -33,6 +33,8 @@ total_threshold="${TOTAL_THRESHOLD:-${LOAD_TOTAL_THRESHOLD:-240}}"
 overwrite="${SUITE_ARTIFACT_OVERWRITE:-0}"
 dry_run="${DRY_RUN:-0}"
 summary_enabled="${FALLBACK_SUMMARY:-1}"
+fallback_compare_min_foreign_speedup="${FALLBACK_COMPARE_MIN_FOREIGN_SPEEDUP:-1.0}"
+fallback_compare_require_foreign="${FALLBACK_COMPARE_REQUIRE_FOREIGN:-0}"
 
 suite_min_total_speedup="${SUITE_MIN_TOTAL_SPEEDUP:-${MIN_TOTAL_SPEEDUP:-1.10}}"
 suite_window_min_total_speedup="${SUITE_WINDOW_MIN_TOTAL_SPEEDUP:-1.0}"
@@ -68,6 +70,9 @@ Important environment knobs:
   VARIANT_PROFILE=prompt-ffn-resident   profile used by existing fast artifacts
   CHECK_QUIET=1                         quiet precheck before prepare/gate work
   FALLBACK_SUMMARY=1                    write atlas and pp/tg summaries after gate
+  FALLBACK_COMPARE_MIN_FOREIGN_SPEEDUP=1.0
+                                        minimum foreign-vs-selected speedup for compare summary
+  FALLBACK_COMPARE_REQUIRE_FOREIGN=0    when 1, compare mode rejects unless foreign beats threshold
   DRY_RUN=1                             print commands without model work
 
 The wrapper only prepares SUITE_ARTIFACT_ARMS=base and uses
@@ -206,6 +211,7 @@ bool_enabled "$gate_check_quiet" >/dev/null || true
 bool_enabled "$overwrite" >/dev/null || true
 bool_enabled "$dry_run" >/dev/null || true
 bool_enabled "$summary_enabled" >/dev/null || true
+bool_enabled "$fallback_compare_require_foreign" >/dev/null || true
 
 case "$stage" in
   all|prepare|attach|gate)
@@ -301,6 +307,8 @@ manifest="$log_dir/fallback_replay_manifest.env"
   printf 'load_threshold=%q\n' "$load_threshold"
   printf 'total_threshold=%q\n' "$total_threshold"
   printf 'summary_enabled=%q\n' "$summary_enabled"
+  printf 'fallback_compare_min_foreign_speedup=%q\n' "$fallback_compare_min_foreign_speedup"
+  printf 'fallback_compare_require_foreign=%q\n' "$fallback_compare_require_foreign"
   printf 'foreign_base_map_override=%q\n' "$foreign_base_map_override"
   printf 'foreign_base_map=%q\n' "$foreign_base_map"
 } >"$manifest"
@@ -470,8 +478,12 @@ write_summaries() {
 
 write_compare_summary() {
   if ! bool_enabled "$summary_enabled"; then
-    printf 'fallback_replay_compare_summary skipped reason=disabled\n'
-    return 0
+    if bool_enabled "$fallback_compare_require_foreign"; then
+      printf 'fallback_replay_compare_summary summary=disabled guard=required\n'
+    else
+      printf 'fallback_replay_compare_summary skipped reason=disabled\n'
+      return 0
+    fi
   fi
   if [[ ! -f "$selected_summary_route_plan" || ! -f "$foreign_summary_route_plan" ]]; then
     printf 'fallback_replay_compare_summary warning=missing_route_plan selected=%s foreign=%s\n' \
@@ -484,11 +496,27 @@ write_compare_summary() {
     "$repo_root/scripts/diffusion_gemma_fallback_compare_summary.py"
     --selected-route-plan "$selected_summary_route_plan"
     --foreign-route-plan "$foreign_summary_route_plan"
+    --min-foreign-speedup "$fallback_compare_min_foreign_speedup"
   )
-  if "${compare_cmd[@]}" >"$compare_summary" 2>"$compare_summary.stderr"; then
+  if bool_enabled "$fallback_compare_require_foreign"; then
+    compare_cmd+=(--require-foreign)
+  fi
+
+  local compare_rc=0
+  set +e
+  "${compare_cmd[@]}" >"$compare_summary" 2>"$compare_summary.stderr"
+  compare_rc=$?
+  set -e
+  if (( compare_rc == 0 )); then
     cat "$compare_summary"
   else
-    printf 'fallback_replay_compare_summary warning=compare_failed stderr=%s\n' "$compare_summary.stderr"
+    cat "$compare_summary"
+    if bool_enabled "$fallback_compare_require_foreign"; then
+      printf 'fallback_replay_compare_summary reject=compare_failed rc=%s stderr=%s\n' "$compare_rc" "$compare_summary.stderr"
+      cat "$compare_summary.stderr" >&2
+      return "$compare_rc"
+    fi
+    printf 'fallback_replay_compare_summary warning=compare_failed rc=%s stderr=%s\n' "$compare_rc" "$compare_summary.stderr"
     return 0
   fi
   if "${compare_cmd[@]}" --tsv >"$compare_summary_tsv" 2>"$compare_summary_tsv.stderr"; then
@@ -521,14 +549,18 @@ if bool_enabled "$dry_run"; then
     else
       print_cmd gate_cmd "${gate_cmd[@]}"
     fi
-    if bool_enabled "$summary_enabled"; then
+    if bool_enabled "$summary_enabled" || { [[ "$replay_mode" == "compare" ]] && bool_enabled "$fallback_compare_require_foreign"; }; then
       if [[ "$replay_mode" == "compare" ]]; then
         print_cmd selected_summary_atlas_cmd python3 "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py" "$selected_summary_route_plan"
         print_cmd selected_summary_pp_tg_cmd python3 "$repo_root/scripts/diffusion_gemma_pp_tg_summary.py" "$selected_gate_stdout"
         print_cmd foreign_summary_atlas_cmd python3 "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py" "$foreign_summary_route_plan"
         print_cmd foreign_summary_pp_tg_cmd python3 "$repo_root/scripts/diffusion_gemma_pp_tg_summary.py" "$foreign_gate_stdout"
-        print_cmd compare_summary_cmd python3 "$repo_root/scripts/diffusion_gemma_fallback_compare_summary.py" --selected-route-plan "$selected_summary_route_plan" --foreign-route-plan "$foreign_summary_route_plan"
-        print_cmd compare_summary_tsv_cmd python3 "$repo_root/scripts/diffusion_gemma_fallback_compare_summary.py" --selected-route-plan "$selected_summary_route_plan" --foreign-route-plan "$foreign_summary_route_plan" --tsv
+        compare_dry_cmd=(python3 "$repo_root/scripts/diffusion_gemma_fallback_compare_summary.py" --selected-route-plan "$selected_summary_route_plan" --foreign-route-plan "$foreign_summary_route_plan" --min-foreign-speedup "$fallback_compare_min_foreign_speedup")
+        if bool_enabled "$fallback_compare_require_foreign"; then
+          compare_dry_cmd+=(--require-foreign)
+        fi
+        print_cmd compare_summary_cmd "${compare_dry_cmd[@]}"
+        print_cmd compare_summary_tsv_cmd "${compare_dry_cmd[@]}" --tsv
       elif [[ "$replay_mode" == "foreign" ]]; then
         print_cmd summary_atlas_cmd python3 "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py" "$foreign_summary_route_plan"
         print_cmd summary_atlas_tsv_cmd python3 "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py" "$foreign_summary_route_plan" --tsv
@@ -617,7 +649,15 @@ if [[ "$stage" == "all" || "$stage" == "gate" ]]; then
         "$selected_rc" "$foreign_rc" "$log_dir"
       exit 4
     fi
+    set +e
     write_compare_summary
+    compare_rc=$?
+    set -e
+    if (( compare_rc != 0 )); then
+      printf 'fallback_replay decision=reject mode=compare reason=compare_summary_failed rc=%s log_dir=%s compare_summary=%s\n' \
+        "$compare_rc" "$log_dir" "$compare_summary"
+      exit "$compare_rc"
+    fi
     printf 'fallback_replay decision=complete mode=compare stage=%s log_dir=%s selected_log=%s foreign_log=%s selected_decision=%q foreign_decision=%q\n' \
       "$stage" "$log_dir" "$selected_gate_stdout" "$foreign_gate_stdout" "$selected_decision" "$foreign_decision"
     exit 0

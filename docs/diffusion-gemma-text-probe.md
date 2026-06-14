@@ -432,12 +432,32 @@ When reusing existing artifacts in compare mode, pass them through
 base map. `FALLBACK_FOREIGN_BASE_ROUTE_ARTIFACT_MAP` is foreign-only and is
 rejected for compare mode.
 
+By default the compare summary is passive evidence. To make it a fail-closed
+promotion guard, require the aggregate common-window foreign replay speedup to
+clear a threshold:
+
+```sh
+FALLBACK_REPLAY_MODE=compare \
+FALLBACK_COMPARE_REQUIRE_FOREIGN=1 \
+FALLBACK_COMPARE_MIN_FOREIGN_SPEEDUP=1.10 \
+MIXED_ROUTE_PLAN=/tmp/diffusiongemma_route_plan_full30_20260614043810/route_plan.jsonl \
+scripts/diffusion_gemma_fallback_replay_gate.sh
+```
+
+This guard compares only common prompt:canvas windows. If the selected gate
+covers the full mixed suite and foreign replay covers only fallback windows, the
+threshold is still applied to the shared fallback window set rather than to the
+whole selected suite. `FALLBACK_SUMMARY=0` disables passive reports, but not
+the required guard when `FALLBACK_COMPARE_REQUIRE_FOREIGN=1`.
+
 The compare helper can also be run offline:
 
 ```sh
 scripts/diffusion_gemma_fallback_compare_summary.py \
   --selected-route-plan LOG_DIR/gate_selected/route_plan.jsonl \
-  --foreign-route-plan LOG_DIR/gate_foreign/route_plan.jsonl
+  --foreign-route-plan LOG_DIR/gate_foreign/route_plan.jsonl \
+  --min-foreign-speedup 1.10 \
+  --require-foreign
 ```
 
 The promotion wrapper records and forwards the same expected-metadata controls
