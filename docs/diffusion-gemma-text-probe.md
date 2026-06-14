@@ -248,3 +248,22 @@ The helper checks that selected fast-route artifacts exist by default and exits
 `DIFFUSION_GEMMA_MIXED_FAST_ROUTE_ARTIFACT_MAP`, not `SUITE_*`, because mixed
 runtime selection has exact fallback windows while suite gates expect complete
 per-window maps.
+
+`scripts/diffusion_gemma_prompt_output_cert_probe.cr` can also consume the same
+plan directly:
+
+```sh
+crystal build scripts/diffusion_gemma_prompt_output_cert_probe.cr \
+  -o /tmp/diffusion_gemma_prompt_output_cert_probe \
+  --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"
+
+/tmp/diffusion_gemma_prompt_output_cert_probe \
+  --mixed-route-plan LOG_DIR/route_plan.jsonl \
+  --dry-run-route-selection
+```
+
+For `variant_fast` windows, the probe runs the variant arm with the selected
+route artifact. For `base_exact` fallback windows, it runs the variant side
+through the base env and does not load the rejected/unsafe variant artifact.
+Explicit `--*-route-artifact*` options are rejected when `--mixed-route-plan` is
+set, so a mixed plan remains the single route authority.

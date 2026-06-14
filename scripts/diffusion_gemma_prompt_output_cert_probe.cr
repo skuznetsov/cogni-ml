@@ -1,6 +1,7 @@
 require "option_parser"
 require "digest/sha256"
 require "../src/ml/gguf/diffusion_gemma_cpu"
+require "../src/ml/gguf/diffusion_gemma_runtime"
 require "../src/ml/gguf/reader"
 
 DEFAULT_MODEL       = "#{ENV["HOME"]}/.cache/lm-studio/models/unsloth/diffusiongemma-26B-A4B-it-GGUF/diffusiongemma-26B-A4B-it-Q4_K_M.gguf"
@@ -83,6 +84,8 @@ base_route_artifact_path = nil.as(String?)
 variant_route_artifact_path = nil.as(String?)
 base_route_artifact_map_arg = nil.as(String?)
 variant_route_artifact_map_arg = nil.as(String?)
+mixed_route_plan_path = nil.as(String?)
+dry_run_route_selection = false
 require_argmax_match = false
 require_sampled_match = false
 min_base_logit_margin = nil.as(Float64?)
@@ -115,6 +118,8 @@ OptionParser.parse do |p|
   p.on("--variant-route-artifact PATH", "Load variant prompt MoE routes from an existing artifact") { |v| variant_route_artifact_path = v }
   p.on("--base-route-artifact-map SPEC", "Load base routes per token window, e.g. 1:0=/tmp/a,17:100=/tmp/b") { |v| base_route_artifact_map_arg = v }
   p.on("--variant-route-artifact-map SPEC", "Load variant routes per token window, e.g. 1:0=/tmp/a,17:100=/tmp/b") { |v| variant_route_artifact_map_arg = v }
+  p.on("--mixed-route-plan PATH", "Load a mixed variant_fast/base_exact route plan and select per-window execution") { |v| mixed_route_plan_path = v }
+  p.on("--dry-run-route-selection", "Print mixed route selection and exit before loading the model") { dry_run_route_selection = true }
   p.on("--require-argmax-match", "Exit 4 when any canvas row changes bounded argmax") { require_argmax_match = true }
   p.on("--require-sampled-match", "Exit 4 when any canvas row changes deterministic sampled token") { require_sampled_match = true }
   p.on("--min-base-logit-margin F", "Exit 4 when the minimum base top1/top2 logit margin is below F") { |v| min_base_logit_margin = v.to_f64 }
@@ -186,6 +191,35 @@ def validate_route_artifact_map!(map : Hash(Tuple(Int32, Int32), String),
   windows.each do |window|
     raise "#{label} missing window #{window[0]}:#{window[1]}" unless map.has_key?(window)
   end
+end
+
+def require_route_plan_window(plan : ML::GGUF::DiffusionGemmaMixedRoutePlan,
+                              window : Tuple(Int32, Int32)) : ML::GGUF::DiffusionGemmaMixedRoutePlan::Window
+  plan.window(window[0], window[1]) ||
+    raise "--token-windows contains #{window[0]}:#{window[1]} but --mixed-route-plan does not"
+end
+
+def selected_variant_env(route_window : ML::GGUF::DiffusionGemmaMixedRoutePlan::Window?,
+                         base_env : ArmEnv,
+                         variant_env : ArmEnv) : ArmEnv
+  return variant_env unless route_window
+
+  route_window.base_exact? ? base_env : variant_env
+end
+
+def selected_variant_artifact(route_window : ML::GGUF::DiffusionGemmaMixedRoutePlan::Window?) : String?
+  return nil unless route_window
+  return nil unless route_window.variant_fast?
+
+  route_window.variant_route_artifact
+end
+
+def selected_route_name(route_window : ML::GGUF::DiffusionGemmaMixedRoutePlan::Window?) : String
+  route_window.try(&.selected_route) || "variant"
+end
+
+def selected_env_role(route_window : ML::GGUF::DiffusionGemmaMixedRoutePlan::Window?) : String
+  route_window.try(&.base_exact?) ? "base" : "variant"
 end
 
 def parse_int_list(raw : String, label : String) : Array(Int32)
@@ -550,7 +584,6 @@ def median(values : Array(Float64)) : Float64
   sorted.size.odd? ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2.0
 end
 
-raise "model not found: #{model}" unless File.exists?(model)
 raise "--prompt-len must be positive" unless prompt_len > 0
 raise "--canvas-len must be positive" unless canvas_len > 0
 valid_certificate_modes = ["bounded", "full-vocab-top1-metal", "full-vocab-top1-cpu", "full-vocab-top2-metal", "full-vocab-top2-cpu"]
@@ -577,6 +610,43 @@ if threshold = max_logit_delta
   raise "--max-logit-delta must be finite and non-negative" unless threshold.finite? && threshold >= 0.0
 end
 
+mixed_route_plan = mixed_route_plan_path.try { |path| ML::GGUF::DiffusionGemmaMixedRoutePlan.from_jsonl(path) }
+if mixed_route_plan
+  if base_route_artifact_path || variant_route_artifact_path || base_route_artifact_map_arg || variant_route_artifact_map_arg
+    raise "--mixed-route-plan is incompatible with explicit route-artifact path/map options"
+  end
+end
+
+windows = if raw = token_windows_arg
+            parse_token_windows(raw)
+          elsif plan = mixed_route_plan
+            plan.windows.map { |window| {window.prompt_token, window.canvas_token} }
+          else
+            [{prompt_token, canvas_token}]
+          end
+if plan = mixed_route_plan
+  windows.each { |window| require_route_plan_window(plan, window) }
+end
+
+if dry_run_route_selection
+  puts "# mixed_route_plan=#{mixed_route_plan_path || "<none>"}"
+  windows.each_with_index do |window, window_index|
+    route_window = mixed_route_plan.try { |plan| require_route_plan_window(plan, window) }
+    puts [
+      "mixed_route_selection",
+      "window=#{window_index}",
+      "prompt_token=#{window[0]}",
+      "canvas_token=#{window[1]}",
+      "selected_route=#{selected_route_name(route_window)}",
+      "variant_env_role=#{selected_env_role(route_window)}",
+      "variant_route_artifact=#{selected_variant_artifact(route_window) || "<none>"}",
+      "reason=#{route_window.try(&.reason) || "explicit_variant"}",
+    ].join('\t')
+  end
+  exit
+end
+
+raise "model not found: #{model}" unless File.exists?(model)
 load_t0 = Time.instant
 weights = ML::GGUF::DiffusionGemmaWeights.from_gguf(model)
 load_ms = (Time.instant - load_t0).total_milliseconds
@@ -584,7 +654,6 @@ hp = weights.hparams
 raise "--max-layers exceeds model layer count" if max_layers > hp.n_layer
 raise "prompt+canvas exceeds context_length" if prompt_len + canvas_len > hp.context_length
 
-windows = token_windows_arg ? parse_token_windows(token_windows_arg.not_nil!) : [{prompt_token, canvas_token}]
 candidate_offsets = parse_int_list(candidate_offsets_arg, "--candidate-offsets")
 windows.each do |window|
   p_start = window[0]
@@ -609,15 +678,15 @@ end
 validate_route_artifact_map!(base_route_artifact_map, windows, "--base-route-artifact-map") unless base_route_artifact_map.empty?
 validate_route_artifact_map!(variant_route_artifact_map, windows, "--variant-route-artifact-map") unless variant_route_artifact_map.empty?
 base_env_sha256 = arm_env_fingerprint(base_env)
-variant_env_sha256 = arm_env_fingerprint(variant_env)
 model_sha256 = model_fingerprint(model)
 
 puts "# load_ms=#{format_f64(load_ms)}"
 puts "# base_env=#{base_env.raw.empty? ? "<empty>" : base_env.raw}"
 puts "# variant_env=#{variant_env.raw.empty? ? "<empty>" : variant_env.raw}"
 puts "# certificate_mode=#{certificate_mode}"
+puts "# mixed_route_plan=#{mixed_route_plan_path || "<none>"}"
 puts "# route_artifact_base=#{base_route_artifact_path || (base_route_artifact_map.empty? ? "<none>" : "map:#{base_route_artifact_map.size}")}"
-puts "# route_artifact_variant=#{variant_route_artifact_path || (variant_route_artifact_map.empty? ? "<none>" : "map:#{variant_route_artifact_map.size}")}"
+puts "# route_artifact_variant=#{mixed_route_plan ? "mixed_plan" : (variant_route_artifact_path || (variant_route_artifact_map.empty? ? "<none>" : "map:#{variant_route_artifact_map.size}"))}"
 puts [
   "kind",
   "window",
@@ -659,25 +728,28 @@ if certificate_mode != "bounded"
     canvas_rows = ML::GGUF::DiffusionGemmaCPU.canvas_rows_from_tokens(weights, canvas_tokens)
     mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: prompt_len, canvas_len: canvas_len, sliding_window: hp.sliding_window)
     prompt_tokens_sha256 = prompt_tokens_fingerprint(prompt_tokens)
+    route_window = mixed_route_plan.try { |plan| require_route_plan_window(plan, window) }
+    variant_run_env = selected_variant_env(route_window, base_env, variant_env)
+    variant_run_env_sha256 = arm_env_fingerprint(variant_run_env)
     base_artifact_path = base_route_artifact_path || base_route_artifact_map[window]?
-    variant_artifact_path = variant_route_artifact_path || variant_route_artifact_map[window]?
+    variant_artifact_path = selected_variant_artifact(route_window) || variant_route_artifact_path || variant_route_artifact_map[window]?
     base_routes = base_artifact_path.try do |path|
       load_route_artifact(path, "base", prompt_len, max_layers, prompt_tokens_sha256, base_env_sha256, model_sha256)
     end
     variant_routes = variant_artifact_path.try do |path|
-      load_route_artifact(path, "variant", prompt_len, max_layers, prompt_tokens_sha256, variant_env_sha256, model_sha256)
+      load_route_artifact(path, "variant", prompt_len, max_layers, prompt_tokens_sha256, variant_run_env_sha256, model_sha256)
     end
 
     if use_top2
       base_top2_result = run_full_vocab_top2_arm(weights, prompt_rows, canvas_rows, mask, max_layers, base_env, use_metal, base_routes)
-      variant_top2_result = run_full_vocab_top2_arm(weights, prompt_rows, canvas_rows, mask, max_layers, variant_env, use_metal, variant_routes)
+      variant_top2_result = run_full_vocab_top2_arm(weights, prompt_rows, canvas_rows, mask, max_layers, variant_run_env, use_metal, variant_routes)
       base_top1s = base_top2_result.top2s.map(&.top1)
       variant_top1s = variant_top2_result.top2s.map(&.top1)
       base = base_top2_result
       variant = variant_top2_result
     else
       base_top1_result = run_full_vocab_top1_arm(weights, prompt_rows, canvas_rows, mask, max_layers, base_env, use_metal, base_routes)
-      variant_top1_result = run_full_vocab_top1_arm(weights, prompt_rows, canvas_rows, mask, max_layers, variant_env, use_metal, variant_routes)
+      variant_top1_result = run_full_vocab_top1_arm(weights, prompt_rows, canvas_rows, mask, max_layers, variant_run_env, use_metal, variant_routes)
       base_top1s = base_top1_result.top1s
       variant_top1s = variant_top1_result.top1s
       base = base_top1_result
@@ -696,6 +768,9 @@ if certificate_mode != "bounded"
       "canvas_token=#{canvas_start}",
       "prompt_len=#{prompt_len}",
       "canvas_len=#{canvas_len}",
+      "selected_route=#{selected_route_name(route_window)}",
+      "variant_env_role=#{selected_env_role(route_window)}",
+      "variant_route_artifact=#{variant_artifact_path || "<none>"}",
       "certificate_mode=#{certificate_mode}",
       "candidate_count=#{hp.vocab_size}",
       "candidate_offsets=full_vocab",
@@ -719,6 +794,8 @@ if certificate_mode != "bounded"
       "window=#{window_index}",
       "prompt_token=#{prompt_start}",
       "canvas_token=#{canvas_start}",
+      "selected_route=#{selected_route_name(route_window)}",
+      "variant_env_role=#{selected_env_role(route_window)}",
       "max_abs=#{format_f64(hidden[:max_abs])}",
       "mean_abs=#{format_f64(hidden[:mean_abs])}",
       "checksum_base=#{format_f64(hidden[:checksum_a])}",
@@ -781,6 +858,8 @@ if certificate_mode != "bounded"
       "window=#{window_index}",
       "prompt_token=#{prompt_start}",
       "canvas_token=#{canvas_start}",
+      "selected_route=#{selected_route_name(route_window)}",
+      "variant_env_role=#{selected_env_role(route_window)}",
       "certificate_mode=#{certificate_mode}",
       "argmax_matches=#{argmax_matches}/#{canvas_len}",
       "sampled_matches=n/a",
@@ -865,17 +944,20 @@ windows.each_with_index do |window, window_index|
   sample_us = ML::GGUF::DiffusionGemmaCPU.sample_u_rows(seed, canvas_len)
   mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: prompt_len, canvas_len: canvas_len, sliding_window: hp.sliding_window)
   prompt_tokens_sha256 = prompt_tokens_fingerprint(prompt_tokens)
+  route_window = mixed_route_plan.try { |plan| require_route_plan_window(plan, window) }
+  variant_run_env = selected_variant_env(route_window, base_env, variant_env)
+  variant_run_env_sha256 = arm_env_fingerprint(variant_run_env)
   base_artifact_path = base_route_artifact_path || base_route_artifact_map[window]?
-  variant_artifact_path = variant_route_artifact_path || variant_route_artifact_map[window]?
+  variant_artifact_path = selected_variant_artifact(route_window) || variant_route_artifact_path || variant_route_artifact_map[window]?
   base_routes = base_artifact_path.try do |path|
     load_route_artifact(path, "base", prompt_len, max_layers, prompt_tokens_sha256, base_env_sha256, model_sha256)
   end
   variant_routes = variant_artifact_path.try do |path|
-    load_route_artifact(path, "variant", prompt_len, max_layers, prompt_tokens_sha256, variant_env_sha256, model_sha256)
+    load_route_artifact(path, "variant", prompt_len, max_layers, prompt_tokens_sha256, variant_run_env_sha256, model_sha256)
   end
 
   base = run_arm(weights, prompt_rows, canvas_rows, mask, candidate_rows, sample_us, max_layers, temp_inv, base_env, base_routes)
-  variant = run_arm(weights, prompt_rows, canvas_rows, mask, candidate_rows, sample_us, max_layers, temp_inv, variant_env, variant_routes)
+  variant = run_arm(weights, prompt_rows, canvas_rows, mask, candidate_rows, sample_us, max_layers, temp_inv, variant_run_env, variant_routes)
   hidden = diff_stats(base.cache.final_rows, variant.cache.final_rows)
   cache_speedup = base.cache_ms / variant.cache_ms
   predict_speedup = base.predict_ms / variant.predict_ms
@@ -889,6 +971,9 @@ windows.each_with_index do |window, window_index|
     "canvas_token=#{canvas_start}",
     "prompt_len=#{prompt_len}",
     "canvas_len=#{canvas_len}",
+    "selected_route=#{selected_route_name(route_window)}",
+    "variant_env_role=#{selected_env_role(route_window)}",
+    "variant_route_artifact=#{variant_artifact_path || "<none>"}",
     "candidate_count=#{candidate_count}",
     "candidate_offsets=#{candidate_offsets.join(",")}",
     "candidate_stride=#{candidate_stride}",
@@ -911,6 +996,8 @@ windows.each_with_index do |window, window_index|
     "window=#{window_index}",
     "prompt_token=#{prompt_start}",
     "canvas_token=#{canvas_start}",
+    "selected_route=#{selected_route_name(route_window)}",
+    "variant_env_role=#{selected_env_role(route_window)}",
     "max_abs=#{format_f64(hidden[:max_abs])}",
     "mean_abs=#{format_f64(hidden[:mean_abs])}",
     "checksum_base=#{format_f64(hidden[:checksum_a])}",
