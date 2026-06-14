@@ -5,7 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 log_dir="${LOG_DIR:-/tmp/diffusiongemma_quiet_check_$(date +%Y%m%d%H%M%S)}"
 quiet_ms="${QUIET_MS:-15000}"
 load_threshold="${LOAD_THRESHOLD:-30}"
-total_threshold="${TOTAL_THRESHOLD:-90}"
+total_threshold="${TOTAL_THRESHOLD:-${LOAD_TOTAL_THRESHOLD:-90}}"
 summary_format="${SUMMARY_FORMAT:-json}"
 require_candidate="${REQUIRE_CANDIDATE:-0}"
 
