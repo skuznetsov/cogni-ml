@@ -1119,6 +1119,10 @@ describe ML::GGUF::DiffusionGemmaCPU do
     old_ffn_resident_max = ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MAX_CANVAS"]?
     old_ffn_combined_gate_up = ENV["DIFFUSION_GEMMA_FFN_RESIDENT_COMBINED_GATE_UP"]?
     old_ffn_combined_gate_up_off = ENV["DIFFUSION_GEMMA_FFN_RESIDENT_COMBINED_GATE_UP_OFF"]?
+    old_ffn_scratch = ENV["DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH"]?
+    old_ffn_scratch_off = ENV["DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH_OFF"]?
+    old_ffn_graph_cache = ENV["DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_CACHE"]?
+    old_ffn_graph_cache_off = ENV["DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_CACHE_OFF"]?
     begin
       ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH"] = "1"
       ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_MIN_CANVAS"] = "2"
@@ -1137,6 +1141,27 @@ describe ML::GGUF::DiffusionGemmaCPU do
         max_diff = diff if diff > max_diff
       end
       max_diff.should be < 1.0e-3_f32
+
+      ML::GGUF::DiffusionGemmaCPU.clear_ffn_resident_graph_cache
+      ENV["DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH"] = "1"
+      ENV.delete("DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH_OFF")
+      ENV["DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_CACHE"] = "1"
+      ENV.delete("DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_CACHE_OFF")
+      cached_first = ML::GGUF::DiffusionGemmaCPU.ffn_residual_rows_resident_graph(w, 0, rows, 2, routes, canvas: true)
+      cached_second = ML::GGUF::DiffusionGemmaCPU.ffn_residual_rows_resident_graph(w, 0, rows, 2, routes, canvas: true)
+      cached_first.should_not be_nil
+      cached_second.should_not be_nil
+      cache_stats = ML::GGUF::DiffusionGemmaCPU.ffn_resident_graph_cache_stats
+      cache_stats[:entries].should eq(1)
+      cache_stats[:misses].should eq(1)
+      cache_stats[:hits].should eq(1)
+      cached_actual = cached_second.not_nil!
+      cached_max_diff = 0.0_f32
+      expected.size.times do |i|
+        diff = (expected[i] - cached_actual[i]).abs
+        cached_max_diff = diff if diff > cached_max_diff
+      end
+      cached_max_diff.should be < 1.0e-3_f32
 
       ENV["DIFFUSION_GEMMA_FFN_RESIDENT_COMBINED_GATE_UP"] = "1"
       combined_resident = ML::GGUF::DiffusionGemmaCPU.ffn_residual_rows_resident_graph(w, 0, rows, 2, routes, canvas: true)
@@ -1220,6 +1245,27 @@ describe ML::GGUF::DiffusionGemmaCPU do
       else
         ENV.delete("DIFFUSION_GEMMA_FFN_RESIDENT_COMBINED_GATE_UP_OFF")
       end
+      if old_ffn_scratch
+        ENV["DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH"] = old_ffn_scratch
+      else
+        ENV.delete("DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH")
+      end
+      if old_ffn_scratch_off
+        ENV["DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH_OFF"] = old_ffn_scratch_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH_OFF")
+      end
+      if old_ffn_graph_cache
+        ENV["DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_CACHE"] = old_ffn_graph_cache
+      else
+        ENV.delete("DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_CACHE")
+      end
+      if old_ffn_graph_cache_off
+        ENV["DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_CACHE_OFF"] = old_ffn_graph_cache_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_CACHE_OFF")
+      end
+      ML::GGUF::DiffusionGemmaCPU.clear_ffn_resident_graph_cache
     end
   end
 
