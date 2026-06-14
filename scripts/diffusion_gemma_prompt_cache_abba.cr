@@ -45,6 +45,16 @@ struct PromptCacheSample
   getter projection_rope_q_apply_ms : Float64
   getter projection_rope_k_apply_ms : Float64
   getter materialize_ms : Float64
+  getter materialize_context_ms : Float64
+  getter materialize_attention_out_ms : Float64
+  getter materialize_shared_ffn_ms : Float64
+  getter materialize_moe_ffn_ms : Float64
+  getter materialize_combine_scale_ms : Float64
+  getter materialize_moe_grouped_prep_ms : Float64
+  getter materialize_moe_grouped_gate_up_ms : Float64
+  getter materialize_moe_grouped_activation_ms : Float64
+  getter materialize_moe_grouped_down_ms : Float64
+  getter materialize_moe_grouped_scatter_combine_norm_ms : Float64
   getter checksum : Float64
   getter prompt_cache_policy : Bool
   getter materialize_batch_rows : Bool
@@ -59,7 +69,15 @@ struct PromptCacheSample
                  @projection_k_norm_ms, @projection_v_norm_ms,
                  @projection_rope_ms, @projection_rope_table_ms,
                  @projection_rope_apply_ms, @projection_rope_q_apply_ms,
-                 @projection_rope_k_apply_ms, @materialize_ms, @checksum,
+                 @projection_rope_k_apply_ms, @materialize_ms,
+                 @materialize_context_ms, @materialize_attention_out_ms,
+                 @materialize_shared_ffn_ms, @materialize_moe_ffn_ms,
+                 @materialize_combine_scale_ms, @materialize_moe_grouped_prep_ms,
+                 @materialize_moe_grouped_gate_up_ms,
+                 @materialize_moe_grouped_activation_ms,
+                 @materialize_moe_grouped_down_ms,
+                 @materialize_moe_grouped_scatter_combine_norm_ms,
+                 @checksum,
                  @prompt_cache_policy, @materialize_batch_rows,
                  @materialize_grouped_moe, @projection_backend,
                  @fused_norm_rope)
@@ -67,22 +85,32 @@ struct PromptCacheSample
 
   def value(metric : String) : Float64
     case metric
-    when "total_ms"                   then total_ms
-    when "projection_ms"              then projection_ms
-    when "projection_norm_ms"         then projection_norm_ms
-    when "projection_matmul_ms"       then projection_matmul_ms
-    when "projection_assemble_ms"     then projection_assemble_ms
-    when "projection_copy_ms"         then projection_copy_ms
-    when "projection_head_norm_ms"    then projection_head_norm_ms
-    when "projection_q_norm_ms"       then projection_q_norm_ms
-    when "projection_k_norm_ms"       then projection_k_norm_ms
-    when "projection_v_norm_ms"       then projection_v_norm_ms
-    when "projection_rope_ms"         then projection_rope_ms
-    when "projection_rope_table_ms"   then projection_rope_table_ms
-    when "projection_rope_apply_ms"   then projection_rope_apply_ms
-    when "projection_rope_q_apply_ms" then projection_rope_q_apply_ms
-    when "projection_rope_k_apply_ms" then projection_rope_k_apply_ms
-    when "materialize_ms"             then materialize_ms
+    when "total_ms"                                        then total_ms
+    when "projection_ms"                                   then projection_ms
+    when "projection_norm_ms"                              then projection_norm_ms
+    when "projection_matmul_ms"                            then projection_matmul_ms
+    when "projection_assemble_ms"                          then projection_assemble_ms
+    when "projection_copy_ms"                              then projection_copy_ms
+    when "projection_head_norm_ms"                         then projection_head_norm_ms
+    when "projection_q_norm_ms"                            then projection_q_norm_ms
+    when "projection_k_norm_ms"                            then projection_k_norm_ms
+    when "projection_v_norm_ms"                            then projection_v_norm_ms
+    when "projection_rope_ms"                              then projection_rope_ms
+    when "projection_rope_table_ms"                        then projection_rope_table_ms
+    when "projection_rope_apply_ms"                        then projection_rope_apply_ms
+    when "projection_rope_q_apply_ms"                      then projection_rope_q_apply_ms
+    when "projection_rope_k_apply_ms"                      then projection_rope_k_apply_ms
+    when "materialize_ms"                                  then materialize_ms
+    when "materialize_context_ms"                          then materialize_context_ms
+    when "materialize_attention_out_ms"                    then materialize_attention_out_ms
+    when "materialize_shared_ffn_ms"                       then materialize_shared_ffn_ms
+    when "materialize_moe_ffn_ms"                          then materialize_moe_ffn_ms
+    when "materialize_combine_scale_ms"                    then materialize_combine_scale_ms
+    when "materialize_moe_grouped_prep_ms"                 then materialize_moe_grouped_prep_ms
+    when "materialize_moe_grouped_gate_up_ms"              then materialize_moe_grouped_gate_up_ms
+    when "materialize_moe_grouped_activation_ms"           then materialize_moe_grouped_activation_ms
+    when "materialize_moe_grouped_down_ms"                 then materialize_moe_grouped_down_ms
+    when "materialize_moe_grouped_scatter_combine_norm_ms" then materialize_moe_grouped_scatter_combine_norm_ms
     else
       raise "unknown metric #{metric}"
     end
@@ -121,6 +149,16 @@ TSV_HEADER = [
   "projection_rope_q_apply_ms",
   "projection_rope_k_apply_ms",
   "materialize_ms",
+  "materialize_context_ms",
+  "materialize_attention_out_ms",
+  "materialize_shared_ffn_ms",
+  "materialize_moe_ffn_ms",
+  "materialize_combine_scale_ms",
+  "materialize_moe_grouped_prep_ms",
+  "materialize_moe_grouped_gate_up_ms",
+  "materialize_moe_grouped_activation_ms",
+  "materialize_moe_grouped_down_ms",
+  "materialize_moe_grouped_scatter_combine_norm_ms",
   "checksum",
 ]
 
@@ -141,6 +179,16 @@ METRICS = [
   "projection_rope_q_apply_ms",
   "projection_rope_k_apply_ms",
   "materialize_ms",
+  "materialize_context_ms",
+  "materialize_attention_out_ms",
+  "materialize_shared_ffn_ms",
+  "materialize_moe_ffn_ms",
+  "materialize_combine_scale_ms",
+  "materialize_moe_grouped_prep_ms",
+  "materialize_moe_grouped_gate_up_ms",
+  "materialize_moe_grouped_activation_ms",
+  "materialize_moe_grouped_down_ms",
+  "materialize_moe_grouped_scatter_combine_norm_ms",
 ]
 
 def generated_token_sequence(default_token : Int32, count : Int32, vocab_size : Int32, label : String) : Array(Int32)
@@ -275,6 +323,16 @@ def run_arm(weights : ML::GGUF::DiffusionGemmaWeights,
     projection_rope_q_apply_ms: cache.projection_rope_q_apply_ms_by_layer.sum,
     projection_rope_k_apply_ms: cache.projection_rope_k_apply_ms_by_layer.sum,
     materialize_ms: cache.materialize_ms_by_layer.sum,
+    materialize_context_ms: cache.materialize_context_ms_by_layer.sum,
+    materialize_attention_out_ms: cache.materialize_attention_out_ms_by_layer.sum,
+    materialize_shared_ffn_ms: cache.materialize_shared_ffn_ms_by_layer.sum,
+    materialize_moe_ffn_ms: cache.materialize_moe_ffn_ms_by_layer.sum,
+    materialize_combine_scale_ms: cache.materialize_combine_scale_ms_by_layer.sum,
+    materialize_moe_grouped_prep_ms: cache.materialize_moe_grouped_prep_ms_by_layer.sum,
+    materialize_moe_grouped_gate_up_ms: cache.materialize_moe_grouped_gate_up_ms_by_layer.sum,
+    materialize_moe_grouped_activation_ms: cache.materialize_moe_grouped_activation_ms_by_layer.sum,
+    materialize_moe_grouped_down_ms: cache.materialize_moe_grouped_down_ms_by_layer.sum,
+    materialize_moe_grouped_scatter_combine_norm_ms: cache.materialize_moe_grouped_scatter_combine_norm_ms_by_layer.sum,
     checksum: checksum_rows(cache.final_rows),
     prompt_cache_policy: ML::GGUF::DiffusionGemmaCPU.prompt_cache_policy_requested?,
     materialize_batch_rows: ML::GGUF::DiffusionGemmaCPU.prompt_materialize_batch_rows_enabled?(prompt_len),
@@ -322,6 +380,16 @@ def print_sample(sample : PromptCacheSample,
     format_f64(sample.projection_rope_q_apply_ms),
     format_f64(sample.projection_rope_k_apply_ms),
     format_f64(sample.materialize_ms),
+    format_f64(sample.materialize_context_ms),
+    format_f64(sample.materialize_attention_out_ms),
+    format_f64(sample.materialize_shared_ffn_ms),
+    format_f64(sample.materialize_moe_ffn_ms),
+    format_f64(sample.materialize_combine_scale_ms),
+    format_f64(sample.materialize_moe_grouped_prep_ms),
+    format_f64(sample.materialize_moe_grouped_gate_up_ms),
+    format_f64(sample.materialize_moe_grouped_activation_ms),
+    format_f64(sample.materialize_moe_grouped_down_ms),
+    format_f64(sample.materialize_moe_grouped_scatter_combine_norm_ms),
     format_f64(sample.checksum),
   ].join('\t')
 end

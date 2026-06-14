@@ -328,6 +328,33 @@ module ML::GGUF
       end
     end
 
+    struct PromptMaterializeTiming
+      getter rows : Array(Float32)
+      getter context_ms : Float64
+      getter attention_out_ms : Float64
+      getter shared_ffn_ms : Float64
+      getter moe_ffn_ms : Float64
+      getter combine_scale_ms : Float64
+      getter moe_grouped_prep_ms : Float64
+      getter moe_grouped_gate_up_ms : Float64
+      getter moe_grouped_activation_ms : Float64
+      getter moe_grouped_down_ms : Float64
+      getter moe_grouped_scatter_combine_norm_ms : Float64
+
+      def initialize(@rows,
+                     @context_ms,
+                     @attention_out_ms,
+                     @shared_ffn_ms,
+                     @moe_ffn_ms,
+                     @combine_scale_ms,
+                     @moe_grouped_prep_ms = 0.0,
+                     @moe_grouped_gate_up_ms = 0.0,
+                     @moe_grouped_activation_ms = 0.0,
+                     @moe_grouped_down_ms = 0.0,
+                     @moe_grouped_scatter_combine_norm_ms = 0.0)
+      end
+    end
+
     enum CogniGraphPlanAccess
       Read
       Write
@@ -541,6 +568,16 @@ module ML::GGUF
       getter projection_rope_q_apply_ms_by_layer : Array(Float64)
       getter projection_rope_k_apply_ms_by_layer : Array(Float64)
       getter materialize_ms_by_layer : Array(Float64)
+      getter materialize_context_ms_by_layer : Array(Float64)
+      getter materialize_attention_out_ms_by_layer : Array(Float64)
+      getter materialize_shared_ffn_ms_by_layer : Array(Float64)
+      getter materialize_moe_ffn_ms_by_layer : Array(Float64)
+      getter materialize_combine_scale_ms_by_layer : Array(Float64)
+      getter materialize_moe_grouped_prep_ms_by_layer : Array(Float64)
+      getter materialize_moe_grouped_gate_up_ms_by_layer : Array(Float64)
+      getter materialize_moe_grouped_activation_ms_by_layer : Array(Float64)
+      getter materialize_moe_grouped_down_ms_by_layer : Array(Float64)
+      getter materialize_moe_grouped_scatter_combine_norm_ms_by_layer : Array(Float64)
       getter metal_cache_by_layer : Array(PromptLayerMetalCache?)
 
       def initialize(@final_rows,
@@ -560,6 +597,16 @@ module ML::GGUF
                      @projection_rope_q_apply_ms_by_layer = [] of Float64,
                      @projection_rope_k_apply_ms_by_layer = [] of Float64,
                      @materialize_ms_by_layer = [] of Float64,
+                     @materialize_context_ms_by_layer = [] of Float64,
+                     @materialize_attention_out_ms_by_layer = [] of Float64,
+                     @materialize_shared_ffn_ms_by_layer = [] of Float64,
+                     @materialize_moe_ffn_ms_by_layer = [] of Float64,
+                     @materialize_combine_scale_ms_by_layer = [] of Float64,
+                     @materialize_moe_grouped_prep_ms_by_layer = [] of Float64,
+                     @materialize_moe_grouped_gate_up_ms_by_layer = [] of Float64,
+                     @materialize_moe_grouped_activation_ms_by_layer = [] of Float64,
+                     @materialize_moe_grouped_down_ms_by_layer = [] of Float64,
+                     @materialize_moe_grouped_scatter_combine_norm_ms_by_layer = [] of Float64,
                      @metal_cache_by_layer = [] of PromptLayerMetalCache?)
       end
 
@@ -2420,6 +2467,15 @@ module ML::GGUF
                                                    prompt_projections : Array(AttentionProjection),
                                                    mask : DiffusionGemmaAttentionMask,
                                                    routes_by_prompt_row : Array(Array(ExpertRoute))? = nil) : Array(Float32)
+      layer_forward_prompt_rows_with_projections_timed(weights, il, prompt_rows, prompt_projections, mask, routes_by_prompt_row).rows
+    end
+
+    def layer_forward_prompt_rows_with_projections_timed(weights : DiffusionGemmaWeights,
+                                                         il : Int32,
+                                                         prompt_rows : Array(Float32),
+                                                         prompt_projections : Array(AttentionProjection),
+                                                         mask : DiffusionGemmaAttentionMask,
+                                                         routes_by_prompt_row : Array(Array(ExpertRoute))? = nil) : PromptMaterializeTiming
       hp = weights.hparams
       prompt_size = mask.prompt_len * hp.n_embd
       raise ArgumentError.new("prompt rows size mismatch: #{prompt_rows.size} != #{prompt_size}") unless prompt_rows.size == prompt_size
@@ -2429,7 +2485,7 @@ module ML::GGUF
       end
 
       if prompt_materialize_batch_rows_enabled?(mask.prompt_len) && mask.prompt_len > 1
-        return layer_forward_prompt_rows_with_projections_batched(
+        return layer_forward_prompt_rows_with_projections_batched_timed(
           weights,
           il,
           prompt_rows,
@@ -2439,6 +2495,7 @@ module ML::GGUF
         )
       end
 
+      t0 = Time.instant
       result = Array(Float32).new(prompt_size, 0.0_f32)
       mask.prompt_len.times do |pos|
         x = prompt_rows[pos * hp.n_embd, hp.n_embd]
@@ -2450,7 +2507,7 @@ module ML::GGUF
                     end
         copy_row!(result, pos, hp.n_embd, layer_row)
       end
-      result
+      PromptMaterializeTiming.new(result, (Time.instant - t0).total_milliseconds, 0.0, 0.0, 0.0, 0.0)
     end
 
     def layer_forward_prompt_rows_with_projections_batched(weights : DiffusionGemmaWeights,
@@ -2459,6 +2516,15 @@ module ML::GGUF
                                                            prompt_projections : Array(AttentionProjection),
                                                            mask : DiffusionGemmaAttentionMask,
                                                            routes_by_prompt_row : Array(Array(ExpertRoute))? = nil) : Array(Float32)
+      layer_forward_prompt_rows_with_projections_batched_timed(weights, il, prompt_rows, prompt_projections, mask, routes_by_prompt_row).rows
+    end
+
+    def layer_forward_prompt_rows_with_projections_batched_timed(weights : DiffusionGemmaWeights,
+                                                                 il : Int32,
+                                                                 prompt_rows : Array(Float32),
+                                                                 prompt_projections : Array(AttentionProjection),
+                                                                 mask : DiffusionGemmaAttentionMask,
+                                                                 routes_by_prompt_row : Array(Array(ExpertRoute))? = nil) : PromptMaterializeTiming
       hp = weights.hparams
       prompt_size = mask.prompt_len * hp.n_embd
       q_context_dim = hp.n_head * hp.head_dim_for_layer(il)
@@ -2468,21 +2534,45 @@ module ML::GGUF
         raise ArgumentError.new("routes_by_prompt_row size mismatch: #{supplied_routes.size} != #{mask.prompt_len}") unless supplied_routes.size == mask.prompt_len
       end
 
+      context_t0 = Time.instant
       context_rows = Array(Float32).new(mask.prompt_len * q_context_dim, 0.0_f32)
       mask.prompt_len.times do |pos|
         context = attention_context_prompt(prompt_projections, hp, il, query_pos: pos, sliding_window: mask.sliding_window)
         copy_row!(context_rows, pos, q_context_dim, context)
       end
+      context_ms = (Time.instant - context_t0).total_milliseconds
 
       force_gemv = prompt_materialize_exact_gemv_enabled?
+      attention_out_t0 = Time.instant
       attn_out_rows = attention_residual_from_context_rows(weights, il, prompt_rows, context_rows, mask.prompt_len, force_gemv: force_gemv)
+      attention_out_ms = (Time.instant - attention_out_t0).total_milliseconds
+      shared_t0 = Time.instant
       shared_rows = shared_dense_ffn_rows(weights, il, attn_out_rows, mask.prompt_len, force_gemv: force_gemv)
+      shared_ms = (Time.instant - shared_t0).total_milliseconds
+      moe_grouped_prep_ms = 0.0
+      moe_grouped_gate_up_ms = 0.0
+      moe_grouped_activation_ms = 0.0
+      moe_grouped_down_ms = 0.0
+      moe_grouped_scatter_combine_norm_ms = 0.0
+      moe_t0 = Time.instant
       moe_rows = if prompt_materialize_grouped_moe_enabled?
-                   moe_ffn_grouped_expert_rows(weights, il, attn_out_rows, mask.prompt_len, routes_by_prompt_row, force_gemv: force_gemv)
+                   grouped = moe_ffn_grouped_expert_rows_timed(weights, il, attn_out_rows, mask.prompt_len, routes_by_prompt_row, force_gemv: force_gemv)
+                   moe_grouped_prep_ms = grouped.prep_ms
+                   moe_grouped_gate_up_ms = grouped.gate_up_ms
+                   moe_grouped_activation_ms = grouped.activation_ms
+                   moe_grouped_down_ms = grouped.down_ms
+                   moe_grouped_scatter_combine_norm_ms = grouped.scatter_combine_norm_ms
+                   grouped.rows
                  else
                    moe_ffn_rows(weights, il, attn_out_rows, mask.prompt_len, routes_by_prompt_row)
                  end
-      ffn_residual_from_parts_rows(weights, il, attn_out_rows, shared_rows, moe_rows, mask.prompt_len, canvas: false)
+      moe_ms = (Time.instant - moe_t0).total_milliseconds
+      combine_t0 = Time.instant
+      rows = ffn_residual_from_parts_rows(weights, il, attn_out_rows, shared_rows, moe_rows, mask.prompt_len, canvas: false)
+      combine_ms = (Time.instant - combine_t0).total_milliseconds
+      PromptMaterializeTiming.new(rows, context_ms, attention_out_ms, shared_ms, moe_ms, combine_ms,
+        moe_grouped_prep_ms, moe_grouped_gate_up_ms, moe_grouped_activation_ms,
+        moe_grouped_down_ms, moe_grouped_scatter_combine_norm_ms)
     end
 
     def build_prompt_layer_cache(weights : DiffusionGemmaWeights,
@@ -2516,6 +2606,16 @@ module ML::GGUF
       projection_rope_q_apply_ms_by_layer = [] of Float64
       projection_rope_k_apply_ms_by_layer = [] of Float64
       materialize_ms_by_layer = [] of Float64
+      materialize_context_ms_by_layer = [] of Float64
+      materialize_attention_out_ms_by_layer = [] of Float64
+      materialize_shared_ffn_ms_by_layer = [] of Float64
+      materialize_moe_ffn_ms_by_layer = [] of Float64
+      materialize_combine_scale_ms_by_layer = [] of Float64
+      materialize_moe_grouped_prep_ms_by_layer = [] of Float64
+      materialize_moe_grouped_gate_up_ms_by_layer = [] of Float64
+      materialize_moe_grouped_activation_ms_by_layer = [] of Float64
+      materialize_moe_grouped_down_ms_by_layer = [] of Float64
+      materialize_moe_grouped_scatter_combine_norm_ms_by_layer = [] of Float64
       metal_cache_by_layer = [] of PromptLayerMetalCache?
       max_layers.times do |il|
         projection_t0 = Time.instant
@@ -2547,8 +2647,19 @@ module ML::GGUF
 
         routes = routes_by_layer_by_prompt_row ? routes_by_layer_by_prompt_row.not_nil![il] : nil
         materialize_t0 = Time.instant
-        rows = layer_forward_prompt_rows_with_projections(weights, il, rows, projections, mask, routes)
+        timed_materialize = layer_forward_prompt_rows_with_projections_timed(weights, il, rows, projections, mask, routes)
+        rows = timed_materialize.rows
         materialize_ms_by_layer << (Time.instant - materialize_t0).total_milliseconds
+        materialize_context_ms_by_layer << timed_materialize.context_ms
+        materialize_attention_out_ms_by_layer << timed_materialize.attention_out_ms
+        materialize_shared_ffn_ms_by_layer << timed_materialize.shared_ffn_ms
+        materialize_moe_ffn_ms_by_layer << timed_materialize.moe_ffn_ms
+        materialize_combine_scale_ms_by_layer << timed_materialize.combine_scale_ms
+        materialize_moe_grouped_prep_ms_by_layer << timed_materialize.moe_grouped_prep_ms
+        materialize_moe_grouped_gate_up_ms_by_layer << timed_materialize.moe_grouped_gate_up_ms
+        materialize_moe_grouped_activation_ms_by_layer << timed_materialize.moe_grouped_activation_ms
+        materialize_moe_grouped_down_ms_by_layer << timed_materialize.moe_grouped_down_ms
+        materialize_moe_grouped_scatter_combine_norm_ms_by_layer << timed_materialize.moe_grouped_scatter_combine_norm_ms
       end
 
       PromptLayerCache.new(
@@ -2569,6 +2680,16 @@ module ML::GGUF
         projection_rope_q_apply_ms_by_layer,
         projection_rope_k_apply_ms_by_layer,
         materialize_ms_by_layer,
+        materialize_context_ms_by_layer,
+        materialize_attention_out_ms_by_layer,
+        materialize_shared_ffn_ms_by_layer,
+        materialize_moe_ffn_ms_by_layer,
+        materialize_combine_scale_ms_by_layer,
+        materialize_moe_grouped_prep_ms_by_layer,
+        materialize_moe_grouped_gate_up_ms_by_layer,
+        materialize_moe_grouped_activation_ms_by_layer,
+        materialize_moe_grouped_down_ms_by_layer,
+        materialize_moe_grouped_scatter_combine_norm_ms_by_layer,
         metal_cache_by_layer,
       )
     end
