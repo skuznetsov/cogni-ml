@@ -35,6 +35,7 @@ dry_run="${DRY_RUN:-0}"
 summary_enabled="${FALLBACK_SUMMARY:-1}"
 fallback_compare_min_foreign_speedup="${FALLBACK_COMPARE_MIN_FOREIGN_SPEEDUP:-1.0}"
 fallback_compare_require_foreign="${FALLBACK_COMPARE_REQUIRE_FOREIGN:-0}"
+fallback_compare_write_promoted_route_plan="${FALLBACK_COMPARE_WRITE_PROMOTED_ROUTE_PLAN:-$fallback_compare_require_foreign}"
 
 suite_min_total_speedup="${SUITE_MIN_TOTAL_SPEEDUP:-${MIN_TOTAL_SPEEDUP:-1.10}}"
 suite_window_min_total_speedup="${SUITE_WINDOW_MIN_TOTAL_SPEEDUP:-1.0}"
@@ -73,6 +74,10 @@ Important environment knobs:
   FALLBACK_COMPARE_MIN_FOREIGN_SPEEDUP=1.0
                                         minimum foreign-vs-selected speedup for compare summary
   FALLBACK_COMPARE_REQUIRE_FOREIGN=0    when 1, compare mode rejects unless foreign beats threshold
+  FALLBACK_COMPARE_WRITE_PROMOTED_ROUTE_PLAN
+                                        when 1, write a mixed route plan with winning
+                                        foreign fallback rows promoted; defaults to
+                                        FALLBACK_COMPARE_REQUIRE_FOREIGN
   DRY_RUN=1                             print commands without model work
 
 The wrapper only prepares SUITE_ARTIFACT_ARMS=base and uses
@@ -212,6 +217,7 @@ bool_enabled "$overwrite" >/dev/null || true
 bool_enabled "$dry_run" >/dev/null || true
 bool_enabled "$summary_enabled" >/dev/null || true
 bool_enabled "$fallback_compare_require_foreign" >/dev/null || true
+bool_enabled "$fallback_compare_write_promoted_route_plan" >/dev/null || true
 
 case "$stage" in
   all|prepare|attach|gate)
@@ -309,6 +315,7 @@ manifest="$log_dir/fallback_replay_manifest.env"
   printf 'summary_enabled=%q\n' "$summary_enabled"
   printf 'fallback_compare_min_foreign_speedup=%q\n' "$fallback_compare_min_foreign_speedup"
   printf 'fallback_compare_require_foreign=%q\n' "$fallback_compare_require_foreign"
+  printf 'fallback_compare_write_promoted_route_plan=%q\n' "$fallback_compare_write_promoted_route_plan"
   printf 'foreign_base_map_override=%q\n' "$foreign_base_map_override"
   printf 'foreign_base_map=%q\n' "$foreign_base_map"
 } >"$manifest"
@@ -374,6 +381,7 @@ selected_summary_route_plan="${FALLBACK_SELECTED_SUMMARY_ROUTE_PLAN:-$selected_r
 foreign_summary_route_plan="${FALLBACK_FOREIGN_SUMMARY_ROUTE_PLAN:-$foreign_runtime_gate_dir/route_plan.jsonl}"
 compare_summary="$log_dir/fallback_replay_compare_summary.txt"
 compare_summary_tsv="$log_dir/fallback_replay_compare_summary.tsv"
+compare_promoted_route_plan="${FALLBACK_COMPARE_PROMOTED_ROUTE_PLAN:-$log_dir/fallback_replay_promoted_route_plan.jsonl}"
 gate_cmd=(
   env
   LOG_DIR="$selected_runtime_gate_dir"
@@ -501,6 +509,10 @@ write_compare_summary() {
   if bool_enabled "$fallback_compare_require_foreign"; then
     compare_cmd+=(--require-foreign)
   fi
+  local compare_tsv_cmd=("${compare_cmd[@]}")
+  if bool_enabled "$fallback_compare_write_promoted_route_plan"; then
+    compare_cmd+=(--promoted-route-plan-out "$compare_promoted_route_plan")
+  fi
 
   local compare_rc=0
   set +e
@@ -519,13 +531,17 @@ write_compare_summary() {
     printf 'fallback_replay_compare_summary warning=compare_failed rc=%s stderr=%s\n' "$compare_rc" "$compare_summary.stderr"
     return 0
   fi
-  if "${compare_cmd[@]}" --tsv >"$compare_summary_tsv" 2>"$compare_summary_tsv.stderr"; then
+  if "${compare_tsv_cmd[@]}" --tsv >"$compare_summary_tsv" 2>"$compare_summary_tsv.stderr"; then
     :
   else
     printf 'fallback_replay_compare_summary warning=compare_tsv_failed stderr=%s\n' "$compare_summary_tsv.stderr"
     return 0
   fi
-  printf 'fallback_replay_compare_summary text=%s tsv=%s\n' "$compare_summary" "$compare_summary_tsv"
+  if bool_enabled "$fallback_compare_write_promoted_route_plan"; then
+    printf 'fallback_replay_compare_summary text=%s tsv=%s promoted_route_plan=%s\n' "$compare_summary" "$compare_summary_tsv" "$compare_promoted_route_plan"
+  else
+    printf 'fallback_replay_compare_summary text=%s tsv=%s\n' "$compare_summary" "$compare_summary_tsv"
+  fi
 }
 
 if bool_enabled "$dry_run"; then
@@ -559,8 +575,12 @@ if bool_enabled "$dry_run"; then
         if bool_enabled "$fallback_compare_require_foreign"; then
           compare_dry_cmd+=(--require-foreign)
         fi
+        compare_dry_tsv_cmd=("${compare_dry_cmd[@]}")
+        if bool_enabled "$fallback_compare_write_promoted_route_plan"; then
+          compare_dry_cmd+=(--promoted-route-plan-out "$compare_promoted_route_plan")
+        fi
         print_cmd compare_summary_cmd "${compare_dry_cmd[@]}"
-        print_cmd compare_summary_tsv_cmd "${compare_dry_cmd[@]}" --tsv
+        print_cmd compare_summary_tsv_cmd "${compare_dry_tsv_cmd[@]}" --tsv
       elif [[ "$replay_mode" == "foreign" ]]; then
         print_cmd summary_atlas_cmd python3 "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py" "$foreign_summary_route_plan"
         print_cmd summary_atlas_tsv_cmd python3 "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py" "$foreign_summary_route_plan" --tsv

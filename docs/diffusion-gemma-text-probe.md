@@ -448,7 +448,11 @@ This guard compares only common prompt:canvas windows. If the selected gate
 covers the full mixed suite and foreign replay covers only fallback windows, the
 threshold is still applied to the shared fallback window set rather than to the
 whole selected suite. `FALLBACK_SUMMARY=0` disables passive reports, but not
-the required guard when `FALLBACK_COMPARE_REQUIRE_FOREIGN=1`.
+the required guard when `FALLBACK_COMPARE_REQUIRE_FOREIGN=1`. Required compare
+mode writes `fallback_replay_promoted_route_plan.jsonl` by default. Set
+`FALLBACK_COMPARE_WRITE_PROMOTED_ROUTE_PLAN=0` to keep the guard without writing
+that handoff plan, or set `FALLBACK_COMPARE_PROMOTED_ROUTE_PLAN=PATH` to choose
+the output path.
 
 Foreign fallback replay may execute the variant profile while loading a
 base/env-bound route artifact. Mixed route-plan window rows can represent that
@@ -470,7 +474,8 @@ scripts/diffusion_gemma_fallback_compare_summary.py \
   --selected-route-plan LOG_DIR/gate_selected/route_plan.jsonl \
   --foreign-route-plan LOG_DIR/gate_foreign/route_plan.jsonl \
   --min-foreign-speedup 1.10 \
-  --require-foreign
+  --require-foreign \
+  --promoted-route-plan-out LOG_DIR/fallback_replay_promoted_route_plan.jsonl
 ```
 
 The promotion wrapper records and forwards the same expected-metadata controls
