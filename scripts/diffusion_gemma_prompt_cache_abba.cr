@@ -1,5 +1,6 @@
 require "option_parser"
 require "digest/sha256"
+require "set"
 require "../src/ml/gguf/diffusion_gemma_cpu"
 require "../src/ml/gguf/reader"
 
@@ -149,6 +150,16 @@ struct RouteReplayCapture
   end
 end
 
+struct RouteArtifactMapEntry
+  getter window_key : String
+  getter prompt_token : Int32
+  getter canvas_token : Int32
+  getter path : String
+
+  def initialize(@window_key, @prompt_token, @canvas_token, @path)
+  end
+end
+
 TSV_HEADER = [
   "kind",
   "arm",
@@ -283,6 +294,28 @@ def model_fingerprint(path : String) : String
   Digest::SHA256.hexdigest(
     "diffusiongemma-route-model-v1\0#{File.expand_path(path)}\0#{info.size}\0#{mtime.to_unix}\0#{mtime.nanosecond}"
   )
+end
+
+def parse_route_artifact_map(raw : String, label : String) : Array(RouteArtifactMapEntry)
+  entries = [] of RouteArtifactMapEntry
+  seen = Set(String).new
+  raw.gsub(",", " ").split(/\s+/).reject(&.empty?).each do |entry|
+    window_raw, path = entry.split("=", 2)
+    raise "#{label} entry must be prompt:canvas=PATH, got #{entry.inspect}" unless path
+    raise "#{label} path must not be empty for #{window_raw}" if path.empty?
+    prompt_raw, canvas_raw = window_raw.split(":", 2)
+    raise "#{label} entry must be prompt:canvas=PATH, got #{entry.inspect}" unless canvas_raw
+    prompt = prompt_raw.to_i
+    canvas = canvas_raw.to_i
+    raise "#{label} prompt token must be non-negative" if prompt < 0
+    raise "#{label} canvas token must be non-negative" if canvas < 0
+    window_key = "#{prompt}:#{canvas}"
+    raise "#{label} duplicate window #{window_key}" if seen.includes?(window_key)
+    seen << window_key
+    entries << RouteArtifactMapEntry.new(window_key, prompt.to_i32, canvas.to_i32, path)
+  end
+  raise "#{label} must contain at least one entry" if entries.empty?
+  entries
 end
 
 def format_sample_values(values : Array(Float64)) : String
@@ -456,6 +489,8 @@ def write_route_artifact(path : String,
                          arm_env_sha256 : String,
                          model_sha256 : String,
                          capture : RouteReplayCapture) : Nil
+  dir = File.dirname(path)
+  Dir.mkdir_p(dir) unless dir.empty? || dir == "."
   File.open(path, "w") do |io|
     io.puts "# format=diffusion_gemma_prompt_route_artifact_v2"
     io.puts "# arm=#{arm}"
@@ -487,6 +522,38 @@ def write_route_artifact(path : String,
     "slots=#{capture.route_slots}",
     "checksum=#{format_f64(capture.checksum)}",
   ].join('\t')
+end
+
+def capture_route_artifact_map(weights : ML::GGUF::DiffusionGemmaWeights,
+                               hp : ML::GGUF::DiffusionGemmaHparams,
+                               prompt_len : Int32,
+                               canvas_len : Int32,
+                               max_layers : Int32,
+                               env : ArmEnv,
+                               arm : String,
+                               env_sha256 : String,
+                               model_sha256 : String,
+                               entries : Array(RouteArtifactMapEntry)) : Float64
+  total_capture_ms = 0.0
+  entries.each do |entry|
+    prompt_tokens = generated_token_sequence(entry.prompt_token, prompt_len, hp.vocab_size, "--prompt-len")
+    prompt_rows = prompt_rows_from_tokens(weights, prompt_tokens)
+    prompt_tokens_sha256 = prompt_tokens_fingerprint(prompt_tokens)
+    mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: prompt_len, canvas_len: canvas_len, sliding_window: hp.sliding_window)
+    capture = capture_routes_for_arm(weights, prompt_rows, mask, max_layers, env, arm, false)
+    write_route_artifact(entry.path, arm, prompt_len, max_layers, prompt_tokens_sha256, env_sha256, model_sha256, capture)
+    total_capture_ms += capture.elapsed_ms
+    puts [
+      "# route_artifact_map_entry",
+      arm,
+      "window=#{entry.window_key}",
+      "prompt_token=#{entry.prompt_token}",
+      "canvas_token=#{entry.canvas_token}",
+      "path=#{entry.path}",
+      "capture_ms=#{format_f64(capture.elapsed_ms)}",
+    ].join('\t')
+  end
+  total_capture_ms
 end
 
 def load_route_artifact(path : String,
@@ -745,6 +812,9 @@ base_route_artifact_path = nil.as(String?)
 variant_route_artifact_path = nil.as(String?)
 write_base_route_artifact_path = nil.as(String?)
 write_variant_route_artifact_path = nil.as(String?)
+capture_route_artifacts_only = false
+write_base_route_artifact_map = nil.as(String?)
+write_variant_route_artifact_map = nil.as(String?)
 
 OptionParser.parse do |p|
   p.banner = "Usage: diffusion_gemma_prompt_cache_abba [options]"
@@ -769,6 +839,9 @@ OptionParser.parse do |p|
   p.on("--variant-route-artifact PATH", "Load variant prompt MoE routes from an existing artifact") { |v| variant_route_artifact_path = v }
   p.on("--write-base-route-artifact PATH", "Write captured base prompt MoE routes to an artifact") { |v| write_base_route_artifact_path = v }
   p.on("--write-variant-route-artifact PATH", "Write captured variant prompt MoE routes to an artifact") { |v| write_variant_route_artifact_path = v }
+  p.on("--capture-route-artifacts-only", "Capture route-artifact maps and exit without ABBA samples") { capture_route_artifacts_only = true }
+  p.on("--write-base-route-artifact-map SPEC", "Write base artifacts for prompt:canvas=PATH entries") { |v| write_base_route_artifact_map = v }
+  p.on("--write-variant-route-artifact-map SPEC", "Write variant artifacts for prompt:canvas=PATH entries") { |v| write_variant_route_artifact_map = v }
   p.on("--route-capture-amortize-uses N", "Charge route-capture cost over N replayed prompt-cache uses in effective summaries (default: 1)") { |v| route_capture_amortize_uses = v.to_i }
   p.on("--keep-route-capture-graph-cache", "Preserve the resident graph cache warmed by a single replay-arm route capture") { keep_route_capture_graph_cache = true }
   p.on("-h", "--help", "Show help") do
@@ -777,6 +850,9 @@ OptionParser.parse do |p|
   end
 end
 
+write_base_route_artifact_entries = write_base_route_artifact_map.try { |raw| parse_route_artifact_map(raw, "--write-base-route-artifact-map") } || [] of RouteArtifactMapEntry
+write_variant_route_artifact_entries = write_variant_route_artifact_map.try { |raw| parse_route_artifact_map(raw, "--write-variant-route-artifact-map") } || [] of RouteArtifactMapEntry
+route_artifact_map_requested = write_base_route_artifact_entries.any? || write_variant_route_artifact_entries.any?
 route_replay_base ||= !base_route_artifact_path.nil? || !write_base_route_artifact_path.nil?
 route_replay_variant ||= !variant_route_artifact_path.nil? || !write_variant_route_artifact_path.nil?
 route_replay_requested = route_replay_base || route_replay_variant
@@ -788,6 +864,17 @@ raise "--warmups must be non-negative" unless warmups >= 0
 raise "--repeats must be positive" unless repeats > 0
 raise "--trim-per-arm must be non-negative" unless trim_per_arm >= 0
 raise "--route-capture-amortize-uses must be positive" unless route_capture_amortize_uses > 0
+if route_artifact_map_requested
+  raise "route-artifact map capture requires --capture-route-artifacts-only" unless capture_route_artifacts_only
+  raise "route-artifact map capture requires --full-routes" if single_route
+  if route_replay_requested || !base_route_artifact_path.nil? || !variant_route_artifact_path.nil? ||
+     !write_base_route_artifact_path.nil? || !write_variant_route_artifact_path.nil?
+    raise "route-artifact map capture is incompatible with single route-artifact load/write/replay options"
+  end
+  raise "route-artifact map capture is incompatible with --keep-route-capture-graph-cache" if keep_route_capture_graph_cache
+elsif capture_route_artifacts_only
+  raise "--capture-route-artifacts-only requires --write-base-route-artifact-map or --write-variant-route-artifact-map"
+end
 arms = sequence.split(/\s+/).reject(&.empty?)
 raise "--sequence must contain at least one arm" if arms.empty?
 arms.each { |arm| raise "--sequence arms must be base or variant, got #{arm.inspect}" unless {"base", "variant"}.includes?(arm) }
@@ -831,6 +918,25 @@ prompt_tokens_sha256 = prompt_tokens_fingerprint(prompt_tokens)
 base_env_sha256 = arm_env_fingerprint(base_env)
 variant_env_sha256 = arm_env_fingerprint(variant_env)
 model_sha256 = model_fingerprint(model)
+if capture_route_artifacts_only
+  base_capture_ms = 0.0
+  variant_capture_ms = 0.0
+  if write_base_route_artifact_entries.any?
+    base_capture_ms = capture_route_artifact_map(weights, hp, prompt_len, canvas_len, max_layers, base_env, "base", base_env_sha256, model_sha256, write_base_route_artifact_entries)
+  end
+  if write_variant_route_artifact_entries.any?
+    variant_capture_ms = capture_route_artifact_map(weights, hp, prompt_len, canvas_len, max_layers, variant_env, "variant", variant_env_sha256, model_sha256, write_variant_route_artifact_entries)
+  end
+
+  puts "# load_ms=#{format_f64(load_ms)}"
+  puts "# base_env=#{base_env.raw.empty? ? "<empty>" : base_env.raw}"
+  puts "# variant_env=#{variant_env.raw.empty? ? "<empty>" : variant_env.raw}"
+  puts "# route_artifact_map_base_count=#{write_base_route_artifact_entries.size}"
+  puts "# route_artifact_map_variant_count=#{write_variant_route_artifact_entries.size}"
+  puts "# route_capture_base_ms=#{format_f64(base_capture_ms)}"
+  puts "# route_capture_variant_ms=#{format_f64(variant_capture_ms)}"
+  exit
+end
 mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: prompt_len, canvas_len: canvas_len, sliding_window: hp.sliding_window)
 routes_by_layer_by_prompt_row = if single_route && materialize_final_rows
                                   top1_prompt_routes(weights, prompt_rows, prompt_len)

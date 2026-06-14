@@ -29,8 +29,9 @@ usage() {
   cat <<'EOF'
 Usage: diffusion_gemma_prompt_artifact_suite_prepare.sh
 
-Captures v2 prompt-route artifacts for each TOKEN_WINDOWS entry and emits
-ready-to-use SUITE_*_ROUTE_ARTIFACT_MAP lines for the suite gate.
+Captures v2 prompt-route artifacts for TOKEN_WINDOWS entries in one shared
+model load and emits ready-to-use SUITE_*_ROUTE_ARTIFACT_MAP lines for the
+suite gate.
 
 Important environment knobs:
   TOKEN_WINDOWS                    prompt:canvas windows to capture
@@ -117,6 +118,7 @@ validate_env_tokens BASE_ENV "$base_env"
 validate_env_tokens VARIANT_ENV "$variant_env"
 [[ -n "$token_windows" ]] || die "TOKEN_WINDOWS is required"
 [[ -f "$model" ]] || die "model not found: $model"
+bool_enabled "$overwrite" >/dev/null || true
 
 case ",${artifact_arms// /}," in
   *,base,*|*,variant,*) ;;
@@ -139,7 +141,11 @@ for entry in sys.argv[1].replace(",", " ").split():
         prompt, canvas = entry.split(":", 1)
     except ValueError:
         raise SystemExit(f"TOKEN_WINDOWS entry must be prompt:canvas, got {entry!r}")
-    windows.append((int(prompt), int(canvas)))
+    prompt = int(prompt)
+    canvas = int(canvas)
+    if prompt < 0 or canvas < 0:
+        raise SystemExit("TOKEN_WINDOWS prompt and canvas tokens must be non-negative")
+    windows.append((prompt, canvas))
 if not windows:
     raise SystemExit("TOKEN_WINDOWS must contain at least one entry")
 if len(set(windows)) != len(windows):
@@ -160,56 +166,54 @@ while IFS=$'\t' read -r index prompt canvas; do
   window_key="${prompt}:${canvas}"
   base_artifact="$artifact_dir/base_p${prompt}_c${canvas}_pl${prompt_len}_l${max_layers}.tsv"
   variant_artifact="$artifact_dir/variant_p${prompt}_c${canvas}_pl${prompt_len}_l${max_layers}.tsv"
-  out="$log_dir/window_${index}_p${prompt}_c${canvas}.tsv"
-  err="$log_dir/window_${index}_p${prompt}_c${canvas}.stderr"
-  sample_sequence="variant"
-  if [[ "$artifact_arms" == "base" ]]; then
-    sample_sequence="base"
-  elif [[ "$artifact_arms" == "base,variant" || "$artifact_arms" == "variant,base" ]]; then
-    sample_sequence="base variant"
-  fi
-
-  args=(
-    --model "$model"
-    --prompt-len "$prompt_len"
-    --canvas-len "$canvas_len"
-    --prompt-token "$prompt"
-    --max-layers "$max_layers"
-    --warmups 0
-    --repeats 1
-    --sequence "$sample_sequence"
-    --base-env "$base_env"
-    --variant-env "$variant_env"
-    --full-routes
-    --materialize-final-rows
-  )
   if [[ ",$artifact_arms," == *",base,"* ]]; then
     if [[ -e "$base_artifact" ]] && ! bool_enabled "$overwrite"; then
       die "artifact already exists: $base_artifact; set SUITE_ARTIFACT_OVERWRITE=1"
     fi
-    args+=(--write-base-route-artifact "$base_artifact")
     base_map_parts+=("${window_key}=${base_artifact}")
   fi
   if [[ ",$artifact_arms," == *",variant,"* ]]; then
     if [[ -e "$variant_artifact" ]] && ! bool_enabled "$overwrite"; then
       die "artifact already exists: $variant_artifact; set SUITE_ARTIFACT_OVERWRITE=1"
     fi
-    args+=(--write-variant-route-artifact "$variant_artifact")
     variant_map_parts+=("${window_key}=${variant_artifact}")
   fi
-
-  "$abba_bin" "${args[@]}" >"$out" 2>"$err"
-  printf 'suite_artifact_child index=%s prompt_token=%s canvas_token=%s log=%s stderr=%s\n' \
-    "$index" "$prompt" "$canvas" "$out" "$err"
+  printf 'suite_artifact_target index=%s prompt_token=%s canvas_token=%s base=%s variant=%s\n' \
+    "$index" "$prompt" "$canvas" \
+    "$(if [[ ",$artifact_arms," == *",base,"* ]]; then printf '%s' "$base_artifact"; else printf '<none>'; fi)" \
+    "$(if [[ ",$artifact_arms," == *",variant,"* ]]; then printf '%s' "$variant_artifact"; else printf '<none>'; fi)"
 done <"$suite_spec"
+
+args=(
+  --model "$model"
+  --prompt-len "$prompt_len"
+  --canvas-len "$canvas_len"
+  --max-layers "$max_layers"
+  --base-env "$base_env"
+  --variant-env "$variant_env"
+  --full-routes
+  --capture-route-artifacts-only
+)
 
 if ((${#base_map_parts[@]} > 0)); then
   base_map="$(IFS=,; printf '%s' "${base_map_parts[*]}")"
+  args+=(--write-base-route-artifact-map "$base_map")
+fi
+if ((${#variant_map_parts[@]} > 0)); then
+  variant_map="$(IFS=,; printf '%s' "${variant_map_parts[*]}")"
+  args+=(--write-variant-route-artifact-map "$variant_map")
+fi
+
+capture_out="$log_dir/artifact_capture.tsv"
+capture_err="$log_dir/artifact_capture.stderr"
+"$abba_bin" "${args[@]}" >"$capture_out" 2>"$capture_err"
+printf 'suite_artifact_capture log=%s stderr=%s\n' "$capture_out" "$capture_err"
+
+if ((${#base_map_parts[@]} > 0)); then
   printf 'SUITE_BASE_ROUTE_ARTIFACT_MAP=%s\n' "$base_map"
   printf 'CERT_BASE_ROUTE_ARTIFACT_MAP=%s\n' "$base_map"
 fi
 if ((${#variant_map_parts[@]} > 0)); then
-  variant_map="$(IFS=,; printf '%s' "${variant_map_parts[*]}")"
   printf 'SUITE_VARIANT_ROUTE_ARTIFACT_MAP=%s\n' "$variant_map"
   printf 'CERT_VARIANT_ROUTE_ARTIFACT_MAP=%s\n' "$variant_map"
 fi
