@@ -33,6 +33,8 @@ min_variant_logit_margin="${MIN_VARIANT_LOGIT_MARGIN:-}"
 max_logit_delta="${MAX_LOGIT_DELTA:-}"
 cert_base_route_artifact_map="${CERT_BASE_ROUTE_ARTIFACT_MAP:-}"
 cert_variant_route_artifact_map="${CERT_VARIANT_ROUTE_ARTIFACT_MAP:-}"
+mixed_route_plan="${MIXED_ROUTE_PLAN:-}"
+cert_mixed_route_plan="${CERT_MIXED_ROUTE_PLAN:-$mixed_route_plan}"
 
 abba_warmups="${ABBA_WARMUPS:-1}"
 abba_repeats="${ABBA_REPEATS:-3}"
@@ -46,9 +48,11 @@ abba_use_effective_total="${ABBA_USE_EFFECTIVE_TOTAL:-1}"
 abba_keep_route_capture_graph_cache="${ABBA_KEEP_ROUTE_CAPTURE_GRAPH_CACHE:-0}"
 abba_base_route_artifact="${ABBA_BASE_ROUTE_ARTIFACT:-}"
 abba_variant_route_artifact="${ABBA_VARIANT_ROUTE_ARTIFACT:-}"
+abba_base_replay_routes="${ABBA_BASE_REPLAY_ROUTES:-0}"
+abba_variant_replay_routes="${ABBA_VARIANT_REPLAY_ROUTES:-0}"
 abba_write_base_route_artifact="${ABBA_WRITE_BASE_ROUTE_ARTIFACT:-}"
 abba_write_variant_route_artifact="${ABBA_WRITE_VARIANT_ROUTE_ARTIFACT:-}"
-abba_mixed_route_plan="${ABBA_MIXED_ROUTE_PLAN:-}"
+abba_mixed_route_plan="${ABBA_MIXED_ROUTE_PLAN:-$mixed_route_plan}"
 min_total_speedup="${MIN_TOTAL_SPEEDUP:-1.10}"
 max_break_even_uses="${MAX_BREAK_EVEN_USES:-}"
 run_abba_on_cert_fail="${RUN_ABBA_ON_CERT_FAIL:-0}"
@@ -89,8 +93,10 @@ Important environment knobs:
                                     cert-only base routes per window, e.g. 1:0=/tmp/a,17:100=/tmp/b
   CERT_VARIANT_ROUTE_ARTIFACT_MAP=SPEC
                                     cert-only variant routes per window, e.g. 1:0=/tmp/a,17:100=/tmp/b
+  MIXED_ROUTE_PLAN=PATH            single mixed route plan used by both cert and ABBA
+  CERT_MIXED_ROUTE_PLAN=PATH       optional cert-only mixed route plan override
   MIN_TOTAL_SPEEDUP=F             ABBA total_ms speedup floor, default 1.10
-  ABBA_MIXED_ROUTE_PLAN=PATH      optional mixed route plan for ABBA fast/exact selection
+  ABBA_MIXED_ROUTE_PLAN=PATH      optional ABBA-only mixed route plan override
   ABBA_PROMPT_TOKEN=N             synthetic prompt start token for ABBA, default 1
   ABBA_BASE_REPLAY_ROUTES=1       pre-capture/replay base prompt MoE routes in ABBA
   ABBA_VARIANT_REPLAY_ROUTES=1    pre-capture/replay variant prompt MoE routes in ABBA
@@ -279,6 +285,27 @@ validate_uint ABBA_TRIM_PER_ARM "$abba_trim_per_arm"
 validate_uint ABBA_PROMPT_TOKEN "$abba_prompt_token"
 validate_uint ABBA_CANVAS_TOKEN "$abba_canvas_token"
 validate_positive_uint ABBA_ROUTE_CAPTURE_AMORTIZE_USES "$abba_route_capture_amortize_uses"
+bool_enabled "$abba_base_replay_routes" >/dev/null || true
+bool_enabled "$abba_variant_replay_routes" >/dev/null || true
+if [[ -n "$cert_mixed_route_plan" && -n "$abba_mixed_route_plan" && "$cert_mixed_route_plan" != "$abba_mixed_route_plan" ]]; then
+  die "CERT_MIXED_ROUTE_PLAN and ABBA_MIXED_ROUTE_PLAN must match; use MIXED_ROUTE_PLAN for a shared route plan"
+fi
+if [[ -n "$cert_mixed_route_plan" ]]; then
+  [[ -f "$cert_mixed_route_plan" ]] || die "CERT_MIXED_ROUTE_PLAN not found: $cert_mixed_route_plan"
+  if [[ -n "$cert_base_route_artifact_map" || -n "$cert_variant_route_artifact_map" ||
+        -n "$abba_base_route_artifact" || -n "$abba_variant_route_artifact" ]]; then
+    die "CERT_MIXED_ROUTE_PLAN is incompatible with route artifact path/map envs"
+  fi
+fi
+if [[ -n "$abba_mixed_route_plan" ]]; then
+  [[ -f "$abba_mixed_route_plan" ]] || die "ABBA_MIXED_ROUTE_PLAN not found: $abba_mixed_route_plan"
+  if [[ -n "$abba_base_route_artifact" || -n "$abba_variant_route_artifact" ||
+        -n "$abba_write_base_route_artifact" || -n "$abba_write_variant_route_artifact" ]] ||
+     bool_enabled "$abba_base_replay_routes" ||
+     bool_enabled "$abba_variant_replay_routes"; then
+    die "ABBA_MIXED_ROUTE_PLAN is incompatible with explicit route artifact load/write/replay envs"
+  fi
+fi
 if [[ -n "$base_extra_env" ]]; then
   base_env="$base_env $base_extra_env"
 fi
@@ -318,6 +345,7 @@ printf 'max_candidate_row_size=%s\n' "$max_candidate_row_size"
 printf 'base_env=%s\n' "$base_env"
 printf 'variant_env=%s\n' "$variant_env"
 printf 'min_total_speedup=%s\n' "$min_total_speedup"
+printf 'cert_mixed_route_plan=%s\n' "${cert_mixed_route_plan:-<none>}"
 printf 'abba_prompt_token=%s\n' "$abba_prompt_token"
 printf 'abba_canvas_token=%s\n' "$abba_canvas_token"
 printf 'abba_mixed_route_plan=%s\n' "${abba_mixed_route_plan:-<none>}"
@@ -364,6 +392,9 @@ if [[ -n "$min_variant_logit_margin" ]]; then
 fi
 if [[ -n "$max_logit_delta" ]]; then
   cert_args+=(--max-logit-delta "$max_logit_delta")
+fi
+if [[ -n "$cert_mixed_route_plan" ]]; then
+  cert_args+=(--mixed-route-plan "$cert_mixed_route_plan")
 fi
 if [[ -n "$cert_base_route_artifact_map" ]]; then
   cert_args+=(--base-route-artifact-map "$cert_base_route_artifact_map")
@@ -418,10 +449,10 @@ abba_args=(
 if [[ -n "$checksum_tolerance" ]]; then
   abba_args+=(--checksum-tolerance "$checksum_tolerance")
 fi
-if bool_enabled "${ABBA_BASE_REPLAY_ROUTES:-0}"; then
+if bool_enabled "$abba_base_replay_routes"; then
   abba_args+=(--base-replay-routes)
 fi
-if bool_enabled "${ABBA_VARIANT_REPLAY_ROUTES:-0}"; then
+if bool_enabled "$abba_variant_replay_routes"; then
   abba_args+=(--variant-replay-routes)
 fi
 if [[ -n "$abba_base_route_artifact" ]]; then

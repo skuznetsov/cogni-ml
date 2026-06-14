@@ -7,6 +7,7 @@ log_dir="${LOG_DIR:-/tmp/diffusiongemma_prompt_artifact_suite_gate_$(date +%Y%m%
 token_windows="${TOKEN_WINDOWS:-}"
 base_map="${SUITE_BASE_ROUTE_ARTIFACT_MAP:-${CERT_BASE_ROUTE_ARTIFACT_MAP:-}}"
 variant_map="${SUITE_VARIANT_ROUTE_ARTIFACT_MAP:-${CERT_VARIANT_ROUTE_ARTIFACT_MAP:-}}"
+suite_mixed_route_plan="${SUITE_MIXED_ROUTE_PLAN:-${MIXED_ROUTE_PLAN:-}}"
 suite_min_total_speedup="${SUITE_MIN_TOTAL_SPEEDUP:-${MIN_TOTAL_SPEEDUP:-1.10}}"
 window_min_total_speedup="${SUITE_WINDOW_MIN_TOTAL_SPEEDUP:-}"
 suite_child_logs="${SUITE_CHILD_LOGS:-}"
@@ -27,6 +28,7 @@ Important environment knobs:
   TOKEN_WINDOWS                         prompt:canvas windows to measure
   SUITE_BASE_ROUTE_ARTIFACT_MAP=SPEC    optional base routes, prompt:canvas=PATH
   SUITE_VARIANT_ROUTE_ARTIFACT_MAP=SPEC optional variant routes, prompt:canvas=PATH
+  SUITE_MIXED_ROUTE_PLAN=PATH           optional mixed route plan used as the single cert+ABBA authority
   SUITE_CHILD_LOGS="A B ..."            aggregate existing child gate.stdout logs without rerun
   SUITE_MIN_TOTAL_SPEEDUP=F             aggregate speedup floor, default MIN_TOTAL_SPEEDUP or 1.10
   SUITE_WINDOW_MIN_TOTAL_SPEEDUP=F      per-window child gate floor, default aggregate floor,
@@ -84,9 +86,17 @@ if [[ -z "$window_min_total_speedup" ]]; then
 fi
 
 if [[ -z "$suite_child_logs" ]]; then
-  [[ -n "$token_windows" ]] || die "TOKEN_WINDOWS is required"
-  if [[ -z "$base_map" && -z "$variant_map" ]]; then
-    die "SUITE_BASE_ROUTE_ARTIFACT_MAP or SUITE_VARIANT_ROUTE_ARTIFACT_MAP is required"
+  if [[ -z "$token_windows" && -z "$suite_mixed_route_plan" ]]; then
+    die "TOKEN_WINDOWS is required unless SUITE_MIXED_ROUTE_PLAN is supplied"
+  fi
+  if [[ -z "$base_map" && -z "$variant_map" && -z "$suite_mixed_route_plan" ]]; then
+    die "SUITE_BASE_ROUTE_ARTIFACT_MAP, SUITE_VARIANT_ROUTE_ARTIFACT_MAP, or SUITE_MIXED_ROUTE_PLAN is required"
+  fi
+  if [[ -n "$suite_mixed_route_plan" ]]; then
+    [[ -f "$suite_mixed_route_plan" ]] || die "SUITE_MIXED_ROUTE_PLAN not found: $suite_mixed_route_plan"
+    if [[ -n "$base_map" || -n "$variant_map" ]]; then
+      die "SUITE_MIXED_ROUTE_PLAN cannot be combined with route artifact maps"
+    fi
   fi
 fi
 
@@ -102,10 +112,11 @@ if [[ -n "$suite_child_logs" ]]; then
   ((${#child_logs[@]} > 0)) || die "SUITE_CHILD_LOGS must contain at least one log"
   : >"$suite_spec"
 else
-  python3 - "$token_windows" "$base_map" "$variant_map" >"$suite_spec" <<'PY'
+  python3 - "$token_windows" "$base_map" "$variant_map" "$suite_mixed_route_plan" >"$suite_spec" <<'PY'
+import json
 import sys
 
-token_windows_raw, base_raw, variant_raw = sys.argv[1:4]
+token_windows_raw, base_raw, variant_raw, route_plan_path = sys.argv[1:5]
 
 def parse_windows(raw):
     windows = []
@@ -119,6 +130,29 @@ def parse_windows(raw):
         raise SystemExit("TOKEN_WINDOWS must contain at least one entry")
     if len(set(windows)) != len(windows):
         raise SystemExit("TOKEN_WINDOWS contains duplicate entries")
+    return windows
+
+def parse_route_plan_windows(path):
+    windows = []
+    with open(path, encoding="utf-8") as handle:
+        for lineno, raw in enumerate(handle, 1):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                row = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise SystemExit(f"SUITE_MIXED_ROUTE_PLAN invalid JSONL at line {lineno}: {exc}") from exc
+            if row.get("kind") != "diffusion_gemma_mixed_route_plan_window_v1":
+                continue
+            try:
+                windows.append((int(row["prompt_token"]), int(row["canvas_token"])))
+            except (KeyError, TypeError, ValueError) as exc:
+                raise SystemExit(f"SUITE_MIXED_ROUTE_PLAN invalid window at line {lineno}") from exc
+    if not windows:
+        raise SystemExit("SUITE_MIXED_ROUTE_PLAN contains no window rows")
+    if len(set(windows)) != len(windows):
+        raise SystemExit("SUITE_MIXED_ROUTE_PLAN contains duplicate windows")
     return windows
 
 def parse_map(raw, label):
@@ -139,7 +173,7 @@ def parse_map(raw, label):
         result[window] = path
     return result
 
-windows = parse_windows(token_windows_raw)
+windows = parse_windows(token_windows_raw) if token_windows_raw else parse_route_plan_windows(route_plan_path)
 base_map = parse_map(base_raw, "SUITE_BASE_ROUTE_ARTIFACT_MAP")
 variant_map = parse_map(variant_raw, "SUITE_VARIANT_ROUTE_ARTIFACT_MAP")
 for label, mapping in (("SUITE_BASE_ROUTE_ARTIFACT_MAP", base_map), ("SUITE_VARIANT_ROUTE_ARTIFACT_MAP", variant_map)):
@@ -165,6 +199,7 @@ printf 'suite_compatibility_audit=%s\n' "$audit_enabled"
 printf 'suite_mixed_fallback_gate=%s\n' "$mixed_gate_enabled"
 printf 'suite_run_abba_on_cert_fail=%s\n' "$suite_run_abba_on_cert_fail"
 printf 'suite_route_plan_out=%s\n' "${suite_route_plan_out:-<empty>}"
+printf 'suite_mixed_route_plan=%s\n' "${suite_mixed_route_plan:-<none>}"
 printf 'suite_spec=%s\n' "$suite_spec"
 
 if [[ -z "$suite_child_logs" ]]; then
@@ -189,6 +224,7 @@ if [[ -z "$suite_child_logs" ]]; then
     TOKEN_WINDOWS="${prompt}:${canvas}" \
     ABBA_PROMPT_TOKEN="$prompt" \
     ABBA_CANVAS_TOKEN="$canvas" \
+    MIXED_ROUTE_PLAN="$suite_mixed_route_plan" \
     CERT_BASE_ROUTE_ARTIFACT_MAP="$cert_base_map" \
     CERT_VARIANT_ROUTE_ARTIFACT_MAP="$cert_variant_map" \
     ABBA_BASE_ROUTE_ARTIFACT="$base_path" \

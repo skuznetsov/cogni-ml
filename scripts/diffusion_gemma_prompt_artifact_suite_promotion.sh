@@ -31,6 +31,7 @@ suite_min_total_speedup="${SUITE_MIN_TOTAL_SPEEDUP:-${MIN_TOTAL_SPEEDUP:-1.10}}"
 suite_window_min_total_speedup="${SUITE_WINDOW_MIN_TOTAL_SPEEDUP:-}"
 suite_mixed_fallback_gate="${SUITE_MIXED_FALLBACK_GATE:-0}"
 suite_route_plan_out="${SUITE_ROUTE_PLAN_OUT:-$log_dir/route_plan.jsonl}"
+suite_mixed_route_plan="${SUITE_MIXED_ROUTE_PLAN:-${MIXED_ROUTE_PLAN:-}}"
 certificate_mode="${CERTIFICATE_MODE:-full-vocab-top1-metal}"
 abba_warmups="${ABBA_WARMUPS:-1}"
 abba_repeats="${ABBA_REPEATS:-3}"
@@ -75,6 +76,7 @@ Important environment knobs:
   SUITE_WINDOW_MIN_TOTAL_SPEEDUP=...    per-window speedup floor
   SUITE_MIXED_FALLBACK_GATE=1           allow certified fast/exact fallback mixed_candidate gates
   SUITE_ROUTE_PLAN_OUT=PATH             mixed fast/exact route plan output, default LOG_DIR/route_plan.jsonl
+  SUITE_MIXED_ROUTE_PLAN=PATH           run gate directly from an existing mixed route plan
   CERTIFICATE_MODE=full-vocab-top1-metal
   DRY_RUN=1                             print commands without running model work
 EOF
@@ -150,6 +152,7 @@ fi
 if [[ -n "$promotion_prepare_log" ]]; then
   [[ "$promotion_stage" != "prepare" ]] || die "PROMOTION_PREPARE_LOG is only valid for all/gate stages"
   [[ -f "$promotion_prepare_log" ]] || die "PROMOTION_PREPARE_LOG not found: $promotion_prepare_log"
+  [[ -z "$suite_mixed_route_plan" ]] || die "PROMOTION_PREPARE_LOG cannot be combined with SUITE_MIXED_ROUTE_PLAN"
   [[ -z "$base_map" && -z "$variant_map" ]] || die "PROMOTION_PREPARE_LOG cannot be combined with supplied route artifact maps"
   if base_map_value="$(extract_map SUITE_BASE_ROUTE_ARTIFACT_MAP "$promotion_prepare_log" 2>/dev/null)"; then
     base_map="$base_map_value"
@@ -170,8 +173,15 @@ esac
 if [[ "$promotion_stage" == "prepare" && ( -n "$base_map" || -n "$variant_map" ) ]]; then
   die "PROMOTION_STAGE=prepare does not accept supplied route artifact maps"
 fi
-if [[ "$promotion_stage" == "gate" && -z "$base_map" && -z "$variant_map" ]]; then
-  die "PROMOTION_STAGE=gate requires SUITE_BASE_ROUTE_ARTIFACT_MAP or SUITE_VARIANT_ROUTE_ARTIFACT_MAP"
+if [[ "$promotion_stage" == "prepare" && -n "$suite_mixed_route_plan" ]]; then
+  die "PROMOTION_STAGE=prepare does not accept SUITE_MIXED_ROUTE_PLAN"
+fi
+if [[ -n "$suite_mixed_route_plan" ]]; then
+  [[ -f "$suite_mixed_route_plan" ]] || die "SUITE_MIXED_ROUTE_PLAN not found: $suite_mixed_route_plan"
+  [[ -z "$base_map" && -z "$variant_map" ]] || die "SUITE_MIXED_ROUTE_PLAN cannot be combined with route artifact maps"
+fi
+if [[ "$promotion_stage" == "gate" && -z "$base_map" && -z "$variant_map" && -z "$suite_mixed_route_plan" ]]; then
+  die "PROMOTION_STAGE=gate requires route artifact maps or SUITE_MIXED_ROUTE_PLAN"
 fi
 
 case "$variant_profile" in
@@ -217,6 +227,7 @@ manifest="$log_dir/promotion_manifest.env"
   printf 'suite_window_min_total_speedup=%q\n' "$suite_window_min_total_speedup"
   printf 'suite_mixed_fallback_gate=%q\n' "$suite_mixed_fallback_gate"
   printf 'suite_route_plan_out=%q\n' "$suite_route_plan_out"
+  printf 'suite_mixed_route_plan=%q\n' "$suite_mixed_route_plan"
   printf 'certificate_mode=%q\n' "$certificate_mode"
 } >"$manifest"
 
@@ -264,6 +275,7 @@ gate_cmd=(
   SUITE_WINDOW_MIN_TOTAL_SPEEDUP="$suite_window_min_total_speedup"
   SUITE_MIXED_FALLBACK_GATE="$suite_mixed_fallback_gate"
   SUITE_ROUTE_PLAN_OUT="$suite_route_plan_out"
+  SUITE_MIXED_ROUTE_PLAN="$suite_mixed_route_plan"
   ABBA_WARMUPS="$abba_warmups"
   ABBA_REPEATS="$abba_repeats"
   ABBA_TRIM_PER_ARM="$abba_trim_per_arm"
@@ -288,7 +300,7 @@ gate_cmd+=("$repo_root/scripts/diffusion_gemma_prompt_artifact_suite_gate.sh")
 should_prepare=0
 if [[ "$promotion_stage" == "prepare" ]]; then
   should_prepare=1
-elif [[ "$promotion_stage" == "all" && -z "$base_map" && -z "$variant_map" ]]; then
+elif [[ "$promotion_stage" == "all" && -z "$base_map" && -z "$variant_map" && -z "$suite_mixed_route_plan" ]]; then
   should_prepare=1
 fi
 
@@ -352,7 +364,7 @@ if [[ "$promotion_stage" == "prepare" ]]; then
   exit 0
 fi
 
-if [[ -z "$base_map" && -z "$variant_map" ]]; then
+if [[ -z "$base_map" && -z "$variant_map" && -z "$suite_mixed_route_plan" ]]; then
   printf 'artifact_suite_promotion decision=reject reason=missing_route_artifact_maps log_dir=%s\n' "$log_dir"
   exit 2
 fi
