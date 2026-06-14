@@ -259,7 +259,13 @@ The atlas ranks windows by certified mixed wall time and folds in child
 `gate_metric` phase rows when the child logs still exist. Treat it as an
 LTP/WBA controller: if exact fallback dominates the recomputed mixed `Phi`,
 fix that certificate/fallback boundary before micro-tuning accepted fast
-windows.
+windows. For exact fallback windows, the atlas also reads the child
+`output_cert_log` when available and prints a cert-derived dual-cache
+canvas-band fallback estimate. Compare it cautiously: `selected_route_ms` comes
+from route-plan ABBA timing, while `dual_cache_band_ms` comes from output-cert
+timing. If `dual_cache_band_vs_selected_route < 1`, the known mixed route should
+keep `base_exact` and the next runtime work should reduce the exact fallback
+itself rather than try variant-first fallback.
 
 When a mixed-plan atlas points at one failing certificate window, inspect the
 row-level certificate:

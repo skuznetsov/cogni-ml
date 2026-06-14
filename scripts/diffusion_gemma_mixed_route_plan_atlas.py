@@ -6,6 +6,11 @@ JSONL route plan emitted by diffusion_gemma_prompt_artifact_suite_gate.sh and,
 when child logs are still present, folds in gate_metric phase rows from those
 logs. The goal is to identify the recomputed mixed fast/exact bottleneck before
 launching another heavy 26B run.
+
+For exact fallback windows, the helper also reads the child output-cert log when
+available and prints a cert-derived dual-cache canvas-band fallback estimate.
+That estimate is a cross-probe guard: route-plan selected costs come from ABBA
+timing, while output-cert rows include certificate decode timing.
 """
 
 from __future__ import annotations
@@ -17,6 +22,15 @@ import os
 import sys
 from pathlib import Path
 from typing import Any
+
+from diffusion_gemma_output_cert_atlas import (
+    dual_cache_band_break_even_uses,
+    dual_cache_band_fallback_ms,
+    group_rows,
+    read_cert,
+    timing_by_window,
+    truthy,
+)
 
 
 SUMMARY_KIND = "diffusion_gemma_mixed_route_plan_summary_v1"
@@ -132,6 +146,21 @@ def parse_child_metrics(log_path: str) -> dict[tuple[str, str], dict[str, float]
     return metrics
 
 
+def parse_child_paths(log_path: str) -> dict[str, str]:
+    if not log_path or not os.path.isfile(log_path):
+        return {}
+    result: dict[str, str] = {}
+    with open(log_path, encoding="utf-8", errors="replace") as handle:
+        for raw in handle:
+            line = raw.strip()
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            if key in {"output_cert_log", "prompt_cache_abba_log"}:
+                result[key] = value
+    return result
+
+
 def aggregate_phase_rows(windows: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, float]]:
     totals: dict[tuple[str, str], dict[str, float]] = {}
     for window in windows:
@@ -167,7 +196,71 @@ def route_label(window: dict[str, Any]) -> str:
     return f"{window.get('prompt_token')}:{window.get('canvas_token')}"
 
 
-def print_text(path: Path, summary: dict[str, Any], windows: list[dict[str, Any]], top: int) -> None:
+def cert_fallback_alternative(
+    window: dict[str, Any],
+    reuse_count: int,
+    min_speedup: float,
+) -> dict[str, Any]:
+    paths = parse_child_paths(str(window.get("child_log", "")))
+    cert_path_raw = paths.get("output_cert_log", "")
+    result: dict[str, Any] = {
+        "status": "missing_output_cert",
+        "output_cert_log": cert_path_raw,
+    }
+    if not cert_path_raw or not os.path.isfile(cert_path_raw):
+        return result
+
+    cert_path = Path(cert_path_raw)
+    rows, timing_rows, _ = read_cert(cert_path)
+    key = (str(window.get("prompt_token")), str(window.get("canvas_token")))
+    grouped = group_rows(rows)
+    window_rows = grouped.get(key)
+    if not window_rows:
+        result["status"] = "missing_window"
+        return result
+    timings = timing_by_window(timing_rows)
+    timing = timings.get(key, {})
+    argmax_failures = sum(1 for row in window_rows if not truthy(row.get("argmax_match", "")))
+    sampled_failures = sum(1 for row in window_rows if not truthy(row.get("sampled_match", "")))
+    base_total = as_float(timing, "base_cache_ms") + as_float(timing, "base_predict_ms")
+    variant_total = as_float(timing, "variant_cache_ms") + as_float(timing, "variant_predict_ms")
+    band_ms = dual_cache_band_fallback_ms(timing, len(window_rows), argmax_failures, reuse_count)
+    band_speedup = base_total / band_ms if band_ms > 0.0 else float("inf")
+    break_even_status, break_even_uses = dual_cache_band_break_even_uses(
+        timing,
+        len(window_rows),
+        argmax_failures,
+        min_speedup,
+    )
+    selected_ms = selected_window_cost(window)
+    vs_selected = selected_ms / band_ms if band_ms > 0.0 else float("inf")
+    cert_vs_selected = base_total / selected_ms if selected_ms > 0.0 else float("inf")
+    return {
+        "status": "ok",
+        "output_cert_log": cert_path_raw,
+        "rows": len(window_rows),
+        "argmax_failures": argmax_failures,
+        "sampled_failures": sampled_failures,
+        "cert_base_total_ms": base_total,
+        "cert_variant_total_ms": variant_total,
+        "dual_cache_band_ms": band_ms,
+        "dual_cache_band_speedup_vs_cert_base": band_speedup,
+        "dual_cache_band_vs_selected_route": vs_selected,
+        "dual_cache_band_delta_vs_selected_ms": selected_ms - band_ms,
+        "dual_cache_band_break_even_status": break_even_status,
+        "dual_cache_band_break_even_uses": break_even_uses,
+        "cert_base_total_vs_selected_route": cert_vs_selected,
+    }
+
+
+def print_text(
+    path: Path,
+    summary: dict[str, Any],
+    windows: list[dict[str, Any]],
+    top: int,
+    fallback_reuse_count: int,
+    fallback_min_speedup: float,
+) -> None:
     mixed_total = as_float(summary, "mixed_variant_ms")
     fallback_count = sum(1 for row in windows if row.get("selected_route") == "base_exact")
     fallback_ms = sum(selected_window_cost(row) for row in windows if row.get("selected_route") == "base_exact")
@@ -249,9 +342,46 @@ def print_text(path: Path, summary: dict[str, Any], windows: list[dict[str, Any]
                     fmt(row["range_over_delta"]),
                 )
             )
+    fallback_windows = [row for row in windows if row.get("selected_route") == "base_exact"]
+    if fallback_windows:
+        print("  fallback_alternatives:")
+        for row in sorted(fallback_windows, key=selected_window_cost, reverse=True)[:top]:
+            alt = cert_fallback_alternative(row, fallback_reuse_count, fallback_min_speedup)
+            if alt["status"] != "ok":
+                print(
+                    "    %s status=%s output_cert_log=%s"
+                    % (route_label(row), alt["status"], alt.get("output_cert_log") or "NA")
+                )
+                continue
+            print(
+                "    %s selected_route_ms=%s cert_base_total_ms=%s cert_base_vs_selected=%s dual_cache_band_ms=%s vs_selected_route=%s delta_vs_selected_ms=%s break_even_status=%s break_even_uses=%s rows=%s argmax_failures=%s sampled_failures=%s"
+                % (
+                    route_label(row),
+                    fmt(selected_window_cost(row)),
+                    fmt(float(alt["cert_base_total_ms"])),
+                    fmt(float(alt["cert_base_total_vs_selected_route"])),
+                    fmt(float(alt["dual_cache_band_ms"])),
+                    fmt(float(alt["dual_cache_band_vs_selected_route"])),
+                    fmt(float(alt["dual_cache_band_delta_vs_selected_ms"])),
+                    alt["dual_cache_band_break_even_status"],
+                    "NA" if alt["dual_cache_band_break_even_uses"] is None else str(alt["dual_cache_band_break_even_uses"]),
+                    alt["rows"],
+                    alt["argmax_failures"],
+                    alt["sampled_failures"],
+                )
+            )
+        print(
+            "  Fallback note: dual-cache band rows use output-cert timing, while selected_route_ms comes from route-plan ABBA timing. Treat vs_selected_route as a cross-probe guard, not promotion evidence."
+        )
 
 
-def print_tsv(path: Path, summary: dict[str, Any], windows: list[dict[str, Any]]) -> None:
+def print_tsv(
+    path: Path,
+    summary: dict[str, Any],
+    windows: list[dict[str, Any]],
+    fallback_reuse_count: int,
+    fallback_min_speedup: float,
+) -> None:
     fields = [
         "kind",
         "source",
@@ -309,19 +439,76 @@ def print_tsv(path: Path, summary: dict[str, Any], windows: list[dict[str, Any]]
         }
         print("\t".join(str(values[field]) for field in phase_fields))
 
+    fallback_fields = [
+        "kind",
+        "source",
+        "prompt_token",
+        "canvas_token",
+        "status",
+        "selected_route_ms",
+        "output_cert_log",
+        "rows",
+        "argmax_failures",
+        "sampled_failures",
+        "cert_base_total_ms",
+        "cert_variant_total_ms",
+        "cert_base_total_vs_selected_route",
+        "dual_cache_reuse_count",
+        "dual_cache_min_speedup",
+        "dual_cache_band_ms",
+        "dual_cache_band_speedup_vs_cert_base",
+        "dual_cache_band_vs_selected_route",
+        "dual_cache_band_delta_vs_selected_ms",
+        "dual_cache_band_break_even_status",
+        "dual_cache_band_break_even_uses",
+    ]
+    print("\t".join(fallback_fields))
+    for row in sorted((row for row in windows if row.get("selected_route") == "base_exact"), key=selected_window_cost, reverse=True):
+        alt = cert_fallback_alternative(row, fallback_reuse_count, fallback_min_speedup)
+        values = {
+            "kind": "fallback_alt",
+            "source": str(path),
+            "prompt_token": row.get("prompt_token", ""),
+            "canvas_token": row.get("canvas_token", ""),
+            "status": alt["status"],
+            "selected_route_ms": fmt(selected_window_cost(row)),
+            "output_cert_log": alt.get("output_cert_log", ""),
+            "rows": alt.get("rows", ""),
+            "argmax_failures": alt.get("argmax_failures", ""),
+            "sampled_failures": alt.get("sampled_failures", ""),
+            "cert_base_total_ms": fmt(float(alt["cert_base_total_ms"])) if alt["status"] == "ok" else "",
+            "cert_variant_total_ms": fmt(float(alt["cert_variant_total_ms"])) if alt["status"] == "ok" else "",
+            "cert_base_total_vs_selected_route": fmt(float(alt["cert_base_total_vs_selected_route"])) if alt["status"] == "ok" else "",
+            "dual_cache_reuse_count": fallback_reuse_count,
+            "dual_cache_min_speedup": fmt(fallback_min_speedup),
+            "dual_cache_band_ms": fmt(float(alt["dual_cache_band_ms"])) if alt["status"] == "ok" else "",
+            "dual_cache_band_speedup_vs_cert_base": fmt(float(alt["dual_cache_band_speedup_vs_cert_base"])) if alt["status"] == "ok" else "",
+            "dual_cache_band_vs_selected_route": fmt(float(alt["dual_cache_band_vs_selected_route"])) if alt["status"] == "ok" else "",
+            "dual_cache_band_delta_vs_selected_ms": fmt(float(alt["dual_cache_band_delta_vs_selected_ms"])) if alt["status"] == "ok" else "",
+            "dual_cache_band_break_even_status": alt.get("dual_cache_band_break_even_status", ""),
+            "dual_cache_band_break_even_uses": "NA" if alt.get("dual_cache_band_break_even_uses") is None else alt.get("dual_cache_band_break_even_uses", ""),
+        }
+        print("\t".join(str(values[field]) for field in fallback_fields))
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("route_plan", type=Path, help="mixed route plan JSONL")
     parser.add_argument("--top", type=int, default=8, help="number of windows/phase rows to print")
     parser.add_argument("--tsv", action="store_true", help="emit machine-readable TSV tables")
+    parser.add_argument("--fallback-reuse-count", type=int, default=2, help="base exact prompt-cache reuse count for cert-derived fallback alternatives")
+    parser.add_argument("--fallback-min-speedup", type=float, default=1.10, help="target speedup for cert-derived fallback break-even estimates")
     args = parser.parse_args()
+    if args.fallback_reuse_count <= 0:
+        raise SystemExit("--fallback-reuse-count must be positive")
+    if args.fallback_min_speedup <= 0.0:
+        raise SystemExit("--fallback-min-speedup must be positive")
 
     summary, windows = load_plan(args.route_plan)
     if args.tsv:
-        print_tsv(args.route_plan, summary, windows)
+        print_tsv(args.route_plan, summary, windows, args.fallback_reuse_count, args.fallback_min_speedup)
     else:
-        print_text(args.route_plan, summary, windows, args.top)
+        print_text(args.route_plan, summary, windows, args.top, args.fallback_reuse_count, args.fallback_min_speedup)
     return 0
 
 
