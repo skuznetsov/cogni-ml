@@ -165,18 +165,37 @@ def aggregate_phase_rows(windows: list[dict[str, Any]]) -> dict[tuple[str, str],
     totals: dict[tuple[str, str], dict[str, float]] = {}
     for window in windows:
         for key, metric in parse_child_metrics(str(window.get("child_log", ""))).items():
+            selected_route = str(window.get("selected_route", ""))
+            mixed_variant_ms = metric["variant_ms"] if selected_route == "variant_fast" else metric["base_ms"]
             row = totals.setdefault(
                 key,
-                {"base_ms": 0.0, "variant_ms": 0.0, "delta_ms": 0.0, "range_over_delta": 0.0, "windows": 0.0},
+                {
+                    "base_ms": 0.0,
+                    "unsafe_variant_ms": 0.0,
+                    "mixed_variant_ms": 0.0,
+                    "unsafe_delta_ms": 0.0,
+                    "mixed_delta_ms": 0.0,
+                    "range_over_delta": 0.0,
+                    "windows": 0.0,
+                    "candidate_windows": 0.0,
+                    "fallback_windows": 0.0,
+                },
             )
             row["base_ms"] += metric["base_ms"]
-            row["variant_ms"] += metric["variant_ms"]
-            row["delta_ms"] += metric["delta_ms"]
+            row["unsafe_variant_ms"] += metric["variant_ms"]
+            row["mixed_variant_ms"] += mixed_variant_ms
+            row["unsafe_delta_ms"] += metric["base_ms"] - metric["variant_ms"]
+            row["mixed_delta_ms"] += metric["base_ms"] - mixed_variant_ms
             row["windows"] += 1.0
+            if selected_route == "variant_fast":
+                row["candidate_windows"] += 1.0
+            elif selected_route == "base_exact":
+                row["fallback_windows"] += 1.0
             if math.isfinite(metric["range_over_delta"]):
                 row["range_over_delta"] = max(row["range_over_delta"], metric["range_over_delta"])
     for row in totals.values():
-        row["speedup"] = row["base_ms"] / row["variant_ms"] if row["variant_ms"] > 0 else float("inf")
+        row["unsafe_speedup"] = row["base_ms"] / row["unsafe_variant_ms"] if row["unsafe_variant_ms"] > 0 else float("inf")
+        row["mixed_speedup"] = row["base_ms"] / row["mixed_variant_ms"] if row["mixed_variant_ms"] > 0 else float("inf")
     return totals
 
 
@@ -210,11 +229,14 @@ def route_owner(window: dict[str, Any]) -> str:
 
 def phase_owner(metric: str, row: dict[str, float]) -> str:
     base_ms = row["base_ms"]
-    variant_ms = row["variant_ms"]
-    if base_ms > 0.0 and variant_ms == 0.0:
+    unsafe_variant_ms = row["unsafe_variant_ms"]
+    mixed_variant_ms = row["mixed_variant_ms"]
+    if base_ms > 0.0 and mixed_variant_ms == 0.0:
         return "eliminated_or_replayed"
+    if base_ms > 0.0 and unsafe_variant_ms == 0.0 and mixed_variant_ms > 0.0:
+        return "mixed_fallback_residual"
     if metric == "total_ms":
-        return "end_to_end_unsafe_variant"
+        return "end_to_end_mixed_route"
     if metric.startswith("materialize_moe_"):
         return "moe_materialize_transport"
     if metric.startswith("materialize"):
@@ -229,8 +251,10 @@ def phase_owner(metric: str, row: dict[str, float]) -> str:
 def phase_next_move(owner: str) -> str:
     if owner == "eliminated_or_replayed":
         return "do_not_microtune; protect certificate/replay boundary"
-    if owner == "end_to_end_unsafe_variant":
-        return "diagnostic_only; recompute mixed route before promotion"
+    if owner == "mixed_fallback_residual":
+        return "fallback/certificate Diamond before subphase tuning"
+    if owner == "end_to_end_mixed_route":
+        return "reduce dominant fallback or recompute promoted mixed route"
     if owner == "moe_materialize_transport":
         return "fuse_or_keep_resident_across_grouped_moe"
     if owner == "residual_materialize_boundary":
@@ -316,7 +340,7 @@ def print_text(
     phases = aggregate_phase_rows(windows)
     noisy_phases = sum(
         1 for row in phases.values()
-        if row["range_over_delta"] > 2.0 and abs(row["delta_ms"]) > 0.0
+        if row["range_over_delta"] > 2.0 and abs(row["mixed_delta_ms"]) > 0.0
     )
     conflict_count = fallback_count + noisy_phases
 
@@ -375,20 +399,25 @@ def print_text(
         )
     if phases:
         print("  phase_deltas:")
-        for (kind, metric), row in sorted(phases.items(), key=lambda item: (-abs(item[1]["delta_ms"]), item[0]))[:top]:
+        for (kind, metric), row in sorted(phases.items(), key=lambda item: (-abs(item[1]["mixed_delta_ms"]), item[0]))[:top]:
             owner = phase_owner(metric, row)
             print(
-                "    kind=%s metric=%s owner=%s next=%s windows=%d base_ms=%s variant_ms=%s speedup=%s delta_ms=%s max_range_over_delta=%s"
+                "    kind=%s metric=%s owner=%s next=%s windows=%d candidate=%d fallback=%d base_ms=%s unsafe_variant_ms=%s mixed_variant_ms=%s unsafe_speedup=%s mixed_speedup=%s unsafe_delta_ms=%s mixed_delta_ms=%s max_range_over_delta=%s"
                 % (
                     kind,
                     metric,
                     owner,
                     phase_next_move(owner),
                     int(row["windows"]),
+                    int(row["candidate_windows"]),
+                    int(row["fallback_windows"]),
                     fmt(row["base_ms"]),
-                    fmt(row["variant_ms"]),
-                    fmt(row["speedup"]),
-                    fmt(row["delta_ms"]),
+                    fmt(row["unsafe_variant_ms"]),
+                    fmt(row["mixed_variant_ms"]),
+                    fmt(row["unsafe_speedup"]),
+                    fmt(row["mixed_speedup"]),
+                    fmt(row["unsafe_delta_ms"]),
+                    fmt(row["mixed_delta_ms"]),
                     fmt(row["range_over_delta"]),
                 )
             )
@@ -474,9 +503,27 @@ def print_tsv(
         }
         print("\t".join(str(values[field]) for field in fields))
 
-    phase_fields = ["kind", "source", "phase_kind", "metric", "phase_owner", "next_move", "windows", "base_ms", "variant_ms", "speedup", "delta_ms", "range_over_delta"]
+    phase_fields = [
+        "kind",
+        "source",
+        "phase_kind",
+        "metric",
+        "phase_owner",
+        "next_move",
+        "windows",
+        "candidate_windows",
+        "fallback_windows",
+        "base_ms",
+        "unsafe_variant_ms",
+        "mixed_variant_ms",
+        "unsafe_speedup",
+        "mixed_speedup",
+        "unsafe_delta_ms",
+        "mixed_delta_ms",
+        "range_over_delta",
+    ]
     print("\t".join(phase_fields))
-    for (kind, metric), row in sorted(aggregate_phase_rows(windows).items(), key=lambda item: (-abs(item[1]["delta_ms"]), item[0])):
+    for (kind, metric), row in sorted(aggregate_phase_rows(windows).items(), key=lambda item: (-abs(item[1]["mixed_delta_ms"]), item[0])):
         owner = phase_owner(metric, row)
         values = {
             "kind": "phase",
@@ -486,10 +533,15 @@ def print_tsv(
             "phase_owner": owner,
             "next_move": phase_next_move(owner),
             "windows": int(row["windows"]),
+            "candidate_windows": int(row["candidate_windows"]),
+            "fallback_windows": int(row["fallback_windows"]),
             "base_ms": fmt(row["base_ms"]),
-            "variant_ms": fmt(row["variant_ms"]),
-            "speedup": fmt(row["speedup"]),
-            "delta_ms": fmt(row["delta_ms"]),
+            "unsafe_variant_ms": fmt(row["unsafe_variant_ms"]),
+            "mixed_variant_ms": fmt(row["mixed_variant_ms"]),
+            "unsafe_speedup": fmt(row["unsafe_speedup"]),
+            "mixed_speedup": fmt(row["mixed_speedup"]),
+            "unsafe_delta_ms": fmt(row["unsafe_delta_ms"]),
+            "mixed_delta_ms": fmt(row["mixed_delta_ms"]),
             "range_over_delta": fmt(row["range_over_delta"]),
         }
         print("\t".join(str(values[field]) for field in phase_fields))
