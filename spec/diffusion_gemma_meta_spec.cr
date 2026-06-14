@@ -1849,6 +1849,10 @@ describe ML::GGUF::DiffusionGemmaCPU do
     old_gpu_reduce_off = ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_REDUCE_OFF"]?
     old_gpu_reduce_min = ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_REDUCE_MIN_CANVAS"]?
     old_gpu_reduce_max = ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_REDUCE_MAX_CANVAS"]?
+    old_down_command = ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_DOWN_COMMAND"]?
+    old_down_command_off = ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_DOWN_COMMAND_OFF"]?
+    old_down_command_min = ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_DOWN_COMMAND_MIN_CANVAS"]?
+    old_down_command_max = ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_DOWN_COMMAND_MAX_CANVAS"]?
     old_gpu_prenorm = ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM"]?
     old_gpu_prenorm_off = ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM_OFF"]?
     old_gpu_prenorm_min = ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM_MIN_CANVAS"]?
@@ -1864,6 +1868,19 @@ describe ML::GGUF::DiffusionGemmaCPU do
       ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH_OFF")
       expected = ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows(w, 0, rows, rows_by_id.size, routes_by_row)
 
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_DOWN_COMMAND"] = "1"
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_DOWN_COMMAND_MIN_CANVAS"] = "4"
+      down_command = ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows(w, 0, rows, rows_by_id.size, routes_by_row)
+      down_command.size.should eq(expected.size)
+      max_diff = 0.0_f32
+      expected.size.times do |i|
+        diff = (expected[i] - down_command[i]).abs
+        max_diff = diff if diff > max_diff
+      end
+      max_diff.should be < 1.0e-4_f32
+
+      ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_DOWN_COMMAND")
+      ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_DOWN_COMMAND_MIN_CANVAS")
       ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH"] = "1"
       actual = ML::GGUF::DiffusionGemmaCPU.moe_ffn_grouped_expert_rows(w, 0, rows, rows_by_id.size, routes_by_row)
       actual.size.should eq(rows_by_id.size * hp.n_embd)
@@ -1957,6 +1974,22 @@ describe ML::GGUF::DiffusionGemmaCPU do
       ML::GGUF::DiffusionGemmaCPU.moe_grouped_gpu_prenorm_enabled?(16).should be_false
       ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM_OFF"] = "1"
       ML::GGUF::DiffusionGemmaCPU.moe_grouped_gpu_prenorm_enabled?(8).should be_false
+
+      ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH")
+      ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_DOWN_COMMAND")
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_resident_down_command_enabled?(8).should be_false
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_DOWN_COMMAND"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_resident_down_command_enabled?(4).should be_false
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_resident_down_command_enabled?(8).should be_true
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_DOWN_COMMAND_MIN_CANVAS"] = "4"
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_DOWN_COMMAND_MAX_CANVAS"] = "8"
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_resident_down_command_enabled?(4).should be_true
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_resident_down_command_enabled?(16).should be_false
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_resident_down_command_enabled?(8).should be_false
+      ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH")
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_DOWN_COMMAND_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.moe_grouped_resident_down_command_enabled?(8).should be_false
     ensure
       if old_enabled
         ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH"] = old_enabled
@@ -2017,6 +2050,26 @@ describe ML::GGUF::DiffusionGemmaCPU do
         ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_REDUCE_MAX_CANVAS"] = old_gpu_reduce_max
       else
         ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_GPU_REDUCE_MAX_CANVAS")
+      end
+      if old_down_command
+        ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_DOWN_COMMAND"] = old_down_command
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_DOWN_COMMAND")
+      end
+      if old_down_command_off
+        ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_DOWN_COMMAND_OFF"] = old_down_command_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_DOWN_COMMAND_OFF")
+      end
+      if old_down_command_min
+        ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_DOWN_COMMAND_MIN_CANVAS"] = old_down_command_min
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_DOWN_COMMAND_MIN_CANVAS")
+      end
+      if old_down_command_max
+        ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_DOWN_COMMAND_MAX_CANVAS"] = old_down_command_max
+      else
+        ENV.delete("DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_DOWN_COMMAND_MAX_CANVAS")
       end
       if old_gpu_prenorm
         ENV["DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM"] = old_gpu_prenorm
