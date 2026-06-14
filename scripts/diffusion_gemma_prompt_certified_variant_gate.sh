@@ -1,0 +1,335 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+default_base_env="DIFFUSION_GEMMA_C8_RESIDENT_DECODE_POLICY=1 DIFFUSION_GEMMA_PROMPT_CACHE_POLICY=1"
+default_variant_env="$default_base_env DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH=1 DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER=1 DIFFUSION_GEMMA_MOE_GROUPED_GPU_REDUCE=1 DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM=1 DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH=1 DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_CACHE=1"
+
+model="${DIFFUSION_GEMMA_MODEL:-$HOME/.cache/lm-studio/models/unsloth/diffusiongemma-26B-A4B-it-GGUF/diffusiongemma-26B-A4B-it-Q4_K_M.gguf}"
+crystal_bin="${CRYSTAL_BIN:-/opt/homebrew/bin/crystal}"
+bridge_o="${COGNI_ML_BRIDGE_O:-}"
+bin_dir="${BIN_DIR:-/tmp}"
+log_dir="${LOG_DIR:-/tmp/diffusiongemma_prompt_certified_variant_gate_$(date +%Y%m%d%H%M%S)}"
+
+base_env="${BASE_ENV:-$default_base_env}"
+variant_env="${VARIANT_ENV:-$default_variant_env}"
+prompt_len="${PROMPT_LEN:-16}"
+canvas_len="${CANVAS_LEN:-8}"
+max_layers="${MAX_LAYERS:-30}"
+token_windows="${TOKEN_WINDOWS:-1:0,17:100,257:1000,4096:8192}"
+candidate_count="${CANDIDATE_COUNT:-1024}"
+
+cert_require_argmax="${CERT_REQUIRE_ARGMAX:-1}"
+cert_require_sampled="${CERT_REQUIRE_SAMPLED:-0}"
+min_base_logit_margin="${MIN_BASE_LOGIT_MARGIN:-}"
+min_variant_logit_margin="${MIN_VARIANT_LOGIT_MARGIN:-}"
+max_logit_delta="${MAX_LOGIT_DELTA:-}"
+
+abba_warmups="${ABBA_WARMUPS:-1}"
+abba_repeats="${ABBA_REPEATS:-3}"
+abba_trim_per_arm="${ABBA_TRIM_PER_ARM:-1}"
+abba_sequence="${ABBA_SEQUENCE:-base variant variant base}"
+abba_mirror_sequence="${ABBA_MIRROR_SEQUENCE:-variant base base variant}"
+min_total_speedup="${MIN_TOTAL_SPEEDUP:-1.10}"
+run_abba_on_cert_fail="${RUN_ABBA_ON_CERT_FAIL:-0}"
+checksum_tolerance="${CHECKSUM_TOLERANCE:-}"
+check_quiet="${CHECK_QUIET:-0}"
+
+cert_source="$repo_root/scripts/diffusion_gemma_prompt_output_cert_probe.cr"
+abba_source="$repo_root/scripts/diffusion_gemma_prompt_cache_abba.cr"
+cert_bin="${CERT_BIN:-$bin_dir/diffusion_gemma_prompt_output_cert_probe}"
+abba_bin="${ABBA_BIN:-$bin_dir/diffusion_gemma_prompt_cache_abba}"
+
+usage() {
+  cat <<'EOF'
+Usage: diffusion_gemma_prompt_certified_variant_gate.sh
+
+Runs a fail-closed promotion gate for the approximate prompt-MoE route:
+  1. output certificate over TOKEN_WINDOWS,
+  2. mirrored prompt-cache ABBA speed measurement,
+  3. single decision row.
+
+Important environment knobs:
+  BASE_ENV / VARIANT_ENV          arm envs passed to both probes
+  PROMPT_LEN / CANVAS_LEN         synthetic shape, defaults 16 / 8
+  MAX_LAYERS                      full-depth default 30
+  TOKEN_WINDOWS                   prompt:canvas starts, default four windows
+  CANDIDATE_COUNT                 bounded candidate set, default 1024
+  CERT_REQUIRE_SAMPLED=1          require deterministic sampled-token stability
+  MIN_BASE_LOGIT_MARGIN=F         optional certificate margin floor
+  MIN_VARIANT_LOGIT_MARGIN=F      optional certificate margin floor
+  MAX_LOGIT_DELTA=F               optional candidate-logit delta ceiling
+  MIN_TOTAL_SPEEDUP=F             ABBA total_ms speedup floor, default 1.10
+  RUN_ABBA_ON_CERT_FAIL=1         run ABBA even when certificate rejects
+  CHECK_QUIET=1                   poll the existing quiet gate before running
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 2
+}
+
+reject() {
+  local reason="$1"
+  shift || true
+  printf 'certified_variant_gate decision=reject reason=%s' "$reason"
+  while (($#)); do
+    printf ' %s' "$1"
+    shift
+  done
+  printf '\n'
+  exit 4
+}
+
+bool_enabled() {
+  case "$1" in
+    1|true|yes|on) return 0 ;;
+    0|false|no|off|"") return 1 ;;
+    *) die "invalid boolean value: $1" ;;
+  esac
+}
+
+validate_uint() {
+  local name="$1"
+  local value="$2"
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    die "$name must be a non-negative integer"
+  fi
+}
+
+validate_positive_uint() {
+  local name="$1"
+  local value="$2"
+  validate_uint "$name" "$value"
+  if [[ "$value" -lt 1 ]]; then
+    die "$name must be positive"
+  fi
+}
+
+validate_env_tokens() {
+  local label="$1"
+  local raw="$2"
+  local token
+  for token in $raw; do
+    if [[ ! "$token" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+      die "$label env token must be KEY=VALUE, got $token"
+    fi
+  done
+}
+
+build_probe() {
+  local source="$1"
+  local bin="$2"
+  if [[ -x "$bin" && "$source" -ot "$bin" && "${FORCE_BUILD:-0}" != "1" ]]; then
+    return
+  fi
+
+  if [[ -z "$bridge_o" ]]; then
+    if [[ -f "$repo_root/build/bridge.o" ]]; then
+      bridge_o="$repo_root/build/bridge.o"
+    else
+      bridge_o="/Users/sergey/Projects/Crystal/cogni-ml/build/bridge.o"
+    fi
+  fi
+  [[ -f "$bridge_o" ]] || die "bridge object not found: $bridge_o"
+  mkdir -p "$(dirname "$bin")"
+  "$crystal_bin" build --release "$source" \
+    -o "$bin" \
+    --error-trace \
+    --link-flags="$bridge_o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"
+}
+
+extract_metric() {
+  local output="$1"
+  local metric="$2"
+  local kind="$3"
+  awk -F'\t' -v metric="$metric" -v kind="$kind" '
+    $1 == kind && $2 == metric {
+      print $3 "\t" $4 "\t" $5 "\t" $6 "\t" $8
+      found = 1
+    }
+    END { if (!found) exit 1 }
+  ' "$output"
+}
+
+print_metric_row() {
+  local output="$1"
+  local metric="$2"
+  local kind="$3"
+  local values
+  if ! values="$(extract_metric "$output" "$metric" "$kind")"; then
+    printf 'gate_metric metric=%s status=missing\n' "$metric"
+    return 1
+  fi
+  local base_ms variant_ms speedup delta range_over_delta
+  IFS=$'\t' read -r base_ms variant_ms speedup delta range_over_delta <<<"$values"
+  printf 'gate_metric metric=%s base_ms=%s variant_ms=%s speedup=%s delta_ms=%s range_over_delta=%s\n' \
+    "$metric" "$base_ms" "$variant_ms" "$speedup" "$delta" "$range_over_delta"
+}
+
+float_ge() {
+  python3 - "$1" "$2" <<'PY'
+import math
+import sys
+
+value = float(sys.argv[1])
+threshold = float(sys.argv[2])
+sys.exit(0 if math.isfinite(value) and value >= threshold else 1)
+PY
+}
+
+validate_positive_uint PROMPT_LEN "$prompt_len"
+validate_positive_uint CANVAS_LEN "$canvas_len"
+validate_positive_uint MAX_LAYERS "$max_layers"
+validate_positive_uint CANDIDATE_COUNT "$candidate_count"
+validate_uint ABBA_WARMUPS "$abba_warmups"
+validate_positive_uint ABBA_REPEATS "$abba_repeats"
+validate_uint ABBA_TRIM_PER_ARM "$abba_trim_per_arm"
+validate_env_tokens BASE_ENV "$base_env"
+validate_env_tokens VARIANT_ENV "$variant_env"
+[[ -f "$model" ]] || die "model not found: $model"
+
+mkdir -p "$log_dir"
+
+printf 'log_dir=%s\n' "$log_dir"
+printf 'model=%s\n' "$model"
+printf 'prompt_len=%s\n' "$prompt_len"
+printf 'canvas_len=%s\n' "$canvas_len"
+printf 'max_layers=%s\n' "$max_layers"
+printf 'token_windows=%s\n' "$token_windows"
+printf 'candidate_count=%s\n' "$candidate_count"
+printf 'base_env=%s\n' "$base_env"
+printf 'variant_env=%s\n' "$variant_env"
+printf 'min_total_speedup=%s\n' "$min_total_speedup"
+
+if bool_enabled "$check_quiet"; then
+  quiet_log="$log_dir/quiet_gate.log"
+  if ! "$repo_root/scripts/diffusion_gemma_quiet_gate_check.sh" >"$quiet_log" 2>&1; then
+    printf 'quiet_gate status=fail log=%s\n' "$quiet_log"
+    reject "quiet_gate_failed" "log=$quiet_log"
+  fi
+  printf 'quiet_gate status=ok log=%s\n' "$quiet_log"
+fi
+
+build_probe "$cert_source" "$cert_bin"
+build_probe "$abba_source" "$abba_bin"
+
+cert_out="$log_dir/output_cert.tsv"
+cert_err="$log_dir/output_cert.stderr"
+cert_args=(
+  --model "$model"
+  --prompt-len "$prompt_len"
+  --canvas-len "$canvas_len"
+  --max-layers "$max_layers"
+  --candidate-count "$candidate_count"
+  --token-windows "$token_windows"
+  --base-env "$base_env"
+  --variant-env "$variant_env"
+)
+if bool_enabled "$cert_require_argmax"; then
+  cert_args+=(--require-argmax-match)
+fi
+if bool_enabled "$cert_require_sampled"; then
+  cert_args+=(--require-sampled-match)
+fi
+if [[ -n "$min_base_logit_margin" ]]; then
+  cert_args+=(--min-base-logit-margin "$min_base_logit_margin")
+fi
+if [[ -n "$min_variant_logit_margin" ]]; then
+  cert_args+=(--min-variant-logit-margin "$min_variant_logit_margin")
+fi
+if [[ -n "$max_logit_delta" ]]; then
+  cert_args+=(--max-logit-delta "$max_logit_delta")
+fi
+
+set +e
+"$cert_bin" "${cert_args[@]}" >"$cert_out" 2>"$cert_err"
+cert_rc=$?
+set -e
+
+cert_status="$(grep -E '^output_cert ' "$cert_err" | tail -1 || true)"
+cert_aggregate="$(grep -E '^aggregate_summary' "$cert_out" | tail -1 || true)"
+printf 'output_cert_rc=%s\n' "$cert_rc"
+printf 'output_cert_log=%s\n' "$cert_out"
+printf 'output_cert_stderr=%s\n' "$cert_err"
+[[ -n "$cert_status" ]] && printf '%s\n' "$cert_status"
+[[ -n "$cert_aggregate" ]] && printf '%s\n' "$cert_aggregate"
+
+if (( cert_rc != 0 )) && ! bool_enabled "$run_abba_on_cert_fail"; then
+  reject "certificate_failed" "cert_rc=$cert_rc" "cert_log=$cert_out" "cert_stderr=$cert_err"
+fi
+
+abba_out="$log_dir/prompt_cache_abba.tsv"
+abba_err="$log_dir/prompt_cache_abba.stderr"
+abba_args=(
+  --model "$model"
+  --prompt-len "$prompt_len"
+  --canvas-len "$canvas_len"
+  --prompt-token 1
+  --max-layers "$max_layers"
+  --warmups "$abba_warmups"
+  --repeats "$abba_repeats"
+  --trim-per-arm "$abba_trim_per_arm"
+  --sequence "$abba_sequence"
+  --mirror-sequence "$abba_mirror_sequence"
+  --base-env "$base_env"
+  --variant-env "$variant_env"
+  --full-routes
+  --materialize-final-rows
+)
+if [[ -n "$checksum_tolerance" ]]; then
+  abba_args+=(--checksum-tolerance "$checksum_tolerance")
+fi
+
+set +e
+"$abba_bin" "${abba_args[@]}" >"$abba_out" 2>"$abba_err"
+abba_rc=$?
+set -e
+
+printf 'prompt_cache_abba_rc=%s\n' "$abba_rc"
+printf 'prompt_cache_abba_log=%s\n' "$abba_out"
+printf 'prompt_cache_abba_stderr=%s\n' "$abba_err"
+if (( abba_rc != 0 )); then
+  reject "abba_failed" "abba_rc=$abba_rc" "abba_log=$abba_out" "abba_stderr=$abba_err"
+fi
+
+summary_kind="summary"
+if [[ "$abba_trim_per_arm" -gt 0 ]]; then
+  summary_kind="trimmed_summary"
+fi
+
+print_metric_row "$abba_out" total_ms "$summary_kind"
+print_metric_row "$abba_out" materialize_ms "$summary_kind" || true
+print_metric_row "$abba_out" materialize_moe_ffn_ms "$summary_kind" || true
+print_metric_row "$abba_out" materialize_moe_grouped_gate_up_ms "$summary_kind" || true
+print_metric_row "$abba_out" materialize_moe_grouped_down_ms "$summary_kind" || true
+grep -E '^checksum_summary' "$abba_out" | tail -1 || true
+
+if (( cert_rc != 0 )); then
+  reject "certificate_failed_after_abba" "cert_rc=$cert_rc" "cert_log=$cert_out" "cert_stderr=$cert_err" "abba_log=$abba_out"
+fi
+
+total_values="$(extract_metric "$abba_out" total_ms "$summary_kind")" || reject "missing_total_speedup" "abba_log=$abba_out"
+IFS=$'\t' read -r total_base_ms total_variant_ms total_speedup total_delta_ms total_range_over_delta <<<"$total_values"
+if ! float_ge "$total_speedup" "$min_total_speedup"; then
+  reject "speed_below_threshold" \
+    "total_speedup=$total_speedup" \
+    "min_total_speedup=$min_total_speedup" \
+    "base_ms=$total_base_ms" \
+    "variant_ms=$total_variant_ms" \
+    "abba_log=$abba_out"
+fi
+
+decision="candidate_argmax_only"
+if bool_enabled "$cert_require_sampled"; then
+  decision="candidate_sampled"
+fi
+printf 'certified_variant_gate decision=%s total_speedup=%s min_total_speedup=%s base_ms=%s variant_ms=%s cert_rc=%s abba_rc=%s log_dir=%s\n' \
+  "$decision" "$total_speedup" "$min_total_speedup" "$total_base_ms" "$total_variant_ms" "$cert_rc" "$abba_rc" "$log_dir"
