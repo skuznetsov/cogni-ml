@@ -355,3 +355,28 @@ the route plan carries a `base_route_artifact`, that base artifact is loaded as
 the selected runtime artifact with `arm=base`.
 Explicit `--*-route-artifact*` options are rejected when `--mixed-route-plan` is
 set, so a mixed plan remains the single route authority.
+
+For the next fallback experiment outside `--mixed-route-plan`, the certificate
+and ABBA probes can intentionally load a route artifact whose stored metadata
+belongs to another arm/env role. This is explicit and still fail-closed because
+the shared v2 route-artifact loader validates the requested metadata:
+
+```sh
+/tmp/diffusion_gemma_prompt_output_cert_probe \
+  --variant-route-artifact /tmp/base_p4096_c8192_pl16_l30.tsv \
+  --variant-route-artifact-expected-arm base \
+  --variant-route-artifact-env-role base
+
+/tmp/diffusion_gemma_prompt_cache_abba \
+  --full-routes \
+  --materialize-final-rows \
+  --variant-route-artifact /tmp/base_p4096_c8192_pl16_l30.tsv \
+  --variant-route-artifact-expected-arm base \
+  --variant-route-artifact-env-role base
+```
+
+Use this only as a foreign-route replay experiment: it can test whether the
+variant/exact-fast runtime profile improves a fallback window while replaying
+base routes. Promotion still requires the output certificate and ABBA timing to
+pass on the same artifact and a recomputed mixed route plan to reduce the
+fallback-dominated Phi.

@@ -83,6 +83,10 @@ base_env = ArmEnv.new(DEFAULT_BASE_ENV)
 variant_env = ArmEnv.new(DEFAULT_VARIANT_ENV)
 base_route_artifact_path = nil.as(String?)
 variant_route_artifact_path = nil.as(String?)
+base_route_artifact_expected_arm = "base"
+variant_route_artifact_expected_arm = "variant"
+base_route_artifact_env_role = "base"
+variant_route_artifact_env_role = "variant"
 base_route_artifact_map_arg = nil.as(String?)
 variant_route_artifact_map_arg = nil.as(String?)
 mixed_route_plan_path = nil.as(String?)
@@ -117,6 +121,10 @@ OptionParser.parse do |p|
   p.on("--variant-env ENV", "Whitespace-separated KEY=VALUE env for variant arm") { |v| variant_env = ArmEnv.new(v) }
   p.on("--base-route-artifact PATH", "Load base prompt MoE routes from an existing artifact") { |v| base_route_artifact_path = v }
   p.on("--variant-route-artifact PATH", "Load variant prompt MoE routes from an existing artifact") { |v| variant_route_artifact_path = v }
+  p.on("--base-route-artifact-expected-arm ARM", "Expected arm metadata for --base-route-artifact/map (base or variant; default base)") { |v| base_route_artifact_expected_arm = v }
+  p.on("--variant-route-artifact-expected-arm ARM", "Expected arm metadata for --variant-route-artifact/map (base or variant; default variant)") { |v| variant_route_artifact_expected_arm = v }
+  p.on("--base-route-artifact-env-role ROLE", "Expected env fingerprint role for --base-route-artifact/map (base or variant; default base)") { |v| base_route_artifact_env_role = v }
+  p.on("--variant-route-artifact-env-role ROLE", "Expected env fingerprint role for --variant-route-artifact/map (base or variant; default variant)") { |v| variant_route_artifact_env_role = v }
   p.on("--base-route-artifact-map SPEC", "Load base routes per token window, e.g. 1:0=/tmp/a,17:100=/tmp/b") { |v| base_route_artifact_map_arg = v }
   p.on("--variant-route-artifact-map SPEC", "Load variant routes per token window, e.g. 1:0=/tmp/a,17:100=/tmp/b") { |v| variant_route_artifact_map_arg = v }
   p.on("--mixed-route-plan PATH", "Load a mixed variant_fast/base_exact route plan and select per-window execution") { |v| mixed_route_plan_path = v }
@@ -226,6 +234,24 @@ end
 
 def selected_env_role(route_window : ML::GGUF::DiffusionGemmaMixedRoutePlan::Window?) : String
   route_window.try(&.variant_env_role) || "variant"
+end
+
+def validate_route_artifact_arm!(label : String, value : String) : Nil
+  return if value == "base" || value == "variant"
+
+  raise "#{label} must be base or variant"
+end
+
+def validate_route_artifact_env_role!(label : String, value : String) : Nil
+  return if value == "base" || value == "variant"
+
+  raise "#{label} must be base or variant"
+end
+
+def route_artifact_env_sha256(role : String,
+                              base_env_sha256 : String,
+                              variant_env_sha256 : String) : String
+  role == "base" ? base_env_sha256 : variant_env_sha256
 end
 
 def parse_int_list(raw : String, label : String) : Array(Int32)
@@ -528,6 +554,10 @@ end
 
 raise "--prompt-len must be positive" unless prompt_len > 0
 raise "--canvas-len must be positive" unless canvas_len > 0
+validate_route_artifact_arm!("--base-route-artifact-expected-arm", base_route_artifact_expected_arm)
+validate_route_artifact_arm!("--variant-route-artifact-expected-arm", variant_route_artifact_expected_arm)
+validate_route_artifact_env_role!("--base-route-artifact-env-role", base_route_artifact_env_role)
+validate_route_artifact_env_role!("--variant-route-artifact-env-role", variant_route_artifact_env_role)
 valid_certificate_modes = ["bounded", "full-vocab-top1-metal", "full-vocab-top1-cpu", "full-vocab-top2-metal", "full-vocab-top2-cpu"]
 raise "--certificate-mode must be one of #{valid_certificate_modes.join(", ")}" unless valid_certificate_modes.includes?(certificate_mode)
 raise "--candidate-count must be positive" unless candidate_count > 0
@@ -622,7 +652,10 @@ end
 validate_route_artifact_map!(base_route_artifact_map, windows, "--base-route-artifact-map") unless base_route_artifact_map.empty?
 validate_route_artifact_map!(variant_route_artifact_map, windows, "--variant-route-artifact-map") unless variant_route_artifact_map.empty?
 base_env_sha256 = arm_env_fingerprint(base_env)
+variant_env_sha256 = arm_env_fingerprint(variant_env)
 model_sha256 = model_fingerprint(model)
+base_artifact_expected_env_sha256 = route_artifact_env_sha256(base_route_artifact_env_role, base_env_sha256, variant_env_sha256)
+variant_artifact_expected_env_sha256 = route_artifact_env_sha256(variant_route_artifact_env_role, base_env_sha256, variant_env_sha256)
 
 puts "# load_ms=#{format_f64(load_ms)}"
 puts "# base_env=#{base_env.raw.empty? ? "<empty>" : base_env.raw}"
@@ -631,6 +664,10 @@ puts "# certificate_mode=#{certificate_mode}"
 puts "# mixed_route_plan=#{mixed_route_plan_path || "<none>"}"
 puts "# route_artifact_base=#{base_route_artifact_path || (base_route_artifact_map.empty? ? "<none>" : "map:#{base_route_artifact_map.size}")}"
 puts "# route_artifact_variant=#{mixed_route_plan ? "mixed_plan" : (variant_route_artifact_path || (variant_route_artifact_map.empty? ? "<none>" : "map:#{variant_route_artifact_map.size}"))}"
+puts "# route_artifact_base_expected_arm=#{base_route_artifact_path || !base_route_artifact_map.empty? ? base_route_artifact_expected_arm : "base"}"
+puts "# route_artifact_base_env_role=#{base_route_artifact_path || !base_route_artifact_map.empty? ? base_route_artifact_env_role : "base"}"
+puts "# route_artifact_variant_expected_arm=#{variant_route_artifact_path || !variant_route_artifact_map.empty? ? variant_route_artifact_expected_arm : "variant"}"
+puts "# route_artifact_variant_env_role=#{variant_route_artifact_path || !variant_route_artifact_map.empty? ? variant_route_artifact_env_role : "variant"}"
 puts [
   "kind",
   "window",
@@ -677,12 +714,13 @@ if certificate_mode != "bounded"
     variant_run_env_sha256 = arm_env_fingerprint(variant_run_env)
     base_artifact_path = base_route_artifact_path || base_route_artifact_map[window]?
     variant_artifact_path = selected_runtime_artifact(route_window) || variant_route_artifact_path || variant_route_artifact_map[window]?
-    variant_artifact_arm = mixed_route_plan ? selected_runtime_artifact_arm(route_window) : "variant"
+    variant_artifact_arm = mixed_route_plan ? selected_runtime_artifact_arm(route_window) : variant_route_artifact_expected_arm
+    selected_variant_artifact_env_sha256 = mixed_route_plan ? variant_run_env_sha256 : variant_artifact_expected_env_sha256
     base_routes = base_artifact_path.try do |path|
-      load_route_artifact(path, "base", prompt_len, max_layers, prompt_tokens_sha256, base_env_sha256, model_sha256)
+      load_route_artifact(path, base_route_artifact_expected_arm, prompt_len, max_layers, prompt_tokens_sha256, base_artifact_expected_env_sha256, model_sha256)
     end
     variant_routes = variant_artifact_path.try do |path|
-      load_route_artifact(path, variant_artifact_arm, prompt_len, max_layers, prompt_tokens_sha256, variant_run_env_sha256, model_sha256)
+      load_route_artifact(path, variant_artifact_arm, prompt_len, max_layers, prompt_tokens_sha256, selected_variant_artifact_env_sha256, model_sha256)
     end
 
     if use_top2
@@ -716,6 +754,10 @@ if certificate_mode != "bounded"
       "selected_route=#{selected_route_name(route_window)}",
       "variant_env_role=#{selected_env_role(route_window)}",
       "variant_route_artifact=#{variant_artifact_path || "<none>"}",
+      "base_route_artifact_expected_arm=#{base_artifact_path ? base_route_artifact_expected_arm : "base"}",
+      "base_route_artifact_env_role=#{base_artifact_path ? base_route_artifact_env_role : "base"}",
+      "variant_route_artifact_expected_arm=#{variant_artifact_path ? variant_artifact_arm : "variant"}",
+      "variant_route_artifact_env_role=#{variant_artifact_path ? (mixed_route_plan ? selected_env_role(route_window) : variant_route_artifact_env_role) : "variant"}",
       "selected_route_artifact=#{variant_artifact_path || "<none>"}",
       "selected_route_artifact_arm=#{variant_artifact_arm}",
       "certificate_mode=#{certificate_mode}",
@@ -896,12 +938,13 @@ windows.each_with_index do |window, window_index|
   variant_run_env_sha256 = arm_env_fingerprint(variant_run_env)
   base_artifact_path = base_route_artifact_path || base_route_artifact_map[window]?
   variant_artifact_path = selected_runtime_artifact(route_window) || variant_route_artifact_path || variant_route_artifact_map[window]?
-  variant_artifact_arm = mixed_route_plan ? selected_runtime_artifact_arm(route_window) : "variant"
+  variant_artifact_arm = mixed_route_plan ? selected_runtime_artifact_arm(route_window) : variant_route_artifact_expected_arm
+  selected_variant_artifact_env_sha256 = mixed_route_plan ? variant_run_env_sha256 : variant_artifact_expected_env_sha256
   base_routes = base_artifact_path.try do |path|
-    load_route_artifact(path, "base", prompt_len, max_layers, prompt_tokens_sha256, base_env_sha256, model_sha256)
+    load_route_artifact(path, base_route_artifact_expected_arm, prompt_len, max_layers, prompt_tokens_sha256, base_artifact_expected_env_sha256, model_sha256)
   end
   variant_routes = variant_artifact_path.try do |path|
-    load_route_artifact(path, variant_artifact_arm, prompt_len, max_layers, prompt_tokens_sha256, variant_run_env_sha256, model_sha256)
+    load_route_artifact(path, variant_artifact_arm, prompt_len, max_layers, prompt_tokens_sha256, selected_variant_artifact_env_sha256, model_sha256)
   end
 
   base = run_arm(weights, prompt_rows, canvas_rows, mask, candidate_rows, sample_us, max_layers, temp_inv, base_env, base_routes)
@@ -922,6 +965,10 @@ windows.each_with_index do |window, window_index|
     "selected_route=#{selected_route_name(route_window)}",
     "variant_env_role=#{selected_env_role(route_window)}",
     "variant_route_artifact=#{variant_artifact_path || "<none>"}",
+    "base_route_artifact_expected_arm=#{base_artifact_path ? base_route_artifact_expected_arm : "base"}",
+    "base_route_artifact_env_role=#{base_artifact_path ? base_route_artifact_env_role : "base"}",
+    "variant_route_artifact_expected_arm=#{variant_artifact_path ? variant_artifact_arm : "variant"}",
+    "variant_route_artifact_env_role=#{variant_artifact_path ? (mixed_route_plan ? selected_env_role(route_window) : variant_route_artifact_env_role) : "variant"}",
     "selected_route_artifact=#{variant_artifact_path || "<none>"}",
     "selected_route_artifact_arm=#{variant_artifact_arm}",
     "candidate_count=#{candidate_count}",

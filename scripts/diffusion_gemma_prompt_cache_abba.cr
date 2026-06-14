@@ -347,6 +347,28 @@ def selected_runtime_route_artifact_arm(route_window : ML::GGUF::DiffusionGemmaM
   route_window.try(&.selected_runtime_route_artifact_arm) || "variant"
 end
 
+def selected_env_role(route_window : ML::GGUF::DiffusionGemmaMixedRoutePlan::Window?) : String
+  route_window.try(&.variant_env_role) || "variant"
+end
+
+def validate_route_artifact_arm!(label : String, value : String) : Nil
+  return if value == "base" || value == "variant"
+
+  raise "#{label} must be base or variant"
+end
+
+def validate_route_artifact_env_role!(label : String, value : String) : Nil
+  return if value == "base" || value == "variant"
+
+  raise "#{label} must be base or variant"
+end
+
+def route_artifact_env_sha256(role : String,
+                              base_env_sha256 : String,
+                              variant_env_sha256 : String) : String
+  role == "base" ? base_env_sha256 : variant_env_sha256
+end
+
 def format_sample_values(values : Array(Float64)) : String
   values.map { |v| "%.3f" % v }.join(",")
 end
@@ -785,6 +807,10 @@ route_capture_amortize_uses = 1
 keep_route_capture_graph_cache = false
 base_route_artifact_path = nil.as(String?)
 variant_route_artifact_path = nil.as(String?)
+base_route_artifact_expected_arm = "base"
+variant_route_artifact_expected_arm = "variant"
+base_route_artifact_env_role = "base"
+variant_route_artifact_env_role = "variant"
 write_base_route_artifact_path = nil.as(String?)
 write_variant_route_artifact_path = nil.as(String?)
 capture_route_artifacts_only = false
@@ -815,6 +841,10 @@ OptionParser.parse do |p|
   p.on("--variant-replay-routes", "Pre-capture and replay variant prompt MoE routes for variant arm") { route_replay_variant = true }
   p.on("--base-route-artifact PATH", "Load base prompt MoE routes from an existing artifact") { |v| base_route_artifact_path = v }
   p.on("--variant-route-artifact PATH", "Load variant prompt MoE routes from an existing artifact") { |v| variant_route_artifact_path = v }
+  p.on("--base-route-artifact-expected-arm ARM", "Expected arm metadata for --base-route-artifact (base or variant; default base)") { |v| base_route_artifact_expected_arm = v }
+  p.on("--variant-route-artifact-expected-arm ARM", "Expected arm metadata for --variant-route-artifact (base or variant; default variant)") { |v| variant_route_artifact_expected_arm = v }
+  p.on("--base-route-artifact-env-role ROLE", "Expected env fingerprint role for --base-route-artifact (base or variant; default base)") { |v| base_route_artifact_env_role = v }
+  p.on("--variant-route-artifact-env-role ROLE", "Expected env fingerprint role for --variant-route-artifact (base or variant; default variant)") { |v| variant_route_artifact_env_role = v }
   p.on("--write-base-route-artifact PATH", "Write captured base prompt MoE routes to an artifact") { |v| write_base_route_artifact_path = v }
   p.on("--write-variant-route-artifact PATH", "Write captured variant prompt MoE routes to an artifact") { |v| write_variant_route_artifact_path = v }
   p.on("--capture-route-artifacts-only", "Capture route-artifact maps and exit without ABBA samples") { capture_route_artifacts_only = true }
@@ -830,6 +860,10 @@ OptionParser.parse do |p|
   end
 end
 
+validate_route_artifact_arm!("--base-route-artifact-expected-arm", base_route_artifact_expected_arm)
+validate_route_artifact_arm!("--variant-route-artifact-expected-arm", variant_route_artifact_expected_arm)
+validate_route_artifact_env_role!("--base-route-artifact-env-role", base_route_artifact_env_role)
+validate_route_artifact_env_role!("--variant-route-artifact-env-role", variant_route_artifact_env_role)
 mixed_route_plan = mixed_route_plan_path.try { |path| ML::GGUF::DiffusionGemmaMixedRoutePlan.from_jsonl(path) }
 mixed_route_window = mixed_route_plan.try { |plan| require_route_plan_window(plan, prompt_token, canvas_token) }
 variant_run_env = selected_variant_env(mixed_route_window, base_env, variant_env)
@@ -925,6 +959,14 @@ prompt_tokens_sha256 = prompt_tokens_fingerprint(prompt_tokens)
 base_env_sha256 = arm_env_fingerprint(base_env)
 variant_env_sha256 = arm_env_fingerprint(variant_run_env)
 model_sha256 = model_fingerprint(model)
+selected_artifact_expected_arm = selected_runtime_route_artifact_arm(mixed_route_window)
+base_artifact_expected_env_sha256 = route_artifact_env_sha256(base_route_artifact_env_role, base_env_sha256, variant_env_sha256)
+variant_artifact_expected_env_sha256 = if mixed_route_window && variant_route_artifact_path
+                                         variant_env_sha256
+                                       else
+                                         route_artifact_env_sha256(variant_route_artifact_env_role, base_env_sha256, variant_env_sha256)
+                                       end
+variant_artifact_expected_arm = mixed_route_window && variant_route_artifact_path ? selected_artifact_expected_arm : variant_route_artifact_expected_arm
 if capture_route_artifacts_only
   base_capture_ms = 0.0
   variant_capture_ms = 0.0
@@ -954,7 +996,7 @@ routes_by_layer_by_prompt_row = if single_route && materialize_final_rows
                                   nil
                                 end
 base_replay_capture = if path = base_route_artifact_path
-                        load_route_artifact(path, "base", prompt_len, max_layers, prompt_tokens_sha256, base_env_sha256, model_sha256)
+                        load_route_artifact(path, base_route_artifact_expected_arm, prompt_len, max_layers, prompt_tokens_sha256, base_artifact_expected_env_sha256, model_sha256)
                       elsif route_replay_base
                         capture = capture_routes_for_arm(weights, prompt_rows, mask, max_layers, base_env, "base", keep_route_capture_graph_cache)
                         if path = write_base_route_artifact_path
@@ -963,7 +1005,7 @@ base_replay_capture = if path = base_route_artifact_path
                         capture
                       end
 variant_replay_capture = if path = variant_route_artifact_path
-                           load_route_artifact(path, selected_runtime_route_artifact_arm(mixed_route_window), prompt_len, max_layers, prompt_tokens_sha256, variant_env_sha256, model_sha256)
+                           load_route_artifact(path, variant_artifact_expected_arm, prompt_len, max_layers, prompt_tokens_sha256, variant_artifact_expected_env_sha256, model_sha256)
                          elsif route_replay_variant
                            capture = capture_routes_for_arm(weights, prompt_rows, mask, max_layers, variant_run_env, "variant", keep_route_capture_graph_cache)
                            if path = write_variant_route_artifact_path
@@ -988,9 +1030,13 @@ puts "# route_replay_base=#{route_replay_base}"
 puts "# route_replay_variant=#{route_replay_variant}"
 puts "# route_artifact_base=#{base_route_artifact_path || write_base_route_artifact_path || "<none>"}"
 puts "# route_artifact_variant=#{variant_route_artifact_path || write_variant_route_artifact_path || "<none>"}"
-puts "# route_artifact_variant_arm=#{variant_route_artifact_path ? selected_runtime_route_artifact_arm(mixed_route_window) : "variant"}"
+puts "# route_artifact_base_expected_arm=#{base_route_artifact_path ? base_route_artifact_expected_arm : "base"}"
+puts "# route_artifact_base_env_role=#{base_route_artifact_path ? base_route_artifact_env_role : "base"}"
+puts "# route_artifact_variant_arm=#{variant_route_artifact_path ? variant_artifact_expected_arm : "variant"}"
+puts "# route_artifact_variant_expected_arm=#{variant_route_artifact_path ? variant_artifact_expected_arm : "variant"}"
+puts "# route_artifact_variant_env_role=#{variant_route_artifact_path ? (mixed_route_window ? selected_env_role(mixed_route_window) : variant_route_artifact_env_role) : "variant"}"
 puts "# route_artifact_selected=#{variant_route_artifact_path || write_variant_route_artifact_path || "<none>"}"
-puts "# route_artifact_selected_arm=#{variant_route_artifact_path ? selected_runtime_route_artifact_arm(mixed_route_window) : "variant"}"
+puts "# route_artifact_selected_arm=#{variant_route_artifact_path ? variant_artifact_expected_arm : "variant"}"
 puts "# route_capture_amortize_uses=#{route_capture_amortize_uses}"
 puts "# keep_route_capture_graph_cache=#{keep_route_capture_graph_cache}"
 puts "# route_capture_base_ms=#{format_f64(base_capture_ms)}"
