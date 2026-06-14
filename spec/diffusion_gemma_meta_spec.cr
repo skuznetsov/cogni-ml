@@ -887,6 +887,7 @@ describe ML::GGUF::DiffusionGemmaCPU do
       "DIFFUSION_GEMMA_PROMPT_CACHE_POLICY_OFF",
       "DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS",
       "DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS_OFF",
+      "DIFFUSION_GEMMA_PROMPT_MATERIALIZE_EXACT_GEMV_OFF",
       "DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE",
       "DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE_OFF",
       "DIFFUSION_GEMMA_PROMPT_PROJ_METAL",
@@ -904,6 +905,7 @@ describe ML::GGUF::DiffusionGemmaCPU do
       ML::GGUF::DiffusionGemmaCPU.prompt_cache_policy_requested?.should be_false
       ML::GGUF::DiffusionGemmaCPU.prompt_materialize_batch_rows_enabled?(8).should be_false
       ML::GGUF::DiffusionGemmaCPU.prompt_materialize_grouped_moe_enabled?.should be_false
+      ML::GGUF::DiffusionGemmaCPU.prompt_materialize_exact_gemv_enabled?.should be_true
       ML::GGUF::DiffusionGemmaCPU.prompt_projection_fused_norm_rope_enabled?.should be_false
       ML::GGUF::DiffusionGemmaCPU.prompt_projection_metal_enabled?.should be_false
 
@@ -912,6 +914,7 @@ describe ML::GGUF::DiffusionGemmaCPU do
       ML::GGUF::DiffusionGemmaCPU.prompt_materialize_batch_rows_enabled?(1).should be_false
       ML::GGUF::DiffusionGemmaCPU.prompt_materialize_batch_rows_enabled?(16).should be_true
       ML::GGUF::DiffusionGemmaCPU.prompt_materialize_grouped_moe_enabled?.should be_true
+      ML::GGUF::DiffusionGemmaCPU.prompt_materialize_exact_gemv_enabled?.should be_true
       ML::GGUF::DiffusionGemmaCPU.prompt_projection_fused_norm_rope_enabled?.should be_true
       ML::GGUF::DiffusionGemmaCPU.prompt_projection_metal_enabled?.should be_true
       ML::GGUF::DiffusionGemmaCPU.prompt_projection_metal_min_batch.should eq(1)
@@ -925,6 +928,10 @@ describe ML::GGUF::DiffusionGemmaCPU do
       ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE_OFF"] = "1"
       ML::GGUF::DiffusionGemmaCPU.prompt_materialize_grouped_moe_enabled?.should be_false
       ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE_OFF")
+
+      ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_EXACT_GEMV_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.prompt_materialize_exact_gemv_enabled?.should be_false
+      ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_EXACT_GEMV_OFF")
 
       ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_OFF"] = "1"
       ML::GGUF::DiffusionGemmaCPU.prompt_projection_metal_enabled?.should be_false
@@ -2319,6 +2326,71 @@ describe ML::GGUF::DiffusionGemmaCPU do
         ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH"] = old_proj_metal_min
       else
         ENV.delete("DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH")
+      end
+    end
+  end
+
+  it "keeps metal batched prompt materialization parity through exact GEMV rows" do
+    pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
+
+    w = ML::GGUF::DiffusionGemmaWeights.from_gguf(DIFFUSION_GEMMA_26B_Q4KM)
+    hp = w.hparams
+    prompt_rows = [] of Float32
+    16.times do |i|
+      prompt_rows.concat(ML::GGUF::DiffusionGemmaCPU.scaled_embedding_lookup(w, i + 1))
+    end
+    mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: 16, canvas_len: 8, sliding_window: hp.sliding_window)
+    keys = [
+      "DIFFUSION_GEMMA_C8_RESIDENT_DECODE_POLICY",
+      "DIFFUSION_GEMMA_C8_RESIDENT_DECODE_POLICY_OFF",
+      "DIFFUSION_GEMMA_PROMPT_CACHE_POLICY",
+      "DIFFUSION_GEMMA_PROMPT_CACHE_POLICY_OFF",
+      "DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS",
+      "DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS_OFF",
+      "DIFFUSION_GEMMA_PROMPT_MATERIALIZE_EXACT_GEMV_OFF",
+      "DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE",
+      "DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE_OFF",
+      "DIFFUSION_GEMMA_PROMPT_PROJ_METAL",
+      "DIFFUSION_GEMMA_PROMPT_PROJ_METAL_OFF",
+      "DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH",
+    ]
+    old_env = keys.to_h { |key| {key, ENV[key]?} }
+    begin
+      keys.each { |key| ENV.delete(key) }
+      ENV["DIFFUSION_GEMMA_C8_RESIDENT_DECODE_POLICY"] = "1"
+      ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS_OFF"] = "1"
+      base = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(
+        w,
+        prompt_rows,
+        mask,
+        max_layers: 1,
+      )
+
+      ENV.delete("DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS_OFF")
+      ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_BATCH_ROWS"] = "1"
+      ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE"] = "1"
+      batched = ML::GGUF::DiffusionGemmaCPU.build_prompt_layer_cache(
+        w,
+        prompt_rows,
+        mask,
+        max_layers: 1,
+      )
+
+      batched.projections_by_layer[0].size.should eq(base.projections_by_layer[0].size)
+      batched.final_rows.size.should eq(base.final_rows.size)
+      max_diff = 0.0_f32
+      base.final_rows.size.times do |i|
+        diff = (base.final_rows[i] - batched.final_rows[i]).abs
+        max_diff = diff if diff > max_diff
+      end
+      max_diff.should be < 1.0e-4_f32
+    ensure
+      old_env.each do |key, value|
+        if value
+          ENV[key] = value
+        else
+          ENV.delete(key)
+        end
       end
     end
   end

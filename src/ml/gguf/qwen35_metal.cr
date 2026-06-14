@@ -49,25 +49,25 @@ module ML
       HEAD_TOP1_ROWS_PER_TG = 12
 
       # GEMM (prefill) tiling — Q4_K only for now.
-      MM_NR0      =    64
-      MM_NR1      =    32
-      MM_TG       =   128 # threads per threadgroup (4 simdgroups × 32)
-      MM_SHMEM    = 12288 # bytes: 2 × (MM_SA_SIZE + MM_SB_SIZE) = 2 × 6144
-      MM48_NR1    =    48
-      MM48_TG     =   192 # threads per threadgroup (6 simdgroups × 32)
-      MM48_SHMEM  = 14336 # bytes: 2 × (4096 + 3072), larger than 64×48 f32 edge scratch
-      MM64_NR1    =    64
-      MM64_TG     =   256 # threads per threadgroup (8 simdgroups × 32)
-      MM64_SHMEM  = 16384 # bytes: 2 × (MM64_SA_SIZE + MM64_SB_SIZE)
-      MM80_NR1    =    80
-      MM80_TG     =   320 # threads per threadgroup (10 simdgroups × 32)
-      MM80_SHMEM  = 20480 # bytes: max double-buffered tile and 64×80 f32 edge scratch
-      MM96_NR1    =    96
-      MM96_TG     =   384 # threads per threadgroup (12 simdgroups × 32)
-      MM96_SHMEM  = 24576 # bytes: max double-buffered tile and 64×96 f32 edge scratch
-      MM112_NR1   =   112
-      MM112_TG    =   448 # threads per threadgroup (14 simdgroups × 32)
-      MM112_SHMEM = 28672 # bytes: max double-buffered tile and 64×112 f32 edge scratch
+      MM_NR0          =    64
+      MM_NR1          =    32
+      MM_TG           =   128 # threads per threadgroup (4 simdgroups × 32)
+      MM_SHMEM        = 12288 # bytes: 2 × (MM_SA_SIZE + MM_SB_SIZE) = 2 × 6144
+      MM48_NR1        =    48
+      MM48_TG         =   192 # threads per threadgroup (6 simdgroups × 32)
+      MM48_SHMEM      = 14336 # bytes: 2 × (4096 + 3072), larger than 64×48 f32 edge scratch
+      MM64_NR1        =    64
+      MM64_TG         =   256 # threads per threadgroup (8 simdgroups × 32)
+      MM64_SHMEM      = 16384 # bytes: 2 × (MM64_SA_SIZE + MM64_SB_SIZE)
+      MM80_NR1        =    80
+      MM80_TG         =   320 # threads per threadgroup (10 simdgroups × 32)
+      MM80_SHMEM      = 20480 # bytes: max double-buffered tile and 64×80 f32 edge scratch
+      MM96_NR1        =    96
+      MM96_TG         =   384 # threads per threadgroup (12 simdgroups × 32)
+      MM96_SHMEM      = 24576 # bytes: max double-buffered tile and 64×96 f32 edge scratch
+      MM112_NR1       =   112
+      MM112_TG        =   448 # threads per threadgroup (14 simdgroups × 32)
+      MM112_SHMEM     = 28672 # bytes: max double-buffered tile and 64×112 f32 edge scratch
       Q4_TENSOR_NR1   =   128
       Q4_TENSOR_TG    =   128 # 4 simdgroups × 32, matches simd_mm_q4k_tensor_f32out
       Q4_TENSOR_SHMEM =  4096 # one 64×32 H16 dequantized A tile
@@ -112,6 +112,10 @@ module ML
         end
 
         def self.matmul(qw : QuantWeight, x : Array(Float32), batch : Int32) : Array(Float32)?
+          nil
+        end
+
+        def self.matmul_gemv(qw : QuantWeight, x : Array(Float32), batch : Int32) : Array(Float32)?
           nil
         end
 
@@ -11460,6 +11464,21 @@ module ML
           end
         end
 
+        def self.matmul_gemv(qw : QuantWeight, x : Array(Float32), batch : Int32) : Array(Float32)?
+          return nil if batch <= 0
+          return nil unless x.size == batch * qw.in_dim
+          ML::Metal::Device.init!
+
+          pipeline = gemv_pipeline_for(qw)
+          return nil if pipeline.nil?
+          w_buf, w_off = if slot = mmap_slot_for(qw.raw)
+                           slot
+                         else
+                           {qw.fallback_metal_buffer, 0_i64}
+                         end
+          matmul_gemv_buf(pipeline, x, w_buf, w_off, qw.in_dim, qw.out_dim, batch)
+        end
+
         # Resident-buffer matmul transport for callers that already keep the
         # input vector on Metal. This intentionally reuses the same encoder and
         # routing as `matmul` so new resident paths cannot silently diverge from
@@ -11552,7 +11571,8 @@ module ML
         def self.matmul_many_to_buffers(qws : Array(QuantWeight),
                                         x_buf : ML::MetalBuffer,
                                         out_bufs : Array(ML::MetalBuffer),
-                                        batch : Int32 = 1) : Bool
+                                        batch : Int32 = 1,
+                                        force_gemv : Bool = false) : Bool
           return false if batch <= 0
           return false if qws.empty? || qws.size != out_bufs.size
           in_dim = qws[0].in_dim
@@ -11573,7 +11593,12 @@ module ML
           cmd = ML::Metal::CommandBuffer.new
           enc = ML::Metal::ComputeEncoder.new(cmd)
           slots.each do |pipeline, w_buf, w_off, qw, out_buf|
-            encode_matmul(enc, pipeline, qw, x_buf, out_buf, w_buf, w_off, qw.in_dim, qw.out_dim, batch)
+            if force_gemv
+              encode_gemv(enc, pipeline, x_buf, out_buf, w_buf, w_off, qw.in_dim, qw.out_dim, batch,
+                profile_shape: true, route_qw: qw)
+            else
+              encode_matmul(enc, pipeline, qw, x_buf, out_buf, w_buf, w_off, qw.in_dim, qw.out_dim, batch)
+            end
           end
           enc.end_encoding
           cmd.commit
@@ -11585,7 +11610,8 @@ module ML
                                                qws : Array(QuantWeight),
                                                x_buf : ML::MetalBuffer,
                                                out_bufs : Array(ML::MetalBuffer),
-                                               batch : Int32 = 1) : Bool
+                                               batch : Int32 = 1,
+                                               force_gemv : Bool = false) : Bool
           return false if batch <= 0
           return false if qws.empty? || qws.size != out_bufs.size
           in_dim = qws[0].in_dim
@@ -11603,7 +11629,7 @@ module ML
           end
 
           ML::Metal::Device.init!
-          if matmul_many_shared_h16_enabled?(batch) && batch > GEMM_BATCH_THRESHOLD && qws.all? { |qw| h16_batch_gemm_candidate?(qw, batch) }
+          if !force_gemv && matmul_many_shared_h16_enabled?(batch) && batch > GEMM_BATCH_THRESHOLD && qws.all? { |qw| h16_batch_gemm_candidate?(qw, batch) }
             x16_buf = Scratch.get(:matmul_many_x16, batch.to_i64 * in_dim * 2_i64)
             Profile.bump_conversion("f32_to_f16 matmul_many_shared_input #{in_dim} b#{batch}", (batch * in_dim).to_i64 * 6_i64)
             enc.set_pipeline(f32_to_f16_pipeline)
@@ -11619,7 +11645,12 @@ module ML
           end
 
           slots.each do |pipeline, w_buf, w_off, qw, out_buf|
-            encode_matmul(enc, pipeline, qw, x_buf, out_buf, w_buf, w_off, qw.in_dim, qw.out_dim, batch)
+            if force_gemv
+              encode_gemv(enc, pipeline, x_buf, out_buf, w_buf, w_off, qw.in_dim, qw.out_dim, batch,
+                profile_shape: true, route_qw: qw)
+            else
+              encode_matmul(enc, pipeline, qw, x_buf, out_buf, w_buf, w_off, qw.in_dim, qw.out_dim, batch)
+            end
           end
           true
         end

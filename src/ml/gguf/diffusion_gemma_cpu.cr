@@ -1016,14 +1016,15 @@ module ML::GGUF
     def attention_output_project_rows(weights : DiffusionGemmaWeights,
                                       il : Int32,
                                       context_rows : Array(Float32),
-                                      row_count : Int32) : Array(Float32)
+                                      row_count : Int32,
+                                      force_gemv : Bool = false) : Array(Float32)
       hp = weights.hparams
       context_dim = hp.n_head * hp.head_dim_for_layer(il)
       expected = row_count * context_dim
       raise ArgumentError.new("attention_output_project_rows row_count must be positive") unless row_count > 0
       raise ArgumentError.new("attention context rows size mismatch at layer #{il}: #{context_rows.size} != #{expected}") unless context_rows.size == expected
 
-      prompt_projection_matmul(weights.layers[il].attn_output_qw, context_rows, row_count)
+      prompt_projection_matmul(weights.layers[il].attn_output_qw, context_rows, row_count, force_gemv: force_gemv)
     end
 
     def attention_residual_from_context(weights : DiffusionGemmaWeights,
@@ -1043,7 +1044,8 @@ module ML::GGUF
                                              il : Int32,
                                              x_rows : Array(Float32),
                                              context_rows : Array(Float32),
-                                             row_count : Int32) : Array(Float32)
+                                             row_count : Int32,
+                                             force_gemv : Bool = false) : Array(Float32)
       hp = weights.hparams
       lw = weights.layers[il]
       expected = row_count * hp.n_embd
@@ -1068,7 +1070,7 @@ module ML::GGUF
         end
       end
 
-      result = attention_output_project_rows(weights, il, context_rows, row_count)
+      result = attention_output_project_rows(weights, il, context_rows, row_count, force_gemv: force_gemv)
       row_count.times do |row|
         offset = row * hp.n_embd
         fast_rms_norm_slice!(result, offset, hp.n_embd, lw.post_attention_norm, hp.rms_eps)
@@ -1123,7 +1125,8 @@ module ML::GGUF
     def shared_dense_ffn_rows(weights : DiffusionGemmaWeights,
                               il : Int32,
                               attn_out_rows : Array(Float32),
-                              row_count : Int32) : Array(Float32)
+                              row_count : Int32,
+                              force_gemv : Bool = false) : Array(Float32)
       hp = weights.hparams
       lw = weights.layers[il]
       expected = row_count * hp.n_embd
@@ -1140,16 +1143,16 @@ module ML::GGUF
         fast_rms_norm_slice!(ffn_in_rows, row * hp.n_embd, hp.n_embd, lw.ffn_norm, hp.rms_eps)
       end
 
-      up_rows, gate_rows = if projected = prompt_projection_many_matmul([lw.ffn_up_qw, lw.ffn_gate_qw], ffn_in_rows, row_count)
+      up_rows, gate_rows = if projected = prompt_projection_many_matmul([lw.ffn_up_qw, lw.ffn_gate_qw], ffn_in_rows, row_count, force_gemv: force_gemv)
                              {projected[0], projected[1]}
                            else
                              {
-                               prompt_projection_matmul(lw.ffn_up_qw, ffn_in_rows, row_count),
-                               prompt_projection_matmul(lw.ffn_gate_qw, ffn_in_rows, row_count),
+                               prompt_projection_matmul(lw.ffn_up_qw, ffn_in_rows, row_count, force_gemv: force_gemv),
+                               prompt_projection_matmul(lw.ffn_gate_qw, ffn_in_rows, row_count, force_gemv: force_gemv),
                              }
                            end
       gate_rows.size.times { |i| gate_rows[i] = Gemma4CPU.gelu(gate_rows[i]) * up_rows[i] }
-      down_rows = prompt_projection_matmul(lw.ffn_down_qw, gate_rows, row_count)
+      down_rows = prompt_projection_matmul(lw.ffn_down_qw, gate_rows, row_count, force_gemv: force_gemv)
       row_count.times do |row|
         fast_rms_norm_slice!(down_rows, row * hp.n_embd, hp.n_embd, lw.post_ffw_norm_1, hp.rms_eps)
       end
@@ -1682,8 +1685,9 @@ module ML::GGUF
                                     il : Int32,
                                     attn_out_rows : Array(Float32),
                                     row_count : Int32,
-                                    routes_by_row : Array(Array(ExpertRoute))? = nil) : Array(Float32)
-      moe_ffn_grouped_expert_rows_timed(weights, il, attn_out_rows, row_count, routes_by_row).rows
+                                    routes_by_row : Array(Array(ExpertRoute))? = nil,
+                                    force_gemv : Bool = false) : Array(Float32)
+      moe_ffn_grouped_expert_rows_timed(weights, il, attn_out_rows, row_count, routes_by_row, force_gemv: force_gemv).rows
     end
 
     def grouped_moe_cognigraph_plan(routes_by_row : Array(Array(ExpertRoute)),
@@ -2147,7 +2151,8 @@ module ML::GGUF
                                           il : Int32,
                                           attn_out_rows : Array(Float32),
                                           row_count : Int32,
-                                          routes_by_row : Array(Array(ExpertRoute))? = nil) : GroupedMoeRowsTiming
+                                          routes_by_row : Array(Array(ExpertRoute))? = nil,
+                                          force_gemv : Bool = false) : GroupedMoeRowsTiming
       hp = weights.hparams
       lw = weights.layers[il]
       expected = row_count * hp.n_embd
@@ -2300,7 +2305,7 @@ module ML::GGUF
           end
 
           gate_up_qw = expert_gate_up_qw(lw, hp, expert)
-          gate_up_rows = prompt_projection_matmul(gate_up_qw, ffn_inputs, batch)
+          gate_up_rows = prompt_projection_matmul(gate_up_qw, ffn_inputs, batch, force_gemv: force_gemv)
           gate_up_ms += (Time.instant - gate_up_t0).total_milliseconds
           raise ArgumentError.new("expert gate_up rows size mismatch") unless gate_up_rows.size == batch * hp.expert_ff * 2
 
@@ -2317,7 +2322,7 @@ module ML::GGUF
           activation_ms += (Time.instant - activation_t0).total_milliseconds
 
           down_t0 = Time.instant
-          down_rows = prompt_projection_matmul(expert_down_qw(lw, hp, expert), hidden_rows, batch)
+          down_rows = prompt_projection_matmul(expert_down_qw(lw, hp, expert), hidden_rows, batch, force_gemv: force_gemv)
           down_ms += (Time.instant - down_t0).total_milliseconds
           raise ArgumentError.new("expert down rows size mismatch") unless down_rows.size == batch * hp.n_embd
 
@@ -2469,10 +2474,11 @@ module ML::GGUF
         copy_row!(context_rows, pos, q_context_dim, context)
       end
 
-      attn_out_rows = attention_residual_from_context_rows(weights, il, prompt_rows, context_rows, mask.prompt_len)
-      shared_rows = shared_dense_ffn_rows(weights, il, attn_out_rows, mask.prompt_len)
+      force_gemv = prompt_materialize_exact_gemv_enabled?
+      attn_out_rows = attention_residual_from_context_rows(weights, il, prompt_rows, context_rows, mask.prompt_len, force_gemv: force_gemv)
+      shared_rows = shared_dense_ffn_rows(weights, il, attn_out_rows, mask.prompt_len, force_gemv: force_gemv)
       moe_rows = if prompt_materialize_grouped_moe_enabled?
-                   moe_ffn_grouped_expert_rows(weights, il, attn_out_rows, mask.prompt_len, routes_by_prompt_row)
+                   moe_ffn_grouped_expert_rows(weights, il, attn_out_rows, mask.prompt_len, routes_by_prompt_row, force_gemv: force_gemv)
                  else
                    moe_ffn_rows(weights, il, attn_out_rows, mask.prompt_len, routes_by_prompt_row)
                  end
@@ -3057,6 +3063,10 @@ module ML::GGUF
         ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE"]? == "1"
     end
 
+    def prompt_materialize_exact_gemv_enabled? : Bool
+      ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_EXACT_GEMV_OFF"]? != "1"
+    end
+
     def prompt_cache_policy_requested? : Bool
       ENV["DIFFUSION_GEMMA_PROMPT_CACHE_POLICY"]? == "1" &&
         ENV["DIFFUSION_GEMMA_PROMPT_CACHE_POLICY_OFF"]? != "1"
@@ -3523,17 +3533,22 @@ module ML::GGUF
 
     def prompt_projection_matmul(qw : QuantWeight,
                                  x : Array(Float32),
-                                 batch : Int32) : Array(Float32)
+                                 batch : Int32,
+                                 force_gemv : Bool = false) : Array(Float32)
       if prompt_projection_metal_enabled? && batch >= prompt_projection_metal_min_batch
-        metal_rows = case qw.type
-                     when .q4_k?
-                       Qwen35Metal.matmul_q4k(x, qw.raw, qw.in_dim, qw.out_dim, batch)
-                     when .q5_k?
-                       Qwen35Metal.matmul_q5k(x, qw.raw, qw.in_dim, qw.out_dim, batch)
-                     when .q6_k?
-                       Qwen35Metal.matmul_q6k(x, qw.raw, qw.in_dim, qw.out_dim, batch)
+        metal_rows = if force_gemv
+                       Qwen35Metal.matmul_gemv(qw, x, batch)
                      else
-                       Qwen35Metal.matmul(qw, x, batch)
+                       case qw.type
+                       when .q4_k?
+                         Qwen35Metal.matmul_q4k(x, qw.raw, qw.in_dim, qw.out_dim, batch)
+                       when .q5_k?
+                         Qwen35Metal.matmul_q5k(x, qw.raw, qw.in_dim, qw.out_dim, batch)
+                       when .q6_k?
+                         Qwen35Metal.matmul_q6k(x, qw.raw, qw.in_dim, qw.out_dim, batch)
+                       else
+                         Qwen35Metal.matmul(qw, x, batch)
+                       end
                      end
         unless metal_rows.nil?
           return metal_rows
@@ -3544,7 +3559,8 @@ module ML::GGUF
 
     def prompt_projection_many_matmul(qws : Array(QuantWeight),
                                       x : Array(Float32),
-                                      batch : Int32) : Array(Array(Float32))?
+                                      batch : Int32,
+                                      force_gemv : Bool = false) : Array(Array(Float32))?
       {% if flag?(:cpu_only) %}
         nil
       {% else %}
@@ -3560,7 +3576,7 @@ module ML::GGUF
         end
         begin
           x_buf.write(x)
-          return nil unless Qwen35Metal.matmul_many_to_buffers(qws, x_buf, out_bufs, batch)
+          return nil unless Qwen35Metal.matmul_many_to_buffers(qws, x_buf, out_bufs, batch, force_gemv: force_gemv)
 
           qws.map_with_index do |qw, i|
             out_bufs[i].read(batch * qw.out_dim)
