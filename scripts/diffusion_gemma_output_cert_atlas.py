@@ -45,6 +45,14 @@ def as_int(value: str | None) -> int:
     return int(value)
 
 
+def safe_speedup(numerator: float, denominator: float) -> float:
+    if math.isnan(numerator) or math.isnan(denominator):
+        return float("nan")
+    if denominator == 0.0:
+        return float("inf")
+    return numerator / denominator
+
+
 def parse_kv_parts(parts: list[str]) -> dict[str, str]:
     fields: dict[str, str] = {}
     for part in parts:
@@ -117,11 +125,59 @@ def optimistic_row_fallback_ms(timing: dict[str, str], total_rows: int, fail_row
     return variant_cache + variant_predict + base_predict * fail_rows / total_rows
 
 
-def print_text(path: Path, rows: list[dict[str, str]], timing_rows: list[dict[str, str]]) -> None:
+def dual_cache_row_fallback_ms(
+    timing: dict[str, str],
+    total_rows: int,
+    fail_rows: int,
+    reuse_count: int,
+) -> float:
+    variant_cache = as_float(timing.get("variant_cache_ms"))
+    variant_predict = as_float(timing.get("variant_predict_ms"))
+    base_cache = as_float(timing.get("base_cache_ms"))
+    base_predict = as_float(timing.get("base_predict_ms"))
+    if total_rows <= 0 or fail_rows <= 0:
+        return variant_cache + variant_predict
+    return variant_cache + variant_predict + base_cache / reuse_count + base_predict * fail_rows / total_rows
+
+
+def dual_cache_break_even_uses(
+    timing: dict[str, str],
+    total_rows: int,
+    fail_rows: int,
+    min_speedup: float,
+) -> tuple[str, int | None]:
+    if total_rows <= 0 or fail_rows <= 0:
+        return "not_needed", 0
+    if min_speedup <= 0.0:
+        raise SystemExit("--min-speedup must be positive")
+
+    base_cache = as_float(timing.get("base_cache_ms"))
+    base_predict = as_float(timing.get("base_predict_ms"))
+    variant_cache = as_float(timing.get("variant_cache_ms"))
+    variant_predict = as_float(timing.get("variant_predict_ms"))
+    base_total = base_cache + base_predict
+    row_exact_predict = base_predict * fail_rows / total_rows
+    fixed_candidate = variant_cache + variant_predict + row_exact_predict
+    required_margin = base_total - min_speedup * fixed_candidate
+    if any(math.isnan(value) for value in (base_cache, base_predict, variant_cache, variant_predict)):
+        return "missing_timing", None
+    if required_margin <= 0.0:
+        return "impossible", None
+    return "finite", max(1, math.ceil(min_speedup * base_cache / required_margin))
+
+
+def print_text(
+    path: Path,
+    rows: list[dict[str, str]],
+    timing_rows: list[dict[str, str]],
+    reuse_count: int,
+    min_speedup: float,
+) -> None:
     grouped = group_rows(rows)
     timings = timing_by_window(timing_rows)
     print("DiffusionGemma output certificate atlas")
     print(f"  source={path}")
+    print(f"  dual_cache_candidate reuse_count={reuse_count} min_speedup={fmt(min_speedup)}")
     for key, window_rows in sorted(grouped.items(), key=lambda item: (int(item[0][0]), int(item[0][1]))):
         prompt_token, canvas_token = key
         argmax_fail = [row for row in window_rows if not truthy(row.get("argmax_match", ""))]
@@ -131,6 +187,14 @@ def print_text(path: Path, rows: list[dict[str, str]], timing_rows: list[dict[st
         base_total = as_float(timing.get("base_cache_ms")) + as_float(timing.get("base_predict_ms"))
         variant_total = as_float(timing.get("variant_cache_ms")) + as_float(timing.get("variant_predict_ms"))
         row_fallback = optimistic_row_fallback_ms(timing, row_count, len(argmax_fail))
+        dual_cache = dual_cache_row_fallback_ms(timing, row_count, len(argmax_fail), reuse_count)
+        dual_speedup = safe_speedup(base_total, dual_cache)
+        break_even_status, break_even_uses = dual_cache_break_even_uses(
+            timing,
+            row_count,
+            len(argmax_fail),
+            min_speedup,
+        )
         current_route = "variant_fast" if not argmax_fail else "base_exact"
         print(
             "  window %s:%s rows=%d argmax=%d/%d sampled=%d/%d current_legal_route=%s"
@@ -149,6 +213,15 @@ def print_text(path: Path, rows: list[dict[str, str]], timing_rows: list[dict[st
             print(
                 "    cert_timing base_total_ms=%s variant_total_ms=%s optimistic_row_fallback_ms=%s"
                 % (fmt(base_total), fmt(variant_total), fmt(row_fallback))
+            )
+            print(
+                "    dual_cache_candidate_ms=%s speedup_vs_base_exact=%s break_even_status=%s break_even_uses=%s"
+                % (
+                    fmt(dual_cache),
+                    fmt(dual_speedup),
+                    break_even_status,
+                    "NA" if break_even_uses is None else str(break_even_uses),
+                )
             )
         if argmax_fail:
             details = ", ".join(
@@ -172,13 +245,19 @@ def print_text(path: Path, rows: list[dict[str, str]], timing_rows: list[dict[st
             print(f"    sampled_only_failures: {details}")
         if argmax_fail:
             print(
-                "    LTP/WBA: Diamond. Candidate window is row-local, but exact fallback is only legal after proving the prompt-cache/hidden boundary can be narrowed or reused."
+                "    LTP/WBA: Diamond. Candidate window is row-local, but exact fallback is only legal after proving the prompt-cache/hidden boundary can be narrowed or reused; dual-cache numbers are branch-selection estimates, not promotion evidence."
             )
         else:
             print("    LTP/WBA: Collapse. Argmax certificate holds for this bounded candidate row set.")
 
 
-def print_tsv(path: Path, rows: list[dict[str, str]], timing_rows: list[dict[str, str]]) -> None:
+def print_tsv(
+    path: Path,
+    rows: list[dict[str, str]],
+    timing_rows: list[dict[str, str]],
+    reuse_count: int,
+    min_speedup: float,
+) -> None:
     timings = timing_by_window(timing_rows)
     fields = [
         "kind",
@@ -213,17 +292,40 @@ def print_tsv(path: Path, rows: list[dict[str, str]], timing_rows: list[dict[str
         "rows",
         "argmax_failures",
         "sampled_failures",
+        "current_legal_route",
+        "base_cache_ms",
+        "base_predict_ms",
+        "variant_cache_ms",
+        "variant_predict_ms",
         "base_total_ms",
         "variant_total_ms",
         "optimistic_row_fallback_ms",
+        "dual_cache_reuse_count",
+        "dual_cache_min_speedup",
+        "dual_cache_candidate_ms",
+        "dual_cache_speedup_vs_base_exact",
+        "dual_cache_break_even_status",
+        "dual_cache_break_even_uses",
     ]
     print("\t".join(summary_fields))
     for key, window_rows in sorted(group_rows(rows).items(), key=lambda item: (int(item[0][0]), int(item[0][1]))):
         timing = timings.get(key, {})
         argmax_failures = sum(1 for row in window_rows if not truthy(row.get("argmax_match", "")))
         sampled_failures = sum(1 for row in window_rows if not truthy(row.get("sampled_match", "")))
+        base_cache = as_float(timing.get("base_cache_ms"))
+        base_predict = as_float(timing.get("base_predict_ms"))
+        variant_cache = as_float(timing.get("variant_cache_ms"))
+        variant_predict = as_float(timing.get("variant_predict_ms"))
         base_total = as_float(timing.get("base_cache_ms")) + as_float(timing.get("base_predict_ms"))
         variant_total = as_float(timing.get("variant_cache_ms")) + as_float(timing.get("variant_predict_ms"))
+        dual_cache = dual_cache_row_fallback_ms(timing, len(window_rows), argmax_failures, reuse_count)
+        dual_speedup = safe_speedup(base_total, dual_cache)
+        break_even_status, break_even_uses = dual_cache_break_even_uses(
+            timing,
+            len(window_rows),
+            argmax_failures,
+            min_speedup,
+        )
         values = {
             "kind": "summary",
             "source": str(path),
@@ -232,9 +334,20 @@ def print_tsv(path: Path, rows: list[dict[str, str]], timing_rows: list[dict[str
             "rows": len(window_rows),
             "argmax_failures": argmax_failures,
             "sampled_failures": sampled_failures,
+            "current_legal_route": "variant_fast" if argmax_failures == 0 else "base_exact",
+            "base_cache_ms": fmt(base_cache),
+            "base_predict_ms": fmt(base_predict),
+            "variant_cache_ms": fmt(variant_cache),
+            "variant_predict_ms": fmt(variant_predict),
             "base_total_ms": fmt(base_total),
             "variant_total_ms": fmt(variant_total),
             "optimistic_row_fallback_ms": fmt(optimistic_row_fallback_ms(timing, len(window_rows), argmax_failures)),
+            "dual_cache_reuse_count": reuse_count,
+            "dual_cache_min_speedup": fmt(min_speedup),
+            "dual_cache_candidate_ms": fmt(dual_cache),
+            "dual_cache_speedup_vs_base_exact": fmt(dual_speedup),
+            "dual_cache_break_even_status": break_even_status,
+            "dual_cache_break_even_uses": "NA" if break_even_uses is None else str(break_even_uses),
         }
         print("\t".join(str(values[field]) for field in summary_fields))
 
@@ -243,13 +356,19 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("output_cert", type=Path, help="output_cert.tsv from diffusion_gemma_prompt_output_cert_probe")
     parser.add_argument("--tsv", action="store_true", help="emit machine-readable row and summary tables")
+    parser.add_argument("--reuse-count", type=int, default=1, help="base exact prompt-cache reuse count for dual-cache estimates")
+    parser.add_argument("--min-speedup", type=float, default=1.10, help="target speedup versus current exact fallback for break-even uses")
     args = parser.parse_args()
+    if args.reuse_count <= 0:
+        raise SystemExit("--reuse-count must be positive")
+    if args.min_speedup <= 0.0:
+        raise SystemExit("--min-speedup must be positive")
 
     rows, timing, _ = read_cert(args.output_cert)
     if args.tsv:
-        print_tsv(args.output_cert, rows, timing)
+        print_tsv(args.output_cert, rows, timing, args.reuse_count, args.min_speedup)
     else:
-        print_text(args.output_cert, rows, timing)
+        print_text(args.output_cert, rows, timing, args.reuse_count, args.min_speedup)
     return 0
 
 

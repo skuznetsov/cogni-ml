@@ -273,6 +273,21 @@ optimistic row-local fallback lower bound. That bound is not a legal route by
 itself: row-local fallback is only promotable after the runtime proves the
 exact prompt-cache/hidden boundary can be narrowed or reused.
 
+Use `--reuse-count N` and `--min-speedup S` to turn the same certificate into a
+dual-cache branch-selection estimate:
+
+```sh
+scripts/diffusion_gemma_output_cert_atlas.py CHILD_LOG_DIR/output_cert.tsv \
+  --reuse-count 2 \
+  --min-speedup 1.10
+```
+
+The dual-cache estimate charges the fast variant cache/predict path every use,
+amortizes the exact base prompt cache over `N`, and adds the exact base predict
+share for argmax-failing rows. The reported `break_even_uses` is only a target
+for a future runtime boundary; it is not promotion evidence until exact
+row/band fallback can reuse the base cache and pass a full gate.
+
 `scripts/diffusion_gemma_prompt_output_cert_probe.cr` can also consume the same
 plan directly:
 
