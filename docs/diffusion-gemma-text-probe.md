@@ -271,6 +271,20 @@ by default, and clears fallback `variant_route_artifact` fields unless
 `--keep-fallback-variant-artifacts` is passed. Use the derived plan as the
 single route authority for the next mixed gate.
 
+To run the whole fallback-replay measurement path when the host is quiet:
+
+```sh
+MIXED_ROUTE_PLAN=LOG_DIR/route_plan.jsonl \
+scripts/diffusion_gemma_fallback_replay_gate.sh
+```
+
+The wrapper derives `base_exact` windows from the plan, prepares only
+`SUITE_ARTIFACT_ARMS=base` artifacts for those windows, attaches the resulting
+base map, and then runs the mixed gate from the derived route plan. It defaults
+to `CHECK_QUIET=1` and `VARIANT_PROFILE=prompt-ffn-resident` for the current
+full-depth route-plan family. Use `DRY_RUN=1` to inspect commands, or
+`FALLBACK_REPLAY_STAGE=prepare|attach|gate` to split the workflow.
+
 Before launching another heavy gate, inspect the mixed plan offline:
 
 ```sh
