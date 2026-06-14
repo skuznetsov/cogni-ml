@@ -134,6 +134,17 @@ struct PromptCacheSample
   end
 end
 
+struct RouteReplayCapture
+  getter routes : Array(Array(Array(ML::GGUF::DiffusionGemmaCPU::ExpertRoute)))
+  getter elapsed_ms : Float64
+  getter route_rows : Int32
+  getter route_slots : Int32
+  getter checksum : Float64
+
+  def initialize(@routes, @elapsed_ms, @route_rows, @route_slots, @checksum)
+  end
+end
+
 TSV_HEADER = [
   "kind",
   "arm",
@@ -381,7 +392,7 @@ def capture_routes_for_arm(weights : ML::GGUF::DiffusionGemmaWeights,
                            mask : ML::GGUF::DiffusionGemmaAttentionMask,
                            max_layers : Int32,
                            env : ArmEnv,
-                           arm : String) : Array(Array(Array(ML::GGUF::DiffusionGemmaCPU::ExpertRoute)))
+                           arm : String) : RouteReplayCapture
   old = apply_env(env)
   begin
     ML::GGUF::DiffusionGemmaCPU.clear_ffn_resident_graph_cache
@@ -398,6 +409,7 @@ def capture_routes_for_arm(weights : ML::GGUF::DiffusionGemmaWeights,
     raise "route capture for #{arm} produced #{routes.size}/#{max_layers} layers" unless routes.size == max_layers
     route_rows = routes.sum(&.size)
     route_slots = routes.sum { |layer| layer.sum(&.size) }
+    checksum = checksum_rows(cache.final_rows)
     puts [
       "# route_capture",
       arm,
@@ -405,9 +417,9 @@ def capture_routes_for_arm(weights : ML::GGUF::DiffusionGemmaWeights,
       "rows=#{route_rows}",
       "slots=#{route_slots}",
       "elapsed_ms=#{format_f64(elapsed_ms)}",
-      "checksum=#{format_f64(checksum_rows(cache.final_rows))}",
+      "checksum=#{format_f64(checksum)}",
     ].join('\t')
-    routes
+    RouteReplayCapture.new(routes, elapsed_ms, route_rows, route_slots, checksum)
   ensure
     restore_env(old)
     ML::GGUF::DiffusionGemmaCPU.clear_ffn_resident_graph_cache
@@ -518,6 +530,32 @@ def print_summary(samples : Array(PromptCacheSample), trim_per_arm : Int32) : Ni
   end
 end
 
+def print_effective_replay_summary(samples : Array(PromptCacheSample),
+                                   trim_per_arm : Int32,
+                                   base_capture_ms : Float64,
+                                   variant_capture_ms : Float64,
+                                   amortize_uses : Int32) : Nil
+  return if base_capture_ms <= 0.0 && variant_capture_ms <= 0.0
+
+  measured = samples.select(&.measured)
+  by_arm = measured.group_by(&.arm)
+  return unless by_arm["base"]? && by_arm["variant"]?
+
+  base_per_use = base_capture_ms / amortize_uses
+  variant_per_use = variant_capture_ms / amortize_uses
+  base_values = by_arm["base"].map { |sample| sample.total_ms + base_per_use }
+  variant_values = by_arm["variant"].map { |sample| sample.total_ms + variant_per_use }
+  print_metric_summary("effective_summary", "total_ms", base_values, variant_values)
+  if trim_per_arm > 0
+    print_metric_summary(
+      "effective_trimmed_summary",
+      "total_ms",
+      trimmed_values(base_values, trim_per_arm),
+      trimmed_values(variant_values, trim_per_arm),
+    )
+  end
+end
+
 def print_checksum_summary(samples : Array(PromptCacheSample)) : Float64?
   measured = samples.select(&.measured)
   by_arm = measured.group_by(&.arm)
@@ -556,6 +594,7 @@ materialize_final_rows = false
 checksum_tolerance = nil.as(Float64?)
 route_replay_base = false
 route_replay_variant = false
+route_capture_amortize_uses = 1
 
 OptionParser.parse do |p|
   p.banner = "Usage: diffusion_gemma_prompt_cache_abba [options]"
@@ -576,6 +615,7 @@ OptionParser.parse do |p|
   p.on("--checksum-tolerance F", "Exit 4 when base/variant checksum median delta exceeds F") { |v| checksum_tolerance = v.to_f64 }
   p.on("--base-replay-routes", "Pre-capture and replay base prompt MoE routes for base arm") { route_replay_base = true }
   p.on("--variant-replay-routes", "Pre-capture and replay variant prompt MoE routes for variant arm") { route_replay_variant = true }
+  p.on("--route-capture-amortize-uses N", "Charge route-capture cost over N replayed prompt-cache uses in effective summaries (default: 1)") { |v| route_capture_amortize_uses = v.to_i }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -590,6 +630,7 @@ raise "--max-layers must be positive" unless max_layers > 0
 raise "--warmups must be non-negative" unless warmups >= 0
 raise "--repeats must be positive" unless repeats > 0
 raise "--trim-per-arm must be non-negative" unless trim_per_arm >= 0
+raise "--route-capture-amortize-uses must be positive" unless route_capture_amortize_uses > 0
 arms = sequence.split(/\s+/).reject(&.empty?)
 raise "--sequence must contain at least one arm" if arms.empty?
 arms.each { |arm| raise "--sequence arms must be base or variant, got #{arm.inspect}" unless {"base", "variant"}.includes?(arm) }
@@ -620,8 +661,12 @@ routes_by_layer_by_prompt_row = if single_route && materialize_final_rows
                                 else
                                   nil
                                 end
-base_replay_routes = route_replay_base ? capture_routes_for_arm(weights, prompt_rows, mask, max_layers, base_env, "base") : nil
-variant_replay_routes = route_replay_variant ? capture_routes_for_arm(weights, prompt_rows, mask, max_layers, variant_env, "variant") : nil
+base_replay_capture = route_replay_base ? capture_routes_for_arm(weights, prompt_rows, mask, max_layers, base_env, "base") : nil
+variant_replay_capture = route_replay_variant ? capture_routes_for_arm(weights, prompt_rows, mask, max_layers, variant_env, "variant") : nil
+base_replay_routes = base_replay_capture.try(&.routes)
+variant_replay_routes = variant_replay_capture.try(&.routes)
+base_capture_ms = base_replay_capture.try(&.elapsed_ms) || 0.0
+variant_capture_ms = variant_replay_capture.try(&.elapsed_ms) || 0.0
 
 puts "# load_ms=#{format_f64(load_ms)}"
 puts "# base_env=#{base_env.raw.empty? ? "<empty>" : base_env.raw}"
@@ -630,6 +675,9 @@ puts "# sequence=#{sequence}"
 puts "# mirror_sequence=#{mirror_sequence || "<none>"}"
 puts "# route_replay_base=#{route_replay_base}"
 puts "# route_replay_variant=#{route_replay_variant}"
+puts "# route_capture_amortize_uses=#{route_capture_amortize_uses}"
+puts "# route_capture_base_ms=#{format_f64(base_capture_ms)}"
+puts "# route_capture_variant_ms=#{format_f64(variant_capture_ms)}"
 puts TSV_HEADER.join('\t')
 
 samples = [] of PromptCacheSample
@@ -673,6 +721,7 @@ total_cycles.times do |cycle|
   end
 end
 print_summary(samples, trim_per_arm)
+print_effective_replay_summary(samples, trim_per_arm, base_capture_ms, variant_capture_ms, route_capture_amortize_uses)
 checksum_delta = print_checksum_summary(samples)
 if tolerance = checksum_tolerance
   if delta = checksum_delta

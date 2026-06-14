@@ -35,6 +35,8 @@ abba_repeats="${ABBA_REPEATS:-3}"
 abba_trim_per_arm="${ABBA_TRIM_PER_ARM:-1}"
 abba_sequence="${ABBA_SEQUENCE:-base variant variant base}"
 abba_mirror_sequence="${ABBA_MIRROR_SEQUENCE:-variant base base variant}"
+abba_route_capture_amortize_uses="${ABBA_ROUTE_CAPTURE_AMORTIZE_USES:-1}"
+abba_use_effective_total="${ABBA_USE_EFFECTIVE_TOTAL:-1}"
 min_total_speedup="${MIN_TOTAL_SPEEDUP:-1.10}"
 run_abba_on_cert_fail="${RUN_ABBA_ON_CERT_FAIL:-0}"
 checksum_tolerance="${CHECKSUM_TOLERANCE:-}"
@@ -71,6 +73,9 @@ Important environment knobs:
   MIN_TOTAL_SPEEDUP=F             ABBA total_ms speedup floor, default 1.10
   ABBA_BASE_REPLAY_ROUTES=1       pre-capture/replay base prompt MoE routes in ABBA
   ABBA_VARIANT_REPLAY_ROUTES=1    pre-capture/replay variant prompt MoE routes in ABBA
+  ABBA_ROUTE_CAPTURE_AMORTIZE_USES=N
+                                    charge route capture over N replayed prompt-cache uses, default 1
+  ABBA_USE_EFFECTIVE_TOTAL=1       when replay is enabled, gate speed on capture-amortized total
   RUN_ABBA_ON_CERT_FAIL=1         run ABBA even when certificate rejects
   CHECK_QUIET=1                   poll the existing quiet gate before running
 EOF
@@ -180,8 +185,8 @@ print_metric_row() {
   fi
   local base_ms variant_ms speedup delta range_over_delta
   IFS=$'\t' read -r base_ms variant_ms speedup delta range_over_delta <<<"$values"
-  printf 'gate_metric metric=%s base_ms=%s variant_ms=%s speedup=%s delta_ms=%s range_over_delta=%s\n' \
-    "$metric" "$base_ms" "$variant_ms" "$speedup" "$delta" "$range_over_delta"
+  printf 'gate_metric kind=%s metric=%s base_ms=%s variant_ms=%s speedup=%s delta_ms=%s range_over_delta=%s\n' \
+    "$kind" "$metric" "$base_ms" "$variant_ms" "$speedup" "$delta" "$range_over_delta"
 }
 
 float_ge() {
@@ -204,6 +209,7 @@ validate_uint MAX_CANDIDATE_ROW_SIZE "$max_candidate_row_size"
 validate_uint ABBA_WARMUPS "$abba_warmups"
 validate_positive_uint ABBA_REPEATS "$abba_repeats"
 validate_uint ABBA_TRIM_PER_ARM "$abba_trim_per_arm"
+validate_positive_uint ABBA_ROUTE_CAPTURE_AMORTIZE_USES "$abba_route_capture_amortize_uses"
 case "$certificate_mode" in
   bounded|full-vocab-top1-metal|full-vocab-top1-cpu|full-vocab-top2-metal|full-vocab-top2-cpu) ;;
   *) die "CERTIFICATE_MODE must be bounded, full-vocab-top1-metal/cpu, or full-vocab-top2-metal/cpu" ;;
@@ -303,6 +309,7 @@ abba_args=(
   --trim-per-arm "$abba_trim_per_arm"
   --sequence "$abba_sequence"
   --mirror-sequence "$abba_mirror_sequence"
+  --route-capture-amortize-uses "$abba_route_capture_amortize_uses"
   --base-env "$base_env"
   --variant-env "$variant_env"
   --full-routes
@@ -334,8 +341,26 @@ summary_kind="summary"
 if [[ "$abba_trim_per_arm" -gt 0 ]]; then
   summary_kind="trimmed_summary"
 fi
+total_summary_kind="$summary_kind"
+route_replay_enabled=0
+if bool_enabled "${ABBA_BASE_REPLAY_ROUTES:-0}"; then
+  route_replay_enabled=1
+fi
+if bool_enabled "${ABBA_VARIANT_REPLAY_ROUTES:-0}"; then
+  route_replay_enabled=1
+fi
+if [[ "$route_replay_enabled" == "1" ]] && bool_enabled "$abba_use_effective_total"; then
+  if [[ "$abba_trim_per_arm" -gt 0 ]]; then
+    total_summary_kind="effective_trimmed_summary"
+  else
+    total_summary_kind="effective_summary"
+  fi
+fi
 
 print_metric_row "$abba_out" total_ms "$summary_kind"
+if [[ "$total_summary_kind" != "$summary_kind" ]]; then
+  print_metric_row "$abba_out" total_ms "$total_summary_kind" || reject "missing_effective_total" "abba_log=$abba_out"
+fi
 print_metric_row "$abba_out" materialize_ms "$summary_kind" || true
 print_metric_row "$abba_out" materialize_moe_ffn_ms "$summary_kind" || true
 print_metric_row "$abba_out" materialize_moe_grouped_gate_up_ms "$summary_kind" || true
@@ -346,7 +371,7 @@ if (( cert_rc != 0 )); then
   reject "certificate_failed_after_abba" "cert_rc=$cert_rc" "cert_log=$cert_out" "cert_stderr=$cert_err" "abba_log=$abba_out"
 fi
 
-total_values="$(extract_metric "$abba_out" total_ms "$summary_kind")" || reject "missing_total_speedup" "abba_log=$abba_out"
+total_values="$(extract_metric "$abba_out" total_ms "$total_summary_kind")" || reject "missing_total_speedup" "summary_kind=$total_summary_kind" "abba_log=$abba_out"
 IFS=$'\t' read -r total_base_ms total_variant_ms total_speedup total_delta_ms total_range_over_delta <<<"$total_values"
 if ! float_ge "$total_speedup" "$min_total_speedup"; then
   reject "speed_below_threshold" \
@@ -354,6 +379,8 @@ if ! float_ge "$total_speedup" "$min_total_speedup"; then
     "min_total_speedup=$min_total_speedup" \
     "base_ms=$total_base_ms" \
     "variant_ms=$total_variant_ms" \
+    "total_summary_kind=$total_summary_kind" \
+    "route_capture_amortize_uses=$abba_route_capture_amortize_uses" \
     "abba_log=$abba_out"
 fi
 
@@ -366,5 +393,5 @@ if [[ "$certificate_mode" == full-vocab-top1-* ]]; then
 elif [[ "$certificate_mode" == full-vocab-top2-* ]]; then
   decision="candidate_full_vocab_margin_argmax_only"
 fi
-printf 'certified_variant_gate decision=%s total_speedup=%s min_total_speedup=%s base_ms=%s variant_ms=%s cert_rc=%s abba_rc=%s log_dir=%s\n' \
-  "$decision" "$total_speedup" "$min_total_speedup" "$total_base_ms" "$total_variant_ms" "$cert_rc" "$abba_rc" "$log_dir"
+printf 'certified_variant_gate decision=%s total_speedup=%s min_total_speedup=%s base_ms=%s variant_ms=%s total_summary_kind=%s route_capture_amortize_uses=%s cert_rc=%s abba_rc=%s log_dir=%s\n' \
+  "$decision" "$total_speedup" "$min_total_speedup" "$total_base_ms" "$total_variant_ms" "$total_summary_kind" "$abba_route_capture_amortize_uses" "$cert_rc" "$abba_rc" "$log_dir"

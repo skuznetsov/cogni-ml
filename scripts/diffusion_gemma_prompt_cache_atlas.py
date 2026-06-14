@@ -137,6 +137,24 @@ def metric_summary(samples: list[dict[str, str]], metric: str) -> dict[str, floa
     }
 
 
+def abba_summary_metric(rows: list[dict[str, str]], kinds: list[str], metric: str) -> dict[str, float] | None:
+    # ABBA summary rows intentionally reuse the sample TSV header. Under that
+    # header, the metric lives in `arm`, then the numeric summary fields occupy
+    # cycle/sequence_index/measured/prompt_len/canvas_len/max_layers.
+    for kind in kinds:
+        for row in rows:
+            if row.get("kind") == kind and row.get("arm") == metric:
+                return {
+                    "base_median": as_float(row, "cycle"),
+                    "variant_median": as_float(row, "sequence_index"),
+                    "speedup": as_float(row, "measured"),
+                    "delta": as_float(row, "prompt_len"),
+                    "combined_range": as_float(row, "canvas_len"),
+                    "range_over_delta": as_float(row, "max_layers"),
+                }
+    return None
+
+
 def visible_median(row: dict[str, float]) -> float:
     finite = [value for value in (row["base_median"], row["variant_median"]) if not math.isnan(value)]
     return max(finite) if finite else float("nan")
@@ -260,11 +278,17 @@ def main() -> int:
     parser.add_argument("--tsv", action="store_true", help="emit machine-readable TSV only")
     args = parser.parse_args()
 
-    samples = measured_samples(read_rows(read_text(args.paths)))
+    rows = read_rows(read_text(args.paths))
+    samples = measured_samples(rows)
     if not samples:
         raise SystemExit("no measured prompt-cache sample rows found")
 
     summaries = {metric: metric_summary(samples, metric) for metric in ["total_ms", *PROMPT_CACHE_METRICS]}
+    effective_total = abba_summary_metric(
+        rows,
+        ["effective_trimmed_summary", "effective_summary"],
+        "total_ms",
+    )
     total_base = summaries["total_ms"]["base_median"]
     phase_rows = {
         metric: summaries[metric]
@@ -312,6 +336,17 @@ def main() -> int:
             fmt(summaries["total_ms"]["range_over_delta"]),
         )
     )
+    if effective_total:
+        print(
+            "  effective_total_ms base=%s variant=%s speedup=%s delta_ms=%s range_over_delta=%s"
+            % (
+                fmt(effective_total["base_median"]),
+                fmt(effective_total["variant_median"]),
+                fmt(effective_total["speedup"]),
+                fmt(effective_total["delta"]),
+                fmt(effective_total["range_over_delta"]),
+            )
+        )
     if route_changes:
         print("  route_changes=" + ",".join(route_changes))
     if regressions:
