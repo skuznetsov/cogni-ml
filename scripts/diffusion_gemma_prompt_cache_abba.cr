@@ -1,4 +1,5 @@
 require "option_parser"
+require "digest/sha256"
 require "../src/ml/gguf/diffusion_gemma_cpu"
 require "../src/ml/gguf/reader"
 
@@ -267,6 +268,23 @@ def format_f64(value : Float64) : String
   "%.6f" % value
 end
 
+def prompt_tokens_fingerprint(tokens : Array(Int32)) : String
+  Digest::SHA256.hexdigest("diffusiongemma-route-prompt-tokens-v1\0#{tokens.join(",")}")
+end
+
+def arm_env_fingerprint(env : ArmEnv) : String
+  canonical = env.pairs.map { |key, value| "#{key}=#{value}" }.join('\0')
+  Digest::SHA256.hexdigest("diffusiongemma-route-arm-env-v1\0#{canonical}")
+end
+
+def model_fingerprint(path : String) : String
+  info = File.info(path)
+  mtime = info.modification_time
+  Digest::SHA256.hexdigest(
+    "diffusiongemma-route-model-v1\0#{File.expand_path(path)}\0#{info.size}\0#{mtime.to_unix}\0#{mtime.nanosecond}"
+  )
+end
+
 def format_sample_values(values : Array(Float64)) : String
   values.map { |v| "%.3f" % v }.join(",")
 end
@@ -434,12 +452,18 @@ def write_route_artifact(path : String,
                          arm : String,
                          prompt_len : Int32,
                          max_layers : Int32,
+                         prompt_tokens_sha256 : String,
+                         arm_env_sha256 : String,
+                         model_sha256 : String,
                          capture : RouteReplayCapture) : Nil
   File.open(path, "w") do |io|
-    io.puts "# format=diffusion_gemma_prompt_route_artifact_v1"
+    io.puts "# format=diffusion_gemma_prompt_route_artifact_v2"
     io.puts "# arm=#{arm}"
     io.puts "# prompt_len=#{prompt_len}"
     io.puts "# max_layers=#{max_layers}"
+    io.puts "# prompt_tokens_sha256=#{prompt_tokens_sha256}"
+    io.puts "# arm_env_sha256=#{arm_env_sha256}"
+    io.puts "# model_fingerprint=#{model_sha256}"
     io.puts "# layers=#{capture.routes.size}"
     io.puts "# rows=#{capture.route_rows}"
     io.puts "# slots=#{capture.route_slots}"
@@ -468,7 +492,10 @@ end
 def load_route_artifact(path : String,
                         arm : String,
                         expected_prompt_len : Int32,
-                        expected_max_layers : Int32) : RouteReplayCapture
+                        expected_max_layers : Int32,
+                        expected_prompt_tokens_sha256 : String,
+                        expected_arm_env_sha256 : String,
+                        expected_model_sha256 : String) : RouteReplayCapture
   t0 = Time.instant
   metadata = {} of String => String
   routes = Array(Array(Array(ML::GGUF::DiffusionGemmaCPU::ExpertRoute))).new(expected_max_layers) do
@@ -502,10 +529,25 @@ def load_route_artifact(path : String,
     row_routes << ML::GGUF::DiffusionGemmaCPU::ExpertRoute.new(expert.to_i32, weight)
   end
 
-  raise "route artifact format mismatch" unless metadata["format"]? == "diffusion_gemma_prompt_route_artifact_v1"
+  case metadata["format"]?
+  when "diffusion_gemma_prompt_route_artifact_v2"
+  when "diffusion_gemma_prompt_route_artifact_v1"
+    raise "route artifact v1 is missing prompt/env/model boundary metadata; regenerate artifact"
+  else
+    raise "route artifact format mismatch"
+  end
   raise "route artifact arm mismatch: #{metadata["arm"]?} != #{arm}" unless metadata["arm"]? == arm
   raise "route artifact prompt_len mismatch" unless metadata["prompt_len"]?.try(&.to_i) == expected_prompt_len
   raise "route artifact max_layers mismatch" unless metadata["max_layers"]?.try(&.to_i) == expected_max_layers
+  unless metadata["prompt_tokens_sha256"]? == expected_prompt_tokens_sha256
+    raise "route artifact prompt_tokens_sha256 mismatch"
+  end
+  unless metadata["arm_env_sha256"]? == expected_arm_env_sha256
+    raise "route artifact arm_env_sha256 mismatch"
+  end
+  unless metadata["model_fingerprint"]? == expected_model_sha256
+    raise "route artifact model_fingerprint mismatch"
+  end
   routes.each_with_index do |layer_routes, layer|
     layer_routes.each_with_index do |row_routes, row|
       raise "route artifact missing routes at layer=#{layer} row=#{row}" if row_routes.empty?
@@ -785,6 +827,10 @@ raise "prompt+canvas exceeds context_length" if prompt_len + canvas_len > hp.con
 
 prompt_tokens = generated_token_sequence(prompt_token, prompt_len, hp.vocab_size, "--prompt-len")
 prompt_rows = prompt_rows_from_tokens(weights, prompt_tokens)
+prompt_tokens_sha256 = prompt_tokens_fingerprint(prompt_tokens)
+base_env_sha256 = arm_env_fingerprint(base_env)
+variant_env_sha256 = arm_env_fingerprint(variant_env)
+model_sha256 = model_fingerprint(model)
 mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: prompt_len, canvas_len: canvas_len, sliding_window: hp.sliding_window)
 routes_by_layer_by_prompt_row = if single_route && materialize_final_rows
                                   top1_prompt_routes(weights, prompt_rows, prompt_len)
@@ -792,20 +838,20 @@ routes_by_layer_by_prompt_row = if single_route && materialize_final_rows
                                   nil
                                 end
 base_replay_capture = if path = base_route_artifact_path
-                        load_route_artifact(path, "base", prompt_len, max_layers)
+                        load_route_artifact(path, "base", prompt_len, max_layers, prompt_tokens_sha256, base_env_sha256, model_sha256)
                       elsif route_replay_base
                         capture = capture_routes_for_arm(weights, prompt_rows, mask, max_layers, base_env, "base", keep_route_capture_graph_cache)
                         if path = write_base_route_artifact_path
-                          write_route_artifact(path, "base", prompt_len, max_layers, capture)
+                          write_route_artifact(path, "base", prompt_len, max_layers, prompt_tokens_sha256, base_env_sha256, model_sha256, capture)
                         end
                         capture
                       end
 variant_replay_capture = if path = variant_route_artifact_path
-                           load_route_artifact(path, "variant", prompt_len, max_layers)
+                           load_route_artifact(path, "variant", prompt_len, max_layers, prompt_tokens_sha256, variant_env_sha256, model_sha256)
                          elsif route_replay_variant
                            capture = capture_routes_for_arm(weights, prompt_rows, mask, max_layers, variant_env, "variant", keep_route_capture_graph_cache)
                            if path = write_variant_route_artifact_path
-                             write_route_artifact(path, "variant", prompt_len, max_layers, capture)
+                             write_route_artifact(path, "variant", prompt_len, max_layers, prompt_tokens_sha256, variant_env_sha256, model_sha256, capture)
                            end
                            capture
                          end
