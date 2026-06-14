@@ -10,6 +10,8 @@ variant_map="${SUITE_VARIANT_ROUTE_ARTIFACT_MAP:-${CERT_VARIANT_ROUTE_ARTIFACT_M
 suite_min_total_speedup="${SUITE_MIN_TOTAL_SPEEDUP:-${MIN_TOTAL_SPEEDUP:-1.10}}"
 window_min_total_speedup="${SUITE_WINDOW_MIN_TOTAL_SPEEDUP:-$suite_min_total_speedup}"
 suite_child_logs="${SUITE_CHILD_LOGS:-}"
+suite_compatibility_audit="${SUITE_COMPATIBILITY_AUDIT:-0}"
+suite_run_abba_on_cert_fail="${SUITE_RUN_ABBA_ON_CERT_FAIL:-$suite_compatibility_audit}"
 
 usage() {
   cat <<'EOF'
@@ -26,6 +28,8 @@ Important environment knobs:
   SUITE_CHILD_LOGS="A B ..."            aggregate existing child gate.stdout logs without rerun
   SUITE_MIN_TOTAL_SPEEDUP=F             aggregate speedup floor, default MIN_TOTAL_SPEEDUP or 1.10
   SUITE_WINDOW_MIN_TOTAL_SPEEDUP=F      per-window child gate floor, default aggregate floor
+  SUITE_COMPATIBILITY_AUDIT=1           continue through child rejects and report a mixed exact-fallback audit
+  SUITE_RUN_ABBA_ON_CERT_FAIL=1         in audit mode, collect timing even when output cert fails
 
 All ordinary diffusion_gemma_prompt_certified_variant_gate.sh environment knobs
 are inherited. The suite wrapper overrides TOKEN_WINDOWS, LOG_DIR,
@@ -43,6 +47,21 @@ die() {
   printf 'error: %s\n' "$*" >&2
   exit 2
 }
+
+bool_enabled() {
+  case "$1" in
+    1|true|yes|on) return 0 ;;
+    0|false|no|off|"") return 1 ;;
+    *) die "invalid boolean value: $1" ;;
+  esac
+}
+
+if bool_enabled "$suite_compatibility_audit"; then
+  audit_enabled=1
+else
+  audit_enabled=0
+fi
+bool_enabled "$suite_run_abba_on_cert_fail" >/dev/null || true
 
 if [[ -z "$suite_child_logs" ]]; then
   [[ -n "$token_windows" ]] || die "TOKEN_WINDOWS is required"
@@ -122,6 +141,8 @@ printf 'token_windows=%s\n' "${token_windows:-<child_logs>}"
 printf 'suite_child_logs=%s\n' "${suite_child_logs:-<empty>}"
 printf 'suite_min_total_speedup=%s\n' "$suite_min_total_speedup"
 printf 'suite_window_min_total_speedup=%s\n' "$window_min_total_speedup"
+printf 'suite_compatibility_audit=%s\n' "$audit_enabled"
+printf 'suite_run_abba_on_cert_fail=%s\n' "$suite_run_abba_on_cert_fail"
 printf 'suite_spec=%s\n' "$suite_spec"
 
 if [[ -z "$suite_child_logs" ]]; then
@@ -150,6 +171,7 @@ if [[ -z "$suite_child_logs" ]]; then
     ABBA_BASE_ROUTE_ARTIFACT="$base_path" \
     ABBA_VARIANT_ROUTE_ARTIFACT="$variant_path" \
     MIN_TOTAL_SPEEDUP="$window_min_total_speedup" \
+    RUN_ABBA_ON_CERT_FAIL="$suite_run_abba_on_cert_fail" \
     "$repo_root/scripts/diffusion_gemma_prompt_certified_variant_gate.sh" >"$child_stdout" 2>&1
     child_rc=$?
     set -e
@@ -157,6 +179,13 @@ if [[ -z "$suite_child_logs" ]]; then
     printf 'suite_child index=%s prompt_token=%s canvas_token=%s rc=%s log=%s\n' \
       "$index" "$prompt" "$canvas" "$child_rc" "$child_stdout"
     if (( child_rc != 0 )); then
+      if [[ "$audit_enabled" == "1" && "$child_rc" -eq 4 ]]; then
+        tail -20 "$child_stdout" || true
+        printf 'suite_child_audit_continue index=%s prompt_token=%s canvas_token=%s child_rc=%s log=%s\n' \
+          "$index" "$prompt" "$canvas" "$child_rc" "$child_stdout"
+        child_logs+=("$child_stdout")
+        continue
+      fi
       tail -20 "$child_stdout" || true
       printf 'artifact_suite_gate decision=reject reason=child_failed index=%s prompt_token=%s canvas_token=%s child_rc=%s child_log=%s\n' \
         "$index" "$prompt" "$canvas" "$child_rc" "$child_stdout"
@@ -166,36 +195,86 @@ if [[ -z "$suite_child_logs" ]]; then
   done <"$suite_spec"
 fi
 
-python3 - "$suite_min_total_speedup" "$window_min_total_speedup" "${child_logs[@]}" <<'PY'
+python3 - "$audit_enabled" "$suite_min_total_speedup" "$window_min_total_speedup" "${child_logs[@]}" <<'PY'
 import math
 import re
 import sys
 
-aggregate_threshold = float(sys.argv[1])
-window_threshold = float(sys.argv[2])
-logs = sys.argv[3:]
+audit_mode = sys.argv[1] == "1"
+aggregate_threshold = float(sys.argv[2])
+window_threshold = float(sys.argv[3])
+logs = sys.argv[4:]
 total_base = 0.0
 total_variant = 0.0
+mixed_variant_total = 0.0
 min_speedup = math.inf
 rows = []
 phase_rows = {}
+
+def parse_fields(line):
+    fields = {}
+    for part in line.split()[1:]:
+        if "=" in part:
+            key, value = part.split("=", 1)
+            fields[key] = value
+    return fields
+
+def parse_gate_metric(line, log):
+    metric_fields = parse_fields(line)
+    try:
+        kind = metric_fields["kind"]
+        metric = metric_fields["metric"]
+        metric_base = float(metric_fields["base_ms"])
+        metric_variant = float(metric_fields["variant_ms"])
+        metric_range = float(metric_fields.get("range_over_delta", "nan"))
+    except (KeyError, ValueError) as exc:
+        raise SystemExit(f"malformed gate_metric in {log}: {line}") from exc
+    return kind, metric, metric_base, metric_variant, metric_range
+
+def choose_total_metric(text, log):
+    totals = {}
+    for line in text:
+        if not line.startswith("gate_metric "):
+            continue
+        kind, metric, metric_base, metric_variant, _ = parse_gate_metric(line, log)
+        if metric == "total_ms":
+            totals[kind] = (metric_base, metric_variant)
+    for kind in ("effective_trimmed_summary", "effective_summary", "trimmed_summary", "summary"):
+        if kind in totals:
+            return kind, totals[kind][0], totals[kind][1]
+    return None
 
 for log in logs:
     text = open(log, encoding="utf-8", errors="replace").read().splitlines()
     decision = next((line for line in reversed(text) if line.startswith("certified_variant_gate decision=")), None)
     if decision is None:
         raise SystemExit(f"missing child decision in {log}")
-    fields = {}
-    for part in decision.split()[1:]:
-        if "=" in part:
-            key, value = part.split("=", 1)
-            fields[key] = value
-    try:
-        speedup = float(fields["total_speedup"])
-        base = float(fields["base_ms"])
-        variant = float(fields["variant_ms"])
-    except KeyError as exc:
-        raise SystemExit(f"missing {exc.args[0]} in {log}: {decision}") from exc
+    fields = parse_fields(decision)
+    child_decision = fields.get("decision", "")
+    accepted = child_decision.startswith("candidate")
+    reason = fields.get("reason", "accepted" if accepted else "rejected")
+    total_metric_kind = fields.get("total_summary_kind", "decision")
+    if accepted:
+        try:
+            threshold_speedup = float(fields["total_speedup"])
+            base = float(fields["base_ms"])
+            variant = float(fields["variant_ms"])
+        except KeyError as exc:
+            raise SystemExit(f"missing {exc.args[0]} in {log}: {decision}") from exc
+        mixed_variant = variant
+        status = "candidate"
+    elif audit_mode:
+        chosen = choose_total_metric(text, log)
+        if chosen is None:
+            raise SystemExit(f"missing total_ms gate_metric for rejected audit child in {log}: {decision}")
+        total_metric_kind, base, variant = chosen
+        mixed_variant = base
+        threshold_speedup = 1.0
+        status = "fallback_exact"
+    else:
+        raise SystemExit(f"child did not produce a candidate decision in {log}: {decision}")
+    observed_speedup = base / variant if variant > 0 else math.inf
+    mixed_window_speedup = base / mixed_variant if mixed_variant > 0 else math.inf
     prompt = canvas = "n/a"
     m = re.search(r"window_(\d+)_p(-?\d+)_c(-?\d+)/gate\.stdout$", log)
     index = m.group(1) if m else "n/a"
@@ -203,24 +282,13 @@ for log in logs:
         prompt, canvas = m.group(2), m.group(3)
     total_base += base
     total_variant += variant
-    min_speedup = min(min_speedup, speedup)
-    rows.append((index, prompt, canvas, speedup, base, variant, log))
+    mixed_variant_total += mixed_variant
+    min_speedup = min(min_speedup, threshold_speedup)
+    rows.append((index, prompt, canvas, status, reason, total_metric_kind, observed_speedup, mixed_window_speedup, base, variant, mixed_variant, log))
     for line in text:
         if not line.startswith("gate_metric "):
             continue
-        metric_fields = {}
-        for part in line.split()[1:]:
-            if "=" in part:
-                key, value = part.split("=", 1)
-                metric_fields[key] = value
-        try:
-            kind = metric_fields["kind"]
-            metric = metric_fields["metric"]
-            metric_base = float(metric_fields["base_ms"])
-            metric_variant = float(metric_fields["variant_ms"])
-            metric_range = float(metric_fields.get("range_over_delta", "nan"))
-        except (KeyError, ValueError) as exc:
-            raise SystemExit(f"malformed gate_metric in {log}: {line}") from exc
+        kind, metric, metric_base, metric_variant, metric_range = parse_gate_metric(line, log)
         bucket = phase_rows.setdefault(
             (kind, metric),
             {"base": 0.0, "variant": 0.0, "max_range": 0.0, "windows": 0},
@@ -231,12 +299,20 @@ for log in logs:
         if math.isfinite(metric_range):
             bucket["max_range"] = max(bucket["max_range"], metric_range)
 
-for index, prompt, canvas, speedup, base, variant, log in rows:
+for index, prompt, canvas, status, reason, total_metric_kind, observed_speedup, mixed_window_speedup, base, variant, mixed_variant, log in rows:
     print(
         "suite_window "
-        f"index={index} prompt_token={prompt} canvas_token={canvas} "
-        f"total_speedup={speedup:.6f} base_ms={base:.6f} variant_ms={variant:.6f} log={log}"
+        f"index={index} prompt_token={prompt} canvas_token={canvas} status={status} reason={reason} "
+        f"total_speedup={observed_speedup:.6f} base_ms={base:.6f} variant_ms={variant:.6f} log={log}"
     )
+    if audit_mode:
+        print(
+            "suite_compat_window "
+            f"index={index} prompt_token={prompt} canvas_token={canvas} status={status} reason={reason} "
+            f"timing_kind={total_metric_kind} base_ms={base:.6f} observed_variant_ms={variant:.6f} "
+            f"mixed_variant_ms={mixed_variant:.6f} observed_speedup={observed_speedup:.6f} "
+            f"mixed_speedup={mixed_window_speedup:.6f} log={log}"
+        )
 
 dominant = None
 for (kind, metric), bucket in sorted(phase_rows.items()):
@@ -263,12 +339,37 @@ if dominant:
     )
 
 aggregate_speedup = total_base / total_variant if total_variant > 0 else math.inf
+mixed_speedup = total_base / mixed_variant_total if mixed_variant_total > 0 else math.inf
 print(
     "suite_summary "
     f"windows={len(rows)} base_ms={total_base:.6f} variant_ms={total_variant:.6f} "
     f"aggregate_speedup={aggregate_speedup:.6f} min_window_speedup={min_speedup:.6f} "
     f"min_total_speedup={aggregate_threshold:.6f} window_min_total_speedup={window_threshold:.6f}"
 )
+if audit_mode:
+    fallback_count = sum(1 for row in rows if row[3] == "fallback_exact")
+    candidate_count = len(rows) - fallback_count
+    mixed_decision = "candidate" if (
+        math.isfinite(mixed_speedup)
+        and mixed_speedup >= aggregate_threshold
+        and math.isfinite(min_speedup)
+        and min_speedup >= window_threshold
+    ) else "reject"
+    print(
+        "suite_compat_summary "
+        f"windows={len(rows)} candidate_windows={candidate_count} fallback_windows={fallback_count} "
+        f"base_ms={total_base:.6f} unsafe_variant_ms={total_variant:.6f} "
+        f"mixed_variant_ms={mixed_variant_total:.6f} unsafe_speedup={aggregate_speedup:.6f} "
+        f"mixed_speedup={mixed_speedup:.6f} min_window_speedup={min_speedup:.6f} "
+        f"min_total_speedup={aggregate_threshold:.6f} window_min_total_speedup={window_threshold:.6f}"
+    )
+    print(
+        "artifact_suite_gate decision=audit_only "
+        f"mixed_decision={mixed_decision} mixed_speedup={mixed_speedup:.6f} "
+        f"unsafe_speedup={aggregate_speedup:.6f} fallback_windows={fallback_count} "
+        f"reason=compatibility_audit_not_promotion"
+    )
+    raise SystemExit(0)
 if not math.isfinite(aggregate_speedup) or aggregate_speedup < aggregate_threshold:
     print(
         "artifact_suite_gate decision=reject reason=aggregate_speed_below_threshold "

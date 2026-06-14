@@ -352,6 +352,10 @@ if (( gate_rc != 0 )); then
   printf 'artifact_suite_promotion decision=reject reason=gate_failed rc=%s log=%s stderr=%s child_decision=%q\n' "$gate_rc" "$gate_stdout" "$gate_stderr" "$decision"
   exit "$gate_rc"
 fi
+if [[ "$decision" != artifact_suite_gate\ decision=candidate* ]]; then
+  printf 'artifact_suite_promotion decision=reject reason=gate_not_candidate log=%s stderr=%s child_decision=%q\n' "$gate_stdout" "$gate_stderr" "$decision"
+  exit 4
+fi
 
 prepare_log="<skipped>"
 if [[ "$promotion_stage" == "all" && -f "$prepare_stdout" ]]; then
