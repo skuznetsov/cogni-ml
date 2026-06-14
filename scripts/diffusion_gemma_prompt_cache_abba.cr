@@ -392,7 +392,8 @@ def capture_routes_for_arm(weights : ML::GGUF::DiffusionGemmaWeights,
                            mask : ML::GGUF::DiffusionGemmaAttentionMask,
                            max_layers : Int32,
                            env : ArmEnv,
-                           arm : String) : RouteReplayCapture
+                           arm : String,
+                           keep_graph_cache : Bool) : RouteReplayCapture
   old = apply_env(env)
   begin
     ML::GGUF::DiffusionGemmaCPU.clear_ffn_resident_graph_cache
@@ -422,7 +423,7 @@ def capture_routes_for_arm(weights : ML::GGUF::DiffusionGemmaWeights,
     RouteReplayCapture.new(routes, elapsed_ms, route_rows, route_slots, checksum)
   ensure
     restore_env(old)
-    ML::GGUF::DiffusionGemmaCPU.clear_ffn_resident_graph_cache
+    ML::GGUF::DiffusionGemmaCPU.clear_ffn_resident_graph_cache unless keep_graph_cache
   end
 end
 
@@ -595,6 +596,7 @@ checksum_tolerance = nil.as(Float64?)
 route_replay_base = false
 route_replay_variant = false
 route_capture_amortize_uses = 1
+keep_route_capture_graph_cache = false
 
 OptionParser.parse do |p|
   p.banner = "Usage: diffusion_gemma_prompt_cache_abba [options]"
@@ -616,6 +618,7 @@ OptionParser.parse do |p|
   p.on("--base-replay-routes", "Pre-capture and replay base prompt MoE routes for base arm") { route_replay_base = true }
   p.on("--variant-replay-routes", "Pre-capture and replay variant prompt MoE routes for variant arm") { route_replay_variant = true }
   p.on("--route-capture-amortize-uses N", "Charge route-capture cost over N replayed prompt-cache uses in effective summaries (default: 1)") { |v| route_capture_amortize_uses = v.to_i }
+  p.on("--keep-route-capture-graph-cache", "Preserve the resident graph cache warmed by a single replay-arm route capture") { keep_route_capture_graph_cache = true }
   p.on("-h", "--help", "Show help") do
     puts p
     exit
@@ -645,6 +648,12 @@ if route_replay_requested
   raise "route replay requires --full-routes" if single_route
   raise "route replay requires --materialize-final-rows" unless materialize_final_rows
 end
+if keep_route_capture_graph_cache && route_replay_base && route_replay_variant
+  raise "--keep-route-capture-graph-cache currently supports exactly one replay arm"
+end
+if keep_route_capture_graph_cache && !route_replay_requested
+  raise "--keep-route-capture-graph-cache requires --base-replay-routes or --variant-replay-routes"
+end
 
 load_t0 = Time.instant
 weights = ML::GGUF::DiffusionGemmaWeights.from_gguf(model)
@@ -661,8 +670,8 @@ routes_by_layer_by_prompt_row = if single_route && materialize_final_rows
                                 else
                                   nil
                                 end
-base_replay_capture = route_replay_base ? capture_routes_for_arm(weights, prompt_rows, mask, max_layers, base_env, "base") : nil
-variant_replay_capture = route_replay_variant ? capture_routes_for_arm(weights, prompt_rows, mask, max_layers, variant_env, "variant") : nil
+base_replay_capture = route_replay_base ? capture_routes_for_arm(weights, prompt_rows, mask, max_layers, base_env, "base", keep_route_capture_graph_cache) : nil
+variant_replay_capture = route_replay_variant ? capture_routes_for_arm(weights, prompt_rows, mask, max_layers, variant_env, "variant", keep_route_capture_graph_cache) : nil
 base_replay_routes = base_replay_capture.try(&.routes)
 variant_replay_routes = variant_replay_capture.try(&.routes)
 base_capture_ms = base_replay_capture.try(&.elapsed_ms) || 0.0
@@ -676,6 +685,7 @@ puts "# mirror_sequence=#{mirror_sequence || "<none>"}"
 puts "# route_replay_base=#{route_replay_base}"
 puts "# route_replay_variant=#{route_replay_variant}"
 puts "# route_capture_amortize_uses=#{route_capture_amortize_uses}"
+puts "# keep_route_capture_graph_cache=#{keep_route_capture_graph_cache}"
 puts "# route_capture_base_ms=#{format_f64(base_capture_ms)}"
 puts "# route_capture_variant_ms=#{format_f64(variant_capture_ms)}"
 puts TSV_HEADER.join('\t')

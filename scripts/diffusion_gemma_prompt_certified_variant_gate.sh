@@ -37,6 +37,7 @@ abba_sequence="${ABBA_SEQUENCE:-base variant variant base}"
 abba_mirror_sequence="${ABBA_MIRROR_SEQUENCE:-variant base base variant}"
 abba_route_capture_amortize_uses="${ABBA_ROUTE_CAPTURE_AMORTIZE_USES:-1}"
 abba_use_effective_total="${ABBA_USE_EFFECTIVE_TOTAL:-1}"
+abba_keep_route_capture_graph_cache="${ABBA_KEEP_ROUTE_CAPTURE_GRAPH_CACHE:-0}"
 min_total_speedup="${MIN_TOTAL_SPEEDUP:-1.10}"
 run_abba_on_cert_fail="${RUN_ABBA_ON_CERT_FAIL:-0}"
 checksum_tolerance="${CHECKSUM_TOLERANCE:-}"
@@ -76,6 +77,8 @@ Important environment knobs:
   ABBA_ROUTE_CAPTURE_AMORTIZE_USES=N
                                     charge route capture over N replayed prompt-cache uses, default 1
   ABBA_USE_EFFECTIVE_TOTAL=1       when replay is enabled, gate speed on capture-amortized total
+  ABBA_KEEP_ROUTE_CAPTURE_GRAPH_CACHE=1
+                                    preserve graph cache warmed by a single replay-arm capture
   RUN_ABBA_ON_CERT_FAIL=1         run ABBA even when certificate rejects
   CHECK_QUIET=1                   poll the existing quiet gate before running
 EOF
@@ -324,6 +327,9 @@ fi
 if bool_enabled "${ABBA_VARIANT_REPLAY_ROUTES:-0}"; then
   abba_args+=(--variant-replay-routes)
 fi
+if bool_enabled "$abba_keep_route_capture_graph_cache"; then
+  abba_args+=(--keep-route-capture-graph-cache)
+fi
 
 set +e
 "$abba_bin" "${abba_args[@]}" >"$abba_out" 2>"$abba_err"
@@ -381,6 +387,7 @@ if ! float_ge "$total_speedup" "$min_total_speedup"; then
     "variant_ms=$total_variant_ms" \
     "total_summary_kind=$total_summary_kind" \
     "route_capture_amortize_uses=$abba_route_capture_amortize_uses" \
+    "keep_route_capture_graph_cache=$abba_keep_route_capture_graph_cache" \
     "abba_log=$abba_out"
 fi
 
@@ -393,5 +400,5 @@ if [[ "$certificate_mode" == full-vocab-top1-* ]]; then
 elif [[ "$certificate_mode" == full-vocab-top2-* ]]; then
   decision="candidate_full_vocab_margin_argmax_only"
 fi
-printf 'certified_variant_gate decision=%s total_speedup=%s min_total_speedup=%s base_ms=%s variant_ms=%s total_summary_kind=%s route_capture_amortize_uses=%s cert_rc=%s abba_rc=%s log_dir=%s\n' \
-  "$decision" "$total_speedup" "$min_total_speedup" "$total_base_ms" "$total_variant_ms" "$total_summary_kind" "$abba_route_capture_amortize_uses" "$cert_rc" "$abba_rc" "$log_dir"
+printf 'certified_variant_gate decision=%s total_speedup=%s min_total_speedup=%s base_ms=%s variant_ms=%s total_summary_kind=%s route_capture_amortize_uses=%s keep_route_capture_graph_cache=%s cert_rc=%s abba_rc=%s log_dir=%s\n' \
+  "$decision" "$total_speedup" "$min_total_speedup" "$total_base_ms" "$total_variant_ms" "$total_summary_kind" "$abba_route_capture_amortize_uses" "$abba_keep_route_capture_graph_cache" "$cert_rc" "$abba_rc" "$log_dir"
