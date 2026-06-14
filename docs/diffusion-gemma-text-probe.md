@@ -283,7 +283,10 @@ The wrapper derives `base_exact` windows from the plan, prepares only
 base map, and then runs the mixed gate from the derived route plan. It defaults
 to `CHECK_QUIET=1` and `VARIANT_PROFILE=prompt-ffn-resident` for the current
 full-depth route-plan family. Use `DRY_RUN=1` to inspect commands, or
-`FALLBACK_REPLAY_STAGE=prepare|attach|gate` to split the workflow.
+`FALLBACK_REPLAY_STAGE=prepare|attach|gate` to split the workflow. After a
+successful gate, the wrapper writes `fallback_replay_route_plan_atlas.txt`,
+`fallback_replay_route_plan_atlas.tsv`, and `fallback_replay_pp_tg.tsv` under
+`LOG_DIR`; set `FALLBACK_SUMMARY=0` to skip these best-effort summaries.
 
 Before launching another heavy gate, inspect the mixed plan offline:
 

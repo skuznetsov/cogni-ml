@@ -28,6 +28,7 @@ load_threshold="${LOAD_THRESHOLD:-40}"
 total_threshold="${TOTAL_THRESHOLD:-${LOAD_TOTAL_THRESHOLD:-240}}"
 overwrite="${SUITE_ARTIFACT_OVERWRITE:-0}"
 dry_run="${DRY_RUN:-0}"
+summary_enabled="${FALLBACK_SUMMARY:-1}"
 
 suite_min_total_speedup="${SUITE_MIN_TOTAL_SPEEDUP:-${MIN_TOTAL_SPEEDUP:-1.10}}"
 suite_window_min_total_speedup="${SUITE_WINDOW_MIN_TOTAL_SPEEDUP:-1.0}"
@@ -53,6 +54,7 @@ Important environment knobs:
   FALLBACK_TOKEN_WINDOWS=prompt:canvas  optional fallback subset, default base_exact rows
   VARIANT_PROFILE=prompt-ffn-resident   profile used by existing fast artifacts
   CHECK_QUIET=1                         quiet precheck before prepare/gate work
+  FALLBACK_SUMMARY=1                    write atlas and pp/tg summaries after gate
   DRY_RUN=1                             print commands without model work
 
 The wrapper only prepares SUITE_ARTIFACT_ARMS=base and uses
@@ -137,6 +139,7 @@ bool_enabled "$check_quiet" >/dev/null || true
 bool_enabled "$gate_check_quiet" >/dev/null || true
 bool_enabled "$overwrite" >/dev/null || true
 bool_enabled "$dry_run" >/dev/null || true
+bool_enabled "$summary_enabled" >/dev/null || true
 
 case "$stage" in
   all|prepare|attach|gate)
@@ -197,6 +200,7 @@ manifest="$log_dir/fallback_replay_manifest.env"
   printf 'quiet_ms=%q\n' "$quiet_ms"
   printf 'load_threshold=%q\n' "$load_threshold"
   printf 'total_threshold=%q\n' "$total_threshold"
+  printf 'summary_enabled=%q\n' "$summary_enabled"
 } >"$manifest"
 
 printf 'fallback_replay_start log_dir=%s manifest=%s\n' "$log_dir" "$manifest"
@@ -245,6 +249,10 @@ fi
 
 gate_stdout="$log_dir/gate.stdout"
 gate_stderr="$log_dir/gate.stderr"
+summary_route_plan="${FALLBACK_SUMMARY_ROUTE_PLAN:-$gate_dir/route_plan.jsonl}"
+summary_atlas="$log_dir/fallback_replay_route_plan_atlas.txt"
+summary_atlas_tsv="$log_dir/fallback_replay_route_plan_atlas.tsv"
+summary_pp_tg="$log_dir/fallback_replay_pp_tg.tsv"
 gate_cmd=(
   env
   LOG_DIR="$gate_dir"
@@ -266,6 +274,56 @@ gate_cmd=(
   "$repo_root/scripts/diffusion_gemma_prompt_artifact_suite_promotion.sh"
 )
 
+atlas_cmd=(
+  python3
+  "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py"
+  "$summary_route_plan"
+)
+
+atlas_tsv_cmd=(
+  python3
+  "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py"
+  "$summary_route_plan"
+  --tsv
+)
+
+pp_tg_cmd=(
+  python3
+  "$repo_root/scripts/diffusion_gemma_pp_tg_summary.py"
+  "$gate_stdout"
+)
+
+write_summaries() {
+  if ! bool_enabled "$summary_enabled"; then
+    printf 'fallback_replay_summary skipped reason=disabled\n'
+    return 0
+  fi
+
+  if [[ ! -f "$summary_route_plan" ]]; then
+    printf 'fallback_replay_summary warning=missing_route_plan route_plan=%s\n' "$summary_route_plan"
+  else
+    if "${atlas_cmd[@]}" >"$summary_atlas" 2>"$summary_atlas.stderr"; then
+      cat "$summary_atlas"
+    else
+      printf 'fallback_replay_summary warning=atlas_failed route_plan=%s stderr=%s\n' "$summary_route_plan" "$summary_atlas.stderr"
+    fi
+    if "${atlas_tsv_cmd[@]}" >"$summary_atlas_tsv" 2>"$summary_atlas_tsv.stderr"; then
+      :
+    else
+      printf 'fallback_replay_summary warning=atlas_tsv_failed route_plan=%s stderr=%s\n' "$summary_route_plan" "$summary_atlas_tsv.stderr"
+    fi
+  fi
+
+  if "${pp_tg_cmd[@]}" >"$summary_pp_tg" 2>"$summary_pp_tg.stderr"; then
+    cat "$summary_pp_tg"
+  else
+    printf 'fallback_replay_summary warning=pp_tg_failed log=%s stderr=%s\n' "$gate_stdout" "$summary_pp_tg.stderr"
+  fi
+
+  printf 'fallback_replay_summary route_plan=%s atlas=%s atlas_tsv=%s pp_tg=%s\n' \
+    "$summary_route_plan" "$summary_atlas" "$summary_atlas_tsv" "$summary_pp_tg"
+}
+
 if bool_enabled "$dry_run"; then
   if bool_enabled "$check_quiet" && [[ "$stage" != "attach" ]]; then
     print_cmd quiet_cmd "${quiet_cmd[@]}"
@@ -278,6 +336,11 @@ if bool_enabled "$dry_run"; then
   fi
   if [[ "$stage" == "all" || "$stage" == "gate" ]]; then
     print_cmd gate_cmd "${gate_cmd[@]}"
+    if bool_enabled "$summary_enabled"; then
+      print_cmd summary_atlas_cmd "${atlas_cmd[@]}"
+      print_cmd summary_atlas_tsv_cmd "${atlas_tsv_cmd[@]}"
+      print_cmd summary_pp_tg_cmd "${pp_tg_cmd[@]}"
+    fi
   fi
   printf 'fallback_replay decision=dry_run stage=%s log_dir=%s attached_plan=%s\n' "$stage" "$log_dir" "$attached_plan"
   exit 0
@@ -330,5 +393,6 @@ if [[ "$stage" == "all" || "$stage" == "gate" ]]; then
     exit "$gate_rc"
   fi
   decision="$(grep -E '^artifact_suite_promotion decision=' "$gate_stdout" | tail -1 || true)"
+  write_summaries
   printf 'fallback_replay decision=complete stage=%s log_dir=%s attached_plan=%s child_decision=%q\n' "$stage" "$log_dir" "$attached_plan" "$decision"
 fi
