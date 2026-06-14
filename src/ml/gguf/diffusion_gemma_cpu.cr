@@ -4668,23 +4668,31 @@ module ML::GGUF
                                   expert : Int32) : QuantWeight
       qw = lw.ffn_gate_up_exps_qw || raise ArgumentError.new("combined gate_up experts are required")
       raise ArgumentError.new("gate_up expert tensor shape mismatch") unless qw.in_dim == hp.n_embd && qw.out_dim == hp.expert_count * hp.expert_ff * 2
-      quant_row_slice(qw, expert * hp.expert_ff * 2, hp.expert_ff * 2, hp.n_embd)
+      expert_slice(lw.ffn_gate_up_expert_qws, hp.expert_count, expert, "gate_up expert")
     end
 
     private def expert_gate_qw(lw : DiffusionGemmaLayerWeights,
                                hp : DiffusionGemmaHparams,
                                expert : Int32) : QuantWeight
-      qw = lw.ffn_gate_up_exps_qw || raise ArgumentError.new("combined gate_up experts are required")
-      raise ArgumentError.new("gate expert tensor shape mismatch") unless qw.in_dim == hp.n_embd && qw.out_dim == hp.expert_count * hp.expert_ff * 2
-      quant_row_slice(qw, expert * hp.expert_ff * 2, hp.expert_ff, hp.n_embd)
+      if qw = lw.ffn_gate_up_exps_qw
+        raise ArgumentError.new("gate expert tensor shape mismatch") unless qw.in_dim == hp.n_embd && qw.out_dim == hp.expert_count * hp.expert_ff * 2
+      else
+        qw = lw.ffn_gate_exps_qw || raise ArgumentError.new("gate experts are required")
+        raise ArgumentError.new("gate expert tensor shape mismatch") unless qw.in_dim == hp.n_embd && qw.out_dim == hp.expert_count * hp.expert_ff
+      end
+      expert_slice(lw.ffn_gate_expert_qws, hp.expert_count, expert, "gate expert")
     end
 
     private def expert_up_qw(lw : DiffusionGemmaLayerWeights,
                              hp : DiffusionGemmaHparams,
                              expert : Int32) : QuantWeight
-      qw = lw.ffn_gate_up_exps_qw || raise ArgumentError.new("combined gate_up experts are required")
-      raise ArgumentError.new("up expert tensor shape mismatch") unless qw.in_dim == hp.n_embd && qw.out_dim == hp.expert_count * hp.expert_ff * 2
-      quant_row_slice(qw, expert * hp.expert_ff * 2 + hp.expert_ff, hp.expert_ff, hp.n_embd)
+      if qw = lw.ffn_gate_up_exps_qw
+        raise ArgumentError.new("up expert tensor shape mismatch") unless qw.in_dim == hp.n_embd && qw.out_dim == hp.expert_count * hp.expert_ff * 2
+      else
+        qw = lw.ffn_up_exps_qw || raise ArgumentError.new("up experts are required")
+        raise ArgumentError.new("up expert tensor shape mismatch") unless qw.in_dim == hp.n_embd && qw.out_dim == hp.expert_count * hp.expert_ff
+      end
+      expert_slice(lw.ffn_up_expert_qws, hp.expert_count, expert, "up expert")
     end
 
     private def expert_down_qw(lw : DiffusionGemmaLayerWeights,
@@ -4692,7 +4700,17 @@ module ML::GGUF
                                expert : Int32) : QuantWeight
       qw = lw.ffn_down_exps_qw
       raise ArgumentError.new("down expert tensor shape mismatch") unless qw.in_dim == hp.expert_ff && qw.out_dim == hp.expert_count * hp.n_embd
-      quant_row_slice(qw, expert * hp.n_embd, hp.n_embd, hp.expert_ff)
+      expert_slice(lw.ffn_down_expert_qws, hp.expert_count, expert, "down expert")
+    end
+
+    private def expert_slice(slices : Array(QuantWeight)?,
+                             expert_count : Int32,
+                             expert : Int32,
+                             label : String) : QuantWeight
+      raise ArgumentError.new("#{label} slices are required") unless slices
+      raise ArgumentError.new("#{label} slice count mismatch") unless slices.size == expert_count
+      raise ArgumentError.new("#{label} id out of range") if expert < 0 || expert >= expert_count
+      slices[expert]
     end
 
     private def quant_row_slice(qw : QuantWeight,

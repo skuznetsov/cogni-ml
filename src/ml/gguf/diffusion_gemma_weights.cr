@@ -40,6 +40,10 @@ module ML::GGUF
     getter ffn_gate_exps_qw : QuantWeight?
     getter ffn_up_exps_qw : QuantWeight?
     getter ffn_down_exps_qw : QuantWeight
+    getter ffn_gate_up_expert_qws : Array(QuantWeight)?
+    getter ffn_gate_expert_qws : Array(QuantWeight)?
+    getter ffn_up_expert_qws : Array(QuantWeight)?
+    getter ffn_down_expert_qws : Array(QuantWeight)
     getter ffn_down_exps_scale : Array(Float32)
 
     getter layer_output_scale : Array(Float32)
@@ -68,6 +72,10 @@ module ML::GGUF
       @ffn_gate_exps_qw,
       @ffn_up_exps_qw,
       @ffn_down_exps_qw,
+      @ffn_gate_up_expert_qws,
+      @ffn_gate_expert_qws,
+      @ffn_up_expert_qws,
+      @ffn_down_expert_qws,
       @ffn_down_exps_scale,
       @layer_output_scale,
       @encoder_layer_output_scale,
@@ -133,6 +141,10 @@ module ML::GGUF
 
     private def load_layer(g : GGUFFile, il : Int32) : DiffusionGemmaLayerWeights
       p = "blk.#{il}"
+      ffn_gate_up_exps_qw = load_qw?(g, "#{p}.ffn_gate_up_exps.weight")
+      ffn_gate_exps_qw = load_qw?(g, "#{p}.ffn_gate_exps.weight")
+      ffn_up_exps_qw = load_qw?(g, "#{p}.ffn_up_exps.weight")
+      ffn_down_exps_qw = load_qw(g, "#{p}.ffn_down_exps.weight")
       DiffusionGemmaLayerWeights.new(
         attn_norm: load_f32(g, "#{p}.attn_norm.weight"),
         attn_q_qw: load_qw(g, "#{p}.attn_q.weight"),
@@ -147,10 +159,22 @@ module ML::GGUF
         ffn_down_qw: load_qw(g, "#{p}.ffn_down.weight"),
         ffn_gate_inp_qw: load_qw(g, "#{p}.ffn_gate_inp.weight"),
         ffn_gate_inp_scale: load_f32(g, "#{p}.ffn_gate_inp.scale"),
-        ffn_gate_up_exps_qw: load_qw?(g, "#{p}.ffn_gate_up_exps.weight"),
-        ffn_gate_exps_qw: load_qw?(g, "#{p}.ffn_gate_exps.weight"),
-        ffn_up_exps_qw: load_qw?(g, "#{p}.ffn_up_exps.weight"),
-        ffn_down_exps_qw: load_qw(g, "#{p}.ffn_down_exps.weight"),
+        ffn_gate_up_exps_qw: ffn_gate_up_exps_qw,
+        ffn_gate_exps_qw: ffn_gate_exps_qw,
+        ffn_up_exps_qw: ffn_up_exps_qw,
+        ffn_down_exps_qw: ffn_down_exps_qw,
+        ffn_gate_up_expert_qws: ffn_gate_up_exps_qw.try { |qw| expert_slices(qw, @hparams.expert_count, @hparams.expert_ff * 2, @hparams.n_embd) },
+        ffn_gate_expert_qws: if qw = ffn_gate_up_exps_qw
+          expert_subslices(qw, @hparams.expert_count, @hparams.expert_ff * 2, 0, @hparams.expert_ff, @hparams.n_embd)
+        elsif qw = ffn_gate_exps_qw
+          expert_slices(qw, @hparams.expert_count, @hparams.expert_ff, @hparams.n_embd)
+        end,
+        ffn_up_expert_qws: if qw = ffn_gate_up_exps_qw
+          expert_subslices(qw, @hparams.expert_count, @hparams.expert_ff * 2, @hparams.expert_ff, @hparams.expert_ff, @hparams.n_embd)
+        elsif qw = ffn_up_exps_qw
+          expert_slices(qw, @hparams.expert_count, @hparams.expert_ff, @hparams.n_embd)
+        end,
+        ffn_down_expert_qws: expert_slices(ffn_down_exps_qw, @hparams.expert_count, @hparams.n_embd, @hparams.expert_ff),
         ffn_down_exps_scale: load_f32(g, "#{p}.ffn_down_exps.scale"),
         layer_output_scale: load_f32(g, "#{p}.layer_output_scale.weight"),
         encoder_layer_output_scale: load_f32(g, "#{p}.enc_layer_output_scale.weight"),
@@ -168,6 +192,32 @@ module ML::GGUF
       in_dim = info.dims[0].to_i32
       out_dim = flattened_out_dim(info)
       QuantWeight.new(raw, info.type, out_dim, in_dim, "diffusion-gemma:#{name}")
+    end
+
+    private def expert_slices(qw : QuantWeight,
+                              expert_count : Int32,
+                              rows_per_expert : Int32,
+                              in_dim : Int32) : Array(QuantWeight)
+      expert_subslices(qw, expert_count, rows_per_expert, 0, rows_per_expert, in_dim)
+    end
+
+    private def expert_subslices(qw : QuantWeight,
+                                 expert_count : Int32,
+                                 stride_rows : Int32,
+                                 first_row_within_expert : Int32,
+                                 row_count : Int32,
+                                 in_dim : Int32) : Array(QuantWeight)
+      raise ArgumentError.new("diffusion_gemma_weights: expert slice dimensions must be positive") unless expert_count > 0 && stride_rows > 0 && row_count > 0 && in_dim > 0
+      raise ArgumentError.new("diffusion_gemma_weights: expert subslice out of stride") if first_row_within_expert < 0 || first_row_within_expert + row_count > stride_rows
+      row_bytes = QuantMatmul.row_bytes(qw.type, in_dim)
+      Array(QuantWeight).new(expert_count) do |expert|
+        first_row = expert * stride_rows + first_row_within_expert
+        offset = first_row.to_i64 * row_bytes.to_i64
+        bytes = row_count.to_i64 * row_bytes.to_i64
+        raise ArgumentError.new("diffusion_gemma_weights: expert slice out of bounds") if offset + bytes > qw.raw.size
+        raw = Bytes.new(qw.raw.to_unsafe + offset, bytes.to_i32, read_only: true)
+        QuantWeight.new(raw, qw.type, row_count, in_dim, qw.route_tag)
+      end
     end
 
     private def load_qw?(g : GGUFFile, name : String) : QuantWeight?
