@@ -30,6 +30,7 @@ total_threshold="${TOTAL_THRESHOLD:-${LOAD_TOTAL_THRESHOLD:-240}}"
 suite_min_total_speedup="${SUITE_MIN_TOTAL_SPEEDUP:-${MIN_TOTAL_SPEEDUP:-1.10}}"
 suite_window_min_total_speedup="${SUITE_WINDOW_MIN_TOTAL_SPEEDUP:-}"
 suite_mixed_fallback_gate="${SUITE_MIXED_FALLBACK_GATE:-0}"
+suite_route_plan_out="${SUITE_ROUTE_PLAN_OUT:-$log_dir/route_plan.jsonl}"
 certificate_mode="${CERTIFICATE_MODE:-full-vocab-top1-metal}"
 abba_warmups="${ABBA_WARMUPS:-1}"
 abba_repeats="${ABBA_REPEATS:-3}"
@@ -73,6 +74,7 @@ Important environment knobs:
   SUITE_MIN_TOTAL_SPEEDUP=1.10          aggregate speedup floor
   SUITE_WINDOW_MIN_TOTAL_SPEEDUP=...    per-window speedup floor
   SUITE_MIXED_FALLBACK_GATE=1           allow certified fast/exact fallback mixed_candidate gates
+  SUITE_ROUTE_PLAN_OUT=PATH             mixed fast/exact route plan output, default LOG_DIR/route_plan.jsonl
   CERTIFICATE_MODE=full-vocab-top1-metal
   DRY_RUN=1                             print commands without running model work
 EOF
@@ -214,6 +216,7 @@ manifest="$log_dir/promotion_manifest.env"
   printf 'suite_min_total_speedup=%q\n' "$suite_min_total_speedup"
   printf 'suite_window_min_total_speedup=%q\n' "$suite_window_min_total_speedup"
   printf 'suite_mixed_fallback_gate=%q\n' "$suite_mixed_fallback_gate"
+  printf 'suite_route_plan_out=%q\n' "$suite_route_plan_out"
   printf 'certificate_mode=%q\n' "$certificate_mode"
 } >"$manifest"
 
@@ -260,6 +263,7 @@ gate_cmd=(
   SUITE_MIN_TOTAL_SPEEDUP="$suite_min_total_speedup"
   SUITE_WINDOW_MIN_TOTAL_SPEEDUP="$suite_window_min_total_speedup"
   SUITE_MIXED_FALLBACK_GATE="$suite_mixed_fallback_gate"
+  SUITE_ROUTE_PLAN_OUT="$suite_route_plan_out"
   ABBA_WARMUPS="$abba_warmups"
   ABBA_REPEATS="$abba_repeats"
   ABBA_TRIM_PER_ARM="$abba_trim_per_arm"
@@ -378,4 +382,4 @@ prepare_log="<skipped>"
 if [[ "$promotion_stage" == "all" && -f "$prepare_stdout" ]]; then
   prepare_log="$prepare_stdout"
 fi
-printf 'artifact_suite_promotion decision=%s stage=%s log_dir=%s prepare_log=%s gate_log=%s child_decision=%q\n' "$promotion_decision" "$promotion_stage" "$log_dir" "$prepare_log" "$gate_stdout" "$decision"
+printf 'artifact_suite_promotion decision=%s stage=%s log_dir=%s prepare_log=%s gate_log=%s route_plan=%s child_decision=%q\n' "$promotion_decision" "$promotion_stage" "$log_dir" "$prepare_log" "$gate_stdout" "$suite_route_plan_out" "$decision"

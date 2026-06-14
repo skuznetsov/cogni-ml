@@ -211,3 +211,20 @@ Use `mixed_pp_like_tok_s`, `mixed_layers_s`, and
 `mixed_prompt_layer_rows_s` for the certified fast/exact route; use the unsafe
 columns only as a diagnostic for how much the rejected fast windows would have
 saved without the certificate boundary.
+
+## Mixed Route Plan
+
+`scripts/diffusion_gemma_prompt_artifact_suite_gate.sh` can write a JSONL
+route plan with one summary row and one row per prompt/canvas window:
+
+```sh
+SUITE_MIXED_FALLBACK_GATE=1 \
+SUITE_ROUTE_PLAN_OUT=/tmp/diffusiongemma_route_plan.jsonl \
+scripts/diffusion_gemma_prompt_artifact_suite_gate.sh
+```
+
+`scripts/diffusion_gemma_prompt_artifact_suite_promotion.sh` writes this plan
+to `LOG_DIR/route_plan.jsonl` by default for `gate` and `all` stages. Window
+rows use `selected_route=variant_fast` only for certified candidate windows;
+rejected windows use `selected_route=base_exact` while preserving the unsafe
+variant timing and artifact path for diagnostics.
