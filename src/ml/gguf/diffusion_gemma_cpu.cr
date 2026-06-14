@@ -2270,6 +2270,20 @@ module ML::GGUF
       outputs
     end
 
+    private def emit_moe_grouped_resident_fallback(route : String,
+                                                   il : Int32,
+                                                   row_count : Int32,
+                                                   step : String,
+                                                   active_experts : Int32,
+                                                   route_slot_count : Int32,
+                                                   max_expert_batch : Int32,
+                                                   over_threshold_experts : Int32,
+                                                   timing_t0 : Time::Instant?) : Nil
+      return unless moe_grouped_resident_timing_enabled?
+      elapsed_ms = timing_t0 ? (Time.instant - timing_t0.not_nil!).total_milliseconds : 0.0
+      STDERR.puts "diffusion_gemma_moe_grouped_resident_fallback route=#{route} layer=#{il} rows=#{row_count} step=#{step} active_experts=#{active_experts} route_slots=#{route_slot_count} max_expert_batch=#{max_expert_batch} over_threshold_experts=#{over_threshold_experts} elapsed_ms=#{elapsed_ms}"
+    end
+
     def moe_grouped_route_reduce_resident_graph_from_row_buffer(weights : DiffusionGemmaWeights,
                                                                 il : Int32,
                                                                 ffn_rows_buf : ML::MetalBuffer,
@@ -2290,6 +2304,8 @@ module ML::GGUF
       raise ArgumentError.new("gpu reduce expert row buffer too small") if ffn_rows_buf.size < row_count.to_i64 * hp.n_embd * sizeof(Float32)
       raise ArgumentError.new("down expert scale size mismatch") unless lw.ffn_down_exps_scale.size == hp.expert_count
 
+      timing_enabled = moe_grouped_resident_timing_enabled?
+      timing_t0 = Time.instant if timing_enabled
       route_slot_count = 0
       route_counts_by_row = Array(Int32).new(row_count, 0)
       selected_by_row.each_with_index do |selected, row|
@@ -2299,6 +2315,9 @@ module ML::GGUF
         route_slot_count += selected.size
       end
       raise ArgumentError.new("gpu reduce route slots must be positive") unless route_slot_count > 0
+      active_experts = assignments_by_expert.size
+      max_expert_batch = batch_by_expert.values.max? || 0
+      over_threshold_experts = batch_by_expert.values.count { |batch| batch > Qwen35Metal::GEMM_BATCH_THRESHOLD }
 
       route_weights = Array(Float32).new(route_slot_count, 0.0_f32)
       selected_by_row.each_with_index do |selected, row|
@@ -2308,6 +2327,7 @@ module ML::GGUF
           route_weights[slot] = route.weight * lw.ffn_down_exps_scale[route.expert]
         end
       end
+      route_map_done = Time.instant if timing_enabled
 
       owned_buffers = [] of ML::MetalBuffer
       route_rows_buf = ML::MetalBuffer.new(route_slot_count.to_i64 * hp.n_embd * sizeof(Float32))
@@ -2320,7 +2340,10 @@ module ML::GGUF
       graph = ML::Metal::ComputeGraph.new
       enc = ML::Metal::GraphEncoder.new(graph)
       source_rows_buf = maybe_encode_moe_pre_ffw_norm_rows(enc, owned_buffers, weights, il, ffn_rows_buf, row_count, pre_norm_rows)
-      return nil unless source_rows_buf
+      unless source_rows_buf
+        emit_moe_grouped_resident_fallback("route_reduce", il, row_count, "pre_norm", active_experts, route_slot_count, max_expert_batch, over_threshold_experts, timing_t0)
+        return nil
+      end
       assignments_by_expert.keys.sort.each do |expert|
         assignments = assignments_by_expert[expert]
         batch = batch_by_expert[expert]
@@ -2349,27 +2372,60 @@ module ML::GGUF
         down_buf = ML::MetalBuffer.new(batch.to_i64 * hp.n_embd * sizeof(Float32))
         owned_buffers.concat([gather_map_buf, scatter_map_buf, input_buf, gate_buf, up_buf, hidden_buf, down_buf])
 
-        return nil unless Gemma4Metal.encode_gather_rows_by_map_to_buffer(enc, source_rows_buf, gather_map_buf, input_buf, row_count, batch, hp.n_embd)
+        unless Gemma4Metal.encode_gather_rows_by_map_to_buffer(enc, source_rows_buf, gather_map_buf, input_buf, row_count, batch, hp.n_embd)
+          emit_moe_grouped_resident_fallback("route_reduce", il, row_count, "expert_gather", active_experts, route_slot_count, max_expert_batch, over_threshold_experts, timing_t0)
+          return nil
+        end
 
         gate_qw = expert_gate_qw(lw, hp, expert)
         up_qw = expert_up_qw(lw, hp, expert)
         down_qw = expert_down_qw(lw, hp, expert)
-        return nil unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [gate_qw, up_qw], input_buf, [gate_buf, up_buf], batch)
-        return nil unless Gemma4Metal.encode_gelu_mul_to_buffer(enc, gate_buf, up_buf, hidden_buf, batch * hp.expert_ff)
-        return nil unless Qwen35Metal.encode_matmul_to_buffer(enc, down_qw, hidden_buf, down_buf, batch)
-        return nil unless Gemma4Metal.encode_scatter_rows_by_map_to_buffer(enc, down_buf, scatter_map_buf, route_rows_buf, batch, route_slot_count, hp.n_embd, partition: expert)
+        unless Qwen35Metal.encode_matmul_many_to_buffers(enc, [gate_qw, up_qw], input_buf, [gate_buf, up_buf], batch)
+          emit_moe_grouped_resident_fallback("route_reduce", il, row_count, "expert_gate_up", active_experts, route_slot_count, max_expert_batch, over_threshold_experts, timing_t0)
+          return nil
+        end
+        unless Gemma4Metal.encode_gelu_mul_to_buffer(enc, gate_buf, up_buf, hidden_buf, batch * hp.expert_ff)
+          emit_moe_grouped_resident_fallback("route_reduce", il, row_count, "expert_gelu", active_experts, route_slot_count, max_expert_batch, over_threshold_experts, timing_t0)
+          return nil
+        end
+        unless Qwen35Metal.encode_matmul_to_buffer(enc, down_qw, hidden_buf, down_buf, batch)
+          emit_moe_grouped_resident_fallback("route_reduce", il, row_count, "expert_down", active_experts, route_slot_count, max_expert_batch, over_threshold_experts, timing_t0)
+          return nil
+        end
+        unless Gemma4Metal.encode_scatter_rows_by_map_to_buffer(enc, down_buf, scatter_map_buf, route_rows_buf, batch, route_slot_count, hp.n_embd, partition: expert)
+          emit_moe_grouped_resident_fallback("route_reduce", il, row_count, "expert_scatter", active_experts, route_slot_count, max_expert_batch, over_threshold_experts, timing_t0)
+          return nil
+        end
       end
-      return nil unless Gemma4Metal.encode_weighted_route_reduce_rows_to_buffer(enc, route_rows_buf, route_offsets_buf, route_counts_buf, route_weights_buf, reduced_buf, row_count, route_slot_count, hp.n_embd)
+      unless Gemma4Metal.encode_weighted_route_reduce_rows_to_buffer(enc, route_rows_buf, route_offsets_buf, route_counts_buf, route_weights_buf, reduced_buf, row_count, route_slot_count, hp.n_embd)
+        emit_moe_grouped_resident_fallback("route_reduce", il, row_count, "route_reduce", active_experts, route_slot_count, max_expert_batch, over_threshold_experts, timing_t0)
+        return nil
+      end
 
+      graph_build_done = Time.instant if timing_enabled
+      compile_t0 = Time.instant if timing_enabled
       graph.compile!
+      compile_done = Time.instant if timing_enabled
       cmd = ML::Metal::CommandBuffer.new
+      encode_t0 = Time.instant if timing_enabled
       graph.encode(cmd)
+      encode_done = Time.instant if timing_enabled
+      wait_t0 = Time.instant if timing_enabled
       cmd.commit
       cmd.wait
+      wait_done = Time.instant if timing_enabled
 
+      read_t0 = Time.instant if timing_enabled
       result = reduced_buf.read(row_count * hp.n_embd)
+      read_done = Time.instant if timing_enabled
+      post_norm_t0 = Time.instant if timing_enabled
       row_count.times do |row|
         fast_rms_norm_slice!(result, row * hp.n_embd, hp.n_embd, lw.post_ffw_norm_2, hp.rms_eps)
+      end
+      if timing_enabled
+        post_norm_done = Time.instant
+        stats = graph.stats
+        STDERR.puts "diffusion_gemma_moe_grouped_resident_timing route=route_reduce layer=#{il} rows=#{row_count} active_experts=#{active_experts} route_slots=#{route_slot_count} max_expert_batch=#{max_expert_batch} over_threshold_experts=#{over_threshold_experts} ops=#{stats.n_ops} waves=#{stats.n_waves} barriers=#{stats.n_barriers} max_wave_width=#{stats.max_wave_width} pre_norm_rows=#{pre_norm_rows} route_map_ms=#{(route_map_done.not_nil! - timing_t0.not_nil!).total_milliseconds} graph_build_ms=#{(graph_build_done.not_nil! - route_map_done.not_nil!).total_milliseconds} compile_ms=#{(compile_done.not_nil! - compile_t0.not_nil!).total_milliseconds} encode_ms=#{(encode_done.not_nil! - encode_t0.not_nil!).total_milliseconds} wait_ms=#{(wait_done.not_nil! - wait_t0.not_nil!).total_milliseconds} read_ms=#{(read_done.not_nil! - read_t0.not_nil!).total_milliseconds} post_norm_ms=#{(post_norm_done - post_norm_t0.not_nil!).total_milliseconds} total_ms=#{(post_norm_done - timing_t0.not_nil!).total_milliseconds}"
       end
       result
     end
@@ -3626,6 +3682,10 @@ module ML::GGUF
 
     def ffn_resident_timing_enabled? : Bool
       ENV["DIFFUSION_GEMMA_FFN_RESIDENT_TIMING"]? == "1"
+    end
+
+    def moe_grouped_resident_timing_enabled? : Bool
+      ENV["DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_TIMING"]? == "1"
     end
 
     def ffn_resident_graph_cache_enabled? : Bool
