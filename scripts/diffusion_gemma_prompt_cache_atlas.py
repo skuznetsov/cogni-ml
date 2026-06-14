@@ -55,6 +55,13 @@ ROUTE_FLAGS = [
     "fused_norm_rope",
 ]
 
+GROUPED_ROUTE_SHAPE_COUNTERS = [
+    "materialize_moe_grouped_active_experts",
+    "materialize_moe_grouped_route_slots",
+    "materialize_moe_grouped_max_expert_batch",
+    "materialize_moe_grouped_over_threshold_experts",
+]
+
 
 def median(values: Iterable[float]) -> float:
     clean = [value for value in values if not math.isnan(value)]
@@ -135,6 +142,13 @@ def route_status(samples: list[dict[str, str]], flag: str, arm: str) -> str:
     values = {row.get(flag, "") for row in samples if row.get("arm") == arm}
     clean = sorted(value for value in values if value)
     return ",".join(clean) if clean else "NA"
+
+
+def available_shape_counters(samples: list[dict[str, str]]) -> list[str]:
+    return [
+        counter for counter in GROUPED_ROUTE_SHAPE_COUNTERS
+        if any(row.get(counter, "") for row in samples)
+    ]
 
 
 def sequence_position_medians(samples: list[dict[str, str]], metric: str) -> dict[int, float]:
@@ -249,6 +263,8 @@ def main() -> int:
         for metric in PROMPT_CACHE_METRICS
         if not math.isnan(summaries[metric]["base_median"])
     }
+    shape_counters = available_shape_counters(samples)
+    shape_summaries = {counter: metric_summary(samples, counter) for counter in shape_counters}
     dominant_metric = max(phase_rows, key=lambda metric: visible_median(phase_rows[metric])) if phase_rows else "none"
     dominant_base = visible_median(phase_rows[dominant_metric]) if dominant_metric != "none" else 0.0
     tied = sum(1 for row in phase_rows.values() if dominant_base > 0.0 and visible_median(row) >= dominant_base * 0.80)
@@ -267,6 +283,7 @@ def main() -> int:
         )
         if row["delta"] < 0.0 and total_base > 0.0 and visible_median(row) >= total_base * 0.05
     ]
+    route_shape_pressure = 1 if shape_summaries.get("materialize_moe_grouped_over_threshold_experts", {}).get("variant_median", 0.0) > 0.0 else 0
 
     if args.tsv:
         print_tsv(summaries, total_base)
@@ -275,7 +292,7 @@ def main() -> int:
     print("DiffusionGemma prompt-cache atlas")
     print(
         "  Phi=(dominant_wait_bucket=%s, tied_dominant_routes=%d, conflict_or_sync_count=%d, remaining_work_ms=%s)"
-        % (dominant_metric, tied, len(route_changes) + noisy_count + len(regressions), fmt(total_base))
+        % (dominant_metric, tied, len(route_changes) + noisy_count + len(regressions) + route_shape_pressure, fmt(total_base))
     )
     print(
         "  total_ms base=%s variant=%s speedup=%s delta_ms=%s range_over_delta=%s"
@@ -296,6 +313,10 @@ def main() -> int:
         moe_base = summaries["materialize_moe_ffn_ms"]["base_median"]
         pct_moe = row["base_median"] * 100.0 / moe_base if moe_base > 0 else float("nan")
         print("  grouped_moe_subphase=%s base=%s ms pct_of_moe=%s%%" % (metric, fmt(row["base_median"]), fmt(pct_moe)))
+    if shape_summaries:
+        threshold = shape_summaries.get("materialize_moe_grouped_over_threshold_experts")
+        if threshold and threshold["variant_median"] > 0.0:
+            print("  grouped_route_pressure=over_threshold_experts variant_median=%s" % fmt(threshold["variant_median"]))
 
     positions = sequence_position_medians(samples, "total_ms")
     if positions:
@@ -330,6 +351,28 @@ def main() -> int:
     print("\nRoute flags")
     for flag in ROUTE_FLAGS:
         print(f"  {flag}: base={route_status(samples, flag, 'base')} variant={route_status(samples, flag, 'variant')}")
+
+    if shape_summaries:
+        print("\nGrouped route shape")
+        for counter, row in shape_summaries.items():
+            print(
+                "  %-50s base=%10s variant=%10s delta=%10s rod=%s"
+                % (
+                    counter,
+                    fmt(row["base_median"]),
+                    fmt(row["variant_median"]),
+                    fmt(row["delta"]),
+                    fmt(row["range_over_delta"]),
+                )
+            )
+        if shape_summaries.get("materialize_moe_grouped_over_threshold_experts", {}).get("variant_median", 0.0) > 0.0:
+            print("  warning=expert_batches_cross_gemv_threshold")
+        shape_drift = [
+            counter for counter, row in shape_summaries.items()
+            if row["delta"] != 0.0 and not math.isnan(row["delta"])
+        ]
+        if shape_drift:
+            print("  warning=route_shape_differs_between_arms:" + ",".join(shape_drift))
 
     print("\nLTP/WBA candidate windows")
     for row in candidate_text(dominant_metric, route_changes, noisy_count, regressions):

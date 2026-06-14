@@ -326,13 +326,21 @@ module ML::GGUF
       getter activation_ms : Float64
       getter down_ms : Float64
       getter scatter_combine_norm_ms : Float64
+      getter active_experts : Int32
+      getter route_slots : Int32
+      getter max_expert_batch : Int32
+      getter over_threshold_experts : Int32
 
       def initialize(@rows,
                      @prep_ms,
                      @gate_up_ms,
                      @activation_ms,
                      @down_ms,
-                     @scatter_combine_norm_ms)
+                     @scatter_combine_norm_ms,
+                     @active_experts = 0,
+                     @route_slots = 0,
+                     @max_expert_batch = 0,
+                     @over_threshold_experts = 0)
       end
     end
 
@@ -348,6 +356,10 @@ module ML::GGUF
       getter moe_grouped_activation_ms : Float64
       getter moe_grouped_down_ms : Float64
       getter moe_grouped_scatter_combine_norm_ms : Float64
+      getter moe_grouped_active_experts : Int32
+      getter moe_grouped_route_slots : Int32
+      getter moe_grouped_max_expert_batch : Int32
+      getter moe_grouped_over_threshold_experts : Int32
 
       def initialize(@rows,
                      @context_ms,
@@ -359,7 +371,11 @@ module ML::GGUF
                      @moe_grouped_gate_up_ms = 0.0,
                      @moe_grouped_activation_ms = 0.0,
                      @moe_grouped_down_ms = 0.0,
-                     @moe_grouped_scatter_combine_norm_ms = 0.0)
+                     @moe_grouped_scatter_combine_norm_ms = 0.0,
+                     @moe_grouped_active_experts = 0,
+                     @moe_grouped_route_slots = 0,
+                     @moe_grouped_max_expert_batch = 0,
+                     @moe_grouped_over_threshold_experts = 0)
       end
     end
 
@@ -586,6 +602,10 @@ module ML::GGUF
       getter materialize_moe_grouped_activation_ms_by_layer : Array(Float64)
       getter materialize_moe_grouped_down_ms_by_layer : Array(Float64)
       getter materialize_moe_grouped_scatter_combine_norm_ms_by_layer : Array(Float64)
+      getter materialize_moe_grouped_active_experts_by_layer : Array(Int32)
+      getter materialize_moe_grouped_route_slots_by_layer : Array(Int32)
+      getter materialize_moe_grouped_max_expert_batch_by_layer : Array(Int32)
+      getter materialize_moe_grouped_over_threshold_experts_by_layer : Array(Int32)
       getter metal_cache_by_layer : Array(PromptLayerMetalCache?)
 
       def initialize(@final_rows,
@@ -615,6 +635,10 @@ module ML::GGUF
                      @materialize_moe_grouped_activation_ms_by_layer = [] of Float64,
                      @materialize_moe_grouped_down_ms_by_layer = [] of Float64,
                      @materialize_moe_grouped_scatter_combine_norm_ms_by_layer = [] of Float64,
+                     @materialize_moe_grouped_active_experts_by_layer = [] of Int32,
+                     @materialize_moe_grouped_route_slots_by_layer = [] of Int32,
+                     @materialize_moe_grouped_max_expert_batch_by_layer = [] of Int32,
+                     @materialize_moe_grouped_over_threshold_experts_by_layer = [] of Int32,
                      @metal_cache_by_layer = [] of PromptLayerMetalCache?)
       end
 
@@ -2416,6 +2440,9 @@ module ML::GGUF
       assignments_by_expert.each do |expert, assignments|
         batch_by_expert[expert] = assignments.size
       end
+      active_experts = assignments_by_expert.size
+      max_expert_batch = batch_by_expert.values.max? || 0
+      over_threshold_experts = batch_by_expert.values.count { |batch| batch > Qwen35Metal::GEMM_BATCH_THRESHOLD }
 
       use_gpu_reduce = use_gpu_gather && moe_grouped_gpu_reduce_enabled?(row_count)
       expert_outputs_by_route_slot = use_gpu_reduce ? nil : Array(Float32).new(route_slot_count * hp.n_embd, 0.0_f32)
@@ -2444,7 +2471,8 @@ module ML::GGUF
           )
           if resident_reduced_rows
             gate_up_ms += (Time.instant - gate_up_t0).total_milliseconds
-            return GroupedMoeRowsTiming.new(resident_reduced_rows, prep_ms, gate_up_ms, activation_ms, down_ms, scatter_combine_norm_ms)
+            return GroupedMoeRowsTiming.new(resident_reduced_rows, prep_ms, gate_up_ms, activation_ms, down_ms, scatter_combine_norm_ms,
+              active_experts, route_slot_count, max_expert_batch, over_threshold_experts)
           end
         end
 
@@ -2569,7 +2597,8 @@ module ML::GGUF
                 fast_rms_norm_slice!(reduced_rows, row * hp.n_embd, hp.n_embd, lw.post_ffw_norm_2, hp.rms_eps)
               end
               scatter_combine_norm_ms += (Time.instant - norm_t0).total_milliseconds
-              return GroupedMoeRowsTiming.new(reduced_rows, prep_ms, gate_up_ms, activation_ms, down_ms, scatter_combine_norm_ms)
+              return GroupedMoeRowsTiming.new(reduced_rows, prep_ms, gate_up_ms, activation_ms, down_ms, scatter_combine_norm_ms,
+                active_experts, route_slot_count, max_expert_batch, over_threshold_experts)
             end
           end
 
@@ -2639,7 +2668,8 @@ module ML::GGUF
         end
       end
       scatter_combine_norm_ms += (Time.instant - combine_t0).total_milliseconds
-      GroupedMoeRowsTiming.new(result, prep_ms, gate_up_ms, activation_ms, down_ms, scatter_combine_norm_ms)
+      GroupedMoeRowsTiming.new(result, prep_ms, gate_up_ms, activation_ms, down_ms, scatter_combine_norm_ms,
+        active_experts, route_slot_count, max_expert_batch, over_threshold_experts)
     end
 
     def ffn_residual(weights : DiffusionGemmaWeights,
@@ -2775,6 +2805,10 @@ module ML::GGUF
       moe_grouped_activation_ms = 0.0
       moe_grouped_down_ms = 0.0
       moe_grouped_scatter_combine_norm_ms = 0.0
+      moe_grouped_active_experts = 0
+      moe_grouped_route_slots = 0
+      moe_grouped_max_expert_batch = 0
+      moe_grouped_over_threshold_experts = 0
       moe_t0 = Time.instant
       moe_rows = if prompt_materialize_grouped_moe_enabled?
                    grouped = moe_ffn_grouped_expert_rows_timed(weights, il, attn_out_rows, mask.prompt_len, routes_by_prompt_row, force_gemv: force_gemv)
@@ -2783,6 +2817,10 @@ module ML::GGUF
                    moe_grouped_activation_ms = grouped.activation_ms
                    moe_grouped_down_ms = grouped.down_ms
                    moe_grouped_scatter_combine_norm_ms = grouped.scatter_combine_norm_ms
+                   moe_grouped_active_experts = grouped.active_experts
+                   moe_grouped_route_slots = grouped.route_slots
+                   moe_grouped_max_expert_batch = grouped.max_expert_batch
+                   moe_grouped_over_threshold_experts = grouped.over_threshold_experts
                    grouped.rows
                  else
                    moe_ffn_rows(weights, il, attn_out_rows, mask.prompt_len, routes_by_prompt_row)
@@ -2793,7 +2831,9 @@ module ML::GGUF
       combine_ms = (Time.instant - combine_t0).total_milliseconds
       PromptMaterializeTiming.new(rows, context_ms, attention_out_ms, shared_ms, moe_ms, combine_ms,
         moe_grouped_prep_ms, moe_grouped_gate_up_ms, moe_grouped_activation_ms,
-        moe_grouped_down_ms, moe_grouped_scatter_combine_norm_ms)
+        moe_grouped_down_ms, moe_grouped_scatter_combine_norm_ms,
+        moe_grouped_active_experts, moe_grouped_route_slots, moe_grouped_max_expert_batch,
+        moe_grouped_over_threshold_experts)
     end
 
     def build_prompt_layer_cache(weights : DiffusionGemmaWeights,
@@ -2837,6 +2877,10 @@ module ML::GGUF
       materialize_moe_grouped_activation_ms_by_layer = [] of Float64
       materialize_moe_grouped_down_ms_by_layer = [] of Float64
       materialize_moe_grouped_scatter_combine_norm_ms_by_layer = [] of Float64
+      materialize_moe_grouped_active_experts_by_layer = [] of Int32
+      materialize_moe_grouped_route_slots_by_layer = [] of Int32
+      materialize_moe_grouped_max_expert_batch_by_layer = [] of Int32
+      materialize_moe_grouped_over_threshold_experts_by_layer = [] of Int32
       metal_cache_by_layer = [] of PromptLayerMetalCache?
       max_layers.times do |il|
         projection_t0 = Time.instant
@@ -2881,6 +2925,10 @@ module ML::GGUF
         materialize_moe_grouped_activation_ms_by_layer << timed_materialize.moe_grouped_activation_ms
         materialize_moe_grouped_down_ms_by_layer << timed_materialize.moe_grouped_down_ms
         materialize_moe_grouped_scatter_combine_norm_ms_by_layer << timed_materialize.moe_grouped_scatter_combine_norm_ms
+        materialize_moe_grouped_active_experts_by_layer << timed_materialize.moe_grouped_active_experts
+        materialize_moe_grouped_route_slots_by_layer << timed_materialize.moe_grouped_route_slots
+        materialize_moe_grouped_max_expert_batch_by_layer << timed_materialize.moe_grouped_max_expert_batch
+        materialize_moe_grouped_over_threshold_experts_by_layer << timed_materialize.moe_grouped_over_threshold_experts
       end
 
       PromptLayerCache.new(
@@ -2911,6 +2959,10 @@ module ML::GGUF
         materialize_moe_grouped_activation_ms_by_layer,
         materialize_moe_grouped_down_ms_by_layer,
         materialize_moe_grouped_scatter_combine_norm_ms_by_layer,
+        materialize_moe_grouped_active_experts_by_layer,
+        materialize_moe_grouped_route_slots_by_layer,
+        materialize_moe_grouped_max_expert_batch_by_layer,
+        materialize_moe_grouped_over_threshold_experts_by_layer,
         metal_cache_by_layer,
       )
     end

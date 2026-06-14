@@ -55,6 +55,10 @@ struct PromptCacheSample
   getter materialize_moe_grouped_activation_ms : Float64
   getter materialize_moe_grouped_down_ms : Float64
   getter materialize_moe_grouped_scatter_combine_norm_ms : Float64
+  getter materialize_moe_grouped_active_experts : Int32
+  getter materialize_moe_grouped_route_slots : Int32
+  getter materialize_moe_grouped_max_expert_batch : Int32
+  getter materialize_moe_grouped_over_threshold_experts : Int32
   getter checksum : Float64
   getter prompt_cache_policy : Bool
   getter materialize_batch_rows : Bool
@@ -77,6 +81,10 @@ struct PromptCacheSample
                  @materialize_moe_grouped_activation_ms,
                  @materialize_moe_grouped_down_ms,
                  @materialize_moe_grouped_scatter_combine_norm_ms,
+                 @materialize_moe_grouped_active_experts,
+                 @materialize_moe_grouped_route_slots,
+                 @materialize_moe_grouped_max_expert_batch,
+                 @materialize_moe_grouped_over_threshold_experts,
                  @checksum,
                  @prompt_cache_policy, @materialize_batch_rows,
                  @materialize_grouped_moe, @projection_backend,
@@ -159,6 +167,10 @@ TSV_HEADER = [
   "materialize_moe_grouped_activation_ms",
   "materialize_moe_grouped_down_ms",
   "materialize_moe_grouped_scatter_combine_norm_ms",
+  "materialize_moe_grouped_active_experts",
+  "materialize_moe_grouped_route_slots",
+  "materialize_moe_grouped_max_expert_batch",
+  "materialize_moe_grouped_over_threshold_experts",
   "checksum",
 ]
 
@@ -333,6 +345,10 @@ def run_arm(weights : ML::GGUF::DiffusionGemmaWeights,
     materialize_moe_grouped_activation_ms: cache.materialize_moe_grouped_activation_ms_by_layer.sum,
     materialize_moe_grouped_down_ms: cache.materialize_moe_grouped_down_ms_by_layer.sum,
     materialize_moe_grouped_scatter_combine_norm_ms: cache.materialize_moe_grouped_scatter_combine_norm_ms_by_layer.sum,
+    materialize_moe_grouped_active_experts: cache.materialize_moe_grouped_active_experts_by_layer.sum,
+    materialize_moe_grouped_route_slots: cache.materialize_moe_grouped_route_slots_by_layer.sum,
+    materialize_moe_grouped_max_expert_batch: cache.materialize_moe_grouped_max_expert_batch_by_layer.max? || 0,
+    materialize_moe_grouped_over_threshold_experts: cache.materialize_moe_grouped_over_threshold_experts_by_layer.sum,
     checksum: checksum_rows(cache.final_rows),
     prompt_cache_policy: ML::GGUF::DiffusionGemmaCPU.prompt_cache_policy_requested?,
     materialize_batch_rows: ML::GGUF::DiffusionGemmaCPU.prompt_materialize_batch_rows_enabled?(prompt_len),
@@ -390,6 +406,10 @@ def print_sample(sample : PromptCacheSample,
     format_f64(sample.materialize_moe_grouped_activation_ms),
     format_f64(sample.materialize_moe_grouped_down_ms),
     format_f64(sample.materialize_moe_grouped_scatter_combine_norm_ms),
+    sample.materialize_moe_grouped_active_experts.to_s,
+    sample.materialize_moe_grouped_route_slots.to_s,
+    sample.materialize_moe_grouped_max_expert_batch.to_s,
+    sample.materialize_moe_grouped_over_threshold_experts.to_s,
     format_f64(sample.checksum),
   ].join('\t')
 end
