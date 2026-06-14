@@ -195,3 +195,19 @@ Safe quiet-window polling without model work:
 ```sh
 scripts/diffusion_gemma_quiet_gate_check.sh
 ```
+
+## Artifact Suite pp/tg Summary
+
+`scripts/diffusion_gemma_pp_tg_summary.py` also accepts artifact-suite gate or
+promotion stdout files. For mixed fast/exact fallback gates it reports the
+unsafe all-fast throughput and the certified mixed throughput separately:
+
+```sh
+scripts/diffusion_gemma_pp_tg_summary.py /tmp/diffusiongemma_full30_prompt_ffn_mixed_promotion_offline_20260614042452.stdout
+```
+
+The suite fields are still probe rates, not ordinary autoregressive pp/tg.
+Use `mixed_pp_like_tok_s`, `mixed_layers_s`, and
+`mixed_prompt_layer_rows_s` for the certified fast/exact route; use the unsafe
+columns only as a diagnostic for how much the rejected fast windows would have
+saved without the certificate boundary.
