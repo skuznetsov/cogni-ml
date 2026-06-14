@@ -1176,6 +1176,50 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
   end
 
+  it "gates prompt causal context Metal rows behind explicit env policy" do
+    old_context = ENV["DIFFUSION_GEMMA_CONTEXT_METAL"]?
+    old_context_off = ENV["DIFFUSION_GEMMA_CONTEXT_METAL_OFF"]?
+    old_prompt_context = ENV["DIFFUSION_GEMMA_PROMPT_CONTEXT_METAL_ROWS"]?
+    old_prompt_context_off = ENV["DIFFUSION_GEMMA_PROMPT_CONTEXT_METAL_ROWS_OFF"]?
+    begin
+      ENV.delete("DIFFUSION_GEMMA_CONTEXT_METAL")
+      ENV.delete("DIFFUSION_GEMMA_CONTEXT_METAL_OFF")
+      ENV.delete("DIFFUSION_GEMMA_PROMPT_CONTEXT_METAL_ROWS")
+      ENV.delete("DIFFUSION_GEMMA_PROMPT_CONTEXT_METAL_ROWS_OFF")
+      ML::GGUF::DiffusionGemmaCPU.prompt_context_metal_rows_enabled?.should be_false
+
+      ENV["DIFFUSION_GEMMA_PROMPT_CONTEXT_METAL_ROWS"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.prompt_context_metal_rows_enabled?.should be_false
+
+      ENV["DIFFUSION_GEMMA_CONTEXT_METAL"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.prompt_context_metal_rows_enabled?.should eq(ML::GGUF::Gemma4Metal.available?)
+
+      ENV["DIFFUSION_GEMMA_PROMPT_CONTEXT_METAL_ROWS_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.prompt_context_metal_rows_enabled?.should be_false
+    ensure
+      if old_context
+        ENV["DIFFUSION_GEMMA_CONTEXT_METAL"] = old_context
+      else
+        ENV.delete("DIFFUSION_GEMMA_CONTEXT_METAL")
+      end
+      if old_context_off
+        ENV["DIFFUSION_GEMMA_CONTEXT_METAL_OFF"] = old_context_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_CONTEXT_METAL_OFF")
+      end
+      if old_prompt_context
+        ENV["DIFFUSION_GEMMA_PROMPT_CONTEXT_METAL_ROWS"] = old_prompt_context
+      else
+        ENV.delete("DIFFUSION_GEMMA_PROMPT_CONTEXT_METAL_ROWS")
+      end
+      if old_prompt_context_off
+        ENV["DIFFUSION_GEMMA_PROMPT_CONTEXT_METAL_ROWS_OFF"] = old_prompt_context_off
+      else
+        ENV.delete("DIFFUSION_GEMMA_PROMPT_CONTEXT_METAL_ROWS_OFF")
+      end
+    end
+  end
+
   it "computes the shared dense FFN branch and residual combiner boundary" do
     pending!("DiffusionGemma 26B GGUF not found") unless File.exists?(DIFFUSION_GEMMA_26B_Q4KM)
 

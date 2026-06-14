@@ -63,6 +63,7 @@ struct PromptCacheSample
   getter prompt_cache_policy : Bool
   getter materialize_batch_rows : Bool
   getter materialize_grouped_moe : Bool
+  getter prompt_context_metal_rows : Bool
   getter projection_backend : String
   getter fused_norm_rope : Bool
 
@@ -87,7 +88,8 @@ struct PromptCacheSample
                  @materialize_moe_grouped_over_threshold_experts,
                  @checksum,
                  @prompt_cache_policy, @materialize_batch_rows,
-                 @materialize_grouped_moe, @projection_backend,
+                 @materialize_grouped_moe, @prompt_context_metal_rows,
+                 @projection_backend,
                  @fused_norm_rope)
   end
 
@@ -139,6 +141,7 @@ TSV_HEADER = [
   "prompt_cache_policy",
   "materialize_batch_rows",
   "materialize_grouped_moe",
+  "prompt_context_metal_rows",
   "projection_backend",
   "fused_norm_rope",
   "total_ms",
@@ -353,6 +356,7 @@ def run_arm(weights : ML::GGUF::DiffusionGemmaWeights,
     prompt_cache_policy: ML::GGUF::DiffusionGemmaCPU.prompt_cache_policy_requested?,
     materialize_batch_rows: ML::GGUF::DiffusionGemmaCPU.prompt_materialize_batch_rows_enabled?(prompt_len),
     materialize_grouped_moe: ML::GGUF::DiffusionGemmaCPU.prompt_materialize_grouped_moe_enabled?,
+    prompt_context_metal_rows: cache.materialize_context_metal_rows_by_layer.any?,
     projection_backend: projection_backend(prompt_len),
     fused_norm_rope: ML::GGUF::DiffusionGemmaCPU.prompt_projection_fused_norm_rope_enabled?,
   )
@@ -416,6 +420,7 @@ def print_sample(sample : PromptCacheSample,
     sample.prompt_cache_policy.to_s,
     sample.materialize_batch_rows.to_s,
     sample.materialize_grouped_moe.to_s,
+    sample.prompt_context_metal_rows.to_s,
     sample.projection_backend,
     sample.fused_norm_rope.to_s,
     format_f64(sample.total_ms),

@@ -26,6 +26,7 @@ module ML::GGUF
       getter canvas_len : Int32
       getter q_dim : Int32
       getter kv_dim : Int32
+      getter row_capacity : Int32
 
       def initialize(prompt_projections : Array(AttentionProjection),
                      @prompt_len : Int32,
@@ -43,8 +44,9 @@ module ML::GGUF
         end
         @k_cache_buf = ML::MetalBuffer.from_array(k_cache)
         @v_cache_buf = ML::MetalBuffer.from_array(v_cache)
-        @q_buf = ML::MetalBuffer.new(@canvas_len.to_i64 * @q_dim * sizeof(Float32))
-        @out_buf = ML::MetalBuffer.new(@canvas_len.to_i64 * @q_dim * sizeof(Float32))
+        @row_capacity = {@prompt_len, @canvas_len}.max
+        @q_buf = ML::MetalBuffer.new(@row_capacity.to_i64 * @q_dim * sizeof(Float32))
+        @out_buf = ML::MetalBuffer.new(@row_capacity.to_i64 * @q_dim * sizeof(Float32))
       end
 
       def write_canvas!(canvas_projections : Array(AttentionProjection)) : Nil
@@ -65,11 +67,12 @@ module ML::GGUF
 
       def write_queries!(queries : Array(AttentionProjection)) : Nil
         raise ArgumentError.new("query count mismatch") unless queries.size == @canvas_len
-        q_ptr = @q_buf.contents.as(Pointer(Float32))
-        queries.each_with_index do |query, pos|
-          raise ArgumentError.new("query q size mismatch") unless query.q.size == @q_dim
-          (q_ptr + pos * @q_dim).copy_from(query.q.to_unsafe, @q_dim)
-        end
+        write_query_rows!(queries)
+      end
+
+      def write_prompt_queries!(queries : Array(AttentionProjection)) : Nil
+        raise ArgumentError.new("prompt query count mismatch") unless queries.size == @prompt_len
+        write_query_rows!(queries)
       end
 
       private def copy_projection_kv_to_rows!(proj : AttentionProjection,
@@ -86,6 +89,15 @@ module ML::GGUF
           k_dst[d] = k_src[d]
           v_dst[d] = v_src[d]
           d += 1
+        end
+      end
+
+      private def write_query_rows!(queries : Array(AttentionProjection)) : Nil
+        raise ArgumentError.new("query row capacity exceeded") if queries.size > @row_capacity
+        q_ptr = @q_buf.contents.as(Pointer(Float32))
+        queries.each_with_index do |query, pos|
+          raise ArgumentError.new("query q size mismatch") unless query.q.size == @q_dim
+          (q_ptr + pos * @q_dim).copy_from(query.q.to_unsafe, @q_dim)
         end
       end
     end
@@ -377,6 +389,7 @@ module ML::GGUF
     struct PromptMaterializeTiming
       getter rows : Array(Float32)
       getter context_ms : Float64
+      getter context_metal_rows : Bool
       getter attention_out_ms : Float64
       getter shared_ffn_ms : Float64
       getter moe_ffn_ms : Float64
@@ -394,6 +407,7 @@ module ML::GGUF
 
       def initialize(@rows,
                      @context_ms,
+                     @context_metal_rows,
                      @attention_out_ms,
                      @shared_ffn_ms,
                      @moe_ffn_ms,
@@ -627,6 +641,7 @@ module ML::GGUF
       getter projection_rope_k_apply_ms_by_layer : Array(Float64)
       getter materialize_ms_by_layer : Array(Float64)
       getter materialize_context_ms_by_layer : Array(Float64)
+      getter materialize_context_metal_rows_by_layer : Array(Bool)
       getter materialize_attention_out_ms_by_layer : Array(Float64)
       getter materialize_shared_ffn_ms_by_layer : Array(Float64)
       getter materialize_moe_ffn_ms_by_layer : Array(Float64)
@@ -661,6 +676,7 @@ module ML::GGUF
                      @projection_rope_k_apply_ms_by_layer = [] of Float64,
                      @materialize_ms_by_layer = [] of Float64,
                      @materialize_context_ms_by_layer = [] of Float64,
+                     @materialize_context_metal_rows_by_layer = [] of Bool,
                      @materialize_attention_out_ms_by_layer = [] of Float64,
                      @materialize_shared_ffn_ms_by_layer = [] of Float64,
                      @materialize_moe_ffn_ms_by_layer = [] of Float64,
@@ -2916,7 +2932,8 @@ module ML::GGUF
                                                          prompt_rows : Array(Float32),
                                                          prompt_projections : Array(AttentionProjection),
                                                          mask : DiffusionGemmaAttentionMask,
-                                                         routes_by_prompt_row : Array(Array(ExpertRoute))? = nil) : PromptMaterializeTiming
+                                                         routes_by_prompt_row : Array(Array(ExpertRoute))? = nil,
+                                                         prompt_metal_cache : PromptLayerMetalCache? = nil) : PromptMaterializeTiming
       hp = weights.hparams
       prompt_size = mask.prompt_len * hp.n_embd
       raise ArgumentError.new("prompt rows size mismatch: #{prompt_rows.size} != #{prompt_size}") unless prompt_rows.size == prompt_size
@@ -2933,6 +2950,7 @@ module ML::GGUF
           prompt_projections,
           mask,
           routes_by_prompt_row,
+          prompt_metal_cache,
         )
       end
 
@@ -2948,7 +2966,7 @@ module ML::GGUF
                     end
         copy_row!(result, pos, hp.n_embd, layer_row)
       end
-      PromptMaterializeTiming.new(result, (Time.instant - t0).total_milliseconds, 0.0, 0.0, 0.0, 0.0)
+      PromptMaterializeTiming.new(result, (Time.instant - t0).total_milliseconds, false, 0.0, 0.0, 0.0, 0.0)
     end
 
     def layer_forward_prompt_rows_with_projections_batched(weights : DiffusionGemmaWeights,
@@ -2965,7 +2983,8 @@ module ML::GGUF
                                                                  prompt_rows : Array(Float32),
                                                                  prompt_projections : Array(AttentionProjection),
                                                                  mask : DiffusionGemmaAttentionMask,
-                                                                 routes_by_prompt_row : Array(Array(ExpertRoute))? = nil) : PromptMaterializeTiming
+                                                                 routes_by_prompt_row : Array(Array(ExpertRoute))? = nil,
+                                                                 prompt_metal_cache : PromptLayerMetalCache? = nil) : PromptMaterializeTiming
       hp = weights.hparams
       prompt_size = mask.prompt_len * hp.n_embd
       q_context_dim = hp.n_head * hp.head_dim_for_layer(il)
@@ -2976,16 +2995,33 @@ module ML::GGUF
       end
 
       context_t0 = Time.instant
-      context_rows = Array(Float32).new(mask.prompt_len * q_context_dim, 0.0_f32)
-      mask.prompt_len.times do |pos|
-        context = attention_context_prompt(prompt_projections, hp, il, query_pos: pos, sliding_window: mask.sliding_window)
-        copy_row!(context_rows, pos, q_context_dim, context)
+      context_metal_rows = false
+      context_rows = nil.as(Array(Float32)?)
+      if prompt_context_metal_rows_enabled? && prompt_metal_cache
+        if metal_rows = attention_context_prompt_batch_metal_resident(
+             prompt_projections,
+             prompt_metal_cache.not_nil!,
+             hp,
+             il,
+             mask.sliding_window,
+           )
+          context_rows = metal_rows
+          context_metal_rows = true
+        end
+      end
+      unless context_rows
+        cpu_context_rows = Array(Float32).new(mask.prompt_len * q_context_dim, 0.0_f32)
+        mask.prompt_len.times do |pos|
+          context = attention_context_prompt(prompt_projections, hp, il, query_pos: pos, sliding_window: mask.sliding_window)
+          copy_row!(cpu_context_rows, pos, q_context_dim, context)
+        end
+        context_rows = cpu_context_rows
       end
       context_ms = (Time.instant - context_t0).total_milliseconds
 
       force_gemv = prompt_materialize_exact_gemv_enabled?
       attention_out_t0 = Time.instant
-      attn_out_rows = attention_residual_from_context_rows(weights, il, prompt_rows, context_rows, mask.prompt_len, force_gemv: force_gemv)
+      attn_out_rows = attention_residual_from_context_rows(weights, il, prompt_rows, context_rows.not_nil!, mask.prompt_len, force_gemv: force_gemv)
       attention_out_ms = (Time.instant - attention_out_t0).total_milliseconds
       shared_t0 = Time.instant
       shared_rows = shared_dense_ffn_rows(weights, il, attn_out_rows, mask.prompt_len, force_gemv: force_gemv)
@@ -3021,7 +3057,7 @@ module ML::GGUF
       combine_t0 = Time.instant
       rows = ffn_residual_from_parts_rows(weights, il, attn_out_rows, shared_rows, moe_rows, mask.prompt_len, canvas: false)
       combine_ms = (Time.instant - combine_t0).total_milliseconds
-      PromptMaterializeTiming.new(rows, context_ms, attention_out_ms, shared_ms, moe_ms, combine_ms,
+      PromptMaterializeTiming.new(rows, context_ms, context_metal_rows, attention_out_ms, shared_ms, moe_ms, combine_ms,
         moe_grouped_prep_ms, moe_grouped_gate_up_ms, moe_grouped_activation_ms,
         moe_grouped_down_ms, moe_grouped_scatter_combine_norm_ms,
         moe_grouped_active_experts, moe_grouped_route_slots, moe_grouped_max_expert_batch,
@@ -3060,6 +3096,7 @@ module ML::GGUF
       projection_rope_k_apply_ms_by_layer = [] of Float64
       materialize_ms_by_layer = [] of Float64
       materialize_context_ms_by_layer = [] of Float64
+      materialize_context_metal_rows_by_layer = [] of Bool
       materialize_attention_out_ms_by_layer = [] of Float64
       materialize_shared_ffn_ms_by_layer = [] of Float64
       materialize_moe_ffn_ms_by_layer = [] of Float64
@@ -3094,21 +3131,23 @@ module ML::GGUF
         projection_rope_q_apply_ms_by_layer << timed_projections.rope_q_apply_ms
         projection_rope_k_apply_ms_by_layer << timed_projections.rope_k_apply_ms
         projections_by_layer << projections
-        if context_metal_enabled? && Gemma4Metal.available?
-          q_dim = hp.n_head * hp.head_dim_for_layer(il)
-          kv_dim = hp.n_head_kv(il) * hp.head_dim_for_layer(il)
-          metal_cache_by_layer << PromptLayerMetalCache.new(projections, mask.prompt_len, mask.canvas_len, q_dim, kv_dim)
-        else
-          metal_cache_by_layer << nil
-        end
+        prompt_metal_cache = if context_metal_enabled? && Gemma4Metal.available?
+                               q_dim = hp.n_head * hp.head_dim_for_layer(il)
+                               kv_dim = hp.n_head_kv(il) * hp.head_dim_for_layer(il)
+                               PromptLayerMetalCache.new(projections, mask.prompt_len, mask.canvas_len, q_dim, kv_dim)
+                             else
+                               nil
+                             end
+        metal_cache_by_layer << prompt_metal_cache
         break if !materialize_final_rows && il == max_layers - 1
 
         routes = routes_by_layer_by_prompt_row ? routes_by_layer_by_prompt_row.not_nil![il] : nil
         materialize_t0 = Time.instant
-        timed_materialize = layer_forward_prompt_rows_with_projections_timed(weights, il, rows, projections, mask, routes)
+        timed_materialize = layer_forward_prompt_rows_with_projections_timed(weights, il, rows, projections, mask, routes, prompt_metal_cache)
         rows = timed_materialize.rows
         materialize_ms_by_layer << (Time.instant - materialize_t0).total_milliseconds
         materialize_context_ms_by_layer << timed_materialize.context_ms
+        materialize_context_metal_rows_by_layer << timed_materialize.context_metal_rows
         materialize_attention_out_ms_by_layer << timed_materialize.attention_out_ms
         materialize_shared_ffn_ms_by_layer << timed_materialize.shared_ffn_ms
         materialize_moe_ffn_ms_by_layer << timed_materialize.moe_ffn_ms
@@ -3144,6 +3183,7 @@ module ML::GGUF
         projection_rope_k_apply_ms_by_layer,
         materialize_ms_by_layer,
         materialize_context_ms_by_layer,
+        materialize_context_metal_rows_by_layer,
         materialize_attention_out_ms_by_layer,
         materialize_shared_ffn_ms_by_layer,
         materialize_moe_ffn_ms_by_layer,
@@ -3650,6 +3690,12 @@ module ML::GGUF
       return false if ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE_OFF"]? == "1"
       prompt_cache_policy_requested? ||
         ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE"]? == "1"
+    end
+
+    def prompt_context_metal_rows_enabled? : Bool
+      return false if ENV["DIFFUSION_GEMMA_PROMPT_CONTEXT_METAL_ROWS_OFF"]? == "1"
+      return false unless ENV["DIFFUSION_GEMMA_PROMPT_CONTEXT_METAL_ROWS"]? == "1"
+      context_metal_enabled? && Gemma4Metal.available?
     end
 
     def prompt_materialize_exact_gemv_enabled? : Bool
@@ -5243,6 +5289,29 @@ module ML::GGUF
       return cache.out_buf if Gemma4Metal.attention_context_rows_fixed_resident_buffers_no_read(
                                 cache.q_buf, cache.k_cache_buf, cache.v_cache_buf, cache.out_buf, high, queries.size, n_head, n_head_kv, head_dim, sliding_window)
       nil
+    end
+
+    private def attention_context_prompt_batch_metal_resident(queries : Array(AttentionProjection),
+                                                              cache : PromptLayerMetalCache,
+                                                              hp : DiffusionGemmaHparams,
+                                                              il : Int32,
+                                                              sliding_window : Int32) : Array(Float32)?
+      return nil unless Gemma4Metal.available?
+      return nil unless queries.size == cache.prompt_len
+      return nil unless cache.prompt_len > 0
+
+      head_dim = hp.head_dim_for_layer(il)
+      n_head = hp.n_head
+      n_head_kv = hp.n_head_kv(il)
+      q_dim = n_head * head_dim
+      kv_dim = n_head_kv * head_dim
+      return nil unless cache.q_dim == q_dim && cache.kv_dim == kv_dim
+      queries.each { |query| validate_projection_shape!(query, q_dim, kv_dim, il) }
+
+      effective_window = hp.sliding_window?(il) ? sliding_window : 0
+      cache.write_prompt_queries!(queries)
+      Gemma4Metal.attention_context_rows_resident_buffers(
+        cache.q_buf, cache.k_cache_buf, cache.v_cache_buf, cache.out_buf, 0, queries.size, n_head, n_head_kv, head_dim, effective_window)
     end
 
     private def attention_context_from_range_metal(query : AttentionProjection,

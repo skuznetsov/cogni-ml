@@ -51,6 +51,7 @@ ROUTE_FLAGS = [
     "materialize_final_rows",
     "materialize_batch_rows",
     "materialize_grouped_moe",
+    "prompt_context_metal_rows",
     "projection_backend",
     "fused_norm_rope",
 ]
