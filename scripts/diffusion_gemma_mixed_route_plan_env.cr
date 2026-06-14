@@ -64,19 +64,21 @@ when "env"
   puts "DIFFUSION_GEMMA_MIXED_EXACT_FALLBACK_ROUTE_ARTIFACT_MAP=#{shell_quote(fallback_artifact_map)}"
   puts "DIFFUSION_GEMMA_MIXED_SELECTED_ROUTE_ARTIFACT_MAP=#{shell_quote(selected_artifact_map)}"
 when "tsv"
-  puts "kind\tprompt_token\tcanvas_token\tselected_route\treason\tmixed_speedup\tbase_route_artifact\tvariant_route_artifact\tselected_route_artifact\tselected_route_artifact_arm\tchild_log"
+  puts "kind\tprompt_token\tcanvas_token\tselected_route\tvariant_env_role\treason\tmixed_speedup\tbase_route_artifact\tvariant_route_artifact\tselected_route_artifact\tselected_route_artifact_arm\tselected_route_artifact_env_role\tchild_log"
   plan.windows.each do |window|
     puts [
       "window",
       window.prompt_token,
       window.canvas_token,
       window.selected_route,
+      window.variant_env_role,
       window.reason,
       window.mixed_speedup,
       window.base_route_artifact,
       window.variant_route_artifact,
       window.selected_runtime_route_artifact || "",
       window.selected_runtime_route_artifact_arm,
+      window.selected_runtime_route_artifact_env_role,
       window.child_log,
     ].join('\t')
   end

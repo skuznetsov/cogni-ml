@@ -296,9 +296,17 @@ def parse_gate_metric(line, log):
 
 def parse_route_artifacts(log):
     child_dir = os.path.dirname(log)
-    paths = {"base": "", "variant": ""}
+    paths = {
+        "base": "",
+        "variant": "",
+        "selected_artifact": "",
+        "variant_env_role": "",
+        "selected_artifact_arm": "",
+        "selected_artifact_env_role": "",
+    }
     selected_artifact = ""
     selected_artifact_arm = ""
+    selected_artifact_env_role = ""
     for name in ("prompt_cache_abba.tsv", "output_cert.tsv"):
         path = os.path.join(child_dir, name)
         if not os.path.isfile(path):
@@ -326,16 +334,23 @@ def parse_route_artifacts(log):
                         selected_artifact = value
                 elif line.startswith("# route_artifact_variant_arm="):
                     selected_artifact_arm = line.split("=", 1)[1]
+                elif line.startswith("# route_artifact_variant_env_role="):
+                    selected_artifact_env_role = line.split("=", 1)[1]
                 elif line.startswith("# route_artifact_selected="):
                     value = line.split("=", 1)[1]
                     if value != "<none>" and not value.startswith("map:"):
                         selected_artifact = value
                 elif line.startswith("# route_artifact_selected_arm="):
                     selected_artifact_arm = line.split("=", 1)[1]
+                elif line.startswith("# route_artifact_selected_env_role="):
+                    selected_artifact_env_role = line.split("=", 1)[1]
+                elif line.startswith("# mixed_variant_env_role="):
+                    paths["variant_env_role"] = line.split("=", 1)[1]
     if selected_artifact:
         arm = selected_artifact_arm or "variant"
-        if arm in paths:
-            paths[arm] = selected_artifact
+        paths["selected_artifact"] = selected_artifact
+        paths["selected_artifact_arm"] = arm
+        paths["selected_artifact_env_role"] = selected_artifact_env_role
     return paths
 
 def choose_total_metric(text, log):
@@ -420,6 +435,10 @@ for log in logs:
         "log": log,
         "base_artifact": artifacts["base"],
         "variant_artifact": artifacts["variant"],
+        "selected_artifact": artifacts["selected_artifact"],
+        "variant_env_role": artifacts["variant_env_role"],
+        "selected_artifact_arm": artifacts["selected_artifact_arm"],
+        "selected_artifact_env_role": artifacts["selected_artifact_env_role"],
     })
     for line in text:
         if not line.startswith("gate_metric "):
@@ -466,6 +485,18 @@ def write_route_plan(decision, reason, aggregate_speedup, mixed_speedup, candida
         }, sort_keys=True) + "\n")
         for row in rows:
             selected_route = "variant_fast" if row["status"] == "candidate" else "base_exact"
+            variant_env_role = row["variant_env_role"] or ("variant" if selected_route == "variant_fast" else "base")
+            selected_artifact_arm = row["selected_artifact_arm"] or ("variant" if selected_route == "variant_fast" else "base")
+            selected_artifact_env_role = row["selected_artifact_env_role"] or variant_env_role
+            base_route_artifact = row["base_artifact"]
+            variant_route_artifact = row["variant_artifact"]
+            if row["selected_artifact"]:
+                if selected_route == "variant_fast":
+                    variant_route_artifact = row["selected_artifact"]
+                    base_route_artifact = ""
+                else:
+                    base_route_artifact = row["selected_artifact"]
+                    variant_route_artifact = ""
             handle.write(json.dumps({
                 "kind": "diffusion_gemma_mixed_route_plan_window_v1",
                 "index": maybe_int(row["index"]),
@@ -481,8 +512,11 @@ def write_route_plan(decision, reason, aggregate_speedup, mixed_speedup, candida
                 "observed_speedup": row["observed_speedup"],
                 "mixed_speedup": row["mixed_window_speedup"],
                 "child_log": row["log"],
-                "base_route_artifact": row["base_artifact"],
-                "variant_route_artifact": row["variant_artifact"],
+                "base_route_artifact": base_route_artifact,
+                "variant_route_artifact": variant_route_artifact,
+                "variant_env_role": variant_env_role,
+                "selected_route_artifact_arm": selected_artifact_arm,
+                "selected_route_artifact_env_role": selected_artifact_env_role,
             }, sort_keys=True) + "\n")
 
 for row in rows:

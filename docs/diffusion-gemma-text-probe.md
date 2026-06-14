@@ -450,6 +450,19 @@ threshold is still applied to the shared fallback window set rather than to the
 whole selected suite. `FALLBACK_SUMMARY=0` disables passive reports, but not
 the required guard when `FALLBACK_COMPARE_REQUIRE_FOREIGN=1`.
 
+Foreign fallback replay may execute the variant profile while loading a
+base/env-bound route artifact. Mixed route-plan window rows can represent that
+case with:
+
+- `selected_route=variant_fast`
+- `variant_env_role=variant`
+- `variant_route_artifact=PATH`
+- `selected_route_artifact_arm=base`
+- `selected_route_artifact_env_role=base`
+
+The probe dry-runs print the selected artifact arm/env role so this metadata is
+visible before model load.
+
 The compare helper can also be run offline:
 
 ```sh

@@ -461,15 +461,58 @@ describe ML::GGUF::DiffusionGemmaMixedRoutePlan do
     fast.selected_variant_route_artifact.should eq("/tmp/variant_p1_c0.tsv")
     fast.selected_runtime_route_artifact.should eq("/tmp/variant_p1_c0.tsv")
     fast.selected_runtime_route_artifact_arm.should eq("variant")
+    fast.selected_runtime_route_artifact_env_role.should eq("variant")
     fallback = plan.require_window(4096, 8192)
     fallback.base_exact?.should be_true
     fallback.variant_env_role.should eq("base")
     fallback.selected_variant_route_artifact.should be_nil
     fallback.selected_runtime_route_artifact.should eq("/tmp/base_p4096_c8192.tsv")
     fallback.selected_runtime_route_artifact_arm.should eq("base")
+    fallback.selected_runtime_route_artifact_env_role.should eq("base")
     expect_raises(ArgumentError, /does not contain window 2:3/) do
       plan.require_window(2, 3)
     end
+  ensure
+    File.delete(path) if path && File.exists?(path)
+  end
+
+  it "loads explicit foreign route-artifact metadata for mixed route plans" do
+    path = ""
+    path = write_diffusion_gemma_route_plan_jsonl([
+      {
+        "kind"              => "diffusion_gemma_mixed_route_plan_summary_v1",
+        "decision"          => "mixed_candidate",
+        "windows"           => 1,
+        "candidate_windows" => 1,
+        "fallback_windows"  => 0,
+        "mixed_speedup"     => 7.0,
+      }.to_json,
+      {
+        "kind"                             => "diffusion_gemma_mixed_route_plan_window_v1",
+        "prompt_token"                     => 4096,
+        "canvas_token"                     => 8192,
+        "selected_route"                   => "variant_fast",
+        "variant_env_role"                 => "variant",
+        "selected_route_artifact_arm"      => "base",
+        "selected_route_artifact_env_role" => "base",
+        "reason"                           => "foreign_fallback_replay_passed",
+        "base_ms"                          => 1577.0,
+        "observed_variant_ms"              => 207.0,
+        "mixed_variant_ms"                 => 207.0,
+        "observed_speedup"                 => 7.6,
+        "mixed_speedup"                    => 7.6,
+        "child_log"                        => "/tmp/foreign/gate.stdout",
+        "variant_route_artifact"           => "/tmp/base_p4096_c8192.tsv",
+      }.to_json,
+    ])
+
+    plan = ML::GGUF::DiffusionGemmaMixedRoutePlan.from_jsonl(path)
+    window = plan.require_window(4096, 8192)
+    window.variant_fast?.should be_true
+    window.variant_env_role.should eq("variant")
+    window.selected_runtime_route_artifact.should eq("/tmp/base_p4096_c8192.tsv")
+    window.selected_runtime_route_artifact_arm.should eq("base")
+    window.selected_runtime_route_artifact_env_role.should eq("base")
   ensure
     File.delete(path) if path && File.exists?(path)
   end

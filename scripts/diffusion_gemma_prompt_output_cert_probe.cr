@@ -228,6 +228,10 @@ def selected_runtime_artifact_arm(route_window : ML::GGUF::DiffusionGemmaMixedRo
   route_window.try(&.selected_runtime_route_artifact_arm) || "variant"
 end
 
+def selected_runtime_artifact_env_role(route_window : ML::GGUF::DiffusionGemmaMixedRoutePlan::Window?) : String
+  route_window.try(&.selected_runtime_route_artifact_env_role) || "variant"
+end
+
 def selected_route_name(route_window : ML::GGUF::DiffusionGemmaMixedRoutePlan::Window?) : String
   route_window.try(&.selected_route) || "variant"
 end
@@ -614,6 +618,7 @@ if dry_run_route_selection
       "variant_route_artifact=#{selected_runtime_artifact(route_window) || "<none>"}",
       "selected_route_artifact=#{selected_runtime_artifact(route_window) || "<none>"}",
       "selected_route_artifact_arm=#{selected_runtime_artifact_arm(route_window)}",
+      "selected_route_artifact_env_role=#{selected_runtime_artifact_env_role(route_window)}",
       "reason=#{route_window.try(&.reason) || "explicit_variant"}",
     ].join('\t')
   end
@@ -715,7 +720,7 @@ if certificate_mode != "bounded"
     base_artifact_path = base_route_artifact_path || base_route_artifact_map[window]?
     variant_artifact_path = selected_runtime_artifact(route_window) || variant_route_artifact_path || variant_route_artifact_map[window]?
     variant_artifact_arm = mixed_route_plan ? selected_runtime_artifact_arm(route_window) : variant_route_artifact_expected_arm
-    selected_variant_artifact_env_sha256 = mixed_route_plan ? variant_run_env_sha256 : variant_artifact_expected_env_sha256
+    selected_variant_artifact_env_sha256 = mixed_route_plan ? route_artifact_env_sha256(selected_runtime_artifact_env_role(route_window), base_env_sha256, variant_env_sha256) : variant_artifact_expected_env_sha256
     base_routes = base_artifact_path.try do |path|
       load_route_artifact(path, base_route_artifact_expected_arm, prompt_len, max_layers, prompt_tokens_sha256, base_artifact_expected_env_sha256, model_sha256)
     end
@@ -757,9 +762,10 @@ if certificate_mode != "bounded"
       "base_route_artifact_expected_arm=#{base_artifact_path ? base_route_artifact_expected_arm : "base"}",
       "base_route_artifact_env_role=#{base_artifact_path ? base_route_artifact_env_role : "base"}",
       "variant_route_artifact_expected_arm=#{variant_artifact_path ? variant_artifact_arm : "variant"}",
-      "variant_route_artifact_env_role=#{variant_artifact_path ? (mixed_route_plan ? selected_env_role(route_window) : variant_route_artifact_env_role) : "variant"}",
+      "variant_route_artifact_env_role=#{variant_artifact_path ? (mixed_route_plan ? selected_runtime_artifact_env_role(route_window) : variant_route_artifact_env_role) : "variant"}",
       "selected_route_artifact=#{variant_artifact_path || "<none>"}",
       "selected_route_artifact_arm=#{variant_artifact_arm}",
+      "selected_route_artifact_env_role=#{variant_artifact_path ? (mixed_route_plan ? selected_runtime_artifact_env_role(route_window) : variant_route_artifact_env_role) : "variant"}",
       "certificate_mode=#{certificate_mode}",
       "candidate_count=#{hp.vocab_size}",
       "candidate_offsets=full_vocab",
@@ -939,7 +945,7 @@ windows.each_with_index do |window, window_index|
   base_artifact_path = base_route_artifact_path || base_route_artifact_map[window]?
   variant_artifact_path = selected_runtime_artifact(route_window) || variant_route_artifact_path || variant_route_artifact_map[window]?
   variant_artifact_arm = mixed_route_plan ? selected_runtime_artifact_arm(route_window) : variant_route_artifact_expected_arm
-  selected_variant_artifact_env_sha256 = mixed_route_plan ? variant_run_env_sha256 : variant_artifact_expected_env_sha256
+  selected_variant_artifact_env_sha256 = mixed_route_plan ? route_artifact_env_sha256(selected_runtime_artifact_env_role(route_window), base_env_sha256, variant_env_sha256) : variant_artifact_expected_env_sha256
   base_routes = base_artifact_path.try do |path|
     load_route_artifact(path, base_route_artifact_expected_arm, prompt_len, max_layers, prompt_tokens_sha256, base_artifact_expected_env_sha256, model_sha256)
   end
@@ -968,9 +974,10 @@ windows.each_with_index do |window, window_index|
     "base_route_artifact_expected_arm=#{base_artifact_path ? base_route_artifact_expected_arm : "base"}",
     "base_route_artifact_env_role=#{base_artifact_path ? base_route_artifact_env_role : "base"}",
     "variant_route_artifact_expected_arm=#{variant_artifact_path ? variant_artifact_arm : "variant"}",
-    "variant_route_artifact_env_role=#{variant_artifact_path ? (mixed_route_plan ? selected_env_role(route_window) : variant_route_artifact_env_role) : "variant"}",
+    "variant_route_artifact_env_role=#{variant_artifact_path ? (mixed_route_plan ? selected_runtime_artifact_env_role(route_window) : variant_route_artifact_env_role) : "variant"}",
     "selected_route_artifact=#{variant_artifact_path || "<none>"}",
     "selected_route_artifact_arm=#{variant_artifact_arm}",
+    "selected_route_artifact_env_role=#{variant_artifact_path ? (mixed_route_plan ? selected_runtime_artifact_env_role(route_window) : variant_route_artifact_env_role) : "variant"}",
     "candidate_count=#{candidate_count}",
     "candidate_offsets=#{candidate_offsets.join(",")}",
     "candidate_stride=#{candidate_stride}",

@@ -347,6 +347,10 @@ def selected_runtime_route_artifact_arm(route_window : ML::GGUF::DiffusionGemmaM
   route_window.try(&.selected_runtime_route_artifact_arm) || "variant"
 end
 
+def selected_runtime_route_artifact_env_role(route_window : ML::GGUF::DiffusionGemmaMixedRoutePlan::Window?) : String
+  route_window.try(&.selected_runtime_route_artifact_env_role) || "variant"
+end
+
 def selected_env_role(route_window : ML::GGUF::DiffusionGemmaMixedRoutePlan::Window?) : String
   route_window.try(&.variant_env_role) || "variant"
 end
@@ -886,6 +890,7 @@ if dry_run_route_selection
     "variant_route_artifact=#{variant_route_artifact_path || "<none>"}",
     "selected_route_artifact=#{variant_route_artifact_path || "<none>"}",
     "selected_route_artifact_arm=#{selected_runtime_route_artifact_arm(mixed_route_window)}",
+    "selected_route_artifact_env_role=#{selected_runtime_route_artifact_env_role(mixed_route_window)}",
     "reason=#{mixed_route_window.try(&.reason) || "explicit_variant"}",
   ].join('\t')
   exit
@@ -962,7 +967,7 @@ model_sha256 = model_fingerprint(model)
 selected_artifact_expected_arm = selected_runtime_route_artifact_arm(mixed_route_window)
 base_artifact_expected_env_sha256 = route_artifact_env_sha256(base_route_artifact_env_role, base_env_sha256, variant_env_sha256)
 variant_artifact_expected_env_sha256 = if mixed_route_window && variant_route_artifact_path
-                                         variant_env_sha256
+                                         route_artifact_env_sha256(selected_runtime_route_artifact_env_role(mixed_route_window), base_env_sha256, variant_env_sha256)
                                        else
                                          route_artifact_env_sha256(variant_route_artifact_env_role, base_env_sha256, variant_env_sha256)
                                        end
@@ -1034,9 +1039,10 @@ puts "# route_artifact_base_expected_arm=#{base_route_artifact_path ? base_route
 puts "# route_artifact_base_env_role=#{base_route_artifact_path ? base_route_artifact_env_role : "base"}"
 puts "# route_artifact_variant_arm=#{variant_route_artifact_path ? variant_artifact_expected_arm : "variant"}"
 puts "# route_artifact_variant_expected_arm=#{variant_route_artifact_path ? variant_artifact_expected_arm : "variant"}"
-puts "# route_artifact_variant_env_role=#{variant_route_artifact_path ? (mixed_route_window ? selected_env_role(mixed_route_window) : variant_route_artifact_env_role) : "variant"}"
+puts "# route_artifact_variant_env_role=#{variant_route_artifact_path ? (mixed_route_window ? selected_runtime_route_artifact_env_role(mixed_route_window) : variant_route_artifact_env_role) : "variant"}"
 puts "# route_artifact_selected=#{variant_route_artifact_path || write_variant_route_artifact_path || "<none>"}"
 puts "# route_artifact_selected_arm=#{variant_route_artifact_path ? variant_artifact_expected_arm : "variant"}"
+puts "# route_artifact_selected_env_role=#{variant_route_artifact_path ? (mixed_route_window ? selected_runtime_route_artifact_env_role(mixed_route_window) : variant_route_artifact_env_role) : "variant"}"
 puts "# route_capture_amortize_uses=#{route_capture_amortize_uses}"
 puts "# keep_route_capture_graph_cache=#{keep_route_capture_graph_cache}"
 puts "# route_capture_base_ms=#{format_f64(base_capture_ms)}"

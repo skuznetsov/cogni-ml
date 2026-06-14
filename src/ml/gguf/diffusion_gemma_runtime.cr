@@ -203,6 +203,9 @@ module ML::GGUF
       getter child_log : String
       getter base_route_artifact : String
       getter variant_route_artifact : String
+      getter variant_env_role : String
+      getter selected_route_artifact_arm : String
+      getter selected_route_artifact_env_role : String
 
       def initialize(@prompt_token : Int32,
                      @canvas_token : Int32,
@@ -215,9 +218,24 @@ module ML::GGUF
                      @mixed_speedup : Float64,
                      @child_log : String,
                      @base_route_artifact : String,
-                     @variant_route_artifact : String)
+                     @variant_route_artifact : String,
+                     variant_env_role : String = "",
+                     selected_route_artifact_arm : String = "",
+                     selected_route_artifact_env_role : String = "")
         unless variant_fast? || base_exact?
           raise ArgumentError.new("unsupported DiffusionGemma mixed route: #{@selected_route}")
+        end
+        @variant_env_role = variant_env_role.empty? ? (base_exact? ? "base" : "variant") : variant_env_role
+        @selected_route_artifact_arm = selected_route_artifact_arm.empty? ? (base_exact? ? "base" : "variant") : selected_route_artifact_arm
+        @selected_route_artifact_env_role = selected_route_artifact_env_role.empty? ? @variant_env_role : selected_route_artifact_env_role
+        validate_role!("variant_env_role", @variant_env_role)
+        validate_role!("selected_route_artifact_arm", @selected_route_artifact_arm)
+        validate_role!("selected_route_artifact_env_role", @selected_route_artifact_env_role)
+        if variant_fast? && @variant_env_role != "variant"
+          raise ArgumentError.new("variant_fast window #{@prompt_token}:#{@canvas_token} must use variant_env_role=variant")
+        end
+        if base_exact? && @variant_env_role != "base"
+          raise ArgumentError.new("base_exact window #{@prompt_token}:#{@canvas_token} must use variant_env_role=base")
         end
         if variant_fast? && @variant_route_artifact.empty?
           raise ArgumentError.new("variant_fast window #{@prompt_token}:#{@canvas_token} requires variant_route_artifact")
@@ -236,10 +254,6 @@ module ML::GGUF
         @selected_route == "base_exact"
       end
 
-      def variant_env_role : String
-        base_exact? ? "base" : "variant"
-      end
-
       def selected_variant_route_artifact : String?
         variant_fast? ? @variant_route_artifact : nil
       end
@@ -253,7 +267,17 @@ module ML::GGUF
       end
 
       def selected_runtime_route_artifact_arm : String
-        base_exact? ? "base" : "variant"
+        @selected_route_artifact_arm
+      end
+
+      def selected_runtime_route_artifact_env_role : String
+        @selected_route_artifact_env_role
+      end
+
+      private def validate_role!(name : String, value : String) : Nil
+        return if value == "base" || value == "variant"
+
+        raise ArgumentError.new("DiffusionGemma route-plan field #{name} must be base or variant")
       end
     end
 
@@ -395,6 +419,9 @@ module ML::GGUF
         child_log: string_field(row, "child_log"),
         base_route_artifact: optional_string_field(row, "base_route_artifact"),
         variant_route_artifact: optional_string_field(row, "variant_route_artifact"),
+        variant_env_role: optional_string_field(row, "variant_env_role"),
+        selected_route_artifact_arm: optional_string_field(row, "selected_route_artifact_arm"),
+        selected_route_artifact_env_role: optional_string_field(row, "selected_route_artifact_env_role"),
       )
     end
 
