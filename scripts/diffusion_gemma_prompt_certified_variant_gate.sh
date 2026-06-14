@@ -39,6 +39,7 @@ abba_route_capture_amortize_uses="${ABBA_ROUTE_CAPTURE_AMORTIZE_USES:-1}"
 abba_use_effective_total="${ABBA_USE_EFFECTIVE_TOTAL:-1}"
 abba_keep_route_capture_graph_cache="${ABBA_KEEP_ROUTE_CAPTURE_GRAPH_CACHE:-0}"
 min_total_speedup="${MIN_TOTAL_SPEEDUP:-1.10}"
+max_break_even_uses="${MAX_BREAK_EVEN_USES:-}"
 run_abba_on_cert_fail="${RUN_ABBA_ON_CERT_FAIL:-0}"
 checksum_tolerance="${CHECKSUM_TOLERANCE:-}"
 check_quiet="${CHECK_QUIET:-0}"
@@ -79,6 +80,7 @@ Important environment knobs:
   ABBA_USE_EFFECTIVE_TOTAL=1       when replay is enabled, gate speed on capture-amortized total
   ABBA_KEEP_ROUTE_CAPTURE_GRAPH_CACHE=1
                                     preserve graph cache warmed by a single replay-arm capture
+  MAX_BREAK_EVEN_USES=N            reject replay candidates needing more than N uses
   RUN_ABBA_ON_CERT_FAIL=1         run ABBA even when certificate rejects
   CHECK_QUIET=1                   poll the existing quiet gate before running
 EOF
@@ -250,6 +252,12 @@ validate_uint ABBA_WARMUPS "$abba_warmups"
 validate_positive_uint ABBA_REPEATS "$abba_repeats"
 validate_uint ABBA_TRIM_PER_ARM "$abba_trim_per_arm"
 validate_positive_uint ABBA_ROUTE_CAPTURE_AMORTIZE_USES "$abba_route_capture_amortize_uses"
+if [[ -n "$max_break_even_uses" ]]; then
+  validate_positive_uint MAX_BREAK_EVEN_USES "$max_break_even_uses"
+  if ! bool_enabled "${ABBA_BASE_REPLAY_ROUTES:-0}" && ! bool_enabled "${ABBA_VARIANT_REPLAY_ROUTES:-0}"; then
+    die "MAX_BREAK_EVEN_USES requires ABBA_BASE_REPLAY_ROUTES=1 or ABBA_VARIANT_REPLAY_ROUTES=1"
+  fi
+fi
 case "$certificate_mode" in
   bounded|full-vocab-top1-metal|full-vocab-top1-cpu|full-vocab-top2-metal|full-vocab-top2-cpu) ;;
   *) die "CERTIFICATE_MODE must be bounded, full-vocab-top1-metal/cpu, or full-vocab-top2-metal/cpu" ;;
@@ -423,6 +431,31 @@ if [[ "$route_replay_enabled" == "1" ]]; then
   break_even_min_uses="$(printf '%s\n' "$break_even_row" | sed -n 's/.*min_uses=\([^ ]*\).*/\1/p')"
   printf 'gate_reuse metric=total_ms threshold=%s base_capture_ms=%s variant_capture_ms=%s %s\n' \
     "$min_total_speedup" "$base_capture_ms" "$variant_capture_ms" "$break_even_row"
+  if [[ -n "$max_break_even_uses" ]]; then
+    case "$break_even_status" in
+      already|finite)
+        if [[ "$break_even_min_uses" == "inf" || -z "$break_even_min_uses" ]]; then
+          reject "break_even_invalid" "break_even_status=$break_even_status" "break_even_uses=${break_even_min_uses:-n/a}" "max_break_even_uses=$max_break_even_uses" "abba_log=$abba_out"
+        fi
+        if (( break_even_min_uses > max_break_even_uses )); then
+          reject "break_even_above_threshold" \
+            "break_even_status=$break_even_status" \
+            "break_even_uses=$break_even_min_uses" \
+            "max_break_even_uses=$max_break_even_uses" \
+            "total_summary_kind=$total_summary_kind" \
+            "route_capture_amortize_uses=$abba_route_capture_amortize_uses" \
+            "keep_route_capture_graph_cache=$abba_keep_route_capture_graph_cache" \
+            "abba_log=$abba_out"
+        fi
+        ;;
+      impossible)
+        reject "break_even_impossible" "break_even_status=$break_even_status" "break_even_uses=$break_even_min_uses" "max_break_even_uses=$max_break_even_uses" "abba_log=$abba_out"
+        ;;
+      *)
+        reject "break_even_invalid" "break_even_status=${break_even_status:-n/a}" "break_even_uses=${break_even_min_uses:-n/a}" "max_break_even_uses=$max_break_even_uses" "abba_log=$abba_out"
+        ;;
+    esac
+  fi
 fi
 
 if (( cert_rc != 0 )); then
@@ -442,6 +475,7 @@ if ! float_ge "$total_speedup" "$min_total_speedup"; then
     "keep_route_capture_graph_cache=$abba_keep_route_capture_graph_cache" \
     "break_even_status=${break_even_status:-n/a}" \
     "break_even_uses=${break_even_min_uses:-n/a}" \
+    "max_break_even_uses=${max_break_even_uses:-n/a}" \
     "abba_log=$abba_out"
 fi
 
@@ -454,5 +488,5 @@ if [[ "$certificate_mode" == full-vocab-top1-* ]]; then
 elif [[ "$certificate_mode" == full-vocab-top2-* ]]; then
   decision="candidate_full_vocab_margin_argmax_only"
 fi
-printf 'certified_variant_gate decision=%s total_speedup=%s min_total_speedup=%s base_ms=%s variant_ms=%s total_summary_kind=%s route_capture_amortize_uses=%s keep_route_capture_graph_cache=%s break_even_status=%s break_even_uses=%s cert_rc=%s abba_rc=%s log_dir=%s\n' \
-  "$decision" "$total_speedup" "$min_total_speedup" "$total_base_ms" "$total_variant_ms" "$total_summary_kind" "$abba_route_capture_amortize_uses" "$abba_keep_route_capture_graph_cache" "${break_even_status:-n/a}" "${break_even_min_uses:-n/a}" "$cert_rc" "$abba_rc" "$log_dir"
+printf 'certified_variant_gate decision=%s total_speedup=%s min_total_speedup=%s base_ms=%s variant_ms=%s total_summary_kind=%s route_capture_amortize_uses=%s keep_route_capture_graph_cache=%s break_even_status=%s break_even_uses=%s max_break_even_uses=%s cert_rc=%s abba_rc=%s log_dir=%s\n' \
+  "$decision" "$total_speedup" "$min_total_speedup" "$total_base_ms" "$total_variant_ms" "$total_summary_kind" "$abba_route_capture_amortize_uses" "$abba_keep_route_capture_graph_cache" "${break_even_status:-n/a}" "${break_even_min_uses:-n/a}" "${max_break_even_uses:-n/a}" "$cert_rc" "$abba_rc" "$log_dir"
