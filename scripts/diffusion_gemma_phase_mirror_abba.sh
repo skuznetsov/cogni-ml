@@ -22,6 +22,7 @@ repeats="${REPEATS:-8}"
 trim_per_arm="${TRIM_PER_ARM:-1}"
 full_routes="${FULL_ROUTES:-1}"
 require_quiet="${REQUIRE_QUIET:-0}"
+require_candidate="${REQUIRE_CANDIDATE:-$require_quiet}"
 in_process_mirror="${IN_PROCESS_MIRROR:-0}"
 quiet_ms="${QUIET_MS:-15000}"
 load_threshold="${LOAD_THRESHOLD:-40}"
@@ -126,6 +127,7 @@ print_config() {
   printf 'TRIM_PER_ARM=%s\n' "$trim_per_arm"
   printf 'FULL_ROUTES=%s\n' "$full_routes"
   printf 'REQUIRE_QUIET=%s\n' "$require_quiet"
+  printf 'REQUIRE_CANDIDATE=%s\n' "$require_candidate"
   printf 'IN_PROCESS_MIRROR=%s\n' "$in_process_mirror"
   printf 'MIN_SPEEDUP=%s\n' "$min_speedup"
   printf 'CHECKSUM_ABS_TOL=%s\n' "$checksum_abs_tol"
@@ -178,6 +180,7 @@ quiet_gate() {
     QUIET_MS="$quiet_ms" \
     LOAD_THRESHOLD="$load_threshold" \
     TOTAL_THRESHOLD="$total_threshold" \
+    REQUIRE_CANDIDATE="$require_candidate" \
     SUMMARY_FORMAT=kv \
     "$repo_root/scripts/diffusion_gemma_quiet_gate_check.sh" | tee "$log_dir/quiet_${label}.txt"
 }
@@ -417,6 +420,10 @@ if [[ "$full_routes" != "0" && "$full_routes" != "1" ]]; then
 fi
 if [[ "$require_quiet" != "0" && "$require_quiet" != "1" ]]; then
   printf 'REQUIRE_QUIET must be 0 or 1, got %s\n' "$require_quiet" >&2
+  exit 2
+fi
+if [[ "$require_candidate" != "0" && "$require_candidate" != "1" ]]; then
+  printf 'REQUIRE_CANDIDATE must be 0 or 1, got %s\n' "$require_candidate" >&2
   exit 2
 fi
 if [[ "$in_process_mirror" != "0" && "$in_process_mirror" != "1" ]]; then
