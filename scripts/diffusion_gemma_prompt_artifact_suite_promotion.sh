@@ -38,6 +38,7 @@ abba_mirror_sequence="${ABBA_MIRROR_SEQUENCE:-variant base base variant}"
 
 base_map="${SUITE_BASE_ROUTE_ARTIFACT_MAP:-${CERT_BASE_ROUTE_ARTIFACT_MAP:-}}"
 variant_map="${SUITE_VARIANT_ROUTE_ARTIFACT_MAP:-${CERT_VARIANT_ROUTE_ARTIFACT_MAP:-}}"
+promotion_prepare_log="${PROMOTION_PREPARE_LOG:-}"
 dry_run="${DRY_RUN:-0}"
 
 usage() {
@@ -55,6 +56,8 @@ Important environment knobs:
   PROMPT_LEN / CANVAS_LEN / MAX_LAYERS  shape, defaults 16 / 8 / 30
   PROMOTION_STAGE=all                   all, prepare, or gate; gate must use the
                                          same profile/env as the prepared artifacts
+  PROMOTION_PREPARE_LOG=PATH            import route-artifact maps from a previous
+                                         prepare stdout before gate/all validation
   CHECK_QUIET=1                         run quiet precheck before model work
   GATE_CHECK_QUIET=1                    run quiet gate inside each child gate
   LOAD_THRESHOLD=40                     per-process quiet threshold
@@ -132,6 +135,19 @@ bool_enabled "$overwrite" >/dev/null || true
 bool_enabled "$dry_run" >/dev/null || true
 [[ -n "$token_windows" ]] || die "TOKEN_WINDOWS is required"
 
+if [[ -n "$promotion_prepare_log" ]]; then
+  [[ "$promotion_stage" != "prepare" ]] || die "PROMOTION_PREPARE_LOG is only valid for all/gate stages"
+  [[ -f "$promotion_prepare_log" ]] || die "PROMOTION_PREPARE_LOG not found: $promotion_prepare_log"
+  [[ -z "$base_map" && -z "$variant_map" ]] || die "PROMOTION_PREPARE_LOG cannot be combined with supplied route artifact maps"
+  if base_map_value="$(extract_map SUITE_BASE_ROUTE_ARTIFACT_MAP "$promotion_prepare_log" 2>/dev/null)"; then
+    base_map="$base_map_value"
+  fi
+  if variant_map_value="$(extract_map SUITE_VARIANT_ROUTE_ARTIFACT_MAP "$promotion_prepare_log" 2>/dev/null)"; then
+    variant_map="$variant_map_value"
+  fi
+  [[ -n "$base_map" || -n "$variant_map" ]] || die "PROMOTION_PREPARE_LOG contains no route artifact maps"
+fi
+
 case "$promotion_stage" in
   all|prepare|gate)
     ;;
@@ -170,6 +186,7 @@ manifest="$log_dir/promotion_manifest.env"
   printf 'gate_dir=%q\n' "$gate_dir"
   printf 'artifact_dir=%q\n' "$artifact_dir"
   printf 'promotion_stage=%q\n' "$promotion_stage"
+  printf 'promotion_prepare_log=%q\n' "$promotion_prepare_log"
   printf 'token_windows=%q\n' "$token_windows"
   printf 'prompt_len=%q\n' "$prompt_len"
   printf 'canvas_len=%q\n' "$canvas_len"
