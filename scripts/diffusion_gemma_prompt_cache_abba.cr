@@ -140,8 +140,11 @@ struct RouteReplayCapture
   getter route_rows : Int32
   getter route_slots : Int32
   getter checksum : Float64
+  getter source : String
+  getter artifact_path : String?
 
-  def initialize(@routes, @elapsed_ms, @route_rows, @route_slots, @checksum)
+  def initialize(@routes, @elapsed_ms, @route_rows, @route_slots, @checksum,
+                 @source = "capture", @artifact_path = nil)
   end
 end
 
@@ -427,6 +430,105 @@ def capture_routes_for_arm(weights : ML::GGUF::DiffusionGemmaWeights,
   end
 end
 
+def write_route_artifact(path : String,
+                         arm : String,
+                         prompt_len : Int32,
+                         max_layers : Int32,
+                         capture : RouteReplayCapture) : Nil
+  File.open(path, "w") do |io|
+    io.puts "# format=diffusion_gemma_prompt_route_artifact_v1"
+    io.puts "# arm=#{arm}"
+    io.puts "# prompt_len=#{prompt_len}"
+    io.puts "# max_layers=#{max_layers}"
+    io.puts "# layers=#{capture.routes.size}"
+    io.puts "# rows=#{capture.route_rows}"
+    io.puts "# slots=#{capture.route_slots}"
+    io.puts "# checksum=#{format_f64(capture.checksum)}"
+    io.puts "# capture_ms=#{format_f64(capture.elapsed_ms)}"
+    io.puts "kind\tlayer\trow\troute_index\texpert\tweight"
+    capture.routes.each_with_index do |layer_routes, layer|
+      layer_routes.each_with_index do |row_routes, row|
+        row_routes.each_with_index do |route, route_index|
+          io.puts ["route", layer, row, route_index, route.expert, route.weight].join('\t')
+        end
+      end
+    end
+  end
+  puts [
+    "# route_artifact_write",
+    arm,
+    "path=#{path}",
+    "layers=#{capture.routes.size}",
+    "rows=#{capture.route_rows}",
+    "slots=#{capture.route_slots}",
+    "checksum=#{format_f64(capture.checksum)}",
+  ].join('\t')
+end
+
+def load_route_artifact(path : String,
+                        arm : String,
+                        expected_prompt_len : Int32,
+                        expected_max_layers : Int32) : RouteReplayCapture
+  t0 = Time.instant
+  metadata = {} of String => String
+  routes = Array(Array(Array(ML::GGUF::DiffusionGemmaCPU::ExpertRoute))).new(expected_max_layers) do
+    Array(Array(ML::GGUF::DiffusionGemmaCPU::ExpertRoute)).new(expected_prompt_len) { [] of ML::GGUF::DiffusionGemmaCPU::ExpertRoute }
+  end
+
+  File.each_line(path) do |line|
+    next if line.empty?
+    if line.starts_with?("#")
+      comment = line[1, line.bytesize - 1].strip
+      if comment.includes?("=")
+        key, value = comment.split("=", 2)
+        metadata[key] = value if value
+      end
+      next
+    end
+
+    parts = line.split('\t')
+    next if parts[0]? == "kind"
+    raise "route artifact row must have 6 fields, got #{parts.size}" unless parts.size == 6
+    raise "route artifact row kind must be route, got #{parts[0].inspect}" unless parts[0] == "route"
+    layer = parts[1].to_i
+    row = parts[2].to_i
+    route_index = parts[3].to_i
+    expert = parts[4].to_i
+    weight = parts[5].to_f32
+    raise "route artifact layer out of range: #{layer}" if layer < 0 || layer >= expected_max_layers
+    raise "route artifact row out of range: #{row}" if row < 0 || row >= expected_prompt_len
+    row_routes = routes[layer][row]
+    raise "route artifact route_index mismatch at layer=#{layer} row=#{row}: #{route_index} != #{row_routes.size}" unless route_index == row_routes.size
+    row_routes << ML::GGUF::DiffusionGemmaCPU::ExpertRoute.new(expert.to_i32, weight)
+  end
+
+  raise "route artifact format mismatch" unless metadata["format"]? == "diffusion_gemma_prompt_route_artifact_v1"
+  raise "route artifact arm mismatch: #{metadata["arm"]?} != #{arm}" unless metadata["arm"]? == arm
+  raise "route artifact prompt_len mismatch" unless metadata["prompt_len"]?.try(&.to_i) == expected_prompt_len
+  raise "route artifact max_layers mismatch" unless metadata["max_layers"]?.try(&.to_i) == expected_max_layers
+  routes.each_with_index do |layer_routes, layer|
+    layer_routes.each_with_index do |row_routes, row|
+      raise "route artifact missing routes at layer=#{layer} row=#{row}" if row_routes.empty?
+    end
+  end
+
+  route_rows = routes.sum(&.size)
+  route_slots = routes.sum { |layer| layer.sum(&.size) }
+  checksum = metadata["checksum"]?.try(&.to_f64) || 0.0
+  elapsed_ms = (Time.instant - t0).total_milliseconds
+  puts [
+    "# route_artifact_load",
+    arm,
+    "path=#{path}",
+    "layers=#{routes.size}",
+    "rows=#{route_rows}",
+    "slots=#{route_slots}",
+    "load_ms=#{format_f64(elapsed_ms)}",
+    "artifact_checksum=#{format_f64(checksum)}",
+  ].join('\t')
+  RouteReplayCapture.new(routes, elapsed_ms, route_rows, route_slots, checksum, "artifact", path)
+end
+
 def print_sample(sample : PromptCacheSample,
                  prompt_len : Int32,
                  canvas_len : Int32,
@@ -597,6 +699,10 @@ route_replay_base = false
 route_replay_variant = false
 route_capture_amortize_uses = 1
 keep_route_capture_graph_cache = false
+base_route_artifact_path = nil.as(String?)
+variant_route_artifact_path = nil.as(String?)
+write_base_route_artifact_path = nil.as(String?)
+write_variant_route_artifact_path = nil.as(String?)
 
 OptionParser.parse do |p|
   p.banner = "Usage: diffusion_gemma_prompt_cache_abba [options]"
@@ -617,6 +723,10 @@ OptionParser.parse do |p|
   p.on("--checksum-tolerance F", "Exit 4 when base/variant checksum median delta exceeds F") { |v| checksum_tolerance = v.to_f64 }
   p.on("--base-replay-routes", "Pre-capture and replay base prompt MoE routes for base arm") { route_replay_base = true }
   p.on("--variant-replay-routes", "Pre-capture and replay variant prompt MoE routes for variant arm") { route_replay_variant = true }
+  p.on("--base-route-artifact PATH", "Load base prompt MoE routes from an existing artifact") { |v| base_route_artifact_path = v }
+  p.on("--variant-route-artifact PATH", "Load variant prompt MoE routes from an existing artifact") { |v| variant_route_artifact_path = v }
+  p.on("--write-base-route-artifact PATH", "Write captured base prompt MoE routes to an artifact") { |v| write_base_route_artifact_path = v }
+  p.on("--write-variant-route-artifact PATH", "Write captured variant prompt MoE routes to an artifact") { |v| write_variant_route_artifact_path = v }
   p.on("--route-capture-amortize-uses N", "Charge route-capture cost over N replayed prompt-cache uses in effective summaries (default: 1)") { |v| route_capture_amortize_uses = v.to_i }
   p.on("--keep-route-capture-graph-cache", "Preserve the resident graph cache warmed by a single replay-arm route capture") { keep_route_capture_graph_cache = true }
   p.on("-h", "--help", "Show help") do
@@ -625,6 +735,8 @@ OptionParser.parse do |p|
   end
 end
 
+route_replay_base ||= !base_route_artifact_path.nil? || !write_base_route_artifact_path.nil?
+route_replay_variant ||= !variant_route_artifact_path.nil? || !write_variant_route_artifact_path.nil?
 route_replay_requested = route_replay_base || route_replay_variant
 raise "model not found: #{model}" unless File.exists?(model)
 raise "--prompt-len must be positive" unless prompt_len > 0
@@ -654,6 +766,15 @@ end
 if keep_route_capture_graph_cache && !route_replay_requested
   raise "--keep-route-capture-graph-cache requires --base-replay-routes or --variant-replay-routes"
 end
+if keep_route_capture_graph_cache && (!base_route_artifact_path.nil? || !variant_route_artifact_path.nil?)
+  raise "--keep-route-capture-graph-cache requires route capture, not artifact load"
+end
+if base_route_artifact_path && write_base_route_artifact_path
+  raise "--base-route-artifact is incompatible with --write-base-route-artifact"
+end
+if variant_route_artifact_path && write_variant_route_artifact_path
+  raise "--variant-route-artifact is incompatible with --write-variant-route-artifact"
+end
 
 load_t0 = Time.instant
 weights = ML::GGUF::DiffusionGemmaWeights.from_gguf(model)
@@ -670,8 +791,24 @@ routes_by_layer_by_prompt_row = if single_route && materialize_final_rows
                                 else
                                   nil
                                 end
-base_replay_capture = route_replay_base ? capture_routes_for_arm(weights, prompt_rows, mask, max_layers, base_env, "base", keep_route_capture_graph_cache) : nil
-variant_replay_capture = route_replay_variant ? capture_routes_for_arm(weights, prompt_rows, mask, max_layers, variant_env, "variant", keep_route_capture_graph_cache) : nil
+base_replay_capture = if path = base_route_artifact_path
+                        load_route_artifact(path, "base", prompt_len, max_layers)
+                      elsif route_replay_base
+                        capture = capture_routes_for_arm(weights, prompt_rows, mask, max_layers, base_env, "base", keep_route_capture_graph_cache)
+                        if path = write_base_route_artifact_path
+                          write_route_artifact(path, "base", prompt_len, max_layers, capture)
+                        end
+                        capture
+                      end
+variant_replay_capture = if path = variant_route_artifact_path
+                           load_route_artifact(path, "variant", prompt_len, max_layers)
+                         elsif route_replay_variant
+                           capture = capture_routes_for_arm(weights, prompt_rows, mask, max_layers, variant_env, "variant", keep_route_capture_graph_cache)
+                           if path = write_variant_route_artifact_path
+                             write_route_artifact(path, "variant", prompt_len, max_layers, capture)
+                           end
+                           capture
+                         end
 base_replay_routes = base_replay_capture.try(&.routes)
 variant_replay_routes = variant_replay_capture.try(&.routes)
 base_capture_ms = base_replay_capture.try(&.elapsed_ms) || 0.0
@@ -684,6 +821,8 @@ puts "# sequence=#{sequence}"
 puts "# mirror_sequence=#{mirror_sequence || "<none>"}"
 puts "# route_replay_base=#{route_replay_base}"
 puts "# route_replay_variant=#{route_replay_variant}"
+puts "# route_artifact_base=#{base_route_artifact_path || write_base_route_artifact_path || "<none>"}"
+puts "# route_artifact_variant=#{variant_route_artifact_path || write_variant_route_artifact_path || "<none>"}"
 puts "# route_capture_amortize_uses=#{route_capture_amortize_uses}"
 puts "# keep_route_capture_graph_cache=#{keep_route_capture_graph_cache}"
 puts "# route_capture_base_ms=#{format_f64(base_capture_ms)}"

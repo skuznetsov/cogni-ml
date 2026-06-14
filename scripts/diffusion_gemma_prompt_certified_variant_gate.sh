@@ -38,6 +38,10 @@ abba_mirror_sequence="${ABBA_MIRROR_SEQUENCE:-variant base base variant}"
 abba_route_capture_amortize_uses="${ABBA_ROUTE_CAPTURE_AMORTIZE_USES:-1}"
 abba_use_effective_total="${ABBA_USE_EFFECTIVE_TOTAL:-1}"
 abba_keep_route_capture_graph_cache="${ABBA_KEEP_ROUTE_CAPTURE_GRAPH_CACHE:-0}"
+abba_base_route_artifact="${ABBA_BASE_ROUTE_ARTIFACT:-}"
+abba_variant_route_artifact="${ABBA_VARIANT_ROUTE_ARTIFACT:-}"
+abba_write_base_route_artifact="${ABBA_WRITE_BASE_ROUTE_ARTIFACT:-}"
+abba_write_variant_route_artifact="${ABBA_WRITE_VARIANT_ROUTE_ARTIFACT:-}"
 min_total_speedup="${MIN_TOTAL_SPEEDUP:-1.10}"
 max_break_even_uses="${MAX_BREAK_EVEN_USES:-}"
 run_abba_on_cert_fail="${RUN_ABBA_ON_CERT_FAIL:-0}"
@@ -80,6 +84,12 @@ Important environment knobs:
   ABBA_USE_EFFECTIVE_TOTAL=1       when replay is enabled, gate speed on capture-amortized total
   ABBA_KEEP_ROUTE_CAPTURE_GRAPH_CACHE=1
                                     preserve graph cache warmed by a single replay-arm capture
+  ABBA_BASE_ROUTE_ARTIFACT=PATH     load base routes from a prompt-route artifact
+  ABBA_VARIANT_ROUTE_ARTIFACT=PATH  load variant routes from a prompt-route artifact
+  ABBA_WRITE_BASE_ROUTE_ARTIFACT=PATH
+                                    write captured base routes to an artifact
+  ABBA_WRITE_VARIANT_ROUTE_ARTIFACT=PATH
+                                    write captured variant routes to an artifact
   MAX_BREAK_EVEN_USES=N            reject replay candidates needing more than N uses
   RUN_ABBA_ON_CERT_FAIL=1         run ABBA even when certificate rejects
   CHECK_QUIET=1                   poll the existing quiet gate before running
@@ -254,7 +264,10 @@ validate_uint ABBA_TRIM_PER_ARM "$abba_trim_per_arm"
 validate_positive_uint ABBA_ROUTE_CAPTURE_AMORTIZE_USES "$abba_route_capture_amortize_uses"
 if [[ -n "$max_break_even_uses" ]]; then
   validate_positive_uint MAX_BREAK_EVEN_USES "$max_break_even_uses"
-  if ! bool_enabled "${ABBA_BASE_REPLAY_ROUTES:-0}" && ! bool_enabled "${ABBA_VARIANT_REPLAY_ROUTES:-0}"; then
+  if ! bool_enabled "${ABBA_BASE_REPLAY_ROUTES:-0}" &&
+     ! bool_enabled "${ABBA_VARIANT_REPLAY_ROUTES:-0}" &&
+     [[ -z "$abba_base_route_artifact" && -z "$abba_variant_route_artifact" &&
+        -z "$abba_write_base_route_artifact" && -z "$abba_write_variant_route_artifact" ]]; then
     die "MAX_BREAK_EVEN_USES requires ABBA_BASE_REPLAY_ROUTES=1 or ABBA_VARIANT_REPLAY_ROUTES=1"
   fi
 fi
@@ -372,6 +385,18 @@ fi
 if bool_enabled "${ABBA_VARIANT_REPLAY_ROUTES:-0}"; then
   abba_args+=(--variant-replay-routes)
 fi
+if [[ -n "$abba_base_route_artifact" ]]; then
+  abba_args+=(--base-route-artifact "$abba_base_route_artifact")
+fi
+if [[ -n "$abba_variant_route_artifact" ]]; then
+  abba_args+=(--variant-route-artifact "$abba_variant_route_artifact")
+fi
+if [[ -n "$abba_write_base_route_artifact" ]]; then
+  abba_args+=(--write-base-route-artifact "$abba_write_base_route_artifact")
+fi
+if [[ -n "$abba_write_variant_route_artifact" ]]; then
+  abba_args+=(--write-variant-route-artifact "$abba_write_variant_route_artifact")
+fi
 if bool_enabled "$abba_keep_route_capture_graph_cache"; then
   abba_args+=(--keep-route-capture-graph-cache)
 fi
@@ -398,6 +423,10 @@ if bool_enabled "${ABBA_BASE_REPLAY_ROUTES:-0}"; then
   route_replay_enabled=1
 fi
 if bool_enabled "${ABBA_VARIANT_REPLAY_ROUTES:-0}"; then
+  route_replay_enabled=1
+fi
+if [[ -n "$abba_base_route_artifact" || -n "$abba_variant_route_artifact" ||
+      -n "$abba_write_base_route_artifact" || -n "$abba_write_variant_route_artifact" ]]; then
   route_replay_enabled=1
 fi
 if [[ "$route_replay_enabled" == "1" ]] && bool_enabled "$abba_use_effective_total"; then
