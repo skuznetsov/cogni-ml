@@ -5,6 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 timestamp="$(date +%Y%m%d%H%M%S)"
 
 mixed_route_plan="${MIXED_ROUTE_PLAN:-${SUITE_MIXED_ROUTE_PLAN:-}}"
+replay_mode="${FALLBACK_REPLAY_MODE:-selected}"
 stage="${FALLBACK_REPLAY_STAGE:-all}"
 log_dir="${LOG_DIR:-/tmp/diffusiongemma_fallback_replay_${timestamp}}"
 prepare_dir="${FALLBACK_PREPARE_LOG_DIR:-$log_dir/prepare}"
@@ -47,6 +48,10 @@ plan:
 
 Important environment knobs:
   MIXED_ROUTE_PLAN=PATH                 required source mixed route plan
+  FALLBACK_REPLAY_MODE=selected         selected or foreign
+                                           selected: attach base artifacts into a derived mixed plan
+                                           foreign: run fallback windows through the variant side
+                                                    while loading base/env-bound route artifacts
   FALLBACK_REPLAY_STAGE=all             all, prepare, attach, or gate
   FALLBACK_PREPARE_LOG=PATH             reuse an existing base-artifact prepare log
   FALLBACK_BASE_ROUTE_ARTIFACT_MAP=SPEC reuse an existing fallback base map
@@ -59,7 +64,8 @@ Important environment knobs:
 
 The wrapper only prepares SUITE_ARTIFACT_ARMS=base and uses
 diffusion_gemma_attach_fallback_artifacts.py to keep fallback artifacts in the
-base_route_artifact slot.
+base_route_artifact slot. In foreign mode, the same prepared base artifacts are
+fed to SUITE_VARIANT_ROUTE_ARTIFACT_MAP with expected arm/env role set to base.
 EOF
 }
 
@@ -124,6 +130,58 @@ print(",".join(windows))
 PY
 }
 
+base_artifact_map_for_windows() {
+  local windows="$1"
+  python3 - "$windows" "$artifact_dir" "$prompt_len" "$max_layers" <<'PY'
+import sys
+
+windows_raw, artifact_dir, prompt_len, max_layers = sys.argv[1:5]
+entries = []
+seen = set()
+for entry in windows_raw.replace(",", " ").split():
+    try:
+        prompt, canvas = entry.split(":", 1)
+        prompt_i = int(prompt)
+        canvas_i = int(canvas)
+    except ValueError as exc:
+        raise SystemExit(f"fallback window must be prompt:canvas, got {entry!r}") from exc
+    if prompt_i < 0 or canvas_i < 0:
+        raise SystemExit("fallback window prompt/canvas tokens must be non-negative")
+    key = (prompt_i, canvas_i)
+    if key in seen:
+        raise SystemExit(f"duplicate fallback window {prompt_i}:{canvas_i}")
+    seen.add(key)
+    path = f"{artifact_dir}/base_p{prompt_i}_c{canvas_i}_pl{prompt_len}_l{max_layers}.tsv"
+    entries.append(f"{prompt_i}:{canvas_i}={path}")
+if not entries:
+    raise SystemExit("fallback windows must not be empty")
+print(",".join(entries))
+PY
+}
+
+check_map_files() {
+  local raw_map="$1"
+  local label="$2"
+  python3 - "$raw_map" "$label" <<'PY'
+import os
+import sys
+
+raw_map, label = sys.argv[1:3]
+missing = []
+for entry in raw_map.replace(",", " ").split():
+    try:
+        window, path = entry.split("=", 1)
+    except ValueError as exc:
+        raise SystemExit(f"{label} entry must be prompt:canvas=PATH, got {entry!r}") from exc
+    if not path:
+        raise SystemExit(f"{label} path must not be empty for {window}")
+    if not os.path.isfile(path):
+        missing.append(f"{window}={path}")
+if missing:
+    raise SystemExit(f"{label} missing artifact(s): {' '.join(missing)}")
+PY
+}
+
 extract_map() {
   local key="$1"
   local file="$2"
@@ -148,6 +206,16 @@ case "$stage" in
     die "FALLBACK_REPLAY_STAGE must be all, prepare, attach, or gate"
     ;;
 esac
+case "$replay_mode" in
+  selected|foreign)
+    ;;
+  *)
+    die "FALLBACK_REPLAY_MODE must be selected or foreign"
+    ;;
+esac
+if [[ "$replay_mode" == "foreign" && "$stage" == "attach" ]]; then
+  die "FALLBACK_REPLAY_MODE=foreign does not use FALLBACK_REPLAY_STAGE=attach"
+fi
 
 if [[ -z "$fallback_windows" ]]; then
   fallback_windows="$(derive_windows "$mixed_route_plan" fallback)"
@@ -166,7 +234,7 @@ fi
 if [[ "$stage" == "prepare" && -n "$base_map" ]]; then
   die "FALLBACK_REPLAY_STAGE=prepare cannot use FALLBACK_BASE_ROUTE_ARTIFACT_MAP"
 fi
-if [[ "$stage" == "attach" || "$stage" == "gate" ]]; then
+if [[ "$replay_mode" == "selected" && ( "$stage" == "attach" || "$stage" == "gate" ) ]]; then
   if [[ "$stage" == "attach" || ! -f "$attached_plan" ]]; then
     [[ -n "$prepare_log" || -n "$base_map" ]] || die "$stage requires FALLBACK_PREPARE_LOG or FALLBACK_BASE_ROUTE_ARTIFACT_MAP unless FALLBACK_ATTACHED_ROUTE_PLAN already exists"
   fi
@@ -179,10 +247,22 @@ elif [[ "$stage" == "all" && -z "$prepare_log" && -z "$base_map" ]]; then
   should_prepare=1
 fi
 
+foreign_base_map=""
+if [[ "$replay_mode" == "foreign" ]]; then
+  if [[ -n "$base_map" ]]; then
+    foreign_base_map="$base_map"
+  elif [[ -n "$prepare_log" ]]; then
+    foreign_base_map="$(extract_map SUITE_BASE_ROUTE_ARTIFACT_MAP "$prepare_log")"
+  else
+    foreign_base_map="$(base_artifact_map_for_windows "$fallback_windows")"
+  fi
+fi
+
 mkdir -p "$log_dir"
 manifest="$log_dir/fallback_replay_manifest.env"
 {
   printf 'mixed_route_plan=%q\n' "$mixed_route_plan"
+  printf 'replay_mode=%q\n' "$replay_mode"
   printf 'stage=%q\n' "$stage"
   printf 'log_dir=%q\n' "$log_dir"
   printf 'prepare_dir=%q\n' "$prepare_dir"
@@ -201,10 +281,11 @@ manifest="$log_dir/fallback_replay_manifest.env"
   printf 'load_threshold=%q\n' "$load_threshold"
   printf 'total_threshold=%q\n' "$total_threshold"
   printf 'summary_enabled=%q\n' "$summary_enabled"
+  printf 'foreign_base_map=%q\n' "$foreign_base_map"
 } >"$manifest"
 
 printf 'fallback_replay_start log_dir=%s manifest=%s\n' "$log_dir" "$manifest"
-printf 'fallback_replay_windows fallback=%s plan=%s\n' "$fallback_windows" "$plan_windows"
+printf 'fallback_replay_windows fallback=%s plan=%s mode=%s\n' "$fallback_windows" "$plan_windows" "$replay_mode"
 
 quiet_log="$log_dir/quiet_precheck.log"
 quiet_cmd=(
@@ -274,6 +355,29 @@ gate_cmd=(
   "$repo_root/scripts/diffusion_gemma_prompt_artifact_suite_promotion.sh"
 )
 
+foreign_gate_cmd=(
+  env
+  LOG_DIR="$gate_dir"
+  PROMOTION_STAGE=gate
+  TOKEN_WINDOWS="$fallback_windows"
+  PROMPT_LEN="$prompt_len"
+  CANVAS_LEN="$canvas_len"
+  MAX_LAYERS="$max_layers"
+  VARIANT_PROFILE="$variant_profile"
+  CHECK_QUIET="$gate_check_quiet"
+  LOAD_THRESHOLD="$load_threshold"
+  TOTAL_THRESHOLD="$total_threshold"
+  QUIET_MS="$quiet_ms"
+  SUITE_MIN_TOTAL_SPEEDUP="$suite_min_total_speedup"
+  SUITE_WINDOW_MIN_TOTAL_SPEEDUP="$suite_window_min_total_speedup"
+  CERTIFICATE_MODE="$certificate_mode"
+  SUITE_VARIANT_ROUTE_ARTIFACT_MAP="$foreign_base_map"
+  CERT_VARIANT_ROUTE_ARTIFACT_MAP="$foreign_base_map"
+  VARIANT_ROUTE_ARTIFACT_EXPECTED_ARM=base
+  VARIANT_ROUTE_ARTIFACT_ENV_ROLE=base
+  "$repo_root/scripts/diffusion_gemma_prompt_artifact_suite_promotion.sh"
+)
+
 atlas_cmd=(
   python3
   "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py"
@@ -331,18 +435,23 @@ if bool_enabled "$dry_run"; then
   if [[ "$should_prepare" == "1" ]]; then
     print_cmd prepare_cmd "${prepare_cmd[@]}"
   fi
-  if [[ "$stage" == "all" || "$stage" == "attach" || ( "$stage" == "gate" && ! -f "$attached_plan" ) ]]; then
+  if [[ "$replay_mode" == "selected" && ( "$stage" == "all" || "$stage" == "attach" || ( "$stage" == "gate" && ! -f "$attached_plan" ) ) ]]; then
     print_cmd attach_cmd "${attach_cmd[@]}"
   fi
   if [[ "$stage" == "all" || "$stage" == "gate" ]]; then
-    print_cmd gate_cmd "${gate_cmd[@]}"
+    if [[ "$replay_mode" == "foreign" ]]; then
+      printf 'foreign_base_map=%s\n' "$foreign_base_map"
+      print_cmd foreign_gate_cmd "${foreign_gate_cmd[@]}"
+    else
+      print_cmd gate_cmd "${gate_cmd[@]}"
+    fi
     if bool_enabled "$summary_enabled"; then
       print_cmd summary_atlas_cmd "${atlas_cmd[@]}"
       print_cmd summary_atlas_tsv_cmd "${atlas_tsv_cmd[@]}"
       print_cmd summary_pp_tg_cmd "${pp_tg_cmd[@]}"
     fi
   fi
-  printf 'fallback_replay decision=dry_run stage=%s log_dir=%s attached_plan=%s\n' "$stage" "$log_dir" "$attached_plan"
+  printf 'fallback_replay decision=dry_run mode=%s stage=%s log_dir=%s attached_plan=%s\n' "$replay_mode" "$stage" "$log_dir" "$attached_plan"
   exit 0
 fi
 
@@ -374,7 +483,7 @@ if [[ "$should_prepare" == "1" ]]; then
   fi
 fi
 
-if [[ "$stage" == "all" || "$stage" == "attach" || ! -f "$attached_plan" ]]; then
+if [[ "$replay_mode" == "selected" && ( "$stage" == "all" || "$stage" == "attach" || ! -f "$attached_plan" ) ]]; then
   "${attach_cmd[@]}"
   if [[ "$stage" == "attach" ]]; then
     printf 'fallback_replay decision=attached log_dir=%s attached_plan=%s\n' "$log_dir" "$attached_plan"
@@ -383,6 +492,25 @@ if [[ "$stage" == "all" || "$stage" == "attach" || ! -f "$attached_plan" ]]; the
 fi
 
 if [[ "$stage" == "all" || "$stage" == "gate" ]]; then
+  if [[ "$replay_mode" == "foreign" ]]; then
+    if ! check_map_files "$foreign_base_map" "FALLBACK_FOREIGN_BASE_ROUTE_ARTIFACT_MAP"; then
+      exit 2
+    fi
+    set +e
+    "${foreign_gate_cmd[@]}" >"$gate_stdout" 2>"$gate_stderr"
+    gate_rc=$?
+    set -e
+    cat "$gate_stdout"
+    if (( gate_rc != 0 )); then
+      printf 'fallback_replay decision=reject mode=foreign reason=gate_failed rc=%s log=%s stderr=%s\n' "$gate_rc" "$gate_stdout" "$gate_stderr"
+      exit "$gate_rc"
+    fi
+    decision="$(grep -E '^artifact_suite_promotion decision=' "$gate_stdout" | tail -1 || true)"
+    write_summaries
+    printf 'fallback_replay decision=complete mode=foreign stage=%s log_dir=%s foreign_base_map=%q child_decision=%q\n' "$stage" "$log_dir" "$foreign_base_map" "$decision"
+    exit 0
+  fi
+
   set +e
   "${gate_cmd[@]}" >"$gate_stdout" 2>"$gate_stderr"
   gate_rc=$?
@@ -394,5 +522,5 @@ if [[ "$stage" == "all" || "$stage" == "gate" ]]; then
   fi
   decision="$(grep -E '^artifact_suite_promotion decision=' "$gate_stdout" | tail -1 || true)"
   write_summaries
-  printf 'fallback_replay decision=complete stage=%s log_dir=%s attached_plan=%s child_decision=%q\n' "$stage" "$log_dir" "$attached_plan" "$decision"
+  printf 'fallback_replay decision=complete mode=selected stage=%s log_dir=%s attached_plan=%s child_decision=%q\n' "$stage" "$log_dir" "$attached_plan" "$decision"
 fi
