@@ -140,6 +140,21 @@ def dual_cache_row_fallback_ms(
     return variant_cache + variant_predict + base_cache / reuse_count + base_predict * fail_rows / total_rows
 
 
+def dual_cache_band_fallback_ms(
+    timing: dict[str, str],
+    total_rows: int,
+    fail_rows: int,
+    reuse_count: int,
+) -> float:
+    variant_cache = as_float(timing.get("variant_cache_ms"))
+    variant_predict = as_float(timing.get("variant_predict_ms"))
+    base_cache = as_float(timing.get("base_cache_ms"))
+    base_predict = as_float(timing.get("base_predict_ms"))
+    if total_rows <= 0 or fail_rows <= 0:
+        return variant_cache + variant_predict
+    return variant_cache + variant_predict + base_cache / reuse_count + base_predict
+
+
 def dual_cache_break_even_uses(
     timing: dict[str, str],
     total_rows: int,
@@ -166,18 +181,56 @@ def dual_cache_break_even_uses(
     return "finite", max(1, math.ceil(min_speedup * base_cache / required_margin))
 
 
+def dual_cache_band_break_even_uses(
+    timing: dict[str, str],
+    total_rows: int,
+    fail_rows: int,
+    min_speedup: float,
+) -> tuple[str, int | None]:
+    if total_rows <= 0 or fail_rows <= 0:
+        return "not_needed", 0
+    if min_speedup <= 0.0:
+        raise SystemExit("--min-speedup must be positive")
+
+    base_cache = as_float(timing.get("base_cache_ms"))
+    base_predict = as_float(timing.get("base_predict_ms"))
+    variant_cache = as_float(timing.get("variant_cache_ms"))
+    variant_predict = as_float(timing.get("variant_predict_ms"))
+    base_total = base_cache + base_predict
+    fixed_candidate = variant_cache + variant_predict + base_predict
+    required_margin = base_total - min_speedup * fixed_candidate
+    if any(math.isnan(value) for value in (base_cache, base_predict, variant_cache, variant_predict)):
+        return "missing_timing", None
+    if required_margin <= 0.0:
+        return "impossible", None
+    return "finite", max(1, math.ceil(min_speedup * base_cache / required_margin))
+
+
+def legal_fallback_grain(canvas_attention: str) -> str:
+    return "row" if canvas_attention == "independent" else "canvas_band"
+
+
 def print_text(
     path: Path,
     rows: list[dict[str, str]],
     timing_rows: list[dict[str, str]],
     reuse_count: int,
     min_speedup: float,
+    canvas_attention: str,
 ) -> None:
     grouped = group_rows(rows)
     timings = timing_by_window(timing_rows)
     print("DiffusionGemma output certificate atlas")
     print(f"  source={path}")
     print(f"  dual_cache_candidate reuse_count={reuse_count} min_speedup={fmt(min_speedup)}")
+    print(
+        "  fallback_boundary canvas_attention=%s legal_grain=%s row_lower_bound_legal=%s"
+        % (
+            canvas_attention,
+            legal_fallback_grain(canvas_attention),
+            str(canvas_attention == "independent").lower(),
+        )
+    )
     for key, window_rows in sorted(grouped.items(), key=lambda item: (int(item[0][0]), int(item[0][1]))):
         prompt_token, canvas_token = key
         argmax_fail = [row for row in window_rows if not truthy(row.get("argmax_match", ""))]
@@ -190,6 +243,14 @@ def print_text(
         dual_cache = dual_cache_row_fallback_ms(timing, row_count, len(argmax_fail), reuse_count)
         dual_speedup = safe_speedup(base_total, dual_cache)
         break_even_status, break_even_uses = dual_cache_break_even_uses(
+            timing,
+            row_count,
+            len(argmax_fail),
+            min_speedup,
+        )
+        band_cache = dual_cache_band_fallback_ms(timing, row_count, len(argmax_fail), reuse_count)
+        band_speedup = safe_speedup(base_total, band_cache)
+        band_break_even_status, band_break_even_uses = dual_cache_band_break_even_uses(
             timing,
             row_count,
             len(argmax_fail),
@@ -215,7 +276,7 @@ def print_text(
                 % (fmt(base_total), fmt(variant_total), fmt(row_fallback))
             )
             print(
-                "    dual_cache_candidate_ms=%s speedup_vs_base_exact=%s break_even_status=%s break_even_uses=%s"
+                "    dual_cache_row_lower_bound_ms=%s speedup_vs_base_exact=%s break_even_status=%s break_even_uses=%s"
                 % (
                     fmt(dual_cache),
                     fmt(dual_speedup),
@@ -223,6 +284,16 @@ def print_text(
                     "NA" if break_even_uses is None else str(break_even_uses),
                 )
             )
+            if canvas_attention != "independent":
+                print(
+                    "    dual_cache_canvas_band_ms=%s speedup_vs_base_exact=%s break_even_status=%s break_even_uses=%s"
+                    % (
+                        fmt(band_cache),
+                        fmt(band_speedup),
+                        band_break_even_status,
+                        "NA" if band_break_even_uses is None else str(band_break_even_uses),
+                    )
+                )
         if argmax_fail:
             details = ", ".join(
                 "row=%s base_argmax=%s variant_argmax=%s max_logit_delta=%s"
@@ -245,7 +316,7 @@ def print_text(
             print(f"    sampled_only_failures: {details}")
         if argmax_fail:
             print(
-                "    LTP/WBA: Diamond. Candidate window is row-local, but exact fallback is only legal after proving the prompt-cache/hidden boundary can be narrowed or reused; dual-cache numbers are branch-selection estimates, not promotion evidence."
+                "    LTP/WBA: Diamond. Candidate window is row-local, but the current full-canvas attention boundary requires a certified band/cache fallback before promotion; dual-cache numbers are branch-selection estimates, not promotion evidence."
             )
         else:
             print("    LTP/WBA: Collapse. Argmax certificate holds for this bounded candidate row set.")
@@ -257,6 +328,7 @@ def print_tsv(
     timing_rows: list[dict[str, str]],
     reuse_count: int,
     min_speedup: float,
+    canvas_attention: str,
 ) -> None:
     timings = timing_by_window(timing_rows)
     fields = [
@@ -293,6 +365,9 @@ def print_tsv(
         "argmax_failures",
         "sampled_failures",
         "current_legal_route",
+        "canvas_attention",
+        "legal_fallback_grain",
+        "row_lower_bound_legal",
         "base_cache_ms",
         "base_predict_ms",
         "variant_cache_ms",
@@ -306,6 +381,10 @@ def print_tsv(
         "dual_cache_speedup_vs_base_exact",
         "dual_cache_break_even_status",
         "dual_cache_break_even_uses",
+        "dual_cache_band_candidate_ms",
+        "dual_cache_band_speedup_vs_base_exact",
+        "dual_cache_band_break_even_status",
+        "dual_cache_band_break_even_uses",
     ]
     print("\t".join(summary_fields))
     for key, window_rows in sorted(group_rows(rows).items(), key=lambda item: (int(item[0][0]), int(item[0][1]))):
@@ -326,6 +405,14 @@ def print_tsv(
             argmax_failures,
             min_speedup,
         )
+        band_cache = dual_cache_band_fallback_ms(timing, len(window_rows), argmax_failures, reuse_count)
+        band_speedup = safe_speedup(base_total, band_cache)
+        band_break_even_status, band_break_even_uses = dual_cache_band_break_even_uses(
+            timing,
+            len(window_rows),
+            argmax_failures,
+            min_speedup,
+        )
         values = {
             "kind": "summary",
             "source": str(path),
@@ -335,6 +422,9 @@ def print_tsv(
             "argmax_failures": argmax_failures,
             "sampled_failures": sampled_failures,
             "current_legal_route": "variant_fast" if argmax_failures == 0 else "base_exact",
+            "canvas_attention": canvas_attention,
+            "legal_fallback_grain": legal_fallback_grain(canvas_attention),
+            "row_lower_bound_legal": str(canvas_attention == "independent").lower(),
             "base_cache_ms": fmt(base_cache),
             "base_predict_ms": fmt(base_predict),
             "variant_cache_ms": fmt(variant_cache),
@@ -348,6 +438,10 @@ def print_tsv(
             "dual_cache_speedup_vs_base_exact": fmt(dual_speedup),
             "dual_cache_break_even_status": break_even_status,
             "dual_cache_break_even_uses": "NA" if break_even_uses is None else str(break_even_uses),
+            "dual_cache_band_candidate_ms": fmt(band_cache),
+            "dual_cache_band_speedup_vs_base_exact": fmt(band_speedup),
+            "dual_cache_band_break_even_status": band_break_even_status,
+            "dual_cache_band_break_even_uses": "NA" if band_break_even_uses is None else str(band_break_even_uses),
         }
         print("\t".join(str(values[field]) for field in summary_fields))
 
@@ -358,6 +452,12 @@ def main() -> int:
     parser.add_argument("--tsv", action="store_true", help="emit machine-readable row and summary tables")
     parser.add_argument("--reuse-count", type=int, default=1, help="base exact prompt-cache reuse count for dual-cache estimates")
     parser.add_argument("--min-speedup", type=float, default=1.10, help="target speedup versus current exact fallback for break-even uses")
+    parser.add_argument(
+        "--canvas-attention",
+        choices=("full", "independent"),
+        default="full",
+        help="canvas-row dependency model for fallback legality; DiffusionGemma decode uses full canvas attention",
+    )
     args = parser.parse_args()
     if args.reuse_count <= 0:
         raise SystemExit("--reuse-count must be positive")
@@ -366,9 +466,9 @@ def main() -> int:
 
     rows, timing, _ = read_cert(args.output_cert)
     if args.tsv:
-        print_tsv(args.output_cert, rows, timing, args.reuse_count, args.min_speedup)
+        print_tsv(args.output_cert, rows, timing, args.reuse_count, args.min_speedup, args.canvas_attention)
     else:
-        print_text(args.output_cert, rows, timing, args.reuse_count, args.min_speedup)
+        print_text(args.output_cert, rows, timing, args.reuse_count, args.min_speedup, args.canvas_attention)
     return 0
 
 

@@ -282,11 +282,13 @@ scripts/diffusion_gemma_output_cert_atlas.py CHILD_LOG_DIR/output_cert.tsv \
   --min-speedup 1.10
 ```
 
-The dual-cache estimate charges the fast variant cache/predict path every use,
-amortizes the exact base prompt cache over `N`, and adds the exact base predict
-share for argmax-failing rows. The reported `break_even_uses` is only a target
-for a future runtime boundary; it is not promotion evidence until exact
-row/band fallback can reuse the base cache and pass a full gate.
+By default the helper uses `--canvas-attention full`, matching the current
+DiffusionGemma decode mask where every canvas query can attend every canvas
+key. Under that boundary, the row-local figure is printed only as a lower bound
+and the legal fallback grain is `canvas_band`; a future runtime path must prove
+base-cache reuse and exact band predict fallback before promotion. The reported
+`break_even_uses` is therefore a target for a future runtime boundary, not speed
+evidence by itself.
 
 `scripts/diffusion_gemma_prompt_output_cert_probe.cr` can also consume the same
 plan directly:
