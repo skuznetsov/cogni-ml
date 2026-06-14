@@ -3,6 +3,7 @@ require "digest/sha256"
 require "set"
 require "../src/ml/gguf/diffusion_gemma_cpu"
 require "../src/ml/gguf/diffusion_gemma_route_artifact"
+require "../src/ml/gguf/diffusion_gemma_runtime"
 require "../src/ml/gguf/reader"
 
 DEFAULT_MODEL = "#{ENV["HOME"]}/.cache/lm-studio/models/unsloth/diffusiongemma-26B-A4B-it-GGUF/diffusiongemma-26B-A4B-it-Q4_K_M.gguf"
@@ -317,6 +318,23 @@ def parse_route_artifact_map(raw : String, label : String) : Array(RouteArtifact
   end
   raise "#{label} must contain at least one entry" if entries.empty?
   entries
+end
+
+def require_route_plan_window(plan : ML::GGUF::DiffusionGemmaMixedRoutePlan,
+                              prompt_token : Int32,
+                              canvas_token : Int32) : ML::GGUF::DiffusionGemmaMixedRoutePlan::Window
+  plan.require_window(prompt_token, canvas_token)
+rescue ex : ArgumentError
+  detail = ex.message || "--mixed-route-plan does not contain the requested window"
+  raise "--mixed-route-plan lookup #{prompt_token}:#{canvas_token} failed: #{detail}"
+end
+
+def selected_variant_env(route_window : ML::GGUF::DiffusionGemmaMixedRoutePlan::Window?,
+                         base_env : ArmEnv,
+                         variant_env : ArmEnv) : ArmEnv
+  return variant_env unless route_window
+
+  route_window.variant_env_role == "base" ? base_env : variant_env
 end
 
 def format_sample_values(values : Array(Float64)) : String
@@ -739,6 +757,7 @@ model = ENV["DIFFUSION_GEMMA_MODEL"]? || DEFAULT_MODEL
 prompt_len = 16
 canvas_len = 8
 prompt_token = 1
+canvas_token = 0
 max_layers = 1
 warmups = 1
 repeats = 4
@@ -761,6 +780,8 @@ write_variant_route_artifact_path = nil.as(String?)
 capture_route_artifacts_only = false
 write_base_route_artifact_map = nil.as(String?)
 write_variant_route_artifact_map = nil.as(String?)
+mixed_route_plan_path = nil.as(String?)
+dry_run_route_selection = false
 
 OptionParser.parse do |p|
   p.banner = "Usage: diffusion_gemma_prompt_cache_abba [options]"
@@ -768,6 +789,7 @@ OptionParser.parse do |p|
   p.on("--prompt-len N", "Synthetic prompt length (default: 16)") { |v| prompt_len = v.to_i }
   p.on("--canvas-len N", "Synthetic canvas length used for mask/cache shape (default: 8)") { |v| canvas_len = v.to_i }
   p.on("--prompt-token ID", "Synthetic prompt start token id (default: 1)") { |v| prompt_token = v.to_i }
+  p.on("--canvas-token ID", "Synthetic canvas start token id for mixed route-plan lookup (default: 0)") { |v| canvas_token = v.to_i }
   p.on("--max-layers N", "Prompt-cache layers (default: 1)") { |v| max_layers = v.to_i }
   p.on("--warmups N", "Unmeasured ABBA cycles before samples (default: 1)") { |v| warmups = v.to_i }
   p.on("--repeats N", "Measured ABBA cycles (default: 4)") { |v| repeats = v.to_i }
@@ -788,6 +810,8 @@ OptionParser.parse do |p|
   p.on("--capture-route-artifacts-only", "Capture route-artifact maps and exit without ABBA samples") { capture_route_artifacts_only = true }
   p.on("--write-base-route-artifact-map SPEC", "Write base artifacts for prompt:canvas=PATH entries") { |v| write_base_route_artifact_map = v }
   p.on("--write-variant-route-artifact-map SPEC", "Write variant artifacts for prompt:canvas=PATH entries") { |v| write_variant_route_artifact_map = v }
+  p.on("--mixed-route-plan PATH", "Select variant_fast/base_exact execution for this prompt:canvas window") { |v| mixed_route_plan_path = v }
+  p.on("--dry-run-route-selection", "Print mixed route selection and exit before loading the model") { dry_run_route_selection = true }
   p.on("--route-capture-amortize-uses N", "Charge route-capture cost over N replayed prompt-cache uses in effective summaries (default: 1)") { |v| route_capture_amortize_uses = v.to_i }
   p.on("--keep-route-capture-graph-cache", "Preserve the resident graph cache warmed by a single replay-arm route capture") { keep_route_capture_graph_cache = true }
   p.on("-h", "--help", "Show help") do
@@ -796,6 +820,30 @@ OptionParser.parse do |p|
   end
 end
 
+mixed_route_plan = mixed_route_plan_path.try { |path| ML::GGUF::DiffusionGemmaMixedRoutePlan.from_jsonl(path) }
+mixed_route_window = mixed_route_plan.try { |plan| require_route_plan_window(plan, prompt_token, canvas_token) }
+variant_run_env = selected_variant_env(mixed_route_window, base_env, variant_env)
+if route_window = mixed_route_window
+  if base_route_artifact_path || variant_route_artifact_path || write_base_route_artifact_path || write_variant_route_artifact_path ||
+     write_base_route_artifact_map || write_variant_route_artifact_map || route_replay_base || route_replay_variant ||
+     capture_route_artifacts_only
+    raise "--mixed-route-plan is incompatible with explicit route artifact load/write/replay/capture options"
+  end
+  variant_route_artifact_path = route_window.selected_variant_route_artifact
+end
+if dry_run_route_selection
+  puts "# mixed_route_plan=#{mixed_route_plan_path || "<none>"}"
+  puts [
+    "mixed_route_selection",
+    "prompt_token=#{prompt_token}",
+    "canvas_token=#{canvas_token}",
+    "selected_route=#{mixed_route_window.try(&.selected_route) || "variant"}",
+    "variant_env_role=#{mixed_route_window.try(&.variant_env_role) || "variant"}",
+    "variant_route_artifact=#{variant_route_artifact_path || "<none>"}",
+    "reason=#{mixed_route_window.try(&.reason) || "explicit_variant"}",
+  ].join('\t')
+  exit
+end
 write_base_route_artifact_entries = write_base_route_artifact_map.try { |raw| parse_route_artifact_map(raw, "--write-base-route-artifact-map") } || [] of RouteArtifactMapEntry
 write_variant_route_artifact_entries = write_variant_route_artifact_map.try { |raw| parse_route_artifact_map(raw, "--write-variant-route-artifact-map") } || [] of RouteArtifactMapEntry
 route_artifact_map_requested = write_base_route_artifact_entries.any? || write_variant_route_artifact_entries.any?
@@ -805,6 +853,7 @@ route_replay_requested = route_replay_base || route_replay_variant
 raise "model not found: #{model}" unless File.exists?(model)
 raise "--prompt-len must be positive" unless prompt_len > 0
 raise "--canvas-len must be positive" unless canvas_len > 0
+raise "--canvas-token must be non-negative" unless canvas_token >= 0
 raise "--max-layers must be positive" unless max_layers > 0
 raise "--warmups must be non-negative" unless warmups >= 0
 raise "--repeats must be positive" unless repeats > 0
@@ -862,7 +911,7 @@ prompt_tokens = generated_token_sequence(prompt_token, prompt_len, hp.vocab_size
 prompt_rows = prompt_rows_from_tokens(weights, prompt_tokens)
 prompt_tokens_sha256 = prompt_tokens_fingerprint(prompt_tokens)
 base_env_sha256 = arm_env_fingerprint(base_env)
-variant_env_sha256 = arm_env_fingerprint(variant_env)
+variant_env_sha256 = arm_env_fingerprint(variant_run_env)
 model_sha256 = model_fingerprint(model)
 if capture_route_artifacts_only
   base_capture_ms = 0.0
@@ -871,12 +920,15 @@ if capture_route_artifacts_only
     base_capture_ms = capture_route_artifact_map(weights, hp, prompt_len, canvas_len, max_layers, base_env, "base", base_env_sha256, model_sha256, write_base_route_artifact_entries)
   end
   if write_variant_route_artifact_entries.any?
-    variant_capture_ms = capture_route_artifact_map(weights, hp, prompt_len, canvas_len, max_layers, variant_env, "variant", variant_env_sha256, model_sha256, write_variant_route_artifact_entries)
+    variant_capture_ms = capture_route_artifact_map(weights, hp, prompt_len, canvas_len, max_layers, variant_run_env, "variant", variant_env_sha256, model_sha256, write_variant_route_artifact_entries)
   end
 
   puts "# load_ms=#{format_f64(load_ms)}"
   puts "# base_env=#{base_env.raw.empty? ? "<empty>" : base_env.raw}"
-  puts "# variant_env=#{variant_env.raw.empty? ? "<empty>" : variant_env.raw}"
+  puts "# variant_env=#{variant_run_env.raw.empty? ? "<empty>" : variant_run_env.raw}"
+  puts "# mixed_route_plan=#{mixed_route_plan_path || "<none>"}"
+  puts "# mixed_selected_route=#{mixed_route_window.try(&.selected_route) || "variant"}"
+  puts "# mixed_variant_env_role=#{mixed_route_window.try(&.variant_env_role) || "variant"}"
   puts "# route_artifact_map_base_count=#{write_base_route_artifact_entries.size}"
   puts "# route_artifact_map_variant_count=#{write_variant_route_artifact_entries.size}"
   puts "# route_capture_base_ms=#{format_f64(base_capture_ms)}"
@@ -901,7 +953,7 @@ base_replay_capture = if path = base_route_artifact_path
 variant_replay_capture = if path = variant_route_artifact_path
                            load_route_artifact(path, "variant", prompt_len, max_layers, prompt_tokens_sha256, variant_env_sha256, model_sha256)
                          elsif route_replay_variant
-                           capture = capture_routes_for_arm(weights, prompt_rows, mask, max_layers, variant_env, "variant", keep_route_capture_graph_cache)
+                           capture = capture_routes_for_arm(weights, prompt_rows, mask, max_layers, variant_run_env, "variant", keep_route_capture_graph_cache)
                            if path = write_variant_route_artifact_path
                              write_route_artifact(path, "variant", prompt_len, max_layers, prompt_tokens_sha256, variant_env_sha256, model_sha256, capture)
                            end
@@ -914,7 +966,10 @@ variant_capture_ms = variant_replay_capture.try(&.elapsed_ms) || 0.0
 
 puts "# load_ms=#{format_f64(load_ms)}"
 puts "# base_env=#{base_env.raw.empty? ? "<empty>" : base_env.raw}"
-puts "# variant_env=#{variant_env.raw.empty? ? "<empty>" : variant_env.raw}"
+puts "# variant_env=#{variant_run_env.raw.empty? ? "<empty>" : variant_run_env.raw}"
+puts "# mixed_route_plan=#{mixed_route_plan_path || "<none>"}"
+puts "# mixed_selected_route=#{mixed_route_window.try(&.selected_route) || "variant"}"
+puts "# mixed_variant_env_role=#{mixed_route_window.try(&.variant_env_role) || "variant"}"
 puts "# sequence=#{sequence}"
 puts "# mirror_sequence=#{mirror_sequence || "<none>"}"
 puts "# route_replay_base=#{route_replay_base}"
@@ -937,7 +992,7 @@ total_cycles.times do |cycle|
                  arms
                end
   cycle_arms.each_with_index do |arm, sequence_index|
-    env = arm == "base" ? base_env : variant_env
+    env = arm == "base" ? base_env : variant_run_env
     arm_routes = case arm
                  when "base"
                    base_replay_routes || routes_by_layer_by_prompt_row

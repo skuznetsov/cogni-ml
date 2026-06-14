@@ -38,6 +38,7 @@ abba_warmups="${ABBA_WARMUPS:-1}"
 abba_repeats="${ABBA_REPEATS:-3}"
 abba_trim_per_arm="${ABBA_TRIM_PER_ARM:-1}"
 abba_prompt_token="${ABBA_PROMPT_TOKEN:-1}"
+abba_canvas_token="${ABBA_CANVAS_TOKEN:-0}"
 abba_sequence="${ABBA_SEQUENCE:-base variant variant base}"
 abba_mirror_sequence="${ABBA_MIRROR_SEQUENCE:-variant base base variant}"
 abba_route_capture_amortize_uses="${ABBA_ROUTE_CAPTURE_AMORTIZE_USES:-1}"
@@ -47,6 +48,7 @@ abba_base_route_artifact="${ABBA_BASE_ROUTE_ARTIFACT:-}"
 abba_variant_route_artifact="${ABBA_VARIANT_ROUTE_ARTIFACT:-}"
 abba_write_base_route_artifact="${ABBA_WRITE_BASE_ROUTE_ARTIFACT:-}"
 abba_write_variant_route_artifact="${ABBA_WRITE_VARIANT_ROUTE_ARTIFACT:-}"
+abba_mixed_route_plan="${ABBA_MIXED_ROUTE_PLAN:-}"
 min_total_speedup="${MIN_TOTAL_SPEEDUP:-1.10}"
 max_break_even_uses="${MAX_BREAK_EVEN_USES:-}"
 run_abba_on_cert_fail="${RUN_ABBA_ON_CERT_FAIL:-0}"
@@ -88,6 +90,7 @@ Important environment knobs:
   CERT_VARIANT_ROUTE_ARTIFACT_MAP=SPEC
                                     cert-only variant routes per window, e.g. 1:0=/tmp/a,17:100=/tmp/b
   MIN_TOTAL_SPEEDUP=F             ABBA total_ms speedup floor, default 1.10
+  ABBA_MIXED_ROUTE_PLAN=PATH      optional mixed route plan for ABBA fast/exact selection
   ABBA_PROMPT_TOKEN=N             synthetic prompt start token for ABBA, default 1
   ABBA_BASE_REPLAY_ROUTES=1       pre-capture/replay base prompt MoE routes in ABBA
   ABBA_VARIANT_REPLAY_ROUTES=1    pre-capture/replay variant prompt MoE routes in ABBA
@@ -274,6 +277,7 @@ validate_uint ABBA_WARMUPS "$abba_warmups"
 validate_positive_uint ABBA_REPEATS "$abba_repeats"
 validate_uint ABBA_TRIM_PER_ARM "$abba_trim_per_arm"
 validate_uint ABBA_PROMPT_TOKEN "$abba_prompt_token"
+validate_uint ABBA_CANVAS_TOKEN "$abba_canvas_token"
 validate_positive_uint ABBA_ROUTE_CAPTURE_AMORTIZE_USES "$abba_route_capture_amortize_uses"
 if [[ -n "$base_extra_env" ]]; then
   base_env="$base_env $base_extra_env"
@@ -315,6 +319,8 @@ printf 'base_env=%s\n' "$base_env"
 printf 'variant_env=%s\n' "$variant_env"
 printf 'min_total_speedup=%s\n' "$min_total_speedup"
 printf 'abba_prompt_token=%s\n' "$abba_prompt_token"
+printf 'abba_canvas_token=%s\n' "$abba_canvas_token"
+printf 'abba_mixed_route_plan=%s\n' "${abba_mixed_route_plan:-<none>}"
 
 if bool_enabled "$check_quiet"; then
   quiet_log="$log_dir/quiet_gate.log"
@@ -396,6 +402,7 @@ abba_args=(
   --prompt-len "$prompt_len"
   --canvas-len "$canvas_len"
   --prompt-token "$abba_prompt_token"
+  --canvas-token "$abba_canvas_token"
   --max-layers "$max_layers"
   --warmups "$abba_warmups"
   --repeats "$abba_repeats"
@@ -422,6 +429,9 @@ if [[ -n "$abba_base_route_artifact" ]]; then
 fi
 if [[ -n "$abba_variant_route_artifact" ]]; then
   abba_args+=(--variant-route-artifact "$abba_variant_route_artifact")
+fi
+if [[ -n "$abba_mixed_route_plan" ]]; then
+  abba_args+=(--mixed-route-plan "$abba_mixed_route_plan")
 fi
 if [[ -n "$abba_write_base_route_artifact" ]]; then
   abba_args+=(--write-base-route-artifact "$abba_write_base_route_artifact")

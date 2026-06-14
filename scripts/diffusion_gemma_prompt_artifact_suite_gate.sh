@@ -188,6 +188,7 @@ if [[ -z "$suite_child_logs" ]]; then
     LOG_DIR="$child_dir" \
     TOKEN_WINDOWS="${prompt}:${canvas}" \
     ABBA_PROMPT_TOKEN="$prompt" \
+    ABBA_CANVAS_TOKEN="$canvas" \
     CERT_BASE_ROUTE_ARTIFACT_MAP="$cert_base_map" \
     CERT_VARIANT_ROUTE_ARTIFACT_MAP="$cert_variant_map" \
     ABBA_BASE_ROUTE_ARTIFACT="$base_path" \
