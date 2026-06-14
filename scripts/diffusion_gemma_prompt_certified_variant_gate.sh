@@ -35,6 +35,7 @@ cert_variant_route_artifact_map="${CERT_VARIANT_ROUTE_ARTIFACT_MAP:-}"
 abba_warmups="${ABBA_WARMUPS:-1}"
 abba_repeats="${ABBA_REPEATS:-3}"
 abba_trim_per_arm="${ABBA_TRIM_PER_ARM:-1}"
+abba_prompt_token="${ABBA_PROMPT_TOKEN:-1}"
 abba_sequence="${ABBA_SEQUENCE:-base variant variant base}"
 abba_mirror_sequence="${ABBA_MIRROR_SEQUENCE:-variant base base variant}"
 abba_route_capture_amortize_uses="${ABBA_ROUTE_CAPTURE_AMORTIZE_USES:-1}"
@@ -83,6 +84,7 @@ Important environment knobs:
   CERT_VARIANT_ROUTE_ARTIFACT_MAP=SPEC
                                     cert-only variant routes per window, e.g. 1:0=/tmp/a,17:100=/tmp/b
   MIN_TOTAL_SPEEDUP=F             ABBA total_ms speedup floor, default 1.10
+  ABBA_PROMPT_TOKEN=N             synthetic prompt start token for ABBA, default 1
   ABBA_BASE_REPLAY_ROUTES=1       pre-capture/replay base prompt MoE routes in ABBA
   ABBA_VARIANT_REPLAY_ROUTES=1    pre-capture/replay variant prompt MoE routes in ABBA
   ABBA_ROUTE_CAPTURE_AMORTIZE_USES=N
@@ -267,6 +269,7 @@ validate_uint MAX_CANDIDATE_ROW_SIZE "$max_candidate_row_size"
 validate_uint ABBA_WARMUPS "$abba_warmups"
 validate_positive_uint ABBA_REPEATS "$abba_repeats"
 validate_uint ABBA_TRIM_PER_ARM "$abba_trim_per_arm"
+validate_uint ABBA_PROMPT_TOKEN "$abba_prompt_token"
 validate_positive_uint ABBA_ROUTE_CAPTURE_AMORTIZE_USES "$abba_route_capture_amortize_uses"
 if [[ -n "$max_break_even_uses" ]]; then
   validate_positive_uint MAX_BREAK_EVEN_USES "$max_break_even_uses"
@@ -301,6 +304,7 @@ printf 'max_candidate_row_size=%s\n' "$max_candidate_row_size"
 printf 'base_env=%s\n' "$base_env"
 printf 'variant_env=%s\n' "$variant_env"
 printf 'min_total_speedup=%s\n' "$min_total_speedup"
+printf 'abba_prompt_token=%s\n' "$abba_prompt_token"
 
 if bool_enabled "$check_quiet"; then
   quiet_log="$log_dir/quiet_gate.log"
@@ -381,7 +385,7 @@ abba_args=(
   --model "$model"
   --prompt-len "$prompt_len"
   --canvas-len "$canvas_len"
-  --prompt-token 1
+  --prompt-token "$abba_prompt_token"
   --max-layers "$max_layers"
   --warmups "$abba_warmups"
   --repeats "$abba_repeats"
