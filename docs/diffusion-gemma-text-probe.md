@@ -380,3 +380,20 @@ variant/exact-fast runtime profile improves a fallback window while replaying
 base routes. Promotion still requires the output certificate and ABBA timing to
 pass on the same artifact and a recomputed mixed route plan to reduce the
 fallback-dominated Phi.
+
+The certified gate wrapper forwards the same controls to both child probes via
+shared defaults:
+
+```sh
+BASE_ROUTE_ARTIFACT_EXPECTED_ARM=base \
+VARIANT_ROUTE_ARTIFACT_EXPECTED_ARM=base \
+BASE_ROUTE_ARTIFACT_ENV_ROLE=base \
+VARIANT_ROUTE_ARTIFACT_ENV_ROLE=base \
+ABBA_VARIANT_ROUTE_ARTIFACT=/tmp/base_p4096_c8192_pl16_l30.tsv \
+scripts/diffusion_gemma_prompt_certified_variant_gate.sh
+```
+
+Use the `CERT_*` or `ABBA_*` prefixed forms when certificate and ABBA need
+different explicit artifacts. These expected-metadata overrides are rejected
+when `MIXED_ROUTE_PLAN`/`CERT_MIXED_ROUTE_PLAN`/`ABBA_MIXED_ROUTE_PLAN` is set,
+because a mixed route plan owns the selected artifact arm/env role.

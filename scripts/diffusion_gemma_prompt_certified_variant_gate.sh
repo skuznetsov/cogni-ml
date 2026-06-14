@@ -35,6 +35,14 @@ cert_base_route_artifact_map="${CERT_BASE_ROUTE_ARTIFACT_MAP:-}"
 cert_variant_route_artifact_map="${CERT_VARIANT_ROUTE_ARTIFACT_MAP:-}"
 mixed_route_plan="${MIXED_ROUTE_PLAN:-}"
 cert_mixed_route_plan="${CERT_MIXED_ROUTE_PLAN:-$mixed_route_plan}"
+shared_base_route_artifact_expected_arm="${BASE_ROUTE_ARTIFACT_EXPECTED_ARM:-base}"
+shared_variant_route_artifact_expected_arm="${VARIANT_ROUTE_ARTIFACT_EXPECTED_ARM:-variant}"
+shared_base_route_artifact_env_role="${BASE_ROUTE_ARTIFACT_ENV_ROLE:-base}"
+shared_variant_route_artifact_env_role="${VARIANT_ROUTE_ARTIFACT_ENV_ROLE:-variant}"
+cert_base_route_artifact_expected_arm="${CERT_BASE_ROUTE_ARTIFACT_EXPECTED_ARM:-$shared_base_route_artifact_expected_arm}"
+cert_variant_route_artifact_expected_arm="${CERT_VARIANT_ROUTE_ARTIFACT_EXPECTED_ARM:-$shared_variant_route_artifact_expected_arm}"
+cert_base_route_artifact_env_role="${CERT_BASE_ROUTE_ARTIFACT_ENV_ROLE:-$shared_base_route_artifact_env_role}"
+cert_variant_route_artifact_env_role="${CERT_VARIANT_ROUTE_ARTIFACT_ENV_ROLE:-$shared_variant_route_artifact_env_role}"
 
 abba_warmups="${ABBA_WARMUPS:-1}"
 abba_repeats="${ABBA_REPEATS:-3}"
@@ -53,6 +61,10 @@ abba_variant_replay_routes="${ABBA_VARIANT_REPLAY_ROUTES:-0}"
 abba_write_base_route_artifact="${ABBA_WRITE_BASE_ROUTE_ARTIFACT:-}"
 abba_write_variant_route_artifact="${ABBA_WRITE_VARIANT_ROUTE_ARTIFACT:-}"
 abba_mixed_route_plan="${ABBA_MIXED_ROUTE_PLAN:-$mixed_route_plan}"
+abba_base_route_artifact_expected_arm="${ABBA_BASE_ROUTE_ARTIFACT_EXPECTED_ARM:-$shared_base_route_artifact_expected_arm}"
+abba_variant_route_artifact_expected_arm="${ABBA_VARIANT_ROUTE_ARTIFACT_EXPECTED_ARM:-$shared_variant_route_artifact_expected_arm}"
+abba_base_route_artifact_env_role="${ABBA_BASE_ROUTE_ARTIFACT_ENV_ROLE:-$shared_base_route_artifact_env_role}"
+abba_variant_route_artifact_env_role="${ABBA_VARIANT_ROUTE_ARTIFACT_ENV_ROLE:-$shared_variant_route_artifact_env_role}"
 min_total_speedup="${MIN_TOTAL_SPEEDUP:-1.10}"
 max_break_even_uses="${MAX_BREAK_EVEN_USES:-}"
 run_abba_on_cert_fail="${RUN_ABBA_ON_CERT_FAIL:-0}"
@@ -93,6 +105,11 @@ Important environment knobs:
                                     cert-only base routes per window, e.g. 1:0=/tmp/a,17:100=/tmp/b
   CERT_VARIANT_ROUTE_ARTIFACT_MAP=SPEC
                                     cert-only variant routes per window, e.g. 1:0=/tmp/a,17:100=/tmp/b
+  CERT_BASE_ROUTE_ARTIFACT_EXPECTED_ARM=base|variant
+  CERT_VARIANT_ROUTE_ARTIFACT_EXPECTED_ARM=base|variant
+  CERT_BASE_ROUTE_ARTIFACT_ENV_ROLE=base|variant
+  CERT_VARIANT_ROUTE_ARTIFACT_ENV_ROLE=base|variant
+                                    expected metadata for explicit cert artifacts/maps
   MIXED_ROUTE_PLAN=PATH            single mixed route plan used by both cert and ABBA
   CERT_MIXED_ROUTE_PLAN=PATH       optional cert-only mixed route plan override
   MIN_TOTAL_SPEEDUP=F             ABBA total_ms speedup floor, default 1.10
@@ -111,6 +128,14 @@ Important environment knobs:
                                     write captured base routes to an artifact
   ABBA_WRITE_VARIANT_ROUTE_ARTIFACT=PATH
                                     write captured variant routes to an artifact
+  ABBA_BASE_ROUTE_ARTIFACT_EXPECTED_ARM=base|variant
+  ABBA_VARIANT_ROUTE_ARTIFACT_EXPECTED_ARM=base|variant
+  ABBA_BASE_ROUTE_ARTIFACT_ENV_ROLE=base|variant
+  ABBA_VARIANT_ROUTE_ARTIFACT_ENV_ROLE=base|variant
+                                    expected metadata for explicit ABBA artifacts
+  BASE_ROUTE_ARTIFACT_EXPECTED_ARM / VARIANT_ROUTE_ARTIFACT_EXPECTED_ARM
+  BASE_ROUTE_ARTIFACT_ENV_ROLE / VARIANT_ROUTE_ARTIFACT_ENV_ROLE
+                                    shared defaults for cert and ABBA expected metadata
   MAX_BREAK_EVEN_USES=N            reject replay candidates needing more than N uses
   RUN_ABBA_ON_CERT_FAIL=1         run ABBA even when certificate rejects
   CHECK_QUIET=1                   poll the existing quiet gate before running
@@ -173,6 +198,32 @@ validate_env_tokens() {
       die "$label env token must be KEY=VALUE, got $token"
     fi
   done
+}
+
+validate_route_artifact_role() {
+  local name="$1"
+  local value="$2"
+  case "$value" in
+    base|variant)
+      ;;
+    *)
+      die "$name must be base or variant"
+      ;;
+  esac
+}
+
+cert_expected_metadata_overridden() {
+  [[ "$cert_base_route_artifact_expected_arm" != "base" ||
+     "$cert_variant_route_artifact_expected_arm" != "variant" ||
+     "$cert_base_route_artifact_env_role" != "base" ||
+     "$cert_variant_route_artifact_env_role" != "variant" ]]
+}
+
+abba_expected_metadata_overridden() {
+  [[ "$abba_base_route_artifact_expected_arm" != "base" ||
+     "$abba_variant_route_artifact_expected_arm" != "variant" ||
+     "$abba_base_route_artifact_env_role" != "base" ||
+     "$abba_variant_route_artifact_env_role" != "variant" ]]
 }
 
 build_probe() {
@@ -285,6 +336,14 @@ validate_uint ABBA_TRIM_PER_ARM "$abba_trim_per_arm"
 validate_uint ABBA_PROMPT_TOKEN "$abba_prompt_token"
 validate_uint ABBA_CANVAS_TOKEN "$abba_canvas_token"
 validate_positive_uint ABBA_ROUTE_CAPTURE_AMORTIZE_USES "$abba_route_capture_amortize_uses"
+validate_route_artifact_role CERT_BASE_ROUTE_ARTIFACT_EXPECTED_ARM "$cert_base_route_artifact_expected_arm"
+validate_route_artifact_role CERT_VARIANT_ROUTE_ARTIFACT_EXPECTED_ARM "$cert_variant_route_artifact_expected_arm"
+validate_route_artifact_role CERT_BASE_ROUTE_ARTIFACT_ENV_ROLE "$cert_base_route_artifact_env_role"
+validate_route_artifact_role CERT_VARIANT_ROUTE_ARTIFACT_ENV_ROLE "$cert_variant_route_artifact_env_role"
+validate_route_artifact_role ABBA_BASE_ROUTE_ARTIFACT_EXPECTED_ARM "$abba_base_route_artifact_expected_arm"
+validate_route_artifact_role ABBA_VARIANT_ROUTE_ARTIFACT_EXPECTED_ARM "$abba_variant_route_artifact_expected_arm"
+validate_route_artifact_role ABBA_BASE_ROUTE_ARTIFACT_ENV_ROLE "$abba_base_route_artifact_env_role"
+validate_route_artifact_role ABBA_VARIANT_ROUTE_ARTIFACT_ENV_ROLE "$abba_variant_route_artifact_env_role"
 bool_enabled "$abba_base_replay_routes" >/dev/null || true
 bool_enabled "$abba_variant_replay_routes" >/dev/null || true
 if [[ -n "$cert_mixed_route_plan" && -n "$abba_mixed_route_plan" && "$cert_mixed_route_plan" != "$abba_mixed_route_plan" ]]; then
@@ -292,6 +351,9 @@ if [[ -n "$cert_mixed_route_plan" && -n "$abba_mixed_route_plan" && "$cert_mixed
 fi
 if [[ -n "$cert_mixed_route_plan" ]]; then
   [[ -f "$cert_mixed_route_plan" ]] || die "CERT_MIXED_ROUTE_PLAN not found: $cert_mixed_route_plan"
+  if cert_expected_metadata_overridden; then
+    die "CERT_MIXED_ROUTE_PLAN owns selected artifact arm/env role; expected metadata overrides require explicit route artifact path/map mode"
+  fi
   if [[ -n "$cert_base_route_artifact_map" || -n "$cert_variant_route_artifact_map" ||
         -n "$abba_base_route_artifact" || -n "$abba_variant_route_artifact" ]]; then
     die "CERT_MIXED_ROUTE_PLAN is incompatible with route artifact path/map envs"
@@ -299,6 +361,9 @@ if [[ -n "$cert_mixed_route_plan" ]]; then
 fi
 if [[ -n "$abba_mixed_route_plan" ]]; then
   [[ -f "$abba_mixed_route_plan" ]] || die "ABBA_MIXED_ROUTE_PLAN not found: $abba_mixed_route_plan"
+  if abba_expected_metadata_overridden; then
+    die "ABBA_MIXED_ROUTE_PLAN owns selected artifact arm/env role; expected metadata overrides require explicit route artifact mode"
+  fi
   if [[ -n "$abba_base_route_artifact" || -n "$abba_variant_route_artifact" ||
         -n "$abba_write_base_route_artifact" || -n "$abba_write_variant_route_artifact" ]] ||
      bool_enabled "$abba_base_replay_routes" ||
@@ -408,6 +473,12 @@ fi
 if [[ -n "$abba_variant_route_artifact" && -z "$cert_variant_route_artifact_map" ]]; then
   cert_args+=(--variant-route-artifact "$abba_variant_route_artifact")
 fi
+cert_args+=(
+  --base-route-artifact-expected-arm "$cert_base_route_artifact_expected_arm"
+  --variant-route-artifact-expected-arm "$cert_variant_route_artifact_expected_arm"
+  --base-route-artifact-env-role "$cert_base_route_artifact_env_role"
+  --variant-route-artifact-env-role "$cert_variant_route_artifact_env_role"
+)
 
 set +e
 "$cert_bin" "${cert_args[@]}" >"$cert_out" 2>"$cert_err"
@@ -461,6 +532,12 @@ fi
 if [[ -n "$abba_variant_route_artifact" ]]; then
   abba_args+=(--variant-route-artifact "$abba_variant_route_artifact")
 fi
+abba_args+=(
+  --base-route-artifact-expected-arm "$abba_base_route_artifact_expected_arm"
+  --variant-route-artifact-expected-arm "$abba_variant_route_artifact_expected_arm"
+  --base-route-artifact-env-role "$abba_base_route_artifact_env_role"
+  --variant-route-artifact-env-role "$abba_variant_route_artifact_env_role"
+)
 if [[ -n "$abba_mixed_route_plan" ]]; then
   abba_args+=(--mixed-route-plan "$abba_mixed_route_plan")
 fi
