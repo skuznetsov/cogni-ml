@@ -15,6 +15,8 @@ canvas_len="${CANVAS_LEN:-8}"
 max_layers="${MAX_LAYERS:-30}"
 artifact_arms="${SUITE_ARTIFACT_ARMS:-variant}"
 overwrite="${SUITE_ARTIFACT_OVERWRITE:-0}"
+variant_profile="${VARIANT_PROFILE:-}"
+prompt_ffn_resident_chunk_rows="${PROMPT_FFN_RESIDENT_GRAPH_CHUNK_ROWS:-8}"
 base_extra_env="${BASE_EXTRA_ENV:-}"
 variant_extra_env="${VARIANT_EXTRA_ENV:-}"
 
@@ -56,6 +58,9 @@ Important environment knobs:
   LOAD_TOTAL_THRESHOLD=240              total quiet threshold fallback
   SUITE_ARTIFACT_ARMS=variant           variant, base, or base,variant
   SUITE_ARTIFACT_OVERWRITE=1            allow prepare to overwrite artifacts
+  VARIANT_PROFILE=prompt-ffn-resident   append the certified prompt FFN resident profile
+  PROMPT_FFN_RESIDENT_GRAPH_CHUNK_ROWS=8
+                                         chunk size for that profile, default 8
   BASE_EXTRA_ENV / VARIANT_EXTRA_ENV    append profile envs to prepare and gate arms
   SUITE_*_ROUTE_ARTIFACT_MAP=SPEC       skip prepare and use existing maps
   SUITE_MIN_TOTAL_SPEEDUP=1.10          aggregate speedup floor
@@ -117,11 +122,28 @@ extract_map() {
 validate_positive_uint PROMPT_LEN "$prompt_len"
 validate_positive_uint CANVAS_LEN "$canvas_len"
 validate_positive_uint MAX_LAYERS "$max_layers"
+validate_positive_uint PROMPT_FFN_RESIDENT_GRAPH_CHUNK_ROWS "$prompt_ffn_resident_chunk_rows"
 bool_enabled "$check_quiet" >/dev/null || true
 bool_enabled "$gate_check_quiet" >/dev/null || true
 bool_enabled "$overwrite" >/dev/null || true
 bool_enabled "$dry_run" >/dev/null || true
 [[ -n "$token_windows" ]] || die "TOKEN_WINDOWS is required"
+
+case "$variant_profile" in
+  "")
+    ;;
+  prompt-ffn-resident)
+    profile_env="DIFFUSION_GEMMA_PROMPT_FFN_RESIDENT_GRAPH=1 DIFFUSION_GEMMA_PROMPT_FFN_RESIDENT_GRAPH_MIN_ROWS=1 DIFFUSION_GEMMA_PROMPT_FFN_RESIDENT_GRAPH_CHUNK_ROWS=$prompt_ffn_resident_chunk_rows"
+    if [[ -n "$variant_extra_env" ]]; then
+      variant_extra_env="$profile_env $variant_extra_env"
+    else
+      variant_extra_env="$profile_env"
+    fi
+    ;;
+  *)
+    die "unsupported VARIANT_PROFILE: $variant_profile"
+    ;;
+esac
 
 mkdir -p "$log_dir"
 manifest="$log_dir/promotion_manifest.env"
@@ -135,6 +157,8 @@ manifest="$log_dir/promotion_manifest.env"
   printf 'canvas_len=%q\n' "$canvas_len"
   printf 'max_layers=%q\n' "$max_layers"
   printf 'artifact_arms=%q\n' "$artifact_arms"
+  printf 'variant_profile=%q\n' "$variant_profile"
+  printf 'prompt_ffn_resident_chunk_rows=%q\n' "$prompt_ffn_resident_chunk_rows"
   printf 'base_extra_env=%q\n' "$base_extra_env"
   printf 'variant_extra_env=%q\n' "$variant_extra_env"
   printf 'check_quiet=%q\n' "$check_quiet"
