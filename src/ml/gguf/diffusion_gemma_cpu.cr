@@ -358,6 +358,7 @@ module ML::GGUF
       getter route_slots : Int32
       getter max_expert_batch : Int32
       getter over_threshold_experts : Int32
+      getter routes_by_row : Array(Array(ExpertRoute))
 
       def initialize(@rows,
                      @prep_ms,
@@ -368,7 +369,8 @@ module ML::GGUF
                      @active_experts = 0,
                      @route_slots = 0,
                      @max_expert_batch = 0,
-                     @over_threshold_experts = 0)
+                     @over_threshold_experts = 0,
+                     @routes_by_row = [] of Array(ExpertRoute))
       end
     end
 
@@ -388,6 +390,7 @@ module ML::GGUF
       getter moe_grouped_route_slots : Int32
       getter moe_grouped_max_expert_batch : Int32
       getter moe_grouped_over_threshold_experts : Int32
+      getter moe_grouped_routes_by_row : Array(Array(ExpertRoute))
 
       def initialize(@rows,
                      @context_ms,
@@ -403,7 +406,8 @@ module ML::GGUF
                      @moe_grouped_active_experts = 0,
                      @moe_grouped_route_slots = 0,
                      @moe_grouped_max_expert_batch = 0,
-                     @moe_grouped_over_threshold_experts = 0)
+                     @moe_grouped_over_threshold_experts = 0,
+                     @moe_grouped_routes_by_row = [] of Array(ExpertRoute))
       end
     end
 
@@ -637,6 +641,7 @@ module ML::GGUF
       getter materialize_moe_grouped_max_expert_batch_by_layer : Array(Int32)
       getter materialize_moe_grouped_over_threshold_experts_by_layer : Array(Int32)
       getter metal_cache_by_layer : Array(PromptLayerMetalCache?)
+      getter routes_by_layer_by_prompt_row : Array(Array(Array(ExpertRoute)))
 
       def initialize(@final_rows,
                      @projections_by_layer,
@@ -669,7 +674,8 @@ module ML::GGUF
                      @materialize_moe_grouped_route_slots_by_layer = [] of Int32,
                      @materialize_moe_grouped_max_expert_batch_by_layer = [] of Int32,
                      @materialize_moe_grouped_over_threshold_experts_by_layer = [] of Int32,
-                     @metal_cache_by_layer = [] of PromptLayerMetalCache?)
+                     @metal_cache_by_layer = [] of PromptLayerMetalCache?,
+                     @routes_by_layer_by_prompt_row = [] of Array(Array(ExpertRoute)))
       end
 
       def layers : Int32
@@ -2656,7 +2662,7 @@ module ML::GGUF
           if resident_reduced_rows
             gate_up_ms += (Time.instant - gate_up_t0).total_milliseconds
             return GroupedMoeRowsTiming.new(resident_reduced_rows, prep_ms, gate_up_ms, activation_ms, down_ms, scatter_combine_norm_ms,
-              active_experts, route_slot_count, max_expert_batch, over_threshold_experts)
+              active_experts, route_slot_count, max_expert_batch, over_threshold_experts, selected_by_row)
           end
         end
 
@@ -2782,7 +2788,7 @@ module ML::GGUF
               end
               scatter_combine_norm_ms += (Time.instant - norm_t0).total_milliseconds
               return GroupedMoeRowsTiming.new(reduced_rows, prep_ms, gate_up_ms, activation_ms, down_ms, scatter_combine_norm_ms,
-                active_experts, route_slot_count, max_expert_batch, over_threshold_experts)
+                active_experts, route_slot_count, max_expert_batch, over_threshold_experts, selected_by_row)
             end
           end
 
@@ -2853,7 +2859,7 @@ module ML::GGUF
       end
       scatter_combine_norm_ms += (Time.instant - combine_t0).total_milliseconds
       GroupedMoeRowsTiming.new(result, prep_ms, gate_up_ms, activation_ms, down_ms, scatter_combine_norm_ms,
-        active_experts, route_slot_count, max_expert_batch, over_threshold_experts)
+        active_experts, route_slot_count, max_expert_batch, over_threshold_experts, selected_by_row)
     end
 
     def ffn_residual(weights : DiffusionGemmaWeights,
@@ -2993,6 +2999,7 @@ module ML::GGUF
       moe_grouped_route_slots = 0
       moe_grouped_max_expert_batch = 0
       moe_grouped_over_threshold_experts = 0
+      moe_grouped_routes_by_row = [] of Array(ExpertRoute)
       moe_t0 = Time.instant
       moe_rows = if prompt_materialize_grouped_moe_enabled?
                    grouped = moe_ffn_grouped_expert_rows_timed(weights, il, attn_out_rows, mask.prompt_len, routes_by_prompt_row, force_gemv: force_gemv)
@@ -3005,6 +3012,7 @@ module ML::GGUF
                    moe_grouped_route_slots = grouped.route_slots
                    moe_grouped_max_expert_batch = grouped.max_expert_batch
                    moe_grouped_over_threshold_experts = grouped.over_threshold_experts
+                   moe_grouped_routes_by_row = grouped.routes_by_row
                    grouped.rows
                  else
                    moe_ffn_rows(weights, il, attn_out_rows, mask.prompt_len, routes_by_prompt_row)
@@ -3017,7 +3025,7 @@ module ML::GGUF
         moe_grouped_prep_ms, moe_grouped_gate_up_ms, moe_grouped_activation_ms,
         moe_grouped_down_ms, moe_grouped_scatter_combine_norm_ms,
         moe_grouped_active_experts, moe_grouped_route_slots, moe_grouped_max_expert_batch,
-        moe_grouped_over_threshold_experts)
+        moe_grouped_over_threshold_experts, moe_grouped_routes_by_row)
     end
 
     def build_prompt_layer_cache(weights : DiffusionGemmaWeights,
@@ -3065,6 +3073,7 @@ module ML::GGUF
       materialize_moe_grouped_route_slots_by_layer = [] of Int32
       materialize_moe_grouped_max_expert_batch_by_layer = [] of Int32
       materialize_moe_grouped_over_threshold_experts_by_layer = [] of Int32
+      captured_routes_by_layer_by_prompt_row = [] of Array(Array(ExpertRoute))
       metal_cache_by_layer = [] of PromptLayerMetalCache?
       max_layers.times do |il|
         projection_t0 = Time.instant
@@ -3113,6 +3122,7 @@ module ML::GGUF
         materialize_moe_grouped_route_slots_by_layer << timed_materialize.moe_grouped_route_slots
         materialize_moe_grouped_max_expert_batch_by_layer << timed_materialize.moe_grouped_max_expert_batch
         materialize_moe_grouped_over_threshold_experts_by_layer << timed_materialize.moe_grouped_over_threshold_experts
+        captured_routes_by_layer_by_prompt_row << timed_materialize.moe_grouped_routes_by_row
       end
 
       PromptLayerCache.new(
@@ -3148,6 +3158,7 @@ module ML::GGUF
         materialize_moe_grouped_max_expert_batch_by_layer,
         materialize_moe_grouped_over_threshold_experts_by_layer,
         metal_cache_by_layer,
+        captured_routes_by_layer_by_prompt_row,
       )
     end
 
