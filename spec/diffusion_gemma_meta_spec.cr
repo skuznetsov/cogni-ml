@@ -917,6 +917,98 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
   end
 
+  it "gates the c8 resident decode policy through existing route kill switches" do
+    keys = [
+      "DIFFUSION_GEMMA_C8_RESIDENT_DECODE_POLICY",
+      "DIFFUSION_GEMMA_C8_RESIDENT_DECODE_POLICY_OFF",
+      "DIFFUSION_GEMMA_CONTEXT_METAL",
+      "DIFFUSION_GEMMA_CONTEXT_METAL_OFF",
+      "DIFFUSION_GEMMA_PROMPT_PROJ_METAL",
+      "DIFFUSION_GEMMA_PROMPT_PROJ_METAL_OFF",
+      "DIFFUSION_GEMMA_FUSED_QK_NORM_ROPE",
+      "DIFFUSION_GEMMA_GROUPED_MOE_POLICY",
+      "DIFFUSION_GEMMA_GROUPED_MOE_POLICY_OFF",
+      "DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS",
+      "DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS_OFF",
+      "DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS",
+      "DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS_OFF",
+      "DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH",
+      "DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_OFF",
+      "DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH",
+      "DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH_OFF",
+      "DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_CACHE",
+      "DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_CACHE_OFF",
+    ]
+    old_env = keys.to_h { |key| {key, ENV[key]?} }
+    begin
+      keys.each { |key| ENV.delete(key) }
+      ML::GGUF::DiffusionGemmaCPU.c8_resident_decode_policy_enabled?(8).should be_false
+      ML::GGUF::DiffusionGemmaCPU.prompt_projection_fused_norm_rope_enabled?.should be_false
+      ML::GGUF::DiffusionGemmaCPU.prompt_projection_metal_enabled?.should be_false
+      ML::GGUF::DiffusionGemmaCPU.decode_context_metal_backend_enabled?.should be_false
+      ML::GGUF::DiffusionGemmaCPU.grouped_moe_policy_enabled?(8).should be_false
+      ML::GGUF::DiffusionGemmaCPU.attention_out_batch_rows_enabled?(8).should be_false
+      ML::GGUF::DiffusionGemmaCPU.ffn_resident_scratch_enabled?.should be_false
+      ML::GGUF::DiffusionGemmaCPU.ffn_resident_graph_cache_enabled?.should be_false
+
+      ENV["DIFFUSION_GEMMA_C8_RESIDENT_DECODE_POLICY"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.c8_resident_decode_policy_enabled?(4).should be_false
+      ML::GGUF::DiffusionGemmaCPU.c8_resident_decode_policy_enabled?(8).should be_true
+      ML::GGUF::DiffusionGemmaCPU.c8_resident_decode_policy_enabled?(16).should be_false
+      ML::GGUF::DiffusionGemmaCPU.prompt_projection_fused_norm_rope_enabled?.should be_true
+      ML::GGUF::DiffusionGemmaCPU.prompt_projection_metal_enabled?.should be_true
+      ML::GGUF::DiffusionGemmaCPU.prompt_projection_metal_min_batch.should eq(1)
+      ML::GGUF::DiffusionGemmaCPU.grouped_moe_policy_enabled?(4).should be_false
+      ML::GGUF::DiffusionGemmaCPU.grouped_moe_policy_enabled?(8).should be_true
+      ML::GGUF::DiffusionGemmaCPU.grouped_moe_policy_enabled?(16).should be_false
+      ML::GGUF::DiffusionGemmaCPU.attention_out_batch_rows_enabled?(4).should be_false
+      ML::GGUF::DiffusionGemmaCPU.attention_out_batch_rows_enabled?(8).should be_true
+      ML::GGUF::DiffusionGemmaCPU.ffn_resident_scratch_enabled?.should be_true
+      ML::GGUF::DiffusionGemmaCPU.ffn_resident_graph_cache_enabled?.should be_true
+
+      if ML::GGUF::Gemma4Metal.available?
+        ML::GGUF::DiffusionGemmaCPU.decode_context_metal_backend_enabled?.should be_true
+        ML::GGUF::DiffusionGemmaCPU.attention_residual_metal_rows_enabled?(8).should be_true
+      end
+      if ML::GGUF::Qwen35Metal.available?
+        ML::GGUF::DiffusionGemmaCPU.ffn_residual_resident_graph_enabled?(8).should be_true
+      end
+
+      ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.attention_out_batch_rows_enabled?(8).should be_false
+      ENV.delete("DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS_OFF")
+
+      ENV["DIFFUSION_GEMMA_GROUPED_MOE_POLICY_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.grouped_moe_policy_enabled?(8).should be_false
+      ENV.delete("DIFFUSION_GEMMA_GROUPED_MOE_POLICY_OFF")
+
+      ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.prompt_projection_metal_enabled?.should be_false
+      ENV.delete("DIFFUSION_GEMMA_PROMPT_PROJ_METAL_OFF")
+
+      ENV["DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.ffn_resident_scratch_enabled?.should be_false
+      ENV.delete("DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH_OFF")
+
+      ENV["DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_CACHE_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.ffn_resident_graph_cache_enabled?.should be_false
+      ENV.delete("DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_CACHE_OFF")
+
+      ENV["DIFFUSION_GEMMA_C8_RESIDENT_DECODE_POLICY_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.c8_resident_decode_policy_enabled?(8).should be_false
+      ML::GGUF::DiffusionGemmaCPU.ffn_resident_scratch_enabled?.should be_false
+      ML::GGUF::DiffusionGemmaCPU.ffn_resident_graph_cache_enabled?.should be_false
+    ensure
+      old_env.each do |key, value|
+        if value
+          ENV[key] = value
+        else
+          ENV.delete(key)
+        end
+      end
+    end
+  end
+
   it "gates Metal attention residual context-buffer transport by canvas length env policy" do
     old_residual = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS"]?
     old_residual_off = ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS_OFF"]?

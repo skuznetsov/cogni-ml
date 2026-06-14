@@ -3027,7 +3027,8 @@ module ML::GGUF
     end
 
     def prompt_projection_fused_norm_rope_enabled? : Bool
-      ENV["DIFFUSION_GEMMA_FUSED_QK_NORM_ROPE"]? == "1"
+      ENV["DIFFUSION_GEMMA_FUSED_QK_NORM_ROPE"]? == "1" ||
+        c8_resident_decode_policy_requested?
     end
 
     def prompt_materialize_batch_rows_enabled?(prompt_len : Int32) : Bool
@@ -3052,12 +3053,24 @@ module ML::GGUF
         ENV["DIFFUSION_GEMMA_PROMPT_MATERIALIZE_GROUPED_MOE_OFF"]? != "1"
     end
 
+    def c8_resident_decode_policy_requested? : Bool
+      ENV["DIFFUSION_GEMMA_C8_RESIDENT_DECODE_POLICY"]? == "1" &&
+        ENV["DIFFUSION_GEMMA_C8_RESIDENT_DECODE_POLICY_OFF"]? != "1"
+    end
+
+    def c8_resident_decode_policy_enabled?(row_count : Int32) : Bool
+      return false unless c8_resident_decode_policy_requested?
+      row_count == 8
+    end
+
     def attention_residual_metal_rows_enabled?(row_count : Int32) : Bool
-      return false unless ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS"]? == "1"
       return false if ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS_OFF"]? == "1"
-      return false if row_count < attention_residual_metal_min_rows
-      max_rows = attention_residual_metal_max_rows
-      return false if max_rows > 0 && row_count > max_rows
+      unless c8_resident_decode_policy_enabled?(row_count)
+        return false unless ENV["DIFFUSION_GEMMA_ATTENTION_RESIDUAL_METAL_ROWS"]? == "1"
+        return false if row_count < attention_residual_metal_min_rows
+        max_rows = attention_residual_metal_max_rows
+        return false if max_rows > 0 && row_count > max_rows
+      end
       Gemma4Metal.available?
     end
 
@@ -3088,11 +3101,13 @@ module ML::GGUF
     end
 
     def grouped_moe_policy_enabled?(canvas_len : Int32) : Bool
-      return false unless ENV["DIFFUSION_GEMMA_GROUPED_MOE_POLICY"]? == "1"
       return false if ENV["DIFFUSION_GEMMA_GROUPED_MOE_POLICY_OFF"]? == "1"
-      return false if canvas_len < grouped_moe_policy_min_canvas
-      max_canvas = grouped_moe_policy_max_canvas
-      return false if max_canvas > 0 && canvas_len > max_canvas
+      unless c8_resident_decode_policy_enabled?(canvas_len)
+        return false unless ENV["DIFFUSION_GEMMA_GROUPED_MOE_POLICY"]? == "1"
+        return false if canvas_len < grouped_moe_policy_min_canvas
+        max_canvas = grouped_moe_policy_max_canvas
+        return false if max_canvas > 0 && canvas_len > max_canvas
+      end
       true
     end
 
@@ -3159,11 +3174,13 @@ module ML::GGUF
     end
 
     def ffn_residual_resident_graph_enabled?(canvas_len : Int32) : Bool
-      return false unless ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH"]? == "1"
       return false if ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_OFF"]? == "1"
-      return false if canvas_len < ffn_residual_resident_graph_min_canvas
-      max_canvas = ffn_residual_resident_graph_max_canvas
-      return false if max_canvas > 0 && canvas_len > max_canvas
+      unless c8_resident_decode_policy_enabled?(canvas_len)
+        return false unless ENV["DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH"]? == "1"
+        return false if canvas_len < ffn_residual_resident_graph_min_canvas
+        max_canvas = ffn_residual_resident_graph_max_canvas
+        return false if max_canvas > 0 && canvas_len > max_canvas
+      end
       Qwen35Metal.available?
     end
 
@@ -3176,8 +3193,9 @@ module ML::GGUF
     end
 
     def ffn_resident_scratch_enabled? : Bool
-      ENV["DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH"]? == "1" &&
-        ENV["DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH_OFF"]? != "1"
+      return false if ENV["DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH_OFF"]? == "1"
+      ENV["DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH"]? == "1" ||
+        c8_resident_decode_policy_requested?
     end
 
     def ffn_resident_graph_expert_chunk_size : Int32
@@ -3198,8 +3216,9 @@ module ML::GGUF
     end
 
     def ffn_resident_graph_cache_enabled? : Bool
-      ENV["DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_CACHE"]? == "1" &&
-        ENV["DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_CACHE_OFF"]? != "1"
+      return false if ENV["DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_CACHE_OFF"]? == "1"
+      ENV["DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_CACHE"]? == "1" ||
+        c8_resident_decode_policy_requested?
     end
 
     def clear_ffn_resident_graph_cache : Nil
@@ -3346,11 +3365,13 @@ module ML::GGUF
     end
 
     def attention_out_batch_rows_enabled?(canvas_len : Int32) : Bool
-      return false unless ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS"]? == "1"
       return false if ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS_OFF"]? == "1"
-      return false if canvas_len < attention_out_batch_min_canvas
-      max_canvas = attention_out_batch_max_canvas
-      return false if max_canvas > 0 && canvas_len > max_canvas
+      unless c8_resident_decode_policy_enabled?(canvas_len)
+        return false unless ENV["DIFFUSION_GEMMA_ATTENTION_OUT_BATCH_ROWS"]? == "1"
+        return false if canvas_len < attention_out_batch_min_canvas
+        max_canvas = attention_out_batch_max_canvas
+        return false if max_canvas > 0 && canvas_len > max_canvas
+      end
       true
     end
 
@@ -3363,12 +3384,19 @@ module ML::GGUF
     end
 
     def prompt_projection_metal_enabled? : Bool
-      ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL"]? == "1" &&
-        ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_OFF"]? != "1"
+      return false if ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_OFF"]? == "1"
+      ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL"]? == "1" ||
+        c8_resident_decode_policy_requested?
     end
 
     def prompt_projection_metal_min_batch : Int32
-      (ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH"]? || "16").to_i
+      if raw = ENV["DIFFUSION_GEMMA_PROMPT_PROJ_METAL_MIN_BATCH"]?
+        raw.to_i
+      elsif c8_resident_decode_policy_requested?
+        1
+      else
+        16
+      end
     end
 
     def grouped_moe_cognigraph_plan_enabled? : Bool
@@ -4378,8 +4406,9 @@ module ML::GGUF
     end
 
     private def context_metal_enabled? : Bool
-      ENV["DIFFUSION_GEMMA_CONTEXT_METAL"]? == "1" &&
-        ENV["DIFFUSION_GEMMA_CONTEXT_METAL_OFF"]? != "1"
+      return false if ENV["DIFFUSION_GEMMA_CONTEXT_METAL_OFF"]? == "1"
+      ENV["DIFFUSION_GEMMA_CONTEXT_METAL"]? == "1" ||
+        c8_resident_decode_policy_requested?
     end
 
     private def context_metal_batch_rows_enabled? : Bool
