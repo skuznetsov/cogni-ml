@@ -39,6 +39,7 @@ PROMPT_CACHE_METRICS = [
     "materialize_shared_ffn_ms",
     "materialize_moe_ffn_ms",
     "materialize_combine_scale_ms",
+    "materialize_ffn_resident_ms",
     "materialize_moe_grouped_prep_ms",
     "materialize_moe_grouped_gate_up_ms",
     "materialize_moe_grouped_activation_ms",
@@ -53,6 +54,7 @@ ROUTE_FLAGS = [
     "materialize_grouped_moe",
     "prompt_context_metal_rows",
     "prompt_attention_residual_context_buffer",
+    "prompt_ffn_resident_graph",
     "projection_backend",
     "fused_norm_rope",
 ]
@@ -207,6 +209,10 @@ def candidate_text(dominant_metric: str, route_changes: list[str], noisy_count: 
     elif dominant_metric == "materialize_combine_scale_ms":
         rows.append(
             "Spike: prompt combine/scale dominates. Window=post-FFN scalar tail; legal move=eliminate redundant passes only if total_ms proof exceeds noise."
+        )
+    elif dominant_metric == "materialize_ffn_resident_ms":
+        rows.append(
+            "Ladder: prompt full-FFN resident graph dominates. Window=resident shared+MoE+post-norm chunks; legal move must reduce graph waves/wait or amortize route/session state."
         )
     else:
         rows.append(

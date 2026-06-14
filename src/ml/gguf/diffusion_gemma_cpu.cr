@@ -386,6 +386,27 @@ module ML::GGUF
       end
     end
 
+    struct PromptFfnResidentRowsTiming
+      getter rows : Array(Float32)
+      getter route_prep_ms : Float64
+      getter resident_ms : Float64
+      getter active_experts : Int32
+      getter route_slots : Int32
+      getter max_expert_batch : Int32
+      getter over_threshold_experts : Int32
+      getter routes_by_row : Array(Array(ExpertRoute))
+
+      def initialize(@rows,
+                     @route_prep_ms,
+                     @resident_ms,
+                     @active_experts,
+                     @route_slots,
+                     @max_expert_batch,
+                     @over_threshold_experts,
+                     @routes_by_row)
+      end
+    end
+
     struct PromptMaterializeTiming
       getter rows : Array(Float32)
       getter context_ms : Float64
@@ -405,6 +426,7 @@ module ML::GGUF
       getter moe_grouped_max_expert_batch : Int32
       getter moe_grouped_over_threshold_experts : Int32
       getter moe_grouped_routes_by_row : Array(Array(ExpertRoute))
+      getter ffn_resident_ms : Float64
 
       def initialize(@rows,
                      @context_ms,
@@ -423,7 +445,8 @@ module ML::GGUF
                      @moe_grouped_route_slots = 0,
                      @moe_grouped_max_expert_batch = 0,
                      @moe_grouped_over_threshold_experts = 0,
-                     @moe_grouped_routes_by_row = [] of Array(ExpertRoute))
+                     @moe_grouped_routes_by_row = [] of Array(ExpertRoute),
+                     @ffn_resident_ms = 0.0)
       end
     end
 
@@ -658,6 +681,7 @@ module ML::GGUF
       getter materialize_moe_grouped_route_slots_by_layer : Array(Int32)
       getter materialize_moe_grouped_max_expert_batch_by_layer : Array(Int32)
       getter materialize_moe_grouped_over_threshold_experts_by_layer : Array(Int32)
+      getter materialize_ffn_resident_ms_by_layer : Array(Float64)
       getter metal_cache_by_layer : Array(PromptLayerMetalCache?)
       getter routes_by_layer_by_prompt_row : Array(Array(Array(ExpertRoute)))
 
@@ -694,6 +718,7 @@ module ML::GGUF
                      @materialize_moe_grouped_route_slots_by_layer = [] of Int32,
                      @materialize_moe_grouped_max_expert_batch_by_layer = [] of Int32,
                      @materialize_moe_grouped_over_threshold_experts_by_layer = [] of Int32,
+                     @materialize_ffn_resident_ms_by_layer = [] of Float64,
                      @metal_cache_by_layer = [] of PromptLayerMetalCache?,
                      @routes_by_layer_by_prompt_row = [] of Array(Array(ExpertRoute)))
       end
@@ -1342,8 +1367,9 @@ module ML::GGUF
                                          attn_out_rows : Array(Float32),
                                          row_count : Int32,
                                          routes_by_row : Array(Array(ExpertRoute))? = nil,
-                                         canvas : Bool = true) : Array(Float32)?
-      return nil unless ffn_residual_resident_graph_enabled?(row_count)
+                                         canvas : Bool = true,
+                                         force_enabled : Bool = false) : Array(Float32)?
+      return nil unless force_enabled || ffn_residual_resident_graph_enabled?(row_count)
 
       hp = weights.hparams
       lw = weights.layers[il]
@@ -1620,6 +1646,80 @@ module ML::GGUF
         STDERR.puts "diffusion_gemma_ffn_resident_timing layer=#{il} rows=#{row_count} active_experts=#{assignments_by_expert.size} route_slots=#{route_slot_count} ops=#{stats.n_ops} waves=#{stats.n_waves} barriers=#{stats.n_barriers} graph_cache=#{graph_cache_status} prep_ms=#{(prep_done.not_nil! - timing_t0.not_nil!).total_milliseconds} graph_build_ms=#{(graph_build_done.not_nil! - prep_done.not_nil!).total_milliseconds} compile_ms=#{(compile_done.not_nil! - compile_t0.not_nil!).total_milliseconds} encode_ms=#{(encode_done.not_nil! - encode_t0.not_nil!).total_milliseconds} wait_ms=#{(wait_done.not_nil! - wait_t0.not_nil!).total_milliseconds} read_ms=#{(read_done - read_t0.not_nil!).total_milliseconds} total_ms=#{(read_done - timing_t0.not_nil!).total_milliseconds}"
       end
       result
+    end
+
+    def prompt_ffn_residual_rows_resident_graph(weights : DiffusionGemmaWeights,
+                                                il : Int32,
+                                                attn_out_rows : Array(Float32),
+                                                row_count : Int32,
+                                                routes_by_row : Array(Array(ExpertRoute))? = nil) : PromptFfnResidentRowsTiming?
+      return nil unless prompt_ffn_resident_graph_enabled?(row_count)
+
+      hp = weights.hparams
+      expected = row_count * hp.n_embd
+      raise ArgumentError.new("prompt ffn resident graph row_count must be positive") unless row_count > 0
+      raise ArgumentError.new("prompt ffn resident graph input size mismatch") unless attn_out_rows.size == expected
+      if supplied_routes = routes_by_row
+        raise ArgumentError.new("prompt ffn resident graph route row count mismatch") unless supplied_routes.size == row_count
+      end
+
+      chunk_rows = prompt_ffn_resident_graph_chunk_rows
+      return nil unless chunk_rows > 0 && chunk_rows <= Qwen35Metal::GEMM_BATCH_THRESHOLD
+      return nil unless row_count % chunk_rows == 0
+
+      route_t0 = Time.instant
+      selected_by_row = routes_by_row || route_experts_rows(weights, il, attn_out_rows, row_count)
+      route_prep_ms = routes_by_row ? 0.0 : (Time.instant - route_t0).total_milliseconds
+      selected_by_row.each do |selected|
+        raise ArgumentError.new("prompt ffn resident graph routes must not be empty") if selected.empty?
+      end
+
+      batch_by_expert = Hash(Int32, Int32).new(0)
+      route_slots = 0
+      selected_by_row.each do |selected|
+        route_slots += selected.size
+        selected.each { |route| batch_by_expert[route.expert] += 1 }
+      end
+      active_experts = batch_by_expert.size
+      max_expert_batch = batch_by_expert.values.max? || 0
+      over_threshold_experts = batch_by_expert.values.count { |batch| batch > Qwen35Metal::GEMM_BATCH_THRESHOLD }
+
+      result = Array(Float32).new(expected, 0.0_f32)
+      resident_t0 = Time.instant
+      row_offset = 0
+      while row_offset < row_count
+        chunk_size = {chunk_rows, row_count - row_offset}.min
+        return nil unless chunk_size == chunk_rows
+        value_offset = row_offset * hp.n_embd
+        chunk_values = attn_out_rows[value_offset, chunk_size * hp.n_embd]
+        chunk_routes = selected_by_row[row_offset, chunk_size]
+        chunk_result = ffn_residual_rows_resident_graph(
+          weights,
+          il,
+          chunk_values,
+          chunk_size,
+          chunk_routes,
+          canvas: false,
+          force_enabled: true,
+        )
+        return nil unless chunk_result
+        chunk_result.not_nil!.each_with_index do |value, index|
+          result[value_offset + index] = value
+        end
+        row_offset += chunk_size
+      end
+      resident_ms = (Time.instant - resident_t0).total_milliseconds
+
+      PromptFfnResidentRowsTiming.new(
+        result,
+        route_prep_ms,
+        resident_ms,
+        active_experts,
+        route_slots,
+        max_expert_batch,
+        over_threshold_experts,
+        selected_by_row,
+      )
     end
 
     def router_input(weights : DiffusionGemmaWeights,
@@ -3053,6 +3153,31 @@ module ML::GGUF
       end
       attn_out_rows ||= attention_residual_from_context_rows(weights, il, prompt_rows, context_rows.not_nil!, mask.prompt_len, force_gemv: force_gemv)
       attention_out_ms = (Time.instant - attention_out_t0).total_milliseconds
+
+      if resident = prompt_ffn_residual_rows_resident_graph(weights, il, attn_out_rows, mask.prompt_len, routes_by_prompt_row)
+        return PromptMaterializeTiming.new(
+          resident.rows,
+          context_ms,
+          context_metal_rows,
+          context_buffer,
+          attention_out_ms,
+          0.0,
+          0.0,
+          0.0,
+          resident.route_prep_ms,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          resident.active_experts,
+          resident.route_slots,
+          resident.max_expert_batch,
+          resident.over_threshold_experts,
+          resident.routes_by_row,
+          resident.resident_ms,
+        )
+      end
+
       shared_t0 = Time.instant
       shared_rows = shared_dense_ffn_rows(weights, il, attn_out_rows, mask.prompt_len, force_gemv: force_gemv)
       shared_ms = (Time.instant - shared_t0).total_milliseconds
@@ -3141,6 +3266,7 @@ module ML::GGUF
       materialize_moe_grouped_route_slots_by_layer = [] of Int32
       materialize_moe_grouped_max_expert_batch_by_layer = [] of Int32
       materialize_moe_grouped_over_threshold_experts_by_layer = [] of Int32
+      materialize_ffn_resident_ms_by_layer = [] of Float64
       captured_routes_by_layer_by_prompt_row = [] of Array(Array(ExpertRoute))
       metal_cache_by_layer = [] of PromptLayerMetalCache?
       max_layers.times do |il|
@@ -3193,6 +3319,7 @@ module ML::GGUF
         materialize_moe_grouped_route_slots_by_layer << timed_materialize.moe_grouped_route_slots
         materialize_moe_grouped_max_expert_batch_by_layer << timed_materialize.moe_grouped_max_expert_batch
         materialize_moe_grouped_over_threshold_experts_by_layer << timed_materialize.moe_grouped_over_threshold_experts
+        materialize_ffn_resident_ms_by_layer << timed_materialize.ffn_resident_ms
         captured_routes_by_layer_by_prompt_row << timed_materialize.moe_grouped_routes_by_row
       end
 
@@ -3230,6 +3357,7 @@ module ML::GGUF
         materialize_moe_grouped_route_slots_by_layer,
         materialize_moe_grouped_max_expert_batch_by_layer,
         materialize_moe_grouped_over_threshold_experts_by_layer,
+        materialize_ffn_resident_ms_by_layer,
         metal_cache_by_layer,
         captured_routes_by_layer_by_prompt_row,
       )
@@ -3757,6 +3885,27 @@ module ML::GGUF
     def prompt_cache_policy_requested? : Bool
       ENV["DIFFUSION_GEMMA_PROMPT_CACHE_POLICY"]? == "1" &&
         ENV["DIFFUSION_GEMMA_PROMPT_CACHE_POLICY_OFF"]? != "1"
+    end
+
+    def prompt_ffn_resident_graph_enabled?(row_count : Int32) : Bool
+      return false unless ENV["DIFFUSION_GEMMA_PROMPT_FFN_RESIDENT_GRAPH"]? == "1"
+      return false if ENV["DIFFUSION_GEMMA_PROMPT_FFN_RESIDENT_GRAPH_OFF"]? == "1"
+      return false if row_count < prompt_ffn_resident_graph_min_rows
+      max_rows = prompt_ffn_resident_graph_max_rows
+      return false if max_rows > 0 && row_count > max_rows
+      Qwen35Metal.available?
+    end
+
+    def prompt_ffn_resident_graph_min_rows : Int32
+      env_i32("DIFFUSION_GEMMA_PROMPT_FFN_RESIDENT_GRAPH_MIN_ROWS", 8)
+    end
+
+    def prompt_ffn_resident_graph_max_rows : Int32
+      env_i32("DIFFUSION_GEMMA_PROMPT_FFN_RESIDENT_GRAPH_MAX_ROWS", 0)
+    end
+
+    def prompt_ffn_resident_graph_chunk_rows : Int32
+      env_i32("DIFFUSION_GEMMA_PROMPT_FFN_RESIDENT_GRAPH_CHUNK_ROWS", Qwen35Metal::GEMM_BATCH_THRESHOLD)
     end
 
     def c8_resident_decode_policy_requested? : Bool

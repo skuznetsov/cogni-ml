@@ -881,6 +881,56 @@ describe ML::GGUF::DiffusionGemmaCPU do
     end
   end
 
+  it "gates prompt FFN resident graph independently from decode FFN routes" do
+    keys = [
+      "DIFFUSION_GEMMA_PROMPT_FFN_RESIDENT_GRAPH",
+      "DIFFUSION_GEMMA_PROMPT_FFN_RESIDENT_GRAPH_OFF",
+      "DIFFUSION_GEMMA_PROMPT_FFN_RESIDENT_GRAPH_MIN_ROWS",
+      "DIFFUSION_GEMMA_PROMPT_FFN_RESIDENT_GRAPH_MAX_ROWS",
+      "DIFFUSION_GEMMA_PROMPT_FFN_RESIDENT_GRAPH_CHUNK_ROWS",
+      "DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH",
+      "DIFFUSION_GEMMA_FFN_RESIDUAL_RESIDENT_GRAPH_OFF",
+    ]
+    old_env = keys.to_h { |key| {key, ENV[key]?} }
+    begin
+      keys.each { |key| ENV.delete(key) }
+      ML::GGUF::DiffusionGemmaCPU.prompt_ffn_resident_graph_enabled?(16).should be_false
+      ML::GGUF::DiffusionGemmaCPU.ffn_residual_resident_graph_enabled?(16).should be_false
+      ML::GGUF::DiffusionGemmaCPU.prompt_ffn_resident_graph_chunk_rows.should eq(ML::GGUF::Qwen35Metal::GEMM_BATCH_THRESHOLD)
+
+      ENV["DIFFUSION_GEMMA_PROMPT_FFN_RESIDENT_GRAPH"] = "1"
+      if ML::GGUF::Qwen35Metal.available?
+        ML::GGUF::DiffusionGemmaCPU.prompt_ffn_resident_graph_enabled?(4).should be_false
+        ML::GGUF::DiffusionGemmaCPU.prompt_ffn_resident_graph_enabled?(8).should be_true
+        ML::GGUF::DiffusionGemmaCPU.prompt_ffn_resident_graph_enabled?(16).should be_true
+      else
+        ML::GGUF::DiffusionGemmaCPU.prompt_ffn_resident_graph_enabled?(16).should be_false
+      end
+      ML::GGUF::DiffusionGemmaCPU.ffn_residual_resident_graph_enabled?(16).should be_false
+
+      ENV["DIFFUSION_GEMMA_PROMPT_FFN_RESIDENT_GRAPH_MIN_ROWS"] = "4"
+      ENV["DIFFUSION_GEMMA_PROMPT_FFN_RESIDENT_GRAPH_MAX_ROWS"] = "16"
+      if ML::GGUF::Qwen35Metal.available?
+        ML::GGUF::DiffusionGemmaCPU.prompt_ffn_resident_graph_enabled?(4).should be_true
+        ML::GGUF::DiffusionGemmaCPU.prompt_ffn_resident_graph_enabled?(32).should be_false
+      end
+
+      ENV["DIFFUSION_GEMMA_PROMPT_FFN_RESIDENT_GRAPH_CHUNK_ROWS"] = "4"
+      ML::GGUF::DiffusionGemmaCPU.prompt_ffn_resident_graph_chunk_rows.should eq(4)
+
+      ENV["DIFFUSION_GEMMA_PROMPT_FFN_RESIDENT_GRAPH_OFF"] = "1"
+      ML::GGUF::DiffusionGemmaCPU.prompt_ffn_resident_graph_enabled?(8).should be_false
+    ensure
+      old_env.each do |key, value|
+        if value
+          ENV[key] = value
+        else
+          ENV.delete(key)
+        end
+      end
+    end
+  end
+
   it "bundles prompt-cache policy without enabling c8 decode routes" do
     keys = [
       "DIFFUSION_GEMMA_PROMPT_CACHE_POLICY",

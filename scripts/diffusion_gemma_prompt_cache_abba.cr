@@ -50,6 +50,7 @@ struct PromptCacheSample
   getter materialize_shared_ffn_ms : Float64
   getter materialize_moe_ffn_ms : Float64
   getter materialize_combine_scale_ms : Float64
+  getter materialize_ffn_resident_ms : Float64
   getter materialize_moe_grouped_prep_ms : Float64
   getter materialize_moe_grouped_gate_up_ms : Float64
   getter materialize_moe_grouped_activation_ms : Float64
@@ -65,6 +66,7 @@ struct PromptCacheSample
   getter materialize_grouped_moe : Bool
   getter prompt_context_metal_rows : Bool
   getter prompt_attention_residual_context_buffer : Bool
+  getter prompt_ffn_resident_graph : Bool
   getter projection_backend : String
   getter fused_norm_rope : Bool
 
@@ -78,7 +80,8 @@ struct PromptCacheSample
                  @projection_rope_k_apply_ms, @materialize_ms,
                  @materialize_context_ms, @materialize_attention_out_ms,
                  @materialize_shared_ffn_ms, @materialize_moe_ffn_ms,
-                 @materialize_combine_scale_ms, @materialize_moe_grouped_prep_ms,
+                 @materialize_combine_scale_ms, @materialize_ffn_resident_ms,
+                 @materialize_moe_grouped_prep_ms,
                  @materialize_moe_grouped_gate_up_ms,
                  @materialize_moe_grouped_activation_ms,
                  @materialize_moe_grouped_down_ms,
@@ -91,6 +94,7 @@ struct PromptCacheSample
                  @prompt_cache_policy, @materialize_batch_rows,
                  @materialize_grouped_moe, @prompt_context_metal_rows,
                  @prompt_attention_residual_context_buffer,
+                 @prompt_ffn_resident_graph,
                  @projection_backend,
                  @fused_norm_rope)
   end
@@ -118,6 +122,7 @@ struct PromptCacheSample
     when "materialize_shared_ffn_ms"                       then materialize_shared_ffn_ms
     when "materialize_moe_ffn_ms"                          then materialize_moe_ffn_ms
     when "materialize_combine_scale_ms"                    then materialize_combine_scale_ms
+    when "materialize_ffn_resident_ms"                     then materialize_ffn_resident_ms
     when "materialize_moe_grouped_prep_ms"                 then materialize_moe_grouped_prep_ms
     when "materialize_moe_grouped_gate_up_ms"              then materialize_moe_grouped_gate_up_ms
     when "materialize_moe_grouped_activation_ms"           then materialize_moe_grouped_activation_ms
@@ -145,6 +150,7 @@ TSV_HEADER = [
   "materialize_grouped_moe",
   "prompt_context_metal_rows",
   "prompt_attention_residual_context_buffer",
+  "prompt_ffn_resident_graph",
   "projection_backend",
   "fused_norm_rope",
   "total_ms",
@@ -168,6 +174,7 @@ TSV_HEADER = [
   "materialize_shared_ffn_ms",
   "materialize_moe_ffn_ms",
   "materialize_combine_scale_ms",
+  "materialize_ffn_resident_ms",
   "materialize_moe_grouped_prep_ms",
   "materialize_moe_grouped_gate_up_ms",
   "materialize_moe_grouped_activation_ms",
@@ -202,6 +209,7 @@ METRICS = [
   "materialize_shared_ffn_ms",
   "materialize_moe_ffn_ms",
   "materialize_combine_scale_ms",
+  "materialize_ffn_resident_ms",
   "materialize_moe_grouped_prep_ms",
   "materialize_moe_grouped_gate_up_ms",
   "materialize_moe_grouped_activation_ms",
@@ -346,6 +354,7 @@ def run_arm(weights : ML::GGUF::DiffusionGemmaWeights,
     materialize_shared_ffn_ms: cache.materialize_shared_ffn_ms_by_layer.sum,
     materialize_moe_ffn_ms: cache.materialize_moe_ffn_ms_by_layer.sum,
     materialize_combine_scale_ms: cache.materialize_combine_scale_ms_by_layer.sum,
+    materialize_ffn_resident_ms: cache.materialize_ffn_resident_ms_by_layer.sum,
     materialize_moe_grouped_prep_ms: cache.materialize_moe_grouped_prep_ms_by_layer.sum,
     materialize_moe_grouped_gate_up_ms: cache.materialize_moe_grouped_gate_up_ms_by_layer.sum,
     materialize_moe_grouped_activation_ms: cache.materialize_moe_grouped_activation_ms_by_layer.sum,
@@ -361,6 +370,7 @@ def run_arm(weights : ML::GGUF::DiffusionGemmaWeights,
     materialize_grouped_moe: ML::GGUF::DiffusionGemmaCPU.prompt_materialize_grouped_moe_enabled?,
     prompt_context_metal_rows: cache.materialize_context_metal_rows_by_layer.any?,
     prompt_attention_residual_context_buffer: cache.materialize_context_buffer_by_layer.any?,
+    prompt_ffn_resident_graph: cache.materialize_ffn_resident_ms_by_layer.any? { |value| value > 0.0 },
     projection_backend: projection_backend(prompt_len),
     fused_norm_rope: ML::GGUF::DiffusionGemmaCPU.prompt_projection_fused_norm_rope_enabled?,
   )
@@ -426,6 +436,7 @@ def print_sample(sample : PromptCacheSample,
     sample.materialize_grouped_moe.to_s,
     sample.prompt_context_metal_rows.to_s,
     sample.prompt_attention_residual_context_buffer.to_s,
+    sample.prompt_ffn_resident_graph.to_s,
     sample.projection_backend,
     sample.fused_norm_rope.to_s,
     format_f64(sample.total_ms),
@@ -449,6 +460,7 @@ def print_sample(sample : PromptCacheSample,
     format_f64(sample.materialize_shared_ffn_ms),
     format_f64(sample.materialize_moe_ffn_ms),
     format_f64(sample.materialize_combine_scale_ms),
+    format_f64(sample.materialize_ffn_resident_ms),
     format_f64(sample.materialize_moe_grouped_prep_ms),
     format_f64(sample.materialize_moe_grouped_gate_up_ms),
     format_f64(sample.materialize_moe_grouped_activation_ms),
