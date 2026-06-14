@@ -1,10 +1,13 @@
 require "option_parser"
+require "digest/sha256"
 require "../src/ml/gguf/diffusion_gemma_cpu"
 require "../src/ml/gguf/reader"
 
 DEFAULT_MODEL       = "#{ENV["HOME"]}/.cache/lm-studio/models/unsloth/diffusiongemma-26B-A4B-it-GGUF/diffusiongemma-26B-A4B-it-Q4_K_M.gguf"
 DEFAULT_BASE_ENV    = "DIFFUSION_GEMMA_C8_RESIDENT_DECODE_POLICY=1 DIFFUSION_GEMMA_PROMPT_CACHE_POLICY=1"
 DEFAULT_VARIANT_ENV = "#{DEFAULT_BASE_ENV} DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH=1 DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_BATCH_GRAPH_MAX_CANVAS=16 DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER=1 DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER_MAX_CANVAS=16 DIFFUSION_GEMMA_MOE_GROUPED_GPU_REDUCE=1 DIFFUSION_GEMMA_MOE_GROUPED_GPU_REDUCE_MAX_CANVAS=16 DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM=1 DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM_MAX_CANVAS=16 DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH=1 DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_CACHE=1 DIFFUSION_GEMMA_PROMPT_CONTEXT_METAL_ROWS=1 DIFFUSION_GEMMA_PROMPT_ATTENTION_RESIDUAL_CONTEXT_BUFFER=1"
+
+alias PromptRouteMap = Array(Array(Array(ML::GGUF::DiffusionGemmaCPU::ExpertRoute)))
 
 struct ArmEnv
   getter raw : String
@@ -76,6 +79,8 @@ seed = 7
 temp_inv = 1.0_f32
 base_env = ArmEnv.new(DEFAULT_BASE_ENV)
 variant_env = ArmEnv.new(DEFAULT_VARIANT_ENV)
+base_route_artifact_path = nil.as(String?)
+variant_route_artifact_path = nil.as(String?)
 require_argmax_match = false
 require_sampled_match = false
 min_base_logit_margin = nil.as(Float64?)
@@ -104,6 +109,8 @@ OptionParser.parse do |p|
   p.on("--temp-inv F", "Inverse sampling temperature for bounded logits (default: 1.0)") { |v| temp_inv = v.to_f32 }
   p.on("--base-env ENV", "Whitespace-separated KEY=VALUE env for base arm") { |v| base_env = ArmEnv.new(v) }
   p.on("--variant-env ENV", "Whitespace-separated KEY=VALUE env for variant arm") { |v| variant_env = ArmEnv.new(v) }
+  p.on("--base-route-artifact PATH", "Load base prompt MoE routes from an existing artifact") { |v| base_route_artifact_path = v }
+  p.on("--variant-route-artifact PATH", "Load variant prompt MoE routes from an existing artifact") { |v| variant_route_artifact_path = v }
   p.on("--require-argmax-match", "Exit 4 when any canvas row changes bounded argmax") { require_argmax_match = true }
   p.on("--require-sampled-match", "Exit 4 when any canvas row changes deterministic sampled token") { require_sampled_match = true }
   p.on("--min-base-logit-margin F", "Exit 4 when the minimum base top1/top2 logit margin is below F") { |v| min_base_logit_margin = v.to_f64 }
@@ -270,7 +277,8 @@ def run_arm(weights : ML::GGUF::DiffusionGemmaWeights,
             sample_us : Array(Float32),
             max_layers : Int32,
             temp_inv : Float32,
-            env : ArmEnv) : ArmResult
+            env : ArmEnv,
+            routes_by_layer_by_prompt_row : PromptRouteMap?) : ArmResult
   old = apply_env(env)
   begin
     cache_t0 = Time.instant
@@ -279,6 +287,7 @@ def run_arm(weights : ML::GGUF::DiffusionGemmaWeights,
       prompt_rows,
       mask,
       max_layers: max_layers,
+      routes_by_layer_by_prompt_row: routes_by_layer_by_prompt_row,
       materialize_final_rows: true,
     )
     cache_ms = (Time.instant - cache_t0).total_milliseconds
@@ -307,7 +316,8 @@ def run_full_vocab_top1_arm(weights : ML::GGUF::DiffusionGemmaWeights,
                             mask : ML::GGUF::DiffusionGemmaAttentionMask,
                             max_layers : Int32,
                             env : ArmEnv,
-                            use_metal : Bool) : FullVocabTop1ArmResult
+                            use_metal : Bool,
+                            routes_by_layer_by_prompt_row : PromptRouteMap?) : FullVocabTop1ArmResult
   old = apply_env(env)
   begin
     cache_t0 = Time.instant
@@ -316,6 +326,7 @@ def run_full_vocab_top1_arm(weights : ML::GGUF::DiffusionGemmaWeights,
       prompt_rows,
       mask,
       max_layers: max_layers,
+      routes_by_layer_by_prompt_row: routes_by_layer_by_prompt_row,
       materialize_final_rows: true,
     )
     cache_ms = (Time.instant - cache_t0).total_milliseconds
@@ -355,7 +366,8 @@ def run_full_vocab_top2_arm(weights : ML::GGUF::DiffusionGemmaWeights,
                             mask : ML::GGUF::DiffusionGemmaAttentionMask,
                             max_layers : Int32,
                             env : ArmEnv,
-                            use_metal : Bool) : FullVocabTop2ArmResult
+                            use_metal : Bool,
+                            routes_by_layer_by_prompt_row : PromptRouteMap?) : FullVocabTop2ArmResult
   old = apply_env(env)
   begin
     cache_t0 = Time.instant
@@ -364,6 +376,7 @@ def run_full_vocab_top2_arm(weights : ML::GGUF::DiffusionGemmaWeights,
       prompt_rows,
       mask,
       max_layers: max_layers,
+      routes_by_layer_by_prompt_row: routes_by_layer_by_prompt_row,
       materialize_final_rows: true,
     )
     cache_ms = (Time.instant - cache_t0).total_milliseconds
@@ -399,6 +412,105 @@ end
 
 def format_f64(value : Float64) : String
   "%.9f" % value
+end
+
+def prompt_tokens_fingerprint(tokens : Array(Int32)) : String
+  Digest::SHA256.hexdigest("diffusiongemma-route-prompt-tokens-v1\0#{tokens.join(",")}")
+end
+
+def arm_env_fingerprint(env : ArmEnv) : String
+  canonical = env.pairs.map { |key, value| "#{key}=#{value}" }.join('\0')
+  Digest::SHA256.hexdigest("diffusiongemma-route-arm-env-v1\0#{canonical}")
+end
+
+def model_fingerprint(path : String) : String
+  info = File.info(path)
+  mtime = info.modification_time
+  Digest::SHA256.hexdigest(
+    "diffusiongemma-route-model-v1\0#{File.expand_path(path)}\0#{info.size}\0#{mtime.to_unix}\0#{mtime.nanosecond}"
+  )
+end
+
+def load_route_artifact(path : String,
+                        arm : String,
+                        expected_prompt_len : Int32,
+                        expected_max_layers : Int32,
+                        expected_prompt_tokens_sha256 : String,
+                        expected_arm_env_sha256 : String,
+                        expected_model_sha256 : String) : PromptRouteMap
+  t0 = Time.instant
+  metadata = {} of String => String
+  routes = PromptRouteMap.new(expected_max_layers) do
+    Array(Array(ML::GGUF::DiffusionGemmaCPU::ExpertRoute)).new(expected_prompt_len) { [] of ML::GGUF::DiffusionGemmaCPU::ExpertRoute }
+  end
+
+  File.each_line(path) do |line|
+    next if line.empty?
+    if line.starts_with?("#")
+      comment = line[1, line.bytesize - 1].strip
+      if comment.includes?("=")
+        key, value = comment.split("=", 2)
+        metadata[key] = value if value
+      end
+      next
+    end
+
+    parts = line.split('\t')
+    next if parts[0]? == "kind"
+    raise "route artifact row must have 6 fields, got #{parts.size}" unless parts.size == 6
+    raise "route artifact row kind must be route, got #{parts[0].inspect}" unless parts[0] == "route"
+    layer = parts[1].to_i
+    row = parts[2].to_i
+    route_index = parts[3].to_i
+    expert = parts[4].to_i
+    weight = parts[5].to_f32
+    raise "route artifact layer out of range: #{layer}" if layer < 0 || layer >= expected_max_layers
+    raise "route artifact row out of range: #{row}" if row < 0 || row >= expected_prompt_len
+    row_routes = routes[layer][row]
+    raise "route artifact route_index mismatch at layer=#{layer} row=#{row}: #{route_index} != #{row_routes.size}" unless route_index == row_routes.size
+    row_routes << ML::GGUF::DiffusionGemmaCPU::ExpertRoute.new(expert.to_i32, weight)
+  end
+
+  case metadata["format"]?
+  when "diffusion_gemma_prompt_route_artifact_v2"
+  when "diffusion_gemma_prompt_route_artifact_v1"
+    raise "route artifact v1 is missing prompt/env/model boundary metadata; regenerate artifact"
+  else
+    raise "route artifact format mismatch"
+  end
+  raise "route artifact arm mismatch: #{metadata["arm"]?} != #{arm}" unless metadata["arm"]? == arm
+  raise "route artifact prompt_len mismatch" unless metadata["prompt_len"]?.try(&.to_i) == expected_prompt_len
+  raise "route artifact max_layers mismatch" unless metadata["max_layers"]?.try(&.to_i) == expected_max_layers
+  unless metadata["prompt_tokens_sha256"]? == expected_prompt_tokens_sha256
+    raise "route artifact prompt_tokens_sha256 mismatch"
+  end
+  unless metadata["arm_env_sha256"]? == expected_arm_env_sha256
+    raise "route artifact arm_env_sha256 mismatch"
+  end
+  unless metadata["model_fingerprint"]? == expected_model_sha256
+    raise "route artifact model_fingerprint mismatch"
+  end
+  routes.each_with_index do |layer_routes, layer|
+    layer_routes.each_with_index do |row_routes, row|
+      raise "route artifact missing routes at layer=#{layer} row=#{row}" if row_routes.empty?
+    end
+  end
+
+  route_rows = routes.sum(&.size)
+  route_slots = routes.sum { |layer| layer.sum(&.size) }
+  checksum = metadata["checksum"]? || "0"
+  elapsed_ms = (Time.instant - t0).total_milliseconds
+  puts [
+    "# route_artifact_load",
+    arm,
+    "path=#{path}",
+    "layers=#{routes.size}",
+    "rows=#{route_rows}",
+    "slots=#{route_slots}",
+    "load_ms=#{format_f64(elapsed_ms)}",
+    "artifact_checksum=#{checksum}",
+  ].join('\t')
+  routes
 end
 
 def median(values : Array(Float64)) : Float64
@@ -450,11 +562,20 @@ windows.each do |window|
   raise "prompt token start out of range" if p_start < 0 || p_start >= hp.vocab_size
   raise "canvas token start out of range" if c_start < 0 || c_start >= hp.vocab_size
 end
+route_artifact_requested = !base_route_artifact_path.nil? || !variant_route_artifact_path.nil?
+if route_artifact_requested && windows.size != 1
+  raise "route artifact certification currently supports exactly one token window"
+end
+base_env_sha256 = arm_env_fingerprint(base_env)
+variant_env_sha256 = arm_env_fingerprint(variant_env)
+model_sha256 = model_fingerprint(model)
 
 puts "# load_ms=#{format_f64(load_ms)}"
 puts "# base_env=#{base_env.raw.empty? ? "<empty>" : base_env.raw}"
 puts "# variant_env=#{variant_env.raw.empty? ? "<empty>" : variant_env.raw}"
 puts "# certificate_mode=#{certificate_mode}"
+puts "# route_artifact_base=#{base_route_artifact_path || "<none>"}"
+puts "# route_artifact_variant=#{variant_route_artifact_path || "<none>"}"
 puts [
   "kind",
   "window",
@@ -495,17 +616,24 @@ if certificate_mode != "bounded"
     prompt_rows = prompt_rows_from_tokens(weights, prompt_tokens)
     canvas_rows = ML::GGUF::DiffusionGemmaCPU.canvas_rows_from_tokens(weights, canvas_tokens)
     mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: prompt_len, canvas_len: canvas_len, sliding_window: hp.sliding_window)
+    prompt_tokens_sha256 = prompt_tokens_fingerprint(prompt_tokens)
+    base_routes = base_route_artifact_path.try do |path|
+      load_route_artifact(path, "base", prompt_len, max_layers, prompt_tokens_sha256, base_env_sha256, model_sha256)
+    end
+    variant_routes = variant_route_artifact_path.try do |path|
+      load_route_artifact(path, "variant", prompt_len, max_layers, prompt_tokens_sha256, variant_env_sha256, model_sha256)
+    end
 
     if use_top2
-      base_top2_result = run_full_vocab_top2_arm(weights, prompt_rows, canvas_rows, mask, max_layers, base_env, use_metal)
-      variant_top2_result = run_full_vocab_top2_arm(weights, prompt_rows, canvas_rows, mask, max_layers, variant_env, use_metal)
+      base_top2_result = run_full_vocab_top2_arm(weights, prompt_rows, canvas_rows, mask, max_layers, base_env, use_metal, base_routes)
+      variant_top2_result = run_full_vocab_top2_arm(weights, prompt_rows, canvas_rows, mask, max_layers, variant_env, use_metal, variant_routes)
       base_top1s = base_top2_result.top2s.map(&.top1)
       variant_top1s = variant_top2_result.top2s.map(&.top1)
       base = base_top2_result
       variant = variant_top2_result
     else
-      base_top1_result = run_full_vocab_top1_arm(weights, prompt_rows, canvas_rows, mask, max_layers, base_env, use_metal)
-      variant_top1_result = run_full_vocab_top1_arm(weights, prompt_rows, canvas_rows, mask, max_layers, variant_env, use_metal)
+      base_top1_result = run_full_vocab_top1_arm(weights, prompt_rows, canvas_rows, mask, max_layers, base_env, use_metal, base_routes)
+      variant_top1_result = run_full_vocab_top1_arm(weights, prompt_rows, canvas_rows, mask, max_layers, variant_env, use_metal, variant_routes)
       base_top1s = base_top1_result.top1s
       variant_top1s = variant_top1_result.top1s
       base = base_top1_result
@@ -692,9 +820,16 @@ windows.each_with_index do |window, window_index|
   candidate_row_sizes.concat(candidate_rows.map(&.size))
   sample_us = ML::GGUF::DiffusionGemmaCPU.sample_u_rows(seed, canvas_len)
   mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: prompt_len, canvas_len: canvas_len, sliding_window: hp.sliding_window)
+  prompt_tokens_sha256 = prompt_tokens_fingerprint(prompt_tokens)
+  base_routes = base_route_artifact_path.try do |path|
+    load_route_artifact(path, "base", prompt_len, max_layers, prompt_tokens_sha256, base_env_sha256, model_sha256)
+  end
+  variant_routes = variant_route_artifact_path.try do |path|
+    load_route_artifact(path, "variant", prompt_len, max_layers, prompt_tokens_sha256, variant_env_sha256, model_sha256)
+  end
 
-  base = run_arm(weights, prompt_rows, canvas_rows, mask, candidate_rows, sample_us, max_layers, temp_inv, base_env)
-  variant = run_arm(weights, prompt_rows, canvas_rows, mask, candidate_rows, sample_us, max_layers, temp_inv, variant_env)
+  base = run_arm(weights, prompt_rows, canvas_rows, mask, candidate_rows, sample_us, max_layers, temp_inv, base_env, base_routes)
+  variant = run_arm(weights, prompt_rows, canvas_rows, mask, candidate_rows, sample_us, max_layers, temp_inv, variant_env, variant_routes)
   hidden = diff_stats(base.cache.final_rows, variant.cache.final_rows)
   cache_speedup = base.cache_ms / variant.cache_ms
   predict_speedup = base.predict_ms / variant.predict_ms

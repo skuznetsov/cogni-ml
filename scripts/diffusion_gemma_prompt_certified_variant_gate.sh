@@ -84,8 +84,8 @@ Important environment knobs:
   ABBA_USE_EFFECTIVE_TOTAL=1       when replay is enabled, gate speed on capture-amortized total
   ABBA_KEEP_ROUTE_CAPTURE_GRAPH_CACHE=1
                                     preserve graph cache warmed by a single replay-arm capture
-  ABBA_BASE_ROUTE_ARTIFACT=PATH     load base routes from a prompt-route artifact
-  ABBA_VARIANT_ROUTE_ARTIFACT=PATH  load variant routes from a prompt-route artifact
+  ABBA_BASE_ROUTE_ARTIFACT=PATH     load base routes from a prompt-route artifact for cert+ABBA
+  ABBA_VARIANT_ROUTE_ARTIFACT=PATH  load variant routes from a prompt-route artifact for cert+ABBA
   ABBA_WRITE_BASE_ROUTE_ARTIFACT=PATH
                                     write captured base routes to an artifact
   ABBA_WRITE_VARIANT_ROUTE_ARTIFACT=PATH
@@ -338,6 +338,12 @@ if [[ -n "$min_variant_logit_margin" ]]; then
 fi
 if [[ -n "$max_logit_delta" ]]; then
   cert_args+=(--max-logit-delta "$max_logit_delta")
+fi
+if [[ -n "$abba_base_route_artifact" ]]; then
+  cert_args+=(--base-route-artifact "$abba_base_route_artifact")
+fi
+if [[ -n "$abba_variant_route_artifact" ]]; then
+  cert_args+=(--variant-route-artifact "$abba_variant_route_artifact")
 fi
 
 set +e
