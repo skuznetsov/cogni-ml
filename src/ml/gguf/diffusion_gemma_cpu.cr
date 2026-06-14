@@ -115,6 +115,14 @@ module ML::GGUF
       end
     end
 
+    struct OutputTop1
+      getter token_id : Int32
+      getter logit : Float32
+
+      def initialize(@token_id, @logit)
+      end
+    end
+
     struct BoundedCanvasUpdate
       getter updated_canvas_tokens : Array(Int32)
       getter accepted : Array(Bool)
@@ -3963,6 +3971,43 @@ module ML::GGUF
       hp = weights.hparams
       raise ArgumentError.new("output hidden size mismatch") unless hidden.size == hp.n_embd
       Gemma4CPU.rms_norm(hidden, weights.output_norm, hp.rms_eps)
+    end
+
+    def output_logit_softcap(value : Float32, cap : Float32) : Float32
+      return value if cap <= 0.0_f32
+      (Math.tanh(value * (1.0_f32 / cap)) * cap).to_f32
+    end
+
+    def output_top1_full_vocab_cpu(weights : DiffusionGemmaWeights,
+                                   hidden : Array(Float32)) : OutputTop1
+      hp = weights.hparams
+      normed = output_hidden_norm(weights, hidden)
+      best_id = 0
+      best_logit = -Float32::INFINITY
+      hp.vocab_size.times do |token_id|
+        row = quant_row_slice(weights.token_embd, token_id, 1, hp.n_embd)
+        logit = Gemma4CPU.matmul(row, normed)[0]
+        if logit > best_logit || (logit == best_logit && token_id < best_id)
+          best_id = token_id
+          best_logit = logit
+        end
+      end
+      OutputTop1.new(best_id, output_logit_softcap(best_logit, hp.final_logit_softcapping))
+    end
+
+    def output_top1_full_vocab_metal(weights : DiffusionGemmaWeights,
+                                     hidden : Array(Float32)) : OutputTop1?
+      return nil unless Qwen35Metal.available?
+      return nil unless weights.token_embd.type.q6_k?
+
+      hp = weights.hparams
+      normed = output_hidden_norm(weights, hidden)
+      result = Qwen35Metal.project_top1_no_norm(weights.token_embd, normed)
+      return nil unless result
+
+      token_id = result[0].to_i32
+      raw_logit = result[1]
+      OutputTop1.new(token_id, output_logit_softcap(raw_logit, hp.final_logit_softcapping))
     end
 
     def output_logits_for_tokens(weights : DiffusionGemmaWeights,
