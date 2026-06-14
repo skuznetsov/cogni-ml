@@ -8,6 +8,7 @@ log_dir="${LOG_DIR:-/tmp/diffusiongemma_prompt_artifact_suite_promotion_${timest
 prepare_dir="${SUITE_PREPARE_LOG_DIR:-$log_dir/prepare}"
 gate_dir="${SUITE_GATE_LOG_DIR:-$log_dir/gate}"
 artifact_dir="${SUITE_ARTIFACT_DIR:-$log_dir/artifacts}"
+promotion_stage="${PROMOTION_STAGE:-all}"
 
 token_windows="${TOKEN_WINDOWS:-1:0,17:100,257:1000,4096:8192}"
 prompt_len="${PROMPT_LEN:-16}"
@@ -52,6 +53,8 @@ Fail-closed driver for the route-artifact prompt-suite promotion path:
 Important environment knobs:
   TOKEN_WINDOWS                         prompt:canvas windows, default four windows
   PROMPT_LEN / CANVAS_LEN / MAX_LAYERS  shape, defaults 16 / 8 / 30
+  PROMOTION_STAGE=all                   all, prepare, or gate; gate must use the
+                                         same profile/env as the prepared artifacts
   CHECK_QUIET=1                         run quiet precheck before model work
   GATE_CHECK_QUIET=1                    run quiet gate inside each child gate
   LOAD_THRESHOLD=40                     per-process quiet threshold
@@ -129,6 +132,20 @@ bool_enabled "$overwrite" >/dev/null || true
 bool_enabled "$dry_run" >/dev/null || true
 [[ -n "$token_windows" ]] || die "TOKEN_WINDOWS is required"
 
+case "$promotion_stage" in
+  all|prepare|gate)
+    ;;
+  *)
+    die "PROMOTION_STAGE must be all, prepare, or gate"
+    ;;
+esac
+if [[ "$promotion_stage" == "prepare" && ( -n "$base_map" || -n "$variant_map" ) ]]; then
+  die "PROMOTION_STAGE=prepare does not accept supplied route artifact maps"
+fi
+if [[ "$promotion_stage" == "gate" && -z "$base_map" && -z "$variant_map" ]]; then
+  die "PROMOTION_STAGE=gate requires SUITE_BASE_ROUTE_ARTIFACT_MAP or SUITE_VARIANT_ROUTE_ARTIFACT_MAP"
+fi
+
 case "$variant_profile" in
   "")
     ;;
@@ -152,6 +169,7 @@ manifest="$log_dir/promotion_manifest.env"
   printf 'prepare_dir=%q\n' "$prepare_dir"
   printf 'gate_dir=%q\n' "$gate_dir"
   printf 'artifact_dir=%q\n' "$artifact_dir"
+  printf 'promotion_stage=%q\n' "$promotion_stage"
   printf 'token_windows=%q\n' "$token_windows"
   printf 'prompt_len=%q\n' "$prompt_len"
   printf 'canvas_len=%q\n' "$canvas_len"
@@ -234,10 +252,25 @@ if [[ -n "$variant_map" ]]; then
 fi
 gate_cmd+=("$repo_root/scripts/diffusion_gemma_prompt_artifact_suite_gate.sh")
 
+should_prepare=0
+if [[ "$promotion_stage" == "prepare" ]]; then
+  should_prepare=1
+elif [[ "$promotion_stage" == "all" && -z "$base_map" && -z "$variant_map" ]]; then
+  should_prepare=1
+fi
+
 if bool_enabled "$dry_run"; then
-  print_cmd quiet_cmd "${quiet_cmd[@]}"
-  print_cmd prepare_cmd "${prepare_cmd[@]}"
-  print_cmd gate_cmd "${gate_cmd[@]}"
+  if bool_enabled "$check_quiet"; then
+    print_cmd quiet_cmd "${quiet_cmd[@]}"
+  fi
+  if [[ "$should_prepare" == "1" ]]; then
+    print_cmd prepare_cmd "${prepare_cmd[@]}"
+  elif [[ "$promotion_stage" == "all" || "$promotion_stage" == "prepare" ]]; then
+    printf 'prepare_cmd=<skipped supplied maps>\n'
+  fi
+  if [[ "$promotion_stage" == "all" || "$promotion_stage" == "gate" ]]; then
+    print_cmd gate_cmd "${gate_cmd[@]}"
+  fi
   printf 'artifact_suite_promotion decision=dry_run log_dir=%s\n' "$log_dir"
   exit 0
 fi
@@ -254,7 +287,12 @@ if bool_enabled "$check_quiet"; then
   fi
 fi
 
-if [[ -z "$base_map" && -z "$variant_map" ]]; then
+if [[ "$should_prepare" == "1" ]]; then
+  if [[ -n "$base_map" || -n "$variant_map" ]]; then
+    printf 'artifact_suite_promotion decision=reject reason=prepare_stage_has_supplied_maps log_dir=%s\n' "$log_dir"
+    exit 2
+  fi
+
   set +e
   "${prepare_cmd[@]}" >"$prepare_stdout" 2>"$prepare_stderr"
   prepare_rc=$?
@@ -275,6 +313,17 @@ if [[ -z "$base_map" && -z "$variant_map" ]]; then
   fi
 fi
 
+if [[ "$promotion_stage" == "prepare" ]]; then
+  printf 'artifact_suite_promotion decision=prepared log_dir=%s prepare_log=%s base_map=%q variant_map=%q\n' \
+    "$log_dir" "$prepare_stdout" "$base_map" "$variant_map"
+  exit 0
+fi
+
+if [[ -z "$base_map" && -z "$variant_map" ]]; then
+  printf 'artifact_suite_promotion decision=reject reason=missing_route_artifact_maps log_dir=%s\n' "$log_dir"
+  exit 2
+fi
+
 set +e
 "${gate_cmd[@]}" >"$gate_stdout" 2>"$gate_stderr"
 gate_rc=$?
@@ -288,7 +337,7 @@ if (( gate_rc != 0 )); then
 fi
 
 prepare_log="<skipped>"
-if [[ -f "$prepare_stdout" ]]; then
+if [[ "$promotion_stage" == "all" && -f "$prepare_stdout" ]]; then
   prepare_log="$prepare_stdout"
 fi
-printf 'artifact_suite_promotion decision=candidate log_dir=%s prepare_log=%s gate_log=%s child_decision=%q\n' "$log_dir" "$prepare_log" "$gate_stdout" "$decision"
+printf 'artifact_suite_promotion decision=candidate stage=%s log_dir=%s prepare_log=%s gate_log=%s child_decision=%q\n' "$promotion_stage" "$log_dir" "$prepare_log" "$gate_stdout" "$decision"
