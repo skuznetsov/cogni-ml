@@ -16,7 +16,8 @@ usage() {
 Usage: diffusion_gemma_prompt_artifact_suite_gate.sh
 
 Runs the certified prompt gate once per route-artifact window, then aggregates
-the measured ABBA total_ms rows across the whole suite.
+the measured ABBA total_ms rows and child gate_metric phase rows across the
+whole suite.
 
 Important environment knobs:
   TOKEN_WINDOWS                         prompt:canvas windows to measure
@@ -177,6 +178,7 @@ total_base = 0.0
 total_variant = 0.0
 min_speedup = math.inf
 rows = []
+phase_rows = {}
 
 for log in logs:
     text = open(log, encoding="utf-8", errors="replace").read().splitlines()
@@ -203,12 +205,61 @@ for log in logs:
     total_variant += variant
     min_speedup = min(min_speedup, speedup)
     rows.append((index, prompt, canvas, speedup, base, variant, log))
+    for line in text:
+        if not line.startswith("gate_metric "):
+            continue
+        metric_fields = {}
+        for part in line.split()[1:]:
+            if "=" in part:
+                key, value = part.split("=", 1)
+                metric_fields[key] = value
+        try:
+            kind = metric_fields["kind"]
+            metric = metric_fields["metric"]
+            metric_base = float(metric_fields["base_ms"])
+            metric_variant = float(metric_fields["variant_ms"])
+            metric_range = float(metric_fields.get("range_over_delta", "nan"))
+        except (KeyError, ValueError) as exc:
+            raise SystemExit(f"malformed gate_metric in {log}: {line}") from exc
+        bucket = phase_rows.setdefault(
+            (kind, metric),
+            {"base": 0.0, "variant": 0.0, "max_range": 0.0, "windows": 0},
+        )
+        bucket["base"] += metric_base
+        bucket["variant"] += metric_variant
+        bucket["windows"] += 1
+        if math.isfinite(metric_range):
+            bucket["max_range"] = max(bucket["max_range"], metric_range)
 
 for index, prompt, canvas, speedup, base, variant, log in rows:
     print(
         "suite_window "
         f"index={index} prompt_token={prompt} canvas_token={canvas} "
         f"total_speedup={speedup:.6f} base_ms={base:.6f} variant_ms={variant:.6f} log={log}"
+    )
+
+dominant = None
+for (kind, metric), bucket in sorted(phase_rows.items()):
+    base = bucket["base"]
+    variant = bucket["variant"]
+    speedup = base / variant if variant > 0 else math.inf
+    delta = base - variant
+    print(
+        "suite_metric "
+        f"kind={kind} metric={metric} windows={bucket['windows']} "
+        f"base_ms={base:.6f} variant_ms={variant:.6f} "
+        f"speedup={speedup:.6f} delta_ms={delta:.6f} "
+        f"max_child_range_over_delta={bucket['max_range']:.6f}"
+    )
+    if metric != "total_ms" and delta > 0 and (dominant is None or delta > dominant[0]):
+        dominant = (delta, kind, metric, base, variant, speedup)
+
+if dominant:
+    delta, kind, metric, base, variant, speedup = dominant
+    print(
+        "suite_dominant_delta "
+        f"kind={kind} metric={metric} delta_ms={delta:.6f} "
+        f"base_ms={base:.6f} variant_ms={variant:.6f} speedup={speedup:.6f}"
     )
 
 aggregate_speedup = total_base / total_variant if total_variant > 0 else math.inf
