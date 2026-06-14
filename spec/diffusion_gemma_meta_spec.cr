@@ -3,6 +3,7 @@ require "../src/ml/gguf/diffusion_gemma_meta"
 require "../src/ml/gguf/diffusion_gemma_weights"
 require "../src/ml/gguf/diffusion_gemma_runtime"
 require "../src/ml/gguf/diffusion_gemma_cpu"
+require "../src/ml/gguf/diffusion_gemma_route_artifact"
 require "../src/ml/gguf/gemma4_metal"
 
 DIFFUSION_GEMMA_26B_Q4KM = "#{ENV["HOME"]}/.cache/lm-studio/models/unsloth/diffusiongemma-26B-A4B-it-GGUF/diffusiongemma-26B-A4B-it-Q4_K_M.gguf"
@@ -258,6 +259,121 @@ def write_diffusion_gemma_route_plan_jsonl(lines : Array(String)) : String
   path = File.tempname("diffusion-gemma-route-plan", ".jsonl")
   File.write(path, lines.join("\n") + "\n")
   path
+end
+
+def diffusion_gemma_route_artifact_metadata(overrides = {} of String => String) : Hash(String, String)
+  metadata = {
+    "format"               => "diffusion_gemma_prompt_route_artifact_v2",
+    "arm"                  => "variant",
+    "prompt_len"           => "2",
+    "max_layers"           => "2",
+    "prompt_tokens_sha256" => "prompt-sha",
+    "arm_env_sha256"       => "env-sha",
+    "model_fingerprint"    => "model-sha",
+    "layers"               => "2",
+    "rows"                 => "4",
+    "slots"                => "4",
+    "checksum"             => "1.250000",
+  }
+  overrides.each { |key, value| metadata[key] = value }
+  metadata
+end
+
+def diffusion_gemma_route_artifact_rows
+  [
+    {0, 0, 0, 7, 0.70_f32},
+    {0, 1, 0, 8, 0.80_f32},
+    {1, 0, 0, 9, 0.90_f32},
+    {1, 1, 0, 10, 1.00_f32},
+  ]
+end
+
+def write_diffusion_gemma_route_artifact(metadata : Hash(String, String),
+                                         rows : Array(Tuple(Int32, Int32, Int32, Int32, Float32))) : String
+  path = File.tempname("diffusion-gemma-route-artifact", ".tsv")
+  File.open(path, "w") do |io|
+    metadata.each { |key, value| io.puts "##{key}=#{value}" }
+    io.puts "kind\tlayer\trow\troute_index\texpert\tweight"
+    rows.each do |layer, row, route_index, expert, weight|
+      io.puts ["route", layer, row, route_index, expert, weight].join('\t')
+    end
+  end
+  path
+end
+
+describe ML::GGUF::DiffusionGemmaPromptRouteArtifact do
+  it "loads v2 prompt route artifacts with boundary metadata" do
+    path = ""
+    path = write_diffusion_gemma_route_artifact(
+      diffusion_gemma_route_artifact_metadata,
+      diffusion_gemma_route_artifact_rows
+    )
+
+    artifact = ML::GGUF::DiffusionGemmaPromptRouteArtifact.load(
+      path,
+      "variant",
+      2,
+      2,
+      "prompt-sha",
+      "env-sha",
+      "model-sha",
+      print_diagnostic: false
+    )
+    artifact.route_rows.should eq(4)
+    artifact.route_slots.should eq(4)
+    artifact.checksum.should eq(1.25)
+    artifact.routes[1][1][0].expert.should eq(10)
+    artifact.routes[1][1][0].weight.should eq(1.0_f32)
+  ensure
+    File.delete(path) if path && File.exists?(path)
+  end
+
+  it "fails closed for stale or malformed route artifacts" do
+    paths = [] of String
+    begin
+      paths << write_diffusion_gemma_route_artifact(
+        diffusion_gemma_route_artifact_metadata({"format" => "diffusion_gemma_prompt_route_artifact_v1"}),
+        diffusion_gemma_route_artifact_rows
+      )
+      expect_raises(Exception, /v1 is missing/) do
+        ML::GGUF::DiffusionGemmaPromptRouteArtifact.load(paths[-1], "variant", 2, 2, "prompt-sha", "env-sha", "model-sha", print_diagnostic: false)
+      end
+
+      paths << write_diffusion_gemma_route_artifact(
+        diffusion_gemma_route_artifact_metadata({"arm_env_sha256" => "other-env"}),
+        diffusion_gemma_route_artifact_rows
+      )
+      expect_raises(Exception, /arm_env_sha256 mismatch/) do
+        ML::GGUF::DiffusionGemmaPromptRouteArtifact.load(paths[-1], "variant", 2, 2, "prompt-sha", "env-sha", "model-sha", print_diagnostic: false)
+      end
+
+      paths << write_diffusion_gemma_route_artifact(
+        diffusion_gemma_route_artifact_metadata({"rows" => "3", "slots" => "3"}),
+        diffusion_gemma_route_artifact_rows[0, 3]
+      )
+      expect_raises(Exception, /missing routes/) do
+        ML::GGUF::DiffusionGemmaPromptRouteArtifact.load(paths[-1], "variant", 2, 2, "prompt-sha", "env-sha", "model-sha", print_diagnostic: false)
+      end
+
+      paths << write_diffusion_gemma_route_artifact(
+        diffusion_gemma_route_artifact_metadata,
+        [{0, 0, 1, 7, 0.70_f32}]
+      )
+      expect_raises(Exception, /route_index mismatch/) do
+        ML::GGUF::DiffusionGemmaPromptRouteArtifact.load(paths[-1], "variant", 2, 2, "prompt-sha", "env-sha", "model-sha", print_diagnostic: false)
+      end
+
+      paths << write_diffusion_gemma_route_artifact(
+        diffusion_gemma_route_artifact_metadata({"rows" => "99"}),
+        diffusion_gemma_route_artifact_rows
+      )
+      expect_raises(Exception, /rows mismatch/) do
+        ML::GGUF::DiffusionGemmaPromptRouteArtifact.load(paths[-1], "variant", 2, 2, "prompt-sha", "env-sha", "model-sha", print_diagnostic: false)
+      end
+    ensure
+      paths.each { |path| File.delete(path) if File.exists?(path) }
+    end
+  end
 end
 
 describe ML::GGUF::DiffusionGemmaMixedRoutePlan do

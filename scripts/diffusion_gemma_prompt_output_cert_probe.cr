@@ -1,6 +1,7 @@
 require "option_parser"
 require "digest/sha256"
 require "../src/ml/gguf/diffusion_gemma_cpu"
+require "../src/ml/gguf/diffusion_gemma_route_artifact"
 require "../src/ml/gguf/diffusion_gemma_runtime"
 require "../src/ml/gguf/reader"
 
@@ -8,7 +9,7 @@ DEFAULT_MODEL       = "#{ENV["HOME"]}/.cache/lm-studio/models/unsloth/diffusiong
 DEFAULT_BASE_ENV    = "DIFFUSION_GEMMA_C8_RESIDENT_DECODE_POLICY=1 DIFFUSION_GEMMA_PROMPT_CACHE_POLICY=1"
 DEFAULT_VARIANT_ENV = "#{DEFAULT_BASE_ENV} DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_GRAPH=1 DIFFUSION_GEMMA_MOE_GROUPED_RESIDENT_BATCH_GRAPH_MAX_CANVAS=16 DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER=1 DIFFUSION_GEMMA_MOE_GROUPED_GPU_GATHER_MAX_CANVAS=16 DIFFUSION_GEMMA_MOE_GROUPED_GPU_REDUCE=1 DIFFUSION_GEMMA_MOE_GROUPED_GPU_REDUCE_MAX_CANVAS=16 DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM=1 DIFFUSION_GEMMA_MOE_GROUPED_GPU_PRENORM_MAX_CANVAS=16 DIFFUSION_GEMMA_FFN_RESIDENT_SCRATCH=1 DIFFUSION_GEMMA_FFN_RESIDENT_GRAPH_CACHE=1 DIFFUSION_GEMMA_PROMPT_CONTEXT_METAL_ROWS=1 DIFFUSION_GEMMA_PROMPT_ATTENTION_RESIDUAL_CONTEXT_BUFFER=1"
 
-alias PromptRouteMap = Array(Array(Array(ML::GGUF::DiffusionGemmaCPU::ExpertRoute)))
+alias PromptRouteMap = ML::GGUF::DiffusionGemmaPromptRouteMap
 
 struct ArmEnv
   getter raw : String
@@ -502,79 +503,15 @@ def load_route_artifact(path : String,
                         expected_prompt_tokens_sha256 : String,
                         expected_arm_env_sha256 : String,
                         expected_model_sha256 : String) : PromptRouteMap
-  t0 = Time.instant
-  metadata = {} of String => String
-  routes = PromptRouteMap.new(expected_max_layers) do
-    Array(Array(ML::GGUF::DiffusionGemmaCPU::ExpertRoute)).new(expected_prompt_len) { [] of ML::GGUF::DiffusionGemmaCPU::ExpertRoute }
-  end
-
-  File.each_line(path) do |line|
-    next if line.empty?
-    if line.starts_with?("#")
-      comment = line[1, line.bytesize - 1].strip
-      if comment.includes?("=")
-        key, value = comment.split("=", 2)
-        metadata[key] = value if value
-      end
-      next
-    end
-
-    parts = line.split('\t')
-    next if parts[0]? == "kind"
-    raise "route artifact row must have 6 fields, got #{parts.size}" unless parts.size == 6
-    raise "route artifact row kind must be route, got #{parts[0].inspect}" unless parts[0] == "route"
-    layer = parts[1].to_i
-    row = parts[2].to_i
-    route_index = parts[3].to_i
-    expert = parts[4].to_i
-    weight = parts[5].to_f32
-    raise "route artifact layer out of range: #{layer}" if layer < 0 || layer >= expected_max_layers
-    raise "route artifact row out of range: #{row}" if row < 0 || row >= expected_prompt_len
-    row_routes = routes[layer][row]
-    raise "route artifact route_index mismatch at layer=#{layer} row=#{row}: #{route_index} != #{row_routes.size}" unless route_index == row_routes.size
-    row_routes << ML::GGUF::DiffusionGemmaCPU::ExpertRoute.new(expert.to_i32, weight)
-  end
-
-  case metadata["format"]?
-  when "diffusion_gemma_prompt_route_artifact_v2"
-  when "diffusion_gemma_prompt_route_artifact_v1"
-    raise "route artifact v1 is missing prompt/env/model boundary metadata; regenerate artifact"
-  else
-    raise "route artifact format mismatch"
-  end
-  raise "route artifact arm mismatch: #{metadata["arm"]?} != #{arm}" unless metadata["arm"]? == arm
-  raise "route artifact prompt_len mismatch" unless metadata["prompt_len"]?.try(&.to_i) == expected_prompt_len
-  raise "route artifact max_layers mismatch" unless metadata["max_layers"]?.try(&.to_i) == expected_max_layers
-  unless metadata["prompt_tokens_sha256"]? == expected_prompt_tokens_sha256
-    raise "route artifact prompt_tokens_sha256 mismatch"
-  end
-  unless metadata["arm_env_sha256"]? == expected_arm_env_sha256
-    raise "route artifact arm_env_sha256 mismatch"
-  end
-  unless metadata["model_fingerprint"]? == expected_model_sha256
-    raise "route artifact model_fingerprint mismatch"
-  end
-  routes.each_with_index do |layer_routes, layer|
-    layer_routes.each_with_index do |row_routes, row|
-      raise "route artifact missing routes at layer=#{layer} row=#{row}" if row_routes.empty?
-    end
-  end
-
-  route_rows = routes.sum(&.size)
-  route_slots = routes.sum { |layer| layer.sum(&.size) }
-  checksum = metadata["checksum"]? || "0"
-  elapsed_ms = (Time.instant - t0).total_milliseconds
-  puts [
-    "# route_artifact_load",
+  ML::GGUF::DiffusionGemmaPromptRouteArtifact.load(
+    path,
     arm,
-    "path=#{path}",
-    "layers=#{routes.size}",
-    "rows=#{route_rows}",
-    "slots=#{route_slots}",
-    "load_ms=#{format_f64(elapsed_ms)}",
-    "artifact_checksum=#{checksum}",
-  ].join('\t')
-  routes
+    expected_prompt_len,
+    expected_max_layers,
+    expected_prompt_tokens_sha256,
+    expected_arm_env_sha256,
+    expected_model_sha256
+  ).routes
 end
 
 def median(values : Array(Float64)) : Float64
