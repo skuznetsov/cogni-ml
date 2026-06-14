@@ -19,6 +19,9 @@ canvas_len="${CANVAS_LEN:-8}"
 max_layers="${MAX_LAYERS:-30}"
 token_windows="${TOKEN_WINDOWS:-1:0,17:100,257:1000,4096:8192}"
 candidate_count="${CANDIDATE_COUNT:-1024}"
+candidate_offsets="${CANDIDATE_OFFSETS:-0,1024,8192,32768,65536,131072}"
+candidate_stride="${CANDIDATE_STRIDE:-1}"
+max_candidate_row_size="${MAX_CANDIDATE_ROW_SIZE:-8192}"
 
 cert_require_argmax="${CERT_REQUIRE_ARGMAX:-1}"
 cert_require_sampled="${CERT_REQUIRE_SAMPLED:-0}"
@@ -55,7 +58,10 @@ Important environment knobs:
   PROMPT_LEN / CANVAS_LEN         synthetic shape, defaults 16 / 8
   MAX_LAYERS                      full-depth default 30
   TOKEN_WINDOWS                   prompt:canvas starts, default four windows
-  CANDIDATE_COUNT                 bounded candidate set, default 1024
+  CANDIDATE_COUNT                 candidate ids per span, default 1024
+  CANDIDATE_OFFSETS               span offsets from each canvas token, default six bands
+  CANDIDATE_STRIDE                token stride inside each span, default 1
+  MAX_CANDIDATE_ROW_SIZE          merged per-row cap, default 8192
   CERT_REQUIRE_SAMPLED=1          require deterministic sampled-token stability
   MIN_BASE_LOGIT_MARGIN=F         optional certificate margin floor
   MIN_VARIANT_LOGIT_MARGIN=F      optional certificate margin floor
@@ -189,6 +195,8 @@ validate_positive_uint PROMPT_LEN "$prompt_len"
 validate_positive_uint CANVAS_LEN "$canvas_len"
 validate_positive_uint MAX_LAYERS "$max_layers"
 validate_positive_uint CANDIDATE_COUNT "$candidate_count"
+validate_positive_uint CANDIDATE_STRIDE "$candidate_stride"
+validate_uint MAX_CANDIDATE_ROW_SIZE "$max_candidate_row_size"
 validate_uint ABBA_WARMUPS "$abba_warmups"
 validate_positive_uint ABBA_REPEATS "$abba_repeats"
 validate_uint ABBA_TRIM_PER_ARM "$abba_trim_per_arm"
@@ -205,6 +213,9 @@ printf 'canvas_len=%s\n' "$canvas_len"
 printf 'max_layers=%s\n' "$max_layers"
 printf 'token_windows=%s\n' "$token_windows"
 printf 'candidate_count=%s\n' "$candidate_count"
+printf 'candidate_offsets=%s\n' "$candidate_offsets"
+printf 'candidate_stride=%s\n' "$candidate_stride"
+printf 'max_candidate_row_size=%s\n' "$max_candidate_row_size"
 printf 'base_env=%s\n' "$base_env"
 printf 'variant_env=%s\n' "$variant_env"
 printf 'min_total_speedup=%s\n' "$min_total_speedup"
@@ -229,6 +240,9 @@ cert_args=(
   --canvas-len "$canvas_len"
   --max-layers "$max_layers"
   --candidate-count "$candidate_count"
+  --candidate-offsets "$candidate_offsets"
+  --candidate-stride "$candidate_stride"
+  --max-candidate-row-size "$max_candidate_row_size"
   --token-windows "$token_windows"
   --base-env "$base_env"
   --variant-env "$variant_env"

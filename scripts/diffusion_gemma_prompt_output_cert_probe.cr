@@ -43,6 +43,9 @@ prompt_token = 1
 canvas_token = 0
 token_windows_arg = nil.as(String?)
 candidate_count = 64
+candidate_offsets_arg = "0"
+candidate_stride = 1
+max_candidate_row_size = 8192
 max_layers = 30
 seed = 7
 temp_inv = 1.0_f32
@@ -62,7 +65,10 @@ OptionParser.parse do |p|
   p.on("--prompt-token ID", "Synthetic prompt start token id (default: 1)") { |v| prompt_token = v.to_i }
   p.on("--canvas-token ID", "Synthetic canvas start token id (default: 0)") { |v| canvas_token = v.to_i }
   p.on("--token-windows LIST", "Comma/space separated prompt:canvas token starts, e.g. 1:0,17:100") { |v| token_windows_arg = v }
-  p.on("--candidate-count N", "Candidate ids per canvas row, generated from the row token (default: 64)") { |v| candidate_count = v.to_i }
+  p.on("--candidate-count N", "Candidate ids per candidate span, generated from the row token plus each offset (default: 64)") { |v| candidate_count = v.to_i }
+  p.on("--candidate-offsets LIST", "Comma/space separated candidate span offsets from each canvas token (default: 0)") { |v| candidate_offsets_arg = v }
+  p.on("--candidate-stride N", "Token stride inside each candidate span (default: 1)") { |v| candidate_stride = v.to_i }
+  p.on("--max-candidate-row-size N", "Fail when merged per-row candidate count exceeds N; 0 disables (default: 8192)") { |v| max_candidate_row_size = v.to_i }
   p.on("--max-layers N", "Prompt-cache/decode layer count (default: 30)") { |v| max_layers = v.to_i }
   p.on("--seed N", "Deterministic sample-u seed for sampled-token comparison (default: 7)") { |v| seed = v.to_i }
   p.on("--temp-inv F", "Inverse sampling temperature for bounded logits (default: 1.0)") { |v| temp_inv = v.to_f32 }
@@ -113,6 +119,46 @@ def parse_token_windows(raw : String) : Array(Tuple(Int32, Int32))
   end
   raise "--token-windows must contain at least one entry" if windows.empty?
   windows
+end
+
+def parse_int_list(raw : String, label : String) : Array(Int32)
+  values = raw.split(/[,\s]+/).reject(&.empty?).map(&.to_i)
+  raise "#{label} must contain at least one integer" if values.empty?
+  values
+end
+
+def wrap_vocab_id(value : Int64, vocab_size : Int32) : Int32
+  wrapped = value % vocab_size
+  wrapped += vocab_size if wrapped < 0
+  wrapped.to_i32
+end
+
+def generated_candidate_rows(canvas_tokens : Array(Int32),
+                             count : Int32,
+                             vocab_size : Int32,
+                             offsets : Array(Int32),
+                             stride : Int32,
+                             max_row_size : Int32) : Array(Array(Int32))
+  raise "candidate count must be positive" unless count > 0
+  raise "candidate count exceeds vocab size" if count > vocab_size
+  raise "candidate stride must be positive" unless stride > 0
+  raise "max candidate row size must be non-negative" if max_row_size < 0
+  raise "candidate offsets must not be empty" if offsets.empty?
+
+  canvas_tokens.map do |token_id|
+    candidates = [] of Int32
+    offsets.each do |offset|
+      count.times do |i|
+        candidates << wrap_vocab_id(token_id.to_i64 + offset.to_i64 + i.to_i64 * stride.to_i64, vocab_size)
+      end
+    end
+    candidates.uniq!
+    candidates.sort!
+    if max_row_size > 0 && candidates.size > max_row_size
+      raise "candidate row size #{candidates.size} exceeds --max-candidate-row-size #{max_row_size}"
+    end
+    candidates
+  end
 end
 
 def prompt_rows_from_tokens(weights : ML::GGUF::DiffusionGemmaWeights, tokens : Array(Int32)) : Array(Float32)
@@ -240,6 +286,8 @@ raise "model not found: #{model}" unless File.exists?(model)
 raise "--prompt-len must be positive" unless prompt_len > 0
 raise "--canvas-len must be positive" unless canvas_len > 0
 raise "--candidate-count must be positive" unless candidate_count > 0
+raise "--candidate-stride must be positive" unless candidate_stride > 0
+raise "--max-candidate-row-size must be non-negative" if max_candidate_row_size < 0
 raise "--max-layers must be positive" unless max_layers > 0
 raise "--temp-inv must be finite and positive" unless temp_inv.finite? && temp_inv > 0.0_f32
 if threshold = min_base_logit_margin
@@ -260,6 +308,7 @@ raise "--max-layers exceeds model layer count" if max_layers > hp.n_layer
 raise "prompt+canvas exceeds context_length" if prompt_len + canvas_len > hp.context_length
 
 windows = token_windows_arg ? parse_token_windows(token_windows_arg.not_nil!) : [{prompt_token, canvas_token}]
+candidate_offsets = parse_int_list(candidate_offsets_arg, "--candidate-offsets")
 windows.each do |window|
   p_start = window[0]
   c_start = window[1]
@@ -302,6 +351,7 @@ aggregate_min_base_prob_margin = Float64::INFINITY
 aggregate_min_variant_prob_margin = Float64::INFINITY
 cache_speedups = [] of Float64
 predict_speedups = [] of Float64
+candidate_row_sizes = [] of Int32
 
 windows.each_with_index do |window, window_index|
   prompt_start = window[0]
@@ -310,7 +360,8 @@ windows.each_with_index do |window, window_index|
   canvas_tokens = generated_token_sequence(canvas_start, canvas_len, hp.vocab_size, "--canvas-len")
   prompt_rows = prompt_rows_from_tokens(weights, prompt_tokens)
   canvas_rows = ML::GGUF::DiffusionGemmaCPU.canvas_rows_from_tokens(weights, canvas_tokens)
-  candidate_rows = ML::GGUF::DiffusionGemmaCPU.generated_candidate_rows(canvas_tokens, candidate_count, hp.vocab_size)
+  candidate_rows = generated_candidate_rows(canvas_tokens, candidate_count, hp.vocab_size, candidate_offsets, candidate_stride, max_candidate_row_size)
+  candidate_row_sizes.concat(candidate_rows.map(&.size))
   sample_us = ML::GGUF::DiffusionGemmaCPU.sample_u_rows(seed, canvas_len)
   mask = ML::GGUF::DiffusionGemmaAttentionMask.new(prompt_len: prompt_len, canvas_len: canvas_len, sliding_window: hp.sliding_window)
 
@@ -330,6 +381,10 @@ windows.each_with_index do |window, window_index|
     "prompt_len=#{prompt_len}",
     "canvas_len=#{canvas_len}",
     "candidate_count=#{candidate_count}",
+    "candidate_offsets=#{candidate_offsets.join(",")}",
+    "candidate_stride=#{candidate_stride}",
+    "min_candidate_row_size=#{candidate_rows.map(&.size).min}",
+    "max_candidate_row_size=#{candidate_rows.map(&.size).max}",
     "max_layers=#{max_layers}",
     "base_cache_ms=#{format_f64(base.cache_ms)}",
     "variant_cache_ms=#{format_f64(variant.cache_ms)}",
@@ -444,6 +499,10 @@ puts [
   "rows=#{aggregate_rows}",
   "argmax_matches=#{aggregate_argmax_matches}/#{aggregate_rows}",
   "sampled_matches=#{aggregate_sampled_matches}/#{aggregate_rows}",
+  "candidate_offsets=#{candidate_offsets.join(",")}",
+  "candidate_stride=#{candidate_stride}",
+  "min_candidate_row_size=#{candidate_row_sizes.min}",
+  "max_candidate_row_size=#{candidate_row_sizes.max}",
   "all_argmax_match=#{all_argmax_match}",
   "all_sampled_match=#{all_sampled_match}",
   "min_base_logit_margin=#{format_f64(aggregate_min_base_logit_margin)}",
