@@ -235,6 +235,14 @@ module ML::GGUF
       def base_exact? : Bool
         @selected_route == "base_exact"
       end
+
+      def variant_env_role : String
+        base_exact? ? "base" : "variant"
+      end
+
+      def selected_variant_route_artifact : String?
+        variant_fast? ? @variant_route_artifact : nil
+      end
     end
 
     def initialize(@decision : String,
@@ -315,6 +323,15 @@ module ML::GGUF
 
     def window(prompt_token : Int32, canvas_token : Int32) : Window?
       @windows.find { |window| window.prompt_token == prompt_token && window.canvas_token == canvas_token }
+    end
+
+    def require_window(prompt_token : Int32, canvas_token : Int32) : Window
+      window(prompt_token, canvas_token) ||
+        raise ArgumentError.new("DiffusionGemma route plan does not contain window #{prompt_token}:#{canvas_token}")
+    end
+
+    def window_keys : Array(Tuple(Int32, Int32))
+      @windows.map(&.key)
     end
 
     def variant_route_artifact_map : String

@@ -451,8 +451,18 @@ describe ML::GGUF::DiffusionGemmaMixedRoutePlan do
     plan.fallback_windows.should eq(1)
     plan.variant_route_artifact_map.should eq("1:0=/tmp/variant_p1_c0.tsv,17:100=/tmp/variant_p17_c100.tsv")
     plan.exact_fallback_windows_spec.should eq("4096:8192")
-    plan.window(4096, 8192).not_nil!.base_exact?.should be_true
-    plan.window(1, 0).not_nil!.variant_fast?.should be_true
+    plan.window_keys.should eq([{1, 0}, {17, 100}, {4096, 8192}])
+    fast = plan.require_window(1, 0)
+    fast.variant_fast?.should be_true
+    fast.variant_env_role.should eq("variant")
+    fast.selected_variant_route_artifact.should eq("/tmp/variant_p1_c0.tsv")
+    fallback = plan.require_window(4096, 8192)
+    fallback.base_exact?.should be_true
+    fallback.variant_env_role.should eq("base")
+    fallback.selected_variant_route_artifact.should be_nil
+    expect_raises(ArgumentError, /does not contain window 2:3/) do
+      plan.require_window(2, 3)
+    end
   ensure
     File.delete(path) if path && File.exists?(path)
   end

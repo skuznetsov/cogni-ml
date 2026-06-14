@@ -196,8 +196,10 @@ end
 
 def require_route_plan_window(plan : ML::GGUF::DiffusionGemmaMixedRoutePlan,
                               window : Tuple(Int32, Int32)) : ML::GGUF::DiffusionGemmaMixedRoutePlan::Window
-  plan.window(window[0], window[1]) ||
-    raise "--token-windows contains #{window[0]}:#{window[1]} but --mixed-route-plan does not"
+  plan.require_window(window[0], window[1])
+rescue ex : ArgumentError
+  detail = ex.message || "--mixed-route-plan does not contain the requested window"
+  raise "--token-windows contains #{window[0]}:#{window[1]} but #{detail}"
 end
 
 def selected_variant_env(route_window : ML::GGUF::DiffusionGemmaMixedRoutePlan::Window?,
@@ -205,14 +207,13 @@ def selected_variant_env(route_window : ML::GGUF::DiffusionGemmaMixedRoutePlan::
                          variant_env : ArmEnv) : ArmEnv
   return variant_env unless route_window
 
-  route_window.base_exact? ? base_env : variant_env
+  route_window.variant_env_role == "base" ? base_env : variant_env
 end
 
 def selected_variant_artifact(route_window : ML::GGUF::DiffusionGemmaMixedRoutePlan::Window?) : String?
   return nil unless route_window
-  return nil unless route_window.variant_fast?
 
-  route_window.variant_route_artifact
+  route_window.selected_variant_route_artifact
 end
 
 def selected_route_name(route_window : ML::GGUF::DiffusionGemmaMixedRoutePlan::Window?) : String
@@ -220,7 +221,7 @@ def selected_route_name(route_window : ML::GGUF::DiffusionGemmaMixedRoutePlan::W
 end
 
 def selected_env_role(route_window : ML::GGUF::DiffusionGemmaMixedRoutePlan::Window?) : String
-  route_window.try(&.base_exact?) ? "base" : "variant"
+  route_window.try(&.variant_env_role) || "variant"
 end
 
 def parse_int_list(raw : String, label : String) : Array(Int32)
@@ -557,7 +558,7 @@ end
 windows = if raw = token_windows_arg
             parse_token_windows(raw)
           elsif plan = mixed_route_plan
-            plan.windows.map { |window| {window.prompt_token, window.canvas_token} }
+            plan.window_keys
           else
             [{prompt_token, canvas_token}]
           end
