@@ -398,7 +398,7 @@ different explicit artifacts. These expected-metadata overrides are rejected
 when `MIXED_ROUTE_PLAN`/`CERT_MIXED_ROUTE_PLAN`/`ABBA_MIXED_ROUTE_PLAN` is set,
 because a mixed route plan owns the selected artifact arm/env role.
 
-The fallback replay wrapper has two explicit frames. The default
+The fallback replay wrapper has explicit frames. The default
 `FALLBACK_REPLAY_MODE=selected` attaches prepared base artifacts back into a
 derived mixed plan and measures the known `base_exact` fallback. The experimental
 `foreign` mode prepares/reuses those same base artifacts, but feeds them through
@@ -413,6 +413,22 @@ scripts/diffusion_gemma_fallback_replay_gate.sh
 
 Use `DRY_RUN=1` first to inspect the derived fallback windows, base artifact
 map, and `foreign_gate_cmd`.
+
+Use `FALLBACK_REPLAY_MODE=compare` when the next quiet window should measure
+both frames from the same prepared or reused base artifacts. It writes separate
+`gate_selected` and `gate_foreign` directories, plus separate atlas and pp/tg
+summary files:
+
+```sh
+FALLBACK_REPLAY_MODE=compare \
+MIXED_ROUTE_PLAN=/tmp/diffusiongemma_route_plan_full30_20260614043810/route_plan.jsonl \
+scripts/diffusion_gemma_fallback_replay_gate.sh
+```
+
+When reusing existing artifacts in compare mode, pass them through
+`FALLBACK_BASE_ROUTE_ARTIFACT_MAP` so selected and foreign replay use the same
+base map. `FALLBACK_FOREIGN_BASE_ROUTE_ARTIFACT_MAP` is foreign-only and is
+rejected for compare mode.
 
 The promotion wrapper records and forwards the same expected-metadata controls
 into its nested suite gate, so a dry-run `gate_cmd` is self-contained for

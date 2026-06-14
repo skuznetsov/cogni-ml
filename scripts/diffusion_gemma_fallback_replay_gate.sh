@@ -10,10 +10,13 @@ stage="${FALLBACK_REPLAY_STAGE:-all}"
 log_dir="${LOG_DIR:-/tmp/diffusiongemma_fallback_replay_${timestamp}}"
 prepare_dir="${FALLBACK_PREPARE_LOG_DIR:-$log_dir/prepare}"
 gate_dir="${FALLBACK_GATE_LOG_DIR:-$log_dir/gate}"
+selected_gate_dir="${FALLBACK_SELECTED_GATE_LOG_DIR:-$log_dir/gate_selected}"
+foreign_gate_dir="${FALLBACK_FOREIGN_GATE_LOG_DIR:-$log_dir/gate_foreign}"
 artifact_dir="${FALLBACK_ARTIFACT_DIR:-$log_dir/artifacts}"
 attached_plan="${FALLBACK_ATTACHED_ROUTE_PLAN:-$log_dir/route_plan_with_base_fallback.jsonl}"
 prepare_log="${FALLBACK_PREPARE_LOG:-}"
 base_map="${FALLBACK_BASE_ROUTE_ARTIFACT_MAP:-${SUITE_BASE_ROUTE_ARTIFACT_MAP:-${CERT_BASE_ROUTE_ARTIFACT_MAP:-}}}"
+foreign_base_map_override="${FALLBACK_FOREIGN_BASE_ROUTE_ARTIFACT_MAP:-}"
 
 fallback_windows="${FALLBACK_TOKEN_WINDOWS:-}"
 plan_windows="${PLAN_TOKEN_WINDOWS:-}"
@@ -48,13 +51,18 @@ plan:
 
 Important environment knobs:
   MIXED_ROUTE_PLAN=PATH                 required source mixed route plan
-  FALLBACK_REPLAY_MODE=selected         selected or foreign
+  FALLBACK_REPLAY_MODE=selected         selected, foreign, or compare
                                            selected: attach base artifacts into a derived mixed plan
                                            foreign: run fallback windows through the variant side
                                                     while loading base/env-bound route artifacts
+                                           compare: run selected and foreign gates from the same
+                                                    prepared/reused base artifacts
   FALLBACK_REPLAY_STAGE=all             all, prepare, attach, or gate
   FALLBACK_PREPARE_LOG=PATH             reuse an existing base-artifact prepare log
   FALLBACK_BASE_ROUTE_ARTIFACT_MAP=SPEC reuse an existing fallback base map
+  FALLBACK_FOREIGN_BASE_ROUTE_ARTIFACT_MAP=SPEC
+                                        reuse an existing fallback base map only for
+                                        foreign variant-side replay
   FALLBACK_ATTACHED_ROUTE_PLAN=PATH     output plan, or existing plan for gate
   FALLBACK_TOKEN_WINDOWS=prompt:canvas  optional fallback subset, default base_exact rows
   VARIANT_PROFILE=prompt-ffn-resident   profile used by existing fast artifacts
@@ -207,14 +215,17 @@ case "$stage" in
     ;;
 esac
 case "$replay_mode" in
-  selected|foreign)
+  selected|foreign|compare)
     ;;
   *)
-    die "FALLBACK_REPLAY_MODE must be selected or foreign"
+    die "FALLBACK_REPLAY_MODE must be selected, foreign, or compare"
     ;;
 esac
-if [[ "$replay_mode" == "foreign" && "$stage" == "attach" ]]; then
-  die "FALLBACK_REPLAY_MODE=foreign does not use FALLBACK_REPLAY_STAGE=attach"
+if [[ ( "$replay_mode" == "foreign" || "$replay_mode" == "compare" ) && "$stage" == "attach" ]]; then
+  die "FALLBACK_REPLAY_MODE=$replay_mode does not use FALLBACK_REPLAY_STAGE=attach"
+fi
+if [[ "$replay_mode" == "compare" && -n "$foreign_base_map_override" ]]; then
+  die "FALLBACK_REPLAY_MODE=compare uses the same base artifacts for selected and foreign; use FALLBACK_BASE_ROUTE_ARTIFACT_MAP"
 fi
 
 if [[ -z "$fallback_windows" ]]; then
@@ -234,7 +245,10 @@ fi
 if [[ "$stage" == "prepare" && -n "$base_map" ]]; then
   die "FALLBACK_REPLAY_STAGE=prepare cannot use FALLBACK_BASE_ROUTE_ARTIFACT_MAP"
 fi
-if [[ "$replay_mode" == "selected" && ( "$stage" == "attach" || "$stage" == "gate" ) ]]; then
+if [[ "$stage" == "prepare" && -n "$foreign_base_map_override" ]]; then
+  die "FALLBACK_REPLAY_STAGE=prepare cannot use FALLBACK_FOREIGN_BASE_ROUTE_ARTIFACT_MAP"
+fi
+if [[ ( "$replay_mode" == "selected" || "$replay_mode" == "compare" ) && ( "$stage" == "attach" || "$stage" == "gate" ) ]]; then
   if [[ "$stage" == "attach" || ! -f "$attached_plan" ]]; then
     [[ -n "$prepare_log" || -n "$base_map" ]] || die "$stage requires FALLBACK_PREPARE_LOG or FALLBACK_BASE_ROUTE_ARTIFACT_MAP unless FALLBACK_ATTACHED_ROUTE_PLAN already exists"
   fi
@@ -244,12 +258,16 @@ should_prepare=0
 if [[ "$stage" == "prepare" ]]; then
   should_prepare=1
 elif [[ "$stage" == "all" && -z "$prepare_log" && -z "$base_map" ]]; then
-  should_prepare=1
+  if [[ "$replay_mode" != "foreign" || -z "$foreign_base_map_override" ]]; then
+    should_prepare=1
+  fi
 fi
 
 foreign_base_map=""
-if [[ "$replay_mode" == "foreign" ]]; then
-  if [[ -n "$base_map" ]]; then
+if [[ "$replay_mode" == "foreign" || "$replay_mode" == "compare" ]]; then
+  if [[ -n "$foreign_base_map_override" ]]; then
+    foreign_base_map="$foreign_base_map_override"
+  elif [[ -n "$base_map" ]]; then
     foreign_base_map="$base_map"
   elif [[ -n "$prepare_log" ]]; then
     foreign_base_map="$(extract_map SUITE_BASE_ROUTE_ARTIFACT_MAP "$prepare_log")"
@@ -267,6 +285,8 @@ manifest="$log_dir/fallback_replay_manifest.env"
   printf 'log_dir=%q\n' "$log_dir"
   printf 'prepare_dir=%q\n' "$prepare_dir"
   printf 'gate_dir=%q\n' "$gate_dir"
+  printf 'selected_gate_dir=%q\n' "$selected_gate_dir"
+  printf 'foreign_gate_dir=%q\n' "$foreign_gate_dir"
   printf 'artifact_dir=%q\n' "$artifact_dir"
   printf 'attached_plan=%q\n' "$attached_plan"
   printf 'fallback_windows=%q\n' "$fallback_windows"
@@ -281,6 +301,7 @@ manifest="$log_dir/fallback_replay_manifest.env"
   printf 'load_threshold=%q\n' "$load_threshold"
   printf 'total_threshold=%q\n' "$total_threshold"
   printf 'summary_enabled=%q\n' "$summary_enabled"
+  printf 'foreign_base_map_override=%q\n' "$foreign_base_map_override"
   printf 'foreign_base_map=%q\n' "$foreign_base_map"
 } >"$manifest"
 
@@ -330,13 +351,22 @@ fi
 
 gate_stdout="$log_dir/gate.stdout"
 gate_stderr="$log_dir/gate.stderr"
+selected_gate_stdout="$log_dir/gate_selected.stdout"
+selected_gate_stderr="$log_dir/gate_selected.stderr"
+foreign_gate_stdout="$log_dir/gate_foreign.stdout"
+foreign_gate_stderr="$log_dir/gate_foreign.stderr"
+selected_runtime_gate_dir="$gate_dir"
+foreign_runtime_gate_dir="$gate_dir"
+if [[ "$replay_mode" == "compare" ]]; then
+  selected_runtime_gate_dir="$selected_gate_dir"
+  foreign_runtime_gate_dir="$foreign_gate_dir"
+fi
 summary_route_plan="${FALLBACK_SUMMARY_ROUTE_PLAN:-$gate_dir/route_plan.jsonl}"
-summary_atlas="$log_dir/fallback_replay_route_plan_atlas.txt"
-summary_atlas_tsv="$log_dir/fallback_replay_route_plan_atlas.tsv"
-summary_pp_tg="$log_dir/fallback_replay_pp_tg.tsv"
+selected_summary_route_plan="${FALLBACK_SELECTED_SUMMARY_ROUTE_PLAN:-$selected_runtime_gate_dir/route_plan.jsonl}"
+foreign_summary_route_plan="${FALLBACK_FOREIGN_SUMMARY_ROUTE_PLAN:-$foreign_runtime_gate_dir/route_plan.jsonl}"
 gate_cmd=(
   env
-  LOG_DIR="$gate_dir"
+  LOG_DIR="$selected_runtime_gate_dir"
   PROMOTION_STAGE=gate
   SUITE_MIXED_ROUTE_PLAN="$attached_plan"
   TOKEN_WINDOWS="$plan_windows"
@@ -357,7 +387,7 @@ gate_cmd=(
 
 foreign_gate_cmd=(
   env
-  LOG_DIR="$gate_dir"
+  LOG_DIR="$foreign_runtime_gate_dir"
   PROMOTION_STAGE=gate
   TOKEN_WINDOWS="$fallback_windows"
   PROMPT_LEN="$prompt_len"
@@ -378,54 +408,62 @@ foreign_gate_cmd=(
   "$repo_root/scripts/diffusion_gemma_prompt_artifact_suite_promotion.sh"
 )
 
-atlas_cmd=(
-  python3
-  "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py"
-  "$summary_route_plan"
-)
-
-atlas_tsv_cmd=(
-  python3
-  "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py"
-  "$summary_route_plan"
-  --tsv
-)
-
-pp_tg_cmd=(
-  python3
-  "$repo_root/scripts/diffusion_gemma_pp_tg_summary.py"
-  "$gate_stdout"
-)
-
 write_summaries() {
+  local label="$1"
+  local route_plan="$2"
+  local gate_log="$3"
+  local prefix="$log_dir/fallback_replay"
+  if [[ "$label" != "default" ]]; then
+    prefix="$log_dir/fallback_replay_${label}"
+  fi
+  local summary_atlas="${prefix}_route_plan_atlas.txt"
+  local summary_atlas_tsv="${prefix}_route_plan_atlas.tsv"
+  local summary_pp_tg="${prefix}_pp_tg.tsv"
+  local atlas_cmd=(
+    python3
+    "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py"
+    "$route_plan"
+  )
+  local atlas_tsv_cmd=(
+    python3
+    "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py"
+    "$route_plan"
+    --tsv
+  )
+  local pp_tg_cmd=(
+    python3
+    "$repo_root/scripts/diffusion_gemma_pp_tg_summary.py"
+    "$gate_log"
+  )
+
   if ! bool_enabled "$summary_enabled"; then
-    printf 'fallback_replay_summary skipped reason=disabled\n'
+    printf 'fallback_replay_summary label=%s skipped reason=disabled\n' "$label"
     return 0
   fi
 
-  if [[ ! -f "$summary_route_plan" ]]; then
-    printf 'fallback_replay_summary warning=missing_route_plan route_plan=%s\n' "$summary_route_plan"
+  if [[ ! -f "$route_plan" ]]; then
+    printf 'fallback_replay_summary label=%s warning=missing_route_plan route_plan=%s\n' "$label" "$route_plan"
   else
     if "${atlas_cmd[@]}" >"$summary_atlas" 2>"$summary_atlas.stderr"; then
       cat "$summary_atlas"
     else
-      printf 'fallback_replay_summary warning=atlas_failed route_plan=%s stderr=%s\n' "$summary_route_plan" "$summary_atlas.stderr"
+      printf 'fallback_replay_summary label=%s warning=atlas_failed route_plan=%s stderr=%s\n' "$label" "$route_plan" "$summary_atlas.stderr"
     fi
     if "${atlas_tsv_cmd[@]}" >"$summary_atlas_tsv" 2>"$summary_atlas_tsv.stderr"; then
       :
     else
-      printf 'fallback_replay_summary warning=atlas_tsv_failed route_plan=%s stderr=%s\n' "$summary_route_plan" "$summary_atlas_tsv.stderr"
+      printf 'fallback_replay_summary label=%s warning=atlas_tsv_failed route_plan=%s stderr=%s\n' "$label" "$route_plan" "$summary_atlas_tsv.stderr"
     fi
   fi
 
   if "${pp_tg_cmd[@]}" >"$summary_pp_tg" 2>"$summary_pp_tg.stderr"; then
     cat "$summary_pp_tg"
   else
-    printf 'fallback_replay_summary warning=pp_tg_failed log=%s stderr=%s\n' "$gate_stdout" "$summary_pp_tg.stderr"
+    printf 'fallback_replay_summary label=%s warning=pp_tg_failed log=%s stderr=%s\n' "$label" "$gate_log" "$summary_pp_tg.stderr"
   fi
 
-  printf 'fallback_replay_summary route_plan=%s atlas=%s atlas_tsv=%s pp_tg=%s\n' \
-    "$summary_route_plan" "$summary_atlas" "$summary_atlas_tsv" "$summary_pp_tg"
+  printf 'fallback_replay_summary label=%s route_plan=%s atlas=%s atlas_tsv=%s pp_tg=%s\n' \
+    "$label" "$route_plan" "$summary_atlas" "$summary_atlas_tsv" "$summary_pp_tg"
 }
 
 if bool_enabled "$dry_run"; then
@@ -435,20 +473,35 @@ if bool_enabled "$dry_run"; then
   if [[ "$should_prepare" == "1" ]]; then
     print_cmd prepare_cmd "${prepare_cmd[@]}"
   fi
-  if [[ "$replay_mode" == "selected" && ( "$stage" == "all" || "$stage" == "attach" || ( "$stage" == "gate" && ! -f "$attached_plan" ) ) ]]; then
+  if [[ ( "$replay_mode" == "selected" || "$replay_mode" == "compare" ) && ( "$stage" == "all" || "$stage" == "attach" || ( "$stage" == "gate" && ! -f "$attached_plan" ) ) ]]; then
     print_cmd attach_cmd "${attach_cmd[@]}"
   fi
   if [[ "$stage" == "all" || "$stage" == "gate" ]]; then
-    if [[ "$replay_mode" == "foreign" ]]; then
+    if [[ "$replay_mode" == "compare" ]]; then
+      printf 'foreign_base_map=%s\n' "$foreign_base_map"
+      print_cmd selected_gate_cmd "${gate_cmd[@]}"
+      print_cmd foreign_gate_cmd "${foreign_gate_cmd[@]}"
+    elif [[ "$replay_mode" == "foreign" ]]; then
       printf 'foreign_base_map=%s\n' "$foreign_base_map"
       print_cmd foreign_gate_cmd "${foreign_gate_cmd[@]}"
     else
       print_cmd gate_cmd "${gate_cmd[@]}"
     fi
     if bool_enabled "$summary_enabled"; then
-      print_cmd summary_atlas_cmd "${atlas_cmd[@]}"
-      print_cmd summary_atlas_tsv_cmd "${atlas_tsv_cmd[@]}"
-      print_cmd summary_pp_tg_cmd "${pp_tg_cmd[@]}"
+      if [[ "$replay_mode" == "compare" ]]; then
+        print_cmd selected_summary_atlas_cmd python3 "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py" "$selected_summary_route_plan"
+        print_cmd selected_summary_pp_tg_cmd python3 "$repo_root/scripts/diffusion_gemma_pp_tg_summary.py" "$selected_gate_stdout"
+        print_cmd foreign_summary_atlas_cmd python3 "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py" "$foreign_summary_route_plan"
+        print_cmd foreign_summary_pp_tg_cmd python3 "$repo_root/scripts/diffusion_gemma_pp_tg_summary.py" "$foreign_gate_stdout"
+      elif [[ "$replay_mode" == "foreign" ]]; then
+        print_cmd summary_atlas_cmd python3 "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py" "$foreign_summary_route_plan"
+        print_cmd summary_atlas_tsv_cmd python3 "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py" "$foreign_summary_route_plan" --tsv
+        print_cmd summary_pp_tg_cmd python3 "$repo_root/scripts/diffusion_gemma_pp_tg_summary.py" "$gate_stdout"
+      else
+        print_cmd summary_atlas_cmd python3 "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py" "$selected_summary_route_plan"
+        print_cmd summary_atlas_tsv_cmd python3 "$repo_root/scripts/diffusion_gemma_mixed_route_plan_atlas.py" "$selected_summary_route_plan" --tsv
+        print_cmd summary_pp_tg_cmd python3 "$repo_root/scripts/diffusion_gemma_pp_tg_summary.py" "$gate_stdout"
+      fi
     fi
   fi
   printf 'fallback_replay decision=dry_run mode=%s stage=%s log_dir=%s attached_plan=%s\n' "$replay_mode" "$stage" "$log_dir" "$attached_plan"
@@ -483,7 +536,7 @@ if [[ "$should_prepare" == "1" ]]; then
   fi
 fi
 
-if [[ "$replay_mode" == "selected" && ( "$stage" == "all" || "$stage" == "attach" || ! -f "$attached_plan" ) ]]; then
+if [[ ( "$replay_mode" == "selected" || "$replay_mode" == "compare" ) && ( "$stage" == "all" || "$stage" == "attach" || ! -f "$attached_plan" ) ]]; then
   "${attach_cmd[@]}"
   if [[ "$stage" == "attach" ]]; then
     printf 'fallback_replay decision=attached log_dir=%s attached_plan=%s\n' "$log_dir" "$attached_plan"
@@ -492,6 +545,47 @@ if [[ "$replay_mode" == "selected" && ( "$stage" == "all" || "$stage" == "attach
 fi
 
 if [[ "$stage" == "all" || "$stage" == "gate" ]]; then
+  if [[ "$replay_mode" == "compare" ]]; then
+    if ! check_map_files "$foreign_base_map" "FALLBACK_FOREIGN_BASE_ROUTE_ARTIFACT_MAP"; then
+      exit 2
+    fi
+
+    set +e
+    "${gate_cmd[@]}" >"$selected_gate_stdout" 2>"$selected_gate_stderr"
+    selected_rc=$?
+    set -e
+    cat "$selected_gate_stdout"
+    selected_decision="$(grep -E '^artifact_suite_promotion decision=' "$selected_gate_stdout" | tail -1 || true)"
+    if (( selected_rc == 0 )); then
+      write_summaries selected "$selected_summary_route_plan" "$selected_gate_stdout"
+    else
+      printf 'fallback_replay decision=reject mode=compare arm=selected reason=gate_failed rc=%s log=%s stderr=%s child_decision=%q\n' \
+        "$selected_rc" "$selected_gate_stdout" "$selected_gate_stderr" "$selected_decision"
+    fi
+
+    set +e
+    "${foreign_gate_cmd[@]}" >"$foreign_gate_stdout" 2>"$foreign_gate_stderr"
+    foreign_rc=$?
+    set -e
+    cat "$foreign_gate_stdout"
+    foreign_decision="$(grep -E '^artifact_suite_promotion decision=' "$foreign_gate_stdout" | tail -1 || true)"
+    if (( foreign_rc == 0 )); then
+      write_summaries foreign "$foreign_summary_route_plan" "$foreign_gate_stdout"
+    else
+      printf 'fallback_replay decision=reject mode=compare arm=foreign reason=gate_failed rc=%s log=%s stderr=%s child_decision=%q\n' \
+        "$foreign_rc" "$foreign_gate_stdout" "$foreign_gate_stderr" "$foreign_decision"
+    fi
+
+    if (( selected_rc != 0 || foreign_rc != 0 )); then
+      printf 'fallback_replay decision=reject mode=compare reason=gate_failed selected_rc=%s foreign_rc=%s log_dir=%s\n' \
+        "$selected_rc" "$foreign_rc" "$log_dir"
+      exit 4
+    fi
+    printf 'fallback_replay decision=complete mode=compare stage=%s log_dir=%s selected_log=%s foreign_log=%s selected_decision=%q foreign_decision=%q\n' \
+      "$stage" "$log_dir" "$selected_gate_stdout" "$foreign_gate_stdout" "$selected_decision" "$foreign_decision"
+    exit 0
+  fi
+
   if [[ "$replay_mode" == "foreign" ]]; then
     if ! check_map_files "$foreign_base_map" "FALLBACK_FOREIGN_BASE_ROUTE_ARTIFACT_MAP"; then
       exit 2
@@ -506,7 +600,7 @@ if [[ "$stage" == "all" || "$stage" == "gate" ]]; then
       exit "$gate_rc"
     fi
     decision="$(grep -E '^artifact_suite_promotion decision=' "$gate_stdout" | tail -1 || true)"
-    write_summaries
+    write_summaries default "$foreign_summary_route_plan" "$gate_stdout"
     printf 'fallback_replay decision=complete mode=foreign stage=%s log_dir=%s foreign_base_map=%q child_decision=%q\n' "$stage" "$log_dir" "$foreign_base_map" "$decision"
     exit 0
   fi
@@ -521,6 +615,6 @@ if [[ "$stage" == "all" || "$stage" == "gate" ]]; then
     exit "$gate_rc"
   fi
   decision="$(grep -E '^artifact_suite_promotion decision=' "$gate_stdout" | tail -1 || true)"
-  write_summaries
+  write_summaries default "$selected_summary_route_plan" "$gate_stdout"
   printf 'fallback_replay decision=complete mode=selected stage=%s log_dir=%s attached_plan=%s child_decision=%q\n' "$stage" "$log_dir" "$attached_plan" "$decision"
 fi
