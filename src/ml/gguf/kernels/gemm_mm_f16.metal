@@ -128,6 +128,7 @@ kernel void simd_mm_f16(
     }
 
     // Store results to shared memory, apply bias + GELU, write FP16 output
+    threadgroup_barrier(mem_flags::mem_threadgroup);
     threadgroup float * temp = (threadgroup float *)shmem;
     threadgroup float * sg_out = temp + 32*(sgitg & 1) + 16*(sgitg >> 1)*MM_NR0;
     for (short i = 0; i < 8; i++) {
@@ -238,6 +239,7 @@ kernel void simd_mm_f16_moe(
         }
     }
 
+    threadgroup_barrier(mem_flags::mem_threadgroup);
     threadgroup float * temp = (threadgroup float *)shmem;
     threadgroup float * sg_out = temp + 32*(sgitg & 1) + 16*(sgitg >> 1)*MM_NR0;
     for (short i = 0; i < 8; i++) simdgroup_store(mc[i], sg_out + 8*(i%4) + 8*MM_NR0*(i/4), MM_NR0, 0, false);

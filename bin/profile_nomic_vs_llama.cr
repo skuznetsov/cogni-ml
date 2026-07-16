@@ -37,6 +37,16 @@ def cosine(a : Array(Float32), b : Array(Float32)) : Float64
   dot / (Math.sqrt(na) * Math.sqrt(nb))
 end
 
+def assert_same_token_ids!(label : String, native_ids : Array(Int32), llama_ids : Array(Int32)) : Nil
+  return if native_ids == llama_ids
+
+  common = {native_ids.size, llama_ids.size}.min
+  mismatch = (0...common).find { |index| native_ids[index] != llama_ids[index] } || common
+  raise "token ID mismatch for #{label} at index #{mismatch}: " \
+        "native=#{native_ids[mismatch]? || "<end>"} llama=#{llama_ids[mismatch]? || "<end>"} " \
+        "lengths=#{native_ids.size}/#{llama_ids.size}"
+end
+
 def summarize(times : Array(Float64)) : Stats
   sorted = times.sort
   p50 = sorted[sorted.size // 2]
@@ -45,34 +55,34 @@ def summarize(times : Array(Float64)) : Stats
   Stats.new(avg_ms: avg, p50_ms: p50, p95_ms: p95)
 end
 
-def measure_abba(runs : Int32, a : -> Array(Float32), b : -> Array(Float32)) : {Stats, Array(Float32), Stats, Array(Float32)}
+def measure_abba(runs : Int32, a : -> Array(Float32), b : -> Array(Float32)) : {Stats, Array(Array(Float32)), Stats, Array(Array(Float32))}
   a_times = Array(Float64).new(runs)
   b_times = Array(Float64).new(runs)
-  last_a = [] of Float32
-  last_b = [] of Float32
+  a_vectors = Array(Array(Float32)).new(runs)
+  b_vectors = Array(Array(Float32)).new(runs)
 
   runs.times do |i|
     a_first = {true, false, false, true}[i % 4]
     if a_first
       t0 = Time.instant
-      last_a = a.call
+      a_vectors << a.call
       a_times << (Time.instant - t0).total_milliseconds
 
       t1 = Time.instant
-      last_b = b.call
+      b_vectors << b.call
       b_times << (Time.instant - t1).total_milliseconds
     else
       t0 = Time.instant
-      last_b = b.call
+      b_vectors << b.call
       b_times << (Time.instant - t0).total_milliseconds
 
       t1 = Time.instant
-      last_a = a.call
+      a_vectors << a.call
       a_times << (Time.instant - t1).total_milliseconds
     end
   end
 
-  {summarize(a_times), last_a, summarize(b_times), last_b}
+  {summarize(a_times), a_vectors, summarize(b_times), b_vectors}
 end
 
 def measure_once(&block : -> Array(Float32)) : OneShot
@@ -93,6 +103,7 @@ n_batch = 512
 n_threads = 0
 llama_flash_attn = false
 llama_fresh_context = false
+min_cosine = 0.9999
 
 OptionParser.parse do |p|
   p.banner = "Usage: profile_nomic_vs_llama [options]"
@@ -105,7 +116,12 @@ OptionParser.parse do |p|
   p.on("--llama-flash-attn", "Enable llama.cpp flash attention") { llama_flash_attn = true }
   p.on("--llama-no-flash-attn", "Disable llama.cpp flash attention (default)") { llama_flash_attn = false }
   p.on("--llama-fresh-context", "Recreate llama.cpp context per embedding call") { llama_fresh_context = true }
+  p.on("--min-cosine=N", "Fail below the minimum per-run cosine (default: 0.9999)") { |v| min_cosine = v.to_f64 }
 end
+
+abort "--runs must be positive" unless runs > 0
+abort "--warmup must be non-negative" unless warmup >= 0
+abort "--min-cosine must be in 0..1" unless 0.0 <= min_cosine <= 1.0
 
 unless File.exists?(model_path)
   STDERR.puts "Model not found: #{model_path}"
@@ -136,7 +152,7 @@ def llama_embed(
   n_batch : Int32,
   n_threads : Int32,
   flash_attn : Bool,
-  fresh_context : Bool
+  fresh_context : Bool,
 ) : Array(Float32)
   tokens = llama_model.tokenize(text, add_bos: true)
 
@@ -163,24 +179,37 @@ def llama_embed(
 end
 
 begin
-  STDERR.puts "settings: device=#{ML::Metal::Device.instance.name.inspect} nomic_simdgroup_matrix=#{native.backend.simdgroup_matrix_enabled?} llama_flash_attn=#{llama_flash_attn} llama_fresh_context=#{llama_fresh_context} runs=#{runs} warmup=#{warmup} steady_order=ABBA"
+  STDERR.puts "settings: device=#{ML::Metal::Device.instance.name.inspect} nomic_simdgroup_matrix=#{native.backend.simdgroup_matrix_enabled?} nomic_matrix_attention=#{native.backend.matrix_attention_enabled?} llama_flash_attn=#{llama_flash_attn} llama_fresh_context=#{llama_fresh_context} runs=#{runs} warmup=#{warmup} steady_order=ABBA min_cosine=#{min_cosine}"
   STDERR.puts
   STDERR.puts "=== Native Metal vs llama.cpp: cold one-shot ==="
   STDERR.puts "#{"label".ljust(8)} #{"tok(native)".rjust(11)} #{"tok(llama)".rjust(11)} #{"native cold".rjust(11)} #{"llama cold".rjust(11)} #{"speedup".rjust(8)} #{"cos".rjust(8)}"
   STDERR.puts "-" * 86
 
   TEXTS.each do |label, text|
-    native_tokens = native.tokenize(text).size
-    llama_tokens = llama_model.tokenize(text, add_bos: true).size
+    native_token_ids = native.tokenize(text)
+    llama_token_ids = llama_model.tokenize(text, add_bos: true)
+    assert_same_token_ids!(label, native_token_ids, llama_token_ids)
+    native_tokens = native_token_ids.size
+    llama_tokens = llama_token_ids.size
 
     native_cold = measure_once { native.embed(text) }
     llama_cold = measure_once { llama_embed(llama_model, llama_ctx, text, n_batch, n_threads, llama_flash_attn, llama_fresh_context) }
 
     cold_speedup = llama_cold.ms / native_cold.ms
     cold_cos = cosine(native_cold.vec, llama_cold.vec)
+    raise "cold cosine below threshold for #{label}: #{cold_cos} < #{min_cosine}" unless cold_cos.finite? && cold_cos >= min_cosine
 
     STDERR.puts "#{label.ljust(8)} #{native_tokens.to_s.rjust(11)} #{llama_tokens.to_s.rjust(11)} #{fmt(native_cold.ms)} #{fmt(llama_cold.ms)} #{cold_speedup.round(2).to_s.rjust(8)} #{cold_cos.round(6).to_s.rjust(8)}"
   end
+
+  native_batch = native.embed_batch(TEXTS.values)
+  llama_batch = TEXTS.values.map do |text|
+    llama_embed(llama_model, llama_ctx, text, n_batch, n_threads, llama_flash_attn, llama_fresh_context)
+  end
+  raise "mixed-batch output count mismatch: #{native_batch.size}/#{llama_batch.size}" unless native_batch.size == llama_batch.size
+  batch_cos = native_batch.zip(llama_batch).min_of { |(native_vec, llama_vec)| cosine(native_vec, llama_vec) }
+  raise "mixed-batch cosine below threshold: #{batch_cos} < #{min_cosine}" unless batch_cos.finite? && batch_cos >= min_cosine
+  STDERR.puts "mixed-batch parity: count=#{native_batch.size} min_cosine=#{batch_cos.round(9)}"
 
   STDERR.puts
   STDERR.puts "=== Native Metal vs llama.cpp: steady state ==="
@@ -195,17 +224,21 @@ begin
   end
 
   TEXTS.each do |label, text|
-    native_tokens = native.tokenize(text).size
-    llama_tokens = llama_model.tokenize(text, add_bos: true).size
+    native_token_ids = native.tokenize(text)
+    llama_token_ids = llama_model.tokenize(text, add_bos: true)
+    assert_same_token_ids!(label, native_token_ids, llama_token_ids)
+    native_tokens = native_token_ids.size
+    llama_tokens = llama_token_ids.size
 
-    native_stats, native_vec, llama_stats, llama_vec = measure_abba(
+    native_stats, native_vectors, llama_stats, llama_vectors = measure_abba(
       runs,
       -> { native.embed(text) },
       -> { llama_embed(llama_model, llama_ctx, text, n_batch, n_threads, llama_flash_attn, llama_fresh_context) },
     )
 
     speedup = llama_stats.p50_ms / native_stats.p50_ms
-    cos = cosine(native_vec, llama_vec)
+    cos = native_vectors.zip(llama_vectors).min_of { |(native_vec, llama_vec)| cosine(native_vec, llama_vec) }
+    raise "steady cosine below threshold for #{label}: #{cos} < #{min_cosine}" unless cos.finite? && cos >= min_cosine
 
     STDERR.puts "#{label.ljust(8)} #{native_tokens.to_s.rjust(11)} #{llama_tokens.to_s.rjust(11)} #{fmt(native_stats.p50_ms)} #{fmt(native_stats.p95_ms)} #{fmt(llama_stats.p50_ms)} #{fmt(llama_stats.p95_ms)} #{speedup.round(2).to_s.rjust(8)} #{cos.round(6).to_s.rjust(8)}"
   end

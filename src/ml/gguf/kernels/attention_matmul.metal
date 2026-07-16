@@ -9,7 +9,7 @@
 //   sq[Q, DK] half       — query tile (Q = Q_TILE * NSG)
 //   so[Q, PV] half       — output accumulator
 //   ss[Q, 2*C] float     — scratch for scores + diagonal (via float2)
-//   sk[8, DK] half       — K tile temp (per simdgroup, reused for V)
+//   sk[8, DK] half       — K/V tail tile temp (per simdgroup, reused)
 //
 // Dispatch: threadgroups = [ceil(seq_len / Q_TOTAL), n_heads]
 //           threads_per_threadgroup = [32, NSG]
@@ -34,8 +34,31 @@ constant short PV8 = 8;
 
 constant short Q_TOTAL = Q_PER_SG * NSG_FA;  // 16 queries per threadgroup
 constant short NQ = Q_PER_SG / NSG_FA;       // 4 queries handled per SG
+constant short ATTENTION_TAIL_ROWS = 8;
 
 constant short SH = 2 * C_TILE;  // shared mem stride for scores (float2)
+
+inline void attention_stage_tail_8(
+    device const half* src,
+    uint base_row,
+    uint valid_rows,
+    uint row_stride,
+    threadgroup half* dst,
+    ushort lane)
+{
+    for (uint idx = lane; idx < ATTENTION_TAIL_ROWS * DK; idx += NW) {
+        const uint row = idx / DK;
+        const uint col = idx - row * DK;
+        if (row < valid_rows) {
+            dst[idx] = src[(base_row + row) * row_stride + col];
+        } else {
+            dst[idx] = half(0);
+        }
+    }
+    // Each simdgroup owns a disjoint tail tile, so no cross-simdgroup
+    // rendezvous is needed before consuming it.
+    simdgroup_barrier(mem_flags::mem_threadgroup);
+}
 
 kernel void attention_matmul(
     device const half*  q_src   [[buffer(0)]],  // [n_heads, seq, DK]
@@ -74,15 +97,24 @@ kernel void attention_matmul(
     threadgroup float*   so  = (threadgroup float*)(sq + Q_TOTAL * DK);
     threadgroup float*   ss  = (threadgroup float*)(so + Q_TOTAL * PV);
     threadgroup float2*  ss2 = (threadgroup float2*)ss;
+    threadgroup half*    tail_scratch = (threadgroup half*)(ss + Q_TOTAL * SH) +
+        sgitg * ATTENTION_TAIL_ROWS * DK;
 
     // Load Q into shared — contiguous per simdgroup (sg0: rows 0-7, sg1: rows 8-15)
     {
         const short q_off = sgitg * Q_PER_SG;
         for (short jj = 0; jj < Q_PER_SG; ++jj) {
             const short j = q_off + jj;
-            device const half4* q4 = (device const half4*)(q_src + h_off_k + (iq1 + j) * DK);
-            for (short i = tiisg; i < DK/4; i += NW) {
-                sq4[j * DK/4 + i] = (iq1 + j < seq_len) ? q4[i] : half4(0);
+            const uint q_pos = iq1 + j;
+            if (q_pos < seq_len) {
+                device const half4* q4 = (device const half4*)(q_src + h_off_k + q_pos * DK);
+                for (short i = tiisg; i < DK/4; i += NW) {
+                    sq4[j * DK/4 + i] = q4[i];
+                }
+            } else {
+                for (short i = tiisg; i < DK/4; i += NW) {
+                    sq4[j * DK/4 + i] = half4(0);
+                }
             }
         }
     }
@@ -114,6 +146,16 @@ kernel void attention_matmul(
         threadgroup float* ps = ss + sgitg * Q_PER_SG * SH;  // score rows for this SG
 
         for (short cc = 0; cc < C_TILE/8; ++cc) {
+            const uint k_tile_row = ic + cc * ATTENTION_TAIL_ROWS;
+            uint k_rows = 0;
+            if (k_tile_row < seq_len) {
+                k_rows = seq_len - k_tile_row;
+                if (k_rows > ATTENTION_TAIL_ROWS) k_rows = ATTENTION_TAIL_ROWS;
+            }
+            if (k_rows < ATTENTION_TAIL_ROWS) {
+                attention_stage_tail_8(k_src + h_off_k, k_tile_row, k_rows, NS_K, tail_scratch, tiisg);
+            }
+
             simdgroup_matrix<float, 8, 8> mqk = simdgroup_matrix<float, 8, 8>(0);
 
             for (short i = 0; i < DK8/2; ++i) {
@@ -122,8 +164,13 @@ kernel void attention_matmul(
                 simdgroup_barrier(mem_flags::mem_none);
                 simdgroup_load(mq[0], pq + 16*i + 0, DK);
                 simdgroup_load(mq[1], pq + 16*i + 8, DK);
-                simdgroup_load(mk[0], pk + cc*8*NS_K + 16*i + 0, NS_K, 0, true);
-                simdgroup_load(mk[1], pk + cc*8*NS_K + 16*i + 8, NS_K, 0, true);
+                if (k_rows == ATTENTION_TAIL_ROWS) {
+                    simdgroup_load(mk[0], pk + cc*8*NS_K + 16*i + 0, NS_K, 0, true);
+                    simdgroup_load(mk[1], pk + cc*8*NS_K + 16*i + 8, NS_K, 0, true);
+                } else {
+                    simdgroup_load(mk[0], tail_scratch + 16*i + 0, DK, 0, true);
+                    simdgroup_load(mk[1], tail_scratch + 16*i + 8, DK, 0, true);
+                }
                 simdgroup_barrier(mem_flags::mem_none);
 
                 simdgroup_multiply_accumulate(mqk, mq[0], mk[0], mqk);
@@ -177,13 +224,27 @@ kernel void attention_matmul(
             const uint v_base = h * seq_len * DV;
 
             for (short cc = 0; cc < C_TILE/8; ++cc) {
+                const uint v_tile_row = ic + cc * ATTENTION_TAIL_ROWS;
+                uint v_rows = 0;
+                if (v_tile_row < seq_len) {
+                    v_rows = seq_len - v_tile_row;
+                    if (v_rows > ATTENTION_TAIL_ROWS) v_rows = ATTENTION_TAIL_ROWS;
+                }
+                if (v_rows < ATTENTION_TAIL_ROWS) {
+                    attention_stage_tail_8(v_src + v_base, v_tile_row, v_rows, NS_V, tail_scratch, tiisg);
+                }
+
                 simdgroup_matrix<float, 8, 8> vs;
                 simdgroup_load(vs, ss + sgitg * Q_PER_SG * SH + cc * 8, SH);
 
                 for (short dk = 0; dk < DV8; ++dk) {
                     simdgroup_matrix<half, 8, 8> mv;
-                    device const half* pv = v_src + v_base + (ic + cc*8) * DV + dk * 8;
-                    simdgroup_load(mv, pv, DV);
+                    if (v_rows == ATTENTION_TAIL_ROWS) {
+                        device const half* pv = v_src + v_base + (ic + cc*8) * DV + dk * 8;
+                        simdgroup_load(mv, pv, DV);
+                    } else {
+                        simdgroup_load(mv, tail_scratch + dk * 8, DV);
+                    }
                     simdgroup_multiply_accumulate(lo[dk], vs, mv, lo[dk]);
                 }
             }
@@ -247,15 +308,23 @@ kernel void attention_matmul_batch(
     threadgroup float*  so  = (threadgroup float*)(sq + Q_TOTAL * DK);
     threadgroup float*  ss  = (threadgroup float*)(so + Q_TOTAL * PV);
     threadgroup float2* ss2 = (threadgroup float2*)ss;
+    threadgroup half*   tail_scratch = (threadgroup half*)(ss + Q_TOTAL * SH) +
+        sgitg * ATTENTION_TAIL_ROWS * DK;
 
     {
         const short q_off = sgitg * Q_PER_SG;
         for (short jj = 0; jj < Q_PER_SG; ++jj) {
             const short j = q_off + jj;
             const uint q_pos = iq1 + j;
-            device const half4* q4 = (device const half4*)(q_src + head_base_k + q_pos * DK);
-            for (short i = tiisg; i < DK/4; i += NW) {
-                sq4[j * DK/4 + i] = (q_pos < valid_len) ? q4[i] : half4(0);
+            if (q_pos < valid_len) {
+                device const half4* q4 = (device const half4*)(q_src + head_base_k + q_pos * DK);
+                for (short i = tiisg; i < DK/4; i += NW) {
+                    sq4[j * DK/4 + i] = q4[i];
+                }
+            } else {
+                for (short i = tiisg; i < DK/4; i += NW) {
+                    sq4[j * DK/4 + i] = half4(0);
+                }
             }
         }
     }
@@ -283,6 +352,16 @@ kernel void attention_matmul_batch(
         threadgroup float* ps = ss + sgitg * Q_PER_SG * SH;
 
         for (short cc = 0; cc < C_TILE/8; ++cc) {
+            const uint k_tile_row = ic + cc * ATTENTION_TAIL_ROWS;
+            uint k_rows = 0;
+            if (k_tile_row < valid_len) {
+                k_rows = valid_len - k_tile_row;
+                if (k_rows > ATTENTION_TAIL_ROWS) k_rows = ATTENTION_TAIL_ROWS;
+            }
+            if (k_rows < ATTENTION_TAIL_ROWS) {
+                attention_stage_tail_8(k_src + head_base_k, k_tile_row, k_rows, NS_K, tail_scratch, tiisg);
+            }
+
             simdgroup_matrix<float, 8, 8> mqk = simdgroup_matrix<float, 8, 8>(0);
 
             for (short i = 0; i < DK8/2; ++i) {
@@ -291,8 +370,13 @@ kernel void attention_matmul_batch(
                 simdgroup_barrier(mem_flags::mem_none);
                 simdgroup_load(mq[0], pq + 16*i + 0, DK);
                 simdgroup_load(mq[1], pq + 16*i + 8, DK);
-                simdgroup_load(mk[0], pk + cc*8*NS_K + 16*i + 0, NS_K, 0, true);
-                simdgroup_load(mk[1], pk + cc*8*NS_K + 16*i + 8, NS_K, 0, true);
+                if (k_rows == ATTENTION_TAIL_ROWS) {
+                    simdgroup_load(mk[0], pk + cc*8*NS_K + 16*i + 0, NS_K, 0, true);
+                    simdgroup_load(mk[1], pk + cc*8*NS_K + 16*i + 8, NS_K, 0, true);
+                } else {
+                    simdgroup_load(mk[0], tail_scratch + 16*i + 0, DK, 0, true);
+                    simdgroup_load(mk[1], tail_scratch + 16*i + 8, DK, 0, true);
+                }
                 simdgroup_barrier(mem_flags::mem_none);
 
                 simdgroup_multiply_accumulate(mqk, mq[0], mk[0], mqk);
@@ -340,13 +424,27 @@ kernel void attention_matmul_batch(
                 simdgroup_load(lo[dk], my_so + dk * 8, PV);
 
             for (short cc = 0; cc < C_TILE/8; ++cc) {
+                const uint v_tile_row = ic + cc * ATTENTION_TAIL_ROWS;
+                uint v_rows = 0;
+                if (v_tile_row < valid_len) {
+                    v_rows = valid_len - v_tile_row;
+                    if (v_rows > ATTENTION_TAIL_ROWS) v_rows = ATTENTION_TAIL_ROWS;
+                }
+                if (v_rows < ATTENTION_TAIL_ROWS) {
+                    attention_stage_tail_8(v_src + head_base_v, v_tile_row, v_rows, NS_V, tail_scratch, tiisg);
+                }
+
                 simdgroup_matrix<float, 8, 8> vs;
                 simdgroup_load(vs, ss + sgitg * Q_PER_SG * SH + cc * 8, SH);
 
                 for (short dk = 0; dk < DV8; ++dk) {
                     simdgroup_matrix<half, 8, 8> mv;
-                    device const half* pv = v_src + head_base_v + (ic + cc*8) * NS_V + dk * 8;
-                    simdgroup_load(mv, pv, NS_V);
+                    if (v_rows == ATTENTION_TAIL_ROWS) {
+                        device const half* pv = v_src + head_base_v + (ic + cc*8) * NS_V + dk * 8;
+                        simdgroup_load(mv, pv, NS_V);
+                    } else {
+                        simdgroup_load(mv, tail_scratch + dk * 8, NS_V);
+                    }
                     simdgroup_multiply_accumulate(lo[dk], vs, mv, lo[dk]);
                 }
             }

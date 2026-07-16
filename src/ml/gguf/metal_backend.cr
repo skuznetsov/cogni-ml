@@ -19,6 +19,9 @@ module ML::GGUF
   # so keep the sync path only for truly tiny sequences unless explicitly overridden.
   MOE_SYNC_MAX_TOKENS = ENV["NOMIC_MOE_SYNC_MAX_TOKENS"]?.try(&.to_i?) || 16
   ATTN_MATMUL_MIN_TOKENS = ENV["NOMIC_ATTN_MATMUL_MIN_TOKENS"]?.try(&.to_i?) || 33
+  ATTN_MATMUL_Q_TOTAL = 8 * 2
+  ATTN_MATMUL_NSG = 2
+  ATTN_MATMUL_TAIL_ROWS = 8
 
   class GPUWeight
     getter buffer : ML::MetalBuffer       # FP16 pre-dequantized weights [out_dim, in_dim]
@@ -178,12 +181,18 @@ module ML::GGUF
     @workspace_rope_cos : Array(Float32)?
     @workspace_rope_sin : Array(Float32)?
     getter? simdgroup_matrix_enabled : Bool
+    getter? matrix_attention_enabled : Bool
 
     def initialize
       raise "Metal not available" unless ML::Metal::Device.available?
+      device_name = ML::Metal::Device.instance.name
       @simdgroup_matrix_enabled = NomicMetalPolicy.simdgroup_matrix_enabled?(
-        ML::Metal::Device.instance.name,
+        device_name,
         ENV["NOMIC_SIMDGROUP_MATRIX"]?,
+      )
+      @matrix_attention_enabled = @simdgroup_matrix_enabled && NomicMetalPolicy.matrix_attention_enabled?(
+        device_name,
+        ENV["NOMIC_MATRIX_ATTENTION"]?,
       )
       @gpu_weights = {} of UInt64 => GPUWeight
       @gpu_f32_bufs = {} of UInt64 => ML::MetalBuffer
@@ -432,7 +441,15 @@ module ML::GGUF
 
     @[AlwaysInline]
     private def use_matmul_attention_path?(seq_len : Int32) : Bool
-      @simdgroup_matrix_enabled && seq_len >= ATTN_MATMUL_MIN_TOKENS
+      @matrix_attention_enabled && seq_len >= ATTN_MATMUL_MIN_TOKENS
+    end
+
+    private def attention_matmul_shmem_bytes(head_dim : Int32) : Int32
+      sh_q = ATTN_MATMUL_Q_TOTAL * head_dim * 2
+      sh_o = ATTN_MATMUL_Q_TOTAL * head_dim * 4
+      sh_s = ATTN_MATMUL_Q_TOTAL * 64 * 4
+      sh_tail = ATTN_MATMUL_NSG * ATTN_MATMUL_TAIL_ROWS * head_dim * 2
+      sh_q + sh_o + sh_s + sh_tail
     end
 
     # Dispatch matmul — auto-selects mm vs mv based on batch size
@@ -583,15 +600,12 @@ module ML::GGUF
         enc.memory_barrier
 
         if use_matmul_attention_path?(seq_len)
-          q_total = 8 * 2
-          n_sg = 2
-          sh_q = q_total * head_dim * 2
-          sh_o = q_total * head_dim * 4
-          sh_s = q_total * 64 * 4
+          q_total = ATTN_MATMUL_Q_TOTAL
+          n_sg = ATTN_MATMUL_NSG
           enc.set_pipeline(pipe("attention_matmul"))
           enc.set_buffer(ws.q, 0); enc.set_buffer(ws.k, 1); enc.set_buffer(ws.v, 2); enc.set_buffer(ws.attn_out, 3, w)
           enc.set_value(batch, 4); enc.set_value(n_heads_u, 5); enc.set_value(head_dim_u, 6); enc.set_value(scale, 7)
-          enc.set_threadgroup_memory(sh_q + sh_o + sh_s, 0)
+          enc.set_threadgroup_memory(attention_matmul_shmem_bytes(head_dim), 0)
           enc.dispatch_threadgroups({(seq_len + q_total - 1) // q_total, n_heads, 1}, {32, n_sg, 1})
         else
           n_qr = 8
@@ -866,16 +880,13 @@ module ML::GGUF
         enc.memory_barrier
 
         if use_matmul_attention_path?(max_seq_len)
-          q_total = 8 * 2
-          n_sg = 2
-          sh_q = q_total * head_dim * 2
-          sh_o = q_total * head_dim * 4
-          sh_s = q_total * 64 * 4
+          q_total = ATTN_MATMUL_Q_TOTAL
+          n_sg = ATTN_MATMUL_NSG
           enc.set_pipeline(pipe("attention_matmul_batch"))
           enc.set_buffer(ws.q, 0); enc.set_buffer(ws.k, 1); enc.set_buffer(ws.v, 2); enc.set_buffer(ws.attn_out, 3, w)
           enc.set_buffer(ws.lengths, 4)
           enc.set_value(batch_size_u, 5); enc.set_value(max_seq_u, 6); enc.set_value(n_heads_u, 7); enc.set_value(head_dim_u, 8); enc.set_value(scale, 9)
-          enc.set_threadgroup_memory(sh_q + sh_o + sh_s, 0)
+          enc.set_threadgroup_memory(attention_matmul_shmem_bytes(head_dim), 0)
           enc.dispatch_threadgroups({(max_seq_len + q_total - 1) // q_total, n_heads, batch_size}, {32, n_sg, 1})
         else
           n_qr = 8
@@ -1193,11 +1204,8 @@ module ML::GGUF
       batch = seq_len.to_u32
 
       if use_matmul_attention_path?(seq_len)
-        q_total = 8 * 2
-        n_sg = 2
-        sh_q = q_total * head_dim * 2
-        sh_o = q_total * head_dim * 4
-        sh_s = q_total * 64 * 4
+        q_total = ATTN_MATMUL_Q_TOTAL
+        n_sg = ATTN_MATMUL_NSG
         enc.set_pipeline(pipe("attention_matmul"))
         enc.set_buffer(ws.q, 0)
         enc.set_buffer(ws.k, 1)
@@ -1207,7 +1215,7 @@ module ML::GGUF
         enc.set_value(n_heads.to_u32, 5)
         enc.set_value(head_dim.to_u32, 6)
         enc.set_value(scale, 7)
-        enc.set_threadgroup_memory(sh_q + sh_o + sh_s, 0)
+        enc.set_threadgroup_memory(attention_matmul_shmem_bytes(head_dim), 0)
         enc.dispatch_threadgroups({(seq_len + q_total - 1) // q_total, n_heads, 1}, {32, n_sg, 1})
       else
         n_qr = 8
@@ -1707,12 +1715,11 @@ module ML::GGUF
 
         # Attention
         if use_matmul_attention_path?(seq_len)
-          q_total = 8 * 2; n_sg = 2
-          sh_q = q_total * head_dim * 2; sh_o = q_total * head_dim * 4; sh_s = q_total * 64 * 4
+          q_total = ATTN_MATMUL_Q_TOTAL; n_sg = ATTN_MATMUL_NSG
           enc.set_pipeline(pipe("attention_matmul"))
           enc.set_buffer(ws.q, 0); enc.set_buffer(ws.k, 1); enc.set_buffer(ws.v, 2); enc.set_buffer(ws.attn_out, 3, w)
           enc.set_value(batch, 4); enc.set_value(n_heads_u, 5); enc.set_value(head_dim_u, 6); enc.set_value(scale, 7)
-          enc.set_threadgroup_memory(sh_q + sh_o + sh_s, 0)
+          enc.set_threadgroup_memory(attention_matmul_shmem_bytes(head_dim), 0)
           enc.dispatch_threadgroups({(seq_len + q_total - 1) // q_total, n_heads, 1}, {32, n_sg, 1})
         else
           n_qr = 8
