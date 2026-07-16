@@ -435,7 +435,7 @@ module ML
 
       # Clear KV cache + recurrent state (decoder/hybrid models only, NOT BERT)
       def clear_memory
-        LlamaFFI.llama_memory_clear(@handle) unless @freed
+        LlamaFFI.llama_memory_clear(memory, true) unless @freed
       end
 
       # ── KV Cache State Management ──
@@ -484,33 +484,39 @@ module ML
 
       # Remove tokens [p0, p1) from sequence. -1 for full range.
       def kv_seq_rm(seq_id : Int32, p0 : Int32 = -1, p1 : Int32 = -1) : Bool
-        LlamaFFI.llama_memory_seq_rm(@handle, seq_id, p0, p1)
+        LlamaFFI.llama_memory_seq_rm(memory, seq_id, p0, p1)
       end
 
       # Copy sequence src to dst in range [p0, p1)
       def kv_seq_cp(src_seq : Int32, dst_seq : Int32, p0 : Int32 = 0, p1 : Int32 = -1) : Nil
-        LlamaFFI.llama_memory_seq_cp(@handle, src_seq, dst_seq, p0, p1)
+        LlamaFFI.llama_memory_seq_cp(memory, src_seq, dst_seq, p0, p1)
       end
 
       # Keep only this sequence, remove all others
       def kv_seq_keep(seq_id : Int32) : Nil
-        LlamaFFI.llama_memory_seq_keep(@handle, seq_id)
+        LlamaFFI.llama_memory_seq_keep(memory, seq_id)
       end
 
       # Shift positions in sequence by delta
       def kv_seq_add(seq_id : Int32, p0 : Int32, p1 : Int32, delta : Int32) : Nil
-        LlamaFFI.llama_memory_seq_add(@handle, seq_id, p0, p1, delta)
+        LlamaFFI.llama_memory_seq_add(memory, seq_id, p0, p1, delta)
       end
 
       # Max position in sequence
       def kv_seq_pos_max(seq_id : Int32) : Int32
-        LlamaFFI.llama_memory_seq_pos_max(@handle, seq_id)
+        LlamaFFI.llama_memory_seq_pos_max(memory, seq_id)
       end
 
       # Clear entire memory (KV cache + recurrent state)
       def kv_clear : Nil
-        LlamaFFI.llama_memory_clear(@handle)
+        LlamaFFI.llama_memory_clear(memory, true)
         @pos = 0
+      end
+
+      private def memory : LlamaFFI::LlamaMemory
+        mem = LlamaFFI.llama_get_memory(@handle)
+        raise "llama.cpp context has no memory" if mem.null?
+        mem
       end
 
       # Current position in context

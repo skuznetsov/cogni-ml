@@ -1,5 +1,5 @@
 # Crystal FFI bindings for llama.cpp
-# Version: 8200 (Mar 2026)
+# Version: 9960 (Jul 2026)
 # API docs: https://github.com/ggml-org/llama.cpp/blob/master/include/llama.h
 
 module ML
@@ -15,6 +15,7 @@ module ML
       # Opaque struct pointers
       type LlamaModel = Void*
       type LlamaContext = Void*
+      type LlamaMemory = Void*
       type LlamaSampler = Void*
       type LlamaVocab = Void*
 
@@ -35,6 +36,11 @@ module ML
         Linear      = 1
         Yarn        = 2
         LongRope    = 3
+      end
+
+      enum LlamaContextType
+        Default = 0
+        Mtp     = 1
       end
 
       enum LlamaPoolingType
@@ -96,8 +102,11 @@ module ML
         n_batch : UInt32
         n_ubatch : UInt32
         n_seq_max : UInt32
+        n_rs_seq : UInt32
+        n_outputs_max : UInt32
         n_threads : Int32
         n_threads_batch : Int32
+        ctx_type : LlamaContextType
         rope_scaling_type : LlamaRopeScalingType
         pooling_type : LlamaPoolingType
         attention_type : LlamaAttentionType
@@ -122,9 +131,10 @@ module ML
         op_offload : Bool
         swa_full : Bool
         kv_unified : Bool
-        # Experimental: backend sampler chain configuration (b8200+)
+        # Experimental: backend sampler chain configuration.
         samplers : Void*  # llama_sampler_seq_config*
         n_samplers : LibC::SizeT
+        ctx_other : LlamaContext
       end
 
       # Sampler chain parameters
@@ -162,7 +172,8 @@ module ML
       fun llama_free(ctx : LlamaContext) : Void
 
       # Memory management (KV cache + recurrent state)
-      fun llama_memory_clear(ctx : LlamaContext) : Void
+      fun llama_get_memory(ctx : LlamaContext) : LlamaMemory
+      fun llama_memory_clear(memory : LlamaMemory, data : Bool) : Void
 
       # Model info
       fun llama_model_n_ctx_train(model : LlamaModel) : Int32
@@ -259,9 +270,6 @@ module ML
       fun llama_set_n_threads(ctx : LlamaContext, n_threads : Int32, n_threads_batch : Int32) : Void
       fun llama_n_threads(ctx : LlamaContext) : Int32
 
-      # KV cache / memory management
-      fun llama_memory_clear(ctx : LlamaContext) : Void
-
       # State serialization (full context: KV cache + logits + embeddings)
       fun llama_state_get_size(ctx : LlamaContext) : LibC::SizeT
       fun llama_state_get_data(ctx : LlamaContext, dst : UInt8*, size : LibC::SizeT) : LibC::SizeT
@@ -276,15 +284,14 @@ module ML
       fun llama_state_seq_save_file(ctx : LlamaContext, filepath : LibC::Char*, seq_id : LlamaSeqId, tokens : LlamaToken*, n_tokens : LibC::SizeT) : LibC::SizeT
       fun llama_state_seq_load_file(ctx : LlamaContext, filepath : LibC::Char*, dest_seq_id : LlamaSeqId, tokens_out : LlamaToken*, n_token_capacity : LibC::SizeT, n_token_count_out : LibC::SizeT*) : LibC::SizeT
 
-      # Memory/KV cache sequence operations (b8400 API: llama_memory_*)
-      fun llama_memory_seq_rm(ctx : LlamaContext, seq_id : LlamaSeqId, p0 : LlamaPos, p1 : LlamaPos) : Bool
-      fun llama_memory_seq_cp(ctx : LlamaContext, seq_id_src : LlamaSeqId, seq_id_dst : LlamaSeqId, p0 : LlamaPos, p1 : LlamaPos) : Void
-      fun llama_memory_seq_keep(ctx : LlamaContext, seq_id : LlamaSeqId) : Void
-      fun llama_memory_seq_add(ctx : LlamaContext, seq_id : LlamaSeqId, p0 : LlamaPos, p1 : LlamaPos, delta : LlamaPos) : Void
-      fun llama_memory_seq_pos_max(ctx : LlamaContext, seq_id : LlamaSeqId) : LlamaPos
-      fun llama_memory_seq_pos_min(ctx : LlamaContext, seq_id : LlamaSeqId) : LlamaPos
-      fun llama_memory_clear(ctx : LlamaContext) : Void
-      fun llama_memory_can_shift(ctx : LlamaContext) : Bool
+      # Memory/KV cache sequence operations (b9960 API: llama_memory_t)
+      fun llama_memory_seq_rm(memory : LlamaMemory, seq_id : LlamaSeqId, p0 : LlamaPos, p1 : LlamaPos) : Bool
+      fun llama_memory_seq_cp(memory : LlamaMemory, seq_id_src : LlamaSeqId, seq_id_dst : LlamaSeqId, p0 : LlamaPos, p1 : LlamaPos) : Void
+      fun llama_memory_seq_keep(memory : LlamaMemory, seq_id : LlamaSeqId) : Void
+      fun llama_memory_seq_add(memory : LlamaMemory, seq_id : LlamaSeqId, p0 : LlamaPos, p1 : LlamaPos, delta : LlamaPos) : Void
+      fun llama_memory_seq_pos_max(memory : LlamaMemory, seq_id : LlamaSeqId) : LlamaPos
+      fun llama_memory_seq_pos_min(memory : LlamaMemory, seq_id : LlamaSeqId) : LlamaPos
+      fun llama_memory_can_shift(memory : LlamaMemory) : Bool
 
       # Chat template
       struct LlamaChatMessage
