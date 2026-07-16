@@ -1208,6 +1208,14 @@ Apple M2 Max, 38 GPU cores:
 - Fused QKV split/RoPE, gate/softmax/top-k, scatter, and norm kernels.
 - GPU-driven dispatch where useful.
 
+`NOMIC_SIMDGROUP_MATRIX=auto` is the default hardware policy. The verified M2
+path keeps matrix GEMM, matrix attention, and batched matrix MoE enabled. On
+`Apple M5 Max`, those Nomic routes currently fail closed to scalar-SIMD Metal
+because a measured embedding-parity run diverged with sequence length. Use
+`NOMIC_SIMDGROUP_MATRIX=on` only for an explicit M5 diagnostic probe;
+`NOMIC_SIMDGROUP_MATRIX=off` forces the conservative corridor on any device.
+The fallback is correctness-oriented and can be substantially slower.
+
 ## Supported Models
 
 | Model | Format | Status |

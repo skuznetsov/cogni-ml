@@ -37,19 +37,42 @@ def cosine(a : Array(Float32), b : Array(Float32)) : Float64
   dot / (Math.sqrt(na) * Math.sqrt(nb))
 end
 
-def measure(runs : Int32, &block : -> Array(Float32)) : {Stats, Array(Float32)}
-  times = Array(Float64).new(runs)
-  last = [] of Float32
-  runs.times do
-    t0 = Time.instant
-    last = yield
-    times << (Time.instant - t0).total_milliseconds
-  end
+def summarize(times : Array(Float64)) : Stats
   sorted = times.sort
   p50 = sorted[sorted.size // 2]
   p95 = sorted[(sorted.size * 95 // 100).clamp(0, sorted.size - 1)]
   avg = times.sum / times.size
-  {Stats.new(avg_ms: avg, p50_ms: p50, p95_ms: p95), last}
+  Stats.new(avg_ms: avg, p50_ms: p50, p95_ms: p95)
+end
+
+def measure_abba(runs : Int32, a : -> Array(Float32), b : -> Array(Float32)) : {Stats, Array(Float32), Stats, Array(Float32)}
+  a_times = Array(Float64).new(runs)
+  b_times = Array(Float64).new(runs)
+  last_a = [] of Float32
+  last_b = [] of Float32
+
+  runs.times do |i|
+    a_first = {true, false, false, true}[i % 4]
+    if a_first
+      t0 = Time.instant
+      last_a = a.call
+      a_times << (Time.instant - t0).total_milliseconds
+
+      t1 = Time.instant
+      last_b = b.call
+      b_times << (Time.instant - t1).total_milliseconds
+    else
+      t0 = Time.instant
+      last_b = b.call
+      b_times << (Time.instant - t0).total_milliseconds
+
+      t1 = Time.instant
+      last_a = a.call
+      a_times << (Time.instant - t1).total_milliseconds
+    end
+  end
+
+  {summarize(a_times), last_a, summarize(b_times), last_b}
 end
 
 def measure_once(&block : -> Array(Float32)) : OneShot
@@ -140,7 +163,7 @@ def llama_embed(
 end
 
 begin
-  STDERR.puts "settings: llama_flash_attn=#{llama_flash_attn} llama_fresh_context=#{llama_fresh_context} runs=#{runs} warmup=#{warmup}"
+  STDERR.puts "settings: device=#{ML::Metal::Device.instance.name.inspect} nomic_simdgroup_matrix=#{native.backend.simdgroup_matrix_enabled?} llama_flash_attn=#{llama_flash_attn} llama_fresh_context=#{llama_fresh_context} runs=#{runs} warmup=#{warmup} steady_order=ABBA"
   STDERR.puts
   STDERR.puts "=== Native Metal vs llama.cpp: cold one-shot ==="
   STDERR.puts "#{"label".ljust(8)} #{"tok(native)".rjust(11)} #{"tok(llama)".rjust(11)} #{"native cold".rjust(11)} #{"llama cold".rjust(11)} #{"speedup".rjust(8)} #{"cos".rjust(8)}"
@@ -175,8 +198,11 @@ begin
     native_tokens = native.tokenize(text).size
     llama_tokens = llama_model.tokenize(text, add_bos: true).size
 
-    native_stats, native_vec = measure(runs) { native.embed(text) }
-    llama_stats, llama_vec = measure(runs) { llama_embed(llama_model, llama_ctx, text, n_batch, n_threads, llama_flash_attn, llama_fresh_context) }
+    native_stats, native_vec, llama_stats, llama_vec = measure_abba(
+      runs,
+      -> { native.embed(text) },
+      -> { llama_embed(llama_model, llama_ctx, text, n_batch, n_threads, llama_flash_attn, llama_fresh_context) },
+    )
 
     speedup = llama_stats.p50_ms / native_stats.p50_ms
     cos = cosine(native_vec, llama_vec)

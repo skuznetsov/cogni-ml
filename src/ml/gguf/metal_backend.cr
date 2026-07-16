@@ -5,6 +5,7 @@
 
 require "./compute"
 require "./profile"
+require "./nomic_metal_policy"
 require "../metal/compute_graph"
 
 module ML::GGUF
@@ -176,9 +177,14 @@ module ML::GGUF
     @workspace_n_experts_used : Int32 = 0
     @workspace_rope_cos : Array(Float32)?
     @workspace_rope_sin : Array(Float32)?
+    getter? simdgroup_matrix_enabled : Bool
 
     def initialize
       raise "Metal not available" unless ML::Metal::Device.available?
+      @simdgroup_matrix_enabled = NomicMetalPolicy.simdgroup_matrix_enabled?(
+        ML::Metal::Device.instance.name,
+        ENV["NOMIC_SIMDGROUP_MATRIX"]?,
+      )
       @gpu_weights = {} of UInt64 => GPUWeight
       @gpu_f32_bufs = {} of UInt64 => ML::MetalBuffer
       @pipelines = {} of String => ML::Metal::ComputePipeline
@@ -421,18 +427,18 @@ module ML::GGUF
 
     @[AlwaysInline]
     private def use_sync_moe_path?(token_count : Int32) : Bool
-      token_count <= MOE_SYNC_MAX_TOKENS
+      !@simdgroup_matrix_enabled || token_count <= MOE_SYNC_MAX_TOKENS
     end
 
     @[AlwaysInline]
     private def use_matmul_attention_path?(seq_len : Int32) : Bool
-      seq_len >= ATTN_MATMUL_MIN_TOKENS
+      @simdgroup_matrix_enabled && seq_len >= ATTN_MATMUL_MIN_TOKENS
     end
 
     # Dispatch matmul — auto-selects mm vs mv based on batch size
     private def matmul_dispatch(enc, type : TensorType,
                                  out_dim : Int32, batch : Int32)
-      if batch > MM_BATCH_THRESHOLD
+      if @simdgroup_matrix_enabled && batch > MM_BATCH_THRESHOLD
         enc.set_pipeline(pipe(matmul_kernel_mm(type)))
         enc.set_threadgroup_memory(MM_SHMEM, 0)
         grid = {(batch + MM_NR1 - 1) // MM_NR1, (out_dim + MM_NR0 - 1) // MM_NR0, 1}
@@ -458,7 +464,7 @@ module ML::GGUF
                               in_dim : UInt32, out_dim_val : UInt32, batch_val : UInt32, gelu : UInt32,
                               w_offset : Int64 = 0)
       batch_i = batch_val.to_i32; out_dim_i = out_dim_val.to_i32
-      if batch_i > MM_BATCH_THRESHOLD
+      if @simdgroup_matrix_enabled && batch_i > MM_BATCH_THRESHOLD
         grid = {(batch_i + MM_NR1 - 1) // MM_NR1, (out_dim_i + MM_NR0 - 1) // MM_NR0, 1}
         g.add_op(pipe(matmul_kernel_mm(gw.type))) do |op|
           op.buffer(gw.buffer, 0, :read, offset: w_offset)
