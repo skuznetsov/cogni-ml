@@ -2,7 +2,7 @@
 
 require "option_parser"
 
-record CounterRow, name : String, calls : Int32, encode_ms : Float64, wait_ms : Float64, read_ms : Float64
+record CounterRow, name : String, calls : Int32, encode_ms : Float64, wait_ms : Float64, read_ms : Float64, gpu_ms : Float64
 record TrafficRow, name : String, calls : Int32, mib : Float64, pct : Float64, kind : String
 record TraceRow, name : String, calls : Int32, ms : Float64
 
@@ -46,7 +46,11 @@ class ProfileAtlas
   end
 
   def grouped_wait_ms : Float64
-    @groups.sum(&.wait_ms)
+    @groups.sum { |row| row.gpu_ms > 0 ? row.gpu_ms : row.wait_ms }
+  end
+
+  def self.group_signal_ms(row : CounterRow) : Float64
+    row.gpu_ms > 0 ? row.gpu_ms : row.wait_ms
   end
 end
 
@@ -86,15 +90,15 @@ section = nil.as(Symbol?)
 text.each_line do |line|
   case line
   when /gemv:\s+(\d+) calls\s+encode\s+([0-9.]+) ms\s+wait\s+([0-9.]+) ms\s+read\s+([0-9.]+) ms/
-    atlas.add_counter("gemv", CounterRow.new("gemv", $1.to_i, $2.to_f, $3.to_f, $4.to_f))
+    atlas.add_counter("gemv", CounterRow.new("gemv", $1.to_i, $2.to_f, $3.to_f, $4.to_f, 0.0))
   when /gemm:\s+(\d+) calls\s+wait\s+([0-9.]+) ms/
-    atlas.add_counter("gemm", CounterRow.new("gemm", $1.to_i, 0.0, $2.to_f, 0.0))
+    atlas.add_counter("gemm", CounterRow.new("gemm", $1.to_i, 0.0, $2.to_f, 0.0, 0.0))
   when /dn:\s+(\d+) calls\s+encode\s+([0-9.]+) ms\s+wait\s+([0-9.]+) ms\s+read\s+([0-9.]+) ms/
-    atlas.add_counter("dn", CounterRow.new("dn", $1.to_i, $2.to_f, $3.to_f, $4.to_f))
+    atlas.add_counter("dn", CounterRow.new("dn", $1.to_i, $2.to_f, $3.to_f, $4.to_f, 0.0))
   when /attn:\s+(\d+) calls\s+encode\s+([0-9.]+) ms\s+wait\s+([0-9.]+) ms\s+read\s+([0-9.]+) ms/
-    atlas.add_counter("attn", CounterRow.new("attn", $1.to_i, $2.to_f, $3.to_f, $4.to_f))
+    atlas.add_counter("attn", CounterRow.new("attn", $1.to_i, $2.to_f, $3.to_f, $4.to_f, 0.0))
   when /wave:\s+(\d+) calls\s+encode\s+([0-9.]+) ms\s+wait\s+([0-9.]+) ms\s+read\s+([0-9.]+) ms/
-    atlas.add_counter("wave", CounterRow.new("wave", $1.to_i, $2.to_f, $3.to_f, $4.to_f))
+    atlas.add_counter("wave", CounterRow.new("wave", $1.to_i, $2.to_f, $3.to_f, $4.to_f, 0.0))
   when /wave encode trace:/
     section = :trace
   when /grouped command buffers:/
@@ -112,8 +116,12 @@ text.each_line do |line|
   else
     case section
     when :groups
-      if line =~ /^\s{4}(.+?)\s+(\d+) calls\s+encode\s+([0-9.]+) ms\s+wait\s+([0-9.]+) ms\s+read\s+([0-9.]+) ms\s*$/
-        atlas.groups << CounterRow.new($1.strip, $2.to_i, $3.to_f, $4.to_f, $5.to_f)
+      if line =~ /^\s{4}(.+?)\s+(\d+) calls\s+encode\s+([0-9.]+) ms\s+wait\s+([0-9.]+) ms\s+read\s+([0-9.]+) ms\s+upload\s+[0-9.]+ MiB\s+readback\s+[0-9.]+ MiB\s+gpu\s+([0-9.]+) ms\s*$/
+        atlas.groups << CounterRow.new($1.strip, $2.to_i, $3.to_f, $4.to_f, $5.to_f, $6.to_f)
+      elsif line =~ /^\s{4}(.+?)\s+(\d+) calls\s+encode\s+([0-9.]+) ms\s+wait\s+([0-9.]+) ms\s+read\s+([0-9.]+) ms\s+upload\s+[0-9.]+ MiB\s+readback\s+[0-9.]+ MiB\s*$/
+        atlas.groups << CounterRow.new($1.strip, $2.to_i, $3.to_f, $4.to_f, $5.to_f, 0.0)
+      elsif line =~ /^\s{4}(.+?)\s+(\d+) calls\s+encode\s+([0-9.]+) ms\s+wait\s+([0-9.]+) ms\s+read\s+([0-9.]+) ms\s*$/
+        atlas.groups << CounterRow.new($1.strip, $2.to_i, $3.to_f, $4.to_f, $5.to_f, 0.0)
       end
     when :matmuls
       if line =~ /^\s{4}(.+?)\s+(\d+) calls\s+([0-9.]+) MiB logical weights\s+([0-9.]+)%\s*$/
@@ -136,7 +144,7 @@ if show_tsv
   [atlas.gemv, atlas.gemm, atlas.dn, atlas.attn, atlas.wave].compact.each do |row|
     puts ["wait", row.name, row.calls, row.wait_ms, ""].join('\t')
   end
-  atlas.groups.each { |row| puts ["group", row.name, row.calls, row.wait_ms, ""].join('\t') }
+  atlas.groups.each { |row| puts ["group", row.name, row.calls, ProfileAtlas.group_signal_ms(row), ""].join('\t') }
   atlas.matmuls.each { |row| puts ["matmul", row.name, row.calls, row.mib, row.pct].join('\t') }
   atlas.conversions.each { |row| puts ["conversion", row.name, row.calls, row.mib, row.pct].join('\t') }
   exit
@@ -154,14 +162,15 @@ puts "\nWait buckets"
 end
 
 unless atlas.groups.empty?
-  waits = atlas.groups.map(&.wait_ms).sort
+  waits = atlas.groups.map { |row| ProfileAtlas.group_signal_ms(row) }.sort
   group_median = median(waits)
   puts "\nGrouped command-buffer waits"
-  atlas.groups.sort_by { |row| {-row.wait_ms, row.name} }.first(top_n).each do |row|
-    ratio = group_median > 0 ? row.wait_ms / group_median : 0.0
-    pct_group = atlas.grouped_wait_ms > 0 ? row.wait_ms * 100.0 / atlas.grouped_wait_ms : 0.0
-    printf "  %-24s %3d calls wait=%8.2f ms pct_group=%5.1f%% ratio_to_median=%4.2f\n",
-      row.name, row.calls, row.wait_ms, pct_group, ratio
+  atlas.groups.sort_by { |row| {-ProfileAtlas.group_signal_ms(row), row.name} }.first(top_n).each do |row|
+    signal = ProfileAtlas.group_signal_ms(row)
+    ratio = group_median > 0 ? signal / group_median : 0.0
+    pct_group = atlas.grouped_wait_ms > 0 ? signal * 100.0 / atlas.grouped_wait_ms : 0.0
+    printf "  %-24s %3d calls wait=%8.2f ms gpu=%8.2f ms pct_group=%5.1f%% ratio_to_median=%4.2f\n",
+      row.name, row.calls, row.wait_ms, row.gpu_ms, pct_group, ratio
   end
 end
 
@@ -195,13 +204,15 @@ if top = atlas.matmuls.sort_by { |row| {-row.mib, row.name} }.first?
   puts "  Ladder: dominant matmul scope '#{top.name}' carries #{top.mib.round(2)} MiB. Window=top logical-weight reader; corridor=layer/batch band; potential=(logical_weight_mib,calls,barriers). Legal move=prepack/fuse/re-route only if profile wall and parity improve."
 end
 unless atlas.groups.empty?
-  waits = atlas.groups.map(&.wait_ms).sort
+  waits = atlas.groups.map { |row| ProfileAtlas.group_signal_ms(row) }.sort
   group_median = median(waits)
   max = waits.last
-  if group_median > 0 && max / group_median < 1.25
+  if max <= 0
+    puts "  Observation: no measured group wait/gpu signal in this log; keep group-level claims downgraded."
+  elsif group_median > 0 && max / group_median < 1.25
     puts "  Collapse: grouped waits are flat (max/median=#{(max / group_median).round(2)}). This refutes a single bad group; reduce repeated per-layer work instead of boundary reshuffle."
   else
-    hot = atlas.groups.max_by(&.wait_ms)
+    hot = atlas.groups.max_by { |row| ProfileAtlas.group_signal_ms(row) }
     puts "  Diamond: hot group '#{hot.name}' is above median. Window=group conflict; corridor=fused command buffer; potential=(group_wait_skew,syncs,bytes). Legal move=split/fuse only with paired wall proof."
   end
 end

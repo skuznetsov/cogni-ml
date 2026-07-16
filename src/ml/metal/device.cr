@@ -72,6 +72,10 @@
         def committed? : Bool
           false
         end
+
+        def wait_gpu_elapsed_ms : Float64
+          raise "Metal disabled (cpu_only)"
+        end
       end
 
       class ComputePipeline
@@ -278,6 +282,10 @@ module ML
         MetalDeviceFFI.wait_command_buffer(@handle)
       end
 
+      def wait_gpu_elapsed_ms : Float64
+        MetalDeviceFFI.wait_command_buffer_gpu_elapsed_ms(@handle)
+      end
+
       def committed? : Bool
         @committed
       end
@@ -377,6 +385,7 @@ lib MetalDeviceFFI
   fun enqueue_command_buffer = gs_enqueue_command_buffer(cmd : Pointer(Void)) : Void
   fun commit_command_buffer = gs_commit_command_buffer(cmd : Pointer(Void)) : Void
   fun wait_command_buffer = gs_wait_command_buffer(cmd : Pointer(Void)) : Void
+  fun wait_command_buffer_gpu_elapsed_ms = gs_wait_command_buffer_gpu_elapsed_ms(cmd : Pointer(Void)) : Float64
   fun commit_and_wait = gs_commit_and_wait(cmd_buffer : Pointer(Void)) : Void
   fun commit = gs_commit(cmd_buffer : Pointer(Void)) : Void
 
@@ -406,6 +415,7 @@ lib MetalDeviceFFI
   fun enqueue_command_buffer = gs_enqueue_command_buffer(cmd : Pointer(Void)) : Void
   fun commit_command_buffer = gs_commit_command_buffer(cmd : Pointer(Void)) : Void
   fun wait_command_buffer = gs_wait_command_buffer(cmd : Pointer(Void)) : Void
+  fun wait_command_buffer_gpu_elapsed_ms = gs_wait_command_buffer_gpu_elapsed_ms(cmd : Pointer(Void)) : Float64
   fun commit_and_wait = gs_commit_and_wait(cmd_buffer : Pointer(Void)) : Void
   fun commit = gs_commit(cmd_buffer : Pointer(Void)) : Void
   fun create_pipeline = gs_create_pipeline(source : Pointer(UInt8), function_name : Pointer(UInt8)) : Pointer(Void)

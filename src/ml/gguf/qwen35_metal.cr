@@ -44,26 +44,26 @@ module ML
       MV_F32_NR0            =  1
       HEAD_TOP1_ROWS_PER_TG = 12
 
-      # GEMM (prefill) tiling — Q4_K only for now.
-      MM_NR0      =    64
-      MM_NR1      =    32
-      MM_TG       =   128 # threads per threadgroup (4 simdgroups × 32)
-      MM_SHMEM    = 12288 # bytes: 2 × (MM_SA_SIZE + MM_SB_SIZE) = 2 × 6144
-      MM48_NR1    =    48
-      MM48_TG     =   192 # threads per threadgroup (6 simdgroups × 32)
-      MM48_SHMEM  = 14336 # bytes: 2 × (4096 + 3072), larger than 64×48 f32 edge scratch
-      MM64_NR1    =    64
-      MM64_TG     =   256 # threads per threadgroup (8 simdgroups × 32)
-      MM64_SHMEM  = 16384 # bytes: 2 × (MM64_SA_SIZE + MM64_SB_SIZE)
-      MM80_NR1    =    80
-      MM80_TG     =   320 # threads per threadgroup (10 simdgroups × 32)
-      MM80_SHMEM  = 20480 # bytes: max double-buffered tile and 64×80 f32 edge scratch
-      MM96_NR1    =    96
-      MM96_TG     =   384 # threads per threadgroup (12 simdgroups × 32)
-      MM96_SHMEM  = 24576 # bytes: max double-buffered tile and 64×96 f32 edge scratch
-      MM112_NR1   =   112
-      MM112_TG    =   448 # threads per threadgroup (14 simdgroups × 32)
-      MM112_SHMEM = 28672 # bytes: max double-buffered tile and 64×112 f32 edge scratch
+      # GEMM (prefill) tiling shared by Q4_K, Q5_K, Q6_K, and Q8_0 routes.
+      MM_NR0          =    64
+      MM_NR1          =    32
+      MM_TG           =   128 # threads per threadgroup (4 simdgroups × 32)
+      MM_SHMEM        = 12288 # bytes: 2 × (MM_SA_SIZE + MM_SB_SIZE) = 2 × 6144
+      MM48_NR1        =    48
+      MM48_TG         =   192 # threads per threadgroup (6 simdgroups × 32)
+      MM48_SHMEM      = 14336 # bytes: 2 × (4096 + 3072), larger than 64×48 f32 edge scratch
+      MM64_NR1        =    64
+      MM64_TG         =   256 # threads per threadgroup (8 simdgroups × 32)
+      MM64_SHMEM      = 16384 # bytes: 2 × (MM64_SA_SIZE + MM64_SB_SIZE)
+      MM80_NR1        =    80
+      MM80_TG         =   320 # threads per threadgroup (10 simdgroups × 32)
+      MM80_SHMEM      = 20480 # bytes: max double-buffered tile and 64×80 f32 edge scratch
+      MM96_NR1        =    96
+      MM96_TG         =   384 # threads per threadgroup (12 simdgroups × 32)
+      MM96_SHMEM      = 24576 # bytes: max double-buffered tile and 64×96 f32 edge scratch
+      MM112_NR1       =   112
+      MM112_TG        =   448 # threads per threadgroup (14 simdgroups × 32)
+      MM112_SHMEM     = 28672 # bytes: max double-buffered tile and 64×112 f32 edge scratch
       Q4_TENSOR_NR1   =   128
       Q4_TENSOR_TG    =   128 # 4 simdgroups × 32, matches simd_mm_q4k_tensor_f32out
       Q4_TENSOR_SHMEM =  4096 # one 64×32 H16 dequantized A tile
@@ -198,6 +198,7 @@ module ML
         @@mv_add_pipeline : ML::Metal::ComputePipeline?
         @@embed_q4k_pipeline : ML::Metal::ComputePipeline?
         @@embed_q6k_pipeline : ML::Metal::ComputePipeline?
+        @@embed_q8_0_pipeline : ML::Metal::ComputePipeline?
         @@embed_q6k_rows_scaled_pipeline : ML::Metal::ComputePipeline?
         @@mm_pipeline   : ML::Metal::ComputePipeline?
         @@mm_h16_pipeline : ML::Metal::ComputePipeline?
@@ -214,6 +215,11 @@ module ML
         @@mm6_pipeline  : ML::Metal::ComputePipeline?
         @@mm5_f32out_pipeline : ML::Metal::ComputePipeline?
         @@mm6_f32out_pipeline : ML::Metal::ComputePipeline?
+        @@mm8_f32out_pipeline : ML::Metal::ComputePipeline?
+        @@mm8_f32in_f32out_pipeline : ML::Metal::ComputePipeline?
+        @@mm8_f32in_f32out_add_pipeline : ML::Metal::ComputePipeline?
+        @@mm8_single_f32in_f32out_pipeline : ML::Metal::ComputePipeline?
+        @@mm8_qkv_gate_mixed_f32in_f32out_pipeline : ML::Metal::ComputePipeline?
         @@mm6_f32out_add_pipeline : ML::Metal::ComputePipeline?
         @@mv5_pipeline  : ML::Metal::ComputePipeline?
         @@mv6_pipeline  : ML::Metal::ComputePipeline?
@@ -282,6 +288,8 @@ module ML
         @@recurrent_shift_pipeline : ML::Metal::ComputePipeline?
         @@recurrent_conv_shift_pipeline : ML::Metal::ComputePipeline?
         @@recurrent_conv_shift_chunk_pipeline : ML::Metal::ComputePipeline?
+        @@recurrent_conv_shift_chunk_token_parallel_pipeline : ML::Metal::ComputePipeline?
+        @@recurrent_conv_shift_chunk_token_parallel_state_pipeline : ML::Metal::ComputePipeline?
         @@recurrent_conv_shift_chunk_checkpoint_pipeline : ML::Metal::ComputePipeline?
         @@recurrent_conv_shift_chunk_h16_pipeline : ML::Metal::ComputePipeline?
         @@l2_heads_pipeline : ML::Metal::ComputePipeline?
@@ -329,6 +337,7 @@ module ML
           @@group_encode_ns = Hash(String, Int64).new(0_i64)
           @@group_wait_ns = Hash(String, Int64).new(0_i64)
           @@group_read_ns = Hash(String, Int64).new(0_i64)
+          @@group_gpu_ns = Hash(String, Int64).new(0_i64)
           @@group_upload_bytes = Hash(String, Int64).new(0_i64)
           @@group_read_bytes = Hash(String, Int64).new(0_i64)
           @@route_counts = Hash(String, Int64).new(0_i64)
@@ -357,6 +366,7 @@ module ML
             @@group_encode_ns.clear
             @@group_wait_ns.clear
             @@group_read_ns.clear
+            @@group_gpu_ns.clear
             @@group_upload_bytes.clear
             @@group_read_bytes.clear
             @@route_counts.clear
@@ -424,6 +434,12 @@ module ML
             @@group_encode_ns[label] += encode_ns
             @@group_wait_ns[label] += wait_ns
             @@group_read_ns[label] += read_ns
+          end
+
+          def self.bump_group_gpu(label : String, gpu_ns : Int64) : Nil
+            return unless @@enabled
+            return unless gpu_ns > 0
+            @@group_gpu_ns[label] += gpu_ns
           end
 
           def self.bump_group_transfer(label : String, upload_bytes : Int64, read_bytes : Int64) : Nil
@@ -509,6 +525,7 @@ module ML
               end
               group_labels = Set(String).new
               @@group_counts.keys.each { |name| group_labels << name }
+              @@group_gpu_ns.keys.each { |name| group_labels << name }
               @@group_upload_bytes.keys.each { |name| group_labels << name }
               @@group_read_bytes.keys.each { |name| group_labels << name }
               unless group_labels.empty?
@@ -518,14 +535,15 @@ module ML
                              total_group_upload / 1_048_576.0,
                              total_group_read / 1_048_576.0)
                 s << "  grouped command buffers:\n"
-                group_labels.to_a.sort_by { |name| {-@@group_wait_ns[name], name} }.each do |name|
-                  s << sprintf("    %-18s %4d calls  encode %.2f ms  wait %.2f ms  read %.2f ms  upload %.2f MiB  readback %.2f MiB\n",
+                group_labels.to_a.sort_by { |name| {-Math.max(@@group_gpu_ns[name], @@group_wait_ns[name]), name} }.each do |name|
+                  s << sprintf("    %-18s %4d calls  encode %.2f ms  wait %.2f ms  read %.2f ms  upload %.2f MiB  readback %.2f MiB  gpu %.2f ms\n",
                                name, @@group_counts[name],
                                @@group_encode_ns[name] / 1_000_000.0,
                                @@group_wait_ns[name] / 1_000_000.0,
                                @@group_read_ns[name] / 1_000_000.0,
                                @@group_upload_bytes[name] / 1_048_576.0,
-                               @@group_read_bytes[name] / 1_048_576.0)
+                               @@group_read_bytes[name] / 1_048_576.0,
+                               @@group_gpu_ns[name] / 1_000_000.0)
                 end
               end
               unless @@route_counts.empty?
@@ -867,6 +885,35 @@ module ML
           cmd.wait
         end
 
+        def self.embedding_q8_0_from_token_id(token_embd_qw : QuantWeight,
+                                              token_id : Int32) : Array(Float32)?
+          return nil unless token_embd_qw.type.q8_0?
+          token_buf = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
+          token_buf.contents.as(Pointer(UInt32)).value = token_id.to_u32
+          out_buf = ML::MetalBuffer.new(token_embd_qw.in_dim.to_i64 * sizeof(Float32))
+          embedding_q8_0_from_token_id_buf(token_embd_qw, token_buf, out_buf)
+          out_buf.read(token_embd_qw.in_dim)
+        end
+
+        def self.embedding_q8_0_from_token_id_buf(token_embd_qw : QuantWeight,
+                                                  token_ids_buf : ML::MetalBuffer,
+                                                  out_buf : ML::MetalBuffer,
+                                                  token_index : Int32 = 0,
+                                                  command_queue_name : String? = nil) : Nil
+          raise "embedding_q8_0_from_token_id_buf requires Q8_0 token embeddings" unless token_embd_qw.type.q8_0?
+          raise "embedding dim #{token_embd_qw.in_dim} must be divisible by #{Q8_0_QK}" unless token_embd_qw.in_dim % Q8_0_QK == 0
+
+          w_buf, w_off = weight_slot(token_embd_qw)
+          cmd_queue = command_queue_name ? lane_command_queue(command_queue_name.not_nil!) : nil
+          cmd = ML::Metal::CommandBuffer.new(queue: cmd_queue)
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_embedding_q8_0_from_token_id(enc, w_buf, w_off, token_ids_buf, out_buf,
+            token_embd_qw.in_dim, token_embd_qw.out_dim, token_index)
+          enc.end_encoding
+          cmd.commit
+          cmd.wait
+        end
+
         def self.embedding_q6k_rows_scaled_to_buffer(token_embd_qw : QuantWeight,
                                                      token_ids : Array(Int32),
                                                      out_buf : ML::MetalBuffer,
@@ -947,6 +994,24 @@ module ML
                                                             vocab_size : Int32,
                                                             token_index : Int32) : Nil
           enc.set_pipeline(embed_q6k_pipeline)
+          enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_off)
+          enc.set_buffer(token_ids_buf, 1)
+          enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_value(hidden_dim.to_u32, 3)
+          enc.set_value(vocab_size.to_u32, 4)
+          enc.set_value(token_index.to_u32, 5)
+          enc.dispatch_1d(hidden_dim, 256)
+        end
+
+        private def self.encode_embedding_q8_0_from_token_id(enc : ML::Metal::ComputeEncoder,
+                                                             w_buf : ML::MetalBuffer,
+                                                             w_off : Int64,
+                                                             token_ids_buf : ML::MetalBuffer,
+                                                             out_buf : ML::MetalBuffer,
+                                                             hidden_dim : Int32,
+                                                             vocab_size : Int32,
+                                                             token_index : Int32) : Nil
+          enc.set_pipeline(embed_q8_0_pipeline)
           enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_off)
           enc.set_buffer(token_ids_buf, 1)
           enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
@@ -1078,6 +1143,12 @@ module ML
           }
         end
 
+        private def self.embed_q8_0_pipeline : ML::Metal::ComputePipeline
+          @@embed_q8_0_pipeline ||= ML::Metal::PipelineCache.get("embed_q8_0_f32_from_token_id") {
+            ML::Metal::ComputePipeline.new("embed_q8_0_f32_from_token_id", GEMM_Q56K_SOURCE)
+          }
+        end
+
         private def self.embed_q6k_rows_scaled_pipeline : ML::Metal::ComputePipeline
           @@embed_q6k_rows_scaled_pipeline ||= ML::Metal::PipelineCache.get("embed_q6k_f32_from_token_ids_scaled") {
             ML::Metal::ComputePipeline.new("embed_q6k_f32_from_token_ids_scaled", GEMM_Q56K_SOURCE)
@@ -1171,6 +1242,42 @@ module ML
         private def self.mm6_f32out_pipeline : ML::Metal::ComputePipeline
           @@mm6_f32out_pipeline ||= ML::Metal::PipelineCache.get("qwen35_simd_mm_q6k_f32out") {
             ML::Metal::ComputePipeline.new("simd_mm_q6k_f32out", GEMM_MM_SOURCE)
+          }
+        end
+
+        private def self.mm8_f32out_pipeline : ML::Metal::ComputePipeline
+          @@mm8_f32out_pipeline ||= ML::Metal::PipelineCache.get("qwen35_simd_mm_q8_0_f32out") {
+            ML::Metal::ComputePipeline.new("simd_mm_q8_0_f32out", GEMM_MM_SOURCE)
+          }
+        end
+
+        private def self.mm8_f32in_f32out_pipeline : ML::Metal::ComputePipeline
+          @@mm8_f32in_f32out_pipeline ||= ML::Metal::PipelineCache.get("qwen35_simd_mm_q8_0_f32in_f32out") {
+            ML::Metal::ComputePipeline.new("simd_mm_q8_0_f32in_f32out", GEMM_MM_SOURCE)
+          }
+        end
+
+        private def self.mm8_f32in_f32out_add_pipeline : ML::Metal::ComputePipeline
+          @@mm8_f32in_f32out_add_pipeline ||= ML::Metal::PipelineCache.get("qwen35_simd_mm_q8_0_f32in_f32out_add") {
+            ML::Metal::ComputePipeline.new("simd_mm_q8_0_f32in_f32out_add", GEMM_MM_SOURCE)
+          }
+        end
+
+        private def self.mm8_single_f32in_f32out_pipeline : ML::Metal::ComputePipeline
+          @@mm8_single_f32in_f32out_pipeline ||= ML::Metal::PipelineCache.get("qwen35_simd_mm_q8_0_f32in_f32out_single") {
+            ML::Metal::ComputePipeline.new("simd_mm_q8_0_f32in_f32out_single", GEMM_MM_SOURCE)
+          }
+        end
+
+        private def self.mm8_qkv_gate_mixed_f32in_f32out_pipeline : ML::Metal::ComputePipeline
+          @@mm8_qkv_gate_mixed_f32in_f32out_pipeline ||= ML::Metal::PipelineCache.get("qwen35_simd_mm_q8_0_f32in_f32out_qkv_gate_mixed") {
+            ML::Metal::ComputePipeline.new("simd_mm_q8_0_f32in_f32out_qkv_gate_mixed", GEMM_MM_SOURCE)
+          }
+        end
+
+        private def self.mm8_rec_proj_mixed_f32in_f32out_pipeline : ML::Metal::ComputePipeline
+          @@mm8_rec_proj_mixed_f32in_f32out_pipeline ||= ML::Metal::PipelineCache.get("qwen35_simd_mm_q8_0_f32in_f32out_rec_proj_mixed") {
+            ML::Metal::ComputePipeline.new("simd_mm_q8_0_f32in_f32out_rec_proj_mixed", GEMM_MM_SOURCE)
           }
         end
 
@@ -1635,6 +1742,18 @@ module ML
         private def self.recurrent_conv_shift_chunk_pipeline : ML::Metal::ComputePipeline
           @@recurrent_conv_shift_chunk_pipeline ||= ML::Metal::PipelineCache.get("qwen35_recurrent_conv_shift_chunk") {
             ML::Metal::ComputePipeline.new("qwen35_recurrent_conv_shift_chunk", RECURRENT_SOURCE)
+          }
+        end
+
+        private def self.recurrent_conv_shift_chunk_token_parallel_pipeline : ML::Metal::ComputePipeline
+          @@recurrent_conv_shift_chunk_token_parallel_pipeline ||= ML::Metal::PipelineCache.get("qwen35_recurrent_conv_shift_chunk_token_parallel") {
+            ML::Metal::ComputePipeline.new("qwen35_recurrent_conv_shift_chunk_token_parallel", RECURRENT_SOURCE)
+          }
+        end
+
+        private def self.recurrent_conv_shift_chunk_token_parallel_state_pipeline : ML::Metal::ComputePipeline
+          @@recurrent_conv_shift_chunk_token_parallel_state_pipeline ||= ML::Metal::PipelineCache.get("qwen35_recurrent_conv_shift_chunk_token_parallel_state") {
+            ML::Metal::ComputePipeline.new("qwen35_recurrent_conv_shift_chunk_token_parallel_state", RECURRENT_SOURCE)
           }
         end
 
@@ -2434,6 +2553,181 @@ module ML
           enc.dispatch_threadgroups(grid, {MM_TG, 1, 1})
         end
 
+        private def self.encode_q8_0_gemm_f32(enc : ML::Metal::ComputeEncoder,
+                                             x_buf : ML::MetalBuffer,
+                                             out_buf : ML::MetalBuffer,
+                                             w_buf : ML::MetalBuffer,
+                                             w_offset : Int64,
+                                             in_dim : Int32,
+                                             out_dim : Int32,
+                                             batch : Int32) : Nil
+          singlebuf = q8_singlebuf_gemm_enabled?(batch)
+          pipeline = singlebuf ? mm8_single_f32in_f32out_pipeline : mm8_f32in_f32out_pipeline
+          enc.set_pipeline(pipeline)
+          enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_offset)
+          enc.set_buffer(x_buf, 1)
+          enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_value(in_dim.to_u32, 3)
+          enc.set_value(out_dim.to_u32, 4)
+          enc.set_value(batch.to_u32, 5)
+          enc.set_threadgroup_memory(MM_SHMEM, 0)
+          grid = {
+            (batch + MM_NR1 - 1) // MM_NR1,
+            (out_dim + MM_NR0 - 1) // MM_NR0,
+            1,
+          }
+          enc.dispatch_threadgroups(grid, {MM_TG, 1, 1})
+        end
+
+        private def self.encode_q8_0_gemm_f32_add(enc : ML::Metal::ComputeEncoder,
+                                                  x_buf : ML::MetalBuffer,
+                                                  residual_buf : ML::MetalBuffer,
+                                                  out_buf : ML::MetalBuffer,
+                                                  w_buf : ML::MetalBuffer,
+                                                  w_offset : Int64,
+                                                  in_dim : Int32,
+                                                  out_dim : Int32,
+                                                  batch : Int32) : Nil
+          enc.set_pipeline(mm8_f32in_f32out_add_pipeline)
+          enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_offset)
+          enc.set_buffer(x_buf, 1)
+          enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_value(in_dim.to_u32, 3)
+          enc.set_value(out_dim.to_u32, 4)
+          enc.set_value(batch.to_u32, 5)
+          enc.set_buffer(residual_buf, 6)
+          enc.set_threadgroup_memory(MM_SHMEM, 0)
+          grid = {
+            (batch + MM_NR1 - 1) // MM_NR1,
+            (out_dim + MM_NR0 - 1) // MM_NR0,
+            1,
+          }
+          enc.dispatch_threadgroups(grid, {MM_TG, 1, 1})
+        end
+
+        private def self.encode_q8_0_qkv_gate_mixed_gemm_f32(enc : ML::Metal::ComputeEncoder,
+                                                             x_buf : ML::MetalBuffer,
+                                                             qkv_out_buf : ML::MetalBuffer,
+                                                             gate_out_buf : ML::MetalBuffer,
+                                                             qkv_w_buf : ML::MetalBuffer,
+                                                             qkv_w_offset : Int64,
+                                                             gate_w_buf : ML::MetalBuffer,
+                                                             gate_w_offset : Int64,
+                                                             in_dim : Int32,
+                                                             qkv_dim : Int32,
+                                                             gate_dim : Int32,
+                                                             batch : Int32) : Nil
+          enc.set_pipeline(mm8_qkv_gate_mixed_f32in_f32out_pipeline)
+          enc.set_buffer(qkv_w_buf, 0, ML::Metal::BufferAccess::Read, offset: qkv_w_offset)
+          enc.set_buffer(gate_w_buf, 1, ML::Metal::BufferAccess::Read, offset: gate_w_offset)
+          enc.set_buffer(x_buf, 2)
+          enc.set_buffer(qkv_out_buf, 3, ML::Metal::BufferAccess::Write)
+          enc.set_buffer(gate_out_buf, 4, ML::Metal::BufferAccess::Write)
+          enc.set_value(in_dim.to_u32, 5)
+          enc.set_value(qkv_dim.to_u32, 6)
+          enc.set_value(gate_dim.to_u32, 7)
+          enc.set_value(batch.to_u32, 8)
+          enc.set_threadgroup_memory(MM_SHMEM, 0)
+          total_out = qkv_dim + gate_dim
+          grid = {
+            (batch + MM_NR1 - 1) // MM_NR1,
+            (total_out + MM_NR0 - 1) // MM_NR0,
+            1,
+          }
+          enc.dispatch_threadgroups(grid, {MM_TG, 1, 1})
+        end
+
+        private def self.encode_q8_0_rec_proj_mixed_gemm_f32(enc : ML::Metal::ComputeEncoder,
+                                                             x_buf : ML::MetalBuffer,
+                                                             qkv_out_buf : ML::MetalBuffer,
+                                                             gate_out_buf : ML::MetalBuffer,
+                                                             alpha_out_buf : ML::MetalBuffer,
+                                                             beta_out_buf : ML::MetalBuffer,
+                                                             qkv_w_buf : ML::MetalBuffer,
+                                                             qkv_w_offset : Int64,
+                                                             gate_w_buf : ML::MetalBuffer,
+                                                             gate_w_offset : Int64,
+                                                             alpha_w_buf : ML::MetalBuffer,
+                                                             alpha_w_offset : Int64,
+                                                             beta_w_buf : ML::MetalBuffer,
+                                                             beta_w_offset : Int64,
+                                                             in_dim : Int32,
+                                                             qkv_dim : Int32,
+                                                             gate_dim : Int32,
+                                                             alpha_dim : Int32,
+                                                             beta_dim : Int32,
+                                                             batch : Int32) : Nil
+          enc.set_pipeline(mm8_rec_proj_mixed_f32in_f32out_pipeline)
+          enc.set_buffer(qkv_w_buf, 0, ML::Metal::BufferAccess::Read, offset: qkv_w_offset)
+          enc.set_buffer(gate_w_buf, 1, ML::Metal::BufferAccess::Read, offset: gate_w_offset)
+          enc.set_buffer(alpha_w_buf, 2, ML::Metal::BufferAccess::Read, offset: alpha_w_offset)
+          enc.set_buffer(beta_w_buf, 3, ML::Metal::BufferAccess::Read, offset: beta_w_offset)
+          enc.set_buffer(x_buf, 4)
+          enc.set_buffer(qkv_out_buf, 5, ML::Metal::BufferAccess::Write)
+          enc.set_buffer(gate_out_buf, 6, ML::Metal::BufferAccess::Write)
+          enc.set_buffer(alpha_out_buf, 7, ML::Metal::BufferAccess::Write)
+          enc.set_buffer(beta_out_buf, 8, ML::Metal::BufferAccess::Write)
+          enc.set_value(in_dim.to_u32, 9)
+          enc.set_value(qkv_dim.to_u32, 10)
+          enc.set_value(gate_dim.to_u32, 11)
+          enc.set_value(alpha_dim.to_u32, 12)
+          enc.set_value(beta_dim.to_u32, 13)
+          enc.set_value(batch.to_u32, 14)
+          enc.set_threadgroup_memory(MM_SHMEM, 0)
+          total_out = qkv_dim + gate_dim + alpha_dim + beta_dim
+          grid = {
+            (batch + MM_NR1 - 1) // MM_NR1,
+            (total_out + MM_NR0 - 1) // MM_NR0,
+            1,
+          }
+          enc.dispatch_threadgroups(grid, {MM_TG, 1, 1})
+        end
+
+        private def self.encode_q8_0_full_qkv_mixed_gemm_f32(enc : ML::Metal::ComputeEncoder,
+                                                             x_buf : ML::MetalBuffer,
+                                                             q_out_buf : ML::MetalBuffer,
+                                                             k_out_buf : ML::MetalBuffer,
+                                                             v_out_buf : ML::MetalBuffer,
+                                                             q_w_buf : ML::MetalBuffer,
+                                                             q_w_offset : Int64,
+                                                             k_w_buf : ML::MetalBuffer,
+                                                             k_w_offset : Int64,
+                                                             v_w_buf : ML::MetalBuffer,
+                                                             v_w_offset : Int64,
+                                                             in_dim : Int32,
+                                                             q_dim : Int32,
+                                                             k_dim : Int32,
+                                                             v_dim : Int32,
+                                                             batch : Int32) : Nil
+          encode_q8_0_rec_proj_mixed_gemm_f32(enc, x_buf, q_out_buf, k_out_buf, v_out_buf, v_out_buf,
+            q_w_buf, q_w_offset, k_w_buf, k_w_offset, v_w_buf, v_w_offset, v_w_buf, v_w_offset,
+            in_dim, q_dim, k_dim, v_dim, 0, batch)
+        end
+
+        private def self.encode_q8_0_gemm_f32_from_h16(enc : ML::Metal::ComputeEncoder,
+                                                       x16_buf : ML::MetalBuffer,
+                                                       out_buf : ML::MetalBuffer,
+                                                       w_buf : ML::MetalBuffer,
+                                                       w_offset : Int64,
+                                                       in_dim : Int32,
+                                                       out_dim : Int32,
+                                                       batch : Int32) : Nil
+          enc.set_pipeline(mm8_f32out_pipeline)
+          enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_offset)
+          enc.set_buffer(x16_buf, 1)
+          enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+          enc.set_value(in_dim.to_u32, 3)
+          enc.set_value(out_dim.to_u32, 4)
+          enc.set_value(batch.to_u32, 5)
+          enc.set_threadgroup_memory(MM_SHMEM, 0)
+          grid = {
+            (batch + MM_NR1 - 1) // MM_NR1,
+            (out_dim + MM_NR0 - 1) // MM_NR0,
+            1,
+          }
+          enc.dispatch_threadgroups(grid, {MM_TG, 1, 1})
+        end
+
         private def self.encode_q56k_gemm_h16(enc : ML::Metal::ComputeEncoder,
                                               pipeline : ML::Metal::ComputePipeline,
                                               x_buf : ML::MetalBuffer,
@@ -2505,6 +2799,8 @@ module ML
                     "q5_gemm"
                   elsif q56_batch_gemm_enabled? && qw.type.q6_k? && batch > GEMM_BATCH_THRESHOLD
                     "q6_gemm"
+                  elsif q8_batch_gemm_enabled? && qw.type.q8_0? && batch > GEMM_BATCH_THRESHOLD
+                    "q8_gemm"
                   else
                     "gemv"
                   end
@@ -2518,6 +2814,8 @@ module ML
             encode_q56k_gemm_f32(enc, mm5_f32out_pipeline, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
           elsif q56_batch_gemm_enabled? && qw.type.q6_k? && batch > GEMM_BATCH_THRESHOLD
             encode_q56k_gemm_f32(enc, mm6_f32out_pipeline, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
+          elsif q8_batch_gemm_enabled? && qw.type.q8_0? && batch > GEMM_BATCH_THRESHOLD
+            encode_q8_0_gemm_f32(enc, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
           else
             encode_gemv(enc, gemv_pipeline, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch, profile_shape: false, route_qw: qw)
           end
@@ -2536,6 +2834,8 @@ module ML
                                            batch : Int32) : Bool
           route = if q56_batch_gemm_enabled? && qw.type.q6_k? && batch > GEMM_BATCH_THRESHOLD
                     "q6_gemm_add"
+                  elsif q8_batch_gemm_enabled? && qw.type.q8_0? && batch > GEMM_BATCH_THRESHOLD
+                    "q8_gemm_add"
                   elsif batch <= GEMM_BATCH_THRESHOLD && (add_pipe = gemv_add_pipeline_for(qw))
                     "gemv_add"
                   else
@@ -2545,6 +2845,8 @@ module ML
 
           if q56_batch_gemm_enabled? && qw.type.q6_k? && batch > GEMM_BATCH_THRESHOLD
             encode_q56k_gemm_f32_add(enc, mm6_f32out_add_pipeline, x_buf, residual_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
+          elsif q8_batch_gemm_enabled? && qw.type.q8_0? && batch > GEMM_BATCH_THRESHOLD
+            encode_q8_0_gemm_f32_add(enc, x_buf, residual_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
           elsif batch <= GEMM_BATCH_THRESHOLD && (add_pipe = gemv_add_pipeline_for(qw))
             encode_gemv_add(enc, add_pipe, x_buf, residual_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch, profile_shape: false)
           else
@@ -2568,7 +2870,8 @@ module ML
           return false unless batch > GEMM_BATCH_THRESHOLD
           force_small_q4_gemv = small_q4_gemv_enabled? && qw.type.q4_k? && qw.out_dim <= 64
           (q4_h16_gemm_enabled? && qw.type.q4_k? && !force_small_q4_gemv) ||
-            (q56_batch_gemm_enabled? && (qw.type.q5_k? || qw.type.q6_k?))
+            (q56_batch_gemm_enabled? && (qw.type.q5_k? || qw.type.q6_k?)) ||
+            (q8_batch_gemm_enabled? && qw.type.q8_0?)
         end
 
         private def self.encode_matmul_from_h16(enc : ML::Metal::ComputeEncoder,
@@ -2590,6 +2893,9 @@ module ML
           elsif q56_batch_gemm_enabled? && qw.type.q6_k? && batch > GEMM_BATCH_THRESHOLD
             Profile.bump_matmul_shape("q6_gemm #{qw.type.name} #{in_dim}x#{out_dim} b#{batch}", qw.raw.size.to_i64)
             encode_q56k_gemm_f32_from_h16(enc, mm6_f32out_pipeline, x16_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
+          elsif q8_batch_gemm_enabled? && qw.type.q8_0? && batch > GEMM_BATCH_THRESHOLD
+            Profile.bump_matmul_shape("q8_gemm #{qw.type.name} #{in_dim}x#{out_dim} b#{batch}", qw.raw.size.to_i64)
+            encode_q8_0_gemm_f32_from_h16(enc, x16_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
           else
             return false
           end
@@ -2764,6 +3070,92 @@ module ML
 
         private def self.q56_batch_gemm_enabled? : Bool
           ENV["QWEN35_Q56K_BATCH_GEMM_OFF"]? != "1"
+        end
+
+        private def self.q8_batch_gemm_enabled? : Bool
+          ENV["QWEN35_Q8_BATCH_GEMM_OFF"]? != "1"
+        end
+
+        private def self.q8_singlebuf_gemm_enabled?(batch : Int32? = nil) : Bool
+          return true if ENV["QWEN35_Q8_SINGLEBUF_GEMM"]? == "1"
+          return false unless max = ENV["QWEN35_Q8_SINGLEBUF_GEMM_MAX_BATCH"]?
+          return false unless b = batch
+          max_batch = max.to_i32? || 0
+          max_batch > 0 && b <= max_batch
+        end
+
+        private def self.q8_qkv_gate_mixed_prefill_enabled? : Bool
+          ENV["QWEN35_Q8_QKV_GATE_MIXED_PREFILL"]? == "1"
+        end
+
+        private def self.q8_ffn_upgate_mixed_prefill_enabled?(batch : Int32? = nil) : Bool
+          return true if ENV["QWEN35_Q8_FFN_UPGATE_MIXED_PREFILL"]? == "1"
+          return false unless max = ENV["QWEN35_Q8_FFN_UPGATE_MIXED_MAX_BATCH"]?
+          return false unless b = batch
+          max_batch = max.to_i32? || 0
+          max_batch > 0 && b <= max_batch
+        end
+
+        private def self.q8_full_qkv_mixed_prefill_enabled?(batch : Int32? = nil) : Bool
+          return true if ENV["QWEN35_Q8_FULL_QKV_MIXED_PREFILL"]? == "1"
+          return false unless max = ENV["QWEN35_Q8_FULL_QKV_MIXED_MAX_BATCH"]?
+          return false unless b = batch
+          max_batch = max.to_i32? || 0
+          max_batch > 0 && b <= max_batch
+        end
+
+        private def self.q8_rec_proj_mixed_prefill_enabled? : Bool
+          ENV["QWEN35_Q8_REC_PROJ_MIXED_PREFILL"]? == "1"
+        end
+
+        private def self.q8_rec_proj_mixed_prefill_candidate?(qkv_qw : QuantWeight,
+                                                              gate_qw : QuantWeight,
+                                                              alpha_qw : QuantWeight,
+                                                              beta_qw : QuantWeight,
+                                                              batch : Int32) : Bool
+          q8_rec_proj_mixed_prefill_enabled? &&
+            q8_batch_gemm_enabled? &&
+            batch > GEMM_BATCH_THRESHOLD &&
+            qkv_qw.type.q8_0? && gate_qw.type.q8_0? && alpha_qw.type.q8_0? && beta_qw.type.q8_0? &&
+            qkv_qw.in_dim == gate_qw.in_dim &&
+            qkv_qw.in_dim == alpha_qw.in_dim &&
+            qkv_qw.in_dim == beta_qw.in_dim &&
+            qkv_qw.in_dim % Q8_0_QK == 0
+        end
+
+        private def self.q8_qkv_gate_mixed_prefill_candidate?(qkv_qw : QuantWeight,
+                                                              gate_qw : QuantWeight,
+                                                              batch : Int32) : Bool
+          q8_qkv_gate_mixed_prefill_enabled? &&
+            q8_batch_gemm_enabled? &&
+            batch > GEMM_BATCH_THRESHOLD &&
+            qkv_qw.type.q8_0? && gate_qw.type.q8_0? &&
+            qkv_qw.in_dim == gate_qw.in_dim &&
+            qkv_qw.in_dim % Q8_0_QK == 0
+        end
+
+        private def self.q8_ffn_upgate_mixed_prefill_candidate?(gate_qw : QuantWeight,
+                                                                up_qw : QuantWeight,
+                                                                batch : Int32) : Bool
+          q8_ffn_upgate_mixed_prefill_enabled?(batch) &&
+            q8_batch_gemm_enabled? &&
+            batch > GEMM_BATCH_THRESHOLD &&
+            gate_qw.type.q8_0? && up_qw.type.q8_0? &&
+            gate_qw.in_dim == up_qw.in_dim &&
+            gate_qw.in_dim % Q8_0_QK == 0
+        end
+
+        private def self.q8_full_qkv_mixed_prefill_candidate?(q_qw : QuantWeight,
+                                                              k_qw : QuantWeight,
+                                                              v_qw : QuantWeight,
+                                                              batch : Int32) : Bool
+          q8_full_qkv_mixed_prefill_enabled?(batch) &&
+            q8_batch_gemm_enabled? &&
+            batch > GEMM_BATCH_THRESHOLD &&
+            q_qw.type.q8_0? && k_qw.type.q8_0? && v_qw.type.q8_0? &&
+            q_qw.in_dim == k_qw.in_dim &&
+            q_qw.in_dim == v_qw.in_dim &&
+            q_qw.in_dim % Q8_0_QK == 0
         end
 
         private def self.swiglu_inplace_enabled? : Bool
@@ -3160,6 +3552,12 @@ module ML
 
         private def self.recurrent_conv_shift_fused_enabled? : Bool
           ENV["QWEN35_REC_CONVSHIFT_FUSED"]? == "1"
+        end
+
+        private def self.recurrent_conv_shift_token_parallel_prefill_enabled?(n_tokens : Int32) : Bool
+          return false unless ENV["QWEN35_REC_CONVSHIFT_TOKEN_PARALLEL_PREFILL"]? == "1"
+          min_batch = (ENV["QWEN35_REC_CONVSHIFT_TOKEN_PARALLEL_MIN_BATCH"]? || "128").to_i32
+          n_tokens >= min_batch
         end
 
         private def self.wave_chunk_layers : Int32
@@ -4374,6 +4772,42 @@ module ML
           }
         end
 
+        private def self.encode_recurrent_conv_shift_chunk_token_parallel(enc : ML::Metal::ComputeEncoder,
+                                                                          conv_state_buf : ML::MetalBuffer,
+                                                                          qkv_buf : ML::MetalBuffer,
+                                                                          conv_w_buf : ML::MetalBuffer,
+                                                                          q_buf : ML::MetalBuffer,
+                                                                          k_buf : ML::MetalBuffer,
+                                                                          v_buf : ML::MetalBuffer,
+                                                                          h_k : Int32,
+                                                                          h_v : Int32,
+                                                                          s : Int32,
+                                                                          conv_k : Int32,
+                                                                          n_tokens : Int32,
+                                                                          qkv_dim : Int32) : Nil
+          enc.set_pipeline(recurrent_conv_shift_chunk_token_parallel_pipeline)
+          enc.set_buffer(conv_state_buf, 0)
+          enc.set_buffer(qkv_buf, 1)
+          enc.set_buffer(conv_w_buf, 2)
+          enc.set_buffer(q_buf, 3, ML::Metal::BufferAccess::Write)
+          enc.set_buffer(k_buf, 4, ML::Metal::BufferAccess::Write)
+          enc.set_buffer(v_buf, 5, ML::Metal::BufferAccess::Write)
+          enc.set_value(h_k.to_u32, 6)
+          enc.set_value(h_v.to_u32, 7)
+          enc.set_value(s.to_u32, 8)
+          enc.set_value(conv_k.to_u32, 9)
+          enc.set_value(n_tokens.to_u32, 10)
+          enc.dispatch_1d(n_tokens * qkv_dim, 128)
+
+          enc.set_pipeline(recurrent_conv_shift_chunk_token_parallel_state_pipeline)
+          enc.set_buffer(conv_state_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+          enc.set_buffer(qkv_buf, 1)
+          enc.set_value(qkv_dim.to_u32, 2)
+          enc.set_value(conv_k.to_u32, 3)
+          enc.set_value(n_tokens.to_u32, 4)
+          enc.dispatch_1d((conv_k - 1) * qkv_dim, 128)
+        end
+
         # Multi-token recurrent prep for Qwen35 prefill chunks.
         #
         # `qkv_mixed`, `alpha`, and `beta` are token-major outputs from the
@@ -4424,19 +4858,24 @@ module ML
           cmd = ML::Metal::CommandBuffer.new
 
           conv_enc = ML::Metal::ComputeEncoder.new(cmd)
-          conv_enc.set_pipeline(recurrent_conv_shift_chunk_pipeline)
-          conv_enc.set_buffer(conv_state_buf, 0, ML::Metal::BufferAccess::ReadWrite)
-          conv_enc.set_buffer(qkv_buf,        1)
-          conv_enc.set_buffer(conv_w_buf,     2)
-          conv_enc.set_buffer(q_buf,          3, ML::Metal::BufferAccess::Write)
-          conv_enc.set_buffer(k_buf,          4, ML::Metal::BufferAccess::Write)
-          conv_enc.set_buffer(v_buf,          5, ML::Metal::BufferAccess::Write)
-          conv_enc.set_value(h_k.to_u32,      6)
-          conv_enc.set_value(h_v.to_u32,      7)
-          conv_enc.set_value(s.to_u32,        8)
-          conv_enc.set_value(conv_k.to_u32,   9)
-          conv_enc.set_value(n_tokens.to_u32, 10)
-          conv_enc.dispatch_1d(qkv_dim, 256)
+          if recurrent_conv_shift_token_parallel_prefill_enabled?(n_tokens)
+            encode_recurrent_conv_shift_chunk_token_parallel(conv_enc, conv_state_buf, qkv_buf, conv_w_buf, q_buf, k_buf, v_buf,
+              h_k, h_v, s, conv_k, n_tokens, qkv_dim)
+          else
+            conv_enc.set_pipeline(recurrent_conv_shift_chunk_pipeline)
+            conv_enc.set_buffer(conv_state_buf, 0, ML::Metal::BufferAccess::ReadWrite)
+            conv_enc.set_buffer(qkv_buf,        1)
+            conv_enc.set_buffer(conv_w_buf,     2)
+            conv_enc.set_buffer(q_buf,          3, ML::Metal::BufferAccess::Write)
+            conv_enc.set_buffer(k_buf,          4, ML::Metal::BufferAccess::Write)
+            conv_enc.set_buffer(v_buf,          5, ML::Metal::BufferAccess::Write)
+            conv_enc.set_value(h_k.to_u32,      6)
+            conv_enc.set_value(h_v.to_u32,      7)
+            conv_enc.set_value(s.to_u32,        8)
+            conv_enc.set_value(conv_k.to_u32,   9)
+            conv_enc.set_value(n_tokens.to_u32, 10)
+            conv_enc.dispatch_1d(qkv_dim, 256)
+          end
           conv_enc.end_encoding
 
           qnorm_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -6030,12 +6469,25 @@ module ML
                 Profile.bump_matmul_shape("q5_h16_gemm #{lw.attn_qkv_qw.type.name} #{lw.attn_qkv_qw.in_dim}x#{lw.attn_qkv_qw.out_dim} b#{n_tokens}", lw.attn_qkv_qw.raw.size.to_i64)
                 encode_q56k_gemm_h16(proj_enc, mm5_pipeline, cur_buf, qkv_h16_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, n_tokens)
                 encode_matmul(proj_enc, gemv_pipeline_for(lw.attn_gate_qw).not_nil!, lw.attn_gate_qw, cur_buf, z_buf, gate_w_buf, gate_w_off, lw.attn_gate_qw.in_dim, lw.attn_gate_qw.out_dim, n_tokens)
+              elsif q8_rec_proj_mixed_prefill_candidate?(lw.attn_qkv_qw, lw.attn_gate_qw, lw.ssm_alpha_qw, lw.ssm_beta_qw, n_tokens)
+                Profile.bump_matmul_shape("q8_rec_proj_mixed #{lw.attn_qkv_qw.type.name} #{lw.attn_qkv_qw.in_dim}x#{lw.attn_qkv_qw.out_dim}+#{lw.attn_gate_qw.out_dim}+#{lw.ssm_alpha_qw.out_dim}+#{lw.ssm_beta_qw.out_dim} b#{n_tokens}",
+                  lw.attn_qkv_qw.raw.size.to_i64 + lw.attn_gate_qw.raw.size.to_i64 + lw.ssm_alpha_qw.raw.size.to_i64 + lw.ssm_beta_qw.raw.size.to_i64)
+                encode_q8_0_rec_proj_mixed_gemm_f32(proj_enc, cur_buf, qkv_buf, z_buf, alpha_buf, beta_buf,
+                  qkv_w_buf, qkv_w_off, gate_w_buf, gate_w_off, alpha_w_buf, alpha_w_off, beta_w_buf, beta_w_off,
+                  lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, lw.attn_gate_qw.out_dim, lw.ssm_alpha_qw.out_dim, lw.ssm_beta_qw.out_dim, n_tokens)
+              elsif q8_qkv_gate_mixed_prefill_candidate?(lw.attn_qkv_qw, lw.attn_gate_qw, n_tokens)
+                Profile.bump_matmul_shape("q8_qkv_gate_mixed #{lw.attn_qkv_qw.type.name} #{lw.attn_qkv_qw.in_dim}x#{lw.attn_qkv_qw.out_dim}+#{lw.attn_gate_qw.out_dim} b#{n_tokens}",
+                  lw.attn_qkv_qw.raw.size.to_i64 + lw.attn_gate_qw.raw.size.to_i64)
+                encode_q8_0_qkv_gate_mixed_gemm_f32(proj_enc, cur_buf, qkv_buf, z_buf, qkv_w_buf, qkv_w_off, gate_w_buf, gate_w_off,
+                  lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, lw.attn_gate_qw.out_dim, n_tokens)
               else
                 encode_matmul(proj_enc, gemv_pipeline_for(lw.attn_qkv_qw).not_nil!, lw.attn_qkv_qw, cur_buf, qkv_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, n_tokens)
                 encode_matmul(proj_enc, gemv_pipeline_for(lw.attn_gate_qw).not_nil!, lw.attn_gate_qw, cur_buf, z_buf, gate_w_buf, gate_w_off, lw.attn_gate_qw.in_dim, lw.attn_gate_qw.out_dim, n_tokens)
               end
-              encode_matmul(proj_enc, gemv_pipeline_for(lw.ssm_alpha_qw).not_nil!, lw.ssm_alpha_qw, cur_buf, alpha_buf, alpha_w_buf, alpha_w_off, lw.ssm_alpha_qw.in_dim, lw.ssm_alpha_qw.out_dim, n_tokens)
-              encode_matmul(proj_enc, gemv_pipeline_for(lw.ssm_beta_qw).not_nil!, lw.ssm_beta_qw, cur_buf, beta_buf, beta_w_buf, beta_w_off, lw.ssm_beta_qw.in_dim, lw.ssm_beta_qw.out_dim, n_tokens)
+              unless q8_rec_proj_mixed_prefill_candidate?(lw.attn_qkv_qw, lw.attn_gate_qw, lw.ssm_alpha_qw, lw.ssm_beta_qw, n_tokens)
+                encode_matmul(proj_enc, gemv_pipeline_for(lw.ssm_alpha_qw).not_nil!, lw.ssm_alpha_qw, cur_buf, alpha_buf, alpha_w_buf, alpha_w_off, lw.ssm_alpha_qw.in_dim, lw.ssm_alpha_qw.out_dim, n_tokens)
+                encode_matmul(proj_enc, gemv_pipeline_for(lw.ssm_beta_qw).not_nil!, lw.ssm_beta_qw, cur_buf, beta_buf, beta_w_buf, beta_w_off, lw.ssm_beta_qw.in_dim, lw.ssm_beta_qw.out_dim, n_tokens)
+              end
               proj_enc.end_encoding
             end
             if full_detail_profile
@@ -6046,23 +6498,28 @@ module ML
 
             conv_enc = ML::Metal::ComputeEncoder.new(cmd)
             qkv_h16 = !checkpoint_requested && q5_qkv_h16_conv_enabled? && q56_batch_gemm_enabled? && lw.attn_qkv_qw.type.q5_k? && n_tokens > GEMM_BATCH_THRESHOLD
-            conv_enc.set_pipeline(checkpoint_requested ? recurrent_conv_shift_chunk_checkpoint_pipeline : (qkv_h16 ? recurrent_conv_shift_chunk_h16_pipeline : recurrent_conv_shift_chunk_pipeline))
-            conv_enc.set_buffer(conv_state_bufs[local_i], 0, ML::Metal::BufferAccess::ReadWrite)
-            conv_enc.set_buffer(qkv_h16 ? qkv_h16_buf : qkv_buf, 1)
-            conv_enc.set_buffer(conv_w_buf, 2)
-            conv_enc.set_buffer(q_buf, 3, ML::Metal::BufferAccess::Write)
-            conv_enc.set_buffer(k_buf, 4, ML::Metal::BufferAccess::Write)
-            conv_enc.set_buffer(v_buf, 5, ML::Metal::BufferAccess::Write)
-            conv_enc.set_value(h_k.to_u32, 6)
-            conv_enc.set_value(h_v.to_u32, 7)
-            conv_enc.set_value(s.to_u32, 8)
-            conv_enc.set_value(conv_k.to_u32, 9)
-            conv_enc.set_value(n_tokens.to_u32, 10)
-            if checkpoint_requested
-              conv_enc.set_buffer(checkpoint_conv_state_bufs.not_nil![local_i], 11, ML::Metal::BufferAccess::Write)
-              conv_enc.set_value(checkpoint_index.not_nil!.to_u32, 12)
+            if !checkpoint_requested && !qkv_h16 && recurrent_conv_shift_token_parallel_prefill_enabled?(n_tokens)
+              encode_recurrent_conv_shift_chunk_token_parallel(conv_enc, conv_state_bufs[local_i], qkv_buf, conv_w_buf, q_buf, k_buf, v_buf,
+                h_k, h_v, s, conv_k, n_tokens, qkv_dim)
+            else
+              conv_enc.set_pipeline(checkpoint_requested ? recurrent_conv_shift_chunk_checkpoint_pipeline : (qkv_h16 ? recurrent_conv_shift_chunk_h16_pipeline : recurrent_conv_shift_chunk_pipeline))
+              conv_enc.set_buffer(conv_state_bufs[local_i], 0, ML::Metal::BufferAccess::ReadWrite)
+              conv_enc.set_buffer(qkv_h16 ? qkv_h16_buf : qkv_buf, 1)
+              conv_enc.set_buffer(conv_w_buf, 2)
+              conv_enc.set_buffer(q_buf, 3, ML::Metal::BufferAccess::Write)
+              conv_enc.set_buffer(k_buf, 4, ML::Metal::BufferAccess::Write)
+              conv_enc.set_buffer(v_buf, 5, ML::Metal::BufferAccess::Write)
+              conv_enc.set_value(h_k.to_u32, 6)
+              conv_enc.set_value(h_v.to_u32, 7)
+              conv_enc.set_value(s.to_u32, 8)
+              conv_enc.set_value(conv_k.to_u32, 9)
+              conv_enc.set_value(n_tokens.to_u32, 10)
+              if checkpoint_requested
+                conv_enc.set_buffer(checkpoint_conv_state_bufs.not_nil![local_i], 11, ML::Metal::BufferAccess::Write)
+                conv_enc.set_value(checkpoint_index.not_nil!.to_u32, 12)
+              end
+              conv_enc.dispatch_1d(qkv_dim, 256)
             end
-            conv_enc.dispatch_1d(qkv_dim, 256)
             conv_enc.end_encoding
 
             qnorm_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -6211,8 +6668,16 @@ module ML
                   encode_q4k_gemm_h16_pair(ffn_proj_enc, normed_buf, ffn_gate_buf, ffn_up_buf, ffn_gate_w_buf, ffn_gate_w_off, ffn_up_w_buf, ffn_up_w_off, lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim, n_tokens)
                 end
               else
-                encode_matmul(ffn_proj_enc, gemv_pipeline_for(lw.ffn_gate_qw).not_nil!, lw.ffn_gate_qw, normed_buf, ffn_gate_buf, ffn_gate_w_buf, ffn_gate_w_off, lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim, n_tokens)
-                encode_matmul(ffn_proj_enc, gemv_pipeline_for(lw.ffn_up_qw).not_nil!, lw.ffn_up_qw, normed_buf, ffn_up_buf, ffn_up_w_buf, ffn_up_w_off, lw.ffn_up_qw.in_dim, lw.ffn_up_qw.out_dim, n_tokens)
+                if q8_ffn_upgate_mixed_prefill_candidate?(lw.ffn_gate_qw, lw.ffn_up_qw, n_tokens)
+                  Profile.bump_matmul_shape("q8_ffn_upgate_mixed #{lw.ffn_gate_qw.type.name} #{lw.ffn_gate_qw.in_dim}x#{lw.ffn_gate_qw.out_dim}+#{lw.ffn_up_qw.out_dim} b#{n_tokens}",
+                    lw.ffn_gate_qw.raw.size.to_i64 + lw.ffn_up_qw.raw.size.to_i64)
+                  encode_q8_0_qkv_gate_mixed_gemm_f32(ffn_proj_enc, normed_buf, ffn_gate_buf, ffn_up_buf,
+                    ffn_gate_w_buf, ffn_gate_w_off, ffn_up_w_buf, ffn_up_w_off,
+                    lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim, lw.ffn_up_qw.out_dim, n_tokens)
+                else
+                  encode_matmul(ffn_proj_enc, gemv_pipeline_for(lw.ffn_gate_qw).not_nil!, lw.ffn_gate_qw, normed_buf, ffn_gate_buf, ffn_gate_w_buf, ffn_gate_w_off, lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim, n_tokens)
+                  encode_matmul(ffn_proj_enc, gemv_pipeline_for(lw.ffn_up_qw).not_nil!, lw.ffn_up_qw, normed_buf, ffn_up_buf, ffn_up_w_buf, ffn_up_w_off, lw.ffn_up_qw.in_dim, lw.ffn_up_qw.out_dim, n_tokens)
+                end
               end
               ffn_proj_enc.end_encoding
             end
@@ -7372,9 +7837,17 @@ module ML
           norm_enc.end_encoding
 
           proj_enc = ML::Metal::ComputeEncoder.new(cmd)
-          encode_matmul(proj_enc, q_pipe.not_nil!, q_qw, cur_buf, qfull_buf, q_w_buf, q_w_off, q_qw.in_dim, q_qw.out_dim, n_tokens)
-          encode_matmul(proj_enc, k_pipe.not_nil!, k_qw, cur_buf, k_buf, k_w_buf, k_w_off, k_qw.in_dim, k_qw.out_dim, n_tokens)
-          encode_matmul(proj_enc, v_pipe.not_nil!, v_qw, cur_buf, v_buf, v_w_buf, v_w_off, v_qw.in_dim, v_qw.out_dim, n_tokens)
+          if q8_full_qkv_mixed_prefill_candidate?(q_qw, k_qw, v_qw, n_tokens)
+            Profile.bump_matmul_shape("q8_full_qkv_mixed #{q_qw.type.name} #{q_qw.in_dim}x#{q_qw.out_dim}+#{k_qw.out_dim}+#{v_qw.out_dim} b#{n_tokens}",
+              q_qw.raw.size.to_i64 + k_qw.raw.size.to_i64 + v_qw.raw.size.to_i64)
+            encode_q8_0_full_qkv_mixed_gemm_f32(proj_enc, cur_buf, qfull_buf, k_buf, v_buf,
+              q_w_buf, q_w_off, k_w_buf, k_w_off, v_w_buf, v_w_off,
+              q_qw.in_dim, q_qw.out_dim, k_qw.out_dim, v_qw.out_dim, n_tokens)
+          else
+            encode_matmul(proj_enc, q_pipe.not_nil!, q_qw, cur_buf, qfull_buf, q_w_buf, q_w_off, q_qw.in_dim, q_qw.out_dim, n_tokens)
+            encode_matmul(proj_enc, k_pipe.not_nil!, k_qw, cur_buf, k_buf, k_w_buf, k_w_off, k_qw.in_dim, k_qw.out_dim, n_tokens)
+            encode_matmul(proj_enc, v_pipe.not_nil!, v_qw, cur_buf, v_buf, v_w_buf, v_w_off, v_qw.in_dim, v_qw.out_dim, n_tokens)
+          end
           proj_enc.end_encoding
 
           split_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -7479,8 +7952,16 @@ module ML
           addnorm_enc.end_encoding
 
           ffn_proj_enc = ML::Metal::ComputeEncoder.new(cmd)
-          encode_matmul(ffn_proj_enc, ffn_gate_pipe.not_nil!, ffn_gate_qw, normed_buf, ffn_gate_buf, ffn_gate_w_buf, ffn_gate_w_off, ffn_gate_qw.in_dim, ffn_gate_qw.out_dim, n_tokens)
-          encode_matmul(ffn_proj_enc, ffn_up_pipe.not_nil!, ffn_up_qw, normed_buf, ffn_up_buf, ffn_up_w_buf, ffn_up_w_off, ffn_up_qw.in_dim, ffn_up_qw.out_dim, n_tokens)
+          if q8_ffn_upgate_mixed_prefill_candidate?(ffn_gate_qw, ffn_up_qw, n_tokens)
+            Profile.bump_matmul_shape("q8_ffn_upgate_mixed #{ffn_gate_qw.type.name} #{ffn_gate_qw.in_dim}x#{ffn_gate_qw.out_dim}+#{ffn_up_qw.out_dim} b#{n_tokens}",
+              ffn_gate_qw.raw.size.to_i64 + ffn_up_qw.raw.size.to_i64)
+            encode_q8_0_qkv_gate_mixed_gemm_f32(ffn_proj_enc, normed_buf, ffn_gate_buf, ffn_up_buf,
+              ffn_gate_w_buf, ffn_gate_w_off, ffn_up_w_buf, ffn_up_w_off,
+              ffn_gate_qw.in_dim, ffn_gate_qw.out_dim, ffn_up_qw.out_dim, n_tokens)
+          else
+            encode_matmul(ffn_proj_enc, ffn_gate_pipe.not_nil!, ffn_gate_qw, normed_buf, ffn_gate_buf, ffn_gate_w_buf, ffn_gate_w_off, ffn_gate_qw.in_dim, ffn_gate_qw.out_dim, n_tokens)
+            encode_matmul(ffn_proj_enc, ffn_up_pipe.not_nil!, ffn_up_qw, normed_buf, ffn_up_buf, ffn_up_w_buf, ffn_up_w_off, ffn_up_qw.in_dim, ffn_up_qw.out_dim, n_tokens)
+          end
           ffn_proj_enc.end_encoding
 
           swiglu_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -7935,20 +8416,28 @@ module ML
 
           Profile.trace("prefill.full.qkv") do
             proj_enc = ML::Metal::ComputeEncoder.new(cmd)
-            if full_norm_h16_proj && h16_batch_gemm_candidate?(q_qw, n_tokens)
-              raise "unsupported h16 full q route" unless encode_matmul_from_h16(proj_enc, q_qw, full_cur_h16_buf, full_qfull_buf, q_w_buf, q_w_off, q_qw.in_dim, q_qw.out_dim, n_tokens)
+            if !full_norm_h16_proj && q8_full_qkv_mixed_prefill_candidate?(q_qw, k_qw, v_qw, n_tokens)
+              Profile.bump_matmul_shape("q8_full_qkv_mixed #{q_qw.type.name} #{q_qw.in_dim}x#{q_qw.out_dim}+#{k_qw.out_dim}+#{v_qw.out_dim} b#{n_tokens}",
+                q_qw.raw.size.to_i64 + k_qw.raw.size.to_i64 + v_qw.raw.size.to_i64)
+              encode_q8_0_full_qkv_mixed_gemm_f32(proj_enc, full_cur_buf, full_qfull_buf, full_k_buf, full_v_buf,
+                q_w_buf, q_w_off, k_w_buf, k_w_off, v_w_buf, v_w_off,
+                q_qw.in_dim, q_qw.out_dim, k_qw.out_dim, v_qw.out_dim, n_tokens)
             else
-              encode_matmul(proj_enc, q_pipe.not_nil!, q_qw, full_cur_buf, full_qfull_buf, q_w_buf, q_w_off, q_qw.in_dim, q_qw.out_dim, n_tokens)
-            end
-            if full_norm_h16_proj && h16_batch_gemm_candidate?(k_qw, n_tokens)
-              raise "unsupported h16 full k route" unless encode_matmul_from_h16(proj_enc, k_qw, full_cur_h16_buf, full_k_buf, k_w_buf, k_w_off, k_qw.in_dim, k_qw.out_dim, n_tokens)
-            else
-              encode_matmul(proj_enc, k_pipe.not_nil!, k_qw, full_cur_buf, full_k_buf, k_w_buf, k_w_off, k_qw.in_dim, k_qw.out_dim, n_tokens)
-            end
-            if full_norm_h16_proj && h16_batch_gemm_candidate?(v_qw, n_tokens)
-              raise "unsupported h16 full v route" unless encode_matmul_from_h16(proj_enc, v_qw, full_cur_h16_buf, full_v_buf, v_w_buf, v_w_off, v_qw.in_dim, v_qw.out_dim, n_tokens)
-            else
-              encode_matmul(proj_enc, v_pipe.not_nil!, v_qw, full_cur_buf, full_v_buf, v_w_buf, v_w_off, v_qw.in_dim, v_qw.out_dim, n_tokens)
+              if full_norm_h16_proj && h16_batch_gemm_candidate?(q_qw, n_tokens)
+                raise "unsupported h16 full q route" unless encode_matmul_from_h16(proj_enc, q_qw, full_cur_h16_buf, full_qfull_buf, q_w_buf, q_w_off, q_qw.in_dim, q_qw.out_dim, n_tokens)
+              else
+                encode_matmul(proj_enc, q_pipe.not_nil!, q_qw, full_cur_buf, full_qfull_buf, q_w_buf, q_w_off, q_qw.in_dim, q_qw.out_dim, n_tokens)
+              end
+              if full_norm_h16_proj && h16_batch_gemm_candidate?(k_qw, n_tokens)
+                raise "unsupported h16 full k route" unless encode_matmul_from_h16(proj_enc, k_qw, full_cur_h16_buf, full_k_buf, k_w_buf, k_w_off, k_qw.in_dim, k_qw.out_dim, n_tokens)
+              else
+                encode_matmul(proj_enc, k_pipe.not_nil!, k_qw, full_cur_buf, full_k_buf, k_w_buf, k_w_off, k_qw.in_dim, k_qw.out_dim, n_tokens)
+              end
+              if full_norm_h16_proj && h16_batch_gemm_candidate?(v_qw, n_tokens)
+                raise "unsupported h16 full v route" unless encode_matmul_from_h16(proj_enc, v_qw, full_cur_h16_buf, full_v_buf, v_w_buf, v_w_off, v_qw.in_dim, v_qw.out_dim, n_tokens)
+              else
+                encode_matmul(proj_enc, v_pipe.not_nil!, v_qw, full_cur_buf, full_v_buf, v_w_buf, v_w_off, v_qw.in_dim, v_qw.out_dim, n_tokens)
+              end
             end
             proj_enc.end_encoding
           end
@@ -8130,8 +8619,16 @@ module ML
                 encode_q4k_gemm_h16_pair(full_ffn_proj_enc, full_normed_buf, full_ffn_gate_buf, full_ffn_up_buf, full_ffn_gate_w_buf, full_ffn_gate_w_off, full_ffn_up_w_buf, full_ffn_up_w_off, ffn_gate_qw.in_dim, ffn_gate_qw.out_dim, n_tokens)
               end
             else
-              encode_matmul(full_ffn_proj_enc, full_ffn_gate_pipe.not_nil!, ffn_gate_qw, full_normed_buf, full_ffn_gate_buf, full_ffn_gate_w_buf, full_ffn_gate_w_off, ffn_gate_qw.in_dim, ffn_gate_qw.out_dim, n_tokens)
-              encode_matmul(full_ffn_proj_enc, full_ffn_up_pipe.not_nil!, ffn_up_qw, full_normed_buf, full_ffn_up_buf, full_ffn_up_w_buf, full_ffn_up_w_off, ffn_up_qw.in_dim, ffn_up_qw.out_dim, n_tokens)
+              if q8_ffn_upgate_mixed_prefill_candidate?(ffn_gate_qw, ffn_up_qw, n_tokens)
+                Profile.bump_matmul_shape("q8_ffn_upgate_mixed #{ffn_gate_qw.type.name} #{ffn_gate_qw.in_dim}x#{ffn_gate_qw.out_dim}+#{ffn_up_qw.out_dim} b#{n_tokens}",
+                  ffn_gate_qw.raw.size.to_i64 + ffn_up_qw.raw.size.to_i64)
+                encode_q8_0_qkv_gate_mixed_gemm_f32(full_ffn_proj_enc, full_normed_buf, full_ffn_gate_buf, full_ffn_up_buf,
+                  full_ffn_gate_w_buf, full_ffn_gate_w_off, full_ffn_up_w_buf, full_ffn_up_w_off,
+                  ffn_gate_qw.in_dim, ffn_gate_qw.out_dim, ffn_up_qw.out_dim, n_tokens)
+              else
+                encode_matmul(full_ffn_proj_enc, full_ffn_gate_pipe.not_nil!, ffn_gate_qw, full_normed_buf, full_ffn_gate_buf, full_ffn_gate_w_buf, full_ffn_gate_w_off, ffn_gate_qw.in_dim, ffn_gate_qw.out_dim, n_tokens)
+                encode_matmul(full_ffn_proj_enc, full_ffn_up_pipe.not_nil!, ffn_up_qw, full_normed_buf, full_ffn_up_buf, full_ffn_up_w_buf, full_ffn_up_w_off, ffn_up_qw.in_dim, ffn_up_qw.out_dim, n_tokens)
+              end
             end
             full_ffn_proj_enc.end_encoding
           end
@@ -8272,12 +8769,25 @@ module ML
                 Profile.bump_matmul_shape("q5_h16_gemm #{lw.attn_qkv_qw.type.name} #{lw.attn_qkv_qw.in_dim}x#{lw.attn_qkv_qw.out_dim} b#{n_tokens}", lw.attn_qkv_qw.raw.size.to_i64)
                 encode_q56k_gemm_h16(rec_proj_enc, mm5_pipeline, rec_cur_buf, rec_qkv_h16_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, n_tokens)
                 encode_matmul(rec_proj_enc, gemv_pipeline_for(lw.attn_gate_qw).not_nil!, lw.attn_gate_qw, rec_cur_buf, rec_z_buf, gate_w_buf, gate_w_off, lw.attn_gate_qw.in_dim, lw.attn_gate_qw.out_dim, n_tokens)
+              elsif q8_rec_proj_mixed_prefill_candidate?(lw.attn_qkv_qw, lw.attn_gate_qw, lw.ssm_alpha_qw, lw.ssm_beta_qw, n_tokens)
+                Profile.bump_matmul_shape("q8_rec_proj_mixed #{lw.attn_qkv_qw.type.name} #{lw.attn_qkv_qw.in_dim}x#{lw.attn_qkv_qw.out_dim}+#{lw.attn_gate_qw.out_dim}+#{lw.ssm_alpha_qw.out_dim}+#{lw.ssm_beta_qw.out_dim} b#{n_tokens}",
+                  lw.attn_qkv_qw.raw.size.to_i64 + lw.attn_gate_qw.raw.size.to_i64 + lw.ssm_alpha_qw.raw.size.to_i64 + lw.ssm_beta_qw.raw.size.to_i64)
+                encode_q8_0_rec_proj_mixed_gemm_f32(rec_proj_enc, rec_cur_buf, rec_qkv_buf, rec_z_buf, rec_alpha_buf, rec_beta_buf,
+                  qkv_w_buf, qkv_w_off, gate_w_buf, gate_w_off, alpha_w_buf, alpha_w_off, beta_w_buf, beta_w_off,
+                  lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, lw.attn_gate_qw.out_dim, lw.ssm_alpha_qw.out_dim, lw.ssm_beta_qw.out_dim, n_tokens)
+              elsif q8_qkv_gate_mixed_prefill_candidate?(lw.attn_qkv_qw, lw.attn_gate_qw, n_tokens)
+                Profile.bump_matmul_shape("q8_qkv_gate_mixed #{lw.attn_qkv_qw.type.name} #{lw.attn_qkv_qw.in_dim}x#{lw.attn_qkv_qw.out_dim}+#{lw.attn_gate_qw.out_dim} b#{n_tokens}",
+                  lw.attn_qkv_qw.raw.size.to_i64 + lw.attn_gate_qw.raw.size.to_i64)
+                encode_q8_0_qkv_gate_mixed_gemm_f32(rec_proj_enc, rec_cur_buf, rec_qkv_buf, rec_z_buf, qkv_w_buf, qkv_w_off, gate_w_buf, gate_w_off,
+                  lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, lw.attn_gate_qw.out_dim, n_tokens)
               else
                 encode_matmul(rec_proj_enc, gemv_pipeline_for(lw.attn_qkv_qw).not_nil!, lw.attn_qkv_qw, rec_cur_buf, rec_qkv_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, n_tokens)
                 encode_matmul(rec_proj_enc, gemv_pipeline_for(lw.attn_gate_qw).not_nil!, lw.attn_gate_qw, rec_cur_buf, rec_z_buf, gate_w_buf, gate_w_off, lw.attn_gate_qw.in_dim, lw.attn_gate_qw.out_dim, n_tokens)
               end
-              encode_matmul(rec_proj_enc, gemv_pipeline_for(lw.ssm_alpha_qw).not_nil!, lw.ssm_alpha_qw, rec_cur_buf, rec_alpha_buf, alpha_w_buf, alpha_w_off, lw.ssm_alpha_qw.in_dim, lw.ssm_alpha_qw.out_dim, n_tokens)
-              encode_matmul(rec_proj_enc, gemv_pipeline_for(lw.ssm_beta_qw).not_nil!, lw.ssm_beta_qw, rec_cur_buf, rec_beta_buf, beta_w_buf, beta_w_off, lw.ssm_beta_qw.in_dim, lw.ssm_beta_qw.out_dim, n_tokens)
+              unless q8_rec_proj_mixed_prefill_candidate?(lw.attn_qkv_qw, lw.attn_gate_qw, lw.ssm_alpha_qw, lw.ssm_beta_qw, n_tokens)
+                encode_matmul(rec_proj_enc, gemv_pipeline_for(lw.ssm_alpha_qw).not_nil!, lw.ssm_alpha_qw, rec_cur_buf, rec_alpha_buf, alpha_w_buf, alpha_w_off, lw.ssm_alpha_qw.in_dim, lw.ssm_alpha_qw.out_dim, n_tokens)
+                encode_matmul(rec_proj_enc, gemv_pipeline_for(lw.ssm_beta_qw).not_nil!, lw.ssm_beta_qw, rec_cur_buf, rec_beta_buf, beta_w_buf, beta_w_off, lw.ssm_beta_qw.in_dim, lw.ssm_beta_qw.out_dim, n_tokens)
+              end
               rec_proj_enc.end_encoding
             end
             if full_detail_profile
@@ -8288,23 +8798,28 @@ module ML
 
             conv_enc = ML::Metal::ComputeEncoder.new(cmd)
             qkv_h16 = !checkpoint_requested && q5_qkv_h16_conv_enabled? && q56_batch_gemm_enabled? && lw.attn_qkv_qw.type.q5_k? && n_tokens > GEMM_BATCH_THRESHOLD
-            conv_enc.set_pipeline(checkpoint_requested ? recurrent_conv_shift_chunk_checkpoint_pipeline : (qkv_h16 ? recurrent_conv_shift_chunk_h16_pipeline : recurrent_conv_shift_chunk_pipeline))
-            conv_enc.set_buffer(conv_state_bufs[local_i], 0, ML::Metal::BufferAccess::ReadWrite)
-            conv_enc.set_buffer(qkv_h16 ? rec_qkv_h16_buf : rec_qkv_buf, 1)
-            conv_enc.set_buffer(conv_w_buf, 2)
-            conv_enc.set_buffer(rec_q_buf, 3, ML::Metal::BufferAccess::Write)
-            conv_enc.set_buffer(rec_k_buf, 4, ML::Metal::BufferAccess::Write)
-            conv_enc.set_buffer(rec_v_buf, 5, ML::Metal::BufferAccess::Write)
-            conv_enc.set_value(h_k.to_u32, 6)
-            conv_enc.set_value(h_v.to_u32, 7)
-            conv_enc.set_value(s.to_u32, 8)
-            conv_enc.set_value(conv_k.to_u32, 9)
-            conv_enc.set_value(n_tokens.to_u32, 10)
-            if checkpoint_requested
-              conv_enc.set_buffer(checkpoint_conv_state_bufs.not_nil![local_i], 11, ML::Metal::BufferAccess::Write)
-              conv_enc.set_value(checkpoint_index.not_nil!.to_u32, 12)
+            if !checkpoint_requested && !qkv_h16 && recurrent_conv_shift_token_parallel_prefill_enabled?(n_tokens)
+              encode_recurrent_conv_shift_chunk_token_parallel(conv_enc, conv_state_bufs[local_i], rec_qkv_buf, conv_w_buf, rec_q_buf, rec_k_buf, rec_v_buf,
+                h_k, h_v, s, conv_k, n_tokens, rec_qkv_dim)
+            else
+              conv_enc.set_pipeline(checkpoint_requested ? recurrent_conv_shift_chunk_checkpoint_pipeline : (qkv_h16 ? recurrent_conv_shift_chunk_h16_pipeline : recurrent_conv_shift_chunk_pipeline))
+              conv_enc.set_buffer(conv_state_bufs[local_i], 0, ML::Metal::BufferAccess::ReadWrite)
+              conv_enc.set_buffer(qkv_h16 ? rec_qkv_h16_buf : rec_qkv_buf, 1)
+              conv_enc.set_buffer(conv_w_buf, 2)
+              conv_enc.set_buffer(rec_q_buf, 3, ML::Metal::BufferAccess::Write)
+              conv_enc.set_buffer(rec_k_buf, 4, ML::Metal::BufferAccess::Write)
+              conv_enc.set_buffer(rec_v_buf, 5, ML::Metal::BufferAccess::Write)
+              conv_enc.set_value(h_k.to_u32, 6)
+              conv_enc.set_value(h_v.to_u32, 7)
+              conv_enc.set_value(s.to_u32, 8)
+              conv_enc.set_value(conv_k.to_u32, 9)
+              conv_enc.set_value(n_tokens.to_u32, 10)
+              if checkpoint_requested
+                conv_enc.set_buffer(checkpoint_conv_state_bufs.not_nil![local_i], 11, ML::Metal::BufferAccess::Write)
+                conv_enc.set_value(checkpoint_index.not_nil!.to_u32, 12)
+              end
+              conv_enc.dispatch_1d(rec_qkv_dim, 256)
             end
-            conv_enc.dispatch_1d(rec_qkv_dim, 256)
             conv_enc.end_encoding
 
             rec_qnorm_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -8453,8 +8968,16 @@ module ML
                   encode_q4k_gemm_h16_pair(rec_ffn_proj_enc, rec_normed_buf, rec_ffn_gate_buf, rec_ffn_up_buf, rec_ffn_gate_w_buf, rec_ffn_gate_w_off, rec_ffn_up_w_buf, rec_ffn_up_w_off, lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim, n_tokens)
                 end
               else
-                encode_matmul(rec_ffn_proj_enc, gemv_pipeline_for(lw.ffn_gate_qw).not_nil!, lw.ffn_gate_qw, rec_normed_buf, rec_ffn_gate_buf, rec_ffn_gate_w_buf, rec_ffn_gate_w_off, lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim, n_tokens)
-                encode_matmul(rec_ffn_proj_enc, gemv_pipeline_for(lw.ffn_up_qw).not_nil!, lw.ffn_up_qw, rec_normed_buf, rec_ffn_up_buf, rec_ffn_up_w_buf, rec_ffn_up_w_off, lw.ffn_up_qw.in_dim, lw.ffn_up_qw.out_dim, n_tokens)
+                if q8_ffn_upgate_mixed_prefill_candidate?(lw.ffn_gate_qw, lw.ffn_up_qw, n_tokens)
+                  Profile.bump_matmul_shape("q8_ffn_upgate_mixed #{lw.ffn_gate_qw.type.name} #{lw.ffn_gate_qw.in_dim}x#{lw.ffn_gate_qw.out_dim}+#{lw.ffn_up_qw.out_dim} b#{n_tokens}",
+                    lw.ffn_gate_qw.raw.size.to_i64 + lw.ffn_up_qw.raw.size.to_i64)
+                  encode_q8_0_qkv_gate_mixed_gemm_f32(rec_ffn_proj_enc, rec_normed_buf, rec_ffn_gate_buf, rec_ffn_up_buf,
+                    rec_ffn_gate_w_buf, rec_ffn_gate_w_off, rec_ffn_up_w_buf, rec_ffn_up_w_off,
+                    lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim, lw.ffn_up_qw.out_dim, n_tokens)
+                else
+                  encode_matmul(rec_ffn_proj_enc, gemv_pipeline_for(lw.ffn_gate_qw).not_nil!, lw.ffn_gate_qw, rec_normed_buf, rec_ffn_gate_buf, rec_ffn_gate_w_buf, rec_ffn_gate_w_off, lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim, n_tokens)
+                  encode_matmul(rec_ffn_proj_enc, gemv_pipeline_for(lw.ffn_up_qw).not_nil!, lw.ffn_up_qw, rec_normed_buf, rec_ffn_up_buf, rec_ffn_up_w_buf, rec_ffn_up_w_off, lw.ffn_up_qw.in_dim, lw.ffn_up_qw.out_dim, n_tokens)
+                end
               end
               rec_ffn_proj_enc.end_encoding
             end
@@ -9604,7 +10127,7 @@ module ML
           if use_token_embedding
             return nil unless token_embd = token_embd_qw
             return nil unless token_ids = token_ids_buf
-            return nil unless token_embd.type.q4_k?
+            return nil unless token_embd.type.q4_k? || token_embd.type.q8_0?
             return nil unless token_embd.in_dim == hidden_dim
           end
           q_dim = hp.n_head * hp.head_dim
@@ -9771,8 +10294,13 @@ module ML
             emb_qw = token_embd_qw.not_nil!
             emb_w_buf, emb_w_off = weight_slot(emb_qw)
             emb_enc = ML::Metal::ComputeEncoder.new(cmd)
-            encode_embedding_q4k_from_token_id(emb_enc, emb_w_buf, emb_w_off, token_ids_buf.not_nil!, src_buf,
-              hidden_dim, emb_qw.out_dim, token_index)
+            if emb_qw.type.q8_0?
+              encode_embedding_q8_0_from_token_id(emb_enc, emb_w_buf, emb_w_off, token_ids_buf.not_nil!, src_buf,
+                hidden_dim, emb_qw.out_dim, token_index)
+            else
+              encode_embedding_q4k_from_token_id(emb_enc, emb_w_buf, emb_w_off, token_ids_buf.not_nil!, src_buf,
+                hidden_dim, emb_qw.out_dim, token_index)
+            end
             emb_enc.end_encoding
           end
 
@@ -10652,6 +11180,33 @@ module ML
           read_shared_f32(out_buf, batch * out_dim)
         end
 
+        private def self.matmul_q8_0_gemm_buf(x : Array(Float32),
+                                              w_buf : ML::MetalBuffer,
+                                              w_offset : Int64,
+                                              in_dim : Int32,
+                                              out_dim : Int32,
+                                              batch : Int32) : Array(Float32)
+          x_buf = Scratch.get(:mm8_x, x.size.to_i64 * 2_i64)
+          write_shared_f16(x_buf, x)
+
+          out_buf = Scratch.get(:mm8_out, (batch * out_dim).to_i64 * sizeof(Float32))
+
+          cmd = ML::Metal::CommandBuffer.new
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_q8_0_gemm_f32_from_h16(enc, x_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
+          enc.end_encoding
+          t_enc = Time.instant if Profile.enabled?
+          cmd.commit
+          cmd.wait
+          t_wait = Time.instant if Profile.enabled?
+          if Profile.enabled?
+            Profile.bump_gemm(
+              (t_wait.not_nil! - t_enc.not_nil!).total_nanoseconds.to_i64,
+            )
+          end
+          read_shared_f32(out_buf, batch * out_dim)
+        end
+
         # Upload w_raw into a fresh MetalBuffer (test + one-shot paths).
         private def self.upload_weights(w_raw : Bytes) : ML::MetalBuffer
           buf = ML::MetalBuffer.new(w_raw.size.to_i64)
@@ -11022,7 +11577,11 @@ module ML
           raise "w_raw size mismatch: expected #{expected_w}, got #{w_raw.size}" unless w_raw.size == expected_w
           ML::Metal::Device.init!
           buf, off = weight_slot(w_raw)
-          matmul_gemv_buf(mv8_pipeline, x, buf, off, in_dim, out_dim, batch)
+          if q8_batch_gemm_enabled? && batch > GEMM_BATCH_THRESHOLD
+            matmul_q8_0_gemm_buf(x, buf, off, in_dim, out_dim, batch)
+          else
+            matmul_gemv_buf(mv8_pipeline, x, buf, off, in_dim, out_dim, batch)
+          end
         end
 
         def self.matmul_iq4_nl(x : Array(Float32),
@@ -11403,7 +11962,11 @@ module ML
               matmul_gemv_buf(mv6_pipeline, x, buf, off, qw.in_dim, qw.out_dim, batch)
             end
           when .q8_0?
-            matmul_gemv_buf(mv8_pipeline, x, buf, off, qw.in_dim, qw.out_dim, batch)
+            if q8_batch_gemm_enabled? && batch > GEMM_BATCH_THRESHOLD
+              matmul_q8_0_gemm_buf(x, buf, off, qw.in_dim, qw.out_dim, batch)
+            else
+              matmul_gemv_buf(mv8_pipeline, x, buf, off, qw.in_dim, qw.out_dim, batch)
+            end
           when .iq4_nl?
             if batch > GEMM_BATCH_THRESHOLD
               nil

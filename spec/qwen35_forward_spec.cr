@@ -433,6 +433,230 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     chunk_next[1].should be_close(serial_next[1], 1e-4_f32)
   end
 
+  it "keeps 0.8B Q8 batch prefill top1 matched to the GEMV fallback" do
+    pending!("0.8B draft model not present") unless File.exists?(QWEN_08B_FWD)
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_08B_FWD)
+    prompt = Array(Int32).new(64) { |i| ((i * 7 + 11) % 1000).to_i32 }
+
+    old = ENV["QWEN35_Q8_BATCH_GEMM_OFF"]?
+    begin
+      ENV["QWEN35_Q8_BATCH_GEMM_OFF"] = "1"
+      fallback = ML::GGUF::Qwen35CPU::State.new(w.hparams, max_seq: 96)
+      fallback_top, _fallback_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, fallback)
+      fallback_next = ML::GGUF::Qwen35CPU.forward_top1(w, fallback_top, prompt.size, fallback)
+
+      ENV.delete("QWEN35_Q8_BATCH_GEMM_OFF")
+      fast = ML::GGUF::Qwen35CPU::State.new(w.hparams, max_seq: 96)
+      fast_top, _fast_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, fast)
+      fast_next = ML::GGUF::Qwen35CPU.forward_top1(w, fast_top, prompt.size, fast)
+
+      fast_top.should eq(fallback_top)
+      fast_next[0].should eq(fallback_next[0])
+    ensure
+      if old
+        ENV["QWEN35_Q8_BATCH_GEMM_OFF"] = old
+      else
+        ENV.delete("QWEN35_Q8_BATCH_GEMM_OFF")
+      end
+    end
+  end
+
+  it "keeps 0.8B Q8 recurrent projection mixed prefill matched to the default route" do
+    pending!("0.8B draft model not present") unless File.exists?(QWEN_08B_FWD)
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_08B_FWD)
+    prompt = Array(Int32).new(64) { |i| ((i * 7 + 11) % 1000).to_i32 }
+
+    old = ENV["QWEN35_Q8_REC_PROJ_MIXED_PREFILL"]?
+    begin
+      ENV.delete("QWEN35_Q8_REC_PROJ_MIXED_PREFILL")
+      default = ML::GGUF::Qwen35CPU::State.new(w.hparams, max_seq: 96)
+      default_top, _default_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, default)
+      default_next = ML::GGUF::Qwen35CPU.forward_top1(w, default_top, prompt.size, default)
+
+      ENV["QWEN35_Q8_REC_PROJ_MIXED_PREFILL"] = "1"
+      mixed = ML::GGUF::Qwen35CPU::State.new(w.hparams, max_seq: 96)
+      mixed_top, _mixed_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, mixed)
+      mixed_next = ML::GGUF::Qwen35CPU.forward_top1(w, mixed_top, prompt.size, mixed)
+
+      mixed_top.should eq(default_top)
+      mixed_next[0].should eq(default_next[0])
+    ensure
+      if old
+        ENV["QWEN35_Q8_REC_PROJ_MIXED_PREFILL"] = old
+      else
+        ENV.delete("QWEN35_Q8_REC_PROJ_MIXED_PREFILL")
+      end
+    end
+  end
+
+  it "keeps 0.8B Q8 capped single-buffer prefill matched to the recurrent projection route" do
+    pending!("0.8B draft model not present") unless File.exists?(QWEN_08B_FWD)
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_08B_FWD)
+    prompt = Array(Int32).new(64) { |i| ((i * 7 + 11) % 1000).to_i32 }
+
+    old_rec = ENV["QWEN35_Q8_REC_PROJ_MIXED_PREFILL"]?
+    old_single = ENV["QWEN35_Q8_SINGLEBUF_GEMM"]?
+    old_cap = ENV["QWEN35_Q8_SINGLEBUF_GEMM_MAX_BATCH"]?
+    begin
+      ENV["QWEN35_Q8_REC_PROJ_MIXED_PREFILL"] = "1"
+      ENV.delete("QWEN35_Q8_SINGLEBUF_GEMM")
+      ENV.delete("QWEN35_Q8_SINGLEBUF_GEMM_MAX_BATCH")
+      base = ML::GGUF::Qwen35CPU::State.new(w.hparams, max_seq: 96)
+      base_top, _base_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, base)
+      base_next = ML::GGUF::Qwen35CPU.forward_top1(w, base_top, prompt.size, base)
+
+      ENV["QWEN35_Q8_SINGLEBUF_GEMM_MAX_BATCH"] = "256"
+      capped = ML::GGUF::Qwen35CPU::State.new(w.hparams, max_seq: 96)
+      capped_top, _capped_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, capped)
+      capped_next = ML::GGUF::Qwen35CPU.forward_top1(w, capped_top, prompt.size, capped)
+
+      capped_top.should eq(base_top)
+      capped_next[0].should eq(base_next[0])
+    ensure
+      if old_rec
+        ENV["QWEN35_Q8_REC_PROJ_MIXED_PREFILL"] = old_rec
+      else
+        ENV.delete("QWEN35_Q8_REC_PROJ_MIXED_PREFILL")
+      end
+      if old_single
+        ENV["QWEN35_Q8_SINGLEBUF_GEMM"] = old_single
+      else
+        ENV.delete("QWEN35_Q8_SINGLEBUF_GEMM")
+      end
+      if old_cap
+        ENV["QWEN35_Q8_SINGLEBUF_GEMM_MAX_BATCH"] = old_cap
+      else
+        ENV.delete("QWEN35_Q8_SINGLEBUF_GEMM_MAX_BATCH")
+      end
+    end
+  end
+
+  it "keeps 0.8B Q8 FFN upgate mixed prefill matched to the default route" do
+    pending!("0.8B draft model not present") unless File.exists?(QWEN_08B_FWD)
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_08B_FWD)
+    prompt = Array(Int32).new(64) { |i| ((i * 7 + 11) % 1000).to_i32 }
+
+    old = ENV["QWEN35_Q8_FFN_UPGATE_MIXED_PREFILL"]?
+    begin
+      ENV.delete("QWEN35_Q8_FFN_UPGATE_MIXED_PREFILL")
+      default = ML::GGUF::Qwen35CPU::State.new(w.hparams, max_seq: 96)
+      default_top, _default_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, default)
+      default_next = ML::GGUF::Qwen35CPU.forward_top1(w, default_top, prompt.size, default)
+
+      ENV["QWEN35_Q8_FFN_UPGATE_MIXED_PREFILL"] = "1"
+      mixed = ML::GGUF::Qwen35CPU::State.new(w.hparams, max_seq: 96)
+      mixed_top, _mixed_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, mixed)
+      mixed_next = ML::GGUF::Qwen35CPU.forward_top1(w, mixed_top, prompt.size, mixed)
+
+      mixed_top.should eq(default_top)
+      mixed_next[0].should eq(default_next[0])
+    ensure
+      if old
+        ENV["QWEN35_Q8_FFN_UPGATE_MIXED_PREFILL"] = old
+      else
+        ENV.delete("QWEN35_Q8_FFN_UPGATE_MIXED_PREFILL")
+      end
+    end
+  end
+
+  it "keeps 0.8B Q8 capped FFN upgate mixed prefill matched to the default route" do
+    pending!("0.8B draft model not present") unless File.exists?(QWEN_08B_FWD)
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_08B_FWD)
+    prompt = Array(Int32).new(64) { |i| ((i * 7 + 11) % 1000).to_i32 }
+
+    old_global = ENV["QWEN35_Q8_FFN_UPGATE_MIXED_PREFILL"]?
+    old_cap = ENV["QWEN35_Q8_FFN_UPGATE_MIXED_MAX_BATCH"]?
+    begin
+      ENV.delete("QWEN35_Q8_FFN_UPGATE_MIXED_PREFILL")
+      ENV.delete("QWEN35_Q8_FFN_UPGATE_MIXED_MAX_BATCH")
+      default = ML::GGUF::Qwen35CPU::State.new(w.hparams, max_seq: 96)
+      default_top, _default_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, default)
+      default_next = ML::GGUF::Qwen35CPU.forward_top1(w, default_top, prompt.size, default)
+
+      ENV["QWEN35_Q8_FFN_UPGATE_MIXED_MAX_BATCH"] = "256"
+      capped = ML::GGUF::Qwen35CPU::State.new(w.hparams, max_seq: 96)
+      capped_top, _capped_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, capped)
+      capped_next = ML::GGUF::Qwen35CPU.forward_top1(w, capped_top, prompt.size, capped)
+
+      capped_top.should eq(default_top)
+      capped_next[0].should eq(default_next[0])
+    ensure
+      if old_global
+        ENV["QWEN35_Q8_FFN_UPGATE_MIXED_PREFILL"] = old_global
+      else
+        ENV.delete("QWEN35_Q8_FFN_UPGATE_MIXED_PREFILL")
+      end
+      if old_cap
+        ENV["QWEN35_Q8_FFN_UPGATE_MIXED_MAX_BATCH"] = old_cap
+      else
+        ENV.delete("QWEN35_Q8_FFN_UPGATE_MIXED_MAX_BATCH")
+      end
+    end
+  end
+
+  it "keeps 0.8B Q8 prefill FFN-down add fused route matched to the default route" do
+    pending!("0.8B draft model not present") unless File.exists?(QWEN_08B_FWD)
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_08B_FWD)
+    prompt = Array(Int32).new(64) { |i| ((i * 7 + 11) % 1000).to_i32 }
+
+    old = ENV["QWEN35_PREFILL_FFN_DOWN_ADD_FUSED"]?
+    begin
+      ENV.delete("QWEN35_PREFILL_FFN_DOWN_ADD_FUSED")
+      default = ML::GGUF::Qwen35CPU::State.new(w.hparams, max_seq: 96)
+      default_top, _default_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, default)
+      default_next = ML::GGUF::Qwen35CPU.forward_top1(w, default_top, prompt.size, default)
+
+      ENV["QWEN35_PREFILL_FFN_DOWN_ADD_FUSED"] = "1"
+      fused = ML::GGUF::Qwen35CPU::State.new(w.hparams, max_seq: 96)
+      fused_top, _fused_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, fused)
+      fused_next = ML::GGUF::Qwen35CPU.forward_top1(w, fused_top, prompt.size, fused)
+
+      fused_top.should eq(default_top)
+      fused_next[0].should eq(default_next[0])
+    ensure
+      if old
+        ENV["QWEN35_PREFILL_FFN_DOWN_ADD_FUSED"] = old
+      else
+        ENV.delete("QWEN35_PREFILL_FFN_DOWN_ADD_FUSED")
+      end
+    end
+  end
+
+  it "keeps 0.8B Q8 capped full-attention qkv mixed prefill matched to the default route" do
+    pending!("0.8B draft model not present") unless File.exists?(QWEN_08B_FWD)
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_08B_FWD)
+    prompt = Array(Int32).new(64) { |i| ((i * 7 + 11) % 1000).to_i32 }
+
+    old_global = ENV["QWEN35_Q8_FULL_QKV_MIXED_PREFILL"]?
+    old_cap = ENV["QWEN35_Q8_FULL_QKV_MIXED_MAX_BATCH"]?
+    begin
+      ENV.delete("QWEN35_Q8_FULL_QKV_MIXED_PREFILL")
+      ENV.delete("QWEN35_Q8_FULL_QKV_MIXED_MAX_BATCH")
+      default = ML::GGUF::Qwen35CPU::State.new(w.hparams, max_seq: 96)
+      default_top, _default_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, default)
+      default_next = ML::GGUF::Qwen35CPU.forward_top1(w, default_top, prompt.size, default)
+
+      ENV["QWEN35_Q8_FULL_QKV_MIXED_MAX_BATCH"] = "256"
+      capped = ML::GGUF::Qwen35CPU::State.new(w.hparams, max_seq: 96)
+      capped_top, _capped_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, capped)
+      capped_next = ML::GGUF::Qwen35CPU.forward_top1(w, capped_top, prompt.size, capped)
+
+      capped_top.should eq(default_top)
+      capped_next[0].should eq(default_next[0])
+    ensure
+      if old_global
+        ENV["QWEN35_Q8_FULL_QKV_MIXED_PREFILL"] = old_global
+      else
+        ENV.delete("QWEN35_Q8_FULL_QKV_MIXED_PREFILL")
+      end
+      if old_cap
+        ENV["QWEN35_Q8_FULL_QKV_MIXED_MAX_BATCH"] = old_cap
+      else
+        ENV.delete("QWEN35_Q8_FULL_QKV_MIXED_MAX_BATCH")
+      end
+    end
+  end
+
   it "forks decode state into independent buffers" do
     w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
     hp = w.hparams

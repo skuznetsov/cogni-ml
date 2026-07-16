@@ -1,6 +1,7 @@
 require "./spec_helper"
 require "../src/ml/gguf/reader"
 require "../src/ml/gguf/qwen35_cpu"
+require "../src/ml/gguf/qwen35_request_state_pool"
 
 QWEN_9B_STATE_COPY = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 
@@ -90,5 +91,60 @@ describe ML::GGUF::Qwen35CPU do
     live_next = ML::GGUF::Qwen35CPU.forward_top1(weights, live_top1[0], prefix.size + 1, live)
     live_next[0].should eq(full_next[0])
     live_next[1].should be_close(full_next[1], 1.0e-4)
+  end
+
+  it "resets prepared request state without clearing reusable KV capacity" do
+    pending!("9B model not present") unless File.exists?(QWEN_9B_STATE_COPY)
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    gguf = ML::GGUF::GGUFFile.new(QWEN_9B_STATE_COPY)
+    hp = ML::GGUF::Qwen35Hparams.new(gguf)
+    state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 16)
+    ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp)
+    state.layers.each { |layer| layer.position = 7 }
+    fill_state_bytes!(state, 0x5a_u8)
+
+    ML::GGUF::Qwen35CPU.reset_prepared_request_state!(state)
+
+    state.layers.all? { |layer| layer.position == 0 }.should be_true
+
+    rec_layer = hp.recurrent_layers.first
+    state.layers[rec_layer].conv_state_buf.not_nil!.contents.as(Pointer(UInt8)).value.should eq(0x00_u8)
+    state.layers[rec_layer].ssm_state_buf.not_nil!.contents.as(Pointer(UInt8)).value.should eq(0x00_u8)
+
+    full_layer = hp.full_attention_layers.first
+    state.layers[full_layer].k_cache_buf.not_nil!.contents.as(Pointer(UInt8)).value.should eq(0x5a_u8)
+    state.layers[full_layer].v_cache_buf.not_nil!.contents.as(Pointer(UInt8)).value.should eq(0x5a_u8)
+  end
+
+  it "checks out one prepared request state per active owner and resets on release" do
+    pending!("9B model not present") unless File.exists?(QWEN_9B_STATE_COPY)
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    gguf = ML::GGUF::GGUFFile.new(QWEN_9B_STATE_COPY)
+    hp = ML::GGUF::Qwen35Hparams.new(gguf)
+    pool = ML::GGUF::Qwen35RequestStatePool.new(hp, max_seq: 16, capacity: 1, prepare_metal: true)
+
+    first = pool.checkout
+    second = pool.checkout
+    first.same?(second).should be_false
+
+    first.layers.each { |layer| layer.position = 3 }
+    fill_state_bytes!(first, 0x7b_u8)
+    pool.release(first)
+
+    reused = pool.checkout
+    reused.same?(first).should be_true
+    reused.layers.all? { |layer| layer.position == 0 }.should be_true
+
+    rec_layer = hp.recurrent_layers.first
+    reused.layers[rec_layer].conv_state_buf.not_nil!.contents.as(Pointer(UInt8)).value.should eq(0x00_u8)
+    reused.layers[rec_layer].ssm_state_buf.not_nil!.contents.as(Pointer(UInt8)).value.should eq(0x00_u8)
+
+    full_layer = hp.full_attention_layers.first
+    reused.layers[full_layer].k_cache_buf.not_nil!.contents.as(Pointer(UInt8)).value.should eq(0x7b_u8)
+
+    pool.release(reused)
+    pool.release(second)
   end
 end

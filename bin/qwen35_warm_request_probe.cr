@@ -9,6 +9,7 @@ require "option_parser"
 
 require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_prompt_cache"
+require "../src/ml/gguf/qwen35_request_state_pool"
 require "../src/ml/gguf/qwen35_serving_route"
 require "../src/ml/gguf/qwen35_resident_session"
 require "../src/ml/gguf/qwen35_tokenizer"
@@ -195,6 +196,10 @@ def copy_prompt_state!(dst : ML::GGUF::Qwen35CPU::State,
       dst.copy_from!(src)
     end
   {% end %}
+end
+
+def reset_reusable_request_state!(state : ML::GGUF::Qwen35CPU::State) : Nil
+  ML::GGUF::Qwen35CPU.reset_prepared_request_state!(state)
 end
 
 def build_source_replay_template(weights : ML::GGUF::Qwen35Weights,
@@ -441,7 +446,8 @@ def run_request(weights : ML::GGUF::Qwen35Weights,
                 prompt : String,
                 n_gen : Int32,
                 max_seq : Int32,
-                prepare_state : Bool) : {RequestTiming, Array(Int32)}
+                prepare_state : Bool,
+                reuse_state : ML::GGUF::Qwen35CPU::State? = nil) : {RequestTiming, Array(Int32)}
   hp = weights.hparams
   request_t0 = Time.instant
 
@@ -451,10 +457,11 @@ def run_request(weights : ML::GGUF::Qwen35Weights,
   raise "prompt encoded to zero tokens" if ids.empty?
   raise "request exceeds max_seq: prompt=#{ids.size} gen=#{n_gen} max_seq=#{max_seq}" if ids.size + n_gen >= max_seq
 
-  state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+  state = reuse_state || ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
+  raise "reused request state max_seq mismatch" if state.max_seq != max_seq
 
   state_prepare_ms = 0.0
-  if prepare_state
+  if prepare_state && reuse_state.nil?
     prepare_t0 = Time.instant
     ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp)
     state_prepare_ms = (Time.instant - prepare_t0).total_milliseconds
@@ -489,6 +496,8 @@ def run_request(weights : ML::GGUF::Qwen35Weights,
     "greedy",
   )
   {timing, output_ids}
+ensure
+  reset_reusable_request_state!(reuse_state) if reuse_state
 end
 
 def run_prompt_cache_serving_route_request(weights : ML::GGUF::Qwen35Weights,
@@ -863,13 +872,10 @@ prompt_cache_template = prompt_cache_replay ? build_prompt_cache_replay_template
 prompt_cache_fast_forward_template = prompt_cache_fast_forward ? build_prompt_cache_fast_forward_template(weights, tokenizer, prompt, n_gen, cached_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv) : nil
 prompt_cache_direct_output_template = prompt_cache_direct_output ? build_prompt_cache_direct_output_template(weights, tokenizer, prompt, n_gen, cached_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv) : nil
 prompt_cache_serving_route_template = prompt_cache_serving_route ? build_prompt_cache_serving_route_template(weights, tokenizer, prompt, n_gen, cached_gen, max_seq, prepare_state, resident_states, artifact_codec, artifact_codec_block, artifact_live_kv, serving_route_direct_miss) : nil
-reusable_request_state = nil.as(ML::GGUF::Qwen35CPU::State?)
-if reuse_request_state
-  reusable_request_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: max_seq)
-  ML::GGUF::Qwen35CPU.prepare_state_metal!(reusable_request_state.not_nil!, weights.hparams, clear: false) if prepare_state
-end
+request_state_pool = reuse_request_state ? ML::GGUF::Qwen35RequestStatePool.new(weights.hparams, max_seq: max_seq, capacity: 1, prepare_metal: prepare_state) : nil
+active_cursor_state = serving_route_active_cursor ? request_state_pool.try(&.checkout) : nil
 prompt_cache_active_cursor_template = if serving_route_active_cursor && (replay = prompt_cache_serving_route_template)
-                                        build_prompt_cache_active_cursor_template(weights, replay, max_seq, prepare_state, reusable_request_state)
+                                        build_prompt_cache_active_cursor_template(weights, replay, max_seq, prepare_state, active_cursor_state)
                                       else
                                         nil
                                       end
@@ -877,20 +883,26 @@ prompt_cache_active_cursor_template = if serving_route_active_cursor && (replay 
 warmup_ms = 0.0
 warmups.times do
   warm_t0 = Time.instant
-  if cursor = prompt_cache_active_cursor_template
-    run_prompt_cache_active_cursor_request(weights, cursor, n_gen)
-  elsif replay = prompt_cache_serving_route_template
-    run_prompt_cache_serving_route_request(weights, replay, max_seq, prepare_state, serving_route_continuation, n_gen, reusable_request_state)
-  elsif replay = prompt_cache_direct_output_template
-    run_prompt_cache_direct_output_request(replay)
-  elsif replay = prompt_cache_fast_forward_template
-    run_prompt_cache_fast_forward_request(weights, replay, max_seq, prepare_state, reusable_request_state)
-  elsif replay = prompt_cache_template
-    run_prompt_cache_replay_request(weights, replay, max_seq, prepare_state, reusable_request_state)
-  elsif replay = source_template
-    run_source_replay_request(weights, replay, max_seq, prepare_state, reusable_request_state)
-  else
-    run_request(weights, tokenizer, prompt, n_gen, max_seq, prepare_state)
+  request_state = nil.as(ML::GGUF::Qwen35CPU::State?)
+  request_state = request_state_pool.try(&.checkout) unless prompt_cache_active_cursor_template
+  begin
+    if cursor = prompt_cache_active_cursor_template
+      run_prompt_cache_active_cursor_request(weights, cursor, n_gen)
+    elsif replay = prompt_cache_serving_route_template
+      run_prompt_cache_serving_route_request(weights, replay, max_seq, prepare_state, serving_route_continuation, n_gen, request_state)
+    elsif replay = prompt_cache_direct_output_template
+      run_prompt_cache_direct_output_request(replay)
+    elsif replay = prompt_cache_fast_forward_template
+      run_prompt_cache_fast_forward_request(weights, replay, max_seq, prepare_state, request_state)
+    elsif replay = prompt_cache_template
+      run_prompt_cache_replay_request(weights, replay, max_seq, prepare_state, request_state)
+    elsif replay = source_template
+      run_source_replay_request(weights, replay, max_seq, prepare_state, request_state)
+    else
+      run_request(weights, tokenizer, prompt, n_gen, max_seq, prepare_state, request_state)
+    end
+  ensure
+    request_state_pool.try(&.release(request_state.not_nil!)) if request_state
   end
   warmup_ms += (Time.instant - warm_t0).total_milliseconds
 end
@@ -905,21 +917,27 @@ timings = [] of RequestTiming
 {% end %}
 
 requests.times do |i|
-  timing, output_ids = if cursor = prompt_cache_active_cursor_template
-                         run_prompt_cache_active_cursor_request(weights, cursor, n_gen)
-                       elsif replay = prompt_cache_serving_route_template
-                         run_prompt_cache_serving_route_request(weights, replay, max_seq, prepare_state, serving_route_continuation, n_gen, reusable_request_state)
-                       elsif replay = prompt_cache_direct_output_template
-                         run_prompt_cache_direct_output_request(replay)
-                       elsif replay = prompt_cache_fast_forward_template
-                         run_prompt_cache_fast_forward_request(weights, replay, max_seq, prepare_state, reusable_request_state)
-                       elsif replay = prompt_cache_template
-                         run_prompt_cache_replay_request(weights, replay, max_seq, prepare_state, reusable_request_state)
-                       elsif replay = source_template
-                         run_source_replay_request(weights, replay, max_seq, prepare_state, reusable_request_state)
-                       else
-                         run_request(weights, tokenizer, prompt, n_gen, max_seq, prepare_state)
-                       end
+  request_state = nil.as(ML::GGUF::Qwen35CPU::State?)
+  request_state = request_state_pool.try(&.checkout) unless prompt_cache_active_cursor_template
+  timing, output_ids = begin
+    if cursor = prompt_cache_active_cursor_template
+      run_prompt_cache_active_cursor_request(weights, cursor, n_gen)
+    elsif replay = prompt_cache_serving_route_template
+      run_prompt_cache_serving_route_request(weights, replay, max_seq, prepare_state, serving_route_continuation, n_gen, request_state)
+    elsif replay = prompt_cache_direct_output_template
+      run_prompt_cache_direct_output_request(replay)
+    elsif replay = prompt_cache_fast_forward_template
+      run_prompt_cache_fast_forward_request(weights, replay, max_seq, prepare_state, request_state)
+    elsif replay = prompt_cache_template
+      run_prompt_cache_replay_request(weights, replay, max_seq, prepare_state, request_state)
+    elsif replay = source_template
+      run_source_replay_request(weights, replay, max_seq, prepare_state, request_state)
+    else
+      run_request(weights, tokenizer, prompt, n_gen, max_seq, prepare_state, request_state)
+    end
+  ensure
+    request_state_pool.try(&.release(request_state.not_nil!)) if request_state
+  end
   timings << timing
   unless quiet
     puts "  request #{i + 1}: ids=#{output_ids.inspect}"
@@ -947,3 +965,4 @@ timings.each { |timing| route_counts[timing.route] += 1 }
 route_summary = route_counts.keys.sort.map { |route| "#{route}=#{route_counts[route]}" }.join(",")
 
 puts "  aggregate: avg_total_ms=#{avg_total.round(3)} p50_total_ms=#{totals[mid].round(3)} avg_ms_per_tok=#{avg_ms_per_tok.round(4)} p50_restore_ms=#{restores[mid].round(3)} p50_prefill_ms=#{prefills[mid].round(3)} p50_decode_ms=#{decode_totals[mid].round(3)} routes=#{route_summary}"
+request_state_pool.try(&.release(active_cursor_state.not_nil!)) if active_cursor_state

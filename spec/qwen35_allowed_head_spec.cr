@@ -18,6 +18,28 @@ private def spec_restricted_top1(logits : Array(Float32), allowed : Array(Int32)
   {best_id, best}
 end
 
+private def spec_restricted_top2(logits : Array(Float32), allowed : Array(Int32)) : {Int32, Float32, Int32, Float32}
+  best_id = -1
+  second_id = -1
+  best = -Float32::INFINITY
+  second = -Float32::INFINITY
+  allowed.each do |id|
+    value = logits[id]
+    if best_id < 0 || value > best || (value == best && id < best_id)
+      if best_id >= 0 && id != best_id
+        second_id = best_id
+        second = best
+      end
+      best_id = id
+      best = value
+    elsif id != best_id && (second_id < 0 || value > second || (value == second && id < second_id))
+      second_id = id
+      second = value
+    end
+  end
+  {best_id, best, second_id, second}
+end
+
 private def spec_restore_env(name : String, old : String?)
   if old
     ENV[name] = old
@@ -69,6 +91,45 @@ describe ML::GGUF::Qwen35CPU, "allowed lm-head route" do
     ensure
       spec_restore_env("QWEN35_DECODE_WAVE_OFF", old_wave)
       spec_restore_env("QWEN35_HEAD_TOP1_FUSED", old_head)
+      spec_restore_env("QWEN35_ALLOWED_HEAD_CAPTURE_PATH", old_capture)
+      File.delete(capture_path) if File.exists?(capture_path)
+    end
+  end
+
+  it "returns constrained top2 labels from one hidden decode and preserves state" do
+    pending!("0.8B model not present") unless File.exists?(QWEN_08B_ALLOWED)
+
+    weights = ML::GGUF::Qwen35Weights.from_gguf(QWEN_08B_ALLOWED)
+    hp = weights.hparams
+    old_capture = ENV["QWEN35_ALLOWED_HEAD_CAPTURE_PATH"]?
+    capture_path = "/tmp/qwen35_allowed_top2_capture_spec_#{Process.pid}.jsonl"
+    File.delete(capture_path) if File.exists?(capture_path)
+    ENV["QWEN35_ALLOWED_HEAD_CAPTURE_PATH"] = capture_path
+
+    begin
+      full_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      full_logits = ML::GGUF::Qwen35CPU.forward(weights, 0, 0, full_state)
+      allowed = [0_i32, 1_i32, 2_i32, 198_i32, 606_i32]
+      expected = spec_restricted_top2(full_logits, allowed)
+
+      allowed_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      actual = ML::GGUF::Qwen35CPU.forward_top2_allowed(weights, 0, 0, allowed_state, allowed)
+      actual[0].should eq(expected[0])
+      actual[1].should be_close(expected[1], 1.0e-3_f32)
+      actual[2].should eq(expected[2])
+      actual[3].should be_close(expected[3], 1.0e-3_f32)
+
+      capture = File.read(capture_path)
+      expected_source = ML::GGUF::Qwen35Metal.available? ? "metal_hidden" : "cpu_hidden"
+      capture.should contain("\"kind\":\"qwen35_allowed_head_hidden\"")
+      capture.should contain("\"source\":\"#{expected_source}\"")
+      capture.should contain("\"allowed_ids\":[#{allowed.join(",")}]")
+
+      full_next = ML::GGUF::Qwen35CPU.forward_top1(weights, 100, 1, full_state)
+      allowed_next = ML::GGUF::Qwen35CPU.forward_top1(weights, 100, 1, allowed_state)
+      allowed_next[0].should eq(full_next[0])
+      allowed_next[1].should be_close(full_next[1], 1.0e-3_f32)
+    ensure
       spec_restore_env("QWEN35_ALLOWED_HEAD_CAPTURE_PATH", old_capture)
       File.delete(capture_path) if File.exists?(capture_path)
     end

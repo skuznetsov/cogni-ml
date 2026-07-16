@@ -1,4 +1,5 @@
 require "./spec_helper"
+require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_weights"
 require "../src/ml/gguf/qwen35_metal"
 require "../src/ml/gguf/quant_matmul"
@@ -19,6 +20,37 @@ def quant_tensor_bytes(model_path : String, name : String,
   in_dim = info.dims[0].to_i32
   out_dim = info.dims[1].to_i32
   {raw, in_dim, out_dim}
+end
+
+describe ML::GGUF::Qwen35Metal, "Q8_0 token embedding" do
+  pending!("0.8B Q8_0 model not present") unless File.exists?(QWEN_08B_METAL)
+  pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+  it "dequantizes Q8_0 token embedding rows like the CPU reference" do
+    raw, in_dim, out_dim = quant_tensor_bytes(
+      QWEN_08B_METAL, "token_embd.weight", ML::GGUF::TensorType::Q8_0)
+    token_embd = ML::GGUF::QuantWeight.new(raw, ML::GGUF::TensorType::Q8_0, out_dim, in_dim)
+
+    [0, 42, 271, out_dim - 1].each do |token_id|
+      cpu = ML::GGUF::Qwen35CPU.embedding_lookup(token_embd, token_id)
+      gpu = ML::GGUF::Qwen35Metal.embedding_q8_0_from_token_id(token_embd, token_id).not_nil!
+
+      gpu.size.should eq(in_dim)
+      diff = max_abs_diff(cpu, gpu)
+      puts "  [qwen35_q8_embed] token=#{token_id}, max|Δ|=#{diff}"
+      diff.should be < 1.0e-6_f32
+    end
+  end
+
+  it "zeros an out-of-range Q8_0 token embedding request" do
+    raw, in_dim, out_dim = quant_tensor_bytes(
+      QWEN_08B_METAL, "token_embd.weight", ML::GGUF::TensorType::Q8_0)
+    token_embd = ML::GGUF::QuantWeight.new(raw, ML::GGUF::TensorType::Q8_0, out_dim, in_dim)
+
+    gpu = ML::GGUF::Qwen35Metal.embedding_q8_0_from_token_id(token_embd, out_dim).not_nil!
+    gpu.size.should eq(in_dim)
+    gpu.all? { |v| v == 0.0_f32 }.should be_true
+  end
 end
 
 def q4k_tensor_bytes(model_path : String, name : String) : {Bytes, Int32, Int32}

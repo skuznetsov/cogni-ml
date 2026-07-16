@@ -429,6 +429,71 @@ describe ML::GGUF::Qwen35PromptCache do
     end
   end
 
+  it "finds the exact known-span artifact behind an output fast-forward certificate" do
+    root = File.tempname("qwen35-output-fast-forward-exact-entry")
+    Dir.mkdir_p(root)
+    begin
+      store = ML::GGUF::Qwen35PromptCache::Store.new(root)
+      prompt_ids = [10_i32, 20_i32]
+      output_ids = [30_i32, 40_i32]
+      full_history = prompt_ids + output_ids
+      snapshot = ML::GGUF::Qwen35StateSnapshot::Snapshot.new(
+        max_seq: 16,
+        layer_count: 1,
+        positions: [0_i32],
+        records: [] of ML::GGUF::Qwen35StateSnapshot::Record,
+      )
+      artifact = ML::GGUF::Qwen35StateSnapshot.write_artifact(snapshot, File.join(root, "exact.qkv"))
+      exact_entry = ML::GGUF::Qwen35PromptCache::Entry.new(
+        runtime_id: ML::GGUF::Qwen35PromptCache::RUNTIME_ID,
+        session_id: "s1",
+        turn_id: "t1",
+        model_id: "model-a",
+        tokenizer_id: "tok-a",
+        prompt_hash: "unused",
+        prefix_len: full_history.size - 1,
+        max_seq: snapshot.max_seq,
+        layer_count: snapshot.layer_count,
+        artifact_path: artifact.path,
+        artifact_sha256: artifact.sha256,
+        artifact_byte_size: artifact.byte_size,
+        state_byte_size: snapshot.byte_size,
+        created_at_unix: Time.utc.to_unix,
+        prompt_preview: nil,
+        token_hash: ML::GGUF::Qwen35PromptCache.token_hash(full_history, full_history.size - 1),
+        artifact_validation_kind: ML::GGUF::Qwen35PromptCache::EXACT_KNOWN_SPAN_VALIDATION_KIND,
+        artifact_validation_steps: output_ids.size,
+        artifact_validation_hash: ML::GGUF::Qwen35PromptCache.token_hash(full_history),
+        next_token_id: output_ids[-1],
+      )
+      File.open(store.manifest_path, "a") do |file|
+        exact_entry.to_json(file)
+        file << '\n'
+      end
+
+      fast = store.save_output_fast_forward(
+        session_id: "s1",
+        turn_id: "t1",
+        model_id: "model-a",
+        tokenizer_id: "tok-a",
+        prompt_text: "prompt text",
+        prompt_token_ids: prompt_ids,
+        output_token_ids: output_ids,
+        generated_text: " generated text",
+        exact_entry: exact_entry,
+      )
+
+      hit = store.lookup_exact_known_span_for_output_fast_forward(fast)
+      hit.should_not be_nil
+      hit.not_nil!.artifact_path.should eq(artifact.path)
+
+      fast.artifact_next_token_id = 999_i32
+      store.lookup_exact_known_span_for_output_fast_forward(fast).should be_nil
+    ensure
+      FileUtils.rm_rf(root) if Dir.exists?(root)
+    end
+  end
+
   it "finds shorter terminal direct output certificates with an EOS guard" do
     root = File.tempname("qwen35-output-fast-forward-at-most")
     Dir.mkdir_p(root)

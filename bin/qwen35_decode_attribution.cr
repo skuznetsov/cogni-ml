@@ -23,9 +23,10 @@ greedy_chain = false
 gpu_token_chain = false
 decode_mode = "top1"
 profile_enabled = true
+verify_gpu_token_chain = false
 
 OptionParser.parse do |p|
-  p.banner = "Usage: qwen35_decode_attribution [--model PATH] [--prompt N] [--gen N] [--warmup N] [--reps N] [--compare-env NAME] [--body-only] [--gpu-token-chain] [--no-profile]"
+  p.banner = "Usage: qwen35_decode_attribution [--model PATH] [--prompt N] [--gen N] [--warmup N] [--reps N] [--compare-env NAME] [--body-only] [--gpu-token-chain] [--verify-gpu-token-chain] [--no-profile]"
   p.on("--model=PATH", "GGUF model path") { |v| model = v }
   p.on("--prompt=N", "Prompt tokens to prefill before timed decode; 0 matches benchmark synthetic decode state (default: 0)") { |v| prompt_len = v.to_i }
   p.on("--gen=N", "Decode tokens for attribution (default: 64)") { |v| gen_len = v.to_i }
@@ -37,6 +38,7 @@ OptionParser.parse do |p|
   p.on("--top1", "Measure product-shaped greedy top1 decode (default)") { decode_mode = "top1" }
   p.on("--greedy-chain", "Feed each generated top1 token into the next step instead of benchmark synthetic input tokens") { greedy_chain = true }
   p.on("--gpu-token-chain", "Use GPU-resident exact greedy token handoff for the timed decode suffix") { gpu_token_chain = true }
+  p.on("--verify-gpu-token-chain", "Compare GPU-resident exact greedy token handoff against CPU-readback greedy tokens before measuring") { verify_gpu_token_chain = true }
   p.on("--no-profile", "Skip the profiled attribution pass and measure wall timing only") { profile_enabled = false }
   p.on("--load-warning-threshold=PCT", "Warn if another process uses at least PCT CPU before benchmarking (default: 50, 0 disables)") { |v| load_warning_threshold = v.to_f }
   p.on("--load-total-warning-threshold=PCT", "Warn if total observed process CPU exceeds PCT before benchmarking (default: 100, 0 disables)") { |v| load_total_warning_threshold = v.to_f }
@@ -54,6 +56,7 @@ raise "--reps must be positive" unless reps > 0
 raise "--wait-quiet-ms must be non-negative" unless wait_quiet_ms >= 0
 raise "--quiet-poll-ms must be positive" unless quiet_poll_ms > 0
 raise "--gpu-token-chain requires top1 mode" if gpu_token_chain && decode_mode != "top1"
+raise "--verify-gpu-token-chain requires top1 mode" if verify_gpu_token_chain && decode_mode != "top1"
 if env = compare_env
   if env.includes?("=")
     name, value = env.split("=", 2)
@@ -121,6 +124,29 @@ def run_decode_once(w : ML::GGUF::Qwen35Weights,
   wall_ms = (Time.instant - t0).total_milliseconds
   ML::GGUF::Qwen35Metal::Profile.disable! if profile
   wall_ms
+end
+
+def greedy_top1_tokens(w : ML::GGUF::Qwen35Weights,
+                       prompt : Array(Int32),
+                       gen_len : Int32,
+                       gpu_token_chain : Bool) : Array(Int32)
+  state = prepare_state(w, prompt, gen_len)
+  token = prompt.empty? ? 11751_i32 : prompt[-1]
+  start_pos = prompt.size
+
+  if gpu_token_chain
+    tokens = ML::GGUF::Qwen35CPU.forward_top1_chain_gpu(w, token, start_pos.to_i32, state, gen_len)
+    raise "GPU token chain route unavailable" if tokens.nil?
+    return tokens.not_nil!
+  end
+
+  out = [] of Int32
+  gen_len.times do |i|
+    top1, _logit = ML::GGUF::Qwen35CPU.forward_top1(w, token, (start_pos + i).to_i32, state)
+    out << top1
+    token = top1
+  end
+  out
 end
 
 def percentile(xs : Array(Float64), pct : Int32) : Float64
@@ -196,6 +222,15 @@ mode = if gpu_token_chain
          "top1_synthetic_inputs"
        end
 puts "prompt=#{prompt_len} gen=#{gen_len} warmup=#{warmup} reps=#{reps} mode=#{mode}"
+
+if verify_gpu_token_chain
+  cpu_tokens = greedy_top1_tokens(w, prompt, gen_len, gpu_token_chain: false)
+  gpu_tokens = greedy_top1_tokens(w, prompt, gen_len, gpu_token_chain: true)
+  puts "gpu_token_chain_verify=#{cpu_tokens == gpu_tokens}"
+  puts "cpu_tokens=#{cpu_tokens.join(",")}"
+  puts "gpu_tokens=#{gpu_tokens.join(",")}"
+  raise "GPU token chain token mismatch" unless cpu_tokens == gpu_tokens
+end
 
 warmup.times { run_decode_once(w, prompt, gen_len, profile: false, greedy_chain: greedy_chain, gpu_token_chain: gpu_token_chain, decode_mode: decode_mode) }
 if profile_enabled

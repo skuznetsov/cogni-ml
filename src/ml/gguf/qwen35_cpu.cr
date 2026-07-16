@@ -247,6 +247,20 @@ module ML::GGUF
       {% end %}
     end
 
+    # Reset a prepared state for a fresh request starting at position 0 without
+    # releasing its reusable backing buffers. Full-attention K/V capacity is not
+    # cleared because prompt prefill overwrites rows before attention reads
+    # them; recurrent conv/SSM state is true request state and must be zeroed.
+    def reset_prepared_request_state!(state : State) : Nil
+      state.layers.each do |layer|
+        layer.position = 0
+        layer.conv_state.try(&.fill(0.0_f32))
+        layer.ssm_state.try(&.fill(0.0_f32))
+        clear_metal_buffer(layer.conv_state_buf)
+        clear_metal_buffer(layer.ssm_state_buf)
+      end
+    end
+
     # Copy only the live GPU-resident decode state into an already prepared
     # destination state. This is the branch-state primitive needed by exact
     # tree/speculative verification: recurrent state is copied in full, while
@@ -2054,6 +2068,19 @@ module ML::GGUF
       )
     end
 
+    def hidden_top2_allowed(weights : Qwen35Weights,
+                            hidden : Array(Float32),
+                            allowed_ids : Array(Int32)) : {Int32, Float32, Int32, Float32}
+      raise ArgumentError.new("hidden_top2_allowed requires at least two allowed ids") if allowed_ids.size < 2
+
+      hp = weights.hparams
+      x = hidden.dup
+      rms_norm!(x, weights.output_norm, hp.rms_eps)
+      QuantMatmul.top2_allowed(
+        x, weights.output.in_dim, weights.output.raw, weights.output.type, weights.output.out_dim, allowed_ids
+      )
+    end
+
     # Probe helper: run one token through the decoder and project the hidden
     # after each layer. This mutates `state` exactly like normal decode for the
     # consumed token, but it is intentionally diagnostic rather than hot-path.
@@ -2210,7 +2237,7 @@ module ML::GGUF
                    Qwen35Metal::Profile.bump_route_marker("allowed_head.cpu_selected_cpu_hidden")
                  {% end %}
                  forward_hidden(weights, token_id, pos, state)
-      end
+               end
       capture_allowed_head_hidden(capture_path, token_id, pos, allowed_ids, hidden, hidden_source) if capture_path
       if !capture_path && q6_enabled && weights.output.type.q6_k? && allowed_ids.size > allowed_head_cpu_max
         if top1 = Qwen35Rpi5AllowedHeadClient.top1_allowed?(
@@ -2226,6 +2253,34 @@ module ML::GGUF
         end
       end
       hidden_top1_allowed(weights, hidden, allowed_ids)
+    end
+
+    def forward_top2_allowed(weights : Qwen35Weights,
+                             token_id : Int32,
+                             pos : Int32,
+                             state : State,
+                             allowed_ids : Array(Int32)) : {Int32, Float32, Int32, Float32}
+      raise ArgumentError.new("forward_top2_allowed requires at least two allowed ids") if allowed_ids.size < 2
+      allowed_ids.each do |id|
+        raise ArgumentError.new("allowed token id #{id} out of range 0...#{weights.output.out_dim}") if id < 0 || id >= weights.output.out_dim
+      end
+
+      capture_path = allowed_head_capture_path
+      hidden_source = "cpu_hidden"
+      hidden = if routed = forward_decode_wave_routed(weights, token_id, pos, state, emit_head: false, emit_hidden: true)
+                 {% unless flag?(:cpu_only) %}
+                   Qwen35Metal::Profile.bump_route_marker("allowed_head.top2_metal_hidden")
+                 {% end %}
+                 hidden_source = "metal_hidden"
+                 routed
+               else
+                 {% unless flag?(:cpu_only) %}
+                   Qwen35Metal::Profile.bump_route_marker("allowed_head.top2_cpu_hidden")
+                 {% end %}
+                 forward_hidden(weights, token_id, pos, state)
+               end
+      capture_allowed_head_hidden(capture_path, token_id, pos, allowed_ids, hidden, hidden_source) if capture_path
+      hidden_top2_allowed(weights, hidden, allowed_ids)
     end
 
     # Greedy exact decode suffix with token handoff kept on the GPU.
@@ -3011,7 +3066,18 @@ module ML::GGUF
       flush_prefill_cmd = -> {
         if cmd = append_prefill_cmd
           cmd.commit
-          cmd.wait
+          if Qwen35Metal::Profile.enabled?
+            t_wait0 = Time.instant
+            gpu_ms = cmd.wait_gpu_elapsed_ms
+            t_wait1 = Time.instant
+            Qwen35Metal::Profile.bump_group("prefill.append_cmd",
+              0_i64,
+              (t_wait1 - t_wait0).total_nanoseconds.to_i64,
+              0_i64)
+            Qwen35Metal::Profile.bump_group_gpu("prefill.append_cmd", (gpu_ms * 1_000_000.0).to_i64)
+          else
+            cmd.wait
+          end
           append_prefill_cmd = nil
         end
       }

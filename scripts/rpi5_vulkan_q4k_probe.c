@@ -4,6 +4,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
+#include <signal.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/socket.h>
 #include <pthread.h>
 #include <vulkan/vulkan.h>
 #if defined(__aarch64__)
@@ -718,9 +725,106 @@ static void chomp(char *s) {
   while (n > 0 && (s[n - 1] == '\n' || s[n - 1] == '\r')) s[--n] = '\0';
 }
 
+typedef struct {
+  VkQueue queue;
+  const VkSubmitInfo *si;
+  void *x_mapped;
+  size_t x_bytes;
+  uint32_t *rowid_mapped;
+  uint32_t *rowmeta_mapped;
+  float *y_mapped;
+  size_t y_bytes;
+  const uint8_t *w_mapped;
+  float *cpu;
+  uint32_t out_dim;
+  uint32_t in_dim;
+  uint32_t src_out_dim;
+} ResidentServeCtx;
+
+/* Serve binary `bin<TAB>ids_csv` + raw Float32 hidden frames from `req_in`,
+ * writing one `resident_stdin_result` row per request to `resp_out`.
+ * Returns 1 on an explicit `quit` frame, 0 on clean EOF, -1 on a protocol
+ * error when `stdin_compat` is 0 (stdin mode keeps the historical fail-fast
+ * die() behavior, and additionally accepts `hidden_f32_path<TAB>ids_csv`). */
+static int serve_resident_requests(ResidentServeCtx *c, FILE *req_in, FILE *resp_out,
+                                   uint32_t *request_index, int stdin_compat) {
+  char line[65536];
+  while (fgets(line, sizeof(line), req_in)) {
+    chomp(line);
+    if (line[0] == '\0') continue;
+    if (strcmp(line, "quit") == 0) return 1;
+    char *ids_csv = strchr(line, '\t');
+    if (!ids_csv) {
+      if (stdin_compat) die("resident stdin expects hidden_f32_path<TAB>ids_csv or bin<TAB>ids_csv");
+      fprintf(stderr, "resident serve: malformed frame header, closing connection\n");
+      return -1;
+    }
+    *ids_csv++ = '\0';
+    if (line[0] == '\0' || ids_csv[0] == '\0') {
+      if (stdin_compat) die("resident stdin empty path or ids");
+      fprintf(stderr, "resident serve: empty path or ids, closing connection\n");
+      return -1;
+    }
+
+    if (strcmp(line, "bin") == 0) {
+      if (fread(c->x_mapped, 1, c->x_bytes, req_in) != c->x_bytes) {
+        if (stdin_compat) die("resident stdin binary hidden fread failed");
+        fprintf(stderr, "resident serve: short binary hidden read, closing connection\n");
+        return -1;
+      }
+      int sep = fgetc(req_in);
+      if (sep != '\n' && sep != EOF) {
+        if (stdin_compat) die("resident stdin binary hidden separator must be newline");
+        fprintf(stderr, "resident serve: bad binary hidden separator, closing connection\n");
+        return -1;
+      }
+    } else if (stdin_compat) {
+      read_file_exact(line, c->x_mapped, c->x_bytes);
+    } else {
+      fprintf(stderr, "resident serve: tcp requests must use bin frames, closing connection\n");
+      return -1;
+    }
+    uint32_t count = 0u;
+    parse_row_ids_group(ids_csv, c->rowid_mapped, &count, c->out_dim, c->src_out_dim);
+    c->rowmeta_mapped[0] = 0u;
+    c->rowmeta_mapped[1] = count;
+    for (uint32_t i = count; i < c->out_dim; i++) c->rowid_mapped[i] = 0u;
+
+    memset(c->y_mapped, 0, c->y_bytes);
+    double rt0 = now_ms();
+    VK_CHECK(vkQueueSubmit(c->queue, 1, c->si, VK_NULL_HANDLE));
+    VK_CHECK(vkQueueWaitIdle(c->queue));
+    double request_ms = now_ms() - rt0;
+
+    double ct0 = now_ms();
+    cpu_q6_prepacked_indexed_meta(c->cpu, c->w_mapped, (const float *)c->x_mapped,
+                                  c->rowid_mapped, c->rowmeta_mapped,
+                                  1u, c->out_dim, c->in_dim);
+    double cpu_req_ms = now_ms() - ct0;
+    float d = max_abs_diff(c->cpu, c->y_mapped, c->out_dim);
+    uint32_t gpu_pos = argmax_f32(c->y_mapped, count);
+    uint32_t cpu_pos = argmax_f32(c->cpu, count);
+    uint32_t gpu_src = c->rowid_mapped[gpu_pos];
+    uint32_t cpu_src = c->rowid_mapped[cpu_pos];
+    float gpu_logit = c->y_mapped[gpu_pos];
+    float cpu_logit = c->cpu[cpu_pos];
+    fprintf(resp_out,
+            "resident_stdin_result\trequest=%u\tallowed=%u\tgpu_ms=%.3f\tcpu_ms=%.3f\tspeedup=%.3fx\tmax_abs_diff=%g\ttop1_match=%s\tgpu_top1_src=%u\tcpu_top1_src=%u\tgpu_top1_logit=%g\tcpu_top1_logit=%g\n",
+            *request_index, count, request_ms, cpu_req_ms, cpu_req_ms / request_ms, d,
+            gpu_src == cpu_src ? "true" : "false", gpu_src, cpu_src, gpu_logit, cpu_logit);
+    fflush(resp_out);
+    (*request_index)++;
+  }
+  return 0;
+}
+
 int main(int argc, char **argv) {
   const char *spv_path = argc > 1 ? argv[1] : "rpi5_q4k_matvec.spv";
   int file_mode = argc > 2 && strcmp(argv[2], "file") == 0;
+  /* Resident serve modes jump to cleanup before the batch-diff check runs;
+   * keep their exit code deterministic (per-request parity is checked in the
+   * emitted result rows instead). */
+  float diff = 0.0f;
   TensorFile tf;
   memset(&tf, 0, sizeof(tf));
   uint32_t out_dim;
@@ -1070,57 +1174,62 @@ int main(int argc, char **argv) {
   }
 
   uint32_t resident_stdin = env_u32("RPI5_RESIDENT_STDIN", 0u);
-  if (resident_stdin) {
-    if (!q6_idx_mode || batch != 1u) die("resident stdin requires q6idx mode with RPI5_BATCH=1");
-    char line[65536];
+  uint32_t resident_tcp_port = env_u32("RPI5_RESIDENT_TCP_PORT", 0u);
+  if (resident_stdin && resident_tcp_port) die("RPI5_RESIDENT_STDIN and RPI5_RESIDENT_TCP_PORT are mutually exclusive");
+  if (resident_stdin || resident_tcp_port) {
+    if (!q6_idx_mode || batch != 1u) die("resident serve requires q6idx mode with RPI5_BATCH=1");
+    ResidentServeCtx ctx = {
+      queue, &si,
+      xb.mapped, x_bytes,
+      (uint32_t *)rowidb.mapped, (uint32_t *)rowmetab.mapped,
+      (float *)yb.mapped, y_bytes,
+      (const uint8_t *)wb.mapped, cpu,
+      out_dim, in_dim, src_out_dim,
+    };
     uint32_t request_index = 0u;
-    while (fgets(line, sizeof(line), stdin)) {
-      chomp(line);
-      if (line[0] == '\0') continue;
-      char *ids_csv = strchr(line, '\t');
-      if (!ids_csv) die("resident stdin expects hidden_f32_path<TAB>ids_csv or bin<TAB>ids_csv");
-      *ids_csv++ = '\0';
-      if (line[0] == '\0' || ids_csv[0] == '\0') die("resident stdin empty path or ids");
-
-      if (strcmp(line, "bin") == 0) {
-        if (fread(xb.mapped, 1, x_bytes, stdin) != x_bytes) die("resident stdin binary hidden fread failed");
-        int sep = fgetc(stdin);
-        if (sep != '\n' && sep != EOF) die("resident stdin binary hidden separator must be newline");
-      } else {
-        read_file_exact(line, xb.mapped, x_bytes);
-      }
-      uint32_t count = 0u;
-      parse_row_ids_group(ids_csv, (uint32_t *)rowidb.mapped, &count, out_dim, src_out_dim);
-      uint32_t *meta = (uint32_t *)rowmetab.mapped;
-      meta[0] = 0u;
-      meta[1] = count;
-      uint32_t *ids = (uint32_t *)rowidb.mapped;
-      for (uint32_t i = count; i < out_dim; i++) ids[i] = 0u;
-
-      memset(yb.mapped, 0, y_bytes);
-      double rt0 = now_ms();
-      VK_CHECK(vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE));
-      VK_CHECK(vkQueueWaitIdle(queue));
-      double request_ms = now_ms() - rt0;
-
-      double ct0 = now_ms();
-      cpu_q6_prepacked_indexed_meta(cpu, (const uint8_t *)wb.mapped, (const float *)xb.mapped,
-                                    (const uint32_t *)rowidb.mapped, (const uint32_t *)rowmetab.mapped,
-                                    1u, out_dim, in_dim);
-      double cpu_req_ms = now_ms() - ct0;
-      float d = max_abs_diff(cpu, (const float *)yb.mapped, out_dim);
-      uint32_t gpu_pos = argmax_f32((const float *)yb.mapped, count);
-      uint32_t cpu_pos = argmax_f32(cpu, count);
-      uint32_t gpu_src = ids[gpu_pos];
-      uint32_t cpu_src = ids[cpu_pos];
-      float gpu_logit = ((const float *)yb.mapped)[gpu_pos];
-      float cpu_logit = cpu[cpu_pos];
-      printf("resident_stdin_result\trequest=%u\tallowed=%u\tgpu_ms=%.3f\tcpu_ms=%.3f\tspeedup=%.3fx\tmax_abs_diff=%g\ttop1_match=%s\tgpu_top1_src=%u\tcpu_top1_src=%u\tgpu_top1_logit=%g\tcpu_top1_logit=%g\n",
-             request_index, count, request_ms, cpu_req_ms, cpu_req_ms / request_ms, d,
-             gpu_src == cpu_src ? "true" : "false", gpu_src, cpu_src, gpu_logit, cpu_logit);
-      fflush(stdout);
-      request_index++;
+    if (resident_stdin) {
+      serve_resident_requests(&ctx, stdin, stdout, &request_index, 1);
+      goto cleanup;
     }
+    if (resident_tcp_port > 65535u) die("RPI5_RESIDENT_TCP_PORT out of range");
+    signal(SIGPIPE, SIG_IGN);
+    int lfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (lfd < 0) die("resident tcp socket failed");
+    int reuse = 1;
+    setsockopt(lfd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)resident_tcp_port);
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind(lfd, (struct sockaddr *)&addr, sizeof(addr)) != 0) die("resident tcp bind failed");
+    if (listen(lfd, 1) != 0) die("resident tcp listen failed");
+    printf("resident_tcp_ready\tport=%u\n", resident_tcp_port);
+    fflush(stdout);
+    for (;;) {
+      int cfd = accept(lfd, NULL, NULL);
+      if (cfd < 0) {
+        if (errno == EINTR) continue;
+        die("resident tcp accept failed");
+      }
+      int nodelay = 1;
+      setsockopt(cfd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
+      FILE *req_in = fdopen(cfd, "r");
+      FILE *resp_out = req_in ? fdopen(dup(cfd), "w") : NULL;
+      int rc = -1;
+      if (req_in && resp_out) {
+        rc = serve_resident_requests(&ctx, req_in, resp_out, &request_index, 0);
+      } else {
+        fprintf(stderr, "resident tcp fdopen failed, dropping connection\n");
+      }
+      if (resp_out) fclose(resp_out);
+      if (req_in) fclose(req_in);
+      else close(cfd);
+      printf("resident_tcp_connection_closed\trc=%d\trequests=%u\n", rc, request_index);
+      fflush(stdout);
+      if (rc == 1) break;
+    }
+    close(lfd);
     goto cleanup;
   }
 
@@ -1250,7 +1359,7 @@ int main(int argc, char **argv) {
     cpu_neon4_ms = now_ms() - mt0;
   }
 #endif
-  float diff = max_abs_diff(cpu, (const float *)yb.mapped, batch * out_dim);
+  diff = max_abs_diff(cpu, (const float *)yb.mapped, batch * out_dim);
   double top1_scan_ms = 0.0;
   uint32_t gpu_top1 = 0, cpu_top1 = 0, gpu_top1_src = 0, cpu_top1_src = 0;
   int top1_match = 1;

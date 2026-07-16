@@ -74,6 +74,45 @@ module ML::GGUF
       {best_id, best_logit}
     end
 
+    def self.top2_allowed(
+      x : Array(Float32), in_dim : Int32,
+      w_raw : Bytes, w_type : TensorType, out_dim : Int32,
+      allowed_ids : Array(Int32),
+    ) : {Int32, Float32, Int32, Float32}
+      raise ArgumentError.new("top2_allowed requires at least two allowed ids") if allowed_ids.size < 2
+      raise ArgumentError.new("x size #{x.size} is smaller than in_dim #{in_dim}") if x.size < in_dim
+
+      rb = row_bytes(w_type, in_dim)
+      best_id = -1
+      second_id = -1
+      best_logit = -Float32::INFINITY
+      second_logit = -Float32::INFINITY
+      allowed_ids.each do |id|
+        raise ArgumentError.new("allowed token id #{id} out of range 0...#{out_dim}") if id < 0 || id >= out_dim
+
+        offset = id * rb
+        raise ArgumentError.new("allowed token id #{id} row exceeds raw tensor bytes") if offset + rb > w_raw.size
+
+        row_raw = Bytes.new(w_raw.to_unsafe + offset, rb, read_only: true)
+        logit = matmul_add(x, 1, in_dim, row_raw, w_type, 1, [0.0_f32])[0]
+        if best_id < 0 || logit > best_logit || (logit == best_logit && id < best_id)
+          if best_id >= 0 && id != best_id
+            second_id = best_id
+            second_logit = best_logit
+          end
+          best_id = id
+          best_logit = logit
+        elsif id != best_id && (second_id < 0 || logit > second_logit || (logit == second_logit && id < second_id))
+          second_id = id
+          second_logit = logit
+        end
+      end
+
+      raise ArgumentError.new("top2_allowed requires at least two distinct allowed ids") if second_id < 0
+
+      {best_id, best_logit, second_id, second_logit}
+    end
+
     # Q4_K fused matmul: for each output neuron, walk through Q4_K blocks
     # and accumulate dot product with dequantized values.
     # Block layout: [d:f16][dmin:f16][scales:12B][qs:128B] = 144 B

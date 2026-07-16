@@ -51,6 +51,30 @@ private def restricted_top1(logits : Array(Float32), allowed : Array(Int32)) : {
   {best_id, best_logit}
 end
 
+private def restricted_top2(logits : Array(Float32), allowed : Array(Int32)) : {Int32, Float32, Int32, Float32}
+  best_id = -1
+  second_id = -1
+  best_logit = -Float32::INFINITY
+  second_logit = -Float32::INFINITY
+
+  allowed.each do |id|
+    logit = logits[id]
+    if best_id < 0 || logit > best_logit || (logit == best_logit && id < best_id)
+      if best_id >= 0 && id != best_id
+        second_id = best_id
+        second_logit = best_logit
+      end
+      best_id = id
+      best_logit = logit
+    elsif id != best_id && (second_id < 0 || logit > second_logit || (logit == second_logit && id < second_id))
+      second_id = id
+      second_logit = logit
+    end
+  end
+
+  {best_id, best_logit, second_id, second_logit}
+end
+
 describe ML::GGUF::QuantMatmul do
   describe ".row_bytes" do
     it "reports row stride for scalar and block quantized tensor types" do
@@ -147,6 +171,63 @@ describe ML::GGUF::QuantMatmul do
 
       expect_raises(ArgumentError, /x size/) do
         ML::GGUF::QuantMatmul.top1_allowed([1.0_f32], 2, raw, ML::GGUF::TensorType::F32, 2, [0])
+      end
+    end
+  end
+
+  describe ".top2_allowed" do
+    it "matches full F32 matmul restricted to allowed row ids" do
+      x = [1.0_f32, -2.0_f32, 0.5_f32]
+      weights = [
+        0.25_f32, 0.50_f32, -1.0_f32, # row 0 -> -1.25
+        1.50_f32, -0.25_f32, 0.0_f32, # row 1 -> 2.00
+        -1.0_f32, -2.0_f32, 2.0_f32, # row 2 -> 4.00
+        0.0_f32, 0.25_f32, 8.0_f32,  # row 3 -> 3.50
+      ]
+      raw = f32_bytes(weights)
+      out_dim = 4
+      full = ML::GGUF::QuantMatmul.matmul_add(
+        x, 1, 3, raw, ML::GGUF::TensorType::F32, out_dim, Array.new(out_dim, 0.0_f32)
+      )
+
+      allowed = [0, 3, 1]
+      expected = restricted_top2(full, allowed)
+      actual = ML::GGUF::QuantMatmul.top2_allowed(
+        x, 3, raw, ML::GGUF::TensorType::F32, out_dim, allowed
+      )
+
+      actual[0].should eq(expected[0])
+      actual[1].should be_close(expected[1], 1.0e-6_f32)
+      actual[2].should eq(expected[2])
+      actual[3].should be_close(expected[3], 1.0e-6_f32)
+    end
+
+    it "uses lower token ids as deterministic tie breakers for both ranks" do
+      x = [1.0_f32, 1.0_f32]
+      raw = f32_bytes([
+        1.0_f32, 0.0_f32, # row 0 -> 1.0
+        0.0_f32, 1.0_f32, # row 1 -> 1.0
+        0.5_f32, 0.5_f32, # row 2 -> 1.0
+      ])
+
+      best_id, best_logit, second_id, second_logit = ML::GGUF::QuantMatmul.top2_allowed(
+        x, 2, raw, ML::GGUF::TensorType::F32, 3, [2, 1, 0]
+      )
+
+      best_id.should eq(0)
+      best_logit.should be_close(1.0_f32, 1.0e-6_f32)
+      second_id.should eq(1)
+      second_logit.should be_close(1.0_f32, 1.0e-6_f32)
+    end
+
+    it "validates that two distinct allowed row ids exist" do
+      raw = f32_bytes([
+        1.0_f32, 0.0_f32,
+        0.0_f32, 1.0_f32,
+      ])
+
+      expect_raises(ArgumentError, /at least two/) do
+        ML::GGUF::QuantMatmul.top2_allowed([1.0_f32, 2.0_f32], 2, raw, ML::GGUF::TensorType::F32, 2, [1, 1])
       end
     end
   end

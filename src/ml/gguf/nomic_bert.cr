@@ -14,6 +14,7 @@ require "./reader"
 require "./tokenizer"
 require "./compute"
 require "./profile"
+require "./nomic_batch_shape"
 
 module ML::GGUF
   class NomicBertMoE(B)
@@ -509,23 +510,24 @@ module ML::GGUF
 
       indexed.each_slice(max_batch) do |slice|
         batch_size = slice.size.to_i32
-        max_seq_len = slice.max_of(&.[1].size).to_i32
+        logical_max_seq_len = slice.max_of(&.[1].size).to_i32
+        physical_max_seq_len = NomicBatchShape.bucket_seq_len(logical_max_seq_len, @max_seq_len)
         lengths = Array(Int32).new(batch_size, 0)
-        token_ids = Array(Int32).new(batch_size * max_seq_len, pad_id)
+        token_ids = Array(Int32).new(batch_size * physical_max_seq_len, pad_id)
 
         slice.each_with_index do |entry, batch_idx|
           _, tokens = entry
           lengths[batch_idx] = tokens.size.to_i32
-          max_seq_len.times do |pos|
+          physical_max_seq_len.times do |pos|
             tid = pos < tokens.size ? tokens[pos] : pad_id
-            token_ids[batch_idx * max_seq_len + pos] = tid.clamp(0, @vocab_size - 1)
+            token_ids[batch_idx * physical_max_seq_len + pos] = tid.clamp(0, @vocab_size - 1)
           end
         end
 
         batch_results = mb.encode_token_ids_batch(
           token_ids,
           batch_size,
-          max_seq_len,
+          physical_max_seq_len,
           lengths,
           layers,
           @dim,
@@ -564,16 +566,17 @@ module ML::GGUF
       indexed.each_slice(max_batch) do |slice|
         t0 = Time.instant
         batch_size = slice.size.to_i32
-        max_seq_len = slice.max_of(&.[1].size).to_i32
+        logical_max_seq_len = slice.max_of(&.[1].size).to_i32
+        physical_max_seq_len = NomicBatchShape.bucket_seq_len(logical_max_seq_len, @max_seq_len)
         lengths = Array(Int32).new(batch_size, 0)
-        token_ids = Array(Int32).new(batch_size * max_seq_len, pad_id)
+        token_ids = Array(Int32).new(batch_size * physical_max_seq_len, pad_id)
 
         slice.each_with_index do |entry, batch_idx|
           _, tokens = entry
           lengths[batch_idx] = tokens.size.to_i32
-          max_seq_len.times do |pos|
+          physical_max_seq_len.times do |pos|
             tid = pos < tokens.size ? tokens[pos] : pad_id
-            token_ids[batch_idx * max_seq_len + pos] = tid.clamp(0, @vocab_size - 1)
+            token_ids[batch_idx * physical_max_seq_len + pos] = tid.clamp(0, @vocab_size - 1)
           end
         end
         prepare_ms += (Time.instant - t0).total_milliseconds
@@ -581,7 +584,7 @@ module ML::GGUF
         batch_results, backend_profile = mb.profile_encode_token_ids_batch(
           token_ids,
           batch_size,
-          max_seq_len,
+          physical_max_seq_len,
           lengths,
           @layers,
           @dim,

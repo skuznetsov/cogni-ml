@@ -314,6 +314,23 @@ extern "C" void gs_commit_command_buffer(void* cmd_handle) {
     [cmd commit];
 }
 
+static double gs_command_buffer_elapsed_ms(id<MTLCommandBuffer> cmd) {
+    if (cmd == nil) return 0.0;
+    if (@available(macOS 10.15, iOS 10.3, *)) {
+        CFTimeInterval start = cmd.GPUStartTime;
+        CFTimeInterval end = cmd.GPUEndTime;
+        if (start > 0.0 && end > start) {
+            return (end - start) * 1000.0;
+        }
+        start = cmd.kernelStartTime;
+        end = cmd.kernelEndTime;
+        if (start > 0.0 && end > start) {
+            return (end - start) * 1000.0;
+        }
+    }
+    return 0.0;
+}
+
 // Submit two command buffers: commit first immediately, commit second after callback
 // The first buffer starts executing on GPU while second is still being encoded
 extern "C" void gs_submit_pipeline(void* cmd1, void* cmd2) {
@@ -332,6 +349,13 @@ extern "C" void gs_wait_command_buffer(void* cmd_handle) {
     if (cmd_handle == nullptr) return;
     id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)cmd_handle;
     [cmd waitUntilCompleted];
+}
+
+extern "C" double gs_wait_command_buffer_gpu_elapsed_ms(void* cmd_handle) {
+    if (cmd_handle == nullptr) return 0.0;
+    id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)cmd_handle;
+    [cmd waitUntilCompleted];
+    return gs_command_buffer_elapsed_ms(cmd);
 }
 
 extern "C" void commit_and_wait_impl(void* cmd_handle) {

@@ -168,6 +168,8 @@ module ML::GGUF
     @norm_bufs_cache_key : UInt64?
     @compiled_graphs : Hash(GraphCacheKey, ML::Metal::ComputeGraph)
     @compiled_batch_graphs : Hash(BatchGraphCacheKey, ML::Metal::ComputeGraph)
+    getter compiled_batch_graph_cache_hits : UInt64 = 0_u64
+    getter compiled_batch_graph_cache_misses : UInt64 = 0_u64
     @workspace_token_capacity : Int32 = 0
     @workspace_dim : Int32 = 0
     @workspace_ffn_dim : Int32 = 0
@@ -303,6 +305,10 @@ module ML::GGUF
       @compiled_batch_graphs.clear
       @norm_bufs_cache = nil
       @norm_bufs_cache_key = nil
+    end
+
+    def compiled_batch_graph_cache_size : Int32
+      @compiled_batch_graphs.size
     end
 
     private def norm_bufs_for(layers : Array(NomicBertMoE::LayerWeights), dim : Int32)
@@ -516,7 +522,11 @@ module ML::GGUF
       moe_every_n : Int32,
     ) : ML::Metal::ComputeGraph
       key = batch_graph_cache_key(layers, batch_size, max_seq_len, dim, n_heads, head_dim, ffn_dim, n_experts, n_experts_used, moe_every_n)
-      @compiled_batch_graphs[key]? || begin
+      if graph = @compiled_batch_graphs[key]?
+        @compiled_batch_graph_cache_hits += 1
+        graph
+      else
+        @compiled_batch_graph_cache_misses += 1
         graph = build_compiled_batch_graph(batch_size, max_seq_len, layers, dim, n_heads, head_dim, ffn_dim, n_experts, n_experts_used, moe_every_n)
         graph.compile!
         @compiled_batch_graphs[key] = graph

@@ -31,6 +31,9 @@ test_*
 !test_*.cr
 *.dwarf
 bin/
+!/bin/
+/bin/*
+!/bin/qwen35_resident_jsonl.cr
 
 # Test helper binaries (rebuildable via `make q4k_ref`)
 spec/support/q4k_ref

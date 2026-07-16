@@ -19,7 +19,7 @@ end
 abort "--log is required" if log_path.empty?
 abort "log not found: #{log_path}" unless File.exists?(log_path)
 
-record GroupRow, name : String, calls : Int32, encode_ms : Float64, wait_ms : Float64, read_ms : Float64, upload_mib : Float64, readback_mib : Float64
+record GroupRow, name : String, calls : Int32, encode_ms : Float64, wait_ms : Float64, read_ms : Float64, upload_mib : Float64, readback_mib : Float64, gpu_ms : Float64
 record MatmulRow, name : String, calls : Int32, weight_mib : Float64, pct : Float64
 record ConversionRow, name : String, calls : Int32, traffic_mib : Float64, pct : Float64
 record PhaseFamilyRow, name : String, calls : Int32, encode_ms : Float64, wait_ms : Float64, read_ms : Float64, upload_mib : Float64, readback_mib : Float64
@@ -30,6 +30,10 @@ matmuls = [] of MatmulRow
 conversions = [] of ConversionRow
 syncs = nil.as(Int32?)
 mode = ""
+
+def group_signal_ms(g : GroupRow) : Float64
+  g.gpu_ms > 0 ? g.gpu_ms : g.wait_ms
+end
 
 text.each_line do |line|
   stripped = line.strip
@@ -52,8 +56,10 @@ text.each_line do |line|
 
   case mode
   when "groups"
-    if m = stripped.match(/^(.+?)\s+(\d+) calls\s+encode\s+([0-9.]+) ms\s+wait\s+([0-9.]+) ms\s+read\s+([0-9.]+) ms\s+upload\s+([0-9.]+) MiB\s+readback\s+([0-9.]+) MiB/)
-      groups << GroupRow.new(m[1].strip, m[2].to_i, m[3].to_f, m[4].to_f, m[5].to_f, m[6].to_f, m[7].to_f)
+    if m = stripped.match(/^(.+?)\s+(\d+) calls\s+encode\s+([0-9.]+) ms\s+wait\s+([0-9.]+) ms\s+read\s+([0-9.]+) ms\s+upload\s+([0-9.]+) MiB\s+readback\s+([0-9.]+) MiB\s+gpu\s+([0-9.]+) ms/)
+      groups << GroupRow.new(m[1].strip, m[2].to_i, m[3].to_f, m[4].to_f, m[5].to_f, m[6].to_f, m[7].to_f, m[8].to_f)
+    elsif m = stripped.match(/^(.+?)\s+(\d+) calls\s+encode\s+([0-9.]+) ms\s+wait\s+([0-9.]+) ms\s+read\s+([0-9.]+) ms\s+upload\s+([0-9.]+) MiB\s+readback\s+([0-9.]+) MiB/)
+      groups << GroupRow.new(m[1].strip, m[2].to_i, m[3].to_f, m[4].to_f, m[5].to_f, m[6].to_f, m[7].to_f, 0.0)
     elsif !stripped.starts_with?("grouped") && !stripped.empty? && !stripped.includes?("calls")
       mode = ""
     end
@@ -72,15 +78,15 @@ text.each_line do |line|
   end
 end
 
-total_wait = groups.sum(&.wait_ms)
+total_wait = groups.sum { |g| group_signal_ms(g) }
 total_encode = groups.sum(&.encode_ms)
 total_read = groups.sum(&.read_ms)
 total_weight = matmuls.sum(&.weight_mib)
 total_conversion = conversions.sum(&.traffic_mib)
-dominant_group = groups.max_by?(&.wait_ms)
+dominant_group = groups.max_by? { |g| group_signal_ms(g) }
 dominant_matmul = matmuls.max_by?(&.weight_mib)
 dominant_conversion = conversions.max_by?(&.traffic_mib)
-tied_groups = dominant_group ? groups.count { |g| dominant_group.not_nil!.wait_ms > 0 && g.wait_ms >= dominant_group.not_nil!.wait_ms * 0.80 } : 0
+tied_groups = dominant_group ? groups.count { |g| group_signal_ms(dominant_group.not_nil!) > 0 && group_signal_ms(g) >= group_signal_ms(dominant_group.not_nil!) * 0.80 } : 0
 tied_matmuls = dominant_matmul ? matmuls.count { |m| dominant_matmul.not_nil!.weight_mib > 0 && m.weight_mib >= dominant_matmul.not_nil!.weight_mib * 0.80 } : 0
 conflict_count = (syncs || groups.size) + groups.count { |g| g.readback_mib > 0 || g.upload_mib > 0 }
 phase_family = {} of String => {Int32, Float64, Float64, Float64, Float64, Float64}
@@ -128,8 +134,8 @@ puts "  dominant_matmul=#{dominant_matmul.try(&.name) || "none"} tied_matmuls=#{
 puts "  dominant_conversion=#{dominant_conversion.try(&.name) || "none"}"
 puts
 puts "Top command-buffer groups by wait:"
-groups.sort_by { |g| {-g.wait_ms, g.name} }.first(limit).each do |g|
-  puts "  #{g.name}: calls=#{g.calls} encode=#{g.encode_ms.round(3)}ms wait=#{g.wait_ms.round(3)}ms read=#{g.read_ms.round(3)}ms upload=#{g.upload_mib.round(3)}MiB readback=#{g.readback_mib.round(3)}MiB"
+groups.sort_by { |g| {-group_signal_ms(g), g.name} }.first(limit).each do |g|
+  puts "  #{g.name}: calls=#{g.calls} encode=#{g.encode_ms.round(3)}ms wait=#{g.wait_ms.round(3)}ms gpu=#{g.gpu_ms.round(3)}ms read=#{g.read_ms.round(3)}ms upload=#{g.upload_mib.round(3)}MiB readback=#{g.readback_mib.round(3)}MiB"
 end
 unless phase_rows.empty?
   puts

@@ -40,6 +40,32 @@ struct block_iq4_nl_56 {
     uint8_t qs[16];
 };
 
+kernel void embed_q8_0_f32_from_token_id(
+    device const uint8_t* w_raw       [[buffer(0)]],
+    device const uint*    token_ids   [[buffer(1)]],
+    device       float*   output      [[buffer(2)]],
+    constant     uint&    hidden_dim  [[buffer(3)]],
+    constant     uint&    vocab_size  [[buffer(4)]],
+    constant     uint&    token_index [[buffer(5)]],
+    uint tid [[thread_position_in_grid]])
+{
+    if (tid >= hidden_dim) return;
+
+    const uint token_id = token_ids[token_index];
+    if (token_id >= vocab_size) {
+        output[tid] = 0.0f;
+        return;
+    }
+
+    const uint nb = hidden_dim / Q8_0_QK;
+    const uint row_bytes = nb * 34;
+    const uint block_id = tid / Q8_0_QK;
+    const uint lane = tid - block_id * Q8_0_QK;
+    device const block_q8_0_56 * row = (device const block_q8_0_56 *)(w_raw + token_id * row_bytes);
+    device const block_q8_0_56 * blk = row + block_id;
+    output[tid] = float(blk->d) * float(blk->qs[lane]);
+}
+
 constant short MV8_NSG = 4;
 constant short MV8_NR0 = 1;
 constant short MVF32_NSG = 4;

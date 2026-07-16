@@ -5,8 +5,8 @@ require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_prompt_cache"
 require "../src/ml/gguf/qwen35_weights"
 
-MODEL_PATH  = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
-LLAMA_BENCH = "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp/build/bin/llama-bench"
+MODEL_PATH      = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
+LLAMA_BENCH     = "#{ENV["HOME"]}/SrcArchives/AI/llama.cpp/build/bin/llama-bench"
 BENCHMARK_MODES = {"both", "native", "llama"}
 
 record NativeStats,
@@ -90,29 +90,8 @@ def measure_native_prefill_prepared_state(w : ML::GGUF::Qwen35Weights, n_prompt 
   )
 end
 
-def clear_float_buffer(buf : ML::MetalBuffer?) : Nil
-  return unless b = buf
-
-  b.contents.as(Pointer(UInt8)).clear(b.size)
-end
-
-def clear_float_array(values : Array(Float32)?) : Nil
-  return unless xs = values
-
-  xs.fill(0.0_f32)
-end
-
 def reset_prefill_state!(state : ML::GGUF::Qwen35CPU::State) : Nil
-  state.layers.each do |layer|
-    layer.position = 0
-    # At start_pos=0 full-attention K/V rows used by the prompt are overwritten
-    # before attention reads them. DeltaNet conv/SSM state is true recurrence
-    # state and must be reset for exact repeated timing.
-    clear_float_array(layer.conv_state)
-    clear_float_array(layer.ssm_state)
-    clear_float_buffer(layer.conv_state_buf)
-    clear_float_buffer(layer.ssm_state_buf)
-  end
+  ML::GGUF::Qwen35CPU.reset_prepared_request_state!(state)
 end
 
 def measure_native_prefill_preallocated(w : ML::GGUF::Qwen35Weights, n_prompt : Int32, reps : Int32, warmup : Int32,
@@ -492,7 +471,7 @@ native_decode_label = case native_decode_mode
                       when "body" then "body_only"
                       when "top1" then "top1"
                       when "full" then "full_logits"
-                      else native_decode_mode
+                      else             native_decode_mode
                       end
 puts "settings: mode=#{benchmark_mode} prompt=#{n_prompt} gen=#{n_gen} reps=#{reps} warmup=#{warmup} ngl=#{n_gpu_layers} threads=#{threads} flash_attn=#{flash_attn} llama_cache_k=#{llama_cache_type_k || "default"} llama_cache_v=#{llama_cache_type_v || "default"} llama_extra_args=#{llama_extra_args.inspect} native_prefill=#{native_prefill_mode} native_decode=#{native_decode_label}"
 puts

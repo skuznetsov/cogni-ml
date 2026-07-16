@@ -379,8 +379,8 @@ module ML::GGUF
         upper = max_prefix_len < token_ids.size ? max_prefix_len : token_ids.size
         upper.downto(min_prefix_len) do |prefix_len|
           expected = Qwen35PromptCache.token_hash(token_ids, prefix_len)
-        candidates = @entry_prefix_index[{model_id, tokenizer_id, prefix_len, expected}]?
-        next unless candidates
+          candidates = @entry_prefix_index[{model_id, tokenizer_id, prefix_len, expected}]?
+          next unless candidates
 
           valid_candidates = candidates.select { |entry| usable_entry?(entry) }
           if hit = valid_candidates.max_by? { |entry| entry.created_at_unix }
@@ -403,6 +403,27 @@ module ML::GGUF
 
         valid_candidates = candidates.select { |entry| usable_entry?(entry) }
         if hit = valid_candidates.max_by? { |entry| entry.created_at_unix }
+          clone_entry(hit)
+        end
+      end
+
+      def lookup_exact_known_span_for_output_fast_forward(entry : OutputFastForwardEntry) : Entry?
+        full_history = entry.prompt_token_ids + entry.output_token_ids
+        ensure_entry_indices
+        candidates = @entry_prefix_index[{entry.model_id, entry.tokenizer_id, entry.artifact_prefix_len, entry.artifact_token_hash}]?
+        return nil unless candidates
+
+        valid_candidates = candidates.select do |candidate|
+          candidate.session_id == entry.session_id &&
+            candidate.turn_id == entry.turn_id &&
+            candidate.artifact_validation_kind == EXACT_KNOWN_SPAN_VALIDATION_KIND &&
+            candidate.artifact_validation_steps == entry.output_token_count &&
+            candidate.artifact_validation_hash == entry.full_history_hash &&
+            candidate.next_token_id == entry.artifact_next_token_id &&
+            usable_entry?(candidate) &&
+            Qwen35PromptCache.exact_known_span_entry_valid?(candidate, full_history, entry.output_token_count)
+        end
+        if hit = valid_candidates.max_by? { |candidate| candidate.created_at_unix }
           clone_entry(hit)
         end
       end
@@ -584,7 +605,7 @@ module ML::GGUF
                        @source_history_turn_index[{session_id, model_id, tokenizer_id, turn}]?
                      else
                        @source_history_base_index[{session_id, model_id, tokenizer_id}]?
-        end
+                     end
         return nil unless candidates
 
         valid_candidates = candidates.select { |entry| source_history_entry_valid?(entry) }

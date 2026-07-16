@@ -202,6 +202,80 @@ kernel void qwen35_recurrent_conv_shift_chunk(
     }
 }
 
+// Token-parallel exact form of qwen35_recurrent_conv_shift_chunk. It reads the
+// initial conv_state for all tokens, writes token-major Q/K/V in parallel, then
+// a companion kernel commits the final conv_state.
+kernel void qwen35_recurrent_conv_shift_chunk_token_parallel(
+    device const float* conv_state [[buffer(0)]],
+    device const float* qkv_mixed  [[buffer(1)]],
+    device const float* conv1d     [[buffer(2)]],
+    device       float* q_out      [[buffer(3)]],
+    device       float* k_out      [[buffer(4)]],
+    device       float* v_out      [[buffer(5)]],
+    constant     uint&  h_k        [[buffer(6)]],
+    constant     uint&  h_v        [[buffer(7)]],
+    constant     uint&  s          [[buffer(8)]],
+    constant     uint&  conv_k     [[buffer(9)]],
+    constant     uint&  n_tokens   [[buffer(10)]],
+    uint gid [[thread_position_in_grid]])
+{
+    const uint qkv_dim = 2 * h_k * s + h_v * s;
+    const uint total = n_tokens * qkv_dim;
+    if (gid >= total) return;
+
+    const uint tok = gid / qkv_dim;
+    const uint d = gid - tok * qkv_dim;
+    const uint w_base = d * conv_k;
+    const int history = int(conv_k) - 1;
+
+    float acc = 0.0f;
+    for (uint kt = 0; kt < conv_k; ++kt) {
+        const int src_pos = int(tok) + int(kt) - history;
+        float x;
+        if (src_pos < 0) {
+            x = conv_state[(src_pos + history) * int(qkv_dim) + int(d)];
+        } else {
+            x = qkv_mixed[uint(src_pos) * qkv_dim + d];
+        }
+        acc += x * conv1d[w_base + kt];
+    }
+
+    const float sig = 1.0f / (1.0f + exp(-acc));
+    const float val = acc * sig;
+
+    const uint q_dim = h_k * s;
+    const uint k_dim = h_k * s;
+    if (d < q_dim) {
+        q_out[tok * q_dim + d] = val;
+    } else if (d < q_dim + k_dim) {
+        k_out[tok * k_dim + d - q_dim] = val;
+    } else {
+        v_out[tok * h_v * s + d - q_dim - k_dim] = val;
+    }
+}
+
+kernel void qwen35_recurrent_conv_shift_chunk_token_parallel_state(
+    device       float* conv_state [[buffer(0)]],
+    device const float* qkv_mixed  [[buffer(1)]],
+    constant     uint&  qkv_dim    [[buffer(2)]],
+    constant     uint&  conv_k     [[buffer(3)]],
+    constant     uint&  n_tokens   [[buffer(4)]],
+    uint gid [[thread_position_in_grid]])
+{
+    const uint state_rows = conv_k - 1;
+    const uint total = state_rows * qkv_dim;
+    if (gid >= total) return;
+
+    const uint row = gid / qkv_dim;
+    const uint d = gid - row * qkv_dim;
+    const int src_pos = int(n_tokens) + int(row) - int(state_rows);
+    if (src_pos < 0) {
+        conv_state[row * qkv_dim + d] = conv_state[uint(src_pos + int(state_rows)) * qkv_dim + d];
+    } else {
+        conv_state[row * qkv_dim + d] = qkv_mixed[uint(src_pos) * qkv_dim + d];
+    }
+}
+
 // Same as qwen35_recurrent_conv_shift_chunk, but also copies conv_state after
 // `checkpoint_index` has been applied. This is the exact recurrent-boundary
 // checkpoint needed by branch-guard verifier fusion; callers still own whether
