@@ -1,0 +1,391 @@
+require "digest/sha256"
+require "./qwen35_engine_contract"
+require "./reader"
+require "./qwen35_chat"
+require "./qwen35_cpu"
+require "./qwen35_tokenizer"
+require "./qwen35_weights"
+
+module ML::GGUF
+  # First product-facing runtime for the Qwen35Engine contract.
+  #
+  # The runtime owns model resources and mutable decode state. State never
+  # crosses the engine boundary; every request receives a fresh State under the
+  # process-wide lock that also protects GGUF mmap registration and teardown.
+  class Qwen35NativeRuntime < Qwen35Engine::Runtime
+    @@process_mutex = Mutex.new
+    # Qwen35Metal keeps one process-global no-copy mmap registration. Until
+    # that registration becomes model-keyed, two live native runtimes cannot
+    # safely coexist: loading the second model would redirect the first
+    # runtime's Metal weight slots. The slot is claimed before any mmap-backed
+    # load and released only after a successful close.
+    @@active_model_id : String? = nil
+
+    getter model_path : String
+    getter max_seq : Int32
+
+    @model_id : String
+    @tokenizer : Qwen35Tokenizer?
+    @weights : Qwen35Weights?
+    @closed = false
+    @llama_tokenize_bin : String
+
+    def initialize(
+      @model_path : String,
+      @max_seq : Int32 = 4096,
+      llama_tokenize_bin : String? = nil,
+    )
+      raise ArgumentError.new("Qwen35NativeRuntime model path must not be empty") if @model_path.strip.empty?
+      raise ArgumentError.new("Qwen35NativeRuntime model not found: #{@model_path}") unless File.exists?(@model_path)
+      raise ArgumentError.new("Qwen35NativeRuntime max_seq must be positive") unless @max_seq > 0
+
+      @llama_tokenize_bin = llama_tokenize_bin || ENV["LLAMA_TOKENIZE_BIN"]? || ""
+      @model_id = self.class.model_id_for(@model_path)
+
+      @@process_mutex.synchronize do
+        if active_model_id = @@active_model_id
+          raise Qwen35Engine::BackendMismatch.new(
+            "another Qwen35NativeRuntime is active for #{active_model_id}; close it before loading #{@model_id}"
+          )
+        end
+
+        @@active_model_id = @model_id
+        begin
+          @tokenizer = load_tokenizer
+          @weights = Qwen35Weights.from_gguf(@model_path)
+        rescue ex
+          # A failed constructor must not strand the process-wide ownership
+          # slot. If weight loading completed before a later failure, release
+          # the mmap registration before allowing another runtime to start.
+          begin
+            @weights.try(&.close)
+          rescue
+          end
+          @weights = nil
+          @tokenizer = nil
+          @@active_model_id = nil
+          raise ex
+        end
+      end
+    end
+
+    def self.model_id_for(path : String) : String
+      info = File.info(path)
+      digest = Digest::SHA256.hexdigest(
+        "qwen35-native\0#{File.expand_path(path)}\0#{info.size}\0#{info.modification_time.to_unix}"
+      )
+      "qwen35-native:#{digest}"
+    end
+
+    # Pure backend-selection helper used by preflight and model-independent
+    # tests. CUDA is intentionally guard-only until a real runtime can report it.
+    def self.backend_identity_for(
+      requested : Qwen35Engine::Backend,
+      model_id : String,
+      *,
+      metal_available : Bool,
+      decode_wave_forced_off : Bool,
+    ) : Qwen35Engine::BackendIdentity
+      if requested == Qwen35Engine::Backend::CUDA
+        raise Qwen35Engine::BackendMismatch.new(
+          "required CUDA, but Qwen35NativeRuntime has no CUDA adapter"
+        )
+      end
+
+      # The decode-wave flag disables one fused route only. Attention,
+      # recurrent, prefill, and output-head paths can still dispatch Metal, so
+      # it must not be used as a proof of CPU-only execution.
+      metal_selected = metal_available
+      primary = case requested
+                when Qwen35Engine::Backend::Metal
+                  detail = metal_selected ? "execution attribution is unavailable" : "native Metal routing is unavailable"
+                  raise Qwen35Engine::BackendMismatch.new(
+                    "required Metal with observed attribution, but #{detail}"
+                  )
+                when Qwen35Engine::Backend::CPU
+                  if metal_available
+                    raise Qwen35Engine::BackendMismatch.new(
+                      "required CPU is unavailable in a native Metal-capable build; use a cpu_only runtime"
+                    )
+                  end
+                  Qwen35Engine::Backend::CPU
+                else
+                  metal_selected ? Qwen35Engine::Backend::Metal : Qwen35Engine::Backend::CPU
+                end
+      components = primary == Qwen35Engine::Backend::Metal ? [Qwen35Engine::Backend::Metal, Qwen35Engine::Backend::CPU] : [Qwen35Engine::Backend::CPU]
+      Qwen35Engine::BackendIdentity.new(
+        requested: requested,
+        primary: primary,
+        components: components,
+        model_id: model_id,
+        attribution: metal_selected ? Qwen35Engine::Attribution::Planned : Qwen35Engine::Attribution::Observed,
+      )
+    end
+
+    # Resolve tokenizer output before any State is allocated. The caller may
+    # supply a token id as a cross-check, but the runtime remains tokenizer-owning.
+    def self.resolve_label_ids(
+      labels : Array(Qwen35Engine::Label),
+      encoded : Array(Array(Int32)),
+    ) : Array(Int32)
+      raise ArgumentError.new("label count does not match tokenizer results") unless labels.size == encoded.size
+
+      ids = labels.map_with_index do |label, index|
+        tokens = encoded[index]
+        raise ArgumentError.new("label #{label.name.inspect} must resolve to exactly one token") unless tokens.size == 1
+
+        token_id = tokens[0]
+        raise ArgumentError.new("label #{label.name.inspect} resolved to a negative token id") if token_id < 0
+        if expected = label.token_id
+          raise ArgumentError.new("label #{label.name.inspect} token id mismatch") unless expected == token_id
+        end
+        token_id
+      end
+      raise ArgumentError.new("label scoring labels require unique token ids") unless ids.uniq.size == ids.size
+      ids
+    end
+
+    def self.effective_max_seq(runtime_max_seq : Int32, request_max_seq : Int32?) : Int32
+      raise ArgumentError.new("max_seq must be positive") unless runtime_max_seq > 0
+      limit = request_max_seq || runtime_max_seq
+      raise ArgumentError.new("max_seq must be positive") unless limit > 0
+      raise ArgumentError.new("max_seq exceeds runtime capacity") if limit > runtime_max_seq
+      limit
+    end
+
+    def preflight(
+      operation : Qwen35Engine::Route,
+      requested_backend : Qwen35Engine::Backend,
+    ) : Qwen35Engine::PreflightRoute
+      @@process_mutex.synchronize do
+        ensure_open!
+        backend = self.class.backend_identity_for(
+          requested_backend,
+          @model_id,
+          metal_available: Qwen35Metal.available?,
+          decode_wave_forced_off: decode_wave_forced_off?,
+        )
+        Qwen35Engine::PreflightRoute.new(operation, backend)
+      end
+    end
+
+    def generate(
+      request : Qwen35Engine::GenerateRequest,
+      route : Qwen35Engine::PreflightRoute,
+    ) : Qwen35Engine::GenerateResult
+      @@process_mutex.synchronize do
+        ensure_open!
+        validate_route!(Qwen35Engine::Route::GenerateGreedy, route)
+        validate_generate_request!(request)
+        tokenizer, weights = resources
+        limit = self.class.effective_max_seq(@max_seq, request.max_seq)
+        rendered = render_messages(request.messages)
+        prompt_ids = tokenizer.encode(rendered, add_bos_override: false)
+        raise ArgumentError.new("Qwen35NativeRuntime generated prompt is empty") if prompt_ids.empty?
+        if prompt_ids.size + request.max_tokens > limit
+          raise ArgumentError.new("generation request exceeds max_seq #{limit}")
+        end
+
+        state = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
+        prepare_state_metal!(state, weights, route)
+        next_token, _logit = Qwen35CPU.prefill_tokens_top1(weights, prompt_ids, 0, state)
+        output_ids = [] of Int32
+        pos = prompt_ids.size
+        while output_ids.size < request.max_tokens
+          break if stop_token?(tokenizer, next_token)
+
+          output_ids << next_token.to_i32
+          break if output_ids.size >= request.max_tokens
+
+          next_token, _logit = Qwen35CPU.forward_top1(weights, next_token, pos, state)
+          pos += 1
+        end
+
+        Qwen35Engine::GenerateResult.new(
+          text: tokenizer.decode(output_ids),
+          token_ids: output_ids,
+          prompt_tokens: prompt_ids.size,
+          completion_tokens: output_ids.size,
+          backend: route.backend,
+          route: route.operation,
+        )
+      end
+    end
+
+    def score_labels(
+      request : Qwen35Engine::ScoreLabelsRequest,
+      route : Qwen35Engine::PreflightRoute,
+    ) : Qwen35Engine::ScoreLabelsResult
+      @@process_mutex.synchronize do
+        ensure_open!
+        validate_route!(Qwen35Engine::Route::ScoreLabels, route)
+        validate_score_labels_request!(request)
+        tokenizer, weights = resources
+        limit = self.class.effective_max_seq(@max_seq, request.max_seq)
+        prompt_ids = tokenizer.encode(request.prompt, add_bos_override: false)
+        raise ArgumentError.new("Qwen35NativeRuntime label-scoring prompt is empty") if prompt_ids.empty?
+        raise ArgumentError.new("label-scoring prompt must leave room for one token") if prompt_ids.size >= limit
+
+        raise ArgumentError.new("label scoring requires at least two labels") if request.labels.size < 2
+
+        encoded = request.labels.map do |label|
+          tokenizer.encode(label.text, add_bos_override: false)
+        end
+        label_ids = self.class.resolve_label_ids(request.labels, encoded)
+
+        state = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
+        prepare_state_metal!(state, weights, route)
+        if prompt_ids.size > 1
+          Qwen35CPU.prefill_tokens(weights, prompt_ids[0...-1], 0, state)
+        end
+        logits = Qwen35CPU.forward(weights, prompt_ids[-1], prompt_ids.size - 1, state)
+        best_index, second_index = top_two_indices(logits, label_ids)
+
+        Qwen35Engine::ScoreLabelsResult.new(
+          best: Qwen35Engine::LabelScore.new(request.labels[best_index], label_ids[best_index], logits[label_ids[best_index]]),
+          second: Qwen35Engine::LabelScore.new(request.labels[second_index], label_ids[second_index], logits[label_ids[second_index]]),
+          backend: route.backend,
+          route: route.operation,
+        )
+      end
+    end
+
+    # Qwen35Weights#close unregisters the process-global mmap wrapper before
+    # unmapping GGUF. Keep the runtime open if that cleanup raises so a caller
+    # can retry, matching the Engine lifecycle contract.
+    def close : Nil
+      @@process_mutex.synchronize do
+        return if @closed
+
+        weights = @weights
+        weights.try(&.close)
+        @weights = nil
+        @tokenizer = nil
+        @closed = true
+        @@active_model_id = nil if @@active_model_id == @model_id
+      end
+    end
+
+    def finalize
+      close
+    end
+
+    private def load_tokenizer : Qwen35Tokenizer
+      gguf = GGUFFile.new(@model_path)
+      begin
+        Qwen35Tokenizer.from_gguf(gguf, @model_path, @llama_tokenize_bin)
+      ensure
+        gguf.close
+      end
+    end
+
+    private def resources : {Qwen35Tokenizer, Qwen35Weights}
+      tokenizer = @tokenizer
+      weights = @weights
+      raise Qwen35Engine::Closed.new("Qwen35NativeRuntime is closed") unless tokenizer && weights
+      {tokenizer, weights}
+    end
+
+    private def prepare_state_metal!(state : Qwen35CPU::State,
+                                     weights : Qwen35Weights,
+                                     route : Qwen35Engine::PreflightRoute) : Nil
+      # An observed CPU-only route must not allocate Metal state. Auto on a
+      # Metal-capable build remains an explicitly planned hybrid even when the
+      # fused decode wave is disabled, because lower-level paths can still use
+      # Metal.
+      return unless route.backend.primary.metal?
+      Qwen35CPU.prepare_state_metal!(state, weights.hparams)
+    end
+
+    private def validate_generate_request!(request : Qwen35Engine::GenerateRequest) : Nil
+      raise ArgumentError.new("generation requires at least one message") if request.messages.empty?
+      raise ArgumentError.new("generation max_tokens must be positive") unless request.max_tokens > 0
+      raise ArgumentError.new("only deterministic temperature=0 generation is admitted") unless request.temperature == 0.0
+      raise ArgumentError.new("generation requires non-empty message content") if request.messages.all? { |message| message.content.strip.empty? }
+      request.messages.each do |message|
+        raise ArgumentError.new("message role must not be empty") if message.role.strip.empty?
+      end
+    end
+
+    private def validate_score_labels_request!(request : Qwen35Engine::ScoreLabelsRequest) : Nil
+      raise ArgumentError.new("label scoring prompt must not be empty") if request.prompt.strip.empty?
+      raise ArgumentError.new("label scoring requires at least two labels") if request.labels.size < 2
+
+      names = request.labels.map(&.name.strip)
+      texts = request.labels.map(&.text.strip)
+      raise ArgumentError.new("label scoring name must not be empty") if names.any?(&.empty?)
+      raise ArgumentError.new("label scoring text must not be empty") if texts.any?(&.empty?)
+      raise ArgumentError.new("label scoring names require uniqueness") unless names.uniq.size == names.size
+      raise ArgumentError.new("label scoring texts require uniqueness") unless texts.uniq.size == texts.size
+
+      token_ids = request.labels.compact_map(&.token_id)
+      unless token_ids.empty? || token_ids.size == request.labels.size
+        raise ArgumentError.new("label scoring labels must either all provide token ids or none")
+      end
+      raise ArgumentError.new("label scoring labels require non-negative token ids") if token_ids.any? { |id| id < 0 }
+      raise ArgumentError.new("label scoring labels require unique token ids") unless token_ids.uniq.size == token_ids.size
+    end
+
+    private def ensure_open! : Nil
+      raise Qwen35Engine::Closed.new("Qwen35NativeRuntime is closed") if @closed
+    end
+
+    private def validate_route!(operation : Qwen35Engine::Route, route : Qwen35Engine::PreflightRoute) : Nil
+      raise Qwen35Engine::RouteMismatch.new("runtime received #{route.operation}, expected #{operation}") unless route.operation == operation
+      unless route.backend.model_id == @model_id
+        raise Qwen35Engine::RouteMismatch.new("runtime route model identity drifted")
+      end
+      expected = self.class.backend_identity_for(
+        route.backend.requested,
+        @model_id,
+        metal_available: Qwen35Metal.available?,
+        decode_wave_forced_off: decode_wave_forced_off?,
+      )
+      raise Qwen35Engine::RouteMismatch.new("runtime route backend identity drifted") unless expected == route.backend
+    end
+
+    private def render_messages(messages : Array(Qwen35Engine::Message)) : String
+      qwen_messages = messages.map { |message| Qwen35Chat::Message.new(message.role, message.content) }
+      Qwen35Chat.render(qwen_messages, add_generation_prompt: true, enable_thinking: false)
+    end
+
+    private def stop_token?(tokenizer : Qwen35Tokenizer, token_id : Int32) : Bool
+      token_id == tokenizer.eos_id || token_id == tokenizer.pad_id ||
+        tokenizer.token_to_id["<|im_end|>"]? == token_id
+    end
+
+    private def top_two_indices(logits : Array(Float32), allowed_ids : Array(Int32)) : {Int32, Int32}
+      raise ArgumentError.new("label scoring requires at least two labels") if allowed_ids.size < 2
+      best_index = 0
+      second_index = 1
+      allowed_ids.each_with_index do |token_id, index|
+        raise ArgumentError.new("label token id #{token_id} is out of vocabulary") if token_id < 0 || token_id >= logits.size
+        if index == 0
+          next
+        elsif index == 1
+          if better_token?(logits[token_id], token_id, logits[allowed_ids[best_index]], allowed_ids[best_index])
+            second_index = best_index
+            best_index = index
+          end
+          next
+        end
+
+        if better_token?(logits[token_id], token_id, logits[allowed_ids[best_index]], allowed_ids[best_index])
+          second_index = best_index
+          best_index = index
+        elsif better_token?(logits[token_id], token_id, logits[allowed_ids[second_index]], allowed_ids[second_index])
+          second_index = index
+        end
+      end
+      {best_index, second_index}
+    end
+
+    private def better_token?(logit : Float32, token_id : Int32, other_logit : Float32, other_token_id : Int32) : Bool
+      logit > other_logit || (logit == other_logit && token_id < other_token_id)
+    end
+
+    private def decode_wave_forced_off? : Bool
+      ENV["QWEN35_DECODE_WAVE_OFF"]? == "1"
+    end
+  end
+end

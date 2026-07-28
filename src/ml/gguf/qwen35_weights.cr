@@ -78,12 +78,22 @@ module ML::GGUF
     getter layers : Array(Qwen35LayerWeights)
 
     # Kept alive so the mmap region backing every QuantWeight.raw stays
-    # mapped for the lifetime of the model. Closing it would invalidate
-    # both the heap-free slices and any whole-mmap Metal buffer built on
-    # top of them.
+    # mapped until this weight set is explicitly closed. Closing it invalidates
+    # both the heap-free slices and any whole-mmap Metal buffer built on top of
+    # them, so callers must quiesce all inference first.
     @gguf : GGUFFile
+    @closed : Bool
+    @close_mutex : Mutex
+    {% unless flag?(:cpu_only) %}
+      @mmap_base : Pointer(UInt8)?
+    {% end %}
 
     def initialize(@gguf : GGUFFile, @hparams : Qwen35Hparams)
+      @closed = false
+      @close_mutex = Mutex.new
+      {% unless flag?(:cpu_only) %}
+        @mmap_base = nil
+      {% end %}
       @token_embd = load_qw(@gguf, "token_embd.weight")
       @output_norm = load_f32(@gguf, "output_norm.weight")
       @output = if @gguf.tensor("output.weight")
@@ -111,6 +121,7 @@ module ML::GGUF
           if region = @gguf.mmap_region
             base, size = region
             Qwen35Metal.register_mmap(base, size)
+            @mmap_base = base
           end
         end
       {% end %}
@@ -118,10 +129,38 @@ module ML::GGUF
 
     def self.from_gguf(path : String) : Qwen35Weights
       g = GGUFFile.new(path)
-      hp = Qwen35Hparams.new(g)
-      # Do NOT close `g` here — the mmap backs every QuantWeight.raw;
-      # Qwen35Weights keeps a reference to it for its lifetime.
-      Qwen35Weights.new(g, hp)
+      begin
+        hp = Qwen35Hparams.new(g)
+        # Do NOT close `g` on success — the mmap backs every QuantWeight.raw;
+        # Qwen35Weights keeps a reference to it for its lifetime.
+        Qwen35Weights.new(g, hp)
+      rescue ex
+        g.close
+        raise ex
+      end
+    end
+
+    # Release any process-global no-copy Metal wrapper before unmapping the
+    # GGUF file that backs its bytes. Callers must quiesce in-flight inference
+    # before closing a weight set; the wrapper cannot protect concurrent users
+    # after this method returns.
+    def close : Nil
+      @close_mutex.synchronize do
+        return if @closed
+
+        {% unless flag?(:cpu_only) %}
+          if base = @mmap_base
+            Qwen35Metal.unregister_mmap(base)
+            @mmap_base = nil
+          end
+        {% end %}
+        @gguf.close
+        @closed = true
+      end
+    end
+
+    def finalize
+      close
     end
 
     private def load_full_attn_layer(g : GGUFFile, il : Int32) : Qwen35FullAttnWeights

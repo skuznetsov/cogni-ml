@@ -83,6 +83,13 @@ module ML
           false
         end
 
+        # CPU-only builds have no registered Metal buffer. Keep the lifecycle
+        # API available so callers can close a weight set without compile-time
+        # backend branching.
+        def self.unregister_mmap(base : Pointer(UInt8)) : Bool
+          false
+        end
+
         def self.matmul_q4k(x : Array(Float32),
                             w_raw : Bytes,
                             in_dim : Int32,
@@ -745,6 +752,7 @@ module ML
         @@mmap_base_addr : UInt64 = 0_u64
         @@mmap_size      : Int64  = 0_i64
         @@mmap_buf       : ML::MetalBuffer? = nil
+        @@mmap_registry_mutex = Mutex.new
         @@bf16_weight_buffers = {} of String => ML::MetalBuffer
         @@bf16_weight_mutex = Mutex.new
 
@@ -759,46 +767,74 @@ module ML
         # (previous one is released).
         def self.register_mmap(base : Pointer(UInt8), size : UInt64) : Nil
           return unless available?
-          page = 16384_u64
-          raise "mmap base #{base.address} not page-aligned (page=#{page})" unless base.address % page == 0
-          # newBufferWithBytesNoCopy also requires the length to be a
-          # multiple of page size. mmap'd files are page-rounded on Darwin.
-          aligned_size = ((size + page - 1) // page) * page
-          if aligned_size.to_i64 > size.to_i64
-            # safer to pass a smaller, still page-aligned length that
-            # lies entirely within the mmap region
-            aligned_size = (size // page) * page
-          end
-          raise "mmap region too small (size=#{size})" if aligned_size == 0
+          @@mmap_registry_mutex.synchronize do
+            page = 16384_u64
+            raise "mmap base #{base.address} not page-aligned (page=#{page})" unless base.address % page == 0
+            # newBufferWithBytesNoCopy also requires the length to be a
+            # multiple of page size. mmap'd files are page-rounded on Darwin.
+            aligned_size = ((size + page - 1) // page) * page
+            if aligned_size.to_i64 > size.to_i64
+              # safer to pass a smaller, still page-aligned length that
+              # lies entirely within the mmap region
+              aligned_size = (size // page) * page
+            end
+            raise "mmap region too small (size=#{size})" if aligned_size == 0
 
-          if buf = @@mmap_buf
-            # Replace previous — release the ObjC wrapper (not the bytes).
+            # Construct the replacement first. If Objective-C allocation
+            # fails, the currently registered wrapper remains valid.
+            new_buf = ML::MetalBuffer.wrap_no_copy(
+              base.as(Pointer(Void)),
+              aligned_size.to_i64,
+            )
+
+            if buf = @@mmap_buf
+              # Replace previous — release the ObjC wrapper (not the bytes).
+              # Callers must quiesce users before replacing a registration.
+              buf.release
+            end
+
+            @@mmap_base_addr = base.address
+            @@mmap_size = aligned_size.to_i64
+            @@mmap_buf = new_buf
+            ConstCache.clear
+          end
+          nil
+        end
+
+        # Release the no-copy wrapper only when it still belongs to `base`.
+        # A later model load may have replaced the process-global registration;
+        # an older weight set must not tear down that newer model's buffer.
+        # Returns true when a matching registration was released and false for
+        # an unknown/already-unregistered base. Repeated calls are harmless.
+        def self.unregister_mmap(base : Pointer(UInt8)) : Bool
+          @@mmap_registry_mutex.synchronize do
+            return false unless @@mmap_base_addr == base.address
+            buf = @@mmap_buf
+            return false unless buf
+
             buf.release
             @@mmap_buf = nil
+            @@mmap_base_addr = 0_u64
+            @@mmap_size = 0_i64
+            ConstCache.clear
+            true
           end
-
-          @@mmap_base_addr = base.address
-          @@mmap_size = aligned_size.to_i64
-          @@mmap_buf = ML::MetalBuffer.wrap_no_copy(
-            base.as(Pointer(Void)),
-            @@mmap_size,
-          )
-          ConstCache.clear
-          nil
         end
 
         # Return (buffer, byte-offset) for the given raw slice if it lies
         # inside the registered mmap region. Otherwise nil — caller must
         # fall back to per-weight upload.
         private def self.mmap_slot_for(raw : Bytes) : {ML::MetalBuffer, Int64}?
-          return nil if @@mmap_buf.nil?
-          base = @@mmap_base_addr
-          size = @@mmap_size
-          addr = raw.to_unsafe.address
-          return nil if addr < base
-          off = (addr - base).to_i64
-          return nil if off + raw.size > size
-          {@@mmap_buf.not_nil!, off}
+          @@mmap_registry_mutex.synchronize do
+            return nil if @@mmap_buf.nil?
+            base = @@mmap_base_addr
+            size = @@mmap_size
+            addr = raw.to_unsafe.address
+            return nil if addr < base
+            off = (addr - base).to_i64
+            return nil if off + raw.size > size
+            {@@mmap_buf.not_nil!, off}
+          end
         end
 
         private def self.weight_slot(qw : QuantWeight) : {ML::MetalBuffer, Int64}
