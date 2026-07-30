@@ -62,6 +62,8 @@ module ML
         attn_mask : Tensor? = nil,
         need_weights : Bool = false,
       ) : Autograd::Variable
+        validate_forward_inputs!(query, key, value, attn_mask)
+
         batch_size = query.data.shape[0]
         tgt_len = query.data.shape[1]
         src_len = key.data.shape[1]
@@ -87,6 +89,64 @@ module ML
 
         # Output projection
         @out_proj.forward(attn_output)
+      end
+
+      private def validate_forward_inputs!(
+        query : Autograd::Variable,
+        key : Autograd::Variable,
+        value : Autograd::Variable,
+        mask : Tensor?,
+      ) : Nil
+        validate_attention_tensor!("query", query.data)
+        validate_attention_tensor!("key", key.data)
+        validate_attention_tensor!("value", value.data)
+
+        unless query.data.shape[0] == key.data.shape[0] &&
+               key.data.shape[0] == value.data.shape[0]
+          raise ArgumentError.new("query, key, and value batch sizes must match")
+        end
+        unless key.data.shape[1] == value.data.shape[1]
+          raise ArgumentError.new("key and value sequence lengths must match")
+        end
+
+        return unless mask
+
+        batch = query.data.shape[0]
+        tgt_len = query.data.shape[1]
+        src_len = key.data.shape[1]
+        valid_shape =
+          case mask.ndim
+          when 2
+            mask.shape[0] == tgt_len && mask.shape[1] == src_len
+          when 3
+            mask.shape[0] == batch &&
+              mask.shape[1] == tgt_len &&
+              mask.shape[2] == src_len
+          else
+            false
+          end
+        unless valid_shape
+          raise ArgumentError.new(
+            "attention mask shape #{mask.shape} must be [#{tgt_len}, #{src_len}] " \
+            "or [#{batch}, #{tgt_len}, #{src_len}]"
+          )
+        end
+      end
+
+      private def validate_attention_tensor!(name : String, tensor : Tensor) : Nil
+        unless tensor.ndim == 3
+          raise ArgumentError.new(
+            "#{name} must have shape [batch, sequence, embed_dim]"
+          )
+        end
+        unless tensor.shape[0] > 0 && tensor.shape[1] > 0
+          raise ArgumentError.new("#{name} batch and sequence dimensions must be positive")
+        end
+        unless tensor.shape[2] == @embed_dim
+          raise ArgumentError.new(
+            "#{name} embedding dimension #{tensor.shape[2]} does not match #{@embed_dim}"
+          )
+        end
       end
 
       def call(
@@ -126,7 +186,7 @@ module ML
             x_on_gpu = x.data.on_gpu?
 
             grad_fn = Autograd::CustomBackward.new("ReshapeForHeadsBackward", ->(g : Tensor) {
-              g_cpu = g.on_cpu? ? g : g.to_cpu
+              g_cpu = g.to_contiguous_cpu
               g_d = g_cpu.cpu_data.not_nil!
 
               grad_x = Tensor.zeros(batch_cap, seq_len_cap, embed_dim_cap, device: Tensor::Device::CPU)
@@ -153,7 +213,7 @@ module ML
           return result_var
         end
 
-        x_data = x.data.on_cpu? ? x.data : x.data.to_cpu
+        x_data = x.data.to_contiguous_cpu
         x_d = x_data.cpu_data.not_nil!
 
         # Target shape: [batch, num_heads, seq_len, head_dim]
@@ -185,7 +245,7 @@ module ML
           x_on_gpu = x.data.on_gpu?
 
           grad_fn = Autograd::CustomBackward.new("ReshapeForHeadsBackward", ->(g : Tensor) {
-            g_cpu = g.on_cpu? ? g : g.to_cpu
+            g_cpu = g.to_contiguous_cpu
             g_d = g_cpu.cpu_data.not_nil!
 
             grad_x = Tensor.zeros(batch_cap, seq_len_cap, embed_dim_cap, device: Tensor::Device::CPU)
@@ -230,7 +290,7 @@ module ML
             x_on_gpu = x.data.on_gpu?
 
             grad_fn = Autograd::CustomBackward.new("ReshapeFromHeadsBackward", ->(g : Tensor) {
-              g_cpu = g.on_cpu? ? g : g.to_cpu
+              g_cpu = g.to_contiguous_cpu
               g_d = g_cpu.cpu_data.not_nil!
 
               grad_x = Tensor.zeros(batch_cap, num_heads_cap, seq_len_cap, head_dim_cap, device: Tensor::Device::CPU)
@@ -257,7 +317,7 @@ module ML
           return result_var
         end
 
-        x_data = x.data.on_cpu? ? x.data : x.data.to_cpu
+        x_data = x.data.to_contiguous_cpu
         x_d = x_data.cpu_data.not_nil!
 
         # Target shape: [batch, seq_len, embed_dim]
@@ -289,7 +349,7 @@ module ML
           x_on_gpu = x.data.on_gpu?
 
           grad_fn = Autograd::CustomBackward.new("ReshapeFromHeadsBackward", ->(g : Tensor) {
-            g_cpu = g.on_cpu? ? g : g.to_cpu
+            g_cpu = g.to_contiguous_cpu
             g_d = g_cpu.cpu_data.not_nil!
 
             grad_x = Tensor.zeros(batch_cap, num_heads_cap, seq_len_cap, head_dim_cap, device: Tensor::Device::CPU)
@@ -329,7 +389,13 @@ module ML
 
         # Try GPU path if tensors are on GPU and mask is not provided
         # (GPU kernel doesn't support masking yet)
-        if !needs_grad && q.data.on_gpu? && k.data.on_gpu? && v.data.on_gpu? && mask.nil? && GPUOps.available?
+        equal_sequence_lengths =
+          q.data.shape[2] == k.data.shape[2] &&
+            k.data.shape[2] == v.data.shape[2]
+        if !needs_grad &&
+           equal_sequence_lengths &&
+           q.data.on_gpu? && k.data.on_gpu? && v.data.on_gpu? &&
+           mask.nil? && GPUOps.available?
           return scaled_dot_product_attention_gpu(q, k, v, scale)
         end
 
@@ -389,9 +455,9 @@ module ML
         mask : Tensor?,
         needs_grad : Bool,
       ) : Autograd::Variable
-        q_data = q.data.on_cpu? ? q.data : q.data.to_cpu
-        k_data = k.data.on_cpu? ? k.data : k.data.to_cpu
-        v_data = v.data.on_cpu? ? v.data : v.data.to_cpu
+        q_data = q.data.to_contiguous_cpu
+        k_data = k.data.to_contiguous_cpu
+        v_data = v.data.to_contiguous_cpu
 
         batch = q_data.shape[0]
         heads = q_data.shape[1]
@@ -427,19 +493,21 @@ module ML
 
         # Apply mask if provided (additive mask, -inf for masked positions)
         if m = mask
-          m_cpu = m.on_cpu? ? m : m.to_cpu
+          m_cpu = m.to_contiguous_cpu
           m_d = m_cpu.cpu_data.not_nil!
 
-          if m.ndim == 2
-            # [tgt_len, src_len] - broadcast to all batch/heads
-            batch.times do |b|
-              heads.times do |h|
-                tgt_len.times do |i|
-                  src_len.times do |j|
-                    s_idx = b * heads * tgt_len * src_len + h * tgt_len * src_len + i * src_len + j
-                    m_idx = i * src_len + j
-                    s_d[s_idx] += m_d[m_idx]
-                  end
+          batch.times do |b|
+            heads.times do |h|
+              tgt_len.times do |i|
+                src_len.times do |j|
+                  s_idx = b * heads * tgt_len * src_len + h * tgt_len * src_len + i * src_len + j
+                  m_idx =
+                    if m.ndim == 2
+                      i * src_len + j
+                    else
+                      b * tgt_len * src_len + i * src_len + j
+                    end
+                  s_d[s_idx] += m_d[m_idx]
                 end
               end
             end
@@ -452,15 +520,33 @@ module ML
             tgt_len.times do |i|
               offset = b * heads * tgt_len * src_len + h * tgt_len * src_len + i * src_len
 
-              # Find max for numerical stability
-              max_val = s_d[offset]
-              (1...src_len).each { |j| max_val = Math.max(max_val, s_d[offset + j]) }
+              # Find the finite max for numerical stability. Negative infinity
+              # is a valid additive-mask value, but a fully masked row has no
+              # defined softmax distribution and must fail closed.
+              max_val = -Float32::INFINITY
+              src_len.times do |j|
+                score = s_d[offset + j]
+                unless score.finite? || score == -Float32::INFINITY
+                  raise ArgumentError.new(
+                    "attention scores must be finite or negative infinity"
+                  )
+                end
+                max_val = Math.max(max_val, score) if score.finite?
+              end
+              unless max_val.finite?
+                raise ArgumentError.new(
+                  "attention row #{i} in batch #{b}, head #{h} has no finite attention source"
+                )
+              end
 
               # Exp and sum
               sum = 0.0_f32
               src_len.times do |j|
                 s_d[offset + j] = Math.exp(s_d[offset + j] - max_val)
                 sum += s_d[offset + j]
+              end
+              unless sum.finite? && sum > 0.0_f32
+                raise ArgumentError.new("attention softmax normalization is not finite")
               end
 
               # Normalize
@@ -508,7 +594,7 @@ module ML
           scale_cap = scale
 
           grad_fn = Autograd::CustomBackward.new("AttentionBackward", ->(g : Tensor) {
-            g_cpu = g.on_cpu? ? g : g.to_cpu
+            g_cpu = g.to_contiguous_cpu
 
             g_d = g_cpu.cpu_data.not_nil!
             q_d = q_cpu.cpu_data.not_nil!
