@@ -8,10 +8,35 @@ module ML
 
     getter dims : StaticArray(Int32, 8)
     getter ndim : Int32
+    getter numel : Int32
 
     def initialize(dimensions : Array(Int32))
       raise ArgumentError.new("Too many dimensions: #{dimensions.size} > #{MAX_DIMS}") if dimensions.size > MAX_DIMS
       raise ArgumentError.new("Shape cannot be empty") if dimensions.empty?
+
+      dimensions.each_with_index do |dimension, index|
+        if dimension < 0
+          raise ArgumentError.new(
+            "Shape dimension #{index} must be non-negative, got #{dimension}"
+          )
+        end
+      end
+
+      @numel =
+        if dimensions.any?(&.zero?)
+          0
+        else
+          total = 1_i64
+          dimensions.each do |dimension|
+            total *= dimension
+            if total > Int32::MAX
+              raise ArgumentError.new(
+                "Shape element count overflow: #{dimensions} exceeds #{Int32::MAX}"
+              )
+            end
+          end
+          total.to_i32
+        end
 
       @ndim = dimensions.size
       @dims = StaticArray(Int32, 8).new(1)
@@ -20,13 +45,6 @@ module ML
 
     def initialize(*dimensions : Int32)
       initialize(dimensions.to_a)
-    end
-
-    # Total number of elements
-    def numel : Int32
-      result = 1
-      @ndim.times { |i| result *= @dims[i] }
-      result
     end
 
     # Access dimension by index (supports negative indices)
@@ -116,9 +134,15 @@ module ML
 
       if contiguous
         # Row-major (C-style) strides
-        @strides[@ndim - 1] = 1
-        (@ndim - 2).downto(0) do |i|
-          @strides[i] = @strides[i + 1] * shape.dims[i + 1]
+        stride = 1_i64
+        (@ndim - 1).downto(0) do |i|
+          if stride > Int32::MAX
+            raise ArgumentError.new(
+              "Shape contiguous stride overflow at dimension #{i}: #{stride}"
+            )
+          end
+          @strides[i] = stride.to_i32
+          stride *= shape.dims[i]
         end
       end
     end
@@ -140,7 +164,7 @@ module ML
     # Check if memory is contiguous (row-major)
     def contiguous?(shape : Shape) : Bool
       return false unless @ndim == shape.ndim
-      expected = 1
+      expected = 1_i64
       (@ndim - 1).downto(0) do |i|
         return false unless @strides[i] == expected
         expected *= shape.dims[i]
@@ -148,7 +172,8 @@ module ML
       true
     end
 
-    # Compute flat index from multi-dimensional indices
+    # Raw stride arithmetic cannot validate per-dimension upper bounds without
+    # a Shape. Tensor element access uses its shape-aware checked path instead.
     def flat_index(indices : Array(Int32)) : Int32
       raise ArgumentError.new("Index count mismatch") unless indices.size == @ndim
       result = 0
@@ -232,11 +257,16 @@ module ML
 
     # Flatten shape from start_dim to end_dim
     def flatten_shape(shape : Shape, start_dim : Int32 = 0, end_dim : Int32 = -1) : Shape
+      start_dim = shape.ndim + start_dim if start_dim < 0
       end_dim = shape.ndim + end_dim if end_dim < 0
-      raise ArgumentError.new("Invalid flatten dims") if start_dim > end_dim
+      unless 0 <= start_dim <= end_dim < shape.ndim
+        raise ArgumentError.new(
+          "Invalid flatten dims #{start_dim}..#{end_dim} for #{shape.ndim}D shape"
+        )
+      end
 
       before = shape.to_a[0...start_dim]
-      middle = shape.to_a[start_dim..end_dim].reduce(1) { |acc, d| acc * d }
+      middle = Shape.new(shape.to_a[start_dim..end_dim]).numel
       after = shape.to_a[(end_dim + 1)..]
 
       Shape.new(before + [middle] + after)

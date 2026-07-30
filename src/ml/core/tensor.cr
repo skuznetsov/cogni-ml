@@ -41,12 +41,16 @@ module ML
       @buffer : MetalBuffer?,
       @cpu_data : Array(Float32)?,
     )
+      validate_storage!
     end
 
     # Create empty tensor on GPU
     def initialize(@shape : Shape, @dtype : DType = DType::F32, @device : Device = Tensor.default_device)
       raise ArgumentError.new("Only F32 dtype is supported for now") unless @dtype.f32?
       @strides = Strides.new(@shape)
+      if @device.gpu? && @shape.numel == 0
+        raise ArgumentError.new("Cannot allocate a zero-element GPU tensor")
+      end
 
       case @device
       in .gpu?
@@ -57,6 +61,7 @@ module ML
         @buffer = nil
         @cpu_data = Array(Float32).new(@shape.numel, 0.0_f32)
       end
+      validate_storage!
     end
 
     # Create from shape tuple
@@ -234,17 +239,22 @@ module ML
       @buffer.not_nil!.release
       @buffer = nil
       @device = Device::CPU
+      validate_storage!
       self
     end
 
     def to_gpu! : self
       return self if @device.gpu?
+      if @shape.numel == 0
+        raise ArgumentError.new("Cannot allocate a zero-element GPU tensor")
+      end
 
       byte_size = @shape.numel.to_i64 * @dtype.byte_size
       @buffer = MetalBuffer.new(byte_size)
       @buffer.not_nil!.write(@cpu_data.not_nil!)
       @cpu_data = nil
       @device = Device::GPU
+      validate_storage!
       self
     end
 
@@ -280,8 +290,8 @@ module ML
 
     # Element access (for debugging, copies to CPU if needed)
     def [](indices : Array(Int32)) : Float32
+      flat_idx = checked_flat_index(indices)
       ensure_cpu!
-      flat_idx = @strides.flat_index(indices)
       @cpu_data.not_nil![flat_idx]
     end
 
@@ -290,8 +300,8 @@ module ML
     end
 
     def []=(indices : Array(Int32), value : Float32) : Float32
+      flat_idx = checked_flat_index(indices)
       ensure_cpu!
-      flat_idx = @strides.flat_index(indices)
       @cpu_data.not_nil![flat_idx] = value
       # Mark as dirty if on GPU
       if @device.gpu?
@@ -311,10 +321,14 @@ module ML
       raise ArgumentError.new("Cannot reshape #{@shape} to #{new_shape}: element count mismatch") unless @shape.numel == new_shape.numel
 
       if contiguous?
-        # Create view with new shape
-        view = Tensor.allocate
-        view.initialize_as_view(self, new_shape)
-        view
+        Tensor.new(
+          new_shape,
+          Strides.new(new_shape),
+          @dtype,
+          @device,
+          @buffer,
+          @cpu_data
+        )
       else
         # Need to copy to make contiguous
         contiguous_copy.reshape(new_shape)
@@ -344,16 +358,6 @@ module ML
         @shape.numel.times { |i| dst[i] = src[i] }
       end
       result
-    end
-
-    # View initialization (internal)
-    protected def initialize_as_view(source : Tensor, new_shape : Shape)
-      @shape = new_shape
-      @strides = Strides.new(new_shape)
-      @dtype = source.dtype
-      @device = source.device
-      @buffer = source.buffer
-      @cpu_data = source.cpu_data
     end
 
     # Transpose (swap last two dims)
@@ -457,6 +461,105 @@ module ML
     def data_ptr : Pointer(Float32)
       raise "Tensor not on CPU" unless @device.cpu?
       @cpu_data.not_nil!.to_unsafe
+    end
+
+    private def validate_storage! : Nil
+      unless @dtype.f32?
+        raise ArgumentError.new("Only F32 dtype is supported for now")
+      end
+      unless @strides.ndim == @shape.ndim
+        raise ArgumentError.new(
+          "Tensor stride rank #{@strides.ndim} doesn't match shape rank #{@shape.ndim}"
+        )
+      end
+      validate_dense_strides!
+
+      case @device
+      in .cpu?
+        raise ArgumentError.new("CPU tensor cannot own a GPU buffer") if @buffer
+        data = @cpu_data
+        raise ArgumentError.new("CPU tensor requires data") unless data
+        unless data.size == @shape.numel
+          raise ArgumentError.new(
+            "CPU tensor data length #{data.size} doesn't match shape #{@shape.numel}"
+          )
+        end
+      in .gpu?
+        if @shape.numel == 0
+          raise ArgumentError.new("Cannot allocate a zero-element GPU tensor")
+        end
+        buffer = @buffer
+        raise ArgumentError.new("GPU tensor requires a buffer") unless buffer
+        required_bytes = @shape.numel.to_i64 * sizeof(Float32)
+        if buffer.size < required_bytes
+          raise ArgumentError.new(
+            "GPU tensor buffer length #{buffer.size} is smaller than #{required_bytes}"
+          )
+        end
+        if data = @cpu_data
+          unless data.size == @shape.numel
+            raise ArgumentError.new(
+              "GPU tensor CPU cache length #{data.size} doesn't match shape #{@shape.numel}"
+            )
+          end
+        end
+      end
+    end
+
+    private def validate_dense_strides! : Nil
+      @shape.ndim.times do |axis|
+        if @strides[axis] < 0
+          raise ArgumentError.new(
+            "Tensor strides must describe a dense non-overlapping layout"
+          )
+        end
+      end
+      return if @shape.numel == 0
+
+      axes = Array(Int32).new
+      @shape.ndim.times do |axis|
+        axes << axis if @shape[axis] > 1
+      end
+      axes.sort_by! { |axis| @strides[axis] }
+
+      expected_stride = 1_i64
+      axes.each do |axis|
+        unless @strides[axis].to_i64 == expected_stride
+          raise ArgumentError.new(
+            "Tensor strides must describe a dense non-overlapping layout"
+          )
+        end
+        expected_stride *= @shape[axis]
+      end
+      unless expected_stride == @shape.numel
+        raise ArgumentError.new(
+          "Tensor strides must describe a dense non-overlapping layout"
+        )
+      end
+    end
+
+    private def checked_flat_index(indices : Array(Int32)) : Int32
+      unless indices.size == @shape.ndim
+        raise ArgumentError.new(
+          "Index count #{indices.size} doesn't match tensor rank #{@shape.ndim}"
+        )
+      end
+
+      flat_index = 0_i64
+      @shape.ndim.times do |axis|
+        index = indices[axis]
+        dimension = @shape[axis]
+        unless 0 <= index < dimension
+          raise IndexError.new(
+            "Tensor index #{index} is outside dimension #{axis} of size #{dimension}"
+          )
+        end
+        flat_index += index.to_i64 * @strides[axis]
+      end
+      if flat_index > Int32::MAX
+        raise IndexError.new("Tensor flat index overflow: #{flat_index}")
+      end
+      flat_index.to_i32
     end
   end
 end
