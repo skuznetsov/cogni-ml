@@ -3,6 +3,7 @@
 
 require "../autograd/variable"
 require "../core/tensor"
+require "../ops/normalization"
 require "./gpu_ops"
 
 module ML
@@ -47,16 +48,24 @@ module ML
       # x: [..., *normalized_shape]
       # output: same shape as x
       def forward(x : Autograd::Variable) : Autograd::Variable
-        # Calculate number of elements to normalize over
-        norm_size = @normalized_shape.reduce(1) { |a, b| a * b }
+        norm_size = Ops::CPU.validate_layer_norm_inputs!(
+          x.data,
+          @weight.data,
+          @bias.data,
+          @normalized_shape,
+          @eps
+        )
 
         # Number of "batches" (everything except normalized dims)
         total = x.data.numel
         batch_size = total // norm_size
-        needs_grad = x.requires_grad? || @weight.requires_grad? || @bias.requires_grad?
+        needs_grad = !Autograd::NoGrad.enabled? &&
+                     (x.requires_grad? || @weight.requires_grad? || @bias.requires_grad?)
 
         # Try GPU path if all tensors on GPU
-        if x.data.on_gpu? && @weight.data.on_gpu? && @bias.data.on_gpu? && GPUOps.available?
+        if x.data.on_gpu? && @weight.data.on_gpu? && @bias.data.on_gpu? &&
+           x.data.contiguous? && @weight.data.contiguous? && @bias.data.contiguous? &&
+           GPUOps.available?
           result = forward_gpu(x.data, batch_size, norm_size)
 
           means = [] of Float32
@@ -103,11 +112,14 @@ module ML
           means_cap = means
           inv_stds_cap = inv_stds
           weight_data_cap = @weight.data.clone
+          x_on_gpu = x.data.on_gpu?
+          weight_on_gpu = @weight.data.on_gpu?
+          bias_on_gpu = @bias.data.on_gpu?
 
           grad_fn = Autograd::CustomBackward.new("LayerNormBackward", ->(grad_output : Tensor) {
-            g_cpu = grad_output.on_cpu? ? grad_output : grad_output.to_cpu
-            x_cpu = x_clone.on_cpu? ? x_clone : x_clone.to_cpu
-            w_cpu = weight_data_cap.on_cpu? ? weight_data_cap : weight_data_cap.to_cpu
+            g_cpu = grad_output.to_contiguous_cpu
+            x_cpu = x_clone.to_contiguous_cpu
+            w_cpu = weight_data_cap.to_contiguous_cpu
 
             g_d = g_cpu.cpu_data.not_nil!
             x_d_bw = x_cpu.cpu_data.not_nil!
@@ -154,11 +166,11 @@ module ML
               end
             end
 
-            if grad_output.on_gpu?
-              [grad_x.to_gpu, grad_w.to_gpu, grad_b.to_gpu] of Tensor?
-            else
-              [grad_x, grad_w, grad_b] of Tensor?
-            end
+            [
+              x_on_gpu ? grad_x.to_gpu : grad_x,
+              weight_on_gpu ? grad_w.to_gpu : grad_w,
+              bias_on_gpu ? grad_b.to_gpu : grad_b,
+            ] of Tensor?
           })
 
           grad_fn.inputs = [x, @weight, @bias]
@@ -204,53 +216,15 @@ module ML
 
       # CPU forward pass
       private def forward_cpu(x : Tensor, batch_size : Int32, norm_size : Int32) : {Tensor, Array(Float32), Array(Float32)}
-        x_data = x.on_cpu? ? x : x.to_cpu
-
-        result = Tensor.new(x_data.shape, x_data.dtype, Tensor::Device::CPU)
-        x_d = x_data.cpu_data.not_nil!
-        r_d = result.cpu_data.not_nil!
-
-        # Get weight and bias data
-        w_data = @weight.data.on_cpu? ? @weight.data : @weight.data.to_cpu
-        b_data = @bias.data.on_cpu? ? @bias.data : @bias.data.to_cpu
-        w_d = w_data.cpu_data.not_nil!
-        b_d = b_data.cpu_data.not_nil!
-
-        # Store mean and variance for backward
-        means = Array(Float32).new(batch_size, 0.0_f32)
-        inv_stds = Array(Float32).new(batch_size, 0.0_f32)
-
-        # Normalize each "batch"
-        batch_size.times do |b|
-          offset = b * norm_size
-
-          # Compute mean
-          mean = 0.0_f32
-          norm_size.times { |i| mean += x_d[offset + i] }
-          mean /= norm_size
-          means[b] = mean
-
-          # Compute variance
-          var = 0.0_f32
-          norm_size.times do |i|
-            diff = x_d[offset + i] - mean
-            var += diff * diff
-          end
-          var /= norm_size
-
-          # Inverse standard deviation
-          inv_std = 1.0_f32 / Math.sqrt(var + @eps)
-          inv_stds[b] = inv_std
-
-          # Normalize and apply affine transform
-          norm_size.times do |i|
-            normalized = (x_d[offset + i] - mean) * inv_std
-            r_d[offset + i] = normalized * w_d[i] + b_d[i]
-          end
-        end
-
-        result = result.to_gpu if x.on_gpu?
-        {result, means, inv_stds}
+        evaluation = Ops::CPU.layer_norm_with_stats(
+          x,
+          @weight.data,
+          @bias.data,
+          @normalized_shape,
+          @eps
+        )
+        result = x.on_gpu? ? evaluation.output.to_gpu : evaluation.output
+        {result, evaluation.means, evaluation.inv_stds}
       end
     end
 
@@ -274,14 +248,18 @@ module ML
       end
 
       def forward(x : Autograd::Variable) : Autograd::Variable
+        Ops::CPU.validate_rms_norm_inputs!(x.data, @weight.data, @dim, @eps)
+
         # Calculate RMS over last dimension
         total = x.data.numel
         batch_size = total // @dim
 
-        needs_grad = x.requires_grad? || @weight.requires_grad?
+        needs_grad = !Autograd::NoGrad.enabled? &&
+                     (x.requires_grad? || @weight.requires_grad?)
 
         # Try GPU path
-        if x.data.on_gpu? && @weight.data.on_gpu? && GPUOps.available?
+        if x.data.on_gpu? && @weight.data.on_gpu? &&
+           x.data.contiguous? && @weight.data.contiguous? && GPUOps.available?
           result = forward_gpu(x.data, batch_size)
         else
           result = forward_cpu(x.data, batch_size)
@@ -299,9 +277,9 @@ module ML
           w_on_gpu = @weight.data.on_gpu?
 
           grad_fn = Autograd::CustomBackward.new("RMSNormBackward", ->(g : Tensor) {
-            g_cpu = g.on_cpu? ? g : g.to_cpu
-            x_cpu = x_clone.on_cpu? ? x_clone : x_clone.to_cpu
-            w_cpu = w_clone.on_cpu? ? w_clone : w_clone.to_cpu
+            g_cpu = g.to_contiguous_cpu
+            x_cpu = x_clone.to_contiguous_cpu
+            w_cpu = w_clone.to_contiguous_cpu
 
             g_d = g_cpu.cpu_data.not_nil!
             x_d = x_cpu.cpu_data.not_nil!
@@ -368,31 +346,8 @@ module ML
       end
 
       private def forward_cpu(x : Tensor, batch_size : Int32) : Tensor
-        x_data = x.on_cpu? ? x : x.to_cpu
-
-        result = Tensor.new(x_data.shape, x_data.dtype, Tensor::Device::CPU)
-        x_d = x_data.cpu_data.not_nil!
-        r_d = result.cpu_data.not_nil!
-
-        w_data = @weight.data.on_cpu? ? @weight.data : @weight.data.to_cpu
-        w_d = w_data.cpu_data.not_nil!
-
-        batch_size.times do |b|
-          offset = b * @dim
-
-          # Compute RMS
-          sum_sq = 0.0_f32
-          @dim.times { |i| sum_sq += x_d[offset + i] * x_d[offset + i] }
-          rms = Math.sqrt(sum_sq / @dim + @eps)
-
-          # Normalize and scale
-          @dim.times do |i|
-            r_d[offset + i] = x_d[offset + i] / rms * w_d[i]
-          end
-        end
-
-        result = result.to_gpu if x.on_gpu?
-        result
+        result = Ops::CPU.rms_norm(x, @weight.data, @dim, @eps)
+        x.on_gpu? ? result.to_gpu : result
       end
 
       def call(x : Autograd::Variable) : Autograd::Variable

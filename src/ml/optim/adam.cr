@@ -94,6 +94,7 @@ module ML
 
       # Single optimization step
       def step : Nil
+        validate_step_inputs!
         @param_groups.each do |group|
           group.params.each do |param|
             next unless param.requires_grad?
@@ -219,6 +220,40 @@ module ML
         end
       end
 
+      private def validate_step_inputs! : Nil
+        active_params = [] of Tensor
+        active_grads = [] of Tensor
+        @param_groups.each do |group|
+          group.params.each do |param|
+            next unless param.requires_grad?
+            next unless grad = param.grad
+
+            unless param.data.contiguous?
+              raise ArgumentError.new("Optimizer parameters must be contiguous")
+            end
+            unless grad.contiguous?
+              raise ArgumentError.new("Optimizer gradients must be contiguous")
+            end
+            unless grad.shape == param.data.shape
+              raise ArgumentError.new(
+                "Optimizer gradient shape #{grad.shape} does not match parameter shape #{param.data.shape}"
+              )
+            end
+            if param.data.shares_storage_with?(grad) ||
+               active_params.any? { |other| param.data.shares_storage_with?(other) } ||
+               active_grads.any? { |other| param.data.shares_storage_with?(other) } ||
+               active_params.any? { |other| grad.shares_storage_with?(other) }
+              raise ArgumentError.new(
+                "Optimizer active parameter storage must not overlap another parameter or gradient"
+              )
+            end
+
+            active_params << param.data
+            active_grads << grad
+          end
+        end
+      end
+
       # Get all parameters
       def parameters : Array(Autograd::Variable)
         @param_groups.flat_map(&.params)
@@ -284,21 +319,13 @@ module ML
       end
 
       def step : Nil
+        validate_step_inputs!
         @params.each do |param|
           next unless param.requires_grad?
           next unless param.grad
 
           grad = param.grad.not_nil!
           param_data = param.data
-
-          # Apply weight decay
-          if @weight_decay > 0
-            grad_cpu = grad.on_cpu? ? grad : grad.to_cpu
-            param_cpu = param_data.on_cpu? ? param_data : param_data.to_cpu
-            grad_data = grad_cpu.cpu_data.not_nil!
-            param_d = param_cpu.cpu_data.not_nil!
-            grad.numel.times { |i| grad_data[i] += @weight_decay * param_d[i] }
-          end
 
           if @momentum > 0
             v = @velocity[param.object_id] ||= begin
@@ -323,9 +350,10 @@ module ML
             p_data = param_cpu.cpu_data.not_nil!
 
             param.numel.times do |i|
-              v_data[i] = @momentum * v_data[i] + (1.0_f32 - @dampening) * g_data[i]
+              effective_grad = g_data[i] + @weight_decay * p_data[i]
+              v_data[i] = @momentum * v_data[i] + (1.0_f32 - @dampening) * effective_grad
               if @nesterov
-                p_data[i] -= @lr * (g_data[i] + @momentum * v_data[i])
+                p_data[i] -= @lr * (effective_grad + @momentum * v_data[i])
               else
                 p_data[i] -= @lr * v_data[i]
               end
@@ -346,10 +374,45 @@ module ML
             g_data = grad_cpu.cpu_data.not_nil!
             p_data = param_data.cpu_data.not_nil!
 
-            param.numel.times { |i| p_data[i] -= @lr * g_data[i] }
+            param.numel.times do |i|
+              effective_grad = g_data[i] + @weight_decay * p_data[i]
+              p_data[i] -= @lr * effective_grad
+            end
 
             param_data.to_gpu! if param_was_gpu
           end
+        end
+      end
+
+      private def validate_step_inputs! : Nil
+        active_params = [] of Tensor
+        active_grads = [] of Tensor
+        @params.each do |param|
+          next unless param.requires_grad?
+          next unless grad = param.grad
+
+          unless param.data.contiguous?
+            raise ArgumentError.new("Optimizer parameters must be contiguous")
+          end
+          unless grad.contiguous?
+            raise ArgumentError.new("Optimizer gradients must be contiguous")
+          end
+          unless grad.shape == param.data.shape
+            raise ArgumentError.new(
+              "Optimizer gradient shape #{grad.shape} does not match parameter shape #{param.data.shape}"
+            )
+          end
+          if param.data.shares_storage_with?(grad) ||
+             active_params.any? { |other| param.data.shares_storage_with?(other) } ||
+             active_grads.any? { |other| param.data.shares_storage_with?(other) } ||
+             active_params.any? { |other| grad.shares_storage_with?(other) }
+            raise ArgumentError.new(
+              "Optimizer active parameter storage must not overlap another parameter or gradient"
+            )
+          end
+
+          active_params << param.data
+          active_grads << grad
         end
       end
 

@@ -21,6 +21,70 @@ module ML
       GPU
     end
 
+    # The currently admitted Tensor layouts are either canonical row-major or
+    # a dense non-overlapping permutation of the same backing storage.
+    enum LayoutClass
+      Contiguous
+      DenseStrided
+    end
+
+    # Read-only logical CPU access for numerical consumers.
+    #
+    # A contiguous CPU tensor is exposed as a live borrow. The owner is retained
+    # for the view lifetime, and callers must not mutate it concurrently.
+    # Every other source produces one stable logical row-major snapshot. No
+    # mutable backing Array is exposed through this API.
+    class CPUReadView
+      include Indexable(Float32)
+
+      getter source_layout : LayoutClass
+      getter source_device : Device
+      getter source_shape : Shape
+      getter source_strides : Strides
+      getter materialized_bytes : Int64
+
+      @owner : Tensor
+      @data : Array(Float32)
+      @borrowed : Bool
+
+      def initialize(@owner : Tensor, @data : Array(Float32))
+        unless @data.size == @owner.numel
+          raise ArgumentError.new(
+            "CPU read data length #{@data.size} does not match Tensor size #{@owner.numel}"
+          )
+        end
+
+        @source_layout = @owner.layout_class
+        @source_device = @owner.device
+        @source_shape = @owner.shape
+        @source_strides = @owner.strides
+        @borrowed = @owner.on_cpu? &&
+                    @owner.contiguous? &&
+                    @owner.cpu_data.not_nil!.object_id == @data.object_id
+        @materialized_bytes = @borrowed ? 0_i64 : @owner.numel.to_i64 * @owner.dtype.byte_size
+      end
+
+      def size : Int32
+        @data.size
+      end
+
+      def borrowed? : Bool
+        @borrowed
+      end
+
+      def materialized? : Bool
+        !@borrowed
+      end
+
+      def unsafe_fetch(index : Int) : Float32
+        if @borrowed &&
+           (!@owner.on_cpu? || @owner.cpu_data.try(&.object_id) != @data.object_id)
+          raise "CPU read borrow was invalidated by a Tensor storage transition"
+        end
+        @data[index]
+      end
+    end
+
     getter device : Device
 
     # Default device (compile-time selectable)
@@ -205,12 +269,31 @@ module ML
       @strides.contiguous?(@shape)
     end
 
+    def layout_class : LayoutClass
+      contiguous? ? LayoutClass::Contiguous : LayoutClass::DenseStrided
+    end
+
     def on_gpu? : Bool
       @device.gpu?
     end
 
     def on_cpu? : Bool
       @device.cpu?
+    end
+
+    # Whether two tensors refer to the same complete backing allocation.
+    #
+    # Tensor currently admits only dense full-allocation views without offsets,
+    # so shared backing implies overlapping storage.
+    def shares_storage_with?(other : Tensor) : Bool
+      return false unless @device == other.device
+
+      case @device
+      in .cpu?
+        @cpu_data.not_nil!.object_id == other.cpu_data.not_nil!.object_id
+      in .gpu?
+        @buffer.not_nil!.object_id == other.buffer.not_nil!.object_id
+      end
     end
 
     # Data access
@@ -387,6 +470,22 @@ module ML
       result
     end
 
+    # Acquire a logical read-only CPU view.
+    #
+    # Contiguous CPU data is borrowed with zero materialization. Dense strided
+    # CPU data and every GPU source are copied exactly once into a logical
+    # row-major snapshot. GPU execution/transfer semantics are not admitted by
+    # this accessor merely because diagnostic reads are supported.
+    def cpu_read : CPUReadView
+      if on_cpu? && contiguous?
+        CPUReadView.new(self, @cpu_data.not_nil!)
+      else
+        logical_data = Array(Float32).new(@shape.numel, 0.0_f32)
+        copy_logical_cpu_data_to!(logical_data)
+        CPUReadView.new(self, logical_data)
+      end
+    end
+
     private def contiguous_copy : Tensor
       result = Tensor.new(@shape, @dtype, @device)
       if @device.gpu?
@@ -459,8 +558,13 @@ module ML
 
     # Gather the logical row-major sequence from the current dense layout.
     private def copy_logical_cpu_data_to!(result : Array(Float32)) : Nil
-      ensure_cpu!
-      src = @cpu_data.not_nil!
+      src =
+        case @device
+        in .cpu?
+          @cpu_data.not_nil!
+        in .gpu?
+          @buffer.not_nil!.read(@shape.numel)
+        end
       unless result.size == @shape.numel
         raise ArgumentError.new(
           "Logical copy destination length #{result.size} doesn't match shape #{@shape.numel}"

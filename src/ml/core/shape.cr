@@ -166,6 +166,9 @@ module ML
       return false unless @ndim == shape.ndim
       expected = 1_i64
       (@ndim - 1).downto(0) do |i|
+        # A singleton axis addresses no additional storage, so its stride does
+        # not affect row-major contiguity.
+        next if shape.dims[i] == 1
         return false unless @strides[i] == expected
         expected *= shape.dims[i]
       end

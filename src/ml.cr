@@ -15,6 +15,9 @@ require "./ml/core/buffer"
 require "./ml/core/floating_storage"
 require "./ml/core/tensor"
 
+# Graphless CPU reference operations
+require "./ml/ops/normalization"
+
 # Autograd - automatic differentiation
 require "./ml/autograd/grad_fn"
 require "./ml/autograd/variable"
