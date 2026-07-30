@@ -27,6 +27,9 @@ require "./ml/nn/vit"
 # Optimizers
 require "./ml/optim/adam"
 
+# Native 3D model artifact contracts
+require "./ml/three_d/trellis2"
+
 module ML
   VERSION = "0.1.0"
 

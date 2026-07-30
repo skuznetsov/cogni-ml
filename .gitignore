@@ -32,5 +32,10 @@ test_*
 *.dwarf
 bin/
 
+# Tracked artifact inspector for the admitted TRELLIS.2 metadata boundary
+!bin/
+bin/*
+!bin/trellis2_inspect.cr
+
 # Test helper binaries (rebuildable via `make q4k_ref`)
 spec/support/q4k_ref
