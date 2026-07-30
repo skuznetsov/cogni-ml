@@ -2,6 +2,7 @@ require "digest/sha256"
 require "json"
 require "set"
 
+require "./conversion_plan"
 require "./inventory"
 require "./strict_json"
 
@@ -85,11 +86,12 @@ module ML::ThreeD::Trellis2
   end
 
   class Manifest
-    SCHEMA_VERSION     = 1_i32
-    PACK_ID_DOMAIN     = "cogni-ml/trellis2/pack-id/v1"
-    MAX_MANIFEST_BYTES = 16_i64 * 1024_i64 * 1024_i64
-    MAX_CONFIG_BYTES   = 16_i64 * 1024_i64 * 1024_i64
-    ALLOWED_STAGES     = Set{
+    LATEST_SCHEMA_VERSION     = 2_i32
+    SUPPORTED_SCHEMA_VERSIONS = Set{1_i32, 2_i32}
+    PACK_ID_DOMAIN            = "cogni-ml/trellis2/pack-id/v1"
+    MAX_MANIFEST_BYTES        = 16_i64 * 1024_i64 * 1024_i64
+    MAX_CONFIG_BYTES          = 16_i64 * 1024_i64 * 1024_i64
+    ALLOWED_STAGES            = Set{
       "dino_v3",
       "sparse_structure_flow",
       "sparse_structure_decoder",
@@ -99,11 +101,19 @@ module ML::ThreeD::Trellis2
       "texture_flow",
       "texture_decoder",
     }
-    ALLOWED_DTYPES = Set{"BF16", "F16", "F32"}
+    ALLOWED_DTYPES  = Set{"BF16", "F16", "F32"}
+    ALLOWED_LAYOUTS = Set{
+      "identity",
+      "transpose",
+      "permute",
+      "split",
+      "concat",
+    }
 
     getter schema_version : Int32
     getter converter_version : String
     getter converter_config_sha256 : String
+    getter converter_config_path : String?
     getter source : SourceRef
     getter model : SourceRef
     getter external_dependencies : Array(ExternalDependency)
@@ -116,6 +126,7 @@ module ML::ThreeD::Trellis2
       @schema_version,
       @converter_version,
       @converter_config_sha256,
+      @converter_config_path,
       @source,
       @model,
       @external_dependencies,
@@ -164,27 +175,34 @@ module ML::ThreeD::Trellis2
 
     private def self.parse_identity(source : String) : Manifest
       root = strict_object(source, "manifest")
-      expect_exact_keys!(
-        root,
-        [
-          "schema_version",
-          "converter_version",
-          "converter_config_sha256",
-          "source",
-          "model",
-          "external_dependencies",
-          "execution_order",
-          "files",
-          "stages",
-          "pack_id",
-        ],
-        "manifest"
-      )
-
+      unless root.has_key?("schema_version")
+        raise ManifestError.new("missing manifest key \"schema_version\"")
+      end
       schema_version = int32(root["schema_version"], "schema_version")
-      unless schema_version == SCHEMA_VERSION
+      unless SUPPORTED_SCHEMA_VERSIONS.includes?(schema_version)
         raise ManifestError.new("unsupported schema_version #{schema_version}")
       end
+
+      allowed_keys = [
+        "schema_version",
+        "converter_version",
+        "converter_config_sha256",
+        "source",
+        "model",
+        "external_dependencies",
+        "execution_order",
+        "files",
+        "stages",
+        "pack_id",
+      ]
+      if schema_version >= 2
+        allowed_keys << "converter_config_path"
+      end
+      expect_exact_keys!(
+        root,
+        allowed_keys,
+        "manifest"
+      )
 
       converter_version = string(root["converter_version"], "converter_version")
       unless converter_version.matches?(/\A[0-9]+\.[0-9]+\.[0-9]+\z/)
@@ -194,13 +212,21 @@ module ML::ThreeD::Trellis2
         string(root["converter_config_sha256"], "converter_config_sha256"),
         "converter_config_sha256"
       )
+      converter_config_path = if schema_version >= 2
+                                safe_relative_path(
+                                  string(
+                                    root["converter_config_path"],
+                                    "converter_config_path"
+                                  )
+                                )
+                              end
       source_ref = parse_source_ref(root["source"], "source")
       model_ref = parse_source_ref(root["model"], "model")
       external_dependencies = parse_external_dependencies(
         root["external_dependencies"]
       )
       execution_order = string_array(root["execution_order"], "execution_order")
-      files = parse_files(root["files"])
+      files = parse_files(root["files"], schema_version)
       stages = parse_stages(root["stages"])
       pack_id = sha256(string(root["pack_id"], "pack_id"), "pack_id")
 
@@ -208,6 +234,7 @@ module ML::ThreeD::Trellis2
         schema_version,
         converter_version,
         converter_config_sha256,
+        converter_config_path,
         source_ref,
         model_ref,
         external_dependencies,
@@ -247,6 +274,9 @@ module ML::ThreeD::Trellis2
           json.field "schema_version", @schema_version
           json.field "converter_version", @converter_version
           json.field "converter_config_sha256", @converter_config_sha256
+          if path = @converter_config_path
+            json.field "converter_config_path", path
+          end
           write_source_ref(json, "source", @source)
           write_source_ref(json, "model", @model)
           json.field "external_dependencies" do
@@ -362,6 +392,11 @@ module ML::ThreeD::Trellis2
         end
       end
 
+      if converter_config_path = @converter_config_path
+        path = safe_pack_path(root, converter_config_path)
+        validate_converter_plan!(path, declared_files)
+      end
+
       expected_by_file = Hash(String, Array(ManifestTensor)).new do |hash, key|
         hash[key] = [] of ManifestTensor
       end
@@ -401,6 +436,12 @@ module ML::ThreeD::Trellis2
     protected def validate_relations! : Nil
       raise ManifestError.new("files must not be empty") if @files.empty?
       raise ManifestError.new("stages must not be empty") if @stages.empty?
+      if @converter_config_path.nil? &&
+         @stages.any? { |stage| stage.tensors.any? { |tensor| tensor.layout != "identity" } }
+        raise ManifestError.new(
+          "transformed layouts require schema v2 with a bound converter config"
+        )
+      end
 
       duplicate_file = duplicate(@files.map(&.path))
       if duplicate_file
@@ -436,6 +477,22 @@ module ML::ThreeD::Trellis2
       declared_files = @files.to_h { |file| {file.path, file} }
       used_configs = Set(String).new
       used_weights = Set(String).new
+      used_converter_configs = Set(String).new
+      if converter_config_path = @converter_config_path
+        converter_config = declared_files[converter_config_path]?
+        unless converter_config &&
+               converter_config.role == "converter_config" &&
+               converter_config.sha256 == @converter_config_sha256
+          raise ManifestError.new(
+            "converter_config_path must reference its declared role and digest"
+          )
+        end
+        used_converter_configs << converter_config_path
+      elsif @files.any? { |file| file.role == "converter_config" }
+        raise ManifestError.new(
+          "schema v1 must not declare a converter_config-role file"
+        )
+      end
       @stages.each do |stage|
         config = declared_files[stage.config_path]?
         unless config
@@ -465,7 +522,15 @@ module ML::ThreeD::Trellis2
         end
       end
       @files.each do |file|
-        used = file.role == "config" ? used_configs : used_weights
+        used = case file.role
+               when "config"           then used_configs
+               when "weights"          then used_weights
+               when "converter_config" then used_converter_configs
+               else
+                 raise ManifestError.new(
+                   "unsupported declared file role #{file.role.inspect}"
+                 )
+               end
         unless used.includes?(file.path)
           raise ManifestError.new(
             "declared #{file.role}-role file #{file.path.inspect} is not referenced"
@@ -497,6 +562,88 @@ module ML::ThreeD::Trellis2
         )
       end
       path
+    end
+
+    private def validate_converter_plan!(
+      path : String,
+      declared_files : Hash(String, PackFile),
+    ) : Nil
+      source = File.read(path)
+      plan = ConversionPlan.parse(source)
+      unless source == plan.canonical_json
+        raise ManifestError.new(
+          "converter plan must use canonical JSON serialization"
+        )
+      end
+      unless @external_dependencies.empty?
+        raise ManifestError.new(
+          "T2N1 converter plans do not admit external pack dependencies"
+        )
+      end
+      unless plan.converter_version == @converter_version &&
+             same_identity?(plan.source, @source) &&
+             same_identity?(plan.model, @model)
+        raise ManifestError.new(
+          "converter plan identity does not match manifest identity"
+        )
+      end
+      unless @stages.size == 1 && @stages.first.id == plan.stage_id
+        raise ManifestError.new(
+          "converter plan stage does not match manifest stage"
+        )
+      end
+
+      stage = @stages.first
+      weight_files = @files
+        .select { |file| file.role == "weights" }
+        .map(&.path)
+        .sort
+      unless weight_files == [plan.output_file] &&
+             stage.config_path == plan.config_path
+        raise ManifestError.new(
+          "converter plan pack paths do not match manifest files"
+        )
+      end
+      unless declared_files[plan.output_file].license ==
+               plan.source_file.license &&
+             declared_files[plan.config_path].license ==
+               plan.converter_license &&
+             declared_files[@converter_config_path.not_nil!].license ==
+               plan.converter_license
+        raise ManifestError.new(
+          "converter plan licenses do not match manifest files"
+        )
+      end
+
+      expected_tensors = plan.operations.flat_map do |operation|
+        operation.destinations.map do |destination|
+          {destination, operation.kind}
+        end
+      end.sort
+      actual_tensors = stage.tensors.map do |tensor|
+        unless tensor.destination_name == "#{stage.id}.#{tensor.source_name}"
+          raise ManifestError.new(
+            "converter plan tensor destination is not stage-qualified"
+          )
+        end
+        {tensor.source_name, tensor.layout}
+      end.sort
+      unless actual_tensors == expected_tensors
+        raise ManifestError.new(
+          "converter plan tensors do not match manifest tensors"
+        )
+      end
+    rescue ex : ConversionPlanError
+      raise ManifestError.new("converter plan is invalid: #{ex.message}")
+    end
+
+    private def same_identity?(
+      plan : ConversionIdentity,
+      manifest : SourceRef,
+    ) : Bool
+      plan.repository == manifest.repository &&
+        plan.revision == manifest.revision &&
+        plan.license == manifest.license
     end
 
     private def validate_root_manifest_binding!(root : String) : Nil
@@ -634,7 +781,10 @@ module ML::ThreeD::Trellis2
       end
     end
 
-    private def self.parse_files(value : JSON::Any) : Array(PackFile)
+    private def self.parse_files(
+      value : JSON::Any,
+      schema_version : Int32,
+    ) : Array(PackFile)
       array(value, "files").map_with_index do |entry, index|
         context = "file[#{index}]"
         object = object(entry, context)
@@ -645,14 +795,16 @@ module ML::ThreeD::Trellis2
         )
         path = safe_relative_path(string(object["path"], "#{context}.path"))
         role = string(object["role"], "#{context}.role")
-        unless {"config", "weights"}.includes?(role)
+        allowed_roles = schema_version >= 2 ? {"config", "weights", "converter_config"} : {"config", "weights"}
+        unless allowed_roles.includes?(role)
           raise ManifestError.new("#{context}.role is unsupported")
         end
         byte_length = int64(object["byte_length"], "#{context}.byte_length")
         unless byte_length >= 0
           raise ManifestError.new("#{context}.byte_length must be non-negative")
         end
-        if role == "config" && byte_length > MAX_CONFIG_BYTES
+        if {"config", "converter_config"}.includes?(role) &&
+           byte_length > MAX_CONFIG_BYTES
           raise ManifestError.new(
             "#{context}.byte_length exceeds config limit #{MAX_CONFIG_BYTES}"
           )
@@ -744,7 +896,7 @@ module ML::ThreeD::Trellis2
           raise ManifestError.new("unsupported byte_order #{byte_order.inspect}")
         end
         layout = string(object["layout"], "#{context}.layout")
-        unless layout == "identity"
+        unless ALLOWED_LAYOUTS.includes?(layout)
           raise ManifestError.new("unsupported layout #{layout.inspect}")
         end
         ManifestTensor.new(

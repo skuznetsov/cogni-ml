@@ -36,6 +36,7 @@ bin/
 !bin/
 bin/*
 !bin/trellis2_inspect.cr
+!bin/trellis2_convert.cr
 
 # Test helper binaries (rebuildable via `make q4k_ref`)
 spec/support/q4k_ref

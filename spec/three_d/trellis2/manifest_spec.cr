@@ -9,6 +9,54 @@ private def expect_manifest_error(json : String, pattern : Regex)
   end
 end
 
+private def canonical_v2_plan(
+  destination : String = "model.weight",
+) : String
+  source = JSON.build do |json|
+    json.object do
+      json.field "schema_version", 1
+      json.field "converter_version", "0.1.0"
+      json.field "converter_license", "MIT"
+      json.field "source" do
+        json.object do
+          json.field "repository", "https://github.com/microsoft/TRELLIS.2"
+          json.field "revision", Trellis2SpecSupport::REV_A
+          json.field "license", "MIT"
+        end
+      end
+      json.field "model" do
+        json.object do
+          json.field "repository", "microsoft/TRELLIS.2-4B"
+          json.field "revision", Trellis2SpecSupport::REV_B
+          json.field "license", "MIT"
+        end
+      end
+      json.field "stage_id", "dino_v3"
+      json.field "source_file" do
+        json.object do
+          json.field "path", "upstream.safetensors"
+          json.field "byte_length", 128
+          json.field "sha256", "d" * 64
+          json.field "license", "MIT"
+        end
+      end
+      json.field "output_file", "stages/dino_v3.safetensors"
+      json.field "config_path", "configs/dino_v3.json"
+      json.field "operations" do
+        json.array do
+          json.object do
+            json.field "id", "model_weight"
+            json.field "kind", "identity"
+            json.field "source", "upstream.model.weight"
+            json.field "destination", destination
+          end
+        end
+      end
+    end
+  end
+  ML::ThreeD::Trellis2::ConversionPlan.parse(source).canonical_json
+end
+
 describe ML::ThreeD::Trellis2::Manifest do
   it "bounds strict JSON nesting before schema validation" do
     nested = "[" * 65 + "0" + "]" * 65
@@ -73,7 +121,7 @@ describe ML::ThreeD::Trellis2::Manifest do
 
   it "rejects unknown versions, stages, dtypes, layouts, and byte order" do
     bad_version = Trellis2SpecSupport.mutate(Trellis2SpecSupport.manifest_json) do |root|
-      root["schema_version"] = JSON::Any.new(2_i64)
+      root["schema_version"] = JSON::Any.new(3_i64)
     end
     expect_manifest_error(bad_version, /unsupported schema_version/)
 
@@ -92,6 +140,21 @@ describe ML::ThreeD::Trellis2::Manifest do
         end
       end
       expect_manifest_error(bad, pattern)
+    end
+  end
+
+  it "requires a bound v2 converter config for transformed layouts" do
+    transformed = Trellis2SpecSupport.mutate(
+      Trellis2SpecSupport.manifest_json
+    ) do |root|
+      root["stages"].as_a.first.as_h["tensors"].as_a.first.as_h["layout"] =
+        JSON::Any.new("transpose")
+    end
+    expect_raises(
+      ML::ThreeD::Trellis2::ManifestError,
+      /schema v2.*converter config/
+    ) do
+      Trellis2SpecSupport.seal_manifest_json(transformed)
     end
   end
 
@@ -254,6 +317,60 @@ describe ML::ThreeD::Trellis2::Manifest do
         /root manifest does not match/
       ) do
         manifest.validate_pack!(dir)
+      end
+    end
+  end
+
+  it "binds a v2 converter plan path and digest into pack identity" do
+    Trellis2SpecSupport.with_temp_dir do |dir|
+      Trellis2SpecSupport.write_valid_pack(dir)
+      conversion_dir = File.join(dir, "conversion")
+      Dir.mkdir(conversion_dir)
+      plan_path = File.join(conversion_dir, "plan.json")
+      File.write(plan_path, canonical_v2_plan)
+      plan_sha = Digest::SHA256.new.file(plan_path).hexfinal
+
+      draft = Trellis2SpecSupport.mutate(
+        File.read(File.join(dir, "manifest.json"))
+      ) do |root|
+        root["schema_version"] = JSON::Any.new(2_i64)
+        root["converter_config_path"] =
+          JSON::Any.new("conversion/plan.json")
+        root["converter_config_sha256"] = JSON::Any.new(plan_sha)
+        root["files"].as_a << JSON::Any.new({
+          "path"        => JSON::Any.new("conversion/plan.json"),
+          "role"        => JSON::Any.new("converter_config"),
+          "byte_length" => JSON::Any.new(File.size(plan_path)),
+          "sha256"      => JSON::Any.new(plan_sha),
+          "license"     => JSON::Any.new("MIT"),
+        })
+      end
+      sealed = Trellis2SpecSupport.seal_manifest_json(draft)
+      File.write(File.join(dir, "manifest.json"), sealed)
+
+      manifest = ML::ThreeD::Trellis2::Manifest.load(dir)
+      manifest.schema_version.should eq(2)
+      manifest.converter_config_path.should eq("conversion/plan.json")
+
+      File.write(plan_path, canonical_v2_plan("different.weight"))
+      different_sha = Digest::SHA256.new.file(plan_path).hexfinal
+      forged = Trellis2SpecSupport.mutate(sealed) do |root|
+        root["converter_config_sha256"] = JSON::Any.new(different_sha)
+        config = root["files"].as_a.find! do |entry|
+          entry.as_h["role"].as_s == "converter_config"
+        end.as_h
+        config["byte_length"] = JSON::Any.new(File.size(plan_path))
+        config["sha256"] = JSON::Any.new(different_sha)
+      end
+      File.write(
+        File.join(dir, "manifest.json"),
+        Trellis2SpecSupport.seal_manifest_json(forged)
+      )
+      expect_raises(
+        ML::ThreeD::Trellis2::ManifestError,
+        /converter plan.*tensor/
+      ) do
+        ML::ThreeD::Trellis2::Manifest.load(dir)
       end
     end
   end
