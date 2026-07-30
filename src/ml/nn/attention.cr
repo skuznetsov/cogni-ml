@@ -53,8 +53,8 @@ module ML
 
       # Forward pass
       # query, key, value: [batch, seq_len, embed_dim]
-      # attn_mask: optional [batch, seq_len, seq_len] or [seq_len, seq_len]
-      # Returns: [batch, seq_len, embed_dim]
+      # attn_mask: optional [batch, tgt_len, src_len] or [tgt_len, src_len]
+      # Returns: [batch, tgt_len, embed_dim]
       def forward(
         query : Autograd::Variable,
         key : Autograd::Variable,
