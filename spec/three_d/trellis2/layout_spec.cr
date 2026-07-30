@@ -64,6 +64,35 @@ describe ML::ThreeD::Trellis2::Layout do
     restored.bytes.should eq(source.bytes)
   end
 
+  it "moves BF16 and F32 elements without changing their bit patterns" do
+    {
+      "BF16" => {
+        Bytes[0, 1, 2, 3, 4, 5, 6, 7],
+        Bytes[0, 1, 4, 5, 2, 3, 6, 7],
+      },
+      "F32" => {
+        Bytes[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        Bytes[0, 1, 2, 3, 8, 9, 10, 11, 4, 5, 6, 7, 12, 13, 14, 15],
+      },
+    }.each do |dtype, (source_bytes, expected_bytes)|
+      source = ML::ThreeD::Trellis2::RawTensor.new(
+        dtype.downcase,
+        dtype,
+        [2_i64, 2_i64],
+        source_bytes
+      )
+      converted = ML::ThreeD::Trellis2::Layout.transpose(
+        source,
+        "#{dtype.downcase}_t",
+        0,
+        1
+      )
+
+      converted.dtype.should eq(dtype)
+      converted.bytes.should eq(expected_bytes)
+    end
+  end
+
   it "round-trips split and concat along a non-leading axis" do
     source = raw_tensor("wide", [2_i64, 4_i64], 0_u16..7_u16)
     parts = ML::ThreeD::Trellis2::Layout.split(
