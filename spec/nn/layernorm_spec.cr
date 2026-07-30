@@ -18,6 +18,21 @@ describe ML::NN::LayerNorm do
       bias = ln.bias.data.cpu_data.not_nil!
       bias.all? { |x| x.abs < 1e-6 }.should be_true
     end
+
+    it "rejects invalid normalized shapes and epsilon" do
+      expect_raises(ArgumentError, /normalized_shape must not be empty/) do
+        ML::NN::LayerNorm.new([] of Int32, device: ML::Tensor::Device::CPU)
+      end
+      expect_raises(ArgumentError, /normalized_shape dimensions must be positive/) do
+        ML::NN::LayerNorm.new([4_i32, 0_i32], device: ML::Tensor::Device::CPU)
+      end
+      expect_raises(ArgumentError, /eps must be finite and positive/) do
+        ML::NN::LayerNorm.new(4, eps: 0.0_f32, device: ML::Tensor::Device::CPU)
+      end
+      expect_raises(ArgumentError, /element count overflow/) do
+        ML::NN::LayerNorm.new([46_341_i32, 46_341_i32], device: ML::Tensor::Device::CPU)
+      end
+    end
   end
 
   describe "#forward" do
@@ -53,6 +68,17 @@ describe ML::NN::LayerNorm do
 end
 
 describe ML::NN::RMSNorm do
+  describe "#initialize" do
+    it "rejects invalid dimension and epsilon" do
+      expect_raises(ArgumentError, /dim must be positive/) do
+        ML::NN::RMSNorm.new(0, device: ML::Tensor::Device::CPU)
+      end
+      expect_raises(ArgumentError, /eps must be finite and positive/) do
+        ML::NN::RMSNorm.new(4, eps: Float32::NAN, device: ML::Tensor::Device::CPU)
+      end
+    end
+  end
+
   describe "#forward" do
     it "produces correct output shape" do
       rms = ML::NN::RMSNorm.new(64, device: ML::Tensor::Device::CPU)

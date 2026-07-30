@@ -13,6 +13,24 @@ describe ML::NN::MultiHeadAttention do
       mha = ML::NN::MultiHeadAttention.new(embed_dim: 64, num_heads: 4, device: ML::Tensor::Device::CPU)
       mha.head_dim.should eq(16)
     end
+
+    it "rejects invalid head geometry and dropout before projection allocation" do
+      expect_raises(ArgumentError, /embed_dim must be positive/) do
+        ML::NN::MultiHeadAttention.new(embed_dim: 0, num_heads: 1, device: ML::Tensor::Device::CPU)
+      end
+      expect_raises(ArgumentError, /num_heads must be positive/) do
+        ML::NN::MultiHeadAttention.new(embed_dim: 8, num_heads: 0, device: ML::Tensor::Device::CPU)
+      end
+      expect_raises(ArgumentError, /embed_dim must be divisible by num_heads/) do
+        ML::NN::MultiHeadAttention.new(embed_dim: 8, num_heads: 3, device: ML::Tensor::Device::CPU)
+      end
+      expect_raises(ArgumentError, /dropout must be finite and in/) do
+        ML::NN::MultiHeadAttention.new(embed_dim: 8, num_heads: 2, dropout: Float32::NAN, device: ML::Tensor::Device::CPU)
+      end
+      expect_raises(ArgumentError, /dropout must be finite and in/) do
+        ML::NN::MultiHeadAttention.new(embed_dim: 8, num_heads: 2, dropout: 1.0_f32, device: ML::Tensor::Device::CPU)
+      end
+    end
   end
 
   describe "#self_attention" do

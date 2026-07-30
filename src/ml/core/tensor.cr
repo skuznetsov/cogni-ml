@@ -145,19 +145,50 @@ module ML
 
     # Arange
     def self.arange(start : Float32, stop : Float32, step : Float32 = 1.0_f32, device : Device = Tensor.default_device) : Tensor
-      count = ((stop - start) / step).ceil.to_i32
+      unless start.finite? && stop.finite?
+        raise ArgumentError.new("arange start and stop must be finite")
+      end
+      unless step.finite? && step != 0.0_f32
+        raise ArgumentError.new("arange step must be finite and non-zero")
+      end
+
+      count_f64 = if (step > 0.0_f32 && start < stop) || (step < 0.0_f32 && start > stop)
+                    ((stop.to_f64 - start.to_f64) / step.to_f64).ceil
+                  else
+                    0.0
+                  end
+      unless count_f64 <= Int32::MAX
+        raise ArgumentError.new("arange element count overflow: #{count_f64}")
+      end
+      count = count_f64.to_i32
       tensor = new(count, device: Device::CPU)
       data = tensor.cpu_data.not_nil!
-      count.times { |i| data[i] = start + i * step }
+      count.times do |i|
+        data[i] = (start.to_f64 + i.to_f64 * step.to_f64).to_f32
+      end
       device.gpu? ? tensor.to_gpu : tensor
     end
 
     # Linspace
     def self.linspace(start : Float32, stop : Float32, count : Int32, device : Device = Tensor.default_device) : Tensor
+      unless start.finite? && stop.finite?
+        raise ArgumentError.new("linspace start and stop must be finite")
+      end
+      if count < 0
+        raise ArgumentError.new("linspace count must be non-negative")
+      end
+
       tensor = new(count, device: Device::CPU)
       data = tensor.cpu_data.not_nil!
-      step = (stop - start) / (count - 1).to_f32
-      count.times { |i| data[i] = start + i * step }
+      if count == 1
+        data[0] = start
+      elsif count > 1
+        step = (stop.to_f64 - start.to_f64) / (count - 1).to_f64
+        count.times do |i|
+          data[i] = (start.to_f64 + i.to_f64 * step).to_f32
+        end
+        data[-1] = stop
+      end
       device.gpu? ? tensor.to_gpu : tensor
     end
 
@@ -184,8 +215,9 @@ module ML
 
     # Data access
     def to_a : Array(Float32)
-      ensure_cpu!
-      @cpu_data.not_nil!.dup
+      result = Array(Float32).new(@shape.numel, 0.0_f32)
+      copy_logical_cpu_data_to!(result)
+      result
     end
 
     def to_flat_array : Array(Float32)
@@ -347,15 +379,12 @@ module ML
 
     private def contiguous_copy : Tensor
       result = Tensor.new(@shape, @dtype, @device)
-      # TODO: implement strided copy
-      # For now, go through CPU
-      ensure_cpu!
       if @device.gpu?
-        result.buffer.not_nil!.write(@cpu_data.not_nil!)
+        logical_data = Array(Float32).new(@shape.numel, 0.0_f32)
+        copy_logical_cpu_data_to!(logical_data)
+        result.buffer.not_nil!.write(logical_data)
       else
-        src = @cpu_data.not_nil!
-        dst = result.cpu_data.not_nil!
-        @shape.numel.times { |i| dst[i] = src[i] }
+        copy_logical_cpu_data_to!(result.cpu_data.not_nil!)
       end
       result
     end
@@ -401,6 +430,8 @@ module ML
 
     # Clone (deep copy)
     def clone : Tensor
+      return contiguous_copy unless contiguous?
+
       result = Tensor.new(@shape, @dtype, @device)
       case @device
       in .cpu?
@@ -414,6 +445,35 @@ module ML
         result.buffer.not_nil!.write(data)
       end
       result
+    end
+
+    # Gather the logical row-major sequence from the current dense layout.
+    private def copy_logical_cpu_data_to!(result : Array(Float32)) : Nil
+      ensure_cpu!
+      src = @cpu_data.not_nil!
+      unless result.size == @shape.numel
+        raise ArgumentError.new(
+          "Logical copy destination length #{result.size} doesn't match shape #{@shape.numel}"
+        )
+      end
+      if contiguous?
+        @shape.numel.times { |i| result[i] = src[i] }
+        return
+      end
+
+      @shape.numel.times do |logical_index|
+        remaining = logical_index
+        storage_index = 0_i64
+        axis = @shape.ndim - 1
+        while axis >= 0
+          dimension = @shape[axis]
+          coordinate = remaining % dimension
+          remaining //= dimension
+          storage_index += coordinate.to_i64 * @strides[axis]
+          axis -= 1
+        end
+        result[logical_index] = src[storage_index.to_i]
+      end
     end
 
     # String representation

@@ -26,14 +26,38 @@ module ML
         @patch_size : Int32 = 16,
         @in_channels : Int32 = 3,
         @embed_dim : Int32 = 768,
-        device : Tensor::Device = Tensor.default_device
+        device : Tensor::Device = Tensor.default_device,
       )
+        if img_size <= 0
+          raise ArgumentError.new("img_size must be positive")
+        end
+        if @patch_size <= 0
+          raise ArgumentError.new("patch_size must be positive")
+        end
+        if @in_channels <= 0
+          raise ArgumentError.new("in_channels must be positive")
+        end
+        if @embed_dim <= 0
+          raise ArgumentError.new("embed_dim must be positive")
+        end
         raise ArgumentError.new("Image size must be divisible by patch size") unless img_size % @patch_size == 0
 
-        @num_patches = (img_size // @patch_size) ** 2
-        patch_dim = in_channels * @patch_size * @patch_size
+        patches_per_axis = img_size.to_i64 // @patch_size
+        num_patches = patches_per_axis * patches_per_axis
+        if num_patches > Int32::MAX
+          raise ArgumentError.new("num_patches overflow: #{num_patches}")
+        end
+        @num_patches = num_patches.to_i32
 
-        @proj = Linear.new(patch_dim, @embed_dim, bias: true, device: device)
+        patch_dim = @in_channels.to_i64
+        2.times do
+          if patch_dim > Int32::MAX.to_i64 // @patch_size
+            raise ArgumentError.new("patch_dim overflow")
+          end
+          patch_dim *= @patch_size
+        end
+
+        @proj = Linear.new(patch_dim.to_i32, @embed_dim, bias: true, device: device)
       end
 
       # Forward: [B, C, H, W] -> [B, num_patches, embed_dim]
@@ -184,10 +208,31 @@ module ML
         hidden_features : Int32? = nil,
         out_features : Int32? = nil,
         @dropout : Float32 = 0.0_f32,
-        device : Tensor::Device = Tensor.default_device
+        device : Tensor::Device = Tensor.default_device,
       )
-        hidden_dim = hidden_features || in_features * 4
+        if in_features <= 0
+          raise ArgumentError.new("in_features must be positive")
+        end
+        unless @dropout.finite? && 0.0_f32 <= @dropout < 1.0_f32
+          raise ArgumentError.new("dropout must be finite and in [0, 1)")
+        end
+
+        hidden_dim = if hidden_features
+                       if hidden_features <= 0
+                         raise ArgumentError.new("hidden_features must be positive")
+                       end
+                       hidden_features
+                     else
+                       default_hidden = in_features.to_i64 * 4_i64
+                       if default_hidden > Int32::MAX
+                         raise ArgumentError.new("hidden_features overflow: #{default_hidden}")
+                       end
+                       default_hidden.to_i32
+                     end
         out_dim = out_features || in_features
+        if out_dim <= 0
+          raise ArgumentError.new("out_features must be positive")
+        end
 
         @fc1 = Linear.new(in_features, hidden_dim, device: device)
         @fc2 = Linear.new(hidden_dim, out_dim, device: device)
@@ -196,8 +241,8 @@ module ML
       # Forward with GELU activation
       def forward(x : Autograd::Variable) : Autograd::Variable
         needs_grad = x.requires_grad? ||
-          @fc1.weight.requires_grad? || (@fc1.bias.try(&.requires_grad?) || false) ||
-          @fc2.weight.requires_grad? || (@fc2.bias.try(&.requires_grad?) || false)
+                     @fc1.weight.requires_grad? || (@fc1.bias.try(&.requires_grad?) || false) ||
+                     @fc2.weight.requires_grad? || (@fc2.bias.try(&.requires_grad?) || false)
 
         if x.data.on_gpu? && GPUOps.available? && !needs_grad
           input_shape = x.data.shape.to_a
@@ -304,10 +349,30 @@ module ML
         num_heads : Int32,
         mlp_ratio : Float32 = 4.0_f32,
         @dropout : Float32 = 0.0_f32,
-        device : Tensor::Device = Tensor.default_device
+        device : Tensor::Device = Tensor.default_device,
       )
+        if embed_dim <= 0
+          raise ArgumentError.new("embed_dim must be positive")
+        end
+        if num_heads <= 0
+          raise ArgumentError.new("num_heads must be positive")
+        end
+        unless mlp_ratio.finite? && mlp_ratio > 0.0_f32
+          raise ArgumentError.new("mlp_ratio must be finite and positive")
+        end
+        unless @dropout.finite? && 0.0_f32 <= @dropout < 1.0_f32
+          raise ArgumentError.new("dropout must be finite and in [0, 1)")
+        end
+
+        hidden_features = embed_dim.to_f64 * mlp_ratio.to_f64
+        unless 1.0 <= hidden_features <= Int32::MAX
+          raise ArgumentError.new(
+            "MLP hidden dimension must be positive and representable"
+          )
+        end
+
         @attention = MultiHeadAttention.new(embed_dim, num_heads, dropout: @dropout, device: device)
-        @mlp = MLP.new(embed_dim, (embed_dim * mlp_ratio).to_i32, embed_dim, @dropout, device)
+        @mlp = MLP.new(embed_dim, hidden_features.to_i32, embed_dim, @dropout, device)
         @norm1 = LayerNorm.new(embed_dim, device: device)
         @norm2 = LayerNorm.new(embed_dim, device: device)
       end
@@ -394,8 +459,24 @@ module ML
         num_heads : Int32 = 12,
         mlp_ratio : Float32 = 4.0_f32,
         dropout : Float32 = 0.0_f32,
-        device : Tensor::Device = Tensor.default_device
+        device : Tensor::Device = Tensor.default_device,
       )
+        if depth < 0
+          raise ArgumentError.new("depth must be non-negative")
+        end
+        if num_heads <= 0
+          raise ArgumentError.new("num_heads must be positive")
+        end
+        unless mlp_ratio.finite? && mlp_ratio > 0.0_f32
+          raise ArgumentError.new("mlp_ratio must be finite and positive")
+        end
+        unless dropout.finite? && 0.0_f32 <= dropout < 1.0_f32
+          raise ArgumentError.new("dropout must be finite and in [0, 1)")
+        end
+        if embed_dim > 0 && embed_dim % num_heads != 0
+          raise ArgumentError.new("embed_dim must be divisible by num_heads")
+        end
+
         @patch_embed = PatchEmbedding.new(img_size, patch_size, in_channels, embed_dim, device)
 
         num_patches = @patch_embed.num_patches
@@ -429,7 +510,7 @@ module ML
         batch = x.data.shape[0]
 
         # Patch embedding
-        patches = @patch_embed.forward(x)  # [batch, num_patches, embed_dim]
+        patches = @patch_embed.forward(x) # [batch, num_patches, embed_dim]
 
         # Prepend CLS token (expand to batch)
         patches = prepend_cls_token(patches, batch)
@@ -559,7 +640,7 @@ module ML
           seq_len.times do |s|
             embed_dim.times do |e|
               x_idx = b * seq_len * embed_dim + s * embed_dim + e
-              p_idx = s * embed_dim + e  # pos_embed is [1, seq_len, embed_dim]
+              p_idx = s * embed_dim + e # pos_embed is [1, seq_len, embed_dim]
               r_d[x_idx] = x_d[x_idx] + p_d[p_idx]
             end
           end

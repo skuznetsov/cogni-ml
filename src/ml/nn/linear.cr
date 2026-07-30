@@ -15,6 +15,13 @@ module ML
       getter out_features : Int32
 
       def initialize(@in_features : Int32, @out_features : Int32, bias : Bool = true, device : Tensor::Device = Tensor.default_device)
+        if @in_features <= 0
+          raise ArgumentError.new("in_features must be positive")
+        end
+        if @out_features <= 0
+          raise ArgumentError.new("out_features must be positive")
+        end
+
         # Initialize weight with Kaiming/He initialization
         # std = sqrt(2 / in_features) for ReLU
         std = Math.sqrt(2.0 / @in_features).to_f32
@@ -83,7 +90,7 @@ module ML
       end
 
       private def reshape_for_linear(x : Autograd::Variable, batch : Int32, features : Int32) : Autograd::Variable
-        return x if x.data.ndim == 2  # Already 2D
+        return x if x.data.ndim == 2 # Already 2D
 
         if x.data.on_gpu?
           reshaped = x.data.reshape(batch, features)
@@ -126,7 +133,7 @@ module ML
       end
 
       private def reshape_from_linear(x : Autograd::Variable, shape : Array(Int32)) : Autograd::Variable
-        return x if shape.size == 2  # Already correct shape
+        return x if shape.size == 2 # Already correct shape
 
         if x.data.on_gpu?
           reshaped = x.data.reshape(Shape.new(shape))
@@ -188,8 +195,8 @@ module ML
       # Result: [batch, m, n] or [m, n] or [n]
       private def matmul(a : Autograd::Variable, b : Autograd::Variable) : Autograd::Variable
         # b is already transposed: [in_features, out_features]
-        k = b.data.shape[0]  # in_features
-        n = b.data.shape[1]  # out_features
+        k = b.data.shape[0] # in_features
+        n = b.data.shape[1] # out_features
 
         # Handle batched vs unbatched
         if a.data.ndim == 1
@@ -198,7 +205,7 @@ module ML
           result_shape = Shape.new(n)
         else
           # [batch, in] @ [in, out] = [batch, out]
-          m = a.data.shape[0]  # batch size
+          m = a.data.shape[0] # batch size
           result_shape = Shape.new(m, n)
         end
 
@@ -235,7 +242,7 @@ module ML
         # b is already [in, out], so we need to transpose it to get weight[out, in]
 
         # Create weight in [out_features, in_features] format
-        weight = b.t  # [out_features, in_features]
+        weight = b.t # [out_features, in_features]
 
         GPUOps.linear_forward(a, weight, nil, result)
         result

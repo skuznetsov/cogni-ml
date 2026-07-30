@@ -10,15 +10,24 @@ module ML
     # Layer Normalization: y = (x - mean) / sqrt(var + eps) * gamma + beta
     class LayerNorm
       getter normalized_shape : Array(Int32)
-      getter weight : Autograd::Variable  # gamma
-      getter bias : Autograd::Variable    # beta
+      getter weight : Autograd::Variable # gamma
+      getter bias : Autograd::Variable   # beta
       getter eps : Float32
 
       def initialize(normalized_shape : Array(Int32) | Int32, @eps : Float32 = 1e-5_f32, device : Tensor::Device = Tensor.default_device)
         @normalized_shape = normalized_shape.is_a?(Int32) ? [normalized_shape] : normalized_shape
+        if @normalized_shape.empty?
+          raise ArgumentError.new("normalized_shape must not be empty")
+        end
+        unless @normalized_shape.all? { |dimension| dimension > 0 }
+          raise ArgumentError.new("normalized_shape dimensions must be positive")
+        end
+        unless @eps.finite? && @eps > 0.0_f32
+          raise ArgumentError.new("eps must be finite and positive")
+        end
 
         # Number of elements in normalized dimensions
-        num_elements = @normalized_shape.reduce(1) { |a, b| a * b }
+        num_elements = Shape.new(@normalized_shape).numel
 
         # Initialize gamma (weight) to ones
         weight_data = Tensor.ones(num_elements, device: device)
@@ -253,6 +262,13 @@ module ML
       getter eps : Float32
 
       def initialize(@dim : Int32, @eps : Float32 = 1e-5_f32, device : Tensor::Device = Tensor.default_device)
+        if @dim <= 0
+          raise ArgumentError.new("dim must be positive")
+        end
+        unless @eps.finite? && @eps > 0.0_f32
+          raise ArgumentError.new("eps must be finite and positive")
+        end
+
         weight_data = Tensor.ones(@dim, device: device)
         @weight = Autograd::Variable.new(weight_data, requires_grad: true)
       end

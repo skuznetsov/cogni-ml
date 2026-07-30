@@ -192,4 +192,70 @@ describe ML::Tensor do
       tensor[2_i32, 0_i32] = 0.0_f32
     end
   end
+
+  it "copies a transposed view in logical row-major order" do
+    tensor = ML::Tensor.from_array(
+      [1.0_f32, 2.0_f32, 3.0_f32, 4.0_f32, 5.0_f32, 6.0_f32],
+      ML::Shape.new(2_i32, 3_i32)
+    )
+    transposed = tensor.transpose
+    expected = [1.0_f32, 4.0_f32, 2.0_f32, 5.0_f32, 3.0_f32, 6.0_f32]
+
+    transposed.to_a.should eq(expected)
+    transposed.to_flat_array.should eq(expected)
+    contiguous = transposed.contiguous
+    contiguous[0_i32, 1_i32].should eq(4.0_f32)
+    contiguous.to_a.should eq(expected)
+    transposed.reshape(6_i32).to_a.should eq(expected)
+
+    cloned = transposed.clone
+    cloned.to_a.should eq(expected)
+    cloned[0_i32, 0_i32] = 99.0_f32
+    transposed[0_i32, 0_i32].should eq(1.0_f32)
+  end
+
+  it "materializes higher-rank transposes by logical coordinates" do
+    tensor = ML::Tensor.from_array(
+      (1..12).map(&.to_f32),
+      ML::Shape.new(2_i32, 2_i32, 3_i32)
+    )
+
+    tensor.transpose.contiguous.to_a.should eq([
+      1.0_f32, 4.0_f32, 2.0_f32, 5.0_f32, 3.0_f32, 6.0_f32,
+      7.0_f32, 10.0_f32, 8.0_f32, 11.0_f32, 9.0_f32, 12.0_f32,
+    ])
+  end
+
+  it "validates arange inputs before count conversion" do
+    expect_raises(ArgumentError, /step must be finite and non-zero/) do
+      ML::Tensor.arange(0.0_f32, 1.0_f32, 0.0_f32, device: ML::Tensor::Device::CPU)
+    end
+    expect_raises(ArgumentError, /start and stop must be finite/) do
+      ML::Tensor.arange(Float32::NAN, 1.0_f32, 1.0_f32, device: ML::Tensor::Device::CPU)
+    end
+    expect_raises(ArgumentError, /element count overflow/) do
+      ML::Tensor.arange(0.0_f32, Float32::MAX, 1e-30_f32, device: ML::Tensor::Device::CPU)
+    end
+
+    ML::Tensor.arange(3.0_f32, 0.0_f32, -1.0_f32, device: ML::Tensor::Device::CPU)
+      .to_a.should eq([3.0_f32, 2.0_f32, 1.0_f32])
+    ML::Tensor.arange(0.0_f32, 3.0_f32, -1.0_f32, device: ML::Tensor::Device::CPU)
+      .to_a.should be_empty
+  end
+
+  it "handles linspace boundary counts without producing NaN" do
+    ML::Tensor.linspace(2.0_f32, 7.0_f32, 1_i32, device: ML::Tensor::Device::CPU)
+      .to_a.should eq([2.0_f32])
+    ML::Tensor.linspace(2.0_f32, 7.0_f32, 0_i32, device: ML::Tensor::Device::CPU)
+      .to_a.should be_empty
+    ML::Tensor.linspace(2.0_f32, 7.0_f32, 3_i32, device: ML::Tensor::Device::CPU)
+      .to_a.should eq([2.0_f32, 4.5_f32, 7.0_f32])
+
+    expect_raises(ArgumentError, /count must be non-negative/) do
+      ML::Tensor.linspace(0.0_f32, 1.0_f32, -1_i32, device: ML::Tensor::Device::CPU)
+    end
+    expect_raises(ArgumentError, /start and stop must be finite/) do
+      ML::Tensor.linspace(0.0_f32, Float32::INFINITY, 2_i32, device: ML::Tensor::Device::CPU)
+    end
+  end
 end

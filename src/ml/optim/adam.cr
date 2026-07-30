@@ -14,13 +14,19 @@ module ML
       property name : String
 
       def initialize(@params : Array(Autograd::Variable), @lr : Float32 = 0.001_f32, @weight_decay : Float32 = 0.0_f32, @name : String = "default")
+        unless @lr.finite? && @lr >= 0.0_f32
+          raise ArgumentError.new("lr must be finite and non-negative")
+        end
+        unless @weight_decay.finite? && @weight_decay >= 0.0_f32
+          raise ArgumentError.new("weight_decay must be finite and non-negative")
+        end
       end
     end
 
     # Adam optimizer state for a single parameter
     class AdamState
-      property m : Tensor  # First moment (mean of gradients)
-      property v : Tensor  # Second moment (mean of squared gradients)
+      property m : Tensor # First moment (mean of gradients)
+      property v : Tensor # Second moment (mean of squared gradients)
       property step : Int32
 
       def initialize(shape : Shape, device : Tensor::Device)
@@ -34,12 +40,12 @@ module ML
 
     # Adam optimizer with optional weight decay (AdamW)
     class Adam
-      property lr : Float32          # Learning rate
-      property beta1 : Float32       # Exponential decay for first moment
-      property beta2 : Float32       # Exponential decay for second moment
-      property eps : Float32         # Small constant for numerical stability
+      property lr : Float32           # Learning rate
+      property beta1 : Float32        # Exponential decay for first moment
+      property beta2 : Float32        # Exponential decay for second moment
+      property eps : Float32          # Small constant for numerical stability
       property weight_decay : Float32 # L2 regularization (0 for standard Adam)
-      property amsgrad : Bool        # Use AMSGrad variant
+      property amsgrad : Bool         # Use AMSGrad variant
 
       @param_groups : Array(ParamGroup)
       @state : Hash(UInt64, AdamState)
@@ -51,8 +57,9 @@ module ML
         @beta2 : Float32 = 0.999_f32,
         @eps : Float32 = 1e-8_f32,
         @weight_decay : Float32 = 0.0_f32,
-        @amsgrad : Bool = false
+        @amsgrad : Bool = false,
       )
+        validate_hyperparameters!
         @param_groups = [ParamGroup.new(params, @lr, @weight_decay)]
         @state = Hash(UInt64, AdamState).new
       end
@@ -71,14 +78,17 @@ module ML
         @beta2 : Float32 = 0.999_f32,
         @eps : Float32 = 1e-8_f32,
         @weight_decay : Float32 = 0.0_f32,
-        @amsgrad : Bool = false
+        @amsgrad : Bool = false,
       )
+        validate_hyperparameters!
+        param_groups.each { |group| validate_param_group!(group) }
         @param_groups = param_groups
         @state = Hash(UInt64, AdamState).new
       end
 
       # Add parameter group
       def add_param_group(group : ParamGroup) : Nil
+        validate_param_group!(group)
         @param_groups << group
       end
 
@@ -182,6 +192,33 @@ module ML
         end
       end
 
+      private def validate_hyperparameters! : Nil
+        unless @lr.finite? && @lr >= 0.0_f32
+          raise ArgumentError.new("lr must be finite and non-negative")
+        end
+        unless @beta1.finite? && 0.0_f32 <= @beta1 < 1.0_f32
+          raise ArgumentError.new("beta1 must be finite and in [0, 1)")
+        end
+        unless @beta2.finite? && 0.0_f32 <= @beta2 < 1.0_f32
+          raise ArgumentError.new("beta2 must be finite and in [0, 1)")
+        end
+        unless @eps.finite? && @eps > 0.0_f32
+          raise ArgumentError.new("eps must be finite and positive")
+        end
+        unless @weight_decay.finite? && @weight_decay >= 0.0_f32
+          raise ArgumentError.new("weight_decay must be finite and non-negative")
+        end
+      end
+
+      private def validate_param_group!(group : ParamGroup) : Nil
+        unless group.lr.finite? && group.lr >= 0.0_f32
+          raise ArgumentError.new("lr must be finite and non-negative")
+        end
+        unless group.weight_decay.finite? && group.weight_decay >= 0.0_f32
+          raise ArgumentError.new("weight_decay must be finite and non-negative")
+        end
+      end
+
       # Get all parameters
       def parameters : Array(Autograd::Variable)
         @param_groups.flat_map(&.params)
@@ -226,8 +263,23 @@ module ML
         @momentum : Float32 = 0.0_f32,
         @weight_decay : Float32 = 0.0_f32,
         @dampening : Float32 = 0.0_f32,
-        @nesterov : Bool = false
+        @nesterov : Bool = false,
       )
+        unless @lr.finite? && @lr >= 0.0_f32
+          raise ArgumentError.new("lr must be finite and non-negative")
+        end
+        unless @momentum.finite? && @momentum >= 0.0_f32
+          raise ArgumentError.new("momentum must be finite and non-negative")
+        end
+        unless @weight_decay.finite? && @weight_decay >= 0.0_f32
+          raise ArgumentError.new("weight_decay must be finite and non-negative")
+        end
+        unless @dampening.finite? && @dampening >= 0.0_f32
+          raise ArgumentError.new("dampening must be finite and non-negative")
+        end
+        if @nesterov && (@momentum <= 0.0_f32 || @dampening != 0.0_f32)
+          raise ArgumentError.new("Nesterov requires positive momentum and zero dampening")
+        end
         @velocity = Hash(UInt64, Tensor).new
       end
 
@@ -321,6 +373,12 @@ module ML
       @base_lr : Float32
 
       def initialize(@optimizer : Adam, @step_size : Int32, @gamma : Float32 = 0.1_f32)
+        if @step_size <= 0
+          raise ArgumentError.new("step_size must be positive")
+        end
+        unless @gamma.finite? && @gamma >= 0.0_f32
+          raise ArgumentError.new("gamma must be finite and non-negative")
+        end
         @current_step = 0
         @base_lr = @optimizer.lr
       end
@@ -343,6 +401,9 @@ module ML
       @gamma : Float32
 
       def initialize(@optimizer : Adam, @gamma : Float32 = 0.99_f32)
+        unless @gamma.finite? && @gamma >= 0.0_f32
+          raise ArgumentError.new("gamma must be finite and non-negative")
+        end
       end
 
       def step : Nil

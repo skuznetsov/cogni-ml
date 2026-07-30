@@ -23,6 +23,15 @@ describe ML::NN::Linear do
       linear = ML::NN::Linear.new(10, 5, bias: false, device: ML::Tensor::Device::CPU)
       linear.bias.should be_nil
     end
+
+    it "rejects non-positive feature counts before initialization" do
+      expect_raises(ArgumentError, /in_features must be positive/) do
+        ML::NN::Linear.new(0, 4, device: ML::Tensor::Device::CPU)
+      end
+      expect_raises(ArgumentError, /out_features must be positive/) do
+        ML::NN::Linear.new(4, 0, device: ML::Tensor::Device::CPU)
+      end
+    end
   end
 
   describe "#forward" do

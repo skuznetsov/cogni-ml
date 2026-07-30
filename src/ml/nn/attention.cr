@@ -27,8 +27,17 @@ module ML
         @num_heads : Int32,
         @dropout : Float32 = 0.0_f32,
         bias : Bool = true,
-        device : Tensor::Device = Tensor.default_device
+        device : Tensor::Device = Tensor.default_device,
       )
+        if @embed_dim <= 0
+          raise ArgumentError.new("embed_dim must be positive")
+        end
+        if @num_heads <= 0
+          raise ArgumentError.new("num_heads must be positive")
+        end
+        unless @dropout.finite? && 0.0_f32 <= @dropout < 1.0_f32
+          raise ArgumentError.new("dropout must be finite and in [0, 1)")
+        end
         raise ArgumentError.new("embed_dim must be divisible by num_heads") unless @embed_dim % @num_heads == 0
 
         @head_dim = @embed_dim // @num_heads
@@ -51,16 +60,16 @@ module ML
         key : Autograd::Variable,
         value : Autograd::Variable,
         attn_mask : Tensor? = nil,
-        need_weights : Bool = false
+        need_weights : Bool = false,
       ) : Autograd::Variable
         batch_size = query.data.shape[0]
         tgt_len = query.data.shape[1]
         src_len = key.data.shape[1]
 
         # Project Q, K, V
-        q = @q_proj.forward(query)  # [batch, tgt_len, embed_dim]
-        k = @k_proj.forward(key)    # [batch, src_len, embed_dim]
-        v = @v_proj.forward(value)  # [batch, src_len, embed_dim]
+        q = @q_proj.forward(query) # [batch, tgt_len, embed_dim]
+        k = @k_proj.forward(key)   # [batch, src_len, embed_dim]
+        v = @v_proj.forward(value) # [batch, src_len, embed_dim]
 
         # Reshape for multi-head: [batch, seq_len, num_heads, head_dim]
         # Then transpose to: [batch, num_heads, seq_len, head_dim]
@@ -84,7 +93,7 @@ module ML
         query : Autograd::Variable,
         key : Autograd::Variable,
         value : Autograd::Variable,
-        attn_mask : Tensor? = nil
+        attn_mask : Tensor? = nil,
       ) : Autograd::Variable
         forward(query, key, value, attn_mask)
       end
@@ -314,7 +323,7 @@ module ML
         k : Autograd::Variable,
         v : Autograd::Variable,
         scale : Float32,
-        mask : Tensor?
+        mask : Tensor?,
       ) : Autograd::Variable
         needs_grad = q.requires_grad? || k.requires_grad? || v.requires_grad?
 
@@ -333,7 +342,7 @@ module ML
         q : Autograd::Variable,
         k : Autograd::Variable,
         v : Autograd::Variable,
-        scale : Float32
+        scale : Float32,
       ) : Autograd::Variable
         batch = q.data.shape[0]
         heads = q.data.shape[1]
@@ -378,7 +387,7 @@ module ML
         v : Autograd::Variable,
         scale : Float32,
         mask : Tensor?,
-        needs_grad : Bool
+        needs_grad : Bool,
       ) : Autograd::Variable
         q_data = q.data.on_cpu? ? q.data : q.data.to_cpu
         k_data = k.data.on_cpu? ? k.data : k.data.to_cpu
@@ -585,9 +594,9 @@ module ML
     class CrossAttention < MultiHeadAttention
       # Same as MultiHeadAttention, just a semantic alias
       def forward_cross(
-        query : Autograd::Variable,   # From decoder
-        memory : Autograd::Variable,  # From encoder
-        attn_mask : Tensor? = nil
+        query : Autograd::Variable,  # From decoder
+        memory : Autograd::Variable, # From encoder
+        attn_mask : Tensor? = nil,
       ) : Autograd::Variable
         forward(query, memory, memory, attn_mask)
       end
