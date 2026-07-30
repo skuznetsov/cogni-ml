@@ -2,28 +2,10 @@
 # NO autograd logic here - that lives in autograd/variable.cr
 
 require "./buffer"
+require "./dtype"
 require "./shape"
 
 module ML
-  # Data type for tensor elements
-  enum DType
-    F32
-    F16 # Future support
-    I32
-    I64
-    U8  # For Bool
-
-    def byte_size : ::Int32
-      case self
-      in .f32? then 4
-      in .f16? then 2
-      in .i32? then 4
-      in .i64? then 8
-      in .u8?  then 1
-      end
-    end
-  end
-
   # Tensor: shape + strides + data buffer
   # Immutable shape, mutable data
   class Tensor
@@ -57,7 +39,7 @@ module ML
       @dtype : DType,
       @device : Device,
       @buffer : MetalBuffer?,
-      @cpu_data : Array(Float32)?
+      @cpu_data : Array(Float32)?,
     )
     end
 

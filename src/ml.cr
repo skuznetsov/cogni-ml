@@ -9,8 +9,10 @@
 # Unified ML shard extracted from 3d_scanner and folding projects.
 
 # Core tensor operations
+require "./ml/core/dtype"
 require "./ml/core/shape"
 require "./ml/core/buffer"
+require "./ml/core/floating_storage"
 require "./ml/core/tensor"
 
 # Autograd - automatic differentiation
