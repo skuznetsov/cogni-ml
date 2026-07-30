@@ -48,6 +48,34 @@ describe ML::NN::Linear do
       output = linear.forward(input)
       output.shape.should eq(ML::Shape.new([2, 4, 8]))
     end
+
+    it "reads a transposed CPU weight in logical row-major order" do
+      linear = ML::NN::Linear.new(2, 2, bias: false, device: ML::Tensor::Device::CPU)
+      linear.weight.data.cpu_data.not_nil!.replace([1.0_f32, 2.0_f32, 3.0_f32, 4.0_f32])
+      input = ML::Autograd::Variable.new(
+        ML::Tensor.from_array([5.0_f32, 6.0_f32], ML::Shape.new(1, 2)),
+        requires_grad: false
+      )
+
+      output = linear.forward(input)
+      output.shape.should eq(ML::Shape.new(1, 2))
+      output.data.to_a.should eq([17.0_f32, 39.0_f32])
+    end
+
+    it "preserves non-symmetric CPU gradients through the transposed weight view" do
+      linear = ML::NN::Linear.new(2, 2, bias: false, device: ML::Tensor::Device::CPU)
+      linear.weight.data.cpu_data.not_nil!.replace([1.0_f32, 2.0_f32, 3.0_f32, 4.0_f32])
+      input = ML::Autograd::Variable.new(
+        ML::Tensor.from_array([5.0_f32, 6.0_f32], ML::Shape.new(1, 2)),
+        requires_grad: true
+      )
+
+      output = linear.forward(input)
+      output.backward(ML::Tensor.from_array([7.0_f32, 11.0_f32], ML::Shape.new(1, 2)))
+
+      input.grad.not_nil!.to_a.should eq([40.0_f32, 58.0_f32])
+      linear.weight.grad.not_nil!.to_a.should eq([35.0_f32, 42.0_f32, 55.0_f32, 66.0_f32])
+    end
   end
 
   describe "#parameters" do

@@ -85,8 +85,8 @@ module ML
 
       private def elementwise_mul(a : Tensor, b : Tensor) : Tensor
         # CPU fallback for now
-        a_cpu = a.on_cpu? ? a : a.to_cpu
-        b_cpu = b.on_cpu? ? b : b.to_cpu
+        a_cpu = a.to_contiguous_cpu
+        b_cpu = b.to_contiguous_cpu
 
         result = Tensor.new(a.shape, a.dtype, Tensor::Device::CPU)
         a_data = a_cpu.cpu_data.not_nil!
@@ -115,9 +115,9 @@ module ML
         # grad_a = grad_output / b
         # grad_b = -grad_output * a / b^2
         # TODO: use GPU kernel
-        a_cpu = @a_data.on_cpu? ? @a_data : @a_data.to_cpu
-        b_cpu = @b_data.on_cpu? ? @b_data : @b_data.to_cpu
-        grad_cpu = grad_output.on_cpu? ? grad_output : grad_output.to_cpu
+        a_cpu = @a_data.to_contiguous_cpu
+        b_cpu = @b_data.to_contiguous_cpu
+        grad_cpu = grad_output.to_contiguous_cpu
 
         grad_a = Tensor.new(grad_output.shape, grad_output.dtype, Tensor::Device::CPU)
         grad_b = Tensor.new(grad_output.shape, grad_output.dtype, Tensor::Device::CPU)
@@ -161,8 +161,8 @@ module ML
       end
 
       private def matmul_cpu(a : Tensor, b : Tensor) : Tensor
-        a_cpu = a.on_cpu? ? a : a.to_cpu
-        b_cpu = b.on_cpu? ? b : b.to_cpu
+        a_cpu = a.to_contiguous_cpu
+        b_cpu = b.to_contiguous_cpu
 
         m = a.shape[0]
         k = a.shape[1]
@@ -198,8 +198,8 @@ module ML
 
       def backward(grad_output : Tensor) : Array(Tensor?)
         # grad_input = grad_output * (input > 0)
-        in_cpu = @input_data.on_cpu? ? @input_data : @input_data.to_cpu
-        grad_cpu = grad_output.on_cpu? ? grad_output : grad_output.to_cpu
+        in_cpu = @input_data.to_contiguous_cpu
+        grad_cpu = grad_output.to_contiguous_cpu
 
         result = Tensor.new(grad_output.shape, grad_output.dtype, Tensor::Device::CPU)
         in_data = in_cpu.cpu_data.not_nil!
@@ -217,15 +217,15 @@ module ML
     # Gradient for Sigmoid: out = 1 / (1 + exp(-x))
     # d(sigmoid)/dx = out * (1 - out)
     class SigmoidBackward < GradFn
-      @output_data : Tensor  # Store sigmoid output, not input
+      @output_data : Tensor # Store sigmoid output, not input
 
       def initialize(@output_data : Tensor)
         super("SigmoidBackward")
       end
 
       def backward(grad_output : Tensor) : Array(Tensor?)
-        out_cpu = @output_data.on_cpu? ? @output_data : @output_data.to_cpu
-        grad_cpu = grad_output.on_cpu? ? grad_output : grad_output.to_cpu
+        out_cpu = @output_data.to_contiguous_cpu
+        grad_cpu = grad_output.to_contiguous_cpu
 
         result = Tensor.new(grad_output.shape, grad_output.dtype, Tensor::Device::CPU)
         out_data = out_cpu.cpu_data.not_nil!

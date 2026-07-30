@@ -206,6 +206,11 @@ describe ML::Tensor do
     contiguous = transposed.contiguous
     contiguous[0_i32, 1_i32].should eq(4.0_f32)
     contiguous.to_a.should eq(expected)
+    cpu_consumer_view = transposed.to_contiguous_cpu
+    cpu_consumer_view.on_cpu?.should be_true
+    cpu_consumer_view.contiguous?.should be_true
+    cpu_consumer_view.to_a.should eq(expected)
+    tensor.to_contiguous_cpu.object_id.should eq(tensor.object_id)
     transposed.reshape(6_i32).to_a.should eq(expected)
 
     cloned = transposed.clone

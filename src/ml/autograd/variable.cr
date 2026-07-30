@@ -32,7 +32,7 @@ module ML
       def initialize(@data : Tensor, @requires_grad : Bool = false)
         @grad = nil
         @grad_fn = nil
-        @is_leaf = true  # Leaf until used in an operation
+        @is_leaf = true # Leaf until used in an operation
       end
 
       # Create from existing data
@@ -84,7 +84,16 @@ module ML
 
       # Transpose (swap last two dims)
       def transpose : Variable
-        Variable.new(@data.transpose, @requires_grad)
+        result = Variable.new(@data.transpose, @requires_grad)
+        if result.requires_grad?
+          result.is_leaf = false
+          grad_fn = CustomBackward.new("TransposeBackward", ->(g : Tensor) {
+            [g.transpose] of Tensor?
+          })
+          grad_fn.inputs = [self]
+          result.grad_fn = grad_fn
+        end
+        result
       end
 
       def t : Variable
@@ -155,8 +164,8 @@ module ML
 
       private def add_tensors(a : Tensor, b : Tensor) : Tensor
         # CPU fallback
-        a_cpu = a.on_cpu? ? a : a.to_cpu
-        b_cpu = b.on_cpu? ? b : b.to_cpu
+        a_cpu = a.to_contiguous_cpu
+        b_cpu = b.to_contiguous_cpu
 
         result = Tensor.new(a.shape, a.dtype, Tensor::Device::CPU)
         a_data = a_cpu.cpu_data.not_nil!
@@ -198,7 +207,7 @@ module ML
         if result.requires_grad?
           result.is_leaf = false
           grad_fn = AddBackward.new
-          grad_fn.inputs = [self]  # scalar doesn't need grad
+          grad_fn.inputs = [self] # scalar doesn't need grad
           result.grad_fn = grad_fn
         end
 
@@ -221,8 +230,8 @@ module ML
       end
 
       private def sub_tensors(a : Tensor, b : Tensor) : Tensor
-        a_cpu = a.on_cpu? ? a : a.to_cpu
-        b_cpu = b.on_cpu? ? b : b.to_cpu
+        a_cpu = a.to_contiguous_cpu
+        b_cpu = b.to_contiguous_cpu
 
         result = Tensor.new(a.shape, a.dtype, Tensor::Device::CPU)
         a_data = a_cpu.cpu_data.not_nil!
@@ -261,7 +270,7 @@ module ML
           result.is_leaf = false
           # Gradient is just scalar * upstream
           grad_fn = CustomBackward.new("MulScalarBackward", ->(g : Tensor) {
-            g_cpu = g.on_cpu? ? g : g.to_cpu
+            g_cpu = g.to_contiguous_cpu
             r = Tensor.new(g.shape, g.dtype, Tensor::Device::CPU)
             g_data = g_cpu.cpu_data.not_nil!
             r_data = r.cpu_data.not_nil!
@@ -276,8 +285,8 @@ module ML
       end
 
       private def mul_tensors(a : Tensor, b : Tensor) : Tensor
-        a_cpu = a.on_cpu? ? a : a.to_cpu
-        b_cpu = b.on_cpu? ? b : b.to_cpu
+        a_cpu = a.to_contiguous_cpu
+        b_cpu = b.to_contiguous_cpu
 
         result = Tensor.new(a.shape, a.dtype, Tensor::Device::CPU)
         a_data = a_cpu.cpu_data.not_nil!
@@ -305,8 +314,8 @@ module ML
       end
 
       private def div_tensors(a : Tensor, b : Tensor) : Tensor
-        a_cpu = a.on_cpu? ? a : a.to_cpu
-        b_cpu = b.on_cpu? ? b : b.to_cpu
+        a_cpu = a.to_contiguous_cpu
+        b_cpu = b.to_contiguous_cpu
 
         result = Tensor.new(a.shape, a.dtype, Tensor::Device::CPU)
         a_data = a_cpu.cpu_data.not_nil!
@@ -338,8 +347,8 @@ module ML
         k = a.shape[1]
         n = b.shape[1]
 
-        a_cpu = a.on_cpu? ? a : a.to_cpu
-        b_cpu = b.on_cpu? ? b : b.to_cpu
+        a_cpu = a.to_contiguous_cpu
+        b_cpu = b.to_contiguous_cpu
 
         result = Tensor.new(Shape.new(m, n), a.dtype, Tensor::Device::CPU)
         a_data = a_cpu.cpu_data.not_nil!
@@ -362,7 +371,7 @@ module ML
       # Sum reduction
       def sum : Variable
         total = 0.0_f32
-        data_cpu = @data.on_cpu? ? @data : @data.to_cpu
+        data_cpu = @data.to_contiguous_cpu
         data_cpu.cpu_data.not_nil!.each { |x| total += x }
 
         result_data = Tensor.new(1, device: @data.device)
@@ -385,7 +394,7 @@ module ML
       # Mean reduction
       def mean : Variable
         total = 0.0_f32
-        data_cpu = @data.on_cpu? ? @data : @data.to_cpu
+        data_cpu = @data.to_contiguous_cpu
         data_cpu.cpu_data.not_nil!.each { |x| total += x }
         total /= @data.numel
 
@@ -408,7 +417,7 @@ module ML
 
       # ReLU activation
       def relu : Variable
-        data_cpu = @data.on_cpu? ? @data : @data.to_cpu
+        data_cpu = @data.to_contiguous_cpu
 
         result_data = Tensor.new(@data.shape, @data.dtype, Tensor::Device::CPU)
         in_data = data_cpu.cpu_data.not_nil!
@@ -431,7 +440,7 @@ module ML
 
       # Sigmoid activation
       def sigmoid : Variable
-        data_cpu = @data.on_cpu? ? @data : @data.to_cpu
+        data_cpu = @data.to_contiguous_cpu
 
         result_data = Tensor.new(@data.shape, @data.dtype, Tensor::Device::CPU)
         in_data = data_cpu.cpu_data.not_nil!
@@ -449,21 +458,6 @@ module ML
           result.grad_fn = grad_fn
         end
 
-        result
-      end
-
-      # Transpose
-      def t : Variable
-        result = Variable.new(@data.t, @requires_grad)
-        # Transpose backward is just transpose again
-        if result.requires_grad?
-          result.is_leaf = false
-          grad_fn = CustomBackward.new("TransposeBackward", ->(g : Tensor) {
-            [g.t] of Tensor?
-          })
-          grad_fn.inputs = [self]
-          result.grad_fn = grad_fn
-        end
         result
       end
 

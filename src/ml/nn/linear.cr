@@ -109,7 +109,7 @@ module ML
           return result_var
         end
 
-        x_data = x.data.on_cpu? ? x.data : x.data.to_cpu
+        x_data = x.data.to_contiguous_cpu
         result = Tensor.new(batch, features, device: Tensor::Device::CPU)
 
         x_d = x_data.cpu_data.not_nil!
@@ -152,7 +152,7 @@ module ML
           return result_var
         end
 
-        x_data = x.data.on_cpu? ? x.data : x.data.to_cpu
+        x_data = x.data.to_contiguous_cpu
         result = Tensor.new(Shape.new(shape), x_data.dtype, Tensor::Device::CPU)
 
         x_d = x_data.cpu_data.not_nil!
@@ -250,10 +250,10 @@ module ML
 
       # CPU matmul fallback
       private def matmul_cpu(a : Tensor, b : Tensor, m : Int32, k : Int32, n : Int32) : Tensor
-        a_data = a.on_cpu? ? a : a.to_cpu
-        b_data = b.on_cpu? ? b : b.to_cpu
+        a_data = a.to_contiguous_cpu
+        b_data = b.to_contiguous_cpu
 
-        result_shape = m == 1 ? Shape.new(n) : Shape.new(m, n)
+        result_shape = a.ndim == 1 ? Shape.new(n) : Shape.new(m, n)
         result = Tensor.new(result_shape, a_data.dtype, Tensor::Device::CPU)
 
         a_d = a_data.cpu_data.not_nil!
@@ -289,8 +289,8 @@ module ML
 
       # Add bias with broadcasting
       private def add_bias(x : Autograd::Variable, bias : Autograd::Variable) : Autograd::Variable
-        x_data = x.data.on_cpu? ? x.data : x.data.to_cpu
-        b_data = bias.data.on_cpu? ? bias.data : bias.data.to_cpu
+        x_data = x.data.to_contiguous_cpu
+        b_data = bias.data.to_contiguous_cpu
 
         result = Tensor.new(x.data.shape, x.data.dtype, Tensor::Device::CPU)
 
@@ -324,7 +324,7 @@ module ML
             # grad_bias = sum(g, dim=0) if batched, else g
             grad_x = g.clone
 
-            g_cpu = g.on_cpu? ? g : g.to_cpu
+            g_cpu = g.to_contiguous_cpu
             g_data = g_cpu.cpu_data.not_nil!
 
             if g.ndim == 1

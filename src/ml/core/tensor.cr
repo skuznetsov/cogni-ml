@@ -377,6 +377,16 @@ module ML
       contiguous_copy
     end
 
+    # Materialize the logical row-major sequence on CPU for numerical consumers.
+    # Contiguous CPU tensors are returned without a copy.
+    def to_contiguous_cpu : Tensor
+      return contiguous if on_cpu?
+
+      result = Tensor.new(@shape, @dtype, Device::CPU)
+      copy_logical_cpu_data_to!(result.cpu_data.not_nil!)
+      result
+    end
+
     private def contiguous_copy : Tensor
       result = Tensor.new(@shape, @dtype, @device)
       if @device.gpu?
