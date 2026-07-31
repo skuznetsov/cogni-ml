@@ -22,6 +22,40 @@ module ML::ThreeD::Trellis2
       Tensor.from_array(data, shape)
     end
 
+    def validate_valid_length!(value : Int32?, physical : Int32, name : String) : Int32
+      logical = value || physical
+      unless logical > 0 && logical <= physical
+        raise ArgumentError.new(
+          "#{name} valid length must be within 1..#{physical}, got #{logical}"
+        )
+      end
+      logical
+    end
+
+    # Keep right-padded rows inert after a row-local projection or residual.
+    # Attention itself skips invalid query rows, but Linear biases and AdaLN
+    # shifts can otherwise repopulate those rows before the next sublayer.
+    def zero_tail_rows(tensor : Tensor, valid_length : Int32) : Tensor
+      reject_gpu!(tensor, "padded tensor")
+      unless tensor.ndim == 3
+        raise ArgumentError.new("padded tensor must have shape [batch, sequence, channels]")
+      end
+      physical = tensor.shape[1]
+      validate_valid_length!(valid_length, physical, "padded tensor")
+      return tensor if valid_length == physical
+
+      values = tensor.to_contiguous_cpu.cpu_data.not_nil!.dup
+      batch = tensor.shape[0]
+      channels = tensor.shape[2]
+      batch.times do |batch_index|
+        (valid_length...physical).each do |position|
+          offset = (batch_index * physical + position) * channels
+          channels.times { |channel| values[offset + channel] = 0.0_f32 }
+        end
+      end
+      tensor_from(values, tensor.shape)
+    end
+
     def add(a : Tensor, b : Tensor) : Tensor
       raise ArgumentError.new("tensor add shape mismatch: #{a.shape} vs #{b.shape}") unless a.shape == b.shape
       reject_gpu!(a, "left tensor")
@@ -233,21 +267,34 @@ module ML::ThreeD::Trellis2
       @k_rms_norm = MultiHeadRMSNorm.new(@head_dim, @num_heads, device: Tensor::Device::CPU)
     end
 
-    def forward(x : Autograd::Variable, phases : Tensor? = nil) : Autograd::Variable
-      result = forward_with_trace(x, phases)
+    def forward(
+      x : Autograd::Variable,
+      phases : Tensor? = nil,
+      valid_length : Int32? = nil,
+    ) : Autograd::Variable
+      result = forward_with_trace(x, phases, valid_length: valid_length)
       Autograd::Variable.new(result.output, requires_grad: false)
     end
 
-    def call(x : Autograd::Variable, phases : Tensor? = nil) : Autograd::Variable
-      forward(x, phases)
+    def call(
+      x : Autograd::Variable,
+      phases : Tensor? = nil,
+      valid_length : Int32? = nil,
+    ) : Autograd::Variable
+      forward(x, phases, valid_length)
     end
 
-    def forward_with_trace(x : Autograd::Variable, phases : Tensor? = nil) : AttentionTrace
+    def forward_with_trace(
+      x : Autograd::Variable,
+      phases : Tensor? = nil,
+      valid_length : Int32? = nil,
+    ) : AttentionTrace
       input = DenseBlockCPU.ensure_cpu!(x, "self-attention input")
       unless input.ndim == 3 && input.shape[2] == @channels && input.shape[0] > 0 && input.shape[1] > 0
         raise ArgumentError.new("self-attention input must have shape [batch, sequence, #{@channels}], got #{input.shape}")
       end
       length = input.shape[1]
+      logical_length = DenseBlockCPU.validate_valid_length!(valid_length, length, "self-attention")
       if @use_rope
         raise ArgumentError.new("self-attention RoPE phases are required") unless phases
         validate_phases!(phases.not_nil!, length)
@@ -290,9 +337,12 @@ module ML::ThreeD::Trellis2
         k = rotary(k, phases.not_nil!, length)
       end
 
-      attended = scaled_attention(q, k, v)
+      attended = scaled_attention(q, k, v, logical_length)
       attended_flat = attended.reshape(batch, length, @channels)
-      output = DenseBlockCPU.linear(@to_out, attended_flat)
+      output = DenseBlockCPU.zero_tail_rows(
+        DenseBlockCPU.linear(@to_out, attended_flat),
+        logical_length
+      )
       AttentionTrace.new(output, q, k)
     end
 
@@ -329,7 +379,7 @@ module ML::ThreeD::Trellis2
       DenseBlockCPU.tensor_from(result_values, x.shape)
     end
 
-    private def scaled_attention(q : Tensor, k : Tensor, v : Tensor) : Tensor
+    private def scaled_attention(q : Tensor, k : Tensor, v : Tensor, valid_length : Int32) : Tensor
       batch = q.shape[0]
       length = q.shape[1]
       values_q = q.to_contiguous_cpu.cpu_data.not_nil!
@@ -342,8 +392,10 @@ module ML::ThreeD::Trellis2
       batch.times do |batch_index|
         @num_heads.times do |head|
           length.times do |query_position|
+            next if query_position >= valid_length
+
             max_score = -Float64::INFINITY
-            length.times do |key_position|
+            valid_length.times do |key_position|
               sum = 0.0_f64
               @head_dim.times do |dimension|
                 q_offset = ((batch_index * length + query_position) * @num_heads + head) * @head_dim + dimension
@@ -355,15 +407,15 @@ module ML::ThreeD::Trellis2
               max_score = score if score > max_score
             end
             total = 0.0_f64
-            length.times do |key_position|
+            valid_length.times do |key_position|
               weight = Math.exp(scores[key_position] - max_score)
               weights[key_position] = weight
               total += weight
             end
-            length.times { |key_position| weights[key_position] /= total }
+            valid_length.times { |key_position| weights[key_position] /= total }
             @head_dim.times do |dimension|
               value = 0.0_f64
-              length.times do |key_position|
+              valid_length.times do |key_position|
                 v_offset = ((batch_index * length + key_position) * @num_heads + head) * @head_dim + dimension
                 value += weights[key_position] * values_v[v_offset].to_f64
               end
@@ -407,16 +459,36 @@ module ML::ThreeD::Trellis2
       @k_rms_norm = MultiHeadRMSNorm.new(@head_dim, @num_heads, device: Tensor::Device::CPU)
     end
 
-    def forward(x : Autograd::Variable, context : Autograd::Variable) : Autograd::Variable
-      result = forward_with_trace(x, context)
+    def forward(
+      x : Autograd::Variable,
+      context : Autograd::Variable,
+      valid_query_length : Int32? = nil,
+      valid_context_length : Int32? = nil,
+    ) : Autograd::Variable
+      result = forward_with_trace(
+        x,
+        context,
+        valid_query_length: valid_query_length,
+        valid_context_length: valid_context_length
+      )
       Autograd::Variable.new(result.output, requires_grad: false)
     end
 
-    def call(x : Autograd::Variable, context : Autograd::Variable) : Autograd::Variable
-      forward(x, context)
+    def call(
+      x : Autograd::Variable,
+      context : Autograd::Variable,
+      valid_query_length : Int32? = nil,
+      valid_context_length : Int32? = nil,
+    ) : Autograd::Variable
+      forward(x, context, valid_query_length, valid_context_length)
     end
 
-    def forward_with_trace(x : Autograd::Variable, context : Autograd::Variable) : AttentionTrace
+    def forward_with_trace(
+      x : Autograd::Variable,
+      context : Autograd::Variable,
+      valid_query_length : Int32? = nil,
+      valid_context_length : Int32? = nil,
+    ) : AttentionTrace
       input = DenseBlockCPU.ensure_cpu!(x, "cross-attention input")
       memory = DenseBlockCPU.ensure_cpu!(context, "cross-attention context")
       unless input.ndim == 3 && input.shape[2] == @channels && input.shape[0] > 0 && input.shape[1] > 0
@@ -428,6 +500,16 @@ module ML::ThreeD::Trellis2
       batch = input.shape[0]
       length = input.shape[1]
       context_length = memory.shape[1]
+      logical_query_length = DenseBlockCPU.validate_valid_length!(
+        valid_query_length,
+        length,
+        "cross-attention query"
+      )
+      logical_context_length = DenseBlockCPU.validate_valid_length!(
+        valid_context_length,
+        context_length,
+        "cross-attention context"
+      )
 
       q_projected = DenseBlockCPU.linear(@to_q, input)
       kv_projected = DenseBlockCPU.linear(@to_kv, memory)
@@ -462,12 +544,31 @@ module ML::ThreeD::Trellis2
 
       q = @q_rms_norm.forward(Autograd::Variable.new(q, requires_grad: false)).data
       k = @k_rms_norm.forward(Autograd::Variable.new(k, requires_grad: false)).data
-      attended = scaled_attention(q, k, v, length, context_length)
-      output = DenseBlockCPU.linear(@to_out, attended.reshape(batch, length, @channels))
+      attended = scaled_attention(
+        q,
+        k,
+        v,
+        length,
+        context_length,
+        logical_query_length,
+        logical_context_length
+      )
+      output = DenseBlockCPU.zero_tail_rows(
+        DenseBlockCPU.linear(@to_out, attended.reshape(batch, length, @channels)),
+        logical_query_length
+      )
       AttentionTrace.new(output, q, k)
     end
 
-    private def scaled_attention(q : Tensor, k : Tensor, v : Tensor, query_length : Int32, key_length : Int32) : Tensor
+    private def scaled_attention(
+      q : Tensor,
+      k : Tensor,
+      v : Tensor,
+      query_length : Int32,
+      key_length : Int32,
+      valid_query_length : Int32,
+      valid_key_length : Int32,
+    ) : Tensor
       batch = q.shape[0]
       values_q = q.to_contiguous_cpu.cpu_data.not_nil!
       values_k = k.to_contiguous_cpu.cpu_data.not_nil!
@@ -479,8 +580,10 @@ module ML::ThreeD::Trellis2
       batch.times do |batch_index|
         @num_heads.times do |head|
           query_length.times do |query_position|
+            next if query_position >= valid_query_length
+
             max_score = -Float64::INFINITY
-            key_length.times do |key_position|
+            valid_key_length.times do |key_position|
               sum = 0.0_f64
               @head_dim.times do |dimension|
                 q_offset = ((batch_index * query_length + query_position) * @num_heads + head) * @head_dim + dimension
@@ -492,15 +595,15 @@ module ML::ThreeD::Trellis2
               max_score = score if score > max_score
             end
             total = 0.0_f64
-            key_length.times do |key_position|
+            valid_key_length.times do |key_position|
               weight = Math.exp(scores[key_position] - max_score)
               weights[key_position] = weight
               total += weight
             end
-            key_length.times { |key_position| weights[key_position] /= total }
+            valid_key_length.times { |key_position| weights[key_position] /= total }
             @head_dim.times do |dimension|
               value = 0.0_f64
-              key_length.times do |key_position|
+              valid_key_length.times do |key_position|
                 v_offset = ((batch_index * key_length + key_position) * @num_heads + head) * @head_dim + dimension
                 value += weights[key_position] * values_v[v_offset].to_f64
               end
@@ -596,8 +699,17 @@ module ML::ThreeD::Trellis2
       mod : Autograd::Variable,
       context : Autograd::Variable,
       phases : Tensor? = nil,
+      valid_voxel_tokens : Int32? = nil,
+      valid_context_tokens : Int32? = nil,
     ) : Autograd::Variable
-      trace = forward_with_trace(x, mod, context, phases)
+      trace = forward_with_trace(
+        x,
+        mod,
+        context,
+        phases,
+        valid_voxel_tokens: valid_voxel_tokens,
+        valid_context_tokens: valid_context_tokens
+      )
       Autograd::Variable.new(trace["output"], requires_grad: false)
     end
 
@@ -606,8 +718,17 @@ module ML::ThreeD::Trellis2
       mod : Autograd::Variable,
       context : Autograd::Variable,
       phases : Tensor? = nil,
+      valid_voxel_tokens : Int32? = nil,
+      valid_context_tokens : Int32? = nil,
     ) : Autograd::Variable
-      forward(x, mod, context, phases)
+      forward(
+        x,
+        mod,
+        context,
+        phases,
+        valid_voxel_tokens,
+        valid_context_tokens
+      )
     end
 
     def forward_with_trace(
@@ -615,6 +736,8 @@ module ML::ThreeD::Trellis2
       mod : Autograd::Variable,
       context : Autograd::Variable,
       phases : Tensor? = nil,
+      valid_voxel_tokens : Int32? = nil,
+      valid_context_tokens : Int32? = nil,
     ) : Hash(String, Tensor)
       # Upstream complex RoPE phases cross this boundary as real-pair F32
       # `[sequence, head_dim / 2, 2]` values. Coordinate-to-phase generation
@@ -623,6 +746,16 @@ module ML::ThreeD::Trellis2
       modulation_input = DenseBlockCPU.ensure_cpu!(mod, "block modulation input")
       memory = DenseBlockCPU.ensure_cpu!(context, "block context")
       validate_block_inputs!(input, modulation_input, memory)
+      logical_voxel_tokens = DenseBlockCPU.validate_valid_length!(
+        valid_voxel_tokens,
+        input.shape[1],
+        "block voxel"
+      )
+      logical_context_tokens = DenseBlockCPU.validate_valid_length!(
+        valid_context_tokens,
+        memory.shape[1],
+        "block context"
+      )
 
       combined = add_modulation(modulation_input)
       # Tensor has no slicing primitive; chunk the contiguous CPU payload below.
@@ -636,22 +769,40 @@ module ML::ThreeD::Trellis2
 
       norm1 = @norm1.forward(x).data
       modulated_self = DenseBlockCPU.affine_last(norm1, scale_msa, shift_msa)
-      self_trace = @self_attn.forward_with_trace(Autograd::Variable.new(modulated_self, requires_grad: false), phases)
+      self_trace = @self_attn.forward_with_trace(
+        Autograd::Variable.new(modulated_self, requires_grad: false),
+        phases,
+        valid_length: logical_voxel_tokens
+      )
       gated_self = DenseBlockCPU.mul_last_broadcast(self_trace.output, gate_msa)
-      after_self = DenseBlockCPU.add(input, gated_self)
+      after_self = DenseBlockCPU.zero_tail_rows(
+        DenseBlockCPU.add(input, gated_self),
+        logical_voxel_tokens
+      )
 
       norm2 = @norm2.forward(Autograd::Variable.new(after_self, requires_grad: false)).data
       cross_trace = @cross_attn.forward_with_trace(
         Autograd::Variable.new(norm2, requires_grad: false),
-        context
+        context,
+        valid_query_length: logical_voxel_tokens,
+        valid_context_length: logical_context_tokens
       )
-      after_cross = DenseBlockCPU.add(after_self, cross_trace.output)
+      after_cross = DenseBlockCPU.zero_tail_rows(
+        DenseBlockCPU.add(after_self, cross_trace.output),
+        logical_voxel_tokens
+      )
 
       norm3 = @norm3.forward(Autograd::Variable.new(after_cross, requires_grad: false)).data
       modulated_mlp = DenseBlockCPU.affine_last(norm3, scale_mlp, shift_mlp)
-      mlp_output = @mlp.forward(Autograd::Variable.new(modulated_mlp, requires_grad: false)).data.to_contiguous_cpu
+      mlp_output = DenseBlockCPU.zero_tail_rows(
+        @mlp.forward(Autograd::Variable.new(modulated_mlp, requires_grad: false)).data.to_contiguous_cpu,
+        logical_voxel_tokens
+      )
       gated_mlp = DenseBlockCPU.mul_last_broadcast(mlp_output, gate_mlp)
-      output = DenseBlockCPU.add(after_cross, gated_mlp)
+      output = DenseBlockCPU.zero_tail_rows(
+        DenseBlockCPU.add(after_cross, gated_mlp),
+        logical_voxel_tokens
+      )
 
       {
         "combined_mod"    => combined,

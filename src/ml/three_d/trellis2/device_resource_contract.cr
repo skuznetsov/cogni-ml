@@ -314,6 +314,7 @@ module ML::ThreeD::Trellis2
 
     getter max_axis_padding_ratio : Float64
     getter cache_owner : String
+    getter kernel_abi : DenseKernelABI
     getter max_single_tensor_bytes : Int64
     getter max_declared_activation_bytes : Int64
     getter theoretical_kernel_key_count : Int32
@@ -615,12 +616,32 @@ module ML::ThreeD::Trellis2
 
   # CPU-only admission ledger for a future owner-scoped compiled-kernel cache.
   # It deliberately refuses instead of evicting: no lifetime, in-flight command,
-  # or concurrency semantics are admitted by T2N2d0.
+  # or device allocation semantics are admitted by T2N2d0. All ledgers for one
+  # process owner share the synchronized entry below, so a second ledger cannot
+  # reset or bypass the first ledger's key capacity.
   class BoundedKernelKeyLedger
-    getter size : Int32
+    MAX_PROCESS_OWNERS      =   64
+    MAX_PROCESS_KERNEL_KEYS = 4096
+
     getter capacity : Int32
 
-    @keys : Array(KernelSpecializationKey)
+    private class OwnerEntry
+      getter capacity : Int32
+      getter keys : Array(KernelSpecializationKey)
+
+      def initialize(@capacity : Int32)
+        @keys = [] of KernelSpecializationKey
+      end
+    end
+
+    # Crystal's Mutex#synchronize is the repository's existing process-wide
+    # coordination primitive (Qwen35NativeRuntime, Qwen35Metal caches, and
+    # ML::LLM backend all use this shape). The entry map is intentionally keyed
+    # only by cache_owner: ABI/profile/shape remain structured fields of each
+    # KernelSpecializationKey and therefore count toward one owner-wide bound.
+    @@owner_mutex = Mutex.new
+    @@owner_entries = {} of String => OwnerEntry
+    @@process_kernel_key_count = 0_i32
 
     def initialize(
       @contract : DenseDeviceResourceContract,
@@ -631,28 +652,93 @@ module ML::ThreeD::Trellis2
           "kernel ledger capacity must be within 1..#{@contract.theoretical_kernel_key_count}"
         )
       end
-      @keys = [] of KernelSpecializationKey
-      @size = 0_i32
+
+      # Keep the hash key independent from a caller-owned String. The contract
+      # remains the authority for validating each structured key at admission.
+      @owner = @contract.cache_owner.dup
+      @@owner_mutex.synchronize do
+        if entry = @@owner_entries[@owner]?
+          unless entry.capacity == @capacity
+            raise KernelCacheCapacityError.new(
+              "kernel cache owner #{@owner} already fixed capacity #{entry.capacity}; " \
+              "requested #{@capacity}"
+            )
+          end
+        else
+          if @@owner_entries.size >= MAX_PROCESS_OWNERS
+            raise KernelCacheCapacityError.new(
+              "process kernel owner capacity #{MAX_PROCESS_OWNERS} would be exceeded"
+            )
+          end
+          @@owner_entries[@owner] = OwnerEntry.new(@capacity)
+        end
+      end
     end
 
     def admit!(keys : Array(KernelSpecializationKey)) : Nil
-      keys.each do |key|
+      # Snapshot record fields before validation so caller mutation after this
+      # call cannot rewrite an identity retained by the registry.
+      snapshots = keys.map { |key| snapshot_key(key) }
+      snapshots.each do |key|
         unless @contract.allows?(key)
           raise ArgumentError.new("kernel key #{key.canonical} is not declared by this contract")
         end
       end
-      unseen = keys.uniq.reject { |key| @keys.includes?(key) }
-      if @keys.size + unseen.size > @capacity
-        raise KernelCacheCapacityError.new(
-          "kernel cache capacity #{@capacity} would be exceeded; no keys admitted"
-        )
+
+      # Validation above has no shared-state side effects. The dedupe, capacity
+      # check, and append are one critical section so concurrent ledgers either
+      # admit the whole batch or admit nothing.
+      unique = snapshots.uniq
+      @@owner_mutex.synchronize do
+        entry = @@owner_entries[@owner]
+        unique.each do |key|
+          unless key.cache_owner == @owner
+            raise ArgumentError.new(
+              "kernel key #{key.canonical} is not owned by ledger #{@owner}"
+            )
+          end
+        end
+        unseen = unique.reject { |key| entry.keys.includes?(key) }
+        if @@process_kernel_key_count > MAX_PROCESS_KERNEL_KEYS - unseen.size
+          raise KernelCacheCapacityError.new(
+            "process kernel key capacity #{MAX_PROCESS_KERNEL_KEYS} would be exceeded; " \
+            "no keys admitted"
+          )
+        end
+        if entry.keys.size + unseen.size > entry.capacity
+          raise KernelCacheCapacityError.new(
+            "kernel cache capacity #{entry.capacity} for owner #{@owner} would be exceeded; " \
+            "no keys admitted"
+          )
+        end
+        entry.keys.concat(unseen)
+        @@process_kernel_key_count += unseen.size
       end
-      @keys.concat(unseen)
-      @size = @keys.size.to_i32
+    end
+
+    def size : Int32
+      @@owner_mutex.synchronize do
+        @@owner_entries[@owner].keys.size.to_i32
+      end
     end
 
     def keys : Array(KernelSpecializationKey)
-      @keys.dup
+      @@owner_mutex.synchronize { @@owner_entries[@owner].keys.dup }
+    end
+
+    private def snapshot_key(key : KernelSpecializationKey) : KernelSpecializationKey
+      KernelSpecializationKey.new(
+        key.cache_owner.dup,
+        key.kernel_abi.dup,
+        key.profile_id.dup,
+        key.profile_signature.dup,
+        key.kernel_variant.dup,
+        key.dtype,
+        key.padding_policy.dup,
+        key.padded_batch,
+        key.padded_voxel_tokens,
+        key.padded_context_tokens
+      )
     end
   end
 end

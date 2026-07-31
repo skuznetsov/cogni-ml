@@ -7,6 +7,7 @@ require "./trellis2/dense_block"
 require "./trellis2/conditioning"
 require "./trellis2/dense_flow"
 require "./trellis2/device_resource_contract"
+require "./trellis2/padded_dense_flow"
 
 module ML::ThreeD::Trellis2
 end

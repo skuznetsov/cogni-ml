@@ -86,6 +86,11 @@ private def dense_resource_request(
 end
 
 describe ML::ThreeD::Trellis2::DenseDeviceResourceContract do
+  it "exposes finite process-owner and aggregate-key ceilings" do
+    ML::ThreeD::Trellis2::BoundedKernelKeyLedger::MAX_PROCESS_OWNERS.should eq(64)
+    ML::ThreeD::Trellis2::BoundedKernelKeyLedger::MAX_PROCESS_KERNEL_KEYS.should eq(4096)
+  end
+
   it "separates logical shapes from finite padded specialization keys" do
     contract = dense_resource_contract
     first = contract.plan(dense_resource_request(batch: 1, voxel_tokens: 27, context_tokens: 3))
@@ -251,6 +256,23 @@ describe ML::ThreeD::Trellis2::DenseDeviceResourceContract do
     first.allows?(third_key).should be_false
   end
 
+  it "exposes the declared typed kernel ABI without canonical-string parsing" do
+    abi = dense_kernel_abi(
+      device_family: "typed-device",
+      accumulation_dtype: ML::DType::BF16
+    )
+    contract = dense_resource_contract(kernel_abi: abi)
+
+    contract.kernel_abi.source_digest.should eq("1" * 64)
+    contract.kernel_abi.device_family.should eq("typed-device")
+    contract.kernel_abi.compiler_abi.should eq("t2n2d0-v1")
+    contract.kernel_abi.accumulation_dtype.should eq(ML::DType::BF16)
+    contract.kernel_abi.mask_mode.should eq("right-valid-trim")
+    contract.kernel_abi.rope_mode.should eq("realpair-3d")
+    contract.kernel_abi.layout_mode.should eq("ncdhw-cubic")
+    contract.kernel_abi.canonical.should eq(abi.canonical)
+  end
+
   it "rejects malformed or unbounded declarations" do
     expect_raises(ArgumentError, /strictly increasing/) do
       dense_resource_profile(voxel_buckets: [8_i32, 8_i32])
@@ -372,7 +394,8 @@ describe ML::ThreeD::Trellis2::DenseDeviceResourceContract do
   it "admits keys idempotently and refuses capacity atomically without eviction" do
     contract = dense_resource_contract(
       variants: ["self-attention", "mlp"],
-      dtypes: [ML::DType::F32]
+      dtypes: [ML::DType::F32],
+      cache_owner: "ledger-idempotence-owner"
     )
     ledger = ML::ThreeD::Trellis2::BoundedKernelKeyLedger.new(contract, 2)
     first_keys = contract.plan(dense_resource_request(voxel_tokens: 8)).kernel_keys
@@ -395,7 +418,8 @@ describe ML::ThreeD::Trellis2::DenseDeviceResourceContract do
   it "rejects foreign keys without mutating the bounded ledger" do
     contract = dense_resource_contract(
       variants: ["mlp"],
-      dtypes: [ML::DType::F32]
+      dtypes: [ML::DType::F32],
+      cache_owner: "ledger-foreign-owner"
     )
     ledger = ML::ThreeD::Trellis2::BoundedKernelKeyLedger.new(contract, 1)
     foreign = ML::ThreeD::Trellis2::KernelSpecializationKey.new(
@@ -415,5 +439,206 @@ describe ML::ThreeD::Trellis2::DenseDeviceResourceContract do
       ledger.admit!([foreign])
     end
     ledger.size.should eq(0)
+  end
+
+  it "shares one owner-wide capacity across independent ledgers" do
+    contract = dense_resource_contract(
+      variants: ["mlp", "self-attention"],
+      dtypes: [ML::DType::F32],
+      cache_owner: "registry-shared-owner"
+    )
+    first = ML::ThreeD::Trellis2::BoundedKernelKeyLedger.new(contract, 2)
+    second = ML::ThreeD::Trellis2::BoundedKernelKeyLedger.new(contract, 2)
+    first_keys = contract.plan(dense_resource_request(voxel_tokens: 8)).kernel_keys
+    second_keys = contract.plan(dense_resource_request(voxel_tokens: 27)).kernel_keys
+
+    first.admit!(first_keys)
+    second.admit!(first_keys)
+    first.size.should eq(2)
+    second.size.should eq(2)
+
+    expect_raises(ML::ThreeD::Trellis2::KernelCacheCapacityError, /capacity 2/) do
+      second.admit!([second_keys.first])
+    end
+    first.size.should eq(2)
+    second.size.should eq(2)
+    first.keys.should eq(first_keys)
+    second.keys.should eq(first_keys)
+  end
+
+  it "rejects a conflicting capacity for an already registered owner before admission" do
+    contract = dense_resource_contract(
+      variants: ["mlp"],
+      dtypes: [ML::DType::F32],
+      cache_owner: "registry-capacity-owner"
+    )
+    first = ML::ThreeD::Trellis2::BoundedKernelKeyLedger.new(contract, 1)
+    key = contract.plan(dense_resource_request(voxel_tokens: 8)).kernel_keys.first
+
+    expect_raises(ML::ThreeD::Trellis2::KernelCacheCapacityError, /capacity.*owner|owner.*capacity/) do
+      ML::ThreeD::Trellis2::BoundedKernelKeyLedger.new(contract, 2)
+    end
+    first.admit!([key])
+    first.size.should eq(1)
+  end
+
+  it "refuses an atomic multi-key batch when concurrent owner ledgers race" do
+    contract = dense_resource_contract(
+      variants: ["mlp", "self-attention"],
+      dtypes: [ML::DType::F32],
+      cache_owner: "registry-race-owner"
+    )
+    first = ML::ThreeD::Trellis2::BoundedKernelKeyLedger.new(contract, 2)
+    second = ML::ThreeD::Trellis2::BoundedKernelKeyLedger.new(contract, 2)
+    first_batch = contract.plan(dense_resource_request(voxel_tokens: 8)).kernel_keys
+    second_batch = contract.plan(dense_resource_request(voxel_tokens: 27)).kernel_keys
+    ready = Channel(Nil).new(2)
+    release = Channel(Nil).new(2)
+    outcomes = Channel(String).new(2)
+
+    spawn do
+      ready.send(nil)
+      release.receive
+      begin
+        first.admit!(first_batch)
+        outcomes.send("winner")
+      rescue ex : ML::ThreeD::Trellis2::KernelCacheCapacityError
+        outcomes.send("capacity")
+      rescue ex : Exception
+        outcomes.send("unexpected:#{ex.class}:#{ex.message}")
+      end
+    end
+    spawn do
+      ready.send(nil)
+      release.receive
+      begin
+        second.admit!(second_batch)
+        outcomes.send("winner")
+      rescue ex : ML::ThreeD::Trellis2::KernelCacheCapacityError
+        outcomes.send("capacity")
+      rescue ex : Exception
+        outcomes.send("unexpected:#{ex.class}:#{ex.message}")
+      end
+    end
+
+    2.times { ready.receive }
+    2.times { release.send(nil) }
+    [outcomes.receive, outcomes.receive].sort.should eq(["capacity", "winner"])
+    first.size.should eq(2)
+    second.size.should eq(2)
+    (first.keys == first_batch || first.keys == second_batch).should be_true
+  end
+
+  it "counts distinct ABI and profile identities against one owner capacity" do
+    owner = "registry-identity-owner"
+    first_contract = dense_resource_contract(
+      variants: ["mlp"],
+      dtypes: [ML::DType::F32],
+      cache_owner: owner
+    )
+    second_contract = dense_resource_contract(
+      profiles: [dense_resource_profile(id: "dense-alt")],
+      variants: ["mlp"],
+      dtypes: [ML::DType::F32],
+      cache_owner: owner,
+      kernel_abi: dense_kernel_abi(device_family: "alternate-device")
+    )
+    first = ML::ThreeD::Trellis2::BoundedKernelKeyLedger.new(first_contract, 2)
+    second = ML::ThreeD::Trellis2::BoundedKernelKeyLedger.new(second_contract, 2)
+    first_key = first_contract.plan(dense_resource_request(voxel_tokens: 8)).kernel_keys.first
+    second_key = second_contract.plan(
+      dense_resource_request(profile_id: "dense-alt", voxel_tokens: 8)
+    ).kernel_keys.first
+
+    first_key.cache_owner.should eq(second_key.cache_owner)
+    first_key.kernel_abi.should_not eq(second_key.kernel_abi)
+    first_key.profile_id.should_not eq(second_key.profile_id)
+    first.admit!([first_key])
+    second.admit!([second_key])
+    first.size.should eq(2)
+    second.keys.should eq([first_key, second_key])
+
+    next_key = first_contract.plan(dense_resource_request(voxel_tokens: 27)).kernel_keys.first
+    expect_raises(ML::ThreeD::Trellis2::KernelCacheCapacityError, /capacity 2/) do
+      first.admit!([next_key])
+    end
+    first.size.should eq(2)
+  end
+
+  it "keeps the owner registry bounded under one hundred contending admissions" do
+    contract = dense_resource_contract(
+      variants: ["mlp", "self-attention"],
+      dtypes: [ML::DType::F32],
+      cache_owner: "registry-contention-owner"
+    )
+    batches = [
+      contract.plan(dense_resource_request(voxel_tokens: 8)).kernel_keys,
+      contract.plan(dense_resource_request(voxel_tokens: 27)).kernel_keys,
+    ]
+    workers = 100
+    ledgers = Array.new(workers) do
+      ML::ThreeD::Trellis2::BoundedKernelKeyLedger.new(contract, 4)
+    end
+    seed_ready = Channel(Nil).new(2)
+    seed_release = Channel(Nil).new(2)
+    seed_outcomes = Channel(String).new(2)
+
+    2.times do |index|
+      spawn do
+        seed_ready.send(nil)
+        seed_release.receive
+        begin
+          ledgers[index].admit!(batches[index])
+          seed_outcomes.send("winner")
+        rescue ex : ML::ThreeD::Trellis2::KernelCacheCapacityError
+          seed_outcomes.send("capacity")
+        rescue ex : Exception
+          seed_outcomes.send("unexpected:#{ex.class}:#{ex.message}")
+        end
+      end
+    end
+
+    2.times { seed_ready.receive }
+    2.times { seed_release.send(nil) }
+    [seed_outcomes.receive, seed_outcomes.receive].sort.should eq(["winner", "winner"])
+
+    overflow = contract.plan(
+      dense_resource_request(voxel_tokens: 8, context_tokens: 8)
+    ).kernel_keys
+    remaining = workers - 2
+    ready = Channel(Nil).new(remaining)
+    release = Channel(Nil).new(remaining)
+    outcomes = Channel(String).new(remaining)
+
+    (2...workers).each do |index|
+      spawn do
+        ready.send(nil)
+        release.receive
+        begin
+          # Even-indexed ledgers repeat an admitted batch; odd-indexed ledgers
+          # race an all-new batch and must refuse at the owner-wide bound.
+          candidate = index.even? ? batches[0] : overflow
+          ledgers[index].admit!(candidate)
+          outcomes.send("winner")
+        rescue ex : ML::ThreeD::Trellis2::KernelCacheCapacityError
+          outcomes.send("capacity")
+        rescue ex : Exception
+          outcomes.send("unexpected:#{ex.class}:#{ex.message}")
+        end
+      end
+    end
+
+    remaining.times { ready.receive }
+    remaining.times { release.send(nil) }
+    remaining_results = Array.new(remaining) { outcomes.receive }
+    remaining_results.all? { |result| result == "winner" || result == "capacity" }.should be_true
+    remaining_results.count("capacity").should eq(remaining // 2)
+
+    expected = batches.flatten.uniq.map(&.canonical).sort
+    expected.size.should be <= ML::ThreeD::Trellis2::BoundedKernelKeyLedger::MAX_PROCESS_KERNEL_KEYS
+    ledgers.each do |ledger|
+      ledger.size.should eq(expected.size)
+      ledger.keys.map(&.canonical).sort.should eq(expected)
+    end
   end
 end
