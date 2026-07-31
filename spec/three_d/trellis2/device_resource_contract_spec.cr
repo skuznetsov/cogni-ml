@@ -28,6 +28,9 @@ private def dense_kernel_abi(
   source_digest : String = "1" * 64,
   device_family : String = "unbound-device",
   accumulation_dtype : ML::DType = ML::DType::F32,
+  rope_mode : String = "realpair-3d",
+  mask_mode : String = "right-valid-trim",
+  layout_mode : String = "ncdhw-cubic",
 ) : ML::ThreeD::Trellis2::DenseKernelABI
   ML::ThreeD::Trellis2::DenseKernelABI.new(
     source_digest: source_digest,
@@ -38,9 +41,9 @@ private def dense_kernel_abi(
     activation_mode: "silu-gelu",
     normalization_mode: "layer-rms",
     attention_mode: "self-cross-qkrms",
-    rope_mode: "realpair-3d",
-    mask_mode: "right-valid-trim",
-    layout_mode: "ncdhw-cubic"
+    rope_mode: rope_mode,
+    mask_mode: mask_mode,
+    layout_mode: layout_mode
   )
 end
 
@@ -195,6 +198,10 @@ describe ML::ThreeD::Trellis2::DenseDeviceResourceContract do
     plan.max_single_tensor_bytes.should eq(plan.declared_tensor_bytes.values.max)
     plan.declared_activation_bytes.should eq(plan.declared_tensor_bytes.values.sum)
     plan.declared_activation_bytes.should be <= contract.max_declared_activation_bytes
+    bf16_plan = dense_resource_contract.plan(
+      dense_resource_request(dtype: ML::DType::BF16)
+    )
+    bf16_plan.declared_tensor_bytes["self attention scores"].should eq(32_768)
     caller_copy = plan.declared_tensor_bytes
     caller_copy.clear
     plan.declared_tensor_bytes.should_not be_empty
@@ -277,6 +284,15 @@ describe ML::ThreeD::Trellis2::DenseDeviceResourceContract do
     end
     expect_raises(ArgumentError, /accumulation dtype/) do
       dense_kernel_abi(accumulation_dtype: ML::DType::I32)
+    end
+    expect_raises(ArgumentError, /mask_mode/) do
+      dense_resource_contract(kernel_abi: dense_kernel_abi(mask_mode: "none"))
+    end
+    expect_raises(ArgumentError, /rope_mode/) do
+      dense_resource_contract(kernel_abi: dense_kernel_abi(rope_mode: "none"))
+    end
+    expect_raises(ArgumentError, /layout_mode/) do
+      dense_resource_contract(kernel_abi: dense_kernel_abi(layout_mode: "nhwc"))
     end
     expect_raises(ArgumentError, /duplicate kernel variant/) do
       dense_resource_contract(variants: ["mlp", "mlp"])

@@ -303,6 +303,9 @@ module ML::ThreeD::Trellis2
     # This string is an execution obligation, not evidence that current
     # attention kernels implement masking or trimming.
     PADDING_POLICY              = "right-zero-mask-trim-v1"
+    REQUIRED_MASK_MODE          = "right-valid-trim"
+    REQUIRED_ROPE_MODE          = "realpair-3d"
+    REQUIRED_LAYOUT_MODE        = "ncdhw-cubic"
     MAX_PROFILES                =   16
     MAX_KERNEL_VARIANTS         =   64
     MAX_DTYPES                  =    3
@@ -336,6 +339,15 @@ module ML::ThreeD::Trellis2
       end
       unless @cache_owner.matches?(/\A[a-z0-9][a-z0-9-]{0,63}\z/)
         raise ArgumentError.new("cache_owner must be a lowercase ASCII cache token")
+      end
+      unless @kernel_abi.mask_mode == REQUIRED_MASK_MODE
+        raise ArgumentError.new("kernel ABI mask_mode must be #{REQUIRED_MASK_MODE}")
+      end
+      unless @kernel_abi.rope_mode == REQUIRED_ROPE_MODE
+        raise ArgumentError.new("kernel ABI rope_mode must be #{REQUIRED_ROPE_MODE}")
+      end
+      unless @kernel_abi.layout_mode == REQUIRED_LAYOUT_MODE
+        raise ArgumentError.new("kernel ABI layout_mode must be #{REQUIRED_LAYOUT_MODE}")
       end
       @kernel_abi_signature = @kernel_abi.canonical
       unless 1 <= kernel_variants.size <= MAX_KERNEL_VARIANTS
@@ -564,7 +576,10 @@ module ML::ThreeD::Trellis2
       total = 0_i64
       factors.each do |name, dimensions|
         elements = checked_product!(dimensions, Int64::MAX, name)
-        byte_size = dtype.byte_size.to_i64
+        # Metadata plans conservatively size every declared tensor with the
+        # wider of activation storage and accumulation precision. Per-kernel
+        # workspace liveness remains outside this no-execution contract.
+        byte_size = Math.max(dtype.byte_size, @kernel_abi.accumulation_dtype.byte_size).to_i64
         if elements > @max_single_tensor_bytes // byte_size
           raise ArgumentError.new(
             "#{name} exceeds single tensor budget #{@max_single_tensor_bytes} bytes"
