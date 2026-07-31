@@ -270,6 +270,83 @@ describe ML::NN::MultiHeadAttention do
       output.data.to_a.should eq([10.0_f32, 40.0_f32])
     end
 
+    it "preserves unequal-length attention through a dense-strided query view" do
+      mha = ML::NN::MultiHeadAttention.new(
+        embed_dim: 2,
+        num_heads: 1,
+        bias: false,
+        device: ML::Tensor::Device::CPU
+      )
+      [mha.q_proj, mha.k_proj, mha.v_proj, mha.out_proj].each do |projection|
+        projection.weight.data.cpu_data.not_nil!.replace([
+          1.0_f32, 0.0_f32,
+          0.0_f32, 1.0_f32,
+        ])
+        projection.weight.requires_grad = false
+      end
+
+      query_base = ML::Autograd::Variable.new(
+        ML::Tensor.from_array(
+          [0.2_f32, -0.7_f32, 1.1_f32, 0.3_f32, 0.5_f32, -0.4_f32],
+          ML::Shape.new(1_i32, 2_i32, 3_i32)
+        ),
+        requires_grad: true
+      )
+      query_view = query_base.transpose
+      dense_query = ML::Autograd::Variable.new(
+        query_view.data.contiguous,
+        requires_grad: true
+      )
+      key = ML::Autograd::Variable.new(
+        ML::Tensor.from_array(
+          [
+            0.5_f32, -0.4_f32,
+            -0.3_f32, 0.8_f32,
+            0.9_f32, 0.2_f32,
+            -0.6_f32, -0.1_f32,
+          ],
+          ML::Shape.new(1_i32, 4_i32, 2_i32)
+        ),
+        requires_grad: false
+      )
+      value = ML::Autograd::Variable.new(
+        ML::Tensor.from_array(
+          [
+            1.2_f32, -0.5_f32,
+            0.7_f32, 1.1_f32,
+            -0.2_f32, 0.4_f32,
+            0.3_f32, -0.9_f32,
+          ],
+          ML::Shape.new(1_i32, 4_i32, 2_i32)
+        ),
+        requires_grad: false
+      )
+      upstream = ML::Tensor.from_array(
+        [0.3_f32, -0.6_f32, 0.9_f32, 0.2_f32, -0.4_f32, 0.7_f32],
+        ML::Shape.new(1_i32, 3_i32, 2_i32)
+      )
+      base_before = query_base.data.to_a
+      view_strides = query_view.data.strides.to_a
+
+      view_output = mha.forward(query_view, key, value)
+      dense_output = mha.forward(dense_query, key, value)
+
+      view_output.data.to_a.each_with_index do |actual, index|
+        actual.should be_close(dense_output.data.to_a[index], 1e-6_f32)
+      end
+      query_base.data.to_a.should eq(base_before)
+      query_view.data.strides.to_a.should eq(view_strides)
+
+      view_output.backward(upstream)
+      dense_output.backward(upstream)
+
+      view_gradient = query_base.grad.not_nil!.transpose.to_a
+      dense_gradient = dense_query.grad.not_nil!.to_a
+      view_gradient.each_with_index do |actual, index|
+        actual.should be_close(dense_gradient[index], 1e-6_f32)
+      end
+    end
+
     it "rejects inconsistent cross-attention and mask shapes before projection" do
       mha = ML::NN::MultiHeadAttention.new(
         embed_dim: 2,
