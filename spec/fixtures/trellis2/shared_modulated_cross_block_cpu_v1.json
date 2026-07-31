@@ -1,0 +1,382 @@
+{
+  "config": {
+    "batch": 2,
+    "channels": 16,
+    "context_channels": 5,
+    "context_length": 2,
+    "device": "cpu",
+    "dtype": "float32",
+    "eps": 1e-06,
+    "heads": 2,
+    "length": 3,
+    "mlp_ratio": 1.25,
+    "qk_rms_norm": true,
+    "qk_rms_norm_cross": true,
+    "share_mod": true,
+    "use_rope": true
+  },
+  "expected": {
+    "after_cross": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        3,
+        16
+      ],
+      "tensor": "expected.after_cross"
+    },
+    "after_self": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        3,
+        16
+      ],
+      "tensor": "expected.after_self"
+    },
+    "combined_mod": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        96
+      ],
+      "tensor": "expected.combined_mod"
+    },
+    "cross_attention": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        3,
+        16
+      ],
+      "tensor": "expected.cross_attention"
+    },
+    "cross_k": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        2,
+        2,
+        8
+      ],
+      "tensor": "expected.cross_k"
+    },
+    "cross_q": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        3,
+        2,
+        8
+      ],
+      "tensor": "expected.cross_q"
+    },
+    "mlp_output": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        3,
+        16
+      ],
+      "tensor": "expected.mlp_output"
+    },
+    "modulated_mlp": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        3,
+        16
+      ],
+      "tensor": "expected.modulated_mlp"
+    },
+    "modulated_self": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        3,
+        16
+      ],
+      "tensor": "expected.modulated_self"
+    },
+    "norm1": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        3,
+        16
+      ],
+      "tensor": "expected.norm1"
+    },
+    "norm2": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        3,
+        16
+      ],
+      "tensor": "expected.norm2"
+    },
+    "norm3": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        3,
+        16
+      ],
+      "tensor": "expected.norm3"
+    },
+    "output": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        3,
+        16
+      ],
+      "tensor": "expected.output"
+    },
+    "self_attention": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        3,
+        16
+      ],
+      "tensor": "expected.self_attention"
+    },
+    "self_k": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        3,
+        2,
+        8
+      ],
+      "tensor": "expected.self_k"
+    },
+    "self_q": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        3,
+        2,
+        8
+      ],
+      "tensor": "expected.self_q"
+    }
+  },
+  "inputs": {
+    "context": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        2,
+        5
+      ],
+      "tensor": "input.context"
+    },
+    "mod": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        96
+      ],
+      "tensor": "input.mod"
+    },
+    "phases": {
+      "dtype": "F32",
+      "shape": [
+        3,
+        4,
+        2
+      ],
+      "tensor": "input.phases"
+    },
+    "x": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        3,
+        16
+      ],
+      "tensor": "input.x"
+    }
+  },
+  "parameters": {
+    "cross_attn.k_rms_norm.gamma": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        8
+      ],
+      "tensor": "parameter.cross_attn.k_rms_norm.gamma"
+    },
+    "cross_attn.q_rms_norm.gamma": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        8
+      ],
+      "tensor": "parameter.cross_attn.q_rms_norm.gamma"
+    },
+    "cross_attn.to_kv.bias": {
+      "dtype": "F32",
+      "shape": [
+        32
+      ],
+      "tensor": "parameter.cross_attn.to_kv.bias"
+    },
+    "cross_attn.to_kv.weight": {
+      "dtype": "F32",
+      "shape": [
+        32,
+        5
+      ],
+      "tensor": "parameter.cross_attn.to_kv.weight"
+    },
+    "cross_attn.to_out.bias": {
+      "dtype": "F32",
+      "shape": [
+        16
+      ],
+      "tensor": "parameter.cross_attn.to_out.bias"
+    },
+    "cross_attn.to_out.weight": {
+      "dtype": "F32",
+      "shape": [
+        16,
+        16
+      ],
+      "tensor": "parameter.cross_attn.to_out.weight"
+    },
+    "cross_attn.to_q.bias": {
+      "dtype": "F32",
+      "shape": [
+        16
+      ],
+      "tensor": "parameter.cross_attn.to_q.bias"
+    },
+    "cross_attn.to_q.weight": {
+      "dtype": "F32",
+      "shape": [
+        16,
+        16
+      ],
+      "tensor": "parameter.cross_attn.to_q.weight"
+    },
+    "mlp.mlp.0.bias": {
+      "dtype": "F32",
+      "shape": [
+        20
+      ],
+      "tensor": "parameter.mlp.mlp.0.bias"
+    },
+    "mlp.mlp.0.weight": {
+      "dtype": "F32",
+      "shape": [
+        20,
+        16
+      ],
+      "tensor": "parameter.mlp.mlp.0.weight"
+    },
+    "mlp.mlp.2.bias": {
+      "dtype": "F32",
+      "shape": [
+        16
+      ],
+      "tensor": "parameter.mlp.mlp.2.bias"
+    },
+    "mlp.mlp.2.weight": {
+      "dtype": "F32",
+      "shape": [
+        16,
+        20
+      ],
+      "tensor": "parameter.mlp.mlp.2.weight"
+    },
+    "modulation": {
+      "dtype": "F32",
+      "shape": [
+        96
+      ],
+      "tensor": "parameter.modulation"
+    },
+    "norm2.bias": {
+      "dtype": "F32",
+      "shape": [
+        16
+      ],
+      "tensor": "parameter.norm2.bias"
+    },
+    "norm2.weight": {
+      "dtype": "F32",
+      "shape": [
+        16
+      ],
+      "tensor": "parameter.norm2.weight"
+    },
+    "self_attn.k_rms_norm.gamma": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        8
+      ],
+      "tensor": "parameter.self_attn.k_rms_norm.gamma"
+    },
+    "self_attn.q_rms_norm.gamma": {
+      "dtype": "F32",
+      "shape": [
+        2,
+        8
+      ],
+      "tensor": "parameter.self_attn.q_rms_norm.gamma"
+    },
+    "self_attn.to_out.bias": {
+      "dtype": "F32",
+      "shape": [
+        16
+      ],
+      "tensor": "parameter.self_attn.to_out.bias"
+    },
+    "self_attn.to_out.weight": {
+      "dtype": "F32",
+      "shape": [
+        16,
+        16
+      ],
+      "tensor": "parameter.self_attn.to_out.weight"
+    },
+    "self_attn.to_qkv.bias": {
+      "dtype": "F32",
+      "shape": [
+        48
+      ],
+      "tensor": "parameter.self_attn.to_qkv.bias"
+    },
+    "self_attn.to_qkv.weight": {
+      "dtype": "F32",
+      "shape": [
+        48,
+        16
+      ],
+      "tensor": "parameter.self_attn.to_qkv.weight"
+    }
+  },
+  "provenance": {
+    "attention": "https://github.com/microsoft/TRELLIS.2/blob/75fbf0183001ed9876c8dbb35de6b68552ee08bd/trellis2/modules/attention/modules.py",
+    "block": "https://github.com/microsoft/TRELLIS.2/blob/75fbf0183001ed9876c8dbb35de6b68552ee08bd/trellis2/modules/transformer/modulated.py",
+    "commit": "75fbf0183001ed9876c8dbb35de6b68552ee08bd",
+    "config": "https://github.com/microsoft/TRELLIS.2/blob/75fbf0183001ed9876c8dbb35de6b68552ee08bd/configs/gen/ss_flow_img_dit_1_3B_64_bf16.json",
+    "generator": "tools/trellis2_oracle/export_shared_modulated_cross_block.py",
+    "model": "https://github.com/microsoft/TRELLIS.2/blob/75fbf0183001ed9876c8dbb35de6b68552ee08bd/trellis2/models/sparse_structure_flow.py",
+    "oracle_kind": "pinned-source-transcribed PyTorch formula oracle",
+    "repository": "microsoft/TRELLIS.2",
+    "rope": "https://github.com/microsoft/TRELLIS.2/blob/75fbf0183001ed9876c8dbb35de6b68552ee08bd/trellis2/modules/attention/rope.py",
+    "torch_version": "2.6.0"
+  },
+  "schema": "cogni-ml/trellis2/shared-modulated-cross-block-oracle/v1",
+  "tensor_file": "shared_modulated_cross_block_cpu_v1.safetensors",
+  "tolerance": {
+    "absolute": 2e-05,
+    "relative": 2e-05
+  }
+}

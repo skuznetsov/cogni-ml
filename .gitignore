@@ -31,6 +31,8 @@ test_*
 !test_*.cr
 *.dwarf
 bin/
+__pycache__/
+*.py[cod]
 
 # Tracked artifact inspector for the admitted TRELLIS.2 metadata boundary
 !bin/
