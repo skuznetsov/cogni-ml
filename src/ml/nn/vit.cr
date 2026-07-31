@@ -13,6 +13,7 @@ module ML
     # Patch Embedding: Convert image to sequence of patch embeddings
     # Image [B, C, H, W] -> Patches [B, num_patches, embed_dim]
     class PatchEmbedding
+      getter img_size : Int32
       getter patch_size : Int32
       getter embed_dim : Int32
       getter num_patches : Int32
@@ -22,13 +23,13 @@ module ML
       getter proj : Linear
 
       def initialize(
-        img_size : Int32 = 224,
+        @img_size : Int32 = 224,
         @patch_size : Int32 = 16,
         @in_channels : Int32 = 3,
         @embed_dim : Int32 = 768,
         device : Tensor::Device = Tensor.default_device,
       )
-        if img_size <= 0
+        if @img_size <= 0
           raise ArgumentError.new("img_size must be positive")
         end
         if @patch_size <= 0
@@ -40,9 +41,9 @@ module ML
         if @embed_dim <= 0
           raise ArgumentError.new("embed_dim must be positive")
         end
-        raise ArgumentError.new("Image size must be divisible by patch size") unless img_size % @patch_size == 0
+        raise ArgumentError.new("Image size must be divisible by patch size") unless @img_size % @patch_size == 0
 
-        patches_per_axis = img_size.to_i64 // @patch_size
+        patches_per_axis = @img_size.to_i64 // @patch_size
         num_patches = patches_per_axis * patches_per_axis
         if num_patches > Int32::MAX
           raise ArgumentError.new("num_patches overflow: #{num_patches}")
@@ -62,6 +63,7 @@ module ML
 
       # Forward: [B, C, H, W] -> [B, num_patches, embed_dim]
       def forward(x : Autograd::Variable) : Autograd::Variable
+        validate_input_shape!(x.data.shape)
         needs_grad = x.requires_grad? || @proj.weight.requires_grad? || (@proj.bias.try(&.requires_grad?) || false)
 
         if x.data.on_gpu? && GPUOps.available? && !needs_grad && ENV["GS_PATCH_EMBED_CPU"]?.nil?
@@ -96,7 +98,7 @@ module ML
           end
         end
 
-        x_data = x.data.on_cpu? ? x.data : x.data.to_cpu
+        x_data = x.data.to_contiguous_cpu
         x_d = x_data.cpu_data.not_nil!
 
         batch = x_data.shape[0]
@@ -150,7 +152,7 @@ module ML
           patch_dim_cap = patch_dim
           input_on_gpu = x.data.on_gpu?
           grad_fn = Autograd::CustomBackward.new("PatchEmbedBackward", ->(g : Tensor) {
-            g_cpu = g.on_cpu? ? g : g.to_cpu
+            g_cpu = g.to_contiguous_cpu
             g_d = g_cpu.cpu_data.not_nil!
 
             grad_input = Tensor.zeros(batch, channels_cap, height_cap, width_cap, device: Tensor::Device::CPU)
@@ -194,6 +196,29 @@ module ML
 
       def parameters : Array(Autograd::Variable)
         @proj.parameters
+      end
+
+      private def validate_input_shape!(shape : Shape) : Nil
+        unless shape.ndim == 4
+          raise ArgumentError.new(
+            "PatchEmbedding input must have rank 4 [batch, channels, height, width], got #{shape}"
+          )
+        end
+        unless shape[1] == @in_channels
+          raise ArgumentError.new(
+            "PatchEmbedding input channel count must be #{@in_channels}, got #{shape[1]}"
+          )
+        end
+        unless shape[2] > 0 && shape[3] > 0
+          raise ArgumentError.new(
+            "PatchEmbedding input spatial dimensions must be positive, got #{shape[2]}x#{shape[3]}"
+          )
+        end
+        unless shape[2] % @patch_size == 0 && shape[3] % @patch_size == 0
+          raise ArgumentError.new(
+            "PatchEmbedding input spatial dimensions must be divisible by patch size #{@patch_size}, got #{shape[2]}x#{shape[3]}"
+          )
+        end
       end
     end
 
@@ -284,7 +309,7 @@ module ML
 
       # GELU activation
       private def gelu(x : Autograd::Variable) : Autograd::Variable
-        x_data = x.data.on_cpu? ? x.data : x.data.to_cpu
+        x_data = x.data.to_contiguous_cpu
         x_d = x_data.cpu_data.not_nil!
 
         result = Tensor.new(x.data.shape, x.data.dtype, Tensor::Device::CPU)
@@ -305,8 +330,8 @@ module ML
           result_var.is_leaf = false
           x_clone = x.data.clone
           grad_fn = Autograd::CustomBackward.new("GeluBackward", ->(g : Tensor) {
-            g_cpu = g.on_cpu? ? g : g.to_cpu
-            x_cpu = x_clone.on_cpu? ? x_clone : x_clone.to_cpu
+            g_cpu = g.to_contiguous_cpu
+            x_cpu = x_clone.to_contiguous_cpu
 
             g_d = g_cpu.cpu_data.not_nil!
             x_d_bw = x_cpu.cpu_data.not_nil!
@@ -415,8 +440,8 @@ module ML
           return result_var
         end
 
-        x_data = x.data.on_cpu? ? x.data : x.data.to_cpu
-        y_data = y.data.on_cpu? ? y.data : y.data.to_cpu
+        x_data = x.data.to_contiguous_cpu
+        y_data = y.data.to_contiguous_cpu
 
         result = Tensor.new(x.data.shape, x.data.dtype, Tensor::Device::CPU)
         x_d = x_data.cpu_data.not_nil!
@@ -507,7 +532,18 @@ module ML
       # x: [batch, channels, height, width]
       # Returns: [batch, num_patches + 1, embed_dim] (includes CLS token)
       def forward(x : Autograd::Variable) : Autograd::Variable
-        batch = x.data.shape[0]
+        shape = x.data.shape
+        unless shape.ndim == 4
+          raise ArgumentError.new(
+            "ViTEncoder input must have rank 4 [batch, channels, height, width], got #{shape}"
+          )
+        end
+        unless shape[2] == @patch_embed.img_size && shape[3] == @patch_embed.img_size
+          raise ArgumentError.new(
+            "ViTEncoder input spatial dimensions must be #{@patch_embed.img_size}x#{@patch_embed.img_size}, got #{shape[2]}x#{shape[3]}"
+          )
+        end
+        batch = shape[0]
 
         # Patch embedding
         patches = @patch_embed.forward(x) # [batch, num_patches, embed_dim]
@@ -546,8 +582,8 @@ module ML
       end
 
       private def prepend_cls_token(x : Autograd::Variable, batch : Int32) : Autograd::Variable
-        x_data = x.data.on_cpu? ? x.data : x.data.to_cpu
-        cls_data = @cls_token.data.on_cpu? ? @cls_token.data : @cls_token.data.to_cpu
+        x_data = x.data.to_contiguous_cpu
+        cls_data = @cls_token.data.to_contiguous_cpu
 
         num_patches = x_data.shape[1]
         embed_dim = x_data.shape[2]
@@ -588,7 +624,7 @@ module ML
           cls_on_gpu = @cls_token.data.on_gpu?
 
           grad_fn = Autograd::CustomBackward.new("PrependClsBackward", ->(g : Tensor) {
-            g_cpu = g.on_cpu? ? g : g.to_cpu
+            g_cpu = g.to_contiguous_cpu
             g_d = g_cpu.cpu_data.not_nil!
 
             grad_x = Tensor.zeros(batch_cap, num_patches_cap, embed_dim_cap, device: Tensor::Device::CPU)
@@ -623,8 +659,8 @@ module ML
       end
 
       private def add_position_embedding(x : Autograd::Variable) : Autograd::Variable
-        x_data = x.data.on_cpu? ? x.data : x.data.to_cpu
-        pos_data = @pos_embed.data.on_cpu? ? @pos_embed.data : @pos_embed.data.to_cpu
+        x_data = x.data.to_contiguous_cpu
+        pos_data = @pos_embed.data.to_contiguous_cpu
 
         result = Tensor.new(x.data.shape, x.data.dtype, Tensor::Device::CPU)
 
@@ -659,7 +695,7 @@ module ML
           pos_on_gpu = @pos_embed.data.on_gpu?
 
           grad_fn = Autograd::CustomBackward.new("PosEmbedAddBackward", ->(g : Tensor) {
-            g_cpu = g.on_cpu? ? g : g.to_cpu
+            g_cpu = g.to_contiguous_cpu
             g_d = g_cpu.cpu_data.not_nil!
 
             grad_x = Tensor.new(g.shape, g.dtype, Tensor::Device::CPU)
@@ -688,7 +724,7 @@ module ML
       end
 
       private def extract_cls_token(x : Autograd::Variable) : Autograd::Variable
-        x_data = x.data.on_cpu? ? x.data : x.data.to_cpu
+        x_data = x.data.to_contiguous_cpu
         x_d = x_data.cpu_data.not_nil!
 
         batch = x_data.shape[0]
@@ -714,7 +750,7 @@ module ML
           x_on_gpu = x.data.on_gpu?
 
           grad_fn = Autograd::CustomBackward.new("ExtractClsBackward", ->(g : Tensor) {
-            g_cpu = g.on_cpu? ? g : g.to_cpu
+            g_cpu = g.to_contiguous_cpu
             g_d = g_cpu.cpu_data.not_nil!
 
             grad_x = Tensor.zeros(batch_cap, seq_len_cap, embed_dim_cap, device: Tensor::Device::CPU)
