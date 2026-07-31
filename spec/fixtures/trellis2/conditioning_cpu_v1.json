@@ -1,0 +1,169 @@
+{
+  "config": {
+    "batch": 3,
+    "channels": 9,
+    "coordinate_count": 5,
+    "device": "cpu",
+    "dtype": "float32",
+    "frequency_dim": 256,
+    "head_dim": 128,
+    "max_period": 10000.0,
+    "rope_high": 10000.0,
+    "rope_low": 1.0,
+    "spatial_dim": 3
+  },
+  "expected": {
+    "angles": {
+      "dtype": "F32",
+      "shape": [
+        5,
+        63
+      ],
+      "tensor": "expected.angles"
+    },
+    "first_linear": {
+      "dtype": "F32",
+      "shape": [
+        3,
+        9
+      ],
+      "tensor": "expected.first_linear"
+    },
+    "first_silu": {
+      "dtype": "F32",
+      "shape": [
+        3,
+        9
+      ],
+      "tensor": "expected.first_silu"
+    },
+    "frequencies": {
+      "dtype": "F32",
+      "shape": [
+        21
+      ],
+      "tensor": "expected.frequencies"
+    },
+    "mod": {
+      "dtype": "F32",
+      "shape": [
+        3,
+        54
+      ],
+      "tensor": "expected.mod"
+    },
+    "phases": {
+      "dtype": "F32",
+      "shape": [
+        5,
+        64,
+        2
+      ],
+      "tensor": "expected.phases"
+    },
+    "t_emb": {
+      "dtype": "F32",
+      "shape": [
+        3,
+        9
+      ],
+      "tensor": "expected.t_emb"
+    },
+    "t_freq": {
+      "dtype": "F32",
+      "shape": [
+        3,
+        256
+      ],
+      "tensor": "expected.t_freq"
+    },
+    "top_silu": {
+      "dtype": "F32",
+      "shape": [
+        3,
+        9
+      ],
+      "tensor": "expected.top_silu"
+    }
+  },
+  "inputs": {
+    "coordinates": {
+      "dtype": "F32",
+      "shape": [
+        5,
+        3
+      ],
+      "tensor": "input.coordinates"
+    },
+    "timesteps": {
+      "dtype": "F32",
+      "shape": [
+        3
+      ],
+      "tensor": "input.timesteps"
+    }
+  },
+  "parameters": {
+    "modulation.linear.bias": {
+      "dtype": "F32",
+      "shape": [
+        54
+      ],
+      "tensor": "parameter.modulation.linear.bias"
+    },
+    "modulation.linear.weight": {
+      "dtype": "F32",
+      "shape": [
+        54,
+        9
+      ],
+      "tensor": "parameter.modulation.linear.weight"
+    },
+    "timestep.first_linear.bias": {
+      "dtype": "F32",
+      "shape": [
+        9
+      ],
+      "tensor": "parameter.timestep.first_linear.bias"
+    },
+    "timestep.first_linear.weight": {
+      "dtype": "F32",
+      "shape": [
+        9,
+        256
+      ],
+      "tensor": "parameter.timestep.first_linear.weight"
+    },
+    "timestep.second_linear.bias": {
+      "dtype": "F32",
+      "shape": [
+        9
+      ],
+      "tensor": "parameter.timestep.second_linear.bias"
+    },
+    "timestep.second_linear.weight": {
+      "dtype": "F32",
+      "shape": [
+        9,
+        9
+      ],
+      "tensor": "parameter.timestep.second_linear.weight"
+    }
+  },
+  "provenance": {
+    "commit": "75fbf0183001ed9876c8dbb35de6b68552ee08bd",
+    "config": "https://github.com/microsoft/TRELLIS.2/blob/75fbf0183001ed9876c8dbb35de6b68552ee08bd/configs/gen/ss_flow_img_dit_1_3B_64_bf16.json",
+    "generator": "tools/trellis2_oracle/export_conditioning.py",
+    "model": "https://github.com/microsoft/TRELLIS.2/blob/75fbf0183001ed9876c8dbb35de6b68552ee08bd/trellis2/models/sparse_structure_flow.py",
+    "oracle_kind": "pinned-source-transcribed PyTorch formula oracle",
+    "repository": "microsoft/TRELLIS.2",
+    "rope": "https://github.com/microsoft/TRELLIS.2/blob/75fbf0183001ed9876c8dbb35de6b68552ee08bd/trellis2/modules/attention/rope.py",
+    "torch_version": "2.6.0"
+  },
+  "schema": "cogni-ml/trellis2/conditioning-oracle/v1",
+  "tensor_file": "conditioning_cpu_v1.safetensors",
+  "tolerance": {
+    "absolute": 2e-05,
+    "relative": 2e-05
+  }
+}
