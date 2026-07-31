@@ -5,6 +5,7 @@ require "./trellis2/conversion_plan"
 require "./trellis2/converter"
 require "./trellis2/dense_block"
 require "./trellis2/conditioning"
+require "./trellis2/dense_flow"
 
 module ML::ThreeD::Trellis2
 end
