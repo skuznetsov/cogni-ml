@@ -1,17 +1,21 @@
-# Opt-in fresh-process Darwin CPU retention probes for T2N2d1b1.
+# Opt-in fresh-process Darwin CPU retention/allocation probes.
 #
 # These probes emit GC/RSS observations; they do not establish allocator,
 # device-memory, or Metal fitness. The ps-based RSS sensor and its threshold
 # are a local manual qualification, not a portable CI contract. Run each
-# define in a separate process.
+# define in a separate process. The allocation-attribution mode does not call
+# ps and reports cumulative allocation traffic only.
 
-{% if flag?(:trellis2_retention_sensor_probe) && flag?(:trellis2_retention_cache_probe) %}
-  {% raise "retention sensor and cache probes must run in separate fresh processes" %}
+{% if (flag?(:trellis2_retention_sensor_probe) && flag?(:trellis2_retention_cache_probe)) ||
+        (flag?(:trellis2_retention_sensor_probe) && flag?(:trellis2_allocation_attribution_probe)) ||
+        (flag?(:trellis2_retention_cache_probe) && flag?(:trellis2_allocation_attribution_probe)) %}
+  {% raise "retention and allocation probes must run in separate fresh processes" %}
 {% end %}
 
-{% if flag?(:trellis2_retention_sensor_probe) || flag?(:trellis2_retention_cache_probe) %}
+{% if flag?(:trellis2_retention_sensor_probe) || flag?(:trellis2_retention_cache_probe) ||
+        flag?(:trellis2_allocation_attribution_probe) %}
 {% unless flag?(:darwin) %}
-  {% raise "retention probes are admitted only for local Darwin measurement" %}
+  {% raise "retention/allocation probes are admitted only for local Darwin measurement" %}
 {% end %}
 
 require "../../spec_helper"
@@ -60,6 +64,11 @@ module Trellis2RetentionProbe
     output.to_s.strip.to_i64? || raise "RSS sensor returned no integer value"
   rescue ex : IO::Error
     raise "RSS sensor unavailable: #{ex.message}"
+  end
+
+  def gc_total_bytes : Int64
+    GC.collect
+    GC.stats.total_bytes.to_i64
   end
 
   def emit_snapshot(builder : JSON::Builder, snapshot : Snapshot) : Nil
@@ -243,6 +252,117 @@ describe "TRELLIS.2 local cache retention orientation" do
         json.field "second_delta" do
           Trellis2RetentionProbe.emit_delta(json, after_first, after_second)
         end
+        json.field "diagnostics" do
+          json.object do
+            json.field "lookups", diagnostics.lookups
+            json.field "hits", diagnostics.hits
+            json.field "misses", diagnostics.misses
+            json.field "compile_attempts", diagnostics.compile_attempts
+            json.field "capacity_refusals", diagnostics.capacity_refusals
+            json.field "entries", diagnostics.entries
+          end
+        end
+      end
+    end
+    puts measurement
+  end
+end
+{% end %}
+
+{% if flag?(:trellis2_allocation_attribution_probe) %}
+describe "TRELLIS.2 local cache allocation attribution" do
+  it "separates no-op, ledger admission, and adapter-hit traffic" do
+    contract = Trellis2RetentionProbe.cache_contract
+    ledger = ML::ThreeD::Trellis2::BoundedKernelKeyLedger.new(contract, 1)
+    compile_calls = [] of String
+    compiler = ->(key : ML::ThreeD::Trellis2::KernelSpecializationKey) do
+      compile_calls << key.canonical
+      "compiled:#{key.canonical}"
+    end
+    adapter = ML::ThreeD::Trellis2::BoundedKernelCacheAdapterCPU.new(
+      ledger,
+      1,
+      compiler
+    )
+    key = Trellis2RetentionProbe.cache_key(contract)
+    artifact = adapter.fetch!(key)
+
+    noop_before = Trellis2RetentionProbe.gc_total_bytes
+    noop_sink = 0_i64
+    Trellis2RetentionProbe::CACHE_HITS_PER_WINDOW.times do
+      noop_sink += 1
+    end
+    noop_after = Trellis2RetentionProbe.gc_total_bytes
+
+    ledger_before = Trellis2RetentionProbe.gc_total_bytes
+    Trellis2RetentionProbe::CACHE_HITS_PER_WINDOW.times do
+      ledger.admit!([key])
+    end
+    ledger_after = Trellis2RetentionProbe.gc_total_bytes
+
+    adapter_before = Trellis2RetentionProbe.gc_total_bytes
+    Trellis2RetentionProbe::CACHE_HITS_PER_WINDOW.times do
+      unless adapter.fetch!(key).same?(artifact)
+        raise "cache hit artifact identity changed"
+      end
+    end
+    adapter_after = Trellis2RetentionProbe.gc_total_bytes
+
+    adapter_reverse_before = Trellis2RetentionProbe.gc_total_bytes
+    Trellis2RetentionProbe::CACHE_HITS_PER_WINDOW.times do
+      unless adapter.fetch!(key).same?(artifact)
+        raise "cache hit artifact identity changed"
+      end
+    end
+    adapter_reverse_after = Trellis2RetentionProbe.gc_total_bytes
+
+    ledger_reverse_before = Trellis2RetentionProbe.gc_total_bytes
+    Trellis2RetentionProbe::CACHE_HITS_PER_WINDOW.times do
+      ledger.admit!([key])
+    end
+    ledger_reverse_after = Trellis2RetentionProbe.gc_total_bytes
+
+    noop_bytes = noop_after - noop_before
+    ledger_bytes = ledger_after - ledger_before
+    adapter_bytes = adapter_after - adapter_before
+    adapter_reverse_bytes = adapter_reverse_after - adapter_reverse_before
+    ledger_reverse_bytes = ledger_reverse_after - ledger_reverse_before
+    diagnostics = adapter.diagnostics
+
+    noop_sink.should eq(Trellis2RetentionProbe::CACHE_HITS_PER_WINDOW)
+    ledger.size.should eq(1)
+    diagnostics.lookups.should eq(2 * Trellis2RetentionProbe::CACHE_HITS_PER_WINDOW + 1)
+    diagnostics.hits.should eq(2 * Trellis2RetentionProbe::CACHE_HITS_PER_WINDOW)
+    diagnostics.misses.should eq(1)
+    diagnostics.compile_attempts.should eq(1)
+    diagnostics.capacity_refusals.should eq(0)
+    diagnostics.entries.should eq(1)
+    compile_calls.should eq([key.canonical])
+    ledger_bytes.should be > noop_bytes
+    adapter_bytes.should be > noop_bytes
+    adapter_reverse_bytes.should be > noop_bytes
+    ledger_reverse_bytes.should be > noop_bytes
+
+    measurement = JSON.build do |json|
+      json.object do
+        json.field "probe", "trellis2-local-cache-allocation-attribution-v1"
+        json.field "scope", "darwin-local-manual"
+        json.field "gc_total_bytes_kind", "cumulative-allocation-traffic"
+        json.field "window_order", [
+          "noop",
+          "round_a_ledger_only",
+          "round_a_adapter_hit",
+          "round_b_adapter_hit",
+          "round_b_ledger_only",
+        ]
+        json.field "iterations_per_window", Trellis2RetentionProbe::CACHE_HITS_PER_WINDOW
+        json.field "noop_bytes", noop_bytes
+        json.field "round_a_ledger_bytes", ledger_bytes
+        json.field "round_a_adapter_bytes", adapter_bytes
+        json.field "round_a_adapter_minus_ledger_bytes", adapter_bytes - ledger_bytes
+        json.field "round_b_adapter_bytes", adapter_reverse_bytes
+        json.field "round_b_ledger_bytes", ledger_reverse_bytes
+        json.field "round_b_adapter_minus_ledger_bytes", adapter_reverse_bytes - ledger_reverse_bytes
         json.field "diagnostics" do
           json.object do
             json.field "lookups", diagnostics.lookups
