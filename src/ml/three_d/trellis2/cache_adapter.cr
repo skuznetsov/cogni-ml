@@ -56,12 +56,12 @@ module ML::ThreeD::Trellis2
       end
 
       # No adapter counter or cache observation occurs before this returns.
-      @ledger.admit!([key])
+      admitted_key = @ledger.admit!(key)
       raise_if_cancelled!(cancelled)
 
       @mutex.synchronize do
         @lookups += 1
-        if artifact = @entries[key]?
+        if artifact = @entries[admitted_key]?
           @hits += 1
           return artifact
         end
@@ -78,8 +78,8 @@ module ML::ThreeD::Trellis2
         # The controlled CPU fake compiles under this lock to make same-key
         # single-compilation observable. A re-entrant or blocking compiler and
         # real device compilation remain outside this adapter's admitted scope.
-        artifact = @compiler.call(key)
-        @entries[key] = artifact
+        artifact = @compiler.call(admitted_key)
+        @entries[admitted_key] = artifact
         artifact
       end
     end

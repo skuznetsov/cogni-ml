@@ -653,9 +653,13 @@ module ML::ThreeD::Trellis2
         )
       end
 
-      # Keep the hash key independent from a caller-owned String. The contract
-      # remains the authority for validating each structured key at admission.
+      # Retain the immutable, GC-owned owner value for the ledger lifetime. The
+      # contract remains the authority for each structured key at admission.
       @owner = @contract.cache_owner.dup
+      # This cache is a contract-local admission certificate, not a second
+      # capacity authority. Entries are added only after this ledger's contract
+      # validates the key and the owner-wide registry admits it.
+      @contract_keys = {} of KernelSpecializationKey => KernelSpecializationKey
       @@owner_mutex.synchronize do
         if entry = @@owner_entries[@owner]?
           unless entry.capacity == @capacity
@@ -675,9 +679,62 @@ module ML::ThreeD::Trellis2
       end
     end
 
+    # Admit one key and return the stable, GC-owned record retained by the
+    # ledger. Normal Crystal Strings are immutable references, so retaining the
+    # record is safer and cheaper than retaining non-owning byte slices.
+    def admit!(key : KernelSpecializationKey) : KernelSpecializationKey
+      if admitted = @@owner_mutex.synchronize { @contract_keys[key]? }
+        return admitted
+      end
+
+      snapshot = snapshot_key(key)
+      unless @contract.allows?(snapshot)
+        raise ArgumentError.new(
+          "kernel key #{snapshot.canonical} is not declared by this contract"
+        )
+      end
+
+      # Validation may allocate and is deliberately outside the process-wide
+      # lock. The second local lookup closes the concurrent-miss race.
+      @@owner_mutex.synchronize do
+        if admitted = @contract_keys[snapshot]?
+          admitted
+        else
+          entry = @@owner_entries[@owner]
+          unless snapshot.cache_owner == @owner
+            raise ArgumentError.new(
+              "kernel key #{snapshot.canonical} is not owned by ledger #{@owner}"
+            )
+          end
+
+          canonical = entry.keys.find { |candidate| candidate == snapshot }
+          unless canonical
+            if @@process_kernel_key_count >= MAX_PROCESS_KERNEL_KEYS
+              raise KernelCacheCapacityError.new(
+                "process kernel key capacity #{MAX_PROCESS_KERNEL_KEYS} would be exceeded; " \
+                "no keys admitted"
+              )
+            end
+            if entry.keys.size >= entry.capacity
+              raise KernelCacheCapacityError.new(
+                "kernel cache capacity #{entry.capacity} for owner #{@owner} would be exceeded; " \
+                "no keys admitted"
+              )
+            end
+            entry.keys << snapshot
+            @@process_kernel_key_count += 1
+            canonical = snapshot
+          end
+
+          @contract_keys[canonical] = canonical
+          canonical
+        end
+      end
+    end
+
     def admit!(keys : Array(KernelSpecializationKey)) : Nil
-      # Snapshot record fields before validation so caller mutation after this
-      # call cannot rewrite an identity retained by the registry.
+      # Snapshot the value record before validation. Its String references are
+      # immutable and GC-owned; no non-owning byte view crosses this boundary.
       snapshots = keys.map { |key| snapshot_key(key) }
       snapshots.each do |key|
         unless @contract.allows?(key)

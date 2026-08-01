@@ -441,6 +441,70 @@ describe ML::ThreeD::Trellis2::DenseDeviceResourceContract do
     ledger.size.should eq(0)
   end
 
+  it "reuses one contract-local canonical key without trusting owner-wide membership" do
+    owner = "ledger-contract-local-owner"
+    first_contract = dense_resource_contract(
+      variants: ["mlp"],
+      dtypes: [ML::DType::F32],
+      cache_owner: owner
+    )
+    second_contract = dense_resource_contract(
+      variants: ["self-attention"],
+      dtypes: [ML::DType::F32],
+      cache_owner: owner
+    )
+    first = ML::ThreeD::Trellis2::BoundedKernelKeyLedger.new(first_contract, 2)
+    second = ML::ThreeD::Trellis2::BoundedKernelKeyLedger.new(second_contract, 2)
+    first_key = first_contract.plan(
+      dense_resource_request(voxel_tokens: 8)
+    ).kernel_keys.first
+    equal_key = first_key.copy_with(
+      profile_signature: String.build { |io| io << first_key.profile_signature }
+    )
+
+    equal_key.profile_signature.same?(first_key.profile_signature).should be_false
+    canonical = first.admit!(first_key)
+    repeated = first.admit!(equal_key)
+    canonical.should eq(first_key)
+    repeated.should eq(first_key)
+    repeated.profile_signature.same?(canonical.profile_signature).should be_true
+    first.size.should eq(1)
+
+    # A process-owner hit is not a contract certificate. The second ledger has
+    # to validate this key against its own declared variants before caching it.
+    expect_raises(ArgumentError, /not declared by this contract/) do
+      second.admit!(first_key)
+    end
+    second.size.should eq(1)
+
+    second_key = second_contract.plan(
+      dense_resource_request(voxel_tokens: 8)
+    ).kernel_keys.first
+    second.admit!(second_key).should eq(second_key)
+    first.size.should eq(2)
+    second.size.should eq(2)
+  end
+
+  it "does not cache a refused single-key admission" do
+    contract = dense_resource_contract(
+      variants: ["mlp", "self-attention"],
+      dtypes: [ML::DType::F32],
+      cache_owner: "ledger-single-refusal-owner"
+    )
+    ledger = ML::ThreeD::Trellis2::BoundedKernelKeyLedger.new(contract, 1)
+    keys = contract.plan(dense_resource_request(voxel_tokens: 8)).kernel_keys
+
+    ledger.admit!(keys.first).should eq(keys.first)
+    2.times do
+      expect_raises(ML::ThreeD::Trellis2::KernelCacheCapacityError, /capacity 1/) do
+        ledger.admit!(keys.last)
+      end
+    end
+    ledger.admit!(keys.first).should eq(keys.first)
+    ledger.size.should eq(1)
+    ledger.keys.should eq([keys.first])
+  end
+
   it "shares one owner-wide capacity across independent ledgers" do
     contract = dense_resource_contract(
       variants: ["mlp", "self-attention"],

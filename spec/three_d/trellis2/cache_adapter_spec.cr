@@ -130,6 +130,38 @@ describe ML::ThreeD::Trellis2::BoundedKernelCacheAdapterCPU do
     )
   end
 
+  it "compiles with the ledger-owned canonical key" do
+    contract = cache_adapter_contract
+    ledger = ML::ThreeD::Trellis2::BoundedKernelKeyLedger.new(
+      contract,
+      contract.theoretical_kernel_key_count
+    )
+    key = cache_adapter_key(contract)
+    canonical = ledger.admit!(key)
+    equal_key = key.copy_with(
+      profile_signature: String.build { |io| io << key.profile_signature }
+    )
+    compiled_keys = [] of ML::ThreeD::Trellis2::KernelSpecializationKey
+    adapter = ML::ThreeD::Trellis2::BoundedKernelCacheAdapterCPU.new(
+      ledger,
+      1,
+      ->(candidate : ML::ThreeD::Trellis2::KernelSpecializationKey) do
+        compiled_keys << candidate
+        "compiled:#{candidate.canonical}"
+      end
+    )
+
+    equal_key.profile_signature.same?(canonical.profile_signature).should be_false
+    first = adapter.fetch!(equal_key)
+    second = adapter.fetch!(key)
+    first.same?(second).should be_true
+    compiled_keys.size.should eq(1)
+    compiled_keys.first.profile_signature.same?(canonical.profile_signature).should be_true
+    adapter.diagnostics.should eq(
+      ML::ThreeD::Trellis2::KernelCacheDiagnostics.new(2, 1, 1, 1, 0, 1)
+    )
+  end
+
   it "compiles a contended key once" do
     contract = cache_adapter_contract
     compile_calls = [] of String

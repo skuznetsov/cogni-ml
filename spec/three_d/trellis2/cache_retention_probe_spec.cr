@@ -28,6 +28,11 @@ module Trellis2RetentionProbe
   SENSOR_BYTES            = 16_i64 * 1024_i64 * 1024_i64
   SENSOR_MIN_RSS_DELTA_KB =  8_i64 * 1024_i64
   CACHE_HITS_PER_WINDOW   = 20_000
+  # Guard only: cumulative managed allocation traffic is not retained heap,
+  # RSS, device memory, or latency. This cap rejects the previously measured
+  # multi-kilobyte-per-hit reconstruction path while allowing 64 bytes/hit of
+  # instrumentation/runtime variance on this opt-in Darwin probe.
+  FAST_PATH_MAX_BYTES_PER_WINDOW = CACHE_HITS_PER_WINDOW.to_i64 * 64_i64
 
   record Snapshot,
     heap_size : Int64,
@@ -296,7 +301,7 @@ describe "TRELLIS.2 local cache allocation attribution" do
 
     ledger_before = Trellis2RetentionProbe.gc_total_bytes
     Trellis2RetentionProbe::CACHE_HITS_PER_WINDOW.times do
-      ledger.admit!([key])
+      ledger.admit!(key)
     end
     ledger_after = Trellis2RetentionProbe.gc_total_bytes
 
@@ -318,7 +323,7 @@ describe "TRELLIS.2 local cache allocation attribution" do
 
     ledger_reverse_before = Trellis2RetentionProbe.gc_total_bytes
     Trellis2RetentionProbe::CACHE_HITS_PER_WINDOW.times do
-      ledger.admit!([key])
+      ledger.admit!(key)
     end
     ledger_reverse_after = Trellis2RetentionProbe.gc_total_bytes
 
@@ -338,10 +343,10 @@ describe "TRELLIS.2 local cache allocation attribution" do
     diagnostics.capacity_refusals.should eq(0)
     diagnostics.entries.should eq(1)
     compile_calls.should eq([key.canonical])
-    ledger_bytes.should be > noop_bytes
-    adapter_bytes.should be > noop_bytes
-    adapter_reverse_bytes.should be > noop_bytes
-    ledger_reverse_bytes.should be > noop_bytes
+    ledger_bytes.should be <= Trellis2RetentionProbe::FAST_PATH_MAX_BYTES_PER_WINDOW
+    adapter_bytes.should be <= Trellis2RetentionProbe::FAST_PATH_MAX_BYTES_PER_WINDOW
+    adapter_reverse_bytes.should be <= Trellis2RetentionProbe::FAST_PATH_MAX_BYTES_PER_WINDOW
+    ledger_reverse_bytes.should be <= Trellis2RetentionProbe::FAST_PATH_MAX_BYTES_PER_WINDOW
 
     measurement = JSON.build do |json|
       json.object do
