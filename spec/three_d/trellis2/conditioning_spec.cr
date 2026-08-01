@@ -53,6 +53,55 @@ private def conditioning_assert_close(
   end
 end
 
+# Frozen copy of the pre-T2N2d1e rotary arithmetic. It intentionally builds the
+# angle array before sin/cos so an output-only implementation must preserve the
+# original F32 rounding without using the refactored trace path as its oracle.
+private def conditioning_pre_d1e_phases(
+  coordinates : ML::Tensor,
+  head_dim : Int32,
+  dim : Int32,
+  rope_low : Float32,
+  rope_high : Float32,
+) : Array(Float32)
+  count = coordinates.shape[0]
+  pairs = head_dim // 2
+  frequency_dim = pairs // dim
+  coordinate_values = coordinates.to_a
+  frequency_values = Array(Float32).new(frequency_dim, 0.0_f32)
+  frequency_dim.times do |index|
+    exponent = index.to_f64 / frequency_dim.to_f64
+    frequency_values[index] = (rope_low.to_f64 / (rope_high.to_f64 ** exponent)).to_f32
+  end
+
+  angle_width = dim * frequency_dim
+  angles = Array(Float32).new(count * angle_width, 0.0_f32)
+  count.times do |position|
+    dim.times do |axis|
+      coordinate = coordinate_values[position * dim + axis]
+      frequency_dim.times do |frequency_index|
+        offset = position * angle_width + axis * frequency_dim + frequency_index
+        angles[offset] = coordinate * frequency_values[frequency_index]
+      end
+    end
+  end
+
+  phases = Array(Float32).new(count * pairs * 2, 0.0_f32)
+  count.times do |position|
+    pairs.times do |pair|
+      phase_offset = (position * pairs + pair) * 2
+      if pair < angle_width
+        angle = angles[position * angle_width + pair].to_f64
+        phases[phase_offset] = Math.cos(angle).to_f32
+        phases[phase_offset + 1] = Math.sin(angle).to_f32
+      else
+        phases[phase_offset] = 1.0_f32
+        phases[phase_offset + 1] = 0.0_f32
+      end
+    end
+  end
+  phases
+end
+
 describe ML::ThreeD::Trellis2::TimestepConditioningCPU do
   it "matches the pinned CPU formula at named boundaries" do
     fixture_path = File.join(__DIR__, "../../fixtures/trellis2/conditioning_cpu_v1.json")
@@ -132,6 +181,16 @@ describe ML::ThreeD::Trellis2::TimestepConditioningCPU do
       end
 
       phases_trace = condition.rotary.forward_with_trace(coordinates)
+      output_only_phases = condition.rotary.forward(coordinates)
+      pre_d1e_phases = conditioning_pre_d1e_phases(
+        coordinates,
+        config["head_dim"].as_i.to_i32,
+        config["spatial_dim"].as_i.to_i32,
+        config["rope_low"].as_f.to_f32,
+        config["rope_high"].as_f.to_f32
+      )
+      output_only_phases.to_a.should eq(pre_d1e_phases)
+      phases_trace["phases"].to_a.should eq(pre_d1e_phases)
       ["frequencies", "angles", "phases"].each do |name|
         conditioning_assert_close(
           phases_trace[name],

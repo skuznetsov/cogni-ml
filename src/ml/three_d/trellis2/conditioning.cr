@@ -275,7 +275,14 @@ module ML::ThreeD::Trellis2
     end
 
     def forward(coordinates : Tensor) : Tensor
-      forward_with_trace(coordinates)["phases"]
+      count, pairs, coordinate_values, frequency_values = rotary_inputs(coordinates)
+      phases = phase_values_from_coordinates(
+        count,
+        pairs,
+        coordinate_values,
+        frequency_values
+      )
+      DenseBlockCPU.tensor_from(phases, Shape.new(count, pairs, 2_i32))
     end
 
     def call(coordinates : Tensor) : Tensor
@@ -283,6 +290,30 @@ module ML::ThreeD::Trellis2
     end
 
     def forward_with_trace(coordinates : Tensor) : Hash(String, Tensor)
+      count, pairs, coordinate_values, frequency_values = rotary_inputs(coordinates)
+      angle_width = @dim * @frequency_dim
+      angles = Array(Float32).new(count * angle_width, 0.0_f32)
+      count.times do |position|
+        @dim.times do |axis|
+          coordinate = coordinate_values[position * @dim + axis]
+          @frequency_dim.times do |frequency_index|
+            offset = position * angle_width + axis * @frequency_dim + frequency_index
+            angles[offset] = coordinate * frequency_values[frequency_index]
+          end
+        end
+      end
+      phases = phase_values_from_angles(count, pairs, angles, angle_width)
+
+      {
+        "frequencies" => DenseBlockCPU.tensor_from(frequency_values, Shape.new(@frequency_dim)),
+        "angles"      => DenseBlockCPU.tensor_from(angles, Shape.new(count, angle_width)),
+        "phases"      => DenseBlockCPU.tensor_from(phases, Shape.new(count, pairs, 2_i32)),
+      }
+    end
+
+    private def rotary_inputs(
+      coordinates : Tensor,
+    ) : Tuple(Int32, Int32, Array(Float32), Array(Float32))
       unless coordinates.ndim == 2
         raise ArgumentError.new("coordinates must be a rank-2 tensor")
       end
@@ -313,19 +344,45 @@ module ML::ThreeD::Trellis2
         end
         frequency_values[index] = value.to_f32
       end
+
+      {count, pairs, coordinate_values, frequency_values}
+    end
+
+    private def phase_values_from_coordinates(
+      count : Int32,
+      pairs : Int32,
+      coordinate_values : Array(Float32),
+      frequency_values : Array(Float32),
+    ) : Array(Float32)
       angle_width = @dim * @frequency_dim
-      angles = Array(Float32).new(count * angle_width, 0.0_f32)
+      phases = Array(Float32).new((count.to_i64 * pairs.to_i64 * 2_i64).to_i, 0.0_f32)
       count.times do |position|
-        @dim.times do |axis|
-          coordinate = coordinate_values[position * @dim + axis]
-          @frequency_dim.times do |frequency_index|
-            offset = position * angle_width + axis * @frequency_dim + frequency_index
-            angles[offset] = coordinate * frequency_values[frequency_index]
+        pairs.times do |pair|
+          phase_offset = (position * pairs + pair) * 2
+          if pair < angle_width
+            axis = pair // @frequency_dim
+            frequency_index = pair % @frequency_dim
+            angle = (
+              coordinate_values[position * @dim + axis] * frequency_values[frequency_index]
+            ).to_f64
+            phases[phase_offset] = Math.cos(angle).to_f32
+            phases[phase_offset + 1] = Math.sin(angle).to_f32
+          else
+            phases[phase_offset] = 1.0_f32
+            phases[phase_offset + 1] = 0.0_f32
           end
         end
       end
+      phases
+    end
 
-      phases = Array(Float32).new(output_elements.to_i, 0.0_f32)
+    private def phase_values_from_angles(
+      count : Int32,
+      pairs : Int32,
+      angles : Array(Float32),
+      angle_width : Int32,
+    ) : Array(Float32)
+      phases = Array(Float32).new((count.to_i64 * pairs.to_i64 * 2_i64).to_i, 0.0_f32)
       count.times do |position|
         pairs.times do |pair|
           phase_offset = (position * pairs + pair) * 2
@@ -339,12 +396,7 @@ module ML::ThreeD::Trellis2
           end
         end
       end
-
-      {
-        "frequencies" => DenseBlockCPU.tensor_from(frequency_values, Shape.new(@frequency_dim)),
-        "angles"      => DenseBlockCPU.tensor_from(angles, Shape.new(count, angle_width)),
-        "phases"      => DenseBlockCPU.tensor_from(phases, Shape.new(count, pairs, 2_i32)),
-      }
+      phases
     end
   end
 
