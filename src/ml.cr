@@ -15,6 +15,9 @@ require "./ml/core/buffer"
 require "./ml/core/floating_storage"
 require "./ml/core/tensor"
 
+# Bounded immutable CPU sparse values
+require "./ml/sparse"
+
 # Graphless CPU reference operations
 require "./ml/ops/normalization"
 

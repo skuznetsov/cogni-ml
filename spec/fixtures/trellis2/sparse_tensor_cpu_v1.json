@@ -1,0 +1,190 @@
+{
+  "schema": "cogni-ml/trellis2/sparse-tensor-structural-oracle/v1",
+  "provenance": {
+    "repository": "microsoft/TRELLIS.2",
+    "commit": "75fbf0183001ed9876c8dbb35de6b68552ee08bd",
+    "source": "https://github.com/microsoft/TRELLIS.2/blob/75fbf0183001ed9876c8dbb35de6b68552ee08bd/trellis2/modules/sparse/basic.py",
+    "source_sha256": "99dbcb7298238fdb6b6d47918ec068f618c68067653489d22b32c136c1ae0e78",
+    "generator": "tools/trellis2_oracle/export_sparse_tensor.py",
+    "python_version": "3.11.9",
+    "torch_version": "2.9.0",
+    "numpy_version": "2.1.3",
+    "network": "none",
+    "device": "cpu",
+    "weights": "none",
+    "sparse_backend": "none"
+  },
+  "contract": {
+    "coordinate_columns": [
+      "batch",
+      "x",
+      "y",
+      "z"
+    ],
+    "input_order": "preserved within nondecreasing batch groups",
+    "duplicates": "local CoordinateMap3D rejects",
+    "explicit_extents": true,
+    "dense_materialization": "not admitted"
+  },
+  "input": {
+    "batch_size": 3,
+    "channels": 2,
+    "spatial_shape": [
+      4,
+      3,
+      4
+    ],
+    "coordinates": [
+      [
+        0,
+        2,
+        0,
+        1
+      ],
+      [
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        2,
+        1,
+        2,
+        0
+      ],
+      [
+        2,
+        0,
+        0,
+        3
+      ],
+      [
+        2,
+        3,
+        1,
+        2
+      ],
+      [
+        2,
+        2,
+        2,
+        1
+      ]
+    ],
+    "coordinates_i32le_sha256": "6ed0a6bef4da45266fb154e22c52391ae677b4ae025dfa371c597af85afc19ed",
+    "features": [
+      [
+        20010.0,
+        20011.0
+      ],
+      [
+        100.0,
+        101.0
+      ],
+      [
+        210200.0,
+        210201.0
+      ],
+      [
+        200030.0,
+        200031.0
+      ],
+      [
+        230120.0,
+        230121.0
+      ],
+      [
+        220210.0,
+        220211.0
+      ]
+    ],
+    "features_f32le_sha256": "56ed20fa5dd8ba7519f81e594ce44617a698dbbd840a2a424fb70abd72cf93a7"
+  },
+  "upstream": {
+    "shape": [
+      3,
+      2
+    ],
+    "layout": [
+      [
+        0,
+        2
+      ],
+      [
+        2,
+        2
+      ],
+      [
+        2,
+        6
+      ]
+    ],
+    "occupied_spatial_shape": [
+      4,
+      3,
+      4
+    ],
+    "sequence_lengths": [
+      2,
+      0,
+      4
+    ],
+    "cumulative_sequence_lengths": [
+      0,
+      2,
+      2,
+      6
+    ],
+    "batch_broadcast_map": [
+      0,
+      0,
+      2,
+      2,
+      2,
+      2
+    ],
+    "to_dense_failure": {
+      "type": "TypeError",
+      "message": "can only concatenate list (not \"tuple\") to list"
+    }
+  },
+  "independent_tuple_lookup_queries": [
+    {
+      "coordinate": [
+        2,
+        3,
+        1,
+        2
+      ],
+      "row": 4
+    },
+    {
+      "coordinate": [
+        0,
+        0,
+        1,
+        0
+      ],
+      "row": 1
+    },
+    {
+      "coordinate": [
+        2,
+        0,
+        0,
+        3
+      ],
+      "row": 3
+    },
+    {
+      "coordinate": [
+        1,
+        0,
+        0,
+        0
+      ],
+      "row": null
+    }
+  ]
+}
