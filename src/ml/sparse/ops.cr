@@ -6,6 +6,14 @@ module ML::Sparse
     # The immutable coordinate map is reused; only one new feature buffer is
     # allocated after all output bounds have passed.
     def self.concat_features(left : TensorCPU, right : TensorCPU) : TensorCPU
+      # `new` below must resolve only to TensorCPU's validated ownership
+      # constructor, never to an inherited subclass overload.
+      unless TensorCPU == self
+        raise SparseTensorError.new(
+          "sparse feature concat requires the base TensorCPU receiver"
+        )
+      end
+
       # Read the base value's sealed state directly. Crystal permits subclasses
       # to override even `class` and ordinary getters, so those are not an
       # authority boundary for invariants established by TensorCPU itself.

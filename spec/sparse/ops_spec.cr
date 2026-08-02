@@ -50,6 +50,23 @@ class SparseConcatMapOverride < ML::Sparse::CoordinateMap3D
   end
 end
 
+class SparseConcatReceiverOverride < ML::Sparse::TensorCPU
+  def self.==(other : ML::Sparse::TensorCPU.class) : Bool
+    true
+  end
+
+  def initialize(
+    features : Array(Float32),
+    map : ML::Sparse::CoordinateMap3D,
+    point_count : Int32,
+    channels : Int32,
+    budget : Int64,
+  )
+    features[0] = Float32::NAN unless features.empty?
+    super(features, map, point_count, channels, budget)
+  end
+end
+
 describe ML::Sparse::TensorCPU do
   it "matches the pinned two-value feature-concat oracle" do
     fixture = sparse_concat_fixture
@@ -196,6 +213,19 @@ describe ML::Sparse::TensorCPU do
     )
     expect_raises(ML::Sparse::SparseTensorError, /same immutable coordinate map/) do
       ML::Sparse::TensorCPU.concat_features(mapped_left, mapped_right)
+    end
+  end
+
+  it "rejects inherited subclass receivers before constructing output" do
+    map = ML::Sparse::CoordinateMap3D.new(
+      [0, 0, 0, 0] of Int32,
+      1,
+      {1, 1, 1}
+    )
+    value = ML::Sparse::TensorCPU.new(ML::Tensor.ones(1, 1), map)
+
+    expect_raises(ML::Sparse::SparseTensorError, /base TensorCPU receiver/) do
+      SparseConcatReceiverOverride.concat_features(value, value)
     end
   end
 
