@@ -20,11 +20,11 @@ describe ML::Metal::PipelineCache do
     before = ML::Metal::PipelineCache.typed_process_diagnostics
     owner = "spec-failed-build"
     key = integration_key(owner)
+    source = "kernel void integration_probe() {}"
+    ML::Metal::PipelineCache.register_typed_owner(owner, 2)
 
-    expect_raises(Exception, "synthetic compile failure") do
-      ML::Metal::PipelineCache.get(key, 2) do
-        raise "synthetic compile failure"
-      end
+    expect_raises(Exception, "Metal disabled (cpu_only)") do
+      ML::Metal::PipelineCache.get_or_compile(key, 2, source)
     end
 
     diagnostics = ML::Metal::PipelineCache.typed_diagnostics(owner).not_nil!
@@ -61,12 +61,8 @@ describe ML::Metal::PipelineCache do
   it "rejects a process capacity request before admitting an owner" do
     before = ML::Metal::PipelineCache.typed_process_diagnostics
     owner = "spec-process-capacity"
-    key = integration_key(owner)
-
     expect_raises(ML::Metal::PipelineCacheCapacityError, /4096/) do
-      ML::Metal::PipelineCache.get(key, 4097) do
-        raise "builder must not run"
-      end
+      ML::Metal::PipelineCache.register_typed_owner(owner, 4097)
     end
 
     ML::Metal::PipelineCache.typed_diagnostics(owner).should be_nil
@@ -75,15 +71,27 @@ describe ML::Metal::PipelineCache do
 
   it "refuses to reinterpret an admitted owner with a different capacity" do
     owner = "spec-owner-capacity"
-    key = integration_key(owner)
+    ML::Metal::PipelineCache.register_typed_owner(owner, 2)
 
-    expect_raises(Exception, "first compile failure") do
-      ML::Metal::PipelineCache.get(key, 2) { raise "first compile failure" }
-    end
     expect_raises(ArgumentError, /already 2, not 3/) do
-      ML::Metal::PipelineCache.get(key, 3) { raise "must not run" }
+      ML::Metal::PipelineCache.register_typed_owner(owner, 3)
     end
 
     ML::Metal::PipelineCache.typed_diagnostics(owner).not_nil!.capacity.should eq(2)
+  end
+
+  it "refuses compilation for an owner that was not explicitly registered" do
+    owner = "spec-unregistered-owner"
+    key = integration_key(owner)
+
+    expect_raises(ArgumentError, /must be registered/) do
+      ML::Metal::PipelineCache.get_or_compile(
+        key,
+        1,
+        "kernel void integration_probe() {}"
+      )
+    end
+
+    ML::Metal::PipelineCache.typed_diagnostics(owner).should be_nil
   end
 end

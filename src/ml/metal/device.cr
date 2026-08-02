@@ -365,21 +365,47 @@ module ML::Metal
     @@typed_caches = {} of String => BoundedPipelineCache(ComputePipeline)
     @@typed_declared_capacity = 0_i32
 
-    def self.get(
-      key : PipelineSpecializationKey,
-      capacity : Int32,
-      &builder : -> ComputePipeline
-    ) : ComputePipeline
-      typed_cache(key.owner, capacity).fetch(key) { builder.call }
-    end
-
     def self.get_or_compile(
       key : PipelineSpecializationKey,
       capacity : Int32,
       source : String,
     ) : ComputePipeline
       key.validate_source!(source)
-      get(key, capacity) { ComputePipeline.new(key.function_name, source) }
+      typed_cache!(key.owner, capacity).fetch(key) do
+        ComputePipeline.new(key.function_name, source)
+      end
+    end
+
+    # Registration is an explicit process-lifetime declaration. It is separate
+    # from compilation so a failed compiler cannot silently claim a new owner.
+    def self.register_typed_owner(owner : String, capacity : Int32) : Nil
+      candidate = BoundedPipelineCache(ComputePipeline).new(owner, capacity)
+      stable_owner = candidate.owner
+
+      @@typed_mutex.synchronize do
+        if cache = @@typed_caches[stable_owner]?
+          unless cache.capacity == capacity
+            raise ArgumentError.new(
+              "pipeline cache capacity for owner #{stable_owner} is already #{cache.capacity}, not #{capacity}"
+            )
+          end
+          return
+        end
+
+        if @@typed_caches.size >= MAX_TYPED_OWNERS
+          raise PipelineCacheCapacityError.new(
+            "typed pipeline owner limit #{MAX_TYPED_OWNERS} would be exceeded"
+          )
+        end
+        if @@typed_declared_capacity + capacity > MAX_TYPED_DECLARED_CAPACITY
+          raise PipelineCacheCapacityError.new(
+            "typed pipeline declared capacity limit #{MAX_TYPED_DECLARED_CAPACITY} would be exceeded"
+          )
+        end
+
+        @@typed_caches[stable_owner] = candidate
+        @@typed_declared_capacity += capacity
+      end
     end
 
     def self.typed_diagnostics(owner : String) : PipelineCacheDiagnostics?
@@ -398,36 +424,24 @@ module ML::Metal
       end
     end
 
-    private def self.typed_cache(
+    private def self.typed_cache!(
       owner : String,
       capacity : Int32,
     ) : BoundedPipelineCache(ComputePipeline)
       raise ArgumentError.new("pipeline cache capacity must be positive") unless capacity > 0
 
       @@typed_mutex.synchronize do
-        if cache = @@typed_caches[owner]?
-          unless cache.capacity == capacity
-            raise ArgumentError.new(
-              "pipeline cache capacity for owner #{owner} is already #{cache.capacity}, not #{capacity}"
-            )
-          end
-          return cache
-        end
-
-        if @@typed_caches.size >= MAX_TYPED_OWNERS
-          raise PipelineCacheCapacityError.new(
-            "typed pipeline owner limit #{MAX_TYPED_OWNERS} would be exceeded"
+        cache = @@typed_caches[owner]?
+        unless cache
+          raise ArgumentError.new(
+            "typed pipeline owner #{owner} must be registered before compilation"
           )
         end
-        if @@typed_declared_capacity + capacity > MAX_TYPED_DECLARED_CAPACITY
-          raise PipelineCacheCapacityError.new(
-            "typed pipeline declared capacity limit #{MAX_TYPED_DECLARED_CAPACITY} would be exceeded"
+        unless cache.capacity == capacity
+          raise ArgumentError.new(
+            "pipeline cache capacity for owner #{owner} is already #{cache.capacity}, not #{capacity}"
           )
         end
-
-        cache = BoundedPipelineCache(ComputePipeline).new(owner, capacity)
-        @@typed_caches[owner] = cache
-        @@typed_declared_capacity += capacity
         cache
       end
     end

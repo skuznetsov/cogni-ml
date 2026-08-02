@@ -25,11 +25,13 @@ private def resource_envelope(
   )
 end
 
-private def wba_card : ML::Metal::Wba::Card
+private def wba_card(
+  legal_move : String = "reuse-one-code-specialized-pipeline",
+) : ML::Metal::Wba::Card
   ML::Metal::Wba::Card.new(
     window_or_trigger: "dino-transformer-blocks",
     transport_corridor: "padded-token-bucket",
-    legal_move: "reuse-one-code-specialized-pipeline",
+    legal_move: legal_move,
     boundary_safety: "exact-shape-parity-and-capacity-gates",
     recompute_safety: "paired-full-corridor-wall-and-potential",
     dual_frame: "gpu-active-window-plus-end-to-end-wall",
@@ -45,9 +47,10 @@ private def corridor_observation(
   sync_count : Int32 = 6,
   resources : ML::Metal::Wba::ResourceEnvelope = resource_envelope,
   active_window : String = "transformer-blocks",
+  card : ML::Metal::Wba::Card = wba_card,
 ) : ML::Metal::Wba::CorridorObservation
   ML::Metal::Wba::CorridorObservation.new(
-    card: wba_card,
+    card: card,
     corridor_id: "dino-encoder",
     profile_id: "dinov3-vitl16-512",
     bucket_id: bucket_id,
@@ -191,6 +194,24 @@ describe ML::Metal::Wba::Atlas do
     analysis.reasons.should contain("resource_policy_mismatch")
   end
 
+  it "refuses to compare observations that change the corridor card" do
+    baseline = corridor_observation
+    candidate = corridor_observation(
+      active_window_gpu_ns: 8_000_000_i64,
+      wall_ns: 10_000_000_i64,
+      card: wba_card(legal_move: "compile-one-pipeline-per-runtime-length")
+    )
+
+    analysis = ML::Metal::Wba::Atlas.compare(
+      baseline,
+      candidate,
+      ML::Metal::Wba::PairedCertificate.new(7, 7)
+    )
+
+    analysis.verdict.should eq(ML::Metal::Wba::Verdict::Incomparable)
+    analysis.reasons.should contain("corridor_card_mismatch")
+  end
+
   it "requires enough paired observations before admitting a candidate" do
     baseline = corridor_observation
     candidate = corridor_observation(
@@ -278,5 +299,26 @@ describe ML::Metal::Wba::Atlas do
 
     analysis.verdict.should eq(ML::Metal::Wba::Verdict::Refuted)
     analysis.reasons.should contain("parity_failures=1")
+  end
+
+  it "does not promote a candidate from an invalid baseline" do
+    baseline = corridor_observation(
+      parity_failures: 1,
+      resources: resource_envelope(memory_pressure_events: 1)
+    )
+    candidate = corridor_observation(
+      active_window_gpu_ns: 8_000_000_i64,
+      wall_ns: 10_000_000_i64
+    )
+
+    analysis = ML::Metal::Wba::Atlas.compare(
+      baseline,
+      candidate,
+      ML::Metal::Wba::PairedCertificate.new(7, 7)
+    )
+
+    analysis.verdict.should eq(ML::Metal::Wba::Verdict::InsufficientEvidence)
+    analysis.reasons.should contain("baseline_parity_failures=1")
+    analysis.reasons.should contain("baseline_memory_pressure_events=1")
   end
 end

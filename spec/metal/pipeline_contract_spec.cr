@@ -57,6 +57,19 @@ describe ML::Metal::PipelineSpecializationKey do
       pipeline_key.validate_source!("kernel void changed_projection() {}")
     end
   end
+
+  it "snapshots caller strings and does not expose mutable hash identity" do
+    owner = String.new("trellis2-dino".to_slice)
+    key = pipeline_key(owner: owner)
+
+    owner.to_unsafe[0] = 'x'.ord.to_u8
+    key.owner.should eq("trellis2-dino")
+
+    exposed = key.owner
+    exposed.to_unsafe[0] = 'y'.ord.to_u8
+    key.owner.should eq("trellis2-dino")
+    key.should eq(pipeline_key)
+  end
 end
 
 describe ML::Metal::BoundedPipelineCache do
@@ -162,6 +175,37 @@ describe ML::Metal::BoundedPipelineCache do
     diagnostics.compile_failures.should eq(1)
   end
 
+  it "fails closed for a concurrent same-key caller while one build is in flight" do
+    cache = ML::Metal::BoundedPipelineCache(String).new(
+      owner: "trellis2-dino",
+      capacity: 1
+    )
+    key = pipeline_key
+    started = Channel(Nil).new
+    release = Channel(Nil).new
+    completed = Channel(String).new
+
+    spawn do
+      completed.send(cache.fetch(key) do
+        started.send(nil)
+        release.receive
+        "pipeline"
+      end)
+    end
+
+    started.receive
+    expect_raises(ML::Metal::PipelineCacheBuildInFlightError, /already in flight/) do
+      cache.fetch(key) { "duplicate" }
+    end
+    release.send(nil)
+    completed.receive.should eq("pipeline")
+
+    diagnostics = cache.diagnostics
+    diagnostics.entries.should eq(1)
+    diagnostics.compile_attempts.should eq(1)
+    diagnostics.in_flight_refusals.should eq(1)
+  end
+
   it "rejects keys from a different owner without observing the cache" do
     cache = ML::Metal::BoundedPipelineCache(String).new(
       owner: "trellis2-dino",
@@ -172,5 +216,16 @@ describe ML::Metal::BoundedPipelineCache do
       cache.fetch(pipeline_key(owner: "trellis2-dense")) { "wrong" }
     end
     cache.diagnostics.lookups.should eq(0)
+  end
+
+  it "snapshots its owner independently of caller and diagnostic strings" do
+    owner = String.new("trellis2-dino".to_slice)
+    cache = ML::Metal::BoundedPipelineCache(String).new(owner, 1)
+    owner.to_unsafe[0] = 'x'.ord.to_u8
+
+    cache.owner.should eq("trellis2-dino")
+    diagnostics = cache.diagnostics
+    diagnostics.owner.to_unsafe[0] = 'y'.ord.to_u8
+    cache.diagnostics.owner.should eq("trellis2-dino")
   end
 end

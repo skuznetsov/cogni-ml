@@ -251,6 +251,10 @@ module ML::Metal::Wba
   module Atlas
     extend self
 
+    # Pure structural classifier. Observations and paired counts are
+    # caller-supplied and remain untrusted until a later telemetry boundary
+    # binds them to immutable samples and a qualified host/runtime.
+
     def profile(observation : CorridorObservation) : Analysis
       Analysis.new(
         Verdict::ProfileOnly,
@@ -286,6 +290,16 @@ module ML::Metal::Wba
         )
       end
 
+      unless baseline.card == candidate.card
+        return Analysis.new(
+          Verdict::Incomparable,
+          baseline,
+          candidate,
+          certificate,
+          ["corridor_card_mismatch"]
+        )
+      end
+
       if certificate.pairs < 3
         return Analysis.new(
           Verdict::InsufficientEvidence,
@@ -313,6 +327,23 @@ module ML::Metal::Wba
           candidate,
           certificate,
           ["positive_full_corridor_wall_required"]
+        )
+      end
+
+      baseline_reasons = [] of String
+      if baseline.parity_failures > 0
+        baseline_reasons << "baseline_parity_failures=#{baseline.parity_failures}"
+      end
+      baseline.resources.violations.each do |reason|
+        baseline_reasons << "baseline_#{reason}"
+      end
+      unless baseline_reasons.empty?
+        return Analysis.new(
+          Verdict::InsufficientEvidence,
+          baseline,
+          candidate,
+          certificate,
+          baseline_reasons
         )
       end
 

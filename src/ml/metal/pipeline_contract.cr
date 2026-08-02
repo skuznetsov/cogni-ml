@@ -9,37 +9,70 @@ module ML::Metal
 
   # Code identity for one compiled Metal pipeline. Runtime sequence/spatial
   # lengths belong to a stage/dispatch plan unless they actually change source
-  # or function-constant specialization.
+  # or function-constant specialization. This value is identity, not runtime
+  # attestation: a device integration must derive compiler/device/variant fields
+  # from the observed compiler path rather than arbitrary request metadata.
   struct PipelineSpecializationKey
-    getter owner : String
-    getter function_name : String
-    getter source_digest : String
-    getter compiler_abi : String
-    getter device_family : String
-    getter code_variant : String
+    @owner : String
+    @function_name : String
+    @source_digest : String
+    @compiler_abi : String
+    @device_family : String
+    @code_variant : String
 
     def initialize(
-      @owner : String,
-      @function_name : String,
-      @source_digest : String,
-      @compiler_abi : String,
-      @device_family : String,
-      @code_variant : String,
+      owner : String,
+      function_name : String,
+      source_digest : String,
+      compiler_abi : String,
+      device_family : String,
+      code_variant : String,
     )
-      validate_cache_token!(@owner, "owner")
-      unless @function_name.matches?(/\A[A-Za-z_][A-Za-z0-9_]{0,127}\z/)
+      validate_cache_token!(owner, "owner")
+      unless function_name.matches?(/\A[A-Za-z_][A-Za-z0-9_]{0,127}\z/)
         raise ArgumentError.new(
           "function_name must be a Metal identifier of at most 128 characters"
         )
       end
-      unless @source_digest.matches?(/\A[0-9a-f]{64}\z/)
+      unless source_digest.matches?(/\A[0-9a-f]{64}\z/)
         raise ArgumentError.new(
           "source_digest must be 64 lowercase hexadecimal characters"
         )
       end
-      validate_cache_token!(@compiler_abi, "compiler_abi")
-      validate_cache_token!(@device_family, "device_family")
-      validate_cache_token!(@code_variant, "code_variant")
+      validate_cache_token!(compiler_abi, "compiler_abi")
+      validate_cache_token!(device_family, "device_family")
+      validate_cache_token!(code_variant, "code_variant")
+
+      @owner = copy_string(owner)
+      @function_name = copy_string(function_name)
+      @source_digest = copy_string(source_digest)
+      @compiler_abi = copy_string(compiler_abi)
+      @device_family = copy_string(device_family)
+      @code_variant = copy_string(code_variant)
+    end
+
+    def owner : String
+      copy_string(@owner)
+    end
+
+    def function_name : String
+      copy_string(@function_name)
+    end
+
+    def source_digest : String
+      copy_string(@source_digest)
+    end
+
+    def compiler_abi : String
+      copy_string(@compiler_abi)
+    end
+
+    def device_family : String
+      copy_string(@device_family)
+    end
+
+    def code_variant : String
+      copy_string(@code_variant)
     end
 
     def self.for_source(
@@ -85,6 +118,10 @@ module ML::Metal
         )
       end
     end
+
+    private def copy_string(value : String) : String
+      String.new(value.to_slice)
+    end
   end
 
   record PipelineCacheDiagnostics,
@@ -112,16 +149,19 @@ module ML::Metal
   # re-entrant compilation and is removed transactionally on failure. Entries
   # have bounded process-lifetime retention; this contract exposes no eviction.
   class BoundedPipelineCache(V)
-    getter owner : String
     getter capacity : Int32
 
-    def initialize(@owner : String, @capacity : Int32)
-      unless @owner.matches?(/\A[a-z0-9][a-z0-9._-]{0,127}\z/)
+    @owner : String
+
+    def initialize(owner : String, @capacity : Int32)
+      unless owner.matches?(/\A[a-z0-9][a-z0-9._-]{0,127}\z/)
         raise ArgumentError.new(
           "owner must be a lowercase ASCII cache token of at most 128 characters"
         )
       end
       raise ArgumentError.new("pipeline cache capacity must be positive") unless @capacity > 0
+
+      @owner = String.new(owner.to_slice)
 
       @mutex = Mutex.new
       @entries = {} of PipelineSpecializationKey => V
@@ -134,6 +174,10 @@ module ML::Metal
       @capacity_refusals = 0_i64
       @in_flight_refusals = 0_i64
       @high_water = 0_i32
+    end
+
+    def owner : String
+      String.new(@owner.to_slice)
     end
 
     def fetch(key : PipelineSpecializationKey, &builder : -> V) : V
@@ -195,7 +239,7 @@ module ML::Metal
     def diagnostics : PipelineCacheDiagnostics
       @mutex.synchronize do
         PipelineCacheDiagnostics.new(
-          owner: @owner,
+          owner: String.new(@owner.to_slice),
           capacity: @capacity,
           lookups: @lookups,
           hits: @hits,
