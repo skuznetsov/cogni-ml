@@ -46,9 +46,10 @@ module ML::Sparse
 
       @point_count = features.shape[0]
       @channels = features.shape[1]
-      unless @point_count == @coordinate_map.point_count
+      _, coordinate_point_count = CoordinateMap3D.kernel_layout(@coordinate_map)
+      unless @point_count == coordinate_point_count
         raise SparseTensorError.new(
-          "sparse feature point count #{@point_count} does not match coordinate point count #{@coordinate_map.point_count}"
+          "sparse feature point count #{@point_count} does not match coordinate point count #{coordinate_point_count}"
         )
       end
       unless 1 <= @channels <= MAX_CHANNELS
@@ -87,7 +88,8 @@ module ML::Sparse
     end
 
     def shape : Tuple(Int32, Int32)
-      {@coordinate_map.batch_size, @channels}
+      batch_size, _ = CoordinateMap3D.kernel_layout(@coordinate_map)
+      {batch_size, @channels}
     end
 
     def feature(row : Int32, channel : Int32) : Float32
@@ -118,9 +120,10 @@ module ML::Sparse
         batch_size,
         spatial_shape
       )
-      unless replacement_map.point_count == @point_count
+      _, replacement_point_count = CoordinateMap3D.kernel_layout(replacement_map)
+      unless replacement_point_count == @point_count
         raise SparseTensorError.new(
-          "replacement coordinate point count #{replacement_map.point_count} does not match feature point count #{@point_count}"
+          "replacement coordinate point count #{replacement_point_count} does not match feature point count #{@point_count}"
         )
       end
       TensorCPU.new(

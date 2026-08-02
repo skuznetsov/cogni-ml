@@ -125,6 +125,20 @@ module ML::Sparse
       @batch_broadcast_map.dup
     end
 
+    # Kernel authority reads over CoordinateMap3D-owned immutable state. These
+    # class methods deliberately bypass virtual getters while exposing neither
+    # the coordinate array nor the cached batch-map storage to callers.
+    def self.kernel_layout(map : CoordinateMap3D) : Tuple(Int32, Int32)
+      {map.@batch_size, map.@point_count}
+    end
+
+    def self.kernel_batch_index(map : CoordinateMap3D, row : Int32) : Int32
+      unless 0 <= row < map.@point_count
+        raise IndexError.new("sparse coordinate row #{row} is out of bounds")
+      end
+      map.@batch_broadcast_map[row]
+    end
+
     def coordinates_copy : Array(Int32)
       @coordinates.dup
     end
