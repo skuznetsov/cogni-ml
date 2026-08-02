@@ -12,6 +12,7 @@
     "numpy_version": "2.1.3",
     "transformers_modeling_sha256": "6073b7665eea50fb2260d86984011e6af8ed68cbd37ae57a6095e5e90e0eea34",
     "transformers_config_sha256": "9a13d3c9ea8020aaed7057db28a7ffe0ffd9bb094a6178261bcc45ed04e9bbfc",
+    "trellis_extractor_sha256": "12530b23e8b6a2cc6b87d8cd01922c7b0085199a365b731f19dd0e7ef4919150",
     "transformers_license": "Apache-2.0",
     "transformers_license_url": "https://github.com/huggingface/transformers/blob/v5.8.1/LICENSE",
     "oracle_kind": "synthetic DINOv3 one-block CPU execution",
@@ -61,7 +62,8 @@
   "tolerance": {
     "absolute": 5e-05,
     "relative": 5e-05,
-    "extractor_final_layer_norm_eps": 1e-05
+    "extractor_final_layer_norm_eps": 1e-05,
+    "comparison": "bounded absolute/relative tolerance; not byte identity"
   },
   "inputs": {
     "input": {

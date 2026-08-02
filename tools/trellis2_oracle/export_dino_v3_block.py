@@ -37,6 +37,9 @@ TRANSFORMERS_MODELING_SHA256 = (
 TRANSFORMERS_CONFIG_SHA256 = (
     "9a13d3c9ea8020aaed7057db28a7ffe0ffd9bb094a6178261bcc45ed04e9bbfc"
 )
+TRELLIS_EXTRACTOR_SHA256 = (
+    "12530b23e8b6a2cc6b87d8cd01922c7b0085199a365b731f19dd0e7ef4919150"
+)
 
 SCHEMA = "cogni-ml/trellis2/dino-v3-block-oracle/v1"
 ABSOLUTE_TOLERANCE = 5.0e-5
@@ -127,7 +130,7 @@ def source_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def require_pins() -> dict[str, str]:
+def require_pins(trellis_extractor: Path) -> dict[str, str]:
     """Reject an oracle run if its numerical/source inputs drift."""
 
     versions = {
@@ -146,14 +149,16 @@ def require_pins() -> dict[str, str]:
     source_hashes = {
         "transformers_modeling_sha256": source_sha256(Path(dino.__file__)),
         "transformers_config_sha256": source_sha256(Path(dino_config.__file__)),
+        "trellis_extractor_sha256": source_sha256(trellis_extractor),
     }
     expected_hashes = {
         "transformers_modeling_sha256": TRANSFORMERS_MODELING_SHA256,
         "transformers_config_sha256": TRANSFORMERS_CONFIG_SHA256,
+        "trellis_extractor_sha256": TRELLIS_EXTRACTOR_SHA256,
     }
     if source_hashes != expected_hashes:
         raise RuntimeError(
-            f"pinned Transformers source drift: expected {expected_hashes}, got {source_hashes}"
+            f"pinned source drift: expected {expected_hashes}, got {source_hashes}"
         )
     return source_hashes
 
@@ -264,9 +269,9 @@ def install_parameters(layer: torch.nn.Module, parameters: dict[str, torch.Tenso
         layer.layer_scale2.lambda1.copy_(parameters["layer_scale2"])
 
 
-def build_fixture() -> dict[str, object]:
+def build_fixture(trellis_extractor: Path) -> dict[str, object]:
     torch.set_num_threads(1)
-    source_hashes = require_pins()
+    source_hashes = require_pins(trellis_extractor)
 
     config = DINOv3ViTConfig(**CONFIG)
     default_config_kwargs = {
@@ -417,6 +422,7 @@ def build_fixture() -> dict[str, object]:
             "absolute": ABSOLUTE_TOLERANCE,
             "relative": RELATIVE_TOLERANCE,
             "extractor_final_layer_norm_eps": EXTRACTOR_EPS,
+            "comparison": "bounded absolute/relative tolerance; not byte identity",
         },
         "inputs": {
             "input": {
@@ -455,8 +461,14 @@ def build_fixture() -> dict[str, object]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("manifest", type=Path)
+    parser.add_argument(
+        "--trellis-extractor",
+        required=True,
+        type=Path,
+        help="path to image_feature_extractor.py from the pinned TRELLIS.2 checkout",
+    )
     args = parser.parse_args()
-    fixture = build_fixture()
+    fixture = build_fixture(args.trellis_extractor)
     args.manifest.parent.mkdir(parents=True, exist_ok=True)
     args.manifest.write_text(
         json.dumps(fixture, indent=2, sort_keys=False) + "\n",
