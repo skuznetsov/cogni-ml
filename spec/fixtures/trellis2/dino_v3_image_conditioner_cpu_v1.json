@@ -1,0 +1,342 @@
+{
+  "cases": [
+    {
+      "expected": {
+        "normalized_f32le_sha256": "a6d9a8f52890e97012e397b6e8d2839bba1430269eb502619df86216ee704f8f",
+        "normalized_shape": [
+          1,
+          3,
+          512,
+          512
+        ],
+        "probes": [
+          {
+            "index": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": -2.0665297508239746
+          },
+          {
+            "index": [
+              0,
+              1,
+              170,
+              256
+            ],
+            "value": -1.9131652116775513
+          },
+          {
+            "index": [
+              0,
+              2,
+              511,
+              511
+            ],
+            "value": -1.6127233505249023
+          },
+          {
+            "index": [
+              0,
+              0,
+              256,
+              170
+            ],
+            "value": -2.0665297508239746
+          }
+        ],
+        "resized_rgb_sha256": "ddb4bf27ee80ae30de9e31494cacd0d13de21da1a9da02a134de29f9a7a679b5"
+      },
+      "input": {
+        "height": 1,
+        "recipe": "rgb(x,y)=[(17*x+13*y+3)%256,(5*x+29*y+7)%256,(x*x+3*y+11)%256]",
+        "rgb_sha256": "c7f63c382dd889a86b0f2f8fda046e2ced5a2a473235bf517511871164a08665",
+        "width": 1
+      },
+      "name": "single_pixel_to_512",
+      "target": 512
+    },
+    {
+      "expected": {
+        "normalized_f32le_sha256": "48a790386551061a4b7d4aa3ba247964f1b6c55c973e3666c05cff1a0efa828c",
+        "normalized_shape": [
+          1,
+          3,
+          1024,
+          1024
+        ],
+        "probes": [
+          {
+            "index": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": -2.1179039478302
+          },
+          {
+            "index": [
+              0,
+              1,
+              341,
+              512
+            ],
+            "value": -0.7051820158958435
+          },
+          {
+            "index": [
+              0,
+              2,
+              1023,
+              1023
+            ],
+            "value": -0.6192591786384583
+          },
+          {
+            "index": [
+              0,
+              0,
+              512,
+              341
+            ],
+            "value": -0.8506721258163452
+          }
+        ],
+        "resized_rgb_sha256": "19951a09eaf9d25589a279b612b61d22baca071f7f421ddaa3bb9e5c526d9f32"
+      },
+      "input": {
+        "height": 7,
+        "recipe": "rgb(x,y)=[(17*x+13*y+3)%256,(5*x+29*y+7)%256,(x*x+3*y+11)%256]",
+        "rgb_sha256": "942050652edb076c53efa199432df6abb1b333fe13b1f31e66ecc1a93cdebb8f",
+        "width": 7
+      },
+      "name": "upscale_7_to_1024",
+      "target": 1024
+    },
+    {
+      "expected": {
+        "normalized_f32le_sha256": "8ee7c66bda7c888aa28447325233c3567d411649065da3147d03d8bdf1394878",
+        "normalized_shape": [
+          1,
+          3,
+          512,
+          512
+        ],
+        "probes": [
+          {
+            "index": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": -1.9466564655303955
+          },
+          {
+            "index": [
+              0,
+              1,
+              170,
+              256
+            ],
+            "value": 0.18767505884170532
+          },
+          {
+            "index": [
+              0,
+              2,
+              511,
+              511
+            ],
+            "value": -1.5778648853302002
+          },
+          {
+            "index": [
+              0,
+              0,
+              256,
+              170
+            ],
+            "value": 0.17681314051151276
+          }
+        ],
+        "resized_rgb_sha256": "1d7c32f2594ae31287313aa101ded3de62acd6ac3402084fbb31d6701aae05a3"
+      },
+      "input": {
+        "height": 769,
+        "recipe": "rgb(x,y)=[(17*x+13*y+3)%256,(5*x+29*y+7)%256,(x*x+3*y+11)%256]",
+        "rgb_sha256": "4e577971ef86fab3d945bf7c9c28d4705f5fec5020d13f4999e3c509ea1843dd",
+        "width": 769
+      },
+      "name": "downscale_769_to_512",
+      "target": 512
+    },
+    {
+      "expected": {
+        "normalized_f32le_sha256": "fd6da8a022be8fc2904041e3e7ebea028a9dc652d088a19868be5608572b91e6",
+        "normalized_shape": [
+          1,
+          3,
+          512,
+          512
+        ],
+        "probes": [
+          {
+            "index": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": -1.7925336360931396
+          },
+          {
+            "index": [
+              0,
+              1,
+              170,
+              256
+            ],
+            "value": 0.6953782439231873
+          },
+          {
+            "index": [
+              0,
+              2,
+              511,
+              511
+            ],
+            "value": -1.647581696510315
+          },
+          {
+            "index": [
+              0,
+              0,
+              256,
+              170
+            ],
+            "value": 0.7076804637908936
+          }
+        ],
+        "resized_rgb_sha256": "52d1fc7d200c3b51d5d1cd476de8862e8081536f804714514d3ce3f0919afaad"
+      },
+      "input": {
+        "height": 1024,
+        "recipe": "rgb(x,y)=[(17*x+13*y+3)%256,(5*x+29*y+7)%256,(x*x+3*y+11)%256]",
+        "rgb_sha256": "9febd1d788efd92a636be1cc54b08ecf728ad851af1e49d9733235f129a85390",
+        "width": 1024
+      },
+      "name": "max_downscale_1024_to_512",
+      "target": 512
+    },
+    {
+      "expected": {
+        "normalized_f32le_sha256": "83fc8d7914bdb7c170b44cec854ad6970fa77dd29a5da6703088dfaef827aad6",
+        "normalized_shape": [
+          1,
+          3,
+          512,
+          512
+        ],
+        "probes": [
+          {
+            "index": [
+              0,
+              0,
+              0,
+              0
+            ],
+            "value": -2.0665297508239746
+          },
+          {
+            "index": [
+              0,
+              1,
+              170,
+              256
+            ],
+            "value": -0.7577030062675476
+          },
+          {
+            "index": [
+              0,
+              2,
+              511,
+              511
+            ],
+            "value": -1.647581696510315
+          },
+          {
+            "index": [
+              0,
+              0,
+              256,
+              170
+            ],
+            "value": -0.7992978692054749
+          }
+        ],
+        "resized_rgb_sha256": "0830cb1eea07628e6357b24f4af1a634a9c244b9ee716fc06f35932f8f45ac30"
+      },
+      "input": {
+        "height": 512,
+        "recipe": "rgb(x,y)=[(17*x+13*y+3)%256,(5*x+29*y+7)%256,(x*x+3*y+11)%256]",
+        "rgb_sha256": "0830cb1eea07628e6357b24f4af1a634a9c244b9ee716fc06f35932f8f45ac30",
+        "width": 512
+      },
+      "name": "identity_512",
+      "target": 512
+    }
+  ],
+  "normalization": {
+    "mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "std": [
+      0.229,
+      0.224,
+      0.225
+    ]
+  },
+  "provenance": {
+    "commit": "75fbf0183001ed9876c8dbb35de6b68552ee08bd",
+    "device": "cpu",
+    "extractor": "https://github.com/microsoft/TRELLIS.2/blob/75fbf0183001ed9876c8dbb35de6b68552ee08bd/trellis2/modules/image_feature_extractor.py",
+    "generator": "tools/trellis2_oracle/export_dino_v3.py",
+    "numpy_version": "2.1.3",
+    "oracle_kind": "pinned-source Pillow and PyTorch CPU execution",
+    "pillow_license": "MIT-CMU",
+    "pillow_license_url": "https://github.com/python-pillow/Pillow/blob/12.2.0/LICENSE",
+    "pillow_resample": "https://github.com/python-pillow/Pillow/blob/12.2.0/src/libImaging/Resample.c",
+    "pillow_version": "12.2.0",
+    "repository": "microsoft/TRELLIS.2",
+    "torch_version": "2.9.0",
+    "weights": "none"
+  },
+  "schema": "cogni-ml/trellis2/dino-v3-image-conditioner-oracle/v1",
+  "scope": {
+    "excludes": [
+      "alpha/rembg crop",
+      "DINOv3 embeddings",
+      "DINOv3 blocks",
+      "weights",
+      "Metal"
+    ],
+    "includes": [
+      "RGB LANCZOS resize",
+      "float32 /255",
+      "CHW",
+      "batch",
+      "ImageNet normalize"
+    ],
+    "targets": [
+      512,
+      1024
+    ]
+  }
+}
