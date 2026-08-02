@@ -1,0 +1,125 @@
+{
+  "schema": "cogni-ml/trellis2/sparse-linear-oracle/v1",
+  "provenance": {
+    "repository": "microsoft/TRELLIS.2",
+    "commit": "75fbf0183001ed9876c8dbb35de6b68552ee08bd",
+    "sources": {
+      "sparse_basic": {
+        "path": "trellis2/modules/sparse/basic.py",
+        "sha256": "99dbcb7298238fdb6b6d47918ec068f618c68067653489d22b32c136c1ae0e78"
+      },
+      "sparse_linear": {
+        "path": "trellis2/modules/sparse/linear.py",
+        "sha256": "733264d356556108bfbbf31ba757b4d29adde2d126f22a362288848c4c023ce2"
+      },
+      "structured_flow": {
+        "path": "trellis2/models/structured_latent_flow.py",
+        "sha256": "76454ead55d112214e36db8de5e9b3d1d4128f05d25256fb6c581b4c1a588021"
+      }
+    },
+    "generator": "tools/trellis2_oracle/export_sparse_linear.py",
+    "python_version": "3.11.9",
+    "torch_version": "2.9.0",
+    "numpy_version": "2.1.3",
+    "network": "none",
+    "device": "cpu",
+    "weights": "synthetic",
+    "sparse_backend": "none"
+  },
+  "contract": {
+    "upstream_call": "SparseLinear(input)",
+    "upstream_formula": "input.feats @ weight.T + bias",
+    "upstream_coordinate_object_reused": true,
+    "local_mode": "graphless frozen-parameter CPU inference"
+  },
+  "input": {
+    "batch_size": 2,
+    "spatial_shape": [
+      3,
+      3,
+      2
+    ],
+    "coordinates": [
+      [
+        0,
+        2,
+        0,
+        1
+      ],
+      [
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        1,
+        1,
+        2,
+        0
+      ]
+    ],
+    "coordinates_i32le_sha256": "ef1e57cc70ff27a0ae837265bcbbe3aee5a5349873986c1759d44c0a36d7ebe5",
+    "channels": 2,
+    "features": [
+      [
+        1.0,
+        2.0
+      ],
+      [
+        3.0,
+        -4.0
+      ],
+      [
+        0.5,
+        1.5
+      ]
+    ],
+    "features_f32le_sha256": "eb24bff308665fd0beb3433d1d5b90374e1aa775bf504fb1c223e410737ed99a"
+  },
+  "linear": {
+    "out_channels": 3,
+    "weight": [
+      [
+        0.25,
+        -0.5
+      ],
+      [
+        1.5,
+        2.0
+      ],
+      [
+        -2.0,
+        0.75
+      ]
+    ],
+    "weight_f32le_sha256": "075fc4a74ff811516687e48cc03dec8d96502f129cfaf30be9bf1c44cba20c39",
+    "bias": [
+      0.10000000149011612,
+      -1.0,
+      2.5
+    ],
+    "bias_f32le_sha256": "0727bdac1b2db3ffadcaf898cdc89819133710f60e037d9585dcd0f69bbc2e51"
+  },
+  "output": {
+    "features": [
+      [
+        -0.6499999761581421,
+        4.5,
+        2.0
+      ],
+      [
+        2.8499999046325684,
+        -4.5,
+        -6.5
+      ],
+      [
+        -0.5249999761581421,
+        2.75,
+        2.625
+      ]
+    ],
+    "features_f32le_sha256": "c6fe6a409c566cfb942a9a06b5bb0d962250b86f8d92609f49b6faaa2d797afa",
+    "coordinate_object_reused": true
+  }
+}

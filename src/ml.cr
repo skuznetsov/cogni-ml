@@ -31,6 +31,7 @@ require "./ml/autograd/variable"
 # Neural network layers
 require "./ml/nn/gpu_ops"
 require "./ml/nn/linear"
+require "./ml/sparse/linear"
 require "./ml/nn/layernorm"
 require "./ml/nn/attention"
 require "./ml/nn/vit"
