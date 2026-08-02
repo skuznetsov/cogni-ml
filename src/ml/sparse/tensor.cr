@@ -19,6 +19,7 @@ module ML::Sparse
     getter max_feature_bytes : Int64
 
     @features : Array(Float32)
+    @initialized : Bool = false
 
     def initialize(
       features : Tensor,
@@ -70,6 +71,19 @@ module ML::Sparse
         end
         value
       end
+      @initialized = true
+    end
+
+    # Private ownership transfer for class operations that already validated
+    # every invariant and produced a fresh, non-escaping feature buffer.
+    private def initialize(
+      @features : Array(Float32),
+      @coordinate_map : CoordinateMap3D,
+      @point_count : Int32,
+      @channels : Int32,
+      @max_feature_bytes : Int64,
+    ) : Nil
+      @initialized = true
     end
 
     def shape : Tuple(Int32, Int32)

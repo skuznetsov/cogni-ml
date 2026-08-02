@@ -1,0 +1,225 @@
+{
+  "schema": "cogni-ml/trellis2/sparse-feature-concat-oracle/v1",
+  "provenance": {
+    "repository": "microsoft/TRELLIS.2",
+    "commit": "75fbf0183001ed9876c8dbb35de6b68552ee08bd",
+    "source": "https://github.com/microsoft/TRELLIS.2/blob/75fbf0183001ed9876c8dbb35de6b68552ee08bd/trellis2/modules/sparse/basic.py",
+    "source_sha256": "99dbcb7298238fdb6b6d47918ec068f618c68067653489d22b32c136c1ae0e78",
+    "generator": "tools/trellis2_oracle/export_sparse_feature_concat.py",
+    "python_version": "3.11.9",
+    "torch_version": "2.9.0",
+    "numpy_version": "2.1.3",
+    "network": "none",
+    "device": "cpu",
+    "weights": "none",
+    "sparse_backend": "none"
+  },
+  "contract": {
+    "arity": 2,
+    "axis": "feature_channels",
+    "upstream_call": "sparse_cat([left, right], dim=-1)",
+    "local_coordinate_policy": "exact same immutable CoordinateMap3D object",
+    "upstream_coordinate_policy": "no equality check observed"
+  },
+  "input": {
+    "batch_size": 3,
+    "spatial_shape": [
+      4,
+      3,
+      4
+    ],
+    "coordinates": [
+      [
+        0,
+        2,
+        0,
+        1
+      ],
+      [
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        2,
+        1,
+        2,
+        0
+      ],
+      [
+        2,
+        0,
+        0,
+        3
+      ],
+      [
+        2,
+        3,
+        1,
+        2
+      ],
+      [
+        2,
+        2,
+        2,
+        1
+      ]
+    ],
+    "coordinates_i32le_sha256": "6ed0a6bef4da45266fb154e22c52391ae677b4ae025dfa371c597af85afc19ed",
+    "left_channels": 2,
+    "left_features": [
+      [
+        1000.0,
+        1001.0
+      ],
+      [
+        1100.0,
+        1101.0
+      ],
+      [
+        1200.0,
+        1201.0
+      ],
+      [
+        1300.0,
+        1301.0
+      ],
+      [
+        1400.0,
+        1401.0
+      ],
+      [
+        1500.0,
+        1501.0
+      ]
+    ],
+    "left_features_f32le_sha256": "2bceafbc2b74e97991e9a0975870efda29cf1d925d8665e865d8dace43fc1cb7",
+    "right_channels": 3,
+    "right_features": [
+      [
+        10000.0,
+        10001.0,
+        10002.0
+      ],
+      [
+        10100.0,
+        10101.0,
+        10102.0
+      ],
+      [
+        10200.0,
+        10201.0,
+        10202.0
+      ],
+      [
+        10300.0,
+        10301.0,
+        10302.0
+      ],
+      [
+        10400.0,
+        10401.0,
+        10402.0
+      ],
+      [
+        10500.0,
+        10501.0,
+        10502.0
+      ]
+    ],
+    "right_features_f32le_sha256": "640e4b5d65e4bfab559ff8c4df105f85bac076ab577646a5f187f0b070deb6a9"
+  },
+  "output": {
+    "channels": 5,
+    "features": [
+      [
+        1000.0,
+        1001.0,
+        10000.0,
+        10001.0,
+        10002.0
+      ],
+      [
+        1100.0,
+        1101.0,
+        10100.0,
+        10101.0,
+        10102.0
+      ],
+      [
+        1200.0,
+        1201.0,
+        10200.0,
+        10201.0,
+        10202.0
+      ],
+      [
+        1300.0,
+        1301.0,
+        10300.0,
+        10301.0,
+        10302.0
+      ],
+      [
+        1400.0,
+        1401.0,
+        10400.0,
+        10401.0,
+        10402.0
+      ],
+      [
+        1500.0,
+        1501.0,
+        10500.0,
+        10501.0,
+        10502.0
+      ]
+    ],
+    "features_f32le_sha256": "d236907d098ed564dc0e9bb65a43a64d4b76ade438e6b751e1e7ade562e6ba87",
+    "coordinates_equal_first_input": true
+  },
+  "upstream_non_guarantee": {
+    "mismatched_coordinates": [
+      [
+        0,
+        1,
+        0,
+        1
+      ],
+      [
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        2,
+        1,
+        2,
+        0
+      ],
+      [
+        2,
+        0,
+        0,
+        3
+      ],
+      [
+        2,
+        3,
+        1,
+        2
+      ],
+      [
+        2,
+        2,
+        2,
+        1
+      ]
+    ],
+    "mismatched_coordinate_concat_succeeded": true,
+    "output_coordinates_equal_first_input": true,
+    "local_policy": "reject before allocating output features"
+  }
+}
