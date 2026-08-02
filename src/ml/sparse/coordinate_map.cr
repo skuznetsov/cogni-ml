@@ -139,6 +139,13 @@ module ML::Sparse
       map.@batch_broadcast_map[row]
     end
 
+    def self.kernel_batch_slice(map : CoordinateMap3D, batch : Int32) : BatchSlice
+      unless 0 <= batch < map.@batch_size
+        raise IndexError.new("sparse coordinate batch #{batch} is out of bounds")
+      end
+      map.@layout[batch]
+    end
+
     def coordinates_copy : Array(Int32)
       @coordinates.dup
     end

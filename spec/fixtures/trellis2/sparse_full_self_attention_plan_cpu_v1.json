@@ -1,0 +1,372 @@
+{
+  "schema": "cogni-ml/trellis2/sparse-full-self-attention-plan-oracle/v1",
+  "provenance": {
+    "repository": "microsoft/TRELLIS.2",
+    "commit": "75fbf0183001ed9876c8dbb35de6b68552ee08bd",
+    "sources": {
+      "sparse_full_attention": {
+        "path": "trellis2/modules/sparse/attention/full_attn.py",
+        "sha256": "bee0c32089f060c8136292f41a2cc7a952a8679a8b6d113d14c772f2c681e520"
+      },
+      "sparse_attention_modules": {
+        "path": "trellis2/modules/sparse/attention/modules.py",
+        "sha256": "cfa99afda24e5840118814e80cefae783423d01d47e6322fe967412aff11f6cf"
+      },
+      "sparse_basic": {
+        "path": "trellis2/modules/sparse/basic.py",
+        "sha256": "99dbcb7298238fdb6b6d47918ec068f618c68067653489d22b32c136c1ae0e78"
+      },
+      "sparse_config": {
+        "path": "trellis2/modules/sparse/config.py",
+        "sha256": "6a9cb44608829cb2c11591685282959928c6081c5bc659687aa8395765c5f91b"
+      },
+      "dense_full_attention": {
+        "path": "trellis2/modules/attention/full_attn.py",
+        "sha256": "64c43354780dcbc3dcf7612ac5e53d6e21c2081234ea63cd329a77f4185dadfc"
+      }
+    },
+    "generator": "tools/trellis2_oracle/export_sparse_full_self_attention_plan.py",
+    "python_version": "3.11.9",
+    "torch_version": "2.9.0",
+    "numpy_version": "2.1.3",
+    "network": "none",
+    "device": "cpu",
+    "weights": "synthetic",
+    "sparse_backend": "none",
+    "upstream_sparse_backend_executed": false,
+    "upstream_dense_reference_executed": true
+  },
+  "contract": {
+    "reference_kind": "source-bound explicit block-diagonal CPU reference",
+    "not_backend_parity": true,
+    "sequence_lengths": [
+      2,
+      0,
+      3,
+      1
+    ],
+    "score_elements": 28,
+    "score_bytes_f32": 112,
+    "output_elements": 24,
+    "output_bytes_f32": 96,
+    "attention_mac_elements": 112,
+    "batch_layout_source": "SparseTensor.layout",
+    "formula_source": "modules/attention/full_attn.py::_naive_sdpa",
+    "row_order_preserved_checked": true
+  },
+  "input": {
+    "batch_size": 4,
+    "spatial_shape": [
+      6,
+      1,
+      1
+    ],
+    "coordinates": [
+      [
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        1,
+        0,
+        0
+      ],
+      [
+        2,
+        4,
+        0,
+        0
+      ],
+      [
+        2,
+        2,
+        0,
+        0
+      ],
+      [
+        2,
+        3,
+        0,
+        0
+      ],
+      [
+        3,
+        5,
+        0,
+        0
+      ]
+    ],
+    "coordinates_i32le_sha256": "6a9b459df5650aea7c7145295eeb5a240f2f33956c259d8b5a9d6e80dfd12932",
+    "qkv_features": [
+      [
+        [
+          [
+            1.0,
+            -0.5
+          ],
+          [
+            0.25,
+            0.75
+          ]
+        ],
+        [
+          [
+            0.5,
+            1.0
+          ],
+          [
+            -0.25,
+            0.5
+          ]
+        ],
+        [
+          [
+            1.0,
+            2.0
+          ],
+          [
+            3.0,
+            4.0
+          ]
+        ]
+      ],
+      [
+        [
+          [
+            -0.5,
+            1.5
+          ],
+          [
+            1.0,
+            -1.0
+          ]
+        ],
+        [
+          [
+            1.25,
+            -0.75
+          ],
+          [
+            0.5,
+            0.25
+          ]
+        ],
+        [
+          [
+            5.0,
+            6.0
+          ],
+          [
+            7.0,
+            8.0
+          ]
+        ]
+      ],
+      [
+        [
+          [
+            0.25,
+            0.5
+          ],
+          [
+            -0.5,
+            1.0
+          ]
+        ],
+        [
+          [
+            1.0,
+            0.0
+          ],
+          [
+            0.75,
+            -0.25
+          ]
+        ],
+        [
+          [
+            11.0,
+            12.0
+          ],
+          [
+            13.0,
+            14.0
+          ]
+        ]
+      ],
+      [
+        [
+          [
+            1.25,
+            -1.0
+          ],
+          [
+            0.5,
+            0.25
+          ]
+        ],
+        [
+          [
+            -0.5,
+            1.5
+          ],
+          [
+            1.0,
+            0.5
+          ]
+        ],
+        [
+          [
+            15.0,
+            16.0
+          ],
+          [
+            17.0,
+            18.0
+          ]
+        ]
+      ],
+      [
+        [
+          [
+            -0.75,
+            0.25
+          ],
+          [
+            1.5,
+            -0.5
+          ]
+        ],
+        [
+          [
+            0.25,
+            0.75
+          ],
+          [
+            -1.0,
+            1.25
+          ]
+        ],
+        [
+          [
+            19.0,
+            20.0
+          ],
+          [
+            21.0,
+            22.0
+          ]
+        ]
+      ],
+      [
+        [
+          [
+            2.0,
+            -1.0
+          ],
+          [
+            0.5,
+            1.5
+          ]
+        ],
+        [
+          [
+            -0.5,
+            0.25
+          ],
+          [
+            1.0,
+            -0.75
+          ]
+        ],
+        [
+          [
+            101.0,
+            102.0
+          ],
+          [
+            103.0,
+            104.0
+          ]
+        ]
+      ]
+    ],
+    "qkv_features_f32le_sha256": "ee5c8c0afb64a553dfa8f096d474321d217ebbed320bf5bf2c30911e0e90fa64"
+  },
+  "attention": {
+    "num_heads": 2,
+    "head_dim": 2,
+    "scale": 0.7071067811865475
+  },
+  "output": {
+    "features": [
+      [
+        [
+          4.03734827041626,
+          5.03734827041626
+        ],
+        [
+          5.0,
+          6.0
+        ]
+      ],
+      [
+        [
+          1.4281672239303589,
+          2.4281671047210693
+        ],
+        [
+          5.679046154022217,
+          6.679046154022217
+        ]
+      ],
+      [
+        [
+          15.164593696594238,
+          16.164594650268555
+        ],
+        [
+          19.20371437072754,
+          20.20371437072754
+        ]
+      ],
+      [
+        [
+          13.002381324768066,
+          14.002381324768066
+        ],
+        [
+          16.596115112304688,
+          17.596115112304688
+        ]
+      ],
+      [
+        [
+          15.500732421875,
+          16.500732421875
+        ],
+        [
+          15.263731002807617,
+          16.263731002807617
+        ]
+      ],
+      [
+        [
+          101.0,
+          102.0
+        ],
+        [
+          103.0,
+          104.0
+        ]
+      ]
+    ],
+    "features_f32le_sha256": "ce294683d1ec7f8fe46bd45066871a5c3bfeaaf257256f7d24478e700dd12112",
+    "batch_isolation_checked": true,
+    "stable_softmax_checked": true,
+    "singleton_equals_value_checked": true
+  }
+}
