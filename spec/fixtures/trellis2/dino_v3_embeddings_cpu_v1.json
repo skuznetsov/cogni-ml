@@ -1,0 +1,651 @@
+{
+  "cases": [
+    {
+      "expected": {
+        "coordinates": {
+          "f32le_sha256": "07b5da4decb9e68942074652505a0b70203a7d952e70ac70fb1120d48a2a41fb",
+          "probes": [
+            {
+              "index": [
+                0,
+                0
+              ],
+              "value": -0.96875
+            },
+            {
+              "index": [
+                0,
+                1
+              ],
+              "value": -0.96875
+            },
+            {
+              "index": [
+                512,
+                0
+              ],
+              "value": 0.03125
+            },
+            {
+              "index": [
+                1023,
+                1
+              ],
+              "value": 0.96875
+            }
+          ],
+          "shape": [
+            1024,
+            2
+          ]
+        },
+        "embeddings": {
+          "f32le_sha256": "c7205b2f5a710d708a1686ff7073c278c18fbce9bb20539e4daa3737bcfc3a67",
+          "probes": [
+            {
+              "index": [
+                0,
+                0,
+                0
+              ],
+              "value": -0.5
+            },
+            {
+              "index": [
+                0,
+                1,
+                0
+              ],
+              "value": -1.0
+            },
+            {
+              "index": [
+                0,
+                4,
+                15
+              ],
+              "value": 0.96875
+            },
+            {
+              "index": [
+                0,
+                5,
+                0
+              ],
+              "value": 0.453125
+            }
+          ],
+          "shape": [
+            1,
+            1029,
+            16
+          ]
+        },
+        "patches": {
+          "f32le_sha256": "2d3583ef1cb5fac763a5d775c18c7459b2739e5c2771b941182c94cd6cf0be64",
+          "probes": [
+            {
+              "index": [
+                0,
+                0,
+                0
+              ],
+              "value": 0.453125
+            },
+            {
+              "index": [
+                0,
+                1,
+                3
+              ],
+              "value": 0.787109375
+            },
+            {
+              "index": [
+                0,
+                512,
+                7
+              ],
+              "value": -0.330078125
+            },
+            {
+              "index": [
+                0,
+                1023,
+                15
+              ],
+              "value": -0.26171875
+            }
+          ],
+          "shape": [
+            1,
+            1024,
+            16
+          ]
+        },
+        "rope_cos": {
+          "probes": [
+            {
+              "index": [
+                0,
+                0
+              ],
+              "value": 0.9807853102684021
+            },
+            {
+              "index": [
+                0,
+                1
+              ],
+              "value": 0.8204014301300049
+            },
+            {
+              "index": [
+                512,
+                4
+              ],
+              "value": 0.9807853102684021
+            },
+            {
+              "index": [
+                1023,
+                7
+              ],
+              "value": 0.8204014301300049
+            }
+          ],
+          "shape": [
+            1024,
+            8
+          ],
+          "truncated_1e4le_sha256": "8364873258cfb20a98eb5e87addee3db2947a1ef00fc8391530d7f21a3e32c29"
+        },
+        "rope_sin": {
+          "probes": [
+            {
+              "index": [
+                0,
+                0
+              ],
+              "value": 0.19509023427963257
+            },
+            {
+              "index": [
+                0,
+                1
+              ],
+              "value": -0.57178795337677
+            },
+            {
+              "index": [
+                512,
+                4
+              ],
+              "value": 0.19509032368659973
+            },
+            {
+              "index": [
+                1023,
+                7
+              ],
+              "value": 0.57178795337677
+            }
+          ],
+          "shape": [
+            1024,
+            8
+          ],
+          "truncated_1e4le_sha256": "2edf054f23630dabdfc1faec17197fd66fd061dc822e1fb6c99a5fcad944aabb"
+        }
+      },
+      "input": {
+        "f32le_sha256": "6d3b13c7bf44ea35d043eb5300669b2832fc8dc80ac717f82a203f69ca6968ad",
+        "recipe": "x[b,c,y,x]=(((5*c+3*y+7*x)%33)-16)/16",
+        "shape": [
+          1,
+          3,
+          512,
+          512
+        ]
+      },
+      "name": "synthetic_512"
+    },
+    {
+      "expected": {
+        "coordinates": {
+          "f32le_sha256": "b092f6712a1db00eb5e13c1a60c317162061467d294135687e21c231d4b07ecc",
+          "probes": [
+            {
+              "index": [
+                0,
+                0
+              ],
+              "value": -0.984375
+            },
+            {
+              "index": [
+                0,
+                1
+              ],
+              "value": -0.984375
+            },
+            {
+              "index": [
+                2048,
+                0
+              ],
+              "value": 0.015625
+            },
+            {
+              "index": [
+                4095,
+                1
+              ],
+              "value": 0.984375
+            }
+          ],
+          "shape": [
+            4096,
+            2
+          ]
+        },
+        "embeddings": {
+          "f32le_sha256": "0bc87400236ace7bcf58f46a818ac56f858204c3dccba3b77ade7fe165fe1db5",
+          "probes": [
+            {
+              "index": [
+                0,
+                0,
+                0
+              ],
+              "value": -0.5
+            },
+            {
+              "index": [
+                0,
+                1,
+                0
+              ],
+              "value": -1.0
+            },
+            {
+              "index": [
+                0,
+                4,
+                15
+              ],
+              "value": 0.96875
+            },
+            {
+              "index": [
+                0,
+                5,
+                0
+              ],
+              "value": 0.453125
+            }
+          ],
+          "shape": [
+            1,
+            4101,
+            16
+          ]
+        },
+        "patches": {
+          "f32le_sha256": "fface568db8dea0a129eccb9f381a8530c4e42197c81935d9d3050f933ed6721",
+          "probes": [
+            {
+              "index": [
+                0,
+                0,
+                0
+              ],
+              "value": 0.453125
+            },
+            {
+              "index": [
+                0,
+                1,
+                3
+              ],
+              "value": 0.787109375
+            },
+            {
+              "index": [
+                0,
+                2048,
+                7
+              ],
+              "value": 0.830078125
+            },
+            {
+              "index": [
+                0,
+                4095,
+                15
+              ],
+              "value": -0.236328125
+            }
+          ],
+          "shape": [
+            1,
+            4096,
+            16
+          ]
+        },
+        "rope_cos": {
+          "probes": [
+            {
+              "index": [
+                0,
+                0
+              ],
+              "value": 0.9951847791671753
+            },
+            {
+              "index": [
+                0,
+                1
+              ],
+              "value": 0.8147484660148621
+            },
+            {
+              "index": [
+                2048,
+                4
+              ],
+              "value": 0.9951847195625305
+            },
+            {
+              "index": [
+                4095,
+                7
+              ],
+              "value": 0.8147484660148621
+            }
+          ],
+          "shape": [
+            4096,
+            8
+          ],
+          "truncated_1e4le_sha256": "bc7d92793289e8bad9369590d37a9b0016aec28bd26f46fb50291341023c00b0"
+        },
+        "rope_sin": {
+          "probes": [
+            {
+              "index": [
+                0,
+                0
+              ],
+              "value": 0.09801676869392395
+            },
+            {
+              "index": [
+                0,
+                1
+              ],
+              "value": -0.579814612865448
+            },
+            {
+              "index": [
+                2048,
+                4
+              ],
+              "value": 0.0980171412229538
+            },
+            {
+              "index": [
+                4095,
+                7
+              ],
+              "value": 0.579814612865448
+            }
+          ],
+          "shape": [
+            4096,
+            8
+          ],
+          "truncated_1e4le_sha256": "82224cffe135af7f529066444c7a156b2bccfd1765db93fa0f77b6c185c23dcd"
+        }
+      },
+      "input": {
+        "f32le_sha256": "bd77ecb076805baa414ac3a16569928b901adf328c399883f188c8958e656b38",
+        "recipe": "x[b,c,y,x]=(((5*c+3*y+7*x)%33)-16)/16",
+        "shape": [
+          1,
+          3,
+          1024,
+          1024
+        ]
+      },
+      "name": "synthetic_1024"
+    }
+  ],
+  "compatibility": {
+    "pinned_upstream_layer_path": "model.layer",
+    "pinned_upstream_path_available_on_instance": false,
+    "status": "blocked for full encoder; embeddings and RoPE paths remain valid",
+    "transformers_5_8_1_layer_path": "model.model.layer",
+    "transformers_5_8_1_path_available_on_instance": true
+  },
+  "float_stress_case": {
+    "config": {
+      "hidden_size": 4,
+      "num_attention_heads": 1,
+      "num_channels": 3,
+      "num_register_tokens": 2,
+      "patch_size": 16,
+      "rope_theta": 100.0
+    },
+    "expected": {
+      "absolute_tolerance": 5e-05,
+      "embeddings": {
+        "probes": [
+          {
+            "index": [
+              0,
+              0,
+              0
+            ],
+            "value": -0.4974924921989441
+          },
+          {
+            "index": [
+              0,
+              1,
+              0
+            ],
+            "value": 0.6068204641342163
+          },
+          {
+            "index": [
+              0,
+              2,
+              3
+            ],
+            "value": 0.6248746514320374
+          },
+          {
+            "index": [
+              0,
+              3,
+              0
+            ],
+            "value": -2.6778244972229004
+          },
+          {
+            "index": [
+              0,
+              4,
+              1
+            ],
+            "value": -6.189630031585693
+          },
+          {
+            "index": [
+              0,
+              1026,
+              3
+            ],
+            "value": -6.400213718414307
+          }
+        ],
+        "shape": [
+          1,
+          1027,
+          4
+        ]
+      },
+      "patches": {
+        "probes": [
+          {
+            "index": [
+              0,
+              0,
+              0
+            ],
+            "value": -2.6778244972229004
+          },
+          {
+            "index": [
+              0,
+              0,
+              3
+            ],
+            "value": -5.730287075042725
+          },
+          {
+            "index": [
+              0,
+              1,
+              1
+            ],
+            "value": -6.189630031585693
+          },
+          {
+            "index": [
+              0,
+              31,
+              2
+            ],
+            "value": 1.3778774738311768
+          },
+          {
+            "index": [
+              0,
+              32,
+              3
+            ],
+            "value": -3.8625006675720215
+          },
+          {
+            "index": [
+              0,
+              255,
+              0
+            ],
+            "value": 6.884261131286621
+          },
+          {
+            "index": [
+              0,
+              511,
+              1
+            ],
+            "value": -1.2026387453079224
+          },
+          {
+            "index": [
+              0,
+              1023,
+              3
+            ],
+            "value": -6.400213718414307
+          }
+        ],
+        "shape": [
+          1,
+          1024,
+          4
+        ]
+      }
+    },
+    "input": {
+      "f32le_sha256": "a159495ef56f8d07899ec5a2cfbb4f7855680353cd60fe714cb75dd447757858",
+      "seed": "0x13579bdf",
+      "shape": [
+        1,
+        3,
+        512,
+        512
+      ]
+    },
+    "name": "non_binary_conv2d_512",
+    "parameters": {
+      "f32le_sha256": "4322f30fc0c867616f4994887ae81f9a6432ab127d56e300489ab1998018e18c",
+      "seeds": [
+        "0x2468ace0",
+        "0x10203040",
+        "0x50607080",
+        "0x90abcdef"
+      ]
+    }
+  },
+  "parameters": {
+    "f32le_sha256": "fcebcdb5c928a044a75465a472406d167cd228f43063ad1429b3b37966a2828a",
+    "order": [
+      "patch_weight",
+      "patch_bias",
+      "cls_token",
+      "register_tokens"
+    ],
+    "recipe": "power-of-two rational dense patch kernel plus explicit prefix tokens"
+  },
+  "provenance": {
+    "commit": "75fbf0183001ed9876c8dbb35de6b68552ee08bd",
+    "device": "cpu",
+    "extractor": "https://github.com/microsoft/TRELLIS.2/blob/75fbf0183001ed9876c8dbb35de6b68552ee08bd/trellis2/modules/image_feature_extractor.py",
+    "generator": "tools/trellis2_oracle/export_dino_v3_embeddings.py",
+    "model_reference": "facebook/dinov3-vitl16-pretrain-lvd1689m",
+    "network": "none",
+    "numpy_version": "2.1.3",
+    "oracle_kind": "synthetic Transformers DINOv3 embedding and RoPE CPU execution",
+    "real_model_config": "unadmitted; gated checkpoint config was not loaded",
+    "repository": "microsoft/TRELLIS.2",
+    "torch_version": "2.9.0",
+    "transformers_config_sha256": "9a13d3c9ea8020aaed7057db28a7ffe0ffd9bb094a6178261bcc45ed04e9bbfc",
+    "transformers_license": "Apache-2.0",
+    "transformers_license_url": "https://github.com/huggingface/transformers/blob/v5.8.1/LICENSE",
+    "transformers_modeling_sha256": "6073b7665eea50fb2260d86984011e6af8ed68cbd37ae57a6095e5e90e0eea34",
+    "transformers_version": "5.8.1",
+    "weights": "synthetic only; no checkpoint"
+  },
+  "schema": "cogni-ml/trellis2/dino-v3-embeddings-oracle/v1",
+  "scope": {
+    "excludes": [
+      "mask token replacement",
+      "attention RoPE application",
+      "transformer blocks",
+      "real model configuration or weights",
+      "BF16/F16",
+      "Metal"
+    ],
+    "includes": [
+      "CPU Conv2d patch projection",
+      "row-major patch flattening",
+      "CLS and register token concatenation",
+      "eval-mode dynamic patch-center coordinates",
+      "DINOv3 RoPE cos and sin"
+    ]
+  },
+  "synthetic_config": {
+    "head_dim": 8,
+    "hidden_size": 16,
+    "num_attention_heads": 2,
+    "num_channels": 3,
+    "num_register_tokens": 4,
+    "patch_size": 16,
+    "rope_theta": 100.0,
+    "training": false
+  }
+}

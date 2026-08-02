@@ -32,6 +32,9 @@ require "./ml/nn/layernorm"
 require "./ml/nn/attention"
 require "./ml/nn/vit"
 
+# Bounded graphless vision references
+require "./ml/vision/dino_v3"
+
 # Optimizers
 require "./ml/optim/adam"
 
