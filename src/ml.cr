@@ -18,6 +18,9 @@ require "./ml/core/tensor"
 # Graphless CPU reference operations
 require "./ml/ops/normalization"
 
+# Device optimization admission and evidence contracts
+require "./ml/metal/wba_phi_atlas"
+
 # Autograd - automatic differentiation
 require "./ml/autograd/grad_fn"
 require "./ml/autograd/variable"

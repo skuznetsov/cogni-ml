@@ -1,3 +1,5 @@
+require "./pipeline_contract"
+
 {% if flag?(:cpu_only) %}
   # CPU-only stubs (Metal disabled)
   module ML
@@ -349,6 +351,88 @@ module ML
   end
 end
 {% end %}
+
+# New pipeline families must opt into this typed, owner-scoped admission path.
+# The legacy String cache remains unchanged until its retained-object lifetime
+# is made safe for fast command buffers. Owner capacity declarations are
+# monotone for the process lifetime, including when a first compile fails.
+module ML::Metal
+  class PipelineCache
+    MAX_TYPED_OWNERS            =   64
+    MAX_TYPED_DECLARED_CAPACITY = 4096
+
+    @@typed_mutex = Mutex.new
+    @@typed_caches = {} of String => BoundedPipelineCache(ComputePipeline)
+    @@typed_declared_capacity = 0_i32
+
+    def self.get(
+      key : PipelineSpecializationKey,
+      capacity : Int32,
+      &builder : -> ComputePipeline
+    ) : ComputePipeline
+      typed_cache(key.owner, capacity).fetch(key) { builder.call }
+    end
+
+    def self.get_or_compile(
+      key : PipelineSpecializationKey,
+      capacity : Int32,
+      source : String,
+    ) : ComputePipeline
+      key.validate_source!(source)
+      get(key, capacity) { ComputePipeline.new(key.function_name, source) }
+    end
+
+    def self.typed_diagnostics(owner : String) : PipelineCacheDiagnostics?
+      cache = @@typed_mutex.synchronize { @@typed_caches[owner]? }
+      cache.try(&.diagnostics)
+    end
+
+    def self.typed_process_diagnostics : PipelineCacheProcessDiagnostics
+      @@typed_mutex.synchronize do
+        PipelineCacheProcessDiagnostics.new(
+          owners: @@typed_caches.size,
+          declared_capacity: @@typed_declared_capacity,
+          max_owners: MAX_TYPED_OWNERS,
+          max_declared_capacity: MAX_TYPED_DECLARED_CAPACITY
+        )
+      end
+    end
+
+    private def self.typed_cache(
+      owner : String,
+      capacity : Int32,
+    ) : BoundedPipelineCache(ComputePipeline)
+      raise ArgumentError.new("pipeline cache capacity must be positive") unless capacity > 0
+
+      @@typed_mutex.synchronize do
+        if cache = @@typed_caches[owner]?
+          unless cache.capacity == capacity
+            raise ArgumentError.new(
+              "pipeline cache capacity for owner #{owner} is already #{cache.capacity}, not #{capacity}"
+            )
+          end
+          return cache
+        end
+
+        if @@typed_caches.size >= MAX_TYPED_OWNERS
+          raise PipelineCacheCapacityError.new(
+            "typed pipeline owner limit #{MAX_TYPED_OWNERS} would be exceeded"
+          )
+        end
+        if @@typed_declared_capacity + capacity > MAX_TYPED_DECLARED_CAPACITY
+          raise PipelineCacheCapacityError.new(
+            "typed pipeline declared capacity limit #{MAX_TYPED_DECLARED_CAPACITY} would be exceeded"
+          )
+        end
+
+        cache = BoundedPipelineCache(ComputePipeline).new(owner, capacity)
+        @@typed_caches[owner] = cache
+        @@typed_declared_capacity += capacity
+        cache
+      end
+    end
+  end
+end
 
 {% if !flag?(:cpu_only) %}
 # Metal Device FFI declarations
