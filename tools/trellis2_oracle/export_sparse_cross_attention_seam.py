@@ -674,6 +674,23 @@ def build_fixture(trellis_root: Path) -> dict[str, object]:
     projected_cross = cross_delegate.to_out(cross_pre_output.reshape(cross_pre_output.shape[0], -1))
     if not torch.equal(cross_output, projected_cross):
         raise AssertionError("upstream cross output projection drift")
+    query_projection = cross_delegate.to_q(norm2_capture.output_features)
+    context_kv_projection = cross_delegate.to_kv(context)
+    require_f32_cpu_contiguous("cross query projection", query_projection)
+    require_f32_cpu_contiguous("cross context K/V projection", context_kv_projection)
+    if tuple(query_projection.shape) != (4, CHANNELS):
+        raise AssertionError(
+            f"cross query projection shape drift: {tuple(query_projection.shape)}"
+        )
+    if tuple(context_kv_projection.shape) != (
+        BATCH_SIZE,
+        CONTEXT_LENGTH,
+        2 * CHANNELS,
+    ):
+        raise AssertionError(
+            "cross context K/V projection shape drift: "
+            f"{tuple(context_kv_projection.shape)}"
+        )
     if not bool(backend_records[0]["empty_query_batch_skipped"] and backend_records[1]["empty_query_batch_skipped"]):
         raise AssertionError("empty query batch was not skipped by the reference")
 
@@ -859,6 +876,21 @@ def build_fixture(trellis_root: Path) -> dict[str, object]:
         "parameters": {
             name: value if name == "epsilon" else stage_payload(value)
             for name, value in parameters.items()
+        },
+        "cross_attention_projections": {
+            "query": stage_payload(query_projection),
+            "context_kv": stage_payload(context_kv_projection),
+        },
+        "cross_attention_projection_contract": {
+            "query_input": "stages.norm2_output flat sparse [N,C]",
+            "context_input": "input.context dense [B,L,Cctx]",
+            "query_formula": "block.cross_attn.to_q(query)",
+            "context_kv_formula": "block.cross_attn.to_kv(context)",
+            "query_layout": "[N,C] exact sparse row order",
+            "context_kv_layout": "[B,L,2C] dense batch-major",
+            "boundary": "before head reshape and Q/K RMS normalization",
+            "upstream_linear_modules_executed": True,
+            "input_and_parameters_unchanged": True,
         },
         "stages": {name: stage_payload(value) for name, value in stages.items()},
         "stage_contract": stage_contract,

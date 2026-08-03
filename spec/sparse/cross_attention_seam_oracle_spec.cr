@@ -21,6 +21,11 @@ private CROSS_ATTENTION_SEAM_CONFIG_DIGESTS = {
   "configs/gen/slat_flow_imgshape2tex_dit_1_3B_512_bf16_ft1024.json" => "df727c8b2bcd6fc592e4feb0489ddec57c73f2f4fdb5b4028ded8648d6d37057",
 }
 
+private CROSS_ATTENTION_SEAM_PROJECTION_DIGESTS = {
+  "query"      => "6821a8e2d745eecf42f6dc0740e6537613a7e93062ed4740264ba8788dee1812",
+  "context_kv" => "f0d6061f8504e51b490adda3eb8b5fb321599a10f87c1a19ced1862fc003990a",
+}
+
 private CROSS_ATTENTION_SEAM_LOCAL_DENSE_DIGEST =
   "6901223b87c6ec4ee39113c7684191b18c68a04edb64bc53ff800a407d82a7ce"
 
@@ -161,6 +166,37 @@ describe "TRELLIS.2 sparse cross-attention seam oracle" do
         )
       )
     end
+
+    projections = fixture["cross_attention_projections"]
+    projections["query"]["shape"].as_a.map(&.as_i).should eq([4_i64, 16_i64])
+    projections["context_kv"]["shape"].as_a.map(&.as_i).should eq([
+      3_i64, 3_i64, 32_i64,
+    ])
+    %w(query context_kv).each do |name|
+      digest = cross_attention_seam_f32le_sha256(
+        cross_attention_seam_f32(projections[name])
+      )
+      digest.should eq(CROSS_ATTENTION_SEAM_PROJECTION_DIGESTS[name])
+      projections[name]["f32le_sha256"].as_s.should eq(digest)
+    end
+
+    projection_contract = fixture["cross_attention_projection_contract"]
+    projection_contract["query_formula"].as_s.should eq(
+      "block.cross_attn.to_q(query)"
+    )
+    projection_contract["context_kv_formula"].as_s.should eq(
+      "block.cross_attn.to_kv(context)"
+    )
+    projection_contract["query_layout"].as_s.should eq(
+      "[N,C] exact sparse row order"
+    )
+    projection_contract["context_kv_layout"].as_s.should eq(
+      "[B,L,2C] dense batch-major"
+    )
+    projection_contract["boundary"].as_s.should eq(
+      "before head reshape and Q/K RMS normalization"
+    )
+    projection_contract["upstream_linear_modules_executed"].as_bool.should be_true
   end
 
   it "rejects conflating the dense oracle with the sparse carrier" do
