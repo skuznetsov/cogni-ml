@@ -30,7 +30,7 @@ private SPARSE_FULL_ATTENTION_PRE_OUTPUT_SOURCE_DIGESTS = {
 private def sparse_full_attention_pre_output_fixture : JSON::Any
   JSON.parse(File.read(File.join(
     __DIR__,
-    "../fixtures/trellis2/sparse_full_self_attention_pre_output_cpu_v1.json"
+    "../fixtures/trellis2/sparse_full_self_attention_output_cpu_v1.json"
   )))
 end
 
@@ -183,7 +183,7 @@ describe "TRELLIS.2 sparse full self-attention pre-output composition" do
   it "matches the source-bound upstream self/full forward boundary" do
     fixture = sparse_full_attention_pre_output_fixture
     fixture["schema"].as_s.should eq(
-      "cogni-ml/trellis2/sparse-full-self-attention-pre-output-oracle/v1"
+      "cogni-ml/trellis2/sparse-full-self-attention-output-oracle/v1"
     )
     provenance = fixture["provenance"]
     provenance["commit"].as_s.should eq(

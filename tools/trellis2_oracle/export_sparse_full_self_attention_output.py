@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Export the pinned TRELLIS.2 self/full attention pre-output composition.
+"""Export pinned TRELLIS.2 self/full attention composition boundaries.
 
 The oracle executes the real SparseMultiHeadAttention.forward orchestration on
 tiny synthetic CPU/F32 data. TRELLIS.2 has no CPU sparse-attention backend, so
 the backend call is replaced with the pinned dense naive formula evaluated per
-canonical sparse batch. The final output projection is replaced with identity;
-this fixture stops at the admitted pre-output boundary.
+canonical sparse batch. One pass replaces the final output projection with
+identity to retain the admitted pre-output boundary; a second pass executes a
+frozen asymmetric biased to_out projection for the next bounded seam.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ TRELLIS_PIN = "75fbf0183001ed9876c8dbb35de6b68552ee08bd"
 PYTHON_PIN = "3.11.9"
 TORCH_PIN = "2.9.0"
 NUMPY_PIN = "2.1.3"
-SCHEMA = "cogni-ml/trellis2/sparse-full-self-attention-pre-output-oracle/v1"
+SCHEMA = "cogni-ml/trellis2/sparse-full-self-attention-output-oracle/v1"
 
 SOURCE_PINS = {
     "sparse_full_attention": (
@@ -94,6 +95,10 @@ Q_GAMMA = patterned_f32(NUM_HEADS * HEAD_DIM, 13, 5, 7.0).reshape(
 K_GAMMA = patterned_f32(NUM_HEADS * HEAD_DIM, 11, 4, 9.0).reshape(
     NUM_HEADS, HEAD_DIM
 ) + np.float32(0.75)
+OUT_WEIGHT = patterned_f32(CHANNELS * CHANNELS, 31, 15, 23.0).reshape(
+    CHANNELS, CHANNELS
+)
+OUT_BIAS = patterned_f32(CHANNELS, 13, 6, 17.0)
 
 
 def sha256(path: Path) -> str:
@@ -179,6 +184,18 @@ def build_fixture(trellis_root: Path) -> dict[str, object]:
     sources = require_pins(trellis_root)
     sparse_module, attention_module, dense_naive = load_upstream(trellis_root)
 
+    bias_independence = attention_module.SparseMultiHeadAttention(
+        channels=CHANNELS,
+        num_heads=NUM_HEADS,
+        type="self",
+        attn_mode="full",
+        qkv_bias=False,
+    ).cpu().eval()
+    if bias_independence.to_qkv.bias is not None:
+        raise AssertionError("qkv_bias=False must disable only the QKV bias")
+    if bias_independence.to_out.bias is None:
+        raise AssertionError("to_out bias must remain independent from qkv_bias")
+
     coordinate_array = np.asarray(COORDINATES, dtype=np.int32)
     coordinates = torch.from_numpy(coordinate_array.copy())
     input_tensor = sparse_module.SparseTensor(
@@ -202,11 +219,16 @@ def build_fixture(trellis_root: Path) -> dict[str, object]:
         rope_freq=tuple(ROPE_FREQ),
         qk_rms_norm=True,
     ).cpu().eval()
+    attention.requires_grad_(False)
+    if any(parameter.requires_grad for parameter in attention.parameters()):
+        raise AssertionError("oracle attention parameters must be frozen")
     with torch.no_grad():
         attention.to_qkv.weight.copy_(torch.from_numpy(QKV_WEIGHT.copy()))
         attention.to_qkv.bias.copy_(torch.from_numpy(QKV_BIAS.copy()))
         attention.q_rms_norm.gamma.copy_(torch.from_numpy(Q_GAMMA.copy()))
         attention.k_rms_norm.gamma.copy_(torch.from_numpy(K_GAMMA.copy()))
+        attention.to_out.weight.copy_(torch.from_numpy(OUT_WEIGHT.copy()))
+        attention.to_out.bias.copy_(torch.from_numpy(OUT_BIAS.copy()))
 
     # Record named stages by invoking the exact upstream helpers in forward order.
     with torch.inference_mode():
@@ -219,10 +241,10 @@ def build_fixture(trellis_root: Path) -> dict[str, object]:
         q, k = attention.rope(q, k)
         roped = projected.replace(torch.stack([q.feats, k.feats, v.feats], dim=1))
 
-    captured: dict[str, torch.Tensor] = {}
+    captured: dict[str, list[torch.Tensor]] = {"qkv": [], "attention": []}
 
     def injected_cpu_full_attention(qkv):
-        captured["qkv"] = qkv.feats.detach().clone()
+        captured["qkv"].append(qkv.feats.detach().clone())
         output = torch.empty(
             (qkv.feats.shape[0], NUM_HEADS, HEAD_DIM), dtype=torch.float32
         )
@@ -235,26 +257,47 @@ def build_fixture(trellis_root: Path) -> dict[str, object]:
             dense = dense_naive(q.unsqueeze(0), k.unsqueeze(0), v.unsqueeze(0))[0]
             torch.testing.assert_close(manual, dense, rtol=1e-6, atol=1e-6)
             output[batch_slice] = dense
-        captured["attention"] = output.detach().clone()
+        captured["attention"].append(output.detach().clone())
         return qkv.replace(output)
 
     input_before = input_tensor.feats.detach().clone()
     original_backend = attention_module.sparse_scaled_dot_product_attention
     attention_module.sparse_scaled_dot_product_attention = injected_cpu_full_attention
+    output_projection = attention.to_out
     attention.to_out = nn.Identity()
     try:
         with torch.inference_mode():
-            output = attention(input_tensor)
+            pre_output = attention(input_tensor)
+            attention.to_out = output_projection
+            final_output = attention(input_tensor)
     finally:
+        attention.to_out = output_projection
         attention_module.sparse_scaled_dot_product_attention = original_backend
 
-    if not torch.equal(captured["qkv"], roped.feats):
+    if len(captured["qkv"]) != 2 or len(captured["attention"]) != 2:
+        raise AssertionError("expected exactly two upstream forward captures")
+    if not all(torch.equal(value, roped.feats) for value in captured["qkv"]):
         raise AssertionError("real forward QKV differs from named upstream stages")
-    if not torch.equal(output.feats, captured["attention"].reshape(-1, CHANNELS)):
+    if not torch.equal(
+        pre_output.feats, captured["attention"][0].reshape(-1, CHANNELS)
+    ):
         raise AssertionError("identity pre-output boundary changed attention output")
+    if not torch.equal(captured["attention"][1], captured["attention"][0]):
+        raise AssertionError("repeated upstream attention context drift")
+    expected_final = torch.nn.functional.linear(
+        pre_output.feats,
+        torch.from_numpy(OUT_WEIGHT.copy()),
+        torch.from_numpy(OUT_BIAS.copy()),
+    )
+    if not torch.equal(final_output.feats, expected_final):
+        raise AssertionError("real forward to_out differs from frozen biased Linear")
+    if torch.equal(final_output.feats, pre_output.feats):
+        raise AssertionError("final output projection must be non-identity")
     if not torch.equal(input_tensor.feats, input_before):
         raise AssertionError("pinned upstream mutated self-attention input")
-    if output.coords is not input_tensor.coords:
+    if pre_output.coords is not input_tensor.coords:
+        raise AssertionError("pinned upstream pre-output coordinate-object drift")
+    if final_output.coords is not input_tensor.coords:
         raise AssertionError("pinned upstream coordinate-object drift")
     if not torch.equal(normalized.feats[:, 2], projected.feats[:, 2]):
         raise AssertionError("Q/K normalization changed V")
@@ -267,7 +310,8 @@ def build_fixture(trellis_root: Path) -> dict[str, object]:
         "projected_qkv": projected.feats.detach().cpu().numpy(),
         "normalized_qkv": normalized.feats.detach().cpu().numpy(),
         "roped_qkv": roped.feats.detach().cpu().numpy(),
-        "attention_output": output.feats.detach().cpu().numpy(),
+        "attention_output": pre_output.feats.detach().cpu().numpy(),
+        "final_output": final_output.feats.detach().cpu().numpy(),
     }
     if not all(np.isfinite(array).all() for array in arrays.values()):
         raise AssertionError("composition reference produced a non-finite value")
@@ -283,7 +327,7 @@ def build_fixture(trellis_root: Path) -> dict[str, object]:
             },
             "generator": (
                 "tools/trellis2_oracle/"
-                "export_sparse_full_self_attention_pre_output.py"
+                "export_sparse_full_self_attention_output.py"
             ),
             "python_version": PYTHON_PIN,
             "torch_version": TORCH_PIN,
@@ -296,6 +340,7 @@ def build_fixture(trellis_root: Path) -> dict[str, object]:
             "upstream_sparse_backend_executed": False,
             "upstream_dense_reference_executed": True,
             "output_projection": "identity substitution",
+            "final_output_projection": "frozen asymmetric biased Linear",
         },
         "contract": {
             "consumer": "SparseMultiHeadAttention.forward self/full path",
@@ -306,13 +351,26 @@ def build_fixture(trellis_root: Path) -> dict[str, object]:
                 "3D RoPE",
                 "block-diagonal full attention",
             ],
+            "final_order": [
+                "to_qkv",
+                "packed [N, 3, H, D] view",
+                "Q/K RMS normalization",
+                "3D RoPE",
+                "block-diagonal full attention",
+                "flatten heads to [N, C]",
+                "biased to_out Linear(C, C)",
+            ],
             "boundary": "pre-output projection",
+            "final_boundary": "post-output projection",
             "qk_rms_norm": True,
             "use_rope": True,
             "not_sparse_backend_parity": True,
             "sequence_lengths": SEQUENCE_LENGTHS,
             "coordinate_object_reused": True,
+            "final_coordinate_object_reused": True,
             "input_unchanged": True,
+            "output_projection_non_identity": True,
+            "qkv_bias_independent_from_to_out_bias": True,
             "value_component_unchanged_before_attention": True,
             "identity_tail_unchanged_before_attention": True,
             "local_mode": "bounded graphless frozen-parameter CPU/F32 inference",
@@ -338,6 +396,11 @@ def build_fixture(trellis_root: Path) -> dict[str, object]:
             "q_gamma_f32le_sha256": little_endian_sha(Q_GAMMA, "<f4"),
             "k_gamma": K_GAMMA.tolist(),
             "k_gamma_f32le_sha256": little_endian_sha(K_GAMMA, "<f4"),
+            "to_out_bias": True,
+            "to_out_weight": OUT_WEIGHT.tolist(),
+            "to_out_weight_f32le_sha256": little_endian_sha(OUT_WEIGHT, "<f4"),
+            "to_out_bias_values": OUT_BIAS.tolist(),
+            "to_out_bias_f32le_sha256": little_endian_sha(OUT_BIAS, "<f4"),
             "rope_freq": ROPE_FREQ,
             "scale": 1.0 / math.sqrt(HEAD_DIM),
         },
