@@ -81,7 +81,7 @@ class SparseQKRMSNormTensorCPUOverride < ML::Sparse::TensorCPU
 end
 
 describe ML::Sparse::TensorCPU do
-  it "matches the pinned upstream packed Q/K normalizer" do
+  it "matches the pinned D=3 upstream Q/K fixture exactly" do
     fixture = sparse_qk_rms_norm_fixture
     fixture["schema"].as_s.should eq(
       "cogni-ml/trellis2/sparse-self-attention-qk-rms-norm-oracle/v1"
