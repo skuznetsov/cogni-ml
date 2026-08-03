@@ -146,6 +146,23 @@ module ML::Sparse
       map.@layout[batch]
     end
 
+    # Zero-copy spatial-coordinate read for bounded CPU kernels. The batch
+    # column is deliberately unavailable through this accessor because 3D
+    # spatial operations must not accidentally treat it as an axis.
+    def self.kernel_spatial_coordinate(
+      map : CoordinateMap3D,
+      row : Int32,
+      axis : Int32,
+    ) : Int32
+      unless 0 <= row < map.@point_count
+        raise IndexError.new("sparse coordinate row #{row} is out of bounds")
+      end
+      unless 0 <= axis < 3
+        raise IndexError.new("sparse spatial coordinate axis #{axis} is out of bounds")
+      end
+      map.@coordinates[row * COORDINATE_WIDTH + axis + 1]
+    end
+
     def coordinates_copy : Array(Int32)
       @coordinates.dup
     end
