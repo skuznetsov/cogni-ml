@@ -85,6 +85,28 @@ class SparseAdaptiveLayerNormInputOverride < ML::Sparse::TensorCPU
   end
 end
 
+class SparseAdaptiveLayerNormParameterOverride < ML::Tensor
+  def initialize(values : Array(Float32))
+    shape = ML::Shape.new(1_i32, 2_i32)
+    super(
+      shape,
+      ML::Strides.new(shape),
+      ML::DType::F32,
+      ML::Tensor::Device::CPU,
+      nil,
+      values
+    )
+  end
+
+  def cpu_read : ML::Tensor::CPUReadView
+    fake = ML::Tensor.from_array(
+      [7.0_f32, 11.0_f32],
+      ML::Shape.new(1_i32, 2_i32)
+    )
+    ML::Tensor::CPUReadView.new(fake, fake.cpu_data.not_nil!)
+  end
+end
+
 describe ML::Sparse::TensorCPU do
   it "matches the pinned asymmetric adaptive LayerNorm32 oracle" do
     fixture = sparse_adaln_fixture
@@ -496,6 +518,39 @@ describe ML::Sparse::TensorCPU do
         finite_scale,
         finite_shift
       )
+    end
+  end
+
+  it "uses canonical adaptive parameter storage instead of virtual reads" do
+    map = ML::Sparse::CoordinateMap3D.new(
+      [0, 0, 0, 0] of Int32,
+      1,
+      {1, 1, 1}
+    )
+    sparse = ML::Sparse::TensorCPU.new(
+      ML::Tensor.from_array(
+        [-1.0_f32, 1.0_f32],
+        ML::Shape.new(1_i32, 2_i32)
+      ),
+      map
+    )
+    scale = SparseAdaptiveLayerNormParameterOverride.new(
+      [0.0_f32, 0.0_f32]
+    )
+    shift = SparseAdaptiveLayerNormParameterOverride.new(
+      [0.0_f32, 0.0_f32]
+    )
+
+    output = ML::Sparse::TensorCPU.apply_adaptive_layer_norm(
+      sparse,
+      scale,
+      shift
+    )
+
+    output.features_copy.zip(
+      [-0.9999995_f32, 0.9999995_f32]
+    ).each do |actual, expected|
+      actual.should be_close(expected, 1e-6_f32)
     end
   end
 end

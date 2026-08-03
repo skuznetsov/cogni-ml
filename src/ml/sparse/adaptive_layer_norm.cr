@@ -277,34 +277,42 @@ module ML::Sparse
       parameter : ML::Tensor,
       batch_size : Int32,
       channels : Int32,
-    ) : ML::Tensor::CPUReadView
-      unless parameter.on_cpu?
+    ) : Array(Float32)
+      # Parameter storage is borrowed under Tensor's existing
+      # no-concurrent-mutation precondition. Read sealed ivars directly so a
+      # Tensor subclass cannot spoof metadata or substitute a virtual view.
+      parameter_device = parameter.@device
+      parameter_dtype = parameter.@dtype
+      parameter_data = parameter.@cpu_data
+      parameter_buffer = parameter.@buffer
+      unless parameter_device.cpu? && parameter_buffer.nil? && parameter_data
         raise SparseTensorError.new(
           "sparse adaptive layer norm #{name} must be on CPU"
         )
       end
-      unless parameter.dtype.f32?
+      unless parameter_dtype.f32?
         raise SparseTensorError.new(
           "sparse adaptive layer norm #{name} must use F32"
         )
       end
-      unless parameter.contiguous?
+      parameter_shape = parameter.@shape
+      parameter_strides = parameter.@strides
+      unless parameter_strides.contiguous?(parameter_shape)
         raise SparseTensorError.new(
           "sparse adaptive layer norm #{name} must be contiguous"
         )
       end
-      unless parameter.ndim == 2 &&
-             parameter.shape[0] == batch_size &&
-             parameter.shape[1] == channels
+      unless parameter_shape.ndim == 2 &&
+             parameter_shape[0] == batch_size &&
+             parameter_shape[1] == channels
         raise SparseTensorError.new(
           "sparse adaptive layer norm #{name} shape must be [#{batch_size}, #{channels}]"
         )
       end
-
-      values = parameter.cpu_read
-      unless values.borrowed? && values.materialized_bytes == 0_i64
+      values = parameter_data.not_nil!
+      unless values.size == parameter_shape.numel
         raise SparseTensorError.new(
-          "sparse adaptive layer norm #{name} read must not materialize storage"
+          "sparse adaptive layer norm #{name} storage size must match [B, C]"
         )
       end
       values.each_with_index do |value, index|
