@@ -1,0 +1,486 @@
+{
+  "schema": "cogni-ml/trellis2/flow-euler-cfg-oracle/v1",
+  "provenance": {
+    "repository": "https://github.com/microsoft/TRELLIS.2",
+    "commit": "75fbf0183001ed9876c8dbb35de6b68552ee08bd",
+    "python_version": "3.11.9",
+    "torch_version": "2.9.0",
+    "numpy_version": "2.1.3",
+    "device": "cpu",
+    "dtype": "float32 state, predictions, model timestep, and CFG output",
+    "weights": "none",
+    "network": "none",
+    "generator": "tools/trellis2_oracle/export_flow_euler_cfg.py",
+    "generator_sha256": "a51ff10617022931b234cbf455e26f696124b187c30f74dae4ba2f1446eb2837",
+    "sources": {
+      "base": {
+        "path": "trellis2/pipelines/samplers/base.py",
+        "sha256": "be8530b55ea66ac58e8ab23d650f463636dd52cf7e39c7c9c66f69bf72e6a0d1"
+      },
+      "cfg": {
+        "path": "trellis2/pipelines/samplers/classifier_free_guidance_mixin.py",
+        "sha256": "1780182cd7d3c7af3f82b7904aa9c40eb3f632064d77456565c5acccd9598bee"
+      },
+      "interval": {
+        "path": "trellis2/pipelines/samplers/guidance_interval_mixin.py",
+        "sha256": "633f97c48a811a835d3b894b3e0de794407f60774f6c60a2c6a61e7c0351c6f2"
+      },
+      "flow_euler": {
+        "path": "trellis2/pipelines/samplers/flow_euler.py",
+        "sha256": "b4bd235874adfc47fd3bce3d596249b1ccfa6644983a9b4562c9295a463bc0fd"
+      }
+    }
+  },
+  "contract": {
+    "owner": "ClassifierFreeGuidanceSamplerMixin._inference_model",
+    "entrypoint": "trellis2.pipelines.samplers.flow_euler.FlowEulerCfgSampler._inference_model",
+    "mro": [
+      "FlowEulerCfgSampler",
+      "ClassifierFreeGuidanceSamplerMixin",
+      "FlowEulerSampler",
+      "Sampler",
+      "ABC",
+      "object"
+    ],
+    "branch_1": "guidance_strength == 1 calls only the positive condition",
+    "branch_0": "guidance_strength == 0 calls only the negative condition",
+    "branch_mixed": "positive call, then negative call, then strength*positive + (1-strength)*negative",
+    "model_timestep": "each model call receives float32[batch] = 1000 * normalized_t",
+    "condition_carriers": "opaque positive and negative objects forwarded by identity",
+    "guidance_rescale": "explicitly 0.0; standard-deviation rescale branch not executed",
+    "arithmetic_scope": "one CPU/F32 fixture seals source order, not general cross-platform parity"
+  },
+  "fixture": {
+    "shape": [
+      2,
+      4
+    ],
+    "normalized_t": 0.6180339887498948,
+    "expected_model_t_f32": 618.0339965820312,
+    "mixed_guidance_strength": 1.7
+  },
+  "inputs": {
+    "x_t": {
+      "shape": [
+        2,
+        4
+      ],
+      "dtype": "float32",
+      "values": [
+        [
+          1.0,
+          -2.0,
+          0.5,
+          3.0
+        ],
+        [
+          -4.0,
+          0.25,
+          8.0,
+          -0.125
+        ]
+      ],
+      "f32le_sha256": "3fc4cb82a47ee8030a1efa6dd3c06cde8e26cc291f8c8141a894ecf09aab56a6"
+    },
+    "pred_pos": {
+      "shape": [
+        2,
+        4
+      ],
+      "dtype": "float32",
+      "values": [
+        [
+          0.125,
+          -16.743309020996094,
+          1000.25,
+          -0.0009765625
+        ],
+        [
+          -85.5,
+          0.3333333432674408,
+          4096.0,
+          -7.25
+        ]
+      ],
+      "f32le_sha256": "591ee2cd9f64b107b3699b37270787c369de9be88b1d5a03a0ccf10a798f24dd"
+    },
+    "pred_neg": {
+      "shape": [
+        2,
+        4
+      ],
+      "dtype": "float32",
+      "values": [
+        [
+          -0.25,
+          124.7040023803711,
+          -999.75,
+          0.001953125
+        ],
+        [
+          31.75,
+          -0.6666666865348816,
+          -2048.0,
+          12.5
+        ]
+      ],
+      "f32le_sha256": "891c060826d159ab4a40d55703becdb7b3208e2776a1b35a2ba9e53ea8d6ee6f"
+    },
+    "pos_cond": {
+      "shape": [
+        2
+      ],
+      "dtype": "float32",
+      "values": [
+        0.25,
+        -0.5
+      ],
+      "f32le_sha256": "a87f7282fda4eba58e73df7310253f02b521d912a9d040beb42c09dceae258fd"
+    },
+    "neg_cond": {
+      "shape": [
+        2
+      ],
+      "dtype": "float32",
+      "values": [
+        -0.75,
+        1.25
+      ],
+      "f32le_sha256": "c9f837df5b05063b0ac465edcdc1438516daa19d529ed6d28db42883331b834e"
+    },
+    "all_unchanged": true
+  },
+  "cases": [
+    {
+      "name": "positive_only",
+      "guidance_strength": 1.0,
+      "call_count": 1,
+      "call_order": [
+        "positive"
+      ],
+      "calls": [
+        {
+          "index": 0,
+          "condition": "positive",
+          "x_t_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "values": [
+              618.0339965820312,
+              618.0339965820312
+            ],
+            "f32le_sha256": "5f6044af11cc8967007f53df357980c48310ce9a0be289449c891ea6cd6e5eb1"
+          },
+          "prediction": {
+            "shape": [
+              2,
+              4
+            ],
+            "dtype": "float32",
+            "values": [
+              [
+                0.125,
+                -16.743309020996094,
+                1000.25,
+                -0.0009765625
+              ],
+              [
+                -85.5,
+                0.3333333432674408,
+                4096.0,
+                -7.25
+              ]
+            ],
+            "f32le_sha256": "591ee2cd9f64b107b3699b37270787c369de9be88b1d5a03a0ccf10a798f24dd"
+          }
+        }
+      ],
+      "output": {
+        "shape": [
+          2,
+          4
+        ],
+        "dtype": "float32",
+        "values": [
+          [
+            0.125,
+            -16.743309020996094,
+            1000.25,
+            -0.0009765625
+          ],
+          [
+            -85.5,
+            0.3333333432674408,
+            4096.0,
+            -7.25
+          ]
+        ],
+        "f32le_sha256": "591ee2cd9f64b107b3699b37270787c369de9be88b1d5a03a0ccf10a798f24dd"
+      }
+    },
+    {
+      "name": "negative_only",
+      "guidance_strength": 0.0,
+      "call_count": 1,
+      "call_order": [
+        "negative"
+      ],
+      "calls": [
+        {
+          "index": 0,
+          "condition": "negative",
+          "x_t_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "values": [
+              618.0339965820312,
+              618.0339965820312
+            ],
+            "f32le_sha256": "5f6044af11cc8967007f53df357980c48310ce9a0be289449c891ea6cd6e5eb1"
+          },
+          "prediction": {
+            "shape": [
+              2,
+              4
+            ],
+            "dtype": "float32",
+            "values": [
+              [
+                -0.25,
+                124.7040023803711,
+                -999.75,
+                0.001953125
+              ],
+              [
+                31.75,
+                -0.6666666865348816,
+                -2048.0,
+                12.5
+              ]
+            ],
+            "f32le_sha256": "891c060826d159ab4a40d55703becdb7b3208e2776a1b35a2ba9e53ea8d6ee6f"
+          }
+        }
+      ],
+      "output": {
+        "shape": [
+          2,
+          4
+        ],
+        "dtype": "float32",
+        "values": [
+          [
+            -0.25,
+            124.7040023803711,
+            -999.75,
+            0.001953125
+          ],
+          [
+            31.75,
+            -0.6666666865348816,
+            -2048.0,
+            12.5
+          ]
+        ],
+        "f32le_sha256": "891c060826d159ab4a40d55703becdb7b3208e2776a1b35a2ba9e53ea8d6ee6f"
+      }
+    },
+    {
+      "name": "mixed",
+      "guidance_strength": 1.7,
+      "call_count": 2,
+      "call_order": [
+        "positive",
+        "negative"
+      ],
+      "calls": [
+        {
+          "index": 0,
+          "condition": "positive",
+          "x_t_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "values": [
+              618.0339965820312,
+              618.0339965820312
+            ],
+            "f32le_sha256": "5f6044af11cc8967007f53df357980c48310ce9a0be289449c891ea6cd6e5eb1"
+          },
+          "prediction": {
+            "shape": [
+              2,
+              4
+            ],
+            "dtype": "float32",
+            "values": [
+              [
+                0.125,
+                -16.743309020996094,
+                1000.25,
+                -0.0009765625
+              ],
+              [
+                -85.5,
+                0.3333333432674408,
+                4096.0,
+                -7.25
+              ]
+            ],
+            "f32le_sha256": "591ee2cd9f64b107b3699b37270787c369de9be88b1d5a03a0ccf10a798f24dd"
+          }
+        },
+        {
+          "index": 1,
+          "condition": "negative",
+          "x_t_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "values": [
+              618.0339965820312,
+              618.0339965820312
+            ],
+            "f32le_sha256": "5f6044af11cc8967007f53df357980c48310ce9a0be289449c891ea6cd6e5eb1"
+          },
+          "prediction": {
+            "shape": [
+              2,
+              4
+            ],
+            "dtype": "float32",
+            "values": [
+              [
+                -0.25,
+                124.7040023803711,
+                -999.75,
+                0.001953125
+              ],
+              [
+                31.75,
+                -0.6666666865348816,
+                -2048.0,
+                12.5
+              ]
+            ],
+            "f32le_sha256": "891c060826d159ab4a40d55703becdb7b3208e2776a1b35a2ba9e53ea8d6ee6f"
+          }
+        }
+      ],
+      "output": {
+        "shape": [
+          2,
+          4
+        ],
+        "dtype": "float32",
+        "values": [
+          [
+            0.38749998807907104,
+            -115.75642395019531,
+            2400.25,
+            -0.0030273436568677425
+          ],
+          [
+            -167.57501220703125,
+            1.033333420753479,
+            8396.7998046875,
+            -21.075000762939453
+          ]
+        ],
+        "f32le_sha256": "6af821155f4ccc250d66a0baa6b69c5477e53f32f8f2d3127a62e1f10b234fd6"
+      }
+    }
+  ],
+  "independent_scalar_reference": {
+    "formula": "f32(f32(f32(strength)*positive) + f32(f32(1-strength)*negative))",
+    "output": {
+      "shape": [
+        2,
+        4
+      ],
+      "dtype": "float32",
+      "values": [
+        [
+          0.38749998807907104,
+          -115.75642395019531,
+          2400.25,
+          -0.0030273436568677425
+        ],
+        [
+          -167.57501220703125,
+          1.033333420753479,
+          8396.7998046875,
+          -21.075000762939453
+        ]
+      ],
+      "f32le_sha256": "6af821155f4ccc250d66a0baa6b69c5477e53f32f8f2d3127a62e1f10b234fd6"
+    },
+    "max_abs_error": 0.0
+  },
+  "counterfactual_reassociated_mix": {
+    "formula": "negative + strength*(positive-negative)",
+    "output": {
+      "shape": [
+        2,
+        4
+      ],
+      "dtype": "float32",
+      "values": [
+        [
+          0.3875000476837158,
+          -115.75643157958984,
+          2400.25,
+          -0.00302734412252903
+        ],
+        [
+          -167.57501220703125,
+          1.0333333015441895,
+          8396.80078125,
+          -21.075000762939453
+        ]
+      ],
+      "f32le_sha256": "7a27049085330d7094c4ae28054efa31c787596575767087574ae9727d70bbc0"
+    },
+    "differing_element_count": 5,
+    "first_differing_flat_index": 0,
+    "source_f32_bits": [
+      1053189734,
+      3269952330,
+      1159070720,
+      3141953126,
+      3274150708,
+      1065632837,
+      1174614835,
+      3249052058
+    ],
+    "counterfactual_f32_bits": [
+      1053189736,
+      3269952331,
+      1159070720,
+      3141953128,
+      3274150708,
+      1065632836,
+      1174614836,
+      3249052058
+    ],
+    "max_abs_difference": 0.0009765625
+  },
+  "rejected_scope": [
+    "Crystal CFG runtime or public API",
+    "guidance interval or standard-deviation guidance rescale execution",
+    "Euler step or repeated sampler execution",
+    "random-noise or cross-device seed reproducibility",
+    "production defaults, pipeline, sparse-structure flow, or decoder",
+    "real weights, model scale, BF16, F16, quantization, GPU, or Metal"
+  ]
+}
