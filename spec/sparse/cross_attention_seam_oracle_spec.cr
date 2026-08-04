@@ -35,6 +35,9 @@ private CROSS_ATTENTION_SEAM_QK_RMS_NORM_DIGESTS = {
 private CROSS_ATTENTION_SEAM_PRE_OUTPUT_DIGEST =
   "c001e63fc83d92ed96bff8ecdc1a0751db5567a24fd94d6c937eafb2298212f1"
 
+private CROSS_ATTENTION_SEAM_OUTPUT_DIGEST =
+  "afa01c08b92d7750e1d0453fcd29b6049600c95d5c147f584141a2a5fa15b635"
+
 private CROSS_ATTENTION_SEAM_LOCAL_DENSE_DIGEST =
   "6901223b87c6ec4ee39113c7684191b18c68a04edb64bc53ff800a407d82a7ce"
 
@@ -267,6 +270,26 @@ describe "TRELLIS.2 sparse cross-attention seam oracle" do
     pre_output_contract["independent_reference_executed"].as_bool.should be_true
     pre_output_contract["coordinate_map_identity_preserved"].as_bool.should be_true
     pre_output_contract["empty_query_batch_emits_no_rows"].as_bool.should be_true
+
+    final_output = stages["cross_attention_output"]
+    final_output["shape"].as_a.map(&.as_i).should eq([
+      4_i64, 16_i64,
+    ])
+    final_output_digest = cross_attention_seam_f32le_sha256(
+      cross_attention_seam_f32(final_output)
+    )
+    final_output_digest.should eq(CROSS_ATTENTION_SEAM_OUTPUT_DIGEST)
+    final_output["f32le_sha256"].as_s.should eq(final_output_digest)
+    fixture["stage_f32le_sha256"]["cross_attention_output"].as_s.should eq(
+      final_output_digest
+    )
+    final_contract = fixture["stage_contract"]["cross_attention_output"]
+    final_contract["formula"].as_s.should eq(
+      "Linear(C,C,bias)(reference(Q,K,V))"
+    )
+    final_contract["boundary"].as_s.should eq(
+      "before second residual add"
+    )
   end
 
   it "rejects conflating the dense oracle with the sparse carrier" do
