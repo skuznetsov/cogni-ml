@@ -1,5 +1,5 @@
 {
-  "schema": "cogni-ml/trellis2/sparse-mlp-oracle/v2",
+  "schema": "cogni-ml/trellis2/sparse-mlp-oracle/v3",
   "provenance": {
     "repository": "microsoft/TRELLIS.2",
     "commit": "75fbf0183001ed9876c8dbb35de6b68552ee08bd",
@@ -48,7 +48,7 @@
       }
     },
     "generator": "tools/trellis2_oracle/export_sparse_mlp_first_stage.py",
-    "generator_sha256": "92897433eecea7e00d314cdfe725b21e5a69af7176c7e7335f9b34d380da730a",
+    "generator_sha256": "8d5a205d0c2f91776c332b64db2d9d8b01c94b6e5e17cbeb60d0be31fddc6477",
     "python_version": "3.11.9",
     "torch_version": "2.9.0",
     "numpy_version": "2.1.3",
@@ -68,6 +68,18 @@
     "tail_projection_executed": true,
     "tail_contract": "biased frozen Linear(H,C)",
     "full_output": "SparseFeedForwardNet output after mlp[2]",
+    "modulated_final": "x = residual + gate_mlp[batch] * SparseFeedForwardNet(mlp_input)",
+    "gate_broadcast": "SparseTensor.__elemwise__ [B,C] -> batch_boardcast_map -> [N,C]",
+    "batch_broadcast_map": [
+      0,
+      0,
+      1,
+      1
+    ],
+    "gate_shape": [
+      3,
+      3
+    ],
     "total_work_rule": "2 * N * C * H",
     "local_mode": "graphless frozen-parameter CPU inference"
   },
@@ -131,6 +143,32 @@
       ]
     ],
     "features_f32le_sha256": "7e1ca267730570cf528ea3c113e986fdbbd2f8ff247a7e260cef89599d835ef9"
+  },
+  "residual_input": {
+    "features": [
+      [
+        0.125,
+        -0.5,
+        1.75
+      ],
+      [
+        -1.0,
+        0.25,
+        0.5
+      ],
+      [
+        2.0,
+        -1.5,
+        0.75
+      ],
+      [
+        0.375,
+        1.25,
+        -2.0
+      ]
+    ],
+    "features_f32le_sha256": "1caccd7a6da0b33f2c2c2ea58794f302a79d7f52f7fc154740632283cd777d45",
+    "coordinate_object_reused": true
   },
   "linear": {
     "out_channels": 16,
@@ -405,6 +443,59 @@
       ]
     ],
     "features_f32le_sha256": "20460a290d9110f532c6e59b66500a34a3f1b8d1d3a002135811c4944615d722",
+    "coordinate_object_reused": true
+  },
+  "gate_mlp": {
+    "shape": [
+      3,
+      3
+    ],
+    "features": [
+      [
+        0.5,
+        -1.0,
+        2.0
+      ],
+      [
+        3.0,
+        0.25,
+        -0.75
+      ],
+      [
+        -1.5,
+        2.5,
+        0.125
+      ]
+    ],
+    "features_f32le_sha256": "6dfd37d36f2c1f3c95948bdaba77536226697a508e38d52f3b9cb4e7e7895b1f",
+    "device": "cpu",
+    "dtype": "float32",
+    "contiguous": true
+  },
+  "final_output": {
+    "features": [
+      [
+        0.11267632991075516,
+        -0.5240819454193115,
+        1.8315300941467285
+      ],
+      [
+        -1.0095828771591187,
+        0.14180421829223633,
+        0.5569905042648315
+      ],
+      [
+        1.9016822576522827,
+        -1.5025527477264404,
+        0.7142093777656555
+      ],
+      [
+        0.30526062846183777,
+        1.247803807258606,
+        -2.0324552059173584
+      ]
+    ],
+    "features_f32le_sha256": "78c6c2a118c10a5044c46951f94c07e2e7d79647f162cbf0d531e0333579ad2d",
     "coordinate_object_reused": true
   }
 }

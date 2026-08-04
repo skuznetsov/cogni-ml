@@ -1,11 +1,12 @@
 require "json"
 require "digest/sha256"
 require "../../src/ml/sparse/mlp_first_stage"
+require "../../src/ml/sparse/gated_residual"
 require "../spec_helper"
 
 private MLP_FIRST_STAGE_TOLERANCE      = 5e-5_f32
 private MLP_FIRST_STAGE_FIXTURE_SHA256 =
-  "5f014ad9ff54d1a3c90f65b3f86eb6a47b6be9eb0ff96920b3c910b4f4a859a6"
+  "7cda9277e2b68374fe6f9671cc785cf7b060b2dbd9038173b8a52d0f7b67c600"
 
 private def sparse_mlp_first_stage_fixture : JSON::Any
   path = File.join(
@@ -34,6 +35,14 @@ private def sparse_mlp_f32(payload : JSON::Any) : Array(Float32)
 end
 
 private def sparse_mlp_f32le_sha256(values : Indexable(Float32)) : String
+  bytes = Bytes.new(values.size * 4, 0_u8)
+  values.each_with_index do |value, index|
+    IO::ByteFormat::LittleEndian.encode(value, bytes[index * 4, 4])
+  end
+  Digest::SHA256.hexdigest(bytes)
+end
+
+private def sparse_mlp_i32le_sha256(values : Indexable(Int32)) : String
   bytes = Bytes.new(values.size * 4, 0_u8)
   values.each_with_index do |value, index|
     IO::ByteFormat::LittleEndian.encode(value, bytes[index * 4, 4])
@@ -103,6 +112,25 @@ private def sparse_mlp_scalar_tail_reference(
   output
 end
 
+private def sparse_mlp_scalar_gated_residual_reference(
+  residual : Indexable(Float32),
+  update : Indexable(Float32),
+  gate : Indexable(Float32),
+  coordinates : Indexable(Int32),
+  point_count : Int32,
+  channels : Int32,
+) : Array(Float32)
+  output = Array(Float32).new(point_count.to_i * channels.to_i)
+  point_count.times do |row|
+    batch = coordinates[row * 4]
+    channels.times do |channel|
+      index = row * channels + channel
+      output << residual[index] + update[index] * gate[batch * channels + channel]
+    end
+  end
+  output
+end
+
 class SparseMLPFirstStageReceiverOverride < ML::Sparse::TensorCPU
   def self.==(other : ML::Sparse::TensorCPU.class) : Bool
     true
@@ -125,7 +153,7 @@ describe "TRELLIS.2 sparse MLP first projection and tanh GELU" do
   it "matches the source-pinned SparseFeedForwardNet first stage" do
     fixture = sparse_mlp_first_stage_fixture
     fixture["schema"].as_s.should eq(
-      "cogni-ml/trellis2/sparse-mlp-oracle/v2"
+      "cogni-ml/trellis2/sparse-mlp-oracle/v3"
     )
     provenance = fixture["provenance"]
     provenance["commit"].as_s.should eq(
@@ -139,7 +167,7 @@ describe "TRELLIS.2 sparse MLP first projection and tanh GELU" do
     provenance["network"].as_s.should eq("none")
     provenance["sparse_backend"].as_s.should eq("none")
     provenance["generator_sha256"].as_s.should eq(
-      "92897433eecea7e00d314cdfe725b21e5a69af7176c7e7335f9b34d380da730a"
+      "8d5a205d0c2f91776c332b64db2d9d8b01c94b6e5e17cbeb60d0be31fddc6477"
     )
 
     sources = provenance["sources"]
@@ -209,6 +237,9 @@ describe "TRELLIS.2 sparse MLP first projection and tanh GELU" do
     tail_bias = sparse_mlp_f32(fixture["tail_linear"]["bias"])
     expected = sparse_mlp_f32(fixture["output"]["features"])
     full_expected = sparse_mlp_f32(fixture["full_output"]["features"])
+    sparse_mlp_i32le_sha256(coordinates).should eq(
+      input["coordinates_i32le_sha256"].as_s
+    )
     sparse_mlp_f32le_sha256(features).should eq(input["features_f32le_sha256"].as_s)
     sparse_mlp_f32le_sha256(weight).should eq(fixture["linear"]["weight_f32le_sha256"].as_s)
     sparse_mlp_f32le_sha256(bias).should eq(fixture["linear"]["bias_f32le_sha256"].as_s)
@@ -345,6 +376,111 @@ describe "TRELLIS.2 sparse MLP first projection and tanh GELU" do
     first.bias.not_nil!.data.cpu_data.not_nil!.should eq(first_bias_before)
     second.weight.data.cpu_data.not_nil!.should eq(second_weight_before)
     second.bias.not_nil!.data.cpu_data.not_nil!.should eq(second_bias_before)
+  end
+
+  it "matches the source-pinned final gate_mlp broadcast and residual" do
+    fixture = sparse_mlp_first_stage_fixture
+    input = fixture["input"]
+    contract = fixture["contract"]
+    contract["modulated_final"].as_s.should eq(
+      "x = residual + gate_mlp[batch] * SparseFeedForwardNet(mlp_input)"
+    )
+    contract["gate_broadcast"].as_s.should eq(
+      "SparseTensor.__elemwise__ [B,C] -> batch_boardcast_map -> [N,C]"
+    )
+    contract["gate_shape"].as_a.map(&.as_i).should eq([3_i64, 3_i64])
+    fixture["residual_input"]["coordinate_object_reused"].as_bool.should be_true
+    fixture["final_output"]["coordinate_object_reused"].as_bool.should be_true
+    coordinates = sparse_mlp_i32(input["coordinates"])
+    mlp_features = sparse_mlp_f32(input["features"])
+    residual_features = sparse_mlp_f32(fixture["residual_input"]["features"])
+    first_weight = sparse_mlp_f32(fixture["linear"]["weight"])
+    first_bias = sparse_mlp_f32(fixture["linear"]["bias"])
+    tail_weight = sparse_mlp_f32(fixture["tail_linear"]["weight"])
+    tail_bias = sparse_mlp_f32(fixture["tail_linear"]["bias"])
+    gate_values = sparse_mlp_f32(fixture["gate_mlp"]["features"])
+    expected = sparse_mlp_f32(fixture["final_output"]["features"])
+
+    sparse_mlp_f32le_sha256(residual_features).should eq(
+      fixture["residual_input"]["features_f32le_sha256"].as_s
+    )
+    sparse_mlp_f32le_sha256(gate_values).should eq(
+      fixture["gate_mlp"]["features_f32le_sha256"].as_s
+    )
+    sparse_mlp_f32le_sha256(expected).should eq(
+      fixture["final_output"]["features_f32le_sha256"].as_s
+    )
+    contract["batch_broadcast_map"].as_a.map(&.as_i).should eq(
+      [0_i64, 0_i64, 1_i64, 1_i64]
+    )
+
+    point_count = input["point_count"].as_i.to_i32
+    channels = input["channels"].as_i.to_i32
+    scalar = sparse_mlp_scalar_gated_residual_reference(
+      residual_features,
+      sparse_mlp_f32(fixture["full_output"]["features"]),
+      gate_values,
+      coordinates,
+      point_count,
+      channels
+    )
+    expected.each_with_index do |value, index|
+      value.should be_close(scalar[index], MLP_FIRST_STAGE_TOLERANCE)
+    end
+
+    map = ML::Sparse::CoordinateMap3D.new(
+      coordinates,
+      input["batch_size"].as_i.to_i32,
+      {
+        input["spatial_shape"][0].as_i.to_i32,
+        input["spatial_shape"][1].as_i.to_i32,
+        input["spatial_shape"][2].as_i.to_i32,
+      }
+    )
+    mlp_input = ML::Sparse::TensorCPU.new(
+      ML::Tensor.from_array(mlp_features, ML::Shape.new(point_count, channels)),
+      map,
+      input["max_feature_bytes"].as_i64
+    )
+    residual = ML::Sparse::TensorCPU.new(
+      ML::Tensor.from_array(residual_features, ML::Shape.new(point_count, channels)),
+      map,
+      input["max_feature_bytes"].as_i64
+    )
+    first = ML::NN::Linear.new(
+      channels,
+      fixture["linear"]["out_channels"].as_i.to_i32,
+      device: ML::Tensor::Device::CPU
+    )
+    second = ML::NN::Linear.new(
+      fixture["linear"]["out_channels"].as_i.to_i32,
+      channels,
+      device: ML::Tensor::Device::CPU
+    )
+    sparse_mlp_assign(first, first_weight, first_bias)
+    sparse_mlp_assign(second, tail_weight, tail_bias)
+    gate = ML::Tensor.from_array(
+      gate_values,
+      ML::Shape.new(input["batch_size"].as_i.to_i32, channels)
+    )
+
+    mlp_before = mlp_input.features_copy
+    residual_before = residual.features_copy
+    gate_before = gate.cpu_data.not_nil!.dup
+    mlp_output = ML::Sparse::TensorCPU.apply_mlp(mlp_input, first, second)
+    output = ML::Sparse::TensorCPU.apply_gated_residual(residual, mlp_output, gate)
+    actual = output.features_copy
+
+    actual.size.should eq(expected.size)
+    actual.each_with_index do |value, index|
+      value.should be_close(expected[index], MLP_FIRST_STAGE_TOLERANCE)
+    end
+    output.coordinate_map.same?(map).should be_true
+    output.production_width?.should be_false
+    output.max_feature_bytes.should eq(input["max_feature_bytes"].as_i64)
+    mlp_input.features_copy.should eq(mlp_before)
+    residual.features_copy.should eq(residual_before)
+    gate.cpu_data.not_nil!.should eq(gate_before)
   end
 
   it "rejects complete-MLP bounds before poisoned payload or parameter reads" do
