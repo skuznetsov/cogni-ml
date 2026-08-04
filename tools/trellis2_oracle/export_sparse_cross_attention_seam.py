@@ -3,7 +3,9 @@
 
 The fixture executes the pinned ``ModulatedSparseTransformerCrossBlock``
 ``_forward`` through ``norm2 -> cross_attn -> x + h`` and stops immediately
-before ``norm3`` arithmetic.  The only substituted operation is the sparse
+before ``norm3`` arithmetic.  The cross backend capture also exports the real
+upstream Q/K RMS-normalized tensors and the unchanged V view at the boundary
+before score arithmetic.  The only substituted operation is the sparse
 attention backend: an explicit CPU/F32 reference handles the real upstream
 backend call shapes (block-diagonal self attention and ragged-query/dense-
 context cross attention).  No production wrapper, weights, GPU/Metal path,
@@ -691,6 +693,34 @@ def build_fixture(trellis_root: Path) -> dict[str, object]:
             "cross context K/V projection shape drift: "
             f"{tuple(context_kv_projection.shape)}"
         )
+
+    normalized_query = cross_backend["query"]
+    normalized_key = cross_backend["key"]
+    preserved_value = cross_backend["value"]
+    query_heads = query_projection.reshape(4, NUM_HEADS, HEAD_DIM)
+    key_heads, value_heads = context_kv_projection.reshape(
+        BATCH_SIZE,
+        CONTEXT_LENGTH,
+        2,
+        NUM_HEADS,
+        HEAD_DIM,
+    ).unbind(dim=2)
+    expected_query = (
+        torch.nn.functional.normalize(query_heads.float(), dim=-1, eps=1e-12)
+        * cross_delegate.q_rms_norm.gamma
+        * math.sqrt(HEAD_DIM)
+    )
+    expected_key = (
+        torch.nn.functional.normalize(key_heads.float(), dim=-1, eps=1e-12)
+        * cross_delegate.k_rms_norm.gamma
+        * math.sqrt(HEAD_DIM)
+    )
+    if not torch.equal(normalized_query, expected_query):
+        raise AssertionError("upstream cross Q RMS normalization drift")
+    if not torch.equal(normalized_key, expected_key):
+        raise AssertionError("upstream cross K RMS normalization drift")
+    if not torch.equal(preserved_value, value_heads):
+        raise AssertionError("upstream cross normalization changed V")
     if not bool(backend_records[0]["empty_query_batch_skipped"] and backend_records[1]["empty_query_batch_skipped"]):
         raise AssertionError("empty query batch was not skipped by the reference")
 
@@ -881,6 +911,11 @@ def build_fixture(trellis_root: Path) -> dict[str, object]:
             "query": stage_payload(query_projection),
             "context_kv": stage_payload(context_kv_projection),
         },
+        "cross_attention_qk_rms_norm": {
+            "query": stage_payload(normalized_query),
+            "key": stage_payload(normalized_key),
+            "value": stage_payload(preserved_value),
+        },
         "cross_attention_projection_contract": {
             "query_input": "stages.norm2_output flat sparse [N,C]",
             "context_input": "input.context dense [B,L,Cctx]",
@@ -891,6 +926,21 @@ def build_fixture(trellis_root: Path) -> dict[str, object]:
             "boundary": "before head reshape and Q/K RMS normalization",
             "upstream_linear_modules_executed": True,
             "input_and_parameters_unchanged": True,
+        },
+        "cross_attention_qk_rms_norm_contract": {
+            "query_input": "cross_attention_projections.query reshaped by view to [N,H,D]",
+            "key_value_input": "cross_attention_projections.context_kv reshaped by view to [B,L,2,H,D]",
+            "query_formula": "F.normalize(q.float(), dim=-1) * q_gamma * sqrt(D)",
+            "key_formula": "F.normalize(k.float(), dim=-1) * k_gamma * sqrt(D)",
+            "epsilon": 1e-12,
+            "gamma_layout": "[H,D]",
+            "query_layout": "[N,H,D] exact sparse row order",
+            "key_value_layout": "[B,L,H,D] dense batch-major",
+            "boundary": "after Q/K RMS normalization and before score arithmetic",
+            "upstream_qk_rms_normalizers_executed": True,
+            "value_preserved_exactly": True,
+            "coordinate_map_identity_preserved": True,
+            "empty_query_batch_emits_no_rows": True,
         },
         "stages": {name: stage_payload(value) for name, value in stages.items()},
         "stage_contract": stage_contract,

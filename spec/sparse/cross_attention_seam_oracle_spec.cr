@@ -26,6 +26,12 @@ private CROSS_ATTENTION_SEAM_PROJECTION_DIGESTS = {
   "context_kv" => "f0d6061f8504e51b490adda3eb8b5fb321599a10f87c1a19ced1862fc003990a",
 }
 
+private CROSS_ATTENTION_SEAM_QK_RMS_NORM_DIGESTS = {
+  "query" => "46b20d067118a1de6b645563f4bbb9ab34582096c848af226391d015bf94ee07",
+  "key"   => "374478a160b69b0b8e6c77e7c72bf3957963908538bf9ce26e6d99f7690bde20",
+  "value" => "c58f1b302c626b46971c14c3ba28fa82dffe26e8df3ac918f5b8b4a83c15a62d",
+}
+
 private CROSS_ATTENTION_SEAM_LOCAL_DENSE_DIGEST =
   "6901223b87c6ec4ee39113c7684191b18c68a04edb64bc53ff800a407d82a7ce"
 
@@ -197,6 +203,39 @@ describe "TRELLIS.2 sparse cross-attention seam oracle" do
       "before head reshape and Q/K RMS normalization"
     )
     projection_contract["upstream_linear_modules_executed"].as_bool.should be_true
+
+    normalized = fixture["cross_attention_qk_rms_norm"]
+    normalized["query"]["shape"].as_a.map(&.as_i).should eq([
+      4_i64, 2_i64, 8_i64,
+    ])
+    %w(key value).each do |name|
+      normalized[name]["shape"].as_a.map(&.as_i).should eq([
+        3_i64, 3_i64, 2_i64, 8_i64,
+      ])
+    end
+    %w(query key value).each do |name|
+      digest = cross_attention_seam_f32le_sha256(
+        cross_attention_seam_f32(normalized[name])
+      )
+      digest.should eq(CROSS_ATTENTION_SEAM_QK_RMS_NORM_DIGESTS[name])
+      normalized[name]["f32le_sha256"].as_s.should eq(digest)
+    end
+
+    norm_contract = fixture["cross_attention_qk_rms_norm_contract"]
+    norm_contract["query_formula"].as_s.should eq(
+      "F.normalize(q.float(), dim=-1) * q_gamma * sqrt(D)"
+    )
+    norm_contract["key_formula"].as_s.should eq(
+      "F.normalize(k.float(), dim=-1) * k_gamma * sqrt(D)"
+    )
+    norm_contract["epsilon"].as_f.should eq(1.0e-12)
+    norm_contract["gamma_layout"].as_s.should eq("[H,D]")
+    norm_contract["boundary"].as_s.should eq(
+      "after Q/K RMS normalization and before score arithmetic"
+    )
+    norm_contract["upstream_qk_rms_normalizers_executed"]
+      .as_bool.should be_true
+    norm_contract["value_preserved_exactly"].as_bool.should be_true
   end
 
   it "rejects conflating the dense oracle with the sparse carrier" do
