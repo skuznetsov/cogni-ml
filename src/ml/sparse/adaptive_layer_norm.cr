@@ -110,6 +110,120 @@ module ML::Sparse
       )
     end
 
+    # Applies the batch-adaptive affine seam used immediately after TRELLIS.2
+    # sparse norm3: h * (1 + scale_mlp) + shift_mlp. This deliberately does
+    # not repeat LayerNorm or execute the following MLP.
+    def self.apply_adaptive_affine(
+      input : TensorCPU,
+      scale : ML::Tensor,
+      shift : ML::Tensor,
+    ) : TensorCPU
+      operation = "sparse adaptive affine"
+      unless TensorCPU == self
+        raise SparseTensorError.new(
+          "#{operation} requires the base TensorCPU receiver"
+        )
+      end
+      unless input.@initialized
+        raise SparseTensorError.new(
+          "#{operation} requires an initialized sparse value"
+        )
+      end
+
+      batch_size, map_point_count = CoordinateMap3D.kernel_layout(
+        input.@coordinate_map
+      )
+      unless 1 <= batch_size <= CoordinateMap3D::MAX_BATCH_SIZE
+        raise SparseTensorError.new(
+          "#{operation} batch size must be in 1..#{CoordinateMap3D::MAX_BATCH_SIZE}"
+        )
+      end
+      unless 0 <= map_point_count <= CoordinateMap3D::MAX_POINTS
+        raise SparseTensorError.new(
+          "#{operation} point count must be in 0..#{CoordinateMap3D::MAX_POINTS}"
+        )
+      end
+      unless map_point_count == input.@point_count
+        raise SparseTensorError.new(
+          "#{operation} requires coordinate and feature point counts to match"
+        )
+      end
+
+      channels = input.@channels
+      channel_limit = standard_carrier_channel_limit(input, operation)
+      unless 1 <= channels <= channel_limit
+        raise SparseTensorError.new(
+          "#{operation} channel count must be in 1..#{channel_limit}"
+        )
+      end
+      unless 0_i64 < input.@max_feature_bytes <= MAX_FEATURE_BYTES
+        raise SparseTensorError.new(
+          "#{operation} feature byte budget must be in 1..#{MAX_FEATURE_BYTES}"
+        )
+      end
+
+      expected_elements = input.@point_count.to_i64 * channels.to_i64
+      unless input.@features.size.to_i64 == expected_elements
+        raise SparseTensorError.new(
+          "#{operation} feature storage size must match [N, C]"
+        )
+      end
+      output_bytes = expected_elements * 4_i64
+      if output_bytes > input.@max_feature_bytes
+        raise SparseTensorBudgetError.new(
+          "#{operation} output features require #{output_bytes} bytes, limit is #{input.@max_feature_bytes}"
+        )
+      end
+
+      scale_values = adaptive_parameter_values(
+        "scale",
+        scale,
+        batch_size,
+        channels,
+        operation
+      )
+      shift_values = adaptive_parameter_values(
+        "shift",
+        shift,
+        batch_size,
+        channels,
+        operation
+      )
+
+      point_count = input.@point_count
+      output_features = Array(Float32).new(expected_elements.to_i)
+      point_count.times do |row|
+        batch = CoordinateMap3D.kernel_batch_index(input.@coordinate_map, row)
+        unless 0 <= batch < batch_size
+          raise SparseTensorError.new(
+            "#{operation} batch map entry #{batch} is outside 0...#{batch_size}"
+          )
+        end
+        feature_offset = row * channels
+        adaptive_offset = batch * channels
+        channels.times do |channel|
+          scale_factor = 1.0_f32 + scale_values[adaptive_offset + channel]
+          scaled = input.@features[feature_offset + channel] * scale_factor
+          value = scaled + shift_values[adaptive_offset + channel]
+          unless value.finite?
+            raise SparseTensorError.new(
+              "#{operation} output[#{output_features.size}] must be finite"
+            )
+          end
+          output_features << value
+        end
+      end
+
+      TensorCPU.from_owned_features(
+        output_features,
+        input.@coordinate_map,
+        point_count,
+        channels,
+        input.@max_feature_bytes,
+        input.@carrier_role
+      )
+    end
+
     # Executes the exact non-affine LayerNorm32 + batch-adaptive scale/shift
     # seam used immediately before TRELLIS.2 sparse attention. This bounded
     # CPU/F32 reference borrows canonical immutable inputs, allocates one output
@@ -385,6 +499,7 @@ module ML::Sparse
       parameter : ML::Tensor,
       batch_size : Int32,
       channels : Int32,
+      operation : String = "sparse adaptive layer norm",
     ) : Array(Float32)
       # Parameter storage is borrowed under Tensor's existing
       # no-concurrent-mutation precondition. Read base-owned ivars directly so a
@@ -395,38 +510,38 @@ module ML::Sparse
       parameter_buffer = parameter.@buffer
       unless parameter_device.cpu? && parameter_buffer.nil? && parameter_data
         raise SparseTensorError.new(
-          "sparse adaptive layer norm #{name} must be on CPU"
+          "#{operation} #{name} must be on CPU"
         )
       end
       unless parameter_dtype.f32?
         raise SparseTensorError.new(
-          "sparse adaptive layer norm #{name} must use F32"
+          "#{operation} #{name} must use F32"
         )
       end
       parameter_shape = parameter.@shape
       parameter_strides = parameter.@strides
       unless parameter_strides.contiguous?(parameter_shape)
         raise SparseTensorError.new(
-          "sparse adaptive layer norm #{name} must be contiguous"
+          "#{operation} #{name} must be contiguous"
         )
       end
       unless parameter_shape.ndim == 2 &&
              parameter_shape[0] == batch_size &&
              parameter_shape[1] == channels
         raise SparseTensorError.new(
-          "sparse adaptive layer norm #{name} shape must be [#{batch_size}, #{channels}]"
+          "#{operation} #{name} shape must be [#{batch_size}, #{channels}]"
         )
       end
       values = parameter_data.not_nil!
       unless values.size == parameter_shape.numel
         raise SparseTensorError.new(
-          "sparse adaptive layer norm #{name} storage size must match [B, C]"
+          "#{operation} #{name} storage size must match [B, C]"
         )
       end
       values.each_with_index do |value, index|
         unless value.finite?
           raise SparseTensorError.new(
-            "sparse adaptive layer norm #{name}[#{index}] must be finite"
+            "#{operation} #{name}[#{index}] must be finite"
           )
         end
       end
