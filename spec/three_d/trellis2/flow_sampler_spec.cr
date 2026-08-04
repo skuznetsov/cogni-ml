@@ -225,3 +225,229 @@ describe "TRELLIS.2 source-pinned flow Euler step" do
     rejected.last.should contain("Metal")
   end
 end
+
+describe ML::ThreeD::Trellis2::FlowEulerStepCPU do
+  it "reproduces the source-pinned scalar F32 outputs without aliasing" do
+    fixture = flow_euler_fixture
+    config = fixture["fixture"]
+    shape = ML::Shape.new(flow_euler_i32(config["shape"]))
+    x_t = ML::Tensor.from_array(
+      flow_euler_f32(fixture["inputs"]["x_t"]["values"]),
+      shape
+    )
+    pred_v = ML::Tensor.from_array(
+      flow_euler_f32(fixture["inputs"]["pred_v"]["values"]),
+      shape
+    )
+    x_before = x_t.to_a
+    velocity_before = pred_v.to_a
+
+    result = ML::ThreeD::Trellis2::FlowEulerStepCPU.sample_once(
+      x_t,
+      pred_v,
+      sigma_min: config["sigma_min"].as_f.to_f32,
+      t: config["t"].as_f.to_f32,
+      t_prev: config["t_prev"].as_f.to_f32
+    )
+
+    expected_prev = flow_euler_f32(fixture["expected"]["pred_x_prev"]["values"])
+    expected_x0 = flow_euler_f32(fixture["expected"]["pred_x_0"]["values"])
+    result.pred_x_prev.shape.should eq(shape)
+    result.pred_x_0.shape.should eq(shape)
+    result.pred_x_prev.on_cpu?.should be_true
+    result.pred_x_0.on_cpu?.should be_true
+    result.pred_x_prev.contiguous?.should be_true
+    result.pred_x_0.contiguous?.should be_true
+    result.pred_x_prev.dtype.should eq(ML::DType::F32)
+    result.pred_x_0.dtype.should eq(ML::DType::F32)
+    result.pred_x_prev.to_a.should eq(expected_prev)
+    result.pred_x_0.to_a.should eq(expected_x0)
+    flow_euler_f32le_sha256(result.pred_x_prev.to_a).should eq(
+      fixture["expected"]["pred_x_prev"]["f32le_sha256"].as_s
+    )
+    flow_euler_f32le_sha256(result.pred_x_0.to_a).should eq(
+      fixture["expected"]["pred_x_0"]["f32le_sha256"].as_s
+    )
+
+    x_t.to_a.should eq(x_before)
+    pred_v.to_a.should eq(velocity_before)
+    result.pred_x_prev.shares_storage_with?(x_t).should be_false
+    result.pred_x_prev.shares_storage_with?(pred_v).should be_false
+    result.pred_x_0.shares_storage_with?(x_t).should be_false
+    result.pred_x_0.shares_storage_with?(pred_v).should be_false
+    result.pred_x_prev.shares_storage_with?(result.pred_x_0).should be_false
+  end
+
+  it "keeps normalized state time distinct from the model timestep" do
+    x_t = ML::Tensor.from_array([0.5_f32], ML::Shape.new(1_i32))
+    pred_v = ML::Tensor.from_array([0.25_f32], ML::Shape.new(1_i32))
+
+    result = ML::ThreeD::Trellis2::FlowEulerStepCPU.sample_once(
+      x_t,
+      pred_v,
+      sigma_min: 0.125_f32,
+      t: 0.75_f32,
+      t_prev: 0.25_f32
+    )
+    result.pred_x_prev.to_a.should eq([0.375_f32])
+    result.pred_x_0.to_a.should eq([0.2421875_f32])
+
+    expect_raises(ArgumentError, /normalized t/) do
+      ML::ThreeD::Trellis2::FlowEulerStepCPU.sample_once(
+        x_t,
+        pred_v,
+        sigma_min: 0.125_f32,
+        t: 750.0_f32,
+        t_prev: 0.25_f32
+      )
+    end
+  end
+
+  it "applies the stricter Cogni scalar policy outside the source formula" do
+    x_t = ML::Tensor.from_array([0.5_f32], ML::Shape.new(1_i32))
+    pred_v = ML::Tensor.from_array([0.25_f32], ML::Shape.new(1_i32))
+
+    {-0.01_f32, 1.0_f32, Float32::NAN, Float32::INFINITY}.each do |sigma_min|
+      expect_raises(ArgumentError, /sigma_min/) do
+        ML::ThreeD::Trellis2::FlowEulerStepCPU.sample_once(
+          x_t, pred_v, sigma_min: sigma_min, t: 0.75_f32, t_prev: 0.25_f32
+        )
+      end
+    end
+    {-0.01_f32, Float32::NAN, Float32::INFINITY}.each do |t|
+      expect_raises(ArgumentError, /normalized t/) do
+        ML::ThreeD::Trellis2::FlowEulerStepCPU.sample_once(
+          x_t, pred_v, sigma_min: 0.125_f32, t: t, t_prev: 0.0_f32
+        )
+      end
+    end
+    expect_raises(ArgumentError, /strictly less/) do
+      ML::ThreeD::Trellis2::FlowEulerStepCPU.sample_once(
+        x_t,
+        pred_v,
+        sigma_min: 0.125_f32,
+        t: 0.5_f32,
+        t_prev: 0.5_f32
+      )
+    end
+    expect_raises(ArgumentError, /strictly less/) do
+      ML::ThreeD::Trellis2::FlowEulerStepCPU.sample_once(
+        x_t,
+        pred_v,
+        sigma_min: 0.125_f32,
+        t: 0.5_f32,
+        t_prev: 0.75_f32
+      )
+    end
+  end
+
+  it "rejects shape, empty, and non-contiguous inputs before reading payloads" do
+    one = ML::Tensor.from_array([1.0_f32, 2.0_f32], ML::Shape.new(2_i32))
+    reshaped = ML::Tensor.from_array(
+      [1.0_f32, 2.0_f32],
+      ML::Shape.new(1_i32, 2_i32)
+    )
+    expect_raises(ArgumentError, /same shape/) do
+      ML::ThreeD::Trellis2::FlowEulerStepCPU.sample_once(
+        one, reshaped, sigma_min: 0.0_f32, t: 1.0_f32, t_prev: 0.0_f32
+      )
+    end
+
+    empty_shape = ML::Shape.new(0_i32, 3_i32)
+    empty = ML::Tensor.from_array([] of Float32, empty_shape)
+    expect_raises(ArgumentError, /non-empty/) do
+      ML::ThreeD::Trellis2::FlowEulerStepCPU.sample_once(
+        empty, empty, sigma_min: 0.0_f32, t: 1.0_f32, t_prev: 0.0_f32
+      )
+    end
+
+    contiguous = ML::Tensor.from_array(
+      [1.0_f32, 2.0_f32, 3.0_f32, 4.0_f32, 5.0_f32, 6.0_f32],
+      ML::Shape.new(2_i32, 3_i32)
+    )
+    strided = contiguous.transpose
+    expect_raises(ArgumentError, /contiguous/) do
+      ML::ThreeD::Trellis2::FlowEulerStepCPU.sample_once(
+        strided,
+        strided,
+        sigma_min: 0.0_f32,
+        t: 1.0_f32,
+        t_prev: 0.0_f32
+      )
+    end
+  end
+
+  it "rejects non-finite inputs and arithmetic overflow" do
+    finite = ML::Tensor.from_array([0.25_f32], ML::Shape.new(1_i32))
+    nan = ML::Tensor.from_array([Float32::NAN], ML::Shape.new(1_i32))
+    infinity = ML::Tensor.from_array([Float32::INFINITY], ML::Shape.new(1_i32))
+    expect_raises(ArgumentError, /x_t values must be finite/) do
+      ML::ThreeD::Trellis2::FlowEulerStepCPU.sample_once(
+        nan, finite, sigma_min: 0.0_f32, t: 1.0_f32, t_prev: 0.0_f32
+      )
+    end
+    expect_raises(ArgumentError, /pred_v values must be finite/) do
+      ML::ThreeD::Trellis2::FlowEulerStepCPU.sample_once(
+        finite, infinity, sigma_min: 0.0_f32, t: 1.0_f32, t_prev: 0.0_f32
+      )
+    end
+
+    largest = ML::Tensor.from_array([Float32::MAX], ML::Shape.new(1_i32))
+    negative_largest = ML::Tensor.from_array([-Float32::MAX], ML::Shape.new(1_i32))
+    expect_raises(ArgumentError, /finite outputs/) do
+      ML::ThreeD::Trellis2::FlowEulerStepCPU.sample_once(
+        largest,
+        negative_largest,
+        sigma_min: 0.0_f32,
+        t: 1.0_f32,
+        t_prev: 0.0_f32
+      )
+    end
+  end
+
+  it "bounds the owned output pair before payload reads" do
+    nan = ML::Tensor.from_array([Float32::NAN], ML::Shape.new(1_i32))
+    finite = ML::Tensor.from_array([0.0_f32], ML::Shape.new(1_i32))
+    expect_raises(ArgumentError, /result budget requires 8 bytes/) do
+      ML::ThreeD::Trellis2::FlowEulerStepCPU.sample_once(
+        nan,
+        finite,
+        sigma_min: 0.0_f32,
+        t: 1.0_f32,
+        t_prev: 0.0_f32,
+        max_result_bytes: 7_i64
+      )
+    end
+    expect_raises(ArgumentError, /positive and no greater/) do
+      ML::ThreeD::Trellis2::FlowEulerStepCPU.sample_once(
+        finite,
+        finite,
+        sigma_min: 0.0_f32,
+        t: 1.0_f32,
+        t_prev: 0.0_f32,
+        max_result_bytes: 0_i64
+      )
+    end
+    expect_raises(ArgumentError, /positive and no greater/) do
+      ML::ThreeD::Trellis2::FlowEulerStepCPU.sample_once(
+        finite,
+        finite,
+        sigma_min: 0.0_f32,
+        t: 1.0_f32,
+        t_prev: 0.0_f32,
+        max_result_bytes: ML::ThreeD::Trellis2::FlowEulerStepCPU::MAX_RESULT_BYTES + 1_i64
+      )
+    end
+
+    exact = ML::ThreeD::Trellis2::FlowEulerStepCPU.sample_once(
+      finite,
+      finite,
+      sigma_min: 0.0_f32,
+      t: 1.0_f32,
+      t_prev: 0.0_f32,
+      max_result_bytes: 8_i64
+    )
+    exact.pred_x_prev.numel.should eq(1)
+    exact.pred_x_0.numel.should eq(1)
+  end
+end
