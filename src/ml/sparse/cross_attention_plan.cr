@@ -7,10 +7,9 @@ module ML::Sparse
   #
   # This plan does not project Q/K/V and is not a sparse attention executor.
   # Projection storage and arithmetic remain a separate, independently bounded
-  # boundary because the current TensorCPU channel ceiling is below the pinned
-  # production TRELLIS.2 dimensions. Mutable context payloads and parameters
-  # are deliberately not read; the future synchronous executor must validate
-  # them after preflight and before arithmetic.
+  # boundary. Mutable context payloads and parameters are deliberately not read;
+  # the synchronous executor validates them after preflight and before
+  # arithmetic.
   class CrossAttentionPlanCPU
     # Local CPU-reference policy, not an upstream TRELLIS.2 backend limit.
     MAX_SCORE_BYTES      = 1_i64 * 1024_i64 * 1024_i64
@@ -118,6 +117,15 @@ module ML::Sparse
         )
       end
       query_channels = query.channels
+      query_channel_limit = TensorCPU.standard_carrier_channel_limit(
+        query,
+        "sparse cross-attention preflight"
+      )
+      unless 1 <= query_channels <= query_channel_limit
+        raise SparseTensorError.new(
+          "sparse cross-attention query must use the standard carrier channel range 1..#{query_channel_limit}"
+        )
+      end
       unless query_channels % num_heads == 0
         raise SparseTensorError.new(
           "sparse cross-attention query channels #{query_channels} must be divisible by heads #{num_heads}"

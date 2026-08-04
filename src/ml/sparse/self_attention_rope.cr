@@ -99,12 +99,13 @@ module ML::Sparse
       )
 
       SelfAttentionQKVCPU.new(
-        new(
+        TensorCPU.from_owned_features(
           output,
           flat.@coordinate_map,
           point_count,
           projected_channels,
-          flat.@max_feature_bytes
+          flat.@max_feature_bytes,
+          flat.@carrier_role
         ),
         num_heads
       )

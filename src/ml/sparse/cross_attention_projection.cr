@@ -8,9 +8,9 @@ module ML::Sparse
   # arithmetic over those arrays and does not create a reshaped buffer. No padded query,
   # normalization, attention scores, softmax, or output projection is created.
   #
-  # The current source query is still TensorCPU and therefore bounded to
-  # TensorCPU::MAX_CHANNELS. This leaf proves the projection contract without
-  # claiming that the production C=1536 sparse carrier has been admitted.
+  # The source query must be an explicit standard TensorCPU carrier. Production
+  # width is admitted by that carrier; this leaf still claims only projection,
+  # not cross-attention score/softmax/output execution.
   class CrossAttentionProjectionCPU
     getter plan : CrossAttentionPlanCPU
 

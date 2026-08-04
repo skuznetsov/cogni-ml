@@ -14,12 +14,30 @@ module ML::Sparse
         )
       end
 
-      # Read the base value's sealed state directly. Crystal permits subclasses
+      # Read the base value's owned state directly. Crystal permits subclasses
       # to override even `class` and ordinary getters, so those are not an
       # authority boundary for invariants established by TensorCPU itself.
       unless left.@initialized && right.@initialized
         raise SparseTensorError.new(
           "sparse feature concat requires initialized sparse values"
+        )
+      end
+      left_limit = standard_carrier_channel_limit(
+        left,
+        "sparse feature concat"
+      )
+      right_limit = standard_carrier_channel_limit(
+        right,
+        "sparse feature concat"
+      )
+      unless left.@carrier_role == right.@carrier_role
+        raise SparseTensorError.new(
+          "sparse feature concat requires the same carrier role"
+        )
+      end
+      unless left_limit == right_limit
+        raise SparseTensorError.new(
+          "sparse feature concat carrier limits must match"
         )
       end
       left_map = left.@coordinate_map
@@ -35,9 +53,9 @@ module ML::Sparse
       left_channels = left.@channels
       right_channels = right.@channels
       output_channels_i64 = left_channels.to_i64 + right_channels.to_i64
-      if output_channels_i64 > MAX_CHANNELS
+      if output_channels_i64 > left_limit
         raise SparseTensorBudgetError.new(
-          "sparse feature concat output channel count #{output_channels_i64} exceeds #{MAX_CHANNELS}"
+          "sparse feature concat output channel count #{output_channels_i64} exceeds #{left_limit}"
         )
       end
 
@@ -66,12 +84,13 @@ module ML::Sparse
         end
       end
 
-      new(
+      TensorCPU.from_owned_features(
         output_features,
         left_map,
         point_count,
         output_channels,
-        output_budget
+        output_budget,
+        left.@carrier_role
       )
     end
   end

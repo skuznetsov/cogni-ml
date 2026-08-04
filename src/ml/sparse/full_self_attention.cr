@@ -127,12 +127,13 @@ module ML::Sparse
         end
       end
 
-      new(
+      TensorCPU.from_owned_features(
         output,
         flat.@coordinate_map,
         plan.point_count,
         channels,
-        flat.@max_feature_bytes
+        flat.@max_feature_bytes,
+        attention_output_role(flat.@carrier_role)
       )
     end
   end

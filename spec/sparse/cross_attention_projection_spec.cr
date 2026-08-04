@@ -298,7 +298,7 @@ describe ML::Sparse::CrossAttentionProjectionCPU do
     end
   end
 
-  it "keeps the production-width source-carrier blocker explicit" do
+  it "keeps the ordinary constructor bounded despite production authority" do
     map = ML::Sparse::CoordinateMap3D.new([0, 0, 0, 0], 1, {1, 1, 1})
     expect_raises(ML::Sparse::SparseTensorError, /channel count must be in 1\.\.256/) do
       ML::Sparse::TensorCPU.new(

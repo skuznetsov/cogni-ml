@@ -5,8 +5,8 @@ module ML::Sparse
     ADAPTIVE_LAYER_NORM_EPSILON = 1e-6_f32
     PYTORCH_CPU_VECTOR_WIDTH    =    4_i32
     PYTORCH_MOMENTS_CHUNK_SIZE  =   16_i32
-    PYTORCH_MOMENTS_STACK_DEPTH =        4
-    PYTORCH_MOMENTS_STACK_CELLS =       16
+    PYTORCH_MOMENTS_STACK_DEPTH =        5
+    PYTORCH_MOMENTS_STACK_CELLS =       20
 
     # Executes the exact non-affine LayerNorm32 + batch-adaptive scale/shift
     # seam used immediately before TRELLIS.2 sparse attention. This bounded
@@ -53,9 +53,13 @@ module ML::Sparse
         )
       end
       channels = input.@channels
-      unless 1 <= channels <= MAX_CHANNELS
+      channel_limit = standard_carrier_channel_limit(
+        input,
+        "sparse adaptive layer norm"
+      )
+      unless 1 <= channels <= channel_limit
         raise SparseTensorError.new(
-          "sparse adaptive layer norm channel count must be in 1..#{MAX_CHANNELS}"
+          "sparse adaptive layer norm channel count must be in 1..#{channel_limit}"
         )
       end
       unless 0_i64 < input.@max_feature_bytes <= MAX_FEATURE_BYTES
@@ -124,19 +128,21 @@ module ML::Sparse
         end
       end
 
-      new(
+      TensorCPU.from_owned_features(
         output_features,
         input.@coordinate_map,
         point_count,
         channels,
-        input.@max_feature_bytes
+        input.@max_feature_bytes,
+        input.@carrier_role
       )
     end
 
     # Mirrors PyTorch 2.9 RowwiseMoments<float> on the pinned Darwin/arm64
     # DEFAULT CPU capability: four F32 lanes, 16 vectors per Welford chunk,
-    # then the same binary-cascade and lane merge order. MAX_CHANNELS bounds
-    # the required stack depth to four without heap scratch storage.
+    # then the same binary-cascade and lane merge order. The explicit
+    # production channel ceiling bounds the required stack depth to five
+    # without heap scratch storage.
     private def self.pytorch_rowwise_moments_f32(
       features : Array(Float32),
       offset : Int32,
@@ -194,7 +200,7 @@ module ML::Sparse
 
         target_count = stack_counts[0]
         combined_count = target_count + chunk_vectors
-        coefficient = chunk_vectors.to_f32 / combined_count.to_f32
+        coefficient = combined_count == 0 ? 0.0_f32 : chunk_vectors.to_f32 / combined_count.to_f32
         PYTORCH_CPU_VECTOR_WIDTH.times do |lane|
           delta = chunk_means[lane] - stack_means[lane]
           stack_means[lane] += coefficient * delta
@@ -211,7 +217,7 @@ module ML::Sparse
           source_count = stack_counts[stack - 1]
           target_count = stack_counts[stack]
           combined_count = target_count + source_count
-          coefficient = source_count.to_f32 / combined_count.to_f32
+          coefficient = combined_count == 0 ? 0.0_f32 : source_count.to_f32 / combined_count.to_f32
           PYTORCH_CPU_VECTOR_WIDTH.times do |lane|
             source = source_offset + lane
             target = target_offset + lane
@@ -235,7 +241,7 @@ module ML::Sparse
         source_count = stack_counts[stack]
         target_count = stack_counts[0]
         combined_count = target_count + source_count
-        coefficient = source_count.to_f32 / combined_count.to_f32
+        coefficient = combined_count == 0 ? 0.0_f32 : source_count.to_f32 / combined_count.to_f32
         PYTORCH_CPU_VECTOR_WIDTH.times do |lane|
           delta = stack_means[source_offset + lane] - stack_means[lane]
           stack_means[lane] += coefficient * delta
@@ -279,7 +285,7 @@ module ML::Sparse
       channels : Int32,
     ) : Array(Float32)
       # Parameter storage is borrowed under Tensor's existing
-      # no-concurrent-mutation precondition. Read sealed ivars directly so a
+      # no-concurrent-mutation precondition. Read base-owned ivars directly so a
       # Tensor subclass cannot spoof metadata or substitute a virtual view.
       parameter_device = parameter.@device
       parameter_dtype = parameter.@dtype

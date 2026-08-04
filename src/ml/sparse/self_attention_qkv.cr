@@ -16,6 +16,10 @@ module ML::Sparse
           "sparse self-attention QKV view requires a base TensorCPU projection"
         )
       end
+      TensorCPU.validate_self_attention_qkv_carrier!(
+        @flat_projection,
+        "sparse self-attention QKV view"
+      )
       unless @num_heads > 0
         raise SparseTensorError.new(
           "sparse self-attention QKV head count must be positive"
@@ -92,7 +96,8 @@ module ML::Sparse
   class TensorCPU
     # Executes only the frozen self-attention to_qkv projection and wraps its
     # flat output in a zero-copy logical [N, 3, H, D] view. Reusing the bounded
-    # sparse linear leaf intentionally limits this reference to 3C <= 256.
+    # sparse linear leaf keeps the standard input ceiling while admitting only
+    # this role-specific packed output up to 3C <= 4608.
     def self.apply_self_attention_qkv(
       input : TensorCPU,
       linear : ML::NN::Linear,
@@ -115,6 +120,10 @@ module ML::Sparse
       end
 
       input_channels = input.@channels
+      standard_limit = standard_carrier_channel_limit(
+        input,
+        "sparse self-attention QKV"
+      )
       linear_input_channels = linear.in_features
       unless input_channels == linear_input_channels
         raise SparseTensorError.new(
@@ -128,19 +137,30 @@ module ML::Sparse
       end
 
       expected_output_channels = input_channels * 3
+      packed_role = packed_qkv_role(input.@carrier_role)
+      packed_limit = if standard_limit == MAX_CHANNELS
+                       MAX_CHANNELS
+                     else
+                       MAX_SELF_ATTENTION_QKV_CHANNELS
+                     end
       output_channels = linear.out_features
       unless output_channels == expected_output_channels
         raise SparseTensorError.new(
           "sparse self-attention QKV Linear out_features #{output_channels} do not match expected #{expected_output_channels}"
         )
       end
-      if expected_output_channels > MAX_CHANNELS
+      if expected_output_channels > packed_limit
         raise SparseTensorBudgetError.new(
-          "bounded sparse self-attention QKV requires 3C <= #{MAX_CHANNELS}, got #{expected_output_channels}"
+          "bounded sparse self-attention QKV requires 3C <= #{packed_limit}, got #{expected_output_channels}"
         )
       end
 
-      flat_projection = apply_linear(input, linear)
+      flat_projection = apply_linear_bounded(
+        input,
+        linear,
+        packed_limit,
+        packed_role
+      )
       SelfAttentionQKVCPU.new(flat_projection, num_heads)
     end
   end

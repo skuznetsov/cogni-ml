@@ -106,6 +106,10 @@ module ML::Sparse
           "sparse full-attention preflight head count must be positive"
         )
       end
+      TensorCPU.standard_carrier_channel_limit(
+        input,
+        "sparse full-attention preflight"
+      )
       channels = input.channels
       unless channels % num_heads == 0
         raise SparseTensorError.new(

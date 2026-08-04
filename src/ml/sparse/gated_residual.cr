@@ -20,6 +20,20 @@ module ML::Sparse
           "sparse gated residual requires initialized sparse values"
         )
       end
+      residual_limit = standard_carrier_channel_limit(
+        residual,
+        "sparse gated residual"
+      )
+      attention_limit = standard_carrier_channel_limit(
+        attention_output,
+        "sparse gated residual"
+      )
+      unless residual.@carrier_role == attention_output.@carrier_role &&
+             residual_limit == attention_limit
+        raise SparseTensorError.new(
+          "sparse gated residual requires the same carrier role"
+        )
+      end
 
       residual_map = residual.@coordinate_map
       attention_map = attention_output.@coordinate_map
@@ -56,9 +70,9 @@ module ML::Sparse
           "sparse gated residual requires the same row and channel shape"
         )
       end
-      unless 1 <= channels <= MAX_CHANNELS
+      unless 1 <= channels <= residual_limit
         raise SparseTensorError.new(
-          "sparse gated residual channel count must be in 1..#{MAX_CHANNELS}"
+          "sparse gated residual channel count must be in 1..#{residual_limit}"
         )
       end
       unless 0_i64 < residual.@max_feature_bytes <= MAX_FEATURE_BYTES &&
@@ -77,7 +91,7 @@ module ML::Sparse
       end
 
       # Gate storage is borrowed under Tensor's existing no-concurrent-mutation
-      # precondition. Read sealed ivars directly so a Tensor subclass cannot
+      # precondition. Read base-owned ivars directly so a Tensor subclass cannot
       # spoof metadata or substitute a virtual CPUReadView.
       gate_device = gate_msa.@device
       gate_dtype = gate_msa.@dtype
@@ -156,12 +170,13 @@ module ML::Sparse
         end
       end
 
-      new(
+      TensorCPU.from_owned_features(
         output_features,
         residual_map,
         point_count,
         channels,
-        output_budget
+        output_budget,
+        residual.@carrier_role
       )
     end
   end

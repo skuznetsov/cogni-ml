@@ -13,13 +13,41 @@ module ML::Sparse
           "sparse linear requires the base TensorCPU receiver"
         )
       end
-      unless input.@initialized
+
+      max_output_channels = standard_carrier_channel_limit(
+        input,
+        "sparse linear"
+      )
+      apply_linear_bounded(
+        input,
+        linear,
+        max_output_channels,
+        input.@carrier_role
+      )
+    end
+
+    # Shared affine implementation for role-specific sparse projections.
+    # Inputs remain standard sparse carriers; only the QKV caller may raise the
+    # output ceiling for its internal packed [N, 3C] storage.
+    private def self.apply_linear_bounded(
+      input : TensorCPU,
+      linear : ML::NN::Linear,
+      max_output_channels : Int32,
+      output_role : CarrierRole,
+    ) : TensorCPU
+      input_limit = standard_carrier_channel_limit(input, "sparse linear")
+      input_channels = input.@channels
+      unless 1 <= input_channels <= input_limit
         raise SparseTensorError.new(
-          "sparse linear requires an initialized sparse value"
+          "sparse linear standard input channel count must be in 1..#{input_limit}"
         )
       end
-
-      input_channels = input.@channels
+      role_limit = carrier_channel_limit(output_role)
+      unless 1 <= max_output_channels <= role_limit
+        raise SparseTensorError.new(
+          "sparse linear output role cannot admit #{max_output_channels} channels"
+        )
+      end
       linear_input_channels = linear.in_features
       output_channels = linear.out_features
       unless input_channels == linear_input_channels
@@ -27,9 +55,9 @@ module ML::Sparse
           "sparse linear input channels #{input_channels} do not match Linear in_features #{linear_input_channels}"
         )
       end
-      unless 1 <= output_channels <= MAX_CHANNELS
+      unless 1 <= output_channels <= max_output_channels
         raise SparseTensorBudgetError.new(
-          "sparse linear output channel count #{output_channels} exceeds #{MAX_CHANNELS}"
+          "sparse linear output channel count #{output_channels} exceeds #{max_output_channels}"
         )
       end
 
@@ -142,12 +170,13 @@ module ML::Sparse
         end
       end
 
-      new(
+      TensorCPU.from_owned_features(
         output_features,
         input.@coordinate_map,
         point_count,
         output_channels,
-        output_budget
+        output_budget,
+        output_role
       )
     end
   end
