@@ -8,6 +8,108 @@ module ML::Sparse
     PYTORCH_MOMENTS_STACK_DEPTH =        5
     PYTORCH_MOMENTS_STACK_CELLS =       20
 
+    # Executes the non-affine LayerNorm32 used by TRELLIS.2 sparse norm3.
+    # The bounded CPU/F32 leaf preserves the exact sparse row/map layout and
+    # stops before the following adaptive MLP scale/shift.
+    def self.apply_non_affine_layer_norm(
+      input : TensorCPU,
+      epsilon : Float32 = ADAPTIVE_LAYER_NORM_EPSILON,
+    ) : TensorCPU
+      unless TensorCPU == self
+        raise SparseTensorError.new(
+          "sparse non-affine layer norm requires the base TensorCPU receiver"
+        )
+      end
+      unless input.@initialized
+        raise SparseTensorError.new(
+          "sparse non-affine layer norm requires an initialized sparse value"
+        )
+      end
+      unless epsilon == ADAPTIVE_LAYER_NORM_EPSILON
+        raise SparseTensorError.new(
+          "sparse non-affine layer norm epsilon must be exactly 1.0e-6"
+        )
+      end
+
+      batch_size, map_point_count = CoordinateMap3D.kernel_layout(
+        input.@coordinate_map
+      )
+      unless 1 <= batch_size <= CoordinateMap3D::MAX_BATCH_SIZE
+        raise SparseTensorError.new(
+          "sparse non-affine layer norm batch size must be in 1..#{CoordinateMap3D::MAX_BATCH_SIZE}"
+        )
+      end
+      unless 0 <= map_point_count <= CoordinateMap3D::MAX_POINTS
+        raise SparseTensorError.new(
+          "sparse non-affine layer norm point count must be in 0..#{CoordinateMap3D::MAX_POINTS}"
+        )
+      end
+      unless map_point_count == input.@point_count
+        raise SparseTensorError.new(
+          "sparse non-affine layer norm requires coordinate and feature point counts to match"
+        )
+      end
+      channels = input.@channels
+      channel_limit = standard_carrier_channel_limit(
+        input,
+        "sparse non-affine layer norm"
+      )
+      unless 1 <= channels <= channel_limit
+        raise SparseTensorError.new(
+          "sparse non-affine layer norm channel count must be in 1..#{channel_limit}"
+        )
+      end
+      unless 0_i64 < input.@max_feature_bytes <= MAX_FEATURE_BYTES
+        raise SparseTensorError.new(
+          "sparse non-affine layer norm feature byte budget must be in 1..#{MAX_FEATURE_BYTES}"
+        )
+      end
+      expected_elements = input.@point_count.to_i64 * channels.to_i64
+      unless input.@features.size.to_i64 == expected_elements
+        raise SparseTensorError.new(
+          "sparse non-affine layer norm feature storage size must match [N, C]"
+        )
+      end
+
+      point_count = input.@point_count
+      output_bytes = expected_elements * 4_i64
+      if output_bytes > input.@max_feature_bytes
+        raise SparseTensorBudgetError.new(
+          "sparse non-affine layer norm output features require #{output_bytes} bytes, limit is #{input.@max_feature_bytes}"
+        )
+      end
+      output_features = Array(Float32).new(expected_elements.to_i)
+      point_count.times do |row|
+        feature_offset = row * channels
+        mean, variance = pytorch_rowwise_moments_f32(
+          input.@features,
+          feature_offset,
+          channels
+        )
+        inverse_std = 1.0_f32 / Math.sqrt(variance + epsilon)
+        channels.times do |channel|
+          value = (
+            input.@features[feature_offset + channel] + (-mean)
+          ) * inverse_std
+          unless value.finite?
+            raise SparseTensorError.new(
+              "sparse non-affine layer norm output[#{output_features.size}] must be finite"
+            )
+          end
+          output_features << value
+        end
+      end
+
+      TensorCPU.from_owned_features(
+        output_features,
+        input.@coordinate_map,
+        point_count,
+        channels,
+        input.@max_feature_bytes,
+        input.@carrier_role
+      )
+    end
+
     # Executes the exact non-affine LayerNorm32 + batch-adaptive scale/shift
     # seam used immediately before TRELLIS.2 sparse attention. This bounded
     # CPU/F32 reference borrows canonical immutable inputs, allocates one output
