@@ -32,6 +32,9 @@ private CROSS_ATTENTION_SEAM_QK_RMS_NORM_DIGESTS = {
   "value" => "c58f1b302c626b46971c14c3ba28fa82dffe26e8df3ac918f5b8b4a83c15a62d",
 }
 
+private CROSS_ATTENTION_SEAM_PRE_OUTPUT_DIGEST =
+  "c001e63fc83d92ed96bff8ecdc1a0751db5567a24fd94d6c937eafb2298212f1"
+
 private CROSS_ATTENTION_SEAM_LOCAL_DENSE_DIGEST =
   "6901223b87c6ec4ee39113c7684191b18c68a04edb64bc53ff800a407d82a7ce"
 
@@ -236,6 +239,34 @@ describe "TRELLIS.2 sparse cross-attention seam oracle" do
     norm_contract["upstream_qk_rms_normalizers_executed"]
       .as_bool.should be_true
     norm_contract["value_preserved_exactly"].as_bool.should be_true
+
+    pre_output = fixture["cross_attention_pre_output"]
+    pre_output["shape"].as_a.map(&.as_i).should eq([
+      4_i64, 2_i64, 8_i64,
+    ])
+    pre_output_digest = cross_attention_seam_f32le_sha256(
+      cross_attention_seam_f32(pre_output)
+    )
+    pre_output_digest.should eq(CROSS_ATTENTION_SEAM_PRE_OUTPUT_DIGEST)
+    pre_output["f32le_sha256"].as_s.should eq(pre_output_digest)
+    pre_output_contract = fixture["cross_attention_pre_output_contract"]
+    pre_output_contract["formula"].as_s.should eq(
+      "stable softmax((Q @ K^T) / sqrt(D)) @ V"
+    )
+    pre_output_contract["reference_score_storage"].as_s.should eq(
+      "independent torch reference score tensor"
+    )
+    pre_output_contract["target_executor_score_storage"].as_s.should eq(
+      "one reusable context-length F32 row"
+    )
+    pre_output_contract["boundary"].as_s.should eq(
+      "after score/softmax/value reduction and before to_out"
+    )
+    pre_output_contract["upstream_attention_backend_executed"]
+      .as_bool.should be_false
+    pre_output_contract["independent_reference_executed"].as_bool.should be_true
+    pre_output_contract["coordinate_map_identity_preserved"].as_bool.should be_true
+    pre_output_contract["empty_query_batch_emits_no_rows"].as_bool.should be_true
   end
 
   it "rejects conflating the dense oracle with the sparse carrier" do

@@ -27,6 +27,11 @@ module ML::Sparse
     getter max_query_length : Int32
     getter score_elements : Int64
     getter score_bytes : Int64
+    # The executor streams one context-length score row and never materializes
+    # the logical score volume. Keep both quantities explicit so admission
+    # accounting cannot be mistaken for an allocation claim.
+    getter score_row_elements : Int64
+    getter score_row_bytes : Int64
     getter query_projection_elements : Int64
     getter context_kv_elements : Int64
     getter projection_elements : Int64
@@ -41,6 +46,8 @@ module ML::Sparse
     getter max_score_bytes : Int64
     getter max_projection_bytes : Int64
     getter max_work_elements : Int64
+    getter query_max_feature_bytes : Int64
+    getter query_production_width : Bool
 
     private def initialize(
       @coordinate_map : CoordinateMap3D,
@@ -54,6 +61,8 @@ module ML::Sparse
       @max_query_length : Int32,
       @score_elements : Int64,
       @score_bytes : Int64,
+      @score_row_elements : Int64,
+      @score_row_bytes : Int64,
       @query_projection_elements : Int64,
       @context_kv_elements : Int64,
       @projection_elements : Int64,
@@ -68,6 +77,8 @@ module ML::Sparse
       @max_score_bytes : Int64,
       @max_projection_bytes : Int64,
       @max_work_elements : Int64,
+      @query_max_feature_bytes : Int64,
+      @query_production_width : Bool,
     )
     end
 
@@ -229,6 +240,13 @@ module ML::Sparse
         )
       end
 
+      score_row_elements = context_length.to_i64
+      score_row_bytes = checked_multiply(
+        score_row_elements,
+        4_i64,
+        "score row bytes"
+      )
+
       query_projection_elements = checked_multiply(
         point_count.to_i64,
         query_channels.to_i64,
@@ -322,6 +340,8 @@ module ML::Sparse
         max_query_length,
         score_elements,
         score_bytes,
+        score_row_elements,
+        score_row_bytes,
         query_projection_elements,
         context_kv_elements,
         projection_elements,
@@ -335,7 +355,9 @@ module ML::Sparse
         work_elements,
         max_score_bytes,
         max_projection_bytes,
-        max_work_elements
+        max_work_elements,
+        query.max_feature_bytes,
+        query.production_width?
       )
     end
 

@@ -673,6 +673,11 @@ def build_fixture(trellis_root: Path) -> dict[str, object]:
 
     cross_backend = next(record for record in backend_records if record["kind"] == "cross")
     cross_pre_output = cross_backend["output"]
+    require_f32_cpu_contiguous("cross pre-output", cross_pre_output)
+    if tuple(cross_pre_output.shape) != (4, NUM_HEADS, HEAD_DIM):
+        raise AssertionError(
+            f"cross pre-output shape drift: {tuple(cross_pre_output.shape)}"
+        )
     projected_cross = cross_delegate.to_out(cross_pre_output.reshape(cross_pre_output.shape[0], -1))
     if not torch.equal(cross_output, projected_cross):
         raise AssertionError("upstream cross output projection drift")
@@ -939,6 +944,21 @@ def build_fixture(trellis_root: Path) -> dict[str, object]:
             "boundary": "after Q/K RMS normalization and before score arithmetic",
             "upstream_qk_rms_normalizers_executed": True,
             "value_preserved_exactly": True,
+            "coordinate_map_identity_preserved": True,
+            "empty_query_batch_emits_no_rows": True,
+        },
+        "cross_attention_pre_output": stage_payload(cross_pre_output),
+        "cross_attention_pre_output_contract": {
+            "query_input": "cross_attention_qk_rms_norm.query [N,H,D]",
+            "key_value_input": "cross_attention_qk_rms_norm.key/value [B,L,H,D]",
+            "formula": "stable softmax((Q @ K^T) / sqrt(D)) @ V",
+            "query_layout": "[N,H,D] exact sparse row order",
+            "key_value_layout": "[B,L,H,D] dense batch-major",
+            "reference_score_storage": "independent torch reference score tensor",
+            "target_executor_score_storage": "one reusable context-length F32 row",
+            "boundary": "after score/softmax/value reduction and before to_out",
+            "upstream_attention_backend_executed": False,
+            "independent_reference_executed": True,
             "coordinate_map_identity_preserved": True,
             "empty_query_batch_emits_no_rows": True,
         },
