@@ -1,0 +1,720 @@
+{
+  "schema": "cogni-ml/trellis2/flow-guidance-interval-oracle/v1",
+  "provenance": {
+    "repository": "https://github.com/microsoft/TRELLIS.2",
+    "commit": "75fbf0183001ed9876c8dbb35de6b68552ee08bd",
+    "python_version": "3.11.9",
+    "torch_version": "2.9.0",
+    "numpy_version": "2.1.3",
+    "device": "cpu",
+    "dtype": "Float64 normalized time; Float32 state, predictions, model timestep, and output",
+    "weights": "none",
+    "network": "none",
+    "generator": "tools/trellis2_oracle/export_flow_guidance_interval.py",
+    "generator_sha256": "4e863eac8d07ef8649cad4fbeccd236a3bf5838a42a0b16c3ec6d1b4cfd25113",
+    "support": "tools/trellis2_oracle/export_flow_euler_cfg.py",
+    "support_sha256": "a51ff10617022931b234cbf455e26f696124b187c30f74dae4ba2f1446eb2837",
+    "sources": {
+      "base": {
+        "path": "trellis2/pipelines/samplers/base.py",
+        "sha256": "be8530b55ea66ac58e8ab23d650f463636dd52cf7e39c7c9c66f69bf72e6a0d1"
+      },
+      "cfg": {
+        "path": "trellis2/pipelines/samplers/classifier_free_guidance_mixin.py",
+        "sha256": "1780182cd7d3c7af3f82b7904aa9c40eb3f632064d77456565c5acccd9598bee"
+      },
+      "interval": {
+        "path": "trellis2/pipelines/samplers/guidance_interval_mixin.py",
+        "sha256": "633f97c48a811a835d3b894b3e0de794407f60774f6c60a2c6a61e7c0351c6f2"
+      },
+      "flow_euler": {
+        "path": "trellis2/pipelines/samplers/flow_euler.py",
+        "sha256": "b4bd235874adfc47fd3bce3d596249b1ccfa6644983a9b4562c9295a463bc0fd"
+      }
+    }
+  },
+  "contract": {
+    "owner": "GuidanceIntervalSamplerMixin._inference_model",
+    "entrypoint": "trellis2.pipelines.samplers.flow_euler.FlowEulerGuidanceIntervalSampler._inference_model",
+    "mro": [
+      "FlowEulerGuidanceIntervalSampler",
+      "GuidanceIntervalSamplerMixin",
+      "ClassifierFreeGuidanceSamplerMixin",
+      "FlowEulerSampler",
+      "Sampler",
+      "ABC",
+      "object"
+    ],
+    "predicate": "guidance_interval[0] <= normalized_t <= guidance_interval[1]",
+    "inside": "forward requested guidance strength to classifier-free guidance",
+    "outside": "force guidance strength to 1 before classifier-free guidance",
+    "model_timestep": "base flow receives normalized Float64 t and creates CPU Float32[batch] = 1000*t",
+    "condition_carriers": "opaque positive and negative objects forwarded by identity",
+    "guidance_rescale": "explicitly 0.0; standard-deviation rescale branch not executed"
+  },
+  "fixture": {
+    "shape": [
+      2,
+      4
+    ],
+    "guidance_interval": [
+      0.25,
+      0.75
+    ],
+    "requested_guidance_strength": 1.7,
+    "case_count": 5
+  },
+  "inputs": {
+    "x_t": {
+      "shape": [
+        2,
+        4
+      ],
+      "dtype": "float32",
+      "values": [
+        [
+          1.0,
+          -2.0,
+          0.5,
+          3.0
+        ],
+        [
+          -4.0,
+          0.25,
+          8.0,
+          -0.125
+        ]
+      ],
+      "f32le_sha256": "3fc4cb82a47ee8030a1efa6dd3c06cde8e26cc291f8c8141a894ecf09aab56a6"
+    },
+    "pred_pos": {
+      "shape": [
+        2,
+        4
+      ],
+      "dtype": "float32",
+      "values": [
+        [
+          0.125,
+          -16.743309020996094,
+          1000.25,
+          -0.0009765625
+        ],
+        [
+          -85.5,
+          0.3333333432674408,
+          4096.0,
+          -7.25
+        ]
+      ],
+      "f32le_sha256": "591ee2cd9f64b107b3699b37270787c369de9be88b1d5a03a0ccf10a798f24dd"
+    },
+    "pred_neg": {
+      "shape": [
+        2,
+        4
+      ],
+      "dtype": "float32",
+      "values": [
+        [
+          -0.25,
+          124.7040023803711,
+          -999.75,
+          0.001953125
+        ],
+        [
+          31.75,
+          -0.6666666865348816,
+          -2048.0,
+          12.5
+        ]
+      ],
+      "f32le_sha256": "891c060826d159ab4a40d55703becdb7b3208e2776a1b35a2ba9e53ea8d6ee6f"
+    },
+    "pos_cond": {
+      "shape": [
+        2
+      ],
+      "dtype": "float32",
+      "values": [
+        0.25,
+        -0.5
+      ],
+      "f32le_sha256": "a87f7282fda4eba58e73df7310253f02b521d912a9d040beb42c09dceae258fd"
+    },
+    "neg_cond": {
+      "shape": [
+        2
+      ],
+      "dtype": "float32",
+      "values": [
+        -0.75,
+        1.25
+      ],
+      "f32le_sha256": "c9f837df5b05063b0ac465edcdc1438516daa19d529ed6d28db42883331b834e"
+    },
+    "all_unchanged": true
+  },
+  "cases": [
+    {
+      "name": "below_lower",
+      "normalized_t": 0.24999999999999997,
+      "normalized_t_f64_bits_hex": "0x3fcfffffffffffff",
+      "inside_inclusive_interval": false,
+      "requested_guidance_strength": 1.7,
+      "effective_guidance_strength": 1.0,
+      "call_count": 1,
+      "call_order": [
+        "positive"
+      ],
+      "output_identity": "positive_prediction",
+      "calls": [
+        {
+          "index": 0,
+          "condition": "positive",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "values": [
+              250.0,
+              250.0
+            ],
+            "f32le_sha256": "5a0425995b566bf71ff4de5583f8be1b11ba257cdb541b044fa556c9908be226"
+          },
+          "prediction": {
+            "shape": [
+              2,
+              4
+            ],
+            "dtype": "float32",
+            "values": [
+              [
+                0.125,
+                -16.743309020996094,
+                1000.25,
+                -0.0009765625
+              ],
+              [
+                -85.5,
+                0.3333333432674408,
+                4096.0,
+                -7.25
+              ]
+            ],
+            "f32le_sha256": "591ee2cd9f64b107b3699b37270787c369de9be88b1d5a03a0ccf10a798f24dd"
+          }
+        }
+      ],
+      "output": {
+        "shape": [
+          2,
+          4
+        ],
+        "dtype": "float32",
+        "values": [
+          [
+            0.125,
+            -16.743309020996094,
+            1000.25,
+            -0.0009765625
+          ],
+          [
+            -85.5,
+            0.3333333432674408,
+            4096.0,
+            -7.25
+          ]
+        ],
+        "f32le_sha256": "591ee2cd9f64b107b3699b37270787c369de9be88b1d5a03a0ccf10a798f24dd"
+      }
+    },
+    {
+      "name": "lower_boundary",
+      "normalized_t": 0.25,
+      "normalized_t_f64_bits_hex": "0x3fd0000000000000",
+      "inside_inclusive_interval": true,
+      "requested_guidance_strength": 1.7,
+      "effective_guidance_strength": 1.7,
+      "call_count": 2,
+      "call_order": [
+        "positive",
+        "negative"
+      ],
+      "output_identity": "owned_mixed",
+      "calls": [
+        {
+          "index": 0,
+          "condition": "positive",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "values": [
+              250.0,
+              250.0
+            ],
+            "f32le_sha256": "5a0425995b566bf71ff4de5583f8be1b11ba257cdb541b044fa556c9908be226"
+          },
+          "prediction": {
+            "shape": [
+              2,
+              4
+            ],
+            "dtype": "float32",
+            "values": [
+              [
+                0.125,
+                -16.743309020996094,
+                1000.25,
+                -0.0009765625
+              ],
+              [
+                -85.5,
+                0.3333333432674408,
+                4096.0,
+                -7.25
+              ]
+            ],
+            "f32le_sha256": "591ee2cd9f64b107b3699b37270787c369de9be88b1d5a03a0ccf10a798f24dd"
+          }
+        },
+        {
+          "index": 1,
+          "condition": "negative",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "values": [
+              250.0,
+              250.0
+            ],
+            "f32le_sha256": "5a0425995b566bf71ff4de5583f8be1b11ba257cdb541b044fa556c9908be226"
+          },
+          "prediction": {
+            "shape": [
+              2,
+              4
+            ],
+            "dtype": "float32",
+            "values": [
+              [
+                -0.25,
+                124.7040023803711,
+                -999.75,
+                0.001953125
+              ],
+              [
+                31.75,
+                -0.6666666865348816,
+                -2048.0,
+                12.5
+              ]
+            ],
+            "f32le_sha256": "891c060826d159ab4a40d55703becdb7b3208e2776a1b35a2ba9e53ea8d6ee6f"
+          }
+        }
+      ],
+      "output": {
+        "shape": [
+          2,
+          4
+        ],
+        "dtype": "float32",
+        "values": [
+          [
+            0.38749998807907104,
+            -115.75642395019531,
+            2400.25,
+            -0.0030273436568677425
+          ],
+          [
+            -167.57501220703125,
+            1.033333420753479,
+            8396.7998046875,
+            -21.075000762939453
+          ]
+        ],
+        "f32le_sha256": "6af821155f4ccc250d66a0baa6b69c5477e53f32f8f2d3127a62e1f10b234fd6"
+      }
+    },
+    {
+      "name": "inside",
+      "normalized_t": 0.5,
+      "normalized_t_f64_bits_hex": "0x3fe0000000000000",
+      "inside_inclusive_interval": true,
+      "requested_guidance_strength": 1.7,
+      "effective_guidance_strength": 1.7,
+      "call_count": 2,
+      "call_order": [
+        "positive",
+        "negative"
+      ],
+      "output_identity": "owned_mixed",
+      "calls": [
+        {
+          "index": 0,
+          "condition": "positive",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "values": [
+              500.0,
+              500.0
+            ],
+            "f32le_sha256": "828e0534f2f468c1887af295b5f88a4f2b38f2facbf493b8fa6a7c43a1644671"
+          },
+          "prediction": {
+            "shape": [
+              2,
+              4
+            ],
+            "dtype": "float32",
+            "values": [
+              [
+                0.125,
+                -16.743309020996094,
+                1000.25,
+                -0.0009765625
+              ],
+              [
+                -85.5,
+                0.3333333432674408,
+                4096.0,
+                -7.25
+              ]
+            ],
+            "f32le_sha256": "591ee2cd9f64b107b3699b37270787c369de9be88b1d5a03a0ccf10a798f24dd"
+          }
+        },
+        {
+          "index": 1,
+          "condition": "negative",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "values": [
+              500.0,
+              500.0
+            ],
+            "f32le_sha256": "828e0534f2f468c1887af295b5f88a4f2b38f2facbf493b8fa6a7c43a1644671"
+          },
+          "prediction": {
+            "shape": [
+              2,
+              4
+            ],
+            "dtype": "float32",
+            "values": [
+              [
+                -0.25,
+                124.7040023803711,
+                -999.75,
+                0.001953125
+              ],
+              [
+                31.75,
+                -0.6666666865348816,
+                -2048.0,
+                12.5
+              ]
+            ],
+            "f32le_sha256": "891c060826d159ab4a40d55703becdb7b3208e2776a1b35a2ba9e53ea8d6ee6f"
+          }
+        }
+      ],
+      "output": {
+        "shape": [
+          2,
+          4
+        ],
+        "dtype": "float32",
+        "values": [
+          [
+            0.38749998807907104,
+            -115.75642395019531,
+            2400.25,
+            -0.0030273436568677425
+          ],
+          [
+            -167.57501220703125,
+            1.033333420753479,
+            8396.7998046875,
+            -21.075000762939453
+          ]
+        ],
+        "f32le_sha256": "6af821155f4ccc250d66a0baa6b69c5477e53f32f8f2d3127a62e1f10b234fd6"
+      }
+    },
+    {
+      "name": "upper_boundary",
+      "normalized_t": 0.75,
+      "normalized_t_f64_bits_hex": "0x3fe8000000000000",
+      "inside_inclusive_interval": true,
+      "requested_guidance_strength": 1.7,
+      "effective_guidance_strength": 1.7,
+      "call_count": 2,
+      "call_order": [
+        "positive",
+        "negative"
+      ],
+      "output_identity": "owned_mixed",
+      "calls": [
+        {
+          "index": 0,
+          "condition": "positive",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "values": [
+              750.0,
+              750.0
+            ],
+            "f32le_sha256": "f71cf669d0fad69ca8fef9fdcc7005cd2efbe5d4d5f1aae4ba9926f7480522eb"
+          },
+          "prediction": {
+            "shape": [
+              2,
+              4
+            ],
+            "dtype": "float32",
+            "values": [
+              [
+                0.125,
+                -16.743309020996094,
+                1000.25,
+                -0.0009765625
+              ],
+              [
+                -85.5,
+                0.3333333432674408,
+                4096.0,
+                -7.25
+              ]
+            ],
+            "f32le_sha256": "591ee2cd9f64b107b3699b37270787c369de9be88b1d5a03a0ccf10a798f24dd"
+          }
+        },
+        {
+          "index": 1,
+          "condition": "negative",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "values": [
+              750.0,
+              750.0
+            ],
+            "f32le_sha256": "f71cf669d0fad69ca8fef9fdcc7005cd2efbe5d4d5f1aae4ba9926f7480522eb"
+          },
+          "prediction": {
+            "shape": [
+              2,
+              4
+            ],
+            "dtype": "float32",
+            "values": [
+              [
+                -0.25,
+                124.7040023803711,
+                -999.75,
+                0.001953125
+              ],
+              [
+                31.75,
+                -0.6666666865348816,
+                -2048.0,
+                12.5
+              ]
+            ],
+            "f32le_sha256": "891c060826d159ab4a40d55703becdb7b3208e2776a1b35a2ba9e53ea8d6ee6f"
+          }
+        }
+      ],
+      "output": {
+        "shape": [
+          2,
+          4
+        ],
+        "dtype": "float32",
+        "values": [
+          [
+            0.38749998807907104,
+            -115.75642395019531,
+            2400.25,
+            -0.0030273436568677425
+          ],
+          [
+            -167.57501220703125,
+            1.033333420753479,
+            8396.7998046875,
+            -21.075000762939453
+          ]
+        ],
+        "f32le_sha256": "6af821155f4ccc250d66a0baa6b69c5477e53f32f8f2d3127a62e1f10b234fd6"
+      }
+    },
+    {
+      "name": "above_upper",
+      "normalized_t": 0.7500000000000001,
+      "normalized_t_f64_bits_hex": "0x3fe8000000000001",
+      "inside_inclusive_interval": false,
+      "requested_guidance_strength": 1.7,
+      "effective_guidance_strength": 1.0,
+      "call_count": 1,
+      "call_order": [
+        "positive"
+      ],
+      "output_identity": "positive_prediction",
+      "calls": [
+        {
+          "index": 0,
+          "condition": "positive",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "values": [
+              750.0,
+              750.0
+            ],
+            "f32le_sha256": "f71cf669d0fad69ca8fef9fdcc7005cd2efbe5d4d5f1aae4ba9926f7480522eb"
+          },
+          "prediction": {
+            "shape": [
+              2,
+              4
+            ],
+            "dtype": "float32",
+            "values": [
+              [
+                0.125,
+                -16.743309020996094,
+                1000.25,
+                -0.0009765625
+              ],
+              [
+                -85.5,
+                0.3333333432674408,
+                4096.0,
+                -7.25
+              ]
+            ],
+            "f32le_sha256": "591ee2cd9f64b107b3699b37270787c369de9be88b1d5a03a0ccf10a798f24dd"
+          }
+        }
+      ],
+      "output": {
+        "shape": [
+          2,
+          4
+        ],
+        "dtype": "float32",
+        "values": [
+          [
+            0.125,
+            -16.743309020996094,
+            1000.25,
+            -0.0009765625
+          ],
+          [
+            -85.5,
+            0.3333333432674408,
+            4096.0,
+            -7.25
+          ]
+        ],
+        "f32le_sha256": "591ee2cd9f64b107b3699b37270787c369de9be88b1d5a03a0ccf10a798f24dd"
+      }
+    }
+  ],
+  "independent_reference": {
+    "predicate": "lower <= normalized_t and normalized_t <= upper",
+    "outside_effective_guidance_strength": 1.0,
+    "inside_output": {
+      "shape": [
+        2,
+        4
+      ],
+      "dtype": "float32",
+      "values": [
+        [
+          0.38749998807907104,
+          -115.75642395019531,
+          2400.25,
+          -0.0030273436568677425
+        ],
+        [
+          -167.57501220703125,
+          1.033333420753479,
+          8396.7998046875,
+          -21.075000762939453
+        ]
+      ],
+      "f32le_sha256": "6af821155f4ccc250d66a0baa6b69c5477e53f32f8f2d3127a62e1f10b234fd6"
+    },
+    "inside_output_f32_bits": [
+      1053189734,
+      3269952330,
+      1159070720,
+      3141953126,
+      3274150708,
+      1065632837,
+      1174614835,
+      3249052058
+    ]
+  },
+  "counterfactuals": {
+    "strict_interval_mismatches": [
+      "lower_boundary",
+      "upper_boundary"
+    ],
+    "missing_outside_override_mismatches": [
+      "below_lower",
+      "above_upper"
+    ],
+    "model_t_domain_mismatches": [
+      "lower_boundary",
+      "inside",
+      "upper_boundary"
+    ],
+    "outside_negative_output_sha256": "891c060826d159ab4a40d55703becdb7b3208e2776a1b35a2ba9e53ea8d6ee6f"
+  },
+  "rejected_scope": [
+    "Crystal guidance-interval runtime or public API",
+    "standard-deviation guidance rescale execution",
+    "Euler step or repeated sampler execution",
+    "random-noise or cross-device seed reproducibility",
+    "production defaults, pipeline, sparse-structure flow, or decoder",
+    "real weights, model scale, BF16, F16, quantization, GPU, or Metal"
+  ]
+}
