@@ -1,5 +1,5 @@
 {
-  "schema": "cogni-ml/trellis2/sparse-mlp-first-stage-oracle/v1",
+  "schema": "cogni-ml/trellis2/sparse-mlp-oracle/v2",
   "provenance": {
     "repository": "microsoft/TRELLIS.2",
     "commit": "75fbf0183001ed9876c8dbb35de6b68552ee08bd",
@@ -48,7 +48,7 @@
       }
     },
     "generator": "tools/trellis2_oracle/export_sparse_mlp_first_stage.py",
-    "generator_sha256": "d7e60a7c4f3c95f8ac83ee2abb3ae35afc35906f5427c7623d9afcd353abd1ef",
+    "generator_sha256": "92897433eecea7e00d314cdfe725b21e5a69af7176c7e7335f9b34d380da730a",
     "python_version": "3.11.9",
     "torch_version": "2.9.0",
     "numpy_version": "2.1.3",
@@ -59,13 +59,16 @@
     "sparse_backend": "none"
   },
   "contract": {
-    "upstream_call": "SparseFeedForwardNet.forward -> mlp[0] -> mlp[1]",
+    "upstream_call": "SparseFeedForwardNet.forward -> mlp[0] -> mlp[1] -> mlp[2]",
     "activation": "SparseGELU(approximate=\"tanh\")",
     "hidden_rule": "int(C * 5.3334)",
     "production_model_channels": 1536,
     "production_mlp_ratio": 5.3334,
     "first_stage_hook": "mlp[1] output",
     "tail_projection_executed": true,
+    "tail_contract": "biased frozen Linear(H,C)",
+    "full_output": "SparseFeedForwardNet output after mlp[2]",
+    "total_work_rule": "2 * N * C * H",
     "local_mode": "graphless frozen-parameter CPU inference"
   },
   "input": {
@@ -292,12 +295,13 @@
         -0.0234375
       ]
     ],
+    "weight_f32le_sha256": "9dd3d574395578e1e3c253a7364fc3692f909d2da05aea0c0ea8d938c60f9c23",
     "bias": [
       -0.03125,
       0.0,
       0.046875
     ],
-    "output_features_f32le_sha256": "20460a290d9110f532c6e59b66500a34a3f1b8d1d3a002135811c4944615d722"
+    "bias_f32le_sha256": "c07c5a6e283880bf6a3eed8c52d591f0879d600d6ebf51f0b2b8f173e9a057e6"
   },
   "output": {
     "features": [
@@ -375,6 +379,32 @@
       ]
     ],
     "features_f32le_sha256": "f75564bab2163ad5709a7f4e50a2cf9721aeafa764ae599738c0702cb21fafe5",
+    "coordinate_object_reused": true
+  },
+  "full_output": {
+    "features": [
+      [
+        -0.024647343903779984,
+        0.02408192679286003,
+        0.04076503962278366
+      ],
+      [
+        -0.0191657692193985,
+        0.10819577425718307,
+        0.02849525399506092
+      ],
+      [
+        -0.03277256712317467,
+        -0.010210800915956497,
+        0.047720812261104584
+      ],
+      [
+        -0.023246459662914276,
+        -0.008784815669059753,
+        0.04327370226383209
+      ]
+    ],
+    "features_f32le_sha256": "20460a290d9110f532c6e59b66500a34a3f1b8d1d3a002135811c4944615d722",
     "coordinate_object_reused": true
   }
 }

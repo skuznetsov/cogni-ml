@@ -4,14 +4,160 @@ require "./linear"
 module ML::Sparse
   class TensorCPU
     # TRELLIS.2 SparseFeedForwardNet uses this exact ratio in its production
-    # SLat blocks: hidden = int(channels * 5.3334).  This leaf stops after the
-    # first SparseLinear and tanh-approximate GELU, before the second projection.
+    # SLat blocks: hidden = int(channels * 5.3334).  The first-stage leaf below
+    # returns that hidden value; the complete wrapper projects it back to C.
     TRELLIS2_MLP_RATIO               = 5.3334_f64
     TRELLIS2_MLP_MAX_INPUT_CHANNELS  =     48_i32
     TRELLIS2_MLP_MAX_HIDDEN_CHANNELS =    256_i32
     TRELLIS2_MLP_MAX_WORK_ELEMENTS   = 128_i64 * 1024_i64 * 1024_i64
     TRELLIS2_GELU_TANH_COEFFICIENT   =           0.044715_f32
     TRELLIS2_GELU_SQRT_2_OVER_PI     = 0.7978845608028654_f32
+
+    # Applies the complete bounded SparseFeedForwardNet MLP sequence:
+    # Linear(C,H) -> tanh GELU -> Linear(H,C).  Keeping the composition behind
+    # one public entry point prevents unauthenticated hidden carriers from
+    # entering the tail projection and admits the work of both projections as
+    # one unit before any feature or parameter payload is read.
+    def self.apply_mlp(
+      input : TensorCPU,
+      first_linear : ML::NN::Linear,
+      tail_linear : ML::NN::Linear,
+      max_work_elements : Int64 = TRELLIS2_MLP_MAX_WORK_ELEMENTS,
+    ) : TensorCPU
+      unless TensorCPU == self
+        raise SparseTensorError.new(
+          "sparse MLP requires the base TensorCPU receiver"
+        )
+      end
+      unless input.@initialized
+        raise SparseTensorError.new(
+          "sparse MLP requires an initialized sparse value"
+        )
+      end
+      unless input.@carrier_role == CarrierRole::Bounded
+        raise SparseTensorError.new(
+          "sparse MLP requires a bounded carrier"
+        )
+      end
+      unless first_linear.class == ML::NN::Linear &&
+             tail_linear.class == ML::NN::Linear
+        raise SparseTensorError.new(
+          "sparse MLP requires base ML::NN::Linear projections"
+        )
+      end
+      unless 1_i64 <= max_work_elements <= TRELLIS2_MLP_MAX_WORK_ELEMENTS
+        raise SparseTensorBudgetError.new(
+          "sparse MLP work budget must be in 1..#{TRELLIS2_MLP_MAX_WORK_ELEMENTS}"
+        )
+      end
+
+      coordinate_map = input.@coordinate_map
+      unless coordinate_map.class == CoordinateMap3D
+        raise SparseTensorError.new(
+          "sparse MLP requires a base CoordinateMap3D"
+        )
+      end
+      batch_size, map_point_count = CoordinateMap3D.kernel_layout(coordinate_map)
+      unless 1 <= batch_size <= CoordinateMap3D::MAX_BATCH_SIZE
+        raise SparseTensorError.new(
+          "sparse MLP batch size must be in 1..#{CoordinateMap3D::MAX_BATCH_SIZE}"
+        )
+      end
+      unless 0 <= map_point_count <= CoordinateMap3D::MAX_POINTS
+        raise SparseTensorError.new(
+          "sparse MLP point count must be in 0..#{CoordinateMap3D::MAX_POINTS}"
+        )
+      end
+      unless input.@point_count == map_point_count
+        raise SparseTensorError.new(
+          "sparse MLP requires coordinate and feature point counts to match"
+        )
+      end
+
+      input_channels = input.@channels
+      unless 1 <= input_channels <= TRELLIS2_MLP_MAX_INPUT_CHANNELS
+        raise SparseTensorBudgetError.new(
+          "sparse MLP input channel count must be in 1..#{TRELLIS2_MLP_MAX_INPUT_CHANNELS}"
+        )
+      end
+      hidden_channels = (input_channels.to_f64 * TRELLIS2_MLP_RATIO).to_i32
+      unless 1 <= hidden_channels <= TRELLIS2_MLP_MAX_HIDDEN_CHANNELS
+        raise SparseTensorBudgetError.new(
+          "sparse MLP hidden channel count must be in 1..#{TRELLIS2_MLP_MAX_HIDDEN_CHANNELS}"
+        )
+      end
+      unless first_linear.in_features == input_channels &&
+             first_linear.out_features == hidden_channels
+        raise SparseTensorError.new(
+          "sparse MLP first projection must have shape [#{hidden_channels}, #{input_channels}]"
+        )
+      end
+      unless tail_linear.in_features == hidden_channels
+        raise SparseTensorError.new(
+          "sparse MLP tail input channels #{tail_linear.in_features} do not match hidden channels #{hidden_channels}"
+        )
+      end
+      unless tail_linear.out_features == input_channels
+        raise SparseTensorError.new(
+          "sparse MLP tail output channels #{tail_linear.out_features} do not match input channels #{input_channels}"
+        )
+      end
+
+      one_projection_work = checked_multiply(
+        checked_multiply(
+          input.@point_count.to_i64,
+          input_channels.to_i64,
+          "total work rows and input channels"
+        ),
+        hidden_channels.to_i64,
+        "total work hidden channels"
+      )
+      total_work = checked_multiply(
+        one_projection_work,
+        2_i64,
+        "total work projections"
+      )
+      if total_work > max_work_elements
+        raise SparseTensorBudgetError.new(
+          "sparse MLP work would require #{total_work} MAC elements, limit is #{max_work_elements}"
+        )
+      end
+
+      unless first_linear.bias
+        raise SparseTensorError.new(
+          "sparse MLP first projection requires a bias"
+        )
+      end
+      if first_linear.weight.requires_grad? ||
+         (first_linear.bias.try(&.requires_grad?) || false)
+        raise SparseTensorError.new(
+          "sparse MLP first projection requires frozen graphless parameters"
+        )
+      end
+      unless tail_linear.bias
+        raise SparseTensorError.new(
+          "sparse MLP tail requires a bias"
+        )
+      end
+      if tail_linear.weight.requires_grad? ||
+         (tail_linear.bias.try(&.requires_grad?) || false)
+        raise SparseTensorError.new(
+          "sparse MLP tail requires frozen graphless parameters"
+        )
+      end
+
+      hidden = apply_mlp_first_projection_gelu(
+        input,
+        first_linear,
+        max_work_elements: max_work_elements
+      )
+      apply_linear_bounded(
+        hidden,
+        tail_linear,
+        TRELLIS2_MLP_MAX_INPUT_CHANNELS,
+        CarrierRole::Bounded
+      )
+    end
 
     # Applies the first production SparseFeedForwardNet projection followed by
     # SparseGELU(approximate="tanh").  The operation is intentionally a

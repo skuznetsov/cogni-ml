@@ -5,7 +5,7 @@ require "../spec_helper"
 
 private MLP_FIRST_STAGE_TOLERANCE      = 5e-5_f32
 private MLP_FIRST_STAGE_FIXTURE_SHA256 =
-  "8fc03ff5300983e627f720c946c9669aff38b08cc074559869f82fadfbd2ae54"
+  "5f014ad9ff54d1a3c90f65b3f86eb6a47b6be9eb0ff96920b3c910b4f4a859a6"
 
 private def sparse_mlp_first_stage_fixture : JSON::Any
   path = File.join(
@@ -81,6 +81,28 @@ private def sparse_mlp_scalar_reference(
   output
 end
 
+private def sparse_mlp_scalar_tail_reference(
+  hidden : Indexable(Float32),
+  weight : Indexable(Float32),
+  bias : Indexable(Float32),
+  point_count : Int32,
+  hidden_channels : Int32,
+  output_channels : Int32,
+) : Array(Float32)
+  output = Array(Float32).new(point_count.to_i * output_channels.to_i)
+  point_count.times do |row|
+    output_channels.times do |output_channel|
+      sum = 0.0_f32
+      hidden_channels.times do |hidden_channel|
+        sum += hidden[row * hidden_channels + hidden_channel] *
+               weight[output_channel * hidden_channels + hidden_channel]
+      end
+      output << sum + bias[output_channel]
+    end
+  end
+  output
+end
+
 class SparseMLPFirstStageReceiverOverride < ML::Sparse::TensorCPU
   def self.==(other : ML::Sparse::TensorCPU.class) : Bool
     true
@@ -103,7 +125,7 @@ describe "TRELLIS.2 sparse MLP first projection and tanh GELU" do
   it "matches the source-pinned SparseFeedForwardNet first stage" do
     fixture = sparse_mlp_first_stage_fixture
     fixture["schema"].as_s.should eq(
-      "cogni-ml/trellis2/sparse-mlp-first-stage-oracle/v1"
+      "cogni-ml/trellis2/sparse-mlp-oracle/v2"
     )
     provenance = fixture["provenance"]
     provenance["commit"].as_s.should eq(
@@ -117,7 +139,7 @@ describe "TRELLIS.2 sparse MLP first projection and tanh GELU" do
     provenance["network"].as_s.should eq("none")
     provenance["sparse_backend"].as_s.should eq("none")
     provenance["generator_sha256"].as_s.should eq(
-      "d7e60a7c4f3c95f8ac83ee2abb3ae35afc35906f5427c7623d9afcd353abd1ef"
+      "92897433eecea7e00d314cdfe725b21e5a69af7176c7e7335f9b34d380da730a"
     )
 
     sources = provenance["sources"]
@@ -155,7 +177,7 @@ describe "TRELLIS.2 sparse MLP first projection and tanh GELU" do
 
     contract = fixture["contract"]
     contract["upstream_call"].as_s.should eq(
-      "SparseFeedForwardNet.forward -> mlp[0] -> mlp[1]"
+      "SparseFeedForwardNet.forward -> mlp[0] -> mlp[1] -> mlp[2]"
     )
     contract["activation"].as_s.should eq(
       "SparseGELU(approximate=\"tanh\")"
@@ -166,8 +188,16 @@ describe "TRELLIS.2 sparse MLP first projection and tanh GELU" do
     (contract["production_model_channels"].as_i.to_f64 *
       contract["production_mlp_ratio"].as_f).to_i64.should eq(8_192_i64)
     contract["tail_projection_executed"].as_bool.should be_true
-    fixture["tail_linear"]["output_features_f32le_sha256"].as_s.should eq(
-      "20460a290d9110f532c6e59b66500a34a3f1b8d1d3a002135811c4944615d722"
+    contract["tail_contract"].as_s.should eq("biased frozen Linear(H,C)")
+    contract["full_output"].as_s.should eq(
+      "SparseFeedForwardNet output after mlp[2]"
+    )
+    contract["total_work_rule"].as_s.should eq("2 * N * C * H")
+    fixture["tail_linear"]["weight_f32le_sha256"].as_s.should eq(
+      "9dd3d574395578e1e3c253a7364fc3692f909d2da05aea0c0ea8d938c60f9c23"
+    )
+    fixture["tail_linear"]["bias_f32le_sha256"].as_s.should eq(
+      "c07c5a6e283880bf6a3eed8c52d591f0879d600d6ebf51f0b2b8f173e9a057e6"
     )
 
     input = fixture["input"]
@@ -175,11 +205,23 @@ describe "TRELLIS.2 sparse MLP first projection and tanh GELU" do
     features = sparse_mlp_f32(input["features"])
     weight = sparse_mlp_f32(fixture["linear"]["weight"])
     bias = sparse_mlp_f32(fixture["linear"]["bias"])
+    tail_weight = sparse_mlp_f32(fixture["tail_linear"]["weight"])
+    tail_bias = sparse_mlp_f32(fixture["tail_linear"]["bias"])
     expected = sparse_mlp_f32(fixture["output"]["features"])
+    full_expected = sparse_mlp_f32(fixture["full_output"]["features"])
     sparse_mlp_f32le_sha256(features).should eq(input["features_f32le_sha256"].as_s)
     sparse_mlp_f32le_sha256(weight).should eq(fixture["linear"]["weight_f32le_sha256"].as_s)
     sparse_mlp_f32le_sha256(bias).should eq(fixture["linear"]["bias_f32le_sha256"].as_s)
     sparse_mlp_f32le_sha256(expected).should eq(fixture["output"]["features_f32le_sha256"].as_s)
+    sparse_mlp_f32le_sha256(tail_weight).should eq(
+      fixture["tail_linear"]["weight_f32le_sha256"].as_s
+    )
+    sparse_mlp_f32le_sha256(tail_bias).should eq(
+      fixture["tail_linear"]["bias_f32le_sha256"].as_s
+    )
+    sparse_mlp_f32le_sha256(full_expected).should eq(
+      fixture["full_output"]["features_f32le_sha256"].as_s
+    )
     scalar = sparse_mlp_scalar_reference(
       features,
       weight,
@@ -189,6 +231,17 @@ describe "TRELLIS.2 sparse MLP first projection and tanh GELU" do
       fixture["linear"]["out_channels"].as_i.to_i32
     )
     expected.each_with_index { |value, index| value.should be_close(scalar[index], MLP_FIRST_STAGE_TOLERANCE) }
+    tail_scalar = sparse_mlp_scalar_tail_reference(
+      expected,
+      tail_weight,
+      tail_bias,
+      input["point_count"].as_i.to_i32,
+      fixture["linear"]["out_channels"].as_i.to_i32,
+      fixture["tail_linear"]["out_channels"].as_i.to_i32
+    )
+    full_expected.each_with_index do |value, index|
+      value.should be_close(tail_scalar[index], MLP_FIRST_STAGE_TOLERANCE)
+    end
 
     map = ML::Sparse::CoordinateMap3D.new(
       coordinates,
@@ -228,6 +281,144 @@ describe "TRELLIS.2 sparse MLP first projection and tanh GELU" do
     sparse.features_copy.should eq(input_before)
     layer.weight.data.cpu_data.not_nil!.should eq(weight_before)
     layer.bias.not_nil!.data.cpu_data.not_nil!.should eq(bias_before)
+  end
+
+  it "matches the complete SparseFeedForwardNet output through mlp[2]" do
+    fixture = sparse_mlp_first_stage_fixture
+    input = fixture["input"]
+    coordinates = sparse_mlp_i32(input["coordinates"])
+    features = sparse_mlp_f32(input["features"])
+    first_weight = sparse_mlp_f32(fixture["linear"]["weight"])
+    first_bias = sparse_mlp_f32(fixture["linear"]["bias"])
+    tail_weight = sparse_mlp_f32(fixture["tail_linear"]["weight"])
+    tail_bias = sparse_mlp_f32(fixture["tail_linear"]["bias"])
+    expected = sparse_mlp_f32(fixture["full_output"]["features"])
+
+    map = ML::Sparse::CoordinateMap3D.new(
+      coordinates,
+      input["batch_size"].as_i.to_i32,
+      {
+        input["spatial_shape"][0].as_i.to_i32,
+        input["spatial_shape"][1].as_i.to_i32,
+        input["spatial_shape"][2].as_i.to_i32,
+      }
+    )
+    sparse = ML::Sparse::TensorCPU.new(
+      ML::Tensor.from_array(
+        features,
+        ML::Shape.new(input["point_count"].as_i.to_i32, input["channels"].as_i.to_i32)
+      ),
+      map,
+      input["max_feature_bytes"].as_i64
+    )
+    first = ML::NN::Linear.new(
+      input["channels"].as_i.to_i32,
+      fixture["linear"]["out_channels"].as_i.to_i32,
+      device: ML::Tensor::Device::CPU
+    )
+    second = ML::NN::Linear.new(
+      fixture["linear"]["out_channels"].as_i.to_i32,
+      fixture["tail_linear"]["out_channels"].as_i.to_i32,
+      device: ML::Tensor::Device::CPU
+    )
+    sparse_mlp_assign(first, first_weight, first_bias)
+    sparse_mlp_assign(second, tail_weight, tail_bias)
+
+    input_before = sparse.features_copy
+    first_weight_before = first.weight.data.cpu_data.not_nil!.dup
+    first_bias_before = first.bias.not_nil!.data.cpu_data.not_nil!.dup
+    second_weight_before = second.weight.data.cpu_data.not_nil!.dup
+    second_bias_before = second.bias.not_nil!.data.cpu_data.not_nil!.dup
+
+    output = ML::Sparse::TensorCPU.apply_mlp(sparse, first, second)
+    actual = output.features_copy
+    actual.size.should eq(expected.size)
+    actual.each_with_index do |value, index|
+      value.should be_close(expected[index], MLP_FIRST_STAGE_TOLERANCE)
+    end
+    output.coordinate_map.same?(map).should be_true
+    output.channels.should eq(fixture["tail_linear"]["out_channels"].as_i)
+    output.production_width?.should be_false
+    output.max_feature_bytes.should eq(input["max_feature_bytes"].as_i64)
+    sparse.features_copy.should eq(input_before)
+    first.weight.data.cpu_data.not_nil!.should eq(first_weight_before)
+    first.bias.not_nil!.data.cpu_data.not_nil!.should eq(first_bias_before)
+    second.weight.data.cpu_data.not_nil!.should eq(second_weight_before)
+    second.bias.not_nil!.data.cpu_data.not_nil!.should eq(second_bias_before)
+  end
+
+  it "rejects complete-MLP bounds before poisoned payload or parameter reads" do
+    map = ML::Sparse::CoordinateMap3D.new(
+      [0, 0, 0, 0] of Int32,
+      1,
+      {1, 1, 1}
+    )
+    poisoned = SparseMLPFirstStageInputOverride.new(
+      [Float32::NAN] * 49,
+      map,
+      1_i32,
+      49_i32,
+      1_i64
+    )
+    first = ML::NN::Linear.new(49, 261, device: ML::Tensor::Device::CPU)
+    second = ML::NN::Linear.new(261, 49, device: ML::Tensor::Device::CPU)
+    first.weight.data.cpu_data.not_nil![0] = Float32::NAN
+    first.bias.not_nil!.data.cpu_data.not_nil![0] = Float32::NAN
+    second.weight.data.cpu_data.not_nil![0] = Float32::NAN
+    second.bias.not_nil!.data.cpu_data.not_nil![0] = Float32::NAN
+    expect_raises(ML::Sparse::SparseTensorBudgetError, /input channel count/) do
+      ML::Sparse::TensorCPU.apply_mlp(poisoned, first, second)
+    end
+
+    low_work_input = SparseMLPFirstStageInputOverride.new(
+      [Float32::NAN] * 3,
+      map,
+      1_i32,
+      3_i32,
+      4_i64 * 1024_i64
+    )
+    low_work_first = ML::NN::Linear.new(3, 16, device: ML::Tensor::Device::CPU)
+    low_work_second = ML::NN::Linear.new(16, 3, device: ML::Tensor::Device::CPU)
+    low_work_first.weight.data.cpu_data.not_nil![0] = Float32::NAN
+    low_work_second.weight.data.cpu_data.not_nil![0] = Float32::NAN
+    expect_raises(ML::Sparse::SparseTensorBudgetError, /work would require 96 MAC elements.*limit is 95/) do
+      ML::Sparse::TensorCPU.apply_mlp(
+        low_work_input,
+        low_work_first,
+        low_work_second,
+        max_work_elements: 95_i64,
+      )
+    end
+  end
+
+  it "enforces the exact biased frozen H-to-C tail contract" do
+    map = ML::Sparse::CoordinateMap3D.new(
+      [0, 0, 0, 0] of Int32,
+      1,
+      {1, 1, 1}
+    )
+    sparse = ML::Sparse::TensorCPU.new(ML::Tensor.ones(1, 3), map)
+    first = ML::NN::Linear.new(3, 16, device: ML::Tensor::Device::CPU)
+    first.weight.requires_grad = false
+    first.bias.not_nil!.requires_grad = false
+
+    wrong_width = ML::NN::Linear.new(16, 2, device: ML::Tensor::Device::CPU)
+    wrong_width.weight.requires_grad = false
+    wrong_width.bias.not_nil!.requires_grad = false
+    expect_raises(ML::Sparse::SparseTensorError, /tail output channels.*input channels/) do
+      ML::Sparse::TensorCPU.apply_mlp(sparse, first, wrong_width)
+    end
+
+    no_bias = ML::NN::Linear.new(16, 3, bias: false, device: ML::Tensor::Device::CPU)
+    no_bias.weight.requires_grad = false
+    expect_raises(ML::Sparse::SparseTensorError, /tail.*requires a bias/) do
+      ML::Sparse::TensorCPU.apply_mlp(sparse, first, no_bias)
+    end
+
+    trainable = ML::NN::Linear.new(16, 3, device: ML::Tensor::Device::CPU)
+    expect_raises(ML::Sparse::SparseTensorError, /tail.*frozen graphless/) do
+      ML::Sparse::TensorCPU.apply_mlp(sparse, first, trainable)
+    end
   end
 
   it "accepts C=48 and rejects C=49 before reading poisoned payloads" do
@@ -277,6 +468,13 @@ describe "TRELLIS.2 sparse MLP first projection and tanh GELU" do
     layer.weight.data.cpu_data.not_nil![0] = Float32::NAN
     expect_raises(ML::Sparse::SparseTensorError, /bounded carrier/) do
       ML::Sparse::TensorCPU.apply_mlp_first_projection_gelu(production, layer)
+    end
+
+    full_first = ML::NN::Linear.new(2, 10, device: ML::Tensor::Device::CPU)
+    full_second = ML::NN::Linear.new(10, 2, device: ML::Tensor::Device::CPU)
+    full_first.weight.data.cpu_data.not_nil![0] = Float32::NAN
+    expect_raises(ML::Sparse::SparseTensorError, /bounded carrier/) do
+      ML::Sparse::TensorCPU.apply_mlp(production, full_first, full_second)
     end
   end
 
@@ -343,6 +541,18 @@ describe "TRELLIS.2 sparse MLP first projection and tanh GELU" do
     empty_output.features_copy.should eq([] of Float32)
     empty_output.coordinate_map.same?(empty_map).should be_true
 
+    empty_tail_layer = ML::NN::Linear.new(16, 3, device: ML::Tensor::Device::CPU)
+    empty_tail_layer.weight.requires_grad = false
+    empty_tail_layer.bias.not_nil!.requires_grad = false
+    empty_full_output = ML::Sparse::TensorCPU.apply_mlp(
+      empty,
+      empty_layer,
+      empty_tail_layer,
+    )
+    empty_full_output.features_copy.should eq([] of Float32)
+    empty_full_output.channels.should eq(3)
+    empty_full_output.coordinate_map.same?(empty_map).should be_true
+
     map = ML::Sparse::CoordinateMap3D.new(
       [0, 0, 0, 0] of Int32,
       1,
@@ -356,6 +566,24 @@ describe "TRELLIS.2 sparse MLP first projection and tanh GELU" do
     overflowing.bias.not_nil!.requires_grad = false
     expect_raises(ML::Sparse::SparseTensorError, /output\[0\].*finite/) do
       ML::Sparse::TensorCPU.apply_mlp_first_projection_gelu(finite, overflowing)
+    end
+
+    finite_first = ML::NN::Linear.new(3, 16, device: ML::Tensor::Device::CPU)
+    finite_first.weight.data.cpu_data.not_nil!.fill(0.0_f32)
+    finite_first.bias.not_nil!.data.cpu_data.not_nil!.fill(1.0_f32)
+    finite_first.weight.requires_grad = false
+    finite_first.bias.not_nil!.requires_grad = false
+    overflowing_tail = ML::NN::Linear.new(16, 3, device: ML::Tensor::Device::CPU)
+    overflowing_tail.weight.data.cpu_data.not_nil!.fill(Float32::MAX)
+    overflowing_tail.bias.not_nil!.data.cpu_data.not_nil!.fill(0.0_f32)
+    overflowing_tail.weight.requires_grad = false
+    overflowing_tail.bias.not_nil!.requires_grad = false
+    expect_raises(ML::Sparse::SparseTensorError, /output\[0\].*finite/) do
+      ML::Sparse::TensorCPU.apply_mlp(
+        finite,
+        finite_first,
+        overflowing_tail,
+      )
     end
   end
 
@@ -371,6 +599,13 @@ describe "TRELLIS.2 sparse MLP first projection and tanh GELU" do
     layer.bias.not_nil!.requires_grad = false
     expect_raises(ML::Sparse::SparseTensorError, /base TensorCPU receiver/) do
       SparseMLPFirstStageReceiverOverride.apply_mlp_first_projection_gelu(sparse, layer)
+    end
+
+    second = ML::NN::Linear.new(16, 3, device: ML::Tensor::Device::CPU)
+    second.weight.requires_grad = false
+    second.bias.not_nil!.requires_grad = false
+    expect_raises(ML::Sparse::SparseTensorError, /base TensorCPU receiver/) do
+      SparseMLPFirstStageReceiverOverride.apply_mlp(sparse, layer, second)
     end
   end
 end

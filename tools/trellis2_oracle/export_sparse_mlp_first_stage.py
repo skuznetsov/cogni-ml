@@ -2,10 +2,11 @@
 """Export a source-pinned CPU oracle for TRELLIS.2 SparseFeedForwardNet.
 
 The oracle executes the upstream ``SparseFeedForwardNet`` with the sparse
-backend disabled and captures the output immediately after its first
-``SparseLinear`` and tanh-approximate ``SparseGELU``.  Inputs and parameters
-are tiny synthetic float32 values; no model weights, network, GPU, or sparse
-runtime are admitted.
+backend disabled and captures both the output immediately after its first
+``SparseLinear`` and tanh-approximate ``SparseGELU`` and the complete output
+after its biased second ``SparseLinear``. Inputs and parameters are tiny
+synthetic float32 values; no model weights, network, GPU, or sparse runtime are
+admitted.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ TRELLIS_PIN = "75fbf0183001ed9876c8dbb35de6b68552ee08bd"
 PYTHON_PIN = "3.11.9"
 TORCH_PIN = "2.9.0"
 NUMPY_PIN = "2.1.3"
-SCHEMA = "cogni-ml/trellis2/sparse-mlp-first-stage-oracle/v1"
+SCHEMA = "cogni-ml/trellis2/sparse-mlp-oracle/v2"
 GENERATOR_REPO_PATH = "tools/trellis2_oracle/export_sparse_mlp_first_stage.py"
 MLP_RATIO = 5.3334
 
@@ -62,6 +63,35 @@ def sha256(path: Path) -> str:
 
 def little_endian_sha(values: np.ndarray, dtype: str) -> str:
     return hashlib.sha256(values.astype(dtype, copy=False).tobytes(order="C")).hexdigest()
+
+
+def scalar_f32_tail_reference(
+    hidden: np.ndarray,
+    weight: np.ndarray,
+    bias: np.ndarray,
+) -> np.ndarray:
+    """Compute the biased H->C tail with scalar float32 accumulation.
+
+    This deliberately independent reference avoids using a matrix primitive
+    for the final projection.  It is only a consistency check for the tiny
+    fixture, not a replacement for the pinned upstream execution.
+    """
+    point_count, hidden_channels = hidden.shape
+    output_channels = weight.shape[0]
+    output = np.empty((point_count, output_channels), dtype=np.float32)
+    for row in range(point_count):
+        for output_channel in range(output_channels):
+            total = np.float32(0.0)
+            for hidden_channel in range(hidden_channels):
+                total = np.float32(
+                    total
+                    + np.float32(
+                        hidden[row, hidden_channel]
+                        * weight[output_channel, hidden_channel]
+                    )
+                )
+            output[row, output_channel] = np.float32(total + bias[output_channel])
+    return output
 
 
 def require_pins(trellis_root: Path) -> tuple[dict[str, Path], dict[str, Path]]:
@@ -192,13 +222,20 @@ def build_fixture(trellis_root: Path, generator_path: Path) -> dict[str, object]
     if "features" not in first_stage:
         raise AssertionError("SparseGELU forward hook did not capture the first stage")
     output_array = first_stage["features"]
-    tail_output_array = full_output.feats.detach().cpu().numpy()
+    tail_output_array = full_output.feats.detach().cpu().numpy().copy()
     if output_array.shape != (feature_array.shape[0], weight_array.shape[0]):
         raise AssertionError(f"unexpected first-stage output shape: {output_array.shape}")
     if not np.isfinite(output_array).all() or not np.isfinite(tail_output_array).all():
         raise AssertionError("upstream first-stage or tail output is not finite")
     if full_output.coords is not sparse_input.coords:
         raise AssertionError("upstream SparseFeedForwardNet coordinate-object drift")
+    scalar_tail = scalar_f32_tail_reference(
+        output_array,
+        tail_weight_array,
+        tail_bias_array,
+    )
+    if not np.allclose(tail_output_array, scalar_tail, rtol=0.0, atol=5e-5):
+        raise AssertionError("upstream tail output disagrees with scalar F32 reference")
 
     return {
         "schema": SCHEMA,
@@ -225,13 +262,16 @@ def build_fixture(trellis_root: Path, generator_path: Path) -> dict[str, object]
             "sparse_backend": "none",
         },
         "contract": {
-            "upstream_call": "SparseFeedForwardNet.forward -> mlp[0] -> mlp[1]",
+            "upstream_call": "SparseFeedForwardNet.forward -> mlp[0] -> mlp[1] -> mlp[2]",
             "activation": "SparseGELU(approximate=\"tanh\")",
             "hidden_rule": "int(C * 5.3334)",
             "production_model_channels": 1536,
             "production_mlp_ratio": MLP_RATIO,
             "first_stage_hook": "mlp[1] output",
             "tail_projection_executed": True,
+            "tail_contract": "biased frozen Linear(H,C)",
+            "full_output": "SparseFeedForwardNet output after mlp[2]",
+            "total_work_rule": "2 * N * C * H",
             "local_mode": "graphless frozen-parameter CPU inference",
         },
         "input": {
@@ -255,12 +295,18 @@ def build_fixture(trellis_root: Path, generator_path: Path) -> dict[str, object]
         "tail_linear": {
             "out_channels": int(tail_weight_array.shape[0]),
             "weight": tail_weight_array.tolist(),
+            "weight_f32le_sha256": little_endian_sha(tail_weight_array, "<f4"),
             "bias": tail_bias_array.tolist(),
-            "output_features_f32le_sha256": little_endian_sha(tail_output_array, "<f4"),
+            "bias_f32le_sha256": little_endian_sha(tail_bias_array, "<f4"),
         },
         "output": {
             "features": output_array.tolist(),
             "features_f32le_sha256": little_endian_sha(output_array, "<f4"),
+            "coordinate_object_reused": True,
+        },
+        "full_output": {
+            "features": tail_output_array.tolist(),
+            "features_f32le_sha256": little_endian_sha(tail_output_array, "<f4"),
             "coordinate_object_reused": True,
         },
     }
