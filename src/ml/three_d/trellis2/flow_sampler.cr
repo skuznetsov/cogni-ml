@@ -136,9 +136,10 @@ module ML::ThreeD::Trellis2
     end
 
     # Preserve the pinned source boundary for one pair owned by a Float64
-    # schedule. The model timestep and state coefficients narrow only after the
-    # corresponding Python/NumPy Float64 scalar expressions are evaluated.
-    # This overload leaves the admitted explicit Float32 one-step API intact.
+    # schedule. The model timestep, schedule delta, and time-dependent x0
+    # coefficient narrow only after their Python/NumPy Float64 scalar
+    # expressions are evaluated. sigma_min keeps the admitted Float32 API
+    # boundary. This overload leaves that explicit one-step API intact.
     def sample_once_with_velocity_provider(
       x_t : Tensor,
       cond : C,
