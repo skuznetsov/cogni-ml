@@ -1,0 +1,518 @@
+{
+  "schema": "cogni-ml/trellis2/flow-euler-schedule-oracle/v1",
+  "provenance": {
+    "repository": "https://github.com/microsoft/TRELLIS.2",
+    "commit": "75fbf0183001ed9876c8dbb35de6b68552ee08bd",
+    "python_version": "3.11.9",
+    "torch_version": "2.9.0",
+    "numpy_version": "2.1.3",
+    "device": "cpu",
+    "dtype": "float32 state/model timestep; float64 schedule",
+    "weights": "none",
+    "network": "none",
+    "generator": "tools/trellis2_oracle/export_flow_euler_schedule.py",
+    "generator_sha256": "a80b40137db32c99ebacd87f9e3d1866919313dd22c8868e25e5ea055688d2b4",
+    "support_module": "tools/trellis2_oracle/export_flow_euler_step.py",
+    "support_module_sha256": "3530eb9c64b50c19783d70104f168d20cbedbac1ba946f14760b8484ca711925",
+    "sources": {
+      "base": {
+        "path": "trellis2/pipelines/samplers/base.py",
+        "sha256": "be8530b55ea66ac58e8ab23d650f463636dd52cf7e39c7c9c66f69bf72e6a0d1"
+      },
+      "flow_euler": {
+        "path": "trellis2/pipelines/samplers/flow_euler.py",
+        "sha256": "b4bd235874adfc47fd3bce3d596249b1ccfa6644983a9b4562c9295a463bc0fd"
+      },
+      "cfg": {
+        "path": "trellis2/pipelines/samplers/classifier_free_guidance_mixin.py",
+        "sha256": "1780182cd7d3c7af3f82b7904aa9c40eb3f632064d77456565c5acccd9598bee"
+      },
+      "interval": {
+        "path": "trellis2/pipelines/samplers/guidance_interval_mixin.py",
+        "sha256": "633f97c48a811a835d3b894b3e0de794407f60774f6c60a2c6a61e7c0351c6f2"
+      },
+      "pipeline": {
+        "path": "trellis2/pipelines/trellis2_image_to_3d.py",
+        "sha256": "e2addfca672354284b23d1541a8f49228d5a727d49220fcb8512cca2cdd38ce9"
+      },
+      "trainer": {
+        "path": "trellis2/trainers/flow_matching/flow_matching.py",
+        "sha256": "09da19de08fc95315d3588d7ca078128e03914d692f20fa2a2ba58038c0cb563"
+      },
+      "production_config": {
+        "path": "configs/gen/ss_flow_img_dit_1_3B_64_bf16.json",
+        "sha256": "6128e63a7bd77db798c649d08fd05ac6b86f3fa7a0d4a405008ccf6cf29945c0"
+      }
+    }
+  },
+  "contract": {
+    "owner": "FlowEulerSampler.sample",
+    "entrypoint": "trellis2.pipelines.samplers.flow_euler.FlowEulerSampler.sample",
+    "schedule": "np.linspace(1,0,steps+1) in float64, then rescale_t*t/(1+(rescale_t-1)*t)",
+    "model_timestep": "each float64 normalized t is materialized as float32[batch] = 1000*t",
+    "state_scalar_boundary": "t/t_prev remain Python float64 until source scalar expressions meet float32 tensors",
+    "model_formula": "pred_v = x_t*0.25 + model_t*(1/1024) + cond",
+    "condition_carrier": "same opaque condition object on every call",
+    "state_transport": "first call receives noise; later calls receive prior pred_x_prev by identity",
+    "rng": "none; initial noise is explicit",
+    "progress_display": "tqdm wrapper replaced by an identity iterator; schedule iteration is unchanged",
+    "fixture_purpose": "exposes endpoint pre-narrowing; the dt table separately isolates subtraction order",
+    "counterfactual_effect": "pre-narrowing changes both model-time materialization and state coefficients",
+    "production_defaults": "not claimed; steps=3 and rescale_t=1.7 are separating test values"
+  },
+  "fixture": {
+    "shape": [
+      2,
+      2
+    ],
+    "steps": 3,
+    "rescale_t": 1.7,
+    "sigma_min": 0.125,
+    "model_x_scale": 0.25,
+    "model_t_scale": 0.0009765625
+  },
+  "inputs": {
+    "noise": {
+      "shape": [
+        2,
+        2
+      ],
+      "dtype": "float32",
+      "values": [
+        [
+          1.0,
+          -2.0
+        ],
+        [
+          0.5,
+          3.0
+        ]
+      ],
+      "f32le_sha256": "f8788ce138a2b6e54302c09bd3d5274cb2fc3ceca6425b02c788181d332edc6d"
+    },
+    "cond": {
+      "shape": [
+        2,
+        2
+      ],
+      "dtype": "float32",
+      "values": [
+        [
+          0.125,
+          -0.25
+        ],
+        [
+          0.375,
+          -0.5
+        ]
+      ],
+      "f32le_sha256": "3e69a592fd9574f18ab62d6dcc96ba9f7c9aeb8e203818872611af0a2b0f3b9c"
+    },
+    "noise_unchanged": true,
+    "cond_unchanged": true
+  },
+  "schedule": {
+    "dtype": "float64",
+    "values": [
+      1.0,
+      0.7727272727272728,
+      0.45945945945945954,
+      0.0
+    ],
+    "f64_bits_hex": [
+      "0x3ff0000000000000",
+      "0x3fe8ba2e8ba2e8bb",
+      "0x3fdd67c8a60dd67e",
+      "0x0000000000000000"
+    ],
+    "f64le_sha256": "ed9fdc900020d54363b006746ad6dcc27658d1113fde648e269090bb49051622"
+  },
+  "model_probe": {
+    "call_count": 3,
+    "same_condition_every_call": true,
+    "first_x_is_noise": true,
+    "later_x_is_prior_output": true,
+    "final_is_last_pred_x_prev": true
+  },
+  "steps": [
+    {
+      "index": 0,
+      "t": 1.0,
+      "t_f64_bits_hex": "0x3ff0000000000000",
+      "t_prev": 0.7727272727272728,
+      "t_prev_f64_bits_hex": "0x3fe8ba2e8ba2e8bb",
+      "dt_f32_after_f64_subtract": 0.22727273404598236,
+      "dt_f32_bits": 1047050799,
+      "x_identity": "initial_noise",
+      "cond_identity_preserved": true,
+      "x_t": {
+        "shape": [
+          2,
+          2
+        ],
+        "dtype": "float32",
+        "values": [
+          [
+            1.0,
+            -2.0
+          ],
+          [
+            0.5,
+            3.0
+          ]
+        ],
+        "f32le_sha256": "f8788ce138a2b6e54302c09bd3d5274cb2fc3ceca6425b02c788181d332edc6d"
+      },
+      "model_t": {
+        "shape": [
+          2
+        ],
+        "dtype": "float32",
+        "values": [
+          1000.0,
+          1000.0
+        ],
+        "f32le_sha256": "8e1a8a5b71136de416b27a6644ea1fd36dd477babbfbccc70d6734663aa9efe5"
+      },
+      "pred_v": {
+        "shape": [
+          2,
+          2
+        ],
+        "dtype": "float32",
+        "values": [
+          [
+            1.3515625,
+            0.2265625
+          ],
+          [
+            1.4765625,
+            1.2265625
+          ]
+        ],
+        "f32le_sha256": "09c762ab8e155639656d63fe7427e1cbb35b4c5d2b8d2b0c41837ddf9d05bc17"
+      },
+      "pred_x_prev": {
+        "shape": [
+          2,
+          2
+        ],
+        "dtype": "float32",
+        "values": [
+          [
+            0.6928266882896423,
+            -2.0514914989471436
+          ],
+          [
+            0.1644175946712494,
+            2.721235752105713
+          ]
+        ],
+        "f32le_sha256": "5362d801e264e3a6e35566cee9e6e7c5440bdf232bc45585d2e2e4284a39c8e6"
+      },
+      "pred_x_0": {
+        "shape": [
+          2,
+          2
+        ],
+        "dtype": "float32",
+        "values": [
+          [
+            -0.4765625,
+            -1.9765625
+          ],
+          [
+            -1.0390625,
+            1.3984375
+          ]
+        ],
+        "f32le_sha256": "c90555739b94c78d5b6823e3ec266e5ff3f131bc03c17577e78f7ddf3edfa3f9"
+      }
+    },
+    {
+      "index": 1,
+      "t": 0.7727272727272728,
+      "t_f64_bits_hex": "0x3fe8ba2e8ba2e8bb",
+      "t_prev": 0.45945945945945954,
+      "t_prev_f64_bits_hex": "0x3fdd67c8a60dd67e",
+      "dt_f32_after_f64_subtract": 0.3132678270339966,
+      "dt_f32_bits": 1050698916,
+      "x_identity": "prior_pred_x_prev",
+      "cond_identity_preserved": true,
+      "x_t": {
+        "shape": [
+          2,
+          2
+        ],
+        "dtype": "float32",
+        "values": [
+          [
+            0.6928266882896423,
+            -2.0514914989471436
+          ],
+          [
+            0.1644175946712494,
+            2.721235752105713
+          ]
+        ],
+        "f32le_sha256": "5362d801e264e3a6e35566cee9e6e7c5440bdf232bc45585d2e2e4284a39c8e6"
+      },
+      "model_t": {
+        "shape": [
+          2
+        ],
+        "dtype": "float32",
+        "values": [
+          772.727294921875,
+          772.727294921875
+        ],
+        "f32le_sha256": "e5730e2b955300f0db08876fb3b447254a05fc45873c2dadcaadc01796c026ba"
+      },
+      "pred_v": {
+        "shape": [
+          2,
+          2
+        ],
+        "dtype": "float32",
+        "values": [
+          [
+            1.0528231859207153,
+            -0.008256375789642334
+          ],
+          [
+            1.1707208156585693,
+            0.9349254369735718
+          ]
+        ],
+        "f32le_sha256": "598a75aedad65d2b087beb3b19bf8acd177b384c1e59de65d63fa8d93f7fa3a7"
+      },
+      "pred_x_prev": {
+        "shape": [
+          2,
+          2
+        ],
+        "dtype": "float32",
+        "values": [
+          [
+            0.36301106214523315,
+            -2.04890513420105
+          ],
+          [
+            -0.2023315727710724,
+            2.428353786468506
+          ]
+        ],
+        "f32le_sha256": "672b9e0bca478c42adf0049a4d4c0cc2b924d7e7afd95a437f9408310118fe94"
+      },
+      "pred_x_0": {
+        "shape": [
+          2,
+          2
+        ],
+        "dtype": "float32",
+        "values": [
+          [
+            -0.23723161220550537,
+            -1.7884405851364136
+          ],
+          [
+            -0.794041633605957,
+            1.6320786476135254
+          ]
+        ],
+        "f32le_sha256": "1e5be1301a5a1a6b601068444df276aa4f134256bdb6c248040d7ea679f40a59"
+      }
+    },
+    {
+      "index": 2,
+      "t": 0.45945945945945954,
+      "t_f64_bits_hex": "0x3fdd67c8a60dd67e",
+      "t_prev": 0.0,
+      "t_prev_f64_bits_hex": "0x0000000000000000",
+      "dt_f32_after_f64_subtract": 0.45945945382118225,
+      "dt_f32_bits": 1055604293,
+      "x_identity": "prior_pred_x_prev",
+      "cond_identity_preserved": true,
+      "x_t": {
+        "shape": [
+          2,
+          2
+        ],
+        "dtype": "float32",
+        "values": [
+          [
+            0.36301106214523315,
+            -2.04890513420105
+          ],
+          [
+            -0.2023315727710724,
+            2.428353786468506
+          ]
+        ],
+        "f32le_sha256": "672b9e0bca478c42adf0049a4d4c0cc2b924d7e7afd95a437f9408310118fe94"
+      },
+      "model_t": {
+        "shape": [
+          2
+        ],
+        "dtype": "float32",
+        "values": [
+          459.45947265625,
+          459.45947265625
+        ],
+        "f32le_sha256": "8f63d17b7c4fa12726b23811f2e2725059c4d5dfb2b210c6d17c9393b3b448ee"
+      },
+      "pred_v": {
+        "shape": [
+          2,
+          2
+        ],
+        "dtype": "float32",
+        "values": [
+          [
+            0.6644436717033386,
+            -0.3135353922843933
+          ],
+          [
+            0.7731080055236816,
+            0.5557793378829956
+          ]
+        ],
+        "f32le_sha256": "13c707190ee2686240e882ce7ccc788d51c9d87de32dc280d861ee30a1579996"
+      },
+      "pred_x_prev": {
+        "shape": [
+          2,
+          2
+        ],
+        "dtype": "float32",
+        "values": [
+          [
+            0.057726144790649414,
+            -1.904848337173462
+          ],
+          [
+            -0.5575433969497681,
+            2.1729958057403564
+          ]
+        ],
+        "f32le_sha256": "ff3c5d71d3946f4a2ca77dd5eae90f32e6da0da9ec0673a582f5165ed0cef973"
+      },
+      "pred_x_0": {
+        "shape": [
+          2,
+          2
+        ],
+        "dtype": "float32",
+        "values": [
+          [
+            -0.03254508972167969,
+            -1.6275503635406494
+          ],
+          [
+            -0.5844889283180237,
+            1.831898808479309
+          ]
+        ],
+        "f32le_sha256": "edd77cf1a5b64154aa4d7e408530286909c90b75b23c5263080f31c4fc01cfbe"
+      }
+    }
+  ],
+  "expected": {
+    "samples": {
+      "shape": [
+        2,
+        2
+      ],
+      "dtype": "float32",
+      "values": [
+        [
+          0.057726144790649414,
+          -1.904848337173462
+        ],
+        [
+          -0.5575433969497681,
+          2.1729958057403564
+        ]
+      ],
+      "f32le_sha256": "ff3c5d71d3946f4a2ca77dd5eae90f32e6da0da9ec0673a582f5165ed0cef973"
+    },
+    "pred_x_t_count": 3,
+    "pred_x_0_count": 3
+  },
+  "independent_scalar_reference": {
+    "schedule_f64le_sha256": "ed9fdc900020d54363b006746ad6dcc27658d1113fde648e269090bb49051622",
+    "max_abs_error": 0.0,
+    "samples_f32le_sha256": "ff3c5d71d3946f4a2ca77dd5eae90f32e6da0da9ec0673a582f5165ed0cef973"
+  },
+  "counterfactual_pre_narrowed_f32_schedule": {
+    "schedule_values": [
+      1.0,
+      0.7727272510528564,
+      0.45945945382118225,
+      0.0
+    ],
+    "schedule_f32_bits": [
+      1065353216,
+      1061540212,
+      1055604293,
+      0
+    ],
+    "dt_comparison": [
+      {
+        "index": 0,
+        "source_f32_after_f64_subtract": 0.22727273404598236,
+        "source_f32_bits": 1047050799,
+        "pre_narrowed_f32_subtract": 0.22727274894714355,
+        "pre_narrowed_f32_bits": 1047050800,
+        "differs": true
+      },
+      {
+        "index": 1,
+        "source_f32_after_f64_subtract": 0.3132678270339966,
+        "source_f32_bits": 1050698916,
+        "pre_narrowed_f32_subtract": 0.3132677972316742,
+        "pre_narrowed_f32_bits": 1050698915,
+        "differs": true
+      },
+      {
+        "index": 2,
+        "source_f32_after_f64_subtract": 0.45945945382118225,
+        "source_f32_bits": 1055604293,
+        "pre_narrowed_f32_subtract": 0.45945945382118225,
+        "pre_narrowed_f32_bits": 1055604293,
+        "differs": false
+      }
+    ],
+    "separating_pair_count": 2,
+    "samples": {
+      "shape": [
+        2,
+        2
+      ],
+      "dtype": "float32",
+      "values": [
+        [
+          0.05772623419761658,
+          -1.904848337173462
+        ],
+        [
+          -0.5575433373451233,
+          2.1729958057403564
+        ]
+      ],
+      "f32le_sha256": "8f4b5262437c6c902290693689bae7a459e4c086fa972a0efac6b74eab67733a"
+    },
+    "differing_element_count": 2,
+    "first_differing_flat_index": 0,
+    "max_abs_difference": 8.940696716308594e-08
+  },
+  "rejected_scope": [
+    "Crystal repeated-step sampler runtime or schedule API",
+    "CFG, guidance interval, or guidance rescale execution",
+    "random-noise or cross-device seed reproducibility",
+    "production sampler defaults, pipeline, sparse-structure flow, or decoder",
+    "aggregate process, stage, retained, RSS, native, or peak memory",
+    "real weights, model scale, BF16, F16, quantization, GPU, or Metal"
+  ]
+}
