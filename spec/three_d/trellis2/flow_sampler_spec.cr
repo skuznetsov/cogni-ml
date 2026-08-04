@@ -451,3 +451,166 @@ describe ML::ThreeD::Trellis2::FlowEulerStepCPU do
     exact.pred_x_0.numel.should eq(1)
   end
 end
+
+describe "TRELLIS.2 bounded single-call flow transport" do
+  it "forwards source model units once and reproduces the pinned step" do
+    fixture = flow_euler_fixture
+    config = fixture["fixture"]
+    shape = ML::Shape.new(flow_euler_i32(config["shape"]))
+    x_t = ML::Tensor.from_array(
+      flow_euler_f32(fixture["inputs"]["x_t"]["values"]),
+      shape
+    )
+    pred_v = ML::Tensor.from_array(
+      flow_euler_f32(fixture["inputs"]["pred_v"]["values"]),
+      shape
+    )
+    cond_payload = fixture["inputs"]["cond"]
+    cond = ML::Tensor.from_array(
+      flow_euler_f32(cond_payload["values"]),
+      ML::Shape.new(flow_euler_i32(cond_payload["shape"]))
+    )
+    x_before = x_t.to_a
+    cond_before = cond.to_a
+    calls = 0
+
+    result = ML::ThreeD::Trellis2::FlowEulerStepCPU
+      .sample_once_with_velocity_provider(
+        x_t,
+        cond,
+        sigma_min: config["sigma_min"].as_f.to_f32,
+        t: config["t"].as_f.to_f32,
+        t_prev: config["t_prev"].as_f.to_f32
+    ) do |actual_x, model_t, actual_cond|
+        calls += 1
+        actual_x.object_id.should eq(x_t.object_id)
+        actual_cond.object_id.should eq(cond.object_id)
+        model_t.shape.should eq(ML::Shape.new(2_i32))
+        model_t.dtype.should eq(ML::DType::F32)
+        model_t.on_cpu?.should be_true
+        model_t.contiguous?.should be_true
+        model_t.to_a.should eq([750.0_f32, 750.0_f32])
+        model_t.shares_storage_with?(x_t).should be_false
+        pred_v
+      end
+
+    calls.should eq(1)
+    result.pred_x_prev.to_a.should eq(
+      flow_euler_f32(fixture["expected"]["pred_x_prev"]["values"])
+    )
+    result.pred_x_0.to_a.should eq(
+      flow_euler_f32(fixture["expected"]["pred_x_0"]["values"])
+    )
+    x_t.to_a.should eq(x_before)
+    cond.to_a.should eq(cond_before)
+  end
+
+  it "preflights normalized state and result capacity before provider execution" do
+    x_t = ML::Tensor.from_array([Float32::NAN], ML::Shape.new(1_i32))
+    cond = ["opaque"]
+    calls = 0
+
+    expect_raises(ArgumentError, /result budget requires 8 bytes/) do
+      ML::ThreeD::Trellis2::FlowEulerStepCPU
+        .sample_once_with_velocity_provider(
+          x_t,
+          cond,
+          sigma_min: 0.0_f32,
+          t: 1.0_f32,
+          t_prev: 0.0_f32,
+          max_result_bytes: 7_i64
+      ) do |actual_x, _model_t, actual_cond|
+          calls += 1
+          actual_cond.object_id.should eq(cond.object_id)
+          actual_x
+        end
+    end
+    calls.should eq(0)
+
+    expect_raises(ArgumentError, /x_t values must be finite/) do
+      ML::ThreeD::Trellis2::FlowEulerStepCPU
+        .sample_once_with_velocity_provider(
+          x_t,
+          cond,
+          sigma_min: 0.0_f32,
+          t: 1.0_f32,
+          t_prev: 0.0_f32
+      ) do |actual_x, _model_t, _actual_cond|
+          calls += 1
+          actual_x
+        end
+    end
+    calls.should eq(0)
+
+    expect_raises(ArgumentError, /normalized t/) do
+      ML::ThreeD::Trellis2::FlowEulerStepCPU
+        .sample_once_with_velocity_provider(
+          x_t,
+          cond,
+          sigma_min: 0.0_f32,
+          t: 750.0_f32,
+          t_prev: 0.0_f32
+      ) do |actual_x, _model_t, _actual_cond|
+          calls += 1
+          actual_x
+        end
+    end
+    calls.should eq(0)
+  end
+
+  it "validates each returned velocity without another provider call" do
+    x_t = ML::Tensor.from_array(
+      [1.0_f32, 2.0_f32, 3.0_f32, 4.0_f32],
+      ML::Shape.new(2_i32, 2_i32)
+    )
+    cond = ["opaque"]
+    calls = 0
+
+    malformed = {
+      ML::Tensor.from_array(x_t.to_a, ML::Shape.new(4_i32)),
+      ML::Tensor.from_array(
+        [1.0_f32, Float32::NAN, 3.0_f32, 4.0_f32],
+        x_t.shape
+      ),
+      ML::Tensor.from_array(x_t.to_a, x_t.shape).transpose,
+    }
+    errors = {/same shape/, /pred_v values must be finite/, /contiguous/}
+    malformed.zip(errors).each do |velocity, expected_error|
+      expect_raises(ArgumentError, expected_error) do
+        ML::ThreeD::Trellis2::FlowEulerStepCPU
+          .sample_once_with_velocity_provider(
+            x_t,
+            cond,
+            sigma_min: 0.0_f32,
+            t: 1.0_f32,
+            t_prev: 0.0_f32
+        ) do |_actual_x, _model_t, _actual_cond|
+            calls += 1
+            velocity
+          end
+      end
+    end
+    calls.should eq(malformed.size)
+  end
+
+  it "propagates a provider exception without retry" do
+    x_t = ML::Tensor.from_array([1.0_f32], ML::Shape.new(1_i32))
+    cond = ["opaque"]
+    calls = 0
+
+    expect_raises(Exception, /velocity provider failed/) do
+      ML::ThreeD::Trellis2::FlowEulerStepCPU
+        .sample_once_with_velocity_provider(
+          x_t,
+          cond,
+          sigma_min: 0.0_f32,
+          t: 1.0_f32,
+          t_prev: 0.0_f32
+      ) do |_actual_x, _model_t, _actual_cond|
+          calls += 1
+          raise "velocity provider failed"
+        end
+    end
+    calls.should eq(1)
+  end
+end

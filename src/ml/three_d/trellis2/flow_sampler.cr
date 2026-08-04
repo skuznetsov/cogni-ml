@@ -3,7 +3,8 @@
 # This leaf consumes an already computed velocity and normalized state times.
 # It does not invoke a model, construct the model timestep `1000*t`, own a
 # schedule or RNG, or implement CFG. Callers must not mutate input tensors
-# concurrently while this synchronous operation holds borrowed CPU reads.
+# concurrently while this synchronous operation holds borrowed CPU reads. A
+# velocity-provider callback must not mutate x_t during its invocation.
 
 require "../../core/tensor"
 
@@ -46,13 +47,7 @@ module ML::ThreeD::Trellis2
       raise ArgumentError.new("flow Euler inputs must be non-empty") if x_t.numel == 0
 
       validate_scalars!(sigma_min, t, t_prev)
-      required_result_bytes = x_t.numel.to_i64 * 2_i64 * DType::F32.byte_size.to_i64
-      if required_result_bytes > max_result_bytes
-        raise ArgumentError.new(
-          "flow Euler result budget requires #{required_result_bytes} bytes but " \
-          "max_result_bytes is #{max_result_bytes}"
-        )
-      end
+      validate_result_capacity!(x_t, max_result_bytes)
 
       x_values = borrowed_values!(x_t, "x_t")
       velocity_values = borrowed_values!(pred_v, "pred_v")
@@ -81,10 +76,66 @@ module ML::ThreeD::Trellis2
       FlowEulerStepResultCPU.new(pred_x_prev, pred_x_0)
     end
 
+    # Construct only the source-required model timestep and invoke one caller-
+    # supplied velocity provider before delegating all state arithmetic to the
+    # admitted explicit-velocity leaf above. x_t is forwarded by identity; the
+    # opaque condition is forwarded unchanged and preserves identity for
+    # reference carriers. Provider exceptions are propagated without retry.
+    # The result cap excludes this small timestep tensor and all provider-owned
+    # memory; it remains only the combined payload cap for the two outputs.
+    def sample_once_with_velocity_provider(
+      x_t : Tensor,
+      cond : C,
+      sigma_min : Float32,
+      t : Float32,
+      t_prev : Float32,
+      max_result_bytes : Int64 = MAX_RESULT_BYTES,
+      &velocity_provider : Tensor, Tensor, C -> Tensor
+    ) : FlowEulerStepResultCPU forall C
+      # Preflight every request-owned invariant and the output pair before the
+      # provider can perform expensive work. The input payload is borrowed and
+      # checked without a copy, then checked again by sample_once after the
+      # provider returns in case the callback mutated x_t synchronously.
+      validate_result_budget!(max_result_bytes)
+      validate_tensor!(x_t, "x_t")
+      raise ArgumentError.new("flow Euler inputs must be non-empty") if x_t.numel == 0
+      validate_scalars!(sigma_min, t, t_prev)
+      validate_result_capacity!(x_t, max_result_bytes)
+      finite_values!(borrowed_values!(x_t, "x_t"), "x_t")
+
+      batch = x_t.shape[0]
+      model_t = (1000.0_f32 * t).to_f32
+      model_timesteps = Tensor.new(
+        Shape.new(batch),
+        dtype: DType::F32,
+        device: Tensor::Device::CPU
+      )
+      model_timesteps.cpu_data.not_nil!.fill(model_t)
+      pred_v = velocity_provider.call(x_t, model_timesteps, cond)
+      sample_once(
+        x_t,
+        pred_v,
+        sigma_min: sigma_min,
+        t: t,
+        t_prev: t_prev,
+        max_result_bytes: max_result_bytes
+      )
+    end
+
     private def validate_result_budget!(max_result_bytes : Int64) : Nil
       unless 0_i64 < max_result_bytes <= MAX_RESULT_BYTES
         raise ArgumentError.new(
           "max_result_bytes must be positive and no greater than #{MAX_RESULT_BYTES}"
+        )
+      end
+    end
+
+    private def validate_result_capacity!(x_t : Tensor, max_result_bytes : Int64) : Nil
+      required_result_bytes = x_t.numel.to_i64 * 2_i64 * DType::F32.byte_size.to_i64
+      if required_result_bytes > max_result_bytes
+        raise ArgumentError.new(
+          "flow Euler result budget requires #{required_result_bytes} bytes but " \
+          "max_result_bytes is #{max_result_bytes}"
         )
       end
     end
