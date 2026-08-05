@@ -20,7 +20,7 @@ module ML::ThreeD::Trellis2
       negative_condition : C,
       sigma_min : Float32,
       steps : Int32 = 50_i32,
-      rescale_t : Float64 = 1.0_f64,
+      rescale_t : Float64 = FlowEulerSamplerCPU::DEFAULT_RESCALE_T,
       guidance_strength : Float64 = FlowEulerSamplerCPU::DEFAULT_GUIDANCE_STRENGTH,
       guidance_rescale : Float64 = 0.0_f64,
       max_result_bytes : Int64 = FlowEulerSamplerCPU::MAX_RETAINED_RESULT_BYTES,

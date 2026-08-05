@@ -417,13 +417,17 @@ module ML::ThreeD::Trellis2
     # guidance_strength to 3.0. This constant is only a public sampler
     # default; it does not add pipeline or model policy.
     DEFAULT_GUIDANCE_STRENGTH = 3.0_f64
+    # TRELLIS.2 source pin 75fbf0183001ed9876c8dbb35de6b68552ee08bd:
+    # FlowEulerSampler.sample and its CFG subclasses default rescale_t to 1.0.
+    # This constant owns only that public sampler default.
+    DEFAULT_RESCALE_T = 1.0_f64
 
     def sample(
       noise : Tensor,
       cond : C,
       sigma_min : Float32,
       steps : Int32 = 50_i32,
-      rescale_t : Float64 = 1.0_f64,
+      rescale_t : Float64 = DEFAULT_RESCALE_T,
       max_result_bytes : Int64 = MAX_RETAINED_RESULT_BYTES,
       &velocity_provider : Tensor, Tensor, C -> Tensor
     ) : FlowEulerSampleResultCPU forall C
@@ -467,7 +471,7 @@ module ML::ThreeD::Trellis2
       cond : C,
       sigma_min : Float32,
       steps : Int32 = 50_i32,
-      rescale_t : Float64 = 1.0_f64,
+      rescale_t : Float64 = DEFAULT_RESCALE_T,
       max_result_bytes : Int64 = MAX_RETAINED_RESULT_BYTES,
       &step_provider : Tensor, Float64, Float64, Tensor, C -> Tensor
     ) : FlowEulerSampleResultCPU forall C
