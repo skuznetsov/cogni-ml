@@ -22,7 +22,7 @@ module ML::ThreeD::Trellis2
       positive_condition : C,
       negative_condition : C,
       sigma_min : Float32,
-      steps : Int32 = 50_i32,
+      steps : Int32 = FlowEulerSamplerCPU::DEFAULT_STEPS,
       rescale_t : Float64 = FlowEulerSamplerCPU::DEFAULT_RESCALE_T,
       guidance_strength : Float64 = FlowEulerSamplerCPU::DEFAULT_GUIDANCE_STRENGTH,
       guidance_interval : Tuple(Float64, Float64) = DEFAULT_GUIDANCE_INTERVAL,

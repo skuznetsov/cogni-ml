@@ -413,6 +413,10 @@ module ML::ThreeD::Trellis2
     MAX_STEPS                 = 4096_i32
     MAX_RETAINED_RESULT_BYTES = FlowEulerStepCPU::MAX_RESULT_BYTES
     # TRELLIS.2 source pin 75fbf0183001ed9876c8dbb35de6b68552ee08bd:
+    # FlowEulerSampler.sample and its CFG subclasses default steps to 50.
+    # This constant owns only that public sampler default.
+    DEFAULT_STEPS = 50_i32
+    # TRELLIS.2 source pin 75fbf0183001ed9876c8dbb35de6b68552ee08bd:
     # FlowEulerCfgSampler and FlowEulerGuidanceIntervalSampler both default
     # guidance_strength to 3.0. This constant is only a public sampler
     # default; it does not add pipeline or model policy.
@@ -426,7 +430,7 @@ module ML::ThreeD::Trellis2
       noise : Tensor,
       cond : C,
       sigma_min : Float32,
-      steps : Int32 = 50_i32,
+      steps : Int32 = DEFAULT_STEPS,
       rescale_t : Float64 = DEFAULT_RESCALE_T,
       max_result_bytes : Int64 = MAX_RETAINED_RESULT_BYTES,
       &velocity_provider : Tensor, Tensor, C -> Tensor
@@ -470,7 +474,7 @@ module ML::ThreeD::Trellis2
       noise : Tensor,
       cond : C,
       sigma_min : Float32,
-      steps : Int32 = 50_i32,
+      steps : Int32 = DEFAULT_STEPS,
       rescale_t : Float64 = DEFAULT_RESCALE_T,
       max_result_bytes : Int64 = MAX_RETAINED_RESULT_BYTES,
       &step_provider : Tensor, Float64, Float64, Tensor, C -> Tensor
