@@ -412,6 +412,11 @@ module ML::ThreeD::Trellis2
 
     MAX_STEPS                 = 4096_i32
     MAX_RETAINED_RESULT_BYTES = FlowEulerStepCPU::MAX_RESULT_BYTES
+    # TRELLIS.2 source pin 75fbf0183001ed9876c8dbb35de6b68552ee08bd:
+    # FlowEulerCfgSampler and FlowEulerGuidanceIntervalSampler both default
+    # guidance_strength to 3.0. This constant is only a public sampler
+    # default; it does not add pipeline or model policy.
+    DEFAULT_GUIDANCE_STRENGTH = 3.0_f64
 
     def sample(
       noise : Tensor,
