@@ -12,6 +12,11 @@ module ML::ThreeD::Trellis2
   module FlowGuidanceIntervalSamplerCPU
     extend self
 
+    # TRELLIS.2 source pin: 75fbf0183001ed9876c8dbb35de6b68552ee08bd.
+    # Upstream FlowEulerGuidanceIntervalSampler.sample defaults to the full
+    # normalized interval [0.0, 1.0], inclusive at both endpoints.
+    DEFAULT_GUIDANCE_INTERVAL = {0.0_f64, 1.0_f64}
+
     def sample(
       noise : Tensor,
       positive_condition : C,
@@ -20,7 +25,7 @@ module ML::ThreeD::Trellis2
       steps : Int32 = 50_i32,
       rescale_t : Float64 = 1.0_f64,
       guidance_strength : Float64 = FlowEulerSamplerCPU::DEFAULT_GUIDANCE_STRENGTH,
-      guidance_interval : Tuple(Float64, Float64) = {0.0_f64, 1.0_f64},
+      guidance_interval : Tuple(Float64, Float64) = DEFAULT_GUIDANCE_INTERVAL,
       guidance_rescale : Float64 = 0.0_f64,
       max_result_bytes : Int64 = FlowEulerSamplerCPU::MAX_RETAINED_RESULT_BYTES,
       &velocity_provider : Tensor, Tensor, C -> Tensor
