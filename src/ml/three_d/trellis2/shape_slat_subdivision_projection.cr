@@ -27,56 +27,13 @@ module ML::ThreeD::Trellis2
       max_resident_bytes : Int64 = MAX_RESIDENT_BYTES,
     ) : Array(Float32)
       validate_budget!(max_resident_bytes)
-      unless input_point_count >= 0
-        raise ArgumentError.new("input point count must be non-negative")
-      end
-      if input_point_count > MAX_INPUT_POINTS
-        raise ArgumentError.new(
-          "input point count exceeds #{MAX_INPUT_POINTS}"
-        )
-      end
-      if input_channels > MAX_INPUT_CHANNELS
-        raise ArgumentError.new(
-          "input channel count exceeds #{MAX_INPUT_CHANNELS}"
-        )
-      end
-      unless input_channels > 0
-        raise ArgumentError.new(
-          "input channel count must be in 1..#{MAX_INPUT_CHANNELS}"
-        )
-      end
-
-      input_elements = checked_elements(
+      input_elements, output_elements, weight_elements = projection_sizes(
+        features,
+        weights,
+        bias,
         input_point_count,
-        input_channels,
-        "feature"
+        input_channels
       )
-      output_elements = checked_elements(
-        input_point_count,
-        OUTPUT_CHANNELS,
-        "subdivision logits"
-      )
-      weight_elements = checked_elements(
-        OUTPUT_CHANNELS,
-        input_channels,
-        "subdivision weight"
-      )
-
-      unless features.size.to_i64 == input_elements
-        raise ArgumentError.new(
-          "feature payload size must match [input point count, input channel count]"
-        )
-      end
-      unless weights.size.to_i64 == weight_elements
-        raise ArgumentError.new(
-          "subdivision weight payload size must match [8, input channel count]"
-        )
-      end
-      unless bias.size == OUTPUT_CHANNELS
-        raise ArgumentError.new(
-          "subdivision bias payload size must match [8]"
-        )
-      end
 
       input_bytes = checked_bytes(input_elements, "feature")
       weight_bytes = checked_bytes(weight_elements, "subdivision weight")
@@ -128,6 +85,125 @@ module ML::ThreeD::Trellis2
         end
       end
       logits
+    end
+
+    # Compose the admitted raw-logit projection with the separate strict mask
+    # boundary. The preflight counts both outputs together so a caller cannot
+    # pass two individually valid stages while exceeding the shared logical
+    # resident budget.
+    def project_and_binarize(
+      features : Array(Float32),
+      weights : Array(Float32),
+      bias : Array(Float32),
+      *,
+      input_point_count : Int32,
+      input_channels : Int32,
+      max_resident_bytes : Int64 = MAX_RESIDENT_BYTES,
+    ) : Tuple(Array(Float32), Array(Array(Bool)))
+      validate_budget!(max_resident_bytes)
+      input_elements, output_elements, weight_elements = projection_sizes(
+        features,
+        weights,
+        bias,
+        input_point_count,
+        input_channels
+      )
+
+      input_bytes = checked_bytes(input_elements, "feature")
+      weight_bytes = checked_bytes(weight_elements, "subdivision weight")
+      bias_bytes = checked_bytes(OUTPUT_CHANNELS.to_i64, "subdivision bias")
+      logits_bytes = checked_bytes(output_elements, "subdivision logits")
+      resident_bytes = checked_sum(input_bytes, weight_bytes, "resident")
+      resident_bytes = checked_sum(resident_bytes, bias_bytes, "resident")
+      resident_bytes = checked_sum(resident_bytes, logits_bytes, "resident")
+      # The mask is a logical one-byte-per-slot payload in this CPU boundary.
+      resident_bytes = checked_sum(
+        resident_bytes,
+        output_elements,
+        "projection and mask resident"
+      )
+      if resident_bytes > max_resident_bytes
+        raise ArgumentError.new(
+          "subdivision projection and mask resident byte budget requires #{resident_bytes} bytes, " \
+          "limit is #{max_resident_bytes}"
+        )
+      end
+
+      logits = project(
+        features,
+        weights,
+        bias,
+        input_point_count: input_point_count,
+        input_channels: input_channels,
+        max_resident_bytes: max_resident_bytes
+      )
+      masks = ShapeSlatSubdivisionMaskCPU.binarize(
+        logits,
+        input_point_count: input_point_count,
+        max_resident_bytes: max_resident_bytes
+      )
+      {logits, masks}
+    end
+
+    private def projection_sizes(
+      features : Array(Float32),
+      weights : Array(Float32),
+      bias : Array(Float32),
+      input_point_count : Int32,
+      input_channels : Int32,
+    ) : Tuple(Int64, Int64, Int64)
+      unless input_point_count >= 0
+        raise ArgumentError.new("input point count must be non-negative")
+      end
+      if input_point_count > MAX_INPUT_POINTS
+        raise ArgumentError.new(
+          "input point count exceeds #{MAX_INPUT_POINTS}"
+        )
+      end
+      if input_channels > MAX_INPUT_CHANNELS
+        raise ArgumentError.new(
+          "input channel count exceeds #{MAX_INPUT_CHANNELS}"
+        )
+      end
+      unless input_channels > 0
+        raise ArgumentError.new(
+          "input channel count must be in 1..#{MAX_INPUT_CHANNELS}"
+        )
+      end
+
+      input_elements = checked_elements(
+        input_point_count,
+        input_channels,
+        "feature"
+      )
+      output_elements = checked_elements(
+        input_point_count,
+        OUTPUT_CHANNELS,
+        "subdivision logits"
+      )
+      weight_elements = checked_elements(
+        OUTPUT_CHANNELS,
+        input_channels,
+        "subdivision weight"
+      )
+
+      unless features.size.to_i64 == input_elements
+        raise ArgumentError.new(
+          "feature payload size must match [input point count, input channel count]"
+        )
+      end
+      unless weights.size.to_i64 == weight_elements
+        raise ArgumentError.new(
+          "subdivision weight payload size must match [8, input channel count]"
+        )
+      end
+      unless bias.size == OUTPUT_CHANNELS
+        raise ArgumentError.new(
+          "subdivision bias payload size must match [8]"
+        )
+      end
+
+      {input_elements, output_elements, weight_elements}
     end
 
     private def validate_budget!(max_resident_bytes : Int64) : Nil
