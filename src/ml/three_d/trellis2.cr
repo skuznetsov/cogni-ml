@@ -20,6 +20,7 @@ require "./trellis2/shape_slat_layout"
 require "./trellis2/shape_slat_upsample_layout"
 require "./trellis2/shape_slat_feature_transport"
 require "./trellis2/shape_slat_subdivision_mask"
+require "./trellis2/shape_slat_subdivision_projection"
 
 module ML::ThreeD::Trellis2
 end
