@@ -452,6 +452,51 @@ module ML::ThreeD::Trellis2
       FlowEulerSampleResultCPU.new(state, pred_x_t, pred_x_0)
     end
 
+    # Preserve the admitted base loop while exposing the exact normalized
+    # Float64 schedule pair to a composition layer. The adapter receives the
+    # already-created model timestep as well, so it can route both source
+    # controls without reconstructing `1000*t` from a narrowed tensor value.
+    # This owns no CFG, interval, RNG, pipeline, model, GPU, or Metal policy.
+    def sample_with_step_provider(
+      noise : Tensor,
+      cond : C,
+      sigma_min : Float32,
+      steps : Int32 = 50_i32,
+      rescale_t : Float64 = 1.0_f64,
+      max_result_bytes : Int64 = MAX_RETAINED_RESULT_BYTES,
+      &step_provider : Tensor, Float64, Float64, Tensor, C -> Tensor
+    ) : FlowEulerSampleResultCPU forall C
+      validate_request!(
+        noise,
+        sigma_min,
+        steps,
+        rescale_t,
+        max_result_bytes
+      )
+      schedule = build_schedule(steps, rescale_t)
+      pred_x_t = Array(Tensor).new(steps)
+      pred_x_0 = Array(Tensor).new(steps)
+      state = noise
+
+      schedule.each_cons_pair do |t, t_prev|
+        outcome = FlowEulerStepCPU.sample_once_with_velocity_provider(
+          state,
+          cond,
+          sigma_min: sigma_min,
+          t: t,
+          t_prev: t_prev,
+          max_result_bytes: max_result_bytes
+        ) do |actual_x, model_t, actual_cond|
+          step_provider.call(actual_x, t, t_prev, model_t, actual_cond)
+        end
+        state = outcome.pred_x_prev
+        pred_x_t << state
+        pred_x_0 << outcome.pred_x_0
+      end
+
+      FlowEulerSampleResultCPU.new(state, pred_x_t, pred_x_0)
+    end
+
     private def validate_request!(
       noise : Tensor,
       sigma_min : Float32,
