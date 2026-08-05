@@ -17,6 +17,7 @@ require "./trellis2/device_resource_contract"
 require "./trellis2/padded_dense_flow"
 require "./trellis2/cache_adapter"
 require "./trellis2/shape_slat_layout"
+require "./trellis2/shape_slat_upsample_layout"
 
 module ML::ThreeD::Trellis2
 end
