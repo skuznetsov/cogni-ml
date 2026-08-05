@@ -19,6 +19,7 @@ require "./trellis2/cache_adapter"
 require "./trellis2/shape_slat_layout"
 require "./trellis2/shape_slat_upsample_layout"
 require "./trellis2/shape_slat_feature_transport"
+require "./trellis2/shape_slat_subdivision_mask"
 
 module ML::ThreeD::Trellis2
 end
