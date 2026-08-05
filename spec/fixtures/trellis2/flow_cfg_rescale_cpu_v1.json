@@ -1,0 +1,3096 @@
+{
+  "schema": "cogni-ml/trellis2/flow-cfg-rescale-oracle/v1",
+  "provenance": {
+    "repository": "https://github.com/microsoft/TRELLIS.2",
+    "commit": "75fbf0183001ed9876c8dbb35de6b68552ee08bd",
+    "python_version": "3.11.9",
+    "torch_version": "2.9.0",
+    "numpy_version": "2.1.3",
+    "device": "cpu",
+    "threads": 1,
+    "dtype": "Float64 controls and normalized time; Float32 tensors",
+    "weights": "none",
+    "network": "none",
+    "generator": "tools/trellis2_oracle/export_flow_cfg_rescale.py",
+    "generator_sha256": "d0c6fed2a1eda7ed4084a3350001c27313b0fe45de49b3853c6e3c165db68be5",
+    "support": "tools/trellis2_oracle/export_flow_euler_cfg.py",
+    "support_sha256": "a51ff10617022931b234cbf455e26f696124b187c30f74dae4ba2f1446eb2837",
+    "sources": {
+      "base": {
+        "path": "trellis2/pipelines/samplers/base.py",
+        "sha256": "be8530b55ea66ac58e8ab23d650f463636dd52cf7e39c7c9c66f69bf72e6a0d1"
+      },
+      "cfg": {
+        "path": "trellis2/pipelines/samplers/classifier_free_guidance_mixin.py",
+        "sha256": "1780182cd7d3c7af3f82b7904aa9c40eb3f632064d77456565c5acccd9598bee"
+      },
+      "interval": {
+        "path": "trellis2/pipelines/samplers/guidance_interval_mixin.py",
+        "sha256": "633f97c48a811a835d3b894b3e0de794407f60774f6c60a2c6a61e7c0351c6f2"
+      },
+      "flow_euler": {
+        "path": "trellis2/pipelines/samplers/flow_euler.py",
+        "sha256": "b4bd235874adfc47fd3bce3d596249b1ccfa6644983a9b4562c9295a463bc0fd"
+      }
+    }
+  },
+  "contract": {
+    "owner": "ClassifierFreeGuidanceSamplerMixin._inference_model",
+    "entrypoint": "trellis2.pipelines.samplers.flow_euler.FlowEulerCfgSampler._inference_model",
+    "mro": [
+      "FlowEulerCfgSampler",
+      "ClassifierFreeGuidanceSamplerMixin",
+      "FlowEulerSampler",
+      "Sampler",
+      "ABC",
+      "object"
+    ],
+    "rescale_gate": "guidance_strength is mixed and guidance_rescale > 0",
+    "formula": "x0_pos=pred_to_xstart(pos); x0_cfg=pred_to_xstart(cfg); std over all non-batch axes with default correction=1 and keepdim; x0_rescaled=x0_cfg*(std_pos/std_cfg); x0=r*x0_rescaled+(1-r)*x0_cfg; pred=xstart_to_pred(x0)",
+    "validation": "no clamp, epsilon floor, or finite-value validation in pinned source",
+    "std_axes": [
+      1,
+      2
+    ],
+    "std_correction": 1,
+    "std_keepdim": true,
+    "normalized_t": 0.6180339887498948,
+    "sigma_min": 1e-05,
+    "model_timestep": "fresh CPU Float32[batch] = 1000*normalized_t"
+  },
+  "cases": [
+    {
+      "name": "positive_only_ignores_rescale",
+      "guidance_strength": 1.0,
+      "guidance_rescale": {
+        "class": "positive_infinity",
+        "f64_bits_hex": "0x7ff0000000000000"
+      },
+      "rescale_branch_entered": false,
+      "call_order": [
+        "positive"
+      ],
+      "calls": [
+        {
+          "condition": "positive",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "all_finite": true,
+            "f32le_sha256": "5f6044af11cc8967007f53df357980c48310ce9a0be289449c891ea6cd6e5eb1",
+            "values": [
+              618.0339965820312,
+              618.0339965820312
+            ]
+          }
+        }
+      ],
+      "conversion_trace": [],
+      "output_identity": "positive_prediction",
+      "inputs": {
+        "x_t": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "3fc4cb82a47ee8030a1efa6dd3c06cde8e26cc291f8c8141a894ecf09aab56a6",
+          "values": [
+            [
+              [
+                1.0,
+                -2.0
+              ],
+              [
+                0.5,
+                3.0
+              ]
+            ],
+            [
+              [
+                -4.0,
+                0.25
+              ],
+              [
+                8.0,
+                -0.125
+              ]
+            ]
+          ]
+        },
+        "positive": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "591ee2cd9f64b107b3699b37270787c369de9be88b1d5a03a0ccf10a798f24dd",
+          "values": [
+            [
+              [
+                0.125,
+                -16.743309020996094
+              ],
+              [
+                1000.25,
+                -0.0009765625
+              ]
+            ],
+            [
+              [
+                -85.5,
+                0.3333333432674408
+              ],
+              [
+                4096.0,
+                -7.25
+              ]
+            ]
+          ]
+        },
+        "negative": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "891c060826d159ab4a40d55703becdb7b3208e2776a1b35a2ba9e53ea8d6ee6f",
+          "values": [
+            [
+              [
+                -0.25,
+                124.7040023803711
+              ],
+              [
+                -999.75,
+                0.001953125
+              ]
+            ],
+            [
+              [
+                31.75,
+                -0.6666666865348816
+              ],
+              [
+                -2048.0,
+                12.5
+              ]
+            ]
+          ]
+        },
+        "all_unchanged": true
+      },
+      "intermediates": {},
+      "output": {
+        "shape": [
+          2,
+          2,
+          2
+        ],
+        "dtype": "float32",
+        "all_finite": true,
+        "f32le_sha256": "591ee2cd9f64b107b3699b37270787c369de9be88b1d5a03a0ccf10a798f24dd",
+        "values": [
+          [
+            [
+              0.125,
+              -16.743309020996094
+            ],
+            [
+              1000.25,
+              -0.0009765625
+            ]
+          ],
+          [
+            [
+              -85.5,
+              0.3333333432674408
+            ],
+            [
+              4096.0,
+              -7.25
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "negative_only_ignores_rescale",
+      "guidance_strength": 0.0,
+      "guidance_rescale": {
+        "class": "nan",
+        "f64_bits_hex": "0x7ff8000000000000"
+      },
+      "rescale_branch_entered": false,
+      "call_order": [
+        "negative"
+      ],
+      "calls": [
+        {
+          "condition": "negative",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "all_finite": true,
+            "f32le_sha256": "5f6044af11cc8967007f53df357980c48310ce9a0be289449c891ea6cd6e5eb1",
+            "values": [
+              618.0339965820312,
+              618.0339965820312
+            ]
+          }
+        }
+      ],
+      "conversion_trace": [],
+      "output_identity": "negative_prediction",
+      "inputs": {
+        "x_t": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "3fc4cb82a47ee8030a1efa6dd3c06cde8e26cc291f8c8141a894ecf09aab56a6",
+          "values": [
+            [
+              [
+                1.0,
+                -2.0
+              ],
+              [
+                0.5,
+                3.0
+              ]
+            ],
+            [
+              [
+                -4.0,
+                0.25
+              ],
+              [
+                8.0,
+                -0.125
+              ]
+            ]
+          ]
+        },
+        "positive": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "591ee2cd9f64b107b3699b37270787c369de9be88b1d5a03a0ccf10a798f24dd",
+          "values": [
+            [
+              [
+                0.125,
+                -16.743309020996094
+              ],
+              [
+                1000.25,
+                -0.0009765625
+              ]
+            ],
+            [
+              [
+                -85.5,
+                0.3333333432674408
+              ],
+              [
+                4096.0,
+                -7.25
+              ]
+            ]
+          ]
+        },
+        "negative": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "891c060826d159ab4a40d55703becdb7b3208e2776a1b35a2ba9e53ea8d6ee6f",
+          "values": [
+            [
+              [
+                -0.25,
+                124.7040023803711
+              ],
+              [
+                -999.75,
+                0.001953125
+              ]
+            ],
+            [
+              [
+                31.75,
+                -0.6666666865348816
+              ],
+              [
+                -2048.0,
+                12.5
+              ]
+            ]
+          ]
+        },
+        "all_unchanged": true
+      },
+      "intermediates": {},
+      "output": {
+        "shape": [
+          2,
+          2,
+          2
+        ],
+        "dtype": "float32",
+        "all_finite": true,
+        "f32le_sha256": "891c060826d159ab4a40d55703becdb7b3208e2776a1b35a2ba9e53ea8d6ee6f",
+        "values": [
+          [
+            [
+              -0.25,
+              124.7040023803711
+            ],
+            [
+              -999.75,
+              0.001953125
+            ]
+          ],
+          [
+            [
+              31.75,
+              -0.6666666865348816
+            ],
+            [
+              -2048.0,
+              12.5
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "mixed_zero_bypass",
+      "guidance_strength": 1.7,
+      "guidance_rescale": {
+        "class": "finite",
+        "f64_bits_hex": "0x0000000000000000",
+        "value": 0.0
+      },
+      "rescale_branch_entered": false,
+      "call_order": [
+        "positive",
+        "negative"
+      ],
+      "calls": [
+        {
+          "condition": "positive",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "all_finite": true,
+            "f32le_sha256": "5f6044af11cc8967007f53df357980c48310ce9a0be289449c891ea6cd6e5eb1",
+            "values": [
+              618.0339965820312,
+              618.0339965820312
+            ]
+          }
+        },
+        {
+          "condition": "negative",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "all_finite": true,
+            "f32le_sha256": "5f6044af11cc8967007f53df357980c48310ce9a0be289449c891ea6cd6e5eb1",
+            "values": [
+              618.0339965820312,
+              618.0339965820312
+            ]
+          }
+        }
+      ],
+      "conversion_trace": [],
+      "output_identity": "owned_mixed",
+      "inputs": {
+        "x_t": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "3fc4cb82a47ee8030a1efa6dd3c06cde8e26cc291f8c8141a894ecf09aab56a6",
+          "values": [
+            [
+              [
+                1.0,
+                -2.0
+              ],
+              [
+                0.5,
+                3.0
+              ]
+            ],
+            [
+              [
+                -4.0,
+                0.25
+              ],
+              [
+                8.0,
+                -0.125
+              ]
+            ]
+          ]
+        },
+        "positive": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "591ee2cd9f64b107b3699b37270787c369de9be88b1d5a03a0ccf10a798f24dd",
+          "values": [
+            [
+              [
+                0.125,
+                -16.743309020996094
+              ],
+              [
+                1000.25,
+                -0.0009765625
+              ]
+            ],
+            [
+              [
+                -85.5,
+                0.3333333432674408
+              ],
+              [
+                4096.0,
+                -7.25
+              ]
+            ]
+          ]
+        },
+        "negative": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "891c060826d159ab4a40d55703becdb7b3208e2776a1b35a2ba9e53ea8d6ee6f",
+          "values": [
+            [
+              [
+                -0.25,
+                124.7040023803711
+              ],
+              [
+                -999.75,
+                0.001953125
+              ]
+            ],
+            [
+              [
+                31.75,
+                -0.6666666865348816
+              ],
+              [
+                -2048.0,
+                12.5
+              ]
+            ]
+          ]
+        },
+        "all_unchanged": true
+      },
+      "intermediates": {},
+      "output": {
+        "shape": [
+          2,
+          2,
+          2
+        ],
+        "dtype": "float32",
+        "all_finite": true,
+        "f32le_sha256": "6af821155f4ccc250d66a0baa6b69c5477e53f32f8f2d3127a62e1f10b234fd6",
+        "values": [
+          [
+            [
+              0.38749998807907104,
+              -115.75642395019531
+            ],
+            [
+              2400.25,
+              -0.0030273436568677425
+            ]
+          ],
+          [
+            [
+              -167.57501220703125,
+              1.033333420753479
+            ],
+            [
+              8396.7998046875,
+              -21.075000762939453
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "mixed_negative_bypass",
+      "guidance_strength": 1.7,
+      "guidance_rescale": {
+        "class": "finite",
+        "f64_bits_hex": "0xbfe0000000000000",
+        "value": -0.5
+      },
+      "rescale_branch_entered": false,
+      "call_order": [
+        "positive",
+        "negative"
+      ],
+      "calls": [
+        {
+          "condition": "positive",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "all_finite": true,
+            "f32le_sha256": "5f6044af11cc8967007f53df357980c48310ce9a0be289449c891ea6cd6e5eb1",
+            "values": [
+              618.0339965820312,
+              618.0339965820312
+            ]
+          }
+        },
+        {
+          "condition": "negative",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "all_finite": true,
+            "f32le_sha256": "5f6044af11cc8967007f53df357980c48310ce9a0be289449c891ea6cd6e5eb1",
+            "values": [
+              618.0339965820312,
+              618.0339965820312
+            ]
+          }
+        }
+      ],
+      "conversion_trace": [],
+      "output_identity": "owned_mixed",
+      "inputs": {
+        "x_t": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "3fc4cb82a47ee8030a1efa6dd3c06cde8e26cc291f8c8141a894ecf09aab56a6",
+          "values": [
+            [
+              [
+                1.0,
+                -2.0
+              ],
+              [
+                0.5,
+                3.0
+              ]
+            ],
+            [
+              [
+                -4.0,
+                0.25
+              ],
+              [
+                8.0,
+                -0.125
+              ]
+            ]
+          ]
+        },
+        "positive": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "591ee2cd9f64b107b3699b37270787c369de9be88b1d5a03a0ccf10a798f24dd",
+          "values": [
+            [
+              [
+                0.125,
+                -16.743309020996094
+              ],
+              [
+                1000.25,
+                -0.0009765625
+              ]
+            ],
+            [
+              [
+                -85.5,
+                0.3333333432674408
+              ],
+              [
+                4096.0,
+                -7.25
+              ]
+            ]
+          ]
+        },
+        "negative": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "891c060826d159ab4a40d55703becdb7b3208e2776a1b35a2ba9e53ea8d6ee6f",
+          "values": [
+            [
+              [
+                -0.25,
+                124.7040023803711
+              ],
+              [
+                -999.75,
+                0.001953125
+              ]
+            ],
+            [
+              [
+                31.75,
+                -0.6666666865348816
+              ],
+              [
+                -2048.0,
+                12.5
+              ]
+            ]
+          ]
+        },
+        "all_unchanged": true
+      },
+      "intermediates": {},
+      "output": {
+        "shape": [
+          2,
+          2,
+          2
+        ],
+        "dtype": "float32",
+        "all_finite": true,
+        "f32le_sha256": "6af821155f4ccc250d66a0baa6b69c5477e53f32f8f2d3127a62e1f10b234fd6",
+        "values": [
+          [
+            [
+              0.38749998807907104,
+              -115.75642395019531
+            ],
+            [
+              2400.25,
+              -0.0030273436568677425
+            ]
+          ],
+          [
+            [
+              -167.57501220703125,
+              1.033333420753479
+            ],
+            [
+              8396.7998046875,
+              -21.075000762939453
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "mixed_nan_bypass",
+      "guidance_strength": 1.7,
+      "guidance_rescale": {
+        "class": "nan",
+        "f64_bits_hex": "0x7ff8000000000000"
+      },
+      "rescale_branch_entered": false,
+      "call_order": [
+        "positive",
+        "negative"
+      ],
+      "calls": [
+        {
+          "condition": "positive",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "all_finite": true,
+            "f32le_sha256": "5f6044af11cc8967007f53df357980c48310ce9a0be289449c891ea6cd6e5eb1",
+            "values": [
+              618.0339965820312,
+              618.0339965820312
+            ]
+          }
+        },
+        {
+          "condition": "negative",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "all_finite": true,
+            "f32le_sha256": "5f6044af11cc8967007f53df357980c48310ce9a0be289449c891ea6cd6e5eb1",
+            "values": [
+              618.0339965820312,
+              618.0339965820312
+            ]
+          }
+        }
+      ],
+      "conversion_trace": [],
+      "output_identity": "owned_mixed",
+      "inputs": {
+        "x_t": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "3fc4cb82a47ee8030a1efa6dd3c06cde8e26cc291f8c8141a894ecf09aab56a6",
+          "values": [
+            [
+              [
+                1.0,
+                -2.0
+              ],
+              [
+                0.5,
+                3.0
+              ]
+            ],
+            [
+              [
+                -4.0,
+                0.25
+              ],
+              [
+                8.0,
+                -0.125
+              ]
+            ]
+          ]
+        },
+        "positive": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "591ee2cd9f64b107b3699b37270787c369de9be88b1d5a03a0ccf10a798f24dd",
+          "values": [
+            [
+              [
+                0.125,
+                -16.743309020996094
+              ],
+              [
+                1000.25,
+                -0.0009765625
+              ]
+            ],
+            [
+              [
+                -85.5,
+                0.3333333432674408
+              ],
+              [
+                4096.0,
+                -7.25
+              ]
+            ]
+          ]
+        },
+        "negative": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "891c060826d159ab4a40d55703becdb7b3208e2776a1b35a2ba9e53ea8d6ee6f",
+          "values": [
+            [
+              [
+                -0.25,
+                124.7040023803711
+              ],
+              [
+                -999.75,
+                0.001953125
+              ]
+            ],
+            [
+              [
+                31.75,
+                -0.6666666865348816
+              ],
+              [
+                -2048.0,
+                12.5
+              ]
+            ]
+          ]
+        },
+        "all_unchanged": true
+      },
+      "intermediates": {},
+      "output": {
+        "shape": [
+          2,
+          2,
+          2
+        ],
+        "dtype": "float32",
+        "all_finite": true,
+        "f32le_sha256": "6af821155f4ccc250d66a0baa6b69c5477e53f32f8f2d3127a62e1f10b234fd6",
+        "values": [
+          [
+            [
+              0.38749998807907104,
+              -115.75642395019531
+            ],
+            [
+              2400.25,
+              -0.0030273436568677425
+            ]
+          ],
+          [
+            [
+              -167.57501220703125,
+              1.033333420753479
+            ],
+            [
+              8396.7998046875,
+              -21.075000762939453
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "mixed_finite_rescale",
+      "guidance_strength": 1.7,
+      "guidance_rescale": {
+        "class": "finite",
+        "f64_bits_hex": "0x3fd6666666666666",
+        "value": 0.35
+      },
+      "rescale_branch_entered": true,
+      "call_order": [
+        "positive",
+        "negative"
+      ],
+      "calls": [
+        {
+          "condition": "positive",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "all_finite": true,
+            "f32le_sha256": "5f6044af11cc8967007f53df357980c48310ce9a0be289449c891ea6cd6e5eb1",
+            "values": [
+              618.0339965820312,
+              618.0339965820312
+            ]
+          }
+        },
+        {
+          "condition": "negative",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "all_finite": true,
+            "f32le_sha256": "5f6044af11cc8967007f53df357980c48310ce9a0be289449c891ea6cd6e5eb1",
+            "values": [
+              618.0339965820312,
+              618.0339965820312
+            ]
+          }
+        }
+      ],
+      "conversion_trace": [
+        "pred_to_xstart:positive",
+        "pred_to_xstart:cfg",
+        "xstart_to_pred:blend"
+      ],
+      "output_identity": "owned_mixed",
+      "inputs": {
+        "x_t": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "3fc4cb82a47ee8030a1efa6dd3c06cde8e26cc291f8c8141a894ecf09aab56a6",
+          "values": [
+            [
+              [
+                1.0,
+                -2.0
+              ],
+              [
+                0.5,
+                3.0
+              ]
+            ],
+            [
+              [
+                -4.0,
+                0.25
+              ],
+              [
+                8.0,
+                -0.125
+              ]
+            ]
+          ]
+        },
+        "positive": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "591ee2cd9f64b107b3699b37270787c369de9be88b1d5a03a0ccf10a798f24dd",
+          "values": [
+            [
+              [
+                0.125,
+                -16.743309020996094
+              ],
+              [
+                1000.25,
+                -0.0009765625
+              ]
+            ],
+            [
+              [
+                -85.5,
+                0.3333333432674408
+              ],
+              [
+                4096.0,
+                -7.25
+              ]
+            ]
+          ]
+        },
+        "negative": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "891c060826d159ab4a40d55703becdb7b3208e2776a1b35a2ba9e53ea8d6ee6f",
+          "values": [
+            [
+              [
+                -0.25,
+                124.7040023803711
+              ],
+              [
+                -999.75,
+                0.001953125
+              ]
+            ],
+            [
+              [
+                31.75,
+                -0.6666666865348816
+              ],
+              [
+                -2048.0,
+                12.5
+              ]
+            ]
+          ]
+        },
+        "all_unchanged": true
+      },
+      "intermediates": {
+        "pred_cfg": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "6af821155f4ccc250d66a0baa6b69c5477e53f32f8f2d3127a62e1f10b234fd6",
+          "values": [
+            [
+              [
+                0.38749998807907104,
+                -115.75642395019531
+              ],
+              [
+                2400.25,
+                -0.0030273436568677425
+              ]
+            ],
+            [
+              [
+                -167.57501220703125,
+                1.033333420753479
+              ],
+              [
+                8396.7998046875,
+                -21.075000762939453
+              ]
+            ]
+          ]
+        },
+        "x0_positive": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "1c22952e4f66ee115e5fe0c81ab6ab76d8eefc3c23987a5a03c9d69dc424c062",
+          "values": [
+            [
+              [
+                0.9227352738380432,
+                8.348018646240234
+              ],
+              [
+                -617.6923217773438,
+                3.0005733966827393
+              ]
+            ],
+            [
+              [
+                48.84226989746094,
+                0.04398488998413086
+              ],
+              [
+                -2523.48291015625,
+                4.355775833129883
+              ]
+            ]
+          ]
+        },
+        "x0_cfg": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "e9f07f8510cd55d5d0b858d799a2a0ce070c276631b797c6236d64fe652314df",
+          "values": [
+            [
+              [
+                0.7605003118515015,
+                69.5418701171875
+              ],
+              [
+                -1482.9453125,
+                3.0018410682678223
+              ]
+            ],
+            [
+              [
+                99.56773376464844,
+                -0.3886416554450989
+              ],
+              [
+                -5181.5400390625,
+                12.900148391723633
+              ]
+            ]
+          ]
+        },
+        "std_positive": {
+          "shape": [
+            2,
+            1,
+            1
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "aaed2437e4ef3e9dfb90488f54a704ca510c0bad7ed0b69113290e05eead42e0",
+          "values": [
+            [
+              [
+                310.9071044921875
+              ]
+            ],
+            [
+              [
+                1270.8065185546875
+              ]
+            ]
+          ]
+        },
+        "std_cfg": {
+          "shape": [
+            2,
+            1,
+            1
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "c71deaf692112338800ebafea9b48dd618ea7727a8335a19621950e1e37cf60f",
+          "values": [
+            [
+              [
+                754.3651733398438
+              ]
+            ],
+            [
+              [
+                2609.826171875
+              ]
+            ]
+          ]
+        },
+        "x0_rescaled": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "3d3a174033da8d302119cf5438d0388143bae6a7e373322d00dfa7bc1d443883",
+          "values": [
+            [
+              [
+                0.3134356737136841,
+                28.661266326904297
+              ],
+              [
+                -611.1870727539062,
+                1.237190842628479
+              ]
+            ],
+            [
+              [
+                48.482662200927734,
+                -0.18924185633659363
+              ],
+              [
+                -2523.054931640625,
+                6.281488418579102
+              ]
+            ]
+          ]
+        },
+        "x0_blend": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "e892fa3196f94b77e27f8c9721b46d578495ae2a5651ff771e6f52a1dfc49e53",
+          "values": [
+            [
+              [
+                0.6040276885032654,
+                55.23365783691406
+              ],
+              [
+                -1177.829833984375,
+                2.384213447570801
+              ]
+            ],
+            [
+              [
+                81.68795776367188,
+                -0.3188517093658447
+              ],
+              [
+                -4251.0703125,
+                10.583617210388184
+              ]
+            ]
+          ]
+        }
+      },
+      "output": {
+        "shape": [
+          2,
+          2,
+          2
+        ],
+        "dtype": "float32",
+        "all_finite": true,
+        "f32le_sha256": "b0493f5e4d7efa53ff95856f02b1f43abd7eabc07f1ccfeb4c33537a3850949e",
+        "values": [
+          [
+            [
+              0.6406764984130859,
+              -92.60540008544922
+            ],
+            [
+              1906.56591796875,
+              0.9963088035583496
+            ]
+          ],
+          [
+            [
+              -138.64511108398438,
+              0.9204116463661194
+            ],
+            [
+              6891.27783203125,
+              -17.326797485351562
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "mixed_unclamped_rescale",
+      "guidance_strength": 1.7,
+      "guidance_rescale": {
+        "class": "finite",
+        "f64_bits_hex": "0x3ffb333333333333",
+        "value": 1.7
+      },
+      "rescale_branch_entered": true,
+      "call_order": [
+        "positive",
+        "negative"
+      ],
+      "calls": [
+        {
+          "condition": "positive",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "all_finite": true,
+            "f32le_sha256": "5f6044af11cc8967007f53df357980c48310ce9a0be289449c891ea6cd6e5eb1",
+            "values": [
+              618.0339965820312,
+              618.0339965820312
+            ]
+          }
+        },
+        {
+          "condition": "negative",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "all_finite": true,
+            "f32le_sha256": "5f6044af11cc8967007f53df357980c48310ce9a0be289449c891ea6cd6e5eb1",
+            "values": [
+              618.0339965820312,
+              618.0339965820312
+            ]
+          }
+        }
+      ],
+      "conversion_trace": [
+        "pred_to_xstart:positive",
+        "pred_to_xstart:cfg",
+        "xstart_to_pred:blend"
+      ],
+      "output_identity": "owned_mixed",
+      "inputs": {
+        "x_t": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "3fc4cb82a47ee8030a1efa6dd3c06cde8e26cc291f8c8141a894ecf09aab56a6",
+          "values": [
+            [
+              [
+                1.0,
+                -2.0
+              ],
+              [
+                0.5,
+                3.0
+              ]
+            ],
+            [
+              [
+                -4.0,
+                0.25
+              ],
+              [
+                8.0,
+                -0.125
+              ]
+            ]
+          ]
+        },
+        "positive": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "591ee2cd9f64b107b3699b37270787c369de9be88b1d5a03a0ccf10a798f24dd",
+          "values": [
+            [
+              [
+                0.125,
+                -16.743309020996094
+              ],
+              [
+                1000.25,
+                -0.0009765625
+              ]
+            ],
+            [
+              [
+                -85.5,
+                0.3333333432674408
+              ],
+              [
+                4096.0,
+                -7.25
+              ]
+            ]
+          ]
+        },
+        "negative": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "891c060826d159ab4a40d55703becdb7b3208e2776a1b35a2ba9e53ea8d6ee6f",
+          "values": [
+            [
+              [
+                -0.25,
+                124.7040023803711
+              ],
+              [
+                -999.75,
+                0.001953125
+              ]
+            ],
+            [
+              [
+                31.75,
+                -0.6666666865348816
+              ],
+              [
+                -2048.0,
+                12.5
+              ]
+            ]
+          ]
+        },
+        "all_unchanged": true
+      },
+      "intermediates": {
+        "pred_cfg": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "6af821155f4ccc250d66a0baa6b69c5477e53f32f8f2d3127a62e1f10b234fd6",
+          "values": [
+            [
+              [
+                0.38749998807907104,
+                -115.75642395019531
+              ],
+              [
+                2400.25,
+                -0.0030273436568677425
+              ]
+            ],
+            [
+              [
+                -167.57501220703125,
+                1.033333420753479
+              ],
+              [
+                8396.7998046875,
+                -21.075000762939453
+              ]
+            ]
+          ]
+        },
+        "x0_positive": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "1c22952e4f66ee115e5fe0c81ab6ab76d8eefc3c23987a5a03c9d69dc424c062",
+          "values": [
+            [
+              [
+                0.9227352738380432,
+                8.348018646240234
+              ],
+              [
+                -617.6923217773438,
+                3.0005733966827393
+              ]
+            ],
+            [
+              [
+                48.84226989746094,
+                0.04398488998413086
+              ],
+              [
+                -2523.48291015625,
+                4.355775833129883
+              ]
+            ]
+          ]
+        },
+        "x0_cfg": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "e9f07f8510cd55d5d0b858d799a2a0ce070c276631b797c6236d64fe652314df",
+          "values": [
+            [
+              [
+                0.7605003118515015,
+                69.5418701171875
+              ],
+              [
+                -1482.9453125,
+                3.0018410682678223
+              ]
+            ],
+            [
+              [
+                99.56773376464844,
+                -0.3886416554450989
+              ],
+              [
+                -5181.5400390625,
+                12.900148391723633
+              ]
+            ]
+          ]
+        },
+        "std_positive": {
+          "shape": [
+            2,
+            1,
+            1
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "aaed2437e4ef3e9dfb90488f54a704ca510c0bad7ed0b69113290e05eead42e0",
+          "values": [
+            [
+              [
+                310.9071044921875
+              ]
+            ],
+            [
+              [
+                1270.8065185546875
+              ]
+            ]
+          ]
+        },
+        "std_cfg": {
+          "shape": [
+            2,
+            1,
+            1
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "c71deaf692112338800ebafea9b48dd618ea7727a8335a19621950e1e37cf60f",
+          "values": [
+            [
+              [
+                754.3651733398438
+              ]
+            ],
+            [
+              [
+                2609.826171875
+              ]
+            ]
+          ]
+        },
+        "x0_rescaled": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "3d3a174033da8d302119cf5438d0388143bae6a7e373322d00dfa7bc1d443883",
+          "values": [
+            [
+              [
+                0.3134356737136841,
+                28.661266326904297
+              ],
+              [
+                -611.1870727539062,
+                1.237190842628479
+              ]
+            ],
+            [
+              [
+                48.482662200927734,
+                -0.18924185633659363
+              ],
+              [
+                -2523.054931640625,
+                6.281488418579102
+              ]
+            ]
+          ]
+        },
+        "x0_blend": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "787bc6d865238c53c5848c2619c50ecd9b85559c6df0b62e4a3a349bbbd01f4d",
+          "values": [
+            [
+              [
+                0.0004904866218566895,
+                0.0448455810546875
+              ],
+              [
+                -0.9564208984375,
+                0.001935720443725586
+              ]
+            ],
+            [
+              [
+                12.723114013671875,
+                -0.049661993980407715
+              ],
+              [
+                -662.115478515625,
+                1.6484270095825195
+              ]
+            ]
+          ]
+        }
+      },
+      "output": {
+        "shape": [
+          2,
+          2,
+          2
+        ],
+        "dtype": "float32",
+        "all_finite": true,
+        "f32le_sha256": "f69b2efef9862ffe3cc57d7a87de5cf403df88f17ab2fe3fbb4e81b8fa12d141",
+        "values": [
+          [
+            [
+              1.6172140836715698,
+              -3.308576822280884
+            ],
+            [
+              2.356515884399414,
+              4.85089111328125
+            ]
+          ],
+          [
+            [
+              -27.058334350585938,
+              0.4848562479019165
+            ],
+            [
+              1084.2628173828125,
+              -2.869445562362671
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "name": "mixed_positive_infinity",
+      "guidance_strength": 1.7,
+      "guidance_rescale": {
+        "class": "positive_infinity",
+        "f64_bits_hex": "0x7ff0000000000000"
+      },
+      "rescale_branch_entered": true,
+      "call_order": [
+        "positive",
+        "negative"
+      ],
+      "calls": [
+        {
+          "condition": "positive",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "all_finite": true,
+            "f32le_sha256": "5f6044af11cc8967007f53df357980c48310ce9a0be289449c891ea6cd6e5eb1",
+            "values": [
+              618.0339965820312,
+              618.0339965820312
+            ]
+          }
+        },
+        {
+          "condition": "negative",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "all_finite": true,
+            "f32le_sha256": "5f6044af11cc8967007f53df357980c48310ce9a0be289449c891ea6cd6e5eb1",
+            "values": [
+              618.0339965820312,
+              618.0339965820312
+            ]
+          }
+        }
+      ],
+      "conversion_trace": [
+        "pred_to_xstart:positive",
+        "pred_to_xstart:cfg",
+        "xstart_to_pred:blend"
+      ],
+      "output_identity": "owned_mixed",
+      "inputs": {
+        "x_t": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "3fc4cb82a47ee8030a1efa6dd3c06cde8e26cc291f8c8141a894ecf09aab56a6",
+          "values": [
+            [
+              [
+                1.0,
+                -2.0
+              ],
+              [
+                0.5,
+                3.0
+              ]
+            ],
+            [
+              [
+                -4.0,
+                0.25
+              ],
+              [
+                8.0,
+                -0.125
+              ]
+            ]
+          ]
+        },
+        "positive": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "591ee2cd9f64b107b3699b37270787c369de9be88b1d5a03a0ccf10a798f24dd",
+          "values": [
+            [
+              [
+                0.125,
+                -16.743309020996094
+              ],
+              [
+                1000.25,
+                -0.0009765625
+              ]
+            ],
+            [
+              [
+                -85.5,
+                0.3333333432674408
+              ],
+              [
+                4096.0,
+                -7.25
+              ]
+            ]
+          ]
+        },
+        "negative": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "891c060826d159ab4a40d55703becdb7b3208e2776a1b35a2ba9e53ea8d6ee6f",
+          "values": [
+            [
+              [
+                -0.25,
+                124.7040023803711
+              ],
+              [
+                -999.75,
+                0.001953125
+              ]
+            ],
+            [
+              [
+                31.75,
+                -0.6666666865348816
+              ],
+              [
+                -2048.0,
+                12.5
+              ]
+            ]
+          ]
+        },
+        "all_unchanged": true
+      },
+      "intermediates": {
+        "pred_cfg": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "6af821155f4ccc250d66a0baa6b69c5477e53f32f8f2d3127a62e1f10b234fd6",
+          "values": [
+            [
+              [
+                0.38749998807907104,
+                -115.75642395019531
+              ],
+              [
+                2400.25,
+                -0.0030273436568677425
+              ]
+            ],
+            [
+              [
+                -167.57501220703125,
+                1.033333420753479
+              ],
+              [
+                8396.7998046875,
+                -21.075000762939453
+              ]
+            ]
+          ]
+        },
+        "x0_positive": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "1c22952e4f66ee115e5fe0c81ab6ab76d8eefc3c23987a5a03c9d69dc424c062",
+          "values": [
+            [
+              [
+                0.9227352738380432,
+                8.348018646240234
+              ],
+              [
+                -617.6923217773438,
+                3.0005733966827393
+              ]
+            ],
+            [
+              [
+                48.84226989746094,
+                0.04398488998413086
+              ],
+              [
+                -2523.48291015625,
+                4.355775833129883
+              ]
+            ]
+          ]
+        },
+        "x0_cfg": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "e9f07f8510cd55d5d0b858d799a2a0ce070c276631b797c6236d64fe652314df",
+          "values": [
+            [
+              [
+                0.7605003118515015,
+                69.5418701171875
+              ],
+              [
+                -1482.9453125,
+                3.0018410682678223
+              ]
+            ],
+            [
+              [
+                99.56773376464844,
+                -0.3886416554450989
+              ],
+              [
+                -5181.5400390625,
+                12.900148391723633
+              ]
+            ]
+          ]
+        },
+        "std_positive": {
+          "shape": [
+            2,
+            1,
+            1
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "aaed2437e4ef3e9dfb90488f54a704ca510c0bad7ed0b69113290e05eead42e0",
+          "values": [
+            [
+              [
+                310.9071044921875
+              ]
+            ],
+            [
+              [
+                1270.8065185546875
+              ]
+            ]
+          ]
+        },
+        "std_cfg": {
+          "shape": [
+            2,
+            1,
+            1
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "c71deaf692112338800ebafea9b48dd618ea7727a8335a19621950e1e37cf60f",
+          "values": [
+            [
+              [
+                754.3651733398438
+              ]
+            ],
+            [
+              [
+                2609.826171875
+              ]
+            ]
+          ]
+        },
+        "x0_rescaled": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "3d3a174033da8d302119cf5438d0388143bae6a7e373322d00dfa7bc1d443883",
+          "values": [
+            [
+              [
+                0.3134356737136841,
+                28.661266326904297
+              ],
+              [
+                -611.1870727539062,
+                1.237190842628479
+              ]
+            ],
+            [
+              [
+                48.482662200927734,
+                -0.18924185633659363
+              ],
+              [
+                -2523.054931640625,
+                6.281488418579102
+              ]
+            ]
+          ]
+        },
+        "x0_blend": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": false,
+          "f32le_sha256": "1294d17832b4cfc0182135afaf08ab7b71112c72a08a286519265469bef62f34",
+          "f32_bits_hex": [
+            "0x7fc00000",
+            "0x7fc00000",
+            "0x7fc00000",
+            "0x7fc00000",
+            "0x7fc00000",
+            "0x7fc00000",
+            "0x7fc00000",
+            "0x7fc00000"
+          ],
+          "classes": [
+            "nan",
+            "nan",
+            "nan",
+            "nan",
+            "nan",
+            "nan",
+            "nan",
+            "nan"
+          ]
+        }
+      },
+      "output": {
+        "shape": [
+          2,
+          2,
+          2
+        ],
+        "dtype": "float32",
+        "all_finite": false,
+        "f32le_sha256": "1294d17832b4cfc0182135afaf08ab7b71112c72a08a286519265469bef62f34",
+        "f32_bits_hex": [
+          "0x7fc00000",
+          "0x7fc00000",
+          "0x7fc00000",
+          "0x7fc00000",
+          "0x7fc00000",
+          "0x7fc00000",
+          "0x7fc00000",
+          "0x7fc00000"
+        ],
+        "classes": [
+          "nan",
+          "nan",
+          "nan",
+          "nan",
+          "nan",
+          "nan",
+          "nan",
+          "nan"
+        ]
+      }
+    },
+    {
+      "name": "mixed_zero_cfg_std",
+      "guidance_strength": 2.0,
+      "guidance_rescale": {
+        "class": "finite",
+        "f64_bits_hex": "0x3fd6666666666666",
+        "value": 0.35
+      },
+      "rescale_branch_entered": true,
+      "call_order": [
+        "positive",
+        "negative"
+      ],
+      "calls": [
+        {
+          "condition": "positive",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "all_finite": true,
+            "f32le_sha256": "5f6044af11cc8967007f53df357980c48310ce9a0be289449c891ea6cd6e5eb1",
+            "values": [
+              618.0339965820312,
+              618.0339965820312
+            ]
+          }
+        },
+        {
+          "condition": "negative",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "all_finite": true,
+            "f32le_sha256": "5f6044af11cc8967007f53df357980c48310ce9a0be289449c891ea6cd6e5eb1",
+            "values": [
+              618.0339965820312,
+              618.0339965820312
+            ]
+          }
+        }
+      ],
+      "conversion_trace": [
+        "pred_to_xstart:positive",
+        "pred_to_xstart:cfg",
+        "xstart_to_pred:blend"
+      ],
+      "output_identity": "owned_mixed",
+      "inputs": {
+        "x_t": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925",
+          "values": [
+            [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ]
+          ]
+        },
+        "positive": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "084a82e6167bee35d90343218bfdae38b2cd0009745dc60df9758fe726bd1c7a",
+          "values": [
+            [
+              [
+                0.25,
+                0.5
+              ],
+              [
+                1.0,
+                2.0
+              ]
+            ],
+            [
+              [
+                0.125,
+                0.375
+              ],
+              [
+                0.75,
+                1.5
+              ]
+            ]
+          ]
+        },
+        "negative": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "369c302fa3b562aa94b594e0c660b6c3f8a26c74c2d23b7dcd57a249f1d9fcb3",
+          "values": [
+            [
+              [
+                -0.5,
+                0.0
+              ],
+              [
+                1.0,
+                3.0
+              ]
+            ],
+            [
+              [
+                -0.75,
+                -0.25
+              ],
+              [
+                0.5,
+                2.0
+              ]
+            ]
+          ]
+        },
+        "all_unchanged": true
+      },
+      "intermediates": {
+        "pred_cfg": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "4f05df05f8da9356bd66425351f166a5f7305b7c805e6900d9ec0f50790c9886",
+          "values": [
+            [
+              [
+                1.0,
+                1.0
+              ],
+              [
+                1.0,
+                1.0
+              ]
+            ],
+            [
+              [
+                1.0,
+                1.0
+              ],
+              [
+                1.0,
+                1.0
+              ]
+            ]
+          ]
+        },
+        "x0_positive": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "59c092c14b4748a3ea366846701c733acc3ee5450849e9e7464a80e4f066eae9",
+          "values": [
+            [
+              [
+                -0.15450945496559143,
+                -0.30901890993118286
+              ],
+              [
+                -0.6180378198623657,
+                -1.2360756397247314
+              ]
+            ],
+            [
+              [
+                -0.07725472748279572,
+                -0.23176418244838715
+              ],
+              [
+                -0.4635283648967743,
+                -0.9270567297935486
+              ]
+            ]
+          ]
+        },
+        "x0_cfg": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "2a5425fb2e9a7aebe9f3dc6828dd57393bca887417a0d16ae46485caba57ab3c",
+          "values": [
+            [
+              [
+                -0.6180378198623657,
+                -0.6180378198623657
+              ],
+              [
+                -0.6180378198623657,
+                -0.6180378198623657
+              ]
+            ],
+            [
+              [
+                -0.6180378198623657,
+                -0.6180378198623657
+              ],
+              [
+                -0.6180378198623657,
+                -0.6180378198623657
+              ]
+            ]
+          ]
+        },
+        "std_positive": {
+          "shape": [
+            2,
+            1,
+            1
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "11de2ed2e7381d6f8b2f1482e51028a662b8af843fab81528a99d1fc36dbc38a",
+          "values": [
+            [
+              [
+                0.47831428050994873
+              ]
+            ],
+            [
+              [
+                0.3705006539821625
+              ]
+            ]
+          ]
+        },
+        "std_cfg": {
+          "shape": [
+            2,
+            1,
+            1
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc",
+          "values": [
+            [
+              [
+                0.0
+              ]
+            ],
+            [
+              [
+                0.0
+              ]
+            ]
+          ]
+        },
+        "x0_rescaled": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": false,
+          "f32le_sha256": "6a936d2664b52812bd06e442e0ef0083cfe881b654caf95c7d6e228246502596",
+          "f32_bits_hex": [
+            "0xff800000",
+            "0xff800000",
+            "0xff800000",
+            "0xff800000",
+            "0xff800000",
+            "0xff800000",
+            "0xff800000",
+            "0xff800000"
+          ],
+          "classes": [
+            "negative_infinity",
+            "negative_infinity",
+            "negative_infinity",
+            "negative_infinity",
+            "negative_infinity",
+            "negative_infinity",
+            "negative_infinity",
+            "negative_infinity"
+          ]
+        },
+        "x0_blend": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": false,
+          "f32le_sha256": "6a936d2664b52812bd06e442e0ef0083cfe881b654caf95c7d6e228246502596",
+          "f32_bits_hex": [
+            "0xff800000",
+            "0xff800000",
+            "0xff800000",
+            "0xff800000",
+            "0xff800000",
+            "0xff800000",
+            "0xff800000",
+            "0xff800000"
+          ],
+          "classes": [
+            "negative_infinity",
+            "negative_infinity",
+            "negative_infinity",
+            "negative_infinity",
+            "negative_infinity",
+            "negative_infinity",
+            "negative_infinity",
+            "negative_infinity"
+          ]
+        }
+      },
+      "output": {
+        "shape": [
+          2,
+          2,
+          2
+        ],
+        "dtype": "float32",
+        "all_finite": false,
+        "f32le_sha256": "b494e1ad2466351226aa2a3115df64d42a9a2c97880f43a77014208206deee63",
+        "f32_bits_hex": [
+          "0x7f800000",
+          "0x7f800000",
+          "0x7f800000",
+          "0x7f800000",
+          "0x7f800000",
+          "0x7f800000",
+          "0x7f800000",
+          "0x7f800000"
+        ],
+        "classes": [
+          "positive_infinity",
+          "positive_infinity",
+          "positive_infinity",
+          "positive_infinity",
+          "positive_infinity",
+          "positive_infinity",
+          "positive_infinity",
+          "positive_infinity"
+        ]
+      }
+    },
+    {
+      "name": "mixed_near_zero_cfg_std",
+      "guidance_strength": 2.0,
+      "guidance_rescale": {
+        "class": "finite",
+        "f64_bits_hex": "0x3fd6666666666666",
+        "value": 0.35
+      },
+      "rescale_branch_entered": true,
+      "call_order": [
+        "positive",
+        "negative"
+      ],
+      "calls": [
+        {
+          "condition": "positive",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "all_finite": true,
+            "f32le_sha256": "5f6044af11cc8967007f53df357980c48310ce9a0be289449c891ea6cd6e5eb1",
+            "values": [
+              618.0339965820312,
+              618.0339965820312
+            ]
+          }
+        },
+        {
+          "condition": "negative",
+          "x_t_identity_preserved": true,
+          "condition_identity_preserved": true,
+          "model_t": {
+            "shape": [
+              2
+            ],
+            "dtype": "float32",
+            "all_finite": true,
+            "f32le_sha256": "5f6044af11cc8967007f53df357980c48310ce9a0be289449c891ea6cd6e5eb1",
+            "values": [
+              618.0339965820312,
+              618.0339965820312
+            ]
+          }
+        }
+      ],
+      "conversion_trace": [
+        "pred_to_xstart:positive",
+        "pred_to_xstart:cfg",
+        "xstart_to_pred:blend"
+      ],
+      "output_identity": "owned_mixed",
+      "inputs": {
+        "x_t": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925",
+          "values": [
+            [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ]
+          ]
+        },
+        "positive": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "084a82e6167bee35d90343218bfdae38b2cd0009745dc60df9758fe726bd1c7a",
+          "values": [
+            [
+              [
+                0.25,
+                0.5
+              ],
+              [
+                1.0,
+                2.0
+              ]
+            ],
+            [
+              [
+                0.125,
+                0.375
+              ],
+              [
+                0.75,
+                1.5
+              ]
+            ]
+          ]
+        },
+        "negative": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "80f3e6d09834ad7aee3d18285c4b7ccd7a15b869e6299d4a1adba8a24b4668a5",
+          "values": [
+            [
+              [
+                -0.5,
+                -2.384185791015625e-07
+              ],
+              [
+                1.000000238418579,
+                2.999999523162842
+              ]
+            ],
+            [
+              [
+                -0.75,
+                -0.2500004768371582
+              ],
+              [
+                0.5000004768371582,
+                1.9999990463256836
+              ]
+            ]
+          ]
+        },
+        "all_unchanged": true
+      },
+      "intermediates": {
+        "pred_cfg": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "903a0fedd32bdf3e269eef42de2dad7cd153f33164bda3cd88719cb1f37a2a4e",
+          "values": [
+            [
+              [
+                1.0,
+                1.000000238418579
+              ],
+              [
+                0.9999997615814209,
+                1.0000004768371582
+              ]
+            ],
+            [
+              [
+                1.0,
+                1.0000004768371582
+              ],
+              [
+                0.9999995231628418,
+                1.0000009536743164
+              ]
+            ]
+          ]
+        },
+        "x0_positive": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "59c092c14b4748a3ea366846701c733acc3ee5450849e9e7464a80e4f066eae9",
+          "values": [
+            [
+              [
+                -0.15450945496559143,
+                -0.30901890993118286
+              ],
+              [
+                -0.6180378198623657,
+                -1.2360756397247314
+              ]
+            ],
+            [
+              [
+                -0.07725472748279572,
+                -0.23176418244838715
+              ],
+              [
+                -0.4635283648967743,
+                -0.9270567297935486
+              ]
+            ]
+          ]
+        },
+        "x0_cfg": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "ae9a389f7b61abd7ce70f260d802a57dc8b426119f39ad8a81da1af43e548752",
+          "values": [
+            [
+              [
+                -0.6180378198623657,
+                -0.6180379390716553
+              ],
+              [
+                -0.6180377006530762,
+                -0.6180381178855896
+              ]
+            ],
+            [
+              [
+                -0.6180378198623657,
+                -0.6180381178855896
+              ],
+              [
+                -0.6180375218391418,
+                -0.6180384159088135
+              ]
+            ]
+          ]
+        },
+        "std_positive": {
+          "shape": [
+            2,
+            1,
+            1
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "11de2ed2e7381d6f8b2f1482e51028a662b8af843fab81528a99d1fc36dbc38a",
+          "values": [
+            [
+              [
+                0.47831428050994873
+              ]
+            ],
+            [
+              [
+                0.3705006539821625
+              ]
+            ]
+          ]
+        },
+        "std_cfg": {
+          "shape": [
+            2,
+            1,
+            1
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "9a4abc603d74f259436b0b08300154954032c9f3da2d21894bee224695ec02ba",
+          "values": [
+            [
+              [
+                1.7798416251935123e-07
+              ]
+            ],
+            [
+              [
+                3.84746329018526e-07
+              ]
+            ]
+          ]
+        },
+        "x0_rescaled": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "ce79ab1739978aa5b36e81541a5c1bb8d1dd397cbdc8c7b0bf32ecf230f24c29",
+          "values": [
+            [
+              [
+                -1660913.625,
+                -1660913.875
+              ],
+              [
+                -1660913.25,
+                -1660914.375
+              ]
+            ],
+            [
+              [
+                -595154.25,
+                -595154.5625
+              ],
+              [
+                -595154.0,
+                -595154.875
+              ]
+            ]
+          ]
+        },
+        "x0_blend": {
+          "shape": [
+            2,
+            2,
+            2
+          ],
+          "dtype": "float32",
+          "all_finite": true,
+          "f32le_sha256": "f599547ce75097dc1ca040a2131bae6c591e780be2fc381bd715cc0a36bcae3d",
+          "values": [
+            [
+              [
+                -581320.125,
+                -581320.25
+              ],
+              [
+                -581320.0,
+                -581320.375
+              ]
+            ],
+            [
+              [
+                -208304.390625,
+                -208304.5
+              ],
+              [
+                -208304.296875,
+                -208304.609375
+              ]
+            ]
+          ]
+        }
+      },
+      "output": {
+        "shape": [
+          2,
+          2,
+          2
+        ],
+        "dtype": "float32",
+        "all_finite": true,
+        "f32le_sha256": "068c2677f5f0f6bf4bf47d7a009a9b17827c712fecd4a2df1d564d01d30dbf5c",
+        "values": [
+          [
+            [
+              940589.875,
+              940590.0625
+            ],
+            [
+              940589.6875,
+              940590.3125
+            ]
+          ],
+          [
+            [
+              337041.5,
+              337041.65625
+            ],
+            [
+              337041.34375,
+              337041.84375
+            ]
+          ]
+        ]
+      }
+    }
+  ],
+  "independent_reference": {
+    "kind": "two-pass scalar Float32 per-batch sample standard deviation",
+    "std_positive": {
+      "shape": [
+        2,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "all_finite": true,
+      "f32le_sha256": "94cb32fc6138c3f3b6a37a31f2c97a1c2196b01d7d7820586e7837a03382ba1d",
+      "values": [
+        [
+          [
+            310.9071350097656
+          ]
+        ],
+        [
+          [
+            1270.806640625
+          ]
+        ]
+      ]
+    },
+    "std_cfg": {
+      "shape": [
+        2,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "all_finite": true,
+      "f32le_sha256": "c71deaf692112338800ebafea9b48dd618ea7727a8335a19621950e1e37cf60f",
+      "values": [
+        [
+          [
+            754.3651733398438
+          ]
+        ],
+        [
+          [
+            2609.826171875
+          ]
+        ]
+      ]
+    },
+    "max_abs_error_vs_torch": 0.0001220703125
+  },
+  "counterfactuals": {
+    "global_axes_output": {
+      "shape": [
+        2,
+        2,
+        2
+      ],
+      "dtype": "float32",
+      "all_finite": true,
+      "f32le_sha256": "2e75dc7c8a01dc5430b3909f97f440e78508b0ca61517b58326720c644172c2b",
+      "values": [
+        [
+          [
+            0.6099033951759338,
+            -95.41936492919922
+          ],
+          [
+            1966.5723876953125,
+            0.8748412132263184
+          ]
+        ],
+        [
+          [
+            -138.4570770263672,
+            0.919677734375
+          ],
+          [
+            6881.4921875,
+            -17.30243682861328
+          ]
+        ]
+      ]
+    },
+    "population_std_positive": {
+      "shape": [
+        2,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "all_finite": true,
+      "f32le_sha256": "502641ae5131391d454d5cef78ff61cd78c034fbecdb23625d7de56ed915be5a",
+      "values": [
+        [
+          [
+            269.2534484863281
+          ]
+        ],
+        [
+          [
+            1100.55078125
+          ]
+        ]
+      ]
+    },
+    "population_std_cfg": {
+      "shape": [
+        2,
+        1,
+        1
+      ],
+      "dtype": "float32",
+      "all_finite": true,
+      "f32le_sha256": "692f536dd64877d89c5906724474c6f5b4abb171a9a0c2f258a83e3d6a6e2201",
+      "values": [
+        [
+          [
+            653.2993774414062
+          ]
+        ],
+        [
+          [
+            2260.17578125
+          ]
+        ]
+      ]
+    },
+    "population_ratio_note": "correction factor cancels from std_pos/std_cfg when both reduce the same finite element count; intermediate std values still differ",
+    "prediction_space_output": {
+      "shape": [
+        2,
+        2,
+        2
+      ],
+      "dtype": "float32",
+      "all_finite": true,
+      "f32le_sha256": "d3e1ee1659c8c6dccc568fc2e586d12cd9775827a1e70385bd7131b0d5575811",
+      "values": [
+        [
+          [
+            0.3077612519264221,
+            -91.9363784790039
+          ],
+          [
+            1906.3330078125,
+            -0.002404384780675173
+          ]
+        ],
+        [
+          [
+            -137.53677368164062,
+            0.848105788230896
+          ],
+          [
+            6891.65234375,
+            -17.29725456237793
+          ]
+        ]
+      ]
+    },
+    "clamp_unclamped_rescale_to_one_output": {
+      "shape": [
+        2,
+        2,
+        2
+      ],
+      "dtype": "float32",
+      "all_finite": true,
+      "f32le_sha256": "2c530e87f66ff24d134916afe4d633237e761296859fae2fb1ff168e3f16ca2d",
+      "values": [
+        [
+          [
+            1.1108613014221191,
+            -49.610633850097656
+          ],
+          [
+            989.724365234375,
+            2.8522188663482666
+          ]
+        ],
+        [
+          [
+            -84.91813659667969,
+            0.7106997966766357
+          ],
+          [
+            4095.3076171875,
+            -10.365849494934082
+          ]
+        ]
+      ]
+    }
+  },
+  "rejected_scope": [
+    "Crystal guidance-rescale runtime or public API",
+    "guidance-interval routing or repeated sampler execution",
+    "random-noise or seed reproducibility",
+    "production defaults, pipeline, sparse flow, decoder, or mesh",
+    "real weights, model scale, BF16, F16, quantization, GPU, or Metal"
+  ]
+}
