@@ -9,6 +9,43 @@
 require "../../core/tensor"
 
 module ML::ThreeD::Trellis2
+  # Shared scalar source expressions for normalized Float64 schedule time.
+  # Callers own tensor/scalar admission and finite-result policy. Keeping these
+  # methods private lets the Euler step and CFG rescale share exact arithmetic
+  # without widening the public runtime API.
+  private module FlowEulerStateConversionCPU
+    private def flow_euler_schedule_coefficients(
+      sigma_min : Float32,
+      normalized_t : Float64,
+    ) : Tuple(Float32, Float32)
+      one_minus_sigma = (1.0_f32 - sigma_min).to_f32
+      noise_scale = (
+        sigma_min.to_f64 +
+        (1.0_f64 - sigma_min.to_f64) * normalized_t
+      ).to_f32
+      {one_minus_sigma, noise_scale}
+    end
+
+    private def flow_euler_pred_to_xstart(
+      x_t : Float32,
+      prediction : Float32,
+      one_minus_sigma : Float32,
+      noise_scale : Float32,
+    ) : Float32
+      (one_minus_sigma * x_t - noise_scale * prediction).to_f32
+    end
+
+    private def flow_euler_xstart_to_pred(
+      x_t : Float32,
+      x_start : Float32,
+      one_minus_sigma : Float32,
+      noise_scale : Float32,
+    ) : Float32
+      numerator = (one_minus_sigma * x_t - x_start).to_f32
+      (numerator / noise_scale).to_f32
+    end
+  end
+
   class FlowEulerStepResultCPU
     getter pred_x_prev : Tensor
     getter pred_x_0 : Tensor
@@ -32,6 +69,7 @@ module ML::ThreeD::Trellis2
 
   module FlowEulerStepCPU
     extend self
+    include FlowEulerStateConversionCPU
 
     # Combined F32 payload of the two owned result tensors. This does not claim
     # an aggregate process or stage working-set bound.
@@ -317,7 +355,12 @@ module ML::ThreeD::Trellis2
       x_t.each_with_index do |x, index|
         velocity = pred_v[index]
         previous = (x - delta * velocity).to_f32
-        origin = (one_minus_sigma * x - noise_scale * velocity).to_f32
+        origin = flow_euler_pred_to_xstart(
+          x,
+          velocity,
+          one_minus_sigma,
+          noise_scale
+        )
         unless previous.finite? && origin.finite?
           raise ArgumentError.new("flow Euler arithmetic must produce finite outputs")
         end
@@ -336,15 +379,20 @@ module ML::ThreeD::Trellis2
       pred_x_0 : Array(Float32),
     ) : Nil
       delta = (t - t_prev).to_f32
-      one_minus_sigma = (1.0_f32 - sigma_min).to_f32
-      noise_scale = (
-        sigma_min.to_f64 + (1.0_f64 - sigma_min.to_f64) * t
-      ).to_f32
+      one_minus_sigma, noise_scale = flow_euler_schedule_coefficients(
+        sigma_min,
+        t
+      )
 
       x_t.each_with_index do |x, index|
         velocity = pred_v[index]
         previous = (x - delta * velocity).to_f32
-        origin = (one_minus_sigma * x - noise_scale * velocity).to_f32
+        origin = flow_euler_pred_to_xstart(
+          x,
+          velocity,
+          one_minus_sigma,
+          noise_scale
+        )
         unless previous.finite? && origin.finite?
           raise ArgumentError.new("flow Euler arithmetic must produce finite outputs")
         end
