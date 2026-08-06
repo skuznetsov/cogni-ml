@@ -4,6 +4,7 @@
 
 require "../../core/tensor"
 require "./image_preprocess"
+require "../../vision/dino_v3"
 
 module ML::ThreeD::Trellis2
   class DinoV3ImageConditionerError < ImagePreprocessError
@@ -13,7 +14,8 @@ module ML::ThreeD::Trellis2
     resized : RGBImage,
     tensor : Tensor,
     source_revision : String,
-    pillow_revision : String
+    pillow_revision : String,
+    runtime_adapter : ML::Vision::DinoV3::RuntimeAdapter
 
   # Behavioral reimplementation of the RGB 8-bit LANCZOS path described by
   # Pillow 12.2.0 src/libImaging/Resample.c (MIT-CMU). Coefficients and per-pass
@@ -170,9 +172,20 @@ module ML::ThreeD::Trellis2
     MEAN            = {0.485_f32, 0.456_f32, 0.406_f32}
     STD             = {0.229_f32, 0.224_f32, 0.225_f32}
 
+    getter runtime_adapter : ML::Vision::DinoV3::RuntimeAdapter
+
+    def initialize(@runtime_adapter : ML::Vision::DinoV3::RuntimeAdapter)
+    end
+
     def prepare(input : RGBImage, target : Int32) : DinoV3ImageCondition
       unless target == 512 || target == 1024
         raise DinoV3ImageConditionerError.new("DINOv3 target must be 512 or 1024")
+      end
+      patch_size = @runtime_adapter.certificate.patch_size
+      unless target.to_i64 % patch_size == 0
+        raise DinoV3ImageConditionerError.new(
+          "DINOv3 target #{target} is not divisible by certified patch size #{patch_size}"
+        )
       end
       unless input.width == input.height
         raise DinoV3ImageConditionerError.new(
@@ -206,7 +219,8 @@ module ML::ThreeD::Trellis2
         resized,
         tensor,
         TRELLIS2_IMAGE_PREPROCESS_REVISION,
-        PILLOW_REVISION
+        PILLOW_REVISION,
+        @runtime_adapter
       )
     end
   end

@@ -1,7 +1,36 @@
 require "json"
 require "digest/sha256"
 require "../../../src/ml/three_d/trellis2/image_conditioner"
+require "../../../src/ml/vision/dino_v3"
 require "../../spec_helper"
+
+private def trellis2_dino_v3_runtime_adapter : ML::Vision::DinoV3::RuntimeAdapter
+  certificate_path = File.join(
+    __DIR__,
+    "../../fixtures/trellis2/dino_v3_config_certificate_v1.json"
+  )
+  certificate = ML::Vision::DinoV3::ConfigCertificate.parse(
+    File.read(certificate_path),
+    source_model: ML::Vision::DinoV3::ConfigCertificate::PINNED_SOURCE_MODEL,
+    source_revision: ML::Vision::DinoV3::ConfigCertificate::PINNED_SOURCE_REVISION
+  )
+  fixture = JSON.parse(
+    File.read(File.join(__DIR__, "../../fixtures/trellis2/dino_v3_embeddings_cpu_v1.json"))
+  )
+  provenance = fixture["provenance"]
+  compatibility = fixture["compatibility"]
+  ML::Vision::DinoV3::RuntimeAdapter.new(
+    certificate,
+    trellis_source_revision: provenance["commit"].as_s,
+    transformers_version: provenance["transformers_version"].as_s,
+    transformers_modeling_sha256: provenance["transformers_modeling_sha256"].as_s,
+    transformers_config_sha256: provenance["transformers_config_sha256"].as_s,
+    source_runtime_path: compatibility["pinned_upstream_layer_path"].as_s,
+    instance_runtime_path: compatibility["transformers_5_8_1_layer_path"].as_s,
+    source_path_available: compatibility["pinned_upstream_path_available_on_instance"].as_bool,
+    instance_path_available: compatibility["transformers_5_8_1_path_available_on_instance"].as_bool
+  )
+end
 
 private def trellis2_conditioner_recipe(width : Int32, height : Int32) : Bytes
   pixels = Bytes.new(width * height * 3, 0_u8)
@@ -44,7 +73,8 @@ describe ML::ThreeD::Trellis2::DinoV3ImageConditionerCPU do
     fixture["provenance"]["pillow_resample"].as_s.should contain(
       "/Pillow/blob/12.2.0/"
     )
-    conditioner = ML::ThreeD::Trellis2::DinoV3ImageConditionerCPU.new
+    runtime_adapter = trellis2_dino_v3_runtime_adapter
+    conditioner = ML::ThreeD::Trellis2::DinoV3ImageConditionerCPU.new(runtime_adapter)
 
     fixture["cases"].as_a.each do |test_case|
       name = test_case["name"].as_s
@@ -64,6 +94,7 @@ describe ML::ThreeD::Trellis2::DinoV3ImageConditionerCPU do
       result.source_revision.should eq(
         "75fbf0183001ed9876c8dbb35de6b68552ee08bd"
       )
+      result.runtime_adapter.object_id.should eq(runtime_adapter.object_id)
       result.pillow_revision.should eq(fixture["provenance"]["pillow_version"].as_s)
       result.resized.width.should eq(target)
       result.resized.height.should eq(target)
@@ -90,7 +121,9 @@ describe ML::ThreeD::Trellis2::DinoV3ImageConditionerCPU do
   end
 
   it "rejects unsupported target, geometry, and source size before resampling" do
-    conditioner = ML::ThreeD::Trellis2::DinoV3ImageConditionerCPU.new
+    conditioner = ML::ThreeD::Trellis2::DinoV3ImageConditionerCPU.new(
+      trellis2_dino_v3_runtime_adapter
+    )
     rectangle = ML::ThreeD::Trellis2::RGBImage.new(
       3,
       2,
