@@ -82,6 +82,9 @@ describe ML::Vision::DinoV3::ConfigCertificate do
     mutable_copy = certificate.fields
     mutable_copy["architectures"].as_a << JSON::Any.new("spoof")
     certificate.fields["architectures"].as_a.size.should eq(1)
+    mutable_architectures = certificate.architectures
+    mutable_architectures << "spoof"
+    certificate.architectures.should eq(["DINOv3ViTModel"])
   end
 
   it "accepts bytes and rejects unknown, missing, or disallowed null fields" do
@@ -131,6 +134,16 @@ describe ML::Vision::DinoV3::ConfigCertificate do
     execution["attn_implementation"] = JSON::Any.new("eager")
     expect_raises(ML::Vision::DinoV3::ConfigError, /unknown config key/) do
       ML::Vision::DinoV3::ConfigCertificate.parse(execution.to_json, **kwargs)
+    end
+
+    duplicate = source.sub(/\}\n\z/, ",\n  \"hidden_size\": 1024\n}\n")
+    expect_raises(ML::Vision::DinoV3::ConfigError, /duplicate JSON key/) do
+      ML::Vision::DinoV3::ConfigCertificate.parse(duplicate, **kwargs)
+    end
+
+    trailing = source + "{}"
+    expect_raises(ML::Vision::DinoV3::ConfigError, /invalid JSON/) do
+      ML::Vision::DinoV3::ConfigCertificate.parse(trailing, **kwargs)
     end
   end
 

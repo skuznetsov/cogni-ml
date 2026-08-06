@@ -54,7 +54,6 @@ module ML::Vision::DinoV3
     getter source_revision : String
     getter config_sha256 : String
 
-    getter architectures : Array(String)
     getter attention_dropout : Float64
     getter drop_path_rate : Float64
     getter hidden_act : String
@@ -154,6 +153,10 @@ module ML::Vision::DinoV3
     # certificate's evidence map after parsing.
     def fields : Hash(String, JSON::Any)
       decoded_fields
+    end
+
+    def architectures : Array(String)
+      @architectures.dup
     end
 
     def decoded_fields : Hash(String, JSON::Any)
