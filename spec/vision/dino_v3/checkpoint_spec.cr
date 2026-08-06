@@ -20,14 +20,51 @@ private def dino_v3_checkpoint_manifest_fixture : String
   )
 end
 
+private def dino_v3_checkpoint_source_evidence_fixture : JSON::Any
+  JSON.parse(
+    File.read(
+      File.join(
+        __DIR__,
+        "../../fixtures/trellis2/dino_v3_checkpoint_source_evidence_v1.json"
+      )
+    )
+  )
+end
+
 private def mutate_dino_v3_checkpoint_manifest(& : Hash(String, JSON::Any) ->)
   root = JSON.parse(dino_v3_checkpoint_manifest_fixture).as_h
   yield root
   root.to_json
 end
 
+private class SpoofedDinoV3Certificate < ML::Vision::DinoV3::ConfigCertificate
+  def source_model : String
+    ML::Vision::DinoV3::ConfigCertificate::PINNED_SOURCE_MODEL
+  end
+
+  def source_revision : String
+    ML::Vision::DinoV3::ConfigCertificate::PINNED_SOURCE_REVISION
+  end
+
+  def config_sha256 : String
+    ML::Vision::DinoV3::ConfigCertificate::PINNED_CONFIG_SHA256
+  end
+
+  def access_mode : String
+    "spoofed-access"
+  end
+
+  def license_name : String
+    "spoofed-license"
+  end
+
+  def license_link : String
+    "https://example.invalid/spoofed-license"
+  end
+end
+
 describe ML::Vision::DinoV3::CheckpointManifest do
-  it "binds the gated config and weight artifacts to the pinned DINOv3 revision" do
+  it "binds declared checkpoint metadata to the pinned DINOv3 revision" do
     manifest = ML::Vision::DinoV3::CheckpointManifest.parse(
       dino_v3_checkpoint_manifest_fixture,
       certificate: dino_v3_checkpoint_certificate
@@ -57,6 +94,20 @@ describe ML::Vision::DinoV3::CheckpointManifest do
     manifest.weights_byte_length.should eq(1_212_559_808_i64)
     manifest.weights_sha256.should eq(
       "dcb2e45127cccbf1601e5f42fef165eea275c8e5213197e8dcf3f48822718179"
+    )
+
+    evidence = dino_v3_checkpoint_source_evidence_fixture
+    evidence["schema"].as_s.should eq(
+      "cogni-ml/vision/dino-v3/checkpoint-source-evidence/v1"
+    )
+    evidence["retrieved_on"].as_s.should eq("2026-08-06")
+    evidence["source"]["model"].as_s.should eq(manifest.model)
+    evidence["source"]["revision"].as_s.should eq(manifest.revision)
+    evidence["files"]["model.safetensors"]["byte_length"].as_i64.should eq(
+      manifest.weights_byte_length
+    )
+    evidence["files"]["model.safetensors"]["lfs_sha256"].as_s.should eq(
+      manifest.weights_sha256
     )
     manifest.config_url.should eq(
       "https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m/resolve/" \
@@ -157,6 +208,18 @@ describe ML::Vision::DinoV3::CheckpointManifest do
       ML::Vision::DinoV3::CheckpointManifest.parse(
         missing,
         certificate: dino_v3_checkpoint_certificate
+      )
+    end
+  end
+
+  it "rejects a certificate subtype with spoofed semantic provenance" do
+    expect_raises(
+      ML::Vision::DinoV3::CheckpointManifestError,
+      /pinned DINOv3 config certificate/
+    ) do
+      ML::Vision::DinoV3::CheckpointManifest.parse(
+        dino_v3_checkpoint_manifest_fixture,
+        certificate: SpoofedDinoV3Certificate.allocate
       )
     end
   end

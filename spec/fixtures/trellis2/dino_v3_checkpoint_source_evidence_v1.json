@@ -1,0 +1,26 @@
+{
+  "schema": "cogni-ml/vision/dino-v3/checkpoint-source-evidence/v1",
+  "retrieved_on": "2026-08-06",
+  "source": {
+    "kind": "huggingface-model-api",
+    "url": "https://huggingface.co/api/models/facebook/dinov3-vitl16-pretrain-lvd1689m?revision=ea8dc2863c51be0a264bab82070e3e8836b02d51",
+    "model": "facebook/dinov3-vitl16-pretrain-lvd1689m",
+    "revision": "ea8dc2863c51be0a264bab82070e3e8836b02d51"
+  },
+  "files": {
+    "config.json": {
+      "byte_length": 745,
+      "lfs_sha256": null,
+      "checked_in_sha256": "135ecd23e34a70b6fbed8b083fdecb319b7e3a54e3d849258bbe4ddcf1783bb5"
+    },
+    "model.safetensors": {
+      "byte_length": 1212559808,
+      "lfs_sha256": "dcb2e45127cccbf1601e5f42fef165eea275c8e5213197e8dcf3f48822718179"
+    }
+  },
+  "limitations": [
+    "Selected metadata fields from one read-only API response are recorded; this is not a signature-backed attestation.",
+    "No checkpoint payload bytes were downloaded or cached.",
+    "No local file presence, safetensors header, tensor inventory, or payload hash was observed."
+  ]
+}

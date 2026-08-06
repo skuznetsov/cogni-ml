@@ -5,7 +5,7 @@ require "../../three_d/trellis2/strict_json"
 
 module ML::Vision::DinoV3
   # A checkpoint manifest is provenance only. It identifies the exact gated
-  # artifacts that a future loader may materialize; it never downloads,
+  # artifact metadata that a future loader may materialize; it never downloads,
   # opens, or executes a checkpoint.
   class CheckpointManifestError < ConfigError
   end
@@ -222,7 +222,10 @@ module ML::Vision::DinoV3
     private def self.validate_certificate!(certificate : ConfigCertificate) : Nil
       unless certificate.source_model == ConfigCertificate::PINNED_SOURCE_MODEL &&
              certificate.source_revision == ConfigCertificate::PINNED_SOURCE_REVISION &&
-             certificate.config_sha256 == ConfigCertificate::PINNED_CONFIG_SHA256
+             certificate.config_sha256 == ConfigCertificate::PINNED_CONFIG_SHA256 &&
+             certificate.access_mode == ConfigCertificate::PINNED_ACCESS_MODE &&
+             certificate.license_name == ConfigCertificate::PINNED_LICENSE_NAME &&
+             certificate.license_link == ConfigCertificate::PINNED_LICENSE_LINK
         raise CheckpointManifestError.new(
           "checkpoint manifest requires the pinned DINOv3 config certificate"
         )
