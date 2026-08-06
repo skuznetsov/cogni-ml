@@ -1,0 +1,125 @@
+{
+  "schema": "landmark/evidence/v1",
+  "id": "trellis2-t2n3d12-real-dinov3-embedding-preflight",
+  "claim": {
+    "level": "VERIFIED",
+    "statement": "The pinned DINOv3 configuration can produce an allocation-free embedding-forward plan that rejects the real 512/1024 projection before tensor or checkpoint payload work under the existing CPU multiply-add policy.",
+    "scope": "Shape, output-byte, and patch-projection work accounting only; no RSS/peak-memory, real forward, transformer block, encoder, GPU, or Metal claim."
+  },
+  "evidence": [
+    {
+      "type": "test",
+      "entrypoint": "spec/vision/dino_v3/embedding_preflight_spec.cr",
+      "result": "4 examples, 0 failures; exact synthetic plan, exact-budget boundary, pinned real-config rejection, and unsupported-edge rejection"
+    },
+    {
+      "type": "test",
+      "entrypoint": "spec/vision/dino_v3/embedding_caller_spec.cr",
+      "result": "3 examples, 0 failures; existing bounded caller regression"
+    },
+    {
+      "type": "command",
+      "entrypoint": "bin/dino_v3_embedding_probe.cr",
+      "arguments": "--preflight-edge 512",
+      "result": "fails before checkpoint/payload work: DINOv3 patch projection requires 805306368 multiply-adds, limit is 67108864"
+    },
+    {
+      "type": "command",
+      "entrypoint": "bin/dino_v3_embedding_probe.cr",
+      "arguments": "--preflight-edge 1024",
+      "result": "fails before checkpoint/payload work: DINOv3 patch projection requires 3221225472 multiply-adds, limit is 67108864"
+    },
+    {
+      "type": "command",
+      "entrypoint": "bin/dino_v3_embedding_probe.cr",
+      "arguments": "--checkpoint /Users/sergey/SrcArchives/AI/dinov3-vitl16-pretrain-lvd1689m/model.safetensors",
+      "result": {
+        "bytes": 1212559808,
+        "header_bytes": 41400,
+        "tensor_count": 415,
+        "semantic_tensor_count": 415,
+        "sha256": "dcb2e45127cccbf1601e5f42fef165eea275c8e5213197e8dcf3f48822718179",
+        "required_roles": [
+          "embedding.patch_weight",
+          "embedding.patch_bias",
+          "embedding.cls_token",
+          "embedding.register_tokens"
+        ],
+        "parameter_bytes": 3170304,
+        "parameter_f32le_sha256": "8124dfb9859ecbb6d33908bcd013e32a469897140cb413c2aa5b629699a1f56f",
+        "config_hidden_size": 1024,
+        "config_register_tokens": 4,
+        "forward": "not-run",
+        "blocks_loaded": 0
+      }
+    },
+    {
+      "type": "test",
+      "entrypoint": "spec/vision/dino_v3/",
+      "result": "42 examples, 0 failures, CPU-only"
+    },
+    {
+      "type": "test",
+      "entrypoint": "spec/three_d/trellis2/",
+      "result": "181 examples, 0 failures, CPU-only"
+    },
+    {
+      "type": "negative",
+      "case": "max-multiply-adds below exact synthetic plan",
+      "result": "fails at 3,145,727 for a 3,145,728-MAC plan; exact budget passes"
+    },
+    {
+      "type": "negative",
+      "case": "unsupported input edge 256",
+      "result": "fails before plan construction with admitted-resolution error"
+    }
+  ],
+  "verification": {
+    "dod": [
+      "The plan is allocation-free and reports patch geometry, output elements/bytes, and projection multiply-adds.",
+      "The pinned real config rejects 512 and 1024 projection work before opening or decoding a checkpoint payload.",
+      "The existing EmbeddingCPU forward consumes the same plan path, avoiding guard drift.",
+      "CPU-only DINOv3/TRELLIS.2 suites, no-codegen builds, formatting, and diff checks pass."
+    ],
+    "passed": true,
+    "adversary_verdict": "ROBUST",
+    "trust": {
+      "F": 0.91,
+      "G": 0.62,
+      "R": 0.95
+    }
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "src/ml/vision/dino_v3/embeddings.cr",
+      "src/ml/vision/dino_v3/embedding_caller.cr",
+      "bin/dino_v3_embedding_probe.cr",
+      "spec/vision/dino_v3/embedding_preflight_spec.cr"
+    ],
+    "changed_paths": [
+      "src/ml/vision/dino_v3/embeddings.cr",
+      "src/ml/vision/dino_v3/embedding_caller.cr",
+      "bin/dino_v3_embedding_probe.cr",
+      "spec/vision/dino_v3/embedding_preflight_spec.cr",
+      ".landmark/evidence/trellis2-t2n3d12-real-dinov3-embedding-preflight.json"
+    ],
+    "excluded": [
+      "real tensor allocation or input reads in preflight mode",
+      "RSS/peak native/managed memory measurement",
+      "real 1024-wide embedding forward and numerical parity",
+      "24 transformer blocks and final norm weights",
+      "full encoder/model-scale execution",
+      "GPU or Metal execution"
+    ]
+  },
+  "links": {
+    "prior_evidence": ".landmark/evidence/trellis2-t2n3d11-real-dinov3-embedding-caller.json",
+    "underlying_commit": "8fbcd9f0"
+  },
+  "residual_risks": [
+    "Multiply-add count is a policy guard and not a measured latency or peak-memory prediction.",
+    "The plan accounts for declared F32 payloads but excludes allocator/native/runtime overhead and concurrent callers.",
+    "The real checkpoint remains a user-local artifact and its embedding forward remains intentionally unexecuted.",
+    "The digest receipt is not a file lock; callers must prevent same-size replacement during role decode."
+  ]
+}

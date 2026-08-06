@@ -100,6 +100,28 @@ module ML::Vision::DinoV3
       @parameters.config
     end
 
+    # Validate pinned geometry and work budgets without opening or decoding a
+    # checkpoint payload. This is the caller-side gate for a future real
+    # embedding forward.
+    def self.preflight(
+      certificate : ConfigCertificate,
+      runtime : RuntimeAdapter,
+      input_edge : Int32,
+      *,
+      max_input_bytes : Int64 = EmbeddingCPU::MAX_INPUT_BYTES,
+      max_output_bytes : Int64 = EmbeddingCPU::MAX_OUTPUT_BYTES,
+      max_multiply_adds : Int64 = EmbeddingCPU::MAX_MULTIPLY_ADDS,
+    ) : EmbeddingForwardPlan
+      config = certified_embedding_config(certificate, runtime)
+      EmbeddingCPU.preflight(
+        config,
+        input_edge,
+        max_input_bytes: max_input_bytes,
+        max_output_bytes: max_output_bytes,
+        max_multiply_adds: max_multiply_adds
+      )
+    end
+
     def forward(input : Tensor) : EmbeddingResult
       @embedding.forward(input)
     end

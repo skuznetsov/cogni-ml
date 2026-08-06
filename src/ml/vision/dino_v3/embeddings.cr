@@ -169,6 +169,18 @@ module ML::Vision::DinoV3
     transformers_modeling_sha256 : String,
     transformers_config_sha256 : String
 
+  record EmbeddingForwardPlan,
+    input_edge : Int32,
+    patch_edge : Int32,
+    patch_count : Int64,
+    input_bytes : Int64,
+    output_elements : Int64,
+    output_bytes : Int64,
+    multiply_adds : Int64,
+    max_input_bytes : Int64,
+    max_output_bytes : Int64,
+    max_multiply_adds : Int64
+
   class EmbeddingCPU
     MAX_INPUT_BYTES      = 16_i64 * 1024_i64 * 1024_i64
     MAX_OUTPUT_BYTES     = 64_i64 * 1024_i64 * 1024_i64
@@ -182,11 +194,121 @@ module ML::Vision::DinoV3
       @config = @parameters.config
     end
 
+    # Allocation-free geometry/work certificate for one admitted embedding
+    # forward. This is intentionally separate from Tensor validation and
+    # parameter loading so a caller can reject model-scale work first.
+    def self.preflight(
+      config : EmbeddingConfig,
+      edge : Int32,
+      *,
+      max_input_bytes : Int64 = MAX_INPUT_BYTES,
+      max_output_bytes : Int64 = MAX_OUTPUT_BYTES,
+      max_multiply_adds : Int64 = MAX_MULTIPLY_ADDS,
+    ) : EmbeddingForwardPlan
+      unless ADMITTED_RESOLUTIONS.includes?(edge)
+        raise EmbeddingError.new("DINOv3 embedding resolution must be 512 or 1024")
+      end
+      validate_budget!(max_input_bytes, MAX_INPUT_BYTES, "input bytes")
+      validate_budget!(max_output_bytes, MAX_OUTPUT_BYTES, "output bytes")
+      validate_budget!(max_multiply_adds, MAX_MULTIPLY_ADDS, "multiply-adds")
+
+      patch_edge = edge // config.patch_size
+      patch_count = checked_multiply(
+        patch_edge.to_i64,
+        patch_edge.to_i64,
+        "patch count"
+      )
+      input_elements = checked_multiply(
+        checked_multiply(
+          config.num_channels.to_i64,
+          edge.to_i64,
+          "input elements"
+        ),
+        edge.to_i64,
+        "input elements"
+      )
+      input_bytes = checked_multiply(input_elements, 4_i64, "input bytes")
+
+      patch_elements = checked_multiply(
+        patch_count,
+        config.hidden_size.to_i64,
+        "patch elements"
+      )
+      prefix_count = checked_add(
+        1_i64,
+        config.num_register_tokens.to_i64,
+        "prefix count"
+      )
+      embedding_elements = checked_multiply(
+        checked_add(patch_count, prefix_count, "embedding token count"),
+        config.hidden_size.to_i64,
+        "embedding elements"
+      )
+      coordinate_elements = checked_multiply(patch_count, 2_i64, "coordinate elements")
+      rope_elements = checked_multiply(
+        checked_multiply(patch_count, config.head_dim.to_i64, "RoPE elements"),
+        2_i64,
+        "RoPE elements"
+      )
+      output_elements = checked_add(
+        checked_add(patch_elements, embedding_elements, "output elements"),
+        checked_add(coordinate_elements, rope_elements, "output elements"),
+        "output elements"
+      )
+      output_bytes = checked_multiply(output_elements, 4_i64, "output bytes")
+      if input_bytes > max_input_bytes
+        raise EmbeddingBudgetError.new(
+          "DINOv3 embedding input requires #{input_bytes} bytes, limit is #{max_input_bytes}"
+        )
+      end
+      if output_bytes > max_output_bytes
+        raise EmbeddingBudgetError.new(
+          "DINOv3 embedding outputs require #{output_bytes} bytes, limit is #{max_output_bytes}"
+        )
+      end
+
+      multiply_adds = checked_multiply(
+        checked_multiply(
+          checked_multiply(
+            checked_multiply(
+              patch_count,
+              config.hidden_size.to_i64,
+              "multiply-adds"
+            ),
+            config.num_channels.to_i64,
+            "multiply-adds"
+          ),
+          config.patch_size.to_i64,
+          "multiply-adds"
+        ),
+        config.patch_size.to_i64,
+        "multiply-adds"
+      )
+      if multiply_adds > max_multiply_adds
+        raise EmbeddingBudgetError.new(
+          "DINOv3 patch projection requires #{multiply_adds} multiply-adds, limit is #{max_multiply_adds}"
+        )
+      end
+
+      EmbeddingForwardPlan.new(
+        edge,
+        patch_edge,
+        patch_count,
+        input_bytes,
+        output_elements,
+        output_bytes,
+        multiply_adds,
+        max_input_bytes,
+        max_output_bytes,
+        max_multiply_adds
+      )
+    end
+
     def forward(input : Tensor) : EmbeddingResult
       edge = validate_input!(input)
-      patch_edge = edge // @config.patch_size
-      patch_count = patch_edge.to_i64 * patch_edge
-      preflight!(input, patch_count)
+      plan = self.class.preflight(@config, edge)
+      patch_edge = plan.patch_edge
+      patch_count = plan.patch_count
       @parameters.validate!
       parameter_f32le_sha256 = @parameters.f32le_sha256
 
@@ -291,36 +413,27 @@ module ML::Vision::DinoV3
       end
     end
 
-    private def preflight!(input : Tensor, patch_count : Int64) : Nil
-      input_bytes = input.numel.to_i64 * 4_i64
-      if input_bytes > MAX_INPUT_BYTES
+    private def self.validate_budget!(value : Int64, maximum : Int64, name : String) : Nil
+      unless 1_i64 <= value <= maximum
         raise EmbeddingBudgetError.new(
-          "DINOv3 embedding input requires #{input_bytes} bytes, limit is #{MAX_INPUT_BYTES}"
+          "DINOv3 embedding #{name} budget must be in 1..#{maximum}"
         )
       end
+    end
 
-      patch_elements = patch_count * @config.hidden_size
-      embedding_elements = (
-        patch_count + 1_i64 + @config.num_register_tokens
-      ) * @config.hidden_size
-      coordinate_elements = patch_count * 2_i64
-      rope_elements = patch_count * @config.head_dim * 2_i64
-      output_bytes = (
-        patch_elements + embedding_elements + coordinate_elements + rope_elements
-      ) * 4_i64
-      if output_bytes > MAX_OUTPUT_BYTES
-        raise EmbeddingBudgetError.new(
-          "DINOv3 embedding outputs require #{output_bytes} bytes, limit is #{MAX_OUTPUT_BYTES}"
-        )
+    private def self.checked_add(left : Int64, right : Int64, name : String) : Int64
+      if left < 0_i64 || right < 0_i64 || left > Int64::MAX - right
+        raise EmbeddingBudgetError.new("DINOv3 embedding #{name} overflow Int64")
       end
+      left + right
+    end
 
-      multiply_adds = patch_count * @config.hidden_size * @config.num_channels *
-                      @config.patch_size * @config.patch_size
-      if multiply_adds > MAX_MULTIPLY_ADDS
-        raise EmbeddingBudgetError.new(
-          "DINOv3 patch projection requires #{multiply_adds} multiply-adds, limit is #{MAX_MULTIPLY_ADDS}"
-        )
+    private def self.checked_multiply(left : Int64, right : Int64, name : String) : Int64
+      if left < 0_i64 || right < 0_i64 ||
+         (right > 0_i64 && left > Int64::MAX // right)
+        raise EmbeddingBudgetError.new("DINOv3 embedding #{name} overflow Int64")
       end
+      left * right
     end
 
     private def project_patches!(

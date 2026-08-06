@@ -6,14 +6,50 @@ require "../src/ml/vision/dino_v3"
 module ML::Vision::DinoV3
   class EmbeddingProbeCLI
     def self.run : Nil
-      checkpoint_path, max_parameter_bytes = parse_args
+      checkpoint_path, max_parameter_bytes, preflight_edge, max_multiply_adds = parse_args
       certificate = load_certificate
       runtime = RuntimeAdapter.new(certificate)
+      if edge = preflight_edge
+        plan = DinoV3EmbeddingCaller.preflight(
+          certificate,
+          runtime,
+          edge,
+          max_multiply_adds: max_multiply_adds
+        )
+        report = JSON.build do |json|
+          json.object do
+            json.field("mode", "preflight")
+            json.field("input_edge", plan.input_edge)
+            json.field("patch_edge", plan.patch_edge)
+            json.field("patch_count", plan.patch_count)
+            json.field("input_bytes", plan.input_bytes)
+            json.field("output_elements", plan.output_elements)
+            json.field("output_bytes", plan.output_bytes)
+            json.field("multiply_adds", plan.multiply_adds)
+            json.field("max_input_bytes", plan.max_input_bytes)
+            json.field("max_output_bytes", plan.max_output_bytes)
+            json.field("max_multiply_adds", plan.max_multiply_adds)
+            json.field("config_hidden_size", certificate.hidden_size)
+            json.field("config_register_tokens", certificate.num_register_tokens)
+            json.field("payload_loaded", false)
+            json.field("forward", "not-run")
+            json.field("blocks_loaded", 0)
+          end
+        end
+        puts report
+        return
+      end
+
+      path = checkpoint_path
+      unless path
+        STDERR.puts "missing --checkpoint PATH or --preflight-edge EDGE"
+        exit 2
+      end
       manifest = CheckpointManifest.parse(
         File.read(fixture_path("trellis2/dino_v3_checkpoint_manifest_v1.json")),
         certificate: certificate
       )
-      inventory = CheckpointInventory.load(checkpoint_path, manifest: manifest)
+      inventory = CheckpointInventory.load(path, manifest: manifest)
       semantic = SemanticInventory.bind(
         inventory,
         certificate: certificate,
@@ -31,7 +67,7 @@ module ML::Vision::DinoV3
 
       report = JSON.build do |json|
         json.object do
-          json.field("checkpoint", checkpoint_path)
+          json.field("checkpoint", path)
           json.field("bytes", inventory.file_byte_length)
           json.field("header_bytes", inventory.header_byte_length)
           json.field("tensor_count", inventory.tensors.size)
@@ -51,12 +87,14 @@ module ML::Vision::DinoV3
       puts report
     end
 
-    private def self.parse_args : Tuple(String, Int64)
+    private def self.parse_args : Tuple(String?, Int64, Int32?, Int64)
       checkpoint_path : String? = nil
       max_parameter_bytes = DinoV3EmbeddingCaller::MAX_PARAMETER_BYTES
+      preflight_edge : Int32? = nil
+      max_multiply_adds = EmbeddingCPU::MAX_MULTIPLY_ADDS
 
       OptionParser.parse do |parser|
-        parser.banner = "Usage: dino_v3_embedding_probe --checkpoint PATH [--max-parameter-bytes BYTES]"
+        parser.banner = "Usage: dino_v3_embedding_probe --checkpoint PATH [--max-parameter-bytes BYTES] | --preflight-edge EDGE [--max-multiply-adds COUNT]"
         parser.on("-c PATH", "--checkpoint=PATH", "materialized model.safetensors path") do |path|
           checkpoint_path = path
         end
@@ -67,18 +105,35 @@ module ML::Vision::DinoV3
             raise OptionParser::InvalidOption.new("invalid --max-parameter-bytes value")
           end
         end
+        parser.on("-p EDGE", "--preflight-edge=EDGE", "allocation-free geometry/work preflight") do |value|
+          begin
+            preflight_edge = value.to_i32
+          rescue
+            raise OptionParser::InvalidOption.new("invalid --preflight-edge value")
+          end
+        end
+        parser.on("-m COUNT", "--max-multiply-adds=COUNT", "operation budget for preflight") do |value|
+          begin
+            max_multiply_adds = value.to_i64
+          rescue
+            raise OptionParser::InvalidOption.new("invalid --max-multiply-adds value")
+          end
+        end
         parser.on("-h", "--help", "show this help") do
           puts parser
           exit
         end
       end
 
-      path = checkpoint_path
-      unless path
-        STDERR.puts "missing --checkpoint PATH"
+      if checkpoint_path && preflight_edge
+        STDERR.puts "choose either --checkpoint PATH or --preflight-edge EDGE"
         exit 2
       end
-      {path, max_parameter_bytes}
+      unless checkpoint_path || preflight_edge
+        STDERR.puts "missing --checkpoint PATH or --preflight-edge EDGE"
+        exit 2
+      end
+      {checkpoint_path, max_parameter_bytes, preflight_edge, max_multiply_adds}
     rescue ex : OptionParser::InvalidOption
       STDERR.puts ex.message
       exit 2
