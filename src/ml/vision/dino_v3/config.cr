@@ -436,9 +436,9 @@ module ML::Vision::DinoV3
     end
   end
 
-  # Maps the runtime attribute path used by the pinned synthetic contract to
-  # serialized state-dict prefixes. A root `.layer` path and other versioned
-  # Transformers paths are rejected rather than silently normalized.
+  # Maps the runtime attribute path used by the pinned Transformers 5.8.1
+  # synthetic contract to its state-dict prefixes. The gated checkpoint has a
+  # separate source-era serialization contract; see CheckpointPathAdapter.
   class LayerPathAdapter
     PINNED_RUNTIME_PATH          = "model.layer"
     ROOT_RUNTIME_PATH            = "layer"
@@ -490,6 +490,69 @@ module ML::Vision::DinoV3
     rescue
       raise ConfigError.new(
         "invalid serialized layer prefix #{prefix.inspect}; expected model.layer.N"
+      )
+    end
+  end
+
+  # Maps the source-era gated checkpoint keys independently from the runtime
+  # object path. The authorized config records Transformers 4.56.0.dev0, whose
+  # DINOv3 model serialized encoder layers at root `layer.N`; the compatibility
+  # runtime used by the native implementation exposes `model.model.layer`.
+  # Keeping these contracts separate prevents a shared path string from being
+  # treated as proof of a checkpoint key name.
+  class CheckpointPathAdapter
+    PINNED_TRANSFORMERS_VERSION  = "4.56.0.dev0"
+    SERIALIZED_STATE_DICT_PREFIX = "layer"
+    ROOT_SERIALIZED_PREFIX       = "model.layer"
+
+    getter transformers_version : String
+
+    def initialize(certificate : ConfigCertificate)
+      unless certificate.source_model == ConfigCertificate::PINNED_SOURCE_MODEL &&
+             certificate.source_revision == ConfigCertificate::PINNED_SOURCE_REVISION &&
+             certificate.config_sha256 == ConfigCertificate::PINNED_CONFIG_SHA256
+        raise ConfigError.new(
+          "checkpoint path adapter requires the pinned DINOv3 config certificate"
+        )
+      end
+      unless certificate.transformers_version == PINNED_TRANSFORMERS_VERSION
+        raise ConfigError.new(
+          "checkpoint path adapter requires Transformers #{PINNED_TRANSFORMERS_VERSION}"
+        )
+      end
+      @transformers_version = certificate.transformers_version.dup
+    end
+
+    def serialized_state_dict_prefix(layer_index : Int32) : String
+      unless layer_index >= 0
+        raise ConfigError.new("layer index must be non-negative")
+      end
+      "#{SERIALIZED_STATE_DICT_PREFIX}.#{layer_index}"
+    end
+
+    def layer_index_from_serialized_prefix(prefix : String) : Int32
+      marker = "#{SERIALIZED_STATE_DICT_PREFIX}."
+      unless prefix.starts_with?(marker)
+        raise ConfigError.new(
+          "invalid checkpoint layer prefix #{prefix.inspect}; expected layer.N"
+        )
+      end
+      suffix = prefix[marker.size..]
+      unless suffix.matches?(/\A(?:0|[1-9][0-9]*)\z/)
+        raise ConfigError.new(
+          "invalid checkpoint layer prefix #{prefix.inspect}; expected layer.N"
+        )
+      end
+      value = suffix.to_i64
+      unless value <= Int32::MAX
+        raise ConfigError.new("checkpoint layer index exceeds Int32")
+      end
+      value.to_i32
+    rescue ex : ConfigError
+      raise ex
+    rescue
+      raise ConfigError.new(
+        "invalid checkpoint layer prefix #{prefix.inspect}; expected layer.N"
       )
     end
   end

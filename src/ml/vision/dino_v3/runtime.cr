@@ -1,7 +1,9 @@
 # Source-pinned metadata adapter for the DINOv3 runtime boundary used by
 # TRELLIS.2. This maps the upstream logical path to the concrete Transformers
 # instance path without constructing a model, loading weights, or executing a
-# 24-layer encoder.
+# 24-layer encoder. Its `serialized_state_dict_prefix` describes the pinned
+# Transformers 5.8.1 synthetic/runtime contract; source-era checkpoint keys
+# are handled separately by CheckpointPathAdapter.
 
 require "./config"
 require "./embeddings"

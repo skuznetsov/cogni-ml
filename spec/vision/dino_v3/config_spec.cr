@@ -169,4 +169,20 @@ describe ML::Vision::DinoV3::ConfigCertificate do
       adapter.serialized_state_dict_prefix(-1)
     end
   end
+
+  it "keeps source-era checkpoint keys separate from runtime state-dict paths" do
+    certificate = dino_v3_config_certificate
+    adapter = ML::Vision::DinoV3::CheckpointPathAdapter.new(certificate)
+
+    adapter.transformers_version.should eq("4.56.0.dev0")
+    adapter.serialized_state_dict_prefix(23).should eq("layer.23")
+    adapter.layer_index_from_serialized_prefix("layer.23").should eq(23_i32)
+
+    expect_raises(ML::Vision::DinoV3::ConfigError, /checkpoint layer prefix/) do
+      adapter.layer_index_from_serialized_prefix("model.layer.23")
+    end
+    expect_raises(ML::Vision::DinoV3::ConfigError, /checkpoint layer prefix/) do
+      adapter.layer_index_from_serialized_prefix("layer.01")
+    end
+  end
 end
