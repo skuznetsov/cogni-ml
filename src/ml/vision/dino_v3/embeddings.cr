@@ -131,6 +131,15 @@ module ML::Vision::DinoV3
       digest.final.hexstring
     end
 
+    def parameter_byte_length : Int64
+      (
+        @patch_weight.size +
+          @patch_bias.size +
+          @cls_token.size +
+          @register_tokens.size
+      ).to_i64 * 4_i64
+    end
+
     private def validate_length!(values : Array(Float32), expected : Int64, name : String) : Nil
       unless values.size.to_i64 == expected
         raise EmbeddingError.new(

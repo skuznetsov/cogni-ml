@@ -40,6 +40,7 @@ bin/*
 !bin/trellis2_inspect.cr
 !bin/trellis2_convert.cr
 !bin/dino_v3_checkpoint_verify.cr
+!bin/dino_v3_embedding_probe.cr
 
 # Test helper binaries (rebuildable via `make q4k_ref`)
 spec/support/q4k_ref

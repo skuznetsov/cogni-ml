@@ -1,0 +1,110 @@
+{
+  "schema": "landmark/evidence/v1",
+  "id": "trellis2-t2n3d11-real-dinov3-embedding-caller",
+  "claim": {
+    "level": "VERIFIED",
+    "statement": "The pinned local DINOv3 checkpoint can feed a bounded embedding caller that decodes exactly four verified embedding roles, constructs the existing CPU embedding boundary, and keeps transformer block weights unloaded.",
+    "scope": "Real local role loading plus synthetic bounded forward composition; the real 1024-wide model forward remains guarded and unclaimed."
+  },
+  "evidence": [
+    {
+      "type": "command",
+      "entrypoint": "bin/dino_v3_embedding_probe.cr",
+      "arguments": "--checkpoint /Users/sergey/SrcArchives/AI/dinov3-vitl16-pretrain-lvd1689m/model.safetensors",
+      "result": {
+        "bytes": 1212559808,
+        "header_bytes": 41400,
+        "tensor_count": 415,
+        "semantic_tensor_count": 415,
+        "sha256": "dcb2e45127cccbf1601e5f42fef165eea275c8e5213197e8dcf3f48822718179",
+        "required_roles": [
+          "embedding.patch_weight",
+          "embedding.patch_bias",
+          "embedding.cls_token",
+          "embedding.register_tokens"
+        ],
+        "parameter_bytes": 3170304,
+        "parameter_f32le_sha256": "8124dfb9859ecbb6d33908bcd013e32a469897140cb413c2aa5b629699a1f56f",
+        "config_hidden_size": 1024,
+        "config_register_tokens": 4,
+        "forward": "not-run",
+        "blocks_loaded": 0
+      }
+    },
+    {
+      "type": "test",
+      "entrypoint": "spec/vision/dino_v3/embedding_caller_spec.cr",
+      "result": "3 examples, 0 failures; bounded synthetic forward, aggregate budget rejection, and immutable four-role registry"
+    },
+    {
+      "type": "test",
+      "entrypoint": "spec/vision/dino_v3/",
+      "result": "38 examples, 0 failures, CPU-only"
+    },
+    {
+      "type": "test",
+      "entrypoint": "spec/three_d/trellis2/",
+      "result": "181 examples, 0 failures, CPU-only"
+    },
+    {
+      "type": "negative",
+      "case": "max-parameter-bytes=1024",
+      "result": "fails before role decode with temporary-residency budget error"
+    },
+    {
+      "type": "negative",
+      "case": "same-size sparse synthetic checkpoint",
+      "result": "manifest SHA-256 mismatch before caller construction"
+    }
+  ],
+  "verification": {
+    "dod": [
+      "The real pinned artifact loads only the four embedding roles and reports 3,170,304 parameter bytes.",
+      "The bounded caller forwards a small synthetic parameter set through the existing CPU embedding API.",
+      "Aggregate temporary residency and digest mismatch fail closed before model-scale allocation or execution.",
+      "CPU-only DINOv3/TRELLIS.2 suites, no-codegen builds, formatting, and diff checks pass."
+    ],
+    "passed": true,
+    "adversary_verdict": "ROBUST",
+    "trust": {
+      "F": 0.9,
+      "G": 0.55,
+      "R": 0.93
+    }
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "src/ml/vision/dino_v3/embedding_caller.cr",
+      "src/ml/vision/dino_v3/embeddings.cr",
+      "src/ml/vision/dino_v3.cr",
+      "bin/dino_v3_embedding_probe.cr",
+      "spec/vision/dino_v3/embedding_caller_spec.cr"
+    ],
+    "changed_paths": [
+      ".gitignore",
+      "src/ml/vision/dino_v3/embedding_caller.cr",
+      "src/ml/vision/dino_v3/embeddings.cr",
+      "src/ml/vision/dino_v3.cr",
+      "bin/dino_v3_embedding_probe.cr",
+      "spec/vision/dino_v3/embedding_caller_spec.cr",
+      ".landmark/evidence/trellis2-t2n3d11-real-dinov3-embedding-caller.json"
+    ],
+    "excluded": [
+      "24 transformer blocks and final norm weights",
+      "real 1024-wide 512/1024 forward and numerical parity",
+      "full-weight residency and model-scale attention",
+      "GPU or Metal execution",
+      "same-size replacement races after digest receipt"
+    ]
+  },
+  "links": {
+    "prior_evidence": ".landmark/evidence/trellis2-t2n3d10-real-dinov3-payload.json",
+    "underlying_commit": "a2bc6225"
+  },
+  "residual_risks": [
+    "The real checkpoint remains a user-local artifact and is intentionally not committed.",
+    "The caller's real model forward is not executed because the existing multiply-add guard rejects model-scale 1024-wide 512/1024 projection.",
+    "The digest receipt is not a file lock; callers must prevent same-size replacement during role decode.",
+    "The embedding parameter arrays retain owned decoded values and are single-owner/non-concurrent by contract."
+  ]
+}
