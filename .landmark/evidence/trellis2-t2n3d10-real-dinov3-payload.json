@@ -1,0 +1,89 @@
+{
+  "schema": "landmark/evidence/v1",
+  "id": "trellis2-t2n3d10-real-dinov3-payload",
+  "claim": {
+    "level": "VERIFIED",
+    "statement": "The pinned gated DINOv3 model.safetensors artifact can be materialized locally and passes manifest-positive header, 415-role semantic, full-file digest, and one-role F32 decode verification.",
+    "scope": "One immutable or synchronized local checkpoint file and one semantic F32 role; no full-model inference claim."
+  },
+  "evidence": [
+    {
+      "type": "artifact",
+      "path": "/Users/sergey/SrcArchives/AI/dinov3-vitl16-pretrain-lvd1689m/model.safetensors",
+      "availability": "local-only",
+      "bytes": 1212559808,
+      "sha256": "dcb2e45127cccbf1601e5f42fef165eea275c8e5213197e8dcf3f48822718179"
+    },
+    {
+      "type": "command",
+      "entrypoint": "bin/dino_v3_checkpoint_verify.cr",
+      "arguments": "--checkpoint /Users/sergey/SrcArchives/AI/dinov3-vitl16-pretrain-lvd1689m/model.safetensors --role embedding.cls_token",
+      "result": {
+        "bytes": 1212559808,
+        "header_bytes": 41400,
+        "tensor_count": 415,
+        "semantic_tensor_count": 415,
+        "sha256": "dcb2e45127cccbf1601e5f42fef165eea275c8e5213197e8dcf3f48822718179",
+        "role": "embedding.cls_token",
+        "name": "embeddings.cls_token",
+        "shape": [1, 1, 1024],
+        "decoded_values": 1024
+      }
+    },
+    {
+      "type": "negative",
+      "case": "unknown semantic role",
+      "result": "fails closed before payload decode"
+    },
+    {
+      "type": "negative",
+      "case": "same-size sparse synthetic checkpoint",
+      "result": "manifest SHA-256 mismatch"
+    }
+  ],
+  "verification": {
+    "dod": [
+      "Crystal CLI positive output reports the pinned byte length, header length, 415 tensors, matching SHA-256, and decoded role.",
+      "Unknown role and same-size synthetic checkpoint both fail closed.",
+      "No model-scale inference or Metal execution is performed."
+    ],
+    "passed": true,
+    "adversary_verdict": "ROBUST",
+    "trust": {
+      "F": 0.92,
+      "G": 0.58,
+      "R": 0.94
+    }
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "bin/dino_v3_checkpoint_verify.cr",
+      "src/ml/vision/dino_v3/**",
+      "spec/fixtures/trellis2/dino_v3_checkpoint_manifest_v1.json"
+    ],
+    "changed_paths": [
+      ".gitignore",
+      "bin/dino_v3_checkpoint_verify.cr",
+      ".landmark/evidence/trellis2-t2n3d10-real-dinov3-payload.json"
+    ],
+    "excluded": [
+      "full 415-tensor resident loading",
+      "encoder execution and numerical parity",
+      "Metal or GPU execution",
+      "same-size replacement races after receipt"
+    ]
+  },
+  "links": {
+    "manifest_fixture": "spec/fixtures/trellis2/dino_v3_checkpoint_manifest_v1.json",
+    "underlying_commits": [
+      "843cc250",
+      "b6f1cc1b",
+      "714742e"
+    ]
+  },
+  "residual_risks": [
+    "The materialized checkpoint is a user-local artifact and is intentionally not committed.",
+    "The digest receipt is not a file lock; callers must prevent same-size replacement during decode.",
+    "The CLI verifies one role under the 64 MiB resident budget and does not establish model-scale memory or encoder parity."
+  ]
+}
