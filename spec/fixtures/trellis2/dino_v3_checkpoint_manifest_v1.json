@@ -1,0 +1,21 @@
+{
+  "schema": "cogni-ml/vision/dino-v3/checkpoint-manifest/v1",
+  "model": "facebook/dinov3-vitl16-pretrain-lvd1689m",
+  "revision": "ea8dc2863c51be0a264bab82070e3e8836b02d51",
+  "access_mode": "manual",
+  "license": {
+    "name": "dinov3-license",
+    "link": "https://ai.meta.com/resources/models-and-libraries/dinov3-license"
+  },
+  "config": {
+    "path": "config.json",
+    "byte_length": 745,
+    "sha256": "135ecd23e34a70b6fbed8b083fdecb319b7e3a54e3d849258bbe4ddcf1783bb5"
+  },
+  "weights": {
+    "path": "model.safetensors",
+    "format": "safetensors",
+    "byte_length": 1212559808,
+    "sha256": "dcb2e45127cccbf1601e5f42fef165eea275c8e5213197e8dcf3f48822718179"
+  }
+}
