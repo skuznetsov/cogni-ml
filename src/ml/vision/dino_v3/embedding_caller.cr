@@ -126,6 +126,21 @@ module ML::Vision::DinoV3
       @embedding.forward(input)
     end
 
+    {% if flag?(:dinov3_model_scale_forward_probe) %}
+      # Compile-flagged manual path; the normal caller remains bounded by the
+      # production EmbeddingCPU multiply-add budget.
+      def forward_for_model_scale_probe(
+        input : Tensor,
+        *,
+        max_multiply_adds : Int64,
+      ) : EmbeddingResult
+        @embedding.forward_for_model_scale_probe(
+          input,
+          max_multiply_adds: max_multiply_adds
+        )
+      end
+    {% end %}
+
     private def self.certified_embedding_config(
       certificate : ConfigCertificate,
       runtime : RuntimeAdapter,

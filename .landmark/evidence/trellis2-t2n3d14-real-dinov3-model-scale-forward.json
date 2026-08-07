@@ -1,0 +1,117 @@
+{
+  "schema": "landmark/evidence/v1",
+  "id": "trellis2-t2n3d14-real-dinov3-model-scale-forward",
+  "claim": {
+    "level": "VERIFIED",
+    "statement": "An explicitly compiled fresh-process Darwin probe runs one pinned hidden-1024 DINOv3 embedding projection at 512x512 on the CPU reference path with an exact 805306368-MAC budget, finite outputs, and a 512 MiB RSS watchdog.",
+    "scope": "One user-local safetensors artifact, four embedding roles, one 512px CPU forward, and post-GC/process-resident orientation only; no true peak, native allocator, transformer block, full encoder, GPU, or Metal claim."
+  },
+  "evidence": [
+    {
+      "type": "tdd-red",
+      "entrypoint": "spec/vision/dino_v3/model_scale_forward_probe_spec.cr",
+      "arguments": "-Dcpu_only -Ddinov3_model_scale_forward_probe before probe-path implementation",
+      "result": "compile failed because preflight_model_scale_probe was absent"
+    },
+    {
+      "type": "test",
+      "entrypoint": "spec/vision/dino_v3/model_scale_forward_probe_spec.cr",
+      "arguments": "-Dcpu_only -Ddinov3_model_scale_forward_probe",
+      "result": "2 examples, 0 failures; elevated path is compile-flagged, bounded, and synthetic forward remains finite"
+    },
+    {
+      "type": "probe",
+      "entrypoint": "spec/vision/dino_v3/model_scale_forward_probe.cr",
+      "arguments": "-Dcpu_only -Ddinov3_model_scale_forward_probe DINO_V3_CHECKPOINT=/Users/sergey/SrcArchives/AI/dinov3-vitl16-pretrain-lvd1689m/model.safetensors DINO_V3_FORWARD_MAX_MULTIPLY_ADDS=805306368 COGNI_SPEC_MAX_RSS_MB=512",
+      "result": {
+        "input_edge": 512,
+        "checkpoint_bytes": 1212559808,
+        "parameter_bytes": 3170304,
+        "parameter_f32le_sha256": "8124dfb9859ecbb6d33908bcd013e32a469897140cb413c2aa5b629699a1f56f",
+        "multiply_adds": 805306368,
+        "max_multiply_adds": 805306368,
+        "output_bytes": 8941568,
+        "output_finite": true,
+        "default_budget_rejected": true,
+        "load_allocation_bytes": 13203712,
+        "load_held_live_managed_delta": 6463488,
+        "load_held_rss_delta_kb": 12384,
+        "forward_allocation_bytes": 9006368,
+        "forward_held_live_managed_delta": 8925184,
+        "forward_held_rss_delta_kb": 6464,
+        "rss_guard_limit_mb": 512,
+        "forward": "cpu-reference-ran",
+        "blocks_loaded": 0,
+        "native_peak_memory": "not-measured",
+        "true_peak_rss": "not-measured",
+        "metal": "not-run"
+      }
+    },
+    {
+      "type": "test",
+      "entrypoint": "spec/vision/dino_v3/",
+      "result": "42 examples, 0 failures, CPU-only; default production gate remains unchanged"
+    },
+    {
+      "type": "negative",
+      "case": "default caller preflight at pinned 512px hidden-1024 geometry",
+      "result": "rejects before payload/forward work because the production 67108864-MAC limit is below 805306368"
+    },
+    {
+      "type": "negative",
+      "case": "DINO_V3_FORWARD_MAX_MULTIPLY_ADDS above the fixed probe ceiling or at/below production limit",
+      "result": "bounded probe budget validation rejects the invalid value"
+    }
+  ],
+  "verification": {
+    "dod": [
+      "The model-scale API is compiled only with dinov3_model_scale_forward_probe; default forward keeps MAX_MULTIPLY_ADDS at 67108864.",
+      "The probe requires an explicit checkpoint path, exact pinned MAC budget, and positive RSS watchdog limit.",
+      "The pinned file size, four-role F32 byte count, role digest, output shapes/bytes, and finite output are checked.",
+      "The probe reports load/forward allocation and post-GC/RSS orientations while marking true peak, native memory, blocks, and Metal explicitly unmeasured or unrun.",
+      "No-codegen build, focused flagged spec, default DINOv3 suite, and CPU-only production compile pass."
+    ],
+    "passed": true,
+    "adversary_verdict": "ROBUST",
+    "trust": {
+      "F": 0.9,
+      "G": 0.43,
+      "R": 0.9
+    }
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "src/ml/vision/dino_v3/embeddings.cr",
+      "src/ml/vision/dino_v3/embedding_caller.cr",
+      "spec/vision/dino_v3/model_scale_forward_probe.cr",
+      "spec/vision/dino_v3/model_scale_forward_probe_spec.cr"
+    ],
+    "changed_paths": [
+      "src/ml/vision/dino_v3/embeddings.cr",
+      "src/ml/vision/dino_v3/embedding_caller.cr",
+      "spec/vision/dino_v3/model_scale_forward_probe.cr",
+      "spec/vision/dino_v3/model_scale_forward_probe_spec.cr",
+      ".landmark/evidence/trellis2-t2n3d14-real-dinov3-model-scale-forward.json"
+    ],
+    "excluded": [
+      "default production multiply-add or RSS policy widening",
+      "true allocator/native/high-water memory accounting",
+      "1024px model-scale forward",
+      "transformer blocks and final normalization",
+      "full encoder/model-scale execution",
+      "GPU or Metal execution",
+      "latency benchmark or repeated-run variance"
+    ]
+  },
+  "links": {
+    "prior_evidence": ".landmark/evidence/trellis2-t2n3d13-real-dinov3-role-retention.json",
+    "prior_code_commit": "7a221f3e"
+  },
+  "residual_risks": [
+    "The RSS watchdog is a process-resident safety cap, not a true high-water or native allocator certificate.",
+    "Post-GC managed-heap and RSS deltas are local orientation signals and can vary with runtime roots, allocator state, and host noise.",
+    "The forward uses a zero-filled CPU input and establishes finiteness/shape/guard behavior, not numerical parity against Python/Transformers or image quality.",
+    "The 24 transformer blocks, final normalization, decoder, GPU, and Metal remain unimplemented or unrun.",
+    "The one fixed-artifact run does not establish production latency, concurrency, or a safe 1024px budget."
+  ]
+}

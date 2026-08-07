@@ -205,12 +205,56 @@ module ML::Vision::DinoV3
       max_output_bytes : Int64 = MAX_OUTPUT_BYTES,
       max_multiply_adds : Int64 = MAX_MULTIPLY_ADDS,
     ) : EmbeddingForwardPlan
+      preflight_internal(
+        config,
+        edge,
+        max_input_bytes: max_input_bytes,
+        max_output_bytes: max_output_bytes,
+        max_multiply_adds: max_multiply_adds,
+        max_multiply_adds_ceiling: MAX_MULTIPLY_ADDS
+      )
+    end
+
+    {% if flag?(:dinov3_model_scale_forward_probe) %}
+      # This ceiling exists only in the explicitly compiled manual probe. It is
+      # large enough for the pinned hidden-1024 512px projection, but does not
+      # authorize arbitrary Int64-sized work.
+      MODEL_SCALE_PROBE_MAX_MULTIPLY_ADDS = 4_i64 * 1024_i64 * 1024_i64 * 1024_i64
+
+      def self.preflight_model_scale_probe(
+        config : EmbeddingConfig,
+        edge : Int32,
+        *,
+        max_input_bytes : Int64 = MAX_INPUT_BYTES,
+        max_output_bytes : Int64 = MAX_OUTPUT_BYTES,
+        max_multiply_adds : Int64,
+      ) : EmbeddingForwardPlan
+        preflight_internal(
+          config,
+          edge,
+          max_input_bytes: max_input_bytes,
+          max_output_bytes: max_output_bytes,
+          max_multiply_adds: max_multiply_adds,
+          max_multiply_adds_ceiling: MODEL_SCALE_PROBE_MAX_MULTIPLY_ADDS
+        )
+      end
+    {% end %}
+
+    private def self.preflight_internal(
+      config : EmbeddingConfig,
+      edge : Int32,
+      *,
+      max_input_bytes : Int64,
+      max_output_bytes : Int64,
+      max_multiply_adds : Int64,
+      max_multiply_adds_ceiling : Int64,
+    ) : EmbeddingForwardPlan
       unless ADMITTED_RESOLUTIONS.includes?(edge)
         raise EmbeddingError.new("DINOv3 embedding resolution must be 512 or 1024")
       end
       validate_budget!(max_input_bytes, MAX_INPUT_BYTES, "input bytes")
       validate_budget!(max_output_bytes, MAX_OUTPUT_BYTES, "output bytes")
-      validate_budget!(max_multiply_adds, MAX_MULTIPLY_ADDS, "multiply-adds")
+      validate_budget!(max_multiply_adds, max_multiply_adds_ceiling, "multiply-adds")
 
       patch_edge = edge // config.patch_size
       patch_count = checked_multiply(
@@ -307,6 +351,37 @@ module ML::Vision::DinoV3
     def forward(input : Tensor) : EmbeddingResult
       edge = validate_input!(input)
       plan = self.class.preflight(@config, edge)
+      forward_with_plan(input, edge, plan)
+    end
+
+    {% if flag?(:dinov3_model_scale_forward_probe) %}
+      # Explicitly compiled manual path for one guarded model-scale CPU
+      # experiment. The production forward method above keeps its 64M-MAC gate.
+      def forward_for_model_scale_probe(
+        input : Tensor,
+        *,
+        max_multiply_adds : Int64,
+      ) : EmbeddingResult
+        unless max_multiply_adds > MAX_MULTIPLY_ADDS
+          raise EmbeddingBudgetError.new(
+            "DINOv3 model-scale probe multiply-add budget must exceed the production limit"
+          )
+        end
+        edge = validate_input!(input)
+        plan = self.class.preflight_model_scale_probe(
+          @config,
+          edge,
+          max_multiply_adds: max_multiply_adds
+        )
+        forward_with_plan(input, edge, plan)
+      end
+    {% end %}
+
+    private def forward_with_plan(
+      input : Tensor,
+      edge : Int32,
+      plan : EmbeddingForwardPlan,
+    ) : EmbeddingResult
       patch_edge = plan.patch_edge
       patch_count = plan.patch_count
       @parameters.validate!
