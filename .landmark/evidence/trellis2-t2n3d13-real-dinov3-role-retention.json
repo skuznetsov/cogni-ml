@@ -1,0 +1,89 @@
+{
+  "schema": "landmark/evidence/v1",
+  "id": "trellis2-t2n3d13-real-dinov3-role-retention",
+  "claim": {
+    "level": "VERIFIED",
+    "statement": "A fresh-process Darwin probe materializes the four pinned real DINOv3 embedding roles within the existing 16 MiB caller budget and reports positive managed-allocation/live-heap/RSS orientation without running the encoder.",
+    "scope": "One user-local safetensors artifact, four embedding roles, one CPU process, and post-GC orientation only; no true peak, native allocator, forward, block, GPU, or Metal claim."
+  },
+  "evidence": [
+    {
+      "type": "control",
+      "entrypoint": "spec/three_d/trellis2/cache_retention_probe_spec.cr",
+      "arguments": "-Dcpu_only -Dtrellis2_retention_sensor_probe",
+      "result": "1 example, 0 failures; 16 MiB retained control moved post-GC managed heap by 16863232 bytes and ps RSS by 16512 KiB"
+    },
+    {
+      "type": "probe",
+      "entrypoint": "spec/vision/dino_v3/embedding_retention_probe_spec.cr",
+      "arguments": "-Dcpu_only -Ddinov3_embedding_retention_probe DINO_V3_CHECKPOINT=/Users/sergey/SrcArchives/AI/dinov3-vitl16-pretrain-lvd1689m/model.safetensors COGNI_SPEC_MAX_RSS_MB=512",
+      "result": {
+        "checkpoint_bytes": 1212559808,
+        "parameter_bytes": 3170304,
+        "parameter_f32le_sha256": "8124dfb9859ecbb6d33908bcd013e32a469897140cb413c2aa5b629699a1f56f",
+        "allocation_bytes": 14492880,
+        "held_live_managed_delta": 3563520,
+        "held_rss_delta_kb": 13152,
+        "dropped_live_managed_delta": 3522560,
+        "dropped_rss_delta_kb": 13152,
+        "released_live_managed_bytes": 40960,
+        "forward": "not-run",
+        "blocks_loaded": 0,
+        "native_peak_memory": "not-measured",
+        "metal": "not-run"
+      }
+    },
+    {
+      "type": "test",
+      "entrypoint": "spec/vision/dino_v3/",
+      "result": "42 examples, 0 failures, CPU-only"
+    },
+    {
+      "type": "negative",
+      "case": "DINO_V3_MAX_PARAMETER_BYTES=1024",
+      "result": "existing caller budget guard rejects before role payload materialization"
+    }
+  ],
+  "verification": {
+    "dod": [
+      "The probe requires an explicit user-local checkpoint path and Darwin compilation flag.",
+      "The pinned file size, four-role F32 byte count, and role payload digest are checked.",
+      "A qualified 16 MiB control demonstrates that the managed/RSS sensor can detect a known positive allocation.",
+      "The probe emits cumulative allocation and post-GC live/RSS orientation while marking forward, native peak, and Metal as unrun or unmeasured."
+    ],
+    "passed": true,
+    "adversary_verdict": "ROBUST",
+    "trust": {
+      "F": 0.88,
+      "G": 0.42,
+      "R": 0.9
+    }
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "spec/vision/dino_v3/embedding_retention_probe_spec.cr"
+    ],
+    "changed_paths": [
+      "spec/vision/dino_v3/embedding_retention_probe_spec.cr",
+      ".landmark/evidence/trellis2-t2n3d13-real-dinov3-role-retention.json"
+    ],
+    "excluded": [
+      "true allocator or native-memory accounting",
+      "peak/high-water memory during digest or role decode",
+      "real 512/1024 embedding forward",
+      "transformer blocks and final normalization",
+      "GPU or Metal execution",
+      "production-scale concurrency and repeated-run variance"
+    ]
+  },
+  "links": {
+    "prior_evidence": ".landmark/evidence/trellis2-t2n3d12-real-dinov3-embedding-preflight.json",
+    "underlying_commit": "85d98400"
+  },
+  "residual_risks": [
+    "ps RSS is a local process-resident orientation and is unavailable in the restricted sandbox without escalation.",
+    "Post-GC live-heap values are conservative and may retain stale roots; the dropped value is diagnostic, not a release guarantee.",
+    "The one-run fixed-artifact result does not establish a true peak, native allocator, latency, or production memory budget.",
+    "The real embedding forward remains rejected by the existing multiply-add policy, and no model block or Metal code ran."
+  ]
+}
