@@ -1,0 +1,158 @@
+{
+  "schema": "landmark/evidence/v1",
+  "id": "trellis2-t2n3d15-real-dinov3-embedding-parity",
+  "claim": {
+    "level": "VERIFIED",
+    "statement": "The guarded Crystal CPU DINOv3 embedding boundary matches an independent source-backed F32 reference over complete patches, prefix embeddings, patch coordinates, and RoPE cos/sin arrays for one deterministic non-zero 512px input.",
+    "scope": "One pinned local DINOv3 F32 checkpoint, one 512px CPU forward, one Apple Silicon host, and the embedding boundary only; this is not upstream Transformers-runtime, transformer-block, full-encoder, quality, GPU, or Metal parity."
+  },
+  "evidence": [
+    {
+      "type": "tdd-red",
+      "entrypoint": "spec/vision/dino_v3/real_embedding_parity_probe_spec.cr",
+      "arguments": "-Dcpu_only -Ddinov3_model_scale_forward_probe -Ddinov3_real_embedding_parity_probe with a missing DINO_V3_PARITY_REFERENCE",
+      "result": "fails closed before checkpoint work because the generated reference directory is absent"
+    },
+    {
+      "type": "reference",
+      "entrypoint": "tools/trellis2_oracle/export_dino_v3_real_embedding_reference.py",
+      "arguments": "/opt/homebrew/Caskroom/miniconda/base/bin/python3 <script> /Users/sergey/SrcArchives/AI/dinov3-vitl16-pretrain-lvd1689m/model.safetensors /private/tmp/pic3d_t2n3d15_reference",
+      "result": {
+        "checkpoint_bytes": 1212559808,
+        "checkpoint_sha256": "dcb2e45127cccbf1601e5f42fef165eea275c8e5213197e8dcf3f48822718179",
+        "parameter_bytes": 3170304,
+        "parameter_f32le_sha256": "8124dfb9859ecbb6d33908bcd013e32a469897140cb413c2aa5b629699a1f56f",
+        "input_shape": [1, 3, 512, 512],
+        "input_f32le_sha256": "d92f66a0df47c99149b35066217741880249f557f414c6bf24e81d4b6e525347",
+        "backend": "torch.nn.functional.conv2d plus explicit F32 prefix/coordinates/RoPE",
+        "torch_version": "2.6.0",
+        "numpy_version": "1.26.4",
+        "transformers_dinov3_runtime_available": false,
+        "tolerance_absolute": 1.0e-5,
+        "tolerance_relative": 1.0e-5
+      }
+    },
+    {
+      "type": "probe",
+      "entrypoint": "spec/vision/dino_v3/real_embedding_parity_probe.cr",
+      "arguments": "-Dcpu_only -Ddinov3_model_scale_forward_probe -Ddinov3_real_embedding_parity_probe DINO_V3_CHECKPOINT=/Users/sergey/SrcArchives/AI/dinov3-vitl16-pretrain-lvd1689m/model.safetensors DINO_V3_PARITY_REFERENCE=/private/tmp/pic3d_t2n3d15_reference DINO_V3_FORWARD_MAX_MULTIPLY_ADDS=805306368 DINO_V3_MAX_PARAMETER_BYTES=16777216 COGNI_SPEC_MAX_RSS_MB=512",
+      "result": {
+        "examples": 1,
+        "failures": 0,
+        "checkpoint_bytes": 1212559808,
+        "parameter_bytes": 3170304,
+        "parameter_f32le_sha256": "8124dfb9859ecbb6d33908bcd013e32a469897140cb413c2aa5b629699a1f56f",
+        "input_f32le_sha256": "d92f66a0df47c99149b35066217741880249f557f414c6bf24e81d4b6e525347",
+        "multiply_adds": 805306368,
+        "default_budget_rejected": true,
+        "rss_guard_limit_mb": 512,
+        "patches": {
+          "elements": 1048576,
+          "max_absolute_error": 1.430511474609375e-6,
+          "max_relative_error": 0.029577782795213368,
+          "max_error_index": 35621
+        },
+        "embeddings": {
+          "elements": 1053696,
+          "max_absolute_error": 1.430511474609375e-6,
+          "max_relative_error": 0.029577782795213368,
+          "max_error_index": 40741
+        },
+        "coordinates": {
+          "elements": 2048,
+          "max_absolute_error": 0.0,
+          "max_relative_error": 0.0,
+          "max_error_index": 0
+        },
+        "rope_cos": {
+          "elements": 65536,
+          "max_absolute_error": 5.960464477539063e-8,
+          "max_relative_error": 1.0925405917068739e-7,
+          "max_error_index": 10
+        },
+        "rope_sin": {
+          "elements": 65536,
+          "max_absolute_error": 5.960464477539063e-8,
+          "max_relative_error": 1.1787554322944098e-7,
+          "max_error_index": 152
+        },
+        "forward": "cpu-reference-ran",
+        "blocks_loaded": 0,
+        "metal": "not-run"
+      }
+    },
+    {
+      "type": "test",
+      "entrypoint": "spec/vision/dino_v3/",
+      "arguments": "-Dcpu_only",
+      "result": "42 examples, 0 failures"
+    },
+    {
+      "type": "test",
+      "entrypoint": "spec/three_d/trellis2/",
+      "arguments": "-Dcpu_only",
+      "result": "181 examples, 0 failures"
+    },
+    {
+      "type": "build",
+      "entrypoint": "src/ml.cr",
+      "arguments": "-Dcpu_only --no-codegen --error-trace",
+      "result": "success"
+    },
+    {
+      "type": "negative",
+      "case": "production embedding budget at pinned 512px hidden-1024 geometry",
+      "result": "rejects the 805306368-MAC plan before the guarded forward"
+    },
+    {
+      "type": "negative",
+      "case": "full encoder / block / Metal execution",
+      "result": "not admitted by this slice and explicitly reported as unrun"
+    }
+  ],
+  "verification": {
+    "dod": [
+      "The source-backed reference verifies the full checkpoint hash and reads only the four certified F32 embedding roles.",
+      "Crystal checks the reference schema, pinned source hashes, input recipe digest, parameter digest, shapes, byte lengths, and every output value.",
+      "The numerical tolerance is bounded in code at 1e-5 absolute and 1e-5 relative; the observed maximum absolute error is 1.43e-6.",
+      "The default production budget remains closed, the RSS watchdog is 512 MiB, and no transformer block or Metal work runs.",
+      "Focused parity, CPU-only DINOv3/TRELLIS.2 suites, formatting, Python AST parsing, and the CPU-only no-codegen build pass."
+    ],
+    "passed": true,
+    "adversary_verdict": "ROBUST",
+    "trust": {
+      "F": 0.9,
+      "G": 0.45,
+      "R": 0.9
+    }
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "tools/trellis2_oracle/export_dino_v3_real_embedding_reference.py",
+      "spec/vision/dino_v3/real_embedding_parity_probe_spec.cr"
+    ],
+    "changed_paths": [
+      "tools/trellis2_oracle/export_dino_v3_real_embedding_reference.py",
+      "spec/vision/dino_v3/real_embedding_parity_probe_spec.cr",
+      ".landmark/evidence/trellis2-t2n3d15-real-dinov3-embedding-parity.json"
+    ],
+    "excluded": [
+      "upstream Transformers 5.8.1 DINOv3 runtime execution because it is unavailable in the current local Python environment",
+      "1024px forward",
+      "transformer blocks, final norm, full encoder, decoder, and mesh quality",
+      "Metal or GPU execution",
+      "true native/high-water memory accounting",
+      "latency, concurrency, and cross-host numerical variance"
+    ]
+  },
+  "links": {
+    "prior_evidence": ".landmark/evidence/trellis2-t2n3d14-real-dinov3-model-scale-forward.json",
+    "prior_code_commit": "bd1371844bf226b64acf8abcbf537fdf417101af"
+  },
+  "residual_risks": [
+    "The reference reconstructs the pinned embedding semantics with PyTorch conv2d and explicit formulas; it is not a run of the unavailable Transformers 5.8.1 DINOv3 module.",
+    "The measured tolerance is one fresh-process Apple Silicon CPU comparison and may need remeasurement after changing the PyTorch, compiler, or host backend.",
+    "A digest receipt is not a file lock; same-size checkpoint replacement after verification remains outside this slice.",
+    "The parity result does not establish transformer-block correctness, full-encoder output quality, 1024px safety, GPU/Metal performance, or production readiness."
+  ]
+}
