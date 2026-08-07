@@ -24,6 +24,16 @@ module ML::Vision::DinoV3
   end
 
   struct BlockConfig
+    {% if flag?(:dinov3_real_block_parity_probe) %}
+      MAX_HIDDEN_SIZE       = 1024_i32
+      MAX_INTERMEDIATE_SIZE = 4096_i32
+      MAX_ATTENTION_HEADS   =   16_i32
+    {% else %}
+      MAX_HIDDEN_SIZE       =  64_i32
+      MAX_INTERMEDIATE_SIZE = 256_i32
+      MAX_ATTENTION_HEADS   =   8_i32
+    {% end %}
+
     getter hidden_size : Int32
     getter intermediate_size : Int32
     getter num_attention_heads : Int32
@@ -62,14 +72,18 @@ module ML::Vision::DinoV3
       @training : Bool = false,
       @extractor_final_layer_norm_eps : Float32 = 1.0e-5_f32,
     )
-      unless 0 < @hidden_size <= 64
-        raise BlockError.new("DINOv3 block hidden size must be in 1..64")
+      unless 0 < @hidden_size <= MAX_HIDDEN_SIZE
+        raise BlockError.new("DINOv3 block hidden size must be in 1..#{MAX_HIDDEN_SIZE}")
       end
-      unless 0 < @intermediate_size <= 256
-        raise BlockError.new("DINOv3 block intermediate size must be in 1..256")
+      unless 0 < @intermediate_size <= MAX_INTERMEDIATE_SIZE
+        raise BlockError.new(
+          "DINOv3 block intermediate size must be in 1..#{MAX_INTERMEDIATE_SIZE}"
+        )
       end
-      unless 0 < @num_attention_heads <= 8
-        raise BlockError.new("DINOv3 block attention heads must be in 1..8")
+      unless 0 < @num_attention_heads <= MAX_ATTENTION_HEADS
+        raise BlockError.new(
+          "DINOv3 block attention heads must be in 1..#{MAX_ATTENTION_HEADS}"
+        )
       end
       unless @hidden_size % @num_attention_heads == 0
         raise BlockError.new("DINOv3 block hidden size must be divisible by attention heads")
@@ -227,6 +241,10 @@ module ML::Vision::DinoV3
       digest.final.hexstring
     end
 
+    def parameter_byte_length : Int64
+      parameter_arrays.sum(&.size).to_i64 * 4_i64
+    end
+
     private def parameter_arrays : Array(Array(Float32))
       [
         @norm1_weight,
@@ -298,9 +316,43 @@ module ML::Vision::DinoV3
       rope_cos : Tensor,
       rope_sin : Tensor,
     ) : BlockTrace
+      forward_with_trace_budgeted(
+        input,
+        rope_cos,
+        rope_sin,
+        MAX_MULTIPLY_ADDS
+      )
+    end
+
+    {% if flag?(:dinov3_real_block_parity_probe) %}
+      # Explicit local probe only. The production API remains bounded by the
+      # synthetic MAX_MULTIPLY_ADDS envelope and cannot silently admit the
+      # real 1024/4096-width block.
+      def forward_for_model_scale_probe(
+        input : Tensor,
+        rope_cos : Tensor,
+        rope_sin : Tensor,
+        *,
+        max_multiply_adds : Int64,
+      ) : BlockTrace
+        forward_with_trace_budgeted(
+          input,
+          rope_cos,
+          rope_sin,
+          max_multiply_adds
+        )
+      end
+    {% end %}
+
+    private def forward_with_trace_budgeted(
+      input : Tensor,
+      rope_cos : Tensor,
+      rope_sin : Tensor,
+      max_multiply_adds : Int64,
+    ) : BlockTrace
       token_count = validate_input!(input)
       patch_count = validate_rope!(rope_cos, rope_sin, token_count)
-      preflight!(token_count, patch_count)
+      preflight!(token_count, patch_count, max_multiply_adds)
 
       # The owner contract above permits no concurrent mutation. Revalidate and
       # digest immediately before reading any retained parameter values.
@@ -486,7 +538,11 @@ module ML::Vision::DinoV3
       patch_count
     end
 
-    private def preflight!(token_count : Int32, patch_count : Int32) : Nil
+    private def preflight!(
+      token_count : Int32,
+      patch_count : Int32,
+      max_multiply_adds : Int64,
+    ) : Nil
       heads = @config.num_attention_heads.to_i64
       tokens = token_count.to_i64
       hidden = @config.hidden_size.to_i64
@@ -497,7 +553,7 @@ module ML::Vision::DinoV3
           "DINOv3 block scores require #{score_elements} elements, limit is #{MAX_SCORE_ELEMENTS}"
         )
       end
-      trace_elements = 17_i64 * tokens * hidden + 2_i64 * tokens * intermediate + 2_i64 * score_elements
+      trace_elements = 16_i64 * tokens * hidden + 2_i64 * tokens * intermediate + 2_i64 * score_elements
       trace_bytes = trace_elements * 4_i64
       if trace_bytes > MAX_OUTPUT_BYTES
         raise BlockBudgetError.new(
@@ -507,9 +563,12 @@ module ML::Vision::DinoV3
       multiply_adds = 4_i64 * tokens * hidden * hidden +
                       2_i64 * tokens * hidden * intermediate +
                       2_i64 * tokens * tokens * hidden
-      if multiply_adds > MAX_MULTIPLY_ADDS
+      unless max_multiply_adds > 0_i64
+        raise BlockBudgetError.new("DINOv3 block multiply-add budget must be positive")
+      end
+      if multiply_adds > max_multiply_adds
         raise BlockBudgetError.new(
-          "DINOv3 block multiply-add budget #{multiply_adds} exceeds #{MAX_MULTIPLY_ADDS}"
+          "DINOv3 block multiply-add budget #{multiply_adds} exceeds #{max_multiply_adds}"
         )
       end
       # Keep the argument live in the arithmetic so malformed callers cannot

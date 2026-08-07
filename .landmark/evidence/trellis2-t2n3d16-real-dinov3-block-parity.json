@@ -1,0 +1,150 @@
+{
+  "schema": "landmark/evidence/v1",
+  "id": "trellis2-t2n3d16-real-dinov3-block-parity",
+  "claim": {
+    "level": "VERIFIED",
+    "statement": "The guarded Crystal CPU DINOv3 layer-0 reference matches an independently generated source-formula F32 reference at every retained boundary for a deterministic eight-token input.",
+    "scope": "One pinned local DINOv3 F32 checkpoint, one layer, eight tokens (one CLS, four registers, three patches), one Apple Silicon CPU process, and the block boundary only; this is not full encoder, 1024px, upstream Transformers-runtime, quality, GPU, or Metal parity."
+  },
+  "evidence": [
+    {
+      "type": "tdd-red",
+      "entrypoint": "spec/vision/dino_v3/real_block_parity_probe_spec.cr",
+      "arguments": "-Dcpu_only -Ddinov3_real_block_parity_probe without DINO_V3_BLOCK_PARITY_REFERENCE",
+      "result": "fails closed before checkpoint work because the generated reference directory is absent"
+    },
+    {
+      "type": "reference",
+      "entrypoint": "tools/trellis2_oracle/export_dino_v3_real_block_reference.py",
+      "arguments": "/opt/homebrew/Caskroom/miniconda/base/bin/python3 <script> /Users/sergey/SrcArchives/AI/dinov3-vitl16-pretrain-lvd1689m/model.safetensors /tmp/dinov3_real_block_ref",
+      "result": {
+        "checkpoint_bytes": 1212559808,
+        "checkpoint_sha256": "dcb2e45127cccbf1601e5f42fef165eea275c8e5213197e8dcf3f48822718179",
+        "layer_index": 0,
+        "token_count": 8,
+        "patch_count": 3,
+        "hidden_size": 1024,
+        "intermediate_size": 4096,
+        "num_attention_heads": 16,
+        "head_dim": 64,
+        "num_register_tokens": 4,
+        "parameter_bytes": 50388992,
+        "parameter_f32le_sha256": "137675263da9051fefe3503e413411c0be938a057d3158a65a62db234d9cd894",
+        "input_f32le_sha256": "f21c76a78eed23d229152f0ddd1e953236bc96a676216c90d64e48fba04a0088",
+        "multiply_adds": 100794368,
+        "max_score_elements": 1024,
+        "trace_bytes": 794624,
+        "backend": "independent torch CPU formulas; no Transformers DINOv3 runtime",
+        "torch_version": "2.6.0",
+        "numpy_version": "1.26.4",
+        "tolerance_absolute": 0.0005,
+        "tolerance_relative": 0.0005
+      }
+    },
+    {
+      "type": "probe",
+      "entrypoint": "spec/vision/dino_v3/real_block_parity_probe_spec.cr",
+      "arguments": "-Dcpu_only -Ddinov3_real_block_parity_probe DINO_V3_CHECKPOINT=/Users/sergey/SrcArchives/AI/dinov3-vitl16-pretrain-lvd1689m/model.safetensors DINO_V3_BLOCK_PARITY_REFERENCE=/tmp/dinov3_real_block_ref DINO_V3_BLOCK_MAX_PARAMETER_BYTES=268435456 DINO_V3_BLOCK_MAX_MULTIPLY_ADDS=100794368 COGNI_SPEC_MAX_RSS_MB=512",
+      "result": {
+        "examples": 1,
+        "failures": 0,
+        "checkpoint_bytes": 1212559808,
+        "layer_index": 0,
+        "parameter_bytes": 50388992,
+        "parameter_f32le_sha256": "137675263da9051fefe3503e413411c0be938a057d3158a65a62db234d9cd894",
+        "multiply_adds": 100794368,
+        "rss_guard_limit_mb": 512,
+        "forward": "cpu-reference-ran",
+        "full_encoder": "not-run",
+        "metal": "not-run"
+      }
+    },
+    {
+      "type": "negative",
+      "case": "model-scale block budget one multiply-add below the pinned plan",
+      "result": "BlockBudgetError is raised before the forward when max_multiply_adds is 100794367"
+    },
+    {
+      "type": "test",
+      "entrypoint": "spec/vision/dino_v3/",
+      "arguments": "-Dcpu_only --order random",
+      "result": "42 examples, 0 failures"
+    },
+    {
+      "type": "test",
+      "entrypoint": "spec/three_d/trellis2/",
+      "arguments": "-Dcpu_only --order random",
+      "result": "181 examples, 0 failures"
+    },
+    {
+      "type": "build",
+      "entrypoint": "src/ml.cr",
+      "arguments": "-Dcpu_only --no-codegen --error-trace",
+      "result": "success"
+    },
+    {
+      "type": "format",
+      "entrypoint": "Crystal sources and probe spec",
+      "arguments": "crystal tool format --check src/ml/vision/dino_v3/block.cr src/ml/vision/dino_v3/block_caller.cr spec/vision/dino_v3/real_block_parity_probe_spec.cr",
+      "result": "success"
+    },
+    {
+      "type": "parse",
+      "entrypoint": "tools/trellis2_oracle/export_dino_v3_real_block_reference.py",
+      "arguments": "python -m py_compile",
+      "result": "success"
+    }
+  ],
+  "verification": {
+    "dod": [
+      "The reference and Crystal loader agree on the pinned checkpoint digest, layer-0 role mapping, geometry, parameter byte count, and F32 parameter digest.",
+      "Crystal compares all 20 retained boundaries with bounded 5e-4 absolute and relative tolerance, including scores, exact GELU, residuals, block output, and extractor final norm.",
+      "The model-scale path is compile-flagged, accepts an explicit multiply-add budget, rejects one-MAC-under admission, and runs behind a 512 MiB RSS guard.",
+      "Default production compilation retains the synthetic 64/256/8 geometry envelope; full encoder, 1024px geometry, and Metal remain unrun.",
+      "Focused parity, CPU-only DINOv3/TRELLIS.2 suites, formatting, Python parsing, and the CPU-only no-codegen build pass."
+    ],
+    "passed": true,
+    "adversary_verdict": "ROBUST",
+    "trust": {
+      "F": 0.9,
+      "G": 0.4,
+      "R": 0.9
+    }
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "src/ml/vision/dino_v3/block.cr",
+      "src/ml/vision/dino_v3/block_caller.cr",
+      "src/ml/vision/dino_v3.cr",
+      "tools/trellis2_oracle/export_dino_v3_real_block_reference.py",
+      "spec/vision/dino_v3/real_block_parity_probe_spec.cr"
+    ],
+    "changed_paths": [
+      "src/ml/vision/dino_v3/block.cr",
+      "src/ml/vision/dino_v3/block_caller.cr",
+      "src/ml/vision/dino_v3.cr",
+      "tools/trellis2_oracle/export_dino_v3_real_block_reference.py",
+      "spec/vision/dino_v3/real_block_parity_probe_spec.cr",
+      ".landmark/evidence/trellis2-t2n3d16-real-dinov3-block-parity.json"
+    ],
+    "excluded": [
+      "full 24-layer encoder",
+      "1024px image geometry and 1029-token attention",
+      "native Transformers DINOv3 runtime execution",
+      "Metal or GPU execution",
+      "true high-water/resident allocation accounting",
+      "latency, concurrency, quality, and cross-host numerical variance"
+    ]
+  },
+  "links": {
+    "prior_evidence": ".landmark/evidence/trellis2-t2n3d15-real-dinov3-embedding-parity.json",
+    "prior_code_commit": "9c1a638054df7508d4edc5daf02635b4aa1e1a0d"
+  },
+  "residual_risks": [
+    "The oracle uses explicit source formulas and PyTorch CPU tensors because the local Transformers DINOv3 runtime is unavailable; this is source-backed numerical parity, not runtime parity.",
+    "The measured tolerance and RSS result are one fresh-process Apple Silicon CPU comparison and may change with compiler, PyTorch, or host backend changes.",
+    "The decoder checks each tensor against a digest receipt but does not lock the checkpoint file against same-size replacement after inventory verification.",
+    "Retaining all 20 trace boundaries is diagnostic-only and is not yet a memory-efficient production execution path.",
+    "The slice does not establish full-encoder output quality, 1024px safety, Metal performance, padding/cache behavior, or production readiness."
+  ]
+}
