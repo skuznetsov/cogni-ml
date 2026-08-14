@@ -21,10 +21,15 @@ describe ML::GGUF::Qwen35ProposalRoute do
       expected_model = ML::GGUF::Qwen35PromptCache.short_hash(
         "model\0#{model_path}\0#{model_info.size}\0#{model_info.modification_time.to_unix}")
       expected_tokenizer = ML::GGUF::Qwen35PromptCache.short_hash(
-        "tokenizer\0#{expected_model}\0#{tok.vocab.size}\0#{tok.eos_id}\0#{tok.pad_id}")
+        "tokenizer\0#{expected_model}\0#{tok.vocab.size}\0#{tok.eos_id}\0#{tok.pad_id}\0#{ML::GGUF::Qwen35Tokenizer::ENCODING_REVISION}"
+      )
+      legacy_tokenizer = ML::GGUF::Qwen35PromptCache.short_hash(
+        "tokenizer\0#{expected_model}\0#{tok.vocab.size}\0#{tok.eos_id}\0#{tok.pad_id}"
+      )
 
       model_id.should eq(expected_model)
       tokenizer_id.should eq(expected_tokenizer)
+      tokenizer_id.should_not eq(legacy_tokenizer)
     ensure
       File.delete(model_path) if File.exists?(model_path)
     end

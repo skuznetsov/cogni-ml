@@ -1,6 +1,6 @@
 require "./reader"
 
-# Qwen 3.5 / 3.6 tokenizer (GPT-2-style BPE).
+# Qwen 3.5 / 3.6 / 3.8 tokenizer (GPT-2-style BPE).
 #
 # Current scope: native decoder + native Qwen3.5 BPE encoder.
 # - Decoder is native Crystal: uses tokenizer.ggml.tokens[] from GGUF, handles
@@ -10,6 +10,10 @@ require "./reader"
 #   llama.cpp `llama-tokenize` bootstrap path for A/B and debugging.
 module ML::GGUF
   class Qwen35Tokenizer
+    # Bump whenever the same GGUF metadata can encode a prompt differently so
+    # prompt/token caches cannot silently reuse IDs from an older algorithm.
+    ENCODING_REVISION = "2-special-partition"
+
     getter vocab : Array(String)
     getter eos_id : Int32
     getter pad_id : Int32
@@ -19,13 +23,34 @@ module ML::GGUF
     getter model_path : String
     getter token_to_id : Hash(String, Int32)
     getter bpe_ranks : Hash(Tuple(String, String), Int32)
+    getter token_types : Array(Int32)
+
+    private alias NativeFragment = String | Int32
+
+    @special_tokens : Array(Tuple(String, Int32))
 
     def initialize(@vocab : Array(String), @eos_id : Int32, @pad_id : Int32,
                    @add_bos : Bool, @model_path : String,
                    @llama_tokenize_bin : String = "",
                    @chat_template : String? = nil,
                    @token_to_id : Hash(String, Int32) = {} of String => Int32,
-                   @bpe_ranks : Hash(Tuple(String, String), Int32) = {} of Tuple(String, String) => Int32)
+                   @bpe_ranks : Hash(Tuple(String, String), Int32) = {} of Tuple(String, String) => Int32,
+                   @token_types : Array(Int32) = [] of Int32)
+      @special_tokens = [] of Tuple(String, Int32)
+      @vocab.each_with_index do |piece, id|
+        token_type = @token_types[id]? || 0
+        # GGML token types: 2=unknown, 3=control, 4=user-defined. llama.cpp
+        # partitions these pieces before running the model pre-tokenizer.
+        if token_type == 2 || token_type == 3 || token_type == 4
+          @special_tokens << {piece, id.to_i32} unless piece.empty?
+        end
+      end
+      # Match llama.cpp's longest-first special-token partitioning so an
+      # overlapping short token cannot consume the prefix of a longer token.
+      @special_tokens.sort! do |a, b|
+        by_length = b[0].bytesize <=> a[0].bytesize
+        by_length == 0 ? (a[1] <=> b[1]) : by_length
+      end
     end
 
     def self.from_gguf(g : GGUFFile, model_path : String,
@@ -58,9 +83,23 @@ module ML::GGUF
         end
       end
 
+      types_raw = g.metadata["tokenizer.ggml.token_type"]?
+      token_types = if types_raw.is_a?(Array)
+                      types_raw.map do |value|
+                        case value
+                        when Int8, UInt8, Int16, UInt16, Int32, UInt32, Int64, UInt64
+                          value.to_i32
+                        else
+                          0
+                        end
+                      end
+                    else
+                      [] of Int32
+                    end
+
       chat_template = g.metadata["tokenizer.chat_template"]?.as?(String)
 
-      new(vocab, eos, pad, add_bos, model_path, llama_tokenize_bin, chat_template, token_to_id, bpe_ranks)
+      new(vocab, eos, pad, add_bos, model_path, llama_tokenize_bin, chat_template, token_to_id, bpe_ranks, token_types)
     end
 
     # Decode a list of token ids back into a UTF-8 string.
@@ -104,6 +143,18 @@ module ML::GGUF
 
     private def encode_native(text : String) : Array(Int32)
       ids = [] of Int32
+      partition_special_tokens(text).each do |fragment|
+        case fragment
+        when Int32
+          ids << fragment
+        when String
+          encode_native_text(fragment, ids)
+        end
+      end
+      ids
+    end
+
+    private def encode_native_text(text : String, ids : Array(Int32)) : Nil
       text.scan(QWEN35_PRETOKENIZER) do |match|
         encoded_piece = encode_piece_bytes(match[0])
         bpe(encoded_piece).each do |piece|
@@ -113,7 +164,40 @@ module ML::GGUF
           ids << id
         end
       end
-      ids
+    end
+
+    private def partition_special_tokens(text : String) : Array(NativeFragment)
+      fragments = [text] of NativeFragment
+      @special_tokens.each do |special_text, special_id|
+        partitioned = [] of NativeFragment
+        fragments.each do |fragment|
+          if fragment.is_a?(Int32)
+            partitioned << fragment
+            next
+          end
+
+          offset = 0
+          matched = false
+          while match_offset = fragment.byte_index(special_text, offset)
+            matched = true
+            if match_offset > offset
+              partitioned << fragment.byte_slice(offset, match_offset - offset).not_nil!
+            end
+            partitioned << special_id
+            offset = match_offset + special_text.bytesize
+          end
+
+          if matched
+            if offset < fragment.bytesize
+              partitioned << fragment.byte_slice(offset, fragment.bytesize - offset).not_nil!
+            end
+          else
+            partitioned << fragment
+          end
+        end
+        fragments = partitioned
+      end
+      fragments
     end
 
     private def encode_piece_bytes(piece : String) : String

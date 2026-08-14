@@ -22,7 +22,9 @@ module ML::GGUF
     end
 
     def tokenizer_id(model_id : String, tok : Qwen35Tokenizer) : String
-      Qwen35PromptCache.short_hash("tokenizer\0#{model_id}\0#{tok.vocab.size}\0#{tok.eos_id}\0#{tok.pad_id}")
+      Qwen35PromptCache.short_hash(
+        "tokenizer\0#{model_id}\0#{tok.vocab.size}\0#{tok.eos_id}\0#{tok.pad_id}\0#{Qwen35Tokenizer::ENCODING_REVISION}"
+      )
     end
 
     def resolve(root : String,
