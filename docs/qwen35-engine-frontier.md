@@ -1,12 +1,13 @@
-# Qwen 3.5 Engine API Frontier SDD
+# Qwen 3.5/3.8 Engine API Frontier SDD
 
 Document status: first native engine slice admitted with bounded attribution;
 consumer migration pending
 Current frontier: stable backend-neutral request/result and lifecycle contract,
 a single-resident native CPU/Metal runtime, a Metal-first product generator,
-and an advanced experimental CUDA full-model mixed-stack/semantic-loop probe
-without an admitted engine adapter
-Bounded context: reusable Qwen 3.5/3.6 inference consumed by `cogni-ml` CLIs and
+typed Qwen 3.8 reasoning-effort routing for embedded text generation, and an
+advanced experimental CUDA full-model mixed-stack/semantic-loop probe without
+an admitted engine adapter
+Bounded context: reusable Qwen 3.5/3.8 inference consumed by `cogni-ml` CLIs and
 resident services such as Cogniformerus `cfmodeld`
 
 ## Problem Card
@@ -45,6 +46,13 @@ resident services such as Cogniformerus `cfmodeld`
 - A future `Qwen35Engine` means the stable request/result and lifecycle
   boundary. It must not imply backend feature parity that has not been
   falsifier-tested.
+- OpenAI `reasoning.effort` and Qwen 3.8 template `reasoning_effort` are
+  different bounded contexts. The embedded engine admits only the intersection
+  it can render and verify exactly: `none`, `low`, `medium`, and `xhigh`.
+  `none` is an engine-level compatibility mode that maps to
+  `enable_thinking=false`; it is not a Qwen 3.8 template effort string.
+- Qwen 3.5 templates do not consume `reasoning_effort`. A shared public enum
+  therefore does not imply that every loaded model supports non-`none` values.
 
 ## Admitted Surface
 
@@ -64,6 +72,12 @@ resident services such as Cogniformerus `cfmodeld`
   - explicit idempotent lifecycle closure;
   - fail-closed validation for empty labels, duplicate token IDs, invalid
     sequence bounds, and unsupported backend requirements.
+- The embedded text runtime may provide typed `none`, `low`, `medium`, and
+  `xhigh` effort routing when the loaded tokenizer template contains the exact
+  Qwen 3.8 low/xhigh instruction contract. The default remains `none` so
+  existing callers retain no-thinking generation semantics.
+- Generation results report the effective effort so a runtime cannot silently
+  ignore or rewrite the request.
 
 ## Rejected Surface
 
@@ -76,6 +90,11 @@ resident services such as Cogniformerus `cfmodeld`
 - Treating unconstrained free text as an authoritative policy decision.
 - Automatically promoting speculative, cache/replay, MTP, or tool-call routes
   through the new façade without their existing exactness guards.
+- Passing arbitrary effort strings, silently mapping `high`, `max`, or
+  `minimal`, or enabling non-`none` effort on a template without the verified
+  Qwen 3.8 contract.
+- Treating reasoning effort as a hard reasoning-token budget or as a guaranteed
+  quality/latency level.
 
 ## Guard-Only Future
 
@@ -101,6 +120,12 @@ resident services such as Cogniformerus `cfmodeld`
   and label text.
 - Cache/replay and speculative routes retain their original exactness
   certificates; the façade cannot weaken them.
+- Effort changes must be represented in the rendered token sequence before
+  cache lookup. Exact token-prefix identity, not the enum value alone, remains
+  the cache certificate.
+- Low and xhigh instructions are copied byte-for-byte from the loaded Qwen 3.8
+  template contract; medium adds no system instruction but enables the open
+  thinking suffix. Unsupported templates fail before state creation.
 - Model load, request execution, and result reporting expose enough identity to
   detect source/build/runtime drift without upgrading route availability into
   execution telemetry.
@@ -126,6 +151,14 @@ resident services such as Cogniformerus `cfmodeld`
 - A fake backend proves preflight/request/result forwarding, planned-to-observed
   route refinement, lifecycle closure, and attributed backend reporting
   without requiring a GGUF model.
+- Pure chat-render tests prove exact no-thinking, low, medium, and xhigh system
+  prefixes/suffixes, including ordering before tool instructions.
+- A fake backend rejects result effort drift, and the native runtime rejects
+  non-`none` effort when the tokenizer template lacks the exact Qwen 3.8
+  capability markers.
+- A real Qwen 3.8 model smoke compares the embedded effort prompt/token path to
+  the tokenizer template-derived contract and exercises effort-specific cold
+  prefix reuse without weakening exact-prefix validation.
 - The native runtime rejects multi-token or duplicate-token label mappings
   before state creation.
 - CPU-only build compiles and runs the contract and existing Qwen unit specs.

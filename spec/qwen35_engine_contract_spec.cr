@@ -16,6 +16,7 @@ private class FakeQwen35EngineRuntime < QwenEngine::Runtime
   property generate_result_backend : QwenEngine::BackendIdentity?
   property score_labels_result_backend : QwenEngine::BackendIdentity?
   property generate_result_route : QwenEngine::Route = QwenEngine::Route::GenerateGreedy
+  property generate_result_reasoning_effort : QwenEngine::ReasoningEffort?
   property score_labels_result_route : QwenEngine::Route = QwenEngine::Route::ScoreLabels
   property preflight_result_operation : QwenEngine::Route?
   property generate_token_ids : Array(Int32) = [7_i32]
@@ -52,6 +53,7 @@ private class FakeQwen35EngineRuntime < QwenEngine::Runtime
       completion_tokens: @generate_completion_tokens,
       backend: @generate_result_backend || route.backend,
       route: @generate_result_route,
+      reasoning_effort: @generate_result_reasoning_effort || request.reasoning_effort,
     )
   end
 
@@ -105,6 +107,7 @@ describe ML::GGUF::Qwen35Engine do
       QwenEngine::GenerateRequest.new(
         messages: [QwenEngine::Message.new("user", "hello")],
         max_tokens: 8,
+        reasoning_effort: QwenEngine::ReasoningEffort::Low,
       )
     )
 
@@ -112,6 +115,7 @@ describe ML::GGUF::Qwen35Engine do
     result.backend.primary.should eq(QwenEngine::Backend::Metal)
     result.backend.components.should eq([QwenEngine::Backend::Metal, QwenEngine::Backend::CPU])
     result.route.should eq(QwenEngine::Route::GenerateGreedy)
+    result.reasoning_effort.should eq(QwenEngine::ReasoningEffort::Low)
     runtime.preflight_calls.should eq([QwenEngine::Route::GenerateGreedy])
     runtime.preflight_requested_backends.should eq([QwenEngine::Backend::Metal])
     runtime.received_generate_routes.size.should eq(1)
@@ -386,6 +390,22 @@ describe ML::GGUF::Qwen35Engine do
           messages: [QwenEngine::Message.new("user", "hello")],
           max_tokens: 1,
           max_seq: 1,
+        )
+      )
+    end
+  end
+
+  it "rejects reasoning-effort drift returned by the runtime" do
+    runtime = FakeQwen35EngineRuntime.new(fake_qwen_identity)
+    runtime.generate_result_reasoning_effort = QwenEngine::ReasoningEffort::XHigh
+    engine = QwenEngine.new(runtime)
+
+    expect_raises(Exception, /reasoning effort/) do
+      engine.generate(
+        QwenEngine::GenerateRequest.new(
+          messages: [QwenEngine::Message.new("user", "hello")],
+          max_tokens: 1,
+          reasoning_effort: QwenEngine::ReasoningEffort::Low,
         )
       )
     end

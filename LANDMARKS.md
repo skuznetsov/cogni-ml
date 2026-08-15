@@ -6,6 +6,18 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-QWEN38-REASONING-EFFORT-2026-08-14] Typed reasoning effort with exact cold-prefix reuse
+**Document status:** verified for embedded Qwen 3.8 text generation
+**Current frontier:** `None`, `Low`, `Medium`, and `XHigh` request/result routing through `Qwen35Engine` and `Qwen35NativeRuntime`
+**Bounded context:** deterministic text generation; effort controls the Qwen 3.8 chat template and is not a token budget or a cross-provider semantic identity
+**Admitted surface:** backward-compatible `None`; exact Qwen 3.8 low/xhigh system instructions; medium open-thinking suffix without an added instruction; effective effort reported in the result; effort-aware explicit prefix prewarm
+**Rejected surface:** arbitrary strings; silent `high`/`max`/`minimal` mapping; non-`None` effort on Qwen 3.5 templates; automatic reasoning-token budgeting; quality claims from effort names alone
+**Design laws:** loaded tokenizer template must contain the exact reproduced Qwen 3.8 instruction contract; unsupported effort fails before state creation; result effort must equal request effort; cache identity remains exact rendered tokens plus model/tokenizer identity
+**LTP/WBA card:** trigger=stable effort-specific system prefix; corridor=effort enum through rendering/tokenization/cache restore and suffix replay; legal move=restore only an exact rendered token prefix; boundary=different instructions cannot share token hashes while identical pre-generation `None`/`Medium` prefixes may share state; potential=`{semantic divergence, state corruption, total_ms}` lexicographically; recompute=full first-token parity after restore; dual frame=ordinary full prefill; certificate=template capability plus token hash plus state artifact validation
+**Evidence (2026-08-14):** engine/chat specs passed 33/0, CPU-only native specs passed 6/0 with one optional model smoke pending, and the actual `Qwen3.8-27B-Q4_K_M` Metal smoke passed 6/0 on Apple M2 Max. The model smoke prewarmed a distinct low-effort prefix, restored it from disk in a new runtime with the resident cache disabled, and matched the independent low-level full-prefill first token; the existing `None` path retained its independent parity check and corrupted-artifact fallback.
+**Adversary boundary:** multi-turn preservation of historical assistant reasoning, hard thinking budgets, sampling, streaming, and provider-level OpenAI parity remain outside this slice
+**Decay trigger / refresh:** refresh template capability, rendered-string fixtures, token parity, and cold-cache parity after tokenizer template text, engine effort enum, cache identity, state snapshot schema, or generation suffix changes
+
 ### [LM-QWEN35-EMBEDDED-COLD-PREFIX-2026-08-14] Embedded cold-prefix state reuse
 **Document status:** verified for the bounded embedded-text surface
 **Current frontier:** capacity-safe persistent prefix restore in `Qwen35NativeRuntime`; reasoning-effort routing remains separate

@@ -26,6 +26,17 @@ module ML::GGUF
       ScoreLabels
     end
 
+    # Qwen 3.8 accepts only low, medium, and xhigh in its tokenizer template.
+    # None is an engine compatibility mode that preserves the historical
+    # enable_thinking=false generation suffix; it is not passed as a template
+    # reasoning_effort string.
+    enum ReasoningEffort
+      None
+      Low
+      Medium
+      XHigh
+    end
+
     class BackendMismatch < Exception
     end
 
@@ -75,7 +86,8 @@ module ML::GGUF
       messages : Array(Message),
       max_tokens : Int32,
       temperature : Float64 = 0.0,
-      max_seq : Int32? = nil
+      max_seq : Int32? = nil,
+      reasoning_effort : ReasoningEffort = ReasoningEffort::None
 
     record GenerateResult,
       text : String,
@@ -83,7 +95,8 @@ module ML::GGUF
       prompt_tokens : Int32,
       completion_tokens : Int32,
       backend : BackendIdentity,
-      route : Route
+      route : Route,
+      reasoning_effort : ReasoningEffort = ReasoningEffort::None
 
     record Label,
       name : String,
@@ -247,6 +260,9 @@ module ML::GGUF
     end
 
     private def validate_generate_result!(request : GenerateRequest, result : GenerateResult) : Nil
+      unless result.reasoning_effort == request.reasoning_effort
+        raise "runtime reasoning effort #{result.reasoning_effort} does not match requested #{request.reasoning_effort}"
+      end
       raise "runtime returned a negative prompt token count" if result.prompt_tokens < 0
       raise "runtime returned a negative completion token count" if result.completion_tokens < 0
       if result.completion_tokens > request.max_tokens

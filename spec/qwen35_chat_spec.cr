@@ -2,7 +2,10 @@ require "./spec_helper"
 require "../src/ml/gguf/qwen35_chat"
 require "../src/ml/gguf/qwen35_tokenizer"
 
-QWEN_9B_CHAT = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
+private alias QwenEngine = ML::GGUF::Qwen35Engine
+
+QWEN_9B_CHAT     = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
+QWEN_38_27B_CHAT = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf"
 
 describe ML::GGUF::Qwen35Chat do
   it "renders Qwen XML tool instructions and user prompt" do
@@ -37,6 +40,96 @@ describe ML::GGUF::Qwen35Chat do
     )
 
     rendered.should end_with("<|im_start|>assistant\n<think>\n")
+  end
+
+  it "renders exact Qwen3.8 low reasoning instructions and opens thinking" do
+    rendered = ML::GGUF::Qwen35Chat.render_user_prompt(
+      "Answer briefly.",
+      reasoning_effort: QwenEngine::ReasoningEffort::Low,
+    )
+
+    rendered.should eq(
+      "<|im_start|>system\n#{ML::GGUF::Qwen35Chat::LOW_REASONING_INSTRUCTION}<|im_end|>\n" \
+      "<|im_start|>user\nAnswer briefly.<|im_end|>\n" \
+      "<|im_start|>assistant\n<think>\n"
+    )
+  end
+
+  it "renders medium reasoning without inventing a system instruction" do
+    rendered = ML::GGUF::Qwen35Chat.render_user_prompt(
+      "Solve it.",
+      system: "Be precise.",
+      reasoning_effort: QwenEngine::ReasoningEffort::Medium,
+    )
+
+    rendered.should eq(
+      "<|im_start|>system\nBe precise.<|im_end|>\n" \
+      "<|im_start|>user\nSolve it.<|im_end|>\n" \
+      "<|im_start|>assistant\n<think>\n"
+    )
+  end
+
+  it "shares the pre-generation prefix between none and medium only" do
+    messages = [ML::GGUF::Qwen35Chat::Message.new("user", "Solve it.")]
+    none_prefix = ML::GGUF::Qwen35Chat.render(
+      messages,
+      add_generation_prompt: false,
+      reasoning_effort: QwenEngine::ReasoningEffort::None,
+    )
+    medium_prefix = ML::GGUF::Qwen35Chat.render(
+      messages,
+      add_generation_prompt: false,
+      reasoning_effort: QwenEngine::ReasoningEffort::Medium,
+    )
+    none_prompt = ML::GGUF::Qwen35Chat.render(
+      messages,
+      reasoning_effort: QwenEngine::ReasoningEffort::None,
+    )
+    medium_prompt = ML::GGUF::Qwen35Chat.render(
+      messages,
+      reasoning_effort: QwenEngine::ReasoningEffort::Medium,
+    )
+
+    medium_prefix.should eq(none_prefix)
+    medium_prompt.should_not eq(none_prompt)
+  end
+
+  it "places xhigh instructions before Qwen tool instructions" do
+    tools = ML::GGUF::Qwen35Chat.parse_tools_json(%([{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}]))
+    rendered = ML::GGUF::Qwen35Chat.render_user_prompt(
+      "Find it.",
+      system: "Use trusted sources.",
+      tools: tools,
+      reasoning_effort: QwenEngine::ReasoningEffort::XHigh,
+    )
+
+    system_prefix = "<|im_start|>system\n#{ML::GGUF::Qwen35Chat::XHIGH_REASONING_INSTRUCTION}\n\n# Tools"
+    rendered.should start_with(system_prefix)
+    rendered.should contain("</IMPORTANT>\n\nUse trusted sources.<|im_end|>\n")
+    rendered.should end_with("<|im_start|>assistant\n<think>\n")
+  end
+
+  it "maps engine none to the existing no-thinking suffix and rejects conflicts" do
+    rendered = ML::GGUF::Qwen35Chat.render_user_prompt(
+      "Answer directly.",
+      reasoning_effort: QwenEngine::ReasoningEffort::None,
+    )
+    rendered.should end_with("<|im_start|>assistant\n<think>\n\n</think>\n\n")
+
+    expect_raises(ArgumentError, /conflicts/) do
+      ML::GGUF::Qwen35Chat.render_user_prompt(
+        "Answer directly.",
+        enable_thinking: true,
+        reasoning_effort: QwenEngine::ReasoningEffort::None,
+      )
+    end
+  end
+
+  it "detects only the exact Qwen3.8 effort template contract" do
+    exact = "enable_thinking reasoning_effort #{ML::GGUF::Qwen35Chat::LOW_REASONING_INSTRUCTION} #{ML::GGUF::Qwen35Chat::XHIGH_REASONING_INSTRUCTION}"
+    ML::GGUF::Qwen35Chat.supports_reasoning_effort?(exact).should be_true
+    ML::GGUF::Qwen35Chat.supports_reasoning_effort?("enable_thinking reasoning_effort").should be_false
+    ML::GGUF::Qwen35Chat.supports_reasoning_effort?(nil).should be_false
   end
 
   it "parses Qwen XML tool calls with multiline parameters" do
@@ -154,5 +247,21 @@ describe ML::GGUF::Qwen35Chat do
     tok.chat_template.should_not be_nil
     tok.chat_template.not_nil!.should contain("<tool_call>")
     tok.chat_template.not_nil!.should contain("tools")
+  end
+
+  it "detects reasoning effort from real Qwen templates when present" do
+    pending!("Qwen3.8 27B model not present") unless File.exists?(QWEN_38_27B_CHAT)
+
+    qwen38_gguf = ML::GGUF::GGUFFile.new(QWEN_38_27B_CHAT)
+    qwen38 = ML::GGUF::Qwen35Tokenizer.from_gguf(qwen38_gguf, QWEN_38_27B_CHAT)
+    qwen38_gguf.close
+    ML::GGUF::Qwen35Chat.supports_reasoning_effort?(qwen38.chat_template).should be_true
+
+    if File.exists?(QWEN_9B_CHAT)
+      qwen35_gguf = ML::GGUF::GGUFFile.new(QWEN_9B_CHAT)
+      qwen35 = ML::GGUF::Qwen35Tokenizer.from_gguf(qwen35_gguf, QWEN_9B_CHAT)
+      qwen35_gguf.close
+      ML::GGUF::Qwen35Chat.supports_reasoning_effort?(qwen35.chat_template).should be_false
+    end
   end
 end

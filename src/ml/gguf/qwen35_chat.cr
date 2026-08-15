@@ -1,12 +1,15 @@
 require "json"
+require "./qwen35_engine_contract"
 
 module ML::GGUF
-  # Minimal Qwen3.5/Qwen3.6 chat-template support for text and function calls.
+  # Minimal Qwen3.5/Qwen3.8 chat-template support for text and function calls.
   # This intentionally implements the tool-call subset embedded in the GGUF
   # tokenizer.chat_template instead of a generic Jinja interpreter.
   module Qwen35Chat
-    TOOL_SYSTEM_PREFIX = "# Tools\n\nYou have access to the following functions:\n\n<tools>"
-    TOOL_SYSTEM_SUFFIX = "\n</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT>"
+    TOOL_SYSTEM_PREFIX          = "# Tools\n\nYou have access to the following functions:\n\n<tools>"
+    TOOL_SYSTEM_SUFFIX          = "\n</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT>"
+    LOW_REASONING_INSTRUCTION   = "Reasoning effort is set to low. Keep your thinking brief and focused, moving directly to the conclusion without unnecessary elaboration."
+    XHIGH_REASONING_INSTRUCTION = "Reasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer."
 
     record Message,
       role : String,
@@ -20,18 +23,30 @@ module ML::GGUF
     def self.render(messages : Array(Message),
                     tools : Array(JSON::Any) = [] of JSON::Any,
                     add_generation_prompt : Bool = true,
-                    enable_thinking : Bool? = nil) : String
+                    enable_thinking : Bool? = nil,
+                    reasoning_effort : Qwen35Engine::ReasoningEffort? = nil) : String
       raise ArgumentError.new("Qwen35Chat.render requires at least one message") if messages.empty?
+
+      effective_thinking = resolve_enable_thinking(enable_thinking, reasoning_effort)
+      effort_instruction = reasoning_instruction(reasoning_effort)
 
       String.build do |io|
         start_index = 0
         if tools.empty?
           if messages[0].role == "system"
-            emit_message(io, messages[0])
+            system = messages[0]
+            if instruction = effort_instruction
+              emit_message(io, Message.new("system", "#{instruction}\n\n#{system.content}"))
+            else
+              emit_message(io, system)
+            end
             start_index = 1
+          elsif instruction = effort_instruction
+            emit_message(io, Message.new("system", instruction))
           end
         else
           io << "<|im_start|>system\n"
+          io << effort_instruction << "\n\n" if effort_instruction
           io << TOOL_SYSTEM_PREFIX
           tools.each do |tool|
             io << '\n'
@@ -49,7 +64,7 @@ module ML::GGUF
         messages[start_index..].each do |message|
           emit_message(io, message)
         end
-        emit_generation_prompt(io, enable_thinking) if add_generation_prompt
+        emit_generation_prompt(io, effective_thinking) if add_generation_prompt
       end
     end
 
@@ -57,11 +72,24 @@ module ML::GGUF
                                 system : String? = nil,
                                 tools : Array(JSON::Any) = [] of JSON::Any,
                                 add_generation_prompt : Bool = true,
-                                enable_thinking : Bool? = nil) : String
+                                enable_thinking : Bool? = nil,
+                                reasoning_effort : Qwen35Engine::ReasoningEffort? = nil) : String
       messages = [] of Message
       messages << Message.new("system", system.not_nil!) if system && !system.empty?
       messages << Message.new("user", prompt)
-      render(messages, tools, add_generation_prompt, enable_thinking)
+      render(messages, tools, add_generation_prompt, enable_thinking, reasoning_effort)
+    end
+
+    # The embedded renderer intentionally recognizes only the exact Qwen 3.8
+    # contract it reproduces. A generic mention of reasoning_effort is not a
+    # sufficient capability certificate.
+    def self.supports_reasoning_effort?(chat_template : String?) : Bool
+      return false unless template = chat_template
+
+      template.includes?("enable_thinking") &&
+        template.includes?("reasoning_effort") &&
+        template.includes?(LOW_REASONING_INSTRUCTION) &&
+        template.includes?(XHIGH_REASONING_INSTRUCTION)
     end
 
     def self.messages_from_openai_json(json : String) : Array(Message)
@@ -193,6 +221,34 @@ module ML::GGUF
         io << "<think>\n\n</think>\n\n"
       when true
         io << "<think>\n"
+      end
+    end
+
+    private def self.resolve_enable_thinking(
+      enable_thinking : Bool?,
+      reasoning_effort : Qwen35Engine::ReasoningEffort?,
+    ) : Bool?
+      return enable_thinking unless effort = reasoning_effort
+
+      required = !effort.none?
+      if !enable_thinking.nil? && enable_thinking != required
+        raise ArgumentError.new(
+          "enable_thinking=#{enable_thinking} conflicts with reasoning_effort=#{effort}"
+        )
+      end
+      required
+    end
+
+    private def self.reasoning_instruction(
+      reasoning_effort : Qwen35Engine::ReasoningEffort?,
+    ) : String?
+      case reasoning_effort
+      when Qwen35Engine::ReasoningEffort::Low
+        LOW_REASONING_INSTRUCTION
+      when Qwen35Engine::ReasoningEffort::XHigh
+        XHIGH_REASONING_INSTRUCTION
+      else
+        nil
       end
     end
 

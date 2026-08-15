@@ -117,6 +117,23 @@ describe ML::GGUF::Qwen35NativeRuntime do
     expect_raises(ArgumentError, /exceeds runtime capacity/) { NativeRuntime.effective_max_seq(128_i32, 129_i32) }
   end
 
+  it "fails closed on unsupported non-none reasoning before state creation" do
+    NativeRuntime.validate_reasoning_effort_supported!(
+      QwenEngine::ReasoningEffort::None,
+      false,
+    )
+    NativeRuntime.validate_reasoning_effort_supported!(
+      QwenEngine::ReasoningEffort::XHigh,
+      true,
+    )
+    expect_raises(ArgumentError, /does not support reasoning_effort/) do
+      NativeRuntime.validate_reasoning_effort_supported!(
+        QwenEngine::ReasoningEffort::Low,
+        false,
+      )
+    end
+  end
+
   it "runs optional model-backed greedy and label-score parity" do
     pending!("set QWEN35_NATIVE_RUNTIME_MODEL_SMOKE=1") unless ENV["QWEN35_NATIVE_RUNTIME_MODEL_SMOKE"]? == "1"
     model_path = ENV["QWEN35_NATIVE_RUNTIME_MODEL"]? || "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q8_0.gguf"
@@ -157,6 +174,7 @@ describe ML::GGUF::Qwen35NativeRuntime do
 
     engine = QwenEngine.new(runtime)
     result = nil.as(QwenEngine::GenerateResult?)
+    low_result = nil.as(QwenEngine::GenerateResult?)
     scores = nil.as(QwenEngine::ScoreLabelsResult?)
     begin
       result = engine.generate(QwenEngine::GenerateRequest.new(messages: messages, max_tokens: 1, max_seq: 256))
@@ -175,6 +193,25 @@ describe ML::GGUF::Qwen35NativeRuntime do
       resident_result = engine.generate(QwenEngine::GenerateRequest.new(messages: messages, max_tokens: 1, max_seq: 256))
       resident_result.token_ids.should eq(result.not_nil!.token_ids)
       runtime.prompt_cache_stats.hits.should eq(2)
+
+      if runtime.reasoning_effort_supported
+        low_entry = runtime.prewarm_prefix(
+          prefix_messages,
+          max_seq: 256,
+          reasoning_effort: QwenEngine::ReasoningEffort::Low,
+        )
+        low_entry.token_hash.should_not eq(warm_entry.token_hash)
+        low_result = engine.generate(
+          QwenEngine::GenerateRequest.new(
+            messages: messages,
+            max_tokens: 1,
+            max_seq: 256,
+            reasoning_effort: QwenEngine::ReasoningEffort::Low,
+          )
+        )
+        low_result.not_nil!.reasoning_effort.should eq(QwenEngine::ReasoningEffort::Low)
+        runtime.prompt_cache_stats.hits.should eq(3)
+      end
 
       scores = engine.score_labels(
         QwenEngine::ScoreLabelsRequest.new(
@@ -215,6 +252,23 @@ describe ML::GGUF::Qwen35NativeRuntime do
       fallback_stats = fallback_runtime.prompt_cache_stats
       fallback_stats.hits.should eq(0)
       fallback_stats.restore_failures.should eq(1)
+
+      if expected_low = low_result
+        cold_low = fallback_runtime.generate(
+          QwenEngine::GenerateRequest.new(
+            messages: messages,
+            max_tokens: 1,
+            max_seq: 256,
+            reasoning_effort: QwenEngine::ReasoningEffort::Low,
+          ),
+          fallback_route,
+        )
+        cold_low.token_ids.should eq(expected_low.token_ids)
+        cold_low.reasoning_effort.should eq(QwenEngine::ReasoningEffort::Low)
+        cold_low_stats = fallback_runtime.prompt_cache_stats
+        cold_low_stats.hits.should eq(1)
+        cold_low_stats.restore_failures.should eq(1)
+      end
     ensure
       fallback_runtime.close
     end
@@ -241,6 +295,19 @@ describe ML::GGUF::Qwen35NativeRuntime do
       ML::GGUF::Qwen35CPU.prepare_state_metal!(state, weights.hparams)
       expected_token, _expected_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(weights, prompt_ids, 0, state)
       result.not_nil!.token_ids[0].should eq(expected_token)
+
+      if actual_low = low_result
+        low_rendered = ML::GGUF::Qwen35Chat.render(
+          messages.map { |message| ML::GGUF::Qwen35Chat::Message.new(message.role, message.content) },
+          add_generation_prompt: true,
+          reasoning_effort: QwenEngine::ReasoningEffort::Low,
+        )
+        low_prompt_ids = tokenizer.encode(low_rendered, add_bos_override: false)
+        low_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: 256)
+        ML::GGUF::Qwen35CPU.prepare_state_metal!(low_state, weights.hparams)
+        expected_low_token, _expected_low_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(weights, low_prompt_ids, 0, low_state)
+        actual_low.token_ids[0].should eq(expected_low_token)
+      end
 
       score_prompt_ids = tokenizer.encode("Choose one letter.", add_bos_override: false)
       encoded_labels = labels.map { |label| tokenizer.encode(label.text, add_bos_override: false) }

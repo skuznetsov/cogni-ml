@@ -33,6 +33,7 @@ module ML::GGUF
 
     getter model_path : String
     getter max_seq : Int32
+    getter reasoning_effort_supported : Bool
 
     @model_id : String
     @tokenizer : Qwen35Tokenizer?
@@ -45,6 +46,7 @@ module ML::GGUF
     @prompt_cache_restore_failures = 0_i64
     @prompt_cache_reused_prefix_tokens = 0_i64
     @prompt_cache_replayed_suffix_tokens = 0_i64
+    @reasoning_effort_supported = false
     @closed = false
     @llama_tokenize_bin : String
 
@@ -86,6 +88,7 @@ module ML::GGUF
         begin
           tokenizer = load_tokenizer
           @tokenizer = tokenizer
+          @reasoning_effort_supported = Qwen35Chat.supports_reasoning_effort?(tokenizer.chat_template)
           @weights = Qwen35Weights.from_gguf(@model_path)
           if cache_root = effective_cache_root
             @prompt_cache = Qwen35PromptCache::Store.new(
@@ -199,6 +202,17 @@ module ML::GGUF
       limit
     end
 
+    def self.validate_reasoning_effort_supported!(
+      effort : Qwen35Engine::ReasoningEffort,
+      supported : Bool,
+    ) : Nil
+      return if effort.none? || supported
+
+      raise ArgumentError.new(
+        "loaded tokenizer chat template does not support reasoning_effort=#{effort}"
+      )
+    end
+
     def preflight(
       operation : Qwen35Engine::Route,
       requested_backend : Qwen35Engine::Backend,
@@ -223,6 +237,7 @@ module ML::GGUF
       messages : Array(Qwen35Engine::Message),
       max_seq : Int32? = nil,
       requested_backend : Qwen35Engine::Backend = Qwen35Engine::Backend::Auto,
+      reasoning_effort : Qwen35Engine::ReasoningEffort = Qwen35Engine::ReasoningEffort::None,
     ) : Qwen35PromptCache::Entry
       @@process_mutex.synchronize do
         ensure_open!
@@ -231,11 +246,16 @@ module ML::GGUF
           raise ArgumentError.new("prewarm message role must not be empty") if message.role.strip.empty?
           raise ArgumentError.new("prewarm message content must not be empty") if message.content.strip.empty?
         end
+        self.class.validate_reasoning_effort_supported!(reasoning_effort, @reasoning_effort_supported)
 
         cache, cache_model_id, cache_tokenizer_id = prompt_cache_resources
         tokenizer, weights = resources
         limit = self.class.effective_max_seq(@max_seq, max_seq)
-        rendered = render_messages(messages, add_generation_prompt: false)
+        rendered = render_messages(
+          messages,
+          add_generation_prompt: false,
+          reasoning_effort: reasoning_effort,
+        )
         prefix_ids = tokenizer.encode(rendered, add_bos_override: false)
         raise ArgumentError.new("Qwen35NativeRuntime prewarm prefix is empty") if prefix_ids.empty?
         if prefix_ids.size >= limit
@@ -287,9 +307,13 @@ module ML::GGUF
         ensure_open!
         validate_route!(Qwen35Engine::Route::GenerateGreedy, route)
         validate_generate_request!(request)
+        self.class.validate_reasoning_effort_supported!(request.reasoning_effort, @reasoning_effort_supported)
         tokenizer, weights = resources
         limit = self.class.effective_max_seq(@max_seq, request.max_seq)
-        rendered = render_messages(request.messages)
+        rendered = render_messages(
+          request.messages,
+          reasoning_effort: request.reasoning_effort,
+        )
         prompt_ids = tokenizer.encode(rendered, add_bos_override: false)
         raise ArgumentError.new("Qwen35NativeRuntime generated prompt is empty") if prompt_ids.empty?
         if prompt_ids.size + request.max_tokens > limit
@@ -372,6 +396,7 @@ module ML::GGUF
           completion_tokens: output_ids.size,
           backend: route.backend,
           route: route.operation,
+          reasoning_effort: request.reasoning_effort,
         )
       end
     end
@@ -521,9 +546,17 @@ module ML::GGUF
       raise Qwen35Engine::RouteMismatch.new("runtime route backend identity drifted") unless expected == route.backend
     end
 
-    private def render_messages(messages : Array(Qwen35Engine::Message), add_generation_prompt : Bool = true) : String
+    private def render_messages(
+      messages : Array(Qwen35Engine::Message),
+      add_generation_prompt : Bool = true,
+      reasoning_effort : Qwen35Engine::ReasoningEffort = Qwen35Engine::ReasoningEffort::None,
+    ) : String
       qwen_messages = messages.map { |message| Qwen35Chat::Message.new(message.role, message.content) }
-      Qwen35Chat.render(qwen_messages, add_generation_prompt: add_generation_prompt, enable_thinking: false)
+      Qwen35Chat.render(
+        qwen_messages,
+        add_generation_prompt: add_generation_prompt,
+        reasoning_effort: reasoning_effort,
+      )
     end
 
     private def stop_token?(tokenizer : Qwen35Tokenizer, token_id : Int32) : Bool

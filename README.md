@@ -551,11 +551,35 @@ runtime.prewarm_prefix(prefix, max_seq: 4096)
 engine = ML::GGUF::Qwen35Engine.new(runtime)
 ```
 
+Qwen 3.8 text generation also exposes a typed reasoning-effort contract:
+
+```crystal
+effort = ML::GGUF::Qwen35Engine::ReasoningEffort::Low
+runtime.prewarm_prefix(prefix, max_seq: 4096, reasoning_effort: effort)
+result = engine.generate(
+  ML::GGUF::Qwen35Engine::GenerateRequest.new(
+    messages: prefix + [ML::GGUF::Qwen35Engine::Message.new("user", prompt)],
+    max_tokens: 128,
+    reasoning_effort: effort,
+  )
+)
+```
+
+The admitted levels are `None`, `Low`, `Medium`, and `XHigh`. `None` is the
+backward-compatible default and keeps the closed no-thinking suffix. Qwen 3.8
+maps the other values exactly to its tokenizer template; Qwen 3.5 templates
+fail closed for non-`None` values instead of silently ignoring them. This is a
+model prompt-control level, not a hard reasoning-token budget.
+
 `prewarm_prefix` renders without the assistant generation marker and stores raw
 recurrent state plus live KV rows. A later request must begin with the exact
 same rendered tokens, and the artifact capacity must cover the full prompt plus
 requested generation without exceeding the runtime capacity. Cache misses,
 inadequate capacities, and invalid artifacts fall back to normal full prefill.
+For `Low` and `XHigh`, the effort instruction is part of those rendered tokens,
+so incompatible cache artifacts cannot match. `Medium` and `None` may safely
+share a pre-generation prefix when their rendered prefix tokens are identical;
+their distinct assistant suffix is replayed after restore.
 `runtime.prompt_cache_stats` exposes
 hits, misses, restore failures, reused prefix tokens, and replayed suffix tokens.
 Use a tenant-private cache root for private system prompts because model state is
