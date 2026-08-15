@@ -371,18 +371,37 @@ module ML::GGUF
                                 tokenizer_id : String,
                                 token_ids : Array(Int32),
                                 min_prefix_len : Int32 = 1,
-                                max_prefix_len : Int32 = token_ids.size) : Entry?
+                                max_prefix_len : Int32 = token_ids.size,
+                                required_max_seq : Int32? = nil,
+                                maximum_max_seq : Int32? = nil) : Entry?
         raise ArgumentError.new("min_prefix_len must be non-negative") if min_prefix_len < 0
         raise ArgumentError.new("max_prefix_len out of range: #{max_prefix_len}") if max_prefix_len < 0 || max_prefix_len > token_ids.size
+        if required = required_max_seq
+          raise ArgumentError.new("required_max_seq must be positive") unless required > 0
+        end
+        if maximum = maximum_max_seq
+          raise ArgumentError.new("maximum_max_seq must be positive") unless maximum > 0
+        end
+        if required = required_max_seq
+          if maximum = maximum_max_seq
+            if required > maximum
+              raise ArgumentError.new("required_max_seq #{required} exceeds maximum_max_seq #{maximum}")
+            end
+          end
+        end
 
         ensure_entry_indices
         upper = max_prefix_len < token_ids.size ? max_prefix_len : token_ids.size
         upper.downto(min_prefix_len) do |prefix_len|
           expected = Qwen35PromptCache.token_hash(token_ids, prefix_len)
-        candidates = @entry_prefix_index[{model_id, tokenizer_id, prefix_len, expected}]?
-        next unless candidates
+          candidates = @entry_prefix_index[{model_id, tokenizer_id, prefix_len, expected}]?
+          next unless candidates
 
-          valid_candidates = candidates.select { |entry| usable_entry?(entry) }
+          valid_candidates = candidates.select do |entry|
+            usable_entry?(entry) &&
+              (!required_max_seq || entry.max_seq >= required_max_seq.not_nil!) &&
+              (!maximum_max_seq || entry.max_seq <= maximum_max_seq.not_nil!)
+          end
           if hit = valid_candidates.max_by? { |entry| entry.created_at_unix }
             return clone_entry(hit)
           end
@@ -584,7 +603,7 @@ module ML::GGUF
                        @source_history_turn_index[{session_id, model_id, tokenizer_id, turn}]?
                      else
                        @source_history_base_index[{session_id, model_id, tokenizer_id}]?
-        end
+                     end
         return nil unless candidates
 
         valid_candidates = candidates.select { |entry| source_history_entry_valid?(entry) }

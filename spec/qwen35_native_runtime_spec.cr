@@ -122,10 +122,21 @@ describe ML::GGUF::Qwen35NativeRuntime do
     model_path = ENV["QWEN35_NATIVE_RUNTIME_MODEL"]? || "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q8_0.gguf"
     pending!("Qwen model not present") unless File.exists?(model_path)
 
-    messages = [QwenEngine::Message.new("user", "Reply with one word: hello")]
+    prefix_messages = [QwenEngine::Message.new("system", "Answer tersely.")]
+    messages = prefix_messages + [QwenEngine::Message.new("user", "Reply with one word: hello")]
     labels = [QwenEngine::Label.new("a", "A"), QwenEngine::Label.new("b", "B")]
 
-    runtime = NativeRuntime.new(model_path, max_seq: 256)
+    cache_root = File.tempname("qwen35-native-runtime-cache")
+    Dir.mkdir_p(cache_root)
+    runtime = NativeRuntime.new(
+      model_path,
+      max_seq: 256,
+      prompt_cache_root: cache_root,
+      prompt_cache_resident_states: 1,
+    )
+    warm_entry = runtime.prewarm_prefix(prefix_messages, max_seq: 256)
+    warm_entry.prefix_len.should be > 0
+    warm_entry.max_seq.should eq(256)
     generation_route = runtime.preflight(QwenEngine::Route::GenerateGreedy, QwenEngine::Backend::Auto)
     expect_raises(ArgumentError, /max_tokens/) do
       runtime.generate(
@@ -154,6 +165,16 @@ describe ML::GGUF::Qwen35NativeRuntime do
       result.not_nil!.backend.primary.should eq(QwenEngine::Backend::Metal)
       result.not_nil!.backend.components.should eq([QwenEngine::Backend::Metal, QwenEngine::Backend::CPU])
       result.not_nil!.backend.attribution.should eq(QwenEngine::Attribution::Planned)
+      first_cache_stats = runtime.prompt_cache_stats
+      first_cache_stats.hits.should eq(1)
+      first_cache_stats.misses.should eq(0)
+      first_cache_stats.restore_failures.should eq(0)
+      first_cache_stats.reused_prefix_tokens.should eq(warm_entry.prefix_len)
+      first_cache_stats.replayed_suffix_tokens.should be > 0
+
+      resident_result = engine.generate(QwenEngine::GenerateRequest.new(messages: messages, max_tokens: 1, max_seq: 256))
+      resident_result.token_ids.should eq(result.not_nil!.token_ids)
+      runtime.prompt_cache_stats.hits.should eq(2)
 
       scores = engine.score_labels(
         QwenEngine::ScoreLabelsRequest.new(
@@ -173,6 +194,29 @@ describe ML::GGUF::Qwen35NativeRuntime do
       end
     ensure
       engine.close
+    end
+
+    # A new process/store must reject a corrupted on-disk artifact and fall
+    # back to ordinary prefill without changing the public result.
+    File.open(warm_entry.artifact_path, "a") { |file| file.write_byte(0_u8) }
+    fallback_runtime = NativeRuntime.new(
+      model_path,
+      max_seq: 256,
+      prompt_cache_root: cache_root,
+      prompt_cache_resident_states: 0,
+    )
+    begin
+      fallback_route = fallback_runtime.preflight(QwenEngine::Route::GenerateGreedy, QwenEngine::Backend::Auto)
+      fallback_result = fallback_runtime.generate(
+        QwenEngine::GenerateRequest.new(messages: messages, max_tokens: 1, max_seq: 256),
+        fallback_route,
+      )
+      fallback_result.token_ids.should eq(result.not_nil!.token_ids)
+      fallback_stats = fallback_runtime.prompt_cache_stats
+      fallback_stats.hits.should eq(0)
+      fallback_stats.restore_failures.should eq(1)
+    ensure
+      fallback_runtime.close
     end
 
     # Compare the public results against the previous low-level CPU/Metal
@@ -215,6 +259,7 @@ describe ML::GGUF::Qwen35NativeRuntime do
       scores.not_nil!.second.logit.should be_close(logits[expected_second], 1.0e-3_f32)
     ensure
       weights.close
+      FileUtils.rm_rf(cache_root) if Dir.exists?(cache_root)
     end
   end
 end

@@ -6,6 +6,24 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-QWEN35-EMBEDDED-COLD-PREFIX-2026-08-14] Embedded cold-prefix state reuse
+**Document status:** verified for the bounded embedded-text surface
+**Current frontier:** capacity-safe persistent prefix restore in `Qwen35NativeRuntime`; reasoning-effort routing remains separate
+**Bounded context:** deterministic text generation with an explicitly prewarmed common message prefix
+**Admitted surface:** opt-in persistent raw/live-KV prefix artifacts; longest exact token-prefix lookup; cold restore followed by resident state reuse; exact suffix replay before ordinary greedy decode
+**Rejected surface:** automatic persistence of user prompts; cross-model/tokenizer reuse; output/reasoning-token prediction for unseen prompts; approximate INT8 restore; speed claims based only on cache-hit counters or decode timing
+**Guard-only future:** compressed BF16 artifacts after model-specific parity evidence; automatic effort/tool-prefix seeding after the request contract owns those fields
+**Non-goals:** reducing GGUF weight load or Metal pipeline compilation time; changing generation semantics; caching generated reasoning
+**Design laws:** token hash and model/tokenizer identities must match; artifact `max_seq` must cover prompt plus requested generation without exceeding runtime capacity; cache failure falls back to full prefill; no prompt preview is persisted
+**Execution order:** explicit prewarm -> durable artifact -> capacity-safe lookup -> restore -> exact suffix replay -> greedy decode -> resident reuse
+**Falsifier roster:** inadequate artifacts are skipped; cached and uncached next-token/output parity; corrupted artifact falls back; full `total_ms` must beat full prefill before performance promotion
+**Stop rules:** do not default-enable persistence or compressed codecs without parity, memory, and end-to-end latency evidence on the target model
+**LTP/WBA card:** trigger=stable shared prefix; corridor=tokenize through first decoded token; legal move=replace exact prefix prefill with validated state restore; boundary=identical token prefix and sufficient capacity; potential=`{semantic divergence, total_ms, resident_bytes}` lexicographically; recompute=include lookup/hash/restore/suffix; dual frame=full prefill fallback; certificate=entry hashes plus parity test
+**Implementation seals:** source=`src/ml/gguf/qwen35_prompt_cache.cr`, `src/ml/gguf/qwen35_native_runtime.cr`; focused falsifiers=`spec/qwen35_prompt_cache_spec.cr`, optional model-backed `spec/qwen35_native_runtime_spec.cr`; boundary=embedded greedy text only
+**Evidence (2026-08-14):** Qwen regression set 60 examples/0 failures; model-backed `Qwen3.8-27B-Q4_K_M` parity and corrupt-artifact fallback 5/0. On Apple M2 Max with kernels equalized by an unrelated warmup, a 797-token request with a 773-token prefix measured uncached median 6485.5 ms, first cold restore 1040.1 ms (6.2x), and resident median 805.5 ms (8.1x); the raw artifact was 258 MB and one-time prewarm was 7765.4 ms. Runtime construction, GGUF load, and first Metal compilation were intentionally excluded.
+**Adversary verdict:** ROBUST for opt-in exact-prefix text reuse and fail-safe fallback; not evidence for process-start acceleration, compressed artifacts, reasoning effort, or other models/hosts
+**Decay trigger / refresh:** refresh parity and end-to-end timing after model bytes, tokenizer/chat template, state snapshot schema, restore kernels, or generation semantics change
+
 ### [LM-LTP-WBA-CODE-2026-05-31] LTP/WBA is encoded in Qwen35 runtime routes, not only documentation
 **status:** verified-with-caveat
 **trust:** {F:0.82, G:medium, R:0.78}

@@ -61,8 +61,38 @@ describe ML::GGUF::Qwen35PromptCache do
         prompt_preview: nil,
         token_hash: token_hash,
       )
+      wide_snapshot = ML::GGUF::Qwen35StateSnapshot::Snapshot.new(
+        max_seq: 16,
+        layer_count: 1,
+        positions: [0_i32],
+        records: [] of ML::GGUF::Qwen35StateSnapshot::Record,
+      )
+      wide_artifact = ML::GGUF::Qwen35StateSnapshot.write_artifact(
+        wide_snapshot,
+        File.join(root, "manual-wide.qkv"),
+      )
+      wide_entry = ML::GGUF::Qwen35PromptCache::Entry.new(
+        runtime_id: ML::GGUF::Qwen35PromptCache::RUNTIME_ID,
+        session_id: "s-wide",
+        turn_id: nil,
+        model_id: "model-a",
+        tokenizer_id: "tok-a",
+        prompt_hash: prompt_hash,
+        prefix_len: 1,
+        max_seq: wide_snapshot.max_seq,
+        layer_count: wide_snapshot.layer_count,
+        artifact_path: wide_artifact.path,
+        artifact_sha256: wide_artifact.sha256,
+        artifact_byte_size: wide_artifact.byte_size,
+        state_byte_size: wide_snapshot.byte_size,
+        created_at_unix: entry.created_at_unix - 1,
+        prompt_preview: nil,
+        token_hash: token_hash,
+      )
       File.open(store.manifest_path, "w") do |file|
         file.puts("{bad json")
+        wide_entry.to_json(file)
+        file << '\n'
         entry.to_json(file)
         file << '\n'
       end
@@ -70,6 +100,16 @@ describe ML::GGUF::Qwen35PromptCache do
       store.lookup_exact("model-a", "tok-a", prompt_hash, 1).should_not be_nil
       store.lookup_prompt("model-a", "tok-a", "x", [42_i32]).should_not be_nil
       store.lookup_longest_prefix("model-a", "tok-a", [42_i32, 99_i32]).try(&.prefix_len).should eq(1)
+      store.lookup_longest_prefix("model-a", "tok-a", [42_i32, 99_i32], required_max_seq: 9).try(&.max_seq).should eq(16)
+      store.lookup_longest_prefix("model-a", "tok-a", [42_i32, 99_i32], required_max_seq: 17).should be_nil
+      store.lookup_longest_prefix("model-a", "tok-a", [42_i32, 99_i32], maximum_max_seq: 8).try(&.max_seq).should eq(8)
+      store.lookup_longest_prefix("model-a", "tok-a", [42_i32, 99_i32], required_max_seq: 9, maximum_max_seq: 12).should be_nil
+      expect_raises(ArgumentError, /required_max_seq/) do
+        store.lookup_longest_prefix("model-a", "tok-a", [42_i32, 99_i32], required_max_seq: 0)
+      end
+      expect_raises(ArgumentError, /maximum_max_seq/) do
+        store.lookup_longest_prefix("model-a", "tok-a", [42_i32, 99_i32], required_max_seq: 9, maximum_max_seq: 8)
+      end
       store.lookup_token_prefix("model-a", "tok-a", [42_i32, 99_i32], 1).try(&.prefix_len).should eq(1)
       store.lookup_session("s1", turn_id: "t1").should_not be_nil
       store.lookup_exact("model-b", "tok-a", prompt_hash, 1).should be_nil

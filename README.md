@@ -534,7 +534,36 @@ printf '{"messages":[{"role":"user","content":"Read src/foo.cr"}],"tools":[]}' \
   | crystal run bin/qwen35_tool_json_adapter.cr -- --render-request
 ```
 
-Enable exact prompt cache:
+The embedded `Qwen35NativeRuntime` can use the same exact state artifacts for a
+common chat prefix. Cache use is opt-in, and prefix persistence is explicit so
+the runtime never writes user prompts automatically:
+
+```crystal
+cache_root = "/path/to/qwen-prefix-cache"
+prefix = [ML::GGUF::Qwen35Engine::Message.new("system", common_system_prompt)]
+runtime = ML::GGUF::Qwen35NativeRuntime.new(
+  model_path,
+  max_seq: 4096,
+  prompt_cache_root: cache_root,
+  prompt_cache_resident_states: 1,
+)
+runtime.prewarm_prefix(prefix, max_seq: 4096)
+engine = ML::GGUF::Qwen35Engine.new(runtime)
+```
+
+`prewarm_prefix` renders without the assistant generation marker and stores raw
+recurrent state plus live KV rows. A later request must begin with the exact
+same rendered tokens, and the artifact capacity must cover the full prompt plus
+requested generation without exceeding the runtime capacity. Cache misses,
+inadequate capacities, and invalid artifacts fall back to normal full prefill.
+`runtime.prompt_cache_stats` exposes
+hits, misses, restore failures, reused prefix tokens, and replayed suffix tokens.
+Use a tenant-private cache root for private system prompts because model state is
+sensitive even when prompt previews are disabled. `QWEN35_PROMPT_CACHE=1` plus
+`QWEN35_PROMPT_CACHE_ROOT` can enable lookup of already seeded artifacts without
+passing the root explicitly.
+
+Enable exact prompt cache in the CLI:
 
 ```sh
 QWEN35_PROMPT_CACHE=1 \
@@ -809,7 +838,7 @@ Useful Qwen environment switches:
 
 | Variable | Effect |
 |---|---|
-| `QWEN35_PROMPT_CACHE=1` | Enable exact prompt-state cache lookup/save in `qwen35_generate`. |
+| `QWEN35_PROMPT_CACHE=1` | Enable exact prompt-state cache lookup/save in `qwen35_generate`; also enables lookup in `Qwen35NativeRuntime` when no explicit cache root is passed. Embedded prefix persistence remains explicit through `prewarm_prefix`. |
 | `QWEN35_PROMPT_CACHE_ROOT=/path` | Override prompt-cache artifact root. |
 | `QWEN35_PROMPT_TOKEN_CACHE_OFF=1` | Disable tokenized-prompt cache lookup/save while keeping prompt-state cache enabled. |
 | `QWEN35_PROMPT_CACHE_FAST_FORWARD=1` | With prompt cache and source-history enabled, save and use validated post-span state artifacts so exact session-cache hits can emit cached spans without verifier recompute. Default off; falls back when source prefix, token hash, or artifact validation fails. |

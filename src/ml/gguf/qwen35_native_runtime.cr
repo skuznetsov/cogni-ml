@@ -3,6 +3,7 @@ require "./qwen35_engine_contract"
 require "./reader"
 require "./qwen35_chat"
 require "./qwen35_cpu"
+require "./qwen35_proposal_route"
 require "./qwen35_tokenizer"
 require "./qwen35_weights"
 
@@ -13,6 +14,15 @@ module ML::GGUF
   # crosses the engine boundary; every request receives a fresh State under the
   # process-wide lock that also protects GGUF mmap registration and teardown.
   class Qwen35NativeRuntime < Qwen35Engine::Runtime
+    NATIVE_PREWARM_SESSION_ID = "qwen35-native-prewarm"
+
+    record PromptCacheStats,
+      hits : Int64,
+      misses : Int64,
+      restore_failures : Int64,
+      reused_prefix_tokens : Int64,
+      replayed_suffix_tokens : Int64
+
     @@process_mutex = Mutex.new
     # Qwen35Metal keeps one process-global no-copy mmap registration. Until
     # that registration becomes model-keyed, two live native runtimes cannot
@@ -27,6 +37,14 @@ module ML::GGUF
     @model_id : String
     @tokenizer : Qwen35Tokenizer?
     @weights : Qwen35Weights?
+    @prompt_cache : Qwen35PromptCache::Store?
+    @prompt_cache_model_id : String?
+    @prompt_cache_tokenizer_id : String?
+    @prompt_cache_hits = 0_i64
+    @prompt_cache_misses = 0_i64
+    @prompt_cache_restore_failures = 0_i64
+    @prompt_cache_reused_prefix_tokens = 0_i64
+    @prompt_cache_replayed_suffix_tokens = 0_i64
     @closed = false
     @llama_tokenize_bin : String
 
@@ -34,13 +52,28 @@ module ML::GGUF
       @model_path : String,
       @max_seq : Int32 = 4096,
       llama_tokenize_bin : String? = nil,
+      prompt_cache_root : String? = nil,
+      prompt_cache_resident_states : Int32? = nil,
     )
       raise ArgumentError.new("Qwen35NativeRuntime model path must not be empty") if @model_path.strip.empty?
       raise ArgumentError.new("Qwen35NativeRuntime model not found: #{@model_path}") unless File.exists?(@model_path)
       raise ArgumentError.new("Qwen35NativeRuntime max_seq must be positive") unless @max_seq > 0
+      if resident_states = prompt_cache_resident_states
+        raise ArgumentError.new("prompt_cache_resident_states must be non-negative") if resident_states < 0
+      end
 
       @llama_tokenize_bin = llama_tokenize_bin || ENV["LLAMA_TOKENIZE_BIN"]? || ""
       @model_id = self.class.model_id_for(@model_path)
+      @prompt_cache = nil
+      @prompt_cache_model_id = nil
+      @prompt_cache_tokenizer_id = nil
+      effective_cache_root = prompt_cache_root
+      if effective_cache_root.nil? && ENV["QWEN35_PROMPT_CACHE"]? == "1"
+        effective_cache_root = ENV["QWEN35_PROMPT_CACHE_ROOT"]? || Qwen35PromptCache.default_root
+      end
+      if cache_root = effective_cache_root
+        raise ArgumentError.new("prompt_cache_root must not be empty") if cache_root.strip.empty?
+      end
 
       @@process_mutex.synchronize do
         if active_model_id = @@active_model_id
@@ -51,8 +84,18 @@ module ML::GGUF
 
         @@active_model_id = @model_id
         begin
-          @tokenizer = load_tokenizer
+          tokenizer = load_tokenizer
+          @tokenizer = tokenizer
           @weights = Qwen35Weights.from_gguf(@model_path)
+          if cache_root = effective_cache_root
+            @prompt_cache = Qwen35PromptCache::Store.new(
+              cache_root,
+              resident_state_cache_entries: prompt_cache_resident_states,
+            )
+            cache_model_id = Qwen35ProposalRoute.model_id(@model_path)
+            @prompt_cache_model_id = cache_model_id
+            @prompt_cache_tokenizer_id = Qwen35ProposalRoute.tokenizer_id(cache_model_id, tokenizer)
+          end
         rescue ex
           # A failed constructor must not strand the process-wide ownership
           # slot. If weight loading completed before a later failure, release
@@ -63,6 +106,9 @@ module ML::GGUF
           end
           @weights = nil
           @tokenizer = nil
+          @prompt_cache = nil
+          @prompt_cache_model_id = nil
+          @prompt_cache_tokenizer_id = nil
           @@active_model_id = nil
           raise ex
         end
@@ -169,6 +215,70 @@ module ML::GGUF
       end
     end
 
+    # Persist an explicitly selected common chat prefix without a generation
+    # prompt. Future requests whose rendered tokens extend this exact prefix can
+    # restore it from disk and replay only their request-specific suffix.
+    # Callers must not pass tenant- or user-private messages to a shared root.
+    def prewarm_prefix(
+      messages : Array(Qwen35Engine::Message),
+      max_seq : Int32? = nil,
+      requested_backend : Qwen35Engine::Backend = Qwen35Engine::Backend::Auto,
+    ) : Qwen35PromptCache::Entry
+      @@process_mutex.synchronize do
+        ensure_open!
+        raise ArgumentError.new("prewarm prefix requires at least one message") if messages.empty?
+        messages.each do |message|
+          raise ArgumentError.new("prewarm message role must not be empty") if message.role.strip.empty?
+          raise ArgumentError.new("prewarm message content must not be empty") if message.content.strip.empty?
+        end
+
+        cache, cache_model_id, cache_tokenizer_id = prompt_cache_resources
+        tokenizer, weights = resources
+        limit = self.class.effective_max_seq(@max_seq, max_seq)
+        rendered = render_messages(messages, add_generation_prompt: false)
+        prefix_ids = tokenizer.encode(rendered, add_bos_override: false)
+        raise ArgumentError.new("Qwen35NativeRuntime prewarm prefix is empty") if prefix_ids.empty?
+        if prefix_ids.size >= limit
+          raise ArgumentError.new("prewarm prefix must leave room within max_seq #{limit}")
+        end
+
+        backend = self.class.backend_identity_for(
+          requested_backend,
+          @model_id,
+          metal_available: Qwen35Metal.available?,
+          decode_wave_forced_off: decode_wave_forced_off?,
+        )
+        route = Qwen35Engine::PreflightRoute.new(Qwen35Engine::Route::GenerateGreedy, backend)
+        state = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
+        prepare_state_metal!(state, weights, route)
+        next_token, next_logit = Qwen35CPU.prefill_tokens_top1(weights, prefix_ids, 0, state)
+        cache.save(
+          session_id: NATIVE_PREWARM_SESSION_ID,
+          model_id: cache_model_id,
+          tokenizer_id: cache_tokenizer_id,
+          prompt_text: rendered,
+          token_ids: prefix_ids,
+          state: state,
+          prompt_preview: nil,
+          artifact_live_kv_tokens: prefix_ids.size.to_i32,
+          next_token_id: next_token,
+          next_token_logit: next_logit,
+        )
+      end
+    end
+
+    def prompt_cache_stats : PromptCacheStats
+      @@process_mutex.synchronize do
+        PromptCacheStats.new(
+          hits: @prompt_cache_hits,
+          misses: @prompt_cache_misses,
+          restore_failures: @prompt_cache_restore_failures,
+          reused_prefix_tokens: @prompt_cache_reused_prefix_tokens,
+          replayed_suffix_tokens: @prompt_cache_replayed_suffix_tokens,
+        )
+      end
+    end
+
     def generate(
       request : Qwen35Engine::GenerateRequest,
       route : Qwen35Engine::PreflightRoute,
@@ -186,18 +296,72 @@ module ML::GGUF
           raise ArgumentError.new("generation request exceeds max_seq #{limit}")
         end
 
-        state = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
-        prepare_state_metal!(state, weights, route)
-        next_token, _logit = Qwen35CPU.prefill_tokens_top1(weights, prompt_ids, 0, state)
+        state = nil.as(Qwen35CPU::State?)
+        next_token = nil.as(Int32?)
+        if cache = @prompt_cache
+          cache_model_id = @prompt_cache_model_id.not_nil!
+          cache_tokenizer_id = @prompt_cache_tokenizer_id.not_nil!
+          required_max_seq = (prompt_ids.size + request.max_tokens).to_i32
+          hit = cache.lookup_longest_prefix(
+            cache_model_id,
+            cache_tokenizer_id,
+            prompt_ids,
+            required_max_seq: required_max_seq,
+            maximum_max_seq: limit,
+          )
+          if hit && hit.prefix_len == prompt_ids.size && hit.next_token_id.nil? && prompt_ids.size > 1
+            hit = cache.lookup_longest_prefix(
+              cache_model_id,
+              cache_tokenizer_id,
+              prompt_ids,
+              max_prefix_len: prompt_ids.size - 1,
+              required_max_seq: required_max_seq,
+              maximum_max_seq: limit,
+            )
+          end
+
+          if cache_hit = hit
+            begin
+              replay = cache.restore_and_replay_suffix(
+                cache_hit,
+                weights,
+                prompt_ids,
+                prefer_metal: route.backend.primary.metal?,
+              )
+              if restored_next_token = replay.next_token_id
+                state = replay.state
+                next_token = restored_next_token
+                @prompt_cache_hits += 1
+                @prompt_cache_reused_prefix_tokens += replay.reused_prefix_len
+                @prompt_cache_replayed_suffix_tokens += replay.replayed_tokens
+              else
+                @prompt_cache_misses += 1
+              end
+            rescue ex : ArgumentError | IO::Error
+              @prompt_cache_restore_failures += 1
+            end
+          else
+            @prompt_cache_misses += 1
+          end
+        end
+
+        unless state && next_token
+          state = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
+          prepare_state_metal!(state, weights, route)
+          next_token, _logit = Qwen35CPU.prefill_tokens_top1(weights, prompt_ids, 0, state)
+        end
+
+        decode_state = state.not_nil!
+        decode_token = next_token.not_nil!
         output_ids = [] of Int32
         pos = prompt_ids.size
         while output_ids.size < request.max_tokens
-          break if stop_token?(tokenizer, next_token)
+          break if stop_token?(tokenizer, decode_token)
 
-          output_ids << next_token.to_i32
+          output_ids << decode_token
           break if output_ids.size >= request.max_tokens
 
-          next_token, _logit = Qwen35CPU.forward_top1(weights, next_token, pos, state)
+          decode_token, _logit = Qwen35CPU.forward_top1(weights, decode_token, pos, decode_state)
           pos += 1
         end
 
@@ -259,6 +423,9 @@ module ML::GGUF
 
         weights = @weights
         weights.try(&.close)
+        @prompt_cache = nil
+        @prompt_cache_model_id = nil
+        @prompt_cache_tokenizer_id = nil
         @weights = nil
         @tokenizer = nil
         @closed = true
@@ -284,6 +451,16 @@ module ML::GGUF
       weights = @weights
       raise Qwen35Engine::Closed.new("Qwen35NativeRuntime is closed") unless tokenizer && weights
       {tokenizer, weights}
+    end
+
+    private def prompt_cache_resources : {Qwen35PromptCache::Store, String, String}
+      cache = @prompt_cache
+      model_id = @prompt_cache_model_id
+      tokenizer_id = @prompt_cache_tokenizer_id
+      unless cache && model_id && tokenizer_id
+        raise ArgumentError.new("Qwen35NativeRuntime prompt cache is disabled")
+      end
+      {cache, model_id, tokenizer_id}
     end
 
     private def prepare_state_metal!(state : Qwen35CPU::State,
@@ -344,9 +521,9 @@ module ML::GGUF
       raise Qwen35Engine::RouteMismatch.new("runtime route backend identity drifted") unless expected == route.backend
     end
 
-    private def render_messages(messages : Array(Qwen35Engine::Message)) : String
+    private def render_messages(messages : Array(Qwen35Engine::Message), add_generation_prompt : Bool = true) : String
       qwen_messages = messages.map { |message| Qwen35Chat::Message.new(message.role, message.content) }
-      Qwen35Chat.render(qwen_messages, add_generation_prompt: true, enable_thinking: false)
+      Qwen35Chat.render(qwen_messages, add_generation_prompt: add_generation_prompt, enable_thinking: false)
     end
 
     private def stop_token?(tokenizer : Qwen35Tokenizer, token_id : Int32) : Bool
