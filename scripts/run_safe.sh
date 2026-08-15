@@ -2,10 +2,10 @@
 # Safe runner for heavy Crystal/Metal commands.
 # Usage: scripts/run_safe.sh <binary> [timeout_sec] [max_mem_mb] [args...]
 #
-# This is based on ../crystal_v2_repo/scripts/run_safe.sh, with one important
-# addition for `crystal spec`: monitor and kill the child process tree too,
-# because Crystal may spawn a `crystal-run-spec.tmp` process that can survive
-# parent interruption and keep consuming memory/GPU.
+# The workload runs in its own process group so signals, timeouts, memory
+# pressure, and wrapper cleanup stop the complete inherited process tree.
+# A small watchdog also stops that group if the wrapper itself is killed.
+# Deliberate daemonization via setsid() is outside this containment boundary.
 #
 # System-pressure guard (enabled by default):
 #   COGNI_RUN_SAFE_MIN_FREE_PCT=12
@@ -17,8 +17,7 @@
 # Optional benchmark-noise preflight:
 #   COGNI_RUN_SAFE_WAIT_QUIET_SEC=600 COGNI_RUN_SAFE_REQUIRE_QUIET=1
 # waits for other-process CPU load to fall below thresholds before launching
-# the child. This is fail-closed for perf runs: it does not kill or modify
-# user processes, it only waits and optionally aborts before model load.
+# the child. It never kills or modifies unrelated processes.
 set -u
 set -m 2>/dev/null || true
 
@@ -49,9 +48,12 @@ REQUIRE_QUIET="${COGNI_RUN_SAFE_REQUIRE_QUIET:-0}"
 PID=""
 PGID=""
 CAN_KILL_PGID=0
-SEEN_PIDS=""
 PARENT_DONE=0
 PARENT_EXIT=0
+TREE_STOPPED=0
+LAUNCHING=0
+PENDING_SIGNAL_NAME=""
+PENDING_SIGNAL_STATUS=""
 
 log_line() {
   if [ "$PASSTHROUGH_STDIO" = "1" ]; then
@@ -135,77 +137,29 @@ dump_captured_output() {
   fi
 }
 
-cleanup() {
-  if [ -n "$WATCHDOG_PID" ]; then
-    kill "$WATCHDOG_PID" 2>/dev/null || true
-    wait "$WATCHDOG_PID" 2>/dev/null || true
-  fi
-  rm -f "$STDOUT_TMP" "$STDERR_TMP"
-}
-trap cleanup EXIT
-trap 'exit 1' TERM
-
-children_of() {
-  local root="$1"
-  local frontier="$root"
-  local all=""
-  local next=""
-  local p c
-  while [ -n "$frontier" ]; do
-    next=""
-    for p in $frontier; do
-      for c in $(pgrep -P "$p" 2>/dev/null || true); do
-        all="$all $c"
-        next="$next $c"
-      done
-    done
-    frontier="$next"
-  done
-  echo "$all"
-}
-
 pids_in_pgid() {
-  if [ -z "$PGID" ]; then
+  if [ "$CAN_KILL_PGID" -ne 1 ] || [ -z "$PGID" ]; then
     return 0
   fi
   ps -axo pid=,pgid= 2>/dev/null | awk -v pg="$PGID" '$2 == pg {print $1}'
 }
 
 process_tree() {
-  local roots p c
   if [ -z "$PID" ]; then
     return 0
   fi
-  roots="$PID $SEEN_PIDS $(pids_in_pgid)"
-  for p in $roots; do
-    if kill -0 "$p" 2>/dev/null; then
-      echo "$p"
-    fi
-    for c in $(children_of "$p"); do
-      if kill -0 "$c" 2>/dev/null; then
-        echo "$c"
-      fi
-    done
-  done | awk 'NF && !seen[$1]++ {print $1}'
+  if [ "$CAN_KILL_PGID" -eq 1 ]; then
+    pids_in_pgid
+  elif kill -0 "$PID" 2>/dev/null; then
+    echo "$PID"
+  fi
 }
 
-remember_tree() {
-  local p
-  for p in $(process_tree); do
-    case " $SEEN_PIDS " in
-      *" $p "*) ;;
-      *) SEEN_PIDS="$SEEN_PIDS $p" ;;
-    esac
-  done
-}
-
-live_tree_without_parent() {
-  local p
-  for p in $(process_tree); do
-    if [ "$p" != "$PID" ] && kill -0 "$p" 2>/dev/null; then
-      echo "$p"
-    fi
-  done
+workload_running() {
+  if [ "$CAN_KILL_PGID" -eq 1 ] && kill -0 "-$PGID" 2>/dev/null; then
+    return 0
+  fi
+  [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null
 }
 
 rss_tree_kb() {
@@ -235,9 +189,6 @@ require_memory_headroom() {
   fi
   free_pct=$(system_free_pct)
   if [ -z "$free_pct" ]; then
-    # `memory_pressure` is macOS-specific. Preserve portability when it is not
-    # installed, but fail closed when the command exists and its output cannot
-    # be interpreted.
     if command -v memory_pressure >/dev/null 2>&1; then
       log_line "[ABORT] Cannot read system memory pressure before launch"
       exit 75
@@ -286,81 +237,181 @@ fd_tree_count() {
   echo "$total"
 }
 
+stop_watchdog() {
+  if [ -n "$WATCHDOG_PID" ] && kill -0 "$WATCHDOG_PID" 2>/dev/null; then
+    kill -KILL "$WATCHDOG_PID" 2>/dev/null || true
+    wait "$WATCHDOG_PID" 2>/dev/null || true
+  fi
+  WATCHDOG_PID=""
+}
+
 kill_tree_briefly() {
   local pids
+  if [ "$TREE_STOPPED" -eq 1 ]; then
+    return 0
+  fi
+  TREE_STOPPED=1
   pids=$(process_tree | tr ' ' '\n' | awk 'NF {print}' | sort -rn)
-  if [ "$CAN_KILL_PGID" -eq 1 ] && [ -n "$PGID" ]; then
+  if [ "$CAN_KILL_PGID" -eq 1 ]; then
     kill -TERM "-$PGID" 2>/dev/null || true
   fi
   if [ -n "$pids" ]; then
     kill -TERM $pids 2>/dev/null || true
-    sleep 0.5
-    if [ "$CAN_KILL_PGID" -eq 1 ] && [ -n "$PGID" ]; then
-      kill -9 "-$PGID" 2>/dev/null || true
-    fi
-    kill -9 $pids 2>/dev/null || true
+  fi
+  sleep 0.5
+  if [ "$CAN_KILL_PGID" -eq 1 ]; then
+    kill -KILL "-$PGID" 2>/dev/null || true
+  fi
+  if [ -n "$pids" ]; then
+    kill -KILL $pids 2>/dev/null || true
   fi
 }
 
+cleanup() {
+  trap - EXIT HUP INT QUIT TERM USR1
+  stop_watchdog
+  if [ "$TREE_STOPPED" -eq 0 ] && workload_running; then
+    kill_tree_briefly
+  fi
+  if [ -n "$PID" ]; then
+    wait "$PID" 2>/dev/null || true
+  fi
+  rm -f "$STDOUT_TMP" "$STDERR_TMP"
+}
+
+terminate_for_signal() {
+  local signal_name="$1"
+  local status="$2"
+  trap '' HUP INT QUIT TERM USR1
+  log_line "[KILL] Received SIG${signal_name}; terminating process tree"
+  kill_tree_briefly
+  exit "$status"
+}
+
+handle_signal() {
+  local signal_name="$1"
+  local status="$2"
+  if [ "$LAUNCHING" -eq 1 ]; then
+    PENDING_SIGNAL_NAME="$signal_name"
+    PENDING_SIGNAL_STATUS="$status"
+    return 0
+  fi
+  terminate_for_signal "$signal_name" "$status"
+}
+
+finish_launch() {
+  LAUNCHING=0
+  if [ -n "$PENDING_SIGNAL_NAME" ]; then
+    terminate_for_signal "$PENDING_SIGNAL_NAME" "$PENDING_SIGNAL_STATUS"
+  fi
+}
+
+timeout_wrapper() {
+  trap '' HUP INT QUIT TERM USR1
+  kill_tree_briefly
+  exit 1
+}
+
+trap cleanup EXIT
+trap 'handle_signal HUP 129' HUP
+trap 'handle_signal INT 130' INT
+trap 'handle_signal QUIT 131' QUIT
+trap 'handle_signal TERM 143' TERM
+trap timeout_wrapper USR1
+
+require_memory_headroom
+wait_for_quiet_host
+LAUNCHING=1
+
 if [ "$PASSTHROUGH_STDIO" = "1" ]; then
-  require_memory_headroom
-  wait_for_quiet_host
   "$BINARY" "$@" <&0 >&1 2> "$STDERR_TMP" &
 else
-  require_memory_headroom
-  wait_for_quiet_host
   "$BINARY" "$@" > "$STDOUT_TMP" 2> "$STDERR_TMP" &
 fi
 PID=$!
-PGID="$PID"
 actual_pgid=$(ps -o pgid= -p "$PID" 2>/dev/null | tr -d ' ')
-if [ -n "$actual_pgid" ]; then
-  PGID="$actual_pgid"
-fi
 SELF_PGID=$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')
-if [ -n "$PGID" ] && [ "$PGID" != "$SELF_PGID" ]; then
+if [ -n "$actual_pgid" ] && [ "$actual_pgid" = "$PID" ] && [ "$actual_pgid" != "$SELF_PGID" ]; then
+  PGID="$actual_pgid"
   CAN_KILL_PGID=1
+elif [ -z "$actual_pgid" ] && ! kill -0 "$PID" 2>/dev/null; then
+  # Very short commands may finish before ps observes them. Bash job control
+  # still assigns PID as the group ID; keep monitoring only if that group has
+  # surviving descendants, otherwise return the already captured exit status.
+  wait "$PID"
+  PARENT_EXIT=$?
+  PARENT_DONE=1
+  PGID="$PID"
+  if kill -0 "-$PGID" 2>/dev/null; then
+    CAN_KILL_PGID=1
+  else
+    finish_launch
+    dump_captured_output
+    log_line "[EXIT: $PARENT_EXIT] after ~0s"
+    exit "$PARENT_EXIT"
+  fi
+else
+  finish_launch
+  log_line "[ABORT] Cannot isolate the workload process group"
+  kill_tree_briefly
+  dump_captured_output
+  exit 75
 fi
+finish_launch
 set +m 2>/dev/null || true
 RUN_SAFE_PID=$$
 
 (
-  sleep $((TIMEOUT + 2))
-  remember_tree
-  if [ -n "$(process_tree)" ]; then
-    FD_COUNT=$(fd_tree_count)
-    RSS=$(rss_tree_kb)
-    log_line "[KILL] Timeout after ${TIMEOUT}s (tree FDs: ${FD_COUNT:-?}, tree RSS: ${RSS:-?}KB)"
-    kill_tree_briefly
-    dump_captured_output
-    kill -TERM "$RUN_SAFE_PID" 2>/dev/null || true
-  fi
+  WATCHDOG_SELF=$(/bin/sh -c 'printf "%s\n" "$PPID"')
+  WATCHDOG_TICKS=0
+  WATCHDOG_MAX_TICKS=$(((TIMEOUT + 2) * 2))
+  while [ "$WATCHDOG_TICKS" -lt "$WATCHDOG_MAX_TICKS" ]; do
+    WATCHDOG_PARENT=$(/bin/ps -o ppid= -p "$WATCHDOG_SELF" 2>/dev/null | tr -d ' ')
+    if [ "$WATCHDOG_PARENT" != "$RUN_SAFE_PID" ]; then
+      kill -KILL "-$PGID" 2>/dev/null || true
+      exit 0
+    fi
+    sleep 0.5
+    WATCHDOG_TICKS=$((WATCHDOG_TICKS + 1))
+  done
+  kill -TERM "-$PGID" 2>/dev/null || true
+  sleep 0.5
+  kill -KILL "-$PGID" 2>/dev/null || true
+  kill -USR1 "$RUN_SAFE_PID" 2>/dev/null || true
 ) &
 WATCHDOG_PID=$!
 
 HALF_SECS=0
 MAX_HALF_SECS=$((TIMEOUT * 2))
 while [ $HALF_SECS -lt $MAX_HALF_SECS ]; do
-  remember_tree
-
   if [ "$PARENT_DONE" -eq 0 ] && ! kill -0 "$PID" 2>/dev/null; then
     wait "$PID"
     PARENT_EXIT=$?
     PARENT_DONE=1
   fi
 
-  if [ "$PARENT_DONE" -eq 1 ] && [ -z "$(live_tree_without_parent)" ]; then
+  if [ "$PARENT_DONE" -eq 1 ] && ! workload_running; then
+    stop_watchdog
     dump_captured_output
     if [ $PARENT_EXIT -eq 139 ]; then log_line "[CRASH] Segfault (exit 139)"; fi
     if [ $PARENT_EXIT -eq 134 ]; then log_line "[CRASH] Abort (exit 134)"; fi
     SECS=$((HALF_SECS / 2))
     log_line "[EXIT: $PARENT_EXIT] after ~${SECS}s"
-    exit $PARENT_EXIT
+    exit "$PARENT_EXIT"
+  fi
+
+  FREE_PCT=$(system_free_pct)
+
+  if [ -n "$FREE_PCT" ] && [ "$MIN_FREE_PCT" -gt 0 ] && [ "$FREE_PCT" -le "$MIN_FREE_PCT" ]; then
+    SECS=$((HALF_SECS / 2))
+    log_line "[KILL] System memory pressure: free ${FREE_PCT}% <= ${MIN_FREE_PCT}% after ~${SECS}s"
+    kill_tree_briefly
+    dump_captured_output
+    exit 1
   fi
 
   FD_COUNT=$(fd_tree_count)
   RSS=$(rss_tree_kb)
-  FREE_PCT=$(system_free_pct)
 
   if [ -n "$FD_COUNT" ] && [ "$FD_COUNT" -gt 1000 ]; then
     SECS=$((HALF_SECS / 2))
@@ -373,14 +424,6 @@ while [ $HALF_SECS -lt $MAX_HALF_SECS ]; do
   if [ -n "$RSS" ] && [ "$RSS" -gt $((MAX_MEM * 1024)) ]; then
     SECS=$((HALF_SECS / 2))
     log_line "[KILL] Memory limit for process tree: ${RSS}KB > ${MAX_MEM}MB after ~${SECS}s"
-    kill_tree_briefly
-    dump_captured_output
-    exit 1
-  fi
-
-  if [ -n "$FREE_PCT" ] && [ "$MIN_FREE_PCT" -gt 0 ] && [ "$FREE_PCT" -le "$MIN_FREE_PCT" ]; then
-    SECS=$((HALF_SECS / 2))
-    log_line "[KILL] System memory pressure: free ${FREE_PCT}% <= ${MIN_FREE_PCT}% after ~${SECS}s (tree RSS: ${RSS:-?}KB)"
     kill_tree_briefly
     dump_captured_output
     exit 1
