@@ -61,6 +61,10 @@ record QBitSessionDelta,
   write_back_time : Time::Span,
   reused_prefix_tokens : Int64,
   replayed_suffix_tokens : Int64,
+  exact_anchor_fast_paths : Int64,
+  exact_anchor_fallbacks : Int64,
+  exact_anchor_replayed_tokens : Int64,
+  exact_anchor_materialization_time : Time::Span,
   last_failure : String?
 
 record QBitSessionObservation,
@@ -97,6 +101,10 @@ def qbit_session_delta(after_stats : QwenSessionRuntime::QBitCacheStats,
     write_back_time: after_stats.write_back_time - before_stats.write_back_time,
     reused_prefix_tokens: after_stats.reused_prefix_tokens - before_stats.reused_prefix_tokens,
     replayed_suffix_tokens: after_stats.replayed_suffix_tokens - before_stats.replayed_suffix_tokens,
+    exact_anchor_fast_paths: after_stats.exact_anchor_fast_paths - before_stats.exact_anchor_fast_paths,
+    exact_anchor_fallbacks: after_stats.exact_anchor_fallbacks - before_stats.exact_anchor_fallbacks,
+    exact_anchor_replayed_tokens: after_stats.exact_anchor_replayed_tokens - before_stats.exact_anchor_replayed_tokens,
+    exact_anchor_materialization_time: after_stats.exact_anchor_materialization_time - before_stats.exact_anchor_materialization_time,
     last_failure: after_stats.last_failure,
   )
 end
@@ -263,6 +271,10 @@ def qbit_session_emit(phase : String,
                   json.field "write_back_ms", delta.write_back_time.total_milliseconds.round(3)
                   json.field "reused_prefix_tokens", delta.reused_prefix_tokens
                   json.field "replayed_suffix_tokens", delta.replayed_suffix_tokens
+                  json.field "exact_anchor_fast_paths", delta.exact_anchor_fast_paths
+                  json.field "exact_anchor_fallbacks", delta.exact_anchor_fallbacks
+                  json.field "exact_anchor_replayed_tokens", delta.exact_anchor_replayed_tokens
+                  json.field "exact_anchor_materialization_ms", delta.exact_anchor_materialization_time.total_milliseconds.round(3)
                   json.field "last_failure", delta.last_failure
                 end
               end

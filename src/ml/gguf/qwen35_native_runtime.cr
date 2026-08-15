@@ -15,7 +15,12 @@ module ML::GGUF
   # crosses the engine boundary; every request receives a fresh State under the
   # process-wide lock that also protects GGUF mmap registration and teardown.
   class Qwen35NativeRuntime < Qwen35Engine::Runtime
-    NATIVE_PREWARM_SESSION_ID = "qwen35-native-prewarm"
+    NATIVE_PREWARM_SESSION_ID       = "qwen35-native-prewarm"
+    EXACT_ANCHOR_REPLAY_TAIL_TOKENS = 8
+
+    record ExactAnchorReplayPlan,
+      prefix_len : Int32,
+      replayed_tokens : Int32
 
     record PromptCacheStats,
       hits : Int64,
@@ -37,7 +42,11 @@ module ML::GGUF
       last_failure : String? = nil,
       lookup_time : Time::Span = Time::Span.zero,
       restore_time : Time::Span = Time::Span.zero,
-      write_back_time : Time::Span = Time::Span.zero
+      write_back_time : Time::Span = Time::Span.zero,
+      exact_anchor_fast_paths : Int64 = 0_i64,
+      exact_anchor_fallbacks : Int64 = 0_i64,
+      exact_anchor_replayed_tokens : Int64 = 0_i64,
+      exact_anchor_materialization_time : Time::Span = Time::Span.zero
 
     @@process_mutex = Mutex.new
     # Qwen35Metal keeps one process-global no-copy mmap registration. Until
@@ -76,6 +85,10 @@ module ML::GGUF
     @qbit_cache_lookup_time = Time::Span.zero
     @qbit_cache_restore_time = Time::Span.zero
     @qbit_cache_write_back_time = Time::Span.zero
+    @qbit_cache_exact_anchor_fast_paths = 0_i64
+    @qbit_cache_exact_anchor_fallbacks = 0_i64
+    @qbit_cache_exact_anchor_replayed_tokens = 0_i64
+    @qbit_cache_exact_anchor_materialization_time = Time::Span.zero
     @reasoning_effort_supported = false
     @closed = false
     @llama_tokenize_bin : String
@@ -257,6 +270,50 @@ module ML::GGUF
       limit
     end
 
+    # Keep a bounded tail outside the recurrent checkpoint because BPE is not
+    # append-stable at the generation-prompt/completed-message seam. The
+    # completed boundary is checked after generation before this prefix is
+    # trusted; an earlier divergence rejects the fast path.
+    def self.exact_anchor_capture_prefix_len(prompt_token_count : Int32) : Int32
+      raise ArgumentError.new("exact anchor prompt must not be empty") unless prompt_token_count > 0
+      Math.max(1, prompt_token_count - EXACT_ANCHOR_REPLAY_TAIL_TOKENS).to_i32
+    end
+
+    def self.exact_anchor_replay_plan(prompt_ids : Array(Int32),
+                                      boundary_ids : Array(Int32),
+                                      prefix_len : Int32) : ExactAnchorReplayPlan?
+      return nil unless prefix_len > 0 && prefix_len <= prompt_ids.size && prefix_len < boundary_ids.size
+      return nil unless prompt_ids[0, prefix_len] == boundary_ids[0, prefix_len]
+
+      ExactAnchorReplayPlan.new(prefix_len, boundary_ids.size.to_i32 - prefix_len)
+    end
+
+    # Emergency rollback for model/template combinations that have not yet
+    # passed the exact-state replay gate. The safe default is enabled and every
+    # request still has the token-prefix falsifier plus sequential fallback.
+    def self.exact_anchor_fast_enabled?(override : String? = ENV["QWEN35_QBIT_EXACT_ANCHOR_FAST_OFF"]?) : Bool
+      override != "1"
+    end
+
+    # Durable QBit state is currently captured from Metal buffers. Debug modes
+    # that move attention or recurrent ownership to CPU arrays must therefore
+    # reject session checkpoints instead of serializing stale Metal buffers.
+    def self.session_checkpoint_metal_state_enabled?(
+      attn_cpu : String? = ENV["QWEN35_ATTN_CPU"]?,
+      recurrent_layer_fuse_off : String? = ENV["QWEN35_RECURRENT_LAYER_FUSE_OFF"]?,
+    ) : Bool
+      attn_cpu != "1" && recurrent_layer_fuse_off != "1"
+    end
+
+    def self.exact_anchor_fast_environment_enabled?(
+      attn_cpu : String? = ENV["QWEN35_ATTN_CPU"]?,
+      recurrent_layer_fuse_off : String? = ENV["QWEN35_RECURRENT_LAYER_FUSE_OFF"]?,
+      prefill_recurrent_run_off : String? = ENV["QWEN35_PREFILL_REC_RUN_OFF"]?,
+    ) : Bool
+      session_checkpoint_metal_state_enabled?(attn_cpu, recurrent_layer_fuse_off) &&
+        prefill_recurrent_run_off != "1"
+    end
+
     def self.validate_reasoning_effort_supported!(
       effort : Qwen35Engine::ReasoningEffort,
       supported : Bool,
@@ -370,6 +427,10 @@ module ML::GGUF
           lookup_time: @qbit_cache_lookup_time,
           restore_time: @qbit_cache_restore_time,
           write_back_time: @qbit_cache_write_back_time,
+          exact_anchor_fast_paths: @qbit_cache_exact_anchor_fast_paths,
+          exact_anchor_fallbacks: @qbit_cache_exact_anchor_fallbacks,
+          exact_anchor_replayed_tokens: @qbit_cache_exact_anchor_replayed_tokens,
+          exact_anchor_materialization_time: @qbit_cache_exact_anchor_materialization_time,
         )
       end
     end
@@ -391,6 +452,9 @@ module ML::GGUF
           unless route.backend.primary.metal?
             raise ArgumentError.new("session checkpoints require the QBit Metal restore route")
           end
+          unless self.class.session_checkpoint_metal_state_enabled?
+            raise ArgumentError.new("session checkpoints require Metal-owned attention and recurrent state")
+          end
         end
         tokenizer, weights = resources
         limit = self.class.effective_max_seq(@max_seq, request.max_seq)
@@ -406,286 +470,370 @@ module ML::GGUF
         did_ordinary_prefill = false
         did_qbit_suffix_prefill = false
         restored_session_checkpoint = nil.as(QwenQBitSessionCheckpoint::Entry?)
+        exact_anchor_checkpoint_state = nil.as(Qwen35CPU::State?)
+        exact_anchor_checkpoint_prefix_len = nil.as(Int32?)
 
-        if qbit_cache = @qbit_cache
-          # Native QBit restore is currently a Metal-only route. CPU requests
-          # retain their existing local-cache/prefill behavior unchanged.
-          if route.backend.primary.metal?
-            admission = nil.as(QwenQBitCacheEnvelope::Admission?)
-            session_hit = nil.as(Qwen35QBitRuntimeCache::SessionHit?)
-            lookup_completed = false
-            lookup_started = Time.instant
-            begin
-              state_abi = QwenQBitCacheEnvelope.state_abi(weights.hparams, limit)
-              if session_id = request.session_id
-                session_hit = qbit_cache.lookup_session_checkpoint(
-                  session_id,
-                  request.checkpoint_id,
-                  rendered,
+        begin
+          if qbit_cache = @qbit_cache
+            # Native QBit restore is currently a Metal-only route. CPU requests
+            # retain their existing local-cache/prefill behavior unchanged.
+            if route.backend.primary.metal?
+              admission = nil.as(QwenQBitCacheEnvelope::Admission?)
+              session_hit = nil.as(Qwen35QBitRuntimeCache::SessionHit?)
+              lookup_completed = false
+              lookup_started = Time.instant
+              begin
+                state_abi = QwenQBitCacheEnvelope.state_abi(weights.hparams, limit)
+                if session_id = request.session_id
+                  session_hit = qbit_cache.lookup_session_checkpoint(
+                    session_id,
+                    request.checkpoint_id,
+                    rendered,
+                    prompt_ids,
+                    limit,
+                    state_abi,
+                    tokenizer.vocab.size.to_i32,
+                  )
+                  if hit = session_hit
+                    admission = hit.admission
+                  end
+                end
+                if prompt_ids.size + request.max_tokens > limit
+                  raise ArgumentError.new("generation request exceeds max_seq #{limit}")
+                end
+                admission ||= qbit_cache.lookup_longest_prefix(
                   prompt_ids,
                   limit,
                   state_abi,
                   tokenizer.vocab.size.to_i32,
                 )
-                if hit = session_hit
-                  admission = hit.admission
+                lookup_completed = true
+              rescue ex : Qwen35QBitRuntimeCache::CheckpointRejected
+                @qbit_cache_rejections += 1
+                record_qbit_failure("checkpoint lookup", ex)
+                raise ex
+              rescue ex : IO::Error
+                @qbit_cache_transport_failures += 1
+                record_qbit_failure("lookup transport", ex)
+                raise ex if request.checkpoint_id
+              rescue ex : ArgumentError
+                @qbit_cache_rejections += 1
+                record_qbit_failure("lookup admission", ex)
+                if request.checkpoint_id
+                  raise Qwen35QBitRuntimeCache::CheckpointRejected.new(
+                    "requested QBit session checkpoint was rejected: #{ex.message}"
+                  )
                 end
+              ensure
+                @qbit_cache_lookup_time += Time.instant - lookup_started
               end
-              if prompt_ids.size + request.max_tokens > limit
-                raise ArgumentError.new("generation request exceeds max_seq #{limit}")
-              end
-              admission ||= qbit_cache.lookup_longest_prefix(
-                prompt_ids,
-                limit,
-                state_abi,
-                tokenizer.vocab.size.to_i32,
-              )
-              lookup_completed = true
-            rescue ex : Qwen35QBitRuntimeCache::CheckpointRejected
-              @qbit_cache_rejections += 1
-              record_qbit_failure("checkpoint lookup", ex)
-              raise ex
-            rescue ex : IO::Error
-              @qbit_cache_transport_failures += 1
-              record_qbit_failure("lookup transport", ex)
-              raise ex if request.checkpoint_id
-            rescue ex : ArgumentError
-              @qbit_cache_rejections += 1
-              record_qbit_failure("lookup admission", ex)
-              if request.checkpoint_id
-                raise Qwen35QBitRuntimeCache::CheckpointRejected.new(
-                  "requested QBit session checkpoint was rejected: #{ex.message}"
-                )
-              end
-            ensure
-              @qbit_cache_lookup_time += Time.instant - lookup_started
-            end
 
-            if lookup_completed
-              if admitted = admission
-                candidate = nil.as(Qwen35CPU::State?)
-                restore_started = Time.instant
-                begin
+              if lookup_completed
+                if admitted = admission
+                  candidate = nil.as(Qwen35CPU::State?)
+                  restore_started = Time.instant
                   begin
-                    candidate = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
-                    prepare_state_metal!(candidate, weights, route)
-                  rescue ex
-                    release_state_metal!(candidate) if candidate
-                    raise ex
-                  end
+                    begin
+                      candidate = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
+                      prepare_state_metal!(candidate, weights, route)
+                    rescue ex
+                      release_state_metal!(candidate) if candidate
+                      raise ex
+                    end
 
-                  begin
-                    prepared_candidate = candidate.not_nil!
-                    qbit_cache.restore(admitted, weights.hparams, prepared_candidate)
-                    replay = Qwen35QBitRuntimeCache.replay_plan(
-                      admitted.entry,
-                      prompt_ids,
-                      tokenizer.vocab.size.to_i32,
-                    )
-                    state = prepared_candidate
-                    if replay.cached_next_token?
-                      next_token = admitted.entry.next_token_id
-                    else
-                      suffix_ids = prompt_ids[replay.prefix_len, replay.replayed_tokens]
-                      replayed_next, _replayed_logit = Qwen35CPU.prefill_tokens_top1(
-                        weights,
-                        suffix_ids,
-                        replay.prefix_len,
-                        prepared_candidate,
+                    begin
+                      prepared_candidate = candidate.not_nil!
+                      qbit_cache.restore(admitted, weights.hparams, prepared_candidate)
+                      replay = Qwen35QBitRuntimeCache.replay_plan(
+                        admitted.entry,
+                        prompt_ids,
+                        tokenizer.vocab.size.to_i32,
                       )
-                      next_token = replayed_next
-                      did_qbit_suffix_prefill = true
+                      state = prepared_candidate
+                      if replay.cached_next_token?
+                        next_token = admitted.entry.next_token_id
+                      else
+                        suffix_ids = prompt_ids[replay.prefix_len, replay.replayed_tokens]
+                        replayed_next, _replayed_logit = Qwen35CPU.prefill_tokens_top1(
+                          weights,
+                          suffix_ids,
+                          replay.prefix_len,
+                          prepared_candidate,
+                        )
+                        next_token = replayed_next
+                        did_qbit_suffix_prefill = true
+                      end
+                      @qbit_cache_hits += 1
+                      @qbit_cache_reused_prefix_tokens += replay.prefix_len
+                      @qbit_cache_replayed_suffix_tokens += replay.replayed_tokens
+                      restored_session_checkpoint = session_hit.try(&.checkpoint)
+                    rescue ex : ArgumentError
+                      release_state_metal!(candidate) if candidate
+                      @qbit_cache_restore_failures += 1
+                      record_qbit_failure("restore admission", ex)
+                      if request.checkpoint_id
+                        raise Qwen35QBitRuntimeCache::CheckpointRejected.new(
+                          "requested QBit session checkpoint restore was rejected: #{ex.message}"
+                        )
+                      end
+                    rescue ex
+                      # Do not retry a full prefill after a system/Metal failure:
+                      # that can compound memory pressure. Release the partial
+                      # candidate immediately and preserve the original failure.
+                      release_state_metal!(candidate) if candidate
+                      @qbit_cache_restore_failures += 1
+                      record_qbit_failure("restore system", ex)
+                      raise ex
                     end
-                    @qbit_cache_hits += 1
-                    @qbit_cache_reused_prefix_tokens += replay.prefix_len
-                    @qbit_cache_replayed_suffix_tokens += replay.replayed_tokens
-                    restored_session_checkpoint = session_hit.try(&.checkpoint)
-                  rescue ex : ArgumentError
-                    release_state_metal!(candidate) if candidate
-                    @qbit_cache_restore_failures += 1
-                    record_qbit_failure("restore admission", ex)
-                    if request.checkpoint_id
-                      raise Qwen35QBitRuntimeCache::CheckpointRejected.new(
-                        "requested QBit session checkpoint restore was rejected: #{ex.message}"
-                      )
-                    end
-                  rescue ex
-                    # Do not retry a full prefill after a system/Metal failure:
-                    # that can compound memory pressure. Release the partial
-                    # candidate immediately and preserve the original failure.
-                    release_state_metal!(candidate) if candidate
-                    @qbit_cache_restore_failures += 1
-                    record_qbit_failure("restore system", ex)
-                    raise ex
+                  ensure
+                    @qbit_cache_restore_time += Time.instant - restore_started
                   end
-                ensure
-                  @qbit_cache_restore_time += Time.instant - restore_started
+                else
+                  @qbit_cache_misses += 1
                 end
-              else
-                @qbit_cache_misses += 1
               end
             end
           end
-        end
 
-        if prompt_ids.size + request.max_tokens > limit
-          raise ArgumentError.new("generation request exceeds max_seq #{limit}")
-        end
+          if prompt_ids.size + request.max_tokens > limit
+            raise ArgumentError.new("generation request exceeds max_seq #{limit}")
+          end
 
-        if state.nil? && (cache = @prompt_cache)
-          cache_model_id = @prompt_cache_model_id.not_nil!
-          cache_tokenizer_id = @prompt_cache_tokenizer_id.not_nil!
-          required_max_seq = (prompt_ids.size + request.max_tokens).to_i32
-          hit = cache.lookup_longest_prefix(
-            cache_model_id,
-            cache_tokenizer_id,
-            prompt_ids,
-            required_max_seq: required_max_seq,
-            maximum_max_seq: limit,
-          )
-          if hit && hit.prefix_len == prompt_ids.size && hit.next_token_id.nil? && prompt_ids.size > 1
+          if state.nil? && (cache = @prompt_cache)
+            cache_model_id = @prompt_cache_model_id.not_nil!
+            cache_tokenizer_id = @prompt_cache_tokenizer_id.not_nil!
+            required_max_seq = (prompt_ids.size + request.max_tokens).to_i32
             hit = cache.lookup_longest_prefix(
               cache_model_id,
               cache_tokenizer_id,
               prompt_ids,
-              max_prefix_len: prompt_ids.size - 1,
               required_max_seq: required_max_seq,
               maximum_max_seq: limit,
             )
-          end
-
-          if cache_hit = hit
-            begin
-              replay = cache.restore_and_replay_suffix(
-                cache_hit,
-                weights,
+            if hit && hit.prefix_len == prompt_ids.size && hit.next_token_id.nil? && prompt_ids.size > 1
+              hit = cache.lookup_longest_prefix(
+                cache_model_id,
+                cache_tokenizer_id,
                 prompt_ids,
-                prefer_metal: route.backend.primary.metal?,
+                max_prefix_len: prompt_ids.size - 1,
+                required_max_seq: required_max_seq,
+                maximum_max_seq: limit,
               )
-              if restored_next_token = replay.next_token_id
-                state = replay.state
-                next_token = restored_next_token
-                @prompt_cache_hits += 1
-                @prompt_cache_reused_prefix_tokens += replay.reused_prefix_len
-                @prompt_cache_replayed_suffix_tokens += replay.replayed_tokens
-              else
-                @prompt_cache_misses += 1
+            end
+
+            if cache_hit = hit
+              begin
+                replay = cache.restore_and_replay_suffix(
+                  cache_hit,
+                  weights,
+                  prompt_ids,
+                  prefer_metal: route.backend.primary.metal?,
+                )
+                if restored_next_token = replay.next_token_id
+                  state = replay.state
+                  next_token = restored_next_token
+                  @prompt_cache_hits += 1
+                  @prompt_cache_reused_prefix_tokens += replay.reused_prefix_len
+                  @prompt_cache_replayed_suffix_tokens += replay.replayed_tokens
+                else
+                  @prompt_cache_misses += 1
+                end
+              rescue ex : ArgumentError | IO::Error
+                @prompt_cache_restore_failures += 1
               end
-            rescue ex : ArgumentError | IO::Error
-              @prompt_cache_restore_failures += 1
+            else
+              @prompt_cache_misses += 1
             end
-          else
-            @prompt_cache_misses += 1
           end
-        end
 
-        unless state && next_token
-          state = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
-          prepare_state_metal!(state, weights, route)
-          next_token, _logit = Qwen35CPU.prefill_tokens_top1(weights, prompt_ids, 0, state)
-          did_ordinary_prefill = true
-        end
-
-        result_checkpoint_id = nil.as(String?)
-        if request.session_id.nil? && (did_ordinary_prefill || did_qbit_suffix_prefill) &&
-           (qbit_cache = @qbit_cache) && qbit_cache.write_back?
-          write_back_started = Time.instant
-          begin
-            qbit_cache.save(
-              rendered,
-              prompt_ids,
-              next_token.not_nil!,
-              weights.hparams,
-              state.not_nil!,
-            )
-            @qbit_cache_writes += 1
-          rescue ex : IO::Error | ArgumentError
-            @qbit_cache_write_failures += 1
-            record_qbit_failure("write-back", ex)
-          ensure
-            @qbit_cache_write_back_time += Time.instant - write_back_started
-          end
-        end
-
-        decode_state = state.not_nil!
-        decode_token = next_token.not_nil!
-        output_ids = [] of Int32
-        pos = prompt_ids.size
-        while output_ids.size < request.max_tokens
-          break if stop_token?(tokenizer, decode_token)
-
-          output_ids << decode_token
-          break if output_ids.size >= request.max_tokens
-
-          decode_token, _logit = Qwen35CPU.forward_top1(weights, decode_token, pos, decode_state)
-          pos += 1
-        end
-
-        output_text = tokenizer.decode(output_ids)
-        if session_id = request.session_id
-          boundary_text = render_messages(
-            request.messages + [Qwen35Engine::Message.new("assistant", output_text)],
-            add_generation_prompt: false,
-            reasoning_effort: request.reasoning_effort,
-          )
-          boundary_token_ids = tokenizer.encode(boundary_text, add_bos_override: false)
-          if boundary_token_ids.empty? || boundary_token_ids.size > limit
-            raise ArgumentError.new("QBit checkpoint transcript token boundary is outside max_seq #{limit}")
-          end
-          qbit_cache = @qbit_cache.not_nil!
-          checkpoint_next_token = nil.as(Int32?)
-          checkpoint_state = decode_state
-          write_back_started = nil.as(Time::Instant?)
-          begin
-            if qbit_cache.checkpoint_requires_anchor?(restored_session_checkpoint, boundary_token_ids)
-              # The generation prompt may contain control tokens that are not
-              # reproduced when the completed assistant message is rendered.
-              # Rebuild only full anchors at the exact public transcript token
-              # boundary; deltas remain token metadata and need no second prefill.
-              release_state_metal!(decode_state)
-              checkpoint_state = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
-              prepare_state_metal!(checkpoint_state, weights, route)
-              checkpoint_next_token, _checkpoint_logit = Qwen35CPU.prefill_tokens_top1_sequential(
-                weights,
-                boundary_token_ids,
-                0,
-                checkpoint_state,
-              )
+          unless state && next_token
+            state = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
+            prepare_state_metal!(state, weights, route)
+            if request.session_id && self.class.exact_anchor_fast_enabled? &&
+               self.class.exact_anchor_fast_environment_enabled? &&
+               Qwen35CPU.recurrent_checkpoint_metal_supported?(weights)
+              capture_prefix_len = self.class.exact_anchor_capture_prefix_len(prompt_ids.size.to_i32)
+              capture_state = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
+              begin
+                next_token, _logit = Qwen35CPU.prefill_tokens_top1_recurrent_checkpoint(
+                  weights,
+                  prompt_ids,
+                  0,
+                  state,
+                  capture_prefix_len - 1,
+                  capture_state,
+                )
+                exact_anchor_checkpoint_state = capture_state
+                exact_anchor_checkpoint_prefix_len = capture_prefix_len
+              rescue ex
+                release_state_metal!(capture_state)
+                raise ex
+              end
+            else
+              next_token, _logit = Qwen35CPU.prefill_tokens_top1(weights, prompt_ids, 0, state)
             end
+            did_ordinary_prefill = true
+          end
+
+          result_checkpoint_id = nil.as(String?)
+          if request.session_id.nil? && (did_ordinary_prefill || did_qbit_suffix_prefill) &&
+             (qbit_cache = @qbit_cache) && qbit_cache.write_back?
             write_back_started = Time.instant
-            checkpoint = qbit_cache.save_checkpoint(
-              session_id,
-              boundary_text,
-              boundary_token_ids,
-              checkpoint_next_token,
-              weights.hparams,
-              checkpoint_state,
-              restored_session_checkpoint,
-            )
-            result_checkpoint_id = checkpoint.checkpoint_id
-            @qbit_cache_writes += 1
-          rescue ex : IO::Error | ArgumentError
-            @qbit_cache_write_failures += 1
-            record_qbit_failure("checkpoint write-back", ex)
-            raise ex
-          ensure
-            if started = write_back_started
-              @qbit_cache_write_back_time += Time.instant - started
+            begin
+              qbit_cache.save(
+                rendered,
+                prompt_ids,
+                next_token.not_nil!,
+                weights.hparams,
+                state.not_nil!,
+              )
+              @qbit_cache_writes += 1
+            rescue ex : IO::Error | ArgumentError
+              @qbit_cache_write_failures += 1
+              record_qbit_failure("write-back", ex)
+            ensure
+              @qbit_cache_write_back_time += Time.instant - write_back_started
             end
-            release_state_metal!(checkpoint_state)
+          end
+
+          decode_state = state.not_nil!
+          decode_token = next_token.not_nil!
+          output_ids = [] of Int32
+          pos = prompt_ids.size
+          while output_ids.size < request.max_tokens
+            break if stop_token?(tokenizer, decode_token)
+
+            output_ids << decode_token
+            break if output_ids.size >= request.max_tokens
+
+            decode_token, _logit = Qwen35CPU.forward_top1(weights, decode_token, pos, decode_state)
+            pos += 1
+          end
+
+          output_text = tokenizer.decode(output_ids)
+          if session_id = request.session_id
+            boundary_text = render_messages(
+              request.messages + [Qwen35Engine::Message.new("assistant", output_text)],
+              add_generation_prompt: false,
+              reasoning_effort: request.reasoning_effort,
+            )
+            boundary_token_ids = tokenizer.encode(boundary_text, add_bos_override: false)
+            if boundary_token_ids.empty? || boundary_token_ids.size > limit
+              raise ArgumentError.new("QBit checkpoint transcript token boundary is outside max_seq #{limit}")
+            end
+            qbit_cache = @qbit_cache.not_nil!
+            checkpoint_next_token = nil.as(Int32?)
+            checkpoint_state = decode_state
+            write_back_started = nil.as(Time::Instant?)
+            begin
+              if qbit_cache.checkpoint_requires_anchor?(restored_session_checkpoint, boundary_token_ids)
+                anchor_materialization_started = Time.instant
+                begin
+                  # The generation prompt may contain control tokens that are not
+                  # reproduced when the completed assistant message is rendered.
+                  # On a fresh ordinary prefill, retain exact KV prefix rows in the
+                  # live state, rewind only recurrent buffers to a pre-captured
+                  # point, and replay the short completed-message suffix. If the
+                  # tokenizer diverged before that point, retain the conservative
+                  # full sequential rebuild. Restored QBit states also use the full
+                  # rebuild so anchor renewal never compounds p7 approximation.
+                  replay_plan = if capture_state = exact_anchor_checkpoint_state
+                                  if prefix_len = exact_anchor_checkpoint_prefix_len
+                                    self.class.exact_anchor_replay_plan(prompt_ids, boundary_token_ids, prefix_len)
+                                  end
+                                end
+                  if plan = replay_plan
+                    capture_state = exact_anchor_checkpoint_state.not_nil!
+                    Qwen35CPU.swap_recurrent_state_metal_buffers!(
+                      decode_state,
+                      capture_state,
+                      weights.hparams,
+                    )
+                    decode_state.layers.each { |layer| layer.position = plan.prefix_len }
+                    release_state_metal!(capture_state)
+                    exact_anchor_checkpoint_state = nil
+                    suffix_ids = boundary_token_ids[plan.prefix_len, plan.replayed_tokens]
+                    checkpoint_next_token, _checkpoint_logit = Qwen35CPU.prefill_tokens_top1_sequential(
+                      weights,
+                      suffix_ids,
+                      plan.prefix_len,
+                      decode_state,
+                    )
+                    Qwen35CPU.clear_kv_tail_metal!(decode_state, weights.hparams, boundary_token_ids.size.to_i32)
+                    @qbit_cache_exact_anchor_fast_paths += 1
+                    @qbit_cache_exact_anchor_replayed_tokens += plan.replayed_tokens
+                  else
+                    @qbit_cache_exact_anchor_fallbacks += 1
+                    if capture_state = exact_anchor_checkpoint_state
+                      release_state_metal!(capture_state)
+                      exact_anchor_checkpoint_state = nil
+                    end
+                    release_state_metal!(decode_state)
+                    checkpoint_state = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
+                    prepare_state_metal!(checkpoint_state, weights, route)
+                    checkpoint_next_token, _checkpoint_logit = Qwen35CPU.prefill_tokens_top1_sequential(
+                      weights,
+                      boundary_token_ids,
+                      0,
+                      checkpoint_state,
+                    )
+                  end
+                ensure
+                  @qbit_cache_exact_anchor_materialization_time += Time.instant - anchor_materialization_started
+                end
+              end
+              write_back_started = Time.instant
+              checkpoint = qbit_cache.save_checkpoint(
+                session_id,
+                boundary_text,
+                boundary_token_ids,
+                checkpoint_next_token,
+                weights.hparams,
+                checkpoint_state,
+                restored_session_checkpoint,
+              )
+              result_checkpoint_id = checkpoint.checkpoint_id
+              @qbit_cache_writes += 1
+            rescue ex : IO::Error | ArgumentError
+              @qbit_cache_write_failures += 1
+              record_qbit_failure("checkpoint write-back", ex)
+              raise ex
+            ensure
+              if started = write_back_started
+                @qbit_cache_write_back_time += Time.instant - started
+              end
+              if capture_state = exact_anchor_checkpoint_state
+                release_state_metal!(capture_state)
+                exact_anchor_checkpoint_state = nil
+              end
+              release_state_metal!(checkpoint_state)
+              # Every session route releases either the live decode state or
+              # its replacement checkpoint state above. Avoid a redundant
+              # device-wide fence in the outer request cleanup.
+              state = nil
+            end
+          end
+
+          Qwen35Engine::GenerateResult.new(
+            text: output_text,
+            token_ids: output_ids,
+            prompt_tokens: prompt_ids.size,
+            completion_tokens: output_ids.size,
+            backend: route.backend,
+            route: route.operation,
+            reasoning_effort: request.reasoning_effort,
+            checkpoint_id: result_checkpoint_id,
+          )
+        ensure
+          if capture_state = exact_anchor_checkpoint_state
+            release_state_metal!(capture_state)
+            exact_anchor_checkpoint_state = nil
+          end
+          if active_state = state
+            release_state_metal!(active_state)
+            state = nil
           end
         end
-
-        Qwen35Engine::GenerateResult.new(
-          text: output_text,
-          token_ids: output_ids,
-          prompt_tokens: prompt_ids.size,
-          completion_tokens: output_ids.size,
-          backend: route.backend,
-          route: route.operation,
-          reasoning_effort: request.reasoning_effort,
-          checkpoint_id: result_checkpoint_id,
-        )
       end
     end
 

@@ -232,6 +232,89 @@ module ML::GGUF
       {% end %}
     end
 
+    # Allocate only the recurrent portion of a Metal state. Recurrent
+    # checkpoints never read or write full-attention KV from the checkpoint
+    # object, so allocating a second max_seq-sized KV cache here wastes unified
+    # memory and can turn a latency optimization into host memory pressure.
+    def prepare_recurrent_state_metal!(state : State, hp : Qwen35Hparams, clear : Bool = false) : Nil
+      {% if flag?(:cpu_only) %}
+        return
+      {% else %}
+        return unless Qwen35Metal.available?
+
+        qkv_dim = 2 * hp.ssm_group_count * hp.ssm_state_size + hp.ssm_time_step_rank * hp.ssm_state_size
+        conv_bytes = ((hp.ssm_conv_kernel - 1) * qkv_dim).to_i64 * sizeof(Float32)
+        ssm_bytes = (hp.ssm_time_step_rank * hp.ssm_state_size * hp.ssm_state_size).to_i64 * sizeof(Float32)
+
+        state.layers.each_with_index do |layer, il|
+          layer.position = 0
+          next if hp.full_attention?(il)
+
+          layer.conv_state_buf ||= ML::MetalBuffer.new(conv_bytes)
+          layer.ssm_state_buf ||= ML::MetalBuffer.new(ssm_bytes)
+          if clear
+            clear_metal_buffer(layer.conv_state_buf)
+            clear_metal_buffer(layer.ssm_state_buf)
+          end
+        end
+      {% end %}
+    end
+
+    # A recurrent checkpoint is useful only when both capture and the later
+    # suffix replay keep recurrent ownership on Metal. Checking this before
+    # prefill turns unsupported weight layouts into an ordinary-prefill
+    # fallback instead of a mid-request checkpoint exception.
+    def recurrent_checkpoint_metal_supported?(weights : Qwen35Weights) : Bool
+      {% if flag?(:cpu_only) %}
+        false
+      {% else %}
+        return false unless Qwen35Metal.available?
+        weights.layers.all? do |layer|
+          case layer
+          in Qwen35FullAttnWeights
+            true
+          in Qwen35RecurrentWeights
+            metal_qw_supported?(layer.attn_qkv_qw) &&
+              metal_qw_supported?(layer.attn_gate_qw) &&
+              metal_qw_supported?(layer.ssm_alpha_qw) &&
+              metal_qw_supported?(layer.ssm_beta_qw) &&
+              metal_qw_supported?(layer.ssm_out_qw) &&
+              metal_qw_supported?(layer.ffn_gate_qw) &&
+              metal_qw_supported?(layer.ffn_up_qw) &&
+              metal_qw_supported?(layer.ffn_down_qw)
+          end
+        end
+      {% end %}
+    end
+
+    # Canonicalize the unused part of exact KV before persistence. Generation
+    # may have written rows beyond the completed-transcript boundary; attention
+    # ignores them via the persisted position, but zeroing prevents irrelevant
+    # output-history bytes from entering the durable artifact.
+    def clear_kv_tail_metal!(state : State, hp : Qwen35Hparams, live_tokens : Int32) : Nil
+      raise ArgumentError.new("live KV token count is outside state capacity") unless live_tokens >= 0 && live_tokens <= state.max_seq
+      {% if flag?(:cpu_only) %}
+        raise "clear_kv_tail_metal requires Metal"
+      {% else %}
+        raise "clear_kv_tail_metal requires Metal" unless Qwen35Metal.available?
+        row_bytes = (hp.head_dim * hp.n_head_kv).to_i64 * sizeof(Float32)
+        offset = live_tokens.to_i64 * row_bytes
+        ML::Metal::Dispatch.execute_blit do |enc|
+          state.layers.each_with_index do |layer, il|
+            next unless hp.full_attention?(il)
+            k_buf = layer.k_cache_buf.not_nil!
+            v_buf = layer.v_cache_buf.not_nil!
+            tail_bytes = k_buf.size - offset
+            raise ArgumentError.new("KV tail offset exceeds buffer at layer #{il}") if tail_bytes < 0 || v_buf.size - offset != tail_bytes
+            next if tail_bytes == 0
+            raise ArgumentError.new("KV tail clear exceeds Int32 encoder limit") if offset > Int32::MAX || tail_bytes > Int32::MAX
+            enc.fill_buffer(k_buf, 0_u8, offset.to_i32, tail_bytes.to_i32)
+            enc.fill_buffer(v_buf, 0_u8, offset.to_i32, tail_bytes.to_i32)
+          end
+        end
+      {% end %}
+    end
+
     # Copy only the live GPU-resident decode state into an already prepared
     # destination state. This is the branch-state primitive needed by exact
     # tree/speculative verification: recurrent state is copied in full, while
@@ -2781,6 +2864,41 @@ module ML::GGUF
       results
     end
 
+    # Prompt prefill with one recurrent rollback point and only the final
+    # next-token projection. This avoids the per-row lm-head work of the
+    # speculative-verifier checkpoint primitive when the caller needs a single
+    # durable boundary candidate.
+    def prefill_tokens_top1_recurrent_checkpoint(weights : Qwen35Weights,
+                                                 token_ids : Array(Int32),
+                                                 start_pos : Int32,
+                                                 state : State,
+                                                 checkpoint_index : Int32,
+                                                 checkpoint_state : State) : {Int32, Float32}
+      raise ArgumentError.new("prefill_tokens_top1_recurrent_checkpoint token_ids must not be empty") if token_ids.empty?
+      unless checkpoint_index >= 0 && checkpoint_index < token_ids.size
+        raise ArgumentError.new("prefill_tokens_top1_recurrent_checkpoint checkpoint index out of range")
+      end
+      if token_ids.size > 1 && prefill_gc_guard_enabled? && !@@prefill_gc_guard_active
+        return with_prefill_gc_guard do
+          prefill_tokens_top1_recurrent_checkpoint(
+            weights, token_ids, start_pos, state, checkpoint_index, checkpoint_state
+          )
+        end
+      end
+
+      hidden = prefill_tokens_hidden(
+        weights,
+        token_ids,
+        start_pos,
+        state,
+        checkpoint_index: checkpoint_index,
+        checkpoint_state: checkpoint_state,
+      )
+      hp = weights.hparams
+      last = hidden[(token_ids.size - 1) * hp.n_embd, hp.n_embd]
+      hidden_top1(weights, last)
+    end
+
     # Process a known prompt span and return the final pre-output-norm hidden.
     # This is useful for MTP/self-draft probes that need the exact target
     # hidden at the prompt boundary without paying an extra lm-head pass.
@@ -2825,7 +2943,7 @@ module ML::GGUF
         max_seq = state.max_seq
         layer_limit = stop_layer || weights.layers.size
         if checkpoint_requested
-          prepare_state_metal!(checkpoint_state.not_nil!, hp, clear: false)
+          prepare_recurrent_state_metal!(checkpoint_state.not_nil!, hp, clear: false)
         end
         hidden = Array(Float32).new(token_ids.size * hp.n_embd, 0.0_f32)
         token_ids.each_with_index do |token_id, i|
@@ -2850,7 +2968,7 @@ module ML::GGUF
 
       hp = weights.hparams
       if checkpoint_requested
-        prepare_state_metal!(checkpoint_state.not_nil!, hp, clear: false)
+        prepare_recurrent_state_metal!(checkpoint_state.not_nil!, hp, clear: false)
       end
       max_seq = state.max_seq
       n_tokens = token_ids.size

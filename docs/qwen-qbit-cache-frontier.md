@@ -24,7 +24,10 @@ or a cumulative exact token delta rooted at one immutable anchor. Delta restore
 loads the anchor once and deterministically replays the stored token suffix;
 it does not add quantized recurrent-state differences. Explicit rollback may
 select an earlier checkpoint only when its session identity and token prefix
-match the caller-authoritative transcript.
+match the caller-authoritative transcript. A fresh ordinary-session prefill may
+also retain a recurrent-only rollback point near the assistant boundary, reuse
+the exact live KV prefix, and replay only the re-tokenized boundary suffix when
+materializing its first exact anchor.
 
 Bounded context: local `.qkv` state artifacts and an explicitly configured
 ClickHouse HTTP endpoint. Background part merges are a separate storage context
@@ -104,11 +107,23 @@ and never establish cache visibility or admission.
   boundary and the exact token prefix independently. Text equality alone is
   insufficient because Qwen generation prompts contain control tokens that are
   not reproduced by rendering a completed assistant message.
-- A full session anchor is rebuilt at the exact completed-transcript token
-  boundary with the conservative sequential prefill route. Descendants store
-  only the cumulative exact token suffix, parent/anchor identities, transcript
-  boundary hash, and certificate. The referenced anchor artifact retains the
-  next-token validation; delta metadata does not invent a cached next token.
+- A fresh ordinary-session prefill may capture only recurrent Metal state eight
+  tokens before the generation-prompt boundary. After generation, the fast
+  anchor path is admitted only when re-tokenizing the exact completed transcript
+  preserves every token through that capture point. It reuses the exact live KV
+  prefix, swaps in the recurrent checkpoint, sequentially replays the short
+  completed-boundary suffix, and zeroes unused KV rows before publication. It
+  never allocates a second full KV cache.
+- Early token divergence, missing capture, unsupported Metal weights or state
+  ownership, an explicit `QWEN35_QBIT_EXACT_ANCHOR_FAST_OFF=1`, and any state
+  restored from QBit or the local prompt cache retain the conservative full
+  sequential anchor rebuild. In particular, periodic anchor renewal from a p7
+  QBit restore stays sequential so approximation is never compounded through a
+  captured recurrent checkpoint.
+- Descendants store only the cumulative exact token suffix, parent/anchor
+  identities, transcript boundary hash, and certificate. The referenced anchor
+  artifact retains the next-token validation; delta metadata does not invent a
+  cached next token.
 - Session checkpoint chains are immutable and branchable. Delta depth is
   bounded to eight and replay to 512 tokens; crossing either limit requires a
   new full anchor. Session identities are stored only as SHA-256 hashes.
@@ -134,6 +149,8 @@ and never establish cache visibility or admission.
   configured.
 - No background write queue, cross-`max_seq` restore, or partially restored
   state reuse is admitted in the active runtime slice.
+- No claim that the recurrent rollback path accelerates periodic anchors rebuilt
+  after a QBit restore. Those anchors remain synchronous and fully sequential.
 - No arithmetic recurrent-state delta chain is admitted. Applying successive
   p7 differences would compound approximation error and make rollback depend
   on chain length. Session deltas contain exact token ids and are recomputed
@@ -240,6 +257,14 @@ and never establish cache visibility or admission.
 - Delta depth and replay tokens are bounded. Crossing either bound writes a new
   full anchor; failure to publish that anchor leaves the previous committed
   checkpoints readable.
+- A captured exact-anchor rollback point must contain recurrent buffers only,
+  with no second KV allocation. Unsupported weights or CPU-owned debug state
+  must not enter the fast route, and early BPE divergence must select the full
+  sequential fallback.
+- Rewinding and replaying an exact completed-transcript boundary must match a
+  full sequential baseline for the checkpoint next token/logit and the next
+  continuation token/logit. Unused live-KV tail rows must be zero before the
+  artifact is encoded.
 
 ## Stop rules
 
@@ -538,8 +563,9 @@ caller transcript. The runtime now re-tokenizes the completed transcript and
 requires both text-boundary and exact token-prefix equality at lookup. The
 token-parallel anchor rebuild then produced a non-finite layer-1 ConvState on
 this boundary; QBit rejected it before publication. Full anchors therefore use
-a sequential exact-boundary prefill, while normal generation and suffix replay
-retain their accelerated paths.
+a sequential exact-boundary prefill unless the fresh recurrent rollback gate
+below proves the reusable live-KV prefix and replays the divergent boundary
+suffix. QBit encoding remains the fail-closed non-finite publication guard.
 
 | Cold-process phase | Prompt tokens | Reused / replayed | Generate total | Checkpoint write |
 | --- | ---: | ---: | ---: | ---: |
@@ -552,9 +578,9 @@ retain their accelerated paths.
 
 The action-five cold checkpoint path was 9.9% faster than its matched full
 prefill in this single local sample. This is not a latency SLA: the fixed
-80-token anchor means the advantage shrinks as replay grows, and the first
-exact anchor is deliberately expensive. Periodic anchors are currently
-synchronous; background materialization remains outside the admitted surface.
+80-token anchor means the advantage shrinks as replay grows. Periodic anchors
+rebuilt after a QBit restore are still synchronous and fully sequential;
+background materialization remains outside the admitted surface.
 
 ClickHouse 26.7.1.1315 stored the one full anchor in 32.98 MiB of recurrent
 QBit parts plus 10.26 MiB of exact-KV parts. Seven checkpoint rows, including
@@ -563,6 +589,27 @@ the restore and rollback branches, occupied 6.42 KiB compressed versus
 the anchor checkpoint to 2,909 bytes for the deepest measured delta. Thus the
 incremental metadata is compact; retained full anchors, not MergeTree merges or
 delta rows, dominate storage and materialization cost.
+
+### Exact-anchor recurrent rollback gate (2026-08-15)
+
+A final guarded Qwen3.8 27B A/B used the same 63-token first-action prompt,
+three-token continuation, model, ClickHouse instance, and process-level memory
+floor. Both routes emitted token ids `[66793, 12, 16]` (`checkpoint-1`) and
+completed with 82% free system memory and zero lookup, admission, restore,
+transport, or write failures.
+
+| Fresh first-anchor route | Boundary replay | Exact-anchor materialization | Generate total | Checkpoint write |
+| --- | ---: | ---: | ---: | ---: |
+| recurrent rollback | 9 tokens | 849.761 ms | 6,749.225 ms | 2,514.663 ms |
+| full sequential fallback | full boundary | 6,055.130 ms | 11,749.099 ms | 2,455.675 ms |
+
+For this sample, recurrent rollback made exact-anchor materialization 7.1x
+faster (85.97% less time) and reduced the complete request by 42.56%. This is a
+scoped fresh-session result, not a general session-cache SLA: synchronous
+ClickHouse encoding/write still costs about 2.5 seconds here, and periodic
+anchors renewed from p7-restored state intentionally retain full sequential
+materialization. The evidence decays when the model, tokenizer, chat template,
+prefill/checkpoint kernels, or Metal state-ownership route changes.
 
 ### ClickHouse boundary probe
 

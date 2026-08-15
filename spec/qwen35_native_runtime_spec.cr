@@ -17,6 +17,30 @@ private def reference_top_two(logits : Array(Float32), token_ids : Array(Int32))
 end
 
 describe ML::GGUF::Qwen35NativeRuntime do
+  it "plans a bounded exact-anchor suffix and rejects an early tokenizer divergence" do
+    prompt_ids = (1..28).map(&.to_i32)
+    boundary_ids = prompt_ids[0, 24] + [101_i32, 102_i32, 103_i32, 104_i32, 105_i32]
+
+    prefix_len = NativeRuntime.exact_anchor_capture_prefix_len(prompt_ids.size)
+    prefix_len.should eq(20)
+    plan = NativeRuntime.exact_anchor_replay_plan(prompt_ids, boundary_ids, prefix_len)
+    plan.should_not be_nil
+    plan.not_nil!.prefix_len.should eq(20)
+    plan.not_nil!.replayed_tokens.should eq(9)
+
+    diverged = boundary_ids.dup
+    diverged[prefix_len - 1] = 999_i32
+    NativeRuntime.exact_anchor_replay_plan(prompt_ids, diverged, prefix_len).should be_nil
+  end
+
+  it "keeps a non-empty capture prefix for short prompts" do
+    NativeRuntime.exact_anchor_capture_prefix_len(1).should eq(1)
+    NativeRuntime.exact_anchor_capture_prefix_len(5).should eq(1)
+    expect_raises(ArgumentError, /prompt/) do
+      NativeRuntime.exact_anchor_capture_prefix_len(0)
+    end
+  end
+
   it "exposes zero-cost QBit phase timing defaults" do
     stats = NativeRuntime::QBitCacheStats.new(
       hits: 0,
@@ -30,6 +54,24 @@ describe ML::GGUF::Qwen35NativeRuntime do
     stats.lookup_time.should eq(Time::Span.zero)
     stats.restore_time.should eq(Time::Span.zero)
     stats.write_back_time.should eq(Time::Span.zero)
+    stats.exact_anchor_fast_paths.should eq(0)
+    stats.exact_anchor_fallbacks.should eq(0)
+    stats.exact_anchor_replayed_tokens.should eq(0)
+    stats.exact_anchor_materialization_time.should eq(Time::Span.zero)
+  end
+
+  it "keeps an explicit rollback switch for exact-anchor replay" do
+    NativeRuntime.exact_anchor_fast_enabled?(nil).should be_true
+    NativeRuntime.exact_anchor_fast_enabled?("0").should be_true
+    NativeRuntime.exact_anchor_fast_enabled?("1").should be_false
+  end
+
+  it "rejects fast anchors when durable state can move away from Metal" do
+    NativeRuntime.session_checkpoint_metal_state_enabled?(nil, nil).should be_true
+    NativeRuntime.session_checkpoint_metal_state_enabled?("1", nil).should be_false
+    NativeRuntime.session_checkpoint_metal_state_enabled?(nil, "1").should be_false
+    NativeRuntime.exact_anchor_fast_environment_enabled?(nil, nil, nil).should be_true
+    NativeRuntime.exact_anchor_fast_environment_enabled?(nil, nil, "1").should be_false
   end
 
   it "reports the selected backend without claiming CUDA or silent fallback" do
