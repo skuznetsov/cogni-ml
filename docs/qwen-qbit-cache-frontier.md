@@ -39,6 +39,10 @@ part merges are a separate transport/storage context.
   into an isolated temporary MergeTree, inspect `system.parts`, read the rows
   back in canonical order, and require an exact byte-for-byte Native round trip.
   The temporary part is measurement evidence only; it is not a durable cache.
+- A matched diagnostic probe may store recurrent QBit plus an exact raw-KV
+  artifact in two parts and the complete recurrent-INT8 artifact in one part.
+  It reports logical, compressed-data, and on-disk bytes separately and requires
+  byte-exact round trips for all three inputs.
 - The model probe may accept a bounded external multi-block response only with
   an explicit expected `cache_id`. Prompt/model/token hashes remain the
   responsibility of the surrounding versioned cache envelope.
@@ -218,8 +222,8 @@ bounded temporary MergeTree under ClickHouse 26.7.1.1315. The active part used
 14.10% below the logical recurrent Native block respectively. Adding all live
 KV bytes without assuming any KV compression gives 42,968,882 bytes, 10.05%
 below the logical INT8 artifact. This is a conservative mixed-boundary estimate,
-not a matched ClickHouse-vs-ClickHouse result: the KV storage envelope and the
-physical INT8 part remain to be measured.
+not a matched ClickHouse-vs-ClickHouse result; the matched gate below supersedes
+it for storage decisions.
 
 Five exact single-block Native reads measured 29 ms first and 28 ms median.
 Together with the same run's 5.474 ms parser and 8.230 ms prepared restore,
@@ -257,6 +261,34 @@ it excludes prompt-envelope lookup and validation, exact KV retrieval, TCP
 client framing, and the first continuation-token forward pass. The explicit
 `cache_id` check is only a row-selection guard; the production envelope must
 still validate model, tokenizer/template, ABI, codec, and prompt-token hashes.
+
+### Matched complete-state physical gate (2026-08-15)
+
+One guarded Qwen3.8 27B run exported all comparison inputs from the same
+11-token chat state: a 40,257,628-byte recurrent p7 Native block, an
+8,389,396-byte exact raw-KV artifact including its snapshot envelope, and a
+47,768,476-byte complete recurrent-INT8 artifact containing the same raw KV.
+P7 retained 16/16 free-running and 15/15 teacher-forced top-1 tokens; its
+maximum matched-logit delta was 0.773716.
+
+`scripts/qwen_qbit_clickhouse_matched_probe.sh` stored recurrent QBit and exact
+KV as two physical parts, while the complete INT8 artifact used one part. The
+blob columns both used `String CODEC(LZ4)`, and every input survived an exact
+ClickHouse round trip.
+
+| Complete state | Logical bytes | Compressed data bytes | Bytes on disk | Parts |
+| --- | ---: | ---: | ---: | ---: |
+| recurrent p7 QBit + exact KV | 48,647,024 | 36,047,499 | 36,049,812 | 2 |
+| recurrent INT8 + exact KV | 47,768,476 | 38,470,261 | 38,470,759 | 1 |
+
+The QBit layout is 1.84% larger before ClickHouse compression but 6.293%
+smaller on disk after including the second-part overhead. This closes the
+matched physical compactness question for this one state distribution. It does
+not prove a general compression ratio: prompt length, KV share, model, QBit
+precision, ClickHouse version/settings, and part size can change the result.
+It also does not close the latency corridor because the exact KV read, envelope
+validation, recurrent restore, and first continuation token have not yet been
+timed together.
 
 ### ClickHouse boundary probe
 

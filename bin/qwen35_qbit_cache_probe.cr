@@ -27,6 +27,8 @@ prepare_state = true
 chat_mode = false
 native_out : String? = nil
 native_in : String? = nil
+kv_out : String? = nil
+int8_out : String? = nil
 cache_id : UInt64? = nil
 native_max_mib = 256
 restore_repeats = 5
@@ -43,6 +45,8 @@ OptionParser.parse do |parser|
   parser.on("--chat", "Render the prompt through the embedded Qwen chat template") { chat_mode = true }
   parser.on("--native-out PATH", "Write recurrent p7 tiles as a revision-zero ClickHouse Native block") { |value| native_out = value }
   parser.on("--native-in PATH", "Restore p7 tiles from ordered ClickHouse Native response blocks") { |value| native_in = value }
+  parser.on("--kv-out PATH", "Write an exact raw-KV-only diagnostic artifact") { |value| kv_out = value }
+  parser.on("--int8-out PATH", "Write the complete recurrent-INT8 comparison artifact") { |value| int8_out = value }
   parser.on("--cache-id ID", "Expected UInt64 Native cache identity (required with --native-in)") { |value| cache_id = value.to_u64 }
   parser.on("--native-max-mib N", "Maximum accepted Native response size (default: 256, hard max: 1024)") { |value| native_max_mib = value.to_i }
   parser.on("--restore-repeats N", "Timed restores after one cold restore (default: 5)") { |value| restore_repeats = value.to_i }
@@ -65,6 +69,8 @@ raise "--native-in requires prepared Metal state" if native_in && !prepare_state
 raise "--native-in file does not exist" if (path = native_in) && !File.file?(path)
 raise "--native-in requires an explicit --cache-id" if native_in && cache_id.nil?
 raise "--native-max-mib must be within 1..1024" unless native_max_mib.in?(1..1024)
+output_paths = [native_out, kv_out, int8_out].compact
+raise "diagnostic output paths must be distinct" unless output_paths.uniq.size == output_paths.size
 native_limit_bytes = native_max_mib.to_i64 * 1024 * 1024
 if path = native_in
   native_input_size = File.size(path)
@@ -216,6 +222,18 @@ release_metal_state!(exact_state)
 
 recurrent_raw_bytes = snapshot.records.sum(0_i64) { |record| recurrent_record?(record.kind) ? record.bytes.size.to_i64 : 0_i64 }
 kv_raw_bytes = snapshot.byte_size - recurrent_raw_bytes
+kv_artifact_bytes = 0_i64
+if path = kv_out
+  kv_snapshot = ML::GGUF::Qwen35StateSnapshot::Snapshot.new(
+    snapshot.max_seq,
+    snapshot.layer_count,
+    snapshot.positions.dup,
+    snapshot.records.reject { |record| recurrent_record?(record.kind) },
+  )
+  kv_artifact = ML::GGUF::Qwen35StateSnapshot.encode_artifact_bytes(kv_snapshot)
+  File.open(path, "w") { |file| file.write(kv_artifact) }
+  kv_artifact_bytes = kv_artifact.size.to_i64
+end
 baseline_artifacts = [
   {"recurrent-bf16", nil},
   {"recurrent-int8", block_size},
@@ -226,6 +244,9 @@ baseline_artifacts = [
     artifact_codec: codec,
     artifact_codec_block: codec_block,
   )
+  if codec == "recurrent-int8" && (path = int8_out)
+    File.open(path, "w") { |file| file.write(bytes) }
+  end
   encode_ms = (Time.instant - started).total_milliseconds
   encoded = ML::GGUF::Qwen35StateSnapshot.decode_artifact_encoded_bytes(
     bytes,
@@ -257,6 +278,7 @@ puts "  model=#{model_path}"
 puts "  prompt=#{prompt.inspect} chat=#{chat_mode} prompt_tokens=#{tokens.size} gen=#{n_gen} max_seq=#{max_seq} block_size=#{block_size} restore_repeats=#{restore_repeats}"
 puts "  startup_ms=#{startup_ms.round(3)} prefill_ms=#{prefill_ms.round(3)} snapshot_ms=#{snapshot_ms.round(3)}"
 puts "  raw_total_bytes=#{snapshot.byte_size} recurrent_raw_bytes=#{recurrent_raw_bytes} kv_raw_bytes=#{kv_raw_bytes}"
+puts "  kv_artifact_bytes=#{kv_artifact_bytes}" if kv_artifact_bytes > 0
 if ML::Metal::Device.available?
   device = ML::Metal::Device.instance
   puts "  metal_allocated_bytes=#{device.current_allocated_size} metal_recommended_working_set_bytes=#{device.recommended_working_set_size}"

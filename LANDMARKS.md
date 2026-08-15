@@ -24046,11 +24046,17 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   decay_trigger: QBit serialization change, ClickHouse version or codec/settings change, cache schema change, or different model-state distribution
   trust: {F:0.86,G:0.35,R:0.84}
 
-- claim: "The matched run supports a compactness direction but not yet a full physical INT8 comparison."
-  source: the same guarded Qwen3.8 probe reported `kv_raw_bytes=8388608` and `recurrent-int8 artifact_bytes=47768476`. Adding uncompressed KV to the physical recurrent QBit part gives 42,968,882 bytes, 10.05% below the logical INT8 artifact, but the QBit KV envelope and physical ClickHouse INT8 part were not measured.
+- claim: "The preliminary recurrent-only gate produced a conservative 10.05% mixed-boundary compactness estimate."
+  source: the guarded Qwen3.8 probe reported `kv_raw_bytes=8388608` and `recurrent-int8 artifact_bytes=47768476`. Adding uncompressed KV to the physical recurrent QBit part gave 42,968,882 bytes, 10.05% below the logical INT8 artifact. This historical estimate is superseded for storage decisions by the complete-state physical gate below.
   verified_at: 2026-08-15
-  decay_trigger: matched KV/INT8 physical-part measurement, artifact envelope change, or broader quality contradiction
+  decay_trigger: artifact envelope change or broader quality contradiction
   trust: {F:0.78,G:0.28,R:0.76}
+
+- claim: "The complete QBit-plus-exact-KV layout is physically smaller than the complete recurrent-INT8 artifact for the matched Qwen3.8 state, including the overhead of a second part."
+  source: one guarded 11-token chat run emitted a 40,257,628-byte recurrent p7 Native block, an 8,389,396-byte exact KV-only artifact, and a 47,768,476-byte complete recurrent-INT8 artifact. `scripts/qwen_qbit_clickhouse_matched_probe.sh` under ClickHouse 26.7.1.1315 measured QBit+KV at 36,047,499 compressed bytes and 36,049,812 on-disk bytes across two parts versus INT8 at 38,470,261 compressed bytes and 38,470,759 on-disk bytes in one part. The QBit layout was 6.293% smaller on disk, and all three inputs round-tripped byte-exactly.
+  verified_at: 2026-08-15
+  decay_trigger: model or prompt-state distribution change, QBit/artifact serialization change, ClickHouse version/codec/settings change, or different part sizing
+  trust: {F:0.91,G:0.34,R:0.89}
 
 - claim: "Forcing a single Native response block preserves the current parser boundary but costs measurable read latency."
   source: the default MergeTree response split the 38,304 rows into multiple Native blocks and measured `19,20,20,21,21ms`; setting `preferred_block_size_bytes` to the bounded input size returned one byte-identical block but measured `28ms` median. The same model run measured `native_parse_ms=5.474` and prepared p7 restore median `8.230ms`, giving a 41.704ms lower bound before KV lookup and first-token work.
@@ -24066,4 +24072,4 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** Window: ClickHouse recurrent-state cache read. Transport: MergeTree QBit planes -> ordered Native blocks -> strict global record validation -> prepared Metal state. The legal move keeps natural block boundaries, maps each chunk to a checked destination offset, and restores all chunks in one command buffer. Recomputed `read + parse + restore` falls from the forced-coalescing 41.704ms lower bound to 35.341ms; the dual frame remains bounded single-block coalescing.
 
-**decision:** Keep the storage and multi-block restore paths diagnostic and default-off. Next measure a matched physical INT8+KV route and the complete `read -> envelope validate -> restore -> first token` corridor before building a production ClickHouse client.
+**decision:** Keep the storage and multi-block restore paths diagnostic and default-off. The matched physical compactness gate is positive for this Qwen3.8 state; next measure the complete `read -> envelope validate -> restore -> first token` corridor before building a production ClickHouse client.
