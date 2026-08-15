@@ -587,6 +587,38 @@ sensitive even when prompt previews are disabled. `QWEN35_PROMPT_CACHE=1` plus
 `QWEN35_PROMPT_CACHE_ROOT` can enable lookup of already seeded artifacts without
 passing the root explicitly.
 
+The native runtime can also use the experimental exact-prompt ClickHouse QBit
+cache. It is disabled unless a store is passed explicitly, never creates or
+changes tables during inference, and leaves write-back disabled when the source
+limit is zero:
+
+```crystal
+config = ML::GGUF::QwenQBitClickHouseCache::Config.new(
+  endpoint: "http://127.0.0.1:8123",
+  database: "cogni_ml",
+  table_prefix: "qwen_qbit",
+)
+store = ML::GGUF::QwenQBitClickHouseCache::Store.new(config)
+# Run store.create_schema separately during explicit cache provisioning.
+runtime = ML::GGUF::Qwen35NativeRuntime.new(
+  model_path,
+  max_seq: 256,
+  qbit_clickhouse_cache: store,
+  qbit_cache_write_back_max_source_bytes: 192_i64 * 1024 * 1024,
+)
+```
+
+Only an exact full-prompt Metal hit is admitted. Identity, ABI, artifact hashes,
+native-stream framing, and the cached next-token certificate are checked before
+use. A miss, transport error, or invalid artifact falls back to the existing
+local cache and ordinary prefill. A system or Metal restore failure does not
+retry prefill, because a second heavy allocation could compound memory pressure.
+Synchronous write-back is opt-in and rejected before snapshot allocation when
+the estimated raw state exceeds the configured limit; the runtime hard ceiling
+is 256 MiB. Inspect `runtime.qbit_cache_stats` for cache outcomes. Prefix search,
+background writes, and partial-state reuse remain outside this experimental
+frontier.
+
 Enable exact prompt cache in the CLI:
 
 ```sh

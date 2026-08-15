@@ -38,7 +38,10 @@ module ML::GGUF
       end
     end
 
-    class Context
+    # Cache identity available before model inference. Cached validation and
+    # next-token fields deliberately live only in `Context`/`Entry`: requiring
+    # them here would make a real cold lookup impossible.
+    class LookupContext
       getter state_runtime_id : String
       getter model_id : String
       getter tokenizer_id : String
@@ -50,10 +53,6 @@ module ML::GGUF
       getter layer_count : Int32
       getter qbit_block_size : Int32
       getter qbit_precision : Int32
-      getter validation_kind : String
-      getter validation_steps : Int32
-      getter validation_hash : String
-      getter next_token_id : Int32
       getter state_abi : StateABI
 
       def initialize(@model_id : String,
@@ -66,12 +65,47 @@ module ML::GGUF
                      @layer_count : Int32,
                      @qbit_block_size : Int32,
                      @qbit_precision : Int32,
+                     @state_abi : StateABI,
+                     @state_runtime_id : String = Qwen35PromptCache::RUNTIME_ID)
+      end
+    end
+
+    class Context < LookupContext
+      getter validation_kind : String
+      getter validation_steps : Int32
+      getter validation_hash : String
+      getter next_token_id : Int32
+
+      def initialize(model_id : String,
+                     tokenizer_id : String,
+                     template_id : String,
+                     prompt_hash : String,
+                     token_hash : String,
+                     prefix_len : Int32,
+                     max_seq : Int32,
+                     layer_count : Int32,
+                     qbit_block_size : Int32,
+                     qbit_precision : Int32,
                      @validation_kind : String,
                      @validation_steps : Int32,
                      @validation_hash : String,
                      @next_token_id : Int32,
-                     @state_abi : StateABI,
-                     @state_runtime_id : String = Qwen35PromptCache::RUNTIME_ID)
+                     state_abi : StateABI,
+                     state_runtime_id : String = Qwen35PromptCache::RUNTIME_ID)
+        super(
+          model_id,
+          tokenizer_id,
+          template_id,
+          prompt_hash,
+          token_hash,
+          prefix_len,
+          max_seq,
+          layer_count,
+          qbit_block_size,
+          qbit_precision,
+          state_abi,
+          state_runtime_id,
+        )
       end
     end
 
@@ -166,8 +200,25 @@ module ML::GGUF
       Digest::SHA256.hexdigest("qwen35-chat-template-v1\0#{marker}\0#{chat_template || ""}")
     end
 
-    def lookup_key(context : Context) : String
-      validate_context!(context)
+    def lookup_context(context : Context) : LookupContext
+      LookupContext.new(
+        context.model_id,
+        context.tokenizer_id,
+        context.template_id,
+        context.prompt_hash,
+        context.token_hash,
+        context.prefix_len,
+        context.max_seq,
+        context.layer_count,
+        context.qbit_block_size,
+        context.qbit_precision,
+        context.state_abi,
+        context.state_runtime_id,
+      )
+    end
+
+    def lookup_key(context : LookupContext) : String
+      validate_lookup_context!(context)
       io = IO::Memory.new
       write_string(io, "qwen-qbit-cache-key-v1")
       write_string(io, context.state_runtime_id)
@@ -187,7 +238,7 @@ module ML::GGUF
 
     # UInt64 is the narrow ClickHouse row key. The full lookup key and all
     # context fields remain in the envelope and are checked after lookup.
-    def cache_id(context : Context) : UInt64
+    def cache_id(context : LookupContext) : UInt64
       lookup_key(context)[0, 16].to_u64(16)
     end
 
@@ -242,6 +293,21 @@ module ML::GGUF
               recurrent_native : Bytes,
               kv_artifact : Bytes) : Admission
       validate_entry!(entry, context)
+      admit_artifacts(entry, context, recurrent_native, kv_artifact)
+    end
+
+    def admit(entry : Entry,
+              context : LookupContext,
+              recurrent_native : Bytes,
+              kv_artifact : Bytes) : Admission
+      validate_entry_identity!(entry, context)
+      admit_artifacts(entry, context, recurrent_native, kv_artifact)
+    end
+
+    private def admit_artifacts(entry : Entry,
+                                context : LookupContext,
+                                recurrent_native : Bytes,
+                                kv_artifact : Bytes) : Admission
       raise ArgumentError.new("QBit exact KV byte-size mismatch") unless kv_artifact.size.to_i64 == entry.kv_artifact_byte_size
       unless Digest::SHA256.hexdigest(kv_artifact) == entry.kv_artifact_sha256
         raise ArgumentError.new("QBit exact KV checksum mismatch")
@@ -269,6 +335,10 @@ module ML::GGUF
     # process-local Admission for the same immutable generation is retained.
     def validate_manifest!(entry : Entry, context : Context) : Nil
       validate_entry!(entry, context)
+    end
+
+    def validate_manifest!(entry : Entry, context : LookupContext) : Nil
+      validate_entry_identity!(entry, context)
     end
 
     def certificate_id(entry : Entry) : String
@@ -305,7 +375,7 @@ module ML::GGUF
       Digest::SHA256.hexdigest(io.to_slice)
     end
 
-    private def validate_context!(context : Context) : Nil
+    private def validate_lookup_context!(context : LookupContext) : Nil
       raise ArgumentError.new("QBit state runtime mismatch") unless context.state_runtime_id == Qwen35PromptCache::RUNTIME_ID
       raise ArgumentError.new("QBit model identity is empty") if context.model_id.empty?
       raise ArgumentError.new("QBit tokenizer identity is empty") if context.tokenizer_id.empty?
@@ -324,6 +394,10 @@ module ML::GGUF
         raise ArgumentError.new("QBit block size is invalid")
       end
       raise ArgumentError.new("QBit precision is unsupported") unless context.qbit_precision == REQUIRED_PRECISION
+    end
+
+    private def validate_context!(context : Context) : Nil
+      validate_lookup_context!(context)
       unless context.validation_kind == Qwen35PromptCache::EXACT_KNOWN_SPAN_VALIDATION_KIND
         raise ArgumentError.new("QBit validation kind is unsupported")
       end
@@ -333,7 +407,16 @@ module ML::GGUF
     end
 
     private def validate_entry!(entry : Entry, context : Context) : Nil
+      validate_entry_identity!(entry, context)
       validate_context!(context)
+      raise ArgumentError.new("QBit validation kind mismatch") unless entry.validation_kind == context.validation_kind
+      raise ArgumentError.new("QBit validation steps mismatch") unless entry.validation_steps == context.validation_steps
+      raise ArgumentError.new("QBit validation hash mismatch") unless entry.validation_hash == context.validation_hash
+      raise ArgumentError.new("QBit next token mismatch") unless entry.next_token_id == context.next_token_id
+    end
+
+    private def validate_entry_identity!(entry : Entry, context : LookupContext) : Nil
+      validate_lookup_context!(context)
       raise ArgumentError.new("QBit envelope schema mismatch") unless entry.schema_id == SCHEMA_ID
       raise ArgumentError.new("QBit state runtime mismatch") unless entry.state_runtime_id == context.state_runtime_id
       raise ArgumentError.new("QBit Native layout mismatch") unless entry.native_layout_id == NATIVE_LAYOUT_ID
@@ -358,14 +441,16 @@ module ML::GGUF
       raise ArgumentError.new("QBit exact KV checksum is invalid") unless sha256?(entry.kv_artifact_sha256)
       raise ArgumentError.new("QBit exact KV byte size is invalid") unless entry.kv_artifact_byte_size > 0
       raise ArgumentError.new("QBit state layout checksum is invalid") unless sha256?(entry.state_layout_sha256)
-      raise ArgumentError.new("QBit validation kind mismatch") unless entry.validation_kind == context.validation_kind
-      raise ArgumentError.new("QBit validation steps mismatch") unless entry.validation_steps == context.validation_steps
-      raise ArgumentError.new("QBit validation hash mismatch") unless entry.validation_hash == context.validation_hash
-      raise ArgumentError.new("QBit next token mismatch") unless entry.next_token_id == context.next_token_id
+      unless entry.validation_kind == Qwen35PromptCache::EXACT_KNOWN_SPAN_VALIDATION_KIND
+        raise ArgumentError.new("QBit validation kind is unsupported")
+      end
+      raise ArgumentError.new("QBit validation span is empty") unless entry.validation_steps > 0
+      raise ArgumentError.new("QBit validation hash is invalid") unless sha256?(entry.validation_hash)
+      raise ArgumentError.new("QBit next token is invalid") if entry.next_token_id < 0
       raise ArgumentError.new("QBit envelope certificate mismatch") unless entry.certificate_id == certificate_id(entry)
     end
 
-    private def validate_artifact_shapes!(context : Context,
+    private def validate_artifact_shapes!(context : LookupContext,
                                           stream : QwenQBitNativeBlock::Stream,
                                           exact : Qwen35StateSnapshot::EncodedSnapshot) : Nil
       validate_stream_identity!(context, stream)
@@ -399,7 +484,7 @@ module ML::GGUF
       validate_complete_record_set!(context, stream, exact)
     end
 
-    private def validate_complete_record_set!(context : Context,
+    private def validate_complete_record_set!(context : LookupContext,
                                               stream : QwenQBitNativeBlock::Stream,
                                               exact : Qwen35StateSnapshot::EncodedSnapshot) : Nil
       actual = {} of {Int32, UInt8} => Int64
@@ -450,7 +535,7 @@ module ML::GGUF
       Digest::SHA256.hexdigest(io.to_slice)
     end
 
-    private def validate_stream_identity!(context : Context,
+    private def validate_stream_identity!(context : LookupContext,
                                           stream : QwenQBitNativeBlock::Stream) : Nil
       raise ArgumentError.new("QBit Native block size mismatch") unless stream.block_size == context.qbit_block_size
       unless stream.record_spans.all? { |span| span.cache_id == cache_id(context) }
@@ -458,7 +543,7 @@ module ML::GGUF
       end
     end
 
-    private def state_layout_sha256(context : Context,
+    private def state_layout_sha256(context : LookupContext,
                                     stream : QwenQBitNativeBlock::Stream,
                                     exact : Qwen35StateSnapshot::EncodedSnapshot) : String
       records = [] of LayoutRecord

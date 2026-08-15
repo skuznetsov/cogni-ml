@@ -3,15 +3,19 @@
 Document status: implementation-bounded
 
 Current frontier: a default-off p7 transport/restore experiment for recurrent
-Qwen cache state plus a bounded ClickHouse HTTP storage/read client.
+Qwen cache state plus a bounded ClickHouse HTTP storage/read client and an
+exact-full-prompt native-runtime route.
 It may emit revision-0 ClickHouse Native blocks whose QBit column is already
 bit-transposed, validate an ordered multi-block Native response, decode logical
 records that cross response-block boundaries directly into prepared Metal state
 buffers, attach exact KV from a separate bounded artifact, compare a complete
 QBit cache-hit corridor against the matched INT8 artifact in alternating order,
 measure one isolated temporary MergeTree, and construct a versioned admission
-envelope for the split recurrent-QBit/exact-KV state. The internal client is
-not yet wired to the default prompt-cache route.
+envelope for the split recurrent-QBit/exact-KV state. The runtime route is
+strictly additive: it may read or write only when explicitly configured and it
+must preserve the existing local prompt-cache and ordinary-prefill behavior on
+every miss, rejection, cache transport failure, or rejected write. System and
+Metal failures abort instead of risking a second heavy attempt.
 
 Bounded context: local `.qkv` state artifacts and an explicitly configured
 ClickHouse HTTP endpoint. Background part merges are a separate storage context
@@ -78,6 +82,22 @@ and never establish cache visibility or admission.
   with a 512 MiB hard configuration ceiling. After reading recurrent state, the
   client uses the authenticated KV size from the manifest to reject an excessive
   combined allocation before it starts the second large response.
+- Runtime lookup identity may contain only facts known before inference:
+  runtime/model/tokenizer/template identity, rendered prompt and token hashes,
+  exact prompt length, state ABI, `max_seq`, and QBit layout. Cached next-token
+  and validation-certificate fields are outcomes; they must be admitted from
+  the manifest and then checked against the request tokens before restore.
+- The first runtime slice admits exact full-prompt hits only. It may synchronously
+  write back a freshly prefetched state after a miss, using one-step
+  exact-known-span validation derived from `prompt_tokens + next_token`. The
+  route is disabled by default and has an explicit bounded TTL.
+- Restore always targets a fresh state. A miss, transport failure, admission
+  rejection, or validation/shape restore error discards that state before the
+  existing local cache or ordinary prefill route is attempted. A system or
+  Metal execution failure also releases the partial state, but propagates
+  instead of attempting another heavy allocation. A write-back failure is
+  observable in cache stats but must not fail or alter the generation already
+  in progress. Unexpected system failures still propagate.
 
 ## Rejected surface
 
@@ -88,12 +108,12 @@ and never establish cache visibility or admission.
 - No claim that ClickHouse background merges are on the cache-hit critical
   path: newly inserted rows must remain readable before a part merge completes.
 - No native ClickHouse TCP packet framing/compression, automatic retry policy,
-  CUDA decoder, or default cache route in this slice. The current serving probe
-  uses bounded HTTP requests and synchronous inserts.
-- The diagnostic corridor starts with an already constructed internal state
-  template and a cached first token. The separate admission envelope now covers
-  identity and state completeness, but the corridor still does not execute a
-  model-runtime cache-miss fallback or restore routing.
+  CUDA decoder, or enabled-by-default cache route in this slice. The runtime
+  uses bounded HTTP requests and synchronous inserts only when explicitly
+  configured.
+- No longest-prefix lookup, suffix replay, background write queue, automatic
+  schema mutation, cross-`max_seq` restore, or partially restored state reuse is
+  admitted in the first runtime slice.
 - The manifest certificate is a deterministic integrity binding, not an HMAC,
   signature, or trust proof for bytes supplied by an untrusted store. A first
   strict cold admission must still verify the artifacts. Mutable backing bytes
@@ -109,9 +129,8 @@ and never establish cache visibility or admission.
 - A trusted ClickHouse transport/storage certificate that can safely amortize
   the first logical digest, tied to the full lookup identity and returned
   artifact checksums rather than to a truncated row key alone.
-- Runtime wiring that uses the bounded client behind an explicit default-off
-  flag, restores the admitted state, and falls back to ordinary prefill on a
-  miss or rejected generation.
+- Longest-prefix runtime wiring that can restore an admitted common prefix and
+  replay only a request-specific suffix.
 - ClickHouse storage using fixed-size tiles and independently readable bit
   planes.
 - Progressive fetch or fallback from 6/7 planes to the full 8-plane code.
@@ -166,6 +185,16 @@ and never establish cache visibility or admission.
   Duplicate or partial artifact rows, an invalid generation id, an unsafe SQL
   identifier, a malformed manifest, and any oversized response must fail closed
   before state admission.
+- Two entries with the same request-known lookup identity but different cached
+  next tokens or validation hashes must map to the same lookup key. The manifest
+  selected by that key must still fail if its certificate is malformed or its
+  validation hash is not exactly the hash of `prompt_tokens + next_token`.
+- Injected ClickHouse miss, malformed admission, transport exception, and
+  validation/shape restore exception must all reach the matched
+  ordinary-prefill result without consuming the partially restored state. An
+  injected system/Metal restore exception must release the candidate and abort
+  without retry. An injected write failure after prefill must preserve the
+  generated token and increment only the write-failure counter.
 
 ## Stop rules
 

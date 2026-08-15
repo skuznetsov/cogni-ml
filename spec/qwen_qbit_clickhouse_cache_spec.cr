@@ -146,11 +146,12 @@ describe ML::GGUF::QwenQBitClickHouseCache do
     transport.queue(native)
     transport.queue(kv)
 
-    admitted = store.lookup(context).not_nil!
+    lookup = envelope.lookup_context(context)
+    admitted = store.lookup(lookup).not_nil!
 
     admitted.entry.certificate_id.should eq(entry.certificate_id)
     transport.requests.size.should eq(3)
-    transport.requests[0].query.should contain(envelope.lookup_key(context))
+    transport.requests[0].query.should contain(envelope.lookup_key(lookup))
     transport.requests[1].query.should contain(generation)
     transport.requests[2].query.should contain(generation)
   end

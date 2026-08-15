@@ -1,5 +1,6 @@
 require "./spec_helper"
 require "../src/ml/gguf/qwen_qbit_cache_envelope"
+require "../src/ml/gguf/qwen35_qbit_runtime_cache"
 
 private def qbit_envelope_bytes(values : Array(Float32)) : Bytes
   bytes = Bytes.new(values.size * sizeof(Float32))
@@ -97,6 +98,73 @@ describe ML::GGUF::QwenQBitCacheEnvelope do
     admitted.entry.certificate_id.should eq(entry.certificate_id)
     admitted.native_stream.record_spans.size.should eq(2)
     admitted.exact_artifact.records.size.should eq(2)
+  end
+
+  it "looks up by request-known identity without requiring cached outcomes" do
+    context = qbit_envelope_context
+    lookup = envelope.lookup_context(context)
+    native, kv = qbit_envelope_artifacts(context)
+    entry = envelope.build(context, native, kv, created_at_unix: 123_i64)
+    different_outcome = ML::GGUF::QwenQBitCacheEnvelope::Context.new(
+      model_id: context.model_id,
+      tokenizer_id: context.tokenizer_id,
+      template_id: context.template_id,
+      prompt_hash: context.prompt_hash,
+      token_hash: context.token_hash,
+      prefix_len: context.prefix_len,
+      max_seq: context.max_seq,
+      layer_count: context.layer_count,
+      qbit_block_size: context.qbit_block_size,
+      qbit_precision: context.qbit_precision,
+      validation_kind: context.validation_kind,
+      validation_steps: 2,
+      validation_hash: "0" * 64,
+      next_token_id: context.next_token_id + 1,
+      state_abi: context.state_abi,
+    )
+
+    envelope.lookup_key(lookup).should eq(envelope.lookup_key(context))
+    envelope.lookup_key(different_outcome).should eq(envelope.lookup_key(context))
+    envelope.cache_id(lookup).should eq(envelope.cache_id(context))
+    envelope.validate_manifest!(entry, lookup)
+    admitted = envelope.admit(entry, lookup, native, kv)
+    admitted.entry.next_token_id.should eq(context.next_token_id)
+  end
+
+  it "binds the cached outcome to prompt tokens before runtime restore" do
+    context = qbit_envelope_context
+    native, kv = qbit_envelope_artifacts(context)
+    entry = envelope.build(context, native, kv, created_at_unix: 123_i64)
+
+    ML::GGUF::Qwen35QBitRuntimeCache.validate_cached_outcome!(
+      entry,
+      [11_i32, 22_i32, 33_i32],
+      128,
+    )
+    entry.next_token_id = 45
+    expect_raises(ArgumentError, /validation hash/) do
+      ML::GGUF::Qwen35QBitRuntimeCache.validate_cached_outcome!(
+        entry,
+        [11_i32, 22_i32, 33_i32],
+        128,
+      )
+    end
+  end
+
+  it "rejects unsafe runtime cache limits before model allocation" do
+    runtime_cache = ML::GGUF::Qwen35QBitRuntimeCache
+    runtime_cache.validate_options!(24.hours, 0_i64)
+    runtime_cache.validate_options!(24.hours, ML::GGUF::Qwen35QBitRuntimeCache::MAX_WRITE_BACK_SOURCE_BYTES)
+
+    expect_raises(ArgumentError, /TTL/) do
+      runtime_cache.validate_options!(0.seconds, 0_i64)
+    end
+    expect_raises(ArgumentError, /256MiB/) do
+      runtime_cache.validate_options!(
+        24.hours,
+        ML::GGUF::Qwen35QBitRuntimeCache::MAX_WRITE_BACK_SOURCE_BYTES + 1_i64,
+      )
+    end
   end
 
   it "rejects a self-consistent but incomplete model state" do

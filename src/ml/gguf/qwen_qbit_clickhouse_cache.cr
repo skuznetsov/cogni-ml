@@ -230,6 +230,15 @@ module ML::GGUF
       end
 
       def lookup(context : QwenQBitCacheEnvelope::Context) : QwenQBitCacheEnvelope::Admission?
+        lookup_internal(context, context)
+      end
+
+      def lookup(context : QwenQBitCacheEnvelope::LookupContext) : QwenQBitCacheEnvelope::Admission?
+        lookup_internal(context, nil)
+      end
+
+      private def lookup_internal(context : QwenQBitCacheEnvelope::LookupContext,
+                                  expected : QwenQBitCacheEnvelope::Context?) : QwenQBitCacheEnvelope::Admission?
         validate_context_layout!(context)
         lookup_key = QwenQBitCacheEnvelope.lookup_key(context)
         manifest = @transport.post(
@@ -252,7 +261,11 @@ module ML::GGUF
         rescue ex : JSON::ParseException
           raise ArgumentError.new("malformed QBit ClickHouse manifest response: #{ex.message}")
         end
-        QwenQBitCacheEnvelope.validate_manifest!(entry, context)
+        if full_context = expected
+          QwenQBitCacheEnvelope.validate_manifest!(entry, full_context)
+        else
+          QwenQBitCacheEnvelope.validate_manifest!(entry, context)
+        end
 
         if admission = resident_admission(generation_id, entry.certificate_id)
           return admission
@@ -275,7 +288,11 @@ module ML::GGUF
         )
         enforce_response_limit!(kv_artifact, @config.max_kv_bytes)
         validate_combined_size!(recurrent_native.size.to_i64, kv_artifact.size.to_i64)
-        admission = QwenQBitCacheEnvelope.admit(entry, context, recurrent_native, kv_artifact)
+        admission = if full_context = expected
+                      QwenQBitCacheEnvelope.admit(entry, full_context, recurrent_native, kv_artifact)
+                    else
+                      QwenQBitCacheEnvelope.admit(entry, context, recurrent_native, kv_artifact)
+                    end
         remember_admission(generation_id, admission, recurrent_native.size.to_i64 + kv_artifact.size)
         admission
       end
@@ -420,7 +437,7 @@ module ML::GGUF
         "#{@config.table_prefix}_manifest"
       end
 
-      private def validate_context_layout!(context : QwenQBitCacheEnvelope::Context) : Nil
+      private def validate_context_layout!(context : QwenQBitCacheEnvelope::LookupContext) : Nil
         unless context.qbit_block_size == QBIT_BLOCK_SIZE
           raise ArgumentError.new("QBit ClickHouse cache requires block size #{QBIT_BLOCK_SIZE}")
         end

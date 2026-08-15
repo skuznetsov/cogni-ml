@@ -4,6 +4,7 @@ require "./reader"
 require "./qwen35_chat"
 require "./qwen35_cpu"
 require "./qwen35_proposal_route"
+require "./qwen35_qbit_runtime_cache"
 require "./qwen35_tokenizer"
 require "./qwen35_weights"
 
@@ -23,6 +24,15 @@ module ML::GGUF
       reused_prefix_tokens : Int64,
       replayed_suffix_tokens : Int64
 
+    record QBitCacheStats,
+      hits : Int64,
+      misses : Int64,
+      rejections : Int64,
+      transport_failures : Int64,
+      restore_failures : Int64,
+      writes : Int64,
+      write_failures : Int64
+
     @@process_mutex = Mutex.new
     # Qwen35Metal keeps one process-global no-copy mmap registration. Until
     # that registration becomes model-keyed, two live native runtimes cannot
@@ -41,11 +51,19 @@ module ML::GGUF
     @prompt_cache : Qwen35PromptCache::Store?
     @prompt_cache_model_id : String?
     @prompt_cache_tokenizer_id : String?
+    @qbit_cache : Qwen35QBitRuntimeCache?
     @prompt_cache_hits = 0_i64
     @prompt_cache_misses = 0_i64
     @prompt_cache_restore_failures = 0_i64
     @prompt_cache_reused_prefix_tokens = 0_i64
     @prompt_cache_replayed_suffix_tokens = 0_i64
+    @qbit_cache_hits = 0_i64
+    @qbit_cache_misses = 0_i64
+    @qbit_cache_rejections = 0_i64
+    @qbit_cache_transport_failures = 0_i64
+    @qbit_cache_restore_failures = 0_i64
+    @qbit_cache_writes = 0_i64
+    @qbit_cache_write_failures = 0_i64
     @reasoning_effort_supported = false
     @closed = false
     @llama_tokenize_bin : String
@@ -56,6 +74,9 @@ module ML::GGUF
       llama_tokenize_bin : String? = nil,
       prompt_cache_root : String? = nil,
       prompt_cache_resident_states : Int32? = nil,
+      qbit_clickhouse_cache : QwenQBitClickHouseCache::Store? = nil,
+      qbit_cache_ttl : Time::Span = 24.hours,
+      qbit_cache_write_back_max_source_bytes : Int64 = 0_i64,
     )
       raise ArgumentError.new("Qwen35NativeRuntime model path must not be empty") if @model_path.strip.empty?
       raise ArgumentError.new("Qwen35NativeRuntime model not found: #{@model_path}") unless File.exists?(@model_path)
@@ -63,12 +84,21 @@ module ML::GGUF
       if resident_states = prompt_cache_resident_states
         raise ArgumentError.new("prompt_cache_resident_states must be non-negative") if resident_states < 0
       end
+      if qbit_clickhouse_cache.nil? && qbit_cache_write_back_max_source_bytes > 0
+        raise ArgumentError.new("QBit write-back requires qbit_clickhouse_cache")
+      end
+      # Validate before tokenizer/weight loading so bad cache configuration
+      # cannot trigger a large mmap or Metal allocation first.
+      if qbit_clickhouse_cache
+        Qwen35QBitRuntimeCache.validate_options!(qbit_cache_ttl, qbit_cache_write_back_max_source_bytes)
+      end
 
       @llama_tokenize_bin = llama_tokenize_bin || ENV["LLAMA_TOKENIZE_BIN"]? || ""
       @model_id = self.class.model_id_for(@model_path)
       @prompt_cache = nil
       @prompt_cache_model_id = nil
       @prompt_cache_tokenizer_id = nil
+      @qbit_cache = nil
       effective_cache_root = prompt_cache_root
       if effective_cache_root.nil? && ENV["QWEN35_PROMPT_CACHE"]? == "1"
         effective_cache_root = ENV["QWEN35_PROMPT_CACHE_ROOT"]? || Qwen35PromptCache.default_root
@@ -99,6 +129,18 @@ module ML::GGUF
             @prompt_cache_model_id = cache_model_id
             @prompt_cache_tokenizer_id = Qwen35ProposalRoute.tokenizer_id(cache_model_id, tokenizer)
           end
+          if qbit_store = qbit_clickhouse_cache
+            cache_model_id = @prompt_cache_model_id || Qwen35ProposalRoute.model_id(@model_path)
+            cache_tokenizer_id = @prompt_cache_tokenizer_id || Qwen35ProposalRoute.tokenizer_id(cache_model_id, tokenizer)
+            @qbit_cache = Qwen35QBitRuntimeCache.new(
+              qbit_store,
+              cache_model_id,
+              cache_tokenizer_id,
+              QwenQBitCacheEnvelope.template_id(tokenizer.chat_template),
+              qbit_cache_ttl,
+              qbit_cache_write_back_max_source_bytes,
+            )
+          end
         rescue ex
           # A failed constructor must not strand the process-wide ownership
           # slot. If weight loading completed before a later failure, release
@@ -112,6 +154,7 @@ module ML::GGUF
           @prompt_cache = nil
           @prompt_cache_model_id = nil
           @prompt_cache_tokenizer_id = nil
+          @qbit_cache = nil
           @@active_model_id = nil
           raise ex
         end
@@ -299,6 +342,20 @@ module ML::GGUF
       end
     end
 
+    def qbit_cache_stats : QBitCacheStats
+      @@process_mutex.synchronize do
+        QBitCacheStats.new(
+          hits: @qbit_cache_hits,
+          misses: @qbit_cache_misses,
+          rejections: @qbit_cache_rejections,
+          transport_failures: @qbit_cache_transport_failures,
+          restore_failures: @qbit_cache_restore_failures,
+          writes: @qbit_cache_writes,
+          write_failures: @qbit_cache_write_failures,
+        )
+      end
+    end
+
     def generate(
       request : Qwen35Engine::GenerateRequest,
       route : Qwen35Engine::PreflightRoute,
@@ -322,7 +379,65 @@ module ML::GGUF
 
         state = nil.as(Qwen35CPU::State?)
         next_token = nil.as(Int32?)
-        if cache = @prompt_cache
+        did_ordinary_prefill = false
+
+        if qbit_cache = @qbit_cache
+          # Native QBit restore is currently a Metal-only route. CPU requests
+          # retain their existing local-cache/prefill behavior unchanged.
+          if route.backend.primary.metal?
+            admission = nil.as(QwenQBitCacheEnvelope::Admission?)
+            lookup_completed = false
+            begin
+              admission = qbit_cache.lookup(
+                rendered,
+                prompt_ids,
+                limit,
+                QwenQBitCacheEnvelope.state_abi(weights.hparams, limit),
+                tokenizer.vocab.size.to_i32,
+              )
+              lookup_completed = true
+            rescue ex : IO::Error
+              @qbit_cache_transport_failures += 1
+            rescue ex : ArgumentError
+              @qbit_cache_rejections += 1
+            end
+
+            if lookup_completed
+              if admitted = admission
+                candidate = nil.as(Qwen35CPU::State?)
+                begin
+                  candidate = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
+                  prepare_state_metal!(candidate, weights, route)
+                rescue ex
+                  release_state_metal!(candidate) if candidate
+                  raise ex
+                end
+
+                begin
+                  prepared_candidate = candidate.not_nil!
+                  qbit_cache.restore(admitted, weights.hparams, prepared_candidate)
+                  state = prepared_candidate
+                  next_token = admitted.entry.next_token_id
+                  @qbit_cache_hits += 1
+                rescue ex : ArgumentError
+                  release_state_metal!(candidate) if candidate
+                  @qbit_cache_restore_failures += 1
+                rescue ex
+                  # Do not retry a full prefill after a system/Metal failure:
+                  # that can compound memory pressure. Release the partial
+                  # candidate immediately and preserve the original failure.
+                  release_state_metal!(candidate) if candidate
+                  @qbit_cache_restore_failures += 1
+                  raise ex
+                end
+              else
+                @qbit_cache_misses += 1
+              end
+            end
+          end
+        end
+
+        if state.nil? && (cache = @prompt_cache)
           cache_model_id = @prompt_cache_model_id.not_nil!
           cache_tokenizer_id = @prompt_cache_tokenizer_id.not_nil!
           required_max_seq = (prompt_ids.size + request.max_tokens).to_i32
@@ -373,6 +488,22 @@ module ML::GGUF
           state = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
           prepare_state_metal!(state, weights, route)
           next_token, _logit = Qwen35CPU.prefill_tokens_top1(weights, prompt_ids, 0, state)
+          did_ordinary_prefill = true
+        end
+
+        if did_ordinary_prefill && (qbit_cache = @qbit_cache) && qbit_cache.write_back?
+          begin
+            qbit_cache.save(
+              rendered,
+              prompt_ids,
+              next_token.not_nil!,
+              weights.hparams,
+              state.not_nil!,
+            )
+            @qbit_cache_writes += 1
+          rescue ex : IO::Error | ArgumentError
+            @qbit_cache_write_failures += 1
+          end
         end
 
         decode_state = state.not_nil!
@@ -451,6 +582,7 @@ module ML::GGUF
         @prompt_cache = nil
         @prompt_cache_model_id = nil
         @prompt_cache_tokenizer_id = nil
+        @qbit_cache = nil
         @weights = nil
         @tokenizer = nil
         @closed = true
@@ -497,6 +629,19 @@ module ML::GGUF
       # Metal.
       return unless route.backend.primary.metal?
       Qwen35CPU.prepare_state_metal!(state, weights.hparams)
+    end
+
+    private def release_state_metal!(state : Qwen35CPU::State) : Nil
+      state.layers.each do |layer|
+        layer.k_cache_buf.try(&.release)
+        layer.v_cache_buf.try(&.release)
+        layer.conv_state_buf.try(&.release)
+        layer.ssm_state_buf.try(&.release)
+        layer.k_cache_buf = nil
+        layer.v_cache_buf = nil
+        layer.conv_state_buf = nil
+        layer.ssm_state_buf = nil
+      end
     end
 
     private def validate_generate_request!(request : Qwen35Engine::GenerateRequest) : Nil
