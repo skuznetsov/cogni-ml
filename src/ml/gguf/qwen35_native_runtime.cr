@@ -32,7 +32,10 @@ module ML::GGUF
       restore_failures : Int64,
       writes : Int64,
       write_failures : Int64,
-      last_failure : String? = nil
+      last_failure : String? = nil,
+      lookup_time : Time::Span = Time::Span.zero,
+      restore_time : Time::Span = Time::Span.zero,
+      write_back_time : Time::Span = Time::Span.zero
 
     @@process_mutex = Mutex.new
     # Qwen35Metal keeps one process-global no-copy mmap registration. Until
@@ -66,6 +69,9 @@ module ML::GGUF
     @qbit_cache_writes = 0_i64
     @qbit_cache_write_failures = 0_i64
     @qbit_cache_last_failure : String? = nil
+    @qbit_cache_lookup_time = Time::Span.zero
+    @qbit_cache_restore_time = Time::Span.zero
+    @qbit_cache_write_back_time = Time::Span.zero
     @reasoning_effort_supported = false
     @closed = false
     @llama_tokenize_bin : String
@@ -355,6 +361,9 @@ module ML::GGUF
           writes: @qbit_cache_writes,
           write_failures: @qbit_cache_write_failures,
           last_failure: @qbit_cache_last_failure,
+          lookup_time: @qbit_cache_lookup_time,
+          restore_time: @qbit_cache_restore_time,
+          write_back_time: @qbit_cache_write_back_time,
         )
       end
     end
@@ -390,6 +399,7 @@ module ML::GGUF
           if route.backend.primary.metal?
             admission = nil.as(QwenQBitCacheEnvelope::Admission?)
             lookup_completed = false
+            lookup_started = Time.instant
             begin
               admission = qbit_cache.lookup(
                 rendered,
@@ -405,37 +415,44 @@ module ML::GGUF
             rescue ex : ArgumentError
               @qbit_cache_rejections += 1
               record_qbit_failure("lookup admission", ex)
+            ensure
+              @qbit_cache_lookup_time += Time.instant - lookup_started
             end
 
             if lookup_completed
               if admitted = admission
                 candidate = nil.as(Qwen35CPU::State?)
+                restore_started = Time.instant
                 begin
-                  candidate = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
-                  prepare_state_metal!(candidate, weights, route)
-                rescue ex
-                  release_state_metal!(candidate) if candidate
-                  raise ex
-                end
+                  begin
+                    candidate = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
+                    prepare_state_metal!(candidate, weights, route)
+                  rescue ex
+                    release_state_metal!(candidate) if candidate
+                    raise ex
+                  end
 
-                begin
-                  prepared_candidate = candidate.not_nil!
-                  qbit_cache.restore(admitted, weights.hparams, prepared_candidate)
-                  state = prepared_candidate
-                  next_token = admitted.entry.next_token_id
-                  @qbit_cache_hits += 1
-                rescue ex : ArgumentError
-                  release_state_metal!(candidate) if candidate
-                  @qbit_cache_restore_failures += 1
-                  record_qbit_failure("restore admission", ex)
-                rescue ex
-                  # Do not retry a full prefill after a system/Metal failure:
-                  # that can compound memory pressure. Release the partial
-                  # candidate immediately and preserve the original failure.
-                  release_state_metal!(candidate) if candidate
-                  @qbit_cache_restore_failures += 1
-                  record_qbit_failure("restore system", ex)
-                  raise ex
+                  begin
+                    prepared_candidate = candidate.not_nil!
+                    qbit_cache.restore(admitted, weights.hparams, prepared_candidate)
+                    state = prepared_candidate
+                    next_token = admitted.entry.next_token_id
+                    @qbit_cache_hits += 1
+                  rescue ex : ArgumentError
+                    release_state_metal!(candidate) if candidate
+                    @qbit_cache_restore_failures += 1
+                    record_qbit_failure("restore admission", ex)
+                  rescue ex
+                    # Do not retry a full prefill after a system/Metal failure:
+                    # that can compound memory pressure. Release the partial
+                    # candidate immediately and preserve the original failure.
+                    release_state_metal!(candidate) if candidate
+                    @qbit_cache_restore_failures += 1
+                    record_qbit_failure("restore system", ex)
+                    raise ex
+                  end
+                ensure
+                  @qbit_cache_restore_time += Time.instant - restore_started
                 end
               else
                 @qbit_cache_misses += 1
@@ -499,6 +516,7 @@ module ML::GGUF
         end
 
         if did_ordinary_prefill && (qbit_cache = @qbit_cache) && qbit_cache.write_back?
+          write_back_started = Time.instant
           begin
             qbit_cache.save(
               rendered,
@@ -511,6 +529,8 @@ module ML::GGUF
           rescue ex : IO::Error | ArgumentError
             @qbit_cache_write_failures += 1
             record_qbit_failure("write-back", ex)
+          ensure
+            @qbit_cache_write_back_time += Time.instant - write_back_started
           end
         end
 

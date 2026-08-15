@@ -17,6 +17,21 @@ private def reference_top_two(logits : Array(Float32), token_ids : Array(Int32))
 end
 
 describe ML::GGUF::Qwen35NativeRuntime do
+  it "exposes zero-cost QBit phase timing defaults" do
+    stats = NativeRuntime::QBitCacheStats.new(
+      hits: 0,
+      misses: 0,
+      rejections: 0,
+      transport_failures: 0,
+      restore_failures: 0,
+      writes: 0,
+      write_failures: 0,
+    )
+    stats.lookup_time.should eq(Time::Span.zero)
+    stats.restore_time.should eq(Time::Span.zero)
+    stats.write_back_time.should eq(Time::Span.zero)
+  end
+
   it "reports the selected backend without claiming CUDA or silent fallback" do
     auto_metal = NativeRuntime.backend_identity_for(
       QwenEngine::Backend::Auto,
