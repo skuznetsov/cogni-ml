@@ -24088,6 +24088,18 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   decay_trigger: logical hash algorithm, Native stream layout, cryptographic implementation, hardware, or trusted transport boundary change
   trust: {F:0.91,G:0.42,R:0.87}
 
+- claim: "The bounded ClickHouse HTTP client publishes a generation only after both artifact inserts and fails closed at the transport/admission boundary."
+  source: `src/ml/gguf/qwen_qbit_clickhouse_cache.cr` uses a random 256-bit generation, synchronous recurrent and KV inserts, and a final manifest insert as the commit marker. Lookups match the narrow cache id plus the full lookup key, fetch one exact generation, bound all streamed responses and their combined allocation, and run strict envelope admission before reuse. The focused safe suite passed `34 examples, 0 failures, 0 errors, 4 pending`, including injected pre-manifest failure, malformed/oversized response, unsafe-identifier, invalid-generation, combined-budget-before-KV-read, miss, and resident-reuse falsifiers.
+  verified_at: 2026-08-15
+  decay_trigger: ClickHouse client/schema, insert ordering, response bounds, envelope admission, or resident-cache ownership change
+  trust: {F:0.92,G:0.50,R:0.89}
+
+- claim: "A real five-block Qwen3.8 generation is practical over the bounded HTTP client, while strict cold admission remains materially slower than resident reuse."
+  source: a guarded local ClickHouse 26.7.1.1315 HTTP/SQL run stored 40,258,119 recurrent Native bytes plus 8,389,396 exact-KV bytes in 85.193ms. The first strict lookup took 80.150ms; manifest recheck plus immutable resident-admission reuse took 2.115ms. Active parts used 34,605,799 recurrent, 1,468,224 KV, and 2,017 manifest bytes on disk (36,076,040 total), 6.22% below the earlier matched 38,470,759-byte INT8 part for this state.
+  verified_at: 2026-08-15
+  decay_trigger: ClickHouse version/settings, HTTP transport, table schema, state distribution, admission hashing, host, or INT8 baseline change
+  trust: {F:0.91,G:0.37,R:0.87}
+
 **LTP/WBA:** Window: complete prepared-state cache hit. Transport: MergeTree QBit planes plus exact KV -> bounded ordered responses -> versioned strict admission -> prepared Metal state -> first post-restore forward. The legal move keeps natural block boundaries, exact KV, complete state ABI, and token parity. The internal envelope closes the representation/identity boundary and an immutable process-local `Admission` amortizes repeated validation, but the measured logical digest makes the first strict cold hit slower. The next legal move must establish a trusted ClickHouse transport/storage certificate or fuse verification with consumption; trusting a self-described manifest or skipping malformed-stream checks is rejected.
 
-**decision:** Keep the route diagnostic and default-off, but accept the measured compactness/latency trade for further engineering: 6.293% less ClickHouse disk for roughly 5-6% more warm cache-hit latency on this state before the new first-admission digest. The versioned internal envelope is built; next connect a bounded ClickHouse client and design a trusted transport/storage certificate that removes redundant first-hit hashing without weakening strict external-stream admission.
+**decision:** Keep the route default-off, but accept the measured compactness/latency trade for runtime integration: 6.22-6.29% less complete-state ClickHouse disk on this state, an 80.150ms strict HTTP lookup, and a 2.115ms manifest-rechecked resident lookup. The bounded client and manifest-last generation protocol are built. Next wire them behind an explicit cache flag with ordinary-prefill fallback, then design a trusted transport/storage certificate that removes redundant first-hit hashing without weakening strict external-stream admission.

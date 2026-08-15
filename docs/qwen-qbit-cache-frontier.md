@@ -3,18 +3,19 @@
 Document status: implementation-bounded
 
 Current frontier: a default-off p7 transport/restore experiment for recurrent
-Qwen cache state plus a bounded local ClickHouse physical-storage/read gate.
+Qwen cache state plus a bounded ClickHouse HTTP storage/read client.
 It may emit revision-0 ClickHouse Native blocks whose QBit column is already
 bit-transposed, validate an ordered multi-block Native response, decode logical
 records that cross response-block boundaries directly into prepared Metal state
 buffers, attach exact KV from a separate bounded artifact, compare a complete
 QBit cache-hit corridor against the matched INT8 artifact in alternating order,
 measure one isolated temporary MergeTree, and construct a versioned admission
-envelope for the split recurrent-QBit/exact-KV state. The envelope is not yet
-wired to a production ClickHouse client or the default prompt-cache route.
+envelope for the split recurrent-QBit/exact-KV state. The internal client is
+not yet wired to the default prompt-cache route.
 
-Bounded context: local `.qkv` state artifacts. ClickHouse storage and background
-part merges are a separate transport/storage context.
+Bounded context: local `.qkv` state artifacts and an explicitly configured
+ClickHouse HTTP endpoint. Background part merges are a separate storage context
+and never establish cache visibility or admission.
 
 ## Admitted surface
 
@@ -64,21 +65,35 @@ part merges are a separate transport/storage context.
   process-local certificate while their backing byte slices remain immutable.
   Repeated restores from that certificate need not reparse or rehash the same
   bytes.
+- The internal ClickHouse client may publish one random 256-bit generation by
+  inserting recurrent QBit and exact KV first, then inserting its manifest as
+  the commit marker. A failed artifact insert leaves no visible manifest;
+  incomplete generations are reclaimed later by TTL.
+- Lookups must match both the narrow `UInt64 cache_id` and the full 256-bit
+  lookup identity, select one completed generation, bound every streamed HTTP
+  response, and run strict envelope/artifact admission on the first process
+  hit. An optional byte-bounded resident admission cache may reuse that result
+  only after rechecking the current manifest; it is disabled by default.
+- Default response limits are 128 MiB for each artifact and 192 MiB combined,
+  with a 512 MiB hard configuration ceiling. After reading recurrent state, the
+  client uses the authenticated KV size from the manifest to reject an excessive
+  combined allocation before it starts the second large response.
 
 ## Rejected surface
 
-- No production prompt-cache default, ClickHouse lookup route, or compatibility
-  promise is added in this slice. Envelope schema v1 is an internal admission
-  boundary and may still change before production promotion.
+- No production prompt-cache default or compatibility promise is added in this
+  slice. Envelope schema v1 and the ClickHouse table schema are internal
+  boundaries and may still change before production promotion.
 - No claim that scalar MSE implies autoregressive parity.
 - No claim that ClickHouse background merges are on the cache-hit critical
   path: newly inserted rows must remain readable before a part merge completes.
-- No production ClickHouse client, TCP packet framing/compression, durable QBit
-  storage schema, CUDA decoder, or default cache route in this slice.
+- No native ClickHouse TCP packet framing/compression, automatic retry policy,
+  CUDA decoder, or default cache route in this slice. The current serving probe
+  uses bounded HTTP requests and synchronous inserts.
 - The diagnostic corridor starts with an already constructed internal state
   template and a cached first token. The separate admission envelope now covers
   identity and state completeness, but the corridor still does not execute a
-  key lookup, TCP framing, or a cache-miss fallback.
+  model-runtime cache-miss fallback or restore routing.
 - The manifest certificate is a deterministic integrity binding, not an HMAC,
   signature, or trust proof for bytes supplied by an untrusted store. A first
   strict cold admission must still verify the artifacts. Mutable backing bytes
@@ -94,8 +109,9 @@ part merges are a separate transport/storage context.
 - A trusted ClickHouse transport/storage certificate that can safely amortize
   the first logical digest, tied to the full lookup identity and returned
   artifact checksums rather than to a truncated row key alone.
-- A production client that joins recurrent QBit, exact KV, and the versioned
-  envelope with bounded response handling and an explicit cache-miss fallback.
+- Runtime wiring that uses the bounded client behind an explicit default-off
+  flag, restores the admitted state, and falls back to ordinary prefill on a
+  miss or rejected generation.
 - ClickHouse storage using fixed-size tiles and independently readable bit
   planes.
 - Progressive fetch or fallback from 6/7 planes to the full 8-plane code.
@@ -146,6 +162,10 @@ part merges are a separate transport/storage context.
 - The logical recurrent digest must remain identical when ClickHouse legally
   reblocks the same ordered rows; raw transport-byte hashes are not a valid
   substitute for logical artifact identity.
+- Failure before the final manifest insert must not publish a generation.
+  Duplicate or partial artifact rows, an invalid generation id, an unsafe SQL
+  identifier, a malformed manifest, and any oversized response must fail closed
+  before state admission.
 
 ## Stop rules
 
@@ -389,6 +409,38 @@ corridor. It is a material first-cold-admission cost, not a free optimization;
 eliminating it requires a trusted transport/storage certificate or validation
 fused with data consumption, not merely trusting the self-described manifest.
 
+### Bounded ClickHouse HTTP client gate (2026-08-15)
+
+The internal client now owns three generation-scoped MergeTree tables:
+recurrent QBit rows, one exact-KV blob, and a manifest. It inserts both artifact
+tables synchronously before publishing the manifest. Readers first select one
+unexpired manifest by the narrow cache id plus the full lookup key, then fetch
+only that random 256-bit generation. TTL cleans up expired committed and orphan
+artifact generations in the background; merges are not a visibility barrier.
+
+Focused fake-transport tests cover manifest-last ordering, failure before
+publication, strict first admission, misses without artifact reads, malformed
+or oversized manifests, safe SQL identifiers, invalid generation ids, per-file
+and combined allocation bounds, streamed reads, and resident admission reuse.
+The guarded QBit suite passed 34
+examples with zero failures or errors; four Metal-only examples were pending on
+the unavailable device.
+
+A real HTTP/SQL gate against local ClickHouse 26.7.1.1315 then stored the natural
+five-block Qwen3.8 artifact: 40,258,119 recurrent Native bytes plus an 8,389,396
+byte exact-KV artifact. The synchronous three-insert save took 85.193 ms; the
+first strict lookup, including both artifact reads, parsing, exact-KV SHA-256,
+and reblocking-stable recurrent digest, took 80.150 ms. Rechecking the manifest
+and reusing the immutable process-local admission took 2.115 ms. Active parts
+occupied 34,605,799 recurrent bytes, 1,468,224 KV bytes, and 2,017 manifest
+bytes on disk (36,076,040 total). This is 6.22% below the matched 38,470,759-byte
+INT8 part from the earlier complete-state gate, not a general compression SLA.
+
+The resident result is deliberately byte-bounded and disabled by default. It
+does not make the first cold admission trusted, and it retains the artifact
+buffers while resident. Runtime integration therefore needs an explicit memory
+budget and a miss/rejection fallback before promotion.
+
 ### ClickHouse boundary probe
 
 Local ClickHouse 26.8.1.1 on the Apple M2 Max was tested with incompressible
@@ -413,13 +465,13 @@ parts to 56.51 MiB, merged them in 104 ms, and read+hashed the seven retained
 plane subcolumns in 27 ms. This validates the compact physical direction and
 selective-plane read path.
 
-The SQL insertion route is a negative result: constructing arrays and casting
+The SQL array-construction route is a negative result: constructing arrays and casting
 them to QBit took 116-156 ms per 8 MiB logical part because ClickHouse had to
 transpose the codes. Cogni-ml now writes the pre-transposed revision-zero Native
-QBit streams and restores the same columnar representation directly on Metal.
-Production TCP framing/compression remains unimplemented and must be benchmarked
-before promotion. Multi-block Native response handling is implemented only in
-the bounded diagnostic/state-restore path, not as a production cache client.
+QBit streams, sends them through the bounded HTTP client, and restores the same
+columnar representation directly on Metal. Native TCP framing/compression
+remains unimplemented and may be benchmarked later; it is not required for the
+default-off HTTP route. Runtime miss/fallback wiring remains open.
 
 Production storage should batch all tiles for one or more cache keys per insert
 to avoid part-count pressure. Background merges should perform cleanup and
@@ -427,13 +479,14 @@ compaction, never admission or visibility.
 
 ### Cache-engine contract
 
-- The internal envelope now makes cache keys content-addressed over model,
+- The internal envelope makes cache keys content-addressed over model,
   tokenizer/chat-template, engine/state ABI, prompt tokens, QBit block/precision,
-  and artifact codec version. A production client must use the same full
-  identity after the narrow `UInt64` ClickHouse lookup.
-- Insert every tile of one artifact in one batch and persist expected tile
-  count plus an artifact digest. Restore fails closed on missing, duplicate, or
-  mismatched tiles; it never waits for `FINAL` or a merge.
+  and artifact codec version. The client checks this full identity after the
+  narrow `UInt64` ClickHouse lookup.
+- Insert every tile of one artifact in one batch under a fresh generation and
+  persist expected tile count plus an artifact digest. Publish its manifest
+  last. Restore fails closed on missing, duplicate, or mismatched tiles; it
+  never waits for `FINAL` or a merge.
 - Store recurrent state as 1024-code QBit tiles with per-tile mean, sigma, value
   count, record kind, layer, and tile ordinal. Keep live KV chunks separately
   because their length follows the cached sequence rather than the recurrent

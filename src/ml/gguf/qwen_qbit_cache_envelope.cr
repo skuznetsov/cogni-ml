@@ -264,6 +264,13 @@ module ML::GGUF
       Admission.new(entry, stream, exact)
     end
 
+    # Validate the manifest and its full lookup context before artifact reads.
+    # Artifact content still requires `admit` unless a previously issued
+    # process-local Admission for the same immutable generation is retained.
+    def validate_manifest!(entry : Entry, context : Context) : Nil
+      validate_entry!(entry, context)
+    end
+
     def certificate_id(entry : Entry) : String
       io = IO::Memory.new
       write_string(io, "qwen-qbit-cache-certificate-v1")
