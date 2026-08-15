@@ -17,6 +17,7 @@ private class FakeQwen35EngineRuntime < QwenEngine::Runtime
   property score_labels_result_backend : QwenEngine::BackendIdentity?
   property generate_result_route : QwenEngine::Route = QwenEngine::Route::GenerateGreedy
   property generate_result_reasoning_effort : QwenEngine::ReasoningEffort?
+  property generate_checkpoint_id : String?
   property score_labels_result_route : QwenEngine::Route = QwenEngine::Route::ScoreLabels
   property preflight_result_operation : QwenEngine::Route?
   property generate_token_ids : Array(Int32) = [7_i32]
@@ -54,6 +55,7 @@ private class FakeQwen35EngineRuntime < QwenEngine::Runtime
       backend: @generate_result_backend || route.backend,
       route: @generate_result_route,
       reasoning_effort: @generate_result_reasoning_effort || request.reasoning_effort,
+      checkpoint_id: @generate_checkpoint_id,
     )
   end
 
@@ -130,6 +132,16 @@ describe ML::GGUF::Qwen35Engine do
     expect_raises(ArgumentError, /at least one message/) do
       engine.generate(QwenEngine::GenerateRequest.new(messages: [] of QwenEngine::Message, max_tokens: 8))
     end
+
+    expect_raises(ArgumentError, /requires session_id/) do
+      engine.generate(
+        QwenEngine::GenerateRequest.new(
+          messages: [QwenEngine::Message.new("user", "hello")],
+          max_tokens: 8,
+          checkpoint_id: "a" * 64,
+        )
+      )
+    end
     expect_raises(ArgumentError, /max_tokens/) do
       engine.generate(
         QwenEngine::GenerateRequest.new(
@@ -150,6 +162,33 @@ describe ML::GGUF::Qwen35Engine do
 
     runtime.generate_calls.should eq(0)
     runtime.preflight_calls.should be_empty
+  end
+
+  it "binds session checkpoint requests and results at the engine boundary" do
+    runtime = FakeQwen35EngineRuntime.new(fake_qwen_identity)
+    runtime.generate_checkpoint_id = "b" * 64
+    engine = QwenEngine.new(runtime)
+
+    result = engine.generate(
+      QwenEngine::GenerateRequest.new(
+        messages: [QwenEngine::Message.new("user", "hello")],
+        max_tokens: 1,
+        session_id: "session-a",
+        checkpoint_id: "a" * 64,
+      )
+    )
+    result.checkpoint_id.should eq("b" * 64)
+
+    runtime.generate_checkpoint_id = nil
+    expect_raises(Exception, /checkpoint/) do
+      engine.generate(
+        QwenEngine::GenerateRequest.new(
+          messages: [QwenEngine::Message.new("user", "hello")],
+          max_tokens: 1,
+          session_id: "session-a",
+        )
+      )
+    end
   end
 
   it "scores constrained labels through a preflight route" do

@@ -121,19 +121,20 @@ describe ML::GGUF::QwenQBitClickHouseCache do
     store.create_schema
     saved = store.save(context, native, kv, ttl: 30.minutes, created_at_unix: 100_i64)
 
-    transport.requests.size.should eq(8)
+    transport.requests.size.should eq(9)
     transport.requests[0].query.should contain("CREATE TABLE IF NOT EXISTS qwen_cache_test_recurrent")
     transport.requests[1].query.should contain("CREATE TABLE IF NOT EXISTS qwen_cache_test_kv")
     transport.requests[2].query.should contain("CREATE TABLE IF NOT EXISTS qwen_cache_test_manifest")
     transport.requests[3].query.should contain("CREATE TABLE IF NOT EXISTS qwen_cache_test_prefix_index")
-    transport.requests[4].query.should contain("INSERT INTO qwen_cache_test_recurrent")
-    transport.requests[5].query.should contain("INSERT INTO qwen_cache_test_kv")
-    transport.requests[6].query.should contain("INSERT INTO qwen_cache_test_manifest")
-    transport.requests[7].query.should contain("INSERT INTO qwen_cache_test_prefix_index")
-    transport.requests[4].query.should contain(envelope.lookup_key(context))
-    transport.requests[4].query.should contain(saved.generation_id)
-    String.new(transport.requests[6].body).should eq(saved.entry.to_json)
+    transport.requests[4].query.should contain("CREATE TABLE IF NOT EXISTS qwen_cache_test_checkpoints")
+    transport.requests[5].query.should contain("INSERT INTO qwen_cache_test_recurrent")
+    transport.requests[6].query.should contain("INSERT INTO qwen_cache_test_kv")
+    transport.requests[7].query.should contain("INSERT INTO qwen_cache_test_manifest")
+    transport.requests[8].query.should contain("INSERT INTO qwen_cache_test_prefix_index")
+    transport.requests[5].query.should contain(envelope.lookup_key(context))
+    transport.requests[5].query.should contain(saved.generation_id)
     String.new(transport.requests[7].body).should eq(saved.entry.to_json)
+    String.new(transport.requests[8].body).should eq(saved.entry.to_json)
     saved.expires_at_unix.should eq(1_900_i64)
   end
 
@@ -352,6 +353,112 @@ describe ML::GGUF::QwenQBitClickHouseCache do
 
     expect_raises(ArgumentError, /candidate limit/) do
       store.lookup_longest_prefix(prefix, tokens)
+    end
+    transport.requests.should be_empty
+  end
+
+  it "stores and retrieves a session checkpoint by id or longest transcript prefix" do
+    transport = QBitCHMemoryTransport.new
+    store = ML::GGUF::QwenQBitClickHouseCache::Store.new(
+      ML::GGUF::QwenQBitClickHouseCache::Config.new(table_prefix: "qwen_cache_test"),
+      transport,
+    )
+    context = qbit_ch_context
+    native, kv = qbit_ch_artifacts(context)
+    anchor = envelope.build(context, native, kv, created_at_unix: 100_i64)
+    tokens = [11_i32, 22_i32, 33_i32]
+    checkpoint = ML::GGUF::QwenQBitSessionCheckpoint.build_anchor(
+      session_id: "session-a",
+      checkpoint_id: "7" * 64,
+      parent_checkpoint_id: nil,
+      anchor_cache_id: anchor.cache_id,
+      anchor_lookup_key: envelope.lookup_key(context),
+      anchor_generation_id: "8" * 64,
+      anchor_certificate_id: anchor.certificate_id,
+      token_ids: tokens,
+      boundary_text: "rendered-boundary-a<|im_end|>\n",
+      created_at_unix: 100_i64,
+      expires_at_unix: 1_000_i64,
+    )
+
+    store.save_checkpoint(checkpoint)
+    transport.requests.last.query.should contain("INSERT INTO qwen_cache_test_checkpoints")
+    String.new(transport.requests.last.body).should eq(checkpoint.to_json)
+
+    transport.queue(checkpoint.to_json.to_slice)
+    rendered = "rendered-boundary-a<|im_end|>\ncontinuation"
+    continuation_tokens = tokens + [44_i32]
+    explicit = store.lookup_checkpoint("session-a", checkpoint.checkpoint_id, rendered, continuation_tokens).not_nil!
+    explicit.checkpoint_id.should eq(checkpoint.checkpoint_id)
+    transport.requests.last.query.should contain(checkpoint.checkpoint_id)
+
+    transport.queue(checkpoint.to_json.to_slice)
+    latest = store.lookup_latest_checkpoint("session-a", rendered, continuation_tokens).not_nil!
+    latest.checkpoint_id.should eq(checkpoint.checkpoint_id)
+    transport.requests.last.query.should contain(checkpoint.boundary_text_hash)
+    transport.requests.last.query.should contain("ORDER BY boundary_text_bytes DESC")
+
+    transport.queue(checkpoint.to_json.to_slice)
+    expect_raises(ArgumentError, /child token hash/) do
+      store.lookup_checkpoint(
+        "session-a",
+        checkpoint.checkpoint_id,
+        rendered,
+        [11_i32, 99_i32, 33_i32, 44_i32],
+      )
+    end
+  end
+
+  it "restores only the immutable anchor generation named by a validated checkpoint" do
+    transport = QBitCHMemoryTransport.new
+    store = ML::GGUF::QwenQBitClickHouseCache::Store.new(
+      ML::GGUF::QwenQBitClickHouseCache::Config.new(table_prefix: "qwen_cache_test"),
+      transport,
+    )
+    context = qbit_ch_context
+    native, kv = qbit_ch_artifacts(context)
+    anchor = envelope.build(context, native, kv, created_at_unix: 100_i64)
+    generation = "8" * 64
+    tokens = [11_i32, 22_i32, 33_i32]
+    checkpoint = ML::GGUF::QwenQBitSessionCheckpoint.build_anchor(
+      session_id: "session-a",
+      checkpoint_id: "7" * 64,
+      parent_checkpoint_id: nil,
+      anchor_cache_id: anchor.cache_id,
+      anchor_lookup_key: envelope.lookup_key(context),
+      anchor_generation_id: generation,
+      anchor_certificate_id: anchor.certificate_id,
+      token_ids: tokens,
+      boundary_text: "rendered-boundary-a<|im_end|>\n",
+      created_at_unix: 100_i64,
+      expires_at_unix: 1_000_i64,
+    )
+    transport.queue(anchor.to_json.to_slice)
+    transport.queue(native)
+    transport.queue(kv)
+
+    admitted = store.lookup_checkpoint_anchor(
+      checkpoint,
+      envelope.prefix_context(context),
+    ).not_nil!
+
+    admitted.entry.certificate_id.should eq(anchor.certificate_id)
+    transport.requests.size.should eq(3)
+    transport.requests[0].query.should contain(generation)
+    transport.requests[1].query.should contain(generation)
+    transport.requests[2].query.should contain(generation)
+  end
+
+  it "bounds completed-message checkpoint candidates before constructing SQL" do
+    transport = QBitCHMemoryTransport.new
+    store = ML::GGUF::QwenQBitClickHouseCache::Store.new(
+      ML::GGUF::QwenQBitClickHouseCache::Config.new(table_prefix: "qwen_cache_test"),
+      transport,
+    )
+    rendered = "<|im_end|>\n" * (ML::GGUF::QwenQBitSessionCheckpoint::MAX_BOUNDARY_CANDIDATES + 1)
+
+    expect_raises(ArgumentError, /candidate limit/) do
+      store.lookup_latest_checkpoint("session-a", rendered, [1_i32])
     end
     transport.requests.should be_empty
   end

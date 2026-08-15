@@ -100,6 +100,18 @@ and never establish cache visibility or admission.
   write back a freshly prefetched state after a miss, using one-step
   exact-known-span validation derived from `prompt_tokens + next_token`. The
   route is disabled by default and has an explicit bounded TTL.
+- A session checkpoint lookup must match the caller-owned rendered transcript
+  boundary and the exact token prefix independently. Text equality alone is
+  insufficient because Qwen generation prompts contain control tokens that are
+  not reproduced by rendering a completed assistant message.
+- A full session anchor is rebuilt at the exact completed-transcript token
+  boundary with the conservative sequential prefill route. Descendants store
+  only the cumulative exact token suffix, parent/anchor identities, transcript
+  boundary hash, and certificate. The referenced anchor artifact retains the
+  next-token validation; delta metadata does not invent a cached next token.
+- Session checkpoint chains are immutable and branchable. Delta depth is
+  bounded to eight and replay to 512 tokens; crossing either limit requires a
+  new full anchor. Session identities are stored only as SHA-256 hashes.
 - Restore always targets a fresh state. A miss, transport failure, admission
   rejection, or validation/shape restore error discards that state before the
   existing local cache or ordinary prefill route is attempted. A system or
@@ -220,8 +232,8 @@ and never establish cache visibility or admission.
   lookup, artifact read, Metal restore, suffix replay, and first continuation.
 - A delta checkpoint must bind its session hash, parent checkpoint, immutable
   anchor generation and certificate, anchor prefix hash, exact cumulative token
-  suffix, child prefix hash, and cached next-token validation. Mutation of any
-  field or token must fail before state becomes reusable.
+  suffix, child prefix hash, and completed-transcript text boundary. Mutation
+  of any field or token must fail before state becomes reusable.
 - Explicit rollback must reject a checkpoint from another session and a
   checkpoint whose child token sequence is not a prefix of the supplied
   caller-authoritative transcript. Branches from one anchor remain distinct.
@@ -505,6 +517,52 @@ The resident result is deliberately byte-bounded and disabled by default. It
 does not make the first cold admission trusted, and it retains the artifact
 buffers while resident. Runtime integration therefore needs an explicit memory
 budget and a miss/rejection fallback before promotion.
+
+### Incremental session checkpoint gate (2026-08-15)
+
+A guarded Qwen3.8 27B run exercised a five-action transcript at 323/512 prompt
+tokens, a sixth cold restore, and a rollback branch from checkpoint three.
+Every model process started with at least 82% free system memory. Explicit
+checkpoint lookup, QBit anchor admission, exact suffix replay, delta write, and
+rollback all completed without rejection, transport failure, restore failure,
+or write failure. A matched no-cache action-five run produced the same three
+token ids as the checkpoint chain. After hardening the exceptional cleanup
+path, a fresh one-state-at-a-time repeat measured 13,819.210 ms for the full
+anchor and 3,208.706 ms for its first cold continuation, again with 82% free
+memory and zero cache failures.
+
+The first full anchor exposed and closed two correctness falsifiers. Whole-text
+BPE tokenization was not assumed to be append-stable, and the Qwen generation
+prompt's hidden `<think>...</think>` suffix was not treated as part of the
+caller transcript. The runtime now re-tokenizes the completed transcript and
+requires both text-boundary and exact token-prefix equality at lookup. The
+token-parallel anchor rebuild then produced a non-finite layer-1 ConvState on
+this boundary; QBit rejected it before publication. Full anchors therefore use
+a sequential exact-boundary prefill, while normal generation and suffix replay
+retain their accelerated paths.
+
+| Cold-process phase | Prompt tokens | Reused / replayed | Generate total | Checkpoint write |
+| --- | ---: | ---: | ---: | ---: |
+| full anchor, action 1 | 79 | 0 / 0 | 13,350.687 ms | 2,529.422 ms |
+| delta, action 2 | 140 | 80 / 60 | 3,057.119 ms | 3.648 ms |
+| delta, action 5 | 323 | 80 / 243 | 4,319.855 ms | 3.624 ms |
+| cold restore, action 6 | 350 | 80 / 270 | 4,600.911 ms | 3.496 ms |
+| rollback checkpoint 3 | 229 | 80 / 149 | 4,091.331 ms | 3.953 ms |
+| matched no-cache action 5 | 323 | 0 / 0 | 4,792.591 ms | none |
+
+The action-five cold checkpoint path was 9.9% faster than its matched full
+prefill in this single local sample. This is not a latency SLA: the fixed
+80-token anchor means the advantage shrinks as replay grows, and the first
+exact anchor is deliberately expensive. Periodic anchors are currently
+synchronous; background materialization remains outside the admitted surface.
+
+ClickHouse 26.7.1.1315 stored the one full anchor in 32.98 MiB of recurrent
+QBit parts plus 10.26 MiB of exact-KV parts. Seven checkpoint rows, including
+the restore and rollback branches, occupied 6.42 KiB compressed versus
+18.16 KiB uncompressed. Individual JSON envelopes grew from 1,529 bytes for
+the anchor checkpoint to 2,909 bytes for the deepest measured delta. Thus the
+incremental metadata is compact; retained full anchors, not MergeTree merges or
+delta rows, dominate storage and materialization cost.
 
 ### ClickHouse boundary probe
 

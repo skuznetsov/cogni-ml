@@ -87,7 +87,9 @@ module ML::GGUF
       max_tokens : Int32,
       temperature : Float64 = 0.0,
       max_seq : Int32? = nil,
-      reasoning_effort : ReasoningEffort = ReasoningEffort::None
+      reasoning_effort : ReasoningEffort = ReasoningEffort::None,
+      session_id : String? = nil,
+      checkpoint_id : String? = nil
 
     record GenerateResult,
       text : String,
@@ -96,7 +98,8 @@ module ML::GGUF
       completion_tokens : Int32,
       backend : BackendIdentity,
       route : Route,
-      reasoning_effort : ReasoningEffort = ReasoningEffort::None
+      reasoning_effort : ReasoningEffort = ReasoningEffort::None,
+      checkpoint_id : String? = nil
 
     record Label,
       name : String,
@@ -257,11 +260,31 @@ module ML::GGUF
       request.messages.each do |message|
         raise ArgumentError.new("message role must not be empty") if message.role.strip.empty?
       end
+      if session_id = request.session_id
+        unless session_id.bytesize > 0 && session_id.bytesize <= 1024
+          raise ArgumentError.new("generation session_id is outside 1..1024 bytes")
+        end
+      elsif request.checkpoint_id
+        raise ArgumentError.new("generation checkpoint_id requires session_id")
+      end
+      if checkpoint_id = request.checkpoint_id
+        unless checkpoint_id.matches?(/\A[0-9a-f]{64}\z/)
+          raise ArgumentError.new("generation checkpoint_id is invalid")
+        end
+      end
     end
 
     private def validate_generate_result!(request : GenerateRequest, result : GenerateResult) : Nil
       unless result.reasoning_effort == request.reasoning_effort
         raise "runtime reasoning effort #{result.reasoning_effort} does not match requested #{request.reasoning_effort}"
+      end
+      if request.session_id
+        checkpoint_id = result.checkpoint_id
+        unless checkpoint_id && checkpoint_id.matches?(/\A[0-9a-f]{64}\z/)
+          raise "runtime did not return a valid session checkpoint"
+        end
+      elsif result.checkpoint_id
+        raise "runtime returned a checkpoint for a request without session_id"
       end
       raise "runtime returned a negative prompt token count" if result.prompt_tokens < 0
       raise "runtime returned a negative completion token count" if result.completion_tokens < 0

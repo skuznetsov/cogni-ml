@@ -1,11 +1,15 @@
 require "./qwen_qbit_clickhouse_cache"
 require "./qwen_qbit_state_snapshot"
+require "random/secure"
 
 module ML::GGUF
   # Prefix-aware adapter between Qwen35NativeRuntime and the bounded ClickHouse
   # QBit store. The store restores only an admitted state boundary; the runtime
   # deterministically replays any request suffix with the live model.
   class Qwen35QBitRuntimeCache
+    class CheckpointRejected < ArgumentError
+    end
+
     BLOCK_SIZE      = QwenQBitClickHouseCache::QBIT_BLOCK_SIZE
     PRECISION       = QwenQBitCacheEnvelope::REQUIRED_PRECISION
     MAX_TTL_SECONDS = 365_i64 * 24 * 60 * 60
@@ -23,6 +27,10 @@ module ML::GGUF
         cached_next_token
       end
     end
+
+    record SessionHit,
+      checkpoint : QwenQBitSessionCheckpoint::Entry,
+      admission : QwenQBitCacheEnvelope::Admission
 
     getter write_back_max_source_bytes : Int64
 
@@ -76,6 +84,54 @@ module ML::GGUF
         self.class.replay_plan(admitted.entry, prompt_ids, vocab_size)
       end
       admission
+    end
+
+    def lookup_session_checkpoint(session_id : String,
+                                  checkpoint_id : String?,
+                                  rendered : String,
+                                  prompt_ids : Array(Int32),
+                                  max_seq : Int32,
+                                  state_abi : QwenQBitCacheEnvelope::StateABI,
+                                  vocab_size : Int32) : SessionHit?
+      checkpoint = if selected = checkpoint_id
+                     @store.lookup_checkpoint(
+                       session_id,
+                       selected,
+                       rendered,
+                       prompt_ids,
+                     )
+                   else
+                     @store.lookup_latest_checkpoint(
+                       session_id,
+                       rendered,
+                       prompt_ids,
+                     )
+                   end
+      unless checkpoint
+        if checkpoint_id
+          raise CheckpointRejected.new("requested QBit session checkpoint was not found or expired")
+        end
+        return nil
+      end
+      admission = @store.lookup_checkpoint_anchor(
+        checkpoint,
+        prefix_context(max_seq, state_abi),
+      )
+      unless admission
+        if checkpoint_id
+          raise CheckpointRejected.new("requested QBit session checkpoint anchor was not found or expired")
+        end
+        return nil
+      end
+      self.class.validate_cached_outcome!(admission.entry, checkpoint.anchor_token_ids, vocab_size)
+      SessionHit.new(checkpoint, admission)
+    rescue ex : CheckpointRejected
+      raise ex
+    rescue ex : ArgumentError
+      if checkpoint_id
+        raise CheckpointRejected.new("requested QBit session checkpoint was rejected: #{ex.message}")
+      end
+      raise ex
     end
 
     def restore(admission : QwenQBitCacheEnvelope::Admission,
@@ -134,6 +190,59 @@ module ML::GGUF
       kv_snapshot = self.class.exact_kv_snapshot(snapshot, prompt_ids.size.to_i32)
       kv_artifact = Qwen35StateSnapshot.encode_artifact_bytes(kv_snapshot)
       @store.save(context, recurrent_native, kv_artifact, ttl: @ttl)
+    end
+
+    def save_checkpoint(session_id : String,
+                        boundary_text : String,
+                        boundary_token_ids : Array(Int32),
+                        next_token_id : Int32?,
+                        hp : Qwen35Hparams,
+                        state : Qwen35CPU::State,
+                        parent : QwenQBitSessionCheckpoint::Entry? = nil) : QwenQBitSessionCheckpoint::Entry
+      raise ArgumentError.new("QBit runtime write-back is disabled") unless write_back?
+      checkpoint_id = Random::Secure.hex(32)
+      created_at_unix = Time.utc.to_unix
+      if previous = parent
+        if QwenQBitSessionCheckpoint.delta_admissible?(previous, boundary_token_ids)
+          checkpoint = QwenQBitSessionCheckpoint.build_delta(
+            session_id: session_id,
+            checkpoint_id: checkpoint_id,
+            parent: previous,
+            token_ids: boundary_token_ids,
+            boundary_text: boundary_text,
+            created_at_unix: created_at_unix,
+          )
+          return @store.save_checkpoint(checkpoint)
+        end
+      end
+
+      anchor_next_token_id = next_token_id
+      unless anchor_next_token_id
+        raise ArgumentError.new("QBit checkpoint anchor requires an exact next token")
+      end
+      saved = save(boundary_text, boundary_token_ids, anchor_next_token_id, hp, state)
+      checkpoint = QwenQBitSessionCheckpoint.build_anchor(
+        session_id: session_id,
+        checkpoint_id: checkpoint_id,
+        parent_checkpoint_id: parent.try(&.checkpoint_id),
+        anchor_cache_id: saved.entry.cache_id,
+        anchor_lookup_key: QwenQBitCacheEnvelope.lookup_key(
+          lookup_context(boundary_text, boundary_token_ids, state.max_seq, QwenQBitCacheEnvelope.state_abi(hp, state.max_seq))
+        ),
+        anchor_generation_id: saved.generation_id,
+        anchor_certificate_id: saved.entry.certificate_id,
+        token_ids: boundary_token_ids,
+        boundary_text: boundary_text,
+        created_at_unix: saved.entry.created_at_unix,
+        expires_at_unix: saved.expires_at_unix,
+      )
+      @store.save_checkpoint(checkpoint)
+    end
+
+    def checkpoint_requires_anchor?(parent : QwenQBitSessionCheckpoint::Entry?,
+                                    boundary_token_ids : Array(Int32)) : Bool
+      return true unless previous = parent
+      !QwenQBitSessionCheckpoint.delta_admissible?(previous, boundary_token_ids)
     end
 
     # Qwen35 State#position is currently advisory and is not bumped by every

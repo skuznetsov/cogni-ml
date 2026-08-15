@@ -2562,6 +2562,29 @@ module ML::GGUF
       forward_top1(weights, token_ids[-1], start_pos + token_ids.size - 1, state)
     end
 
+    # Conservative exact-boundary path for durable checkpoint anchors. Unlike
+    # the token-parallel prefill routes, every consumed token retires through
+    # the ordinary decode path before the next state mutation. This is slower,
+    # but full anchors are periodic and must never serialize padded tail state.
+    def prefill_tokens_top1_sequential(weights : Qwen35Weights,
+                                       token_ids : Array(Int32),
+                                       start_pos : Int32,
+                                       state : State) : {Int32, Float32}
+      raise ArgumentError.new("prefill_tokens_top1_sequential token_ids must not be empty") if token_ids.empty?
+      if token_ids.size > 1 && prefill_gc_guard_enabled? && !@@prefill_gc_guard_active
+        return with_prefill_gc_guard do
+          prefill_tokens_top1_sequential(weights, token_ids, start_pos, state)
+        end
+      end
+
+      if token_ids.size > 1
+        token_ids[0...-1].each_with_index do |token_id, i|
+          forward_hidden(weights, token_id, start_pos + i, state)
+        end
+      end
+      forward_top1(weights, token_ids[-1], start_pos + token_ids.size - 1, state)
+    end
+
     # Process a known token span and return the greedy next-token prediction
     # after each consumed token. This is the exact target-verifier primitive for
     # greedy speculative decode: candidate[i+1] is checked against result[i].

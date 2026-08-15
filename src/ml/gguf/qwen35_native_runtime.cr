@@ -383,6 +383,15 @@ module ML::GGUF
         validate_route!(Qwen35Engine::Route::GenerateGreedy, route)
         validate_generate_request!(request)
         self.class.validate_reasoning_effort_supported!(request.reasoning_effort, @reasoning_effort_supported)
+        if request.session_id
+          qbit_cache = @qbit_cache
+          unless qbit_cache && qbit_cache.write_back?
+            raise ArgumentError.new("session checkpoints require QBit write-back")
+          end
+          unless route.backend.primary.metal?
+            raise ArgumentError.new("session checkpoints require the QBit Metal restore route")
+          end
+        end
         tokenizer, weights = resources
         limit = self.class.effective_max_seq(@max_seq, request.max_seq)
         rendered = render_messages(
@@ -391,36 +400,63 @@ module ML::GGUF
         )
         prompt_ids = tokenizer.encode(rendered, add_bos_override: false)
         raise ArgumentError.new("Qwen35NativeRuntime generated prompt is empty") if prompt_ids.empty?
-        if prompt_ids.size + request.max_tokens > limit
-          raise ArgumentError.new("generation request exceeds max_seq #{limit}")
-        end
 
         state = nil.as(Qwen35CPU::State?)
         next_token = nil.as(Int32?)
         did_ordinary_prefill = false
         did_qbit_suffix_prefill = false
+        restored_session_checkpoint = nil.as(QwenQBitSessionCheckpoint::Entry?)
 
         if qbit_cache = @qbit_cache
           # Native QBit restore is currently a Metal-only route. CPU requests
           # retain their existing local-cache/prefill behavior unchanged.
           if route.backend.primary.metal?
             admission = nil.as(QwenQBitCacheEnvelope::Admission?)
+            session_hit = nil.as(Qwen35QBitRuntimeCache::SessionHit?)
             lookup_completed = false
             lookup_started = Time.instant
             begin
-              admission = qbit_cache.lookup_longest_prefix(
+              state_abi = QwenQBitCacheEnvelope.state_abi(weights.hparams, limit)
+              if session_id = request.session_id
+                session_hit = qbit_cache.lookup_session_checkpoint(
+                  session_id,
+                  request.checkpoint_id,
+                  rendered,
+                  prompt_ids,
+                  limit,
+                  state_abi,
+                  tokenizer.vocab.size.to_i32,
+                )
+                if hit = session_hit
+                  admission = hit.admission
+                end
+              end
+              if prompt_ids.size + request.max_tokens > limit
+                raise ArgumentError.new("generation request exceeds max_seq #{limit}")
+              end
+              admission ||= qbit_cache.lookup_longest_prefix(
                 prompt_ids,
                 limit,
-                QwenQBitCacheEnvelope.state_abi(weights.hparams, limit),
+                state_abi,
                 tokenizer.vocab.size.to_i32,
               )
               lookup_completed = true
+            rescue ex : Qwen35QBitRuntimeCache::CheckpointRejected
+              @qbit_cache_rejections += 1
+              record_qbit_failure("checkpoint lookup", ex)
+              raise ex
             rescue ex : IO::Error
               @qbit_cache_transport_failures += 1
               record_qbit_failure("lookup transport", ex)
+              raise ex if request.checkpoint_id
             rescue ex : ArgumentError
               @qbit_cache_rejections += 1
               record_qbit_failure("lookup admission", ex)
+              if request.checkpoint_id
+                raise Qwen35QBitRuntimeCache::CheckpointRejected.new(
+                  "requested QBit session checkpoint was rejected: #{ex.message}"
+                )
+              end
             ensure
               @qbit_cache_lookup_time += Time.instant - lookup_started
             end
@@ -463,10 +499,16 @@ module ML::GGUF
                     @qbit_cache_hits += 1
                     @qbit_cache_reused_prefix_tokens += replay.prefix_len
                     @qbit_cache_replayed_suffix_tokens += replay.replayed_tokens
+                    restored_session_checkpoint = session_hit.try(&.checkpoint)
                   rescue ex : ArgumentError
                     release_state_metal!(candidate) if candidate
                     @qbit_cache_restore_failures += 1
                     record_qbit_failure("restore admission", ex)
+                    if request.checkpoint_id
+                      raise Qwen35QBitRuntimeCache::CheckpointRejected.new(
+                        "requested QBit session checkpoint restore was rejected: #{ex.message}"
+                      )
+                    end
                   rescue ex
                     # Do not retry a full prefill after a system/Metal failure:
                     # that can compound memory pressure. Release the partial
@@ -484,6 +526,10 @@ module ML::GGUF
               end
             end
           end
+        end
+
+        if prompt_ids.size + request.max_tokens > limit
+          raise ArgumentError.new("generation request exceeds max_seq #{limit}")
         end
 
         if state.nil? && (cache = @prompt_cache)
@@ -540,7 +586,8 @@ module ML::GGUF
           did_ordinary_prefill = true
         end
 
-        if (did_ordinary_prefill || did_qbit_suffix_prefill) &&
+        result_checkpoint_id = nil.as(String?)
+        if request.session_id.nil? && (did_ordinary_prefill || did_qbit_suffix_prefill) &&
            (qbit_cache = @qbit_cache) && qbit_cache.write_back?
           write_back_started = Time.instant
           begin
@@ -574,14 +621,70 @@ module ML::GGUF
           pos += 1
         end
 
+        output_text = tokenizer.decode(output_ids)
+        if session_id = request.session_id
+          boundary_text = render_messages(
+            request.messages + [Qwen35Engine::Message.new("assistant", output_text)],
+            add_generation_prompt: false,
+            reasoning_effort: request.reasoning_effort,
+          )
+          boundary_token_ids = tokenizer.encode(boundary_text, add_bos_override: false)
+          if boundary_token_ids.empty? || boundary_token_ids.size > limit
+            raise ArgumentError.new("QBit checkpoint transcript token boundary is outside max_seq #{limit}")
+          end
+          qbit_cache = @qbit_cache.not_nil!
+          checkpoint_next_token = nil.as(Int32?)
+          checkpoint_state = decode_state
+          write_back_started = nil.as(Time::Instant?)
+          begin
+            if qbit_cache.checkpoint_requires_anchor?(restored_session_checkpoint, boundary_token_ids)
+              # The generation prompt may contain control tokens that are not
+              # reproduced when the completed assistant message is rendered.
+              # Rebuild only full anchors at the exact public transcript token
+              # boundary; deltas remain token metadata and need no second prefill.
+              release_state_metal!(decode_state)
+              checkpoint_state = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
+              prepare_state_metal!(checkpoint_state, weights, route)
+              checkpoint_next_token, _checkpoint_logit = Qwen35CPU.prefill_tokens_top1_sequential(
+                weights,
+                boundary_token_ids,
+                0,
+                checkpoint_state,
+              )
+            end
+            write_back_started = Time.instant
+            checkpoint = qbit_cache.save_checkpoint(
+              session_id,
+              boundary_text,
+              boundary_token_ids,
+              checkpoint_next_token,
+              weights.hparams,
+              checkpoint_state,
+              restored_session_checkpoint,
+            )
+            result_checkpoint_id = checkpoint.checkpoint_id
+            @qbit_cache_writes += 1
+          rescue ex : IO::Error | ArgumentError
+            @qbit_cache_write_failures += 1
+            record_qbit_failure("checkpoint write-back", ex)
+            raise ex
+          ensure
+            if started = write_back_started
+              @qbit_cache_write_back_time += Time.instant - started
+            end
+            release_state_metal!(checkpoint_state)
+          end
+        end
+
         Qwen35Engine::GenerateResult.new(
-          text: tokenizer.decode(output_ids),
+          text: output_text,
           token_ids: output_ids,
           prompt_tokens: prompt_ids.size,
           completion_tokens: output_ids.size,
           backend: route.backend,
           route: route.operation,
           reasoning_effort: request.reasoning_effort,
+          checkpoint_id: result_checkpoint_id,
         )
       end
     end
@@ -686,6 +789,10 @@ module ML::GGUF
     end
 
     private def release_state_metal!(state : Qwen35CPU::State) : Nil
+      # A fresh command-buffer fence prevents released unified-memory buffers
+      # from being recycled while an asynchronously submitted fused kernel is
+      # still retiring on the device.
+      ML::Metal::Device.synchronize
       state.layers.each do |layer|
         layer.k_cache_buf.try(&.release)
         layer.v_cache_buf.try(&.release)
@@ -705,6 +812,18 @@ module ML::GGUF
       raise ArgumentError.new("generation requires non-empty message content") if request.messages.all? { |message| message.content.strip.empty? }
       request.messages.each do |message|
         raise ArgumentError.new("message role must not be empty") if message.role.strip.empty?
+      end
+      if session_id = request.session_id
+        unless session_id.bytesize > 0 && session_id.bytesize <= QwenQBitSessionCheckpoint::MAX_SESSION_BYTES
+          raise ArgumentError.new("generation session_id is outside 1..#{QwenQBitSessionCheckpoint::MAX_SESSION_BYTES} bytes")
+        end
+      elsif request.checkpoint_id
+        raise ArgumentError.new("generation checkpoint_id requires session_id")
+      end
+      if checkpoint_id = request.checkpoint_id
+        unless checkpoint_id.matches?(/\A[0-9a-f]{64}\z/)
+          raise ArgumentError.new("generation checkpoint_id is invalid")
+        end
       end
     end
 

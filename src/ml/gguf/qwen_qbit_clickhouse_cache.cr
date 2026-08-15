@@ -3,6 +3,7 @@ require "random/secure"
 require "uri"
 require "uri/params"
 require "./qwen_qbit_cache_envelope"
+require "./qwen_qbit_session_checkpoint"
 
 module ML::GGUF
   # Bounded ClickHouse HTTP storage for split recurrent-QBit/exact-KV state.
@@ -287,6 +288,89 @@ module ML::GGUF
         load_admission(entry, lookup, indexed_lookup_key, generation_id, nil)
       end
 
+      def save_checkpoint(entry : QwenQBitSessionCheckpoint::Entry) : QwenQBitSessionCheckpoint::Entry
+        QwenQBitSessionCheckpoint.validate_certificate!(entry)
+        envelope_json = entry.to_json
+        if envelope_json.bytesize.to_i64 > @config.max_envelope_bytes
+          raise ArgumentError.new("QBit checkpoint envelope exceeds #{@config.max_envelope_bytes} bytes")
+        end
+        @transport.post(
+          checkpoint_insert_query(entry),
+          envelope_json.to_slice,
+          @config.max_envelope_bytes,
+        )
+        entry
+      end
+
+      def lookup_checkpoint(session_id : String,
+                            checkpoint_id : String,
+                            rendered : String,
+                            token_ids : Array(Int32)) : QwenQBitSessionCheckpoint::Entry?
+        session_hash = QwenQBitSessionCheckpoint.session_hash(session_id)
+        validate_hex_id!(checkpoint_id, QwenQBitSessionCheckpoint::HEX_ID_SIZE, "checkpoint")
+        response = @transport.post(
+          checkpoint_lookup_query(session_hash, checkpoint_id),
+          EMPTY_BODY,
+          @config.max_envelope_bytes,
+        )
+        parse_checkpoint_response(response, session_id, rendered, token_ids, checkpoint_id)
+      end
+
+      def lookup_latest_checkpoint(session_id : String,
+                                   rendered : String,
+                                   token_ids : Array(Int32)) : QwenQBitSessionCheckpoint::Entry?
+        boundary_hashes = checkpoint_boundary_hashes(rendered)
+        return nil if boundary_hashes.empty?
+        session_hash = QwenQBitSessionCheckpoint.session_hash(session_id)
+        response = @transport.post(
+          latest_checkpoint_lookup_query(session_hash, boundary_hashes),
+          EMPTY_BODY,
+          @config.max_envelope_bytes,
+        )
+        parse_checkpoint_response(response, session_id, rendered, token_ids, nil)
+      end
+
+      def lookup_checkpoint_anchor(checkpoint : QwenQBitSessionCheckpoint::Entry,
+                                   context : QwenQBitCacheEnvelope::PrefixContext) : QwenQBitCacheEnvelope::Admission?
+        QwenQBitSessionCheckpoint.validate_certificate!(checkpoint)
+        anchor_token_hash = Qwen35PromptCache.token_hash(checkpoint.anchor_token_ids)
+        unless anchor_token_hash == checkpoint.anchor_token_hash
+          raise ArgumentError.new("QBit checkpoint anchor token hash mismatch")
+        end
+        manifest = @transport.post(
+          checkpoint_anchor_manifest_query(checkpoint),
+          EMPTY_BODY,
+          @config.max_envelope_bytes,
+        )
+        return nil if manifest.empty?
+        enforce_response_limit!(manifest, @config.max_envelope_bytes)
+        entry = begin
+          QwenQBitCacheEnvelope::Entry.from_json(String.new(manifest))
+        rescue ex : JSON::ParseException
+          raise ArgumentError.new("malformed QBit checkpoint anchor response: #{ex.message}")
+        end
+        unless entry.cache_id == checkpoint.anchor_cache_id &&
+               entry.certificate_id == checkpoint.anchor_certificate_id
+          raise ArgumentError.new("QBit checkpoint anchor reference mismatch")
+        end
+        lookup = QwenQBitCacheEnvelope.validate_prefix_manifest!(
+          entry,
+          context,
+          anchor_token_hash,
+          checkpoint.anchor_prefix_len,
+        )
+        unless QwenQBitCacheEnvelope.lookup_key(lookup) == checkpoint.anchor_lookup_key
+          raise ArgumentError.new("QBit checkpoint anchor lookup key mismatch")
+        end
+        load_admission(
+          entry,
+          lookup,
+          checkpoint.anchor_lookup_key,
+          checkpoint.anchor_generation_id,
+          nil,
+        )
+      end
+
       private def lookup_internal(context : QwenQBitCacheEnvelope::LookupContext,
                                   expected : QwenQBitCacheEnvelope::Context?) : QwenQBitCacheEnvelope::Admission?
         validate_context_layout!(context)
@@ -375,6 +459,22 @@ module ML::GGUF
             envelope String CODEC(ZSTD(1))
           ) ENGINE=MergeTree
           ORDER BY (scope_key, token_hash, prefix_len, created_at_unix, generation_id)
+          TTL toDateTime(expires_at_unix)
+          SQL
+          <<-SQL,
+          CREATE TABLE IF NOT EXISTS #{checkpoint_table} (
+            session_hash FixedString(64),
+            checkpoint_id FixedString(64),
+            parent_checkpoint_id String,
+            child_token_hash FixedString(64),
+            child_prefix_len UInt32,
+            boundary_text_hash FixedString(64),
+            boundary_text_bytes UInt32,
+            created_at_unix Int64,
+            expires_at_unix Int64,
+            envelope String CODEC(ZSTD(1))
+          ) ENGINE=MergeTree
+          ORDER BY (session_hash, checkpoint_id, boundary_text_hash, boundary_text_bytes, created_at_unix)
           TTL toDateTime(expires_at_unix)
           SQL
         ]
@@ -469,6 +569,61 @@ module ML::GGUF
         SQL
       end
 
+      private def checkpoint_insert_query(entry : QwenQBitSessionCheckpoint::Entry) : String
+        parent = entry.parent_checkpoint_id || ""
+        <<-SQL
+        INSERT INTO #{checkpoint_table}
+        SELECT toFixedString('#{entry.session_hash}', 64), toFixedString('#{entry.checkpoint_id}', 64),
+               '#{parent}', toFixedString('#{entry.child_token_hash}', 64),
+               toUInt32(#{entry.child_prefix_len}), toFixedString('#{entry.boundary_text_hash}', 64),
+               toUInt32(#{entry.boundary_text_bytes}), toInt64(#{entry.created_at_unix}),
+               toInt64(#{entry.expires_at_unix}), envelope
+        FROM input('envelope String')
+        FORMAT RawBLOB
+        SQL
+      end
+
+      private def checkpoint_lookup_query(session_hash : String, checkpoint_id : String) : String
+        <<-SQL
+        SELECT envelope
+        FROM #{checkpoint_table}
+        WHERE session_hash = toFixedString('#{session_hash}', 64)
+          AND checkpoint_id = toFixedString('#{checkpoint_id}', 64)
+          AND expires_at_unix > toUnixTimestamp(now())
+        ORDER BY created_at_unix DESC
+        LIMIT 1
+        FORMAT RawBLOB
+        SQL
+      end
+
+      private def latest_checkpoint_lookup_query(session_hash : String,
+                                                 boundary_hashes : Array(String)) : String
+        hashes = boundary_hashes.map { |hash| "toFixedString('#{hash}', 64)" }.join(", ")
+        <<-SQL
+        SELECT envelope
+        FROM #{checkpoint_table}
+        WHERE session_hash = toFixedString('#{session_hash}', 64)
+          AND boundary_text_hash IN (#{hashes})
+          AND expires_at_unix > toUnixTimestamp(now())
+        ORDER BY boundary_text_bytes DESC, created_at_unix DESC, checkpoint_id DESC
+        LIMIT 1
+        FORMAT RawBLOB
+        SQL
+      end
+
+      private def checkpoint_anchor_manifest_query(entry : QwenQBitSessionCheckpoint::Entry) : String
+        <<-SQL
+        SELECT envelope
+        FROM #{manifest_table}
+        WHERE cache_id = toUInt64(#{entry.anchor_cache_id})
+          AND lookup_key = toFixedString('#{entry.anchor_lookup_key}', 64)
+          AND generation_id = toFixedString('#{entry.anchor_generation_id}', 64)
+          AND expires_at_unix > toUnixTimestamp(now())
+        LIMIT 1
+        FORMAT RawBLOB
+        SQL
+      end
+
       private def recurrent_lookup_query(cache_id : UInt64,
                                          lookup_key : String,
                                          generation_id : String) : String
@@ -515,6 +670,10 @@ module ML::GGUF
         "#{@config.table_prefix}_prefix_index"
       end
 
+      private def checkpoint_table : String
+        "#{@config.table_prefix}_checkpoints"
+      end
+
       private def validate_context_layout!(context : QwenQBitCacheEnvelope::LookupContext) : Nil
         unless context.qbit_block_size == QBIT_BLOCK_SIZE
           raise ArgumentError.new("QBit ClickHouse cache requires block size #{QBIT_BLOCK_SIZE}")
@@ -535,6 +694,55 @@ module ML::GGUF
         unless context.qbit_block_size == QBIT_BLOCK_SIZE
           raise ArgumentError.new("QBit ClickHouse cache requires block size #{QBIT_BLOCK_SIZE}")
         end
+      end
+
+      private def checkpoint_boundary_hashes(rendered : String) : Array(String)
+        raise ArgumentError.new("QBit checkpoint transcript is empty") if rendered.empty?
+        if rendered.bytesize > QwenQBitSessionCheckpoint::MAX_BOUNDARY_BYTES
+          raise ArgumentError.new("QBit checkpoint transcript exceeds the text boundary limit")
+        end
+        hashes = [] of String
+        cursor = 0
+        marker = "<|im_end|>"
+        while offset = rendered.index(marker, cursor)
+          boundary_end = offset + marker.bytesize
+          boundary_end += 1 if rendered.byte_at?(boundary_end) == '\n'.ord
+          prefix = rendered.byte_slice(0, boundary_end)
+          hashes << QwenQBitSessionCheckpoint.boundary_hash(prefix) if prefix && !prefix.empty?
+          if hashes.size > QwenQBitSessionCheckpoint::MAX_BOUNDARY_CANDIDATES
+            raise ArgumentError.new("QBit checkpoint text boundary candidate limit exceeded")
+          end
+          cursor = boundary_end
+        end
+        hashes.uniq!
+        hashes
+      end
+
+      private def parse_checkpoint_response(response : Bytes,
+                                            session_id : String,
+                                            rendered : String,
+                                            token_ids : Array(Int32),
+                                            checkpoint_id : String?) : QwenQBitSessionCheckpoint::Entry?
+        return nil if response.empty?
+        enforce_response_limit!(response, @config.max_envelope_bytes)
+        entry = begin
+          QwenQBitSessionCheckpoint::Entry.from_json(String.new(response))
+        rescue ex : JSON::ParseException
+          raise ArgumentError.new("malformed QBit checkpoint response: #{ex.message}")
+        end
+        QwenQBitSessionCheckpoint.validate_boundary!(
+          entry,
+          session_id,
+          rendered,
+          checkpoint_id: checkpoint_id,
+        )
+        QwenQBitSessionCheckpoint.validate!(
+          entry,
+          session_id,
+          token_ids,
+          checkpoint_id: checkpoint_id,
+        )
+        entry
       end
 
       private def load_admission(entry : QwenQBitCacheEnvelope::Entry,

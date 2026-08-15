@@ -57,7 +57,13 @@ module ML::GGUF
       end
       records = snapshot.records.map do |record|
         if recurrent_record?(record.kind)
-          encoded = QwenQBitGaussianCodec.encode(floats_from(record.bytes), block_size, precision)
+          encoded = begin
+            QwenQBitGaussianCodec.encode(floats_from(record.bytes), block_size, precision)
+          rescue ex : ArgumentError
+            raise ArgumentError.new(
+              "QBit #{record.kind} layer #{record.layer} encoding failed: #{ex.message}"
+            )
+          end
           EncodedRecord.new(record.layer, record.kind, record.storage_mode, record.bytes.size.to_i32, nil, encoded)
         else
           EncodedRecord.new(record.layer, record.kind, record.storage_mode, record.bytes.size.to_i32, record.bytes, nil)
