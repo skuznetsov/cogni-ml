@@ -10,6 +10,8 @@ MAX_TOTAL_MIB="${QWEN_QBIT_CH_MATCHED_MAX_TOTAL_MIB:-512}"
 MAX_TREE_MIB="${QWEN_QBIT_CH_MATCHED_MAX_TREE_MIB:-2048}"
 TIMEOUT_SEC="${QWEN_QBIT_CH_MATCHED_TIMEOUT_SEC:-120}"
 MIN_FREE_PCT="${COGNI_RUN_SAFE_MIN_FREE_PCT:-12}"
+READ_REPEATS="${QWEN_QBIT_CH_MATCHED_READ_REPEATS:-5}"
+EXPORT_DIR="${QWEN_QBIT_CH_MATCHED_EXPORT_DIR:-}"
 
 usage() {
   echo "Usage: $0 QBIT_RECURRENT_NATIVE EXACT_KV_ARTIFACT FULL_INT8_ARTIFACT" >&2
@@ -27,11 +29,11 @@ if [[ ! -x "$CLICKHOUSE_BIN" ]]; then
   echo "ClickHouse binary is not executable: $CLICKHOUSE_BIN" >&2
   exit 2
 fi
-if ! [[ "$MAX_INPUT_MIB" =~ ^[1-9][0-9]*$ && "$MAX_TOTAL_MIB" =~ ^[1-9][0-9]*$ && "$MAX_TREE_MIB" =~ ^[1-9][0-9]*$ && "$TIMEOUT_SEC" =~ ^[1-9][0-9]*$ && "$MIN_FREE_PCT" =~ ^[0-9]+$ ]]; then
+if ! [[ "$MAX_INPUT_MIB" =~ ^[1-9][0-9]*$ && "$MAX_TOTAL_MIB" =~ ^[1-9][0-9]*$ && "$MAX_TREE_MIB" =~ ^[1-9][0-9]*$ && "$TIMEOUT_SEC" =~ ^[1-9][0-9]*$ && "$MIN_FREE_PCT" =~ ^[0-9]+$ && "$READ_REPEATS" =~ ^[1-9][0-9]*$ ]]; then
   echo "matched QBit ClickHouse limits must be integers (zero is allowed only for the memory-pressure floor)" >&2
   exit 2
 fi
-if ((MAX_INPUT_MIB > 1024 || MAX_TOTAL_MIB > 2048 || MAX_TREE_MIB > 8192 || TIMEOUT_SEC > 600 || MIN_FREE_PCT > 99)); then
+if ((MAX_INPUT_MIB > 1024 || MAX_TOTAL_MIB > 2048 || MAX_TREE_MIB > 8192 || TIMEOUT_SEC > 600 || MIN_FREE_PCT > 99 || READ_REPEATS > 20)); then
   echo "matched QBit ClickHouse limits exceed the diagnostic safety envelope" >&2
   exit 2
 fi
@@ -95,6 +97,10 @@ PART_STATS_PATH="$WORK_DIR/part-stats.tsv"
 QBIT_ROUNDTRIP_PATH="$WORK_DIR/qbit-roundtrip.native"
 KV_ROUNDTRIP_PATH="$WORK_DIR/kv-roundtrip.qkv"
 INT8_ROUNDTRIP_PATH="$WORK_DIR/int8-roundtrip.qkv"
+QBIT_NATURAL_PATH="$WORK_DIR/qbit-natural.native"
+QBIT_READ_TIMES_PATH="$WORK_DIR/qbit-read-times.txt"
+KV_READ_TIMES_PATH="$WORK_DIR/kv-read-times.txt"
+INT8_READ_TIMES_PATH="$WORK_DIR/int8-read-times.txt"
 mkdir -p "$STORE_PATH"
 
 QBIT_SCHEMA="cache_id UInt64, layer Int32, kind UInt8, tile UInt32, value_count UInt16, mean Float32, sigma Float32, codes QBit(Int8, 1024)"
@@ -195,6 +201,42 @@ run_clickhouse local \
   --query "SELECT payload FROM int8_cache WHERE cache_id = 0 FORMAT RawBLOB" \
   > "$INT8_ROUNDTRIP_PATH"
 
+timed_read() {
+  local output_path="$1"
+  local times_path="$2"
+  local query="$3"
+  local read_log="$WORK_DIR/read.log"
+  run_clickhouse local \
+    --path "$STORE_PATH" \
+    --max_memory_usage "$((MAX_TREE_MIB * 1024 * 1024))" \
+    --time \
+    --query "$query" \
+    > "$output_path" 2> "$read_log"
+  local read_seconds
+  read_seconds="$(awk '/^[0-9]+([.][0-9]+)?$/ { value=$0 } END { print value }' "$read_log")"
+  if [[ -z "$read_seconds" ]]; then
+    echo "ClickHouse did not report query time" >&2
+    sed -n '1,120p' "$read_log" >&2
+    exit 1
+  fi
+  echo "$read_seconds" >> "$times_path"
+}
+
+for ((READ_INDEX = 1; READ_INDEX <= READ_REPEATS; READ_INDEX++)); do
+  timed_read \
+    "$QBIT_NATURAL_PATH" \
+    "$QBIT_READ_TIMES_PATH" \
+    "SELECT cache_id, layer, kind, tile, value_count, mean, sigma, codes FROM qbit_recurrent ORDER BY cache_id, layer, kind, tile FORMAT Native"
+  timed_read \
+    "$KV_ROUNDTRIP_PATH" \
+    "$KV_READ_TIMES_PATH" \
+    "SELECT payload FROM qbit_kv WHERE cache_id = 0 FORMAT RawBLOB"
+  timed_read \
+    "$INT8_ROUNDTRIP_PATH" \
+    "$INT8_READ_TIMES_PATH" \
+    "SELECT payload FROM int8_cache WHERE cache_id = 0 FORMAT RawBLOB"
+done
+
 assert_roundtrip() {
   local source_path="$1"
   local roundtrip_path="$2"
@@ -215,6 +257,30 @@ QBIT_TOTAL_PARTS=$((QBIT_REC_PARTS + KV_PARTS))
 COMPRESSED_RATIO="$(awk -v qbit="$QBIT_PHYSICAL_COMPRESSED" -v int8="$INT8_COMPRESSED" 'BEGIN { printf "%.6f", qbit / int8 }')"
 DISK_RATIO="$(awk -v qbit="$QBIT_PHYSICAL_DISK" -v int8="$INT8_DISK" 'BEGIN { printf "%.6f", qbit / int8 }')"
 DISK_SAVING_PCT="$(awk -v qbit="$QBIT_PHYSICAL_DISK" -v int8="$INT8_DISK" 'BEGIN { printf "%.3f", (1.0 - qbit / int8) * 100.0 }')"
+median_ms() {
+  sort -n "$1" | awk '{ values[NR]=$1 } END { middle=int((NR + 1) / 2); if (NR % 2) value=values[middle]; else value=(values[middle] + values[middle + 1]) / 2.0; printf "%.3f", value * 1000.0 }'
+}
+QBIT_READ_MEDIAN_MS="$(median_ms "$QBIT_READ_TIMES_PATH")"
+KV_READ_MEDIAN_MS="$(median_ms "$KV_READ_TIMES_PATH")"
+INT8_READ_MEDIAN_MS="$(median_ms "$INT8_READ_TIMES_PATH")"
+QBIT_COMPLETE_READ_MEDIAN_MS="$(awk -v recurrent="$QBIT_READ_MEDIAN_MS" -v kv="$KV_READ_MEDIAN_MS" 'BEGIN { printf "%.3f", recurrent + kv }')"
+
+if [[ -n "$EXPORT_DIR" ]]; then
+  if [[ ! -d "$EXPORT_DIR" ]]; then
+    echo "matched export directory does not exist: $EXPORT_DIR" >&2
+    exit 2
+  fi
+  EXPORT_DIR="$(cd "$EXPORT_DIR" && pwd)"
+  for TARGET in "$EXPORT_DIR/qbit-natural.native" "$EXPORT_DIR/exact-kv.qkv" "$EXPORT_DIR/recurrent-int8.qkv"; do
+    if [[ -e "$TARGET" ]]; then
+      echo "refusing to overwrite matched export: $TARGET" >&2
+      exit 2
+    fi
+  done
+  cp "$QBIT_NATURAL_PATH" "$EXPORT_DIR/qbit-natural.native"
+  cp "$KV_ROUNDTRIP_PATH" "$EXPORT_DIR/exact-kv.qkv"
+  cp "$INT8_ROUNDTRIP_PATH" "$EXPORT_DIR/recurrent-int8.qkv"
+fi
 
 echo "qwen_qbit_clickhouse_matched_probe"
 echo "  clickhouse_version=$($CLICKHOUSE_BIN --version | head -1)"
@@ -223,4 +289,8 @@ echo "  qbit_kv_logical_bytes=$KV_BYTES rows=$KV_ROWS compressed_bytes=$KV_COMPR
 echo "  qbit_complete_logical_bytes=$QBIT_LOGICAL compressed_bytes=$QBIT_PHYSICAL_COMPRESSED disk_bytes=$QBIT_PHYSICAL_DISK parts=$QBIT_TOTAL_PARTS"
 echo "  int8_complete_logical_bytes=$INT8_BYTES rows=$INT8_ROWS compressed_bytes=$INT8_COMPRESSED uncompressed_bytes=$INT8_UNCOMPRESSED disk_bytes=$INT8_DISK parts=$INT8_PARTS codec=LZ4"
 echo "  qbit_vs_int8_compressed_ratio=$COMPRESSED_RATIO qbit_vs_int8_disk_ratio=$DISK_RATIO disk_saving_pct=$DISK_SAVING_PCT"
+echo "  read_repeats=$READ_REPEATS qbit_recurrent_read_median_ms=$QBIT_READ_MEDIAN_MS qbit_kv_read_median_ms=$KV_READ_MEDIAN_MS qbit_complete_sequential_read_median_ms=$QBIT_COMPLETE_READ_MEDIAN_MS int8_complete_read_median_ms=$INT8_READ_MEDIAN_MS"
 echo "  exact_native_roundtrip=true exact_kv_roundtrip=true exact_int8_roundtrip=true"
+if [[ -n "$EXPORT_DIR" ]]; then
+  echo "  exported_qbit_native=$EXPORT_DIR/qbit-natural.native exported_exact_kv=$EXPORT_DIR/exact-kv.qkv exported_int8=$EXPORT_DIR/recurrent-int8.qkv"
+fi

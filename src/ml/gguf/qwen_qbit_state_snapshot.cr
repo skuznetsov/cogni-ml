@@ -27,13 +27,15 @@ module ML::GGUF
       getter records : Array(EncodedRecord)
       getter block_size : Int32
       getter precision : Int32
+      getter backing_stores : Array(Bytes)
 
       def initialize(@max_seq : Int32,
                      @layer_count : Int32,
                      @positions : Array(Int32),
                      @records : Array(EncodedRecord),
                      @block_size : Int32,
-                     @precision : Int32)
+                     @precision : Int32,
+                     @backing_stores : Array(Bytes) = [] of Bytes)
       end
 
       def payload_byte_size : Int64
@@ -64,6 +66,58 @@ module ML::GGUF
       encoded = Snapshot.new(snapshot.max_seq, snapshot.layer_count, snapshot.positions.dup, records, block_size, precision)
       validate(encoded)
       encoded
+    end
+
+    # Replaces the in-memory exact records with a validated raw KV-only
+    # artifact. The returned snapshot retains the artifact backing store so its
+    # zero-copy payload slices stay live through device restore.
+    def with_exact_artifact(snapshot : Snapshot,
+                            artifact : Qwen35StateSnapshot::EncodedSnapshot) : Snapshot
+      validate(snapshot)
+      raise ArgumentError.new("QBit exact artifact max_seq mismatch") unless artifact.max_seq == snapshot.max_seq
+      raise ArgumentError.new("QBit exact artifact layer count mismatch") unless artifact.layer_count == snapshot.layer_count
+      raise ArgumentError.new("QBit exact artifact positions mismatch") unless artifact.positions == snapshot.positions
+      raise ArgumentError.new("QBit exact artifact must use the raw codec") unless artifact.codec.raw_f32?
+
+      exact_records = Hash({Int32, UInt8}, Qwen35StateSnapshot::EncodedRecord).new
+      artifact.records.each do |record|
+        raise ArgumentError.new("QBit exact artifact must be KV-only") if recurrent_record?(record.kind)
+        raise ArgumentError.new("QBit exact artifact record must stay raw") unless record.codec.raw_f32?
+        raise ArgumentError.new("QBit exact artifact record is truncated") unless record.payload.size == record.original_byte_size
+        key = {record.layer, record.kind.value}
+        raise ArgumentError.new("duplicate QBit exact artifact record") if exact_records.has_key?(key)
+        exact_records[key] = record
+      end
+
+      expected_keys = snapshot.records.compact_map do |record|
+        record.raw ? {record.layer, record.kind.value} : nil
+      end.to_set
+      raise ArgumentError.new("QBit exact artifact record set mismatch") unless exact_records.keys.to_set == expected_keys
+
+      records = snapshot.records.map do |record|
+        if record.raw
+          exact = exact_records[{record.layer, record.kind.value}]
+          raise ArgumentError.new("QBit exact artifact storage mode mismatch") unless exact.storage_mode == record.storage_mode
+          raise ArgumentError.new("QBit exact artifact byte size mismatch") unless exact.original_byte_size == record.original_byte_size
+          EncodedRecord.new(record.layer, record.kind, record.storage_mode, record.original_byte_size, exact.payload, nil)
+        else
+          record
+        end
+      end
+      # `snapshot` was fully validated above; every replaced exact record has
+      # now been checked against its expected key, mode, and byte size. Avoid a
+      # second scan of the unchanged recurrent QBit tiles on the cache-hit path.
+      backing_stores = snapshot.backing_stores + artifact.backing_stores
+      attached = Snapshot.new(
+        snapshot.max_seq,
+        snapshot.layer_count,
+        snapshot.positions.dup,
+        records,
+        snapshot.block_size,
+        snapshot.precision,
+        backing_stores,
+      )
+      attached
     end
 
     def decode(snapshot : Snapshot) : Qwen35StateSnapshot::Snapshot

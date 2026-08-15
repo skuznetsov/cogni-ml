@@ -7,7 +7,9 @@ Qwen cache state plus a bounded local ClickHouse physical-storage/read gate.
 It may emit revision-0 ClickHouse Native blocks whose QBit column is already
 bit-transposed, validate an ordered multi-block Native response, decode logical
 records that cross response-block boundaries directly into prepared Metal state
-buffers, and measure one isolated temporary MergeTree.
+buffers, attach exact KV from a separate bounded artifact, compare a complete
+QBit cache-hit corridor against the matched INT8 artifact in alternating order,
+and measure one isolated temporary MergeTree.
 
 Bounded context: local `.qkv` state artifacts. ClickHouse storage and background
 part merges are a separate transport/storage context.
@@ -46,6 +48,10 @@ part merges are a separate transport/storage context.
 - The model probe may accept a bounded external multi-block response only with
   an explicit expected `cache_id`. Prompt/model/token hashes remain the
   responsibility of the surrounding versioned cache envelope.
+- A complete diagnostic corridor may read recurrent Native QBit plus exact KV,
+  structurally validate both inputs, restore prepared Metal state, and execute
+  the first post-restore forward. When the matched INT8 input is present, the
+  probe alternates execution order as ABBA and reports paired deltas.
 
 ## Rejected surface
 
@@ -56,6 +62,10 @@ part merges are a separate transport/storage context.
   path: newly inserted rows must remain readable before a part merge completes.
 - No production ClickHouse client, TCP packet framing/compression, durable QBit
   artifact version, CUDA decoder, or default cache route in this slice.
+- The diagnostic corridor starts with an already constructed internal state
+  template and a cached first token. It is not a versioned production envelope
+  and does not include key lookup, model/tokenizer/template/prompt hash checks,
+  TCP framing, or a cache-miss fallback.
 - A fast kernel or compact Native block alone is not evidence that the complete
   cold-hit path is faster.
 - Recurrent-only QBit part bytes must not be compared with a full INT8 artifact
@@ -105,6 +115,9 @@ part merges are a separate transport/storage context.
 - A multi-block response must reject skipped tiles, a non-final partial tile,
   record reappearance, mixed QBit widths, unexpected cache identity, and an
   input above the probe's bounded size before state admission.
+- A complete-state latency comparison must use matched source state, exact
+  first post-restore token checks, prepared states, and alternating QBit/INT8
+  order. Sequential format-wide runs are rejected as an order-sensitive proxy.
 
 ## Stop rules
 
@@ -286,9 +299,45 @@ smaller on disk after including the second-part overhead. This closes the
 matched physical compactness question for this one state distribution. It does
 not prove a general compression ratio: prompt length, KV share, model, QBit
 precision, ClickHouse version/settings, and part size can change the result.
-It also does not close the latency corridor because the exact KV read, envelope
-validation, recurrent restore, and first continuation token have not yet been
-timed together.
+The complete diagnostic latency corridor is measured below. Production envelope
+lookup and validation remain open.
+
+### Complete warm cache-hit corridor gate (2026-08-15)
+
+The guarded Qwen3.8 27B probe re-read the exact recurrent QBit, raw-KV, and
+complete INT8 outputs above. Both routes used prepared Metal state and the same
+cached first token. Seven samples alternated QBit/INT8 order as ABBA; every
+first post-restore token matched token id 198.
+
+| Warm in-process phase | QBit + exact KV | Recurrent INT8 + exact KV |
+| --- | ---: | ---: |
+| local artifact read | 8.148 + 1.316 ms | 11.556 ms |
+| parse + structural validation | 7.909 ms | 0.065 ms |
+| prepared Metal restore | 9.828 ms | 8.913 ms |
+| first post-restore forward | 69.405 ms | 68.825 ms |
+| complete median | 94.833 ms | 89.541 ms |
+
+The paired median QBit-minus-INT8 delta was +8.473 ms; the ratio of format
+medians was 1.0591, so QBit was 5.9% slower in this diagnostic corridor while
+remaining 6.293% smaller on disk. The paired pre-forward cache-ready delta was
++8.726 ms. QBit's maximum first-post-restore logit delta was 0.578329 versus
+0.182318 for INT8; both retained the exact expected token.
+
+The matched ClickHouse probe independently measured warm server-side medians of
+20 ms for recurrent QBit, 5 ms for exact KV, and 27 ms for the complete INT8
+blob. Replacing, rather than adding to, the local file-read phases with those
+unpaired server timings gives a diagnostic estimate of 110.369 ms for QBit and
+104.985 ms for INT8, or about a 5.1% QBit latency cost. This is not a production
+SLA: the ClickHouse samples were not interleaved with model execution and a
+future TCP client may change the balance.
+
+The dominant format-specific gap is strict Native parsing and validation, not
+Metal reconstruction or the first forward. QBit reads fewer physical bytes and
+was about 2 ms faster in both the ClickHouse and local-file read comparisons;
+its 7.844 ms parse/validation disadvantage consumes that gain. The next safe
+latency move is to eliminate redundant validation through a versioned trusted
+envelope or fuse validation with restore, without weakening malformed-stream
+rejection.
 
 ### ClickHouse boundary probe
 

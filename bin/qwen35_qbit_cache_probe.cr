@@ -29,8 +29,11 @@ native_out : String? = nil
 native_in : String? = nil
 kv_out : String? = nil
 int8_out : String? = nil
+kv_in : String? = nil
+int8_in : String? = nil
 cache_id : UInt64? = nil
 native_max_mib = 256
+artifact_max_mib = 256
 restore_repeats = 5
 
 OptionParser.parse do |parser|
@@ -47,8 +50,11 @@ OptionParser.parse do |parser|
   parser.on("--native-in PATH", "Restore p7 tiles from ordered ClickHouse Native response blocks") { |value| native_in = value }
   parser.on("--kv-out PATH", "Write an exact raw-KV-only diagnostic artifact") { |value| kv_out = value }
   parser.on("--int8-out PATH", "Write the complete recurrent-INT8 comparison artifact") { |value| int8_out = value }
+  parser.on("--kv-in PATH", "Attach exact KV from a raw KV-only artifact to --native-in") { |value| kv_in = value }
+  parser.on("--int8-in PATH", "Measure a complete recurrent-INT8 artifact corridor") { |value| int8_in = value }
   parser.on("--cache-id ID", "Expected UInt64 Native cache identity (required with --native-in)") { |value| cache_id = value.to_u64 }
   parser.on("--native-max-mib N", "Maximum accepted Native response size (default: 256, hard max: 1024)") { |value| native_max_mib = value.to_i }
+  parser.on("--artifact-max-mib N", "Maximum accepted KV/INT8 artifact size (default: 256, hard max: 1024)") { |value| artifact_max_mib = value.to_i }
   parser.on("--restore-repeats N", "Timed restores after one cold restore (default: 5)") { |value| restore_repeats = value.to_i }
   parser.on("--no-prepare-state", "Do not eagerly prepare Metal state") { prepare_state = false }
   parser.on("-h", "--help", "Show this help") do
@@ -68,14 +74,29 @@ raise "--native-in requires p7 in --precisions" if native_in && !precisions.incl
 raise "--native-in requires prepared Metal state" if native_in && !prepare_state
 raise "--native-in file does not exist" if (path = native_in) && !File.file?(path)
 raise "--native-in requires an explicit --cache-id" if native_in && cache_id.nil?
+raise "--kv-in requires --native-in" if kv_in && native_in.nil?
+raise "--kv-in file does not exist" if (path = kv_in) && !File.file?(path)
+raise "--int8-in requires prepared Metal state" if int8_in && !prepare_state
+raise "--int8-in file does not exist" if (path = int8_in) && !File.file?(path)
 raise "--native-max-mib must be within 1..1024" unless native_max_mib.in?(1..1024)
+raise "--artifact-max-mib must be within 1..1024" unless artifact_max_mib.in?(1..1024)
 output_paths = [native_out, kv_out, int8_out].compact
 raise "diagnostic output paths must be distinct" unless output_paths.uniq.size == output_paths.size
+input_paths = [native_in, kv_in, int8_in].compact
+raise "diagnostic input paths must be distinct" unless input_paths.uniq.size == input_paths.size
+raise "diagnostic input and output paths must not overlap" unless (input_paths & output_paths).empty?
 native_limit_bytes = native_max_mib.to_i64 * 1024 * 1024
+artifact_limit_bytes = artifact_max_mib.to_i64 * 1024 * 1024
 if path = native_in
   native_input_size = File.size(path)
   unless native_input_size > 0 && native_input_size <= native_limit_bytes
     raise "--native-in size is outside 1..#{native_limit_bytes} bytes"
+  end
+end
+[kv_in, int8_in].compact.each do |path|
+  artifact_input_size = File.size(path)
+  unless artifact_input_size > 0 && artifact_input_size <= artifact_limit_bytes
+    raise "diagnostic artifact size is outside 1..#{artifact_limit_bytes} bytes"
   end
 end
 effective_cache_id = cache_id.nil? ? 0_u64 : cache_id.not_nil!
@@ -98,10 +119,10 @@ def bytes_from(values : Array(Float32)) : Bytes
   bytes
 end
 
-def read_bytes(path : String, max_bytes : Int64) : Bytes
+def read_bytes(path : String, max_bytes : Int64, label : String) : Bytes
   size = File.size(path)
   unless size > 0 && size <= max_bytes && size <= Int32::MAX
-    raise "Native response size changed outside the admitted limit"
+    raise "#{label} size changed outside the admitted limit"
   end
   bytes = Bytes.new(size.to_i32)
   File.open(path, "r") { |file| file.read_fully(bytes) }
@@ -117,6 +138,136 @@ def recurrent_record?(kind : ML::GGUF::Qwen35StateSnapshot::RecordKind) : Bool
      ML::GGUF::Qwen35StateSnapshot::RecordKind::VCache
     false
   end
+end
+
+def validate_complete_int8_artifact!(artifact : ML::GGUF::Qwen35StateSnapshot::EncodedSnapshot,
+                                     expected : ML::GGUF::Qwen35StateSnapshot::Snapshot) : Nil
+  raise "INT8 artifact max_seq mismatch" unless artifact.max_seq == expected.max_seq
+  raise "INT8 artifact layer count mismatch" unless artifact.layer_count == expected.layer_count
+  raise "INT8 artifact positions mismatch" unless artifact.positions == expected.positions
+
+  actual_records = Hash({Int32, UInt8}, ML::GGUF::Qwen35StateSnapshot::EncodedRecord).new
+  artifact.records.each do |record|
+    key = {record.layer, record.kind.value}
+    raise "duplicate INT8 artifact record" if actual_records.has_key?(key)
+    actual_records[key] = record
+  end
+  expected_keys = expected.records.map { |record| {record.layer, record.kind.value} }.to_set
+  raise "INT8 artifact record set mismatch" unless actual_records.keys.to_set == expected_keys
+
+  expected.records.each do |record|
+    actual = actual_records[{record.layer, record.kind.value}]
+    raise "INT8 artifact storage mode mismatch" unless actual.storage_mode == record.storage_mode
+    raise "INT8 artifact byte size mismatch" unless actual.original_byte_size == record.bytes.size
+    expected_codec = recurrent_record?(record.kind) ? ML::GGUF::Qwen35StateSnapshot::RecordCodec::BlockI8 : ML::GGUF::Qwen35StateSnapshot::RecordCodec::RawF32
+    raise "INT8 artifact record codec mismatch" unless actual.codec == expected_codec
+  end
+end
+
+record CacheHitCorridorSample,
+  primary_read_ms : Float64,
+  secondary_read_ms : Float64,
+  parse_validate_ms : Float64,
+  restore_ms : Float64,
+  forward_ms : Float64,
+  total_ms : Float64,
+  post_id : Int32,
+  logit_delta : Float64
+
+def measure_qbit_cache_hit(native_path : String,
+                           kv_path : String,
+                           native_limit_bytes : Int64,
+                           artifact_limit_bytes : Int64,
+                           template : ML::GGUF::QwenQBitStateSnapshot::Snapshot,
+                           cache_id : UInt64,
+                           weights : ML::GGUF::Qwen35Weights,
+                           state : ML::GGUF::Qwen35CPU::State,
+                           first_token : Int32,
+                           position : Int32,
+                           expected_id : Int32,
+                           expected_logit : Float32) : CacheHitCorridorSample
+  total_started = Time.instant
+  phase_started = Time.instant
+  native_response = read_bytes(native_path, native_limit_bytes, "Native response")
+  native_read_ms = (Time.instant - phase_started).total_milliseconds
+
+  phase_started = Time.instant
+  kv_response = read_bytes(kv_path, artifact_limit_bytes, "exact KV artifact")
+  kv_read_ms = (Time.instant - phase_started).total_milliseconds
+
+  phase_started = Time.instant
+  native_stream = ML::GGUF::QwenQBitNativeBlock.parse_stream(native_response)
+  kv_artifact = ML::GGUF::Qwen35StateSnapshot.decode_artifact_encoded_bytes(kv_response, copy_payloads: false)
+  restore_snapshot = ML::GGUF::QwenQBitStateSnapshot.with_exact_artifact(template, kv_artifact)
+  parse_validate_ms = (Time.instant - phase_started).total_milliseconds
+
+  phase_started = Time.instant
+  ML::GGUF::QwenQBitStateSnapshot.restore_native_stream_into(restore_snapshot, native_stream, cache_id, weights.hparams, state)
+  restore_ms = (Time.instant - phase_started).total_milliseconds
+
+  phase_started = Time.instant
+  post_id, post_logit = ML::GGUF::Qwen35CPU.forward_top1(weights, first_token, position, state)
+  forward_ms = (Time.instant - phase_started).total_milliseconds
+  total_ms = (Time.instant - total_started).total_milliseconds
+  raise "QBit corridor first post-restore token mismatch" unless post_id == expected_id
+
+  CacheHitCorridorSample.new(
+    native_read_ms,
+    kv_read_ms,
+    parse_validate_ms,
+    restore_ms,
+    forward_ms,
+    total_ms,
+    post_id,
+    (post_logit - expected_logit).abs.to_f64,
+  )
+end
+
+def measure_int8_cache_hit(path : String,
+                           artifact_limit_bytes : Int64,
+                           block_size : Int32,
+                           expected_snapshot : ML::GGUF::Qwen35StateSnapshot::Snapshot,
+                           weights : ML::GGUF::Qwen35Weights,
+                           state : ML::GGUF::Qwen35CPU::State,
+                           first_token : Int32,
+                           position : Int32,
+                           expected_id : Int32,
+                           expected_logit : Float32) : CacheHitCorridorSample
+  total_started = Time.instant
+  phase_started = Time.instant
+  artifact_bytes = read_bytes(path, artifact_limit_bytes, "INT8 artifact")
+  read_ms = (Time.instant - phase_started).total_milliseconds
+
+  phase_started = Time.instant
+  artifact = ML::GGUF::Qwen35StateSnapshot.decode_artifact_encoded_bytes(
+    artifact_bytes,
+    expected_codec: "recurrent-int8",
+    expected_codec_block: block_size,
+    copy_payloads: false,
+  )
+  validate_complete_int8_artifact!(artifact, expected_snapshot)
+  parse_validate_ms = (Time.instant - phase_started).total_milliseconds
+
+  phase_started = Time.instant
+  ML::GGUF::Qwen35StateSnapshot.restore_encoded_into(artifact, weights.hparams, state, prefer_metal: true)
+  restore_ms = (Time.instant - phase_started).total_milliseconds
+
+  phase_started = Time.instant
+  post_id, post_logit = ML::GGUF::Qwen35CPU.forward_top1(weights, first_token, position, state)
+  forward_ms = (Time.instant - phase_started).total_milliseconds
+  total_ms = (Time.instant - total_started).total_milliseconds
+  raise "INT8 corridor first post-restore token mismatch" unless post_id == expected_id
+
+  CacheHitCorridorSample.new(
+    read_ms,
+    0.0_f64,
+    parse_validate_ms,
+    restore_ms,
+    forward_ms,
+    total_ms,
+    post_id,
+    (post_logit - expected_logit).abs.to_f64,
+  )
 end
 
 def qbit_snapshot(snapshot : ML::GGUF::Qwen35StateSnapshot::Snapshot,
@@ -181,6 +332,18 @@ def median(values : Array(Float64)) : Float64
   middle = sorted.size // 2
   return sorted[middle] if sorted.size.odd?
   (sorted[middle - 1] + sorted[middle]) / 2.0
+end
+
+def print_qbit_corridor(samples : Array(CacheHitCorridorSample), expected_id : Int32) : Float64
+  total_median = median(samples.map(&.total_ms))
+  puts "  qbit_complete_corridor repeats=#{samples.size} native_read_median_ms=#{median(samples.map(&.primary_read_ms)).round(3)} kv_read_median_ms=#{median(samples.map(&.secondary_read_ms)).round(3)} parse_validate_median_ms=#{median(samples.map(&.parse_validate_ms)).round(3)} restore_median_ms=#{median(samples.map(&.restore_ms)).round(3)} first_post_restore_forward_median_ms=#{median(samples.map(&.forward_ms)).round(3)} total_median_ms=#{total_median.round(3)} first_post_restore_id=#{expected_id} max_logit_delta=#{samples.max_of(&.logit_delta).round(6)} prepared_state=true"
+  total_median
+end
+
+def print_int8_corridor(samples : Array(CacheHitCorridorSample), expected_id : Int32) : Float64
+  total_median = median(samples.map(&.total_ms))
+  puts "  int8_complete_corridor repeats=#{samples.size} read_median_ms=#{median(samples.map(&.primary_read_ms)).round(3)} parse_validate_median_ms=#{median(samples.map(&.parse_validate_ms)).round(3)} restore_median_ms=#{median(samples.map(&.restore_ms)).round(3)} first_post_restore_forward_median_ms=#{median(samples.map(&.forward_ms)).round(3)} total_median_ms=#{total_median.round(3)} first_post_restore_id=#{expected_id} max_logit_delta=#{samples.max_of(&.logit_delta).round(6)} prepared_state=true"
+  total_median
 end
 
 def release_metal_state!(state : ML::GGUF::Qwen35CPU::State) : Nil
@@ -288,8 +451,10 @@ baseline_artifacts.each do |codec, bytes, encode_ms, cold_restore_ms, restore_me
 end
 puts "  exact_ids=#{exact_ids.join(',')}"
 
+qbit_corridor_template : ML::GGUF::QwenQBitStateSnapshot::Snapshot? = nil
 precisions.each do |precision|
   quantized, payload_bytes, encode_ms, decode_ms = qbit_snapshot(snapshot, block_size, precision)
+  qbit_corridor_template = quantized if precision == 7
   # `qbit_snapshot` materializes a scalar reference solely as a falsifier.
   # Reclaim it before measuring the device restore path.
   GC.collect
@@ -299,8 +464,12 @@ precisions.each do |precision|
   native_parse_ms = 0.0_f64
   native_response_bytes = 0_i64
   native_block_count = 0
+  kv_response_bytes = 0_i64
+  kv_read_ms = 0.0_f64
+  kv_parse_ms = 0.0_f64
   parsed_native : ML::GGUF::QwenQBitNativeBlock::Parsed? = nil
   parsed_native_stream : ML::GGUF::QwenQBitNativeBlock::Stream? = nil
+  restore_snapshot = quantized
   if precision == 7
     native_started = Time.instant
     native_block = ML::GGUF::QwenQBitStateSnapshot.encode_native_recurrent(quantized, effective_cache_id)
@@ -311,7 +480,7 @@ precisions.each do |precision|
     end
     if path = native_in
       native_started = Time.instant
-      response = read_bytes(path, native_limit_bytes)
+      response = read_bytes(path, native_limit_bytes, "Native response")
       native_read_ms = (Time.instant - native_started).total_milliseconds
       native_response_bytes = response.size.to_i64
       native_started = Time.instant
@@ -324,6 +493,16 @@ precisions.each do |precision|
       native_block_count = 1
     end
     native_parse_ms = (Time.instant - native_started).total_milliseconds
+    if path = kv_in
+      kv_started = Time.instant
+      kv_response = read_bytes(path, artifact_limit_bytes, "exact KV artifact")
+      kv_read_ms = (Time.instant - kv_started).total_milliseconds
+      kv_response_bytes = kv_response.size.to_i64
+      kv_started = Time.instant
+      kv_artifact = ML::GGUF::Qwen35StateSnapshot.decode_artifact_encoded_bytes(kv_response, copy_payloads: false)
+      restore_snapshot = ML::GGUF::QwenQBitStateSnapshot.with_exact_artifact(quantized, kv_artifact)
+      kv_parse_ms = (Time.instant - kv_started).total_milliseconds
+    end
   end
 
   direct_metal = prepare_state && precision == 7
@@ -332,9 +511,9 @@ precisions.each do |precision|
   restore_started = Time.instant
   if direct_metal
     if stream = parsed_native_stream
-      ML::GGUF::QwenQBitStateSnapshot.restore_native_stream_into(quantized, stream, cache_id.not_nil!, weights.hparams, free_state)
+      ML::GGUF::QwenQBitStateSnapshot.restore_native_stream_into(restore_snapshot, stream, cache_id.not_nil!, weights.hparams, free_state)
     else
-      ML::GGUF::QwenQBitStateSnapshot.restore_native_into(quantized, parsed_native.not_nil!, 0_u64, weights.hparams, free_state)
+      ML::GGUF::QwenQBitStateSnapshot.restore_native_into(restore_snapshot, parsed_native.not_nil!, 0_u64, weights.hparams, free_state)
     end
   else
     ML::GGUF::QwenQBitStateSnapshot.restore_into(quantized, weights.hparams, free_state, prefer_metal: false)
@@ -345,9 +524,9 @@ precisions.each do |precision|
     restore_started = Time.instant
     if direct_metal
       if stream = parsed_native_stream
-        ML::GGUF::QwenQBitStateSnapshot.restore_native_stream_into(quantized, stream, cache_id.not_nil!, weights.hparams, free_state)
+        ML::GGUF::QwenQBitStateSnapshot.restore_native_stream_into(restore_snapshot, stream, cache_id.not_nil!, weights.hparams, free_state)
       else
-        ML::GGUF::QwenQBitStateSnapshot.restore_native_into(quantized, parsed_native.not_nil!, 0_u64, weights.hparams, free_state)
+        ML::GGUF::QwenQBitStateSnapshot.restore_native_into(restore_snapshot, parsed_native.not_nil!, 0_u64, weights.hparams, free_state)
       end
     else
       ML::GGUF::QwenQBitStateSnapshot.restore_into(quantized, weights.hparams, free_state, prefer_metal: false)
@@ -362,9 +541,9 @@ precisions.each do |precision|
   forced_restore_started = Time.instant
   if direct_metal
     if stream = parsed_native_stream
-      ML::GGUF::QwenQBitStateSnapshot.restore_native_stream_into(quantized, stream, cache_id.not_nil!, weights.hparams, forced_state)
+      ML::GGUF::QwenQBitStateSnapshot.restore_native_stream_into(restore_snapshot, stream, cache_id.not_nil!, weights.hparams, forced_state)
     else
-      ML::GGUF::QwenQBitStateSnapshot.restore_native_into(quantized, parsed_native.not_nil!, 0_u64, weights.hparams, forced_state)
+      ML::GGUF::QwenQBitStateSnapshot.restore_native_into(restore_snapshot, parsed_native.not_nil!, 0_u64, weights.hparams, forced_state)
     end
   else
     ML::GGUF::QwenQBitStateSnapshot.restore_into(quantized, weights.hparams, forced_state, prefer_metal: false)
@@ -386,12 +565,68 @@ precisions.each do |precision|
                   else
                     "cpu-reference"
                   end
-  puts "  p#{precision} payload_bytes=#{payload_bytes} ratio=#{ratio.round(6)} encode_ms=#{encode_ms.round(3)} cpu_decode_ms=#{decode_ms.round(3)} native_cache_id=#{effective_cache_id} native_recurrent_bytes=#{native_bytes} native_response_bytes=#{native_response_bytes} native_block_count=#{native_block_count} native_encode_ms=#{native_encode_ms.round(3)} native_read_ms=#{native_read_ms.round(3)} native_parse_ms=#{native_parse_ms.round(3)} restore_route=#{restore_route} restore_cold_ms=#{restore_ms.round(3)} restore_median_ms=#{restore_median_ms.round(3)} forced_restore_ms=#{forced_restore_ms.round(3)} free_prefix=#{prefix}/#{exact_ids.size} first_divergence=#{first_divergence} forced_top1=#{forced_matches}/#{expected_forced.size} max_matched_top1_logit_delta=#{max_matched_logit_delta.round(6)}"
+  puts "  p#{precision} payload_bytes=#{payload_bytes} ratio=#{ratio.round(6)} encode_ms=#{encode_ms.round(3)} cpu_decode_ms=#{decode_ms.round(3)} native_cache_id=#{effective_cache_id} native_recurrent_bytes=#{native_bytes} native_response_bytes=#{native_response_bytes} native_block_count=#{native_block_count} native_encode_ms=#{native_encode_ms.round(3)} native_read_ms=#{native_read_ms.round(3)} native_parse_ms=#{native_parse_ms.round(3)} kv_response_bytes=#{kv_response_bytes} kv_read_ms=#{kv_read_ms.round(3)} kv_parse_ms=#{kv_parse_ms.round(3)} restore_route=#{restore_route} restore_cold_ms=#{restore_ms.round(3)} restore_median_ms=#{restore_median_ms.round(3)} forced_restore_ms=#{forced_restore_ms.round(3)} free_prefix=#{prefix}/#{exact_ids.size} first_divergence=#{first_divergence} forced_top1=#{forced_matches}/#{expected_forced.size} max_matched_top1_logit_delta=#{max_matched_logit_delta.round(6)}"
   if direct_metal
     puts "    metal_allocated_bytes=#{ML::Metal::Device.instance.current_allocated_size}"
   end
   puts "    free_ids=#{free_ids.join(',')}"
   release_metal_state!(free_state)
   release_metal_state!(forced_state)
+  GC.collect
+end
+
+if native_in && kv_in && int8_in
+  qbit_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: snapshot.max_seq)
+  int8_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: snapshot.max_seq)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(qbit_state, weights.hparams)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(int8_state, weights.hparams)
+  qbit_samples = [] of CacheHitCorridorSample
+  int8_samples = [] of CacheHitCorridorSample
+  paired_total_deltas = [] of Float64
+  paired_ready_deltas = [] of Float64
+
+  restore_repeats.times do |index|
+    qbit_sample : CacheHitCorridorSample
+    int8_sample : CacheHitCorridorSample
+    if index.even?
+      qbit_sample = measure_qbit_cache_hit(native_in.not_nil!, kv_in.not_nil!, native_limit_bytes, artifact_limit_bytes, qbit_corridor_template.not_nil!, cache_id.not_nil!, weights, qbit_state, first_token, tokens.size.to_i32, exact_ids[1], exact_logits[1])
+      int8_sample = measure_int8_cache_hit(int8_in.not_nil!, artifact_limit_bytes, block_size, snapshot, weights, int8_state, first_token, tokens.size.to_i32, exact_ids[1], exact_logits[1])
+    else
+      int8_sample = measure_int8_cache_hit(int8_in.not_nil!, artifact_limit_bytes, block_size, snapshot, weights, int8_state, first_token, tokens.size.to_i32, exact_ids[1], exact_logits[1])
+      qbit_sample = measure_qbit_cache_hit(native_in.not_nil!, kv_in.not_nil!, native_limit_bytes, artifact_limit_bytes, qbit_corridor_template.not_nil!, cache_id.not_nil!, weights, qbit_state, first_token, tokens.size.to_i32, exact_ids[1], exact_logits[1])
+    end
+    qbit_samples << qbit_sample
+    int8_samples << int8_sample
+    paired_total_deltas << qbit_sample.total_ms - int8_sample.total_ms
+    qbit_ready_ms = qbit_sample.primary_read_ms + qbit_sample.secondary_read_ms + qbit_sample.parse_validate_ms + qbit_sample.restore_ms
+    int8_ready_ms = int8_sample.primary_read_ms + int8_sample.parse_validate_ms + int8_sample.restore_ms
+    paired_ready_deltas << qbit_ready_ms - int8_ready_ms
+  end
+
+  qbit_total_median = print_qbit_corridor(qbit_samples, exact_ids[1])
+  int8_total_median = print_int8_corridor(int8_samples, exact_ids[1])
+  puts "  paired_complete_corridor order=ABBA qbit_minus_int8_ready_median_ms=#{median(paired_ready_deltas).round(3)} qbit_minus_int8_total_median_ms=#{median(paired_total_deltas).round(3)} qbit_vs_int8_total_median_ratio=#{(qbit_total_median / int8_total_median).round(6)}"
+  release_metal_state!(qbit_state)
+  release_metal_state!(int8_state)
+  GC.collect
+elsif native_in && kv_in
+  qbit_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: snapshot.max_seq)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(qbit_state, weights.hparams)
+  qbit_samples = Array(CacheHitCorridorSample).new(restore_repeats)
+  restore_repeats.times do
+    qbit_samples << measure_qbit_cache_hit(native_in.not_nil!, kv_in.not_nil!, native_limit_bytes, artifact_limit_bytes, qbit_corridor_template.not_nil!, cache_id.not_nil!, weights, qbit_state, first_token, tokens.size.to_i32, exact_ids[1], exact_logits[1])
+  end
+  print_qbit_corridor(qbit_samples, exact_ids[1])
+  release_metal_state!(qbit_state)
+  GC.collect
+elsif int8_in
+  int8_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: snapshot.max_seq)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(int8_state, weights.hparams)
+  int8_samples = Array(CacheHitCorridorSample).new(restore_repeats)
+  restore_repeats.times do
+    int8_samples << measure_int8_cache_hit(int8_in.not_nil!, artifact_limit_bytes, block_size, snapshot, weights, int8_state, first_token, tokens.size.to_i32, exact_ids[1], exact_logits[1])
+  end
+  print_int8_corridor(int8_samples, exact_ids[1])
+  release_metal_state!(int8_state)
   GC.collect
 end
