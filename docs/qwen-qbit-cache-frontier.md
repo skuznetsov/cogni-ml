@@ -3,9 +3,11 @@
 Document status: implementation-bounded
 
 Current frontier: a default-off p7 transport/restore experiment for recurrent
-Qwen cache state. It may emit revision-0 ClickHouse Native blocks whose QBit
-column is already bit-transposed, and may decode the retained planes directly
-into prepared Metal state buffers.
+Qwen cache state plus a bounded local ClickHouse physical-storage/read gate.
+It may emit revision-0 ClickHouse Native blocks whose QBit column is already
+bit-transposed, decode the retained planes directly into prepared Metal state
+buffers, and round-trip one complete Native block through an isolated temporary
+MergeTree while reporting logical, compressed-part, on-disk, and response bytes.
 
 Bounded context: local `.qkv` state artifacts. ClickHouse storage and background
 part merges are a separate transport/storage context.
@@ -32,6 +34,10 @@ part merges are a separate transport/storage context.
   reconstruction, and write all recurrent records into existing Float32 state
   buffers in one command buffer. Live KV remains exact and outside the QBit
   column.
+- A diagnostic `clickhouse local` probe may insert one bounded p7 Native block
+  into an isolated temporary MergeTree, inspect `system.parts`, read the rows
+  back in canonical order, and require an exact byte-for-byte Native round trip.
+  The temporary part is measurement evidence only; it is not a durable cache.
 
 ## Rejected surface
 
@@ -45,6 +51,9 @@ part merges are a separate transport/storage context.
   default cache route in this slice.
 - A fast kernel or compact Native block alone is not evidence that the complete
   cold-hit path is faster.
+- Recurrent-only QBit part bytes must not be compared with a full INT8 artifact
+  that also contains live KV and its envelope. A storage win requires matched
+  artifact boundaries or an explicitly itemized recurrent-plus-KV total.
 
 ## Guard-only future
 
@@ -73,6 +82,11 @@ part merges are a separate transport/storage context.
   any divergence keeps the precision experimental.
 - A later ClickHouse gate must measure insert visibility separately from
   background merge duration and full cold-hit restore latency.
+- The local physical-storage gate must fail if ClickHouse changes the Native
+  bytes, returns more than the expected rows, or reports an impossible part
+  size. Logical Native bytes, `data_compressed_bytes`, `bytes_on_disk`, and
+  response bytes are separate metrics and must not be substituted for one
+  another.
 - Revision-0 Native bytes must be accepted by ClickHouse and reproduce all
   metadata plus the exact seven retained bit-plane subcolumns. Missing rows,
   malformed plane sizes, mixed tile widths, or unsupported precision must fail
@@ -158,7 +172,7 @@ Metal state. The p7 route parsed the actual revision-zero Native block, uploaded
 that block once per restore, decoded all 96 recurrent records in one command
 buffer, restored exact live KV, and then continued generation.
 
-| Route | Uncompressed state bytes | Cold restore | Median prepared restore |
+| Route | Artifact / payload bytes | Cold restore | Median prepared restore |
 | --- | ---: | ---: | ---: |
 | recurrent BF16 artifact | 86,838,556 | 10.112 ms | 8.556 ms |
 | recurrent INT8 artifact | 47,768,476 | 8.687 ms | 6.064 ms |
@@ -180,6 +194,39 @@ which closes the writer/parser representation gap. Warm local reads that hashed
 all seven retained plane subcolumns took 10-13 ms. Those server-side timings do
 not include a future TCP client, response materialization, raw-KV lookup, or
 first-token forward pass, so the complete cold-hit promotion gate remains open.
+
+### Real ClickHouse physical-storage gate (2026-08-15)
+
+The guarded Qwen3.8 27B probe was repeated after the host reboot with the same
+11-token chat prompt and 16-token continuation. It produced a
+40,257,628-byte recurrent p7 Native block, 8,388,608 raw live-KV bytes, and a
+47,768,476-byte recurrent-INT8 artifact. P7 again retained 16/16 free-running
+and 15/15 teacher-forced top-1 tokens. Prepared restore medians in this repeat
+were 8.230 ms for p7 and 8.469 ms for INT8; this reverses the earlier 13.6%
+p7 loss, so their small in-memory difference is host/order sensitive and must
+not be promoted without an interleaved benchmark.
+
+`scripts/qwen_qbit_clickhouse_probe.sh` inserted that exact Native block into a
+bounded temporary MergeTree under ClickHouse 26.7.1.1315. The active part used
+34,580,274 compressed data bytes and 34,582,213 bytes on disk, 14.10% and
+14.10% below the logical recurrent Native block respectively. Adding all live
+KV bytes without assuming any KV compression gives 42,968,882 bytes, 10.05%
+below the logical INT8 artifact. This is a conservative mixed-boundary estimate,
+not a matched ClickHouse-vs-ClickHouse result: the KV storage envelope and the
+physical INT8 part remain to be measured.
+
+Five exact single-block Native reads measured 29 ms first and 28 ms median.
+Together with the same run's 5.474 ms parser and 8.230 ms prepared restore,
+this gives a 41.704 ms lower bound for `recurrent read -> parse -> restore`.
+It still excludes KV lookup/validation and the first continuation token.
+
+The default ClickHouse read split the same response at MergeTree block
+boundaries and measured 19-21 ms across five warm reads. Raising
+`preferred_block_size_bytes` to the bounded input limit coalesced it back into
+the writer's single 38,304-row block and restored exact byte identity, but cost
+about 8 ms median. This is a new transport falsifier: production should parse
+and restore validated multi-block responses instead of paying for forced
+coalescing.
 
 ### ClickHouse boundary probe
 

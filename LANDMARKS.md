@@ -24035,3 +24035,29 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: quoted/backticked existing directory in the latest user turn. Transport: user text -> cwd directory existence certificate -> `list_directory.path` enum hint -> Gemma finite literal corridor -> tool execution. Legal move: constrain only explicit verified directory values. Boundary safety: unquoted ordinary words do not generate directory hints; open-string behavior remains available with the kill-switch.
 
 **decision:** Auto hints now cover the two safest path tools: `read_file` for explicit existing files and `list_directory` for quoted/backticked existing directories. Next candidates need separate certificates; do not auto-constrain `grep`/`glob` patterns yet.
+
+#### [LM-QWEN38-QBIT-CH-PHYSICAL-911] Real Qwen3.8 p7 state compresses in ClickHouse, while multi-block read is the next latency boundary
+**context:** ml / Qwen3.8 / QBit / ClickHouse / prompt cache / physical storage
+**state:** diagnostic storage gate implemented and verified
+
+- claim: "The real Qwen3.8 27B recurrent p7 Native block is physically smaller in a local ClickHouse MergeTree while remaining byte-exact when returned as one bounded Native block."
+  source: guarded `scripts/qwen_qbit_clickhouse_probe.sh /private/tmp/qwen38_27b_p7_recurrent.native` under ClickHouse 26.7.1.1315 inserted 38,304 rows; 40,257,628 logical Native bytes used 34,580,274 compressed part bytes and 34,582,213 bytes on disk. Five coalesced Native reads were byte-identical, with first/median query time `29/28ms`.
+  verified_at: 2026-08-15
+  decay_trigger: QBit serialization change, ClickHouse version or codec/settings change, cache schema change, or different model-state distribution
+  trust: {F:0.86,G:0.35,R:0.84}
+
+- claim: "The matched run supports a compactness direction but not yet a full physical INT8 comparison."
+  source: the same guarded Qwen3.8 probe reported `kv_raw_bytes=8388608` and `recurrent-int8 artifact_bytes=47768476`. Adding uncompressed KV to the physical recurrent QBit part gives 42,968,882 bytes, 10.05% below the logical INT8 artifact, but the QBit KV envelope and physical ClickHouse INT8 part were not measured.
+  verified_at: 2026-08-15
+  decay_trigger: matched KV/INT8 physical-part measurement, artifact envelope change, or broader quality contradiction
+  trust: {F:0.78,G:0.28,R:0.76}
+
+- claim: "Forcing a single Native response block preserves the current parser boundary but costs measurable read latency."
+  source: the default MergeTree response split the 38,304 rows into multiple Native blocks and measured `19,20,20,21,21ms`; setting `preferred_block_size_bytes` to the bounded input size returned one byte-identical block but measured `28ms` median. The same model run measured `native_parse_ms=5.474` and prepared p7 restore median `8.230ms`, giving a 41.704ms lower bound before KV lookup and first-token work.
+  verified_at: 2026-08-15
+  decay_trigger: multi-block parser/restore implementation, ClickHouse read pipeline change, or a fresh interleaved end-to-end cache benchmark
+  trust: {F:0.84,G:0.34,R:0.82}
+
+**LTP/WBA:** Window: ClickHouse recurrent-state cache read. Transport: MergeTree QBit planes -> Native response -> strict parser -> prepared Metal state. The single-block coalescing move preserves the current parser boundary and exact bytes, but recomputed potential worsens read latency by about 8ms. The legal next Ladder is validated multi-block transport into one restore command buffer; the dual frame remains bounded single-block coalescing.
+
+**decision:** Keep the storage probe diagnostic and default-off. Implement multi-block Native validation/restore before a production client, then measure a matched physical INT8+KV route and the complete `read -> validate -> restore -> first token` corridor.
