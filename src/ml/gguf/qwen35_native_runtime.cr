@@ -32,6 +32,8 @@ module ML::GGUF
       restore_failures : Int64,
       writes : Int64,
       write_failures : Int64,
+      reused_prefix_tokens : Int64 = 0_i64,
+      replayed_suffix_tokens : Int64 = 0_i64,
       last_failure : String? = nil,
       lookup_time : Time::Span = Time::Span.zero,
       restore_time : Time::Span = Time::Span.zero,
@@ -68,6 +70,8 @@ module ML::GGUF
     @qbit_cache_restore_failures = 0_i64
     @qbit_cache_writes = 0_i64
     @qbit_cache_write_failures = 0_i64
+    @qbit_cache_reused_prefix_tokens = 0_i64
+    @qbit_cache_replayed_suffix_tokens = 0_i64
     @qbit_cache_last_failure : String? = nil
     @qbit_cache_lookup_time = Time::Span.zero
     @qbit_cache_restore_time = Time::Span.zero
@@ -360,6 +364,8 @@ module ML::GGUF
           restore_failures: @qbit_cache_restore_failures,
           writes: @qbit_cache_writes,
           write_failures: @qbit_cache_write_failures,
+          reused_prefix_tokens: @qbit_cache_reused_prefix_tokens,
+          replayed_suffix_tokens: @qbit_cache_replayed_suffix_tokens,
           last_failure: @qbit_cache_last_failure,
           lookup_time: @qbit_cache_lookup_time,
           restore_time: @qbit_cache_restore_time,
@@ -392,6 +398,7 @@ module ML::GGUF
         state = nil.as(Qwen35CPU::State?)
         next_token = nil.as(Int32?)
         did_ordinary_prefill = false
+        did_qbit_suffix_prefill = false
 
         if qbit_cache = @qbit_cache
           # Native QBit restore is currently a Metal-only route. CPU requests
@@ -401,8 +408,7 @@ module ML::GGUF
             lookup_completed = false
             lookup_started = Time.instant
             begin
-              admission = qbit_cache.lookup(
-                rendered,
+              admission = qbit_cache.lookup_longest_prefix(
                 prompt_ids,
                 limit,
                 QwenQBitCacheEnvelope.state_abi(weights.hparams, limit),
@@ -435,9 +441,28 @@ module ML::GGUF
                   begin
                     prepared_candidate = candidate.not_nil!
                     qbit_cache.restore(admitted, weights.hparams, prepared_candidate)
+                    replay = Qwen35QBitRuntimeCache.replay_plan(
+                      admitted.entry,
+                      prompt_ids,
+                      tokenizer.vocab.size.to_i32,
+                    )
                     state = prepared_candidate
-                    next_token = admitted.entry.next_token_id
+                    if replay.cached_next_token?
+                      next_token = admitted.entry.next_token_id
+                    else
+                      suffix_ids = prompt_ids[replay.prefix_len, replay.replayed_tokens]
+                      replayed_next, _replayed_logit = Qwen35CPU.prefill_tokens_top1(
+                        weights,
+                        suffix_ids,
+                        replay.prefix_len,
+                        prepared_candidate,
+                      )
+                      next_token = replayed_next
+                      did_qbit_suffix_prefill = true
+                    end
                     @qbit_cache_hits += 1
+                    @qbit_cache_reused_prefix_tokens += replay.prefix_len
+                    @qbit_cache_replayed_suffix_tokens += replay.replayed_tokens
                   rescue ex : ArgumentError
                     release_state_metal!(candidate) if candidate
                     @qbit_cache_restore_failures += 1
@@ -515,7 +540,8 @@ module ML::GGUF
           did_ordinary_prefill = true
         end
 
-        if did_ordinary_prefill && (qbit_cache = @qbit_cache) && qbit_cache.write_back?
+        if (did_ordinary_prefill || did_qbit_suffix_prefill) &&
+           (qbit_cache = @qbit_cache) && qbit_cache.write_back?
           write_back_started = Time.instant
           begin
             qbit_cache.save(

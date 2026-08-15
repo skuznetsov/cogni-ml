@@ -131,6 +131,60 @@ describe ML::GGUF::QwenQBitCacheEnvelope do
     admitted.entry.next_token_id.should eq(context.next_token_id)
   end
 
+  it "derives a prompt-independent prefix scope and strictly admits a prefix candidate" do
+    context = qbit_envelope_context
+    native, kv = qbit_envelope_artifacts(context)
+    entry = envelope.build(context, native, kv, created_at_unix: 123_i64)
+    prefix = envelope.prefix_context(context)
+    different_prompt = ML::GGUF::QwenQBitCacheEnvelope::LookupContext.new(
+      model_id: context.model_id,
+      tokenizer_id: context.tokenizer_id,
+      template_id: context.template_id,
+      prompt_hash: "1" * 64,
+      token_hash: "2" * 64,
+      prefix_len: 2,
+      max_seq: context.max_seq,
+      layer_count: context.layer_count,
+      qbit_block_size: context.qbit_block_size,
+      qbit_precision: context.qbit_precision,
+      state_abi: context.state_abi,
+    )
+
+    envelope.prefix_scope_key(prefix).should eq(
+      envelope.prefix_scope_key(envelope.prefix_context(different_prompt))
+    )
+    candidate_lookup = envelope.validate_prefix_manifest!(
+      entry,
+      prefix,
+      context.token_hash,
+      context.prefix_len,
+    )
+    envelope.lookup_key(candidate_lookup).should eq(envelope.lookup_key(context))
+    envelope.admit(entry, candidate_lookup, native, kv).entry.certificate_id.should eq(entry.certificate_id)
+
+    expect_raises(ArgumentError, /token hash/) do
+      envelope.validate_prefix_manifest!(entry, prefix, "3" * 64, context.prefix_len)
+    end
+    expect_raises(ArgumentError, /prefix length/) do
+      envelope.validate_prefix_manifest!(entry, prefix, context.token_hash, context.prefix_len - 1)
+    end
+
+    wrong_max_seq = ML::GGUF::QwenQBitCacheEnvelope::PrefixContext.new(
+      model_id: prefix.model_id,
+      tokenizer_id: prefix.tokenizer_id,
+      template_id: prefix.template_id,
+      max_seq: prefix.max_seq + 1,
+      layer_count: prefix.layer_count,
+      qbit_block_size: prefix.qbit_block_size,
+      qbit_precision: prefix.qbit_precision,
+      state_abi: prefix.state_abi,
+    )
+    envelope.prefix_scope_key(wrong_max_seq).should_not eq(envelope.prefix_scope_key(prefix))
+    expect_raises(ArgumentError, /max_seq/) do
+      envelope.validate_prefix_manifest!(entry, wrong_max_seq, context.token_hash, context.prefix_len)
+    end
+  end
+
   it "binds the cached outcome to prompt tokens before runtime restore" do
     context = qbit_envelope_context
     native, kv = qbit_envelope_artifacts(context)
@@ -146,6 +200,38 @@ describe ML::GGUF::QwenQBitCacheEnvelope do
       ML::GGUF::Qwen35QBitRuntimeCache.validate_cached_outcome!(
         entry,
         [11_i32, 22_i32, 33_i32],
+        128,
+      )
+    end
+  end
+
+  it "plans exact-hit reuse or bounded suffix replay from an admitted prefix" do
+    context = qbit_envelope_context
+    native, kv = qbit_envelope_artifacts(context)
+    entry = envelope.build(context, native, kv, created_at_unix: 123_i64)
+
+    exact = ML::GGUF::Qwen35QBitRuntimeCache.replay_plan(
+      entry,
+      [11_i32, 22_i32, 33_i32],
+      128,
+    )
+    exact.prefix_len.should eq(3)
+    exact.replayed_tokens.should eq(0)
+    exact.cached_next_token?.should be_true
+
+    prefix = ML::GGUF::Qwen35QBitRuntimeCache.replay_plan(
+      entry,
+      [11_i32, 22_i32, 33_i32, 55_i32],
+      128,
+    )
+    prefix.prefix_len.should eq(3)
+    prefix.replayed_tokens.should eq(1)
+    prefix.cached_next_token?.should be_false
+
+    expect_raises(ArgumentError, /token hash/) do
+      ML::GGUF::Qwen35QBitRuntimeCache.replay_plan(
+        entry,
+        [11_i32, 22_i32, 99_i32, 55_i32],
         128,
       )
     end

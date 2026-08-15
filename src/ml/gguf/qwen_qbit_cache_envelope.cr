@@ -70,6 +70,34 @@ module ML::GGUF
       end
     end
 
+    # Request-known identity shared by every token prefix of one runtime/model
+    # configuration. Prompt text and token hashes are intentionally excluded:
+    # the ClickHouse index uses this scope only to find candidates, while
+    # `validate_prefix_manifest!` performs the actual admission check against
+    # the caller's token prefix.
+    class PrefixContext
+      getter state_runtime_id : String
+      getter model_id : String
+      getter tokenizer_id : String
+      getter template_id : String
+      getter max_seq : Int32
+      getter layer_count : Int32
+      getter qbit_block_size : Int32
+      getter qbit_precision : Int32
+      getter state_abi : StateABI
+
+      def initialize(@model_id : String,
+                     @tokenizer_id : String,
+                     @template_id : String,
+                     @max_seq : Int32,
+                     @layer_count : Int32,
+                     @qbit_block_size : Int32,
+                     @qbit_precision : Int32,
+                     @state_abi : StateABI,
+                     @state_runtime_id : String = Qwen35PromptCache::RUNTIME_ID)
+      end
+    end
+
     class Context < LookupContext
       getter validation_kind : String
       getter validation_steps : Int32
@@ -217,6 +245,36 @@ module ML::GGUF
       )
     end
 
+    def prefix_context(context : LookupContext) : PrefixContext
+      PrefixContext.new(
+        context.model_id,
+        context.tokenizer_id,
+        context.template_id,
+        context.max_seq,
+        context.layer_count,
+        context.qbit_block_size,
+        context.qbit_precision,
+        context.state_abi,
+        context.state_runtime_id,
+      )
+    end
+
+    def prefix_scope_key(context : PrefixContext) : String
+      validate_prefix_context!(context)
+      io = IO::Memory.new
+      write_string(io, "qwen-qbit-prefix-scope-v1")
+      write_string(io, context.state_runtime_id)
+      write_string(io, context.model_id)
+      write_string(io, context.tokenizer_id)
+      write_string(io, context.template_id)
+      write_string(io, state_abi_id(context.state_abi))
+      io.write_bytes(context.max_seq.to_u32, IO::ByteFormat::LittleEndian)
+      io.write_bytes(context.layer_count.to_u32, IO::ByteFormat::LittleEndian)
+      io.write_bytes(context.qbit_block_size.to_u32, IO::ByteFormat::LittleEndian)
+      io.write_bytes(context.qbit_precision.to_u32, IO::ByteFormat::LittleEndian)
+      Digest::SHA256.hexdigest(io.to_slice)
+    end
+
     def lookup_key(context : LookupContext) : String
       validate_lookup_context!(context)
       io = IO::Memory.new
@@ -341,6 +399,36 @@ module ML::GGUF
       validate_entry_identity!(entry, context)
     end
 
+    # Reconstruct the entry's full lookup identity only after checking every
+    # request-known scope field plus the actual caller-derived token hash and
+    # prefix length. The returned context is safe to use for artifact admission.
+    def validate_prefix_manifest!(entry : Entry,
+                                  context : PrefixContext,
+                                  token_hash : String,
+                                  prefix_len : Int32) : LookupContext
+      validate_prefix_context!(context)
+      raise ArgumentError.new("QBit token hash is invalid") unless sha256?(token_hash)
+      unless prefix_len > 0 && prefix_len <= context.max_seq
+        raise ArgumentError.new("QBit prefix length is invalid")
+      end
+      lookup = LookupContext.new(
+        model_id: context.model_id,
+        tokenizer_id: context.tokenizer_id,
+        template_id: context.template_id,
+        prompt_hash: entry.prompt_hash,
+        token_hash: token_hash,
+        prefix_len: prefix_len,
+        max_seq: context.max_seq,
+        layer_count: context.layer_count,
+        qbit_block_size: context.qbit_block_size,
+        qbit_precision: context.qbit_precision,
+        state_abi: context.state_abi,
+        state_runtime_id: context.state_runtime_id,
+      )
+      validate_entry_identity!(entry, lookup)
+      lookup
+    end
+
     def certificate_id(entry : Entry) : String
       io = IO::Memory.new
       write_string(io, "qwen-qbit-cache-certificate-v1")
@@ -383,6 +471,25 @@ module ML::GGUF
       raise ArgumentError.new("QBit prompt hash is invalid") unless sha256?(context.prompt_hash)
       raise ArgumentError.new("QBit token hash is invalid") unless sha256?(context.token_hash)
       raise ArgumentError.new("QBit prefix length is invalid") unless context.prefix_len > 0 && context.prefix_len <= context.max_seq
+      raise ArgumentError.new("QBit layer count is invalid") unless context.layer_count > 0
+      abi = context.state_abi
+      raise ArgumentError.new("QBit state ABI layer count mismatch") unless abi.layer_count == context.layer_count
+      raise ArgumentError.new("QBit state ABI attention interval is invalid") unless abi.full_attention_interval > 0
+      unless abi.kv_record_byte_size > 0 && abi.conv_record_byte_size > 0 && abi.ssm_record_byte_size > 0
+        raise ArgumentError.new("QBit state ABI record size is invalid")
+      end
+      unless context.qbit_block_size > 0 && context.qbit_block_size <= UInt16::MAX && context.qbit_block_size % 8 == 0
+        raise ArgumentError.new("QBit block size is invalid")
+      end
+      raise ArgumentError.new("QBit precision is unsupported") unless context.qbit_precision == REQUIRED_PRECISION
+    end
+
+    private def validate_prefix_context!(context : PrefixContext) : Nil
+      raise ArgumentError.new("QBit state runtime mismatch") unless context.state_runtime_id == Qwen35PromptCache::RUNTIME_ID
+      raise ArgumentError.new("QBit model identity is empty") if context.model_id.empty?
+      raise ArgumentError.new("QBit tokenizer identity is empty") if context.tokenizer_id.empty?
+      raise ArgumentError.new("QBit template identity is invalid") unless sha256?(context.template_id)
+      raise ArgumentError.new("QBit max_seq is invalid") unless context.max_seq > 0
       raise ArgumentError.new("QBit layer count is invalid") unless context.layer_count > 0
       abi = context.state_abi
       raise ArgumentError.new("QBit state ABI layer count mismatch") unless abi.layer_count == context.layer_count

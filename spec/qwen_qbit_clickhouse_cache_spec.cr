@@ -121,16 +121,19 @@ describe ML::GGUF::QwenQBitClickHouseCache do
     store.create_schema
     saved = store.save(context, native, kv, ttl: 30.minutes, created_at_unix: 100_i64)
 
-    transport.requests.size.should eq(6)
+    transport.requests.size.should eq(8)
     transport.requests[0].query.should contain("CREATE TABLE IF NOT EXISTS qwen_cache_test_recurrent")
     transport.requests[1].query.should contain("CREATE TABLE IF NOT EXISTS qwen_cache_test_kv")
     transport.requests[2].query.should contain("CREATE TABLE IF NOT EXISTS qwen_cache_test_manifest")
-    transport.requests[3].query.should contain("INSERT INTO qwen_cache_test_recurrent")
-    transport.requests[4].query.should contain("INSERT INTO qwen_cache_test_kv")
-    transport.requests[5].query.should contain("INSERT INTO qwen_cache_test_manifest")
-    transport.requests[3].query.should contain(envelope.lookup_key(context))
-    transport.requests[3].query.should contain(saved.generation_id)
-    String.new(transport.requests[5].body).should eq(saved.entry.to_json)
+    transport.requests[3].query.should contain("CREATE TABLE IF NOT EXISTS qwen_cache_test_prefix_index")
+    transport.requests[4].query.should contain("INSERT INTO qwen_cache_test_recurrent")
+    transport.requests[5].query.should contain("INSERT INTO qwen_cache_test_kv")
+    transport.requests[6].query.should contain("INSERT INTO qwen_cache_test_manifest")
+    transport.requests[7].query.should contain("INSERT INTO qwen_cache_test_prefix_index")
+    transport.requests[4].query.should contain(envelope.lookup_key(context))
+    transport.requests[4].query.should contain(saved.generation_id)
+    String.new(transport.requests[6].body).should eq(saved.entry.to_json)
+    String.new(transport.requests[7].body).should eq(saved.entry.to_json)
     saved.expires_at_unix.should eq(1_900_i64)
   end
 
@@ -154,6 +157,50 @@ describe ML::GGUF::QwenQBitClickHouseCache do
     transport.requests[0].query.should contain(envelope.lookup_key(lookup))
     transport.requests[1].query.should contain(generation)
     transport.requests[2].query.should contain(generation)
+  end
+
+  it "finds the longest indexed token prefix and revalidates its full identity" do
+    transport = QBitCHMemoryTransport.new
+    config = ML::GGUF::QwenQBitClickHouseCache::Config.new(table_prefix: "qwen_cache_test")
+    store = ML::GGUF::QwenQBitClickHouseCache::Store.new(config, transport)
+    context = qbit_ch_context
+    native, kv = qbit_ch_artifacts(context)
+    entry = envelope.build(context, native, kv, created_at_unix: 100_i64)
+    generation = "f" * 64
+    lookup_key = envelope.lookup_key(context)
+    transport.queue((generation + lookup_key + entry.to_json).to_slice)
+    transport.queue(native)
+    transport.queue(kv)
+
+    tokens = [11_i32, 22_i32, 33_i32, 55_i32]
+    admitted = store.lookup_longest_prefix(envelope.prefix_context(context), tokens).not_nil!
+
+    admitted.entry.prefix_len.should eq(3)
+    transport.requests.size.should eq(3)
+    transport.requests[0].query.should contain(envelope.prefix_scope_key(envelope.prefix_context(context)))
+    transport.requests[0].query.should contain(ML::GGUF::Qwen35PromptCache.token_hash(tokens, 3))
+    transport.requests[0].query.should contain("ORDER BY prefix_len DESC")
+    transport.requests[1].query.should contain(generation)
+    transport.requests[2].query.should contain(generation)
+  end
+
+  it "rejects a prefix-index row whose claimed token prefix does not match the request" do
+    transport = QBitCHMemoryTransport.new
+    store = ML::GGUF::QwenQBitClickHouseCache::Store.new(
+      ML::GGUF::QwenQBitClickHouseCache::Config.new(table_prefix: "qwen_cache_test"),
+      transport,
+    )
+    context = qbit_ch_context
+    native, kv = qbit_ch_artifacts(context)
+    entry = envelope.build(context, native, kv, created_at_unix: 100_i64)
+    generation = "9" * 64
+    lookup_key = envelope.lookup_key(context)
+    transport.queue((generation + lookup_key + entry.to_json).to_slice)
+
+    expect_raises(ArgumentError, /token hash/) do
+      store.lookup_longest_prefix(envelope.prefix_context(context), [11_i32, 22_i32, 99_i32, 55_i32])
+    end
+    transport.requests.size.should eq(1)
   end
 
   it "does not publish a manifest when an artifact insert fails" do
@@ -280,6 +327,31 @@ describe ML::GGUF::QwenQBitClickHouseCache do
     native, kv = qbit_ch_artifacts(context)
     expect_raises(ArgumentError, /generation identity/) do
       store.save(context, native, kv, ttl: 30.minutes, created_at_unix: 100_i64)
+    end
+    transport.requests.should be_empty
+  end
+
+  it "bounds the number of prefix hashes before constructing a ClickHouse query" do
+    transport = QBitCHMemoryTransport.new
+    store = ML::GGUF::QwenQBitClickHouseCache::Store.new(
+      ML::GGUF::QwenQBitClickHouseCache::Config.new(table_prefix: "qwen_cache_test"),
+      transport,
+    )
+    context = qbit_ch_context
+    prefix = ML::GGUF::QwenQBitCacheEnvelope::PrefixContext.new(
+      model_id: context.model_id,
+      tokenizer_id: context.tokenizer_id,
+      template_id: context.template_id,
+      max_seq: ML::GGUF::QwenQBitClickHouseCache::MAX_PREFIX_CANDIDATES + 1,
+      layer_count: context.layer_count,
+      qbit_block_size: context.qbit_block_size,
+      qbit_precision: context.qbit_precision,
+      state_abi: context.state_abi,
+    )
+    tokens = Array(Int32).new(ML::GGUF::QwenQBitClickHouseCache::MAX_PREFIX_CANDIDATES + 1, 1_i32)
+
+    expect_raises(ArgumentError, /candidate limit/) do
+      store.lookup_longest_prefix(prefix, tokens)
     end
     transport.requests.should be_empty
   end

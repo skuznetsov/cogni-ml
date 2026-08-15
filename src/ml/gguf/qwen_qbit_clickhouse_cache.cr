@@ -7,17 +7,18 @@ require "./qwen_qbit_cache_envelope"
 module ML::GGUF
   # Bounded ClickHouse HTTP storage for split recurrent-QBit/exact-KV state.
   #
-  # Every write uses a random generation and publishes its manifest last. A
-  # lookup therefore sees either no committed generation or one whose exact
-  # artifact rows already completed insertion. Background merges and TTL are
-  # never admission authorities.
+  # Every write uses a random generation and publishes its exact manifest only
+  # after both artifacts. The optional prefix index is published after that
+  # manifest, so every visible prefix row names an already committed exact
+  # generation. Background merges and TTL are never admission authorities.
   module QwenQBitClickHouseCache
     extend self
 
-    QBIT_BLOCK_SIZE     = 1024
-    GENERATION_HEX_SIZE =   64
-    LOOKUP_HEX_SIZE     =   64
-    EMPTY_BODY          = Bytes.empty
+    QBIT_BLOCK_SIZE       =  1024
+    GENERATION_HEX_SIZE   =    64
+    LOOKUP_HEX_SIZE       =    64
+    MAX_PREFIX_CANDIDATES = 8_192
+    EMPTY_BODY            = Bytes.empty
 
     class Config
       getter endpoint : URI
@@ -209,8 +210,9 @@ module ML::GGUF
         lookup_key = QwenQBitCacheEnvelope.lookup_key(context)
         expires_at_unix = created_at_unix + ttl_seconds
 
-        # Publish artifacts first. The manifest is the commit marker and must
-        # remain the final successful insert for this generation.
+        # Publish artifacts first. The exact manifest is their commit marker;
+        # the prefix row is a secondary, fail-closed discoverability index and
+        # is visible only after the exact generation is committed.
         @transport.post(
           recurrent_insert_query(lookup_key, generation_id, expires_at_unix),
           recurrent_native,
@@ -226,6 +228,11 @@ module ML::GGUF
           envelope_json.to_slice,
           @config.max_envelope_bytes,
         )
+        @transport.post(
+          prefix_insert_query(entry, context, lookup_key, generation_id, expires_at_unix),
+          envelope_json.to_slice,
+          @config.max_envelope_bytes,
+        )
         Saved.new(entry, generation_id, expires_at_unix)
       end
 
@@ -235,6 +242,49 @@ module ML::GGUF
 
       def lookup(context : QwenQBitCacheEnvelope::LookupContext) : QwenQBitCacheEnvelope::Admission?
         lookup_internal(context, nil)
+      end
+
+      def lookup_longest_prefix(context : QwenQBitCacheEnvelope::PrefixContext,
+                                token_ids : Array(Int32)) : QwenQBitCacheEnvelope::Admission?
+        validate_prefix_request!(context, token_ids)
+        response_limit = @config.max_envelope_bytes + GENERATION_HEX_SIZE + LOOKUP_HEX_SIZE
+        indexed = @transport.post(
+          prefix_lookup_query(context, token_ids),
+          EMPTY_BODY,
+          response_limit,
+        )
+        return nil if indexed.empty?
+        enforce_response_limit!(indexed, response_limit)
+        header_size = GENERATION_HEX_SIZE + LOOKUP_HEX_SIZE
+        unless indexed.size > header_size
+          raise ArgumentError.new("malformed QBit ClickHouse prefix response")
+        end
+
+        generation_id = String.new(indexed[0, GENERATION_HEX_SIZE])
+        validate_hex_id!(generation_id, GENERATION_HEX_SIZE, "generation")
+        indexed_lookup_key = String.new(indexed[GENERATION_HEX_SIZE, LOOKUP_HEX_SIZE])
+        validate_hex_id!(indexed_lookup_key, LOOKUP_HEX_SIZE, "lookup")
+        entry = begin
+          QwenQBitCacheEnvelope::Entry.from_json(
+            String.new(indexed[header_size, indexed.size - header_size])
+          )
+        rescue ex : JSON::ParseException
+          raise ArgumentError.new("malformed QBit ClickHouse prefix response: #{ex.message}")
+        end
+        unless entry.prefix_len > 0 && entry.prefix_len <= token_ids.size
+          raise ArgumentError.new("QBit prefix length is outside the request")
+        end
+        token_hash = Qwen35PromptCache.token_hash(token_ids, entry.prefix_len)
+        lookup = QwenQBitCacheEnvelope.validate_prefix_manifest!(
+          entry,
+          context,
+          token_hash,
+          entry.prefix_len,
+        )
+        unless indexed_lookup_key == QwenQBitCacheEnvelope.lookup_key(lookup)
+          raise ArgumentError.new("QBit prefix lookup key mismatch")
+        end
+        load_admission(entry, lookup, indexed_lookup_key, generation_id, nil)
       end
 
       private def lookup_internal(context : QwenQBitCacheEnvelope::LookupContext,
@@ -267,34 +317,7 @@ module ML::GGUF
           QwenQBitCacheEnvelope.validate_manifest!(entry, context)
         end
 
-        if admission = resident_admission(generation_id, entry.certificate_id)
-          return admission
-        end
-
-        recurrent_native = @transport.post(
-          recurrent_lookup_query(entry.cache_id, lookup_key, generation_id),
-          EMPTY_BODY,
-          @config.max_recurrent_bytes,
-        )
-        enforce_response_limit!(recurrent_native, @config.max_recurrent_bytes)
-        # The envelope authenticates the exact-KV byte count. Reject a combined
-        # response that cannot fit the configured budget before allocating the
-        # second large HTTP response.
-        validate_combined_size!(recurrent_native.size.to_i64, entry.kv_artifact_byte_size)
-        kv_artifact = @transport.post(
-          kv_lookup_query(entry.cache_id, lookup_key, generation_id),
-          EMPTY_BODY,
-          @config.max_kv_bytes,
-        )
-        enforce_response_limit!(kv_artifact, @config.max_kv_bytes)
-        validate_combined_size!(recurrent_native.size.to_i64, kv_artifact.size.to_i64)
-        admission = if full_context = expected
-                      QwenQBitCacheEnvelope.admit(entry, full_context, recurrent_native, kv_artifact)
-                    else
-                      QwenQBitCacheEnvelope.admit(entry, context, recurrent_native, kv_artifact)
-                    end
-        remember_admission(generation_id, admission, recurrent_native.size.to_i64 + kv_artifact.size)
-        admission
+        load_admission(entry, context, lookup_key, generation_id, expected)
       end
 
       private def schema_queries : Array(String)
@@ -337,6 +360,21 @@ module ML::GGUF
             envelope String CODEC(ZSTD(1))
           ) ENGINE=MergeTree
           ORDER BY (cache_id, lookup_key, created_at_unix, generation_id)
+          TTL toDateTime(expires_at_unix)
+          SQL
+          <<-SQL,
+          CREATE TABLE IF NOT EXISTS #{prefix_index_table} (
+            scope_key FixedString(64),
+            token_hash FixedString(64),
+            prefix_len UInt32,
+            cache_id UInt64,
+            lookup_key FixedString(64),
+            generation_id FixedString(64),
+            created_at_unix Int64,
+            expires_at_unix Int64,
+            envelope String CODEC(ZSTD(1))
+          ) ENGINE=MergeTree
+          ORDER BY (scope_key, token_hash, prefix_len, created_at_unix, generation_id)
           TTL toDateTime(expires_at_unix)
           SQL
         ]
@@ -395,6 +433,42 @@ module ML::GGUF
         SQL
       end
 
+      private def prefix_insert_query(entry : QwenQBitCacheEnvelope::Entry,
+                                      context : QwenQBitCacheEnvelope::LookupContext,
+                                      lookup_key : String,
+                                      generation_id : String,
+                                      expires_at_unix : Int64) : String
+        scope_key = QwenQBitCacheEnvelope.prefix_scope_key(QwenQBitCacheEnvelope.prefix_context(context))
+        <<-SQL
+        INSERT INTO #{prefix_index_table}
+        SELECT toFixedString('#{scope_key}', 64), toFixedString('#{entry.token_hash}', 64),
+               toUInt32(#{entry.prefix_len}), toUInt64(#{entry.cache_id}),
+               toFixedString('#{lookup_key}', 64), toFixedString('#{generation_id}', 64),
+               toInt64(#{entry.created_at_unix}), toInt64(#{expires_at_unix}), envelope
+        FROM input('envelope String')
+        FORMAT RawBLOB
+        SQL
+      end
+
+      private def prefix_lookup_query(context : QwenQBitCacheEnvelope::PrefixContext,
+                                      token_ids : Array(Int32)) : String
+        scope_key = QwenQBitCacheEnvelope.prefix_scope_key(context)
+        token_hashes = (1..token_ids.size).map do |prefix_len|
+          "toFixedString('#{Qwen35PromptCache.token_hash(token_ids, prefix_len)}', 64)"
+        end.join(", ")
+        <<-SQL
+        SELECT concat(generation_id, lookup_key, envelope)
+        FROM #{prefix_index_table}
+        WHERE scope_key = toFixedString('#{scope_key}', 64)
+          AND token_hash IN (#{token_hashes})
+          AND prefix_len <= toUInt32(#{token_ids.size})
+          AND expires_at_unix > toUnixTimestamp(now())
+        ORDER BY prefix_len DESC, created_at_unix DESC, generation_id DESC
+        LIMIT 1
+        FORMAT RawBLOB
+        SQL
+      end
+
       private def recurrent_lookup_query(cache_id : UInt64,
                                          lookup_key : String,
                                          generation_id : String) : String
@@ -437,10 +511,65 @@ module ML::GGUF
         "#{@config.table_prefix}_manifest"
       end
 
+      private def prefix_index_table : String
+        "#{@config.table_prefix}_prefix_index"
+      end
+
       private def validate_context_layout!(context : QwenQBitCacheEnvelope::LookupContext) : Nil
         unless context.qbit_block_size == QBIT_BLOCK_SIZE
           raise ArgumentError.new("QBit ClickHouse cache requires block size #{QBIT_BLOCK_SIZE}")
         end
+      end
+
+      private def validate_prefix_request!(context : QwenQBitCacheEnvelope::PrefixContext,
+                                           token_ids : Array(Int32)) : Nil
+        # Validate the complete scope before constructing SQL from it.
+        QwenQBitCacheEnvelope.prefix_scope_key(context)
+        raise ArgumentError.new("QBit prefix request is empty") if token_ids.empty?
+        if token_ids.size > context.max_seq
+          raise ArgumentError.new("QBit prefix request exceeds max_seq")
+        end
+        if token_ids.size > MAX_PREFIX_CANDIDATES
+          raise ArgumentError.new("QBit prefix candidate limit exceeded")
+        end
+        unless context.qbit_block_size == QBIT_BLOCK_SIZE
+          raise ArgumentError.new("QBit ClickHouse cache requires block size #{QBIT_BLOCK_SIZE}")
+        end
+      end
+
+      private def load_admission(entry : QwenQBitCacheEnvelope::Entry,
+                                 context : QwenQBitCacheEnvelope::LookupContext,
+                                 lookup_key : String,
+                                 generation_id : String,
+                                 expected : QwenQBitCacheEnvelope::Context?) : QwenQBitCacheEnvelope::Admission
+        if admission = resident_admission(generation_id, entry.certificate_id)
+          return admission
+        end
+
+        recurrent_native = @transport.post(
+          recurrent_lookup_query(entry.cache_id, lookup_key, generation_id),
+          EMPTY_BODY,
+          @config.max_recurrent_bytes,
+        )
+        enforce_response_limit!(recurrent_native, @config.max_recurrent_bytes)
+        # The envelope authenticates the exact-KV byte count. Reject a combined
+        # response that cannot fit the configured budget before allocating the
+        # second large HTTP response.
+        validate_combined_size!(recurrent_native.size.to_i64, entry.kv_artifact_byte_size)
+        kv_artifact = @transport.post(
+          kv_lookup_query(entry.cache_id, lookup_key, generation_id),
+          EMPTY_BODY,
+          @config.max_kv_bytes,
+        )
+        enforce_response_limit!(kv_artifact, @config.max_kv_bytes)
+        validate_combined_size!(recurrent_native.size.to_i64, kv_artifact.size.to_i64)
+        admission = if full_context = expected
+                      QwenQBitCacheEnvelope.admit(entry, full_context, recurrent_native, kv_artifact)
+                    else
+                      QwenQBitCacheEnvelope.admit(entry, context, recurrent_native, kv_artifact)
+                    end
+        remember_admission(generation_id, admission, recurrent_native.size.to_i64 + kv_artifact.size)
+        admission
       end
 
       private def validate_input_size!(bytes : Bytes, limit : Int64, label : String) : Nil

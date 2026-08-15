@@ -2,8 +2,9 @@ require "./qwen_qbit_clickhouse_cache"
 require "./qwen_qbit_state_snapshot"
 
 module ML::GGUF
-  # Exact-full-prompt adapter between Qwen35NativeRuntime and the bounded
-  # ClickHouse QBit store. Prefix search/replay is deliberately out of scope.
+  # Prefix-aware adapter between Qwen35NativeRuntime and the bounded ClickHouse
+  # QBit store. The store restores only an admitted state boundary; the runtime
+  # deterministically replays any request suffix with the live model.
   class Qwen35QBitRuntimeCache
     BLOCK_SIZE      = QwenQBitClickHouseCache::QBIT_BLOCK_SIZE
     PRECISION       = QwenQBitCacheEnvelope::REQUIRED_PRECISION
@@ -13,6 +14,15 @@ module ML::GGUF
     # while an accidentally much larger capture fails before allocating a
     # host snapshot or compressed stream.
     MAX_WRITE_BACK_SOURCE_BYTES = 256_i64 * 1024 * 1024
+
+    record ReplayPlan,
+      prefix_len : Int32,
+      replayed_tokens : Int32,
+      cached_next_token : Bool do
+      def cached_next_token? : Bool
+        cached_next_token
+      end
+    end
 
     getter write_back_max_source_bytes : Int64
 
@@ -53,6 +63,17 @@ module ML::GGUF
       admission = @store.lookup(lookup)
       if admitted = admission
         self.class.validate_cached_outcome!(admitted.entry, prompt_ids, vocab_size)
+      end
+      admission
+    end
+
+    def lookup_longest_prefix(prompt_ids : Array(Int32),
+                              max_seq : Int32,
+                              state_abi : QwenQBitCacheEnvelope::StateABI,
+                              vocab_size : Int32) : QwenQBitCacheEnvelope::Admission?
+      admission = @store.lookup_longest_prefix(prefix_context(max_seq, state_abi), prompt_ids)
+      if admitted = admission
+        self.class.replay_plan(admitted.entry, prompt_ids, vocab_size)
       end
       admission
     end
@@ -151,6 +172,22 @@ module ML::GGUF
       end
     end
 
+    def self.replay_plan(entry : QwenQBitCacheEnvelope::Entry,
+                         prompt_ids : Array(Int32),
+                         vocab_size : Int32) : ReplayPlan
+      prefix_len = entry.prefix_len
+      unless prefix_len > 0 && prefix_len <= prompt_ids.size
+        raise ArgumentError.new("QBit cached prefix length is outside the request")
+      end
+      prefix_ids = prompt_ids[0, prefix_len]
+      unless entry.token_hash == Qwen35PromptCache.token_hash(prefix_ids)
+        raise ArgumentError.new("QBit cached token hash mismatch")
+      end
+      validate_cached_outcome!(entry, prefix_ids, vocab_size)
+      replayed_tokens = prompt_ids.size.to_i32 - prefix_len
+      ReplayPlan.new(prefix_len, replayed_tokens, replayed_tokens == 0)
+    end
+
     private def lookup_context(prompt_text : String,
                                prompt_ids : Array(Int32),
                                max_seq : Int32,
@@ -163,6 +200,20 @@ module ML::GGUF
         prompt_hash: Qwen35PromptCache.prompt_hash(prompt_ids, prompt_text),
         token_hash: Qwen35PromptCache.token_hash(prompt_ids),
         prefix_len: prompt_ids.size.to_i32,
+        max_seq: max_seq,
+        layer_count: state_abi.layer_count,
+        qbit_block_size: BLOCK_SIZE,
+        qbit_precision: PRECISION,
+        state_abi: state_abi,
+      )
+    end
+
+    private def prefix_context(max_seq : Int32,
+                               state_abi : QwenQBitCacheEnvelope::StateABI) : QwenQBitCacheEnvelope::PrefixContext
+      QwenQBitCacheEnvelope::PrefixContext.new(
+        model_id: @model_id,
+        tokenizer_id: @tokenizer_id,
+        template_id: @template_id,
         max_seq: max_seq,
         layer_count: state_abi.layer_count,
         qbit_block_size: BLOCK_SIZE,

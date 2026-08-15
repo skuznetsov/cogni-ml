@@ -1,6 +1,6 @@
 # Qwen QBit Cache Frontier
 
-Document status: implementation-bounded
+Document status: active design-sealed slice
 
 Current frontier: a default-off p7 transport/restore experiment for recurrent
 Qwen cache state plus a bounded ClickHouse HTTP storage/read client and an
@@ -16,6 +16,15 @@ strictly additive: it may read or write only when explicitly configured and it
 must preserve the existing local prompt-cache and ordinary-prefill behavior on
 every miss, rejection, cache transport failure, or rejected write. System and
 Metal failures abort instead of risking a second heavy attempt.
+
+Active slice: widen the default-off runtime route from exact-full-prompt lookup
+to longest-token-prefix restore plus suffix replay. New writes may additionally
+publish session checkpoints. A checkpoint is either a full QBit/exact-KV anchor
+or a cumulative exact token delta rooted at one immutable anchor. Delta restore
+loads the anchor once and deterministically replays the stored token suffix;
+it does not add quantized recurrent-state differences. Explicit rollback may
+select an earlier checkpoint only when its session identity and token prefix
+match the caller-authoritative transcript.
 
 Bounded context: local `.qkv` state artifacts and an explicitly configured
 ClickHouse HTTP endpoint. Background part merges are a separate storage context
@@ -111,9 +120,17 @@ and never establish cache visibility or admission.
   CUDA decoder, or enabled-by-default cache route in this slice. The runtime
   uses bounded HTTP requests and synchronous inserts only when explicitly
   configured.
-- No longest-prefix lookup, suffix replay, background write queue, automatic
-  schema mutation, cross-`max_seq` restore, or partially restored state reuse is
-  admitted in the first runtime slice.
+- No background write queue, cross-`max_seq` restore, or partially restored
+  state reuse is admitted in the active runtime slice.
+- No arithmetic recurrent-state delta chain is admitted. Applying successive
+  p7 differences would compound approximation error and make rollback depend
+  on chain length. Session deltas contain exact token ids and are recomputed
+  from a bounded full anchor instead.
+- No cache artifact becomes transcript authority. Message content and the
+  selected rollback point remain caller-owned; cache metadata may bind only a
+  session hash, checkpoint identity, token hashes, and exact replay tokens.
+- `always rollback` means every non-expired committed checkpoint whose anchor
+  is still retained and validates. It is not an infinite-retention guarantee.
 - The manifest certificate is a deterministic integrity binding, not an HMAC,
   signature, or trust proof for bytes supplied by an untrusted store. A first
   strict cold admission must still verify the artifacts. Mutable backing bytes
@@ -129,8 +146,8 @@ and never establish cache visibility or admission.
 - A trusted ClickHouse transport/storage certificate that can safely amortize
   the first logical digest, tied to the full lookup identity and returned
   artifact checksums rather than to a truncated row key alone.
-- Longest-prefix runtime wiring that can restore an admitted common prefix and
-  replay only a request-specific suffix.
+- Background checkpoint compaction and anchor renewal that preserve every
+  still-retained rollback boundary.
 - ClickHouse storage using fixed-size tiles and independently readable bit
   planes.
 - Progressive fetch or fallback from 6/7 planes to the full 8-plane code.
@@ -195,6 +212,22 @@ and never establish cache visibility or admission.
   injected system/Metal restore exception must release the candidate and abort
   without retry. An injected write failure after prefill must preserve the
   generated token and increment only the write-failure counter.
+- Longest-prefix lookup must reject a row with the right model but the wrong
+  tokenizer, template, state ABI, `max_seq`, token hash, or claimed prefix
+  length. A truncated `UInt64` cache id is never sufficient admission evidence.
+- Restoring a full anchor and replaying the request suffix must produce the same
+  next token as an ordinary full prefill. The measured corridor includes index
+  lookup, artifact read, Metal restore, suffix replay, and first continuation.
+- A delta checkpoint must bind its session hash, parent checkpoint, immutable
+  anchor generation and certificate, anchor prefix hash, exact cumulative token
+  suffix, child prefix hash, and cached next-token validation. Mutation of any
+  field or token must fail before state becomes reusable.
+- Explicit rollback must reject a checkpoint from another session and a
+  checkpoint whose child token sequence is not a prefix of the supplied
+  caller-authoritative transcript. Branches from one anchor remain distinct.
+- Delta depth and replay tokens are bounded. Crossing either bound writes a new
+  full anchor; failure to publish that anchor leaves the previous committed
+  checkpoints readable.
 
 ## Stop rules
 
@@ -207,6 +240,9 @@ and never establish cache visibility or admission.
 - Stop promotion if p7 cold-hit latency does not beat recurrent BF16 or is not
   competitive with recurrent INT8 after storage read, validation, upload,
   restore, and first continuation are recomputed together.
+- Stop delta promotion if total restore plus replay does not beat full prefill,
+  or if retained bytes per rollback boundary do not fall below full-snapshot
+  storage. Do not hide anchor cost or checkpoint-index bytes.
 
 ## Host resource safety
 
