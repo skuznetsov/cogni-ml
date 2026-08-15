@@ -1,9 +1,11 @@
 # Qwen QBit Cache Frontier
 
-Document status: measured-experimental
+Document status: implementation-bounded
 
-Current frontier: CPU diagnostic for Gaussian Lloyd-Max prefix compression of
-recurrent Qwen cache state at 8, 7, and 6 retained bit planes.
+Current frontier: a default-off p7 transport/restore experiment for recurrent
+Qwen cache state. It may emit revision-0 ClickHouse Native blocks whose QBit
+column is already bit-transposed, and may decode the retained planes directly
+into prepared Metal state buffers.
 
 Bounded context: local `.qkv` state artifacts. ClickHouse storage and background
 part merges are a separate transport/storage context.
@@ -18,6 +20,18 @@ part merges are a separate transport/storage context.
   error, and free-running token parity on a local model.
 - Eight-plane reconstruction is the full-code reference. It is not lossless
   relative to the original Float32 state.
+- A diagnostic Native writer may batch complete 1024-code tiles and append an
+  all-zero eighth plane for the p7 representation required by
+  `QBit(Int8, 1024)`. This is a column-layout operation, not a second bit
+  transpose.
+- A strict single-block Native parser may validate the exact eight-column
+  schema, contiguous record/tile ordering, tail counts, and zero p7 LSB before
+  exposing zero-copy column offsets.
+- A diagnostic Metal kernel may consume that plane-major Native block in one
+  upload, fuse p7 untranspose, conditional-centroid lookup, affine
+  reconstruction, and write all recurrent records into existing Float32 state
+  buffers in one command buffer. Live KV remains exact and outside the QBit
+  column.
 
 ## Rejected surface
 
@@ -26,8 +40,11 @@ part merges are a separate transport/storage context.
 - No claim that scalar MSE implies autoregressive parity.
 - No claim that ClickHouse background merges are on the cache-hit critical
   path: newly inserted rows must remain readable before a part merge completes.
-- No Metal/CUDA decoder or end-to-end ClickHouse Native writer yet. Per-tile
-  plane bytes do have a checked `QBit(Int8, 8)` ordering contract.
+- No production ClickHouse client, multi-block Native response parser, TCP
+  packet framing/compression, durable QBit artifact version, CUDA decoder, or
+  default cache route in this slice.
+- A fast kernel or compact Native block alone is not evidence that the complete
+  cold-hit path is faster.
 
 ## Guard-only future
 
@@ -56,6 +73,14 @@ part merges are a separate transport/storage context.
   any divergence keeps the precision experimental.
 - A later ClickHouse gate must measure insert visibility separately from
   background merge duration and full cold-hit restore latency.
+- Revision-0 Native bytes must be accepted by ClickHouse and reproduce all
+  metadata plus the exact seven retained bit-plane subcolumns. Missing rows,
+  malformed plane sizes, mixed tile widths, or unsupported precision must fail
+  before any state becomes admissible.
+- Metal p7 reconstruction must match the CPU reference on constant, tail,
+  sign-boundary, and extreme-code blocks, then retain real-model continuation
+  parity. The end-to-end gate is `Native read + Metal restore + continuation`,
+  not kernel time alone.
 
 ## Stop rules
 
@@ -65,6 +90,41 @@ part merges are a separate transport/storage context.
   useful size/parity trade-off.
 - Do not attribute cache latency to ClickHouse merges unless a measured read is
   actually blocked on a merge.
+- Stop promotion if p7 cold-hit latency does not beat recurrent BF16 or is not
+  competitive with recurrent INT8 after storage read, validation, upload,
+  restore, and first continuation are recomputed together.
+
+## Host resource safety
+
+- QBit verification is limited to `scripts/qwen_qbit_safe_check.sh`. The script
+  accepts no caller-provided spec paths and therefore cannot silently widen
+  into the full Crystal/Metal suite.
+- Heavy Gemma/Qwen specs and model probes must run through `scripts/run_safe.sh`.
+  Its macOS system-memory floor is enabled by default at 12%; setting it to zero
+  is an explicit unsafe opt-out.
+- The in-process spec watchdog uses the same default system-memory floor, so a
+  direct `crystal spec` remains pressure-bounded even when the outer wrapper is
+  accidentally omitted. RSS remains a secondary signal because Metal, wired,
+  and compressor pages share Apple unified memory and are not fully attributed
+  to the child RSS.
+- Do not use the full suite as a QBit completion proxy. The focused codec,
+  Native layout, tail, malformed-input, and Metal parity falsifiers are the
+  relevant gate; broader model families add resource pressure without closing
+  this frontier.
+- After any watchdog reboot or pressure termination, stop model work until the
+  panic report and current host headroom are inspected. A user-space watchdog
+  reduces risk but cannot guarantee recovery once the kernel scheduler is
+  already starved.
+
+The 2026-08-15 full-suite attempt violated the pre-existing guarded-run
+boundary and ended in a watchdog panic. The panic reported no watchdogd
+check-ins for 92 seconds, compressor segments at 100% (`BAD`), 76 swapfiles,
+and only 908 free 16 KiB pages. `crystal-run-spec.tmp` was the largest sampled
+process at 3.49 GB RSS, illustrating why RSS alone was not an adequate guard.
+The report does not isolate Metal pipeline cache bytes from buffers, compiler
+state, other processes, or VM compressor churn. `MTLDevice.currentAllocatedSize`
+is now exposed for future attribution; it is diagnostic evidence, not a reboot
+prevention mechanism.
 
 ## Measured evidence (2026-08-14)
 
@@ -89,6 +149,37 @@ The current scalar CPU implementation is a negative latency result. On Qwen3.8
 restore. The current recurrent INT8 artifact encoded in 248 ms. A direct Metal
 plane decoder is therefore a prerequisite; the CPU route must not enter the
 cache-hit path.
+
+### Direct Native-to-Metal gate (2026-08-15)
+
+A release build on the Apple M2 Max exercised Qwen3.8 27B with a five-token
+plain-text prompt, seven timed restores after one cold restore, and a prepared
+Metal state. The p7 route parsed the actual revision-zero Native block, uploaded
+that block once per restore, decoded all 96 recurrent records in one command
+buffer, restored exact live KV, and then continued generation.
+
+| Route | Uncompressed state bytes | Cold restore | Median prepared restore |
+| --- | ---: | ---: | ---: |
+| recurrent BF16 artifact | 86,838,556 | 10.112 ms | 8.556 ms |
+| recurrent INT8 artifact | 47,768,476 | 8.687 ms | 6.064 ms |
+| Native p7 recurrent + raw KV | 48,646,236 | 10.426 ms | 6.887 ms |
+
+Native p7 retained 16/16 free-running and 15/15 teacher-forced top-1 tokens;
+the largest matched top-1 logit delta was 0.292534. The 40,257,628-byte Native
+recurrent block encoded in 18.080 ms and its strict parser took 4.477 ms. P7 is
+19.5% faster than BF16 at the median, but 13.6% slower than INT8 and 1.84%
+larger than the full INT8 state before transport compression. This is a useful
+experimental cache route, not a promotion result. QBit's repeated metadata and
+all-zero eighth plane need ClickHouse protocol/part compression to establish a
+storage-size win.
+
+ClickHouse 26.8.1.1 accepted all 38,304 rows, reconstructed a total value count
+of 39,223,296, and observed a zero eighth stream for every row. An ordered
+`SELECT ... FORMAT Native` re-emitted a byte-identical 40,257,628-byte block,
+which closes the writer/parser representation gap. Warm local reads that hashed
+all seven retained plane subcolumns took 10-13 ms. Those server-side timings do
+not include a future TCP client, response materialization, raw-KV lookup, or
+first-token forward pass, so the complete cold-hit promotion gate remains open.
 
 ### ClickHouse boundary probe
 
@@ -116,10 +207,10 @@ selective-plane read path.
 
 The SQL insertion route is a negative result: constructing arrays and casting
 them to QBit took 116-156 ms per 8 MiB logical part because ClickHouse had to
-transpose the codes. Cogni-ml already produces bytes in
-`SerializationQBit::transposeBits` order, so the integration must send the
-pre-transposed Native QBit streams instead of paying that conversion. This
-wire-level path remains unimplemented and must be benchmarked before promotion.
+transpose the codes. Cogni-ml now writes the pre-transposed revision-zero Native
+QBit streams and restores the same columnar representation directly on Metal.
+Production TCP framing/compression and multi-block response handling remain
+unimplemented and must be benchmarked before promotion.
 
 Production storage should batch all tiles for one or more cache keys per insert
 to avoid part-count pressure. Background merges should perform cleanup and

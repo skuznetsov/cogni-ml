@@ -132,9 +132,7 @@ module ML::GGUF
     end
 
     def decode(encoded : Encoded) : Array(Float32)
-      validate_shape(encoded.block_size, encoded.precision)
-      expected = payload_size(encoded.value_count, encoded.block_size, encoded.precision)
-      raise ArgumentError.new("corrupt QBit state payload") unless encoded.payload.size == expected
+      validate(encoded)
 
       values = Array(Float32).new(encoded.value_count, 0.0_f32)
       return values if encoded.value_count == 0
@@ -163,6 +161,46 @@ module ML::GGUF
       values
     end
 
+    # Validate an encoded payload without materializing its decoded values.
+    # Transport and device-restore paths call this before admitting any tile.
+    def validate(encoded : Encoded) : Nil
+      validate_shape(encoded.block_size, encoded.precision)
+      raise ArgumentError.new("QBit value count must be non-negative") if encoded.value_count < 0
+      expected = payload_size(encoded.value_count, encoded.block_size, encoded.precision)
+      raise ArgumentError.new("corrupt QBit state payload") unless encoded.payload.size == expected
+
+      tile_count(encoded).times do |tile|
+        mean, sigma = tile_moments(encoded, tile)
+        raise ArgumentError.new("corrupt QBit state block moments") unless mean.finite? && sigma.finite? && sigma >= 0.0_f32
+      end
+    end
+
+    def tile_count(encoded : Encoded) : Int32
+      blocks(encoded.value_count, encoded.block_size)
+    end
+
+    def tile_value_count(encoded : Encoded, tile : Int32) : Int32
+      validate_tile_index(encoded, tile)
+      Math.min(encoded.block_size, encoded.value_count - tile * encoded.block_size)
+    end
+
+    def tile_moments(encoded : Encoded, tile : Int32) : {Float32, Float32}
+      validate_tile_index(encoded, tile)
+      offset = tile * block_stride(encoded.block_size, encoded.precision)
+      {read_f32_le(encoded.payload, offset), read_f32_le(encoded.payload, offset + sizeof(Float32))}
+    end
+
+    # Returns a zero-copy view of one already-transposed plane in one tile.
+    def tile_plane(encoded : Encoded, tile : Int32, plane : Int32) : Bytes
+      validate_tile_index(encoded, tile)
+      unless plane >= 0 && plane < encoded.precision
+        raise ArgumentError.new("QBit plane out of range: #{plane}")
+      end
+      bytes = plane_bytes(encoded.block_size)
+      offset = tile * block_stride(encoded.block_size, encoded.precision) + BLOCK_HEADER_BYTES + plane * bytes
+      encoded.payload[offset, bytes]
+    end
+
     def payload_size(value_count : Int, block_size : Int32, precision : Int32) : Int32
       validate_shape(block_size, precision)
       raise ArgumentError.new("QBit value count must be non-negative") if value_count < 0
@@ -189,6 +227,14 @@ module ML::GGUF
 
     private def plane_bytes(block_size : Int32) : Int32
       (block_size + 7) // 8
+    end
+
+    private def block_stride(block_size : Int32, precision : Int32) : Int32
+      BLOCK_HEADER_BYTES + precision * plane_bytes(block_size)
+    end
+
+    private def validate_tile_index(encoded : Encoded, tile : Int32) : Nil
+      raise ArgumentError.new("QBit tile out of range: #{tile}") unless tile >= 0 && tile < tile_count(encoded)
     end
 
     private def blocks(value_count : Int32, block_size : Int32) : Int32

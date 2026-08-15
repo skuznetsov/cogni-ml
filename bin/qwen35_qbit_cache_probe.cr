@@ -1,6 +1,7 @@
-# Default-off quality and size falsifier for QBit-style Gaussian compression of
-# recurrent Qwen cache state. This probe deliberately decodes on CPU and then
-# restores Float32 state; it does not claim production restore latency.
+# Default-off quality, size, and restore falsifier for QBit-style Gaussian
+# compression of recurrent Qwen cache state. P7 restores directly from the
+# plane-major ClickHouse Native block into prepared Metal state; other
+# precisions retain the scalar CPU reference path.
 
 require "option_parser"
 
@@ -10,6 +11,9 @@ require "../src/ml/gguf/qwen35_state_snapshot"
 require "../src/ml/gguf/qwen35_tokenizer"
 require "../src/ml/gguf/qwen35_weights"
 require "../src/ml/gguf/qwen_qbit_gaussian_codec"
+require "../src/ml/gguf/qwen_qbit_native_block"
+require "../src/ml/gguf/qwen_qbit_native_writer"
+require "../src/ml/gguf/qwen_qbit_state_snapshot"
 
 DEFAULT_MODEL_PATH = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 
@@ -21,6 +25,8 @@ block_size = 1024
 precisions = [8, 7, 6] of Int32
 prepare_state = true
 chat_mode = false
+native_out : String? = nil
+restore_repeats = 5
 
 OptionParser.parse do |parser|
   parser.banner = "Usage: qwen35_qbit_cache_probe [options] [prompt]"
@@ -32,6 +38,8 @@ OptionParser.parse do |parser|
     precisions = value.split(',').map(&.to_i32)
   end
   parser.on("--chat", "Render the prompt through the embedded Qwen chat template") { chat_mode = true }
+  parser.on("--native-out PATH", "Write recurrent p7 tiles as a revision-zero ClickHouse Native block") { |value| native_out = value }
+  parser.on("--restore-repeats N", "Timed restores after one cold restore (default: 5)") { |value| restore_repeats = value.to_i }
   parser.on("--no-prepare-state", "Do not eagerly prepare Metal state") { prepare_state = false }
   parser.on("-h", "--help", "Show this help") do
     puts parser
@@ -45,6 +53,7 @@ raise "--gen must be at least 2" unless n_gen >= 2
 raise "--max-seq must be positive" unless max_seq > 0
 raise "--block-size must be positive" unless block_size > 0
 raise "--precisions cannot be empty" if precisions.empty?
+raise "--restore-repeats must be positive" unless restore_repeats > 0
 precisions.each do |precision|
   unless precision >= ML::GGUF::QwenQBitGaussianCodec::MIN_PRECISION && precision <= ML::GGUF::QwenQBitGaussianCodec::MAX_PRECISION
     raise "unsupported precision: #{precision}"
@@ -77,40 +86,17 @@ end
 
 def qbit_snapshot(snapshot : ML::GGUF::Qwen35StateSnapshot::Snapshot,
                   block_size : Int32,
-                  precision : Int32) : {ML::GGUF::Qwen35StateSnapshot::Snapshot, Int64, Float64, Float64}
-  codec = ML::GGUF::QwenQBitGaussianCodec
-  payload_bytes = 0_i64
-  encode_ms = 0.0_f64
-  decode_ms = 0.0_f64
-  records = snapshot.records.map do |record|
-    unless recurrent_record?(record.kind)
-      payload_bytes += record.bytes.size
-      next record
-    end
+                  precision : Int32) : {ML::GGUF::QwenQBitStateSnapshot::Snapshot, Int64, Float64, Float64}
+  started = Time.instant
+  encoded = ML::GGUF::QwenQBitStateSnapshot.encode(snapshot, block_size: block_size, precision: precision)
+  encode_ms = (Time.instant - started).total_milliseconds
 
-    values = floats_from(record.bytes)
-    started = Time.instant
-    encoded = codec.encode(values, block_size: block_size, precision: precision)
-    encode_ms += (Time.instant - started).total_milliseconds
-    payload_bytes += encoded.payload.size
-
-    started = Time.instant
-    decoded = codec.decode(encoded)
-    decode_ms += (Time.instant - started).total_milliseconds
-    ML::GGUF::Qwen35StateSnapshot::Record.new(
-      record.layer,
-      record.kind,
-      bytes_from(decoded),
-      record.storage_mode,
-    )
-  end
-
-  {
-    ML::GGUF::Qwen35StateSnapshot::Snapshot.new(snapshot.max_seq, snapshot.layer_count, snapshot.positions, records),
-    payload_bytes,
-    encode_ms,
-    decode_ms,
-  }
+  # Retain the scalar reference as a falsifier, but do not use it for the
+  # measured cache-hit restore path.
+  started = Time.instant
+  ML::GGUF::QwenQBitStateSnapshot.decode(encoded)
+  decode_ms = (Time.instant - started).total_milliseconds
+  {encoded, encoded.payload_byte_size, encode_ms, decode_ms}
 end
 
 def continuation(weights : ML::GGUF::Qwen35Weights,
@@ -154,6 +140,27 @@ def common_prefix(a : Array(Int32), b : Array(Int32)) : Int32
   i.to_i32
 end
 
+def median(values : Array(Float64)) : Float64
+  raise "median requires at least one value" if values.empty?
+  sorted = values.sort
+  middle = sorted.size // 2
+  return sorted[middle] if sorted.size.odd?
+  (sorted[middle - 1] + sorted[middle]) / 2.0
+end
+
+def release_metal_state!(state : ML::GGUF::Qwen35CPU::State) : Nil
+  state.layers.each do |layer|
+    layer.k_cache_buf.try(&.release)
+    layer.v_cache_buf.try(&.release)
+    layer.conv_state_buf.try(&.release)
+    layer.ssm_state_buf.try(&.release)
+    layer.k_cache_buf = nil
+    layer.v_cache_buf = nil
+    layer.conv_state_buf = nil
+    layer.ssm_state_buf = nil
+  end
+end
+
 startup_started = Time.instant
 gguf = ML::GGUF::GGUFFile.new(model_path)
 tokenizer = ML::GGUF::Qwen35Tokenizer.from_gguf(gguf, model_path)
@@ -172,9 +179,11 @@ prefill_ms = (Time.instant - prefill_started).total_milliseconds
 snapshot_started = Time.instant
 snapshot = ML::GGUF::Qwen35StateSnapshot.capture(state)
 snapshot_ms = (Time.instant - snapshot_started).total_milliseconds
+release_metal_state!(state)
 
 exact_state = ML::GGUF::Qwen35StateSnapshot.restore(snapshot, weights.hparams)
 exact_ids, exact_logits = continuation(weights, exact_state, first_token, first_logit, tokens.size.to_i32, n_gen)
+release_metal_state!(exact_state)
 
 recurrent_raw_bytes = snapshot.records.sum(0_i64) { |record| recurrent_record?(record.kind) ? record.bytes.size.to_i64 : 0_i64 }
 kv_raw_bytes = snapshot.byte_size - recurrent_raw_bytes
@@ -188,28 +197,100 @@ baseline_artifacts = [
     artifact_codec: codec,
     artifact_codec_block: codec_block,
   )
-  {codec, bytes.size.to_i64, (Time.instant - started).total_milliseconds}
+  encode_ms = (Time.instant - started).total_milliseconds
+  encoded = ML::GGUF::Qwen35StateSnapshot.decode_artifact_encoded_bytes(
+    bytes,
+    expected_codec: codec,
+    expected_codec_block: codec_block,
+    copy_payloads: false,
+  )
+  target = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: snapshot.max_seq)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(target, weights.hparams) if prepare_state
+  started = Time.instant
+  ML::GGUF::Qwen35StateSnapshot.restore_encoded_into(encoded, weights.hparams, target, prefer_metal: prepare_state)
+  cold_restore_ms = (Time.instant - started).total_milliseconds
+  restore_samples = Array(Float64).new(restore_repeats)
+  restore_repeats.times do
+    started = Time.instant
+    ML::GGUF::Qwen35StateSnapshot.restore_encoded_into(encoded, weights.hparams, target, prefer_metal: prepare_state)
+    restore_samples << (Time.instant - started).total_milliseconds
+  end
+  restore_median_ms = median(restore_samples)
+  release_metal_state!(target)
+  {codec, bytes.size.to_i64, encode_ms, cold_restore_ms, restore_median_ms}
 end
+# Artifact bytes and decoded views are no longer part of the benchmark working
+# set. Reclaim them before QBit states are prepared on the unified-memory host.
+GC.collect
 
 puts "qwen35_qbit_cache_probe"
 puts "  model=#{model_path}"
-puts "  prompt=#{prompt.inspect} chat=#{chat_mode} prompt_tokens=#{tokens.size} gen=#{n_gen} max_seq=#{max_seq} block_size=#{block_size}"
+puts "  prompt=#{prompt.inspect} chat=#{chat_mode} prompt_tokens=#{tokens.size} gen=#{n_gen} max_seq=#{max_seq} block_size=#{block_size} restore_repeats=#{restore_repeats}"
 puts "  startup_ms=#{startup_ms.round(3)} prefill_ms=#{prefill_ms.round(3)} snapshot_ms=#{snapshot_ms.round(3)}"
 puts "  raw_total_bytes=#{snapshot.byte_size} recurrent_raw_bytes=#{recurrent_raw_bytes} kv_raw_bytes=#{kv_raw_bytes}"
-baseline_artifacts.each do |codec, bytes, encode_ms|
-  puts "  baseline_codec=#{codec} artifact_bytes=#{bytes} ratio=#{(bytes.to_f64 / snapshot.byte_size).round(6)} encode_ms=#{encode_ms.round(3)}"
+if ML::Metal::Device.available?
+  device = ML::Metal::Device.instance
+  puts "  metal_allocated_bytes=#{device.current_allocated_size} metal_recommended_working_set_bytes=#{device.recommended_working_set_size}"
+end
+baseline_artifacts.each do |codec, bytes, encode_ms, cold_restore_ms, restore_median_ms|
+  puts "  baseline_codec=#{codec} artifact_bytes=#{bytes} ratio=#{(bytes.to_f64 / snapshot.byte_size).round(6)} encode_ms=#{encode_ms.round(3)} prepared_restore_cold_ms=#{cold_restore_ms.round(3)} prepared_restore_median_ms=#{restore_median_ms.round(3)}"
 end
 puts "  exact_ids=#{exact_ids.join(',')}"
 
 precisions.each do |precision|
   quantized, payload_bytes, encode_ms, decode_ms = qbit_snapshot(snapshot, block_size, precision)
+  # `qbit_snapshot` materializes a scalar reference solely as a falsifier.
+  # Reclaim it before measuring the device restore path.
+  GC.collect
+  native_bytes = 0_i64
+  native_encode_ms = 0.0_f64
+  native_parse_ms = 0.0_f64
+  parsed_native : ML::GGUF::QwenQBitNativeBlock::Parsed? = nil
+  if precision == 7
+    native_started = Time.instant
+    native_block = ML::GGUF::QwenQBitStateSnapshot.encode_native_recurrent(quantized)
+    native_encode_ms = (Time.instant - native_started).total_milliseconds
+    native_bytes = native_block.size.to_i64
+    if path = native_out
+      File.open(path, "w") { |file| file.write(native_block) }
+    end
+    native_started = Time.instant
+    parsed_native = ML::GGUF::QwenQBitNativeBlock.parse(native_block)
+    native_parse_ms = (Time.instant - native_started).total_milliseconds
+  end
 
+  direct_metal = prepare_state && precision == 7
+  free_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: snapshot.max_seq)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(free_state, weights.hparams) if direct_metal
   restore_started = Time.instant
-  free_state = ML::GGUF::Qwen35StateSnapshot.restore(quantized, weights.hparams)
+  if direct_metal
+    ML::GGUF::QwenQBitStateSnapshot.restore_native_into(quantized, parsed_native.not_nil!, 0_u64, weights.hparams, free_state)
+  else
+    ML::GGUF::QwenQBitStateSnapshot.restore_into(quantized, weights.hparams, free_state, prefer_metal: false)
+  end
   restore_ms = (Time.instant - restore_started).total_milliseconds
+  restore_samples = Array(Float64).new(restore_repeats)
+  restore_repeats.times do
+    restore_started = Time.instant
+    if direct_metal
+      ML::GGUF::QwenQBitStateSnapshot.restore_native_into(quantized, parsed_native.not_nil!, 0_u64, weights.hparams, free_state)
+    else
+      ML::GGUF::QwenQBitStateSnapshot.restore_into(quantized, weights.hparams, free_state, prefer_metal: false)
+    end
+    restore_samples << (Time.instant - restore_started).total_milliseconds
+  end
+  restore_median_ms = median(restore_samples)
   free_ids, _free_logits = continuation(weights, free_state, first_token, first_logit, tokens.size.to_i32, n_gen)
 
-  forced_state = ML::GGUF::Qwen35StateSnapshot.restore(quantized, weights.hparams)
+  forced_state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: snapshot.max_seq)
+  ML::GGUF::Qwen35CPU.prepare_state_metal!(forced_state, weights.hparams) if direct_metal
+  forced_restore_started = Time.instant
+  if direct_metal
+    ML::GGUF::QwenQBitStateSnapshot.restore_native_into(quantized, parsed_native.not_nil!, 0_u64, weights.hparams, forced_state)
+  else
+    ML::GGUF::QwenQBitStateSnapshot.restore_into(quantized, weights.hparams, forced_state, prefer_metal: false)
+  end
+  forced_restore_ms = (Time.instant - forced_restore_started).total_milliseconds
   forced_ids, forced_logits = teacher_forced_predictions(weights, forced_state, exact_ids, tokens.size.to_i32)
   expected_forced = exact_ids[1, exact_ids.size - 1]
   forced_matches = forced_ids.each_with_index.count { |id, i| id == expected_forced[i] }
@@ -221,6 +302,13 @@ precisions.each do |precision|
   first_divergence = prefix == exact_ids.size ? -1 : prefix
   ratio = payload_bytes.to_f64 / snapshot.byte_size
 
-  puts "  p#{precision} payload_bytes=#{payload_bytes} ratio=#{ratio.round(6)} encode_ms=#{encode_ms.round(3)} decode_ms=#{decode_ms.round(3)} raw_restore_ms=#{restore_ms.round(3)} free_prefix=#{prefix}/#{exact_ids.size} first_divergence=#{first_divergence} forced_top1=#{forced_matches}/#{expected_forced.size} max_matched_top1_logit_delta=#{max_matched_logit_delta.round(6)}"
+  restore_route = direct_metal ? "native-metal-direct" : "cpu-reference"
+  puts "  p#{precision} payload_bytes=#{payload_bytes} ratio=#{ratio.round(6)} encode_ms=#{encode_ms.round(3)} cpu_decode_ms=#{decode_ms.round(3)} native_recurrent_bytes=#{native_bytes} native_encode_ms=#{native_encode_ms.round(3)} native_parse_ms=#{native_parse_ms.round(3)} restore_route=#{restore_route} restore_cold_ms=#{restore_ms.round(3)} restore_median_ms=#{restore_median_ms.round(3)} forced_restore_ms=#{forced_restore_ms.round(3)} free_prefix=#{prefix}/#{exact_ids.size} first_divergence=#{first_divergence} forced_top1=#{forced_matches}/#{expected_forced.size} max_matched_top1_logit_delta=#{max_matched_logit_delta.round(6)}"
+  if direct_metal
+    puts "    metal_allocated_bytes=#{ML::Metal::Device.instance.current_allocated_size}"
+  end
   puts "    free_ids=#{free_ids.join(',')}"
+  release_metal_state!(free_state)
+  release_metal_state!(forced_state)
+  GC.collect
 end
