@@ -190,6 +190,70 @@ module ML::GGUF
       {% end %}
     end
 
+    # Directly restores recurrent records from a validated ordered Native
+    # response stream. Logical records may cross ClickHouse block boundaries;
+    # live KV still comes byte-exact from the snapshot envelope.
+    def restore_native_stream_into(snapshot : Snapshot,
+                                   stream : QwenQBitNativeBlock::Stream,
+                                   cache_id : UInt64,
+                                   hp : Qwen35Hparams,
+                                   state : Qwen35CPU::State) : Nil
+      validate_for_state(snapshot, hp, state)
+      raise ArgumentError.new("QBit Native state restore requires p7 precision") unless snapshot.precision == 7
+      raise ArgumentError.new("QBit Native state block size mismatch") unless stream.block_size == snapshot.block_size
+      unless stream.record_spans.all? { |span| span.cache_id == cache_id }
+        raise ArgumentError.new("unexpected QBit Native state cache identity")
+      end
+
+      spans = Hash({Int32, UInt8}, QwenQBitNativeBlock::StreamRecordSpan).new
+      stream.record_spans.each do |span|
+        next unless span.cache_id == cache_id
+        key = {span.layer, span.kind}
+        raise ArgumentError.new("duplicate QBit Native state record") if spans.has_key?(key)
+        spans[key] = span
+      end
+
+      expected_keys = snapshot.records.compact_map do |record|
+        record.qbit ? {record.layer, record.kind.value} : nil
+      end.to_set
+      raise ArgumentError.new("QBit Native state record set mismatch") unless spans.keys.to_set == expected_keys
+
+      snapshot.records.each do |record|
+        next unless record.qbit
+        span = spans[{record.layer, record.kind.value}]
+        unless span.value_count.to_i64 * sizeof(Float32) == record.original_byte_size
+          raise ArgumentError.new("QBit Native state value count mismatch")
+        end
+      end
+
+      {% if flag?(:cpu_only) %}
+        raise "Metal disabled (cpu_only)"
+      {% else %}
+        raise "Metal not available" unless Qwen35Metal.available?
+        assignments = [] of NamedTuple(record: EncodedRecord, buffer: ML::MetalBuffer)
+        jobs = [] of QwenQBitMetalRestore::NativeStreamJob
+        snapshot.records.each do |record|
+          reusable = state_buffer(state.layers[record.layer], record.kind)
+          buffer = reusable
+          if buffer.nil? || buffer.size != record.original_byte_size || buffer.storage_mode != record.storage_mode
+            buffer = ML::MetalBuffer.new(record.original_byte_size.to_i64, record.storage_mode)
+          end
+
+          if raw = record.raw
+            buffer.write_bytes(raw.to_unsafe, raw.size)
+          else
+            span = spans[{record.layer, record.kind.value}]
+            jobs << QwenQBitMetalRestore::NativeStreamJob.new(span, buffer)
+          end
+          assignments << {record: record, buffer: buffer}
+        end
+        QwenQBitMetalRestore.decode_native_stream_into(stream, jobs)
+
+        snapshot.positions.each_with_index { |position, i| state.layers[i].position = position }
+        assignments.each { |assignment| assign_state_buffer(state.layers[assignment[:record].layer], assignment[:record].kind, assignment[:buffer]) }
+      {% end %}
+    end
+
     def validate(snapshot : Snapshot) : Nil
       raise ArgumentError.new("QBit state position count mismatch") unless snapshot.positions.size == snapshot.layer_count
       unless snapshot.precision >= QwenQBitGaussianCodec::MIN_PRECISION && snapshot.precision <= QwenQBitGaussianCodec::MAX_PRECISION

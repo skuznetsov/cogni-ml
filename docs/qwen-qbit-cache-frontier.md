@@ -5,9 +5,9 @@ Document status: implementation-bounded
 Current frontier: a default-off p7 transport/restore experiment for recurrent
 Qwen cache state plus a bounded local ClickHouse physical-storage/read gate.
 It may emit revision-0 ClickHouse Native blocks whose QBit column is already
-bit-transposed, decode the retained planes directly into prepared Metal state
-buffers, and round-trip one complete Native block through an isolated temporary
-MergeTree while reporting logical, compressed-part, on-disk, and response bytes.
+bit-transposed, validate an ordered multi-block Native response, decode logical
+records that cross response-block boundaries directly into prepared Metal state
+buffers, and measure one isolated temporary MergeTree.
 
 Bounded context: local `.qkv` state artifacts. ClickHouse storage and background
 part merges are a separate transport/storage context.
@@ -26,9 +26,10 @@ part merges are a separate transport/storage context.
   all-zero eighth plane for the p7 representation required by
   `QBit(Int8, 1024)`. This is a column-layout operation, not a second bit
   transpose.
-- A strict single-block Native parser may validate the exact eight-column
-  schema, contiguous record/tile ordering, tail counts, and zero p7 LSB before
-  exposing zero-copy column offsets.
+- A strict Native parser may validate the exact eight-column schema,
+  contiguous record/tile ordering, tail counts, and zero p7 LSB for either one
+  block or an ordered sequence. A block boundary may split a logical record
+  only after a full tile; global tile and destination offsets remain exact.
 - A diagnostic Metal kernel may consume that plane-major Native block in one
   upload, fuse p7 untranspose, conditional-centroid lookup, affine
   reconstruction, and write all recurrent records into existing Float32 state
@@ -38,6 +39,9 @@ part merges are a separate transport/storage context.
   into an isolated temporary MergeTree, inspect `system.parts`, read the rows
   back in canonical order, and require an exact byte-for-byte Native round trip.
   The temporary part is measurement evidence only; it is not a durable cache.
+- The model probe may accept a bounded external multi-block response only with
+  an explicit expected `cache_id`. Prompt/model/token hashes remain the
+  responsibility of the surrounding versioned cache envelope.
 
 ## Rejected surface
 
@@ -46,9 +50,8 @@ part merges are a separate transport/storage context.
 - No claim that scalar MSE implies autoregressive parity.
 - No claim that ClickHouse background merges are on the cache-hit critical
   path: newly inserted rows must remain readable before a part merge completes.
-- No production ClickHouse client, multi-block Native response parser, TCP
-  packet framing/compression, durable QBit artifact version, CUDA decoder, or
-  default cache route in this slice.
+- No production ClickHouse client, TCP packet framing/compression, durable QBit
+  artifact version, CUDA decoder, or default cache route in this slice.
 - A fast kernel or compact Native block alone is not evidence that the complete
   cold-hit path is faster.
 - Recurrent-only QBit part bytes must not be compared with a full INT8 artifact
@@ -95,6 +98,9 @@ part merges are a separate transport/storage context.
   sign-boundary, and extreme-code blocks, then retain real-model continuation
   parity. The end-to-end gate is `Native read + Metal restore + continuation`,
   not kernel time alone.
+- A multi-block response must reject skipped tiles, a non-final partial tile,
+  record reappearance, mixed QBit widths, unexpected cache identity, and an
+  input above the probe's bounded size before state admission.
 
 ## Stop rules
 
@@ -228,6 +234,30 @@ about 8 ms median. This is a new transport falsifier: production should parse
 and restore validated multi-block responses instead of paying for forced
 coalescing.
 
+### Natural multi-block restore gate (2026-08-15)
+
+The stream parser now accepts the five naturally emitted Native blocks without
+copying them into a synthetic single block. It proves global record contiguity
+across block boundaries and gives each chunk a checked destination offset. The
+Metal route uploads each source block once and submits all record chunks in one
+command buffer; exact live KV still comes from the snapshot envelope.
+
+On the same Qwen3.8 27B 11-token chat prompt, the 40,258,119-byte natural
+response parsed as five blocks in 5.790 ms after a separately reported 6.336 ms
+file read. Prepared multi-block restore measured 9.551 ms median versus 8.487 ms
+for recurrent INT8 in the same run, a 12.5% restore-latency exchange for the
+previously measured storage compactness. It retained 16/16 free-running and
+15/15 teacher-forced top-1 tokens with the same 0.773716 maximum matched-logit
+delta as the source cache run.
+
+Using the measured natural ClickHouse read median of 20 ms gives a 35.341 ms
+lower bound for `recurrent read -> parse -> restore`, about 6.36 ms below the
+forced-single-block 41.704 ms bound. This is not an end-to-end cache-hit SLA:
+it excludes prompt-envelope lookup and validation, exact KV retrieval, TCP
+client framing, and the first continuation-token forward pass. The explicit
+`cache_id` check is only a row-selection guard; the production envelope must
+still validate model, tokenizer/template, ABI, codec, and prompt-token hashes.
+
 ### ClickHouse boundary probe
 
 Local ClickHouse 26.8.1.1 on the Apple M2 Max was tested with incompressible
@@ -256,8 +286,9 @@ The SQL insertion route is a negative result: constructing arrays and casting
 them to QBit took 116-156 ms per 8 MiB logical part because ClickHouse had to
 transpose the codes. Cogni-ml now writes the pre-transposed revision-zero Native
 QBit streams and restores the same columnar representation directly on Metal.
-Production TCP framing/compression and multi-block response handling remain
-unimplemented and must be benchmarked before promotion.
+Production TCP framing/compression remains unimplemented and must be benchmarked
+before promotion. Multi-block Native response handling is implemented only in
+the bounded diagnostic/state-restore path, not as a production cache client.
 
 Production storage should batch all tiles for one or more cache keys per insert
 to avoid part-count pressure. Background merges should perform cleanup and

@@ -24036,7 +24036,7 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **decision:** Auto hints now cover the two safest path tools: `read_file` for explicit existing files and `list_directory` for quoted/backticked existing directories. Next candidates need separate certificates; do not auto-constrain `grep`/`glob` patterns yet.
 
-#### [LM-QWEN38-QBIT-CH-PHYSICAL-911] Real Qwen3.8 p7 state compresses in ClickHouse, while multi-block read is the next latency boundary
+#### [LM-QWEN38-QBIT-CH-PHYSICAL-911] Real Qwen3.8 p7 state compresses in ClickHouse and restores from natural multi-block reads
 **context:** ml / Qwen3.8 / QBit / ClickHouse / prompt cache / physical storage
 **state:** diagnostic storage gate implemented and verified
 
@@ -24058,6 +24058,12 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   decay_trigger: multi-block parser/restore implementation, ClickHouse read pipeline change, or a fresh interleaved end-to-end cache benchmark
   trust: {F:0.84,G:0.34,R:0.82}
 
-**LTP/WBA:** Window: ClickHouse recurrent-state cache read. Transport: MergeTree QBit planes -> Native response -> strict parser -> prepared Metal state. The single-block coalescing move preserves the current parser boundary and exact bytes, but recomputed potential worsens read latency by about 8ms. The legal next Ladder is validated multi-block transport into one restore command buffer; the dual frame remains bounded single-block coalescing.
+- claim: "The natural five-block ClickHouse response restores directly without coalescing and preserves the matched Qwen3.8 continuation gate."
+  source: the guarded 11-token chat probe parsed the 40,258,119-byte response as five ordered Native blocks in 5.790ms, restored all recurrent chunks through one Metal command buffer at a 9.551ms median, and retained `16/16` free-running plus `15/15` teacher-forced top-1 tokens with maximum matched-logit delta `0.773716`. Same-run recurrent INT8 restore was 8.487ms. Combining the prior natural ClickHouse read median of 20ms gives a 35.341ms lower bound before KV/envelope lookup, TCP client work, and the first continuation token.
+  verified_at: 2026-08-15
+  decay_trigger: Native block parser, QBit restore kernel, ClickHouse block formation, model/template bytes, or cache envelope identity changes
+  trust: {F:0.88,G:0.38,R:0.86}
 
-**decision:** Keep the storage probe diagnostic and default-off. Implement multi-block Native validation/restore before a production client, then measure a matched physical INT8+KV route and the complete `read -> validate -> restore -> first token` corridor.
+**LTP/WBA:** Window: ClickHouse recurrent-state cache read. Transport: MergeTree QBit planes -> ordered Native blocks -> strict global record validation -> prepared Metal state. The legal move keeps natural block boundaries, maps each chunk to a checked destination offset, and restores all chunks in one command buffer. Recomputed `read + parse + restore` falls from the forced-coalescing 41.704ms lower bound to 35.341ms; the dual frame remains bounded single-block coalescing.
+
+**decision:** Keep the storage and multi-block restore paths diagnostic and default-off. Next measure a matched physical INT8+KV route and the complete `read -> envelope validate -> restore -> first token` corridor before building a production ClickHouse client.

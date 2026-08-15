@@ -23,6 +23,10 @@ module ML::GGUF
       span : QwenQBitNativeBlock::RecordSpan,
       destination : ML::MetalBuffer
 
+    record NativeStreamJob,
+      span : QwenQBitNativeBlock::StreamRecordSpan,
+      destination : ML::MetalBuffer
+
     {% unless flag?(:cpu_only) %}
       SOURCE = {{ read_file("#{__DIR__}/kernels/qbit_restore_qwen35.metal") }}
       @@pipeline : ML::Metal::ComputePipeline?
@@ -116,6 +120,76 @@ module ML::GGUF
       {% end %}
     end
 
+    # Restores records from an ordered sequence of ClickHouse Native blocks.
+    # A logical record may cross block boundaries; every chunk writes at its
+    # validated value offset in the same destination buffer and all chunks are
+    # submitted through one command buffer.
+    def decode_native_stream_into(stream : QwenQBitNativeBlock::Stream,
+                                  jobs : Array(NativeStreamJob)) : Nil
+      raise ArgumentError.new("QBit Native stream Metal restore batch must not be empty") if jobs.empty?
+      jobs.each do |job|
+        span = job.span
+        unless stream.record_spans.includes?(span)
+          raise ArgumentError.new("QBit Native stream Metal restore span is not present in the parsed stream")
+        end
+        unless span.tile_count > 0 && span.value_count > 0 && !span.chunks.empty?
+          raise ArgumentError.new("QBit Native stream Metal restore span is invalid")
+        end
+        minimum_count = (span.tile_count.to_i64 - 1) * stream.block_size + 1
+        maximum_count = span.tile_count.to_i64 * stream.block_size
+        unless span.value_count >= minimum_count && span.value_count <= maximum_count
+          raise ArgumentError.new("QBit Native stream Metal restore value count is invalid")
+        end
+        expected_size = span.value_count.to_i64 * sizeof(Float32)
+        unless job.destination.size == expected_size
+          raise ArgumentError.new("QBit Native stream Metal restore destination size mismatch")
+        end
+
+        expected_tile = 0_i64
+        expected_value = 0_i64
+        span.chunks.each do |chunk|
+          unless chunk.block_index >= 0 && chunk.block_index < stream.blocks.size
+            raise ArgumentError.new("QBit Native stream Metal restore block index is invalid")
+          end
+          block = stream.blocks[chunk.block_index]
+          end_row = chunk.row_start.to_i64 + chunk.tile_count
+          unless chunk.row_start >= 0 && chunk.tile_count > 0 && end_row <= block.row_count
+            raise ArgumentError.new("QBit Native stream Metal restore row span is invalid")
+          end
+          unless chunk.tile_start == expected_tile && chunk.value_start == expected_value
+            raise ArgumentError.new("QBit Native stream Metal restore chunk sequence is invalid")
+          end
+          minimum_chunk_count = (chunk.tile_count.to_i64 - 1) * stream.block_size + 1
+          maximum_chunk_count = chunk.tile_count.to_i64 * stream.block_size
+          unless chunk.value_count >= minimum_chunk_count && chunk.value_count <= maximum_chunk_count
+            raise ArgumentError.new("QBit Native stream Metal restore chunk value count is invalid")
+          end
+          expected_tile += chunk.tile_count
+          expected_value += chunk.value_count
+        end
+        unless expected_tile == span.tile_count && expected_value == span.value_count
+          raise ArgumentError.new("QBit Native stream Metal restore chunk totals mismatch")
+        end
+      end
+
+      {% if flag?(:cpu_only) %}
+        raise "Metal disabled (cpu_only)"
+      {% else %}
+        raise "Metal not available" unless Qwen35Metal.available?
+        sources = [] of ML::MetalBuffer
+        begin
+          stream.blocks.each do |block|
+            source = ML::MetalBuffer.new(block.bytes.size.to_i64, ML::StorageMode::Shared)
+            sources << source
+            source.write_bytes(block.bytes.to_unsafe, block.bytes.size)
+          end
+          dispatch_native_stream(sources, stream, jobs)
+        ensure
+          sources.each(&.release)
+        end
+      {% end %}
+    end
+
     {% unless flag?(:cpu_only) %}
       private def pipeline : ML::Metal::ComputePipeline
         @@pipeline ||= ML::Metal::PipelineCache.get("qwen35_qbit_p7_decode_f32") {
@@ -163,6 +237,36 @@ module ML::GGUF
           enc.set_value(block.sigma_offset.to_u32, 7)
           enc.set_value(block.codes_offset.to_u32, 8)
           enc.dispatch_1d((span.value_count + 7) // 8, 256)
+        end
+        enc.end_encoding
+        cmd.commit_and_wait
+      end
+
+      private def dispatch_native_stream(sources : Array(ML::MetalBuffer),
+                                         stream : QwenQBitNativeBlock::Stream,
+                                         jobs : Array(NativeStreamJob)) : Nil
+        cmd = ML::Metal::CommandBuffer.new
+        enc = ML::Metal::ComputeEncoder.new(cmd)
+        enc.set_pipeline(native_pipeline)
+        jobs.each do |job|
+          job.span.chunks.each do |chunk|
+            block = stream.blocks[chunk.block_index]
+            enc.set_buffer(sources[chunk.block_index], 0)
+            enc.set_buffer(
+              job.destination,
+              1,
+              ML::Metal::BufferAccess::Write,
+              offset: chunk.value_start.to_i64 * sizeof(Float32),
+            )
+            enc.set_value(chunk.value_count.to_u32, 2)
+            enc.set_value(block.block_size.to_u32, 3)
+            enc.set_value(chunk.row_start.to_u32, 4)
+            enc.set_value(block.row_count.to_u32, 5)
+            enc.set_value(block.mean_offset.to_u32, 6)
+            enc.set_value(block.sigma_offset.to_u32, 7)
+            enc.set_value(block.codes_offset.to_u32, 8)
+            enc.dispatch_1d((chunk.value_count + 7) // 8, 256)
+          end
         end
         enc.end_encoding
         cmd.commit_and_wait

@@ -5,6 +5,35 @@ require "../src/ml/gguf/qwen_qbit_native_block"
 require "../src/ml/gguf/qwen_qbit_native_writer"
 require "../src/ml/gguf/qwen_qbit_metal_restore"
 
+private def qbit_native_concat(parts : Array(Bytes)) : Bytes
+  bytes = Bytes.new(parts.sum(&.size))
+  offset = 0
+  parts.each do |part|
+    bytes[offset, part.size].copy_from(part)
+    offset += part.size
+  end
+  bytes
+end
+
+private def qbit_native_rebase_tiles(bytes : Bytes, start_tile : UInt32, tile_count : Int32) : Bytes
+  rebased = bytes.dup
+  marker = "\u0004tile\u0006UInt32".to_slice
+  marker_offset = nil.as(Int32?)
+  (0..(rebased.size - marker.size)).each do |offset|
+    if rebased[offset, marker.size] == marker
+      marker_offset = offset
+      break
+    end
+  end
+  raise "Native tile marker not found" unless marker_offset
+  tile_offset = marker_offset.not_nil! + marker.size
+  tile_count.times do |i|
+    value = start_tile + i.to_u32
+    4.times { |byte| rebased[tile_offset + i * 4 + byte] = ((value >> (byte * 8)) & 0xff).to_u8 }
+  end
+  rebased
+end
+
 describe "QBit Native restore" do
   codec = ML::GGUF::QwenQBitGaussianCodec
   writer = ML::GGUF::QwenQBitNativeWriter
@@ -41,6 +70,53 @@ describe "QBit Native restore" do
     expect_raises(ArgumentError, /moments/) { parser.parse(nonfinite_moment) }
   end
 
+  it "validates a record split across ordered Native response blocks" do
+    first = codec.encode(Array(Float32).new(16) { |i| i.to_f32 / 7.0_f32 }, block_size: 8, precision: 7)
+    second = codec.encode(Array(Float32).new(9) { |i| -(i.to_f32 / 5.0_f32) }, block_size: 8, precision: 7)
+    first_block = writer.encode([
+      ML::GGUF::QwenQBitNativeWriter::Record.new(42_u64, 3_i32, 0_u8, first),
+    ])
+    second_block = qbit_native_rebase_tiles(writer.encode([
+      ML::GGUF::QwenQBitNativeWriter::Record.new(42_u64, 3_i32, 0_u8, second),
+    ]), 2_u32, 2)
+
+    stream = parser.parse_stream(qbit_native_concat([first_block, second_block]))
+    stream.block_size.should eq(8)
+    stream.row_count.should eq(4)
+    stream.blocks.map(&.row_count).should eq([2, 2])
+    stream.record_spans.map { |span| {span.cache_id, span.layer, span.kind, span.tile_count, span.value_count, span.chunks.size} }.should eq([
+      {42_u64, 3_i32, 0_u8, 4_i32, 25_i32, 2},
+    ])
+    stream.record_spans[0].chunks.map { |chunk| {chunk.block_index, chunk.row_start, chunk.tile_start, chunk.tile_count, chunk.value_start, chunk.value_count} }.should eq([
+      {0_i32, 0_i32, 0_i32, 2_i32, 0_i32, 16_i32},
+      {1_i32, 0_i32, 2_i32, 2_i32, 16_i32, 9_i32},
+    ])
+
+    skipped_tile = qbit_native_rebase_tiles(second_block, 3_u32, 2)
+    expect_raises(ArgumentError, /tile sequence/) do
+      parser.parse_stream(qbit_native_concat([first_block, skipped_tile]))
+    end
+
+    partial_first = writer.encode([
+      ML::GGUF::QwenQBitNativeWriter::Record.new(42_u64, 3_i32, 0_u8, second),
+    ])
+    expect_raises(ArgumentError, /non-final tile/) do
+      parser.parse_stream(qbit_native_concat([partial_first, second_block]))
+    end
+
+    different_width = writer.encode([
+      ML::GGUF::QwenQBitNativeWriter::Record.new(
+        43_u64,
+        3_i32,
+        0_u8,
+        codec.encode(Array(Float32).new(16, 1.0_f32), block_size: 16, precision: 7),
+      ),
+    ])
+    expect_raises(ArgumentError, /block size mismatch/) do
+      parser.parse_stream(qbit_native_concat([first_block, different_width]))
+    end
+  end
+
   it "restores columnar Native p7 streams into multiple Metal state buffers" do
     pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
 
@@ -66,5 +142,32 @@ describe "QBit Native restore" do
     second_dst.read(second.value_count).each_with_index { |value, i| value.should be_close(codec.decode(second)[i], 2e-6_f32) }
     first_dst.release
     second_dst.release
+  end
+
+  it "restores a record split across Native response blocks into one Metal buffer" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    first = codec.encode(Array(Float32).new(16) { |i| i.to_f32 / 7.0_f32 }, block_size: 8, precision: 7)
+    second = codec.encode(Array(Float32).new(9) { |i| -(i.to_f32 / 5.0_f32) }, block_size: 8, precision: 7)
+    first_block = writer.encode([
+      ML::GGUF::QwenQBitNativeWriter::Record.new(42_u64, 3_i32, 0_u8, first),
+    ])
+    second_block = qbit_native_rebase_tiles(writer.encode([
+      ML::GGUF::QwenQBitNativeWriter::Record.new(42_u64, 3_i32, 0_u8, second),
+    ]), 2_u32, 2)
+    stream = parser.parse_stream(qbit_native_concat([first_block, second_block]))
+
+    destination = ML::MetalBuffer.new(25_i64 * sizeof(Float32))
+    live_before = ML::MetalBuffer.stats[:live_bytes]
+    restore.decode_native_stream_into(stream, [
+      ML::GGUF::QwenQBitMetalRestore::NativeStreamJob.new(stream.record_spans[0], destination),
+    ])
+    ML::MetalBuffer.stats[:live_bytes].should eq(live_before)
+
+    expected = codec.decode(first) + codec.decode(second)
+    destination.read(expected.size).each_with_index do |value, i|
+      value.should be_close(expected[i], 2e-6_f32)
+    end
+    destination.release
   end
 end

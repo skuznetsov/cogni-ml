@@ -26,6 +26,9 @@ precisions = [8, 7, 6] of Int32
 prepare_state = true
 chat_mode = false
 native_out : String? = nil
+native_in : String? = nil
+cache_id : UInt64? = nil
+native_max_mib = 256
 restore_repeats = 5
 
 OptionParser.parse do |parser|
@@ -39,6 +42,9 @@ OptionParser.parse do |parser|
   end
   parser.on("--chat", "Render the prompt through the embedded Qwen chat template") { chat_mode = true }
   parser.on("--native-out PATH", "Write recurrent p7 tiles as a revision-zero ClickHouse Native block") { |value| native_out = value }
+  parser.on("--native-in PATH", "Restore p7 tiles from ordered ClickHouse Native response blocks") { |value| native_in = value }
+  parser.on("--cache-id ID", "Expected UInt64 Native cache identity (required with --native-in)") { |value| cache_id = value.to_u64 }
+  parser.on("--native-max-mib N", "Maximum accepted Native response size (default: 256, hard max: 1024)") { |value| native_max_mib = value.to_i }
   parser.on("--restore-repeats N", "Timed restores after one cold restore (default: 5)") { |value| restore_repeats = value.to_i }
   parser.on("--no-prepare-state", "Do not eagerly prepare Metal state") { prepare_state = false }
   parser.on("-h", "--help", "Show this help") do
@@ -54,6 +60,19 @@ raise "--max-seq must be positive" unless max_seq > 0
 raise "--block-size must be positive" unless block_size > 0
 raise "--precisions cannot be empty" if precisions.empty?
 raise "--restore-repeats must be positive" unless restore_repeats > 0
+raise "--native-in requires p7 in --precisions" if native_in && !precisions.includes?(7)
+raise "--native-in requires prepared Metal state" if native_in && !prepare_state
+raise "--native-in file does not exist" if (path = native_in) && !File.file?(path)
+raise "--native-in requires an explicit --cache-id" if native_in && cache_id.nil?
+raise "--native-max-mib must be within 1..1024" unless native_max_mib.in?(1..1024)
+native_limit_bytes = native_max_mib.to_i64 * 1024 * 1024
+if path = native_in
+  native_input_size = File.size(path)
+  unless native_input_size > 0 && native_input_size <= native_limit_bytes
+    raise "--native-in size is outside 1..#{native_limit_bytes} bytes"
+  end
+end
+effective_cache_id = cache_id.nil? ? 0_u64 : cache_id.not_nil!
 precisions.each do |precision|
   unless precision >= ML::GGUF::QwenQBitGaussianCodec::MIN_PRECISION && precision <= ML::GGUF::QwenQBitGaussianCodec::MAX_PRECISION
     raise "unsupported precision: #{precision}"
@@ -70,6 +89,16 @@ end
 def bytes_from(values : Array(Float32)) : Bytes
   bytes = Bytes.new(values.size * sizeof(Float32))
   bytes.copy_from(Slice.new(values.to_unsafe.as(Pointer(UInt8)), bytes.size))
+  bytes
+end
+
+def read_bytes(path : String, max_bytes : Int64) : Bytes
+  size = File.size(path)
+  unless size > 0 && size <= max_bytes && size <= Int32::MAX
+    raise "Native response size changed outside the admitted limit"
+  end
+  bytes = Bytes.new(size.to_i32)
+  File.open(path, "r") { |file| file.read_fully(bytes) }
   bytes
 end
 
@@ -244,18 +273,34 @@ precisions.each do |precision|
   GC.collect
   native_bytes = 0_i64
   native_encode_ms = 0.0_f64
+  native_read_ms = 0.0_f64
   native_parse_ms = 0.0_f64
+  native_response_bytes = 0_i64
+  native_block_count = 0
   parsed_native : ML::GGUF::QwenQBitNativeBlock::Parsed? = nil
+  parsed_native_stream : ML::GGUF::QwenQBitNativeBlock::Stream? = nil
   if precision == 7
     native_started = Time.instant
-    native_block = ML::GGUF::QwenQBitStateSnapshot.encode_native_recurrent(quantized)
+    native_block = ML::GGUF::QwenQBitStateSnapshot.encode_native_recurrent(quantized, effective_cache_id)
     native_encode_ms = (Time.instant - native_started).total_milliseconds
     native_bytes = native_block.size.to_i64
     if path = native_out
       File.open(path, "w") { |file| file.write(native_block) }
     end
-    native_started = Time.instant
-    parsed_native = ML::GGUF::QwenQBitNativeBlock.parse(native_block)
+    if path = native_in
+      native_started = Time.instant
+      response = read_bytes(path, native_limit_bytes)
+      native_read_ms = (Time.instant - native_started).total_milliseconds
+      native_response_bytes = response.size.to_i64
+      native_started = Time.instant
+      parsed_native_stream = ML::GGUF::QwenQBitNativeBlock.parse_stream(response)
+      native_block_count = parsed_native_stream.not_nil!.blocks.size
+    else
+      native_started = Time.instant
+      parsed_native = ML::GGUF::QwenQBitNativeBlock.parse(native_block)
+      native_response_bytes = native_bytes
+      native_block_count = 1
+    end
     native_parse_ms = (Time.instant - native_started).total_milliseconds
   end
 
@@ -264,7 +309,11 @@ precisions.each do |precision|
   ML::GGUF::Qwen35CPU.prepare_state_metal!(free_state, weights.hparams) if direct_metal
   restore_started = Time.instant
   if direct_metal
-    ML::GGUF::QwenQBitStateSnapshot.restore_native_into(quantized, parsed_native.not_nil!, 0_u64, weights.hparams, free_state)
+    if stream = parsed_native_stream
+      ML::GGUF::QwenQBitStateSnapshot.restore_native_stream_into(quantized, stream, cache_id.not_nil!, weights.hparams, free_state)
+    else
+      ML::GGUF::QwenQBitStateSnapshot.restore_native_into(quantized, parsed_native.not_nil!, 0_u64, weights.hparams, free_state)
+    end
   else
     ML::GGUF::QwenQBitStateSnapshot.restore_into(quantized, weights.hparams, free_state, prefer_metal: false)
   end
@@ -273,7 +322,11 @@ precisions.each do |precision|
   restore_repeats.times do
     restore_started = Time.instant
     if direct_metal
-      ML::GGUF::QwenQBitStateSnapshot.restore_native_into(quantized, parsed_native.not_nil!, 0_u64, weights.hparams, free_state)
+      if stream = parsed_native_stream
+        ML::GGUF::QwenQBitStateSnapshot.restore_native_stream_into(quantized, stream, cache_id.not_nil!, weights.hparams, free_state)
+      else
+        ML::GGUF::QwenQBitStateSnapshot.restore_native_into(quantized, parsed_native.not_nil!, 0_u64, weights.hparams, free_state)
+      end
     else
       ML::GGUF::QwenQBitStateSnapshot.restore_into(quantized, weights.hparams, free_state, prefer_metal: false)
     end
@@ -286,7 +339,11 @@ precisions.each do |precision|
   ML::GGUF::Qwen35CPU.prepare_state_metal!(forced_state, weights.hparams) if direct_metal
   forced_restore_started = Time.instant
   if direct_metal
-    ML::GGUF::QwenQBitStateSnapshot.restore_native_into(quantized, parsed_native.not_nil!, 0_u64, weights.hparams, forced_state)
+    if stream = parsed_native_stream
+      ML::GGUF::QwenQBitStateSnapshot.restore_native_stream_into(quantized, stream, cache_id.not_nil!, weights.hparams, forced_state)
+    else
+      ML::GGUF::QwenQBitStateSnapshot.restore_native_into(quantized, parsed_native.not_nil!, 0_u64, weights.hparams, forced_state)
+    end
   else
     ML::GGUF::QwenQBitStateSnapshot.restore_into(quantized, weights.hparams, forced_state, prefer_metal: false)
   end
@@ -302,8 +359,12 @@ precisions.each do |precision|
   first_divergence = prefix == exact_ids.size ? -1 : prefix
   ratio = payload_bytes.to_f64 / snapshot.byte_size
 
-  restore_route = direct_metal ? "native-metal-direct" : "cpu-reference"
-  puts "  p#{precision} payload_bytes=#{payload_bytes} ratio=#{ratio.round(6)} encode_ms=#{encode_ms.round(3)} cpu_decode_ms=#{decode_ms.round(3)} native_recurrent_bytes=#{native_bytes} native_encode_ms=#{native_encode_ms.round(3)} native_parse_ms=#{native_parse_ms.round(3)} restore_route=#{restore_route} restore_cold_ms=#{restore_ms.round(3)} restore_median_ms=#{restore_median_ms.round(3)} forced_restore_ms=#{forced_restore_ms.round(3)} free_prefix=#{prefix}/#{exact_ids.size} first_divergence=#{first_divergence} forced_top1=#{forced_matches}/#{expected_forced.size} max_matched_top1_logit_delta=#{max_matched_logit_delta.round(6)}"
+  restore_route = if direct_metal
+                    parsed_native_stream ? "native-stream-metal-direct" : "native-metal-direct"
+                  else
+                    "cpu-reference"
+                  end
+  puts "  p#{precision} payload_bytes=#{payload_bytes} ratio=#{ratio.round(6)} encode_ms=#{encode_ms.round(3)} cpu_decode_ms=#{decode_ms.round(3)} native_cache_id=#{effective_cache_id} native_recurrent_bytes=#{native_bytes} native_response_bytes=#{native_response_bytes} native_block_count=#{native_block_count} native_encode_ms=#{native_encode_ms.round(3)} native_read_ms=#{native_read_ms.round(3)} native_parse_ms=#{native_parse_ms.round(3)} restore_route=#{restore_route} restore_cold_ms=#{restore_ms.round(3)} restore_median_ms=#{restore_median_ms.round(3)} forced_restore_ms=#{forced_restore_ms.round(3)} free_prefix=#{prefix}/#{exact_ids.size} first_divergence=#{first_divergence} forced_top1=#{forced_matches}/#{expected_forced.size} max_matched_top1_logit_delta=#{max_matched_logit_delta.round(6)}"
   if direct_metal
     puts "    metal_allocated_bytes=#{ML::Metal::Device.instance.current_allocated_size}"
   end
