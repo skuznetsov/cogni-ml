@@ -65,6 +65,12 @@ record QBitSessionDelta,
   exact_anchor_fallbacks : Int64,
   exact_anchor_replayed_tokens : Int64,
   exact_anchor_materialization_time : Time::Span,
+  async_checkpoint_enqueued : Int64,
+  async_checkpoint_completed : Int64,
+  async_checkpoint_pending : Int32,
+  async_checkpoint_capture_time : Time::Span,
+  async_checkpoint_commit_time : Time::Span,
+  async_checkpoint_wait_time : Time::Span,
   last_failure : String?
 
 record QBitSessionObservation,
@@ -76,6 +82,9 @@ record QBitSessionObservation,
   text : String,
   backend : String,
   checkpoint_id : String?,
+  checkpoint_pending : Bool,
+  pending_after_generate : Int32,
+  flush_time : Time::Span,
   qbit : QBitSessionDelta
 
 def qbit_session_action(index : Int32, repetitions : Int32) : String
@@ -105,6 +114,12 @@ def qbit_session_delta(after_stats : QwenSessionRuntime::QBitCacheStats,
     exact_anchor_fallbacks: after_stats.exact_anchor_fallbacks - before_stats.exact_anchor_fallbacks,
     exact_anchor_replayed_tokens: after_stats.exact_anchor_replayed_tokens - before_stats.exact_anchor_replayed_tokens,
     exact_anchor_materialization_time: after_stats.exact_anchor_materialization_time - before_stats.exact_anchor_materialization_time,
+    async_checkpoint_enqueued: after_stats.async_checkpoint_enqueued - before_stats.async_checkpoint_enqueued,
+    async_checkpoint_completed: after_stats.async_checkpoint_completed - before_stats.async_checkpoint_completed,
+    async_checkpoint_pending: after_stats.async_checkpoint_pending,
+    async_checkpoint_capture_time: after_stats.async_checkpoint_capture_time - before_stats.async_checkpoint_capture_time,
+    async_checkpoint_commit_time: after_stats.async_checkpoint_commit_time - before_stats.async_checkpoint_commit_time,
+    async_checkpoint_wait_time: after_stats.async_checkpoint_wait_time - before_stats.async_checkpoint_wait_time,
     last_failure: after_stats.last_failure,
   )
 end
@@ -116,7 +131,8 @@ def qbit_session_run(engine : QwenSessionEngine,
                      max_tokens : Int32,
                      max_seq : Int32,
                      session_id : String? = nil,
-                     checkpoint_id : String? = nil) : QBitSessionObservation
+                     checkpoint_id : String? = nil,
+                     flush_pending : Bool = false) : QBitSessionObservation
   before_stats = runtime.qbit_cache_stats
   started = Time.instant
   result = engine.generate(
@@ -129,6 +145,13 @@ def qbit_session_run(engine : QwenSessionEngine,
     )
   )
   elapsed = Time.instant - started
+  pending_after_generate = runtime.qbit_cache_stats.async_checkpoint_pending
+  flush_time = Time::Span.zero
+  if flush_pending && result.checkpoint_pending?
+    flush_started = Time.instant
+    runtime.flush_qbit_checkpoint_writes
+    flush_time = Time.instant - flush_started
+  end
   delta = qbit_session_delta(runtime.qbit_cache_stats, before_stats)
   QBitSessionObservation.new(
     action: action,
@@ -139,6 +162,9 @@ def qbit_session_run(engine : QwenSessionEngine,
     text: result.text,
     backend: result.backend.primary.to_s,
     checkpoint_id: result.checkpoint_id,
+    checkpoint_pending: result.checkpoint_pending?,
+    pending_after_generate: pending_after_generate,
+    flush_time: flush_time,
     qbit: delta,
   )
 end
@@ -176,7 +202,16 @@ def qbit_session_assert!(phase : String,
              end
   checkpoint_expected = phase == "baseline" ? observation.checkpoint_id.nil? : observation.checkpoint_id.try(&.matches?(/\A[0-9a-f]{64}\z/)) == true
   checkpoint_advances = parent_checkpoint_id.nil? || observation.checkpoint_id != parent_checkpoint_id
-  unless expected && checkpoint_expected && checkpoint_advances && qbit_session_clean?(delta)
+  async_consistent = if observation.checkpoint_pending
+                       delta.async_checkpoint_enqueued == 1 &&
+                         delta.async_checkpoint_completed == 1 &&
+                         delta.async_checkpoint_pending == 0
+                     else
+                       delta.async_checkpoint_enqueued == 0 &&
+                         delta.async_checkpoint_completed == 0 &&
+                         delta.async_checkpoint_pending == 0
+                     end
+  unless expected && checkpoint_expected && checkpoint_advances && async_consistent && qbit_session_clean?(delta)
     raise "#{phase} action #{observation.action} did not produce the expected clean QBit transition: #{delta.inspect}"
   end
 end
@@ -257,6 +292,9 @@ def qbit_session_emit(phase : String,
               json.field "text", observation.text
               json.field "backend", observation.backend
               json.field "checkpoint_id", observation.checkpoint_id
+              json.field "checkpoint_pending", observation.checkpoint_pending
+              json.field "pending_after_generate", observation.pending_after_generate
+              json.field "flush_ms", observation.flush_time.total_milliseconds.round(3)
               json.field "qbit" do
                 json.object do
                   json.field "hits", delta.hits
@@ -275,6 +313,12 @@ def qbit_session_emit(phase : String,
                   json.field "exact_anchor_fallbacks", delta.exact_anchor_fallbacks
                   json.field "exact_anchor_replayed_tokens", delta.exact_anchor_replayed_tokens
                   json.field "exact_anchor_materialization_ms", delta.exact_anchor_materialization_time.total_milliseconds.round(3)
+                  json.field "async_checkpoint_enqueued", delta.async_checkpoint_enqueued
+                  json.field "async_checkpoint_completed", delta.async_checkpoint_completed
+                  json.field "async_checkpoint_pending", delta.async_checkpoint_pending
+                  json.field "async_checkpoint_capture_ms", delta.async_checkpoint_capture_time.total_milliseconds.round(3)
+                  json.field "async_checkpoint_commit_ms", delta.async_checkpoint_commit_time.total_milliseconds.round(3)
+                  json.field "async_checkpoint_wait_ms", delta.async_checkpoint_wait_time.total_milliseconds.round(3)
                   json.field "last_failure", delta.last_failure
                 end
               end
@@ -299,6 +343,7 @@ payload_repetitions = 2
 max_seq = SESSION_MAX_SEQ
 max_tokens = 4
 max_source_mib = SESSION_MAX_SOURCE_MIB
+async_checkpoint_writes = false
 
 OptionParser.parse do |parser|
   parser.banner = "Usage: qwen35_qbit_session_smoke [options]"
@@ -314,6 +359,7 @@ OptionParser.parse do |parser|
   parser.on("--max-seq N", "State capacity, at most 512") { |value| max_seq = value.to_i }
   parser.on("--max-tokens N", "Generated tokens per action (default: 4)") { |value| max_tokens = value.to_i }
   parser.on("--max-source-mib N", "Write-back source admission, at most 256 MiB") { |value| max_source_mib = value.to_i }
+  parser.on("--async-checkpoint-writes", "Defer full-anchor QBit encode and ClickHouse publication") { async_checkpoint_writes = true }
   parser.on("-h", "--help", "Show this help") do
     puts parser
     exit
@@ -330,6 +376,7 @@ raise "max-source-mib must be within 1..#{SESSION_MAX_SOURCE_MIB}" unless max_so
 raise "session-id must be within 1..1024 bytes" unless session_id.bytesize.in?(1..1024)
 raise "rollback-action must be within 1..#{SESSION_MAX_ACTIONS}" unless rollback_action.in?(1..SESSION_MAX_ACTIONS)
 raise "seed refuses to overwrite transcript: #{transcript_path}" if phase == "seed" && File.exists?(transcript_path)
+raise "async checkpoint writes require a QBit phase" if phase == "baseline" && async_checkpoint_writes
 
 write_back = phase != "baseline"
 store = nil.as(ML::GGUF::QwenQBitClickHouseCache::Store?)
@@ -358,6 +405,7 @@ begin
     qbit_clickhouse_cache: store,
     qbit_cache_ttl: 1.hour,
     qbit_cache_write_back_max_source_bytes: write_back ? max_source_mib.to_i64 * 1024 * 1024 : 0_i64,
+    qbit_async_checkpoint_writes: async_checkpoint_writes,
   )
   load_time = Time.instant - load_started
   engine = QwenSessionEngine.new(runtime.not_nil!)
@@ -381,6 +429,7 @@ begin
         engine.not_nil!, runtime.not_nil!, messages, action, max_tokens, max_seq,
         session_id: session_id,
         checkpoint_id: parent_checkpoint,
+        flush_pending: async_checkpoint_writes,
       )
       qbit_session_assert!(phase, observation, parent_checkpoint)
       observations << observation
@@ -435,6 +484,7 @@ begin
       engine.not_nil!, runtime.not_nil!, messages, action, max_tokens, max_seq,
       session_id: transcript.session_id,
       checkpoint_id: parent_checkpoint,
+      flush_pending: async_checkpoint_writes,
     )
     qbit_session_assert!(phase, observation, parent_checkpoint)
     observations << observation
@@ -450,6 +500,7 @@ begin
       engine.not_nil!, runtime.not_nil!, messages, action, max_tokens, max_seq,
       session_id: transcript.session_id,
       checkpoint_id: transcript.checkpoint_ids.last,
+      flush_pending: async_checkpoint_writes,
     )
     qbit_session_assert!(phase, observation, transcript.checkpoint_ids.last)
     observations << observation
@@ -483,6 +534,7 @@ begin
       engine.not_nil!, runtime.not_nil!, messages, action, max_tokens, max_seq,
       session_id: transcript.session_id,
       checkpoint_id: parent_checkpoint,
+      flush_pending: async_checkpoint_writes,
     )
     qbit_session_assert!(phase, observation, parent_checkpoint)
     observations << observation

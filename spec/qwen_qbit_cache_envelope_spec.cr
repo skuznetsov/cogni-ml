@@ -241,6 +241,7 @@ describe ML::GGUF::QwenQBitCacheEnvelope do
     runtime_cache = ML::GGUF::Qwen35QBitRuntimeCache
     runtime_cache.validate_options!(24.hours, 0_i64)
     runtime_cache.validate_options!(24.hours, ML::GGUF::Qwen35QBitRuntimeCache::MAX_WRITE_BACK_SOURCE_BYTES)
+    runtime_cache.validate_options!(24.hours, 1_i64, true)
 
     expect_raises(ArgumentError, /TTL/) do
       runtime_cache.validate_options!(0.seconds, 0_i64)
@@ -250,6 +251,9 @@ describe ML::GGUF::QwenQBitCacheEnvelope do
         24.hours,
         ML::GGUF::Qwen35QBitRuntimeCache::MAX_WRITE_BACK_SOURCE_BYTES + 1_i64,
       )
+    end
+    expect_raises(ArgumentError, /require write-back/) do
+      runtime_cache.validate_options!(24.hours, 0_i64, true)
     end
   end
 

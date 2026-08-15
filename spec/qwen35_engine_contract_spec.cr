@@ -18,6 +18,7 @@ private class FakeQwen35EngineRuntime < QwenEngine::Runtime
   property generate_result_route : QwenEngine::Route = QwenEngine::Route::GenerateGreedy
   property generate_result_reasoning_effort : QwenEngine::ReasoningEffort?
   property generate_checkpoint_id : String?
+  property generate_checkpoint_pending : Bool = false
   property score_labels_result_route : QwenEngine::Route = QwenEngine::Route::ScoreLabels
   property preflight_result_operation : QwenEngine::Route?
   property generate_token_ids : Array(Int32) = [7_i32]
@@ -56,6 +57,7 @@ private class FakeQwen35EngineRuntime < QwenEngine::Runtime
       route: @generate_result_route,
       reasoning_effort: @generate_result_reasoning_effort || request.reasoning_effort,
       checkpoint_id: @generate_checkpoint_id,
+      checkpoint_pending: @generate_checkpoint_pending,
     )
   end
 
@@ -178,6 +180,20 @@ describe ML::GGUF::Qwen35Engine do
       )
     )
     result.checkpoint_id.should eq("b" * 64)
+    result.checkpoint_pending?.should be_false
+
+    runtime.generate_checkpoint_pending = true
+    pending = engine.generate(
+      QwenEngine::GenerateRequest.new(
+        messages: [QwenEngine::Message.new("user", "hello")],
+        max_tokens: 1,
+        session_id: "session-a",
+      )
+    )
+    pending.checkpoint_id.should eq("b" * 64)
+    pending.checkpoint_pending?.should be_true
+
+    runtime.generate_checkpoint_pending = false
 
     runtime.generate_checkpoint_id = nil
     expect_raises(Exception, /checkpoint/) do
@@ -186,6 +202,17 @@ describe ML::GGUF::Qwen35Engine do
           messages: [QwenEngine::Message.new("user", "hello")],
           max_tokens: 1,
           session_id: "session-a",
+        )
+      )
+    end
+
+    runtime.generate_checkpoint_id = "c" * 64
+    runtime.generate_checkpoint_pending = true
+    expect_raises(Exception, /pending/) do
+      engine.generate(
+        QwenEngine::GenerateRequest.new(
+          messages: [QwenEngine::Message.new("user", "hello")],
+          max_tokens: 1,
         )
       )
     end

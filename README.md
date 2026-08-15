@@ -605,18 +605,32 @@ runtime = ML::GGUF::Qwen35NativeRuntime.new(
   max_seq: 256,
   qbit_clickhouse_cache: store,
   qbit_cache_write_back_max_source_bytes: 192_i64 * 1024 * 1024,
+  qbit_async_checkpoint_writes: true, # Optional; session full anchors only.
 )
 ```
 
-Only an exact full-prompt Metal hit is admitted. Identity, ABI, artifact hashes,
-native-stream framing, and the cached next-token certificate are checked before
-use. A miss, transport error, or invalid artifact falls back to the existing
-local cache and ordinary prefill. A system or Metal restore failure does not
-retry prefill, because a second heavy allocation could compound memory pressure.
-Synchronous write-back is opt-in and rejected before snapshot allocation when
-the estimated raw state exceeds the configured limit; the runtime hard ceiling
-is 256 MiB. Inspect `runtime.qbit_cache_stats` for cache outcomes. Prefix search,
-background writes, and partial-state reuse remain outside this experimental
+Exact full-prompt and admitted longest-prefix Metal hits are supported. Identity,
+ABI, artifact hashes, native-stream framing, and the cached next-token
+certificate are checked before use. A miss, transport error, or invalid artifact
+falls back to the existing local cache and ordinary prefill. A system or Metal
+restore failure does not retry prefill, because a second heavy allocation could
+compound memory pressure. Write-back is opt-in and rejected before snapshot
+allocation when the estimated raw state exceeds the configured limit; the
+runtime hard ceiling is 256 MiB.
+
+Async checkpoint writes are separately opt-in. Only a newly materialized full
+session anchor is deferred: the request first captures one bounded immutable
+host snapshot, then one isolated scheduler-backed execution context performs
+QBit encode and manifest-last ClickHouse publication.
+`GenerateResult#checkpoint_pending?` distinguishes the accepted checkpoint
+identity from a durable one. The next generation and `close` flush it
+automatically; diagnostics may call
+`runtime.flush_qbit_checkpoint_writes` explicitly. The queue capacity is one,
+delta checkpoints stay synchronous, and no live Metal buffer or model weight is
+owned by the worker. A pending identity is intentionally not crash-durable: if
+the process terminates before a successful flush, the caller must discard it.
+Inspect `runtime.qbit_cache_stats` for pending, capture, commit, wait, success,
+and failure counters. Partial-state reuse remains outside this experimental
 frontier.
 
 Enable exact prompt cache in the CLI:

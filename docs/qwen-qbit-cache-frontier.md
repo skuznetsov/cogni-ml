@@ -29,6 +29,15 @@ also retain a recurrent-only rollback point near the assistant boundary, reuse
 the exact live KV prefix, and replay only the re-tokenized boundary suffix when
 materializing its first exact anchor.
 
+The default-off session route may additionally defer only the CPU QBit encode
+and manifest-last ClickHouse publication of a newly materialized full anchor to
+one bounded scheduler-backed execution context. The request still captures one
+immutable host snapshot while it owns the exact Metal state, returns the
+preallocated checkpoint identity with an explicit pending marker, and never
+queues a second snapshot. The next generation and runtime close wait for the
+pending publication before consuming or releasing its durability boundary.
+Small token-delta checkpoints remain synchronous.
+
 Bounded context: local `.qkv` state artifacts and an explicitly configured
 ClickHouse HTTP endpoint. Background part merges are a separate storage context
 and never establish cache visibility or admission.
@@ -134,6 +143,14 @@ and never establish cache visibility or admission.
   instead of attempting another heavy allocation. A write-back failure is
   observable in cache stats but must not fail or alter the generation already
   in progress. Unexpected system failures still propagate.
+- Async anchor publication is separately opt-in and single-flight: one active
+  immutable host snapshot is the complete queue capacity. It never transfers a
+  live Metal buffer to the worker, never overlaps QBit encode with the next
+  inference request, and preserves artifact -> manifest -> checkpoint order.
+  The returned result marks its checkpoint as pending until publication, while
+  cumulative success/failure, capture, commit, pending, and wait metrics remain
+  observable. The next request and `close` flush the worker; a background
+  failure is reported before the next inference and by `close`.
 
 ## Rejected surface
 
@@ -147,8 +164,14 @@ and never establish cache visibility or admission.
   CUDA decoder, or enabled-by-default cache route in this slice. The runtime
   uses bounded HTTP requests and synchronous inserts only when explicitly
   configured.
-- No background write queue, cross-`max_seq` restore, or partially restored
-  state reuse is admitted in the active runtime slice.
+- No unbounded or multi-entry background write queue, cross-`max_seq` restore,
+  or partially restored state reuse is admitted in the active runtime slice.
+- No live Metal state, GGUF weights, tokenizer, or mutable transcript storage
+  may be owned by the background writer. It receives only a bounded immutable
+  host snapshot and copied checkpoint metadata.
+- A pending checkpoint identity is not a process-crash recovery record. Until a
+  successful explicit or automatic flush, termination may leave that identity
+  unpublished and callers must not treat it as durable.
 - No claim that the recurrent rollback path accelerates periodic anchors rebuilt
   after a QBit restore. Those anchors remain synchronous and fully sequential.
 - No arithmetic recurrent-state delta chain is admitted. Applying successive
@@ -265,6 +288,18 @@ and never establish cache visibility or admission.
   full sequential baseline for the checkpoint next token/logit and the next
   continuation token/logit. Unused live-KV tail rows must be zero before the
   artifact is encoded.
+- Async enqueue must return while encode/publication is blocked, reject a second
+  job, expose exactly one pending item, and make flush/close wait for the first
+  completion. Publication failure must not become a successful write or a
+  silently durable checkpoint.
+- The async request result must identify its checkpoint as pending. The next
+  request must wait before lookup/inference, and cold restore after flush must
+  retain the same checkpoint certificate and continuation parity as the
+  synchronous route.
+- The measured async corridor must report synchronous host-capture time,
+  response latency, background encode/commit time, immediate-next-action wait,
+  peak pending jobs, and free-memory floor. Moving latency to the next request
+  or exceeding the one-snapshot memory bound falsifies the acceleration claim.
 
 ## Stop rules
 
@@ -580,7 +615,8 @@ The action-five cold checkpoint path was 9.9% faster than its matched full
 prefill in this single local sample. This is not a latency SLA: the fixed
 80-token anchor means the advantage shrinks as replay grows. Periodic anchors
 rebuilt after a QBit restore are still synchronous and fully sequential;
-background materialization remains outside the admitted surface.
+only fresh ordinary-session anchors admit the default-off background publication
+path measured below.
 
 ClickHouse 26.7.1.1315 stored the one full anchor in 32.98 MiB of recurrent
 QBit parts plus 10.26 MiB of exact-KV parts. Seven checkpoint rows, including
@@ -610,6 +646,40 @@ ClickHouse encoding/write still costs about 2.5 seconds here, and periodic
 anchors renewed from p7-restored state intentionally retain full sequential
 materialization. The evidence decays when the model, tokenizer, chat template,
 prefill/checkpoint kernels, or Metal state-ownership route changes.
+
+### Async anchor publication gate (2026-08-15)
+
+A guarded Qwen3.8 27B sync/async A/B used the same 63-token prompt, model,
+ClickHouse instance, process-level memory floor, and four-token generation
+limit. Both routes emitted token ids `[66793, 12, 16]` (`checkpoint-1`). The
+async route returned the preallocated checkpoint identity as pending after
+capturing an immutable host snapshot; the smoke then drained it explicitly to
+separate response latency from publication cost.
+
+| Fresh first-anchor route | Generate response | Host snapshot | QBit + ClickHouse | Explicit drain |
+| --- | ---: | ---: | ---: | ---: |
+| synchronous publication | 6,215.919 ms | included | 2,439.522 ms | none |
+| asynchronous publication | 3,537.305 ms | 38.670 ms | 2,345.053 ms | 2,343.060 ms |
+
+Moving publication off the response boundary reduced this first-action sample
+by 2,678.614 ms (43.1%) without changing generated tokens. It did not eliminate
+the work: this diagnostic drained immediately, and the runtime must also drain
+before the next generation or close. Natural idle-time overlap and sustained
+multi-session throughput remain unmeasured; the single-flight capacity is one.
+
+The second action restored the anchor and emitted the same token ids
+`[66793, 12, 17]` as the synchronous route. A third action in a new process hit
+the same chain with zero cache errors: total generation was 3,029.360 ms,
+including 2,673.500 ms of restore. The resulting checkpoint depths were
+`0 -> 1 -> 2`, with one full anchor and two compact exact-token deltas.
+
+ClickHouse stored the full anchor in 32.98 MiB of recurrent QBit parts plus
+10.18 MiB of exact-KV parts, about 43.16 MiB compressed in total. The three
+checkpoint rows occupied 4.31 KiB compressed versus 6.34 KiB uncompressed.
+An initial 1 GiB ClickHouse memory ceiling rejected the large exact-KV read
+safely; a 2 GiB server ceiling inside a 3 GiB process-tree guard completed the
+A/B while the host retained at least 84% free memory. These figures are a
+bounded local gate, not a storage-ratio, latency, or server-sizing SLA.
 
 ### ClickHouse boundary probe
 

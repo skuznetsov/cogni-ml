@@ -46,7 +46,13 @@ module ML::GGUF
       exact_anchor_fast_paths : Int64 = 0_i64,
       exact_anchor_fallbacks : Int64 = 0_i64,
       exact_anchor_replayed_tokens : Int64 = 0_i64,
-      exact_anchor_materialization_time : Time::Span = Time::Span.zero
+      exact_anchor_materialization_time : Time::Span = Time::Span.zero,
+      async_checkpoint_enqueued : Int64 = 0_i64,
+      async_checkpoint_completed : Int64 = 0_i64,
+      async_checkpoint_pending : Int32 = 0,
+      async_checkpoint_capture_time : Time::Span = Time::Span.zero,
+      async_checkpoint_commit_time : Time::Span = Time::Span.zero,
+      async_checkpoint_wait_time : Time::Span = Time::Span.zero
 
     @@process_mutex = Mutex.new
     # Qwen35Metal keeps one process-global no-copy mmap registration. Until
@@ -67,6 +73,7 @@ module ML::GGUF
     @prompt_cache_model_id : String?
     @prompt_cache_tokenizer_id : String?
     @qbit_cache : Qwen35QBitRuntimeCache?
+    @closed_qbit_async_stats = Qwen35QBitRuntimeCache::AsyncCheckpointStats.new
     @prompt_cache_hits = 0_i64
     @prompt_cache_misses = 0_i64
     @prompt_cache_restore_failures = 0_i64
@@ -102,6 +109,7 @@ module ML::GGUF
       qbit_clickhouse_cache : QwenQBitClickHouseCache::Store? = nil,
       qbit_cache_ttl : Time::Span = 24.hours,
       qbit_cache_write_back_max_source_bytes : Int64 = 0_i64,
+      qbit_async_checkpoint_writes : Bool = false,
     )
       raise ArgumentError.new("Qwen35NativeRuntime model path must not be empty") if @model_path.strip.empty?
       raise ArgumentError.new("Qwen35NativeRuntime model not found: #{@model_path}") unless File.exists?(@model_path)
@@ -112,10 +120,17 @@ module ML::GGUF
       if qbit_clickhouse_cache.nil? && qbit_cache_write_back_max_source_bytes > 0
         raise ArgumentError.new("QBit write-back requires qbit_clickhouse_cache")
       end
+      if qbit_clickhouse_cache.nil? && qbit_async_checkpoint_writes
+        raise ArgumentError.new("async QBit checkpoints require qbit_clickhouse_cache")
+      end
       # Validate before tokenizer/weight loading so bad cache configuration
       # cannot trigger a large mmap or Metal allocation first.
       if qbit_clickhouse_cache
-        Qwen35QBitRuntimeCache.validate_options!(qbit_cache_ttl, qbit_cache_write_back_max_source_bytes)
+        Qwen35QBitRuntimeCache.validate_options!(
+          qbit_cache_ttl,
+          qbit_cache_write_back_max_source_bytes,
+          qbit_async_checkpoint_writes,
+        )
       end
 
       @llama_tokenize_bin = llama_tokenize_bin || ENV["LLAMA_TOKENIZE_BIN"]? || ""
@@ -164,6 +179,7 @@ module ML::GGUF
               QwenQBitCacheEnvelope.template_id(tokenizer.chat_template),
               qbit_cache_ttl,
               qbit_cache_write_back_max_source_bytes,
+              qbit_async_checkpoint_writes,
             )
           end
         rescue ex
@@ -413,25 +429,42 @@ module ML::GGUF
 
     def qbit_cache_stats : QBitCacheStats
       @@process_mutex.synchronize do
+        async_stats = @qbit_cache.try(&.async_checkpoint_stats) || @closed_qbit_async_stats
         QBitCacheStats.new(
           hits: @qbit_cache_hits,
           misses: @qbit_cache_misses,
           rejections: @qbit_cache_rejections,
           transport_failures: @qbit_cache_transport_failures,
           restore_failures: @qbit_cache_restore_failures,
-          writes: @qbit_cache_writes,
-          write_failures: @qbit_cache_write_failures,
+          writes: @qbit_cache_writes + async_stats.completed,
+          write_failures: @qbit_cache_write_failures + async_stats.failures,
           reused_prefix_tokens: @qbit_cache_reused_prefix_tokens,
           replayed_suffix_tokens: @qbit_cache_replayed_suffix_tokens,
-          last_failure: @qbit_cache_last_failure,
+          last_failure: async_stats.last_failure || @qbit_cache_last_failure,
           lookup_time: @qbit_cache_lookup_time,
           restore_time: @qbit_cache_restore_time,
-          write_back_time: @qbit_cache_write_back_time,
+          write_back_time: @qbit_cache_write_back_time + async_stats.commit_time,
           exact_anchor_fast_paths: @qbit_cache_exact_anchor_fast_paths,
           exact_anchor_fallbacks: @qbit_cache_exact_anchor_fallbacks,
           exact_anchor_replayed_tokens: @qbit_cache_exact_anchor_replayed_tokens,
           exact_anchor_materialization_time: @qbit_cache_exact_anchor_materialization_time,
+          async_checkpoint_enqueued: async_stats.enqueued,
+          async_checkpoint_completed: async_stats.completed,
+          async_checkpoint_pending: async_stats.pending,
+          async_checkpoint_capture_time: async_stats.capture_time,
+          async_checkpoint_commit_time: async_stats.commit_time,
+          async_checkpoint_wait_time: async_stats.wait_time,
         )
+      end
+    end
+
+    # Diagnostic durability barrier for callers that need to separate response
+    # latency from background checkpoint readiness. Normal generation and close
+    # invoke the same barrier automatically.
+    def flush_qbit_checkpoint_writes : Nil
+      @@process_mutex.synchronize do
+        ensure_open!
+        flush_async_qbit_checkpoint_writes!
       end
     end
 
@@ -444,6 +477,7 @@ module ML::GGUF
         validate_route!(Qwen35Engine::Route::GenerateGreedy, route)
         validate_generate_request!(request)
         self.class.validate_reasoning_effort_supported!(request.reasoning_effort, @reasoning_effort_supported)
+        flush_async_qbit_checkpoint_writes!
         if request.session_id
           qbit_cache = @qbit_cache
           unless qbit_cache && qbit_cache.write_back?
@@ -676,6 +710,7 @@ module ML::GGUF
           end
 
           result_checkpoint_id = nil.as(String?)
+          result_checkpoint_pending = false
           if request.session_id.nil? && (did_ordinary_prefill || did_qbit_suffix_prefill) &&
              (qbit_cache = @qbit_cache) && qbit_cache.write_back?
             write_back_started = Time.instant
@@ -726,7 +761,8 @@ module ML::GGUF
             checkpoint_state = decode_state
             write_back_started = nil.as(Time::Instant?)
             begin
-              if qbit_cache.checkpoint_requires_anchor?(restored_session_checkpoint, boundary_token_ids)
+              checkpoint_requires_anchor = qbit_cache.checkpoint_requires_anchor?(restored_session_checkpoint, boundary_token_ids)
+              if checkpoint_requires_anchor
                 anchor_materialization_started = Time.instant
                 begin
                   # The generation prompt may contain control tokens that are not
@@ -782,18 +818,32 @@ module ML::GGUF
                   @qbit_cache_exact_anchor_materialization_time += Time.instant - anchor_materialization_started
                 end
               end
-              write_back_started = Time.instant
-              checkpoint = qbit_cache.save_checkpoint(
-                session_id,
-                boundary_text,
-                boundary_token_ids,
-                checkpoint_next_token,
-                weights.hparams,
-                checkpoint_state,
-                restored_session_checkpoint,
-              )
-              result_checkpoint_id = checkpoint.checkpoint_id
-              @qbit_cache_writes += 1
+              if checkpoint_requires_anchor && qbit_cache.async_checkpoint_writes?
+                prepared = qbit_cache.enqueue_anchor_checkpoint(
+                  session_id,
+                  boundary_text,
+                  boundary_token_ids,
+                  checkpoint_next_token,
+                  weights.hparams,
+                  checkpoint_state,
+                  restored_session_checkpoint,
+                )
+                result_checkpoint_id = prepared.checkpoint_id
+                result_checkpoint_pending = true
+              else
+                write_back_started = Time.instant
+                checkpoint = qbit_cache.save_checkpoint(
+                  session_id,
+                  boundary_text,
+                  boundary_token_ids,
+                  checkpoint_next_token,
+                  weights.hparams,
+                  checkpoint_state,
+                  restored_session_checkpoint,
+                )
+                result_checkpoint_id = checkpoint.checkpoint_id
+                @qbit_cache_writes += 1
+              end
             rescue ex : IO::Error | ArgumentError
               @qbit_cache_write_failures += 1
               record_qbit_failure("checkpoint write-back", ex)
@@ -823,6 +873,7 @@ module ML::GGUF
             route: route.operation,
             reasoning_effort: request.reasoning_effort,
             checkpoint_id: result_checkpoint_id,
+            checkpoint_pending: result_checkpoint_pending,
           )
         ensure
           if capture_state = exact_anchor_checkpoint_state
@@ -882,6 +933,11 @@ module ML::GGUF
       @@process_mutex.synchronize do
         return if @closed
 
+        if qbit_cache = @qbit_cache
+          completion = qbit_cache.close_async_checkpoint_writes
+          raise_async_qbit_completion!(completion, "close")
+          @closed_qbit_async_stats = qbit_cache.async_checkpoint_stats
+        end
         weights = @weights
         weights.try(&.close)
         @prompt_cache = nil
@@ -1066,6 +1122,25 @@ module ML::GGUF
 
     private def record_qbit_failure(stage : String, exception : Exception) : Nil
       @qbit_cache_last_failure = "#{stage}: #{exception.class}: #{exception.message || "unknown error"}"
+    end
+
+    private def flush_async_qbit_checkpoint_writes! : Nil
+      qbit_cache = @qbit_cache
+      return unless qbit_cache && qbit_cache.async_checkpoint_writes?
+      completion = qbit_cache.flush_async_checkpoint_writes
+      raise_async_qbit_completion!(completion, "flush")
+    end
+
+    private def raise_async_qbit_completion!(
+      completion : QwenQBitAsyncCompletion(QwenQBitSessionCheckpoint::Entry)?,
+      stage : String,
+    ) : Nil
+      return unless completion && completion.failed?
+      error = IO::Error.new(
+        "async QBit checkpoint #{stage} failed: #{completion.error_class}: #{completion.error_message}"
+      )
+      record_qbit_failure("async checkpoint #{stage}", error)
+      raise error
     end
   end
 end

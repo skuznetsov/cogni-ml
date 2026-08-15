@@ -99,7 +99,12 @@ module ML::GGUF
       backend : BackendIdentity,
       route : Route,
       reasoning_effort : ReasoningEffort = ReasoningEffort::None,
-      checkpoint_id : String? = nil
+      checkpoint_id : String? = nil,
+      checkpoint_pending : Bool = false do
+      def checkpoint_pending? : Bool
+        checkpoint_pending
+      end
+    end
 
     record Label,
       name : String,
@@ -277,6 +282,9 @@ module ML::GGUF
     private def validate_generate_result!(request : GenerateRequest, result : GenerateResult) : Nil
       unless result.reasoning_effort == request.reasoning_effort
         raise "runtime reasoning effort #{result.reasoning_effort} does not match requested #{request.reasoning_effort}"
+      end
+      if result.checkpoint_pending? && (request.session_id.nil? || result.checkpoint_id.nil?)
+        raise "runtime returned a pending checkpoint outside a session checkpoint result"
       end
       if request.session_id
         checkpoint_id = result.checkpoint_id

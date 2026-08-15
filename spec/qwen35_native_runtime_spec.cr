@@ -58,6 +58,12 @@ describe ML::GGUF::Qwen35NativeRuntime do
     stats.exact_anchor_fallbacks.should eq(0)
     stats.exact_anchor_replayed_tokens.should eq(0)
     stats.exact_anchor_materialization_time.should eq(Time::Span.zero)
+    stats.async_checkpoint_enqueued.should eq(0)
+    stats.async_checkpoint_completed.should eq(0)
+    stats.async_checkpoint_pending.should eq(0)
+    stats.async_checkpoint_capture_time.should eq(Time::Span.zero)
+    stats.async_checkpoint_commit_time.should eq(Time::Span.zero)
+    stats.async_checkpoint_wait_time.should eq(Time::Span.zero)
   end
 
   it "keeps an explicit rollback switch for exact-anchor replay" do
