@@ -9,7 +9,9 @@ bit-transposed, validate an ordered multi-block Native response, decode logical
 records that cross response-block boundaries directly into prepared Metal state
 buffers, attach exact KV from a separate bounded artifact, compare a complete
 QBit cache-hit corridor against the matched INT8 artifact in alternating order,
-and measure one isolated temporary MergeTree.
+measure one isolated temporary MergeTree, and construct a versioned admission
+envelope for the split recurrent-QBit/exact-KV state. The envelope is not yet
+wired to a production ClickHouse client or the default prompt-cache route.
 
 Bounded context: local `.qkv` state artifacts. ClickHouse storage and background
 part merges are a separate transport/storage context.
@@ -52,20 +54,35 @@ part merges are a separate transport/storage context.
   structurally validate both inputs, restore prepared Metal state, and execute
   the first post-restore forward. When the matched INT8 input is present, the
   probe alternates execution order as ABBA and reports paired deltas.
+- A versioned QBit cache envelope may bind the state runtime, model, tokenizer,
+  explicit chat-template identity, prompt and token hashes, state ABI, codec,
+  exact-known-span validation result, and cached next token. Admission requires
+  the complete per-layer recurrent/KV record set, exact record byte sizes and
+  positions, exact KV bytes, and a block-framing-independent logical digest of
+  all QBit columns.
+- A successful strict admission may retain the parsed zero-copy views as a
+  process-local certificate while their backing byte slices remain immutable.
+  Repeated restores from that certificate need not reparse or rehash the same
+  bytes.
 
 ## Rejected surface
 
-- No production prompt-cache codec, artifact version, manifest value, default,
-  or compatibility promise is added in this slice.
+- No production prompt-cache default, ClickHouse lookup route, or compatibility
+  promise is added in this slice. Envelope schema v1 is an internal admission
+  boundary and may still change before production promotion.
 - No claim that scalar MSE implies autoregressive parity.
 - No claim that ClickHouse background merges are on the cache-hit critical
   path: newly inserted rows must remain readable before a part merge completes.
 - No production ClickHouse client, TCP packet framing/compression, durable QBit
-  artifact version, CUDA decoder, or default cache route in this slice.
+  storage schema, CUDA decoder, or default cache route in this slice.
 - The diagnostic corridor starts with an already constructed internal state
-  template and a cached first token. It is not a versioned production envelope
-  and does not include key lookup, model/tokenizer/template/prompt hash checks,
-  TCP framing, or a cache-miss fallback.
+  template and a cached first token. The separate admission envelope now covers
+  identity and state completeness, but the corridor still does not execute a
+  key lookup, TCP framing, or a cache-miss fallback.
+- The manifest certificate is a deterministic integrity binding, not an HMAC,
+  signature, or trust proof for bytes supplied by an untrusted store. A first
+  strict cold admission must still verify the artifacts. Mutable backing bytes
+  invalidate a process-local `Admission`.
 - A fast kernel or compact Native block alone is not evidence that the complete
   cold-hit path is faster.
 - Recurrent-only QBit part bytes must not be compared with a full INT8 artifact
@@ -74,7 +91,11 @@ part merges are a separate transport/storage context.
 
 ## Guard-only future
 
-- A versioned recurrent QBit artifact codec with direct device decode.
+- A trusted ClickHouse transport/storage certificate that can safely amortize
+  the first logical digest, tied to the full lookup identity and returned
+  artifact checksums rather than to a truncated row key alone.
+- A production client that joins recurrent QBit, exact KV, and the versioned
+  envelope with bounded response handling and an explicit cache-miss fallback.
 - ClickHouse storage using fixed-size tiles and independently readable bit
   planes.
 - Progressive fetch or fallback from 6/7 planes to the full 8-plane code.
@@ -118,6 +139,13 @@ part merges are a separate transport/storage context.
 - A complete-state latency comparison must use matched source state, exact
   first post-restore token checks, prepared states, and alternating QBit/INT8
   order. Sequential format-wide runs are rejected as an order-sensitive proxy.
+- Envelope admission must fail on model/tokenizer/template or prompt-token
+  identity changes, missing or duplicate state records, wrong ABI byte sizes or
+  positions, logical recurrent corruption, exact-KV corruption, and mutation of
+  any certificate-covered manifest field.
+- The logical recurrent digest must remain identical when ClickHouse legally
+  reblocks the same ordered rows; raw transport-byte hashes are not a valid
+  substitute for logical artifact identity.
 
 ## Stop rules
 
@@ -339,6 +367,28 @@ latency move is to eliminate redundant validation through a versioned trusted
 envelope or fuse validation with restore, without weakening malformed-stream
 rejection.
 
+### Versioned admission-envelope gate (2026-08-15)
+
+The internal v1 envelope now derives the narrow ClickHouse `cache_id` from a
+full lookup identity and retains all identity fields for collision-safe
+post-lookup comparison. It additionally binds the complete state ABI, exact KV
+artifact, recurrent logical content and shape, exact-known-span validation, and
+cached next token. A successful `Admission` retains the already parsed views so
+subsequent in-process restores can reuse the validation result without hashing
+the same immutable buffers again.
+
+The real 38,304-row Qwen3.8 recurrent artifact was hashed in both its canonical
+single-block form and the natural five-block ClickHouse response. Their raw
+file SHA-256 values differ, but their logical digest is the same:
+`0de2...d98b`. In a guarded release probe, strict parsing took 5.430/5.388 ms
+and the logical digest took 15.602/14.503 ms for the one/five-block forms. A
+fresh final run measured 6.488/4.552 ms parse and 14.835/13.990 ms digest;
+the difference is ordinary local timing variance, not a format change.
+This digest cost was not included in the earlier 94.833 ms complete QBit
+corridor. It is a material first-cold-admission cost, not a free optimization;
+eliminating it requires a trusted transport/storage certificate or validation
+fused with data consumption, not merely trusting the self-described manifest.
+
 ### ClickHouse boundary probe
 
 Local ClickHouse 26.8.1.1 on the Apple M2 Max was tested with incompressible
@@ -377,8 +427,10 @@ compaction, never admission or visibility.
 
 ### Cache-engine contract
 
-- Make cache keys content-addressed over model, tokenizer/chat-template,
-  engine/state ABI, prompt tokens, cache policy, and artifact codec version.
+- The internal envelope now makes cache keys content-addressed over model,
+  tokenizer/chat-template, engine/state ABI, prompt tokens, QBit block/precision,
+  and artifact codec version. A production client must use the same full
+  identity after the narrow `UInt64` ClickHouse lookup.
 - Insert every tile of one artifact in one batch and persist expected tile
   count plus an artifact digest. Restore fails closed on missing, duplicate, or
   mismatched tiles; it never waits for `FINAL` or a merge.

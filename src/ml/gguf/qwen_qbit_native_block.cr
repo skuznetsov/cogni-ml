@@ -1,3 +1,5 @@
+require "digest/sha256"
+
 module ML::GGUF
   # Strict parser for revision-zero Native blocks emitted by QwenQBitNativeWriter
   # or an equivalent ordered ClickHouse SELECT ... FORMAT Native. It exposes
@@ -133,6 +135,48 @@ module ML::GGUF
       raise ArgumentError.new("truncated QBit Native stream: #{ex.message}")
     end
 
+    # Stable digest of the logical QBit rows. ClickHouse may split the same
+    # ordered result into different Native blocks, so hashing transport bytes
+    # would turn legal reblocking into a false cache miss.
+    def logical_sha256(stream : Stream) : String
+      digest = Digest::SHA256.new
+      digest.update("cogni-ml/qwen-qbit-native-logical-v1\0".to_slice)
+      scalar = Bytes.new(4)
+      write_u32_le(scalar, 0, stream.block_size.to_u32)
+      digest.update(scalar)
+      record_header = Bytes.new(21)
+      plane_bytes = stream.block_size // 8
+
+      stream.record_spans.each do |span|
+        write_u64_le(record_header, 0, span.cache_id)
+        write_u32_le(record_header, 8, span.layer.unsafe_as(UInt32))
+        record_header[12] = span.kind
+        write_u32_le(record_header, 13, span.tile_count.to_u32)
+        write_u32_le(record_header, 17, span.value_count.to_u32)
+        digest.update(record_header)
+
+        # Hash each logical column across response chunks. Concatenating spans
+        # in record order is invariant to where ClickHouse places block cuts,
+        # while avoiding hundreds of thousands of per-row digest calls.
+        span.chunks.each do |chunk|
+          block = stream.blocks[chunk.block_index]
+          digest.update(block.bytes[block.mean_offset + chunk.row_start * sizeof(Float32), chunk.tile_count * sizeof(Float32)])
+        end
+        span.chunks.each do |chunk|
+          block = stream.blocks[chunk.block_index]
+          digest.update(block.bytes[block.sigma_offset + chunk.row_start * sizeof(Float32), chunk.tile_count * sizeof(Float32)])
+        end
+        8.times do |plane|
+          span.chunks.each do |chunk|
+            block = stream.blocks[chunk.block_index]
+            offset = block.codes_offset + (plane * block.row_count + chunk.row_start) * plane_bytes
+            digest.update(block.bytes[offset, chunk.tile_count * plane_bytes])
+          end
+        end
+      end
+      digest.final.hexstring
+    end
+
     private def parse_block(reader : Reader, source : Bytes) : Block
       block_start = reader.offset
       raise ArgumentError.new("QBit Native column count mismatch") unless reader.read_varuint == COLUMN_COUNT
@@ -232,6 +276,14 @@ module ML::GGUF
              (bytes[offset + 2].to_u32 << 16) |
              (bytes[offset + 3].to_u32 << 24)
       bits.unsafe_as(Float32)
+    end
+
+    private def write_u32_le(bytes : Bytes, offset : Int32, value : UInt32) : Nil
+      4.times { |i| bytes[offset + i] = ((value >> (i * 8)) & 0xff).to_u8 }
+    end
+
+    private def write_u64_le(bytes : Bytes, offset : Int32, value : UInt64) : Nil
+      8.times { |i| bytes[offset + i] = ((value >> (i * 8)) & 0xff).to_u8 }
     end
 
     private def build_record_chunks(cache_ids : Array(UInt64),

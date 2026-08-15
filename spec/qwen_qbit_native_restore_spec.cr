@@ -117,6 +117,27 @@ describe "QBit Native restore" do
     end
   end
 
+  it "hashes logical QBit rows independently of Native block framing" do
+    first = codec.encode(Array(Float32).new(17) { |i| (i - 8).to_f32 / 3.0_f32 }, block_size: 8, precision: 7)
+    second = codec.encode(Array(Float32).new(9) { |i| -(i.to_f32 / 5.0_f32) }, block_size: 8, precision: 7)
+    first_record = ML::GGUF::QwenQBitNativeWriter::Record.new(42_u64, 3_i32, 0_u8, first)
+    second_record = ML::GGUF::QwenQBitNativeWriter::Record.new(42_u64, 3_i32, 1_u8, second)
+
+    single_block = parser.parse_stream(writer.encode([first_record, second_record]))
+    split_blocks = parser.parse_stream(qbit_native_concat([
+      writer.encode([first_record]),
+      writer.encode([second_record]),
+    ]))
+
+    parser.logical_sha256(single_block).should eq(parser.logical_sha256(split_blocks))
+
+    changed = split_blocks.bytes.dup
+    changed_stream = parser.parse_stream(changed)
+    first_block = changed_stream.blocks.first
+    changed[first_block.codes_offset] ^= 0x80_u8
+    parser.logical_sha256(parser.parse_stream(changed)).should_not eq(parser.logical_sha256(single_block))
+  end
+
   it "restores columnar Native p7 streams into multiple Metal state buffers" do
     pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
 

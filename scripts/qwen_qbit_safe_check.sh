@@ -39,6 +39,7 @@ exec "$RUN_SAFE" "$CRYSTAL_BIN" "$TIMEOUT_SEC" "$MAX_TREE_MB" \
   spec/qwen_qbit_native_writer_spec.cr \
   spec/qwen_qbit_metal_restore_spec.cr \
   spec/qwen_qbit_native_restore_spec.cr \
+  spec/qwen_qbit_cache_envelope_spec.cr \
   spec/qwen_qbit_state_snapshot_spec.cr \
   --error-trace \
   --link-flags="$ROOT/build/bridge.o -framework Metal -framework Foundation -lc++"
