@@ -86,6 +86,11 @@ extern "C" int64_t recommended_working_set_size_impl() {
     return (int64_t)gs_device.recommendedMaxWorkingSetSize;
 }
 
+extern "C" int64_t current_allocated_size_impl() {
+    if (gs_device == nil) return 0;
+    return (int64_t)gs_device.currentAllocatedSize;
+}
+
 extern "C" int32_t has_unified_memory_impl() {
     if (gs_device == nil) return 0;
     return gs_device.hasUnifiedMemory ? 1 : 0;
@@ -590,6 +595,10 @@ extern "C" int32_t gs_max_threads_per_threadgroup() {
 
 extern "C" int64_t gs_recommended_working_set_size() {
     return recommended_working_set_size_impl();
+}
+
+extern "C" int64_t gs_current_allocated_size() {
+    return current_allocated_size_impl();
 }
 
 extern "C" int32_t gs_has_unified_memory() {

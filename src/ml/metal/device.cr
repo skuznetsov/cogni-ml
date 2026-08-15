@@ -33,6 +33,10 @@
           0_i64
         end
 
+        def current_allocated_size : Int64
+          0_i64
+        end
+
         def has_unified_memory? : Bool
           false
         end
@@ -186,6 +190,18 @@ module ML
         return 0_i64 unless @available
         {% if flag?(:darwin) %}
           MetalDeviceFFI.recommended_working_set_size
+        {% else %}
+          0_i64
+        {% end %}
+      end
+
+      # Metal-visible resource bytes for this device. On Apple Silicon these
+      # consume the same unified-memory pool as CPU allocations and therefore
+      # complement, rather than duplicate, process RSS telemetry.
+      def current_allocated_size : Int64
+        return 0_i64 unless @available
+        {% if flag?(:darwin) %}
+          MetalDeviceFFI.current_allocated_size
         {% else %}
           0_i64
         {% end %}
@@ -365,6 +381,7 @@ lib MetalDeviceFFI
   fun device_name = gs_device_name : Pointer(UInt8)
   fun max_threads_per_threadgroup = gs_max_threads_per_threadgroup : Int32
   fun recommended_working_set_size = gs_recommended_working_set_size : Int64
+  fun current_allocated_size = gs_current_allocated_size : Int64
   fun has_unified_memory = gs_has_unified_memory : Int32
 
   # Command buffer
@@ -396,6 +413,7 @@ lib MetalDeviceFFI
   fun device_name = gs_device_name : Pointer(UInt8)
   fun max_threads_per_threadgroup = gs_max_threads_per_threadgroup : Int32
   fun recommended_working_set_size = gs_recommended_working_set_size : Int64
+  fun current_allocated_size = gs_current_allocated_size : Int64
   fun has_unified_memory = gs_has_unified_memory : Int32
   fun create_command_queue = gs_create_command_queue : Pointer(Void)
   fun release_command_queue = gs_release_command_queue(queue : Pointer(Void)) : Void

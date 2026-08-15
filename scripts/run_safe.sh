@@ -7,8 +7,9 @@
 # because Crystal may spawn a `crystal-run-spec.tmp` process that can survive
 # parent interruption and keep consuming memory/GPU.
 #
-# Optional system-pressure guard:
-#   COGNI_RUN_SAFE_MIN_FREE_PCT=10
+# System-pressure guard (enabled by default):
+#   COGNI_RUN_SAFE_MIN_FREE_PCT=12
+#   COGNI_RUN_SAFE_MIN_FREE_PCT=0   # explicit opt-out
 # kills the process tree if `memory_pressure -Q` reports free memory at or
 # below the threshold. This catches unified-memory/Metal/compressor pressure
 # that is not always visible in the child RSS alone.
@@ -39,7 +40,7 @@ STDOUT_TMP=$(mktemp /tmp/run_safe_stdout.XXXXXX)
 STDERR_TMP=$(mktemp /tmp/run_safe_stderr.XXXXXX)
 WATCHDOG_PID=""
 PASSTHROUGH_STDIO="${RUN_SAFE_PASSTHROUGH_STDIO:-0}"
-MIN_FREE_PCT="${COGNI_RUN_SAFE_MIN_FREE_PCT:-0}"
+MIN_FREE_PCT="${COGNI_RUN_SAFE_MIN_FREE_PCT:-12}"
 WAIT_QUIET_SEC="${COGNI_RUN_SAFE_WAIT_QUIET_SEC:-0}"
 QUIET_POLL_SEC="${COGNI_RUN_SAFE_QUIET_POLL_SEC:-1}"
 QUIET_PROC_PCT="${COGNI_RUN_SAFE_QUIET_PROC_PCT:-50}"
@@ -227,6 +228,29 @@ system_free_pct() {
   memory_pressure -Q 2>/dev/null | awk -F': ' '/System-wide memory free percentage/ {gsub(/%/, "", $2); print $2; exit}'
 }
 
+require_memory_headroom() {
+  local free_pct
+  if [ "$MIN_FREE_PCT" -le 0 ]; then
+    return 0
+  fi
+  free_pct=$(system_free_pct)
+  if [ -z "$free_pct" ]; then
+    # `memory_pressure` is macOS-specific. Preserve portability when it is not
+    # installed, but fail closed when the command exists and its output cannot
+    # be interpreted.
+    if command -v memory_pressure >/dev/null 2>&1; then
+      log_line "[ABORT] Cannot read system memory pressure before launch"
+      exit 75
+    fi
+    return 0
+  fi
+  if [ "$free_pct" -le "$MIN_FREE_PCT" ]; then
+    log_line "[ABORT] Insufficient system memory headroom before launch: free ${free_pct}% <= ${MIN_FREE_PCT}%"
+    exit 75
+  fi
+  log_line "[PREFLIGHT] System memory free ${free_pct}% > ${MIN_FREE_PCT}%"
+}
+
 fd_count_for_pid() {
   local target_pid="$1"
   local tmp
@@ -279,9 +303,11 @@ kill_tree_briefly() {
 }
 
 if [ "$PASSTHROUGH_STDIO" = "1" ]; then
+  require_memory_headroom
   wait_for_quiet_host
   "$BINARY" "$@" <&0 >&1 2> "$STDERR_TMP" &
 else
+  require_memory_headroom
   wait_for_quiet_host
   "$BINARY" "$@" > "$STDOUT_TMP" 2> "$STDERR_TMP" &
 fi
