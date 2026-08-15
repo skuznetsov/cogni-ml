@@ -110,14 +110,26 @@ module ML::GGUF
         encoded,
         QwenQBitCacheEnvelope.cache_id(context),
       )
-      kv_snapshot = Qwen35StateSnapshot::Snapshot.new(
-        snapshot.max_seq,
-        snapshot.layer_count,
-        snapshot.positions.dup,
-        snapshot.records.select { |record| record.kind.k_cache? || record.kind.v_cache? },
-      )
+      kv_snapshot = self.class.exact_kv_snapshot(snapshot, prompt_ids.size.to_i32)
       kv_artifact = Qwen35StateSnapshot.encode_artifact_bytes(kv_snapshot)
       @store.save(context, recurrent_native, kv_artifact, ttl: @ttl)
+    end
+
+    # Qwen35 State#position is currently advisory and is not bumped by every
+    # fused prefill route. The cache boundary is request-known, so persist the
+    # canonical prompt length for every layer instead of serializing stale
+    # per-layer zeros into an otherwise valid exact-KV artifact.
+    def self.exact_kv_snapshot(snapshot : Qwen35StateSnapshot::Snapshot,
+                               prefix_len : Int32) : Qwen35StateSnapshot::Snapshot
+      unless prefix_len > 0 && prefix_len <= snapshot.max_seq
+        raise ArgumentError.new("QBit exact KV prefix length is outside snapshot capacity")
+      end
+      Qwen35StateSnapshot::Snapshot.new(
+        snapshot.max_seq,
+        snapshot.layer_count,
+        Array(Int32).new(snapshot.layer_count, prefix_len),
+        snapshot.records.select { |record| record.kind.k_cache? || record.kind.v_cache? },
+      )
     end
 
     def self.validation_hash(prompt_ids : Array(Int32), next_token_id : Int32) : String

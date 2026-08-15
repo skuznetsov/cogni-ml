@@ -167,6 +167,48 @@ describe ML::GGUF::QwenQBitCacheEnvelope do
     end
   end
 
+  it "canonicalizes exact KV positions to the cached prompt boundary" do
+    source = ML::GGUF::Qwen35StateSnapshot::Snapshot.new(
+      16,
+      2,
+      [0_i32, 0_i32],
+      [
+        ML::GGUF::Qwen35StateSnapshot::Record.new(
+          0,
+          ML::GGUF::Qwen35StateSnapshot::RecordKind::ConvState,
+          qbit_envelope_bytes([1.0_f32]),
+          ML::StorageMode::Shared,
+        ),
+        ML::GGUF::Qwen35StateSnapshot::Record.new(
+          1,
+          ML::GGUF::Qwen35StateSnapshot::RecordKind::KCache,
+          qbit_envelope_bytes([2.0_f32]),
+          ML::StorageMode::Shared,
+        ),
+        ML::GGUF::Qwen35StateSnapshot::Record.new(
+          1,
+          ML::GGUF::Qwen35StateSnapshot::RecordKind::VCache,
+          qbit_envelope_bytes([3.0_f32]),
+          ML::StorageMode::Shared,
+        ),
+      ],
+    )
+
+    exact = ML::GGUF::Qwen35QBitRuntimeCache.exact_kv_snapshot(source, 3)
+    exact.positions.should eq([3_i32, 3_i32])
+    exact.records.map(&.kind).should eq([
+      ML::GGUF::Qwen35StateSnapshot::RecordKind::KCache,
+      ML::GGUF::Qwen35StateSnapshot::RecordKind::VCache,
+    ])
+
+    expect_raises(ArgumentError, /outside snapshot capacity/) do
+      ML::GGUF::Qwen35QBitRuntimeCache.exact_kv_snapshot(source, 0)
+    end
+    expect_raises(ArgumentError, /outside snapshot capacity/) do
+      ML::GGUF::Qwen35QBitRuntimeCache.exact_kv_snapshot(source, 17)
+    end
+  end
+
   it "rejects a self-consistent but incomplete model state" do
     context = qbit_envelope_context
     _native, kv = qbit_envelope_artifacts(context)

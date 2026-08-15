@@ -31,7 +31,8 @@ module ML::GGUF
       transport_failures : Int64,
       restore_failures : Int64,
       writes : Int64,
-      write_failures : Int64
+      write_failures : Int64,
+      last_failure : String? = nil
 
     @@process_mutex = Mutex.new
     # Qwen35Metal keeps one process-global no-copy mmap registration. Until
@@ -64,6 +65,7 @@ module ML::GGUF
     @qbit_cache_restore_failures = 0_i64
     @qbit_cache_writes = 0_i64
     @qbit_cache_write_failures = 0_i64
+    @qbit_cache_last_failure : String? = nil
     @reasoning_effort_supported = false
     @closed = false
     @llama_tokenize_bin : String
@@ -352,6 +354,7 @@ module ML::GGUF
           restore_failures: @qbit_cache_restore_failures,
           writes: @qbit_cache_writes,
           write_failures: @qbit_cache_write_failures,
+          last_failure: @qbit_cache_last_failure,
         )
       end
     end
@@ -398,8 +401,10 @@ module ML::GGUF
               lookup_completed = true
             rescue ex : IO::Error
               @qbit_cache_transport_failures += 1
+              record_qbit_failure("lookup transport", ex)
             rescue ex : ArgumentError
               @qbit_cache_rejections += 1
+              record_qbit_failure("lookup admission", ex)
             end
 
             if lookup_completed
@@ -422,12 +427,14 @@ module ML::GGUF
                 rescue ex : ArgumentError
                   release_state_metal!(candidate) if candidate
                   @qbit_cache_restore_failures += 1
+                  record_qbit_failure("restore admission", ex)
                 rescue ex
                   # Do not retry a full prefill after a system/Metal failure:
                   # that can compound memory pressure. Release the partial
                   # candidate immediately and preserve the original failure.
                   release_state_metal!(candidate) if candidate
                   @qbit_cache_restore_failures += 1
+                  record_qbit_failure("restore system", ex)
                   raise ex
                 end
               else
@@ -503,6 +510,7 @@ module ML::GGUF
             @qbit_cache_writes += 1
           rescue ex : IO::Error | ArgumentError
             @qbit_cache_write_failures += 1
+            record_qbit_failure("write-back", ex)
           end
         end
 
@@ -741,6 +749,10 @@ module ML::GGUF
 
     private def decode_wave_forced_off? : Bool
       ENV["QWEN35_DECODE_WAVE_OFF"]? == "1"
+    end
+
+    private def record_qbit_failure(stage : String, exception : Exception) : Nil
+      @qbit_cache_last_failure = "#{stage}: #{exception.class}: #{exception.message || "unknown error"}"
     end
   end
 end
