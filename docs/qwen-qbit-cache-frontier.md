@@ -292,10 +292,22 @@ and never establish cache visibility or admission.
   job, expose exactly one pending item, and make flush/close wait for the first
   completion. Publication failure must not become a successful write or a
   silently durable checkpoint.
-- The async request result must identify its checkpoint as pending. The next
-  request must wait before lookup/inference, and cold restore after flush must
-  retain the same checkpoint certificate and continuation parity as the
-  synchronous route.
+- The async request result must identify its checkpoint as pending. A request
+  that depends on the in-flight row must wait before lookup/inference, and cold
+  restore after flush must retain the same checkpoint certificate and
+  continuation parity as the synchronous route.
+- The pending-checkpoint barrier is session-scoped, not global. A request for
+  another session, or a sessionless request, must record exactly zero added
+  wait while a publication is in flight; a request that resolves the pending row
+  itself must record a non-zero wait. A continuation of the pending session must
+  still reach its own chain rather than fork, which holds only because enqueue
+  drains the previous job before claiming the single-flight slot.
+- A failed publication must be reported once and must not become fatal to
+  unrelated requests: the drain at the next enqueue records the write failure
+  and returns normally, and the retained error surfaces through the explicit
+  durability barrier. Teardown must complete even when it reports that failure —
+  after close the runtime rejects further barriers as closed and a repeated
+  close is silent.
 - The measured async corridor must report synchronous host-capture time,
   response latency, background encode/commit time, immediate-next-action wait,
   peak pending jobs, and free-memory floor. Moving latency to the next request
@@ -680,6 +692,51 @@ An initial 1 GiB ClickHouse memory ceiling rejected the large exact-KV read
 safely; a 2 GiB server ceiling inside a 3 GiB process-tree guard completed the
 A/B while the host retained at least 84% free memory. These figures are a
 bounded local gate, not a storage-ratio, latency, or server-sizing SLA.
+
+### Session-scoped async barrier gate (2026-08-15)
+
+`bin/qwen35_qbit_session_barrier_probe.cr` covers the two paths the unit specs
+cannot reach: which requests the pending-checkpoint barrier stops, and what
+teardown does after a publication fails. Both need a real model and a real
+ClickHouse instance, so the probe runs under `scripts/run_safe.sh`.
+
+The discriminator is wait accounting. `async_checkpoint_wait_time` advances only
+inside a drain, so a request that must not be serialized has to show an exactly
+zero delta, and a request that depends on the in-flight row has to show a
+positive one. This is an accounting identity rather than a timing threshold, so
+it does not race.
+
+The interleave phase runs two sessions plus a sessionless request against one
+runtime (Qwen3.8 27B, `max_seq` 512):
+
+| Step | Pending publication | Added wait | Outcome |
+| --- | --- | ---: | --- |
+| `a1` | enqueues A | 0.001 ms | checkpoint returned pending |
+| `sessionless` | A in flight | 0.000 ms | completed on the writer thread, unwaited |
+| `b1` | enqueues B | 0.001 ms | checkpoint returned pending |
+| `a2` | B in flight | 0.000 ms | hit A's own chain, 77 prefix tokens reused |
+| `b2` | resolves B | 3,115.165 ms | waited for its own row, then hit |
+| `a3` | none | 0.000 ms | hit, 77 prefix tokens reused |
+
+Final accounting was 2 enqueued, 2 completed, 0 pending, 0 write failures, and
+all five published parent links matched in ClickHouse (`a2 -> a1`, `a3 -> a2`,
+`b2 -> b1`, with `a1` and `b1` rootless). `a2` is the load-bearing row: it
+skipped the barrier while another session's publication occupied the slot and
+still continued its own chain instead of forking a new anchor.
+
+The failure phase drops the checkpoints table after schema creation, so reads
+resolve and the terminal insert fails inside the writer thread. `a1` enqueued a
+doomed publication and returned normally; `b1`'s enqueue drained that failure,
+recorded it as a write failure, and also returned normally; the sessionless
+request added zero wait while publication was failing. The explicit durability
+barrier then raised twice — once as `flush failed`, once as
+`publication failed` — and stopped. Close reported no further failure because
+the errors had already been consumed, the runtime rejected a later barrier as
+closed, and a repeated close was silent, so teardown completed.
+
+Both phases pass unchanged on Qwen3.5-0.8B, Qwen3.5-9B, and Qwen3.8-27B. This
+is a bounded local gate on one host; it fixes the ordering contract, not
+throughput under real concurrency, and the single-flight capacity is still one.
 
 ### ClickHouse boundary probe
 
