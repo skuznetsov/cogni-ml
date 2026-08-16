@@ -933,10 +933,21 @@ module ML::GGUF
       @@process_mutex.synchronize do
         return if @closed
 
+        # A checkpoint durability failure must not abandon teardown: the GGUF
+        # mapping and Metal state are released first and the failure is raised
+        # only once the runtime is fully closed. The async writer retains its
+        # drained completion, so a close retried after a weights failure still
+        # reports the same durability outcome.
+        pending_error = nil.as(Exception?)
         if qbit_cache = @qbit_cache
-          completion = qbit_cache.close_async_checkpoint_writes
-          raise_async_qbit_completion!(completion, "close")
-          @closed_qbit_async_stats = qbit_cache.async_checkpoint_stats
+          begin
+            completion = qbit_cache.close_async_checkpoint_writes
+            raise_async_qbit_completion!(completion, "close")
+          rescue ex
+            pending_error = ex
+          ensure
+            @closed_qbit_async_stats = qbit_cache.async_checkpoint_stats
+          end
         end
         weights = @weights
         weights.try(&.close)
@@ -948,11 +959,16 @@ module ML::GGUF
         @tokenizer = nil
         @closed = true
         @@active_model_id = nil if @@active_model_id == @model_id
+        raise pending_error if pending_error
       end
     end
 
+    # Finalizers run on the collector path where no caller can receive a
+    # durability failure. Teardown still happens; the report is dropped.
     def finalize
       close
+    rescue
+      nil
     end
 
     private def load_tokenizer : Qwen35Tokenizer

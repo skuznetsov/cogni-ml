@@ -2,6 +2,7 @@ require "./spec_helper"
 require "../src/ml/gguf/qwen_qbit_async_writer"
 
 private alias QBitAsyncWriter = ML::GGUF::QwenQBitAsyncWriter(Int32, Int32)
+private alias QBitAsyncCompletion = ML::GGUF::QwenQBitAsyncCompletion(Int32)
 
 describe ML::GGUF::QwenQBitAsyncWriter do
   it "publishes one job off-thread and rejects a second resident job" do
@@ -180,5 +181,37 @@ describe ML::GGUF::QwenQBitAsyncWriter do
     ensure
       writer.close
     end
+  end
+
+  it "reports the drained failure to a concurrent and to a retried close" do
+    writer = QBitAsyncWriter.new("qbit-close-failure-spec") do |_value|
+      Thread.sleep(10.milliseconds)
+      raise IO::Error.new("injected teardown publication failure")
+    end
+
+    writer.enqueue(5)
+
+    # Whichever caller wins the ownership race drains the job; the loser must
+    # observe the same durability outcome instead of a silent nil, otherwise a
+    # runtime that retries close after a teardown error reports success.
+    concurrent = nil.as(QBitAsyncCompletion?)
+    other = Thread.new { concurrent = writer.close }
+    direct = writer.close
+    other.join
+
+    direct.not_nil!.failed?.should be_true
+    direct.not_nil!.error_class.not_nil!.should contain("IO::Error")
+    direct.not_nil!.error_message.not_nil!.should contain("injected teardown publication failure")
+    concurrent.not_nil!.error_class.should eq(direct.not_nil!.error_class)
+    concurrent.not_nil!.error_message.should eq(direct.not_nil!.error_message)
+
+    retried = writer.close.not_nil!
+    retried.failed?.should be_true
+    retried.error_message.should eq(direct.not_nil!.error_message)
+
+    stats = writer.stats
+    stats.failures.should eq(1)
+    stats.completed.should eq(0)
+    stats.pending.should eq(0)
   end
 end

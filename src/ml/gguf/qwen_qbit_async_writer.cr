@@ -28,6 +28,7 @@ module ML::GGUF
     @condition = Thread::ConditionVariable.new
     @job : Job? = nil
     @completion : QwenQBitAsyncCompletion(Result)? = nil
+    @close_completion : QwenQBitAsyncCompletion(Result)? = nil
     @reserved = false
     @closed = false
     @stop = false
@@ -112,7 +113,9 @@ module ML::GGUF
 
     # Admission stops before the current reservation/job is drained. Returning
     # its completion lets the runtime surface a durability failure before
-    # teardown.
+    # teardown. The drained completion is retained so that a caller which lost
+    # the ownership race, or which retries close after an earlier teardown
+    # failure, observes the same durability outcome instead of a silent nil.
     def close : QwenQBitAsyncCompletion(Result)?
       close_owner = false
       @mutex.synchronize do
@@ -128,10 +131,10 @@ module ML::GGUF
           until @stopped
             @condition.wait(@mutex)
           end
+          return @close_completion
         ensure
           @mutex.unlock
         end
-        return nil
       end
 
       completion = flush
@@ -143,6 +146,7 @@ module ML::GGUF
         @worker.join
       ensure
         @mutex.synchronize do
+          @close_completion = completion
           @stopped = true
           @condition.broadcast
         end
