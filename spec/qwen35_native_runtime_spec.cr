@@ -17,6 +17,20 @@ private def reference_top_two(logits : Array(Float32), token_ids : Array(Int32))
 end
 
 describe ML::GGUF::Qwen35NativeRuntime do
+  it "waits for an in-flight checkpoint publication only within its own session" do
+    # The session that owns the pending row must wait for it: with an explicit
+    # checkpoint_id the lookup fails closed, and without one it would resolve an
+    # older boundary and fork the chain.
+    NativeRuntime.await_pending_checkpoint?("session-a", "session-a").should be_true
+
+    # Nothing else depends on that row, so it neither blocks on the commit nor
+    # inherits its failure.
+    NativeRuntime.await_pending_checkpoint?("session-a", "session-b").should be_false
+    NativeRuntime.await_pending_checkpoint?("session-a", nil).should be_false
+    NativeRuntime.await_pending_checkpoint?(nil, "session-a").should be_false
+    NativeRuntime.await_pending_checkpoint?(nil, nil).should be_false
+  end
+
   it "plans a bounded exact-anchor suffix and rejects an early tokenizer divergence" do
     prompt_ids = (1..28).map(&.to_i32)
     boundary_ids = prompt_ids[0, 24] + [101_i32, 102_i32, 103_i32, 104_i32, 105_i32]

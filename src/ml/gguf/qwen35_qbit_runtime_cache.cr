@@ -54,6 +54,12 @@ module ML::GGUF
       end
     end
 
+    # Pairs the newly reserved publication with the outcome of the previous one,
+    # which had to be drained to free the single-flight slot.
+    record EnqueuedAnchorCheckpoint,
+      prepared : PreparedAnchorCheckpoint,
+      drained : QwenQBitAsyncCompletion(QwenQBitSessionCheckpoint::Entry)?
+
     record AsyncCheckpointStats,
       enqueued : Int64 = 0_i64,
       completed : Int64 = 0_i64,
@@ -219,10 +225,16 @@ module ML::GGUF
                                   next_token_id : Int32?,
                                   hp : Qwen35Hparams,
                                   state : Qwen35CPU::State,
-                                  parent : QwenQBitSessionCheckpoint::Entry? = nil) : PreparedAnchorCheckpoint
+                                  parent : QwenQBitSessionCheckpoint::Entry? = nil) : EnqueuedAnchorCheckpoint
       writer = @async_writer
       raise ArgumentError.new("async QBit checkpoints are disabled") unless writer
-      writer.enqueue_with do
+      # The previous publication is drained here, where the slot is actually
+      # needed, instead of at every request's entry: a request that does not
+      # depend on that row then overlaps its own prefill and decode with the
+      # in-flight commit. The drained outcome belongs to an earlier request, so
+      # it is handed back for accounting rather than raised from here.
+      drained = flush_async_checkpoint_writes
+      prepared = writer.enqueue_with do
         prepare_anchor_checkpoint_internal(
           session_id,
           boundary_text,
@@ -234,6 +246,7 @@ module ML::GGUF
           track_capture: true,
         )
       end
+      EnqueuedAnchorCheckpoint.new(prepared, drained)
     end
 
     def flush_async_checkpoint_writes : QwenQBitAsyncCompletion(QwenQBitSessionCheckpoint::Entry)?

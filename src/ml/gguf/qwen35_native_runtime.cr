@@ -89,6 +89,12 @@ module ML::GGUF
     @qbit_cache_reused_prefix_tokens = 0_i64
     @qbit_cache_replayed_suffix_tokens = 0_i64
     @qbit_cache_last_failure : String? = nil
+    # Session whose checkpoint publication has been enqueued but not drained
+    # yet. Only that session's next request has to wait for it.
+    @pending_async_checkpoint_session : String? = nil
+    # Publication failure observed by a request that did not cause it, held back
+    # until a durability barrier asks for it.
+    @retained_async_qbit_error : String? = nil
     @qbit_cache_lookup_time = Time::Span.zero
     @qbit_cache_restore_time = Time::Span.zero
     @qbit_cache_write_back_time = Time::Span.zero
@@ -465,6 +471,7 @@ module ML::GGUF
       @@process_mutex.synchronize do
         ensure_open!
         flush_async_qbit_checkpoint_writes!
+        raise_retained_async_qbit_error!
       end
     end
 
@@ -477,7 +484,7 @@ module ML::GGUF
         validate_route!(Qwen35Engine::Route::GenerateGreedy, route)
         validate_generate_request!(request)
         self.class.validate_reasoning_effort_supported!(request.reasoning_effort, @reasoning_effort_supported)
-        flush_async_qbit_checkpoint_writes!
+        await_pending_qbit_checkpoint!(request.session_id)
         if request.session_id
           qbit_cache = @qbit_cache
           unless qbit_cache && qbit_cache.write_back?
@@ -819,7 +826,8 @@ module ML::GGUF
                 end
               end
               if checkpoint_requires_anchor && qbit_cache.async_checkpoint_writes?
-                prepared = qbit_cache.enqueue_anchor_checkpoint(
+                @pending_async_checkpoint_session = nil
+                enqueued = qbit_cache.enqueue_anchor_checkpoint(
                   session_id,
                   boundary_text,
                   boundary_token_ids,
@@ -828,8 +836,10 @@ module ML::GGUF
                   checkpoint_state,
                   restored_session_checkpoint,
                 )
-                result_checkpoint_id = prepared.checkpoint_id
+                record_async_qbit_completion(enqueued.drained)
+                result_checkpoint_id = enqueued.prepared.checkpoint_id
                 result_checkpoint_pending = true
+                @pending_async_checkpoint_session = session_id
               else
                 write_back_started = Time.instant
                 checkpoint = qbit_cache.save_checkpoint(
@@ -943,6 +953,7 @@ module ML::GGUF
           begin
             completion = qbit_cache.close_async_checkpoint_writes
             raise_async_qbit_completion!(completion, "close")
+            raise_retained_async_qbit_error!
           rescue ex
             pending_error = ex
           ensure
@@ -1144,7 +1155,49 @@ module ML::GGUF
       qbit_cache = @qbit_cache
       return unless qbit_cache && qbit_cache.async_checkpoint_writes?
       completion = qbit_cache.flush_async_checkpoint_writes
+      @pending_async_checkpoint_session = nil
       raise_async_qbit_completion!(completion, "flush")
+    end
+
+    # A publication in flight is a durability barrier for the session it belongs
+    # to: an explicit checkpoint_id lookup fails closed on a row that is not
+    # durable yet, and a continuation without one resolves the session's latest
+    # checkpoint, which would silently fork the chain onto an older boundary.
+    # Requests for other sessions, and requests without a session, have no such
+    # dependency - they neither wait for the commit nor inherit its failure. The
+    # slot they leave occupied is freed where it is needed, at the next enqueue.
+    private def await_pending_qbit_checkpoint!(session_id : String?) : Nil
+      return unless self.class.await_pending_checkpoint?(@pending_async_checkpoint_session, session_id)
+      flush_async_qbit_checkpoint_writes!
+    end
+
+    def self.await_pending_checkpoint?(pending_session_id : String?, requested_session_id : String?) : Bool
+      return false unless pending_session_id && requested_session_id
+      pending_session_id == requested_session_id
+    end
+
+    # The drain that frees the single-flight slot reports an earlier request's
+    # publication, so a failure is recorded against the cache instead of being
+    # raised as a failure of the request that happened to observe it. It is not
+    # dropped either: it is retained and raised by the next durability barrier
+    # (#flush_qbit_checkpoint_writes or #close), which is where a caller asks
+    # about durability rather than about its own generation.
+    private def record_async_qbit_completion(
+      completion : QwenQBitAsyncCompletion(QwenQBitSessionCheckpoint::Entry)?,
+    ) : Nil
+      return unless completion && completion.failed?
+      @qbit_cache_write_failures += 1
+      message = "async QBit checkpoint publication failed: " \
+                "#{completion.error_class}: #{completion.error_message || "unknown error"}"
+      @qbit_cache_last_failure = message
+      @retained_async_qbit_error = message
+    end
+
+    private def raise_retained_async_qbit_error! : Nil
+      message = @retained_async_qbit_error
+      return unless message
+      @retained_async_qbit_error = nil
+      raise IO::Error.new(message)
     end
 
     private def raise_async_qbit_completion!(
