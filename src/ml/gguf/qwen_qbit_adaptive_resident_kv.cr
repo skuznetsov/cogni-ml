@@ -13,6 +13,26 @@ module ML::GGUF
   module QwenQBitAdaptiveResidentKV
     extend self
 
+    DEVICE_SUCCESS = 0xa17ecafe_u32
+
+    # Only the validated module factories can construct a resident cache. The
+    # private admission type prevents callers from bypassing buffer/shape
+    # validation and binding arbitrary regions to unchecked Metal kernels.
+    private record CacheAdmission,
+      k_base : ML::MetalBuffer,
+      k_metadata : ML::MetalBuffer,
+      k_sidecar : ML::MetalBuffer,
+      v_base : ML::MetalBuffer,
+      v_metadata : ML::MetalBuffer,
+      v_sidecar : ML::MetalBuffer,
+      cache_len : Int32,
+      max_seq : Int32,
+      n_head_kv : Int32,
+      head_dim : Int32,
+      compressed_bytes : Int64,
+      k_plan : QwenQBitAdaptiveKV::Plan?,
+      v_plan : QwenQBitAdaptiveKV::Plan?
+
     class Cache
       getter max_seq : Int32
       getter n_head_kv : Int32
@@ -25,19 +45,24 @@ module ML::GGUF
       @k_plan : QwenQBitAdaptiveKV::Plan?
       @v_plan : QwenQBitAdaptiveKV::Plan?
 
-      def initialize(@k_base : ML::MetalBuffer,
-                     @k_metadata : ML::MetalBuffer,
-                     @k_sidecar : ML::MetalBuffer,
-                     @v_base : ML::MetalBuffer,
-                     @v_metadata : ML::MetalBuffer,
-                     @v_sidecar : ML::MetalBuffer,
-                     @cache_len : Int32,
-                     @max_seq : Int32,
-                     @n_head_kv : Int32,
-                     @head_dim : Int32,
-                     @compressed_bytes : Int64,
-                     @k_plan : QwenQBitAdaptiveKV::Plan? = nil,
-                     @v_plan : QwenQBitAdaptiveKV::Plan? = nil)
+      def self.from_admission(admission : CacheAdmission) : self
+        new(admission)
+      end
+
+      private def initialize(admission : CacheAdmission)
+        @k_base = admission.k_base
+        @k_metadata = admission.k_metadata
+        @k_sidecar = admission.k_sidecar
+        @v_base = admission.v_base
+        @v_metadata = admission.v_metadata
+        @v_sidecar = admission.v_sidecar
+        @cache_len = admission.cache_len
+        @max_seq = admission.max_seq
+        @n_head_kv = admission.n_head_kv
+        @head_dim = admission.head_dim
+        @compressed_bytes = admission.compressed_bytes
+        @k_plan = admission.k_plan
+        @v_plan = admission.v_plan
         @lifecycle_mutex = Mutex.new
         @released = false
       end
@@ -136,8 +161,12 @@ module ML::GGUF
       PACK_SOURCE = {{ read_file("#{__DIR__}/kernels/qbit_adaptive_pack_qwen35.metal") }}
       @@gqa6_pipeline : ML::Metal::ComputePipeline?
       @@gqa6_pipeline_mutex = Mutex.new
+      @@prefill_gqa6_pipeline : ML::Metal::ComputePipeline?
+      @@prefill_gqa6_pipeline_mutex = Mutex.new
       @@pack_pipeline : ML::Metal::ComputePipeline?
       @@pack_pipeline_mutex = Mutex.new
+      @@finalize_pipeline : ML::Metal::ComputePipeline?
+      @@finalize_pipeline_mutex = Mutex.new
     {% end %}
 
     def prepare(k : QwenQBitAdaptiveKV::Encoded,
@@ -160,12 +189,12 @@ module ML::GGUF
         buffers = [] of ML::MetalBuffer
         begin
           payloads.each { |payload| buffers << upload(payload) }
-          Cache.new(
+          Cache.from_admission(CacheAdmission.new(
             buffers[0], buffers[1], buffers[2],
             buffers[3], buffers[4], buffers[5],
             cache_len, cache_len, n_head_kv, head_dim,
-            k.payload_bytes.to_i64 + v.payload_bytes.to_i64,
-          )
+            k.payload_bytes.to_i64 + v.payload_bytes.to_i64, nil, nil,
+          ))
         rescue ex
           buffers.each(&.release)
           raise ex
@@ -194,13 +223,13 @@ module ML::GGUF
           buffers << allocate_region(v_plan.base_bytes)
           buffers << upload(v_plan.metadata)
           buffers << allocate_region(v_plan.sidecar_bytes)
-          Cache.new(
+          Cache.from_admission(CacheAdmission.new(
             buffers[0], buffers[1], buffers[2],
             buffers[3], buffers[4], buffers[5],
             0, max_seq, n_head_kv, head_dim,
             k_plan.payload_bytes.to_i64 + v_plan.payload_bytes.to_i64,
             k_plan, v_plan,
-          )
+          ))
         rescue ex
           buffers.each(&.release)
           raise ex
@@ -246,10 +275,66 @@ module ML::GGUF
               source_row_offset, destination_row_offset, row_count)
             encode_pack(command, v_source, v_base, v_metadata, v_sidecar, status,
               source_row_offset, destination_row_offset, row_count)
+            encode_finalize(command, status)
             command.commit_and_wait
             status_code = read_u32(status)
-            unless status_code == 0
+            unless status_code == DEVICE_SUCCESS
               raise ArgumentError.new("adaptive resident QBit device pack failed closed (status=#{status_code})")
+            end
+          ensure
+            status.release
+          end
+        end
+      {% end %}
+      nil
+    end
+
+    # Compute causal attention over the already packed prefix plus an exact
+    # temporary Float32 chunk, then pack that chunk into the resident cache.
+    # All encoders share one command buffer and the new prefix becomes visible
+    # only after attention and both K/V packers complete without an error.
+    def prefill_chunk_and_append_from_metal(cache : Cache,
+                                            q_source : ML::MetalBuffer,
+                                            gate_source : ML::MetalBuffer,
+                                            k_source : ML::MetalBuffer,
+                                            v_source : ML::MetalBuffer,
+                                            output : ML::MetalBuffer,
+                                            token_count : Int32,
+                                            n_head : Int32,
+                                            heads_per_group : Int32,
+                                            scale : Float32) : Nil
+      validate_prefill_buffers(
+        cache, q_source, gate_source, k_source, v_source, output,
+        token_count, n_head, heads_per_group, scale,
+      )
+
+      {% if flag?(:cpu_only) %}
+        raise "Metal disabled (cpu_only)"
+      {% else %}
+        raise "Metal not available" unless Qwen35Metal.available?
+        cache.with_append(token_count) do |k_base, k_metadata, k_sidecar, v_base, v_metadata, v_sidecar, _k_plan, _v_plan, start_token|
+          status = upload(Bytes.new(sizeof(UInt32), 0_u8))
+          begin
+            destination_row_offset = checked_u32(start_token.to_i64 * cache.n_head_kv, "destination row offset")
+            row_count = checked_i32(token_count.to_i64 * cache.n_head_kv, "row count")
+            command = ML::Metal::CommandBuffer.new
+            encode_prefill_chunk(
+              command, q_source, gate_source, k_source, v_source,
+              k_base, k_metadata, k_sidecar,
+              v_base, v_metadata, v_sidecar,
+              output, status, start_token, token_count,
+              n_head, cache.n_head_kv, cache.head_dim,
+              heads_per_group, scale,
+            )
+            encode_pack(command, k_source, k_base, k_metadata, k_sidecar, status,
+              0_u32, destination_row_offset, row_count)
+            encode_pack(command, v_source, v_base, v_metadata, v_sidecar, status,
+              0_u32, destination_row_offset, row_count)
+            encode_finalize(command, status)
+            command.commit_and_wait
+            status_code = read_u32(status)
+            unless status_code == DEVICE_SUCCESS
+              raise ArgumentError.new("adaptive resident QBit prefill/pack failed closed (status=#{status_code})")
             end
           ensure
             status.release
@@ -386,6 +471,44 @@ module ML::GGUF
       raise ArgumentError.new("adaptive resident QBit attention scale must be finite") unless scale.finite?
     end
 
+    private def validate_prefill_buffers(cache : Cache,
+                                         q_source : ML::MetalBuffer,
+                                         gate_source : ML::MetalBuffer,
+                                         k_source : ML::MetalBuffer,
+                                         v_source : ML::MetalBuffer,
+                                         output : ML::MetalBuffer,
+                                         token_count : Int32,
+                                         n_head : Int32,
+                                         heads_per_group : Int32,
+                                         scale : Float32) : Nil
+      raise ArgumentError.new("adaptive resident QBit prefill token count must be positive") unless token_count > 0
+      raise ArgumentError.new("adaptive resident QBit query head count must be positive") unless n_head > 0
+      expected_heads = cache.n_head_kv.to_i64 * heads_per_group
+      unless heads_per_group == 6 && n_head.to_i64 == expected_heads
+        raise ArgumentError.new("adaptive resident QBit prefill requires Qwen3.8 GQA6 shape")
+      end
+      raise ArgumentError.new("adaptive resident QBit attention scale must be finite") unless scale.finite?
+
+      buffers = [q_source, gate_source, k_source, v_source, output]
+      unless buffers.all?(&.valid?)
+        raise ArgumentError.new("adaptive resident QBit prefill buffer has been released")
+      end
+      q_values = token_count.to_i64 * n_head * cache.head_dim
+      kv_values = token_count.to_i64 * cache.n_head_kv * cache.head_dim
+      max_kv_values = cache.max_seq.to_i64 * cache.n_head_kv * cache.head_dim
+      if q_values > UInt32::MAX || kv_values > UInt32::MAX || max_kv_values > UInt32::MAX
+        raise ArgumentError.new("adaptive resident QBit prefill index exceeds the device kernel limit")
+      end
+      q_bytes = q_values * sizeof(Float32)
+      kv_bytes = kv_values * sizeof(Float32)
+      unless q_source.size >= q_bytes && gate_source.size >= q_bytes && output.size >= q_bytes
+        raise ArgumentError.new("adaptive resident QBit prefill query/gate/output buffer is too small")
+      end
+      unless k_source.size >= kv_bytes && v_source.size >= kv_bytes
+        raise ArgumentError.new("adaptive resident QBit prefill K/V buffer is too small")
+      end
+    end
+
     {% unless flag?(:cpu_only) %}
       private def upload(payload : Bytes) : ML::MetalBuffer
         # Metal rejects zero-byte allocations. A one-byte sentinel is bound for
@@ -427,6 +550,63 @@ module ML::GGUF
         encoder.end_encoding
       end
 
+      private def encode_prefill_chunk(command : ML::Metal::CommandBuffer,
+                                       q_source : ML::MetalBuffer,
+                                       gate_source : ML::MetalBuffer,
+                                       k_source : ML::MetalBuffer,
+                                       v_source : ML::MetalBuffer,
+                                       k_base : ML::MetalBuffer,
+                                       k_metadata : ML::MetalBuffer,
+                                       k_sidecar : ML::MetalBuffer,
+                                       v_base : ML::MetalBuffer,
+                                       v_metadata : ML::MetalBuffer,
+                                       v_sidecar : ML::MetalBuffer,
+                                       output : ML::MetalBuffer,
+                                       status : ML::MetalBuffer,
+                                       packed_len : Int32,
+                                       token_count : Int32,
+                                       n_head : Int32,
+                                       n_head_kv : Int32,
+                                       head_dim : Int32,
+                                       heads_per_group : Int32,
+                                       scale : Float32) : Nil
+        encoder = ML::Metal::ComputeEncoder.new(command)
+        encoder.set_pipeline(prefill_gqa6_pipeline)
+        encoder.set_buffer(q_source, 0)
+        encoder.set_buffer(gate_source, 1)
+        encoder.set_buffer(k_source, 2)
+        encoder.set_buffer(v_source, 3)
+        encoder.set_buffer(k_base, 4)
+        encoder.set_buffer(k_metadata, 5)
+        encoder.set_buffer(k_sidecar, 6)
+        encoder.set_buffer(v_base, 7)
+        encoder.set_buffer(v_metadata, 8)
+        encoder.set_buffer(v_sidecar, 9)
+        encoder.set_buffer(output, 10, ML::Metal::BufferAccess::Write)
+        encoder.set_buffer(status, 11, ML::Metal::BufferAccess::Write)
+        encoder.set_value(packed_len.to_u32, 12)
+        encoder.set_value(token_count.to_u32, 13)
+        encoder.set_value(n_head.to_u32, 14)
+        encoder.set_value(n_head_kv.to_u32, 15)
+        encoder.set_value(head_dim.to_u32, 16)
+        encoder.set_value(heads_per_group.to_u32, 17)
+        encoder.set_value(scale, 18)
+        encoder.dispatch_threadgroups({n_head_kv, token_count, 1}, {192, 1, 1})
+        encoder.end_encoding
+      end
+
+      # A zero-initialized status alone cannot distinguish success from a
+      # command buffer that never executed. This final encoder publishes a
+      # non-zero marker only after all earlier encoders completed cleanly.
+      private def encode_finalize(command : ML::Metal::CommandBuffer,
+                                  status : ML::MetalBuffer) : Nil
+        encoder = ML::Metal::ComputeEncoder.new(command)
+        encoder.set_pipeline(finalize_pipeline)
+        encoder.set_buffer(status, 0, ML::Metal::BufferAccess::ReadWrite)
+        encoder.dispatch_1d(1, 1)
+        encoder.end_encoding
+      end
+
       private def checked_u32(value : Int64, label : String) : UInt32
         unless value >= 0 && value <= UInt32::MAX
           raise ArgumentError.new("adaptive resident QBit #{label} exceeds the device kernel limit")
@@ -464,10 +644,26 @@ module ML::GGUF
         end
       end
 
+      private def prefill_gqa6_pipeline : ML::Metal::ComputePipeline
+        @@prefill_gqa6_pipeline_mutex.synchronize do
+          @@prefill_gqa6_pipeline ||= ML::Metal::PipelineCache.get("qwen35_qbit_adaptive_prefill_chunk_gqa6") {
+            ML::Metal::ComputePipeline.new("qwen35_qbit_adaptive_prefill_chunk_gqa6", SOURCE)
+          }
+        end
+      end
+
       private def pack_pipeline : ML::Metal::ComputePipeline
         @@pack_pipeline_mutex.synchronize do
           @@pack_pipeline ||= ML::Metal::PipelineCache.get("qwen35_qbit_adaptive_pack_row") {
             ML::Metal::ComputePipeline.new("qwen35_qbit_adaptive_pack_row", PACK_SOURCE)
+          }
+        end
+      end
+
+      private def finalize_pipeline : ML::Metal::ComputePipeline
+        @@finalize_pipeline_mutex.synchronize do
+          @@finalize_pipeline ||= ML::Metal::PipelineCache.get("qwen35_qbit_adaptive_finalize_status") {
+            ML::Metal::ComputePipeline.new("qwen35_qbit_adaptive_finalize_status", PACK_SOURCE)
           }
         end
       end

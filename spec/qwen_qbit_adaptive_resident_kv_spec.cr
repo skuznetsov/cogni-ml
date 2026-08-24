@@ -39,6 +39,59 @@ module QwenQBitAdaptiveResidentKVSpec
     out
   end
 
+  def chunk_reference(q : Array(Float32), gate : Array(Float32),
+                      packed_k : Array(Float32), packed_v : Array(Float32),
+                      current_k : Array(Float32), current_v : Array(Float32),
+                      packed_len : Int32, token_count : Int32,
+                      n_head : Int32, n_head_kv : Int32,
+                      head_dim : Int32, heads_per_group : Int32,
+                      scale : Float32) : Array(Float32)
+    q_dim = n_head * head_dim
+    kv_dim = n_head_kv * head_dim
+    out = Array(Float32).new(token_count * q_dim, 0.0_f32)
+    scores = Array(Float32).new(packed_len + token_count, 0.0_f32)
+
+    token_count.times do |token|
+      visible_len = packed_len + token + 1
+      n_head.times do |h|
+        kv_h = h // heads_per_group
+        q_offset = token * q_dim + h * head_dim
+        visible_len.times do |position|
+          if position < packed_len
+            k_values = packed_k
+            k_offset = position * kv_dim + kv_h * head_dim
+          else
+            k_values = current_k
+            k_offset = (position - packed_len) * kv_dim + kv_h * head_dim
+          end
+          dot = 0.0_f32
+          head_dim.times { |d| dot += q[q_offset + d] * k_values[k_offset + d] }
+          scores[position] = dot * scale
+        end
+        ML::GGUF::Qwen35CPU.softmax_slice!(scores, 0, visible_len)
+
+        visible_len.times do |position|
+          if position < packed_len
+            v_values = packed_v
+            v_offset = position * kv_dim + kv_h * head_dim
+          else
+            v_values = current_v
+            v_offset = (position - packed_len) * kv_dim + kv_h * head_dim
+          end
+          weight = scores[position]
+          head_dim.times do |d|
+            out[q_offset + d] += weight * v_values[v_offset + d]
+          end
+        end
+      end
+    end
+
+    out.size.times do |i|
+      out[i] *= ML::GGUF::Qwen35CPU.sigmoid(gate[i])
+    end
+    out
+  end
+
   def max_diff(a : Array(Float32), b : Array(Float32)) : Float32
     a.each_with_index.max_of { |value, i| (value - b[i]).abs }
   end
@@ -205,6 +258,82 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
     ML::MetalBuffer.stats[:live_bytes].should eq(live_before)
   end
 
+  it "attends over packed history plus an exact current chunk before publishing the append" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    cache_len = 19
+    first_chunk = 7
+    second_chunk = cache_len - first_chunk
+    n_head = 24
+    n_head_kv = 4
+    head_dim = 256
+    heads_per_group = 6
+    q_dim = n_head * head_dim
+    kv_dim = n_head_kv * head_dim
+    scale = (1.0 / Math.sqrt(head_dim.to_f64)).to_f32
+    row_count = cache_len * n_head_kv
+    rng = Random.new(0xC4A5CA1E_u64)
+    q = Array(Float32).new(cache_len * q_dim) { ((rng.next_float - 0.5) * 1.0).to_f32 }
+    gate = Array(Float32).new(cache_len * q_dim) { ((rng.next_float - 0.5) * 2.0).to_f32 }
+    k = Array(Float32).new(cache_len * kv_dim) { ((rng.next_float - 0.5) * 1.0).to_f32 }
+    v = Array(Float32).new(cache_len * kv_dim) { ((rng.next_float - 0.5) * 1.0).to_f32 }
+    k_tiers = Array(ML::GGUF::QwenQBitAdaptiveKV::Tier).new(row_count) { |i| tier.from_value(i % 4) }
+    v_tiers = Array(ML::GGUF::QwenQBitAdaptiveKV::Tier).new(row_count) { |i| tier.from_value((i + 2) % 4) }
+    k_plan = adaptive.plan(k_tiers)
+    v_plan = adaptive.plan(v_tiers)
+
+    live_before = ML::MetalBuffer.stats[:live_bytes]
+    resident = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
+      k_plan, v_plan, cache_len, n_head_kv, head_dim,
+    )
+    begin
+      chunks = [{0, first_chunk}, {first_chunk, second_chunk}]
+      decoded_history_k = [] of Float32
+      decoded_history_v = [] of Float32
+
+      chunks.each do |(start_token, token_count)|
+        q_chunk = q[start_token * q_dim, token_count * q_dim]
+        gate_chunk = gate[start_token * q_dim, token_count * q_dim]
+        k_chunk = k[start_token * kv_dim, token_count * kv_dim]
+        v_chunk = v[start_token * kv_dim, token_count * kv_dim]
+        expected = QwenQBitAdaptiveResidentKVSpec.chunk_reference(
+          q_chunk, gate_chunk, decoded_history_k, decoded_history_v,
+          k_chunk, v_chunk, start_token, token_count,
+          n_head, n_head_kv, head_dim, heads_per_group, scale,
+        )
+
+        buffers = [
+          ML::MetalBuffer.from_array(q_chunk),
+          ML::MetalBuffer.from_array(gate_chunk),
+          ML::MetalBuffer.from_array(k_chunk),
+          ML::MetalBuffer.from_array(v_chunk),
+          ML::MetalBuffer.new(expected.size.to_i64 * sizeof(Float32)),
+        ]
+        begin
+          ML::GGUF::QwenQBitAdaptiveResidentKV.prefill_chunk_and_append_from_metal(
+            resident, buffers[0], buffers[1], buffers[2], buffers[3], buffers[4],
+            token_count, n_head, heads_per_group, scale,
+          )
+          actual = buffers[4].read(expected.size.to_i32)
+          QwenQBitAdaptiveResidentKVSpec.cosine(expected, actual).should be > 0.9999999
+          QwenQBitAdaptiveResidentKVSpec.max_diff(expected, actual).should be < 2.0e-4_f32
+        ensure
+          buffers.each(&.release)
+        end
+
+        resident.cache_len.should eq(start_token + token_count)
+        packed_k, packed_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(resident)
+        adaptive.validate(packed_k)
+        adaptive.validate(packed_v)
+        decoded_history_k = adaptive.decode(packed_k)
+        decoded_history_v = adaptive.decode(packed_v)
+      end
+    ensure
+      resident.release
+    end
+    ML::MetalBuffer.stats[:live_bytes].should eq(live_before)
+  end
+
   it "keeps a failed non-finite device append invisible and permits a clean retry" do
     pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
 
@@ -242,6 +371,49 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
       resident.release
       k_source.release
       v_source.release
+    end
+  end
+
+  it "keeps a failed mixed prefill invisible and permits a clean retry" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    head_dim = 256
+    n_head = 6
+    q_values = n_head * head_dim
+    valid_q = Array(Float32).new(q_values, 0.125_f32)
+    invalid_q = valid_q.dup
+    invalid_q[41] = Float32::NAN
+    gate = Array(Float32).new(q_values, 0.0_f32)
+    kv = Array(Float32).new(head_dim, 0.25_f32)
+    plan = adaptive.plan([ML::GGUF::QwenQBitAdaptiveKV::Tier::P4])
+    buffers = [
+      ML::MetalBuffer.from_array(invalid_q),
+      ML::MetalBuffer.from_array(gate),
+      ML::MetalBuffer.from_array(kv),
+      ML::MetalBuffer.from_array(kv),
+      ML::MetalBuffer.new(q_values.to_i64 * sizeof(Float32)),
+    ]
+    resident = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
+      plan, plan, 1, 1, head_dim,
+    )
+    begin
+      expect_raises(ArgumentError, /prefill\/pack failed closed/) do
+        ML::GGUF::QwenQBitAdaptiveResidentKV.prefill_chunk_and_append_from_metal(
+          resident, buffers[0], buffers[1], buffers[2], buffers[3], buffers[4],
+          1, n_head, 6, 1.0_f32,
+        )
+      end
+      resident.cache_len.should eq(0)
+
+      buffers[0].write(valid_q)
+      ML::GGUF::QwenQBitAdaptiveResidentKV.prefill_chunk_and_append_from_metal(
+        resident, buffers[0], buffers[1], buffers[2], buffers[3], buffers[4],
+        1, n_head, 6, 1.0_f32,
+      )
+      resident.cache_len.should eq(1)
+    ensure
+      resident.release
+      buffers.each(&.release)
     end
   end
 

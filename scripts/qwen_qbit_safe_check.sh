@@ -44,6 +44,9 @@ exec "$RUN_SAFE" "$CRYSTAL_BIN" "$TIMEOUT_SEC" "$MAX_TREE_MB" \
   spec/qwen_qbit_session_checkpoint_spec.cr \
   spec/qwen_qbit_async_writer_spec.cr \
   spec/qwen_qbit_state_snapshot_spec.cr \
+  spec/qwen_qbit_kv_quality_spec.cr \
+  spec/qwen_qbit_adaptive_kv_spec.cr \
+  spec/qwen_qbit_adaptive_resident_kv_spec.cr \
   spec/qwen35_native_runtime_spec.cr \
   --error-trace \
   --link-flags="$ROOT/build/bridge.o -framework Metal -framework Foundation -lc++"

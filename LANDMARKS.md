@@ -24159,7 +24159,7 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **state:** default-off device packer verified; production ownership still rejected
 
 - claim: "A preplanned adaptive owner can become compact after every completed append without retaining a persistent Float32 KV duplicate."
-  source: `QwenQBitAdaptiveKV::Plan` fixes canonical tier/offset metadata and exact base/sidecar capacity before allocation. `QwenQBitAdaptiveResidentKV.append_from_metal` packs K and V directly from caller-owned temporary Metal buffers, serializes append/attention/release, and advances `cache_len` only after command completion and a zero failure status. A 19-token mixed-tier spec appended `7 + 12` tokens, validated the live prefix after the first chunk, crossed the 16-token attention tile, and passed decoded CPU/GPU delta `<2e-5`, attention cosine `>0.9999999`, and attention delta `<2e-4`. A NaN injection left the prefix invisible and a finite retry validated cleanly.
+  source: `QwenQBitAdaptiveKV::Plan` fixes canonical tier/offset metadata and exact base/sidecar capacity before allocation. `QwenQBitAdaptiveResidentKV.append_from_metal` packs K and V directly from caller-owned temporary Metal buffers, serializes append/attention/release, and advances `cache_len` only after command completion and a final device completion marker. A 19-token mixed-tier spec appended `7 + 12` tokens, validated the live prefix after the first chunk, crossed the 16-token attention tile, and passed decoded CPU/GPU delta `<2e-5`, attention cosine `>0.9999999`, and attention delta `<2e-4`. A NaN injection left the prefix invisible and a finite retry validated cleanly.
   verified_at: 2026-08-23
   decay_trigger: adaptive plan layout, pack reduction/quantizer, Metal synchronization, cache lifecycle, or attention indexing change
   trust: {F:0.94,G:0.42,R:0.91}
@@ -24175,3 +24175,19 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Trigger: a completed exact-attention chunk whose K/V rows will only be read by future chunks. Transport: temporary F32 Metal projection rows -> preplanned canonical row addresses -> packed resident owner -> fused adaptive attention. Boundary: append-only token/head identity, exact canonical metadata, source lifetime through command completion, and invisible failed prefixes. Potential: `{quality mismatch, invalid visible prefix, persistent KV bytes, pack+attention ms}` lexicographically. Recompute: strict live-prefix snapshot plus attention parity. Dual frame: ordinary full-F32 runtime.
 
 **decision:** Admit append-only device packing only inside the default-off synthetic owner. The next production slice is a shape-gated fused prefill experiment ordered `exact current-chunk attention -> pack retired rows -> next chunk reads packed rows`, with no simultaneous full-capacity F32 owner. Explicitly reject packed routing for fork/snapshot paths until those semantics are implemented or safely gated.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-MIXED-PREFILL-915] Mixed-history attention closes the resident command-order seam
+**context:** ml / Qwen3.8 / adaptive QBit / Metal / prefill / resident KV
+**state:** default-off resident primitive implemented; production ownership still rejected
+
+- claim: "One Metal command can attend over packed history plus an exact current chunk and publish the packed append only after all work succeeds."
+  source: `QwenQBitAdaptiveResidentKV.prefill_chunk_and_append_from_metal` encodes mixed-history causal GQA6 attention before K and V packing, shares one device failure word, waits once, and advances the serialized live prefix only after a final device kernel converts clean zero into a non-zero completion marker. An unexecuted command therefore cannot masquerade as success. `qwen35_qbit_adaptive_prefill_chunk_gqa6` reconstructs only history tiles and reads the current causal tail from temporary Float32 buffers. A 19-token `7 + 12` mixed-tier spec compares each chunk with a CPU reference over the same decoded history, checks cosine `>0.9999999` and maximum delta `<2e-4`, restores Metal live bytes, and verifies that a non-finite query leaves the prefix invisible before a clean retry.
+  verified_at: 2026-08-23
+  decay_trigger: adaptive layout, mixed-attention indexing, command ordering, pack status, cache publication, GQA geometry, or Metal runtime change
+  trust: {F:0.94,G:0.39,R:0.91}
+
+**Adversary:** This owner is still synthetic and synchronous. Production `LayerState` continues to allocate full-capacity Float32 K/V, and the fused full/recurrent prefill route builds its projection and recurrent work in a caller-owned shared command. Fork, snapshot, checkpoint, other head shapes, end-to-end model quality, and long-context throughput remain outside this certificate.
+
+**LTP/WBA:** Trigger: a bounded current chunk has exact temporary Q/K/V rows and an immutable packed prefix. Transport: packed history plus exact causal tail -> mixed attention -> append-only pack -> longer resident prefix. Boundary: history identity, causal visibility, exact current values, attention-before-pack ordering, and invisible failed publication. Potential: `{quality mismatch, invalid visible prefix, persistent KV bytes, full-corridor ms}` lexicographically. Recompute: two-chunk decoded-history parity plus failed-query retry. Dual frame: the unchanged full-F32 `LayerState` route.
+
+**decision:** Admit the mixed-history resident primitive only. The next default-off slice may replace one supported full-attention layer's persistent F32 owner, but it must reuse the existing shared prefill command, route decode through packed KV, and reject unsupported fork/snapshot/checkpoint semantics before adaptive allocation.

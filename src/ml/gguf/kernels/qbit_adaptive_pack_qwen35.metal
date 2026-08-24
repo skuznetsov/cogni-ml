@@ -16,6 +16,7 @@ constant uint QQP_P4 = 0;
 constant uint QQP_P5 = 1;
 constant uint QQP_BF16 = 2;
 constant uint QQP_F32 = 3;
+constant uint QQP_SUCCESS = 0xa17ecafeu;
 
 constant float QQP_POSITIVE_LEVELS[128] = {
     0.00491977f, 0.01475981f, 0.02460130f, 0.03444523f,
@@ -186,5 +187,18 @@ kernel void qwen35_qbit_adaptive_pack_row(
                 sidecar_offset + (lane * 8u + i) * 4u,
                 as_type<uint>(values[i]));
         }
+    }
+}
+
+// Publish success only if every prior encoder in the command buffer ran and
+// no attention or pack kernel set an error bit. An untouched zero is failure.
+kernel void qwen35_qbit_adaptive_finalize_status(
+    device atomic_uint* status [[buffer(0)]],
+    uint gid [[thread_position_in_grid]]) {
+    if (gid != 0) {
+        return;
+    }
+    if (atomic_load_explicit(status, memory_order_relaxed) == 0u) {
+        atomic_store_explicit(status, QQP_SUCCESS, memory_order_relaxed);
     }
 }

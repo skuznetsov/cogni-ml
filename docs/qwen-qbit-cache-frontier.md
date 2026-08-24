@@ -190,8 +190,9 @@ ownership. A host-built tier plan fixes every row's metadata and canonical
 sidecar offset before allocation. The resident owner then allocates exact
 base/metadata/sidecar capacity once and appends a contiguous K/V chunk directly
 from temporary Float32 Metal buffers. Its visible length advances only after
-both device pack dispatches complete and a shared failure status remains zero.
-No persistent Float32 KV buffer is retained by this owner.
+both device pack dispatches complete, their shared failure word remains clean,
+and a final device encoder writes the completion marker. No persistent Float32
+KV buffer is retained by this owner.
 
 One 32-lane SIMD group packs one 256-value `(token, KV head)` row. It computes
 moments, writes the dense p4 base, and writes the selected p5/BF16/F32 sidecar
@@ -245,6 +246,42 @@ requires packed-aware decode/prefill consumers and an explicit rejection or
 implementation of fork/snapshot paths; the synthetic append owner alone does
 not establish immediate compactness for the shipped runtime.
 
+### Mixed packed-history prefill slice
+
+The bounded resident owner now closes the command-ordering seam without yet
+changing production `LayerState`. Its GQA6/head-dim-256 prefill kernel computes
+each current query over two representations:
+
+- positions before the current chunk are decoded directly from resident
+  p4/p5/BF16/F32 rows;
+- the causal portion of the current chunk is read exactly from caller-owned
+  temporary Float32 K/V buffers.
+
+Six query heads share each reconstructed KV tile. Attention runs before both
+device pack dispatches in one command buffer. A shared failure word covers the
+attention and pack kernels; `cache_len` advances only after command completion
+and a final device kernel replaces a clean zero with a non-zero completion
+marker. An untouched zero is failure, so a command that never executes cannot
+publish a prefix. A non-finite query, gate, K, or V likewise leaves the
+attempted prefix invisible and allows the same destination rows to be retried.
+
+A deterministic 19-token mixed-tier spec exercised two chunks (`7 + 12`). The
+first chunk used only exact current K/V; the second consumed the packed first
+chunk plus its exact causal tail. Both outputs matched a CPU reference built
+from the same decoded history with cosine above `0.9999999` and maximum delta
+below `2e-4`. A separate non-finite-query case kept `cache_len == 0` and a clean
+retry succeeded. All temporary and resident Metal buffers returned to the
+pre-test live-byte baseline.
+
+This proves the representation and ordering seam, not shipped-runtime memory
+reduction. Production still allocates full-capacity Float32 K/V. The next
+default-off integration must give one shape-gated full-attention layer an
+adaptive owner instead, route both prefill and decode through packed-aware
+consumers, and reject fork/snapshot/checkpoint paths before allocation until
+their ownership semantics are implemented. It must also encode into the
+existing shared prefill command rather than introduce an extra synchronization
+per layer.
+
 ## Admitted surface
 
 - A default-off probe may encode recurrent Float32 records in independent
@@ -260,8 +297,14 @@ not establish immediate compactness for the shipped runtime.
 - A default-off append-only resident owner may preplan exact K/V base,
   metadata, and sidecar capacity and pack a contiguous temporary Float32 Metal
   chunk directly into the next canonical rows. It may publish the longer live
-  prefix only after both pack dispatches complete and their failure status is
-  zero. Diagnostic snapshots may read and validate only that live prefix.
+  prefix only after both pack dispatches complete and their final device
+  completion marker is present. Diagnostic snapshots may read and validate
+  only that live prefix.
+- A default-off GQA6/head-dim-256 resident prefill probe may compute causal
+  attention over a packed immutable prefix plus an exact temporary Float32
+  current chunk, then pack that chunk later in the same command buffer. The
+  longer prefix may become visible only after attention and both packers leave
+  a clean shared status and the final device completion marker is present.
 - The real-model quality probe may apply an explicitly supplied tier per
   full-attention layer to calibrate the finer row-addressable representation.
   Such maps are diagnostic inputs, not runtime policy.

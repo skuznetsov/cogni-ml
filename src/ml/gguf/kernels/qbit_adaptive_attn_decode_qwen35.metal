@@ -210,3 +210,145 @@ kernel void qwen35_qbit_adaptive_attn_decode_gqa6(
         out[h * head_dim + d] = o[dl] * inv_l * sigmoid_gate;
     }
 }
+
+// Each query token attends to the immutable packed prefix and the causal part
+// of its exact current chunk. Six query heads share each decoded KV tile.
+kernel void qwen35_qbit_adaptive_prefill_chunk_gqa6(
+    device const float* Q [[buffer(0)]],
+    device const float* gate [[buffer(1)]],
+    device const float* current_k [[buffer(2)]],
+    device const float* current_v [[buffer(3)]],
+    device const uchar* k_base [[buffer(4)]],
+    device const uchar* k_metadata [[buffer(5)]],
+    device const uchar* k_sidecar [[buffer(6)]],
+    device const uchar* v_base [[buffer(7)]],
+    device const uchar* v_metadata [[buffer(8)]],
+    device const uchar* v_sidecar [[buffer(9)]],
+    device float* out [[buffer(10)]],
+    device atomic_uint* status [[buffer(11)]],
+    constant uint& packed_len [[buffer(12)]],
+    constant uint& token_count [[buffer(13)]],
+    constant uint& n_head [[buffer(14)]],
+    constant uint& n_head_kv [[buffer(15)]],
+    constant uint& head_dim [[buffer(16)]],
+    constant uint& heads_per_group [[buffer(17)]],
+    constant float& scale [[buffer(18)]],
+    uint3 group [[threadgroup_position_in_grid]],
+    ushort lane [[thread_index_in_simdgroup]],
+    ushort local_h [[simdgroup_index_in_threadgroup]],
+    ushort thread_index [[thread_index_in_threadgroup]]) {
+    const uint kv_h = group.x;
+    const uint token = group.y;
+    if (kv_h >= n_head_kv || token >= token_count ||
+        local_h >= QQA_ADAPTIVE_GQA6_HEADS ||
+        heads_per_group != QQA_ADAPTIVE_GQA6_HEADS ||
+        head_dim != QQA_ADAPTIVE_HD) {
+        return;
+    }
+
+    const uint h = kv_h * QQA_ADAPTIVE_GQA6_HEADS + local_h;
+    if (h >= n_head) {
+        return;
+    }
+
+    const uint kv_dim = n_head_kv * head_dim;
+    const uint query_offset = (token * n_head + h) * head_dim;
+    const uint visible_len = packed_len + token + 1u;
+    threadgroup float kv_tile[QQA_ADAPTIVE_GQA6_TILE * QQA_ADAPTIVE_HD];
+    threadgroup float probabilities[QQA_ADAPTIVE_GQA6_HEADS][QQA_ADAPTIVE_SG];
+
+    float m = -1e30f;
+    float l = 0.0f;
+    float o[QQA_ADAPTIVE_HD / QQA_ADAPTIVE_SG];
+    for (uint i = 0; i < QQA_ADAPTIVE_HD / QQA_ADAPTIVE_SG; ++i) {
+        o[i] = 0.0f;
+    }
+
+    for (uint tile_start = 0; tile_start < visible_len;
+         tile_start += QQA_ADAPTIVE_GQA6_TILE) {
+        const uint tile_len = min(tile_start + QQA_ADAPTIVE_GQA6_TILE, visible_len) - tile_start;
+        const uint tile_values = tile_len * head_dim;
+
+        for (uint index = thread_index; index < tile_values;
+             index += QQA_ADAPTIVE_GQA6_THREADS) {
+            const uint position_in_tile = index / head_dim;
+            const uint d = index - position_in_tile * head_dim;
+            const uint position = tile_start + position_in_tile;
+            if (position < packed_len) {
+                const uint row = position * n_head_kv + kv_h;
+                kv_tile[index] = qqa_adaptive_value(
+                    k_base, k_metadata, k_sidecar, row, d);
+            } else {
+                const uint current_token = position - packed_len;
+                kv_tile[index] = current_k[current_token * kv_dim + kv_h * head_dim + d];
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        float score = -1e30f;
+        if (lane < tile_len) {
+            threadgroup const float4* key =
+                (threadgroup const float4*)(kv_tile + lane * head_dim);
+            device const float4* query =
+                (device const float4*)(Q + query_offset);
+            float dot = 0.0f;
+            for (uint d4 = 0; d4 < head_dim / 4; ++d4) {
+                const float4 k4 = key[d4];
+                const float4 q4 = query[d4];
+                dot += q4.x * k4.x + q4.y * k4.y + q4.z * k4.z + q4.w * k4.w;
+            }
+            score = dot * scale;
+            if (!isfinite(score)) {
+                atomic_fetch_or_explicit(status, 16u, memory_order_relaxed);
+            }
+        }
+
+        const float tile_max = simd_max(score);
+        const float m_new = max(m, tile_max);
+        const float correction = exp(m - m_new);
+        const float probability = lane < tile_len ? exp(score - m_new) : 0.0f;
+        l = l * correction + simd_sum(probability);
+        probabilities[local_h][lane] = probability;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (uint index = thread_index; index < tile_values;
+             index += QQA_ADAPTIVE_GQA6_THREADS) {
+            const uint position_in_tile = index / head_dim;
+            const uint d = index - position_in_tile * head_dim;
+            const uint position = tile_start + position_in_tile;
+            if (position < packed_len) {
+                const uint row = position * n_head_kv + kv_h;
+                kv_tile[index] = qqa_adaptive_value(
+                    v_base, v_metadata, v_sidecar, row, d);
+            } else {
+                const uint current_token = position - packed_len;
+                kv_tile[index] = current_v[current_token * kv_dim + kv_h * head_dim + d];
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (uint dl = 0; dl < QQA_ADAPTIVE_HD / QQA_ADAPTIVE_SG; ++dl) {
+            const uint d = lane + dl * QQA_ADAPTIVE_SG;
+            float acc = 0.0f;
+            for (uint s = 0; s < tile_len; ++s) {
+                acc += probabilities[local_h][s] * kv_tile[s * head_dim + d];
+            }
+            o[dl] = o[dl] * correction + acc;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        m = m_new;
+    }
+
+    const float inv_l = l > 0.0f ? 1.0f / l : 0.0f;
+    for (uint dl = 0; dl < QQA_ADAPTIVE_HD / QQA_ADAPTIVE_SG; ++dl) {
+        const uint d = lane + dl * QQA_ADAPTIVE_SG;
+        const uint index = query_offset + d;
+        const float g = gate[index];
+        const float sigmoid_gate = 1.0f / (1.0f + exp(-g));
+        const float value = o[dl] * inv_l * sigmoid_gate;
+        out[index] = value;
+        if (!isfinite(g) || !isfinite(value)) {
+            atomic_fetch_or_explicit(status, 32u, memory_order_relaxed);
+        }
+    }
+}
