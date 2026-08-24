@@ -15,6 +15,29 @@ SPEC.loader.exec_module(MODULE)
 
 
 class SemanticJudgeTest(unittest.TestCase):
+    def _quality_record(self) -> dict[str, object]:
+        return {
+            "schema": "qwen-qbit-quality-v1",
+            "policy": "resident[p4;27=bf16,43=bf16,47=bf16,51=bf16]",
+            "exact_text": "The final available count is 84.",
+            "candidate_text": "The final available count is 84.",
+            "exact_ids": [1, 2, 3, 4],
+            "candidate_ids": [1, 2, 3, 4],
+            "exact_ended_with_eos": True,
+            "candidate_ended_with_eos": True,
+            "retire_order_top1_matches": 4,
+            "retire_order_top1_count": 4,
+            "teacher_top2_ranked_matches": 6,
+            "teacher_top2_ranked_count": 6,
+            "teacher_top2_set_overlap": 6,
+            "teacher_top2_set_overlap_count": 6,
+            "teacher_exact_top1_covered": 3,
+            "teacher_top2_steps": 3,
+            "teacher_token_ecs_mean": 1.0,
+            "prefix_raw_bytes": 100,
+            "prefix_payload_bytes": 20,
+        }
+
     def test_selects_named_cases_without_reordering_the_manifest(self) -> None:
         cases = [{"name": "first"}, {"name": "second"}, {"name": "third"}]
 
@@ -159,6 +182,62 @@ QBIT_QUALITY_JSON={"schema":"qwen-qbit-quality-v1","policy":"p4"}
         self.assertEqual("valid", result["status"])
         self.assertFalse(result["policy_results"]["p4"]["meaning_preserved"])
         self.assertIn("candidate did not reach EOS", result["policy_results"]["p4"]["semantic_failures"])
+
+    def test_resident_mode_requires_gpu_ownership_proof(self) -> None:
+        case = {
+            "name": "ledger",
+            "min_exact_tokens": 4,
+            "rules": {"required_all": [r"\b84\b"]},
+        }
+
+        with self.assertRaisesRegex(ValueError, "resident GPU proof"):
+            MODULE.evaluate_case(case, [self._quality_record()], require_resident=True)
+
+        record = {
+            **self._quality_record(),
+            "execution_mode": "resident_gpu",
+            "full_attention_layers": 16,
+            "resident_layers": 16,
+            "resident_f32_owner_layers": [],
+            "resident_cache_consistent": True,
+        }
+        result = MODULE.evaluate_case(case, [record], require_resident=True)
+
+        self.assertEqual("valid", result["status"])
+        row = result["policy_results"][record["policy"]]
+        self.assertEqual(16, row["resident_layers"])
+        self.assertEqual([], row["resident_f32_owner_layers"])
+
+        with self.assertRaisesRegex(ValueError, "invalid resident GPU proof"):
+            MODULE.evaluate_case(
+                case,
+                [{**record, "resident_layers": 15}],
+                require_resident=True,
+            )
+        with self.assertRaisesRegex(ValueError, "invalid resident GPU proof"):
+            MODULE.evaluate_case(
+                case,
+                [{**record, "resident_f32_owner_layers": ""}],
+                require_resident=True,
+            )
+
+    def test_resident_command_uses_only_the_runtime_map(self) -> None:
+        command = MODULE.build_probe_command(
+            run_safe=Path("safe"),
+            binary=Path("resident-probe"),
+            timeout=120,
+            max_mem_mb=8192,
+            generation=256,
+            retire_chunk=32,
+            model=None,
+            policy_maps=("p4;27=bf16,43=bf16,47=bf16,51=bf16",),
+            prompt="hello",
+            resident=True,
+        )
+
+        self.assertIn("--resident-map=p4;27=bf16,43=bf16,47=bf16,51=bf16", command)
+        self.assertNotIn("--precisions=4", command)
+        self.assertFalse(any(value.startswith("--adaptive-map=") for value in command))
 
 
 if __name__ == "__main__":

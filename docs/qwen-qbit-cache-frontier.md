@@ -344,6 +344,50 @@ multi-turn sessions. The diagnostic probe still
 roundtrips into Float32 storage, so resident packing, GPU-only execution,
 throughput, and restore/checkpoint behavior remain outside this gate.
 
+### Resident GPU held-out replay
+
+`bin/qwen35_adaptive_resident_kv_quality_probe.cr` reruns the same frozen
+four-case corpus through the actual resident adaptive-KV corridor. The exact
+Float32 oracle state is released before a policy is evaluated. Each policy then
+uses two fresh states: one independent free run and one teacher-forced exact
+trajectory. Neither state is snapshotted or reconstructed through a Float32 KV
+cache. After prefill and after every decode token, the probe requires all 16
+full-attention layers to have packed adaptive owners, no Float32 K/V owner, and
+the expected published `cache_len`. Corpus `--resident` mode rejects a record
+without that execution proof.
+
+The coarse map is the only policy admitted to this bounded resident replay:
+
+| Execution path | Logical KV density | Meaning | Retire top-1 | Ranked top-2 slots | Top-2 set overlap | Exact top-1 in candidate top-2 | Token ECS mean |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| diagnostic Float32 roundtrip | 3.7647x | 4/4 | 927/967 | 1682/1926 | 1740/1926 | 952/963 | 0.963158 |
+| resident GPU packed KV | 3.7647x | 4/4 | 930/967 | 1702/1926 | 1764/1926 | 956/963 | 0.964905 |
+
+Every exact and resident free response reached its own EOS. All four resident
+records reported `resident_layers=16`, an empty
+`resident_f32_owner_layers`, and a consistent packed prefix. Density includes
+the resident allocation capacity and padding; its absolute byte count must not
+be compared directly with the earlier diagnostic's populated-prefix byte
+count. The small metric improvement over the diagnostic roundtrip is measured,
+but is not evidence that resident execution is generally more accurate.
+
+This closes the missing execution-path falsifier, not the production frontier.
+The four English regex oracles can still miss a contradiction that repeats the
+required facts, and their rules were repaired after earlier outputs were
+observed. These are long single responses rather than restored multi-turn
+sessions. Runs were ordered, the exact baseline paid cold Metal setup, and the
+probe's decode timers include state cleanup, so they do not provide an A/B
+throughput certificate. The coarse map also remains red against the separate
+single-prompt `0.05` winning-logit guard below. That guard is retained as a
+local drift diagnostic; response meaning, EOS, top-1/top-2, and ECS jointly own
+the held-out admission decision.
+
+The KISS decision is therefore narrow: retain
+`p4;27=bf16,43=bf16,47=bf16,51=bf16` as a default-off resident policy for the
+direct synchronous path. Production defaulting, native/asynchronous routing,
+restore/checkpoint quality, longer multi-turn sessions, and quiet-host speed
+remain separate gates.
+
 ### Append-only device packing slice
 
 The next bounded default-off slice now removes the host encoder from the
@@ -477,7 +521,8 @@ caches published 44 rows with no Float32 alias. Resident K/V used 3,694,592
 bytes instead of 5,767,168 bytes (`1.561x`).
 
 The deeper coarse map (`p4` plus BF16 layers `27,43,47,51`) is structurally
-stable but remains quality-red. On the same 32-step diagnostic it retained
+stable but remains red against this local winning-logit guard. On the same
+32-step diagnostic it retained
 `32/32` top-1, `58/64` ranked top-2 slots, top-1 ECS `1.0`, mean second-token
 ECS `0.8512`, and `3.7647x` density, but maximum winning-logit delta reached
 `1.6252`. A p5 base improved ranked top-2 only to `59/64` and mean second-token
@@ -485,11 +530,14 @@ ECS to `0.8815` while reducing density to `3.4595x`; it did not close the
 quality gate. These ordered timings show roughly 7-8% decode overhead but are
 not quiet-host throughput evidence.
 
-The all-layer runtime mechanism is therefore admitted only as a default-off
-bounded experiment with a strict all-BF16 correctness control. Aggressive
-p4/p5 tier maps remain diagnostic calibration inputs. The next density move is
-row/head/age-sensitive tier selection with a larger held-out quality corpus,
-not relaxation of the `0.05` guard.
+The later resident held-out replay above preserved all four task meanings with
+the same coarse map. This does not erase the local red signal: the two gates
+measure different failure surfaces, and the `0.05` guard remains useful for
+detecting concentrated logit drift. The all-layer runtime mechanism and coarse
+map are therefore admitted only as a default-off bounded experiment. More
+aggressive p4/p5 maps remain diagnostic calibration inputs; production
+promotion requires broader session, lifecycle, and performance evidence rather
+than relaxation of either gate.
 
 ## Admitted surface
 

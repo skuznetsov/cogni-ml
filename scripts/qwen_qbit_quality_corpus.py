@@ -22,12 +22,15 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CASES = ROOT / "examples" / "qwen_qbit_quality_heldout.jsonl"
 DEFAULT_BINARY = Path("/private/tmp/qwen35_qbit_kv_head_quality_probe")
+DEFAULT_RESIDENT_BINARY = Path("/private/tmp/qwen35_adaptive_resident_kv_quality_probe")
 DEFAULT_OUT_DIR = Path("/private/tmp/qwen_qbit_quality_heldout")
+DEFAULT_RESIDENT_OUT_DIR = Path("/private/tmp/qwen_qbit_resident_quality_heldout")
 DEFAULT_RUN_SAFE = ROOT / "scripts" / "run_safe.sh"
 DEFAULT_POLICY_MAPS = (
     "51:k0=bf16",
     "27=bf16,43=bf16,47=bf16,51=bf16",
 )
+DEFAULT_RESIDENT_MAPS = ("p4;27=bf16,43=bf16,47=bf16,51=bf16",)
 
 PROBE_SCHEMA = "qwen-qbit-quality-v1"
 REQUIRED_METRICS = (
@@ -97,7 +100,9 @@ def extract_requested_generation(log_text: str) -> int:
     return values.pop()
 
 
-def _policy_result(record: dict[str, Any], rules: dict[str, Any]) -> dict[str, Any]:
+def _policy_result(
+    record: dict[str, Any], rules: dict[str, Any], require_resident: bool = False
+) -> dict[str, Any]:
     missing = [name for name in REQUIRED_METRICS if name not in record]
     if missing:
         raise ValueError(f"policy {record.get('policy')!r} is missing metrics: {missing}")
@@ -107,7 +112,7 @@ def _policy_result(record: dict[str, Any], rules: dict[str, Any]) -> dict[str, A
     failures = semantic_failures(str(record["candidate_text"]), rules)
     if not bool(record["candidate_ended_with_eos"]):
         failures.append("candidate did not reach EOS")
-    return {
+    result = {
         "meaning_preserved": not failures,
         "semantic_failures": failures,
         "top1_matches": int(record["retire_order_top1_matches"]),
@@ -126,9 +131,62 @@ def _policy_result(record: dict[str, Any], rules: dict[str, Any]) -> dict[str, A
         "candidate_ended_with_eos": bool(record["candidate_ended_with_eos"]),
         "candidate_text": str(record["candidate_text"]),
     }
+    if require_resident:
+        proof_fields = (
+            "execution_mode",
+            "full_attention_layers",
+            "resident_layers",
+            "resident_f32_owner_layers",
+            "resident_cache_consistent",
+        )
+        missing_proof = [name for name in proof_fields if name not in record]
+        if missing_proof:
+            raise ValueError(
+                f"policy {record.get('policy')!r} is missing resident GPU proof: "
+                f"{missing_proof}"
+            )
+        raw_f32_owners = record["resident_f32_owner_layers"]
+        raw_full_attention_layers = record["full_attention_layers"]
+        raw_resident_layers = record["resident_layers"]
+        if (
+            type(raw_full_attention_layers) is not int
+            or type(raw_resident_layers) is not int
+            or not isinstance(raw_f32_owners, list)
+            or any(type(layer) is not int for layer in raw_f32_owners)
+        ):
+            raise ValueError(
+                f"policy {record.get('policy')!r} has invalid resident GPU proof"
+            )
+        f32_owners = list(raw_f32_owners)
+        full_attention_layers = raw_full_attention_layers
+        resident_layers = raw_resident_layers
+        if (
+            record["execution_mode"] != "resident_gpu"
+            or full_attention_layers <= 0
+            or resident_layers != full_attention_layers
+            or f32_owners
+            or record["resident_cache_consistent"] is not True
+        ):
+            raise ValueError(
+                f"policy {record.get('policy')!r} has invalid resident GPU proof"
+            )
+        result.update(
+            {
+                "execution_mode": "resident_gpu",
+                "full_attention_layers": full_attention_layers,
+                "resident_layers": resident_layers,
+                "resident_f32_owner_layers": f32_owners,
+                "resident_cache_consistent": True,
+            }
+        )
+    return result
 
 
-def evaluate_case(case: dict[str, Any], records: list[dict[str, Any]]) -> dict[str, Any]:
+def evaluate_case(
+    case: dict[str, Any],
+    records: list[dict[str, Any]],
+    require_resident: bool = False,
+) -> dict[str, Any]:
     name = str(case["name"])
     if not records:
         return {"name": name, "status": "invalid_probe", "failures": ["no probe records"]}
@@ -167,7 +225,9 @@ def evaluate_case(case: dict[str, Any], records: list[dict[str, Any]]) -> dict[s
             raise ValueError(f"case {name!r} contains a policy without a label")
         if policy in policy_results:
             raise ValueError(f"case {name!r} contains duplicate policy {policy!r}")
-        policy_results[policy] = _policy_result(record, dict(case["rules"]))
+        policy_results[policy] = _policy_result(
+            record, dict(case["rules"]), require_resident=require_resident
+        )
     return {
         "name": name,
         "status": "valid",
@@ -290,6 +350,37 @@ def run_to_file(cmd: list[str], path: Path, timeout: int) -> int:
             return 124
 
 
+def build_probe_command(
+    *,
+    run_safe: Path,
+    binary: Path,
+    timeout: int,
+    max_mem_mb: int,
+    generation: int,
+    retire_chunk: int,
+    model: Path | None,
+    policy_maps: tuple[str, ...],
+    prompt: str,
+    resident: bool,
+) -> list[str]:
+    command = [
+        str(run_safe),
+        str(binary),
+        str(timeout),
+        str(max_mem_mb),
+        f"--gen={generation}",
+    ]
+    if resident:
+        command.extend(f"--resident-map={policy_map}" for policy_map in policy_maps)
+    else:
+        command.extend((f"--retire-chunk={retire_chunk}", "--precisions=4"))
+        command.extend(f"--adaptive-map={policy_map}" for policy_map in policy_maps)
+    if model is not None:
+        command.append(f"--model={model}")
+    command.append(prompt)
+    return command
+
+
 def print_aggregate(aggregate: dict[str, Any]) -> None:
     print("QBIT_CORPUS_VECTOR", flush=True)
     for policy, row in aggregate.items():
@@ -309,10 +400,10 @@ def print_aggregate(aggregate: dict[str, Any]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--binary", type=Path, default=DEFAULT_BINARY)
+    parser.add_argument("--binary", type=Path, default=None)
     parser.add_argument("--model", type=Path, default=None)
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASES)
-    parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
+    parser.add_argument("--out-dir", type=Path, default=None)
     parser.add_argument("--run-safe", type=Path, default=DEFAULT_RUN_SAFE)
     parser.add_argument("--timeout", type=int, default=1200)
     parser.add_argument("--max-mem-mb", type=int, default=28672)
@@ -322,10 +413,15 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--score-only", action="store_true")
     parser.add_argument(
+        "--resident",
+        action="store_true",
+        help="Require the real resident GPU KV probe and its ownership proof",
+    )
+    parser.add_argument(
         "--policy-map",
         action="append",
         default=[],
-        help="Additional p4-default adaptive map; defaults to head and coarse controls",
+        help="Adaptive map; diagnostic and resident modes have separate defaults",
     )
     args = parser.parse_args()
 
@@ -334,31 +430,38 @@ def main() -> int:
     cases = select_cases(load_cases(args.cases), args.case)
     if args.limit > 0:
         cases = cases[: args.limit]
-    policy_maps = tuple(args.policy_map) if args.policy_map else DEFAULT_POLICY_MAPS
-    expected_policies = {"p4", *(f"adaptive[{value}]" for value in policy_maps)}
-    args.out_dir.mkdir(parents=True, exist_ok=True)
+    policy_maps = tuple(args.policy_map) if args.policy_map else (
+        DEFAULT_RESIDENT_MAPS if args.resident else DEFAULT_POLICY_MAPS
+    )
+    if args.resident:
+        expected_policies = {f"resident[{value}]" for value in policy_maps}
+        binary = args.binary or DEFAULT_RESIDENT_BINARY
+        out_dir = args.out_dir or DEFAULT_RESIDENT_OUT_DIR
+    else:
+        expected_policies = {"p4", *(f"adaptive[{value}]" for value in policy_maps)}
+        binary = args.binary or DEFAULT_BINARY
+        out_dir = args.out_dir or DEFAULT_OUT_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     results: list[dict[str, Any]] = []
     infrastructure_failed = False
     for index, case in enumerate(cases, 1):
         name = str(case["name"])
-        log_path = args.out_dir / f"{name}.log"
+        log_path = out_dir / f"{name}.log"
         print(f"QBIT_CORPUS_CASE {index}/{len(cases)} name={name} phase=start", flush=True)
         if not args.score_only:
-            cmd = [
-                str(args.run_safe),
-                str(args.binary),
-                str(args.timeout),
-                str(args.max_mem_mb),
-                f"--gen={int(case.get('gen', args.gen))}",
-                f"--retire-chunk={int(case.get('retire_chunk', args.retire_chunk))}",
-                "--precisions=4",
-            ]
-            if args.model is not None:
-                cmd.append(f"--model={args.model}")
-            for policy_map in policy_maps:
-                cmd.append(f"--adaptive-map={policy_map}")
-            cmd.append(str(case["prompt"]))
+            cmd = build_probe_command(
+                run_safe=args.run_safe,
+                binary=binary,
+                timeout=args.timeout,
+                max_mem_mb=args.max_mem_mb,
+                generation=int(case.get("gen", args.gen)),
+                retire_chunk=int(case.get("retire_chunk", args.retire_chunk)),
+                model=args.model,
+                policy_maps=policy_maps,
+                prompt=str(case["prompt"]),
+                resident=args.resident,
+            )
             returncode = run_to_file(cmd, log_path, args.timeout + 90)
             if returncode != 0:
                 infrastructure_failed = True
@@ -441,7 +544,7 @@ def main() -> int:
                 flush=True,
             )
             continue
-        result = evaluate_case(case, records)
+        result = evaluate_case(case, records, require_resident=args.resident)
         if result["status"] != "valid":
             infrastructure_failed = True
         results.append(result)
@@ -467,14 +570,15 @@ def main() -> int:
         "schema": "qwen-qbit-quality-corpus-v1",
         "cases_file": str(args.cases),
         "default_generation_limit": args.gen,
+        "execution_mode": "resident_gpu" if args.resident else "diagnostic_roundtrip",
         "case_generation_limits": {
             str(case["name"]): int(case.get("gen", args.gen)) for case in cases
         },
-        "retire_chunk": args.retire_chunk,
+        "retire_chunk": None if args.resident else args.retire_chunk,
         "results": results,
         "aggregate": aggregate,
     }
-    report_path = args.out_dir / "report.json"
+    report_path = out_dir / "report.json"
     temporary_path = report_path.with_suffix(".json.tmp")
     temporary_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(temporary_path, report_path)
