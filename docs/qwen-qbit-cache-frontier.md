@@ -331,6 +331,25 @@ suite excluding the independently failing raw-thread writer test passed
 `91 examples, 0 failures, 0 errors, 1 pending`. These checks establish bounded
 correctness, not decode throughput.
 
+The same smoke now accepts a guarded `QWEN35_ADAPTIVE_DECODE_TOKENS=1..512`
+sweep. It records the baseline greedy trajectory, presents those same input
+tokens to the adaptive state, and checks every step for top-1 equality, exact
+`cache_len + 1` publication, finite logit drift, and absence of a selected-layer
+Float32 owner. Because every compared top-1 remained equal in the measured
+runs, the baseline-bound inputs were also the adaptive greedy inputs.
+
+On the same single prompt and BF16 layer 3, 64 and 128 decoded tokens passed the
+default `0.05` maximum-logit-delta guard. They retained `64/64` and `128/128`
+top-1 respectively, published 76 and 140 total rows, and measured maximum
+deltas `0.002687` and `0.010164`. At 256 tokens, ownership, publication, and
+`256/256` top-1 still held through 268 total rows, but the maximum delta reached
+`0.193283` and therefore failed the default guard. A diagnostic-only repeat
+with a `1.0` threshold and explicit
+`QWEN35_ADAPTIVE_ALLOW_LOGIT_DELTA_OVERRIDE=1` measured mean delta `0.004505`;
+the JSON records both the effective threshold and diagnostic status, and the
+override does not widen the admitted quality bound. Decode timings varied
+materially across the ordered single runs and are not throughput evidence.
+
 A uniform p4 or p5 selector remains diagnostic; the earlier quality gate
 rejected both as global defaults. Calibrated mixed tiers, multiple adaptive
 layers, state fork/copy, persistence, native runtime integration, and advanced

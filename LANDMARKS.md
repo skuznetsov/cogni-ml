@@ -24241,3 +24241,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Trigger: a synchronous token reaches one supported packed full-attention layer with `cache_len == pos`. Transport: exact projected Q/gate/K/V -> mixed packed-history attention -> one-row pack -> later layers/head -> true-tail completion. Boundary: sole KV owner, exact position, single command identity, no mid-wave commit, and invisible failed publication. Potential: `{quality mismatch, invalid visible prefix, duplicate persistent bytes, extra synchronization}`. Recompute: one-row mixed-history parity, guarded real-model top-1/logit parity, lifecycle suite, and CPU-only build. Dual frame: unchanged Float32-owner decode when selectors are absent.
 
 **decision:** Admit only direct synchronous single-token packed decode for the existing default-off one-layer owner. Keep advanced async/speculative/native/lifecycle widening fail-closed; the next useful gate is calibrated tier selection or a longer-context correctness/stability sweep, not a broad ownership refactor.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-REPEATED-DECODE-918] Repeated decode is structurally stable through 256 rows but the winning-logit guard is red
+**context:** ml / Qwen3.8 / adaptive QBit / resident KV / repeated decode / quality
+**state:** 128-token bounded winning-logit parity gate verified; 256-token guard measured-red
+
+- claim: "The real-model smoke can distinguish repeated packed-decode stability from a one-token success."
+  source: `bin/qwen35_adaptive_resident_kv_prefill_smoke.cr` accepts `QWEN35_ADAPTIVE_DECODE_TOKENS=1..512`, records one baseline greedy trajectory, and feeds the same inputs to the adaptive state while checking top-1, finite logit drift, exact per-step prefix publication, and sole compact ownership. A zero-token sensitivity control failed before model loading with the declared `1..512` boundary; the default one-token regression retained its prior top-1 and `1.335144e-5` delta.
+  verified_at: 2026-08-24
+  decay_trigger: smoke trajectory construction, decode dispatch, cache publication, ownership checks, model weights, or logit gate change
+  trust: {F:0.93,G:0.27,R:0.89}
+
+- claim: "One BF16 selected layer preserves the measured greedy trajectory and compact ownership through 256 repeated decode steps, but only the 64/128 runs satisfy the current winning-logit guard."
+  source: guarded Qwen3.8-27B Q4_K_M runs on layer 3 retained `64/64`, `128/128`, and `256/256` top-1 while publishing `cache_len 12 -> 76/140/268` without a selected-layer Float32 owner. Maximum top-1-logit deltas were `0.002687`, `0.010164`, and `0.193283`; the 256 run therefore failed the default `0.05` guard. A diagnostic-only `1.0` repeat with an explicit override exposed the complete 256-step vector with mean delta `0.004505`; the JSON records the effective guard and diagnostic status, so it is not an admitted threshold change. Selected-layer density remained `1.56098x` at each capacity.
+  verified_at: 2026-08-24
+  decay_trigger: model prompt/weights, selected layer/tier, decode length, adaptive Metal kernels, trajectory metric, or host runtime change
+  trust: {F:0.92,G:0.19,R:0.86}
+
+**Adversary:** This is one synthetic tokenized prompt, one BF16 layer, one ordered run per length, and top-1 plus winning-logit evidence rather than full-distribution or task-quality evaluation. The `0.05` threshold is a conservative guard, not a calibrated human-quality boundary. Timing order and host variance make the reported decode milliseconds orientation only. No p4/p5 policy, multi-layer compactness, long-context quality, or eightfold context claim follows.
+
+**LTP/WBA:** Trigger: repeated synchronous decode over the published packed prefix. Transport: baseline token trajectory -> exact current projections -> packed-history attention -> append-only row -> later recurrent/full layers. Boundary: identical input tokens, exact position, sole KV owner, true-tail publication, and fail-closed length/logit guards. Potential: `{top-1 mismatch, logit drift, invalid prefix, duplicate bytes, time}`. Recompute descends through 128 steps but not at 256 because the quality-guard component rises above `0.05`; byte and timing improvements cannot override that earlier component. Dual frame: ordinary Float32 KV under the same baseline trajectory.
+
+**decision:** Keep the default-off repeated-decode route and admit the bounded 128-step winning-logit parity certificate only. Treat 256 steps as structural evidence plus a measured-red winning-logit guard. The calibrated p4/p5/BF16 selector must include this repeated-decode sweep and richer model-quality evidence; do not relax `0.05` from this one prompt.
