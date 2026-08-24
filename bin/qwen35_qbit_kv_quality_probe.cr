@@ -24,7 +24,8 @@ record QBitQualityPolicy,
   label : String,
   precision : Int32?,
   adaptive_default : ML::GGUF::QwenQBitAdaptiveKV::Tier?,
-  adaptive_layer_tiers : Hash(Int32, ML::GGUF::QwenQBitAdaptiveKV::Tier)
+  adaptive_layer_tiers : Hash(Int32, ML::GGUF::QwenQBitAdaptiveKV::Tier),
+  selected_max_error : Float64?
 
 record TokenECSPosition,
   position : Int32,
@@ -46,6 +47,7 @@ n_gen = 4
 requested_max_seq = 0
 precisions = [4, 5] of Int32
 adaptive_maps = [] of String
+selected_max_errors = [] of Float64
 adaptive_sweep = nil.as(String?)
 chat_mode = true
 retire_chunk = 8
@@ -65,6 +67,9 @@ OptionParser.parse do |parser|
   parser.on("--adaptive-sweep TIER", "Try one p5, bf16, or f32 escape layer at a time") do |value|
     adaptive_sweep = value
   end
+  parser.on("--selected-max-error X", "Add row-local p4/p5/BF16 selector with normalized max-error bound") do |value|
+    selected_max_errors << value.to_f64
+  end
   parser.on("--retire-chunk N", "Completed prefill rows packed per chunk (default: 8)") { |value| retire_chunk = value.to_i }
   parser.on("--raw", "Do not render the Qwen chat template") { chat_mode = false }
   parser.on("-h", "--help", "Show this help") do
@@ -77,12 +82,16 @@ prompt = ARGV.join(" ") unless ARGV.empty?
 raise "model does not exist: #{model_path}" unless File.file?(model_path)
 raise "--gen must be at least 2" unless n_gen >= 2
 raise "--max-seq cannot be negative" if requested_max_seq < 0
-raise "no quality variant selected" if precisions.empty? && adaptive_maps.empty? && adaptive_sweep.nil?
+raise "no quality variant selected" if precisions.empty? && adaptive_maps.empty? && adaptive_sweep.nil? && selected_max_errors.empty?
 raise "--retire-chunk must be positive" unless retire_chunk > 0
 precisions.each do |precision|
   raise "precision must be p4 or p5" unless precision == 4 || precision == 5
 end
 raise "duplicate precisions" unless precisions.uniq.size == precisions.size
+selected_max_errors.each do |bound|
+  raise "selected max-error bound must be finite and positive" unless bound.finite? && bound > 0.0
+end
+raise "duplicate selected max-error bounds" unless selected_max_errors.uniq.size == selected_max_errors.size
 
 def adaptive_tier(value : String) : ML::GGUF::QwenQBitAdaptiveKV::Tier
   case value.downcase
@@ -106,7 +115,7 @@ def adaptive_policy(spec : String) : QBitQualityPolicy
   end
   raise "adaptive map cannot be empty" if layer_tiers.empty?
   QBitQualityPolicy.new("adaptive[#{spec}]", nil,
-    ML::GGUF::QwenQBitAdaptiveKV::Tier::P4, layer_tiers)
+    ML::GGUF::QwenQBitAdaptiveKV::Tier::P4, layer_tiers, nil)
 end
 
 def release_state!(state : ML::GGUF::Qwen35CPU::State) : Nil
@@ -210,11 +219,17 @@ def roundtrip_policy!(state : ML::GGUF::Qwen35CPU::State,
                       max_seq : Int32,
                       start_pos : Int32,
                       token_count : Int32,
-                      policy : QBitQualityPolicy) : ML::GGUF::QwenQBitKVQuality::Stats
+                      policy : QBitQualityPolicy,
+                      counts : ML::GGUF::QwenQBitKVQuality::TierCounts) : ML::GGUF::QwenQBitKVQuality::Stats
   if precision = policy.precision
     ML::GGUF::QwenQBitKVQuality.roundtrip_layers_span!(
       state.layers, hp.full_attention_layers, max_seq,
       hp.n_head_kv, hp.head_dim, start_pos, token_count, precision,
+    )
+  elsif max_error = policy.selected_max_error
+    ML::GGUF::QwenQBitKVQuality.roundtrip_layers_span_selected!(
+      state.layers, hp.full_attention_layers, max_seq,
+      hp.n_head_kv, hp.head_dim, start_pos, token_count, max_error, counts,
     )
   else
     ML::GGUF::QwenQBitKVQuality.roundtrip_layers_span_adaptive!(
@@ -234,6 +249,7 @@ def prefill_chunked(weights : ML::GGUF::Qwen35Weights,
   state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
   ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp)
   stats = ML::GGUF::QwenQBitKVQuality::Stats.new(0_i64, 0_i64, 0_i64)
+  tier_counts = ML::GGUF::QwenQBitKVQuality::TierCounts.new
   roundtrip_ms = 0.0_f64
   first_id = -1_i32
   first_logit = Float32::NAN
@@ -254,7 +270,7 @@ def prefill_chunked(weights : ML::GGUF::Qwen35Weights,
 
       if selected = policy
         roundtrip_started = Time.instant
-        retired = roundtrip_policy!(state, hp, max_seq, offset, count, selected)
+        retired = roundtrip_policy!(state, hp, max_seq, offset, count, selected, tier_counts)
         roundtrip_ms += (Time.instant - roundtrip_started).total_milliseconds
         stats = add_stats(stats, retired)
       end
@@ -263,7 +279,7 @@ def prefill_chunked(weights : ML::GGUF::Qwen35Weights,
 
     snapshot = ML::GGUF::Qwen35StateSnapshot.capture(state)
     elapsed_ms = (Time.instant - started).total_milliseconds
-    {snapshot, first_id, first_logit, elapsed_ms, roundtrip_ms, stats}
+    {snapshot, first_id, first_logit, elapsed_ms, roundtrip_ms, stats, tier_counts}
   ensure
     release_state!(state)
   end
@@ -284,7 +300,7 @@ minimum_max_seq = tokens.size + n_gen + 1
 max_seq = requested_max_seq == 0 ? minimum_max_seq : requested_max_seq
 raise "prompt plus continuation exceeds --max-seq" if max_seq < minimum_max_seq
 
-snapshot, first_id, first_logit, prefill_ms, _exact_roundtrip_ms, _exact_stats = prefill_chunked(
+snapshot, first_id, first_logit, prefill_ms, _exact_roundtrip_ms, _exact_stats, _exact_tier_counts = prefill_chunked(
   weights, tokens, max_seq, retire_chunk, nil,
 )
 
@@ -316,22 +332,28 @@ puts "  exact_ids=#{exact_ids.join(',')} exact_text=#{tokenizer.decode(exact_ids
 
 policies = precisions.map do |precision|
   QBitQualityPolicy.new("p#{precision}", precision, nil,
-    {} of Int32 => ML::GGUF::QwenQBitAdaptiveKV::Tier)
+    {} of Int32 => ML::GGUF::QwenQBitAdaptiveKV::Tier, nil)
 end
 adaptive_maps.each { |spec| policies << adaptive_policy(spec) }
+selected_max_errors.each do |bound|
+  policies << QBitQualityPolicy.new(
+    "selected[max_error=#{bound}]", nil, nil,
+    {} of Int32 => ML::GGUF::QwenQBitAdaptiveKV::Tier, bound,
+  )
+end
 if sweep_name = adaptive_sweep
   sweep_tier = adaptive_tier(sweep_name)
   raise "adaptive sweep tier must refine or replace p4" if sweep_tier.p4?
   hp.full_attention_layers.each do |layer|
     policies << QBitQualityPolicy.new(
       "adaptive[#{layer}=#{sweep_name.downcase}]", nil,
-      ML::GGUF::QwenQBitAdaptiveKV::Tier::P4, {layer => sweep_tier},
+      ML::GGUF::QwenQBitAdaptiveKV::Tier::P4, {layer => sweep_tier}, nil,
     )
   end
 end
 
 policies.each do |policy|
-  quantized_snapshot, qbit_first_id, qbit_first_logit, qbit_prefill_ms, prefix_quantize_ms, prefix_stats = prefill_chunked(
+  quantized_snapshot, qbit_first_id, qbit_first_logit, qbit_prefill_ms, prefix_quantize_ms, prefix_stats, prefix_tier_counts = prefill_chunked(
     weights, tokens, max_seq, retire_chunk, policy,
   )
 
@@ -339,6 +361,7 @@ policies.each do |policy|
   free_ids = [qbit_first_id] of Int32
   free_top2s = [] of ML::GGUF::QwenQBitQualityMetrics::Top2
   free_append_stats = ML::GGUF::QwenQBitKVQuality::Stats.new(0_i64, 0_i64, 0_i64)
+  free_tier_counts = ML::GGUF::QwenQBitKVQuality::TierCounts.new
   begin
     exact_logits.size.times do |step|
       break if free_ids[-1] == tokenizer.eos_id
@@ -350,7 +373,7 @@ policies.each do |policy|
         free_first_id, free_first_logit, free_second_id, free_second_logit,
       )
       free_top2s << top2
-      appended = roundtrip_policy!(free_state, hp, max_seq, pos, 1, policy)
+      appended = roundtrip_policy!(free_state, hp, max_seq, pos, 1, policy, free_tier_counts)
       free_append_stats = add_stats(free_append_stats, appended)
       free_ids << top2.first_id
     end
@@ -374,6 +397,7 @@ policies.each do |policy|
   max_top2_margin_delta = 0.0_f32
   min_exact_top2_margin = Float32::INFINITY
   forced_append_stats = ML::GGUF::QwenQBitKVQuality::Stats.new(0_i64, 0_i64, 0_i64)
+  forced_tier_counts = ML::GGUF::QwenQBitKVQuality::TierCounts.new
   begin
     exact_logits.size.times do |step|
       pos = tokens.size + step
@@ -397,7 +421,7 @@ policies.each do |policy|
       min_exact_top2_margin = Math.min(min_exact_top2_margin, exact_top2.margin)
       min_logit_cosine = Math.min(min_logit_cosine, cosine(exact_logits[step], logits))
       max_logit_delta = Math.max(max_logit_delta, max_delta(exact_logits[step], logits))
-      appended = roundtrip_policy!(forced_state, hp, max_seq, pos, 1, policy)
+      appended = roundtrip_policy!(forced_state, hp, max_seq, pos, 1, policy, forced_tier_counts)
       forced_append_stats = add_stats(forced_append_stats, appended)
     end
   ensure
@@ -426,6 +450,9 @@ policies.each do |policy|
     puts "      teacher_token_ecs_position=#{row.position} expected=#{tokenizer.decode([row.expected_id]).inspect}(#{row.expected_id}) candidate=#{tokenizer.decode([row.candidate_id]).inspect}(#{row.candidate_id}) ecs=#{row.ecs.round(6)}"
   end
   puts "    append_payload_bytes=#{forced_append_stats.payload_bytes} free_append_payload_bytes=#{free_append_stats.payload_bytes}"
+  if policy.selected_max_error
+    puts "    prefix_tiers=p4:#{prefix_tier_counts.p4},p5:#{prefix_tier_counts.p5},bf16:#{prefix_tier_counts.bf16} forced_append_tiers=p4:#{forced_tier_counts.p4},p5:#{forced_tier_counts.p5},bf16:#{forced_tier_counts.bf16} free_append_tiers=p4:#{free_tier_counts.p4},p5:#{free_tier_counts.p5},bf16:#{free_tier_counts.bf16}"
+  end
   payload = JSON.build do |json|
     json.object do
       json.field "schema", "qwen-qbit-quality-v1"
@@ -464,6 +491,31 @@ policies.each do |policy|
       json.field "prefix_raw_bytes", prefix_stats.raw_bytes
       json.field "prefix_payload_bytes", prefix_stats.payload_bytes
       json.field "prefix_ratio", prefix_ratio
+      json.field "selected_max_error", policy.selected_max_error
+      json.field "prefix_tier_counts" do
+        json.object do
+          json.field "p4", prefix_tier_counts.p4
+          json.field "p5", prefix_tier_counts.p5
+          json.field "bf16", prefix_tier_counts.bf16
+          json.field "f32", prefix_tier_counts.f32
+        end
+      end
+      json.field "forced_append_tier_counts" do
+        json.object do
+          json.field "p4", forced_tier_counts.p4
+          json.field "p5", forced_tier_counts.p5
+          json.field "bf16", forced_tier_counts.bf16
+          json.field "f32", forced_tier_counts.f32
+        end
+      end
+      json.field "free_append_tier_counts" do
+        json.object do
+          json.field "p4", free_tier_counts.p4
+          json.field "p5", free_tier_counts.p5
+          json.field "bf16", free_tier_counts.bf16
+          json.field "f32", free_tier_counts.f32
+        end
+      end
       json.field "teacher_token_ecs_mismatches" do
         json.array do
           teacher_token_ecs.positions.each do |row|

@@ -85,6 +85,54 @@ describe ML::GGUF::QwenQBitKVQuality do
     stats.payload_bytes.should eq((2 * per_owner).to_i64)
   end
 
+  it "selects the lowest row tier that satisfies a normalized-error bound" do
+    row = Array(Float32).new(256) do |i|
+      (Math.sin(i.to_f64 * 0.071) + 0.35 * Math.cos(i.to_f64 * 0.193) +
+        (i % 29 == 0 ? 2.75 : 0.0)).to_f32
+    end
+    p4_error = ML::GGUF::QwenQBitKVQuality.max_normalized_error(row, 4)
+    p5_error = ML::GGUF::QwenQBitKVQuality.max_normalized_error(row, 5)
+    p5_error.should be < p4_error
+
+    ML::GGUF::QwenQBitKVQuality.select_tier(row, p4_error + 1e-12)
+      .should eq(ML::GGUF::QwenQBitAdaptiveKV::Tier::P4)
+    ML::GGUF::QwenQBitKVQuality.select_tier(row, (p4_error + p5_error) / 2.0)
+      .should eq(ML::GGUF::QwenQBitAdaptiveKV::Tier::P5)
+    ML::GGUF::QwenQBitKVQuality.select_tier(row, p5_error / 2.0)
+      .should eq(ML::GGUF::QwenQBitAdaptiveKV::Tier::BF16)
+  end
+
+  it "selects and reports one adaptive tier per retired semantic row" do
+    head_dim = 256
+    n_head_kv = 2
+    kv_dim = n_head_kv * head_dim
+    layer = ML::GGUF::Qwen35CPU::LayerState.new
+    original_k = Array(Float32).new(3 * kv_dim) do |i|
+      (Math.sin(i.to_f64 * 0.031) + (i % 251 == 0 ? 3.0 : 0.0)).to_f32
+    end
+    original_v = Array(Float32).new(3 * kv_dim) do |i|
+      (Math.cos(i.to_f64 * 0.037) - (i % 239 == 0 ? 2.5 : 0.0)).to_f32
+    end
+    layer.k_cache = original_k.dup
+    layer.v_cache = original_v.dup
+    counts = ML::GGUF::QwenQBitKVQuality::TierCounts.new
+
+    stats = ML::GGUF::QwenQBitKVQuality.roundtrip_layers_span_selected!(
+      [layer], [0], 3, n_head_kv, head_dim, 1, 2, 0.25, counts,
+    )
+
+    counts.total.should eq((2 * 2 * n_head_kv).to_i64)
+    counts.p4.should be >= 0
+    counts.p5.should be >= 0
+    counts.bf16.should be >= 0
+    counts.f32.should eq(0)
+    (counts.p4 + counts.p5 + counts.bf16).should eq(counts.total)
+    stats.raw_bytes.should eq((2 * 2 * kv_dim * sizeof(Float32)).to_i64)
+    stats.payload_bytes.should be < stats.raw_bytes
+    layer.k_cache.not_nil![0, kv_dim].should eq(original_k[0, kv_dim])
+    layer.k_cache.not_nil![2 * kv_dim, kv_dim].should_not eq(original_k[2 * kv_dim, kv_dim])
+  end
+
   it "roundtrips the requested span in shared Metal storage" do
     pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
 
@@ -170,6 +218,10 @@ describe ML::GGUF::QwenQBitKVQuality do
         ML::GGUF::QwenQBitAdaptiveKV::Tier::P4,
         {0 => ML::GGUF::QwenQBitAdaptiveKV::Tier::BF16},
       )
+    end
+
+    expect_raises(ArgumentError, /normalized-error bound/) do
+      ML::GGUF::QwenQBitKVQuality.select_tier(Array(Float32).new(256, 0.0_f32), 0.0)
     end
   end
 end

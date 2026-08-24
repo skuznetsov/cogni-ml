@@ -220,6 +220,37 @@ universal selector or a numeric ECS threshold. The next calibration gate must
 expand prompts, lengths, and retirement policies and replace manual response
 classification with a repeatable semantic judge before policy widening.
 
+### Row-local selector falsifier
+
+The quality-only probe can also choose the cheapest p4, p5, or BF16 tier whose
+maximum reconstruction residual, normalized by the row standard deviation,
+fits `--selected-max-error`. It reports the resulting tier histogram. The
+selector runs after each semantic row exists and roundtrips it into the
+diagnostic Float32 cache; it neither changes resident allocation nor estimates
+the cost of a fused GPU selector.
+
+On a guarded 16-token sky-scattering slice, the row-local proxy failed the
+promotion test:
+
+| Policy | Logical KV density | Retire top-1 | Ranked top-2 slots | Token ECS mean | Meaning preserved |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| coarse BF16 layers `27,43,47,51` | 3.7647x | 15/16 | 28/30 | 0.934414 | yes |
+| selected max error `1.5` | 2.2036x | 16/16 | 30/30 | 1.000000 | yes |
+| selected max error `3.0` | 3.8487x | 14/16 | 26/30 | 0.876178 | yes |
+
+The strict selector preserves the tested local decisions only by retaining
+many BF16 rows. At comparable density, it is worse than the coarse layer map.
+Therefore row-local normalized reconstruction error is rejected as a sole tier
+selector: value-space error does not encode downstream model sensitivity. The
+next KISS calibration boundary is a static `(layer, K/V, KV head)` sensitivity
+map, validated by the same top-1/top-2/ECS/meaning vector.
+
+This is also the shape compatible with the existing immutable resident plan:
+tier and sidecar offsets are fixed before the K/V values exist. A truly
+value-dependent or age-dependent online selector still requires a separate
+two-pass compaction, dynamic arena, or hot-tail repack design and remains
+guard-only.
+
 Mutable row replacement and compressed active DeltaNet state remain guard-only.
 The later default-off runtime slice owns compact K/V immediately after each
 successful prefill command; this calibration corpus alone does not promote its

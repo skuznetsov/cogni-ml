@@ -24285,3 +24285,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Trigger: a compressed retire/restore changes a token decision under an otherwise identical exact prefix. Transport: exact prefix -> exact and compressed top-2 -> position-aligned output-row ECS -> separately decoded free response. Boundary: identical teacher-forced position, immutable tokenizer/model identity, and no post-divergence free-run positional alignment. Potential: `{whole-response semantic failure, exact top-1 absent from candidate top-2, low or misaligned token ECS, resident bytes}` lexicographically. Recompute classifies free-response meaning independently, preventing a local metric improvement from hiding a semantic regression. Dual frame: full-F32 KV under the same prompt and generation policy.
 
 **decision:** Use top-1, top-2 coverage, position-aligned token ECS, and whole-response meaning as a joint quality vector. Do not promote a tier selector or set an ECS threshold from this corpus. Next expand the semantic corpus and make its response-level assessment repeatable before optimizing density further.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-LOCAL-SELECTOR-920] Row-local reconstruction error does not predict model sensitivity
+**context:** ml / Qwen3.8 / adaptive QBit / tier selection / falsifier
+**state:** diagnostic selector verified; resident-runtime promotion rejected
+
+- claim: "The quality probe can reproducibly choose and report p4, p5, or BF16 per completed `(token, K/V, KV head)` row from a normalized maximum reconstruction-error bound."
+  source: `QwenQBitKVQuality.select_tier` tests p4 then p5 and uses BF16 as the bounded escape; `roundtrip_layers_span_selected!` applies it only to completed 256-value semantic rows and accumulates tier counts. The CLI accepts repeatable `--selected-max-error` policies and emits prefix and append histograms. The focused spec passed `8 examples, 0 failures, 0 errors, 0 pending`; the release quality probe built successfully.
+  verified_at: 2026-08-24
+  decay_trigger: Gaussian codec, adaptive tier format, semantic row geometry, quality probe routing, or histogram schema change
+  trust: {F:0.94,G:0.38,R:0.90}
+
+- claim: "Row-local normalized error is rejected as the sole adaptive tier selector on the measured quality-density frontier."
+  source: guarded Qwen3.8-27B Q4_K_M sky-scattering runs with eight-token retirement and 16 generated tokens. Bound `1.5` retained top-1 `16/16`, ranked top-2 `30/30`, ECS `1.0`, and meaning at only `2.2036x` density. Bound `3.0` reached `3.8487x` but fell to top-1 `14/16`, ranked top-2 `26/30`, and ECS `0.876178`. The coarse BF16 layer map `27,43,47,51` achieved comparable `3.7647x` with top-1 `15/16`, ranked top-2 `28/30`, ECS `0.934414`, and the same preserved meaning.
+  verified_at: 2026-08-24
+  decay_trigger: prompt/model/tokenizer, retirement order, selector error definition, codec, generation length, or quality-vector implementation change
+  trust: {F:0.91,G:0.15,R:0.85}
+
+**Adversary:** This is one prompt and 16 generated tokens. The result falsifies promotion of this specific local proxy; it does not prove that no value-dependent feature can help. ECS uses `output.weight` rows and is not a human semantic metric. The diagnostic selector re-encodes on CPU into an F32 cache, so its timing is not resident GPU performance. BF16 is treated as the escape without first predicting its own error, and no held-out head-sensitivity corpus exists yet.
+
+**LTP/WBA:** Trigger: a completed semantic KV row is assigned the cheapest tier satisfying a local value-space bound. Transport: row values -> p4/p5 reconstruction error -> tier -> retire/restore -> teacher-forced and free generation. Boundary: identical prompt/model/tokenizer, row geometry, retirement order, and joint semantic/top-1/top-2/ECS quality vector. Potential: `{semantic failure, top-1/top-2 loss, ECS loss, resident bytes}`. At comparable bytes the local selector worsens earlier quality coordinates, so compression gain cannot promote it. Dual frame: the calibration-derived fixed layer map under the same probe.
+
+**decision:** Keep the row-local selector as a reproducible quality diagnostic only. Do not add it to the immutable resident plan. The next bounded policy is a static `(layer, K/V, KV head)` calibration map, which can be planned before values exist; online value/age selection remains a separate guarded design.
