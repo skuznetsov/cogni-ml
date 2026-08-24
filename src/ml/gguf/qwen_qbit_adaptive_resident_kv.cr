@@ -44,6 +44,10 @@ module ML::GGUF
       @cache_len : Int32
       @k_plan : QwenQBitAdaptiveKV::Plan?
       @v_plan : QwenQBitAdaptiveKV::Plan?
+      @pending_status : ML::MetalBuffer?
+      @pending_command : ML::Metal::CommandBuffer?
+      @pending_token_count : Int32
+      @pending_start_token : Int32
 
       def self.from_admission(admission : CacheAdmission) : self
         new(admission)
@@ -65,6 +69,10 @@ module ML::GGUF
         @v_plan = admission.v_plan
         @lifecycle_mutex = Mutex.new
         @released = false
+        @pending_status = nil
+        @pending_command = nil
+        @pending_token_count = 0
+        @pending_start_token = 0
       end
 
       def cache_len : Int32
@@ -93,6 +101,7 @@ module ML::GGUF
       def release : Nil
         @lifecycle_mutex.synchronize do
           return if @released
+          ensure_no_pending!
           @released = true
           buffers.each(&.release)
         end
@@ -103,6 +112,7 @@ module ML::GGUF
       def with_live_buffers(&)
         @lifecycle_mutex.synchronize do
           ensure_live!
+          ensure_no_pending!
           yield @k_base, @k_metadata, @k_sidecar,
             @v_base, @v_metadata, @v_sidecar, @cache_len
         end
@@ -113,6 +123,7 @@ module ML::GGUF
       def with_append(token_count : Int32, &)
         @lifecycle_mutex.synchronize do
           ensure_live!
+          ensure_no_pending!
           k_plan = @k_plan
           v_plan = @v_plan
           unless k_plan && v_plan
@@ -136,6 +147,7 @@ module ML::GGUF
       def with_snapshot_buffers(&)
         @lifecycle_mutex.synchronize do
           ensure_live!
+          ensure_no_pending!
           k_plan = @k_plan
           v_plan = @v_plan
           unless k_plan && v_plan
@@ -146,6 +158,109 @@ module ML::GGUF
         end
       end
 
+      # Internal encoder lease: unlike normal reads this is legal only while a
+      # shared-command append reservation is active. Publication is still
+      # controlled exclusively by `finish_pending_append!`.
+      def with_pending_buffers(&)
+        @lifecycle_mutex.synchronize do
+          ensure_live!
+          unless @pending_status
+            raise ArgumentError.new("adaptive resident QBit append is not pending")
+          end
+          yield @k_base, @k_metadata, @k_sidecar,
+            @v_base, @v_metadata, @v_sidecar
+        end
+      end
+
+      # Reserve one append whose encoders are owned by an external command
+      # buffer. The old prefix remains the only visible prefix until the caller
+      # waits for that command and explicitly publishes the completion status.
+      def begin_pending_append!(token_count : Int32,
+                                expected_start_token : Int32,
+                                status : ML::MetalBuffer,
+                                command : ML::Metal::CommandBuffer) : Int32
+        @lifecycle_mutex.synchronize do
+          ensure_live!
+          ensure_no_pending!
+          if command.committed?
+            raise ArgumentError.new("adaptive resident QBit append requires an uncommitted command")
+          end
+          unless @k_plan && @v_plan
+            raise ArgumentError.new("adaptive resident QBit cache is not appendable")
+          end
+          unless token_count > 0
+            raise ArgumentError.new("adaptive resident QBit append token count must be positive")
+          end
+          unless expected_start_token == @cache_len
+            raise ArgumentError.new("adaptive resident QBit append start does not match the live prefix")
+          end
+          if @cache_len.to_i64 + token_count > @max_seq
+            raise ArgumentError.new("adaptive resident QBit append exceeds cache capacity")
+          end
+          unless status.valid? && status.size >= sizeof(UInt32)
+            raise ArgumentError.new("adaptive resident QBit pending status buffer is invalid")
+          end
+
+          @pending_status = status
+          @pending_command = command
+          @pending_token_count = token_count
+          @pending_start_token = @cache_len
+          @pending_start_token
+        end
+      end
+
+      # Publish only after the caller has committed and waited for the external
+      # command. A failed/non-executed marker clears the reservation without
+      # advancing the visible prefix, so a clean retry remains possible.
+      def finish_pending_append!(command : ML::Metal::CommandBuffer) : Nil
+        @lifecycle_mutex.synchronize do
+          ensure_live!
+          status = @pending_status
+          raise ArgumentError.new("adaptive resident QBit append is not pending") unless status
+          ensure_pending_command!(command)
+          unless command.completed_successfully?
+            raise ArgumentError.new("adaptive resident QBit publication requires its command to complete successfully")
+          end
+
+          status_code = status.contents.as(Pointer(UInt32)).value
+          token_count = @pending_token_count
+          clear_pending!
+          status.release
+          unless status_code == DEVICE_SUCCESS
+            raise ArgumentError.new("adaptive resident QBit prefill/pack failed closed (status=#{status_code})")
+          end
+          @cache_len += token_count
+        end
+      end
+
+      # Cancellation may reopen the reserved destination rows only while the
+      # bound command is still uncommitted or after it has completed. An
+      # in-flight/unknown command deliberately leaves the cache pending.
+      def cancel_pending_append!(command : ML::Metal::CommandBuffer) : Nil
+        @lifecycle_mutex.synchronize do
+          return unless status = @pending_status
+          ensure_pending_command!(command)
+          if command.committed? && !command.completed?
+            raise ArgumentError.new("adaptive resident QBit command is not completed; cancellation is unsafe")
+          end
+          clear_pending!
+          status.release
+        end
+      end
+
+      def with_pending_status(command : ML::Metal::CommandBuffer, &)
+        @lifecycle_mutex.synchronize do
+          ensure_live!
+          status = @pending_status
+          raise ArgumentError.new("adaptive resident QBit append is not pending") unless status
+          ensure_pending_command!(command)
+          if command.committed?
+            raise ArgumentError.new("adaptive resident QBit finalizer requires an uncommitted command")
+          end
+          yield status
+        end
+      end
+
       private def buffers : Array(ML::MetalBuffer)
         [@k_base, @k_metadata, @k_sidecar,
          @v_base, @v_metadata, @v_sidecar]
@@ -153,6 +268,26 @@ module ML::GGUF
 
       private def ensure_live! : Nil
         raise ArgumentError.new("adaptive resident QBit cache has been released") if @released
+      end
+
+      private def ensure_no_pending! : Nil
+        if @pending_status
+          raise ArgumentError.new("adaptive resident QBit append is pending shared-command completion")
+        end
+      end
+
+      private def clear_pending! : Nil
+        @pending_status = nil
+        @pending_command = nil
+        @pending_token_count = 0
+        @pending_start_token = 0
+      end
+
+      private def ensure_pending_command!(command : ML::Metal::CommandBuffer) : Nil
+        pending_command = @pending_command
+        unless pending_command && pending_command.same?(command)
+          raise ArgumentError.new("adaptive resident QBit command does not own the pending append")
+        end
       end
     end
 
@@ -312,12 +447,63 @@ module ML::GGUF
         raise "Metal disabled (cpu_only)"
       {% else %}
         raise "Metal not available" unless Qwen35Metal.available?
-        cache.with_append(token_count) do |k_base, k_metadata, k_sidecar, v_base, v_metadata, v_sidecar, _k_plan, _v_plan, start_token|
-          status = upload(Bytes.new(sizeof(UInt32), 0_u8))
-          begin
+        command = ML::Metal::CommandBuffer.new
+        encode_prefill_chunk_and_append(
+          command, cache,
+          q_source, gate_source, k_source, v_source, output,
+          token_count, n_head, heads_per_group, scale,
+          expected_start_token: cache.cache_len,
+        )
+        begin
+          finalize_pending_append(command, cache)
+          command.commit_and_wait
+          finish_pending_append!(cache, command)
+        rescue ex
+          if !command.committed? || command.completed?
+            cancel_pending_append!(cache, command)
+          end
+          raise ex
+        end
+      {% end %}
+      nil
+    end
+
+    # Encode attention over packed history plus the exact current Float32
+    # chunk, followed by K/V packing, into a caller-owned command buffer. The
+    # cache remains unpublished and exclusively reserved until
+    # `finish_pending_append!` observes the completion marker after a wait.
+    def encode_prefill_chunk_and_append(command : ML::Metal::CommandBuffer,
+                                        cache : Cache,
+                                        q_source : ML::MetalBuffer,
+                                        gate_source : ML::MetalBuffer,
+                                        k_source : ML::MetalBuffer,
+                                        v_source : ML::MetalBuffer,
+                                        output : ML::MetalBuffer,
+                                        token_count : Int32,
+                                        n_head : Int32,
+                                        heads_per_group : Int32,
+                                        scale : Float32,
+                                        expected_start_token : Int32) : Nil
+      validate_prefill_buffers(
+        cache, q_source, gate_source, k_source, v_source, output,
+        token_count, n_head, heads_per_group, scale,
+      )
+
+      {% if flag?(:cpu_only) %}
+        raise "Metal disabled (cpu_only)"
+      {% else %}
+        raise "Metal not available" unless Qwen35Metal.available?
+        if command.committed?
+          raise ArgumentError.new("adaptive resident QBit append requires an uncommitted command")
+        end
+        status = upload(Bytes.new(sizeof(UInt32), 0_u8))
+        reserved = false
+        begin
+          start_token = cache.begin_pending_append!(token_count, expected_start_token, status, command)
+          reserved = true
+          cache.with_pending_buffers do |k_base, k_metadata, k_sidecar, v_base, v_metadata, v_sidecar|
             destination_row_offset = checked_u32(start_token.to_i64 * cache.n_head_kv, "destination row offset")
             row_count = checked_i32(token_count.to_i64 * cache.n_head_kv, "row count")
-            command = ML::Metal::CommandBuffer.new
             encode_prefill_chunk(
               command, q_source, gate_source, k_source, v_source,
               k_base, k_metadata, k_sidecar,
@@ -330,18 +516,45 @@ module ML::GGUF
               0_u32, destination_row_offset, row_count)
             encode_pack(command, v_source, v_base, v_metadata, v_sidecar, status,
               0_u32, destination_row_offset, row_count)
-            encode_finalize(command, status)
-            command.commit_and_wait
-            status_code = read_u32(status)
-            unless status_code == DEVICE_SUCCESS
-              raise ArgumentError.new("adaptive resident QBit prefill/pack failed closed (status=#{status_code})")
-            end
-          ensure
+          end
+        rescue ex
+          if reserved
+            cache.cancel_pending_append!(command) unless command.committed?
+          else
             status.release
           end
+          raise ex
         end
       {% end %}
       nil
+    end
+
+    # This must be the final encoder added to the caller-owned command. Its
+    # non-zero marker certifies that all earlier attention, pack, and later
+    # model encoders in that command reached the tail without a device error.
+    def finalize_pending_append(command : ML::Metal::CommandBuffer,
+                                cache : Cache) : Nil
+      if command.committed?
+        raise ArgumentError.new("adaptive resident QBit finalizer requires an uncommitted command")
+      end
+      {% if flag?(:cpu_only) %}
+        raise "Metal disabled (cpu_only)"
+      {% else %}
+        cache.with_pending_status(command) do |status|
+          encode_finalize(command, status)
+        end
+      {% end %}
+      nil
+    end
+
+    def finish_pending_append!(cache : Cache,
+                               command : ML::Metal::CommandBuffer) : Nil
+      cache.finish_pending_append!(command)
+    end
+
+    def cancel_pending_append!(cache : Cache,
+                               command : ML::Metal::CommandBuffer) : Nil
+      cache.cancel_pending_append!(command)
     end
 
     # Read back only the live compressed prefix for validation or durable

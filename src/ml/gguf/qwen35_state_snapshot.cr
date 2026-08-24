@@ -133,6 +133,9 @@ module ML::GGUF
     {% end %}
 
     def capture(state : Qwen35CPU::State) : Snapshot
+      if state.adaptive_kv?
+        raise ArgumentError.new("adaptive resident QBit KV snapshot is unsupported")
+      end
       records = [] of Record
       positions = Array(Int32).new(state.layers.size)
       state.layers.each_with_index do |layer, i|

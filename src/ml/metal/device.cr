@@ -69,6 +69,14 @@
           raise "Metal disabled (cpu_only)"
         end
 
+        def completed? : Bool
+          false
+        end
+
+        def completed_successfully? : Bool
+          false
+        end
+
         def commit : Nil
           raise "Metal disabled (cpu_only)"
         end
@@ -255,6 +263,8 @@ module ML
     class CommandBuffer
       @handle : Pointer(Void)
       @committed : Bool = false
+      @completed : Bool = false
+      @completion_status : Int32? = nil
 
       def initialize(fast : Bool = false, queue : CommandQueue? = nil)
         raise "Metal not available" unless Device.available?
@@ -277,9 +287,12 @@ module ML
 
       # Commit and wait for completion
       def commit_and_wait : Nil
-        return if @committed
-        MetalDeviceFFI.commit_and_wait(@handle)
+        return verify_completion! if @completed
+        return wait if @committed
         @committed = true
+        @completion_status = MetalDeviceFFI.commit_and_wait_status(@handle)
+        @completed = true
+        verify_completion!
       end
 
       # Commit without waiting (async GPU execution)
@@ -291,11 +304,30 @@ module ML
 
       # Wait for already-committed buffer to complete
       def wait : Nil
-        MetalDeviceFFI.wait_command_buffer(@handle)
+        return verify_completion! if @completed
+        raise "cannot wait for an uncommitted Metal command buffer" unless @committed
+        @completion_status = MetalDeviceFFI.wait_command_buffer_status(@handle)
+        @completed = true
+        verify_completion!
       end
 
       def committed? : Bool
         @committed
+      end
+
+      def completed? : Bool
+        @completed
+      end
+
+      def completed_successfully? : Bool
+        @completed && @completion_status == 0
+      end
+
+      private def verify_completion! : Nil
+        status = @completion_status
+        unless status == 0
+          raise "Metal command buffer failed (completion_status=#{status})"
+        end
       end
 
       def finalize
@@ -394,7 +426,9 @@ lib MetalDeviceFFI
   fun enqueue_command_buffer = gs_enqueue_command_buffer(cmd : Pointer(Void)) : Void
   fun commit_command_buffer = gs_commit_command_buffer(cmd : Pointer(Void)) : Void
   fun wait_command_buffer = gs_wait_command_buffer(cmd : Pointer(Void)) : Void
+  fun wait_command_buffer_status = gs_wait_command_buffer_status(cmd : Pointer(Void)) : Int32
   fun commit_and_wait = gs_commit_and_wait(cmd_buffer : Pointer(Void)) : Void
+  fun commit_and_wait_status = gs_commit_and_wait_status(cmd_buffer : Pointer(Void)) : Int32
   fun commit = gs_commit(cmd_buffer : Pointer(Void)) : Void
 
   # Pipeline compilation
@@ -424,7 +458,9 @@ lib MetalDeviceFFI
   fun enqueue_command_buffer = gs_enqueue_command_buffer(cmd : Pointer(Void)) : Void
   fun commit_command_buffer = gs_commit_command_buffer(cmd : Pointer(Void)) : Void
   fun wait_command_buffer = gs_wait_command_buffer(cmd : Pointer(Void)) : Void
+  fun wait_command_buffer_status = gs_wait_command_buffer_status(cmd : Pointer(Void)) : Int32
   fun commit_and_wait = gs_commit_and_wait(cmd_buffer : Pointer(Void)) : Void
+  fun commit_and_wait_status = gs_commit_and_wait_status(cmd_buffer : Pointer(Void)) : Int32
   fun commit = gs_commit(cmd_buffer : Pointer(Void)) : Void
   fun create_pipeline = gs_create_pipeline(source : Pointer(UInt8), function_name : Pointer(UInt8)) : Pointer(Void)
   fun create_pipeline_from_library = gs_create_pipeline_from_library(library_path : Pointer(UInt8), function_name : Pointer(UInt8)) : Pointer(Void)

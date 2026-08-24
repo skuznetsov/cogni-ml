@@ -417,6 +417,166 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
     end
   end
 
+  it "publishes an externally encoded append only after the shared command completes" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    head_dim = 256
+    n_head = 6
+    q_values = n_head * head_dim
+    q = Array(Float32).new(q_values, 0.125_f32)
+    gate = Array(Float32).new(q_values, 0.0_f32)
+    kv = Array(Float32).new(head_dim, 0.25_f32)
+    plan = adaptive.plan([ML::GGUF::QwenQBitAdaptiveKV::Tier::P4])
+    buffers = [
+      ML::MetalBuffer.from_array(q),
+      ML::MetalBuffer.from_array(gate),
+      ML::MetalBuffer.from_array(kv),
+      ML::MetalBuffer.from_array(kv),
+      ML::MetalBuffer.new(q_values.to_i64 * sizeof(Float32)),
+    ]
+    resident = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
+      plan, plan, 1, 1, head_dim,
+    )
+    begin
+      command = ML::Metal::CommandBuffer.new
+      ML::GGUF::QwenQBitAdaptiveResidentKV.encode_prefill_chunk_and_append(
+        command, resident,
+        buffers[0], buffers[1], buffers[2], buffers[3], buffers[4],
+        1, n_head, 6, 1.0_f32,
+        expected_start_token: 0,
+      )
+
+      resident.cache_len.should eq(0)
+      expect_raises(ArgumentError, /complete successfully/) do
+        ML::GGUF::QwenQBitAdaptiveResidentKV.finish_pending_append!(resident, command)
+      end
+      expect_raises(ArgumentError, /pending/) do
+        ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(resident)
+      end
+      expect_raises(ArgumentError, /pending/) { resident.release }
+
+      ML::GGUF::QwenQBitAdaptiveResidentKV.finalize_pending_append(
+        command, resident,
+      )
+      command.commit_and_wait
+      ML::GGUF::QwenQBitAdaptiveResidentKV.finish_pending_append!(resident, command)
+      resident.cache_len.should eq(1)
+      packed_k, packed_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(resident)
+      adaptive.validate(packed_k)
+      adaptive.validate(packed_v)
+    ensure
+      if command
+        ML::GGUF::QwenQBitAdaptiveResidentKV.cancel_pending_append!(resident, command)
+      end
+      resident.release
+      buffers.each(&.release)
+    end
+  end
+
+  it "requires a true command-tail marker before publishing an external append" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    head_dim = 256
+    n_head = 6
+    q_values = n_head * head_dim
+    plan = adaptive.plan([ML::GGUF::QwenQBitAdaptiveKV::Tier::P4])
+    buffers = [
+      ML::MetalBuffer.from_array(Array(Float32).new(q_values, 0.125_f32)),
+      ML::MetalBuffer.from_array(Array(Float32).new(q_values, 0.0_f32)),
+      ML::MetalBuffer.from_array(Array(Float32).new(head_dim, 0.25_f32)),
+      ML::MetalBuffer.from_array(Array(Float32).new(head_dim, 0.25_f32)),
+      ML::MetalBuffer.new(q_values.to_i64 * sizeof(Float32)),
+    ]
+    resident = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(plan, plan, 1, 1, head_dim)
+    begin
+      command = ML::Metal::CommandBuffer.new
+      ML::GGUF::QwenQBitAdaptiveResidentKV.encode_prefill_chunk_and_append(
+        command, resident,
+        buffers[0], buffers[1], buffers[2], buffers[3], buffers[4],
+        1, n_head, 6, 1.0_f32,
+        expected_start_token: 0,
+      )
+
+      command.commit_and_wait
+      expect_raises(ArgumentError, /failed closed/) do
+        ML::GGUF::QwenQBitAdaptiveResidentKV.finish_pending_append!(resident, command)
+      end
+      resident.cache_len.should eq(0)
+    ensure
+      if command
+        ML::GGUF::QwenQBitAdaptiveResidentKV.cancel_pending_append!(resident, command)
+      end
+      resident.release
+      buffers.each(&.release)
+    end
+  end
+
+  it "keeps a failed externally encoded append unpublished and permits retry" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    head_dim = 256
+    n_head = 6
+    q_values = n_head * head_dim
+    valid_q = Array(Float32).new(q_values, 0.125_f32)
+    invalid_q = valid_q.dup
+    invalid_q[41] = Float32::NAN
+    gate = Array(Float32).new(q_values, 0.0_f32)
+    kv = Array(Float32).new(head_dim, 0.25_f32)
+    plan = adaptive.plan([ML::GGUF::QwenQBitAdaptiveKV::Tier::P4])
+    buffers = [
+      ML::MetalBuffer.from_array(invalid_q),
+      ML::MetalBuffer.from_array(gate),
+      ML::MetalBuffer.from_array(kv),
+      ML::MetalBuffer.from_array(kv),
+      ML::MetalBuffer.new(q_values.to_i64 * sizeof(Float32)),
+    ]
+    resident = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
+      plan, plan, 1, 1, head_dim,
+    )
+    begin
+      failed_command = ML::Metal::CommandBuffer.new
+      ML::GGUF::QwenQBitAdaptiveResidentKV.encode_prefill_chunk_and_append(
+        failed_command, resident,
+        buffers[0], buffers[1], buffers[2], buffers[3], buffers[4],
+        1, n_head, 6, 1.0_f32,
+        expected_start_token: 0,
+      )
+      ML::GGUF::QwenQBitAdaptiveResidentKV.finalize_pending_append(
+        failed_command, resident,
+      )
+      failed_command.commit_and_wait
+      expect_raises(ArgumentError, /failed closed/) do
+        ML::GGUF::QwenQBitAdaptiveResidentKV.finish_pending_append!(resident, failed_command)
+      end
+      resident.cache_len.should eq(0)
+
+      buffers[0].write(valid_q)
+      retry_command = ML::Metal::CommandBuffer.new
+      ML::GGUF::QwenQBitAdaptiveResidentKV.encode_prefill_chunk_and_append(
+        retry_command, resident,
+        buffers[0], buffers[1], buffers[2], buffers[3], buffers[4],
+        1, n_head, 6, 1.0_f32,
+        expected_start_token: 0,
+      )
+      ML::GGUF::QwenQBitAdaptiveResidentKV.finalize_pending_append(
+        retry_command, resident,
+      )
+      retry_command.commit
+      expect_raises(ArgumentError, /not completed/) do
+        ML::GGUF::QwenQBitAdaptiveResidentKV.cancel_pending_append!(resident, retry_command)
+      end
+      retry_command.wait
+      ML::GGUF::QwenQBitAdaptiveResidentKV.finish_pending_append!(resident, retry_command)
+      resident.cache_len.should eq(1)
+    ensure
+      if retry_command
+        ML::GGUF::QwenQBitAdaptiveResidentKV.cancel_pending_append!(resident, retry_command)
+      end
+      resident.release
+      buffers.each(&.release)
+    end
+  end
+
   it "rejects adaptive layouts that do not match the declared KV shape" do
     values = Array(Float32).new(2 * 256, 0.0_f32)
     encoded = adaptive.encode(values, [

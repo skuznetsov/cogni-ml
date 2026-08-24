@@ -273,14 +273,44 @@ below `2e-4`. A separate non-finite-query case kept `cache_len == 0` and a clean
 retry succeeded. All temporary and resident Metal buffers returned to the
 pre-test live-byte baseline.
 
-This proves the representation and ordering seam, not shipped-runtime memory
-reduction. Production still allocates full-capacity Float32 K/V. The next
-default-off integration must give one shape-gated full-attention layer an
-adaptive owner instead, route both prefill and decode through packed-aware
-consumers, and reject fork/snapshot/checkpoint paths before allocation until
-their ownership semantics are implemented. It must also encode into the
-existing shared prefill command rather than introduce an extra synchronization
-per layer.
+This proved the representation and ordering seam before runtime ownership was
+changed. The bounded integration below now gives one selected layer that owner;
+packed decode remains a separate frontier.
+
+### One-layer runtime prefill integration
+
+The default-off Qwen3.8 experiment accepts both
+`QWEN35_ADAPTIVE_RESIDENT_KV_LAYER=<index>` and
+`QWEN35_ADAPTIVE_RESIDENT_KV_TIER=p4|p5|bf16`. State preparation admits exactly
+one GQA6/head-dim-256 full-attention layer with a recurrent successor. That
+layer receives the adaptive owner instead of full-capacity Float32 K/V Metal
+buffers; every other full-attention layer keeps the ordinary owner. A missing
+selector, disabled shared-command/fused-prefill corridor, unsupported shape, or
+attempted coexistence fails before inference.
+
+The existing fused full-attention-plus-recurrent prefill invokes mixed-history
+attention and K/V packing inside its caller-owned Metal command. The adaptive
+prefix remains unpublished while later layer work is encoded. The outer prefill
+flush appends the success marker at the true command tail, commits and waits for
+that shared command, checks both `MTLCommandBuffer` completion status and the
+marker, and only then advances `cache_len`. The reservation is bound to that
+exact command object. Cancellation may reopen the rows only while the bound
+command is uncommitted or observably complete; an unknown outcome leaves the
+cache pending and unusable rather than permitting an unsafe retry.
+
+A guarded Qwen3.8-27B Q4_K_M smoke used BF16 rows on layer 3 and two prefill
+calls of `8 + 4` tokens. The second call consumed the first packed prefix. Both
+calls retained baseline top-1; the packed-history logit delta was
+`4.7683716e-6`. The selected layer published 12 rows, retained no Float32 KV
+owner, and used 83,968 bytes instead of 131,072 bytes at `max_seq=16`, or
+`1.56098x` density. These single-run timings are a correctness smoke, not a
+throughput comparison because baseline execution paid Metal source compilation.
+
+This slice is deliberately prefill-only. Single-token decode, fork/copy,
+snapshot, checkpoint swapping, tail clearing, and `Qwen35NativeRuntime` reject
+adaptive ownership explicitly. A uniform p4 or p5 selector remains diagnostic;
+the earlier quality gate rejected both as global defaults. Packed decode and a
+calibrated mixed-tier owner are the next independent promotion steps.
 
 ## Admitted surface
 
@@ -305,6 +335,10 @@ per layer.
   current chunk, then pack that chunk later in the same command buffer. The
   longer prefix may become visible only after attention and both packers leave
   a clean shared status and the final device completion marker is present.
+- A default-off Qwen3.8 runtime experiment may replace one selected
+  full-attention layer's persistent Float32 KV buffers with that resident owner
+  during multi-token fused prefill. Publication belongs to the existing shared
+  command flush. Decode and state-copy/persistence operations must fail closed.
 - The real-model quality probe may apply an explicitly supplied tier per
   full-attention layer to calibrate the finer row-addressable representation.
   Such maps are diagnostic inputs, not runtime policy.
@@ -416,8 +450,10 @@ per layer.
   slice. Envelope schema v1 and the ClickHouse table schema are internal
   boundaries and may still change before production promotion.
 - No claim that scalar MSE implies autoregressive parity.
-- No fixed layer escape map, immediate production-prefill compactness, adaptive
-  decode speedup, or eightfold production context-window claim is admitted.
+- No fixed layer escape map, all-layer or enabled-by-default production
+  compactness, adaptive decode speedup, or eightfold production context-window
+  claim is admitted. Immediate compactness is established only for one
+  explicitly selected prefill layer under the bounded Qwen3.8 experiment.
 - No claim that ClickHouse background merges are on the cache-hit critical
   path: newly inserted rows must remain readable before a part merge completes.
 - No native ClickHouse TCP packet framing/compression, automatic retry policy,

@@ -24191,3 +24191,31 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Trigger: a bounded current chunk has exact temporary Q/K/V rows and an immutable packed prefix. Transport: packed history plus exact causal tail -> mixed attention -> append-only pack -> longer resident prefix. Boundary: history identity, causal visibility, exact current values, attention-before-pack ordering, and invisible failed publication. Potential: `{quality mismatch, invalid visible prefix, persistent KV bytes, full-corridor ms}` lexicographically. Recompute: two-chunk decoded-history parity plus failed-query retry. Dual frame: the unchanged full-F32 `LayerState` route.
 
 **decision:** Admit the mixed-history resident primitive only. The next default-off slice may replace one supported full-attention layer's persistent F32 owner, but it must reuse the existing shared prefill command, route decode through packed KV, and reject unsupported fork/snapshot/checkpoint semantics before adaptive allocation.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-RUNTIME-PREFILL-916] One runtime prefill layer owns compact KV immediately
+**context:** ml / Qwen3.8 / adaptive QBit / runtime ownership / fused prefill / Metal
+**state:** default-off prefill-only experiment implemented and verified
+
+- claim: "One selected Qwen3.8 full-attention layer can use adaptive resident KV as its sole persistent owner during real fused prefill."
+  source: `QWEN35_ADAPTIVE_RESIDENT_KV_LAYER` plus `QWEN35_ADAPTIVE_RESIDENT_KV_TIER` allocate one GQA6/head-dim-256 owner before ordinary KV allocation and skip that layer's full-capacity Float32 K/V buffers. The metadata-backed state spec verified ordinary default ownership, sole adaptive ownership, shape/corridor rejection, and fail-closed fork, snapshot, tail-clear, copy, and checkpoint-swap boundaries. The targeted guarded suite excluding the independently failing Crystal raw-thread test passed `91 examples, 0 failures, 0 errors, 1 pending`.
+  verified_at: 2026-08-24
+  decay_trigger: `LayerState` ownership, state preparation, Qwen geometry, prefill routing, or lifecycle API change
+  trust: {F:0.94,G:0.31,R:0.90}
+
+- claim: "Adaptive publication follows the existing shared Metal command rather than introducing a per-layer wait."
+  source: the fused full-attention-plus-recurrent route calls mixed-history attention and both packers through a callback on its caller-owned command. `cache_len` stays unchanged while the command is pending; the outer prefill flush places the success marker at the true command tail, commits, waits, then requires both successful `MTLCommandBuffer` completion and the marker before publication. The reservation is bound to that exact command object, and cancellation accepts it only while uncommitted or observably complete, so an unknown outcome cannot reopen destination rows. Focused tests verified pre-completion invisibility, missing-tail rejection, pending snapshot/release rejection, failed-command non-publication, in-flight cancellation rejection, and clean retry.
+  verified_at: 2026-08-24
+  decay_trigger: shared-command scheduling, completion-marker protocol, adaptive cache locking, or prefill flush ownership change
+  trust: {F:0.95,G:0.40,R:0.92}
+
+- claim: "A second real-model prefill can consume the first packed prefix with negligible BF16 error on the bounded smoke."
+  source: guarded Qwen3.8-27B Q4_K_M execution selected layer 3 and ran `8 + 4` tokens. The first and second predictions retained baseline top-1, packed-history logit delta was `4.7683716e-6`, and the cache published `8 -> 12` tokens. At `max_seq=16`, selected-layer KV used 83,968 bytes instead of 131,072 bytes (`1.56098x`) and retained no Float32 owner. A subsequent single-token decode was explicitly rejected.
+  verified_at: 2026-08-24
+  decay_trigger: model weights, Metal kernels, BF16 layout, selected layer, prompt tokens, prefill ordering, or default route settings change
+  trust: {F:0.92,G:0.20,R:0.87}
+
+**Adversary:** This is one BF16 layer, two short chunks, and a fixed diagnostic tier plan. It does not establish all-layer quality, packed decode, adaptive policy, long-context scaling, or an eightfold context increase. Baseline timing paid Metal source compilation, so the smoke is not throughput evidence. The canonical QBit safe script is currently red on an unchanged 2026-08-15 async-writer test: under Crystal 1.21.0, `close` called from a raw `Thread` reaches `Thread#join` without a scheduler. The failure reproduces alone and is outside this KV diff.
+
+**LTP/WBA:** Trigger: a supported full-attention prefill group with exact temporary Q/K/V and a packed immutable prefix. Transport: sole compact `LayerState` owner -> mixed-history attention -> append pack -> later layers on the same command -> completion publication. Boundary: no full-capacity Float32 alias, exact current causal tail, one unpublished reservation, and explicit rejection of operations without packed semantics. Potential: `{quality mismatch, invalid visible prefix, duplicate persistent bytes, synchronization count}`. Recompute: two-call model parity, ownership inspection, completion-marker tests, and decode rejection. Dual frame: unchanged ordinary Float32 state when selectors are absent.
+
+**decision:** Admit the default-off one-layer prefill experiment only. Keep decode, persistence, copy/checkpoint, and native runtime fail-closed. The next atomic slice is packed single-token decode for the same owner; calibrated mixed-tier policy and multi-layer promotion remain later gates.

@@ -7783,8 +7783,8 @@ module ML
                                                              q_norm : Array(Float32),
                                                              k_norm : Array(Float32),
                                                              out_qw : QuantWeight,
-                                                             k_cache_buf : ML::MetalBuffer,
-                                                             v_cache_buf : ML::MetalBuffer,
+                                                             k_cache_buf : ML::MetalBuffer?,
+                                                             v_cache_buf : ML::MetalBuffer?,
                                                              post_attention_norm : Array(Float32),
                                                              ffn_gate_qw : QuantWeight,
                                                              ffn_up_qw : QuantWeight,
@@ -7814,7 +7814,8 @@ module ML
                                                              input_buf : ML::MetalBuffer? = nil,
                                                              output_buf : ML::MetalBuffer? = nil,
                                                              read_output : Bool = true,
-                                                             append_command_buffer : ML::Metal::CommandBuffer? = nil) : Array(Float32)?
+                                                             append_command_buffer : ML::Metal::CommandBuffer? = nil,
+                                                             adaptive_prefill_encoder : Proc(ML::Metal::CommandBuffer, ML::MetalBuffer, ML::MetalBuffer, ML::MetalBuffer, ML::MetalBuffer, ML::MetalBuffer, Nil)? = nil) : Array(Float32)?
           q_pipe = gemv_pipeline_for(q_qw)
           k_pipe = gemv_pipeline_for(k_qw)
           v_pipe = gemv_pipeline_for(v_qw)
@@ -7827,6 +7828,11 @@ module ML
           return nil unless n_tokens > 0
           return nil if rec_layers.empty?
           return nil if append_command_buffer && read_output
+          if adaptive_prefill_encoder
+            raise ArgumentError.new("adaptive resident QBit KV cannot coexist with F32 KV buffers") if k_cache_buf || v_cache_buf
+          else
+            return nil unless k_cache_buf && v_cache_buf
+          end
           return nil unless conv_state_bufs.size == rec_layers.size && ssm_state_bufs.size == rec_layers.size
           checkpoint_requested = !checkpoint_index.nil?
           if checkpoint_requested
@@ -8062,46 +8068,52 @@ module ML
             phase_t0 = checked[1]
           end
 
-          kvwrite_enc = ML::Metal::ComputeEncoder.new(cmd)
-          kvwrite_enc.set_pipeline(kv_write_rows_pipeline)
-          kvwrite_enc.set_buffer(full_k_buf, 0)
-          kvwrite_enc.set_buffer(full_v_buf, 1)
-          kvwrite_enc.set_buffer(k_cache_buf, 2, ML::Metal::BufferAccess::ReadWrite)
-          kvwrite_enc.set_buffer(v_cache_buf, 3, ML::Metal::BufferAccess::ReadWrite)
-          kvwrite_enc.set_value(start_pos.to_u32, 4)
-          kvwrite_enc.set_value(kv_dim.to_u32, 5)
-          kvwrite_enc.set_value(n_tokens.to_u32, 6)
-          kvwrite_enc.dispatch_1d(n_tokens * kv_dim, 256)
-          kvwrite_enc.end_encoding
+          if adaptive_encoder = adaptive_prefill_encoder
+            adaptive_encoder.call(
+              cmd, full_q_buf, full_gate_buf, full_k_buf, full_v_buf, full_attn_buf,
+            )
+          else
+            kvwrite_enc = ML::Metal::ComputeEncoder.new(cmd)
+            kvwrite_enc.set_pipeline(kv_write_rows_pipeline)
+            kvwrite_enc.set_buffer(full_k_buf, 0)
+            kvwrite_enc.set_buffer(full_v_buf, 1)
+            kvwrite_enc.set_buffer(k_cache_buf.not_nil!, 2, ML::Metal::BufferAccess::ReadWrite)
+            kvwrite_enc.set_buffer(v_cache_buf.not_nil!, 3, ML::Metal::BufferAccess::ReadWrite)
+            kvwrite_enc.set_value(start_pos.to_u32, 4)
+            kvwrite_enc.set_value(kv_dim.to_u32, 5)
+            kvwrite_enc.set_value(n_tokens.to_u32, 6)
+            kvwrite_enc.dispatch_1d(n_tokens * kv_dim, 256)
+            kvwrite_enc.end_encoding
+
+            attn_enc = ML::Metal::ComputeEncoder.new(cmd)
+            use_attn_sg4 = prefill_attn_rows_sg4_enabled? && n_tokens >= 4
+            use_direct_gate = !prefill_attn_rows_sg4_pregate_enabled? && prefill_attn_rows_sg4_direct_gate_enabled?(n_tokens)
+            attn_sg4_pipeline = use_direct_gate ? attn_rows_sg4_pipeline : attn_rows_sg4_pregate_pipeline
+            attn_enc.set_pipeline(use_attn_sg4 ? attn_sg4_pipeline : attn_rows_pipeline)
+            attn_enc.set_buffer(full_q_buf, 0)
+            attn_enc.set_buffer(full_gate_buf, 1)
+            attn_enc.set_buffer(k_cache_buf.not_nil!, 2)
+            attn_enc.set_buffer(v_cache_buf.not_nil!, 3)
+            attn_enc.set_buffer(full_attn_buf, 4, ML::Metal::BufferAccess::Write)
+            attn_enc.set_value(start_pos.to_u32, 5)
+            attn_enc.set_value(n_tokens.to_u32, 6)
+            attn_enc.set_value(n_head.to_u32, 7)
+            attn_enc.set_value(n_head_kv.to_u32, 8)
+            attn_enc.set_value(head_dim.to_u32, 9)
+            attn_enc.set_value(heads_per_group.to_u32, 10)
+            attn_enc.set_value(scale, 11)
+            if use_attn_sg4
+              attn_enc.dispatch_threadgroups({n_head, (n_tokens + 3) // 4, 1}, {128, 1, 1})
+            else
+              attn_enc.dispatch_threadgroups({n_head, n_tokens, 1}, {32, 1, 1})
+            end
+            attn_enc.end_encoding
+          end
           if full_detail_profile
             checked = prefill_phase_checkpoint(cmd, "#{profile_label}.full.kvwrite", phase_t0)
             cmd = checked[0]
             phase_t0 = checked[1]
           end
-
-          attn_enc = ML::Metal::ComputeEncoder.new(cmd)
-          use_attn_sg4 = prefill_attn_rows_sg4_enabled? && n_tokens >= 4
-          use_direct_gate = !prefill_attn_rows_sg4_pregate_enabled? && prefill_attn_rows_sg4_direct_gate_enabled?(n_tokens)
-          attn_sg4_pipeline = use_direct_gate ? attn_rows_sg4_pipeline : attn_rows_sg4_pregate_pipeline
-          attn_enc.set_pipeline(use_attn_sg4 ? attn_sg4_pipeline : attn_rows_pipeline)
-          attn_enc.set_buffer(full_q_buf, 0)
-          attn_enc.set_buffer(full_gate_buf, 1)
-          attn_enc.set_buffer(k_cache_buf, 2)
-          attn_enc.set_buffer(v_cache_buf, 3)
-          attn_enc.set_buffer(full_attn_buf, 4, ML::Metal::BufferAccess::Write)
-          attn_enc.set_value(start_pos.to_u32, 5)
-          attn_enc.set_value(n_tokens.to_u32, 6)
-          attn_enc.set_value(n_head.to_u32, 7)
-          attn_enc.set_value(n_head_kv.to_u32, 8)
-          attn_enc.set_value(head_dim.to_u32, 9)
-          attn_enc.set_value(heads_per_group.to_u32, 10)
-          attn_enc.set_value(scale, 11)
-          if use_attn_sg4
-            attn_enc.dispatch_threadgroups({n_head, (n_tokens + 3) // 4, 1}, {128, 1, 1})
-          else
-            attn_enc.dispatch_threadgroups({n_head, n_tokens, 1}, {32, 1, 1})
-          end
-          attn_enc.end_encoding
           if full_detail_profile
             checked = prefill_phase_checkpoint(cmd, "#{profile_label}.full.attn_rows", phase_t0)
             cmd = checked[0]

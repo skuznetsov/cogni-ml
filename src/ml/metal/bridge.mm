@@ -339,11 +339,35 @@ extern "C" void gs_wait_command_buffer(void* cmd_handle) {
     [cmd waitUntilCompleted];
 }
 
+// Wait and return a stable completion certificate to the host. Zero means the
+// complete command buffer finished successfully; every other value is a
+// fail-closed encoding of MTLCommandBufferStatus (or a null handle).
+extern "C" int32_t gs_wait_command_buffer_status(void* cmd_handle) {
+    if (cmd_handle == nullptr) return -1;
+    id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)cmd_handle;
+    [cmd waitUntilCompleted];
+    MTLCommandBufferStatus status = cmd.status;
+    return status == MTLCommandBufferStatusCompleted
+        ? 0
+        : -((int32_t)status + 1);
+}
+
 extern "C" void commit_and_wait_impl(void* cmd_handle) {
     if (cmd_handle == nullptr) return;
     id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)cmd_handle;
     [cmd commit];
     [cmd waitUntilCompleted];
+}
+
+extern "C" int32_t gs_commit_and_wait_status(void* cmd_handle) {
+    if (cmd_handle == nullptr) return -1;
+    id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)cmd_handle;
+    [cmd commit];
+    [cmd waitUntilCompleted];
+    MTLCommandBufferStatus status = cmd.status;
+    return status == MTLCommandBufferStatusCompleted
+        ? 0
+        : -((int32_t)status + 1);
 }
 
 extern "C" void commit_impl(void* cmd_handle) {
