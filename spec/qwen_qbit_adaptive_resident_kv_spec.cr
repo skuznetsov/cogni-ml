@@ -515,6 +515,61 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
     end
   end
 
+  it "keeps every cache unpublished when one shared-command append fails" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    head_dim = 256
+    n_head = 6
+    q_values = n_head * head_dim
+    plan = adaptive.plan([ML::GGUF::QwenQBitAdaptiveKV::Tier::P4])
+    valid_q = Array(Float32).new(q_values, 0.125_f32)
+    invalid_q = valid_q.dup
+    invalid_q[41] = Float32::NAN
+    gate = Array(Float32).new(q_values, 0.0_f32)
+    kv = Array(Float32).new(head_dim, 0.25_f32)
+    buffers = [valid_q, invalid_q].map do |q|
+      [
+        ML::MetalBuffer.from_array(q),
+        ML::MetalBuffer.from_array(gate),
+        ML::MetalBuffer.from_array(kv),
+        ML::MetalBuffer.from_array(kv),
+        ML::MetalBuffer.new(q_values.to_i64 * sizeof(Float32)),
+      ]
+    end
+    residents = Array.new(2) do
+      ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(plan, plan, 1, 1, head_dim)
+    end
+    begin
+      command = ML::Metal::CommandBuffer.new
+      residents.each_with_index do |resident, i|
+        layer_buffers = buffers[i]
+        ML::GGUF::QwenQBitAdaptiveResidentKV.encode_prefill_chunk_and_append(
+          command, resident,
+          layer_buffers[0], layer_buffers[1], layer_buffers[2], layer_buffers[3], layer_buffers[4],
+          1, n_head, 6, 1.0_f32,
+          expected_start_token: 0,
+        )
+      end
+      residents.each do |resident|
+        ML::GGUF::QwenQBitAdaptiveResidentKV.finalize_pending_append(command, resident)
+      end
+      command.commit_and_wait
+
+      expect_raises(ArgumentError, /failed closed/) do
+        ML::GGUF::QwenQBitAdaptiveResidentKV.finish_pending_appends!(residents, command)
+      end
+      residents.each { |resident| resident.cache_len.should eq(0) }
+    ensure
+      if command
+        residents.each do |resident|
+          ML::GGUF::QwenQBitAdaptiveResidentKV.cancel_pending_append!(resident, command)
+        end
+      end
+      residents.each(&.release)
+      buffers.each { |layer_buffers| layer_buffers.each(&.release) }
+    end
+  end
+
   it "keeps a failed externally encoded append unpublished and permits retry" do
     pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
 

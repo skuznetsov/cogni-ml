@@ -1016,7 +1016,9 @@ module ML::GGUF
       # fused decode wave is disabled, because lower-level paths can still use
       # Metal.
       return unless route.backend.primary.metal?
-      if ENV["QWEN35_ADAPTIVE_RESIDENT_KV_LAYER"]? || ENV["QWEN35_ADAPTIVE_RESIDENT_KV_TIER"]?
+      if ENV["QWEN35_ADAPTIVE_RESIDENT_KV_LAYER"]? ||
+         ENV["QWEN35_ADAPTIVE_RESIDENT_KV_TIER"]? ||
+         ENV["QWEN35_ADAPTIVE_RESIDENT_KV_MAP"]?
         raise ArgumentError.new("adaptive resident QBit KV is not admitted by Qwen35NativeRuntime")
       end
       Qwen35CPU.prepare_state_metal!(state, weights.hparams)

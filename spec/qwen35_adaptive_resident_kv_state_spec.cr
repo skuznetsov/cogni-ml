@@ -6,10 +6,11 @@ require "../src/ml/gguf/qwen35_state_snapshot"
 QWEN_38_ADAPTIVE_STATE    = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf"
 QWEN_35_9B_ADAPTIVE_STATE = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 
-private def with_adaptive_state_env(layer : String?, tier : String?, &)
+private def with_adaptive_state_env(layer : String?, tier : String?, map : String? = nil, &)
   keys = [
     "QWEN35_ADAPTIVE_RESIDENT_KV_LAYER",
     "QWEN35_ADAPTIVE_RESIDENT_KV_TIER",
+    "QWEN35_ADAPTIVE_RESIDENT_KV_MAP",
     "QWEN35_PREFILL_APPEND_CMD_OFF",
     "QWEN35_PREFILL_RESIDENT_BOUNDARY_OFF",
     "QWEN35_PREFILL_FUSE_FULL_REC_OFF",
@@ -28,6 +29,11 @@ private def with_adaptive_state_env(layer : String?, tier : String?, &)
     ENV["QWEN35_ADAPTIVE_RESIDENT_KV_TIER"] = tier
   else
     ENV.delete("QWEN35_ADAPTIVE_RESIDENT_KV_TIER")
+  end
+  if map
+    ENV["QWEN35_ADAPTIVE_RESIDENT_KV_MAP"] = map
+  else
+    ENV.delete("QWEN35_ADAPTIVE_RESIDENT_KV_MAP")
   end
   yield
 ensure
@@ -119,6 +125,91 @@ describe ML::GGUF::Qwen35CPU do
     end
   ensure
     release_adaptive_state!(state) if state
+    gguf.try(&.close)
+  end
+
+  it "gives every Qwen3.8 full-attention layer a sole mixed-tier compact KV owner" do
+    pending!("Qwen3.8 27B model not present") unless File.exists?(QWEN_38_ADAPTIVE_STATE)
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    gguf = ML::GGUF::GGUFFile.new(QWEN_38_ADAPTIVE_STATE)
+    hp = ML::GGUF::Qwen35Hparams.new(gguf)
+    state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 8)
+    with_adaptive_state_env(nil, nil, "p4;27=bf16,43=bf16,47=bf16,51=bf16") do
+      ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp)
+    end
+
+    state.adaptive_kv_layer_indices.should eq(hp.full_attention_layers)
+    adaptive_bytes = 0_i64
+    hp.full_attention_layers.each do |layer_index|
+      layer = state.layers[layer_index]
+      layer.k_cache.should be_nil
+      layer.v_cache.should be_nil
+      layer.k_cache_buf.should be_nil
+      layer.v_cache_buf.should be_nil
+      adaptive_bytes += layer.adaptive_kv.not_nil!.compressed_bytes
+    end
+    raw_kv_bytes = hp.full_attention_layers.size.to_i64 * 2_i64 *
+                   state.max_seq * hp.n_head_kv * hp.head_dim * sizeof(Float32)
+    adaptive_bytes.should be < raw_kv_bytes
+    state.layers[27].adaptive_kv.not_nil!.compressed_bytes.should be >
+                                                                  state.layers[3].adaptive_kv.not_nil!.compressed_bytes
+  ensure
+    release_adaptive_state!(state) if state
+    gguf.try(&.close)
+  end
+
+  it "rejects changing an allocated all-layer tier map" do
+    pending!("Qwen3.8 27B model not present") unless File.exists?(QWEN_38_ADAPTIVE_STATE)
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    gguf = ML::GGUF::GGUFFile.new(QWEN_38_ADAPTIVE_STATE)
+    hp = ML::GGUF::Qwen35Hparams.new(gguf)
+    state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 8)
+    with_adaptive_state_env(nil, nil, "p4") do
+      ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp)
+    end
+    with_adaptive_state_env(nil, nil, "p5") do
+      expect_raises(ArgumentError, /tier map cannot change/) do
+        ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp)
+      end
+    end
+  ensure
+    release_adaptive_state!(state) if state
+    gguf.try(&.close)
+  end
+
+  it "rejects ambiguous and non-attention all-layer maps before allocation" do
+    pending!("Qwen3.8 27B model not present") unless File.exists?(QWEN_38_ADAPTIVE_STATE)
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    gguf = ML::GGUF::GGUFFile.new(QWEN_38_ADAPTIVE_STATE)
+    hp = ML::GGUF::Qwen35Hparams.new(gguf)
+
+    with_adaptive_state_env("3", "p4", "p4") do
+      state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 8)
+      expect_raises(ArgumentError, /cannot be combined/) do
+        ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp)
+      end
+      state.layers.all?(&.adaptive_kv.nil?).should be_true
+    end
+
+    with_adaptive_state_env(nil, nil, "p4;26=bf16") do
+      state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 8)
+      expect_raises(ArgumentError, /full-attention/) do
+        ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp)
+      end
+      state.layers.all?(&.adaptive_kv.nil?).should be_true
+    end
+
+    with_adaptive_state_env(nil, nil, "p4;3=p5,3=bf16") do
+      state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 8)
+      expect_raises(ArgumentError, /duplicate layer/) do
+        ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp)
+      end
+      state.layers.all?(&.adaptive_kv.nil?).should be_true
+    end
+  ensure
     gguf.try(&.close)
   end
 

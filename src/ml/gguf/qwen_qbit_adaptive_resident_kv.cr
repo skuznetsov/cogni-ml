@@ -13,6 +13,29 @@ module ML::GGUF
   module QwenQBitAdaptiveResidentKV
     extend self
 
+    {% if flag?(:cpu_only) %}
+      # Keep the resident cache type available to shared state declarations
+      # without importing Metal into CPU-only builds. No CPU path constructs or
+      # submits this command type.
+      private class DisabledCommandBuffer
+        def committed? : Bool
+          false
+        end
+
+        def completed? : Bool
+          false
+        end
+
+        def completed_successfully? : Bool
+          false
+        end
+      end
+
+      alias ResidentCommandBuffer = DisabledCommandBuffer
+    {% else %}
+      alias ResidentCommandBuffer = ML::Metal::CommandBuffer
+    {% end %}
+
     DEVICE_SUCCESS = 0xa17ecafe_u32
 
     # Only the validated module factories can construct a resident cache. The
@@ -45,7 +68,7 @@ module ML::GGUF
       @k_plan : QwenQBitAdaptiveKV::Plan?
       @v_plan : QwenQBitAdaptiveKV::Plan?
       @pending_status : ML::MetalBuffer?
-      @pending_command : ML::Metal::CommandBuffer?
+      @pending_command : ResidentCommandBuffer?
       @pending_token_count : Int32
       @pending_start_token : Int32
 
@@ -178,7 +201,7 @@ module ML::GGUF
       def begin_pending_append!(token_count : Int32,
                                 expected_start_token : Int32,
                                 status : ML::MetalBuffer,
-                                command : ML::Metal::CommandBuffer) : Int32
+                                command : ResidentCommandBuffer) : Int32
         @lifecycle_mutex.synchronize do
           ensure_live!
           ensure_no_pending!
@@ -212,7 +235,7 @@ module ML::GGUF
       # Publish only after the caller has committed and waited for the external
       # command. A failed/non-executed marker clears the reservation without
       # advancing the visible prefix, so a clean retry remains possible.
-      def finish_pending_append!(command : ML::Metal::CommandBuffer) : Nil
+      def finish_pending_append!(command : ResidentCommandBuffer) : Nil
         @lifecycle_mutex.synchronize do
           ensure_live!
           status = @pending_status
@@ -233,10 +256,28 @@ module ML::GGUF
         end
       end
 
+      # Non-mutating half of group publication. Callers with several caches on
+      # one command validate every tail marker before advancing any live prefix.
+      def validate_pending_append!(command : ResidentCommandBuffer) : Nil
+        @lifecycle_mutex.synchronize do
+          ensure_live!
+          status = @pending_status
+          raise ArgumentError.new("adaptive resident QBit append is not pending") unless status
+          ensure_pending_command!(command)
+          unless command.completed_successfully?
+            raise ArgumentError.new("adaptive resident QBit publication requires its command to complete successfully")
+          end
+          status_code = status.contents.as(Pointer(UInt32)).value
+          unless status_code == DEVICE_SUCCESS
+            raise ArgumentError.new("adaptive resident QBit prefill/pack failed closed (status=#{status_code})")
+          end
+        end
+      end
+
       # Cancellation may reopen the reserved destination rows only while the
       # bound command is still uncommitted or after it has completed. An
       # in-flight/unknown command deliberately leaves the cache pending.
-      def cancel_pending_append!(command : ML::Metal::CommandBuffer) : Nil
+      def cancel_pending_append!(command : ResidentCommandBuffer) : Nil
         @lifecycle_mutex.synchronize do
           return unless status = @pending_status
           ensure_pending_command!(command)
@@ -248,7 +289,7 @@ module ML::GGUF
         end
       end
 
-      def with_pending_status(command : ML::Metal::CommandBuffer, &)
+      def with_pending_status(command : ResidentCommandBuffer, &)
         @lifecycle_mutex.synchronize do
           ensure_live!
           status = @pending_status
@@ -283,7 +324,7 @@ module ML::GGUF
         @pending_start_token = 0
       end
 
-      private def ensure_pending_command!(command : ML::Metal::CommandBuffer) : Nil
+      private def ensure_pending_command!(command : ResidentCommandBuffer) : Nil
         pending_command = @pending_command
         unless pending_command && pending_command.same?(command)
           raise ArgumentError.new("adaptive resident QBit command does not own the pending append")
@@ -472,7 +513,7 @@ module ML::GGUF
     # chunk, followed by K/V packing, into a caller-owned command buffer. The
     # cache remains unpublished and exclusively reserved until
     # `finish_pending_append!` observes the completion marker after a wait.
-    def encode_prefill_chunk_and_append(command : ML::Metal::CommandBuffer,
+    def encode_prefill_chunk_and_append(command : ResidentCommandBuffer,
                                         cache : Cache,
                                         q_source : ML::MetalBuffer,
                                         gate_source : ML::MetalBuffer,
@@ -532,7 +573,7 @@ module ML::GGUF
     # This must be the final encoder added to the caller-owned command. Its
     # non-zero marker certifies that all earlier attention, pack, and later
     # model encoders in that command reached the tail without a device error.
-    def finalize_pending_append(command : ML::Metal::CommandBuffer,
+    def finalize_pending_append(command : ResidentCommandBuffer,
                                 cache : Cache) : Nil
       if command.committed?
         raise ArgumentError.new("adaptive resident QBit finalizer requires an uncommitted command")
@@ -548,12 +589,20 @@ module ML::GGUF
     end
 
     def finish_pending_append!(cache : Cache,
-                               command : ML::Metal::CommandBuffer) : Nil
+                               command : ResidentCommandBuffer) : Nil
       cache.finish_pending_append!(command)
     end
 
+    # All caches share one completed command. Validate the complete set first,
+    # then publish; a bad layer therefore cannot expose a partial cache prefix.
+    def finish_pending_appends!(caches : Array(Cache),
+                                command : ResidentCommandBuffer) : Nil
+      caches.each { |cache| cache.validate_pending_append!(command) }
+      caches.each { |cache| cache.finish_pending_append!(command) }
+    end
+
     def cancel_pending_append!(cache : Cache,
-                               command : ML::Metal::CommandBuffer) : Nil
+                               command : ResidentCommandBuffer) : Nil
       cache.cancel_pending_append!(command)
     end
 

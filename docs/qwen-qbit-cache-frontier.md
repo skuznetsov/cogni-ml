@@ -44,26 +44,27 @@ and never establish cache visibility or admission.
 
 ## Resident KV experimental slice
 
-This is a separate default-off probe, not an extension of the durable cache
-runtime. It admits uniform p4/p5 payloads and a canonical adaptive payload whose
-affine block is exactly one `(token, KV head)` vector. Its Metal attention
+This is a separate default-off experiment, not an extension of the durable
+cache runtime. It admits uniform p4/p5 payloads and a canonical adaptive payload
+whose affine block is exactly one `(token, KV head)` vector. Its Metal attention
 decode consumes p4 bases plus optional p5/BF16/F32 sidecars directly without
-materializing an intermediate Float32 KV cache.
+materializing an intermediate Float32 KV cache. The Qwen3.8 path can now replace
+the persistent Float32 K/V owner for every configured full-attention layer
+during prefill and direct synchronous decode.
 
-- The resident-attention slice is synthetic and bounded. It does not replace
-  `LayerState.k_cache_buf` or `LayerState.v_cache_buf`, change live state
-  ownership, or route the 27B model through compressed buffers. A separate
-  roundtrip probe runs the real model only to calibrate numeric quality.
+- Qwen3.8-27B has 64 layers. The 16 full-attention layers are zero-based
+  `3,7,...,63`; the other 48 layers are recurrent/DeltaNet. Only the 16
+  token-linear K/V owners participate in resident adaptive compression.
 - Active DeltaNet/recurrent state remains uncompressed. QBit recurrent-state
   compression remains a save/restore transport concern because the active
   state has fixed size rather than token-linear growth.
 - The required falsifier is parity between fused Metal attention and the CPU
   reference over the *same decoded p4/p5 values*. A seeded plane-bit mutation
   must change the comparison result, proving that the parity check is live.
-- Automatic tier selection, hot tails, device-side retirement packing,
-  production runtime routing, and non-GQA6 shapes are guard-only follow-ups.
-  Memory-ratio measurements from this probe do not establish an eightfold
-  production context-window increase.
+- Automatic row/head/age tier selection, hot tails, state fork/copy,
+  persistence, native runtime routing, speculative/asynchronous decode, and
+  non-GQA6 shapes are guard-only follow-ups. Memory-ratio measurements from
+  this experiment do not establish an eightfold production context increase.
 
 Bounded synthetic evidence on Apple M2 Max (2026-08-23):
 
@@ -127,12 +128,11 @@ admissible policy is a fixed-index p4 base plus optional refinement planes and
 bounded escape metadata, calibrated by layer/head sensitivity and
 teacher-forced/free-run gates.
 
-Production still allocates and writes a full-capacity Float32 KV cache. A future
-resident implementation should instead retire and pack one bounded chunk at a
-time. Its persistent cache can then be compact after every completed chunk while
-only one current F32/H16 K/V scratch chunk remains transient. It cannot claim
-compactness during the first unfinished chunk, and this diagnostic roundtrip
-does not yet implement that ownership change.
+This calibration probe still allocates and writes a full-capacity Float32 KV
+cache. The later default-off runtime integration instead packs each completed
+chunk directly into its persistent resident owner while only current K/V scratch
+is transient. This earlier roundtrip result does not itself establish that
+ownership change.
 
 ### Adaptive resident row layout
 
@@ -220,10 +220,10 @@ universal selector or a numeric ECS threshold. The next calibration gate must
 expand prompts, lengths, and retirement policies and replace manual response
 classification with a repeatable semantic judge before policy widening.
 
-Runtime prefill ownership, mutable row replacement, and compressed DeltaNet
-state remain guard-only. Production still owns a complete Float32 KV
-allocation, so compactness is demonstrated for the experimental owner and
-fused consumer, not yet achieved immediately during production prefill.
+Mutable row replacement and compressed active DeltaNet state remain guard-only.
+The later default-off runtime slice owns compact K/V immediately after each
+successful prefill command; this calibration corpus alone does not promote its
+tier map to a production default.
 
 ### Append-only device packing slice
 
@@ -317,86 +317,60 @@ retry succeeded. All temporary and resident Metal buffers returned to the
 pre-test live-byte baseline.
 
 This proved the representation and ordering seam before runtime ownership was
-changed. The bounded integration below now gives one selected layer that owner;
-single-token decode now consumes and extends the same packed owner. Advanced
-asynchronous/speculative decode remains a separate frontier.
+changed. The bounded integration below now gives every configured
+full-attention layer that owner; single-token decode consumes and extends the
+same packed owners. Advanced asynchronous/speculative decode remains a separate
+frontier.
 
-### One-layer runtime prefill and decode integration
+### All-full-attention runtime prefill and decode integration
 
-The default-off Qwen3.8 experiment accepts both
-`QWEN35_ADAPTIVE_RESIDENT_KV_LAYER=<index>` and
-`QWEN35_ADAPTIVE_RESIDENT_KV_TIER=p4|p5|bf16`. State preparation admits exactly
-one GQA6/head-dim-256 full-attention layer with a recurrent successor. That
-layer receives the adaptive owner instead of full-capacity Float32 K/V Metal
-buffers; every other full-attention layer keeps the ordinary owner. A missing
-selector, disabled shared-command/fused-prefill corridor, unsupported shape, or
-attempted coexistence fails before inference.
+The default-off Qwen3.8 experiment accepts either the legacy one-layer pair
+`QWEN35_ADAPTIVE_RESIDENT_KV_LAYER` plus
+`QWEN35_ADAPTIVE_RESIDENT_KV_TIER`, or an all-layer map such as
+`QWEN35_ADAPTIVE_RESIDENT_KV_MAP=p4;27=bf16,43=bf16,47=bf16,51=bf16`.
+The map assigns its default tier to every full-attention layer and then applies
+explicit layer overrides. Mixing selector forms, duplicate overrides,
+recurrent-layer overrides, unsupported geometry, or a second Float32 owner
+fails before inference. Allocation is transactional across all selected layers.
 
-The existing fused full-attention-plus-recurrent prefill invokes mixed-history
-attention and K/V packing inside its caller-owned Metal command. The adaptive
-prefix remains unpublished while later layer work is encoded. The outer prefill
-flush appends the success marker at the true command tail, commits and waits for
-that shared command, checks both `MTLCommandBuffer` completion status and the
-marker, and only then advances `cache_len`. The reservation is bound to that
-exact command object. Cancellation may reopen the rows only while the bound
-command is uncommitted or observably complete; an unknown outcome leaves the
-cache pending and unusable rather than permitting an unsafe retry.
+Prefill keeps the intermediate hidden state and every temporary Q/K/V row on
+Metal. Fused full-attention-plus-recurrent groups append to one caller-owned
+command; layer 63 uses the standalone full-attention encoder because it has no
+recurrent successor. Every cache appends its completion marker at the true
+command tail. After successful command completion, all pending caches are
+validated before any `cache_len` is published, so a failure cannot expose a
+partially advanced layer set.
 
-A guarded Qwen3.8-27B Q4_K_M smoke used BF16 rows on layer 3 and two prefill
-calls of `8 + 4` tokens. The second call consumed the first packed prefix. Both
-calls retained baseline top-1; the packed-history logit delta was
-`4.7683716e-6`. The selected layer published 12 rows, retained no Float32 KV
-owner, and used 83,968 bytes instead of 131,072 bytes at `max_seq=16`, or
-`1.56098x` density. These single-run timings are a correctness smoke, not a
-throughput comparison because baseline execution paid Metal source compilation.
+Direct synchronous decode passes one adaptive encoder per selected layer into
+the existing whole-token Metal wave. Each full-attention layer consumes its
+packed prefix plus exact current K/V, then packs the current row in the same
+command. Group publication again validates every layer before advancing any of
+them. Position mismatch, duplicate ownership, a declined Metal wave, and
+unknown command outcome fail closed. `forward_hidden`, fork/copy, snapshots,
+checkpoint swapping, tail clearing, `Qwen35NativeRuntime`, and advanced
+asynchronous/speculative helpers remain outside this admitted corridor.
 
-Direct synchronous single-token helpers that use the ordinary whole-token Metal
-wave reuse the mixed-history kernel with `token_count=1`. The selected layer
-skips its Float32 KV write, attends to the published packed prefix plus the exact
-current K/V row, and packs that row before later layers and the optional output
-head finish on the same command. The outer route appends the completion marker
-at the true tail, waits for successful `MTLCommandBuffer` completion, verifies
-exact command ownership, and only then publishes `cache_len + 1`.
-If adaptive encoding fails before submission, the reservation is cancelled and
-the uncommitted native command handle is explicitly discarded.
+A guarded Qwen3.8-27B Q4_K_M all-BF16 run used `8 + 4` prefill tokens and 32
+teacher-forced decode comparisons. It retained `32/32` top-1 and `64/64`
+ranked top-2 slots, with top-1 and second-token ECS `1.0`; maximum winning-logit
+delta was `0.0038605`, below the unchanged `0.05` guard. Every one of the 16
+caches published 44 rows with no Float32 alias. Resident K/V used 3,694,592
+bytes instead of 5,767,168 bytes (`1.561x`).
 
-The route rejects a packed-prefix/`pos` mismatch, any second Float32 owner, more
-than one adaptive layer, a declined whole-token Metal wave, and direct use by
-advanced asynchronous helpers. `forward_hidden`, fork/copy, snapshot,
-checkpoint swapping, tail clearing, and `Qwen35NativeRuntime` also remain
-fail-closed because they do not yet preserve the same packed-state semantics.
+The deeper coarse map (`p4` plus BF16 layers `27,43,47,51`) is structurally
+stable but remains quality-red. On the same 32-step diagnostic it retained
+`32/32` top-1, `58/64` ranked top-2 slots, top-1 ECS `1.0`, mean second-token
+ECS `0.8512`, and `3.7647x` density, but maximum winning-logit delta reached
+`1.6252`. A p5 base improved ranked top-2 only to `59/64` and mean second-token
+ECS to `0.8815` while reducing density to `3.4595x`; it did not close the
+quality gate. These ordered timings show roughly 7-8% decode overhead but are
+not quiet-host throughput evidence.
 
-A guarded Qwen3.8-27B Q4_K_M smoke prefetched `8 + 4` tokens, then decoded one
-token. Packed and Float32 baselines retained decode top-1 `314`; maximum decode
-logit delta was `1.335144e-5`, and the packed cache advanced from 12 to 13 rows.
-The focused lifecycle/attention suite passed `16 examples`; the target QBit
-suite excluding the independently failing raw-thread writer test passed
-`91 examples, 0 failures, 0 errors, 1 pending`. These checks establish bounded
-correctness, not decode throughput.
-
-The same smoke now accepts a guarded `QWEN35_ADAPTIVE_DECODE_TOKENS=1..512`
-sweep. It records the baseline greedy trajectory, presents those same input
-tokens to the adaptive state, and checks every step for top-1 equality, exact
-`cache_len + 1` publication, finite logit drift, and absence of a selected-layer
-Float32 owner. Because every compared top-1 remained equal in the measured
-runs, the baseline-bound inputs were also the adaptive greedy inputs.
-
-On the same single prompt and BF16 layer 3, 64 and 128 decoded tokens passed the
-default `0.05` maximum-logit-delta guard. They retained `64/64` and `128/128`
-top-1 respectively, published 76 and 140 total rows, and measured maximum
-deltas `0.002687` and `0.010164`. At 256 tokens, ownership, publication, and
-`256/256` top-1 still held through 268 total rows, but the maximum delta reached
-`0.193283` and therefore failed the default guard. A diagnostic-only repeat
-with a `1.0` threshold and explicit
-`QWEN35_ADAPTIVE_ALLOW_LOGIT_DELTA_OVERRIDE=1` measured mean delta `0.004505`;
-the JSON records both the effective threshold and diagnostic status, and the
-override does not widen the admitted quality bound. Decode timings varied
-materially across the ordered single runs and are not throughput evidence.
-
-A uniform p4 or p5 selector remains diagnostic; the earlier quality gate
-rejected both as global defaults. Calibrated mixed tiers, multiple adaptive
-layers, state fork/copy, persistence, native runtime integration, and advanced
-asynchronous packed decode remain separate frontiers.
+The all-layer runtime mechanism is therefore admitted only as a default-off
+bounded experiment with a strict all-BF16 correctness control. Aggressive
+p4/p5 tier maps remain diagnostic calibration inputs. The next density move is
+row/head/age-sensitive tier selection with a larger held-out quality corpus,
+not relaxation of the `0.05` guard.
 
 ## Admitted surface
 
@@ -421,12 +395,13 @@ asynchronous packed decode remain separate frontiers.
   current chunk, then pack that chunk later in the same command buffer. The
   longer prefix may become visible only after attention and both packers leave
   a clean shared status and the final device completion marker is present.
-- A default-off Qwen3.8 runtime experiment may replace one selected
-  full-attention layer's persistent Float32 KV buffers with that resident owner
-  during multi-token fused prefill and synchronous single-token decode.
-  Publication belongs to the existing shared command tail. Advanced async,
-  native-runtime, hidden-state-only, and state-copy/persistence operations must
-  fail closed.
+- A default-off Qwen3.8 runtime experiment may replace any configured set of
+  full-attention layers' persistent Float32 KV buffers with resident owners
+  during multi-token prefill and synchronous single-token decode. An all-layer
+  map applies a default tier and explicit per-layer overrides. Group publication
+  belongs to the existing shared command tail and must validate every cache
+  before publishing any cache. Advanced async, native-runtime,
+  hidden-state-only, and state-copy/persistence operations must fail closed.
 - The real-model quality probe may apply an explicitly supplied tier per
   full-attention layer to calibrate the finer row-addressable representation.
   Such maps are diagnostic inputs, not runtime policy.
@@ -538,11 +513,12 @@ asynchronous packed decode remain separate frontiers.
   slice. Envelope schema v1 and the ClickHouse table schema are internal
   boundaries and may still change before production promotion.
 - No claim that scalar MSE implies autoregressive parity.
-- No fixed layer escape map, all-layer or enabled-by-default production
+- No fixed layer escape map as production policy, enabled-by-default
   compactness, adaptive decode speedup, or eightfold production context-window
-  claim is admitted. Immediate compactness is established only for one
-  explicitly selected prefill-and-decode layer under the bounded Qwen3.8
-  experiment.
+  claim is admitted. Immediate compact ownership is established for the
+  explicitly configured full-attention layers, including the bounded all-layer
+  Qwen3.8 experiment; aggressive p4/p5 maps remain diagnostic rather than a
+  production quality result.
 - No claim that ClickHouse background merges are on the cache-hit critical
   path: newly inserted rows must remain readable before a part merge completes.
 - No native ClickHouse TCP packet framing/compression, automatic retry policy,
@@ -588,8 +564,8 @@ asynchronous packed decode remain separate frontiers.
 - ClickHouse storage using fixed-size tiles and independently readable bit
   planes.
 - Progressive fetch or fallback from 6/7 planes to the full 8-plane code.
-- Row/head/age-sensitive KV tier selection, device-side retire packing, mutable
-  compressed-row replacement, non-GQA6 kernels, and production KV ownership.
+- Row/head/age-sensitive KV tier selection, mutable compressed-row replacement,
+  non-GQA6 kernels, lifecycle integration, and production-default promotion.
 
 ## Design laws
 

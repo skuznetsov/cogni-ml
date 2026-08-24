@@ -238,38 +238,57 @@ module ML::GGUF
 
         adaptive_config = adaptive_resident_kv_config(hp, state.max_seq)
         adaptive_indices = state.adaptive_kv_layer_indices
-        if adaptive_indices.size > 1
-          raise ArgumentError.new("adaptive resident QBit KV admits exactly one selected layer")
-        end
         if config = adaptive_config
-          if existing = adaptive_indices.first?
-            unless existing == config[0]
-              raise ArgumentError.new("adaptive resident QBit KV layer cannot change after allocation")
+          row_count64 = state.max_seq.to_i64 * hp.n_head_kv
+          if row_count64 > Int32::MAX
+            raise ArgumentError.new("adaptive resident QBit KV plan row count exceeds Int32")
+          end
+          if adaptive_indices.any?
+            unless adaptive_indices.sort == config.keys.sort
+              raise ArgumentError.new("adaptive resident QBit KV layer map cannot change after allocation")
+            end
+            config.each do |layer_index, tier|
+              tiers = Array(QwenQBitAdaptiveKV::Tier).new(row_count64.to_i, tier)
+              plan = QwenQBitAdaptiveKV.plan(tiers)
+              expected_bytes = 2_i64 * plan.payload_bytes
+              unless state.layers[layer_index].adaptive_kv.not_nil!.compressed_bytes == expected_bytes
+                raise ArgumentError.new("adaptive resident QBit KV tier map cannot change after allocation")
+              end
             end
           else
-            selected_state = state.layers[config[0]]
-            if selected_state.k_cache || selected_state.v_cache ||
-               selected_state.k_cache_buf || selected_state.v_cache_buf
-              raise ArgumentError.new("adaptive resident QBit KV requires a fresh state without an F32 owner")
+            config.each_key do |layer_index|
+              selected_state = state.layers[layer_index]
+              if selected_state.k_cache || selected_state.v_cache ||
+                 selected_state.k_cache_buf || selected_state.v_cache_buf
+                raise ArgumentError.new("adaptive resident QBit KV requires a fresh state without an F32 owner")
+              end
             end
-            row_count64 = state.max_seq.to_i64 * hp.n_head_kv
-            if row_count64 > Int32::MAX
-              raise ArgumentError.new("adaptive resident QBit KV plan row count exceeds Int32")
+            allocated = {} of Int32 => QwenQBitAdaptiveResidentKV::Cache
+            begin
+              config.each do |layer_index, tier|
+                tiers = Array(QwenQBitAdaptiveKV::Tier).new(row_count64.to_i, tier)
+                plan = QwenQBitAdaptiveKV.plan(tiers)
+                allocated[layer_index] = QwenQBitAdaptiveResidentKV.allocate(
+                  plan, plan, state.max_seq, hp.n_head_kv, hp.head_dim,
+                )
+              end
+            rescue ex
+              allocated.each_value(&.release)
+              raise ex
             end
-            tiers = Array(QwenQBitAdaptiveKV::Tier).new(row_count64.to_i, config[1])
-            plan = QwenQBitAdaptiveKV.plan(tiers)
-            selected_state.adaptive_kv = QwenQBitAdaptiveResidentKV.allocate(
-              plan, plan, state.max_seq, hp.n_head_kv, hp.head_dim,
-            )
-            adaptive_indices = [config[0]]
+            allocated.each do |layer_index, cache|
+              state.layers[layer_index].adaptive_kv = cache
+            end
+            adaptive_indices = config.keys.sort
           end
         end
 
-        adaptive_index = adaptive_indices.first?
-        if adaptive_index && clear
-          cache = state.layers[adaptive_index].adaptive_kv.not_nil!
-          unless cache.cache_len == 0
-            raise ArgumentError.new("adaptive resident QBit KV cannot clear a published cache in place")
+        if clear
+          adaptive_indices.each do |layer_index|
+            cache = state.layers[layer_index].adaptive_kv.not_nil!
+            unless cache.cache_len == 0
+              raise ArgumentError.new("adaptive resident QBit KV cannot clear a published cache in place")
+            end
           end
         end
 
@@ -282,7 +301,7 @@ module ML::GGUF
         state.layers.each_with_index do |layer, il|
           layer.position = 0
           if hp.full_attention?(il)
-            if adaptive_index == il
+            if adaptive_indices.includes?(il)
               if layer.k_cache || layer.v_cache || layer.k_cache_buf || layer.v_cache_buf
                 raise ArgumentError.new("adaptive resident QBit KV cannot coexist with an F32 owner")
               end
@@ -307,12 +326,18 @@ module ML::GGUF
     end
 
     private def adaptive_resident_kv_config(hp : Qwen35Hparams,
-                                            max_seq : Int32) : {Int32, QwenQBitAdaptiveKV::Tier}?
+                                            max_seq : Int32) : Hash(Int32, QwenQBitAdaptiveKV::Tier)?
       layer_raw = ENV["QWEN35_ADAPTIVE_RESIDENT_KV_LAYER"]?
       tier_raw = ENV["QWEN35_ADAPTIVE_RESIDENT_KV_TIER"]?
-      return nil unless layer_raw || tier_raw
+      map_raw = ENV["QWEN35_ADAPTIVE_RESIDENT_KV_MAP"]?
+      return nil unless layer_raw || tier_raw || map_raw
+      if map_raw && (layer_raw || tier_raw)
+        raise ArgumentError.new("QWEN35_ADAPTIVE_RESIDENT_KV_MAP cannot be combined with the single-layer selectors")
+      end
       unless layer_raw && tier_raw
-        raise ArgumentError.new("adaptive resident QBit KV requires both QWEN35_ADAPTIVE_RESIDENT_KV_LAYER and QWEN35_ADAPTIVE_RESIDENT_KV_TIER")
+        unless map_raw
+          raise ArgumentError.new("adaptive resident QBit KV requires both QWEN35_ADAPTIVE_RESIDENT_KV_LAYER and QWEN35_ADAPTIVE_RESIDENT_KV_TIER")
+        end
       end
       unless max_seq > 0
         raise ArgumentError.new("adaptive resident QBit KV maximum sequence must be positive")
@@ -334,25 +359,59 @@ module ML::GGUF
         raise ArgumentError.new("adaptive resident QBit KV requires fused chunked full+recurrent prefill")
       end
 
-      layer_index = layer_raw.to_i32?
+      if map = map_raw
+        sections = map.split(';')
+        unless sections.size.in?(1..2) && !sections[0].strip.empty?
+          raise ArgumentError.new("adaptive resident QBit KV map must be DEFAULT_TIER[;LAYER=TIER,...]")
+        end
+        default_tier = adaptive_resident_kv_tier(sections[0].strip)
+        config = {} of Int32 => QwenQBitAdaptiveKV::Tier
+        hp.full_attention_layers.each { |layer_index| config[layer_index] = default_tier }
+        if sections.size == 2
+          overrides = sections[1].strip
+          if overrides.empty?
+            raise ArgumentError.new("adaptive resident QBit KV map overrides cannot be empty")
+          end
+          seen = Set(Int32).new
+          overrides.split(',').each do |entry|
+            layer_text, override_tier = entry.split('=', 2)
+            unless layer_text && override_tier
+              raise ArgumentError.new("adaptive resident QBit KV map entries must use LAYER=TIER")
+            end
+            layer_index = layer_text.strip.to_i32?
+            unless layer_index && layer_index >= 0 && layer_index < hp.n_layer
+              raise ArgumentError.new("adaptive resident QBit KV layer selector is out of range")
+            end
+            unless hp.full_attention?(layer_index)
+              raise ArgumentError.new("adaptive resident QBit KV selected layer must be full-attention")
+            end
+            unless seen.add?(layer_index)
+              raise ArgumentError.new("adaptive resident QBit KV map contains a duplicate layer")
+            end
+            config[layer_index] = adaptive_resident_kv_tier(override_tier.strip)
+          end
+        end
+        return config
+      end
+
+      layer_index = layer_raw.not_nil!.to_i32?
       unless layer_index && layer_index >= 0 && layer_index < hp.n_layer
         raise ArgumentError.new("adaptive resident QBit KV layer selector is out of range")
       end
       unless hp.full_attention?(layer_index)
         raise ArgumentError.new("adaptive resident QBit KV selected layer must be full-attention")
       end
-      if layer_index + 1 >= hp.n_layer || !hp.recurrent?(layer_index + 1)
-        raise ArgumentError.new("adaptive resident QBit KV selected layer requires a recurrent successor")
-      end
+      {layer_index => adaptive_resident_kv_tier(tier_raw.not_nil!)}
+    end
 
-      tier = case tier_raw.downcase
-             when "p4"   then QwenQBitAdaptiveKV::Tier::P4
-             when "p5"   then QwenQBitAdaptiveKV::Tier::P5
-             when "bf16" then QwenQBitAdaptiveKV::Tier::BF16
-             else
-               raise ArgumentError.new("adaptive resident QBit KV tier must be p4, p5, or bf16")
-             end
-      {layer_index, tier}
+    private def adaptive_resident_kv_tier(raw : String) : QwenQBitAdaptiveKV::Tier
+      case raw.downcase
+      when "p4"   then QwenQBitAdaptiveKV::Tier::P4
+      when "p5"   then QwenQBitAdaptiveKV::Tier::P5
+      when "bf16" then QwenQBitAdaptiveKV::Tier::BF16
+      else
+        raise ArgumentError.new("adaptive resident QBit KV tier must be p4, p5, or bf16")
+      end
     end
 
     # Allocate only the recurrent portion of a Metal state. Recurrent
@@ -1129,7 +1188,10 @@ module ML::GGUF
                                                      hp : Qwen35Hparams,
                                                      max_seq : Int32,
                                                      read_output : Bool = true,
-                                                     output_buf : ML::MetalBuffer? = nil) : Array(Float32)?
+                                                     output_buf : ML::MetalBuffer? = nil,
+                                                     input_buf : ML::MetalBuffer? = nil,
+                                                     append_command_buffer : PrefillCommandBuffer? = nil,
+                                                     pending_adaptive_caches : Array(QwenQBitAdaptiveResidentKV::Cache)? = nil) : Array(Float32)?
       {% unless flag?(:cpu_only) %}
         return nil if ENV["QWEN35_FULL_PREFILL_CHUNK_OFF"]? == "1"
         return nil unless Qwen35Metal.available?
@@ -1144,32 +1206,78 @@ module ML::GGUF
 
         kv_dim = hp.head_dim * hp.n_head_kv
         bytes = (max_seq * kv_dim).to_i64 * sizeof(Float32)
-        k_buf = lstate.k_cache_buf
-        v_buf = lstate.v_cache_buf
-        if k_buf.nil?
-          k_buf = ML::MetalBuffer.new(bytes)
-          k_buf.contents.as(Pointer(UInt8)).clear(bytes)
-          lstate.k_cache_buf = k_buf
-        end
-        if v_buf.nil?
-          v_buf = ML::MetalBuffer.new(bytes)
-          v_buf.contents.as(Pointer(UInt8)).clear(bytes)
-          lstate.v_cache_buf = v_buf
+        adaptive_cache = lstate.adaptive_kv
+        k_buf = nil.as(ML::MetalBuffer?)
+        v_buf = nil.as(ML::MetalBuffer?)
+        adaptive_encoder = nil.as(AdaptivePrefillEncoder?)
+        unless adaptive_cache.nil?
+          selected_cache = adaptive_cache.as(QwenQBitAdaptiveResidentKV::Cache)
+          unless append_command_buffer && pending_adaptive_caches
+            raise ArgumentError.new("adaptive resident QBit KV requires shared-command publication ownership")
+          end
+          if lstate.k_cache || lstate.v_cache || lstate.k_cache_buf || lstate.v_cache_buf
+            raise ArgumentError.new("adaptive resident QBit KV cannot coexist with an F32 owner")
+          end
+          unless selected_cache.cache_len == start_pos
+            raise ArgumentError.new("adaptive resident QBit KV prefill start does not match the live prefix")
+          end
+          adaptive_encoder = ->(command : ML::Metal::CommandBuffer, q_source : ML::MetalBuffer, gate_source : ML::MetalBuffer, k_source : ML::MetalBuffer, v_source : ML::MetalBuffer, output : ML::MetalBuffer) do
+            QwenQBitAdaptiveResidentKV.encode_prefill_chunk_and_append(
+              command, selected_cache,
+              q_source, gate_source, k_source, v_source, output,
+              n_tokens, hp.n_head, hp.n_head // hp.n_head_kv,
+              (1.0 / Math.sqrt(hp.head_dim.to_f64)).to_f32,
+              expected_start_token: start_pos,
+            )
+          end
+        else
+          k_buf = lstate.k_cache_buf
+          v_buf = lstate.v_cache_buf
+          if k_buf.nil?
+            k_buf = ML::MetalBuffer.new(bytes)
+            k_buf.contents.as(Pointer(UInt8)).clear(bytes)
+            lstate.k_cache_buf = k_buf
+          end
+          if v_buf.nil?
+            v_buf = ML::MetalBuffer.new(bytes)
+            v_buf.contents.as(Pointer(UInt8)).clear(bytes)
+            lstate.v_cache_buf = v_buf
+          end
         end
 
         scale = (1.0 / Math.sqrt(hp.head_dim.to_f64)).to_f32
-        return Qwen35Metal.full_attn_layer_chunk_project(
-          inp,
-          lw.attn_q_qw, lw.attn_k_qw, lw.attn_v_qw,
-          lw.attn_norm, lw.attn_q_norm, lw.attn_k_norm, lw.attn_output_qw,
-          k_buf, v_buf,
-          lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
-          start_pos, n_tokens,
-          hp.n_head, hp.n_head_kv, hp.head_dim, hp.rope_dim_count,
-          hp.n_head // hp.n_head_kv, hp.rope_freq_base, hp.rms_eps, scale,
-          read_output: read_output,
-          output_buf: output_buf,
-        )
+        begin
+          result = Qwen35Metal.full_attn_layer_chunk_project(
+            inp,
+            lw.attn_q_qw, lw.attn_k_qw, lw.attn_v_qw,
+            lw.attn_norm, lw.attn_q_norm, lw.attn_k_norm, lw.attn_output_qw,
+            k_buf, v_buf,
+            lw.post_attention_norm, lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw,
+            start_pos, n_tokens,
+            hp.n_head, hp.n_head_kv, hp.head_dim, hp.rope_dim_count,
+            hp.n_head // hp.n_head_kv, hp.rope_freq_base, hp.rms_eps, scale,
+            read_output: read_output,
+            output_buf: output_buf,
+            input_buf: input_buf,
+            append_command_buffer: append_command_buffer,
+            adaptive_prefill_encoder: adaptive_encoder,
+          )
+        rescue ex
+          if failed_cache = adaptive_cache
+            if cmd = append_command_buffer
+              QwenQBitAdaptiveResidentKV.cancel_pending_append!(failed_cache, cmd) unless cmd.committed?
+            end
+          end
+          raise ex
+        end
+        if published_cache = adaptive_cache
+          unless result
+            QwenQBitAdaptiveResidentKV.cancel_pending_append!(published_cache, append_command_buffer.not_nil!)
+            raise ArgumentError.new("adaptive resident QBit KV full-attention prefill route declined after allocation")
+          end
+          pending_adaptive_caches.not_nil! << published_cache
+        end
+        result
       {% else %}
         nil
       {% end %}
@@ -2770,7 +2878,8 @@ module ML::GGUF
           return forward_top1(weights, token_ids[-1], start_pos + token_ids.size - 1, state)
         end
 
-        if ENV["QWEN35_FINAL_FULL_LAST_OFF"]? != "1" &&
+        if !state.layers[-1].adaptive_kv &&
+           ENV["QWEN35_FINAL_FULL_LAST_OFF"]? != "1" &&
            (last_layer = weights.layers[-1].as?(Qwen35FullAttnWeights)) &&
            metal_qw_supported?(last_layer.attn_q_qw) &&
            metal_qw_supported?(last_layer.attn_k_qw) &&
@@ -3231,9 +3340,7 @@ module ML::GGUF
               end
               cmd.commit
               cmd.wait
-              pending_adaptive_caches.each do |cache|
-                QwenQBitAdaptiveResidentKV.finish_pending_append!(cache, cmd)
-              end
+              QwenQBitAdaptiveResidentKV.finish_pending_appends!(pending_adaptive_caches, cmd)
             rescue ex
               if !cmd.committed? || cmd.completed?
                 pending_adaptive_caches.each do |cache|
@@ -3283,7 +3390,7 @@ module ML::GGUF
               end
             end
           end
-          flush_prefill_cmd.call if fused_read_output
+          flush_prefill_cmd.call if fused_read_output && !state.layers[il].adaptive_kv
 
           if fused = full_attn_then_recurrent_chunk_project_many_routed(
                x, n_tokens, start_pos, state, weights, il, hp, max_seq,
@@ -3308,6 +3415,43 @@ module ML::GGUF
               x = fused[0]
               gpu_hidden = nil
             end
+            next
+          end
+
+          if state.layers[il].adaptive_kv
+            cmd = append_prefill_cmd
+            unless cmd
+              raise ArgumentError.new("adaptive resident QBit KV lost its shared prefill command")
+            end
+            adaptive_read_output = need_output || il + 1 < layer_limit
+            adaptive_output_buf = if adaptive_read_output
+                                    ML::MetalBuffer.new(handoff_bytes)
+                                  elsif rb = resident_output_buf
+                                    rb
+                                  else
+                                    nil
+                                  end
+            adaptive_input = gpu_hidden ? [] of Float32 : x
+            adaptive_result = full_attn_layer_chunk_project_routed(
+              adaptive_input, n_tokens, start_pos, state.layers[il], lw, hp, max_seq,
+              read_output: false,
+              output_buf: adaptive_output_buf,
+              input_buf: gpu_hidden,
+              append_command_buffer: cmd,
+              pending_adaptive_caches: pending_adaptive_caches,
+            )
+            unless adaptive_result
+              raise ArgumentError.new("adaptive resident QBit KV full-attention prefill route is unavailable")
+            end
+            flush_prefill_cmd.call
+            gpu_hidden = nil
+            if adaptive_read_output
+              x = adaptive_output_buf.not_nil!.read(n_tokens * hp.n_embd)
+            else
+              resident_output_written.try { |flag| flag[0] = true } if resident_output_buf
+              x = [] of Float32
+            end
+            il += 1
             next
           end
 
@@ -3583,15 +3727,15 @@ module ML::GGUF
                                                     top1_allowed_ids : Array(Int32)?) : Array(Float32)
       {% unless flag?(:cpu_only) %}
         adaptive_indices = state.adaptive_kv_layer_indices
-        unless adaptive_indices.size == 1
-          raise ArgumentError.new("adaptive resident QBit decode requires exactly one selected layer")
-        end
+        raise ArgumentError.new("adaptive resident QBit decode requires at least one selected layer") if adaptive_indices.empty?
         unless pos >= 0 && pos < state.max_seq
           raise ArgumentError.new("adaptive resident QBit decode position exceeds state capacity")
         end
-        cache = state.layers[adaptive_indices.first].adaptive_kv.not_nil!
-        unless cache.cache_len == pos
-          raise ArgumentError.new("adaptive resident QBit decode position does not match the live prefix")
+        caches = adaptive_indices.map { |layer_index| state.layers[layer_index].adaptive_kv.not_nil! }
+        caches.each do |cache|
+          unless cache.cache_len == pos
+            raise ArgumentError.new("adaptive resident QBit decode position does not match the live prefix")
+          end
         end
 
         submission = forward_decode_wave_routed_async(
@@ -3606,14 +3750,18 @@ module ML::GGUF
 
         command = submission.cmd
         begin
-          QwenQBitAdaptiveResidentKV.finalize_pending_append(command, cache)
+          caches.each do |cache|
+            QwenQBitAdaptiveResidentKV.finalize_pending_append(command, cache)
+          end
           command.commit
           result = Qwen35Metal.wait_forward_decode_wave(submission)
-          QwenQBitAdaptiveResidentKV.finish_pending_append!(cache, command)
+          QwenQBitAdaptiveResidentKV.finish_pending_appends!(caches, command)
           result
         rescue ex
           if !command.committed? || command.completed?
-            QwenQBitAdaptiveResidentKV.cancel_pending_append!(cache, command)
+            caches.each do |cache|
+              QwenQBitAdaptiveResidentKV.cancel_pending_append!(cache, command)
+            end
           end
           raise ex
         end
@@ -3661,8 +3809,8 @@ module ML::GGUF
         if !adaptive_indices.empty? && !adaptive_decode
           raise ArgumentError.new("adaptive resident QBit KV decode requires the synchronous whole-token Metal route")
         end
-        if adaptive_decode && adaptive_indices.size != 1
-          raise ArgumentError.new("adaptive resident QBit decode requires exactly one selected layer")
+        if adaptive_decode && adaptive_indices.empty?
+          raise ArgumentError.new("adaptive resident QBit decode requires at least one selected layer")
         end
         return nil if ENV["QWEN35_DECODE_WAVE_OFF"]? == "1"
         return nil unless Qwen35Metal.available?
@@ -3700,29 +3848,24 @@ module ML::GGUF
         v_cache_bufs = Array(ML::MetalBuffer?).new(hp.n_layer, nil)
         conv_state_bufs = Array(ML::MetalBuffer?).new(hp.n_layer, nil)
         ssm_state_bufs = Array(ML::MetalBuffer?).new(hp.n_layer, nil)
-        adaptive_index = adaptive_decode ? adaptive_indices.first? : nil
-        adaptive_encoder = nil.as(AdaptivePrefillEncoder?)
+        adaptive_encoders = nil.as(Qwen35Metal::AdaptiveDecodeEncoders?)
 
-        if selected = adaptive_index
-          cache = state.layers[selected].adaptive_kv.not_nil!
-          unless cache.cache_len == pos
-            raise ArgumentError.new("adaptive resident QBit decode position does not match the live prefix")
+        if adaptive_decode
+          encoders = {} of Int32 => Qwen35Metal::AdaptiveDecodeEncoder
+          adaptive_indices.each do |selected|
+            cache = state.layers[selected].adaptive_kv.not_nil!
+            unless cache.cache_len == pos
+              raise ArgumentError.new("adaptive resident QBit decode position does not match the live prefix")
+            end
+            encoders[selected] = adaptive_decode_encoder_for(cache, hp, pos)
           end
-          adaptive_encoder = ->(command : ML::Metal::CommandBuffer, q_source : ML::MetalBuffer, gate_source : ML::MetalBuffer, k_source : ML::MetalBuffer, v_source : ML::MetalBuffer, output : ML::MetalBuffer) do
-            QwenQBitAdaptiveResidentKV.encode_prefill_chunk_and_append(
-              command, cache,
-              q_source, gate_source, k_source, v_source, output,
-              1, hp.n_head, hp.n_head // hp.n_head_kv,
-              (1.0 / Math.sqrt(hp.head_dim.to_f64)).to_f32,
-              expected_start_token: pos,
-            )
-          end
+          adaptive_encoders = encoders
         end
 
         weights.layers.each_with_index do |lw, il|
           case lw
           in Qwen35FullAttnWeights
-            if adaptive_index == il
+            if adaptive_decode && adaptive_indices.includes?(il)
               layer = state.layers[il]
               if layer.k_cache || layer.v_cache || layer.k_cache_buf || layer.v_cache_buf
                 raise ArgumentError.new("adaptive resident QBit KV cannot coexist with an F32 owner")
@@ -3796,11 +3939,26 @@ module ML::GGUF
           top1_store_index: top1_store_index,
           command_queue_name: command_queue_name,
           append_command_buffer: append_command_buffer,
-          adaptive_decode_layer: adaptive_index,
-          adaptive_decode_encoder: adaptive_encoder)
+          adaptive_decode_encoders: adaptive_encoders)
       {% else %}
         nil
       {% end %}
     end
+
+    {% unless flag?(:cpu_only) %}
+      private def adaptive_decode_encoder_for(cache : QwenQBitAdaptiveResidentKV::Cache,
+                                              hp : Qwen35Hparams,
+                                              pos : Int32) : Qwen35Metal::AdaptiveDecodeEncoder
+        ->(command : ML::Metal::CommandBuffer, q_source : ML::MetalBuffer, gate_source : ML::MetalBuffer, k_source : ML::MetalBuffer, v_source : ML::MetalBuffer, output : ML::MetalBuffer) do
+          QwenQBitAdaptiveResidentKV.encode_prefill_chunk_and_append(
+            command, cache,
+            q_source, gate_source, k_source, v_source, output,
+            1, hp.n_head, hp.n_head // hp.n_head_kv,
+            (1.0 / Math.sqrt(hp.head_dim.to_f64)).to_f32,
+            expected_start_token: pos,
+          )
+        end
+      end
+    {% end %}
   end
 end

@@ -20,6 +20,15 @@ require "./qwen35_weights"
 module ML
   module GGUF
     module Qwen35Metal
+      {% unless flag?(:cpu_only) %}
+        alias AdaptiveDecodeEncoder = Proc(
+          ML::Metal::CommandBuffer,
+          ML::MetalBuffer, ML::MetalBuffer, ML::MetalBuffer,
+          ML::MetalBuffer, ML::MetalBuffer, Nil,
+        )
+        alias AdaptiveDecodeEncoders = Hash(Int32, AdaptiveDecodeEncoder)
+      {% end %}
+
       Q4K_BLOCK_BYTES    = 144
       Q5K_BLOCK_BYTES    = 176
       Q6K_BLOCK_BYTES    = 210
@@ -7324,8 +7333,8 @@ module ML
                                                q_norm : Array(Float32),
                                                k_norm : Array(Float32),
                                                out_qw : QuantWeight,
-                                               k_cache_buf : ML::MetalBuffer,
-                                               v_cache_buf : ML::MetalBuffer,
+                                               k_cache_buf : ML::MetalBuffer?,
+                                               v_cache_buf : ML::MetalBuffer?,
                                                post_attention_norm : Array(Float32),
                                                ffn_gate_qw : QuantWeight,
                                                ffn_up_qw : QuantWeight,
@@ -7341,7 +7350,10 @@ module ML
                                                eps : Float32,
                                                scale : Float32,
                                                read_output : Bool = true,
-                                               output_buf : ML::MetalBuffer? = nil) : Array(Float32)?
+                                               output_buf : ML::MetalBuffer? = nil,
+                                               input_buf : ML::MetalBuffer? = nil,
+                                               append_command_buffer : ML::Metal::CommandBuffer? = nil,
+                                               adaptive_prefill_encoder : AdaptiveDecodeEncoder? = nil) : Array(Float32)?
           q_pipe = gemv_pipeline_for(q_qw)
           k_pipe = gemv_pipeline_for(k_qw)
           v_pipe = gemv_pipeline_for(v_qw)
@@ -7352,6 +7364,12 @@ module ML
           return nil if q_pipe.nil? || k_pipe.nil? || v_pipe.nil? || out_pipe.nil? ||
                         ffn_gate_pipe.nil? || ffn_up_pipe.nil? || ffn_down_pipe.nil?
           return nil unless n_tokens > 0
+          return nil if append_command_buffer && read_output
+          if adaptive_prefill_encoder
+            raise ArgumentError.new("adaptive resident QBit KV cannot coexist with F32 KV buffers") if k_cache_buf || v_cache_buf
+          else
+            return nil unless k_cache_buf && v_cache_buf
+          end
 
           ML::Metal::Device.init!
 
@@ -7359,11 +7377,16 @@ module ML
           q_dim = n_head * head_dim
           kv_dim = n_head_kv * head_dim
           ffn_dim = ffn_gate_qw.out_dim
-          raise "full_attn_layer_chunk input size mismatch" unless inp.size == n_tokens * hidden_dim
+          hidden_bytes = (n_tokens * hidden_dim).to_i64 * sizeof(Float32)
+          if ib = input_buf
+            raise "full_attn_layer_chunk input buffer too small" if ib.size < hidden_bytes
+          else
+            raise "full_attn_layer_chunk input size mismatch" unless inp.size == n_tokens * hidden_dim
+          end
 
-          inp_buf = Scratch.get(:full_chunk_inp, inp.size.to_i64 * sizeof(Float32))
+          inp_buf = input_buf || Scratch.get(:full_chunk_inp, hidden_bytes)
           norm_w_buf = Scratch.get(:full_chunk_norm_w, attn_norm.size.to_i64 * sizeof(Float32))
-          cur_buf = Scratch.get(:full_chunk_cur, inp.size.to_i64 * sizeof(Float32))
+          cur_buf = Scratch.get(:full_chunk_cur, hidden_bytes)
           qfull_buf = Scratch.get(:full_chunk_qfull, (n_tokens * q_qw.out_dim).to_i64 * sizeof(Float32))
           q_buf = Scratch.get(:full_chunk_q, (n_tokens * q_dim).to_i64 * sizeof(Float32))
           gate_buf = Scratch.get(:full_chunk_gate, (n_tokens * q_dim).to_i64 * sizeof(Float32))
@@ -7374,15 +7397,15 @@ module ML
           qnorm_buf = Scratch.get(:full_chunk_qnorm, q_norm.size.to_i64 * sizeof(Float32))
           knorm_buf = Scratch.get(:full_chunk_knorm, k_norm.size.to_i64 * sizeof(Float32))
           post_norm_buf = Scratch.get(:full_chunk_postnorm_w, post_attention_norm.size.to_i64 * sizeof(Float32))
-          residual_buf = Scratch.get(:full_chunk_residual, inp.size.to_i64 * sizeof(Float32))
-          normed_buf = Scratch.get(:full_chunk_normed, inp.size.to_i64 * sizeof(Float32))
+          residual_buf = Scratch.get(:full_chunk_residual, hidden_bytes)
+          normed_buf = Scratch.get(:full_chunk_normed, hidden_bytes)
           ffn_gate_buf = Scratch.get(:full_chunk_ffn_gate, (n_tokens * ffn_dim).to_i64 * sizeof(Float32))
           ffn_up_buf = Scratch.get(:full_chunk_ffn_up, (n_tokens * ffn_dim).to_i64 * sizeof(Float32))
           ffn_comb_buf = Scratch.get(:full_chunk_ffn_comb, (n_tokens * ffn_dim).to_i64 * sizeof(Float32))
           ffn_out_buf = Scratch.get(:full_chunk_ffn_out, (n_tokens * ffn_down_qw.out_dim).to_i64 * sizeof(Float32))
-          out_buf = Scratch.get(:full_chunk_out, inp.size.to_i64 * sizeof(Float32))
+          out_buf = Scratch.get(:full_chunk_out, hidden_bytes)
 
-          inp_buf.write(inp)
+          inp_buf.write(inp) unless input_buf
           norm_w_buf.write(attn_norm)
           qnorm_buf.write(q_norm)
           knorm_buf.write(k_norm)
@@ -7397,7 +7420,8 @@ module ML
           ffn_down_w_buf, ffn_down_w_off = weight_slot(ffn_down_qw)
 
           t0 = Time.instant if Profile.enabled?
-          cmd = ML::Metal::CommandBuffer.new
+          cmd = append_command_buffer || ML::Metal::CommandBuffer.new
+          appended = !append_command_buffer.nil?
 
           norm_enc = ML::Metal::ComputeEncoder.new(cmd)
           encode_rmsnorm_rows(norm_enc, inp_buf, norm_w_buf, cur_buf, hidden_dim, n_tokens, eps)
@@ -7466,41 +7490,45 @@ module ML
           krope_enc.dispatch_threadgroups({n_head_kv, n_tokens, 1}, {32, 1, 1})
           krope_enc.end_encoding
 
-          kvwrite_enc = ML::Metal::ComputeEncoder.new(cmd)
-          kvwrite_enc.set_pipeline(kv_write_rows_pipeline)
-          kvwrite_enc.set_buffer(k_buf, 0)
-          kvwrite_enc.set_buffer(v_buf, 1)
-          kvwrite_enc.set_buffer(k_cache_buf, 2, ML::Metal::BufferAccess::ReadWrite)
-          kvwrite_enc.set_buffer(v_cache_buf, 3, ML::Metal::BufferAccess::ReadWrite)
-          kvwrite_enc.set_value(start_pos.to_u32, 4)
-          kvwrite_enc.set_value(kv_dim.to_u32, 5)
-          kvwrite_enc.set_value(n_tokens.to_u32, 6)
-          kvwrite_enc.dispatch_1d(n_tokens * kv_dim, 256)
-          kvwrite_enc.end_encoding
-
-          attn_enc = ML::Metal::ComputeEncoder.new(cmd)
-          use_attn_sg4 = prefill_attn_rows_sg4_enabled? && n_tokens >= 4
-          use_direct_gate = !prefill_attn_rows_sg4_pregate_enabled? && prefill_attn_rows_sg4_direct_gate_enabled?(n_tokens)
-          attn_sg4_pipeline = use_direct_gate ? attn_rows_sg4_pipeline : attn_rows_sg4_pregate_pipeline
-          attn_enc.set_pipeline(use_attn_sg4 ? attn_sg4_pipeline : attn_rows_pipeline)
-          attn_enc.set_buffer(q_buf, 0)
-          attn_enc.set_buffer(gate_buf, 1)
-          attn_enc.set_buffer(k_cache_buf, 2)
-          attn_enc.set_buffer(v_cache_buf, 3)
-          attn_enc.set_buffer(attn_buf, 4, ML::Metal::BufferAccess::Write)
-          attn_enc.set_value(start_pos.to_u32, 5)
-          attn_enc.set_value(n_tokens.to_u32, 6)
-          attn_enc.set_value(n_head.to_u32, 7)
-          attn_enc.set_value(n_head_kv.to_u32, 8)
-          attn_enc.set_value(head_dim.to_u32, 9)
-          attn_enc.set_value(heads_per_group.to_u32, 10)
-          attn_enc.set_value(scale, 11)
-          if use_attn_sg4
-            attn_enc.dispatch_threadgroups({n_head, (n_tokens + 3) // 4, 1}, {128, 1, 1})
+          if adaptive_encoder = adaptive_prefill_encoder
+            adaptive_encoder.call(cmd, q_buf, gate_buf, k_buf, v_buf, attn_buf)
           else
-            attn_enc.dispatch_threadgroups({n_head, n_tokens, 1}, {32, 1, 1})
+            kvwrite_enc = ML::Metal::ComputeEncoder.new(cmd)
+            kvwrite_enc.set_pipeline(kv_write_rows_pipeline)
+            kvwrite_enc.set_buffer(k_buf, 0)
+            kvwrite_enc.set_buffer(v_buf, 1)
+            kvwrite_enc.set_buffer(k_cache_buf.not_nil!, 2, ML::Metal::BufferAccess::ReadWrite)
+            kvwrite_enc.set_buffer(v_cache_buf.not_nil!, 3, ML::Metal::BufferAccess::ReadWrite)
+            kvwrite_enc.set_value(start_pos.to_u32, 4)
+            kvwrite_enc.set_value(kv_dim.to_u32, 5)
+            kvwrite_enc.set_value(n_tokens.to_u32, 6)
+            kvwrite_enc.dispatch_1d(n_tokens * kv_dim, 256)
+            kvwrite_enc.end_encoding
+
+            attn_enc = ML::Metal::ComputeEncoder.new(cmd)
+            use_attn_sg4 = prefill_attn_rows_sg4_enabled? && n_tokens >= 4
+            use_direct_gate = !prefill_attn_rows_sg4_pregate_enabled? && prefill_attn_rows_sg4_direct_gate_enabled?(n_tokens)
+            attn_sg4_pipeline = use_direct_gate ? attn_rows_sg4_pipeline : attn_rows_sg4_pregate_pipeline
+            attn_enc.set_pipeline(use_attn_sg4 ? attn_sg4_pipeline : attn_rows_pipeline)
+            attn_enc.set_buffer(q_buf, 0)
+            attn_enc.set_buffer(gate_buf, 1)
+            attn_enc.set_buffer(k_cache_buf.not_nil!, 2)
+            attn_enc.set_buffer(v_cache_buf.not_nil!, 3)
+            attn_enc.set_buffer(attn_buf, 4, ML::Metal::BufferAccess::Write)
+            attn_enc.set_value(start_pos.to_u32, 5)
+            attn_enc.set_value(n_tokens.to_u32, 6)
+            attn_enc.set_value(n_head.to_u32, 7)
+            attn_enc.set_value(n_head_kv.to_u32, 8)
+            attn_enc.set_value(head_dim.to_u32, 9)
+            attn_enc.set_value(heads_per_group.to_u32, 10)
+            attn_enc.set_value(scale, 11)
+            if use_attn_sg4
+              attn_enc.dispatch_threadgroups({n_head, (n_tokens + 3) // 4, 1}, {128, 1, 1})
+            else
+              attn_enc.dispatch_threadgroups({n_head, n_tokens, 1}, {32, 1, 1})
+            end
+            attn_enc.end_encoding
           end
-          attn_enc.end_encoding
 
           outproj_enc = ML::Metal::ComputeEncoder.new(cmd)
           encode_matmul(outproj_enc, out_pipe.not_nil!, out_qw, attn_buf, attn_out_buf, out_w_buf, out_w_off, out_qw.in_dim, out_qw.out_dim, n_tokens)
@@ -7543,6 +7571,8 @@ module ML
             blit.copy_buffer(out_buf, 0, ob, 0, ((n_tokens * hidden_dim).to_i64 * sizeof(Float32)).to_i32)
             blit.end_encoding
           end
+
+          return [] of Float32 if appended
 
           t_enc = Time.instant if Profile.enabled?
           cmd.commit
@@ -9554,8 +9584,7 @@ module ML
                                            top1_store_index : Int32 = -1,
                                            command_queue_name : String? = nil,
                                            append_command_buffer : ML::Metal::CommandBuffer? = nil,
-                                           adaptive_decode_layer : Int32? = nil,
-                                           adaptive_decode_encoder : Proc(ML::Metal::CommandBuffer, ML::MetalBuffer, ML::MetalBuffer, ML::MetalBuffer, ML::MetalBuffer, ML::MetalBuffer, Nil)? = nil) : DecodeWaveSubmission?
+                                           adaptive_decode_encoders : AdaptiveDecodeEncoders? = nil) : DecodeWaveSubmission?
           # Two-lane callers can request fresh scratch so multiple submitted waves
           # do not race through the pooled temporary buffers before wait/readback.
           if fresh_scratch
@@ -9590,8 +9619,7 @@ module ML
                 top1_store_index: top1_store_index,
                 command_queue_name: command_queue_name,
                 append_command_buffer: append_command_buffer,
-                adaptive_decode_layer: adaptive_decode_layer,
-                adaptive_decode_encoder: adaptive_decode_encoder)
+                adaptive_decode_encoders: adaptive_decode_encoders)
             end
           end
           if namespace = scratch_namespace
@@ -9626,19 +9654,18 @@ module ML
                 top1_store_index: top1_store_index,
                 command_queue_name: command_queue_name,
                 append_command_buffer: append_command_buffer,
-                adaptive_decode_layer: adaptive_decode_layer,
-                adaptive_decode_encoder: adaptive_decode_encoder)
+                adaptive_decode_encoders: adaptive_decode_encoders)
             end
           end
 
           top1 = true if top2
-          if adaptive_decode_layer.nil? != adaptive_decode_encoder.nil?
-            raise ArgumentError.new("adaptive decode requires both a layer and an encoder")
-          end
-          if adaptive_layer = adaptive_decode_layer
-            unless adaptive_layer >= 0 && adaptive_layer < layers.size &&
-                   layers[adaptive_layer].is_a?(Qwen35FullAttnWeights)
-              raise ArgumentError.new("adaptive decode layer must select a full-attention layer")
+          if adaptive = adaptive_decode_encoders
+            raise ArgumentError.new("adaptive decode encoder map cannot be empty") if adaptive.empty?
+            adaptive.each_key do |adaptive_layer|
+              unless adaptive_layer >= 0 && adaptive_layer < layers.size &&
+                     layers[adaptive_layer].is_a?(Qwen35FullAttnWeights)
+                raise ArgumentError.new("adaptive decode layer must select a full-attention layer")
+              end
             end
           end
           out_pipe = gemv_pipeline_for(output_qw)
@@ -9796,7 +9823,7 @@ module ML
           wave_dn_pipeline = use_dn_post_fused ? dn128_fused_post_pipeline : active_dn_pipeline
           wave_dn_threadgroup_size = use_dn_post_fused ? 128 : dn_threadgroup_size
           use_conv_shift_fused = recurrent_conv_shift_fused_enabled?
-          chunk_layers = (append_command_buffer || adaptive_decode_encoder) ? 0 : wave_chunk_layers
+          chunk_layers = (append_command_buffer || adaptive_decode_encoders) ? 0 : wave_chunk_layers
           pending_cmds = [] of ML::Metal::CommandBuffer
 
           lr_set = lowrank_layer_indices
@@ -9847,7 +9874,7 @@ module ML
               ffn_gate_w_buf, ffn_gate_w_off = weight_slot(lw.ffn_gate_qw)
               ffn_up_w_buf, ffn_up_w_off = weight_slot(lw.ffn_up_qw)
               ffn_down_w_buf, ffn_down_w_off = weight_slot(lw.ffn_down_qw)
-              adaptive_decode = adaptive_decode_layer == il
+              adaptive_decode = !!adaptive_decode_encoders.try(&.has_key?(il))
               k_cache_buf = k_cache_bufs[il]
               v_cache_buf = v_cache_bufs[il]
               if adaptive_decode
@@ -9934,7 +9961,7 @@ module ML
               Profile.trace("full.attn") do
                 if adaptive_decode
                   begin
-                    adaptive_decode_encoder.not_nil!.call(
+                    adaptive_decode_encoders.not_nil![il].call(
                       cmd, q_buf, gate_buf, k_buf, v_buf, attn_buf,
                     )
                   rescue ex
@@ -10521,7 +10548,7 @@ module ML
           end
 
           t_enc = Time.instant if Profile.enabled?
-          cmd.commit unless append_command_buffer || adaptive_decode_encoder
+          cmd.commit unless append_command_buffer || adaptive_decode_encoders
           DecodeWaveSubmission.new(
             cmd, pending_cmds, emit_head, use_head_top1, use_head_top2,
             logits_buf, top1_id_buf, top1_value_buf, second_id_buf, second_value_buf, output_qw.out_dim,
