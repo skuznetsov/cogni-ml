@@ -177,6 +177,49 @@ layer 51 independently of retirement policy and keeps automatic selection
 default-off. The next density move is row/head/age-sensitive calibration, not
 adding more global layer escapes.
 
+### Position-aware quality vector
+
+The quality probe now reports top-1, top-2, and token embedding cosine at each
+teacher-forced position. Both executions consume the same exact prefix at a
+compared position, so the expected and compressed token IDs are aligned before
+their vectors are compared. Exact token matches score `1.0`; mismatches use the
+cosine between the corresponding Qwen `output.weight` rows. This output-space
+token ECS measures whether the compressed choice remains close to the exact
+choice in the model's token decision representation. It is not a calibrated
+human semantic score.
+
+Free-running token positions are deliberately not assigned this ECS after the
+first insertion, deletion, or replacement. Their BPE positions may then denote
+different grammatical roles even when the generated sentence keeps the same
+meaning. Free-running quality therefore retains a separate whole-response
+semantic assessment.
+
+A guarded Qwen3.8-27B Q4_K_M slice used 64-token generation limits, eight-token
+retirement, and three one-sentence tasks: arithmetic, sky scattering, and
+Crystal `Array#map`. `adaptive` is the coarse p4 default with BF16 layers
+`27,43,47,51`; `p4` is the rejected uniform control.
+
+| Policy | Logical KV density | Retire top-1 | Exact top-1 in candidate top-2 | Ranked top-2 slots | Top-2 set overlap | Token ECS mean | ECS mismatches | Meaning preserved |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| uniform p4 | 7.5294x | 111/118 | 114/115 | 202/230 | 214/230 | 0.948830 | 7/118 | 3/3 |
+| adaptive | 3.7647x | 115/118 | 115/115 | 214/230 | 220/230 | 0.976423 | 3/118 | 3/3 |
+
+The vector exposes two different cases that common-prefix equality hides. In
+the arithmetic answer, uniform p4 selected `arrive` instead of `obtain` while
+keeping the correct result and explanation. In the sky answer, both policies
+omitted `the`, shifting the next teacher-forced comparison to `the` versus
+`molecules` even though the free sentence remained correct. The raw token ECS
+for these rows was low, so ECS alone would misclassify harmless rephrasing or a
+token omission. The admitted evaluation order is therefore semantic failure,
+exact top-1 absence from candidate top-2, position-aligned ECS, then bytes; no
+single local proxy can override a whole-response semantic failure.
+
+This corpus supports the coarse adaptive map over uniform p4 on the measured
+local signals, but it is too small and manually assessed to promote either a
+universal selector or a numeric ECS threshold. The next calibration gate must
+expand prompts, lengths, and retirement policies and replace manual response
+classification with a repeatable semantic judge before policy widening.
+
 Runtime prefill ownership, mutable row replacement, and compressed DeltaNet
 state remain guard-only. Production still owns a complete Float32 KV
 allocation, so compactness is demonstrated for the experimental owner and

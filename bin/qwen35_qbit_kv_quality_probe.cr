@@ -7,6 +7,7 @@
 # a future resident QBit attention kernel would observe without changing
 # production cache ownership or routing.
 
+require "json"
 require "option_parser"
 
 require "../src/ml/gguf/qwen35_chat"
@@ -15,6 +16,7 @@ require "../src/ml/gguf/qwen35_state_snapshot"
 require "../src/ml/gguf/qwen35_tokenizer"
 require "../src/ml/gguf/qwen35_weights"
 require "../src/ml/gguf/qwen_qbit_kv_quality"
+require "../src/ml/gguf/qwen_qbit_quality_metrics"
 
 DEFAULT_QWEN38_MODEL = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf"
 
@@ -23,6 +25,20 @@ record QBitQualityPolicy,
   precision : Int32?,
   adaptive_default : ML::GGUF::QwenQBitAdaptiveKV::Tier?,
   adaptive_layer_tiers : Hash(Int32, ML::GGUF::QwenQBitAdaptiveKV::Tier)
+
+record TokenECSPosition,
+  position : Int32,
+  expected_id : Int32,
+  candidate_id : Int32,
+  ecs : Float64
+
+record TokenECSSummary,
+  positions : Array(TokenECSPosition),
+  mean : Float64,
+  min : Float64,
+  mismatch_count : Int32,
+  mismatch_mean : Float64?,
+  mismatch_min : Float64?
 
 model_path = ENV["QWEN35_MODEL"]? || DEFAULT_QWEN38_MODEL
 prompt = "Explain in one sentence why the sky appears blue."
@@ -109,11 +125,6 @@ def release_state!(state : ML::GGUF::Qwen35CPU::State) : Nil
   end
 end
 
-def top1(logits : Array(Float32)) : {Int32, Float32}
-  value = logits.max
-  {logits.index(value).not_nil!.to_i32, value}
-end
-
 def cosine(a : Array(Float32), b : Array(Float32)) : Float64
   dot = 0.0_f64
   aa = 0.0_f64
@@ -130,6 +141,59 @@ end
 
 def max_delta(a : Array(Float32), b : Array(Float32)) : Float32
   a.each_with_index.max_of { |value, i| (value - b[i]).abs }
+end
+
+def token_ecs_summary(embedding_weight : ML::GGUF::QuantWeight,
+                      expected_ids : Array(Int32),
+                      candidate_ids : Array(Int32),
+                      embedding_cache : Hash(Int32, Array(Float32))) : TokenECSSummary
+  raise "token ECS requires identical non-empty positions" unless expected_ids.size == candidate_ids.size && !expected_ids.empty?
+  aligned = expected_ids.size
+
+  positions = Array(TokenECSPosition).new(aligned)
+  total = 0.0_f64
+  minimum = 1.0_f64
+  mismatch_total = 0.0_f64
+  mismatch_minimum = 1.0_f64
+  mismatch_count = 0_i32
+
+  aligned.times do |position|
+    expected_id = expected_ids[position]
+    candidate_id = candidate_ids[position]
+    ecs = if expected_id == candidate_id
+            1.0_f64
+          else
+            expected_embedding = embedding_cache[expected_id]? || begin
+              embedding = ML::GGUF::Qwen35CPU.embedding_lookup(embedding_weight, expected_id)
+              embedding_cache[expected_id] = embedding
+              embedding
+            end
+            candidate_embedding = embedding_cache[candidate_id]? || begin
+              embedding = ML::GGUF::Qwen35CPU.embedding_lookup(embedding_weight, candidate_id)
+              embedding_cache[candidate_id] = embedding
+              embedding
+            end
+            ML::GGUF::QwenQBitQualityMetrics.embedding_cosine(expected_embedding, candidate_embedding)
+          end
+
+    total += ecs
+    minimum = Math.min(minimum, ecs)
+    if expected_id != candidate_id
+      mismatch_count += 1
+      mismatch_total += ecs
+      mismatch_minimum = Math.min(mismatch_minimum, ecs)
+    end
+    positions << TokenECSPosition.new(position.to_i32, expected_id, candidate_id, ecs)
+  end
+
+  TokenECSSummary.new(
+    positions,
+    total / aligned,
+    minimum,
+    mismatch_count,
+    mismatch_count > 0 ? mismatch_total / mismatch_count : nil,
+    mismatch_count > 0 ? mismatch_minimum : nil,
+  )
 end
 
 def add_stats(a : ML::GGUF::QwenQBitKVQuality::Stats,
@@ -228,16 +292,20 @@ snapshot, first_id, first_logit, prefill_ms, _exact_roundtrip_ms, _exact_stats =
 exact_state = ML::GGUF::Qwen35StateSnapshot.restore(snapshot, hp)
 exact_ids = [first_id] of Int32
 exact_logits = [] of Array(Float32)
+exact_top2s = [] of ML::GGUF::QwenQBitQualityMetrics::Top2
 begin
   (n_gen - 1).times do |step|
     break if exact_ids[-1] == tokenizer.eos_id
     logits = ML::GGUF::Qwen35CPU.forward(weights, exact_ids[-1], tokens.size + step, exact_state)
+    top2 = ML::GGUF::QwenQBitQualityMetrics.top2(logits)
     exact_logits << logits
-    exact_ids << top1(logits)[0]
+    exact_top2s << top2
+    exact_ids << top2.first_id
   end
 ensure
   release_state!(exact_state)
 end
+raise "exact continuation ended before a top-2 decode step" if exact_top2s.empty?
 
 puts "qwen35_qbit_kv_quality_probe"
 puts "  model=#{model_path}"
@@ -269,15 +337,22 @@ policies.each do |policy|
 
   free_state = ML::GGUF::Qwen35StateSnapshot.restore(quantized_snapshot, hp)
   free_ids = [qbit_first_id] of Int32
+  free_top2s = [] of ML::GGUF::QwenQBitQualityMetrics::Top2
   free_append_stats = ML::GGUF::QwenQBitKVQuality::Stats.new(0_i64, 0_i64, 0_i64)
   begin
     exact_logits.size.times do |step|
       break if free_ids[-1] == tokenizer.eos_id
       pos = tokens.size + step
-      next_id, _logit = ML::GGUF::Qwen35CPU.forward_top1(weights, free_ids[-1], pos, free_state)
+      free_first_id, free_first_logit, free_second_id, free_second_logit = ML::GGUF::Qwen35CPU.forward_top2(
+        weights, free_ids[-1], pos, free_state,
+      )
+      top2 = ML::GGUF::QwenQBitQualityMetrics::Top2.new(
+        free_first_id, free_first_logit, free_second_id, free_second_logit,
+      )
+      free_top2s << top2
       appended = roundtrip_policy!(free_state, hp, max_seq, pos, 1, policy)
       free_append_stats = add_stats(free_append_stats, appended)
-      free_ids << next_id
+      free_ids << top2.first_id
     end
   ensure
     release_state!(free_state)
@@ -287,13 +362,39 @@ policies.each do |policy|
   forced_matches = 0
   min_logit_cosine = 1.0_f64
   max_logit_delta = 0.0_f32
+  forced_top2s = [] of ML::GGUF::QwenQBitQualityMetrics::Top2
+  top2_ranked_matches = 0_i32
+  top2_set_overlap = 0_i32
+  top2_set_matches = 0_i32
+  exact_top1_covered = 0_i32
+  exact_top2_covered = 0_i32
+  top2_rescues = 0_i32
+  first_top2_rank_mismatch_step = nil.as(Int32?)
+  max_top2_logit_delta = 0.0_f32
+  max_top2_margin_delta = 0.0_f32
+  min_exact_top2_margin = Float32::INFINITY
   forced_append_stats = ML::GGUF::QwenQBitKVQuality::Stats.new(0_i64, 0_i64, 0_i64)
   begin
     exact_logits.size.times do |step|
       pos = tokens.size + step
       logits = ML::GGUF::Qwen35CPU.forward(weights, exact_ids[step], pos, forced_state)
-      predicted_id, _predicted_logit = top1(logits)
-      forced_matches += 1 if predicted_id == exact_ids[step + 1]
+      candidate_top2 = ML::GGUF::QwenQBitQualityMetrics.top2(logits)
+      exact_top2 = exact_top2s[step]
+      comparison = ML::GGUF::QwenQBitQualityMetrics.compare_top2(exact_top2, candidate_top2)
+      forced_top2s << candidate_top2
+      top1_matches = candidate_top2.first_id == exact_ids[step + 1]
+      forced_matches += 1 if top1_matches
+      top2_ranked_matches += comparison.ranked_matches
+      top2_set_overlap += comparison.set_overlap
+      top2_set_matches += 1 if comparison.set_overlap == 2
+      exact_top1_covered += 1 if comparison.exact_top1_covered
+      exact_top2_covered += 1 if comparison.exact_top2_covered
+      top2_rescues += 1 if !top1_matches && comparison.exact_top1_covered
+      first_top2_rank_mismatch_step ||= step.to_i32 unless comparison.ranked_matches == 2
+      max_top2_logit_delta = Math.max(max_top2_logit_delta,
+        Math.max(comparison.first_logit_delta, comparison.second_logit_delta))
+      max_top2_margin_delta = Math.max(max_top2_margin_delta, comparison.margin_delta)
+      min_exact_top2_margin = Math.min(min_exact_top2_margin, exact_top2.margin)
       min_logit_cosine = Math.min(min_logit_cosine, cosine(exact_logits[step], logits))
       max_logit_delta = Math.max(max_logit_delta, max_delta(exact_logits[step], logits))
       appended = roundtrip_policy!(forced_state, hp, max_seq, pos, 1, policy)
@@ -307,13 +408,110 @@ policies.each do |policy|
   boundary_top1_match = qbit_first_id == first_id
   total_top1_matches = forced_matches + (boundary_top1_match ? 1 : 0)
   total_top1_count = exact_logits.size + 1
+  forced_ids = [qbit_first_id] + forced_top2s.map(&.first_id)
+  embedding_cache = {} of Int32 => Array(Float32)
+  teacher_token_ecs = token_ecs_summary(weights.output, exact_ids, forced_ids, embedding_cache)
   prefix_ratio = prefix_stats.raw_bytes.to_f64 / prefix_stats.payload_bytes
   append_ratio = forced_append_stats.payload_bytes > 0 ? forced_append_stats.raw_bytes.to_f64 / forced_append_stats.payload_bytes : Float64::NAN
+  exact_text = tokenizer.decode(exact_ids)
+  free_text = tokenizer.decode(free_ids)
   puts "  #{policy.label} prefix_raw_bytes=#{prefix_stats.raw_bytes} prefix_payload_bytes=#{prefix_stats.payload_bytes} prefix_ratio=#{prefix_ratio.round(4)}x qbit_prefill_ms=#{qbit_prefill_ms.round(3)} prefix_cpu_roundtrip_ms=#{prefix_quantize_ms.round(3)}"
   puts "    boundary_top1_match=#{boundary_top1_match} qbit_first_id=#{qbit_first_id} qbit_first_logit=#{qbit_first_logit.round(6)} retire_order_top1=#{total_top1_matches}/#{total_top1_count}"
-  puts "    free_prefix=#{common_prefix}/#{exact_ids.size} free_ids=#{free_ids.join(',')} free_text=#{tokenizer.decode(free_ids).inspect}"
+  puts "    free_prefix=#{common_prefix}/#{exact_ids.size} free_ids=#{free_ids.join(',')} free_text=#{free_text.inspect}"
   puts "    forced_top1=#{forced_matches}/#{exact_logits.size} min_logit_cosine=#{min_logit_cosine.round(9)} max_logit_delta=#{max_logit_delta.round(6)} appended_ratio=#{append_ratio.round(4)}x"
+  puts "    teacher_top2_ranked=#{top2_ranked_matches}/#{2 * exact_top2s.size} teacher_top2_set_overlap=#{top2_set_overlap}/#{2 * exact_top2s.size} teacher_top2_set_matches=#{top2_set_matches}/#{exact_top2s.size} exact_top1_covered=#{exact_top1_covered}/#{exact_top2s.size} exact_top2_covered=#{exact_top2_covered}/#{exact_top2s.size} top2_rescues=#{top2_rescues} first_top2_rank_mismatch_step=#{first_top2_rank_mismatch_step} min_exact_top2_margin=#{min_exact_top2_margin.round(6)} max_top2_logit_delta=#{max_top2_logit_delta.round(6)} max_top2_margin_delta=#{max_top2_margin_delta.round(6)}"
+  puts "    teacher_token_ecs_basis=output.weight teacher_token_ecs_mean=#{teacher_token_ecs.mean.round(6)} teacher_token_ecs_min=#{teacher_token_ecs.min.round(6)} teacher_token_ecs_mismatches=#{teacher_token_ecs.mismatch_count} teacher_token_ecs_mismatch_mean=#{teacher_token_ecs.mismatch_mean.try(&.round(6))} teacher_token_ecs_mismatch_min=#{teacher_token_ecs.mismatch_min.try(&.round(6))}"
+  teacher_token_ecs.positions.each do |row|
+    next if row.expected_id == row.candidate_id
+    puts "      teacher_token_ecs_position=#{row.position} expected=#{tokenizer.decode([row.expected_id]).inspect}(#{row.expected_id}) candidate=#{tokenizer.decode([row.candidate_id]).inspect}(#{row.candidate_id}) ecs=#{row.ecs.round(6)}"
+  end
   puts "    append_payload_bytes=#{forced_append_stats.payload_bytes} free_append_payload_bytes=#{free_append_stats.payload_bytes}"
+  payload = JSON.build do |json|
+    json.object do
+      json.field "schema", "qwen-qbit-quality-v1"
+      json.field "model", File.basename(model_path)
+      json.field "prompt", prompt
+      json.field "policy", policy.label
+      json.field "retire_chunk", retire_chunk
+      json.field "exact_text", exact_text
+      json.field "candidate_text", free_text
+      json.field "exact_ids", exact_ids
+      json.field "candidate_ids", free_ids
+      json.field "free_common_prefix", common_prefix
+      json.field "retire_order_top1_matches", total_top1_matches
+      json.field "retire_order_top1_count", total_top1_count
+      json.field "teacher_top2_ranked_matches", top2_ranked_matches
+      json.field "teacher_top2_ranked_count", 2 * exact_top2s.size
+      json.field "teacher_top2_set_overlap", top2_set_overlap
+      json.field "teacher_top2_set_overlap_count", 2 * exact_top2s.size
+      json.field "teacher_top2_set_matches", top2_set_matches
+      json.field "teacher_top2_steps", exact_top2s.size
+      json.field "teacher_exact_top1_covered", exact_top1_covered
+      json.field "teacher_exact_top2_covered", exact_top2_covered
+      json.field "teacher_top2_rescues", top2_rescues
+      json.field "teacher_token_ecs_mean", teacher_token_ecs.mean
+      json.field "teacher_token_ecs_min", teacher_token_ecs.min
+      json.field "teacher_token_ecs_mismatch_count", teacher_token_ecs.mismatch_count
+      json.field "teacher_token_ecs_mismatch_mean", teacher_token_ecs.mismatch_mean
+      json.field "teacher_token_ecs_mismatch_min", teacher_token_ecs.mismatch_min
+      json.field "teacher_token_ecs_basis", "output.weight"
+      json.field "first_top2_rank_mismatch_step", first_top2_rank_mismatch_step
+      json.field "min_exact_top2_margin", min_exact_top2_margin
+      json.field "max_top2_logit_delta", max_top2_logit_delta
+      json.field "max_top2_margin_delta", max_top2_margin_delta
+      json.field "min_logit_cosine", min_logit_cosine
+      json.field "max_logit_delta", max_logit_delta
+      json.field "prefix_raw_bytes", prefix_stats.raw_bytes
+      json.field "prefix_payload_bytes", prefix_stats.payload_bytes
+      json.field "prefix_ratio", prefix_ratio
+      json.field "teacher_token_ecs_mismatches" do
+        json.array do
+          teacher_token_ecs.positions.each do |row|
+            next if row.expected_id == row.candidate_id
+            json.object do
+              json.field "position", row.position
+              json.field "expected_id", row.expected_id
+              json.field "candidate_id", row.candidate_id
+              json.field "expected_piece", tokenizer.decode([row.expected_id])
+              json.field "candidate_piece", tokenizer.decode([row.candidate_id])
+              json.field "ecs", row.ecs
+            end
+          end
+        end
+      end
+      json.field "exact_top2_ids" do
+        json.array do
+          exact_top2s.each do |row|
+            json.array do
+              json.number row.first_id
+              json.number row.second_id
+            end
+          end
+        end
+      end
+      json.field "candidate_teacher_top2_ids" do
+        json.array do
+          forced_top2s.each do |row|
+            json.array do
+              json.number row.first_id
+              json.number row.second_id
+            end
+          end
+        end
+      end
+      json.field "candidate_free_top2_ids" do
+        json.array do
+          free_top2s.each do |row|
+            json.array do
+              json.number row.first_id
+              json.number row.second_id
+            end
+          end
+        end
+      end
+    end
+  end
+  puts "QBIT_QUALITY_JSON=#{payload}"
   GC.collect
 end
 

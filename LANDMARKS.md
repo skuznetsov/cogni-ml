@@ -24263,3 +24263,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Trigger: repeated synchronous decode over the published packed prefix. Transport: baseline token trajectory -> exact current projections -> packed-history attention -> append-only row -> later recurrent/full layers. Boundary: identical input tokens, exact position, sole KV owner, true-tail publication, and fail-closed length/logit guards. Potential: `{top-1 mismatch, logit drift, invalid prefix, duplicate bytes, time}`. Recompute descends through 128 steps but not at 256 because the quality-guard component rises above `0.05`; byte and timing improvements cannot override that earlier component. Dual frame: ordinary Float32 KV under the same baseline trajectory.
 
 **decision:** Keep the default-off repeated-decode route and admit the bounded 128-step winning-logit parity certificate only. Treat 256 steps as structural evidence plus a measured-red winning-logit guard. The calibrated p4/p5/BF16 selector must include this repeated-decode sweep and richer model-quality evidence; do not relax `0.05` from this one prompt.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-QUALITY-VECTOR-919] Position-aligned ECS separates local token drift from response meaning
+**context:** ml / Qwen3.8 / adaptive QBit / model quality / top-2 / token ECS
+**state:** bounded multi-signal quality probe implemented and verified; selector promotion still rejected
+
+- claim: "The retire-order probe can compare the exact and compressed token choices at the same teacher-forced position without conflating later BPE drift."
+  source: `bin/qwen35_qbit_kv_quality_probe.cr` now records ranked and unordered top-2 parity, exact-top-1 coverage, and per-position cosine between the selected tokens' Qwen `output.weight` rows. Both sides consume the exact token prefix at every teacher-forced comparison; exact token matches score `1.0`. Free-running text is emitted separately rather than assigning misleading position ECS after a sequence insertion, deletion, or replacement. The pure metric spec passed `4 examples, 0 failures`; the existing Metal top-2 projection/decode spec passed `2 examples, 0 failures` against full logits.
+  verified_at: 2026-08-24
+  decay_trigger: teacher-forcing construction, output projection, tokenizer, top-2 implementation, model weights, or JSON quality schema change
+  trust: {F:0.94,G:0.43,R:0.90}
+
+- claim: "The coarse adaptive map improves every aggregated local quality signal over uniform p4 on the measured three-prompt slice while preserving the meaning of all six free responses."
+  source: guarded Qwen3.8-27B Q4_K_M runs with eight-token retirement and up to 64 generated tokens covered arithmetic, sky scattering, and Crystal `Array#map`. Uniform p4 versus adaptive p4 plus BF16 layers `27,43,47,51` measured retire top-1 `111/118` versus `115/118`, exact top-1 contained in candidate top-2 `114/115` versus `115/115`, ranked top-2 slots `202/230` versus `214/230`, unordered top-2 overlap `214/230` versus `220/230`, weighted token ECS mean `0.948830` versus `0.976423`, and ECS mismatches `7/118` versus `3/118`. Manual inspection found the requested meaning preserved for all `3/3` prompts under each policy; density was `7.5294x` versus `3.7647x`.
+  verified_at: 2026-08-24
+  decay_trigger: prompt corpus, retirement chunk/order, layer-tier map, model/tokenizer/template, generation length, or semantic assessment procedure change
+  trust: {F:0.90,G:0.20,R:0.84}
+
+**Adversary:** Output-row cosine is a model-local token proxy, not a calibrated semantic distance. Synonymous `obtain -> arrive` and a harmless article omission produced low local ECS despite correct full responses. The corpus has only three manually assessed prompts, no long-session row, no automated semantic judge, and no selector trained on held-out data. Uniform p4 remains rejected by the earlier accumulated-error counterexample; the coarse adaptive map remains calibration-only despite its better aggregate values.
+
+**LTP/WBA:** Trigger: a compressed retire/restore changes a token decision under an otherwise identical exact prefix. Transport: exact prefix -> exact and compressed top-2 -> position-aligned output-row ECS -> separately decoded free response. Boundary: identical teacher-forced position, immutable tokenizer/model identity, and no post-divergence free-run positional alignment. Potential: `{whole-response semantic failure, exact top-1 absent from candidate top-2, low or misaligned token ECS, resident bytes}` lexicographically. Recompute classifies free-response meaning independently, preventing a local metric improvement from hiding a semantic regression. Dual frame: full-F32 KV under the same prompt and generation policy.
+
+**decision:** Use top-1, top-2 coverage, position-aligned token ECS, and whole-response meaning as a joint quality vector. Do not promote a tier selector or set an ECS threshold from this corpus. Next expand the semantic corpus and make its response-level assessment repeatable before optimizing density further.
