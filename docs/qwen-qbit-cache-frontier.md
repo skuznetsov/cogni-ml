@@ -45,23 +45,25 @@ and never establish cache visibility or admission.
 ## Resident KV experimental slice
 
 This is a separate default-off probe, not an extension of the durable cache
-runtime. It admits p4/p5 QBit payloads whose affine block is exactly one
-`(token, KV head)` vector and a Metal attention decode that consumes those
-payloads directly without materializing an intermediate Float32 KV cache.
+runtime. It admits uniform p4/p5 payloads and a canonical adaptive payload whose
+affine block is exactly one `(token, KV head)` vector. Its Metal attention
+decode consumes p4 bases plus optional p5/BF16/F32 sidecars directly without
+materializing an intermediate Float32 KV cache.
 
-- The first slice is synthetic and bounded. It does not replace
+- The resident-attention slice is synthetic and bounded. It does not replace
   `LayerState.k_cache_buf` or `LayerState.v_cache_buf`, change live state
-  ownership, or run the 27B model.
+  ownership, or route the 27B model through compressed buffers. A separate
+  roundtrip probe runs the real model only to calibrate numeric quality.
 - Active DeltaNet/recurrent state remains uncompressed. QBit recurrent-state
   compression remains a save/restore transport concern because the active
   state has fixed size rather than token-linear growth.
 - The required falsifier is parity between fused Metal attention and the CPU
   reference over the *same decoded p4/p5 values*. A seeded plane-bit mutation
   must change the comparison result, proving that the parity check is live.
-- Adaptive per-tile precision, sparse BF16/F32 escape values, hot tails,
+- Automatic tier selection, hot tails, device-side retirement packing,
   production runtime routing, and non-GQA6 shapes are guard-only follow-ups.
-  Memory-ratio measurements from this probe do not establish model quality or
-  an eightfold production context-window increase.
+  Memory-ratio measurements from this probe do not establish an eightfold
+  production context-window increase.
 
 Bounded synthetic evidence on Apple M2 Max (2026-08-23):
 
@@ -132,6 +134,54 @@ only one current F32/H16 K/V scratch chunk remains transient. It cannot claim
 compactness during the first unfinished chunk, and this diagnostic roundtrip
 does not yet implement that ownership change.
 
+### Adaptive resident row layout
+
+The next default-off slice uses one canonical, directly indexed representation
+for every semantic `(token, KV head, 256)` row:
+
+- a dense p4 block is always present;
+- one aligned 8-byte metadata entry stores a tier and sidecar byte offset;
+- tier `p5` stores only the fifth 32-byte plane in the compact sidecar;
+- tier `BF16` stores one 512-byte replacement row;
+- tier `F32` stores one 1024-byte exact replacement row.
+
+The metadata entry makes lookup O(1) in the fused attention kernel without a
+variable-width scan or rank structure. Sidecar offsets must be canonical,
+monotonic, aligned, non-overlapping, and consume the payload exactly; malformed
+tiers or offsets fail before Metal admission. This costs 8 metadata bytes per
+row, reducing pure-p4 density from `136` to `144` bytes per 256 values, or from
+`7.53x` to `7.11x` versus F32.
+
+The default-off codec and fused GQA6 Metal reader implement this layout. The
+codec keeps one canonical payload with zero-copy base/metadata/sidecar views;
+validation rejects non-canonical offsets, incomplete or trailing sidecars,
+invalid tiers, malformed p4 rows, and non-finite replacements. The Metal
+kernel reconstructs only the bounded 16-token attention tile. A mixed-tier
+parity spec measured cosine `1.0` and maximum CPU-versus-Metal delta
+`3.73e-08` across the 16-token kernel tile boundary; it did not benchmark
+adaptive decode throughput.
+
+The real-model calibration hook deliberately starts with one tier per
+full-attention layer while the wire format remains row-addressable. On the
+known arithmetic counterexample with eight-token retirement, p4 plus a BF16
+escape only for layer 51 restored `8/8` free-running and `8/8` retire-order
+top-1 parity at `5.8182x` KV compactness. The same map also preserved all eight
+tokens on the text and Crystal-code rows, giving `24/24` over the original
+three-prompt slice. A p5 refinement of layer 51 still failed the arithmetic row.
+
+That map is calibration evidence, not a universal policy. With a 32-token
+retirement chunk, the single-layer map failed at the same fifth token. A
+coarser four-BF16-layer map (`27,43,47,51`) closed the tested arithmetic row for
+both chunk sizes, but density fell to `3.7647x`. This falsifies hard-coding
+layer 51 independently of retirement policy and keeps automatic selection
+default-off. The next density move is row/head/age-sensitive calibration, not
+adding more global layer escapes.
+
+Runtime prefill ownership, device-side packing, mutable row replacement, and
+compressed DeltaNet state remain guard-only. Production still owns a complete
+Float32 KV allocation, so compactness is demonstrated for the representation
+and fused consumer, not yet achieved immediately during production prefill.
+
 ## Admitted surface
 
 - A default-off probe may encode recurrent Float32 records in independent
@@ -140,6 +190,13 @@ does not yet implement that ownership change.
   reconstruct each prefix with its Gaussian conditional mean.
 - The probe may report payload size, CPU encode/decode time, next-token logit
   error, and free-running token parity on a local model.
+- A default-off resident-KV probe may encode one 256-value semantic row as a
+  fixed p4 base plus canonical tier/offset metadata and an optional p5, BF16, or
+  F32 sidecar. After strict validation, its Qwen3.8 GQA6 Metal kernel may decode
+  those rows directly inside a bounded attention tile.
+- The real-model quality probe may apply an explicitly supplied tier per
+  full-attention layer to calibrate the finer row-addressable representation.
+  Such maps are diagnostic inputs, not runtime policy.
 - Eight-plane reconstruction is the full-code reference. It is not lossless
   relative to the original Float32 state.
 - A diagnostic Native writer may batch complete 1024-code tiles and append an
@@ -248,6 +305,8 @@ does not yet implement that ownership change.
   slice. Envelope schema v1 and the ClickHouse table schema are internal
   boundaries and may still change before production promotion.
 - No claim that scalar MSE implies autoregressive parity.
+- No fixed layer escape map, immediate production-prefill compactness, adaptive
+  decode speedup, or eightfold production context-window claim is admitted.
 - No claim that ClickHouse background merges are on the cache-hit critical
   path: newly inserted rows must remain readable before a part merge completes.
 - No native ClickHouse TCP packet framing/compression, automatic retry policy,
@@ -293,6 +352,8 @@ does not yet implement that ownership change.
 - ClickHouse storage using fixed-size tiles and independently readable bit
   planes.
 - Progressive fetch or fallback from 6/7 planes to the full 8-plane code.
+- Row/head/age-sensitive KV tier selection, device-side retire packing, mutable
+  compressed-row replacement, non-GQA6 kernels, and production KV ownership.
 
 ## Design laws
 
@@ -312,6 +373,11 @@ does not yet implement that ownership change.
   widened from 6 to 7 to 8 planes.
 - On real cache state, report first token divergence and continuation parity;
   any divergence keeps the precision experimental.
+- Adaptive row payloads must reject non-canonical or out-of-bounds sidecars,
+  invalid tiers, malformed p4 moments, non-finite replacements, and trailing
+  bytes before Metal admission. Mixed-tier fused attention must match the CPU
+  reference across at least one internal tile boundary. A layer map that loses
+  top-1 parity when prompt or retirement policy changes must not be hard-coded.
 - A later ClickHouse gate must measure insert visibility separately from
   background merge duration and full cold-hit restore latency.
 - The local physical-storage gate must fail if ClickHouse changes the Native

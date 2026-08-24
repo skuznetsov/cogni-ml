@@ -24125,3 +24125,31 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: completed K/V row or bounded prefill chunk. Transport: exact current attention -> semantic-row QBit encode -> compact persistent KV -> fused future attention decode. Legal move: retire and pack after the current attention so approximation affects only future rows; persistent cache becomes compact chunk by chunk while one bounded F32/H16 scratch chunk remains. Potential does not descend for uniform p4 because model-quality mismatch is an earlier component than memory bytes. The dual frame is fixed-index p4 base plus optional p5+ refinement and bounded BF16/F32 escapes calibrated by model sensitivity.
 
 **decision:** Reject uniform p4 and p5 promotion. Keep adaptive resident KV default-off. Next add a fixed-offset progressive p4 base plus refinement/escape probe and calibrate its per-layer/head policy on longer teacher-forced and free-run gates before production prefill wiring.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-KV-913] Canonical sidecars close the bounded counterexample but not policy generality
+**context:** ml / Qwen3.8 / adaptive QBit / resident KV / Metal / model quality
+**state:** default-off representation and fused consumer implemented; bounded quality gate verified
+
+- claim: "A canonical row-addressable p4 plus p5/BF16/F32 sidecar artifact can remain compressed in Metal-visible memory and be decoded inside GQA6 attention."
+  source: `src/ml/gguf/qwen_qbit_adaptive_kv.cr` owns one payload with fixed 136-byte p4 rows, canonical 8-byte tier/offset metadata, and exact-consumption sidecars. `src/ml/gguf/kernels/qbit_adaptive_attn_decode_qwen35.metal` reconstructs only a bounded 16-token tile. The guarded non-async QBit regression suite passed `71 examples, 0 failures`; a 19-token mixed-tier CPU-versus-Metal attention case crossed that tile boundary with cosine `1.0` and maximum delta `3.72529e-08`.
+  verified_at: 2026-08-23
+  decay_trigger: adaptive wire layout, QBit centroid tables, Metal indexing, Qwen head geometry, or resident-buffer ownership change
+  trust: {F:0.93,G:0.44,R:0.90}
+
+- claim: "Sparse BF16 escapes can repair the known uniform-p4 quality failure while retaining materially better-than-F32 density."
+  source: guarded Qwen3.8-27B Q4_K_M calibration with eight-token retirement found that BF16 only for full-attention layer 51 restored `8/8` free-running and `8/8` retire-order top-1 on the arithmetic counterexample; p5 at the same layer still failed. The same BF16 map preserved `24/24` tokens over the original text, Crystal-code, and arithmetic slice at `5.8182x` logical KV compactness.
+  verified_at: 2026-08-23
+  decay_trigger: model weights, prompt/template/tokenizer, retirement order or chunk size, tier codec, or broader quality suite
+  trust: {F:0.88,G:0.27,R:0.84}
+
+- claim: "A fixed layer-51 escape is not a chunk-independent adaptive policy."
+  source: changing retirement from 8 to 32 tokens made the layer-51 BF16 map fail the arithmetic row again at a `5/8` greedy prefix and `7/8` retire-order top-1. No single BF16 layer closed that row. A four-layer BF16 map `27,43,47,51` restored `8/8` at both tested chunk sizes but reduced compactness to `3.7647x`.
+  verified_at: 2026-08-23
+  decay_trigger: retirement policy, row/head selector, prompt distribution, model weights, or longer-context evidence
+  trust: {F:0.89,G:0.24,R:0.85}
+
+**Adversary:** The representation and fused decode are verified only for Qwen3.8 GQA6 geometry, and adaptive kernel throughput is unmeasured. The quality evidence is three eight-token continuations plus one chunk-size falsifier, not a long-context policy certificate. Production prefill still owns complete Float32 KV buffers; neither immediate live compactness nor an eightfold production context increase is established.
+
+**LTP/WBA:** Window: one retired `(token, KV head, 256)` row. Transport: exact current attention -> p4 base plus selected sidecar -> canonical resident buffers -> fused future attention decode. The legal move preserves row identity, retirement ordering, and fail-closed metadata admission. Quality precedes byte reduction in the potential: layer-51 BF16 descends for chunk 8 but loses its certificate when chunk size changes. The dual frame remains a fixed-address representation with a future row/head/age-sensitive selector rather than a hard-coded layer map.
+
+**decision:** Keep the adaptive representation and fused reader default-off. Do not hard-code layer 51. Next calibrate row/head/age-sensitive tier selection and measure device-side retire packing plus adaptive attention throughput before changing production prefill ownership.

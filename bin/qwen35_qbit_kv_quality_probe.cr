@@ -1,4 +1,5 @@
-# Default-off quality falsifier for retire-then-pack p4/p5 KV semantics.
+# Default-off quality falsifier for retire-then-pack uniform and adaptive QBit
+# KV semantics.
 #
 # Each prefill chunk is consumed exactly, then its completed KV rows are
 # quantized and reconstructed into the existing Float32 cache before the next
@@ -17,11 +18,19 @@ require "../src/ml/gguf/qwen_qbit_kv_quality"
 
 DEFAULT_QWEN38_MODEL = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf"
 
+record QBitQualityPolicy,
+  label : String,
+  precision : Int32?,
+  adaptive_default : ML::GGUF::QwenQBitAdaptiveKV::Tier?,
+  adaptive_layer_tiers : Hash(Int32, ML::GGUF::QwenQBitAdaptiveKV::Tier)
+
 model_path = ENV["QWEN35_MODEL"]? || DEFAULT_QWEN38_MODEL
 prompt = "Explain in one sentence why the sky appears blue."
 n_gen = 4
 requested_max_seq = 0
 precisions = [4, 5] of Int32
+adaptive_maps = [] of String
+adaptive_sweep = nil.as(String?)
 chat_mode = true
 retire_chunk = 8
 
@@ -32,6 +41,13 @@ OptionParser.parse do |parser|
   parser.on("--max-seq N", "Cache capacity; 0 selects prompt+gen+1 (default: 0)") { |value| requested_max_seq = value.to_i }
   parser.on("--precisions LIST", "Comma-separated QBit planes (default: 4,5)") do |value|
     precisions = value.split(',').map(&.to_i32)
+  end
+  parser.on("--no-uniform", "Skip uniform p4/p5 variants") { precisions.clear }
+  parser.on("--adaptive-map MAP", "Add p4-default layer escapes, e.g. 3=f32,7=bf16") do |value|
+    adaptive_maps << value
+  end
+  parser.on("--adaptive-sweep TIER", "Try one p5, bf16, or f32 escape layer at a time") do |value|
+    adaptive_sweep = value
   end
   parser.on("--retire-chunk N", "Completed prefill rows packed per chunk (default: 8)") { |value| retire_chunk = value.to_i }
   parser.on("--raw", "Do not render the Qwen chat template") { chat_mode = false }
@@ -45,12 +61,37 @@ prompt = ARGV.join(" ") unless ARGV.empty?
 raise "model does not exist: #{model_path}" unless File.file?(model_path)
 raise "--gen must be at least 2" unless n_gen >= 2
 raise "--max-seq cannot be negative" if requested_max_seq < 0
-raise "--precisions cannot be empty" if precisions.empty?
+raise "no quality variant selected" if precisions.empty? && adaptive_maps.empty? && adaptive_sweep.nil?
 raise "--retire-chunk must be positive" unless retire_chunk > 0
 precisions.each do |precision|
   raise "precision must be p4 or p5" unless precision == 4 || precision == 5
 end
 raise "duplicate precisions" unless precisions.uniq.size == precisions.size
+
+def adaptive_tier(value : String) : ML::GGUF::QwenQBitAdaptiveKV::Tier
+  case value.downcase
+  when "p4"   then ML::GGUF::QwenQBitAdaptiveKV::Tier::P4
+  when "p5"   then ML::GGUF::QwenQBitAdaptiveKV::Tier::P5
+  when "bf16" then ML::GGUF::QwenQBitAdaptiveKV::Tier::BF16
+  when "f32"  then ML::GGUF::QwenQBitAdaptiveKV::Tier::F32
+  else
+    raise "adaptive tier must be p4, p5, bf16, or f32"
+  end
+end
+
+def adaptive_policy(spec : String) : QBitQualityPolicy
+  layer_tiers = {} of Int32 => ML::GGUF::QwenQBitAdaptiveKV::Tier
+  spec.split(',').each do |entry|
+    layer_text, tier_text = entry.split('=', 2)
+    raise "adaptive map entries must use LAYER=TIER" unless layer_text && tier_text
+    layer = layer_text.to_i32
+    raise "duplicate adaptive layer #{layer}" if layer_tiers.has_key?(layer)
+    layer_tiers[layer] = adaptive_tier(tier_text)
+  end
+  raise "adaptive map cannot be empty" if layer_tiers.empty?
+  QBitQualityPolicy.new("adaptive[#{spec}]", nil,
+    ML::GGUF::QwenQBitAdaptiveKV::Tier::P4, layer_tiers)
+end
 
 def release_state!(state : ML::GGUF::Qwen35CPU::State) : Nil
   {% unless flag?(:cpu_only) %}
@@ -100,11 +141,31 @@ def add_stats(a : ML::GGUF::QwenQBitKVQuality::Stats,
   )
 end
 
+def roundtrip_policy!(state : ML::GGUF::Qwen35CPU::State,
+                      hp : ML::GGUF::Qwen35Hparams,
+                      max_seq : Int32,
+                      start_pos : Int32,
+                      token_count : Int32,
+                      policy : QBitQualityPolicy) : ML::GGUF::QwenQBitKVQuality::Stats
+  if precision = policy.precision
+    ML::GGUF::QwenQBitKVQuality.roundtrip_layers_span!(
+      state.layers, hp.full_attention_layers, max_seq,
+      hp.n_head_kv, hp.head_dim, start_pos, token_count, precision,
+    )
+  else
+    ML::GGUF::QwenQBitKVQuality.roundtrip_layers_span_adaptive!(
+      state.layers, hp.full_attention_layers, max_seq,
+      hp.n_head_kv, hp.head_dim, start_pos, token_count,
+      policy.adaptive_default.not_nil!, policy.adaptive_layer_tiers,
+    )
+  end
+end
+
 def prefill_chunked(weights : ML::GGUF::Qwen35Weights,
                     token_ids : Array(Int32),
                     max_seq : Int32,
                     chunk_size : Int32,
-                    precision : Int32?)
+                    policy : QBitQualityPolicy?)
   hp = weights.hparams
   state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
   ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp)
@@ -127,12 +188,9 @@ def prefill_chunked(weights : ML::GGUF::Qwen35Weights,
         ML::GGUF::Qwen35CPU.prefill_tokens(weights, token_ids[offset, count], offset, state)
       end
 
-      if qbit_precision = precision
+      if selected = policy
         roundtrip_started = Time.instant
-        retired = ML::GGUF::QwenQBitKVQuality.roundtrip_layers_span!(
-          state.layers, hp.full_attention_layers, max_seq,
-          hp.n_head_kv, hp.head_dim, offset, count, qbit_precision,
-        )
+        retired = roundtrip_policy!(state, hp, max_seq, offset, count, selected)
         roundtrip_ms += (Time.instant - roundtrip_started).total_milliseconds
         stats = add_stats(stats, retired)
       end
@@ -188,9 +246,25 @@ puts "  layers=#{hp.n_layer} full_attention_layers=#{hp.full_attention_layers.si
 puts "  startup_ms=#{startup_ms.round(3)} prefill_ms=#{prefill_ms.round(3)} exact_first_id=#{first_id} exact_first_logit=#{first_logit.round(6)}"
 puts "  exact_ids=#{exact_ids.join(',')} exact_text=#{tokenizer.decode(exact_ids).inspect}"
 
-precisions.each do |precision|
+policies = precisions.map do |precision|
+  QBitQualityPolicy.new("p#{precision}", precision, nil,
+    {} of Int32 => ML::GGUF::QwenQBitAdaptiveKV::Tier)
+end
+adaptive_maps.each { |spec| policies << adaptive_policy(spec) }
+if sweep_name = adaptive_sweep
+  sweep_tier = adaptive_tier(sweep_name)
+  raise "adaptive sweep tier must refine or replace p4" if sweep_tier.p4?
+  hp.full_attention_layers.each do |layer|
+    policies << QBitQualityPolicy.new(
+      "adaptive[#{layer}=#{sweep_name.downcase}]", nil,
+      ML::GGUF::QwenQBitAdaptiveKV::Tier::P4, {layer => sweep_tier},
+    )
+  end
+end
+
+policies.each do |policy|
   quantized_snapshot, qbit_first_id, qbit_first_logit, qbit_prefill_ms, prefix_quantize_ms, prefix_stats = prefill_chunked(
-    weights, tokens, max_seq, retire_chunk, precision,
+    weights, tokens, max_seq, retire_chunk, policy,
   )
 
   free_state = ML::GGUF::Qwen35StateSnapshot.restore(quantized_snapshot, hp)
@@ -201,10 +275,7 @@ precisions.each do |precision|
       break if free_ids[-1] == tokenizer.eos_id
       pos = tokens.size + step
       next_id, _logit = ML::GGUF::Qwen35CPU.forward_top1(weights, free_ids[-1], pos, free_state)
-      appended = ML::GGUF::QwenQBitKVQuality.roundtrip_layers_span!(
-        free_state.layers, hp.full_attention_layers, max_seq,
-        hp.n_head_kv, hp.head_dim, pos, 1, precision,
-      )
+      appended = roundtrip_policy!(free_state, hp, max_seq, pos, 1, policy)
       free_append_stats = add_stats(free_append_stats, appended)
       free_ids << next_id
     end
@@ -225,10 +296,7 @@ precisions.each do |precision|
       forced_matches += 1 if predicted_id == exact_ids[step + 1]
       min_logit_cosine = Math.min(min_logit_cosine, cosine(exact_logits[step], logits))
       max_logit_delta = Math.max(max_logit_delta, max_delta(exact_logits[step], logits))
-      appended = ML::GGUF::QwenQBitKVQuality.roundtrip_layers_span!(
-        forced_state.layers, hp.full_attention_layers, max_seq,
-        hp.n_head_kv, hp.head_dim, pos, 1, precision,
-      )
+      appended = roundtrip_policy!(forced_state, hp, max_seq, pos, 1, policy)
       forced_append_stats = add_stats(forced_append_stats, appended)
     end
   ensure
@@ -241,7 +309,7 @@ precisions.each do |precision|
   total_top1_count = exact_logits.size + 1
   prefix_ratio = prefix_stats.raw_bytes.to_f64 / prefix_stats.payload_bytes
   append_ratio = forced_append_stats.payload_bytes > 0 ? forced_append_stats.raw_bytes.to_f64 / forced_append_stats.payload_bytes : Float64::NAN
-  puts "  p#{precision} prefix_raw_bytes=#{prefix_stats.raw_bytes} prefix_payload_bytes=#{prefix_stats.payload_bytes} prefix_ratio=#{prefix_ratio.round(4)}x qbit_prefill_ms=#{qbit_prefill_ms.round(3)} prefix_cpu_roundtrip_ms=#{prefix_quantize_ms.round(3)}"
+  puts "  #{policy.label} prefix_raw_bytes=#{prefix_stats.raw_bytes} prefix_payload_bytes=#{prefix_stats.payload_bytes} prefix_ratio=#{prefix_ratio.round(4)}x qbit_prefill_ms=#{qbit_prefill_ms.round(3)} prefix_cpu_roundtrip_ms=#{prefix_quantize_ms.round(3)}"
   puts "    boundary_top1_match=#{boundary_top1_match} qbit_first_id=#{qbit_first_id} qbit_first_logit=#{qbit_first_logit.round(6)} retire_order_top1=#{total_top1_matches}/#{total_top1_count}"
   puts "    free_prefix=#{common_prefix}/#{exact_ids.size} free_ids=#{free_ids.join(',')} free_text=#{tokenizer.decode(free_ids).inspect}"
   puts "    forced_top1=#{forced_matches}/#{exact_logits.size} min_logit_cosine=#{min_logit_cosine.round(9)} max_logit_delta=#{max_logit_delta.round(6)} appended_ratio=#{append_ratio.round(4)}x"

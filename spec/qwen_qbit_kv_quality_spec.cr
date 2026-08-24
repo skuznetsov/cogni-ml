@@ -56,6 +56,35 @@ describe ML::GGUF::QwenQBitKVQuality do
     (first_stats.payload_bytes + second_stats.payload_bytes).should eq(whole_stats.payload_bytes)
   end
 
+  it "applies an externally calibrated adaptive tier per full-attention layer" do
+    head_dim = 256
+    n_head_kv = 1
+    kv_dim = n_head_kv * head_dim
+    excluded = ML::GGUF::Qwen35CPU::LayerState.new
+    selected = ML::GGUF::Qwen35CPU::LayerState.new
+    original_k = Array(Float32).new(2 * kv_dim) { |i| Math.sin(i.to_f64 * 0.013).to_f32 }
+    original_v = Array(Float32).new(2 * kv_dim) { |i| Math.cos(i.to_f64 * 0.017).to_f32 }
+    excluded.k_cache = original_k.dup
+    excluded.v_cache = original_v.dup
+    selected.k_cache = original_k.dup
+    selected.v_cache = original_v.dup
+    stats = ML::GGUF::QwenQBitKVQuality.roundtrip_layers_span_adaptive!(
+      [excluded, selected], [1], 2, n_head_kv, head_dim, 0, 2,
+      ML::GGUF::QwenQBitAdaptiveKV::Tier::P4,
+      {1 => ML::GGUF::QwenQBitAdaptiveKV::Tier::F32},
+    )
+
+    selected.k_cache.should eq(original_k)
+    selected.v_cache.should eq(original_v)
+    excluded.k_cache.should eq(original_k)
+    excluded.v_cache.should eq(original_v)
+    stats.raw_bytes.should eq((2 * 2 * kv_dim * sizeof(Float32)).to_i64)
+    per_owner = 2 * (ML::GGUF::QwenQBitAdaptiveKV::BASE_ROW_BYTES +
+                     ML::GGUF::QwenQBitAdaptiveKV::METADATA_BYTES +
+                     ML::GGUF::QwenQBitAdaptiveKV::F32_SIDECAR_BYTES)
+    stats.payload_bytes.should eq((2 * per_owner).to_i64)
+  end
+
   it "roundtrips the requested span in shared Metal storage" do
     pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
 
@@ -87,6 +116,38 @@ describe ML::GGUF::QwenQBitKVQuality do
     end
   end
 
+  it "roundtrips an adaptive tier in shared Metal storage" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    head_dim = 256
+    n_head_kv = 1
+    original_k = Array(Float32).new(2 * head_dim) { |i| Math.sin(i.to_f64 * 0.023).to_f32 }
+    original_v = Array(Float32).new(2 * head_dim) { |i| Math.cos(i.to_f64 * 0.029).to_f32 }
+    tiers = [ML::GGUF::QwenQBitAdaptiveKV::Tier::BF16]
+    expected_k = ML::GGUF::QwenQBitAdaptiveKV.decode(
+      ML::GGUF::QwenQBitAdaptiveKV.encode(original_k[head_dim, head_dim], tiers),
+    )
+    layer = ML::GGUF::Qwen35CPU::LayerState.new
+    layer.k_cache_buf = ML::MetalBuffer.from_array(original_k)
+    layer.v_cache_buf = ML::MetalBuffer.from_array(original_v)
+
+    begin
+      ML::GGUF::QwenQBitKVQuality.roundtrip_layers_span_adaptive!(
+        [layer], [0], 2, n_head_kv, head_dim, 1, 1,
+        ML::GGUF::QwenQBitAdaptiveKV::Tier::BF16,
+        {} of Int32 => ML::GGUF::QwenQBitAdaptiveKV::Tier,
+      )
+      actual_k = layer.k_cache_buf.not_nil!.read(original_k.size)
+      actual_k[0, head_dim].should eq(original_k[0, head_dim])
+      actual_k[head_dim, head_dim].should eq(expected_k)
+    ensure
+      layer.k_cache_buf.try(&.release)
+      layer.v_cache_buf.try(&.release)
+      layer.k_cache_buf = nil
+      layer.v_cache_buf = nil
+    end
+  end
+
   it "rejects non-Qwen3.8 head geometry and out-of-range spans" do
     expect_raises(ArgumentError, /head dimension 256/) do
       ML::GGUF::QwenQBitKVQuality.roundtrip_layers_span!(
@@ -99,6 +160,15 @@ describe ML::GGUF::QwenQBitKVQuality do
       ML::GGUF::QwenQBitKVQuality.roundtrip_layers_span!(
         [] of ML::GGUF::Qwen35CPU::LayerState, [] of Int32,
         1, 1, 256, 1, 1, 4,
+      )
+    end
+
+    expect_raises(ArgumentError, /not a full-attention layer/) do
+      ML::GGUF::QwenQBitKVQuality.roundtrip_layers_span_adaptive!(
+        [] of ML::GGUF::Qwen35CPU::LayerState, [] of Int32,
+        1, 1, 256, 0, 1,
+        ML::GGUF::QwenQBitAdaptiveKV::Tier::P4,
+        {0 => ML::GGUF::QwenQBitAdaptiveKV::Tier::BF16},
       )
     end
   end
