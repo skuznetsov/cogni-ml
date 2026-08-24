@@ -70,6 +70,8 @@ begin
   baseline_logit = 0.0_f32
   baseline_append_top = 0_i32
   baseline_append_logit = 0.0_f32
+  baseline_decode_top = 0_i32
+  baseline_decode_logit = 0.0_f32
   with_adaptive_env(nil, nil) do
     ML::GGUF::Qwen35CPU.prepare_state_metal!(baseline_state.not_nil!, hp)
     baseline_top, baseline_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(
@@ -77,6 +79,10 @@ begin
     )
     baseline_append_top, baseline_append_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(
       weights, CONTINUATION, PROMPT.size.to_i32, baseline_state.not_nil!,
+    )
+    baseline_decode_top, baseline_decode_logit = ML::GGUF::Qwen35CPU.forward_top1(
+      weights, baseline_append_top, (PROMPT.size + CONTINUATION.size).to_i32,
+      baseline_state.not_nil!,
     )
   end
   baseline_ms = (Time.instant - baseline_started).total_milliseconds
@@ -89,6 +95,8 @@ begin
   adaptive_logit = 0.0_f32
   adaptive_append_top = 0_i32
   adaptive_append_logit = 0.0_f32
+  adaptive_decode_top = 0_i32
+  adaptive_decode_logit = 0.0_f32
   first_cache_len = 0_i32
   with_adaptive_env(selected_layer, "bf16") do
     ML::GGUF::Qwen35CPU.prepare_state_metal!(adaptive_state.not_nil!, hp)
@@ -99,6 +107,10 @@ begin
     adaptive_append_top, adaptive_append_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(
       weights, CONTINUATION, PROMPT.size.to_i32, adaptive_state.not_nil!,
     )
+    adaptive_decode_top, adaptive_decode_logit = ML::GGUF::Qwen35CPU.forward_top1(
+      weights, adaptive_append_top, (PROMPT.size + CONTINUATION.size).to_i32,
+      adaptive_state.not_nil!,
+    )
   end
   adaptive_ms = (Time.instant - adaptive_started).total_milliseconds
 
@@ -106,6 +118,7 @@ begin
   cache = selected_state.adaptive_kv.not_nil!
   logit_delta = (adaptive_logit - baseline_logit).abs
   append_logit_delta = (adaptive_append_logit - baseline_append_logit).abs
+  decode_logit_delta = (adaptive_decode_logit - baseline_decode_logit).abs
   raise "adaptive prefill top-1 mismatch: #{adaptive_top} != #{baseline_top}" unless adaptive_top == baseline_top
   unless logit_delta.finite? && logit_delta <= MAX_LOGIT_DELTA
     raise "adaptive prefill logit delta #{logit_delta} exceeds #{MAX_LOGIT_DELTA}"
@@ -116,23 +129,18 @@ begin
   unless append_logit_delta.finite? && append_logit_delta <= MAX_LOGIT_DELTA
     raise "adaptive packed-history logit delta #{append_logit_delta} exceeds #{MAX_LOGIT_DELTA}"
   end
+  unless adaptive_decode_top == baseline_decode_top
+    raise "adaptive packed decode top-1 mismatch: #{adaptive_decode_top} != #{baseline_decode_top}"
+  end
+  unless decode_logit_delta.finite? && decode_logit_delta <= MAX_LOGIT_DELTA
+    raise "adaptive packed decode logit delta #{decode_logit_delta} exceeds #{MAX_LOGIT_DELTA}"
+  end
   raise "adaptive first prefill published #{first_cache_len} tokens, expected #{PROMPT.size}" unless first_cache_len == PROMPT.size
-  expected_cache_len = PROMPT.size + CONTINUATION.size
+  expected_cache_len = PROMPT.size + CONTINUATION.size + 1
   raise "adaptive append published #{cache.cache_len} tokens, expected #{expected_cache_len}" unless cache.cache_len == expected_cache_len
   if selected_state.k_cache || selected_state.v_cache || selected_state.k_cache_buf || selected_state.v_cache_buf
     raise "adaptive prefill allocated a second F32 KV owner"
   end
-
-  decode_rejected = false
-  begin
-    ML::GGUF::Qwen35CPU.forward_top1(
-      weights, CONTINUATION.last, cache.cache_len, adaptive_state.not_nil!,
-    )
-  rescue ex : ArgumentError
-    raise ex unless ex.message.to_s.includes?("decode is not implemented")
-    decode_rejected = true
-  end
-  raise "adaptive resident KV unexpectedly admitted single-token decode" unless decode_rejected
 
   adaptive_bytes = cache.compressed_bytes
   payload = JSON.build do |json|
@@ -148,13 +156,17 @@ begin
       json.field "adaptive_top1", adaptive_top
       json.field "baseline_append_top1", baseline_append_top
       json.field "adaptive_append_top1", adaptive_append_top
+      json.field "baseline_decode_top1", baseline_decode_top
+      json.field "adaptive_decode_top1", adaptive_decode_top
       json.field "baseline_logit", baseline_logit
       json.field "adaptive_logit", adaptive_logit
       json.field "logit_delta", logit_delta
       json.field "baseline_append_logit", baseline_append_logit
       json.field "adaptive_append_logit", adaptive_append_logit
       json.field "append_logit_delta", append_logit_delta
-      json.field "decode_rejected", decode_rejected
+      json.field "baseline_decode_logit", baseline_decode_logit
+      json.field "adaptive_decode_logit", adaptive_decode_logit
+      json.field "decode_logit_delta", decode_logit_delta
       json.field "baseline_selected_kv_bytes", baseline_selected_bytes
       json.field "adaptive_selected_kv_bytes", adaptive_bytes
       json.field "selected_layer_compression", baseline_selected_bytes.to_f64 / adaptive_bytes

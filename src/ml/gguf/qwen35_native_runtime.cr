@@ -1017,7 +1017,7 @@ module ML::GGUF
       # Metal.
       return unless route.backend.primary.metal?
       if ENV["QWEN35_ADAPTIVE_RESIDENT_KV_LAYER"]? || ENV["QWEN35_ADAPTIVE_RESIDENT_KV_TIER"]?
-        raise ArgumentError.new("adaptive resident QBit KV is prefill-only and is not admitted by Qwen35NativeRuntime")
+        raise ArgumentError.new("adaptive resident QBit KV is not admitted by Qwen35NativeRuntime")
       end
       Qwen35CPU.prepare_state_metal!(state, weights.hparams)
     end

@@ -10,3 +10,16 @@ describe ML::Metal::Device do
     device.current_allocated_size.should be >= 0_i64
   end
 end
+
+describe ML::Metal::CommandBuffer do
+  it "discards an uncommitted native command handle exactly once" do
+    pending!("Metal not available") unless ML::Metal::Device.available?
+
+    command = ML::Metal::CommandBuffer.new
+    command.handle.null?.should be_false
+
+    command.discard
+    command.handle.null?.should be_true
+    command.discard
+  end
+end

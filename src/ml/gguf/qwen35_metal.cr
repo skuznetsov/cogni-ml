@@ -9553,7 +9553,9 @@ module ML
                                            top1_store_token_ids_buf : ML::MetalBuffer? = nil,
                                            top1_store_index : Int32 = -1,
                                            command_queue_name : String? = nil,
-                                           append_command_buffer : ML::Metal::CommandBuffer? = nil) : DecodeWaveSubmission?
+                                           append_command_buffer : ML::Metal::CommandBuffer? = nil,
+                                           adaptive_decode_layer : Int32? = nil,
+                                           adaptive_decode_encoder : Proc(ML::Metal::CommandBuffer, ML::MetalBuffer, ML::MetalBuffer, ML::MetalBuffer, ML::MetalBuffer, ML::MetalBuffer, Nil)? = nil) : DecodeWaveSubmission?
           # Two-lane callers can request fresh scratch so multiple submitted waves
           # do not race through the pooled temporary buffers before wait/readback.
           if fresh_scratch
@@ -9587,7 +9589,9 @@ module ML
                 top1_store_token_ids_buf: top1_store_token_ids_buf,
                 top1_store_index: top1_store_index,
                 command_queue_name: command_queue_name,
-                append_command_buffer: append_command_buffer)
+                append_command_buffer: append_command_buffer,
+                adaptive_decode_layer: adaptive_decode_layer,
+                adaptive_decode_encoder: adaptive_decode_encoder)
             end
           end
           if namespace = scratch_namespace
@@ -9621,11 +9625,22 @@ module ML
                 top1_store_token_ids_buf: top1_store_token_ids_buf,
                 top1_store_index: top1_store_index,
                 command_queue_name: command_queue_name,
-                append_command_buffer: append_command_buffer)
+                append_command_buffer: append_command_buffer,
+                adaptive_decode_layer: adaptive_decode_layer,
+                adaptive_decode_encoder: adaptive_decode_encoder)
             end
           end
 
           top1 = true if top2
+          if adaptive_decode_layer.nil? != adaptive_decode_encoder.nil?
+            raise ArgumentError.new("adaptive decode requires both a layer and an encoder")
+          end
+          if adaptive_layer = adaptive_decode_layer
+            unless adaptive_layer >= 0 && adaptive_layer < layers.size &&
+                   layers[adaptive_layer].is_a?(Qwen35FullAttnWeights)
+              raise ArgumentError.new("adaptive decode layer must select a full-attention layer")
+            end
+          end
           out_pipe = gemv_pipeline_for(output_qw)
           return nil if emit_head && out_pipe.nil?
           return nil if top1_store_token_ids_buf && (!emit_head || !top1)
@@ -9781,7 +9796,7 @@ module ML
           wave_dn_pipeline = use_dn_post_fused ? dn128_fused_post_pipeline : active_dn_pipeline
           wave_dn_threadgroup_size = use_dn_post_fused ? 128 : dn_threadgroup_size
           use_conv_shift_fused = recurrent_conv_shift_fused_enabled?
-          chunk_layers = append_command_buffer ? 0 : wave_chunk_layers
+          chunk_layers = (append_command_buffer || adaptive_decode_encoder) ? 0 : wave_chunk_layers
           pending_cmds = [] of ML::Metal::CommandBuffer
 
           lr_set = lowrank_layer_indices
@@ -9832,8 +9847,16 @@ module ML
               ffn_gate_w_buf, ffn_gate_w_off = weight_slot(lw.ffn_gate_qw)
               ffn_up_w_buf, ffn_up_w_off = weight_slot(lw.ffn_up_qw)
               ffn_down_w_buf, ffn_down_w_off = weight_slot(lw.ffn_down_qw)
-              k_cache_buf = k_cache_bufs[il].not_nil!
-              v_cache_buf = v_cache_bufs[il].not_nil!
+              adaptive_decode = adaptive_decode_layer == il
+              k_cache_buf = k_cache_bufs[il]
+              v_cache_buf = v_cache_bufs[il]
+              if adaptive_decode
+                if k_cache_buf || v_cache_buf
+                  raise ArgumentError.new("adaptive resident QBit KV cannot coexist with F32 KV buffers")
+                end
+              elsif k_cache_buf.nil? || v_cache_buf.nil?
+                raise ArgumentError.new("ordinary decode layer requires F32 KV buffers")
+              end
 
               Profile.trace("full.norm") do
                 norm_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -9909,73 +9932,84 @@ module ML
               end
 
               Profile.trace("full.attn") do
-                kvwrite_enc = ML::Metal::ComputeEncoder.new(cmd)
-                kvwrite_enc.set_pipeline(kv_write_pipeline)
-                kvwrite_enc.set_buffer(k_buf, 0)
-                kvwrite_enc.set_buffer(v_buf, 1)
-                kvwrite_enc.set_buffer(k_cache_buf, 2, ML::Metal::BufferAccess::ReadWrite)
-                kvwrite_enc.set_buffer(v_cache_buf, 3, ML::Metal::BufferAccess::ReadWrite)
-                kvwrite_enc.set_value((pos * kv_dim).to_u32, 4)
-                kvwrite_enc.set_value(kv_dim.to_u32, 5)
-                kvwrite_enc.dispatch_1d(kv_dim, 256)
-                kvwrite_enc.end_encoding
-
-                use_splitk_attn = ENV["QWEN35_ATTN_SPLITK_OFF"]? != "1" &&
-                                  pos + 1 >= attn_splitk_min_context &&
-                                  hp.head_dim <= 256
-                if use_splitk_attn
-                  split1_enc = ML::Metal::ComputeEncoder.new(cmd)
-                  split1_enc.set_pipeline(attn_splitk_stage1_pipeline)
-                  split1_enc.set_buffer(q_buf, 0)
-                  split1_enc.set_buffer(k_cache_buf, 1)
-                  split1_enc.set_buffer(v_cache_buf, 2)
-                  split1_enc.set_buffer(splitk_partial_o_buf, 3, ML::Metal::BufferAccess::Write)
-                  split1_enc.set_buffer(splitk_partial_m_buf, 4, ML::Metal::BufferAccess::Write)
-                  split1_enc.set_buffer(splitk_partial_l_buf, 5, ML::Metal::BufferAccess::Write)
-                  split1_enc.set_value((pos + 1).to_u32, 6)
-                  split1_enc.set_value(hp.n_head.to_u32, 7)
-                  split1_enc.set_value(hp.n_head_kv.to_u32, 8)
-                  split1_enc.set_value(hp.head_dim.to_u32, 9)
-                  split1_enc.set_value((hp.n_head // hp.n_head_kv).to_u32, 10)
-                  split1_enc.set_value(attn_scale, 11)
-                  split1_enc.set_value(splitk_chunk.to_u32, 12)
-                  split1_enc.set_value(splitk_blocks.to_u32, 13)
-                  split1_enc.dispatch_threadgroups({hp.n_head, splitk_blocks, 1}, {32, 1, 1})
-                  split1_enc.end_encoding
-
-                  split2_enc = ML::Metal::ComputeEncoder.new(cmd)
-                  split2_enc.set_pipeline(attn_splitk_stage2_pipeline)
-                  split2_enc.set_buffer(gate_buf, 0)
-                  split2_enc.set_buffer(splitk_partial_o_buf, 1)
-                  split2_enc.set_buffer(splitk_partial_m_buf, 2)
-                  split2_enc.set_buffer(splitk_partial_l_buf, 3)
-                  split2_enc.set_buffer(attn_buf, 4, ML::Metal::BufferAccess::Write)
-                  split2_enc.set_value(hp.n_head.to_u32, 5)
-                  split2_enc.set_value(hp.head_dim.to_u32, 6)
-                  split2_enc.set_value(splitk_blocks.to_u32, 7)
-                  split2_enc.dispatch_threadgroups({hp.n_head, 1, 1}, {32, 1, 1})
-                  split2_enc.end_encoding
-                else
-                  attn_enc = ML::Metal::ComputeEncoder.new(cmd)
-                  use_gqa4_attn = hp.n_head // hp.n_head_kv == 4 && hp.head_dim <= 128 && attn_gqa4_enabled?
-                  attn_enc.set_pipeline(use_gqa4_attn ? attn_gqa4_pipeline : attn_pipeline)
-                  attn_enc.set_buffer(q_buf, 0)
-                  attn_enc.set_buffer(gate_buf, 1)
-                  attn_enc.set_buffer(k_cache_buf, 2)
-                  attn_enc.set_buffer(v_cache_buf, 3)
-                  attn_enc.set_buffer(attn_buf, 4, ML::Metal::BufferAccess::Write)
-                  attn_enc.set_value((pos + 1).to_u32, 5)
-                  attn_enc.set_value(hp.n_head.to_u32, 6)
-                  attn_enc.set_value(hp.n_head_kv.to_u32, 7)
-                  attn_enc.set_value(hp.head_dim.to_u32, 8)
-                  attn_enc.set_value((hp.n_head // hp.n_head_kv).to_u32, 9)
-                  attn_enc.set_value(attn_scale, 10)
-                  if use_gqa4_attn
-                    attn_enc.dispatch_threadgroups({hp.n_head_kv, 1, 1}, {128, 1, 1})
-                  else
-                    attn_enc.dispatch_threadgroups({hp.n_head, 1, 1}, {32, 1, 1})
+                if adaptive_decode
+                  begin
+                    adaptive_decode_encoder.not_nil!.call(
+                      cmd, q_buf, gate_buf, k_buf, v_buf, attn_buf,
+                    )
+                  rescue ex
+                    cmd.discard unless cmd.committed?
+                    raise ex
                   end
-                  attn_enc.end_encoding
+                else
+                  kvwrite_enc = ML::Metal::ComputeEncoder.new(cmd)
+                  kvwrite_enc.set_pipeline(kv_write_pipeline)
+                  kvwrite_enc.set_buffer(k_buf, 0)
+                  kvwrite_enc.set_buffer(v_buf, 1)
+                  kvwrite_enc.set_buffer(k_cache_buf.not_nil!, 2, ML::Metal::BufferAccess::ReadWrite)
+                  kvwrite_enc.set_buffer(v_cache_buf.not_nil!, 3, ML::Metal::BufferAccess::ReadWrite)
+                  kvwrite_enc.set_value((pos * kv_dim).to_u32, 4)
+                  kvwrite_enc.set_value(kv_dim.to_u32, 5)
+                  kvwrite_enc.dispatch_1d(kv_dim, 256)
+                  kvwrite_enc.end_encoding
+
+                  use_splitk_attn = ENV["QWEN35_ATTN_SPLITK_OFF"]? != "1" &&
+                                    pos + 1 >= attn_splitk_min_context &&
+                                    hp.head_dim <= 256
+                  if use_splitk_attn
+                    split1_enc = ML::Metal::ComputeEncoder.new(cmd)
+                    split1_enc.set_pipeline(attn_splitk_stage1_pipeline)
+                    split1_enc.set_buffer(q_buf, 0)
+                    split1_enc.set_buffer(k_cache_buf.not_nil!, 1)
+                    split1_enc.set_buffer(v_cache_buf.not_nil!, 2)
+                    split1_enc.set_buffer(splitk_partial_o_buf, 3, ML::Metal::BufferAccess::Write)
+                    split1_enc.set_buffer(splitk_partial_m_buf, 4, ML::Metal::BufferAccess::Write)
+                    split1_enc.set_buffer(splitk_partial_l_buf, 5, ML::Metal::BufferAccess::Write)
+                    split1_enc.set_value((pos + 1).to_u32, 6)
+                    split1_enc.set_value(hp.n_head.to_u32, 7)
+                    split1_enc.set_value(hp.n_head_kv.to_u32, 8)
+                    split1_enc.set_value(hp.head_dim.to_u32, 9)
+                    split1_enc.set_value((hp.n_head // hp.n_head_kv).to_u32, 10)
+                    split1_enc.set_value(attn_scale, 11)
+                    split1_enc.set_value(splitk_chunk.to_u32, 12)
+                    split1_enc.set_value(splitk_blocks.to_u32, 13)
+                    split1_enc.dispatch_threadgroups({hp.n_head, splitk_blocks, 1}, {32, 1, 1})
+                    split1_enc.end_encoding
+
+                    split2_enc = ML::Metal::ComputeEncoder.new(cmd)
+                    split2_enc.set_pipeline(attn_splitk_stage2_pipeline)
+                    split2_enc.set_buffer(gate_buf, 0)
+                    split2_enc.set_buffer(splitk_partial_o_buf, 1)
+                    split2_enc.set_buffer(splitk_partial_m_buf, 2)
+                    split2_enc.set_buffer(splitk_partial_l_buf, 3)
+                    split2_enc.set_buffer(attn_buf, 4, ML::Metal::BufferAccess::Write)
+                    split2_enc.set_value(hp.n_head.to_u32, 5)
+                    split2_enc.set_value(hp.head_dim.to_u32, 6)
+                    split2_enc.set_value(splitk_blocks.to_u32, 7)
+                    split2_enc.dispatch_threadgroups({hp.n_head, 1, 1}, {32, 1, 1})
+                    split2_enc.end_encoding
+                  else
+                    attn_enc = ML::Metal::ComputeEncoder.new(cmd)
+                    use_gqa4_attn = hp.n_head // hp.n_head_kv == 4 && hp.head_dim <= 128 && attn_gqa4_enabled?
+                    attn_enc.set_pipeline(use_gqa4_attn ? attn_gqa4_pipeline : attn_pipeline)
+                    attn_enc.set_buffer(q_buf, 0)
+                    attn_enc.set_buffer(gate_buf, 1)
+                    attn_enc.set_buffer(k_cache_buf.not_nil!, 2)
+                    attn_enc.set_buffer(v_cache_buf.not_nil!, 3)
+                    attn_enc.set_buffer(attn_buf, 4, ML::Metal::BufferAccess::Write)
+                    attn_enc.set_value((pos + 1).to_u32, 5)
+                    attn_enc.set_value(hp.n_head.to_u32, 6)
+                    attn_enc.set_value(hp.n_head_kv.to_u32, 7)
+                    attn_enc.set_value(hp.head_dim.to_u32, 8)
+                    attn_enc.set_value((hp.n_head // hp.n_head_kv).to_u32, 9)
+                    attn_enc.set_value(attn_scale, 10)
+                    if use_gqa4_attn
+                      attn_enc.dispatch_threadgroups({hp.n_head_kv, 1, 1}, {128, 1, 1})
+                    else
+                      attn_enc.dispatch_threadgroups({hp.n_head, 1, 1}, {32, 1, 1})
+                    end
+                    attn_enc.end_encoding
+                  end
                 end
               end
 
@@ -10487,7 +10521,7 @@ module ML
           end
 
           t_enc = Time.instant if Profile.enabled?
-          cmd.commit unless append_command_buffer
+          cmd.commit unless append_command_buffer || adaptive_decode_encoder
           DecodeWaveSubmission.new(
             cmd, pending_cmds, emit_head, use_head_top1, use_head_top2,
             logits_buf, top1_id_buf, top1_value_buf, second_id_buf, second_value_buf, output_qw.out_dim,

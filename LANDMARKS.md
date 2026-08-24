@@ -24219,3 +24219,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Trigger: a supported full-attention prefill group with exact temporary Q/K/V and a packed immutable prefix. Transport: sole compact `LayerState` owner -> mixed-history attention -> append pack -> later layers on the same command -> completion publication. Boundary: no full-capacity Float32 alias, exact current causal tail, one unpublished reservation, and explicit rejection of operations without packed semantics. Potential: `{quality mismatch, invalid visible prefix, duplicate persistent bytes, synchronization count}`. Recompute: two-call model parity, ownership inspection, completion-marker tests, and decode rejection. Dual frame: unchanged ordinary Float32 state when selectors are absent.
 
 **decision:** Admit the default-off one-layer prefill experiment only. Keep decode, persistence, copy/checkpoint, and native runtime fail-closed. The next atomic slice is packed single-token decode for the same owner; calibrated mixed-tier policy and multi-layer promotion remain later gates.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-RUNTIME-DECODE-917] One packed layer extends in the whole-token decode wave
+**context:** ml / Qwen3.8 / adaptive QBit / runtime ownership / single-token decode / Metal
+**state:** default-off synchronous one-layer decode implemented and verified
+
+- claim: "One selected Qwen3.8 layer can attend to packed history, append the current row, and publish it without restoring a persistent Float32 KV owner."
+  source: the ordinary whole-token Metal wave accepts one shape-checked adaptive layer and invokes the existing mixed-history attention/pack encoder with `token_count=1` instead of its Float32 KV write. The caller owns one command through later layers and the output head, adds the adaptive completion marker at the true tail, waits for successful command completion, and only then advances the packed prefix. A guarded Qwen3.8-27B Q4_K_M smoke prefetched `8 + 4` tokens, retained baseline/adaptive decode top-1 `314`, measured maximum decode-logit delta `1.335144e-5`, and published `cache_len 12 -> 13` with no selected-layer Float32 owner.
+  verified_at: 2026-08-24
+  decay_trigger: decode-wave command ownership, adaptive callback placement, completion publication, selected-layer KV allocation, Metal kernel, model weights, or Qwen geometry change
+  trust: {F:0.94,G:0.24,R:0.89}
+
+- claim: "Unsupported adaptive decode consumers remain fail-closed."
+  source: the adaptive route requires exactly one selected layer, `cache_len == pos`, no Float32 alias, and the synchronous whole-token Metal wave. Direct advanced async calls require private corridor parameters unavailable to ordinary callers; a declined wave aborts before fallback. An adaptive callback failure cancels its reservation and explicitly discards the uncommitted native command handle. `forward_hidden`, `Qwen35NativeRuntime`, fork/copy, snapshots, checkpoints, and tail clearing retain explicit rejection. Focused guarded tests passed `16 examples, 0 failures`; the target QBit roster excluding the independently failing Crystal raw-thread writer test passed `91 examples, 0 failures, 0 errors, 1 pending`; a CPU-only build also passed.
+  verified_at: 2026-08-24
+  decay_trigger: decode dispatch, method visibility, native runtime admission, lifecycle guards, or CPU-only gates change
+  trust: {F:0.92,G:0.30,R:0.88}
+
+**Adversary:** This certificate covers one BF16 layer, one decoded token, a short 12-token packed prefix, and the direct synchronous CPU/Qwen runtime. It does not establish p4/p5 quality, multi-layer interaction, `Qwen35NativeRuntime`, hidden-state-only execution, speculative/parallel decode, long-context stability, or speed. Baseline timing paid Metal source compilation and is not comparable. The canonical QBit script still includes an unchanged Crystal 1.21 raw-thread writer test that fails independently of this diff.
+
+**LTP/WBA:** Trigger: a synchronous token reaches one supported packed full-attention layer with `cache_len == pos`. Transport: exact projected Q/gate/K/V -> mixed packed-history attention -> one-row pack -> later layers/head -> true-tail completion. Boundary: sole KV owner, exact position, single command identity, no mid-wave commit, and invisible failed publication. Potential: `{quality mismatch, invalid visible prefix, duplicate persistent bytes, extra synchronization}`. Recompute: one-row mixed-history parity, guarded real-model top-1/logit parity, lifecycle suite, and CPU-only build. Dual frame: unchanged Float32-owner decode when selectors are absent.
+
+**decision:** Admit only direct synchronous single-token packed decode for the existing default-off one-layer owner. Keep advanced async/speculative/native/lifecycle widening fail-closed; the next useful gate is calibrated tier selection or a longer-context correctness/stability sweep, not a broad ownership refactor.

@@ -285,6 +285,11 @@ extern "C" void gs_release_command_queue(void* queue_handle) {
     CFBridgingRelease(queue_handle);
 }
 
+extern "C" void gs_release_command_buffer(void* cmd_handle) {
+    if (cmd_handle == nullptr) return;
+    CFBridgingRelease(cmd_handle);
+}
+
 extern "C" void* gs_create_command_buffer_on_queue(void* queue_handle) {
     if (queue_handle == nullptr) return create_command_buffer_impl();
     id<MTLCommandQueue> queue = (__bridge id<MTLCommandQueue>)queue_handle;

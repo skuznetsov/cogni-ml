@@ -1826,7 +1826,7 @@ module ML::GGUF
                                 hp : Qwen35Hparams,
                                 max_seq : Int32) : Array(Float32)
       if lstate.adaptive_kv
-        raise ArgumentError.new("adaptive resident KV decode is not implemented; use multi-token fused prefill")
+        raise ArgumentError.new("adaptive resident QBit KV decode requires the synchronous whole-token Metal route")
       end
       n_embd = hp.n_embd
       n_head = hp.n_head
@@ -3559,11 +3559,67 @@ module ML::GGUF
                                            emit_head : Bool = true,
                                            top1_allowed_ids : Array(Int32)? = nil) : Array(Float32)?
       {% unless flag?(:cpu_only) %}
+        if state.adaptive_kv?
+          return forward_adaptive_decode_wave_routed(
+            weights, token_id, pos, state,
+            top1: top1, top2: top2, emit_head: emit_head,
+            top1_allowed_ids: top1_allowed_ids,
+          )
+        end
         if submission = forward_decode_wave_routed_async(weights, token_id, pos, state, top1: top1, top2: top2, emit_head: emit_head, top1_allowed_ids: top1_allowed_ids)
           return Qwen35Metal.wait_forward_decode_wave(submission)
         end
       {% end %}
       nil
+    end
+
+    private def forward_adaptive_decode_wave_routed(weights : Qwen35Weights,
+                                                    token_id : Int32,
+                                                    pos : Int32,
+                                                    state : State,
+                                                    top1 : Bool,
+                                                    top2 : Bool,
+                                                    emit_head : Bool,
+                                                    top1_allowed_ids : Array(Int32)?) : Array(Float32)
+      {% unless flag?(:cpu_only) %}
+        adaptive_indices = state.adaptive_kv_layer_indices
+        unless adaptive_indices.size == 1
+          raise ArgumentError.new("adaptive resident QBit decode requires exactly one selected layer")
+        end
+        unless pos >= 0 && pos < state.max_seq
+          raise ArgumentError.new("adaptive resident QBit decode position exceeds state capacity")
+        end
+        cache = state.layers[adaptive_indices.first].adaptive_kv.not_nil!
+        unless cache.cache_len == pos
+          raise ArgumentError.new("adaptive resident QBit decode position does not match the live prefix")
+        end
+
+        submission = forward_decode_wave_routed_async(
+          weights, token_id, pos, state,
+          top1: top1, top2: top2, emit_head: emit_head,
+          top1_allowed_ids: top1_allowed_ids,
+          adaptive_decode: true,
+        )
+        unless submission
+          raise ArgumentError.new("adaptive resident QBit decode requires the whole-token Metal wave")
+        end
+
+        command = submission.cmd
+        begin
+          QwenQBitAdaptiveResidentKV.finalize_pending_append(command, cache)
+          command.commit
+          result = Qwen35Metal.wait_forward_decode_wave(submission)
+          QwenQBitAdaptiveResidentKV.finish_pending_append!(cache, command)
+          result
+        rescue ex
+          if !command.committed? || command.completed?
+            QwenQBitAdaptiveResidentKV.cancel_pending_append!(cache, command)
+          end
+          raise ex
+        end
+      {% else %}
+        raise "Metal disabled (cpu_only)"
+      {% end %}
     end
 
     private def forward_decode_wave_routed_async(weights : Qwen35Weights,
@@ -3598,10 +3654,15 @@ module ML::GGUF
                                                  top1_store_token_ids_buf : ML::MetalBuffer? = nil,
                                                  top1_store_index : Int32 = -1,
                                                  command_queue_name : String? = nil,
-                                                 append_command_buffer : PrefillCommandBuffer? = nil)
+                                                 append_command_buffer : PrefillCommandBuffer? = nil,
+                                                 adaptive_decode : Bool = false)
       {% unless flag?(:cpu_only) %}
-        if state.adaptive_kv?
-          raise ArgumentError.new("adaptive resident KV decode is not implemented; use multi-token fused prefill")
+        adaptive_indices = state.adaptive_kv_layer_indices
+        if !adaptive_indices.empty? && !adaptive_decode
+          raise ArgumentError.new("adaptive resident QBit KV decode requires the synchronous whole-token Metal route")
+        end
+        if adaptive_decode && adaptive_indices.size != 1
+          raise ArgumentError.new("adaptive resident QBit decode requires exactly one selected layer")
         end
         return nil if ENV["QWEN35_DECODE_WAVE_OFF"]? == "1"
         return nil unless Qwen35Metal.available?
@@ -3639,25 +3700,50 @@ module ML::GGUF
         v_cache_bufs = Array(ML::MetalBuffer?).new(hp.n_layer, nil)
         conv_state_bufs = Array(ML::MetalBuffer?).new(hp.n_layer, nil)
         ssm_state_bufs = Array(ML::MetalBuffer?).new(hp.n_layer, nil)
+        adaptive_index = adaptive_decode ? adaptive_indices.first? : nil
+        adaptive_encoder = nil.as(AdaptivePrefillEncoder?)
+
+        if selected = adaptive_index
+          cache = state.layers[selected].adaptive_kv.not_nil!
+          unless cache.cache_len == pos
+            raise ArgumentError.new("adaptive resident QBit decode position does not match the live prefix")
+          end
+          adaptive_encoder = ->(command : ML::Metal::CommandBuffer, q_source : ML::MetalBuffer, gate_source : ML::MetalBuffer, k_source : ML::MetalBuffer, v_source : ML::MetalBuffer, output : ML::MetalBuffer) do
+            QwenQBitAdaptiveResidentKV.encode_prefill_chunk_and_append(
+              command, cache,
+              q_source, gate_source, k_source, v_source, output,
+              1, hp.n_head, hp.n_head // hp.n_head_kv,
+              (1.0 / Math.sqrt(hp.head_dim.to_f64)).to_f32,
+              expected_start_token: pos,
+            )
+          end
+        end
 
         weights.layers.each_with_index do |lw, il|
           case lw
           in Qwen35FullAttnWeights
-            bytes = (max_seq * kv_dim).to_i64 * sizeof(Float32)
-            k_buf = state.layers[il].k_cache_buf
-            if k_buf.nil?
-              k_buf = ML::MetalBuffer.new(bytes)
-              k_buf.contents.as(Pointer(UInt8)).clear(bytes)
-              state.layers[il].k_cache_buf = k_buf
+            if adaptive_index == il
+              layer = state.layers[il]
+              if layer.k_cache || layer.v_cache || layer.k_cache_buf || layer.v_cache_buf
+                raise ArgumentError.new("adaptive resident QBit KV cannot coexist with an F32 owner")
+              end
+            else
+              bytes = (max_seq * kv_dim).to_i64 * sizeof(Float32)
+              k_buf = state.layers[il].k_cache_buf
+              if k_buf.nil?
+                k_buf = ML::MetalBuffer.new(bytes)
+                k_buf.contents.as(Pointer(UInt8)).clear(bytes)
+                state.layers[il].k_cache_buf = k_buf
+              end
+              v_buf = state.layers[il].v_cache_buf
+              if v_buf.nil?
+                v_buf = ML::MetalBuffer.new(bytes)
+                v_buf.contents.as(Pointer(UInt8)).clear(bytes)
+                state.layers[il].v_cache_buf = v_buf
+              end
+              k_cache_bufs[il] = k_buf
+              v_cache_bufs[il] = v_buf
             end
-            v_buf = state.layers[il].v_cache_buf
-            if v_buf.nil?
-              v_buf = ML::MetalBuffer.new(bytes)
-              v_buf.contents.as(Pointer(UInt8)).clear(bytes)
-              state.layers[il].v_cache_buf = v_buf
-            end
-            k_cache_bufs[il] = k_buf
-            v_cache_bufs[il] = v_buf
           in Qwen35RecurrentWeights
             conv_bytes = ((hp.ssm_conv_kernel - 1) * qkv_dim).to_i64 * sizeof(Float32)
             conv_buf = state.layers[il].conv_state_buf
@@ -3709,7 +3795,9 @@ module ML::GGUF
           top1_store_token_ids_buf: top1_store_token_ids_buf,
           top1_store_index: top1_store_index,
           command_queue_name: command_queue_name,
-          append_command_buffer: append_command_buffer)
+          append_command_buffer: append_command_buffer,
+          adaptive_decode_layer: adaptive_index,
+          adaptive_decode_encoder: adaptive_encoder)
       {% else %}
         nil
       {% end %}

@@ -261,9 +261,9 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
   it "attends over packed history plus an exact current chunk before publishing the append" do
     pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
 
-    cache_len = 19
+    cache_len = 20
     first_chunk = 7
-    second_chunk = cache_len - first_chunk
+    second_chunk = cache_len - first_chunk - 1
     n_head = 24
     n_head_kv = 4
     head_dim = 256
@@ -287,7 +287,11 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
       k_plan, v_plan, cache_len, n_head_kv, head_dim,
     )
     begin
-      chunks = [{0, first_chunk}, {first_chunk, second_chunk}]
+      chunks = [
+        {0, first_chunk},
+        {first_chunk, second_chunk},
+        {first_chunk + second_chunk, 1},
+      ]
       decoded_history_k = [] of Float32
       decoded_history_v = [] of Float32
 

@@ -84,6 +84,9 @@
         def committed? : Bool
           false
         end
+
+        def discard : Nil
+        end
       end
 
       class ComputePipeline
@@ -323,6 +326,15 @@ module ML
         @completed && @completion_status == 0
       end
 
+      # Release a command that will never be submitted. Committed command
+      # buffers remain owned by their wait path and cannot be discarded.
+      def discard : Nil
+        raise "cannot discard a committed Metal command buffer" if @committed
+        return if @handle.null?
+        MetalDeviceFFI.release_command_buffer(@handle)
+        @handle = Pointer(Void).null
+      end
+
       private def verify_completion! : Nil
         status = @completion_status
         unless status == 0
@@ -331,7 +343,7 @@ module ML
       end
 
       def finalize
-        # Command buffers are autoreleased after commit
+        discard unless @committed || @handle.null?
       end
     end
 
@@ -419,6 +431,7 @@ lib MetalDeviceFFI
   # Command buffer
   fun create_command_queue = gs_create_command_queue : Pointer(Void)
   fun release_command_queue = gs_release_command_queue(queue : Pointer(Void)) : Void
+  fun release_command_buffer = gs_release_command_buffer(cmd : Pointer(Void)) : Void
   fun create_command_buffer = gs_create_command_buffer : Pointer(Void)
   fun create_command_buffer_fast = gs_create_command_buffer_fast : Pointer(Void)
   fun create_command_buffer_on_queue = gs_create_command_buffer_on_queue(queue : Pointer(Void)) : Pointer(Void)
@@ -451,6 +464,7 @@ lib MetalDeviceFFI
   fun has_unified_memory = gs_has_unified_memory : Int32
   fun create_command_queue = gs_create_command_queue : Pointer(Void)
   fun release_command_queue = gs_release_command_queue(queue : Pointer(Void)) : Void
+  fun release_command_buffer = gs_release_command_buffer(cmd : Pointer(Void)) : Void
   fun create_command_buffer = gs_create_command_buffer : Pointer(Void)
   fun create_command_buffer_fast = gs_create_command_buffer_fast : Pointer(Void)
   fun create_command_buffer_on_queue = gs_create_command_buffer_on_queue(queue : Pointer(Void)) : Pointer(Void)

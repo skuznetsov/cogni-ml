@@ -275,9 +275,10 @@ pre-test live-byte baseline.
 
 This proved the representation and ordering seam before runtime ownership was
 changed. The bounded integration below now gives one selected layer that owner;
-packed decode remains a separate frontier.
+single-token decode now consumes and extends the same packed owner. Advanced
+asynchronous/speculative decode remains a separate frontier.
 
-### One-layer runtime prefill integration
+### One-layer runtime prefill and decode integration
 
 The default-off Qwen3.8 experiment accepts both
 `QWEN35_ADAPTIVE_RESIDENT_KV_LAYER=<index>` and
@@ -306,11 +307,34 @@ owner, and used 83,968 bytes instead of 131,072 bytes at `max_seq=16`, or
 `1.56098x` density. These single-run timings are a correctness smoke, not a
 throughput comparison because baseline execution paid Metal source compilation.
 
-This slice is deliberately prefill-only. Single-token decode, fork/copy,
-snapshot, checkpoint swapping, tail clearing, and `Qwen35NativeRuntime` reject
-adaptive ownership explicitly. A uniform p4 or p5 selector remains diagnostic;
-the earlier quality gate rejected both as global defaults. Packed decode and a
-calibrated mixed-tier owner are the next independent promotion steps.
+Direct synchronous single-token helpers that use the ordinary whole-token Metal
+wave reuse the mixed-history kernel with `token_count=1`. The selected layer
+skips its Float32 KV write, attends to the published packed prefix plus the exact
+current K/V row, and packs that row before later layers and the optional output
+head finish on the same command. The outer route appends the completion marker
+at the true tail, waits for successful `MTLCommandBuffer` completion, verifies
+exact command ownership, and only then publishes `cache_len + 1`.
+If adaptive encoding fails before submission, the reservation is cancelled and
+the uncommitted native command handle is explicitly discarded.
+
+The route rejects a packed-prefix/`pos` mismatch, any second Float32 owner, more
+than one adaptive layer, a declined whole-token Metal wave, and direct use by
+advanced asynchronous helpers. `forward_hidden`, fork/copy, snapshot,
+checkpoint swapping, tail clearing, and `Qwen35NativeRuntime` also remain
+fail-closed because they do not yet preserve the same packed-state semantics.
+
+A guarded Qwen3.8-27B Q4_K_M smoke prefetched `8 + 4` tokens, then decoded one
+token. Packed and Float32 baselines retained decode top-1 `314`; maximum decode
+logit delta was `1.335144e-5`, and the packed cache advanced from 12 to 13 rows.
+The focused lifecycle/attention suite passed `16 examples`; the target QBit
+suite excluding the independently failing raw-thread writer test passed
+`91 examples, 0 failures, 0 errors, 1 pending`. These checks establish bounded
+correctness, not decode throughput.
+
+A uniform p4 or p5 selector remains diagnostic; the earlier quality gate
+rejected both as global defaults. Calibrated mixed tiers, multiple adaptive
+layers, state fork/copy, persistence, native runtime integration, and advanced
+asynchronous packed decode remain separate frontiers.
 
 ## Admitted surface
 
@@ -337,8 +361,10 @@ calibrated mixed-tier owner are the next independent promotion steps.
   a clean shared status and the final device completion marker is present.
 - A default-off Qwen3.8 runtime experiment may replace one selected
   full-attention layer's persistent Float32 KV buffers with that resident owner
-  during multi-token fused prefill. Publication belongs to the existing shared
-  command flush. Decode and state-copy/persistence operations must fail closed.
+  during multi-token fused prefill and synchronous single-token decode.
+  Publication belongs to the existing shared command tail. Advanced async,
+  native-runtime, hidden-state-only, and state-copy/persistence operations must
+  fail closed.
 - The real-model quality probe may apply an explicitly supplied tier per
   full-attention layer to calibrate the finer row-addressable representation.
   Such maps are diagnostic inputs, not runtime policy.
@@ -453,7 +479,8 @@ calibrated mixed-tier owner are the next independent promotion steps.
 - No fixed layer escape map, all-layer or enabled-by-default production
   compactness, adaptive decode speedup, or eightfold production context-window
   claim is admitted. Immediate compactness is established only for one
-  explicitly selected prefill layer under the bounded Qwen3.8 experiment.
+  explicitly selected prefill-and-decode layer under the bounded Qwen3.8
+  experiment.
 - No claim that ClickHouse background merges are on the cache-hit critical
   path: newly inserted rows must remain readable before a part merge completes.
 - No native ClickHouse TCP packet framing/compression, automatic retry policy,
