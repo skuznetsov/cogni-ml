@@ -24307,3 +24307,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Trigger: a completed semantic KV row is assigned the cheapest tier satisfying a local value-space bound. Transport: row values -> p4/p5 reconstruction error -> tier -> retire/restore -> teacher-forced and free generation. Boundary: identical prompt/model/tokenizer, row geometry, retirement order, and joint semantic/top-1/top-2/ECS quality vector. Potential: `{semantic failure, top-1/top-2 loss, ECS loss, resident bytes}`. At comparable bytes the local selector worsens earlier quality coordinates, so compression gain cannot promote it. Dual frame: the calibration-derived fixed layer map under the same probe.
 
 **decision:** Keep the row-local selector as a reproducible quality diagnostic only. Do not add it to the immutable resident plan. The next bounded policy is a static `(layer, K/V, KV head)` calibration map, which can be planned before values exist; online value/age selection remains a separate guarded design.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-HEAD-MAP-921] Static KV-head escapes expose a narrow Pareto point, not a universal selector
+**context:** ml / Qwen3.8 / adaptive QBit / KV head sensitivity / calibration
+**state:** static quality-probe map verified; resident-runtime promotion guard-only
+
+- claim: "The quality probe can apply a deterministic tier at `(full-attention layer, K/V side, KV head)` while preserving layer fallback and the immutable resident-plan boundary."
+  source: `QwenQBitKVQuality::HeadCoordinate` and `KVSide` address per-head tier overrides; `roundtrip_layers_span_adaptive!` expands the four Qwen3.8 KV-head tiers across each token while retaining layer and default fallbacks. The CLI accepts entries such as `51:k0=bf16`. The focused spec checks mixed K/V head overrides against isolated codec roundtrips and rejects an out-of-range head; it passed with the quality metric specs under the guarded Metal runner, and the release probe built successfully.
+  verified_at: 2026-08-24
+  decay_trigger: Qwen KV geometry, adaptive codec layout, tier precedence, probe parser, or resident-plan ownership change
+  trust: {F:0.95,G:0.45,R:0.91}
+
+- claim: "BF16 `51:k0` is a measured high-density Pareto candidate, but it is not supported as a general default."
+  source: guarded Qwen3.8-27B Q4_K_M runs used 64-token limits, 32-token retirement, and arithmetic, sky-scattering, and Crystal `Array#map` prompts. Uniform p4, BF16 `51:k0`, BF16 layers `27,43,47,51`, and all-BF16 attention KV measured density `7.5294x/6.9189x/3.7647x/1.5610x`; aggregated retire top-1 `126/131`, `127/131`, `128/131`, `131/131`; ranked top-2 slots `231/256`, `235/256`, `242/256`, `256/256`; top-2 set overlap `241/256`, `243/256`, `248/256`, `256/256`; and weighted token ECS `0.970086`, `0.974869`, `0.982879`, `1.0`. Exact top-1 remained in candidate top-2 for `128/128` non-boundary positions under every policy, and manual inspection preserved meaning for all `3/3` responses. The head escape improved only arithmetic, not sky or code.
+  verified_at: 2026-08-24
+  decay_trigger: prompt corpus, model/tokenizer/template, retirement order, generation length, tier map, metric implementation, or semantic assessment procedure change
+  trust: {F:0.92,G:0.18,R:0.85}
+
+**Adversary:** Three manually assessed prompts do not identify a general selector. Token ECS is cosine between Qwen output-token rows, not a human semantic score. The `51:k0` gain is arithmetic-local, no long session was included, and one short run showed non-monotone interaction: adding `43:k0` to `51:k0` regressed to the uniform-p4 decision vector. The probe still roundtrips through diagnostic Float32 cache and does not measure a resident per-head GPU plan.
+
+**LTP/WBA:** Trigger: replace a coarse full-layer BF16 escape with a static head-level escape. Transport: calibrated coordinate -> immutable tier plan -> retire/restore -> joint teacher-forced and free-response quality vector. Boundary: identical model, prompt, tokenizer, position, retirement order, and fixed per-head address map. Potential: `{semantic failure, exact top-1 outside top-2, top-1/top-2/ECS loss, resident bytes}`. `51:k0` descends bytes relative to the coarse map but worsens earlier aggregate quality coordinates, so it is a Pareto candidate rather than a promotion. Dual frame: the coarse four-layer map and all-BF16 attention KV.
+
+**decision:** Keep static head overrides as a KISS-compatible calibration mechanism. Do not wire `51:k0` into the resident default. Expand to a held-out, longer-session corpus with repeatable response-level semantic assessment, then promote only a static map whose joint quality vector survives recomputation.

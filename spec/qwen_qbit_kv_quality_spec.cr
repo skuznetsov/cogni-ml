@@ -85,6 +85,50 @@ describe ML::GGUF::QwenQBitKVQuality do
     stats.payload_bytes.should eq((2 * per_owner).to_i64)
   end
 
+  it "applies static K/V head overrides on top of the layer tier" do
+    head_dim = 256
+    n_head_kv = 2
+    kv_dim = n_head_kv * head_dim
+    layer = ML::GGUF::Qwen35CPU::LayerState.new
+    original_k = Array(Float32).new(2 * kv_dim) do |i|
+      (Math.sin(i.to_f64 * 0.019) + (i % 257) * 0.0003).to_f32
+    end
+    original_v = Array(Float32).new(2 * kv_dim) do |i|
+      (Math.cos(i.to_f64 * 0.023) - (i % 263) * 0.0002).to_f32
+    end
+    layer.k_cache = original_k.dup
+    layer.v_cache = original_v.dup
+    coordinate = ML::GGUF::QwenQBitKVQuality::HeadCoordinate
+    overrides = {
+      coordinate.new(0, ML::GGUF::QwenQBitKVQuality::KVSide::K, 1) => ML::GGUF::QwenQBitAdaptiveKV::Tier::P4,
+      coordinate.new(0, ML::GGUF::QwenQBitKVQuality::KVSide::V, 0) => ML::GGUF::QwenQBitAdaptiveKV::Tier::P5,
+    }
+
+    stats = ML::GGUF::QwenQBitKVQuality.roundtrip_layers_span_adaptive!(
+      [layer], [0], 2, n_head_kv, head_dim, 0, 2,
+      ML::GGUF::QwenQBitAdaptiveKV::Tier::BF16,
+      {} of Int32 => ML::GGUF::QwenQBitAdaptiveKV::Tier,
+      overrides,
+    )
+
+    2.times do |token|
+      n_head_kv.times do |head|
+        offset = token * kv_dim + head * head_dim
+        k_tier = head == 1 ? ML::GGUF::QwenQBitAdaptiveKV::Tier::P4 : ML::GGUF::QwenQBitAdaptiveKV::Tier::BF16
+        v_tier = head == 0 ? ML::GGUF::QwenQBitAdaptiveKV::Tier::P5 : ML::GGUF::QwenQBitAdaptiveKV::Tier::BF16
+        expected_k = ML::GGUF::QwenQBitAdaptiveKV.decode(
+          ML::GGUF::QwenQBitAdaptiveKV.encode(original_k[offset, head_dim], [k_tier]),
+        )
+        expected_v = ML::GGUF::QwenQBitAdaptiveKV.decode(
+          ML::GGUF::QwenQBitAdaptiveKV.encode(original_v[offset, head_dim], [v_tier]),
+        )
+        layer.k_cache.not_nil![offset, head_dim].should eq(expected_k)
+        layer.v_cache.not_nil![offset, head_dim].should eq(expected_v)
+      end
+    end
+    stats.raw_bytes.should eq((2 * 2 * kv_dim * sizeof(Float32)).to_i64)
+  end
+
   it "selects the lowest row tier that satisfies a normalized-error bound" do
     row = Array(Float32).new(256) do |i|
       (Math.sin(i.to_f64 * 0.071) + 0.35 * Math.cos(i.to_f64 * 0.193) +
@@ -222,6 +266,17 @@ describe ML::GGUF::QwenQBitKVQuality do
 
     expect_raises(ArgumentError, /normalized-error bound/) do
       ML::GGUF::QwenQBitKVQuality.select_tier(Array(Float32).new(256, 0.0_f32), 0.0)
+    end
+
+    expect_raises(ArgumentError, /KV head outside/) do
+      coordinate = ML::GGUF::QwenQBitKVQuality::HeadCoordinate
+      ML::GGUF::QwenQBitKVQuality.roundtrip_layers_span_adaptive!(
+        [] of ML::GGUF::Qwen35CPU::LayerState, [] of Int32,
+        1, 1, 256, 0, 1,
+        ML::GGUF::QwenQBitAdaptiveKV::Tier::P4,
+        {} of Int32 => ML::GGUF::QwenQBitAdaptiveKV::Tier,
+        {coordinate.new(0, ML::GGUF::QwenQBitKVQuality::KVSide::K, 1) => ML::GGUF::QwenQBitAdaptiveKV::Tier::BF16},
+      )
     end
   end
 end

@@ -25,6 +25,7 @@ record QBitQualityPolicy,
   precision : Int32?,
   adaptive_default : ML::GGUF::QwenQBitAdaptiveKV::Tier?,
   adaptive_layer_tiers : Hash(Int32, ML::GGUF::QwenQBitAdaptiveKV::Tier),
+  adaptive_head_tiers : Hash(ML::GGUF::QwenQBitKVQuality::HeadCoordinate, ML::GGUF::QwenQBitAdaptiveKV::Tier),
   selected_max_error : Float64?
 
 record TokenECSPosition,
@@ -51,6 +52,8 @@ selected_max_errors = [] of Float64
 adaptive_sweep = nil.as(String?)
 chat_mode = true
 retire_chunk = 8
+emit_json = true
+summary_only = false
 
 OptionParser.parse do |parser|
   parser.banner = "Usage: qwen35_qbit_kv_quality_probe [options] [prompt]"
@@ -61,7 +64,7 @@ OptionParser.parse do |parser|
     precisions = value.split(',').map(&.to_i32)
   end
   parser.on("--no-uniform", "Skip uniform p4/p5 variants") { precisions.clear }
-  parser.on("--adaptive-map MAP", "Add p4-default layer escapes, e.g. 3=f32,7=bf16") do |value|
+  parser.on("--adaptive-map MAP", "Add p4-default layer/head escapes, e.g. 27=bf16,27:k0=p4") do |value|
     adaptive_maps << value
   end
   parser.on("--adaptive-sweep TIER", "Try one p5, bf16, or f32 escape layer at a time") do |value|
@@ -71,6 +74,8 @@ OptionParser.parse do |parser|
     selected_max_errors << value.to_f64
   end
   parser.on("--retire-chunk N", "Completed prefill rows packed per chunk (default: 8)") { |value| retire_chunk = value.to_i }
+  parser.on("--no-json", "Suppress per-policy JSON; keep the human-readable quality summary") { emit_json = false }
+  parser.on("--summary-only", "Print one compact quality line per policy and suppress JSON") { summary_only = true }
   parser.on("--raw", "Do not render the Qwen chat template") { chat_mode = false }
   parser.on("-h", "--help", "Show this help") do
     puts parser
@@ -106,16 +111,27 @@ end
 
 def adaptive_policy(spec : String) : QBitQualityPolicy
   layer_tiers = {} of Int32 => ML::GGUF::QwenQBitAdaptiveKV::Tier
+  head_tiers = {} of ML::GGUF::QwenQBitKVQuality::HeadCoordinate => ML::GGUF::QwenQBitAdaptiveKV::Tier
   spec.split(',').each do |entry|
-    layer_text, tier_text = entry.split('=', 2)
-    raise "adaptive map entries must use LAYER=TIER" unless layer_text && tier_text
-    layer = layer_text.to_i32
-    raise "duplicate adaptive layer #{layer}" if layer_tiers.has_key?(layer)
-    layer_tiers[layer] = adaptive_tier(tier_text)
+    target_text, tier_text = entry.split('=', 2)
+    raise "adaptive map entries must use TARGET=TIER" unless target_text && tier_text
+    tier = adaptive_tier(tier_text)
+    if match = /\A(-?\d+):([kKvV])(\d+)\z/.match(target_text)
+      layer = match[1].to_i32
+      side = match[2].downcase == "k" ? ML::GGUF::QwenQBitKVQuality::KVSide::K : ML::GGUF::QwenQBitKVQuality::KVSide::V
+      head = match[3].to_i32
+      coordinate = ML::GGUF::QwenQBitKVQuality::HeadCoordinate.new(layer, side, head)
+      raise "duplicate adaptive head #{target_text}" if head_tiers.has_key?(coordinate)
+      head_tiers[coordinate] = tier
+    else
+      layer = target_text.to_i32
+      raise "duplicate adaptive layer #{layer}" if layer_tiers.has_key?(layer)
+      layer_tiers[layer] = tier
+    end
   end
-  raise "adaptive map cannot be empty" if layer_tiers.empty?
+  raise "adaptive map cannot be empty" if layer_tiers.empty? && head_tiers.empty?
   QBitQualityPolicy.new("adaptive[#{spec}]", nil,
-    ML::GGUF::QwenQBitAdaptiveKV::Tier::P4, layer_tiers, nil)
+    ML::GGUF::QwenQBitAdaptiveKV::Tier::P4, layer_tiers, head_tiers, nil)
 end
 
 def release_state!(state : ML::GGUF::Qwen35CPU::State) : Nil
@@ -236,6 +252,7 @@ def roundtrip_policy!(state : ML::GGUF::Qwen35CPU::State,
       state.layers, hp.full_attention_layers, max_seq,
       hp.n_head_kv, hp.head_dim, start_pos, token_count,
       policy.adaptive_default.not_nil!, policy.adaptive_layer_tiers,
+      policy.adaptive_head_tiers,
     )
   end
 end
@@ -332,13 +349,17 @@ puts "  exact_ids=#{exact_ids.join(',')} exact_text=#{tokenizer.decode(exact_ids
 
 policies = precisions.map do |precision|
   QBitQualityPolicy.new("p#{precision}", precision, nil,
-    {} of Int32 => ML::GGUF::QwenQBitAdaptiveKV::Tier, nil)
+    {} of Int32 => ML::GGUF::QwenQBitAdaptiveKV::Tier,
+    {} of ML::GGUF::QwenQBitKVQuality::HeadCoordinate => ML::GGUF::QwenQBitAdaptiveKV::Tier,
+    nil)
 end
 adaptive_maps.each { |spec| policies << adaptive_policy(spec) }
 selected_max_errors.each do |bound|
   policies << QBitQualityPolicy.new(
     "selected[max_error=#{bound}]", nil, nil,
-    {} of Int32 => ML::GGUF::QwenQBitAdaptiveKV::Tier, bound,
+    {} of Int32 => ML::GGUF::QwenQBitAdaptiveKV::Tier,
+    {} of ML::GGUF::QwenQBitKVQuality::HeadCoordinate => ML::GGUF::QwenQBitAdaptiveKV::Tier,
+    bound,
   )
 end
 if sweep_name = adaptive_sweep
@@ -347,7 +368,9 @@ if sweep_name = adaptive_sweep
   hp.full_attention_layers.each do |layer|
     policies << QBitQualityPolicy.new(
       "adaptive[#{layer}=#{sweep_name.downcase}]", nil,
-      ML::GGUF::QwenQBitAdaptiveKV::Tier::P4, {layer => sweep_tier}, nil,
+      ML::GGUF::QwenQBitAdaptiveKV::Tier::P4, {layer => sweep_tier},
+      {} of ML::GGUF::QwenQBitKVQuality::HeadCoordinate => ML::GGUF::QwenQBitAdaptiveKV::Tier,
+      nil,
     )
   end
 end
@@ -439,6 +462,11 @@ policies.each do |policy|
   append_ratio = forced_append_stats.payload_bytes > 0 ? forced_append_stats.raw_bytes.to_f64 / forced_append_stats.payload_bytes : Float64::NAN
   exact_text = tokenizer.decode(exact_ids)
   free_text = tokenizer.decode(free_ids)
+  if summary_only
+    puts "QBIT_QUALITY_SUMMARY policy=#{policy.label.inspect} ratio=#{prefix_ratio.round(4)}x top1=#{total_top1_matches}/#{total_top1_count} ranked_top2=#{top2_ranked_matches}/#{2 * exact_top2s.size} top2_overlap=#{top2_set_overlap}/#{2 * exact_top2s.size} exact_top1_covered=#{exact_top1_covered}/#{exact_top2s.size} ecs=#{teacher_token_ecs.mean.round(6)} max_logit_delta=#{max_logit_delta.round(6)} free_prefix=#{common_prefix}/#{exact_ids.size} free_text=#{free_text.inspect}"
+    GC.collect
+    next
+  end
   puts "  #{policy.label} prefix_raw_bytes=#{prefix_stats.raw_bytes} prefix_payload_bytes=#{prefix_stats.payload_bytes} prefix_ratio=#{prefix_ratio.round(4)}x qbit_prefill_ms=#{qbit_prefill_ms.round(3)} prefix_cpu_roundtrip_ms=#{prefix_quantize_ms.round(3)}"
   puts "    boundary_top1_match=#{boundary_top1_match} qbit_first_id=#{qbit_first_id} qbit_first_logit=#{qbit_first_logit.round(6)} retire_order_top1=#{total_top1_matches}/#{total_top1_count}"
   puts "    free_prefix=#{common_prefix}/#{exact_ids.size} free_ids=#{free_ids.join(',')} free_text=#{free_text.inspect}"
@@ -452,6 +480,10 @@ policies.each do |policy|
   puts "    append_payload_bytes=#{forced_append_stats.payload_bytes} free_append_payload_bytes=#{free_append_stats.payload_bytes}"
   if policy.selected_max_error
     puts "    prefix_tiers=p4:#{prefix_tier_counts.p4},p5:#{prefix_tier_counts.p5},bf16:#{prefix_tier_counts.bf16} forced_append_tiers=p4:#{forced_tier_counts.p4},p5:#{forced_tier_counts.p5},bf16:#{forced_tier_counts.bf16} free_append_tiers=p4:#{free_tier_counts.p4},p5:#{free_tier_counts.p5},bf16:#{free_tier_counts.bf16}"
+  end
+  unless emit_json
+    GC.collect
+    next
   end
   payload = JSON.build do |json|
     json.object do

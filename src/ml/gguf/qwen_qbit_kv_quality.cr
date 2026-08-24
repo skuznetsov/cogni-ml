@@ -15,6 +15,16 @@ module ML::GGUF
       payload_bytes : Int64,
       blocks : Int64
 
+    enum KVSide
+      K
+      V
+    end
+
+    record HeadCoordinate,
+      layer : Int32,
+      side : KVSide,
+      head : Int32
+
     # Mutable only because a quality run retires many independent spans. The
     # production wire format remains immutable and carries no selector state.
     class TierCounts
@@ -118,11 +128,20 @@ module ML::GGUF
       token_count : Int32,
       default_tier : QwenQBitAdaptiveKV::Tier,
       layer_tiers : Hash(Int32, QwenQBitAdaptiveKV::Tier),
+      head_tiers : Hash(HeadCoordinate, QwenQBitAdaptiveKV::Tier) = {} of HeadCoordinate => QwenQBitAdaptiveKV::Tier,
     ) : Stats
       validate_adaptive_shape(max_seq, n_head_kv, head_dim, start_pos, token_count)
       layer_tiers.each_key do |layer_index|
         unless full_attention_layers.includes?(layer_index)
           raise ArgumentError.new("adaptive KV tier override is not a full-attention layer")
+        end
+      end
+      head_tiers.each_key do |coordinate|
+        unless coordinate.head >= 0 && coordinate.head < n_head_kv
+          raise ArgumentError.new("adaptive KV head outside model geometry")
+        end
+        unless full_attention_layers.includes?(coordinate.layer)
+          raise ArgumentError.new("adaptive KV head override is not a full-attention layer")
         end
       end
 
@@ -135,14 +154,20 @@ module ML::GGUF
           raise ArgumentError.new("full-attention layer index outside state")
         end
         selected_tier = layer_tiers[layer_index]? || default_tier
+        k_tiers = Array(QwenQBitAdaptiveKV::Tier).new(n_head_kv) do |head|
+          head_tiers[HeadCoordinate.new(layer_index, KVSide::K, head)]? || selected_tier
+        end
+        v_tiers = Array(QwenQBitAdaptiveKV::Tier).new(n_head_kv) do |head|
+          head_tiers[HeadCoordinate.new(layer_index, KVSide::V, head)]? || selected_tier
+        end
         layer = layers[layer_index]
         stats = roundtrip_owner_adaptive!(
           layer.k_cache_buf, layer.k_cache, value_offset, value_count,
-          head_dim, selected_tier, stats,
+          head_dim, k_tiers, stats,
         )
         stats = roundtrip_owner_adaptive!(
           layer.v_cache_buf, layer.v_cache, value_offset, value_count,
-          head_dim, selected_tier, stats,
+          head_dim, v_tiers, stats,
         )
       end
       stats
@@ -231,7 +256,7 @@ module ML::GGUF
       value_offset : Int32,
       value_count : Int32,
       head_dim : Int32,
-      tier : QwenQBitAdaptiveKV::Tier,
+      head_tiers : Array(QwenQBitAdaptiveKV::Tier),
       stats : Stats,
     ) : Stats
       live = Array(Float32).new(value_count, 0.0_f32)
@@ -244,7 +269,7 @@ module ML::GGUF
         Slice.new(live.to_unsafe, value_count).copy_from(
           Slice.new(owner.contents.as(Pointer(Float32)) + value_offset, value_count),
         )
-        encoded = encode_adaptive(live, head_dim, tier)
+        encoded = encode_adaptive(live, head_dim, head_tiers)
         decoded = QwenQBitAdaptiveKV.decode(encoded)
         Slice.new(owner.contents.as(Pointer(Float32)) + value_offset, value_count).copy_from(
           Slice.new(decoded.to_unsafe, value_count),
@@ -255,7 +280,7 @@ module ML::GGUF
         Slice.new(live.to_unsafe, value_count).copy_from(
           Slice.new(owner.to_unsafe + value_offset, value_count),
         )
-        encoded = encode_adaptive(live, head_dim, tier)
+        encoded = encode_adaptive(live, head_dim, head_tiers)
         decoded = QwenQBitAdaptiveKV.decode(encoded)
         Slice.new(owner.to_unsafe + value_offset, value_count).copy_from(
           Slice.new(decoded.to_unsafe, value_count),
@@ -310,9 +335,15 @@ module ML::GGUF
 
     private def encode_adaptive(values : Array(Float32),
                                 head_dim : Int32,
-                                tier : QwenQBitAdaptiveKV::Tier) : QwenQBitAdaptiveKV::Encoded
+                                head_tiers : Array(QwenQBitAdaptiveKV::Tier)) : QwenQBitAdaptiveKV::Encoded
+      raise ArgumentError.new("adaptive KV head tier map cannot be empty") if head_tiers.empty?
       rows = values.size // head_dim
-      tiers = Array(QwenQBitAdaptiveKV::Tier).new(rows, tier)
+      unless rows % head_tiers.size == 0
+        raise ArgumentError.new("adaptive KV rows do not align to the head tier map")
+      end
+      tiers = Array(QwenQBitAdaptiveKV::Tier).new(rows) do |row|
+        head_tiers[row % head_tiers.size]
+      end
       QwenQBitAdaptiveKV.encode(values, tiers, block_size: head_dim)
     end
 

@@ -251,6 +251,43 @@ value-dependent or age-dependent online selector still requires a separate
 two-pass compaction, dynamic arena, or hot-tail repack design and remains
 guard-only.
 
+### Static KV-head sensitivity calibration
+
+The quality-only probe now accepts static head overrides such as
+`--adaptive-map 51:k0=bf16` in addition to whole-layer overrides. The address is
+`(full-attention layer, K/V side, KV head)`; a head override wins over its layer
+tier, and the layer tier wins over the p4 default. Qwen3.8-27B has four KV heads
+of 256 values in each of its 16 full-attention layers, so this map is fixed by
+model geometry and remains compatible with the existing immutable resident
+plan. It is a calibration mechanism only; the resident runtime does not yet
+consume this map.
+
+A guarded three-prompt slice used 64-token generation limits and 32-token
+retirement. The prompts covered arithmetic, sky scattering, and Crystal
+`Array#map`. The table aggregates only position-aligned teacher-forced metrics;
+whole-response meaning was checked separately.
+
+| Policy | Logical KV density | Retire top-1 | Exact top-1 in candidate top-2 | Ranked top-2 slots | Top-2 set overlap | Token ECS mean | Meaning preserved |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| all BF16 attention KV | 1.5610x | 131/131 | 128/128 | 256/256 | 256/256 | 1.000000 | 3/3 |
+| BF16 layers `27,43,47,51` | 3.7647x | 128/131 | 128/128 | 242/256 | 248/256 | 0.982879 | 3/3 |
+| BF16 `51:k0` | 6.9189x | 127/131 | 128/128 | 235/256 | 243/256 | 0.974869 | 3/3 |
+| uniform p4 | 7.5294x | 126/131 | 128/128 | 231/256 | 241/256 | 0.970086 | 3/3 |
+
+The `51:k0` escape recovered one arithmetic top-1 decision and four ranked
+top-2 slots over uniform p4 for about eight percent more logical KV bytes. It
+did not improve the sky or code prompts, whereas the four-layer map recovered
+more aggregate quality at lower density. Tier refinement was also not monotone
+in token decisions: on the short arithmetic slice, adding `43:k0` to the
+working `51:k0` escape regressed to the uniform-p4 decision vector. Static head
+sensitivity is therefore useful calibration evidence, not a universal default
+or a proof that independently good head escapes compose.
+
+The next promotion gate is a held-out and longer-session corpus with a
+repeatable response-level semantic judge. Only a map that survives that gate
+should be compiled into the resident GPU plan; the current result does not
+justify dynamic allocation or an online selector.
+
 Mutable row replacement and compressed active DeltaNet state remain guard-only.
 The later default-off runtime slice owns compact K/V immediately after each
 successful prefill command; this calibration corpus alone does not promote its
