@@ -48,6 +48,129 @@ module ML::GGUF
     # buffers. `regions` validates the artifact once before exposing them.
     record Regions, base : Bytes, metadata : Bytes, sidecar : Bytes
 
+    # Immutable allocation plan for an append-only resident cache. Tier
+    # metadata and sidecar offsets depend only on row order, so the exact Metal
+    # allocation can be known before any K/V values are produced.
+    class Plan
+      getter row_count : Int32
+      getter base_bytes : Int32
+      getter metadata_bytes : Int32
+      getter sidecar_bytes : Int32
+      getter payload_bytes : Int32
+      @prefix_sidecar_bytes : Array(Int32)
+
+      private def initialize(@row_count : Int32,
+                             @base_bytes : Int32,
+                             @metadata_bytes : Int32,
+                             @sidecar_bytes : Int32,
+                             @payload_bytes : Int32,
+                             @metadata : Bytes,
+                             @prefix_sidecar_bytes : Array(Int32))
+      end
+
+      def self.from_tiers(tiers : Array(Tier)) : self
+        row_count = tiers.size.to_i32
+        base_bytes64 = row_count.to_i64 * BASE_ROW_BYTES
+        metadata_bytes64 = row_count.to_i64 * METADATA_BYTES
+        prefix_sidecar = Array(Int32).new(row_count + 1, 0_i32)
+        sidecar_cursor = 0_i64
+
+        tiers.each_with_index do |selected, row|
+          sidecar_cursor += QwenQBitAdaptiveKV.sidecar_size(selected)
+          raise ArgumentError.new("adaptive QBit sidecar offset exceeds UInt32") if sidecar_cursor > UInt32::MAX
+          raise ArgumentError.new("adaptive QBit payload is too large") if sidecar_cursor > Int32::MAX
+          prefix_sidecar[row + 1] = sidecar_cursor.to_i32
+        end
+
+        total_bytes = base_bytes64 + metadata_bytes64 + sidecar_cursor
+        raise ArgumentError.new("adaptive QBit payload is too large") if total_bytes > Int32::MAX
+        metadata = Bytes.new(metadata_bytes64.to_i, 0_u8)
+        tiers.each_with_index do |selected, row|
+          offset = row * METADATA_BYTES
+          write_u32_le(metadata, offset, selected.value)
+          write_u32_le(metadata, offset + TIER_BYTES, prefix_sidecar[row].to_u32)
+        end
+
+        new(
+          row_count,
+          base_bytes64.to_i32,
+          metadata_bytes64.to_i32,
+          sidecar_cursor.to_i32,
+          total_bytes.to_i32,
+          metadata,
+          prefix_sidecar,
+        )
+      end
+
+      def prefix_sidecar_bytes(prefix_rows : Int) : Int32
+        unless prefix_rows >= 0 && prefix_rows <= @row_count
+          raise ArgumentError.new("adaptive QBit plan prefix row count is out of range")
+        end
+        @prefix_sidecar_bytes[prefix_rows]
+      end
+
+      # Callers receive a copy so the canonical plan cannot be changed after
+      # its offsets have been admitted or uploaded.
+      def metadata : Bytes
+        @metadata.dup
+      end
+
+      private def self.write_u32_le(payload : Bytes, offset : Int, value : UInt32) : Nil
+        payload[offset] = (value & 0xff).to_u8
+        payload[offset + 1] = ((value >> 8) & 0xff).to_u8
+        payload[offset + 2] = ((value >> 16) & 0xff).to_u8
+        payload[offset + 3] = (value >> 24).to_u8
+      end
+    end
+
+    # Build canonical metadata without allocating or touching the much larger
+    # value payload. Prefix sidecar sizes make live append snapshots exact.
+    def plan(tiers : Array(Tier)) : Plan
+      Plan.from_tiers(tiers)
+    end
+
+    # Allocate the canonical prefix layout with zero values. Device packers
+    # can fill its base and sidecar regions and then pass the result through the
+    # ordinary strict validator/decoder.
+    def empty_encoded(plan : Plan, prefix_rows : Int) : Encoded
+      prefix_sidecar = plan.prefix_sidecar_bytes(prefix_rows)
+      base_bytes = prefix_rows.to_i64 * BASE_ROW_BYTES
+      metadata_bytes = prefix_rows.to_i64 * METADATA_BYTES
+      total_bytes = base_bytes + metadata_bytes + prefix_sidecar
+      value_count = prefix_rows.to_i64 * ROW_VALUES
+      raise ArgumentError.new("adaptive QBit payload is too large") if total_bytes > Int32::MAX
+      raise ArgumentError.new("adaptive QBit value count exceeds Int32") if value_count > Int32::MAX
+
+      payload = Bytes.new(total_bytes.to_i, 0_u8)
+      payload[base_bytes.to_i, metadata_bytes.to_i].copy_from(
+        plan.metadata[0, metadata_bytes.to_i]
+      ) unless metadata_bytes == 0
+      Encoded.new(value_count.to_i32, ROW_VALUES, payload)
+    end
+
+    # Join separately resident base and sidecar prefixes back into the
+    # canonical transport artifact. This is intentionally a verification and
+    # snapshot boundary, not part of the attention hot path.
+    def encoded_from_regions(plan : Plan, prefix_rows : Int,
+                             base : Bytes, sidecar : Bytes) : Encoded
+      expected_base = prefix_rows.to_i64 * BASE_ROW_BYTES
+      expected_sidecar = plan.prefix_sidecar_bytes(prefix_rows)
+      unless base.size == expected_base
+        raise ArgumentError.new("adaptive QBit base prefix size mismatch")
+      end
+      unless sidecar.size == expected_sidecar
+        raise ArgumentError.new("adaptive QBit sidecar prefix size mismatch")
+      end
+
+      encoded = empty_encoded(plan, prefix_rows)
+      metadata_bytes = prefix_rows * METADATA_BYTES
+      encoded.payload[0, base.size].copy_from(base) unless base.empty?
+      sidecar_offset = base.size + metadata_bytes
+      encoded.payload[sidecar_offset, sidecar.size].copy_from(sidecar) unless sidecar.empty?
+      validate(encoded)
+      encoded
+    end
+
     # Encode all rows as dense p4 plus the requested per-row tier.
     def encode(values : Array(Float32), tiers : Array(Tier), block_size : Int32 = ROW_VALUES) : Encoded
       validate_block_size(block_size)

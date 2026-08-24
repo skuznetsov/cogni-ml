@@ -177,10 +177,73 @@ layer 51 independently of retirement policy and keeps automatic selection
 default-off. The next density move is row/head/age-sensitive calibration, not
 adding more global layer escapes.
 
-Runtime prefill ownership, device-side packing, mutable row replacement, and
-compressed DeltaNet state remain guard-only. Production still owns a complete
-Float32 KV allocation, so compactness is demonstrated for the representation
-and fused consumer, not yet achieved immediately during production prefill.
+Runtime prefill ownership, mutable row replacement, and compressed DeltaNet
+state remain guard-only. Production still owns a complete Float32 KV
+allocation, so compactness is demonstrated for the experimental owner and
+fused consumer, not yet achieved immediately during production prefill.
+
+### Append-only device packing slice
+
+The next bounded default-off slice now removes the host encoder from the
+resident-cache construction path without changing production `LayerState`
+ownership. A host-built tier plan fixes every row's metadata and canonical
+sidecar offset before allocation. The resident owner then allocates exact
+base/metadata/sidecar capacity once and appends a contiguous K/V chunk directly
+from temporary Float32 Metal buffers. Its visible length advances only after
+both device pack dispatches complete and a shared failure status remains zero.
+No persistent Float32 KV buffer is retained by this owner.
+
+One 32-lane SIMD group packs one 256-value `(token, KV head)` row. It computes
+moments, writes the dense p4 base, and writes the selected p5/BF16/F32 sidecar
+into its preplanned location. Non-finite inputs or moments, invalid tiers, and
+non-finite p4/p5 reconstruction bounds fail closed without advancing the live
+prefix. A failed row range may be overwritten by a later clean retry. The plan
+is immutable to callers, and diagnostic snapshots reassemble only the live
+prefix and run the ordinary strict host validator.
+
+GPU moments use deterministic Float32 SIMD reduction, while the diagnostic CPU
+encoder uses Float64 accumulation. Byte identity is therefore not an admitted
+invariant. The required invariant is canonical structural validation plus
+bounded decoded-value and attention parity. A 19-token mixed-tier test appends
+`7 + 12` tokens, crosses the 16-token attention tile, and compares the packed
+snapshot with the CPU codec. On Apple M2 Max it passed with decoded-value delta
+below `2e-5`, attention cosine above `0.9999999`, and attention maximum delta
+below `2e-4`. A separate NaN injection left `cache_len == 0`, then a finite
+retry produced a strictly valid snapshot.
+
+A bounded synthetic quiet-host probe (no model weights) measured the current
+synchronous API, including K and V dispatches, command completion, and the
+failure-status read:
+
+| Retired tokens | p4 pack time | mixed25 pack time | p4 input throughput | mixed25 input throughput |
+| ---: | ---: | ---: | ---: | ---: |
+| 8 | 0.249 ms | 0.215 ms | 0.245 GiB/s | 0.283 GiB/s |
+| 32 | 0.197 ms | 0.191 ms | 1.237 GiB/s | 1.278 GiB/s |
+| 128 | 0.189 ms | 0.183 ms | 5.164 GiB/s | 5.344 GiB/s |
+
+Here `mixed25` is a synthetic repeatable plan with one BF16 row per four rows;
+it reproduces the `3.765x` representation density of the coarse four-layer
+calibration but is not a learned selector. Pure p4 density is `7.111x` after
+metadata. At live contexts from 80 to 1280 tokens, adaptive attention ranged
+from `0.764x` to `1.152x` the generic F32 comparator time over the same decoded
+values, with maximum output delta below `6e-8`; these small timings are noisy
+feasibility evidence, not a production speed claim.
+
+Still rejected in this slice:
+
+- production `LayerState` routing or simultaneous full-capacity F32 and packed
+  ownership;
+- mutable age-based re-tiering or sidecar compaction;
+- prompt-cache fork/snapshot/rollback semantics for the packed owner;
+- Qwen3.5 GQA4, non-256 head dimensions, or asynchronous publication of a
+  prefix before pack completion.
+
+The next integration seam is the existing fused full/recurrent prefill command:
+exact attention consumes the current temporary chunk, then the same command
+packs retired K/V rows for the next chunk. Production promotion additionally
+requires packed-aware decode/prefill consumers and an explicit rejection or
+implementation of fork/snapshot paths; the synthetic append owner alone does
+not establish immediate compactness for the shipped runtime.
 
 ## Admitted surface
 
@@ -194,6 +257,11 @@ and fused consumer, not yet achieved immediately during production prefill.
   fixed p4 base plus canonical tier/offset metadata and an optional p5, BF16, or
   F32 sidecar. After strict validation, its Qwen3.8 GQA6 Metal kernel may decode
   those rows directly inside a bounded attention tile.
+- A default-off append-only resident owner may preplan exact K/V base,
+  metadata, and sidecar capacity and pack a contiguous temporary Float32 Metal
+  chunk directly into the next canonical rows. It may publish the longer live
+  prefix only after both pack dispatches complete and their failure status is
+  zero. Diagnostic snapshots may read and validate only that live prefix.
 - The real-model quality probe may apply an explicitly supplied tier per
   full-attention layer to calibrate the finer row-addressable representation.
   Such maps are diagnostic inputs, not runtime policy.

@@ -24153,3 +24153,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: one retired `(token, KV head, 256)` row. Transport: exact current attention -> p4 base plus selected sidecar -> canonical resident buffers -> fused future attention decode. The legal move preserves row identity, retirement ordering, and fail-closed metadata admission. Quality precedes byte reduction in the potential: layer-51 BF16 descends for chunk 8 but loses its certificate when chunk size changes. The dual frame remains a fixed-address representation with a future row/head/age-sensitive selector rather than a hard-coded layer map.
 
 **decision:** Keep the adaptive representation and fused reader default-off. Do not hard-code layer 51. Next calibrate row/head/age-sensitive tier selection and measure device-side retire packing plus adaptive attention throughput before changing production prefill ownership.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-PACK-914] Append-only Metal packing closes the resident construction gap
+**context:** ml / Qwen3.8 / adaptive QBit / Metal / append-only resident KV
+**state:** default-off device packer verified; production ownership still rejected
+
+- claim: "A preplanned adaptive owner can become compact after every completed append without retaining a persistent Float32 KV duplicate."
+  source: `QwenQBitAdaptiveKV::Plan` fixes canonical tier/offset metadata and exact base/sidecar capacity before allocation. `QwenQBitAdaptiveResidentKV.append_from_metal` packs K and V directly from caller-owned temporary Metal buffers, serializes append/attention/release, and advances `cache_len` only after command completion and a zero failure status. A 19-token mixed-tier spec appended `7 + 12` tokens, validated the live prefix after the first chunk, crossed the 16-token attention tile, and passed decoded CPU/GPU delta `<2e-5`, attention cosine `>0.9999999`, and attention delta `<2e-4`. A NaN injection left the prefix invisible and a finite retry validated cleanly.
+  verified_at: 2026-08-23
+  decay_trigger: adaptive plan layout, pack reduction/quantizer, Metal synchronization, cache lifecycle, or attention indexing change
+  trust: {F:0.94,G:0.42,R:0.91}
+
+- claim: "Current synchronous device packing is sub-millisecond for bounded prefill chunks on Apple M2 Max."
+  source: quiet-host synthetic `bin/qwen35_qbit_adaptive_pack_probe.cr` run with no model weights and nine measured appends reported p4/mixed25 medians of `0.249/0.215 ms` for 8 tokens, `0.197/0.191 ms` for 32, and `0.189/0.183 ms` for 128. The measurement includes K+V dispatches, command completion, and failure-status read. Pure p4 density was `7.111x`; the synthetic 25% BF16 mixture was `3.765x`. Adaptive attention over the same decoded values ranged from `0.764x` to `1.152x` the generic F32 comparator with maximum delta below `6e-8`.
+  verified_at: 2026-08-23
+  decay_trigger: host load, compiler/runtime, pack/status fencing, attention comparator, tier mix, chunk geometry, or target hardware change
+  trust: {F:0.88,G:0.25,R:0.82}
+
+**Adversary:** This is a synthetic owner, not the production `LayerState`. It excludes projection time, model weights, prefill scheduling, fork/snapshot/rollback, and row/head/age policy quality. Float32 SIMD moments intentionally differ from the CPU codec's Float64 reduction, so semantic tolerance and strict structural validation—not byte identity—are the admitted certificate. The GQA6/head-dim-256 reader remains shape-specific.
+
+**LTP/WBA:** Trigger: a completed exact-attention chunk whose K/V rows will only be read by future chunks. Transport: temporary F32 Metal projection rows -> preplanned canonical row addresses -> packed resident owner -> fused adaptive attention. Boundary: append-only token/head identity, exact canonical metadata, source lifetime through command completion, and invisible failed prefixes. Potential: `{quality mismatch, invalid visible prefix, persistent KV bytes, pack+attention ms}` lexicographically. Recompute: strict live-prefix snapshot plus attention parity. Dual frame: ordinary full-F32 runtime.
+
+**decision:** Admit append-only device packing only inside the default-off synthetic owner. The next production slice is a shape-gated fused prefill experiment ordered `exact current-chunk attention -> pack retired rows -> next chunk reads packed rows`, with no simultaneous full-capacity F32 owner. Explicitly reject packed routing for fork/snapshot paths until those semantics are implemented or safely gated.

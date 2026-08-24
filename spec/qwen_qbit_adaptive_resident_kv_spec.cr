@@ -118,6 +118,133 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
     diff.should be < 2.0e-4_f32
   end
 
+  it "packs append-only F32 Metal chunks directly into a canonical resident cache" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    cache_len = 19
+    first_chunk = 7
+    n_head = 24
+    n_head_kv = 4
+    head_dim = 256
+    heads_per_group = 6
+    scale = (1.0 / Math.sqrt(head_dim.to_f64)).to_f32
+    row_count = cache_len * n_head_kv
+    value_count = row_count * head_dim
+    rng = Random.new(0xA991D0_u64)
+    k = Array(Float32).new(value_count) { ((rng.next_float - 0.5) * 1.0).to_f32 }
+    v = Array(Float32).new(value_count) { ((rng.next_float - 0.5) * 1.0).to_f32 }
+    q = Array(Float32).new(n_head * head_dim) { ((rng.next_float - 0.5) * 1.0).to_f32 }
+    gate = Array(Float32).new(n_head * head_dim) { ((rng.next_float - 0.5) * 2.0).to_f32 }
+    k_tiers = Array(ML::GGUF::QwenQBitAdaptiveKV::Tier).new(row_count) { |i| tier.from_value(i % 4) }
+    v_tiers = Array(ML::GGUF::QwenQBitAdaptiveKV::Tier).new(row_count) { |i| tier.from_value((i + 2) % 4) }
+    k_plan = adaptive.plan(k_tiers)
+    v_plan = adaptive.plan(v_tiers)
+
+    live_before = ML::MetalBuffer.stats[:live_bytes]
+    k_source = ML::MetalBuffer.from_array(k)
+    v_source = ML::MetalBuffer.from_array(v)
+    resident = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
+      k_plan, v_plan, cache_len, n_head_kv, head_dim,
+    )
+    begin
+      ML::GGUF::QwenQBitAdaptiveResidentKV.append_from_metal(
+        resident, k_source, v_source, first_chunk,
+      )
+      resident.cache_len.should eq(first_chunk)
+      resident.live_compressed_bytes.should eq(
+        first_chunk * n_head_kv *
+        (2 * ML::GGUF::QwenQBitAdaptiveKV::BASE_ROW_BYTES +
+         2 * ML::GGUF::QwenQBitAdaptiveKV::METADATA_BYTES) +
+        k_plan.prefix_sidecar_bytes(first_chunk * n_head_kv) +
+        v_plan.prefix_sidecar_bytes(first_chunk * n_head_kv),
+      )
+      first_k, first_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(resident)
+      adaptive.validate(first_k)
+      adaptive.validate(first_v)
+
+      ML::GGUF::QwenQBitAdaptiveResidentKV.append_from_metal(
+        resident, k_source, v_source, cache_len - first_chunk,
+        source_token_offset: first_chunk,
+      )
+      resident.cache_len.should eq(cache_len)
+      packed_k, packed_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(resident)
+      decoded_k = adaptive.decode(packed_k)
+      decoded_v = adaptive.decode(packed_v)
+      cpu_k = adaptive.decode(adaptive.encode(k, k_tiers))
+      cpu_v = adaptive.decode(adaptive.encode(v, v_tiers))
+
+      QwenQBitAdaptiveResidentKVSpec.max_diff(decoded_k, cpu_k).should be < 2.0e-5_f32
+      QwenQBitAdaptiveResidentKVSpec.max_diff(decoded_v, cpu_v).should be < 2.0e-5_f32
+      expected = QwenQBitAdaptiveResidentKVSpec.reference(
+        q, gate, decoded_k, decoded_v, cache_len,
+        n_head, n_head_kv, head_dim, heads_per_group, scale,
+      )
+      actual = ML::GGUF::QwenQBitAdaptiveResidentKV.attn_decode(
+        q, gate, resident, n_head, heads_per_group, scale,
+      )
+      QwenQBitAdaptiveResidentKVSpec.cosine(expected, actual).should be > 0.9999999
+      QwenQBitAdaptiveResidentKVSpec.max_diff(expected, actual).should be < 2.0e-4_f32
+
+      unsupported_q = Array(Float32).new(4 * head_dim, 0.0_f32)
+      expect_raises(ArgumentError, /GQA6/) do
+        ML::GGUF::QwenQBitAdaptiveResidentKV.attn_decode(
+          unsupported_q, unsupported_q, resident, 4, 1, scale,
+        )
+      end
+
+      expect_raises(ArgumentError, /capacity/) do
+        ML::GGUF::QwenQBitAdaptiveResidentKV.append_from_metal(
+          resident, k_source, v_source, 1,
+        )
+      end
+    ensure
+      resident.release
+      k_source.release
+      v_source.release
+    end
+    ML::MetalBuffer.stats[:live_bytes].should eq(live_before)
+  end
+
+  it "keeps a failed non-finite device append invisible and permits a clean retry" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    values = Array(Float32).new(256, 0.25_f32)
+    invalid = values.dup
+    invalid[17] = Float32::NAN
+    plan = adaptive.plan([ML::GGUF::QwenQBitAdaptiveKV::Tier::P4])
+    k_source = ML::MetalBuffer.from_array(invalid)
+    v_source = ML::MetalBuffer.from_array(values)
+    resident = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(plan, plan, 1, 1, 256)
+    begin
+      empty_q = Array(Float32).new(6 * 256, 0.0_f32)
+      expect_raises(ArgumentError, /empty/) do
+        ML::GGUF::QwenQBitAdaptiveResidentKV.attn_decode(
+          empty_q, empty_q, resident, 6, 6, 1.0_f32,
+        )
+      end
+
+      expect_raises(ArgumentError, /failed closed/) do
+        ML::GGUF::QwenQBitAdaptiveResidentKV.append_from_metal(
+          resident, k_source, v_source, 1,
+        )
+      end
+      resident.cache_len.should eq(0)
+
+      k_source.write(values)
+      ML::GGUF::QwenQBitAdaptiveResidentKV.append_from_metal(
+        resident, k_source, v_source, 1,
+      )
+      resident.cache_len.should eq(1)
+      packed_k, packed_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(resident)
+      adaptive.validate(packed_k)
+      adaptive.validate(packed_v)
+    ensure
+      resident.release
+      k_source.release
+      v_source.release
+    end
+  end
+
   it "rejects adaptive layouts that do not match the declared KV shape" do
     values = Array(Float32).new(2 * 256, 0.0_f32)
     encoded = adaptive.encode(values, [
@@ -127,6 +254,17 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
 
     expect_raises(ArgumentError, /value count/) do
       ML::GGUF::QwenQBitAdaptiveResidentKV.prepare(encoded, encoded, 1, 1, 256)
+    end
+
+    plan = adaptive.plan([
+      ML::GGUF::QwenQBitAdaptiveKV::Tier::P4,
+      ML::GGUF::QwenQBitAdaptiveKV::Tier::P5,
+    ])
+    expect_raises(ArgumentError, /plan row count/) do
+      ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(plan, plan, 1, 1, 256)
+    end
+    expect_raises(ArgumentError, /maximum sequence/) do
+      ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(plan, plan, 0, 1, 256)
     end
   end
 

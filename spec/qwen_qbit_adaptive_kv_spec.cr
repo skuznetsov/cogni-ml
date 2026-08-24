@@ -98,6 +98,44 @@ describe ML::GGUF::QwenQBitAdaptiveKV do
     bits_per_value.should be < 5.0
   end
 
+  it "plans canonical metadata and exact prefix sidecar capacity without value payloads" do
+    tiers = [
+      ML::GGUF::QwenQBitAdaptiveKV::Tier::P4,
+      ML::GGUF::QwenQBitAdaptiveKV::Tier::P5,
+      ML::GGUF::QwenQBitAdaptiveKV::Tier::BF16,
+      ML::GGUF::QwenQBitAdaptiveKV::Tier::F32,
+    ]
+    plan = codec.plan(tiers)
+
+    plan.row_count.should eq(4)
+    plan.base_bytes.should eq(4 * ML::GGUF::QwenQBitAdaptiveKV::BASE_ROW_BYTES)
+    plan.metadata_bytes.should eq(4 * ML::GGUF::QwenQBitAdaptiveKV::METADATA_BYTES)
+    plan.sidecar_bytes.should eq(32 + 512 + 1024)
+    plan.payload_bytes.should eq(plan.base_bytes + plan.metadata_bytes + plan.sidecar_bytes)
+    [0, 0, 32, 544, 1568].each_with_index do |expected, prefix_rows|
+      plan.prefix_sidecar_bytes(prefix_rows).should eq(expected)
+    end
+    mutable_copy = plan.metadata
+    mutable_copy[0] = 0xff_u8
+    plan.metadata[0].should eq(ML::GGUF::QwenQBitAdaptiveKV::Tier::P4.value.to_u8)
+
+    encoded = codec.empty_encoded(plan, 3)
+    encoded.value_count.should eq(3 * 256)
+    encoded.payload_bytes.should eq(
+      3 * (ML::GGUF::QwenQBitAdaptiveKV::BASE_ROW_BYTES +
+           ML::GGUF::QwenQBitAdaptiveKV::METADATA_BYTES) + 544,
+    )
+    regions = codec.regions(encoded)
+    regions.metadata.should eq(plan.metadata[0, 3 * ML::GGUF::QwenQBitAdaptiveKV::METADATA_BYTES])
+  end
+
+  it "rejects invalid adaptive plan prefixes" do
+    plan = codec.plan([ML::GGUF::QwenQBitAdaptiveKV::Tier::P4])
+    expect_raises(ArgumentError, /prefix/) { plan.prefix_sidecar_bytes(-1) }
+    expect_raises(ArgumentError, /prefix/) { plan.prefix_sidecar_bytes(2) }
+    expect_raises(ArgumentError, /prefix/) { codec.empty_encoded(plan, 2) }
+  end
+
   it "rejects non-row-aligned input and tier-count mismatches" do
     expect_raises(ArgumentError, /256/) do
       codec.encode(Array(Float32).new(255, 0.0_f32), [ML::GGUF::QwenQBitAdaptiveKV::Tier::P4])
