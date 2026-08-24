@@ -10,8 +10,9 @@ module ML::GGUF
   module QwenQBitStateSnapshot
     extend self
 
-    MIN_STATE_PRECISION = 6
-    MAX_STATE_PRECISION = 8
+    MIN_STATE_PRECISION           =   6
+    MAX_STATE_PRECISION           =   8
+    ADAPTIVE_RESTORE_CHUNK_TOKENS = 512
 
     alias RecordKind = Qwen35StateSnapshot::RecordKind
 
@@ -408,6 +409,144 @@ module ML::GGUF
           buffer.write_bytes(record.payload.to_unsafe, record.payload.size)
         end
         QwenQBitMetalRestore.decode_native_stream_into(stream, jobs)
+        exact.positions.each_with_index { |position, layer| state.layers[layer].position = position }
+      {% end %}
+    end
+
+    # Cold restore into an already allocated adaptive resident state. Recurrent
+    # records decode directly from the admitted Native stream into their Metal
+    # owners. Each exact live-KV layer is uploaded only long enough for the GPU
+    # packer to append it to the resident cache; no Float32 KV owner survives
+    # this call. The caller must discard the target state if a device operation
+    # raises after validation.
+    def restore_admitted_native_stream_into_adaptive(stream : QwenQBitNativeBlock::Stream,
+                                                     exact : Qwen35StateSnapshot::EncodedSnapshot,
+                                                     cache_id : UInt64,
+                                                     hp : Qwen35Hparams,
+                                                     state : Qwen35CPU::State) : Nil
+      raise ArgumentError.new("QBit adaptive state layer count mismatch") unless exact.layer_count == hp.n_layer && state.layers.size == hp.n_layer
+      raise ArgumentError.new("QBit adaptive state max_seq mismatch") unless exact.max_seq == state.max_seq
+      raise ArgumentError.new("QBit adaptive state position count mismatch") unless exact.positions.size == hp.n_layer
+      raise ArgumentError.new("QBit adaptive exact artifact must use raw Float32") unless exact.codec.raw_f32?
+      unless stream.record_spans.all? { |span| span.cache_id == cache_id }
+        raise ArgumentError.new("unexpected QBit Native state cache identity")
+      end
+
+      live_tokens = exact.positions.first? || 0_i32
+      unless live_tokens > 0 && live_tokens <= state.max_seq && exact.positions.all? { |position| position == live_tokens }
+        raise ArgumentError.new("QBit adaptive state positions must name one live prefix")
+      end
+      unless state.adaptive_kv_layer_indices == hp.full_attention_layers
+        raise ArgumentError.new("QBit adaptive restore requires every full-attention layer")
+      end
+
+      recurrent = Hash({Int32, UInt8}, QwenQBitNativeBlock::StreamRecordSpan).new
+      stream.record_spans.each do |span|
+        key = {span.layer, span.kind}
+        raise ArgumentError.new("duplicate QBit Native state record") if recurrent.has_key?(key)
+        recurrent[key] = span
+      end
+      exact_records = Hash({Int32, UInt8}, Qwen35StateSnapshot::EncodedRecord).new
+      exact.records.each do |record|
+        unless record.kind.k_cache? || record.kind.v_cache?
+          raise ArgumentError.new("QBit adaptive exact artifact must be KV-only")
+        end
+        raise ArgumentError.new("QBit adaptive exact record must stay raw") unless record.codec.raw_f32?
+        key = {record.layer, record.kind.value}
+        raise ArgumentError.new("duplicate QBit adaptive exact record") if exact_records.has_key?(key)
+        exact_records[key] = record
+      end
+
+      expected_recurrent = Set({Int32, UInt8}).new
+      expected_exact = Set({Int32, UInt8}).new
+      kv_record_byte_size = state.max_seq.to_i64 * hp.head_dim * hp.n_head_kv * sizeof(Float32)
+      live_kv_byte_size = live_tokens.to_i64 * hp.head_dim * hp.n_head_kv * sizeof(Float32)
+      qkv_dim = 2_i64 * hp.ssm_group_count * hp.ssm_state_size + hp.ssm_time_step_rank.to_i64 * hp.ssm_state_size
+      conv_record_byte_size = (hp.ssm_conv_kernel - 1).to_i64 * qkv_dim * sizeof(Float32)
+      ssm_record_byte_size = hp.ssm_time_step_rank.to_i64 * hp.ssm_state_size * hp.ssm_state_size * sizeof(Float32)
+      hp.n_layer.times do |layer|
+        if hp.full_attention?(layer)
+          expected_exact.add({layer, RecordKind::KCache.value})
+          expected_exact.add({layer, RecordKind::VCache.value})
+        else
+          expected_recurrent.add({layer, RecordKind::ConvState.value})
+          expected_recurrent.add({layer, RecordKind::SsmState.value})
+        end
+      end
+      raise ArgumentError.new("QBit adaptive recurrent record set mismatch") unless recurrent.keys.to_set == expected_recurrent
+      raise ArgumentError.new("QBit adaptive exact record set mismatch") unless exact_records.keys.to_set == expected_exact
+
+      recurrent.each do |key, span|
+        kind = RecordKind.from_value(key[1])
+        expected_size = kind.conv_state? ? conv_record_byte_size : ssm_record_byte_size
+        unless span.value_count.to_i64 * sizeof(Float32) == expected_size
+          raise ArgumentError.new("QBit adaptive recurrent record byte size mismatch")
+        end
+        layer = state.layers[key[0]]
+        if layer.conv_state || layer.ssm_state
+          raise ArgumentError.new("QBit adaptive recurrent state cannot coexist with a CPU owner")
+        end
+        buffer = state_buffer(layer, kind)
+        unless buffer && buffer.size == expected_size
+          raise ArgumentError.new("QBit adaptive recurrent target buffer is not prepared")
+        end
+      end
+      exact_records.each do |key, record|
+        unless record.original_byte_size.to_i64 == kv_record_byte_size
+          raise ArgumentError.new("QBit adaptive exact record byte size mismatch")
+        end
+        unless record.payload.size.to_i64 == live_kv_byte_size || record.payload.size.to_i64 == kv_record_byte_size
+          raise ArgumentError.new("QBit adaptive exact live prefix is truncated")
+        end
+        layer = state.layers[key[0]]
+        if layer.k_cache || layer.v_cache || layer.k_cache_buf || layer.v_cache_buf
+          raise ArgumentError.new("QBit adaptive KV cannot coexist with a Float32 owner")
+        end
+        cache = layer.adaptive_kv.not_nil!
+        unless cache.cache_len == 0 && cache.max_seq == state.max_seq &&
+               cache.n_head_kv == hp.n_head_kv && cache.head_dim == hp.head_dim
+          raise ArgumentError.new("QBit adaptive target cache is not empty or has the wrong shape")
+        end
+      end
+
+      {% if flag?(:cpu_only) %}
+        raise "Metal disabled (cpu_only)"
+      {% else %}
+        raise "Metal not available" unless Qwen35Metal.available?
+        jobs = [] of QwenQBitMetalRestore::NativeStreamJob
+        recurrent.each do |key, span|
+          kind = RecordKind.from_value(key[1])
+          buffer = state_buffer(state.layers[key[0]], kind).not_nil!
+          jobs << QwenQBitMetalRestore::NativeStreamJob.new(span, buffer)
+        end
+        QwenQBitMetalRestore.decode_native_stream_into(stream, jobs)
+
+        hp.full_attention_layers.each do |layer_index|
+          k_record = exact_records[{layer_index, RecordKind::KCache.value}]
+          v_record = exact_records[{layer_index, RecordKind::VCache.value}]
+          token_offset = 0_i32
+          while token_offset < live_tokens
+            chunk_tokens = Math.min(ADAPTIVE_RESTORE_CHUNK_TOKENS, live_tokens - token_offset)
+            chunk_byte_offset = token_offset.to_i64 * hp.head_dim * hp.n_head_kv * sizeof(Float32)
+            chunk_byte_size = chunk_tokens.to_i64 * hp.head_dim * hp.n_head_kv * sizeof(Float32)
+            k_source = ML::MetalBuffer.new(chunk_byte_size, ML::StorageMode::Shared)
+            v_source = ML::MetalBuffer.new(chunk_byte_size, ML::StorageMode::Shared)
+            begin
+              k_source.write_bytes(k_record.payload[chunk_byte_offset.to_i, chunk_byte_size.to_i].to_unsafe, chunk_byte_size.to_i)
+              v_source.write_bytes(v_record.payload[chunk_byte_offset.to_i, chunk_byte_size.to_i].to_unsafe, chunk_byte_size.to_i)
+              QwenQBitAdaptiveResidentKV.append_from_metal(
+                state.layers[layer_index].adaptive_kv.not_nil!,
+                k_source,
+                v_source,
+                chunk_tokens,
+              )
+            ensure
+              k_source.release
+              v_source.release
+            end
+            token_offset += chunk_tokens
+          end
+        end
         exact.positions.each_with_index { |position, layer| state.layers[layer].position = position }
       {% end %}
     end

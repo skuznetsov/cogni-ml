@@ -1309,6 +1309,53 @@ Production storage should batch all tiles for one or more cache keys per insert
 to avoid part-count pressure. Background merges should perform cleanup and
 compaction, never admission or visibility.
 
+### Direct cold artifact to adaptive resident KV gate (2026-08-24)
+
+`QwenQBitStateSnapshot.restore_admitted_native_stream_into_adaptive` is the
+smallest restore corridor that avoids recreating a persistent Float32 KV owner.
+It decodes the admitted p7 recurrent Native stream directly into the prepared
+Metal recurrent buffers, then uploads one attention layer's exact live K/V
+prefix to the adaptive GPU packer in fixed 512-token chunks. The two temporary
+shared buffers are released before the next chunk; for Qwen3.8 geometry their
+combined payload is bounded near 6 MiB instead of growing with the full context.
+All 16 attention layers finish with adaptive ownership only. Validation of
+identity, record completeness, shape, positions, and empty target ownership
+happens before publication; after a device error the caller must discard the
+target state.
+
+A guarded Qwen3.8-27B Q4_K_M multi-turn row used an 829-token checkpoint, a
+34-token follow-up, and the default-off
+`p4;27=bf16,43=bf16,47=bf16,51=bf16` map:
+
+| Phase or quality signal | Measured result |
+| --- | ---: |
+| exact anchor prefill | 9,515.721 ms |
+| synchronous checkpoint serialization | 15,650.038 ms |
+| first / second in-memory admitted restore | 64.147 / 35.015 ms |
+| adaptive follow-up replay | 1,470.185 ms |
+| adaptive response decode | 754.545 ms |
+| source snapshot / cold payload | 276,430,848 / 148,917,368 bytes (`1.8563x`) |
+| recurrent Native / exact live-KV / total payload | 40,257,628 / 108,659,740 / 148,917,368 bytes |
+| raw / resident live attention KV | 108,658,688 / 30,046,208 bytes (`3.6164x`) |
+| top-1 / exact top-1 covered by restored top-2 | `8/8` / `7/7` |
+| ranked top-2 / unordered overlap | `9/14` / `9/14` |
+| output-row token ECS mean/minimum | `1.0 / 1.0` |
+
+Exact and restored free runs both reached EOS and emitted the identical sentence
+`Their sum is 95.`. The differing runner-up candidates therefore remain an
+explicit distribution-drift warning, not a response-level failure. Meaning,
+greedy top-1, exact-top-1 coverage, and ECS form the admission gate; ranked and
+unordered top-2 parity remain separately visible diagnostics.
+
+The restore numbers begin after artifacts are already present and parsed in
+memory. They exclude filesystem and ClickHouse lookup/read, so they are not
+full cold-hit latency. The exact live-KV artifact is still raw Float32 on disk,
+and the synchronous 15.7-second recurrent QBit encoding is not on an acceptable
+response boundary; background publication remains the intended dual frame.
+`Qwen35NativeRuntime`, checkpoint renewal from an adaptive owner, ClickHouse
+composition, and packed adaptive KV persistence remain fail-closed or open.
+These are single guarded rows; replay/decode variance is not a throughput SLA.
+
 ### Cache-engine contract
 
 - The internal envelope makes cache keys content-addressed over model,

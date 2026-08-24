@@ -2,6 +2,7 @@ require "./spec_helper"
 require "../src/ml/gguf/reader"
 require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_state_snapshot"
+require "../src/ml/gguf/qwen_qbit_state_snapshot"
 
 QWEN_38_ADAPTIVE_STATE    = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf"
 QWEN_35_9B_ADAPTIVE_STATE = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
@@ -154,6 +155,54 @@ describe ML::GGUF::Qwen35CPU do
     adaptive_bytes.should be < raw_kv_bytes
     state.layers[27].adaptive_kv.not_nil!.compressed_bytes.should be >
                                                                   state.layers[3].adaptive_kv.not_nil!.compressed_bytes
+  ensure
+    release_adaptive_state!(state) if state
+    gguf.try(&.close)
+  end
+
+  it "rejects an incomplete cold adaptive restore before publishing KV rows" do
+    pending!("Qwen3.8 27B model not present") unless File.exists?(QWEN_38_ADAPTIVE_STATE)
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    gguf = ML::GGUF::GGUFFile.new(QWEN_38_ADAPTIVE_STATE)
+    hp = ML::GGUF::Qwen35Hparams.new(gguf)
+    state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 8)
+    with_adaptive_state_env(nil, nil, "p4;27=bf16,43=bf16,47=bf16,51=bf16") do
+      ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp)
+    end
+
+    encoded = ML::GGUF::QwenQBitGaussianCodec.encode([0.0_f32], 8, 7)
+    native_bytes = ML::GGUF::QwenQBitNativeWriter.encode([
+      ML::GGUF::QwenQBitNativeWriter::Record.new(
+        7_u64,
+        hp.recurrent_layers.first,
+        ML::GGUF::Qwen35StateSnapshot::RecordKind::ConvState.value,
+        encoded,
+      ),
+    ])
+    stream = ML::GGUF::QwenQBitNativeBlock.parse_stream(native_bytes)
+    exact_records = [] of ML::GGUF::Qwen35StateSnapshot::EncodedRecord
+    exact = ML::GGUF::Qwen35StateSnapshot::EncodedSnapshot.new(
+      state.max_seq,
+      hp.n_layer,
+      Array(Int32).new(hp.n_layer, 1_i32),
+      exact_records,
+      ML::GGUF::Qwen35StateSnapshot::RecordCodec::RawF32,
+      0_i32,
+    )
+
+    expect_raises(ArgumentError, /record set mismatch/) do
+      ML::GGUF::QwenQBitStateSnapshot.restore_admitted_native_stream_into_adaptive(
+        stream,
+        exact,
+        7_u64,
+        hp,
+        state,
+      )
+    end
+    hp.full_attention_layers.each do |layer_index|
+      state.layers[layer_index].adaptive_kv.not_nil!.cache_len.should eq(0)
+    end
   ensure
     release_adaptive_state!(state) if state
     gguf.try(&.close)
