@@ -78,6 +78,60 @@ the final production overhead. The probe fails closed on output divergence; its
 latest p4/p5 runs had maximum differences of `8.85e-9` and `5.59e-9` against
 the current F32 kernel over the same decoded values.
 
+### Retire-then-pack quality gate
+
+The real-model quality falsifier models a conservative streaming order:
+
+1. one bounded prefill chunk, or one decode row, runs exact attention and writes
+   ordinary K/V;
+2. after that work has completed, its `(token, KV head, 256)` K/V rows are
+   quantized and reconstructed;
+3. the next chunk or decode row observes the reconstructed older values.
+
+`bin/qwen35_qbit_kv_quality_probe.cr` implements this order without changing
+production routing. The exact oracle and QBit variants use identical explicit
+chunk boundaries, but only the QBit variants roundtrip each completed chunk
+before the next one. Decode rows retire in the same order. The probe then
+compares teacher-forced full logits plus free greedy continuation. The roundtrip
+restores Float32 values into the existing cache, so it isolates model quality
+but does **not** demonstrate live-memory compactness or GPU pack cost. Together
+with the resident-attention parity probe, it is evidence for the numeric values
+a future fused resident route would consume.
+
+One guarded Qwen3.8-27B Q4_K_M stress slice on Apple M2 Max (2026-08-23) used an
+eight-token retire chunk and covered explanatory text, Crystal code, and
+arithmetic. All prompts crossed at least two retire boundaries.
+
+| Format | Greedy common prefix | Retire-order top-1 | Minimum decode-logit cosine | Maximum decode-logit delta |
+| --- | ---: | ---: | ---: | ---: |
+| p4 | 21/24 | 23/24 | 0.955567 | 5.088198 |
+| p5 | 21/24 | 23/24 | 0.961276 | 3.694828 |
+
+Both formats preserved the prompt-boundary prediction on all three rows. That
+prediction already observes compressed older chunks but, by retire-after-use
+definition, is computed before the final chunk itself is packed. The first
+teacher-forced decode comparison observes the packed final chunk. Both formats
+diverged after a five-token common prefix on the arithmetic row and scored
+`7/8` across this retire-order sequence. Repeating that row with a
+32-token retire chunk produced the same first divergence. Uniform p4 and p5 are
+therefore rejected as production defaults by this bounded accumulated-error
+slice. The earlier whole-prompt-retire p5 `38/38` result was a lower-bound
+diagnostic: it did not expose later prefill chunks to compressed older values.
+
+Cosine/MSE cannot select the adaptive tier by itself. The code row had the
+lowest p4 logit cosine in the earlier six-prompt lower-bound slice yet preserved
+all tested top-1 tokens, while arithmetic diverged at a higher cosine. The next
+admissible policy is a fixed-index p4 base plus optional refinement planes and
+bounded escape metadata, calibrated by layer/head sensitivity and
+teacher-forced/free-run gates.
+
+Production still allocates and writes a full-capacity Float32 KV cache. A future
+resident implementation should instead retire and pack one bounded chunk at a
+time. Its persistent cache can then be compact after every completed chunk while
+only one current F32/H16 K/V scratch chunk remains transient. It cannot claim
+compactness during the first unfinished chunk, and this diagnostic roundtrip
+does not yet implement that ownership change.
+
 ## Admitted surface
 
 - A default-off probe may encode recurrent Float32 records in independent

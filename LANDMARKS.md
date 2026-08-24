@@ -24103,3 +24103,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Window: complete prepared-state cache hit. Transport: MergeTree QBit planes plus exact KV -> bounded ordered responses -> versioned strict admission -> prepared Metal state -> first post-restore forward. The legal move keeps natural block boundaries, exact KV, complete state ABI, and token parity. The internal envelope closes the representation/identity boundary and an immutable process-local `Admission` amortizes repeated validation, but the measured logical digest makes the first strict cold hit slower. The next legal move must establish a trusted ClickHouse transport/storage certificate or fuse verification with consumption; trusting a self-described manifest or skipping malformed-stream checks is rejected.
 
 **decision:** Keep the route default-off, but accept the measured compactness/latency trade for runtime integration: 6.22-6.29% less complete-state ClickHouse disk on this state, an 80.150ms strict HTTP lookup, and a 2.115ms manifest-rechecked resident lookup. The bounded client and manifest-last generation protocol are built. Next wire them behind an explicit cache flag with ordinary-prefill fallback, then design a trusted transport/storage certificate that removes redundant first-hit hashing without weakening strict external-stream admission.
+
+#### [LM-QWEN38-QBIT-KV-QUALITY-912] Chunk-retire quality rejects uniform p4 and p5 defaults
+**context:** ml / Qwen3.8 / QBit / resident KV / model quality / prefill
+**state:** bounded diagnostic quality gate implemented and verified
+
+- claim: "A chunk-retire probe can isolate accumulated p4/p5 KV quality loss without changing production cache ownership."
+  source: `bin/qwen35_qbit_kv_quality_probe.cr` runs its exact oracle and QBit variants through identical explicit prefill chunks, but roundtrips every completed QBit chunk before the next chunk consumes it; each decode row retires after its current attention. `spec/qwen_qbit_kv_quality_spec.cr` passed `4 examples, 0 failures`, including chunk/full codec equivalence, shared-Metal roundtrip, untouched adjacent rows, and excluded-layer preservation.
+  verified_at: 2026-08-23
+  decay_trigger: KV layout, QBit codec, attention ordering, state ownership, tokenizer EOS semantics, or quality probe rewrite
+  trust: {F:0.90,G:0.48,R:0.87}
+
+- claim: "Uniform p4 and p5 are not admissible production defaults on the first accumulated-error Qwen3.8-27B quality slice."
+  source: three guarded short-chat rows on Qwen3.8-27B Q4_K_M used eight-token retire chunks and covered text, Crystal code, and arithmetic. Both p4 and p5 retained a `21/24` greedy common prefix and `23/24` retire-order top-1; both arithmetic rows diverged after five common tokens. The prompt-boundary prediction observes compressed older chunks but precedes final-chunk retirement; the first decode comparison observes that final packed chunk. p4/p5 minimum decode-logit cosine was `0.955567/0.961276`, while maximum decode-logit delta was `5.088198/3.694828`. A 32-token retire-chunk repeat preserved the same arithmetic divergence. The earlier whole-prompt-retire p5 `38/38` result is only a lower-bound diagnostic because later prefill chunks never consumed compressed older values.
+  verified_at: 2026-08-23
+  decay_trigger: model weights, prompt/template/tokenizer, codec or tile policy, longer quality suite, or resident runtime integration
+  trust: {F:0.88,G:0.30,R:0.84}
+
+**Adversary:** Three short prompts cannot establish long-context quality, and the probe reconstructs into Float32 rather than measuring GPU pack cost or live compactness. Cosine is not a safe adaptive selector; production still owns a full-capacity Float32 KV allocation.
+
+**LTP/WBA:** Window: completed K/V row or bounded prefill chunk. Transport: exact current attention -> semantic-row QBit encode -> compact persistent KV -> fused future attention decode. Legal move: retire and pack after the current attention so approximation affects only future rows; persistent cache becomes compact chunk by chunk while one bounded F32/H16 scratch chunk remains. Potential does not descend for uniform p4 because model-quality mismatch is an earlier component than memory bytes. The dual frame is fixed-index p4 base plus optional p5+ refinement and bounded BF16/F32 escapes calibrated by model sensitivity.
+
+**decision:** Reject uniform p4 and p5 promotion. Keep adaptive resident KV default-off. Next add a fixed-offset progressive p4 base plus refinement/escape probe and calibrate its per-layer/head policy on longer teacher-forced and free-run gates before production prefill wiring.
