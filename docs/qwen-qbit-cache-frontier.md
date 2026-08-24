@@ -283,15 +283,66 @@ working `51:k0` escape regressed to the uniform-p4 decision vector. Static head
 sensitivity is therefore useful calibration evidence, not a universal default
 or a proof that independently good head escapes compose.
 
-The next promotion gate is a held-out and longer-session corpus with a
-repeatable response-level semantic judge. Only a map that survives that gate
-should be compiled into the resident GPU plan; the current result does not
-justify dynamic allocation or an online selector.
+That promotion gate is now implemented as the deterministic long-response
+corpus below. It rejects this head escape and narrows the next resident-GPU
+trial to the coarse four-layer map. It still does not justify dynamic
+allocation or an online selector.
 
 Mutable row replacement and compressed active DeltaNet state remain guard-only.
 The later default-off runtime slice owns compact K/V immediately after each
 successful prefill command; this calibration corpus alone does not promote its
 tier map to a production default.
+
+### Held-out long-response quality gate
+
+`scripts/qwen_qbit_quality_corpus.py` runs the existing quality probe one case
+at a time under `run_safe.sh` and keeps the quality result as a vector rather
+than a scalar score. The frozen JSONL manifest contains four task-level
+oracles: an inventory ledger, a Crystal pipeline trace, an Earth-seasons causal
+chain, and a transaction-recovery protocol. Each compressed response and the
+exact-F32 response must satisfy the same required facts and minimum length. If
+the exact response fails, the case is an invalid baseline rather than evidence
+against QBit. Exact and compressed responses must also reach their own EOS;
+the compressed free-run is not capped at the shorter exact-response length.
+Score-only replay requires the logged generation limit to match the manifest,
+preventing an older or truncated log from being accepted.
+
+The valid exact responses generated 155--313 tokens each, 967 tokens in total.
+The teacher-forced top-2 comparison covered 963 positions. The aggregate
+held-out vector was:
+
+| Policy | Logical KV density | Meaning | Retire top-1 | Ranked top-2 slots | Top-2 set overlap | Exact top-1 in candidate top-2 | Token ECS mean |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| BF16 layers `27,43,47,51` | 3.7647x | 4/4 | 927/967 | 1682/1926 | 1740/1926 | 952/963 | 0.963158 |
+| BF16 `51:k0` | 6.9189x | 3/4 | 913/967 | 1583/1926 | 1667/1926 | 951/963 | 0.951736 |
+| uniform p4 | 7.5294x | 3/4 | 914/967 | 1588/1926 | 1667/1926 | 950/963 | 0.951670 |
+
+The head escape is therefore rejected for promotion. It consumed about nine
+percent more payload than uniform p4 while preserving the meaning of the same
+three cases; its aggregate local metrics were effectively tied and mostly a
+little worse. The coarse four-layer map is the only measured policy that
+preserved all four task-level meanings and it led every aggregate local metric,
+but at roughly twice the payload of p4. It is the next default-off resident-GPU
+candidate, not a production default.
+
+The corpus also falsifies treating ECS or top-2 coverage as the semantic gate.
+On the inventory task, p4 and `51:k0` kept the exact top-1 inside their top-2 at
+every measured position and had ECS about `0.9955`, yet an early free-running
+divergence produced the wrong ledger states and final count. ECS remains useful
+for locating token drift, but the task oracle owns the earlier acceptance
+coordinate.
+
+This certificate is deliberately narrow. The oracles are regular-expression
+fact checks over four English responses, not a general semantic judge, and can
+miss a contradiction that also repeats the required facts. During exact-
+baseline qualification and adversary review, patterns were widened for obvious
+inflections or semantic equivalents and a false 60-word boundary was removed;
+generation budgets were also raised after 128-token truncation. The same
+repaired rules and EOS guard were then applied to every policy, but the judge
+was not perfectly preregistered. These are long responses, not restored
+multi-turn sessions. The diagnostic probe still
+roundtrips into Float32 storage, so resident packing, GPU-only execution,
+throughput, and restore/checkpoint behavior remain outside this gate.
 
 ### Append-only device packing slice
 

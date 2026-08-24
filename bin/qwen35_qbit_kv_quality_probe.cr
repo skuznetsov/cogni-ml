@@ -386,7 +386,7 @@ policies.each do |policy|
   free_append_stats = ML::GGUF::QwenQBitKVQuality::Stats.new(0_i64, 0_i64, 0_i64)
   free_tier_counts = ML::GGUF::QwenQBitKVQuality::TierCounts.new
   begin
-    exact_logits.size.times do |step|
+    (n_gen - 1).times do |step|
       break if free_ids[-1] == tokenizer.eos_id
       pos = tokens.size + step
       free_first_id, free_first_logit, free_second_id, free_second_logit = ML::GGUF::Qwen35CPU.forward_top2(
@@ -496,6 +496,8 @@ policies.each do |policy|
       json.field "candidate_text", free_text
       json.field "exact_ids", exact_ids
       json.field "candidate_ids", free_ids
+      json.field "exact_ended_with_eos", exact_ids[-1] == tokenizer.eos_id
+      json.field "candidate_ended_with_eos", free_ids[-1] == tokenizer.eos_id
       json.field "free_common_prefix", common_prefix
       json.field "retire_order_top1_matches", total_top1_matches
       json.field "retire_order_top1_count", total_top1_count
