@@ -17,7 +17,7 @@ module ML::GGUF
       precision : Int32,
       payload : Bytes
 
-    MIN_PRECISION      = 6
+    MIN_PRECISION      = 4
     MAX_PRECISION      = 8
     BLOCK_HEADER_BYTES = 2 * sizeof(Float32)
 
@@ -63,6 +63,18 @@ module ML::GGUF
     # Exact Float32 bit patterns from ClickHouse
     # LloydMax::POSITIVE_PREFIX_CENTROIDS. Keeping the generated values avoids
     # platform-dependent libm rounding in the cache representation.
+    private P4_POSITIVE_PREFIX_CENTROID_BITS = [
+      0x3da18fb8_u32, 0x3e747262_u32, 0x3ecf6cea_u32, 0x3f158a3a_u32,
+      0x3f491a06_u32, 0x3f8408fb_u32, 0x3fb45dcf_u32, 0x4007469a_u32,
+    ] of UInt32
+
+    private P5_POSITIVE_PREFIX_CENTROID_BITS = [
+      0x3d214c9e_u32, 0x3df27670_u32, 0x3e4aeb9c_u32, 0x3e8efa3f_u32,
+      0x3eb97bb4_u32, 0x3ee558d1_u32, 0x3f0982c6_u32, 0x3f218b69_u32,
+      0x3f3b2b35_u32, 0x3f56f4e8_u32, 0x3f75d8c1_u32, 0x3f8cda65_u32,
+      0x3fa379d0_u32, 0x3fc3f223_u32, 0x3ff8a44f_u32, 0x4028a4fe_u32,
+    ] of UInt32
+
     private P6_POSITIVE_PREFIX_CENTROID_BITS = [
       0x3ca13bf4_u32, 0x3d71fa9c_u32, 0x3dc9dcd5_u32, 0x3e0d8782_u32,
       0x3e365b21_u32, 0x3e5f7b2c_u32, 0x3e847d3d_u32, 0x3e997688_u32,
@@ -94,6 +106,7 @@ module ML::GGUF
     ] of UInt32
 
     @@reconstruction_luts = {} of Int32 => Array(Float32)
+    @@reconstruction_luts_mutex = Mutex.new
 
     def encode(values : Array(Float32), block_size : Int32, precision : Int32) : Encoded
       validate_shape(block_size, precision)
@@ -273,7 +286,9 @@ module ML::GGUF
     end
 
     private def reconstruction_lut(precision : Int32) : Array(Float32)
-      @@reconstruction_luts[precision] ||= build_reconstruction_lut(precision)
+      @@reconstruction_luts_mutex.synchronize do
+        @@reconstruction_luts[precision] ||= build_reconstruction_lut(precision)
+      end
     end
 
     private def build_reconstruction_lut(precision : Int32) : Array(Float32)
@@ -304,7 +319,14 @@ module ML::GGUF
     end
 
     private def positive_prefix_centroid_bits(precision : Int32) : Array(UInt32)
-      precision == 6 ? P6_POSITIVE_PREFIX_CENTROID_BITS : P7_POSITIVE_PREFIX_CENTROID_BITS
+      case precision
+      when 4 then P4_POSITIVE_PREFIX_CENTROID_BITS
+      when 5 then P5_POSITIVE_PREFIX_CENTROID_BITS
+      when 6 then P6_POSITIVE_PREFIX_CENTROID_BITS
+      when 7 then P7_POSITIVE_PREFIX_CENTROID_BITS
+      else
+        raise ArgumentError.new("QBit prefix centroids are unavailable for precision #{precision}")
+      end
     end
 
     private def bf16_round(value : Float32) : Float32

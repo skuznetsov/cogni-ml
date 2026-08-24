@@ -10,6 +10,9 @@ module ML::GGUF
   module QwenQBitStateSnapshot
     extend self
 
+    MIN_STATE_PRECISION = 6
+    MAX_STATE_PRECISION = 8
+
     alias RecordKind = Qwen35StateSnapshot::RecordKind
 
     record EncodedRecord,
@@ -52,7 +55,7 @@ module ML::GGUF
     def encode(snapshot : Qwen35StateSnapshot::Snapshot,
                block_size : Int32 = 1024,
                precision : Int32 = 7) : Snapshot
-      unless precision >= QwenQBitGaussianCodec::MIN_PRECISION && precision <= QwenQBitGaussianCodec::MAX_PRECISION
+      unless precision >= MIN_STATE_PRECISION && precision <= MAX_STATE_PRECISION
         raise ArgumentError.new("QBit state snapshot precision is unsupported")
       end
       records = snapshot.records.map do |record|
@@ -411,7 +414,7 @@ module ML::GGUF
 
     def validate(snapshot : Snapshot) : Nil
       raise ArgumentError.new("QBit state position count mismatch") unless snapshot.positions.size == snapshot.layer_count
-      unless snapshot.precision >= QwenQBitGaussianCodec::MIN_PRECISION && snapshot.precision <= QwenQBitGaussianCodec::MAX_PRECISION
+      unless snapshot.precision >= MIN_STATE_PRECISION && snapshot.precision <= MAX_STATE_PRECISION
         raise ArgumentError.new("QBit state snapshot precision is unsupported")
       end
       seen = Set({Int32, UInt8}).new

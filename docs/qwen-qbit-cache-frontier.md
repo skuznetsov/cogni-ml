@@ -42,6 +42,42 @@ Bounded context: local `.qkv` state artifacts and an explicitly configured
 ClickHouse HTTP endpoint. Background part merges are a separate storage context
 and never establish cache visibility or admission.
 
+## Resident KV experimental slice
+
+This is a separate default-off probe, not an extension of the durable cache
+runtime. It admits p4/p5 QBit payloads whose affine block is exactly one
+`(token, KV head)` vector and a Metal attention decode that consumes those
+payloads directly without materializing an intermediate Float32 KV cache.
+
+- The first slice is synthetic and bounded. It does not replace
+  `LayerState.k_cache_buf` or `LayerState.v_cache_buf`, change live state
+  ownership, or run the 27B model.
+- Active DeltaNet/recurrent state remains uncompressed. QBit recurrent-state
+  compression remains a save/restore transport concern because the active
+  state has fixed size rather than token-linear growth.
+- The required falsifier is parity between fused Metal attention and the CPU
+  reference over the *same decoded p4/p5 values*. A seeded plane-bit mutation
+  must change the comparison result, proving that the parity check is live.
+- Adaptive per-tile precision, sparse BF16/F32 escape values, hot tails,
+  production runtime routing, and non-GQA6 shapes are guard-only follow-ups.
+  Memory-ratio measurements from this probe do not establish model quality or
+  an eightfold production context-window increase.
+
+Bounded synthetic evidence on Apple M2 Max (2026-08-23):
+
+| Format | Resident KV size vs F32 | QBit/F32 time at 8192 tokens |
+| --- | ---: | ---: |
+| p4 | 7.53x smaller | 0.94x-1.04x |
+| p5 | 6.10x smaller | 1.03x-1.13x |
+
+The parity spec uses the Qwen3.8 GQA shape of 24 query heads and 4 KV heads.
+The latency probe uses one KV head to bound allocation and isolate scaling. Its
+F32 comparator is the current generic attention kernel, not a hypothetical
+GQA-specialized F32 kernel, so these timings establish feasibility rather than
+the final production overhead. The probe fails closed on output divergence; its
+latest p4/p5 runs had maximum differences of `8.85e-9` and `5.59e-9` against
+the current F32 kernel over the same decoded values.
+
 ## Admitted surface
 
 - A default-off probe may encode recurrent Float32 records in independent

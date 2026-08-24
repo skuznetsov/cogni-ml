@@ -101,7 +101,7 @@ end
 end
 effective_cache_id = cache_id.nil? ? 0_u64 : cache_id.not_nil!
 precisions.each do |precision|
-  unless precision >= ML::GGUF::QwenQBitGaussianCodec::MIN_PRECISION && precision <= ML::GGUF::QwenQBitGaussianCodec::MAX_PRECISION
+  unless precision >= ML::GGUF::QwenQBitStateSnapshot::MIN_STATE_PRECISION && precision <= ML::GGUF::QwenQBitStateSnapshot::MAX_STATE_PRECISION
     raise "unsupported precision: #{precision}"
   end
 end

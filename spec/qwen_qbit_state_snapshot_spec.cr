@@ -63,6 +63,26 @@ describe ML::GGUF::QwenQBitStateSnapshot do
     expect_raises(ArgumentError, /duplicate/) { state_codec.validate(malformed) }
   end
 
+  it "keeps save-time recurrent compression at p6 through p8" do
+    source = ML::GGUF::Qwen35StateSnapshot::Snapshot.new(
+      16,
+      1,
+      [5_i32],
+      [
+        ML::GGUF::Qwen35StateSnapshot::Record.new(
+          0,
+          QBitStateRecordKind::ConvState,
+          qbit_state_bytes([1.0_f32, 2.0_f32]),
+          ML::StorageMode::Shared,
+        ),
+      ],
+    )
+
+    expect_raises(ArgumentError, /precision/) do
+      state_codec.encode(source, block_size: 8, precision: 5)
+    end
+  end
+
   it "attaches an exact KV-only artifact without admitting recurrent records" do
     source = ML::GGUF::Qwen35StateSnapshot::Snapshot.new(
       16,
