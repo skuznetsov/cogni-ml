@@ -230,13 +230,18 @@ module ML::GGUF
     # K/V cache rows are overwritten before first use at start_pos=0, but the
     # buffers are cleared here to preserve strict fresh-state semantics for
     # callers that prepare a state ahead of time.
-    def prepare_state_metal!(state : State, hp : Qwen35Hparams, clear : Bool = true) : Nil
+    def prepare_state_metal!(state : State,
+                             hp : Qwen35Hparams,
+                             clear : Bool = true,
+                             admit_adaptive_resident_kv : Bool = true) : Nil
       {% if flag?(:cpu_only) %}
         return
       {% else %}
         return unless Qwen35Metal.available?
 
-        adaptive_config = adaptive_resident_kv_config(hp, state.max_seq)
+        adaptive_config = if admit_adaptive_resident_kv
+                            adaptive_resident_kv_config(hp, state.max_seq)
+                          end
         adaptive_indices = state.adaptive_kv_layer_indices
         if config = adaptive_config
           row_count64 = state.max_seq.to_i64 * hp.n_head_kv

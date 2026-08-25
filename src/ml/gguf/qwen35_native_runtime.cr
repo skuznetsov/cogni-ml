@@ -52,7 +52,8 @@ module ML::GGUF
       async_checkpoint_pending : Int32 = 0,
       async_checkpoint_capture_time : Time::Span = Time::Span.zero,
       async_checkpoint_commit_time : Time::Span = Time::Span.zero,
-      async_checkpoint_wait_time : Time::Span = Time::Span.zero
+      async_checkpoint_wait_time : Time::Span = Time::Span.zero,
+      adaptive_hits : Int64 = 0_i64
 
     @@process_mutex = Mutex.new
     # Qwen35Metal keeps one process-global no-copy mmap registration. Until
@@ -80,6 +81,7 @@ module ML::GGUF
     @prompt_cache_reused_prefix_tokens = 0_i64
     @prompt_cache_replayed_suffix_tokens = 0_i64
     @qbit_cache_hits = 0_i64
+    @qbit_cache_adaptive_hits = 0_i64
     @qbit_cache_misses = 0_i64
     @qbit_cache_rejections = 0_i64
     @qbit_cache_transport_failures = 0_i64
@@ -317,6 +319,15 @@ module ML::GGUF
       override != "1"
     end
 
+    def self.adaptive_qbit_restore_enabled?(
+      session_id : String?,
+      layer : String? = ENV["QWEN35_ADAPTIVE_RESIDENT_KV_LAYER"]?,
+      tier : String? = ENV["QWEN35_ADAPTIVE_RESIDENT_KV_TIER"]?,
+      map : String? = ENV["QWEN35_ADAPTIVE_RESIDENT_KV_MAP"]?,
+    ) : Bool
+      session_id.nil? && !!(layer || tier || map)
+    end
+
     # Durable QBit state is currently captured from Metal buffers. Debug modes
     # that move attention or recurrent ownership to CPU arrays must therefore
     # reject session checkpoints instead of serializing stale Metal buffers.
@@ -460,6 +471,7 @@ module ML::GGUF
           async_checkpoint_capture_time: async_stats.capture_time,
           async_checkpoint_commit_time: async_stats.commit_time,
           async_checkpoint_wait_time: async_stats.wait_time,
+          adaptive_hits: @qbit_cache_adaptive_hits,
         )
       end
     end
@@ -572,11 +584,18 @@ module ML::GGUF
               if lookup_completed
                 if admitted = admission
                   candidate = nil.as(Qwen35CPU::State?)
+                  adaptive_qbit_restore = self.class.adaptive_qbit_restore_enabled?(request.session_id)
                   restore_started = Time.instant
                   begin
                     begin
                       candidate = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
-                      prepare_state_metal!(candidate, weights, route)
+                      prepare_state_metal!(
+                        candidate,
+                        weights,
+                        route,
+                        adaptive_qbit_restore: adaptive_qbit_restore,
+                        qbit_f32_fallback: true,
+                      )
                     rescue ex
                       release_state_metal!(candidate) if candidate
                       raise ex
@@ -584,7 +603,11 @@ module ML::GGUF
 
                     begin
                       prepared_candidate = candidate.not_nil!
-                      qbit_cache.restore(admitted, weights.hparams, prepared_candidate)
+                      if adaptive_qbit_restore
+                        qbit_cache.restore_adaptive(admitted, weights.hparams, prepared_candidate)
+                      else
+                        qbit_cache.restore(admitted, weights.hparams, prepared_candidate)
+                      end
                       replay = Qwen35QBitRuntimeCache.replay_plan(
                         admitted.entry,
                         prompt_ids,
@@ -605,6 +628,7 @@ module ML::GGUF
                         did_qbit_suffix_prefill = true
                       end
                       @qbit_cache_hits += 1
+                      @qbit_cache_adaptive_hits += 1 if prepared_candidate.adaptive_kv?
                       @qbit_cache_reused_prefix_tokens += replay.prefix_len
                       @qbit_cache_replayed_suffix_tokens += replay.replayed_tokens
                       restored_session_checkpoint = session_hit.try(&.checkpoint)
@@ -689,7 +713,7 @@ module ML::GGUF
 
           unless state && next_token
             state = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
-            prepare_state_metal!(state, weights, route)
+            prepare_state_metal!(state, weights, route, qbit_f32_fallback: !@qbit_cache.nil?)
             if request.session_id && self.class.exact_anchor_fast_enabled? &&
                self.class.exact_anchor_fast_environment_enabled? &&
                Qwen35CPU.recurrent_checkpoint_metal_supported?(weights)
@@ -719,6 +743,7 @@ module ML::GGUF
           result_checkpoint_id = nil.as(String?)
           result_checkpoint_pending = false
           if request.session_id.nil? && (did_ordinary_prefill || did_qbit_suffix_prefill) &&
+             !state.not_nil!.adaptive_kv? &&
              (qbit_cache = @qbit_cache) && qbit_cache.write_back?
             write_back_started = Time.instant
             begin
@@ -813,7 +838,7 @@ module ML::GGUF
                     end
                     release_state_metal!(decode_state)
                     checkpoint_state = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
-                    prepare_state_metal!(checkpoint_state, weights, route)
+                    prepare_state_metal!(checkpoint_state, weights, route, qbit_f32_fallback: true)
                     checkpoint_next_token, _checkpoint_logit = Qwen35CPU.prefill_tokens_top1_sequential(
                       weights,
                       boundary_token_ids,
@@ -1010,18 +1035,23 @@ module ML::GGUF
 
     private def prepare_state_metal!(state : Qwen35CPU::State,
                                      weights : Qwen35Weights,
-                                     route : Qwen35Engine::PreflightRoute) : Nil
+                                     route : Qwen35Engine::PreflightRoute,
+                                     adaptive_qbit_restore : Bool = false,
+                                     qbit_f32_fallback : Bool = false) : Nil
       # An observed CPU-only route must not allocate Metal state. Auto on a
       # Metal-capable build remains an explicitly planned hybrid even when the
       # fused decode wave is disabled, because lower-level paths can still use
       # Metal.
       return unless route.backend.primary.metal?
-      if ENV["QWEN35_ADAPTIVE_RESIDENT_KV_LAYER"]? ||
-         ENV["QWEN35_ADAPTIVE_RESIDENT_KV_TIER"]? ||
-         ENV["QWEN35_ADAPTIVE_RESIDENT_KV_MAP"]?
+      adaptive_requested = self.class.adaptive_qbit_restore_enabled?(nil)
+      if adaptive_requested && !adaptive_qbit_restore && !qbit_f32_fallback
         raise ArgumentError.new("adaptive resident QBit KV is not admitted by Qwen35NativeRuntime")
       end
-      Qwen35CPU.prepare_state_metal!(state, weights.hparams)
+      Qwen35CPU.prepare_state_metal!(
+        state,
+        weights.hparams,
+        admit_adaptive_resident_kv: adaptive_qbit_restore,
+      )
     end
 
     private def release_state_metal!(state : Qwen35CPU::State) : Nil

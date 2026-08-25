@@ -10,6 +10,9 @@ module ML::GGUF
   module QwenQBitStateSnapshot
     extend self
 
+    class AdaptiveRestoreDeviceError < Exception
+    end
+
     MIN_STATE_PRECISION           =   6
     MAX_STATE_PRECISION           =   8
     ADAPTIVE_RESTORE_CHUNK_TOKENS = 512
@@ -513,41 +516,45 @@ module ML::GGUF
         raise "Metal disabled (cpu_only)"
       {% else %}
         raise "Metal not available" unless Qwen35Metal.available?
-        jobs = [] of QwenQBitMetalRestore::NativeStreamJob
-        recurrent.each do |key, span|
-          kind = RecordKind.from_value(key[1])
-          buffer = state_buffer(state.layers[key[0]], kind).not_nil!
-          jobs << QwenQBitMetalRestore::NativeStreamJob.new(span, buffer)
-        end
-        QwenQBitMetalRestore.decode_native_stream_into(stream, jobs)
-
-        hp.full_attention_layers.each do |layer_index|
-          k_record = exact_records[{layer_index, RecordKind::KCache.value}]
-          v_record = exact_records[{layer_index, RecordKind::VCache.value}]
-          token_offset = 0_i32
-          while token_offset < live_tokens
-            chunk_tokens = Math.min(ADAPTIVE_RESTORE_CHUNK_TOKENS, live_tokens - token_offset)
-            chunk_byte_offset = token_offset.to_i64 * hp.head_dim * hp.n_head_kv * sizeof(Float32)
-            chunk_byte_size = chunk_tokens.to_i64 * hp.head_dim * hp.n_head_kv * sizeof(Float32)
-            k_source = ML::MetalBuffer.new(chunk_byte_size, ML::StorageMode::Shared)
-            v_source = ML::MetalBuffer.new(chunk_byte_size, ML::StorageMode::Shared)
-            begin
-              k_source.write_bytes(k_record.payload[chunk_byte_offset.to_i, chunk_byte_size.to_i].to_unsafe, chunk_byte_size.to_i)
-              v_source.write_bytes(v_record.payload[chunk_byte_offset.to_i, chunk_byte_size.to_i].to_unsafe, chunk_byte_size.to_i)
-              QwenQBitAdaptiveResidentKV.append_from_metal(
-                state.layers[layer_index].adaptive_kv.not_nil!,
-                k_source,
-                v_source,
-                chunk_tokens,
-              )
-            ensure
-              k_source.release
-              v_source.release
-            end
-            token_offset += chunk_tokens
+        begin
+          jobs = [] of QwenQBitMetalRestore::NativeStreamJob
+          recurrent.each do |key, span|
+            kind = RecordKind.from_value(key[1])
+            buffer = state_buffer(state.layers[key[0]], kind).not_nil!
+            jobs << QwenQBitMetalRestore::NativeStreamJob.new(span, buffer)
           end
+          QwenQBitMetalRestore.decode_native_stream_into(stream, jobs)
+
+          hp.full_attention_layers.each do |layer_index|
+            k_record = exact_records[{layer_index, RecordKind::KCache.value}]
+            v_record = exact_records[{layer_index, RecordKind::VCache.value}]
+            token_offset = 0_i32
+            while token_offset < live_tokens
+              chunk_tokens = Math.min(ADAPTIVE_RESTORE_CHUNK_TOKENS, live_tokens - token_offset)
+              chunk_byte_offset = token_offset.to_i64 * hp.head_dim * hp.n_head_kv * sizeof(Float32)
+              chunk_byte_size = chunk_tokens.to_i64 * hp.head_dim * hp.n_head_kv * sizeof(Float32)
+              k_source = ML::MetalBuffer.new(chunk_byte_size, ML::StorageMode::Shared)
+              v_source = ML::MetalBuffer.new(chunk_byte_size, ML::StorageMode::Shared)
+              begin
+                k_source.write_bytes(k_record.payload[chunk_byte_offset.to_i, chunk_byte_size.to_i].to_unsafe, chunk_byte_size.to_i)
+                v_source.write_bytes(v_record.payload[chunk_byte_offset.to_i, chunk_byte_size.to_i].to_unsafe, chunk_byte_size.to_i)
+                QwenQBitAdaptiveResidentKV.append_from_metal(
+                  state.layers[layer_index].adaptive_kv.not_nil!,
+                  k_source,
+                  v_source,
+                  chunk_tokens,
+                )
+              ensure
+                k_source.release
+                v_source.release
+              end
+              token_offset += chunk_tokens
+            end
+          end
+          exact.positions.each_with_index { |position, layer| state.layers[layer].position = position }
+        rescue ex
+          raise AdaptiveRestoreDeviceError.new("QBit adaptive device restore failed: #{ex.class}: #{ex.message}")
         end
-        exact.positions.each_with_index { |position, layer| state.layers[layer].position = position }
       {% end %}
     end
 

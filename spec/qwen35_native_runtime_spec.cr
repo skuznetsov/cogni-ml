@@ -78,6 +78,14 @@ describe ML::GGUF::Qwen35NativeRuntime do
     stats.async_checkpoint_capture_time.should eq(Time::Span.zero)
     stats.async_checkpoint_commit_time.should eq(Time::Span.zero)
     stats.async_checkpoint_wait_time.should eq(Time::Span.zero)
+    stats.adaptive_hits.should eq(0)
+  end
+
+  it "admits adaptive QBit ownership only for non-session cache hits" do
+    NativeRuntime.adaptive_qbit_restore_enabled?(nil, nil, nil, nil).should be_false
+    NativeRuntime.adaptive_qbit_restore_enabled?(nil, nil, nil, "p4").should be_true
+    NativeRuntime.adaptive_qbit_restore_enabled?(nil, "3", "p4", nil).should be_true
+    NativeRuntime.adaptive_qbit_restore_enabled?("session-a", nil, nil, "p4").should be_false
   end
 
   it "keeps an explicit rollback switch for exact-anchor replay" do

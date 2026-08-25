@@ -24425,3 +24425,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Trigger: a repeated prompt with a strictly admitted durable anchor. Transport: ClickHouse manifest/artifacts -> strict V3 live-prefix admission -> fresh adaptive owners -> exact suffix replay. Boundary: full identity/ABI certificate, resident-admission cache disabled, exact anchor/suffix split, sole target ownership, and target discard after uncertain device failure. Potential `{semantic failure, invalid admission, cold latency, persistent F32 KV bytes}` descends on the measured row from exact prefill to a 1.175-second cold corridor with no observed semantic or ownership failure. Dual frame: ordinary exact F32 prefill and the already-certified in-memory restore.
 
 **decision:** Admit the durable ClickHouse-to-adaptive probe and V3 live-prefix envelope rule. Integrate next only as a default-off, non-session NativeRuntime cache-hit route with explicit F32 miss fallback; keep adaptive snapshot/writeback and session checkpoint renewal rejected.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-NATIVE-HIT-926] NativeRuntime admits adaptive ownership only after a non-session QBit hit
+**context:** ml / Qwen3.8 / adaptive QBit / NativeRuntime / cache lifecycle
+**state:** default-off non-session hit route verified; adaptive sessions and writeback rejected
+
+- claim: "A strict non-session NativeRuntime QBit hit can restore and decode from adaptive GPU KV without widening the miss or session ownership boundary."
+  source: `Qwen35NativeRuntime` enables adaptive preparation only for a non-session admission hit and records `adaptive_hits` from actual state ownership. `Qwen35QBitRuntimeCache#restore_adaptive` delegates to the previously certified direct restore. The guarded Qwen3.8-27B Q4_K_M seed/hit used separate processes and emitted identical ids `[21,11,220,22,11,220,23,11]` and text `6, 7, 8,`; the assert observed `adaptive_hits=1`, `hits=1`, and zero restore failures.
+  verified_at: 2026-08-24
+  decay_trigger: NativeRuntime cache selection, adaptive environment policy, QBit admission/restore, state ownership, synchronous decode, model/tokenizer/template, or smoke prompt change
+  trust: {F:0.96,G:0.22,R:0.91}
+
+- claim: "Adaptive configuration does not make a QBit miss or session checkpoint own unsnapshotable adaptive KV."
+  source: `Qwen35CPU.prepare_state_metal!` now has an explicit allocation-admission argument. NativeRuntime suppresses adaptive allocation on ordinary QBit fallback and when the request has a session identity. A guarded empty-table real-model run with the adaptive map reported `misses=1`, `writes=1`, and zero write/restore failures, proving that miss writeback captured an F32 state. Policy and F32-owner specs plus envelope/state/runtime regressions passed `53 examples, 0 failures, 0 errors, 1 pending`.
+  verified_at: 2026-08-24
+  decay_trigger: miss fallback, state preparation, snapshot capture, writeback condition, session routing, or environment selector change
+  trust: {F:0.95,G:0.38,R:0.91}
+
+**Adversary:** Adaptive hits are deliberately read-only: suffix-extended state is not written back. Session restore/checkpoint renewal, adaptive snapshot/fork/tail clearing, async/speculative decode, and production defaulting remain unsupported. A device-stage restore error is retyped as `AdaptiveRestoreDeviceError`, causing candidate release and request abort rather than a second heavy prefill; this favors host safety over availability. The 38-token hit was only about 1.14x faster than seed prefill under cold process/kernel setup, so no throughput promotion follows.
+
+**Value proxy:** The primary value is correct generation from a strictly admitted compact owner while miss/session safety remains intact. `adaptive_hits`, latency, memory density, token parity, and write counters are separate coordinates. A fast hit that breaks fallback durability is rejected; a green fallback does not prove long-context speed.
+
+**LTP/WBA:** Trigger: strict non-session QBit admission plus explicit adaptive map. Transport: admitted artifacts -> fresh sole adaptive owners -> synchronous decode/append. Boundary: process lock, Metal backend, no session identity, complete all-attention map, no F32 KV alias, and discard on uncertain device outcome. Potential `{semantic failure, invalid ownership, durability regression, duplicate heavy work, resident F32 KV bytes}` descends on the measured hit without worsening the miss test; session stays in the dual Float32 frame.
+
+**decision:** Admit the default-off non-session adaptive NativeRuntime hit and explicit F32 miss fallback. Next improve cold artifact compactness or add a certified adaptive snapshot; do not silently enable session checkpoints or writeback from adaptive owners.

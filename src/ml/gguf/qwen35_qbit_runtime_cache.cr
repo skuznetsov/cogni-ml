@@ -206,6 +206,18 @@ module ML::GGUF
       )
     end
 
+    def restore_adaptive(admission : QwenQBitCacheEnvelope::Admission,
+                         hp : Qwen35Hparams,
+                         state : Qwen35CPU::State) : Nil
+      QwenQBitStateSnapshot.restore_admitted_native_stream_into_adaptive(
+        admission.native_stream,
+        admission.exact_artifact,
+        admission.entry.cache_id,
+        hp,
+        state,
+      )
+    end
+
     def save(prompt_text : String,
              prompt_ids : Array(Int32),
              next_token_id : Int32,

@@ -82,6 +82,28 @@ describe ML::GGUF::Qwen35CPU do
     gguf.try(&.close)
   end
 
+  it "can explicitly retain the F32 miss fallback when an adaptive map is configured" do
+    pending!("Qwen3.8 27B model not present") unless File.exists?(QWEN_38_ADAPTIVE_STATE)
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    gguf = ML::GGUF::GGUFFile.new(QWEN_38_ADAPTIVE_STATE)
+    hp = ML::GGUF::Qwen35Hparams.new(gguf)
+    state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 8)
+    with_adaptive_state_env(nil, nil, "p4;27=bf16,43=bf16,47=bf16,51=bf16") do
+      ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp, admit_adaptive_resident_kv: false)
+    end
+
+    state.adaptive_kv_layer_indices.should be_empty
+    hp.full_attention_layers.each do |layer_index|
+      layer = state.layers[layer_index]
+      layer.k_cache_buf.should_not be_nil
+      layer.v_cache_buf.should_not be_nil
+    end
+  ensure
+    release_adaptive_state!(state) if state
+    gguf.try(&.close)
+  end
+
   it "gives one selected GQA6 layer a sole compact KV owner" do
     pending!("Qwen3.8 27B model not present") unless File.exists?(QWEN_38_ADAPTIVE_STATE)
     pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?

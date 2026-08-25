@@ -4,7 +4,9 @@ Document status: active design-sealed slice
 
 Current frontier: a default-off p7 transport/restore experiment for recurrent
 Qwen cache state plus a bounded ClickHouse HTTP storage/read client and an
-exact-full-prompt native-runtime route.
+exact-full-prompt native-runtime route. A non-session cache hit may now restore
+directly into configured adaptive GPU KV owners; misses and session requests
+retain the ordinary Float32 owner.
 It may emit revision-0 ClickHouse Native blocks whose QBit column is already
 bit-transposed, validate an ordered multi-block Native response, decode logical
 records that cross response-block boundaries directly into prepared Metal state
@@ -44,8 +46,10 @@ and never establish cache visibility or admission.
 
 ## Resident KV experimental slice
 
-This is a separate default-off experiment, not an extension of the durable
-cache runtime. It admits uniform p4/p5 payloads and a canonical adaptive payload
+This began as a separate default-off experiment. Its all-layer restore path now
+composes with the durable cache only for non-session native-runtime hits; the
+resident representation itself remains experimental. It admits uniform p4/p5
+payloads and a canonical adaptive payload
 whose affine block is exactly one `(token, KV head)` vector. Its Metal attention
 decode consumes p4 bases plus optional p5/BF16/F32 sidecars directly without
 materializing an intermediate Float32 KV cache. The Qwen3.8 path can now replace
@@ -61,10 +65,11 @@ during prefill and direct synchronous decode.
 - The required falsifier is parity between fused Metal attention and the CPU
   reference over the *same decoded p4/p5 values*. A seeded plane-bit mutation
   must change the comparison result, proving that the parity check is live.
-- Automatic row/head/age tier selection, hot tails, state fork/copy,
-  persistence, native runtime routing, speculative/asynchronous decode, and
-  non-GQA6 shapes are guard-only follow-ups. Memory-ratio measurements from
-  this experiment do not establish an eightfold production context increase.
+- Automatic row/head/age tier selection, hot tails, state fork/copy, adaptive
+  snapshot/writeback, session checkpoint routing, speculative/asynchronous
+  decode, and non-GQA6 shapes are guard-only follow-ups. Memory-ratio
+  measurements from this experiment do not establish an eightfold production
+  context increase.
 
 Bounded synthetic evidence on Apple M2 Max (2026-08-23):
 
@@ -509,8 +514,9 @@ the existing whole-token Metal wave. Each full-attention layer consumes its
 packed prefix plus exact current K/V, then packs the current row in the same
 command. Group publication again validates every layer before advancing any of
 them. Position mismatch, duplicate ownership, a declined Metal wave, and
-unknown command outcome fail closed. `forward_hidden`, fork/copy, snapshots,
-checkpoint swapping, tail clearing, `Qwen35NativeRuntime`, and advanced
+unknown command outcome fail closed. `Qwen35NativeRuntime` now admits the same
+owner only after a strict non-session QBit hit. `forward_hidden`, fork/copy,
+snapshots, checkpoint swapping, tail clearing, session routing, and advanced
 asynchronous/speculative helpers remain outside this admitted corridor.
 
 A guarded Qwen3.8-27B Q4_K_M all-BF16 run used `8 + 4` prefill tokens and 32
@@ -667,6 +673,16 @@ than relaxation of either gate.
   instead of attempting another heavy allocation. A write-back failure is
   observable in cache stats but must not fail or alter the generation already
   in progress. Unexpected system failures still propagate.
+- With an explicit adaptive resident-KV environment map, a non-session Metal
+  QBit hit may prepare sole adaptive owners, restore recurrent state and exact
+  live KV into them, and continue through the synchronous prefill/decode wave.
+  `adaptive_hits` reports only a successfully restored state that actually owns
+  adaptive KV. A miss prepares the ordinary Float32 state so existing writeback
+  remains valid. Session requests always use the Float32 restore route.
+- A validation/shape rejection discards the candidate and may use the ordinary
+  prefill fallback. Once adaptive restore enters a Metal decode/pack operation,
+  any exception is promoted to a system restore failure: the candidate is
+  released and the request aborts instead of attempting a second heavy state.
 - Async anchor publication is separately opt-in and single-flight: one active
   immutable host snapshot is the complete queue capacity. It never transfers a
   live Metal buffer to the worker, never overlaps QBit encode with the next
@@ -699,6 +715,10 @@ than relaxation of either gate.
 - No live Metal state, GGUF weights, tokenizer, or mutable transcript storage
   may be owned by the background writer. It receives only a bounded immutable
   host snapshot and copied checkpoint metadata.
+- An adaptive native-runtime hit is read-only with respect to durable state.
+  It does not snapshot or write back its extended prefix. Session checkpoints,
+  anchor renewal, state fork/copy, and tail clearing continue on the Float32
+  route until adaptive snapshots have their own admission certificate.
 - A pending checkpoint identity is not a process-crash recovery record. Until a
   successful explicit or automatic flush, termination may leave that identity
   unpublished and callers must not treat it as durable.
@@ -1386,11 +1406,46 @@ single host row; it excludes process/model startup and is not a throughput SLA.
 ClickHouse background merges were not required for visibility and are outside
 the lookup critical path measured here.
 
-This composes the strict durable admission and direct adaptive restore
-primitives, but does not yet admit adaptive ownership inside
-`Qwen35NativeRuntime`. Native runtime integration must preserve ordinary F32
-miss fallback and keep session checkpoint/snapshot routes fail-closed until
-adaptive snapshots have their own certificate.
+This measurement composed strict durable admission with direct adaptive
+restore, leaving NativeRuntime ownership as the next gate. The following slice
+now closes that gate only for non-session hits: ordinary F32 miss fallback and
+session checkpoint/snapshot routes remain fail-closed until adaptive snapshots
+have their own certificate.
+
+### NativeRuntime non-session adaptive cache-hit gate (2026-08-24)
+
+`Qwen35NativeRuntime` now selects adaptive ownership only when all of these are
+true: a QBit cache is configured, the request is non-session, the backend is
+Metal, a strict admission hit exists, and an adaptive resident-KV environment
+selector is present. The existing adaptive restore primitive requires every
+full-attention layer, so a partial map cannot become a successful adaptive hit.
+Ordinary misses explicitly suppress adaptive allocation and retain Float32 KV;
+this preserves snapshot-based writeback. Session lookups and checkpoint renewal
+also remain Float32. Adaptive hits skip writeback because adaptive snapshot
+capture is still rejected.
+
+The restore has two failure classes. Admission/shape failures happen before
+device mutation and may fall back to ordinary prefill. Once recurrent decode or
+KV packing begins on Metal, failures become `AdaptiveRestoreDeviceError`; the
+runtime releases the candidate and aborts instead of allocating a second heavy
+state. The public QBit statistics add `adaptive_hits`, incremented from actual
+state ownership rather than from the environment selector.
+
+A guarded Qwen3.8-27B Q4_K_M exact-prompt seed/hit used `max_seq=64`, eight
+generated tokens, separate processes, the coarse adaptive map, and the local
+ClickHouse server. Seed and hit both emitted token ids
+`[21,11,220,22,11,220,23,11]` and text `6, 7, 8,`. The hit reported
+`adaptive_hits=1`, `hits=1`, and zero restore failures. A second empty table
+started with the same adaptive environment and reported `misses=1`, `writes=1`,
+and zero failures, proving that the miss state remained snapshot-capable F32.
+The focused regression set passed `53 examples, 0 failures, 0 errors, 1
+pending`.
+
+The short prompt measured about 6.74 seconds for the adaptive hit versus 7.68
+seconds for the seed prefill, only a roughly 1.14x observed improvement with
+cold process/kernel setup and no paired quiet-host design. This is an ownership
+and lifecycle gate, not a speed claim. The larger direct cold-corridor row above
+remains the relevant latency feasibility evidence.
 
 ### Cache-engine contract
 
