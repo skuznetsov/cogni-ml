@@ -56,6 +56,93 @@ module ML::GGUF
       end
     end
 
+    record NativeRecurrentEncoding,
+      bytes : Bytes,
+      record_count : Int32,
+      source_byte_size : Int64,
+      peak_source_record_bytes : Int64
+
+    # Builds one legal Native block per recurrent record. The final transport
+    # body must remain resident until ClickHouse accepts it, but F32 capture,
+    # Float32 conversion, and QBit payload ownership are bounded to one record.
+    class NativeRecurrentStreamEncoder
+      @io : IO::Memory
+      @seen : Set({Int32, UInt8})
+      @record_count : Int32
+      @source_byte_size : Int64
+      @peak_source_record_bytes : Int64
+      @finished : Bool
+
+      def initialize(@cache_id : UInt64 = 0_u64,
+                     @block_size : Int32 = 1024,
+                     @precision : Int32 = 7)
+        unless @block_size > 0 && @block_size <= UInt16::MAX && @block_size % 8 == 0
+          raise ArgumentError.new("QBit Native block size must be a positive UInt16 multiple of 8")
+        end
+        raise ArgumentError.new("QBit Native state encoding requires p7 precision") unless @precision == 7
+        @io = IO::Memory.new
+        @seen = Set({Int32, UInt8}).new
+        @record_count = 0
+        @source_byte_size = 0_i64
+        @peak_source_record_bytes = 0_i64
+        @finished = false
+      end
+
+      def append(record : Qwen35StateSnapshot::Record) : Nil
+        raise ArgumentError.new("QBit Native recurrent stream encoder is finished") if @finished
+        unless record.kind.conv_state? || record.kind.ssm_state?
+          raise ArgumentError.new("QBit Native recurrent stream accepts recurrent records only")
+        end
+        key = {record.layer, record.kind.value}
+        raise ArgumentError.new("duplicate QBit Native recurrent record") if @seen.includes?(key)
+
+        encoded = begin
+          QwenQBitGaussianCodec.encode(
+            floats_from(record.bytes),
+            @block_size,
+            @precision,
+          )
+        rescue ex : ArgumentError
+          raise ArgumentError.new(
+            "QBit #{record.kind} layer #{record.layer} encoding failed: #{ex.message}"
+          )
+        end
+        block = QwenQBitNativeWriter.encode([
+          QwenQBitNativeWriter::Record.new(
+            @cache_id,
+            record.layer,
+            record.kind.value,
+            encoded,
+          ),
+        ])
+        @io.write(block)
+        @seen.add(key)
+        @record_count += 1
+        source_bytes = record.bytes.size.to_i64
+        @source_byte_size += source_bytes
+        @peak_source_record_bytes = source_bytes if source_bytes > @peak_source_record_bytes
+      end
+
+      def finish : NativeRecurrentEncoding
+        raise ArgumentError.new("QBit Native recurrent stream encoder is finished") if @finished
+        raise ArgumentError.new("QBit Native recurrent stream must not be empty") if @record_count == 0
+        @finished = true
+        NativeRecurrentEncoding.new(
+          @io.to_slice,
+          @record_count,
+          @source_byte_size,
+          @peak_source_record_bytes,
+        )
+      end
+
+      private def floats_from(bytes : Bytes) : Array(Float32)
+        raise ArgumentError.new("state record byte size is not Float32-aligned") unless bytes.size % sizeof(Float32) == 0
+        values = Array(Float32).new(bytes.size // sizeof(Float32), 0.0_f32)
+        Slice.new(values.to_unsafe.as(Pointer(UInt8)), bytes.size).copy_from(bytes)
+        values
+      end
+    end
+
     def encode(snapshot : Qwen35StateSnapshot::Snapshot,
                block_size : Int32 = 1024,
                precision : Int32 = 7) : Snapshot
@@ -155,6 +242,17 @@ module ML::GGUF
         end
       end
       QwenQBitNativeWriter.encode(records)
+    end
+
+    def encode_native_recurrent_streaming(state : Qwen35CPU::State,
+                                          cache_id : UInt64 = 0_u64,
+                                          block_size : Int32 = 1024,
+                                          precision : Int32 = 7) : NativeRecurrentEncoding
+      encoder = NativeRecurrentStreamEncoder.new(cache_id, block_size, precision)
+      Qwen35StateSnapshot.each_recurrent_record(state) do |record|
+        encoder.append(record)
+      end
+      encoder.finish
     end
 
     def restore_into(snapshot : Snapshot,

@@ -1499,6 +1499,43 @@ production-default policy. The long ClickHouse probe also depends on sending
 large prefix SQL in the HTTP request body; URL query transport hits the server's
 header limit at this prefix length.
 
+### Streaming recurrent writeback peak gate (2026-08-24)
+
+Adaptive writeback no longer captures all recurrent Float32 records and retains
+all encoded QBit records before building the Native body. It now reads one Conv
+or SSM owner, encodes it, appends one legal Native block, and retains no
+encoder-owned reference to the per-record source or QBit objects when that
+append returns. The final Native HTTP body still remains resident until
+ClickHouse accepts it. This keeps the existing envelope, tables, record schema,
+and logical artifact digest; it does not introduce a new checkpoint format.
+
+A release-mode allocation probe used 96 recurrent records with the exact
+Qwen3.8 source total of 156,893,184 bytes. The old full-snapshot route reached
+319,389,696 bytes maximum RSS; the per-record route reached 184,745,984 bytes,
+a 42.2% reduction. Internal encode time was 783.272 versus 781.544 ms. The
+logical SHA-256 was identical. Multiple Native headers increased the 40.26 MiB
+body by 11,684 bytes, or 0.029%. The probe used equal-sized, zero-valued
+synthetic records to isolate allocation and serialization ownership; it is not
+a real per-record shape distribution, full model RSS, compression-quality, or
+throughput measurement.
+
+ClickHouse accepted a two-record, five-tile concatenated Native test with all
+4,000 values and both record identities. The real 2,172-token Qwen3.8 seed then
+inserted 38,304 recurrent QBit tile rows covering 39,223,296 values and all 96
+recurrent record identities. Compressed data across the isolated cache tables
+remained 107,809,078 bytes. In separate guarded model processes, seed generation
+took 32,189.108 ms with 3,454.824 ms attributed to writeback; the cold hit took
+5,579.489 ms, including 327.929 ms lookup and 94.149 ms restore. Both emitted
+`Their sum is 95.` with identical token ids and no cache, transport, restore, or
+write failures. This single-host row confirms lifecycle compatibility, not a
+new throughput SLA.
+
+The remaining save-side allocation target is the final accumulated Native HTTP
+body and its transport copy. Removing that requires a bounded streaming HTTP or
+Native insert path and is deliberately outside this KISS slice. Session
+checkpoints remain raw, the 256 MiB logical source guard remains in force, and
+the existing top-1, top-2, ECS, EOS, and meaning boundaries are unchanged.
+
 ### Cache-engine contract
 
 - The internal envelope makes cache keys content-addressed over model,

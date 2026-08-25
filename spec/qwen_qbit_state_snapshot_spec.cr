@@ -49,6 +49,57 @@ describe ML::GGUF::QwenQBitStateSnapshot do
     ])
   end
 
+  it "encodes recurrent Native blocks one source record at a time" do
+    records = [
+      ML::GGUF::Qwen35StateSnapshot::Record.new(
+        1,
+        QBitStateRecordKind::ConvState,
+        qbit_state_bytes(Array(Float32).new(13) { |i| (i - 6).to_f32 / 3.0_f32 }),
+        ML::StorageMode::Shared,
+      ),
+      ML::GGUF::Qwen35StateSnapshot::Record.new(
+        1,
+        QBitStateRecordKind::SsmState,
+        qbit_state_bytes(Array(Float32).new(29) { |i| (i - 14).to_f32 / 7.0_f32 }),
+        ML::StorageMode::Shared,
+      ),
+    ]
+    snapshot = ML::GGUF::Qwen35StateSnapshot::Snapshot.new(16, 2, [5_i32, 5_i32], records)
+    reference = ML::GGUF::QwenQBitNativeBlock.parse_stream(
+      state_codec.encode_native_recurrent(state_codec.encode(snapshot, block_size: 8, precision: 7), 19_u64)
+    )
+
+    encoder = ML::GGUF::QwenQBitStateSnapshot::NativeRecurrentStreamEncoder.new(
+      cache_id: 19_u64,
+      block_size: 8,
+      precision: 7,
+    )
+    records.each { |record| encoder.append(record) }
+    streamed = encoder.finish
+    parsed = ML::GGUF::QwenQBitNativeBlock.parse_stream(streamed.bytes)
+
+    streamed.record_count.should eq(2)
+    streamed.source_byte_size.should eq(records.sum(0_i64, &.bytes.size.to_i64))
+    streamed.peak_source_record_bytes.should eq(records.max_of(&.bytes.size).to_i64)
+    streamed.peak_source_record_bytes.should be < streamed.source_byte_size
+    parsed.blocks.size.should eq(records.size)
+    ML::GGUF::QwenQBitNativeBlock.logical_sha256(parsed).should eq(
+      ML::GGUF::QwenQBitNativeBlock.logical_sha256(reference)
+    )
+    parsed.record_spans.map { |span| {span.cache_id, span.layer, span.kind, span.value_count} }.should eq(
+      reference.record_spans.map { |span| {span.cache_id, span.layer, span.kind, span.value_count} }
+    )
+
+    expect_raises(ArgumentError, /finished/) { encoder.append(records.first) }
+
+    duplicate_encoder = ML::GGUF::QwenQBitStateSnapshot::NativeRecurrentStreamEncoder.new(block_size: 8)
+    duplicate_encoder.append(records.first)
+    expect_raises(ArgumentError, /duplicate/) { duplicate_encoder.append(records.first) }
+    expect_raises(ArgumentError, /must not be empty/) do
+      ML::GGUF::QwenQBitStateSnapshot::NativeRecurrentStreamEncoder.new(block_size: 8).finish
+    end
+  end
+
   it "validates the complete snapshot before restore admission" do
     raw = qbit_state_bytes([0.0_f32] * 8)
     record = ML::GGUF::QwenQBitStateSnapshot::EncodedRecord.new(

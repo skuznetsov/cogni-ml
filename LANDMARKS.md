@@ -24473,3 +24473,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Trigger: a strict non-session miss or matching cold prefix under an explicit tier map. Transport: packed prefill -> canonical V3 payload plus recurrent QBit -> strict layout-specific admission -> fresh recurrent/adaptive owners. Boundary: exact model/tokenizer/engine/state identity, complete full-attention layer set, sole target ownership, atomic K/V prefix publication, and target discard after uncertain device failure. Potential `{semantic failure, invalid admission/publication, persistent F32 KV bytes, cold latency, durable bytes}` descends on the measured row without widening the session frame. Dual frame: raw Float32 session/miss artifacts and ordinary full prefill.
 
 **decision:** Admit the compact default-off non-session corridor and its existing-schema KISS design. Keep sessions raw, preserve the 256 MiB save guard, and require broader restored-session quality plus peak-memory evidence before widening context or policy claims.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-RECURRENT-STREAM-928] Recurrent writeback is per-record without changing the cold artifact
+**context:** ml / Qwen3.8 / adaptive QBit / recurrent serialization / ClickHouse
+**state:** bounded peak-memory and long cold-cache corridor verified; transport streaming guard-only
+
+- claim: "Per-record recurrent capture and Native emission reduce serialization peak while preserving the admitted logical artifact."
+  source: `Qwen35StateSnapshot.each_recurrent_record` yields one Conv or SSM owner at a time, and `NativeRecurrentStreamEncoder` validates and emits one legal p7 Native block per record. A release allocation probe at the exact 156,893,184-byte Qwen3.8 recurrent source total measured maximum RSS `319,389,696 -> 184,745,984` bytes (`-42.2%`) and encoder time `783.272 -> 781.544 ms`. Old and new logical SHA-256 matched; multi-block framing added 11,684 bytes (`0.029%`) to the approximately 40.26 MiB body. The focused and runtime/cache regression passed `83 examples, 0 failures, 0 errors, 1 optional pending`.
+  verified_at: 2026-08-24
+  decay_trigger: recurrent owner shape, capture semantics, QBit codec, Native framing/parser, IO ownership, ClickHouse Native input, or runtime writeback routing change
+  trust: {F:0.97,G:0.43,R:0.93}
+
+- claim: "The concatenated Native stream remains compatible with the measured 2,172-token ClickHouse cold lifecycle."
+  source: ClickHouse first accepted a two-record, five-tile stream with all 4,000 values. A guarded Qwen3.8-27B Q4_K_M seed inserted 38,304 recurrent tile rows covering 39,223,296 values and 96 record identities; compressed cache-table data was 107,809,078 bytes. Separate seed/hit processes under `p4;27=bf16,43=bf16,47=bf16,51=bf16` emitted identical `Their sum is 95.` ids with zero failures. Seed generation/writeback was `32,189.108/3,454.824 ms`; hit generation, lookup, and restore were `5,579.489/327.929/94.149 ms`.
+  verified_at: 2026-08-24
+  decay_trigger: model, prompt, tokenizer/template, tier map, runtime cache lifecycle, HTTP transport, ClickHouse version/schema, host load, or safe-run memory policy change
+  trust: {F:0.96,G:0.18,R:0.90}
+
+**Adversary:** The RSS probe uses equal-sized, zero-valued synthetic records and isolates serialization rather than the real per-record shape distribution, weights, Metal buffers, HTTP copies, or whole-runtime unified memory. Its `peak_source_record_bytes` is an algorithmic source-capture bound, not process RSS. The final approximately 40 MiB Native body is still accumulated in memory, and `IO::Memory` growth plus HTTP transport can add transient capacity or copies. The model timing is one guarded host row and must not be read as a throughput SLA. Current response equality composes with the earlier aligned top-1/top-2/ECS certificate; those quality metrics were not independently rerun for the framing-only change.
+
+**LTP/WBA:** Trigger: adaptive non-session writeback after a successful packed prefill. Transport: recurrent Metal owner -> one Float32 record -> one p7 Native block -> accumulated request body -> ClickHouse, while canonical adaptive KV remains compact. Boundary: each recurrent identity appears exactly once, record values and logical digest are reblocking-invariant, ClickHouse admits concatenated blocks, and the existing envelope publishes only after complete validation. Potential `{semantic or logical-artifact mismatch, source-capture peak, encoded-record peak, writeback wall, durable bytes}` descends in both transient source ownership and measured RSS without worsening encode time or logical content. Dual frame: the previous full recurrent snapshot plus all encoded records.
+
+**decision:** Admit per-record recurrent capture/encoding for adaptive non-session writeback. Keep the final Native body buffered, session checkpoints raw, and the 256 MiB logical guard unchanged; consider streaming HTTP/Native insertion only as a separate measured slice.

@@ -162,6 +162,21 @@ module ML::GGUF
       Snapshot.new(state.max_seq, state.layers.size, positions, records)
     end
 
+    # Capture one recurrent owner at a time. Consumers that immediately encode
+    # and release each yielded record avoid retaining a full recurrent F32
+    # snapshot alongside its compressed representation.
+    def each_recurrent_record(state : Qwen35CPU::State,
+                              &block : Record -> Nil) : Nil
+      state.layers.each_with_index do |layer, i|
+        if record = capture_record(i, RecordKind::ConvState, layer.conv_state_buf, layer.conv_state)
+          block.call(record)
+        end
+        if record = capture_record(i, RecordKind::SsmState, layer.ssm_state_buf, layer.ssm_state)
+          block.call(record)
+        end
+      end
+    end
+
     def restore(snapshot : Snapshot, hp : Qwen35Hparams, prefer_metal : Bool = Qwen35Metal.available?) : Qwen35CPU::State
       raise ArgumentError.new("layer count mismatch: snapshot=#{snapshot.layer_count}, hp=#{hp.n_layer}") unless snapshot.layer_count == hp.n_layer
 
@@ -401,12 +416,21 @@ module ML::GGUF
                              kind : RecordKind,
                              buf : ML::MetalBuffer?,
                              array : Array(Float32)?) : Nil
+      if record = capture_record(layer, kind, buf, array)
+        records << record
+      end
+    end
+
+    private def capture_record(layer : Int32,
+                               kind : RecordKind,
+                               buf : ML::MetalBuffer?,
+                               array : Array(Float32)?) : Record?
       if active_buf = buf
         bytes = Bytes.new(active_buf.size.to_i)
         active_buf.read_bytes(bytes.to_unsafe, bytes.size)
-        records << Record.new(layer, kind, bytes, active_buf.storage_mode)
+        Record.new(layer, kind, bytes, active_buf.storage_mode)
       elsif active_array = array
-        records << Record.new(layer, kind, bytes_from(active_array), ML::StorageMode::Shared)
+        Record.new(layer, kind, bytes_from(active_array), ML::StorageMode::Shared)
       end
     end
 
