@@ -9,12 +9,13 @@ require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_state_snapshot"
 require "../src/ml/gguf/qwen35_tokenizer"
 require "../src/ml/gguf/qwen35_weights"
+require "../src/ml/gguf/qwen35_proposal_route"
+require "../src/ml/gguf/qwen35_qbit_runtime_cache"
 require "../src/ml/gguf/qwen_qbit_quality_metrics"
 require "../src/ml/gguf/qwen_qbit_state_snapshot"
 
 DEFAULT_QWEN38_SESSION_MODEL = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf"
 DEFAULT_SESSION_RESIDENT_MAP = "p4;27=bf16,43=bf16,47=bf16,51=bf16"
-SESSION_CACHE_ID             = 0x51a7e_u64
 
 record SessionTokenECS,
   mean : Float64,
@@ -153,6 +154,8 @@ model_path = ENV["QWEN35_MODEL"]? || DEFAULT_QWEN38_SESSION_MODEL
 resident_map = DEFAULT_SESSION_RESIDENT_MAP
 filler_repetitions = 48_i32
 n_gen = 48_i32
+clickhouse_endpoint = nil.as(String?)
+clickhouse_table_prefix = "qwen_adaptive_session_restore"
 
 OptionParser.parse do |parser|
   parser.banner = "Usage: qwen35_adaptive_session_restore_probe [options]"
@@ -160,6 +163,8 @@ OptionParser.parse do |parser|
   parser.on("--resident-map MAP", "Resident adaptive tier map") { |value| resident_map = value }
   parser.on("--filler N", "Neutral anchor filler repetitions") { |value| filler_repetitions = value.to_i32 }
   parser.on("--gen N", "Maximum response tokens") { |value| n_gen = value.to_i32 }
+  parser.on("--clickhouse URL", "Persist and cold-read the admitted state through ClickHouse") { |value| clickhouse_endpoint = value }
+  parser.on("--table-prefix NAME", "Isolated ClickHouse table prefix") { |value| clickhouse_table_prefix = value }
   parser.on("-h", "--help", "Show this help") do
     puts parser
     exit
@@ -170,6 +175,9 @@ raise "model does not exist: #{model_path}" unless File.file?(model_path)
 raise "--resident-map cannot be empty" if resident_map.strip.empty?
 raise "--filler must be within 0..256" unless filler_repetitions.in?(0..256)
 raise "--gen must be within 8..128" unless n_gen.in?(8..128)
+unless clickhouse_table_prefix.matches?(/\A[A-Za-z_][A-Za-z0-9_]*\z/)
+  raise "--table-prefix is not a safe ClickHouse identifier"
+end
 raise "Metal is unavailable" unless ML::GGUF::Qwen35Metal.available?
 
 startup_started = Time.instant
@@ -275,6 +283,27 @@ raise "exact multi-turn response did not produce top-2 steps" if exact_top2.empt
 exact_text = tokenizer.decode(exact_ids)
 
 source_snapshot = snapshot.not_nil!
+state_abi = ML::GGUF::QwenQBitCacheEnvelope.state_abi(hp, max_seq)
+model_id = ML::GGUF::Qwen35ProposalRoute.model_id(model_path)
+tokenizer_id = ML::GGUF::Qwen35ProposalRoute.tokenizer_id(model_id, tokenizer)
+cache_context = ML::GGUF::QwenQBitCacheEnvelope::Context.new(
+  model_id: model_id,
+  tokenizer_id: tokenizer_id,
+  template_id: ML::GGUF::QwenQBitCacheEnvelope.template_id(tokenizer.chat_template),
+  prompt_hash: ML::GGUF::Qwen35PromptCache.prompt_hash(anchor_ids, anchor_text),
+  token_hash: ML::GGUF::Qwen35PromptCache.token_hash(anchor_ids),
+  prefix_len: anchor_ids.size.to_i32,
+  max_seq: max_seq,
+  layer_count: state_abi.layer_count,
+  qbit_block_size: ML::GGUF::Qwen35QBitRuntimeCache::BLOCK_SIZE,
+  qbit_precision: ML::GGUF::Qwen35QBitRuntimeCache::PRECISION,
+  validation_kind: ML::GGUF::Qwen35PromptCache::EXACT_KNOWN_SPAN_VALIDATION_KIND,
+  validation_steps: 1,
+  validation_hash: ML::GGUF::Qwen35QBitRuntimeCache.validation_hash(anchor_ids, exact_ids.first),
+  next_token_id: exact_ids.first,
+  state_abi: state_abi,
+)
+effective_cache_id = ML::GGUF::QwenQBitCacheEnvelope.cache_id(cache_context)
 serialize_started = Time.instant
 encoded_state = ML::GGUF::QwenQBitStateSnapshot.encode(
   source_snapshot,
@@ -283,9 +312,8 @@ encoded_state = ML::GGUF::QwenQBitStateSnapshot.encode(
 )
 native_bytes = ML::GGUF::QwenQBitStateSnapshot.encode_native_recurrent(
   encoded_state,
-  SESSION_CACHE_ID,
+  effective_cache_id,
 )
-native_stream = ML::GGUF::QwenQBitNativeBlock.parse_stream(native_bytes)
 kv_snapshot = ML::GGUF::Qwen35StateSnapshot::Snapshot.new(
   source_snapshot.max_seq,
   source_snapshot.layer_count,
@@ -296,16 +324,72 @@ exact_artifact_bytes = ML::GGUF::Qwen35StateSnapshot.encode_artifact_bytes(
   kv_snapshot,
   artifact_live_kv_tokens: anchor_ids.size.to_i32,
 )
-exact_artifact = ML::GGUF::Qwen35StateSnapshot.decode_artifact_encoded_bytes(
-  exact_artifact_bytes,
-  copy_payloads: false,
-)
 serialize_ms = (Time.instant - serialize_started).total_milliseconds
+
+clickhouse_save_ms = 0.0_f64
+clickhouse_lookup_admit_ms = 0.0_f64
+admission = nil.as(ML::GGUF::QwenQBitCacheEnvelope::Admission?)
+if endpoint = clickhouse_endpoint
+  config = ML::GGUF::QwenQBitClickHouseCache::Config.new(
+    endpoint: endpoint,
+    table_prefix: clickhouse_table_prefix,
+    connect_timeout: 2.seconds,
+    read_timeout: 180.seconds,
+    write_timeout: 180.seconds,
+    max_recurrent_bytes: 160_i64 * 1024 * 1024,
+    max_kv_bytes: 128_i64 * 1024 * 1024,
+    max_total_artifact_bytes: 256_i64 * 1024 * 1024,
+    resident_admission_bytes: 0_i64,
+  )
+  save_store = ML::GGUF::QwenQBitClickHouseCache::Store.new(config)
+  save_store.create_schema
+  save_started = Time.instant
+  saved = save_store.save(cache_context, native_bytes, exact_artifact_bytes, ttl: 1.hour)
+  clickhouse_save_ms = (Time.instant - save_started).total_milliseconds
+  unless saved.entry.cache_id == effective_cache_id
+    raise "ClickHouse publication changed the cache identity"
+  end
+
+  cold_store = ML::GGUF::QwenQBitClickHouseCache::Store.new(config)
+  lookup_started = Time.instant
+  admission = cold_store.lookup_longest_prefix(
+    ML::GGUF::QwenQBitCacheEnvelope.prefix_context(cache_context),
+    full_ids,
+  )
+  admitted = admission || raise("ClickHouse cold lookup missed the published session anchor")
+  replay = ML::GGUF::Qwen35QBitRuntimeCache.replay_plan(
+    admitted.entry,
+    full_ids,
+    tokenizer.vocab.size.to_i32,
+  )
+  unless replay.prefix_len == anchor_ids.size && replay.replayed_tokens == suffix_ids.size && !replay.cached_next_token?
+    raise "ClickHouse admission produced the wrong suffix replay boundary"
+  end
+  clickhouse_lookup_admit_ms = (Time.instant - lookup_started).total_milliseconds
+else
+  native_stream = ML::GGUF::QwenQBitNativeBlock.parse_stream(native_bytes)
+  exact_artifact = ML::GGUF::Qwen35StateSnapshot.decode_artifact_encoded_bytes(
+    exact_artifact_bytes,
+    copy_payloads: false,
+  )
+  synthetic_entry = ML::GGUF::QwenQBitCacheEnvelope.build(
+    cache_context,
+    native_bytes,
+    exact_artifact_bytes,
+  )
+  admission = ML::GGUF::QwenQBitCacheEnvelope::Admission.new(
+    synthetic_entry,
+    native_stream,
+    exact_artifact,
+  )
+end
+admitted_state = admission.not_nil!
 
 free_ids = [] of Int32
 free_restore_ms = 0.0_f64
 free_replay_ms = 0.0_f64
 free_decode_ms = 0.0_f64
+free_prepare_ms = 0.0_f64
 free_ended = false
 forced_restore_ms = 0.0_f64
 forced_replay_ms = 0.0_f64
@@ -315,12 +399,14 @@ resident_live_bytes = 0_i64
 with_session_adaptive_env(resident_map) do
   free_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
   begin
+    prepare_started = Time.instant
     ML::GGUF::Qwen35CPU.prepare_state_metal!(free_state, hp)
+    free_prepare_ms = (Time.instant - prepare_started).total_milliseconds
     restore_started = Time.instant
     ML::GGUF::QwenQBitStateSnapshot.restore_admitted_native_stream_into_adaptive(
-      native_stream,
-      exact_artifact,
-      SESSION_CACHE_ID,
+      admitted_state.native_stream,
+      admitted_state.exact_artifact,
+      admitted_state.entry.cache_id,
       hp,
       free_state,
     )
@@ -362,9 +448,9 @@ with_session_adaptive_env(resident_map) do
     ML::GGUF::Qwen35CPU.prepare_state_metal!(forced_state, hp)
     restore_started = Time.instant
     ML::GGUF::QwenQBitStateSnapshot.restore_admitted_native_stream_into_adaptive(
-      native_stream,
-      exact_artifact,
-      SESSION_CACHE_ID,
+      admitted_state.native_stream,
+      admitted_state.exact_artifact,
+      admitted_state.entry.cache_id,
       hp,
       forced_state,
     )
@@ -432,14 +518,17 @@ top2_distribution_stable = ranked_top2_rate >= 0.75 && top2_overlap_rate >= 0.75
 quality_pass = exact_ended && free_ended && exact_meaning && free_meaning &&
                top1_rate >= 0.80 && exact_top1_coverage >= 0.80 &&
                ecs.mean >= 0.90
+cold_hit_to_first_token_ms = clickhouse_lookup_admit_ms + free_prepare_ms + free_restore_ms + free_replay_ms
+serialize_and_publish_ms = serialize_ms + clickhouse_save_ms
 
 puts "qwen35_adaptive_session_restore_probe"
 puts "  model=#{model_path}"
 puts "  resident_map=#{resident_map.inspect} filler=#{filler_repetitions} requested_gen=#{n_gen}"
 puts "  anchor_tokens=#{anchor_ids.size} suffix_tokens=#{suffix_ids.size} full_tokens=#{full_ids.size} max_seq=#{max_seq}"
 puts "  startup_ms=#{startup_ms.round(3)} exact_prefill_ms=#{exact_prefill_ms.round(3)} exact_replay_ms=#{exact_replay_ms.round(3)} exact_decode_ms=#{exact_decode_ms.round(3)}"
-puts "  serialize_ms=#{serialize_ms.round(3)} cold_native_bytes=#{native_bytes.size} cold_exact_kv_bytes=#{exact_artifact_bytes.size} cold_payload_bytes=#{cold_payload_bytes}"
-puts "  free_restore_ms=#{free_restore_ms.round(3)} free_replay_ms=#{free_replay_ms.round(3)} free_decode_ms=#{free_decode_ms.round(3)} forced_restore_ms=#{forced_restore_ms.round(3)} forced_replay_ms=#{forced_replay_ms.round(3)}"
+puts "  serialize_ms=#{serialize_ms.round(3)} clickhouse_save_ms=#{clickhouse_save_ms.round(3)} serialize_and_publish_ms=#{serialize_and_publish_ms.round(3)} cold_native_bytes=#{native_bytes.size} cold_exact_kv_bytes=#{exact_artifact_bytes.size} cold_payload_bytes=#{cold_payload_bytes}"
+puts "  clickhouse_enabled=#{!clickhouse_endpoint.nil?} clickhouse_lookup_admit_ms=#{clickhouse_lookup_admit_ms.round(3)} free_prepare_ms=#{free_prepare_ms.round(3)} free_restore_ms=#{free_restore_ms.round(3)} free_replay_ms=#{free_replay_ms.round(3)} cold_hit_to_first_token_ms=#{cold_hit_to_first_token_ms.round(3)}"
+puts "  free_decode_ms=#{free_decode_ms.round(3)} forced_restore_ms=#{forced_restore_ms.round(3)} forced_replay_ms=#{forced_replay_ms.round(3)}"
 puts "  top1=#{top1_matches}/#{top1_count} ranked_top2=#{ranked_top2_matches}/#{ranked_top2_count} top2_overlap=#{top2_overlap}/#{ranked_top2_count} exact_top1_covered=#{exact_top1_covered}/#{exact_top2.size} ecs=#{ecs.mean.round(6)}"
 puts "  raw_live_kv_bytes=#{raw_live_kv_bytes} resident_live_kv_bytes=#{resident_live_bytes} density=#{(raw_live_kv_bytes.to_f64 / resident_live_bytes).round(4)}x"
 puts "  exact_ended=#{exact_ended} free_ended=#{free_ended} exact_meaning=#{exact_meaning} free_meaning=#{free_meaning} top2_distribution_stable=#{top2_distribution_stable} quality_pass=#{quality_pass}"
@@ -478,8 +567,14 @@ json = JSON.build do |builder|
     builder.field "startup_ms", startup_ms
     builder.field "exact_prefill_ms", exact_prefill_ms
     builder.field "serialize_ms", serialize_ms
+    builder.field "clickhouse_save_ms", clickhouse_save_ms
+    builder.field "serialize_and_publish_ms", serialize_and_publish_ms
+    builder.field "clickhouse_enabled", !clickhouse_endpoint.nil?
+    builder.field "clickhouse_lookup_admit_ms", clickhouse_lookup_admit_ms
+    builder.field "free_prepare_ms", free_prepare_ms
     builder.field "free_restore_ms", free_restore_ms
     builder.field "free_replay_ms", free_replay_ms
+    builder.field "cold_hit_to_first_token_ms", cold_hit_to_first_token_ms
     builder.field "free_decode_ms", free_decode_ms
     builder.field "forced_restore_ms", forced_restore_ms
     builder.field "forced_replay_ms", forced_replay_ms

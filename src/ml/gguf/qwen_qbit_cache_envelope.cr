@@ -585,10 +585,28 @@ module ML::GGUF
           raise ArgumentError.new("QBit exact artifact must be KV-only")
         end
         raise ArgumentError.new("QBit exact artifact record must stay raw") unless record.codec.raw_f32?
-        raise ArgumentError.new("QBit exact artifact record is truncated") unless record.payload.size == record.original_byte_size
+        validate_exact_kv_payload!(context, exact, record)
         raise ArgumentError.new("duplicate QBit exact artifact record") unless exact_keys.add?({record.layer, record.kind.value})
       end
       validate_complete_record_set!(context, stream, exact)
+    end
+
+    private def validate_exact_kv_payload!(context : LookupContext,
+                                           exact : Qwen35StateSnapshot::EncodedSnapshot,
+                                           record : Qwen35StateSnapshot::EncodedRecord) : Nil
+      unless exact.artifact_version == Qwen35StateSnapshot::ARTIFACT_VERSION_V3
+        raise ArgumentError.new("QBit exact artifact record is truncated") unless record.payload.size == record.original_byte_size
+        return
+      end
+
+      unless record.original_byte_size % context.max_seq == 0
+        raise ArgumentError.new("QBit exact live-prefix KV row size is invalid")
+      end
+      row_bytes = record.original_byte_size // context.max_seq
+      expected_live_bytes = context.prefix_len.to_i64 * row_bytes
+      unless record.payload.size.to_i64 == expected_live_bytes
+        raise ArgumentError.new("QBit exact live-prefix KV payload mismatch")
+      end
     end
 
     private def validate_complete_record_set!(context : LookupContext,

@@ -24401,3 +24401,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Trigger: a strictly admitted repeated-session checkpoint. Transport: Native recurrent planes plus exact live KV -> prepared recurrent Metal owners plus sequential per-layer, 512-token GPU packing -> suffix replay. Boundary: complete identity/shape certificate, one common live prefix, empty sole adaptive owners, and target discard after uncertain device failure. Potential `{semantic failure, invalid publication, persistent F32 KV bytes, transient restore bytes, restore work}` descends locally: no semantic failure or invalid publication was observed, persistent Float32 KV ownership is zero, and transient KV is bounded to one layer chunk pair. Dual frame: ordinary exact Float32 restore/re-prefill and background checkpoint publication.
 
 **decision:** Admit this direct restore primitive and probe only. Next measure the full disk or ClickHouse read-to-first-token corridor, then wire the same discard-on-failure contract into `Qwen35NativeRuntime`; do not redesign the checkpoint format or tier selector first.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-CLICKHOUSE-COLD-925] Strict ClickHouse cold admission composes with direct adaptive GPU restore
+**context:** ml / Qwen3.8 / adaptive QBit / ClickHouse / cold cache
+**state:** full bounded cold-hit corridor verified; NativeRuntime integration guard-only
+
+- claim: "V3 exact-KV artifacts may compact the unused tail without weakening envelope admission."
+  source: `QwenQBitCacheEnvelope` still requires full V1/V2 raw payloads. For V3 it derives the row width from the ABI-certified original size and `max_seq`, then requires each payload to contain exactly `prefix_len` complete rows. The focused envelope suite passed `13 examples, 0 failures, 0 errors`; a wrong live-token boundary is rejected before admission.
+  verified_at: 2026-08-24
+  decay_trigger: envelope schema, V3 artifact layout, state ABI, prefix identity, or record validation change
+  trust: {F:0.97,G:0.55,R:0.94}
+
+- claim: "A true bounded ClickHouse cold lookup can restore the measured 829-token checkpoint into sole adaptive GPU KV owners and reach the first follow-up token in about 1.18 seconds."
+  source: an isolated local ClickHouse server received a 40,257,628-byte recurrent Native artifact and a 108,659,740-byte exact live-KV artifact. A fresh `Store` with `resident_admission_bytes=0` read and strictly admitted the 829-token prefix in 327.683 ms; state preparation took 13.992 ms, adaptive restore 45.931 ms, and 34-token suffix replay to the first token 787.860 ms, totaling 1,175.466 ms versus 10,094.536 ms exact prefill. All 16 attention layers had adaptive owners, no F32 KV owner, and 3.6164x live-KV density. Exact/restored text was `Their sum is 95.` with EOS, meaning pass, top-1 `8/8`, exact top-1 in restored top-2 `7/7`, and ECS `1.0`.
+  verified_at: 2026-08-24
+  decay_trigger: model, prompt, tokenizer/template, ClickHouse transport/schema, envelope admission, adaptive restore/packer, Metal runtime, host load, or timing boundary change
+  trust: {F:0.96,G:0.17,R:0.89}
+
+**Adversary:** Ranked and unordered top-2 agreement remains `9/14`, and the single-host timing excludes process/model startup. The exact KV artifact is raw F32 live-prefix data, so disk compactness is only `1.8563x` for the complete payload while resident KV is `3.6164x`. NativeRuntime still rejects adaptive ownership, and adaptive state still cannot be snapshotted, forked, or used for checkpoint renewal. Enabling the environment globally would therefore break miss/writeback/session boundaries rather than complete the feature.
+
+**Value proxy:** The value coordinate is valid admitted state to first follow-up token with preserved response meaning and ownership. HTTP time, restore time, bytes, top-1/top-2, and ECS remain separate diagnostics; none alone proves the corridor.
+
+**LTP/WBA:** Trigger: a repeated prompt with a strictly admitted durable anchor. Transport: ClickHouse manifest/artifacts -> strict V3 live-prefix admission -> fresh adaptive owners -> exact suffix replay. Boundary: full identity/ABI certificate, resident-admission cache disabled, exact anchor/suffix split, sole target ownership, and target discard after uncertain device failure. Potential `{semantic failure, invalid admission, cold latency, persistent F32 KV bytes}` descends on the measured row from exact prefill to a 1.175-second cold corridor with no observed semantic or ownership failure. Dual frame: ordinary exact F32 prefill and the already-certified in-memory restore.
+
+**decision:** Admit the durable ClickHouse-to-adaptive probe and V3 live-prefix envelope rule. Integrate next only as a default-off, non-session NativeRuntime cache-hit route with explicit F32 miss fallback; keep adaptive snapshot/writeback and session checkpoint renewal rejected.

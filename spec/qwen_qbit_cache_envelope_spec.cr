@@ -8,12 +8,15 @@ private def qbit_envelope_bytes(values : Array(Float32)) : Bytes
   bytes
 end
 
-private def qbit_envelope_context(template : String = "{{ messages }}") : ML::GGUF::QwenQBitCacheEnvelope::Context
+private def qbit_envelope_context(template : String = "{{ messages }}",
+                                  max_seq : Int32 = 16_i32,
+                                  prefix_len : Int32 = 3_i32,
+                                  kv_record_values : Int32 = 3_i32) : ML::GGUF::QwenQBitCacheEnvelope::Context
   tokens = [11_i32, 22_i32, 33_i32, 44_i32]
   state_abi = ML::GGUF::QwenQBitCacheEnvelope::StateABI.new(
     layer_count: 2,
     full_attention_interval: 2,
-    kv_record_byte_size: 3_i64 * sizeof(Float32),
+    kv_record_byte_size: kv_record_values.to_i64 * sizeof(Float32),
     conv_record_byte_size: 13_i64 * sizeof(Float32),
     ssm_record_byte_size: 2_i64 * sizeof(Float32),
   )
@@ -21,22 +24,23 @@ private def qbit_envelope_context(template : String = "{{ messages }}") : ML::GG
     model_id: "model-a",
     tokenizer_id: "tokenizer-a",
     template_id: ML::GGUF::QwenQBitCacheEnvelope.template_id(template),
-    prompt_hash: ML::GGUF::Qwen35PromptCache.prompt_hash(tokens[0, 3], "rendered prompt"),
-    token_hash: ML::GGUF::Qwen35PromptCache.token_hash(tokens, 3),
-    prefix_len: 3,
-    max_seq: 16,
+    prompt_hash: ML::GGUF::Qwen35PromptCache.prompt_hash(tokens[0, prefix_len], "rendered prompt"),
+    token_hash: ML::GGUF::Qwen35PromptCache.token_hash(tokens, prefix_len),
+    prefix_len: prefix_len,
+    max_seq: max_seq,
     layer_count: 2,
     qbit_block_size: 8,
     qbit_precision: 7,
     validation_kind: ML::GGUF::Qwen35PromptCache::EXACT_KNOWN_SPAN_VALIDATION_KIND,
     validation_steps: 1,
-    validation_hash: ML::GGUF::Qwen35PromptCache.token_hash(tokens),
-    next_token_id: tokens.last,
+    validation_hash: ML::GGUF::Qwen35PromptCache.token_hash(tokens, prefix_len + 1),
+    next_token_id: tokens[prefix_len],
     state_abi: state_abi,
   )
 end
 
-private def qbit_envelope_artifacts(context : ML::GGUF::QwenQBitCacheEnvelope::Context) : {Bytes, Bytes}
+private def qbit_envelope_artifacts(context : ML::GGUF::QwenQBitCacheEnvelope::Context,
+                                    live_kv_tokens : Int32? = nil) : {Bytes, Bytes}
   codec = ML::GGUF::QwenQBitGaussianCodec
   cache_id = ML::GGUF::QwenQBitCacheEnvelope.cache_id(context)
   native = ML::GGUF::QwenQBitNativeWriter.encode([
@@ -61,18 +65,24 @@ private def qbit_envelope_artifacts(context : ML::GGUF::QwenQBitCacheEnvelope::C
       ML::GGUF::Qwen35StateSnapshot::Record.new(
         1,
         ML::GGUF::Qwen35StateSnapshot::RecordKind::KCache,
-        qbit_envelope_bytes([1.0_f32, 2.0_f32, 3.0_f32]),
+        qbit_envelope_bytes(Array(Float32).new(context.state_abi.kv_record_byte_size.to_i // sizeof(Float32)) { |i| i.to_f32 + 1.0_f32 }),
         ML::StorageMode::Shared,
       ),
       ML::GGUF::Qwen35StateSnapshot::Record.new(
         1,
         ML::GGUF::Qwen35StateSnapshot::RecordKind::VCache,
-        qbit_envelope_bytes([4.0_f32, 5.0_f32, 6.0_f32]),
+        qbit_envelope_bytes(Array(Float32).new(context.state_abi.kv_record_byte_size.to_i // sizeof(Float32)) { |i| i.to_f32 + 101.0_f32 }),
         ML::StorageMode::Shared,
       ),
     ],
   )
-  {native, ML::GGUF::Qwen35StateSnapshot.encode_artifact_bytes(exact)}
+  {
+    native,
+    ML::GGUF::Qwen35StateSnapshot.encode_artifact_bytes(
+      exact,
+      artifact_live_kv_tokens: live_kv_tokens,
+    ),
+  }
 end
 
 describe ML::GGUF::QwenQBitCacheEnvelope do
@@ -98,6 +108,24 @@ describe ML::GGUF::QwenQBitCacheEnvelope do
     admitted.entry.certificate_id.should eq(entry.certificate_id)
     admitted.native_stream.record_spans.size.should eq(2)
     admitted.exact_artifact.records.size.should eq(2)
+  end
+
+  it "admits exact live-prefix KV payloads only at the certified boundary" do
+    context = qbit_envelope_context(max_seq: 4, prefix_len: 2, kv_record_values: 8)
+    native, live_kv = qbit_envelope_artifacts(context, live_kv_tokens: 2)
+
+    entry = envelope.build(context, native, live_kv, created_at_unix: 123_i64)
+    admitted = envelope.admit(entry, context, native, live_kv)
+    admitted.exact_artifact.artifact_version.should eq(ML::GGUF::Qwen35StateSnapshot::ARTIFACT_VERSION_V3)
+    admitted.exact_artifact.records.each do |record|
+      record.original_byte_size.should eq(8 * sizeof(Float32))
+      record.payload.size.should eq(4 * sizeof(Float32))
+    end
+
+    _native, wrong_boundary = qbit_envelope_artifacts(context, live_kv_tokens: 1)
+    expect_raises(ArgumentError, /live-prefix/) do
+      envelope.build(context, native, wrong_boundary, created_at_unix: 123_i64)
+    end
   end
 
   it "looks up by request-known identity without requiring cached outcomes" do

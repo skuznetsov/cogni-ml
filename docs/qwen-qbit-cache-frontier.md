@@ -605,9 +605,11 @@ than relaxation of either gate.
 - A versioned QBit cache envelope may bind the state runtime, model, tokenizer,
   explicit chat-template identity, prompt and token hashes, state ABI, codec,
   exact-known-span validation result, and cached next token. Admission requires
-  the complete per-layer recurrent/KV record set, exact record byte sizes and
-  positions, exact KV bytes, and a block-framing-independent logical digest of
-  all QBit columns.
+  the complete per-layer recurrent/KV record set, exact declared record byte
+  sizes and positions, and a block-framing-independent logical digest of all
+  QBit columns. V1/V2 KV payloads must remain full-sized. V3 may instead carry
+  exactly `prefix_len` complete KV rows from each original `max_seq` record;
+  arbitrary truncation remains invalid.
 - A successful strict admission may retain the parsed zero-copy views as a
   process-local certificate while their backing byte slices remain immutable.
   Repeated restores from that certificate need not reparse or rehash the same
@@ -1355,6 +1357,40 @@ response boundary; background publication remains the intended dual frame.
 `Qwen35NativeRuntime`, checkpoint renewal from an adaptive owner, ClickHouse
 composition, and packed adaptive KV persistence remain fail-closed or open.
 These are single guarded rows; replay/decode variance is not a throughput SLA.
+
+### ClickHouse cold admission to adaptive resident KV gate (2026-08-24)
+
+The same probe can now publish the p7 recurrent stream plus exact V3 live-prefix
+KV artifact through the bounded ClickHouse store, construct a fresh store with
+its resident admission cache disabled, perform longest-prefix lookup and strict
+admission, and restore the returned views directly into adaptive GPU owners.
+The lookup also proves the expected 829-token anchor and 34-token suffix replay
+boundary before Metal state mutation. A focused negative spec rejects a V3 KV
+payload whose live-row count differs from the envelope `prefix_len`.
+
+Two guarded Qwen3.8-27B Q4_K_M rows used the default-off
+`p4;27=bf16,43=bf16,47=bf16,51=bf16` map and an isolated local ClickHouse HTTP
+server:
+
+| Anchor | Exact prefill | Serialize + publish | Cold lookup + admit | Prepare + adaptive restore | Suffix replay / first token | Full cold hit to first token | Live KV density |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 445 tokens | 8,341.259 ms | 2,510.841 ms | 223.146 ms | 49.518 ms | 739.484 ms | 1,012.148 ms | 3.4975x |
+| 829 tokens | 10,094.536 ms | 2,633.929 ms | 327.683 ms | 59.923 ms | 787.860 ms | 1,175.466 ms | 3.6164x |
+
+Both exact and restored 829-token runs reached EOS and emitted `Their sum is
+95.` with top-1 `8/8`, exact top-1 covered by restored top-2 `7/7`, and
+output-row token ECS `1.0`. Ranked and unordered top-2 agreement remained
+`9/14`, so the existing runner-up distribution warning is unchanged. The full
+cold boundary is about `8.6x` shorter than the matched exact prefill on this
+single host row; it excludes process/model startup and is not a throughput SLA.
+ClickHouse background merges were not required for visibility and are outside
+the lookup critical path measured here.
+
+This composes the strict durable admission and direct adaptive restore
+primitives, but does not yet admit adaptive ownership inside
+`Qwen35NativeRuntime`. Native runtime integration must preserve ordinary F32
+miss fallback and keep session checkpoint/snapshot routes fail-closed until
+adaptive snapshots have their own certificate.
 
 ### Cache-engine contract
 
