@@ -24517,3 +24517,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Trigger: adaptive non-session writeback. Transport: recurrent Metal owner -> one Float32 record -> one p7 Native block -> bounded one-shot HTTP -> ClickHouse. Boundary: exact KV prevalidation, unique recurrent identities, reblocking-invariant logical digest, request byte cap, and manifest-last publication. Potential `{semantic mismatch, visible partial generation, source peak, final-body peak, writeback wall}` descends without changing the dual raw-session/read frame.
 
 **decision:** Admit bounded recurrent HTTP writeback for the existing default-off adaptive non-session corridor. Keep KV upload, cold reads, and sessions on their current bounded paths; do not add retries or another container format.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-KV-STREAM-930] Adaptive KV writeback is bounded to one canonical record
+**context:** ml / Qwen3.8 / adaptive QBit / KV serialization / ClickHouse
+**state:** default-off non-session write-side verified; device-direct write and cold read guard-only
+
+- claim: "Adaptive writeback no longer retains the complete compact KV artifact on the host."
+  source: `PreencodedArtifactBody` emits the existing CQKV V3 header and one validated K/V payload at a time while incrementally computing its SHA-256 and record summary. `QwenQBitAdaptiveResidentKV#snapshot_k/#snapshot_v` read only the selected resident record. A release synthetic probe at the qualified 75,621,404-byte Qwen3.8 artifact size measured maximum RSS `288,030,720 -> 15,384,576` bytes (`18.7x` lower), with identical bytes and SHA-256; the largest retained canonical payload was 2,363,136 bytes.
+  verified_at: 2026-08-24
+  decay_trigger: CQKV framing, adaptive snapshot ownership, per-record validation, HTTP IO semantics, request limits, or runtime writeback routing change
+  trust: {F:0.98,G:0.38,R:0.94}
+
+- claim: "The one-record KV body preserves the existing envelope and cold restore lifecycle."
+  source: byte-equivalence and envelope-equivalence specs passed. An isolated Qwen3.8-27B Q4_K_M seed/hit through ClickHouse under `p4;27=bf16,43=bf16,47=bf16,51=bf16` emitted identical ids `[21,11,220,22]` and text `6, 7`, reused all 38 prompt tokens, and reported zero failures. Seed writeback was 2,516.971 ms; hit lookup/restore was 95.606/23.265 ms. The stored KV payload was exactly 1,324,060 bytes, alongside 38,304 recurrent rows, 39,223,296 values, and 96 recurrent identities.
+  verified_at: 2026-08-24
+  decay_trigger: model, prompt, tokenizer/template, tier map, CQKV/envelope schema, ClickHouse transport/read path, host load, or safe-run policy change
+  trust: {F:0.97,G:0.20,R:0.91}
+
+**Adversary:** The RSS probe isolates serialization and does not measure full-model unified memory. Host staging still transiently owns one selected base/sidecar plus one canonical payload; this is not Metal-to-HTTP zero-copy. KV-first publication can leave an invisible TTL orphan if validation or transport fails, but recurrent state, manifest, and prefix remain unpublished. Bodies are one-shot and non-replayable. The 130 applicable isolated QBit/Metal examples passed, but the unrelated async-writer raw-thread concurrency example reproducibly fails under Crystal 1.21 with `Thread#scheduler nil`; it was not changed by this slice. Cold reads, sessions, async/speculative paths, and default enablement remain unchanged.
+
+**LTP/WBA:** Trigger: adaptive non-session writeback after a successful packed prefill. Transport: selected resident K/V base/sidecar -> one canonical V3 record -> bounded one-shot HTTP -> ClickHouse, followed by recurrent Native rows. Boundary: exact V3 framing and digest, per-record adaptive validation, unique full-attention K/V identities, combined byte cap, and manifest/prefix last. Potential `{semantic or envelope mismatch, visible partial generation, complete-KV host ownership, writeback wall}` descends while the raw-session/read frame remains unchanged. Dual frame: the previous complete compact KV artifact.
+
+**decision:** Admit one-record adaptive KV writeback for the existing default-off non-session corridor. Keep direct device streaming, bounded cold reads, sessions, and retry semantics as separate slices.

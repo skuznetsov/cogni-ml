@@ -50,6 +50,24 @@ module ML::GGUF
       sha256 : String,
       byte_size : Int64
 
+    record ArtifactRecordIdentity,
+      layer : Int32,
+      kind : RecordKind,
+      storage_mode : ML::StorageMode,
+      original_byte_size : Int64,
+      payload_byte_size : Int64
+
+    record ArtifactSummary,
+      artifact_version : UInt32,
+      max_seq : Int32,
+      layer_count : Int32,
+      positions : Array(Int32),
+      codec : RecordCodec,
+      codec_block : Int32,
+      records : Array(ArtifactRecordIdentity),
+      sha256 : String,
+      byte_size : Int64
+
     class Snapshot
       getter max_seq : Int32
       getter layer_count : Int32
@@ -95,6 +113,191 @@ module ML::GGUF
       end
     end
 
+    # One-shot V3 artifact body. The source is pulled only after the fixed
+    # header has drained, and at most one encoded record payload is retained.
+    class PreencodedArtifactBody < IO
+      getter max_seq : Int32
+      getter layer_count : Int32
+      getter expected_record_count : Int32
+      getter byte_size : Int64
+      getter record_count : Int32
+      getter peak_record_payload_bytes : Int64
+
+      @next_record : Proc(EncodedRecord?)
+      @expected_record_count : Int32
+      @positions : Array(Int32)
+      @seen : Set({Int32, UInt8})
+      @records : Array(ArtifactRecordIdentity)
+      @digest : Digest::SHA256
+      @segment : Bytes
+      @segment_offset : Int32
+      @payload : Bytes
+      @payload_offset : Int32
+      @summary : ArtifactSummary?
+      @record_validator : Proc(EncodedRecord, Nil)?
+      @eof : Bool
+
+      def initialize(@max_seq : Int32,
+                     @layer_count : Int32,
+                     positions : Array(Int32),
+                     @expected_record_count : Int32,
+                     @next_record : Proc(EncodedRecord?))
+        raise ArgumentError.new("preencoded Qwen state artifact max_seq must be positive") unless @max_seq > 0
+        raise ArgumentError.new("preencoded Qwen state artifact layer count must be positive") unless @layer_count > 0
+        unless positions.size == @layer_count
+          raise ArgumentError.new("preencoded Qwen state artifact position count mismatch")
+        end
+        unless @expected_record_count > 0
+          raise ArgumentError.new("preencoded Qwen state artifact record count must be positive")
+        end
+
+        @positions = positions.dup
+        @seen = Set({Int32, UInt8}).new
+        @records = [] of ArtifactRecordIdentity
+        @digest = Digest::SHA256.new
+        @segment = artifact_header
+        @segment_offset = 0
+        @payload = Bytes.empty
+        @payload_offset = 0
+        @summary = nil
+        @record_validator = nil
+        @byte_size = 0_i64
+        @record_count = 0
+        @peak_record_payload_bytes = 0_i64
+        @eof = false
+      end
+
+      def positions : Array(Int32)
+        @positions.dup
+      end
+
+      def validate_records_with(&block : EncodedRecord -> Nil) : Nil
+        unless @byte_size == 0 && @record_count == 0 && @record_validator.nil?
+          raise ArgumentError.new("preencoded Qwen state artifact validator must be installed before consumption")
+        end
+        @record_validator = block
+      end
+
+      def read(slice : Bytes) : Int32
+        return 0 if slice.empty? || @eof
+
+        copied = 0
+        while copied < slice.size && !@eof
+          if @segment_offset < @segment.size
+            count = Math.min(slice.size - copied, @segment.size - @segment_offset)
+            part = @segment[@segment_offset, count]
+            slice[copied, count].copy_from(part)
+            @digest.update(part)
+            @segment_offset += count
+            copied += count
+            @byte_size += count
+            next
+          end
+
+          if @payload_offset < @payload.size
+            count = Math.min(slice.size - copied, @payload.size - @payload_offset)
+            part = @payload[@payload_offset, count]
+            slice[copied, count].copy_from(part)
+            @digest.update(part)
+            @payload_offset += count
+            copied += count
+            @byte_size += count
+            next
+          end
+
+          load_next_record
+        end
+        copied
+      end
+
+      def write(slice : Bytes) : NoReturn
+        raise IO::Error.new("preencoded Qwen state artifact body is read-only")
+      end
+
+      def summary : ArtifactSummary
+        @summary || raise ArgumentError.new("preencoded Qwen state artifact body was not fully consumed")
+      end
+
+      private def artifact_header : Bytes
+        io = IO::Memory.new
+        io.write(ARTIFACT_MAGIC)
+        io.write_bytes(ARTIFACT_VERSION_V3, IO::ByteFormat::LittleEndian)
+        io.write_bytes(@max_seq.to_u32, IO::ByteFormat::LittleEndian)
+        io.write_bytes(@layer_count.to_u32, IO::ByteFormat::LittleEndian)
+        io.write_bytes(@expected_record_count.to_u32, IO::ByteFormat::LittleEndian)
+        io.write_byte(RecordCodec::RawF32.value)
+        io.write_byte(0_u8)
+        io.write_bytes(0_u16, IO::ByteFormat::LittleEndian)
+        io.write_bytes(0_u32, IO::ByteFormat::LittleEndian)
+        @positions.each { |position| io.write_bytes(position.to_u32, IO::ByteFormat::LittleEndian) }
+        io.to_slice
+      end
+
+      private def load_next_record : Nil
+        # Drop the fully drained record before the lazy source allocates its
+        # successor, otherwise two canonical payloads overlap transiently.
+        @segment = Bytes.empty
+        @segment_offset = 0
+        @payload = Bytes.empty
+        @payload_offset = 0
+
+        if @record_count == @expected_record_count
+          if @next_record.call
+            raise ArgumentError.new("preencoded Qwen state artifact record count mismatch")
+          end
+          @summary = ArtifactSummary.new(
+            ARTIFACT_VERSION_V3,
+            @max_seq,
+            @layer_count,
+            @positions.dup,
+            RecordCodec::RawF32,
+            0_i32,
+            @records.dup,
+            @digest.final.hexstring,
+            @byte_size,
+          )
+          @record_validator = nil
+          @eof = true
+          return
+        end
+
+        record = @next_record.call || raise ArgumentError.new("preencoded Qwen state artifact record count mismatch")
+        unless record.layer >= 0 && record.layer < @layer_count
+          raise ArgumentError.new("preencoded Qwen state artifact record layer is out of range")
+        end
+        unless @seen.add?({record.layer, record.kind.value})
+          raise ArgumentError.new("duplicate preencoded Qwen state artifact record")
+        end
+        unless record.codec.raw_f32? && record.original_byte_size >= 0
+          raise ArgumentError.new("preencoded Qwen state artifact record must use raw framing")
+        end
+        @record_validator.try(&.call(record))
+
+        io = IO::Memory.new
+        io.write_bytes(record.layer.to_u32, IO::ByteFormat::LittleEndian)
+        io.write_byte(record.kind.value)
+        io.write_byte(record.storage_mode.value.to_u8)
+        io.write_byte(RecordCodec::RawF32.value)
+        io.write_byte(0_u8)
+        io.write_bytes(record.original_byte_size.to_u64, IO::ByteFormat::LittleEndian)
+        io.write_bytes(record.payload.size.to_u64, IO::ByteFormat::LittleEndian)
+        @segment = io.to_slice
+        @segment_offset = 0
+        @payload = record.payload
+        @payload_offset = 0
+        payload_bytes = record.payload.size.to_i64
+        @peak_record_payload_bytes = payload_bytes if payload_bytes > @peak_record_payload_bytes
+        @records << ArtifactRecordIdentity.new(
+          record.layer,
+          record.kind,
+          record.storage_mode,
+          record.original_byte_size.to_i64,
+          payload_bytes,
+        )
+        @record_count += 1
+      end
+    end
+
     class MappedEncodedSnapshot
       getter encoded : EncodedSnapshot
 
@@ -120,11 +323,13 @@ module ML::GGUF
       end
     end
 
-    ARTIFACT_MAGIC      = Bytes[0x43, 0x51, 0x4b, 0x56] # "CQKV"
-    ARTIFACT_VERSION_V1 = 1_u32
-    ARTIFACT_VERSION_V2 = 2_u32
-    ARTIFACT_VERSION_V3 = 3_u32
-    ARTIFACT_VERSION    = ARTIFACT_VERSION_V1
+    ARTIFACT_MAGIC                  = Bytes[0x43, 0x51, 0x4b, 0x56] # "CQKV"
+    ARTIFACT_VERSION_V1             =  1_u32
+    ARTIFACT_VERSION_V2             =  2_u32
+    ARTIFACT_VERSION_V3             =  3_u32
+    ARTIFACT_V3_FIXED_HEADER_BYTES  = 28_i64
+    ARTIFACT_V3_RECORD_HEADER_BYTES = 24_i64
+    ARTIFACT_VERSION                = ARTIFACT_VERSION_V1
 
     {% unless flag?(:cpu_only) %}
       ARTIFACT_RESTORE_SOURCE = {{ read_file("#{__DIR__}/kernels/artifact_restore_qwen35.metal") }}

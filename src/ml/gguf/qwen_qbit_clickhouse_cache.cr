@@ -369,6 +369,80 @@ module ML::GGUF
         Saved.new(entry, generation_id, expires_at_unix)
       end
 
+      # Adaptive compact-KV writeback. KV is framed and validated one record at
+      # a time, then recurrent state is streamed. A failed KV body can leave at
+      # most an unreferenced TTL row; recurrent state and the manifest remain
+      # unpublished.
+      def save_streaming(context : QwenQBitCacheEnvelope::Context,
+                         recurrent_body : QwenQBitStateSnapshot::NativeRecurrentBody,
+                         kv_body : Qwen35StateSnapshot::PreencodedArtifactBody,
+                         ttl : Time::Span,
+                         created_at_unix : Int64 = Time.utc.to_unix) : Saved
+        validate_context_layout!(context)
+        unless recurrent_body.byte_size == 0 && recurrent_body.record_count == 0
+          raise ArgumentError.new("QBit recurrent request body was already consumed")
+        end
+        unless kv_body.byte_size == 0 && kv_body.record_count == 0
+          raise ArgumentError.new("QBit KV request body was already consumed")
+        end
+        ttl_seconds = ttl.total_seconds.to_i64
+        unless ttl_seconds > 0 && ttl_seconds <= 365_i64 * 24 * 60 * 60
+          raise ArgumentError.new("QBit ClickHouse TTL must be within 1 second..365 days")
+        end
+        unless created_at_unix > 0 && created_at_unix <= Int64::MAX - ttl_seconds
+          raise ArgumentError.new("QBit ClickHouse creation time is invalid")
+        end
+
+        QwenQBitCacheEnvelope.prepare_exact_artifact_stream!(context, kv_body)
+        generation_id = @generation_id_factory.call
+        validate_hex_id!(generation_id, GENERATION_HEX_SIZE, "generation")
+        lookup_key = QwenQBitCacheEnvelope.lookup_key(context)
+        expires_at_unix = created_at_unix + ttl_seconds
+        cache_id = QwenQBitCacheEnvelope.cache_id(context)
+        kv_limit = Math.min(@config.max_kv_bytes, @config.max_total_artifact_bytes)
+
+        @transport.post_stream(
+          blob_insert_query(kv_table, "payload", cache_id, lookup_key, generation_id, expires_at_unix),
+          kv_body,
+          kv_limit,
+          @config.max_envelope_bytes,
+        )
+        kv = kv_body.summary
+        QwenQBitCacheEnvelope.validate_exact_artifact_summary!(context, kv)
+        validate_combined_size!(0_i64, kv.byte_size)
+
+        combined_recurrent_limit = @config.max_total_artifact_bytes - kv.byte_size
+        unless combined_recurrent_limit > 0
+          raise ArgumentError.new("QBit combined artifact exceeds #{@config.max_total_artifact_bytes} bytes")
+        end
+        recurrent_limit = Math.min(@config.max_recurrent_bytes, combined_recurrent_limit)
+        @transport.post_stream(
+          recurrent_insert_query(lookup_key, generation_id, expires_at_unix),
+          recurrent_body,
+          recurrent_limit,
+          @config.max_envelope_bytes,
+        )
+        recurrent = recurrent_body.summary
+        validate_combined_size!(recurrent_body.byte_size, kv.byte_size)
+        entry = QwenQBitCacheEnvelope.build(context, recurrent, kv, created_at_unix)
+        envelope_json = entry.to_json
+        if envelope_json.bytesize.to_i64 > @config.max_envelope_bytes
+          raise ArgumentError.new("QBit cache envelope exceeds #{@config.max_envelope_bytes} bytes")
+        end
+
+        @transport.post(
+          manifest_insert_query(entry, lookup_key, generation_id, expires_at_unix),
+          envelope_json.to_slice,
+          @config.max_envelope_bytes,
+        )
+        @transport.post(
+          prefix_insert_query(entry, context, lookup_key, generation_id, expires_at_unix),
+          envelope_json.to_slice,
+          @config.max_envelope_bytes,
+        )
+        Saved.new(entry, generation_id, expires_at_unix)
+      end
+
       def lookup(context : QwenQBitCacheEnvelope::Context) : QwenQBitCacheEnvelope::Admission?
         lookup_internal(context, context)
       end

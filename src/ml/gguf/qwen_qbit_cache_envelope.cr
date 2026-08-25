@@ -343,6 +343,30 @@ module ML::GGUF
       exact = Qwen35StateSnapshot.decode_artifact_encoded_bytes(kv_artifact, copy_payloads: false)
       validate_artifact_shapes!(context, stream, exact)
 
+      build_validated(
+        context,
+        recurrent,
+        stream,
+        artifact_summary(exact, Digest::SHA256.hexdigest(kv_artifact), kv_artifact.size.to_i64),
+        created_at_unix,
+      )
+    end
+
+    def build(context : Context,
+              recurrent : QwenQBitNativeBlock::Summary,
+              kv_artifact : Qwen35StateSnapshot::ArtifactSummary,
+              created_at_unix : Int64 = Time.utc.to_unix) : Entry
+      validate_context!(context)
+      stream = summary_stream(recurrent)
+      validate_artifact_summary_shapes!(context, stream, kv_artifact)
+      build_validated(context, recurrent, stream, kv_artifact, created_at_unix)
+    end
+
+    private def build_validated(context : Context,
+                                recurrent : QwenQBitNativeBlock::Summary,
+                                stream : QwenQBitNativeBlock::Stream,
+                                kv_artifact : Qwen35StateSnapshot::ArtifactSummary,
+                                created_at_unix : Int64) : Entry
       entry = Entry.new(
         schema_id: SCHEMA_ID,
         state_runtime_id: context.state_runtime_id,
@@ -365,9 +389,9 @@ module ML::GGUF
         recurrent_tile_count: recurrent.row_count,
         recurrent_value_count: recurrent.records.sum(0_i64, &.value_count.to_i64),
         recurrent_logical_sha256: recurrent.logical_sha256,
-        kv_artifact_sha256: Digest::SHA256.hexdigest(kv_artifact),
-        kv_artifact_byte_size: kv_artifact.size.to_i64,
-        state_layout_sha256: state_layout_sha256(context, stream, exact),
+        kv_artifact_sha256: kv_artifact.sha256,
+        kv_artifact_byte_size: kv_artifact.byte_size,
+        state_layout_sha256: state_layout_sha256(context, stream, kv_artifact),
         validation_kind: context.validation_kind,
         validation_steps: context.validation_steps,
         validation_hash: context.validation_hash,
@@ -378,6 +402,31 @@ module ML::GGUF
       entry.certificate_id = certificate_id(entry)
       validate_entry!(entry, context)
       entry
+    end
+
+    # Installs content validation before a one-shot body can be consumed. The
+    # final record-set check is performed on its summary after EOF.
+    def prepare_exact_artifact_stream!(context : LookupContext,
+                                       body : Qwen35StateSnapshot::PreencodedArtifactBody) : Nil
+      validate_lookup_context!(context)
+      validate_artifact_header!(
+        context,
+        Qwen35StateSnapshot::ARTIFACT_VERSION_V3,
+        body.max_seq,
+        body.layer_count,
+        body.positions,
+        Qwen35StateSnapshot::RecordCodec::RawF32,
+        body.expected_record_count,
+      )
+      body.validate_records_with do |record|
+        validate_exact_record!(context, Qwen35StateSnapshot::ARTIFACT_VERSION_V3, record)
+      end
+    end
+
+    def validate_exact_artifact_summary!(context : LookupContext,
+                                         artifact : Qwen35StateSnapshot::ArtifactSummary) : Nil
+      validate_lookup_context!(context)
+      validate_artifact_summary!(context, artifact)
     end
 
     # Streaming writeback validates the complete KV side before any recurrent
@@ -415,6 +464,31 @@ module ML::GGUF
         expected[{layer, Qwen35StateSnapshot::RecordKind::VCache.value}] = context.state_abi.kv_record_byte_size
       end
       raise ArgumentError.new("QBit exact artifact record set mismatch") unless actual == expected
+    end
+
+    private def artifact_summary(exact : Qwen35StateSnapshot::EncodedSnapshot,
+                                 sha256 : String,
+                                 byte_size : Int64) : Qwen35StateSnapshot::ArtifactSummary
+      records = exact.records.map do |record|
+        Qwen35StateSnapshot::ArtifactRecordIdentity.new(
+          record.layer,
+          record.kind,
+          record.storage_mode,
+          record.original_byte_size.to_i64,
+          record.payload.size.to_i64,
+        )
+      end
+      Qwen35StateSnapshot::ArtifactSummary.new(
+        exact.artifact_version,
+        exact.max_seq,
+        exact.layer_count,
+        exact.positions,
+        exact.codec,
+        exact.codec_block,
+        records,
+        sha256,
+        byte_size,
+      )
     end
 
     private def summary_stream(summary : QwenQBitNativeBlock::Summary) : QwenQBitNativeBlock::Stream
@@ -689,11 +763,112 @@ module ML::GGUF
       validate_complete_record_set!(context, stream, exact)
     end
 
+    private def validate_artifact_summary_shapes!(context : LookupContext,
+                                                  stream : QwenQBitNativeBlock::Stream,
+                                                  exact : Qwen35StateSnapshot::ArtifactSummary) : Nil
+      validate_stream_identity!(context, stream)
+      recurrent_keys = Set({Int32, UInt8}).new
+      stream.record_spans.each do |span|
+        raise ArgumentError.new("QBit recurrent layer is out of range") unless span.layer >= 0 && span.layer < context.layer_count
+        kind = Qwen35StateSnapshot::RecordKind.from_value?(span.kind)
+        unless kind && (kind.conv_state? || kind.ssm_state?)
+          raise ArgumentError.new("QBit Native stream contains a non-recurrent record")
+        end
+        raise ArgumentError.new("duplicate QBit recurrent record") unless recurrent_keys.add?({span.layer, span.kind})
+      end
+      validate_artifact_summary!(context, exact)
+      validate_complete_record_set!(context, stream, exact)
+    end
+
+    private def validate_artifact_header!(context : LookupContext,
+                                          artifact_version : UInt32,
+                                          max_seq : Int32,
+                                          layer_count : Int32,
+                                          positions : Array(Int32),
+                                          codec : Qwen35StateSnapshot::RecordCodec,
+                                          record_count : Int32) : Nil
+      raise ArgumentError.new("QBit exact artifact max_seq mismatch") unless max_seq == context.max_seq
+      raise ArgumentError.new("QBit exact artifact layer count mismatch") unless layer_count == context.layer_count
+      unless positions.size == context.layer_count && positions.all? { |position| position == context.prefix_len }
+        raise ArgumentError.new("QBit exact artifact positions mismatch")
+      end
+      raise ArgumentError.new("QBit exact artifact must use the raw codec") unless codec.raw_f32?
+      raise ArgumentError.new("QBit exact artifact must contain KV records") unless record_count > 0
+      if adaptive_artifact_codec?(context.kv_artifact_codec) && artifact_version != Qwen35StateSnapshot::ARTIFACT_VERSION_V3
+        raise ArgumentError.new("QBit adaptive KV artifact must use V3 live-prefix framing")
+      end
+    end
+
+    private def validate_exact_record!(context : LookupContext,
+                                       artifact_version : UInt32,
+                                       record : Qwen35StateSnapshot::EncodedRecord) : Nil
+      raise ArgumentError.new("QBit exact artifact layer is out of range") unless record.layer >= 0 && record.layer < context.layer_count
+      unless record.kind.k_cache? || record.kind.v_cache?
+        raise ArgumentError.new("QBit exact artifact must be KV-only")
+      end
+      raise ArgumentError.new("QBit exact artifact record must stay raw") unless record.codec.raw_f32?
+      validate_exact_kv_payload!(context, artifact_version, record)
+    end
+
+    private def validate_artifact_summary!(context : LookupContext,
+                                           exact : Qwen35StateSnapshot::ArtifactSummary) : Nil
+      validate_artifact_header!(
+        context,
+        exact.artifact_version,
+        exact.max_seq,
+        exact.layer_count,
+        exact.positions,
+        exact.codec,
+        exact.records.size.to_i32,
+      )
+      unless exact.codec_block == 0 && sha256?(exact.sha256) && exact.byte_size > 0
+        raise ArgumentError.new("QBit exact artifact summary is invalid")
+      end
+
+      actual = {} of {Int32, UInt8} => Int64
+      payload_bytes = 0_i64
+      exact.records.each do |record|
+        raise ArgumentError.new("QBit exact artifact layer is out of range") unless record.layer >= 0 && record.layer < context.layer_count
+        unless record.kind.k_cache? || record.kind.v_cache?
+          raise ArgumentError.new("QBit exact artifact must be KV-only")
+        end
+        unless record.payload_byte_size >= 0 && record.payload_byte_size <= exact.byte_size - payload_bytes
+          raise ArgumentError.new("QBit exact artifact summary byte size is invalid")
+        end
+        payload_bytes += record.payload_byte_size
+        key = {record.layer, record.kind.value}
+        raise ArgumentError.new("duplicate QBit exact artifact record") if actual.has_key?(key)
+        actual[key] = record.original_byte_size
+      end
+
+      framed_bytes = Qwen35StateSnapshot::ARTIFACT_V3_FIXED_HEADER_BYTES +
+                     exact.layer_count.to_i64 * sizeof(UInt32) +
+                     exact.records.size.to_i64 * Qwen35StateSnapshot::ARTIFACT_V3_RECORD_HEADER_BYTES +
+                     payload_bytes
+      unless exact.byte_size == framed_bytes
+        raise ArgumentError.new("QBit exact artifact summary byte size is invalid")
+      end
+
+      expected = {} of {Int32, UInt8} => Int64
+      context.layer_count.times do |layer|
+        next unless context.state_abi.full_attention?(layer)
+        expected[{layer, Qwen35StateSnapshot::RecordKind::KCache.value}] = context.state_abi.kv_record_byte_size
+        expected[{layer, Qwen35StateSnapshot::RecordKind::VCache.value}] = context.state_abi.kv_record_byte_size
+      end
+      raise ArgumentError.new("QBit exact artifact record set mismatch") unless actual == expected
+    end
+
     private def validate_exact_kv_payload!(context : LookupContext,
                                            exact : Qwen35StateSnapshot::EncodedSnapshot,
                                            record : Qwen35StateSnapshot::EncodedRecord) : Nil
+      validate_exact_kv_payload!(context, exact.artifact_version, record)
+    end
+
+    private def validate_exact_kv_payload!(context : LookupContext,
+                                           artifact_version : UInt32,
+                                           record : Qwen35StateSnapshot::EncodedRecord) : Nil
       if adaptive_artifact_codec?(context.kv_artifact_codec)
-        unless exact.artifact_version == Qwen35StateSnapshot::ARTIFACT_VERSION_V3
+        unless artifact_version == Qwen35StateSnapshot::ARTIFACT_VERSION_V3
           raise ArgumentError.new("QBit adaptive KV artifact must use V3 live-prefix framing")
         end
         unless record.original_byte_size % context.max_seq == 0
@@ -715,7 +890,7 @@ module ML::GGUF
         return
       end
 
-      unless exact.artifact_version == Qwen35StateSnapshot::ARTIFACT_VERSION_V3
+      unless artifact_version == Qwen35StateSnapshot::ARTIFACT_VERSION_V3
         raise ArgumentError.new("QBit exact artifact record is truncated") unless record.payload.size == record.original_byte_size
         return
       end
@@ -749,6 +924,12 @@ module ML::GGUF
     private def validate_complete_record_set!(context : LookupContext,
                                               stream : QwenQBitNativeBlock::Stream,
                                               exact : Qwen35StateSnapshot::EncodedSnapshot) : Nil
+      validate_complete_record_set!(context, stream, artifact_summary(exact, "0" * 64, 1_i64))
+    end
+
+    private def validate_complete_record_set!(context : LookupContext,
+                                              stream : QwenQBitNativeBlock::Stream,
+                                              exact : Qwen35StateSnapshot::ArtifactSummary) : Nil
       actual = {} of {Int32, UInt8} => Int64
       stream.record_spans.each do |span|
         actual[{span.layer, span.kind}] = span.value_count.to_i64 * sizeof(Float32)
@@ -808,6 +989,12 @@ module ML::GGUF
     private def state_layout_sha256(context : LookupContext,
                                     stream : QwenQBitNativeBlock::Stream,
                                     exact : Qwen35StateSnapshot::EncodedSnapshot) : String
+      state_layout_sha256(context, stream, artifact_summary(exact, "0" * 64, 1_i64))
+    end
+
+    private def state_layout_sha256(context : LookupContext,
+                                    stream : QwenQBitNativeBlock::Stream,
+                                    exact : Qwen35StateSnapshot::ArtifactSummary) : String
       records = [] of LayoutRecord
       stream.record_spans.each do |span|
         records << LayoutRecord.new(span.layer, span.kind, span.value_count.to_i64 * sizeof(Float32), 0xff_u8)

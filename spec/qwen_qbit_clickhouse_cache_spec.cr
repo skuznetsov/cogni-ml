@@ -7,12 +7,13 @@ private def qbit_ch_bytes(values : Array(Float32)) : Bytes
   bytes
 end
 
-private def qbit_ch_context(template : String = "{{ messages }}") : ML::GGUF::QwenQBitCacheEnvelope::Context
+private def qbit_ch_context(template : String = "{{ messages }}",
+                            kv_record_byte_size : Int64 = 3_i64 * sizeof(Float32)) : ML::GGUF::QwenQBitCacheEnvelope::Context
   tokens = [11_i32, 22_i32, 33_i32, 44_i32]
   state_abi = ML::GGUF::QwenQBitCacheEnvelope::StateABI.new(
     layer_count: 2,
     full_attention_interval: 2,
-    kv_record_byte_size: 3_i64 * sizeof(Float32),
+    kv_record_byte_size: kv_record_byte_size,
     conv_record_byte_size: 13_i64 * sizeof(Float32),
     ssm_record_byte_size: 2_i64 * sizeof(Float32),
   )
@@ -33,6 +34,37 @@ private def qbit_ch_context(template : String = "{{ messages }}") : ML::GGUF::Qw
     next_token_id: tokens.last,
     state_abi: state_abi,
   )
+end
+
+private def qbit_ch_live_kv_artifact(context : ML::GGUF::QwenQBitCacheEnvelope::Context) : Bytes
+  records = [
+    ML::GGUF::Qwen35StateSnapshot::EncodedRecord.new(
+      1,
+      ML::GGUF::Qwen35StateSnapshot::RecordKind::KCache,
+      ML::StorageMode::Shared,
+      ML::GGUF::Qwen35StateSnapshot::RecordCodec::RawF32,
+      context.state_abi.kv_record_byte_size.to_i32,
+      qbit_ch_bytes([1.0_f32, 2.0_f32, 3.0_f32]),
+    ),
+    ML::GGUF::Qwen35StateSnapshot::EncodedRecord.new(
+      1,
+      ML::GGUF::Qwen35StateSnapshot::RecordKind::VCache,
+      ML::StorageMode::Shared,
+      ML::GGUF::Qwen35StateSnapshot::RecordCodec::RawF32,
+      context.state_abi.kv_record_byte_size.to_i32,
+      qbit_ch_bytes([4.0_f32, 5.0_f32, 6.0_f32]),
+    ),
+  ]
+  exact = ML::GGUF::Qwen35StateSnapshot::EncodedSnapshot.new(
+    context.max_seq,
+    context.layer_count,
+    [context.prefix_len, context.prefix_len],
+    records,
+    ML::GGUF::Qwen35StateSnapshot::RecordCodec::RawF32,
+    0,
+    artifact_version: ML::GGUF::Qwen35StateSnapshot::ARTIFACT_VERSION_V3,
+  )
+  ML::GGUF::Qwen35StateSnapshot.encode_preencoded_artifact_bytes(exact)
 end
 
 private def qbit_ch_artifacts(context : ML::GGUF::QwenQBitCacheEnvelope::Context) : {Bytes, Bytes}
@@ -100,6 +132,19 @@ private def qbit_ch_stream_body(context : ML::GGUF::QwenQBitCacheEnvelope::Conte
     cache_id: ML::GGUF::QwenQBitCacheEnvelope.cache_id(context),
     block_size: context.qbit_block_size,
     precision: context.qbit_precision,
+  )
+end
+
+private def qbit_ch_kv_stream_body(kv : Bytes) : ML::GGUF::Qwen35StateSnapshot::PreencodedArtifactBody
+  exact = ML::GGUF::Qwen35StateSnapshot.decode_artifact_encoded_bytes(kv)
+  records = exact.records.dup
+  source = -> : ML::GGUF::Qwen35StateSnapshot::EncodedRecord? { records.shift? }
+  ML::GGUF::Qwen35StateSnapshot::PreencodedArtifactBody.new(
+    exact.max_seq,
+    exact.layer_count,
+    exact.positions,
+    exact.records.size.to_i32,
+    source,
   )
 end
 
@@ -217,6 +262,80 @@ describe ML::GGUF::QwenQBitClickHouseCache do
     String.new(transport.requests[2].body).should eq(saved.entry.to_json)
     legacy = envelope.build(context, transport.requests[0].body, kv, created_at_unix: 100_i64)
     saved.entry.to_json.should eq(legacy.to_json)
+  end
+
+  it "streams compact KV before recurrent state and preserves the legacy envelope" do
+    transport = QBitCHMemoryTransport.new
+    config = ML::GGUF::QwenQBitClickHouseCache::Config.new(table_prefix: "qwen_cache_test")
+    store = ML::GGUF::QwenQBitClickHouseCache::Store.new(config, transport, -> { "a" * 64 })
+    context = qbit_ch_context(kv_record_byte_size: 16_i64 * sizeof(Float32))
+    kv = qbit_ch_live_kv_artifact(context)
+    recurrent_body = qbit_ch_stream_body(context)
+    kv_body = qbit_ch_kv_stream_body(kv)
+
+    saved = store.save_streaming(context, recurrent_body, kv_body, ttl: 30.minutes, created_at_unix: 100_i64)
+
+    transport.requests.size.should eq(4)
+    transport.requests[0].query.should contain("_kv")
+    transport.requests[1].query.should contain("_recurrent")
+    transport.requests[2].query.should contain("_manifest")
+    transport.requests[3].query.should contain("_prefix_index")
+    transport.requests[0].body.should eq(kv)
+    kv_body.summary.sha256.should eq(saved.entry.kv_artifact_sha256)
+    recurrent_body.summary.logical_sha256.should eq(saved.entry.recurrent_logical_sha256)
+    legacy = envelope.build(context, transport.requests[1].body, kv, created_at_unix: 100_i64)
+    saved.entry.to_json.should eq(legacy.to_json)
+  end
+
+  it "does not consume recurrent state or publish a manifest when streamed KV is incomplete" do
+    transport = QBitCHMemoryTransport.new
+    store = ML::GGUF::QwenQBitClickHouseCache::Store.new(
+      ML::GGUF::QwenQBitClickHouseCache::Config.new(table_prefix: "qwen_cache_test"),
+      transport,
+      -> { "a" * 64 },
+    )
+    context = qbit_ch_context
+    recurrent_body = qbit_ch_stream_body(context)
+    kv_body = ML::GGUF::Qwen35StateSnapshot::PreencodedArtifactBody.new(
+      context.max_seq,
+      context.layer_count,
+      [context.prefix_len, context.prefix_len],
+      1,
+      -> : ML::GGUF::Qwen35StateSnapshot::EncodedRecord? { nil },
+    )
+
+    expect_raises(ArgumentError, /record count mismatch/) do
+      store.save_streaming(context, recurrent_body, kv_body, ttl: 30.minutes, created_at_unix: 100_i64)
+    end
+
+    recurrent_body.record_count.should eq(0)
+    transport.requests.none? { |request| request.query.includes?("_manifest") }.should be_true
+  end
+
+  it "does not publish a manifest when recurrent upload fails after streamed KV" do
+    transport = QBitCHFailingTransport.new(fail_on_request: 2)
+    store = ML::GGUF::QwenQBitClickHouseCache::Store.new(
+      ML::GGUF::QwenQBitClickHouseCache::Config.new(table_prefix: "qwen_cache_test"),
+      transport,
+      -> { "a" * 64 },
+    )
+    context = qbit_ch_context(kv_record_byte_size: 16_i64 * sizeof(Float32))
+    kv = qbit_ch_live_kv_artifact(context)
+
+    expect_raises(IO::Error, /injected ClickHouse/) do
+      store.save_streaming(
+        context,
+        qbit_ch_stream_body(context),
+        qbit_ch_kv_stream_body(kv),
+        ttl: 30.minutes,
+        created_at_unix: 100_i64,
+      )
+    end
+
+    transport.requests.size.should eq(2)
+    transport.requests[0].query.should contain("_kv")
+    transport.requests[1].query.should contain("_recurrent")
+    transport.requests.none? { |request| request.query.includes?("_manifest") }.should be_true
   end
 
   it "rejects an invalid exact KV artifact before consuming or uploading recurrent state" do

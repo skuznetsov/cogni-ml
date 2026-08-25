@@ -1573,9 +1573,49 @@ For this transport-only slice, exact token identity makes the positionwise ECS
 mean/minimum `1.0/1.0` and preserves the sentence meaning. The runtime smoke
 does not expose fresh runner-up logits, so the applicable top-2 evidence remains
 the earlier aligned resident-quality result (`12/14` ranked and set overlap,
-maximum top-2 logit delta `1.0112152`), not a new top-2 measurement. KV upload
-still owns its compact byte artifact, and cold reads still buffer their bounded
-responses; changing either is outside this slice.
+maximum top-2 logit delta `1.0112152`), not a new top-2 measurement. At this
+checkpoint KV upload still owned its compact byte artifact; the next slice
+closes that write-side allocation. Cold reads remain buffered.
+
+### Bounded adaptive-KV writeback gate (2026-08-24)
+
+Adaptive non-session writeback now frames and validates the existing CQKV V3
+artifact one K or V record at a time. It snapshots only the selected resident
+base/sidecar, produces its canonical payload, and releases that record before
+pulling the next one. The wire bytes, SHA-256, envelope, cache identity, tables,
+and cold read path are unchanged. This is bounded host staging, not direct
+Metal-to-HTTP zero-copy: one selected base/sidecar plus one canonical payload
+can still coexist transiently.
+
+The compact KV stream is uploaded first, recurrent Native rows second, and the
+manifest and prefix index last. A malformed or interrupted stream can therefore
+leave TTL-governed orphan rows, but cannot publish an admissible generation.
+The one-shot bodies are deliberately not retried; callers must capture a fresh
+body. Raw/session checkpoints keep their existing format and ordering.
+
+A release synthetic probe used the qualified Qwen3.8 long-context KV artifact
+size of 75,621,404 bytes. The accumulated path reached 288,030,720 bytes maximum
+RSS; the one-record path reached 15,384,576 bytes, an 18.7x reduction. Both
+emitted exactly 75,621,404 bytes with SHA-256
+`38f63faf4fbe03d5402e70ef1e1065f6b893692d5c5014dc5384c8b50a73c709`;
+the largest retained record payload was 2,363,136 bytes. This isolates
+serialization ownership rather than whole-model unified-memory pressure.
+
+An isolated ClickHouse/Qwen3.8-27B Q4_K_M seed and cold hit then exercised the
+new branch at `max_seq=64` under
+`p4;27=bf16,43=bf16,47=bf16,51=bf16`. Seed writeback took 2,516.971 ms. The hit
+looked up the entry in 95.606 ms, restored it in 23.265 ms, reused all 38 prompt
+tokens, and emitted the same ids `[21,11,220,22]` and text `6, 7` with zero
+cache failures. ClickHouse stored one 1,324,060-byte KV payload plus 38,304
+recurrent rows covering 39,223,296 values and 96 recurrent identities.
+
+Focused stream/envelope/resident tests passed, and 130 applicable QBit/Metal
+examples passed in resource-isolated processes with one optional model-backed
+pending. The legacy async-writer concurrency example remains incompatible with
+Crystal 1.21 when `Isolated#join` is called from a raw `Thread`
+(`Thread#scheduler nil`); it is outside this KV diff and was reproduced alone.
+Direct device streaming, buffered cold reads, adaptive session checkpoints,
+and production-default policy remain guard-only.
 
 ### Cache-engine contract
 

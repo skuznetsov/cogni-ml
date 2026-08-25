@@ -139,6 +139,85 @@ describe ML::GGUF::Qwen35StateSnapshot do
     payload.to_unsafe.address.should be < bytes.to_unsafe.address + bytes.size
   end
 
+  it "streams preencoded V3 records lazily with byte-identical framing and digest" do
+    records = [
+      ML::GGUF::Qwen35StateSnapshot::EncodedRecord.new(
+        0,
+        ML::GGUF::Qwen35StateSnapshot::RecordKind::KCache,
+        ML::StorageMode::Shared,
+        ML::GGUF::Qwen35StateSnapshot::RecordCodec::RawF32,
+        32,
+        Bytes[1, 2, 3, 4, 5],
+      ),
+      ML::GGUF::Qwen35StateSnapshot::EncodedRecord.new(
+        0,
+        ML::GGUF::Qwen35StateSnapshot::RecordKind::VCache,
+        ML::StorageMode::Shared,
+        ML::GGUF::Qwen35StateSnapshot::RecordCodec::RawF32,
+        32,
+        Bytes[6, 7, 8],
+      ),
+    ]
+    snapshot = ML::GGUF::Qwen35StateSnapshot::EncodedSnapshot.new(
+      4,
+      1,
+      [2_i32],
+      records,
+      ML::GGUF::Qwen35StateSnapshot::RecordCodec::RawF32,
+      0,
+      artifact_version: ML::GGUF::Qwen35StateSnapshot::ARTIFACT_VERSION_V3,
+    )
+    legacy = ML::GGUF::Qwen35StateSnapshot.encode_preencoded_artifact_bytes(snapshot)
+    pending = records.dup
+    pulls = 0
+    source = -> : ML::GGUF::Qwen35StateSnapshot::EncodedRecord? do
+      record = pending.shift?
+      pulls += 1 if record
+      record
+    end
+    body = ML::GGUF::Qwen35StateSnapshot::PreencodedArtifactBody.new(
+      snapshot.max_seq,
+      snapshot.layer_count,
+      snapshot.positions,
+      snapshot.records.size.to_i32,
+      source,
+    )
+
+    chunk = Bytes.new(3)
+    first = body.read(chunk)
+    first.should eq(3)
+    pulls.should eq(0)
+
+    streamed = IO::Memory.new
+    streamed.write(chunk[0, first])
+    while (read = body.read(chunk)) > 0
+      streamed.write(chunk[0, read])
+    end
+
+    streamed.to_slice.should eq(legacy)
+    pulls.should eq(2)
+    body.record_count.should eq(2)
+    body.peak_record_payload_bytes.should eq(5)
+    body.summary.byte_size.should eq(legacy.size)
+    body.summary.sha256.should eq(Digest::SHA256.hexdigest(legacy))
+    body.summary.records.map(&.payload_byte_size).should eq([5_i64, 3_i64])
+  end
+
+  it "rejects a truncated preencoded V3 record source at EOF" do
+    source = -> : ML::GGUF::Qwen35StateSnapshot::EncodedRecord? { nil }
+    body = ML::GGUF::Qwen35StateSnapshot::PreencodedArtifactBody.new(
+      4,
+      1,
+      [2_i32],
+      1,
+      source,
+    )
+
+    expect_raises(ArgumentError, /record count mismatch/) do
+      IO.copy(body, IO::Memory.new)
+    end
+  end
+
   it "can mmap an encoded artifact and preserve payloads as mapped slices" do
     values = [1.0_f32, -2.5_f32, 0.125_f32, 128.0_f32, -64.0_f32]
     snapshot = synthetic_snapshot(values)

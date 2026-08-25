@@ -676,6 +676,37 @@ module ML::GGUF
       {% end %}
     end
 
+    # Bounded durable-writeback helpers: materialize only one canonical K/V
+    # payload so the caller can release it before requesting the next record.
+    def snapshot_k(cache : Cache) : QwenQBitAdaptiveKV::Encoded
+      snapshot_one(cache, true)
+    end
+
+    def snapshot_v(cache : Cache) : QwenQBitAdaptiveKV::Encoded
+      snapshot_one(cache, false)
+    end
+
+    private def snapshot_one(cache : Cache, key : Bool) : QwenQBitAdaptiveKV::Encoded
+      {% if flag?(:cpu_only) %}
+        raise "Metal disabled (cpu_only)"
+      {% else %}
+        result = nil
+        cache.with_snapshot_buffers do |k_base, k_sidecar, v_base, v_sidecar, k_plan, v_plan, cache_len|
+          rows = cache_len * cache.n_head_kv
+          if key
+            base = read_bytes(k_base, rows * QwenQBitAdaptiveKV::BASE_ROW_BYTES)
+            sidecar = read_bytes(k_sidecar, k_plan.prefix_sidecar_bytes(rows))
+            result = QwenQBitAdaptiveKV.encoded_from_regions(k_plan, rows, base, sidecar)
+          else
+            base = read_bytes(v_base, rows * QwenQBitAdaptiveKV::BASE_ROW_BYTES)
+            sidecar = read_bytes(v_sidecar, v_plan.prefix_sidecar_bytes(rows))
+            result = QwenQBitAdaptiveKV.encoded_from_regions(v_plan, rows, base, sidecar)
+          end
+        end
+        result.not_nil!
+      {% end %}
+    end
+
     def restore_snapshot!(cache : Cache,
                           k : QwenQBitAdaptiveKV::Encoded,
                           v : QwenQBitAdaptiveKV::Encoded,

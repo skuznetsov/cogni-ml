@@ -494,7 +494,7 @@ module ML::GGUF
         block_size: BLOCK_SIZE,
         precision: PRECISION,
       )
-      kv_artifact = self.class.adaptive_kv_artifact(state, hp, context.prefix_len)
+      kv_artifact = self.class.adaptive_kv_artifact_body(state, hp, context.prefix_len)
       @store.save_streaming(
         context,
         recurrent_body,
@@ -552,9 +552,9 @@ module ML::GGUF
       )
     end
 
-    def self.adaptive_kv_artifact(state : Qwen35CPU::State,
-                                  hp : Qwen35Hparams,
-                                  prefix_len : Int32) : Bytes
+    def self.adaptive_kv_artifact_body(state : Qwen35CPU::State,
+                                       hp : Qwen35Hparams,
+                                       prefix_len : Int32) : Qwen35StateSnapshot::PreencodedArtifactBody
       unless prefix_len > 0 && prefix_len <= state.max_seq
         raise ArgumentError.new("QBit adaptive KV prefix length is outside state capacity")
       end
@@ -566,43 +566,44 @@ module ML::GGUF
       raise ArgumentError.new("QBit adaptive KV record is too large") if raw_record_bytes > Int32::MAX
       expected_values = prefix_len.to_i64 * hp.n_head_kv * hp.head_dim
       raise ArgumentError.new("QBit adaptive KV live prefix is too large") if expected_values > Int32::MAX
-      records = [] of Qwen35StateSnapshot::EncodedRecord
       hp.full_attention_layers.each do |layer_index|
         cache = state.layers[layer_index].adaptive_kv.not_nil!
         unless cache.cache_len == prefix_len
           raise ArgumentError.new("QBit adaptive KV snapshot prefix mismatch")
         end
-        k, v = QwenQBitAdaptiveResidentKV.snapshot(cache)
-        unless k.value_count == expected_values && v.value_count == expected_values
-          raise ArgumentError.new("QBit adaptive KV snapshot value count mismatch")
-        end
-        records << Qwen35StateSnapshot::EncodedRecord.new(
-          layer_index,
-          Qwen35StateSnapshot::RecordKind::KCache,
-          ML::StorageMode::Shared,
-          Qwen35StateSnapshot::RecordCodec::RawF32,
-          raw_record_bytes.to_i32,
-          k.payload,
-        )
-        records << Qwen35StateSnapshot::EncodedRecord.new(
-          layer_index,
-          Qwen35StateSnapshot::RecordKind::VCache,
-          ML::StorageMode::Shared,
-          Qwen35StateSnapshot::RecordCodec::RawF32,
-          raw_record_bytes.to_i32,
-          v.payload,
-        )
       end
-      snapshot = Qwen35StateSnapshot::EncodedSnapshot.new(
+
+      layers = hp.full_attention_layers
+      record_index = 0
+      source = -> : Qwen35StateSnapshot::EncodedRecord? do
+        if record_index >= layers.size * 2
+          nil
+        else
+          layer_index = layers[record_index // 2]
+          key = record_index.even?
+          cache = state.layers[layer_index].adaptive_kv.not_nil!
+          encoded = key ? QwenQBitAdaptiveResidentKV.snapshot_k(cache) : QwenQBitAdaptiveResidentKV.snapshot_v(cache)
+          unless encoded.value_count == expected_values
+            raise ArgumentError.new("QBit adaptive KV snapshot value count mismatch")
+          end
+          record_index += 1
+          Qwen35StateSnapshot::EncodedRecord.new(
+            layer_index,
+            key ? Qwen35StateSnapshot::RecordKind::KCache : Qwen35StateSnapshot::RecordKind::VCache,
+            ML::StorageMode::Shared,
+            Qwen35StateSnapshot::RecordCodec::RawF32,
+            raw_record_bytes.to_i32,
+            encoded.payload,
+          )
+        end
+      end
+      Qwen35StateSnapshot::PreencodedArtifactBody.new(
         state.max_seq,
         hp.n_layer,
         Array(Int32).new(hp.n_layer, prefix_len),
-        records,
-        Qwen35StateSnapshot::RecordCodec::RawF32,
-        0_i32,
-        artifact_version: Qwen35StateSnapshot::ARTIFACT_VERSION_V3,
+        (layers.size * 2).to_i32,
+        source,
       )
-      Qwen35StateSnapshot.encode_preencoded_artifact_bytes(snapshot)
     end
 
     def self.validation_hash(prompt_ids : Array(Int32), next_token_id : Int32) : String

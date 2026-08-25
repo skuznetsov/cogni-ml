@@ -221,6 +221,8 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
       )
       resident.cache_len.should eq(cache_len)
       packed_k, packed_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(resident)
+      ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot_k(resident).payload.should eq(packed_k.payload)
+      ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot_v(resident).payload.should eq(packed_v.payload)
       decoded_k = adaptive.decode(packed_k)
       decoded_v = adaptive.decode(packed_v)
       cpu_k = adaptive.decode(adaptive.encode(k, k_tiers))
