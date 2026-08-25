@@ -138,8 +138,9 @@ module ML::GGUF
     def lookup_longest_prefix(prompt_ids : Array(Int32),
                               max_seq : Int32,
                               state_abi : QwenQBitCacheEnvelope::StateABI,
-                              vocab_size : Int32) : QwenQBitCacheEnvelope::Admission?
-      admission = @store.lookup_longest_prefix(prefix_context(max_seq, state_abi), prompt_ids)
+                              vocab_size : Int32,
+                              kv_artifact_codec : String = QwenQBitCacheEnvelope::EXACT_ARTIFACT_CODEC) : QwenQBitCacheEnvelope::Admission?
+      admission = @store.lookup_longest_prefix(prefix_context(max_seq, state_abi, kv_artifact_codec), prompt_ids)
       if admitted = admission
         self.class.replay_plan(admitted.entry, prompt_ids, vocab_size)
       end
@@ -197,6 +198,9 @@ module ML::GGUF
     def restore(admission : QwenQBitCacheEnvelope::Admission,
                 hp : Qwen35Hparams,
                 state : Qwen35CPU::State) : Nil
+      if QwenQBitCacheEnvelope.adaptive_artifact_codec?(admission.entry.exact_artifact_codec)
+        raise ArgumentError.new("adaptive QBit KV artifact requires adaptive restore")
+      end
       QwenQBitStateSnapshot.restore_admitted_native_stream_into(
         admission.native_stream,
         admission.exact_artifact,
@@ -209,26 +213,55 @@ module ML::GGUF
     def restore_adaptive(admission : QwenQBitCacheEnvelope::Admission,
                          hp : Qwen35Hparams,
                          state : Qwen35CPU::State) : Nil
-      QwenQBitStateSnapshot.restore_admitted_native_stream_into_adaptive(
-        admission.native_stream,
-        admission.exact_artifact,
-        admission.entry.cache_id,
-        hp,
-        state,
-      )
+      if QwenQBitCacheEnvelope.adaptive_artifact_codec?(admission.entry.exact_artifact_codec)
+        QwenQBitStateSnapshot.restore_admitted_native_stream_into_adaptive_compact(
+          admission.native_stream,
+          admission.exact_artifact,
+          admission.entry.cache_id,
+          hp,
+          state,
+        )
+      else
+        QwenQBitStateSnapshot.restore_admitted_native_stream_into_adaptive(
+          admission.native_stream,
+          admission.exact_artifact,
+          admission.entry.cache_id,
+          hp,
+          state,
+        )
+      end
     end
 
     def save(prompt_text : String,
              prompt_ids : Array(Int32),
              next_token_id : Int32,
              hp : Qwen35Hparams,
-             state : Qwen35CPU::State) : QwenQBitClickHouseCache::Saved
+             state : Qwen35CPU::State,
+             kv_artifact_codec : String = QwenQBitCacheEnvelope::EXACT_ARTIFACT_CODEC) : QwenQBitClickHouseCache::Saved
       raise ArgumentError.new("QBit runtime write-back is disabled") unless write_back?
       state_abi = QwenQBitCacheEnvelope.state_abi(hp, state.max_seq)
-      validate_write_back_state!(state_abi)
-      context = write_context(prompt_text, prompt_ids, next_token_id, state.max_seq, state_abi)
-      snapshot = Qwen35StateSnapshot.capture(state)
-      save_snapshot(context, snapshot)
+      context = write_context(
+        prompt_text,
+        prompt_ids,
+        next_token_id,
+        state.max_seq,
+        state_abi,
+        kv_artifact_codec,
+      )
+      if state.adaptive_kv?
+        unless QwenQBitCacheEnvelope.adaptive_artifact_codec?(kv_artifact_codec)
+          raise ArgumentError.new("adaptive QBit KV write-back requires an adaptive artifact identity")
+        end
+        validate_adaptive_write_back_state!(state_abi, state, context.prefix_len)
+        save_adaptive_state(context, hp, state)
+      else
+        unless kv_artifact_codec == QwenQBitCacheEnvelope::EXACT_ARTIFACT_CODEC
+          raise ArgumentError.new("raw QBit KV write-back requires the raw artifact identity")
+        end
+        validate_write_back_state!(state_abi)
+        snapshot = Qwen35StateSnapshot.capture(state)
+        save_snapshot(context, snapshot)
+      end
     end
 
     def enqueue_anchor_checkpoint(session_id : String,
@@ -427,8 +460,9 @@ module ML::GGUF
                               prompt_ids : Array(Int32),
                               next_token_id : Int32,
                               max_seq : Int32,
-                              state_abi : QwenQBitCacheEnvelope::StateABI) : QwenQBitCacheEnvelope::Context
-      lookup = lookup_context(prompt_text, prompt_ids, max_seq, state_abi)
+                              state_abi : QwenQBitCacheEnvelope::StateABI,
+                              kv_artifact_codec : String = QwenQBitCacheEnvelope::EXACT_ARTIFACT_CODEC) : QwenQBitCacheEnvelope::Context
+      lookup = lookup_context(prompt_text, prompt_ids, max_seq, state_abi, kv_artifact_codec)
       QwenQBitCacheEnvelope::Context.new(
         model_id: lookup.model_id,
         tokenizer_id: lookup.tokenizer_id,
@@ -446,6 +480,31 @@ module ML::GGUF
         next_token_id: next_token_id,
         state_abi: lookup.state_abi,
         state_runtime_id: lookup.state_runtime_id,
+        kv_artifact_codec: lookup.kv_artifact_codec,
+      )
+    end
+
+    private def save_adaptive_state(context : QwenQBitCacheEnvelope::Context,
+                                    hp : Qwen35Hparams,
+                                    state : Qwen35CPU::State,
+                                    created_at_unix : Int64 = Time.utc.to_unix) : QwenQBitClickHouseCache::Saved
+      recurrent_snapshot = Qwen35StateSnapshot.capture_recurrent(state)
+      encoded = QwenQBitStateSnapshot.encode(
+        recurrent_snapshot,
+        block_size: BLOCK_SIZE,
+        precision: PRECISION,
+      )
+      recurrent_native = QwenQBitStateSnapshot.encode_native_recurrent(
+        encoded,
+        QwenQBitCacheEnvelope.cache_id(context),
+      )
+      kv_artifact = self.class.adaptive_kv_artifact(state, hp, context.prefix_len)
+      @store.save(
+        context,
+        recurrent_native,
+        kv_artifact,
+        ttl: @ttl,
+        created_at_unix: created_at_unix,
       )
     end
 
@@ -497,6 +556,59 @@ module ML::GGUF
       )
     end
 
+    def self.adaptive_kv_artifact(state : Qwen35CPU::State,
+                                  hp : Qwen35Hparams,
+                                  prefix_len : Int32) : Bytes
+      unless prefix_len > 0 && prefix_len <= state.max_seq
+        raise ArgumentError.new("QBit adaptive KV prefix length is outside state capacity")
+      end
+      unless state.adaptive_kv_layer_indices == hp.full_attention_layers
+        raise ArgumentError.new("QBit adaptive KV snapshot requires every full-attention layer")
+      end
+
+      raw_record_bytes = state.max_seq.to_i64 * hp.n_head_kv * hp.head_dim * sizeof(Float32)
+      raise ArgumentError.new("QBit adaptive KV record is too large") if raw_record_bytes > Int32::MAX
+      expected_values = prefix_len.to_i64 * hp.n_head_kv * hp.head_dim
+      raise ArgumentError.new("QBit adaptive KV live prefix is too large") if expected_values > Int32::MAX
+      records = [] of Qwen35StateSnapshot::EncodedRecord
+      hp.full_attention_layers.each do |layer_index|
+        cache = state.layers[layer_index].adaptive_kv.not_nil!
+        unless cache.cache_len == prefix_len
+          raise ArgumentError.new("QBit adaptive KV snapshot prefix mismatch")
+        end
+        k, v = QwenQBitAdaptiveResidentKV.snapshot(cache)
+        unless k.value_count == expected_values && v.value_count == expected_values
+          raise ArgumentError.new("QBit adaptive KV snapshot value count mismatch")
+        end
+        records << Qwen35StateSnapshot::EncodedRecord.new(
+          layer_index,
+          Qwen35StateSnapshot::RecordKind::KCache,
+          ML::StorageMode::Shared,
+          Qwen35StateSnapshot::RecordCodec::RawF32,
+          raw_record_bytes.to_i32,
+          k.payload,
+        )
+        records << Qwen35StateSnapshot::EncodedRecord.new(
+          layer_index,
+          Qwen35StateSnapshot::RecordKind::VCache,
+          ML::StorageMode::Shared,
+          Qwen35StateSnapshot::RecordCodec::RawF32,
+          raw_record_bytes.to_i32,
+          v.payload,
+        )
+      end
+      snapshot = Qwen35StateSnapshot::EncodedSnapshot.new(
+        state.max_seq,
+        hp.n_layer,
+        Array(Int32).new(hp.n_layer, prefix_len),
+        records,
+        Qwen35StateSnapshot::RecordCodec::RawF32,
+        0_i32,
+        artifact_version: Qwen35StateSnapshot::ARTIFACT_VERSION_V3,
+      )
+      Qwen35StateSnapshot.encode_preencoded_artifact_bytes(snapshot)
+    end
+
     def self.validation_hash(prompt_ids : Array(Int32), next_token_id : Int32) : String
       Qwen35PromptCache.token_hash_concat(prompt_ids, [next_token_id])
     end
@@ -535,7 +647,8 @@ module ML::GGUF
     private def lookup_context(prompt_text : String,
                                prompt_ids : Array(Int32),
                                max_seq : Int32,
-                               state_abi : QwenQBitCacheEnvelope::StateABI) : QwenQBitCacheEnvelope::LookupContext
+                               state_abi : QwenQBitCacheEnvelope::StateABI,
+                               kv_artifact_codec : String = QwenQBitCacheEnvelope::EXACT_ARTIFACT_CODEC) : QwenQBitCacheEnvelope::LookupContext
       raise ArgumentError.new("QBit runtime prompt is empty") if prompt_ids.empty?
       QwenQBitCacheEnvelope::LookupContext.new(
         model_id: @model_id,
@@ -549,11 +662,13 @@ module ML::GGUF
         qbit_block_size: BLOCK_SIZE,
         qbit_precision: PRECISION,
         state_abi: state_abi,
+        kv_artifact_codec: kv_artifact_codec,
       )
     end
 
     private def prefix_context(max_seq : Int32,
-                               state_abi : QwenQBitCacheEnvelope::StateABI) : QwenQBitCacheEnvelope::PrefixContext
+                               state_abi : QwenQBitCacheEnvelope::StateABI,
+                               kv_artifact_codec : String = QwenQBitCacheEnvelope::EXACT_ARTIFACT_CODEC) : QwenQBitCacheEnvelope::PrefixContext
       QwenQBitCacheEnvelope::PrefixContext.new(
         model_id: @model_id,
         tokenizer_id: @tokenizer_id,
@@ -563,7 +678,35 @@ module ML::GGUF
         qbit_block_size: BLOCK_SIZE,
         qbit_precision: PRECISION,
         state_abi: state_abi,
+        kv_artifact_codec: kv_artifact_codec,
       )
+    end
+
+    private def validate_adaptive_write_back_state!(state_abi : QwenQBitCacheEnvelope::StateABI,
+                                                    state : Qwen35CPU::State,
+                                                    prefix_len : Int32) : Nil
+      unless prefix_len > 0 && prefix_len <= state.max_seq
+        raise ArgumentError.new("QBit adaptive write-back prefix is outside state capacity")
+      end
+      full_layers = (0...state_abi.layer_count).select { |layer| state_abi.full_attention?(layer) }
+      unless state.adaptive_kv_layer_indices == full_layers
+        raise ArgumentError.new("QBit adaptive write-back requires every full-attention layer")
+      end
+      recurrent_layers = state_abi.layer_count.to_i64 - full_layers.size
+      source_bytes = recurrent_layers *
+                     (state_abi.conv_record_byte_size + state_abi.ssm_record_byte_size)
+      full_layers.each do |layer_index|
+        cache = state.layers[layer_index].adaptive_kv.not_nil!
+        unless cache.cache_len == prefix_len
+          raise ArgumentError.new("QBit adaptive write-back prefix mismatch")
+        end
+        source_bytes += cache.live_compressed_bytes
+      end
+      if source_bytes > @write_back_max_source_bytes
+        raise ArgumentError.new(
+          "QBit adaptive runtime source state exceeds write-back limit: #{source_bytes} > #{@write_back_max_source_bytes}"
+        )
+      end
     end
 
     private def source_state_byte_size(state_abi : QwenQBitCacheEnvelope::StateABI) : Int64

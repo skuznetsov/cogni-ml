@@ -659,6 +659,53 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
     end
   end
 
+  it "restores a compact snapshot atomically into the matching planned owner" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    max_seq = 4
+    cache_len = 2
+    head_dim = 256
+    live_tiers = [
+      ML::GGUF::QwenQBitAdaptiveKV::Tier::P4,
+      ML::GGUF::QwenQBitAdaptiveKV::Tier::P5,
+    ]
+    capacity_tiers = [
+      ML::GGUF::QwenQBitAdaptiveKV::Tier::P4,
+      ML::GGUF::QwenQBitAdaptiveKV::Tier::P5,
+      ML::GGUF::QwenQBitAdaptiveKV::Tier::P4,
+      ML::GGUF::QwenQBitAdaptiveKV::Tier::P5,
+    ]
+    values = Array(Float32).new(cache_len * head_dim) { |i| (i - 255).to_f32 / 89.0_f32 }
+    k = adaptive.encode(values, live_tiers, block_size: head_dim)
+    v = adaptive.encode(values.reverse, live_tiers, block_size: head_dim)
+    plan = adaptive.plan(capacity_tiers)
+    resident = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
+      plan, plan, max_seq, 1, head_dim,
+    )
+    wrong_plan = adaptive.plan(Array(ML::GGUF::QwenQBitAdaptiveKV::Tier).new(
+      max_seq,
+      ML::GGUF::QwenQBitAdaptiveKV::Tier::P5,
+    ))
+    wrong = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
+      wrong_plan, wrong_plan, max_seq, 1, head_dim,
+    )
+    begin
+      ML::GGUF::QwenQBitAdaptiveResidentKV.restore_snapshot!(resident, k, v, cache_len)
+      resident.cache_len.should eq(cache_len)
+      restored_k, restored_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(resident)
+      restored_k.payload.should eq(k.payload)
+      restored_v.payload.should eq(v.payload)
+
+      expect_raises(ArgumentError, /tier plan mismatch/) do
+        ML::GGUF::QwenQBitAdaptiveResidentKV.restore_snapshot!(wrong, k, v, cache_len)
+      end
+      wrong.cache_len.should eq(0)
+    ensure
+      resident.release
+      wrong.release
+    end
+  end
+
   it "makes release idempotent and rejects use after release" do
     pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
 

@@ -11,7 +11,8 @@ end
 private def qbit_envelope_context(template : String = "{{ messages }}",
                                   max_seq : Int32 = 16_i32,
                                   prefix_len : Int32 = 3_i32,
-                                  kv_record_values : Int32 = 3_i32) : ML::GGUF::QwenQBitCacheEnvelope::Context
+                                  kv_record_values : Int32 = 3_i32,
+                                  kv_artifact_codec : String = ML::GGUF::QwenQBitCacheEnvelope::EXACT_ARTIFACT_CODEC) : ML::GGUF::QwenQBitCacheEnvelope::Context
   tokens = [11_i32, 22_i32, 33_i32, 44_i32]
   state_abi = ML::GGUF::QwenQBitCacheEnvelope::StateABI.new(
     layer_count: 2,
@@ -36,7 +37,66 @@ private def qbit_envelope_context(template : String = "{{ messages }}",
     validation_hash: ML::GGUF::Qwen35PromptCache.token_hash(tokens, prefix_len + 1),
     next_token_id: tokens[prefix_len],
     state_abi: state_abi,
+    kv_artifact_codec: kv_artifact_codec,
   )
+end
+
+private def qbit_legacy_lookup_key(context : ML::GGUF::QwenQBitCacheEnvelope::LookupContext) : String
+  io = IO::Memory.new
+  [
+    "qwen-qbit-cache-key-v1",
+    context.state_runtime_id,
+    context.model_id,
+    context.tokenizer_id,
+    context.template_id,
+    context.prompt_hash,
+    context.token_hash,
+    ML::GGUF::QwenQBitCacheEnvelope.state_abi_id(context.state_abi),
+  ].each do |value|
+    io.write_bytes(value.bytesize.to_u32, IO::ByteFormat::LittleEndian)
+    io.write(value.to_slice)
+  end
+  io.write_bytes(context.prefix_len.to_u32, IO::ByteFormat::LittleEndian)
+  io.write_bytes(context.max_seq.to_u32, IO::ByteFormat::LittleEndian)
+  io.write_bytes(context.layer_count.to_u32, IO::ByteFormat::LittleEndian)
+  io.write_bytes(context.qbit_block_size.to_u32, IO::ByteFormat::LittleEndian)
+  io.write_bytes(context.qbit_precision.to_u32, IO::ByteFormat::LittleEndian)
+  Digest::SHA256.hexdigest(io.to_slice)
+end
+
+private def qbit_adaptive_artifact(context : ML::GGUF::QwenQBitCacheEnvelope::Context,
+                                   payload : Bytes? = nil) : Bytes
+  live_values = context.prefix_len * ML::GGUF::QwenQBitAdaptiveKV::ROW_VALUES
+  encoded = ML::GGUF::QwenQBitAdaptiveKV.encode(
+    Array(Float32).new(live_values) { |i| (i - live_values // 2).to_f32 / 97.0_f32 },
+    Array(ML::GGUF::QwenQBitAdaptiveKV::Tier).new(context.prefix_len) do |i|
+      i.even? ? ML::GGUF::QwenQBitAdaptiveKV::Tier::P4 : ML::GGUF::QwenQBitAdaptiveKV::Tier::P5
+    end,
+  )
+  record_payload = payload || encoded.payload
+  raw_record_size = context.state_abi.kv_record_byte_size.to_i32
+  records = [
+    ML::GGUF::Qwen35StateSnapshot::EncodedRecord.new(
+      1, ML::GGUF::Qwen35StateSnapshot::RecordKind::KCache,
+      ML::StorageMode::Shared, ML::GGUF::Qwen35StateSnapshot::RecordCodec::RawF32,
+      raw_record_size, record_payload,
+    ),
+    ML::GGUF::Qwen35StateSnapshot::EncodedRecord.new(
+      1, ML::GGUF::Qwen35StateSnapshot::RecordKind::VCache,
+      ML::StorageMode::Shared, ML::GGUF::Qwen35StateSnapshot::RecordCodec::RawF32,
+      raw_record_size, record_payload,
+    ),
+  ]
+  snapshot = ML::GGUF::Qwen35StateSnapshot::EncodedSnapshot.new(
+    context.max_seq,
+    context.layer_count,
+    Array(Int32).new(context.layer_count, context.prefix_len),
+    records,
+    ML::GGUF::Qwen35StateSnapshot::RecordCodec::RawF32,
+    0_i32,
+    artifact_version: ML::GGUF::Qwen35StateSnapshot::ARTIFACT_VERSION_V3,
+  )
+  ML::GGUF::Qwen35StateSnapshot.encode_preencoded_artifact_bytes(snapshot)
 end
 
 private def qbit_envelope_artifacts(context : ML::GGUF::QwenQBitCacheEnvelope::Context,
@@ -108,6 +168,67 @@ describe ML::GGUF::QwenQBitCacheEnvelope do
     admitted.entry.certificate_id.should eq(entry.certificate_id)
     admitted.native_stream.record_spans.size.should eq(2)
     admitted.exact_artifact.records.size.should eq(2)
+  end
+
+  it "preserves raw identities while separating every adaptive KV layout" do
+    raw = qbit_envelope_context(
+      max_seq: 4,
+      prefix_len: 2,
+      kv_record_values: 4 * ML::GGUF::QwenQBitAdaptiveKV::ROW_VALUES,
+    )
+    adaptive_p4 = qbit_envelope_context(
+      max_seq: 4,
+      prefix_len: 2,
+      kv_record_values: 4 * ML::GGUF::QwenQBitAdaptiveKV::ROW_VALUES,
+      kv_artifact_codec: "qkv-adaptive-qbit-v1|1=0",
+    )
+    adaptive_p5 = qbit_envelope_context(
+      max_seq: 4,
+      prefix_len: 2,
+      kv_record_values: 4 * ML::GGUF::QwenQBitAdaptiveKV::ROW_VALUES,
+      kv_artifact_codec: "qkv-adaptive-qbit-v1|1=1",
+    )
+
+    envelope.lookup_key(raw).should eq(qbit_legacy_lookup_key(raw))
+    envelope.lookup_key(adaptive_p4).should_not eq(envelope.lookup_key(raw))
+    envelope.lookup_key(adaptive_p4).should_not eq(envelope.lookup_key(adaptive_p5))
+    envelope.prefix_scope_key(envelope.prefix_context(adaptive_p4)).should_not eq(
+      envelope.prefix_scope_key(envelope.prefix_context(adaptive_p5))
+    )
+
+    native, _raw = qbit_envelope_artifacts(adaptive_p4)
+    exact = qbit_adaptive_artifact(adaptive_p4)
+    entry = envelope.build(adaptive_p4, native, exact)
+    prefix = envelope.prefix_context(adaptive_p4)
+    lookup = envelope.validate_prefix_manifest!(
+      entry,
+      prefix,
+      adaptive_p4.token_hash,
+      adaptive_p4.prefix_len,
+    )
+    lookup.kv_artifact_codec.should eq(adaptive_p4.kv_artifact_codec)
+  end
+
+  it "admits canonical compact adaptive KV payloads and rejects truncation" do
+    context = qbit_envelope_context(
+      max_seq: 4,
+      prefix_len: 2,
+      kv_record_values: 4 * ML::GGUF::QwenQBitAdaptiveKV::ROW_VALUES,
+      kv_artifact_codec: "qkv-adaptive-qbit-v1|1=0",
+    )
+    native, _raw = qbit_envelope_artifacts(context)
+    compact = qbit_adaptive_artifact(context)
+    entry = envelope.build(context, native, compact, created_at_unix: 123_i64)
+    admitted = envelope.admit(entry, context, native, compact)
+    admitted.exact_artifact.records.each do |record|
+      record.payload.size.should be < record.original_byte_size
+    end
+
+    decoded = admitted.exact_artifact.records.first.payload
+    truncated = qbit_adaptive_artifact(context, decoded[0, decoded.size - 1])
+    expect_raises(ArgumentError) do
+      envelope.build(context, native, truncated, created_at_unix: 123_i64)
+    end
   end
 
   it "admits exact live-prefix KV payloads only at the certified boundary" do

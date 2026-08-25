@@ -409,6 +409,22 @@ module ML::GGUF
       {layer_index => adaptive_resident_kv_tier(tier_raw.not_nil!)}
     end
 
+    # Stable request-known identity for the complete resident tier plan. Cache
+    # lookup must separate raw-F32 artifacts and every adaptive tier map before
+    # reading or restoring either representation.
+    def adaptive_resident_kv_layout_id(hp : Qwen35Hparams,
+                                       max_seq : Int32) : String?
+      return nil unless config = adaptive_resident_kv_config(hp, max_seq)
+
+      String.build do |io|
+        io << "qkv-adaptive-qbit-v1|"
+        config.keys.sort.each_with_index do |layer_index, index|
+          io << ',' unless index == 0
+          io << layer_index << '=' << config[layer_index].value
+        end
+      end
+    end
+
     private def adaptive_resident_kv_tier(raw : String) : QwenQBitAdaptiveKV::Tier
       case raw.downcase
       when "p4"   then QwenQBitAdaptiveKV::Tier::P4

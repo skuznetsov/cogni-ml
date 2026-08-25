@@ -517,6 +517,11 @@ module ML::GGUF
         )
         prompt_ids = tokenizer.encode(rendered, add_bos_override: false)
         raise ArgumentError.new("Qwen35NativeRuntime generated prompt is empty") if prompt_ids.empty?
+        adaptive_qbit_requested = self.class.adaptive_qbit_restore_enabled?(request.session_id)
+        kv_artifact_codec = QwenQBitCacheEnvelope::EXACT_ARTIFACT_CODEC
+        if adaptive_qbit_requested
+          kv_artifact_codec = Qwen35CPU.adaptive_resident_kv_layout_id(weights.hparams, limit).not_nil!
+        end
 
         state = nil.as(Qwen35CPU::State?)
         next_token = nil.as(Int32?)
@@ -559,6 +564,7 @@ module ML::GGUF
                   limit,
                   state_abi,
                   tokenizer.vocab.size.to_i32,
+                  kv_artifact_codec,
                 )
                 lookup_completed = true
               rescue ex : Qwen35QBitRuntimeCache::CheckpointRejected
@@ -584,7 +590,6 @@ module ML::GGUF
               if lookup_completed
                 if admitted = admission
                   candidate = nil.as(Qwen35CPU::State?)
-                  adaptive_qbit_restore = self.class.adaptive_qbit_restore_enabled?(request.session_id)
                   restore_started = Time.instant
                   begin
                     begin
@@ -593,7 +598,7 @@ module ML::GGUF
                         candidate,
                         weights,
                         route,
-                        adaptive_qbit_restore: adaptive_qbit_restore,
+                        adaptive_qbit_restore: adaptive_qbit_requested,
                         qbit_f32_fallback: true,
                       )
                     rescue ex
@@ -603,7 +608,7 @@ module ML::GGUF
 
                     begin
                       prepared_candidate = candidate.not_nil!
-                      if adaptive_qbit_restore
+                      if adaptive_qbit_requested
                         qbit_cache.restore_adaptive(admitted, weights.hparams, prepared_candidate)
                       else
                         qbit_cache.restore(admitted, weights.hparams, prepared_candidate)
@@ -713,7 +718,13 @@ module ML::GGUF
 
           unless state && next_token
             state = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
-            prepare_state_metal!(state, weights, route, qbit_f32_fallback: !@qbit_cache.nil?)
+            prepare_state_metal!(
+              state,
+              weights,
+              route,
+              adaptive_qbit_restore: adaptive_qbit_requested && !@qbit_cache.nil?,
+              qbit_f32_fallback: !@qbit_cache.nil? && !adaptive_qbit_requested,
+            )
             if request.session_id && self.class.exact_anchor_fast_enabled? &&
                self.class.exact_anchor_fast_environment_enabled? &&
                Qwen35CPU.recurrent_checkpoint_metal_supported?(weights)
@@ -743,7 +754,6 @@ module ML::GGUF
           result_checkpoint_id = nil.as(String?)
           result_checkpoint_pending = false
           if request.session_id.nil? && (did_ordinary_prefill || did_qbit_suffix_prefill) &&
-             !state.not_nil!.adaptive_kv? &&
              (qbit_cache = @qbit_cache) && qbit_cache.write_back?
             write_back_started = Time.instant
             begin
@@ -753,6 +763,7 @@ module ML::GGUF
                 next_token.not_nil!,
                 weights.hparams,
                 state.not_nil!,
+                kv_artifact_codec,
               )
               @qbit_cache_writes += 1
             rescue ex : IO::Error | ArgumentError

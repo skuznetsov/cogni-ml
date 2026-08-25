@@ -24449,3 +24449,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Trigger: strict non-session QBit admission plus explicit adaptive map. Transport: admitted artifacts -> fresh sole adaptive owners -> synchronous decode/append. Boundary: process lock, Metal backend, no session identity, complete all-attention map, no F32 KV alias, and discard on uncertain device outcome. Potential `{semantic failure, invalid ownership, durability regression, duplicate heavy work, resident F32 KV bytes}` descends on the measured hit without worsening the miss test; session stays in the dual Float32 frame.
 
 **decision:** Admit the default-off non-session adaptive NativeRuntime hit and explicit F32 miss fallback. Next improve cold artifact compactness or add a certified adaptive snapshot; do not silently enable session checkpoints or writeback from adaptive owners.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-COMPACT-COLD-927] Non-session prefill, writeback, and cold restore keep full-attention KV adaptive
+**context:** ml / Qwen3.8 / adaptive QBit / NativeRuntime / compact cold cache
+**state:** bounded default-off non-session corridor verified; sessions and production default guard-only
+
+- claim: "An adaptive non-session miss can remain compact from prefill through durable writeback and a later cold restore without a persistent Float32 KV owner."
+  source: `Qwen35NativeRuntime` allocates adaptive owners before prefill when the explicit tier map is present. `Qwen35QBitRuntimeCache#save_adaptive_state` QBit-encodes only the fixed recurrent source and snapshots canonical resident K/V; CQKV V3 carries those payloads under a layout-specific codec identity. `restore_admitted_native_stream_into_adaptive_compact` restores recurrent records into final Metal buffers and atomically publishes validated resident K/V. Raw/session cache hashes remain unchanged. The guarded regression passed `82 examples, 0 failures, 0 errors, 1 optional model-backed pending`.
+  verified_at: 2026-08-24
+  decay_trigger: adaptive allocation, tier layout identity, CQKV framing, state ABI, resident snapshot/restore, NativeRuntime cache routing, or ClickHouse transport change
+  trust: {F:0.97,G:0.31,R:0.92}
+
+- claim: "The measured 2,172-token cold hit preserves the response and is about 4.06x shorter than matched full prefill while its live attention KV is 3.7647x denser."
+  source: separate guarded Qwen3.8-27B Q4_K_M processes under `p4;27=bf16,43=bf16,47=bf16,51=bf16` measured baseline/seed/hit generation at `24,540.372/28,599.536/6,048.205 ms`. The hit reported `hits=1`, `adaptive_hits=1`, no failures, a 2,172-token restored prefix, 314.146 ms lookup, and 95.599 ms state restore. All paths emitted `Their sum is 95.` with identical ids. Raw live KV was 284,688,384 bytes and compact KV 75,621,404 bytes. Aligned quality was top-1 `8/8`, ranked and set top-2 `12/14`, exact-top-1 coverage `7/7`, ECS mean/minimum `1.0/1.0`, EOS, and preserved meaning.
+  verified_at: 2026-08-24
+  decay_trigger: model weights, prompt, tokenizer/template, generation budget, tier map, Metal kernels, ClickHouse data/schema, host load, timing boundary, or quality metric change
+  trust: {F:0.96,G:0.16,R:0.89}
+
+**Adversary:** Maximum top-2 logit delta was `1.0112152`; identical short output and ECS do not establish distribution parity. The cold timing excludes model loading and is one guarded host row, not a throughput SLA. The qualified four-BF16-layer map is `3.7647x`, not eightfold; an all-P4 control is about `7.1x` but lacks the same quality boundary. Save still holds the recurrent Float32 capture and its encoded records concurrently; the measured logical source was 232,514,588 bytes below the 256 MiB guard, but longer rows need streaming or a new peak-memory certificate. Adaptive session checkpoints, async/speculative paths, and default enablement remain rejected. The long ClickHouse route relies on HTTP-body SQL transport, which is currently a separate working-tree dependency.
+
+**Value proxy:** Correct admitted state, EOS, and response meaning own the first coordinates. Top-1, top-2, ECS, latency, resident density, disk bytes, and cache counters remain separate diagnostics. Exact output cannot erase runner-up drift, and compact bytes cannot promote a tier map that fails meaning.
+
+**LTP/WBA:** Trigger: a strict non-session miss or matching cold prefix under an explicit tier map. Transport: packed prefill -> canonical V3 payload plus recurrent QBit -> strict layout-specific admission -> fresh recurrent/adaptive owners. Boundary: exact model/tokenizer/engine/state identity, complete full-attention layer set, sole target ownership, atomic K/V prefix publication, and target discard after uncertain device failure. Potential `{semantic failure, invalid admission/publication, persistent F32 KV bytes, cold latency, durable bytes}` descends on the measured row without widening the session frame. Dual frame: raw Float32 session/miss artifacts and ordinary full prefill.
+
+**decision:** Admit the compact default-off non-session corridor and its existing-schema KISS design. Keep sessions raw, preserve the 256 MiB save guard, and require broader restored-session quality plus peak-memory evidence before widening context or policy claims.

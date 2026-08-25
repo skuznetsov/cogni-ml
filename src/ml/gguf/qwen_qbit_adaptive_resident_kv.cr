@@ -181,6 +181,54 @@ module ML::GGUF
         end
       end
 
+      # Restore one validated compact live prefix into an empty planned cache.
+      # Publication happens only after both K and V regions have been copied;
+      # a failed copy therefore leaves cache_len at zero and invisible.
+      def restore_snapshot!(k : QwenQBitAdaptiveKV::Encoded,
+                            v : QwenQBitAdaptiveKV::Encoded,
+                            cache_len : Int32) : Nil
+        k_regions = QwenQBitAdaptiveKV.regions(k)
+        v_regions = QwenQBitAdaptiveKV.regions(v)
+        @lifecycle_mutex.synchronize do
+          ensure_live!
+          ensure_no_pending!
+          unless @cache_len == 0
+            raise ArgumentError.new("adaptive resident QBit snapshot target is not empty")
+          end
+          unless cache_len > 0 && cache_len <= @max_seq
+            raise ArgumentError.new("adaptive resident QBit snapshot length is outside capacity")
+          end
+          expected_values = cache_len.to_i64 * @n_head_kv * @head_dim
+          unless expected_values <= Int32::MAX &&
+                 k.value_count == expected_values && v.value_count == expected_values
+            raise ArgumentError.new("adaptive resident QBit snapshot shape mismatch")
+          end
+          k_plan = @k_plan
+          v_plan = @v_plan
+          unless k_plan && v_plan
+            raise ArgumentError.new("adaptive resident QBit snapshot target is not appendable")
+          end
+          rows = cache_len * @n_head_kv
+          expected_metadata_bytes = rows * QwenQBitAdaptiveKV::METADATA_BYTES
+          unless k_regions.metadata == k_plan.metadata[0, expected_metadata_bytes] &&
+                 v_regions.metadata == v_plan.metadata[0, expected_metadata_bytes]
+            raise ArgumentError.new("adaptive resident QBit snapshot tier plan mismatch")
+          end
+          unless k_regions.base.size <= @k_base.size &&
+                 k_regions.sidecar.size <= @k_sidecar.size &&
+                 v_regions.base.size <= @v_base.size &&
+                 v_regions.sidecar.size <= @v_sidecar.size
+            raise ArgumentError.new("adaptive resident QBit snapshot exceeds target buffers")
+          end
+
+          @k_base.write_bytes(k_regions.base.to_unsafe, k_regions.base.size) unless k_regions.base.empty?
+          @k_sidecar.write_bytes(k_regions.sidecar.to_unsafe, k_regions.sidecar.size) unless k_regions.sidecar.empty?
+          @v_base.write_bytes(v_regions.base.to_unsafe, v_regions.base.size) unless v_regions.base.empty?
+          @v_sidecar.write_bytes(v_regions.sidecar.to_unsafe, v_regions.sidecar.size) unless v_regions.sidecar.empty?
+          @cache_len = cache_len
+        end
+      end
+
       # Internal encoder lease: unlike normal reads this is legal only while a
       # shared-command append reservation is active. Publication is still
       # controlled exclusively by `finish_pending_append!`.
@@ -626,6 +674,13 @@ module ML::GGUF
         end
         result.not_nil!
       {% end %}
+    end
+
+    def restore_snapshot!(cache : Cache,
+                          k : QwenQBitAdaptiveKV::Encoded,
+                          v : QwenQBitAdaptiveKV::Encoded,
+                          cache_len : Int32) : Nil
+      cache.restore_snapshot!(k, v, cache_len)
     end
 
     def attn_decode(q : Array(Float32),

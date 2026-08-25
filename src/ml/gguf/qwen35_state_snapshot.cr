@@ -148,6 +148,20 @@ module ML::GGUF
       Snapshot.new(state.max_seq, state.layers.size, positions, records)
     end
 
+    # Recurrent state has fixed size and remains Float32-owned even when KV is
+    # adaptive. Capturing only Conv/SSM avoids materializing any max_seq-sized
+    # Float32 KV buffer on the write-back path.
+    def capture_recurrent(state : Qwen35CPU::State) : Snapshot
+      records = [] of Record
+      positions = Array(Int32).new(state.layers.size)
+      state.layers.each_with_index do |layer, i|
+        positions << layer.position
+        capture_pair(records, i, RecordKind::ConvState, layer.conv_state_buf, layer.conv_state)
+        capture_pair(records, i, RecordKind::SsmState, layer.ssm_state_buf, layer.ssm_state)
+      end
+      Snapshot.new(state.max_seq, state.layers.size, positions, records)
+    end
+
     def restore(snapshot : Snapshot, hp : Qwen35Hparams, prefer_metal : Bool = Qwen35Metal.available?) : Qwen35CPU::State
       raise ArgumentError.new("layer count mismatch: snapshot=#{snapshot.layer_count}, hp=#{hp.n_layer}") unless snapshot.layer_count == hp.n_layer
 
@@ -266,6 +280,52 @@ module ML::GGUF
       else
         encode_artifact_v2(snapshot, codec, artifact_codec_block, artifact_live_kv_tokens)
       end
+    end
+
+    # Serialize already encoded V3 records without interpreting their payload.
+    # The caller owns representation-specific validation; the ordinary decoder
+    # still provides strict framing, bounds, and trailing-byte checks.
+    def encode_preencoded_artifact_bytes(snapshot : EncodedSnapshot) : Bytes
+      unless snapshot.artifact_version == ARTIFACT_VERSION_V3 && snapshot.codec.raw_f32? && snapshot.codec_block == 0
+        raise ArgumentError.new("preencoded Qwen state artifact must use raw-codec V3 framing")
+      end
+      unless snapshot.positions.size == snapshot.layer_count
+        raise ArgumentError.new("preencoded Qwen state artifact position count mismatch")
+      end
+
+      io = IO::Memory.new
+      io.write(ARTIFACT_MAGIC)
+      io.write_bytes(ARTIFACT_VERSION_V3, IO::ByteFormat::LittleEndian)
+      io.write_bytes(snapshot.max_seq.to_u32, IO::ByteFormat::LittleEndian)
+      io.write_bytes(snapshot.layer_count.to_u32, IO::ByteFormat::LittleEndian)
+      io.write_bytes(snapshot.records.size.to_u32, IO::ByteFormat::LittleEndian)
+      io.write_byte(RecordCodec::RawF32.value)
+      io.write_byte(0_u8)
+      io.write_bytes(0_u16, IO::ByteFormat::LittleEndian)
+      io.write_bytes(0_u32, IO::ByteFormat::LittleEndian)
+      snapshot.positions.each { |position| io.write_bytes(position.to_u32, IO::ByteFormat::LittleEndian) }
+
+      seen = Set({Int32, UInt8}).new
+      snapshot.records.each do |record|
+        unless record.layer >= 0 && record.layer < snapshot.layer_count
+          raise ArgumentError.new("preencoded Qwen state artifact record layer is out of range")
+        end
+        unless seen.add?({record.layer, record.kind.value})
+          raise ArgumentError.new("duplicate preencoded Qwen state artifact record")
+        end
+        unless record.codec.raw_f32? && record.original_byte_size >= 0
+          raise ArgumentError.new("preencoded Qwen state artifact record must use raw framing")
+        end
+        io.write_bytes(record.layer.to_u32, IO::ByteFormat::LittleEndian)
+        io.write_byte(record.kind.value)
+        io.write_byte(storage_mode_value(record.storage_mode))
+        io.write_byte(RecordCodec::RawF32.value)
+        io.write_byte(0_u8)
+        io.write_bytes(record.original_byte_size.to_u64, IO::ByteFormat::LittleEndian)
+        io.write_bytes(record.payload.size.to_u64, IO::ByteFormat::LittleEndian)
+        io.write(record.payload)
+      end
+      io.to_slice
     end
 
     def decode_artifact_encoded_bytes(bytes : Bytes,

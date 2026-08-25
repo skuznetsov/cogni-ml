@@ -1447,6 +1447,58 @@ cold process/kernel setup and no paired quiet-host design. This is an ownership
 and lifecycle gate, not a speed claim. The larger direct cold-corridor row above
 remains the relevant latency feasibility evidence.
 
+### Compact adaptive miss, writeback, and cold-hit gate (2026-08-24)
+
+The next bounded slice supersedes the earlier Float32-miss restriction for
+non-session requests. When the Metal adaptive tier map is enabled, a cache miss
+now creates sole adaptive KV owners before prefill, so full-attention KV is
+packed as it is produced rather than first accumulating in Float32. Session
+requests and requests without the adaptive selector keep the raw path. DeltaNet
+recurrent state remains uncompressed in live GPU memory because its size is
+fixed; writeback captures and QBit-encodes it only for the cold artifact.
+
+Writeback reuses the existing CQKV V3 envelope and ClickHouse tables. It stores
+the canonical resident K/V payloads directly, without expanding them to
+Float32, and records the exact tier layout in an adaptive artifact codec. Cache
+lookup therefore cannot alias two tier layouts. Cold restore decodes recurrent
+records into their final Metal buffers and copies the canonical packed K/V into
+fresh sole adaptive owners. K and V are both validated and copied before the
+prefix length is published. A rejected or partially restored candidate is
+discarded; raw and session artifacts retain their byte-for-byte cache identity.
+
+A guarded Qwen3.8-27B Q4_K_M run used `max_seq=4096`, a 2,172-token prompt,
+eight generated tokens, separate baseline/seed/hit processes, and
+`p4;27=bf16,43=bf16,47=bf16,51=bf16`. The baseline took 24,540.372 ms, adaptive
+seed 28,599.536 ms, and cold adaptive hit 6,048.205 ms: about 4.06x faster than
+the matched full prefill. The hit restored all 2,172 tokens with no suffix
+replay; lookup took 314.146 ms and state restore 95.599 ms. All three runs
+emitted `Their sum is 95.` with identical token ids.
+
+The live raw KV represented 284,688,384 bytes and its canonical adaptive
+payload 75,621,404 bytes, or `3.7647x` density for this conservative four-BF16-
+layer map. ClickHouse used 107,809,078 bytes on disk for the complete KV,
+recurrent, manifest, and prefix-index rows. The save-side host guard accounted
+156,893,184 bytes of recurrent Float32 source plus 75,621,404 bytes of already
+compact KV, 232,514,588 bytes total, and stayed below its 256 MiB boundary. This
+does not establish an eightfold window: the all-P4 control is about `7.1x`, while
+the currently qualified quality map is `3.7647x`.
+
+The aligned quality probe preserved exact top-1 `8/8`, ranked top-2 `12/14`,
+top-2 set overlap `12/14`, exact-top-1 coverage `7/7`, and output-row embedding
+cosine similarity mean/minimum `1.0/1.0`; both paths reached EOS with identical
+meaning. Maximum top-2 logit delta was `1.0112152`, so response preservation is
+not a logit-parity claim. The compact snapshot unit gate separately proves that
+the canonical payload survives snapshot/restore byte-for-byte; together these
+are compositional evidence for the same resident representation and compute
+path, not a direct top-2 trace inside the cold NativeRuntime process.
+
+The implementation intentionally adds no new container, table, or checkpoint
+graph. Remaining guard-only surfaces are adaptive session checkpoints,
+longer-than-this-row save peak memory, asynchronous/speculative decoding, and
+production-default policy. The long ClickHouse probe also depends on sending
+large prefix SQL in the HTTP request body; URL query transport hits the server's
+header limit at this prefix length.
+
 ### Cache-engine contract
 
 - The internal envelope makes cache keys content-addressed over model,

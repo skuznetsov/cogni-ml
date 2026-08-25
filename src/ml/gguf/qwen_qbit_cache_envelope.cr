@@ -1,6 +1,7 @@
 require "digest/sha256"
 require "json"
 require "./qwen35_prompt_cache"
+require "./qwen_qbit_adaptive_kv"
 require "./qwen_qbit_native_block"
 
 module ML::GGUF
@@ -13,11 +14,12 @@ module ML::GGUF
   module QwenQBitCacheEnvelope
     extend self
 
-    SCHEMA_ID            = "cogni-ml/qwen-qbit-cache-envelope-v1"
-    NATIVE_LAYOUT_ID     = "clickhouse-native-qbit-int8-p7-v0"
-    EXACT_ARTIFACT_CODEC = "qkv-raw-v1"
-    LOGICAL_HASH_KIND    = "qwen-qbit-native-logical-v1"
-    REQUIRED_PRECISION   = 7
+    SCHEMA_ID                      = "cogni-ml/qwen-qbit-cache-envelope-v1"
+    NATIVE_LAYOUT_ID               = "clickhouse-native-qbit-int8-p7-v0"
+    EXACT_ARTIFACT_CODEC           = "qkv-raw-v1"
+    ADAPTIVE_ARTIFACT_CODEC_PREFIX = "qkv-adaptive-qbit-v1|"
+    LOGICAL_HASH_KIND              = "qwen-qbit-native-logical-v1"
+    REQUIRED_PRECISION             = 7
 
     class StateABI
       getter layer_count : Int32
@@ -54,6 +56,7 @@ module ML::GGUF
       getter qbit_block_size : Int32
       getter qbit_precision : Int32
       getter state_abi : StateABI
+      getter kv_artifact_codec : String
 
       def initialize(@model_id : String,
                      @tokenizer_id : String,
@@ -66,7 +69,8 @@ module ML::GGUF
                      @qbit_block_size : Int32,
                      @qbit_precision : Int32,
                      @state_abi : StateABI,
-                     @state_runtime_id : String = Qwen35PromptCache::RUNTIME_ID)
+                     @state_runtime_id : String = Qwen35PromptCache::RUNTIME_ID,
+                     @kv_artifact_codec : String = EXACT_ARTIFACT_CODEC)
       end
     end
 
@@ -85,6 +89,7 @@ module ML::GGUF
       getter qbit_block_size : Int32
       getter qbit_precision : Int32
       getter state_abi : StateABI
+      getter kv_artifact_codec : String
 
       def initialize(@model_id : String,
                      @tokenizer_id : String,
@@ -94,7 +99,8 @@ module ML::GGUF
                      @qbit_block_size : Int32,
                      @qbit_precision : Int32,
                      @state_abi : StateABI,
-                     @state_runtime_id : String = Qwen35PromptCache::RUNTIME_ID)
+                     @state_runtime_id : String = Qwen35PromptCache::RUNTIME_ID,
+                     @kv_artifact_codec : String = EXACT_ARTIFACT_CODEC)
       end
     end
 
@@ -119,7 +125,8 @@ module ML::GGUF
                      @validation_hash : String,
                      @next_token_id : Int32,
                      state_abi : StateABI,
-                     state_runtime_id : String = Qwen35PromptCache::RUNTIME_ID)
+                     state_runtime_id : String = Qwen35PromptCache::RUNTIME_ID,
+                     kv_artifact_codec : String = EXACT_ARTIFACT_CODEC)
         super(
           model_id,
           tokenizer_id,
@@ -133,6 +140,7 @@ module ML::GGUF
           qbit_precision,
           state_abi,
           state_runtime_id,
+          kv_artifact_codec,
         )
       end
     end
@@ -242,6 +250,7 @@ module ML::GGUF
         context.qbit_precision,
         context.state_abi,
         context.state_runtime_id,
+        context.kv_artifact_codec,
       )
     end
 
@@ -256,6 +265,7 @@ module ML::GGUF
         context.qbit_precision,
         context.state_abi,
         context.state_runtime_id,
+        context.kv_artifact_codec,
       )
     end
 
@@ -267,6 +277,7 @@ module ML::GGUF
       write_string(io, context.model_id)
       write_string(io, context.tokenizer_id)
       write_string(io, context.template_id)
+      write_adaptive_artifact_identity(io, context.kv_artifact_codec)
       write_string(io, state_abi_id(context.state_abi))
       io.write_bytes(context.max_seq.to_u32, IO::ByteFormat::LittleEndian)
       io.write_bytes(context.layer_count.to_u32, IO::ByteFormat::LittleEndian)
@@ -285,6 +296,7 @@ module ML::GGUF
       write_string(io, context.template_id)
       write_string(io, context.prompt_hash)
       write_string(io, context.token_hash)
+      write_adaptive_artifact_identity(io, context.kv_artifact_codec)
       write_string(io, state_abi_id(context.state_abi))
       io.write_bytes(context.prefix_len.to_u32, IO::ByteFormat::LittleEndian)
       io.write_bytes(context.max_seq.to_u32, IO::ByteFormat::LittleEndian)
@@ -313,7 +325,7 @@ module ML::GGUF
         schema_id: SCHEMA_ID,
         state_runtime_id: context.state_runtime_id,
         native_layout_id: NATIVE_LAYOUT_ID,
-        exact_artifact_codec: EXACT_ARTIFACT_CODEC,
+        exact_artifact_codec: context.kv_artifact_codec,
         logical_hash_kind: LOGICAL_HASH_KIND,
         state_abi_id: state_abi_id(context.state_abi),
         model_id: context.model_id,
@@ -424,6 +436,7 @@ module ML::GGUF
         qbit_precision: context.qbit_precision,
         state_abi: context.state_abi,
         state_runtime_id: context.state_runtime_id,
+        kv_artifact_codec: context.kv_artifact_codec,
       )
       validate_entry_identity!(entry, lookup)
       lookup
@@ -482,6 +495,9 @@ module ML::GGUF
         raise ArgumentError.new("QBit block size is invalid")
       end
       raise ArgumentError.new("QBit precision is unsupported") unless context.qbit_precision == REQUIRED_PRECISION
+      unless context.kv_artifact_codec == EXACT_ARTIFACT_CODEC || adaptive_artifact_codec?(context.kv_artifact_codec)
+        raise ArgumentError.new("QBit KV artifact codec is unsupported")
+      end
     end
 
     private def validate_prefix_context!(context : PrefixContext) : Nil
@@ -501,6 +517,9 @@ module ML::GGUF
         raise ArgumentError.new("QBit block size is invalid")
       end
       raise ArgumentError.new("QBit precision is unsupported") unless context.qbit_precision == REQUIRED_PRECISION
+      unless context.kv_artifact_codec == EXACT_ARTIFACT_CODEC || adaptive_artifact_codec?(context.kv_artifact_codec)
+        raise ArgumentError.new("QBit KV artifact codec is unsupported")
+      end
     end
 
     private def validate_context!(context : Context) : Nil
@@ -527,7 +546,7 @@ module ML::GGUF
       raise ArgumentError.new("QBit envelope schema mismatch") unless entry.schema_id == SCHEMA_ID
       raise ArgumentError.new("QBit state runtime mismatch") unless entry.state_runtime_id == context.state_runtime_id
       raise ArgumentError.new("QBit Native layout mismatch") unless entry.native_layout_id == NATIVE_LAYOUT_ID
-      raise ArgumentError.new("QBit exact artifact codec mismatch") unless entry.exact_artifact_codec == EXACT_ARTIFACT_CODEC
+      raise ArgumentError.new("QBit KV artifact codec mismatch") unless entry.exact_artifact_codec == context.kv_artifact_codec
       raise ArgumentError.new("QBit logical hash kind mismatch") unless entry.logical_hash_kind == LOGICAL_HASH_KIND
       raise ArgumentError.new("QBit state ABI mismatch") unless entry.state_abi_id == state_abi_id(context.state_abi)
       raise ArgumentError.new("QBit model identity mismatch") unless entry.model_id == context.model_id
@@ -594,6 +613,29 @@ module ML::GGUF
     private def validate_exact_kv_payload!(context : LookupContext,
                                            exact : Qwen35StateSnapshot::EncodedSnapshot,
                                            record : Qwen35StateSnapshot::EncodedRecord) : Nil
+      if adaptive_artifact_codec?(context.kv_artifact_codec)
+        unless exact.artifact_version == Qwen35StateSnapshot::ARTIFACT_VERSION_V3
+          raise ArgumentError.new("QBit adaptive KV artifact must use V3 live-prefix framing")
+        end
+        unless record.original_byte_size % context.max_seq == 0
+          raise ArgumentError.new("QBit adaptive KV row size is invalid")
+        end
+        row_bytes = record.original_byte_size // context.max_seq
+        unless row_bytes % sizeof(Float32) == 0
+          raise ArgumentError.new("QBit adaptive KV row size is not Float32-aligned")
+        end
+        live_value_count = context.prefix_len.to_i64 * row_bytes // sizeof(Float32)
+        if live_value_count > Int32::MAX || live_value_count % QwenQBitAdaptiveKV::ROW_VALUES != 0
+          raise ArgumentError.new("QBit adaptive KV value count is invalid")
+        end
+        QwenQBitAdaptiveKV.validate(QwenQBitAdaptiveKV::Encoded.new(
+          live_value_count.to_i32,
+          QwenQBitAdaptiveKV::ROW_VALUES,
+          record.payload,
+        ))
+        return
+      end
+
       unless exact.artifact_version == Qwen35StateSnapshot::ARTIFACT_VERSION_V3
         raise ArgumentError.new("QBit exact artifact record is truncated") unless record.payload.size == record.original_byte_size
         return
@@ -607,6 +649,22 @@ module ML::GGUF
       unless record.payload.size.to_i64 == expected_live_bytes
         raise ArgumentError.new("QBit exact live-prefix KV payload mismatch")
       end
+    end
+
+    def adaptive_artifact_codec?(codec : String) : Bool
+      codec.starts_with?(ADAPTIVE_ARTIFACT_CODEC_PREFIX) &&
+        codec.bytesize > ADAPTIVE_ARTIFACT_CODEC_PREFIX.bytesize &&
+        codec.bytesize <= 1024
+    end
+
+    # Keep the historical raw-F32 hash byte-for-byte. Adaptive layouts append
+    # a tagged identity so they cannot collide with raw artifacts or each other.
+    private def write_adaptive_artifact_identity(io : IO,
+                                                 codec : String) : Nil
+      return if codec == EXACT_ARTIFACT_CODEC
+
+      write_string(io, "qwen-qbit-kv-artifact-codec-v1")
+      write_string(io, codec)
     end
 
     private def validate_complete_record_set!(context : LookupContext,
