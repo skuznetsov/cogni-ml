@@ -316,8 +316,30 @@ module ML::GGUF
               recurrent_native : Bytes,
               kv_artifact : Bytes,
               created_at_unix : Int64 = Time.utc.to_unix) : Entry
-      validate_context!(context)
       stream = QwenQBitNativeBlock.parse_stream(recurrent_native)
+      summary = QwenQBitNativeBlock::Summary.new(
+        stream.block_size,
+        stream.row_count,
+        stream.record_spans.map do |span|
+          QwenQBitNativeBlock::RecordIdentity.new(
+            span.cache_id,
+            span.layer,
+            span.kind,
+            span.tile_count,
+            span.value_count,
+          )
+        end,
+        QwenQBitNativeBlock.logical_sha256(stream),
+      )
+      build(context, summary, kv_artifact, created_at_unix)
+    end
+
+    def build(context : Context,
+              recurrent : QwenQBitNativeBlock::Summary,
+              kv_artifact : Bytes,
+              created_at_unix : Int64 = Time.utc.to_unix) : Entry
+      validate_context!(context)
+      stream = summary_stream(recurrent)
       exact = Qwen35StateSnapshot.decode_artifact_encoded_bytes(kv_artifact, copy_payloads: false)
       validate_artifact_shapes!(context, stream, exact)
 
@@ -339,10 +361,10 @@ module ML::GGUF
         cache_id: cache_id(context),
         qbit_block_size: context.qbit_block_size,
         qbit_precision: context.qbit_precision,
-        recurrent_record_count: stream.record_spans.size.to_i32,
-        recurrent_tile_count: stream.row_count,
-        recurrent_value_count: stream.record_spans.sum(0_i64, &.value_count.to_i64),
-        recurrent_logical_sha256: QwenQBitNativeBlock.logical_sha256(stream),
+        recurrent_record_count: recurrent.records.size.to_i32,
+        recurrent_tile_count: recurrent.row_count,
+        recurrent_value_count: recurrent.records.sum(0_i64, &.value_count.to_i64),
+        recurrent_logical_sha256: recurrent.logical_sha256,
         kv_artifact_sha256: Digest::SHA256.hexdigest(kv_artifact),
         kv_artifact_byte_size: kv_artifact.size.to_i64,
         state_layout_sha256: state_layout_sha256(context, stream, exact),
@@ -356,6 +378,63 @@ module ML::GGUF
       entry.certificate_id = certificate_id(entry)
       validate_entry!(entry, context)
       entry
+    end
+
+    # Streaming writeback validates the complete KV side before any recurrent
+    # row is sent. Cross-artifact record-set/layout checks still happen after
+    # the one-pass recurrent summary reaches EOF and before manifest publish.
+    def validate_exact_artifact!(context : LookupContext,
+                                 kv_artifact : Bytes) : Nil
+      validate_lookup_context!(context)
+      exact = Qwen35StateSnapshot.decode_artifact_encoded_bytes(kv_artifact, copy_payloads: false)
+      raise ArgumentError.new("QBit exact artifact max_seq mismatch") unless exact.max_seq == context.max_seq
+      raise ArgumentError.new("QBit exact artifact layer count mismatch") unless exact.layer_count == context.layer_count
+      unless exact.positions.size == context.layer_count && exact.positions.all? { |position| position == context.prefix_len }
+        raise ArgumentError.new("QBit exact artifact positions mismatch")
+      end
+      raise ArgumentError.new("QBit exact artifact must use the raw codec") unless exact.codec.raw_f32?
+      raise ArgumentError.new("QBit exact artifact must contain KV records") if exact.records.empty?
+
+      actual = {} of {Int32, UInt8} => Int64
+      exact.records.each do |record|
+        raise ArgumentError.new("QBit exact artifact layer is out of range") unless record.layer >= 0 && record.layer < context.layer_count
+        unless record.kind.k_cache? || record.kind.v_cache?
+          raise ArgumentError.new("QBit exact artifact must be KV-only")
+        end
+        raise ArgumentError.new("QBit exact artifact record must stay raw") unless record.codec.raw_f32?
+        validate_exact_kv_payload!(context, exact, record)
+        key = {record.layer, record.kind.value}
+        raise ArgumentError.new("duplicate QBit exact artifact record") if actual.has_key?(key)
+        actual[key] = record.original_byte_size.to_i64
+      end
+
+      expected = {} of {Int32, UInt8} => Int64
+      context.layer_count.times do |layer|
+        next unless context.state_abi.full_attention?(layer)
+        expected[{layer, Qwen35StateSnapshot::RecordKind::KCache.value}] = context.state_abi.kv_record_byte_size
+        expected[{layer, Qwen35StateSnapshot::RecordKind::VCache.value}] = context.state_abi.kv_record_byte_size
+      end
+      raise ArgumentError.new("QBit exact artifact record set mismatch") unless actual == expected
+    end
+
+    private def summary_stream(summary : QwenQBitNativeBlock::Summary) : QwenQBitNativeBlock::Stream
+      spans = summary.records.map do |record|
+        QwenQBitNativeBlock::StreamRecordSpan.new(
+          record.cache_id,
+          record.layer,
+          record.kind,
+          record.tile_count,
+          record.value_count,
+          [] of QwenQBitNativeBlock::StreamChunk,
+        )
+      end
+      QwenQBitNativeBlock::Stream.new(
+        Bytes.empty,
+        [] of QwenQBitNativeBlock::Block,
+        summary.row_count,
+        summary.block_size,
+        spans,
+      )
     end
 
     def admit(entry : Entry,

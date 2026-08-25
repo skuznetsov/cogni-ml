@@ -74,11 +74,41 @@ private def qbit_ch_artifacts(context : ML::GGUF::QwenQBitCacheEnvelope::Context
   {native, ML::GGUF::Qwen35StateSnapshot.encode_artifact_bytes(exact)}
 end
 
+private def qbit_ch_stream_body(context : ML::GGUF::QwenQBitCacheEnvelope::Context) : ML::GGUF::QwenQBitStateSnapshot::NativeRecurrentBody
+  records = [
+    ML::GGUF::Qwen35StateSnapshot::Record.new(
+      0,
+      ML::GGUF::Qwen35StateSnapshot::RecordKind::ConvState,
+      qbit_ch_bytes(Array(Float32).new(13) { |i| (i - 6).to_f32 / 3.0_f32 }),
+      ML::StorageMode::Shared,
+    ),
+    ML::GGUF::Qwen35StateSnapshot::Record.new(
+      0,
+      ML::GGUF::Qwen35StateSnapshot::RecordKind::SsmState,
+      qbit_ch_bytes([1.0_f32, -1.0_f32]),
+      ML::StorageMode::Shared,
+    ),
+  ]
+  index = 0
+  source = -> : ML::GGUF::Qwen35StateSnapshot::Record? do
+    record = records[index]?
+    index += 1 if record
+    record
+  end
+  ML::GGUF::QwenQBitStateSnapshot::NativeRecurrentBody.new(
+    source,
+    cache_id: ML::GGUF::QwenQBitCacheEnvelope.cache_id(context),
+    block_size: context.qbit_block_size,
+    precision: context.qbit_precision,
+  )
+end
+
 private class QBitCHMemoryTransport < ML::GGUF::QwenQBitClickHouseCache::Transport
   record Request, query : String, body : Bytes, max_response_bytes : Int64
 
   getter requests = [] of Request
   getter responses = [] of Bytes
+  getter stream_read_sizes = [] of Int32
 
   def queue(response : Bytes) : Nil
     @responses << response.dup
@@ -86,6 +116,21 @@ private class QBitCHMemoryTransport < ML::GGUF::QwenQBitClickHouseCache::Transpo
 
   def post(query : String, body : Bytes, max_response_bytes : Int64) : Bytes
     @requests << Request.new(query, body.dup, max_response_bytes)
+    @responses.shift?.try(&.dup) || Bytes.empty
+  end
+
+  def post_stream(query : String,
+                  body : IO,
+                  max_body_bytes : Int64,
+                  max_response_bytes : Int64) : Bytes
+    output = IO::Memory.new
+    bounded = ML::GGUF::QwenQBitClickHouseCache::BoundedRequestBody.new(body, max_body_bytes)
+    chunk = Bytes.new(3)
+    while (read = bounded.read(chunk)) > 0
+      @stream_read_sizes << read
+      output.write(chunk[0, read])
+    end
+    @requests << Request.new(query, output.to_slice.dup, max_response_bytes)
     @responses.shift?.try(&.dup) || Bytes.empty
   end
 end
@@ -103,6 +148,19 @@ private class QBitCHFailingTransport < ML::GGUF::QwenQBitClickHouseCache::Transp
     if @requests.size == @fail_on_request
       raise IO::Error.new("injected ClickHouse insert failure")
     end
+    Bytes.empty
+  end
+
+  def post_stream(query : String,
+                  body : IO,
+                  max_body_bytes : Int64,
+                  max_response_bytes : Int64) : Bytes
+    @requests << Request.new(query, Bytes.empty, max_response_bytes)
+    if @requests.size == @fail_on_request
+      raise IO::Error.new("injected ClickHouse insert failure")
+    end
+    bounded = ML::GGUF::QwenQBitClickHouseCache::BoundedRequestBody.new(body, max_body_bytes)
+    IO.copy(bounded, IO::Memory.new)
     Bytes.empty
   end
 end
@@ -136,6 +194,108 @@ describe ML::GGUF::QwenQBitClickHouseCache do
     String.new(transport.requests[7].body).should eq(saved.entry.to_json)
     String.new(transport.requests[8].body).should eq(saved.entry.to_json)
     saved.expires_at_unix.should eq(1_900_i64)
+  end
+
+  it "streams recurrent Native blocks before manifest publication" do
+    transport = QBitCHMemoryTransport.new
+    config = ML::GGUF::QwenQBitClickHouseCache::Config.new(table_prefix: "qwen_cache_test")
+    store = ML::GGUF::QwenQBitClickHouseCache::Store.new(config, transport, -> { "a" * 64 })
+    context = qbit_ch_context
+    _native, kv = qbit_ch_artifacts(context)
+    body = qbit_ch_stream_body(context)
+
+    saved = store.save_streaming(context, body, kv, ttl: 30.minutes, created_at_unix: 100_i64)
+
+    transport.requests.size.should eq(4)
+    transport.requests[0].query.should contain("_recurrent")
+    transport.requests[1].query.should contain("_kv")
+    transport.requests[2].query.should contain("_manifest")
+    transport.requests[3].query.should contain("_prefix_index")
+    transport.stream_read_sizes.should_not be_empty
+    transport.stream_read_sizes.max.should be <= 3
+    body.summary.logical_sha256.should eq(saved.entry.recurrent_logical_sha256)
+    String.new(transport.requests[2].body).should eq(saved.entry.to_json)
+    legacy = envelope.build(context, transport.requests[0].body, kv, created_at_unix: 100_i64)
+    saved.entry.to_json.should eq(legacy.to_json)
+  end
+
+  it "rejects an invalid exact KV artifact before consuming or uploading recurrent state" do
+    transport = QBitCHMemoryTransport.new
+    store = ML::GGUF::QwenQBitClickHouseCache::Store.new(
+      ML::GGUF::QwenQBitClickHouseCache::Config.new(table_prefix: "qwen_cache_test"),
+      transport,
+      -> { "a" * 64 },
+    )
+    context = qbit_ch_context
+    _native, valid_kv = qbit_ch_artifacts(context)
+    invalid_kv = valid_kv.dup
+    invalid_kv[8] = (context.max_seq + 1).to_u8
+    body = qbit_ch_stream_body(context)
+
+    expect_raises(ArgumentError, /max_seq mismatch/) do
+      store.save_streaming(context, body, invalid_kv, ttl: 30.minutes, created_at_unix: 100_i64)
+    end
+
+    transport.requests.should be_empty
+    body.record_count.should eq(0)
+    body.byte_size.should eq(0)
+  end
+
+  it "rejects an incomplete exact KV record set before recurrent upload" do
+    transport = QBitCHMemoryTransport.new
+    store = ML::GGUF::QwenQBitClickHouseCache::Store.new(
+      ML::GGUF::QwenQBitClickHouseCache::Config.new(table_prefix: "qwen_cache_test"),
+      transport,
+      -> { "a" * 64 },
+    )
+    context = qbit_ch_context
+    incomplete = ML::GGUF::Qwen35StateSnapshot::Snapshot.new(
+      context.max_seq,
+      context.layer_count,
+      [context.prefix_len, context.prefix_len],
+      [
+        ML::GGUF::Qwen35StateSnapshot::Record.new(
+          1,
+          ML::GGUF::Qwen35StateSnapshot::RecordKind::KCache,
+          qbit_ch_bytes([1.0_f32, 2.0_f32, 3.0_f32]),
+          ML::StorageMode::Shared,
+        ),
+      ],
+    )
+    kv = ML::GGUF::Qwen35StateSnapshot.encode_artifact_bytes(incomplete)
+    body = qbit_ch_stream_body(context)
+
+    expect_raises(ArgumentError, /record set mismatch/) do
+      store.save_streaming(context, body, kv, ttl: 30.minutes, created_at_unix: 100_i64)
+    end
+
+    transport.requests.should be_empty
+    body.record_count.should eq(0)
+  end
+
+  it "does not publish a streamed manifest when recurrent insertion fails" do
+    transport = QBitCHFailingTransport.new(fail_on_request: 1)
+    store = ML::GGUF::QwenQBitClickHouseCache::Store.new(
+      ML::GGUF::QwenQBitClickHouseCache::Config.new(table_prefix: "qwen_cache_test"),
+      transport,
+      -> { "a" * 64 },
+    )
+    context = qbit_ch_context
+    _native, kv = qbit_ch_artifacts(context)
+
+    expect_raises(IO::Error, /injected ClickHouse/) do
+      store.save_streaming(
+        context,
+        qbit_ch_stream_body(context),
+        kv,
+        ttl: 30.minutes,
+        created_at_unix: 100_i64,
+      )
+    end
+
+    transport.requests.size.should eq(1)
+    transport.requests.first.query.should contain("_recurrent")
+    transport.requests.none? { |request| request.query.includes?("_manifest") }.should be_true
   end
 
   it "returns a strict admission for one committed generation" do
@@ -311,6 +471,13 @@ describe ML::GGUF::QwenQBitClickHouseCache do
     expect_raises(ArgumentError, /response exceeds/) do
       ML::GGUF::QwenQBitClickHouseCache::HTTPTransport.read_bounded(IO::Memory.new("12345"), 4)
     end
+  end
+
+  it "rejects a request body beyond its byte budget" do
+    bounded = ML::GGUF::QwenQBitClickHouseCache::BoundedRequestBody.new(IO::Memory.new("12345"), 4)
+    chunk = Bytes.new(4)
+    bounded.read(chunk).should eq(4)
+    expect_raises(ArgumentError, /request exceeds/) { bounded.read(Bytes.new(1)) }
   end
 
   it "rejects unsafe SQL identifiers and invalid generations before transport" do

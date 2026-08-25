@@ -1530,11 +1530,52 @@ took 32,189.108 ms with 3,454.824 ms attributed to writeback; the cold hit took
 write failures. This single-host row confirms lifecycle compatibility, not a
 new throughput SLA.
 
-The remaining save-side allocation target is the final accumulated Native HTTP
-body and its transport copy. Removing that requires a bounded streaming HTTP or
-Native insert path and is deliberately outside this KISS slice. Session
-checkpoints remain raw, the 256 MiB logical source guard remains in force, and
-the existing top-1, top-2, ECS, EOS, and meaning boundaries are unchanged.
+At this checkpoint, the remaining save-side allocation target was the final
+accumulated Native HTTP body and its transport copy. The next bounded-streaming
+slice below closes that target. Session checkpoints remain raw, the 256 MiB
+logical source guard remains in force, and the existing top-1, top-2, ECS, EOS,
+and meaning boundaries are unchanged.
+
+### Bounded HTTP recurrent writeback gate (2026-08-24)
+
+Adaptive non-session writeback now sends each recurrent Native block directly
+to ClickHouse under HTTP backpressure. The request body retains at most one
+captured Float32 record and one encoded block; it no longer accumulates the
+approximately 40 MiB Native body. The schema, envelope, logical digest, compact
+KV artifact, read path, and raw session path are unchanged. Exact KV is fully
+validated before the first recurrent record is captured or uploaded. The
+manifest remains the commit marker, so a transport or late cross-artifact
+validation failure can leave only invisible TTL-governed rows.
+
+On the same synthetic 96-record, 156,893,184-byte recurrent source, maximum
+process RSS fell from 159,563,776 to 15,941,632 bytes, a 90.0% reduction. Both
+paths produced 40,269,312 Native bytes and logical SHA-256
+`80e0be2535a904a351da4eda3096051934110de6a32a425cfd13d0743e9189ba`.
+Internal encode time was 490.304 versus 515.717 ms, a 5.2% cost in this one
+synthetic run. This isolates serialization ownership; it is not whole-model
+unified-memory or throughput evidence.
+
+An actual chunked HTTP insert was admitted by ClickHouse before the model run.
+The guarded 2,172-token Qwen3.8 seed then completed in 25,243.030 ms with
+2,724.428 ms writeback. A separate cold hit completed in 5,449.876 ms, including
+319.774 ms lookup and 93.424 ms restore, with all 2,172 prefix tokens reused and
+no suffix replay. Both emitted `Their sum is 95.` with ids
+`[33645,2542,369,220,24,20,13]` and zero cache failures. ClickHouse contained
+38,304 recurrent rows, 39,223,296 values, 96 record identities, and 107,809,078
+compressed bytes, matching the accumulated-body lifecycle.
+
+The 2,172-token prefix lookup also used the pre-existing working-tree change
+that sends large read-only SQL through the HTTP body instead of the URL. That
+separate transport fix is not part of this write-side commit or promoted by
+this evidence.
+
+For this transport-only slice, exact token identity makes the positionwise ECS
+mean/minimum `1.0/1.0` and preserves the sentence meaning. The runtime smoke
+does not expose fresh runner-up logits, so the applicable top-2 evidence remains
+the earlier aligned resident-quality result (`12/14` ranked and set overlap,
+maximum top-2 logit delta `1.0112152`), not a new top-2 measurement. KV upload
+still owns its compact byte artifact, and cold reads still buffer their bounded
+responses; changing either is outside this slice.
 
 ### Cache-engine contract
 

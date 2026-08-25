@@ -42,6 +42,19 @@ module ML::GGUF
       value_count : Int32,
       chunks : Array(StreamChunk)
 
+    record RecordIdentity,
+      cache_id : UInt64,
+      layer : Int32,
+      kind : UInt8,
+      tile_count : Int32,
+      value_count : Int32
+
+    record Summary,
+      block_size : Int32,
+      row_count : Int32,
+      records : Array(RecordIdentity),
+      logical_sha256 : String
+
     class Block
       getter bytes : Bytes
       getter row_count : Int32
@@ -88,6 +101,58 @@ module ML::GGUF
                      @row_count : Int32,
                      @block_size : Int32,
                      @record_spans : Array(StreamRecordSpan))
+      end
+    end
+
+    # Incremental logical certificate for a sequence of legal Native blocks.
+    # It retains only record identities; the current block can be released as
+    # soon as its bytes have been consumed by the transport.
+    class SummaryBuilder
+      @digest : Digest::SHA256
+      @records : Array(RecordIdentity)
+      @row_count : Int64
+      @finished : Bool
+
+      def initialize(@block_size : Int32)
+        unless @block_size > 0 && @block_size <= UInt16::MAX && @block_size % 8 == 0
+          raise ArgumentError.new("QBit Native summary block size is invalid")
+        end
+        @digest = Digest::SHA256.new
+        @digest.update("cogni-ml/qwen-qbit-native-logical-v1\0".to_slice)
+        scalar = Bytes.new(4)
+        value = @block_size.to_u32
+        4.times { |i| scalar[i] = ((value >> (i * 8)) & 0xff).to_u8 }
+        @digest.update(scalar)
+        @records = [] of RecordIdentity
+        @row_count = 0_i64
+        @finished = false
+      end
+
+      def append(native_block : Bytes) : Nil
+        raise ArgumentError.new("QBit Native summary is finished") if @finished
+        stream = QwenQBitNativeBlock.parse_stream(native_block)
+        unless stream.block_size == @block_size
+          raise ArgumentError.new("QBit Native summary block size mismatch")
+        end
+        stream.record_spans.each do |span|
+          QwenQBitNativeBlock.update_logical_record(@digest, stream, span)
+          @records << RecordIdentity.new(
+            span.cache_id,
+            span.layer,
+            span.kind,
+            span.tile_count,
+            span.value_count,
+          )
+        end
+        @row_count += stream.row_count
+        raise ArgumentError.new("QBit Native summary row count exceeds Int32") if @row_count > Int32::MAX
+      end
+
+      def finish : Summary
+        raise ArgumentError.new("QBit Native summary is finished") if @finished
+        raise ArgumentError.new("QBit Native summary must not be empty") if @records.empty?
+        @finished = true
+        Summary.new(@block_size, @row_count.to_i32, @records, @digest.final.hexstring)
       end
     end
 
@@ -144,37 +209,45 @@ module ML::GGUF
       scalar = Bytes.new(4)
       write_u32_le(scalar, 0, stream.block_size.to_u32)
       digest.update(scalar)
-      record_header = Bytes.new(21)
-      plane_bytes = stream.block_size // 8
 
       stream.record_spans.each do |span|
-        write_u64_le(record_header, 0, span.cache_id)
-        write_u32_le(record_header, 8, span.layer.unsafe_as(UInt32))
-        record_header[12] = span.kind
-        write_u32_le(record_header, 13, span.tile_count.to_u32)
-        write_u32_le(record_header, 17, span.value_count.to_u32)
-        digest.update(record_header)
-
-        # Hash each logical column across response chunks. Concatenating spans
-        # in record order is invariant to where ClickHouse places block cuts,
-        # while avoiding hundreds of thousands of per-row digest calls.
-        span.chunks.each do |chunk|
-          block = stream.blocks[chunk.block_index]
-          digest.update(block.bytes[block.mean_offset + chunk.row_start * sizeof(Float32), chunk.tile_count * sizeof(Float32)])
-        end
-        span.chunks.each do |chunk|
-          block = stream.blocks[chunk.block_index]
-          digest.update(block.bytes[block.sigma_offset + chunk.row_start * sizeof(Float32), chunk.tile_count * sizeof(Float32)])
-        end
-        8.times do |plane|
-          span.chunks.each do |chunk|
-            block = stream.blocks[chunk.block_index]
-            offset = block.codes_offset + (plane * block.row_count + chunk.row_start) * plane_bytes
-            digest.update(block.bytes[offset, chunk.tile_count * plane_bytes])
-          end
-        end
+        update_logical_record(digest, stream, span)
       end
       digest.final.hexstring
+    end
+
+    # Shared by full-stream validation and write-side incremental summaries.
+    # Public only so SummaryBuilder can keep one digest across bounded blocks.
+    def update_logical_record(digest : Digest::SHA256,
+                              stream : Stream,
+                              span : StreamRecordSpan) : Nil
+      record_header = Bytes.new(21)
+      write_u64_le(record_header, 0, span.cache_id)
+      write_u32_le(record_header, 8, span.layer.unsafe_as(UInt32))
+      record_header[12] = span.kind
+      write_u32_le(record_header, 13, span.tile_count.to_u32)
+      write_u32_le(record_header, 17, span.value_count.to_u32)
+      digest.update(record_header)
+
+      # Hash each logical column across response chunks. Concatenating spans
+      # in record order is invariant to where ClickHouse places block cuts,
+      # while avoiding hundreds of thousands of per-row digest calls.
+      span.chunks.each do |chunk|
+        block = stream.blocks[chunk.block_index]
+        digest.update(block.bytes[block.mean_offset + chunk.row_start * sizeof(Float32), chunk.tile_count * sizeof(Float32)])
+      end
+      span.chunks.each do |chunk|
+        block = stream.blocks[chunk.block_index]
+        digest.update(block.bytes[block.sigma_offset + chunk.row_start * sizeof(Float32), chunk.tile_count * sizeof(Float32)])
+      end
+      plane_bytes = stream.block_size // 8
+      8.times do |plane|
+        span.chunks.each do |chunk|
+          block = stream.blocks[chunk.block_index]
+          offset = block.codes_offset + (plane * block.row_count + chunk.row_start) * plane_bytes
+          digest.update(block.bytes[offset, chunk.tile_count * plane_bytes])
+        end
+      end
     end
 
     private def parse_block(reader : Reader, source : Bytes) : Block

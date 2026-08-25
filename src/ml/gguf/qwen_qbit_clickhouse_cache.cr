@@ -4,6 +4,7 @@ require "uri"
 require "uri/params"
 require "./qwen_qbit_cache_envelope"
 require "./qwen_qbit_session_checkpoint"
+require "./qwen_qbit_state_snapshot"
 
 module ML::GGUF
   # Bounded ClickHouse HTTP storage for split recurrent-QBit/exact-KV state.
@@ -89,6 +90,37 @@ module ML::GGUF
 
     abstract class Transport
       abstract def post(query : String, body : Bytes, max_response_bytes : Int64) : Bytes
+      abstract def post_stream(query : String,
+                               body : IO,
+                               max_body_bytes : Int64,
+                               max_response_bytes : Int64) : Bytes
+    end
+
+    class BoundedRequestBody < IO
+      def initialize(@source : IO, @max_bytes : Int64)
+        raise ArgumentError.new("QBit ClickHouse request limit must be positive") unless @max_bytes > 0
+        @read_bytes = 0_i64
+      end
+
+      def read(slice : Bytes) : Int32
+        return 0 if slice.empty?
+        remaining = @max_bytes - @read_bytes
+        if remaining <= 0
+          probe = uninitialized UInt8[1]
+          if @source.read(probe.to_slice) > 0
+            raise ArgumentError.new("QBit ClickHouse request exceeds #{@max_bytes} bytes")
+          end
+          return 0
+        end
+
+        count = @source.read(slice[0, Math.min(slice.size.to_i64, remaining).to_i])
+        @read_bytes += count
+        count
+      end
+
+      def write(slice : Bytes) : NoReturn
+        raise IO::Error.new("bounded QBit request body is read-only")
+      end
     end
 
     class HTTPTransport < Transport
@@ -112,6 +144,42 @@ module ML::GGUF
           client.read_timeout = @config.read_timeout
           client.write_timeout = @config.write_timeout
           client.exec("POST", request_path(query), headers, body) do |response|
+            unless response.status.success?
+              error = begin
+                String.new(self.class.read_bounded(response.body_io, 64_i64 * 1024))
+              rescue ArgumentError
+                "response body exceeded 64KiB"
+              end
+              raise IO::Error.new("ClickHouse HTTP #{response.status_code}: #{error}")
+            end
+            response_bytes = self.class.read_bounded(response.body_io, max_response_bytes)
+          end
+        end
+        response_bytes
+      end
+
+      def post_stream(query : String,
+                      body : IO,
+                      max_body_bytes : Int64,
+                      max_response_bytes : Int64) : Bytes
+        raise ArgumentError.new("QBit ClickHouse response limit must be positive") unless max_response_bytes > 0
+        raise ArgumentError.new("QBit ClickHouse query must not be empty") if query.empty?
+        headers = HTTP::Headers{
+          "Accept-Encoding" => "identity",
+          "Content-Type"    => "application/octet-stream",
+        }
+        if username = @config.username
+          headers["X-ClickHouse-User"] = username
+          headers["X-ClickHouse-Key"] = @config.password || ""
+        end
+
+        response_bytes = Bytes.empty
+        request_body = BoundedRequestBody.new(body, max_body_bytes)
+        HTTP::Client.new(@config.endpoint) do |client|
+          client.connect_timeout = @config.connect_timeout
+          client.read_timeout = @config.read_timeout
+          client.write_timeout = @config.write_timeout
+          client.exec("POST", request_path(query), headers, request_body) do |response|
             unless response.status.success?
               error = begin
                 String.new(self.class.read_bounded(response.body_io, 64_i64 * 1024))
@@ -219,6 +287,70 @@ module ML::GGUF
           recurrent_native,
           @config.max_envelope_bytes,
         )
+        @transport.post(
+          blob_insert_query(kv_table, "payload", entry.cache_id, lookup_key, generation_id, expires_at_unix),
+          kv_artifact,
+          @config.max_envelope_bytes,
+        )
+        @transport.post(
+          manifest_insert_query(entry, lookup_key, generation_id, expires_at_unix),
+          envelope_json.to_slice,
+          @config.max_envelope_bytes,
+        )
+        @transport.post(
+          prefix_insert_query(entry, context, lookup_key, generation_id, expires_at_unix),
+          envelope_json.to_slice,
+          @config.max_envelope_bytes,
+        )
+        Saved.new(entry, generation_id, expires_at_unix)
+      end
+
+      # Adaptive write-side only: recurrent Native rows are generated under
+      # HTTP backpressure. The manifest remains the commit marker and is built
+      # only after the complete body produced a validated logical summary.
+      def save_streaming(context : QwenQBitCacheEnvelope::Context,
+                         recurrent_body : QwenQBitStateSnapshot::NativeRecurrentBody,
+                         kv_artifact : Bytes,
+                         ttl : Time::Span,
+                         created_at_unix : Int64 = Time.utc.to_unix) : Saved
+        validate_context_layout!(context)
+        validate_input_size!(kv_artifact, @config.max_kv_bytes, "KV")
+        QwenQBitCacheEnvelope.validate_exact_artifact!(context, kv_artifact)
+        unless recurrent_body.byte_size == 0 && recurrent_body.record_count == 0
+          raise ArgumentError.new("QBit recurrent request body was already consumed")
+        end
+        ttl_seconds = ttl.total_seconds.to_i64
+        unless ttl_seconds > 0 && ttl_seconds <= 365_i64 * 24 * 60 * 60
+          raise ArgumentError.new("QBit ClickHouse TTL must be within 1 second..365 days")
+        end
+        unless created_at_unix > 0 && created_at_unix <= Int64::MAX - ttl_seconds
+          raise ArgumentError.new("QBit ClickHouse creation time is invalid")
+        end
+
+        generation_id = @generation_id_factory.call
+        validate_hex_id!(generation_id, GENERATION_HEX_SIZE, "generation")
+        lookup_key = QwenQBitCacheEnvelope.lookup_key(context)
+        expires_at_unix = created_at_unix + ttl_seconds
+        combined_recurrent_limit = @config.max_total_artifact_bytes - kv_artifact.size.to_i64
+        unless combined_recurrent_limit > 0
+          raise ArgumentError.new("QBit combined artifact exceeds #{@config.max_total_artifact_bytes} bytes")
+        end
+        recurrent_limit = Math.min(@config.max_recurrent_bytes, combined_recurrent_limit)
+
+        @transport.post_stream(
+          recurrent_insert_query(lookup_key, generation_id, expires_at_unix),
+          recurrent_body,
+          recurrent_limit,
+          @config.max_envelope_bytes,
+        )
+        recurrent = recurrent_body.summary
+        validate_combined_size!(recurrent_body.byte_size, kv_artifact.size.to_i64)
+        entry = QwenQBitCacheEnvelope.build(context, recurrent, kv_artifact, created_at_unix)
+        envelope_json = entry.to_json
+        if envelope_json.bytesize.to_i64 > @config.max_envelope_bytes
+          raise ArgumentError.new("QBit cache envelope exceeds #{@config.max_envelope_bytes} bytes")
+        end
+
         @transport.post(
           blob_insert_query(kv_table, "payload", entry.cache_id, lookup_key, generation_id, expires_at_unix),
           kv_artifact,

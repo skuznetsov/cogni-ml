@@ -100,6 +100,52 @@ describe ML::GGUF::QwenQBitStateSnapshot do
     end
   end
 
+  it "pulls recurrent Native bytes without retaining the complete body" do
+    records = [
+      ML::GGUF::Qwen35StateSnapshot::Record.new(
+        1,
+        QBitStateRecordKind::ConvState,
+        qbit_state_bytes(Array(Float32).new(13) { |i| (i - 6).to_f32 / 3.0_f32 }),
+        ML::StorageMode::Shared,
+      ),
+      ML::GGUF::Qwen35StateSnapshot::Record.new(
+        1,
+        QBitStateRecordKind::SsmState,
+        qbit_state_bytes(Array(Float32).new(29) { |i| (i - 14).to_f32 / 7.0_f32 }),
+        ML::StorageMode::Shared,
+      ),
+    ]
+    index = 0
+    source = -> : ML::GGUF::Qwen35StateSnapshot::Record? do
+      record = records[index]?
+      index += 1 if record
+      record
+    end
+    body = ML::GGUF::QwenQBitStateSnapshot::NativeRecurrentBody.new(
+      source,
+      cache_id: 19_u64,
+      block_size: 8,
+      precision: 7,
+    )
+    expect_raises(ArgumentError, /not fully consumed/) { body.summary }
+
+    output = IO::Memory.new
+    chunk = Bytes.new(3)
+    while (read = body.read(chunk)) > 0
+      output.write(chunk[0, read])
+    end
+
+    parsed = ML::GGUF::QwenQBitNativeBlock.parse_stream(output.to_slice)
+    summary = body.summary
+    body.byte_size.should eq(output.size)
+    body.record_count.should eq(records.size)
+    body.source_byte_size.should eq(records.sum(0_i64, &.bytes.size.to_i64))
+    body.peak_source_record_bytes.should eq(records.max_of(&.bytes.size).to_i64)
+    summary.row_count.should eq(parsed.row_count)
+    summary.records.size.should eq(parsed.record_spans.size)
+    summary.logical_sha256.should eq(ML::GGUF::QwenQBitNativeBlock.logical_sha256(parsed))
+  end
+
   it "validates the complete snapshot before restore admission" do
     raw = qbit_state_bytes([0.0_f32] * 8)
     record = ML::GGUF::QwenQBitStateSnapshot::EncodedRecord.new(

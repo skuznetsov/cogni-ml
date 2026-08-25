@@ -177,6 +177,30 @@ module ML::GGUF
       end
     end
 
+    # Pull form of `each_recurrent_record` for backpressured transports. It
+    # captures the active owner only when the consumer asks for the next
+    # record, so no full recurrent snapshot is retained.
+    def recurrent_record_source(state : Qwen35CPU::State) : Proc(Record?)
+      layer_index = 0
+      next_kind = RecordKind::ConvState
+      -> : Record? do
+        result = nil.as(Record?)
+        while layer_index < state.layers.size
+          layer = state.layers[layer_index]
+          if next_kind.conv_state?
+            next_kind = RecordKind::SsmState
+            result = capture_record(layer_index, RecordKind::ConvState, layer.conv_state_buf, layer.conv_state)
+          else
+            next_kind = RecordKind::ConvState
+            layer_index += 1
+            result = capture_record(layer_index - 1, RecordKind::SsmState, layer.ssm_state_buf, layer.ssm_state)
+          end
+          break if result
+        end
+        result
+      end
+    end
+
     def restore(snapshot : Snapshot, hp : Qwen35Hparams, prefer_metal : Bool = Qwen35Metal.available?) : Qwen35CPU::State
       raise ArgumentError.new("layer count mismatch: snapshot=#{snapshot.layer_count}, hp=#{hp.n_layer}") unless snapshot.layer_count == hp.n_layer
 

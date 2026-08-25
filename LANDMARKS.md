@@ -24495,3 +24495,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Trigger: adaptive non-session writeback after a successful packed prefill. Transport: recurrent Metal owner -> one Float32 record -> one p7 Native block -> accumulated request body -> ClickHouse, while canonical adaptive KV remains compact. Boundary: each recurrent identity appears exactly once, record values and logical digest are reblocking-invariant, ClickHouse admits concatenated blocks, and the existing envelope publishes only after complete validation. Potential `{semantic or logical-artifact mismatch, source-capture peak, encoded-record peak, writeback wall, durable bytes}` descends in both transient source ownership and measured RSS without worsening encode time or logical content. Dual frame: the previous full recurrent snapshot plus all encoded records.
 
 **decision:** Admit per-record recurrent capture/encoding for adaptive non-session writeback. Keep the final Native body buffered, session checkpoints raw, and the 256 MiB logical guard unchanged; consider streaming HTTP/Native insertion only as a separate measured slice.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-HTTP-STREAM-929] Adaptive recurrent writeback is bounded through ClickHouse HTTP
+**context:** ml / Qwen3.8 / adaptive QBit / ClickHouse / write-side memory
+**state:** default-off non-session write-side verified; KV, read, and session buffering unchanged
+
+- claim: "Adaptive recurrent writeback no longer retains the complete Native HTTP body."
+  source: `NativeRecurrentBody` pulls one recurrent owner, emits one legal Native block, and incrementally retains only record identities plus a logical digest. `HTTPTransport#post_stream` sends that one-shot IO under a byte cap, and `Store#save_streaming` publishes KV, manifest, and prefix only after complete recurrent consumption and validation. A 156,893,184-byte synthetic source measured maximum RSS `159,563,776 -> 15,941,632` bytes (`-90.0%`), with identical 40,269,312-byte output and logical SHA-256; encode time was `490.304 -> 515.717 ms`. Focused tests passed `26/26`; the final resource-isolated regression partitions passed `135 + 7 = 142 examples`, with no failures or errors and one optional model-backed pending.
+  verified_at: 2026-08-24
+  decay_trigger: recurrent capture, Native framing/digest, Crystal HTTP IO semantics, request limits, publication ordering, or adaptive runtime routing change
+  trust: {F:0.98,G:0.35,R:0.94}
+
+- claim: "A 2,172-token cache written through the bounded HTTP path remains cold-restorable without semantic drift."
+  source: separate guarded Qwen3.8 seed/hit processes emitted identical ids `[33645,2542,369,220,24,20,13]` and `Their sum is 95.` with zero failures. Seed generation/writeback was `25,243.030/2,724.428 ms`; hit generation, lookup, and restore were `5,449.876/319.774/93.424 ms`. ClickHouse contained 38,304 recurrent rows, 39,223,296 values, 96 identities, and 107,809,078 compressed bytes. Identical tokens imply positionwise ECS mean/minimum `1.0/1.0`; fresh top-2 logits were not captured, so the prior aligned `12/14` certificate remains the runner-up boundary.
+  verified_at: 2026-08-24
+  decay_trigger: model, prompt, tokenizer/template, tier map, cache schema/read path, host load, or quality probe boundary change
+  trust: {F:0.97,G:0.18,R:0.91}
+
+**Adversary:** A malformed recurrent record discovered after upload begins may leave orphan rows, but no manifest or prefix makes them admissible and TTL removes them. The request IO is deliberately non-replayable; callers must construct a fresh body instead of retrying it. Compact KV upload and bounded cold responses are still materialized. The long prefix hit composed with a separate working-tree HTTP-body SQL fix that is not part of this commit. The RSS probe is synthetic, and the model timing is one guarded host row rather than a throughput SLA.
+
+**LTP/WBA:** Trigger: adaptive non-session writeback. Transport: recurrent Metal owner -> one Float32 record -> one p7 Native block -> bounded one-shot HTTP -> ClickHouse. Boundary: exact KV prevalidation, unique recurrent identities, reblocking-invariant logical digest, request byte cap, and manifest-last publication. Potential `{semantic mismatch, visible partial generation, source peak, final-body peak, writeback wall}` descends without changing the dual raw-session/read frame.
+
+**decision:** Admit bounded recurrent HTTP writeback for the existing default-off adaptive non-session corridor. Keep KV upload, cold reads, and sessions on their current bounded paths; do not add retries or another container format.

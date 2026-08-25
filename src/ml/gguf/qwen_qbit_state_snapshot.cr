@@ -62,6 +62,100 @@ module ML::GGUF
       source_byte_size : Int64,
       peak_source_record_bytes : Int64
 
+    # Lazy HTTP request body. Each read holds at most one captured F32 record
+    # and one encoded Native block; completed blocks contribute only compact
+    # identities and an incremental logical digest.
+    class NativeRecurrentBody < IO
+      getter byte_size : Int64
+      getter record_count : Int32
+      getter source_byte_size : Int64
+      getter peak_source_record_bytes : Int64
+
+      @next_record : Proc(Qwen35StateSnapshot::Record?)
+      @summary_builder : QwenQBitNativeBlock::SummaryBuilder
+      @summary : QwenQBitNativeBlock::Summary?
+      @seen : Set({Int32, UInt8})
+      @block : Bytes
+      @block_offset : Int32
+      @eof : Bool
+
+      def self.for_state(state : Qwen35CPU::State,
+                         cache_id : UInt64 = 0_u64,
+                         block_size : Int32 = 1024,
+                         precision : Int32 = 7) : self
+        new(Qwen35StateSnapshot.recurrent_record_source(state), cache_id, block_size, precision)
+      end
+
+      def initialize(@next_record : Proc(Qwen35StateSnapshot::Record?),
+                     @cache_id : UInt64 = 0_u64,
+                     @block_size : Int32 = 1024,
+                     @precision : Int32 = 7)
+        validate_native_parameters!(@block_size, @precision)
+        @summary_builder = QwenQBitNativeBlock::SummaryBuilder.new(@block_size)
+        @summary = nil
+        @seen = Set({Int32, UInt8}).new
+        @block = Bytes.empty
+        @block_offset = 0
+        @byte_size = 0_i64
+        @record_count = 0
+        @source_byte_size = 0_i64
+        @peak_source_record_bytes = 0_i64
+        @eof = false
+      end
+
+      def read(slice : Bytes) : Int32
+        return 0 if slice.empty? || @eof
+        load_next_block if @block_offset == @block.size
+        return 0 if @eof
+
+        count = Math.min(slice.size, @block.size - @block_offset)
+        slice[0, count].copy_from(@block[@block_offset, count])
+        @block_offset += count
+        count
+      end
+
+      def write(slice : Bytes) : NoReturn
+        raise IO::Error.new("QBit recurrent request body is read-only")
+      end
+
+      def summary : QwenQBitNativeBlock::Summary
+        @summary || raise ArgumentError.new("QBit recurrent request body was not fully consumed")
+      end
+
+      private def load_next_block : Nil
+        if record = @next_record.call
+          key = {record.layer, record.kind.value}
+          raise ArgumentError.new("duplicate QBit Native recurrent record") unless @seen.add?(key)
+          block = QwenQBitStateSnapshot.encode_native_recurrent_record(
+            record,
+            @cache_id,
+            @block_size,
+            @precision,
+          )
+          @summary_builder.append(block)
+          @block = block
+          @block_offset = 0
+          @byte_size += block.size
+          @record_count += 1
+          source_bytes = record.bytes.size.to_i64
+          @source_byte_size += source_bytes
+          @peak_source_record_bytes = source_bytes if source_bytes > @peak_source_record_bytes
+        else
+          @summary = @summary_builder.finish
+          @block = Bytes.empty
+          @block_offset = 0
+          @eof = true
+        end
+      end
+
+      private def validate_native_parameters!(block_size : Int32, precision : Int32) : Nil
+        unless block_size > 0 && block_size <= UInt16::MAX && block_size % 8 == 0
+          raise ArgumentError.new("QBit Native block size must be a positive UInt16 multiple of 8")
+        end
+        raise ArgumentError.new("QBit Native state encoding requires p7 precision") unless precision == 7
+      end
+    end
+
     # Builds one legal Native block per recurrent record. The final transport
     # body must remain resident until ClickHouse accepts it, but F32 capture,
     # Float32 conversion, and QBit payload ownership are bounded to one record.
@@ -96,25 +190,12 @@ module ML::GGUF
         key = {record.layer, record.kind.value}
         raise ArgumentError.new("duplicate QBit Native recurrent record") if @seen.includes?(key)
 
-        encoded = begin
-          QwenQBitGaussianCodec.encode(
-            floats_from(record.bytes),
-            @block_size,
-            @precision,
-          )
-        rescue ex : ArgumentError
-          raise ArgumentError.new(
-            "QBit #{record.kind} layer #{record.layer} encoding failed: #{ex.message}"
-          )
-        end
-        block = QwenQBitNativeWriter.encode([
-          QwenQBitNativeWriter::Record.new(
-            @cache_id,
-            record.layer,
-            record.kind.value,
-            encoded,
-          ),
-        ])
+        block = QwenQBitStateSnapshot.encode_native_recurrent_record(
+          record,
+          @cache_id,
+          @block_size,
+          @precision,
+        )
         @io.write(block)
         @seen.add(key)
         @record_count += 1
@@ -134,13 +215,30 @@ module ML::GGUF
           @peak_source_record_bytes,
         )
       end
+    end
 
-      private def floats_from(bytes : Bytes) : Array(Float32)
-        raise ArgumentError.new("state record byte size is not Float32-aligned") unless bytes.size % sizeof(Float32) == 0
-        values = Array(Float32).new(bytes.size // sizeof(Float32), 0.0_f32)
-        Slice.new(values.to_unsafe.as(Pointer(UInt8)), bytes.size).copy_from(bytes)
-        values
+    def encode_native_recurrent_record(record : Qwen35StateSnapshot::Record,
+                                       cache_id : UInt64 = 0_u64,
+                                       block_size : Int32 = 1024,
+                                       precision : Int32 = 7) : Bytes
+      unless record.kind.conv_state? || record.kind.ssm_state?
+        raise ArgumentError.new("QBit Native recurrent stream accepts recurrent records only")
       end
+      unless block_size > 0 && block_size <= UInt16::MAX && block_size % 8 == 0
+        raise ArgumentError.new("QBit Native block size must be a positive UInt16 multiple of 8")
+      end
+      raise ArgumentError.new("QBit Native state encoding requires p7 precision") unless precision == 7
+
+      encoded = begin
+        QwenQBitGaussianCodec.encode(floats_from(record.bytes), block_size, precision)
+      rescue ex : ArgumentError
+        raise ArgumentError.new(
+          "QBit #{record.kind} layer #{record.layer} encoding failed: #{ex.message}"
+        )
+      end
+      QwenQBitNativeWriter.encode([
+        QwenQBitNativeWriter::Record.new(cache_id, record.layer, record.kind.value, encoded),
+      ])
     end
 
     def encode(snapshot : Qwen35StateSnapshot::Snapshot,

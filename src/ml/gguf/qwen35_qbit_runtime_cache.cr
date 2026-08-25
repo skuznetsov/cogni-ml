@@ -488,16 +488,16 @@ module ML::GGUF
                                     hp : Qwen35Hparams,
                                     state : Qwen35CPU::State,
                                     created_at_unix : Int64 = Time.utc.to_unix) : QwenQBitClickHouseCache::Saved
-      recurrent_encoding = QwenQBitStateSnapshot.encode_native_recurrent_streaming(
+      recurrent_body = QwenQBitStateSnapshot::NativeRecurrentBody.for_state(
         state,
         QwenQBitCacheEnvelope.cache_id(context),
         block_size: BLOCK_SIZE,
         precision: PRECISION,
       )
       kv_artifact = self.class.adaptive_kv_artifact(state, hp, context.prefix_len)
-      @store.save(
+      @store.save_streaming(
         context,
-        recurrent_encoding.bytes,
+        recurrent_body,
         kv_artifact,
         ttl: @ttl,
         created_at_unix: created_at_unix,
