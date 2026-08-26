@@ -1,5 +1,29 @@
 require "./spec_helper"
+require "http/server"
 require "../src/ml/gguf/qwen_qbit_clickhouse_cache"
+
+private record QBitCHHTTPRequest, resource : String, body : String
+
+private def with_qbit_ch_http_transport(&)
+  requests = Channel(QBitCHHTTPRequest).new(1)
+  server = HTTP::Server.new do |context|
+    request_body = context.request.body.try(&.gets_to_end) || ""
+    requests.send(QBitCHHTTPRequest.new(context.request.resource, request_body))
+    context.response.content_length = 2
+    context.response.print("ok")
+  end
+  address = server.bind_unused_port
+  spawn { server.listen }
+  config = ML::GGUF::QwenQBitClickHouseCache::Config.new(
+    endpoint: "http://#{address.address}:#{address.port}",
+  )
+
+  begin
+    yield ML::GGUF::QwenQBitClickHouseCache::HTTPTransport.new(config), requests
+  ensure
+    server.close unless server.closed?
+  end
+end
 
 private def qbit_ch_bytes(values : Array(Float32)) : Bytes
   bytes = Bytes.new(values.size * sizeof(Float32))
@@ -789,6 +813,65 @@ describe ML::GGUF::QwenQBitClickHouseCache do
         IO::Memory.new,
         4,
       )
+    end
+  end
+
+  it "keeps long body-free queries out of the URL for heap and file sinks" do
+    query = "SELECT 1 -- " + ("x" * 160 * 1024)
+    query.bytesize.should be > 128 * 1024
+
+    with_qbit_ch_http_transport do |transport, requests|
+      transport.post(query, Bytes.empty, 16).should eq("ok".to_slice)
+      request = requests.receive
+      params = URI::Params.parse(URI.parse(request.resource).query.not_nil!)
+      params.has_key?("query").should be_false
+      request.body.should eq(query)
+    end
+
+    with_qbit_ch_http_transport do |transport, requests|
+      output = IO::Memory.new
+      transport.post_into(query, Bytes.empty, 16, output).should eq(2)
+      output.to_slice.should eq("ok".to_slice)
+      request = requests.receive
+      params = URI::Params.parse(URI.parse(request.resource).query.not_nil!)
+      params.has_key?("query").should be_false
+      request.body.should eq(query)
+    end
+  end
+
+  it "keeps input payloads in the body and their query in the URL" do
+    query = "INSERT INTO cache FORMAT RowBinary"
+    payload = "row-data".to_slice
+
+    with_qbit_ch_http_transport do |transport, requests|
+      transport.post(query, payload, 16).should eq("ok".to_slice)
+      request = requests.receive
+      params = URI::Params.parse(URI.parse(request.resource).query.not_nil!)
+      params["query"].should eq(query)
+      request.body.should eq("row-data")
+    end
+
+    with_qbit_ch_http_transport do |transport, requests|
+      transport.post_stream(query, IO::Memory.new("stream-row"), 16, 16).should eq("ok".to_slice)
+      request = requests.receive
+      params = URI::Params.parse(URI.parse(request.resource).query.not_nil!)
+      params["query"].should eq(query)
+      request.body.should eq("stream-row")
+    end
+  end
+
+  it "rejects an empty HTTP query before opening a connection" do
+    config = ML::GGUF::QwenQBitClickHouseCache::Config.new(endpoint: "http://127.0.0.1:1")
+    transport = ML::GGUF::QwenQBitClickHouseCache::HTTPTransport.new(config)
+
+    expect_raises(ArgumentError, /query must not be empty/) do
+      transport.post("", Bytes.empty, 16)
+    end
+    expect_raises(ArgumentError, /query must not be empty/) do
+      transport.post_into("", Bytes.empty, 16, IO::Memory.new)
+    end
+    expect_raises(ArgumentError, /query must not be empty/) do
+      transport.post_stream("", IO::Memory.new, 16, 16)
     end
   end
 

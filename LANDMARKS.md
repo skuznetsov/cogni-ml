@@ -24566,7 +24566,7 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 #### [LM-QWEN38-ADAPTIVE-QBIT-COLD-READ-AB-932] File-backed cold reads remove the full heap artifact in a matched sink-only probe
 **context:** ml / Qwen3.8 / adaptive QBit / ClickHouse / read-side process peak
-**state:** matched process-memory evidence verified; total unified memory, physical cold disk, and large-query transport commit remain open
+**state:** matched process-memory evidence verified; large-query transport regression closed; total unified memory and physical cold disk remain open
 
 - claim: "The mmap sink lowers whole-process peak memory for the measured 2,172-token adaptive cold hit."
   source: two release binaries from `b635b72f` used identical query-in-body framing, `post_into`, caps, ClickHouse generation, parsing, admission, restore, and decode; only the response sink differed between managed `IO::Memory` and the committed unlinked tempfile plus read-only mmap. After one warm-up, ABBA mean maximum RSS was `771,555,328 -> 607,870,976` bytes (`-156.1 MiB`, `-21.2%`) with non-overlapping ranges `756,056,064..787,054,592` and `607,633,408..608,108,544`. Mean macOS peak footprint was `814,731,680 -> 535,040,248` bytes (`-34.3%`) over 115,879,032 logical response bytes.
@@ -24580,10 +24580,24 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   decay_trigger: model, prompt, tokenizer/template, tier map, transport, cache data, Metal restore, host load, or quality probe boundary change
   trust: {F:0.96,G:0.16,R:0.86}
 
-**Adversary:** This is process-cold but ClickHouse/page/Metal-cache-warm: every measured process reported zero block I/O. Two samples per arm and desktop background load do not promote the observed `6.6%` lookup or `7.3%` wall reduction into a throughput claim. Process RSS and macOS peak footprint omit system-wide file-cache ownership, so the result does not prove a `156.1 MiB` total unified-memory saving. The heap control transiently owns an `IO::Memory` buffer plus its retained safe copy, matching the previous managed response behavior but explaining why peak footprint can fall by more than the logical artifact size. The first clean-commit seed reproduced `HTTP 500: Field value too long`; both matched binaries used the same working-tree query-in-body fix, which remains uncommitted and requires a separate regression gate.
+**Adversary:** This is process-cold but ClickHouse/page/Metal-cache-warm: every measured process reported zero block I/O. Two samples per arm and desktop background load do not promote the observed `6.6%` lookup or `7.3%` wall reduction into a throughput claim. Process RSS and macOS peak footprint omit system-wide file-cache ownership, so the result does not prove a `156.1 MiB` total unified-memory saving. The heap control transiently owns an `IO::Memory` buffer plus its retained safe copy, matching the previous managed response behavior but explaining why peak footprint can fall by more than the logical artifact size. The first clean-commit seed reproduced `HTTP 500: Field value too long`; the query-in-body framing now has an independent socket-backed regression and a real ClickHouse probe, but those checks do not remove ClickHouse's separate SQL-size limits.
 
 **Value proxy:** Strict admission and exact restored generation are the capability gate. Maximum process RSS, peak footprint, lookup latency, logical spool throughput, physical block I/O, temporary disk bytes, total unified memory, top-2, and ECS are separate coordinates; none substitutes for the others.
 
 **LTP/WBA:** This is an ordinary response-backing optimization and matched falsifier, not an LTP/WBA promotion. No speculative move or recomputed global-descent certificate is claimed.
 
-**decision:** Keep the committed file-backed adaptive cold-read route. Promote only the measured process-peak reduction and exact response; retain total unified memory, physical cold-disk throughput, and stable latency as open measurements. Land the independent large-prefix query-in-body fix before treating the 2,172-token corridor as committed-head clean.
+**decision:** Keep the committed file-backed adaptive cold-read route and body-free query-in-body framing. The measured 2,172-token HTTP corridor is clean from this source state; retain total unified memory, physical cold-disk throughput, stable latency, and larger SQL limits as open measurements.
+
+#### [LM-QWEN38-QBIT-LONG-QUERY-BODY-933] Body-free ClickHouse SQL no longer consumes the HTTP request target
+**context:** ml / Qwen3.8 / adaptive QBit / ClickHouse / HTTP framing
+**state:** verified for heap and file response sinks; streamed input framing preserved
+
+- claim: "Body-free SQL larger than the default HTTP request-target corridor reaches ClickHouse through the POST body without changing input-payload requests."
+  source: the socket-backed `HTTPTransport` regression uses 163,852 bytes of SQL. On parent `b635b72f` it fails with `HTTP 414: URI Too Long`; with the fix, `post` and `post_into` omit `query` from the URL and preserve the exact SQL body. `post` and `post_stream` with input payloads retain SQL in the URL and the exact payload in the body. A real ClickHouse 26.7.1 server returned `1\n` for the same long body query. The ClickHouse-cache spec passed `30/30`, and the guarded QBit suite passed `129` examples with zero failures and one optional model-backed pending example.
+  verified_at: 2026-08-25
+  decay_trigger: ClickHouse HTTP semantics or limits, Crystal HTTP client/server framing, transport routing, query construction, or response-sink changes
+  trust: {F:0.98,G:0.34,R:0.95}
+
+**Adversary:** Every body-free `post` caller changes wire placement, not just prefix lookup. Store/query semantics are unchanged and the real server accepted the request, but POST-body SQL remains subject to ClickHouse query parsing and size limits. `post_stream` deliberately keeps SQL in the URL because its body carries non-replayable `input()` data. The unrelated eager `Content-Length` allocation was excluded from this fix.
+
+**decision:** Use one framing rule: body-free requests carry SQL in the body; requests with input data carry SQL in the URL. Keep the existing candidate cap and bounded response/request guards.

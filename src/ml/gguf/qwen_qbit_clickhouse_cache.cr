@@ -141,6 +141,7 @@ module ML::GGUF
 
       def post(query : String, body : Bytes, max_response_bytes : Int64) : Bytes
         raise ArgumentError.new("QBit ClickHouse response limit must be positive") unless max_response_bytes > 0
+        raise ArgumentError.new("QBit ClickHouse query must not be empty") if query.empty?
         headers = HTTP::Headers{
           "Accept-Encoding" => "identity",
           "Content-Type"    => "application/octet-stream",
@@ -150,12 +151,22 @@ module ML::GGUF
           headers["X-ClickHouse-Key"] = @config.password || ""
         end
 
+        # Long prefix lookups can exceed ClickHouse's HTTP field-value limit.
+        # When there is no input() payload, keep SQL out of the request URL.
+        if body.empty?
+          path = request_path(nil)
+          request_body = query.to_slice
+        else
+          path = request_path(query)
+          request_body = body
+        end
+
         response_bytes = Bytes.empty
         HTTP::Client.new(@config.endpoint) do |client|
           client.connect_timeout = @config.connect_timeout
           client.read_timeout = @config.read_timeout
           client.write_timeout = @config.write_timeout
-          client.exec("POST", request_path(query), headers, body) do |response|
+          client.exec("POST", path, headers, request_body) do |response|
             unless response.status.success?
               error = begin
                 String.new(self.class.read_bounded(response.body_io, 64_i64 * 1024))
@@ -224,7 +235,7 @@ module ML::GGUF
         # Artifact reads have no input() payload. Keep their potentially long
         # SQL out of the URL while preserving ClickHouse's POST semantics.
         if body.empty?
-          path = request_path("")
+          path = request_path(nil)
           request_body = query.to_slice
         else
           path = request_path(query)
@@ -302,15 +313,15 @@ module ML::GGUF
         total
       end
 
-      private def request_path(query : String) : String
+      private def request_path(query : String?) : String
         path = @config.endpoint.path
         path = "/" if path.empty?
-        params = URI::Params.encode({
-          "query"             => query,
-          "database"          => @config.database,
-          "wait_end_of_query" => "1",
-          "async_insert"      => "0",
-        })
+        params = URI::Params.build do |form|
+          form.add("query", query) if query
+          form.add("database", @config.database)
+          form.add("wait_end_of_query", "1")
+          form.add("async_insert", "0")
+        end
         "#{path}?#{params}"
       end
     end

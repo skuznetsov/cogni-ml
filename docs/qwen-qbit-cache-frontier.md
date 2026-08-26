@@ -1699,10 +1699,14 @@ RSS and peak footprint therefore do not prove the same reduction in total
 system unified memory. The seed wrote one complete generation in 2,811.152 ms,
 and ClickHouse held 107,809,078 compressed bytes, but its initial clean-commit
 prefix lookup exposed the known large-query URL limit with `HTTP 500: Field
-value too long`. The matched binaries both included the same working-tree
-query-in-body fix. That transport fix remains a separate uncommitted production
-gate and must land with its own regression evidence before the long-prefix
-corridor is considered clean from committed HEAD alone.
+value too long`. The transport fix now sends body-free SQL in the POST body for
+both heap and file response sinks while keeping `input()` payloads in the body
+and their SQL in the URL. A socket-backed query larger than 128 KiB fails on
+`b635b72f` with `HTTP 414: URI Too Long` and passes with the fix; the complete
+ClickHouse-cache spec passes `30/30`. A real ClickHouse 26.7.1 probe also
+accepted a 163,852-byte body query and returned `1\n`. This closes the HTTP
+framing gate for the measured 2,172-token corridor without changing the
+separate ClickHouse query-size or candidate-count limits.
 
 ### Cache-engine contract
 
