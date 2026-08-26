@@ -1617,6 +1617,48 @@ Crystal 1.21 when `Isolated#join` is called from a raw `Thread`
 Direct device streaming, buffered cold reads, adaptive session checkpoints,
 and production-default policy remain guard-only.
 
+### File-backed adaptive cold-read gate (2026-08-25)
+
+Adaptive non-session artifact responses now flow from the ClickHouse HTTP body
+into an already-unlinked temporary file under the existing byte caps. The file
+is mapped read-only, strict envelope admission operates on zero-copy slices,
+and the admission retains a typed owner for the mapping lifetime. The schema,
+wire bytes, manifest-last authority, cache identity, retry policy, and GPU
+restore boundary are unchanged. Raw artifacts and session anchors deliberately
+remain on the previous in-memory transport path.
+
+This is bounded managed-heap staging, not direct ClickHouse-to-Metal streaming.
+Integrity and layout validation still scan the complete file-backed artifacts,
+and the host must have temporary disk space for both responses. A short write,
+oversize response, digest/layout failure, mmap failure, or disk error fails
+before an admission is returned. The directory entry is removed before the
+HTTP read begins, so normal completion and handled failure leave no named
+spool. An abrupt process loss in the narrow interval between tempfile creation
+and unlink can strand that one generated name. The descriptor closes
+immediately after mmap; an explicit backing owner retains the mapping until the
+admission is finalized and then unmaps it. Callers must retain the admission
+while using its zero-copy views.
+
+The focused transport suite passed 27 examples, including adaptive streaming,
+post-GC mapping lifetime, no named spool during the write, truncation, combined
+budget rejection before the KV request, and an explicit raw-path preservation
+check. The applicable CPU regression partition passed 72 examples with no
+failures or pending cases.
+
+An isolated Qwen3.8-27B Q4_K_M seed and three separate cold-hit processes used
+`max_seq=64` and `p4;27=bf16,43=bf16,47=bf16,51=bf16`. Seed writeback took
+2,409.128 ms. Cold lookup took 180.660, 120.926, and 114.186 ms (median
+120.926 ms); restore took 28.640, 27.760, and 29.542 ms. Every hit reused all
+38 prompt tokens with no suffix replay or cache failure and emitted the same
+ids `[21,11,220,22]` and text `6, 7`. Exact token identity preserves
+positionwise ECS at `1.0`; fresh top-2 logits were not captured. The earlier
+single buffered lookup at 95.606 ms is only a historical reference, not a
+matched latency comparison, so the read overhead is not yet promoted as a
+stable percentage.
+
+Direct network-to-device streaming, adaptive session checkpoints, response
+spool pooling, retries, and production-default policy remain separate slices.
+
 ### Cache-engine contract
 
 - The internal envelope makes cache keys content-addressed over model,

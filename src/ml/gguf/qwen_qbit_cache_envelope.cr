@@ -212,6 +212,11 @@ module ML::GGUF
       end
     end
 
+    # Typed lifetime token for non-heap backing stores retained by Admission.
+    abstract class BackingOwner
+      abstract def close : Nil
+    end
+
     # Retains the validated zero-copy views. Callers must treat their backing
     # byte slices as immutable for the lifetime of this certificate.
     class Admission
@@ -221,7 +226,12 @@ module ML::GGUF
 
       def initialize(@entry : Entry,
                      @native_stream : QwenQBitNativeBlock::Stream,
-                     @exact_artifact : Qwen35StateSnapshot::EncodedSnapshot)
+                     @exact_artifact : Qwen35StateSnapshot::EncodedSnapshot,
+                     @backing_owner : BackingOwner? = nil)
+      end
+
+      def finalize
+        @backing_owner.try(&.close)
       end
     end
 

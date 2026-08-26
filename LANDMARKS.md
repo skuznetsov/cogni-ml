@@ -24539,3 +24539,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Trigger: adaptive non-session writeback after a successful packed prefill. Transport: selected resident K/V base/sidecar -> one canonical V3 record -> bounded one-shot HTTP -> ClickHouse, followed by recurrent Native rows. Boundary: exact V3 framing and digest, per-record adaptive validation, unique full-attention K/V identities, combined byte cap, and manifest/prefix last. Potential `{semantic or envelope mismatch, visible partial generation, complete-KV host ownership, writeback wall}` descends while the raw-session/read frame remains unchanged. Dual frame: the previous complete compact KV artifact.
 
 **decision:** Admit one-record adaptive KV writeback for the existing default-off non-session corridor. Keep direct device streaming, bounded cold reads, sessions, and retry semantics as separate slices.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-COLD-READ-931] Adaptive cold responses are file-backed and admission-owned
+**context:** ml / Qwen3.8 / adaptive QBit / ClickHouse / read-side memory
+**state:** default-off adaptive non-session cold-read verified; raw/session and direct-device paths unchanged
+
+- claim: "Adaptive artifact responses no longer require complete managed-heap response buffers."
+  source: `HTTPTransport#post_into` copies a response under its byte cap into an already-unlinked temporary file. `MappedResponse` validates the actual byte count, maps the completed file read-only, and closes its descriptor; strict envelope admission retains both mappings through a typed `BackingOwner` until `Admission` finalization. Fixed-length short and oversize bodies fail before admission, the combined cap is checked before the second response, and no named spool exists during or after the write. The focused suite passed `27 examples`; the applicable CPU regression partition passed `72 examples`, both without failures, errors, or pending cases.
+  verified_at: 2026-08-25
+  decay_trigger: Crystal HTTP framing, temporary-file or mmap behavior, envelope/admission ownership, response caps, adaptive codec routing, or ClickHouse read SQL change
+  trust: {F:0.97,G:0.37,R:0.93}
+
+- claim: "The final isolated Qwen3.8 cold hit remains exact through the file-backed route."
+  source: a rebuilt guarded Qwen3.8-27B Q4_K_M process under `p4;27=bf16,43=bf16,47=bf16,51=bf16` reported `hits=1`, `adaptive_hits=1`, zero cache failures, all 38 prompt tokens reused, no suffix replay, `134.983 ms` lookup, and `28.569 ms` restore. It emitted the established ids `[21,11,220,22]` and text `6, 7`; exact aligned tokens imply positionwise ECS `1.0`, while fresh top-2 logits were not captured.
+  verified_at: 2026-08-25
+  decay_trigger: model, prompt, tokenizer/template, tier map, ClickHouse data/schema, cache identity, Metal restore path, host load, or safe-run policy change
+  trust: {F:0.97,G:0.19,R:0.91}
+
+**Adversary:** This bounds managed-heap response staging, not total memory: mapped pages still occupy the OS file cache and require temporary disk capacity. Mapping release follows `Admission` reachability and GC finalization rather than an immediate public close; callers must retain the admission while using its zero-copy views. An abrupt crash between tempfile creation and immediate unlink can strand one generated name; normal completion and handled failure cannot. A disk, mmap, framing, cap, digest, or layout failure rejects the hit. The four observed lookups ranged from `114.186` to `180.660 ms`; the earlier `95.606 ms` buffered observation was not a matched A/B row, so no stable latency regression or speedup is claimed. Raw artifacts, session anchors, direct network-to-Metal transfer, pooling, and retries remain unchanged.
+
+**Value proxy:** The primary coordinate is strict admission followed by exact restored generation without a complete managed-heap artifact copy. Lookup time, mapped bytes, temporary disk bytes, token identity, top-2, and ECS remain separate diagnostics; bounded heap does not by itself prove lower total unified-memory pressure.
+
+**LTP/WBA:** This is ordinary cache transport optimization, not an LTP/WBA promotion. It changes response backing storage while preserving the same manifest, envelope, identity, strict validation, and adaptive restore boundary; no speculative local move or recomputed global-descent claim is introduced.
+
+**decision:** Admit the file-backed cold-read route only for the existing default-off adaptive non-session codec. Keep raw/session reads and device-direct transfer in their current frames; measure matched read latency and total unified-memory pressure before considering broader routing.

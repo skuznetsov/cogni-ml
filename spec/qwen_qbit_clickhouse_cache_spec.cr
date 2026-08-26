@@ -8,7 +8,8 @@ private def qbit_ch_bytes(values : Array(Float32)) : Bytes
 end
 
 private def qbit_ch_context(template : String = "{{ messages }}",
-                            kv_record_byte_size : Int64 = 3_i64 * sizeof(Float32)) : ML::GGUF::QwenQBitCacheEnvelope::Context
+                            kv_record_byte_size : Int64 = 3_i64 * sizeof(Float32),
+                            kv_artifact_codec : String = ML::GGUF::QwenQBitCacheEnvelope::EXACT_ARTIFACT_CODEC) : ML::GGUF::QwenQBitCacheEnvelope::Context
   tokens = [11_i32, 22_i32, 33_i32, 44_i32]
   state_abi = ML::GGUF::QwenQBitCacheEnvelope::StateABI.new(
     layer_count: 2,
@@ -33,7 +34,47 @@ private def qbit_ch_context(template : String = "{{ messages }}",
     validation_hash: ML::GGUF::Qwen35PromptCache.token_hash(tokens),
     next_token_id: tokens.last,
     state_abi: state_abi,
+    kv_artifact_codec: kv_artifact_codec,
   )
+end
+
+private def qbit_ch_adaptive_artifact(context : ML::GGUF::QwenQBitCacheEnvelope::Context) : Bytes
+  row_values = ML::GGUF::QwenQBitAdaptiveKV::ROW_VALUES
+  live_values = context.prefix_len * row_values
+  encoded = ML::GGUF::QwenQBitAdaptiveKV.encode(
+    Array(Float32).new(live_values) { |i| (i - live_values // 2).to_f32 / 97.0_f32 },
+    Array(ML::GGUF::QwenQBitAdaptiveKV::Tier).new(context.prefix_len) do |i|
+      i.even? ? ML::GGUF::QwenQBitAdaptiveKV::Tier::P4 : ML::GGUF::QwenQBitAdaptiveKV::Tier::P5
+    end,
+  )
+  records = [
+    ML::GGUF::Qwen35StateSnapshot::EncodedRecord.new(
+      1,
+      ML::GGUF::Qwen35StateSnapshot::RecordKind::KCache,
+      ML::StorageMode::Shared,
+      ML::GGUF::Qwen35StateSnapshot::RecordCodec::RawF32,
+      context.state_abi.kv_record_byte_size.to_i32,
+      encoded.payload,
+    ),
+    ML::GGUF::Qwen35StateSnapshot::EncodedRecord.new(
+      1,
+      ML::GGUF::Qwen35StateSnapshot::RecordKind::VCache,
+      ML::StorageMode::Shared,
+      ML::GGUF::Qwen35StateSnapshot::RecordCodec::RawF32,
+      context.state_abi.kv_record_byte_size.to_i32,
+      encoded.payload,
+    ),
+  ]
+  snapshot = ML::GGUF::Qwen35StateSnapshot::EncodedSnapshot.new(
+    context.max_seq,
+    context.layer_count,
+    Array(Int32).new(context.layer_count, context.prefix_len),
+    records,
+    ML::GGUF::Qwen35StateSnapshot::RecordCodec::RawF32,
+    0_i32,
+    artifact_version: ML::GGUF::Qwen35StateSnapshot::ARTIFACT_VERSION_V3,
+  )
+  ML::GGUF::Qwen35StateSnapshot.encode_preencoded_artifact_bytes(snapshot)
 end
 
 private def qbit_ch_live_kv_artifact(context : ML::GGUF::QwenQBitCacheEnvelope::Context) : Bytes
@@ -177,6 +218,32 @@ private class QBitCHMemoryTransport < ML::GGUF::QwenQBitClickHouseCache::Transpo
     end
     @requests << Request.new(query, output.to_slice.dup, max_response_bytes)
     @responses.shift?.try(&.dup) || Bytes.empty
+  end
+end
+
+private class QBitCHStreamingReadTransport < QBitCHMemoryTransport
+  getter response_stream_calls = 0
+  getter named_spool_seen = false
+
+  def post_into(query : String,
+                body : Bytes,
+                max_response_bytes : Int64,
+                output : IO) : Int64
+    @response_stream_calls += 1
+    @requests << Request.new(query, body.dup, max_response_bytes)
+    if file = output.as?(File)
+      @named_spool_seen ||= File.exists?(file.path)
+    end
+    response = @responses.shift?.try(&.dup) || Bytes.empty
+    written = 0_i64
+    offset = 0
+    while offset < response.size
+      chunk = response[offset, Math.min(3, response.size - offset)]
+      output.write(chunk)
+      written += chunk.size
+      offset += chunk.size
+    end
+    written
   end
 end
 
@@ -585,10 +652,143 @@ describe ML::GGUF::QwenQBitClickHouseCache do
     transport.requests.size.should eq(4)
   end
 
+  it "streams cold artifact responses instead of materializing transport Bytes" do
+    context = qbit_ch_context(
+      kv_record_byte_size: 16_i64 * ML::GGUF::QwenQBitAdaptiveKV::ROW_VALUES * sizeof(Float32),
+      kv_artifact_codec: "qkv-adaptive-qbit-v1|1=0",
+    )
+    native, _raw_kv = qbit_ch_artifacts(context)
+    kv = qbit_ch_adaptive_artifact(context)
+    entry = envelope.build(context, native, kv, created_at_unix: 100_i64)
+    generation = "b" * 64
+    transport = QBitCHStreamingReadTransport.new
+    transport.queue((generation + entry.to_json).to_slice)
+    transport.queue(native)
+    transport.queue(kv)
+    store = ML::GGUF::QwenQBitClickHouseCache::Store.new(
+      ML::GGUF::QwenQBitClickHouseCache::Config.new(table_prefix: "qwen_cache_test"),
+      transport,
+    )
+
+    admission = store.lookup(context).not_nil!
+    GC.collect
+
+    admission.entry.certificate_id.should eq(entry.certificate_id)
+    admission.exact_artifact.records.first.payload.should_not be_empty
+    transport.response_stream_calls.should eq(2)
+    transport.named_spool_seen.should be_false
+    transport.requests.size.should eq(3)
+  end
+
+  it "keeps raw artifact reads on the existing transport path" do
+    context = qbit_ch_context
+    native, kv = qbit_ch_artifacts(context)
+    entry = envelope.build(context, native, kv, created_at_unix: 100_i64)
+    generation = "c" * 64
+    transport = QBitCHStreamingReadTransport.new
+    transport.queue((generation + entry.to_json).to_slice)
+    transport.queue(native)
+    transport.queue(kv)
+    store = ML::GGUF::QwenQBitClickHouseCache::Store.new(
+      ML::GGUF::QwenQBitClickHouseCache::Config.new(table_prefix: "qwen_cache_test"),
+      transport,
+    )
+
+    store.lookup(context).should_not be_nil
+
+    transport.response_stream_calls.should eq(0)
+    transport.requests.size.should eq(3)
+  end
+
+  it "rejects a truncated streamed adaptive artifact after both bounded reads" do
+    context = qbit_ch_context(
+      kv_record_byte_size: 16_i64 * ML::GGUF::QwenQBitAdaptiveKV::ROW_VALUES * sizeof(Float32),
+      kv_artifact_codec: "qkv-adaptive-qbit-v1|1=0",
+    )
+    native, _raw_kv = qbit_ch_artifacts(context)
+    kv = qbit_ch_adaptive_artifact(context)
+    entry = envelope.build(context, native, kv, created_at_unix: 100_i64)
+    generation = "d" * 64
+    transport = QBitCHStreamingReadTransport.new
+    transport.queue((generation + entry.to_json).to_slice)
+    transport.queue(native)
+    transport.queue(kv[0, kv.size - 1])
+    store = ML::GGUF::QwenQBitClickHouseCache::Store.new(
+      ML::GGUF::QwenQBitClickHouseCache::Config.new(table_prefix: "qwen_cache_test"),
+      transport,
+    )
+
+    expect_raises(ArgumentError, /byte-size mismatch/) do
+      store.lookup(context)
+    end
+
+    transport.response_stream_calls.should eq(2)
+    transport.requests.size.should eq(3)
+  end
+
+  it "rejects an adaptive combined budget before streaming the KV artifact" do
+    context = qbit_ch_context(
+      kv_record_byte_size: 16_i64 * ML::GGUF::QwenQBitAdaptiveKV::ROW_VALUES * sizeof(Float32),
+      kv_artifact_codec: "qkv-adaptive-qbit-v1|1=0",
+    )
+    native, _raw_kv = qbit_ch_artifacts(context)
+    kv = qbit_ch_adaptive_artifact(context)
+    entry = envelope.build(context, native, kv, created_at_unix: 100_i64)
+    generation = "e" * 64
+    transport = QBitCHStreamingReadTransport.new
+    transport.queue((generation + entry.to_json).to_slice)
+    transport.queue(native)
+    transport.queue(kv)
+    store = ML::GGUF::QwenQBitClickHouseCache::Store.new(
+      ML::GGUF::QwenQBitClickHouseCache::Config.new(
+        table_prefix: "qwen_cache_test",
+        max_total_artifact_bytes: native.size.to_i64 + kv.size - 1,
+      ),
+      transport,
+    )
+
+    expect_raises(ArgumentError, /combined artifact/) do
+      store.lookup(context)
+    end
+
+    transport.response_stream_calls.should eq(1)
+    transport.requests.size.should eq(2)
+  end
+
   it "bounds streamed HTTP response reads" do
     ML::GGUF::QwenQBitClickHouseCache::HTTPTransport.read_bounded(IO::Memory.new("1234"), 4).should eq("1234".to_slice)
     expect_raises(ArgumentError, /response exceeds/) do
       ML::GGUF::QwenQBitClickHouseCache::HTTPTransport.read_bounded(IO::Memory.new("12345"), 4)
+    end
+
+    output = IO::Memory.new
+    ML::GGUF::QwenQBitClickHouseCache::HTTPTransport.copy_bounded(
+      IO::Memory.new("1234"),
+      output,
+      4,
+    ).should eq(4)
+    output.to_slice.should eq("1234".to_slice)
+    expect_raises(ArgumentError, /response exceeds/) do
+      ML::GGUF::QwenQBitClickHouseCache::HTTPTransport.copy_bounded(
+        IO::Memory.new("12345"),
+        IO::Memory.new,
+        4,
+      )
+    end
+
+    expect_raises(ArgumentError, /length mismatch/) do
+      ML::GGUF::QwenQBitClickHouseCache::HTTPTransport.copy_bounded(
+        HTTP::FixedLengthContent.new(IO::Memory.new("123"), 4),
+        IO::Memory.new,
+        4,
+      )
+    end
+    expect_raises(ArgumentError, /response exceeds/) do
+      ML::GGUF::QwenQBitClickHouseCache::HTTPTransport.copy_bounded(
+        HTTP::FixedLengthContent.new(IO::Memory.new("12345"), 5),
+        IO::Memory.new,
+        4,
+      )
     end
   end
 

@@ -94,6 +94,18 @@ module ML::GGUF
                                body : IO,
                                max_body_bytes : Int64,
                                max_response_bytes : Int64) : Bytes
+
+      # Compatibility fallback for in-memory/test transports. HTTPTransport
+      # overrides this seam so large cold artifacts never become response
+      # Bytes on the managed heap.
+      def post_into(query : String,
+                    body : Bytes,
+                    max_response_bytes : Int64,
+                    output : IO) : Int64
+        response = post(query, body, max_response_bytes)
+        output.write(response)
+        response.size.to_i64
+      end
     end
 
     class BoundedRequestBody < IO
@@ -194,6 +206,55 @@ module ML::GGUF
         response_bytes
       end
 
+      def post_into(query : String,
+                    body : Bytes,
+                    max_response_bytes : Int64,
+                    output : IO) : Int64
+        raise ArgumentError.new("QBit ClickHouse response limit must be positive") unless max_response_bytes > 0
+        raise ArgumentError.new("QBit ClickHouse query must not be empty") if query.empty?
+        headers = HTTP::Headers{
+          "Accept-Encoding" => "identity",
+          "Content-Type"    => "application/octet-stream",
+        }
+        if username = @config.username
+          headers["X-ClickHouse-User"] = username
+          headers["X-ClickHouse-Key"] = @config.password || ""
+        end
+
+        # Artifact reads have no input() payload. Keep their potentially long
+        # SQL out of the URL while preserving ClickHouse's POST semantics.
+        if body.empty?
+          path = request_path("")
+          request_body = query.to_slice
+        else
+          path = request_path(query)
+          request_body = body
+        end
+
+        written = 0_i64
+        HTTP::Client.new(@config.endpoint) do |client|
+          client.connect_timeout = @config.connect_timeout
+          client.read_timeout = @config.read_timeout
+          client.write_timeout = @config.write_timeout
+          client.exec("POST", path, headers, request_body) do |response|
+            unless response.status.success?
+              error = begin
+                String.new(self.class.read_bounded(response.body_io, 64_i64 * 1024))
+              rescue ArgumentError
+                "response body exceeded 64KiB"
+              end
+              raise IO::Error.new("ClickHouse HTTP #{response.status_code}: #{error}")
+            end
+            written = self.class.copy_bounded(
+              response.body_io,
+              output,
+              max_response_bytes,
+            )
+          end
+        end
+        written
+      end
+
       def self.read_bounded(io : IO, max_bytes : Int64) : Bytes
         raise ArgumentError.new("QBit ClickHouse response limit must be positive") unless max_bytes > 0
         output = IO::Memory.new(Math.min(max_bytes, 64_i64 * 1024).to_i)
@@ -209,6 +270,38 @@ module ML::GGUF
         output.to_slice.dup
       end
 
+      def self.copy_bounded(io : IO,
+                            output : IO,
+                            max_bytes : Int64) : Int64
+        raise ArgumentError.new("QBit ClickHouse response limit must be positive") unless max_bytes > 0
+
+        expected = if io.is_a?(HTTP::FixedLengthContent)
+                     remaining = io.read_remaining
+                     remaining <= Int64::MAX.to_u64 ? remaining.to_i64 : nil
+                   end
+        if expected
+          if expected > max_bytes
+            raise ArgumentError.new("QBit ClickHouse response exceeds #{max_bytes} bytes")
+          end
+        end
+
+        buffer = Bytes.new(64 * 1024)
+        total = 0_i64
+        while (read = io.read(buffer)) > 0
+          total += read
+          if total > max_bytes
+            raise ArgumentError.new("QBit ClickHouse response exceeds #{max_bytes} bytes")
+          end
+          output.write(buffer[0, read])
+        end
+        if expected
+          unless total == expected
+            raise ArgumentError.new("QBit ClickHouse response length mismatch")
+          end
+        end
+        total
+      end
+
       private def request_path(query : String) : String
         path = @config.endpoint.path
         path = "/" if path.empty?
@@ -219,6 +312,101 @@ module ML::GGUF
           "async_insert"      => "0",
         })
         "#{path}?#{params}"
+      end
+    end
+
+    # File-backed immutable response. The temporary directory entry is removed
+    # before the HTTP read starts; Admission owns the file-backed mapping
+    # lifetime. This keeps large cold artifacts off the managed heap and leaves
+    # no named spool behind after normal completion or handled failure.
+    class MappedResponse
+      getter bytes : Bytes
+      getter byte_size : Int64
+
+      def initialize(@bytes : Bytes,
+                     @byte_size : Int64,
+                     @ptr : Pointer(UInt8)?,
+                     @map_size : UInt64)
+        @closed = false
+      end
+
+      def self.fetch(transport : Transport,
+                     query : String,
+                     body : Bytes,
+                     max_response_bytes : Int64) : MappedResponse
+        file = File.tempfile("cogni-qbit-cold-read")
+        path = file.path
+        mapped_ptr = nil.as(Pointer(UInt8)?)
+        begin
+          # POSIX keeps the open file alive after this immediate unlink. An
+          # abrupt crash between tempfile creation and this call is the only
+          # narrow interval in which the generated name can be stranded.
+          File.delete(path)
+          written = transport.post_into(query, body, max_response_bytes, file)
+          file.flush
+          actual = file.size
+          unless written == actual
+            raise IO::Error.new("QBit ClickHouse streamed response size mismatch")
+          end
+          if actual > max_response_bytes
+            raise ArgumentError.new("QBit ClickHouse response exceeds #{max_response_bytes} bytes")
+          end
+          if actual == 0
+            return new(Bytes.empty, 0_i64, nil, 0_u64)
+          end
+          if actual > Int32::MAX
+            raise ArgumentError.new("QBit ClickHouse response is too large to map into a Slice")
+          end
+
+          mapped = LibC.mmap(
+            Pointer(Void).null,
+            actual.to_u64,
+            LibC::PROT_READ,
+            LibC::MAP_PRIVATE,
+            file.fd,
+            0,
+          )
+          if mapped.address == LibC::MAP_FAILED.address
+            raise IO::Error.new("QBit ClickHouse response mmap failed")
+          end
+          mapped_ptr = mapped.as(Pointer(UInt8))
+          bytes = Bytes.new(mapped_ptr.not_nil!, actual.to_i, read_only: true)
+          response = new(bytes, actual, mapped_ptr, actual.to_u64)
+          mapped_ptr = nil
+          response
+        ensure
+          if ptr = mapped_ptr
+            LibC.munmap(ptr.as(Void*), file.size.to_u64)
+          end
+          file.close
+          File.delete(path) if File.exists?(path)
+        end
+      end
+
+      def close : Nil
+        return if @closed
+        if ptr = @ptr
+          LibC.munmap(ptr.as(Void*), @map_size)
+          @ptr = nil
+        end
+        @closed = true
+      end
+
+      def finalize
+        close
+      end
+    end
+
+    class MappedArtifacts < QwenQBitCacheEnvelope::BackingOwner
+      getter recurrent : MappedResponse
+      getter kv : MappedResponse
+
+      def initialize(@recurrent : MappedResponse, @kv : MappedResponse)
+      end
+
+      def close : Nil
+        @recurrent.close
+        @kv.close
       end
     end
 
@@ -960,6 +1148,10 @@ module ML::GGUF
           return admission
         end
 
+        if QwenQBitCacheEnvelope.adaptive_artifact_codec?(entry.exact_artifact_codec)
+          return load_mapped_admission(entry, context, lookup_key, generation_id, expected)
+        end
+
         recurrent_native = @transport.post(
           recurrent_lookup_query(entry.cache_id, lookup_key, generation_id),
           EMPTY_BODY,
@@ -984,6 +1176,52 @@ module ML::GGUF
                     end
         remember_admission(generation_id, admission, recurrent_native.size.to_i64 + kv_artifact.size)
         admission
+      end
+
+      private def load_mapped_admission(entry : QwenQBitCacheEnvelope::Entry,
+                                        context : QwenQBitCacheEnvelope::LookupContext,
+                                        lookup_key : String,
+                                        generation_id : String,
+                                        expected : QwenQBitCacheEnvelope::Context?) : QwenQBitCacheEnvelope::Admission
+        recurrent_response = MappedResponse.fetch(
+          @transport,
+          recurrent_lookup_query(entry.cache_id, lookup_key, generation_id),
+          EMPTY_BODY,
+          @config.max_recurrent_bytes,
+        )
+        recurrent_native = recurrent_response.bytes
+        enforce_response_limit!(recurrent_native, @config.max_recurrent_bytes)
+        # The envelope authenticates the exact-KV byte count. Reject a combined
+        # response that cannot fit the configured budget before allocating the
+        # second large HTTP response.
+        validate_combined_size!(recurrent_native.size.to_i64, entry.kv_artifact_byte_size)
+        kv_response = MappedResponse.fetch(
+          @transport,
+          kv_lookup_query(entry.cache_id, lookup_key, generation_id),
+          EMPTY_BODY,
+          @config.max_kv_bytes,
+        )
+        kv_artifact = kv_response.bytes
+        enforce_response_limit!(kv_artifact, @config.max_kv_bytes)
+        validate_combined_size!(recurrent_native.size.to_i64, kv_artifact.size.to_i64)
+        owner = MappedArtifacts.new(recurrent_response, kv_response)
+        validated = if full_context = expected
+                      QwenQBitCacheEnvelope.admit(entry, full_context, recurrent_native, kv_artifact)
+                    else
+                      QwenQBitCacheEnvelope.admit(entry, context, recurrent_native, kv_artifact)
+                    end
+        admission = QwenQBitCacheEnvelope::Admission.new(
+          validated.entry,
+          validated.native_stream,
+          validated.exact_artifact,
+          owner,
+        )
+        remember_admission(generation_id, admission, recurrent_native.size.to_i64 + kv_artifact.size)
+        admission
+      rescue ex
+        recurrent_response.try(&.close)
+        kv_response.try(&.close)
+        raise ex
       end
 
       private def validate_input_size!(bytes : Bytes, limit : Int64, label : String) : Nil
