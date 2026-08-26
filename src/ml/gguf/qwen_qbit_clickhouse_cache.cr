@@ -16,11 +16,12 @@ module ML::GGUF
   module QwenQBitClickHouseCache
     extend self
 
-    QBIT_BLOCK_SIZE       =  1024
-    GENERATION_HEX_SIZE   =    64
-    LOOKUP_HEX_SIZE       =    64
-    MAX_PREFIX_CANDIDATES = 8_192
-    EMPTY_BODY            = Bytes.empty
+    QBIT_BLOCK_SIZE               =  1024
+    GENERATION_HEX_SIZE           =    64
+    LOOKUP_HEX_SIZE               =    64
+    PREFIX_QUERY_BATCH_CANDIDATES = 2_048
+    MAX_PREFIX_CANDIDATES         = 8_192
+    EMPTY_BODY                    = Bytes.empty
 
     class Config
       getter endpoint : URI
@@ -654,11 +655,18 @@ module ML::GGUF
                                 token_ids : Array(Int32)) : QwenQBitCacheEnvelope::Admission?
         validate_prefix_request!(context, token_ids)
         response_limit = @config.max_envelope_bytes + GENERATION_HEX_SIZE + LOOKUP_HEX_SIZE
-        indexed = @transport.post(
-          prefix_lookup_query(context, token_ids),
-          EMPTY_BODY,
-          response_limit,
-        )
+        indexed = EMPTY_BODY
+        upper_prefix_len = token_ids.size
+        while upper_prefix_len > 0
+          lower_prefix_len = Math.max(1, upper_prefix_len - PREFIX_QUERY_BATCH_CANDIDATES + 1)
+          indexed = @transport.post(
+            prefix_lookup_query(context, token_ids, lower_prefix_len, upper_prefix_len),
+            EMPTY_BODY,
+            response_limit,
+          )
+          break unless indexed.empty?
+          upper_prefix_len = lower_prefix_len - 1
+        end
         return nil if indexed.empty?
         enforce_response_limit!(indexed, response_limit)
         header_size = GENERATION_HEX_SIZE + LOOKUP_HEX_SIZE
@@ -956,9 +964,11 @@ module ML::GGUF
       end
 
       private def prefix_lookup_query(context : QwenQBitCacheEnvelope::PrefixContext,
-                                      token_ids : Array(Int32)) : String
+                                      token_ids : Array(Int32),
+                                      lower_prefix_len : Int32,
+                                      upper_prefix_len : Int32) : String
         scope_key = QwenQBitCacheEnvelope.prefix_scope_key(context)
-        token_hashes = (1..token_ids.size).map do |prefix_len|
+        token_hashes = (lower_prefix_len..upper_prefix_len).map do |prefix_len|
           "toFixedString('#{Qwen35PromptCache.token_hash(token_ids, prefix_len)}', 64)"
         end.join(", ")
         <<-SQL
@@ -966,7 +976,7 @@ module ML::GGUF
         FROM #{prefix_index_table}
         WHERE scope_key = toFixedString('#{scope_key}', 64)
           AND token_hash IN (#{token_hashes})
-          AND prefix_len <= toUInt32(#{token_ids.size})
+          AND prefix_len BETWEEN toUInt32(#{lower_prefix_len}) AND toUInt32(#{upper_prefix_len})
           AND expires_at_unix > toUnixTimestamp(now())
         ORDER BY prefix_len DESC, created_at_unix DESC, generation_id DESC
         LIMIT 1

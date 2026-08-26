@@ -33,7 +33,8 @@ end
 
 private def qbit_ch_context(template : String = "{{ messages }}",
                             kv_record_byte_size : Int64 = 3_i64 * sizeof(Float32),
-                            kv_artifact_codec : String = ML::GGUF::QwenQBitCacheEnvelope::EXACT_ARTIFACT_CODEC) : ML::GGUF::QwenQBitCacheEnvelope::Context
+                            kv_artifact_codec : String = ML::GGUF::QwenQBitCacheEnvelope::EXACT_ARTIFACT_CODEC,
+                            max_seq : Int32 = 16) : ML::GGUF::QwenQBitCacheEnvelope::Context
   tokens = [11_i32, 22_i32, 33_i32, 44_i32]
   state_abi = ML::GGUF::QwenQBitCacheEnvelope::StateABI.new(
     layer_count: 2,
@@ -49,7 +50,7 @@ private def qbit_ch_context(template : String = "{{ messages }}",
     prompt_hash: ML::GGUF::Qwen35PromptCache.prompt_hash(tokens[0, 3], "rendered prompt"),
     token_hash: ML::GGUF::Qwen35PromptCache.token_hash(tokens, 3),
     prefix_len: 3,
-    max_seq: 16,
+    max_seq: max_seq,
     layer_count: 2,
     qbit_block_size: 1024,
     qbit_precision: 7,
@@ -553,6 +554,38 @@ describe ML::GGUF::QwenQBitClickHouseCache do
     transport.requests[0].query.should contain("ORDER BY prefix_len DESC")
     transport.requests[1].query.should contain(generation)
     transport.requests[2].query.should contain(generation)
+  end
+
+  it "batches long prefix lookups below ClickHouse's default max query size" do
+    transport = QBitCHMemoryTransport.new
+    store = ML::GGUF::QwenQBitClickHouseCache::Store.new(
+      ML::GGUF::QwenQBitClickHouseCache::Config.new(table_prefix: "qwen_cache_test"),
+      transport,
+    )
+    token_count = 3_277
+    context = qbit_ch_context(max_seq: token_count)
+    native, kv = qbit_ch_artifacts(context)
+    entry = envelope.build(context, native, kv, created_at_unix: 100_i64)
+    generation = "d" * 64
+    lookup_key = envelope.lookup_key(context)
+    transport.queue(Bytes.empty)
+    transport.queue((generation + lookup_key + entry.to_json).to_slice)
+    transport.queue(native)
+    transport.queue(kv)
+    tokens = [11_i32, 22_i32, 33_i32]
+    (token_count - tokens.size).times { |index| tokens << (index + 100).to_i32 }
+
+    admitted = store.lookup_longest_prefix(envelope.prefix_context(context), tokens).not_nil!
+
+    admitted.entry.prefix_len.should eq(3)
+    transport.requests.size.should eq(4)
+    transport.requests[0, 2].each do |request|
+      request.query.bytesize.should be < 192 * 1024
+    end
+    transport.requests.first.query.should contain(ML::GGUF::Qwen35PromptCache.token_hash(tokens, token_count))
+    transport.requests[1].query.should contain(ML::GGUF::Qwen35PromptCache.token_hash(tokens, 3))
+    transport.requests[2].query.should contain(generation)
+    transport.requests[3].query.should contain(generation)
   end
 
   it "rejects a prefix-index row whose claimed token prefix does not match the request" do
