@@ -5,8 +5,9 @@ Document status: active design-sealed slice
 Current frontier: a default-off p7 transport/restore experiment for recurrent
 Qwen cache state plus a bounded ClickHouse HTTP storage/read client and an
 exact-full-prompt native-runtime route. A non-session cache hit may now restore
-directly into configured adaptive GPU KV owners; misses and session requests
-retain the ordinary Float32 owner.
+directly into configured adaptive GPU KV owners; misses retain the ordinary
+Float32 owner. Session requests also retain Float32 unless both an adaptive
+resident-KV map and the explicit `QWEN35_QBIT_ADAPTIVE_SESSION=1` gate are set.
 It may emit revision-0 ClickHouse Native blocks whose QBit column is already
 bit-transposed, validate an ordered multi-block Native response, decode logical
 records that cross response-block boundaries directly into prepared Metal state
@@ -16,8 +17,11 @@ measure one isolated temporary MergeTree, and construct a versioned admission
 envelope for the split recurrent-QBit/exact-KV state. The runtime route is
 strictly additive: it may read or write only when explicitly configured and it
 must preserve the existing local prompt-cache and ordinary-prefill behavior on
-every miss, rejection, cache transport failure, or rejected write. System and
-Metal failures abort instead of risking a second heavy attempt.
+ordinary misses, rejections, cache transport failures, or rejected writes. A
+caller-selected explicit checkpoint is rollback authority, so its rejection,
+admission failure, or transport failure aborts instead of silently selecting a
+different state. System and Metal failures also abort rather than risk a second
+heavy attempt.
 
 Active slice: widen the default-off runtime route from exact-full-prompt lookup
 to longest-token-prefix restore plus suffix replay. New writes may additionally
@@ -52,11 +56,13 @@ token is rejected explicitly because no causal multi-token chunk can represent
 it. Adaptive session anchors do not use the asynchronous Float32 snapshot
 writer; enabling both routes fails before inference.
 
-This is deliberately simpler than periodic anchor renewal. Exact deltas may
-grow to 4096 tokens but remain bounded to depth 8. Reaching the depth bound
-fails closed because rebuilding a compact root from already approximated
-recurrent state would compound error. A future renewal path must recompute from
-caller-authoritative transcript tokens before it can widen this boundary.
+This is deliberately simpler than periodic anchor renewal. The checkpoint
+schema admits at most 4096 cumulative exact-delta tokens and depth 8; each
+request is further limited by `max_seq`, root-prefix length, and its generation
+budget. Reaching either schema bound fails closed because rebuilding a compact
+root from already approximated recurrent state would compound error. A future
+renewal path must recompute from caller-authoritative transcript tokens before
+it can widen this boundary.
 
 The cache/replay promotion card for this slice is:
 
@@ -104,6 +110,40 @@ and unordered top-2 agreement was only `9/14` with maximum winning-logit delta
 `1.2506447`; the representation preserves this measured greedy trajectory and
 meaning but is not logit-lossless.
 
+Separate guarded 3072- and 4096-token stages then closed the same lifecycle
+with a 35% free-memory floor, a 24 GiB process-tree cap, and zero swaps. In the
+4096 stage the compact root contained 507 tokens. Seed, cold restore,
+continuation to a 3986-token prompt, and rollback all retained exact
+transcript/checkpoint boundaries, sole adaptive ownership, and zero failure
+counters. The store held one compact root and eleven immutable checkpoint
+rows, including two legal branches, with maximum depth eight and no replacement
+full anchor. Active ClickHouse parts used 51,698,587 compressed bytes
+(49.30 MiB) for KV, recurrent state, manifests, prefix index, and checkpoints.
+
+This wider stage is a compactness result, not an acceleration result. At the
+matched 3986-token boundary the adaptive continuation took 45,948.137 ms
+versus 31,130.034 ms for exact full prefill, or 47.6% longer in this sample.
+`/usr/bin/time -l` reported a 1,000,477,352-byte adaptive peak footprint versus
+6,778,360,824 bytes for the matched exact run, about 6.78x lower, but that
+counter does not fully attribute Metal, wired, and compressor memory on Apple
+unified memory. ClickHouse lookup was 157.848 ms and checkpoint write was
+7.623 ms; nearly all of the 44,992.266 ms restore interval was compact-root
+restore plus replay of the 3479-token suffix. The 64-token causal bound makes
+that suffix 55 replay calls. A previously observed non-finite K/V result at a
+96-token span prevents widening this bound by assumption.
+
+An aligned 3226-token in-memory representation probe separately preserved
+`Their sum is 95.`, EOS, top-1 `8/8`, ranked top-2 `11/14`, top-2 set overlap
+`11/14`, exact-top-1 coverage `7/7`, and output-row ECS mean/minimum `1.0/1.0`.
+Its raw live KV was 418,381,824 bytes versus 112,316,416 adaptive resident
+bytes, or `3.7250x` density for the qualified mixed map. This probe reconstructs
+the same adaptive representation from an exact artifact; it is compositional
+quality evidence, not a second direct ClickHouse session trace. Its
+418,382,876-byte (399.0 MiB) exact control artifact correctly failed the
+independent 128 MiB transport cap, while the current adaptive session path
+stores its root directly in compact form and passed the separate 4096 lifecycle
+above.
+
 Bounded context: local `.qkv` state artifacts and an explicitly configured
 ClickHouse HTTP endpoint. Background part merges are a separate storage context
 and never establish cache visibility or admission.
@@ -111,9 +151,10 @@ and never establish cache visibility or admission.
 ## Resident KV experimental slice
 
 This began as a separate default-off experiment. Its all-layer restore path now
-composes with the durable cache only for non-session native-runtime hits; the
-resident representation itself remains experimental. It admits uniform p4/p5
-payloads and a canonical adaptive payload
+composes with the durable cache for non-session native-runtime hits and for the
+separately gated adaptive-session route; the resident representation itself
+remains experimental. It admits uniform p4/p5 payloads and a canonical adaptive
+payload
 whose affine block is exactly one `(token, KV head)` vector. Its Metal attention
 decode consumes p4 bases plus optional p5/BF16/F32 sidecars directly without
 materializing an intermediate Float32 KV cache. The Qwen3.8 path can now replace
@@ -129,11 +170,12 @@ during prefill and direct synchronous decode.
 - The required falsifier is parity between fused Metal attention and the CPU
   reference over the *same decoded p4/p5 values*. A seeded plane-bit mutation
   must change the comparison result, proving that the parity check is live.
-- Automatic row/head/age tier selection, hot tails, state fork/copy, adaptive
-  snapshot/writeback, session checkpoint routing, speculative/asynchronous
-  decode, and non-GQA6 shapes are guard-only follow-ups. Memory-ratio
-  measurements from this experiment do not establish an eightfold production
-  context increase.
+- Automatic row/head/age tier selection, hot tails, state fork/copy, periodic
+  exact root renewal, speculative/asynchronous adaptive decode, and non-GQA6
+  shapes are guard-only follow-ups. Default-off adaptive snapshot/writeback and
+  synchronous session checkpoint routing are now admitted only through their
+  explicit runtime gates. Memory-ratio measurements from this experiment do
+  not establish an eightfold production context increase.
 
 Bounded synthetic evidence on Apple M2 Max (2026-08-23):
 
@@ -728,21 +770,32 @@ than relaxation of either gate.
   artifact retains the next-token validation; delta metadata does not invent a
   cached next token.
 - Session checkpoint chains are immutable and branchable. Delta depth is
-  bounded to eight and replay to 512 tokens; crossing either limit requires a
-  new full anchor. Session identities are stored only as SHA-256 hashes.
-- Restore always targets a fresh state. A miss, transport failure, admission
-  rejection, or validation/shape restore error discards that state before the
-  existing local cache or ordinary prefill route is attempted. A system or
-  Metal execution failure also releases the partial state, but propagates
-  instead of attempting another heavy allocation. A write-back failure is
-  observable in cache stats but must not fail or alter the generation already
-  in progress. Unexpected system failures still propagate.
+  bounded to eight, and the checkpoint schema admits at most 4096 cumulative
+  adaptive-session replay tokens. The runtime further limits replay by
+  `max_seq`, root-prefix length, and generation budget. Crossing either schema
+  limit currently fails closed. A future compact-root renewal must recompute
+  exact caller-authoritative transcript tokens rather than promote restored
+  approximate recurrent state. Session identities are stored only as SHA-256
+  hashes.
+- Restore always targets a fresh state. Without an explicit checkpoint, a miss,
+  transport failure, admission rejection, or validation/shape restore error
+  discards that state before the existing local cache or ordinary prefill route
+  is attempted. The same failure for an explicit checkpoint propagates so the
+  caller cannot silently leave its selected rollback state. A system or Metal
+  execution failure also releases the partial state, but propagates instead of
+  attempting another heavy allocation. A write-back failure is observable in
+  cache stats but must not fail or alter the generation already in progress.
+  Unexpected system failures still propagate.
 - With an explicit adaptive resident-KV environment map, a non-session Metal
   QBit hit may prepare sole adaptive owners, restore recurrent state and exact
   live KV into them, and continue through the synchronous prefill/decode wave.
   `adaptive_hits` reports only a successfully restored state that actually owns
   adaptive KV. A miss prepares the ordinary Float32 state so existing writeback
-  remains valid. Session requests always use the Float32 restore route.
+  remains valid. A session request uses adaptive owners only when the resident
+  map and `QWEN35_QBIT_ADAPTIVE_SESSION=1` are both explicit; otherwise it uses
+  the Float32 route. The adaptive session stores one immutable compact root and
+  exact cumulative token deltas, and aborts rather than falling back after a
+  Metal mutation begins.
 - A validation/shape rejection discards the candidate and may use the ordinary
   prefill fallback. Once adaptive restore enters a Metal decode/pack operation,
   any exception is promoted to a system restore failure: the candidate is
@@ -779,10 +832,12 @@ than relaxation of either gate.
 - No live Metal state, GGUF weights, tokenizer, or mutable transcript storage
   may be owned by the background writer. It receives only a bounded immutable
   host snapshot and copied checkpoint metadata.
-- An adaptive native-runtime hit is read-only with respect to durable state.
-  It does not snapshot or write back its extended prefix. Session checkpoints,
-  anchor renewal, state fork/copy, and tail clearing continue on the Float32
-  route until adaptive snapshots have their own admission certificate.
+- An adaptive non-session native-runtime hit is read-only with respect to
+  durable state and does not snapshot or write back its extended prefix. The
+  separately gated adaptive-session route may publish its certified initial
+  compact root and later exact token deltas. Periodic compact-root renewal and
+  state fork/copy remain rejected until they can preserve exact transcript
+  authority without promoting approximate recurrent state.
 - A pending checkpoint identity is not a process-crash recovery record. Until a
   successful explicit or automatic flush, termination may leave that identity
   unpublished and callers must not treat it as durable.
@@ -879,9 +934,11 @@ than relaxation of either gate.
   next tokens or validation hashes must map to the same lookup key. The manifest
   selected by that key must still fail if its certificate is malformed or its
   validation hash is not exactly the hash of `prompt_tokens + next_token`.
-- Injected ClickHouse miss, malformed admission, transport exception, and
-  validation/shape restore exception must all reach the matched
-  ordinary-prefill result without consuming the partially restored state. An
+- Without a caller-selected explicit checkpoint, injected ClickHouse miss,
+  malformed admission, transport exception, and validation/shape restore
+  exception must all reach the matched ordinary-prefill result without
+  consuming the partially restored state. The same failures against an
+  explicit checkpoint must abort rather than silently choose another state. An
   injected system/Metal restore exception must release the candidate and abort
   without retry. An injected write failure after prefill must preserve the
   generated token and increment only the write-failure counter.
@@ -898,9 +955,10 @@ than relaxation of either gate.
 - Explicit rollback must reject a checkpoint from another session and a
   checkpoint whose child token sequence is not a prefix of the supplied
   caller-authoritative transcript. Branches from one anchor remain distinct.
-- Delta depth and replay tokens are bounded. Crossing either bound writes a new
-  full anchor; failure to publish that anchor leaves the previous committed
-  checkpoints readable.
+- Delta depth and replay tokens are bounded. The current adaptive-session route
+  fails closed at either bound and leaves previous committed checkpoints
+  readable. Any future replacement root must be recomputed from exact
+  caller-authoritative transcript tokens before publication.
 - A captured exact-anchor rollback point must contain recurrent buffers only,
   with no second KV allocation. Unsupported weights or CPU-owned debug state
   must not enter the fast route, and early BPE divergence must select the full
@@ -945,9 +1003,12 @@ than relaxation of either gate.
 - Stop promotion if p7 cold-hit latency does not beat recurrent BF16 or is not
   competitive with recurrent INT8 after storage read, validation, upload,
   restore, and first continuation are recomputed together.
-- Stop delta promotion if total restore plus replay does not beat full prefill,
-  or if retained bytes per rollback boundary do not fall below full-snapshot
-  storage. Do not hide anchor cost or checkpoint-index bytes.
+- Stop promoting delta replay as a speedup if total restore plus replay does not
+  beat full prefill. A compactness-only route may remain experimental when its
+  quality, storage, memory-pressure, and rollback gates pass, but the measured
+  latency trade-off must stay explicit. Stop all delta promotion if retained
+  bytes per rollback boundary do not fall below full-snapshot storage. Do not
+  hide anchor cost or checkpoint-index bytes.
 
 ## Host resource safety
 
@@ -1556,8 +1617,9 @@ the canonical payload survives snapshot/restore byte-for-byte; together these
 are compositional evidence for the same resident representation and compute
 path, not a direct top-2 trace inside the cold NativeRuntime process.
 
-The implementation intentionally adds no new container, table, or checkpoint
-graph. Remaining guard-only surfaces are adaptive session checkpoints,
+The implementation intentionally added no new container, table, or checkpoint
+graph. At this 2026-08-24 stage, remaining guard-only surfaces were adaptive
+session checkpoints,
 longer-than-this-row save peak memory, asynchronous/speculative decoding, and
 production-default policy. The long ClickHouse probe also depends on sending
 large prefix SQL in the HTTP request body; URL query transport hits the server's
@@ -1678,8 +1740,8 @@ examples passed in resource-isolated processes with one optional model-backed
 pending. The legacy async-writer concurrency example remains incompatible with
 Crystal 1.21 when `Isolated#join` is called from a raw `Thread`
 (`Thread#scheduler nil`); it is outside this KV diff and was reproduced alone.
-Direct device streaming, buffered cold reads, adaptive session checkpoints,
-and production-default policy remain guard-only.
+At this stage, direct device streaming, buffered cold reads, adaptive session
+checkpoints, and production-default policy remained guard-only.
 
 ### File-backed adaptive cold-read gate (2026-08-25)
 
@@ -1720,8 +1782,9 @@ single buffered lookup at 95.606 ms is only a historical reference, not a
 matched latency comparison, so the read overhead is not yet promoted as a
 stable percentage.
 
-Direct network-to-device streaming, adaptive session checkpoints, response
-spool pooling, retries, and production-default policy remain separate slices.
+At this stage, direct network-to-device streaming, adaptive session
+checkpoints, response spool pooling, retries, and production-default policy
+remained separate slices.
 
 ### Matched adaptive cold-read sink A/B (2026-08-25)
 

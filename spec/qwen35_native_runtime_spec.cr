@@ -89,6 +89,9 @@ describe ML::GGUF::Qwen35NativeRuntime do
     NativeRuntime.adaptive_qbit_restore_enabled?("session-a", nil, nil, "p4", "0").should be_false
     NativeRuntime.adaptive_qbit_restore_enabled?("session-a", nil, nil, nil, "1").should be_false
     NativeRuntime.adaptive_qbit_restore_enabled?("session-a", nil, nil, "p4", "1").should be_true
+    expect_raises(ArgumentError, /require QWEN35_ADAPTIVE_RESIDENT_KV_MAP/) do
+      NativeRuntime.adaptive_qbit_restore_enabled?("session-a", "3", "p4", nil, "1")
+    end
   end
 
   it "admits an initial adaptive anchor only at an exact text and token prefix" do

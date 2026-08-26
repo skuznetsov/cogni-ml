@@ -329,7 +329,12 @@ module ML::GGUF
     ) : Bool
       adaptive_requested = !!(layer || tier || map)
       return false unless adaptive_requested
-      session_id.nil? || adaptive_session == "1"
+      return true if session_id.nil?
+      return false unless adaptive_session == "1"
+      if layer || tier
+        raise ArgumentError.new("adaptive QBit sessions require QWEN35_ADAPTIVE_RESIDENT_KV_MAP")
+      end
+      true
     end
 
     def self.adaptive_initial_anchor_prefix?(anchor_text : String,
