@@ -233,6 +233,7 @@ kernel void qwen35_qbit_adaptive_prefill_chunk_gqa6(
     constant uint& head_dim [[buffer(16)]],
     constant uint& heads_per_group [[buffer(17)]],
     constant float& scale [[buffer(18)]],
+    constant uint& source_token_offset [[buffer(19)]],
     uint3 group [[threadgroup_position_in_grid]],
     ushort lane [[thread_index_in_simdgroup]],
     ushort local_h [[simdgroup_index_in_threadgroup]],
@@ -252,7 +253,8 @@ kernel void qwen35_qbit_adaptive_prefill_chunk_gqa6(
     }
 
     const uint kv_dim = n_head_kv * head_dim;
-    const uint query_offset = (token * n_head + h) * head_dim;
+    const uint source_token = source_token_offset + token;
+    const uint query_offset = (source_token * n_head + h) * head_dim;
     const uint visible_len = packed_len + token + 1u;
     threadgroup float kv_tile[QQA_ADAPTIVE_GQA6_TILE * QQA_ADAPTIVE_HD];
     threadgroup float probabilities[QQA_ADAPTIVE_GQA6_HEADS][QQA_ADAPTIVE_SG];
@@ -279,7 +281,7 @@ kernel void qwen35_qbit_adaptive_prefill_chunk_gqa6(
                 kv_tile[index] = qqa_adaptive_value(
                     k_base, k_metadata, k_sidecar, row, d);
             } else {
-                const uint current_token = position - packed_len;
+                const uint current_token = source_token_offset + position - packed_len;
                 kv_tile[index] = current_k[current_token * kv_dim + kv_h * head_dim + d];
             }
         }
@@ -321,7 +323,7 @@ kernel void qwen35_qbit_adaptive_prefill_chunk_gqa6(
                 kv_tile[index] = qqa_adaptive_value(
                     v_base, v_metadata, v_sidecar, row, d);
             } else {
-                const uint current_token = position - packed_len;
+                const uint current_token = source_token_offset + position - packed_len;
                 kv_tile[index] = current_v[current_token * kv_dim + kv_h * head_dim + d];
             }
         }

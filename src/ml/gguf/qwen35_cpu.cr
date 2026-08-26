@@ -3340,6 +3340,8 @@ module ML::GGUF
       handoff_flip = false
       handoff_bytes = (n_tokens * hp.n_embd).to_i64 * sizeof(Float32)
       append_prefill_cmd = nil
+      prefill_boundary_profile = ENV["QWEN35_PREFILL_BOUNDARY_PROFILE"]? == "1"
+      append_prefill_started = nil.as(Time::Instant?)
       pending_adaptive_caches = [] of QwenQBitAdaptiveResidentKV::Cache
       checkpoint_resident_ok = !checkpoint_requested || ENV["QWEN35_PREFILL_CHECKPOINT_RESIDENT"]? == "1"
       resident_boundary_ok = false
@@ -3352,16 +3354,41 @@ module ML::GGUF
         if ENV["QWEN35_PREFILL_APPEND_CMD_OFF"]? != "1" &&
            resident_boundary_ok && Qwen35Metal.available?
           append_prefill_cmd = ML::Metal::CommandBuffer.new
+          append_prefill_started = Time.instant if prefill_boundary_profile
         end
         flush_prefill_cmd = -> {
           if cmd = append_prefill_cmd
             begin
+              finalize_started = prefill_boundary_profile ? Time.instant : nil
               pending_adaptive_caches.each do |cache|
                 QwenQBitAdaptiveResidentKV.finalize_pending_append(cmd, cache)
               end
+              finalize_finished = prefill_boundary_profile ? Time.instant : nil
               cmd.commit
+              commit_finished = prefill_boundary_profile ? Time.instant : nil
               cmd.wait
+              wait_finished = prefill_boundary_profile ? Time.instant : nil
               QwenQBitAdaptiveResidentKV.finish_pending_appends!(pending_adaptive_caches, cmd)
+              publish_finished = prefill_boundary_profile ? Time.instant : nil
+              if prefill_boundary_profile
+                finalize_started_value = finalize_started.not_nil!
+                finalize_finished_value = finalize_finished.not_nil!
+                commit_finished_value = commit_finished.not_nil!
+                wait_finished_value = wait_finished.not_nil!
+                publish_finished_value = publish_finished.not_nil!
+                encode_started = append_prefill_started || finalize_started_value
+                STDERR.puts(String.build do |io|
+                  io << "qwen35_prefill_boundary"
+                  io << " start_pos=" << start_pos
+                  io << " tokens=" << n_tokens
+                  io << " caches=" << pending_adaptive_caches.size
+                  io << " encode_ms=" << (finalize_started_value - encode_started).total_milliseconds.round(3)
+                  io << " finalize_ms=" << (finalize_finished_value - finalize_started_value).total_milliseconds.round(3)
+                  io << " commit_ms=" << (commit_finished_value - finalize_finished_value).total_milliseconds.round(3)
+                  io << " wait_ms=" << (wait_finished_value - commit_finished_value).total_milliseconds.round(3)
+                  io << " publish_ms=" << (publish_finished_value - wait_finished_value).total_milliseconds.round(3)
+                end)
+              end
             rescue ex
               if !cmd.committed? || cmd.completed?
                 pending_adaptive_caches.each do |cache|

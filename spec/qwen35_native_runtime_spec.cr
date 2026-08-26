@@ -122,17 +122,15 @@ describe ML::GGUF::Qwen35NativeRuntime do
     ).should be_false
   end
 
-  it "partitions adaptive session replay into a short leading chunk and bounded tails" do
+  it "keeps qualified adaptive session replay in one model-level span" do
     NativeRuntime.adaptive_session_replay_chunks(35).should eq([35_i32])
     NativeRuntime.adaptive_session_replay_chunks(64).should eq([64_i32])
-    NativeRuntime.adaptive_session_replay_chunks(65).should eq([32_i32, 33_i32])
-    NativeRuntime.adaptive_session_replay_chunks(96).should eq([32_i32, 64_i32])
-    NativeRuntime.adaptive_session_replay_chunks(1409).should eq(
-      [32_i32, 33_i32] + Array(Int32).new(21, 64_i32)
-    )
-    NativeRuntime.adaptive_session_replay_chunks(339).should eq(
-      [19_i32, 64_i32, 64_i32, 64_i32, 64_i32, 64_i32]
-    )
+    NativeRuntime.adaptive_session_replay_chunks(65).should eq([65_i32])
+    NativeRuntime.adaptive_session_replay_chunks(96).should eq([96_i32])
+    NativeRuntime.adaptive_session_replay_chunks(1409).should eq([1409_i32])
+    NativeRuntime.adaptive_session_replay_chunks(339).should eq([339_i32])
+    NativeRuntime.adaptive_session_replay_chunks(4096).should eq([4096_i32])
+    NativeRuntime.adaptive_session_replay_chunks(4097).should eq([2048_i32, 2049_i32])
     expect_raises(ML::GGUF::Qwen35QBitRuntimeCache::CheckpointRejected, /at least two tokens/) do
       NativeRuntime.adaptive_session_replay_chunks(1)
     end
@@ -143,9 +141,8 @@ describe ML::GGUF::Qwen35NativeRuntime do
       NativeRuntime.adaptive_session_replay_chunks(0)
     end
 
-    # Width 80 is diagnostic-only: the model-backed probe rejects it before
-    # adaptive resident-state publication, but deterministic partitioning keeps
-    # that falsifier exact.
+    # Custom model widths remain diagnostic-only; deterministic partitioning
+    # keeps legacy replay schedules reproducible.
     NativeRuntime.adaptive_session_replay_chunks(80, 80).should eq([80_i32])
     NativeRuntime.adaptive_session_replay_chunks(81, 80).should eq([40_i32, 41_i32])
     NativeRuntime.adaptive_session_replay_chunks(96, 80).should eq([16_i32, 80_i32])

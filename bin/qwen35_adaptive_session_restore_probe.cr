@@ -186,6 +186,7 @@ filler_repetitions = 48_i32
 suffix_filler_repetitions = 0_i32
 replay_chunk_tokens = ML::GGUF::Qwen35NativeRuntime::ADAPTIVE_SESSION_REPLAY_CHUNK_TOKENS
 n_gen = 48_i32
+attribute_replay = false
 clickhouse_endpoint = nil.as(String?)
 clickhouse_table_prefix = "qwen_adaptive_session_restore"
 
@@ -195,7 +196,8 @@ OptionParser.parse do |parser|
   parser.on("--resident-map MAP", "Resident adaptive tier map") { |value| resident_map = value }
   parser.on("--filler N", "Neutral anchor filler repetitions") { |value| filler_repetitions = value.to_i32 }
   parser.on("--suffix-filler N", "Neutral replay-suffix filler repetitions") { |value| suffix_filler_repetitions = value.to_i32 }
-  parser.on("--replay-chunk N", "Diagnostic replay chunk size: production 64 or rejected 80") { |value| replay_chunk_tokens = value.to_i32 }
+  parser.on("--replay-chunk N", "Model replay chunk size: legacy 64, diagnostic 80, or production 4096") { |value| replay_chunk_tokens = value.to_i32 }
+  parser.on("--attribute-replay", "Compare single-span and identically chunked exact replay") { attribute_replay = true }
   parser.on("--gen N", "Maximum response tokens") { |value| n_gen = value.to_i32 }
   parser.on("--clickhouse URL", "Persist and cold-read the admitted state through ClickHouse") { |value| clickhouse_endpoint = value }
   parser.on("--table-prefix NAME", "Isolated ClickHouse table prefix") { |value| clickhouse_table_prefix = value }
@@ -209,7 +211,7 @@ raise "model does not exist: #{model_path}" unless File.file?(model_path)
 raise "--resident-map cannot be empty" if resident_map.strip.empty?
 raise "--filler must be within 0..256" unless filler_repetitions.in?(0..256)
 raise "--suffix-filler must be within 0..256" unless suffix_filler_repetitions.in?(0..256)
-raise "--replay-chunk must be 64 or 80" unless replay_chunk_tokens.in?(64, 80)
+raise "--replay-chunk must be 64, 80, or 4096" unless replay_chunk_tokens.in?(64, 80, 4096)
 raise "--gen must be within 8..128" unless n_gen.in?(8..128)
 unless clickhouse_table_prefix.matches?(/\A[A-Za-z_][A-Za-z0-9_]*\z/)
   raise "--table-prefix is not a safe ClickHouse identifier"
@@ -278,6 +280,7 @@ exact_prefill_ms = 0.0_f64
 exact_replay_ms = 0.0_f64
 exact_decode_ms = 0.0_f64
 exact_ended = false
+exact_first = -1_i32
 exact_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: max_seq)
 begin
   with_session_adaptive_env(nil) do
@@ -289,14 +292,16 @@ begin
   exact_state.layers.each { |layer| layer.position = anchor_ids.size.to_i32 }
   snapshot = ML::GGUF::Qwen35StateSnapshot.capture(exact_state)
 
-  replay_started = Time.instant
-  exact_first, _exact_first_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(
-    weights,
-    suffix_ids,
-    anchor_ids.size.to_i32,
-    exact_state,
-  )
-  exact_replay_ms = (Time.instant - replay_started).total_milliseconds
+  with_session_adaptive_env(nil) do
+    replay_started = Time.instant
+    exact_first, _exact_first_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(
+      weights,
+      suffix_ids,
+      anchor_ids.size.to_i32,
+      exact_state,
+    )
+    exact_replay_ms = (Time.instant - replay_started).total_milliseconds
+  end
   decode_started = Time.instant
   token = exact_first
   pos = full_ids.size.to_i32
@@ -329,8 +334,39 @@ end
 raise "exact multi-turn response did not produce tokens" if exact_ids.empty?
 raise "exact multi-turn response did not produce top-2 steps" if exact_top2.empty?
 exact_text = tokenizer.decode(exact_ids)
-
 source_snapshot = snapshot.not_nil!
+
+# This optional control keeps model, anchor, suffix, chunk plan, and exact F32
+# ownership constant. Its delta from the single-span exact replay therefore
+# attributes chunk-shape plus command publication cost without perturbing the
+# production adaptive path with profiler-inserted synchronization points.
+exact_chunked_restore_ms = 0.0_f64
+exact_chunked_replay_ms = 0.0_f64
+exact_chunked_boundary_first = -1_i32
+if attribute_replay
+  with_session_adaptive_env(nil) do
+    restore_started = Time.instant
+    exact_chunked_state = ML::GGUF::Qwen35StateSnapshot.restore(source_snapshot, hp)
+    exact_chunked_restore_ms = (Time.instant - restore_started).total_milliseconds
+    begin
+      replay_started = Time.instant
+      exact_chunked_boundary_first, _exact_chunked_boundary_logit = prefill_session_suffix_top1(
+        weights,
+        suffix_ids,
+        anchor_ids.size.to_i32,
+        exact_chunked_state,
+        replay_chunks,
+      )
+      exact_chunked_replay_ms = (Time.instant - replay_started).total_milliseconds
+    ensure
+      release_session_state!(exact_chunked_state)
+    end
+  end
+  unless exact_chunked_boundary_first == exact_ids.first
+    raise "identically chunked exact replay changed the boundary top-1 token"
+  end
+end
+
 state_abi = ML::GGUF::QwenQBitCacheEnvelope.state_abi(hp, max_seq)
 model_id = ML::GGUF::Qwen35ProposalRoute.model_id(model_path)
 tokenizer_id = ML::GGUF::Qwen35ProposalRoute.tokenizer_id(model_id, tokenizer)
@@ -570,12 +606,15 @@ quality_pass = exact_ended && free_ended && exact_meaning && free_meaning &&
                ecs.mean >= 0.90
 cold_hit_to_first_token_ms = clickhouse_lookup_admit_ms + free_prepare_ms + free_restore_ms + free_replay_ms
 serialize_and_publish_ms = serialize_ms + clickhouse_save_ms
+exact_chunking_overhead_ms = attribute_replay ? exact_chunked_replay_ms - exact_replay_ms : 0.0_f64
+adaptive_route_overhead_ms = attribute_replay ? free_replay_ms - exact_chunked_replay_ms : 0.0_f64
 
 puts "qwen35_adaptive_session_restore_probe"
 puts "  model=#{model_path}"
 puts "  resident_map=#{resident_map.inspect} anchor_filler=#{filler_repetitions} suffix_filler=#{suffix_filler_repetitions} requested_gen=#{n_gen}"
 puts "  anchor_tokens=#{anchor_ids.size} suffix_tokens=#{suffix_ids.size} full_tokens=#{full_ids.size} max_seq=#{max_seq} replay_chunk_tokens=#{replay_chunk_tokens} replay_chunk_count=#{replay_chunks.size}"
 puts "  startup_ms=#{startup_ms.round(3)} exact_prefill_ms=#{exact_prefill_ms.round(3)} exact_replay_ms=#{exact_replay_ms.round(3)} exact_decode_ms=#{exact_decode_ms.round(3)}"
+puts "  attribution_enabled=#{attribute_replay} exact_chunked_restore_ms=#{exact_chunked_restore_ms.round(3)} exact_chunked_replay_ms=#{exact_chunked_replay_ms.round(3)} exact_chunking_overhead_ms=#{exact_chunking_overhead_ms.round(3)} adaptive_route_overhead_ms=#{adaptive_route_overhead_ms.round(3)}"
 puts "  serialize_ms=#{serialize_ms.round(3)} clickhouse_save_ms=#{clickhouse_save_ms.round(3)} serialize_and_publish_ms=#{serialize_and_publish_ms.round(3)} cold_native_bytes=#{native_bytes.size} cold_exact_kv_bytes=#{exact_artifact_bytes.size} cold_payload_bytes=#{cold_payload_bytes}"
 puts "  clickhouse_enabled=#{!clickhouse_endpoint.nil?} clickhouse_lookup_admit_ms=#{clickhouse_lookup_admit_ms.round(3)} free_prepare_ms=#{free_prepare_ms.round(3)} free_restore_ms=#{free_restore_ms.round(3)} free_replay_ms=#{free_replay_ms.round(3)} cold_hit_to_first_token_ms=#{cold_hit_to_first_token_ms.round(3)}"
 puts "  free_decode_ms=#{free_decode_ms.round(3)} forced_restore_ms=#{forced_restore_ms.round(3)} forced_replay_ms=#{forced_replay_ms.round(3)}"
@@ -620,6 +659,11 @@ json = JSON.build do |builder|
     builder.field "max_first_logit_delta", max_first_logit_delta
     builder.field "startup_ms", startup_ms
     builder.field "exact_prefill_ms", exact_prefill_ms
+    builder.field "replay_attribution_enabled", attribute_replay
+    builder.field "exact_chunked_restore_ms", exact_chunked_restore_ms
+    builder.field "exact_chunked_replay_ms", exact_chunked_replay_ms
+    builder.field "exact_chunking_overhead_ms", exact_chunking_overhead_ms
+    builder.field "adaptive_route_overhead_ms", adaptive_route_overhead_ms
     builder.field "serialize_ms", serialize_ms
     builder.field "clickhouse_save_ms", clickhouse_save_ms
     builder.field "serialize_and_publish_ms", serialize_and_publish_ms

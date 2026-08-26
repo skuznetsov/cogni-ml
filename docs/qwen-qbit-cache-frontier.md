@@ -142,14 +142,50 @@ cold-hit-to-first-token corridor took 40,197.678 ms. Corrected full-boundary
 accounting measured 425,066,496 raw KV bytes versus 112,908,288 resident bytes,
 or `3.7647x` density. The guarded run reported zero swaps.
 
-The same suffix partitions into 40 chunks at width 80, but its adaptive
-prefill/pack failed closed with device status 59 before adaptive resident-state
-publication and before producing a quality or latency result. The exact source
-artifact may already exist at that point. The aborted run also reported zero
-swaps. Therefore width 80 is rejected at the correctness gate, the production
-replay bound remains the constant 64 tokens, and no ClickHouse runtime A/B was
-run. A shorter call count is not a speed result when the candidate cannot
-publish a valid resident cache.
+The same suffix partitions into 40 model calls at width 80, but the original
+monolithic adaptive-attention dispatch failed closed with device status 59
+before adaptive resident-state publication and before producing a quality or
+latency result. The exact source artifact may already exist at that point. The
+aborted run also reported zero swaps. Width 80 therefore remains rejected as a
+hardware attention dispatch; a shorter call count is not a speed result when
+the candidate cannot publish a valid resident cache.
+
+A follow-up boundary profile kept the qualified width-64 route and added no
+commit, wait, or device synchronization. For the same 3173-token suffix, exact
+single-span replay took 24,943.127 ms, identically chunked exact replay took
+34,089.049 ms, and adaptive replay took 36,377.014 ms. Existing command waits
+accounted for virtually the whole per-call boundary: host encode was about
+5--9 ms, finalization/commit/publication stayed below 0.1 ms, and GPU wait grew
+from about 0.48 to 0.98 seconds per adaptive call. This attributes the dominant
+cost to repeating model work at the fixed-64 call shape, not to ClickHouse,
+cache publication, or host-side QBit packing.
+
+The admitted optimization separates the two widths. Model-level replay now
+uses one span up to the qualified 4096-token session boundary, while each full-
+attention layer internally encodes attention and K/V packing as ordered
+sub-dispatches of at most 64 tokens in the same command buffer. One reservation
+and one tail marker still publish the complete span atomically. A Metal spec
+falsified the old wide behavior at 65 tokens (cosine `0.9994193414` versus the
+32+33 packed reference), then passed after internal splitting with identical
+canonical K/V payloads and output cosine above `0.9999999`.
+
+The guarded Qwen3.8-27B candidate completed the 3173-token suffix in one model
+call. Against the profiled fixed-64 run, free replay fell from 36,377.014 to
+33,544.593 ms (7.8%), cold-hit-to-first-token from 36,436.992 to 33,607.913 ms
+(7.8%), and forced replay from 38,857.517 to 33,042.061 ms (15.0%). Peak RSS
+fell from 2,793,586,688 to 2,285,928,448 bytes and both runs reported zero
+swaps. Both emitted `Their sum is 95.` and EOS with top-1 `8/8`, ranked top-2
+`12/14`, top-2 set overlap `12/14`, exact-top-1 coverage `7/7`, output-row ECS
+mean/minimum `1.0/1.0`, and consistent sole resident ownership across all 16
+full-attention layers. These measurements qualify the split-width route only
+through the existing 4096-token session limit on M2 Max; they do not qualify a
+hardware attention dispatch wider than 64.
+
+A fresh build then repeated the guarded run without a replay-width override,
+confirming the production default selected one 3173-token model span. Free
+replay was 34,493.090 ms, cold-hit-to-first-token was 34,568.357 ms, forced
+replay was 34,056.372 ms, peak RSS was 1,977,303,040 bytes, and swaps remained
+zero. The same quality vector and all 16 resident-owner checks passed.
 
 An aligned 3226-token in-memory representation probe separately preserved
 `Their sum is 95.`, EOS, top-1 `8/8`, ranked top-2 `11/14`, top-2 set overlap

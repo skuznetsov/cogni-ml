@@ -16,8 +16,8 @@ module ML::GGUF
   # process-wide lock that also protects GGUF mmap registration and teardown.
   class Qwen35NativeRuntime < Qwen35Engine::Runtime
     NATIVE_PREWARM_SESSION_ID            = "qwen35-native-prewarm"
-    EXACT_ANCHOR_REPLAY_TAIL_TOKENS      =  8
-    ADAPTIVE_SESSION_REPLAY_CHUNK_TOKENS = 64
+    EXACT_ANCHOR_REPLAY_TAIL_TOKENS      =    8
+    ADAPTIVE_SESSION_REPLAY_CHUNK_TOKENS = 4096
 
     record ExactAnchorReplayPlan,
       prefix_len : Int32,
@@ -347,11 +347,11 @@ module ML::GGUF
       boundary_token_ids[0, anchor_token_ids.size] == anchor_token_ids
     end
 
-    # Keep the final chunk full-sized and put any remainder first. Split a
-    # one-token remainder across the first 65 tokens so adaptive replay never
-    # falls into the unsupported single-token decode route. This also avoids
-    # the Qwen3.8 recurrent-prefill shape that produced non-finite K/V for a
-    # single 96-token replay span on M2 Max.
+    # Bound model-level replay independently from adaptive attention. Resident
+    # QBit attention splits each model span into qualified 64-token dispatches
+    # inside the same command, so recurrent/model work is not repeated for
+    # every attention chunk. Keep the generic remainder rule for diagnostic
+    # chunk sizes and future spans above the qualified 4096-token boundary.
     def self.adaptive_session_replay_chunks(
       token_count : Int32,
       chunk_size : Int32 = ADAPTIVE_SESSION_REPLAY_CHUNK_TOKENS,

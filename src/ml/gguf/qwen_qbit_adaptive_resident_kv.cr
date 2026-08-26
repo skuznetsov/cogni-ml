@@ -36,7 +36,8 @@ module ML::GGUF
       alias ResidentCommandBuffer = ML::Metal::CommandBuffer
     {% end %}
 
-    DEVICE_SUCCESS = 0xa17ecafe_u32
+    DEVICE_SUCCESS                 = 0xa17ecafe_u32
+    PREFILL_ATTENTION_CHUNK_TOKENS =             64
 
     # Only the validated module factories can construct a resident cache. The
     # private admission type prevents callers from bypassing buffer/shape
@@ -591,20 +592,32 @@ module ML::GGUF
           start_token = cache.begin_pending_append!(token_count, expected_start_token, status, command)
           reserved = true
           cache.with_pending_buffers do |k_base, k_metadata, k_sidecar, v_base, v_metadata, v_sidecar|
-            destination_row_offset = checked_u32(start_token.to_i64 * cache.n_head_kv, "destination row offset")
-            row_count = checked_i32(token_count.to_i64 * cache.n_head_kv, "row count")
-            encode_prefill_chunk(
-              command, q_source, gate_source, k_source, v_source,
-              k_base, k_metadata, k_sidecar,
-              v_base, v_metadata, v_sidecar,
-              output, status, start_token, token_count,
-              n_head, cache.n_head_kv, cache.head_dim,
-              heads_per_group, scale,
-            )
-            encode_pack(command, k_source, k_base, k_metadata, k_sidecar, status,
-              0_u32, destination_row_offset, row_count)
-            encode_pack(command, v_source, v_base, v_metadata, v_sidecar, status,
-              0_u32, destination_row_offset, row_count)
+            source_token_offset = 0_i32
+            prefill_attention_chunks(token_count).each do |chunk_tokens|
+              packed_len = start_token + source_token_offset
+              source_row_offset = checked_u32(
+                source_token_offset.to_i64 * cache.n_head_kv,
+                "source row offset",
+              )
+              destination_row_offset = checked_u32(
+                packed_len.to_i64 * cache.n_head_kv,
+                "destination row offset",
+              )
+              row_count = checked_i32(chunk_tokens.to_i64 * cache.n_head_kv, "row count")
+              encode_prefill_chunk(
+                command, q_source, gate_source, k_source, v_source,
+                k_base, k_metadata, k_sidecar,
+                v_base, v_metadata, v_sidecar,
+                output, status, packed_len, chunk_tokens, source_token_offset,
+                n_head, cache.n_head_kv, cache.head_dim,
+                heads_per_group, scale,
+              )
+              encode_pack(command, k_source, k_base, k_metadata, k_sidecar, status,
+                source_row_offset, destination_row_offset, row_count)
+              encode_pack(command, v_source, v_base, v_metadata, v_sidecar, status,
+                source_row_offset, destination_row_offset, row_count)
+              source_token_offset += chunk_tokens
+            end
           end
         rescue ex
           if reserved
@@ -857,6 +870,28 @@ module ML::GGUF
       end
     end
 
+    # Keep adaptive attention dispatches inside the qualified 64-token width
+    # while the surrounding model prefill remains a single command. A
+    # one-token remainder is split across the first 65 tokens so no dispatch
+    # falls onto a one-token shape.
+    private def prefill_attention_chunks(token_count : Int32) : Array(Int32)
+      first = token_count % PREFILL_ATTENTION_CHUNK_TOKENS
+      first = PREFILL_ATTENTION_CHUNK_TOKENS if first == 0
+      chunks = if first == 1 && token_count > PREFILL_ATTENTION_CHUNK_TOKENS
+                 left = (PREFILL_ATTENTION_CHUNK_TOKENS + 1) // 2
+                 [left.to_i32, (PREFILL_ATTENTION_CHUNK_TOKENS + 1 - left).to_i32]
+               else
+                 [first.to_i32]
+               end
+      remaining = token_count - first
+      remaining -= PREFILL_ATTENTION_CHUNK_TOKENS if chunks.size == 2
+      while remaining > 0
+        chunks << Math.min(remaining, PREFILL_ATTENTION_CHUNK_TOKENS).to_i32
+        remaining -= PREFILL_ATTENTION_CHUNK_TOKENS
+      end
+      chunks
+    end
+
     {% unless flag?(:cpu_only) %}
       private def upload(payload : Bytes) : ML::MetalBuffer
         # Metal rejects zero-byte allocations. A one-byte sentinel is bound for
@@ -913,6 +948,7 @@ module ML::GGUF
                                        status : ML::MetalBuffer,
                                        packed_len : Int32,
                                        token_count : Int32,
+                                       source_token_offset : Int32,
                                        n_head : Int32,
                                        n_head_kv : Int32,
                                        head_dim : Int32,
@@ -939,6 +975,7 @@ module ML::GGUF
         encoder.set_value(head_dim.to_u32, 16)
         encoder.set_value(heads_per_group.to_u32, 17)
         encoder.set_value(scale, 18)
+        encoder.set_value(source_token_offset.to_u32, 19)
         encoder.dispatch_threadgroups({n_head_kv, token_count, 1}, {192, 1, 1})
         encoder.end_encoding
       end
