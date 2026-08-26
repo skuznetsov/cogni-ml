@@ -475,21 +475,20 @@ begin
       checkpoint_ids << observation.checkpoint_id.not_nil!
       action_token_ids << observation.token_ids
       messages << QwenSessionEngine::Message.new("assistant", observation.text)
+      qbit_session_write(
+        transcript_path,
+        QBitSessionTranscript.new(
+          session_id,
+          qbit_session_serialized(messages),
+          action,
+          checkpoint_ids,
+          action_token_ids,
+          observation.token_ids,
+          max_seq,
+          max_tokens,
+        ),
+      )
     end
-    last = observations.last
-    qbit_session_write(
-      transcript_path,
-      QBitSessionTranscript.new(
-        session_id,
-        qbit_session_serialized(messages),
-        actions,
-        checkpoint_ids,
-        action_token_ids,
-        last.token_ids,
-        max_seq,
-        max_tokens,
-      ),
-    )
   when "baseline"
     transcript = qbit_session_read(transcript_path)
     qbit_session_validate_transcript!(transcript, max_seq, max_tokens)
