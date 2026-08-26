@@ -24563,3 +24563,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** This is ordinary cache transport optimization, not an LTP/WBA promotion. It changes response backing storage while preserving the same manifest, envelope, identity, strict validation, and adaptive restore boundary; no speculative local move or recomputed global-descent claim is introduced.
 
 **decision:** Admit the file-backed cold-read route only for the existing default-off adaptive non-session codec. Keep raw/session reads and device-direct transfer in their current frames; measure matched read latency and total unified-memory pressure before considering broader routing.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-COLD-READ-AB-932] File-backed cold reads remove the full heap artifact in a matched sink-only probe
+**context:** ml / Qwen3.8 / adaptive QBit / ClickHouse / read-side process peak
+**state:** matched process-memory evidence verified; total unified memory, physical cold disk, and large-query transport commit remain open
+
+- claim: "The mmap sink lowers whole-process peak memory for the measured 2,172-token adaptive cold hit."
+  source: two release binaries from `b635b72f` used identical query-in-body framing, `post_into`, caps, ClickHouse generation, parsing, admission, restore, and decode; only the response sink differed between managed `IO::Memory` and the committed unlinked tempfile plus read-only mmap. After one warm-up, ABBA mean maximum RSS was `771,555,328 -> 607,870,976` bytes (`-156.1 MiB`, `-21.2%`) with non-overlapping ranges `756,056,064..787,054,592` and `607,633,408..608,108,544`. Mean macOS peak footprint was `814,731,680 -> 535,040,248` bytes (`-34.3%`) over 115,879,032 logical response bytes.
+  verified_at: 2026-08-25
+  decay_trigger: response sink, HTTP framing, artifact sizes, allocator/GC, macOS accounting, model/tier map, ClickHouse version, or runtime lifecycle change
+  trust: {F:0.96,G:0.17,R:0.91}
+
+- claim: "The matched mmap hits preserved the long-prefix response and showed no observed restore penalty."
+  source: all four ABBA processes reported `hits=1`, `adaptive_hits=1`, no failures, 2,172 reused tokens, no suffix replay, ids `[33645,2542,369,220,24,20,13]`, and `Their sum is 95.` Mean lookup was `333.994 -> 311.965 ms`, mean restore `96.691 -> 96.144 ms`, and mean wall `5.015 -> 4.650 s`. Exact tokens imply positionwise ECS mean/minimum `1.0/1.0`; fresh top-2 was not captured.
+  verified_at: 2026-08-25
+  decay_trigger: model, prompt, tokenizer/template, tier map, transport, cache data, Metal restore, host load, or quality probe boundary change
+  trust: {F:0.96,G:0.16,R:0.86}
+
+**Adversary:** This is process-cold but ClickHouse/page/Metal-cache-warm: every measured process reported zero block I/O. Two samples per arm and desktop background load do not promote the observed `6.6%` lookup or `7.3%` wall reduction into a throughput claim. Process RSS and macOS peak footprint omit system-wide file-cache ownership, so the result does not prove a `156.1 MiB` total unified-memory saving. The heap control transiently owns an `IO::Memory` buffer plus its retained safe copy, matching the previous managed response behavior but explaining why peak footprint can fall by more than the logical artifact size. The first clean-commit seed reproduced `HTTP 500: Field value too long`; both matched binaries used the same working-tree query-in-body fix, which remains uncommitted and requires a separate regression gate.
+
+**Value proxy:** Strict admission and exact restored generation are the capability gate. Maximum process RSS, peak footprint, lookup latency, logical spool throughput, physical block I/O, temporary disk bytes, total unified memory, top-2, and ECS are separate coordinates; none substitutes for the others.
+
+**LTP/WBA:** This is an ordinary response-backing optimization and matched falsifier, not an LTP/WBA promotion. No speculative move or recomputed global-descent certificate is claimed.
+
+**decision:** Keep the committed file-backed adaptive cold-read route. Promote only the measured process-peak reduction and exact response; retain total unified memory, physical cold-disk throughput, and stable latency as open measurements. Land the independent large-prefix query-in-body fix before treating the 2,172-token corridor as committed-head clean.

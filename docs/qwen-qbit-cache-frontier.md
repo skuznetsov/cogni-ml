@@ -1659,6 +1659,51 @@ stable percentage.
 Direct network-to-device streaming, adaptive session checkpoints, response
 spool pooling, retries, and production-default policy remain separate slices.
 
+### Matched adaptive cold-read sink A/B (2026-08-25)
+
+A sink-only ABBA probe compared two release binaries built from `b635b72f`.
+Both used the same model, 2,172-token prompt, adaptive tier map, ClickHouse
+generation, large-query POST framing, `HTTPTransport#post_into`, response byte
+caps, parsing, admission, restore, and eight-token decode. The temporary control
+changed only `MappedResponse.fetch`: one binary retained the two responses in
+managed `IO::Memory` storage, while the other used the committed immediately
+unlinked tempfile plus read-only mmap route. A separate mmap hit warmed the
+host caches before the measured `buffered, mmap, mmap, buffered` order.
+
+The logical response body was 115,879,032 bytes: 40,257,628 Native recurrent
+bytes plus 75,621,404 compact KV bytes. Mean maximum process RSS was
+771,555,328 bytes for the buffered control and 607,870,976 bytes for mmap, a
+163,684,352-byte or 156.1 MiB reduction (`-21.2%`). The two ranges did not
+overlap: buffered measured 756,056,064 and 787,054,592 bytes; mmap measured
+607,633,408 and 608,108,544 bytes. Mean macOS peak memory footprint was
+814,731,680 versus 535,040,248 bytes (`-34.3%`). The larger footprint delta is
+consistent with the buffered control's transient `IO::Memory` plus retained
+byte copy; it is not an additional artifact-size claim.
+
+Mean lookup was 333.994 ms buffered and 311.965 ms mmap, corresponding to about
+330.9 and 354.2 MiB/s over the logical response bytes. Mean restore was 96.691
+and 96.144 ms. Mean generation was 4,623.154 and 4,360.316 ms, and mean wall
+time was 5.015 and 4.650 seconds. Both mmap observations were faster, but two
+samples per arm under normal desktop background load are insufficient for a
+stable latency or throughput percentage. All four hits reused 2,172 tokens,
+replayed no suffix, reported `hits=1`, `adaptive_hits=1`, and zero failures,
+and emitted ids `[33645,2542,369,220,24,20,13]` and `Their sum is 95.` Exact
+token identity gives positionwise ECS mean/minimum `1.0/1.0`; fresh top-2
+logits were not captured.
+
+This is a process-cold but host-cache-warm measurement. `/usr/bin/time -l`
+reported zero block input and output operations in every measured process, so
+it does not measure physical cold-disk throughput. Mapped pages still consume
+OS file-cache/unified-memory capacity and require temporary disk space; process
+RSS and peak footprint therefore do not prove the same reduction in total
+system unified memory. The seed wrote one complete generation in 2,811.152 ms,
+and ClickHouse held 107,809,078 compressed bytes, but its initial clean-commit
+prefix lookup exposed the known large-query URL limit with `HTTP 500: Field
+value too long`. The matched binaries both included the same working-tree
+query-in-body fix. That transport fix remains a separate uncommitted production
+gate and must land with its own regression evidence before the long-prefix
+corridor is considered clean from committed HEAD alone.
+
 ### Cache-engine contract
 
 - The internal envelope makes cache keys content-addressed over model,
