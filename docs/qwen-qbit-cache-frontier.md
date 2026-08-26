@@ -132,6 +132,25 @@ restore plus replay of the 3479-token suffix. The 64-token causal bound makes
 that suffix 55 replay calls. A previously observed non-finite K/V result at a
 96-token span prevents widening this bound by assumption.
 
+A guarded replay-width falsifier on 2026-08-26 tested an 80-token diagnostic
+candidate before exposing any production runtime switch. The matched control
+used a 3173-token suffix at a 3243-token full boundary: 64-token replay produced 50
+chunks, preserved `Their sum is 95.` and EOS, scored top-1 `8/8`, ranked top-2
+`12/14`, top-2 set overlap `12/14`, exact-top-1 coverage `7/7`, and output-row
+ECS mean/minimum `1.0/1.0`. Free replay took 39,452.520 ms and the complete
+cold-hit-to-first-token corridor took 40,197.678 ms. Corrected full-boundary
+accounting measured 425,066,496 raw KV bytes versus 112,908,288 resident bytes,
+or `3.7647x` density. The guarded run reported zero swaps.
+
+The same suffix partitions into 40 chunks at width 80, but its adaptive
+prefill/pack failed closed with device status 59 before adaptive resident-state
+publication and before producing a quality or latency result. The exact source
+artifact may already exist at that point. The aborted run also reported zero
+swaps. Therefore width 80 is rejected at the correctness gate, the production
+replay bound remains the constant 64 tokens, and no ClickHouse runtime A/B was
+run. A shorter call count is not a speed result when the candidate cannot
+publish a valid resident cache.
+
 An aligned 3226-token in-memory representation probe separately preserved
 `Their sum is 95.`, EOS, top-1 `8/8`, ranked top-2 `11/14`, top-2 set overlap
 `11/14`, exact-top-1 coverage `7/7`, and output-row ECS mean/minimum `1.0/1.0`.

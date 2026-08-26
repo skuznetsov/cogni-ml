@@ -142,6 +142,21 @@ describe ML::GGUF::Qwen35NativeRuntime do
     expect_raises(ArgumentError, /token count/) do
       NativeRuntime.adaptive_session_replay_chunks(0)
     end
+
+    # Width 80 is diagnostic-only: the model-backed probe rejects it before
+    # adaptive resident-state publication, but deterministic partitioning keeps
+    # that falsifier exact.
+    NativeRuntime.adaptive_session_replay_chunks(80, 80).should eq([80_i32])
+    NativeRuntime.adaptive_session_replay_chunks(81, 80).should eq([40_i32, 41_i32])
+    NativeRuntime.adaptive_session_replay_chunks(96, 80).should eq([16_i32, 80_i32])
+    NativeRuntime.adaptive_session_replay_chunks(161, 80).should eq([40_i32, 41_i32, 80_i32])
+    NativeRuntime.adaptive_session_replay_chunks(339, 80).should eq(
+      [19_i32, 80_i32, 80_i32, 80_i32, 80_i32]
+    )
+    chunks_1409 = NativeRuntime.adaptive_session_replay_chunks(1409, 80)
+    chunks_1409.should eq([49_i32] + Array(Int32).new(17, 80_i32))
+    chunks_1409.sum.should eq(1409)
+    chunks_1409.should_not contain(1)
   end
 
   it "keeps an explicit rollback switch for exact-anchor replay" do

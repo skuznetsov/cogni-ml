@@ -6,6 +6,7 @@ require "option_parser"
 
 require "../src/ml/gguf/qwen35_chat"
 require "../src/ml/gguf/qwen35_cpu"
+require "../src/ml/gguf/qwen35_native_runtime"
 require "../src/ml/gguf/qwen35_state_snapshot"
 require "../src/ml/gguf/qwen35_tokenizer"
 require "../src/ml/gguf/qwen35_weights"
@@ -57,6 +58,9 @@ private def with_session_adaptive_env(map : String?, &)
     "QWEN35_FULL_PREFILL_CHUNK_OFF",
     "QWEN35_PREFILL_REC_RUN_OFF",
     "QWEN35_PREFILL_CHUNK_OFF",
+    "QWEN35_PREFILL_CHUNK_SIZE",
+    "QWEN35_PREFILL_FINAL_CHUNK_OFF",
+    "QWEN35_PREFILL_LONG_SUFFIX_OFF",
   ]
   old = keys.to_h { |key| {key, ENV[key]?} }
   keys.each { |key| ENV.delete(key) }
@@ -150,9 +154,37 @@ private def session_filler(repetitions : Int32) : String
   end
 end
 
+private def prefill_session_suffix_top1(
+  weights : ML::GGUF::Qwen35Weights,
+  token_ids : Array(Int32),
+  start_pos : Int32,
+  state : ML::GGUF::Qwen35CPU::State,
+  chunks : Array(Int32),
+) : {Int32, Float32}
+  offset = 0
+  chunks[0...-1].each do |chunk_size|
+    ML::GGUF::Qwen35CPU.prefill_tokens(
+      weights,
+      token_ids[offset, chunk_size],
+      start_pos + offset,
+      state,
+    )
+    offset += chunk_size
+  end
+  final_chunk = chunks[-1]
+  ML::GGUF::Qwen35CPU.prefill_tokens_top1(
+    weights,
+    token_ids[offset, final_chunk],
+    start_pos + offset,
+    state,
+  )
+end
+
 model_path = ENV["QWEN35_MODEL"]? || DEFAULT_QWEN38_SESSION_MODEL
 resident_map = DEFAULT_SESSION_RESIDENT_MAP
 filler_repetitions = 48_i32
+suffix_filler_repetitions = 0_i32
+replay_chunk_tokens = ML::GGUF::Qwen35NativeRuntime::ADAPTIVE_SESSION_REPLAY_CHUNK_TOKENS
 n_gen = 48_i32
 clickhouse_endpoint = nil.as(String?)
 clickhouse_table_prefix = "qwen_adaptive_session_restore"
@@ -162,6 +194,8 @@ OptionParser.parse do |parser|
   parser.on("--model PATH", "Qwen GGUF path") { |value| model_path = value }
   parser.on("--resident-map MAP", "Resident adaptive tier map") { |value| resident_map = value }
   parser.on("--filler N", "Neutral anchor filler repetitions") { |value| filler_repetitions = value.to_i32 }
+  parser.on("--suffix-filler N", "Neutral replay-suffix filler repetitions") { |value| suffix_filler_repetitions = value.to_i32 }
+  parser.on("--replay-chunk N", "Diagnostic replay chunk size: production 64 or rejected 80") { |value| replay_chunk_tokens = value.to_i32 }
   parser.on("--gen N", "Maximum response tokens") { |value| n_gen = value.to_i32 }
   parser.on("--clickhouse URL", "Persist and cold-read the admitted state through ClickHouse") { |value| clickhouse_endpoint = value }
   parser.on("--table-prefix NAME", "Isolated ClickHouse table prefix") { |value| clickhouse_table_prefix = value }
@@ -174,6 +208,8 @@ end
 raise "model does not exist: #{model_path}" unless File.file?(model_path)
 raise "--resident-map cannot be empty" if resident_map.strip.empty?
 raise "--filler must be within 0..256" unless filler_repetitions.in?(0..256)
+raise "--suffix-filler must be within 0..256" unless suffix_filler_repetitions.in?(0..256)
+raise "--replay-chunk must be 64 or 80" unless replay_chunk_tokens.in?(64, 80)
 raise "--gen must be within 8..128" unless n_gen.in?(8..128)
 unless clickhouse_table_prefix.matches?(/\A[A-Za-z_][A-Za-z0-9_]*\z/)
   raise "--table-prefix is not a safe ClickHouse identifier"
@@ -201,7 +237,12 @@ anchor_messages = [
 full_messages = anchor_messages + [
   ML::GGUF::Qwen35Chat::Message.new(
     "user",
-    "Reply with one short sentence containing the integer result and the words 'their sum'. What is alpha + beta?",
+    String.build do |io|
+      if suffix_filler_repetitions > 0
+        io << session_filler(suffix_filler_repetitions) << '\n'
+      end
+      io << "Reply with one short sentence containing the integer result and the words 'their sum'. What is alpha + beta?"
+    end,
   ),
 ]
 anchor_text = ML::GGUF::Qwen35Chat.render(
@@ -221,7 +262,14 @@ unless full_ids.size > anchor_ids.size && full_ids[0, anchor_ids.size] == anchor
   raise "rendered multi-turn anchor is not an exact token prefix"
 end
 suffix_ids = full_ids[anchor_ids.size, full_ids.size - anchor_ids.size]
+replay_chunks = ML::GGUF::Qwen35NativeRuntime.adaptive_session_replay_chunks(
+  suffix_ids.size.to_i32,
+  replay_chunk_tokens,
+)
 max_seq = full_ids.size + n_gen + 1
+if max_seq > ML::GGUF::QwenQBitSessionCheckpoint::MAX_REPLAY_TOKENS
+  raise "probe max_seq exceeds the qualified 4096-token adaptive-session boundary"
+end
 
 snapshot = nil.as(ML::GGUF::Qwen35StateSnapshot::Snapshot?)
 exact_ids = [] of Int32
@@ -413,11 +461,12 @@ with_session_adaptive_env(resident_map) do
     free_restore_ms = (Time.instant - restore_started).total_milliseconds
     verify_session_resident!(free_state, hp, anchor_ids.size.to_i32)
     replay_started = Time.instant
-    free_first, _free_first_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(
+    free_first, _free_first_logit = prefill_session_suffix_top1(
       weights,
       suffix_ids,
       anchor_ids.size.to_i32,
       free_state,
+      replay_chunks,
     )
     free_replay_ms = (Time.instant - replay_started).total_milliseconds
     verify_session_resident!(free_state, hp, full_ids.size.to_i32)
@@ -456,11 +505,12 @@ with_session_adaptive_env(resident_map) do
     )
     forced_restore_ms = (Time.instant - restore_started).total_milliseconds
     replay_started = Time.instant
-    forced_boundary_first, _forced_boundary_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(
+    forced_boundary_first, _forced_boundary_logit = prefill_session_suffix_top1(
       weights,
       suffix_ids,
       anchor_ids.size.to_i32,
       forced_state,
+      replay_chunks,
     )
     forced_replay_ms = (Time.instant - replay_started).total_milliseconds
     verify_session_resident!(forced_state, hp, full_ids.size.to_i32)
@@ -502,7 +552,7 @@ end
 top1_count = exact_top2.size + 1
 ranked_top2_count = exact_top2.size * 2
 raw_live_kv_bytes = hp.full_attention_layers.size.to_i64 * 2_i64 *
-                    anchor_ids.size.to_i64 * hp.n_head_kv.to_i64 *
+                    full_ids.size.to_i64 * hp.n_head_kv.to_i64 *
                     hp.head_dim.to_i64 * sizeof(Float32)
 cold_payload_bytes = native_bytes.size.to_i64 + exact_artifact_bytes.size.to_i64
 exact_meaning = session_meaning_preserved?(exact_text)
@@ -523,8 +573,8 @@ serialize_and_publish_ms = serialize_ms + clickhouse_save_ms
 
 puts "qwen35_adaptive_session_restore_probe"
 puts "  model=#{model_path}"
-puts "  resident_map=#{resident_map.inspect} filler=#{filler_repetitions} requested_gen=#{n_gen}"
-puts "  anchor_tokens=#{anchor_ids.size} suffix_tokens=#{suffix_ids.size} full_tokens=#{full_ids.size} max_seq=#{max_seq}"
+puts "  resident_map=#{resident_map.inspect} anchor_filler=#{filler_repetitions} suffix_filler=#{suffix_filler_repetitions} requested_gen=#{n_gen}"
+puts "  anchor_tokens=#{anchor_ids.size} suffix_tokens=#{suffix_ids.size} full_tokens=#{full_ids.size} max_seq=#{max_seq} replay_chunk_tokens=#{replay_chunk_tokens} replay_chunk_count=#{replay_chunks.size}"
 puts "  startup_ms=#{startup_ms.round(3)} exact_prefill_ms=#{exact_prefill_ms.round(3)} exact_replay_ms=#{exact_replay_ms.round(3)} exact_decode_ms=#{exact_decode_ms.round(3)}"
 puts "  serialize_ms=#{serialize_ms.round(3)} clickhouse_save_ms=#{clickhouse_save_ms.round(3)} serialize_and_publish_ms=#{serialize_and_publish_ms.round(3)} cold_native_bytes=#{native_bytes.size} cold_exact_kv_bytes=#{exact_artifact_bytes.size} cold_payload_bytes=#{cold_payload_bytes}"
 puts "  clickhouse_enabled=#{!clickhouse_endpoint.nil?} clickhouse_lookup_admit_ms=#{clickhouse_lookup_admit_ms.round(3)} free_prepare_ms=#{free_prepare_ms.round(3)} free_restore_ms=#{free_restore_ms.round(3)} free_replay_ms=#{free_replay_ms.round(3)} cold_hit_to_first_token_ms=#{cold_hit_to_first_token_ms.round(3)}"
@@ -539,9 +589,13 @@ json = JSON.build do |builder|
   builder.object do
     builder.field "schema", "qwen-adaptive-session-restore-v1"
     builder.field "resident_map", resident_map
+    builder.field "anchor_filler_repetitions", filler_repetitions
+    builder.field "suffix_filler_repetitions", suffix_filler_repetitions
     builder.field "anchor_tokens", anchor_ids.size
     builder.field "suffix_tokens", suffix_ids.size
     builder.field "full_tokens", full_ids.size
+    builder.field "replay_chunk_tokens", replay_chunk_tokens
+    builder.field "replay_chunk_sizes", replay_chunks
     builder.field "requested_gen", n_gen
     builder.field "exact_text", exact_text
     builder.field "candidate_text", free_text
