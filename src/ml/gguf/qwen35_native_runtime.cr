@@ -15,8 +15,9 @@ module ML::GGUF
   # crosses the engine boundary; every request receives a fresh State under the
   # process-wide lock that also protects GGUF mmap registration and teardown.
   class Qwen35NativeRuntime < Qwen35Engine::Runtime
-    NATIVE_PREWARM_SESSION_ID       = "qwen35-native-prewarm"
-    EXACT_ANCHOR_REPLAY_TAIL_TOKENS = 8
+    NATIVE_PREWARM_SESSION_ID            = "qwen35-native-prewarm"
+    EXACT_ANCHOR_REPLAY_TAIL_TOKENS      =  8
+    ADAPTIVE_SESSION_REPLAY_CHUNK_TOKENS = 64
 
     record ExactAnchorReplayPlan,
       prefix_len : Int32,
@@ -324,8 +325,57 @@ module ML::GGUF
       layer : String? = ENV["QWEN35_ADAPTIVE_RESIDENT_KV_LAYER"]?,
       tier : String? = ENV["QWEN35_ADAPTIVE_RESIDENT_KV_TIER"]?,
       map : String? = ENV["QWEN35_ADAPTIVE_RESIDENT_KV_MAP"]?,
+      adaptive_session : String? = ENV["QWEN35_QBIT_ADAPTIVE_SESSION"]?,
     ) : Bool
-      session_id.nil? && !!(layer || tier || map)
+      adaptive_requested = !!(layer || tier || map)
+      return false unless adaptive_requested
+      session_id.nil? || adaptive_session == "1"
+    end
+
+    def self.adaptive_initial_anchor_prefix?(anchor_text : String,
+                                             anchor_token_ids : Array(Int32),
+                                             boundary_text : String,
+                                             boundary_token_ids : Array(Int32)) : Bool
+      return false if anchor_text.empty? || anchor_token_ids.empty?
+      return false unless boundary_text.starts_with?(anchor_text)
+      return false unless anchor_token_ids.size < boundary_token_ids.size
+      boundary_token_ids[0, anchor_token_ids.size] == anchor_token_ids
+    end
+
+    # Keep the final chunk full-sized and put any remainder first. Split a
+    # one-token remainder across the first 65 tokens so adaptive replay never
+    # falls into the unsupported single-token decode route. This also avoids
+    # the Qwen3.8 recurrent-prefill shape that produced non-finite K/V for a
+    # single 96-token replay span on M2 Max.
+    def self.adaptive_session_replay_chunks(
+      token_count : Int32,
+      chunk_size : Int32 = ADAPTIVE_SESSION_REPLAY_CHUNK_TOKENS,
+    ) : Array(Int32)
+      raise ArgumentError.new("adaptive session replay token count must be positive") unless token_count > 0
+      if token_count == 1
+        raise Qwen35QBitRuntimeCache::CheckpointRejected.new(
+          "adaptive session replay requires at least two tokens"
+        )
+      end
+      if chunk_size < 2
+        raise ArgumentError.new("adaptive session replay chunk size must be at least two")
+      end
+
+      first = token_count % chunk_size
+      first = chunk_size if first == 0
+      chunks = if first == 1 && token_count > chunk_size
+                 left = (chunk_size + 1) // 2
+                 [left.to_i32, (chunk_size + 1 - left).to_i32]
+               else
+                 [first.to_i32]
+               end
+      remaining = token_count - first
+      remaining -= chunk_size if chunks.size == 2
+      while remaining > 0
+        chunks << Math.min(remaining, chunk_size).to_i32
+        remaining -= chunk_size
+      end
+      chunks
     end
 
     # Durable QBit state is currently captured from Metal buffers. Debug modes
@@ -519,8 +569,33 @@ module ML::GGUF
         raise ArgumentError.new("Qwen35NativeRuntime generated prompt is empty") if prompt_ids.empty?
         adaptive_qbit_requested = self.class.adaptive_qbit_restore_enabled?(request.session_id)
         kv_artifact_codec = QwenQBitCacheEnvelope::EXACT_ARTIFACT_CODEC
+        adaptive_initial_anchor_text = nil.as(String?)
+        adaptive_initial_anchor_ids = nil.as(Array(Int32)?)
         if adaptive_qbit_requested
           kv_artifact_codec = Qwen35CPU.adaptive_resident_kv_layout_id(weights.hparams, limit).not_nil!
+          if request.session_id && @qbit_cache.not_nil!.async_checkpoint_writes?
+            raise ArgumentError.new("adaptive QBit sessions require synchronous checkpoint writes")
+          end
+          if request.session_id
+            anchor_message_count = 1
+            request.messages.each_with_index do |message, index|
+              if message.role == "user"
+                anchor_message_count = index + 1
+                break
+              end
+            end
+            anchor_text = render_messages(
+              request.messages[0, anchor_message_count],
+              add_generation_prompt: false,
+              reasoning_effort: request.reasoning_effort,
+            )
+            anchor_ids = tokenizer.encode(anchor_text, add_bos_override: false)
+            unless self.class.adaptive_initial_anchor_prefix?(anchor_text, anchor_ids, rendered, prompt_ids)
+              raise ArgumentError.new("adaptive QBit session could not establish an exact initial message boundary")
+            end
+            adaptive_initial_anchor_text = anchor_text
+            adaptive_initial_anchor_ids = anchor_ids
+          end
         end
 
         state = nil.as(Qwen35CPU::State?)
@@ -551,6 +626,7 @@ module ML::GGUF
                     limit,
                     state_abi,
                     tokenizer.vocab.size.to_i32,
+                    kv_artifact_codec,
                   )
                   if hit = session_hit
                     admission = hit.admission
@@ -623,12 +699,21 @@ module ML::GGUF
                         next_token = admitted.entry.next_token_id
                       else
                         suffix_ids = prompt_ids[replay.prefix_len, replay.replayed_tokens]
-                        replayed_next, _replayed_logit = Qwen35CPU.prefill_tokens_top1(
-                          weights,
-                          suffix_ids,
-                          replay.prefix_len,
-                          prepared_candidate,
-                        )
+                        replayed_next, _replayed_logit = if adaptive_qbit_requested && request.session_id
+                                                           prefill_adaptive_session_suffix_top1(
+                                                             weights,
+                                                             suffix_ids,
+                                                             replay.prefix_len,
+                                                             prepared_candidate,
+                                                           )
+                                                         else
+                                                           Qwen35CPU.prefill_tokens_top1(
+                                                             weights,
+                                                             suffix_ids,
+                                                             replay.prefix_len,
+                                                             prepared_candidate,
+                                                           )
+                                                         end
                         next_token = replayed_next
                         did_qbit_suffix_prefill = true
                       end
@@ -637,6 +722,11 @@ module ML::GGUF
                       @qbit_cache_reused_prefix_tokens += replay.prefix_len
                       @qbit_cache_replayed_suffix_tokens += replay.replayed_tokens
                       restored_session_checkpoint = session_hit.try(&.checkpoint)
+                    rescue ex : Qwen35QBitRuntimeCache::CheckpointRejected
+                      release_state_metal!(candidate) if candidate
+                      @qbit_cache_restore_failures += 1
+                      record_qbit_failure("restore admission", ex)
+                      raise ex
                     rescue ex : ArgumentError
                       release_state_metal!(candidate) if candidate
                       @qbit_cache_restore_failures += 1
@@ -725,7 +815,7 @@ module ML::GGUF
               adaptive_qbit_restore: adaptive_qbit_requested && !@qbit_cache.nil?,
               qbit_f32_fallback: !@qbit_cache.nil? && !adaptive_qbit_requested,
             )
-            if request.session_id && self.class.exact_anchor_fast_enabled? &&
+            if request.session_id && !adaptive_qbit_requested && self.class.exact_anchor_fast_enabled? &&
                self.class.exact_anchor_fast_environment_enabled? &&
                Qwen35CPU.recurrent_checkpoint_metal_supported?(weights)
               capture_prefix_len = self.class.exact_anchor_capture_prefix_len(prompt_ids.size.to_i32)
@@ -802,60 +892,88 @@ module ML::GGUF
             qbit_cache = @qbit_cache.not_nil!
             checkpoint_next_token = nil.as(Int32?)
             checkpoint_state = decode_state
+            checkpoint_uses_initial_adaptive_anchor = false
             write_back_started = nil.as(Time::Instant?)
             begin
               checkpoint_requires_anchor = qbit_cache.checkpoint_requires_anchor?(restored_session_checkpoint, boundary_token_ids)
               if checkpoint_requires_anchor
                 anchor_materialization_started = Time.instant
                 begin
-                  # The generation prompt may contain control tokens that are not
-                  # reproduced when the completed assistant message is rendered.
-                  # On a fresh ordinary prefill, retain exact KV prefix rows in the
-                  # live state, rewind only recurrent buffers to a pre-captured
-                  # point, and replay the short completed-message suffix. If the
-                  # tokenizer diverged before that point, retain the conservative
-                  # full sequential rebuild. Restored QBit states also use the full
-                  # rebuild so anchor renewal never compounds p7 approximation.
-                  replay_plan = if capture_state = exact_anchor_checkpoint_state
-                                  if prefix_len = exact_anchor_checkpoint_prefix_len
-                                    self.class.exact_anchor_replay_plan(prompt_ids, boundary_token_ids, prefix_len)
-                                  end
-                                end
-                  if plan = replay_plan
-                    capture_state = exact_anchor_checkpoint_state.not_nil!
-                    Qwen35CPU.swap_recurrent_state_metal_buffers!(
-                      decode_state,
-                      capture_state,
-                      weights.hparams,
-                    )
-                    decode_state.layers.each { |layer| layer.position = plan.prefix_len }
-                    release_state_metal!(capture_state)
-                    exact_anchor_checkpoint_state = nil
-                    suffix_ids = boundary_token_ids[plan.prefix_len, plan.replayed_tokens]
-                    checkpoint_next_token, _checkpoint_logit = Qwen35CPU.prefill_tokens_top1_sequential(
-                      weights,
-                      suffix_ids,
-                      plan.prefix_len,
-                      decode_state,
-                    )
-                    Qwen35CPU.clear_kv_tail_metal!(decode_state, weights.hparams, boundary_token_ids.size.to_i32)
-                    @qbit_cache_exact_anchor_fast_paths += 1
-                    @qbit_cache_exact_anchor_replayed_tokens += plan.replayed_tokens
-                  else
-                    @qbit_cache_exact_anchor_fallbacks += 1
-                    if capture_state = exact_anchor_checkpoint_state
-                      release_state_metal!(capture_state)
-                      exact_anchor_checkpoint_state = nil
+                  if adaptive_qbit_requested
+                    if restored_session_checkpoint
+                      raise ArgumentError.new("adaptive QBit session reached its bounded delta depth; anchor renewal is not yet supported")
+                    end
+                    anchor_text = adaptive_initial_anchor_text.not_nil!
+                    anchor_ids = adaptive_initial_anchor_ids.not_nil!
+                    unless self.class.adaptive_initial_anchor_prefix?(anchor_text, anchor_ids, boundary_text, boundary_token_ids)
+                      raise ArgumentError.new("adaptive QBit initial anchor diverged from the completed transcript")
                     end
                     release_state_metal!(decode_state)
                     checkpoint_state = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
-                    prepare_state_metal!(checkpoint_state, weights, route, qbit_f32_fallback: true)
-                    checkpoint_next_token, _checkpoint_logit = Qwen35CPU.prefill_tokens_top1_sequential(
+                    prepare_state_metal!(
+                      checkpoint_state,
                       weights,
-                      boundary_token_ids,
+                      route,
+                      adaptive_qbit_restore: true,
+                      qbit_f32_fallback: false,
+                    )
+                    checkpoint_next_token, _checkpoint_logit = Qwen35CPU.prefill_tokens_top1(
+                      weights,
+                      anchor_ids,
                       0,
                       checkpoint_state,
                     )
+                    checkpoint_uses_initial_adaptive_anchor = true
+                  else
+                    # The generation prompt may contain control tokens that are not
+                    # reproduced when the completed assistant message is rendered.
+                    # On a fresh ordinary prefill, retain exact KV prefix rows in the
+                    # live state, rewind only recurrent buffers to a pre-captured
+                    # point, and replay the short completed-message suffix. If the
+                    # tokenizer diverged before that point, retain the conservative
+                    # full sequential rebuild. Restored QBit states also use the full
+                    # rebuild so anchor renewal never compounds p7 approximation.
+                    replay_plan = if capture_state = exact_anchor_checkpoint_state
+                                    if prefix_len = exact_anchor_checkpoint_prefix_len
+                                      self.class.exact_anchor_replay_plan(prompt_ids, boundary_token_ids, prefix_len)
+                                    end
+                                  end
+                    if plan = replay_plan
+                      capture_state = exact_anchor_checkpoint_state.not_nil!
+                      Qwen35CPU.swap_recurrent_state_metal_buffers!(
+                        decode_state,
+                        capture_state,
+                        weights.hparams,
+                      )
+                      decode_state.layers.each { |layer| layer.position = plan.prefix_len }
+                      release_state_metal!(capture_state)
+                      exact_anchor_checkpoint_state = nil
+                      suffix_ids = boundary_token_ids[plan.prefix_len, plan.replayed_tokens]
+                      checkpoint_next_token, _checkpoint_logit = Qwen35CPU.prefill_tokens_top1_sequential(
+                        weights,
+                        suffix_ids,
+                        plan.prefix_len,
+                        decode_state,
+                      )
+                      Qwen35CPU.clear_kv_tail_metal!(decode_state, weights.hparams, boundary_token_ids.size.to_i32)
+                      @qbit_cache_exact_anchor_fast_paths += 1
+                      @qbit_cache_exact_anchor_replayed_tokens += plan.replayed_tokens
+                    else
+                      @qbit_cache_exact_anchor_fallbacks += 1
+                      if capture_state = exact_anchor_checkpoint_state
+                        release_state_metal!(capture_state)
+                        exact_anchor_checkpoint_state = nil
+                      end
+                      release_state_metal!(decode_state)
+                      checkpoint_state = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
+                      prepare_state_metal!(checkpoint_state, weights, route, qbit_f32_fallback: true)
+                      checkpoint_next_token, _checkpoint_logit = Qwen35CPU.prefill_tokens_top1_sequential(
+                        weights,
+                        boundary_token_ids,
+                        0,
+                        checkpoint_state,
+                      )
+                    end
                   end
                 ensure
                   @qbit_cache_exact_anchor_materialization_time += Time.instant - anchor_materialization_started
@@ -878,15 +996,30 @@ module ML::GGUF
                 @pending_async_checkpoint_session = session_id
               else
                 write_back_started = Time.instant
-                checkpoint = qbit_cache.save_checkpoint(
-                  session_id,
-                  boundary_text,
-                  boundary_token_ids,
-                  checkpoint_next_token,
-                  weights.hparams,
-                  checkpoint_state,
-                  restored_session_checkpoint,
-                )
+                checkpoint = if checkpoint_uses_initial_adaptive_anchor
+                               qbit_cache.save_initial_adaptive_checkpoint(
+                                 session_id,
+                                 adaptive_initial_anchor_text.not_nil!,
+                                 adaptive_initial_anchor_ids.not_nil!,
+                                 checkpoint_next_token,
+                                 boundary_text,
+                                 boundary_token_ids,
+                                 weights.hparams,
+                                 checkpoint_state,
+                                 kv_artifact_codec,
+                               )
+                             else
+                               qbit_cache.save_checkpoint(
+                                 session_id,
+                                 boundary_text,
+                                 boundary_token_ids,
+                                 checkpoint_next_token,
+                                 weights.hparams,
+                                 checkpoint_state,
+                                 restored_session_checkpoint,
+                                 kv_artifact_codec,
+                               )
+                             end
                 result_checkpoint_id = checkpoint.checkpoint_id
                 @qbit_cache_writes += 1
               end
@@ -1153,6 +1286,32 @@ module ML::GGUF
         qwen_messages,
         add_generation_prompt: add_generation_prompt,
         reasoning_effort: reasoning_effort,
+      )
+    end
+
+    private def prefill_adaptive_session_suffix_top1(
+      weights : Qwen35Weights,
+      token_ids : Array(Int32),
+      start_pos : Int32,
+      state : Qwen35CPU::State,
+    ) : {Int32, Float32}
+      chunks = self.class.adaptive_session_replay_chunks(token_ids.size.to_i32)
+      offset = 0
+      chunks[0...-1].each do |chunk_size|
+        Qwen35CPU.prefill_tokens(
+          weights,
+          token_ids[offset, chunk_size],
+          start_pos + offset,
+          state,
+        )
+        offset += chunk_size
+      end
+      final_chunk = chunks[-1]
+      Qwen35CPU.prefill_tokens_top1(
+        weights,
+        token_ids[offset, final_chunk],
+        start_pos + offset,
+        state,
       )
     end
 

@@ -40,6 +40,70 @@ queues a second snapshot. The next generation and runtime close wait for the
 pending publication before consuming or releasing its durability boundary.
 Small token-delta checkpoints remain synchronous.
 
+The explicit `QWEN35_QBIT_ADAPTIVE_SESSION=1` gate now composes the adaptive
+resident-KV map with synchronous session restore and publication. The first
+system-plus-user message boundary becomes one immutable compact root; the
+completed assistant boundary and later checkpoints are exact cumulative token
+deltas. A hit restores that root directly into adaptive Metal owners and
+replays the exact suffix in causal chunks no larger than 64 tokens. A remainder
+of one is split across the first 65 tokens so replay cannot accidentally enter
+the unsupported single-token Float32 decode route. A suffix containing only one
+token is rejected explicitly because no causal multi-token chunk can represent
+it. Adaptive session anchors do not use the asynchronous Float32 snapshot
+writer; enabling both routes fails before inference.
+
+This is deliberately simpler than periodic anchor renewal. Exact deltas may
+grow to 4096 tokens but remain bounded to depth 8. Reaching the depth bound
+fails closed because rebuilding a compact root from already approximated
+recurrent state would compound error. A future renewal path must recompute from
+caller-authoritative transcript tokens before it can widen this boundary.
+
+The cache/replay promotion card for this slice is:
+
+- Window: a session request with both an adaptive resident-KV map and the
+  explicit adaptive-session gate.
+- Transport corridor: transcript and exact tokens -> immutable ClickHouse
+  anchor -> adaptive Metal owners -> bounded exact suffix replay -> new delta
+  checkpoint.
+- Legal move: replace persistent Float32 KV ownership only; live DeltaNet state
+  remains uncompressed and recurrent state is compressed only for persistence.
+- Boundary safety: model, tokenizer, template, ABI, artifact codec, checkpoint,
+  transcript boundary, token prefix, and manifest certificates all remain
+  mandatory and fail closed.
+- Lexicographic potential: persistent Float32 KV owners, peak admitted source
+  bytes, replayed suffix tokens, then end-to-end wall time.
+- Recompute safety: only the initial root is computed from exact transcript
+  tokens; no arithmetic state delta and no restored approximate recurrent state
+  becomes a new anchor source.
+- Dual frame: exact token/checkpoint history is the rollback authority while
+  adaptive QBit is only the memory representation of full-attention KV.
+- Local certificate: clean seed/restore/continue/rollback counters plus top-1,
+  top-2, meaning, ECS, ownership, memory-pressure, and swap observations.
+
+Guarded Qwen3.8-27B Q4_K_M evidence on Apple M2 Max (2026-08-26) closed the
+512- and 2048-token seed/baseline/restore/continue/rollback lifecycle. At
+`max_seq=2048`, the compact root had 286 tokens, the longest measured suffix
+replay had 1657 tokens, and the continued prompt reached 1943 tokens. The
+baseline and seed both emitted token ids `[66793, 12, 21]` (`checkpoint-6`);
+cold restore emitted `restored-7`, continuation emitted `checkpoint-7`, and
+rollback emitted `rollback-3`. Every hit reported sole adaptive ownership and
+exact token conservation. Checkpoint writes took 3.714-16.005 ms. The largest
+observed RSS was 1,485,750,272 bytes, peak footprint was 2,243,942,304 bytes,
+and every guarded phase reported zero swaps.
+
+The 2048 ClickHouse tables contained one p4/BF16 adaptive root, ten unique
+checkpoint rows, maximum depth 7, and no second full anchor. Active compressed
+parts totalled 44,264,745 bytes: 34,557,019 recurrent, 9,698,964 KV, and about
+9 KiB of manifest, prefix, and checkpoint metadata. The longest cold restore
+took 14,981.473 ms versus 13,291.594 ms for the matched full prefill, so this
+slice establishes compact persistence and rollback reliability, not a long-
+suffix speedup. In the aligned 829-token quality probe, exact and adaptive both
+emitted `Their sum is 95.` and reached EOS: top-1 was `8/8`, exact top-1 was in
+the adaptive top-2 at `7/7`, and token ECS mean/minimum was `1.0/1.0`. Ranked
+and unordered top-2 agreement was only `9/14` with maximum winning-logit delta
+`1.2506447`; the representation preserves this measured greedy trajectory and
+meaning but is not logit-lossless.
+
 Bounded context: local `.qkv` state artifacts and an explicitly configured
 ClickHouse HTTP endpoint. Background part merges are a separate storage context
 and never establish cache visibility or admission.

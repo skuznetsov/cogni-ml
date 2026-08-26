@@ -153,7 +153,8 @@ module ML::GGUF
                                   prompt_ids : Array(Int32),
                                   max_seq : Int32,
                                   state_abi : QwenQBitCacheEnvelope::StateABI,
-                                  vocab_size : Int32) : SessionHit?
+                                  vocab_size : Int32,
+                                  kv_artifact_codec : String = QwenQBitCacheEnvelope::EXACT_ARTIFACT_CODEC) : SessionHit?
       checkpoint = if selected = checkpoint_id
                      @store.lookup_checkpoint(
                        session_id,
@@ -176,7 +177,7 @@ module ML::GGUF
       end
       admission = @store.lookup_checkpoint_anchor(
         checkpoint,
-        prefix_context(max_seq, state_abi),
+        prefix_context(max_seq, state_abi, kv_artifact_codec),
       )
       unless admission
         if checkpoint_id
@@ -273,6 +274,9 @@ module ML::GGUF
                                   parent : QwenQBitSessionCheckpoint::Entry? = nil) : EnqueuedAnchorCheckpoint
       writer = @async_writer
       raise ArgumentError.new("async QBit checkpoints are disabled") unless writer
+      if state.adaptive_kv?
+        raise ArgumentError.new("async adaptive QBit session checkpoints are unsupported")
+      end
       # The previous publication is drained here, where the slot is actually
       # needed, instead of at every request's entry: a request that does not
       # depend on that row then overlaps its own prefill and decode with the
@@ -342,7 +346,8 @@ module ML::GGUF
                         next_token_id : Int32?,
                         hp : Qwen35Hparams,
                         state : Qwen35CPU::State,
-                        parent : QwenQBitSessionCheckpoint::Entry? = nil) : QwenQBitSessionCheckpoint::Entry
+                        parent : QwenQBitSessionCheckpoint::Entry? = nil,
+                        kv_artifact_codec : String = QwenQBitCacheEnvelope::EXACT_ARTIFACT_CODEC) : QwenQBitSessionCheckpoint::Entry
       raise ArgumentError.new("QBit runtime write-back is disabled") unless write_back?
       checkpoint_id = Random::Secure.hex(32)
       created_at_unix = Time.utc.to_unix
@@ -364,6 +369,34 @@ module ML::GGUF
       unless anchor_next_token_id
         raise ArgumentError.new("QBit checkpoint anchor requires an exact next token")
       end
+      if state.adaptive_kv?
+        unless QwenQBitCacheEnvelope.adaptive_artifact_codec?(kv_artifact_codec)
+          raise ArgumentError.new("adaptive QBit session checkpoint requires an adaptive artifact identity")
+        end
+        state_abi = QwenQBitCacheEnvelope.state_abi(hp, state.max_seq)
+        validate_adaptive_write_back_state!(state_abi, state, boundary_token_ids.size.to_i32)
+        context = write_context(
+          boundary_text,
+          boundary_token_ids,
+          anchor_next_token_id,
+          state.max_seq,
+          state_abi,
+          kv_artifact_codec,
+        )
+        saved = save_adaptive_state(context, hp, state, created_at_unix)
+        return publish_anchor_checkpoint(
+          session_id,
+          checkpoint_id,
+          parent.try(&.checkpoint_id),
+          boundary_text,
+          boundary_token_ids,
+          context,
+          saved,
+        )
+      end
+      unless kv_artifact_codec == QwenQBitCacheEnvelope::EXACT_ARTIFACT_CODEC
+        raise ArgumentError.new("Float32 QBit session checkpoint requires the raw artifact identity")
+      end
       prepared = prepare_anchor_checkpoint_internal(
         session_id,
         boundary_text,
@@ -377,6 +410,52 @@ module ML::GGUF
         track_capture: false,
       )
       commit_prepared_anchor_checkpoint(prepared)
+    end
+
+    # Persist one compact root at a stable pre-generation message boundary, then
+    # publish the completed assistant boundary as an exact token delta. The root
+    # remains a valid recovery point if publication of the child is interrupted.
+    def save_initial_adaptive_checkpoint(session_id : String,
+                                         anchor_text : String,
+                                         anchor_token_ids : Array(Int32),
+                                         anchor_next_token_id : Int32?,
+                                         boundary_text : String,
+                                         boundary_token_ids : Array(Int32),
+                                         hp : Qwen35Hparams,
+                                         state : Qwen35CPU::State,
+                                         kv_artifact_codec : String) : QwenQBitSessionCheckpoint::Entry
+      unless state.adaptive_kv?
+        raise ArgumentError.new("initial adaptive QBit checkpoint requires adaptive KV ownership")
+      end
+      unless boundary_text.starts_with?(anchor_text) &&
+             anchor_token_ids.size < boundary_token_ids.size &&
+             boundary_token_ids[0, anchor_token_ids.size] == anchor_token_ids
+        raise ArgumentError.new("initial adaptive QBit anchor is not an exact transcript prefix")
+      end
+
+      anchor = save_checkpoint(
+        session_id,
+        anchor_text,
+        anchor_token_ids,
+        anchor_next_token_id,
+        hp,
+        state,
+        nil,
+        kv_artifact_codec,
+      )
+      unless QwenQBitSessionCheckpoint.delta_admissible?(anchor, boundary_token_ids)
+        raise ArgumentError.new("initial adaptive QBit checkpoint exceeds the exact-delta bound")
+      end
+      save_checkpoint(
+        session_id,
+        boundary_text,
+        boundary_token_ids,
+        nil,
+        hp,
+        state,
+        anchor,
+        kv_artifact_codec,
+      )
     end
 
     def checkpoint_requires_anchor?(parent : QwenQBitSessionCheckpoint::Entry?,
@@ -440,16 +519,34 @@ module ML::GGUF
 
     private def commit_prepared_anchor_checkpoint(prepared : PreparedAnchorCheckpoint) : QwenQBitSessionCheckpoint::Entry
       saved = save_snapshot(prepared.context, prepared.snapshot, prepared.created_at_unix)
+      publish_anchor_checkpoint(
+        prepared.session_id,
+        prepared.checkpoint_id,
+        prepared.parent_checkpoint_id,
+        prepared.boundary_text,
+        prepared.boundary_token_ids,
+        prepared.context,
+        saved,
+      )
+    end
+
+    private def publish_anchor_checkpoint(session_id : String,
+                                          checkpoint_id : String,
+                                          parent_checkpoint_id : String?,
+                                          boundary_text : String,
+                                          boundary_token_ids : Array(Int32),
+                                          context : QwenQBitCacheEnvelope::Context,
+                                          saved : QwenQBitClickHouseCache::Saved) : QwenQBitSessionCheckpoint::Entry
       checkpoint = QwenQBitSessionCheckpoint.build_anchor(
-        session_id: prepared.session_id,
-        checkpoint_id: prepared.checkpoint_id,
-        parent_checkpoint_id: prepared.parent_checkpoint_id,
+        session_id: session_id,
+        checkpoint_id: checkpoint_id,
+        parent_checkpoint_id: parent_checkpoint_id,
         anchor_cache_id: saved.entry.cache_id,
-        anchor_lookup_key: QwenQBitCacheEnvelope.lookup_key(prepared.context),
+        anchor_lookup_key: QwenQBitCacheEnvelope.lookup_key(context),
         anchor_generation_id: saved.generation_id,
         anchor_certificate_id: saved.entry.certificate_id,
-        token_ids: prepared.boundary_token_ids,
-        boundary_text: prepared.boundary_text,
+        token_ids: boundary_token_ids,
+        boundary_text: boundary_text,
         created_at_unix: saved.entry.created_at_unix,
         expires_at_unix: saved.expires_at_unix,
       )

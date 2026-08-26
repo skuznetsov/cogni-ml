@@ -10,10 +10,15 @@ require "../src/ml/gguf/qwen35_native_runtime"
 alias QwenSessionEngine = ML::GGUF::Qwen35Engine
 alias QwenSessionRuntime = ML::GGUF::Qwen35NativeRuntime
 
-SESSION_MAX_SEQ        = 512
-SESSION_MAX_ACTIONS    =   8
-SESSION_MAX_SOURCE_MIB = 256
-DEFAULT_MODEL_PATH     = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf"
+# Sweep envelope. The defaults stay where the published runs measured them; the
+# ceilings only bound how far a prefix-length sweep may push the same probe.
+SESSION_MAX_SEQ             = 4096
+SESSION_DEFAULT_MAX_SEQ     =  512
+SESSION_MAX_REPETITIONS     =   64
+SESSION_DEFAULT_REPETITIONS =    2
+SESSION_MAX_ACTIONS         =    8
+SESSION_MAX_SOURCE_MIB      =  256
+DEFAULT_MODEL_PATH          = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf"
 
 struct QBitSessionMessage
   include JSON::Serializable
@@ -56,6 +61,7 @@ record QBitSessionDelta,
   restore_failures : Int64,
   writes : Int64,
   write_failures : Int64,
+  adaptive_hits : Int64,
   lookup_time : Time::Span,
   restore_time : Time::Span,
   write_back_time : Time::Span,
@@ -105,6 +111,7 @@ def qbit_session_delta(after_stats : QwenSessionRuntime::QBitCacheStats,
     restore_failures: after_stats.restore_failures - before_stats.restore_failures,
     writes: after_stats.writes - before_stats.writes,
     write_failures: after_stats.write_failures - before_stats.write_failures,
+    adaptive_hits: after_stats.adaptive_hits - before_stats.adaptive_hits,
     lookup_time: after_stats.lookup_time - before_stats.lookup_time,
     restore_time: after_stats.restore_time - before_stats.restore_time,
     write_back_time: after_stats.write_back_time - before_stats.write_back_time,
@@ -177,8 +184,11 @@ end
 
 def qbit_session_assert!(phase : String,
                          observation : QBitSessionObservation,
-                         parent_checkpoint_id : String? = nil) : Nil
+                         parent_checkpoint_id : String? = nil,
+                         adaptive_session_expected : Bool = false) : Nil
   delta = observation.qbit
+  cache_hit_expected = phase.in?("restore", "continue", "rollback") ||
+                       (phase == "seed" && observation.action > 1)
   expected = case phase
              when "seed"
                if observation.action == 1
@@ -202,6 +212,26 @@ def qbit_session_assert!(phase : String,
              end
   checkpoint_expected = phase == "baseline" ? observation.checkpoint_id.nil? : observation.checkpoint_id.try(&.matches?(/\A[0-9a-f]{64}\z/)) == true
   checkpoint_advances = parent_checkpoint_id.nil? || observation.checkpoint_id != parent_checkpoint_id
+  ownership_consistent = if adaptive_session_expected && cache_hit_expected
+                           delta.adaptive_hits == 1
+                         else
+                           delta.adaptive_hits == 0
+                         end
+  token_conservation = if cache_hit_expected
+                         delta.reused_prefix_tokens + delta.replayed_suffix_tokens == observation.prompt_tokens
+                       else
+                         delta.reused_prefix_tokens == 0 && delta.replayed_suffix_tokens == 0
+                       end
+  semantic_output = case phase
+                    when "seed", "continue"
+                      observation.text.strip == "checkpoint-#{observation.action}"
+                    when "restore"
+                      observation.text.strip == "restored-#{observation.action}"
+                    when "rollback"
+                      observation.text.strip == "rollback-#{observation.action}"
+                    else
+                      true
+                    end
   async_consistent = if observation.checkpoint_pending
                        delta.async_checkpoint_enqueued == 1 &&
                          delta.async_checkpoint_completed == 1 &&
@@ -211,7 +241,8 @@ def qbit_session_assert!(phase : String,
                          delta.async_checkpoint_completed == 0 &&
                          delta.async_checkpoint_pending == 0
                      end
-  unless expected && checkpoint_expected && checkpoint_advances && async_consistent && qbit_session_clean?(delta)
+  unless expected && checkpoint_expected && checkpoint_advances && ownership_consistent &&
+         token_conservation && semantic_output && async_consistent && qbit_session_clean?(delta)
     raise "#{phase} action #{observation.action} did not produce the expected clean QBit transition: #{delta.inspect}"
   end
 end
@@ -304,6 +335,7 @@ def qbit_session_emit(phase : String,
                   json.field "restore_failures", delta.restore_failures
                   json.field "writes", delta.writes
                   json.field "write_failures", delta.write_failures
+                  json.field "adaptive_hits", delta.adaptive_hits
                   json.field "lookup_ms", delta.lookup_time.total_milliseconds.round(3)
                   json.field "restore_ms", delta.restore_time.total_milliseconds.round(3)
                   json.field "write_back_ms", delta.write_back_time.total_milliseconds.round(3)
@@ -339,11 +371,15 @@ transcript_path = "/private/tmp/qwen_qbit_session_transcript.json"
 session_id = "qwen-qbit-session-smoke-v1"
 actions = 6
 rollback_action = 2
-payload_repetitions = 2
-max_seq = SESSION_MAX_SEQ
+payload_repetitions = SESSION_DEFAULT_REPETITIONS
+max_seq = SESSION_DEFAULT_MAX_SEQ
 max_tokens = 4
 max_source_mib = SESSION_MAX_SOURCE_MIB
 async_checkpoint_writes = false
+adaptive_session_expected = ENV["QWEN35_QBIT_ADAPTIVE_SESSION"]? == "1" &&
+                            !!(ENV["QWEN35_ADAPTIVE_RESIDENT_KV_LAYER"]? ||
+                               ENV["QWEN35_ADAPTIVE_RESIDENT_KV_TIER"]? ||
+                               ENV["QWEN35_ADAPTIVE_RESIDENT_KV_MAP"]?)
 
 OptionParser.parse do |parser|
   parser.banner = "Usage: qwen35_qbit_session_smoke [options]"
@@ -355,8 +391,8 @@ OptionParser.parse do |parser|
   parser.on("--session-id ID", "Session identity used by seed") { |value| session_id = value }
   parser.on("--actions N", "Seed action count (default: 6)") { |value| actions = value.to_i }
   parser.on("--rollback-action N", "Earlier action boundary to restore (default: 2)") { |value| rollback_action = value.to_i }
-  parser.on("--payload-repetitions N", "Payload segments per action (default: 2)") { |value| payload_repetitions = value.to_i }
-  parser.on("--max-seq N", "State capacity, at most 512") { |value| max_seq = value.to_i }
+  parser.on("--payload-repetitions N", "Payload segments per action (default: #{SESSION_DEFAULT_REPETITIONS}, at most #{SESSION_MAX_REPETITIONS})") { |value| payload_repetitions = value.to_i }
+  parser.on("--max-seq N", "State capacity (default: #{SESSION_DEFAULT_MAX_SEQ}, at most #{SESSION_MAX_SEQ})") { |value| max_seq = value.to_i }
   parser.on("--max-tokens N", "Generated tokens per action (default: 4)") { |value| max_tokens = value.to_i }
   parser.on("--max-source-mib N", "Write-back source admission, at most 256 MiB") { |value| max_source_mib = value.to_i }
   parser.on("--async-checkpoint-writes", "Defer full-anchor QBit encode and ClickHouse publication") { async_checkpoint_writes = true }
@@ -369,7 +405,7 @@ end
 raise "phase must be seed, baseline, restore, continue, or rollback" unless phase.in?("seed", "baseline", "restore", "continue", "rollback")
 raise "model does not exist: #{model_path}" unless File.file?(model_path)
 raise "actions must be within 1..#{SESSION_MAX_ACTIONS}" unless actions.in?(1..SESSION_MAX_ACTIONS)
-raise "payload repetitions must be within 1..4" unless payload_repetitions.in?(1..4)
+raise "payload repetitions must be within 1..#{SESSION_MAX_REPETITIONS}" unless payload_repetitions.in?(1..SESSION_MAX_REPETITIONS)
 raise "max-seq must be within 64..#{SESSION_MAX_SEQ}" unless max_seq.in?(64..SESSION_MAX_SEQ)
 raise "max-tokens must be within 1..8" unless max_tokens.in?(1..8)
 raise "max-source-mib must be within 1..#{SESSION_MAX_SOURCE_MIB}" unless max_source_mib.in?(1..SESSION_MAX_SOURCE_MIB)
@@ -377,6 +413,9 @@ raise "session-id must be within 1..1024 bytes" unless session_id.bytesize.in?(1
 raise "rollback-action must be within 1..#{SESSION_MAX_ACTIONS}" unless rollback_action.in?(1..SESSION_MAX_ACTIONS)
 raise "seed refuses to overwrite transcript: #{transcript_path}" if phase == "seed" && File.exists?(transcript_path)
 raise "async checkpoint writes require a QBit phase" if phase == "baseline" && async_checkpoint_writes
+if phase != "baseline" && max_seq > 512 && !adaptive_session_expected
+  raise "QBit sessions above max_seq 512 require the explicit adaptive session gate and adaptive KV layout"
+end
 
 write_back = phase != "baseline"
 store = nil.as(ML::GGUF::QwenQBitClickHouseCache::Store?)
@@ -431,7 +470,7 @@ begin
         checkpoint_id: parent_checkpoint,
         flush_pending: async_checkpoint_writes,
       )
-      qbit_session_assert!(phase, observation, parent_checkpoint)
+      qbit_session_assert!(phase, observation, parent_checkpoint, adaptive_session_expected)
       observations << observation
       checkpoint_ids << observation.checkpoint_id.not_nil!
       action_token_ids << observation.token_ids
@@ -463,7 +502,7 @@ begin
       max_tokens,
       max_seq,
     )
-    qbit_session_assert!(phase, observation)
+    qbit_session_assert!(phase, observation, adaptive_session_expected: adaptive_session_expected)
     unless observation.token_ids == transcript.last_token_ids
       raise "#{phase} token parity mismatch: #{observation.token_ids} != #{transcript.last_token_ids}"
     end
@@ -486,7 +525,7 @@ begin
       checkpoint_id: parent_checkpoint,
       flush_pending: async_checkpoint_writes,
     )
-    qbit_session_assert!(phase, observation, parent_checkpoint)
+    qbit_session_assert!(phase, observation, parent_checkpoint, adaptive_session_expected)
     observations << observation
     transcript_actions = transcript.actions
   when "continue"
@@ -502,7 +541,7 @@ begin
       checkpoint_id: transcript.checkpoint_ids.last,
       flush_pending: async_checkpoint_writes,
     )
-    qbit_session_assert!(phase, observation, transcript.checkpoint_ids.last)
+    qbit_session_assert!(phase, observation, transcript.checkpoint_ids.last, adaptive_session_expected)
     observations << observation
     messages << QwenSessionEngine::Message.new("assistant", observation.text)
     qbit_session_write(
@@ -536,7 +575,7 @@ begin
       checkpoint_id: parent_checkpoint,
       flush_pending: async_checkpoint_writes,
     )
-    qbit_session_assert!(phase, observation, parent_checkpoint)
+    qbit_session_assert!(phase, observation, parent_checkpoint, adaptive_session_expected)
     observations << observation
     transcript_actions = transcript.actions
   end

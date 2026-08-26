@@ -81,11 +81,64 @@ describe ML::GGUF::Qwen35NativeRuntime do
     stats.adaptive_hits.should eq(0)
   end
 
-  it "admits adaptive QBit ownership only for non-session cache hits" do
-    NativeRuntime.adaptive_qbit_restore_enabled?(nil, nil, nil, nil).should be_false
-    NativeRuntime.adaptive_qbit_restore_enabled?(nil, nil, nil, "p4").should be_true
-    NativeRuntime.adaptive_qbit_restore_enabled?(nil, "3", "p4", nil).should be_true
-    NativeRuntime.adaptive_qbit_restore_enabled?("session-a", nil, nil, "p4").should be_false
+  it "requires an additional explicit gate for adaptive session ownership" do
+    NativeRuntime.adaptive_qbit_restore_enabled?(nil, nil, nil, nil, nil).should be_false
+    NativeRuntime.adaptive_qbit_restore_enabled?(nil, nil, nil, "p4", nil).should be_true
+    NativeRuntime.adaptive_qbit_restore_enabled?(nil, "3", "p4", nil, nil).should be_true
+    NativeRuntime.adaptive_qbit_restore_enabled?("session-a", nil, nil, "p4", nil).should be_false
+    NativeRuntime.adaptive_qbit_restore_enabled?("session-a", nil, nil, "p4", "0").should be_false
+    NativeRuntime.adaptive_qbit_restore_enabled?("session-a", nil, nil, nil, "1").should be_false
+    NativeRuntime.adaptive_qbit_restore_enabled?("session-a", nil, nil, "p4", "1").should be_true
+  end
+
+  it "admits an initial adaptive anchor only at an exact text and token prefix" do
+    NativeRuntime.adaptive_initial_anchor_prefix?(
+      "system-user-boundary",
+      [11_i32, 22_i32, 33_i32],
+      "system-user-boundary-assistant",
+      [11_i32, 22_i32, 33_i32, 44_i32],
+    ).should be_true
+
+    NativeRuntime.adaptive_initial_anchor_prefix?(
+      "system-user-boundary",
+      [11_i32, 99_i32],
+      "system-user-boundary-assistant",
+      [11_i32, 22_i32, 33_i32, 44_i32],
+    ).should be_false
+    NativeRuntime.adaptive_initial_anchor_prefix?(
+      "different-boundary",
+      [11_i32, 22_i32],
+      "system-user-boundary-assistant",
+      [11_i32, 22_i32, 33_i32, 44_i32],
+    ).should be_false
+    NativeRuntime.adaptive_initial_anchor_prefix?(
+      "system-user-boundary",
+      [11_i32, 22_i32, 33_i32, 44_i32],
+      "system-user-boundary",
+      [11_i32, 22_i32, 33_i32, 44_i32],
+    ).should be_false
+  end
+
+  it "partitions adaptive session replay into a short leading chunk and bounded tails" do
+    NativeRuntime.adaptive_session_replay_chunks(35).should eq([35_i32])
+    NativeRuntime.adaptive_session_replay_chunks(64).should eq([64_i32])
+    NativeRuntime.adaptive_session_replay_chunks(65).should eq([32_i32, 33_i32])
+    NativeRuntime.adaptive_session_replay_chunks(96).should eq([32_i32, 64_i32])
+    NativeRuntime.adaptive_session_replay_chunks(1409).should eq(
+      [32_i32, 33_i32] + Array(Int32).new(21, 64_i32)
+    )
+    NativeRuntime.adaptive_session_replay_chunks(339).should eq(
+      [19_i32, 64_i32, 64_i32, 64_i32, 64_i32, 64_i32]
+    )
+    expect_raises(ML::GGUF::Qwen35QBitRuntimeCache::CheckpointRejected, /at least two tokens/) do
+      NativeRuntime.adaptive_session_replay_chunks(1)
+    end
+    expect_raises(ArgumentError, /chunk size/) do
+      NativeRuntime.adaptive_session_replay_chunks(2, 1)
+    end
+    expect_raises(ArgumentError, /token count/) do
+      NativeRuntime.adaptive_session_replay_chunks(0)
+    end
   end
 
   it "keeps an explicit rollback switch for exact-anchor replay" do

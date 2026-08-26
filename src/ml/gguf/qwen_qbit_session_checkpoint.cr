@@ -12,10 +12,13 @@ module ML::GGUF
   module QwenQBitSessionCheckpoint
     extend self
 
-    SCHEMA_ID               = "cogni-ml/qwen-qbit-session-checkpoint-v1"
-    MAX_SESSION_BYTES       = 1024
-    MAX_DELTA_DEPTH         =    8
-    MAX_REPLAY_TOKENS       =  512
+    SCHEMA_ID         = "cogni-ml/qwen-qbit-session-checkpoint-v1"
+    MAX_SESSION_BYTES = 1024
+    MAX_DELTA_DEPTH   =    8
+    # Exact token deltas are cheap (16 KiB at 4096 tokens) and let compact
+    # adaptive anchors avoid frequent full-state renewal. Depth remains bounded
+    # independently so a session still fails closed instead of growing forever.
+    MAX_REPLAY_TOKENS       = 4096
     MAX_BOUNDARY_BYTES      = 1024 * 1024
     MAX_BOUNDARY_CANDIDATES = 1024
     HEX_ID_SIZE             =   64

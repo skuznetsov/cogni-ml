@@ -118,4 +118,27 @@ describe ML::GGUF::QwenQBitSessionCheckpoint do
       checkpoints.validate!(tampered, "session-a", anchor_tokens + [44_i32])
     end
   end
+
+  it "keeps a 4096-token session in one bounded exact-delta chain" do
+    anchor_tokens = (1..32).map(&.to_i32)
+    anchor = checkpoint_anchor(anchor_tokens)
+    session_tokens = anchor_tokens + Array(Int32).new(4_000, 66_i32)
+
+    checkpoints.delta_admissible?(anchor, session_tokens).should be_true
+    child = checkpoints.build_delta(
+      session_id: "session-a",
+      checkpoint_id: "f" * 64,
+      parent: anchor,
+      token_ids: session_tokens,
+      boundary_text: "rendered-boundary-a<|im_end|>long-session",
+      created_at_unix: 1_100_i64,
+    )
+    child.cumulative_token_ids.size.should eq(4_000)
+    checkpoints.validate!(child, "session-a", session_tokens)
+
+    checkpoints.delta_admissible?(
+      anchor,
+      anchor_tokens + Array(Int32).new(4_097, 66_i32),
+    ).should be_false
+  end
 end
