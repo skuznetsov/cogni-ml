@@ -1708,6 +1708,21 @@ accepted a 163,852-byte body query and returned `1\n`. This closes the HTTP
 framing gate for the measured 2,172-token corridor without changing the
 separate ClickHouse query-size or candidate-count limits.
 
+A fresh release binary built from a detached `7211fc03` worktree then repeated
+the complete long-prefix lifecycle against a new ClickHouse table. The guarded
+adaptive seed used 128 filler records, produced exactly 2,172 prompt tokens,
+completed generation in 30,118.824 ms, and wrote one clean miss in 2,720.971
+ms. A separate process restored all 2,172 tokens with no suffix replay or
+writeback; generation took 7,315.455 ms, including 335.572 ms lookup and
+102.201 ms restore. Seed and hit both emitted ids
+`[33645,2542,369,220,24,20,13]` and `Their sum is 95.`. All rejection,
+transport, restore, and write-failure counters remained zero. ClickHouse held
+38,304 recurrent rows plus one KV, manifest, and prefix row, totaling
+107,809,078 compressed bytes. Exact aligned tokens imply positionwise ECS
+mean/minimum `1.0/1.0`; the runtime smoke still does not capture fresh top-2
+logits. This is a fresh-process lifecycle gate, not a physical-cold-disk,
+stable-throughput, or total-unified-memory measurement.
+
 ### Cache-engine contract
 
 - The internal envelope makes cache keys content-addressed over model,
