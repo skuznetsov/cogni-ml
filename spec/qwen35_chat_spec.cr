@@ -7,6 +7,35 @@ private alias QwenEngine = ML::GGUF::Qwen35Engine
 QWEN_9B_CHAT     = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 QWEN_38_27B_CHAT = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf"
 
+private def open_fd_count : Int32?
+  path = if Dir.exists?("/proc/self/fd")
+           "/proc/self/fd"
+         elsif Dir.exists?("/dev/fd")
+           "/dev/fd"
+         end
+  path ? Dir.children(path).size : nil
+end
+
+describe ML::GGUF::GGUFFile do
+  it "closes its file when malformed metadata fails during construction" do
+    before = open_fd_count
+    pending!("open file descriptor inventory unavailable") unless before
+    path = File.tempname("malformed-gguf", ".gguf")
+    File.write(path, "not a GGUF file")
+
+    begin
+      32.times do
+        expect_raises(Exception, /GGUF/) do
+          ML::GGUF::GGUFFile.new(path, mmap_tensors: false)
+        end
+      end
+      (open_fd_count.not_nil! - before).should be <= 2
+    ensure
+      File.delete(path) if File.exists?(path)
+    end
+  end
+end
+
 describe ML::GGUF::Qwen35Chat do
   it "renders Qwen XML tool instructions and user prompt" do
     tools = ML::GGUF::Qwen35Chat.parse_tools_json(%([{"type":"function","function":{"name":"get_weather","description":"Get weather","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}]))
@@ -125,9 +154,9 @@ describe ML::GGUF::Qwen35Chat do
     end
   end
 
-  it "detects only the exact Qwen3.8 effort template contract" do
-    exact = "enable_thinking reasoning_effort #{ML::GGUF::Qwen35Chat::LOW_REASONING_INSTRUCTION} #{ML::GGUF::Qwen35Chat::XHIGH_REASONING_INSTRUCTION}"
-    ML::GGUF::Qwen35Chat.supports_reasoning_effort?(exact).should be_true
+  it "rejects marker-only and comment-only reasoning effort templates" do
+    comment_only = "{# enable_thinking reasoning_effort #{ML::GGUF::Qwen35Chat::LOW_REASONING_INSTRUCTION} #{ML::GGUF::Qwen35Chat::XHIGH_REASONING_INSTRUCTION} #}"
+    ML::GGUF::Qwen35Chat.supports_reasoning_effort?(comment_only).should be_false
     ML::GGUF::Qwen35Chat.supports_reasoning_effort?("enable_thinking reasoning_effort").should be_false
     ML::GGUF::Qwen35Chat.supports_reasoning_effort?(nil).should be_false
   end
@@ -252,7 +281,8 @@ describe ML::GGUF::Qwen35Chat do
   it "detects reasoning effort from real Qwen templates when present" do
     pending!("Qwen3.8 27B model not present") unless File.exists?(QWEN_38_27B_CHAT)
 
-    qwen38_gguf = ML::GGUF::GGUFFile.new(QWEN_38_27B_CHAT)
+    qwen38_gguf = ML::GGUF::GGUFFile.new(QWEN_38_27B_CHAT, mmap_tensors: false)
+    qwen38_gguf.mmap_region.should be_nil
     qwen38 = ML::GGUF::Qwen35Tokenizer.from_gguf(qwen38_gguf, QWEN_38_27B_CHAT)
     qwen38_gguf.close
     ML::GGUF::Qwen35Chat.supports_reasoning_effort?(qwen38.chat_template).should be_true

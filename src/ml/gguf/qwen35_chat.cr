@@ -1,4 +1,5 @@
 require "json"
+require "digest/sha256"
 require "./qwen35_engine_contract"
 
 module ML::GGUF
@@ -10,6 +11,7 @@ module ML::GGUF
     TOOL_SYSTEM_SUFFIX          = "\n</tools>\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT>"
     LOW_REASONING_INSTRUCTION   = "Reasoning effort is set to low. Keep your thinking brief and focused, moving directly to the conclusion without unnecessary elaboration."
     XHIGH_REASONING_INSTRUCTION = "Reasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer."
+    QWEN38_REASONING_TEMPLATE_SHA256 = "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041"
 
     record Message,
       role : String,
@@ -80,16 +82,14 @@ module ML::GGUF
       render(messages, tools, add_generation_prompt, enable_thinking, reasoning_effort)
     end
 
-    # The embedded renderer intentionally recognizes only the exact Qwen 3.8
-    # contract it reproduces. A generic mention of reasoning_effort is not a
-    # sufficient capability certificate.
+    # The embedded renderer intentionally recognizes only tokenizer templates
+    # whose complete bytes were verified against the Qwen 3.8 contract it
+    # reproduces. New upstream templates fail closed until their full rendering
+    # behavior is compared and their digest is admitted deliberately.
     def self.supports_reasoning_effort?(chat_template : String?) : Bool
       return false unless template = chat_template
 
-      template.includes?("enable_thinking") &&
-        template.includes?("reasoning_effort") &&
-        template.includes?(LOW_REASONING_INSTRUCTION) &&
-        template.includes?(XHIGH_REASONING_INSTRUCTION)
+      Digest::SHA256.hexdigest(template) == QWEN38_REASONING_TEMPLATE_SHA256
     end
 
     def self.messages_from_openai_json(json : String) : Array(Message)

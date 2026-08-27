@@ -127,7 +127,8 @@ module ML::GGUF
     end
   end
 
-  # Parsed GGUF file — uses mmap for zero-copy tensor access
+  # Parsed GGUF file — uses mmap by default for zero-copy tensor access.
+  # Metadata-only callers can skip the whole-file mapping.
   class GGUFFile
     getter path : String
     getter version : UInt32
@@ -136,17 +137,22 @@ module ML::GGUF
     getter data_offset : Int64  # File offset where tensor data blob starts
 
     @io : File
-    @mmap : Pointer(UInt8)?
+    @mmap : Pointer(UInt8)? = nil
     @mmap_size : UInt64 = 0
 
-    def initialize(@path)
+    def initialize(@path, *, mmap_tensors : Bool = true)
       @version = 0_u32
       @metadata = {} of String => Value
       @tensors = [] of TensorInfo
       @data_offset = 0_i64
       @io = File.new(@path, "rb")
-      parse_header
-      setup_mmap
+      begin
+        parse_header
+        setup_mmap if mmap_tensors
+      rescue ex
+        close rescue nil
+        raise ex
+      end
     end
 
     def close
