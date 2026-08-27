@@ -2021,3 +2021,40 @@ system scheduling corridor rather than generalized to decode. Metal
 are not occupancy, bandwidth, or instruction counters. Hardware-counter
 sampling remains rejected for this slice because it would add a separate
 capability and can perturb scheduling without answering the current boundary.
+
+The same existing timestamp seam now measures the complete adaptive prefill
+command directly: causal attention over the packed prefix, K/V packing of the
+current chunk, and the completion finalizer. The probe uses the public
+encode/finalize/publication boundary instead of widening the runtime API or
+changing a kernel. It continues to report wall time and pack-only wall time,
+but no longer presents their difference as an attention measurement.
+
+In a guarded tile-15/tile-16/tile-16/tile-15 sequence, each fresh process used
+the same deterministic inputs, a fixed 3,072-token snapshot, and a 64-token
+chunk. Every one of the nine timed commands restored that immutable snapshot
+into a fresh cache; a separate scratch cache warmed the prefill path before
+sampling. P4 GPU medians were `19.752/24.978/25.235/20.004 ms`; BF16 medians
+were `16.738/22.721/22.998/17.080 ms`; F32 medians were
+`22.613/30.272/31.125/22.908 ms`. The paired means make tile `15` faster by
+approximately `20.8%`, `26.0%`, and `25.9%`, respectively. Every tile-15
+observation was below every matching tile-16 observation.
+
+Each probe output records the effective Metal device, selected tile, fixed RNG
+seed, and fixed-snapshot mode. The synthetic prefix deliberately repeats one
+deterministic 64-token K/V chunk; this is an attribution payload, not a model
+activation distribution.
+
+The final release probe completed its default fixed-snapshot sweep at prefixes
+512, 1,536, and 3,072. Focused tile-15 and tile-16 resident suites each passed
+`14/14` with CPU-reference cosine `1.0` and maximum delta `3.72529e-08`; the
+complete resource-isolated QBit/Metal suite passed `139` examples with zero
+failures or errors and one optional model-backed pending example.
+
+This closes the earlier attribution gap at command-buffer granularity: tile
+selection changes only the attention pipeline, while the K/V packers and
+finalizer in the same command are identical. The measurement therefore
+supports prefill attention as the source of the bounded tile-15 gain and
+rejects host-side packing subtraction as the explanation. It still does not
+prove the occupancy mechanism, isolate individual encoder counters, or widen
+the result beyond Apple M2 Max, this GQA6 shape, the tested prefix range, and
+the existing end-to-end quality certificate.

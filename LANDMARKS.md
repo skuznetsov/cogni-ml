@@ -24679,3 +24679,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** The profiling seam is diagnostic rather than a promoted local move. Recomputing the decode-only potential refuted the proposed explanation, so no decode kernel change was built. The next admissible experiment is prefill-only GPU attribution while preserving the existing end-to-end replay frame.
 
 **decision:** Keep the scoped M2 Max tile-15 replay policy, but do not claim or optimize a standalone decode win. Retain the small timestamp seam for bounded falsifiers; do not add hardware counters until a question requires metrics that timestamps cannot answer.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-PREFILL-TIME-937] Fused prefill command GPU time explains the bounded M2 Max tile-15 gain
+**context:** ml / Qwen3.8 / adaptive QBit / Metal / prefill / profiling
+**state:** verified at command-buffer granularity on the bounded M2 Max GQA6 corridor
+
+- claim: "The adaptive prefill command is materially faster with tile 15 than tile 16 on the measured long-prefix corridor."
+  source: a release probe used deterministic inputs, one immutable 3,072-token snapshot, a fresh restored cache for every sample, a separate warm-up cache, 64-token chunks, nine timed commands per process, and a guarded tile-15/tile-16/tile-16/tile-15 sequence. P4 GPU medians were `19.752/24.978/25.235/20.004 ms`; BF16 medians were `16.738/22.721/22.998/17.080 ms`; F32 medians were `22.613/30.272/31.125/22.908 ms`. Paired means make tile 15 approximately `20.8%/26.0%/25.9%` faster, with no overlap between matching tile observations.
+  verified_at: 2026-08-26
+  decay_trigger: command-buffer boundary, tile source, prefill or pack encoder order, compiler/runtime, hardware, cache tier/layout, prefix/chunk shape, host load, or probe warm-up changes
+  trust: {F:0.97,G:0.13,R:0.93}
+
+- claim: "The probe measures the existing publication command without widening the runtime API or changing kernel semantics."
+  source: the bounded probe calls the public prefill encode and finalizer, waits through `commit_and_wait_gpu_elapsed_seconds`, and publishes through the existing `finish_pending_append!` boundary. The GPU interval contains attention, both K/V packers, and the finalizer; wall-minus-pack is no longer labeled as attention time. The final release probe completed its default 512/1,536/3,072-prefix sweep. Focused tile-15 and tile-16 resident suites each passed `14/14`; the complete resource-isolated QBit/Metal suite passed `139` examples with zero failures/errors and one optional pending example.
+  verified_at: 2026-08-26
+  decay_trigger: resident append ownership, completion marker, command-buffer timestamp semantics, or probe call sequence changes
+  trust: {F:0.98,G:0.43,R:0.95}
+
+**Adversary:** This is command-buffer attribution, not a direct occupancy, bandwidth, cache-miss, or instruction count. The timed interval includes identical K/V packers and finalizer. Fresh-cache restore and allocation happen outside the timestamp; they strengthen payload identity but do not model steady-state owner reuse. The synthetic prefix repeats one deterministic 64-token K/V chunk rather than sampling a production distribution. Tile selection changes only the attention pipeline, so the stable fixed-snapshot ABBA delta supports that encoder as the differentiator, but other Apple GPUs, mixed tier maps, chunk shapes, and larger contexts remain outside the certificate.
+
+**Value proxy:** GPU time explains the bounded performance mechanism but does not replace generation quality, publication safety, resident density, or end-to-end replay time. The previously measured top-1, top-2, ECS, meaning, and ownership gates remain the promotion authority.
+
+**LTP/WBA:** This is diagnostic attribution of an already admitted compile-time geometry, not a new speculative move. The prefill coordinate descends while the decode coordinate does not; the end-to-end replay certificate remains the global frame.
+
+**decision:** Retain the M2 Max tile-15 policy and attribute its bounded gain to the adaptive prefill command, not standalone decode. Keep hardware counters and further kernel changes out of scope until a new falsifier requires them.
