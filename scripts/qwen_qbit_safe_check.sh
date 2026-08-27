@@ -46,6 +46,7 @@ exec "$RUN_SAFE" "$CRYSTAL_BIN" "$TIMEOUT_SEC" "$MAX_TREE_MB" \
   spec/qwen_qbit_state_snapshot_spec.cr \
   spec/qwen_qbit_kv_quality_spec.cr \
   spec/qwen_qbit_adaptive_kv_spec.cr \
+  spec/qwen_qbit_adaptive_metal_policy_spec.cr \
   spec/qwen_qbit_adaptive_resident_kv_spec.cr \
   spec/qwen35_adaptive_resident_kv_state_spec.cr \
   spec/qwen35_native_runtime_spec.cr \

@@ -1949,3 +1949,58 @@ stable-throughput, or total-unified-memory measurement.
   are not an authority for whether a stale row is admissible.
 - Send pre-transposed Native streams and read only retained plane subcolumns.
   SQL Array-to-QBit casts remain a diagnostic fallback, not the serving route.
+
+### Adaptive prefill tile occupancy gate (2026-08-26)
+
+A bounded synthetic Metal probe now separates adaptive attention-plus-pack from
+pack-only work at the Qwen3.8 GQA6 shape (`24` query heads, `4` KV heads,
+head dimension `256`, and a `64`-token append). Pack-only cost was only
+`0.18--0.26 ms` in the stable rows, while a 3,072-token prefix took roughly
+`24--31 ms`; BF16 packing is therefore not the dominant residual prefill cost.
+
+The same release probe compared compile-time attention tiles under a 2 GiB
+process-tree cap, a 35% system-memory headroom gate, and a quiet-host gate. For
+the seven samples starting at prefix 3,072 and advancing by 64 tokens,
+tile `15` measured `23.958/21.002/27.193 ms` for uniform
+P4/BF16/F32, versus tile `16` A/A observations of
+`26.403--26.350/24.240--23.879/31.152--31.180 ms`. Tile `24` was slower than
+the baseline. Tile `12` was faster in isolation but failed the end-to-end gate:
+its extra tile reductions did not reduce long-session replay. It remains a
+rejected diagnostic, not a production setting.
+
+Two guarded tile-16 baselines and two tile-15 observations then replayed the
+same 2,391-token suffix into a 3,220-token Qwen3.8 session. Tile `15` measured
+free replay `21,237.714/24,814.303 ms` and forced replay
+`21,094.244/22,251.629 ms`. Tile `16` measured
+`25,776.402/26,234.501 ms` and `26,520.454/27,574.286 ms`; against the faster
+baseline and the slower candidate, the conservative reductions were
+`3.7%/15.2%`. The candidate exact chunked controls were
+`16,553.551/18,864.194 ms`, while the baselines measured
+`16,764.830/23,078.128 ms`; that control spread is large, so no stable
+throughput percentage is claimed beyond these bounded, non-overlapping replay
+observations.
+
+Both candidate observations preserved top-1 `8/8`, exact-top-1 coverage in
+candidate top-2 `7/7`, ECS mean/minimum `1.0/1.0`, EOS, resident ownership,
+`3.7647x` logical KV density, and the exact text `Their sum is 95.`. Ranked and
+unordered top-2 overlap repeated at `11/14`, one slot below both tile-16
+baselines (`12/14`), which is reported as numerical distribution drift from
+the changed online-softmax reduction grouping rather than hidden by the
+identical greedy trajectory.
+
+The focused auto tile-15 and forced tile-16 Metal routes each passed `14/14`
+with CPU-reference cosine `1.0` and maximum delta `3.72529e-08`. The complete
+resource-isolated QBit/Metal suite, now including the admission policy checks,
+passed `139` examples with zero failures or errors and one optional model-backed
+pending example. The earlier intermittent Crystal 1.21 raw-thread async-writer
+error did not reproduce in this run.
+
+The host admits tile `15` only when Metal reports the measured `Apple M2 Max`;
+every other or unknown device fails closed to tile `16`. The two variants use
+distinct pipeline-cache keys, and `QWEN35_ADAPTIVE_GQA6_TILE=15|16` is an
+explicit benchmark override. This does not change cache bytes, checkpoints,
+publication, rollback, or resident memory. Other Apple GPUs, larger contexts,
+stable multi-prompt throughput, and exact runner-up-logit preservation remain
+open. The selected tile also affects the standalone adaptive decode kernel;
+correctness is covered by the Metal parity suite, while dedicated
+decode-throughput promotion remains separate.

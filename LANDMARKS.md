@@ -24631,3 +24631,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** The local move removes redundant per-value metadata work while preserving exact checkpoint history, replay-token count, resident bytes, fallback recomputation, and publication boundaries. In the measured row, the earlier lexicographic coordinates were unchanged and replay wall descended; the generic loader remains the dual frame and explicit fallback.
 
 **decision:** Admit direct uniform P4/BF16 loading for the existing Qwen3.8 adaptive prefill corridor. Retain the generic loader for every unproved layout and require a new falsifier before widening shape or hardware scope.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-TILE15-935] A sub-16-KiB adaptive attention tile lowers long-session replay time
+**context:** ml / Qwen3.8 / adaptive QBit / Metal / session replay / threadgroup memory
+**state:** verified and default-admitted only on the bounded M2 Max Qwen3.8 GQA6 corridor; other devices fail closed to tile 16
+
+- claim: "Tile 15 lowers adaptive prefill time without changing cache ownership or the greedy response."
+  source: the compile-time tile keeps the kernel's explicit threadgroup arrays at 16,128 bytes. A guarded synthetic seven-sample row starting at prefix 3,072 and advancing by 64 tokens measured P4/BF16/F32 prefill-plus-pack at `23.958/21.002/27.193 ms`, versus tile-16 A/A at `26.403--26.350/24.240--23.879/31.152--31.180 ms`; tile 24 was slower, and tile 12 was rejected after it failed the long-session absolute-time gate. In the 3,220-token model row, two tile-15 observations measured free replay `21,237.714/24,814.303 ms` and forced replay `21,094.244/22,251.629 ms`; two tile-16 baselines measured `25,776.402/26,234.501 ms` and `26,520.454/27,574.286 ms`. All candidate observations were below all baseline observations; comparing the slower candidate with the faster baseline gives conservative reductions of `3.7%/15.2%`.
+  verified_at: 2026-08-26
+  decay_trigger: tile geometry, compiler, Metal runtime, hardware, model, tier map, prompt/replay shape, host load, or benchmark harness change
+  trust: {F:0.97,G:0.11,R:0.87}
+
+- claim: "The admitted tile preserves the bounded session quality and resident-state invariants, with one reported runner-up slot of numerical drift."
+  source: both tile-15 observations retained top-1 `8/8`, exact-top-1 coverage `7/7`, ECS mean/minimum `1.0/1.0`, EOS, `Their sum is 95.`, 16 resident layers, no Float32 KV owner, and `3.7647x` density. Ranked and set top-2 repeated at `11/14` versus both tile-16 baselines at `12/14`. Auto tile-15 and forced tile-16 resident Metal suites each passed `14/14`; the complete resource-isolated QBit/Metal suite, including the admission policy checks, passed `139` examples with zero failures/errors and one optional pending example. The earlier intermittent Crystal 1.21 raw-thread error did not reproduce in this run.
+  verified_at: 2026-08-26
+  decay_trigger: attention reduction order, quality prompt, tier map, resident ownership/publication, snapshot ABI, Metal kernel, or Crystal runtime change
+  trust: {F:0.98,G:0.12,R:0.90}
+
+**Adversary:** The occupancy mechanism is strongly suggested, not proven by hardware counters. Tile 15 changes online-softmax grouping and the standalone decode kernel as well as prefill; one runner-up slot moved reproducibly even though greedy tokens and ECS were exact. Exact controls varied materially across both versions, so the conservative non-overlapping replay observations are bounded evidence rather than a general throughput guarantee. Other Apple GPUs and larger contexts are outside the certificate.
+
+**Value proxy:** Exact generation semantics, resident ownership, and fail-closed publication remain the capability gate. Replay time, microkernel time, top-1, top-2, ECS, meaning, density, and resource headroom remain separate coordinates.
+
+**LTP/WBA:** This is ordinary compile-time kernel geometry tuning, not an LTP/WBA promotion. The measured end-to-end corridor recomputed the unchanged checkpoint/replay boundary and showed time descending while state bytes, ownership, and response semantics remained fixed; Git rollback retains the prior tile as the recovery frame.
+
+**decision:** Admit tile 15 only when Metal reports `Apple M2 Max`, with a distinct tile-15 pipeline-cache key; every other or unknown device fails closed to tile 16. Keep tile 12 and tile 24 rejected, and require fresh cross-device and larger-context falsifiers before widening the performance claim.

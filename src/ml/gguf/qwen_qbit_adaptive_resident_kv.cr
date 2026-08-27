@@ -1,5 +1,6 @@
 require "./qwen35_metal"
 require "./qwen_qbit_adaptive_kv"
+require "./qwen_qbit_adaptive_metal_policy"
 require "../core/buffer"
 
 {% unless flag?(:cpu_only) %}
@@ -387,10 +388,15 @@ module ML::GGUF
 
     {% unless flag?(:cpu_only) %}
       SOURCE = {{ read_file("#{__DIR__}/kernels/qbit_adaptive_attn_decode_qwen35.metal") }}
+      SOURCE_TILE15 = SOURCE.sub(
+        "constant uint QQA_ADAPTIVE_GQA6_TILE = 16;",
+        "constant uint QQA_ADAPTIVE_GQA6_TILE = 15;",
+      )
+      raise "adaptive GQA6 tile-15 source patch no longer matches" if SOURCE_TILE15 == SOURCE
       PACK_SOURCE = {{ read_file("#{__DIR__}/kernels/qbit_adaptive_pack_qwen35.metal") }}
-      @@gqa6_pipeline : ML::Metal::ComputePipeline?
+      @@gqa6_pipelines = Hash(Int32, ML::Metal::ComputePipeline).new
       @@gqa6_pipeline_mutex = Mutex.new
-      @@prefill_gqa6_pipeline : ML::Metal::ComputePipeline?
+      @@prefill_gqa6_pipelines = Hash(Int32, ML::Metal::ComputePipeline).new
       @@prefill_gqa6_pipeline_mutex = Mutex.new
       @@pack_pipeline : ML::Metal::ComputePipeline?
       @@pack_pipeline_mutex = Mutex.new
@@ -1039,19 +1045,40 @@ module ML::GGUF
       end
 
       private def gqa6_pipeline : ML::Metal::ComputePipeline
+        tile = gqa6_tile
         @@gqa6_pipeline_mutex.synchronize do
-          @@gqa6_pipeline ||= ML::Metal::PipelineCache.get("qwen35_qbit_adaptive_attn_decode_gqa6") {
-            ML::Metal::ComputePipeline.new("qwen35_qbit_adaptive_attn_decode_gqa6", SOURCE)
+          @@gqa6_pipelines[tile] ||= ML::Metal::PipelineCache.get("qwen35_qbit_adaptive_attn_decode_gqa6_tile#{tile}") {
+            ML::Metal::ComputePipeline.new(
+              "qwen35_qbit_adaptive_attn_decode_gqa6_tile#{tile}",
+              gqa6_source(tile),
+              "qwen35_qbit_adaptive_attn_decode_gqa6",
+            )
           }
         end
       end
 
       private def prefill_gqa6_pipeline : ML::Metal::ComputePipeline
+        tile = gqa6_tile
         @@prefill_gqa6_pipeline_mutex.synchronize do
-          @@prefill_gqa6_pipeline ||= ML::Metal::PipelineCache.get("qwen35_qbit_adaptive_prefill_chunk_gqa6") {
-            ML::Metal::ComputePipeline.new("qwen35_qbit_adaptive_prefill_chunk_gqa6", SOURCE)
+          @@prefill_gqa6_pipelines[tile] ||= ML::Metal::PipelineCache.get("qwen35_qbit_adaptive_prefill_chunk_gqa6_tile#{tile}") {
+            ML::Metal::ComputePipeline.new(
+              "qwen35_qbit_adaptive_prefill_chunk_gqa6_tile#{tile}",
+              gqa6_source(tile),
+              "qwen35_qbit_adaptive_prefill_chunk_gqa6",
+            )
           }
         end
+      end
+
+      private def gqa6_tile : Int32
+        QwenQBitAdaptiveMetalPolicy.gqa6_tile(
+          ML::Metal::Device.instance.name,
+          ENV["QWEN35_ADAPTIVE_GQA6_TILE"]?,
+        )
+      end
+
+      private def gqa6_source(tile : Int32) : String
+        tile == 15 ? SOURCE_TILE15 : SOURCE
       end
 
       private def pack_pipeline : ML::Metal::ComputePipeline
