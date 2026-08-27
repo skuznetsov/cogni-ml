@@ -2058,3 +2058,49 @@ rejects host-side packing subtraction as the explanation. It still does not
 prove the occupancy mechanism, isolate individual encoder counters, or widen
 the result beyond Apple M2 Max, this GQA6 shape, the tested prefix range, and
 the existing end-to-end quality certificate.
+
+### Real-KV fused prefill profile (2026-08-27)
+
+The existing default-off `QWEN35_PREFILL_BOUNDARY_PROFILE=1` boundary now
+reports the completed command buffer's `gpu_ms` through
+`GPUStartTime/GPUEndTime`. The ordinary path still uses the original separate
+commit and wait calls. The diagnostic interval covers the complete model
+prefill command, including full attention, recurrent work, adaptive K/V
+packing, the finalizer, and any output blit; it is not a per-kernel occupancy or
+bandwidth counter. `gpu_ms` is nested inside `submit_wait_ms`; the two fields
+must not be added. A no-op command reports `gpu_ms=0.0 gpu_timed=false` instead
+of treating unavailable positive timestamps as an execution failure.
+
+A Qwen3.8 session probe then rebuilt the same deterministic 829-token
+model-produced snapshot recipe and replayed the same 2,391-token suffix in a guarded
+tile-15/tile-16/tile-16/tile-15 order. Each process produced two independent
+adaptive trajectories with 16 resident attention caches. Raw adaptive GPU
+means were `23,227.136 ms` for tile 15 and `28,203.145 ms` for tile 16; medians
+were `22,960.803/28,125.776 ms`, with a nominal `17.6%` reduction between the
+means.
+
+That raw result is not admitted as causal evidence. The tile-independent exact
+replay controls drifted in the same direction and by a larger fraction:
+`17,824.924 ms` beside tile 15 versus `22,152.505 ms` beside tile 16, a
+`19.5%` difference. Per-process adaptive/exact ratios averaged `1.3090` for
+tile 15 and `1.2703` for tile 16. The strict quiet-host gate had already waited
+600 seconds and failed closed on an unrelated, seven-hour CPU-bound process;
+the bounded fallback runs used low priority, a 24 GiB tree cap, 79--84% free
+system memory, and no recorded thermal warning. They are controlled busy-host
+observations, not a quiet-host certificate.
+
+All four rows completed with zero swaps, roughly `7.67--7.71 GB` peak memory
+footprint, consistent resident ownership, and `3.7647x` logical KV density.
+They preserved top-1 `8/8`, exact-top-1 coverage `7/7`, ECS mean/minimum
+`1.0/1.0`, EOS, meaning, and `Their sum is 95.`. Tile 15 repeated ranked and
+set top-2 `11/14`; tile 16 repeated `12/14`, matching the already reported
+reduction-order drift. The focused state/resident suite passed `23/23`, and
+the complete resource-isolated QBit/Metal suite passed `139` examples with no
+failures or errors and one optional model-backed pending example.
+
+The profiler seam is therefore verified, but this real-KV run does not close
+steady-state tile attribution. The next falsifier is the same ABBA on a quiet
+host with a 64-token replay chunk. That gives a naturally growing resident
+owner across many commands while preserving the snapshot recipe, positions,
+chunk sequence, exact controls, quality coordinates, and resource guards. No
+further tile-specific kernel optimization is admitted before that signal.

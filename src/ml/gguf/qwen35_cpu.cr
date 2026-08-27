@@ -3340,6 +3340,7 @@ module ML::GGUF
       handoff_flip = false
       handoff_bytes = (n_tokens * hp.n_embd).to_i64 * sizeof(Float32)
       append_prefill_cmd = nil
+      append_prefill_gpu_work = false
       prefill_boundary_profile = ENV["QWEN35_PREFILL_BOUNDARY_PROFILE"]? == "1"
       append_prefill_started = nil.as(Time::Instant?)
       pending_adaptive_caches = [] of QwenQBitAdaptiveResidentKV::Cache
@@ -3364,17 +3365,21 @@ module ML::GGUF
                 QwenQBitAdaptiveResidentKV.finalize_pending_append(cmd, cache)
               end
               finalize_finished = prefill_boundary_profile ? Time.instant : nil
-              cmd.commit
-              commit_finished = prefill_boundary_profile ? Time.instant : nil
-              cmd.wait
-              wait_finished = prefill_boundary_profile ? Time.instant : nil
+              gpu_elapsed_ms = 0.0_f64
+              gpu_timed = prefill_boundary_profile && append_prefill_gpu_work
+              if gpu_timed
+                gpu_elapsed_ms = cmd.commit_and_wait_gpu_elapsed_seconds * 1000.0
+              else
+                cmd.commit
+                cmd.wait
+              end
+              submit_wait_finished = prefill_boundary_profile ? Time.instant : nil
               QwenQBitAdaptiveResidentKV.finish_pending_appends!(pending_adaptive_caches, cmd)
               publish_finished = prefill_boundary_profile ? Time.instant : nil
               if prefill_boundary_profile
                 finalize_started_value = finalize_started.not_nil!
                 finalize_finished_value = finalize_finished.not_nil!
-                commit_finished_value = commit_finished.not_nil!
-                wait_finished_value = wait_finished.not_nil!
+                submit_wait_finished_value = submit_wait_finished.not_nil!
                 publish_finished_value = publish_finished.not_nil!
                 encode_started = append_prefill_started || finalize_started_value
                 STDERR.puts(String.build do |io|
@@ -3384,9 +3389,10 @@ module ML::GGUF
                   io << " caches=" << pending_adaptive_caches.size
                   io << " encode_ms=" << (finalize_started_value - encode_started).total_milliseconds.round(3)
                   io << " finalize_ms=" << (finalize_finished_value - finalize_started_value).total_milliseconds.round(3)
-                  io << " commit_ms=" << (commit_finished_value - finalize_finished_value).total_milliseconds.round(3)
-                  io << " wait_ms=" << (wait_finished_value - commit_finished_value).total_milliseconds.round(3)
-                  io << " publish_ms=" << (publish_finished_value - wait_finished_value).total_milliseconds.round(3)
+                  io << " submit_wait_ms=" << (submit_wait_finished_value - finalize_finished_value).total_milliseconds.round(3)
+                  io << " gpu_ms=" << gpu_elapsed_ms.round(3)
+                  io << " gpu_timed=" << gpu_timed
+                  io << " publish_ms=" << (publish_finished_value - submit_wait_finished_value).total_milliseconds.round(3)
                 end)
               end
             rescue ex
@@ -3399,6 +3405,7 @@ module ML::GGUF
             ensure
               pending_adaptive_caches.clear
               append_prefill_cmd = nil
+              append_prefill_gpu_work = false
             end
           elsif pending_adaptive_caches.any?
             pending_adaptive_caches.clear
@@ -3449,6 +3456,7 @@ module ML::GGUF
                read_output: fused_read_output,
                append_command_buffer: fused_read_output ? nil : append_prefill_cmd,
                pending_adaptive_caches: pending_adaptive_caches)
+            append_prefill_gpu_work = true unless fused_read_output
             il = fused[1]
             if fused_read_output
               x = fused[0]
@@ -3491,6 +3499,7 @@ module ML::GGUF
             unless adaptive_result
               raise ArgumentError.new("adaptive resident QBit KV full-attention prefill route is unavailable")
             end
+            append_prefill_gpu_work = true
             flush_prefill_cmd.call
             gpu_hidden = nil
             if adaptive_read_output
@@ -3511,6 +3520,7 @@ module ML::GGUF
             if !need_output && il + 1 >= layer_limit && !checkpoint_requested && full_output_buf.nil? &&
                final_full_attn_layer_chunk_kv_cache_only_routed([] of Float32, n_tokens, start_pos, state.layers[il], lw, hp, max_seq,
                  input_buf: gb, append_command_buffer: append_prefill_cmd)
+              append_prefill_gpu_work = true
               x = [] of Float32
               gpu_hidden = nil
               il += 1
@@ -3522,6 +3532,7 @@ module ML::GGUF
           elsif !need_output && il + 1 >= layer_limit && !checkpoint_requested && resident_output_buf.nil? &&
                 final_full_attn_layer_chunk_kv_cache_only_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq,
                   append_command_buffer: append_prefill_cmd)
+            append_prefill_gpu_work = true
             x = [] of Float32
             il += 1
             next
@@ -3664,6 +3675,7 @@ module ML::GGUF
                        output_buf: rec_output_buf,
                        read_output: rec_read_output,
                        append_command_buffer: rec_read_output ? nil : append_prefill_cmd)
+                    append_prefill_gpu_work = true unless rec_read_output
                     il = run_end
                     if rec_read_output
                       x = gpu_out

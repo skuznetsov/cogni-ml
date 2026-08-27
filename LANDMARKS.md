@@ -24703,3 +24703,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** This is diagnostic attribution of an already admitted compile-time geometry, not a new speculative move. The prefill coordinate descends while the decode coordinate does not; the end-to-end replay certificate remains the global frame.
 
 **decision:** Retain the M2 Max tile-15 policy and attribute its bounded gain to the adaptive prefill command, not standalone decode. Keep hardware counters and further kernel changes out of scope until a new falsifier requires them.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-REAL-KV-PROFILE-938] Busy-host real-KV profiling does not independently close tile attribution
+**context:** ml / Qwen3.8 / adaptive QBit / Metal / real KV / session replay / profiling
+**state:** profiling seam verified; steady-state tile attribution remains vulnerable pending a quiet-host multi-command falsifier
+
+- claim: "The production prefill boundary can report the fused model command's GPU interval without changing default execution or cache publication semantics."
+  source: `QWEN35_PREFILL_BOUNDARY_PROFILE=1` now commits and waits through the existing Metal timestamp seam and reports `gpu_ms`; the default-off path retains the original separate commit and wait calls. Four release model runs completed the profile path with consistent resident ownership and zero swaps. The focused state/resident suite passed `23/23`; the complete resource-isolated QBit/Metal suite passed `139` examples with zero failures/errors and one optional pending example.
+  verified_at: 2026-08-27
+  decay_trigger: shared-prefill command ownership, publication ordering, Metal timestamp semantics, profile output contract, or completion handling changes
+  trust: {F:0.98,G:0.39,R:0.94}
+
+- claim: "The controlled busy-host real-KV ABBA is insufficient to attribute its raw tile-15 reduction to tile geometry."
+  source: the same deterministic 829-token snapshot recipe and 2,391-token suffix produced raw fused-command GPU means of `23,227.136/28,203.145 ms` and medians of `22,960.803/28,125.776 ms` for tile 15/16, with a nominal `17.6%` reduction between the means. Tile-independent exact controls also favored the tile-15 rows by `19.5%` (`17,824.924/22,152.505 ms`), while adaptive/exact ratios averaged `1.3090/1.2703`; host drift therefore explains the raw separation at least as well as tile geometry. The strict quiet gate failed closed after 600 seconds on an unrelated long-running CPU process, so these are bounded busy-host observations rather than promotion evidence.
+  verified_at: 2026-08-27
+  decay_trigger: a quiet-host ABBA with identical real activations and a naturally reused resident owner, or any change to model, snapshot, prompt, chunk plan, compiler/runtime, hardware, or profile boundary
+  trust: {F:0.96,G:0.11,R:0.90}
+
+**Adversary:** The GPU interval contains full attention, recurrent work, adaptive packing, the finalizer, and any output blit; it cannot isolate the adaptive attention kernel. The 4,096-token replay chunk yielded one fused command per adaptive trajectory, so it warmed the process path but did not sample a sequence of command-level owner reuses. Exact matching text and ECS do not erase the repeated top-2 difference.
+
+**Value proxy:** The profile is a mechanism probe, not the session objective. Generation semantics, top-1/top-2/ECS/meaning, resident ownership, density, end-to-end replay, exact controls, memory pressure, and host noise remain separate coordinates.
+
+**LTP/WBA:** This is diagnostic instrumentation, not an LTP/WBA promotion. The noisy real-KV observation cannot recompose the synthetic local signal into a stronger global certificate, so no new kernel move is admitted.
+
+**decision:** Keep the already bounded M2 Max tile-15 policy and the default-off fused-command profiler. Do not strengthen the real-KV mechanism claim or optimize further until a quiet-host ABBA uses 64-token chunks to sample the same naturally growing resident owner across many commands.
