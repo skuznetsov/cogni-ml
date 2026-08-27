@@ -154,9 +154,12 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
       (encoded_k.payload_bytes + encoded_v.payload_bytes).to_i64,
     )
     begin
+      gpu_elapsed_seconds = 0.0_f64
       actual = ML::GGUF::QwenQBitAdaptiveResidentKV.attn_decode(
         q, gate, resident, n_head, heads_per_group, scale,
+        gpu_elapsed_seconds: pointerof(gpu_elapsed_seconds),
       )
+      gpu_elapsed_seconds.should be > 0.0_f64
     ensure
       resident.release
     end

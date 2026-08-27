@@ -65,7 +65,7 @@ module Qwen35QBitAdaptivePackProbe
     head_dim = 256
     heads_per_group = 6
     scale = (1.0 / Math.sqrt(head_dim.to_f64)).to_f32
-    puts "chunk mode live_tokens density pack_ms pack_gib_s f32_attn_ms qbit_attn_ms slowdown max_diff"
+    puts "chunk mode live_tokens density pack_ms pack_gib_s f32_attn_ms qbit_wall_ms qbit_gpu_ms slowdown max_diff"
 
     chunks.each do |chunk|
       ["p4", "mixed25"].each do |mode|
@@ -117,19 +117,24 @@ module Qwen35QBitAdaptivePackProbe
                 live_tokens - 1, n_head, n_head_kv, head_dim, heads_per_group, scale,
               )
             end
+            gpu_samples = Array(Float64).new(repeats)
             qbit_ms = timed_ms(repeats) do
+              gpu_elapsed_seconds = 0.0_f64
               ML::GGUF::QwenQBitAdaptiveResidentKV.attn_decode(
                 q, gate, resident, n_head, heads_per_group, scale,
+                gpu_elapsed_seconds: pointerof(gpu_elapsed_seconds),
               )
+              gpu_samples << gpu_elapsed_seconds * 1000.0
             end
+            qbit_gpu_ms = median(gpu_samples)
 
             raw_bytes = 2_i64 * live_tokens * n_head_kv * head_dim * sizeof(Float32)
             packed_input_bytes = 2_i64 * chunk * n_head_kv * head_dim * sizeof(Float32)
             density = raw_bytes.to_f64 / resident.compressed_bytes
             gib_s = packed_input_bytes.to_f64 / (1024.0 ** 3) / (pack_ms / 1000.0)
-            printf "%5d %-7s %11d %7.3fx %7.3f %10.3f %11.3f %12.3f %8.3fx %.3g\n",
+            printf "%5d %-7s %11d %7.3fx %7.3f %10.3f %11.3f %12.3f %11.3f %8.3fx %.3g\n",
               chunk, mode, live_tokens, density, pack_ms, gib_s,
-              f32_ms, qbit_ms, qbit_ms / f32_ms, diff
+              f32_ms, qbit_ms, qbit_gpu_ms, qbit_ms / f32_ms, diff
           ensure
             k_f32.release
             v_f32.release

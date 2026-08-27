@@ -375,6 +375,32 @@ extern "C" int32_t gs_commit_and_wait_status(void* cmd_handle) {
         : -((int32_t)status + 1);
 }
 
+// Commit, wait, and capture the interval during which the GPU executed this
+// command buffer. The timestamps must be read before ARC releases the retained
+// native handle. A zero interval is left for the caller to treat as unavailable.
+extern "C" int32_t gs_commit_and_wait_status_gpu_elapsed(
+    void* cmd_handle,
+    double* elapsed_seconds
+) {
+    if (elapsed_seconds != nullptr) *elapsed_seconds = 0.0;
+    if (cmd_handle == nullptr) return -1;
+    id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)cmd_handle;
+    [cmd commit];
+    [cmd waitUntilCompleted];
+    MTLCommandBufferStatus status = cmd.status;
+    if (status != MTLCommandBufferStatusCompleted) {
+        return -((int32_t)status + 1);
+    }
+    if (elapsed_seconds != nullptr) {
+        CFTimeInterval start = cmd.GPUStartTime;
+        CFTimeInterval end = cmd.GPUEndTime;
+        if (start > 0.0 && end >= start) {
+            *elapsed_seconds = end - start;
+        }
+    }
+    return 0;
+}
+
 extern "C" void commit_impl(void* cmd_handle) {
     if (cmd_handle == nullptr) return;
     id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)cmd_handle;

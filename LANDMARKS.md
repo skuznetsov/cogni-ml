@@ -24655,3 +24655,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** This is ordinary compile-time kernel geometry tuning, not an LTP/WBA promotion. The measured end-to-end corridor recomputed the unchanged checkpoint/replay boundary and showed time descending while state bytes, ownership, and response semantics remained fixed; Git rollback retains the prior tile as the recovery frame.
 
 **decision:** Admit tile 15 only when Metal reports `Apple M2 Max`, with a distinct tile-15 pipeline-cache key; every other or unknown device fails closed to tile 16. Keep tile 12 and tile 24 rejected, and require fresh cross-device and larger-context falsifiers before widening the performance claim.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-DECODE-TIME-936] Standalone decode does not explain the M2 Max tile-15 replay gain
+**context:** ml / Qwen3.8 / adaptive QBit / Metal / standalone decode / profiling
+**state:** decode speed hypothesis refuted; command-buffer timestamp seam verified
+
+- claim: "The standalone adaptive decode dispatch is not faster with tile 15 on the measured M2 Max corridor."
+  source: a release probe used deterministic 2,048-token resident inputs, one warm decode outside the timer, 15 timed samples per fresh process, and a guarded tile-15/tile-16/tile-16/tile-15 sequence. P4 GPU medians were `6.409/6.340/6.365/6.400 ms`; mixed-25% BF16 medians were `6.154/6.091/6.067/6.049 ms`. Paired means make tile 15 about `0.8%` slower for P4 and `0.4%` slower for mixed-25%. CPU-reference maximum deltas were below `8e-08`.
+  verified_at: 2026-08-26
+  decay_trigger: Metal timestamps, command-buffer boundary, decode dispatch shape, tile source, compiler/runtime, hardware, cache length, tier distribution, or probe warm-up changes
+  trust: {F:0.97,G:0.13,R:0.92}
+
+- claim: "The profiling seam reports the completed command buffer's GPU interval without changing ordinary decode behavior."
+  source: `CommandBuffer#commit_and_wait_gpu_elapsed_seconds` reads `GPUStartTime/GPUEndTime` in the same native commit/wait call before releasing the handle. Adaptive decode writes the interval only when an explicit caller pointer is supplied; the default path is unchanged. The resident Metal suite required a positive interval and passed `14 examples, 0 failures, 0 errors` with CPU-reference cosine `1.0` and maximum delta `3.72529e-08`; the complete resource-isolated QBit/Metal suite passed `139 examples, 0 failures, 0 errors, 1 optional pending`.
+  verified_at: 2026-08-26
+  decay_trigger: command-buffer ownership, ARC bridge lifetime, completion-status handling, Metal timestamp semantics, or adaptive decode API changes
+  trust: {F:0.98,G:0.46,R:0.95}
+
+**Adversary:** Command-buffer timestamps are not occupancy, memory-bandwidth, cache-miss, or instruction counters. They exclude host allocation, transfers before submission, and output readback, which is intentional for kernel attribution but prevents a whole-request latency claim. The paired differences are small and do not prove tile 16 is a generally better decode default; they only refute decode as the measured tile-15 mechanism. The earlier session-level tile-15 policy remains supported by separate prefill and replay evidence.
+
+**Value proxy:** Correct output and completion status remain the capability gate. GPU interval, wall time, full replay time, top-1, top-2, ECS, and resident density are separate coordinates; a microkernel result cannot replace the end-to-end session objective.
+
+**LTP/WBA:** The profiling seam is diagnostic rather than a promoted local move. Recomputing the decode-only potential refuted the proposed explanation, so no decode kernel change was built. The next admissible experiment is prefill-only GPU attribution while preserving the existing end-to-end replay frame.
+
+**decision:** Keep the scoped M2 Max tile-15 replay policy, but do not claim or optimize a standalone decode win. Retain the small timestamp seam for bounded falsifiers; do not add hardware counters until a question requires metrics that timestamps cannot answer.

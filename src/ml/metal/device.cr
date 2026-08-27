@@ -69,6 +69,10 @@
           raise "Metal disabled (cpu_only)"
         end
 
+        def commit_and_wait_gpu_elapsed_seconds : Float64
+          raise "Metal disabled (cpu_only)"
+        end
+
         def completed? : Bool
           false
         end
@@ -298,6 +302,23 @@ module ML
         verify_completion!
       end
 
+      # Commit once and return Metal's completed-command GPU execution interval.
+      # This is a profiling seam, not wall time and not a hardware-counter API.
+      def commit_and_wait_gpu_elapsed_seconds : Float64
+        raise "cannot GPU-time an already committed Metal command buffer" if @committed
+        @committed = true
+        elapsed_seconds = 0.0_f64
+        @completion_status = MetalDeviceFFI.commit_and_wait_status_gpu_elapsed(
+          @handle, pointerof(elapsed_seconds),
+        )
+        @completed = true
+        verify_completion!
+        unless elapsed_seconds.finite? && elapsed_seconds > 0.0
+          raise "Metal GPU execution timestamps unavailable"
+        end
+        elapsed_seconds
+      end
+
       # Commit without waiting (async GPU execution)
       def commit : Nil
         return if @committed
@@ -442,6 +463,7 @@ lib MetalDeviceFFI
   fun wait_command_buffer_status = gs_wait_command_buffer_status(cmd : Pointer(Void)) : Int32
   fun commit_and_wait = gs_commit_and_wait(cmd_buffer : Pointer(Void)) : Void
   fun commit_and_wait_status = gs_commit_and_wait_status(cmd_buffer : Pointer(Void)) : Int32
+  fun commit_and_wait_status_gpu_elapsed = gs_commit_and_wait_status_gpu_elapsed(cmd_buffer : Pointer(Void), elapsed_seconds : Pointer(Float64)) : Int32
   fun commit = gs_commit(cmd_buffer : Pointer(Void)) : Void
 
   # Pipeline compilation
@@ -475,6 +497,7 @@ lib MetalDeviceFFI
   fun wait_command_buffer_status = gs_wait_command_buffer_status(cmd : Pointer(Void)) : Int32
   fun commit_and_wait = gs_commit_and_wait(cmd_buffer : Pointer(Void)) : Void
   fun commit_and_wait_status = gs_commit_and_wait_status(cmd_buffer : Pointer(Void)) : Int32
+  fun commit_and_wait_status_gpu_elapsed = gs_commit_and_wait_status_gpu_elapsed(cmd_buffer : Pointer(Void), elapsed_seconds : Pointer(Float64)) : Int32
   fun commit = gs_commit(cmd_buffer : Pointer(Void)) : Void
   fun create_pipeline = gs_create_pipeline(source : Pointer(UInt8), function_name : Pointer(UInt8)) : Pointer(Void)
   fun create_pipeline_from_library = gs_create_pipeline_from_library(library_path : Pointer(UInt8), function_name : Pointer(UInt8)) : Pointer(Void)

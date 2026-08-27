@@ -2001,6 +2001,23 @@ distinct pipeline-cache keys, and `QWEN35_ADAPTIVE_GQA6_TILE=15|16` is an
 explicit benchmark override. This does not change cache bytes, checkpoints,
 publication, rollback, or resident memory. Other Apple GPUs, larger contexts,
 stable multi-prompt throughput, and exact runner-up-logit preservation remain
-open. The selected tile also affects the standalone adaptive decode kernel;
-correctness is covered by the Metal parity suite, while dedicated
-decode-throughput promotion remains separate.
+open.
+
+A dedicated command-buffer timestamp probe now separates the standalone
+adaptive decode dispatch from host allocation, transfer, readback, and wall
+noise. In a guarded tile-15/tile-16/tile-16/tile-15 sequence at 2,048 live
+tokens, with 15 timed samples per process and deterministic cache inputs, P4
+GPU medians were `6.409/6.340/6.365/6.400 ms`; mixed-25% BF16 medians were
+`6.154/6.091/6.067/6.049 ms`. Averaging the paired observations makes tile
+`15` approximately `0.8%` slower for P4 and `0.4%` slower for mixed-25%, not
+faster. CPU-reference maximum deltas remained below `8e-08`, and the focused
+resident Metal suite passed `14/14` with a required nonzero GPU interval.
+
+This refutes standalone decode as the source of the session-level tile-15
+gain. The admitted M2 Max policy remains supported by the earlier prefill and
+end-to-end replay evidence, but its mechanism is now scoped to the prefill or
+system scheduling corridor rather than generalized to decode. Metal
+`GPUStartTime/GPUEndTime` measure the completed command-buffer interval; they
+are not occupancy, bandwidth, or instruction counters. Hardware-counter
+sampling remains rejected for this slice because it would add a separate
+capability and can perturb scheduling without answering the current boundary.

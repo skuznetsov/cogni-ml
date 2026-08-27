@@ -743,7 +743,8 @@ module ML::GGUF
                     cache : Cache,
                     n_head : Int32,
                     heads_per_group : Int32,
-                    scale : Float32) : Array(Float32)
+                    scale : Float32,
+                    gpu_elapsed_seconds : Pointer(Float64) = Pointer(Float64).null) : Array(Float32)
       validate_attention(q, gate, cache, n_head, heads_per_group, scale)
 
       {% if flag?(:cpu_only) %}
@@ -781,7 +782,11 @@ module ML::GGUF
             encoder.set_value(scale, 14)
             encoder.dispatch_threadgroups({cache.n_head_kv, 1, 1}, {192, 1, 1})
             encoder.end_encoding
-            command.commit_and_wait
+            if gpu_elapsed_seconds.null?
+              command.commit_and_wait
+            else
+              gpu_elapsed_seconds.value = command.commit_and_wait_gpu_elapsed_seconds
+            end
             out_buffer.read(q.size.to_i32)
           ensure
             transient.each(&.release)
