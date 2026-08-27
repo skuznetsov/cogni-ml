@@ -98,6 +98,36 @@ inline float qqa_adaptive_value(device const uchar* base,
     return mean + sigma * qqa_adaptive_centroid(raw_code, precision);
 }
 
+// Planned session caches use one tier for every row in a layer. Keep the
+// generic metadata path above for admitted mixed artifacts, but skip its two
+// metadata loads and per-value tier selection when the host proves P4/BF16
+// uniformity from both immutable K/V plans.
+inline float qqa_adaptive_uniform_value(device const uchar* base,
+                                        device const uchar* metadata,
+                                        device const uchar* sidecar,
+                                        uint row,
+                                        uint within,
+                                        uint uniform_tier) {
+    if (uniform_tier == QQA_ADAPTIVE_P4) {
+        const uint row_base = row * QQA_ADAPTIVE_P4_STRIDE;
+        uint raw_code = 0;
+        for (uint plane = 0; plane < 4; ++plane) {
+            const uint plane_offset = row_base + 8 + plane * QQA_ADAPTIVE_PLANE_BYTES;
+            raw_code |= qqa_adaptive_plane_bit(base + plane_offset, within) << (7u - plane);
+        }
+        const float mean = as_type<float>(qqa_adaptive_read_u32_le(base, row_base));
+        const float sigma = as_type<float>(qqa_adaptive_read_u32_le(base, row_base + 4));
+        return mean + sigma * qqa_adaptive_centroid(raw_code, 4);
+    }
+    if (uniform_tier == QQA_ADAPTIVE_BF16) {
+        const uint sidecar_offset = row * QQA_ADAPTIVE_HD * 2u;
+        const uint bits = ((uint)qqa_adaptive_read_u16_le(
+            sidecar, sidecar_offset + within * 2)) << 16;
+        return as_type<float>(bits);
+    }
+    return qqa_adaptive_value(base, metadata, sidecar, row, within);
+}
+
 constant uint QQA_ADAPTIVE_GQA6_HEADS = 6;
 constant uint QQA_ADAPTIVE_GQA6_TILE = 16;
 constant uint QQA_ADAPTIVE_GQA6_THREADS = QQA_ADAPTIVE_GQA6_HEADS * QQA_ADAPTIVE_SG;
@@ -234,6 +264,7 @@ kernel void qwen35_qbit_adaptive_prefill_chunk_gqa6(
     constant uint& heads_per_group [[buffer(17)]],
     constant float& scale [[buffer(18)]],
     constant uint& source_token_offset [[buffer(19)]],
+    constant uint& uniform_tier [[buffer(20)]],
     uint3 group [[threadgroup_position_in_grid]],
     ushort lane [[thread_index_in_simdgroup]],
     ushort local_h [[simdgroup_index_in_threadgroup]],
@@ -278,8 +309,8 @@ kernel void qwen35_qbit_adaptive_prefill_chunk_gqa6(
             const uint position = tile_start + position_in_tile;
             if (position < packed_len) {
                 const uint row = position * n_head_kv + kv_h;
-                kv_tile[index] = qqa_adaptive_value(
-                    k_base, k_metadata, k_sidecar, row, d);
+                kv_tile[index] = qqa_adaptive_uniform_value(
+                    k_base, k_metadata, k_sidecar, row, d, uniform_tier);
             } else {
                 const uint current_token = source_token_offset + position - packed_len;
                 kv_tile[index] = current_k[current_token * kv_dim + kv_h * head_dim + d];
@@ -320,8 +351,8 @@ kernel void qwen35_qbit_adaptive_prefill_chunk_gqa6(
             const uint position = tile_start + position_in_tile;
             if (position < packed_len) {
                 const uint row = position * n_head_kv + kv_h;
-                kv_tile[index] = qqa_adaptive_value(
-                    v_base, v_metadata, v_sidecar, row, d);
+                kv_tile[index] = qqa_adaptive_uniform_value(
+                    v_base, v_metadata, v_sidecar, row, d, uniform_tier);
             } else {
                 const uint current_token = source_token_offset + position - packed_len;
                 kv_tile[index] = current_v[current_token * kv_dim + kv_h * head_dim + d];

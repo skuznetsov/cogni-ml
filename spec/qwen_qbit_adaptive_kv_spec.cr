@@ -129,6 +129,16 @@ describe ML::GGUF::QwenQBitAdaptiveKV do
     regions.metadata.should eq(plan.metadata[0, 3 * ML::GGUF::QwenQBitAdaptiveKV::METADATA_BYTES])
   end
 
+  it "records a uniform tier without misclassifying mixed or empty plans" do
+    p4 = ML::GGUF::QwenQBitAdaptiveKV::Tier::P4
+    bf16 = ML::GGUF::QwenQBitAdaptiveKV::Tier::BF16
+
+    codec.plan(Array.new(3, p4)).uniform_tier.should eq(p4)
+    codec.plan(Array.new(2, bf16)).uniform_tier.should eq(bf16)
+    codec.plan([p4, bf16]).uniform_tier.should be_nil
+    codec.plan([] of ML::GGUF::QwenQBitAdaptiveKV::Tier).uniform_tier.should be_nil
+  end
+
   it "rejects invalid adaptive plan prefixes" do
     plan = codec.plan([ML::GGUF::QwenQBitAdaptiveKV::Tier::P4])
     expect_raises(ArgumentError, /prefix/) { plan.prefix_sidecar_bytes(-1) }

@@ -57,6 +57,7 @@ module ML::GGUF
       getter metadata_bytes : Int32
       getter sidecar_bytes : Int32
       getter payload_bytes : Int32
+      getter uniform_tier : Tier?
       @prefix_sidecar_bytes : Array(Int32)
 
       private def initialize(@row_count : Int32,
@@ -65,6 +66,7 @@ module ML::GGUF
                              @sidecar_bytes : Int32,
                              @payload_bytes : Int32,
                              @metadata : Bytes,
+                             @uniform_tier : Tier?,
                              @prefix_sidecar_bytes : Array(Int32))
       end
 
@@ -90,6 +92,10 @@ module ML::GGUF
           write_u32_le(metadata, offset, selected.value)
           write_u32_le(metadata, offset + TIER_BYTES, prefix_sidecar[row].to_u32)
         end
+        uniform_tier = tiers.first?
+        if uniform_tier && tiers.any? { |selected| selected != uniform_tier }
+          uniform_tier = nil
+        end
 
         new(
           row_count,
@@ -98,6 +104,7 @@ module ML::GGUF
           sidecar_cursor.to_i32,
           total_bytes.to_i32,
           metadata,
+          uniform_tier,
           prefix_sidecar,
         )
       end

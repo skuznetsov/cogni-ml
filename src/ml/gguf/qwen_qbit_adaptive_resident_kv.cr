@@ -239,8 +239,12 @@ module ML::GGUF
           unless @pending_status
             raise ArgumentError.new("adaptive resident QBit append is not pending")
           end
+          uniform_tier = if (k_plan = @k_plan) && (v_plan = @v_plan)
+                           selected = k_plan.uniform_tier
+                           selected if selected && v_plan.uniform_tier == selected
+                         end
           yield @k_base, @k_metadata, @k_sidecar,
-            @v_base, @v_metadata, @v_sidecar
+            @v_base, @v_metadata, @v_sidecar, uniform_tier
         end
       end
 
@@ -591,7 +595,8 @@ module ML::GGUF
         begin
           start_token = cache.begin_pending_append!(token_count, expected_start_token, status, command)
           reserved = true
-          cache.with_pending_buffers do |k_base, k_metadata, k_sidecar, v_base, v_metadata, v_sidecar|
+          cache.with_pending_buffers do |k_base, k_metadata, k_sidecar, v_base, v_metadata, v_sidecar, uniform_tier|
+            qualified_uniform_tier = qualified_uniform_prefill_tier(uniform_tier)
             source_token_offset = 0_i32
             prefill_attention_chunks(token_count).each do |chunk_tokens|
               packed_len = start_token + source_token_offset
@@ -610,7 +615,7 @@ module ML::GGUF
                 v_base, v_metadata, v_sidecar,
                 output, status, packed_len, chunk_tokens, source_token_offset,
                 n_head, cache.n_head_kv, cache.head_dim,
-                heads_per_group, scale,
+                heads_per_group, scale, qualified_uniform_tier,
               )
               encode_pack(command, k_source, k_base, k_metadata, k_sidecar, status,
                 source_row_offset, destination_row_offset, row_count)
@@ -953,7 +958,8 @@ module ML::GGUF
                                        n_head_kv : Int32,
                                        head_dim : Int32,
                                        heads_per_group : Int32,
-                                       scale : Float32) : Nil
+                                       scale : Float32,
+                                       uniform_tier : QwenQBitAdaptiveKV::Tier?) : Nil
         encoder = ML::Metal::ComputeEncoder.new(command)
         encoder.set_pipeline(prefill_gqa6_pipeline)
         encoder.set_buffer(q_source, 0)
@@ -976,8 +982,19 @@ module ML::GGUF
         encoder.set_value(heads_per_group.to_u32, 17)
         encoder.set_value(scale, 18)
         encoder.set_value(source_token_offset.to_u32, 19)
+        encoder.set_value(uniform_tier ? uniform_tier.value.to_u32 : UInt32::MAX, 20)
         encoder.dispatch_threadgroups({n_head_kv, token_count, 1}, {192, 1, 1})
         encoder.end_encoding
+      end
+
+      private def qualified_uniform_prefill_tier(tier : QwenQBitAdaptiveKV::Tier?) : QwenQBitAdaptiveKV::Tier?
+        return nil if ENV["QWEN35_ADAPTIVE_UNIFORM_PREFILL_OFF"]? == "1"
+        case tier
+        when QwenQBitAdaptiveKV::Tier::P4, QwenQBitAdaptiveKV::Tier::BF16
+          tier
+        else
+          nil
+        end
       end
 
       # A zero-initialized status alone cannot distinguish success from a

@@ -340,6 +340,76 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
     ML::MetalBuffer.stats[:live_bytes].should eq(live_before)
   end
 
+  it "matches the CPU reference for a uniform BF16 prefill plan" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    initial_tokens = 3
+    token_count = 2
+    capacity = initial_tokens + token_count
+    n_head = 6
+    n_head_kv = 1
+    head_dim = 256
+    heads_per_group = 6
+    q_dim = n_head * head_dim
+    kv_dim = n_head_kv * head_dim
+    scale = (1.0 / Math.sqrt(head_dim.to_f64)).to_f32
+    rng = Random.new(0xBF160001_u64)
+    initial_k = Array(Float32).new(initial_tokens * kv_dim) { ((rng.next_float - 0.5) * 1.0).to_f32 }
+    initial_v = Array(Float32).new(initial_tokens * kv_dim) { ((rng.next_float - 0.5) * 1.0).to_f32 }
+    q = Array(Float32).new(token_count * q_dim) { ((rng.next_float - 0.5) * 1.0).to_f32 }
+    gate = Array(Float32).new(token_count * q_dim) { ((rng.next_float - 0.5) * 2.0).to_f32 }
+    current_k = Array(Float32).new(token_count * kv_dim) { ((rng.next_float - 0.5) * 1.0).to_f32 }
+    current_v = Array(Float32).new(token_count * kv_dim) { ((rng.next_float - 0.5) * 1.0).to_f32 }
+    plan = adaptive.plan(Array.new(capacity, ML::GGUF::QwenQBitAdaptiveKV::Tier::BF16))
+
+    live_before = ML::MetalBuffer.stats[:live_bytes]
+    resident = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
+      plan, plan, capacity, n_head_kv, head_dim,
+    )
+    begin
+      initial_buffers = [
+        ML::MetalBuffer.from_array(initial_k),
+        ML::MetalBuffer.from_array(initial_v),
+      ]
+      begin
+        ML::GGUF::QwenQBitAdaptiveResidentKV.append_from_metal(
+          resident, initial_buffers[0], initial_buffers[1], initial_tokens,
+        )
+      ensure
+        initial_buffers.each(&.release)
+      end
+
+      packed_k, packed_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(resident)
+      expected = QwenQBitAdaptiveResidentKVSpec.chunk_reference(
+        q, gate, adaptive.decode(packed_k), adaptive.decode(packed_v),
+        current_k, current_v, initial_tokens, token_count,
+        n_head, n_head_kv, head_dim, heads_per_group, scale,
+      )
+      buffers = [
+        ML::MetalBuffer.from_array(q),
+        ML::MetalBuffer.from_array(gate),
+        ML::MetalBuffer.from_array(current_k),
+        ML::MetalBuffer.from_array(current_v),
+        ML::MetalBuffer.new(expected.size.to_i64 * sizeof(Float32)),
+      ]
+      begin
+        ML::GGUF::QwenQBitAdaptiveResidentKV.prefill_chunk_and_append_from_metal(
+          resident,
+          buffers[0], buffers[1], buffers[2], buffers[3], buffers[4],
+          token_count, n_head, heads_per_group, scale,
+        )
+        actual = buffers[4].read(expected.size.to_i32)
+        QwenQBitAdaptiveResidentKVSpec.cosine(expected, actual).should be > 0.9999999
+        QwenQBitAdaptiveResidentKVSpec.max_diff(expected, actual).should be < 2.0e-4_f32
+      ensure
+        buffers.each(&.release)
+      end
+    ensure
+      resident.release
+    end
+    ML::MetalBuffer.stats[:live_bytes].should eq(live_before)
+  end
+
   it "matches bounded adaptive chunks when a wide span is published once" do
     pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
 

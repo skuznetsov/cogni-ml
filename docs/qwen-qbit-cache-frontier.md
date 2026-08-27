@@ -187,6 +187,32 @@ replay was 34,493.090 ms, cold-hit-to-first-token was 34,568.357 ms, forced
 replay was 34,056.372 ms, peak RSS was 1,977,303,040 bytes, and swaps remained
 zero. The same quality vector and all 16 resident-owner checks passed.
 
+The next admitted prefill optimization removes redundant adaptive row-metadata
+loads when the immutable K/V plans already prove that every row in a layer has
+the same tier. `Plan#uniform_tier` records that invariant. Matching uniform P4
+or BF16 K/V plans use direct base or sidecar addressing inside the Metal
+prefill kernel; mixed plans, P5/F32 plans, planless prepared artifacts, and
+mismatched K/V tiers retain the generic metadata path. Setting
+`QWEN35_ADAPTIVE_UNIFORM_PREFILL_OFF=1` also selects the generic path for a
+matched diagnostic control. The cache format, resident bytes, exact checkpoint
+history, and DeltaNet ownership are unchanged.
+
+A focused plan spec passed `9/9`; the Metal resident-KV suite passed `14/14`,
+including a uniform-BF16 CPU-reference parity row with cosine above
+`0.9999999` and maximum delta below `2e-4`. A guarded A/B/A Qwen3.8-27B row at
+3,220 full tokens then compared the generic control, the uniform loader, and a
+second generic control. The candidate's free replay was 24,847.812 ms versus
+26,985.614 and 28,686.299 ms for the controls; forced replay was 25,185.206 ms
+versus 26,503.942 and 27,780.730 ms. Against the faster control observation,
+this is a measured 7.9% free-replay and 5.0% forced-replay reduction. All three
+rows emitted `Their sum is 95.` with EOS, top-1 `8/8`, ranked top-2 `12/14`,
+top-2 set overlap `12/14`, exact-top-1 coverage `7/7`, and output-row ECS
+mean/minimum `1.0/1.0`. Resident KV remained 112,107,520 bytes versus
+422,051,840 raw bytes (`3.7647x`), and no resource guard fired. Absolute exact
+baselines varied materially across the A/B/A order, so this qualifies the
+bounded loader mechanism on M2 Max, not a stable throughput or cross-hardware
+claim.
+
 An aligned 3226-token in-memory representation probe separately preserved
 `Their sum is 95.`, EOS, top-1 `8/8`, ranked top-2 `11/14`, top-2 set overlap
 `11/14`, exact-top-1 coverage `7/7`, and output-row ECS mean/minimum `1.0/1.0`.

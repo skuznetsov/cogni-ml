@@ -24607,3 +24607,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **Adversary:** Every body-free `post` caller changes wire placement, not just prefix lookup. Store/query semantics are unchanged and the real server accepted the request, but POST-body SQL remains subject to ClickHouse query parsing and size limits. `post_stream` deliberately keeps SQL in the URL because its body carries non-replayable `input()` data. The unrelated eager `Content-Length` allocation was excluded from this fix. The model hit is process-cold but follows the seed immediately, so ClickHouse, filesystem, and Metal caches may be warm; it is not a physical-cold-disk or stable-latency row. The 24 GiB process-tree cap is a safety boundary rather than a measured peak, and exact output tokens do not establish fresh runner-up-logit parity.
 
 **decision:** Use one framing rule: body-free requests carry SQL in the body; requests with input data carry SQL in the URL. Keep the existing candidate cap and bounded response/request guards.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-UNIFORM-PREFILL-934] Uniform session plans bypass per-value metadata in Metal prefill
+**context:** ml / Qwen3.8 / adaptive QBit / Metal / session replay
+**state:** verified on the bounded M2 Max Qwen3.8 session corridor; generic path retained
+
+- claim: "A proven uniform layer tier can select direct P4 or BF16 addressing without changing adaptive cache semantics."
+  source: immutable K/V plans now expose `uniform_tier`; only matching P4/BF16 plans select the direct Metal loader. Mixed, mismatched, P5/F32, and planless artifacts retain the generic metadata path, and `QWEN35_ADAPTIVE_UNIFORM_PREFILL_OFF=1` provides a diagnostic fallback. The plan spec passed `9/9`; the resident Metal suite passed `14/14`, including uniform-BF16 CPU-reference parity above `0.9999999` cosine with maximum delta below `2e-4`.
+  verified_at: 2026-08-26
+  decay_trigger: adaptive plan immutability, row layout, tier encoding, head dimension, Metal buffer ABI, or prefill dispatch changes
+  trust: {F:0.98,G:0.22,R:0.94}
+
+- claim: "The direct uniform loader reduced measured long-session replay time without changing the quality or memory vector."
+  source: a guarded 3,220-token generic/uniform/generic A/B/A row measured free replay `26,985.614 / 24,847.812 / 28,686.299 ms` and forced replay `26,503.942 / 25,185.206 / 27,780.730 ms`. The candidate was 7.9% and 5.0% faster than the faster generic observation. Every row preserved top-1 `8/8`, ranked top-2 `12/14`, top-2-set `12/14`, exact-top-1 coverage `7/7`, ECS `1.0/1.0`, `Their sum is 95.`, EOS, resident ownership, and `3.7647x` KV density.
+  verified_at: 2026-08-26
+  decay_trigger: model, tier map, prompt, replay shape, compiler, Metal runtime, hardware, host load, or benchmark harness change
+  trust: {F:0.97,G:0.12,R:0.86}
+
+**Adversary:** Exact baselines varied substantially across the A/B/A order, so the observed reduction is not a stable throughput guarantee. The direct BF16 offset relies on the same uniform immutable plan that owns the sidecar layout; snapshot restore validates metadata against that plan. Other Apple GPUs, non-GQA6 shapes, mixed tiers, and larger session windows remain outside this certificate.
+
+**Value proxy:** Exact generation semantics and resident ownership are the capability gate. Replay wall time, top-1, top-2, ECS, meaning, logical density, resource guards, and host noise remain separate coordinates.
+
+**LTP/WBA:** The local move removes redundant per-value metadata work while preserving exact checkpoint history, replay-token count, resident bytes, fallback recomputation, and publication boundaries. In the measured row, the earlier lexicographic coordinates were unchanged and replay wall descended; the generic loader remains the dual frame and explicit fallback.
+
+**decision:** Admit direct uniform P4/BF16 loading for the existing Qwen3.8 adaptive prefill corridor. Retain the generic loader for every unproved layout and require a new falsifier before widening shape or hardware scope.
