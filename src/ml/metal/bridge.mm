@@ -121,6 +121,20 @@ static void wait_for_command_completion(id<MTLCommandBuffer> cmd, bool commit) {
     if (timeout_ms > 0) unregister_command_wait(&record);
 }
 
+static int32_t command_completion_status(id<MTLCommandBuffer> cmd) {
+    MTLCommandBufferStatus status = cmd.status;
+    if (status == MTLCommandBufferStatusCompleted) return 0;
+
+    NSError* error = cmd.error;
+    const char* description = error.localizedDescription.UTF8String;
+    std::fprintf(stderr,
+                 "GS Metal command buffer failed: status=%ld error_code=%ld description=%s\n",
+                 (long)status,
+                 error == nil ? 0L : (long)error.code,
+                 description == nullptr ? "unavailable" : description);
+    return -((int32_t)status + 1);
+}
+
 extern "C" int32_t init_device_impl();
 
 static int32_t ensure_device() {
@@ -460,10 +474,7 @@ extern "C" int32_t gs_wait_command_buffer_status(void* cmd_handle) {
     if (cmd_handle == nullptr) return -1;
     id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)cmd_handle;
     wait_for_command_completion(cmd, false);
-    MTLCommandBufferStatus status = cmd.status;
-    return status == MTLCommandBufferStatusCompleted
-        ? 0
-        : -((int32_t)status + 1);
+    return command_completion_status(cmd);
 }
 
 extern "C" void commit_and_wait_impl(void* cmd_handle) {
@@ -476,10 +487,7 @@ extern "C" int32_t gs_commit_and_wait_status(void* cmd_handle) {
     if (cmd_handle == nullptr) return -1;
     id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)cmd_handle;
     wait_for_command_completion(cmd, true);
-    MTLCommandBufferStatus status = cmd.status;
-    return status == MTLCommandBufferStatusCompleted
-        ? 0
-        : -((int32_t)status + 1);
+    return command_completion_status(cmd);
 }
 
 // Commit, wait, and capture the interval during which the GPU executed this
@@ -493,10 +501,8 @@ extern "C" int32_t gs_commit_and_wait_status_gpu_elapsed(
     if (cmd_handle == nullptr) return -1;
     id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)cmd_handle;
     wait_for_command_completion(cmd, true);
-    MTLCommandBufferStatus status = cmd.status;
-    if (status != MTLCommandBufferStatusCompleted) {
-        return -((int32_t)status + 1);
-    }
+    int32_t status = command_completion_status(cmd);
+    if (status != 0) return status;
     if (elapsed_seconds != nullptr) {
         CFTimeInterval start = cmd.GPUStartTime;
         CFTimeInterval end = cmd.GPUEndTime;
