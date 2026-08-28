@@ -12,6 +12,14 @@ describe ML::Metal::Device do
 end
 
 describe ML::Metal::CommandBuffer do
+  it "completes an empty command buffer through the bounded wait path" do
+    pending!("Metal not available") unless ML::Metal::Device.available?
+
+    command = ML::Metal::CommandBuffer.new
+    command.commit_and_wait
+    command.completed_successfully?.should be_true
+  end
+
   it "discards an uncommitted native command handle exactly once" do
     pending!("Metal not available") unless ML::Metal::Device.available?
 

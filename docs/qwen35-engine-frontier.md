@@ -6,7 +6,9 @@ Current frontier: stable backend-neutral request/result and lifecycle contract,
 a single-resident native CPU/Metal runtime, a Metal-first product generator,
 typed Qwen 3.8 reasoning-effort routing for embedded text generation, and an
 advanced experimental CUDA full-model mixed-stack/semantic-loop probe without
-an admitted engine adapter
+an admitted engine adapter. Cross-process Metal single-flight and killable
+command-buffer waits are an admitted safety slice; in-process recovery after a
+GPU timeout remains rejected because Metal exposes no command-buffer cancel.
 Bounded context: reusable Qwen 3.5/3.8 inference consumed by `cogni-ml` CLIs and
 resident services such as Cogniformerus `cfmodeld`
 
@@ -78,6 +80,13 @@ resident services such as Cogniformerus `cfmodeld`
   existing callers retain no-thinking generation semantics.
 - Generation results report the effective effort so a runtime cannot silently
   ignore or rewrite the request.
+- Product Metal generation and label scoring acquire one cross-process lease
+  before creating inference state. Direct-output cache hits remain outside the
+  lease because they do not initialize Metal.
+- Every synchronous Metal command-buffer wait has a 120-second watchdog by
+  default. Timeout terminates the process with status 124; callers may override
+  the deadline or explicitly disable it through the documented environment
+  control. The setting is captured on the process's first Metal wait.
 
 ## Rejected Surface
 
@@ -95,6 +104,8 @@ resident services such as Cogniformerus `cfmodeld`
   Qwen 3.8 contract.
 - Treating reasoning effort as a hard reasoning-token budget or as a guaranteed
   quality/latency level.
+- Returning normally after a Metal command timeout: the submitted command may
+  still access unretained buffers, so the inference process must terminate.
 
 ## Guard-Only Future
 
@@ -129,6 +140,14 @@ resident services such as Cogniformerus `cfmodeld`
 - Model load, request execution, and result reporting expose enough identity to
   detect source/build/runtime drift without upgrading route availability into
   execution telemetry.
+- The Metal lease is released by process exit and is reentrant only inside the
+  owning process. It does not serialize CPU compilation or non-GPU cache hits.
+- The lease serializes guarded active inference and guarded model loading; it is
+  not a host-wide quota for model mappings kept resident by unguarded processes.
+  Direct low-level Metal probes still require process/RSS supervision.
+- A submitted Metal command may outlive a host-side deadline. Timeout handling
+  therefore exits without Crystal or Objective-C unwinding; it never raises a
+  recoverable exception through live command-buffer resources.
 
 ## Execution Order
 
@@ -159,6 +178,12 @@ resident services such as Cogniformerus `cfmodeld`
 - A real Qwen 3.8 model smoke compares the embedded effort prompt/token path to
   the tokenizer template-derived contract and exercises effort-specific cold
   prefix reuse without weakening exact-prefix validation.
+- A cross-process lock holder rejects a second Metal request before model load,
+  process exit releases the lease, and nested same-process acquisition remains
+  valid until its final holder closes.
+- An empty native Metal command buffer completes through the bounded native
+  wait. An uncommitted-buffer child probe with a short deadline must exit 124,
+  proving the watchdog cannot unwind as a normal error.
 - The native runtime rejects multi-token or duplicate-token label mappings
   before state creation.
 - CPU-only build compiles and runs the contract and existing Qwen unit specs.
@@ -199,6 +224,9 @@ resident services such as Cogniformerus `cfmodeld`
 - Stop backend promotion on silent fallback, unknown actual-backend identity,
   state aliasing, non-finite logits, token mismatch, or cache certificate
   bypass.
+- Stop GPU safety promotion if a second process can enter inference while the
+  lease is held, if process exit strands the lease, or if timeout handling
+  unwinds through live Metal buffers instead of terminating the process.
 - Stop CUDA product claims until an NVIDIA-host gate passes.
 - Do not modify or commit unrelated Cogniformerus work from its current dirty
   tree.
@@ -226,6 +254,19 @@ resident services such as Cogniformerus `cfmodeld`
     remains weaker than Metal because the long quiet-host run was not completed
   - Nonclaim: strict required-Metal execution is unavailable until backend
     telemetry can return an observed result
+- Slice: cross-process Metal inference safety
+  - Status: verified for guarded product routes on Apple M2 Max
+  - Source/spec: `src/ml/metal/process_lease.cr`,
+    `src/ml/metal/bridge.mm`, `spec/metal_process_lease_spec.cr`, and
+    `spec/metal_device_resource_spec.cr`
+  - Evidence: lease contention/reentrancy 2/2, native runtime 15/15 with one
+    optional model-backed case pending, live Metal resource/wait 3/3, and an
+    uncommitted-buffer probe exits 124 under a 25 ms watchdog. A guarded
+    Qwen 3.8 27B Q4_K_M one-token smoke completed under RSS/free-memory guards.
+  - Boundary: guarded active inference and model loading only; command timeout
+    is a process-termination guard, not recoverable cancellation
+  - Nonclaim: no host-wide quota over resident mappings or unguarded low-level
+    Metal probes
 - Slice: CUDA engine adapter
   - Status: guard-only
   - Boundary: requires independent NVIDIA-host build, parity, lifecycle, and

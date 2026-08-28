@@ -7,6 +7,7 @@ require "./qwen35_proposal_route"
 require "./qwen35_qbit_runtime_cache"
 require "./qwen35_tokenizer"
 require "./qwen35_weights"
+require "../metal/process_lease"
 
 module ML::GGUF
   # First product-facing runtime for the Qwen35Engine contract.
@@ -610,8 +611,10 @@ module ML::GGUF
         restored_session_checkpoint = nil.as(QwenQBitSessionCheckpoint::Entry?)
         exact_anchor_checkpoint_state = nil.as(Qwen35CPU::State?)
         exact_anchor_checkpoint_prefix_len = nil.as(Int32?)
+        metal_lease = nil.as(ML::Metal::ProcessLease?)
 
         begin
+          metal_lease = ML::Metal::ProcessLease.acquire if route.backend.primary.metal?
           if qbit_cache = @qbit_cache
             # Native QBit restore is currently a Metal-only route. CPU requests
             # retain their existing local-cache/prefill behavior unchanged.
@@ -1068,6 +1071,7 @@ module ML::GGUF
             release_state_metal!(active_state)
             state = nil
           end
+          metal_lease.try(&.close)
         end
       end
     end
@@ -1093,20 +1097,28 @@ module ML::GGUF
         end
         label_ids = self.class.resolve_label_ids(request.labels, encoded)
 
-        state = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
-        prepare_state_metal!(state, weights, route)
-        if prompt_ids.size > 1
-          Qwen35CPU.prefill_tokens(weights, prompt_ids[0...-1], 0, state)
-        end
-        logits = Qwen35CPU.forward(weights, prompt_ids[-1], prompt_ids.size - 1, state)
-        best_index, second_index = top_two_indices(logits, label_ids)
+        state = nil.as(Qwen35CPU::State?)
+        metal_lease = nil.as(ML::Metal::ProcessLease?)
+        begin
+          metal_lease = ML::Metal::ProcessLease.acquire if route.backend.primary.metal?
+          state = Qwen35CPU::State.new(weights.hparams, max_seq: limit)
+          prepare_state_metal!(state, weights, route)
+          if prompt_ids.size > 1
+            Qwen35CPU.prefill_tokens(weights, prompt_ids[0...-1], 0, state)
+          end
+          logits = Qwen35CPU.forward(weights, prompt_ids[-1], prompt_ids.size - 1, state)
+          best_index, second_index = top_two_indices(logits, label_ids)
 
-        Qwen35Engine::ScoreLabelsResult.new(
-          best: Qwen35Engine::LabelScore.new(request.labels[best_index], label_ids[best_index], logits[label_ids[best_index]]),
-          second: Qwen35Engine::LabelScore.new(request.labels[second_index], label_ids[second_index], logits[label_ids[second_index]]),
-          backend: route.backend,
-          route: route.operation,
-        )
+          Qwen35Engine::ScoreLabelsResult.new(
+            best: Qwen35Engine::LabelScore.new(request.labels[best_index], label_ids[best_index], logits[label_ids[best_index]]),
+            second: Qwen35Engine::LabelScore.new(request.labels[second_index], label_ids[second_index], logits[label_ids[second_index]]),
+            backend: route.backend,
+            route: route.operation,
+          )
+        ensure
+          release_state_metal!(state) if state
+          metal_lease.try(&.close)
+        end
       end
     end
 

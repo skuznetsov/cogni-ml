@@ -18,6 +18,7 @@ require "../src/ml/gguf/qwen35_self_spec_plan"
 require "../src/ml/gguf/qwen35_spec_acceptance"
 require "../src/ml/gguf/qwen35_weights"
 require "../src/ml/gguf/qwen35_tokenizer"
+require "../src/ml/metal/process_lease"
 
 MODEL_PATH         = ENV["QWEN35_MODEL_PATH"]? || "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 DRAFT_MODEL_PATH   = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q8_0.gguf"
@@ -738,6 +739,9 @@ if prompt_cache_preweight_fast_forward_enabled && (source = source_history_hit)
     end
   end
 end
+
+metal_lease = ML::Metal::ProcessLease.acquire
+at_exit { metal_lease.close }
 
 puts "Loading weights..."
 t0 = Time.instant

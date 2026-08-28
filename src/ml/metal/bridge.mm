@@ -3,12 +3,123 @@
 
 #import <Metal/Metal.h>
 #import <Foundation/Foundation.h>
+#import <dispatch/dispatch.h>
+
+#include <algorithm>
+#include <cerrno>
+#include <climits>
+#include <cstdio>
+#include <cstdlib>
+#include <mutex>
+#include <time.h>
+#include <unistd.h>
+#include <vector>
 
 // Global device and command queue
 static id<MTLDevice> gs_device = nil;
 static id<MTLCommandQueue> gs_command_queue = nil;
 static NSMutableDictionary<NSString*, id<MTLLibrary>>* gs_libraries = nil;
 static id<MTLLibrary> gs_default_library = nil;
+
+// Metal exposes no cancellation API for a submitted command buffer. A
+// process-wide watchdog bounds the native host-side wait; if the deadline is
+// exceeded the only safe action is to terminate the inference process without
+// unwinding buffers that the GPU may still reference.
+static constexpr int64_t GS_DEFAULT_COMMAND_TIMEOUT_MS = 120000;
+static constexpr uint64_t GS_WATCHDOG_POLL_NS = 100000000;
+
+struct GSCommandWaitRecord {
+    uint64_t deadline_ns;
+    int64_t timeout_ms;
+};
+
+static std::mutex gs_command_waits_mutex;
+static std::vector<GSCommandWaitRecord*> gs_command_waits;
+static dispatch_source_t gs_command_watchdog = nil;
+
+static int64_t command_timeout_ms() {
+    static const int64_t timeout = []() -> int64_t {
+        const char* raw = std::getenv("COGNI_METAL_COMMAND_TIMEOUT_MS");
+        if (raw == nullptr || raw[0] == '\0') return GS_DEFAULT_COMMAND_TIMEOUT_MS;
+
+        errno = 0;
+        char* end = nullptr;
+        long long parsed = std::strtoll(raw, &end, 10);
+        if (errno != 0 || end == raw || *end != '\0' || parsed < 0 ||
+            parsed > LLONG_MAX / NSEC_PER_MSEC) {
+            std::fprintf(stderr,
+                         "GS Warning: invalid COGNI_METAL_COMMAND_TIMEOUT_MS='%s'; using %lldms\n",
+                         raw, (long long)GS_DEFAULT_COMMAND_TIMEOUT_MS);
+            return GS_DEFAULT_COMMAND_TIMEOUT_MS;
+        }
+        return (int64_t)parsed;
+    }();
+    return timeout;
+}
+
+static uint64_t monotonic_time_ns() {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (uint64_t)now.tv_sec * NSEC_PER_SEC + (uint64_t)now.tv_nsec;
+}
+
+static void command_watchdog_tick() {
+    std::lock_guard<std::mutex> lock(gs_command_waits_mutex);
+    uint64_t now = monotonic_time_ns();
+    for (GSCommandWaitRecord* record : gs_command_waits) {
+        if (now >= record->deadline_ns) {
+            std::fprintf(stderr,
+                         "GS FATAL: Metal command buffer exceeded %lldms; "
+                         "terminating because submitted Metal work cannot be cancelled safely\n",
+                         (long long)record->timeout_ms);
+            std::fflush(stderr);
+            _exit(124);
+        }
+    }
+}
+
+static void ensure_command_watchdog() {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        gs_command_watchdog = dispatch_source_create(
+            DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+            dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0)
+        );
+        dispatch_source_set_timer(
+            gs_command_watchdog,
+            dispatch_time(DISPATCH_TIME_NOW, GS_WATCHDOG_POLL_NS),
+            GS_WATCHDOG_POLL_NS,
+            GS_WATCHDOG_POLL_NS / 10
+        );
+        dispatch_source_set_event_handler(gs_command_watchdog, ^{
+            command_watchdog_tick();
+        });
+        dispatch_resume(gs_command_watchdog);
+    });
+}
+
+static void register_command_wait(GSCommandWaitRecord* record, int64_t timeout_ms) {
+    ensure_command_watchdog();
+    record->timeout_ms = timeout_ms;
+    record->deadline_ns = monotonic_time_ns() + (uint64_t)timeout_ms * NSEC_PER_MSEC;
+    std::lock_guard<std::mutex> lock(gs_command_waits_mutex);
+    gs_command_waits.push_back(record);
+}
+
+static void unregister_command_wait(GSCommandWaitRecord* record) {
+    std::lock_guard<std::mutex> lock(gs_command_waits_mutex);
+    auto found = std::find(gs_command_waits.begin(), gs_command_waits.end(), record);
+    if (found != gs_command_waits.end()) gs_command_waits.erase(found);
+}
+
+static void wait_for_command_completion(id<MTLCommandBuffer> cmd, bool commit) {
+    int64_t timeout_ms = command_timeout_ms();
+    GSCommandWaitRecord record;
+    if (timeout_ms > 0) register_command_wait(&record, timeout_ms);
+    if (commit) [cmd commit];
+    [cmd waitUntilCompleted];
+    if (timeout_ms > 0) unregister_command_wait(&record);
+}
 
 extern "C" int32_t init_device_impl();
 
@@ -66,8 +177,7 @@ extern "C" void synchronize_impl() {
     if (gs_command_queue == nil) return;
 
     id<MTLCommandBuffer> cmd = [gs_command_queue commandBuffer];
-    [cmd commit];
-    [cmd waitUntilCompleted];
+    wait_for_command_completion(cmd, true);
 }
 
 extern "C" const char* device_name_impl() {
@@ -224,8 +334,7 @@ extern "C" void buffer_sync_impl(void* handle) {
         id<MTLBlitCommandEncoder> blit = [cmd blitCommandEncoder];
         [blit synchronizeResource:buffer];
         [blit endEncoding];
-        [cmd commit];
-        [cmd waitUntilCompleted];
+        wait_for_command_completion(cmd, true);
     }
 }
 
@@ -341,7 +450,7 @@ extern "C" void gs_submit_pipeline(void* cmd1, void* cmd2) {
 extern "C" void gs_wait_command_buffer(void* cmd_handle) {
     if (cmd_handle == nullptr) return;
     id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)cmd_handle;
-    [cmd waitUntilCompleted];
+    wait_for_command_completion(cmd, false);
 }
 
 // Wait and return a stable completion certificate to the host. Zero means the
@@ -350,7 +459,7 @@ extern "C" void gs_wait_command_buffer(void* cmd_handle) {
 extern "C" int32_t gs_wait_command_buffer_status(void* cmd_handle) {
     if (cmd_handle == nullptr) return -1;
     id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)cmd_handle;
-    [cmd waitUntilCompleted];
+    wait_for_command_completion(cmd, false);
     MTLCommandBufferStatus status = cmd.status;
     return status == MTLCommandBufferStatusCompleted
         ? 0
@@ -360,15 +469,13 @@ extern "C" int32_t gs_wait_command_buffer_status(void* cmd_handle) {
 extern "C" void commit_and_wait_impl(void* cmd_handle) {
     if (cmd_handle == nullptr) return;
     id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)cmd_handle;
-    [cmd commit];
-    [cmd waitUntilCompleted];
+    wait_for_command_completion(cmd, true);
 }
 
 extern "C" int32_t gs_commit_and_wait_status(void* cmd_handle) {
     if (cmd_handle == nullptr) return -1;
     id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)cmd_handle;
-    [cmd commit];
-    [cmd waitUntilCompleted];
+    wait_for_command_completion(cmd, true);
     MTLCommandBufferStatus status = cmd.status;
     return status == MTLCommandBufferStatusCompleted
         ? 0
@@ -385,8 +492,7 @@ extern "C" int32_t gs_commit_and_wait_status_gpu_elapsed(
     if (elapsed_seconds != nullptr) *elapsed_seconds = 0.0;
     if (cmd_handle == nullptr) return -1;
     id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)cmd_handle;
-    [cmd commit];
-    [cmd waitUntilCompleted];
+    wait_for_command_completion(cmd, true);
     MTLCommandBufferStatus status = cmd.status;
     if (status != MTLCommandBufferStatusCompleted) {
         return -((int32_t)status + 1);
