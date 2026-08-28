@@ -5,6 +5,30 @@ require "../src/ml/gguf/qwen35_weights"
 QWEN_9B_CPU = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 
 describe ML::GGUF::Qwen35CPU do
+  describe "rank_allowed_logits" do
+    it "returns all allowed tokens in deterministic logit order" do
+      ranked = ML::GGUF::Qwen35CPU.rank_allowed_logits(
+        [0.5_f32, 2.0_f32, 2.0_f32, -1.0_f32],
+        [3_i32, 2_i32, 1_i32],
+      )
+
+      ranked.map(&.token_id).should eq([1_i32, 2_i32, 3_i32])
+      ranked.map(&.logit).should eq([2.0_f32, 2.0_f32, -1.0_f32])
+    end
+
+    it "rejects empty, invalid, and non-finite allowed logits" do
+      expect_raises(ArgumentError, /at least one/) do
+        ML::GGUF::Qwen35CPU.rank_allowed_logits([0.0_f32], [] of Int32)
+      end
+      expect_raises(ArgumentError, /out of range/) do
+        ML::GGUF::Qwen35CPU.rank_allowed_logits([0.0_f32], [1_i32])
+      end
+      expect_raises(ArgumentError, /non-finite/) do
+        ML::GGUF::Qwen35CPU.rank_allowed_logits([Float32::NAN], [0_i32])
+      end
+    end
+  end
+
   describe "rms_norm" do
     it "matches reference formula on fixed input" do
       x = [1.0_f32, 2.0_f32, 3.0_f32, 4.0_f32]

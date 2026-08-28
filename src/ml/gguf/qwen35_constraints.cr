@@ -11,6 +11,11 @@ module ML::GGUF
   module Qwen35Constraints
     MAX_ENUMERATED_INTEGER_VALUES = 256
 
+    record LabeledFrontierToken,
+      token_id : Int32,
+      text : String,
+      labels : Array(String)
+
     class TokenTextIndex
       @texts : Array(String)
       @by_first : Hash(Char, Array({Int32, String}))
@@ -84,6 +89,32 @@ module ML::GGUF
       index.literal_frontier_ids(remaining_literals)
     end
 
+    # Preserve the source label for each finite literal while a constrained
+    # decoder consumes a shared prefix. This lets diagnostics distinguish
+    # tokenizer alternatives for one choice from the first real choice between
+    # labels without changing the grammar itself.
+    def self.labeled_literal_frontier(index : TokenTextIndex,
+                                      remaining_by_label : Hash(String, String)) : Array(LabeledFrontierToken)
+      literal_frontier_ids(index, remaining_by_label.values).map do |token_id|
+        text = index.text_for_id(token_id)
+        labels = remaining_by_label.compact_map do |label, literal|
+          label if literal.starts_with?(text)
+        end
+        LabeledFrontierToken.new(token_id, text, labels)
+      end
+    end
+
+    def self.labeled_frontier_diverged?(frontier : Array(LabeledFrontierToken)) : Bool
+      return false if frontier.empty?
+
+      labels = frontier.flat_map(&.labels).uniq
+      label_sets = frontier.map { |candidate| candidate.labels.sort }.uniq
+      return false unless labels.size >= 2 && label_sets.size >= 2
+
+      all_labels = labels.sort
+      frontier.none? { |candidate| candidate.labels.sort == all_labels }
+    end
+
     def self.advance_literal_options(remaining_literals : Array(String),
                                      emitted : String) : Array(String)
       return remaining_literals if emitted.empty?
@@ -95,6 +126,19 @@ module ML::GGUF
         next_literals << literal[emitted.size..]
       end
       next_literals
+    end
+
+    def self.advance_labeled_literal_options(remaining_by_label : Hash(String, String),
+                                             emitted : String) : Hash(String, String)
+      return remaining_by_label if emitted.empty?
+
+      next_by_label = {} of String => String
+      remaining_by_label.each do |label, literal|
+        next unless literal.starts_with?(emitted)
+
+        next_by_label[label] = literal[emitted.size..]
+      end
+      next_by_label
     end
 
     def self.tool_function_names(tools : Array(JSON::Any)) : Array(String)
@@ -186,6 +230,14 @@ module ML::GGUF
       function_names.reject(&.empty?).uniq.map do |name|
         "<tool_call>\n<function=#{name}>\n"
       end
+    end
+
+    def self.labeled_tool_call_prefixes(function_names : Array(String)) : Hash(String, String)
+      prefixes = {} of String => String
+      function_names.reject(&.empty?).uniq.each do |name|
+        prefixes[name] = "<tool_call>\n<function=#{name}>\n"
+      end
+      prefixes
     end
 
     def self.qwen_tool_required_parameter_prefix_options(tools : Array(JSON::Any)) : Array(String)

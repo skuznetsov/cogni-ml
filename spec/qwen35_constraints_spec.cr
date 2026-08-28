@@ -44,6 +44,57 @@ describe ML::GGUF::Qwen35Constraints do
     next_options.should eq(["_call>"])
   end
 
+  it "keeps tool labels attached until literal choices diverge" do
+    tok = Qwen35ConstraintsSpecHelper.fake_tokenizer([
+      "<", "<tool_call>", "s", "shell", "l", "list", "list_directory",
+    ])
+    index = ML::GGUF::Qwen35Constraints::TokenTextIndex.new(tok)
+    remaining = ML::GGUF::Qwen35Constraints.labeled_tool_call_prefixes([
+      "shell", "list_directory",
+    ])
+
+    common = ML::GGUF::Qwen35Constraints.labeled_literal_frontier(index, remaining)
+    common.find { |candidate| candidate.text == "<" }.not_nil!.labels.should eq([
+      "shell", "list_directory",
+    ])
+
+    remaining = ML::GGUF::Qwen35Constraints.advance_labeled_literal_options(
+      remaining,
+      "<tool_call>\n<function=",
+    )
+    choice = ML::GGUF::Qwen35Constraints.labeled_literal_frontier(index, remaining)
+    choice.find { |candidate| candidate.text == "shell" }.not_nil!.labels.should eq(["shell"])
+    choice.find { |candidate| candidate.text == "list" }.not_nil!.labels.should eq(["list_directory"])
+    ML::GGUF::Qwen35Constraints.labeled_frontier_diverged?(choice).should be_true
+  end
+
+  it "detects a real choice while one token still prefixes multiple labels" do
+    tok = Qwen35ConstraintsSpecHelper.fake_tokenizer(["g", "grep", "glob", "s", "shell"])
+    index = ML::GGUF::Qwen35Constraints::TokenTextIndex.new(tok)
+    frontier = ML::GGUF::Qwen35Constraints.labeled_literal_frontier(index, {
+      "grep"  => "grep>\n",
+      "glob"  => "glob>\n",
+      "shell" => "shell>\n",
+    })
+
+    frontier.find { |candidate| candidate.text == "g" }.not_nil!.labels.should eq(["grep", "glob"])
+    ML::GGUF::Qwen35Constraints.labeled_frontier_diverged?(frontier).should be_true
+  end
+
+  it "does not confuse a longer tokenizer shortcut with a label choice" do
+    tok = Qwen35ConstraintsSpecHelper.fake_tokenizer(["=", "=read", "=list"])
+    index = ML::GGUF::Qwen35Constraints::TokenTextIndex.new(tok)
+    frontier = ML::GGUF::Qwen35Constraints.labeled_literal_frontier(index, {
+      "read_file"      => "=read_file>\n",
+      "list_directory" => "=list_directory>\n",
+    })
+
+    frontier.find { |candidate| candidate.text == "=" }.not_nil!.labels.should eq([
+      "read_file", "list_directory",
+    ])
+    ML::GGUF::Qwen35Constraints.labeled_frontier_diverged?(frontier).should be_false
+  end
+
   it "returns an empty frontier after the literal corridor is complete or invalid" do
     tok = Qwen35ConstraintsSpecHelper.fake_tokenizer(["<", "x"])
 

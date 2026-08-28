@@ -19,6 +19,9 @@ require "./qwen_qbit_adaptive_resident_kv"
 module ML::GGUF
   module Qwen35CPU
     extend self
+    record AllowedTokenScore,
+      token_id : Int32,
+      logit : Float32
     {% if flag?(:cpu_only) %}
       alias PrefillCommandBuffer = Nil
     {% else %}
@@ -2464,6 +2467,31 @@ module ML::GGUF
       {best_id, best}
     end
 
+    # Rank a grammar-certified token frontier from an already materialized
+    # logit vector. This pure helper is also the reference ordering for the
+    # opt-in full-head diagnostic below.
+    def rank_allowed_logits(logits : Array(Float32),
+                            allowed_ids : Array(Int32)) : Array(AllowedTokenScore)
+      raise ArgumentError.new("allowed-token ranking requires at least one id") if allowed_ids.empty?
+
+      ranked = allowed_ids.map do |id|
+        raise ArgumentError.new("allowed token id #{id} out of range 0...#{logits.size}") if id < 0 || id >= logits.size
+        value = logits[id]
+        raise ArgumentError.new("allowed token id #{id} has a non-finite logit") unless value.finite?
+        AllowedTokenScore.new(id, value)
+      end
+      ranked.sort! do |a, b|
+        if a.logit == b.logit
+          a.token_id <=> b.token_id
+        elsif a.logit > b.logit
+          -1
+        else
+          1
+        end
+      end
+      ranked
+    end
+
     # Greedy decode helper. By default, the Metal wave path avoids
     # materializing full lm-head logits and returns only top-1. Set
     # `QWEN35_HEAD_TOP1_FUSED=0` to force the full-logit fallback.
@@ -2502,6 +2530,23 @@ module ML::GGUF
 
       logits = forward(weights, token_id, pos, state)
       top1_from_allowed_logits(logits, allowed_ids)
+    end
+
+    # Opt-in diagnostic path for a constrained frontier. It executes exactly
+    # one decoder step, like forward_top1_allowed, but materializes the full
+    # head once so callers can inspect all allowed logits. Keep it out of the
+    # default decode path because the fused allowed-token head is cheaper.
+    def forward_rank_allowed(weights : Qwen35Weights,
+                             token_id : Int32,
+                             pos : Int32,
+                             state : State,
+                             allowed_ids : Array(Int32)) : Array(AllowedTokenScore)
+      raise ArgumentError.new("forward_rank_allowed requires at least one allowed id") if allowed_ids.empty?
+      allowed_ids.each do |id|
+        raise ArgumentError.new("allowed token id #{id} out of range 0...#{weights.output.out_dim}") if id < 0 || id >= weights.output.out_dim
+      end
+
+      rank_allowed_logits(forward(weights, token_id, pos, state), allowed_ids)
     end
 
     # Greedy exact decode suffix with token handoff kept on the GPU.
