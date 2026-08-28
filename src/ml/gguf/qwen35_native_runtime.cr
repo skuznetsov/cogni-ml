@@ -1216,22 +1216,7 @@ module ML::GGUF
     end
 
     private def release_state_metal!(state : Qwen35CPU::State) : Nil
-      # A fresh command-buffer fence prevents released unified-memory buffers
-      # from being recycled while an asynchronously submitted fused kernel is
-      # still retiring on the device.
-      ML::Metal::Device.synchronize
-      state.layers.each do |layer|
-        layer.k_cache_buf.try(&.release)
-        layer.v_cache_buf.try(&.release)
-        layer.conv_state_buf.try(&.release)
-        layer.ssm_state_buf.try(&.release)
-        layer.adaptive_kv.try(&.release)
-        layer.k_cache_buf = nil
-        layer.v_cache_buf = nil
-        layer.conv_state_buf = nil
-        layer.ssm_state_buf = nil
-        layer.adaptive_kv = nil
-      end
+      Qwen35CPU.release_state_metal!(state)
     end
 
     private def validate_generate_request!(request : Qwen35Engine::GenerateRequest) : Nil

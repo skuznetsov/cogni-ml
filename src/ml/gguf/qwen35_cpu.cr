@@ -333,6 +333,25 @@ module ML::GGUF
       {% end %}
     end
 
+    # Release every GPU-owned buffer in a sequence state before replacing it.
+    # The device fence prevents unified-memory storage from being recycled
+    # while an asynchronously submitted kernel is still retiring.
+    def release_state_metal!(state : State) : Nil
+      ML::Metal::Device.synchronize
+      state.layers.each do |layer|
+        layer.k_cache_buf.try(&.release)
+        layer.v_cache_buf.try(&.release)
+        layer.conv_state_buf.try(&.release)
+        layer.ssm_state_buf.try(&.release)
+        layer.adaptive_kv.try(&.release)
+        layer.k_cache_buf = nil
+        layer.v_cache_buf = nil
+        layer.conv_state_buf = nil
+        layer.ssm_state_buf = nil
+        layer.adaptive_kv = nil
+      end
+    end
+
     private def adaptive_resident_kv_config(hp : Qwen35Hparams,
                                             max_seq : Int32) : Hash(Int32, QwenQBitAdaptiveKV::Tier)?
       layer_raw = ENV["QWEN35_ADAPTIVE_RESIDENT_KV_LAYER"]?
