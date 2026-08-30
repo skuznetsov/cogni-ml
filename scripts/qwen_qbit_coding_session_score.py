@@ -172,6 +172,7 @@ def main(argv: list[str] | None = None) -> int:
             "prompt_tokens": record.get("prompt_tokens"),
             "prefill_chunk_size": record.get("prefill_chunk_size"),
             "prefill_append_max_groups": record.get("prefill_append_max_groups"),
+            "prefill_append_cooldown_ms": record.get("prefill_append_cooldown_ms"),
             "quality": {
                 "top1_matches": record.get("retire_order_top1_matches"),
                 "top1_count": record.get("retire_order_top1_count"),

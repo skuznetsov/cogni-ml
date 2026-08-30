@@ -2161,10 +2161,9 @@ fresh project copies, and treats that product result as the capability gate.
 Top-1, top-2, ECS, density, ownership, and timing remain diagnostic coordinates
 rather than substitutes for the external tests.
 
-The first sealed prompt renders to 7,718 Qwen3.8 tokens. Its exact continuation
-produced the intended `Math.max` upper bound and passed all four external specs.
-No resident candidate reached the scorer, so this is an exact-baseline
-certificate only, not an adaptive-quality result.
+The sealed prompt renders to 7,718 Qwen3.8 tokens. Its exact and adaptive
+continuations both produced the intended `Math.max` upper bound. The extracted
+sources had the same SHA-256 and each passed all four external specs.
 
 Three guarded adaptive attempts separated two failure mechanisms without an
 OOM or reboot. One 7,718-row layer group per command let the first resident
@@ -2178,22 +2177,37 @@ by the 35% free-memory guard at 32%. Giving exact and resident sides the same
 but sustained adaptive work still reached the interactivity guard after
 completed commands of roughly `2.4--5.3 s`.
 
-The implementation therefore admits only the smaller scheduling primitives:
-automatic resident row tiles are capped at 2,048, command submission can rotate
-without materializing hidden state or Float32 KV, and explicit environment
-overrides retain the old corridor as the rollback frame. The current automatic
-row-group budget is conservatively 2,048, which means one layer group per
-2,048-row resident command. Focused policy tests, a 9B bounded-vs-unbounded
-Metal parity test, no-codegen, and the scorer's four unit tests pass. A tiny
-27B forced one-group adaptive control also preserved cache lengths, ownership,
-top-1/top-2, and ECS exactly; its pre-existing `0.2004795` decode-logit delta
-was identical to the unbounded control and is not caused by command rotation.
+One-group rotation alone was not sufficient: a fourth guarded run reduced most
+exact commands to roughly `0.95--1.9 s`, but continuous queue occupancy still
+hit `Impacting Interactivity` after about 53 seconds. The smallest separating
+move was therefore a 50 ms idle window after each completed and published
+long-prefill command, before the next command buffer is created. It changes no
+cache bytes or arithmetic. The safe default applies only when large-row command
+rotation occurs; `QWEN35_PREFILL_APPEND_COOLDOWN_MS=0` retains the historical
+benchmark frame.
 
-The 2,048-row by one-group policy is guard-only until a fresh 8K run completes
-after host cooldown. Admission requires: no memory/interactivity guard,
-exactly one resident quality record, all 16 adaptive owners with no Float32 KV
-owner, consistent published cache length, the full top-1/top-2/ECS vector, and
-passing external specs for both exact and resident source. The 16K gate remains
-blocked until that 8K certificate exists. Lowering the memory guard, hiding the
-teacher-forced pass, or treating the exact-only source as adaptive evidence are
-explicitly rejected routes.
+The fresh 8K acceptance run completed in about 230 seconds under the strict
+quiet-host preflight, 35% free-memory floor, 24 GiB process-tree limit, and
+900-second timeout. A live sample retained 56% system memory and the host
+returned to 87% afterward. The longest adaptive completed command was
+`2.703 s` wall / `2.700 s` GPU. All 16 full-attention layers had adaptive owners,
+no Float32 KV owner existed, and every cache published the expected 7,785 rows.
+The 1,073,741,824-byte raw-capacity comparison used 285,212,672 resident bytes,
+or `3.7647x` logical density.
+
+The 68-token adaptive continuation matched exact top-1 at `68/68`, matched the
+entire free-running text including EOS, covered exact top-1 in candidate top-2
+at `67/67`, and retained token ECS mean/minimum `1.0/1.0`. Ranked top-2 and set
+overlap were only `121/134`; this divergence remains a diagnostic warning even
+though it did not change the generated program. Exact/adaptive prefill measured
+`68.424/92.134 s`. Exact/adaptive decode measured `5.144/25.192 s`, about
+`13.02/2.66 tok/s`; compact decode is therefore functional but still about
+`4.90x` slower on this long-context row. The result promotes 8K host safety and
+the measured coding task, not general coding quality or speed.
+
+The 16K gate is no longer blocked by missing 8K evidence, but it remains a
+separate guarded falsifier. Its prerequisites are the same sole-owner and
+external-spec gates plus a capacity-sized memory forecast. Lowering the memory
+guard, hiding the teacher-forced pass, treating exact-only output as adaptive
+evidence, or trading away the 50 ms safety window before a measured replacement
+is explicitly rejected.

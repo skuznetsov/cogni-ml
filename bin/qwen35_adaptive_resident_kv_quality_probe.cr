@@ -225,6 +225,7 @@ ENV["QWEN35_PREFILL_CHUNK_SIZE"] = prefill_chunk_size.to_s
 prefill_append_max_groups = ML::GGUF::Qwen35CPU.prefill_append_group_limit(
   Math.min(tokens.size, prefill_chunk_size).to_i32,
 )
+prefill_append_cooldown_ms = ML::GGUF::Qwen35CPU.prefill_append_cooldown_ms
 minimum_max_seq = tokens.size + n_gen + 1
 max_seq = requested_max_seq == 0 ? minimum_max_seq : requested_max_seq
 raise "prompt plus continuation exceeds --max-seq" if max_seq < minimum_max_seq
@@ -256,7 +257,7 @@ exact_text = tokenizer.decode(exact_ids)
 puts "qwen35_adaptive_resident_kv_quality_probe"
 puts "  model=#{model_path}"
 prompt_label = prompt_file ? "@#{prompt_file}" : prompt.inspect
-puts "  prompt=#{prompt_label} chat=#{chat_mode} prompt_tokens=#{tokens.size} requested_gen=#{n_gen} observed_gen=#{exact_ids.size} max_seq=#{max_seq} prefill_chunk_size=#{prefill_chunk_size} prefill_append_max_groups=#{prefill_append_max_groups}"
+puts "  prompt=#{prompt_label} chat=#{chat_mode} prompt_tokens=#{tokens.size} requested_gen=#{n_gen} observed_gen=#{exact_ids.size} max_seq=#{max_seq} prefill_chunk_size=#{prefill_chunk_size} prefill_append_max_groups=#{prefill_append_max_groups} prefill_append_cooldown_ms=#{prefill_append_cooldown_ms}"
 puts "  layers=#{hp.n_layer} full_attention_layers=#{hp.full_attention_layers.size} n_head_kv=#{hp.n_head_kv} head_dim=#{hp.head_dim}"
 puts "  startup_ms=#{startup_ms.round(3)} exact_prefill_ms=#{exact_prefill_ms.round(3)} exact_decode_ms=#{exact_decode_ms.round(3)} exact_first_id=#{exact_first_id} exact_first_logit=#{exact_first_logit.round(6)}"
 puts "  exact_ids=#{exact_ids.join(',')} exact_text=#{exact_text.inspect}"
@@ -369,6 +370,7 @@ resident_maps.each do |resident_map|
       json.field "prompt_tokens", tokens.size
       json.field "prefill_chunk_size", prefill_chunk_size
       json.field "prefill_append_max_groups", prefill_append_max_groups
+      json.field "prefill_append_cooldown_ms", prefill_append_cooldown_ms
       json.field "policy", policy
       json.field "resident_map", resident_map
       json.field "exact_text", exact_text

@@ -37,6 +37,7 @@ module ML::GGUF
     FALLBACK_PREFILL_CHUNK_SIZE          = 4096
     ADAPTIVE_RESIDENT_PREFILL_CHUNK_SIZE = 2048
     PREFILL_APPEND_ROW_GROUP_BUDGET      = 2048
+    PREFILL_APPEND_COOLDOWN_MS           =   50
     GIB                                  = 1024_u64 * 1024_u64 * 1024_u64
     @@default_prefill_chunk_size : Int32?
     @@prefill_gc_guard_active = false
@@ -84,6 +85,20 @@ module ML::GGUF
       end
       return 0 if n_tokens < 1024
       Math.max(1, PREFILL_APPEND_ROW_GROUP_BUDGET // n_tokens)
+    end
+
+    # Give the display compositor a bounded scheduling window between completed
+    # long-prefill commands. Rotation only applies to large row batches; an
+    # explicit zero preserves the historical benchmark path exactly.
+    def prefill_append_cooldown_ms(
+      configured : String? = ENV["QWEN35_PREFILL_APPEND_COOLDOWN_MS"]?,
+    ) : Int32
+      return PREFILL_APPEND_COOLDOWN_MS unless raw = configured
+      value = raw.to_i?
+      unless value && value >= 0
+        raise ArgumentError.new("QWEN35_PREFILL_APPEND_COOLDOWN_MS must be a non-negative integer")
+      end
+      value
     end
 
     private def prefill_gc_guard_enabled? : Bool
@@ -3442,6 +3457,7 @@ module ML::GGUF
       append_prefill_gpu_work = false
       append_prefill_group_count = 0
       append_prefill_group_limit = prefill_append_group_limit(n_tokens)
+      append_prefill_cooldown_ms = prefill_append_cooldown_ms
       prefill_boundary_profile = ENV["QWEN35_PREFILL_BOUNDARY_PROFILE"]? == "1"
       append_prefill_started = nil.as(Time::Instant?)
       pending_adaptive_caches = [] of QwenQBitAdaptiveResidentKV::Cache
@@ -3489,6 +3505,7 @@ module ML::GGUF
                   io << " tokens=" << n_tokens
                   io << " caches=" << pending_adaptive_caches.size
                   io << " groups=" << append_prefill_group_count
+                  io << " cooldown_ms=" << append_prefill_cooldown_ms
                   io << " encode_ms=" << (finalize_started_value - encode_started.not_nil!).total_milliseconds.round(3)
                   io << " finalize_ms=" << (finalize_finished_value - finalize_started_value).total_milliseconds.round(3)
                   io << " submit_wait_ms=" << (submit_wait_finished_value - finalize_finished_value).total_milliseconds.round(3)
@@ -3579,6 +3596,7 @@ module ML::GGUF
               append_prefill_group_count += 1
               if append_prefill_group_count >= append_prefill_group_limit && il < layer_limit
                 flush_prefill_cmd.call
+                sleep append_prefill_cooldown_ms.milliseconds if append_prefill_cooldown_ms > 0
                 {% unless flag?(:cpu_only) %}
                   append_prefill_cmd = ML::Metal::CommandBuffer.new
                   append_prefill_started = Time.instant if prefill_boundary_profile

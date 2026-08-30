@@ -29,6 +29,18 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     end
   end
 
+  it "parses the prefill command cooldown fail-closed" do
+    ML::GGUF::Qwen35CPU.prefill_append_cooldown_ms(nil).should eq(50)
+    ML::GGUF::Qwen35CPU.prefill_append_cooldown_ms("50").should eq(50)
+    ML::GGUF::Qwen35CPU.prefill_append_cooldown_ms("0").should eq(0)
+    expect_raises(ArgumentError, /non-negative integer/) do
+      ML::GGUF::Qwen35CPU.prefill_append_cooldown_ms("invalid")
+    end
+    expect_raises(ArgumentError, /non-negative integer/) do
+      ML::GGUF::Qwen35CPU.prefill_append_cooldown_ms("-1")
+    end
+  end
+
   it "caps automatic resident prefill row tiles while preserving explicit overrides" do
     default_size = ML::GGUF::Qwen35CPU.default_prefill_chunk_size
     ML::GGUF::Qwen35CPU.prefill_chunk_size(false, nil).should eq(default_size)
@@ -304,8 +316,10 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     prompt = [760_i32, 6511_i32, 314_i32, 9338_i32, 369_i32, 279_i32, 9821_i32, 13_i32]
 
     old_limit = ENV["QWEN35_PREFILL_APPEND_MAX_GROUPS"]?
+    old_cooldown = ENV["QWEN35_PREFILL_APPEND_COOLDOWN_MS"]?
     old_chunk = ENV["QWEN35_PREFILL_CHUNK_SIZE"]?
     ENV["QWEN35_PREFILL_CHUNK_SIZE"] = "64"
+    ENV.delete("QWEN35_PREFILL_APPEND_COOLDOWN_MS")
     begin
       unbounded = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
       ENV["QWEN35_PREFILL_APPEND_MAX_GROUPS"] = "0"
@@ -326,6 +340,11 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
         ENV["QWEN35_PREFILL_APPEND_MAX_GROUPS"] = old_limit
       else
         ENV.delete("QWEN35_PREFILL_APPEND_MAX_GROUPS")
+      end
+      if old_cooldown
+        ENV["QWEN35_PREFILL_APPEND_COOLDOWN_MS"] = old_cooldown
+      else
+        ENV.delete("QWEN35_PREFILL_APPEND_COOLDOWN_MS")
       end
       if old_chunk
         ENV["QWEN35_PREFILL_CHUNK_SIZE"] = old_chunk

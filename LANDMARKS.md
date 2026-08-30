@@ -24758,9 +24758,9 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **decision:** Treat steady-state real-KV prefill as the bounded source of the M2 Max tile-15 replay gain. Retain the existing device-gated policy and stop tuning this shape. The next performance falsifiers, if valuable, are larger contexts, broader prompts, or other Apple GPUs; none is implied by this certificate.
 
-#### [LM-QWEN38-ADAPTIVE-QBIT-CODING-8K-940] Command rotation narrows the 8K safety frontier but does not yet close it
+#### [LM-QWEN38-ADAPTIVE-QBIT-CODING-8K-940] A bounded command cooldown closes the first product-shaped 8K coding gate
 **context:** ml / Qwen3.8 / adaptive QBit / Metal / 8K coding / safety
-**state:** implementation and bounded parity verified; product-shaped 8K adaptive acceptance remains open
+**state:** verified for the measured M2 Max, Qwen3.8-27B Q4_K_M, 7,718-token Crystal task, and coarse p4/BF16 map
 
 - claim: "The quality gate now distinguishes product correctness from token-level diagnostics."
   source: the prompt-file quality probe reports row/group policy and exact/resident timing; `qwen_qbit_coding_session_score.py` requires one sole-owner resident record, extracts generated Crystal, and runs public plus sealed specs in independent project copies. Its four unit tests pass. The 7,718-token exact output used `Math.max` and passed four external specs.
@@ -24768,16 +24768,28 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   decay_trigger: prompt/scorer schema, sealed task, source extraction, Crystal toolchain, or quality-record ownership contract change
   trust: {F:0.98,G:0.19,R:0.94}
 
-- claim: "Commit/wait rotation preserves the measured state boundary, but large-session watchdog safety is not closed by command buffers alone."
-  source: focused policy plus 9B bounded/unbounded Metal parity passed; a tiny 27B forced one-group control matched the unbounded control exactly for cache lengths, ownership, top-1/top-2, ECS, and all reported logit deltas. In guarded 7,718-token runs, full-row one-group commands still hit `Impacting Interactivity` during repeated adaptive prefill; 2,048-row two-group commands avoided the large scratch peak when both A/B sides shared that geometry, yet sustained commands around `2.4--5.3 s` still reached the same guard. No attempt rebooted the host; the 35% memory guard separately stopped one mixed-scratch run at 32% and memory recovered immediately.
+- claim: "A 50 ms idle window between completed long-prefill commands closes the observed M2 Max interactivity failure without changing KV ownership or arithmetic."
+  source: 2,048-row one-group rotation without a cooldown still failed in exact prefill after about 53 seconds despite mostly `0.95--1.9 s` commands. The same policy with a 50 ms post-publication cooldown completed exact, free-running adaptive, and teacher-forced adaptive phases in about 230 seconds. Its longest adaptive command was `2.703 s` wall / `2.700 s` GPU; a live memory sample retained 56% free against the 35% floor and the host returned to 87%. The safe value is now the long-row default; explicit zero is the rollback and benchmark frame.
   verified_at: 2026-08-30
-  decay_trigger: Metal scheduling/watchdog behavior, row/group policy, cache publication, model, hardware, prompt length, host load, or guard thresholds change
-  trust: {F:0.95,G:0.10,R:0.90}
+  decay_trigger: Metal scheduling/watchdog behavior, cooldown, row/group policy, cache publication, model, hardware, prompt length, host load, or guard thresholds change
+  trust: {F:0.98,G:0.11,R:0.94}
 
-**Adversary:** The current 2,048-row by one-group automatic policy is inferred from the completed command timings, not yet certified by a successful 8K adaptive run. Exact source passing hidden specs says nothing about the missing resident candidate. Short parity, top-1/top-2/ECS, and memory headroom cannot replace the product gate.
+- claim: "The measured adaptive 8K coding result preserves product meaning and sole compact ownership."
+  source: exact and adaptive generated identical 177-byte Crystal sources with SHA-256 `3494ecf7843f68ecc7261d75fc23e520a39a8fef50d1ce5d6d961f50b70c2d46`; each passed four public plus hidden specs. Adaptive matched top-1 `68/68`, exact-top-1 coverage `67/67`, ECS mean/minimum `1.0/1.0`, EOS, and full text. All 16 attention layers had adaptive owners, no Float32 owner remained, every cache published 7,785 rows, and density was `3.7647x` (`1,073,741,824 / 285,212,672` bytes).
+  verified_at: 2026-08-30
+  decay_trigger: model, prompt/task/specs, tokenizer/template, resident map/layout, cache publication, scorer, generation policy, or hardware change
+  trust: {F:0.98,G:0.10,R:0.95}
+
+- claim: "The current resident decode path is a compactness result, not a speed result."
+  source: exact/adaptive prefill was `68.424/92.134 s`; exact/adaptive decode was `5.144/25.192 s` for 67 decode steps, about `13.02/2.66 tok/s` or a `4.90x` adaptive slowdown. Ranked top-2 and set overlap were `121/134` even though the winning trajectory remained identical.
+  verified_at: 2026-08-30
+  decay_trigger: attention decoder, tier map, kernel geometry, model, context, compiler/runtime, or timing boundary change
+  trust: {F:0.98,G:0.10,R:0.95}
+
+**Adversary:** This is one small Crystal repair, one prompt, one model quantization, one tier map, and one Apple GPU. Exact text and specs do not erase the `13/134` ranked top-2 divergence or prove harder multi-file coding. The successful run separates the cooldown from the earlier no-cooldown failure, but it is not an ABBA scheduler benchmark. The large decode slowdown makes any broad adaptive-QBit performance or production-default claim false.
 
 **Value proxy:** External Crystal specs are the coding capability authority. Top-1, top-2, ECS, logit deltas, timing, density, owner count, and memory pressure are separate explanatory and safety coordinates.
 
-**LTP/WBA:** Trigger is a large adaptive prefill group whose continuous GPU corridor risks host watchdog failure. Transport keeps hidden activations and the sole adaptive KV owner on GPU across command rotation. The legal move finalizes and publishes pending appends before commit/wait, then resumes from the same handoff buffer. Boundary invariants are cache length, no Float32 owner, exact next-token parity, and failure-atomic publication. Potential is `(host failure, invalid publication, peak memory, longest command, total wall)`. The unbounded env override is the dual frame; promotion requires recomputing the complete 8K product gate.
+**LTP/WBA:** Trigger is a completed long-prefill command whose immediate successor keeps the GPU corridor continuously occupied. Transport keeps hidden activations and the sole adaptive KV owner on GPU. The legal move finalizes, commits, waits, validates, and publishes before a bounded idle window and the next command. Boundary invariants are cache length, no Float32 owner, exact next-token parity, and failure-atomic publication. Potential `(host failure, invalid publication, peak memory, longest continuous occupancy, total wall)` descends lexicographically despite added wall time. Explicit zero is the dual scheduling frame.
 
-**decision:** Admit prompt/scorer instrumentation, the 2,048-row resident cap, and command rotation as bounded safety infrastructure. Keep the conservative one-group policy guard-only. Do not claim 8K adaptive quality or start 16K until one fresh guarded 8K run emits a complete resident record and both external source variants pass.
+**decision:** Admit the 2,048-row, one-group, 50 ms policy as the safe long-prefill default and admit this 8K task certificate. Keep adaptive QBit explicit and scope the claim to compactness plus measured task correctness. The next useful move is decode-kernel profiling/optimization; 16K is now admissible only as a separately forecast and guarded falsifier, not an automatic widening.
