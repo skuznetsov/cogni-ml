@@ -50,6 +50,46 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     ML::GGUF::Qwen35CPU.prefill_chunk_boundary_cooldown_ms(1024, true, true, "0", nil).should eq(0)
   end
 
+  it "admits bounded CogniGraph prefill enqueue only for the exact route" do
+    qwen = ML::GGUF::Qwen35CPU
+    qwen.prefill_graph_max_inflight(false, false, false, nil).should eq(0)
+    qwen.prefill_graph_max_inflight(false, false, false, "0").should eq(0)
+    qwen.prefill_graph_max_inflight(false, false, false, "1").should eq(1)
+    qwen.prefill_graph_max_inflight(false, false, false, "2").should eq(2)
+
+    expect_raises(ArgumentError, /between 0 and 2/) do
+      qwen.prefill_graph_max_inflight(false, false, false, "3")
+    end
+    expect_raises(ArgumentError, /exact F32 KV/) do
+      qwen.prefill_graph_max_inflight(true, false, false, "1")
+    end
+    expect_raises(ArgumentError, /checkpoint/) do
+      qwen.prefill_graph_max_inflight(false, true, false, "1")
+    end
+    expect_raises(ArgumentError, /profiling/) do
+      qwen.prefill_graph_max_inflight(false, false, true, "1")
+    end
+  end
+
+  it "gives concurrent CogniGraph leases disjoint scratch arenas" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    first = ML::GGUF::Qwen35Metal::Scratch::Arena.new("cognigraph_spec:0")
+    second = ML::GGUF::Qwen35Metal::Scratch::Arena.new("cognigraph_spec:1")
+    first_buf = first.with { ML::GGUF::Qwen35Metal::Scratch.get(:cognigraph_spec, 64_i64) }
+    second_buf = second.with { ML::GGUF::Qwen35Metal::Scratch.get(:cognigraph_spec, 64_i64) }
+
+    first_buf.handle.should_not eq(second_buf.handle)
+    first.buffers.should eq([first_buf])
+    second.buffers.should eq([second_buf])
+    first.release
+    second.release
+    first.released?.should be_true
+    second.released?.should be_true
+    first_buf.valid?.should be_false
+    second_buf.valid?.should be_false
+  end
+
   it "caps automatic resident prefill row tiles while preserving explicit overrides" do
     default_size = ML::GGUF::Qwen35CPU.default_prefill_chunk_size
     ML::GGUF::Qwen35CPU.prefill_chunk_size(false, nil).should eq(default_size)
@@ -359,6 +399,50 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
         ENV["QWEN35_PREFILL_CHUNK_SIZE"] = old_chunk
       else
         ENV.delete("QWEN35_PREFILL_CHUNK_SIZE")
+      end
+    end
+  end
+
+  it "CogniGraph depth two preserves exact prefill and append results" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
+    hp = w.hparams
+    prompt = [760_i32, 6511_i32, 314_i32, 9338_i32, 369_i32, 279_i32, 9821_i32, 13_i32]
+    keys = [
+      "QWEN35_COGNIGRAPH_PREFILL_MAX_INFLIGHT",
+      "QWEN35_PREFILL_APPEND_MAX_GROUPS",
+      "QWEN35_PREFILL_APPEND_COOLDOWN_MS",
+      "QWEN35_PREFILL_CHUNK_SIZE",
+      "QWEN35_PREFILL_BOUNDARY_PROFILE",
+    ]
+    old = keys.to_h { |key| {key, ENV[key]?} }
+    ENV["QWEN35_PREFILL_APPEND_MAX_GROUPS"] = "1"
+    ENV["QWEN35_PREFILL_APPEND_COOLDOWN_MS"] = "0"
+    ENV["QWEN35_PREFILL_CHUNK_SIZE"] = "64"
+    ENV.delete("QWEN35_PREFILL_BOUNDARY_PROFILE")
+    begin
+      baseline = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      ENV["QWEN35_COGNIGRAPH_PREFILL_MAX_INFLIGHT"] = "0"
+      baseline_top, baseline_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, baseline)
+      baseline_next_top, baseline_next_logit = ML::GGUF::Qwen35CPU.forward_top1(w, 11751_i32, prompt.size.to_i32, baseline)
+
+      graph = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      ENV["QWEN35_COGNIGRAPH_PREFILL_MAX_INFLIGHT"] = "2"
+      graph_top, graph_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, graph)
+      graph_next_top, graph_next_logit = ML::GGUF::Qwen35CPU.forward_top1(w, 11751_i32, prompt.size.to_i32, graph)
+
+      graph_top.should eq(baseline_top)
+      graph_logit.should be_close(baseline_logit, 1e-4_f32)
+      graph_next_top.should eq(baseline_next_top)
+      graph_next_logit.should be_close(baseline_next_logit, 1e-4_f32)
+    ensure
+      old.each do |key, value|
+        if value
+          ENV[key] = value
+        else
+          ENV.delete(key)
+        end
       end
     end
   end

@@ -2321,3 +2321,57 @@ Like the existing Qwen35 Metal scratch paths, this reuse assumes one in-flight
 model wave per scratch namespace. A future concurrent multi-queue serving path
 must provide a lane/session namespace before it may overlap adaptive decode
 commands; this patch does not claim or introduce that wider concurrency model.
+
+### CogniGraph bounded exact-prefill enqueue frontier (2026-08-30)
+
+CogniGraph now has a default-off, depth-one-or-two submission corridor for the
+exact Qwen prefill path. `QWEN35_COGNIGRAPH_PREFILL_MAX_INFLIGHT=1|2` reserves a
+lease before any command encoding or host mutation, creates every command from
+one explicit Metal queue, retains a private scratch arena until terminal GPU
+completion, and reuses a slot only after the FIFO-oldest command has completed.
+Caller-side encoding aborts and command construction, submit, wait, or cancel
+failures drain all known work and poison the local queue. Zero or an unset
+variable preserves the previous path.
+
+The drain is a resource and ordering barrier, not a transactional rollback of
+model state already written by an earlier completed command. As with other
+Metal inference failures after state mutation, the caller must discard that
+sequence state rather than retry from it.
+
+This first slice deliberately rejects adaptive QBit KV, checkpoints, boundary
+profiling, CPU-only execution, and disabled/unavailable resident Metal command
+routes. Adaptive caches still expose one publication ledger, so overlapping
+them before that ledger becomes per-flight would make completion ownership
+ambiguous. The exact slice is the lifecycle certificate for that later change,
+not evidence that adaptive enqueue is already safe.
+
+The nine-example focused queue suite covers FIFO reservation, depth-two reuse,
+foreign lease rejection, cancellation, construction/submit/wait/discard failure
+draining, retained-resource release, and native same-queue Metal ordering.
+CPU-only generation also builds.
+A Qwen3.5-9B integration probe preserves prefill top-1/logit and the next append
+top-1/logit. On the local Qwen3.8-27B Q4_K_M model, a 1,024-token run submitted
+14 command buffers, reached a measured maximum pending depth of two, completed
+all 14, and matched baseline top-1 plus top-1 logit within `1e-4` in two paired
+observations.
+
+Against the historical no-idle timing frame (`cooldown=0`), one noisy pair was
+effectively flat: the queued path was `6,050.61 ms` versus `6,015.53 ms`
+(`0.58%` slower). Against the admitted 50 ms compositor-window policy, two
+interleaved pairs measured `6,032.32 ms` queued versus `6,861.24 ms` baseline,
+an `828.92 ms` or `12.08%` reduction, with parity in both pairs. This is a
+bounded recovery of host cooldown overhead at 1,024 tokens, not a general GPU
+kernel speedup or a long-context safety promotion. Live 8K/16K watchdog behavior
+and repeated quiet-host throughput remain open.
+
+The LTP/WBA trigger is an exact resident prefill group that would otherwise
+commit, wait, cool down, and only then encode its successor. The transport
+corridor is one Metal queue plus a FIFO lease and its private scratch arena. A
+legal move is `reserve -> write/encode -> enqueue/commit -> await oldest ->
+release/publish`; its boundary invariants are exact output/state parity, no
+mutable scratch alias across live leases, same-queue command order, bounded
+depth, and terminal draining before resource reuse. The recomputed potential is
+`(semantic failure, resource alias, undrained work, interactivity failure,
+sync/cooldown wall)`, in that order. The legacy zero-depth path is the dual
+frame. The move is not promotable to adaptive QBit until a per-flight cache
+publication certificate preserves those same higher-priority coordinates.

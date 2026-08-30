@@ -1,3 +1,283 @@
+module ML
+  module Metal
+    enum GraphSubmissionState
+      Open
+      Submitted
+      Completed
+      Failed
+      Cancelled
+    end
+
+    # Ownership certificate for one command buffer and its mutable resources.
+    # Retained references are released only after terminal GPU completion.
+    class GraphSubmissionLease(T, R)
+      getter command : T
+      getter sequence : UInt64
+      getter slot : Int32
+      getter owner_id : UInt64
+      getter state : GraphSubmissionState
+
+      @retained = [] of R
+      @release_callbacks = [] of Proc(Nil)
+
+      def initialize(@command : T, @sequence : UInt64, @slot : Int32, @owner_id : UInt64)
+        @state = GraphSubmissionState::Open
+      end
+
+      def retain(resource : R) : Nil
+        unless @state.open?
+          raise ArgumentError.new("resources must be retained before graph submission")
+        end
+        @retained << resource
+      end
+
+      def retain(resource : R, &release : R -> Nil) : Nil
+        retain(resource)
+        @release_callbacks << -> { release.call(resource) }
+      end
+
+      def retained_count : Int32
+        @retained.size
+      end
+
+      def terminal? : Bool
+        @state.completed? || @state.failed? || @state.cancelled?
+      end
+
+      protected def mark_submitted! : Nil
+        @state = GraphSubmissionState::Submitted
+      end
+
+      protected def finish!(state : GraphSubmissionState) : Nil
+        @state = state
+        @release_callbacks.each do |release|
+          begin
+            release.call
+          rescue
+            # Completion state is authoritative. A best-effort native resource
+            # release must not rewrite a successful command into a retryable
+            # semantic failure.
+          end
+        end
+        @release_callbacks.clear
+        @retained.clear
+      end
+    end
+
+    # Bounded single-producer submission corridor. Commands enter only through
+    # the factory; a Metal caller closes that factory over one explicit command
+    # queue. The oldest lease completes before its slot can be reused for host
+    # writes.
+    class GraphSubmissionQueue(T, R)
+      getter max_in_flight : Int32
+      getter submitted_count : Int64
+      getter completed_count : Int64
+      getter max_pending_seen : Int32
+
+      @pending : Array(GraphSubmissionLease(T, R))
+      @slot_busy : Array(Bool)
+      @open : GraphSubmissionLease(T, R)?
+      @failed = false
+      @next_sequence = 0_u64
+      @owner_id : UInt64
+
+      def initialize(@max_in_flight : Int32 = 2, &@command_factory : Int32, UInt64 -> T)
+        unless 1 <= @max_in_flight <= 2
+          raise ArgumentError.new("graph submission window must be between 1 and 2")
+        end
+        @pending = [] of GraphSubmissionLease(T, R)
+        @slot_busy = Array(Bool).new(@max_in_flight, false)
+        @open = nil
+        @submitted_count = 0_i64
+        @completed_count = 0_i64
+        @max_pending_seen = 0
+        @owner_id = object_id
+      end
+
+      def pending_count : Int32
+        @pending.size
+      end
+
+      def failed? : Bool
+        @failed
+      end
+
+      # This is the resource boundary: it waits before the caller may allocate,
+      # mutate, or encode anything for the returned slot.
+      def begin_submission : GraphSubmissionLease(T, R)
+        raise ArgumentError.new("graph submission queue has failed") if @failed
+        raise ArgumentError.new("graph submission queue already has an open lease") if @open
+        wait_oldest! if @pending.size >= @max_in_flight
+
+        slot = @slot_busy.index(false)
+        raise ArgumentError.new("graph submission queue has no free resource slot") unless slot
+        sequence = @next_sequence
+        @next_sequence &+= 1_u64
+        @slot_busy[slot] = true
+        begin
+          command = @command_factory.call(slot, sequence)
+        rescue ex
+          @slot_busy[slot] = false
+          # Construction can fail while older leases are already executing.
+          # Preserve the factory exception, but do not strand their resources.
+          abort
+          raise ex
+        end
+        lease = GraphSubmissionLease(T, R).new(command, sequence, slot, @owner_id)
+        @open = lease
+        lease
+      end
+
+      def submit(lease : GraphSubmissionLease(T, R)) : Nil
+        validate_open!(lease)
+        @open = nil
+        lease.mark_submitted!
+        @pending << lease
+        @submitted_count += 1
+        @max_pending_seen = Math.max(@max_pending_seen, @pending.size)
+        begin
+          lease.command.enqueue
+          lease.command.commit
+        rescue ex
+          drain_after_failure!(ex, lease)
+        end
+      end
+
+      # FIFO-only await preserves the command-queue transport order.
+      def await(lease : GraphSubmissionLease(T, R)) : Nil
+        validate_owner!(lease)
+        unless @pending.first? == lease
+          raise ArgumentError.new("only the oldest graph submission may be awaited")
+        end
+        wait_oldest!
+      end
+
+      def cancel(lease : GraphSubmissionLease(T, R)) : Nil
+        validate_open!(lease)
+        begin
+          lease.command.discard
+        rescue ex
+          @open = nil
+          @slot_busy[lease.slot] = false
+          lease.finish!(GraphSubmissionState::Cancelled)
+          # A failed discard cannot strand older, already submitted work.
+          # Preserve the discard exception after the best-effort barrier.
+          abort
+          raise ex
+        end
+        @open = nil
+        @slot_busy[lease.slot] = false
+        lease.finish!(GraphSubmissionState::Cancelled)
+      end
+
+      # Error-path barrier for callers whose encoding failed after earlier
+      # submissions. It cancels the open lease, waits every known command, and
+      # poisons the queue without replacing the caller's original exception.
+      def abort : Nil
+        if lease = @open
+          begin
+            lease.command.discard
+          rescue
+          ensure
+            @slot_busy[lease.slot] = false
+            lease.finish!(GraphSubmissionState::Cancelled)
+            @open = nil
+          end
+        end
+        until @pending.empty?
+          lease = @pending.shift
+          begin
+            lease.command.wait
+            @completed_count += 1
+            lease.finish!(GraphSubmissionState::Completed)
+          rescue
+            lease.finish!(GraphSubmissionState::Failed)
+          ensure
+            @slot_busy[lease.slot] = false
+          end
+        end
+        @failed = true
+      end
+
+      # Drain all known work even after one command fails, then poison the
+      # queue. No retained arena is released before its command is terminal.
+      def drain : Nil
+        raise ArgumentError.new("graph submission queue has failed") if @failed
+        raise ArgumentError.new("cannot drain graph submission queue with an open lease") if @open
+        first_error = nil.as(Exception?)
+        until @pending.empty?
+          lease = @pending.shift
+          begin
+            lease.command.wait
+            @completed_count += 1
+            lease.finish!(GraphSubmissionState::Completed)
+          rescue ex
+            first_error ||= ex
+            lease.finish!(GraphSubmissionState::Failed)
+          ensure
+            @slot_busy[lease.slot] = false
+          end
+        end
+        if error = first_error
+          @failed = true
+          raise error
+        end
+      end
+
+      private def wait_oldest! : Nil
+        lease = @pending.shift
+        begin
+          lease.command.wait
+          @completed_count += 1
+          lease.finish!(GraphSubmissionState::Completed)
+        rescue ex
+          lease.finish!(GraphSubmissionState::Failed)
+          drain_after_failure!(ex)
+        ensure
+          @slot_busy[lease.slot] = false
+        end
+      end
+
+      private def drain_after_failure!(first_error : Exception,
+                                       failed_lease : GraphSubmissionLease(T, R)? = nil) : NoReturn
+        until @pending.empty?
+          lease = @pending.shift
+          begin
+            lease.command.wait
+            @completed_count += 1
+            lease.finish!(lease == failed_lease ? GraphSubmissionState::Failed : GraphSubmissionState::Completed)
+          rescue
+            if lease == failed_lease
+              begin
+                lease.command.discard
+              rescue
+              end
+            end
+            lease.finish!(GraphSubmissionState::Failed)
+          ensure
+            @slot_busy[lease.slot] = false
+          end
+        end
+        @failed = true
+        raise first_error
+      end
+
+      private def validate_open!(lease : GraphSubmissionLease(T, R)) : Nil
+        validate_owner!(lease)
+        unless @open == lease && lease.state.open?
+          raise ArgumentError.new("graph submission lease is not open")
+        end
+      end
+
+      private def validate_owner!(lease : GraphSubmissionLease(T, R)) : Nil
+        unless lease.owner_id == @owner_id
+          raise ArgumentError.new("graph submission lease belongs to another queue")
+        end
+      end
+    end
+  end
+end
+
 {% if flag?(:cpu_only) %}
 module ML
   module Metal

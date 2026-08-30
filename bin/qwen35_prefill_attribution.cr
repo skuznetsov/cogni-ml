@@ -68,24 +68,31 @@ def prompt_tokens(n : Int32) : Array(Int32)
   Array(Int32).new(n) { |i| ((i * 7 + 11) % 1000).to_i32 }
 end
 
+record PrefillObservation,
+  wall_ms : Float64,
+  top1 : Int32?,
+  top1_logit : Float32?
+
 def run_prefill_once(w : ML::GGUF::Qwen35Weights,
                      prompt : Array(Int32),
                      profile : Bool,
                      prepare_state : Bool,
-                     final_top1 : Bool) : Float64
+                     final_top1 : Bool) : PrefillObservation
   state = ML::GGUF::Qwen35CPU::State.new(w.hparams, max_seq: prompt.size + 4)
   ML::GGUF::Qwen35CPU.prepare_state_metal!(state, w.hparams) if prepare_state
   ML::GGUF::Qwen35Metal::Profile.reset if profile
   ML::GGUF::Qwen35Metal::Profile.enable! if profile
   t0 = Time.instant
+  top1 = nil.as(Int32?)
+  top1_logit = nil.as(Float32?)
   if final_top1
-    ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, state)
+    top1, top1_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, state)
   else
     ML::GGUF::Qwen35CPU.prefill_tokens(w, prompt, 0, state)
   end
   wall_ms = (Time.instant - t0).total_milliseconds
   ML::GGUF::Qwen35Metal::Profile.disable! if profile
-  wall_ms
+  PrefillObservation.new(wall_ms, top1, top1_logit)
 end
 
 record LifecycleTiming,
@@ -159,7 +166,9 @@ end
 
 def measure_wall(w, prompt, warmup : Int32, reps : Int32, prepare_state : Bool, final_top1 : Bool) : Array(Float64)
   warmup.times { run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1) }
-  Array(Float64).new(reps) { run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1) }
+  Array(Float64).new(reps) do
+    run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1).wall_ms
+  end
 end
 
 def measure_paired_env(w,
@@ -183,17 +192,22 @@ def measure_paired_env(w,
   reps.times do |i|
     if i.even?
       set_env(env, nil)
-      a = run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1)
+      a_run = run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1)
       set_env(env, alternate_value)
-      b = run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1)
+      b_run = run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1)
     else
       set_env(env, alternate_value)
-      b = run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1)
+      b_run = run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1)
       set_env(env, nil)
-      a = run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1)
+      a_run = run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1)
     end
-    default << a
-    alternate << b
+    if final_top1
+      unless a_run.top1 == b_run.top1 && (a_run.top1_logit.not_nil! - b_run.top1_logit.not_nil!).abs <= 1e-4_f32
+        raise "prefill A/B semantic mismatch: default=#{a_run.top1}/#{a_run.top1_logit}, alternate=#{b_run.top1}/#{b_run.top1_logit}"
+      end
+    end
+    default << a_run.wall_ms
+    alternate << b_run.wall_ms
   end
 
   {default, alternate}
@@ -209,12 +223,14 @@ puts "model=#{model}"
 puts "prompt=#{prompt_len} warmup=#{warmup} reps=#{reps} mode=#{final_top1 ? "prompt_plus_final_top1" : "body_only"} prepare_state=#{prepare_state} breakdown_state_overhead=#{breakdown_state_overhead}"
 
 warmup.times { run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1) }
-profile_ms = run_prefill_once(w, prompt, profile: true, prepare_state: prepare_state, final_top1: final_top1)
+profile_run = run_prefill_once(w, prompt, profile: true, prepare_state: prepare_state, final_top1: final_top1)
 puts
 print ML::GGUF::Qwen35Metal::Profile.report_io
-printf "  profiled wall: %.2f ms  %.2f tok/s\n", profile_ms, prompt_len * 1000.0 / profile_ms
+printf "  profiled wall: %.2f ms  %.2f tok/s\n", profile_run.wall_ms, prompt_len * 1000.0 / profile_run.wall_ms
 
-times = Array(Float64).new(reps) { run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1) }
+times = Array(Float64).new(reps) do
+  run_prefill_once(w, prompt, profile: false, prepare_state: prepare_state, final_top1: final_top1).wall_ms
+end
 printf "  wall reps: avg=%.2f ms p50=%.2f ms p90=%.2f ms p50=%.2f tok/s\n",
   mean(times), percentile(times, 50), percentile(times, 90),
   prompt_len * 1000.0 / percentile(times, 50)
@@ -237,6 +253,7 @@ if env = compare_env
     printf "  other:   avg=%.2f ms p50=%.2f ms %.2f tok/s\n",
       mean(off), percentile(off, 50), prompt_len * 1000.0 / percentile(off, 50)
     printf "  default-other: %.2f ms  wins=%d/%d\n", mean(on) - mean(off), wins, reps
+    puts "  semantic parity: top1 and top1 logit within 1e-4 for #{reps}/#{reps} pairs" if final_top1
   ensure
     set_env(env, old)
   end

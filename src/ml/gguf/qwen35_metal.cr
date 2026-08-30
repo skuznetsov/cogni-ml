@@ -629,6 +629,52 @@ module ML
           @@fresh_collectors = {} of UInt64 => Array(Array(ML::MetalBuffer))
           @@namespaces = {} of UInt64 => Array(String)
 
+          # Private bounded scratch ownership for an asynchronous graph lease.
+          # `with_fresh` prevents pool aliases; the arena keeps every buffer
+          # alive until its owning lease reaches terminal GPU completion.
+          class Arena
+            getter namespace : String
+            getter buffers : Array(ML::MetalBuffer)
+
+            @released = false
+
+            def initialize(@namespace : String)
+              @buffers = [] of ML::MetalBuffer
+            end
+
+            def with(&)
+              raise ArgumentError.new("scratch arena is released") if @released
+              Scratch.with_fresh do |fresh|
+                begin
+                  Scratch.with_namespace(@namespace) { yield }
+                ensure
+                  @buffers.concat(fresh)
+                end
+              end
+            end
+
+            def release : Nil
+              return if @released
+              begin
+                @buffers.each do |buffer|
+                  begin
+                    buffer.release
+                  rescue
+                    # Release every buffer even if one native handle has
+                    # already been invalidated by an earlier failure path.
+                  end
+                end
+              ensure
+                @buffers.clear
+                @released = true
+              end
+            end
+
+            def released? : Bool
+              @released
+            end
+          end
+
           private def self.thread_key : UInt64
             Thread.current.object_id
           end

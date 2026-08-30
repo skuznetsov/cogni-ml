@@ -24853,3 +24853,33 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Trigger is a non-final large-row prefill chunk whose terminal command was followed immediately by the next chunk. Transport preserves resident hidden state and sole adaptive KV ownership across the host scheduling window. The legal move waits for completion and publication, then applies the already-configured idle window before the next chunk. Cache length, arithmetic, publication, and rollback behavior remain invariant; potential `(interactivity failure, invalid publication, memory pressure, continuous occupancy, wall time)` descends on the measured run.
 
 **decision:** Admit the chunk-boundary cooldown as part of the existing long-prefill safety contract and admit the bounded 16K-capacity certificate. Do not call it live 16K or promote speed. The next gate is a pre-counted roughly 16,000-token chat prompt followed by fresh split-K-on and serial-rollback processes under unchanged guards.
+
+#### [LM-QWEN38-COGNIGRAPH-EXACT-PREFILL-943] Bounded FIFO leases recover the measured exact-prefill cooldown tax
+**context:** ml / Qwen3.8 / CogniGraph / Metal / exact prefill / enqueue / LTP-WBA
+**state:** verified for queue lifecycle, Qwen3.5-9B parity, and the measured Qwen3.8-27B Q4_K_M 1,024-token row; adaptive and long-context promotion remain open
+
+- claim: "CogniGraph now owns a bounded reservation-before-encoding command corridor."
+  source: `GraphSubmissionQueue` admits only depth one or two, constructs commands through its factory, waits the FIFO-oldest lease before slot reuse, retains resources to terminal completion, drains all known work after construction/submit/wait/discard failure, and rejects foreign leases. Qwen closes the factory over one explicit Metal command queue and gives every live lease a private scratch arena with deterministic release. The focused suite passed nine examples including native Metal command order; CPU-only `qwen35_generate` builds.
+  verified_at: 2026-08-30
+  decay_trigger: queue/command lifecycle, Scratch allocation, Qwen prefill route, Metal completion semantics, or CPU-only branching changes
+  trust: {F:0.97,G:0.31,R:0.94}
+
+- claim: "The bounded exact route preserves the measured model boundary."
+  source: the Qwen3.5-9B integration probe preserved prefill and next-append top-1/logit. A guarded Qwen3.8-27B Q4_K_M pp1024 run submitted and completed 14 buffers with measured `max_pending=2`; two interleaved baseline/queued pairs preserved top-1 and top-1 logit within `1e-4` and exited zero under the 35% free-memory floor and 24 GiB process-tree cap.
+  verified_at: 2026-08-30
+  decay_trigger: model, exact prefill arithmetic/state, command grouping, output head, compiler/runtime, hardware, or safety guards change
+  trust: {F:0.97,G:0.13,R:0.94}
+
+- claim: "The measured gain recovers the safe cooldown tax; it is not a general kernel speedup."
+  source: with cooldown zero, one noisy pp1024 pair measured `6,050.61 ms` queued versus `6,015.53 ms` baseline (`0.58%` slower). With the admitted 50 ms compositor window, two interleaved pairs measured `6,032.32 ms` queued versus `6,861.24 ms` baseline, an `828.92 ms` or `12.08%` reduction with parity `2/2`. Host load was not quiet, so repetition and long-context safety remain required before wider promotion.
+  verified_at: 2026-08-30
+  decay_trigger: cooldown/group policy, host load, model, prompt length, compiler/runtime, hardware, or timing boundary change
+  trust: {F:0.96,G:0.08,R:0.88}
+
+**Adversary:** A same-queue depth-two window overlaps host encoding with already submitted GPU work; it does not execute dependent GPU groups concurrently or reduce model bytes. Private arenas increase bounded scratch ownership and need a long-context memory/watchdog falsifier. Exact state is externally observed only after the enclosing call drains. Failure draining is a resource/order barrier, not rollback of state already mutated by an earlier completed command, so the failed sequence state must be discarded. Adaptive QBit, checkpoints, boundary profiling, CPU-only, and disabled Metal routes are rejected rather than silently widened. One noisy device/model row does not establish production throughput, live-8K/16K safety, concurrency, or cross-device behavior.
+
+**Value proxy:** Top-1/logit parity and completion prove the measured exact boundary; timing explains the scheduling benefit. Neither substitutes for generated-code quality, adaptive cache publication safety, memory headroom, watchdog survival, or repeated quiet-host results.
+
+**LTP/WBA:** Trigger is an exact resident group followed by another group. Transport is one Metal queue plus a FIFO lease and private arena. Legal move is `reserve -> encode -> submit -> await oldest -> release/publish`. Boundary invariants are exact output/state, no live scratch alias, same-queue order, bounded depth, and failure drain before reuse. Potential `(semantic failure, alias, undrained work, interactivity failure, sync/cooldown wall)` descends on the measured row; zero depth is the dual frame. Adaptive promotion requires a new per-flight publication certificate and a fresh global recomputation.
+
+**decision:** Admit the default-off exact-prefill lifecycle and its bounded pp1024 result. Keep `QWEN35_COGNIGRAPH_PREFILL_MAX_INFLIGHT` unset by default. Do not route adaptive QBit until completion/publication ownership is per-flight; do not remove the existing cooldown default until a guarded live long-context pair replaces it.
