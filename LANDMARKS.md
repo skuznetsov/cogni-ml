@@ -24913,3 +24913,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. Per-flight publication and depth-two enqueue are ordinary boundary-safe scheduling. A future LTP/WBA promotion would still need an explicit trigger, transport corridor, legal transformation, boundary invariant, lexicographic potential, recompute-safety proof, and local certificate; zero depth remains the dual frame.
 
 **decision:** Admit serialized adaptive sessions to the default-off depth-one-or-two CogniGraph corridor. Keep checkpoints, boundary profiling, concurrent shared-cache sessions, and default enablement outside the certificate. Next attack the adaptive full-attention readback boundary; separately profile tier-specialized QBit pack/decode and decode-chain command fragmentation.
+
+#### [LM-QWEN38-ADAPTIVE-FINAL-HEAD-945] Final adaptive prefill can project top-1 without hidden readback
+**context:** ml / Qwen3.8 / adaptive QBit / Metal / final prefill head / resident handoff
+**state:** verified as a default-off transfer optimization on Apple M2 Max and Qwen3.8-27B Q4_K_M; speed promotion remains open
+
+- claim: "The final adaptive hidden rows can remain resident through output RMSNorm and fused top-1 projection without changing KV publication."
+  source: `QWEN35_PREFILL_TOP1_ADAPTIVE_RESIDENT=1` supplies an invocation-owned output buffer to the existing adaptive final-layer command, waits and publishes through the unchanged boundary, then projects only the last row and reads back `{id, score}`. Static dimension preflight runs before state mutation, and a late head rejection reads only the completed final row instead of rerunning the decoder. A focused selected-row Metal spec uses an independent CPU RMSNorm plus quantized-head oracle and includes negative and overflow offset guards; the complete forward suite passed `24/24`, and CPU-only generation built successfully.
+  verified_at: 2026-08-30
+  decay_trigger: final adaptive prefill routing, buffer lifetime/offset ABI, output RMSNorm/top-1 kernels, cache completion/publication, compiler/runtime, or head quantization changes
+  trust: {F:0.98,G:0.27,R:0.95}
+
+- claim: "The bounded route removes the measured final hidden transfer and preserves the tested model boundary."
+  source: a guarded pp1024 warm `off/on/on/off` row preserved top-1 id `30`, logit `26.449722`, and all 16 adaptive cache lengths while reducing `adaptive_standalone.boundary` readback from 20 MiB to zero. A separate eight-token quality pair preserved exact text, top-1 `8/8`, ranked top-2 `14/14`, exact-top-1 coverage `7/7`, ECS mean/minimum `1.0/1.0`, 16 resident owners, no Float32 owner, and consistent publication.
+  verified_at: 2026-08-30
+  decay_trigger: model, prompt, resident tier map, final-layer ownership, quality probe, profiling counters, or publication policy changes
+  trust: {F:0.98,G:0.12,R:0.95}
+
+**Adversary:** Warm means were `7,725.79 ms` off and `7,610.65 ms` on (`1.49%`), but observation spread is comparable to the delta. The 20 MiB host transfer is eliminated, while the invocation-owned resident allocation remains. A repeatable wall-time speedup is not verified. The producer still completes and publishes before a separate head command, so this does not prove adaptive-to-recurrent overlap or safe output-buffer reuse at queue depth two.
+
+**Value proxy:** Hidden readback bytes diagnose the removed boundary but do not replace token quality, publication safety, or end-to-end wall time.
+
+**LTP/WBA:** Not claimed. This is ordinary resident dataflow with the existing synchronous completion/publication boundary and the host-readback path as its dual frame.
+
+**decision:** Keep `QWEN35_PREFILL_TOP1_ADAPTIVE_RESIDENT` default-off. Admit the exact resident final-head path as a measured transfer optimization, but require a stable wall-time win before default promotion. Treat a future cross-layer handoff as a separate lifetime and queue-ordering problem.

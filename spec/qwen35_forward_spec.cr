@@ -165,6 +165,41 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     end
   end
 
+  it "projects top-1 directly from a selected resident hidden row" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
+    hidden_dim = w.hparams.n_embd
+    first = Array(Float32).new(hidden_dim) { |i| ((i % 29) - 14).to_f32 / 29.0_f32 }
+    second = Array(Float32).new(hidden_dim) { |i| ((i % 31) - 15).to_f32 / 31.0_f32 }
+    resident = ML::MetalBuffer.new((2 * hidden_dim).to_i64 * sizeof(Float32))
+    resident.write(first + second)
+
+    normalized = ML::GGUF::Qwen35CPU.rms_norm(
+      second, w.output_norm, w.hparams.rms_eps,
+    )
+    cpu_logits = ML::GGUF::QuantMatmul.matmul_add(
+      normalized, 1, w.output.in_dim, w.output.raw, w.output.type,
+      w.output.out_dim, Array(Float32).new(w.output.out_dim, 0.0_f32),
+    )
+    expected_id = cpu_logits.index(cpu_logits.max).not_nil!.to_i32
+    actual = ML::GGUF::Qwen35Metal.rmsnorm_project_top1_buffer(
+      resident, hidden_dim.to_i64, w.output_norm, w.output, w.hparams.rms_eps,
+    ).not_nil!
+
+    actual[0].to_i32.should eq(expected_id)
+    actual[1].should be_close(cpu_logits[expected_id], 1.0e-4_f32)
+    ML::GGUF::Qwen35Metal.rmsnorm_project_top1_buffer(
+      resident, -1_i64, w.output_norm, w.output, w.hparams.rms_eps,
+    ).should be_nil
+    ML::GGUF::Qwen35Metal.rmsnorm_project_top1_buffer(
+      resident, hidden_dim.to_i64 + 1_i64, w.output_norm, w.output, w.hparams.rms_eps,
+    ).should be_nil
+    ML::GGUF::Qwen35Metal.rmsnorm_project_top1_buffer(
+      resident, Int64::MAX, w.output_norm, w.output, w.hparams.rms_eps,
+    ).should be_nil
+  end
+
   it "falls back to full-logit argmax when fused greedy head is disabled" do
     w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
     hp = w.hparams

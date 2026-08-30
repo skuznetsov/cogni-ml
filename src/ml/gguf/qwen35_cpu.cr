@@ -1989,6 +1989,54 @@ module ML::GGUF
       nil
     end
 
+    private def output_project_top1_resident_routed(x_buf : ML::MetalBuffer,
+                                                     row : Int32,
+                                                     norm_weight : Array(Float32),
+                                                     out_qw : QuantWeight,
+                                                     eps : Float32) : {Int32, Float32}?
+      {% unless flag?(:cpu_only) %}
+        return nil if row < 0
+        return nil if ENV["QWEN35_HEAD_TOP1_FUSED"]? == "0"
+        return nil unless Qwen35Metal.available?
+        element_offset = row.to_i64 * out_qw.in_dim.to_i64
+        if packed = Qwen35Metal.rmsnorm_project_top1_buffer(
+             x_buf, element_offset, norm_weight, out_qw, eps,
+           )
+          return {packed[0].to_i32, packed[1]} if packed.size == 2
+        end
+      {% end %}
+      nil
+    end
+
+    private def prefill_adaptive_resident_top1_supported?(weights : Qwen35Weights,
+                                                          state : State,
+                                                          rows : Int32) : Bool
+      {% unless flag?(:cpu_only) %}
+        return false unless ENV["QWEN35_PREFILL_TOP1_ADAPTIVE_RESIDENT"]? == "1"
+        return false if ENV["QWEN35_HEAD_TOP1_FUSED"]? == "0"
+        return false if ENV["QWEN35_PREFILL_CHUNK_OFF"]? == "1"
+        return false if ENV["QWEN35_PREFILL_RESIDENT_BOUNDARY_OFF"]? == "1"
+        return false unless Qwen35Metal.available?
+        return false unless state.layers[-1].adaptive_kv
+        return false if rows > prefill_chunk_size(true)
+        hp = weights.hparams
+        return false unless weights.output.in_dim == hp.n_embd
+        return false unless weights.output_norm.size == hp.n_embd
+        last_layer = weights.layers[-1].as?(Qwen35FullAttnWeights)
+        return false unless last_layer
+        return false unless Qwen35Metal.rmsnorm_project_top1_supported?(weights.output)
+        metal_qw_supported?(last_layer.attn_q_qw) &&
+          metal_qw_supported?(last_layer.attn_k_qw) &&
+          metal_qw_supported?(last_layer.attn_v_qw) &&
+          metal_qw_supported?(last_layer.attn_output_qw) &&
+          metal_qw_supported?(last_layer.ffn_gate_qw) &&
+          metal_qw_supported?(last_layer.ffn_up_qw) &&
+          metal_qw_supported?(last_layer.ffn_down_qw)
+      {% else %}
+        false
+      {% end %}
+    end
+
     private def output_project_top1s_routed(x : Array(Float32),
                                             rows : Int32,
                                             norm_weight : Array(Float32),
@@ -3078,6 +3126,39 @@ module ML::GGUF
           return forward_top1(weights, token_ids[-1], start_pos + token_ids.size - 1, state)
         end
 
+        {% unless flag?(:cpu_only) %}
+          if prefill_adaptive_resident_top1_supported?(weights, state, token_ids.size)
+            hp = weights.hparams
+            resident_buf = ML::MetalBuffer.new(
+              token_ids.size.to_i64 * hp.n_embd.to_i64 * sizeof(Float32),
+            )
+            resident_written = [false]
+            prefill_tokens_hidden(weights, token_ids, start_pos, state,
+              need_output: false,
+              resident_output_buf: resident_buf,
+              resident_output_written: resident_written)
+            raise "adaptive resident final prefill did not produce a GPU hidden buffer" unless resident_written[0]
+            if top1 = output_project_top1_resident_routed(
+                 resident_buf, token_ids.size - 1, weights.output_norm, weights.output, hp.rms_eps,
+               )
+              Qwen35Metal::Profile.bump_route_marker("adaptive_final_resident_top1")
+              return top1
+            end
+
+            # The state is already published, so never retry the decoder body.
+            # A late head-policy change or helper rejection falls back by
+            # materializing only the completed final hidden row.
+            row_offset = (token_ids.size - 1).to_i64 * hp.n_embd.to_i64
+            row_ptr = resident_buf.contents.as(Pointer(Float32)) + row_offset
+            last_hidden = Array(Float32).new(hp.n_embd) { |i| row_ptr[i] }
+            Qwen35Metal::Profile.bump_group_transfer(
+              "adaptive_final_head.fallback", 0_i64, hp.n_embd.to_i64 * sizeof(Float32),
+            )
+            Qwen35Metal::Profile.bump_route_marker("adaptive_final_resident_top1_fallback")
+            return hidden_top1(weights, last_hidden)
+          end
+        {% end %}
+
         if !state.layers[-1].adaptive_kv &&
            ENV["QWEN35_FINAL_FULL_LAST_OFF"]? != "1" &&
            (last_layer = weights.layers[-1].as?(Qwen35FullAttnWeights)) &&
@@ -3836,6 +3917,11 @@ module ML::GGUF
             flush_prefill_cmd.call
             gpu_hidden = nil
             if adaptive_read_output
+              {% unless flag?(:cpu_only) %}
+                Qwen35Metal::Profile.bump_group_transfer(
+                  "adaptive_standalone.boundary", 0_i64, handoff_bytes,
+                )
+              {% end %}
               x = adaptive_output_buf.not_nil!.read(n_tokens * hp.n_embd)
             else
               resident_output_written.try { |flag| flag[0] = true } if resident_output_buf

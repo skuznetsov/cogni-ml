@@ -2453,3 +2453,42 @@ adaptive session and removes measured scheduler wall time, but it does not
 claim to eliminate the remaining adaptive host boundary. That boundary,
 tier-specialized pack/decode, and decode-chain command fragmentation are the
 next independent performance falsifiers.
+
+### Adaptive final-head resident handoff frontier (2026-08-30)
+
+The first adaptive boundary reduction is intentionally narrower than a general
+cross-layer handoff. When `QWEN35_PREFILL_TOP1_ADAPTIVE_RESIDENT=1`, the final
+adaptive full-attention layer writes its completed hidden rows into an
+invocation-owned Metal buffer. After the existing command completion, status
+validation, and KV publication boundary, output RMSNorm and the fused Q6/Q8
+top-1 projection consume the last row in place and read back only the token id
+and score. The ordinary hidden readback route remains the default and rollback.
+
+This keeps the existing cache semantics unchanged: it neither overlaps two
+adaptive commands nor defers publication, and the buffer cannot outlive the
+enclosing prefill call. Static preflight certifies the output hidden/norm
+dimensions before state mutation. If the selected-row head is nevertheless
+rejected after publication, the route materializes only the completed final
+hidden row and uses the ordinary exact head; it never reruns the decoder body.
+A focused Metal spec compares a selected second row against an independent CPU
+RMSNorm plus quantized-head oracle and rejects negative or out-of-range offsets.
+The complete forward suite passes `24/24`, and CPU-only generation builds with
+the route compiled out.
+
+On the guarded Qwen3.8-27B Q4_K_M pp1024 row, an unmeasured warmup followed by
+`off/on/on/off` preserved the final top-1 id, score, and all 16 published cache
+lengths. The profile reduced the final adaptive hidden readback from 20 MiB to
+zero. This removes the host transfer, not the invocation-owned 20 MiB resident
+buffer itself. Warm means were `7,725.79 ms` off and `7,610.65 ms` on (`1.49%`),
+but the
+per-observation spread is large enough that this is not a speed certificate.
+A separate eight-token quality pair preserved the exact text, top-1 `8/8`,
+ranked top-2 `14/14`, exact-top-1 coverage `7/7`, ECS mean/minimum `1.0/1.0`,
+16 resident owners, no Float32 KV owner, and consistent cache publication.
+
+The value claim is therefore limited to removing a measured transfer while
+preserving the tested boundary. Timing, transfer bytes, token quality, cache
+ownership, and publication remain separate coordinates. This is ordinary
+resident dataflow, not an LTP/WBA promotion. Default enablement needs a stable
+end-to-end wall-time win; a wider adaptive-to-recurrent handoff additionally
+needs an explicit lifetime certificate for every in-flight output buffer.

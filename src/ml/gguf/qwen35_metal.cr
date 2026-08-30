@@ -8750,19 +8750,58 @@ module ML
                                       out_qw : QuantWeight,
                                       eps : Float32) : Array(Float32)?
           return nil unless can_use_head_top1_fused?(out_qw)
+          return nil unless x.size == out_qw.in_dim
 
           ML::Metal::Device.init!
 
-          hidden_dim = x.size
+          x_buf = Scratch.get(:head_top1_x, out_qw.in_dim.to_i64 * sizeof(Float32))
+          x_buf.write(x)
+          rmsnorm_project_top1_buffer_impl(
+            x_buf, 0_i64, norm_weight, out_qw, eps, "head_top1",
+          )
+        end
+
+        def self.rmsnorm_project_top1_supported?(out_qw : QuantWeight) : Bool
+          can_use_head_top1_fused?(out_qw)
+        end
+
+        # Project one hidden row directly from a resident multi-row buffer.
+        # `element_offset` is expressed in Float32 elements, not bytes.
+        def self.rmsnorm_project_top1_buffer(x_buf : ML::MetalBuffer,
+                                             element_offset : Int64,
+                                             norm_weight : Array(Float32),
+                                             out_qw : QuantWeight,
+                                             eps : Float32) : Array(Float32)?
+          rmsnorm_project_top1_buffer_impl(
+            x_buf, element_offset, norm_weight, out_qw, eps, "head_top1_resident",
+          )
+        end
+
+        private def self.rmsnorm_project_top1_buffer_impl(x_buf : ML::MetalBuffer,
+                                                          element_offset : Int64,
+                                                          norm_weight : Array(Float32),
+                                                          out_qw : QuantWeight,
+                                                          eps : Float32,
+                                                          profile_label : String) : Array(Float32)?
+          return nil unless can_use_head_top1_fused?(out_qw)
+          return nil if element_offset < 0
+          hidden_dim = out_qw.in_dim
+          return nil unless norm_weight.size == hidden_dim
+          hidden_dim_i64 = hidden_dim.to_i64
+          return nil if element_offset > Int64::MAX - hidden_dim_i64
+          required_elements = element_offset + hidden_dim_i64
+          return nil if required_elements > Int64::MAX // sizeof(Float32)
+          return nil if x_buf.size < required_elements * sizeof(Float32)
+
+          ML::Metal::Device.init!
+
           tile_count = (out_qw.out_dim + HEAD_TOP1_ROWS_PER_TG - 1) // HEAD_TOP1_ROWS_PER_TG
-          x_buf = Scratch.get(:head_top1_x, hidden_dim.to_i64 * sizeof(Float32))
           norm_w_buf = Scratch.get(:head_top1_norm_w, norm_weight.size.to_i64 * sizeof(Float32))
           normed_buf = Scratch.get(:head_top1_normed, hidden_dim.to_i64 * sizeof(Float32))
           tile_values_buf = Scratch.get(:head_top1_tile_values, tile_count.to_i64 * sizeof(Float32))
           tile_ids_buf = Scratch.get(:head_top1_tile_ids, tile_count.to_i64 * sizeof(UInt32))
           top1_id_buf = Scratch.get(:head_top1_id, sizeof(UInt32).to_i64)
           top1_value_buf = Scratch.get(:head_top1_value, sizeof(Float32).to_i64)
-          x_buf.write(x)
           norm_w_buf.write(norm_weight)
 
           out_w_buf, out_w_off = weight_slot(out_qw)
@@ -8771,12 +8810,19 @@ module ML
           cmd = ML::Metal::CommandBuffer.new
 
           norm_enc = ML::Metal::ComputeEncoder.new(cmd)
-          encode_rmsnorm_vec(norm_enc, x_buf, norm_w_buf, normed_buf, hidden_dim, eps)
+          norm_enc.set_pipeline(rmsnorm_vec_pipeline)
+          norm_enc.set_buffer(x_buf, 0, ML::Metal::BufferAccess::Read,
+            offset: element_offset * sizeof(Float32))
+          norm_enc.set_buffer(norm_w_buf, 1)
+          norm_enc.set_buffer(normed_buf, 2, ML::Metal::BufferAccess::Write)
+          norm_enc.set_value(hidden_dim.to_u32, 3)
+          norm_enc.set_value(eps, 4)
+          norm_enc.dispatch_threadgroups({1, 1, 1}, {256, 1, 1})
           norm_enc.end_encoding
 
           head_top1_enc = ML::Metal::ComputeEncoder.new(cmd)
           head_top1_enc.set_pipeline(out_qw.type.q8_0? ? mv8_top1_tiles_pipeline : mv6_top1_tiles_pipeline)
-          profile_bump_head_top1_shape("head_top1", out_qw)
+          profile_bump_head_top1_shape(profile_label, out_qw)
           head_top1_enc.set_buffer(out_w_buf, 0, ML::Metal::BufferAccess::Read, offset: out_w_off)
           head_top1_enc.set_buffer(normed_buf, 1)
           head_top1_enc.set_buffer(tile_values_buf, 2, ML::Metal::BufferAccess::Write)
