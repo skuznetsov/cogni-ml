@@ -2183,8 +2183,9 @@ hit `Impacting Interactivity` after about 53 seconds. The smallest separating
 move was therefore a 50 ms idle window after each completed and published
 long-prefill command, before the next command buffer is created. It changes no
 cache bytes or arithmetic. The safe default applies only when large-row command
-rotation occurs; `QWEN35_PREFILL_APPEND_COOLDOWN_MS=0` retains the historical
-benchmark frame.
+rotation occurs. `QWEN35_PREFILL_APPEND_COOLDOWN_MS=0` removes only the idle
+window for timing comparisons; `QWEN35_PREFILL_APPEND_MAX_GROUPS=0` restores
+the historical single-command behavior.
 
 The fresh 8K acceptance run completed in about 230 seconds under the strict
 quiet-host preflight, 35% free-memory floor, 24 GiB process-tree limit, and
@@ -2255,16 +2256,17 @@ attention caches stayed resident, no Float32 KV owner appeared, and every cache
 published 7,785 rows.
 
 Split-K adds one shared, process-cached scratch set per distinct cache capacity
-rather than one allocation per layer. At 8,192 capacity and the measured 48
-query heads it is at most
-`6,340,608` bytes (about `6.05 MiB`) for partial numerators, maxima, and
-denominators. Scratch is sized from immutable cache capacity, not current
+rather than one allocation per layer. The measured model has 24 query heads,
+not 48. At 8,192 capacity and 64-token blocks the scratch set is
+`3,170,304` bytes (about `3.02 MiB`) for partial numerators, maxima, and
+denominators; at 16,384 capacity it doubles to `6,340,608` bytes (about
+`6.05 MiB`). Scratch is sized from immutable cache capacity, not current
 length, so growth across context-block boundaries reuses the same three buffers
 instead of retaining one size-keyed pool entry per boundary. A regression
 crosses the 256/257 boundary and requires three cache hits with no new misses.
 This scratch is not included in the `285,212,672` resident KV payload metric;
 counting it conservatively changes effective logical density from `3.7647x` to
-about `3.683x`. Cache payload bytes, checkpoints, restore, and ClickHouse
+about `3.7233x`. Cache payload bytes, checkpoints, restore, and ClickHouse
 serialization are unchanged.
 
 One guarded product attempt stopped safely at macOS `Impacting Interactivity`
@@ -2272,8 +2274,48 @@ during exact/adaptive prefill before the new decode phase. A later run with the
 same 35% memory floor, 24 GiB process-tree cap, and a 100 ms benchmark cooldown
 completed. That is evidence for keeping the existing host guards, not for
 changing the admitted 50 ms default. Cross-device speed, all-BF16 product
-sessions, 16K scratch/runtime behavior, and harder coding quality remain open
+sessions, live-16K runtime behavior, and harder coding quality remain open
 falsifiers.
+
+### Guarding the measured 16K-capacity prefill seam (2026-08-30)
+
+A first guarded 16K-capacity run used the established 7,718-token coding prompt,
+one layer group per command, and a 100 ms cooldown. Exact prefill completed, but
+adaptive prefill was rejected by macOS as `Impacting Interactivity`. Reducing
+the row chunk from 2,048 to 1,024 did not fix the failure: the profiled exact
+path still stopped after about 64 seconds at the transition from the chunk
+starting at row 5,120 to the next chunk. Completed heavy commands were roughly
+`0.58--1.47 s`, so the evidence refuted a single oversized command as the sole
+cause.
+
+The trace exposed a narrower scheduling bug. In-chunk command rotation slept
+after a completed command only when more layers remained. The final command of
+each chunk was committed and waited, but the outer chunk loop immediately
+started the next heavy command. The compositor window therefore did not cover
+chunk boundaries even though the documented policy said it covered every
+successive long-prefill command. The fix reuses the configured cooldown at that
+boundary only when the completed chunk actually submitted shared-command GPU
+work. It does not sleep after the final chunk or when the explicit group limit
+is zero. The automatic policy also skips rows below 1,024; an explicit positive
+group override intentionally opts smaller chunks into the same policy.
+
+The same 1,024-row, one-group, 100 ms reproduction then completed all exact,
+free-running adaptive, and teacher-forced adaptive phases under the 35% memory
+floor and 24 GiB process-tree cap, exiting successfully in about 233 seconds.
+Exact/resident/forced prefill measured `89.159/103.122/104.999 s`; exact/free
+decode measured `5.383/5.387 s`. Exact and adaptive produced identical text and
+EOS, matched top-1 `68/68`, covered exact top-1 `67/67`, and retained ECS
+mean/minimum `1.0/1.0`. Ranked top-2 was `120/134`. All 16 attention layers had
+adaptive owners, no Float32 owner appeared, cache publication was consistent,
+and exact plus adaptive outputs each passed four external Crystal specs.
+
+This is a 16K-*capacity* certificate, not a 16K-live-context certificate. The
+probe allocated 16,384 rows but published only 7,785. Capacity accounting was
+`2,147,483,648` raw F32 bytes versus `570,425,344` adaptive payload bytes
+(`3.7647x`); including the corrected `6,340,608`-byte split-K scratch gives
+about `3.7233x`. A prompt that actually renders to roughly 16,000 tokens, plus a
+fresh split-K-on/serial-rollback pair, remains the next separately guarded
+falsifier. This single run also does not promote a 16K speed claim.
 
 Like the existing Qwen35 Metal scratch paths, this reuse assumes one in-flight
 model wave per scratch namespace. A future concurrent multi-queue serving path

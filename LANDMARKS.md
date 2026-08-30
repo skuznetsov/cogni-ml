@@ -24811,15 +24811,45 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   trust: {F:0.97,G:0.12,R:0.94}
 
 - claim: "The speed result does not trade away the measured product, ownership, or compactness gates."
-  source: exact and adaptive emitted identical 177-byte Crystal sources with SHA-256 `3494ecf7843f68ecc7261d75fc23e520a39a8fef50d1ce5d6d961f50b70c2d46`, and each passed four external specs. Top-1 was `68/68`, exact-top-1 coverage `67/67`, ECS mean/minimum `1.0/1.0`, EOS and full text matched, 16 attention layers retained resident owners, no Float32 KV owner appeared, and every cache published 7,785 rows. The shared split-K scratch is bounded to `6,340,608` bytes at 8,192 capacity; including it conservatively changes effective density from `3.7647x` to about `3.683x` without changing payload, checkpoint, restore, or serialized bytes.
+  source: exact and adaptive emitted identical 177-byte Crystal sources with SHA-256 `3494ecf7843f68ecc7261d75fc23e520a39a8fef50d1ce5d6d961f50b70c2d46`, and each passed four external specs. Top-1 was `68/68`, exact-top-1 coverage `67/67`, ECS mean/minimum `1.0/1.0`, EOS and full text matched, 16 attention layers retained resident owners, no Float32 KV owner appeared, and every cache published 7,785 rows. For the measured 24-query-head model, shared split-K scratch is bounded to `3,170,304` bytes at 8,192 capacity; including it conservatively changes effective density from `3.7647x` to about `3.7233x` without changing payload, checkpoint, restore, or serialized bytes.
   verified_at: 2026-08-30
   decay_trigger: product prompt/specs, tokenizer/template, generation policy, quality metrics, resident ownership/publication, scratch reuse, snapshot ABI, or cache serialization change
   trust: {F:0.98,G:0.10,R:0.95}
 
-**Adversary:** The compact representation already reduced traffic; split-K does not reduce bytes again. It parallelizes decompression and attention over context, adds a stable second reduction, and retains about 6.05 MiB of shared scratch at 8K. A boundary probe found pure BF16 split-K slower at 129 visible tokens, so the common default was raised to 256 instead of adding a tier-specific heuristic. P4 has replicated long-context observations; the BF16 micro-result does not. One product run and one M2 Max do not establish cross-device, all-BF16, 16K, or general coding throughput. Scratch reuse inherits the existing engine assumption of one in-flight model wave per namespace; future concurrent multi-queue serving requires lane/session isolation before overlap. The first final product attempt stopped safely under the macOS interactivity guard during prefill before split-K decode, so it supports the guard rather than the kernel speed claim.
+**Adversary:** The compact representation already reduced traffic; split-K does not reduce bytes again. It parallelizes decompression and attention over context, adds a stable second reduction, and retains about 3.02 MiB of shared scratch at 8K. A boundary probe found pure BF16 split-K slower at 129 visible tokens, so the common default was raised to 256 instead of adding a tier-specific heuristic. P4 has replicated long-context observations; the BF16 micro-result does not. One product run and one M2 Max do not establish cross-device, all-BF16, 16K, or general coding throughput. Scratch reuse inherits the existing engine assumption of one in-flight model wave per namespace; future concurrent multi-queue serving requires lane/session isolation before overlap. The first final product attempt stopped safely under the macOS interactivity guard during prefill before split-K decode, so it supports the guard rather than the kernel speed claim.
 
 **Value proxy:** External Crystal specs, exact generated meaning, and failure-atomic resident ownership remain capability authorities. Microkernel GPU time, end-to-end decode time, top-1, top-2, ECS, logical density, scratch bytes, memory headroom, and host noise remain separate coordinates.
 
 **LTP/WBA:** This is ordinary exact kernel parallelization, not an LTP/WBA promotion. The move preserves cache payload bytes, checkpoint history, exact-current-row ordering, publication, restore, and the serial kernel as a runtime dual frame. The recomputed product corridor holds quality and ownership coordinates fixed while decode wall time descends.
 
 **decision:** Default to split-K only for one-token uniform P4/BF16 GQA6 decode at 256 or more visible tokens. Keep multi-token, mixed-tier, P5/F32, and short-context paths on the serial kernel; retain `QWEN35_ADAPTIVE_SPLITK=0` as rollback. Scope the speed certificate to the measured M2 Max 8K row and require fresh falsifiers before widening hardware, tier-map, context, or coding-quality claims.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-16K-CAPACITY-942] Chunk-boundary cooldown guards the measured 16K-capacity interactivity seam
+**context:** ml / Qwen3.8 / adaptive QBit / Metal / prefill / 16K capacity / safety
+**state:** verified for the measured Apple M2 Max, Qwen3.8-27B Q4_K_M, 7,718-token Crystal task, 16,384-row capacity, and coarse P4/BF16 map; live 16K remains open
+
+- claim: "The long-prefill compositor window now covers chunk boundaries as well as in-chunk command rotation."
+  source: with 1,024-row chunks, one group per command, and a 100 ms cooldown, the pre-fix exact path failed at the transition after the chunk beginning at row 5,120. Its completed heavy commands were roughly `0.58--1.47 s`; the final per-chunk command took only about `4--6 ms`, then the outer loop immediately began the next heavy command because the cooldown existed only while more layers remained. A red unit contract for the boundary policy preceded the fix. The first rebuilt reproduction completed in about 233 seconds after applying the configured cooldown between non-final chunks. Hostile review then found that this first form also slept on CPU and disabled routes; the final policy records actual shared-command GPU completion and preserves zero boundary sleep when no such work completed. Explicit group limit zero, automatic sub-1,024 rows, and the final chunk also retain no boundary sleep; an explicit positive group override opts smaller rows in.
+  verified_at: 2026-08-30
+  decay_trigger: prefill chunk loop, command rotation/finalization, cooldown or row threshold, Metal scheduling/watchdog behavior, model, hardware, host load, or guard thresholds change
+  trust: {F:0.98,G:0.13,R:0.94}
+
+- claim: "The bounded 16K-capacity run preserves the established coding, ownership, and memory gates."
+  source: exact/resident/teacher prefill was `89.159/103.122/104.999 s`; exact/free decode was `5.383/5.387 s`. Exact and adaptive text and EOS matched, top-1 was `68/68`, exact-top-1 coverage `67/67`, ECS mean/minimum `1.0/1.0`, and ranked top-2 was `120/134`. Both generated programs passed four external Crystal specs. All 16 attention layers retained adaptive owners, no Float32 owner appeared, and cache publication was consistent. The run exited zero under the 35% free-memory floor and 24 GiB process-tree cap.
+  verified_at: 2026-08-30
+  decay_trigger: model, prompt/task/specs, tokenizer/template, resident map/layout, cache publication, generation policy, scorer, split-K policy, compiler/runtime, hardware, or safety guards change
+  trust: {F:0.98,G:0.10,R:0.95}
+
+- claim: "The measured allocation is a capacity result, not proof of a live 16K session."
+  source: the probe allocated 16,384 rows but published 7,785. Capacity accounting was `2,147,483,648` raw F32 bytes versus `570,425,344` adaptive payload bytes (`3.7647x`). For 24 query heads and 64-token blocks, 16K split-K scratch is `6,340,608` bytes; including it gives about `3.7233x` effective density. The earlier 8K scratch statement was corrected to `3,170,304` bytes.
+  verified_at: 2026-08-30
+  decay_trigger: model head geometry, maximum sequence, resident tier map/format, scratch block size/layout, allocator policy, or probe byte-accounting semantics change
+  trust: {F:0.99,G:0.18,R:0.97}
+
+**Adversary:** `--max-seq 16384` controls allocation, not populated context. This run has only 7,785 resident tokens and cannot establish live-16K quality, prefill safety, or throughput. One process on one M2 Max also cannot establish concurrency or cross-device safety. The near-equal exact/adaptive decode timing is encouraging but is one unbalanced row, not a speed promotion.
+
+**Value proxy:** External specs and exact generated meaning remain the capability gate. Capacity bytes, live rows, scratch bytes, watchdog survival, token metrics, and timings are separate coordinates.
+
+**LTP/WBA:** Trigger is a non-final large-row prefill chunk whose terminal command was followed immediately by the next chunk. Transport preserves resident hidden state and sole adaptive KV ownership across the host scheduling window. The legal move waits for completion and publication, then applies the already-configured idle window before the next chunk. Cache length, arithmetic, publication, and rollback behavior remain invariant; potential `(interactivity failure, invalid publication, memory pressure, continuous occupancy, wall time)` descends on the measured run.
+
+**decision:** Admit the chunk-boundary cooldown as part of the existing long-prefill safety contract and admit the bounded 16K-capacity certificate. Do not call it live 16K or promote speed. The next gate is a pre-counted roughly 16,000-token chat prompt followed by fresh split-K-on and serial-rollback processes under unchanged guards.

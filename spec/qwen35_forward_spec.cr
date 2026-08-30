@@ -41,6 +41,15 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     end
   end
 
+  it "keeps the compositor cooldown across long-prefill chunk boundaries" do
+    ML::GGUF::Qwen35CPU.prefill_chunk_boundary_cooldown_ms(1024, true, true, nil, nil).should eq(50)
+    ML::GGUF::Qwen35CPU.prefill_chunk_boundary_cooldown_ms(1024, true, true, "1", "100").should eq(100)
+    ML::GGUF::Qwen35CPU.prefill_chunk_boundary_cooldown_ms(1024, false, true, nil, nil).should eq(0)
+    ML::GGUF::Qwen35CPU.prefill_chunk_boundary_cooldown_ms(1024, true, false, nil, nil).should eq(0)
+    ML::GGUF::Qwen35CPU.prefill_chunk_boundary_cooldown_ms(512, true, true, nil, nil).should eq(0)
+    ML::GGUF::Qwen35CPU.prefill_chunk_boundary_cooldown_ms(1024, true, true, "0", nil).should eq(0)
+  end
+
   it "caps automatic resident prefill row tiles while preserving explicit overrides" do
     default_size = ML::GGUF::Qwen35CPU.default_prefill_chunk_size
     ML::GGUF::Qwen35CPU.prefill_chunk_size(false, nil).should eq(default_size)

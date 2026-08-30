@@ -88,8 +88,8 @@ module ML::GGUF
     end
 
     # Give the display compositor a bounded scheduling window between completed
-    # long-prefill commands. Rotation only applies to large row batches; an
-    # explicit zero preserves the historical benchmark path exactly.
+    # long-prefill commands. Zero removes the idle window; the group-limit zero
+    # setting disables command rotation itself.
     def prefill_append_cooldown_ms(
       configured : String? = ENV["QWEN35_PREFILL_APPEND_COOLDOWN_MS"]?,
     ) : Int32
@@ -99,6 +99,21 @@ module ML::GGUF
         raise ArgumentError.new("QWEN35_PREFILL_APPEND_COOLDOWN_MS must be a non-negative integer")
       end
       value
+    end
+
+    # The last command of a chunk is followed by the first command of the next
+    # chunk, so it needs the same compositor window as an in-chunk rotation.
+    def prefill_chunk_boundary_cooldown_ms(
+      n_tokens : Int32,
+      more_chunks : Bool,
+      shared_command_completed : Bool,
+      group_limit_configured : String? = ENV["QWEN35_PREFILL_APPEND_MAX_GROUPS"]?,
+      cooldown_configured : String? = ENV["QWEN35_PREFILL_APPEND_COOLDOWN_MS"]?,
+    ) : Int32
+      return 0 unless more_chunks
+      return 0 unless shared_command_completed
+      return 0 if prefill_append_group_limit(n_tokens, group_limit_configured) == 0
+      prefill_append_cooldown_ms(cooldown_configured)
     end
 
     private def prefill_gc_guard_enabled? : Bool
@@ -3369,7 +3384,8 @@ module ML::GGUF
                                       checkpoint_rollback_log : Bool = false,
                                       need_output : Bool = true,
                                       resident_output_buf : ML::MetalBuffer? = nil,
-                                      resident_output_written : Array(Bool)? = nil) : Array(Float32)
+                                      resident_output_written : Array(Bool)? = nil,
+                                      shared_command_completed : Array(Bool)? = nil) : Array(Float32)
       raise ArgumentError.new("prefill_tokens_hidden token_ids must not be empty") if token_ids.empty?
       checkpoint_requested = !checkpoint_index.nil? || !checkpoint_state.nil?
       if checkpoint_requested && state.adaptive_kv?
@@ -3431,11 +3447,17 @@ module ML::GGUF
             end
           end
           chunk_need_output = need_output && offset + len >= n_tokens
+          chunk_shared_command_completed = [false]
           x = prefill_tokens_hidden(weights, token_ids[offset, len], start_pos + offset, state,
             stop_layer: stop_layer, checkpoint_index: local_checkpoint_index, checkpoint_state: local_checkpoint_state,
             checkpoint_rollback_log: checkpoint_rollback_log,
-            need_output: chunk_need_output)
+            need_output: chunk_need_output,
+            shared_command_completed: chunk_shared_command_completed)
           offset += len
+          boundary_cooldown_ms = prefill_chunk_boundary_cooldown_ms(
+            len, offset < n_tokens, chunk_shared_command_completed[0],
+          )
+          sleep boundary_cooldown_ms.milliseconds if boundary_cooldown_ms > 0
         end
         return need_output ? x.not_nil! : [] of Float32
       end
@@ -3514,6 +3536,7 @@ module ML::GGUF
                   io << " publish_ms=" << (publish_finished_value - submit_wait_finished_value).total_milliseconds.round(3)
                 end)
               end
+              shared_command_completed.try { |flag| flag[0] = true } if append_prefill_gpu_work
             rescue ex
               if !cmd.committed? || cmd.completed?
                 pending_adaptive_caches.each do |cache|
