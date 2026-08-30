@@ -2375,3 +2375,78 @@ depth, and terminal draining before resource reuse. The recomputed potential is
 sync/cooldown wall)`, in that order. The legacy zero-depth path is the dual
 frame. The move is not promotable to adaptive QBit until a per-flight cache
 publication certificate preserves those same higher-priority coordinates.
+
+### CogniGraph adaptive-QBit publication frontier (2026-08-30)
+
+This slice is admitted behind the existing default-off depth-one-or-two
+CogniGraph prefill corridor. Every adaptive cache now carries an ordered
+per-command publication ledger, so reservation, completion, failure cleanup,
+and visible-prefix publication no longer share one mutable pending slot.
+
+Admitted surface for the implementation is deliberately narrow:
+
+- one model invocation, one explicit Metal command queue, and FIFO completion;
+- adaptive full-attention prefill appends whose token ranges are disjoint and
+  reserved before any encoder writes them;
+- one per-command ticket per selected cache, containing the exact command,
+  status buffer, start row, and token count;
+- group validation across all selected layers before any ticket for that
+command advances a visible cache length;
+- depth zero as the unchanged synchronous rollback frame.
+
+The visible prefix remains `cache_len`; reservations extend a separate ordered
+tail. A second command may reserve only at that tail. Completion may publish
+only the FIFO-oldest ticket and only after both the Metal command and its true
+tail marker succeed. Snapshot, release, synchronous append, and decode remain
+illegal while any ticket is unpublished. A failed or indeterminate command
+poisons the local submission corridor. After the queue has cancelled or
+drained every possible writer, one checked discard operation releases the
+complete unpublished suffix in reverse order without advancing the visible
+prefix. The failed sequence state remains non-retryable and must be discarded
+by its caller.
+
+Rejected or not certified in this slice: default enablement, out-of-order
+publication, multiple Metal queues or concurrent sessions sharing a cache,
+adaptive decode overlap, checkpointing, boundary profiling, recovery from a
+failed submitted command, and a general scheduler abstraction. Callers must
+serialize access to one model state; the other cases require separate
+certificates.
+
+The lifecycle falsifier shows that two commands can reserve adjacent ranges on
+the same cache while `cache_len` remains unchanged, that the second cannot
+publish before the first, and that foreign-command finalization/cancellation is
+rejected. A second test uses two caches and two completed commands, failing
+each cache position in turn: neither cache becomes visible, the successor
+remains blocked, and a checked suffix discard restores snapshot/release
+eligibility without leaking Metal buffers. The full adaptive resident suite
+passes 17/17, and the policy keeps checkpoint and boundary-profiling routes
+rejected.
+
+Performance is vector-valued: full wall time, GPU time, host encode/wait time,
+peak/resident bytes, watchdog survival, cache ownership/publication, generated
+meaning, top-1, ranked top-2, and ECS remain separate coordinates. Lower
+command-boundary wall time cannot compensate for a regression in any earlier
+semantic, ownership, or safety coordinate. A later speed promotion therefore
+requires a guarded paired run and retains the synchronous adaptive route as the
+dual frame.
+
+The measured Qwen3.8-27B Q4_K_M pp1024 row used the coarse
+`p4;27=bf16,43=bf16,47=bf16,51=bf16` map, a 35% free-memory floor, and a 24 GiB
+process-tree cap. Four interleaved pairs preserved final top-1 and its logit
+within `1e-4`; depth two was faster in all four pairs, with mean wall time
+falling from `7,099.60 ms` to `6,633.17 ms` (`6.57%`). A separate graph-on/off
+quality pair produced byte-identical exact and resident token sequences,
+teacher top-2 rows, top-1 counts, and ECS. The resident result itself was
+`28/32` teacher-forced top-1, `57/62` top-2 set overlap, and ECS `0.882048` for
+this prompt; the semantically weaker compressed sentence was identical with
+the graph off, so it is a coarse-map quality limitation rather than a scheduler
+regression.
+
+This is not adaptive-attention overlap yet. The current adaptive full-attention
+route still flushes its command and reads the hidden output before continuing;
+the observed `max_pending=2` comes from adjacent recurrent/full-attention
+handoff groups. The slice therefore makes bounded CogniGraph usable with an
+adaptive session and removes measured scheduler wall time, but it does not
+claim to eliminate the remaining adaptive host boundary. That boundary,
+tier-specialized pack/decode, and decode-chain command fragmentation are the
+next independent performance falsifiers.

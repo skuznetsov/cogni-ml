@@ -24883,3 +24883,33 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Trigger is an exact resident group followed by another group. Transport is one Metal queue plus a FIFO lease and private arena. Legal move is `reserve -> encode -> submit -> await oldest -> release/publish`. Boundary invariants are exact output/state, no live scratch alias, same-queue order, bounded depth, and failure drain before reuse. Potential `(semantic failure, alias, undrained work, interactivity failure, sync/cooldown wall)` descends on the measured row; zero depth is the dual frame. Adaptive promotion requires a new per-flight publication certificate and a fresh global recomputation.
 
 **decision:** Admit the default-off exact-prefill lifecycle and its bounded pp1024 result. Keep `QWEN35_COGNIGRAPH_PREFILL_MAX_INFLIGHT` unset by default. Do not route adaptive QBit until completion/publication ownership is per-flight; do not remove the existing cooldown default until a guarded live long-context pair replaces it.
+
+#### [LM-QWEN38-COGNIGRAPH-ADAPTIVE-PUBLICATION-944] Per-flight tickets admit bounded CogniGraph scheduling for adaptive sessions
+**context:** ml / Qwen3.8 / CogniGraph / Metal / adaptive QBit / prefill publication
+**state:** verified for lifecycle specs, one Apple M2 Max Qwen3.8-27B Q4_K_M pp1024 pair set, and one graph-on/off quality pair; adaptive-attention overlap and default enablement remain open
+
+- claim: "Adaptive cache publication is owned by an ordered command-specific ledger rather than one shared pending slot."
+  source: each ticket binds one command, status buffer, start token, and count; reservations extend a separate tail while `cache_len` remains the visible prefix. Publication requires FIFO command completion plus a true tail marker, and multi-cache publication validates every layer before advancing any layer. A two-flight Metal test rejects out-of-order publication. Its failure sibling uses two caches and two completed flights, fails each cache position in turn, proves both remain invisible, then discards both terminal suffixes in reverse without leaking Metal buffers and regains snapshot/release eligibility. The complete adaptive resident suite passed `17/17`; the bounded policy spec passed; CPU-only source analysis completed with `--no-codegen`.
+  verified_at: 2026-08-30
+  decay_trigger: pending-ticket ledger, command completion semantics, cache publication/discard, queue ordering, Metal status ABI, or CPU-only branching change
+  trust: {F:0.98,G:0.34,R:0.95}
+
+- claim: "The default-off adaptive session route preserves the measured scheduler boundary and reduces pp1024 wall time."
+  source: a guarded Qwen3.8-27B Q4_K_M run with the coarse P4/BF16 map submitted/completed 14 command buffers and observed `max_pending=2`. Four interleaved synchronous/depth-two pairs preserved final top-1 and its logit within `1e-4`; depth two won `4/4`, reducing mean wall from `7,099.60 ms` to `6,633.17 ms` (`6.57%`) under the 35% free-memory floor and 24 GiB process-tree cap. A rebuilt post-cleanup binary repeated the short adaptive depth-two route and exited zero.
+  verified_at: 2026-08-30
+  decay_trigger: model, tier map, command grouping, cooldown, graph depth, compiler/runtime, hardware, host load, or guard thresholds change
+  trust: {F:0.97,G:0.11,R:0.91}
+
+- claim: "CogniGraph scheduling adds no measured token, top-2, ECS, or sentence-meaning regression on the paired quality prompt."
+  source: graph-on and graph-off runs emitted identical exact and resident token ids, exact/candidate sentences, candidate top-2 ids, teacher top-2 ids, `28/32` teacher-forced top-1, `57/62` top-2 set overlap, ECS `0.882048`, and consistent 16-layer resident ownership. The compressed sentence's weaker cache-invalidation explanation therefore belongs to the coarse QBit map on this prompt, not to graph scheduling.
+  verified_at: 2026-08-30
+  decay_trigger: prompt, model, tier map, tokenizer/template, generation policy, quality metrics, scheduler ordering, or cache publication change
+  trust: {F:0.98,G:0.08,R:0.94}
+
+**Adversary:** The adaptive full-attention branch still flushes and reads its hidden output before the next layer. The observed depth-two window overlaps other handoff groups; it does not yet overlap two adaptive-attention commands or remove that host boundary. Host load was not quiet, the A/B has four pairs on one device, and the quality prompt exposes a real coarse-map semantic weakness despite scheduler parity. Failed sequence state is discarded after terminal suffix cleanup; the cleanup is not rollback of already executed model state.
+
+**Value proxy:** Graph-on/off token/top-2/ECS identity is the scheduler-quality authority for this prompt. The `6.57%` wall reduction explains local value but does not override compressed-model meaning, long-context memory, watchdog survival, concurrency, or cross-device gates.
+
+**LTP/WBA:** Not claimed. Per-flight publication and depth-two enqueue are ordinary boundary-safe scheduling. A future LTP/WBA promotion would still need an explicit trigger, transport corridor, legal transformation, boundary invariant, lexicographic potential, recompute-safety proof, and local certificate; zero depth remains the dual frame.
+
+**decision:** Admit serialized adaptive sessions to the default-off depth-one-or-two CogniGraph corridor. Keep checkpoints, boundary profiling, concurrent shared-cache sessions, and default enablement outside the certificate. Next attack the adaptive full-attention readback boundary; separately profile tier-specialized QBit pack/decode and decode-chain command fragmentation.

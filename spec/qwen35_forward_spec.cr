@@ -50,7 +50,7 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     ML::GGUF::Qwen35CPU.prefill_chunk_boundary_cooldown_ms(1024, true, true, "0", nil).should eq(0)
   end
 
-  it "admits bounded CogniGraph prefill enqueue only for the exact route" do
+  it "admits bounded CogniGraph prefill enqueue for exact and adaptive prefill" do
     qwen = ML::GGUF::Qwen35CPU
     qwen.prefill_graph_max_inflight(false, false, false, nil).should eq(0)
     qwen.prefill_graph_max_inflight(false, false, false, "0").should eq(0)
@@ -60,9 +60,8 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     expect_raises(ArgumentError, /between 0 and 2/) do
       qwen.prefill_graph_max_inflight(false, false, false, "3")
     end
-    expect_raises(ArgumentError, /exact F32 KV/) do
-      qwen.prefill_graph_max_inflight(true, false, false, "1")
-    end
+    qwen.prefill_graph_max_inflight(true, false, false, "1").should eq(1)
+    qwen.prefill_graph_max_inflight(true, false, false, "2").should eq(2)
     expect_raises(ArgumentError, /checkpoint/) do
       qwen.prefill_graph_max_inflight(false, true, false, "1")
     end

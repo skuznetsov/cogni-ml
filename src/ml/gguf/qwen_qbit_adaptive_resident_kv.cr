@@ -59,6 +59,19 @@ module ML::GGUF
       v_plan : QwenQBitAdaptiveKV::Plan?
 
     class Cache
+      private class PendingAppend
+        getter status : ML::MetalBuffer
+        getter command : ResidentCommandBuffer
+        getter token_count : Int32
+        getter start_token : Int32
+
+        def initialize(@status : ML::MetalBuffer,
+                       @command : ResidentCommandBuffer,
+                       @token_count : Int32,
+                       @start_token : Int32)
+        end
+      end
+
       getter max_seq : Int32
       getter n_head_kv : Int32
       getter head_dim : Int32
@@ -69,10 +82,7 @@ module ML::GGUF
       @cache_len : Int32
       @k_plan : QwenQBitAdaptiveKV::Plan?
       @v_plan : QwenQBitAdaptiveKV::Plan?
-      @pending_status : ML::MetalBuffer?
-      @pending_command : ResidentCommandBuffer?
-      @pending_token_count : Int32
-      @pending_start_token : Int32
+      @pending_appends : Array(PendingAppend)
 
       def self.from_admission(admission : CacheAdmission) : self
         new(admission)
@@ -94,10 +104,7 @@ module ML::GGUF
         @v_plan = admission.v_plan
         @lifecycle_mutex = Mutex.new
         @released = false
-        @pending_status = nil
-        @pending_command = nil
-        @pending_token_count = 0
-        @pending_start_token = 0
+        @pending_appends = [] of PendingAppend
       end
 
       def cache_len : Int32
@@ -234,12 +241,10 @@ module ML::GGUF
       # Internal encoder lease: unlike normal reads this is legal only while a
       # shared-command append reservation is active. Publication is still
       # controlled exclusively by `finish_pending_append!`.
-      def with_pending_buffers(&)
+      def with_pending_buffers(command : ResidentCommandBuffer, &)
         @lifecycle_mutex.synchronize do
           ensure_live!
-          unless @pending_status
-            raise ArgumentError.new("adaptive resident QBit append is not pending")
-          end
+          find_pending!(command)
           uniform_tier = if (k_plan = @k_plan) && (v_plan = @v_plan)
                            selected = k_plan.uniform_tier
                            selected if selected && v_plan.uniform_tier == selected
@@ -258,9 +263,11 @@ module ML::GGUF
                                 command : ResidentCommandBuffer) : Int32
         @lifecycle_mutex.synchronize do
           ensure_live!
-          ensure_no_pending!
           if command.committed?
             raise ArgumentError.new("adaptive resident QBit append requires an uncommitted command")
+          end
+          if @pending_appends.any? { |pending| pending.command.same?(command) }
+            raise ArgumentError.new("adaptive resident QBit command already owns a pending append")
           end
           unless @k_plan && @v_plan
             raise ArgumentError.new("adaptive resident QBit cache is not appendable")
@@ -268,45 +275,46 @@ module ML::GGUF
           unless token_count > 0
             raise ArgumentError.new("adaptive resident QBit append token count must be positive")
           end
-          unless expected_start_token == @cache_len
-            raise ArgumentError.new("adaptive resident QBit append start does not match the live prefix")
+          reserved_tail = pending_tail
+          unless expected_start_token == reserved_tail
+            raise ArgumentError.new("adaptive resident QBit append start does not match the reserved tail")
           end
-          if @cache_len.to_i64 + token_count > @max_seq
+          if reserved_tail.to_i64 + token_count > @max_seq
             raise ArgumentError.new("adaptive resident QBit append exceeds cache capacity")
           end
           unless status.valid? && status.size >= sizeof(UInt32)
             raise ArgumentError.new("adaptive resident QBit pending status buffer is invalid")
           end
 
-          @pending_status = status
-          @pending_command = command
-          @pending_token_count = token_count
-          @pending_start_token = @cache_len
-          @pending_start_token
+          @pending_appends << PendingAppend.new(status, command, token_count, reserved_tail)
+          reserved_tail
         end
       end
 
       # Publish only after the caller has committed and waited for the external
-      # command. A failed/non-executed marker clears the reservation without
-      # advancing the visible prefix, so a clean retry remains possible.
+      # command. A lone failed marker clears its reservation; a failed FIFO head
+      # with a queued suffix remains pending until the owner drains every writer
+      # and discards that suffix without advancing the visible prefix.
       def finish_pending_append!(command : ResidentCommandBuffer) : Nil
         @lifecycle_mutex.synchronize do
           ensure_live!
-          status = @pending_status
-          raise ArgumentError.new("adaptive resident QBit append is not pending") unless status
-          ensure_pending_command!(command)
+          pending = find_pending!(command)
+          ensure_fifo_pending!(pending)
           unless command.completed_successfully?
             raise ArgumentError.new("adaptive resident QBit publication requires its command to complete successfully")
           end
 
-          status_code = status.contents.as(Pointer(UInt32)).value
-          token_count = @pending_token_count
-          clear_pending!
-          status.release
+          status_code = pending.status.contents.as(Pointer(UInt32)).value
           unless status_code == DEVICE_SUCCESS
+            if @pending_appends.last?.same?(pending)
+              @pending_appends.shift
+              pending.status.release
+            end
             raise ArgumentError.new("adaptive resident QBit prefill/pack failed closed (status=#{status_code})")
           end
-          @cache_len += token_count
+          @pending_appends.shift
+          pending.status.release
+          @cache_len += pending.token_count
         end
       end
 
@@ -315,13 +323,12 @@ module ML::GGUF
       def validate_pending_append!(command : ResidentCommandBuffer) : Nil
         @lifecycle_mutex.synchronize do
           ensure_live!
-          status = @pending_status
-          raise ArgumentError.new("adaptive resident QBit append is not pending") unless status
-          ensure_pending_command!(command)
+          pending = find_pending!(command)
+          ensure_fifo_pending!(pending)
           unless command.completed_successfully?
             raise ArgumentError.new("adaptive resident QBit publication requires its command to complete successfully")
           end
-          status_code = status.contents.as(Pointer(UInt32)).value
+          status_code = pending.status.contents.as(Pointer(UInt32)).value
           unless status_code == DEVICE_SUCCESS
             raise ArgumentError.new("adaptive resident QBit prefill/pack failed closed (status=#{status_code})")
           end
@@ -333,26 +340,44 @@ module ML::GGUF
       # in-flight/unknown command deliberately leaves the cache pending.
       def cancel_pending_append!(command : ResidentCommandBuffer) : Nil
         @lifecycle_mutex.synchronize do
-          return unless status = @pending_status
-          ensure_pending_command!(command)
+          pending = @pending_appends.find { |candidate| candidate.command.same?(command) }
+          return unless pending
           if command.committed? && !command.completed?
             raise ArgumentError.new("adaptive resident QBit command is not completed; cancellation is unsafe")
           end
-          clear_pending!
-          status.release
+          unless @pending_appends.last?.same?(pending)
+            raise ArgumentError.new("adaptive resident QBit cancellation must remove the reserved tail")
+          end
+          @pending_appends.pop
+          pending.status.release
+        end
+      end
+
+      # Error-corridor cleanup after the owner has cancelled or drained every
+      # command that can write the unpublished suffix. The visible prefix never
+      # advances; releasing in reverse reservation order removes the complete
+      # suffix without creating a publishable gap.
+      def discard_pending_appends! : Nil
+        @lifecycle_mutex.synchronize do
+          ensure_live!
+          @pending_appends.each do |pending|
+            if pending.command.committed? && !pending.command.completed?
+              raise ArgumentError.new("adaptive resident QBit pending suffix still has in-flight GPU work")
+            end
+          end
+          @pending_appends.reverse_each { |pending| pending.status.release }
+          @pending_appends.clear
         end
       end
 
       def with_pending_status(command : ResidentCommandBuffer, &)
         @lifecycle_mutex.synchronize do
           ensure_live!
-          status = @pending_status
-          raise ArgumentError.new("adaptive resident QBit append is not pending") unless status
-          ensure_pending_command!(command)
+          pending = find_pending!(command)
           if command.committed?
             raise ArgumentError.new("adaptive resident QBit finalizer requires an uncommitted command")
           end
-          yield status
+          yield pending.status
         end
       end
 
@@ -366,22 +391,27 @@ module ML::GGUF
       end
 
       private def ensure_no_pending! : Nil
-        if @pending_status
+        if @pending_appends.any?
           raise ArgumentError.new("adaptive resident QBit append is pending shared-command completion")
         end
       end
 
-      private def clear_pending! : Nil
-        @pending_status = nil
-        @pending_command = nil
-        @pending_token_count = 0
-        @pending_start_token = 0
+      private def pending_tail : Int32
+        if pending = @pending_appends.last?
+          pending.start_token + pending.token_count
+        else
+          @cache_len
+        end
       end
 
-      private def ensure_pending_command!(command : ResidentCommandBuffer) : Nil
-        pending_command = @pending_command
-        unless pending_command && pending_command.same?(command)
-          raise ArgumentError.new("adaptive resident QBit command does not own the pending append")
+      private def find_pending!(command : ResidentCommandBuffer) : PendingAppend
+        @pending_appends.find { |pending| pending.command.same?(command) } ||
+          raise ArgumentError.new("adaptive resident QBit command does not own a pending append")
+      end
+
+      private def ensure_fifo_pending!(pending : PendingAppend) : Nil
+        unless @pending_appends.first?.same?(pending)
+          raise ArgumentError.new("adaptive resident QBit publication must follow FIFO reservation order")
         end
       end
     end
@@ -605,7 +635,7 @@ module ML::GGUF
         begin
           start_token = cache.begin_pending_append!(token_count, expected_start_token, status, command)
           reserved = true
-          cache.with_pending_buffers do |k_base, k_metadata, k_sidecar, v_base, v_metadata, v_sidecar, uniform_tier|
+          cache.with_pending_buffers(command) do |k_base, k_metadata, k_sidecar, v_base, v_metadata, v_sidecar, uniform_tier|
             qualified_uniform_tier = qualified_uniform_prefill_tier(uniform_tier)
             source_token_offset = 0_i32
             prefill_attention_chunks(token_count).each do |chunk_tokens|
@@ -675,6 +705,10 @@ module ML::GGUF
                                 command : ResidentCommandBuffer) : Nil
       caches.each { |cache| cache.validate_pending_append!(command) }
       caches.each { |cache| cache.finish_pending_append!(command) }
+    end
+
+    def discard_pending_appends!(cache : Cache) : Nil
+      cache.discard_pending_appends!
     end
 
     def cancel_pending_append!(cache : Cache,

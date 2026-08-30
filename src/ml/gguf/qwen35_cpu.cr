@@ -122,10 +122,10 @@ module ML::GGUF
       prefill_append_cooldown_ms(cooldown_configured)
     end
 
-    # Default-off CogniGraph submission window. The first production slice is
-    # deliberately exact-only: adaptive KV publication, checkpoints, and GPU
-    # boundary profiling all require completion semantics that cannot be
-    # inferred safely from an asynchronously submitted command.
+    # Default-off CogniGraph submission window. Exact and adaptive prefill use
+    # the same FIFO queue; adaptive visibility is separately certified by its
+    # per-command publication tickets. Checkpoints and GPU boundary profiling
+    # still require synchronous completion semantics.
     def prefill_graph_max_inflight(
       adaptive_kv : Bool,
       checkpoint_requested : Bool,
@@ -138,9 +138,6 @@ module ML::GGUF
         raise ArgumentError.new("QWEN35_COGNIGRAPH_PREFILL_MAX_INFLIGHT must be between 0 and 2")
       end
       return 0 if value == 0
-      if adaptive_kv
-        raise ArgumentError.new("CogniGraph prefill enqueue currently requires exact F32 KV")
-      end
       if checkpoint_requested
         raise ArgumentError.new("CogniGraph prefill enqueue does not support checkpoints")
       end
@@ -3549,6 +3546,8 @@ module ML::GGUF
         append_prefill_cmd = nil.as(ML::Metal::CommandBuffer?)
         prefill_graph_queue = nil.as(ML::Metal::GraphSubmissionQueue(ML::Metal::CommandBuffer, Qwen35Metal::Scratch::Arena)?)
         prefill_graph_lease = nil.as(ML::Metal::GraphSubmissionLease(ML::Metal::CommandBuffer, Qwen35Metal::Scratch::Arena)?)
+        prefill_graph_pending_leases = [] of ML::Metal::GraphSubmissionLease(ML::Metal::CommandBuffer, Qwen35Metal::Scratch::Arena)
+        prefill_graph_pending_cache_sets = [] of Array(QwenQBitAdaptiveResidentKV::Cache)
         prefill_graph_submitted_gpu_work = false
         append_command_available = ENV["QWEN35_PREFILL_APPEND_CMD_OFF"]? != "1" &&
                                    resident_boundary_ok && Qwen35Metal.available?
@@ -3573,13 +3572,15 @@ module ML::GGUF
         flush_prefill_cmd = -> {
           if queue = prefill_graph_queue
             begin
-              if pending_adaptive_caches.any?
-                raise ArgumentError.new("CogniGraph exact prefill queue received adaptive KV publication")
-              end
               if cmd = append_prefill_cmd
                 lease = prefill_graph_lease.not_nil!
                 if append_prefill_gpu_work
+                  pending_adaptive_caches.each do |cache|
+                    QwenQBitAdaptiveResidentKV.finalize_pending_append(cmd, cache)
+                  end
                   queue.submit(lease)
+                  prefill_graph_pending_leases << lease
+                  prefill_graph_pending_cache_sets << pending_adaptive_caches.dup
                   prefill_graph_submitted_gpu_work = true
                 else
                   queue.cancel(lease)
@@ -3588,7 +3589,14 @@ module ML::GGUF
               append_prefill_cmd = nil
               prefill_graph_lease = nil
               prefill_graph_scratch_arena = nil
-              queue.drain
+              until prefill_graph_pending_leases.empty?
+                lease = prefill_graph_pending_leases.first
+                caches = prefill_graph_pending_cache_sets.first
+                queue.await(lease)
+                QwenQBitAdaptiveResidentKV.finish_pending_appends!(caches, lease.command)
+                prefill_graph_pending_leases.shift
+                prefill_graph_pending_cache_sets.shift
+              end
               if ENV["QWEN35_COGNIGRAPH_PREFILL_TRACE"]? == "1"
                 STDERR.puts(
                   "qwen35_cognigraph_prefill depth=#{queue.max_in_flight} " \
@@ -3607,6 +3615,12 @@ module ML::GGUF
                       queue.cancel(lease)
                     rescue
                     end
+                  end
+                end
+                pending_adaptive_caches.reverse_each do |cache|
+                  begin
+                    QwenQBitAdaptiveResidentKV.cancel_pending_append!(cache, cmd)
+                  rescue
                   end
                 end
               end
@@ -3746,18 +3760,29 @@ module ML::GGUF
               if append_prefill_group_count >= append_prefill_group_limit && il < layer_limit
                 {% unless flag?(:cpu_only) %}
                   if queue = prefill_graph_queue
-                    if pending_adaptive_caches.any?
-                      raise ArgumentError.new("CogniGraph exact prefill queue received adaptive KV publication")
-                    end
                     cmd = append_prefill_cmd.not_nil!
                     lease = prefill_graph_lease.not_nil!
+                    pending_adaptive_caches.each do |cache|
+                      QwenQBitAdaptiveResidentKV.finalize_pending_append(cmd, cache)
+                    end
                     queue.submit(lease)
+                    prefill_graph_pending_leases << lease
+                    prefill_graph_pending_cache_sets << pending_adaptive_caches.dup
                     prefill_graph_submitted_gpu_work = true
                     append_prefill_cmd = nil
                     prefill_graph_lease = nil
                     prefill_graph_scratch_arena = nil
+                    pending_adaptive_caches.clear
                     append_prefill_gpu_work = false
                     append_prefill_group_count = 0
+                    if queue.pending_count >= queue.max_in_flight
+                      completed_lease = prefill_graph_pending_leases.first
+                      completed_caches = prefill_graph_pending_cache_sets.first
+                      queue.await(completed_lease)
+                      QwenQBitAdaptiveResidentKV.finish_pending_appends!(completed_caches, completed_lease.command)
+                      prefill_graph_pending_leases.shift
+                      prefill_graph_pending_cache_sets.shift
+                    end
                     next_lease = queue.begin_submission
                     next_arena = Qwen35Metal::Scratch::Arena.new(
                       "qwen35_prefill:#{Thread.current.object_id}:#{next_lease.sequence}",
@@ -4040,6 +4065,11 @@ module ML::GGUF
         {% unless flag?(:cpu_only) %}
           if queue = prefill_graph_queue
             queue.abort unless queue.failed?
+            cleanup_caches = pending_adaptive_caches.dup
+            prefill_graph_pending_cache_sets.each do |caches|
+              caches.each { |cache| cleanup_caches << cache unless cleanup_caches.includes?(cache) }
+            end
+            cleanup_caches.each { |cache| QwenQBitAdaptiveResidentKV.discard_pending_appends!(cache) }
           end
         {% end %}
         raise ex

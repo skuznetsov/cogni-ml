@@ -779,6 +779,161 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
     end
   end
 
+  it "reserves two adjacent shared-command appends and publishes them FIFO" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    head_dim = 256
+    n_head = 6
+    q_values = n_head * head_dim
+    plan = adaptive.plan(Array.new(2, ML::GGUF::QwenQBitAdaptiveKV::Tier::P4))
+    inputs = Array.new(2) do |index|
+      value = 0.125_f32 + index.to_f32 * 0.125_f32
+      [
+        ML::MetalBuffer.from_array(Array(Float32).new(q_values, value)),
+        ML::MetalBuffer.from_array(Array(Float32).new(q_values, 0.0_f32)),
+        ML::MetalBuffer.from_array(Array(Float32).new(head_dim, value)),
+        ML::MetalBuffer.from_array(Array(Float32).new(head_dim, value)),
+        ML::MetalBuffer.new(q_values.to_i64 * sizeof(Float32)),
+      ]
+    end
+    resident = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(plan, plan, 2, 1, head_dim)
+    command_queue = ML::Metal::CommandQueue.new
+    command_a = ML::Metal::CommandBuffer.new(queue: command_queue)
+    command_b = ML::Metal::CommandBuffer.new(queue: command_queue)
+    begin
+      {command_a, command_b}.each_with_index do |command, index|
+        buffers = inputs[index]
+        ML::GGUF::QwenQBitAdaptiveResidentKV.encode_prefill_chunk_and_append(
+          command, resident,
+          buffers[0], buffers[1], buffers[2], buffers[3], buffers[4],
+          1, n_head, 6, 1.0_f32,
+          expected_start_token: index,
+        )
+        ML::GGUF::QwenQBitAdaptiveResidentKV.finalize_pending_append(command, resident)
+      end
+
+      resident.cache_len.should eq(0)
+      expect_raises(ArgumentError, /pending/) do
+        ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(resident)
+      end
+
+      command_a.commit
+      command_b.commit
+      command_b.wait
+      expect_raises(ArgumentError, /FIFO/) do
+        ML::GGUF::QwenQBitAdaptiveResidentKV.finish_pending_append!(resident, command_b)
+      end
+      resident.cache_len.should eq(0)
+
+      command_a.wait
+      ML::GGUF::QwenQBitAdaptiveResidentKV.finish_pending_append!(resident, command_a)
+      resident.cache_len.should eq(1)
+      ML::GGUF::QwenQBitAdaptiveResidentKV.finish_pending_append!(resident, command_b)
+      resident.cache_len.should eq(2)
+    ensure
+      {command_b, command_a}.each do |command|
+        begin
+          ML::GGUF::QwenQBitAdaptiveResidentKV.cancel_pending_append!(resident, command)
+        rescue
+        end
+        begin
+          command.discard unless command.committed?
+        rescue
+        end
+      end
+      resident.release
+      inputs.each { |buffers| buffers.each(&.release) }
+    end
+  end
+
+  it "fails a two-cache two-flight group atomically and discards both reserved suffixes" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    head_dim = 256
+    n_head = 6
+    q_values = n_head * head_dim
+    plan = adaptive.plan(Array.new(2, ML::GGUF::QwenQBitAdaptiveKV::Tier::P4))
+    valid_q = Array(Float32).new(q_values, 0.125_f32)
+    invalid_q = valid_q.dup
+    invalid_q[41] = Float32::NAN
+    live_before = ML::MetalBuffer.stats[:live_bytes]
+    2.times do |failed_cache_index|
+      inputs = Array.new(2) do |flight_index|
+        Array.new(2) do |cache_index|
+          q = flight_index == 0 && cache_index == failed_cache_index ? invalid_q : valid_q
+          [
+            ML::MetalBuffer.from_array(q),
+            ML::MetalBuffer.from_array(Array(Float32).new(q_values, 0.0_f32)),
+            ML::MetalBuffer.from_array(Array(Float32).new(head_dim, 0.25_f32)),
+            ML::MetalBuffer.from_array(Array(Float32).new(head_dim, 0.25_f32)),
+            ML::MetalBuffer.new(q_values.to_i64 * sizeof(Float32)),
+          ]
+        end
+      end
+      residents = Array.new(2) do
+        ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(plan, plan, 2, 1, head_dim)
+      end
+      command_queue = ML::Metal::CommandQueue.new
+      command_a = ML::Metal::CommandBuffer.new(queue: command_queue)
+      command_b = ML::Metal::CommandBuffer.new(queue: command_queue)
+      begin
+        {command_a, command_b}.each_with_index do |command, index|
+          residents.each_with_index do |resident, cache_index|
+            buffers = inputs[index][cache_index]
+            ML::GGUF::QwenQBitAdaptiveResidentKV.encode_prefill_chunk_and_append(
+              command, resident,
+              buffers[0], buffers[1], buffers[2], buffers[3], buffers[4],
+              1, n_head, 6, 1.0_f32,
+              expected_start_token: index,
+            )
+            ML::GGUF::QwenQBitAdaptiveResidentKV.finalize_pending_append(command, resident)
+          end
+        end
+
+        command_a.commit
+        command_b.commit
+        expect_raises(ArgumentError, /in-flight GPU work/) do
+          ML::GGUF::QwenQBitAdaptiveResidentKV.discard_pending_appends!(residents[0])
+        end
+        command_a.wait
+        command_b.wait
+
+        expect_raises(ArgumentError, /failed closed/) do
+          ML::GGUF::QwenQBitAdaptiveResidentKV.finish_pending_appends!(residents, command_a)
+        end
+        expect_raises(ArgumentError, /FIFO/) do
+          ML::GGUF::QwenQBitAdaptiveResidentKV.finish_pending_appends!(residents, command_b)
+        end
+        residents.each { |resident| resident.cache_len.should eq(0) }
+
+        residents.each do |resident|
+          ML::GGUF::QwenQBitAdaptiveResidentKV.discard_pending_appends!(resident)
+          packed_k, packed_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(resident)
+          packed_k.value_count.should eq(0)
+          packed_v.value_count.should eq(0)
+        end
+      ensure
+        {command_b, command_a}.each do |command|
+          residents.reverse_each do |resident|
+            begin
+              ML::GGUF::QwenQBitAdaptiveResidentKV.cancel_pending_append!(resident, command)
+            rescue
+            end
+          end
+          begin
+            command.discard unless command.committed?
+          rescue
+          end
+        end
+        residents.each(&.release)
+        inputs.each do |flight|
+          flight.each { |buffers| buffers.each(&.release) }
+        end
+      end
+      ML::MetalBuffer.stats[:live_bytes].should eq(live_before)
+    end
+  end
+
   it "requires a true command-tail marker before publishing an external append" do
     pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
 
