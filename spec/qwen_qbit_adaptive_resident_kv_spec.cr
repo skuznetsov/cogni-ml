@@ -798,8 +798,10 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
     end
     resident = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(plan, plan, 2, 1, head_dim)
     command_queue = ML::Metal::CommandQueue.new
+    foreign_queue = ML::Metal::CommandQueue.new
     command_a = ML::Metal::CommandBuffer.new(queue: command_queue)
     command_b = ML::Metal::CommandBuffer.new(queue: command_queue)
+    foreign_command = ML::Metal::CommandBuffer.new(queue: foreign_queue)
     begin
       {command_a, command_b}.each_with_index do |command, index|
         buffers = inputs[index]
@@ -810,6 +812,20 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
           expected_start_token: index,
         )
         ML::GGUF::QwenQBitAdaptiveResidentKV.finalize_pending_append(command, resident)
+        if index == 0
+          expect_raises(ArgumentError, /does not own/) do
+            ML::GGUF::QwenQBitAdaptiveResidentKV.cancel_pending_append!(resident, foreign_command)
+          end
+          foreign_buffers = inputs[1]
+          expect_raises(ArgumentError, /Metal queue/) do
+            ML::GGUF::QwenQBitAdaptiveResidentKV.encode_prefill_chunk_and_append(
+              foreign_command, resident,
+              foreign_buffers[0], foreign_buffers[1], foreign_buffers[2], foreign_buffers[3], foreign_buffers[4],
+              1, n_head, 6, 1.0_f32,
+              expected_start_token: 1,
+            )
+          end
+        end
       end
 
       resident.cache_len.should eq(0)
@@ -826,12 +842,16 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
       resident.cache_len.should eq(0)
 
       command_a.wait
+      expect_raises(ArgumentError, /duplicate cache/) do
+        ML::GGUF::QwenQBitAdaptiveResidentKV.finish_pending_appends!([resident, resident], command_a)
+      end
+      resident.cache_len.should eq(0)
       ML::GGUF::QwenQBitAdaptiveResidentKV.finish_pending_append!(resident, command_a)
       resident.cache_len.should eq(1)
       ML::GGUF::QwenQBitAdaptiveResidentKV.finish_pending_append!(resident, command_b)
       resident.cache_len.should eq(2)
     ensure
-      {command_b, command_a}.each do |command|
+      {command_b, foreign_command, command_a}.each do |command|
         begin
           ML::GGUF::QwenQBitAdaptiveResidentKV.cancel_pending_append!(resident, command)
         rescue

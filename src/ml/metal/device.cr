@@ -57,6 +57,10 @@
       end
 
       class CommandBuffer
+        def transport_identity : UInt64
+          0_u64
+        end
+
         def initialize
           raise "Metal disabled (cpu_only)"
         end
@@ -269,12 +273,22 @@ module ML
 
     class CommandBuffer
       @handle : Pointer(Void)
+      @queue_owner : CommandQueue?
+      getter transport_identity : UInt64
       @committed : Bool = false
       @completed : Bool = false
       @completion_status : Int32? = nil
 
       def initialize(fast : Bool = false, queue : CommandQueue? = nil)
         raise "Metal not available" unless Device.available?
+        # Retain an explicit queue for the command lifetime. The address is a
+        # host-side ordering certificate; it is never passed to a kernel.
+        @queue_owner = queue
+        @transport_identity = if q = queue
+                                q.handle.address.to_u64
+                              else
+                                Device.instance.queue_handle.address.to_u64
+                              end
         @handle = if q = queue
                     fast ? MetalDeviceFFI.create_command_buffer_fast_on_queue(q.handle) : MetalDeviceFFI.create_command_buffer_on_queue(q.handle)
                   else

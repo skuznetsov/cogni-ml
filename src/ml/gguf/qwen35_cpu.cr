@@ -3546,8 +3546,10 @@ module ML::GGUF
         append_prefill_cmd = nil.as(ML::Metal::CommandBuffer?)
         prefill_graph_queue = nil.as(ML::Metal::GraphSubmissionQueue(ML::Metal::CommandBuffer, Qwen35Metal::Scratch::Arena)?)
         prefill_graph_lease = nil.as(ML::Metal::GraphSubmissionLease(ML::Metal::CommandBuffer, Qwen35Metal::Scratch::Arena)?)
-        prefill_graph_pending_leases = [] of ML::Metal::GraphSubmissionLease(ML::Metal::CommandBuffer, Qwen35Metal::Scratch::Arena)
-        prefill_graph_pending_cache_sets = [] of Array(QwenQBitAdaptiveResidentKV::Cache)
+        prefill_graph_pending_flights = [] of {
+          ML::Metal::GraphSubmissionLease(ML::Metal::CommandBuffer, Qwen35Metal::Scratch::Arena),
+          Array(QwenQBitAdaptiveResidentKV::Cache),
+        }
         prefill_graph_submitted_gpu_work = false
         append_command_available = ENV["QWEN35_PREFILL_APPEND_CMD_OFF"]? != "1" &&
                                    resident_boundary_ok && Qwen35Metal.available?
@@ -3578,9 +3580,8 @@ module ML::GGUF
                   pending_adaptive_caches.each do |cache|
                     QwenQBitAdaptiveResidentKV.finalize_pending_append(cmd, cache)
                   end
+                  prefill_graph_pending_flights << {lease, pending_adaptive_caches.dup}
                   queue.submit(lease)
-                  prefill_graph_pending_leases << lease
-                  prefill_graph_pending_cache_sets << pending_adaptive_caches.dup
                   prefill_graph_submitted_gpu_work = true
                 else
                   queue.cancel(lease)
@@ -3589,13 +3590,13 @@ module ML::GGUF
               append_prefill_cmd = nil
               prefill_graph_lease = nil
               prefill_graph_scratch_arena = nil
-              until prefill_graph_pending_leases.empty?
-                lease = prefill_graph_pending_leases.first
-                caches = prefill_graph_pending_cache_sets.first
+              until prefill_graph_pending_flights.empty?
+                flight = prefill_graph_pending_flights.first
+                lease = flight[0]
+                caches = flight[1]
                 queue.await(lease)
                 QwenQBitAdaptiveResidentKV.finish_pending_appends!(caches, lease.command)
-                prefill_graph_pending_leases.shift
-                prefill_graph_pending_cache_sets.shift
+                prefill_graph_pending_flights.shift
               end
               if ENV["QWEN35_COGNIGRAPH_PREFILL_TRACE"]? == "1"
                 STDERR.puts(
@@ -3765,9 +3766,8 @@ module ML::GGUF
                     pending_adaptive_caches.each do |cache|
                       QwenQBitAdaptiveResidentKV.finalize_pending_append(cmd, cache)
                     end
+                    prefill_graph_pending_flights << {lease, pending_adaptive_caches.dup}
                     queue.submit(lease)
-                    prefill_graph_pending_leases << lease
-                    prefill_graph_pending_cache_sets << pending_adaptive_caches.dup
                     prefill_graph_submitted_gpu_work = true
                     append_prefill_cmd = nil
                     prefill_graph_lease = nil
@@ -3776,12 +3776,12 @@ module ML::GGUF
                     append_prefill_gpu_work = false
                     append_prefill_group_count = 0
                     if queue.pending_count >= queue.max_in_flight
-                      completed_lease = prefill_graph_pending_leases.first
-                      completed_caches = prefill_graph_pending_cache_sets.first
+                      completed_flight = prefill_graph_pending_flights.first
+                      completed_lease = completed_flight[0]
+                      completed_caches = completed_flight[1]
                       queue.await(completed_lease)
                       QwenQBitAdaptiveResidentKV.finish_pending_appends!(completed_caches, completed_lease.command)
-                      prefill_graph_pending_leases.shift
-                      prefill_graph_pending_cache_sets.shift
+                      prefill_graph_pending_flights.shift
                     end
                     next_lease = queue.begin_submission
                     next_arena = Qwen35Metal::Scratch::Arena.new(
@@ -4066,8 +4066,8 @@ module ML::GGUF
           if queue = prefill_graph_queue
             queue.abort unless queue.failed?
             cleanup_caches = pending_adaptive_caches.dup
-            prefill_graph_pending_cache_sets.each do |caches|
-              caches.each { |cache| cleanup_caches << cache unless cleanup_caches.includes?(cache) }
+            prefill_graph_pending_flights.each do |flight|
+              flight[1].each { |cache| cleanup_caches << cache unless cleanup_caches.includes?(cache) }
             end
             cleanup_caches.each { |cache| QwenQBitAdaptiveResidentKV.discard_pending_appends!(cache) }
           end

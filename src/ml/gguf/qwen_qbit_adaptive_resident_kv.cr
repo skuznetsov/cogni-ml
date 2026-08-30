@@ -19,6 +19,10 @@ module ML::GGUF
       # without importing Metal into CPU-only builds. No CPU path constructs or
       # submits this command type.
       private class DisabledCommandBuffer
+        def transport_identity : UInt64
+          0_u64
+        end
+
         def committed? : Bool
           false
         end
@@ -83,6 +87,7 @@ module ML::GGUF
       @k_plan : QwenQBitAdaptiveKV::Plan?
       @v_plan : QwenQBitAdaptiveKV::Plan?
       @pending_appends : Array(PendingAppend)
+      @pending_transport_identity : UInt64?
 
       def self.from_admission(admission : CacheAdmission) : self
         new(admission)
@@ -105,6 +110,7 @@ module ML::GGUF
         @lifecycle_mutex = Mutex.new
         @released = false
         @pending_appends = [] of PendingAppend
+        @pending_transport_identity = nil
       end
 
       def cache_len : Int32
@@ -269,6 +275,11 @@ module ML::GGUF
           if @pending_appends.any? { |pending| pending.command.same?(command) }
             raise ArgumentError.new("adaptive resident QBit command already owns a pending append")
           end
+          if owner = @pending_transport_identity
+            unless owner == command.transport_identity
+              raise ArgumentError.new("adaptive resident QBit pending appends must use one Metal queue")
+            end
+          end
           unless @k_plan && @v_plan
             raise ArgumentError.new("adaptive resident QBit cache is not appendable")
           end
@@ -287,6 +298,7 @@ module ML::GGUF
           end
 
           @pending_appends << PendingAppend.new(status, command, token_count, reserved_tail)
+          @pending_transport_identity ||= command.transport_identity
           reserved_tail
         end
       end
@@ -309,12 +321,14 @@ module ML::GGUF
             if @pending_appends.last?.same?(pending)
               @pending_appends.shift
               pending.status.release
+              clear_pending_transport_if_empty!
             end
             raise ArgumentError.new("adaptive resident QBit prefill/pack failed closed (status=#{status_code})")
           end
           @pending_appends.shift
           pending.status.release
           @cache_len += pending.token_count
+          clear_pending_transport_if_empty!
         end
       end
 
@@ -340,8 +354,8 @@ module ML::GGUF
       # in-flight/unknown command deliberately leaves the cache pending.
       def cancel_pending_append!(command : ResidentCommandBuffer) : Nil
         @lifecycle_mutex.synchronize do
-          pending = @pending_appends.find { |candidate| candidate.command.same?(command) }
-          return unless pending
+          return if @pending_appends.empty?
+          pending = find_pending!(command)
           if command.committed? && !command.completed?
             raise ArgumentError.new("adaptive resident QBit command is not completed; cancellation is unsafe")
           end
@@ -350,6 +364,7 @@ module ML::GGUF
           end
           @pending_appends.pop
           pending.status.release
+          clear_pending_transport_if_empty!
         end
       end
 
@@ -367,6 +382,7 @@ module ML::GGUF
           end
           @pending_appends.reverse_each { |pending| pending.status.release }
           @pending_appends.clear
+          @pending_transport_identity = nil
         end
       end
 
@@ -413,6 +429,10 @@ module ML::GGUF
         unless @pending_appends.first?.same?(pending)
           raise ArgumentError.new("adaptive resident QBit publication must follow FIFO reservation order")
         end
+      end
+
+      private def clear_pending_transport_if_empty! : Nil
+        @pending_transport_identity = nil if @pending_appends.empty?
       end
     end
 
@@ -703,6 +723,13 @@ module ML::GGUF
     # then publish; a bad layer therefore cannot expose a partial cache prefix.
     def finish_pending_appends!(caches : Array(Cache),
                                 command : ResidentCommandBuffer) : Nil
+      unique_caches = [] of Cache
+      caches.each do |cache|
+        if unique_caches.any? { |seen| seen.same?(cache) }
+          raise ArgumentError.new("adaptive resident QBit publication contains a duplicate cache")
+        end
+        unique_caches << cache
+      end
       caches.each { |cache| cache.validate_pending_append!(command) }
       caches.each { |cache| cache.finish_pending_append!(command) }
     end

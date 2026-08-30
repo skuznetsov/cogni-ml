@@ -2385,13 +2385,14 @@ and visible-prefix publication no longer share one mutable pending slot.
 
 Admitted surface for the implementation is deliberately narrow:
 
-- one model invocation, one explicit Metal command queue, and FIFO completion;
+- one serialized model invocation, one explicit Metal command queue, and FIFO
+  completion; a pending suffix rejects a command from any other queue;
 - adaptive full-attention prefill appends whose token ranges are disjoint and
   reserved before any encoder writes them;
 - one per-command ticket per selected cache, containing the exact command,
   status buffer, start row, and token count;
-- group validation across all selected layers before any ticket for that
-command advances a visible cache length;
+- duplicate-free group validation across all selected layers before any ticket
+  for that command advances a visible cache length;
 - depth zero as the unchanged synchronous rollback frame.
 
 The visible prefix remains `cache_len`; reservations extend a separate ordered
@@ -2402,15 +2403,16 @@ illegal while any ticket is unpublished. A failed or indeterminate command
 poisons the local submission corridor. After the queue has cancelled or
 drained every possible writer, one checked discard operation releases the
 complete unpublished suffix in reverse order without advancing the visible
-prefix. The failed sequence state remains non-retryable and must be discarded
-by its caller.
+prefix. The enclosing failed multi-flight model sequence remains non-retryable
+and must be discarded by its caller; this does not forbid a fresh isolated
+single-ticket cache append after its failed reservation has been removed.
 
 Rejected or not certified in this slice: default enablement, out-of-order
-publication, multiple Metal queues or concurrent sessions sharing a cache,
-adaptive decode overlap, checkpointing, boundary profiling, recovery from a
-failed submitted command, and a general scheduler abstraction. Callers must
-serialize access to one model state; the other cases require separate
-certificates.
+publication, concurrent sessions sharing a cache, adaptive decode overlap,
+checkpointing, boundary profiling, recovery from a failed submitted command,
+and a general scheduler abstraction. A second Metal queue is rejected while a
+suffix is pending, but callers must still serialize access to one model state;
+the other cases require separate certificates.
 
 The lifecycle falsifier shows that two commands can reserve adjacent ranges on
 the same cache while `cache_len` remains unchanged, that the second cannot
@@ -2419,8 +2421,9 @@ rejected. A second test uses two caches and two completed commands, failing
 each cache position in turn: neither cache becomes visible, the successor
 remains blocked, and a checked suffix discard restores snapshot/release
 eligibility without leaking Metal buffers. The full adaptive resident suite
-passes 17/17, and the policy keeps checkpoint and boundary-profiling routes
-rejected.
+also rejects a duplicate cache group before publication and a second Metal
+queue before it can encode a successor reservation. It passes 17/17, and the
+policy keeps checkpoint and boundary-profiling routes rejected.
 
 Performance is vector-valued: full wall time, GPU time, host encode/wait time,
 peak/resident bytes, watchdog survival, cache ownership/publication, generated
