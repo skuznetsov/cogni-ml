@@ -24757,3 +24757,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** This is attribution of an already admitted exact kernel geometry, not a new speculative move. The naturally reused owner preserves checkpoint/replay boundaries and state bytes while the recomputed global replay coordinate descends. Tile 16 remains the fail-closed dual frame on every unmeasured device.
 
 **decision:** Treat steady-state real-KV prefill as the bounded source of the M2 Max tile-15 replay gain. Retain the existing device-gated policy and stop tuning this shape. The next performance falsifiers, if valuable, are larger contexts, broader prompts, or other Apple GPUs; none is implied by this certificate.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-CODING-8K-940] Command rotation narrows the 8K safety frontier but does not yet close it
+**context:** ml / Qwen3.8 / adaptive QBit / Metal / 8K coding / safety
+**state:** implementation and bounded parity verified; product-shaped 8K adaptive acceptance remains open
+
+- claim: "The quality gate now distinguishes product correctness from token-level diagnostics."
+  source: the prompt-file quality probe reports row/group policy and exact/resident timing; `qwen_qbit_coding_session_score.py` requires one sole-owner resident record, extracts generated Crystal, and runs public plus sealed specs in independent project copies. Its four unit tests pass. The 7,718-token exact output used `Math.max` and passed four external specs.
+  verified_at: 2026-08-30
+  decay_trigger: prompt/scorer schema, sealed task, source extraction, Crystal toolchain, or quality-record ownership contract change
+  trust: {F:0.98,G:0.19,R:0.94}
+
+- claim: "Commit/wait rotation preserves the measured state boundary, but large-session watchdog safety is not closed by command buffers alone."
+  source: focused policy plus 9B bounded/unbounded Metal parity passed; a tiny 27B forced one-group control matched the unbounded control exactly for cache lengths, ownership, top-1/top-2, ECS, and all reported logit deltas. In guarded 7,718-token runs, full-row one-group commands still hit `Impacting Interactivity` during repeated adaptive prefill; 2,048-row two-group commands avoided the large scratch peak when both A/B sides shared that geometry, yet sustained commands around `2.4--5.3 s` still reached the same guard. No attempt rebooted the host; the 35% memory guard separately stopped one mixed-scratch run at 32% and memory recovered immediately.
+  verified_at: 2026-08-30
+  decay_trigger: Metal scheduling/watchdog behavior, row/group policy, cache publication, model, hardware, prompt length, host load, or guard thresholds change
+  trust: {F:0.95,G:0.10,R:0.90}
+
+**Adversary:** The current 2,048-row by one-group automatic policy is inferred from the completed command timings, not yet certified by a successful 8K adaptive run. Exact source passing hidden specs says nothing about the missing resident candidate. Short parity, top-1/top-2/ECS, and memory headroom cannot replace the product gate.
+
+**Value proxy:** External Crystal specs are the coding capability authority. Top-1, top-2, ECS, logit deltas, timing, density, owner count, and memory pressure are separate explanatory and safety coordinates.
+
+**LTP/WBA:** Trigger is a large adaptive prefill group whose continuous GPU corridor risks host watchdog failure. Transport keeps hidden activations and the sole adaptive KV owner on GPU across command rotation. The legal move finalizes and publishes pending appends before commit/wait, then resumes from the same handoff buffer. Boundary invariants are cache length, no Float32 owner, exact next-token parity, and failure-atomic publication. Potential is `(host failure, invalid publication, peak memory, longest command, total wall)`. The unbounded env override is the dual frame; promotion requires recomputing the complete 8K product gate.
+
+**decision:** Admit prompt/scorer instrumentation, the 2,048-row resident cap, and command rotation as bounded safety infrastructure. Keep the conservative one-group policy guard-only. Do not claim 8K adaptive quality or start 16K until one fresh guarded 8K run emits a complete resident record and both external source variants pass.

@@ -34,8 +34,10 @@ module ML::GGUF
     {% end %}
     # Keep prompt chunks large enough to avoid CPU-side boundary overhead while
     # preserving an env override for small-memory experiments.
-    FALLBACK_PREFILL_CHUNK_SIZE = 4096
-    GIB                         = 1024_u64 * 1024_u64 * 1024_u64
+    FALLBACK_PREFILL_CHUNK_SIZE          = 4096
+    ADAPTIVE_RESIDENT_PREFILL_CHUNK_SIZE = 2048
+    PREFILL_APPEND_ROW_GROUP_BUDGET      = 2048
+    GIB                                  = 1024_u64 * 1024_u64 * 1024_u64
     @@default_prefill_chunk_size : Int32?
     @@prefill_gc_guard_active = false
 
@@ -48,6 +50,40 @@ module ML::GGUF
 
     def default_prefill_chunk_size : Int32
       @@default_prefill_chunk_size ||= prefill_chunk_size_for_memory(physical_memory_bytes?)
+    end
+
+    # Adaptive packing adds enough work to large row tiles that repeated
+    # prefill can trip the macOS GPU interactivity watchdog. Keep automatic
+    # resident tiles bounded; an explicit setting remains an exact override.
+    def prefill_chunk_size(resident_adaptive : Bool,
+                           configured : String? = ENV["QWEN35_PREFILL_CHUNK_SIZE"]?) : Int32
+      if raw = configured
+        value = raw.to_i?
+        unless value && value > 0
+          raise ArgumentError.new("QWEN35_PREFILL_CHUNK_SIZE must be a positive integer")
+        end
+        return value
+      end
+      size = default_prefill_chunk_size
+      resident_adaptive ? Math.min(size, ADAPTIVE_RESIDENT_PREFILL_CHUNK_SIZE) : size
+    end
+
+    # Bound continuous GPU occupancy without breaking the resident hidden/KV
+    # corridor. Zero keeps the historical single-command behavior. The default
+    # only slices large row-prefill batches and keeps roughly the same
+    # token-rows x layer-groups work in each submitted command.
+    def prefill_append_group_limit(n_tokens : Int32,
+                                   configured : String? = ENV["QWEN35_PREFILL_APPEND_MAX_GROUPS"]?) : Int32
+      raise ArgumentError.new("prefill append group limit requires positive token rows") unless n_tokens > 0
+      if raw = configured
+        value = raw.to_i?
+        unless value && value >= 0
+          raise ArgumentError.new("QWEN35_PREFILL_APPEND_MAX_GROUPS must be a non-negative integer")
+        end
+        return value
+      end
+      return 0 if n_tokens < 1024
+      Math.max(1, PREFILL_APPEND_ROW_GROUP_BUDGET // n_tokens)
     end
 
     private def prefill_gc_guard_enabled? : Bool
@@ -2950,7 +2986,7 @@ module ML::GGUF
       if ENV["QWEN35_PREFILL_FINAL_CHUNK_OFF"]? != "1" &&
          ENV["QWEN35_PREFILL_CHUNK_OFF"]? != "1" &&
          token_ids.size > 1
-        chunk_size = (ENV["QWEN35_PREFILL_CHUNK_SIZE"]? || default_prefill_chunk_size.to_s).to_i
+        chunk_size = prefill_chunk_size(state.adaptive_kv_layer_indices.any?)
         if token_ids.size > chunk_size
           if ENV["QWEN35_PREFILL_LONG_SUFFIX_OFF"]? != "1"
             prefix_len = token_ids.size - chunk_size
@@ -3365,8 +3401,7 @@ module ML::GGUF
       n_tokens = token_ids.size
       raise ArgumentError.new("prefill span exceeds max_seq") if start_pos < 0 || start_pos + n_tokens > max_seq
 
-      chunk_size = (ENV["QWEN35_PREFILL_CHUNK_SIZE"]? || default_prefill_chunk_size.to_s).to_i
-      raise ArgumentError.new("QWEN35_PREFILL_CHUNK_SIZE must be positive") unless chunk_size > 0
+      chunk_size = prefill_chunk_size(state.adaptive_kv_layer_indices.any?)
       if n_tokens > chunk_size
         offset = 0
         x = nil.as(Array(Float32)?)
@@ -3405,6 +3440,8 @@ module ML::GGUF
       handoff_bytes = (n_tokens * hp.n_embd).to_i64 * sizeof(Float32)
       append_prefill_cmd = nil
       append_prefill_gpu_work = false
+      append_prefill_group_count = 0
+      append_prefill_group_limit = prefill_append_group_limit(n_tokens)
       prefill_boundary_profile = ENV["QWEN35_PREFILL_BOUNDARY_PROFILE"]? == "1"
       append_prefill_started = nil.as(Time::Instant?)
       pending_adaptive_caches = [] of QwenQBitAdaptiveResidentKV::Cache
@@ -3451,7 +3488,8 @@ module ML::GGUF
                   io << " start_pos=" << start_pos
                   io << " tokens=" << n_tokens
                   io << " caches=" << pending_adaptive_caches.size
-                  io << " encode_ms=" << (finalize_started_value - encode_started).total_milliseconds.round(3)
+                  io << " groups=" << append_prefill_group_count
+                  io << " encode_ms=" << (finalize_started_value - encode_started.not_nil!).total_milliseconds.round(3)
                   io << " finalize_ms=" << (finalize_finished_value - finalize_started_value).total_milliseconds.round(3)
                   io << " submit_wait_ms=" << (submit_wait_finished_value - finalize_finished_value).total_milliseconds.round(3)
                   io << " gpu_ms=" << gpu_elapsed_ms.round(3)
@@ -3470,6 +3508,7 @@ module ML::GGUF
               pending_adaptive_caches.clear
               append_prefill_cmd = nil
               append_prefill_gpu_work = false
+              append_prefill_group_count = 0
             end
           elsif pending_adaptive_caches.any?
             pending_adaptive_caches.clear
@@ -3520,6 +3559,7 @@ module ML::GGUF
                read_output: fused_read_output,
                append_command_buffer: fused_read_output ? nil : append_prefill_cmd,
                pending_adaptive_caches: pending_adaptive_caches)
+            fused_appended = !fused_read_output && !append_prefill_cmd.nil?
             append_prefill_gpu_work = true unless fused_read_output
             il = fused[1]
             if fused_read_output
@@ -3534,6 +3574,16 @@ module ML::GGUF
               return [] of Float32 unless need_output
               x = fused[0]
               gpu_hidden = nil
+            end
+            if fused_appended && !gpu_hidden.nil? && append_prefill_group_limit > 0
+              append_prefill_group_count += 1
+              if append_prefill_group_count >= append_prefill_group_limit && il < layer_limit
+                flush_prefill_cmd.call
+                {% unless flag?(:cpu_only) %}
+                  append_prefill_cmd = ML::Metal::CommandBuffer.new
+                  append_prefill_started = Time.instant if prefill_boundary_profile
+                {% end %}
+              end
             end
             next
           end

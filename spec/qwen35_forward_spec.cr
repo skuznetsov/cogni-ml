@@ -16,6 +16,29 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     ML::GGUF::Qwen35CPU.prefill_chunk_size_for_memory(48_u64 * gib).should eq(8192)
   end
 
+  it "bounds shared prefill command groups by the prompt-row budget" do
+    ML::GGUF::Qwen35CPU.prefill_append_group_limit(512, nil).should eq(0)
+    ML::GGUF::Qwen35CPU.prefill_append_group_limit(1024, nil).should eq(2)
+    ML::GGUF::Qwen35CPU.prefill_append_group_limit(2048, nil).should eq(1)
+    ML::GGUF::Qwen35CPU.prefill_append_group_limit(4096, nil).should eq(1)
+    ML::GGUF::Qwen35CPU.prefill_append_group_limit(8192, nil).should eq(1)
+    ML::GGUF::Qwen35CPU.prefill_append_group_limit(8192, "3").should eq(3)
+    ML::GGUF::Qwen35CPU.prefill_append_group_limit(8192, "0").should eq(0)
+    expect_raises(ArgumentError, /non-negative integer/) do
+      ML::GGUF::Qwen35CPU.prefill_append_group_limit(8192, "invalid")
+    end
+  end
+
+  it "caps automatic resident prefill row tiles while preserving explicit overrides" do
+    default_size = ML::GGUF::Qwen35CPU.default_prefill_chunk_size
+    ML::GGUF::Qwen35CPU.prefill_chunk_size(false, nil).should eq(default_size)
+    ML::GGUF::Qwen35CPU.prefill_chunk_size(true, nil).should eq(Math.min(default_size, 2048))
+    ML::GGUF::Qwen35CPU.prefill_chunk_size(true, "4096").should eq(4096)
+    expect_raises(ArgumentError, /positive integer/) do
+      ML::GGUF::Qwen35CPU.prefill_chunk_size(true, "invalid")
+    end
+  end
+
   it "produces finite logits at pos=0 for token 0" do
     w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
     hp = w.hparams
@@ -271,6 +294,43 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
         ENV["QWEN35_PREFILL_LONG_SUFFIX_OFF"] = old_long
       else
         ENV.delete("QWEN35_PREFILL_LONG_SUFFIX_OFF")
+      end
+    end
+  end
+
+  it "bounded shared prefill commands preserve the next-token result" do
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
+    hp = w.hparams
+    prompt = [760_i32, 6511_i32, 314_i32, 9338_i32, 369_i32, 279_i32, 9821_i32, 13_i32]
+
+    old_limit = ENV["QWEN35_PREFILL_APPEND_MAX_GROUPS"]?
+    old_chunk = ENV["QWEN35_PREFILL_CHUNK_SIZE"]?
+    ENV["QWEN35_PREFILL_CHUNK_SIZE"] = "64"
+    begin
+      unbounded = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      ENV["QWEN35_PREFILL_APPEND_MAX_GROUPS"] = "0"
+      unbounded_top, unbounded_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, unbounded)
+      unbounded_next_top, unbounded_next_logit = ML::GGUF::Qwen35CPU.forward_top1(w, 11751_i32, prompt.size.to_i32, unbounded)
+
+      bounded = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      ENV["QWEN35_PREFILL_APPEND_MAX_GROUPS"] = "1"
+      bounded_top, bounded_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, bounded)
+      bounded_next_top, bounded_next_logit = ML::GGUF::Qwen35CPU.forward_top1(w, 11751_i32, prompt.size.to_i32, bounded)
+
+      bounded_top.should eq(unbounded_top)
+      bounded_logit.should be_close(unbounded_logit, 1e-4_f32)
+      bounded_next_top.should eq(unbounded_next_top)
+      bounded_next_logit.should be_close(unbounded_next_logit, 1e-4_f32)
+    ensure
+      if old_limit
+        ENV["QWEN35_PREFILL_APPEND_MAX_GROUPS"] = old_limit
+      else
+        ENV.delete("QWEN35_PREFILL_APPEND_MAX_GROUPS")
+      end
+      if old_chunk
+        ENV["QWEN35_PREFILL_CHUNK_SIZE"] = old_chunk
+      else
+        ENV.delete("QWEN35_PREFILL_CHUNK_SIZE")
       end
     end
   end

@@ -171,6 +171,7 @@ end
 
 model_path = ENV["QWEN35_MODEL"]? || DEFAULT_QWEN38_MODEL
 prompt = "Explain in one sentence why the sky appears blue."
+prompt_file = nil.as(String?)
 n_gen = 128
 requested_max_seq = 0
 resident_maps = [] of String
@@ -179,6 +180,7 @@ chat_mode = true
 OptionParser.parse do |parser|
   parser.banner = "Usage: qwen35_adaptive_resident_kv_quality_probe [options] [prompt]"
   parser.on("--model PATH", "Qwen GGUF path") { |value| model_path = value }
+  parser.on("--prompt-file PATH", "Read the complete prompt from PATH") { |value| prompt_file = value }
   parser.on("--gen N", "Maximum generated tokens including prefill top-1") { |value| n_gen = value.to_i }
   parser.on("--max-seq N", "Cache capacity; 0 selects prompt+gen+1") { |value| requested_max_seq = value.to_i }
   parser.on("--resident-map MAP", "Resident tier map; may be repeated") { |value| resident_maps << value }
@@ -188,7 +190,13 @@ OptionParser.parse do |parser|
     exit
   end
 end
-prompt = ARGV.join(" ") unless ARGV.empty?
+raise "--prompt-file cannot be combined with a positional prompt" if prompt_file && !ARGV.empty?
+if path = prompt_file
+  raise "prompt file does not exist: #{path}" unless File.file?(path)
+  prompt = File.read(path)
+else
+  prompt = ARGV.join(" ") unless ARGV.empty?
+end
 resident_maps << DEFAULT_RESIDENT_MAP if resident_maps.empty?
 
 raise "model does not exist: #{model_path}" unless File.file?(model_path)
@@ -209,6 +217,14 @@ raise "resident quality probe requires Qwen3.8 head dimension 256" unless hp.hea
 model_prompt = chat_mode ? ML::GGUF::Qwen35Chat.render_user_prompt(prompt, enable_thinking: false) : prompt
 tokens = tokenizer.encode(model_prompt)
 raise "prompt encoded to zero tokens" if tokens.empty?
+# Use one row geometry for both sides of the quality comparison. Otherwise the
+# Metal scratch pool retains the large exact geometry while resident prefill
+# allocates a second one, turning the probe itself into an avoidable peak.
+prefill_chunk_size = ML::GGUF::Qwen35CPU.prefill_chunk_size(true)
+ENV["QWEN35_PREFILL_CHUNK_SIZE"] = prefill_chunk_size.to_s
+prefill_append_max_groups = ML::GGUF::Qwen35CPU.prefill_append_group_limit(
+  Math.min(tokens.size, prefill_chunk_size).to_i32,
+)
 minimum_max_seq = tokens.size + n_gen + 1
 max_seq = requested_max_seq == 0 ? minimum_max_seq : requested_max_seq
 raise "prompt plus continuation exceeds --max-seq" if max_seq < minimum_max_seq
@@ -239,7 +255,8 @@ exact_text = tokenizer.decode(exact_ids)
 
 puts "qwen35_adaptive_resident_kv_quality_probe"
 puts "  model=#{model_path}"
-puts "  prompt=#{prompt.inspect} chat=#{chat_mode} prompt_tokens=#{tokens.size} requested_gen=#{n_gen} observed_gen=#{exact_ids.size} max_seq=#{max_seq}"
+prompt_label = prompt_file ? "@#{prompt_file}" : prompt.inspect
+puts "  prompt=#{prompt_label} chat=#{chat_mode} prompt_tokens=#{tokens.size} requested_gen=#{n_gen} observed_gen=#{exact_ids.size} max_seq=#{max_seq} prefill_chunk_size=#{prefill_chunk_size} prefill_append_max_groups=#{prefill_append_max_groups}"
 puts "  layers=#{hp.n_layer} full_attention_layers=#{hp.full_attention_layers.size} n_head_kv=#{hp.n_head_kv} head_dim=#{hp.head_dim}"
 puts "  startup_ms=#{startup_ms.round(3)} exact_prefill_ms=#{exact_prefill_ms.round(3)} exact_decode_ms=#{exact_decode_ms.round(3)} exact_first_id=#{exact_first_id} exact_first_logit=#{exact_first_logit.round(6)}"
 puts "  exact_ids=#{exact_ids.join(',')} exact_text=#{exact_text.inspect}"
@@ -349,6 +366,9 @@ resident_maps.each do |resident_map|
       json.field "execution_mode", "resident_gpu"
       json.field "model", File.basename(model_path)
       json.field "prompt", prompt
+      json.field "prompt_tokens", tokens.size
+      json.field "prefill_chunk_size", prefill_chunk_size
+      json.field "prefill_append_max_groups", prefill_append_max_groups
       json.field "policy", policy
       json.field "resident_map", resident_map
       json.field "exact_text", exact_text
@@ -393,6 +413,8 @@ resident_maps.each do |resident_map|
       json.field "resident_capacity_tokens", max_seq
       json.field "resident_first_logit", resident_first_logit
       json.field "forced_first_logit", forced_first_logit
+      json.field "exact_prefill_ms", exact_prefill_ms
+      json.field "exact_decode_ms", exact_decode_ms
       json.field "resident_prefill_ms", resident_prefill_ms
       json.field "forced_prefill_ms", forced_prefill_ms
       json.field "free_decode_ms", free_decode_ms

@@ -2150,3 +2150,50 @@ Apple M2 Max Qwen3.8 GQA6 tile-15 policy. It does not identify occupancy or
 cache behavior through hardware counters, and it does not widen the result to
 other GPUs, models, prompts, chunk shapes, or larger contexts. Those remain
 separate falsifiers rather than reasons to tune this already closed shape.
+
+### Product-shaped 8K coding and prefill safety frontier (2026-08-30)
+
+The quality probe now accepts a complete prompt from `--prompt-file`, reports
+the effective prefill row and layer-group budgets, and emits exact/resident
+prefill and decode times in its structured record. A separate scorer extracts
+the generated Crystal source, runs the public and sealed neighboring specs in
+fresh project copies, and treats that product result as the capability gate.
+Top-1, top-2, ECS, density, ownership, and timing remain diagnostic coordinates
+rather than substitutes for the external tests.
+
+The first sealed prompt renders to 7,718 Qwen3.8 tokens. Its exact continuation
+produced the intended `Math.max` upper bound and passed all four external specs.
+No resident candidate reached the scorer, so this is an exact-baseline
+certificate only, not an adaptive-quality result.
+
+Three guarded adaptive attempts separated two failure mechanisms without an
+OOM or reboot. One 7,718-row layer group per command let the first resident
+prefill complete, but a repeated prefill eventually grew individual commands
+to `17.1/11.5/12.4 s` and macOS rejected the third as `Impacting
+Interactivity`. Capping resident rows at 2,048 and using two layer groups per
+command reduced completed GPU intervals to roughly `1.6--5.6 s`; an A/B probe
+that first used a distinct 7,718-row exact scratch geometry was safely stopped
+by the 35% free-memory guard at 32%. Giving exact and resident sides the same
+2,048-row geometry removed that extra peak and retained 54--56% free memory,
+but sustained adaptive work still reached the interactivity guard after
+completed commands of roughly `2.4--5.3 s`.
+
+The implementation therefore admits only the smaller scheduling primitives:
+automatic resident row tiles are capped at 2,048, command submission can rotate
+without materializing hidden state or Float32 KV, and explicit environment
+overrides retain the old corridor as the rollback frame. The current automatic
+row-group budget is conservatively 2,048, which means one layer group per
+2,048-row resident command. Focused policy tests, a 9B bounded-vs-unbounded
+Metal parity test, no-codegen, and the scorer's four unit tests pass. A tiny
+27B forced one-group adaptive control also preserved cache lengths, ownership,
+top-1/top-2, and ECS exactly; its pre-existing `0.2004795` decode-logit delta
+was identical to the unbounded control and is not caused by command rotation.
+
+The 2,048-row by one-group policy is guard-only until a fresh 8K run completes
+after host cooldown. Admission requires: no memory/interactivity guard,
+exactly one resident quality record, all 16 adaptive owners with no Float32 KV
+owner, consistent published cache length, the full top-1/top-2/ECS vector, and
+passing external specs for both exact and resident source. The 16K gate remains
+blocked until that 8K certificate exists. Lowering the memory guard, hiding the
+teacher-forced pass, or treating the exact-only source as adaptive evidence are
+explicitly rejected routes.
