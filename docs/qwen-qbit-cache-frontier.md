@@ -2098,9 +2098,55 @@ reduction-order drift. The focused state/resident suite passed `23/23`, and
 the complete resource-isolated QBit/Metal suite passed `139` examples with no
 failures or errors and one optional model-backed pending example.
 
-The profiler seam is therefore verified, but this real-KV run does not close
-steady-state tile attribution. The next falsifier is the same ABBA on a quiet
-host with a 64-token replay chunk. That gives a naturally growing resident
+The profiler seam is therefore verified, but this real-KV run did not close
+steady-state tile attribution. Its required falsifier was the same ABBA on a
+quiet host with a 64-token replay chunk, giving a naturally growing resident
 owner across many commands while preserving the snapshot recipe, positions,
-chunk sequence, exact controls, quality coordinates, and resource guards. No
-further tile-specific kernel optimization is admitted before that signal.
+chunk sequence, exact controls, quality coordinates, and resource guards. The
+next section records that completed falsifier; this subsection remains the
+historical busy-host result.
+
+### Quiet-host 64-token real-KV replay (2026-08-30)
+
+The release session probe replayed a 2,119-token real-model suffix from the
+same deterministic 829-token Qwen3.8-27B Q4_K_M snapshot. Replay used one
+7-token chunk followed by 33 64-token chunks, so each adaptive trajectory grew
+and reused one resident owner across 34 commands. The guarded order was
+tile-15/tile-16/tile-16/tile-15. Relevant source was commit `3362535e`; the
+probe arguments were `--filler 48 --suffix-filler 128 --replay-chunk 64
+--attribute-replay --gen 8`. Every process independently required less
+than 50% CPU from any unrelated process and less than 100% aggregate unrelated
+CPU before launch, waited for up to 600 seconds instead of modifying unrelated
+workloads, required more than 35% free system memory, used a 24 GiB
+process-tree cap, and had a 600-second timeout. The four rows began with
+84--85% free memory, waited 16/69/25/99 seconds for a quiet window, and exited
+cleanly after 70--75 seconds.
+
+In ABBA order, exact chunked replay wall times were
+`21,181.982/21,314.055/21,142.459/21,300.848 ms`; adaptive replay times were
+`21,326.282/23,251.760/23,232.472/21,184.013 ms`. Tile 15 therefore averaged
+`21,255.148 ms` adaptive replay beside a `21,241.415 ms` exact control, an
+overhead of `13.733 ms` or `0.065%`. Tile 16 averaged `23,242.116 ms` beside a
+`21,228.257 ms` exact control, an overhead of `2,013.860 ms` or `9.487%`.
+The exact-control means differed by only `13.158 ms` (`0.062%`), while tile 15
+reduced adaptive wall time by `8.549%` relative to tile 16.
+
+Summed command-buffer GPU intervals independently preserved the result. Tile
+15 averaged `20,964.582 ms` adaptive GPU time beside `21,030.207 ms` exact,
+while tile 16 averaged `22,927.578 ms` beside `20,982.301 ms` exact. The
+normalized adaptive GPU overhead was `-0.312%` for tile 15 and `9.271%` for
+tile 16; tile 15 reduced adaptive GPU time by `8.562%`. The agreement between
+wall and GPU intervals rejects host-side replay bookkeeping as the explanation
+for this ABBA separation.
+
+All four rows preserved top-1 `8/8`, ranked top-2 `11/14`, top-2 set overlap
+`11/14`, exact-top-1 coverage in candidate top-2 `7/7`, token ECS
+mean/minimum `1.0/1.0`, EOS, meaning, and the exact text
+`Their sum is 95.`. Each row retained 16 resident attention layers,
+`102,637,568` resident live-KV bytes, and `3.7647x` logical KV density.
+
+This closes the steady-state real-KV attribution gap for the already admitted
+Apple M2 Max Qwen3.8 GQA6 tile-15 policy. It does not identify occupancy or
+cache behavior through hardware counters, and it does not widen the result to
+other GPUs, models, prompts, chunk shapes, or larger contexts. Those remain
+separate falsifiers rather than reasons to tune this already closed shape.

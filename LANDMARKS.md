@@ -24706,7 +24706,7 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 #### [LM-QWEN38-ADAPTIVE-QBIT-REAL-KV-PROFILE-938] Busy-host real-KV profiling does not independently close tile attribution
 **context:** ml / Qwen3.8 / adaptive QBit / Metal / real KV / session replay / profiling
-**state:** profiling seam verified; steady-state tile attribution remains vulnerable pending a quiet-host multi-command falsifier
+**state:** historical busy-host result; its steady-state attribution gap was later closed by the quiet-host multi-command falsifier in LM-QWEN38-ADAPTIVE-QBIT-REAL-KV-QUIET-939
 
 - claim: "The production prefill boundary can report the fused model command's GPU interval without changing default execution or cache publication semantics."
   source: `QWEN35_PREFILL_BOUNDARY_PROFILE=1` now commits and waits through the existing Metal timestamp seam and reports `gpu_ms`; the default-off path retains the original separate commit and wait calls. Four release model runs completed the profile path with consistent resident ownership and zero swaps. The focused state/resident suite passed `23/23`; the complete resource-isolated QBit/Metal suite passed `139` examples with zero failures/errors and one optional pending example.
@@ -24726,4 +24726,34 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 
 **LTP/WBA:** This is diagnostic instrumentation, not an LTP/WBA promotion. The noisy real-KV observation cannot recompose the synthetic local signal into a stronger global certificate, so no new kernel move is admitted.
 
-**decision:** Keep the already bounded M2 Max tile-15 policy and the default-off fused-command profiler. Do not strengthen the real-KV mechanism claim or optimize further until a quiet-host ABBA uses 64-token chunks to sample the same naturally growing resident owner across many commands.
+**decision:** Keep the already bounded M2 Max tile-15 policy and the default-off fused-command profiler. This row alone did not support a stronger mechanism claim; the required quiet-host, 64-token, naturally growing-owner ABBA was subsequently completed in LM-QWEN38-ADAPTIVE-QBIT-REAL-KV-QUIET-939.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-REAL-KV-QUIET-939] Quiet-host real-KV replay closes the bounded tile-15 attribution gap
+**context:** ml / Qwen3.8 / adaptive QBit / Metal / real KV / session replay / quiet host
+**state:** verified for Apple M2 Max, Qwen3.8 GQA6, the measured 829+2,119-token session, and 64-token replay chunks
+
+- claim: "Tile 15 removes the adaptive replay tax seen with tile 16 while the adjacent exact controls remain stable."
+  source: a release Qwen3.8-27B Q4_K_M probe replayed the same 2,119-token real-model suffix from an 829-token snapshot as `7 + 33*64` tokens, growing and reusing one resident owner across 34 commands. Strict quiet-host tile-15/tile-16/tile-16/tile-15 rows measured adaptive wall `21,326.282/23,251.760/23,232.472/21,184.013 ms` beside exact chunked controls `21,181.982/21,314.055/21,142.459/21,300.848 ms`. Tile-15 means were `21,255.148/21,241.415 ms`, only `13.733 ms` or `0.065%` adaptive overhead; tile-16 means were `23,242.116/21,228.257 ms`, `2,013.860 ms` or `9.487%` overhead. Exact-control means differed by only `13.158 ms`, while tile 15 reduced adaptive wall by `8.549%`.
+  verified_at: 2026-08-30
+  decay_trigger: model, snapshot/prompt, tier map, chunk plan, compiler/runtime, hardware, profiling boundary, tile kernel, or quiet-host guard change
+  trust: {F:0.98,G:0.13,R:0.95}
+
+- claim: "Completed-command GPU intervals independently corroborate the wall result."
+  source: summed adaptive/exact GPU means were `20,964.582/21,030.207 ms` for tile 15 and `22,927.578/20,982.301 ms` for tile 16. Normalized adaptive GPU overhead was `-0.312%` versus `9.271%`; tile 15 reduced adaptive GPU time by `8.562%`. The ABBA exact GPU controls remained close while both tile-16 adaptive rows were above both tile-15 rows.
+  verified_at: 2026-08-30
+  decay_trigger: Metal timestamp semantics, command-buffer ownership, model scheduling, tile kernel, compiler/runtime, hardware, or replay grouping change
+  trust: {F:0.98,G:0.16,R:0.96}
+
+- claim: "The bounded speed result preserves the measured quality, ownership, density, and resource gates."
+  source: all four rows exited zero after independent strict quiet preflight, a 35% free-memory floor, 24 GiB process-tree cap, and 600-second timeout. They preserved top-1 `8/8`, ranked top-2 and top-2 set overlap `11/14`, exact-top-1 coverage `7/7`, token ECS mean/minimum `1.0/1.0`, EOS, meaning, exact text, 16 resident attention layers, `102,637,568` resident bytes, and `3.7647x` logical KV density.
+  verified_at: 2026-08-30
+  decay_trigger: quality prompt/evaluator, tier map, resident ownership/publication, snapshot ABI, resource guard, model, or kernel change
+  trust: {F:0.98,G:0.12,R:0.95}
+
+**Adversary:** The result uses one model, one arithmetic completion, one tier map, one M2 Max, one session shape, and one 64-token chunk policy. Top-2 is stable across the four rows but not exact against the exact trajectory. Command-buffer timestamps cover the whole fused model command and do not expose occupancy, bandwidth, or cache counters. The paired exact controls and concordant GPU/wall signs make ordinary host drift an implausible explanation for this bounded separation, but they do not create a cross-device or general-throughput certificate.
+
+**Value proxy:** The performance claim remains subordinate to generation meaning, top-1/top-2/ECS, resident ownership, publication safety, logical density, and resource headroom. A faster replay row cannot widen quality or hardware scope.
+
+**LTP/WBA:** This is attribution of an already admitted exact kernel geometry, not a new speculative move. The naturally reused owner preserves checkpoint/replay boundaries and state bytes while the recomputed global replay coordinate descends. Tile 16 remains the fail-closed dual frame on every unmeasured device.
+
+**decision:** Treat steady-state real-KV prefill as the bounded source of the M2 Max tile-15 replay gain. Retain the existing device-gated policy and stop tuning this shape. The next performance falsifiers, if valuable, are larger contexts, broader prompts, or other Apple GPUs; none is implied by this certificate.
