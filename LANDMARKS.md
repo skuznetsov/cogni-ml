@@ -24793,3 +24793,33 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Trigger is a completed long-prefill command whose immediate successor keeps the GPU corridor continuously occupied. Transport keeps hidden activations and the sole adaptive KV owner on GPU. The legal move finalizes, commits, waits, validates, and publishes before a bounded idle window and the next command. Boundary invariants are cache length, no Float32 owner, exact next-token parity, and failure-atomic publication. Potential `(host failure, invalid publication, peak memory, longest continuous occupancy, total wall)` descends lexicographically despite added wall time. Explicit zero is the dual scheduling frame.
 
 **decision:** Admit the 2,048-row, one-group, 50 ms policy as the safe long-prefill default and admit this 8K task certificate. Keep adaptive QBit explicit and scope the claim to compactness plus measured task correctness. The next useful move is decode-kernel profiling/optimization; 16K is now admissible only as a separately forecast and guarded falsifier, not an automatic widening.
+
+#### [LM-QWEN38-ADAPTIVE-QBIT-SPLITK-DECODE-941] Split-K removes the measured 8K resident-decode tax
+**context:** ml / Qwen3.8 / adaptive QBit / Metal / split-K / long-context decode
+**state:** verified for the measured Apple M2 Max, Qwen3.8-27B Q4_K_M, 7,718-token Crystal task, and coarse P4/BF16 map; functional fallback boundaries remain explicit
+
+- claim: "A two-stage context reduction preserves the resident cache and attention result while exposing enough parallel work for long one-token decode."
+  source: stage 1 partitions the visible context into 64-token blocks and emits per-head online-softmax `{m,l,o}` summaries while preserving GQA6 K/V sharing; stage 2 merges them with stable log-sum-exp and applies the existing gate. A Metal parity spec crosses the default 256-token boundary, compares serial and split-K against a CPU reference above `0.9999999` cosine with maximum error below `2e-4`, bounds serial/split-K delta below `2e-5`, requires byte-identical packed K/V payloads, then crosses the next block-count boundary and observes three scratch hits with no new allocations. The focused policy/resident suite passed `20/20`; the complete QBit suite passed `127/127`, the common state-snapshot suite passed `16/16`, and the Python scorer/corpus suite passed `13/13`.
+  verified_at: 2026-08-30
+  decay_trigger: adaptive row encoding, online-softmax state, GQA6 geometry, Metal buffer ABI, split size or reduction order, pack/publication order, compiler/runtime, or policy threshold change
+  trust: {F:0.98,G:0.24,R:0.95}
+
+- claim: "The split-K path removes almost all measured adaptive decode overhead on the bounded 8K coding row."
+  source: fixed-snapshot P4 observations fell from `21.092--21.144 ms` to `2.749--3.250 ms` (`6.49--7.69x`); one BF16 control fell from `21.252 ms` to `2.014 ms` (`10.55x`). In the fresh product run, 67-step exact/adaptive decode measured `5.172/5.291 s`, or `12.95/12.66 tok/s`: adaptive was `4.76x` faster than the prior `25.192 s` row and only `2.30%` slower than its adjacent exact control.
+  verified_at: 2026-08-30
+  decay_trigger: model, tier map, prompt/context, split size, compiler/runtime, hardware, host load, timing boundary, or exact baseline change
+  trust: {F:0.97,G:0.12,R:0.94}
+
+- claim: "The speed result does not trade away the measured product, ownership, or compactness gates."
+  source: exact and adaptive emitted identical 177-byte Crystal sources with SHA-256 `3494ecf7843f68ecc7261d75fc23e520a39a8fef50d1ce5d6d961f50b70c2d46`, and each passed four external specs. Top-1 was `68/68`, exact-top-1 coverage `67/67`, ECS mean/minimum `1.0/1.0`, EOS and full text matched, 16 attention layers retained resident owners, no Float32 KV owner appeared, and every cache published 7,785 rows. The shared split-K scratch is bounded to `6,340,608` bytes at 8,192 capacity; including it conservatively changes effective density from `3.7647x` to about `3.683x` without changing payload, checkpoint, restore, or serialized bytes.
+  verified_at: 2026-08-30
+  decay_trigger: product prompt/specs, tokenizer/template, generation policy, quality metrics, resident ownership/publication, scratch reuse, snapshot ABI, or cache serialization change
+  trust: {F:0.98,G:0.10,R:0.95}
+
+**Adversary:** The compact representation already reduced traffic; split-K does not reduce bytes again. It parallelizes decompression and attention over context, adds a stable second reduction, and retains about 6.05 MiB of shared scratch at 8K. A boundary probe found pure BF16 split-K slower at 129 visible tokens, so the common default was raised to 256 instead of adding a tier-specific heuristic. P4 has replicated long-context observations; the BF16 micro-result does not. One product run and one M2 Max do not establish cross-device, all-BF16, 16K, or general coding throughput. Scratch reuse inherits the existing engine assumption of one in-flight model wave per namespace; future concurrent multi-queue serving requires lane/session isolation before overlap. The first final product attempt stopped safely under the macOS interactivity guard during prefill before split-K decode, so it supports the guard rather than the kernel speed claim.
+
+**Value proxy:** External Crystal specs, exact generated meaning, and failure-atomic resident ownership remain capability authorities. Microkernel GPU time, end-to-end decode time, top-1, top-2, ECS, logical density, scratch bytes, memory headroom, and host noise remain separate coordinates.
+
+**LTP/WBA:** This is ordinary exact kernel parallelization, not an LTP/WBA promotion. The move preserves cache payload bytes, checkpoint history, exact-current-row ordering, publication, restore, and the serial kernel as a runtime dual frame. The recomputed product corridor holds quality and ownership coordinates fixed while decode wall time descends.
+
+**decision:** Default to split-K only for one-token uniform P4/BF16 GQA6 decode at 256 or more visible tokens. Keep multi-token, mixed-tier, P5/F32, and short-context paths on the serial kernel; retain `QWEN35_ADAPTIVE_SPLITK=0` as rollback. Scope the speed certificate to the measured M2 Max 8K row and require fresh falsifiers before widening hardware, tier-map, context, or coding-quality claims.

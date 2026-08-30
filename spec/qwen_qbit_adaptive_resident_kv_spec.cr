@@ -343,6 +343,123 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
     ML::MetalBuffer.stats[:live_bytes].should eq(live_before)
   end
 
+  it "matches the serial adaptive decode when split-K crosses its long-context boundary" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    packed_len = 255
+    capacity = packed_len + 2
+    n_head = 6
+    n_head_kv = 1
+    head_dim = 256
+    heads_per_group = 6
+    q_dim = n_head * head_dim
+    kv_dim = n_head_kv * head_dim
+    scale = (1.0 / Math.sqrt(head_dim.to_f64)).to_f32
+    rng = Random.new(0x5A117A_u64)
+    initial_k = Array(Float32).new(packed_len * kv_dim) { ((rng.next_float - 0.5) * 1.0).to_f32 }
+    initial_v = Array(Float32).new(packed_len * kv_dim) { ((rng.next_float - 0.5) * 1.0).to_f32 }
+    q = Array(Float32).new(q_dim) { ((rng.next_float - 0.5) * 1.0).to_f32 }
+    gate = Array(Float32).new(q_dim) { ((rng.next_float - 0.5) * 2.0).to_f32 }
+    current_k = Array(Float32).new(kv_dim) { ((rng.next_float - 0.5) * 1.0).to_f32 }
+    current_v = Array(Float32).new(kv_dim) { ((rng.next_float - 0.5) * 1.0).to_f32 }
+    plan = adaptive.plan(Array.new(
+      capacity * n_head_kv,
+      ML::GGUF::QwenQBitAdaptiveKV::Tier::P4,
+    ))
+    serial = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
+      plan, plan, capacity, n_head_kv, head_dim,
+    )
+    splitk = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
+      plan, plan, capacity, n_head_kv, head_dim,
+    )
+    initial_buffers = [
+      ML::MetalBuffer.from_array(initial_k),
+      ML::MetalBuffer.from_array(initial_v),
+    ]
+    previous_splitk = ENV["QWEN35_ADAPTIVE_SPLITK"]?
+    begin
+      [serial, splitk].each do |cache|
+        ML::GGUF::QwenQBitAdaptiveResidentKV.append_from_metal(
+          cache, initial_buffers[0], initial_buffers[1], packed_len,
+        )
+      end
+      hits_before, misses_before = ML::GGUF::Qwen35Metal::Scratch.stats
+      packed_k, packed_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(serial)
+      expected = QwenQBitAdaptiveResidentKVSpec.chunk_reference(
+        q, gate, adaptive.decode(packed_k), adaptive.decode(packed_v),
+        current_k, current_v, packed_len, 1,
+        n_head, n_head_kv, head_dim, heads_per_group, scale,
+      )
+
+      outputs = [] of Array(Float32)
+      [serial, splitk].each_with_index do |cache, index|
+        ENV["QWEN35_ADAPTIVE_SPLITK"] = index == 0 ? "0" : "1"
+        buffers = [
+          ML::MetalBuffer.from_array(q),
+          ML::MetalBuffer.from_array(gate),
+          ML::MetalBuffer.from_array(current_k),
+          ML::MetalBuffer.from_array(current_v),
+          ML::MetalBuffer.new(q_dim.to_i64 * sizeof(Float32)),
+        ]
+        begin
+          ML::GGUF::Qwen35Metal::Scratch.with_namespace("adaptive_splitk_capacity_spec") do
+            ML::GGUF::QwenQBitAdaptiveResidentKV.prefill_chunk_and_append_from_metal(
+              cache, buffers[0], buffers[1], buffers[2], buffers[3], buffers[4],
+              1, n_head, heads_per_group, scale,
+            )
+          end
+          outputs << buffers[4].read(q_dim)
+        ensure
+          buffers.each(&.release)
+        end
+      end
+
+      outputs.each do |actual|
+        QwenQBitAdaptiveResidentKVSpec.cosine(expected, actual).should be > 0.9999999
+        QwenQBitAdaptiveResidentKVSpec.max_diff(expected, actual).should be < 2.0e-4_f32
+      end
+      QwenQBitAdaptiveResidentKVSpec.cosine(outputs[0], outputs[1]).should be > 0.9999999
+      QwenQBitAdaptiveResidentKVSpec.max_diff(outputs[0], outputs[1]).should be < 2.0e-5_f32
+      serial_k, serial_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(serial)
+      splitk_k, splitk_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(splitk)
+      splitk_k.payload.should eq(serial_k.payload)
+      splitk_v.payload.should eq(serial_v.payload)
+
+      hits_after_first, misses_after_first = ML::GGUF::Qwen35Metal::Scratch.stats
+      misses_after_first.should eq(misses_before + 3)
+      hits_after_first.should eq(hits_before)
+      second_buffers = [
+        ML::MetalBuffer.from_array(q),
+        ML::MetalBuffer.from_array(gate),
+        ML::MetalBuffer.from_array(current_k),
+        ML::MetalBuffer.from_array(current_v),
+        ML::MetalBuffer.new(q_dim.to_i64 * sizeof(Float32)),
+      ]
+      begin
+        ML::GGUF::Qwen35Metal::Scratch.with_namespace("adaptive_splitk_capacity_spec") do
+          ML::GGUF::QwenQBitAdaptiveResidentKV.prefill_chunk_and_append_from_metal(
+            splitk, second_buffers[0], second_buffers[1], second_buffers[2],
+            second_buffers[3], second_buffers[4], 1, n_head, heads_per_group, scale,
+          )
+        end
+      ensure
+        second_buffers.each(&.release)
+      end
+      hits_after_second, misses_after_second = ML::GGUF::Qwen35Metal::Scratch.stats
+      hits_after_second.should eq(hits_after_first + 3)
+      misses_after_second.should eq(misses_after_first)
+    ensure
+      if previous_splitk
+        ENV["QWEN35_ADAPTIVE_SPLITK"] = previous_splitk
+      else
+        ENV.delete("QWEN35_ADAPTIVE_SPLITK")
+      end
+      initial_buffers.each(&.release)
+      serial.release
+      splitk.release
+    end
+  end
+
   it "matches the CPU reference for a uniform BF16 prefill plan" do
     pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
 

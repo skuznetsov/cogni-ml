@@ -2211,3 +2211,71 @@ external-spec gates plus a capacity-sized memory forecast. Lowering the memory
 guard, hiding the teacher-forced pass, treating exact-only output as adaptive
 evidence, or trading away the 50 ms safety window before a measured replacement
 is explicitly rejected.
+
+### Split-K long-context decode frontier (2026-08-30)
+
+The resident one-token decoder now uses a two-stage split-K reduction when the
+K/V plans prove one uniform P4 or BF16 tier and the visible context contains at
+least 256 tokens. Stage 1 partitions context into 64-token blocks while keeping
+the existing GQA6 sharing: one decoded K/V tile serves six query heads. Each
+block emits an online-softmax summary `{maximum, denominator, numerator}`;
+stage 2 combines those summaries with a stable log-sum-exp reduction and applies
+the existing gate. The exact current K/V row is still packed only after
+attention. Multi-token prefill, mixed tiers, P5/F32 plans, and short contexts
+retain the previous serial kernel. `QWEN35_ADAPTIVE_SPLITK=0` is the complete
+runtime rollback.
+
+The common 256-token threshold is deliberately conservative. In a fresh
+boundary probe, P4 split-K GPU time was `0.608/0.616 ms` at 129/257 visible
+tokens versus serial `1.042/1.925 ms`. BF16 was slower at 129 tokens
+(`0.561` versus `0.370 ms`) but faster at 257 (`0.570` versus `0.695 ms`). A
+tier-specific crossover rule would recover one short P4 interval but add policy
+complexity; the common 256 threshold rejects that trade until a product result
+requires it.
+
+At 8K, fixed-snapshot P4 observations fell from `21.092--21.144 ms` to
+`2.749--3.250 ms`, a non-overlapping `6.49--7.69x` reduction. One BF16 control
+fell from `21.252 ms` to `2.014 ms` (`10.55x`), but lacks the replicated ABBA
+strength of the P4 row. The kernel reads the same compact bytes; the gain comes
+from replacing one long sequential context traversal with independent context
+blocks that expose enough parallel work to overlap decode arithmetic and memory
+latency. It is not an additional compression ratio.
+
+The fresh product-shaped run kept the prior 7,718-token prompt, 68-token
+continuation, coarse P4/BF16 layer map, and 8,192-token capacity. Exact/adaptive
+decode measured `5.172/5.291 s` for 67 decode steps, or `12.95/12.66 tok/s`.
+Adaptive decode is therefore `4.76x` faster than the previous `25.192 s` row
+and only `2.30%` slower than its adjacent exact control. Exact and adaptive
+generated identical 177-byte Crystal sources with SHA-256
+`3494ecf7843f68ecc7261d75fc23e520a39a8fef50d1ce5d6d961f50b70c2d46`;
+both passed four external specs. Top-1 remained `68/68`, exact-top-1 coverage
+`67/67`, ECS mean/minimum `1.0/1.0`, EOS and full text matched, while ranked
+top-2 and set overlap remained the pre-existing `121/134` warning. All 16
+attention caches stayed resident, no Float32 KV owner appeared, and every cache
+published 7,785 rows.
+
+Split-K adds one shared, process-cached scratch set per distinct cache capacity
+rather than one allocation per layer. At 8,192 capacity and the measured 48
+query heads it is at most
+`6,340,608` bytes (about `6.05 MiB`) for partial numerators, maxima, and
+denominators. Scratch is sized from immutable cache capacity, not current
+length, so growth across context-block boundaries reuses the same three buffers
+instead of retaining one size-keyed pool entry per boundary. A regression
+crosses the 256/257 boundary and requires three cache hits with no new misses.
+This scratch is not included in the `285,212,672` resident KV payload metric;
+counting it conservatively changes effective logical density from `3.7647x` to
+about `3.683x`. Cache payload bytes, checkpoints, restore, and ClickHouse
+serialization are unchanged.
+
+One guarded product attempt stopped safely at macOS `Impacting Interactivity`
+during exact/adaptive prefill before the new decode phase. A later run with the
+same 35% memory floor, 24 GiB process-tree cap, and a 100 ms benchmark cooldown
+completed. That is evidence for keeping the existing host guards, not for
+changing the admitted 50 ms default. Cross-device speed, all-BF16 product
+sessions, 16K scratch/runtime behavior, and harder coding quality remain open
+falsifiers.
+
+Like the existing Qwen35 Metal scratch paths, this reuse assumes one in-flight
+model wave per scratch namespace. A future concurrent multi-queue serving path
+must provide a lane/session namespace before it may overlap adaptive decode
+commands; this patch does not claim or introduce that wider concurrency model.

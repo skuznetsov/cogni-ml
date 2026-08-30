@@ -385,3 +385,190 @@ kernel void qwen35_qbit_adaptive_prefill_chunk_gqa6(
         }
     }
 }
+
+// Long-context one-token decode. Stage 1 preserves GQA6 KV sharing while
+// splitting the visible context into independent online-softmax summaries.
+// The current token remains exact F32 until the following pack encoder.
+kernel void qwen35_qbit_adaptive_decode_splitk_stage1_gqa6(
+    device const float* Q [[buffer(0)]],
+    device const float* current_k [[buffer(1)]],
+    device const float* current_v [[buffer(2)]],
+    device const uchar* k_base [[buffer(3)]],
+    device const uchar* k_metadata [[buffer(4)]],
+    device const uchar* k_sidecar [[buffer(5)]],
+    device const uchar* v_base [[buffer(6)]],
+    device const uchar* v_metadata [[buffer(7)]],
+    device const uchar* v_sidecar [[buffer(8)]],
+    device float* partial_o [[buffer(9)]],
+    device float* partial_m [[buffer(10)]],
+    device float* partial_l [[buffer(11)]],
+    device atomic_uint* status [[buffer(12)]],
+    constant uint& packed_len [[buffer(13)]],
+    constant uint& n_head [[buffer(14)]],
+    constant uint& n_head_kv [[buffer(15)]],
+    constant uint& head_dim [[buffer(16)]],
+    constant uint& heads_per_group [[buffer(17)]],
+    constant float& scale [[buffer(18)]],
+    constant uint& chunk_size [[buffer(19)]],
+    constant uint& n_blocks [[buffer(20)]],
+    constant uint& uniform_tier [[buffer(21)]],
+    uint2 group [[threadgroup_position_in_grid]],
+    ushort lane [[thread_index_in_simdgroup]],
+    ushort local_h [[simdgroup_index_in_threadgroup]],
+    ushort thread_index [[thread_index_in_threadgroup]]) {
+    const uint kv_h = group.x;
+    const uint block = group.y;
+    if (kv_h >= n_head_kv || block >= n_blocks ||
+        local_h >= QQA_ADAPTIVE_GQA6_HEADS ||
+        heads_per_group != QQA_ADAPTIVE_GQA6_HEADS ||
+        head_dim != QQA_ADAPTIVE_HD || chunk_size == 0u) {
+        return;
+    }
+
+    const uint h = kv_h * QQA_ADAPTIVE_GQA6_HEADS + local_h;
+    if (h >= n_head) {
+        return;
+    }
+
+    const uint visible_len = packed_len + 1u;
+    const uint block_start = block * chunk_size;
+    const uint block_end = min(block_start + chunk_size, visible_len);
+    threadgroup float kv_tile[QQA_ADAPTIVE_GQA6_TILE * QQA_ADAPTIVE_HD];
+    threadgroup float probabilities[QQA_ADAPTIVE_GQA6_HEADS][QQA_ADAPTIVE_SG];
+
+    float m = -1e30f;
+    float l = 0.0f;
+    float o[QQA_ADAPTIVE_HD / QQA_ADAPTIVE_SG];
+    for (uint i = 0; i < QQA_ADAPTIVE_HD / QQA_ADAPTIVE_SG; ++i) {
+        o[i] = 0.0f;
+    }
+
+    for (uint tile_start = block_start; tile_start < block_end;
+         tile_start += QQA_ADAPTIVE_GQA6_TILE) {
+        const uint tile_len = min(tile_start + QQA_ADAPTIVE_GQA6_TILE, block_end) - tile_start;
+        const uint tile_values = tile_len * head_dim;
+
+        for (uint index = thread_index; index < tile_values;
+             index += QQA_ADAPTIVE_GQA6_THREADS) {
+            const uint position_in_tile = index / head_dim;
+            const uint d = index - position_in_tile * head_dim;
+            const uint position = tile_start + position_in_tile;
+            if (position < packed_len) {
+                const uint row = position * n_head_kv + kv_h;
+                kv_tile[index] = qqa_adaptive_uniform_value(
+                    k_base, k_metadata, k_sidecar, row, d, uniform_tier);
+            } else {
+                kv_tile[index] = current_k[kv_h * head_dim + d];
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        float score = -1e30f;
+        if (lane < tile_len) {
+            threadgroup const float4* key =
+                (threadgroup const float4*)(kv_tile + lane * head_dim);
+            device const float4* query =
+                (device const float4*)(Q + h * head_dim);
+            float dot = 0.0f;
+            for (uint d4 = 0; d4 < head_dim / 4; ++d4) {
+                const float4 k4 = key[d4];
+                const float4 q4 = query[d4];
+                dot += q4.x * k4.x + q4.y * k4.y + q4.z * k4.z + q4.w * k4.w;
+            }
+            score = dot * scale;
+            if (!isfinite(score)) {
+                atomic_fetch_or_explicit(status, 64u, memory_order_relaxed);
+            }
+        }
+
+        const float tile_max = simd_max(score);
+        const float m_new = max(m, tile_max);
+        const float correction = exp(m - m_new);
+        const float probability = lane < tile_len ? exp(score - m_new) : 0.0f;
+        l = l * correction + simd_sum(probability);
+        probabilities[local_h][lane] = probability;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (uint index = thread_index; index < tile_values;
+             index += QQA_ADAPTIVE_GQA6_THREADS) {
+            const uint position_in_tile = index / head_dim;
+            const uint d = index - position_in_tile * head_dim;
+            const uint position = tile_start + position_in_tile;
+            if (position < packed_len) {
+                const uint row = position * n_head_kv + kv_h;
+                kv_tile[index] = qqa_adaptive_uniform_value(
+                    v_base, v_metadata, v_sidecar, row, d, uniform_tier);
+            } else {
+                kv_tile[index] = current_v[kv_h * head_dim + d];
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (uint dl = 0; dl < QQA_ADAPTIVE_HD / QQA_ADAPTIVE_SG; ++dl) {
+            const uint d = lane + dl * QQA_ADAPTIVE_SG;
+            float acc = 0.0f;
+            for (uint s = 0; s < tile_len; ++s) {
+                acc += probabilities[local_h][s] * kv_tile[s * head_dim + d];
+            }
+            o[dl] = o[dl] * correction + acc;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        m = m_new;
+    }
+
+    const uint mb = h * n_blocks + block;
+    if (lane == 0) {
+        partial_m[mb] = m;
+        partial_l[mb] = l;
+    }
+    const uint out_base = mb * head_dim;
+    for (uint dl = 0; dl < QQA_ADAPTIVE_HD / QQA_ADAPTIVE_SG; ++dl) {
+        const uint d = lane + dl * QQA_ADAPTIVE_SG;
+        partial_o[out_base + d] = o[dl];
+    }
+}
+
+kernel void qwen35_qbit_adaptive_decode_splitk_stage2(
+    device const float* gate [[buffer(0)]],
+    device const float* partial_o [[buffer(1)]],
+    device const float* partial_m [[buffer(2)]],
+    device const float* partial_l [[buffer(3)]],
+    device float* out [[buffer(4)]],
+    device atomic_uint* status [[buffer(5)]],
+    constant uint& n_head [[buffer(6)]],
+    constant uint& head_dim [[buffer(7)]],
+    constant uint& n_blocks [[buffer(8)]],
+    uint h [[threadgroup_position_in_grid]],
+    ushort lane [[thread_index_in_simdgroup]]) {
+    if (h >= n_head || head_dim != QQA_ADAPTIVE_HD) {
+        return;
+    }
+
+    float m = -1e30f;
+    for (uint block = 0; block < n_blocks; ++block) {
+        m = max(m, partial_m[h * n_blocks + block]);
+    }
+
+    float l_total = 0.0f;
+    for (uint block = 0; block < n_blocks; ++block) {
+        const uint mb = h * n_blocks + block;
+        l_total += partial_l[mb] * exp(partial_m[mb] - m);
+    }
+    const float inv_l = l_total > 0.0f ? 1.0f / l_total : 0.0f;
+
+    for (uint dl = 0; dl < QQA_ADAPTIVE_HD / QQA_ADAPTIVE_SG; ++dl) {
+        const uint d = lane + dl * QQA_ADAPTIVE_SG;
+        float acc = 0.0f;
+        for (uint block = 0; block < n_blocks; ++block) {
+            const uint mb = h * n_blocks + block;
+            acc += partial_o[mb * head_dim + d] * exp(partial_m[mb] - m);
+        }
+        const uint index = h * head_dim + d;
+        const float g = gate[index];
+        const float value = acc * inv_l / (1.0f + exp(-g));
+        out[index] = value;
+        if (!isfinite(g) || !isfinite(value)) {
+            atomic_fetch_or_explicit(status, 128u, memory_order_relaxed);
+        }
+    }
+}

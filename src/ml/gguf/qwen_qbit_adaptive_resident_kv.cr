@@ -398,6 +398,10 @@ module ML::GGUF
       @@gqa6_pipeline_mutex = Mutex.new
       @@prefill_gqa6_pipelines = Hash(Int32, ML::Metal::ComputePipeline).new
       @@prefill_gqa6_pipeline_mutex = Mutex.new
+      @@decode_splitk_stage1_pipelines = Hash(Int32, ML::Metal::ComputePipeline).new
+      @@decode_splitk_stage1_pipeline_mutex = Mutex.new
+      @@decode_splitk_stage2_pipeline : ML::Metal::ComputePipeline?
+      @@decode_splitk_stage2_pipeline_mutex = Mutex.new
       @@pack_pipeline : ML::Metal::ComputePipeline?
       @@pack_pipeline_mutex = Mutex.new
       @@finalize_pipeline : ML::Metal::ComputePipeline?
@@ -619,7 +623,7 @@ module ML::GGUF
                 command, q_source, gate_source, k_source, v_source,
                 k_base, k_metadata, k_sidecar,
                 v_base, v_metadata, v_sidecar,
-                output, status, packed_len, chunk_tokens, source_token_offset,
+                output, status, cache.max_seq, packed_len, chunk_tokens, source_token_offset,
                 n_head, cache.n_head_kv, cache.head_dim,
                 heads_per_group, scale, qualified_uniform_tier,
               )
@@ -962,6 +966,7 @@ module ML::GGUF
                                        v_sidecar : ML::MetalBuffer,
                                        output : ML::MetalBuffer,
                                        status : ML::MetalBuffer,
+                                       max_seq : Int32,
                                        packed_len : Int32,
                                        token_count : Int32,
                                        source_token_offset : Int32,
@@ -971,6 +976,21 @@ module ML::GGUF
                                        heads_per_group : Int32,
                                        scale : Float32,
                                        uniform_tier : QwenQBitAdaptiveKV::Tier?) : Nil
+        if QwenQBitAdaptiveMetalPolicy.decode_splitk?(
+             packed_len, token_count, !uniform_tier.nil?,
+             ENV["QWEN35_ADAPTIVE_SPLITK"]?,
+             ENV["QWEN35_ADAPTIVE_SPLITK_MIN_CTX"]?,
+           )
+          encode_decode_splitk(
+            command, q_source, gate_source, k_source, v_source,
+            k_base, k_metadata, k_sidecar,
+            v_base, v_metadata, v_sidecar,
+            output, status, max_seq, packed_len, n_head, n_head_kv, head_dim,
+            heads_per_group, scale, uniform_tier.not_nil!,
+          )
+          return
+        end
+
         encoder = ML::Metal::ComputeEncoder.new(command)
         encoder.set_pipeline(prefill_gqa6_pipeline)
         encoder.set_buffer(q_source, 0)
@@ -996,6 +1016,104 @@ module ML::GGUF
         encoder.set_value(uniform_tier ? uniform_tier.value.to_u32 : UInt32::MAX, 20)
         encoder.dispatch_threadgroups({n_head_kv, token_count, 1}, {192, 1, 1})
         encoder.end_encoding
+      end
+
+      private def encode_decode_splitk(command : ML::Metal::CommandBuffer,
+                                       q_source : ML::MetalBuffer,
+                                       gate_source : ML::MetalBuffer,
+                                       k_source : ML::MetalBuffer,
+                                       v_source : ML::MetalBuffer,
+                                       k_base : ML::MetalBuffer,
+                                       k_metadata : ML::MetalBuffer,
+                                       k_sidecar : ML::MetalBuffer,
+                                       v_base : ML::MetalBuffer,
+                                       v_metadata : ML::MetalBuffer,
+                                       v_sidecar : ML::MetalBuffer,
+                                       output : ML::MetalBuffer,
+                                       status : ML::MetalBuffer,
+                                       max_seq : Int32,
+                                       packed_len : Int32,
+                                       n_head : Int32,
+                                       n_head_kv : Int32,
+                                       head_dim : Int32,
+                                       heads_per_group : Int32,
+                                       scale : Float32,
+                                       uniform_tier : QwenQBitAdaptiveKV::Tier) : Nil
+        chunk_size = adaptive_splitk_chunk_size
+        block_count = checked_i32(
+          (packed_len.to_i64 + 1_i64 + chunk_size.to_i64 - 1_i64) // chunk_size,
+          "adaptive split-K block count",
+        )
+        # Scratch.get keys by both tag and byte size. Size from the immutable
+        # cache capacity so growing decode does not retain one pool entry per
+        # 64-token block-count boundary.
+        scratch_block_count = checked_i32(
+          (max_seq.to_i64 + chunk_size.to_i64 - 1_i64) // chunk_size,
+          "adaptive split-K scratch block count",
+        )
+        partial_o = Qwen35Metal::Scratch.get(
+          :adaptive_qbit_splitk_o,
+          n_head.to_i64 * scratch_block_count * head_dim * sizeof(Float32),
+        )
+        partial_m = Qwen35Metal::Scratch.get(
+          :adaptive_qbit_splitk_m,
+          n_head.to_i64 * scratch_block_count * sizeof(Float32),
+        )
+        partial_l = Qwen35Metal::Scratch.get(
+          :adaptive_qbit_splitk_l,
+          n_head.to_i64 * scratch_block_count * sizeof(Float32),
+        )
+
+        stage1 = ML::Metal::ComputeEncoder.new(command)
+        stage1.set_pipeline(decode_splitk_stage1_pipeline)
+        stage1.set_buffer(q_source, 0)
+        stage1.set_buffer(k_source, 1)
+        stage1.set_buffer(v_source, 2)
+        stage1.set_buffer(k_base, 3)
+        stage1.set_buffer(k_metadata, 4)
+        stage1.set_buffer(k_sidecar, 5)
+        stage1.set_buffer(v_base, 6)
+        stage1.set_buffer(v_metadata, 7)
+        stage1.set_buffer(v_sidecar, 8)
+        stage1.set_buffer(partial_o, 9, ML::Metal::BufferAccess::Write)
+        stage1.set_buffer(partial_m, 10, ML::Metal::BufferAccess::Write)
+        stage1.set_buffer(partial_l, 11, ML::Metal::BufferAccess::Write)
+        stage1.set_buffer(status, 12, ML::Metal::BufferAccess::Write)
+        stage1.set_value(packed_len.to_u32, 13)
+        stage1.set_value(n_head.to_u32, 14)
+        stage1.set_value(n_head_kv.to_u32, 15)
+        stage1.set_value(head_dim.to_u32, 16)
+        stage1.set_value(heads_per_group.to_u32, 17)
+        stage1.set_value(scale, 18)
+        stage1.set_value(chunk_size.to_u32, 19)
+        stage1.set_value(block_count.to_u32, 20)
+        stage1.set_value(uniform_tier.value.to_u32, 21)
+        stage1.dispatch_threadgroups({n_head_kv, block_count, 1}, {192, 1, 1})
+        stage1.end_encoding
+
+        stage2 = ML::Metal::ComputeEncoder.new(command)
+        stage2.set_pipeline(decode_splitk_stage2_pipeline)
+        stage2.set_buffer(gate_source, 0)
+        stage2.set_buffer(partial_o, 1)
+        stage2.set_buffer(partial_m, 2)
+        stage2.set_buffer(partial_l, 3)
+        stage2.set_buffer(output, 4, ML::Metal::BufferAccess::Write)
+        stage2.set_buffer(status, 5, ML::Metal::BufferAccess::Write)
+        stage2.set_value(n_head.to_u32, 6)
+        stage2.set_value(head_dim.to_u32, 7)
+        stage2.set_value(block_count.to_u32, 8)
+        stage2.dispatch_threadgroups({n_head, 1, 1}, {32, 1, 1})
+        stage2.end_encoding
+      end
+
+      private def adaptive_splitk_chunk_size : Int32
+        raw = ENV["QWEN35_ADAPTIVE_SPLITK_CHUNK"]?
+        return 64 unless raw
+        value = raw.strip.to_i?
+        unless value && value > 0
+          raise ArgumentError.new("QWEN35_ADAPTIVE_SPLITK_CHUNK must be a positive integer")
+        end
+        value
       end
 
       private def qualified_uniform_prefill_tier(tier : QwenQBitAdaptiveKV::Tier?) : QwenQBitAdaptiveKV::Tier?
@@ -1070,6 +1188,30 @@ module ML::GGUF
               "qwen35_qbit_adaptive_prefill_chunk_gqa6_tile#{tile}",
               gqa6_source(tile),
               "qwen35_qbit_adaptive_prefill_chunk_gqa6",
+            )
+          }
+        end
+      end
+
+      private def decode_splitk_stage1_pipeline : ML::Metal::ComputePipeline
+        tile = gqa6_tile
+        @@decode_splitk_stage1_pipeline_mutex.synchronize do
+          @@decode_splitk_stage1_pipelines[tile] ||= ML::Metal::PipelineCache.get("qwen35_qbit_adaptive_decode_splitk_stage1_gqa6_tile#{tile}") {
+            ML::Metal::ComputePipeline.new(
+              "qwen35_qbit_adaptive_decode_splitk_stage1_gqa6_tile#{tile}",
+              gqa6_source(tile),
+              "qwen35_qbit_adaptive_decode_splitk_stage1_gqa6",
+            )
+          }
+        end
+      end
+
+      private def decode_splitk_stage2_pipeline : ML::Metal::ComputePipeline
+        @@decode_splitk_stage2_pipeline_mutex.synchronize do
+          @@decode_splitk_stage2_pipeline ||= ML::Metal::PipelineCache.get("qwen35_qbit_adaptive_decode_splitk_stage2") {
+            ML::Metal::ComputePipeline.new(
+              "qwen35_qbit_adaptive_decode_splitk_stage2",
+              SOURCE,
             )
           }
         end
