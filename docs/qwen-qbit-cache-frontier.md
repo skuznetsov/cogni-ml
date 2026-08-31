@@ -3144,3 +3144,29 @@ scratch as a compactness option for a future multi-flight design, but current
 scratch is already small and shared; halving it does not accelerate one-token
 decode on this M2 Max corridor. This was ordinary intermediate-format tuning,
 not LTP/WBA.
+
+### Rejected Q6_K batch-one ILP2 pipeline (2026-08-31)
+
+The production adaptive-decode profile showed that quantized weight reads, not
+adaptive attention, dominate the remaining one-token interval. Q6_K FFN-down
+alone accounts for a large repeated corridor, so a temporary kernel unrolled
+the 256-value block loop by two and accumulated the two blocks independently.
+This preserved the GGUF layout and total bytes while testing whether a single
+dependent accumulation chain was hiding useful instruction-level parallelism.
+
+The candidate passed the full-vector `1e-3` maximum-difference guard. A guarded
+same-process Apple M2 Max test used the real Qwen3.8-27B Q4_K_M weights, five
+warmups, ten alternating ABBA/BAAB-style blocks per Q6_K shape, and required at
+least 3% p50 improvement with at least 8/10 candidate wins. The dominant
+`17408 -> 5120` FFN-down shape regressed from `0.7386` to `0.7410 ms`
+(`-0.321%`, `3/10` wins). The output head changed from `3.1073` to `3.0935 ms`
+(`+0.447%`, `8/10`), recurrent QKV from `0.2804` to `0.2764 ms`
+(`+1.447%`, `7/10`), and the small projection from `0.1809` to `0.1780 ms`
+(`+1.639%`, `6/10`). None cleared the gate.
+
+The experiment therefore rejects block-loop ILP as the next performance lever:
+it does not reduce the dominant Q6_K byte stream, and the primary FFN-down
+corridor became slightly slower. The temporary kernel, pipeline, and diagnostic
+route were removed. A future Q6_K candidate must change the representation or
+eliminate a larger execution boundary, with quality and memory gates stated
+before integration. This was ordinary kernel scheduling, not LTP/WBA.

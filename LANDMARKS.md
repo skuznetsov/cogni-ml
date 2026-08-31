@@ -25571,3 +25571,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary P4 kernel specialization with unchanged cache representation and publication semantics.
 
 **decision:** Keep automatic prefix-only packing scoped to the previously verified uniform-BF16 M2 Max corridor. Keep uniform P4 on the generic pack path by default and retain `QWEN35_ADAPTIVE_PACK_PREFIX_QUANT=1` only as an attribution override. Reopen P4 when a candidate removes a larger enclosing unit, such as pack plus finalization or another command boundary.
+
+#### [LM-QWEN38-Q6K-ILP2-FALSIFIED-971] Block-loop ILP does not accelerate the dominant Q6_K corridor
+**context:** ml / Qwen3.8-27B / Metal / Q6_K / decode / instruction scheduling
+**state:** candidate rejected and removed; production kernel unchanged
+
+- claim: "A two-block software pipeline can preserve the current Q6_K operator contract."
+  source: a temporary batch-one Metal variant retained the GGUF layout and total weight bytes, unrolled the 256-value block loop by two, and used independent accumulators before the existing SIMD reduction. Full-vector validation against the current kernel passed the predeclared `1e-3` maximum-difference guard on real Qwen3.8-27B Q6_K tensors.
+  verified_at: 2026-08-31
+  decay_trigger: Q6_K arithmetic, weight layout, Metal compiler/runtime, validation boundary, model, or device changes
+  trust: {F:0.98,G:0.05,R:0.95}
+
+- claim: "Exposing block-level instruction parallelism does not produce a promotable speedup on the measured Apple M2 Max shapes."
+  source: a guarded same-process run used five warmups and ten alternating paired blocks. Current/candidate completed-command p50 and candidate wins were `0.7386/0.7410 ms`, `3/10` for the dominant `17408 -> 5120` FFN-down; `3.1073/3.0935 ms`, `8/10` for `5120 -> 248320`; `0.2804/0.2764 ms`, `7/10` for `5120 -> 10240`; and `0.1809/0.1780 ms`, `6/10` for `5120 -> 1024`. The gate required at least `3%` improvement and `8/10` wins; the main corridor regressed `0.321%`, and every other shape stayed below `1.7%`.
+  verified_at: 2026-08-31
+  decay_trigger: Q6_K kernel family, device, compiler/runtime, shape mix, timing boundary, or weight representation changes
+  trust: {F:0.98,G:0.05,R:0.94}
+
+**Adversary:** Passing numerical parity only establishes that the local scheduling transformation was safe. It neither lowers the Q6_K byte stream nor removes a command boundary. The output-head row reached `8/10` wins but its sub-percent median is below the value gate; promoting it would optimize a proxy while adding another kernel route. This result rejects the tested ILP2 implementation, not a representation that materially reduces bytes.
+
+**Value proxy:** Independent accumulators and apparent instruction overlap are mechanism coordinates. Complete-command timing on the repeated FFN-down shape is the first value boundary, and it regressed.
+
+**LTP/WBA:** Not claimed. This was ordinary loop unrolling and instruction scheduling with unchanged representation and boundaries.
+
+**decision:** Remove the temporary kernel, pipeline, and diagnostic route. Keep the existing Q6_K batch-one kernel. Do not retry local block scheduling without a new byte or boundary argument; the next admissible frame must reduce Q6_K traffic or eliminate a larger execution unit.
