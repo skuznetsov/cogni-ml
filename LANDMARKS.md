@@ -25093,3 +25093,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary loop fusion with the serial attention route as the broader operational fallback.
 
 **decision:** Automatically use fused stage2 only for uniform BF16 on exact `Apple M2 Max`. Keep P4 and other devices on the legacy reducer. Preserve `QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED=0` as exact runtime rollback and `1` as the explicit experimental force switch; malformed values fail closed. Do not widen the speed claim beyond the measured M2 Max 8K BF16 adaptive interval without cross-device and whole-model decode A/B evidence.
+
+#### [LM-QWEN38-ADAPTIVE-PACK-PREFIX-952] Stored code prefixes can be found without resolving discarded bits
+**context:** ml / Qwen3.8 / adaptive QBit / Metal / pack quantizer / prefix search
+**state:** verified BF16-only bounded promotion on Apple M2 Max; P4 auto-promotion rejected; whole-engine speed open
+
+- claim: "Three- and four-step prefix searches produce the exact legacy P4/P5 wire payload."
+  source: the prefix-only source searches the same Float32 midpoint boundaries at QBit groups of 16 codes for P4 and eight codes for P5, preserves the negative-code complement, and constructs only the stored four or five planes. It retains the generic entry point, per-row tier validation, metadata, sidecars, status/finalizer, and publication path. A mixed P4/P5/BF16/F32 Metal contract forces both source variants and requires byte-identical K/V snapshots. The policy suite passes `8/8`, the adaptive resident suite passes `18/18`, and CPU-only generation builds.
+  verified_at: 2026-08-31
+  decay_trigger: QBit centroids or boundary ties, plane order, negative-code mapping, row-tier validation, sidecar/layout, source specialization, compiler/runtime, or cache publication changes
+  trust: {F:0.99,G:0.28,R:0.97}
+
+- claim: "The measured M2 Max BF16 route reduces pack work, with a much smaller complete-command gain."
+  source: fresh-process A/B/B/A screens measured the isolated pack command about `52.5%` lower for 64-token BF16 and `50.7%` lower at prefix 8,192/chunk one. The complete 8K BF16 adaptive attention, pack, and finalizer interval was about `2.1%` lower by pair means. P4's isolated pack was also faster, but its complete-command row was noisy and did not establish a win. A guarded 360-token Qwen3.8-27B run preserved top-1 `2/2`, ranked/set top-2 `2/2`, ECS `1.0`, all 16 adaptive owners, no Float32 owner, consistent publication, and `3.7647x` density.
+  verified_at: 2026-08-31
+  decay_trigger: device, Metal compiler/runtime, tier distribution, append shape, attention/pack command composition, profiler semantics, model, prompt, or quality schema changes
+  trust: {F:0.98,G:0.11,R:0.94}
+
+**Adversary:** A roughly 50% pack-kernel reduction is not a 50% engine gain; attention dominates the complete command, whose measured BF16 improvement was about `2.1%`. P4 demonstrates the proxy hazard: its isolated pack interval improved while the full route remained noisy. Exact mathematical grouping is covered over a deterministic mixed snapshot, but midpoint-adjacent and signed-zero vectors remain a P2 test gap. A future centroid, rounding, or compiler change must reopen byte parity. The second lazily compiled pack pipeline can also add unmeasured first-use cost.
+
+**Value proxy:** Search steps and isolated pack GPU time explain the local mechanism. The admission coordinates remain complete adaptive command time, exact cache bytes, top-1/top-2/ECS, ownership/publication, memory safety, and end-to-end inference.
+
+**LTP/WBA:** Not claimed. This is ordinary compile-time quantizer specialization with the canonical seven-step source as its dual frame.
+
+**decision:** Automatically select prefix-only pack quantization only for each uniform-BF16 K or V plan on exact `Apple M2 Max`. Keep P4/P5/F32, nonuniform plans, and other devices canonical by default. Preserve `QWEN35_ADAPTIVE_PACK_PREFIX_QUANT=0` as exact rollback and `1` as the experimental force switch; malformed values fail closed. Do not widen the performance claim beyond the measured pack and 8K BF16 adaptive-command intervals without new evidence.

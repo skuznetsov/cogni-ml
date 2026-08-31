@@ -17,6 +17,7 @@ constant uint QQP_P5 = 1;
 constant uint QQP_BF16 = 2;
 constant uint QQP_F32 = 3;
 constant uint QQP_SUCCESS = 0xa17ecafeu;
+constant bool QQP_PREFIX_QUANT = false;
 
 constant float QQP_POSITIVE_LEVELS[128] = {
     0.00491977f, 0.01475981f, 0.02460130f, 0.03444523f,
@@ -90,6 +91,49 @@ inline uint qqp_quantize_raw_code(float value) {
     return negative ? 255u - low : low;
 }
 
+// The resident wire format stores only the four most-significant code bits
+// for P4/BF16/F32 and five for P5. Search the exact boundary between those
+// prefix groups instead of resolving the discarded low bits.
+inline uint qqp_quantize_p4_code(float value) {
+    const bool negative = signbit(value);
+    const float magnitude = abs(value);
+    uint low = 0u;
+    uint high = 7u;
+    for (uint step = 0u; step < 3u; ++step) {
+        const uint mid = (low + high) >> 1;
+        const uint boundary_index = (mid + 1u) * 16u - 1u;
+        const float boundary =
+            (QQP_POSITIVE_LEVELS[boundary_index] +
+             QQP_POSITIVE_LEVELS[boundary_index + 1u]) * 0.5f;
+        if (magnitude <= boundary) {
+            high = mid;
+        } else {
+            low = mid + 1u;
+        }
+    }
+    return negative ? 15u - low : low;
+}
+
+inline uint qqp_quantize_p5_code(float value) {
+    const bool negative = signbit(value);
+    const float magnitude = abs(value);
+    uint low = 0u;
+    uint high = 15u;
+    for (uint step = 0u; step < 4u; ++step) {
+        const uint mid = (low + high) >> 1;
+        const uint boundary_index = (mid + 1u) * 8u - 1u;
+        const float boundary =
+            (QQP_POSITIVE_LEVELS[boundary_index] +
+             QQP_POSITIVE_LEVELS[boundary_index + 1u]) * 0.5f;
+        if (magnitude <= boundary) {
+            high = mid;
+        } else {
+            low = mid + 1u;
+        }
+    }
+    return negative ? 31u - low : low;
+}
+
 kernel void qwen35_qbit_adaptive_pack_row(
     device const float* source [[buffer(0)]],
     device uchar* base [[buffer(1)]],
@@ -155,12 +199,36 @@ kernel void qwen35_qbit_adaptive_pack_row(
     }
 
     uchar plane_bytes[5] = {0, 0, 0, 0, 0};
-    for (uint i = 0; i < 8; ++i) {
-        const float normalized = sigma == 0.0f ? 0.0f : (values[i] - mean) / sigma;
-        const uint raw_code = qqp_quantize_raw_code(normalized);
-        for (uint plane = 0; plane < 5; ++plane) {
-            if ((raw_code & (1u << (7u - plane))) != 0) {
-                plane_bytes[plane] |= (uchar)(1u << i);
+    if (QQP_PREFIX_QUANT) {
+        if (tier == QQP_P5) {
+            for (uint i = 0; i < 8; ++i) {
+                const float normalized = sigma == 0.0f ? 0.0f : (values[i] - mean) / sigma;
+                const uint prefix_code = qqp_quantize_p5_code(normalized);
+                for (uint plane = 0; plane < 5u; ++plane) {
+                    if ((prefix_code & (1u << (4u - plane))) != 0) {
+                        plane_bytes[plane] |= (uchar)(1u << i);
+                    }
+                }
+            }
+        } else {
+            for (uint i = 0; i < 8; ++i) {
+                const float normalized = sigma == 0.0f ? 0.0f : (values[i] - mean) / sigma;
+                const uint prefix_code = qqp_quantize_p4_code(normalized);
+                for (uint plane = 0; plane < 4u; ++plane) {
+                    if ((prefix_code & (1u << (3u - plane))) != 0) {
+                        plane_bytes[plane] |= (uchar)(1u << i);
+                    }
+                }
+            }
+        }
+    } else {
+        for (uint i = 0; i < 8; ++i) {
+            const float normalized = sigma == 0.0f ? 0.0f : (values[i] - mean) / sigma;
+            const uint raw_code = qqp_quantize_raw_code(normalized);
+            for (uint plane = 0; plane < 5; ++plane) {
+                if ((raw_code & (1u << (7u - plane))) != 0) {
+                    plane_bytes[plane] |= (uchar)(1u << i);
+                }
             }
         }
     }

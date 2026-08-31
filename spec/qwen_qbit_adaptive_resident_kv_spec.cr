@@ -266,6 +266,53 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
     ML::MetalBuffer.stats[:live_bytes].should eq(live_before)
   end
 
+  it "keeps prefix-only pack quantization byte-identical across every tier" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    token_count = 8
+    n_head_kv = 4
+    head_dim = 256
+    row_count = token_count * n_head_kv
+    value_count = row_count * head_dim
+    rng = Random.new(0xA991F1_u64)
+    k = Array(Float32).new(value_count) { ((rng.next_float - 0.5) * 4.0).to_f32 }
+    v = Array(Float32).new(value_count) { ((rng.next_float - 0.5) * 4.0).to_f32 }
+    k_plan = adaptive.plan(Array.new(row_count) { |i| tier.from_value(i % 4) })
+    v_plan = adaptive.plan(Array.new(row_count) { |i| tier.from_value((i + 2) % 4) })
+    legacy = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
+      k_plan, v_plan, token_count, n_head_kv, head_dim,
+    )
+    prefix = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
+      k_plan, v_plan, token_count, n_head_kv, head_dim,
+    )
+    buffers = [ML::MetalBuffer.from_array(k), ML::MetalBuffer.from_array(v)]
+    previous_prefix_quant = ENV["QWEN35_ADAPTIVE_PACK_PREFIX_QUANT"]?
+    begin
+      ENV["QWEN35_ADAPTIVE_PACK_PREFIX_QUANT"] = "0"
+      ML::GGUF::QwenQBitAdaptiveResidentKV.append_from_metal(
+        legacy, buffers[0], buffers[1], token_count,
+      )
+      ENV["QWEN35_ADAPTIVE_PACK_PREFIX_QUANT"] = "1"
+      ML::GGUF::QwenQBitAdaptiveResidentKV.append_from_metal(
+        prefix, buffers[0], buffers[1], token_count,
+      )
+
+      legacy_k, legacy_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(legacy)
+      prefix_k, prefix_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(prefix)
+      prefix_k.payload.should eq(legacy_k.payload)
+      prefix_v.payload.should eq(legacy_v.payload)
+    ensure
+      if previous_prefix_quant
+        ENV["QWEN35_ADAPTIVE_PACK_PREFIX_QUANT"] = previous_prefix_quant
+      else
+        ENV.delete("QWEN35_ADAPTIVE_PACK_PREFIX_QUANT")
+      end
+      buffers.each(&.release)
+      prefix.release
+      legacy.release
+    end
+  end
+
   it "attends over packed history plus an exact current chunk before publishing the append" do
     pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
 

@@ -463,6 +463,13 @@ module ML::GGUF
         raise "adaptive fused split-K stage2 source patch no longer matches"
       end
       PACK_SOURCE = {{ read_file("#{__DIR__}/kernels/qbit_adaptive_pack_qwen35.metal") }}
+      PACK_SOURCE_PREFIX_QUANT = PACK_SOURCE.sub(
+        "constant bool QQP_PREFIX_QUANT = false;",
+        "constant bool QQP_PREFIX_QUANT = true;",
+      )
+      if PACK_SOURCE_PREFIX_QUANT == PACK_SOURCE
+        raise "adaptive prefix-only pack quantizer source patch no longer matches"
+      end
       @@gqa6_pipelines = Hash(Int32, ML::Metal::ComputePipeline).new
       @@gqa6_pipeline_mutex = Mutex.new
       @@prefill_gqa6_pipelines = Hash(Tuple(Int32, Bool), ML::Metal::ComputePipeline).new
@@ -471,7 +478,7 @@ module ML::GGUF
       @@decode_splitk_stage1_pipeline_mutex = Mutex.new
       @@decode_splitk_stage2_pipelines = Hash(Bool, ML::Metal::ComputePipeline).new
       @@decode_splitk_stage2_pipeline_mutex = Mutex.new
-      @@pack_pipeline : ML::Metal::ComputePipeline?
+      @@pack_pipelines = Hash(Bool, ML::Metal::ComputePipeline).new
       @@pack_pipeline_mutex = Mutex.new
       @@finalize_pipeline : ML::Metal::ComputePipeline?
       @@finalize_pipeline_mutex = Mutex.new
@@ -575,7 +582,7 @@ module ML::GGUF
         raise "Metal disabled (cpu_only)"
       {% else %}
         raise "Metal not available" unless Qwen35Metal.available?
-        cache.with_append(token_count) do |k_base, k_metadata, k_sidecar, v_base, v_metadata, v_sidecar, _k_plan, _v_plan, start_token|
+        cache.with_append(token_count) do |k_base, k_metadata, k_sidecar, v_base, v_metadata, v_sidecar, k_plan, v_plan, start_token|
           status = upload(Bytes.new(sizeof(UInt32), 0_u8))
           begin
             source_row_offset = checked_u32(source_token_offset.to_i64 * cache.n_head_kv, "source row offset")
@@ -583,9 +590,11 @@ module ML::GGUF
             row_count = checked_i32(token_count.to_i64 * cache.n_head_kv, "row count")
             command = ML::Metal::CommandBuffer.new
             encode_pack(command, k_source, k_base, k_metadata, k_sidecar, status,
-              source_row_offset, destination_row_offset, row_count)
+              source_row_offset, destination_row_offset, row_count,
+              k_plan.uniform_tier == QwenQBitAdaptiveKV::Tier::BF16)
             encode_pack(command, v_source, v_base, v_metadata, v_sidecar, status,
-              source_row_offset, destination_row_offset, row_count)
+              source_row_offset, destination_row_offset, row_count,
+              v_plan.uniform_tier == QwenQBitAdaptiveKV::Tier::BF16)
             encode_finalize(command, status)
             if gpu_elapsed_seconds.null?
               command.commit_and_wait
@@ -704,9 +713,11 @@ module ML::GGUF
                 heads_per_group, scale, qualified_uniform_tier,
               )
               encode_pack(command, k_source, k_base, k_metadata, k_sidecar, status,
-                source_row_offset, destination_row_offset, row_count)
+                source_row_offset, destination_row_offset, row_count,
+                uniform_tier == QwenQBitAdaptiveKV::Tier::BF16)
               encode_pack(command, v_source, v_base, v_metadata, v_sidecar, status,
-                source_row_offset, destination_row_offset, row_count)
+                source_row_offset, destination_row_offset, row_count,
+                uniform_tier == QwenQBitAdaptiveKV::Tier::BF16)
               source_token_offset += chunk_tokens
             end
           end
@@ -1025,9 +1036,10 @@ module ML::GGUF
                               status : ML::MetalBuffer,
                               source_row_offset : UInt32,
                               destination_row_offset : UInt32,
-                              row_count : Int32) : Nil
+                              row_count : Int32,
+                              automatic_prefix_quant : Bool) : Nil
         encoder = ML::Metal::ComputeEncoder.new(command)
-        encoder.set_pipeline(pack_pipeline)
+        encoder.set_pipeline(pack_pipeline(automatic: automatic_prefix_quant))
         encoder.set_buffer(source, 0)
         encoder.set_buffer(base, 1, ML::Metal::BufferAccess::Write)
         encoder.set_buffer(metadata, 2)
@@ -1352,10 +1364,20 @@ module ML::GGUF
         end
       end
 
-      private def pack_pipeline : ML::Metal::ComputePipeline
+      private def pack_pipeline(automatic : Bool) : ML::Metal::ComputePipeline
+        prefix_quant = QwenQBitAdaptiveMetalPolicy.pack_prefix_quant?(
+          ML::Metal::Device.instance.name,
+          automatic,
+          ENV["QWEN35_ADAPTIVE_PACK_PREFIX_QUANT"]?,
+        )
+        suffix = prefix_quant ? "_prefix_quant" : ""
         @@pack_pipeline_mutex.synchronize do
-          @@pack_pipeline ||= ML::Metal::PipelineCache.get("qwen35_qbit_adaptive_pack_row") {
-            ML::Metal::ComputePipeline.new("qwen35_qbit_adaptive_pack_row", PACK_SOURCE)
+          @@pack_pipelines[prefix_quant] ||= ML::Metal::PipelineCache.get("qwen35_qbit_adaptive_pack_row#{suffix}") {
+            ML::Metal::ComputePipeline.new(
+              "qwen35_qbit_adaptive_pack_row#{suffix}",
+              prefix_quant ? PACK_SOURCE_PREFIX_QUANT : PACK_SOURCE,
+              "qwen35_qbit_adaptive_pack_row",
+            )
           }
         end
       end

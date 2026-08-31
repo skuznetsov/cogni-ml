@@ -58,6 +58,23 @@ describe ML::GGUF::QwenQBitAdaptiveMetalPolicy do
     end
   end
 
+  it "scopes prefix-only adaptive pack quantization to the measured M2 Max corridor" do
+    policy = ML::GGUF::QwenQBitAdaptiveMetalPolicy
+
+    policy.pack_prefix_quant?("Apple M2 Max", true).should be_true
+    policy.pack_prefix_quant?("Apple M2 Max", false).should be_false
+    policy.pack_prefix_quant?("Apple M2 Pro", true).should be_false
+    policy.pack_prefix_quant?("Unknown Metal Device", true).should be_false
+    policy.pack_prefix_quant?("Apple M2 Max", true, "0").should be_false
+    policy.pack_prefix_quant?("Apple M2 Pro", false, "1").should be_true
+    expect_raises(ArgumentError, /QWEN35_ADAPTIVE_PACK_PREFIX_QUANT/) do
+      policy.pack_prefix_quant?("Apple M2 Max", true, "")
+    end
+    expect_raises(ArgumentError, /QWEN35_ADAPTIVE_PACK_PREFIX_QUANT/) do
+      policy.pack_prefix_quant?("Apple M2 Max", true, "true")
+    end
+  end
+
   it "auto-admits register-local t4 only on measured M2 Max corridors" do
     policy = ML::GGUF::QwenQBitAdaptiveMetalPolicy
 

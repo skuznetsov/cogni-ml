@@ -11,7 +11,7 @@ require "../src/ml/gguf/qwen_qbit_adaptive_resident_kv"
 module Qwen35QBitAdaptivePrefillProbe
   extend self
 
-  MAX_PREFIX   =          8192
+  MAX_PREFIX   =         16384
   MAX_REPEATS  =            10
   SOURCE_CHUNK =            64
   SEED         = 0xA77B10C_u64
@@ -120,11 +120,18 @@ module Qwen35QBitAdaptivePrefillProbe
     )
     dequant_t4_override = ENV["QWEN35_ADAPTIVE_DEQUANT_T4"]?
     dequant_t4_mode = dequant_t4_override.nil? ? "auto" : dequant_t4_override.strip.inspect
-    puts %(probe device=#{device_name.inspect} tile=#{tile} dequant_t4_mode=#{dequant_t4_mode} seed=0x#{SEED.to_s(16)} fixed_snapshot=true)
-    puts "tier prefix chunk route    t4 pack_wall_ms fused_wall_ms prefill_pack_finalize_gpu_ms non_gpu_ms"
+    pack_prefix_quant_override = ENV["QWEN35_ADAPTIVE_PACK_PREFIX_QUANT"]?
+    pack_prefix_quant_mode = pack_prefix_quant_override.nil? ? "auto" : pack_prefix_quant_override.strip.inspect
+    puts %(probe device=#{device_name.inspect} tile=#{tile} dequant_t4_mode=#{dequant_t4_mode} pack_prefix_quant_mode=#{pack_prefix_quant_mode} seed=0x#{SEED.to_s(16)} fixed_snapshot=true)
+    puts "tier prefix chunk route    t4    pq pack_wall_ms pack_gpu_ms fused_wall_ms prefill_pack_finalize_gpu_ms non_gpu_ms"
     begin
       tier_names.each do |tier_name|
         tier = tier_for(tier_name)
+        selected_prefix_quant = ML::GGUF::QwenQBitAdaptiveMetalPolicy.pack_prefix_quant?(
+          device_name,
+          tier == ML::GGUF::QwenQBitAdaptiveKV::Tier::BF16,
+          pack_prefix_quant_override,
+        )
         pack_plan = ML::GGUF::QwenQBitAdaptiveKV.plan(
           Array.new((repeats + 1) * token_count * n_head_kv, tier),
         )
@@ -132,21 +139,26 @@ module Qwen35QBitAdaptivePrefillProbe
           pack_plan, pack_plan, (repeats + 1) * token_count, n_head_kv, head_dim,
         )
         pack_samples = Array(Float64).new(repeats)
+        pack_gpu_samples = Array(Float64).new(repeats)
         begin
           ML::GGUF::QwenQBitAdaptiveResidentKV.append_from_metal(
             pack_cache, k_buffer, v_buffer, token_count,
           )
           repeats.times do
             started = Time.instant
+            pack_gpu_elapsed_seconds = 0.0_f64
             ML::GGUF::QwenQBitAdaptiveResidentKV.append_from_metal(
               pack_cache, k_buffer, v_buffer, token_count,
+              gpu_elapsed_seconds: pointerof(pack_gpu_elapsed_seconds),
             )
             pack_samples << (Time.instant - started).total_milliseconds
+            pack_gpu_samples << pack_gpu_elapsed_seconds * 1000.0
           end
         ensure
           pack_cache.release
         end
         pack_ms = median(pack_samples)
+        pack_gpu_ms = median(pack_gpu_samples)
 
         prefixes.each do |prefix|
           splitk_uniform_tier = tier == ML::GGUF::QwenQBitAdaptiveKV::Tier::P4 ||
@@ -218,9 +230,9 @@ module Qwen35QBitAdaptivePrefillProbe
           end
           fused_wall_ms = median(wall_samples)
           fused_gpu_ms = median(gpu_samples)
-          printf "%4s %6d %5d %-8s %3s %12.3f %13.3f %28.3f %10.3f\n",
-            tier_name, prefix, token_count, route, selected_t4,
-            pack_ms, fused_wall_ms, fused_gpu_ms,
+          printf "%4s %6d %5d %-8s %3s %5s %12.3f %11.3f %13.3f %28.3f %10.3f\n",
+            tier_name, prefix, token_count, route, selected_t4, selected_prefix_quant,
+            pack_ms, pack_gpu_ms, fused_wall_ms, fused_gpu_ms,
             fused_wall_ms - fused_gpu_ms
         end
       end

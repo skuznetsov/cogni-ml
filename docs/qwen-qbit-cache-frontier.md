@@ -2712,3 +2712,44 @@ closed. Register pressure and the relative benefit may change with GPU
 generation, compiler, head dimension, block count, or tile. Cross-device
 timing and a direct whole-model decode A/B remain open. This is ordinary loop
 fusion, not LTP/WBA.
+
+### Prefix-only adaptive pack quantization (2026-08-31)
+
+The resident format stores only the four most-significant QBit code planes for
+P4, BF16, and F32 rows, and five planes for P5 rows. The canonical pack kernel
+previously resolved all eight code bits with a seven-step search before
+discarding the unused suffix. The prefix-only variant instead searches the
+exact P4 or P5 group boundary in three or four steps and constructs only the
+stored planes. It keeps the generic per-row tier and metadata validation,
+sidecar layout, status/finalizer, cache bytes, and publication boundary.
+
+This is a successor to the rejected dedicated-pipeline experiment above, not a
+reversal of its evidence. It uses the same generic entry point and does not
+bypass mixed-tier validation. A focused mixed P4/P5/BF16/F32 Metal contract
+forces legacy and prefix-only compilation and requires byte-for-byte identical
+K/V snapshots. The policy suite passes `8/8`, the full adaptive resident suite
+passes `18/18`, and CPU-only generation builds.
+
+Fresh-process A/B/B/A screens on Apple M2 Max measured the isolated 64-token
+pack command about `41.8%` lower for P4 and `52.5%` lower for BF16. At prefix
+8,192 and chunk one, pack GPU time was about `44.6%` lower for P4 and `50.7%`
+lower for BF16. The complete BF16 adaptive attention, pack, and finalizer
+interval was only about `2.1%` lower by pair means. The corresponding P4
+complete-command row was noisy and did not establish a win, so P4 is excluded
+from automatic selection despite its faster isolated pack step.
+
+Unset `QWEN35_ADAPTIVE_PACK_PREFIX_QUANT` therefore selects prefix-only packing
+only for uniform BF16 on exact `Apple M2 Max`. P4, P5, F32, nonuniform per-row
+plans, and other devices remain on the canonical seven-step source by default.
+Admission is evaluated independently for K and V, so a uniform-BF16 plan may
+use the prefix source even when its peer plan is nonuniform. `0` is the exact
+legacy rollback and `1` is an explicit experimental force switch;
+malformed configured values fail closed. A guarded 360-token Qwen3.8-27B
+Q4_K_M check preserved top-1 `2/2`, ranked/set top-2 `2/2`, ECS mean/minimum
+`1.0/1.0`, all 16 adaptive owners, no Float32 owner, consistent publication,
+and `3.7647x` logical density.
+
+The admitted value is a bounded reduction in pack and one 8K BF16 adaptive
+command interval. Whole-model decode, end-to-end generation, cross-device
+occupancy, and broader tier distributions remain open. This is ordinary
+quantizer specialization, not LTP/WBA.

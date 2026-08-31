@@ -63,6 +63,19 @@ module ML::GGUF
       end
     end
 
+    def self.pack_prefix_quant?(device_name : String,
+                                uniform_bf16 : Bool,
+                                override : String? = nil) : Bool
+      return device_name == "Apple M2 Max" && uniform_bf16 unless override
+
+      case override.strip
+      when "0" then false
+      when "1" then true
+      else
+        raise ArgumentError.new("QWEN35_ADAPTIVE_PACK_PREFIX_QUANT must be 0 or 1")
+      end
+    end
+
     def self.automatic_dequant_t4?(token_count : Int32,
                                    splitk : Bool,
                                    uniform_p4 : Bool,
