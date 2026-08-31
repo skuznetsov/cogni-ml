@@ -25499,3 +25499,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary bounded host/GPU pipelining without a recomputed global descent certificate.
 
 **decision:** Remove the adaptive chain2 branch, cache-tail helper, test, and probe. Keep synchronous one-token adaptive decode. Reopen only if the removable host boundary becomes materially larger or a stop-aware rollback design is independently required; otherwise search for elimination of GPU work inside one adaptive token.
+
+#### [LM-QWEN38-ADAPTIVE-SPLITK-CHUNK-SWEEP-968] The 64-token split-K block remains the shared P4/BF16 geometry
+**context:** ml / Qwen3.8 geometry / adaptive QBit / Metal / long-context split-K decode
+**state:** alternatives rejected without source changes; existing runtime override retained
+
+- claim: "Neither halving nor doubling the current 64-token split-K block improves the dominant P4 route at 8K."
+  source: fresh guarded Apple M2 Max processes used the current synthetic fixed snapshot, prefix 8,192, one appended token, ten repetitions, automatic T4/prefix-pack policy, a 35% free-memory floor, and a 24,576 MiB process-tree cap. Complete attention/pack/finalize GPU medians for P4 were `3.087/1.862/2.872 ms` at chunks `32/64/128`; chunk 64 was respectively `39.7%` and `35.2%` lower than the alternatives. All processes exited normally.
+  verified_at: 2026-08-31
+  decay_trigger: split-K stage geometry, reducer, T4 policy, pack/finalizer, context, tier map, device, compiler/runtime, or timing probe changes
+  trust: {F:0.98,G:0.04,R:0.93}
+
+- claim: "The small BF16 chunk-128 local difference does not justify splitting the common policy."
+  source: the matching BF16 GPU medians were `1.960/1.745/1.709 ms` at chunks `32/64/128`; 128 was only `2.1%` below 64 in this unpaired synthetic screen. The measured coarse product map has four BF16 and twelve P4 attention layers, so a BF16-only policy branch would preserve the dominant P4 geometry while adding a weak, sub-gate special case.
+  verified_at: 2026-08-31
+  decay_trigger: BF16 layer share, stage2 cost, context, device, compiler/runtime, paired timing, or product tier map changes
+  trust: {F:0.97,G:0.03,R:0.88}
+
+**Adversary:** These are separate fresh processes rather than a same-process paired test, and absolute wall includes cache allocation/restore overhead. The P4 reversal is nevertheless large in the completed-command GPU interval. The BF16 result is too small to promote and could be process variance. This does not rule out a different split-K algorithm that reduces summary traffic or changes the tile/reduction frame.
+
+**Value proxy:** Block count and scratch bytes are mechanism coordinates. The complete adaptive command interval rejects 32 and 128 for the dominant tier before a noisier whole-model wall test.
+
+**LTP/WBA:** Not claimed. This was ordinary launch/reduction geometry with unchanged arithmetic and cache state.
+
+**decision:** Keep the default adaptive split-K chunk at 64 and retain `QWEN35_ADAPTIVE_SPLITK_CHUNK` for diagnostics. Do not add a BF16-only 128 branch from this screen. Move to removal of actual pack/dequant/attention work rather than more chunk-size tuning.

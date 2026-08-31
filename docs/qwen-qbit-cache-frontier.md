@@ -3074,3 +3074,22 @@ cache-tail helper, tests, and probe were removed. Synchronous one-token adaptive
 decode remains the default, and the next search targets removal of GPU work
 inside a token rather than another command-boundary rearrangement. This was
 ordinary bounded pipelining, not LTP/WBA.
+
+### Rejected adaptive split-K chunk 32/128 retune (2026-08-31)
+
+A guarded fixed-snapshot screen tested the existing split-K block-size override
+at an 8,192-token prefix, one appended token, and ten repetitions. Fresh Apple
+M2 Max processes kept automatic T4 and prefix-pack policy, the 35% free-memory
+floor, and the 24,576 MiB tree cap. Complete attention, pack, and finalizer GPU
+medians for P4 were `3.087/1.862/2.872 ms` at chunks `32/64/128`. The existing
+64-token block was therefore about 40% faster than 32 and 35% faster than 128
+on the dominant P4 tier.
+
+BF16 medians were `1.960/1.745/1.709 ms`. The 128-token result is only about
+2.1% below 64 in an unpaired process-level screen, while the measured product
+map has four BF16 and twelve P4 attention layers. That is insufficient evidence
+for a separate BF16 policy branch. No source route changed; chunk 64 remains the
+default and `QWEN35_ADAPTIVE_SPLITK_CHUNK` remains available for diagnostics.
+This rejects a simple geometry retune, not a future algorithm that removes
+summary traffic or dequantization work. It is ordinary split-K tuning, not
+LTP/WBA.
