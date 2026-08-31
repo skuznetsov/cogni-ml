@@ -79,20 +79,24 @@ def run_prefill_once(w : ML::GGUF::Qwen35Weights,
                      prepare_state : Bool,
                      final_top1 : Bool) : PrefillObservation
   state = ML::GGUF::Qwen35CPU::State.new(w.hparams, max_seq: prompt.size + 4)
-  ML::GGUF::Qwen35CPU.prepare_state_metal!(state, w.hparams) if prepare_state
-  ML::GGUF::Qwen35Metal::Profile.reset if profile
-  ML::GGUF::Qwen35Metal::Profile.enable! if profile
-  t0 = Time.instant
-  top1 = nil.as(Int32?)
-  top1_logit = nil.as(Float32?)
-  if final_top1
-    top1, top1_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, state)
-  else
-    ML::GGUF::Qwen35CPU.prefill_tokens(w, prompt, 0, state)
+  begin
+    ML::GGUF::Qwen35CPU.prepare_state_metal!(state, w.hparams) if prepare_state
+    ML::GGUF::Qwen35Metal::Profile.reset if profile
+    ML::GGUF::Qwen35Metal::Profile.enable! if profile
+    t0 = Time.instant
+    top1 = nil.as(Int32?)
+    top1_logit = nil.as(Float32?)
+    if final_top1
+      top1, top1_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, state)
+    else
+      ML::GGUF::Qwen35CPU.prefill_tokens(w, prompt, 0, state)
+    end
+    wall_ms = (Time.instant - t0).total_milliseconds
+    PrefillObservation.new(wall_ms, top1, top1_logit)
+  ensure
+    ML::GGUF::Qwen35Metal::Profile.disable! if profile
+    ML::GGUF::Qwen35CPU.release_state_metal!(state)
   end
-  wall_ms = (Time.instant - t0).total_milliseconds
-  ML::GGUF::Qwen35Metal::Profile.disable! if profile
-  PrefillObservation.new(wall_ms, top1, top1_logit)
 end
 
 record LifecycleTiming,
@@ -108,26 +112,30 @@ def run_prefill_lifecycle_once(w : ML::GGUF::Qwen35Weights,
   hp = w.hparams
   t0 = Time.instant
   state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: prompt.size + 4)
-  t1 = Time.instant
+  begin
+    t1 = Time.instant
 
-  if prepare_state
-    ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp)
+    if prepare_state
+      ML::GGUF::Qwen35CPU.prepare_state_metal!(state, hp)
+    end
+    t2 = Time.instant
+
+    if final_top1
+      ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, state)
+    else
+      ML::GGUF::Qwen35CPU.prefill_tokens(w, prompt, 0, state)
+    end
+    t3 = Time.instant
+
+    LifecycleTiming.new(
+      state_ms: (t1 - t0).total_milliseconds,
+      prepare_ms: (t2 - t1).total_milliseconds,
+      prefill_ms: (t3 - t2).total_milliseconds,
+      total_ms: (t3 - t0).total_milliseconds,
+    )
+  ensure
+    ML::GGUF::Qwen35CPU.release_state_metal!(state)
   end
-  t2 = Time.instant
-
-  if final_top1
-    ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, state)
-  else
-    ML::GGUF::Qwen35CPU.prefill_tokens(w, prompt, 0, state)
-  end
-  t3 = Time.instant
-
-  LifecycleTiming.new(
-    state_ms: (t1 - t0).total_milliseconds,
-    prepare_ms: (t2 - t1).total_milliseconds,
-    prefill_ms: (t3 - t2).total_milliseconds,
-    total_ms: (t3 - t0).total_milliseconds,
-  )
 end
 
 def percentile(xs : Array(Float64), pct : Int32) : Float64
