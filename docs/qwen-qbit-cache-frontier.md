@@ -2767,3 +2767,30 @@ The admitted value is a bounded reduction in pack and one 8K BF16 adaptive
 command interval. Whole-model decode, end-to-end generation, cross-device
 occupancy, and broader tier distributions remain open. This is ordinary
 quantizer specialization, not LTP/WBA.
+
+### Rejected explicit vec4 Q4_K dequantization (2026-08-31)
+
+A temporary compile-time variant replaced four adjacent scalar Q4_K byte loads
+with `uchar4` loads and retained four dequantized values in `float4`. It was
+default-off, restricted to exact Apple M2 Max and four-byte-aligned weight
+offsets, and covered both the plain B64 gate route and the fused H16
+up-plus-SwiGLU route. It changed neither the GGUF layout nor any public runtime
+contract.
+
+A real Qwen3.5-9B Q4_K_M parity contract compared every Float32 gate bit and
+every Float16 fused up-plus-SwiGLU bit with the scalar source and passed. The
+candidate was nevertheless slower in the product-shaped pre-gate: seven
+interleaved pp64 pairs measured `515.65 ms` scalar versus `520.28 ms` vec4 on
+average, about a `0.90%` regression, with scalar winning five pairs. Final
+top-1 and its logit within `1e-4` matched in all seven pairs. Profiling assigned
+`27.07%` of logical matmul-weight traffic to recurrent Q4_H16 FFN up/gate and
+`34.96%` to total Q4 FFN up/gate, so this was not a cold-route result.
+
+The explicit vector implementation, policy, and tests were removed. No 27B
+pp2048 run was admitted after the smaller product-shaped pre-gate failed. A
+plausible explanation is that Metal already coalesces the scalar loads and the
+explicit vector form increases register pressure, but no counter evidence
+promotes that explanation to a finding. The next Q4 FFN experiment must first
+measure the actual plain gate plus fused up/SwiGLU command interval and then
+demonstrate local work reduction as well as end-to-end parity. This is an
+ordinary rejected kernel specialization, not LTP/WBA.

@@ -25253,3 +25253,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** The legal H16 transport lowers the conversion coordinate but fails recomputation because end-to-end wall time does not descend. No LTP/WBA promotion is claimed.
 
 **decision:** Keep `QWEN35_ADDNORM_H16_FFN` default-off. Do not stack more conversion-only H16 flags. Move the next falsifier into the dominant recurrent Q4 FFN up/gate matmul itself, while preserving the current-kernel/opt-in dual frame and product-shaped parity gate.
+
+#### [LM-QWEN38-Q4K-B64-VEC4-FALSIFIED-958] Explicit vector dequantization regresses the hot B64 FFN route
+**context:** ml / Qwen3.8 / Metal / prefill / recurrent FFN / Q4_K dequantization
+**state:** compile-time vec4 candidate rejected and removed; scalar source retained
+
+- claim: "Four-value Q4_K loads can preserve the exact B64 gate and fused up-plus-SwiGLU outputs."
+  source: a temporary default-off `uchar4`/`float4` dequantization source was selected only for exact Apple M2 Max and four-byte-aligned weights. A real Qwen3.5-9B Q4_K_M contract compared every Float32 gate bit and every Float16 fused up-plus-SwiGLU bit against the scalar source and passed `1/1`. A release Metal compile smoke also completed normally.
+  verified_at: 2026-08-31
+  decay_trigger: Q4_K block layout, B64 kernel arithmetic, weight alignment, compiler vector lowering, or output representation changes
+  trust: {F:0.99,G:0.08,R:0.96}
+
+- claim: "The explicit vector form does not improve the measured product-shaped pp64 route."
+  source: one release binary ran seven interleaved scalar/vector pairs for Qwen3.5-9B Q4_K_M with prepared state and final-top1 validation. Scalar averaged `515.65 ms`; vec4 averaged `520.28 ms`, a `0.90%` vector regression. Scalar won `5/7` pairs, while top-1 and its logit within `1e-4` matched for `7/7`. The profile assigned `27.07%` of logical matmul-weight traffic to recurrent Q4_H16 FFN up/gate and `34.96%` to total Q4 FFN up/gate, so the candidate exercised a material corridor rather than a cold side route.
+  verified_at: 2026-08-31
+  decay_trigger: model, prompt length, device, compiler/runtime, B64 route policy, surrounding fusion, or timing method changes
+  trust: {F:0.99,G:0.05,R:0.93}
+
+**Adversary:** The scalar compiler may already coalesce adjacent byte loads, while explicit vectors can increase register pressure; no hardware-counter evidence establishes either mechanism. The row is one short-prompt model/device scope with quiet-host gating intentionally disabled. That is enough to reject a candidate whose mean moved in the wrong direction, not enough to derive a general scalar-versus-vector law.
+
+**Value proxy:** Aligned vector loads and exact output parity are mechanism and safety checks. The promotion coordinate is product-shaped wall time, which regressed; a larger 27B run was therefore skipped rather than spending memory on a failed pre-gate.
+
+**LTP/WBA:** Not claimed. This was ordinary compile-time load/dequantization specialization with the scalar source as the exact dual frame.
+
+**decision:** Remove the experimental vec4 source, policy, and tests; retain the scalar B64 implementation. Before attempting another paired Q4 kernel, isolate the actual gate plus fused up/SwiGLU route so a new schedule must reduce its own command interval without relying on whole-prefill noise.
