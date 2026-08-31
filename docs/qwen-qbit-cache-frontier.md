@@ -2881,6 +2881,32 @@ next kernel candidate must remove independently identified work rather than
 depending on branch folding. This was ordinary compile-time specialization,
 not LTP/WBA.
 
+### Rejected automatic P4 prefix-only pack widening (2026-08-31)
+
+The existing prefix-only pack source was forced on for uniform P4 at an
+8,192-token prefix and one appended token. It reliably reduced the isolated
+pack GPU median from `0.068--0.072 ms` to `0.036 ms`, confirming that its
+three-step P4 search removes real local work relative to the generic seven-step
+quantizer.
+
+That local result did not survive the full-operation value boundary. A first
+ten-repeat fresh-process A/B/B/A screen had complete attention, pack, and
+finalizer GPU medians ranging from `1.875` to `3.298 ms`, too noisy to decide.
+A second bounded screen temporarily raised the per-process median sample count
+to 100. Its generic/prefix/prefix/generic complete GPU medians were
+`1.992/1.860/1.878/1.881 ms`: one adjacent pair improved about `6.6%`, while
+the other improved only about `0.2%`. More importantly, the full wall medians
+were `2.650/2.599/2.669/2.614 ms`; generic and prefix pair means were both
+approximately `2.63 ms`, with the candidate slightly slower.
+
+The temporary repeat-limit change was removed. P4 therefore remains on the
+generic pack source by default, while the existing explicit force switch stays
+available for attribution. Uniform BF16 retains its independently established
+automatic prefix-only route. This rejects treating isolated pack throughput as
+end-to-end value; it does not reject a future fused pack/finalize path that
+removes a larger fraction of the command. This was ordinary kernel
+specialization, not LTP/WBA.
+
 ### Rejected adjacent-subblock Q4_K metadata reuse (2026-08-31)
 
 A temporary default-off B64 source variant paired only logical Q4_K subblocks

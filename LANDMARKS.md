@@ -25547,3 +25547,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary temporary intermediate compression with the existing FP32 route as the dual frame.
 
 **decision:** Remove the FP16 source variant, selector, scratch allocation split, and test extension. Keep `partial_o` in FP32. Reconsider half-width summaries only if multi-flight scratch pressure becomes the primary bottleneck; for one-token latency, move to eliminating metadata/dequantization work instead.
+
+#### [LM-QWEN38-ADAPTIVE-P4-PREFIX-PACK-FALSIFIED-970] Faster isolated P4 packing is neutral at the command boundary
+**context:** ml / Qwen3.8 geometry / adaptive QBit / Metal / P4 pack / value boundary
+**state:** default widening rejected; existing explicit diagnostic override retained
+
+- claim: "The prefix-only quantizer removes measurable work from uniform P4 packing."
+  source: guarded Apple M2 Max fresh-process probes at prefix 8,192 and one appended token repeatedly measured generic P4 pack GPU medians `0.068--0.072 ms` and prefix-only medians `0.036 ms`. The source uses the same canonical P4 encoding but reduces the midpoint search from seven steps to three.
+  verified_at: 2026-08-31
+  decay_trigger: pack arithmetic, P4 wire format, Metal compiler/runtime, device, or timing probe changes
+  trust: {F:0.98,G:0.04,R:0.94}
+
+- claim: "The isolated pack gain is not a stable end-to-end reason to widen automatic prefix-only selection to P4."
+  source: an initial ten-repeat A/B/B/A screen had complete attention, pack, and finalizer GPU medians from `1.875` to `3.298 ms` and was rejected as too noisy. A guarded 100-repeat generic/prefix/prefix/generic screen measured complete GPU medians `1.992/1.860/1.878/1.881 ms`: the two adjacent comparisons improved about `6.6%` and `0.2%`. Full wall medians were `2.650/2.599/2.669/2.614 ms`; generic and prefix pair means were both about `2.63 ms`, with prefix slightly slower. The temporary repeat-limit instrumentation was removed.
+  verified_at: 2026-08-31
+  decay_trigger: fused command composition, pack/finalizer boundary, allocator/host overhead, device, compiler/runtime, or product route changes
+  trust: {F:0.98,G:0.03,R:0.90}
+
+**Adversary:** The stable twofold isolated pack improvement can dominate a microbenchmark while contributing too little to the enclosing command. The GPU interval remained order-sensitive even with 100 samples, and wall time showed no gain. Multiplying the isolated delta by layer count would still be a proxy rather than a measured product speedup.
+
+**Value proxy:** Pack-only GPU time is diagnostic. The admitted value is the complete adaptive command and ultimately product token wall; the candidate failed the first stable wall boundary.
+
+**LTP/WBA:** Not claimed. This was ordinary P4 kernel specialization with unchanged cache representation and publication semantics.
+
+**decision:** Keep automatic prefix-only packing scoped to the previously verified uniform-BF16 M2 Max corridor. Keep uniform P4 on the generic pack path by default and retain `QWEN35_ADAPTIVE_PACK_PREFIX_QUANT=1` only as an attribution override. Reopen P4 when a candidate removes a larger enclosing unit, such as pack plus finalization or another command boundary.
