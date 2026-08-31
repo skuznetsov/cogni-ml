@@ -3170,3 +3170,39 @@ corridor became slightly slower. The temporary kernel, pipeline, and diagnostic
 route were removed. A future Q6_K candidate must change the representation or
 eliminate a larger execution boundary, with quality and memory gates stated
 before integration. This was ordinary kernel scheduling, not LTP/WBA.
+
+### Rejected 256-value Gaussian P4/P5 compression of Q6_K weights (2026-08-31)
+
+An offline CPU-only probe tested whether the existing Gaussian QBit codec could
+reduce Qwen3.8 Q6_K weight traffic before investing in a Metal format or
+decoder. It sampled 256 evenly spaced rows from the real
+`blk.0.ffn_down.weight` tensor (`17408 -> 5120`) and reconstructed every native
+256-value Q6_K block as Gaussian P4 and P5. The forecast charged four bytes of
+record metadata in addition to payload: 140 bytes for P4, 172 for P5, and 214
+for a native-Q6 escape, versus the original 210-byte Q6_K block.
+
+The original conservative policy admitted no compressed blocks. Across 17,408
+sampled blocks, the mean maximum-residual-to-block-standard-deviation ratios
+were `1.0068` for P4 and `0.5605` for P5; the `P4 <= 0.20`, `P5 <= 0.10`
+policy selected 100% native Q6 and therefore grew by `1.9%`. All-P5 forecast
+`1.221x` compression, but five deterministic operator inputs produced cosine
+between `0.9851` and `0.99978`, and one changed the sampled-row top-2 set.
+
+A bounded threshold sweep found no near-lossless operating point. A P5-only
+threshold of `0.35` forecast only `1.072x` compression and still reduced the
+worst cosine to `0.998997`. A threshold of `0.75` forecast `1.162x`
+compression but reduced the worst cosine to `0.997995`. Adding P4 at a `0.50`
+threshold reached `1.123x`, with worst cosine `0.998494`. Sampled-row top-1 and
+top-2 happened to remain stable for those mixed policies, but these are
+operator proxies, not token, semantic, or ECS measurements; the predeclared
+`>=1.12x`, cosine `>=0.99999`, exact ordered-top-2 gate was not met.
+An independent 32-row rerun of the `0.50/0.50` policy forecast `1.127x` but
+also swapped sampled-row top-1 on both random-uniform activation families.
+
+The likely structural cause is that one mean and standard deviation over 256
+values discard the smaller-scale structure already represented inside Q6_K.
+The result rejects this specific single-moment Gaussian block format before any
+Metal work. It does not reject a future weight format that preserves sub-block
+scales or explicitly codes a bounded residual. The offline probe is retained as
+a reproducible quality/size falsifier. This was ordinary approximate weight
+representation research, not LTP/WBA.

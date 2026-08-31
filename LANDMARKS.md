@@ -25595,3 +25595,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary loop unrolling and instruction scheduling with unchanged representation and boundaries.
 
 **decision:** Remove the temporary kernel, pipeline, and diagnostic route. Keep the existing Q6_K batch-one kernel. Do not retry local block scheduling without a new byte or boundary argument; the next admissible frame must reduce Q6_K traffic or eliminate a larger execution unit.
+
+#### [LM-QWEN38-Q6K-GAUSSIAN-WEIGHT-FALSIFIED-972] One-moment P4/P5 blocks do not preserve Q6_K operator quality
+**context:** ml / Qwen3.8-27B / Q6_K weights / approximate compression / offline falsifier
+**state:** Metal integration rejected; CPU-only falsifier retained
+
+- claim: "The tested variable-record format has meaningful byte capacity but no near-lossless operating point on the sampled Q6_K FFN-down tensor."
+  source: `bin/qwen35_q6_adaptive_weight_probe.cr` sampled 256 evenly spaced rows and 17,408 native blocks from real `blk.0.ffn_down.weight` (`17408 -> 5120`). Forecast records charged P4/P5/native-Q6 as `140/172/214` bytes versus 210 raw Q6_K bytes. All-P5 forecast `1.221x` compression but yielded cosine `0.9851--0.99978` over five deterministic activation families and changed one sampled-row top-2 set. Mixed thresholds at P5 `0.35` and `0.75` forecast `1.072x` and `1.162x`, with worst cosine `0.998997` and `0.997995`; P4/P5 `0.50/0.50` forecast `1.123x`, with worst cosine `0.998494`. None met the predeclared `>=1.12x`, cosine `>=0.99999`, exact ordered-top-2 gate. A separate 32-row rerun of the `0.50/0.50` policy forecast `1.127x` and swapped sampled-row top-1 on both random-uniform inputs.
+  verified_at: 2026-08-31
+  decay_trigger: source Q6_K quantization, Gaussian reconstruction tables, block/moment granularity, sampled tensor/rows, activation corpus, selector, or byte layout changes
+  trust: {F:0.98,G:0.03,R:0.92}
+
+**Adversary:** Ranking was measured only among 256 sampled output rows and is not model-token top-1/top-2 or ECS. The deterministic activations are a bounded operator screen rather than real hidden states. Those limitations can only weaken a promotion claim; they cannot rescue a candidate that already misses the numerical gate. The failure is specific to a single mean/std for each 256-value block and does not cover sub-block scale preservation or residual coding.
+
+**Value proxy:** Forecast bytes alone are not acceleration or quality. The probe requires both a material byte reduction and a near-lossless operator boundary before a Metal decoder is admissible; the tested representation failed that composition.
+
+**LTP/WBA:** Not claimed. This was ordinary approximate representation screening with native Q6_K as the comparison frame.
+
+**decision:** Do not implement a Metal decoder for the tested one-moment Gaussian P4/P5/native-Q6 records. Retain the CPU probe. Reopen weight compression only with a new information-preserving argument, such as Q6_K sub-block scales or a bounded residual; move the immediate exact-parity frontier to producer-consumer boundary fusion.
