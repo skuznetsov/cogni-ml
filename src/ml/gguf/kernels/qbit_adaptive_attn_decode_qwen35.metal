@@ -63,6 +63,7 @@ inline uint qqa_adaptive_plane_bit(device const uchar* plane, uint within) {
 }
 
 constant bool QQA_ADAPTIVE_DEQUANT_T4 = false;
+constant bool QQA_ADAPTIVE_SPLITK_STAGE2_FUSED = false;
 
 inline float qqa_adaptive_value(device const uchar* base,
                                 device const uchar* metadata,
@@ -635,26 +636,54 @@ kernel void qwen35_qbit_adaptive_decode_splitk_stage2(
         m = max(m, partial_m[h * n_blocks + block]);
     }
 
-    float l_total = 0.0f;
-    for (uint block = 0; block < n_blocks; ++block) {
-        const uint mb = h * n_blocks + block;
-        l_total += partial_l[mb] * exp(partial_m[mb] - m);
-    }
-    const float inv_l = l_total > 0.0f ? 1.0f / l_total : 0.0f;
-
-    for (uint dl = 0; dl < QQA_ADAPTIVE_HD / QQA_ADAPTIVE_SG; ++dl) {
-        const uint d = lane + dl * QQA_ADAPTIVE_SG;
-        float acc = 0.0f;
+    if (QQA_ADAPTIVE_SPLITK_STAGE2_FUSED) {
+        float l_total = 0.0f;
+        float acc[QQA_ADAPTIVE_HD / QQA_ADAPTIVE_SG] = {0.0f};
+        // Preserve the global-max normalization and ascending block order while
+        // sharing one weight across the eight output dimensions owned by a lane.
         for (uint block = 0; block < n_blocks; ++block) {
             const uint mb = h * n_blocks + block;
-            acc += partial_o[mb * head_dim + d] * exp(partial_m[mb] - m);
+            const float weight = exp(partial_m[mb] - m);
+            l_total += partial_l[mb] * weight;
+            const uint out_base = mb * head_dim;
+            for (uint dl = 0; dl < QQA_ADAPTIVE_HD / QQA_ADAPTIVE_SG; ++dl) {
+                const uint d = lane + dl * QQA_ADAPTIVE_SG;
+                acc[dl] += partial_o[out_base + d] * weight;
+            }
         }
-        const uint index = h * head_dim + d;
-        const float g = gate[index];
-        const float value = acc * inv_l / (1.0f + exp(-g));
-        out[index] = value;
-        if (!isfinite(g) || !isfinite(value)) {
-            atomic_fetch_or_explicit(status, 128u, memory_order_relaxed);
+        const float inv_l = l_total > 0.0f ? 1.0f / l_total : 0.0f;
+        for (uint dl = 0; dl < QQA_ADAPTIVE_HD / QQA_ADAPTIVE_SG; ++dl) {
+            const uint d = lane + dl * QQA_ADAPTIVE_SG;
+            const uint index = h * head_dim + d;
+            const float g = gate[index];
+            const float value = acc[dl] * inv_l / (1.0f + exp(-g));
+            out[index] = value;
+            if (!isfinite(g) || !isfinite(value)) {
+                atomic_fetch_or_explicit(status, 128u, memory_order_relaxed);
+            }
+        }
+    } else {
+        float l_total = 0.0f;
+        for (uint block = 0; block < n_blocks; ++block) {
+            const uint mb = h * n_blocks + block;
+            l_total += partial_l[mb] * exp(partial_m[mb] - m);
+        }
+        const float inv_l = l_total > 0.0f ? 1.0f / l_total : 0.0f;
+
+        for (uint dl = 0; dl < QQA_ADAPTIVE_HD / QQA_ADAPTIVE_SG; ++dl) {
+            const uint d = lane + dl * QQA_ADAPTIVE_SG;
+            float acc = 0.0f;
+            for (uint block = 0; block < n_blocks; ++block) {
+                const uint mb = h * n_blocks + block;
+                acc += partial_o[mb * head_dim + d] * exp(partial_m[mb] - m);
+            }
+            const uint index = h * head_dim + d;
+            const float g = gate[index];
+            const float value = acc * inv_l / (1.0f + exp(-g));
+            out[index] = value;
+            if (!isfinite(g) || !isfinite(value)) {
+                atomic_fetch_or_explicit(status, 128u, memory_order_relaxed);
+            }
         }
     }
 }

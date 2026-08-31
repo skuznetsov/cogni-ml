@@ -25069,3 +25069,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is an ordinary route-scoped kernel selection with the canonical scalar source as rollback.
 
 **decision:** Enable T4 automatically only on Apple M2 Max for uniform multi-token P4/BF16 prefill and uniform BF16 split-K. Keep P4 split-K and other devices scalar by default. Preserve explicit `1` as the experimental force switch and `0` as exact rollback; require fresh evidence before widening the device or route scope.
+
+#### [LM-QWEN38-ADAPTIVE-SPLITK-STAGE2-951] One BF16 weight traversal accelerates the long-context reducer
+**context:** ml / Qwen3.8 / adaptive QBit / Metal / split-K / stage2 reduction
+**state:** verified BF16-only bounded promotion on Apple M2 Max; P4 auto-promotion rejected; cross-device and whole-model decode timing open
+
+- claim: "The BF16 split-K stage2 reducer can reuse one block weight across the eight output dimensions owned by a lane without changing its numerical or cache boundary."
+  source: the fused loop preserves the existing global-max pass, ascending block order for normalization and every output accumulator, and post-normalization gate. It changes no Metal ABI, scratch layout, cache bytes, or publication path. The adaptive resident contract uses an 8,191-token prefix, covers scalar and T4 stage1 plus fused and legacy stage2, matches the CPU and serial Metal references within the established bounds, requires byte-identical packed K/V, and passes together with the policy suite `24/24`.
+  verified_at: 2026-08-31
+  decay_trigger: stage1 summary semantics, reducer order, head dimension, scratch layout, gate placement, pack/finalize, Metal compiler/runtime, or cache publication changes
+  trust: {F:0.99,G:0.23,R:0.97}
+
+- claim: "At the measured 8K M2 Max BF16 shape, fused stage2 materially reduces the complete adaptive append GPU interval."
+  source: a same-binary legacy/auto/auto/legacy screen at prefix 8,192, chunk one, tile 15, default automatic BF16 T4 stage1, and ten repetitions measured legacy `2.481/2.490 ms` versus fused `1.797/1.807 ms`, `27.5%` lower by pair means. A scalar-stage1 control remained positive at `22.0%` lower. P4 did not reproduce its earlier gain and was `6.6%` slower by pair means, so automatic P4 admission was rejected. A guarded 360-token mixed-route Qwen3.8 run preserved top-1 `2/2`, ranked/set top-2 `2/2`, ECS `1.0`, all 16 adaptive owners, no Float32 owner, consistent cache publication, and `3.7647x` density.
+  verified_at: 2026-08-31
+  decay_trigger: device, Metal compiler/runtime, context/block count, tile, stage-one dequantization, tier, command composition, host/GPU power state, quality prompt, or profiler semantics change
+  trust: {F:0.98,G:0.12,R:0.95}
+
+**Adversary:** The measured interval contains stage1, stage2, pack, and finalization, so it does not isolate stage2 or prove a `27.5%` whole-engine gain. The P4 reversal demonstrates that saved exponentials are only a proxy for elapsed time. Eight live accumulators can change register pressure on another GPU or compiler. The real-model quality run has only one teacher decode step beyond the threshold; broader long-session quality remains inherited from earlier adaptive-cache evidence rather than re-proven by this slice.
+
+**Value proxy:** Reusing exponentials is the mechanism. The admitted performance coordinate is the completed adaptive append GPU interval, while whole-model decode wall time, output quality, cache ownership/publication, memory pressure, and watchdog behavior remain separate gates.
+
+**LTP/WBA:** Not claimed. This is ordinary loop fusion with the serial attention route as the broader operational fallback.
+
+**decision:** Automatically use fused stage2 only for uniform BF16 on exact `Apple M2 Max`. Keep P4 and other devices on the legacy reducer. Preserve `QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED=0` as exact runtime rollback and `1` as the explicit experimental force switch; malformed values fail closed. Do not widen the speed claim beyond the measured M2 Max 8K BF16 adaptive interval without cross-device and whole-model decode A/B evidence.

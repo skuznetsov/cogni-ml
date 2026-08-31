@@ -455,6 +455,13 @@ module ML::GGUF
       if SOURCE_TILE15_DEQUANT_T4 == SOURCE_DEQUANT_T4
         raise "adaptive t4 dequant tile-15 source patch no longer matches"
       end
+      SOURCE_SPLITK_STAGE2_FUSED = SOURCE.sub(
+        "constant bool QQA_ADAPTIVE_SPLITK_STAGE2_FUSED = false;",
+        "constant bool QQA_ADAPTIVE_SPLITK_STAGE2_FUSED = true;",
+      )
+      if SOURCE_SPLITK_STAGE2_FUSED == SOURCE
+        raise "adaptive fused split-K stage2 source patch no longer matches"
+      end
       PACK_SOURCE = {{ read_file("#{__DIR__}/kernels/qbit_adaptive_pack_qwen35.metal") }}
       @@gqa6_pipelines = Hash(Int32, ML::Metal::ComputePipeline).new
       @@gqa6_pipeline_mutex = Mutex.new
@@ -462,7 +469,7 @@ module ML::GGUF
       @@prefill_gqa6_pipeline_mutex = Mutex.new
       @@decode_splitk_stage1_pipelines = Hash(Tuple(Int32, Bool), ML::Metal::ComputePipeline).new
       @@decode_splitk_stage1_pipeline_mutex = Mutex.new
-      @@decode_splitk_stage2_pipeline : ML::Metal::ComputePipeline?
+      @@decode_splitk_stage2_pipelines = Hash(Bool, ML::Metal::ComputePipeline).new
       @@decode_splitk_stage2_pipeline_mutex = Mutex.new
       @@pack_pipeline : ML::Metal::ComputePipeline?
       @@pack_pipeline_mutex = Mutex.new
@@ -1148,9 +1155,11 @@ module ML::GGUF
           :adaptive_qbit_splitk_l,
           n_head.to_i64 * scratch_block_count * sizeof(Float32),
         )
+        stage1_pipeline = decode_splitk_stage1_pipeline(uniform_tier)
+        stage2_pipeline = decode_splitk_stage2_pipeline(uniform_tier)
 
         stage1 = ML::Metal::ComputeEncoder.new(command)
-        stage1.set_pipeline(decode_splitk_stage1_pipeline(uniform_tier))
+        stage1.set_pipeline(stage1_pipeline)
         stage1.set_buffer(q_source, 0)
         stage1.set_buffer(k_source, 1)
         stage1.set_buffer(v_source, 2)
@@ -1177,7 +1186,7 @@ module ML::GGUF
         stage1.end_encoding
 
         stage2 = ML::Metal::ComputeEncoder.new(command)
-        stage2.set_pipeline(decode_splitk_stage2_pipeline)
+        stage2.set_pipeline(stage2_pipeline)
         stage2.set_buffer(gate_source, 0)
         stage2.set_buffer(partial_o, 1)
         stage2.set_buffer(partial_m, 2)
@@ -1302,12 +1311,19 @@ module ML::GGUF
         end
       end
 
-      private def decode_splitk_stage2_pipeline : ML::Metal::ComputePipeline
+      private def decode_splitk_stage2_pipeline(uniform_tier : QwenQBitAdaptiveKV::Tier) : ML::Metal::ComputePipeline
+        fused = QwenQBitAdaptiveMetalPolicy.splitk_stage2_fused?(
+          ML::Metal::Device.instance.name,
+          uniform_tier == QwenQBitAdaptiveKV::Tier::BF16,
+          ENV["QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED"]?,
+        )
+        suffix = fused ? "_fused" : ""
         @@decode_splitk_stage2_pipeline_mutex.synchronize do
-          @@decode_splitk_stage2_pipeline ||= ML::Metal::PipelineCache.get("qwen35_qbit_adaptive_decode_splitk_stage2") {
+          @@decode_splitk_stage2_pipelines[fused] ||= ML::Metal::PipelineCache.get("qwen35_qbit_adaptive_decode_splitk_stage2#{suffix}") {
             ML::Metal::ComputePipeline.new(
+              "qwen35_qbit_adaptive_decode_splitk_stage2#{suffix}",
+              fused ? SOURCE_SPLITK_STAGE2_FUSED : SOURCE,
               "qwen35_qbit_adaptive_decode_splitk_stage2",
-              SOURCE,
             )
           }
         end

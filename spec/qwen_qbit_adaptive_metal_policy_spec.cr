@@ -41,6 +41,23 @@ describe ML::GGUF::QwenQBitAdaptiveMetalPolicy do
     end
   end
 
+  it "scopes fused split-K stage2 to the measured M2 Max corridor" do
+    policy = ML::GGUF::QwenQBitAdaptiveMetalPolicy
+
+    policy.splitk_stage2_fused?("Apple M2 Max", true).should be_true
+    policy.splitk_stage2_fused?("Apple M2 Max", false).should be_false
+    policy.splitk_stage2_fused?("Apple M2 Pro", true).should be_false
+    policy.splitk_stage2_fused?("Unknown Metal Device", true).should be_false
+    policy.splitk_stage2_fused?("Apple M2 Max", true, "0").should be_false
+    policy.splitk_stage2_fused?("Apple M2 Pro", false, "1").should be_true
+    expect_raises(ArgumentError, /QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED/) do
+      policy.splitk_stage2_fused?("Apple M2 Max", true, "")
+    end
+    expect_raises(ArgumentError, /QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED/) do
+      policy.splitk_stage2_fused?("Apple M2 Max", true, "true")
+    end
+  end
+
   it "auto-admits register-local t4 only on measured M2 Max corridors" do
     policy = ML::GGUF::QwenQBitAdaptiveMetalPolicy
 

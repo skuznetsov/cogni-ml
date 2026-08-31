@@ -2671,3 +2671,44 @@ This evidence admits a narrow Apple M2 Max default for the measured uniform
 prefill and BF16 split-K corridors. Cross-device occupancy, mixed-tier
 execution, broader prompt distributions, and production-scale speed remain
 open. This is ordinary register-local kernel optimization, not LTP/WBA.
+
+### BF16 fused split-K stage2 weight traversal (2026-08-31)
+
+The long-context split-K reducer used to evaluate the same softmax rescaling
+weight once for the normalization sum and again for each of the eight output
+dimensions owned by a SIMD lane. The fused traversal keeps the existing
+global-maximum pass, computes one weight per block and lane, and updates the
+normalization plus all eight dimension accumulators together. Global-max
+normalization, ascending block order for every sum, post-normalization gating,
+scratch layout, host bindings, cache bytes, and publication remain unchanged.
+
+A same-binary legacy/auto/auto/legacy screen on Apple M2 Max used prefix
+8,192, chunk one, tile 15, the default automatic BF16 T4 stage1, and ten
+repetitions. The complete adaptive attention, K/V pack, and finalizer GPU
+interval measured `2.481/2.490 ms` with exact legacy rollback versus
+`1.797/1.807 ms` with automatic fused stage2, about `27.5%` lower by pair
+means. A scalar-stage1 control remained positive at about `22.0%` lower. P4
+did not reproduce the earlier apparent gain: its pair mean was about `6.6%`
+slower fused in the scoped rerun, so automatic P4 admission was rejected.
+These numbers include both split-K stages and cache append work; they are not
+isolated stage2 timings or a claim about whole-engine decode speed.
+
+The adaptive resident Metal suite now exercises an 8,191-token packed prefix
+rather than only the 255-token split-K threshold. It covers scalar and T4
+stage1, fused and legacy stage2, matches the independent CPU attention
+reference and serial Metal path within the established cosine and maximum-error
+bounds, preserves byte-identical packed K/V, and reuses capacity-sized scratch;
+the policy plus resident suites pass `24/24`. A guarded Qwen3.8-27B Q4_K_M
+check with a 360-token prompt crossed the live split-K threshold using the
+mixed default route: legacy P4 plus fused BF16. It preserved top-1 `2/2`,
+ranked/set top-2 `2/2`, ECS mean/minimum `1.0/1.0`, all 16 adaptive owners, no
+Float32 KV owner, consistent cache publication, and `3.7647x` logical density.
+
+Automatic fused stage2 is admitted only for uniform BF16 on the exact
+`Apple M2 Max` device name. P4 and other devices retain the legacy reducer.
+`QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED=0` is the exact runtime rollback, while
+`1` is an explicit experimental force switch; malformed configured values fail
+closed. Register pressure and the relative benefit may change with GPU
+generation, compiler, head dimension, block count, or tile. Cross-device
+timing and a direct whole-model decode A/B remain open. This is ordinary loop
+fusion, not LTP/WBA.
