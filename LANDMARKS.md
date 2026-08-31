@@ -25523,3 +25523,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary launch/reduction geometry with unchanged arithmetic and cache state.
 
 **decision:** Keep the default adaptive split-K chunk at 64 and retain `QWEN35_ADAPTIVE_SPLITK_CHUNK` for diagnostics. Do not add a BF16-only 128 branch from this screen. Move to removal of actual pack/dequant/attention work rather than more chunk-size tuning.
+
+#### [LM-QWEN38-ADAPTIVE-SPLITK-PARTIAL-O-H16-FALSIFIED-969] Half-width split-K summaries save scratch but not decode time
+**context:** ml / Qwen3.8 geometry / adaptive QBit / Metal / split-K / intermediate precision
+**state:** candidate rejected and removed; FP32 split-K summary retained
+
+- claim: "FP16 `partial_o` can preserve the bounded 8K adaptive attention contract while halving its dominant split-K scratch region."
+  source: a temporary explicit-only Metal variant retained FP32 online-softmax `m/l` and stage-local accumulation, converted only the stage-one `partial_o` spill to FP16, and converted it back while merging stage two. The existing 8,191-token CPU/serial/split-K contract kept cosine above `0.9999999`, maximum split-K delta below `2e-5`, and byte-identical packed K/V. For 24 heads, head dimension 256, and 64-token blocks, the computed scratch fell from `3,170,304` to `1,597,440` bytes at 8K capacity and from `6,340,608` to `3,194,880` bytes at 16K capacity.
+  verified_at: 2026-08-31
+  decay_trigger: split-K summary semantics, precision, shape, block count, scratch ownership, Metal compiler/runtime, or parity thresholds change
+  trust: {F:0.98,G:0.03,R:0.91}
+
+- claim: "The reduced summary traffic does not produce a stable completed-command speedup on the measured M2 Max BF16 route."
+  source: all runs used fresh guarded processes, prefix 8,192, one appended token, ten repetitions, a 35% free-memory floor, and a 24,576 MiB tree cap. The first mixed-tier screen contained one slow FP32 BF16 observation (`2.809 ms`) and was treated as inconclusive. A second BF16-only A/B/B/A screen measured FP32 `1.762/1.763 ms` and FP16 `1.763/1.770 ms` for complete attention, pack, and finalization. Pair means were approximately `1.7625/1.7665 ms`, making FP16 about `0.23%` slower. P4 was also unstable and established no gain.
+  verified_at: 2026-08-31
+  decay_trigger: device, compiler/runtime, split-K stage implementation, context, tier, timing probe, or concurrent-flight memory pressure changes
+  trust: {F:0.98,G:0.03,R:0.92}
+
+**Adversary:** Halving bytes is a mechanism proxy, not elapsed-time evidence. The first apparent BF16 win vanished when one slow FP32 control was repeated. The parity case used bounded random values and does not prove that unnormalized block summaries cannot overflow or amplify FP16 rounding on hostile activations; the performance gate failed before a broader quality escalation was warranted.
+
+**Value proxy:** Scratch bytes and theoretical write/read traffic are secondary coordinates. The complete adaptive command GPU interval is the first value boundary and showed no speedup.
+
+**LTP/WBA:** Not claimed. This was ordinary temporary intermediate compression with the existing FP32 route as the dual frame.
+
+**decision:** Remove the FP16 source variant, selector, scratch allocation split, and test extension. Keep `partial_o` in FP32. Reconsider half-width summaries only if multi-flight scratch pressure becomes the primary bottleneck; for one-token latency, move to eliminating metadata/dequantization work instead.

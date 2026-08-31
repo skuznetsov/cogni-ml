@@ -3093,3 +3093,28 @@ default and `QWEN35_ADAPTIVE_SPLITK_CHUNK` remains available for diagnostics.
 This rejects a simple geometry retune, not a future algorithm that removes
 summary traffic or dequantization work. It is ordinary split-K tuning, not
 LTP/WBA.
+
+### Rejected adaptive split-K FP16 partial output (2026-08-31)
+
+A temporary explicit-only source variant kept the split-K online-softmax
+statistics and accumulation in FP32 but stored the stage-one `partial_o`
+summary in FP16 before stage two reloaded it. At the measured 24-head,
+256-dimensional, 64-token-block geometry this would reduce split-K scratch
+from `3,170,304` to `1,597,440` bytes at 8K capacity and from `6,340,608` to
+`3,194,880` bytes at 16K capacity. It also removes about 3 MiB of stage-one
+write plus stage-two read traffic per attention layer at 8K.
+
+The existing 8,191-token Metal contract passed with its strict cosine and
+maximum-difference bounds and retained byte-identical packed K/V. Performance,
+however, rejected promotion. An initial four-process P4/BF16 screen contained
+one slow FP32 BF16 observation and therefore appeared favorable. A second
+BF16-only A/B/B/A screen reproduced FP32 at `1.762/1.763 ms` and FP16 at
+`1.763/1.770 ms` for the complete attention, pack, and finalizer GPU interval.
+The candidate was effectively neutral and about 0.2% slower by pair means.
+
+P4 was also unstable and did not establish a gain. The source variant, policy,
+scratch split, and test extension were removed. The result does not reject FP16
+scratch as a compactness option for a future multi-flight design, but current
+scratch is already small and shared; halving it does not accelerate one-token
+decode on this M2 Max corridor. This was ordinary intermediate-format tuning,
+not LTP/WBA.
