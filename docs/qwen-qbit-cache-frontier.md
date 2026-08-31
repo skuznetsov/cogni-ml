@@ -2994,3 +2994,32 @@ current FFN-down fused-add kernel remains. Local GPU timing established the
 mechanism but not product value. The compare-only harness improvement stays as
 the reusable evidence tool. This was ordinary kernel specialization, not
 LTP/WBA.
+
+### Rejected lane-preserving Q4_K metadata broadcast (2026-08-31)
+
+The next Q4_K B64 experiment preserved both adjacent SIMD loader lanes. Each
+lane still loaded its own quantized payload and wrote its own 16 dequantized
+values, while only the even lane decoded the common scale/min bytes and sent
+them to the odd lane with `simd_shuffle`. This avoided the idle-lane mechanism
+of the earlier paired-dequantization candidate. The source specialization was
+compile-time only, default off, and left Q offsets, nibble masks, barriers,
+shared-memory layout, and the production path unchanged.
+
+The guarded safety contract passed on a real Qwen3.5-9B Q4_K_M fixture. It
+compared every Float32 gate output bit and every Float16 fused up/SwiGLU output
+bit for the exact batch-64 B64 route and reported `1/1` green.
+
+Performance rejected the candidate before any larger escalation. On Apple M2
+Max, exact `4096 -> 12288`, batch 64, five warmups, and ten same-process ABBA
+blocks measured current/candidate completed-command GPU p50
+`1.638875/1.722854 ms`. The candidate was `5.124%` slower and won `0/10`
+blocks. The predeclared gate required at least `3%` improvement and `8/10`
+wins in both ABBA and BAAB, so the decisive first-stratum failure triggered the
+fail-fast rule: BAAB, larger batches, and Qwen3.8-27B product runs were not
+executed.
+
+The likely trade is a small reduction in scale/min arithmetic for an added SIMD
+shuffle dependency, but hardware counters did not identify the cause. The
+bounded result is that this lane-preserving broadcast is slower on the measured
+corridor. The source variant, selector, focused test extension, and transient
+ABBA option were removed. This was ordinary SIMD scheduling, not LTP/WBA.

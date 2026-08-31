@@ -25427,3 +25427,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was an ordinary exact kernel specialization with the current fused-add route as dual frame.
 
 **decision:** Remove the x16 fused-add kernel, selector, policy test, and temporary probe. Keep FFN-down on the current fused-add kernel. Retain only the generic `--compare-only` harness mode so future small candidates are not biased by unrelated pre-pair runs. Reopen FFN-down only if a materially larger work reduction predicts at least a few percent at the full decode boundary.
+
+#### [LM-QWEN38-Q4K-B64-LANE-SHARED-META-FALSIFIED-965] SIMD metadata broadcast regresses the B64 Q4_K corridor
+**context:** ml / Qwen3.8 / Metal / prefill / recurrent FFN / Q4_K dequantization
+**state:** candidate rejected and removed; current B64 loaders retained
+
+- claim: "Adjacent active SIMD lanes can share Q4_K scale/min extraction without changing the tested outputs."
+  source: a temporary compile-time source variant kept both adjacent lanes active for their own Q payload and 16-value store. The even lane extracted and packed the common scale/min bytes, then broadcast them to the odd lane with `simd_shuffle`. The Q offsets, nibble masks, shared-memory destinations, barriers, output route, and production default remained unchanged. A guarded real Qwen3.5-9B Q4_K_M contract compared every Float32 gate bit and every Float16 fused up/SwiGLU activation bit for the exact B64 route and passed `1/1`.
+  verified_at: 2026-08-31
+  decay_trigger: Q4_K layout, B64 loader mapping, Metal compiler/runtime, model fixture, or parity boundary changes
+  trust: {F:0.99,G:0.06,R:0.96}
+
+- claim: "The metadata broadcast does not accelerate the measured complete gate plus fused up/SwiGLU command."
+  source: a guarded same-process Apple M2 Max falsifier used Qwen3.5-9B Q4_K_M, exact `4096 -> 12288`, batch 64, five warmups, and ten ABBA blocks. Current/candidate completed-command GPU p50 was `1.638875/1.722854 ms`; the candidate regressed `5.124%` and won `0/10` blocks. The predeclared gate required at least `3%` improvement and `8/10` wins in both ABBA and BAAB. Because the first stratum failed decisively, BAAB and all larger-model/product escalations were skipped by the fail-fast rule.
+  verified_at: 2026-08-31
+  decay_trigger: device, Metal compiler/runtime, B64 kernel, model shape, batch, timing boundary, or shuffle implementation changes
+  trust: {F:0.99,G:0.05,R:0.95}
+
+**Adversary:** Both loader lanes stayed active, so this is not the idle-lane mechanism rejected by LM-962. The result instead shows that eliminating a small duplicated decode does not pay for the new shuffle dependency on this measured corridor. Register pressure, compiler scheduling, and cache behavior remain possible explanations because no hardware counter attributes the regression. The result rejects this implementation on this target; it does not prove that every metadata-sharing layout is universally slower.
+
+**Value proxy:** Full-buffer bit parity is the safety gate, not the acceleration objective. Complete-command GPU time and paired wins directly reject value before any noisier whole-prefill measurement.
+
+**LTP/WBA:** Not claimed. This was ordinary SIMD scheduling with the current source as an exact dual frame.
+
+**decision:** Remove the source variant, selector, focused test extension, and transient ABBA CLI seam. Keep the current independent per-lane metadata extraction. Do not retry scale/min sharing unless a new layout also removes a materially larger unit of memory or synchronization work.
