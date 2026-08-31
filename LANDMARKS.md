@@ -25403,3 +25403,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary exact kernel routing with a runtime dual frame.
 
 **decision:** Default the existing x16 Q4_K GEMV only when the measured Qwen3.8-27B GGUF identity issues the typed capability and the weight matches exact `5120 -> 17408` FFN gate/up or measured recurrent QKV/gate/alpha/beta/output tag-plus-shape contracts. Keep unknown models, full-attention, and FFN-down routes on their prior kernels. Preserve global force-on for experiments and `QWEN35_Q4K_GEMV_X16=0` as rollback. Reopen scope only with a balanced product suite or a model/device contradiction.
+
+#### [LM-QWEN38-Q4K-X16-FFN-DOWN-FALSIFIED-964] Local FFN-down x16 gain is too small at the decode boundary
+**context:** ml / Qwen3.8-27B / Metal / Q4_K / decode / FFN-down fused residual
+**state:** candidate rejected and removed; compare-only timing mode retained
+
+- claim: "A two-row Q4_K x16 fused-add kernel preserves the measured FFN-down result and accelerates that isolated projector."
+  source: a temporary route admitted only typed Qwen3.8 `17408 -> 5120` `.ffn_down.weight` at batch one. Random, zero-input/residual-preservation, and alternating-scale/zero-residual cases compared candidate, current GPU, and CPU `QuantMatmul`. Candidate/current maximum absolute difference was at most `7.1525574e-7`; CPU cosine was at least `0.9999999999976616`; zero input returned residual bit-exactly. A guarded Apple M2 Max ABBA/BAAB probe measured current/candidate GPU p50 `0.161208/0.153083 ms`, a `5.040%` local reduction, with candidate wins `9/10` and `10/10`.
+  verified_at: 2026-08-31
+  decay_trigger: Q4_K kernel arithmetic, FFN-down shape, compiler/runtime, device, or timing method changes
+  trust: {F:0.99,G:0.06,R:0.86}
+
+- claim: "The isolated gain does not produce a stable promotable decode-wall improvement."
+  source: a new `--compare-only` harness mode removed unrelated standalone baseline/profile runs before the paired gate. For 32-token greedy top-1 decode, 16 interleaved pairs measured current/candidate means `2170.67/2156.33 ms`, only `0.660%` lower candidate wall, with candidate winning `11/16`. A body-only repetition measured `2170.91/2166.85 ms`, only `0.187%`, with candidate winning `9/16`. Both miss the predeclared `>=80%` paired-win requirement. An earlier 64-token run was discarded because both branches degraded from about `4.0 s` before pairing to `10-11 s` inside pairing. A separate adaptive quality pair had identical eight-token text and IDs, top-1 `8/8`, top-2 `14/14`, ECS `1.0`, all 16 cache owners, and consistent publication.
+  verified_at: 2026-08-31
+  decay_trigger: surrounding decode graph, FFN-down share, device, power state, compiler/runtime, route policy, or a stronger balanced benchmark changes
+  trust: {F:0.99,G:0.05,R:0.82}
+
+**Adversary:** The local projector probe is strong evidence for its own command, but the product effect is sub-percent and paired wins are unstable. The long run demonstrates that warming, allocator, or power drift can manufacture a much larger aggregate percentage; it is excluded rather than averaged in. Raw samples and the temporary candidate source were not retained, so these rows are sufficient to reject promotion but are not an independently reproducible performance certificate. This does not prove the kernel can never help another device or route composition.
+
+**Value proxy:** Local GPU p50 is a mechanism coordinate, not the objective. Full decode wall and paired stability reject automatic routing even though numerical and semantic gates pass.
+
+**LTP/WBA:** Not claimed. This was an ordinary exact kernel specialization with the current fused-add route as dual frame.
+
+**decision:** Remove the x16 fused-add kernel, selector, policy test, and temporary probe. Keep FFN-down on the current fused-add kernel. Retain only the generic `--compare-only` harness mode so future small candidates are not biased by unrelated pre-pair runs. Reopen FFN-down only if a materially larger work reduction predicts at least a few percent at the full decode boundary.

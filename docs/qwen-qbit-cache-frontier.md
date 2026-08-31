@@ -2962,3 +2962,35 @@ run supplies the semantic and cache-publication check. `QWEN35_Q4K_GEMV_X16=0` r
 `=1` remains a global experimental force switch. Full-attention and FFN-down
 stay on their prior routes. This is ordinary shape- and operator-scoped kernel
 routing, not LTP/WBA.
+
+### Rejected Q4_K x16 fused-add FFN-down routing (2026-08-31)
+
+A temporary two-row-per-simdgroup Q4_K fused-add kernel was restricted to the
+typed Qwen3.8-27B `17408 -> 5120` FFN-down route at batch one. Random,
+zero-input, and alternating-scale cases compared it with both the current GPU
+kernel and CPU `QuantMatmul`. Candidate/current maximum absolute error stayed
+below `7.2e-7`, CPU cosine stayed above `0.9999999999976`, and zero input
+returned the residual bit-exactly. A guarded same-process Apple M2 Max probe
+measured current/candidate GPU p50 `0.161208/0.153083 ms`, a `5.040%` local
+reduction, with candidate wins `9/10` ABBA and `10/10` BAAB.
+
+The value did not survive recomputation at the full decode boundary. A new
+generic `--compare-only` mode skips unrelated standalone wall/profile runs
+before the paired environment gate. With 32 greedy top-1 tokens and 16
+interleaved pairs, current/candidate means were `2170.67/2156.33 ms`: only a
+`0.660%` candidate reduction and `11/16` wins. Body-only means were
+`2170.91/2166.85 ms`: `0.187%` and `9/16` wins. Both miss the `>=80%` paired-win
+gate. A separate adaptive quality pair preserved identical eight-token output,
+top-1 `8/8`, top-2 `14/14`, ECS `1.0`, all 16 cache owners, and consistent
+publication. A longer run was excluded because both branches thermally or
+allocator-wise degraded by more than 2x before the paired section.
+
+The raw paired samples and temporary candidate source were not retained, so
+these measurements are a bounded rejection record rather than an independently
+reproducible performance certificate.
+
+The candidate kernel, selector, policy test, and probe were removed; the
+current FFN-down fused-add kernel remains. Local GPU timing established the
+mechanism but not product value. The compare-only harness improvement stays as
+the reusable evidence tool. This was ordinary kernel specialization, not
+LTP/WBA.
