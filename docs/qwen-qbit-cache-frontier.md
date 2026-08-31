@@ -3023,3 +3023,29 @@ shuffle dependency, but hardware counters did not identify the cause. The
 bounded result is that this lane-preserving broadcast is slower on the measured
 corridor. The source variant, selector, focused test extension, and transient
 ABBA option were removed. This was ordinary SIMD scheduling, not LTP/WBA.
+
+### Rejected Q6_K NSG4 layout for recurrent QKV (2026-08-31)
+
+A metadata-only inventory of the local Qwen3.8-27B Q4_K_M GGUF found a useful
+unmeasured split: its 48 recurrent `attn_qkv` tensors all have shape
+`5120 -> 10240`, but 24 are Q6_K and 24 are Q4_K. The Q4 half is covered by the
+new operator-scoped x16 route; the Q6 half remains on the current
+`NSG=2, NR0=1` kernel. Earlier NSG4 experiments were global or involved Q6
+FFN-down/head shapes, so this exact QKV shape justified one bounded test.
+
+The probe reused the existing alternate-layout pipeline and compared the
+current `2x1` launch with `NSG=4, NR0=1`; production routing was never changed.
+Both variants passed the existing full-vector `1e-3` maximum-difference guard
+against the current matmul path. On Apple M2 Max, a real Qwen3.8-27B Q6_K QKV
+weight at batch 1 was warmed five times and measured in ten ABBA blocks.
+Current/candidate completed-command p50 was `0.467938/0.465458 ms`, only
+`0.530%` improvement, and the candidate won `6/10` blocks.
+
+That misses the predeclared `>=3%` and `>=8/10` local gate. The absolute samples
+also shifted from roughly `0.47` to `0.38 ms` during the short run, reinforcing
+that a sub-percent median is not robust evidence. BAAB and whole-decode runs
+were therefore skipped by fail-fast. The transient probe was removed and no
+Q6 production selector changed. This result rejects another launch-geometry
+retry, not a future Q6 kernel that removes a larger unit of dequantization,
+traffic, or synchronization work. This was ordinary dispatch tuning, not
+LTP/WBA.

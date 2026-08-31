@@ -25451,3 +25451,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary SIMD scheduling with the current source as an exact dual frame.
 
 **decision:** Remove the source variant, selector, focused test extension, and transient ABBA CLI seam. Keep the current independent per-lane metadata extraction. Do not retry scale/min sharing unless a new layout also removes a materially larger unit of memory or synchronization work.
+
+#### [LM-QWEN38-Q6K-RECURRENT-QKV-NSG4-FALSIFIED-966] Shape-specific NSG4 is not a stable Q6 recurrent-QKV win
+**context:** ml / Qwen3.8-27B / Metal / recurrent QKV / Q6_K / decode
+**state:** candidate rejected without production routing; transient probe removed
+
+- claim: "Qwen3.8-27B has a material exact Q6 recurrent-QKV corridor distinct from the earlier global Q6 layout experiments."
+  source: a metadata-only read of the local Qwen3.8-27B Q4_K_M GGUF found 48 recurrent `attn_qkv` tensors at `5120 -> 10240`: 24 Q6_K and 24 Q4_K. The Q6 tensors are not covered by the operator-scoped Q4 x16 route. Earlier Q6 NSG4 refutations were global or targeted Q6 FFN-down/head shapes, so this exact shape admitted a new bounded falsifier rather than automatic promotion.
+  verified_at: 2026-08-31
+  decay_trigger: model quantization mix, tensor shapes, layer routing, or GGUF inventory changes
+  trust: {F:0.99,G:0.08,R:0.98}
+
+- claim: "Changing only this Q6_K shape from the current `NSG=2, NR0=1` layout to `NSG=4, NR0=1` is not a stable local acceleration."
+  source: a transient diagnostic reused the existing alternate-layout pipeline and `bench_q6_layout_wait_ms`; production route selection was never changed. Both layouts passed the existing full-vector validation against the current matmul path with the `1e-3` maximum-difference guard. A guarded Apple M2 Max run on the real Qwen3.8-27B Q4_K_M weight used batch 1, five warmups, and ten ABBA blocks. Current/candidate completed-command p50 was `0.467938/0.465458 ms`, only `0.530%` improvement, with `6/10` candidate wins. The predeclared local gate required at least `3%` and `8/10` wins in both orders; BAAB and whole-decode escalation were skipped after ABBA failed.
+  verified_at: 2026-08-31
+  decay_trigger: Q6 kernel arithmetic, Metal compiler/runtime, device, shape, model, timing boundary, or a new layout strategy changes
+  trust: {F:0.98,G:0.05,R:0.93}
+
+**Adversary:** The ABBA samples moved materially during the short run, from roughly `0.47` to `0.38 ms`, showing that power/cache state still affected absolute timing. Interleaving prevents a simple all-current-before-all-candidate bias, but a sub-percent median and only `6/10` wins cannot support promotion. This rejects the existing NSG4 geometry on the measured QKV shape; it does not reject a different Q6 kernel family that changes dequantization, row sharing, or traffic.
+
+**Value proxy:** The count of 24 repeated tensors establishes leverage, not value. The exact operator wait is the first value gate and failed before the noisier whole-decode boundary.
+
+**LTP/WBA:** Not claimed. This was ordinary shape-specific dispatch geometry using the current kernel source.
+
+**decision:** Keep Q6 recurrent QKV on the current `2x1` route. Remove the transient comparison mode and do not add the shape to `q6_gemv_shape_layout`. Move the search to a larger boundary or a genuinely different Q6 kernel family rather than another launch-geometry retry.
