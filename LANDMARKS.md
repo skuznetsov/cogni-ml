@@ -24906,7 +24906,7 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   decay_trigger: prompt, model, tier map, tokenizer/template, generation policy, quality metrics, scheduler ordering, or cache publication change
   trust: {F:0.98,G:0.08,R:0.94}
 
-**Adversary:** The adaptive full-attention branch still flushes and reads its hidden output before the next layer. The observed depth-two window overlaps other handoff groups; it does not yet overlap two adaptive-attention commands or remove that host boundary. Host load was not quiet, the A/B has four pairs on one device, and the quality prompt exposes a real coarse-map semantic weakness despite scheduler parity. Failed sequence state is discarded after terminal suffix cleanup; the cleanup is not rollback of already executed model state. Queue identity closes cross-queue GPU ordering only while a suffix is pending; concurrent callers must still serialize the whole model state.
+**Adversary:** A source re-read narrowed the handoff claim: intermediate full-attention layers 3 through 59 already feed their following recurrent runs through the fused resident helper, while final full-attention layer 63 remains a standalone external boundary. The observed depth-two window overlaps other handoff groups; it does not overlap two adaptive-attention commands or remove the final boundary. Host load was not quiet, the A/B has four pairs on one device, and the quality prompt exposes a real coarse-map semantic weakness despite scheduler parity. Failed sequence state is discarded after terminal suffix cleanup; the cleanup is not rollback of already executed model state. Queue identity closes cross-queue GPU ordering only while a suffix is pending; concurrent callers must still serialize the whole model state.
 
 **Value proxy:** Graph-on/off token/top-2/ECS identity is the scheduler-quality authority for this prompt. The `6.57%` wall reduction explains local value but does not override compressed-model meaning, long-context memory, watchdog survival, concurrency, or cross-device gates.
 
@@ -25117,3 +25117,33 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary compile-time quantizer specialization with the canonical seven-step source as its dual frame.
 
 **decision:** Automatically select prefix-only pack quantization only for each uniform-BF16 K or V plan on exact `Apple M2 Max`. Keep P4/P5/F32, nonuniform plans, and other devices canonical by default. Preserve `QWEN35_ADAPTIVE_PACK_PREFIX_QUANT=0` as exact rollback and `1` as the experimental force switch; malformed values fail closed. Do not widen the performance claim beyond the measured pack and 8K BF16 adaptive-command intervals without new evidence.
+
+#### [LM-QWEN38-B64-TAIL-AUTO-953] Padding-bounded B64 fusion accelerates one irregular prefill band
+**context:** ml / Qwen3.8 / shared Q4 Metal primitive / recurrent FFN / irregular prefill / route policy
+**state:** verified scoped automatic promotion on Apple M2 Max; broader batch, full Gemma4, and device promotion open
+
+- claim: "Tail-safe B64 up-plus-SwiGLU fusion can be selected automatically without admitting the previously regressive padding shapes."
+  source: the policy is automatic only on exact `Apple M2 Max`, batches at least 96, and shapes whose next multiple-of-64 row count is no more than 12.5% above the live batch. The existing tail-safe kernel, exact-rowpack exclusions, and quantized-weight routes are unchanged. `QWEN35_Q4K_H16_B64_TAIL_MIN=0` is the exact automatic-policy rollback; a positive value retains the historical experimental minimum-batch override on every device. The focused policy contract covers admitted and rejected boundaries, the measured pp360 route, another device, explicit override, and rollback. CPU-only source generation and the release attribution build pass; the forward plus DeltaNet profile passed `30/30` examples.
+  verified_at: 2026-08-31
+  decay_trigger: B64 tile width, tail-safe kernel bounds, device naming, route order, exact-rowpack policy, environment contract, compiler/runtime, or padding threshold changes
+  trust: {F:0.98,G:0.18,R:0.95}
+
+- claim: "The final scoped policy reduces measured pp360 prompt-processing wall time without changing the final token boundary."
+  source: a guarded paired/interleaved Qwen3.8-27B Q4_K_M run with the coarse adaptive map measured automatic/off averages of `2,527.44/2,559.40 ms`, a `1.25%` reduction; automatic won `5/5` pairs and preserved final top-1 plus its logit within `1e-4` in all `5/5`. Profiling reported recurrent FFN up/gate as the dominant logical-weight corridor and reduced conversion traffic from the earlier non-tail profile's approximately `5,309 MiB` to `3,050 MiB` at this shape.
+  verified_at: 2026-08-31
+  decay_trigger: model, prompt length, device, compiler/runtime, FFN routing, resident prefill corridor, adaptive map, host/GPU power state, or timing method changes
+  trust: {F:0.97,G:0.08,R:0.92}
+
+- claim: "The shared Q4 primitive does not reverse the measured gain on the local Gemma4 FFN shape."
+  source: a fresh-process A/B/B/A operator screen on Gemma4-12B Q4_K_M at batch 360 measured automatic pair waits of `9.926/9.895 ms` versus rollback `10.470/10.484 ms`, about `5.4%` lower by pair means. Each row ran the probe's finite-output validation guard. This is a shared-kernel scope check, not full Gemma4 prefill evidence or an exact-output parity proof.
+  verified_at: 2026-08-31
+  decay_trigger: Gemma4 weights or shapes, shared Q4 entry points, B64 kernel, device, compiler/runtime, profiler, or full-model routing changes
+  trust: {F:0.97,G:0.07,R:0.92}
+
+**Adversary:** A broader 25% padding proposal was rejected after pp205 measured automatic about `3.4%` slower with parity `7/7`; the final 12.5% policy excludes that shape. The policy test is model-free, widens before padding arithmetic, and attacks zero, negative, `Int32::MAX`, malformed, and oversized values. One five-pair Qwen pp360 row plus one Gemma operator shape is a scoped promotion, not a monotonic padding theorem, full-Gemma result, cross-device result, decode gain, or whole-inference percentage. Logical conversion traffic is diagnostic rather than a wall-time proxy, and the explicit positive override can still request historically shape-sensitive routes.
+
+**Value proxy:** Fewer conversion bytes explain the candidate. The admission coordinate is paired prompt-processing wall time with top-1/logit parity; generated-code quality, long-context behavior, decode, memory pressure, watchdog survival, and other devices remain separate gates.
+
+**LTP/WBA:** Not claimed. This is ordinary shape- and device-scoped dispatch using the generic non-tail route as automatic rollback.
+
+**decision:** Enable tail-safe B64 FFN fusion automatically only on Apple M2 Max when padding is at most 12.5%. Preserve `TAIL_MIN=0` as rollback and positive values as explicit experiments. Reopen the threshold if a boundary sweep finds a regression inside the admitted bands; do not extrapolate the pp360 gain to total inference.

@@ -54,25 +54,25 @@ module ML
       HEAD_TOP1_ROWS_PER_TG = 12
 
       # GEMM (prefill) tiling — Q4_K only for now.
-      MM_NR0      =    64
-      MM_NR1      =    32
-      MM_TG       =   128 # threads per threadgroup (4 simdgroups × 32)
-      MM_SHMEM    = 12288 # bytes: 2 × (MM_SA_SIZE + MM_SB_SIZE) = 2 × 6144
-      MM48_NR1    =    48
-      MM48_TG     =   192 # threads per threadgroup (6 simdgroups × 32)
-      MM48_SHMEM  = 14336 # bytes: 2 × (4096 + 3072), larger than 64×48 f32 edge scratch
-      MM64_NR1    =    64
-      MM64_TG     =   256 # threads per threadgroup (8 simdgroups × 32)
-      MM64_SHMEM  = 16384 # bytes: 2 × (MM64_SA_SIZE + MM64_SB_SIZE)
-      MM80_NR1    =    80
-      MM80_TG     =   320 # threads per threadgroup (10 simdgroups × 32)
-      MM80_SHMEM  = 20480 # bytes: max double-buffered tile and 64×80 f32 edge scratch
-      MM96_NR1    =    96
-      MM96_TG     =   384 # threads per threadgroup (12 simdgroups × 32)
-      MM96_SHMEM  = 24576 # bytes: max double-buffered tile and 64×96 f32 edge scratch
-      MM112_NR1   =   112
-      MM112_TG    =   448 # threads per threadgroup (14 simdgroups × 32)
-      MM112_SHMEM = 28672 # bytes: max double-buffered tile and 64×112 f32 edge scratch
+      MM_NR0          =    64
+      MM_NR1          =    32
+      MM_TG           =   128 # threads per threadgroup (4 simdgroups × 32)
+      MM_SHMEM        = 12288 # bytes: 2 × (MM_SA_SIZE + MM_SB_SIZE) = 2 × 6144
+      MM48_NR1        =    48
+      MM48_TG         =   192 # threads per threadgroup (6 simdgroups × 32)
+      MM48_SHMEM      = 14336 # bytes: 2 × (4096 + 3072), larger than 64×48 f32 edge scratch
+      MM64_NR1        =    64
+      MM64_TG         =   256 # threads per threadgroup (8 simdgroups × 32)
+      MM64_SHMEM      = 16384 # bytes: 2 × (MM64_SA_SIZE + MM64_SB_SIZE)
+      MM80_NR1        =    80
+      MM80_TG         =   320 # threads per threadgroup (10 simdgroups × 32)
+      MM80_SHMEM      = 20480 # bytes: max double-buffered tile and 64×80 f32 edge scratch
+      MM96_NR1        =    96
+      MM96_TG         =   384 # threads per threadgroup (12 simdgroups × 32)
+      MM96_SHMEM      = 24576 # bytes: max double-buffered tile and 64×96 f32 edge scratch
+      MM112_NR1       =   112
+      MM112_TG        =   448 # threads per threadgroup (14 simdgroups × 32)
+      MM112_SHMEM     = 28672 # bytes: max double-buffered tile and 64×112 f32 edge scratch
       Q4_TENSOR_NR1   =   128
       Q4_TENSOR_TG    =   128 # 4 simdgroups × 32, matches simd_mm_q4k_tensor_f32out
       Q4_TENSOR_SHMEM =  4096 # one 64×32 H16 dequantized A tile
@@ -86,6 +86,23 @@ module ML
       # Reusing one F32->F16 activation conversion across FFN gate/up now
       # pays even at pp64 after the later H16 routing cleanups.
       Q4_PAIR_H16_MIN_BATCH = 64
+
+      # Admit the tail-safe B64 FFN fusion automatically only when its padded
+      # row count stays within 12.5% of the live batch. Explicit overrides retain
+      # the historical min-batch semantics for experiments and rollback.
+      def self.q4_h16_b64_tail_policy?(batch : Int32,
+                                       device_name : String,
+                                       override : String?) : Bool
+        if raw = override
+          min_batch = raw.to_i32
+          return min_batch > 0 && batch >= min_batch
+        end
+
+        return false unless device_name == "Apple M2 Max" && batch >= 96
+        live_batch = batch.to_i64
+        padded_batch = ((live_batch + MM64_NR1 - 1) // MM64_NR1) * MM64_NR1
+        padded_batch * 8_i64 <= live_batch * 9_i64
+      end
 
       {% if flag?(:cpu_only) %}
         def self.available? : Bool
@@ -2936,13 +2953,12 @@ module ML
           ENV["QWEN35_Q4K_H16_B64_OFF"]? != "1"
         end
 
-        private def self.q4_h16_b64_tail_min_batch : Int32
-          (ENV["QWEN35_Q4K_H16_B64_TAIL_MIN"]? || "0").to_i32
-        end
-
         private def self.q4_h16_b64_tail_candidate?(batch : Int32) : Bool
-          min_batch = q4_h16_b64_tail_min_batch
-          min_batch > 0 && batch >= min_batch
+          q4_h16_b64_tail_policy?(
+            batch,
+            ML::Metal::Device.instance.name,
+            ENV["QWEN35_Q4K_H16_B64_TAIL_MIN"]?,
+          )
         end
 
         private def self.q4_h16_exact_rowpack_candidate?(batch : Int32) : Bool

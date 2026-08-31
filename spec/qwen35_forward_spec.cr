@@ -5,6 +5,37 @@ require "../src/ml/gguf/qwen35_weights"
 QWEN_9B_FWD  = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 QWEN_08B_FWD = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q8_0.gguf"
 
+describe ML::GGUF::Qwen35Metal, "route policies" do
+  it "bounds automatic B64 tail fusion padding on M2 Max" do
+    metal = ML::GGUF::Qwen35Metal
+
+    metal.q4_h16_b64_tail_policy?(96, "Apple M2 Max", nil).should be_false
+    metal.q4_h16_b64_tail_policy?(103, "Apple M2 Max", nil).should be_false
+    metal.q4_h16_b64_tail_policy?(114, "Apple M2 Max", nil).should be_true
+    metal.q4_h16_b64_tail_policy?(129, "Apple M2 Max", nil).should be_false
+    metal.q4_h16_b64_tail_policy?(171, "Apple M2 Max", nil).should be_true
+    metal.q4_h16_b64_tail_policy?(193, "Apple M2 Max", nil).should be_false
+    metal.q4_h16_b64_tail_policy?(205, "Apple M2 Max", nil).should be_false
+    metal.q4_h16_b64_tail_policy?(228, "Apple M2 Max", nil).should be_true
+    metal.q4_h16_b64_tail_policy?(257, "Apple M2 Max", nil).should be_false
+    metal.q4_h16_b64_tail_policy?(285, "Apple M2 Max", nil).should be_true
+    metal.q4_h16_b64_tail_policy?(321, "Apple M2 Max", nil).should be_false
+    metal.q4_h16_b64_tail_policy?(342, "Apple M2 Max", nil).should be_true
+    metal.q4_h16_b64_tail_policy?(360, "Apple M2 Max", nil).should be_true
+
+    metal.q4_h16_b64_tail_policy?(360, "Apple M3 Max", nil).should be_false
+    metal.q4_h16_b64_tail_policy?(96, "Apple M3 Max", "96").should be_true
+    metal.q4_h16_b64_tail_policy?(360, "Apple M2 Max", "0").should be_false
+    metal.q4_h16_b64_tail_policy?(0, "Apple M2 Max", nil).should be_false
+    metal.q4_h16_b64_tail_policy?(-1, "Apple M2 Max", nil).should be_false
+    metal.q4_h16_b64_tail_policy?(Int32::MAX, "Apple M2 Max", nil).should be_true
+
+    expect_raises(ArgumentError) { metal.q4_h16_b64_tail_policy?(360, "Apple M2 Max", "") }
+    expect_raises(ArgumentError) { metal.q4_h16_b64_tail_policy?(360, "Apple M2 Max", "abc") }
+    expect_raises(ArgumentError) { metal.q4_h16_b64_tail_policy?(360, "Apple M2 Max", "999999999999999999999999") }
+  end
+end
+
 describe ML::GGUF::Qwen35CPU, "full decoder forward" do
   pending!("9B model not present") unless File.exists?(QWEN_9B_FWD)
 
