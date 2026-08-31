@@ -25475,3 +25475,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary shape-specific dispatch geometry using the current kernel source.
 
 **decision:** Keep Q6 recurrent QKV on the current `2x1` route. Remove the transient comparison mode and do not add the shape to `q6_gemv_shape_layout`. Move the search to a larger boundary or a genuinely different Q6 kernel family rather than another launch-geometry retry.
+
+#### [LM-QWEN38-ADAPTIVE-DECODE-CHAIN2-FALSIFIED-967] Bounded adaptive chain2 does not repay its lifecycle cost
+**context:** ml / Qwen3.8-27B / adaptive QBit / decode / host-GPU overlap
+**state:** candidate rejected and removed; no production route retained
+
+- claim: "A bounded two-token adaptive chain can preserve the fixed-length decode state contract."
+  source: a temporary diagnostic used one named Metal queue, fresh scratch per token, GPU token-ID handoff, FIFO cache reservations, and ordered wait/validate/publish. Against two serial adaptive steps it produced identical token IDs, identical subsequent top-2 continuation, and identical live lengths for all adaptive caches. This certificate applies only to fixed-length greedy execution without EOS, grammar, tool, or cancellation stops.
+  verified_at: 2026-08-31
+  decay_trigger: adaptive reservation/publication semantics, recurrent-state mutation, token handoff, queue ordering, cache ownership, or stopping semantics change
+  trust: {F:0.98,G:0.03,R:0.91}
+
+- claim: "Overlapping host encoding of token N+1 with GPU execution of token N is not a promotable wall-clock acceleration."
+  source: after one warmup, ten interleaved serial/chain2 pairs at prompt 0 and generation 8 measured serial/chain2 means `497.332/492.095 ms`, p50 `498.739/492.069 ms`, and throughput `16.040/16.258 token/s`. The candidate reduced wall time by only `1.053%` and won `7/10` pairs, missing the predeclared `>=3%` and stable-win gate. A cold run that appeared about `93%` faster was rejected because the serial branch alone paid Metal compilation.
+  verified_at: 2026-08-31
+  decay_trigger: host encoding cost, command construction, Metal compilation/cache state, scratch ownership, model/device, decode topology, or timing harness changes
+  trust: {F:0.98,G:0.03,R:0.88}
+
+**Adversary:** The diagnostic held two fresh scratch sets and introduced a larger failure surface. Because recurrent state mutates in place, a failure after submission cannot safely expose the partially advanced state; a production design would need stop-aware rollback or whole-state poisoning. The exact parity result therefore proves only the narrow no-stop path. The small warmed gain cannot pay for this memory and lifecycle complexity, and the excluded cold result shows how compilation order can manufacture a false speedup.
+
+**Value proxy:** Same-queue structural overlap and cold wall time are not the objective. Warmed paired end-to-end token wall, stable wins, state/cache parity, and product stopping semantics are the value boundary; the candidate failed it.
+
+**LTP/WBA:** Not claimed. This was ordinary bounded host/GPU pipelining without a recomputed global descent certificate.
+
+**decision:** Remove the adaptive chain2 branch, cache-tail helper, test, and probe. Keep synchronous one-token adaptive decode. Reopen only if the removable host boundary becomes materially larger or a stop-aware rollback design is independently required; otherwise search for elimination of GPU work inside one adaptive token.

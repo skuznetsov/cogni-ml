@@ -3049,3 +3049,28 @@ Q6 production selector changed. This result rejects another launch-geometry
 retry, not a future Q6 kernel that removes a larger unit of dequantization,
 traffic, or synchronization work. This was ordinary dispatch tuning, not
 LTP/WBA.
+
+### Rejected adaptive decode chain2 host overlap (2026-08-31)
+
+A temporary fixed-length diagnostic submitted two adaptive decode tokens on one
+named Metal queue. It retained fresh scratch per token, GPU token-ID handoff,
+FIFO cache reservations, and ordered wait, validation, and publication. The
+candidate matched two serial steps exactly: token IDs, the next token's top-2
+continuation, and every adaptive cache length were identical. This did not cover
+EOS, grammar, tool, cancellation, or other early-stop semantics.
+
+After one warmup, ten interleaved serial/chain2 pairs at prompt 0 and generation
+8 measured means `497.332/492.095 ms`, p50 `498.739/492.069 ms`, and throughput
+`16.040/16.258 token/s`. Chain2 reduced wall time by only `1.053%` and won
+`7/10` pairs, missing the predeclared `>=3%` and stable-win gate. An earlier
+cold comparison that appeared about `93%` faster was excluded because only the
+serial branch paid Metal source compilation.
+
+The small warmed gain cannot justify two fresh scratch sets and the larger
+failure contract. Recurrent state mutates in place, so a submitted-token failure
+would require stop-aware rollback or poisoning the entire advanced state; the
+narrow parity result is not a production stopping certificate. The prototype,
+cache-tail helper, tests, and probe were removed. Synchronous one-token adaptive
+decode remains the default, and the next search targets removal of GPU work
+inside a token rather than another command-boundary rearrangement. This was
+ordinary bounded pipelining, not LTP/WBA.
