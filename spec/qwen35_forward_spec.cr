@@ -70,6 +70,15 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     end
   end
 
+  it "appends the resident top-1 head only at the final adaptive layer" do
+    qwen = ML::GGUF::Qwen35CPU
+    qwen.prefill_resident_top1_append_layer?(0, 16).should be_false
+    qwen.prefill_resident_top1_append_layer?(14, 16).should be_false
+    qwen.prefill_resident_top1_append_layer?(15, 16).should be_true
+    qwen.prefill_resident_top1_append_layer?(0, 1).should be_true
+    qwen.prefill_resident_top1_append_layer?(0, 0).should be_false
+  end
+
   it "gives concurrent CogniGraph leases disjoint scratch arenas" do
     pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
 
@@ -198,6 +207,51 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     ML::GGUF::Qwen35Metal.rmsnorm_project_top1_buffer(
       resident, Int64::MAX, w.output_norm, w.output, w.hparams.rms_eps,
     ).should be_nil
+  end
+
+  it "appends a selected resident top-1 head without committing its caller command" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
+    hidden_dim = w.hparams.n_embd
+    first = Array(Float32).new(hidden_dim) { |i| ((i % 17) - 8).to_f32 / 17.0_f32 }
+    second = Array(Float32).new(hidden_dim) { |i| ((i % 23) - 11).to_f32 / 23.0_f32 }
+    resident = ML::MetalBuffer.new((2 * hidden_dim).to_i64 * sizeof(Float32))
+    resident.write(first + second)
+    top1_id = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
+    top1_value = ML::MetalBuffer.new(sizeof(Float32).to_i64)
+
+    normalized = ML::GGUF::Qwen35CPU.rms_norm(
+      second, w.output_norm, w.hparams.rms_eps,
+    )
+    cpu_logits = ML::GGUF::QuantMatmul.matmul_add(
+      normalized, 1, w.output.in_dim, w.output.raw, w.output.type,
+      w.output.out_dim, Array(Float32).new(w.output.out_dim, 0.0_f32),
+    )
+    expected_id = cpu_logits.index(cpu_logits.max).not_nil!.to_i32
+
+    cmd = ML::Metal::CommandBuffer.new
+    ML::GGUF::Qwen35Metal.encode_rmsnorm_project_top1_buffer(
+      cmd, resident, hidden_dim.to_i64,
+      w.output_norm, w.output, w.hparams.rms_eps,
+      top1_id, top1_value,
+    ).should be_true
+    cmd.committed?.should be_false
+
+    cmd.commit
+    cmd.wait
+    actual = ML::GGUF::Qwen35Metal.read_head_top1_buffers(top1_id, top1_value)
+    actual[0].to_i32.should eq(expected_id)
+    actual[1].should be_close(cpu_logits[expected_id], 1.0e-4_f32)
+
+    completed = ML::Metal::CommandBuffer.new
+    completed.commit
+    completed.wait
+    ML::GGUF::Qwen35Metal.encode_rmsnorm_project_top1_buffer(
+      completed, resident, hidden_dim.to_i64,
+      w.output_norm, w.output, w.hparams.rms_eps,
+      top1_id, top1_value,
+    ).should be_false
   end
 
   it "falls back to full-logit argmax when fused greedy head is disabled" do

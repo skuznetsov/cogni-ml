@@ -28,6 +28,10 @@ module ML::GGUF
     record AllowedTokenScore,
       token_id : Int32,
       logit : Float32
+    record PrefillResidentTop1Append,
+      id_buf : ML::MetalBuffer,
+      value_buf : ML::MetalBuffer,
+      encoded : Array(Bool)
     {% if flag?(:cpu_only) %}
       alias PrefillCommandBuffer = Nil
     {% else %}
@@ -145,6 +149,11 @@ module ML::GGUF
         raise ArgumentError.new("CogniGraph prefill enqueue does not support boundary profiling")
       end
       value
+    end
+
+    def prefill_resident_top1_append_layer?(layer_index : Int32,
+                                            layer_limit : Int32) : Bool
+      layer_limit > 0 && layer_index == layer_limit - 1
     end
 
     private def with_prefill_scratch_arena(arena : PrefillScratchArena?, &)
@@ -3133,11 +3142,29 @@ module ML::GGUF
               token_ids.size.to_i64 * hp.n_embd.to_i64 * sizeof(Float32),
             )
             resident_written = [false]
+            append_top1 = ENV["QWEN35_PREFILL_TOP1_ADAPTIVE_APPEND"]? == "1"
+            top1_id_buf = append_top1 ? ML::MetalBuffer.new(sizeof(UInt32).to_i64) : nil
+            top1_value_buf = append_top1 ? ML::MetalBuffer.new(sizeof(Float32).to_i64) : nil
+            top1_encoded = [false]
+            resident_top1_append = if append_top1
+                                     PrefillResidentTop1Append.new(
+                                       top1_id_buf.not_nil!, top1_value_buf.not_nil!, top1_encoded,
+                                     )
+                                   end
             prefill_tokens_hidden(weights, token_ids, start_pos, state,
               need_output: false,
               resident_output_buf: resident_buf,
-              resident_output_written: resident_written)
+              resident_output_written: resident_written,
+              resident_top1_append: resident_top1_append)
             raise "adaptive resident final prefill did not produce a GPU hidden buffer" unless resident_written[0]
+            if append_top1
+              raise "adaptive resident final prefill did not append the top-1 head" unless top1_encoded[0]
+              packed = Qwen35Metal.read_head_top1_buffers(
+                top1_id_buf.not_nil!, top1_value_buf.not_nil!,
+              )
+              Qwen35Metal::Profile.bump_route_marker("adaptive_final_resident_top1_appended")
+              return {packed[0].to_i32, packed[1]}
+            end
             if top1 = output_project_top1_resident_routed(
                  resident_buf, token_ids.size - 1, weights.output_norm, weights.output, hp.rms_eps,
                )
@@ -3515,8 +3542,17 @@ module ML::GGUF
                                       need_output : Bool = true,
                                       resident_output_buf : ML::MetalBuffer? = nil,
                                       resident_output_written : Array(Bool)? = nil,
+                                      resident_top1_append : PrefillResidentTop1Append? = nil,
                                       shared_command_completed : Array(Bool)? = nil) : Array(Float32)
       raise ArgumentError.new("prefill_tokens_hidden token_ids must not be empty") if token_ids.empty?
+      if resident_top1_append
+        if need_output || resident_output_buf.nil? || resident_output_written.nil?
+          raise ArgumentError.new("resident top-1 append requires a resident output-only prefill")
+        end
+        unless resident_top1_append.not_nil!.encoded.size == 1
+          raise ArgumentError.new("resident top-1 append requires one completion marker")
+        end
+      end
       checkpoint_requested = !checkpoint_index.nil? || !checkpoint_state.nil?
       if checkpoint_requested && state.adaptive_kv?
         raise ArgumentError.new("adaptive resident QBit KV checkpoint is unsupported")
@@ -3914,6 +3950,41 @@ module ML::GGUF
               raise ArgumentError.new("adaptive resident QBit KV full-attention prefill route is unavailable")
             end
             append_prefill_gpu_work = true
+            if top1_append = resident_top1_append
+              if prefill_resident_top1_append_layer?(il, layer_limit)
+                unless adaptive_output_buf
+                  pending_adaptive_caches.each do |cache|
+                    QwenQBitAdaptiveResidentKV.cancel_pending_append!(cache, cmd)
+                  end
+                  pending_adaptive_caches.clear
+                  raise ArgumentError.new("resident top-1 append did not reach the final adaptive output")
+                end
+                begin
+                  encoded = with_prefill_scratch_arena(prefill_graph_scratch_arena) do
+                    Qwen35Metal.encode_rmsnorm_project_top1_buffer(
+                      cmd, adaptive_output_buf.not_nil!,
+                      (n_tokens - 1).to_i64 * hp.n_embd.to_i64,
+                      weights.output_norm, weights.output, hp.rms_eps,
+                      top1_append.id_buf, top1_append.value_buf,
+                    )
+                  end
+                  unless encoded
+                    pending_adaptive_caches.each do |cache|
+                      QwenQBitAdaptiveResidentKV.cancel_pending_append!(cache, cmd)
+                    end
+                    pending_adaptive_caches.clear
+                    raise ArgumentError.new("resident top-1 append encoder rejected the final adaptive output")
+                  end
+                  top1_append.encoded[0] = true
+                rescue ex
+                  pending_adaptive_caches.each do |cache|
+                    QwenQBitAdaptiveResidentKV.cancel_pending_append!(cache, cmd)
+                  end
+                  pending_adaptive_caches.clear
+                  raise ex
+                end
+              end
+            end
             flush_prefill_cmd.call
             gpu_hidden = nil
             if adaptive_read_output

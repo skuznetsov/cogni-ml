@@ -8777,6 +8777,61 @@ module ML
           )
         end
 
+        # Encode one resident hidden row through output RMSNorm and the fused
+        # top-1 head into a caller-owned command buffer. The caller owns commit,
+        # completion, result-buffer lifetime, and result visibility.
+        def self.encode_rmsnorm_project_top1_buffer(command : ML::Metal::CommandBuffer,
+                                                    x_buf : ML::MetalBuffer,
+                                                    element_offset : Int64,
+                                                    norm_weight : Array(Float32),
+                                                    out_qw : QuantWeight,
+                                                    eps : Float32,
+                                                    top1_id_buf : ML::MetalBuffer,
+                                                    top1_value_buf : ML::MetalBuffer,
+                                                    profile_label : String = "head_top1_resident_append") : Bool
+          return false unless can_use_head_top1_fused?(out_qw)
+          return false if command.committed?
+          return false if element_offset < 0
+          hidden_dim = out_qw.in_dim
+          return false unless norm_weight.size == hidden_dim
+          hidden_dim_i64 = hidden_dim.to_i64
+          return false if element_offset > Int64::MAX - hidden_dim_i64
+          required_elements = element_offset + hidden_dim_i64
+          return false if required_elements > Int64::MAX // sizeof(Float32)
+          return false if x_buf.size < required_elements * sizeof(Float32)
+          return false if top1_id_buf.size < sizeof(UInt32)
+          return false if top1_value_buf.size < sizeof(Float32)
+
+          ML::Metal::Device.init!
+
+          tile_count = head_top1_tile_count(out_qw)
+          norm_w_buf = Scratch.get(:head_top1_norm_w, norm_weight.size.to_i64 * sizeof(Float32))
+          normed_buf = Scratch.get(:head_top1_normed, hidden_dim.to_i64 * sizeof(Float32))
+          tile_values_buf = Scratch.get(:head_top1_tile_values, tile_count.to_i64 * sizeof(Float32))
+          tile_ids_buf = Scratch.get(:head_top1_tile_ids, tile_count.to_i64 * sizeof(UInt32))
+          norm_w_buf.write(norm_weight)
+
+          norm_enc = ML::Metal::ComputeEncoder.new(command)
+          norm_enc.set_pipeline(rmsnorm_vec_pipeline)
+          norm_enc.set_buffer(x_buf, 0, ML::Metal::BufferAccess::Read,
+            offset: element_offset * sizeof(Float32))
+          norm_enc.set_buffer(norm_w_buf, 1)
+          norm_enc.set_buffer(normed_buf, 2, ML::Metal::BufferAccess::Write)
+          norm_enc.set_value(hidden_dim.to_u32, 3)
+          norm_enc.set_value(eps, 4)
+          norm_enc.dispatch_threadgroups({1, 1, 1}, {256, 1, 1})
+          norm_enc.end_encoding
+
+          head_top1_enc = ML::Metal::ComputeEncoder.new(command)
+          encoded = encode_head_top1_no_norm_to_buffers(
+            head_top1_enc, out_qw, normed_buf,
+            tile_values_buf, tile_ids_buf, top1_id_buf, top1_value_buf,
+          )
+          head_top1_enc.end_encoding
+          Profile.bump_route_marker(profile_label) if encoded
+          encoded
+        end
+
         private def self.rmsnorm_project_top1_buffer_impl(x_buf : ML::MetalBuffer,
                                                           element_offset : Int64,
                                                           norm_weight : Array(Float32),

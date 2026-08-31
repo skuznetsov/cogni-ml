@@ -2492,3 +2492,51 @@ ownership, and publication remain separate coordinates. This is ordinary
 resident dataflow, not an LTP/WBA promotion. Default enablement needs a stable
 end-to-end wall-time win; a wider adaptive-to-recurrent handoff additionally
 needs an explicit lifetime certificate for every in-flight output buffer.
+
+### Adaptive final-head command append frontier (2026-08-30)
+
+A source re-read narrowed the next boundary. Intermediate adaptive
+full-attention layers that are followed by recurrent runs already use the
+existing fused full-to-recurrent Metal helper and keep their hidden handoff in
+the caller-owned command. The remaining final boundary was smaller: the last
+adaptive layer completed and published its cache, then output RMSNorm and the
+resident top-1 head ran in a second command.
+
+`QWEN35_PREFILL_TOP1_ADAPTIVE_APPEND=1`, layered on the existing default-off
+`QWEN35_PREFILL_TOP1_ADAPTIVE_RESIDENT=1` gate, appends that RMSNorm and fused
+top-1 projection to the last adaptive command. The id/value outputs are
+invocation-owned buffers. The adaptive cache finalizer is still encoded after
+the head, so successful command completion and every cache tail marker remain
+the publication certificate. Scratch belongs to the active CogniGraph lease
+arena when one exists. Unset or `0` preserves the separate-head command as the
+exact rollback.
+
+The focused Metal contract proves that the encoder neither commits its caller
+command nor changes the selected-row result relative to an independent CPU
+RMSNorm plus quantized-head oracle; it also rejects an already completed
+command. The full forward suite passes `25/25`, the adaptive resident lifecycle
+suite passes `17/17`, and CPU-only generation builds. A separate final-layer
+policy regression proves that earlier standalone adaptive layers do not consume
+the append descriptor; only the last model layer may encode the head. A real
+Qwen3.8 depth-one CogniGraph smoke reached both append route markers with zero
+profiled Metal syncs. The old resident-head profile reported one sync; the
+appended profile reported zero.
+
+The guarded Qwen3.8-27B Q4_K_M pp1024 A/B used the coarse
+`p4;27=bf16,43=bf16,47=bf16,51=bf16` map, a 12% memory-pressure floor, and a
+24 GiB process-tree cap. Four interleaved pairs preserved top-1 and its logit
+within `1e-4`. Means were `7,533.81 ms` for the separate command and
+`7,533.07 ms` for the append, only `0.73 ms`; the append won one of four pairs.
+This proves no wall-time speedup. The structural command reduction is retained
+only as a default-off composition seam for future GPU-resident decode work.
+
+An eight-token quality run preserved exact text, top-1 `8/8`, ranked and set
+top-2 `14/14`, exact-top-1 coverage `7/7`, and ECS mean/minimum `1.0/1.0`.
+All 16 attention layers remained adaptive owners, no Float32 KV owner appeared,
+and cache lengths were consistent. These metrics certify the tested boundary;
+they do not turn the noisy timing row into a speed claim.
+
+This is ordinary same-command fusion, not LTP/WBA. The rollback is the existing
+separate resident-head command. Default promotion remains rejected until a
+downstream resident consumer removes a material synchronization or a repeated
+paired measurement establishes end-to-end value.

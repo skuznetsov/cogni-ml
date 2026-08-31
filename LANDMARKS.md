@@ -24937,3 +24937,33 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary resident dataflow with the existing synchronous completion/publication boundary and the host-readback path as its dual frame.
 
 **decision:** Keep `QWEN35_PREFILL_TOP1_ADAPTIVE_RESIDENT` default-off. Admit the exact resident final-head path as a measured transfer optimization, but require a stable wall-time win before default promotion. Treat a future cross-layer handoff as a separate lifetime and queue-ordering problem.
+
+#### [LM-QWEN38-ADAPTIVE-FINAL-HEAD-APPEND-946] Final adaptive prefill can encode top-1 in its producer command
+**context:** ml / Qwen3.8 / adaptive QBit / Metal / final prefill head / command fusion
+**state:** verified as a default-off structural command reduction on Apple M2 Max and Qwen3.8-27B Q4_K_M; wall-time promotion rejected
+
+- claim: "The final adaptive producer can encode output RMSNorm and top-1 before its cache tail marker without weakening publication."
+  source: `QWEN35_PREFILL_TOP1_ADAPTIVE_APPEND=1` is admitted only inside the existing resident-head preflight. It writes caller-owned id/value buffers, allocates intermediate scratch through the active lease Arena, and leaves commit/wait to the adaptive producer. Cache finalizers remain the last encoders. The selected-row Metal contract proves the helper leaves its caller command uncommitted, matches an independent CPU RMSNorm plus quantized-head oracle, and rejects a completed command. A final-layer policy regression proves earlier standalone adaptive layers cannot consume the descriptor. The forward suite passed `25/25`, the adaptive lifecycle suite passed `17/17`, and CPU-only generation built.
+  verified_at: 2026-08-30
+  decay_trigger: final adaptive routing, encoder/finalizer order, Scratch Arena ownership, head quantization, command completion, cache publication, compiler/runtime, or Metal ABI changes
+  trust: {F:0.98,G:0.25,R:0.95}
+
+- claim: "The tested route removes one profiled Metal synchronization but has no measured pp1024 wall-time benefit."
+  source: the separate resident head reported one gemv/Metal sync; the appended route reported zero and hit both append markers, including through CogniGraph depth one. Four guarded Qwen3.8 pp1024 interleaved pairs preserved top-1/logit within `1e-4`; means were `7,533.81 ms` separate versus `7,533.07 ms` appended, a `0.73 ms` difference with only one append win in four. This is noise, not a speed certificate.
+  verified_at: 2026-08-30
+  decay_trigger: model, prompt length, tier map, graph depth, command grouping, host load, compiler/runtime, hardware, profile accounting, or safety guards change
+  trust: {F:0.97,G:0.09,R:0.92}
+
+- claim: "The appended boundary preserves the measured token and cache quality vector."
+  source: a guarded eight-token Qwen3.8 run preserved exact text, top-1 `8/8`, ranked and set top-2 `14/14`, exact-top-1 coverage `7/7`, ECS mean/minimum `1.0/1.0`, all 16 adaptive owners, no Float32 KV owner, and consistent cache lengths.
+  verified_at: 2026-08-30
+  decay_trigger: prompt, tokenizer/template, model, resident tier map, generation policy, quality metrics, cache ownership, or publication changes
+  trust: {F:0.98,G:0.08,R:0.95}
+
+**Adversary:** Fewer commits are not automatically faster: the head kernels still execute and the caller still waits before reading id/value. The pp1024 delta is negligible and unstable. The route does not overlap adaptive tokens, remove the final host-visible result, establish concurrency, or generalize beyond one device/model. A source re-read also corrected the frontier: intermediate adaptive full-to-recurrent runs already use the existing fused helper, so building a second handoff protocol there would be duplication.
+
+**Value proxy:** Raw sync count proves the structural boundary change. End-to-end time, top-1/top-2/ECS, cache publication, memory pressure, and downstream residency remain independent admission coordinates.
+
+**LTP/WBA:** Not claimed. This is ordinary same-command fusion. The separate resident-head command is the dual frame; no global-potential promotion follows from one removed sync.
+
+**decision:** Keep both resident-head gates default-off. Retain the appended route as a tested composition seam, not a speed promotion. The next useful acceleration must remove a material downstream boundary or attack a measured kernel/bandwidth hotspot.
