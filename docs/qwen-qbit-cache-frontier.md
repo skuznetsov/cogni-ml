@@ -2794,3 +2794,36 @@ promotes that explanation to a finding. The next Q4 FFN experiment must first
 measure the actual plain gate plus fused up/SwiGLU command interval and then
 demonstrate local work reduction as well as end-to-end parity. This is an
 ordinary rejected kernel specialization, not LTP/WBA.
+
+### Exact-route fused Q4 FFN timing boundary (2026-08-31)
+
+The attribution binary can now measure the current default B64 FFN corridor
+directly: one shared F32-to-F16 input conversion, a Float32 gate projection,
+and the fused H16 up-plus-SwiGLU projection. It reports host submit-and-wait and
+the Metal completed-command GPU interval separately. The diagnostic fails
+closed unless the dimensions, raw Q4_K sizes, dispatch counts, and current
+gate/up/down B64 route policy match. It also rejects ADDNORM-H16 input,
+tensor-gate, exact-rowpack, scratch-off, and other route-changing
+configurations. Its validation mode compares every Float32 gate bit and every
+Float16 activation
+bit against the current unfused GPU pair plus standalone SwiGLU route; the
+focused real-model Metal contract passes.
+
+On Apple M2 Max, two guarded Qwen3.8-27B Q4_K_M screens measured the exact
+`5120 -> 17408`, batch-2048 shape after two warmups and across seven samples.
+The first submit-and-wait/GPU p50 was `95.783/94.185 ms`; the final route-aware
+binary measured `86.699/85.203 ms` for the same command. The roughly `9.5%`
+absolute GPU-p50 drift occurred without a kernel candidate, so future A/B
+decisions must be interleaved in one process. There are 64 same-shape pairs,
+but even the final `5452.989 ms` serial estimate is multiplication, not a
+traced whole-model interval. It must not be read as total prefill time or as an
+engine speedup.
+
+This is a kernel-candidate pre-gate, not an independent correctness oracle or
+hardware-counter profiler. The comparison reference shares the current Metal
+Q4 implementation, and the timestamps do not expose occupancy, register
+pressure, cache traffic, or individual dispatch intervals. A candidate must
+therefore keep a separate current-source pipeline, preserve full-buffer parity,
+win a stable interleaved local GPU-timing screen, and then survive a
+product-shaped wall-time and output-parity run. This instrumentation and the
+next scheduling probes are ordinary Metal optimization, not LTP/WBA.

@@ -31,7 +31,8 @@ record PairRef,
   gate_name : String,
   up_name : String,
   gate_qw : ML::GGUF::QuantWeight,
-  up_qw : ML::GGUF::QuantWeight
+  up_qw : ML::GGUF::QuantWeight,
+  down_qw : ML::GGUF::QuantWeight
 
 def add_op(ops : Array(OpRef), name : String, qw : ML::GGUF::QuantWeight) : Nil
   ops << OpRef.new(name, qw)
@@ -69,9 +70,11 @@ def collect_ffn_gate_up_pairs(w : ML::GGUF::Qwen35Weights) : Array(PairRef)
   w.layers.each_with_index do |lw, il|
     case lw
     in ML::GGUF::Qwen35FullAttnWeights
-      pairs << PairRef.new("L#{il}.ffn.g", "L#{il}.ffn.u", lw.ffn_gate_qw, lw.ffn_up_qw)
+      pairs << PairRef.new("L#{il}.ffn.g", "L#{il}.ffn.u",
+        lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw)
     in ML::GGUF::Qwen35RecurrentWeights
-      pairs << PairRef.new("L#{il}.ffn.g", "L#{il}.ffn.u", lw.ffn_gate_qw, lw.ffn_up_qw)
+      pairs << PairRef.new("L#{il}.ffn.g", "L#{il}.ffn.u",
+        lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw)
     end
   end
   pairs
@@ -94,7 +97,11 @@ def shape_stats(ops : Array(OpRef)) : Array(ShapeStats)
 end
 
 def input_for(in_dim : Int32, batch : Int32) : Array(Float32)
-  Array(Float32).new(in_dim * batch) do |i|
+  count = in_dim.to_i64 * batch.to_i64
+  unless count > 0 && count <= Int32::MAX
+    raise ArgumentError.new("input element count must fit Int32")
+  end
+  Array(Float32).new(count.to_i32) do |i|
     # Deterministic bounded values; avoids RNG setup in measured loops.
     ((((i.to_i64 * 1103515245_i64 + 12345_i64) & 0xffff_i64) / 32768.0) - 1.0).to_f32
   end
@@ -108,6 +115,27 @@ def bench_q4_h16_pair(pair : PairRef, warmup : Int32, runs : Int32, batch : Int3
     ML::GGUF::Qwen35Metal.bench_q4_h16_pair_wait_ms(pair.gate_qw, pair.up_qw, x, batch)
   end
   percentile(times.sort, 50)
+end
+
+def bench_q4_h16_fused_pair(pair : PairRef, warmup : Int32, runs : Int32, batch : Int32) : NamedTuple(submit_wait_ms: Float64, gpu_ms: Float64)
+  x = input_for(pair.gate_qw.in_dim, batch)
+  ML::GGUF::Qwen35Metal.bench_q4_h16_fused_swiglu_timing_ms(
+    pair.gate_qw, pair.up_qw, pair.down_qw, x, batch, validate: true)
+  warmup.times do
+    ML::GGUF::Qwen35Metal.bench_q4_h16_fused_swiglu_timing_ms(
+      pair.gate_qw, pair.up_qw, pair.down_qw, x, batch,
+    )
+  end
+  submit_wait_times = Array(Float64).new(runs)
+  gpu_times = Array(Float64).new(runs)
+  runs.times do
+    timing = ML::GGUF::Qwen35Metal.bench_q4_h16_fused_swiglu_timing_ms(
+      pair.gate_qw, pair.up_qw, pair.down_qw, x, batch,
+    )
+    submit_wait_times << timing[:submit_wait_ms]
+    gpu_times << timing[:gpu_ms]
+  end
+  {submit_wait_ms: percentile(submit_wait_times.sort, 50), gpu_ms: percentile(gpu_times.sort, 50)}
 end
 
 def percentile(sorted : Array(Float64), pct : Int32) : Float64
@@ -178,6 +206,33 @@ def print_prefill_q4_pair_table(w : ML::GGUF::Qwen35Weights, warmup : Int32, run
   end
 end
 
+def print_prefill_q4_fused_pair_table(w : ML::GGUF::Qwen35Weights, warmup : Int32, runs : Int32, batch : Int32) : Nil
+  pairs = collect_ffn_gate_up_pairs(w).select do |p|
+    p.gate_qw.type.q4_k? && p.up_qw.type.q4_k? &&
+      p.gate_qw.in_dim == p.up_qw.in_dim &&
+      p.gate_qw.out_dim == p.up_qw.out_dim
+  end
+  by_shape = pairs.group_by { |p| {p.gate_qw.in_dim, p.gate_qw.out_dim} }
+
+  puts
+  puts "Prefill Q4_H16 B64 gate + fused H16 B64 up/SwiGLU diagnostic corridor"
+  puts "note: submit_wait excludes setup and command encoding; gpu is the Metal completed-command execution interval."
+  puts "note: the probe fails closed when env policy selects a different gate/input/down route."
+  puts "note: serial_est is a standalone shape extrapolation, not a traced whole-model interval."
+  printf "%7s %8s %5s %5s %10s %10s %10s %14s  %s\n",
+    "in", "out", "pairs", "batch", "submit_p50", "gpu_p50", "gpu/row", "serial_est", "examples"
+  by_shape.to_a.sort_by { |(shape, shape_pairs)| -(shape[0].to_i64 * shape[1] * shape_pairs.size) }.each do |shape, shape_pairs|
+    sample = shape_pairs.first
+    timing = bench_q4_h16_fused_pair(sample, warmup, runs, batch)
+    shape_estimate_ms = timing[:gpu_ms] * shape_pairs.size
+    examples = shape_pairs.first(3).map { |p| "#{p.gate_name}+#{p.up_name}" }.join(",")
+    examples += ",..." if shape_pairs.size > 3
+    printf "%7d %8d %5d %5d %10.3f %10.3f %10.3f %14.3f  %s\n",
+      shape[0], shape[1], shape_pairs.size, batch,
+      timing[:submit_wait_ms], timing[:gpu_ms], timing[:gpu_ms] / batch, shape_estimate_ms, examples
+  end
+end
+
 model = MODEL_PATH
 warmup = 3
 runs = 9
@@ -186,21 +241,27 @@ batch = 1
 profile_wait = false
 prefill_q4_pair_wait = false
 prefill_q4_pair_only = false
+prefill_q4_fused_pair_wait = false
+prefill_q4_fused_pair_only = false
 
 OptionParser.parse do |p|
-  p.banner = "Usage: qwen35_op_attribution [--model PATH] [--warmup N] [--runs N] [--limit N] [--batch N] [--profile-wait] [--prefill-q4-pair-wait] [--prefill-q4-pair-only]"
+  p.banner = "Usage: qwen35_op_attribution [--model PATH] [--warmup N] [--runs N] [--limit N] [--batch N] [--profile-wait] [--prefill-q4-pair-wait] [--prefill-q4-pair-only] [--prefill-q4-fused-pair-wait] [--prefill-q4-fused-pair-only]"
   p.on("--model=PATH", "GGUF model path") { |v| model = v }
   p.on("--warmup=N", "Warmup runs per shape (default: 3)") { |v| warmup = v.to_i }
   p.on("--runs=N", "Measured runs per shape (default: 9)") { |v| runs = v.to_i }
   p.on("--limit=N", "Only benchmark top-N dense-MAC shapes (default: all)") { |v| limit = v.to_i }
   p.on("--batch=N", "Rows per matmul call (default: 1)") { |v| batch = v.to_i }
   p.on("--profile-wait", "Also report Metal command wait time, excluding host-side input write/readback") { profile_wait = true }
-  p.on("--prefill-q4-pair-wait", "Also benchmark the actual Q4_H16 FFN gate+up pair route used by prefill") { prefill_q4_pair_wait = true }
-  p.on("--prefill-q4-pair-only", "Only benchmark the actual Q4_H16 FFN gate+up pair route used by prefill") { prefill_q4_pair_wait = true; prefill_q4_pair_only = true }
+  p.on("--prefill-q4-pair-wait", "Also benchmark the unfused Q4_H16 FFN gate+up pair baseline") { prefill_q4_pair_wait = true }
+  p.on("--prefill-q4-pair-only", "Only benchmark the unfused Q4_H16 FFN gate+up pair baseline") { prefill_q4_pair_wait = true; prefill_q4_pair_only = true }
+  p.on("--prefill-q4-fused-pair-wait", "Also benchmark the B64 gate + fused H16 up/SwiGLU prefill route") { prefill_q4_fused_pair_wait = true }
+  p.on("--prefill-q4-fused-pair-only", "Only benchmark the B64 gate + fused H16 up/SwiGLU prefill route") { prefill_q4_fused_pair_wait = true; prefill_q4_fused_pair_only = true }
   p.on("-h", "--help", "Show help") { puts p; exit }
 end
 
 raise "Metal not available" unless ML::GGUF::Qwen35Metal.available?
+raise "--warmup must be non-negative" unless warmup >= 0
+raise "--runs must be positive" unless runs > 0
 raise "--batch must be positive" unless batch > 0
 
 w = ML::GGUF::Qwen35Weights.from_gguf(model)
@@ -219,7 +280,13 @@ puts
 
 if prefill_q4_pair_wait
   print_prefill_q4_pair_table(w, warmup, runs, batch)
-  exit if prefill_q4_pair_only
+  exit if prefill_q4_pair_only && !prefill_q4_fused_pair_wait
+  puts
+end
+
+if prefill_q4_fused_pair_wait
+  print_prefill_q4_fused_pair_table(w, warmup, runs, batch)
+  exit if prefill_q4_fused_pair_only || prefill_q4_pair_only
   puts
 end
 

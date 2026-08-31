@@ -25277,3 +25277,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary compile-time load/dequantization specialization with the scalar source as the exact dual frame.
 
 **decision:** Remove the experimental vec4 source, policy, and tests; retain the scalar B64 implementation. Before attempting another paired Q4 kernel, isolate the actual gate plus fused up/SwiGLU route so a new schedule must reduce its own command interval without relying on whole-prefill noise.
+
+#### [LM-QWEN38-Q4K-FUSED-FFN-TIMING-959] Exact-route timing exposes the fused B64 FFN optimization boundary
+**context:** ml / Qwen3.8 / Metal / prefill / recurrent FFN / measurement
+**state:** scoped diagnostic admitted; no speedup claimed
+
+- claim: "The attribution harness can time the current default B64 gate plus fused H16 up-and-SwiGLU corridor without changing route policy."
+  source: `Qwen35Metal.bench_q4_h16_fused_swiglu_timing_ms` resolves the gate/up/down policy, rejects the ADDNORM-H16, tensor-gate, exact-rowpack, scratch-off, and non-selected branches, then uses the existing shared F32-to-F16 conversion and `encode_q4k_gemm_h16_pair_b64_swiglu_h16` path. It reports host submit-and-wait and Metal completed-command GPU intervals separately and fails closed unless dimensions, raw Q4_K bytes, dispatch counts, and the current B64 candidate policy match. With validation enabled it compares every Float32 gate bit and every Float16 activation bit against the current unfused GPU pair plus standalone SwiGLU reference. The focused real-model Metal contract passed `1/1`.
+  verified_at: 2026-08-31
+  decay_trigger: B64 route policy, Q4_K layout, fused kernel, unfused reference, Metal timestamp semantics, compiler/runtime, or validation boundary changes
+  trust: {F:0.99,G:0.10,R:0.96}
+
+- claim: "The exact Qwen3.8-27B `5120 -> 17408` batch-2048 shape is a material local corridor, but an unpaired absolute timing is power-state sensitive."
+  source: two consecutive guarded current-release screens on Apple M2 Max used a `35%` system-memory floor, `24576 MiB` process-tree cap, two warmups, and seven samples. The first measured submit-and-wait/GPU p50 `95.783/94.185 ms`; the final route-aware binary measured `86.699/85.203 ms`. Both timed the same gate plus fused up/SwiGLU command, exposing about `9.5%` absolute GPU-p50 drift without a code candidate. The model contains 64 same-shape pairs, but even the final `5452.989 ms` value is only `shape GPU p50 * pair count`; it is not a traced whole-model interval.
+  verified_at: 2026-08-31
+  decay_trigger: model, batch, route mix, device, compiler/runtime, power state, or timing method changes
+  trust: {F:0.99,G:0.05,R:0.92}
+
+**Adversary:** The validation reference shares the same Metal Q4 kernels and is not an independent CPU oracle. Whole-command timestamps provide no occupancy, cache, bandwidth, or per-dispatch counters. One shape sample multiplied by 64 ignores layer scheduling, recurrent/full-attention differences, command overlap, and surrounding work. The two baseline screens also moved by about `9.5%` without a candidate, so future decisions require same-process interleaving rather than absolute rows. Therefore the probe can reject a local kernel candidate, but it cannot attribute total prefill time or promote an engine-speed claim by itself.
+
+**Value proxy:** Local GPU p50 is the promotion coordinate for the next kernel-only pre-gate, while exact full-buffer parity is the safety gate. The serial estimate is explicitly non-promotable until a product-shaped wall benchmark recomputes the engine boundary.
+
+**LTP/WBA:** Not claimed. This is ordinary instrumentation around an existing command corridor.
+
+**decision:** Use the exact-route probe to screen one default-off, separate-pipeline kernel change at a time. Preserve a current-source reference, require full-buffer parity, and promote nothing without stable interleaved local timing followed by product-shaped wall parity.

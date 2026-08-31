@@ -276,4 +276,56 @@ describe ML::GGUF::Qwen35Metal do
     puts "  [metal_q8_0_gemv] cos=#{cos.round(6)}, max|Δ|=#{diff}  (#{in_dim}→#{out_dim})"
     cos.should be >= 0.9999
   end
+
+  it "times and fully validates the production B64 gate plus fused H16 SwiGLU route" do
+    old_addnorm = ENV["QWEN35_ADDNORM_H16_FFN"]?
+    ENV.delete("QWEN35_ADDNORM_H16_FFN")
+    gate_raw, in_dim, out_dim = q4k_tensor_bytes(QWEN_9B_METAL, "blk.0.ffn_gate.weight")
+    up_raw, up_in_dim, up_out_dim = q4k_tensor_bytes(QWEN_9B_METAL, "blk.0.ffn_up.weight")
+    down_raw, down_in_dim, down_out_dim = quant_tensor_bytes(
+      QWEN_9B_METAL, "blk.0.ffn_down.weight", ML::GGUF::TensorType::Q6_K)
+    up_in_dim.should eq(in_dim)
+    up_out_dim.should eq(out_dim)
+    down_in_dim.should eq(out_dim)
+    down_out_dim.should eq(in_dim)
+
+    gate_qw = ML::GGUF::QuantWeight.new(gate_raw, ML::GGUF::TensorType::Q4_K, out_dim, in_dim)
+    up_qw = ML::GGUF::QuantWeight.new(up_raw, ML::GGUF::TensorType::Q4_K, out_dim, in_dim)
+    down_qw = ML::GGUF::QuantWeight.new(down_raw, ML::GGUF::TensorType::Q6_K, down_out_dim, down_in_dim)
+    batch = 64
+    x = Array(Float32).new(batch * in_dim) do |i|
+      ((((i.to_i64 * 1103515245_i64 + 12345_i64) & 0xffff_i64) / 32768.0) - 1.0).to_f32
+    end
+
+    timing = ML::GGUF::Qwen35Metal.bench_q4_h16_fused_swiglu_timing_ms(
+      gate_qw, up_qw, down_qw, x, batch, validate: true)
+    timing[:submit_wait_ms].should be > 0.0
+    timing[:gpu_ms].should be > 0.0
+
+    bad_down_shape = ML::GGUF::QuantWeight.new(
+      down_raw, ML::GGUF::TensorType::Q6_K, down_out_dim, down_in_dim + 256)
+    expect_raises(ArgumentError, /reversed-shape/) do
+      ML::GGUF::Qwen35Metal.bench_q4_h16_fused_swiglu_timing_ms(
+        gate_qw, up_qw, bad_down_shape, x, batch)
+    end
+
+    short_down = ML::GGUF::QuantWeight.new(
+      down_raw[0, down_raw.size - 1], ML::GGUF::TensorType::Q6_K, down_out_dim, down_in_dim)
+    expect_raises(ArgumentError, /down weight size mismatch/) do
+      ML::GGUF::Qwen35Metal.bench_q4_h16_fused_swiglu_timing_ms(
+        gate_qw, up_qw, short_down, x, batch)
+    end
+
+    ENV["QWEN35_ADDNORM_H16_FFN"] = "1"
+    expect_raises(ArgumentError, /default F32-input B64 gate route/) do
+      ML::GGUF::Qwen35Metal.bench_q4_h16_fused_swiglu_timing_ms(
+        gate_qw, up_qw, down_qw, x, batch)
+    end
+  ensure
+    if old_addnorm
+      ENV["QWEN35_ADDNORM_H16_FFN"] = old_addnorm
+    else
+      ENV.delete("QWEN35_ADDNORM_H16_FFN")
+    end
+  end
 end

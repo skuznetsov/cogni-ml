@@ -827,6 +827,7 @@ module ML
         @@mmap_registry_mutex = Mutex.new
         @@bf16_weight_buffers = {} of String => ML::MetalBuffer
         @@bf16_weight_mutex = Mutex.new
+        @@q4_fused_bench_mutex = Mutex.new
 
         def self.available? : Bool
           ML::Metal::Device.init!
@@ -11578,6 +11579,151 @@ module ML
             end
           end
           elapsed
+        end
+
+        # Measure the default production B64 FFN corridor: one shared F32->F16 input
+        # conversion, a Float32 gate projection, and a fused H16 up+SwiGLU
+        # projection. Fail closed when environment policy selects another
+        # route. This is a serialized profiling seam; it does not alter policy.
+        def self.bench_q4_h16_fused_swiglu_timing_ms(gate_qw : QuantWeight,
+                                                      up_qw : QuantWeight,
+                                                      down_qw : QuantWeight,
+                                                      x : Array(Float32),
+                                                      batch : Int32,
+                                                      validate : Bool = false) : NamedTuple(submit_wait_ms: Float64, gpu_ms: Float64)
+          @@q4_fused_bench_mutex.synchronize do
+            bench_q4_h16_fused_swiglu_timing_serialized_ms(
+              gate_qw, up_qw, down_qw, x, batch, validate)
+          end
+        end
+
+        private def self.bench_q4_h16_fused_swiglu_timing_serialized_ms(gate_qw : QuantWeight,
+                                                                        up_qw : QuantWeight,
+                                                                        down_qw : QuantWeight,
+                                                                        x : Array(Float32),
+                                                                        batch : Int32,
+                                                                        validate : Bool) : NamedTuple(submit_wait_ms: Float64, gpu_ms: Float64)
+          unless batch > 0 && gate_qw.in_dim > 0 && gate_qw.out_dim > 0 &&
+                 gate_qw.in_dim == up_qw.in_dim && gate_qw.out_dim == up_qw.out_dim &&
+                 (gate_qw.in_dim % QK_K) == 0
+            raise ArgumentError.new("fused Q4 H16 SwiGLU bench requires positive, matching Q4_K block dimensions")
+          end
+          unless gate_qw.type.q4_k? && up_qw.type.q4_k?
+            raise ArgumentError.new("fused Q4 H16 SwiGLU bench requires Q4_K gate and up weights")
+          end
+          expected_weight_bytes = gate_qw.out_dim.to_i64 * (gate_qw.in_dim // QK_K).to_i64 * Q4K_BLOCK_BYTES.to_i64
+          unless gate_qw.raw.size.to_i64 == expected_weight_bytes && up_qw.raw.size.to_i64 == expected_weight_bytes
+            raise ArgumentError.new("fused Q4 H16 SwiGLU bench weight size mismatch")
+          end
+          unless (down_qw.type.q4_k? || down_qw.type.q5_k? || down_qw.type.q6_k?) &&
+                 down_qw.in_dim == gate_qw.out_dim && down_qw.out_dim == gate_qw.in_dim &&
+                 (down_qw.in_dim % QK_K) == 0
+            raise ArgumentError.new("fused Q4 H16 SwiGLU bench requires a reversed-shape Q4_K, Q5_K, or Q6_K down weight")
+          end
+          down_block_bytes = if down_qw.type.q4_k?
+                               Q4K_BLOCK_BYTES
+                             elsif down_qw.type.q5_k?
+                               Q5K_BLOCK_BYTES
+                             else
+                               Q6K_BLOCK_BYTES
+                             end
+          expected_down_bytes = down_qw.out_dim.to_i64 * (down_qw.in_dim // QK_K).to_i64 * down_block_bytes.to_i64
+          unless down_qw.raw.size.to_i64 == expected_down_bytes
+            raise ArgumentError.new("fused Q4 H16 SwiGLU bench down weight size mismatch")
+          end
+          raise ArgumentError.new("fused Q4 H16 SwiGLU bench requires pooled scratch") if ENV["QWEN35_SCRATCH_OFF"]? == "1"
+          down_h16 = prefill_swiglu_h16_down_candidate?(down_qw, batch) ||
+            q4_b64_up_swiglu_h16_down_candidate?(gate_qw, up_qw, down_qw, batch)
+          unless q4_b64_up_swiglu_h16_candidate?(gate_qw, up_qw, batch, down_h16)
+            raise ArgumentError.new("fused Q4 H16 SwiGLU bench is not selected by current gate/up/down policy")
+          end
+          if prefill_addnorm_h16_ffn_enabled? ||
+             (q4_tensor_mm_enabled? && q4_tensor_ffn_candidate?(gate_qw.out_dim) && batch >= Q4_TENSOR_NR1) ||
+             q4_h16_exact_rowpack_candidate?(batch)
+            raise ArgumentError.new("fused Q4 H16 SwiGLU bench requires the default F32-input B64 gate route")
+          end
+          expected_input_count = gate_qw.in_dim.to_i64 * batch.to_i64
+          unless expected_input_count > 0 && expected_input_count <= Int32::MAX
+            raise ArgumentError.new("fused Q4 H16 SwiGLU bench input size overflow")
+          end
+          raise ArgumentError.new("fused Q4 H16 SwiGLU bench x size mismatch") unless x.size.to_i64 == expected_input_count
+          output_count_i64 = batch.to_i64 * gate_qw.out_dim.to_i64
+          unless output_count_i64 > 0 && output_count_i64 <= Int32::MAX
+            raise ArgumentError.new("fused Q4 H16 SwiGLU bench output size overflow")
+          end
+
+          ML::Metal::Device.init!
+          gate_w_buf, gate_w_off = weight_slot(gate_qw)
+          up_w_buf, up_w_off = weight_slot(up_qw)
+          output_count = output_count_i64.to_i32
+          x_buf = Scratch.get(:bench_q4_fused_swiglu_x, x.size.to_i64 * sizeof(Float32))
+          gate_out = Scratch.get(:bench_q4_fused_swiglu_gate, output_count.to_i64 * sizeof(Float32))
+          act_h16_out = Scratch.get(:bench_q4_fused_swiglu_act_h16, output_count.to_i64 * sizeof(UInt16))
+          x_buf.write(x)
+
+          if validate
+            gate_ptr = gate_out.contents.as(Pointer(Float32))
+            act_ptr = act_h16_out.contents.as(Pointer(UInt16))
+            gate_ptr[0] = Float32::NAN
+            gate_ptr[output_count - 1] = Float32::NAN
+            act_ptr[0] = 0x7e00_u16
+            act_ptr[output_count - 1] = 0x7e00_u16
+          end
+
+          cmd = ML::Metal::CommandBuffer.new
+          enc = ML::Metal::ComputeEncoder.new(cmd)
+          encode_q4k_gemm_h16_pair_b64_swiglu_h16(enc,
+            x_buf, gate_out, act_h16_out,
+            gate_w_buf, gate_w_off, up_w_buf, up_w_off,
+            gate_qw.in_dim, gate_qw.out_dim, batch)
+          enc.end_encoding
+
+          t0 = Time.instant
+          gpu_ms = cmd.commit_and_wait_gpu_elapsed_seconds * 1000.0
+          submit_wait_ms = (Time.instant - t0).total_milliseconds
+
+          if validate
+            gate_ptr = gate_out.contents.as(Pointer(Float32))
+            act_ptr = act_h16_out.contents.as(Pointer(UInt16))
+            gate_first = gate_ptr[0]
+            gate_last = gate_ptr[output_count - 1]
+            act_first = Dequant.fp16_to_f32(act_ptr[0])
+            act_last = Dequant.fp16_to_f32(act_ptr[output_count - 1])
+            unless gate_first.finite? && gate_last.finite? && act_first.finite? && act_last.finite?
+              raise "fused Q4 H16 SwiGLU bench validation failed: non-finite boundary output"
+            end
+
+            ref_gate_out = Scratch.get(:bench_q4_fused_swiglu_ref_gate, output_count.to_i64 * sizeof(Float32))
+            ref_up_out = Scratch.get(:bench_q4_fused_swiglu_ref_up, output_count.to_i64 * sizeof(Float32))
+            ref_act_h16_out = Scratch.get(:bench_q4_fused_swiglu_ref_act_h16, output_count.to_i64 * sizeof(UInt16))
+            ref_cmd = ML::Metal::CommandBuffer.new
+            ref_enc = ML::Metal::ComputeEncoder.new(ref_cmd)
+            encode_q4k_gemm_h16_pair(ref_enc,
+              x_buf, ref_gate_out, ref_up_out,
+              gate_w_buf, gate_w_off, up_w_buf, up_w_off,
+              gate_qw.in_dim, gate_qw.out_dim, batch)
+            ref_enc.set_pipeline(ffn_swiglu_h16_pipeline)
+            ref_enc.set_buffer(ref_gate_out, 0)
+            ref_enc.set_buffer(ref_up_out, 1)
+            ref_enc.set_buffer(ref_act_h16_out, 2, ML::Metal::BufferAccess::Write)
+            ref_enc.set_value(output_count.to_u32, 3)
+            ref_enc.dispatch_1d(output_count, 256)
+            ref_enc.end_encoding
+            ref_cmd.commit_and_wait
+
+            ref_gate_ptr = ref_gate_out.contents.as(Pointer(Float32))
+            ref_act_ptr = ref_act_h16_out.contents.as(Pointer(UInt16))
+            output_count.times do |i|
+              unless gate_ptr[i].unsafe_as(UInt32) == ref_gate_ptr[i].unsafe_as(UInt32)
+                raise "fused Q4 H16 SwiGLU gate parity failed at index #{i}"
+              end
+              unless act_ptr[i] == ref_act_ptr[i]
+                raise "fused Q4 H16 SwiGLU activation parity failed at index #{i}"
+              end
+            end
+          end
+
+          {submit_wait_ms: submit_wait_ms, gpu_ms: gpu_ms}
         end
 
         # Pair-only Q4_K FFN projection: share one F32->F16 input conversion
