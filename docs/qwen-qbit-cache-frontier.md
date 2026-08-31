@@ -2827,3 +2827,29 @@ therefore keep a separate current-source pipeline, preserve full-buffer parity,
 win a stable interleaved local GPU-timing screen, and then survive a
 product-shaped wall-time and output-parity run. This instrumentation and the
 next scheduling probes are ordinary Metal optimization, not LTP/WBA.
+
+### Rejected final B64 gate barrier elision (2026-08-31)
+
+A temporary separate-source candidate removed only the final input-loop
+`threadgroup_barrier` from the plain B64 Q4_K gate kernel. Initial,
+inter-iteration, SIMD-group, and output-staging barriers stayed intact, and
+normal route selection was unchanged. Full-buffer bit parity passed on a real
+Qwen3.5-9B Q4_K_M weight for a complete batch-64 tile and a batch-120 tail.
+
+The exact-route probe then ran current and candidate pipelines in alternating
+AB/BA order in one process on Apple M2 Max. For the `4096 -> 12288`,
+batch-2048 corridor, two warmups and ten measured pairs produced current and
+candidate GPU p50s of `45.649 ms` and `45.870 ms`. From the reported p50s the
+candidate was about `0.48%` slower and won only `4/10` pairs. Same-process
+ordering limits slow drift, but this is still a
+noise-sized ten-pair result. The raw pairs and temporary candidate artifact
+were not retained, so the row is not a reproducible performance certificate.
+Its wrong-sign p50 and minority paired wins are sufficient to reject promotion
+on this one shape; no 27B product-shaped run was admitted.
+
+The candidate kernel, diagnostic route, tests, and CLI switches were removed.
+The current barrier remains. Exact parity was a safety coordinate rather than
+evidence of value; interleaved GPU time was the local value coordinate and it
+rejected the change. Future synchronization work must remove a larger,
+independently justified unit of work instead of retrying this single-barrier
+hypothesis. This was ordinary kernel scheduling, not LTP/WBA.

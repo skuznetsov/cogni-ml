@@ -25301,3 +25301,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary instrumentation around an existing command corridor.
 
 **decision:** Use the exact-route probe to screen one default-off, separate-pipeline kernel change at a time. Preserve a current-source reference, require full-buffer parity, and promote nothing without stable interleaved local timing followed by product-shaped wall parity.
+
+#### [LM-QWEN38-Q4K-FINAL-GATE-BARRIER-960] Correct final-barrier elision is not an acceleration
+**context:** ml / Qwen3.8 / Metal / prefill / recurrent FFN / synchronization
+**state:** candidate rejected and removed; current barrier retained
+
+- claim: "The last plain B64 gate input barrier can be removed without changing the tested output bits."
+  source: a temporary separate-source candidate removed only the final loop `threadgroup_barrier` from the plain B64 Q4_K gate kernel. Initial, inter-iteration, SIMD-group, and output-staging barriers remained unchanged, and production route selection remained untouched. Full-buffer bit parity passed on a real Qwen3.5-9B Q4_K_M weight for a complete batch-64 tile and a batch-120 tail.
+  verified_at: 2026-08-31
+  decay_trigger: Q4_K dimensions, ping-pong layout, output staging, compiler/runtime, or parity coverage changes
+  trust: {F:0.99,G:0.06,R:0.95}
+
+- claim: "Removing that one barrier does not improve the measured exact B64 gate plus fused up-and-SwiGLU corridor."
+  source: a same-process AB/BA screen on Apple M2 Max used Qwen3.5-9B Q4_K_M, exact `4096 -> 12288`, batch 2048, two warmups, and ten measured pairs. Current/candidate GPU p50 was `45.649/45.870 ms`; from the reported p50s the candidate was about `0.48%` slower and won only `4/10` pairs. The transient screen did not retain its ten raw pair samples or candidate artifact, so it is evidence for rejecting promotion on this one shape rather than a reproducible performance certificate. The 27B escalation was skipped after this screen failed.
+  verified_at: 2026-08-31
+  decay_trigger: device, model shape, compiler/runtime, surrounding fused route, or timing method changes
+  trust: {F:0.94,G:0.05,R:0.82}
+
+**Adversary:** Exact parity proves only the tested route is observationally equal; it does not establish that the barrier is universally redundant. Same-process AB/BA limits slow power-state drift, but ten pairs and a roughly `0.48%` delta are still noise-sized, and the raw samples were not retained. This does not prove that barrier elision can never help; the wrong-sign p50 and minority paired wins are enough only to reject promotion on the measured shape.
+
+**Value proxy:** Full-buffer parity is the safety gate. Interleaved Metal GPU time and paired wins are the local acceleration gate; both reject promotion. No whole-prefill or engine-speed claim follows.
+
+**LTP/WBA:** Not claimed. This was an ordinary local synchronization experiment.
+
+**decision:** Remove the candidate kernel source, diagnostic route, tests, and CLI flags. Retain the current barrier. Revisit synchronization only with a larger independently justified work reduction, not by retrying the same single-barrier hypothesis.
