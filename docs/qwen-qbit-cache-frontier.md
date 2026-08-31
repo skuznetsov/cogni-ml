@@ -3206,3 +3206,29 @@ Metal work. It does not reject a future weight format that preserves sub-block
 scales or explicitly codes a bounded residual. The offline probe is retained as
 a reproducible quality/size falsifier. This was ordinary approximate weight
 representation research, not LTP/WBA.
+
+### Rejected Q6_K recurrent producer/conv-shift fusion (2026-08-31)
+
+A temporary batch-one Metal kernel fused the exact recurrent QKV Q6_K GEMV
+producer with the existing conv-state shift, convolution, SiLU, and Q/K/V split.
+It removed the 10,240-float intermediate and one consumer dispatch on each of
+the 24 Q6_K recurrent layers, a static reduction of about 1.97 MB of
+intermediate write-plus-read traffic per decoded token. The production route
+remained opt-in while a direct operator seam compared it with the current Q6_K
+GEMV followed by the already-fused conv/shift consumer.
+
+The guarded Apple M2 Max probe used a real `5120 -> 10240` Qwen3.8-27B Q6_K
+recurrent tensor. Random, zero-input, and hostile alternating-scale cases had
+exactly zero maximum difference for Q, K, V, and final conv-state. Five warmups
+and ten four-command blocks then measured current/candidate completed-command
+GPU p50 `0.30017/0.30192 ms` in ABBA and `0.30388/0.30271 ms` in BAAB. The
+candidate therefore changed sign by order and stayed within about `0.6%` of the
+baseline, far below the predeclared `>=3%` promotion gate.
+
+Lane 0 must perform the scalar conv/shift after the SIMD reduction while the
+other 31 lanes are idle, which plausibly consumes the dispatch and tiny-buffer
+saving. The measurement does not establish that mechanism, but it decisively
+rejects this implementation before whole-model integration. The temporary
+kernel, selector, and probe were removed. A future recurrent fusion needs a
+larger shared unit or parallel consumer mapping, not another lane-0 scalar tail.
+This was ordinary producer-consumer fusion, not LTP/WBA.

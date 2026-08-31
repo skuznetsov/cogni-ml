@@ -25613,3 +25613,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary approximate representation screening with native Q6_K as the comparison frame.
 
 **decision:** Do not implement a Metal decoder for the tested one-moment Gaussian P4/P5/native-Q6 records. Retain the CPU probe. Reopen weight compression only with a new information-preserving argument, such as Q6_K sub-block scales or a bounded residual; move the immediate exact-parity frontier to producer-consumer boundary fusion.
+
+#### [LM-QWEN38-Q6K-RECURRENT-CONVSHIFT-FUSION-FALSIFIED-973] Exact producer fusion does not reduce the recurrent operator interval
+**context:** ml / Qwen3.8-27B / Metal / Q6_K / recurrent decode / producer-consumer fusion
+**state:** candidate rejected and removed; current two-dispatch route retained
+
+- claim: "The Q6_K recurrent producer can absorb the exact conv-state update without changing the operator result."
+  source: a temporary batch-one kernel fused Q6_K GEMV with the existing conv/shift/SiLU/QKV split. On a real Qwen3.8-27B `5120 -> 10240` recurrent weight, random, zero-input, and hostile alternating-scale inputs produced zero maximum difference in Q, K, V, and final conv-state versus the current GEMV plus fused conv/shift consumer.
+  verified_at: 2026-08-31
+  decay_trigger: Q6_K reduction, recurrent convolution order, state layout, model shape, Metal compiler/runtime, or validation corpus changes
+  trust: {F:0.98,G:0.04,R:0.95}
+
+- claim: "Removing the 10,240-float intermediate and one dispatch does not materially accelerate the measured operator on Apple M2 Max."
+  source: five warmups and ten four-command blocks measured current/candidate completed-command GPU p50 `0.30017/0.30192 ms` in ABBA and `0.30388/0.30271 ms` in BAAB. The candidate changed sign and remained within about `0.6%`, missing the predeclared `>=3%` gate. The static saving was about 1.97 MB of intermediate write-plus-read traffic per decoded token across 24 Q6 recurrent layers.
+  verified_at: 2026-08-31
+  decay_trigger: kernel lane mapping, consumer parallelism, command encoding, device, compiler/runtime, layer mix, or timing boundary changes
+  trust: {F:0.98,G:0.04,R:0.93}
+
+**Adversary:** Exact parity proves safety only for the tested operator seam. Lane 0 performs the scalar consumer tail after the SIMD reduction while the other lanes idle, plausibly erasing the small dispatch and buffer saving. No whole-model run was warranted because the direct value gate failed.
+
+**Value proxy:** Eliminated bytes and dispatch count are mechanism coordinates. Repeated completed-command GPU time is the first value boundary and showed no stable gain.
+
+**LTP/WBA:** Not claimed. This was ordinary exact producer-consumer fusion.
+
+**decision:** Remove the temporary kernel, selector, and probe. Keep the current Q6_K GEMV followed by fused conv/shift. Reopen only with a consumer mapping that uses the SIMD group or eliminates a materially larger recurrent unit.
