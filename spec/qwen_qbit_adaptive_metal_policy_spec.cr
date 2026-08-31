@@ -41,15 +41,29 @@ describe ML::GGUF::QwenQBitAdaptiveMetalPolicy do
     end
   end
 
-  it "keeps register-local t4 dequantization behind an exact boolean override" do
+  it "auto-admits register-local t4 only on measured M2 Max corridors" do
     policy = ML::GGUF::QwenQBitAdaptiveMetalPolicy
 
-    policy.dequant_t4?(nil).should be_false
-    policy.dequant_t4?("").should be_false
-    policy.dequant_t4?("0").should be_false
-    policy.dequant_t4?("1").should be_true
+    policy.automatic_dequant_t4?(1, false, true, false).should be_false
+    policy.automatic_dequant_t4?(1, false, false, true).should be_false
+    policy.automatic_dequant_t4?(64, false, true, false).should be_true
+    policy.automatic_dequant_t4?(64, false, false, true).should be_true
+    policy.automatic_dequant_t4?(64, false, false, false).should be_false
+    policy.automatic_dequant_t4?(1, true, true, false).should be_false
+    policy.automatic_dequant_t4?(1, true, false, true).should be_true
+
+    policy.dequant_t4?("Apple M2 Max", true).should be_true
+    policy.dequant_t4?("Apple M2 Max", false).should be_false
+    policy.dequant_t4?("Apple M2 Pro", true).should be_false
+    policy.dequant_t4?("Unknown Metal Device", true).should be_false
+
+    policy.dequant_t4?("Apple M2 Max", true, "0").should be_false
+    policy.dequant_t4?("Apple M2 Pro", false, "1").should be_true
     expect_raises(ArgumentError, /QWEN35_ADAPTIVE_DEQUANT_T4/) do
-      policy.dequant_t4?("true")
+      policy.dequant_t4?("Apple M2 Max", true, "")
+    end
+    expect_raises(ArgumentError, /QWEN35_ADAPTIVE_DEQUANT_T4/) do
+      policy.dequant_t4?("Apple M2 Max", true, "true")
     end
   end
 end

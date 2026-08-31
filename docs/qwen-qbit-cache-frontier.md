@@ -2615,16 +2615,23 @@ quality or default-promotion work.
 
 The successor candidate applies the useful part of llama.cpp's four-value
 dequantization pattern without copying its cache format or using cross-lane
-exchange. `QWEN35_ADAPTIVE_DEQUANT_T4=1` selects a separately compiled Metal
-source variant. Four aligned adjacent values stay in one thread's registers.
+exchange. Four aligned adjacent values stay in one thread's registers.
 Uniform P4 reads the row header once and one byte from each plane; uniform BF16
 loads four adjacent values. The packed representation, tier metadata, sidecar,
 threadgroup tile, softmax, pack/finalize path, publication, and host buffer ABI
-are unchanged. Unset or `0` selects the canonical scalar source.
+are unchanged.
+
+The default policy is deliberately route- and device-scoped. On Apple M2 Max,
+unset `QWEN35_ADAPTIVE_DEQUANT_T4` selects t4 for uniform multi-token P4/BF16
+prefill and for uniform BF16 split-K stage one. Uniform P4 split-K remains on
+the scalar source because its isolated timings crossed. One-token serial
+attention, non-P4/BF16 and mixed-tier rows, and other Metal devices remain
+scalar by default. `QWEN35_ADAPTIVE_DEQUANT_T4=1` forces t4 for eligible routes
+as an experimental override; `=0` is the exact scalar rollback.
 
 A common tile-fill helper covers both prefill and split-K stage one, so the
 candidate does not duplicate four K/V traversal implementations. The exact
-boolean policy fails closed. Focused Metal coverage compares canonical serial,
+override policy fails closed. Focused Metal coverage compares canonical serial,
 t4 serial, and t4 split-K against the independent CPU attention reference,
 requires the existing cosine and maximum-error bounds, and requires byte-for-
 byte identical packed K/V after append. The fallback tile-16 variant passes the
@@ -2647,8 +2654,20 @@ top-1 `151/155`, ranked top-2 `274/308`, top-2 set overlap `282/308`, exact
 top-1 coverage `154/154`, ECS `0.976445`, all 16 resident owners, no Float32 KV
 owner, consistent publication, and `3.7647x` logical density.
 
-This admits a default-off prefill acceleration candidate for the measured
-device, shape, and uniform tiers. Split-K has numerical and payload parity but
-no timing certificate yet. Cross-device occupancy, mixed-tier execution,
-end-to-end prompt processing, and automatic/default promotion remain open.
-This is ordinary register-local kernel optimization, not LTP/WBA.
+Two paired real-model prompt-processing checks then measured total wall time,
+not only the local Metal interval. At pp512, scalar averaged `4134.82 ms` and
+t4 `4065.41 ms` (`1.68%` lower); at pp1024, scalar averaged `7534.44 ms` and
+t4 `7340.85 ms` (`2.57%` lower). T4 won all `8/8` paired repetitions, with the
+same top-1 token and final logit within `1e-4` in every pair. These are bounded
+single-device prompt-processing results, not a claim that the whole engine is
+25% faster.
+
+An isolated uniform BF16 split-K A/B/B/A at prefix 8,192 and chunk one measured
+scalar `2.000/1.825 ms` versus t4 `1.860/1.468 ms`, about `13.0%` lower by pair
+means. Uniform P4 split-K crossed (`2.764/2.067 ms` scalar versus
+`1.546/3.486 ms` t4), so it is explicitly excluded from automatic selection.
+
+This evidence admits a narrow Apple M2 Max default for the measured uniform
+prefill and BF16 split-K corridors. Cross-device occupancy, mixed-tier
+execution, broader prompt distributions, and production-scale speed remain
+open. This is ordinary register-local kernel optimization, not LTP/WBA.

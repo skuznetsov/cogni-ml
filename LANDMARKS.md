@@ -25039,3 +25039,33 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary register-local dequantization with the canonical scalar source as the dual frame.
 
 **decision:** Keep `QWEN35_ADAPTIVE_DEQUANT_T4` default-off. Admit it as a measured Apple M2 Max prefill candidate for uniform P4/BF16. Measure split-K and end-to-end pp wall time, then repeat on another Metal device before considering automatic promotion.
+
+#### [LM-QWEN38-ADAPTIVE-DEQUANT-T4-AUTO-950] End-to-end and split-K gates admit a scoped M2 Max default
+**context:** ml / Qwen3.8 / adaptive QBit / Metal / T4 routing policy / prompt processing / split-K
+**state:** verified scoped automatic promotion on Apple M2 Max; exact scalar rollback retained; cross-device promotion open
+
+- claim: "T4 reduces real-model prompt-processing wall time on the measured M2 Max corridor without changing the selected token."
+  source: paired guarded Qwen3.8-27B Q4_K_M runs with the coarse adaptive map measured scalar/t4 averages of `4134.82/4065.41 ms` at pp512 (`1.68%` lower) and `7534.44/7340.85 ms` at pp1024 (`2.57%` lower). T4 won all `8/8` paired repetitions; every pair had the same top-1 token and final logit within `1e-4`.
+  verified_at: 2026-08-31
+  decay_trigger: model, device, Metal compiler/runtime, tier map, prompt-processing path, workload shape, host load, or timing method changes
+  trust: {F:0.97,G:0.09,R:0.92}
+
+- claim: "Uniform BF16 split-K admits T4 on this device, while uniform P4 split-K does not."
+  source: isolated fresh-process A/B/B/A at prefix 8,192 and chunk one measured BF16 scalar `2.000/1.825 ms` versus t4 `1.860/1.468 ms`, about `13.0%` lower by pair means. The matching P4 screen crossed: scalar `2.764/2.067 ms` versus t4 `1.546/3.486 ms`. The automatic policy therefore admits only BF16 split-K and keeps P4 split-K scalar.
+  verified_at: 2026-08-31
+  decay_trigger: tier encoding, split-K stages, context/chunk, tile, device, compiler/runtime, or timing variance changes
+  trust: {F:0.96,G:0.08,R:0.88}
+
+- claim: "The automatic route is fail-closed and has an exact rollback."
+  source: unset mode selects T4 only for Apple M2 Max uniform multi-token P4/BF16 prefill and uniform BF16 split-K stage one. One-token serial attention, non-P4/BF16 and mixed-tier rows, other devices, and P4 split-K remain scalar. A model-free route probe observed `serial1=false` for P4/BF16 at prefix 64, `splitk=false/true` for P4/BF16 at prefix 8,192, and multi-token `prefill=true/true/false` for P4/BF16/F32. `QWEN35_ADAPTIVE_DEQUANT_T4=1` explicitly forces eligible T4 routes, `=0` forces scalar, and every other configured value raises. The focused policy contract passes `6/6`; the adaptive resident Metal contract passes `17/17` in automatic mode and `17/17` with scalar forced.
+  verified_at: 2026-08-31
+  decay_trigger: device naming, policy parsing, route dispatch, tier identity, test coverage, or environment contract changes
+  trust: {F:0.99,G:0.18,R:0.97}
+
+**Adversary:** The end-to-end rows cover one model, one machine, two prompt lengths, and eight pairs. The BF16 split-K certificate is a short synthetic timing screen, and P4 variance explicitly rejects automatic promotion. No cross-device, mixed-tier, decode, or general production-speed claim follows.
+
+**Value proxy:** The local `26.2%/23.9%` kernel reductions are not whole-engine gains. The admitted product coordinate is the smaller `1.68%/2.57%` prompt-processing wall reduction together with unchanged output and cache invariants.
+
+**LTP/WBA:** Not claimed. This is an ordinary route-scoped kernel selection with the canonical scalar source as rollback.
+
+**decision:** Enable T4 automatically only on Apple M2 Max for uniform multi-token P4/BF16 prefill and uniform BF16 split-K. Keep P4 split-K and other devices scalar by default. Preserve explicit `1` as the experimental force switch and `0` as exact rollback; require fresh evidence before widening the device or route scope.

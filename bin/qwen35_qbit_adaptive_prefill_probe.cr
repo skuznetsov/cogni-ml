@@ -118,11 +118,10 @@ module Qwen35QBitAdaptivePrefillProbe
     tile = ML::GGUF::QwenQBitAdaptiveMetalPolicy.gqa6_tile(
       device_name, ENV["QWEN35_ADAPTIVE_GQA6_TILE"]?,
     )
-    dequant_t4 = ML::GGUF::QwenQBitAdaptiveMetalPolicy.dequant_t4?(
-      ENV["QWEN35_ADAPTIVE_DEQUANT_T4"]?,
-    )
-    puts %(probe device=#{device_name.inspect} tile=#{tile} dequant_t4=#{dequant_t4} seed=0x#{SEED.to_s(16)} fixed_snapshot=true)
-    puts "tier prefix chunk pack_wall_ms fused_wall_ms prefill_pack_finalize_gpu_ms non_gpu_ms"
+    dequant_t4_override = ENV["QWEN35_ADAPTIVE_DEQUANT_T4"]?
+    dequant_t4_mode = dequant_t4_override.nil? ? "auto" : dequant_t4_override.strip.inspect
+    puts %(probe device=#{device_name.inspect} tile=#{tile} dequant_t4_mode=#{dequant_t4_mode} seed=0x#{SEED.to_s(16)} fixed_snapshot=true)
+    puts "tier prefix chunk route    t4 pack_wall_ms fused_wall_ms prefill_pack_finalize_gpu_ms non_gpu_ms"
     begin
       tier_names.each do |tier_name|
         tier = tier_for(tier_name)
@@ -150,6 +149,20 @@ module Qwen35QBitAdaptivePrefillProbe
         pack_ms = median(pack_samples)
 
         prefixes.each do |prefix|
+          splitk = ML::GGUF::QwenQBitAdaptiveMetalPolicy.decode_splitk?(
+            prefix, token_count, true,
+            ENV["QWEN35_ADAPTIVE_SPLITK"]?,
+            ENV["QWEN35_ADAPTIVE_SPLITK_MIN_CTX"]?,
+          )
+          route = splitk ? "splitk" : (token_count == 1 ? "serial1" : "prefill")
+          automatic_t4 = ML::GGUF::QwenQBitAdaptiveMetalPolicy.automatic_dequant_t4?(
+            token_count, splitk,
+            tier == ML::GGUF::QwenQBitAdaptiveKV::Tier::P4,
+            tier == ML::GGUF::QwenQBitAdaptiveKV::Tier::BF16,
+          )
+          selected_t4 = ML::GGUF::QwenQBitAdaptiveMetalPolicy.dequant_t4?(
+            device_name, automatic_t4, dequant_t4_override,
+          )
           capacity = prefix + token_count
           plan = ML::GGUF::QwenQBitAdaptiveKV.plan(
             Array.new(capacity * n_head_kv, tier),
@@ -203,8 +216,8 @@ module Qwen35QBitAdaptivePrefillProbe
           end
           fused_wall_ms = median(wall_samples)
           fused_gpu_ms = median(gpu_samples)
-          printf "%4s %6d %5d %12.3f %13.3f %28.3f %10.3f\n",
-            tier_name, prefix, token_count,
+          printf "%4s %6d %5d %-8s %3s %12.3f %13.3f %28.3f %10.3f\n",
+            tier_name, prefix, token_count, route, selected_t4,
             pack_ms, fused_wall_ms, fused_gpu_ms,
             fused_wall_ms - fused_gpu_ms
         end

@@ -37,13 +37,24 @@ module ML::GGUF
         packed_len.to_i64 + 1_i64 >= min_context.to_i64
     end
 
-    def self.dequant_t4?(override : String? = nil) : Bool
-      case override.try(&.strip)
-      when nil, "", "0" then false
-      when "1"          then true
+    def self.dequant_t4?(device_name : String,
+                         automatic : Bool,
+                         override : String? = nil) : Bool
+      return automatic && device_name == "Apple M2 Max" unless override
+
+      case override.strip
+      when "0" then false
+      when "1" then true
       else
         raise ArgumentError.new("QWEN35_ADAPTIVE_DEQUANT_T4 must be 0 or 1")
       end
+    end
+
+    def self.automatic_dequant_t4?(token_count : Int32,
+                                   splitk : Bool,
+                                   uniform_p4 : Bool,
+                                   uniform_bf16 : Bool) : Bool
+      splitk ? uniform_bf16 : token_count > 1 && (uniform_p4 || uniform_bf16)
     end
   end
 end

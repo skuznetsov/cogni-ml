@@ -1071,8 +1071,13 @@ module ML::GGUF
           return
         end
 
+        automatic_t4 = QwenQBitAdaptiveMetalPolicy.automatic_dequant_t4?(
+          token_count, false,
+          uniform_tier == QwenQBitAdaptiveKV::Tier::P4,
+          uniform_tier == QwenQBitAdaptiveKV::Tier::BF16,
+        )
         encoder = ML::Metal::ComputeEncoder.new(command)
-        encoder.set_pipeline(prefill_gqa6_pipeline)
+        encoder.set_pipeline(prefill_gqa6_pipeline(automatic_t4: automatic_t4))
         encoder.set_buffer(q_source, 0)
         encoder.set_buffer(gate_source, 1)
         encoder.set_buffer(k_source, 2)
@@ -1145,7 +1150,7 @@ module ML::GGUF
         )
 
         stage1 = ML::Metal::ComputeEncoder.new(command)
-        stage1.set_pipeline(decode_splitk_stage1_pipeline)
+        stage1.set_pipeline(decode_splitk_stage1_pipeline(uniform_tier))
         stage1.set_buffer(q_source, 0)
         stage1.set_buffer(k_source, 1)
         stage1.set_buffer(v_source, 2)
@@ -1260,9 +1265,9 @@ module ML::GGUF
         end
       end
 
-      private def prefill_gqa6_pipeline : ML::Metal::ComputePipeline
+      private def prefill_gqa6_pipeline(automatic_t4 : Bool) : ML::Metal::ComputePipeline
         tile = gqa6_tile
-        dequant_t4 = dequant_t4?
+        dequant_t4 = dequant_t4?(automatic: automatic_t4)
         key = {tile, dequant_t4}
         suffix = dequant_t4 ? "_dequant_t4" : ""
         @@prefill_gqa6_pipeline_mutex.synchronize do
@@ -1276,9 +1281,14 @@ module ML::GGUF
         end
       end
 
-      private def decode_splitk_stage1_pipeline : ML::Metal::ComputePipeline
+      private def decode_splitk_stage1_pipeline(uniform_tier : QwenQBitAdaptiveKV::Tier) : ML::Metal::ComputePipeline
         tile = gqa6_tile
-        dequant_t4 = dequant_t4?
+        automatic_t4 = QwenQBitAdaptiveMetalPolicy.automatic_dequant_t4?(
+          1, true,
+          uniform_tier == QwenQBitAdaptiveKV::Tier::P4,
+          uniform_tier == QwenQBitAdaptiveKV::Tier::BF16,
+        )
+        dequant_t4 = dequant_t4?(automatic: automatic_t4)
         key = {tile, dequant_t4}
         suffix = dequant_t4 ? "_dequant_t4" : ""
         @@decode_splitk_stage1_pipeline_mutex.synchronize do
@@ -1310,8 +1320,10 @@ module ML::GGUF
         )
       end
 
-      private def dequant_t4? : Bool
+      private def dequant_t4?(automatic : Bool) : Bool
         QwenQBitAdaptiveMetalPolicy.dequant_t4?(
+          ML::Metal::Device.instance.name,
+          automatic,
           ENV["QWEN35_ADAPTIVE_DEQUANT_T4"]?,
         )
       end
