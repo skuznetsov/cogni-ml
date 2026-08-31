@@ -25349,3 +25349,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary compile-time kernel specialization with the generic source as an exact dual frame.
 
 **decision:** Remove the static-tier source patch, policy, test, and temporary probe. Keep the generic uniform loader. Move to Q4_K adjacent-subblock metadata reuse, where the candidate removes duplicated scale/min decoding work rather than relying on compiler branch folding.
+
+#### [LM-QWEN38-Q4K-B64-PAIR-DEQUANT-FALSIFIED-962] Adjacent-subblock metadata reuse loses B64 loader parallelism
+**context:** ml / Qwen3.8 / Metal / prefill / recurrent FFN / Q4_K dequantization
+**state:** candidate rejected and removed; current B64 loaders retained
+
+- claim: "Even/odd Q4_K subblocks can share one scale/min decode without changing the tested B64 output bits."
+  source: a temporary default-off source variant paired only `(0,1), (2,3), ..., (14,15)` within one Q4_K block and kept the current Q payload offsets, nibble masks, shared-memory destinations, barriers, and output path. Distinct cached pipelines allowed current/candidate selection in one process. A focused real Qwen3.5-9B Q4_K_M Metal contract exercised low/high nibbles, multiple Q4_K blocks including the `(14,15)` wrap, a full batch-64 tile, and a batch-65 tail. It compared every Float32 gate bit and every Float16 fused activation bit with the current route and passed `1/1`.
+  verified_at: 2026-08-31
+  decay_trigger: Q4_K layout, B64 loader mapping, Metal compiler/runtime, model fixture, or parity boundary changes
+  trust: {F:0.99,G:0.07,R:0.96}
+
+- claim: "The paired metadata loader does not accelerate the measured exact B64 gate plus fused H16 up/SwiGLU corridor."
+  source: a same-process Apple M2 Max falsifier used Qwen3.5-9B shape `4096 -> 12288`, batch 64, five warmups, and ten ABBA plus ten BAAB blocks. Each block averaged two current and two candidate completed-command GPU intervals. ABBA current/candidate medians were `1.705812/1.900917 ms`, a candidate change of `-10.264%`, with `3/10` candidate wins. BAAB medians were `1.828229/1.830000 ms`, `-0.097%`, with `6/10` wins. Both strata failed the predeclared `>=3%` and `>=8/10` gate while parity stayed bit-exact.
+  verified_at: 2026-08-31
+  decay_trigger: device, Metal compiler/runtime, B64 kernel, model shape, batch, ordering, or timing boundary changes
+  trust: {F:0.99,G:0.05,R:0.94}
+
+**Adversary:** The source removes one scale/min decode per logical pair, but one even loader lane performs both 16-value stores while the odd lane is idle. Lower loader parallelism, store scheduling, or compiler behavior can explain the regression, but no hardware counters distinguish them. The result is scoped to one shape and device; it rejects promotion here rather than proving a universal Q4_K scheduling law.
+
+**Value proxy:** Exact full-buffer parity is only the safety gate. The two order strata measure the intended complete command and both reject value. The batch-2048 and 27B escalations were skipped because the agreed batch-64 pre-gate failed.
+
+**LTP/WBA:** Not claimed. This was ordinary compile-time loader scheduling with a current-source dual frame.
+
+**decision:** Remove the pair helper, source variant, selector, focused test, and temporary ABBA CLI seam. Keep the existing two-lane B64 loader. Do not retry metadata-only Q4_K rewrites without a design that preserves loader parallelism or removes a materially larger unit of work.

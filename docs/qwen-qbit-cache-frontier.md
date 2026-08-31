@@ -2880,3 +2880,34 @@ shows that a positive median without stable paired wins is not enough. The
 next kernel candidate must remove independently identified work rather than
 depending on branch folding. This was ordinary compile-time specialization,
 not LTP/WBA.
+
+### Rejected adjacent-subblock Q4_K metadata reuse (2026-08-31)
+
+A temporary default-off B64 source variant paired only logical Q4_K subblocks
+`(0,1), (2,3), ..., (14,15)`. Each pair shared scale/min extraction while
+retaining the current Q-byte offsets, low/high-nibble mask, shared-memory
+locations, barriers, and output representation. Current and candidate sources
+had distinct cached pipelines and explicit same-process selection; production
+default behavior was unchanged.
+
+The safety contract passed. A real Qwen3.5-9B Q4_K_M fixture exercised both
+nibbles, both metadata families, multiple 256-value blocks including the
+`(14,15)` wrap, a complete batch-64 tile, and a batch-65 tail. The test compared
+every Float32 gate bit and every Float16 fused up/SwiGLU activation bit against
+the current route and passed `1/1`.
+
+The acceleration gate failed in both order strata. On Apple M2 Max, the exact
+`4096 -> 12288`, batch-64 gate-plus-fused-up command was warmed five times and
+measured in ten ABBA plus ten BAAB blocks, with two samples per variant averaged
+inside each block. ABBA current/candidate medians were `1.705812/1.900917 ms`:
+the candidate regressed `10.264%` and won only `3/10` blocks. BAAB medians were
+`1.828229/1.830000 ms`, a `0.097%` regression, with `6/10` wins. Both missed the
+predeclared `>=3%` and `>=8/10` thresholds despite bit-exact output.
+
+The candidate, tests, and transient ABBA option were removed; no batch-2048 or
+27B escalation was admitted after the small exact-route gate failed. The likely
+trade is less metadata arithmetic for half as many active weight-loader lanes
+and two serialized subblock stores per even lane, but hardware counters did not
+attribute the regression. The bounded conclusion is simply that metadata-only
+pairing is not a useful acceleration on this measured corridor. This was
+ordinary Metal scheduling, not LTP/WBA.
