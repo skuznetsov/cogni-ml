@@ -149,8 +149,10 @@ module Qwen35QBitAdaptivePrefillProbe
         pack_ms = median(pack_samples)
 
         prefixes.each do |prefix|
+          splitk_uniform_tier = tier == ML::GGUF::QwenQBitAdaptiveKV::Tier::P4 ||
+                                tier == ML::GGUF::QwenQBitAdaptiveKV::Tier::BF16
           splitk = ML::GGUF::QwenQBitAdaptiveMetalPolicy.decode_splitk?(
-            prefix, token_count, true,
+            prefix, token_count, splitk_uniform_tier,
             ENV["QWEN35_ADAPTIVE_SPLITK"]?,
             ENV["QWEN35_ADAPTIVE_SPLITK_MIN_CTX"]?,
           )
