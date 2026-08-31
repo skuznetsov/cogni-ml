@@ -25201,3 +25201,33 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary bounded command scheduling. The missing global-descent evidence is precisely the long-context result that fails to improve.
 
 **decision:** Keep CogniGraph prefill depth zero as the automatic default and retain depth one or two as explicit bounded experiments. Do not add a dynamic depth controller from the current two-point evidence. Reopen only after a scheduler change removes a proven publication/readback boundary and an order-balanced long-context A/B demonstrates a wall-time win with parity and memory/watchdog guards.
+
+#### [LM-QWEN38-ADAPTIVE-DEQUANT-T4-SERIAL-956] Register-local dequantization does not clear the serial default gate
+**context:** ml / Qwen3.8 / adaptive QBit / Metal / serial decode / T4 routing policy
+**state:** automatic serial promotion rejected; scalar default and explicit T4 experiment retained
+
+- claim: "The existing register-local T4 source is byte- and quality-compatible with one-token uniform P4/BF16 adaptive attention."
+  source: the focused Metal 8K contract compared forced scalar and T4 serial attention against the independent CPU reference, preserved the established numerical bounds, required byte-identical appended K/V, and passed `1/1`. The complete adaptive policy plus resident suite passed `26/26`. Unset policy remains scalar for one-token serial work; uniform BF16 split-K remains separately automatic. `QWEN35_ADAPTIVE_DEQUANT_T4=1` explicitly selects the experimental T4 source and `=0` is the exact scalar rollback.
+  verified_at: 2026-08-31
+  decay_trigger: device naming, T4 source, tier identity, split-K policy, token-count routing, cache layout/publication, Metal compiler/runtime, or test coverage changes
+  trust: {F:0.99,G:0.18,R:0.97}
+
+- claim: "T4 materially reduces the measured short serial adaptive-attention command, but does not provide a robust end-to-end free-decode win for this one 29-token trace."
+  source: fresh-process scalar/T4 screens at prefixes 64, 128, and 192 with ten repetitions measured lower GPU and complete-command intervals for uniform P4 and BF16 in every tested shape; pair-mean reductions ranged from about `28-53%` GPU and `23-49%` wall for P4, and `36-40%` GPU and `31-36%` wall for BF16. Five guarded Qwen3.8-27B Q4_K_M pairs requested 64 tokens and reached EOS after 29. Free-decode pair deltas were `+0.54%`, `+0.48%`, `+0.14%`, `+1.73%`, and `-3.93%`: T4 won `4/5`, with a `+0.48%` paired median, but the arithmetic means were scalar `1944.52 ms` and T4 `1947.97 ms`, a `0.18%` regression.
+  verified_at: 2026-08-31
+  decay_trigger: model, prompt and EOS length, device, compiler/runtime, tier map, route composition, host/GPU power state, or timing method changes
+  trust: {F:0.98,G:0.06,R:0.91}
+
+- claim: "The measured scalar and T4 product trajectories are equivalent at the recorded quality boundary."
+  source: all ten guarded real-model runs produced identical token IDs and text, top-1 `29/29`, ranked and set-overlap top-2 `55/56`, exact-top1 coverage `28/28`, ECS mean/minimum `1.0/1.0`, all 16 adaptive owners, no Float32 owner, consistent publication at 51 live cache tokens, and `3.7647x` logical density. One scalar teacher-forced timing was a large outlier (`2791 ms`) and was excluded from the free-decode means.
+  verified_at: 2026-08-31
+  decay_trigger: model, prompt/template/tokenizer, tier map, generation, quality schema, cache ownership/publication, or T4 arithmetic changes
+  trust: {F:0.99,G:0.05,R:0.97}
+
+**Adversary:** The local attention-command reduction is not a whole-token percentage. The real-model certificate covers one short prompt, one EOS-limited 29-token trajectory, one model, and one M2 Max. The fifth pair reversed by more than the four small wins, showing that observed run variance can erase the local benefit; host/GPU state is only a plausible cause. Uniform P4 split-K remains scalar because its earlier timing crossed, and no other device is admitted automatically.
+
+**Value proxy:** The local GPU interval identifies the mechanism but is not the product objective. Complete free-decode wall time failed the robust-promotion gate even though top-1/top-2/ECS and cache invariants stayed unchanged. The teacher timing outlier is retained as a warning against using one noisy aggregate.
+
+**LTP/WBA:** Not claimed. This is ordinary route selection over an existing kernel source with an explicit scalar dual frame.
+
+**decision:** Keep one-token serial attention scalar by default. Retain `QWEN35_ADAPTIVE_DEQUANT_T4=1` as an explicit experiment because its local command is faster and quality-safe, but do not promote it from the current end-to-end evidence. Reopen only if a broader prepared-state benchmark shows a stable whole-token win across prompts and power states.

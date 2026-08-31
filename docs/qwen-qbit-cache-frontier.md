@@ -2662,6 +2662,20 @@ same top-1 token and final logit within `1e-4` in every pair. These are bounded
 single-device prompt-processing results, not a claim that the whole engine is
 25% faster.
 
+The one-token serial route was screened separately but not promoted. Fresh-
+process scalar/T4 rows at prefixes 64, 128, and 192 reduced the complete
+adaptive attention command on both uniform P4 and BF16. Five guarded paired
+Qwen3.8-27B Q4_K_M replays requested 64 generated tokens and reached EOS after
+29. T4 won four pairs and the paired median was `0.48%` faster, but one pair
+regressed `3.93%` and the five-run arithmetic mean was `0.18%` slower. All ten
+runs produced the same token IDs and text; each reported top-1 `29/29`,
+ranked/set top-2 `55/56`, exact-top1 coverage `28/28`, ECS mean/minimum
+`1.0/1.0`, all 16 adaptive owners, no Float32 owner, consistent publication,
+and `3.7647x` logical density on this one prompt/model/device/29-token trace.
+The strong local command win therefore does not
+justify changing the serial default; explicit `=1` remains available for
+experiments.
+
 An isolated uniform BF16 split-K A/B/B/A at prefix 8,192 and chunk one measured
 scalar `2.000/1.825 ms` versus t4 `1.860/1.468 ms`, about `13.0%` lower by pair
 means. Uniform P4 split-K crossed (`2.764/2.067 ms` scalar versus
