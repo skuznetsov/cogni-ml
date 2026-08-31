@@ -2576,3 +2576,37 @@ This is ordinary kernel profiling, not LTP/WBA. The value coordinate is
 end-to-end latency, not removal of one arithmetic loop in isolation. The next
 QBit acceleration target remains attention/dequantization dataflow and tile
 occupancy, where the measured GPU time is material.
+
+### SIMD P4 dequantization falsifier (2026-08-30)
+
+The next bounded candidate attacked repeated uniform-P4 loads inside adaptive
+prefill and split-K stage one. In the canonical loader every value reads its
+row `mean` and `sigma`, and every eight neighboring values address the same
+plane byte. A temporary compile-time Metal variant made each 32-lane SIMD group
+load the row header once and each plane byte once per eight lanes, then shared
+them with `simd_shuffle`. It added no barrier, changed no cache byte or buffer
+binding, and left BF16 and mixed-tier arithmetic unchanged.
+
+The transformation was numerically legal but operationally bad. A focused
+Metal contract matched the independent CPU reference, canonical serial output,
+and split-K output within the established bounds, while the appended packed
+payload remained byte-identical. The model-free product-shaped probe then ran
+fresh-process A/B/B/A at prefix 3,072, chunk 64, tile 15, and nine repetitions.
+Canonical P4 completed the prefill, K/V pack, and finalizer command in
+`18.991/18.988 ms`; the SIMD variant required `30.712/30.734 ms`, a repeatable
+regression of about `61.8%`. The unchanged BF16 control moved with host noise,
+but the P4 regression was stable in both candidate positions and disappeared
+in both rollback positions.
+
+The exact microarchitectural cause is not established. Cross-lane shuffle
+latency, lower instruction-level parallelism, and effective caching of the
+canonical repeated addresses are plausible explanations, not verified facts.
+The decisive result is the completed GPU interval: reducing the logical load
+count did not reduce product-shaped work. The experimental policy, source
+variants, pipelines, probe label, and parity extension were all reverted.
+
+This is ordinary kernel falsification, not LTP/WBA. The canonical loader is the
+dual frame and remains unchanged. A future attention candidate must reduce
+actual instructions or memory transactions without cross-lane exchange and
+must first beat this same product-shaped GPU interval before any model-backed
+quality or default-promotion work.

@@ -24991,3 +24991,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was a bounded ordinary-kernel optimization test with the unchanged generic path as its dual frame.
 
 **decision:** Reject the dedicated P4/BF16 pipelines and retain only the low-cost timing seam plus BF16 probe coverage. Move the acceleration frontier to attention/dequantization dataflow and tile occupancy.
+
+#### [LM-QWEN38-ADAPTIVE-SIMD-P4-FALSIFIER-948] SIMD broadcast makes uniform P4 prefill slower
+**context:** ml / Qwen3.8 / adaptive QBit / Metal / P4 dequantization / performance falsifier
+**state:** verified bounded rejection on Apple M2 Max; canonical per-thread loader retained
+
+- claim: "Broadcasting one P4 row header and plane byte across each SIMD group is numerically legal but materially slower at the measured product shape."
+  source: a temporary compile-time Metal variant used `simd_shuffle` to share `mean`, `sigma`, and each eight-value plane byte without changing centroids, cache bytes, publication, or the host ABI. A focused Metal test matched the CPU reference, the canonical serial path, and split-K within the existing bounds and produced byte-identical packed payloads. Fresh-process A/B/B/A at prefix 3,072, chunk 64, tile 15, and nine repetitions measured canonical P4 GPU intervals of `18.991/18.988 ms` versus `30.712/30.734 ms` for the SIMD variant, about `61.8%` slower. The candidate policy, pipelines, kernel, probe label, and test extension were reverted.
+  verified_at: 2026-08-30
+  decay_trigger: Metal compiler, GPU generation, QBit row layout, dequantization arithmetic, tile/thread mapping, product prefix/chunk shape, or profiler semantics change
+  trust: {F:0.99,G:0.19,R:0.97}
+
+**Adversary:** The measurements localize a strong regression but do not prove its microarchitectural cause. `simd_shuffle` latency, reduced instruction-level parallelism, and already-effective device caching are hypotheses. BF16 was an unchanged control and varied across the noisy host, but the P4 result repeated almost exactly in both candidate and rollback positions.
+
+**Value proxy:** Fewer logical device loads were the proposed mechanism, not the objective. The completed fused-command GPU interval is authoritative for this bounded decision and rejects the candidate despite exact parity.
+
+**LTP/WBA:** Not claimed. This was an ordinary kernel-local falsifier with the unchanged loader as the dual frame.
+
+**decision:** Reject SIMD broadcast and retain the canonical per-thread P4 loader. Do not promote logical load-count reductions without a product-shaped GPU interval. Move next to a layout/occupancy candidate that reduces dequantization instructions or transaction count without cross-lane exchange.
