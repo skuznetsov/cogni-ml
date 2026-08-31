@@ -25231,3 +25231,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary route selection over an existing kernel source with an explicit scalar dual frame.
 
 **decision:** Keep one-token serial attention scalar by default. Retain `QWEN35_ADAPTIVE_DEQUANT_T4=1` as an explicit experiment because its local command is faster and quality-safe, but do not promote it from the current end-to-end evidence. Reopen only if a broader prepared-state benchmark shows a stable whole-token win across prompts and power states.
+
+#### [LM-QWEN38-ADDNORM-H16-PP2048-957] Conversion removal does not accelerate the Qwen3.8 pp2048 FFN corridor
+**context:** ml / Qwen3.8 / Metal / prefill / recurrent FFN / H16 activation staging
+**state:** existing default-off probe revalidated and rejected as the next promotion lever
+
+- claim: "The pp2048 profile contains enough F32-to-H16 traffic for `ADDNORM_H16_FFN` to be a meaningful falsifier, but not enough evidence to predict a wall-time win."
+  source: a fresh current-source Qwen3.8-27B Q4_K_M prepared-state profile reported `15044.47 MiB` logical matmul weights and `16896.00 MiB` logical conversion traffic. Recurrent Q4_H16 FFN up/gate accounted for `4590.00 MiB` (`30.51%`) of logical weights, while its pair-input conversion accounted for `2880.00 MiB` (`17.05%`) of conversion traffic. These are logical traffic coordinates, not GPU-byte counters.
+  verified_at: 2026-08-31
+  decay_trigger: model, prompt length, route mix, profiler accounting, B64 FFN kernels, or H16 staging changes
+  trust: {F:0.99,G:0.12,R:0.96}
+
+- claim: "Producer-side H16 addnorm staging does not improve the measured pp2048 product-shaped wall boundary."
+  source: one current release binary ran five interleaved default/`QWEN35_ADDNORM_H16_FFN=1` pairs with `--prepare-state --final-top1` under `scripts/run_safe.sh`, a `35%` system-memory floor, and a `24576 MiB` process-tree cap. Default averaged `16216.85 ms`; H16 averaged `16249.15 ms`; default was `32.30 ms` faster by means and won `3/5` pairs. Top-1 and final-logit parity within `1e-4` held for `5/5` pairs. The guarded process exited zero without a memory-pressure or watchdog event.
+  verified_at: 2026-08-31
+  decay_trigger: model, prompt, device, Metal compiler/runtime, surrounding FFN fusion, H16 producer/consumer route, or timing method changes
+  trust: {F:0.99,G:0.05,R:0.94}
+
+**Adversary:** Quiet-host gating was intentionally disabled, the harness did not print individual pair times, and the earlier profiled/default rows were faster than the later paired rows, so this is not a stable public benchmark. Those weaknesses cannot support a small positive promotion; they are sufficient to reject a route whose mean moved in the wrong direction. Logical conversion traffic is a mechanism proxy, not the wall objective.
+
+**LTP/WBA:** The legal H16 transport lowers the conversion coordinate but fails recomputation because end-to-end wall time does not descend. No LTP/WBA promotion is claimed.
+
+**decision:** Keep `QWEN35_ADDNORM_H16_FFN` default-off. Do not stack more conversion-only H16 flags. Move the next falsifier into the dominant recurrent Q4 FFN up/gate matmul itself, while preserving the current-kernel/opt-in dual frame and product-shaped parity gate.
