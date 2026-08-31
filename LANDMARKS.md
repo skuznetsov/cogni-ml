@@ -25177,3 +25177,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary synchronous command-buffer scheduling; no independent transport corridor, recomputation certificate, or global descent proof is present.
 
 **decision:** Retain automatic group one and the 50 ms cooldown for 2,048-row adaptive chunks. Keep `QWEN35_PREFILL_APPEND_MAX_GROUPS=2` and shorter cooldowns as explicit experiments only. Reopen group coalescing only with fresh order-balanced long-context evidence and no watchdog or thermal regression; pursue conversion-traffic reduction before wider scheduler occupancy.
+
+#### [LM-QWEN38-COGNIGRAPH-DEPTH2-SCALE-955] A second prefill flight does not retain its short-prompt gain at 8K
+**context:** ml / Qwen3.8 / CogniGraph / adaptive resident QBit KV / prefill scheduler / long context
+**state:** depth-two automatic promotion rejected; default depth zero retained; bounded opt-in corridor unchanged
+
+- claim: "CogniGraph depth two does not provide a promotable 8K prompt-processing speedup on the measured M2 Max route."
+  source: a guarded Qwen3.8-27B Q4_K_M comparison used the coarse adaptive map, 2,048-row chunks, group one, 50 ms cooldown, fresh prepared state, final top-1, and the same release binary for both modes. The default depth-zero leg took `93,612.62 ms`; depth two took `94,167.65 ms`, `555.04 ms` or `0.59%` slower. Final top-1 and its logit matched within `1e-4`. The run started with 87% free memory and exited normally after about 268 seconds without a timeout, memory-pressure kill, or compositor-interactivity failure.
+  verified_at: 2026-08-31
+  decay_trigger: CogniGraph dependency/publication scheduling, adaptive handoff boundaries, chunk/group/cooldown policy, model/device, Metal compiler/runtime, host load, or balanced long-context reproduction changes
+  trust: {F:0.98,G:0.05,R:0.88}
+
+- claim: "The earlier short-prompt depth-two result is not a general prefill scaling law."
+  source: the prior bounded pp1024 certificate measured about a `6.57%` depth-two reduction, while the 8K falsifier above did not reproduce it. The 8K profile reported `7,718` prompt tokens and `7,785` live resident cache tokens under `max_seq=16,384`; therefore the comparison exercised a long live prefix rather than allocation capacity alone. No scheduler or queue-depth default was changed.
+  verified_at: 2026-08-31
+  decay_trigger: order-balanced pp1024/pp8192 reproduction, live-token accounting, flight trace, scheduler implementation, or host/GPU timing control changes
+  trust: {F:0.97,G:0.05,R:0.86}
+
+**Adversary:** This is one default-then-depth-two pair, so `0.59%` is within plausible timing noise and does not prove depth two is intrinsically slower. It is still sufficient to reject automatic promotion because the expected short-prompt advantage disappeared at the target long-context scale. Queue depth is not equivalent to independent GPU execution, and retained scratch or mandatory adaptive publication/readback boundaries can erase overlap even when two flights are admitted.
+
+**Value proxy:** Submitted-flight count is only a mechanism signal. Promotion requires product-shaped wall time plus semantic parity, long-context survival, bounded scratch, and watchdog safety; this row closes only the measured M2 Max 8K promotion question.
+
+**LTP/WBA:** Not claimed. This is ordinary bounded command scheduling. The missing global-descent evidence is precisely the long-context result that fails to improve.
+
+**decision:** Keep CogniGraph prefill depth zero as the automatic default and retain depth one or two as explicit bounded experiments. Do not add a dynamic depth controller from the current two-point evidence. Reopen only after a scheduler change removes a proven publication/readback boundary and an order-balanced long-context A/B demonstrates a wall-time win with parity and memory/watchdog guards.
