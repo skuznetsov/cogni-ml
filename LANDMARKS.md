@@ -24967,3 +24967,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary same-command fusion. The separate resident-head command is the dual frame; no global-potential promotion follows from one removed sync.
 
 **decision:** Keep both resident-head gates default-off. Retain the appended route as a tested composition seam, not a speed promotion. The next useful acceleration must remove a material downstream boundary or attack a measured kernel/bandwidth hotspot.
+
+#### [LM-QWEN38-ADAPTIVE-PACK-FALSIFIER-947] Dedicated uniform pack pipelines do not earn their complexity
+**context:** ml / Qwen3.8 / adaptive QBit / Metal / pack kernel / performance falsifier
+**state:** verified bounded rejection on Apple M2 Max; generic runtime retained
+
+- claim: "Separate uniform P4 and BF16 pack pipelines have no stable measured advantage at the product append shape."
+  source: a temporary byte-identical candidate was measured A/B/B/A with 15-sample fresh-process rows. At 64 tokens, generic/candidate P4 GPU intervals were `0.026/0.030 ms` and `0.028/0.024 ms`; BF16 was `0.027/0.031 ms` and `0.028/0.024 ms`. The 128-token intervals also overlapped, and wall medians crossed. The interval covers both K/V pack encoders plus the status finalizer. The candidate pipelines and policy were reverted.
+  verified_at: 2026-08-30
+  decay_trigger: pack kernel arithmetic, tier distribution, product chunk shape, command composition, compiler/runtime, hardware, or profiler semantics change
+  trust: {F:0.98,G:0.20,R:0.94}
+
+- claim: "Pack GPU time is now directly observable without changing cache publication semantics."
+  source: `append_from_metal` optionally reports the completed command's GPU interval while preserving its synchronous commit, status validation, and `with_append` publication boundary. The model-free probe covers uniform P4, uniform BF16, and mixed tiers. The adaptive resident suite passed `17/17`, the timing assertion was positive on Apple M2 Max, the final generic probe completed all three modes, and CPU-only generation built.
+  verified_at: 2026-08-30
+  decay_trigger: command timing API, append completion/publication, probe modes, Metal bridge, or CPU-only branching change
+  trust: {F:0.99,G:0.29,R:0.97}
+
+**Adversary:** The specialized candidate had exact payload parity only for uniform P4/BF16 and would have needed P5, F32, mixed metadata, invalid-tier, and boundary coverage. Its dedicated entry points also weakened the generic per-row metadata validation boundary. A microsecond arithmetic reduction is not evidence of an end-to-end speedup.
+
+**Value proxy:** Pack command GPU time localizes cost; it does not replace prefill/decode wall time, token quality, cache integrity, or watchdog behavior.
+
+**LTP/WBA:** Not claimed. This was a bounded ordinary-kernel optimization test with the unchanged generic path as its dual frame.
+
+**decision:** Reject the dedicated P4/BF16 pipelines and retain only the low-cost timing seam plus BF16 probe coverage. Move the acceleration frontier to attention/dequantization dataflow and tile occupancy.

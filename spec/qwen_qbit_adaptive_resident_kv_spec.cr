@@ -218,10 +218,13 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
       adaptive.validate(first_k)
       adaptive.validate(first_v)
 
+      pack_gpu_elapsed_seconds = 0.0_f64
       ML::GGUF::QwenQBitAdaptiveResidentKV.append_from_metal(
         resident, k_source, v_source, cache_len - first_chunk,
         source_token_offset: first_chunk,
+        gpu_elapsed_seconds: pointerof(pack_gpu_elapsed_seconds),
       )
+      pack_gpu_elapsed_seconds.should be > 0.0_f64
       resident.cache_len.should eq(cache_len)
       packed_k, packed_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(resident)
       ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot_k(resident).payload.should eq(packed_k.payload)

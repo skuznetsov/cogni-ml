@@ -529,11 +529,14 @@ module ML::GGUF
     # Pack a contiguous source token range directly from temporary Float32
     # Metal buffers into the next rows of the resident adaptive cache. Callers
     # must keep both source buffers alive until this synchronous call returns.
+    # An optional timing pointer receives the completed K/V pack command's GPU
+    # interval without changing its synchronous publication boundary.
     def append_from_metal(cache : Cache,
                           k_source : ML::MetalBuffer,
                           v_source : ML::MetalBuffer,
                           token_count : Int32,
-                          source_token_offset : Int32 = 0) : Nil
+                          source_token_offset : Int32 = 0,
+                          gpu_elapsed_seconds : Pointer(Float64) = Pointer(Float64).null) : Nil
       raise ArgumentError.new("adaptive resident QBit source token offset must be non-negative") if source_token_offset < 0
       raise ArgumentError.new("adaptive resident QBit append token count must be positive") unless token_count > 0
       source_rows = (source_token_offset.to_i64 + token_count) * cache.n_head_kv
@@ -565,7 +568,11 @@ module ML::GGUF
             encode_pack(command, v_source, v_base, v_metadata, v_sidecar, status,
               source_row_offset, destination_row_offset, row_count)
             encode_finalize(command, status)
-            command.commit_and_wait
+            if gpu_elapsed_seconds.null?
+              command.commit_and_wait
+            else
+              gpu_elapsed_seconds.value = command.commit_and_wait_gpu_elapsed_seconds
+            end
             status_code = read_u32(status)
             unless status_code == DEVICE_SUCCESS
               raise ArgumentError.new("adaptive resident QBit device pack failed closed (status=#{status_code})")

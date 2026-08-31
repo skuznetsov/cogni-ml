@@ -41,8 +41,12 @@ module Qwen35QBitAdaptivePackProbe
       Array(ML::GGUF::QwenQBitAdaptiveKV::Tier).new(rows) do |row|
         row % 4 == 3 ? ML::GGUF::QwenQBitAdaptiveKV::Tier::BF16 : ML::GGUF::QwenQBitAdaptiveKV::Tier::P4
       end
+    when "bf16"
+      Array(ML::GGUF::QwenQBitAdaptiveKV::Tier).new(
+        rows, ML::GGUF::QwenQBitAdaptiveKV::Tier::BF16
+      )
     else
-      raise ArgumentError.new("mode must be p4 or mixed25")
+      raise ArgumentError.new("mode must be p4, bf16, or mixed25")
     end
   end
 
@@ -65,10 +69,10 @@ module Qwen35QBitAdaptivePackProbe
     head_dim = 256
     heads_per_group = 6
     scale = (1.0 / Math.sqrt(head_dim.to_f64)).to_f32
-    puts "chunk mode live_tokens density pack_ms pack_gib_s f32_attn_ms qbit_wall_ms qbit_gpu_ms slowdown max_diff"
+    puts "chunk mode live_tokens density pack_ms pack_gpu_ms pack_gib_s f32_attn_ms qbit_wall_ms qbit_gpu_ms slowdown max_diff"
 
     chunks.each do |chunk|
-      ["p4", "mixed25"].each do |mode|
+      ["p4", "bf16", "mixed25"].each do |mode|
         live_tokens = chunk * (repeats + 1)
         row_count = live_tokens * n_head_kv
         plan = ML::GGUF::QwenQBitAdaptiveKV.plan(tiers(mode, row_count))
@@ -89,11 +93,16 @@ module Qwen35QBitAdaptivePackProbe
           ML::GGUF::QwenQBitAdaptiveResidentKV.append_from_metal(
             resident, k_source, v_source, chunk,
           )
+          pack_gpu_samples = Array(Float64).new(repeats)
           pack_ms = timed_ms(repeats) do
+            pack_gpu_elapsed_seconds = 0.0_f64
             ML::GGUF::QwenQBitAdaptiveResidentKV.append_from_metal(
               resident, k_source, v_source, chunk,
+              gpu_elapsed_seconds: pointerof(pack_gpu_elapsed_seconds),
             )
+            pack_gpu_samples << pack_gpu_elapsed_seconds * 1000.0
           end
+          pack_gpu_ms = median(pack_gpu_samples)
 
           encoded_k, encoded_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(resident)
           decoded_k = ML::GGUF::QwenQBitAdaptiveKV.decode(encoded_k)
@@ -132,8 +141,8 @@ module Qwen35QBitAdaptivePackProbe
             packed_input_bytes = 2_i64 * chunk * n_head_kv * head_dim * sizeof(Float32)
             density = raw_bytes.to_f64 / resident.compressed_bytes
             gib_s = packed_input_bytes.to_f64 / (1024.0 ** 3) / (pack_ms / 1000.0)
-            printf "%5d %-7s %11d %7.3fx %7.3f %10.3f %11.3f %12.3f %11.3f %8.3fx %.3g\n",
-              chunk, mode, live_tokens, density, pack_ms, gib_s,
+            printf "%5d %-7s %11d %7.3fx %7.3f %11.3f %10.3f %11.3f %12.3f %11.3f %8.3fx %.3g\n",
+              chunk, mode, live_tokens, density, pack_ms, pack_gpu_ms, gib_s,
               f32_ms, qbit_ms, qbit_gpu_ms, qbit_ms / f32_ms, diff
           ensure
             k_f32.release

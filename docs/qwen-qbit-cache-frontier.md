@@ -2540,3 +2540,39 @@ This is ordinary same-command fusion, not LTP/WBA. The rollback is the existing
 separate resident-head command. Default promotion remains rejected until a
 downstream resident consumer removes a material synchronization or a repeated
 paired measurement establishes end-to-end value.
+
+### Adaptive pack specialization falsifier (2026-08-30)
+
+The generic adaptive pack kernel computes five bit planes before selecting the
+row tier, although P4 consumes only four planes and BF16/F32 use exact sidecar
+storage. A temporary candidate split uniform P4 and BF16 into dedicated Metal
+entry points and host pipelines. Focused two-append tests established exact
+payload parity for those uniform plans before timing.
+
+The bounded A/B/B/A result rejected the extra pipelines. With 64 source tokens,
+the complete K pack, V pack, and status finalizer GPU interval was
+`0.026/0.030 ms` for generic P4 and `0.028/0.024 ms` for the candidate. Generic
+BF16 measured `0.027/0.031 ms`; the candidate measured `0.028/0.024 ms`. The
+128-token rows also overlapped: generic P4 was `0.027/0.028 ms` versus
+`0.026/0.025 ms`, and generic BF16 was `0.029/0.031 ms` versus
+`0.029/0.026 ms`. Wall-clock medians crossed in both directions. These are
+microsecond-scale differences inside a command that is already a small fraction
+of the measured long-prefix attention cost.
+
+The candidate was therefore reverted. In addition to its unverified value, a
+uniform entry point would bypass the generic kernel's per-row tier/metadata
+validation and would need a wider corruption and mixed-tier certificate before
+promotion. The canonical kernel, pipeline set, payload format, and default
+runtime behavior remain unchanged.
+
+The useful diagnostic seam is retained: `append_from_metal` can optionally
+return the completed pack command's GPU interval, and the model-free probe now
+covers uniform BF16 as well as P4 and mixed tiers. Omitting the pointer preserves
+the existing synchronous API. The complete adaptive resident suite passes
+`17/17`, its measured append interval is positive on Apple M2 Max, the final
+generic probe runs all three tier modes, and CPU-only generation builds.
+
+This is ordinary kernel profiling, not LTP/WBA. The value coordinate is
+end-to-end latency, not removal of one arithmetic loop in isolation. The next
+QBit acceleration target remains attention/dequantization dataflow and tile
+occupancy, where the measured GPU time is material.
