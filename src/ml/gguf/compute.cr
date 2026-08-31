@@ -6,10 +6,15 @@
 
 require "./quant_matmul"
 require "./dequant"
-require "./reader"  # for TensorType
+require "./reader" # for TensorType
 require "../core/buffer"
 
 module ML::GGUF
+  enum Q4GemvX16Capability
+    Unknown
+    Qwen38
+  end
+
   # Quantized weight: raw bytes + type for on-the-fly dequant during matmul.
   #
   # Reference semantics (class, not struct) so weights can cache a
@@ -23,10 +28,12 @@ module ML::GGUF
     getter out_dim : Int32
     getter in_dim : Int32
     getter route_tag : String?
+    getter q4_gemv_x16_capability : Q4GemvX16Capability
 
     @metal_buf : ML::MetalBuffer? = nil
 
-    def initialize(@raw, @type, @out_dim, @in_dim, @route_tag = nil)
+    def initialize(@raw, @type, @out_dim, @in_dim, @route_tag = nil,
+                   @q4_gemv_x16_capability = Q4GemvX16Capability::Unknown)
     end
 
     {% unless flag?(:cpu_only) %}
@@ -43,6 +50,7 @@ module ML::GGUF
       end
     {% end %}
   end
+
   # Abstract compute backend. All math ops go through this interface.
   module ComputeBackend
     # Matrix multiply: x[rows, in_dim] × W_quant + bias → [rows, out_dim]
@@ -122,9 +130,9 @@ module ML::GGUF
       mant = (bits >> 13) & 0x03FF_u32
 
       h = if exp <= 0
-            0_u16  # Flush subnormals to zero
+            0_u16 # Flush subnormals to zero
           elsif exp >= 31
-            (sign | 0x7C00).to_u16  # Inf
+            (sign | 0x7C00).to_u16 # Inf
           else
             (sign | (exp.to_u32 << 10) | mant).to_u16
           end

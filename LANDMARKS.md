@@ -25373,3 +25373,33 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary compile-time loader scheduling with a current-source dual frame.
 
 **decision:** Remove the pair helper, source variant, selector, focused test, and temporary ABBA CLI seam. Keep the existing two-lane B64 loader. Do not retry metadata-only Q4_K rewrites without a design that preserves loader parallelism or removes a materially larger unit of work.
+
+#### [LM-QWEN38-Q4K-X16-DECODE-963] Operator-scoped x16 routing accelerates Qwen3.8 decode
+**context:** ml / Qwen3.8-27B / Metal / Q4_K / decode / route policy
+**state:** measured FFN and recurrent routes admitted by default; full-attention routes rejected
+
+- claim: "The existing Q4_K x16 kernel is numerically compatible with the measured Qwen3.8 FFN and recurrent decode routes."
+  source: a same-process adaptive-QBit harness alternated full rollback (`QWEN35_Q4K_GEMV_X16=0`) and the operator-scoped default for six pairs after warming both routes. Every pair produced the same token IDs, the maximum selected top-1 logit delta was `0.00108242`, every full-attention adaptive cache reached the expected live length, and the guarded process exited zero. A separate default/rollback quality pair produced the same eight-token text and IDs, top-1 `8/8`, ranked and set-overlap top-2 `14/14`, exact-top1 coverage `7/7`, and ECS mean/minimum `1.0/1.0` in both modes. The route-policy contract covers every admitted operator and rejects Qwen3.5-9B dimensions, FFN down, full-attention Q/K/V/output, a mismatched recurrent shape, an absent tag, missing model capability, and the local Qwen3.6 metadata identity; it passes `4/4`.
+  verified_at: 2026-08-31
+  decay_trigger: Q4_K arithmetic, x16 reduction, route tags, Qwen tensor dimensions, decode call routing, selected-logit precision, adaptive publication, or policy tests change
+  trust: {F:0.99,G:0.10,R:0.96}
+
+- claim: "The scoped default reduces short Qwen3.8-27B decode wall time on both adaptive-QBit and ordinary KV paths on Apple M2 Max."
+  source: with prompt `256`, generation `12`, six alternating pairs, and one warmup, adaptive QBit measured rollback/default means `64.313/62.676 ms/token`, a `2.545%` time reduction or `2.612%` throughput gain, with default winning `6/6`. The ordinary KV top-1 harness measured `60.544/58.803 ms/token`, a `2.875%` time reduction or `2.960%` throughput gain, also `6/6`. Both runs used `scripts/run_safe.sh`, a `35%` free-memory floor, and a `24576 MiB` process-tree cap.
+  verified_at: 2026-08-31
+  decay_trigger: model, prompt/generation length, device, Metal compiler/runtime, power state, Q4 route composition, cache backend, or timing harness changes
+  trust: {F:0.99,G:0.06,R:0.93}
+
+- claim: "Full-attention Q4_K projections do not contribute a promotable x16 win in this corridor."
+  source: relative to the FFN-only default, enabling x16 only for full-attention Q/K/V/output measured identical `63.483/63.483 ms/token` means and won `3/6`. Recurrent/DeltaNet Q4 routes alone measured `64.024/63.414 ms/token`, a `0.963%` throughput gain and `5/6` wins; all non-FFN attention/recurrent tags measured a `1.134%` gain and `6/6`, localizing useful composition to recurrent routes. Full-attention routes therefore remain on the base kernel.
+  verified_at: 2026-08-31
+  decay_trigger: full-attention shapes, kernel scheduling, compiler/runtime, prompt/context, or a stronger balanced rerun contradicts the null result
+  trust: {F:0.98,G:0.05,R:0.90}
+
+**Adversary:** These are short same-process synthetic-token runs on one M2 Max, not a quiet-host prompt suite or cross-device certificate. The ordinary harness times repeated fixed input tokens and does not independently compare token traces; semantic evidence comes from the adaptive harness. Automatic routing now requires an immutable typed capability issued only when both measured GGUF identity strings match (`general.name=Qwen_Qwen3.8 27B`, `general.basename=Qwen_Qwen3.8`); unknown converters, Qwen3.6, and future models fail closed. This identity is deliberately narrow and may withhold the optimization from a semantically identical repack. The x16 arithmetic is unchanged and `QWEN35_Q4K_GEMV_X16=0` remains the exact runtime rollback, but broader quality and long-context timing can still reopen the default.
+
+**Value proxy:** Per-operator logical traffic predicted the candidates but did not decide promotion: FFN-only was only about `0.8%`, and full-attention was flat. The admitted value is the recomputed end-to-end decode wall improvement with adaptive token/cache parity, not the existence of an x16 kernel or a dominant weight-byte fraction.
+
+**LTP/WBA:** Not claimed. This is ordinary exact kernel routing with a runtime dual frame.
+
+**decision:** Default the existing x16 Q4_K GEMV only when the measured Qwen3.8-27B GGUF identity issues the typed capability and the weight matches exact `5120 -> 17408` FFN gate/up or measured recurrent QKV/gate/alpha/beta/output tag-plus-shape contracts. Keep unknown models, full-attention, and FFN-down routes on their prior kernels. Preserve global force-on for experiments and `QWEN35_Q4K_GEMV_X16=0` as rollback. Reopen scope only with a balanced product suite or a model/device contradiction.

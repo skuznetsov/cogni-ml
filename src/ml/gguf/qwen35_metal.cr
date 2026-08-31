@@ -1089,6 +1089,33 @@ module ML
           tag.try { |value| value.gsub(/\.\d+\./, ".*.") }
         end
 
+        # Default x16 routing is deliberately operator-, shape-, and model-family
+        # scoped. Gemma4 keeps its established route-tag default. Qwen uses x16
+        # only for the measured Qwen3.8-27B FFN and recurrent projections;
+        # full-attention and unrelated Q4_K projections retain the base layout.
+        def self.q4_gemv_x16_default_route?(route_tag : String?,
+                                             in_dim : Int32,
+                                             out_dim : Int32,
+                                             capability : Q4GemvX16Capability) : Bool
+          return false unless route_tag
+          return true if route_tag.starts_with?("gemma4:")
+          return false unless route_tag.starts_with?("qwen35:")
+          return false unless capability.qwen38?
+
+          shape = {in_dim, out_dim}
+          return true if shape == {5120, 17408} &&
+                         (route_tag.ends_with?(".ffn_gate.weight") ||
+                           route_tag.ends_with?(".ffn_up.weight"))
+          return true if shape == {5120, 10240} && route_tag.ends_with?(".attn_qkv.weight")
+          return true if shape == {5120, 6144} && route_tag.ends_with?(".attn_gate.weight")
+          return true if shape == {5120, 48} &&
+                         (route_tag.ends_with?(".ssm_alpha.weight") ||
+                           route_tag.ends_with?(".ssm_beta.weight"))
+          return true if shape == {6144, 5120} && route_tag.ends_with?(".ssm_out.weight")
+
+          false
+        end
+
         private def self.q4_gemv_x16_enabled?(qw : QuantWeight?) : Bool
           if value = ENV["QWEN35_Q4K_GEMV_X16"]?
             return true if value == "1"
@@ -1097,7 +1124,9 @@ module ML
           return false if ENV["QWEN35_Q4K_GEMV_X16_OFF"]? == "1"
           return false if ENV["GEMMA4_Q4K_GEMV_X16_OFF"]? == "1"
           tag = normalized_route_tag(qw)
-          return true if tag.try(&.starts_with?("gemma4:"))
+          if qw && q4_gemv_x16_default_route?(tag, qw.in_dim, qw.out_dim, qw.q4_gemv_x16_capability)
+            return true
+          end
           return false unless patterns = ENV["QWEN35_Q4K_GEMV_X16_TAGS"]?
           return false unless tag
 
@@ -10057,13 +10086,13 @@ module ML
 
               Profile.trace("full.qkv") do
                 proj_enc = ML::Metal::ComputeEncoder.new(cmd)
-                encode_gemv(proj_enc, gemv_pipeline_for(lw.attn_q_qw).not_nil!, pre_norm_buf, qfull_buf, q_w_buf, q_w_off, lw.attn_q_qw.in_dim, lw.attn_q_qw.out_dim)
+                encode_gemv(proj_enc, gemv_pipeline_for(lw.attn_q_qw).not_nil!, pre_norm_buf, qfull_buf, q_w_buf, q_w_off, lw.attn_q_qw.in_dim, lw.attn_q_qw.out_dim, route_qw: lw.attn_q_qw)
                 if q8_kv_dual_gemv_candidate?(lw.attn_k_qw, lw.attn_v_qw)
                   encode_gemv_q8_dual(proj_enc, pre_norm_buf, k_buf, v_buf,
                     k_w_buf, k_w_off, v_w_buf, v_w_off, lw.attn_k_qw.in_dim, lw.attn_k_qw.out_dim)
                 else
-                  encode_gemv(proj_enc, gemv_pipeline_for(lw.attn_k_qw).not_nil!, pre_norm_buf, k_buf, k_w_buf, k_w_off, lw.attn_k_qw.in_dim, lw.attn_k_qw.out_dim)
-                  encode_gemv(proj_enc, gemv_pipeline_for(lw.attn_v_qw).not_nil!, pre_norm_buf, v_buf, v_w_buf, v_w_off, lw.attn_v_qw.in_dim, lw.attn_v_qw.out_dim)
+                  encode_gemv(proj_enc, gemv_pipeline_for(lw.attn_k_qw).not_nil!, pre_norm_buf, k_buf, k_w_buf, k_w_off, lw.attn_k_qw.in_dim, lw.attn_k_qw.out_dim, route_qw: lw.attn_k_qw)
+                  encode_gemv(proj_enc, gemv_pipeline_for(lw.attn_v_qw).not_nil!, pre_norm_buf, v_buf, v_w_buf, v_w_off, lw.attn_v_qw.in_dim, lw.attn_v_qw.out_dim, route_qw: lw.attn_v_qw)
                 end
                 proj_enc.end_encoding
               end
@@ -10206,7 +10235,7 @@ module ML
 
               Profile.trace("full.o_proj") do
                 attn_out_enc = ML::Metal::ComputeEncoder.new(cmd)
-                encode_gemv(attn_out_enc, gemv_pipeline_for(lw.attn_output_qw).not_nil!, attn_buf, attn_out_buf, attn_out_w_buf, attn_out_w_off, lw.attn_output_qw.in_dim, lw.attn_output_qw.out_dim)
+                encode_gemv(attn_out_enc, gemv_pipeline_for(lw.attn_output_qw).not_nil!, attn_buf, attn_out_buf, attn_out_w_buf, attn_out_w_off, lw.attn_output_qw.in_dim, lw.attn_output_qw.out_dim, route_qw: lw.attn_output_qw)
                 attn_out_enc.end_encoding
               end
 
@@ -10223,8 +10252,8 @@ module ML
                     ffn_gate_w_buf, ffn_gate_w_off, ffn_up_w_buf, ffn_up_w_off,
                     lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim)
                 else
-                  encode_gemv(ffn_proj_enc, gemv_pipeline_for(lw.ffn_gate_qw).not_nil!, pre_norm_buf, ffn_gate_buf, ffn_gate_w_buf, ffn_gate_w_off, lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim)
-                  encode_gemv(ffn_proj_enc, gemv_pipeline_for(lw.ffn_up_qw).not_nil!, pre_norm_buf, ffn_up_buf, ffn_up_w_buf, ffn_up_w_off, lw.ffn_up_qw.in_dim, lw.ffn_up_qw.out_dim)
+                  encode_gemv(ffn_proj_enc, gemv_pipeline_for(lw.ffn_gate_qw).not_nil!, pre_norm_buf, ffn_gate_buf, ffn_gate_w_buf, ffn_gate_w_off, lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim, route_qw: lw.ffn_gate_qw)
+                  encode_gemv(ffn_proj_enc, gemv_pipeline_for(lw.ffn_up_qw).not_nil!, pre_norm_buf, ffn_up_buf, ffn_up_w_buf, ffn_up_w_off, lw.ffn_up_qw.in_dim, lw.ffn_up_qw.out_dim, route_qw: lw.ffn_up_qw)
                 end
                 ffn_proj_enc.end_encoding
               end
@@ -10296,15 +10325,15 @@ module ML
 
                 Profile.trace("rec.proj") do
                   proj_enc = ML::Metal::ComputeEncoder.new(cmd)
-                  encode_gemv(proj_enc, gemv_pipeline_for(lw.attn_qkv_qw).not_nil!, pre_norm_buf, rec_qkv_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim)
-                  encode_gemv(proj_enc, gemv_pipeline_for(lw.attn_gate_qw).not_nil!, pre_norm_buf, z_buf, gate_w_buf, gate_w_off, lw.attn_gate_qw.in_dim, lw.attn_gate_qw.out_dim)
+                  encode_gemv(proj_enc, gemv_pipeline_for(lw.attn_qkv_qw).not_nil!, pre_norm_buf, rec_qkv_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, route_qw: lw.attn_qkv_qw)
+                  encode_gemv(proj_enc, gemv_pipeline_for(lw.attn_gate_qw).not_nil!, pre_norm_buf, z_buf, gate_w_buf, gate_w_off, lw.attn_gate_qw.in_dim, lw.attn_gate_qw.out_dim, route_qw: lw.attn_gate_qw)
                   if q8_alpha_beta_dual_gemv_candidate?(lw.ssm_alpha_qw, lw.ssm_beta_qw)
                     encode_gemv_q8_dual(proj_enc, pre_norm_buf, alpha_buf, beta_buf,
                       alpha_w_buf, alpha_w_off, beta_w_buf, beta_w_off,
                       lw.ssm_alpha_qw.in_dim, lw.ssm_alpha_qw.out_dim)
                   else
-                    encode_gemv(proj_enc, gemv_pipeline_for(lw.ssm_alpha_qw).not_nil!, pre_norm_buf, alpha_buf, alpha_w_buf, alpha_w_off, lw.ssm_alpha_qw.in_dim, lw.ssm_alpha_qw.out_dim)
-                    encode_gemv(proj_enc, gemv_pipeline_for(lw.ssm_beta_qw).not_nil!, pre_norm_buf, beta_buf, beta_w_buf, beta_w_off, lw.ssm_beta_qw.in_dim, lw.ssm_beta_qw.out_dim)
+                    encode_gemv(proj_enc, gemv_pipeline_for(lw.ssm_alpha_qw).not_nil!, pre_norm_buf, alpha_buf, alpha_w_buf, alpha_w_off, lw.ssm_alpha_qw.in_dim, lw.ssm_alpha_qw.out_dim, route_qw: lw.ssm_alpha_qw)
+                    encode_gemv(proj_enc, gemv_pipeline_for(lw.ssm_beta_qw).not_nil!, pre_norm_buf, beta_buf, beta_w_buf, beta_w_off, lw.ssm_beta_qw.in_dim, lw.ssm_beta_qw.out_dim, route_qw: lw.ssm_beta_qw)
                   end
                   proj_enc.end_encoding
                 end
@@ -10469,7 +10498,7 @@ module ML
 
                 Profile.trace("rec.o_proj") do
                   rec_out_enc = ML::Metal::ComputeEncoder.new(cmd)
-                  encode_gemv(rec_out_enc, gemv_pipeline_for(lw.ssm_out_qw).not_nil!, rec_mid_buf, rec_attn_out_buf, ssm_out_w_buf, ssm_out_w_off, lw.ssm_out_qw.in_dim, lw.ssm_out_qw.out_dim)
+                  encode_gemv(rec_out_enc, gemv_pipeline_for(lw.ssm_out_qw).not_nil!, rec_mid_buf, rec_attn_out_buf, ssm_out_w_buf, ssm_out_w_off, lw.ssm_out_qw.in_dim, lw.ssm_out_qw.out_dim, route_qw: lw.ssm_out_qw)
                   rec_out_enc.end_encoding
                 end
 
@@ -10558,8 +10587,8 @@ module ML
                         ffn_gate_w_buf, ffn_gate_w_off, ffn_up_w_buf, ffn_up_w_off,
                         lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim)
                     else
-                      encode_gemv(ffn_proj_enc, gemv_pipeline_for(lw.ffn_gate_qw).not_nil!, pre_norm_buf, ffn_gate_buf, ffn_gate_w_buf, ffn_gate_w_off, lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim)
-                      encode_gemv(ffn_proj_enc, gemv_pipeline_for(lw.ffn_up_qw).not_nil!, pre_norm_buf, ffn_up_buf, ffn_up_w_buf, ffn_up_w_off, lw.ffn_up_qw.in_dim, lw.ffn_up_qw.out_dim)
+                      encode_gemv(ffn_proj_enc, gemv_pipeline_for(lw.ffn_gate_qw).not_nil!, pre_norm_buf, ffn_gate_buf, ffn_gate_w_buf, ffn_gate_w_off, lw.ffn_gate_qw.in_dim, lw.ffn_gate_qw.out_dim, route_qw: lw.ffn_gate_qw)
+                      encode_gemv(ffn_proj_enc, gemv_pipeline_for(lw.ffn_up_qw).not_nil!, pre_norm_buf, ffn_up_buf, ffn_up_w_buf, ffn_up_w_off, lw.ffn_up_qw.in_dim, lw.ffn_up_qw.out_dim, route_qw: lw.ffn_up_qw)
                     end
                     ffn_proj_enc.end_encoding
                   end

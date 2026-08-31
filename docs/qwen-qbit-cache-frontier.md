@@ -2911,3 +2911,54 @@ and two serialized subblock stores per even lane, but hardware counters did not
 attribute the regression. The bounded conclusion is simply that metadata-only
 pairing is not a useful acceleration on this measured corridor. This was
 ordinary Metal scheduling, not LTP/WBA.
+
+### Operator-scoped Q4_K x16 decode routing (2026-08-31)
+
+The pre-existing `simd_mv_q4k_f32_x16` kernel processes two output rows per
+simdgroup. A global force-on experiment on Qwen3.8-27B suggested roughly a 3%
+decode gain, but a first FFN gate/up-only default recovered only about 0.8%.
+Inspection found that the hot decode wave had not carried each projection's
+`QuantWeight` route metadata into `encode_gemv`, so the existing tag selector
+could not separate full-attention from recurrent projections. The decode path
+now carries this existing metadata without changing weight bytes, cache layout,
+command boundaries, or kernel arithmetic.
+
+The useful policy was found by falsification rather than logical traffic alone.
+Relative to the FFN gate/up default, x16 on full-attention Q/K/V/output was flat:
+`63.483/63.483 ms/token`, with only `3/6` candidate wins. Recurrent/DeltaNet Q4
+QKV, gate, alpha, beta, and output routes measured `64.024/63.414 ms/token`, a
+`0.963%` throughput gain with `5/6` wins. Enabling all non-FFN projection tags
+measured a `1.134%` gain and `6/6`, but the null full-attention ablation excludes
+those operators from the automatic policy.
+
+The final default requires an immutable typed capability issued only when both
+measured GGUF identity strings match (`general.name=Qwen_Qwen3.8 27B` and
+`general.basename=Qwen_Qwen3.8`), then applies exact tag-plus-shape contracts
+for Qwen FFN gate/up and the five recurrent projection families. Missing,
+conflicting, Qwen3.6, and future model identities fail closed. Against complete rollback,
+a guarded adaptive-QBit Qwen3.8-27B Q4_K_M run at prompt 256 and generation 12
+measured `64.313/62.676 ms/token`: a `2.545%` time reduction or `2.612%`
+throughput gain, with default winning all six alternating pairs. Token IDs were
+identical, maximum selected top-1 logit delta was `0.00108242`, every adaptive
+full-attention cache reached the expected live length, and the process exited
+normally. The ordinary KV top-1 route measured `60.544/58.803 ms/token`, a
+`2.875%` time reduction or `2.960%` throughput gain, also `6/6`. Both used a
+`35%` system-memory floor and `24576 MiB` process-tree cap.
+
+A separate short default/rollback quality pair closed the richer semantic gate.
+Both modes emitted the same eight token IDs and text, matched top-1 `8/8`,
+ranked and set-overlap top-2 `14/14`, exact-top1 coverage `7/7`, and ECS
+mean/minimum `1.0/1.0`. Both retained all 16 adaptive owners, no Float32 owner,
+consistent publication, and `3.7647x` logical density. Cold exact-prefill time
+was intentionally excluded from the speed claim because the first process paid
+Metal source compilation.
+
+This is a one-device, short synthetic-token certificate. The ordinary timing
+harness does not independently compare generated traces, quiet-host gating was
+not required. The identity certificate is intentionally narrow and can withhold
+the optimization from a semantically identical repack; this is safer than
+silently extending a performance default to an unmeasured model. The adaptive
+run supplies the semantic and cache-publication check. `QWEN35_Q4K_GEMV_X16=0` remains the exact rollback;
+`=1` remains a global experimental force switch. Full-attention and FFN-down
+stay on their prior routes. This is ordinary shape- and operator-scoped kernel
+routing, not LTP/WBA.

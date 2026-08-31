@@ -84,6 +84,7 @@ module ML::GGUF
     @gguf : GGUFFile
     @closed : Bool
     @close_mutex : Mutex
+    @q4_gemv_x16_capability : Q4GemvX16Capability
     {% unless flag?(:cpu_only) %}
       @mmap_base : Pointer(UInt8)?
     {% end %}
@@ -91,6 +92,10 @@ module ML::GGUF
     def initialize(@gguf : GGUFFile, @hparams : Qwen35Hparams)
       @closed = false
       @close_mutex = Mutex.new
+      @q4_gemv_x16_capability = self.class.q4_gemv_x16_capability_for(
+        @gguf.get_string("general.name"),
+        @gguf.get_string("general.basename")
+      )
       {% unless flag?(:cpu_only) %}
         @mmap_base = nil
       {% end %}
@@ -125,6 +130,18 @@ module ML::GGUF
           end
         end
       {% end %}
+    end
+
+    # Performance defaults are issued only to the exact GGUF model identity
+    # measured by the corresponding gate. Unknown converters and future models
+    # fail closed to the established kernels while explicit env experiments
+    # remain available.
+    def self.q4_gemv_x16_capability_for(model_name : String?, model_basename : String?) : Q4GemvX16Capability
+      if model_name == "Qwen_Qwen3.8 27B" && model_basename == "Qwen_Qwen3.8"
+        Q4GemvX16Capability::Qwen38
+      else
+        Q4GemvX16Capability::Unknown
+      end
     end
 
     def self.from_gguf(path : String) : Qwen35Weights
@@ -209,7 +226,9 @@ module ML::GGUF
       # GGUF convention: dims=[in_dim, out_dim], row-major with out_dim rows.
       in_dim = info.dims[0].to_i32
       out_dim = info.dims.size >= 2 ? info.dims[1].to_i32 : 1
-      QuantWeight.new(raw, info.type, out_dim, in_dim, "qwen35:#{name}")
+      QuantWeight.new(raw, info.type, out_dim, in_dim,
+        route_tag: "qwen35:#{name}",
+        q4_gemv_x16_capability: @q4_gemv_x16_capability)
     end
 
     private def load_f32(g : GGUFFile, name : String) : Array(Float32)
