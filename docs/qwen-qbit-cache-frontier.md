@@ -2853,3 +2853,30 @@ evidence of value; interleaved GPU time was the local value coordinate and it
 rejected the change. Future synchronization work must remove a larger,
 independently justified unit of work instead of retrying this single-barrier
 hypothesis. This was ordinary kernel scheduling, not LTP/WBA.
+
+### Rejected compile-time P4 prefill tier folding (2026-08-31)
+
+A temporary separate-source adaptive-attention pipeline replaced the runtime
+uniform-tier selector with a compile-time P4 constant. It changed no cache
+layout, arithmetic, publication boundary, or mixed-tier fallback. A focused
+Metal contract required bit-identical P4/BF16 outputs and serialized K/V bytes
+across prefill and split-K fallback cases and passed; the policy contract also
+passed.
+
+The performance evidence did not survive a stronger ordering falsifier. The
+route-shaped screen used 24 query heads, 4 KV heads, head dimension 256, a
+3,072-token packed P4 prefix, and a 64-token chunk on Apple M2 Max. Simple
+same-process AB/BA runs initially appeared `4.6-7.0%` faster, but paired wins
+degraded from `10/10` to `16/20` and then `12/20`. A symmetric ten-block
+ABBA/BAAB run, averaging two commands per variant inside each block, measured
+generic/static GPU medians `16.771/19.465 ms`: the static source was about
+`16.06%` slower and won only `3/10` blocks. All compared outputs stayed
+bit-identical.
+
+The source patch, route policy, tests, and temporary probe were removed; the
+generic uniform loader remains. The reversal does not establish a universal
+compiler law, but it rejects automatic promotion on the measured target and
+shows that a positive median without stable paired wins is not enough. The
+next kernel candidate must remove independently identified work rather than
+depending on branch folding. This was ordinary compile-time specialization,
+not LTP/WBA.

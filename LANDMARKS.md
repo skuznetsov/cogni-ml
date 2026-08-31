@@ -25325,3 +25325,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was an ordinary local synchronization experiment.
 
 **decision:** Remove the candidate kernel source, diagnostic route, tests, and CLI flags. Retain the current barrier. Revisit synchronization only with a larger independently justified work reduction, not by retrying the same single-barrier hypothesis.
+
+#### [LM-QWEN38-ADAPTIVE-STATIC-P4-PREFILL-961] Compile-time P4 tier folding is not a stable prefill acceleration
+**context:** ml / Qwen3.8 / adaptive QBit / Metal / prefill / uniform-tier dispatch
+**state:** candidate rejected and removed; generic uniform loader retained
+
+- claim: "A compile-time P4 tier constant can preserve the adaptive attention and cache bytes exactly."
+  source: a temporary separate-source pipeline replaced only the runtime uniform-tier selection with a compile-time P4 constant. A focused Metal contract covered P4/BF16 prefill and P4/BF16 split-K fallbacks, required bit-identical attention outputs and serialized K/V snapshots, and passed `1/1`; the fail-closed policy contract passed `9/9`. Mixed tiers and the production pipeline remained untouched.
+  verified_at: 2026-08-31
+  decay_trigger: adaptive cache layout, uniform loader arithmetic, pipeline source specialization, Metal compiler/runtime, or parity coverage changes
+  trust: {F:0.99,G:0.06,R:0.95}
+
+- claim: "Compile-time P4 tier folding does not produce a stable complete-command prefill win on the measured M2 Max corridor."
+  source: same-process screens used the Qwen3.8 shape (`24` query heads, `4` KV heads, head dimension `256`), a `3,072`-token P4 prefix, a `64`-token chunk, warmed pipelines, exact outputs, and Metal completed-command intervals. Simple AB/BA screens appeared positive (`+4.60%`, `10/10`; then `+4.67%`, `16/20`; then `+7.02%`, `12/20`) but their paired stability degraded. The stronger symmetric ten-block ABBA/BAAB falsifier averaged two commands per variant per block and reversed: generic/static medians were `16.771/19.465 ms`, static was about `16.06%` slower, and it won only `3/10` blocks. Every compared output remained bit-identical.
+  verified_at: 2026-08-31
+  decay_trigger: device, Metal compiler/runtime, P4 loader, prefill shape, timing method, or GPU power/load control changes
+  trust: {F:0.98,G:0.05,R:0.91}
+
+**Adversary:** The temporary experiment had no hardware counters, so register pressure, compiler scheduling, cache residency, and host/GPU power state remain possible explanations rather than findings. The sign reversal does not prove that static folding can never help another device or shape. It does prove that the earlier positive AB/BA medians were insufficient for automatic promotion on this target and that paired-win instability was a real warning rather than harmless noise.
+
+**Value proxy:** Bit parity establishes safety, and local command timing measures the intended corridor, but neither substitutes for stable acceleration. The symmetric block result is the strongest local value falsifier and rejects escalation to a 27B product run.
+
+**LTP/WBA:** Not claimed. This was ordinary compile-time kernel specialization with the generic source as an exact dual frame.
+
+**decision:** Remove the static-tier source patch, policy, test, and temporary probe. Keep the generic uniform loader. Move to Q4_K adjacent-subblock metadata reuse, where the candidate removes duplicated scale/min decoding work rather than relying on compiler branch folding.
