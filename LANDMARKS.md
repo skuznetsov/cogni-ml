@@ -25147,3 +25147,33 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary shape- and device-scoped dispatch using the generic non-tail route as automatic rollback.
 
 **decision:** Enable tail-safe B64 FFN fusion automatically only on Apple M2 Max when padding is at most 12.5%. Preserve `TAIL_MIN=0` as rollback and positive values as explicit experiments. Reopen the threshold if a boundary sweep finds a regression inside the admitted bands; do not extrapolate the pp360 gain to total inference.
+
+#### [LM-QWEN38-PREFILL-GROUP2-FALSIFIED-954] Longer shared prefill commands lose at 8K despite short-prompt wins
+**context:** ml / Qwen3.8 / adaptive resident QBit KV / prefill scheduler / command boundaries / watchdog
+**state:** automatic group-two and shorter-cooldown promotion rejected; group one plus 50 ms retained
+
+- claim: "Coalescing two fused full-attention/recurrent groups reduces short-prompt command-boundary overhead."
+  source: guarded paired/interleaved Qwen3.8-27B Q4_K_M attribution runs with the coarse adaptive map, 2,048-row chunks, CogniGraph off, fresh prepared state, and final top-1 measured group two against the group-one default. At pp2048, group two averaged `14,120.49 ms` versus `14,618.53 ms`, a `3.41%` reduction with top-1/logit parity `3/3`. At pp4096 it averaged `32,749.00 ms` versus `33,827.22 ms`, a `3.19%` reduction with parity `2/2`. A secondary boundary profile showed 16 synchronous adaptive command boundaries per 2,048-row execution with group one and 8 with group two; seven removed 50 ms cooldowns explain 350 ms of the approximately 498 ms short-prompt delta. The route remains synchronous command coalescing, not CogniGraph overlap.
+  verified_at: 2026-08-31
+  decay_trigger: layer schedule, chunk size, cooldown, adaptive map, shared-command route, host/GPU thermal state, compiler/runtime, or boundary instrumentation changes
+  trust: {F:0.98,G:0.08,R:0.92}
+
+- claim: "The same group-two setting is not safe to promote across long coding contexts."
+  source: the guarded pp8192 scale falsifier completed without timeout, memory-pressure kill, or semantic mismatch, but group two took `108,286.00 ms` versus group one's `96,155.90 ms`, a `12.61%` regression with top-1/logit parity `1/1`. This single pair ran default before alternate after additional default profiling and is thermally/order confounded, so it does not prove group two is intrinsically slower. It is nevertheless a sufficient negative promotion signal: the expected short-prompt saving did not survive four chunks, while continuous command occupancy doubled from roughly one fused group to two. No scheduler default was changed.
+  verified_at: 2026-08-31
+  decay_trigger: balanced long-context reproduction, thermal/power control, group scheduling, chunk geometry, Metal watchdog behavior, or the measured model/device changes
+  trust: {F:0.96,G:0.05,R:0.84}
+
+- claim: "Halving the cooldown while retaining group one does not recover a stable short-prompt wall-time gain."
+  source: a guarded pp2048 paired/interleaved A/B measured the 50 ms default at `16,980.07 ms` and 25 ms at `17,019.73 ms`; the default won `2/3` pairs and final top-1/logit matched `3/3`. The noisy p50 moved in the opposite direction from the average, so neither coordinate supports automatic promotion. Both scheduler experiments started above the 35% free-memory floor and exited normally.
+  verified_at: 2026-08-31
+  decay_trigger: host/GPU thermal state, cooldown implementation, command duration, chunk geometry, model/device, or a quiet balanced reproduction
+  trust: {F:0.97,G:0.05,R:0.88}
+
+**Adversary:** Short-prompt wins are dominated by deterministic host cooldown removal and do not certify better GPU execution. The pp8192 rejection is deliberately asymmetric: it is strong enough to block a default change, but too confounded to establish a general slowdown law. Group zero is not a valid speed fallback because it restores the historically unsafe single-command frame. Trying group three or removing cooldown after this result would widen continuous GPU occupancy without evidence.
+
+**Value proxy:** Boundary count and removed sleep time explain the local mechanism but are not the objective. Product-shaped prompt-processing wall time, semantic parity, long-context survival, memory pressure, and compositor/watchdog behavior jointly govern promotion.
+
+**LTP/WBA:** Not claimed. This is ordinary synchronous command-buffer scheduling; no independent transport corridor, recomputation certificate, or global descent proof is present.
+
+**decision:** Retain automatic group one and the 50 ms cooldown for 2,048-row adaptive chunks. Keep `QWEN35_PREFILL_APPEND_MAX_GROUPS=2` and shorter cooldowns as explicit experiments only. Reopen group coalescing only with fresh order-balanced long-context evidence and no watchdog or thermal regression; pursue conversion-traffic reduction before wider scheduler occupancy.
