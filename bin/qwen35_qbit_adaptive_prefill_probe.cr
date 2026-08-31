@@ -118,7 +118,10 @@ module Qwen35QBitAdaptivePrefillProbe
     tile = ML::GGUF::QwenQBitAdaptiveMetalPolicy.gqa6_tile(
       device_name, ENV["QWEN35_ADAPTIVE_GQA6_TILE"]?,
     )
-    puts %(probe device=#{device_name.inspect} tile=#{tile} seed=0x#{SEED.to_s(16)} fixed_snapshot=true)
+    dequant_t4 = ML::GGUF::QwenQBitAdaptiveMetalPolicy.dequant_t4?(
+      ENV["QWEN35_ADAPTIVE_DEQUANT_T4"]?,
+    )
+    puts %(probe device=#{device_name.inspect} tile=#{tile} dequant_t4=#{dequant_t4} seed=0x#{SEED.to_s(16)} fixed_snapshot=true)
     puts "tier prefix chunk pack_wall_ms fused_wall_ms prefill_pack_finalize_gpu_ms non_gpu_ms"
     begin
       tier_names.each do |tier_name|

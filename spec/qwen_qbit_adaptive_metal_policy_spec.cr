@@ -40,4 +40,16 @@ describe ML::GGUF::QwenQBitAdaptiveMetalPolicy do
       policy.decode_splitk?(127, 1, true, "1", "zero")
     end
   end
+
+  it "keeps register-local t4 dequantization behind an exact boolean override" do
+    policy = ML::GGUF::QwenQBitAdaptiveMetalPolicy
+
+    policy.dequant_t4?(nil).should be_false
+    policy.dequant_t4?("").should be_false
+    policy.dequant_t4?("0").should be_false
+    policy.dequant_t4?("1").should be_true
+    expect_raises(ArgumentError, /QWEN35_ADAPTIVE_DEQUANT_T4/) do
+      policy.dequant_t4?("true")
+    end
+  end
 end

@@ -36,5 +36,14 @@ module ML::GGUF
       enabled && uniform_tier && token_count == 1 &&
         packed_len.to_i64 + 1_i64 >= min_context.to_i64
     end
+
+    def self.dequant_t4?(override : String? = nil) : Bool
+      case override.try(&.strip)
+      when nil, "", "0" then false
+      when "1"          then true
+      else
+        raise ArgumentError.new("QWEN35_ADAPTIVE_DEQUANT_T4 must be 0 or 1")
+      end
+    end
   end
 end

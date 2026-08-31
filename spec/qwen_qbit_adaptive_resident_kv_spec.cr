@@ -369,10 +369,13 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
       capacity * n_head_kv,
       ML::GGUF::QwenQBitAdaptiveKV::Tier::P4,
     ))
-    serial = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
+    baseline = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
       plan, plan, capacity, n_head_kv, head_dim,
     )
-    splitk = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
+    t4_serial = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
+      plan, plan, capacity, n_head_kv, head_dim,
+    )
+    t4_splitk = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
       plan, plan, capacity, n_head_kv, head_dim,
     )
     initial_buffers = [
@@ -380,14 +383,15 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
       ML::MetalBuffer.from_array(initial_v),
     ]
     previous_splitk = ENV["QWEN35_ADAPTIVE_SPLITK"]?
+    previous_dequant_t4 = ENV["QWEN35_ADAPTIVE_DEQUANT_T4"]?
     begin
-      [serial, splitk].each do |cache|
+      [baseline, t4_serial, t4_splitk].each do |cache|
         ML::GGUF::QwenQBitAdaptiveResidentKV.append_from_metal(
           cache, initial_buffers[0], initial_buffers[1], packed_len,
         )
       end
       hits_before, misses_before = ML::GGUF::Qwen35Metal::Scratch.stats
-      packed_k, packed_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(serial)
+      packed_k, packed_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(baseline)
       expected = QwenQBitAdaptiveResidentKVSpec.chunk_reference(
         q, gate, adaptive.decode(packed_k), adaptive.decode(packed_v),
         current_k, current_v, packed_len, 1,
@@ -395,8 +399,14 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
       )
 
       outputs = [] of Array(Float32)
-      [serial, splitk].each_with_index do |cache, index|
-        ENV["QWEN35_ADAPTIVE_SPLITK"] = index == 0 ? "0" : "1"
+      cases = [
+        {cache: baseline, splitk: "0", dequant_t4: "0"},
+        {cache: t4_serial, splitk: "0", dequant_t4: "1"},
+        {cache: t4_splitk, splitk: "1", dequant_t4: "1"},
+      ]
+      cases.each do |candidate|
+        ENV["QWEN35_ADAPTIVE_SPLITK"] = candidate[:splitk]
+        ENV["QWEN35_ADAPTIVE_DEQUANT_T4"] = candidate[:dequant_t4]
         buffers = [
           ML::MetalBuffer.from_array(q),
           ML::MetalBuffer.from_array(gate),
@@ -407,7 +417,7 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
         begin
           ML::GGUF::Qwen35Metal::Scratch.with_namespace("adaptive_splitk_capacity_spec") do
             ML::GGUF::QwenQBitAdaptiveResidentKV.prefill_chunk_and_append_from_metal(
-              cache, buffers[0], buffers[1], buffers[2], buffers[3], buffers[4],
+              candidate[:cache], buffers[0], buffers[1], buffers[2], buffers[3], buffers[4],
               1, n_head, heads_per_group, scale,
             )
           end
@@ -423,10 +433,15 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
       end
       QwenQBitAdaptiveResidentKVSpec.cosine(outputs[0], outputs[1]).should be > 0.9999999
       QwenQBitAdaptiveResidentKVSpec.max_diff(outputs[0], outputs[1]).should be < 2.0e-5_f32
-      serial_k, serial_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(serial)
-      splitk_k, splitk_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(splitk)
-      splitk_k.payload.should eq(serial_k.payload)
-      splitk_v.payload.should eq(serial_v.payload)
+      QwenQBitAdaptiveResidentKVSpec.cosine(outputs[0], outputs[2]).should be > 0.9999999
+      QwenQBitAdaptiveResidentKVSpec.max_diff(outputs[0], outputs[2]).should be < 2.0e-5_f32
+      baseline_k, baseline_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(baseline)
+      t4_serial_k, t4_serial_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(t4_serial)
+      t4_splitk_k, t4_splitk_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(t4_splitk)
+      t4_serial_k.payload.should eq(baseline_k.payload)
+      t4_serial_v.payload.should eq(baseline_v.payload)
+      t4_splitk_k.payload.should eq(baseline_k.payload)
+      t4_splitk_v.payload.should eq(baseline_v.payload)
 
       hits_after_first, misses_after_first = ML::GGUF::Qwen35Metal::Scratch.stats
       misses_after_first.should eq(misses_before + 3)
@@ -441,7 +456,7 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
       begin
         ML::GGUF::Qwen35Metal::Scratch.with_namespace("adaptive_splitk_capacity_spec") do
           ML::GGUF::QwenQBitAdaptiveResidentKV.prefill_chunk_and_append_from_metal(
-            splitk, second_buffers[0], second_buffers[1], second_buffers[2],
+            t4_splitk, second_buffers[0], second_buffers[1], second_buffers[2],
             second_buffers[3], second_buffers[4], 1, n_head, heads_per_group, scale,
           )
         end
@@ -457,9 +472,15 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
       else
         ENV.delete("QWEN35_ADAPTIVE_SPLITK")
       end
+      if previous_dequant_t4
+        ENV["QWEN35_ADAPTIVE_DEQUANT_T4"] = previous_dequant_t4
+      else
+        ENV.delete("QWEN35_ADAPTIVE_DEQUANT_T4")
+      end
       initial_buffers.each(&.release)
-      serial.release
-      splitk.release
+      baseline.release
+      t4_serial.release
+      t4_splitk.release
     end
   end
 
@@ -486,49 +507,73 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
     plan = adaptive.plan(Array.new(capacity, ML::GGUF::QwenQBitAdaptiveKV::Tier::BF16))
 
     live_before = ML::MetalBuffer.stats[:live_bytes]
-    resident = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
+    baseline = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
       plan, plan, capacity, n_head_kv, head_dim,
     )
+    t4 = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
+      plan, plan, capacity, n_head_kv, head_dim,
+    )
+    previous_dequant_t4 = ENV["QWEN35_ADAPTIVE_DEQUANT_T4"]?
     begin
       initial_buffers = [
         ML::MetalBuffer.from_array(initial_k),
         ML::MetalBuffer.from_array(initial_v),
       ]
       begin
-        ML::GGUF::QwenQBitAdaptiveResidentKV.append_from_metal(
-          resident, initial_buffers[0], initial_buffers[1], initial_tokens,
-        )
+        [baseline, t4].each do |resident|
+          ML::GGUF::QwenQBitAdaptiveResidentKV.append_from_metal(
+            resident, initial_buffers[0], initial_buffers[1], initial_tokens,
+          )
+        end
       ensure
         initial_buffers.each(&.release)
       end
 
-      packed_k, packed_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(resident)
+      packed_k, packed_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(baseline)
       expected = QwenQBitAdaptiveResidentKVSpec.chunk_reference(
         q, gate, adaptive.decode(packed_k), adaptive.decode(packed_v),
         current_k, current_v, initial_tokens, token_count,
         n_head, n_head_kv, head_dim, heads_per_group, scale,
       )
-      buffers = [
-        ML::MetalBuffer.from_array(q),
-        ML::MetalBuffer.from_array(gate),
-        ML::MetalBuffer.from_array(current_k),
-        ML::MetalBuffer.from_array(current_v),
-        ML::MetalBuffer.new(expected.size.to_i64 * sizeof(Float32)),
-      ]
-      begin
-        ML::GGUF::QwenQBitAdaptiveResidentKV.prefill_chunk_and_append_from_metal(
-          resident,
-          buffers[0], buffers[1], buffers[2], buffers[3], buffers[4],
-          token_count, n_head, heads_per_group, scale,
-        )
-        actual = buffers[4].read(expected.size.to_i32)
+      outputs = [] of Array(Float32)
+      [{resident: baseline, dequant_t4: "0"}, {resident: t4, dequant_t4: "1"}].each do |candidate|
+        ENV["QWEN35_ADAPTIVE_DEQUANT_T4"] = candidate[:dequant_t4]
+        buffers = [
+          ML::MetalBuffer.from_array(q),
+          ML::MetalBuffer.from_array(gate),
+          ML::MetalBuffer.from_array(current_k),
+          ML::MetalBuffer.from_array(current_v),
+          ML::MetalBuffer.new(expected.size.to_i64 * sizeof(Float32)),
+        ]
+        begin
+          ML::GGUF::QwenQBitAdaptiveResidentKV.prefill_chunk_and_append_from_metal(
+            candidate[:resident],
+            buffers[0], buffers[1], buffers[2], buffers[3], buffers[4],
+            token_count, n_head, heads_per_group, scale,
+          )
+          outputs << buffers[4].read(expected.size.to_i32)
+        ensure
+          buffers.each(&.release)
+        end
+      end
+      outputs.each do |actual|
         QwenQBitAdaptiveResidentKVSpec.cosine(expected, actual).should be > 0.9999999
         QwenQBitAdaptiveResidentKVSpec.max_diff(expected, actual).should be < 2.0e-4_f32
-      ensure
-        buffers.each(&.release)
       end
+      QwenQBitAdaptiveResidentKVSpec.cosine(outputs[0], outputs[1]).should be > 0.9999999
+      QwenQBitAdaptiveResidentKVSpec.max_diff(outputs[0], outputs[1]).should be < 2.0e-5_f32
+      baseline_k, baseline_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(baseline)
+      t4_k, t4_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(t4)
+      t4_k.payload.should eq(baseline_k.payload)
+      t4_v.payload.should eq(baseline_v.payload)
     ensure
-      resident.release
+      if previous_dequant_t4
+        ENV["QWEN35_ADAPTIVE_DEQUANT_T4"] = previous_dequant_t4
+      else
+        ENV.delete("QWEN35_ADAPTIVE_DEQUANT_T4")
+      end
+      baseline.release
+      t4.release
     end
     ML::MetalBuffer.stats[:live_bytes].should eq(live_before)
   end
@@ -565,6 +610,7 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
     )
     reference_output = [] of Float32
     offset = 0
+    previous_dequant_t4 = ENV["QWEN35_ADAPTIVE_DEQUANT_T4"]?
     begin
       initial_buffers = [
         ML::MetalBuffer.from_array(initial_k),
@@ -580,6 +626,7 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
         initial_buffers.each(&.release)
       end
 
+      ENV["QWEN35_ADAPTIVE_DEQUANT_T4"] = "0"
       chunks.each do |chunk_size|
         chunk_buffers = [
           ML::MetalBuffer.from_array(q[offset * q_dim, chunk_size * q_dim]),
@@ -601,6 +648,7 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
         offset += chunk_size
       end
 
+      ENV["QWEN35_ADAPTIVE_DEQUANT_T4"] = "1"
       wide_buffers = [
         ML::MetalBuffer.from_array(q),
         ML::MetalBuffer.from_array(gate),
@@ -636,6 +684,11 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
         wide_buffers.each(&.release)
       end
     ensure
+      if previous_dequant_t4
+        ENV["QWEN35_ADAPTIVE_DEQUANT_T4"] = previous_dequant_t4
+      else
+        ENV.delete("QWEN35_ADAPTIVE_DEQUANT_T4")
+      end
       reference.release
       wide.release
     end

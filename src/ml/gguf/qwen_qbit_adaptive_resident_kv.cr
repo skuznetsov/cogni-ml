@@ -443,12 +443,24 @@ module ML::GGUF
         "constant uint QQA_ADAPTIVE_GQA6_TILE = 15;",
       )
       raise "adaptive GQA6 tile-15 source patch no longer matches" if SOURCE_TILE15 == SOURCE
+      SOURCE_DEQUANT_T4 = SOURCE.sub(
+        "constant bool QQA_ADAPTIVE_DEQUANT_T4 = false;",
+        "constant bool QQA_ADAPTIVE_DEQUANT_T4 = true;",
+      )
+      raise "adaptive t4 dequant source patch no longer matches" if SOURCE_DEQUANT_T4 == SOURCE
+      SOURCE_TILE15_DEQUANT_T4 = SOURCE_DEQUANT_T4.sub(
+        "constant uint QQA_ADAPTIVE_GQA6_TILE = 16;",
+        "constant uint QQA_ADAPTIVE_GQA6_TILE = 15;",
+      )
+      if SOURCE_TILE15_DEQUANT_T4 == SOURCE_DEQUANT_T4
+        raise "adaptive t4 dequant tile-15 source patch no longer matches"
+      end
       PACK_SOURCE = {{ read_file("#{__DIR__}/kernels/qbit_adaptive_pack_qwen35.metal") }}
       @@gqa6_pipelines = Hash(Int32, ML::Metal::ComputePipeline).new
       @@gqa6_pipeline_mutex = Mutex.new
-      @@prefill_gqa6_pipelines = Hash(Int32, ML::Metal::ComputePipeline).new
+      @@prefill_gqa6_pipelines = Hash(Tuple(Int32, Bool), ML::Metal::ComputePipeline).new
       @@prefill_gqa6_pipeline_mutex = Mutex.new
-      @@decode_splitk_stage1_pipelines = Hash(Int32, ML::Metal::ComputePipeline).new
+      @@decode_splitk_stage1_pipelines = Hash(Tuple(Int32, Bool), ML::Metal::ComputePipeline).new
       @@decode_splitk_stage1_pipeline_mutex = Mutex.new
       @@decode_splitk_stage2_pipeline : ML::Metal::ComputePipeline?
       @@decode_splitk_stage2_pipeline_mutex = Mutex.new
@@ -1250,11 +1262,14 @@ module ML::GGUF
 
       private def prefill_gqa6_pipeline : ML::Metal::ComputePipeline
         tile = gqa6_tile
+        dequant_t4 = dequant_t4?
+        key = {tile, dequant_t4}
+        suffix = dequant_t4 ? "_dequant_t4" : ""
         @@prefill_gqa6_pipeline_mutex.synchronize do
-          @@prefill_gqa6_pipelines[tile] ||= ML::Metal::PipelineCache.get("qwen35_qbit_adaptive_prefill_chunk_gqa6_tile#{tile}") {
+          @@prefill_gqa6_pipelines[key] ||= ML::Metal::PipelineCache.get("qwen35_qbit_adaptive_prefill_chunk_gqa6_tile#{tile}#{suffix}") {
             ML::Metal::ComputePipeline.new(
-              "qwen35_qbit_adaptive_prefill_chunk_gqa6_tile#{tile}",
-              gqa6_source(tile),
+              "qwen35_qbit_adaptive_prefill_chunk_gqa6_tile#{tile}#{suffix}",
+              gqa6_source(tile, dequant_t4),
               "qwen35_qbit_adaptive_prefill_chunk_gqa6",
             )
           }
@@ -1263,11 +1278,14 @@ module ML::GGUF
 
       private def decode_splitk_stage1_pipeline : ML::Metal::ComputePipeline
         tile = gqa6_tile
+        dequant_t4 = dequant_t4?
+        key = {tile, dequant_t4}
+        suffix = dequant_t4 ? "_dequant_t4" : ""
         @@decode_splitk_stage1_pipeline_mutex.synchronize do
-          @@decode_splitk_stage1_pipelines[tile] ||= ML::Metal::PipelineCache.get("qwen35_qbit_adaptive_decode_splitk_stage1_gqa6_tile#{tile}") {
+          @@decode_splitk_stage1_pipelines[key] ||= ML::Metal::PipelineCache.get("qwen35_qbit_adaptive_decode_splitk_stage1_gqa6_tile#{tile}#{suffix}") {
             ML::Metal::ComputePipeline.new(
-              "qwen35_qbit_adaptive_decode_splitk_stage1_gqa6_tile#{tile}",
-              gqa6_source(tile),
+              "qwen35_qbit_adaptive_decode_splitk_stage1_gqa6_tile#{tile}#{suffix}",
+              gqa6_source(tile, dequant_t4),
               "qwen35_qbit_adaptive_decode_splitk_stage1_gqa6",
             )
           }
@@ -1292,8 +1310,18 @@ module ML::GGUF
         )
       end
 
-      private def gqa6_source(tile : Int32) : String
-        tile == 15 ? SOURCE_TILE15 : SOURCE
+      private def dequant_t4? : Bool
+        QwenQBitAdaptiveMetalPolicy.dequant_t4?(
+          ENV["QWEN35_ADAPTIVE_DEQUANT_T4"]?,
+        )
+      end
+
+      private def gqa6_source(tile : Int32, dequant_t4 : Bool = false) : String
+        if dequant_t4
+          tile == 15 ? SOURCE_TILE15_DEQUANT_T4 : SOURCE_DEQUANT_T4
+        else
+          tile == 15 ? SOURCE_TILE15 : SOURCE
+        end
       end
 
       private def pack_pipeline : ML::Metal::ComputePipeline

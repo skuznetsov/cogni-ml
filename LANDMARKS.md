@@ -25009,3 +25009,33 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was an ordinary kernel-local falsifier with the unchanged loader as the dual frame.
 
 **decision:** Reject SIMD broadcast and retain the canonical per-thread P4 loader. Do not promote logical load-count reductions without a product-shaped GPU interval. Move next to a layout/occupancy candidate that reduces dequantization instructions or transaction count without cross-lane exchange.
+
+#### [LM-QWEN38-ADAPTIVE-DEQUANT-T4-949] Register-local t4 reduces measured adaptive prefill GPU time
+**context:** ml / Qwen3.8 / adaptive QBit / Metal / P4 and BF16 dequantization / prefill performance
+**state:** verified default-off prefill candidate on Apple M2 Max; split-K parity only; default promotion open
+
+- claim: "Four aligned values can be dequantized register-locally without changing adaptive KV bytes or attention results."
+  source: `QWEN35_ADAPTIVE_DEQUANT_T4=1` selects a separately compiled source variant. The common K/V tile-fill helper uses one-thread `float4` dequantization for uniform P4 and BF16 while preserving the scalar source as rollback. The focused Metal contract matched the independent CPU reference and canonical serial output for t4 serial and t4 split-K, required byte-identical appended K/V, and passed for tile 15 and tile 16. The adaptive resident suite passed `17/17` with the gate off and `17/17` with it on; the exact policy suite passed `6/6`.
+  verified_at: 2026-08-31
+  decay_trigger: QBit row layout, head dimension/alignment, Metal source specialization, tile traversal, split-K, pack/finalize, compiler/runtime, or Metal ABI changes
+  trust: {F:0.99,G:0.24,R:0.97}
+
+- claim: "At the measured long-prefix product shape, register-local t4 materially reduces the fused prefill GPU interval."
+  source: fresh-process A/B/B/A on Apple M2 Max at prefix 3,072, chunk 64, tile 15, and ten repetitions measured scalar P4 `18.974/19.015 ms` versus t4 `14.027/14.028 ms` (`26.2%` lower by pair means), and scalar BF16 `22.982/22.326 ms` versus t4 `17.083/17.408 ms` (`23.9%` lower). The interval includes prefill attention, K/V pack, and finalization. Split-K timing was not measured.
+  verified_at: 2026-08-31
+  decay_trigger: device, Metal compiler, tile, prefix/chunk shape, tier distribution, command composition, host/GPU power state, or profiler semantics change
+  trust: {F:0.98,G:0.13,R:0.95}
+
+- claim: "The measured t4 quality vector is identical to the scalar resident route on one frozen real-model case."
+  source: paired guarded Qwen3.8-27B Q4_K_M replays with the coarse resident map produced equal full reports and response text: meaning `1/1`, top-1 `151/155`, ranked top-2 `274/308`, set overlap `282/308`, exact-top1 coverage `154/154`, ECS `0.976445`, EOS, all 16 adaptive owners, no Float32 owner, consistent cache publication, and `3.7647x` density.
+  verified_at: 2026-08-31
+  decay_trigger: model, prompt/template/tokenizer, tier map, generation, dequantization, cache ownership/publication, or quality schema changes
+  trust: {F:0.99,G:0.05,R:0.97}
+
+**Adversary:** The long-prefix GPU interval is strong local evidence, not end-to-end prompt throughput or cross-device proof. The 256-prefix rows were noisier across probe shapes, mixed-tier rows use the scalar fallback, and split-K has parity without a speed measurement. Register pressure or occupancy can reverse the result on another GPU or tile. Default enablement remains unjustified.
+
+**Value proxy:** The fused-command GPU interval is the local performance coordinate. It does not replace response quality, cache bytes, publication safety, total prompt wall time, memory pressure, or watchdog behavior.
+
+**LTP/WBA:** Not claimed. This is ordinary register-local dequantization with the canonical scalar source as the dual frame.
+
+**decision:** Keep `QWEN35_ADAPTIVE_DEQUANT_T4` default-off. Admit it as a measured Apple M2 Max prefill candidate for uniform P4/BF16. Measure split-K and end-to-end pp wall time, then repeat on another Metal device before considering automatic promotion.

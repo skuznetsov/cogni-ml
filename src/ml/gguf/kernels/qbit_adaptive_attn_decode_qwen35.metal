@@ -62,6 +62,8 @@ inline uint qqa_adaptive_plane_bit(device const uchar* plane, uint within) {
     return (plane[byte_offset] & bit_mask) != 0 ? 1u : 0u;
 }
 
+constant bool QQA_ADAPTIVE_DEQUANT_T4 = false;
+
 inline float qqa_adaptive_value(device const uchar* base,
                                 device const uchar* metadata,
                                 device const uchar* sidecar,
@@ -128,9 +130,129 @@ inline float qqa_adaptive_uniform_value(device const uchar* base,
     return qqa_adaptive_value(base, metadata, sidecar, row, within);
 }
 
+// Four adjacent values never cross a row because the GQA6 fill traversal is
+// aligned to four and Qwen3.8 head_dim is 256. Keep the four dequantizations
+// register-local: one header read and one byte from each P4 plane, with no
+// cross-lane exchange or cache-layout change.
+inline float4 qqa_adaptive_uniform_value4(device const uchar* base,
+                                          device const uchar* metadata,
+                                          device const uchar* sidecar,
+                                          uint row,
+                                          uint within,
+                                          uint uniform_tier) {
+    if (uniform_tier == QQA_ADAPTIVE_P4) {
+        const uint row_base = row * QQA_ADAPTIVE_P4_STRIDE;
+        uint raw0 = 0;
+        uint raw1 = 0;
+        uint raw2 = 0;
+        uint raw3 = 0;
+        for (uint plane = 0; plane < 4; ++plane) {
+            const uint plane_offset = row_base + 8 + plane * QQA_ADAPTIVE_PLANE_BYTES;
+            const uint byte_offset = QQA_ADAPTIVE_PLANE_BYTES - 1 - within / 8;
+            const uint plane_byte = base[plane_offset + byte_offset];
+            const uint shift = 7u - plane;
+            raw0 |= ((plane_byte >> ((within + 0u) & 7u)) & 1u) << shift;
+            raw1 |= ((plane_byte >> ((within + 1u) & 7u)) & 1u) << shift;
+            raw2 |= ((plane_byte >> ((within + 2u) & 7u)) & 1u) << shift;
+            raw3 |= ((plane_byte >> ((within + 3u) & 7u)) & 1u) << shift;
+        }
+        const float mean = as_type<float>(qqa_adaptive_read_u32_le(base, row_base));
+        const float sigma = as_type<float>(qqa_adaptive_read_u32_le(base, row_base + 4));
+        return float4(
+            mean + sigma * qqa_adaptive_centroid(raw0, 4),
+            mean + sigma * qqa_adaptive_centroid(raw1, 4),
+            mean + sigma * qqa_adaptive_centroid(raw2, 4),
+            mean + sigma * qqa_adaptive_centroid(raw3, 4));
+    }
+    if (uniform_tier == QQA_ADAPTIVE_BF16) {
+        const uint sidecar_offset = row * QQA_ADAPTIVE_HD * 2u + within * 2u;
+        const uint bits0 = ((uint)qqa_adaptive_read_u16_le(sidecar, sidecar_offset + 0u)) << 16;
+        const uint bits1 = ((uint)qqa_adaptive_read_u16_le(sidecar, sidecar_offset + 2u)) << 16;
+        const uint bits2 = ((uint)qqa_adaptive_read_u16_le(sidecar, sidecar_offset + 4u)) << 16;
+        const uint bits3 = ((uint)qqa_adaptive_read_u16_le(sidecar, sidecar_offset + 6u)) << 16;
+        return float4(
+            as_type<float>(bits0), as_type<float>(bits1),
+            as_type<float>(bits2), as_type<float>(bits3));
+    }
+    return float4(
+        qqa_adaptive_value(base, metadata, sidecar, row, within + 0u),
+        qqa_adaptive_value(base, metadata, sidecar, row, within + 1u),
+        qqa_adaptive_value(base, metadata, sidecar, row, within + 2u),
+        qqa_adaptive_value(base, metadata, sidecar, row, within + 3u));
+}
+
+inline void qqa_adaptive_store4(threadgroup float* destination,
+                                uint index,
+                                float4 values) {
+    destination[index + 0u] = values.x;
+    destination[index + 1u] = values.y;
+    destination[index + 2u] = values.z;
+    destination[index + 3u] = values.w;
+}
+
 constant uint QQA_ADAPTIVE_GQA6_HEADS = 6;
 constant uint QQA_ADAPTIVE_GQA6_TILE = 16;
 constant uint QQA_ADAPTIVE_GQA6_THREADS = QQA_ADAPTIVE_GQA6_HEADS * QQA_ADAPTIVE_SG;
+
+inline void qqa_adaptive_fill_uniform_tile(
+    threadgroup float* destination,
+    device const uchar* base,
+    device const uchar* metadata,
+    device const uchar* sidecar,
+    device const float* current,
+    uint tile_start,
+    uint tile_values,
+    uint packed_len,
+    uint source_token_offset,
+    uint kv_dim,
+    uint kv_h,
+    uint n_head_kv,
+    uint head_dim,
+    uint uniform_tier,
+    uint thread_index) {
+    const bool use_t4 = QQA_ADAPTIVE_DEQUANT_T4 &&
+        (uniform_tier == QQA_ADAPTIVE_P4 || uniform_tier == QQA_ADAPTIVE_BF16);
+    if (use_t4) {
+        const uint tile_vectors = tile_values / 4u;
+        for (uint vector_index = thread_index; vector_index < tile_vectors;
+             vector_index += QQA_ADAPTIVE_GQA6_THREADS) {
+            const uint index = vector_index * 4u;
+            const uint position_in_tile = index / head_dim;
+            const uint d = index - position_in_tile * head_dim;
+            const uint position = tile_start + position_in_tile;
+            float4 values;
+            if (position < packed_len) {
+                const uint row = position * n_head_kv + kv_h;
+                values = qqa_adaptive_uniform_value4(
+                    base, metadata, sidecar, row, d, uniform_tier);
+            } else {
+                const uint current_token =
+                    source_token_offset + position - packed_len;
+                const uint source_index =
+                    current_token * kv_dim + kv_h * head_dim + d;
+                values = *((device const float4*)(current + source_index));
+            }
+            qqa_adaptive_store4(destination, index, values);
+        }
+    } else {
+        for (uint index = thread_index; index < tile_values;
+             index += QQA_ADAPTIVE_GQA6_THREADS) {
+            const uint position_in_tile = index / head_dim;
+            const uint d = index - position_in_tile * head_dim;
+            const uint position = tile_start + position_in_tile;
+            if (position < packed_len) {
+                const uint row = position * n_head_kv + kv_h;
+                destination[index] = qqa_adaptive_uniform_value(
+                    base, metadata, sidecar, row, d, uniform_tier);
+            } else {
+                const uint current_token =
+                    source_token_offset + position - packed_len;
+                destination[index] = current[
+                    current_token * kv_dim + kv_h * head_dim + d];
+            }
+        }
+    }
+}
 
 kernel void qwen35_qbit_adaptive_attn_decode_gqa6(
     device const float* Q [[buffer(0)]],
@@ -302,20 +424,10 @@ kernel void qwen35_qbit_adaptive_prefill_chunk_gqa6(
         const uint tile_len = min(tile_start + QQA_ADAPTIVE_GQA6_TILE, visible_len) - tile_start;
         const uint tile_values = tile_len * head_dim;
 
-        for (uint index = thread_index; index < tile_values;
-             index += QQA_ADAPTIVE_GQA6_THREADS) {
-            const uint position_in_tile = index / head_dim;
-            const uint d = index - position_in_tile * head_dim;
-            const uint position = tile_start + position_in_tile;
-            if (position < packed_len) {
-                const uint row = position * n_head_kv + kv_h;
-                kv_tile[index] = qqa_adaptive_uniform_value(
-                    k_base, k_metadata, k_sidecar, row, d, uniform_tier);
-            } else {
-                const uint current_token = source_token_offset + position - packed_len;
-                kv_tile[index] = current_k[current_token * kv_dim + kv_h * head_dim + d];
-            }
-        }
+        qqa_adaptive_fill_uniform_tile(
+            kv_tile, k_base, k_metadata, k_sidecar, current_k,
+            tile_start, tile_values, packed_len, source_token_offset,
+            kv_dim, kv_h, n_head_kv, head_dim, uniform_tier, thread_index);
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
         float score = -1e30f;
@@ -344,20 +456,10 @@ kernel void qwen35_qbit_adaptive_prefill_chunk_gqa6(
         probabilities[local_h][lane] = probability;
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        for (uint index = thread_index; index < tile_values;
-             index += QQA_ADAPTIVE_GQA6_THREADS) {
-            const uint position_in_tile = index / head_dim;
-            const uint d = index - position_in_tile * head_dim;
-            const uint position = tile_start + position_in_tile;
-            if (position < packed_len) {
-                const uint row = position * n_head_kv + kv_h;
-                kv_tile[index] = qqa_adaptive_uniform_value(
-                    v_base, v_metadata, v_sidecar, row, d, uniform_tier);
-            } else {
-                const uint current_token = source_token_offset + position - packed_len;
-                kv_tile[index] = current_v[current_token * kv_dim + kv_h * head_dim + d];
-            }
-        }
+        qqa_adaptive_fill_uniform_tile(
+            kv_tile, v_base, v_metadata, v_sidecar, current_v,
+            tile_start, tile_values, packed_len, source_token_offset,
+            kv_dim, kv_h, n_head_kv, head_dim, uniform_tier, thread_index);
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
         for (uint dl = 0; dl < QQA_ADAPTIVE_HD / QQA_ADAPTIVE_SG; ++dl) {
@@ -448,19 +550,11 @@ kernel void qwen35_qbit_adaptive_decode_splitk_stage1_gqa6(
         const uint tile_len = min(tile_start + QQA_ADAPTIVE_GQA6_TILE, block_end) - tile_start;
         const uint tile_values = tile_len * head_dim;
 
-        for (uint index = thread_index; index < tile_values;
-             index += QQA_ADAPTIVE_GQA6_THREADS) {
-            const uint position_in_tile = index / head_dim;
-            const uint d = index - position_in_tile * head_dim;
-            const uint position = tile_start + position_in_tile;
-            if (position < packed_len) {
-                const uint row = position * n_head_kv + kv_h;
-                kv_tile[index] = qqa_adaptive_uniform_value(
-                    k_base, k_metadata, k_sidecar, row, d, uniform_tier);
-            } else {
-                kv_tile[index] = current_k[kv_h * head_dim + d];
-            }
-        }
+        qqa_adaptive_fill_uniform_tile(
+            kv_tile, k_base, k_metadata, k_sidecar, current_k,
+            tile_start, tile_values, packed_len, 0u,
+            n_head_kv * head_dim, kv_h, n_head_kv, head_dim,
+            uniform_tier, thread_index);
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
         float score = -1e30f;
@@ -489,19 +583,11 @@ kernel void qwen35_qbit_adaptive_decode_splitk_stage1_gqa6(
         probabilities[local_h][lane] = probability;
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        for (uint index = thread_index; index < tile_values;
-             index += QQA_ADAPTIVE_GQA6_THREADS) {
-            const uint position_in_tile = index / head_dim;
-            const uint d = index - position_in_tile * head_dim;
-            const uint position = tile_start + position_in_tile;
-            if (position < packed_len) {
-                const uint row = position * n_head_kv + kv_h;
-                kv_tile[index] = qqa_adaptive_uniform_value(
-                    v_base, v_metadata, v_sidecar, row, d, uniform_tier);
-            } else {
-                kv_tile[index] = current_v[kv_h * head_dim + d];
-            }
-        }
+        qqa_adaptive_fill_uniform_tile(
+            kv_tile, v_base, v_metadata, v_sidecar, current_v,
+            tile_start, tile_values, packed_len, 0u,
+            n_head_kv * head_dim, kv_h, n_head_kv, head_dim,
+            uniform_tier, thread_index);
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
         for (uint dl = 0; dl < QQA_ADAPTIVE_HD / QQA_ADAPTIVE_SG; ++dl) {

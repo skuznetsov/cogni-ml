@@ -2610,3 +2610,45 @@ dual frame and remains unchanged. A future attention candidate must reduce
 actual instructions or memory transactions without cross-lane exchange and
 must first beat this same product-shaped GPU interval before any model-backed
 quality or default-promotion work.
+
+### Register-local t4 adaptive dequantization (2026-08-31)
+
+The successor candidate applies the useful part of llama.cpp's four-value
+dequantization pattern without copying its cache format or using cross-lane
+exchange. `QWEN35_ADAPTIVE_DEQUANT_T4=1` selects a separately compiled Metal
+source variant. Four aligned adjacent values stay in one thread's registers.
+Uniform P4 reads the row header once and one byte from each plane; uniform BF16
+loads four adjacent values. The packed representation, tier metadata, sidecar,
+threadgroup tile, softmax, pack/finalize path, publication, and host buffer ABI
+are unchanged. Unset or `0` selects the canonical scalar source.
+
+A common tile-fill helper covers both prefill and split-K stage one, so the
+candidate does not duplicate four K/V traversal implementations. The exact
+boolean policy fails closed. Focused Metal coverage compares canonical serial,
+t4 serial, and t4 split-K against the independent CPU attention reference,
+requires the existing cosine and maximum-error bounds, and requires byte-for-
+byte identical packed K/V after append. The fallback tile-16 variant passes the
+same contract. The complete adaptive resident suite passes `17/17` with the
+gate off and `17/17` with it on.
+
+On Apple M2 Max, the post-refactor fresh-process A/B/B/A row used uniform P4
+and BF16, prefix 3,072, chunk 64, tile 15, and ten repetitions. The complete
+prefill, K/V pack, and finalizer GPU interval was `18.974/19.015 ms` for scalar
+P4 versus `14.027/14.028 ms` for t4, a `26.2%` reduction by pair means. BF16
+measured `22.982/22.326 ms` scalar versus `17.083/17.408 ms` t4, a `23.9%`
+reduction. An isolated 256-prefix A/B/B/A also favored t4, but earlier
+multi-prefix short rows had much larger variance, so no general short-context
+speed claim follows from that point.
+
+A paired guarded Qwen3.8-27B Q4_K_M resident replay used the coarse
+`p4;27=bf16,43=bf16,47=bf16,51=bf16` map and the frozen Crystal pipeline task.
+The scalar and t4 reports were identical, including response text, EOS,
+top-1 `151/155`, ranked top-2 `274/308`, top-2 set overlap `282/308`, exact
+top-1 coverage `154/154`, ECS `0.976445`, all 16 resident owners, no Float32 KV
+owner, consistent publication, and `3.7647x` logical density.
+
+This admits a default-off prefill acceleration candidate for the measured
+device, shape, and uniform tiers. Split-K has numerical and payload parity but
+no timing certificate yet. Cross-device occupancy, mixed-tier execution,
+end-to-end prompt processing, and automatic/default promotion remain open.
+This is ordinary register-local kernel optimization, not LTP/WBA.
