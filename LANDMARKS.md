@@ -26093,3 +26093,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was an ordinary exact-address store-shape experiment.
 
 **decision:** Retain the existing scalar-source T8 stores. Do not retry explicit `float4` threadgroup stores without compiler-level evidence of a changed instruction schedule; move the search to work or bytes that survive compiler optimization.
+
+#### [LM-QWEN38-Q4-X16-METADATA-BROADCAST-FALSIFIED-994] SIMD metadata broadcast is slower than cached Q4_K loads
+**context:** ml / Qwen3.8-27B / Metal / recurrent FFN / Q4_K x16 GEMV
+**state:** candidate rejected and removed; production x16 kernel retained
+
+- claim: "Broadcasting scale/min metadata once per four-lane x16 group does not accelerate the dominant `5120x17408` Q4_K FFN projection on the measured M2 Max corridor."
+  source: a temporary operator-only kernel left quant payload loads, arithmetic, reduction, and output layout unchanged while lane `ir=0` loaded and packed the shared scale/min values and two `simd_shuffle` operations broadcast them. Full Float32 output was bit-identical to the production x16 kernel. After both pipelines were prewarmed, ten same-process alternating pairs measured baseline GPU median `0.364000 ms` versus candidate `0.455125 ms`, a `-20.022%` regression with `0/10` wins. The protected run kept the 35% free-memory floor and exited normally, so the temporary kernel and probe were removed.
+  verified_at: 2026-09-01
+  decay_trigger: Q4_K x16 kernel structure, compiler treatment of metadata loads or SIMD shuffle, model shape, device/runtime, or timing probe changes
+  trust: {F:0.98,G:0.03,R:0.94}
+
+**Adversary:** Four source-level loads of the same metadata are not four DRAM transactions. The cache can satisfy them cheaply, while divergent leader loads, packing, and two cross-lane shuffles add unavoidable work inside every quant block. Exact parity therefore does not rescue the failed performance hypothesis.
+
+**Value proxy:** Fewer metadata load expressions were only a mechanism coordinate. Paired completed-GPU time and stable wins were the value boundary; the candidate failed decisively.
+
+**LTP/WBA:** Not claimed. This was an ordinary exact Q4_K kernel experiment with the production x16 kernel as rollback.
+
+**decision:** Keep the existing x16 metadata loads. Do not retry metadata shuffle/broadcast without a compiler or hardware-counter certificate that the load path materially changed; move to FFN weight traffic or a higher scheduling boundary.
