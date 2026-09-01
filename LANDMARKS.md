@@ -26129,3 +26129,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was an ordinary exact Q4_K row-blocking experiment with the production x16 kernel as rollback.
 
 **decision:** Keep one output row per 16-lane half. Do not add x16 row blocking for a sub-threshold local gain; reopen only if a fused FFN corridor can reuse weights or eliminate a material intermediate/dispatch at the whole-token boundary.
+
+#### [LM-QWEN38-Q4-B2-WEIGHT-SHARING-FALSIFIED-996] Cross-session Q4_K B2 sharing misses the operator gate
+**context:** ml / Qwen3.8-27B / Metal / independent-session throughput / Q4_K GEMV
+**state:** candidate rejected and removed; production x16 batch route retained
+
+- claim: "Loading each Q4_K block once for two independent input rows is not a material B2 throughput acceleration on the measured M2 Max corridor."
+  source: a temporary operator-only kernel evaluated two unrelated RHS rows inside one threadgroup while retaining separate outputs and the production quant arithmetic. On the real `5120x17408` Qwen3.8 FFN gate weight, ten warmed same-process alternating pairs measured production/candidate completed-GPU medians `0.231792/0.222250 ms`, only `+4.116%` with `10/10` wins. Submit/wait medians regressed `0.384792/0.404042 ms` (`-5.003%`). Candidate output differed from the production x16 route by at most `2.38419e-7` and was not bit-identical. This failed the declared exact-bit, `>=15%` GPU, and `>=8/10` gate, so the kernel, pipeline, timing seam, and probe were removed.
+  verified_at: 2026-09-01
+  decay_trigger: Q4_K production layout, compiler register allocation or occupancy, batch scheduling boundary, FFN shape, device/runtime, or timing harness changes
+  trust: {F:0.98,G:0.03,R:0.94}
+
+**Adversary:** Halving source-level weight loads does not halve memory transactions or wall time. Retaining two RHS accumulations and per-block metadata raises register and instruction pressure, while the current x16 route already exploits a different reduction order. The stable GPU direction is real but too small to justify a non-bit-exact kernel, and host overhead reverses it.
+
+**Value proxy:** Shared weight expressions and `10/10` GPU wins are mechanism evidence. Exact output compatibility plus completed-command GPU and submit/wait time are the admission boundary; correctness and materiality both failed.
+
+**LTP/WBA:** Not claimed. This was ordinary independent-row batching with the production x16 B2 route as rollback.
+
+**decision:** Keep the existing B2 x16 dispatch. Do not add cross-session Q4_K weight sharing on this shape. Scheduler-level overlap remains a separate hypothesis and must prove independent state ownership and a product-level throughput gain; this operator result provides no promotion evidence for it.
