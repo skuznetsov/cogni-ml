@@ -31,7 +31,8 @@ module ML::GGUF
     record PrefillResidentTop1Append,
       id_buf : ML::MetalBuffer,
       value_buf : ML::MetalBuffer,
-      encoded : Array(Bool)
+      encoded : Array(Bool),
+      allowed_ids : Array(Int32)? = nil
     {% if flag?(:cpu_only) %}
       alias PrefillCommandBuffer = Nil
     {% else %}
@@ -2714,6 +2715,16 @@ module ML::GGUF
         raise ArgumentError.new("allowed token id #{id} out of range 0...#{weights.output.out_dim}") if id < 0 || id >= weights.output.out_dim
       end
 
+      {% unless flag?(:cpu_only) %}
+        # Adaptive decode must consume the token exactly once. Preflight the
+        # specialized allowed-token head before entering its whole-token wave;
+        # an unsupported output format uses the exact full-logit wave instead.
+        if state.adaptive_kv? &&
+           !Qwen35Metal.rmsnorm_project_top1_allowed_ids_supported?(weights.output)
+          return top1_from_allowed_logits(forward(weights, token_id, pos, state), allowed_ids)
+        end
+      {% end %}
+
       if packed = forward_decode_wave_routed(weights, token_id, pos, state, top1: true, top1_allowed_ids: allowed_ids)
         return {packed[0].to_i32, packed[1]} if packed.size == 2
         return top1_from_allowed_logits(packed, allowed_ids)
@@ -3254,6 +3265,82 @@ module ML::GGUF
         prefill_tokens(weights, token_ids[0...-1], start_pos, state)
       end
       forward_top1(weights, token_ids[-1], start_pos + token_ids.size - 1, state)
+    end
+
+    # Prefill a known token span and choose the following token from a
+    # grammar-certified frontier. On adaptive resident KV, the constrained
+    # output head is appended to the final prefill command so the last known
+    # token never needs a second decoder-body pass.
+    def prefill_tokens_top1_allowed(weights : Qwen35Weights,
+                                    token_ids : Array(Int32),
+                                    start_pos : Int32,
+                                    state : State,
+                                    allowed_ids : Array(Int32)) : {Int32, Float32}
+      raise ArgumentError.new("prefill_tokens_top1_allowed token_ids must not be empty") if token_ids.empty?
+      raise ArgumentError.new("prefill_tokens_top1_allowed requires at least one allowed id") if allowed_ids.empty?
+      allowed_ids.each do |id|
+        raise ArgumentError.new("allowed token id #{id} out of range 0...#{weights.output.out_dim}") if id < 0 || id >= weights.output.out_dim
+      end
+      if token_ids.size > 1 && prefill_gc_guard_enabled? && !@@prefill_gc_guard_active
+        return with_prefill_gc_guard do
+          prefill_tokens_top1_allowed(weights, token_ids, start_pos, state, allowed_ids)
+        end
+      end
+
+      if ENV["QWEN35_PREFILL_FINAL_CHUNK_OFF"]? != "1" &&
+         ENV["QWEN35_PREFILL_CHUNK_OFF"]? != "1" &&
+         token_ids.size > 1
+        chunk_size = prefill_chunk_size(state.adaptive_kv_layer_indices.any?)
+        if token_ids.size > chunk_size
+          if ENV["QWEN35_PREFILL_LONG_SUFFIX_OFF"]? != "1"
+            prefix_len = token_ids.size - chunk_size
+            if prefix_len > 0
+              prefill_tokens(weights, token_ids[0, prefix_len], start_pos, state)
+              return prefill_tokens_top1_allowed(
+                weights,
+                token_ids[prefix_len, token_ids.size - prefix_len],
+                start_pos + prefix_len,
+                state,
+                allowed_ids,
+              )
+            end
+          end
+        else
+          {% unless flag?(:cpu_only) %}
+            if prefill_adaptive_resident_top1_supported?(weights, state, token_ids.size) &&
+               Qwen35Metal.rmsnorm_project_top1_allowed_ids_supported?(weights.output)
+              hp = weights.hparams
+              resident_buf = ML::MetalBuffer.new(
+                token_ids.size.to_i64 * hp.n_embd.to_i64 * sizeof(Float32),
+              )
+              resident_written = [false]
+              top1_id_buf = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
+              top1_value_buf = ML::MetalBuffer.new(sizeof(Float32).to_i64)
+              top1_encoded = [false]
+              resident_top1_append = PrefillResidentTop1Append.new(
+                top1_id_buf, top1_value_buf, top1_encoded, allowed_ids,
+              )
+              prefill_tokens_hidden(weights, token_ids, start_pos, state,
+                need_output: false,
+                resident_output_buf: resident_buf,
+                resident_output_written: resident_written,
+                resident_top1_append: resident_top1_append)
+              raise "adaptive resident allowed-head prefill did not produce a GPU hidden buffer" unless resident_written[0]
+              raise "adaptive resident allowed-head prefill did not append the constrained head" unless top1_encoded[0]
+              packed = Qwen35Metal.read_head_top1_buffers(top1_id_buf, top1_value_buf)
+              Qwen35Metal::Profile.bump_route_marker("adaptive_final_resident_top1_allowed_appended")
+              return {packed[0].to_i32, packed[1]}
+            end
+          {% end %}
+        end
+      end
+
+      if token_ids.size > 1
+        prefill_tokens(weights, token_ids[0...-1], start_pos, state)
+      end
+      forward_top1_allowed(
+        weights, token_ids[-1], start_pos + token_ids.size - 1, state, allowed_ids,
+      )
     end
 
     # Conservative exact-boundary path for durable checkpoint anchors. Unlike
@@ -3961,12 +4048,22 @@ module ML::GGUF
                 end
                 begin
                   encoded = with_prefill_scratch_arena(prefill_graph_scratch_arena) do
-                    Qwen35Metal.encode_rmsnorm_project_top1_buffer(
-                      cmd, adaptive_output_buf.not_nil!,
-                      (n_tokens - 1).to_i64 * hp.n_embd.to_i64,
-                      weights.output_norm, weights.output, hp.rms_eps,
-                      top1_append.id_buf, top1_append.value_buf,
-                    )
+                    if allowed_ids = top1_append.allowed_ids
+                      Qwen35Metal.encode_rmsnorm_project_top1_allowed_ids_buffer(
+                        cmd, adaptive_output_buf.not_nil!,
+                        (n_tokens - 1).to_i64 * hp.n_embd.to_i64,
+                        weights.output_norm, weights.output, hp.rms_eps,
+                        allowed_ids,
+                        top1_append.id_buf, top1_append.value_buf,
+                      )
+                    else
+                      Qwen35Metal.encode_rmsnorm_project_top1_buffer(
+                        cmd, adaptive_output_buf.not_nil!,
+                        (n_tokens - 1).to_i64 * hp.n_embd.to_i64,
+                        weights.output_norm, weights.output, hp.rms_eps,
+                        top1_append.id_buf, top1_append.value_buf,
+                      )
+                    end
                   end
                   unless encoded
                     pending_adaptive_caches.each do |cache|

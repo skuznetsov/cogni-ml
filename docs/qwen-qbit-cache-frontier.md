@@ -3498,3 +3498,77 @@ geometry and economics falsifier. The routed helper can silently fall back to
 CPU, so no fused-Metal top-2 route certificate is claimed; a conservative
 Float32 Metal bound would need additional upward inflation and cannot improve
 the byte ceiling. This was ordinary exact pruning research, not LTP/WBA.
+
+### Resident decision-tail fusion for constrained tool decoding (2026-09-01)
+
+When a deterministic token span ends immediately before a finite grammar
+choice, the constrained Qwen controller can now consume the whole known span
+and append an allowed-ID output head to the same adaptive prefill command. The
+selected token is returned but deliberately remains unconsumed, preserving the
+ordinary next-token state boundary. The route requires the existing adaptive
+resident final-head policy and a supported Q6_K output tensor; every other
+configuration uses the exact previous two-step fallback. The dedicated rollback
+is `QWEN35_CONSTRAINED_TOKEN_STAGE_DECISION_TAIL_OFF=1`.
+
+The caller-owned Metal helper rejects committed commands, empty or out-of-range
+allowed-ID sets, invalid row offsets, and undersized buffers before encoding.
+It allocates its intermediates through the active prefill scratch Arena, while
+the existing adaptive command retains commit, completion, cache-finalization,
+and result-visibility ownership. The complete forward suite passed 29 examples
+on Apple M2 Max. That suite also disables the fused allowed-token head on a
+real Qwen3.8 adaptive state and verifies that the exact full-logit fallback
+selects the same non-global winner while advancing the live cache once. A
+direct diagnostic Qwen3.8-27B run observed two
+`adaptive_final_resident_top1_allowed_appended` route hits, removed two separate
+decoder waves and synchronizations, and emitted the same 39 token IDs and typed
+tool call as rollback.
+
+Two independent balanced ABBA suites then covered required enum/boolean,
+required string/integer, optional-field, and two-tool schemas. All 16 pairs
+preserved exact token IDs and expected canonical parsed tool calls. Candidate
+decision-tail coverage was one to four choices per call and rollback coverage
+was zero. The first suite measured mean paired constrained-decode speedup
+`5.412%` (range `-10.126..11.845%`); the second, on a materially slower host
+interval, measured `6.206%` (range `-4.976..12.987%`). Across all 16 equally
+weighted pairs the mean was `5.809%`. The corresponding combined mean
+fresh-process request improvement was only about `0.035%`, because the unchanged
+275-token prefill dominated and varied substantially. The prebuilt binary SHA-256
+was `f156c527a16f8d6bda0f843158f53571f5cc0b9b617277ec2bb24a4a4e953b88` and
+the content fingerprint was
+`ac230c09ab5cbe6a96761a2d4924212e4377a4f00dc8cb997518097a9dad4bd3`.
+
+A third fresh-build suite exercised the now-enforced threshold directly. It
+again preserved all eight token-ID and typed-call pairs, reported candidate
+decision-tail coverage `1..4` and zero rollback coverage, and passed the 3%
+gate with mean paired constrained-decode improvement `6.094%` (range
+`-16.700..12.921%`). Its mean total-request result was `-7.656%` (range
+`-56.791..1.995%`) because one candidate cold-prefill row dominated the small
+sample. The run is retained at
+`/private/tmp/qwen35_span_suite_decision_tail_current_gate_20260901_63354`;
+its source-input SHA-256 was
+`006ff7288d67eb97a4b7c7a55a98e05c99b0368bfb88094fd107ae2d3c8e419a`
+and binary SHA-256 was
+`ec4af3a4028f04d2eab9ff48a958194971e8c119d56ae16ae0e23d96be4a09fd`.
+The subsequent unsupported-head exact-fallback patch does not alter the
+Q6_K fused route exercised by that suite.
+
+This admits a scoped incremental constrained-decode win on Qwen3.8-27B with
+adaptive resident QBit KV, not a whole-request or unconstrained-text speed
+claim. Per-pair timing remained noisy and sometimes negative, while both
+independent aggregate decode results cleared the predeclared 3% gate. The
+optimization is ordinary grammar-certified scheduling and output-head fusion,
+not LTP/WBA.
+
+The suite now enforces that economics boundary instead of merely reporting it:
+`MIN_DECODE_SPEEDUP_PCT` defaults to `3.0`, and a lower aggregate paired decode
+mean exits non-zero after semantic parity and route-activation checks. Replaying
+the two retained pair tables through the current summarizer passed at `5.412%`
+and `6.206%`; a synthetic zero-mean table failed closed. The original ABBA logs
+predate this script-level enforcement, so their recorded source fingerprint is
+retained rather than relabeled as if the stronger gate had produced them.
+
+**decision:** Keep resident decision tails default-on only inside the
+token-option constrained tool-call route. Preserve exact rollback with
+`QWEN35_CONSTRAINED_TOKEN_STAGE_DECISION_TAIL_OFF=1`. Require a CrystalBall
+task-level run or a wider exact schema corpus before broadening the performance
+claim.

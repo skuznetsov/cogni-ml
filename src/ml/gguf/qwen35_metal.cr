@@ -192,6 +192,10 @@ module ML
           nil
         end
 
+        def self.rmsnorm_project_top1_allowed_ids_supported?(out_qw : QuantWeight) : Bool
+          false
+        end
+
         def self.mtp_one_token_hidden_from_fc_in(fc_in : Array(Float32),
                                                  fc_raw : Bytes,
                                                  v_raw : Bytes,
@@ -3319,6 +3323,10 @@ module ML
           head_top1_fused_enabled? &&
             ((output_qw.type.q6_k? && output_qw.in_dim % QK_K == 0) ||
               (output_qw.type.q8_0? && output_qw.in_dim % Q8_0_QK == 0))
+        end
+
+        private def self.can_use_head_top1_allowed?(output_qw : QuantWeight) : Bool
+          head_top1_fused_enabled? && output_qw.type.q6_k? && output_qw.in_dim % QK_K == 0
         end
 
         private def self.profile_bump_head_top1_shape(label : String,
@@ -8811,6 +8819,13 @@ module ML
           can_use_head_top1_fused?(out_qw)
         end
 
+        # The allowed-token kernel is intentionally Q6_K-only. Keep this
+        # preflight predicate aligned with the encoder's exact policy so CPU
+        # callers can reject before mutating a command buffer.
+        def self.rmsnorm_project_top1_allowed_ids_supported?(out_qw : QuantWeight) : Bool
+          can_use_head_top1_allowed?(out_qw)
+        end
+
         # Project one hidden row directly from a resident multi-row buffer.
         # `element_offset` is expressed in Float32 elements, not bytes.
         def self.rmsnorm_project_top1_buffer(x_buf : ML::MetalBuffer,
@@ -8871,6 +8886,78 @@ module ML
           head_top1_enc = ML::Metal::ComputeEncoder.new(command)
           encoded = encode_head_top1_no_norm_to_buffers(
             head_top1_enc, out_qw, normed_buf,
+            tile_values_buf, tile_ids_buf, top1_id_buf, top1_value_buf,
+          )
+          head_top1_enc.end_encoding
+          Profile.bump_route_marker(profile_label) if encoded
+          encoded
+        end
+
+        # Encode one resident hidden row through output RMSNorm and the
+        # Q6_K-only allowed-token top-1 head into a caller-owned command
+        # buffer. The caller owns commit, completion, result-buffer lifetime,
+        # and result visibility.
+        def self.encode_rmsnorm_project_top1_allowed_ids_buffer(command : ML::Metal::CommandBuffer,
+                                                                x_buf : ML::MetalBuffer,
+                                                                element_offset : Int64,
+                                                                norm_weight : Array(Float32),
+                                                                out_qw : QuantWeight,
+                                                                eps : Float32,
+                                                                allowed_ids : Array(Int32),
+                                                                top1_id_buf : ML::MetalBuffer,
+                                                                top1_value_buf : ML::MetalBuffer,
+                                                                profile_label : String = "head_top1_allowed_resident_append") : Bool
+          return false unless can_use_head_top1_allowed?(out_qw)
+          return false if command.committed?
+          return false if element_offset < 0
+          return false if allowed_ids.empty?
+
+          hidden_dim = out_qw.in_dim
+          return false unless norm_weight.size == hidden_dim
+          allowed_ids.each do |id|
+            return false if id < 0 || id >= out_qw.out_dim
+          end
+
+          hidden_dim_i64 = hidden_dim.to_i64
+          return false if element_offset > Int64::MAX - hidden_dim_i64
+          required_elements = element_offset + hidden_dim_i64
+          return false if required_elements > Int64::MAX // sizeof(Float32)
+          return false if x_buf.size < required_elements * sizeof(Float32)
+          return false if top1_id_buf.size < sizeof(UInt32)
+          return false if top1_value_buf.size < sizeof(Float32)
+
+          ML::Metal::Device.init!
+
+          allowed_n = allowed_ids.size
+          tile_count = (allowed_n + HEAD_TOP1_ROWS_PER_TG - 1) // HEAD_TOP1_ROWS_PER_TG
+          norm_w_buf = Scratch.get(:head_top1_allowed_resident_norm_w,
+            norm_weight.size.to_i64 * sizeof(Float32))
+          normed_buf = Scratch.get(:head_top1_allowed_resident_normed,
+            hidden_dim_i64 * sizeof(Float32))
+          allowed_ids_buf = Scratch.get(:head_top1_allowed_resident_ids,
+            allowed_n.to_i64 * sizeof(UInt32))
+          tile_values_buf = Scratch.get(:head_top1_allowed_resident_tile_values,
+            tile_count.to_i64 * sizeof(Float32))
+          tile_ids_buf = Scratch.get(:head_top1_allowed_resident_tile_ids,
+            tile_count.to_i64 * sizeof(UInt32))
+          norm_w_buf.write(norm_weight)
+          allowed_ptr = allowed_ids_buf.contents.as(Pointer(UInt32))
+          allowed_ids.each_with_index { |id, i| allowed_ptr[i] = id.to_u32 }
+
+          norm_enc = ML::Metal::ComputeEncoder.new(command)
+          norm_enc.set_pipeline(rmsnorm_vec_pipeline)
+          norm_enc.set_buffer(x_buf, 0, ML::Metal::BufferAccess::Read,
+            offset: element_offset * sizeof(Float32))
+          norm_enc.set_buffer(norm_w_buf, 1)
+          norm_enc.set_buffer(normed_buf, 2, ML::Metal::BufferAccess::Write)
+          norm_enc.set_value(hidden_dim.to_u32, 3)
+          norm_enc.set_value(eps, 4)
+          norm_enc.dispatch_threadgroups({1, 1, 1}, {256, 1, 1})
+          norm_enc.end_encoding
+
+          head_top1_enc = ML::Metal::ComputeEncoder.new(command)
+          encoded = encode_head_top1_allowed_no_norm_to_buffers(
+            head_top1_enc, out_qw, normed_buf, allowed_ids_buf, allowed_n,
             tile_values_buf, tile_ids_buf, top1_id_buf, top1_value_buf,
           )
           head_top1_enc.end_encoding
@@ -9041,7 +9128,7 @@ module ML
                                                   out_qw : QuantWeight,
                                                   eps : Float32,
                                                   allowed_ids : Array(Int32)) : Array(Float32)?
-          return nil unless head_top1_fused_enabled? && out_qw.type.q6_k? && out_qw.in_dim % QK_K == 0
+          return nil unless can_use_head_top1_allowed?(out_qw)
           return nil if allowed_ids.empty?
           raise "rmsnorm_project_top1_allowed_ids input mismatch: expected #{out_qw.in_dim}, got #{x.size}" unless x.size == out_qw.in_dim
           raise "rmsnorm_project_top1_allowed_ids norm mismatch: expected #{out_qw.in_dim}, got #{norm_weight.size}" unless norm_weight.size == out_qw.in_dim
@@ -9317,7 +9404,7 @@ module ML
                                                              tile_ids_buf : ML::MetalBuffer,
                                                              top1_id_buf : ML::MetalBuffer,
                                                              top1_value_buf : ML::MetalBuffer) : Bool
-          return false unless head_top1_fused_enabled? && out_qw.type.q6_k? && out_qw.in_dim % QK_K == 0
+          return false unless can_use_head_top1_allowed?(out_qw)
           return false if allowed_n <= 0
           return false if x_buf.size < out_qw.in_dim.to_i64 * sizeof(Float32)
           return false if allowed_ids_buf.size < allowed_n.to_i64 * sizeof(UInt32)
@@ -9865,8 +9952,15 @@ module ML
           return nil if emit_head && out_pipe.nil?
           return nil if top1_store_token_ids_buf && (!emit_head || !top1)
           return nil if top1_store_token_ids_buf && top1_store_index < 0
-          use_allowed_top1 = emit_head && top1 && !top2 && top1_allowed_ids && !top1_allowed_ids.not_nil!.empty? && output_qw.type.q6_k?
-          allowed_ids = use_allowed_top1 ? top1_allowed_ids.not_nil! : nil
+          if ids = top1_allowed_ids
+            # Never weaken a constrained request into the unrestricted head.
+            # The caller may fall back to exact full logits when this narrow
+            # Q6_K route is unavailable.
+            return nil if ids.empty? || !emit_head || !top1 || top2
+            return nil unless can_use_head_top1_allowed?(output_qw)
+          end
+          use_allowed_top1 = !top1_allowed_ids.nil?
+          allowed_ids = top1_allowed_ids
           if ids = allowed_ids
             ids.each do |id|
               return nil if id < 0 || id >= output_qw.out_dim

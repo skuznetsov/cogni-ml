@@ -160,6 +160,7 @@ constrained_force_single_literal = ENV["QWEN35_CONSTRAINED_FORCE_SINGLE"]? == "1
 constrained_force_literal_span = ENV["QWEN35_CONSTRAINED_FORCE_SPAN_OFF"]? != "1"
 constrained_token_options_enabled = constrained_tool_call_prefix_enabled && ENV["QWEN35_CONSTRAINED_TOKEN_OPTIONS_OFF"]? != "1"
 constrained_token_stage_span_enabled = constrained_token_options_enabled && ENV["QWEN35_CONSTRAINED_TOKEN_STAGE_SPAN_OFF"]? != "1"
+constrained_token_stage_decision_tail_enabled = constrained_token_stage_span_enabled && ENV["QWEN35_CONSTRAINED_TOKEN_STAGE_DECISION_TAIL_OFF"]? != "1"
 
 raise "QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN must be non-negative" unless prompt_cache_full_hit_min_gen >= 0
 raise "QWEN35_PROMPT_CACHE_ARTIFACT_CODEC_BLOCK must be positive" unless prompt_cache_artifact_codec_block > 0
@@ -882,6 +883,7 @@ literal_forced_span_steps = 0
 literal_token_option_steps = 0
 literal_token_option_span_batches = 0
 literal_token_stage_span_transitions = 0
+literal_token_stage_decision_tails = 0
 literal_emitted = ""
 tool_value_text = ""
 tool_literal_stage = constrained_tool_call_prefix_enabled ? "function_prefix" : "none"
@@ -1915,11 +1917,66 @@ else
         literal_token_stage_span_transitions += 1
       end
       if span_ids.size >= 1
-        body_inputs = [prev]
-        body_inputs.concat(span_ids[0...-1]) if span_ids.size > 1
-        ML::GGUF::Qwen35CPU.prefill_tokens(w, body_inputs, pos, state)
+        if literal_remaining.empty? && !span_advanced_stage
+          tool_literal_stage, literal_remaining, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_value_options_by_parameter, reset_tool_value = advance_tool_literal_stage(
+            tool_literal_stage, literal_emitted, tool_required_parameters, tool_optional_parameters, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_finite_value_options, tool_value_options_by_parameter)
+          literal_token_corridor = build_literal_token_corridor(tok, literal_remaining, constrained_token_options_enabled)
+          tool_value_text = "" if reset_tool_value
+        end
+
+        decision_tail_top = nil.as(Int32?)
+        decision_tail_allowed = [] of Int32
+        if constrained_token_stage_decision_tail_enabled &&
+           output_ids.size + span_ids.size < n_gen &&
+           !literal_token_corridor.empty? &&
+           !literal_token_corridor.complete?
+          frontier = literal_token_corridor.next_ids
+          decision_tail_allowed = frontier if frontier.size > 1
+        end
+
+        if decision_tail_allowed.empty?
+          body_inputs = [prev]
+          body_inputs.concat(span_ids[0...-1]) if span_ids.size > 1
+          ML::GGUF::Qwen35CPU.prefill_tokens(w, body_inputs, pos, state)
+        else
+          decision_stage = tool_literal_stage
+          body_inputs = [prev]
+          body_inputs.concat(span_ids)
+          selected, _selected_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1_allowed(
+            w, body_inputs, pos, state, decision_tail_allowed,
+          )
+          selected_piece = tok.decode_single(selected)
+          next_corridor = literal_token_corridor.advance(selected)
+          next_remaining = ML::GGUF::Qwen35Constraints.advance_literal_options(
+            literal_remaining, selected_piece,
+          )
+          complete = next_corridor.complete?
+          unless complete == literal_constraint_complete?(next_remaining)
+            raise ML::GGUF::Qwen35Constraints::LiteralFrontierError.new(
+              "decision-tail token and byte literal corridors diverged",
+            )
+          end
+          next_remaining = [] of String if complete
+          literal_token_corridor = next_corridor
+          literal_remaining = next_remaining
+          literal_emitted += selected_piece
+          decision_tail_top = selected
+          literal_token_stage_decision_tails += 1
+          literal_constrained_steps += 1
+          literal_token_option_steps += 1
+          tool_literal_stage_counts[decision_stage] += 1
+
+          if literal_remaining.empty?
+            tool_literal_stage, literal_remaining, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_value_options_by_parameter, reset_tool_value = advance_tool_literal_stage(
+              tool_literal_stage, literal_emitted, tool_required_parameters, tool_optional_parameters, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_finite_value_options, tool_value_options_by_parameter)
+            literal_token_corridor = build_literal_token_corridor(tok, literal_remaining, constrained_token_options_enabled)
+            tool_value_text = "" if reset_tool_value
+          end
+        end
+
         output_ids.concat(span_ids)
-        pos += span_ids.size
+        output_ids << decision_tail_top.not_nil! if decision_tail_top
+        pos += span_ids.size + (decision_tail_top ? 1 : 0)
         literal_constrained_steps += span_ids.size
         literal_forced_span_steps += span_ids.size
         literal_token_option_steps += span_ids.size
@@ -1927,15 +1984,10 @@ else
         span_stage_counts.each do |stage, count|
           tool_literal_stage_counts[stage] += count
         end
-        if literal_remaining.empty? && !span_advanced_stage
-          tool_literal_stage, literal_remaining, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_value_options_by_parameter, reset_tool_value = advance_tool_literal_stage(
-            tool_literal_stage, literal_emitted, tool_required_parameters, tool_optional_parameters, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_finite_value_options, tool_value_options_by_parameter)
-          literal_token_corridor = build_literal_token_corridor(tok, literal_remaining, constrained_token_options_enabled)
-          tool_value_text = "" if reset_tool_value
-        end
         dt = (Time.instant - tstart).total_seconds
         if trace_steps
-          STDOUT << "  gen #{g_i + 1}/#{n_gen} pos=#{pos - span_ids.size} token_option_span=#{span_ids.size} stage_transitions=#{literal_token_stage_span_transitions} took #{dt.round(2)}s\n"
+          consumed = span_ids.size + (decision_tail_top ? 1 : 0)
+          STDOUT << "  gen #{g_i + 1}/#{n_gen} pos=#{pos - consumed} token_option_span=#{span_ids.size} decision_tail=#{decision_tail_top ? 1 : 0} stage_transitions=#{literal_token_stage_span_transitions} took #{dt.round(2)}s\n"
           STDOUT.flush
         end
         span_consumed = true
@@ -2035,7 +2087,7 @@ else
     break if top == tok.eos_id
   end
   decode_ms = (Time.instant - decode_t0).total_milliseconds
-  STDOUT << "  greedy summary: wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} literal_constrained_steps=#{literal_constrained_steps} literal_token_option_steps=#{literal_token_option_steps} literal_token_option_span_batches=#{literal_token_option_span_batches} literal_token_stage_span_transitions=#{literal_token_stage_span_transitions}\n"
+  STDOUT << "  greedy summary: wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} literal_constrained_steps=#{literal_constrained_steps} literal_token_option_steps=#{literal_token_option_steps} literal_token_option_span_batches=#{literal_token_option_span_batches} literal_token_stage_span_transitions=#{literal_token_stage_span_transitions} literal_token_stage_decision_tails=#{literal_token_stage_decision_tails}\n"
 end
 
 {% unless flag?(:cpu_only) %}

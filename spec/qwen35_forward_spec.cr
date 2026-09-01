@@ -2,8 +2,38 @@ require "./spec_helper"
 require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_weights"
 
-QWEN_9B_FWD  = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
-QWEN_08B_FWD = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q8_0.gguf"
+QWEN_9B_FWD     = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
+QWEN_08B_FWD    = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q8_0.gguf"
+QWEN_38_27B_FWD = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf"
+
+private def with_qwen38_adaptive_allowed_fallback_env(layer_index : Int32, &)
+  keys = [
+    "QWEN35_ADAPTIVE_RESIDENT_KV_LAYER",
+    "QWEN35_ADAPTIVE_RESIDENT_KV_TIER",
+    "QWEN35_ADAPTIVE_RESIDENT_KV_MAP",
+    "QWEN35_PREFILL_APPEND_CMD_OFF",
+    "QWEN35_PREFILL_RESIDENT_BOUNDARY_OFF",
+    "QWEN35_PREFILL_FUSE_FULL_REC_OFF",
+    "QWEN35_FULL_PREFILL_CHUNK_OFF",
+    "QWEN35_PREFILL_REC_RUN_OFF",
+    "QWEN35_PREFILL_CHUNK_OFF",
+    "QWEN35_HEAD_TOP1_FUSED",
+  ]
+  old = keys.to_h { |key| {key, ENV[key]?} }
+  keys.each { |key| ENV.delete(key) }
+  ENV["QWEN35_ADAPTIVE_RESIDENT_KV_LAYER"] = layer_index.to_s
+  ENV["QWEN35_ADAPTIVE_RESIDENT_KV_TIER"] = "bf16"
+  ENV["QWEN35_HEAD_TOP1_FUSED"] = "0"
+  yield
+ensure
+  old.try &.each do |key, value|
+    if value
+      ENV[key] = value
+    else
+      ENV.delete(key)
+    end
+  end
+end
 
 describe ML::GGUF::Qwen35Metal, "route policies" do
   it "bounds automatic B64 tail fusion padding on M2 Max" do
@@ -205,6 +235,53 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     end
   end
 
+  it "falls back to exact allowed logits for adaptive decode when the fused head is unavailable" do
+    pending!("Qwen3.8 27B model not present") unless File.exists?(QWEN_38_27B_FWD)
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    weights = ML::GGUF::Qwen35Weights.from_gguf(QWEN_38_27B_FWD)
+    hp = weights.hparams
+    expected_state = nil.as(ML::GGUF::Qwen35CPU::State?)
+    actual_state = nil.as(ML::GGUF::Qwen35CPU::State?)
+
+    with_qwen38_adaptive_allowed_fallback_env(hp.full_attention_layers.first) do
+      expected_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 2)
+      ML::GGUF::Qwen35CPU.prepare_state_metal!(expected_state.not_nil!, hp, clear: true)
+      expected_state.not_nil!.adaptive_kv?.should be_true
+      expected_state.not_nil!.adaptive_kv_layer_indices.should_not be_empty
+      logits = ML::GGUF::Qwen35CPU.forward(weights, 0, 0, expected_state.not_nil!)
+      full_top = logits.index(logits.max).not_nil!.to_i32
+      allowed_ids = Array(Int32).new(13) do |offset|
+        (full_top + offset + 1) % weights.output.out_dim
+      end
+      expected_id = allowed_ids.max_by { |id| logits[id] }
+      expected_logit = logits[expected_id]
+      allowed_ids.includes?(full_top).should be_false
+      expected_state.not_nil!.adaptive_kv_layer_indices.each do |layer_index|
+        expected_state.not_nil!.layers[layer_index].adaptive_kv.not_nil!.cache_len.should eq(1)
+      end
+      ML::GGUF::Qwen35CPU.release_state_metal!(expected_state.not_nil!)
+      expected_state = nil
+
+      actual_state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 2)
+      ML::GGUF::Qwen35CPU.prepare_state_metal!(actual_state.not_nil!, hp, clear: true)
+      actual_state.not_nil!.adaptive_kv?.should be_true
+      actual_state.not_nil!.adaptive_kv_layer_indices.should_not be_empty
+      actual_id, actual_logit = ML::GGUF::Qwen35CPU.forward_top1_allowed(
+        weights, 0, 0, actual_state.not_nil!, allowed_ids,
+      )
+      actual_id.should eq(expected_id)
+      actual_logit.should be_close(expected_logit, 1.0e-4_f32)
+      actual_state.not_nil!.adaptive_kv_layer_indices.each do |layer_index|
+        actual_state.not_nil!.layers[layer_index].adaptive_kv.not_nil!.cache_len.should eq(1)
+      end
+    end
+  ensure
+    ML::GGUF::Qwen35CPU.release_state_metal!(expected_state) if expected_state
+    ML::GGUF::Qwen35CPU.release_state_metal!(actual_state) if actual_state
+    weights.try(&.close)
+  end
+
   it "projects top-1 directly from a selected resident hidden row" do
     pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
 
@@ -283,6 +360,95 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
       w.output_norm, w.output, w.hparams.rms_eps,
       top1_id, top1_value,
     ).should be_false
+  end
+
+  it "appends a multi-tile allowed resident top-1 head without weakening to global top-1" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
+    hidden_dim = w.hparams.n_embd
+    first = Array(Float32).new(hidden_dim) { |i| ((i % 19) - 9).to_f32 / 19.0_f32 }
+    second = Array(Float32).new(hidden_dim) { |i| ((i % 27) - 13).to_f32 / 27.0_f32 }
+    resident = ML::MetalBuffer.new((2 * hidden_dim).to_i64 * sizeof(Float32))
+    resident.write(first + second)
+    top1_id = ML::MetalBuffer.new(sizeof(UInt32).to_i64)
+    top1_value = ML::MetalBuffer.new(sizeof(Float32).to_i64)
+
+    normalized = ML::GGUF::Qwen35CPU.rms_norm(
+      second, w.output_norm, w.hparams.rms_eps,
+    )
+    cpu_logits = ML::GGUF::QuantMatmul.matmul_add(
+      normalized, 1, w.output.in_dim, w.output.raw, w.output.type,
+      w.output.out_dim, Array(Float32).new(w.output.out_dim, 0.0_f32),
+    )
+    full_top = cpu_logits.index(cpu_logits.max).not_nil!.to_i32
+    # HEAD_TOP1_ROWS_PER_TG is 12. Thirteen candidates exercise both the tile
+    # kernel and its reducer, while excluding the unrestricted global winner.
+    allowed_ids = Array(Int32).new(13) do |offset|
+      (full_top + offset + 1) % w.output.out_dim
+    end
+    expected_id = allowed_ids.max_by { |id| cpu_logits[id] }
+    allowed_ids.includes?(full_top).should be_false
+    expected_id.should_not eq(full_top)
+
+    ML::GGUF::Qwen35Metal.rmsnorm_project_top1_allowed_ids_supported?(
+      w.output,
+    ).should be_true
+
+    cmd = ML::Metal::CommandBuffer.new
+    ML::GGUF::Qwen35Metal.encode_rmsnorm_project_top1_allowed_ids_buffer(
+      cmd, resident, hidden_dim.to_i64,
+      w.output_norm, w.output, w.hparams.rms_eps, allowed_ids,
+      top1_id, top1_value,
+    ).should be_true
+    cmd.committed?.should be_false
+
+    cmd.commit
+    cmd.wait
+    actual = ML::GGUF::Qwen35Metal.read_head_top1_buffers(top1_id, top1_value)
+    actual[0].to_i32.should eq(expected_id)
+    actual[1].should be_close(cpu_logits[expected_id], 1.0e-4_f32)
+
+    completed = ML::Metal::CommandBuffer.new
+    completed.commit
+    completed.wait
+    ML::GGUF::Qwen35Metal.encode_rmsnorm_project_top1_allowed_ids_buffer(
+      completed, resident, hidden_dim.to_i64,
+      w.output_norm, w.output, w.hparams.rms_eps, allowed_ids,
+      top1_id, top1_value,
+    ).should be_false
+
+    empty_ids_cmd = ML::Metal::CommandBuffer.new
+    ML::GGUF::Qwen35Metal.encode_rmsnorm_project_top1_allowed_ids_buffer(
+      empty_ids_cmd, resident, hidden_dim.to_i64,
+      w.output_norm, w.output, w.hparams.rms_eps, [] of Int32,
+      top1_id, top1_value,
+    ).should be_false
+    empty_ids_cmd.committed?.should be_false
+
+    invalid_id_cmd = ML::Metal::CommandBuffer.new
+    ML::GGUF::Qwen35Metal.encode_rmsnorm_project_top1_allowed_ids_buffer(
+      invalid_id_cmd, resident, hidden_dim.to_i64,
+      w.output_norm, w.output, w.hparams.rms_eps, [-1_i32],
+      top1_id, top1_value,
+    ).should be_false
+    invalid_id_cmd.committed?.should be_false
+
+    out_of_range_cmd = ML::Metal::CommandBuffer.new
+    ML::GGUF::Qwen35Metal.encode_rmsnorm_project_top1_allowed_ids_buffer(
+      out_of_range_cmd, resident, hidden_dim.to_i64,
+      w.output_norm, w.output, w.hparams.rms_eps, [w.output.out_dim],
+      top1_id, top1_value,
+    ).should be_false
+    out_of_range_cmd.committed?.should be_false
+
+    source_bounds_cmd = ML::Metal::CommandBuffer.new
+    ML::GGUF::Qwen35Metal.encode_rmsnorm_project_top1_allowed_ids_buffer(
+      source_bounds_cmd, resident, hidden_dim.to_i64 + 1_i64,
+      w.output_norm, w.output, w.hparams.rms_eps, allowed_ids,
+      top1_id, top1_value,
+    ).should be_false
+    source_bounds_cmd.committed?.should be_false
   end
 
   it "falls back to full-logit argmax when fused greedy head is disabled" do

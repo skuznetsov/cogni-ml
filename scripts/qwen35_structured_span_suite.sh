@@ -13,6 +13,7 @@ LOG_DIR="${LOG_DIR:-/tmp}"
 REPS="${REPS:-2}"
 GEN="${GEN:-80}"
 GATE_MODE="${GATE_MODE:-span}"
+MIN_DECODE_SPEEDUP_PCT="${MIN_DECODE_SPEEDUP_PCT:-3.0}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}_$$"
 MODEL_PATH="${QWEN35_MODEL_PATH:-}"
 HOST_PATH="${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
@@ -35,8 +36,12 @@ if [[ "${REBUILD:-1}" != "0" && "${REBUILD:-1}" != "1" ]]; then
   printf 'REBUILD must be 0 or 1\n' >&2
   exit 1
 fi
-if [[ "$GATE_MODE" != "span" && "$GATE_MODE" != "token-options" && "$GATE_MODE" != "token-stage-span" ]]; then
-  printf 'GATE_MODE must be span, token-options, or token-stage-span\n' >&2
+if [[ "$GATE_MODE" != "span" && "$GATE_MODE" != "token-options" && "$GATE_MODE" != "token-stage-span" && "$GATE_MODE" != "decision-tail" ]]; then
+  printf 'GATE_MODE must be span, token-options, token-stage-span, or decision-tail\n' >&2
+  exit 1
+fi
+if [[ ! "$MIN_DECODE_SPEEDUP_PCT" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+  printf 'MIN_DECODE_SPEEDUP_PCT must be a non-negative decimal number\n' >&2
   exit 1
 fi
 
@@ -56,7 +61,8 @@ SOURCE_INPUT_SHA256="$({
     shasum -a 256 "$path"
   done < <(find bin/qwen35_generate.cr src lib -type f -print | LC_ALL=C sort)
   shasum -a 256 shard.yml shard.lock build/bridge.o
-  shasum -a 256 "$ROOT/scripts/qwen35_structured_span_suite.sh" "$RUN_SAFE"
+  shasum -a 256 "$ROOT/scripts/qwen35_structured_span_suite.sh" \
+    "$ROOT/scripts/qwen35_structured_span_summary.awk" "$RUN_SAFE"
 } | shasum -a 256 | awk '{print $1}')"
 
 BUILD_ENV=(
@@ -80,8 +86,8 @@ fi
 SOURCE_REVISION="$(git rev-parse --verify HEAD)"
 BIN_SHA256="$(shasum -a 256 "$BIN" | awk '{print $1}')"
 MODEL_BYTES="$(stat -f %z "$MODEL_PATH")"
-printf 'suite_config provenance=%s source_revision=%s source_input_sha256=%s binary_sha256=%s model_path=%s model_bytes=%s gate_mode=%s reps=%s gen=%s rss_mb=%s\n' \
-  "$PROVENANCE_MODE" "$SOURCE_REVISION" "$SOURCE_INPUT_SHA256" "$BIN_SHA256" "$MODEL_PATH" "$MODEL_BYTES" "$GATE_MODE" "$REPS" "$GEN" "$RSS_MB"
+printf 'suite_config provenance=%s source_revision=%s source_input_sha256=%s binary_sha256=%s model_path=%s model_bytes=%s gate_mode=%s reps=%s gen=%s rss_mb=%s min_decode_speedup_pct=%s\n' \
+  "$PROVENANCE_MODE" "$SOURCE_REVISION" "$SOURCE_INPUT_SHA256" "$BIN_SHA256" "$MODEL_PATH" "$MODEL_BYTES" "$GATE_MODE" "$REPS" "$GEN" "$RSS_MB" "$MIN_DECODE_SPEEDUP_PCT"
 
 COMMON_ENV=(
   PATH="$HOST_PATH"
@@ -97,6 +103,14 @@ COMMON_ENV=(
   COGNI_RUN_SAFE_MIN_FREE_PCT="${COGNI_RUN_SAFE_MIN_FREE_PCT:-35}"
   COGNI_SPEC_MAX_RSS_MB="$RSS_MB"
 )
+if [[ -n "${QWEN35_ADAPTIVE_RESIDENT_KV_MAP:-}" ]]; then
+  COMMON_ENV+=(QWEN35_ADAPTIVE_RESIDENT_KV_MAP="$QWEN35_ADAPTIVE_RESIDENT_KV_MAP")
+fi
+if [[ "$GATE_MODE" == "decision-tail" ]]; then
+  # Keep both sides on the same resident-final-head policy. Only the candidate
+  # may append the grammar-restricted head to its final adaptive prefill wave.
+  COMMON_ENV+=(QWEN35_PREFILL_TOP1_ADAPTIVE_RESIDENT=1)
+fi
 
 run_case() {
   local name="$1" prompt="$2" tools="$3" mode="$4" rep="$5"
@@ -109,8 +123,11 @@ run_case() {
     elif [[ "$GATE_MODE" == "token-options" ]]; then
       env -i QWEN35_CONSTRAINED_TOKEN_OPTIONS_OFF=1 QWEN35_TOOLS_JSON="$tools" "${COMMON_ENV[@]}" \
         "$RUN_SAFE" "$BIN" 240 "$RSS_MB" "$prompt" "$GEN" >"$log" 2>&1
-    else
+    elif [[ "$GATE_MODE" == "token-stage-span" ]]; then
       env -i QWEN35_CONSTRAINED_TOKEN_STAGE_SPAN_OFF=1 QWEN35_TOOLS_JSON="$tools" "${COMMON_ENV[@]}" \
+        "$RUN_SAFE" "$BIN" 240 "$RSS_MB" "$prompt" "$GEN" >"$log" 2>&1
+    else
+      env -i QWEN35_CONSTRAINED_TOKEN_STAGE_DECISION_TAIL_OFF=1 QWEN35_TOOLS_JSON="$tools" "${COMMON_ENV[@]}" \
         "$RUN_SAFE" "$BIN" 240 "$RSS_MB" "$prompt" "$GEN" >"$log" 2>&1
     fi
   else
@@ -129,12 +146,13 @@ run_case() {
     return 1
   fi
 
-  local decode total spans token_options stage_transitions free parsed_raw parsed tokens
+  local decode total spans token_options stage_transitions decision_tails free parsed_raw parsed tokens
   decode="$(rg 'greedy summary:' "$log" | sed -E 's/.*wall_ms=([0-9.]+).*/\1/' || true)"
   total="$(rg 'request summary:' "$log" | sed -E 's/.*total_ms=([0-9.]+).*/\1/' || true)"
   spans="$(rg 'tool constraint summary:' "$log" | sed -E 's/.*forced_span_steps=([0-9]+).*/\1/' || true)"
   token_options="$(rg 'tool constraint summary:' "$log" | sed -E 's/.*token_option_steps=([0-9]+).*/\1/' || true)"
   stage_transitions="$(rg 'greedy summary:' "$log" | sed -E 's/.*literal_token_stage_span_transitions=([0-9]+).*/\1/' || true)"
+  decision_tails="$(rg 'greedy summary:' "$log" | sed -E 's/.*literal_token_stage_decision_tails=([0-9]+).*/\1/' || true)"
   free="$(rg 'tool constraint summary:' "$log" | sed -E 's/.*freeform_value_steps=([0-9]+).*/\1/' || true)"
   parsed_raw="$(awk '/^=== Parsed tool calls ===$/ { getline; print; exit }' "$log")"
   parsed="$(printf '%s\n' "$parsed_raw" | jq -ceS '
@@ -146,19 +164,20 @@ run_case() {
   ' 2>/dev/null || true)"
   tokens="$(awk '/^=== Generated token ids ===$/ { getline; print; exit }' "$log")"
 
-  if [[ -z "$decode" || -z "$total" || -z "$spans" || -z "$token_options" || -z "$stage_transitions" || -z "$tokens" || -z "$parsed" ]]; then
+  if [[ -z "$decode" || -z "$total" || -z "$spans" || -z "$token_options" || -z "$stage_transitions" || -z "$decision_tails" || -z "$tokens" || -z "$parsed" ]]; then
     printf 'incomplete suite row: name=%s mode=%s rep=%s log=%s\n' "$name" "$mode" "$rep" "$log" >&2
     return 1
   fi
 
-  printf 'suite_row name=%s mode=%s rep=%s decode_ms=%s total_ms=%s forced_span=%s token_options=%s stage_transitions=%s freeform=%s parsed=%s log=%s\n' \
-    "$name" "$mode" "$rep" "$decode" "$total" "$spans" "$token_options" "$stage_transitions" "${free:-na}" "$parsed" "$log"
+  printf 'suite_row name=%s mode=%s rep=%s decode_ms=%s total_ms=%s forced_span=%s token_options=%s stage_transitions=%s decision_tails=%s freeform=%s parsed=%s log=%s\n' \
+    "$name" "$mode" "$rep" "$decode" "$total" "$spans" "$token_options" "$stage_transitions" "$decision_tails" "${free:-na}" "$parsed" "$log"
 
   RUN_DECODE="$decode"
   RUN_TOTAL="$total"
   RUN_SPANS="$spans"
   RUN_TOKEN_OPTIONS="$token_options"
   RUN_STAGE_TRANSITIONS="$stage_transitions"
+  RUN_DECISION_TAILS="$decision_tails"
   RUN_PARSED="$parsed"
   RUN_TOKENS="$tokens"
 }
@@ -173,24 +192,24 @@ run_pair() {
     second=default
   fi
 
-  local default_decode default_total default_spans default_token_options default_stage_transitions default_parsed default_tokens
-  local off_decode off_total off_spans off_token_options off_stage_transitions off_parsed off_tokens
+  local default_decode default_total default_spans default_token_options default_stage_transitions default_decision_tails default_parsed default_tokens
+  local off_decode off_total off_spans off_token_options off_stage_transitions off_decision_tails off_parsed off_tokens
 
   run_case "$name" "$prompt" "$tools" "$first" "$rep"
   if [[ "$first" == "default" ]]; then
-    default_decode="$RUN_DECODE"; default_total="$RUN_TOTAL"; default_spans="$RUN_SPANS"; default_token_options="$RUN_TOKEN_OPTIONS"; default_stage_transitions="$RUN_STAGE_TRANSITIONS"
+    default_decode="$RUN_DECODE"; default_total="$RUN_TOTAL"; default_spans="$RUN_SPANS"; default_token_options="$RUN_TOKEN_OPTIONS"; default_stage_transitions="$RUN_STAGE_TRANSITIONS"; default_decision_tails="$RUN_DECISION_TAILS"
     default_parsed="$RUN_PARSED"; default_tokens="$RUN_TOKENS"
   else
-    off_decode="$RUN_DECODE"; off_total="$RUN_TOTAL"; off_spans="$RUN_SPANS"; off_token_options="$RUN_TOKEN_OPTIONS"; off_stage_transitions="$RUN_STAGE_TRANSITIONS"
+    off_decode="$RUN_DECODE"; off_total="$RUN_TOTAL"; off_spans="$RUN_SPANS"; off_token_options="$RUN_TOKEN_OPTIONS"; off_stage_transitions="$RUN_STAGE_TRANSITIONS"; off_decision_tails="$RUN_DECISION_TAILS"
     off_parsed="$RUN_PARSED"; off_tokens="$RUN_TOKENS"
   fi
 
   run_case "$name" "$prompt" "$tools" "$second" "$rep"
   if [[ "$second" == "default" ]]; then
-    default_decode="$RUN_DECODE"; default_total="$RUN_TOTAL"; default_spans="$RUN_SPANS"; default_token_options="$RUN_TOKEN_OPTIONS"; default_stage_transitions="$RUN_STAGE_TRANSITIONS"
+    default_decode="$RUN_DECODE"; default_total="$RUN_TOTAL"; default_spans="$RUN_SPANS"; default_token_options="$RUN_TOKEN_OPTIONS"; default_stage_transitions="$RUN_STAGE_TRANSITIONS"; default_decision_tails="$RUN_DECISION_TAILS"
     default_parsed="$RUN_PARSED"; default_tokens="$RUN_TOKENS"
   else
-    off_decode="$RUN_DECODE"; off_total="$RUN_TOTAL"; off_spans="$RUN_SPANS"; off_token_options="$RUN_TOKEN_OPTIONS"; off_stage_transitions="$RUN_STAGE_TRANSITIONS"
+    off_decode="$RUN_DECODE"; off_total="$RUN_TOTAL"; off_spans="$RUN_SPANS"; off_token_options="$RUN_TOKEN_OPTIONS"; off_stage_transitions="$RUN_STAGE_TRANSITIONS"; off_decision_tails="$RUN_DECISION_TAILS"
     off_parsed="$RUN_PARSED"; off_tokens="$RUN_TOKENS"
   fi
 
@@ -210,9 +229,12 @@ run_pair() {
   elif [[ "$GATE_MODE" == "token-options" ]]; then
     candidate_steps="$default_token_options"
     off_steps="$off_token_options"
-  else
+  elif [[ "$GATE_MODE" == "token-stage-span" ]]; then
     candidate_steps="$default_stage_transitions"
     off_steps="$off_stage_transitions"
+  else
+    candidate_steps="$default_decision_tails"
+    off_steps="$off_decision_tails"
   fi
   if [[ ! "$candidate_steps" =~ ^[0-9]+$ || ! "$off_steps" =~ ^[0-9]+$ ]] ||
      (( candidate_steps <= 0 || off_steps != 0 )); then
@@ -249,21 +271,6 @@ for rep in $(seq 1 "$REPS"); do
     '[{"name":"edit_mode","arguments":{"mode":"safe"}}]'
 done
 
-awk -F '\t' '
-  NR == 1 { next }
-  count == 0 { min_decode = max_decode = $3; min_total = max_total = $4 }
-  {
-    count += 1
-    sum_decode += $3
-    sum_total += $4
-    if ($3 < min_decode) min_decode = $3
-    if ($3 > max_decode) max_decode = $3
-    if ($4 < min_total) min_total = $4
-    if ($4 > max_total) max_total = $4
-  }
-  END {
-    if (count == 0) exit 1
-    printf "suite_summary pairs=%d parity=exact decode_speedup_mean_pct=%.3f decode_speedup_range_pct=%.3f..%.3f total_speedup_mean_pct=%.3f total_speedup_range_pct=%.3f..%.3f\n", count, sum_decode / count, min_decode, max_decode, sum_total / count, min_total, max_total
-  }
-' "$PAIR_RESULTS"
+awk -F '\t' -v min_decode_speedup_pct="$MIN_DECODE_SPEEDUP_PCT" \
+  -f "$ROOT/scripts/qwen35_structured_span_summary.awk" "$PAIR_RESULTS"
 printf 'suite_results path=%s\n' "$PAIR_RESULTS"
