@@ -26111,3 +26111,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was an ordinary exact Q4_K kernel experiment with the production x16 kernel as rollback.
 
 **decision:** Keep the existing x16 metadata loads. Do not retry metadata shuffle/broadcast without a compiler or hardware-counter certificate that the load path materially changed; move to FFN weight traffic or a higher scheduling boundary.
+
+#### [LM-QWEN38-Q4-X16-NR2-FALSIFIED-995] Two rows per x16 half are exact but below the product gate
+**context:** ml / Qwen3.8-27B / Metal / recurrent FFN / Q4_K x16 GEMV
+**state:** candidate rejected and removed; production one-row-per-half x16 kernel retained
+
+- claim: "Sharing each 16-lane half's input-vector loads across two output rows preserves exact Q4_K output but is not a material operator acceleration on the measured M2 Max corridor."
+  source: a temporary operator-only kernel produced four output rows per SIMD group, with two accumulators per lane instead of the historical full-SIMD NR4 kernel's four. On the real `5120x17408` recurrent FFN gate weight, all `17,408` Float32 outputs were bit-identical in ten same-process alternating pairs. Baseline/candidate GPU medians were `0.364292/0.357917 ms` (`+1.750%`, `10/10` wins); submit/wait medians were `0.530708/0.521583 ms` (`+1.719%`, `8/10`). The result missed the declared `>=3%` materiality gate, so the temporary kernel, pipeline, timing seam, and probe were removed.
+  verified_at: 2026-09-01
+  decay_trigger: Q4_K x16 kernel structure, compiler register allocation or occupancy, FFN shape, device/runtime, or timing harness changes
+  trust: {F:0.98,G:0.03,R:0.94}
+
+**Adversary:** Stable microkernel wins do not imply a worthwhile whole-token win. This operator accounts for only part of decode wall, so a `1.75%` local reduction predicts roughly sub-percent product impact while permanently doubling the x16 accumulator/control path. The old full-SIMD NR4 refutation remains distinct but directionally consistent.
+
+**Value proxy:** Reused input loads and `10/10` GPU wins establish a real local mechanism. The predeclared materiality threshold and projected whole-token impact remain the value boundary; the candidate failed it.
+
+**LTP/WBA:** Not claimed. This was an ordinary exact Q4_K row-blocking experiment with the production x16 kernel as rollback.
+
+**decision:** Keep one output row per 16-lane half. Do not add x16 row blocking for a sub-threshold local gain; reopen only if a fused FFN corridor can reuse weights or eliminate a material intermediate/dispatch at the whole-token boundary.
