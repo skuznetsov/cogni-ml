@@ -118,7 +118,7 @@ private def verify_candidate_t8_route!(state : ML::GGUF::Qwen35CPU::State,
         case tier
         when ML::GGUF::QwenQBitAdaptiveKV::Tier::P4
           unless ML::GGUF::QwenQBitAdaptiveMetalPolicy.p4_splitk_t8?(
-                   device_name, ENV["QWEN35_ADAPTIVE_P4_SPLITK_T8"]?,
+                   device_name, cache_len, ENV["QWEN35_ADAPTIVE_P4_SPLITK_T8"]?,
                  )
             raise "P4 T8 route is inactive at layer #{layer_index}"
           end
@@ -129,7 +129,7 @@ private def verify_candidate_t8_route!(state : ML::GGUF::Qwen35CPU::State,
             raise "BF16 T8 sidecar alignment is invalid at layer #{layer_index}"
           end
           unless ML::GGUF::QwenQBitAdaptiveMetalPolicy.bf16_splitk_t8?(
-                   device_name, ENV["QWEN35_ADAPTIVE_BF16_SPLITK_T8"]?,
+                   device_name, cache_len, ENV["QWEN35_ADAPTIVE_BF16_SPLITK_T8"]?,
                  )
             raise "BF16 T8 route is inactive at layer #{layer_index}"
           end
@@ -391,6 +391,7 @@ begin
   puts "qwen35_adaptive_t8_decode_probe"
   puts "  release_build=#{RELEASE_BUILD} device=#{device_name.inspect} prompt_sha256=#{prompt_sha256}"
   puts "  prompt_tokens=#{tokens.size} prompt_repeats=#{prompt_repeats} samples=#{sample_count} max_seq=#{max_seq} full_attention_layers=#{hp.full_attention_layers.size}"
+  puts "  automatic_t8_min_context=#{ML::GGUF::QwenQBitAdaptiveMetalPolicy::SPLITK_T8_MIN_CONTEXT}"
   puts "  candidate_t8_route_owners=p4:#{route_certificate.p4_t8_owners},bf16:#{route_certificate.bf16_t8_owners} packed_len=#{route_certificate.packed_len}"
   puts "  baseline_mean_ms=#{baseline_mean.round(3)} candidate_mean_ms=#{candidate_mean.round(3)} improvement_pct=#{improvement_pct.round(3)} wins=#{wins}/#{sample_count} gate=#{gate_passed ? "PASS" : "FAIL"}"
   puts "  baseline_median_ms=#{median(baseline_values).round(3)} candidate_median_ms=#{median(candidate_values).round(3)} ratio=#{(baseline_mean / candidate_mean).round(5)}x"
@@ -407,6 +408,7 @@ begin
       json.field "effective_splitk", true
       json.field "effective_splitk_min_context", 256
       json.field "effective_splitk_chunk", 64
+      json.field "automatic_t8_min_context", ML::GGUF::QwenQBitAdaptiveMetalPolicy::SPLITK_T8_MIN_CONTEXT
       json.field "candidate_p4_t8_owners", route_certificate.p4_t8_owners
       json.field "candidate_bf16_t8_owners", route_certificate.bf16_t8_owners
       json.field "prompt_tokens", tokens.size

@@ -1,5 +1,7 @@
 module ML::GGUF
   module QwenQBitAdaptiveMetalPolicy
+    SPLITK_T8_MIN_CONTEXT = 6_144
+
     def self.gqa6_tile(device_name : String, override : String? = nil) : Int32
       case override.try(&.strip.downcase)
       when nil, "", "auto"
@@ -83,12 +85,13 @@ module ML::GGUF
       splitk ? uniform_bf16 : token_count > 1 && (uniform_p4 || uniform_bf16)
     end
 
-    # The measured M2 Max corridor benefits from loading eight adjacent P4
-    # values per lane. Other devices stay on the portable loader unless an
-    # explicit benchmark override is supplied.
+    # Replicated M2 Max measurements admit the eight-value P4 loader only at
+    # long context. Shorter prefixes stay on the portable loader; an explicit
+    # benchmark override can still force either route.
     def self.p4_splitk_t8?(device_name : String,
+                           packed_len : Int32,
                            override : String? = nil) : Bool
-      return device_name == "Apple M2 Max" unless override
+      return device_name == "Apple M2 Max" && packed_len >= SPLITK_T8_MIN_CONTEXT unless override
 
       case override.strip
       when "0" then false
@@ -98,11 +101,12 @@ module ML::GGUF
       end
     end
 
-    # The measured M2 Max corridor benefits from one aligned 128-bit BF16 load
-    # per eight values. Other devices retain the portable T4 loader.
+    # The aligned BF16 loader shares the same measured long-context boundary.
+    # Alignment remains a separate runtime requirement at the call site.
     def self.bf16_splitk_t8?(device_name : String,
+                             packed_len : Int32,
                              override : String? = nil) : Bool
-      return device_name == "Apple M2 Max" unless override
+      return device_name == "Apple M2 Max" && packed_len >= SPLITK_T8_MIN_CONTEXT unless override
 
       case override.strip
       when "0" then false

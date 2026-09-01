@@ -26213,3 +26213,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary diagnostic attribution and candidate rejection.
 
 **decision:** Keep the repaired opt-in profiler and atlas aggregation. Do not begin the large standalone attention-row flash-MMA port at the 1,024-token frontier. Reopen when a longer-context row ceiling or a small attention-plus-projection prototype makes a `>=3%` body-only win credible; continue from the measured recurrent FFN/projection frontier without retrying already-refuted conversion-only, metadata-broadcast, row-blocking, or barrier-elision variants.
+
+#### [LM-QWEN38-ADAPTIVE-T8-CONTEXT-GATE-1000] Live-prefix gate removes the known short-context T8 regression
+**context:** ml / Qwen3.8-27B / adaptive QBit KV / Metal split-K decode / Apple M2 Max
+**state:** context-free default rejected; conservative live-prefix gate implemented and bounded evidence verified
+
+- claim: "The exact-device default alone is not a safe admission rule for the P4/BF16 T8 loaders."
+  source: the earlier 1,675-token run regressed by `4.979%` with only `5/10` wins. Two guarded 3,989-token processes were order-sensitive: baseline-first measured `-0.855%` with `7/10`, while candidate-first measured `+6.345%` with `8/10`. All routes preserved the same observed top-1 IDs/logits and the intended 12 P4 plus 4 aligned BF16 owners, so the short-context rejection is performance-driven rather than a correctness escape.
+  verified_at: 2026-09-01
+  decay_trigger: loader implementation, device/compiler/runtime, split-K scheduling, benchmark prompt/order, or admission policy changes
+  trust: {F:0.98,G:0.08,R:0.94}
+
+- claim: "Automatic T8 admission now starts from a 6,144-token published live prefix on the exact Apple M2 Max; capacity alone cannot admit it."
+  source: two fresh guarded processes at a 5,978-token prefix measured `+8.991%` and `+5.945%`, each with `8/10` wins, while the independently replicated 8,331-token prompt measured `+4.907%` and `+5.360%` with `10/10`. The policy deliberately rounds the lower positive observation upward to the simple `6 * 1,024` boundary, leaving the unmeasured `5,978--6,143` band on the prior loader. Unit falsifiers require automatic OFF at `6,143`, ON at `6,144`, other devices OFF, explicit `0` as rollback, and explicit `1` as a benchmark force override. Runtime selection receives `packed_len`, not `max_seq`, and keeps T8/T4 pipeline identities distinct.
+  verified_at: 2026-09-01
+  decay_trigger: threshold or environment semantics, packed/live-prefix ownership, pipeline cache identity, model tier map, device/compiler/runtime, or new matched boundary evidence
+  trust: {F:0.99,G:0.06,R:0.95}
+
+**Adversary:** `6,144` is a conservative policy boundary, not a measured performance knee. The live A/B evidence covers one device, the current 12-P4/4-BF16 map, two prompt families, ten positions per process, and forced loader selection; it does not establish sampled-quality parity, cross-device gains, or a universal long-context speedup. An exact `6,144` automatic-route wall measurement remains useful but is not required to eliminate the already-proven short-context regression.
+
+**Value proxy:** Per-loader microseconds and vector width are mechanism coordinates. Full-token paired wall time, exact observed output parity, route ownership, and live-prefix provenance remain the product gate.
+
+**LTP/WBA:** Not claimed. This is an ordinary context-selective runtime policy with exact fallback.
+
+**decision:** Gate automatic P4 and aligned-BF16 T8 split-K loaders at `packed_len >= 6,144` on exact Apple M2 Max. Preserve `QWEN35_ADAPTIVE_{P4,BF16}_SPLITK_T8=0` as rollback and `=1` as explicit experimental force. Keep shorter contexts on the existing loaders and revisit the threshold only with matched evidence that crosses the same parity and `>=3%`, `>=8/10` gates.

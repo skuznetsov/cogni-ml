@@ -1196,7 +1196,7 @@ module ML::GGUF
           n_head.to_i64 * scratch_block_count * sizeof(Float32),
         )
         stage1_pipeline = decode_splitk_stage1_pipeline(
-          uniform_tier, k_sidecar, v_sidecar,
+          uniform_tier, k_sidecar, v_sidecar, packed_len,
         )
         stage2_pipeline = decode_splitk_stage2_pipeline(uniform_tier)
 
@@ -1336,11 +1336,13 @@ module ML::GGUF
         uniform_tier : QwenQBitAdaptiveKV::Tier,
         k_sidecar : ML::MetalBuffer,
         v_sidecar : ML::MetalBuffer,
+        packed_len : Int32,
       ) : ML::Metal::ComputePipeline
         tile = gqa6_tile
         p4_t8 = uniform_tier == QwenQBitAdaptiveKV::Tier::P4 &&
                 QwenQBitAdaptiveMetalPolicy.p4_splitk_t8?(
                   ML::Metal::Device.instance.name,
+                  packed_len,
                   ENV["QWEN35_ADAPTIVE_P4_SPLITK_T8"]?,
                 )
         bf16_t8 = uniform_tier == QwenQBitAdaptiveKV::Tier::BF16 &&
@@ -1348,6 +1350,7 @@ module ML::GGUF
                   vector_load_aligned?(v_sidecar) &&
                   QwenQBitAdaptiveMetalPolicy.bf16_splitk_t8?(
                     ML::Metal::Device.instance.name,
+                    packed_len,
                     ENV["QWEN35_ADAPTIVE_BF16_SPLITK_T8"]?,
                   )
         automatic_t4 = QwenQBitAdaptiveMetalPolicy.automatic_dequant_t4?(

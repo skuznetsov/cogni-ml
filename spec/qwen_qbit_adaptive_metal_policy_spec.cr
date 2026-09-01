@@ -101,36 +101,40 @@ describe ML::GGUF::QwenQBitAdaptiveMetalPolicy do
     end
   end
 
-  it "scopes the P4 split-K t8 loader to the measured M2 Max corridor" do
+  it "auto-admits the P4 split-K t8 loader only in the measured long-context corridor" do
     policy = ML::GGUF::QwenQBitAdaptiveMetalPolicy
 
-    policy.p4_splitk_t8?("Apple M2 Max").should be_true
-    policy.p4_splitk_t8?("Apple M2 Pro").should be_false
-    policy.p4_splitk_t8?("Apple M5 Max").should be_false
-    policy.p4_splitk_t8?("Unknown Metal Device").should be_false
-    policy.p4_splitk_t8?("Apple M2 Max", "0").should be_false
-    policy.p4_splitk_t8?("Apple M2 Pro", "1").should be_true
+    policy.p4_splitk_t8?("Apple M2 Max", 6_143).should be_false
+    policy.p4_splitk_t8?("Apple M2 Max", 6_144).should be_true
+    policy.p4_splitk_t8?("Apple M2 Max", 6_145).should be_true
+    policy.p4_splitk_t8?("Apple M2 Pro", 6_144).should be_false
+    policy.p4_splitk_t8?("Apple M5 Max", 6_144).should be_false
+    policy.p4_splitk_t8?("Unknown Metal Device", 6_144).should be_false
+    policy.p4_splitk_t8?("Apple M2 Max", 6_144, "0").should be_false
+    policy.p4_splitk_t8?("Apple M2 Pro", 1, "1").should be_true
     expect_raises(ArgumentError, /QWEN35_ADAPTIVE_P4_SPLITK_T8/) do
-      policy.p4_splitk_t8?("Apple M2 Max", "")
+      policy.p4_splitk_t8?("Apple M2 Max", 6_144, "")
     end
     expect_raises(ArgumentError, /QWEN35_ADAPTIVE_P4_SPLITK_T8/) do
-      policy.p4_splitk_t8?("Apple M2 Max", "true")
+      policy.p4_splitk_t8?("Apple M2 Max", 6_144, "true")
     end
   end
 
-  it "scopes the BF16 split-K t8 loader to the measured M2 Max corridor" do
+  it "auto-admits the BF16 split-K t8 loader only in the measured long-context corridor" do
     policy = ML::GGUF::QwenQBitAdaptiveMetalPolicy
 
-    policy.bf16_splitk_t8?("Apple M2 Max").should be_true
-    policy.bf16_splitk_t8?("Apple M2 Pro").should be_false
-    policy.bf16_splitk_t8?("Unknown Metal Device").should be_false
-    policy.bf16_splitk_t8?("Apple M2 Max", "0").should be_false
-    policy.bf16_splitk_t8?("Apple M2 Max", "1").should be_true
+    policy.bf16_splitk_t8?("Apple M2 Max", 6_143).should be_false
+    policy.bf16_splitk_t8?("Apple M2 Max", 6_144).should be_true
+    policy.bf16_splitk_t8?("Apple M2 Max", 6_145).should be_true
+    policy.bf16_splitk_t8?("Apple M2 Pro", 6_144).should be_false
+    policy.bf16_splitk_t8?("Unknown Metal Device", 6_144).should be_false
+    policy.bf16_splitk_t8?("Apple M2 Max", 6_144, "0").should be_false
+    policy.bf16_splitk_t8?("Apple M2 Pro", 1, "1").should be_true
     expect_raises(ArgumentError, /QWEN35_ADAPTIVE_BF16_SPLITK_T8/) do
-      policy.bf16_splitk_t8?("Apple M2 Max", "")
+      policy.bf16_splitk_t8?("Apple M2 Max", 6_144, "")
     end
     expect_raises(ArgumentError, /QWEN35_ADAPTIVE_BF16_SPLITK_T8/) do
-      policy.bf16_splitk_t8?("Apple M2 Max", "true")
+      policy.bf16_splitk_t8?("Apple M2 Max", 6_144, "true")
     end
   end
 end
