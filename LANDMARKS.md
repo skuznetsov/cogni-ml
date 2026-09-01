@@ -25913,3 +25913,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was an ordinary representation handoff with an exact F32-output rollback frame.
 
 **decision:** Keep recurrent Q6 QKV on the optimized F32-output route. Do not add a Q6 H16 handoff until a dedicated double-buffered kernel passes isolated timing, full state parity, and a whole-prefill forecast above the promotion threshold.
+
+#### [LM-QWEN38-ADAPTIVE-FINALIZE-DISPATCH-FALSIFIED-986] Removing the adaptive tail marker is not a product acceleration
+**context:** ml / Qwen3.8-27B / adaptive QBit KV / Metal command completion / prefill
+**state:** candidate rejected and removed; explicit GPU tail marker retained
+
+- claim: "A dispatch-free terminal certificate can preserve the bounded publication semantics but does not materially accelerate product prefill."
+  source: a temporary opt-in `QWEN35_ADAPTIVE_FINALIZE_DISPATCH=0` route replaced the one-thread GPU tail marker with the conjunction of a host-side sealed encoder list, successful terminal Metal command status, and a zero device error mask. A focused Metal falsifier published valid P4 K/V and rejected a nonfinite append without advancing `cache_len`. Two fresh synthetic runs showed small and noisy complete-pack savings, generally `2..8%` for chunks `8/32/64`, while enclosing attention wall remained nearly unchanged. A protected same-process Qwen3.8-27B pp577 A/B with five interleaved pairs preserved final top-1 and its logit within `1e-4` in `5/5`; the candidate averaged `3877.16 ms` versus `3881.46 ms` for the explicit-marker baseline, only `4.30 ms` (`0.111%`) faster, and won `2/5` pairs. The run used adaptive map `p4;27=bf16,43=bf16,47=bf16,51=bf16`, a 24 GiB process-tree cap, and a 35% free-memory floor.
+  verified_at: 2026-09-01
+  decay_trigger: adaptive append grouping, finalizer placement, Metal command semantics, model/device, compiler/runtime, or prefill timing boundary changes
+  trust: {F:0.97,G:0.04,R:0.92}
+
+**Adversary:** The composite certificate was tested only on valid P4 data and one nonfinite failure, not every multi-cache failure permutation. That weakens a safety promotion but cannot rescue the performance result. The microbenchmark exposed a real dispatch cost, yet whole-model prefill amortized it below measurement relevance and below the predeclared `3%` product gate by roughly twenty-seven times.
+
+**Value proxy:** Fewer dispatches and lower isolated pack wall are mechanism coordinates. Paired whole-prefill wall plus semantic parity is the value boundary; parity held but wall improvement was noise-level.
+
+**LTP/WBA:** Not claimed. This was an ordinary command-finalization experiment with an exact explicit-marker rollback frame.
+
+**decision:** Retain the explicit GPU tail marker and its independent non-zero completion certificate. Do not revisit dispatch-free publication unless append grouping or command topology changes enough to make finalization a measured material share.
