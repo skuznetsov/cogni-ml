@@ -25955,3 +25955,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was an ordinary attention-tile representation experiment with an exact FP32 tile-15 rollback frame.
 
 **decision:** Keep the scoped M2 Max P4 tile-15 route. Do not retry wider half tiles unless a new kernel also reduces dequantization work or first demonstrates a stable same-process isolated gain; tile widening alone is closed.
+
+#### [LM-QWEN38-P4-SPLITK-T8-988] Eight-value P4 loads accelerate the bounded M2 Max split-K corridor
+**context:** ml / Qwen3.8-27B / adaptive QBit KV / Metal / P4 split-K decode / long context
+**state:** verified and default-on only for exact Apple M2 Max
+
+- claim: "The T8 loader preserves the measured adaptive attention and cache boundary."
+  source: the specialization shares four P4 bitplane-byte loads and one mean/sigma header pair across eight adjacent values, while retaining the FP32 tile, attention arithmetic, current-token path, and persisted cache layout. The protected 8K integration contract passed against the independent CPU reference and retained byte-identical K/V payloads. Its T8 case deliberately set both T4 and T8, verifying canonical T8 selection rather than hybrid composition. The policy contract passed `9/9`: unset enables T8 only for exact `Apple M2 Max`, explicit `0` rolls back, other devices default false, and malformed overrides fail closed. The complete guarded QBit suite passed `149` examples with zero failures or errors and one optional model-backed case pending.
+  verified_at: 2026-09-01
+  decay_trigger: P4 bitplane layout, head dimension or alignment, split-K/tier routing, tile policy, current-token handling, device naming, Metal compiler/runtime, or cache publication changes
+  trust: {F:0.97,G:0.05,R:0.93}
+
+- claim: "T8 materially accelerates the complete isolated P4 split-K command at 8K and 16K on Apple M2 Max."
+  source: a same-process probe prewarmed both pipelines, restored fresh cache state per sample, and alternated order for ten pairs. At 8K, wall improved `2.687 -> 2.330 ms` (`13.291%`, `8/10` wins) and GPU `2.098 -> 1.615 ms` (`23.010%`, `10/10`). At 16K, wall improved `4.825 -> 3.879 ms` (`19.608%`, `10/10`) and GPU `4.156 -> 3.247 ms` (`21.867%`, `10/10`). Both passed the predeclared `>=3%` and `>=8/10` wall-and-GPU gate under the 35% free-memory floor. A separate real Qwen3.8-27B 905-token, eight-generation semantic pair produced identical T8-off/on token IDs, text, top-1/top-2 coverage, ECS, ownership, density, and cache-consistency metrics; its single free-decode row was only about `1.2%` faster and is not a product-speed certificate.
+  verified_at: 2026-09-01
+  decay_trigger: model/device/compiler, adaptive tier map, context geometry, split-K chunk/tile, cache probe, host load, or timing boundary changes
+  trust: {F:0.97,G:0.04,R:0.91}
+
+**Adversary:** The evidence covers exact Apple M2 Max, uniform P4, head-dimension 256, one-token split-K, and two long contexts. Only 12 of 16 full-attention layers are P4 under the measured map. Explicit T8 on other devices or tiles remains experimental, and the isolated 13--23% win is not a whole-inference claim.
+
+**Value proxy:** Fewer bitplane/header loads are mechanism evidence. Numerical/payload parity and paired complete-command wall/GPU time are the value boundary; whole-model latency remains separate.
+
+**LTP/WBA:** Not claimed. This is ordinary exact-layout kernel specialization with an explicit portable-loader rollback.
+
+**decision:** Default T8 only on exact `Apple M2 Max`, uniform P4, one-token split-K. Preserve `QWEN35_ADAPTIVE_P4_SPLITK_T8=0`; widen only after new paired numerical and performance evidence.

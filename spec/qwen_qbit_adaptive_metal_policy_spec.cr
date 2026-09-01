@@ -100,4 +100,21 @@ describe ML::GGUF::QwenQBitAdaptiveMetalPolicy do
       policy.dequant_t4?("Apple M2 Max", true, "true")
     end
   end
+
+  it "scopes the P4 split-K t8 loader to the measured M2 Max corridor" do
+    policy = ML::GGUF::QwenQBitAdaptiveMetalPolicy
+
+    policy.p4_splitk_t8?("Apple M2 Max").should be_true
+    policy.p4_splitk_t8?("Apple M2 Pro").should be_false
+    policy.p4_splitk_t8?("Apple M5 Max").should be_false
+    policy.p4_splitk_t8?("Unknown Metal Device").should be_false
+    policy.p4_splitk_t8?("Apple M2 Max", "0").should be_false
+    policy.p4_splitk_t8?("Apple M2 Pro", "1").should be_true
+    expect_raises(ArgumentError, /QWEN35_ADAPTIVE_P4_SPLITK_T8/) do
+      policy.p4_splitk_t8?("Apple M2 Max", "")
+    end
+    expect_raises(ArgumentError, /QWEN35_ADAPTIVE_P4_SPLITK_T8/) do
+      policy.p4_splitk_t8?("Apple M2 Max", "true")
+    end
+  end
 end

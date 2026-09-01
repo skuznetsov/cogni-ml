@@ -64,6 +64,12 @@ inline uint qqa_adaptive_plane_bit(device const uchar* plane, uint within) {
 
 constant bool QQA_ADAPTIVE_DEQUANT_T4 = false;
 constant bool QQA_ADAPTIVE_SPLITK_STAGE2_FUSED = false;
+constant bool QQA_ADAPTIVE_P4_SPLITK_T8 = false;
+
+struct QQAAdaptiveFloat8 {
+    float4 low;
+    float4 high;
+};
 
 inline float qqa_adaptive_value(device const uchar* base,
                                 device const uchar* metadata,
@@ -182,6 +188,52 @@ inline float4 qqa_adaptive_uniform_value4(device const uchar* base,
         qqa_adaptive_value(base, metadata, sidecar, row, within + 3u));
 }
 
+// Eight adjacent P4 values share one row header and the same byte from each
+// bitplane. This changes only loader scheduling; the FP32 tile, dot-product
+// order, softmax, and persisted cache representation remain unchanged.
+inline QQAAdaptiveFloat8 qqa_adaptive_uniform_p4_value8(
+    device const uchar* base,
+    uint row,
+    uint within) {
+    const uint row_base = row * QQA_ADAPTIVE_P4_STRIDE;
+    uint raw0 = 0;
+    uint raw1 = 0;
+    uint raw2 = 0;
+    uint raw3 = 0;
+    uint raw4 = 0;
+    uint raw5 = 0;
+    uint raw6 = 0;
+    uint raw7 = 0;
+    for (uint plane = 0; plane < 4; ++plane) {
+        const uint plane_offset = row_base + 8 + plane * QQA_ADAPTIVE_PLANE_BYTES;
+        const uint byte_offset = QQA_ADAPTIVE_PLANE_BYTES - 1 - within / 8;
+        const uint plane_byte = base[plane_offset + byte_offset];
+        const uint shift = 7u - plane;
+        raw0 |= ((plane_byte >> 0u) & 1u) << shift;
+        raw1 |= ((plane_byte >> 1u) & 1u) << shift;
+        raw2 |= ((plane_byte >> 2u) & 1u) << shift;
+        raw3 |= ((plane_byte >> 3u) & 1u) << shift;
+        raw4 |= ((plane_byte >> 4u) & 1u) << shift;
+        raw5 |= ((plane_byte >> 5u) & 1u) << shift;
+        raw6 |= ((plane_byte >> 6u) & 1u) << shift;
+        raw7 |= ((plane_byte >> 7u) & 1u) << shift;
+    }
+    const float mean = as_type<float>(qqa_adaptive_read_u32_le(base, row_base));
+    const float sigma = as_type<float>(qqa_adaptive_read_u32_le(base, row_base + 4));
+    QQAAdaptiveFloat8 result;
+    result.low = float4(
+        mean + sigma * qqa_adaptive_centroid(raw0, 4),
+        mean + sigma * qqa_adaptive_centroid(raw1, 4),
+        mean + sigma * qqa_adaptive_centroid(raw2, 4),
+        mean + sigma * qqa_adaptive_centroid(raw3, 4));
+    result.high = float4(
+        mean + sigma * qqa_adaptive_centroid(raw4, 4),
+        mean + sigma * qqa_adaptive_centroid(raw5, 4),
+        mean + sigma * qqa_adaptive_centroid(raw6, 4),
+        mean + sigma * qqa_adaptive_centroid(raw7, 4));
+    return result;
+}
+
 inline void qqa_adaptive_store4(threadgroup float* destination,
                                 uint index,
                                 float4 values) {
@@ -189,6 +241,13 @@ inline void qqa_adaptive_store4(threadgroup float* destination,
     destination[index + 1u] = values.y;
     destination[index + 2u] = values.z;
     destination[index + 3u] = values.w;
+}
+
+inline void qqa_adaptive_store8(threadgroup float* destination,
+                                uint index,
+                                QQAAdaptiveFloat8 values) {
+    qqa_adaptive_store4(destination, index, values.low);
+    qqa_adaptive_store4(destination, index + 4u, values.high);
 }
 
 constant uint QQA_ADAPTIVE_GQA6_HEADS = 6;
@@ -211,9 +270,33 @@ inline void qqa_adaptive_fill_uniform_tile(
     uint head_dim,
     uint uniform_tier,
     uint thread_index) {
+    const bool use_t8 = QQA_ADAPTIVE_P4_SPLITK_T8 &&
+        uniform_tier == QQA_ADAPTIVE_P4;
     const bool use_t4 = QQA_ADAPTIVE_DEQUANT_T4 &&
         (uniform_tier == QQA_ADAPTIVE_P4 || uniform_tier == QQA_ADAPTIVE_BF16);
-    if (use_t4) {
+    if (use_t8) {
+        const uint tile_vectors = tile_values / 8u;
+        for (uint vector_index = thread_index; vector_index < tile_vectors;
+             vector_index += QQA_ADAPTIVE_GQA6_THREADS) {
+            const uint index = vector_index * 8u;
+            const uint position_in_tile = index / head_dim;
+            const uint d = index - position_in_tile * head_dim;
+            const uint position = tile_start + position_in_tile;
+            QQAAdaptiveFloat8 values;
+            if (position < packed_len) {
+                const uint row = position * n_head_kv + kv_h;
+                values = qqa_adaptive_uniform_p4_value8(base, row, d);
+            } else {
+                const uint current_token =
+                    source_token_offset + position - packed_len;
+                const uint source_index =
+                    current_token * kv_dim + kv_h * head_dim + d;
+                values.low = *((device const float4*)(current + source_index));
+                values.high = *((device const float4*)(current + source_index + 4u));
+            }
+            qqa_adaptive_store8(destination, index, values);
+        }
+    } else if (use_t4) {
         const uint tile_vectors = tile_values / 4u;
         for (uint vector_index = thread_index; vector_index < tile_vectors;
              vector_index += QQA_ADAPTIVE_GQA6_THREADS) {

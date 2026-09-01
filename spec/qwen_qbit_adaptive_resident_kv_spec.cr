@@ -431,6 +431,9 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
     legacy_splitk = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
       plan, plan, capacity, n_head_kv, head_dim,
     )
+    t8_splitk = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
+      plan, plan, capacity, n_head_kv, head_dim,
+    )
     initial_buffers = [
       ML::MetalBuffer.from_array(initial_k),
       ML::MetalBuffer.from_array(initial_v),
@@ -438,8 +441,9 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
     previous_splitk = ENV["QWEN35_ADAPTIVE_SPLITK"]?
     previous_dequant_t4 = ENV["QWEN35_ADAPTIVE_DEQUANT_T4"]?
     previous_stage2_fused = ENV["QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED"]?
+    previous_p4_t8 = ENV["QWEN35_ADAPTIVE_P4_SPLITK_T8"]?
     begin
-      [baseline, t4_serial, scalar_splitk, t4_splitk, legacy_splitk].each do |cache|
+      [baseline, t4_serial, scalar_splitk, t4_splitk, legacy_splitk, t8_splitk].each do |cache|
         ML::GGUF::QwenQBitAdaptiveResidentKV.append_from_metal(
           cache, initial_buffers[0], initial_buffers[1], packed_len,
         )
@@ -454,15 +458,17 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
 
       outputs = [] of Array(Float32)
       cases = [
-        {cache: baseline, splitk: "0", dequant_t4: "0", stage2_fused: "0"},
-        {cache: t4_serial, splitk: "0", dequant_t4: "1", stage2_fused: "1"},
-        {cache: scalar_splitk, splitk: "1", dequant_t4: "0", stage2_fused: "auto"},
-        {cache: t4_splitk, splitk: "1", dequant_t4: "1", stage2_fused: "1"},
-        {cache: legacy_splitk, splitk: "1", dequant_t4: "0", stage2_fused: "0"},
+        {cache: baseline, splitk: "0", dequant_t4: "0", stage2_fused: "0", p4_t8: "0"},
+        {cache: t4_serial, splitk: "0", dequant_t4: "1", stage2_fused: "1", p4_t8: "0"},
+        {cache: scalar_splitk, splitk: "1", dequant_t4: "0", stage2_fused: "auto", p4_t8: "0"},
+        {cache: t4_splitk, splitk: "1", dequant_t4: "1", stage2_fused: "1", p4_t8: "0"},
+        {cache: legacy_splitk, splitk: "1", dequant_t4: "0", stage2_fused: "0", p4_t8: "0"},
+        {cache: t8_splitk, splitk: "1", dequant_t4: "1", stage2_fused: "0", p4_t8: "1"},
       ]
       cases.each do |candidate|
         ENV["QWEN35_ADAPTIVE_SPLITK"] = candidate[:splitk]
         ENV["QWEN35_ADAPTIVE_DEQUANT_T4"] = candidate[:dequant_t4]
+        ENV["QWEN35_ADAPTIVE_P4_SPLITK_T8"] = candidate[:p4_t8]
         if candidate[:stage2_fused] == "auto"
           ENV.delete("QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED")
         else
@@ -501,6 +507,7 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
       scalar_splitk_k, scalar_splitk_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(scalar_splitk)
       t4_splitk_k, t4_splitk_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(t4_splitk)
       legacy_splitk_k, legacy_splitk_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(legacy_splitk)
+      t8_splitk_k, t8_splitk_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(t8_splitk)
       t4_serial_k.payload.should eq(baseline_k.payload)
       t4_serial_v.payload.should eq(baseline_v.payload)
       scalar_splitk_k.payload.should eq(baseline_k.payload)
@@ -509,13 +516,16 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
       t4_splitk_v.payload.should eq(baseline_v.payload)
       legacy_splitk_k.payload.should eq(baseline_k.payload)
       legacy_splitk_v.payload.should eq(baseline_v.payload)
+      t8_splitk_k.payload.should eq(baseline_k.payload)
+      t8_splitk_v.payload.should eq(baseline_v.payload)
 
       hits_after_first, misses_after_first = ML::GGUF::Qwen35Metal::Scratch.stats
       misses_after_first.should eq(misses_before + 3)
-      hits_after_first.should eq(hits_before + 6)
+      hits_after_first.should eq(hits_before + 9)
       ENV["QWEN35_ADAPTIVE_SPLITK"] = "1"
       ENV["QWEN35_ADAPTIVE_DEQUANT_T4"] = "1"
       ENV["QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED"] = "1"
+      ENV["QWEN35_ADAPTIVE_P4_SPLITK_T8"] = "0"
       second_buffers = [
         ML::MetalBuffer.from_array(q),
         ML::MetalBuffer.from_array(gate),
@@ -552,12 +562,18 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
       else
         ENV.delete("QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED")
       end
+      if previous_p4_t8
+        ENV["QWEN35_ADAPTIVE_P4_SPLITK_T8"] = previous_p4_t8
+      else
+        ENV.delete("QWEN35_ADAPTIVE_P4_SPLITK_T8")
+      end
       initial_buffers.each(&.release)
       baseline.release
       t4_serial.release
       scalar_splitk.release
       t4_splitk.release
       legacy_splitk.release
+      t8_splitk.release
     end
   end
 

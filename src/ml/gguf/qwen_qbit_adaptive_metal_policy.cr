@@ -82,5 +82,20 @@ module ML::GGUF
                                    uniform_bf16 : Bool) : Bool
       splitk ? uniform_bf16 : token_count > 1 && (uniform_p4 || uniform_bf16)
     end
+
+    # The measured M2 Max corridor benefits from loading eight adjacent P4
+    # values per lane. Other devices stay on the portable loader unless an
+    # explicit benchmark override is supplied.
+    def self.p4_splitk_t8?(device_name : String,
+                           override : String? = nil) : Bool
+      return device_name == "Apple M2 Max" unless override
+
+      case override.strip
+      when "0" then false
+      when "1" then true
+      else
+        raise ArgumentError.new("QWEN35_ADAPTIVE_P4_SPLITK_T8 must be 0 or 1")
+      end
+    end
   end
 end
