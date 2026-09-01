@@ -12,6 +12,7 @@ RSS_MB="${RSS_MB:-12288}"
 LOG_DIR="${LOG_DIR:-/tmp}"
 REPS="${REPS:-2}"
 GEN="${GEN:-80}"
+GATE_MODE="${GATE_MODE:-span}"
 RUN_ID="${RUN_ID:-$(date +%Y%m%d_%H%M%S)}_$$"
 MODEL_PATH="${QWEN35_MODEL_PATH:-}"
 HOST_PATH="${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
@@ -34,6 +35,10 @@ if [[ "${REBUILD:-1}" != "0" && "${REBUILD:-1}" != "1" ]]; then
   printf 'REBUILD must be 0 or 1\n' >&2
   exit 1
 fi
+if [[ "$GATE_MODE" != "span" && "$GATE_MODE" != "token-options" ]]; then
+  printf 'GATE_MODE must be span or token-options\n' >&2
+  exit 1
+fi
 
 mkdir -p "$LOG_DIR"
 RUN_DIR="$LOG_DIR/qwen35_span_suite_${RUN_ID}"
@@ -42,7 +47,7 @@ if ! mkdir "$RUN_DIR"; then
   exit 1
 fi
 PAIR_RESULTS="$RUN_DIR/pairs.tsv"
-printf 'name\trep\tdecode_speedup_pct\ttotal_speedup_pct\tforced_span_steps\n' >"$PAIR_RESULTS"
+printf 'name\trep\tdecode_speedup_pct\ttotal_speedup_pct\tcandidate_steps\n' >"$PAIR_RESULTS"
 
 SOURCE_INPUT_SHA256="$({
   printf '%s\n' 'build=qwen35_generate release no-debug error-trace bridge+Metal+Foundation+MPS+c++'
@@ -73,8 +78,8 @@ fi
 
 SOURCE_REVISION="$(git rev-parse --verify HEAD)"
 BIN_SHA256="$(shasum -a 256 "$BIN" | awk '{print $1}')"
-printf 'suite_config provenance=%s source_revision=%s source_input_sha256=%s binary_sha256=%s reps=%s gen=%s rss_mb=%s\n' \
-  "$PROVENANCE_MODE" "$SOURCE_REVISION" "$SOURCE_INPUT_SHA256" "$BIN_SHA256" "$REPS" "$GEN" "$RSS_MB"
+printf 'suite_config provenance=%s source_revision=%s source_input_sha256=%s binary_sha256=%s gate_mode=%s reps=%s gen=%s rss_mb=%s\n' \
+  "$PROVENANCE_MODE" "$SOURCE_REVISION" "$SOURCE_INPUT_SHA256" "$BIN_SHA256" "$GATE_MODE" "$REPS" "$GEN" "$RSS_MB"
 
 COMMON_ENV=(
   PATH="$HOST_PATH"
@@ -96,17 +101,23 @@ run_case() {
   local log="$RUN_DIR/${name}_${mode}_${rep}.log"
 
   if [[ "$mode" == "off" ]]; then
-    env -i QWEN35_CONSTRAINED_FORCE_SPAN_OFF=1 QWEN35_TOOLS_JSON="$tools" "${COMMON_ENV[@]}" \
-      "$RUN_SAFE" "$BIN" 240 "$RSS_MB" "$prompt" "$GEN" >"$log" 2>&1
+    if [[ "$GATE_MODE" == "span" ]]; then
+      env -i QWEN35_CONSTRAINED_FORCE_SPAN_OFF=1 QWEN35_TOOLS_JSON="$tools" "${COMMON_ENV[@]}" \
+        "$RUN_SAFE" "$BIN" 240 "$RSS_MB" "$prompt" "$GEN" >"$log" 2>&1
+    else
+      env -i QWEN35_CONSTRAINED_TOKEN_OPTIONS_OFF=1 QWEN35_TOOLS_JSON="$tools" "${COMMON_ENV[@]}" \
+        "$RUN_SAFE" "$BIN" 240 "$RSS_MB" "$prompt" "$GEN" >"$log" 2>&1
+    fi
   else
     env -i QWEN35_TOOLS_JSON="$tools" "${COMMON_ENV[@]}" \
       "$RUN_SAFE" "$BIN" 240 "$RSS_MB" "$prompt" "$GEN" >"$log" 2>&1
   fi
 
-  local decode total spans free parsed_raw parsed tokens
+  local decode total spans token_options free parsed_raw parsed tokens
   decode="$(rg 'greedy summary:' "$log" | sed -E 's/.*wall_ms=([0-9.]+).*/\1/' || true)"
   total="$(rg 'request summary:' "$log" | sed -E 's/.*total_ms=([0-9.]+).*/\1/' || true)"
   spans="$(rg 'tool constraint summary:' "$log" | sed -E 's/.*forced_span_steps=([0-9]+).*/\1/' || true)"
+  token_options="$(rg 'tool constraint summary:' "$log" | sed -E 's/.*token_option_steps=([0-9]+).*/\1/' || true)"
   free="$(rg 'tool constraint summary:' "$log" | sed -E 's/.*freeform_value_steps=([0-9]+).*/\1/' || true)"
   parsed_raw="$(awk '/^=== Parsed tool calls ===$/ { getline; print; exit }' "$log")"
   parsed="$(printf '%s\n' "$parsed_raw" | jq -ceS '
@@ -118,17 +129,18 @@ run_case() {
   ' 2>/dev/null || true)"
   tokens="$(awk '/^=== Generated token ids ===$/ { getline; print; exit }' "$log")"
 
-  if [[ -z "$decode" || -z "$total" || -z "$spans" || -z "$tokens" || -z "$parsed" ]]; then
+  if [[ -z "$decode" || -z "$total" || -z "$spans" || -z "$token_options" || -z "$tokens" || -z "$parsed" ]]; then
     printf 'incomplete suite row: name=%s mode=%s rep=%s log=%s\n' "$name" "$mode" "$rep" "$log" >&2
     return 1
   fi
 
-  printf 'suite_row name=%s mode=%s rep=%s decode_ms=%s total_ms=%s forced_span=%s freeform=%s parsed=%s log=%s\n' \
-    "$name" "$mode" "$rep" "$decode" "$total" "$spans" "${free:-na}" "$parsed" "$log"
+  printf 'suite_row name=%s mode=%s rep=%s decode_ms=%s total_ms=%s forced_span=%s token_options=%s freeform=%s parsed=%s log=%s\n' \
+    "$name" "$mode" "$rep" "$decode" "$total" "$spans" "$token_options" "${free:-na}" "$parsed" "$log"
 
   RUN_DECODE="$decode"
   RUN_TOTAL="$total"
   RUN_SPANS="$spans"
+  RUN_TOKEN_OPTIONS="$token_options"
   RUN_PARSED="$parsed"
   RUN_TOKENS="$tokens"
 }
@@ -143,24 +155,24 @@ run_pair() {
     second=default
   fi
 
-  local default_decode default_total default_spans default_parsed default_tokens
-  local off_decode off_total off_spans off_parsed off_tokens
+  local default_decode default_total default_spans default_token_options default_parsed default_tokens
+  local off_decode off_total off_spans off_token_options off_parsed off_tokens
 
   run_case "$name" "$prompt" "$tools" "$first" "$rep"
   if [[ "$first" == "default" ]]; then
-    default_decode="$RUN_DECODE"; default_total="$RUN_TOTAL"; default_spans="$RUN_SPANS"
+    default_decode="$RUN_DECODE"; default_total="$RUN_TOTAL"; default_spans="$RUN_SPANS"; default_token_options="$RUN_TOKEN_OPTIONS"
     default_parsed="$RUN_PARSED"; default_tokens="$RUN_TOKENS"
   else
-    off_decode="$RUN_DECODE"; off_total="$RUN_TOTAL"; off_spans="$RUN_SPANS"
+    off_decode="$RUN_DECODE"; off_total="$RUN_TOTAL"; off_spans="$RUN_SPANS"; off_token_options="$RUN_TOKEN_OPTIONS"
     off_parsed="$RUN_PARSED"; off_tokens="$RUN_TOKENS"
   fi
 
   run_case "$name" "$prompt" "$tools" "$second" "$rep"
   if [[ "$second" == "default" ]]; then
-    default_decode="$RUN_DECODE"; default_total="$RUN_TOTAL"; default_spans="$RUN_SPANS"
+    default_decode="$RUN_DECODE"; default_total="$RUN_TOTAL"; default_spans="$RUN_SPANS"; default_token_options="$RUN_TOKEN_OPTIONS"
     default_parsed="$RUN_PARSED"; default_tokens="$RUN_TOKENS"
   else
-    off_decode="$RUN_DECODE"; off_total="$RUN_TOTAL"; off_spans="$RUN_SPANS"
+    off_decode="$RUN_DECODE"; off_total="$RUN_TOTAL"; off_spans="$RUN_SPANS"; off_token_options="$RUN_TOKEN_OPTIONS"
     off_parsed="$RUN_PARSED"; off_tokens="$RUN_TOKENS"
   fi
 
@@ -173,10 +185,18 @@ run_pair() {
       "$name" "$rep" "$expected_parsed" "$default_parsed" >&2
     return 1
   fi
-  if [[ ! "$default_spans" =~ ^[0-9]+$ || ! "$off_spans" =~ ^[0-9]+$ ]] ||
-     (( default_spans <= 0 || off_spans != 0 )); then
-    printf 'span activation failure: name=%s rep=%s default=%s off=%s\n' \
-      "$name" "$rep" "$default_spans" "$off_spans" >&2
+  local candidate_steps off_steps
+  if [[ "$GATE_MODE" == "span" ]]; then
+    candidate_steps="$default_spans"
+    off_steps="$off_spans"
+  else
+    candidate_steps="$default_token_options"
+    off_steps="$off_token_options"
+  fi
+  if [[ ! "$candidate_steps" =~ ^[0-9]+$ || ! "$off_steps" =~ ^[0-9]+$ ]] ||
+     (( candidate_steps <= 0 || off_steps != 0 )); then
+    printf '%s activation failure: name=%s rep=%s candidate=%s off=%s\n' \
+      "$GATE_MODE" "$name" "$rep" "$candidate_steps" "$off_steps" >&2
     return 1
   fi
 
@@ -186,10 +206,10 @@ run_pair() {
   total_speedup="$(awk -v candidate="$default_total" -v baseline="$off_total" \
     'BEGIN { if (baseline <= 0) exit 1; printf "%.3f", 100.0 * (baseline - candidate) / baseline }')"
 
-  printf 'suite_pair name=%s rep=%s order=%s-%s parity=exact decode_speedup_pct=%s total_speedup_pct=%s forced_span=%s\n' \
-    "$name" "$rep" "$first" "$second" "$decode_speedup" "$total_speedup" "$default_spans"
+  printf 'suite_pair name=%s rep=%s order=%s-%s parity=exact gate_mode=%s decode_speedup_pct=%s total_speedup_pct=%s candidate_steps=%s\n' \
+    "$name" "$rep" "$first" "$second" "$GATE_MODE" "$decode_speedup" "$total_speedup" "$candidate_steps"
   printf '%s\t%s\t%s\t%s\t%s\n' \
-    "$name" "$rep" "$decode_speedup" "$total_speedup" "$default_spans" >>"$PAIR_RESULTS"
+    "$name" "$rep" "$decode_speedup" "$total_speedup" "$candidate_steps" >>"$PAIR_RESULTS"
 }
 
 edit_tools='[{"type":"function","function":{"name":"edit_mode","description":"Choose edit mode","parameters":{"type":"object","properties":{"mode":{"type":"string","enum":["fast","safe"]},"dry_run":{"type":"boolean"}},"required":["mode","dry_run"]}}}]'

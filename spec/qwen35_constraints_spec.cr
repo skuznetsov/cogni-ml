@@ -18,6 +18,63 @@ module Qwen35ConstraintsSpecHelper
 end
 
 describe ML::GGUF::Qwen35Constraints do
+  it "tracks token-option corridors through singleton spans and branch points" do
+    corridor = ML::GGUF::Qwen35Constraints::TokenOptionCorridor.from_options([
+      [10, 20, 30],
+      [10, 20, 40],
+      [10, 50],
+    ])
+
+    corridor.next_ids.should eq([10])
+    corridor = corridor.advance(10)
+    corridor.next_ids.should eq([20, 50])
+    corridor = corridor.advance(20)
+    corridor.next_ids.should eq([30, 40])
+    corridor = corridor.advance(30)
+    corridor.complete?.should be_true
+  end
+
+  it "rejects empty and prefix-ambiguous token-option entries" do
+    ML::GGUF::Qwen35Constraints::TokenOptionCorridor.from_options([] of Array(Int32)).empty?.should be_true
+    expect_raises(ArgumentError, "token-option corridor options must be non-empty") do
+      ML::GGUF::Qwen35Constraints.required_token_option_corridor([[] of Int32])
+    end
+    expect_raises(ArgumentError, "token-option corridor options must be prefix-free") do
+      ML::GGUF::Qwen35Constraints.required_token_option_corridor([
+        [1, 2],
+        [1, 2, 3],
+      ])
+    end
+  end
+
+  it "maps an emitted token trace back to the selected finite literal option" do
+    options = [
+      [1, 2, 3],
+      [1, 2, 4],
+      [1, 2, 4, 5],
+    ]
+
+    ML::GGUF::Qwen35Constraints::TokenOptionCorridor.selected_literal_index?(options, [1, 2, 4]).should eq(1)
+    ML::GGUF::Qwen35Constraints::TokenOptionCorridor.selected_literal_index?(options, [1, 2, 4, 5]).should eq(2)
+    ML::GGUF::Qwen35Constraints::TokenOptionCorridor.selected_literal_index?(options, [1, 9]).should be_nil
+  end
+
+  it "builds byte-exact token-option corridors with the native tokenizer" do
+    tok = ML::GGUF::Qwen35Tokenizer.new(
+      ["a", "b", "c", "ab", "ac", "eos"],
+      eos_id: 5,
+      pad_id: 5,
+      add_bos: false,
+      model_path: "fake.gguf",
+      token_to_id: {"a" => 0, "b" => 1, "c" => 2, "ab" => 3, "ac" => 4, "eos" => 5},
+      bpe_ranks: { {"a", "b"} => 0, {"a", "c"} => 1 },
+    )
+
+    corridor = ML::GGUF::Qwen35Constraints.token_option_corridor(tok, ["ab", "ac"])
+    corridor.options.should eq([[3], [4]])
+    corridor.next_ids.should eq([3, 4])
+  end
+
   it "builds token frontiers for finite literal corridors" do
     tok = Qwen35ConstraintsSpecHelper.fake_tokenizer(["<", "<tool", "<tool_call>", "_call", "_call>", "tool", ">"])
 

@@ -158,6 +158,7 @@ constrained_tool_call_prefix_enabled = ENV["QWEN35_CONSTRAINED_TOOL_CALL_PREFIX"
 structured_constraint_enabled = (constrained_literal_prefix && !constrained_literal_prefix.not_nil!.empty?) || constrained_tool_call_prefix_enabled
 constrained_force_single_literal = ENV["QWEN35_CONSTRAINED_FORCE_SINGLE"]? == "1"
 constrained_force_literal_span = ENV["QWEN35_CONSTRAINED_FORCE_SPAN_OFF"]? != "1"
+constrained_token_options_enabled = constrained_tool_call_prefix_enabled && ENV["QWEN35_CONSTRAINED_TOKEN_OPTIONS_OFF"]? != "1"
 
 raise "QWEN35_PROMPT_CACHE_FULL_HIT_MIN_GEN must be non-negative" unless prompt_cache_full_hit_min_gen >= 0
 raise "QWEN35_PROMPT_CACHE_ARTIFACT_CODEC_BLOCK must be positive" unless prompt_cache_artifact_codec_block > 0
@@ -274,6 +275,81 @@ end
 
 def literal_constraint_complete?(remaining : Array(String)) : Bool
   remaining.empty? || remaining.any?(&.empty?)
+end
+
+def build_literal_token_corridor(tokenizer : ML::GGUF::Qwen35Tokenizer,
+                                 remaining : Array(String),
+                                 enabled : Bool) : ML::GGUF::Qwen35Constraints::TokenOptionCorridor
+  return ML::GGUF::Qwen35Constraints::TokenOptionCorridor.from_options([] of Array(Int32)) unless enabled
+  return ML::GGUF::Qwen35Constraints::TokenOptionCorridor.from_options([] of Array(Int32)) if literal_constraint_complete?(remaining)
+
+  ML::GGUF::Qwen35Constraints.token_option_corridor(tokenizer, remaining)
+rescue ex : ML::GGUF::Qwen35Constraints::LiteralFrontierError
+  STDERR << "Token-option corridor unavailable; using byte frontier: #{ex.message}\n"
+  ML::GGUF::Qwen35Constraints::TokenOptionCorridor.from_options([] of Array(Int32))
+end
+
+def advance_next_maybe_token_option_constrained(weights : ML::GGUF::Qwen35Weights,
+                                                tokenizer : ML::GGUF::Qwen35Tokenizer,
+                                                token_id : Int32,
+                                                pos : Int32,
+                                                state : ML::GGUF::Qwen35CPU::State,
+                                                corridor : ML::GGUF::Qwen35Constraints::TokenOptionCorridor,
+                                                remaining : Array(String)) : {Int32, Float32, ML::GGUF::Qwen35Constraints::TokenOptionCorridor, Array(String), String, Bool}
+  allowed = corridor.next_ids
+  raise ML::GGUF::Qwen35Constraints::LiteralFrontierError.new("incomplete token-option corridor has no frontier") if allowed.empty?
+
+  forced_single = allowed.size == 1
+  if forced_single
+    top = allowed[0]
+    ML::GGUF::Qwen35CPU.prefill_token(weights, token_id, pos, state)
+    logit = 0.0_f32
+  else
+    selected, selected_logit = ML::GGUF::Qwen35CPU.forward_top1_allowed(weights, token_id, pos, state, allowed)
+    top = selected.to_i32
+    logit = selected_logit
+  end
+
+  piece = tokenizer.decode_single(top)
+  next_corridor = corridor.advance(top)
+  next_remaining = ML::GGUF::Qwen35Constraints.advance_literal_options(remaining, piece)
+  complete = next_corridor.complete?
+  unless complete == literal_constraint_complete?(next_remaining)
+    raise ML::GGUF::Qwen35Constraints::LiteralFrontierError.new("token and byte literal corridors diverged")
+  end
+  next_remaining = [] of String if complete
+  {top, logit, next_corridor, next_remaining, piece, forced_single}
+end
+
+def forced_token_option_span(tokenizer : ML::GGUF::Qwen35Tokenizer,
+                             corridor : ML::GGUF::Qwen35Constraints::TokenOptionCorridor,
+                             remaining : Array(String),
+                             max_tokens : Int32) : {Array(Int32), Array(String), ML::GGUF::Qwen35Constraints::TokenOptionCorridor, Array(String)}
+  ids = [] of Int32
+  pieces = [] of String
+  cursor = corridor
+  byte_cursor = remaining
+  return {ids, pieces, cursor, byte_cursor} if max_tokens <= 0 || cursor.empty? || cursor.complete?
+
+  max_tokens.times do
+    allowed = cursor.next_ids
+    break unless allowed.size == 1
+
+    id = allowed[0]
+    piece = tokenizer.decode_single(id)
+    cursor = cursor.advance(id)
+    byte_cursor = ML::GGUF::Qwen35Constraints.advance_literal_options(byte_cursor, piece)
+    complete = cursor.complete?
+    unless complete == literal_constraint_complete?(byte_cursor)
+      raise ML::GGUF::Qwen35Constraints::LiteralFrontierError.new("token and byte literal spans diverged")
+    end
+    byte_cursor = [] of String if complete
+    ids << id
+    pieces << piece
+    break if complete
+  end
+
+  {ids, pieces, cursor, byte_cursor}
 end
 
 def advance_next_maybe_literal_constrained(weights : ML::GGUF::Qwen35Weights,
@@ -798,9 +874,11 @@ literal_remaining = if prefix = constrained_literal_prefix
                     else
                       [] of String
                     end
+literal_token_corridor = build_literal_token_corridor(tok, literal_remaining, constrained_token_options_enabled)
 literal_constrained_steps = 0
 literal_forced_single_steps = 0
 literal_forced_span_steps = 0
+literal_token_option_steps = 0
 literal_emitted = ""
 tool_value_text = ""
 tool_literal_stage = constrained_tool_call_prefix_enabled ? "function_prefix" : "none"
@@ -1001,6 +1079,22 @@ if output_ids.empty?
       else
         top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, final_id, pos, state)
       end
+    elsif !literal_token_corridor.empty? && !literal_token_corridor.complete?
+      constrained_stage = tool_literal_stage
+      top, top_logit, literal_token_corridor, literal_remaining, emitted_piece, forced_single = advance_next_maybe_token_option_constrained(
+        w, tok, final_id, pos, state, literal_token_corridor, literal_remaining)
+      constrained_generated = true
+      literal_constrained_steps += 1
+      literal_token_option_steps += 1
+      literal_forced_single_steps += 1 if forced_single
+      tool_literal_stage_counts[constrained_stage] += 1
+      literal_emitted += emitted_piece
+      if literal_remaining.empty?
+        tool_literal_stage, literal_remaining, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_value_options_by_parameter, reset_tool_value = advance_tool_literal_stage(
+          tool_literal_stage, literal_emitted, tool_required_parameters, tool_optional_parameters, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_finite_value_options, tool_value_options_by_parameter)
+        literal_token_corridor = build_literal_token_corridor(tok, literal_remaining, constrained_token_options_enabled)
+        tool_value_text = "" if reset_tool_value
+      end
     else
       constrained_stage = tool_literal_stage
       top, top_logit, literal_remaining, emitted_piece, constrained, forced_single = advance_next_maybe_literal_constrained(
@@ -1014,6 +1108,7 @@ if output_ids.empty?
         if literal_remaining.empty? && constrained_tool_call_prefix_enabled
           tool_literal_stage, literal_remaining, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_value_options_by_parameter, reset_tool_value = advance_tool_literal_stage(
             tool_literal_stage, literal_emitted, tool_required_parameters, tool_optional_parameters, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_finite_value_options, tool_value_options_by_parameter)
+          literal_token_corridor = build_literal_token_corridor(tok, literal_remaining, constrained_token_options_enabled)
           tool_value_text = "" if reset_tool_value
         end
       end
@@ -1029,6 +1124,7 @@ if output_ids.empty?
         tool_value_boundary_hits += 1
         tool_literal_stage = next_stage
         literal_remaining = next_literals
+        literal_token_corridor = build_literal_token_corridor(tok, literal_remaining, constrained_token_options_enabled)
         tool_parameter_index = next_parameter_index
         tool_value_text = next_value_text
       end
@@ -1785,7 +1881,37 @@ else
     tstart = Time.instant
     constrained_generated = false
     span_consumed = false
-    if constrained_force_literal_span && !literal_remaining.empty?
+    if constrained_force_literal_span && !literal_token_corridor.empty? && !literal_token_corridor.complete?
+      constrained_stage = tool_literal_stage
+      span_ids, span_pieces, span_corridor, span_remaining = forced_token_option_span(
+        tok, literal_token_corridor, literal_remaining, n_gen - output_ids.size)
+      if span_ids.size >= 1
+        body_inputs = [prev]
+        body_inputs.concat(span_ids[0...-1]) if span_ids.size > 1
+        ML::GGUF::Qwen35CPU.prefill_tokens(w, body_inputs, pos, state)
+        output_ids.concat(span_ids)
+        pos += span_ids.size
+        literal_token_corridor = span_corridor
+        literal_remaining = span_remaining
+        literal_constrained_steps += span_ids.size
+        literal_forced_span_steps += span_ids.size
+        literal_token_option_steps += span_ids.size
+        tool_literal_stage_counts[constrained_stage] += span_ids.size
+        literal_emitted += span_pieces.join
+        if literal_remaining.empty?
+          tool_literal_stage, literal_remaining, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_value_options_by_parameter, reset_tool_value = advance_tool_literal_stage(
+            tool_literal_stage, literal_emitted, tool_required_parameters, tool_optional_parameters, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_finite_value_options, tool_value_options_by_parameter)
+          literal_token_corridor = build_literal_token_corridor(tok, literal_remaining, constrained_token_options_enabled)
+          tool_value_text = "" if reset_tool_value
+        end
+        dt = (Time.instant - tstart).total_seconds
+        if trace_steps
+          STDOUT << "  gen #{g_i + 1}/#{n_gen} pos=#{pos - span_ids.size} token_option_span=#{span_ids.size} took #{dt.round(2)}s\n"
+          STDOUT.flush
+        end
+        span_consumed = true
+      end
+    elsif constrained_force_literal_span && !literal_remaining.empty?
       constrained_stage = tool_literal_stage
       span_ids, span_pieces, span_remaining = forced_literal_span(
         constraint_token_index.not_nil!, literal_remaining, n_gen - output_ids.size)
@@ -1803,6 +1929,7 @@ else
         if literal_remaining.empty? && constrained_tool_call_prefix_enabled
           tool_literal_stage, literal_remaining, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_value_options_by_parameter, reset_tool_value = advance_tool_literal_stage(
             tool_literal_stage, literal_emitted, tool_required_parameters, tool_optional_parameters, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_finite_value_options, tool_value_options_by_parameter)
+          literal_token_corridor = build_literal_token_corridor(tok, literal_remaining, constrained_token_options_enabled)
           tool_value_text = "" if reset_tool_value
         end
         dt = (Time.instant - tstart).total_seconds
@@ -1819,6 +1946,22 @@ else
       next
     elsif literal_remaining.empty?
       top, top_logit = ML::GGUF::Qwen35CPU.forward_top1(w, prev, pos, state)
+    elsif !literal_token_corridor.empty? && !literal_token_corridor.complete?
+      constrained_stage = tool_literal_stage
+      top, top_logit, literal_token_corridor, literal_remaining, emitted_piece, forced_single = advance_next_maybe_token_option_constrained(
+        w, tok, prev, pos, state, literal_token_corridor, literal_remaining)
+      constrained_generated = true
+      literal_constrained_steps += 1
+      literal_token_option_steps += 1
+      literal_forced_single_steps += 1 if forced_single
+      tool_literal_stage_counts[constrained_stage] += 1
+      literal_emitted += emitted_piece
+      if literal_remaining.empty?
+        tool_literal_stage, literal_remaining, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_value_options_by_parameter, reset_tool_value = advance_tool_literal_stage(
+          tool_literal_stage, literal_emitted, tool_required_parameters, tool_optional_parameters, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_finite_value_options, tool_value_options_by_parameter)
+        literal_token_corridor = build_literal_token_corridor(tok, literal_remaining, constrained_token_options_enabled)
+        tool_value_text = "" if reset_tool_value
+      end
     else
       constrained_stage = tool_literal_stage
       top, top_logit, literal_remaining, emitted_piece, constrained, forced_single = advance_next_maybe_literal_constrained(
@@ -1832,6 +1975,7 @@ else
         if literal_remaining.empty? && constrained_tool_call_prefix_enabled
           tool_literal_stage, literal_remaining, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_value_options_by_parameter, reset_tool_value = advance_tool_literal_stage(
             tool_literal_stage, literal_emitted, tool_required_parameters, tool_optional_parameters, tool_required_sequence, tool_optional_sequence, tool_parameter_index, tool_finite_value_options, tool_value_options_by_parameter)
+          literal_token_corridor = build_literal_token_corridor(tok, literal_remaining, constrained_token_options_enabled)
           tool_value_text = "" if reset_tool_value
         end
       end
@@ -1847,6 +1991,7 @@ else
         tool_value_boundary_hits += 1
         tool_literal_stage = next_stage
         literal_remaining = next_literals
+        literal_token_corridor = build_literal_token_corridor(tok, literal_remaining, constrained_token_options_enabled)
         tool_parameter_index = next_parameter_index
         tool_value_text = next_value_text
       end
@@ -1861,7 +2006,7 @@ else
     break if top == tok.eos_id
   end
   decode_ms = (Time.instant - decode_t0).total_milliseconds
-  STDOUT << "  greedy summary: wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} literal_constrained_steps=#{literal_constrained_steps}\n"
+  STDOUT << "  greedy summary: wall_ms=#{decode_ms.round(1)} ms_per_tok=#{(decode_ms / output_ids.size).round(2)} literal_constrained_steps=#{literal_constrained_steps} literal_token_option_steps=#{literal_token_option_steps}\n"
 end
 
 {% unless flag?(:cpu_only) %}
@@ -1932,7 +2077,7 @@ if constrained_tool_call_prefix_enabled
   stage_steps = tool_literal_stage_counts.to_a.sort_by { |entry| entry[0] }.map { |stage, count| "#{stage}:#{count}" }.join(",")
   stage_steps = "none" if stage_steps.empty?
   finite_value_params = tool_value_options_by_parameter.size
-  STDOUT << "  tool constraint summary: final_stage=#{tool_literal_stage} stage_steps=#{stage_steps} forced_single_steps=#{literal_forced_single_steps} forced_span_steps=#{literal_forced_span_steps} freeform_value_steps=#{tool_freeform_value_steps} value_boundary_hits=#{tool_value_boundary_hits} finite_value_params=#{finite_value_params}\n"
+  STDOUT << "  tool constraint summary: final_stage=#{tool_literal_stage} stage_steps=#{stage_steps} forced_single_steps=#{literal_forced_single_steps} forced_span_steps=#{literal_forced_span_steps} token_option_steps=#{literal_token_option_steps} freeform_value_steps=#{tool_freeform_value_steps} value_boundary_hits=#{tool_value_boundary_hits} finite_value_params=#{finite_value_params}\n"
 end
 STDOUT << "  request summary: total_ms=#{total_ms.round(1)} model_load_ms=#{model_load_ms.round(1)} draft_load_ms=#{draft_load_ms.round(1)} tokenize_ms=#{tokenize_ms.round(1)} token_cache_hit=#{token_cache_hit} cache_route=#{cache_route} state_prepare_ms=#{state_prepare_ms.round(1)} source_history_lookup_ms=#{source_history_lookup_ms.round(1)} cache_restore_ms=#{cache_restore_ms.round(1)} prefill_ms=#{prefill_ms.round(1)} decode_ms=#{decode_ms.round(1)} source_history_save_ms=#{source_history_save_ms.round(1)} prompt_tokens=#{ids.size} output_tokens=#{output_ids.size}\n"
 

@@ -25793,3 +25793,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary exact branch-and-bound screening with unchanged model state and output semantics.
 
 **decision:** Retain the exact CPU falsifier and do not implement the tested two-pass Metal output head. Reopen only with a materially tighter certificate or a different product boundary that can statically exceed the `3%` whole-decode gate.
+
+#### [LM-QWEN38-TOKEN-OPTION-CORRIDOR-981] Canonical finite-option corridors remove most structured-decode head work
+**context:** ml / Qwen3.8-27B / constrained tool calls / tokenizer / deterministic spans / decode wall
+**state:** verified and default-on inside opt-in constrained tool-call decoding
+
+- claim: "Canonical token-option corridors preserve the measured structured-output boundary while replacing dynamic BPE frontiers only on finite grammar stages."
+  source: `Qwen35Constraints.token_option_corridor` requires non-empty, prefix-free token options and byte-exact decode of every canonical encoding. The Qwen controller advances token and byte corridors together and raises on any completion mismatch; `QWEN35_CONSTRAINED_TOKEN_OPTIONS_OFF=1` restores the prior byte-frontier route. Focused Qwen/Gemma specs passed `30 examples, 0 failures`; no-codegen, format, shell syntax, and diff checks passed. A fresh release binary then completed eight balanced ABBA pairs across finite enum/boolean, free-form required values, optional parameters, and multiple functions. Every candidate/baseline pair emitted identical token IDs and the expected typed parsed tool call.
+  verified_at: 2026-08-31
+  decay_trigger: Qwen tokenizer encoding, tool grammar literals/stages, corridor invariants, constrained controller, output-head route, model, or schema corpus changes
+  trust: {F:0.98,G:0.10,R:0.94}
+
+- claim: "The bounded four-schema corpus improves structured decode wall by about one quarter on Qwen3.8-27B Q4_K_M on Apple M2 Max."
+  source: guarded fresh-process ABBA at `/private/tmp/qwen35_span_suite_token_options_final_20260831_39235` used source-input SHA256 `583ca678329fa6a76076168bd2a6cff3deed1392a5ef660a2f556cad6072e4cc`, binary SHA256 `7a453b25edb467a214a449fa7b045b39fbffbf5da7a0c425fae9f33da0f53256`, two repetitions with reversed order, a 24 GiB process-tree cap, and a 35% free-memory floor. Mean paired decode speedup was `25.047%`, range `15.017..32.103%`; mean full-request speedup including unchanged prefill was `8.320%`, range `4.871..12.008%`. The candidate covered `26..39` token-option steps per call, versus zero on rollback.
+  verified_at: 2026-08-31
+  decay_trigger: model/device/compiler, prompt or schema corpus, prefill/decode mix, constrained batching, host load, or timing boundary changes
+  trust: {F:0.97,G:0.08,R:0.91}
+
+**Adversary:** Canonical isolated-literal tokenization is safe here only because each finite option decodes byte-exactly, token options are prefix-free, and the runtime cross-checks the byte corridor after every chosen token. Prefix-ambiguous or unavailable tokenizations fall back to the old byte frontier. The corpus has four small schemas on one model/device and does not certify unconstrained text, arbitrary templates, or a universal 25% request-speed gain. Free-form values remain model-decoded.
+
+**Value proxy:** Forced-token count and eliminated output-head evaluations are mechanism coordinates. Exact token/typed-call parity plus paired whole-decode wall is the value boundary; both held in every measured pair.
+
+**LTP/WBA:** Not claimed. This is ordinary grammar-certified batching and allowed-head elimination inside finite structured stages.
+
+**decision:** Keep token-option corridors default-on only when `QWEN35_CONSTRAINED_TOOL_CALL_PREFIX=1`; preserve byte-frontier rollback through `QWEN35_CONSTRAINED_TOKEN_OPTIONS_OFF=1`. Widen only after CrystalBall task-level evidence or a larger exact structured-schema corpus.

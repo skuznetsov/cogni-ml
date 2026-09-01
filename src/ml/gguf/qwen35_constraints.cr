@@ -1,5 +1,6 @@
 require "json"
 require "./qwen35_tokenizer"
+require "./token_option_corridor"
 
 module ML::GGUF
   # Tokenizer-aware frontiers for exact constrained decode.
@@ -9,6 +10,8 @@ module ML::GGUF
   # tool/function names, then fall back to unconstrained decode for free-form
   # string/value spans.
   module Qwen35Constraints
+    alias TokenOptionCorridor = ML::GGUF::TokenOptionCorridor
+
     MAX_ENUMERATED_INTEGER_VALUES = 256
 
     class LiteralFrontierError < Exception
@@ -105,6 +108,46 @@ module ML::GGUF
           "incomplete literal corridor has no tokenizer frontier (options=#{remaining_literals.size})")
       end
       allowed
+    end
+
+    # Canonically tokenize complete finite options once. The byte-exact decode
+    # check prevents a tokenizer implementation or metadata mismatch from
+    # turning an acceleration hint into a different grammar.
+    def self.token_option_corridor(tokenizer : Qwen35Tokenizer,
+                                   literals : Array(String)) : TokenOptionCorridor
+      return TokenOptionCorridor.from_options([] of Array(Int32)) if literals.empty?
+
+      options = literals.map do |literal|
+        ids = tokenizer.encode(literal, add_bos_override: false)
+        if ids.empty? || tokenizer.decode(ids) != literal
+          raise LiteralFrontierError.new("literal tokenization is not byte-exact")
+        end
+        ids
+      end
+      required_token_option_corridor(options)
+    rescue ex : LiteralFrontierError
+      raise ex
+    rescue ex
+      raise LiteralFrontierError.new("literal token-option corridor unavailable: #{ex.message}")
+    end
+
+    # Qwen's accelerated grammar cannot represent "stop or continue" at one
+    # token frontier, so admitted finite stages must contain no empty option and
+    # no option that is a token-prefix of another.
+    def self.required_token_option_corridor(options : Array(Array(Int32))) : TokenOptionCorridor
+      normalized = options.map(&.dup).uniq
+      if normalized.any?(&.empty?)
+        raise ArgumentError.new("token-option corridor options must be non-empty")
+      end
+      normalized.each_with_index do |prefix, prefix_index|
+        normalized.each_with_index do |option, option_index|
+          next if prefix_index == option_index || prefix.size > option.size
+          if option[0, prefix.size] == prefix
+            raise ArgumentError.new("token-option corridor options must be prefix-free")
+          end
+        end
+      end
+      TokenOptionCorridor.from_options(normalized)
     end
 
     # Preserve the source label for each finite literal while a constrained
