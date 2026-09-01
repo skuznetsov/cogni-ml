@@ -26189,3 +26189,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary exact-layout kernel specialization with explicit T8-off rollback.
 
 **decision:** Promote the near-8.3K Apple M2 Max adaptive-decode signal from provisional single-prompt evidence to a replicated bounded `4.9--5.4%` full-token gain on the second prompt shape. Keep the existing exact-device/tier gates and rollback; do not infer short-context, cross-device, sampled-quality, or universal tokens-per-second gains.
+
+#### [LM-QWEN38-PREFILL-ATTENTION-ROWS-CEILING-999] Truthful phase attribution rejects an immediate attention-row flash-MMA rewrite
+**context:** ml / Qwen3.8-27B / Metal / 1,024-token prefill / phase profiling
+**state:** profiler repaired and bounded body-only row ceiling verified; attention-row flash-MMA implementation rejected at this frontier
+
+- claim: "Ordinary full-attention KV writes and attention rows now have distinct detailed-profile intervals, and the atlas consumes the current profile format."
+  source: the detailed ordinary full-prefill route checkpoints KV writes before encoding attention. The atlas accepts the profiler's upload/readback suffix, sums top-level counters across multiple input logs, and aggregates per-layer labels into phase totals. A fresh release build passed; parsing the guarded warm Qwen3.8 log recovered all `441` synchronization points and `7,157.61 ms` of grouped waits instead of the historical false zero. These extra command boundaries exist only under `QWEN35_PREFILL_FULL_DETAIL_PROFILE=1`; the production route is unchanged. Adaptive appended prefill is not covered because detailed profiling is disabled for appended commands under the current ownership contract.
+  verified_at: 2026-09-01
+  decay_trigger: detailed-profile checkpoint placement, profile text format, atlas grouping rules, prefill command topology, or model/compiler/runtime changes
+  trust: {F:0.98,G:0.12,R:0.95}
+
+- claim: "A standalone llama.cpp-style flash-MMA attention-row rewrite does not have enough measured body-only ceiling to be the next KISS optimization."
+  source: two guarded Qwen3.8-27B Q4_K_M runs at 1,024 prompt tokens split the 15 ordinary full-attention layers into `290.83/327.32 ms` of attention rows and `4.65/6.55 ms` of KV writes. Against the corresponding ordinary body-only walls of `6,884.80/7,005.64 ms`, perfect elimination of attention rows would save only `4.22--4.67%`; reaching a `3%` body-only gain therefore requires roughly a `2.8--3.5x` local row-kernel speedup before accounting for the new kernel's reduction, occupancy, and numerical costs. The warm phase atlas instead assigns `30.6%` to recurrent FFN up/gate, `16.7%` to recurrent FFN down, and `16.1%` to recurrent projections.
+  verified_at: 2026-09-01
+  decay_trigger: prompt length, attention implementation, layer mix, model shape, phase instrumentation, device/compiler/runtime, or whole-prefill gate changes
+  trust: {F:0.97,G:0.05,R:0.91}
+
+**Adversary:** Detailed checkpoints serialize phases and can perturb scheduling, so their sum is an attribution instrument rather than production latency. The conclusion is limited to the current attention-row kernel inside body-only prefill. It does not bound a wider fusion with output projection, cover adaptive prefill, or claim that flash-MMA can never win at longer context, on another device, or after a lower-risk prototype demonstrates a much larger local gain.
+
+**Value proxy:** SIMD-group MMA and fewer scalar dot instructions are mechanism coordinates. Whole-prefill wall, numerical parity, and the predeclared materiality threshold remain the product boundary.
+
+**LTP/WBA:** Not claimed. This is ordinary diagnostic attribution and candidate rejection.
+
+**decision:** Keep the repaired opt-in profiler and atlas aggregation. Do not begin the large standalone attention-row flash-MMA port at the 1,024-token frontier. Reopen when a longer-context row ceiling or a small attention-plus-projection prototype makes a `>=3%` body-only win credible; continue from the measured recurrent FFN/projection frontier without retrying already-refuted conversion-only, metadata-broadcast, row-blocking, or barrier-elision variants.

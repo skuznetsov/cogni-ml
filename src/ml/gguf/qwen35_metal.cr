@@ -8225,6 +8225,11 @@ module ML
             kvwrite_enc.set_value(n_tokens.to_u32, 6)
             kvwrite_enc.dispatch_1d(n_tokens * kv_dim, 256)
             kvwrite_enc.end_encoding
+            if full_detail_profile
+              checked = prefill_phase_checkpoint(cmd, "#{profile_label}.full.kvwrite", phase_t0)
+              cmd = checked[0]
+              phase_t0 = checked[1]
+            end
 
             attn_enc = ML::Metal::ComputeEncoder.new(cmd)
             use_attn_sg4 = prefill_attn_rows_sg4_enabled? && n_tokens >= 4
@@ -8249,16 +8254,11 @@ module ML
               attn_enc.dispatch_threadgroups({n_head, n_tokens, 1}, {32, 1, 1})
             end
             attn_enc.end_encoding
-          end
-          if full_detail_profile
-            checked = prefill_phase_checkpoint(cmd, "#{profile_label}.full.kvwrite", phase_t0)
-            cmd = checked[0]
-            phase_t0 = checked[1]
-          end
-          if full_detail_profile
-            checked = prefill_phase_checkpoint(cmd, "#{profile_label}.full.attn_rows", phase_t0)
-            cmd = checked[0]
-            phase_t0 = checked[1]
+            if full_detail_profile
+              checked = prefill_phase_checkpoint(cmd, "#{profile_label}.full.attn_rows", phase_t0)
+              cmd = checked[0]
+              phase_t0 = checked[1]
+            end
           end
 
           Profile.trace("prefill.full.o_proj") do

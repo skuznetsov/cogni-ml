@@ -20,12 +20,30 @@ class ProfileAtlas
   getter traces = [] of TraceRow
 
   def add_counter(kind : String, row : CounterRow)
+    current = case kind
+              when "gemv" then @gemv
+              when "gemm" then @gemm
+              when "dn"   then @dn
+              when "attn" then @attn
+              when "wave" then @wave
+              end
+    merged = if current
+               CounterRow.new(
+                 row.name,
+                 current.calls + row.calls,
+                 current.encode_ms + row.encode_ms,
+                 current.wait_ms + row.wait_ms,
+                 current.read_ms + row.read_ms,
+               )
+             else
+               row
+             end
     case kind
-    when "gemv" then @gemv = row
-    when "gemm" then @gemm = row
-    when "dn"   then @dn = row
-    when "attn" then @attn = row
-    when "wave" then @wave = row
+    when "gemv" then @gemv = merged
+    when "gemm" then @gemm = merged
+    when "dn"   then @dn = merged
+    when "attn" then @attn = merged
+    when "wave" then @wave = merged
     end
   end
 
@@ -59,6 +77,42 @@ def median(xs : Array(Float64)) : Float64
     sorted[mid]
   else
     (sorted[mid - 1] + sorted[mid]) / 2.0
+  end
+end
+
+def phase_group_name(name : String) : String
+  if match = /\.full\.([a-z0-9_]+)\z/.match(name)
+    "full.#{match[1]}"
+  elsif match = /\.rec\d+\.([a-z0-9_]+)\z/.match(name)
+    "rec.#{match[1]}"
+  else
+    name
+  end
+end
+
+def phase_groups(rows : Array(CounterRow)) : Array(CounterRow)
+  rows.group_by { |row| phase_group_name(row.name) }.map do |name, phase_rows|
+    CounterRow.new(
+      name,
+      phase_rows.sum(&.calls),
+      phase_rows.sum(&.encode_ms),
+      phase_rows.sum(&.wait_ms),
+      phase_rows.sum(&.read_ms),
+    )
+  end
+end
+
+def traffic_groups(rows : Array(TrafficRow)) : Array(TrafficRow)
+  total_mib = rows.sum(&.mib)
+  rows.group_by(&.name).map do |name, traffic_rows|
+    mib = traffic_rows.sum(&.mib)
+    TrafficRow.new(
+      name,
+      traffic_rows.sum(&.calls),
+      mib,
+      total_mib > 0 ? mib * 100.0 / total_mib : 0.0,
+      traffic_rows.first.kind,
+    )
   end
 end
 
@@ -106,13 +160,13 @@ text.each_line do |line|
   when /logical traffic mix:/
     section = nil
   when /cpu_fallback matvecs:\s+(\d+)/
-    atlas.cpu_fallback = $1.to_i
+    atlas.cpu_fallback += $1.to_i
   when /total metal syncs:\s+(\d+)/
-    atlas.total_syncs = $1.to_i
+    atlas.total_syncs += $1.to_i
   else
     case section
     when :groups
-      if line =~ /^\s{4}(.+?)\s+(\d+) calls\s+encode\s+([0-9.]+) ms\s+wait\s+([0-9.]+) ms\s+read\s+([0-9.]+) ms\s*$/
+      if line =~ /^\s{4}(.+?)\s+(\d+) calls\s+encode\s+([0-9.]+) ms\s+wait\s+([0-9.]+) ms\s+read\s+([0-9.]+) ms(?:\s+upload\s+[0-9.]+ MiB\s+readback\s+[0-9.]+ MiB)?\s*$/
         atlas.groups << CounterRow.new($1.strip, $2.to_i, $3.to_f, $4.to_f, $5.to_f)
       end
     when :matmuls
@@ -131,14 +185,17 @@ text.each_line do |line|
   end
 end
 
+matmul_rows = traffic_groups(atlas.matmuls)
+conversion_rows = traffic_groups(atlas.conversions)
+
 if show_tsv
   puts "kind\tname\tcalls\tms_or_mib\tpct"
   [atlas.gemv, atlas.gemm, atlas.dn, atlas.attn, atlas.wave].compact.each do |row|
     puts ["wait", row.name, row.calls, row.wait_ms, ""].join('\t')
   end
   atlas.groups.each { |row| puts ["group", row.name, row.calls, row.wait_ms, ""].join('\t') }
-  atlas.matmuls.each { |row| puts ["matmul", row.name, row.calls, row.mib, row.pct].join('\t') }
-  atlas.conversions.each { |row| puts ["conversion", row.name, row.calls, row.mib, row.pct].join('\t') }
+  matmul_rows.each { |row| puts ["matmul", row.name, row.calls, row.mib, row.pct].join('\t') }
+  conversion_rows.each { |row| puts ["conversion", row.name, row.calls, row.mib, row.pct].join('\t') }
   exit
 end
 
@@ -156,6 +213,13 @@ end
 unless atlas.groups.empty?
   waits = atlas.groups.map(&.wait_ms).sort
   group_median = median(waits)
+  puts "\nGrouped phase aggregates"
+  phase_groups(atlas.groups).sort_by { |row| {-row.wait_ms, row.name} }.first(top_n).each do |row|
+    pct_group = atlas.grouped_wait_ms > 0 ? row.wait_ms * 100.0 / atlas.grouped_wait_ms : 0.0
+    printf "  %-24s %3d calls wait=%8.2f ms pct_group=%5.1f%%\n",
+      row.name, row.calls, row.wait_ms, pct_group
+  end
+
   puts "\nGrouped command-buffer waits"
   atlas.groups.sort_by { |row| {-row.wait_ms, row.name} }.first(top_n).each do |row|
     ratio = group_median > 0 ? row.wait_ms / group_median : 0.0
@@ -167,14 +231,14 @@ end
 
 unless atlas.matmuls.empty?
   puts "\nTop logical matmul traffic"
-  atlas.matmuls.sort_by { |row| {-row.mib, row.name} }.first(top_n).each do |row|
+  matmul_rows.sort_by { |row| {-row.mib, row.name} }.first(top_n).each do |row|
     printf "  %-54s %3d calls %9.2f MiB %5.1f%%\n", row.name, row.calls, row.mib, row.pct
   end
 end
 
 unless atlas.conversions.empty?
   puts "\nTop conversion traffic"
-  atlas.conversions.sort_by { |row| {-row.mib, row.name} }.first(top_n).each do |row|
+  conversion_rows.sort_by { |row| {-row.mib, row.name} }.first(top_n).each do |row|
     pct_total = atlas.total_logical_mib > 0 ? row.mib * 100.0 / atlas.total_logical_mib : 0.0
     printf "  %-54s %3d calls %9.2f MiB %5.1f%% of conversions %5.1f%% total\n",
       row.name, row.calls, row.mib, row.pct, pct_total
@@ -191,7 +255,7 @@ if atlas.total_conversion_mib > 0 && atlas.total_logical_mib > 0
     puts "  Ladder: conversion traffic is material (#{conversion_pct.round(1)}%). Window=F32/F16 staging; corridor=activation batch span; potential=(conversion_mib,conversion_calls,syncs,wall). Legal move=fuse conversion into producer/consumer or keep native staged type without changing exact math."
   end
 end
-if top = atlas.matmuls.sort_by { |row| {-row.mib, row.name} }.first?
+if top = matmul_rows.sort_by { |row| {-row.mib, row.name} }.first?
   puts "  Ladder: dominant matmul scope '#{top.name}' carries #{top.mib.round(2)} MiB. Window=top logical-weight reader; corridor=layer/batch band; potential=(logical_weight_mib,calls,barriers). Legal move=prepack/fuse/re-route only if profile wall and parity improve."
 end
 unless atlas.groups.empty?
