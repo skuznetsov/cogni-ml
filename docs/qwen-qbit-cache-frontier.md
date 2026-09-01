@@ -3349,12 +3349,46 @@ about 994.6 MiB of logical row traffic per unconstrained token at
 forced spans additionally batch exact body state updates and remove
 intermediate head/synchronization boundaries.
 
-This is a scoped product-path certificate, not a general Qwen3.8 decode claim.
-The host was deliberately not quiet-gated, the corpus contains one finite tool
-schema, only 12/39 tokens used forced spans, and one pair improved by less than
-the `3%` target. The feature therefore remains default-on only inside the
-experimental constrained structured mode, with the existing kill switch. A
-broader promotion still requires multi-schema ABBA and exact token/JSON parity.
+The reusable suite was then hardened to create its log directory, use this
+repository's guarded runner, alternate pair order by repetition, and fail
+closed unless candidate and rollback have identical token IDs and canonical
+parsed JSON. It additionally compares each parsed call with the exact expected
+function and arguments, requires positive forced-span coverage in the candidate
+and zero coverage under the kill switch, and rejects unbalanced repetition
+counts. It now rebuilds by default, fingerprints the content of the Crystal
+compiler inputs and Metal bridge, records the source revision and binary digest,
+and runs both candidates from a minimal allowlist environment. Explicit
+`REBUILD=0` reuse is labelled `prebuilt-explicit`, rather than presented as a
+fresh-build certificate. Synthetic token mismatch, malformed JSON,
+valid-but-wrong tool-call, and inherited-env checks were all rejected or
+isolated before the model gate.
+
+The balanced Qwen3.8 gate covered four schema configurations: required enum and
+boolean fields, a required open string plus bounded integer, an optional-field
+variant, and a two-tool choice. The required and optional read schemas selected
+the same output trace, so this is four grammar configurations but only three
+distinct emitted tool-call traces. All eight fresh-process pairs preserved
+exact token IDs and parsed JSON. Decode speedups were `3.02%..4.22%`, mean
+`3.90%` in the preliminary gate. The final fresh-build/minimal-environment run
+measured `3.780%..4.306%`, mean `4.023%`; fresh-process request speedups,
+including unchanged prefill and model setup, were `0.917%..2.038%`, mean
+`1.407%`. It used source revision
+`c454977658518c419d1d21e6ffd0e5f988efbad8`, source-input SHA-256
+`8c9c97fef37119d90cf6fb79357b1c8d8fc70cf647815911b28cf141baa56983`,
+and freshly built binary SHA-256
+`18a517e522e6bcf84714c6733aacf6ff48d9bf268099225823ff568f7667d706`.
+All runs exited zero under the 24 GiB
+process-tree cap and 35% free-memory floor; the host was deliberately not
+quiet-gated.
+
+This closes the requested multi-schema ABBA gate, but remains a scoped
+structured-decode certificate rather than a general Qwen3.8 inference claim.
+Only 8 or 12 output tokens were transported through forced spans, the corpus is
+small, and the total-request gain is materially lower than the decode-only
+gain. The feature therefore remains default-on only inside the experimental
+constrained structured mode, with the existing kill switch. The next widening
+gate is a real CrystalBall tool task or an exact extension that increases
+deterministic-span coverage without crossing a free-form or choice boundary.
 
 ### Rejected ordinary-F32 GQA6 split-K sharing (2026-08-31)
 
