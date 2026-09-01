@@ -26075,3 +26075,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary command encoding with an exact historical rollback.
 
 **decision:** Keep the two-encoder path. Reopen only if profiling first proves command encoding is material or a single fused K/V pack kernel removes real GPU work as well as host setup.
+
+#### [LM-QWEN38-ADAPTIVE-VECTOR-TG-STORE-FALSIFIED-993] Explicit vector threadgroup stores do not accelerate T8 decode
+**context:** ml / Qwen3.8-27B / adaptive QBit KV / Metal / split-K / threadgroup stores
+**state:** candidate rejected and removed; scalar-source store form retained
+
+- claim: "Replacing four scalar threadgroup writes with one explicit `float4` store does not improve the complete adaptive split-K command on the measured M2 Max corridor."
+  source: a temporary compile-time variant changed only the T8 loader's threadgroup write form and was exercised after both pipelines were prewarmed. Ten same-process alternating pairs at prefix 8,320 used fresh restored cache state per sample. P4 wall regressed `1.624 -> 1.645 ms` (`-1.302%`, `2/10` wins) and GPU regressed `1.030 -> 1.041 ms` (`-1.096%`, `5/10`). BF16 wall changed `1.969 -> 1.955 ms` (`+0.752%`, `4/10`) while GPU regressed `1.315 -> 1.317 ms` (`-0.165%`, `4/10`). Both missed the declared `>=3%` and `>=8/10` wall-and-GPU gate under the 35% free-memory floor and 4 GiB process-tree cap.
+  verified_at: 2026-09-01
+  decay_trigger: Metal compiler vectorization, T8 loader/store form, threadgroup layout, model/device/runtime, or timing harness changes
+  trust: {F:0.97,G:0.03,R:0.92}
+
+**Adversary:** Source-level vector width is not an instruction-count certificate: the compiler may already coalesce the scalar form, while an explicit vector pointer can constrain scheduling or introduce a less favorable store sequence. The performance gate failed before a numerical-promotion suite was needed.
+
+**Value proxy:** Fewer written source statements are a mechanism coordinate. Paired complete-command wall/GPU time and stable wins are the admission boundary; both tiers failed.
+
+**LTP/WBA:** Not claimed. This was an ordinary exact-address store-shape experiment.
+
+**decision:** Retain the existing scalar-source T8 stores. Do not retry explicit `float4` threadgroup stores without compiler-level evidence of a changed instruction schedule; move the search to work or bytes that survive compiler optimization.

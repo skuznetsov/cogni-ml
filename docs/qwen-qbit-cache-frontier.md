@@ -3818,3 +3818,24 @@ or failure leaves canonical recurrent and KV state unchanged.
 
 **LTP/WBA:** not claimed. This was ordinary command-buffer fusion with an exact
 separate-command comparison.
+
+### Explicit vector threadgroup stores are not a speed path
+
+A temporary compile-time split-K variant replaced each four scalar threadgroup
+writes in the T8 loader with one explicit `float4` store. Both pipelines were
+prewarmed, every sample restored the same cache prefix, and ten pairs alternated
+order in one process at prefix 8,320.
+
+P4 regressed from `1.624` to `1.645 ms` wall (`-1.302%`, `2/10` wins) and
+from `1.030` to `1.041 ms` GPU (`-1.096%`, `5/10`). BF16 changed from
+`1.969` to `1.955 ms` wall (`+0.752%`, `4/10`) while GPU regressed from
+`1.315` to `1.317 ms` (`-0.165%`, `4/10`). Both missed the unchanged
+`>=3%`, `>=8/10` wall-and-GPU gate under the 35% free-memory floor and 4 GiB
+tree cap. The candidate was removed.
+
+The source spelling of a vector write is not evidence of fewer generated
+instructions. The Metal compiler may already coalesce the scalar form, and the
+explicit pointer cast can instead constrain scheduling. Keep the existing
+scalar-source T8 stores and require compiler-level evidence before revisiting
+this store-shape experiment. The next candidate must remove work or bytes that
+remain visible after compiler optimization.
