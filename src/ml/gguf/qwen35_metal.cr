@@ -3189,6 +3189,17 @@ module ML
           read_shared_top1(id_buf, value_buf)
         end
 
+        def self.read_head_top1_rows_buffers(id_buf : ML::MetalBuffer,
+                                             value_buf : ML::MetalBuffer,
+                                             rows : Int32) : Array({Int32, Float32})
+          raise ArgumentError.new("top-1 row count must be positive") unless rows > 0
+          required_ids = rows.to_i64 * sizeof(UInt32)
+          required_values = rows.to_i64 * sizeof(Float32)
+          raise ArgumentError.new("top-1 row id buffer is too small") if id_buf.size < required_ids
+          raise ArgumentError.new("top-1 row value buffer is too small") if value_buf.size < required_values
+          read_shared_top1_rows(id_buf, value_buf, rows)
+        end
+
         def self.read_head_top2_buffers(id_buf : ML::MetalBuffer,
                                         value_buf : ML::MetalBuffer,
                                         second_id_buf : ML::MetalBuffer,
@@ -8891,6 +8902,87 @@ module ML
           head_top1_enc.end_encoding
           Profile.bump_route_marker(profile_label) if encoded
           encoded
+        end
+
+        # Encode every resident hidden row through output RMSNorm and the
+        # batched Q6_K top-1 head into a caller-owned command buffer. The
+        # caller must keep the input, output, command, and scratch arena alive
+        # through completion. `true` means encoded, not completed; the caller
+        # owns commit, wait, result visibility, and arena release.
+        def self.encode_rmsnorm_project_top1_rows_buffer(command : ML::Metal::CommandBuffer,
+                                                         scratch_arena : Scratch::Arena,
+                                                         x_buf : ML::MetalBuffer,
+                                                         rows : Int32,
+                                                         norm_weight : Array(Float32),
+                                                         out_qw : QuantWeight,
+                                                         eps : Float32,
+                                                         top1_id_buf : ML::MetalBuffer,
+                                                         top1_value_buf : ML::MetalBuffer,
+                                                         profile_label : String = "head_top1_rows_resident_append") : Bool
+          return false if command.committed?
+          return false unless head_top1_fused_enabled?
+          return false unless out_qw.type.q6_k?
+          return false unless out_qw.in_dim > 0
+          return false unless out_qw.in_dim % QK_K == 0
+          return false unless out_qw.out_dim > 0
+          return false unless rows > 0
+
+          hidden_dim = out_qw.in_dim
+          return false unless norm_weight.size == hidden_dim
+          expected_weight_bytes = out_qw.out_dim.to_i64 * (hidden_dim // QK_K).to_i64 * out_qw.type.block_bytes.to_i64
+          return false unless out_qw.raw.size.to_i64 == expected_weight_bytes
+          hidden_elements = rows.to_i64 * hidden_dim.to_i64
+          return false if hidden_elements > Int64::MAX // sizeof(Float32)
+          hidden_bytes = hidden_elements * sizeof(Float32)
+          row_bytes = rows.to_i64 * sizeof(Float32)
+          return false if x_buf.size < hidden_bytes
+          return false if top1_id_buf.size < row_bytes
+          return false if top1_value_buf.size < row_bytes
+
+          ML::Metal::Device.init!
+          scratch_arena.with do
+            tile_count_i64 = (out_qw.out_dim.to_i64 + HEAD_TOP1_ROWS_PER_TG - 1) // HEAD_TOP1_ROWS_PER_TG
+            return false if tile_count_i64 > Int32::MAX
+            tile_count = tile_count_i64.to_i32
+            tile_slots = rows.to_i64 * tile_count.to_i64
+            return false if tile_slots > Int64::MAX // sizeof(Float32)
+            norm_w_buf = Scratch.get(:head_top1_rows_append_norm_w, norm_weight.size.to_i64 * sizeof(Float32))
+            normed_buf = Scratch.get(:head_top1_rows_append_normed, hidden_bytes)
+            tile_values_buf = Scratch.get(:head_top1_rows_append_tile_values, tile_slots * sizeof(Float32))
+            tile_ids_buf = Scratch.get(:head_top1_rows_append_tile_ids, tile_slots * sizeof(UInt32))
+            norm_w_buf.write(norm_weight)
+
+            out_w_buf, out_w_off = weight_slot(out_qw)
+
+            norm_enc = ML::Metal::ComputeEncoder.new(command)
+            encode_rmsnorm_rows(norm_enc, x_buf, norm_w_buf, normed_buf, hidden_dim, rows, eps)
+            norm_enc.end_encoding
+
+            head_top1_enc = ML::Metal::ComputeEncoder.new(command)
+            head_top1_enc.set_pipeline(mv6_top1_tiles_batch_pipeline)
+            head_top1_enc.set_buffer(out_w_buf, 0, ML::Metal::BufferAccess::Read, offset: out_w_off)
+            head_top1_enc.set_buffer(normed_buf, 1)
+            head_top1_enc.set_buffer(tile_values_buf, 2, ML::Metal::BufferAccess::Write)
+            head_top1_enc.set_buffer(tile_ids_buf, 3, ML::Metal::BufferAccess::Write)
+            head_top1_enc.set_value(hidden_dim.to_u32, 4)
+            head_top1_enc.set_value(out_qw.out_dim.to_u32, 5)
+            head_top1_enc.set_value(tile_count.to_u32, 6)
+            head_top1_enc.dispatch_threadgroups({tile_count, rows, 1}, {64, 1, 1})
+            head_top1_enc.end_encoding
+
+            reduce_top1_enc = ML::Metal::ComputeEncoder.new(command)
+            reduce_top1_enc.set_pipeline(top1_reduce_tiles_batch_pipeline)
+            reduce_top1_enc.set_buffer(tile_values_buf, 0)
+            reduce_top1_enc.set_buffer(tile_ids_buf, 1)
+            reduce_top1_enc.set_buffer(top1_id_buf, 2, ML::Metal::BufferAccess::Write)
+            reduce_top1_enc.set_buffer(top1_value_buf, 3, ML::Metal::BufferAccess::Write)
+            reduce_top1_enc.set_value(tile_count.to_u32, 4)
+            reduce_top1_enc.dispatch_threadgroups({rows, 1, 1}, {256, 1, 1})
+            reduce_top1_enc.end_encoding
+
+            Profile.bump_route_marker(profile_label)
+            true
+          end
         end
 
         # Encode one resident hidden row through output RMSNorm and the

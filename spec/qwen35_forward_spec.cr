@@ -35,6 +35,18 @@ ensure
   end
 end
 
+private def with_qwen35_head_top1_fused(&)
+  old = ENV["QWEN35_HEAD_TOP1_FUSED"]?
+  ENV["QWEN35_HEAD_TOP1_FUSED"] = "1"
+  yield
+ensure
+  if old
+    ENV["QWEN35_HEAD_TOP1_FUSED"] = old
+  else
+    ENV.delete("QWEN35_HEAD_TOP1_FUSED")
+  end
+end
+
 describe ML::GGUF::Qwen35Metal, "route policies" do
   it "bounds automatic B64 tail fusion padding on M2 Max" do
     metal = ML::GGUF::Qwen35Metal
@@ -360,6 +372,178 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
       w.output_norm, w.output, w.hparams.rms_eps,
       top1_id, top1_value,
     ).should be_false
+  end
+
+  it "appends resident top-1 rows without opening a second command" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    with_qwen35_head_top1_fused do
+      w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
+      hidden_dim = w.hparams.n_embd
+      rows = 3
+      hidden = Array(Float32).new(rows * hidden_dim) do |i|
+        ((i % 29) - 14).to_f32 / 29.0_f32
+      end
+      resident = ML::MetalBuffer.new(hidden.size.to_i64 * sizeof(Float32))
+      resident.write(hidden)
+      expected = ML::GGUF::Qwen35Metal.rmsnorm_project_top1_rows_buffer(
+        resident, rows, w.output_norm, w.output, w.hparams.rms_eps,
+      ).not_nil!
+      top1_ids = ML::MetalBuffer.new(rows.to_i64 * sizeof(UInt32))
+      top1_values = ML::MetalBuffer.new(rows.to_i64 * sizeof(Float32))
+      arena = ML::GGUF::Qwen35Metal::Scratch::Arena.new("row_head_direct_spec")
+
+      cmd = ML::Metal::CommandBuffer.new
+      ML::GGUF::Qwen35Metal.encode_rmsnorm_project_top1_rows_buffer(
+        cmd, arena, resident, rows,
+        w.output_norm, w.output, w.hparams.rms_eps,
+        top1_ids, top1_values,
+      ).should be_true
+      cmd.committed?.should be_false
+
+      cmd.commit
+      cmd.wait
+      actual = ML::GGUF::Qwen35Metal.read_head_top1_rows_buffers(
+        top1_ids, top1_values, rows,
+      )
+      actual.map(&.[0]).should eq(expected.map(&.[0]))
+      actual.each_with_index do |(_, value), i|
+        value.should be_close(expected[i][1], 1.0e-6_f32)
+      end
+
+      completed = ML::Metal::CommandBuffer.new
+      completed.commit
+      completed.wait
+      ML::GGUF::Qwen35Metal.encode_rmsnorm_project_top1_rows_buffer(
+        completed, arena, resident, rows,
+        w.output_norm, w.output, w.hparams.rms_eps,
+        top1_ids, top1_values,
+      ).should be_false
+      undersized_ids = ML::MetalBuffer.new((rows - 1).to_i64 * sizeof(UInt32))
+      fresh = ML::Metal::CommandBuffer.new
+      ML::GGUF::Qwen35Metal.encode_rmsnorm_project_top1_rows_buffer(
+        fresh, arena, resident, rows,
+        w.output_norm, w.output, w.hparams.rms_eps,
+        undersized_ids, top1_values,
+      ).should be_false
+      fresh.committed?.should be_false
+
+      scratch_count = arena.buffers.size
+      ENV["QWEN35_HEAD_TOP1_FUSED"] = "0"
+      disabled = ML::Metal::CommandBuffer.new
+      ML::GGUF::Qwen35Metal.encode_rmsnorm_project_top1_rows_buffer(
+        disabled, arena, resident, rows,
+        w.output_norm, w.output, w.hparams.rms_eps,
+        top1_ids, top1_values,
+      ).should be_false
+      ENV["QWEN35_HEAD_TOP1_FUSED"] = "1"
+      invalid_rows = ML::Metal::CommandBuffer.new
+      ML::GGUF::Qwen35Metal.encode_rmsnorm_project_top1_rows_buffer(
+        invalid_rows, arena, resident, 0,
+        w.output_norm, w.output, w.hparams.rms_eps,
+        top1_ids, top1_values,
+      ).should be_false
+      undersized_x = ML::MetalBuffer.new(sizeof(Float32).to_i64)
+      invalid_x = ML::Metal::CommandBuffer.new
+      ML::GGUF::Qwen35Metal.encode_rmsnorm_project_top1_rows_buffer(
+        invalid_x, arena, undersized_x, rows,
+        w.output_norm, w.output, w.hparams.rms_eps,
+        top1_ids, top1_values,
+      ).should be_false
+      undersized_values = ML::MetalBuffer.new(sizeof(Float32).to_i64)
+      invalid_values = ML::Metal::CommandBuffer.new
+      ML::GGUF::Qwen35Metal.encode_rmsnorm_project_top1_rows_buffer(
+        invalid_values, arena, resident, rows,
+        w.output_norm, w.output, w.hparams.rms_eps,
+        top1_ids, undersized_values,
+      ).should be_false
+      arena.buffers.size.should eq(scratch_count)
+      [disabled, invalid_rows, invalid_x, invalid_values].each(&.committed?.should(be_false))
+      arena.release
+    end
+  end
+
+  it "keeps equal-size resident row-head flights scratch-disjoint until completion" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    old_head = ENV["QWEN35_HEAD_TOP1_FUSED"]?
+    ENV["QWEN35_HEAD_TOP1_FUSED"] = "1"
+    first_cmd = nil.as(ML::Metal::CommandBuffer?)
+    second_cmd = nil.as(ML::Metal::CommandBuffer?)
+    first_arena = ML::GGUF::Qwen35Metal::Scratch::Arena.new("row_head_flight_spec:0")
+    second_arena = ML::GGUF::Qwen35Metal::Scratch::Arena.new("row_head_flight_spec:1")
+
+    begin
+      weights = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
+      hidden_dim = weights.hparams.n_embd
+      rows = 3
+      first_hidden = Array(Float32).new(rows * hidden_dim) do |i|
+        ((i % 29) - 14).to_f32 / 29.0_f32
+      end
+      second_hidden = Array(Float32).new(rows * hidden_dim) do |i|
+        ((i % 37) - 18).to_f32 / 37.0_f32
+      end
+      first_resident = ML::MetalBuffer.new(first_hidden.size.to_i64 * sizeof(Float32))
+      second_resident = ML::MetalBuffer.new(second_hidden.size.to_i64 * sizeof(Float32))
+      first_resident.write(first_hidden)
+      second_resident.write(second_hidden)
+      expected_first = ML::GGUF::Qwen35Metal.rmsnorm_project_top1_rows_buffer(
+        first_resident, rows, weights.output_norm, weights.output, weights.hparams.rms_eps,
+      ).not_nil!
+      expected_second = ML::GGUF::Qwen35Metal.rmsnorm_project_top1_rows_buffer(
+        second_resident, rows, weights.output_norm, weights.output, weights.hparams.rms_eps,
+      ).not_nil!
+      first_ids = ML::MetalBuffer.new(rows.to_i64 * sizeof(UInt32))
+      first_values = ML::MetalBuffer.new(rows.to_i64 * sizeof(Float32))
+      second_ids = ML::MetalBuffer.new(rows.to_i64 * sizeof(UInt32))
+      second_values = ML::MetalBuffer.new(rows.to_i64 * sizeof(Float32))
+
+      first_cmd = ML::Metal::CommandBuffer.new(queue: ML::Metal::CommandQueue.new)
+      second_cmd = ML::Metal::CommandBuffer.new(queue: ML::Metal::CommandQueue.new)
+      ML::GGUF::Qwen35Metal.encode_rmsnorm_project_top1_rows_buffer(
+        first_cmd.not_nil!, first_arena, first_resident, rows,
+        weights.output_norm, weights.output, weights.hparams.rms_eps,
+        first_ids, first_values,
+      ).should be_true
+      ML::GGUF::Qwen35Metal.encode_rmsnorm_project_top1_rows_buffer(
+        second_cmd.not_nil!, second_arena, second_resident, rows,
+        weights.output_norm, weights.output, weights.hparams.rms_eps,
+        second_ids, second_values,
+      ).should be_true
+      first_arena.buffers.size.should eq(4)
+      second_arena.buffers.size.should eq(4)
+      first_arena.buffers.each do |first_buffer|
+        second_arena.buffers.each do |second_buffer|
+          first_buffer.handle.should_not eq(second_buffer.handle)
+        end
+      end
+
+      first_cmd.not_nil!.commit
+      second_cmd.not_nil!.commit
+      first_cmd.not_nil!.wait
+      second_cmd.not_nil!.wait
+      actual_first = ML::GGUF::Qwen35Metal.read_head_top1_rows_buffers(first_ids, first_values, rows)
+      actual_second = ML::GGUF::Qwen35Metal.read_head_top1_rows_buffers(second_ids, second_values, rows)
+      actual_first.map(&.[0]).should eq(expected_first.map(&.[0]))
+      actual_second.map(&.[0]).should eq(expected_second.map(&.[0]))
+      actual_first.each_with_index { |(_, value), i| value.should be_close(expected_first[i][1], 1.0e-6_f32) }
+      actual_second.each_with_index { |(_, value), i| value.should be_close(expected_second[i][1], 1.0e-6_f32) }
+    ensure
+      [first_cmd, second_cmd].each do |command|
+        next unless command
+        begin
+          command.wait if command.committed? && !command.completed?
+        rescue
+        end
+      end
+      first_arena.release
+      second_arena.release
+      if old_head
+        ENV["QWEN35_HEAD_TOP1_FUSED"] = old_head
+      else
+        ENV.delete("QWEN35_HEAD_TOP1_FUSED")
+      end
+    end
   end
 
   it "appends a multi-tile allowed resident top-1 head without weakening to global top-1" do

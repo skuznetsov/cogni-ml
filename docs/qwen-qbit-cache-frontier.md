@@ -3630,3 +3630,36 @@ with an explicit portable-loader rollback.
 one-token split-K. Keep `QWEN35_ADAPTIVE_P4_SPLITK_T8=0` as rollback and require
 new paired and numerical evidence before widening device, tile, tier, or shape
 scope.
+
+### Resident batched verifier-head append result (2026-09-01)
+
+The experiment removed one real submit/wait boundary from the existing
+resident verifier, but it did not materially reduce product wall time. Ten
+interleaved Qwen3.8-27B pairs preserved every top-1 ID and logit, adaptive cache
+length, and the next decoded token. The appended route reduced verifier-head
+synchronizations from one to zero, yet averaged only `0.222%` faster and won
+`6/10` pairs. This fails the predeclared `>=3%` and `>=8/10` promotion gate.
+
+**retained:** a caller-owned batched RMSNorm/Q6_K top-1 encoder. It leaves the
+command uncommitted, validates input, weight, and output extents, and requires
+the per-flight scratch Arena explicitly in its API. A direct Metal contract test
+matches the existing separate-command path row for row. A second test encodes
+two equal-shape commands on distinct queues before either completes, proves
+their Arena scratch handles are disjoint, and matches both results.
+
+**removed:** the CPU product flag and adaptive verifier wiring. A synchronization
+count is mechanism evidence, not the performance objective; keeping the extra
+policy and route after the wall-clock falsifier would add complexity without
+user-visible value.
+
+Invalid shape, buffer, environment, and committed-command requests fail before
+encoding or allocating Arena scratch.
+
+**next boundary:** a truly deferred verifier requires private speculative state
+and fail-closed publication before wait. Do not approximate that boundary with
+a thread wrapper, wider CogniGraph flight depth, early cache publication, or
+adaptive token batching. The next experiment must first prove that cancellation
+or failure leaves canonical recurrent and KV state unchanged.
+
+**LTP/WBA:** not claimed. This was ordinary command-buffer fusion with an exact
+separate-command comparison.

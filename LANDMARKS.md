@@ -25979,3 +25979,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary exact-layout kernel specialization with an explicit portable-loader rollback.
 
 **decision:** Default T8 only on exact `Apple M2 Max`, uniform P4, one-token split-K. Preserve `QWEN35_ADAPTIVE_P4_SPLITK_T8=0`; widen only after new paired numerical and performance evidence.
+
+#### [LM-QWEN38-RESIDENT-BATCH-HEAD-FALSIFIED-989] Removing one verifier-head synchronization is not a product acceleration
+**context:** ml / Qwen3.8-27B / adaptive QBit KV / resident verifier / Metal command fusion
+**state:** product wiring rejected and removed; caller-owned batch encoder retained
+
+- claim: "A batched resident output head can join a caller-owned Metal command without changing its bounded result or taking ownership of commit."
+  source: the new Q6_K-only encoder requires a Scratch Arena explicitly, validates row, Q6_K weight, and buffer extents, appends batched RMSNorm, output projection, and top-1 reduction to an uncommitted command, and retains its scratch through the caller-owned Arena. Its direct protected Metal contract matched the existing separate-command path for all three rows, kept the command uncommitted until the caller committed it, and rejected disabled, committed, non-positive-row, undersized-input, and undersized-output requests without allocating more Arena scratch. A second protected test encoded two equal-shape commands on distinct queues before either completed, proved all per-flight scratch handles disjoint, and matched both results to the separate-command oracle. A temporary real Qwen3.8-27B adaptive integration route also preserved every row ID and logit, adaptive cache length, and the next decoded token.
+  verified_at: 2026-09-01
+  decay_trigger: Q6_K head kernels, scratch-Arena ownership, command lifecycle, output dimensions, or Metal runtime changes
+  trust: {F:0.97,G:0.05,R:0.92}
+
+- claim: "Appending that head to the final adaptive prefill command is not a material verifier acceleration on the measured corridor."
+  source: a protected same-process Qwen3.8-27B probe used the adaptive map `p4;27=bf16,43=bf16,47=bf16,51=bf16`, eight verifier rows, fresh state per sample, both routes warmed, and ten interleaved pairs. The candidate removed the measured extra head synchronization (`1 -> 0`) but averaged `314.878 ms` versus `315.579 ms`, only `0.222%` faster, with `6/10` wins. Every pair preserved exact top-1 IDs, bounded logits, and cache length. This failed the predeclared `>=3%` and `>=8/10` promotion gate, so the temporary CPU flag and route were removed.
+  verified_at: 2026-09-01
+  decay_trigger: verifier command topology, output-head cost, model/device/compiler, row count, host load, or timing boundary changes
+  trust: {F:0.98,G:0.03,R:0.94}
+
+**Adversary:** A removed synchronization is not necessarily on the critical path or large enough to matter. The exact mechanism changed as predicted, but wall time did not. Conversely, the retained encoder is only a safe primitive; it does not prove that a future deferred verifier may publish recurrent or KV state before completion. Such a route needs a separate private-state and cancellation proof.
+
+**Value proxy:** Synchronization and command-buffer counts are mechanism coordinates. Paired end-to-end verifier wall plus semantic and state parity are the value boundary; correctness held and performance failed.
+
+**LTP/WBA:** Not claimed. This was ordinary output-head command fusion with an exact separate-command rollback frame.
+
+**decision:** Keep only the caller-owned batched head encoder and its direct contract test. Do not expose product policy or CPU wiring for a `0.222%` result. The next admissible verifier optimization starts with a fail-closed private-state publication falsifier, not a wider queue or a thread wrapper.
