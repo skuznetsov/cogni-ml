@@ -25810,10 +25810,34 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   decay_trigger: model/device/compiler, prompt or schema corpus, prefill/decode mix, constrained batching, host load, or timing boundary changes
   trust: {F:0.97,G:0.08,R:0.91}
 
-**Adversary:** Canonical isolated-literal tokenization is safe here only because each finite option decodes byte-exactly, token options are prefix-free, and the runtime cross-checks the byte corridor after every chosen token. Prefix-ambiguous or unavailable tokenizations fall back to the old byte frontier. The corpus has four small schemas on one model/device and does not certify unconstrained text, arbitrary templates, or a universal 25% request-speed gain. Free-form values remain model-decoded.
+**Adversary:** Canonical isolated-literal tokenization is safe at the admitted byte-valid typed-call boundary because each finite option decodes byte-exactly, token options are prefix-free, and the runtime cross-checks the byte corridor after every chosen token. It is not generally token-ID or hidden-state equivalent to the legacy byte frontier: the latter may admit non-canonical tokenizations of the same bytes, so an unmeasured schema can change a later model choice. The measured corpus retained exact token parity. Prefix-ambiguous or unavailable tokenizations fall back to the old byte frontier. The corpus has four small schemas on one model/device and does not certify unconstrained text, arbitrary templates, or a universal 25% request-speed gain. Free-form values remain model-decoded.
 
 **Value proxy:** Forced-token count and eliminated output-head evaluations are mechanism coordinates. Exact token/typed-call parity plus paired whole-decode wall is the value boundary; both held in every measured pair.
 
 **LTP/WBA:** Not claimed. This is ordinary grammar-certified batching and allowed-head elimination inside finite structured stages.
 
 **decision:** Keep token-option corridors default-on only when `QWEN35_CONSTRAINED_TOOL_CALL_PREFIX=1`; preserve byte-frontier rollback through `QWEN35_CONSTRAINED_TOKEN_OPTIONS_OFF=1`. Widen only after CrystalBall task-level evidence or a larger exact structured-schema corpus.
+
+#### [LM-QWEN38-TOKEN-STAGE-SPAN-982] Deterministic grammar stages share one structured prefill command
+**context:** ml / Qwen3.8-27B / constrained tool calls / grammar stages / command batching / decode wall
+**state:** verified and default-on inside token-option constrained tool-call decoding
+
+- claim: "Adjacent finite grammar stages can be batched without crossing a model decision when the next canonical token frontier is a singleton."
+  source: the Qwen controller advances to the next grammar stage only after the current token corridor completes, then continues the same body-only prefill command only when the next corridor exposes exactly one token ID. A branch, free-form frontier, exhausted generation budget, or corridor failure ends the batch. `QWEN35_CONSTRAINED_TOKEN_STAGE_SPAN_OFF=1` restores one command per grammar stage. A traced enum-plus-boolean call reduced six deterministic commands with spans `8/6/1/11/1/9` to three commands with spans `14/12/10`, while preserving all 39 generated token IDs and the typed call. A separate `n_gen=20` boundary adversary emitted exactly the same 20 token IDs with the optimization on and off, proving that the combined command did not overrun the generation budget. Crystal no-codegen, formatter, shell syntax, and diff checks passed.
+  verified_at: 2026-08-31
+  decay_trigger: grammar-stage transitions, canonical token corridors, body-only prefill semantics, generation-budget handling, tokenizer, or tool-call parser changes
+  trust: {F:0.98,G:0.10,R:0.94}
+
+- claim: "Cross-stage batching materially improves the already accelerated structured-decode path on the bounded Qwen3.8 corpus."
+  source: the final guarded fresh-build ABBA at `/private/tmp/qwen35_span_suite_token_stage_span_certified_20260901_60467` used source revision `2cf731cc24245d45d4198dfc3fbe71affcd5a2e1`, source-input SHA256 `3d0053e919be000b5f8449da32a631949f10e1170ebfc8b4e42433dc733f66a9`, and binary SHA256 `50182fbe6935146bbb95c50f75d0ddbf28aae95bd68cd6dbecacddb24ba3d374`. The source fingerprint includes the suite and safety runner; the recorded model was the `16,810,714,336`-byte Qwen3.8-27B Q4_K_M file. Two repetitions with reversed order covered four tool schemas under a 24 GiB process-tree cap and 35% free-memory floor, and the gate rejected token-corridor fallback. Candidate versus explicit rollback emitted identical token IDs and expected typed calls in all eight pairs. Candidate transitions were `2..3`, rollback transitions were zero. Mean paired decode speedup was `20.680%`, range `12.526..30.157%`. Mean full-request speedup was `4.325%`, range `-7.314..9.130%`; one unchanged-prefill outlier makes that secondary coordinate non-promotable on the deliberately non-quiet host.
+  verified_at: 2026-09-01
+  decay_trigger: model/device/compiler, schema corpus, constrained routing, prefill/decode mix, host load, or timing boundary changes
+  trust: {F:0.97,G:0.08,R:0.91}
+
+**Adversary:** The optimization mutates the in-process grammar cursor before submitting the combined prefill, so a command failure aborts the request rather than offering local recovery; it never publishes a partially successful response. Exact parity covers four small schemas on one model and device, not arbitrary grammars. The measured percentages are incremental over the token-option corridor and apply only to constrained tool calls with deterministic adjacent stages; unconstrained text and actual model branches are unchanged.
+
+**Value proxy:** Fewer stage commands and transition counts are mechanism coordinates. Exact token and typed-call parity plus paired whole-decode wall are the value boundary; all measured pairs remained exact and faster.
+
+**LTP/WBA:** Not claimed. This is ordinary grammar-certified command batching. The local legality certificate is the singleton canonical next-token frontier; any non-singleton or free-form frontier terminates the batch.
+
+**decision:** Keep cross-stage spans default-on only inside the token-option constrained tool-call route. Preserve exact rollback with `QWEN35_CONSTRAINED_TOKEN_STAGE_SPAN_OFF=1`. Require a CrystalBall task-level run or a wider exact schema corpus before broadening the performance claim.
