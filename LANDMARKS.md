@@ -25673,3 +25673,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary lossless representation screening against native Q6_K.
 
 **decision:** Do not implement a resident Metal decoder for majority-plus-UInt8 sparse Q6 bitplanes. Retain the exact distribution probe. Move the performance frontier to reuse of one native Q6 dequantization across multiple input rows rather than trying to shrink single-row records.
+
+#### [LM-QWEN38-Q6K-VECTOR-EPILOGUE-FALSIFIED-976] Vector stores do not accelerate the large-batch Q6_K GEMM
+**context:** ml / Qwen / Metal / Q6_K / prefill / GEMM epilogue
+**state:** candidate rejected and removed; scoped attribution filter retained
+
+- claim: "The temporary complete-tile vector epilogue preserved the measured non-add Q6_K parity case."
+  source: a temporary `float4` Metal epilogue retained the threadgroup spill and explicit FP16 rounding, while source compilation covered the residual-add variant and scalar partial-row fallback. The existing batch-16 Q6_K GEMM spec executed the non-add path and measured cosine `1.0` and maximum absolute difference `0.0048918724` against the CPU reference. This is not a bitwise alignment/tail certificate for every shape.
+  verified_at: 2026-08-31
+  decay_trigger: Q6_K GEMM accumulator or epilogue arithmetic, Metal compiler/runtime, parity corpus, model, or device changes
+  trust: {F:0.98,G:0.04,R:0.95}
+
+- claim: "Replacing the scalar output loop with float4 loads and stores regresses the measured standalone large-batch Q6_K FFN-down interval."
+  source: guarded candidate/baseline/baseline/candidate fresh-process runs on Apple M2 Max used real Qwen3.5-9B Q6_K `12288 -> 4096`, batch 64, five warmups, and 31 samples. Candidate/baseline completed-command p50 was `2.470/2.357 ms` in the first adjacent pair and `2.307/2.266 ms` in the second, regressions of about `4.8%` and `1.8%`. An unchanged Q4_K FFN-down row served as a noise control and invalidated an earlier unbalanced apparent gain.
+  verified_at: 2026-08-31
+  decay_trigger: Q6_K GEMM kernel, compiler/runtime, device, shape, batch, process ordering, timing boundary, or host/GPU load changes
+  trust: {F:0.98,G:0.04,R:0.92}
+
+**Adversary:** The candidate changed only the final store loop and left the dominant weight fetch, dequantization, matrix multiply, threadgroup spill, and command boundary intact. The measured non-add parity case passed, but a complete vector-alignment, canary, and tail proof was not needed after both balanced Q6 comparisons were slower. The unchanged Q4 control also demonstrated why the initial unbalanced pair could not support a speed claim. The product residual-add route was not timed and receives no promotion claim.
+
+**Value proxy:** Fewer source-level scalar stores are a mechanism coordinate. Repeated completed-command time on the standalone large-GEMM diagnostic is the first value boundary, and it regressed before product integration was admissible.
+
+**LTP/WBA:** Not claimed. This was ordinary vectorization with unchanged representation and execution boundaries.
+
+**decision:** Remove the Q6_K vector epilogue and keep the existing scalar store. Retain `bin/qwen35_op_attribution.cr --name-filter` to exclude unrelated large operators from future attribution. Reopen the Q6_K prefill kernel only for a candidate that reduces native weight/dequantization work or a larger boundary.

@@ -243,14 +243,16 @@ prefill_q4_pair_wait = false
 prefill_q4_pair_only = false
 prefill_q4_fused_pair_wait = false
 prefill_q4_fused_pair_only = false
+name_filter = nil.as(String?)
 
 OptionParser.parse do |p|
-  p.banner = "Usage: qwen35_op_attribution [--model PATH] [--warmup N] [--runs N] [--limit N] [--batch N] [--profile-wait] [--prefill-q4-pair-wait] [--prefill-q4-pair-only] [--prefill-q4-fused-pair-wait] [--prefill-q4-fused-pair-only]"
+  p.banner = "Usage: qwen35_op_attribution [--model PATH] [--warmup N] [--runs N] [--limit N] [--batch N] [--name-filter TEXT] [--profile-wait] [--prefill-q4-pair-wait] [--prefill-q4-pair-only] [--prefill-q4-fused-pair-wait] [--prefill-q4-fused-pair-only]"
   p.on("--model=PATH", "GGUF model path") { |v| model = v }
   p.on("--warmup=N", "Warmup runs per shape (default: 3)") { |v| warmup = v.to_i }
   p.on("--runs=N", "Measured runs per shape (default: 9)") { |v| runs = v.to_i }
   p.on("--limit=N", "Only benchmark top-N dense-MAC shapes (default: all)") { |v| limit = v.to_i }
   p.on("--batch=N", "Rows per matmul call (default: 1)") { |v| batch = v.to_i }
+  p.on("--name-filter=TEXT", "Only benchmark shapes with an op name containing TEXT") { |v| name_filter = v }
   p.on("--profile-wait", "Also report Metal command wait time, excluding host-side input write/readback") { profile_wait = true }
   p.on("--prefill-q4-pair-wait", "Also benchmark the unfused Q4_H16 FFN gate+up pair baseline") { prefill_q4_pair_wait = true }
   p.on("--prefill-q4-pair-only", "Only benchmark the unfused Q4_H16 FFN gate+up pair baseline") { prefill_q4_pair_wait = true; prefill_q4_pair_only = true }
@@ -266,6 +268,10 @@ raise "--batch must be positive" unless batch > 0
 
 w = ML::GGUF::Qwen35Weights.from_gguf(model)
 stats = shape_stats(collect_ops(w))
+if filter = name_filter
+  stats.select! { |s| s.names.any?(&.includes?(filter)) }
+  raise "--name-filter matched no operators: #{filter}" if stats.empty?
+end
 stats = stats.sort_by { |s| -(s.in_dim.to_i64 * s.out_dim * s.count) }
 stats = stats.first(limit) if limit > 0
 

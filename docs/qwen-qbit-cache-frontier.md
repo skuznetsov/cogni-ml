@@ -3298,3 +3298,34 @@ of one raw Q6 bitplane on the measured tensors. It does not rule out structured
 multi-block entropy coding for disk storage, but such a format would add random
 access and decode costs and is not currently justified for resident weights.
 This was ordinary lossless representation screening, not LTP/WBA.
+
+### Rejected vectorized Q6_K large-GEMM epilogue (2026-08-31)
+
+A temporary Metal change replaced the scalar FP32 output loop in the
+large-batch Q6_K GEMM and residual-add kernels with `float4` loads and
+stores on complete 64-row tiles. It retained the existing threadgroup spill,
+the historical FP16 rounding before the FP32 write, and the scalar tail for
+partial row tiles. The change therefore targeted only epilogue instruction
+count; it did not reduce Q6_K weight traffic, dequantization, matrix work,
+threadgroup memory, or command boundaries.
+
+The existing Q6_K batch-16 parity test compiled both candidate kernels and
+executed the non-add path, reproducing cosine `1.0` and maximum absolute
+difference `0.0048918724` against the CPU reference. A guarded
+candidate/baseline/baseline/candidate diagnostic then measured the standalone
+Qwen3.5-9B Q6_K `12288 -> 4096` FFN-down shape at batch 64. Candidate
+versus adjacent baseline completed-command medians were `2.470/2.357 ms` and
+`2.307/2.266 ms`: regressions of about `4.8%` and `1.8%`. The unchanged Q4_K
+FFN-down row was retained as a noise control; its first pair moved materially,
+while the second pair was nearly equal, so an earlier unbalanced apparent gain
+was rejected rather than promoted.
+
+The temporary kernel change was removed. The attribution harness retains a
+`--name-filter` option so future probes can exclude unrelated large operators;
+this is especially important because an unfiltered large-batch run includes the
+output head and can exceed the useful watchdog-safe scope. The result rejects
+the non-add vectorized epilogue on the measured route and gives no reason to
+widen the same transformation to the product residual-add route. A future
+large-batch Q6_K change must reduce the weight/dequantization corridor or a
+larger execution boundary, not only rearrange its final stores. This was
+ordinary kernel optimization, not LTP/WBA.
