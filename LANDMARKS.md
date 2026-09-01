@@ -26165,3 +26165,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary host/Metal scheduling with exact serial execution as the rollback frame.
 
 **decision:** Retain `forward_top1_async` and the capacity-safe falsifier, but do not add a two-session product scheduler for a repeated `4.6%` gain. Reopen only if another required feature can amortize the scheduler or a new command topology establishes a credible `>=15%` ceiling before implementation.
+
+#### [LM-QWEN38-ADAPTIVE-T8-LONG-CONTEXT-REPLICATION-998] A second long prompt reproduces the full-token T8 gain
+**context:** ml / Qwen3.8-27B / adaptive QBit KV / Metal / full decode / long context
+**state:** verified for the bounded Apple M2 Max long-context corridor; no short-context or cross-device claim
+
+- claim: "Combined P4 and BF16 T8 loaders materially accelerate full adaptive decode near 8.3K tokens on the second measured prompt shape."
+  source: a fresh release build of `bin/qwen35_adaptive_t8_decode_probe.cr` evaluated a different coding-review prompt repeated to 8,331 chat tokens. Two guarded fresh processes reversed which route ran first, while every process alternated order for ten measured positions. Baseline-first measured `100.522 -> 95.590 ms` (`+4.907%`, `10/10` candidate wins); candidate-first measured `92.877 -> 87.899 ms` (`+5.360%`, `10/10`). Both passed the predeclared `>=3%` and `>=8/10` gate under the 24 GiB process-tree cap and 35% free-memory floor.
+  verified_at: 2026-09-01
+  decay_trigger: context geometry, adaptive tier map, T8 loader or policy, model/device/compiler/runtime, decode scheduler, or prompt distribution changes
+  trust: {F:0.98,G:0.04,R:0.91}
+
+- claim: "The replicated timing result preserves the probe's checked semantic and cache-publication boundary."
+  source: both runs emitted the same ten output token IDs and exact observed top-1 logits for rollback and candidate, certified all 16 adaptive owners as 12 P4 plus 4 aligned BF16 with no Float32 KV owners, and advanced every published cache from the same 8,331-token prefix. The probe does not certify bytewise recurrent-state equality or broader sampling quality.
+  verified_at: 2026-09-01
+  decay_trigger: probe parity checks, recurrent-state routing, adaptive cache publication, model weights, tokenizer/template, or prompt trajectory changes
+  trust: {F:0.98,G:0.04,R:0.93}
+
+**Adversary:** The earlier first 8.3K prompt had positive opposite-order medians but one mean below the gate, and the 1.7K gate remained flat/regressive. The new result therefore strengthens a context-dependent M2 Max corridor rather than proving universal generation throughput. Repeated text is controlled prompt geometry, not a representative coding benchmark.
+
+**Value proxy:** Isolated loader timing remains mechanism evidence. Alternating full-token wall, stable wins, exact observed logits, route ownership, and cache publication are the bounded value boundary.
+
+**LTP/WBA:** Not claimed. This is ordinary exact-layout kernel specialization with explicit T8-off rollback.
+
+**decision:** Promote the near-8.3K Apple M2 Max adaptive-decode signal from provisional single-prompt evidence to a replicated bounded `4.9--5.4%` full-token gain on the second prompt shape. Keep the existing exact-device/tier gates and rollback; do not infer short-context, cross-device, sampled-quality, or universal tokens-per-second gains.
