@@ -159,6 +159,18 @@ describe ML::GGUF::Qwen35Constraints do
     ML::GGUF::Qwen35Constraints.advance_literal_options(["<tool_call>"], "nope").should be_empty
   end
 
+  it "advances literal frontiers by decoded bytes across split UTF-8 tokens" do
+    first_byte = String.new(Bytes[0xc3_u8])
+    expected_tail = [0xa9_u8]
+
+    remaining = ML::GGUF::Qwen35Constraints.advance_literal_options(["é"], first_byte)
+    remaining.size.should eq(1)
+    remaining[0].bytes.to_a.should eq(expected_tail)
+
+    labeled = ML::GGUF::Qwen35Constraints.advance_labeled_literal_options({"accent" => "é"}, first_byte)
+    labeled["accent"].bytes.to_a.should eq(expected_tail)
+  end
+
   it "rejects an incomplete literal corridor with no tokenizer frontier" do
     tok = Qwen35ConstraintsSpecHelper.fake_tokenizer(["x", "eos"])
     index = ML::GGUF::Qwen35Constraints::TokenTextIndex.new(tok)

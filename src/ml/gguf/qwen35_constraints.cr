@@ -184,7 +184,7 @@ module ML::GGUF
       remaining_literals.each do |literal|
         next unless literal.starts_with?(emitted)
 
-        next_literals << literal[emitted.size..]
+        next_literals << literal.byte_slice(emitted.bytesize, literal.bytesize - emitted.bytesize)
       end
       next_literals
     end
@@ -197,7 +197,7 @@ module ML::GGUF
       remaining_by_label.each do |label, literal|
         next unless literal.starts_with?(emitted)
 
-        next_by_label[label] = literal[emitted.size..]
+        next_by_label[label] = literal.byte_slice(emitted.bytesize, literal.bytesize - emitted.bytesize)
       end
       next_by_label
     end
