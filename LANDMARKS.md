@@ -25889,3 +25889,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was an ordinary row-tile reuse experiment with an exact B64 rollback frame.
 
 **decision:** Keep B80 default-on only for exact `batch == 80`. Do not widen B80, B96, or B112 to arbitrary tails by selector alone. Reopen only after repairing and directly testing partial-tile edge publication.
+
+#### [LM-QWEN38-Q6K-RECURRENT-H16-FALSIFIED-985] Recurrent Q6 QKV must keep the optimized F32-output kernel
+**context:** ml / Qwen3.8-27B / Metal / recurrent prefill / Q6_K QKV / H16 handoff
+**state:** candidate rejected and removed; existing Q5 H16 route retained
+
+- claim: "Routing the exact Qwen3.8 recurrent `Q6_K 5120x10240` projection directly into the H16 convolution input is semantically compatible on the bounded product probe."
+  source: a temporary default-on route reached all 24 recurrent Q6 projections in adaptive-resident pp577. Five interleaved candidate/rollback pairs preserved final top-1 and its logit within `1e-4`. Checkpoint, batch-threshold, exact-shape, global Q56, and dedicated Q6 rollback guards were present during the experiment.
+  verified_at: 2026-09-01
+  decay_trigger: Q6 GEMM arithmetic, recurrent convolution input contract, state evolution, model shape, or probe changes
+  trust: {F:0.96,G:0.04,R:0.90}
+
+- claim: "The tested H16 handoff is not an acceleration and fails the prefill promotion gate."
+  source: the protected paired run used Qwen3.8-27B Q4_K_M, the adaptive map `p4;27=bf16,43=bf16,47=bf16,51=bf16`, pp577, five reversed-order pairs, a 24 GiB process-tree cap, and a 35% free-memory floor. H16 averaged `4051.80 ms` versus `4042.73 ms` for the F32-output rollback, a `9.07 ms` or `0.224%` regression, with only `3/5` wins. H16 p50 was also worse: `4108.74 ms` versus `4040.28 ms`. The temporary route and policy spec were removed.
+  verified_at: 2026-09-01
+  decay_trigger: Q6 H16 kernel staging, Metal compiler/runtime, model/device, prefill composition, or promotion threshold changes
+  trust: {F:0.98,G:0.03,R:0.95}
+
+**Adversary:** The experiment compared different GEMM implementations, not output formats alone. The existing `simd_mm_q6k_f32out` uses double-buffered threadgroup staging, while `simd_mm_q6k` uses the older single-buffer loop. The saved QKV output traffic therefore does not isolate the cost of H16 storage. Conversely, final top-1/logit parity does not prove byte-identical recurrent state. A future retry needs a double-buffered H16-output kernel and direct kernel timing/state parity before another product run; even then the measured projection is only `6.53%` of logical prefill weight traffic, so it must first show a credible path to the `3%` whole-prefill gate.
+
+**Value proxy:** Reduced output bytes and route hits are mechanism coordinates. Paired product wall and semantic parity are the admission boundary; wall regressed.
+
+**LTP/WBA:** Not claimed. This was an ordinary representation handoff with an exact F32-output rollback frame.
+
+**decision:** Keep recurrent Q6 QKV on the optimized F32-output route. Do not add a Q6 H16 handoff until a dedicated double-buffered kernel passes isolated timing, full state parity, and a whole-prefill forecast above the promotion threshold.
