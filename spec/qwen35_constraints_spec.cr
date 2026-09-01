@@ -102,6 +102,25 @@ describe ML::GGUF::Qwen35Constraints do
     ML::GGUF::Qwen35Constraints.advance_literal_options(["<tool_call>"], "nope").should be_empty
   end
 
+  it "rejects an incomplete literal corridor with no tokenizer frontier" do
+    tok = Qwen35ConstraintsSpecHelper.fake_tokenizer(["x", "eos"])
+    index = ML::GGUF::Qwen35Constraints::TokenTextIndex.new(tok)
+
+    expect_raises(ML::GGUF::Qwen35Constraints::LiteralFrontierError) do
+      ML::GGUF::Qwen35Constraints.required_literal_frontier_ids(index, ["<tool_call>"])
+    end
+  end
+
+  it "keeps representable and completed literal corridors admissible" do
+    tok = Qwen35ConstraintsSpecHelper.fake_tokenizer(["<", "<tool", "eos"])
+    index = ML::GGUF::Qwen35Constraints::TokenTextIndex.new(tok)
+
+    ML::GGUF::Qwen35Constraints.required_literal_frontier_ids(
+      index, ["<tool_call>"]).should eq([0, 1])
+    ML::GGUF::Qwen35Constraints.required_literal_frontier_ids(
+      index, [""]).should be_empty
+  end
+
   it "extracts Qwen tool-call prefix options from OpenAI-style tools" do
     tools = ML::GGUF::Qwen35Chat.parse_tools_json(%([
       {"type":"function","function":{"name":"read_file","parameters":{"type":"object"}}},

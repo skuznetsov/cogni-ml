@@ -11,6 +11,9 @@ module ML::GGUF
   module Qwen35Constraints
     MAX_ENUMERATED_INTEGER_VALUES = 256
 
+    class LiteralFrontierError < Exception
+    end
+
     record LabeledFrontierToken,
       token_id : Int32,
       text : String,
@@ -87,6 +90,21 @@ module ML::GGUF
     def self.literal_frontier_ids(index : TokenTextIndex,
                                   remaining_literals : Array(String)) : Array(Int32)
       index.literal_frontier_ids(remaining_literals)
+    end
+
+    # An incomplete finite corridor must never fall back to unrestricted
+    # decoding. An empty frontier means the tokenizer and grammar cannot
+    # represent the next literal byte sequence under the current contract.
+    def self.required_literal_frontier_ids(index : TokenTextIndex,
+                                           remaining_literals : Array(String)) : Array(Int32)
+      return [] of Int32 if remaining_literals.empty? || remaining_literals.any?(&.empty?)
+
+      allowed = literal_frontier_ids(index, remaining_literals)
+      if allowed.empty?
+        raise LiteralFrontierError.new(
+          "incomplete literal corridor has no tokenizer frontier (options=#{remaining_literals.size})")
+      end
+      allowed
     end
 
     # Preserve the source label for each finite literal while a constrained

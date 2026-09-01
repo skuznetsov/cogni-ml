@@ -289,11 +289,7 @@ def advance_next_maybe_literal_constrained(weights : ML::GGUF::Qwen35Weights,
     return {top.to_i32, logit, [] of String, "", false, false}
   end
 
-  allowed = ML::GGUF::Qwen35Constraints.literal_frontier_ids(token_index, remaining)
-  if allowed.empty?
-    top, logit = ML::GGUF::Qwen35CPU.forward_top1(weights, token_id, pos, state)
-    return {top.to_i32, logit, [] of String, "", false, false}
-  end
+  allowed = ML::GGUF::Qwen35Constraints.required_literal_frontier_ids(token_index, remaining)
 
   if force_single_literal && allowed.size == 1
     top = allowed[0]
@@ -577,7 +573,7 @@ if prompt_cache_preweight_fast_forward_enabled && prompt_token_cache_enabled
          source_remaining >= n_gen &&
          ML::GGUF::Qwen35PromptCache.generated_text_metadata_valid?(source, n_gen) &&
          (cached_text = source.generated_text) &&
-        ML::GGUF::Qwen35PromptCache.source_history_prefix_match?(source.token_ids, ids, replay_start)
+         ML::GGUF::Qwen35PromptCache.source_history_prefix_match?(source.token_ids, ids, replay_start)
         full_history_len = ids.size + n_gen
         cached_prefix_len = full_history_len - 1
         if fast_hit = cache_store.not_nil!.lookup_token_prefix(
@@ -864,7 +860,7 @@ if prompt_cache_enabled
   end
 
   if prompt_cache_fast_forward_enabled && output_ids.empty? && (source = source_history_hit)
-      source_remaining = source.token_ids.size - ids.size
+    source_remaining = source.token_ids.size - ids.size
     if source_remaining >= n_gen
       full_history_len = ids.size + n_gen
       cached_prefix_len = full_history_len - 1
