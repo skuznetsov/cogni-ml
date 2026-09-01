@@ -25745,3 +25745,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary exact-shape attention-kernel specialization with unchanged cache representation and stage-2 boundary.
 
 **decision:** Remove the temporary F32 GQA6 kernel, selector, and probe. Keep the generic ordinary-F32 split-K route. Do not spend a 4K/8K retry on this layout because adaptive QBit already supplies GQA6 sharing for the intended long-context path; reopen only with a materially different synchronization or memory-layout argument.
+
+#### [LM-QWEN38-DECODE-PREP-GRAPH-FALSIFIED-979] Per-layer CogniGraph scheduling does not accelerate full-attention preparation
+**context:** ml / Qwen3.8-27B / Metal / decode / CogniGraph / concurrent dispatch / refutation
+**state:** candidate rejected and removed; serial full-attention preparation retained
+
+- claim: "The tested eight-operation attention-preparation graph is product-reachable on the ordinary F32-KV Qwen3.8 decode route."
+  source: a temporary default-off `QWEN35_DECODE_FULL_PREP_GRAPH=1` route encoded Q/K/V GEMV, Q/gate split, Q/K head RMSNorm, and Q/K RoPE through `ComputeGraph`. Its fail-closed runtime certificate required exactly eight operations, four dependency waves, three barriers, and maximum wave width three. A guarded real Qwen3.8-27B smoke completed with exit 0; adaptive QBit and the Q8 K/V dual-GEMV route were excluded.
+  verified_at: 2026-08-31
+  decay_trigger: full-attention buffer dependencies, graph compiler, route gates, scratch ownership, Metal concurrent-encoder semantics, model, or device changes
+  trust: {F:0.96,G:0.04,R:0.90}
+
+- claim: "Building and encoding that graph once per full-attention layer does not produce a measurable whole-decode win on Apple M2 Max."
+  source: a guarded same-process interleaved Qwen3.8-27B run used 16 greedy decode tokens, one warmup, and eight pairs. Serial baseline versus graph mean was `900.61/902.20 ms`; median was `901.31/901.30 ms`; the graph won `3/8` pairs. The run retained the 24 GiB process-tree cap and 35% free-memory floor while deliberately not waiting for a quiet WindowServer. Static real-tensor accounting bounds perfect K+V hiding under Q to 115,998,720 bytes/token (`110.625 MiB`), only `0.734%` of the current 15,078 MiB/token logical matmul stream.
+  verified_at: 2026-08-31
+  decay_trigger: graph allocation/compilation strategy, encoder creation cost, Q/K/V weight mix, device, compiler/runtime, layer mix, timing boundary, or host load changes
+  trust: {F:0.97,G:0.05,R:0.88}
+
+**Adversary:** The run proves reachability and lack of a speed signal, not numerical parity; no parity promotion was needed after the value gate failed. Shared unified-memory bandwidth makes concurrent Q/K/V dispatch a weak mechanism, while constructing sixteen small graphs per token adds host allocation and dependency-analysis work. The non-quiet host limits fine-grained attribution, but an effect near zero with only `3/8` wins cannot support the predeclared `>=3%` promotion gate.
+
+**Value proxy:** A wider concurrent wave and fewer encoder transitions are mechanism coordinates. Paired whole-model greedy-decode wall is the value boundary and remained flat.
+
+**LTP/WBA:** Not claimed. This was ordinary dependency scheduling inside one command buffer.
+
+**decision:** Remove the temporary graph route and keep the serial full-attention preparation path. Do not retry per-layer ephemeral graphs without a new boundary argument, such as reusing a precompiled binding plan or measured host evidence that graph construction and encoder transitions can be removed rather than rearranged.

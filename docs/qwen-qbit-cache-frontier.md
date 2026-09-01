@@ -3391,3 +3391,37 @@ not a strong retry target because the intended long-context product route is
 adaptive QBit, where GQA6 sharing is already implemented. Reopen only with a
 materially different synchronization or layout argument. This was ordinary
 kernel specialization, not LTP/WBA.
+
+### Rejected per-layer full-attention preparation CogniGraph (2026-08-31)
+
+A temporary default-off decode route used the existing `ComputeGraph` scheduler
+for Q/K/V projection, Q/gate split, Q/K head RMSNorm, and Q/K RoPE. Exact buffer
+access declarations compiled the eight operations into four dependency waves:
+Q/K/V projection; Q/gate split plus K norm; Q norm plus K RoPE; and Q RoPE. A
+fail-closed runtime certificate required eight operations, four waves, three
+barriers, and maximum wave width three. Adaptive QBit and the Q8 K/V dual-GEMV
+route remained on the existing serial path.
+
+The candidate was reachable and completed a guarded real Qwen3.8-27B smoke,
+but it did not accelerate product decode. With 16 greedy tokens, one warmup,
+and eight interleaved pairs, serial baseline versus graph mean was
+`900.61/902.20 ms`; median was `901.31/901.30 ms`; the graph won only `3/8`
+pairs. The run used a 24 GiB process-tree cap and 35% free-memory floor without
+waiting for WindowServer to become quiet.
+
+The weak result matches the static ceiling. Across all 16 full-attention
+layers, the real Qwen3.8 tensors contain 115,998,720 bytes/token
+(`110.625 MiB`) of K+V projection
+weights that could theoretically hide under the much larger Q projection. That
+is only about `0.734%` of the current 15,078 MiB/token logical matmul stream.
+Graph construction and dependency analysis also occurred once per layer and
+token, while the concurrent dispatches still contended for unified-memory
+bandwidth. These are mechanism explanations; paired whole-decode wall is the
+decision boundary.
+
+No numerical-parity promotion claim is made because the candidate failed the
+speed gate before retention was admissible. The temporary route was removed.
+Reopen this scheduling frame only if graph bindings can be compiled and reused,
+or if direct host instrumentation shows that eliminating a larger encoder or
+command boundary can exceed the `3%` product gate. This was ordinary concurrent
+dispatch scheduling, not LTP/WBA.
