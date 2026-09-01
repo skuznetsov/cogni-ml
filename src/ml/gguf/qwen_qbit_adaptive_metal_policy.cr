@@ -97,5 +97,19 @@ module ML::GGUF
         raise ArgumentError.new("QWEN35_ADAPTIVE_P4_SPLITK_T8 must be 0 or 1")
       end
     end
+
+    # The measured M2 Max corridor benefits from one aligned 128-bit BF16 load
+    # per eight values. Other devices retain the portable T4 loader.
+    def self.bf16_splitk_t8?(device_name : String,
+                             override : String? = nil) : Bool
+      return device_name == "Apple M2 Max" unless override
+
+      case override.strip
+      when "0" then false
+      when "1" then true
+      else
+        raise ArgumentError.new("QWEN35_ADAPTIVE_BF16_SPLITK_T8 must be 0 or 1")
+      end
+    end
   end
 end

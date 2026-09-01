@@ -65,6 +65,7 @@ inline uint qqa_adaptive_plane_bit(device const uchar* plane, uint within) {
 constant bool QQA_ADAPTIVE_DEQUANT_T4 = false;
 constant bool QQA_ADAPTIVE_SPLITK_STAGE2_FUSED = false;
 constant bool QQA_ADAPTIVE_P4_SPLITK_T8 = false;
+constant bool QQA_ADAPTIVE_BF16_SPLITK_T8 = false;
 
 struct QQAAdaptiveFloat8 {
     float4 low;
@@ -234,6 +235,29 @@ inline QQAAdaptiveFloat8 qqa_adaptive_uniform_p4_value8(
     return result;
 }
 
+// BF16 sidecars and every eight-value traversal start are 16-byte aligned:
+// rows are 512 bytes and head_dim is 256. One vector load replaces sixteen
+// scalar byte loads without changing the reconstructed Float32 values.
+inline QQAAdaptiveFloat8 qqa_adaptive_uniform_bf16_value8(
+    device const uchar* sidecar,
+    uint row,
+    uint within) {
+    const uint sidecar_offset =
+        row * QQA_ADAPTIVE_HD * 2u + within * 2u;
+    const uint4 packed =
+        *((device const uint4*)(sidecar + sidecar_offset));
+    const uint4 even_bits = packed << 16u;
+    const uint4 odd_bits = packed & uint4(0xffff0000u);
+    QQAAdaptiveFloat8 result;
+    result.low = float4(
+        as_type<float>(even_bits.x), as_type<float>(odd_bits.x),
+        as_type<float>(even_bits.y), as_type<float>(odd_bits.y));
+    result.high = float4(
+        as_type<float>(even_bits.z), as_type<float>(odd_bits.z),
+        as_type<float>(even_bits.w), as_type<float>(odd_bits.w));
+    return result;
+}
+
 inline void qqa_adaptive_store4(threadgroup float* destination,
                                 uint index,
                                 float4 values) {
@@ -270,8 +294,11 @@ inline void qqa_adaptive_fill_uniform_tile(
     uint head_dim,
     uint uniform_tier,
     uint thread_index) {
-    const bool use_t8 = QQA_ADAPTIVE_P4_SPLITK_T8 &&
+    const bool use_p4_t8 = QQA_ADAPTIVE_P4_SPLITK_T8 &&
         uniform_tier == QQA_ADAPTIVE_P4;
+    const bool use_bf16_t8 = QQA_ADAPTIVE_BF16_SPLITK_T8 &&
+        uniform_tier == QQA_ADAPTIVE_BF16;
+    const bool use_t8 = use_p4_t8 || use_bf16_t8;
     const bool use_t4 = QQA_ADAPTIVE_DEQUANT_T4 &&
         (uniform_tier == QQA_ADAPTIVE_P4 || uniform_tier == QQA_ADAPTIVE_BF16);
     if (use_t8) {
@@ -285,7 +312,9 @@ inline void qqa_adaptive_fill_uniform_tile(
             QQAAdaptiveFloat8 values;
             if (position < packed_len) {
                 const uint row = position * n_head_kv + kv_h;
-                values = qqa_adaptive_uniform_p4_value8(base, row, d);
+                values = use_p4_t8
+                    ? qqa_adaptive_uniform_p4_value8(base, row, d)
+                    : qqa_adaptive_uniform_bf16_value8(sidecar, row, d);
             } else {
                 const uint current_token =
                     source_token_offset + position - packed_len;

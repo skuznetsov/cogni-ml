@@ -3631,6 +3631,75 @@ one-token split-K. Keep `QWEN35_ADAPTIVE_P4_SPLITK_T8=0` as rollback and require
 new paired and numerical evidence before widening device, tile, tier, or shape
 scope.
 
+### Eight-value BF16 split-K loader on Apple M2 Max (2026-09-01)
+
+The uniform-BF16 split-K stage now reconstructs eight adjacent BF16 values from
+one aligned `uint4` load. The row stride is 512 bytes and the eight-value
+traversal advances by 16 bytes. The host also checks the actual K and V sidecar
+base addresses before selecting the specialized pipeline; an unexpected
+unaligned buffer falls back to the portable T4 loader. The FP32 tile,
+dot-product and softmax order, exact-F32 current-token path, and persisted cache
+format are unchanged. Automatic selection is limited to the exact
+`Apple M2 Max` device name. `QWEN35_ADAPTIVE_BF16_SPLITK_T8=0` is the rollback;
+`=1` remains an aligned-buffer research override on other devices.
+
+The first candidate used two four-value loads. It passed the 8K gate narrowly,
+but at 16K its GPU interval improved only `2.508%` with `7/10` wins, below the
+predeclared `>=3%` and `>=8/10` requirements. That route was rejected rather
+than rescued with more samples. The replacement uses one 128-bit load and
+separates the even and odd BF16 halves with integer shifts and masks before
+bit-casting to Float32.
+
+A protected 8K contract compared the portable and 128-bit loaders against the
+independent CPU reference, verified the actual sidecar base alignment, retained
+the exact-F32 current token, and required byte-identical persisted K/V payloads.
+It passed. The complete protected adaptive-QBit set then passed `145` examples
+with zero failures, errors, or pending cases under a 4 GiB process-tree cap and
+35% free-memory floor.
+
+The same-process falsifier prewarmed both pipelines, restored fresh cache state
+for every sample, and alternated order for ten pairs. At an 8,192-token BF16
+prefix, wall improved `2.492 -> 2.207 ms` (`11.436%`, `8/10` wins) and GPU time
+improved `1.706 -> 1.456 ms` (`14.655%`, `8/10`). At 16,384 tokens, wall
+improved `3.761 -> 3.007 ms` (`20.051%`, `8/10`) and GPU time improved
+`2.734 -> 2.013 ms` (`26.374%`, `8/10`). Both contexts passed the unchanged
+wall-and-GPU gate under the 35% free-memory floor.
+
+A separate real Qwen3.8-27B Q4_K_M semantic pair used a 1,055-token prompt,
+eight generated tokens, a 4,096-token capacity, and map
+`p4;27=bf16,43=bf16,47=bf16,51=bf16`. BF16 T8 off/on produced identical exact
+and resident token IDs and text. Both runs retained top-1 `7/8`, ranked top-2
+`11/14`, top-2 overlap `13/14`, exact-top-1 coverage `7/7`, ECS `0.888779`, all
+16 resident owners, no F32 owner, consistent cache state, and `3.7647x` density.
+The single timing pair was order-confounded and is semantic evidence only.
+
+For the measured map, the four BF16 layers account for about `60.29%` of the
+adaptive payload, while the vectorized BF16 sidecars themselves account for
+`47.06%`. Those byte shares explain why the kernel can matter, but they are not
+whole-model speed predictions: the loader does not reduce stored bytes and
+does not change packing, stage two, P4 layers, recurrent layers, or weight
+traffic.
+
+**Adversary:** The speed certificate is bounded to one Apple M2 Max, uniform
+BF16, head dimension 256, one-token split-K, and two long contexts. The runtime
+alignment guard closes the local vector-load precondition, but cross-device
+compiler behavior and other head dimensions remain unproven. Exactly `8/10`
+wins at both contexts clears the declared gate but leaves less noise margin than
+the percentage deltas suggest. No whole-inference acceleration is claimed.
+
+**Value proxy:** A 128-bit load and BF16 byte share are mechanism coordinates.
+Independent numerical and payload parity plus paired complete-command wall and
+GPU time are the admission boundary; the real-model pair establishes semantics,
+not product speed.
+
+**LTP/WBA:** Not claimed. This is ordinary exact-layout kernel specialization
+with a portable T4 rollback.
+
+**decision:** Enable the aligned BF16 T8 loader only for exact `Apple M2 Max`
+inside uniform-BF16 one-token split-K. Preserve
+`QWEN35_ADAPTIVE_BF16_SPLITK_T8=0`; widen only after new alignment, numerical,
+and paired performance evidence.
+
 ### Resident batched verifier-head append result (2026-09-01)
 
 The experiment removed one real submit/wait boundary from the existing

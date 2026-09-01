@@ -26003,3 +26003,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary output-head command fusion with an exact separate-command rollback frame.
 
 **decision:** Keep only the caller-owned batched head encoder and its direct contract test. Do not expose product policy or CPU wiring for a `0.222%` result. The next admissible verifier optimization starts with a fail-closed private-state publication falsifier, not a wider queue or a thread wrapper.
+
+#### [LM-QWEN38-BF16-SPLITK-T8-990] One aligned 128-bit BF16 load accelerates bounded M2 Max split-K
+**context:** ml / Qwen3.8-27B / adaptive QBit KV / Metal / BF16 split-K decode / long context
+**state:** verified and default-on only for exact Apple M2 Max with aligned sidecars
+
+- claim: "The BF16 T8 loader preserves the measured attention and cache boundary."
+  source: the specialization reconstructs eight BF16 values from one aligned `uint4` load while preserving the FP32 tile, attention arithmetic, exact-F32 current token, and cache bytes. Host routing checks both sidecar base addresses and falls back to T4 if either is not 16-byte aligned. The protected 8K contract matched an independent CPU reference, observed aligned buffers, and retained byte-identical persisted K/V payloads. The complete protected adaptive-QBit set passed `145` examples with no failures, errors, or pending cases under a 4 GiB tree cap and 35% free-memory floor. A real Qwen3.8-27B off/on pair produced identical token IDs/text and the same top-1/top-2, ECS `0.888779`, owner, density, and cache-consistency metrics.
+  verified_at: 2026-09-01
+  decay_trigger: BF16 sidecar layout, head dimension or alignment, split-K/tier routing, current-token handling, device naming, Metal compiler/runtime, or cache publication changes
+  trust: {F:0.98,G:0.04,R:0.93}
+
+- claim: "The final uint4 loader materially accelerates the isolated BF16 split-K command at 8K and 16K on Apple M2 Max."
+  source: the first two-load candidate was rejected after missing the 16K GPU gate (`2.508%`, `7/10`). The replacement prewarmed both pipelines, restored fresh state per sample, and alternated ten pairs. At 8K, wall improved `2.492 -> 2.207 ms` (`11.436%`, `8/10`) and GPU `1.706 -> 1.456 ms` (`14.655%`, `8/10`). At 16K, wall improved `3.761 -> 3.007 ms` (`20.051%`, `8/10`) and GPU `2.734 -> 2.013 ms` (`26.374%`, `8/10`). Both passed the unchanged `>=3%`, `>=8/10` wall-and-GPU gate under the 35% free-memory floor.
+  verified_at: 2026-09-01
+  decay_trigger: model/device/compiler, BF16 layout and alignment, context geometry, split-K chunk/tile, timing probe, or host load changes
+  trust: {F:0.97,G:0.04,R:0.91}
+
+**Adversary:** Evidence is limited to exact Apple M2 Max, uniform BF16, head dimension 256, one-token split-K, and two contexts. The aligned sidecars close the vector-load precondition locally, but `8/10` wins leaves modest noise margin and cross-device behavior is unknown. BF16 sidecars are `47.06%` of adaptive payload under the measured map; no whole-inference speed follows from the isolated command result.
+
+**Value proxy:** Fewer load instructions and byte share are mechanism evidence. Numerical/payload parity and paired complete-command wall/GPU time are the value boundary; the real-model row is semantic evidence only.
+
+**LTP/WBA:** Not claimed. This is ordinary exact-layout kernel specialization with a T4 rollback.
+
+**decision:** Default BF16 T8 only on exact `Apple M2 Max`, uniform BF16, one-token split-K, and aligned K/V sidecars. Preserve `QWEN35_ADAPTIVE_BF16_SPLITK_T8=0`; widen only with new paired numerical and performance evidence.
