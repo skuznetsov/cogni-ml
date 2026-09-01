@@ -3700,6 +3700,66 @@ inside uniform-BF16 one-token split-K. Preserve
 `QWEN35_ADAPTIVE_BF16_SPLITK_T8=0`; widen only after new alignment, numerical,
 and paired performance evidence.
 
+### Combined P4+BF16 T8 whole-decode boundary (2026-09-01)
+
+`bin/qwen35_adaptive_t8_decode_probe.cr` measures both T8 loaders through the
+complete Qwen3.8 decode step without reloading weights between sides. It creates
+two identically prefilled adaptive states, performs one unmeasured matched warm
+step, then advances both states over the same ten-token forced greedy
+trajectory. Every pair receives the same input token and position. Execution
+order alternates AB/BA; `--candidate-first` also reverses warmup and the first
+measured pair. Any top-1, logit, cache-length, owner, or Float32-owner mismatch
+fails before a performance result is admitted.
+
+The tracked release probe is fail-closed for non-finite logits and invalid token
+IDs. It clears and restores every adaptive decode-route override, fixes split-K
+to `1`, minimum context to `256`, and chunk size to `64`, and proves the exact
+branch preconditions over the live candidate buffers before timing. The tested
+map reported twelve P4 T8 owners, four aligned BF16 T8 owners, and no Float32 KV
+owners on the exact Apple M2 Max route. This avoids a hot-path counter that
+would perturb the corridor while still closing the deterministic branch.
+
+At 1,675 prompt tokens, the final release run measured means
+`74.955 -> 78.687 ms` (`-4.979%`, `5/10`) and essentially equal medians
+`68.582 -> 68.646 ms`. This failed the predeclared `>=3%` and `>=8/10` gate.
+The loader kernels remain correct there, but their work is too small relative
+to the 48 recurrent layers, weight projections, and output head for a material
+corridor claim.
+
+At 8,327 tokens, two fresh guarded release processes with opposite initial
+order preserved the same ten output IDs and exact observed top-1 logits. The
+baseline-first run measured means `82.858 -> 81.100 ms` (`2.121%`, `8/10`) and
+medians `76.728 -> 73.756 ms` (`3.87%`); it failed the predeclared mean gate.
+The candidate-first run measured means `88.702 -> 75.911 ms` (`14.420%`,
+`10/10`) and medians `79.726 -> 75.386 ms` (`5.44%`); it passed. Both runs used
+the 24 GiB process-tree cap and 35% free-memory floor without quiet-host
+waiting. The repeated positive median signal is useful diagnostic evidence,
+but one pass in two processes is not a promotion-grade speed certificate.
+
+**Adversary:** The product evidence is still one Apple M2 Max, one 27B model,
+one repeated source prompt, ten matched positions per process, and the current
+coarse adaptive map. Individual wall samples contain scheduler outliers; the
+opposite-order repetition and median agreement narrow but do not remove host
+noise, and the predeclared mean gate was unstable. The short-context failure
+also proves that isolated 11--26% attention kernel gains must not be presented
+as universal token-throughput gains. The state checks cover matched top-1
+trajectory, finite logits, adaptive ownership, and published cache length; they
+do not prove bytewise KV or recurrent-state identity.
+
+**Value proxy:** Isolated split-K wall/GPU time explains the mechanism. Matched
+full-token wall with exact trajectory, logit, owner, and cache publication is
+the product boundary. Context length is part of the certificate.
+
+**LTP/WBA:** Not claimed. This is ordinary exact-layout load specialization
+measured through a stateful full-model decode corridor.
+
+**decision:** Keep both exact-M2-Max T8 defaults and their independent rollback
+flags on their existing isolated-kernel evidence. Report no material
+`forward_top1` corridor win near 1.7K and only a provisional `3.9--5.4%` median
+signal near 8.3K; do not promote a whole-generation speed claim. Re-run this
+same-process probe across more prompts whenever decode scheduling, recurrent
+kernels, adaptive tier maps, or model/device identity changes.
+
 ### Resident batched verifier-head append result (2026-09-01)
 
 The experiment removed one real submit/wait boundary from the existing

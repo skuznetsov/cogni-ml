@@ -26027,3 +26027,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary exact-layout kernel specialization with a T4 rollback.
 
 **decision:** Default BF16 T8 only on exact `Apple M2 Max`, uniform BF16, one-token split-K, and aligned K/V sidecars. Preserve `QWEN35_ADAPTIVE_BF16_SPLITK_T8=0`; widen only with new paired numerical and performance evidence.
+
+#### [LM-QWEN38-ADAPTIVE-T8-FULL-DECODE-991] Combined T8 loaders cross the product wall only at long context
+**context:** ml / Qwen3.8-27B / adaptive QBit KV / Metal / full decode / context scaling
+**state:** semantic route verified; long-context speed promotion remains provisional; short-context material-speed claim falsified
+
+- claim: "Combined P4 and BF16 T8 preserve the checked `forward_top1` semantic and publication boundary."
+  source: the tracked release `bin/qwen35_adaptive_t8_decode_probe.cr` loads weights once, creates rollback and candidate adaptive states, performs a matched warm step, and advances both over ten identical forced greedy positions with alternating order. It fail-closes on non-finite logits and invalid IDs, hermetically fixes every adaptive route input, and certified 12 P4 plus 4 aligned BF16 T8 owners. The 1.7K run and both opposite-order 8.3K runs produced identical top-1 IDs, exact observed top-1 logits, all 16 adaptive owners, no Float32 KV owners, and matching published cache lengths. This does not assert bytewise KV or recurrent-state equality.
+  verified_at: 2026-09-01
+  decay_trigger: adaptive loader arithmetic, state publication, tier map, full-decode routing, model/device/compiler, or probe trajectory changes
+  trust: {F:0.98,G:0.04,R:0.94}
+
+- claim: "The measured corridor has no material 1.7K benefit and only a provisional positive median signal near 8.3K."
+  source: at 1,675 prompt tokens, release means were `74.955 -> 78.687 ms` (`-4.979%`, `5/10`) and medians `68.582 -> 68.646 ms`, failing the `>=3%`, `>=8/10` gate. At 8,327 tokens, baseline-first means were `82.858 -> 81.100 ms` (`2.121%`, `8/10`) and medians `76.728 -> 73.756 ms` (`3.87%`), so the mean gate failed. A fresh candidate-first process measured means `88.702 -> 75.911 ms` (`14.420%`, `10/10`) and medians `79.726 -> 75.386 ms` (`5.44%`), so it passed. Both guarded long-context runs used a 24 GiB tree cap and 35% free-memory floor.
+  verified_at: 2026-09-01
+  decay_trigger: context geometry, adaptive map, recurrent/full-attention ratio, decode scheduler, device load, model/compiler/runtime, or T8 policy changes
+  trust: {F:0.96,G:0.03,R:0.78}
+
+**Adversary:** Baseline and candidate both showed isolated scheduler outliers. Opposite-order medians support a narrower `3.9--5.4%` diagnostic signal, but the predeclared mean gate passed only one of two fresh processes. One repeated source prompt and twenty total long-context pairs do not establish cross-prompt, cross-device, whole-generation, or universal tokens-per-second gains.
+
+**Value proxy:** Vector-load and isolated-kernel improvements are mechanism evidence. Matched stateful whole-token wall, exact outputs/logits, and published cache ownership are the value boundary. The failed 1.7K gate prevents a context-free speed claim.
+
+**LTP/WBA:** Not claimed. This is ordinary kernel specialization with explicit T4 rollback frames.
+
+**decision:** Retain exact-M2-Max defaults for both T8 loaders on their existing isolated-kernel evidence. Claim no material short-context corridor acceleration and only a provisional `3.9--5.4%` median signal near 8.3K. Do not promote a whole-generation speed claim; refresh across more prompts after scheduler, tier-map, model, or device changes.
