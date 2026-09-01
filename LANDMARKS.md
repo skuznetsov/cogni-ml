@@ -448,10 +448,10 @@ Rich landmarks include full State/Relations/Evidence structure.
   source: `crystal build bin/qwen35_generate.cr -o /tmp/qwen35_generate --release --link-flags "$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++"; QWEN35_QUIET=1 /tmp/qwen35_generate "The capital of France is" 1`, output token `Paris`, on 2026-04-26
   verified_at: 2026-04-26
   decay_trigger: decode wave routing, scratch allocator semantics, command-buffer lifetime, or two-lane controller implementation changes
-- claim: "Lane-local scratch namespaces plus queued async submissions show measurable exact/exact overlap headroom before a low-rank draft kernel exists. A fresh-scratch async path was safe but allocation-heavy; namespace lanes (`probe_a`, `probe_b`) avoid in-flight scratch races while preserving reuse. On Qwen3.5-9B with prompt `The capital of France is`, `bin/qwen35_two_lane_overlap_probe.cr` measured `1.13x` for `pairs=4` (`167.9ms` pooled sequential -> `148.3ms`) and `1.11x` for `pairs=8` (`331.7ms` -> `298.9ms`). Interpret this as hidden CPU encode/barrier/scheduling work, not proof of concurrent GPU compute."
+- claim: "Lane-local scratch namespaces plus queued async submissions showed preliminary same-queue scheduling headroom before a low-rank draft kernel existed. The bounded `pairs=4` Qwen3.5-9B row measured `1.13x` (`167.9ms` pooled sequential -> `148.3ms`). The originally recorded `pairs=8` row is invalid: the historical probe allocated only `prompt + 4` positions, so the last four steps exceeded its KV capacity. Interpret the remaining bounded row as hidden CPU encode/barrier/scheduling work, not proof of concurrent GPU compute."
   source: `/tmp/qwen35_two_lane_overlap_probe --pairs 4|8 --prompt "The capital of France is"`, on 2026-04-26
   verified_at: 2026-04-26
-  decay_trigger: command-buffer queue semantics, scratch namespace implementation, model size, prompt/state length, or future low-rank lane implementation changes
+  decay_trigger: command-buffer queue semantics, scratch namespace implementation, model size, prompt/state length, probe capacity, or future low-rank lane implementation changes
 - claim: "A wall-clock low-rank self-spec probe was added. For Qwen3.6-27B/rank64/layers `0,2,4`/progressive `4,4,8`/`gen=16`, exact output held with `100%` acceptance, but the current CPU projected-K draft branch dominates wall time (`draft_ms=2853`, exact chunk `verifier_ms=732`, `overlap_est=1.26x`). This validates the staged semantics while showing that the next speed gate is a Metal low-rank recurrent draft stage, not further controller work."
   source: `/tmp/qwen35_deltanet_fixed_basis_probe --simulate-self-spec-wall-progressive=4,4,8 --simulate-generate=16 --simulate-logits-layers=0,2,4 --simulate-logits-rank=64`, prompt `compact Metal runtime`, on 2026-04-26
   verified_at: 2026-04-26
@@ -26147,3 +26147,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary independent-row batching with the production x16 B2 route as rollback.
 
 **decision:** Keep the existing B2 x16 dispatch. Do not add cross-session Q4_K weight sharing on this shape. Scheduler-level overlap remains a separate hypothesis and must prove independent state ownership and a product-level throughput gain; this operator result provides no promotion evidence for it.
+
+#### [LM-QWEN38-TWO-LANE-SCHEDULER-OVERLAP-FALSIFIED-997] Two independent decode lanes expose only a small scheduling gain
+**context:** ml / Qwen3.8-27B / Metal / independent-session throughput / decode scheduling
+**state:** product scheduler candidate rejected; experimental async primitive retained
+
+- claim: "Submitting two independent decode waves before waiting preserves the strengthened bounded two-session result but misses the material throughput gate."
+  source: the strengthened Qwen3.8-27B probe forks six ordinary non-adaptive states from one prefilled prefix and advances two distinct token trajectories through synchronous `forward_top1`, serial `forward_top1_async` plus immediate wait, and two-lane async submission. After correcting the historical four-token state capacity for the new ten-pair run, all routes produced identical token IDs, top-1 logits within `1e-4`, and matching full state-snapshot SHA-256 values. Three corrected release runs under a 24 GiB process-tree cap and 35% free-memory floor measured gains of `4.615%`, `4.659%`, and `4.665%`, each with `10/10` wins; the final exact-source adversary alternated A-first and B-first submission and measured `113.625 -> 108.325 ms`. Every run failed the predeclared `>=15%` throughput gate.
+  verified_at: 2026-09-01
+  decay_trigger: decode command topology, scratch namespace ownership, model/device/compiler/runtime, host scheduling, state snapshot coverage, or multi-session product requirements change
+  trust: {F:0.97,G:0.03,R:0.92}
+
+**Adversary:** The first strengthened run appeared to show route-dependent logits, but the probe had inherited `prompt + 4` state capacity while advancing ten positions. That invalid out-of-capacity result was discarded; the capacity-correct rerun closed the apparent correctness failure. Conversely, `10/10` timing wins establish a small local scheduling effect, not GPU concurrency or sufficient product value. The comparison covers two short ordinary-cache sessions on one Apple M2 Max and does not cover adaptive KV, cancellation, stop tokens, fairness, longer queues, or mixed prompt lengths.
+
+**Value proxy:** Queued command buffers and stable pair wins are mechanism coordinates. Independent state parity plus the predeclared end-to-end two-session throughput threshold are the admission boundary; parity held and materiality failed.
+
+**LTP/WBA:** Not claimed. This was ordinary host/Metal scheduling with exact serial execution as the rollback frame.
+
+**decision:** Retain `forward_top1_async` and the capacity-safe falsifier, but do not add a two-session product scheduler for a repeated `4.6%` gain. Reopen only if another required feature can amortize the scheduler or a new command topology establishes a credible `>=15%` ceiling before implementation.
