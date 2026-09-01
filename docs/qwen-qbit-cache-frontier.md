@@ -3329,3 +3329,29 @@ widen the same transformation to the product residual-add route. A future
 large-batch Q6_K change must reduce the weight/dequantization corridor or a
 larger execution boundary, not only rearrange its final stores. This was
 ordinary kernel optimization, not LTP/WBA.
+
+### Qwen3.8 structured forced-span decode validation (2026-08-31)
+
+The already-default forced-span route inside opt-in constrained tool decoding
+was revalidated against the real Qwen3.8-27B Q4_K_M model. The tested edit-mode
+schema produced 39 output tokens, of which 12 were transported through exact
+deterministic spans. Four sequential fresh-process pairs were run in both
+candidate-first and rollback-first order. Candidate versus
+`QWEN35_CONSTRAINED_FORCE_SPAN_OFF=1` decode wall times were
+`2073.4/2157.0`, `2065.6/2157.0`, `2063.3/2094.1`, and
+`2003.4/2088.7 ms`. The candidate won all four pairs; paired speedups were
+`4.03%`, `4.43%`, `1.49%`, and `4.26%` (mean `3.55%`).
+
+Every pair emitted the same 39 token IDs and the same parsed
+`edit_mode(mode=safe,dry_run=true)` JSON. The model's full Q6_K output head is
+about 994.6 MiB of logical row traffic per unconstrained token at
+`5120 -> 248320`; constrained allowed-ID selection collapses that scan, while
+forced spans additionally batch exact body state updates and remove
+intermediate head/synchronization boundaries.
+
+This is a scoped product-path certificate, not a general Qwen3.8 decode claim.
+The host was deliberately not quiet-gated, the corpus contains one finite tool
+schema, only 12/39 tokens used forced spans, and one pair improved by less than
+the `3%` target. The feature therefore remains default-on only inside the
+experimental constrained structured mode, with the existing kill switch. A
+broader promotion still requires multi-schema ABBA and exact token/JSON parity.

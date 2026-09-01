@@ -25697,3 +25697,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary vectorization with unchanged representation and execution boundaries.
 
 **decision:** Remove the Q6_K vector epilogue and keep the existing scalar store. Retain `bin/qwen35_op_attribution.cr --name-filter` to exclude unrelated large operators from future attribution. Reopen the Q6_K prefill kernel only for a candidate that reduces native weight/dequantization work or a larger boundary.
+
+#### [LM-QWEN38-STRUCTURED-FORCED-SPAN-977] Exact forced spans accelerate the measured Qwen3.8 tool-call corridor
+**context:** ml / Qwen3.8-27B / constrained structured decode / forced spans / product path
+**state:** scoped Qwen3.8 validation; existing default-on route retained inside opt-in constrained mode
+
+- claim: "The existing deterministic forced-span route preserves the complete measured token and tool-call boundary on Qwen3.8-27B."
+  source: four guarded candidate/rollback pairs on the real Qwen3.8-27B Q4_K_M model emitted the same 39 token IDs and the same parsed `edit_mode(mode=safe,dry_run=true)` JSON. Candidate runs reported `forced_span_steps=12`; `QWEN35_CONSTRAINED_FORCE_SPAN_OFF=1` reported zero. All runs completed with exit 0 under the 24 GiB process-tree and 35% free-memory floors.
+  verified_at: 2026-08-31
+  decay_trigger: tokenizer, structured grammar/frontier, body-only prefill state semantics, model, generated schema, or tool-call parser changes
+  trust: {F:0.98,G:0.12,R:0.94}
+
+- claim: "Forced spans are a repeatable small decode win on the measured finite edit-mode corridor."
+  source: candidate/rollback decode wall pairs were `2073.4/2157.0`, `2065.6/2157.0`, `2063.3/2094.1`, and `2003.4/2088.7 ms`, in candidate-first and rollback-first order. The candidate won 4/4 pairs; paired speedups were `4.03%`, `4.43%`, `1.49%`, and `4.26%`, mean `3.55%`. Twelve of 39 output tokens were transported through forced spans.
+  verified_at: 2026-08-31
+  decay_trigger: model/device, Metal runtime/compiler, structured span coverage, prompt/schema, host load, generation length, or timing boundary changes
+  trust: {F:0.96,G:0.08,R:0.88}
+
+**Adversary:** This was one schema on a deliberately non-quiet host, with fresh processes and only four pairs. One pair improved by only `1.49%`; therefore the result does not certify a universal `>=3%` gain, ordinary unconstrained text, or arbitrary tool schemas. Exact token and parsed-JSON equality closes the measured semantic boundary but does not widen the performance scope.
+
+**Value proxy:** Eliminated output-head bytes and forced-span coverage are mechanism coordinates. Paired whole-decode wall with exact output parity is the value boundary; it improved in every measured pair.
+
+**LTP/WBA:** This is the already-certified structured grammar corridor from LM-566, not a new protocol claim. The local trigger is a singleton tokenizer frontier over at least two IDs; the legal transformation batches exact body updates without crossing a grammar stage boundary; the rollback frame is `QWEN35_CONSTRAINED_FORCE_SPAN_OFF=1`.
+
+**decision:** Keep forced spans default-on only inside opt-in constrained structured decoding. Record the Qwen3.8 evidence as a narrow product-path win and require broader multi-schema ABBA before any general speed claim.
