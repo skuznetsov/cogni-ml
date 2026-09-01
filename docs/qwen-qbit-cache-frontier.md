@@ -3236,12 +3236,11 @@ This was ordinary producer-consumer fusion, not LTP/WBA.
 ### Rejected native-granularity subscale-P5 compression of Q6_K weights (2026-08-31)
 
 The retained offline weight probe was extended with a second representation
-falsifier that preserves Q6_K's 16-value scale granularity. Each 256-value
-block is requantized to signed five-bit values, sixteen unsigned scale codes,
-and one FP32 master scale. The fixed record is 180 bytes versus 210 bytes for
-native Q6_K, a theoretical `1.1667x` reduction. FP32 is intentional: a first
-FP16-master variant flushed real subnormal master scales to zero and was
-rejected before quality measurement.
+falsifier that preserves Q6_K's 16-value grouping granularity, but not its
+native signed scale bytes. Each 256-value block is requantized to signed
+five-bit values, sixteen new unsigned scale codes, and one FP32 master scale.
+The fixed record is 180 bytes versus 210 bytes for native Q6_K, a theoretical
+`1.1667x` reduction.
 
 All-subscale-P5 preserved sampled-row ordered top-2 on five deterministic
 activation families, but this proxy did not imply near-lossless arithmetic.
@@ -3263,8 +3262,39 @@ promotion claim and cannot rescue a representation that already fails its
 local numerical gate.
 
 No Metal format or decoder was implemented. The probe remains a reproducible
-negative certificate. The next admissible Q6_K compression candidate must be
+negative falsifier. The next admissible Q6_K compression candidate must be
 bit-exact or use a selector calibrated against real hidden activations and the
 token/ECS boundary. In particular, preserving sub-block scale granularity by
 itself is insufficient when the sixth value bit is discarded. This was
 ordinary approximate weight representation research, not LTP/WBA.
+
+### Rejected exact sparse-bitplane compression of Q6_K weights (2026-08-31)
+
+A bit-exact follow-up tested whether one of Q6_K's six value bitplanes could be
+stored as a majority bit plus sparse exception indices. The candidate retains
+the other five bitplanes densely and preserves the native sixteen scale bytes
+and FP16 `d` unchanged. Its compressed record is `180 + k` bytes for `k`
+exceptions versus 210 native bytes; a one-bit type bitmap selects compressed
+records or native escape. A block can therefore save space only for `k <= 29`.
+
+The CPU probe extracts all 256 unsigned Q6 codes using the production Q6_K
+layout, chooses the sparsest plane and polarity, validates sorted in-range
+exception indices, reconstructs the dropped bit, and fails closed unless every
+code is identical. On 256 sampled rows of real `blk.0.ffn_down.weight`, all
+17,408 blocks reconstructed exactly, but none had `k <= 29`: 51 blocks were in
+`k=64--95` and 17,357 were in `k=96--128`. The type bitmap made the forecast
+slightly larger than native Q6_K (`0.999405x` native-over-forecast).
+
+The same falsifier on 256 sampled rows of the real Q6_K recurrent
+`blk.1.attn_qkv.weight` reproduced the result: zero of 5,120 blocks compressed,
+17 had `k=64--95`, and 5,103 had `k=96--128`. This independently attacks the
+possibility that FFN-down alone has unusually dense bitplanes. The result is a
+representation failure, not a decoder-performance result: no Metal format was
+implemented because the byte gate failed before timing was admissible.
+
+The exact reconstruction logic is retained as a reproducible distribution
+falsifier. The negative result rules out majority-plus-UInt8-exception coding
+of one raw Q6 bitplane on the measured tensors. It does not rule out structured
+multi-block entropy coding for disk storage, but such a format would add random
+access and decode costs and is not currently justified for resident weights.
+This was ordinary lossless representation screening, not LTP/WBA.

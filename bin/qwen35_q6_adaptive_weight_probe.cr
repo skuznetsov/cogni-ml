@@ -1,31 +1,37 @@
-# Offline, CPU-only falsifier for a sampled Qwen3.8 Q6_K FFN-down weight row set.
+# Offline, CPU-only falsifier for sampled Qwen3.8 Q6_K weight rows.
 #
-# This probe forecasts a variable-record representation. It does not implement
-# or exercise a production weight format: each selected 256-value block is
-# charged payload bytes (P4=136, P5=168, native Q6=210) plus four forecast
-# metadata bytes. No model runner, Metal command buffer, or scheduling path is
+# This probe forecasts several weight representations. It does not implement
+# or exercise a production format: Gaussian records charge payload plus four
+# metadata bytes, while subscale-P5 and exact sparse-bitplane Q6 report their
+# own layouts. No model runner, Metal command buffer, or scheduling path is
 # involved.
 
 require "option_parser"
 require "../src/ml/gguf/reader"
 require "../src/ml/gguf/qwen_qbit_gaussian_codec"
 
-QK                            =             256
-NATIVE_Q6_BYTES               =             210
-SUBSCALE_P5_BYTES             =             180
-P4_PAYLOAD_BYTES              =             136
-P5_PAYLOAD_BYTES              =             168
-FORECAST_METADATA_BYTES       =               4
-DEFAULT_ROWS                  =             256
-DEFAULT_P4_THRESHOLD          =        0.20_f64
-DEFAULT_P5_THRESHOLD          =        0.10_f64
-DEFAULT_SUBSCALE_P5_THRESHOLD =        0.11_f64
-DEFAULT_SEED                  = 0x51f0_3a95_u64
+QK                             =             256
+NATIVE_Q6_BYTES                =             210
+SUBSCALE_P5_BYTES              =             180
+SPARSE_BITPLANE_BASE_BYTES     =             180
+SPARSE_BITPLANE_MAX_EXCEPTIONS =              29
+P4_PAYLOAD_BYTES               =             136
+P5_PAYLOAD_BYTES               =             168
+FORECAST_METADATA_BYTES        =               4
+DEFAULT_ROWS                   =             256
+DEFAULT_P4_THRESHOLD           =        0.20_f64
+DEFAULT_P5_THRESHOLD           =        0.10_f64
+DEFAULT_SUBSCALE_P5_THRESHOLD  =        0.11_f64
+DEFAULT_SEED                   = 0x51f0_3a95_u64
 
 record Activation, name : String, values : Array(Float32)
 
 def ffn_down_name?(name : String) : Bool
   !/\Ablk\.\d+\.ffn_down\.weight\z/.match(name).nil?
+end
+
+def supported_q6_weight_name?(name : String) : Bool
+  ffn_down_name?(name) || !/\Ablk\.\d+\.attn_qkv\.weight\z/.match(name).nil?
 end
 
 def parse_nonnegative_float(value : String, option : String) : Float64
@@ -79,6 +85,101 @@ def dequantize_q6_block(raw : Bytes) : Array(Float32)
   values = ML::GGUF::Dequant.dequantize(raw, ML::GGUF::TensorType::Q6_K, QK)
   raise ArgumentError.new("native Q6_K block dequantized to non-finite values") unless values.all? { |value| value.finite? }
   values
+end
+
+# Extract the unsigned six-bit codes in dequantized element order. Native Q6_K
+# maps those codes to signed values by subtracting 32; scales and d remain
+# byte-identical in the sparse-bitplane candidate.
+def q6_codes(raw : Bytes) : Array(UInt8)
+  raise ArgumentError.new("native Q6_K block is not #{NATIVE_Q6_BYTES} bytes") unless raw.size == NATIVE_Q6_BYTES
+
+  codes = Array(UInt8).new(QK, 0_u8)
+  output_base = 0
+  2.times do |half|
+    ql_base = half * 64
+    qh_base = 128 + half * 32
+    32.times do |lane|
+      ql0 = raw[ql_base + lane]
+      ql1 = raw[ql_base + lane + 32]
+      qh = raw[qh_base + lane]
+      codes[output_base + lane] = ((ql0 & 0x0f_u8) | (((qh >> 0) & 3_u8) << 4)).to_u8
+      codes[output_base + lane + 32] = ((ql1 & 0x0f_u8) | (((qh >> 2) & 3_u8) << 4)).to_u8
+      codes[output_base + lane + 64] = ((ql0 >> 4) | (((qh >> 4) & 3_u8) << 4)).to_u8
+      codes[output_base + lane + 96] = ((ql1 >> 4) | (((qh >> 6) & 3_u8) << 4)).to_u8
+    end
+    output_base += 128
+  end
+  codes
+end
+
+def pack_q6_codes(codes : Array(UInt8)) : Bytes
+  raise ArgumentError.new("Q6_K packing requires exactly #{QK} codes") unless codes.size == QK
+
+  packed = Bytes.new(192, 0_u8)
+  output_base = 0
+  2.times do |half|
+    ql_base = half * 64
+    qh_base = 128 + half * 32
+    32.times do |lane|
+      q1 = codes[output_base + lane]
+      q2 = codes[output_base + lane + 32]
+      q3 = codes[output_base + lane + 64]
+      q4 = codes[output_base + lane + 96]
+      raise ArgumentError.new("Q6_K code exceeds six bits") if (q1 | q2 | q3 | q4) > 63_u8
+
+      packed[ql_base + lane] = (q1 & 0x0f_u8) | ((q3 & 0x0f_u8) << 4)
+      packed[ql_base + lane + 32] = (q2 & 0x0f_u8) | ((q4 & 0x0f_u8) << 4)
+      packed[qh_base + lane] = (q1 >> 4) | ((q2 >> 4) << 2) | ((q3 >> 4) << 4) | ((q4 >> 4) << 6)
+    end
+    output_base += 128
+  end
+  packed
+end
+
+# Drop the sparsest of six bitplanes, retain the other five densely, and code
+# deviations from the dropped plane's majority bit as sorted UInt8 indices.
+# This simulates the fail-closed decoder and proves semantic Q6 code identity;
+# the unchanged 18-byte scales+d suffix is charged in the fixed 180-byte base.
+def analyze_sparse_bitplane_q6(raw : Bytes) : {Int32, Int32, UInt8}
+  codes = q6_codes(raw)
+  best_plane = 0
+  best_default = 0_u8
+  best_exceptions = QK + 1
+
+  6.times do |plane|
+    ones = codes.count { |code| ((code >> plane) & 1_u8) == 1_u8 }
+    default_bit = ones <= QK - ones ? 0_u8 : 1_u8
+    exceptions = Math.min(ones, QK - ones)
+    if exceptions < best_exceptions
+      best_plane = plane
+      best_default = default_bit
+      best_exceptions = exceptions
+    end
+  end
+
+  plane_mask = (1_u8 << best_plane)
+  reconstructed = codes.map do |code|
+    (code & ~plane_mask) | (best_default << best_plane)
+  end
+  exception_indices = Array(UInt8).new(best_exceptions)
+  codes.each_with_index do |code, index|
+    bit = (code >> best_plane) & 1_u8
+    exception_indices << index.to_u8 if bit != best_default
+  end
+  raise ArgumentError.new("sparse Q6 exception count mismatch") unless exception_indices.size == best_exceptions
+
+  previous = -1
+  exception_indices.each do |encoded_index|
+    index = encoded_index.to_i
+    raise ArgumentError.new("sparse Q6 exception index is not strictly increasing") unless index > previous && index < QK
+    reconstructed[index] ^= plane_mask
+    previous = index
+  end
+  raise ArgumentError.new("sparse Q6 reconstruction changed a quantized code") unless reconstructed == codes
+  raise ArgumentError.new("sparse Q6 reconstruction changed packed value bytes") unless pack_q6_codes(reconstructed) == raw[0, 192]
+  raise ArgumentError.new("sparse Q6 metadata suffix is truncated") unless raw[192, 18].size == 18
+
+  {best_exceptions, best_plane, best_default}
 end
 
 def reconstruct_gaussian(values : Array(Float32), precision : Int32) : Array(Float32)
@@ -232,7 +333,7 @@ begin
   OptionParser.parse do |parser|
     parser.banner = "Usage: crystal run bin/qwen35_q6_adaptive_weight_probe.cr -- [options]"
     parser.on("--model PATH", "GGUF file (default: QWEN35_MODEL or the Qwen3.8 cache path)") { |value| model_path = value }
-    parser.on("--tensor NAME", "exact blk.<layer>.ffn_down.weight tensor") { |value| requested_tensor = value }
+    parser.on("--tensor NAME", "exact Q6_K FFN-down or recurrent QKV tensor") { |value| requested_tensor = value }
     parser.on("--rows N", "evenly sampled output rows (default: #{DEFAULT_ROWS})") { |value| requested_rows = value.to_i }
     parser.on("--p4-threshold X", "P4 max residual/std threshold (default: #{DEFAULT_P4_THRESHOLD})") { |value| p4_threshold = parse_nonnegative_float(value, "--p4-threshold") }
     parser.on("--p5-threshold X", "P5 max residual/std threshold (default: #{DEFAULT_P5_THRESHOLD})") { |value| p5_threshold = parse_nonnegative_float(value, "--p5-threshold") }
@@ -250,7 +351,7 @@ begin
   begin
     gguf = ML::GGUF::GGUFFile.new(model_path)
     tensor = if name = requested_tensor
-               raise ArgumentError.new("tensor #{name} is not an FFN-down tensor") unless ffn_down_name?(name)
+               raise ArgumentError.new("tensor #{name} is not a supported Q6_K weight") unless supported_q6_weight_name?(name)
                gguf.not_nil!.tensor(name) || raise ArgumentError.new("tensor not found: #{name}")
              else
                gguf.not_nil!.tensors.find do |candidate|
@@ -308,6 +409,13 @@ begin
     p4_ratio_max = 0.0_f64
     p5_ratio_max = 0.0_f64
     zero_std_blocks = 0_i64
+    sparse_bitplane_bitmap_bytes = (total_blocks + 7_i64) // 8_i64
+    sparse_bitplane_bytes = sparse_bitplane_bitmap_bytes
+    sparse_bitplane_compressed = 0_i64
+    sparse_bitplane_escapes = 0_i64
+    sparse_bitplane_histogram = Array(Int64).new(129, 0_i64)
+    sparse_bitplane_plane_counts = Array(Int64).new(6, 0_i64)
+    sparse_bitplane_default_one = 0_i64
 
     rows.each_with_index do |row, sampled_index|
       row_native_sums = Array(Float64).new(activations.size, 0.0_f64)
@@ -319,7 +427,20 @@ begin
 
       blocks_per_row.times do |block|
         block_offset = (row.to_i64 * blocks_per_row * NATIVE_Q6_BYTES + block.to_i64 * NATIVE_Q6_BYTES).to_i
-        native_block = dequantize_q6_block(raw[block_offset, NATIVE_Q6_BYTES])
+        raw_block = raw[block_offset, NATIVE_Q6_BYTES]
+        exceptions, sparse_plane, sparse_default = analyze_sparse_bitplane_q6(raw_block)
+        sparse_bitplane_histogram[exceptions] += 1
+        sparse_bitplane_plane_counts[sparse_plane] += 1
+        sparse_bitplane_default_one += 1 if sparse_default == 1_u8
+        if exceptions <= SPARSE_BITPLANE_MAX_EXCEPTIONS
+          sparse_bitplane_compressed += 1
+          sparse_bitplane_bytes += SPARSE_BITPLANE_BASE_BYTES + exceptions
+        else
+          sparse_bitplane_escapes += 1
+          sparse_bitplane_bytes += NATIVE_Q6_BYTES
+        end
+
+        native_block = dequantize_q6_block(raw_block)
         subscale_p5_block = reconstruct_subscale_p5(native_block)
         p4_block = reconstruct_gaussian(native_block, 4)
         p5_block = reconstruct_gaussian(native_block, 5)
@@ -417,6 +538,18 @@ begin
     puts "native_baseline=raw_q6_payload_bytes=#{native_bytes} variable_record_q6_forecast_bytes=#{native_record_bytes}"
     puts "policy=all_subscale_p5 blocks=#{total_blocks} forecast_bytes=#{all_subscale_p5_bytes} native_bytes=#{native_bytes} native_over_forecast=#{(native_bytes.to_f64 / all_subscale_p5_bytes.to_f64).round(9)} layout=fixed_5bit_values_plus_16_scale_bytes_plus_f32_master"
     puts "policy=adaptive_subscale_p5 blocks=#{total_blocks} p5=#{adaptive_subscale_p5} q6=#{adaptive_subscale_q6} forecast_bytes=#{adaptive_subscale_bytes} native_bytes=#{native_bytes} native_over_forecast=#{(native_bytes.to_f64 / adaptive_subscale_bytes.to_f64).round(9)} layout=one_bit_tier_bitmap_plus_grouped_fixed_records"
+    sparse_ratio = native_bytes.to_f64 / sparse_bitplane_bytes.to_f64
+    sparse_escape_rate = sparse_bitplane_escapes.to_f64 / total_blocks.to_f64
+    sparse_histogram_bands = [
+      sparse_bitplane_histogram[0..15].sum,
+      sparse_bitplane_histogram[16..29].sum,
+      sparse_bitplane_histogram[30..63].sum,
+      sparse_bitplane_histogram[64..95].sum,
+      sparse_bitplane_histogram[96..128].sum,
+    ]
+    sparse_metal_gate = sparse_ratio >= 1.12 && sparse_escape_rate <= 0.10
+    puts "policy=exact_q6_sparse_bitplane blocks=#{total_blocks} compressed=#{sparse_bitplane_compressed} q6_escapes=#{sparse_bitplane_escapes} escape_rate=#{sparse_escape_rate.round(9)} forecast_bytes=#{sparse_bitplane_bytes} native_bytes=#{native_bytes} native_over_forecast=#{sparse_ratio.round(9)} exact_reconstruction=true metal_gate=#{sparse_metal_gate} layout=one_bit_type_bitmap_plus_180_byte_base_plus_uint8_exceptions"
+    puts "exact_q6_sparse_bitplane_histogram=k0_15:#{sparse_histogram_bands[0]} k16_29:#{sparse_histogram_bands[1]} k30_63:#{sparse_histogram_bands[2]} k64_95:#{sparse_histogram_bands[3]} k96_128:#{sparse_histogram_bands[4]} selected_planes=#{sparse_bitplane_plane_counts.join(",")} default_zero=#{total_blocks - sparse_bitplane_default_one} default_one=#{sparse_bitplane_default_one}"
     puts "policy=all_p4 blocks=#{total_blocks} p4=#{total_blocks} p5=0 q6=0 forecast_bytes=#{all_p4_bytes} native_bytes=#{native_bytes} forecast_over_native_payload=#{(all_p4_bytes.to_f64 / native_bytes.to_f64).round(9)} forecast_over_native_record=#{(all_p4_bytes.to_f64 / native_record_bytes.to_f64).round(9)} native_over_forecast=#{(native_bytes.to_f64 / all_p4_bytes.to_f64).round(9)}"
     puts "policy=all_p5 blocks=#{total_blocks} p4=0 p5=#{total_blocks} q6=0 forecast_bytes=#{all_p5_bytes} native_bytes=#{native_bytes} forecast_over_native_payload=#{(all_p5_bytes.to_f64 / native_bytes.to_f64).round(9)} forecast_over_native_record=#{(all_p5_bytes.to_f64 / native_record_bytes.to_f64).round(9)} native_over_forecast=#{(native_bytes.to_f64 / all_p5_bytes.to_f64).round(9)}"
     puts "policy=adaptive blocks=#{total_blocks} p4=#{adaptive_p4} p5=#{adaptive_p5} q6=#{adaptive_q6} forecast_bytes=#{adaptive_bytes} native_bytes=#{native_bytes} forecast_over_native_payload=#{(adaptive_bytes.to_f64 / native_bytes.to_f64).round(9)} forecast_over_native_record=#{(adaptive_bytes.to_f64 / native_record_bytes.to_f64).round(9)} native_over_forecast=#{(native_bytes.to_f64 / adaptive_bytes.to_f64).round(9)}"

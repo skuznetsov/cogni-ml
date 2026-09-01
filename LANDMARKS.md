@@ -25642,16 +25642,34 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **context:** ml / Qwen3.8-27B / Q6_K weights / approximate compression / offline falsifier
 **state:** Metal integration rejected; CPU-only falsifier retained
 
-- claim: "A five-bit representation that retains Q6_K's 16-value scale granularity still has no operating point that combines useful compression with the predeclared near-lossless operator gate."
+- claim: "None of the tested thresholds for a five-bit representation that retains Q6_K's 16-value grouping granularity combines useful compression with the predeclared near-lossless operator gate."
   source: `bin/qwen35_q6_adaptive_weight_probe.cr` models 256 signed five-bit values, sixteen unsigned scale codes, and one FP32 master scale in 180 bytes versus 210 native Q6_K bytes. On 256 evenly sampled rows of the real `blk.0.ffn_down.weight`, all-subscale-P5 gave cosine `0.998450--0.999946`. A one-bit tier bitmap with native-Q6 escapes compressed only `1.005x` at residual/std threshold `0.08`, where cosine was `0.999920--0.999998`. Threshold `0.11` compressed `1.140x` but gave cosine `0.999225--0.999953`. A different-seed 32-row run compressed `1.142x` and gave cosine `0.998954--0.999611`. The required composition was compression `>=1.12x`, cosine `>=0.99999`, and exact ordered sampled-row top-2.
   verified_at: 2026-08-31
   decay_trigger: Q6_K source quantization, subscale-P5 arithmetic or byte layout, selector, sampled tensor/rows, activation corpus, or quality threshold changes
   trust: {F:0.98,G:0.03,R:0.94}
 
-**Adversary:** Ordered sampled-row top-2 happened to remain stable, but it is an operator proxy rather than model-token top-1/top-2 or ECS. The synthetic activation corpus cannot certify production semantics. These gaps can only block promotion; they do not overturn the direct cosine failure. FP16 master-scale storage was also rejected because real Q6_K blocks can require a subnormal master that the bounded conversion flushed to zero.
+**Adversary:** The candidate derives sixteen new unsigned scale codes plus an FP32 master; it preserves Q6_K's 16-value grouping, not the native signed scale bytes. Ordered sampled-row top-2 happened to remain stable in the documented runs, but it is an operator proxy rather than model-token top-1/top-2 or ECS. The synthetic activation corpus cannot certify production semantics. These gaps can only block promotion; they do not overturn the direct cosine failure. The sweep is bounded and rejects the tested thresholds, not every possible selector.
 
-**Value proxy:** Theoretical bytes and sampled-row ranking are secondary coordinates. The representation had to meet the joint size and numerical gate before any Metal decoder was admissible; no threshold did.
+**Value proxy:** Theoretical bytes and sampled-row ranking are secondary coordinates. The representation had to meet the joint size and numerical gate before any Metal decoder was admissible; no tested threshold did.
 
 **LTP/WBA:** Not claimed. This was ordinary approximate representation screening against the native Q6_K comparison frame.
 
 **decision:** Retain the CPU falsifier but do not implement this lossy Metal format. Reopen with a bit-exact residual/bitplane format, or with real-hidden calibration plus model-token/ECS evidence; retaining native sub-block scale granularity alone is not enough.
+
+#### [LM-QWEN38-Q6K-SPARSE-BITPLANE-FALSIFIED-975] Raw Q6_K bitplanes are not sparse enough to compress exactly
+**context:** ml / Qwen3.8-27B / Q6_K weights / lossless compression / offline falsifier
+**state:** Metal integration rejected; exact CPU distribution falsifier retained
+
+- claim: "Dropping one Q6_K value bitplane and storing its minority polarity as UInt8 exception indices does not reduce the measured resident weight stream."
+  source: the exact candidate uses five dense bitplanes, native sixteen scale bytes and FP16 `d`, a header/count pair, and `k` exception bytes: `180+k` bytes versus 210 native, with a one-bit record-type bitmap and native escape for `k>29`. `bin/qwen35_q6_adaptive_weight_probe.cr` extracts the production-order six-bit codes and fails closed unless sorted exception replay reconstructs every code. Across 17,408 sampled blocks of real `blk.0.ffn_down.weight`, zero compressed: 51 had best `k=64--95` and 17,357 had `k=96--128`. Across 5,120 sampled blocks of Q6_K `blk.1.attn_qkv.weight`, zero compressed: 17 had `k=64--95` and 5,103 had `k=96--128`. Both forecasts were `0.999405x` native-over-forecast because only the type bitmap was added.
+  verified_at: 2026-08-31
+  decay_trigger: source Q6_K code distribution, tensor set, sample selection, exception index width, record framing, or resident random-access requirement changes
+  trust: {F:0.99,G:0.04,R:0.97}
+
+**Adversary:** Exact code reconstruction establishes safety but cannot create entropy. Both the dominant FFN-down and a distinct recurrent-QKV tensor miss the `k<=29` break-even point by a wide margin. More global entropy coding might compress on disk, but its framing, random access, and decode cost are a different boundary and were not measured here.
+
+**Value proxy:** A theoretical 14.3% maximum saving assumed a sparse plane. The observed exception histogram is the discriminating value coordinate and makes every sampled record a native escape.
+
+**LTP/WBA:** Not claimed. This was ordinary lossless representation screening against native Q6_K.
+
+**decision:** Do not implement a resident Metal decoder for majority-plus-UInt8 sparse Q6 bitplanes. Retain the exact distribution probe. Move the performance frontier to reuse of one native Q6 dequantization across multiple input rows rather than trying to shrink single-row records.
