@@ -25931,3 +25931,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was an ordinary command-finalization experiment with an exact explicit-marker rollback frame.
 
 **decision:** Retain the explicit GPU tail marker and its independent non-zero completion certificate. Do not revisit dispatch-free publication unless append grouping or command topology changes enough to make finalization a measured material share.
+
+#### [LM-QWEN38-P4-HALF-TILE30-FALSIFIED-987] Wider FP16 P4 tiles regress long-context split-K decode
+**context:** ml / Qwen3.8-27B / adaptive QBit KV / Metal / P4 split-K decode / long context
+**state:** candidate rejected and removed; existing FP32 tile-15 route retained
+
+- claim: "A 30-row FP16 threadgroup tile is numerically compatible with the bounded P4 split-K attention contract when the current token remains exact F32."
+  source: a temporary explicit route doubled the compressed-prefix tile from 15 FP32 rows to 30 FP16 rows while preserving the same 16,128-byte threadgroup footprint. The protected 8K Metal contract passed `1/1` against an independent CPU reference with cosine above `0.9999999`, bounded maximum error, exact-F32 handling for the current token, and byte-identical persisted K/V payloads. The experiment remained isolated to uniform-P4 one-token split-K decode.
+  verified_at: 2026-09-01
+  decay_trigger: P4 dequantization arithmetic, split-K online-softmax order, tile storage type, current-token boundary, model/device, or Metal compiler changes
+  trust: {F:0.96,G:0.03,R:0.91}
+
+- claim: "The wider half tile is not an acceleration on the measured Apple M2 Max long-context corridor."
+  source: the attractive first fresh-process comparison measured `1.731 ms` candidate versus `2.510 ms` rollback GPU time, but the first reversed-order sequence exposed process-order instability when a later rollback fell to `1.123 ms`. A second warmed A/B/B/A measured rollback GPU times `2.398/2.254 ms` and candidate `2.571/2.911 ms`: paired means `2.326 ms` versus `2.741 ms`, a `17.8%` candidate regression. Corresponding wall means were `2.966 ms` versus `3.343 ms`, a `12.7%` regression. The temporary policy, source variant, pipeline key, and integration case were removed.
+  verified_at: 2026-09-01
+  decay_trigger: P4 dequant implementation, tile width/storage, split-K chunking, model/device, compiler/runtime, power state, or timing harness changes
+  trust: {F:0.97,G:0.03,R:0.92}
+
+**Adversary:** Equal threadgroup bytes and half as many tile barriers did not establish lower GPU time. FP16 conversion, the larger live tile, occupancy, or compiler scheduling can outweigh the saved barriers; this experiment does not isolate which mechanism caused the regression. The first apparent 31% gain was a process-order and warm-state proxy failure, which the warmed reversed-order run falsified.
+
+**Value proxy:** Tile count, barrier count, and fixed threadgroup footprint are mechanism coordinates. Protected numerical parity plus warmed paired GPU and wall time are the admission boundary; correctness held and performance regressed.
+
+**LTP/WBA:** Not claimed. This was an ordinary attention-tile representation experiment with an exact FP32 tile-15 rollback frame.
+
+**decision:** Keep the scoped M2 Max P4 tile-15 route. Do not retry wider half tiles unless a new kernel also reduces dequantization work or first demonstrates a stable same-process isolated gain; tile widening alone is closed.
