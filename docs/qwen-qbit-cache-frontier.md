@@ -3425,3 +3425,42 @@ Reopen this scheduling frame only if graph bindings can be compiled and reused,
 or if direct host instrumentation shows that eliminating a larger encoder or
 command boundary can exceed the `3%` product gate. This was ordinary concurrent
 dispatch scheduling, not LTP/WBA.
+
+### Rejected one-cut exact Q6_K output-head norm pruning (2026-08-31)
+
+An offline falsifier tested an exact two-pass output-head scheme on real hidden
+rows from Qwen3.8-27B Q4_K_M. The first pass reads a block-aligned prefix of
+every Q6_K vocabulary row. A small seed set is evaluated completely, while the
+remaining suffix contribution is bounded by Cauchy-Schwarz using one precomputed
+Float32 suffix norm per row. A row is discarded only when its upper bound cannot
+enter the exact ordered top-2. The probe also evaluates an unrealistically free
+oracle threshold using the true exact second score, so a weak seed incumbent
+cannot explain a rejection.
+
+The probe exactly scanned the real `248320 x 5120` Q6_K output head for three
+consecutive hidden rows. CPU Float64 ordered top-2 matched the normal routed
+full-vector helper for all three samples, every discarded row satisfied the
+bound, and every survivor scan reproduced the exact ordered top-2. At cuts after 5 and 10 of 20
+Q6_K blocks, all 248,320 rows survived. At 15 blocks, the best sample pruned only
+`1.907%` of rows and another pruned none. At 18 blocks, survivor counts were
+`3,639`, `49,570`, and `2`; after charging the prefix, survivor suffixes, and a
+four-byte sidecar per row, output-head savings were `9.758%`, `7.909%`, and
+`9.905%`. The seed and oracle survivor sets were identical at every cut.
+
+The measured output head is about `6.6%` of current decode wall, so a `3%`
+whole-decode target requires at least `45.455%` head savings before dispatch,
+scratch, compaction, and conservative floating-point-bound costs. The best
+minimum optimistic head saving was only `7.909%`, a whole-decode ceiling of
+about `0.522%`; even the best sample reached only about `0.654%`. A production
+Metal implementation is therefore not admissible for this scheme.
+
+This is a robust rejection of one block-aligned prefix pass plus a per-row L2
+suffix bound on the measured model and hidden rows. Three positions are not a
+general corpus, but the free oracle threshold and the factor-of-5.7 miss against
+the required head saving make seed tuning an invalid retry. The result does not
+rule out materially tighter multi-stage bounds, constrained vocabulary
+frontiers, or approximate/learned retrieval. The retained probe is an exact
+geometry and economics falsifier. The routed helper can silently fall back to
+CPU, so no fused-Metal top-2 route certificate is claimed; a conservative
+Float32 Metal bound would need additional upward inflation and cannot improve
+the byte ceiling. This was ordinary exact pruning research, not LTP/WBA.

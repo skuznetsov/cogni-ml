@@ -25769,3 +25769,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary dependency scheduling inside one command buffer.
 
 **decision:** Remove the temporary graph route and keep the serial full-attention preparation path. Do not retry per-layer ephemeral graphs without a new boundary argument, such as reusing a precompiled binding plan or measured host evidence that graph construction and encoder transitions can be removed rather than rearranged.
+
+#### [LM-QWEN38-Q6K-HEAD-CAUCHY-FALSIFIED-980] One-cut norm bounds are too loose for exact output-head pruning
+**context:** ml / Qwen3.8-27B / Q6_K output head / exact top-2 / pruning / economics falsifier
+**state:** Metal implementation rejected; exact offline falsifier retained
+
+- claim: "The one-cut prefix plus Cauchy suffix scheme is exact on the measured real hidden rows."
+  source: `bin/qwen35_q6_head_bound_probe.cr` exactly scanned the real `248320 x 5120` Q6_K output tensor for three consecutive Qwen3.8 hidden rows. CPU Float64 ordered top-2 matched the normal routed full-vector helper. Across block cuts `5/10/15/18` of 20, every pruned row satisfied its Cauchy upper bound and every survivor scan reproduced exact ordered top-2. A free oracle threshold using the true exact second score produced exactly the same survivor counts as the seeded threshold.
+  verified_at: 2026-08-31
+  decay_trigger: output-head tensor/layout, hidden-row generation, dequantization, bound arithmetic, tie-breaking, model, or probe corpus changes
+  trust: {F:0.99,G:0.03,R:0.95}
+
+- claim: "The tested exact bound misses the product speed gate by too much to justify a Metal route."
+  source: cuts after 5 and 10 blocks retained all 248,320 rows. The 15-block cut retained all rows for one sample and pruned at most `1.907%`. The 18-block cut retained `3,639/49,570/2` rows and, after charging prefix bytes, survivor suffixes, and one four-byte sidecar per row, saved `9.758/7.909/9.905%` of head traffic. With the measured output-head wall share `6.6%`, the best minimum optimistic whole-decode ceiling is about `0.522%`, versus a `3%` target requiring `45.455%` head savings. The forecast deliberately excludes second-dispatch, scratch, compaction, and floating-point-conservatism costs.
+  verified_at: 2026-08-31
+  decay_trigger: output-head wall share, decode composition, bound/layout scheme, target model, device, or promotion threshold changes
+  trust: {F:0.98,G:0.04,R:0.94}
+
+**Adversary:** Only three real hidden positions were scanned, so this is not a universal statement about output distributions. The routed comparison helper may silently fall back to CPU, so it is not a fused-Metal route certificate. A production Float32 bound would also require conservative upward rounding beyond the probe's Float64 tolerance. Those limitations weaken promotion and can only retain more rows. The exact oracle incumbent still fails identically to the seed incumbent and the optimistic byte ceiling misses the required head saving by a factor above five. More seed tuning cannot repair that geometry. The result rejects one block-aligned cut plus an L2 suffix bound, not constrained vocabularies, tighter multi-stage certificates, or approximate retrieval.
+
+**Value proxy:** Bound soundness and survivor count are mechanism coordinates. The admission boundary is optimistic whole-decode savings after charged bytes; it remains below `0.7%` even before implementation overhead.
+
+**LTP/WBA:** Not claimed. This was ordinary exact branch-and-bound screening with unchanged model state and output semantics.
+
+**decision:** Retain the exact CPU falsifier and do not implement the tested two-pass Metal output head. Reopen only with a materially tighter certificate or a different product boundary that can statically exceed the `3%` whole-decode gate.
