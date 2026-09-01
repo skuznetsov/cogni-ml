@@ -25865,3 +25865,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary grammar-certified scheduling and output-head fusion. The legal boundary is a non-singleton canonical finite frontier immediately after a deterministic span; free-form, exhausted-budget, unsupported-output, or non-resident routes stop or fall back exactly.
 
 **decision:** Retain resident decision-tail fusion inside the opt-in constrained/adaptive route with `QWEN35_CONSTRAINED_TOKEN_STAGE_DECISION_TAIL_OFF=1` rollback. Do not claim whole-request acceleration. Next require a CrystalBall task-level wall measurement or a wider exact schema corpus before widening scope.
+
+#### [LM-QWEN38-Q4K-B80-ARBITRARY-TAIL-FALSIFIED-984] B80 must remain exact-shape only
+**context:** ml / Qwen3.8-27B / Metal / Q4_K H16 GEMM / long prefill tail
+**state:** candidate rejected and removed; exact `batch == 80` route retained
+
+- claim: "Reusing the exact B80 row-pack kernel for arbitrary long batches is not edge-safe in its current form."
+  source: `simd_mm_q4k_h16_b80` correctly computes a partial `nr1`, but its edge-copy loop advances by `256` while the B80 dispatch uses `320` threads. A partial final tile can therefore issue overlapping unsynchronized stores. The exact-80 path never enters this edge-copy branch.
+  verified_at: 2026-09-01
+  decay_trigger: B80 threadgroup size, edge-copy stride, output staging, or exact-shape routing changes
+  trust: {F:0.99,G:0.04,R:0.98}
+
+- claim: "The temporary pp577 arbitrary-tail selector failed the bounded product falsifier and does not justify a corrected production route yet."
+  source: four fresh protected operator processes compared the existing B64 rollback with the temporary B80 selector on the dominant real Qwen3.8-27B `Q4_K 5120x17408 b577` shape. Mean reported p50 improved by `3.122%`, but mean completed-command Metal wait improved by only `0.855%`. The rollback then completed adaptive-resident pp577 at p50 `4281.82 ms`; the B80 candidate failed closed with adaptive resident status `59`. The transient selector and policy test were removed after the failure.
+  verified_at: 2026-09-01
+  decay_trigger: B80 edge handling, Metal compiler/runtime, adaptive pack validation, model/device, or benchmark boundary changes
+  trust: {F:0.98,G:0.03,R:0.94}
+
+**Adversary:** Status `59` is an adaptive device-side validation result, not a direct Metal completion error. The run proves that the widened route is unsafe on the measured corridor and that rollback closes it; it does not prove whether the final trigger was overlapping B80 stores, propagated nonfinite data, or a separate adaptive-pack condition. A future retry must first make the edge stride match the actual threadgroup, then pass explicit nonfinite/output parity and quiet interleaved GPU-wait gates before any product run.
+
+**Value proxy:** Fewer B80 threadgroups and host-side p50 are not sufficient. Correct output, clean adaptive status, and completed-command GPU time are the admission boundary; correctness failed and the measured GPU-wait gain was below one percent.
+
+**LTP/WBA:** Not claimed. This was an ordinary row-tile reuse experiment with an exact B64 rollback frame.
+
+**decision:** Keep B80 default-on only for exact `batch == 80`. Do not widen B80, B96, or B112 to arbitrary tails by selector alone. Reopen only after repairing and directly testing partial-tile edge publication.
