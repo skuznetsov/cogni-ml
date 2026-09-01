@@ -25721,3 +25721,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** This is the already-certified structured grammar corridor from LM-566, not a new protocol claim. The local trigger is a singleton tokenizer frontier over at least two IDs; the legal transformation batches exact body updates without crossing a grammar stage boundary; the rollback frame is `QWEN35_CONSTRAINED_FORCE_SPAN_OFF=1`.
 
 **decision:** Keep forced spans default-on only inside opt-in constrained structured decoding. Record the Qwen3.8 evidence as a narrow product-path win and require broader multi-schema ABBA before any general speed claim.
+
+#### [LM-QWEN38-F32-GQA6-SPLITK-FALSIFIED-978] Shared F32 GQA6 tiles do not improve measured decode wall
+**context:** ml / Qwen3.8-27B / Metal / ordinary F32 KV / GQA6 / split-K / refutation
+**state:** candidate rejected and removed; generic per-query-head split-K retained
+
+- claim: "The temporary shared-tile GQA6 stage preserved the measured ordinary-F32 attention boundary."
+  source: a direct Apple M2 Max probe used Qwen3.8 geometry `n_head=24`, `n_head_kv=4`, `head_dim=256` at cache lengths `127/128/129/255/256/257`, with NaN guard rows. The guarded spec run passed all three examples. Candidate versus generic maximum differences were `0` for `partial_m`, `7.6293945e-6` for `partial_l`, `1.4305115e-6` for `partial_o`, and `1.1175871e-8` for final output; both routes stayed within `4.4703484e-8` of the CPU reference.
+  verified_at: 2026-08-31
+  decay_trigger: attention arithmetic, tile geometry, stage-2 ABI, Metal compiler/runtime, device, model head geometry, or probe corpus changes
+  trust: {F:0.98,G:0.05,R:0.95}
+
+- claim: "The tested 192-thread shared-tile stage does not produce a promotable whole-model decode win at 1K or 2K context."
+  source: guarded paired Qwen3.8-27B Q4_K_M runs generated eight greedy tokens with one warmup and three interleaved repetitions. At 1,024 prompt tokens, baseline/candidate mean and median were `473.63/500.58 ms` and `472.11/481.74 ms`, with candidate wins `1/3`. At 2,048 prompt tokens, mean and median were `495.18/504.29 ms` and `485.04/487.29 ms`; the candidate won `2/3` pairs but remained slower in both aggregate coordinates. Each run retained the 24 GiB process-tree and 35% free-memory guards.
+  verified_at: 2026-08-31
+  decay_trigger: split-K kernel, tile/barrier structure, device, compiler/runtime, context regime, model, host load, or timing boundary changes
+  trust: {F:0.97,G:0.06,R:0.89}
+
+**Adversary:** Sharing K/V loads is a mechanism improvement, not a wall-clock certificate. Six SIMD groups require 192-thread coordination, the F32 threadgroup footprint forced a 16-token tile instead of the generic 32-token tile, and extra barriers plausibly erase the traffic saving. The 2K pair ordering was noisy, but both mean and median remained slower; it cannot support promotion. The result rejects this implementation at 1K/2K, not every possible GQA6 layout.
+
+**Value proxy:** Static K/V read reduction and fewer threadgroups are secondary coordinates. Paired whole-model greedy-decode wall is the value boundary, and it did not improve.
+
+**LTP/WBA:** Not claimed. This was ordinary exact-shape attention-kernel specialization with unchanged cache representation and stage-2 boundary.
+
+**decision:** Remove the temporary F32 GQA6 kernel, selector, and probe. Keep the generic ordinary-F32 split-K route. Do not spend a 4K/8K retry on this layout because adaptive QBit already supplies GQA6 sharing for the intended long-context path; reopen only with a materially different synchronization or memory-layout argument.

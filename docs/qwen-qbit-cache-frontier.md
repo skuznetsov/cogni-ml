@@ -3355,3 +3355,39 @@ schema, only 12/39 tokens used forced spans, and one pair improved by less than
 the `3%` target. The feature therefore remains default-on only inside the
 experimental constrained structured mode, with the existing kill switch. A
 broader promotion still requires multi-schema ABBA and exact token/JSON parity.
+
+### Rejected ordinary-F32 GQA6 split-K sharing (2026-08-31)
+
+A temporary Qwen3.8 specialization changed ordinary F32 split-K attention from
+one 32-thread group per query head and context block to one 192-thread group per
+KV head and block. Six SIMD groups shared a 16-token F32 K/V tile while keeping
+the existing `{partial_m, partial_l, partial_o}` ABI and stage-2 reduction. The
+candidate was exact-shape and default-off; adaptive QBit attention was excluded
+because its existing GQA6 kernel already shares K/V rows across the six query
+heads.
+
+The direct Apple M2 Max operator gate used the real Qwen3.8 geometry
+`24 query heads / 4 KV heads / head_dim 256` at cache lengths
+`127, 128, 129, 255, 256, 257`, with NaN guard rows after the visible prefix.
+The guarded spec run passed all three examples. Candidate versus generic maximum differences were
+`0` for `partial_m`, `7.6293945e-6` for `partial_l`, `1.4305115e-6` for
+`partial_o`, and at most `1.1175871e-8` for final output. Candidate and generic
+outputs both stayed within `4.4703484e-8` of the CPU reference.
+
+The whole-model paired gate rejected the speed claim. On Qwen3.8-27B Q4_K_M,
+eight greedy decode tokens after a 1,024-token prefill measured baseline versus
+candidate mean `473.63/500.58 ms` and median `472.11/481.74 ms`; the candidate
+won only one of three pairs. At a 2,048-token prefill, baseline versus candidate
+mean was `495.18/504.29 ms` and median was `485.04/487.29 ms`; the candidate won
+two of three pairs but remained slower in both aggregate coordinates. Both runs
+used one warmup, three interleaved repetitions, a 24 GiB process-tree cap, and a
+35% free-memory floor.
+
+The likely cost is the combination of 192-thread coordination, a smaller
+16-token tile, and additional threadgroup barriers. That explanation remains a
+hypothesis; the paired wall regression is the decision boundary. The temporary
+kernel, selector, and test probe were removed. Longer ordinary-F32 contexts are
+not a strong retry target because the intended long-context product route is
+adaptive QBit, where GQA6 sharing is already implemented. Reopen only with a
+materially different synchronization or layout argument. This was ordinary
+kernel specialization, not LTP/WBA.
