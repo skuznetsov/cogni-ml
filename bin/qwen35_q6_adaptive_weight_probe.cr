@@ -10,15 +10,17 @@ require "option_parser"
 require "../src/ml/gguf/reader"
 require "../src/ml/gguf/qwen_qbit_gaussian_codec"
 
-QK                      =             256
-NATIVE_Q6_BYTES         =             210
-P4_PAYLOAD_BYTES        =             136
-P5_PAYLOAD_BYTES        =             168
-FORECAST_METADATA_BYTES =               4
-DEFAULT_ROWS            =             256
-DEFAULT_P4_THRESHOLD    =        0.20_f64
-DEFAULT_P5_THRESHOLD    =        0.10_f64
-DEFAULT_SEED            = 0x51f0_3a95_u64
+QK                            =             256
+NATIVE_Q6_BYTES               =             210
+SUBSCALE_P5_BYTES             =             180
+P4_PAYLOAD_BYTES              =             136
+P5_PAYLOAD_BYTES              =             168
+FORECAST_METADATA_BYTES       =               4
+DEFAULT_ROWS                  =             256
+DEFAULT_P4_THRESHOLD          =        0.20_f64
+DEFAULT_P5_THRESHOLD          =        0.10_f64
+DEFAULT_SUBSCALE_P5_THRESHOLD =        0.11_f64
+DEFAULT_SEED                  = 0x51f0_3a95_u64
 
 record Activation, name : String, values : Array(Float32)
 
@@ -86,6 +88,47 @@ def reconstruct_gaussian(values : Array(Float32), precision : Int32) : Array(Flo
     raise ArgumentError.new("unexpected P#{precision} Gaussian payload size #{encoded.payload.size}; expected #{expected_payload}")
   end
   ML::GGUF::QwenQBitGaussianCodec.decode(encoded)
+end
+
+# Requantize one native Q6_K block to a fixed-width symmetric 5-bit format
+# while retaining Q6_K's 16-value scale granularity. The candidate layout is:
+# 256 signed 5-bit values (160 B), 16 unsigned scale bytes, and one F32 master
+# scale (4 B). This is an offline reconstruction model, not a production ABI.
+def reconstruct_subscale_p5(values : Array(Float32)) : Array(Float32)
+  raise ArgumentError.new("subscale P5 requires exactly #{QK} values") unless values.size == QK
+
+  ideal_scales = Array(Float32).new(QK // 16, 0.0_f32)
+  ideal_scales.size.times do |group|
+    base = group * 16
+    minimum = values[base].to_f64
+    maximum = minimum
+    1.upto(15) do |offset|
+      value = values[base + offset].to_f64
+      minimum = value if value < minimum
+      maximum = value if value > maximum
+    end
+    ideal_scales[group] = Math.max(maximum / 15.0_f64, -minimum / 16.0_f64).to_f32
+  end
+
+  max_scale = ideal_scales.max
+  return Array(Float32).new(QK, 0.0_f32) if max_scale == 0.0_f32
+
+  # The scale bytes are unsigned magnitudes; signed weights carry the sign.
+  # F32 is intentional: real Q6 blocks can require a subnormal FP16 master.
+  master = max_scale / 127.0_f32
+  raise ArgumentError.new("subscale P5 master scale is not finite and positive") unless master.finite? && master > 0.0_f32
+
+  reconstructed = Array(Float32).new(QK, 0.0_f32)
+  ideal_scales.each_with_index do |ideal, group|
+    scale_code = (ideal / master).round.to_i.clamp(1, 127)
+    scale = master * scale_code.to_f32
+    base = group * 16
+    16.times do |offset|
+      quant = (values[base + offset] / scale).round.to_i.clamp(-16, 15)
+      reconstructed[base + offset] = scale * quant.to_f32
+    end
+  end
+  reconstructed
 end
 
 def block_std(values : Array(Float32)) : Float64
@@ -182,6 +225,7 @@ requested_tensor = nil.as(String?)
 requested_rows = DEFAULT_ROWS
 p4_threshold = DEFAULT_P4_THRESHOLD
 p5_threshold = DEFAULT_P5_THRESHOLD
+subscale_p5_threshold = DEFAULT_SUBSCALE_P5_THRESHOLD
 seed = DEFAULT_SEED
 
 begin
@@ -192,6 +236,7 @@ begin
     parser.on("--rows N", "evenly sampled output rows (default: #{DEFAULT_ROWS})") { |value| requested_rows = value.to_i }
     parser.on("--p4-threshold X", "P4 max residual/std threshold (default: #{DEFAULT_P4_THRESHOLD})") { |value| p4_threshold = parse_nonnegative_float(value, "--p4-threshold") }
     parser.on("--p5-threshold X", "P5 max residual/std threshold (default: #{DEFAULT_P5_THRESHOLD})") { |value| p5_threshold = parse_nonnegative_float(value, "--p5-threshold") }
+    parser.on("--subscale-p5-threshold X", "subscale P5 max residual/std threshold (default: #{DEFAULT_SUBSCALE_P5_THRESHOLD})") { |value| subscale_p5_threshold = parse_nonnegative_float(value, "--subscale-p5-threshold") }
     parser.on("--seed N", "deterministic activation seed (default: #{DEFAULT_SEED})") { |value| seed = value.to_u64 }
     parser.on("-h", "--help", "show this help") do
       puts parser
@@ -238,10 +283,13 @@ begin
     total_blocks = rows.size.to_i64 * blocks_per_row
     native_bytes = total_blocks * NATIVE_Q6_BYTES
     native_record_bytes = total_blocks * (NATIVE_Q6_BYTES + FORECAST_METADATA_BYTES)
+    all_subscale_p5_bytes = total_blocks * SUBSCALE_P5_BYTES
     all_p4_bytes = total_blocks * (P4_PAYLOAD_BYTES + FORECAST_METADATA_BYTES)
     all_p5_bytes = total_blocks * (P5_PAYLOAD_BYTES + FORECAST_METADATA_BYTES)
 
     native_outputs = Array(Array(Float64)).new(activations.size) { Array(Float64).new(rows.size, 0.0_f64) }
+    subscale_p5_outputs = Array(Array(Float64)).new(activations.size) { Array(Float64).new(rows.size, 0.0_f64) }
+    adaptive_subscale_p5_outputs = Array(Array(Float64)).new(activations.size) { Array(Float64).new(rows.size, 0.0_f64) }
     p4_outputs = Array(Array(Float64)).new(activations.size) { Array(Float64).new(rows.size, 0.0_f64) }
     p5_outputs = Array(Array(Float64)).new(activations.size) { Array(Float64).new(rows.size, 0.0_f64) }
     adaptive_outputs = Array(Array(Float64)).new(activations.size) { Array(Float64).new(rows.size, 0.0_f64) }
@@ -250,6 +298,11 @@ begin
     adaptive_p5 = 0_i64
     adaptive_q6 = 0_i64
     adaptive_bytes = 0_i64
+    adaptive_subscale_p5 = 0_i64
+    adaptive_subscale_q6 = 0_i64
+    adaptive_subscale_bytes = (total_blocks + 7_i64) // 8_i64
+    subscale_p5_ratio_sum = 0.0_f64
+    subscale_p5_ratio_max = 0.0_f64
     p4_ratio_sum = 0.0_f64
     p5_ratio_sum = 0.0_f64
     p4_ratio_max = 0.0_f64
@@ -258,6 +311,8 @@ begin
 
     rows.each_with_index do |row, sampled_index|
       row_native_sums = Array(Float64).new(activations.size, 0.0_f64)
+      row_subscale_p5_sums = Array(Float64).new(activations.size, 0.0_f64)
+      row_adaptive_subscale_p5_sums = Array(Float64).new(activations.size, 0.0_f64)
       row_p4_sums = Array(Float64).new(activations.size, 0.0_f64)
       row_p5_sums = Array(Float64).new(activations.size, 0.0_f64)
       row_adaptive_sums = Array(Float64).new(activations.size, 0.0_f64)
@@ -265,9 +320,22 @@ begin
       blocks_per_row.times do |block|
         block_offset = (row.to_i64 * blocks_per_row * NATIVE_Q6_BYTES + block.to_i64 * NATIVE_Q6_BYTES).to_i
         native_block = dequantize_q6_block(raw[block_offset, NATIVE_Q6_BYTES])
+        subscale_p5_block = reconstruct_subscale_p5(native_block)
         p4_block = reconstruct_gaussian(native_block, 4)
         p5_block = reconstruct_gaussian(native_block, 5)
         standard_deviation = block_std(native_block)
+        subscale_p5_ratio = max_residual_ratio(native_block, subscale_p5_block, standard_deviation)
+        subscale_p5_ratio_sum += subscale_p5_ratio
+        subscale_p5_ratio_max = subscale_p5_ratio if subscale_p5_ratio > subscale_p5_ratio_max
+        adaptive_subscale_block = if subscale_p5_ratio <= subscale_p5_threshold
+                                    adaptive_subscale_p5 += 1
+                                    adaptive_subscale_bytes += SUBSCALE_P5_BYTES
+                                    subscale_p5_block
+                                  else
+                                    adaptive_subscale_q6 += 1
+                                    adaptive_subscale_bytes += NATIVE_Q6_BYTES
+                                    native_block
+                                  end
         zero_std_blocks += 1 if standard_deviation == 0.0
         p4_ratio = max_residual_ratio(native_block, p4_block, standard_deviation)
         p5_ratio = max_residual_ratio(native_block, p5_block, standard_deviation)
@@ -293,6 +361,8 @@ begin
         activations.each_with_index do |activation, activation_index|
           activation_offset = block * QK
           native_sum = 0.0_f64
+          subscale_p5_sum = 0.0_f64
+          adaptive_subscale_p5_sum = 0.0_f64
           p4_sum = 0.0_f64
           p5_sum = 0.0_f64
           adaptive_sum = 0.0_f64
@@ -300,6 +370,8 @@ begin
           while value_index < QK
             input = activation.values[activation_offset + value_index].to_f64
             native_value = native_block[value_index].to_f64
+            subscale_p5_value = subscale_p5_block[value_index].to_f64
+            adaptive_subscale_p5_value = adaptive_subscale_block[value_index].to_f64
             p4_value = p4_block[value_index].to_f64
             p5_value = p5_block[value_index].to_f64
             adaptive_value = case adaptive_kind
@@ -308,12 +380,16 @@ begin
                              else          native_value
                              end
             native_sum += input * native_value
+            subscale_p5_sum += input * subscale_p5_value
+            adaptive_subscale_p5_sum += input * adaptive_subscale_p5_value
             p4_sum += input * p4_value
             p5_sum += input * p5_value
             adaptive_sum += input * adaptive_value
             value_index += 1
           end
           row_native_sums[activation_index] += native_sum
+          row_subscale_p5_sums[activation_index] += subscale_p5_sum
+          row_adaptive_subscale_p5_sums[activation_index] += adaptive_subscale_p5_sum
           row_p4_sums[activation_index] += p4_sum
           row_p5_sums[activation_index] += p5_sum
           row_adaptive_sums[activation_index] += adaptive_sum
@@ -322,6 +398,8 @@ begin
 
       activations.each_index do |activation_index|
         native_outputs[activation_index][sampled_index] = row_native_sums[activation_index]
+        subscale_p5_outputs[activation_index][sampled_index] = row_subscale_p5_sums[activation_index]
+        adaptive_subscale_p5_outputs[activation_index][sampled_index] = row_adaptive_subscale_p5_sums[activation_index]
         p4_outputs[activation_index][sampled_index] = row_p4_sums[activation_index]
         p5_outputs[activation_index][sampled_index] = row_p5_sums[activation_index]
         adaptive_outputs[activation_index][sampled_index] = row_adaptive_sums[activation_index]
@@ -330,17 +408,22 @@ begin
 
     puts "probe=qwen35_q6_adaptive_weight_probe mode=offline_cpu_only"
     puts "tensor=#{tensor.name} type=#{tensor.type} dims=#{tensor.dims.join("x")} sampled_rows=#{rows.size}/#{out_dim} first_row=#{rows.first} last_row=#{rows.last}"
-    puts "thresholds=p4:#{p4_threshold} p5:#{p5_threshold} seed=#{seed} activations=#{activations.size}"
-    puts "forecast_warning=payload_plus_4_metadata_per_256_value_block; this is a forecast, not an implemented production layout"
-    puts "memory_model=GGUF raw mmap view plus one native Q6_K block and two Gaussian reconstructions at a time"
+    puts "thresholds=p4:#{p4_threshold} p5:#{p5_threshold} subscale_p5:#{subscale_p5_threshold} seed=#{seed} activations=#{activations.size}"
+    puts "forecast_warning=Gaussian records include 4 metadata bytes per 256 values; subscale P5 uses its separately reported fixed/grouped layout; neither is a production ABI"
+    puts "memory_model=GGUF raw mmap view plus bounded native and reconstructed 256-value blocks"
     puts "ranking_scope=sampled_output_rows_only; top1_top2_are_operator_proxies_not_token_or_ECS_metrics"
     puts "residual_ratio=max_abs(original-candidate)/original_block_std p4_mean=#{(p4_ratio_sum / total_blocks).round(9)} p4_max=#{p4_ratio_max.round(9)} p5_mean=#{(p5_ratio_sum / total_blocks).round(9)} p5_max=#{p5_ratio_max.round(9)} zero_std_blocks=#{zero_std_blocks}"
+    puts "subscale_p5_residual_ratio=mean:#{(subscale_p5_ratio_sum / total_blocks).round(9)} max:#{subscale_p5_ratio_max.round(9)}"
     puts "native_baseline=raw_q6_payload_bytes=#{native_bytes} variable_record_q6_forecast_bytes=#{native_record_bytes}"
+    puts "policy=all_subscale_p5 blocks=#{total_blocks} forecast_bytes=#{all_subscale_p5_bytes} native_bytes=#{native_bytes} native_over_forecast=#{(native_bytes.to_f64 / all_subscale_p5_bytes.to_f64).round(9)} layout=fixed_5bit_values_plus_16_scale_bytes_plus_f32_master"
+    puts "policy=adaptive_subscale_p5 blocks=#{total_blocks} p5=#{adaptive_subscale_p5} q6=#{adaptive_subscale_q6} forecast_bytes=#{adaptive_subscale_bytes} native_bytes=#{native_bytes} native_over_forecast=#{(native_bytes.to_f64 / adaptive_subscale_bytes.to_f64).round(9)} layout=one_bit_tier_bitmap_plus_grouped_fixed_records"
     puts "policy=all_p4 blocks=#{total_blocks} p4=#{total_blocks} p5=0 q6=0 forecast_bytes=#{all_p4_bytes} native_bytes=#{native_bytes} forecast_over_native_payload=#{(all_p4_bytes.to_f64 / native_bytes.to_f64).round(9)} forecast_over_native_record=#{(all_p4_bytes.to_f64 / native_record_bytes.to_f64).round(9)} native_over_forecast=#{(native_bytes.to_f64 / all_p4_bytes.to_f64).round(9)}"
     puts "policy=all_p5 blocks=#{total_blocks} p4=0 p5=#{total_blocks} q6=0 forecast_bytes=#{all_p5_bytes} native_bytes=#{native_bytes} forecast_over_native_payload=#{(all_p5_bytes.to_f64 / native_bytes.to_f64).round(9)} forecast_over_native_record=#{(all_p5_bytes.to_f64 / native_record_bytes.to_f64).round(9)} native_over_forecast=#{(native_bytes.to_f64 / all_p5_bytes.to_f64).round(9)}"
     puts "policy=adaptive blocks=#{total_blocks} p4=#{adaptive_p4} p5=#{adaptive_p5} q6=#{adaptive_q6} forecast_bytes=#{adaptive_bytes} native_bytes=#{native_bytes} forecast_over_native_payload=#{(adaptive_bytes.to_f64 / native_bytes.to_f64).round(9)} forecast_over_native_record=#{(adaptive_bytes.to_f64 / native_record_bytes.to_f64).round(9)} native_over_forecast=#{(native_bytes.to_f64 / adaptive_bytes.to_f64).round(9)}"
 
     activations.each_with_index do |activation, activation_index|
+      print_metrics("all_subscale_p5", activation, rows, native_outputs[activation_index], subscale_p5_outputs[activation_index])
+      print_metrics("adaptive_subscale_p5", activation, rows, native_outputs[activation_index], adaptive_subscale_p5_outputs[activation_index])
       print_metrics("all_p4", activation, rows, native_outputs[activation_index], p4_outputs[activation_index])
       print_metrics("all_p5", activation, rows, native_outputs[activation_index], p5_outputs[activation_index])
       print_metrics("adaptive", activation, rows, native_outputs[activation_index], adaptive_outputs[activation_index])

@@ -3232,3 +3232,39 @@ rejects this implementation before whole-model integration. The temporary
 kernel, selector, and probe were removed. A future recurrent fusion needs a
 larger shared unit or parallel consumer mapping, not another lane-0 scalar tail.
 This was ordinary producer-consumer fusion, not LTP/WBA.
+
+### Rejected native-granularity subscale-P5 compression of Q6_K weights (2026-08-31)
+
+The retained offline weight probe was extended with a second representation
+falsifier that preserves Q6_K's 16-value scale granularity. Each 256-value
+block is requantized to signed five-bit values, sixteen unsigned scale codes,
+and one FP32 master scale. The fixed record is 180 bytes versus 210 bytes for
+native Q6_K, a theoretical `1.1667x` reduction. FP32 is intentional: a first
+FP16-master variant flushed real subnormal master scales to zero and was
+rejected before quality measurement.
+
+All-subscale-P5 preserved sampled-row ordered top-2 on five deterministic
+activation families, but this proxy did not imply near-lossless arithmetic.
+On 256 evenly sampled rows of the real `blk.0.ffn_down.weight`, output cosine
+ranged from `0.998450` to `0.999946`. A one-bit tier bitmap and native-Q6
+escape policy was then screened by the maximum residual divided by native
+block standard deviation. Threshold `0.08` retained cosine between `0.999920`
+and `0.999998`, but compressed only `1.005x`. Threshold `0.11` compressed
+`1.140x` and still preserved sampled-row ordered top-2, but cosine fell to
+`0.999225--0.999953`.
+
+An independent 32-row, different-seed run at threshold `0.11` reproduced the
+size result (`1.142x`) and weakened the numerical result further: cosine was
+`0.998954--0.999611`. The tested selector therefore cannot satisfy the
+predeclared joint gate of at least `1.12x` compression, cosine at least
+`0.99999`, and exact ordered top-2. Sampled rows and synthetic activations are
+only operator proxies, not token top-1/top-2 or ECS; this limitation weakens a
+promotion claim and cannot rescue a representation that already fails its
+local numerical gate.
+
+No Metal format or decoder was implemented. The probe remains a reproducible
+negative certificate. The next admissible Q6_K compression candidate must be
+bit-exact or use a selector calibrated against real hidden activations and the
+token/ECS boundary. In particular, preserving sub-block scale granularity by
+itself is insufficient when the sixth value bit is discarded. This was
+ordinary approximate weight representation research, not LTP/WBA.

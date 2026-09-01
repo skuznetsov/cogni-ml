@@ -25637,3 +25637,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary exact producer-consumer fusion.
 
 **decision:** Remove the temporary kernel, selector, and probe. Keep the current Q6_K GEMV followed by fused conv/shift. Reopen only with a consumer mapping that uses the SIMD group or eliminates a materially larger recurrent unit.
+
+#### [LM-QWEN38-Q6K-SUBSCALE-P5-FALSIFIED-974] Native sub-block scales do not make five-bit Q6_K near-lossless
+**context:** ml / Qwen3.8-27B / Q6_K weights / approximate compression / offline falsifier
+**state:** Metal integration rejected; CPU-only falsifier retained
+
+- claim: "A five-bit representation that retains Q6_K's 16-value scale granularity still has no operating point that combines useful compression with the predeclared near-lossless operator gate."
+  source: `bin/qwen35_q6_adaptive_weight_probe.cr` models 256 signed five-bit values, sixteen unsigned scale codes, and one FP32 master scale in 180 bytes versus 210 native Q6_K bytes. On 256 evenly sampled rows of the real `blk.0.ffn_down.weight`, all-subscale-P5 gave cosine `0.998450--0.999946`. A one-bit tier bitmap with native-Q6 escapes compressed only `1.005x` at residual/std threshold `0.08`, where cosine was `0.999920--0.999998`. Threshold `0.11` compressed `1.140x` but gave cosine `0.999225--0.999953`. A different-seed 32-row run compressed `1.142x` and gave cosine `0.998954--0.999611`. The required composition was compression `>=1.12x`, cosine `>=0.99999`, and exact ordered sampled-row top-2.
+  verified_at: 2026-08-31
+  decay_trigger: Q6_K source quantization, subscale-P5 arithmetic or byte layout, selector, sampled tensor/rows, activation corpus, or quality threshold changes
+  trust: {F:0.98,G:0.03,R:0.94}
+
+**Adversary:** Ordered sampled-row top-2 happened to remain stable, but it is an operator proxy rather than model-token top-1/top-2 or ECS. The synthetic activation corpus cannot certify production semantics. These gaps can only block promotion; they do not overturn the direct cosine failure. FP16 master-scale storage was also rejected because real Q6_K blocks can require a subnormal master that the bounded conversion flushed to zero.
+
+**Value proxy:** Theoretical bytes and sampled-row ranking are secondary coordinates. The representation had to meet the joint size and numerical gate before any Metal decoder was admissible; no threshold did.
+
+**LTP/WBA:** Not claimed. This was ordinary approximate representation screening against the native Q6_K comparison frame.
+
+**decision:** Retain the CPU falsifier but do not implement this lossy Metal format. Reopen with a bit-exact residual/bitplane format, or with real-hidden calibration plus model-token/ECS evidence; retaining native sub-block scale granularity alone is not enough.
