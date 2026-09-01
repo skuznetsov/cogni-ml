@@ -3760,6 +3760,32 @@ signal near 8.3K; do not promote a whole-generation speed claim. Re-run this
 same-process probe across more prompts whenever decode scheduling, recurrent
 kernels, adaptive tier maps, or model/device identity changes.
 
+### Paired K/V pack encoder refutation (2026-09-01)
+
+A temporary route encoded the independent K and V adaptive-pack dispatches in
+one ordinary Metal compute encoder instead of opening two encoders. It changed
+neither kernels, payload bytes, cache publication, nor command-buffer count.
+The protected resident-QBit set passed `19/19`; its numerical row reported
+cosine `1.0` and maximum absolute delta `3.72529e-8`.
+
+The same-process probe prewarmed both routes, restored identical cache state,
+and alternated order over ten pairs at an 8,320-token prefix. Uniform P4
+regressed from `1.826` to `1.943 ms` mean wall time (`-6.432%`, `6/10` wins)
+and from `1.228` to `1.264 ms` GPU time. Uniform BF16 improved wall time only
+from `2.253` to `2.207 ms` (`2.025%`, `7/10`) and therefore missed the declared
+`>=3%`, `>=8/10` promotion gate. Its GPU mean improved `3.374%`, but only
+`4/10` individual GPU pairs won, confirming high measurement variance rather
+than a stable product boundary.
+
+**Adversary:** Fewer encoder creations are only mechanism evidence. They do not
+guarantee lower command latency, and the measured setup cost is too small and
+noisy relative to pack, attention, finalization, and host scheduling.
+
+**decision:** Reject and remove the paired-encoder policy and route. Do not
+retry this submission-only optimization unless command-encoding attribution
+shows a materially larger host bottleneck or the dispatches can be fused into
+one kernel.
+
 ### Resident batched verifier-head append result (2026-09-01)
 
 The experiment removed one real submit/wait boundary from the existing

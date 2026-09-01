@@ -26051,3 +26051,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary kernel specialization with explicit T4 rollback frames.
 
 **decision:** Retain exact-M2-Max defaults for both T8 loaders on their existing isolated-kernel evidence. Claim no material short-context corridor acceleration and only a provisional `3.9--5.4%` median signal near 8.3K. Do not promote a whole-generation speed claim; refresh across more prompts after scheduler, tier-map, model, or device changes.
+
+#### [LM-QWEN38-PACK-PAIR-ENCODER-FALSIFIED-992] One encoder for K/V pack is not a stable speedup
+**context:** ml / Qwen3.8-27B / adaptive QBit KV / Metal encoder setup / long context
+**state:** candidate rejected and removed; historical two-encoder route retained
+
+- claim: "Sharing one ordinary Metal compute encoder between independent K and V pack dispatches preserves the bounded adaptive-cache result."
+  source: a temporary default-off route changed only encoder lifetime. The protected resident-QBit set passed `19/19`; the numerical row retained cosine `1.0` with maximum absolute delta `3.72529e-8`. Kernels, payload format, status/finalizer ordering, command ownership, and cache publication were unchanged.
+  verified_at: 2026-09-01
+  decay_trigger: adaptive pack kernels, Metal encoder semantics, status/finalizer ordering, or cache publication changes
+  trust: {F:0.94,G:0.05,R:0.90}
+
+- claim: "The paired encoder is not a promotable acceleration on the measured M2 Max 8K corridor."
+  source: ten same-process alternating pairs at prefix 8,320 restored equal cache state per sample. P4 wall regressed `1.826 -> 1.943 ms` (`-6.432%`, `6/10` wins); BF16 wall improved only `2.253 -> 2.207 ms` (`2.025%`, `7/10`). Both failed the declared `>=3%`, `>=8/10` gate, so the temporary policy, product route, and benchmark switch were removed.
+  verified_at: 2026-09-01
+  decay_trigger: command-encoding cost, pack/attention command topology, model/device/compiler/runtime, or timing harness changes
+  trust: {F:0.97,G:0.03,R:0.91}
+
+**Adversary:** Halving encoder creations is a mechanism count, not a wall-clock value. GPU/host timing was noisy and the only positive mean stayed below the admission threshold.
+
+**Value proxy:** Encoder count was rejected as the objective; paired complete-command wall plus stable wins was the promotion boundary.
+
+**LTP/WBA:** Not claimed. This was ordinary command encoding with an exact historical rollback.
+
+**decision:** Keep the two-encoder path. Reopen only if profiling first proves command encoding is material or a single fused K/V pack kernel removes real GPU work as well as host setup.
