@@ -26551,3 +26551,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was the final ordinary batch-four kernel falsifier after the dequantized `mul_mv_ext` port failed.
 
 **decision:** Close the current Q4_K batch-four weight-sharing family on Apple M2 Max. Do not retry dequantized, packed-integer, H16, Q5, or Q6 variants without a materially different ownership schedule. Move to exact layer-resident work elimination across the FFN diamond, where complete intermediate writes, reads, or dispatches can be removed.
+
+#### [LM-QWEN38-MTP-FFN-DIAMOND-CEILING-NOGO-1016] The multi-row FFN diamond cannot clear the MTP wall gate
+**context:** ml / Qwen3.8-27B / MTP verifier / exact multi-row FFN / Apple M2 Max
+**state:** attribution ceiling measured and candidate rejected before implementation; production runtime unchanged
+
+- claim: "Even deleting the complete measured multi-row FFN phases would not move the current exact MTP route past the `1.03x` admission gate."
+  source: two fresh guarded controls used the current Qwen3.8 Q4_K_M target, gamma four, stage-one-then-tail verification, sixteen generated tokens, persistent MTP state, recurrent checkpoint replay, exact output parity, and the full-state continuation oracle. They measured `plain/all-in = 902.142/1279.798 ms` and `907.295/1233.577 ms`; reaching `1.03x` would require removing `403.932 ms` and `352.708 ms`, respectively. A matched attribution run enabled both `QWEN35_PREFILL_PHASE_PROFILE=1` and `QWEN35_PREFILL_FULL_DETAIL_PROFILE=1`. Across every eligible non-appended multi-row verifier layer, `ffn_upgate + ffn_down` accounted for `331.310 ms`: recurrent up/down `142.820/109.850 ms` and full-attention up/down `44.880/33.760 ms`. In the profiled run this was only `24.11%` of `1373.966 ms` all-in wall, while reaching `1.03x` required `495.675 ms` or `36.08%`. All three processes exited zero under the 35% free-memory floor and 24 GiB tree cap; output parity and the state/continuation checks passed.
+  verified_at: 2026-09-02
+  decay_trigger: verifier route or eligible batch distribution, FFN phase boundaries, model/device/compiler/runtime, admission threshold, or all-in measurement protocol changes
+  trust: {F:0.98,G:0.03,R:0.94}
+
+**Adversary:** The detailed checkpoints serialize phases and add profiling overhead, so their waits are attribution measurements rather than production timings. The rejection deliberately grants the candidate an impossible upper bound: it assumes both quantized matrix multiplications, SwiGLU, residual addition, and every measured FFN phase vanish at zero cost. A real layer-resident implementation can remove only intermediate traffic and dispatches while retaining the dominant weight work, so its attainable gain is strictly smaller. The profile excludes appended/small-batch routes, but those are outside this proposed multi-row function boundary and their separate Q4/Q6 reuse families were already refuted.
+
+**Value proxy:** FFN logical traffic and phase share identify a large local bucket; the product boundary is complete exact speculative wall including persistent-state setup. A locally dominant phase is insufficient when its impossible whole-phase ceiling does not clear the end-to-end gate.
+
+**LTP/WBA:** Not claimed. This is a falsifier for an ordinary exact kernel-fusion proposal.
+
+**decision:** Do not implement the large layer-resident FFN diamond on the current MTP verifier route. Keep the existing exact FFN kernels. Return to verifier control flow and pursue work elimination across rejected-tail, checkpoint, or route boundaries; require the state continuation oracle and a fresh ceiling before writing another large kernel.
