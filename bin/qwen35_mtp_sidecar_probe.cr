@@ -68,7 +68,12 @@ mtp_spec_wall_gpu_fallback_chain_min = 1_i32
 mtp_spec_wall_speed_mode = false
 mtp_spec_wall_persistent_mtp_state = false
 mtp_spec_wall_spec_first = false
+mtp_spec_wall_state_parity = false
 mtp_draft_state_off = false
+
+STATE_PARITY_ATOL                =   1.0e-4_f64
+STATE_PARITY_CONTINUATION_TOKENS =        4_i32
+STATE_PARITY_MIN_ECS             = 0.999999_f64
 
 struct DiagBridge
   getter scale : Array(Float32)
@@ -203,6 +208,19 @@ class MtpSpecWallAggregate
   property snapshot_modeled_wall_ms_sum : Float64
   property wall_ms_sum : Float64
   property plain_exact_ms_sum : Float64
+  property state_rows : Int32
+  property state_parity_ok : Int32
+  property state_exact_mismatches : Int64
+  property state_tolerance_mismatches : Int64
+  property state_nonfinite : Int64
+  property state_shape_mismatches : Int32
+  property state_owner_mismatches : Int32
+  property state_max_abs : Float64
+  property state_continuation_ok : Int32
+  property state_hidden_diagnostic_available : Int32
+  property state_hidden_diagnostic_ok : Int32
+  property state_continuation_min_ecs : Float64
+  property state_continuation_max_abs : Float64
 
   def initialize
     @rows = 0
@@ -241,6 +259,85 @@ class MtpSpecWallAggregate
     @snapshot_modeled_wall_ms_sum = 0.0
     @wall_ms_sum = 0.0
     @plain_exact_ms_sum = 0.0
+    @state_rows = 0
+    @state_parity_ok = 0
+    @state_exact_mismatches = 0_i64
+    @state_tolerance_mismatches = 0_i64
+    @state_nonfinite = 0_i64
+    @state_shape_mismatches = 0
+    @state_owner_mismatches = 0
+    @state_max_abs = 0.0
+    @state_continuation_ok = 0
+    @state_hidden_diagnostic_available = 0
+    @state_hidden_diagnostic_ok = 0
+    @state_continuation_min_ecs = 1.0
+    @state_continuation_max_abs = 0.0
+  end
+end
+
+class StateParityResult
+  getter compared_floats : Int64
+  getter exact_mismatches : Int64
+  getter tolerance_mismatches : Int64
+  getter nonfinite : Int64
+  getter shape_mismatches : Int32
+  getter owner_mismatches : Int32
+  getter max_abs : Float64
+  getter kv_max_abs : Float64
+  getter recurrent_max_abs : Float64
+
+  def initialize(@atol : Float64)
+    @compared_floats = 0_i64
+    @exact_mismatches = 0_i64
+    @tolerance_mismatches = 0_i64
+    @nonfinite = 0_i64
+    @shape_mismatches = 0
+    @owner_mismatches = 0
+    @max_abs = 0.0
+    @kv_max_abs = 0.0
+    @recurrent_max_abs = 0.0
+  end
+
+  def observe(actual : Float32, expected : Float32, kv : Bool) : Nil
+    @compared_floats += 1
+    unless actual.finite? && expected.finite?
+      @nonfinite += 1
+      return
+    end
+
+    @exact_mismatches += 1 unless actual.unsafe_as(UInt32) == expected.unsafe_as(UInt32)
+    delta = (actual - expected).abs.to_f64
+    @tolerance_mismatches += 1 if delta > @atol
+    @max_abs = delta if delta > @max_abs
+    if kv
+      @kv_max_abs = delta if delta > @kv_max_abs
+    else
+      @recurrent_max_abs = delta if delta > @recurrent_max_abs
+    end
+  end
+
+  def shape_mismatch! : Nil
+    @shape_mismatches += 1
+  end
+
+  def owner_mismatch! : Nil
+    @owner_mismatches += 1
+  end
+
+  def merge!(other : StateParityResult) : Nil
+    @compared_floats += other.compared_floats
+    @exact_mismatches += other.exact_mismatches
+    @tolerance_mismatches += other.tolerance_mismatches
+    @nonfinite += other.nonfinite
+    @shape_mismatches += other.shape_mismatches
+    @owner_mismatches += other.owner_mismatches
+    @max_abs = other.max_abs if other.max_abs > @max_abs
+    @kv_max_abs = other.kv_max_abs if other.kv_max_abs > @kv_max_abs
+    @recurrent_max_abs = other.recurrent_max_abs if other.recurrent_max_abs > @recurrent_max_abs
+  end
+
+  def passed? : Bool
+    @tolerance_mismatches == 0 && @nonfinite == 0 && @shape_mismatches == 0 && @owner_mismatches == 0
   end
 end
 
@@ -286,6 +383,161 @@ end
 
 private def elapsed_ms(start : Time::Instant) : Float64
   (Time.instant - start).total_milliseconds
+end
+
+private def compare_state_array!(result : StateParityResult,
+                                 actual : Array(Float32)?,
+                                 expected : Array(Float32)?,
+                                 kv : Bool,
+                                 live_count : Int32? = nil) : Nil
+  if actual && expected
+    if actual.size != expected.size
+      result.shape_mismatch!
+      return
+    end
+    count = live_count || actual.size
+    if count < 0 || count > actual.size
+      result.shape_mismatch!
+      return
+    end
+    count.times { |i| result.observe(actual[i], expected[i], kv) }
+  elsif actual || expected
+    result.owner_mismatch!
+  end
+end
+
+private def compare_state_buffer!(result : StateParityResult,
+                                  actual : ML::MetalBuffer?,
+                                  expected : ML::MetalBuffer?,
+                                  kv : Bool,
+                                  live_count : Int32? = nil) : Nil
+  if actual && expected
+    if actual.size != expected.size || actual.size % sizeof(Float32) != 0
+      result.shape_mismatch!
+      return
+    end
+    count = live_count || actual.element_count
+    if count < 0 || count > actual.element_count
+      result.shape_mismatch!
+      return
+    end
+    actual.sync
+    expected.sync
+    actual_ptr = actual.contents.as(Pointer(Float32))
+    expected_ptr = expected.contents.as(Pointer(Float32))
+    count.times { |i| result.observe(actual_ptr[i], expected_ptr[i], kv) }
+  elsif actual || expected
+    result.owner_mismatch!
+  end
+end
+
+private def compare_owned_state!(result : StateParityResult,
+                                 actual_array : Array(Float32)?,
+                                 expected_array : Array(Float32)?,
+                                 actual_buffer : ML::MetalBuffer?,
+                                 expected_buffer : ML::MetalBuffer?,
+                                 kv : Bool,
+                                 live_count : Int32? = nil) : Nil
+  actual_array_owner = !actual_array.nil?
+  expected_array_owner = !expected_array.nil?
+  actual_buffer_owner = !actual_buffer.nil?
+  expected_buffer_owner = !expected_buffer.nil?
+  unless actual_array_owner != actual_buffer_owner &&
+         expected_array_owner != expected_buffer_owner &&
+         actual_array_owner == expected_array_owner
+    result.owner_mismatch!
+    return
+  end
+
+  if actual_array_owner
+    compare_state_array!(result, actual_array, expected_array, kv, live_count)
+  else
+    compare_state_buffer!(result, actual_buffer, expected_buffer, kv, live_count)
+  end
+end
+
+private def compare_exact_state(actual : ML::GGUF::Qwen35CPU::State,
+                                expected : ML::GGUF::Qwen35CPU::State,
+                                hp : ML::GGUF::Qwen35Hparams,
+                                live_tokens : Int32,
+                                atol : Float64) : StateParityResult
+  result = StateParityResult.new(atol)
+  if actual.max_seq != expected.max_seq || actual.layers.size != expected.layers.size
+    result.shape_mismatch!
+    return result
+  end
+  if live_tokens < 0 || live_tokens > actual.max_seq
+    result.shape_mismatch!
+    return result
+  end
+  if actual.adaptive_kv? || expected.adaptive_kv?
+    result.owner_mismatch!
+    return result
+  end
+
+  # State producers are synchronous today, but the oracle reads unified-memory
+  # buffers directly and must remain valid if a producer becomes asynchronous.
+  ML::Metal::Device.synchronize
+
+  kv_live_count64 = live_tokens.to_i64 * hp.head_dim * hp.n_head_kv
+  if kv_live_count64 < 0 || kv_live_count64 > Int32::MAX
+    result.shape_mismatch!
+    return result
+  end
+  kv_live_count = kv_live_count64.to_i32
+
+  actual.layers.each_with_index do |actual_layer, il|
+    expected_layer = expected.layers[il]
+    result.shape_mismatch! unless actual_layer.position == expected_layer.position
+    if hp.full_attention?(il)
+      compare_owned_state!(result,
+        actual_layer.k_cache, expected_layer.k_cache,
+        actual_layer.k_cache_buf, expected_layer.k_cache_buf,
+        true, kv_live_count)
+      compare_owned_state!(result,
+        actual_layer.v_cache, expected_layer.v_cache,
+        actual_layer.v_cache_buf, expected_layer.v_cache_buf,
+        true, kv_live_count)
+    else
+      compare_owned_state!(result,
+        actual_layer.conv_state, expected_layer.conv_state,
+        actual_layer.conv_state_buf, expected_layer.conv_state_buf,
+        false)
+      compare_owned_state!(result,
+        actual_layer.ssm_state, expected_layer.ssm_state,
+        actual_layer.ssm_state_buf, expected_layer.ssm_state_buf,
+        false)
+    end
+  end
+  result
+end
+
+private def embedding_cosine_similarity(actual : Array(Float32), expected : Array(Float32)) : Float64
+  raise ArgumentError.new("embedding size mismatch") unless actual.size == expected.size
+  dot = 0.0_f64
+  actual_norm = 0.0_f64
+  expected_norm = 0.0_f64
+  actual.each_with_index do |value, i|
+    a = value.to_f64
+    b = expected[i].to_f64
+    raise "non-finite continuation hidden" unless a.finite? && b.finite?
+    dot += a * b
+    actual_norm += a * a
+    expected_norm += b * b
+  end
+  denom = Math.sqrt(actual_norm * expected_norm)
+  raise "zero-norm continuation hidden" unless denom > 0.0
+  (dot / denom).clamp(-1.0, 1.0)
+end
+
+private def max_abs_delta(actual : Array(Float32), expected : Array(Float32)) : Float64
+  raise ArgumentError.new("embedding size mismatch") unless actual.size == expected.size
+  max_abs = 0.0_f64
+  actual.each_with_index do |value, i|
+    delta = (value - expected[i]).abs.to_f64
+    max_abs = delta if delta > max_abs
+  end
+  max_abs
 end
 
 private def prompt_entry_features(token_ids : Array(Int32)) : PromptEntryFeatures
@@ -646,7 +898,7 @@ private def measure_plain_exact(weights, initial_state, prev_token : Int32, pos 
     plain_prev = id
     plain_pos += 1
   end
-  {ids: plain_ids, token_ms: plain_token_ms, wall_ms: elapsed_ms(plain_start)}
+  {ids: plain_ids, token_ms: plain_token_ms, wall_ms: elapsed_ms(plain_start), state: plain_state}
 end
 
 OptionParser.parse do |p|
@@ -721,6 +973,7 @@ OptionParser.parse do |p|
   p.on("--mtp-spec-wall-gpu-fallback-chain-min N", "Use GPU fallback chain only for suffixes with at least N remaining tokens") { |v| mtp_spec_wall_gpu_fallback_chain_min = v.to_i32 }
   p.on("--mtp-spec-wall-persistent-mtp-state", "Keep a llama.cpp-style MTP KV/history state across wall passes and repair it at verifier boundaries") { mtp_spec_wall_persistent_mtp_state = true }
   p.on("--mtp-spec-wall-spec-first", "Measure the single MTP wall gamma before paired plain exact for order-balanced benchmarks") { mtp_spec_wall_spec_first = true }
+  p.on("--mtp-spec-wall-state-check", "Tolerance-check live KV/recurrent state and production continuation against plain decode outside wall timing") { mtp_spec_wall_state_parity = true }
   p.on("--mtp-spec-wall-speed-mode", "Enable the current exact low-risk MTP wall controller: exact-first stage2 lazy hidden-resync checkpoint replay, local low-margin exact off-ramp, and first-reject off-ramp") do
     mtp_spec_wall_speed_mode = true
     mtp_spec_wall_stage = 2
@@ -758,6 +1011,7 @@ if run_forward && mtp_spec_wall_state_slot_probe
   abort "--mtp-spec-wall-state-slot-probe is incompatible with --mtp-spec-wall-top2-rescue-continue" if mtp_spec_wall_top2_rescue_continue
   mtp_spec_wall_rec_checkpoint_replay = true
 end
+abort "--mtp-spec-wall-state-check requires --mtp-spec-wall-gammas" if mtp_spec_wall_state_parity && mtp_spec_wall_gammas.empty?
 
 abort "model not found: #{model_path}" unless File.exists?(model_path)
 mtp_source_path = mtp_from_gguf ? (mtp_gguf_path || model_path).not_nil! : mtp_path
@@ -872,7 +1126,8 @@ rows.each do |label, prompt_text|
   token_ids = tokenizer.encode(prompt_text)
   abort "prompt #{label.inspect} encoded to no tokens" if token_ids.empty?
   entry_features = prompt_entry_features(token_ids)
-  needed_seq = token_ids.size + (mtp_chain_tokens > 0 ? mtp_chain_tokens + 1 : 2)
+  continuation_capacity = mtp_spec_wall_state_parity ? STATE_PARITY_CONTINUATION_TOKENS : 1
+  needed_seq = token_ids.size + (mtp_chain_tokens > 0 ? mtp_chain_tokens + continuation_capacity : 2)
   abort "prompt #{label.inspect} needs max_seq >= #{needed_seq}, got #{max_seq}" if needed_seq > max_seq
 
   state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq)
@@ -1017,6 +1272,7 @@ rows.each do |label, prompt_text|
   plain_ids = [] of Int32
   plain_token_ms = [] of Float64
   plain_exact_ms = 0.0_f64
+  plain_state = nil.as(ML::GGUF::Qwen35CPU::State?)
   plain_suffix_ms = Array(Float64).new(mtp_chain_tokens + 1, 0.0_f64)
   exact_ids = exact_nexts.map(&.[0])
   unless mtp_spec_wall_spec_first
@@ -1024,6 +1280,7 @@ rows.each do |label, prompt_text|
     plain_ids = plain_result[:ids]
     plain_token_ms = plain_result[:token_ms]
     plain_exact_ms = plain_result[:wall_ms]
+    plain_state = plain_result[:state]
     (mtp_chain_tokens - 1).downto(0) do |i|
       plain_suffix_ms[i] = plain_suffix_ms[i + 1] + plain_token_ms[i]
     end
@@ -1632,6 +1889,7 @@ rows.each do |label, prompt_text|
       plain_ids = plain_result[:ids]
       plain_token_ms = plain_result[:token_ms]
       plain_exact_ms = plain_result[:wall_ms]
+      plain_state = plain_result[:state]
       (mtp_chain_tokens - 1).downto(0) do |i|
         plain_suffix_ms[i] = plain_suffix_ms[i + 1] + plain_token_ms[i]
       end
@@ -1655,6 +1913,77 @@ rows.each do |label, prompt_text|
       puts "mtp_spec_wall_mismatch label=#{label.inspect} gamma=#{gamma} stage=#{mtp_spec_wall_stage} expected=#{exact_ids.join(",")} actual=#{wall_ids.join(",")}"
     end
     raise "mtp spec wall ids mismatch for #{label} gamma #{gamma}" unless parity
+
+    state_parity = nil.as(StateParityResult?)
+    state_continuation_ok = false
+    state_hidden_diagnostic_available = false
+    state_hidden_diagnostic_ok = false
+    state_hidden_diagnostic_error = nil.as(String?)
+    state_continuation_min_ecs = 1.0_f64
+    state_continuation_max_abs = 0.0_f64
+    if mtp_spec_wall_state_parity
+      state_parity = compare_exact_state(
+        wall_state,
+        plain_state.not_nil!,
+        weights.hparams,
+        token_ids.size + mtp_chain_tokens,
+        STATE_PARITY_ATOL)
+      result = state_parity.not_nil!
+      wall_continuation_ids = [] of Int32
+      plain_continuation_ids = [] of Int32
+      wall_continuation_state = wall_state.fork
+      plain_continuation_state = plain_state.not_nil!.fork
+      begin
+        wall_continuation_token = wall_ids.last
+        plain_continuation_token = plain_ids.last
+        continuation_pos = token_ids.size + mtp_chain_tokens
+        STATE_PARITY_CONTINUATION_TOKENS.times do
+          wall_continuation_token, _ = ML::GGUF::Qwen35CPU.forward_top1(
+            weights, wall_continuation_token, continuation_pos, wall_continuation_state)
+          plain_continuation_token, _ = ML::GGUF::Qwen35CPU.forward_top1(
+            weights, plain_continuation_token, continuation_pos, plain_continuation_state)
+          wall_continuation_ids << wall_continuation_token
+          plain_continuation_ids << plain_continuation_token
+          continuation_pos += 1
+        end
+
+        result.merge!(compare_exact_state(
+          wall_continuation_state,
+          plain_continuation_state,
+          weights.hparams,
+          token_ids.size + mtp_chain_tokens + STATE_PARITY_CONTINUATION_TOKENS,
+          STATE_PARITY_ATOL))
+
+        # ECS remains a non-blocking diagnostic on the next hidden boundary.
+        # Correctness is decided by production forward_top1 tokens and both
+        # complete state scans, so a diagnostic-path failure cannot reject it.
+        if continuation_pos < wall_continuation_state.max_seq && continuation_pos < plain_continuation_state.max_seq
+          begin
+            wall_continuation_hidden = ML::GGUF::Qwen35CPU.forward_hidden(
+              weights, wall_continuation_token, continuation_pos, wall_continuation_state)
+            plain_continuation_hidden = ML::GGUF::Qwen35CPU.forward_hidden(
+              weights, plain_continuation_token, continuation_pos, plain_continuation_state)
+            state_continuation_min_ecs = embedding_cosine_similarity(
+              wall_continuation_hidden, plain_continuation_hidden)
+            state_continuation_max_abs = max_abs_delta(
+              wall_continuation_hidden, plain_continuation_hidden)
+            state_hidden_diagnostic_available = true
+            state_hidden_diagnostic_ok = state_continuation_min_ecs >= STATE_PARITY_MIN_ECS
+          rescue ex
+            state_hidden_diagnostic_error = ex.class.name
+          end
+        else
+          state_hidden_diagnostic_error = "sequence_capacity"
+        end
+      ensure
+        ML::GGUF::Qwen35CPU.release_state_metal!(wall_continuation_state)
+        ML::GGUF::Qwen35CPU.release_state_metal!(plain_continuation_state)
+      end
+      state_continuation_ok = wall_continuation_ids == plain_continuation_ids
+      state_parity_passed = result.passed? && state_continuation_ok
+      puts "mtp_spec_wall_state_check label=#{label.inspect} gamma=#{gamma} atol=#{STATE_PARITY_ATOL} passed=#{state_parity_passed} state_checkpoints=2 compared_floats=#{result.compared_floats} exact_mismatches=#{result.exact_mismatches} tolerance_mismatches=#{result.tolerance_mismatches} nonfinite=#{result.nonfinite} shape_mismatches=#{result.shape_mismatches} owner_mismatches=#{result.owner_mismatches} max_abs=#{result.max_abs} kv_max_abs=#{result.kv_max_abs} recurrent_max_abs=#{result.recurrent_max_abs} continuation_tokens=#{STATE_PARITY_CONTINUATION_TOKENS} continuation_route=forward_top1 continuation_ids_match=#{state_continuation_ok} hidden_diagnostic_available=#{state_hidden_diagnostic_available} hidden_diagnostic_ok=#{state_hidden_diagnostic_ok} hidden_diagnostic_error=#{state_hidden_diagnostic_error.inspect} post_continuation_hidden_ecs=#{state_continuation_min_ecs} post_continuation_hidden_max_abs=#{state_continuation_max_abs} continuation_actual_ids=#{wall_continuation_ids.join(",")} continuation_expected_ids=#{plain_continuation_ids.join(",")}"
+      raise "mtp spec wall state mismatch for #{label} gamma #{gamma}" unless state_parity_passed
+    end
 
     if router_trace_io || !mtp_spec_wall_router_thresholds.empty?
       target_margin_cache.clear
@@ -1734,6 +2063,21 @@ rows.each do |label, prompt_text|
     agg.snapshot_modeled_wall_ms_sum += snapshot_modeled_wall_ms
     agg.wall_ms_sum += wall_ms
     agg.plain_exact_ms_sum += plain_exact_ms
+    if result = state_parity
+      agg.state_rows += 1
+      agg.state_parity_ok += 1 if result.passed? && state_continuation_ok
+      agg.state_exact_mismatches += result.exact_mismatches
+      agg.state_tolerance_mismatches += result.tolerance_mismatches
+      agg.state_nonfinite += result.nonfinite
+      agg.state_shape_mismatches += result.shape_mismatches
+      agg.state_owner_mismatches += result.owner_mismatches
+      agg.state_max_abs = result.max_abs if result.max_abs > agg.state_max_abs
+      agg.state_continuation_ok += 1 if state_continuation_ok
+      agg.state_hidden_diagnostic_available += 1 if state_hidden_diagnostic_available
+      agg.state_hidden_diagnostic_ok += 1 if state_hidden_diagnostic_ok
+      agg.state_continuation_min_ecs = state_continuation_min_ecs if state_continuation_min_ecs < agg.state_continuation_min_ecs
+      agg.state_continuation_max_abs = state_continuation_max_abs if state_continuation_max_abs > agg.state_continuation_max_abs
+    end
 
     verifier_mode = mtp_spec_wall_serial_early_verify ? "serial_early" : "chunk"
     measurement_order = mtp_spec_wall_spec_first ? "spec_then_plain" : "plain_then_spec"
@@ -1974,7 +2318,8 @@ mtp_spec_wall_aggregates.keys.sort.each do |gamma|
   verifier_mode = mtp_spec_wall_serial_early_verify ? "serial_early" : "chunk"
   measurement_order = mtp_spec_wall_spec_first ? "spec_then_plain" : "plain_then_spec"
   all_in_wall_ms = agg.wall_ms_sum + agg.persistent_setup_ms_sum
-  puts "mtp_spec_wall_suite_summary mode=exact_resync_wall verifier=#{verifier_mode} speed_mode=#{mtp_spec_wall_speed_mode} measurement_order=#{measurement_order} gamma=#{gamma} stage=#{mtp_spec_wall_stage} stage_once=#{mtp_spec_wall_stage_once} stage_bonus=#{mtp_spec_wall_stage_bonus} top2_accounting=#{mtp_spec_wall_top2_accounting} top2_on_reject=#{mtp_spec_wall_top2_on_reject} top2_miss_offramp=#{mtp_spec_wall_top2_miss_offramp} top2_rescue_continue=#{mtp_spec_wall_top2_rescue_continue} promote_top2_margin=#{fmt3(mtp_spec_wall_promote_top2_margin)} min_margin=#{fmt3(mtp_spec_wall_min_margin)} min_margin_offramp=#{mtp_spec_wall_min_margin_offramp} raw_blend=#{fmt3(mtp_spec_wall_raw_blend.try(&.to_f64))} lazy_draft=#{mtp_spec_wall_lazy_draft} persistent_mtp_state=#{mtp_spec_wall_persistent_mtp_state} reject_offramp=#{mtp_spec_wall_reject_offramp} snapshot_cost_probe=#{mtp_spec_wall_snapshot_cost_probe} exact_warmup=#{mtp_wall_exact_warmup} resync_draft_hidden=#{mtp_spec_wall_resync_draft_hidden} rec_checkpoint_replay=#{mtp_spec_wall_rec_checkpoint_replay} rec_rollback_log=#{mtp_spec_wall_rec_rollback_log} state_slot_probe=#{mtp_spec_wall_state_slot_probe} state_slot_skipped_backups=#{agg.state_slot_skipped_backups} state_slot_recoveries=#{agg.state_slot_recoveries} exact_first=#{mtp_spec_wall_exact_first} gpu_fallback_chain=#{mtp_spec_wall_gpu_fallback_chain} gpu_fallback_chain_min=#{mtp_spec_wall_gpu_fallback_chain_min} rows=#{agg.rows} parity_ok=#{agg.parity_ok}/#{agg.rows} tokens=#{agg.tokens} passes=#{agg.passes} emitted=#{agg.emitted} draft_tokens=#{agg.draft_tokens} accepted=#{agg.accepted} rejections=#{agg.rejections} verifier_calls=#{agg.verifier_calls} verifier_tokens=#{agg.verifier_tokens} replay_tokens=#{agg.replay_tokens} fallback_tokens=#{agg.fallback_tokens} snapshot_tokens=#{agg.snapshot_tokens} top2_checks=#{agg.top2_checks} top2_rescues=#{agg.top2_rescues} top2_wrong_tail_tokens=#{agg.top2_wrong_tail_tokens} top2_replay_tokens=#{agg.top2_replay_tokens} top2_replay_ms=#{agg.top2_replay_ms_sum.round(3)} top2_offramp_hits=#{agg.top2_offramp_hits} top2_promotions=#{agg.top2_promotions} top2_promoted_accepted=#{agg.top2_promoted_accepted} margin_skips=#{agg.margin_skips} entry_skips=#{agg.entry_skips} entry_skip_tokens=#{agg.entry_skip_tokens} accept_rate=#{pct(agg.accepted, agg.draft_tokens).round(2)} tokens_per_pass=#{(agg.emitted.to_f64 / agg.passes).round(3)} mtp_ms=#{agg.mtp_ms_sum.round(3)} verifier_ms=#{agg.verifier_ms_sum.round(3)} backup_ms=#{agg.backup_ms_sum.round(3)} replay_ms=#{agg.replay_ms_sum.round(3)} fallback_ms=#{agg.fallback_ms_sum.round(3)} persistent_setup_ms=#{agg.persistent_setup_ms_sum.round(3)} all_in_wall_ms=#{all_in_wall_ms.round(3)} snapshot_sim_ms=#{agg.snapshot_ms_sum.round(3)} snapshot_modeled_wall_ms=#{agg.snapshot_modeled_wall_ms_sum.round(3)} snapshot_modeled_speedup=#{(agg.plain_exact_ms_sum / agg.snapshot_modeled_wall_ms_sum).round(3)} wall_ms=#{agg.wall_ms_sum.round(3)} plain_exact_ms=#{agg.plain_exact_ms_sum.round(3)} plain_speedup=#{(agg.plain_exact_ms_sum / agg.wall_ms_sum).round(3)} all_in_plain_speedup=#{(agg.plain_exact_ms_sum / all_in_wall_ms).round(3)}"
+  state_parity_summary = mtp_spec_wall_state_parity ? "#{agg.state_parity_ok}/#{agg.state_rows}" : "not_checked"
+  puts "mtp_spec_wall_suite_summary mode=exact_resync_wall verifier=#{verifier_mode} speed_mode=#{mtp_spec_wall_speed_mode} measurement_order=#{measurement_order} gamma=#{gamma} stage=#{mtp_spec_wall_stage} stage_once=#{mtp_spec_wall_stage_once} stage_bonus=#{mtp_spec_wall_stage_bonus} top2_accounting=#{mtp_spec_wall_top2_accounting} top2_on_reject=#{mtp_spec_wall_top2_on_reject} top2_miss_offramp=#{mtp_spec_wall_top2_miss_offramp} top2_rescue_continue=#{mtp_spec_wall_top2_rescue_continue} promote_top2_margin=#{fmt3(mtp_spec_wall_promote_top2_margin)} min_margin=#{fmt3(mtp_spec_wall_min_margin)} min_margin_offramp=#{mtp_spec_wall_min_margin_offramp} raw_blend=#{fmt3(mtp_spec_wall_raw_blend.try(&.to_f64))} lazy_draft=#{mtp_spec_wall_lazy_draft} persistent_mtp_state=#{mtp_spec_wall_persistent_mtp_state} reject_offramp=#{mtp_spec_wall_reject_offramp} snapshot_cost_probe=#{mtp_spec_wall_snapshot_cost_probe} exact_warmup=#{mtp_wall_exact_warmup} resync_draft_hidden=#{mtp_spec_wall_resync_draft_hidden} rec_checkpoint_replay=#{mtp_spec_wall_rec_checkpoint_replay} rec_rollback_log=#{mtp_spec_wall_rec_rollback_log} state_slot_probe=#{mtp_spec_wall_state_slot_probe} state_slot_skipped_backups=#{agg.state_slot_skipped_backups} state_slot_recoveries=#{agg.state_slot_recoveries} state_check=#{state_parity_summary} state_exact_mismatches=#{agg.state_exact_mismatches} state_tolerance_mismatches=#{agg.state_tolerance_mismatches} state_nonfinite=#{agg.state_nonfinite} state_shape_mismatches=#{agg.state_shape_mismatches} state_owner_mismatches=#{agg.state_owner_mismatches} state_max_abs=#{agg.state_max_abs} state_continuation_ok=#{agg.state_continuation_ok}/#{agg.state_rows} state_hidden_diagnostic_available=#{agg.state_hidden_diagnostic_available}/#{agg.state_rows} state_hidden_diagnostic_ok=#{agg.state_hidden_diagnostic_ok}/#{agg.state_rows} state_post_continuation_min_ecs=#{agg.state_continuation_min_ecs} state_post_continuation_max_abs=#{agg.state_continuation_max_abs} exact_first=#{mtp_spec_wall_exact_first} gpu_fallback_chain=#{mtp_spec_wall_gpu_fallback_chain} gpu_fallback_chain_min=#{mtp_spec_wall_gpu_fallback_chain_min} rows=#{agg.rows} parity_ok=#{agg.parity_ok}/#{agg.rows} tokens=#{agg.tokens} passes=#{agg.passes} emitted=#{agg.emitted} draft_tokens=#{agg.draft_tokens} accepted=#{agg.accepted} rejections=#{agg.rejections} verifier_calls=#{agg.verifier_calls} verifier_tokens=#{agg.verifier_tokens} replay_tokens=#{agg.replay_tokens} fallback_tokens=#{agg.fallback_tokens} snapshot_tokens=#{agg.snapshot_tokens} top2_checks=#{agg.top2_checks} top2_rescues=#{agg.top2_rescues} top2_wrong_tail_tokens=#{agg.top2_wrong_tail_tokens} top2_replay_tokens=#{agg.top2_replay_tokens} top2_replay_ms=#{agg.top2_replay_ms_sum.round(3)} top2_offramp_hits=#{agg.top2_offramp_hits} top2_promotions=#{agg.top2_promotions} top2_promoted_accepted=#{agg.top2_promoted_accepted} margin_skips=#{agg.margin_skips} entry_skips=#{agg.entry_skips} entry_skip_tokens=#{agg.entry_skip_tokens} accept_rate=#{pct(agg.accepted, agg.draft_tokens).round(2)} tokens_per_pass=#{(agg.emitted.to_f64 / agg.passes).round(3)} mtp_ms=#{agg.mtp_ms_sum.round(3)} verifier_ms=#{agg.verifier_ms_sum.round(3)} backup_ms=#{agg.backup_ms_sum.round(3)} replay_ms=#{agg.replay_ms_sum.round(3)} fallback_ms=#{agg.fallback_ms_sum.round(3)} persistent_setup_ms=#{agg.persistent_setup_ms_sum.round(3)} all_in_wall_ms=#{all_in_wall_ms.round(3)} snapshot_sim_ms=#{agg.snapshot_ms_sum.round(3)} snapshot_modeled_wall_ms=#{agg.snapshot_modeled_wall_ms_sum.round(3)} snapshot_modeled_speedup=#{(agg.plain_exact_ms_sum / agg.snapshot_modeled_wall_ms_sum).round(3)} wall_ms=#{agg.wall_ms_sum.round(3)} plain_exact_ms=#{agg.plain_exact_ms_sum.round(3)} plain_speedup=#{(agg.plain_exact_ms_sum / agg.wall_ms_sum).round(3)} all_in_plain_speedup=#{(agg.plain_exact_ms_sum / all_in_wall_ms).round(3)}"
 end
 router_trace_io.try(&.close)
 if ML::GGUF::Qwen35MTP.profile_enabled?
