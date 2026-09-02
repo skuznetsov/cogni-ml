@@ -26315,3 +26315,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was an ordinary compile-only fusion falsifier with the current B32 gate plus B64 up route as the rollback frame.
 
 **decision:** Do not dispatch or integrate sequential B32 gate/up fusion. B64 and B32 sequential schedules are now closed under the current compiler-resource gate. Reopen only with a mechanism that eliminates material GEMM work, avoids storing the full gate tile, or provides a direct hardware counter that justifies a different resource gate before timing.
+
+#### [LM-QWEN38-ADAPTIVE-SPLITK-PAIR-DOT-NOGO-1005] Two-lane QK sharing preserves summaries but slows adaptive split-K stage one
+**context:** ml / Qwen3.8-27B / adaptive QBit KV / Metal split-K decode / P4 T8
+**state:** bounded synthetic-kernel candidate measured and rejected on Apple M2 Max; production kernel unchanged
+
+- claim: "Assigning two SIMD lanes to each key row and caching all six query heads in threadgroup memory preserves the checked adaptive-attention result but materially slows stage one."
+  source: a compile-only probe first changed only the QK score schedule in the current P4 T8, tile-15 split-K stage-one kernel. Its CPU dot oracle differed by at most `7.63e-6`; both Metal pipelines compiled with the same `maxTotalThreadsPerThreadgroup=1024`, while static threadgroup storage increased from `16,128` to `22,272` bytes. After explicit operator authorization, a bounded synthetic dispatch ran under a 120-second process-tree timeout, 1 GiB cap, and 25% free-memory floor. A 64-token smoke and an 8,192-visible-token check both completed with zero device status. At 8,192 tokens, final stage-two output differed by at most `4.66e-10` absolute and `2.10e-5` relative. Ten ABBA cycles measured baseline/candidate stage-one p50 of `0.656/1.012 ms`; the candidate regressed by `47.55%` at the paired median and won only `1/10` cycles, failing the predeclared `>=8%`, `>=8/10` local gate.
+  verified_at: 2026-09-01
+  decay_trigger: split-K stage-one score schedule, query residency, threadgroup tile or storage, Metal compiler/runtime, device, synthetic fixture, or timing protocol changes
+  trust: {F:0.98,G:0.03,R:0.95}
+
+**Adversary:** Completed-command intervals were noisy in absolute terms, and the fixture used deterministic synthetic P4 rows rather than a full-model layer. Those facts limit positive generalization but do not rescue a candidate that lost nine of ten balanced cycles and missed the local gate by more than fifty percentage points. The source-level reduction in serial dot work was outweighed by the extra query load, full-threadgroup barrier, shuffle, and larger shared-memory footprint; compiler thread-limit equality did not predict execution cost.
+
+**Value proxy:** Active SIMD lanes and halved per-lane dot iterations are mechanism coordinates. Device status, summary/final-output parity, balanced completed-GPU time, stable wins, and the local admission threshold are the bounded decision coordinates.
+
+**LTP/WBA:** Not claimed. This was an ordinary kernel schedule experiment with the current single-lane-per-row P4 T8 kernel as the rollback frame.
+
+**decision:** Keep the production P4 T8 stage-one score schedule. Do not add the query threadgroup cache or two-lane pair reduction, and do not retry lane repartitioning without a new mechanism that avoids the added barrier/shared-memory cost. Continue from work elimination or a different kernel boundary rather than increasing cooperation around the same QK dot.
