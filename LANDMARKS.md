@@ -26569,3 +26569,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is a falsifier for an ordinary exact kernel-fusion proposal.
 
 **decision:** Do not implement the large layer-resident FFN diamond on the current MTP verifier route. Keep the existing exact FFN kernels. Return to verifier control flow and pursue work elimination across rejected-tail, checkpoint, or route boundaries; require the state continuation oracle and a fresh ceiling before writing another large kernel.
+
+#### [LM-QWEN38-MTP-REJECTED-TAIL-STATE-NOGO-1017] Rejected-tail elimination does not justify a serial verifier
+**context:** ml / Qwen3.8-27B / MTP verifier / rejection boundary / Apple M2 Max
+**state:** telemetry retained; serial verifier and broader state-equivalence claim rejected; production runtime unchanged
+
+- claim: "The chunk verifier performs measurable work after a correction row, but removing that logical tail with scalar verification is slower and does not repair the prompt-dependent state divergence."
+  source: the topological-sort control measured `verifier_tokens=18` and `rejected_tail_tokens=2`, where rejected tail means verified target rows strictly after the correction row. It preserved exact token output and the full-state continuation oracle but reached only `0.782x` all-in speed (`899.950/1150.384 ms`). Serial early verification removed those two logical rows (`16/0`) yet raised verifier wall from `967.163` to `1140.697 ms` and all-in wall to `1325.670 ms` (`0.680x`). A six-prompt coding screen then found a deterministic LCS state-gate failure: six KV values exceeded the `1e-4` tolerance, with maximum absolute delta `0.0007743835`, although continuation IDs matched and hidden ECS remained effectively one. Disabling recurrent checkpoint replay produced the identical failure; scalar verification reduced it to four mismatches and `0.0001964569`; disabling prefill chunking still left six mismatches and `0.0005588531`. An exact-wall bypass using ordinary `forward_top1` produced bit-identical state. A trace without the state gate showed one first-row rejection, no rejected tail, no replay, and three later fully accepted spans, isolating the remaining difference to the verifier execution route rather than rollback or recovery.
+  verified_at: 2026-09-02
+  decay_trigger: verifier execution route, state comparison tolerance, checkpoint/replay control flow, model/device/compiler/runtime, or prompt corpus changes
+  trust: {F:0.98,G:0.04,R:0.95}
+
+**Adversary:** Matching top1 tokens, continuation IDs, and near-unit ECS do not prove equivalent KV state. Conversely, six out-of-tolerance values among roughly eighty million compared floats do not establish user-visible degradation. The strict gate therefore blocks promotion without claiming catastrophic corruption. The serial A/B changes both work count and execution geometry, so its regression rejects this implementation rather than every possible early-stop design.
+
+**Value proxy:** `rejected_tail_tokens` is logical verifier work after a correction row, not time saved. The complete all-in wall and full-state continuation oracle remain the product gates. The logical counter found two removable rows, but the scalar route lost batching efficiency and increased wall time.
+
+**LTP/WBA:** Not claimed. No local transformation obtained both route-equivalent state and recomputed global wall descent.
+
+**decision:** Keep the additive rejected-tail telemetry, retain the `1e-4` state gate, and do not promote the serial verifier or weaken state equivalence to token/ECS parity. Treat the current MTP route as experimental/default-off. A future verifier must capture hidden/state through a route-equivalent decode path and first prove enough end-to-end ceiling to clear the `1.03x` gate; otherwise pivot to a different inference boundary.
