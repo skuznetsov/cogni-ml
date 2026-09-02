@@ -26533,3 +26533,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was an ordinary small-batch Metal kernel experiment.
 
 **decision:** Keep the existing Q4_K batch-four GEMV and do not port `mul_mv_ext` mechanically. The next verifier optimization must remove work across a larger control-flow or layer boundary rather than trade bandwidth for register pressure inside the same FFN matmul.
+
+#### [LM-QWEN38-MTP-Q4-PACKED-B4-REUSE-NOGO-1015] Packed Q4 reuse confirms the small-batch occupancy limit
+**context:** ml / Qwen3.8-27B / MTP verifier body / packed Q4_K FFN / Apple M2 Max
+**state:** terminal small-batch reuse falsifier rejected; temporary implementation removed; production routing unchanged
+
+- claim: "Keeping the existing packed-integer Q4_K arithmetic does not rescue four-row weight sharing on the current verifier shape."
+  source: a temporary exact-shape Metal kernel loaded each packed Q4_K word and scale once, then applied the unchanged baseline accumulation formula to four activation rows. After correcting the activation block index from the SIMD partition to the Q4 block index, the real Qwen3.8-27B `blk.0.ffn_up.weight` probe matched the existing Metal route with cosine similarity `1.0` and maximum absolute delta `0.0`. Guarded fresh-process A/B/B/A on `5120 -> 17408`, batch four, five warmups, and fifteen measured runs produced baseline p50 `1.479/0.839ms` and candidate `1.555/1.051ms`; mean candidate wall was about `12.4%` higher. Two balanced same-process alternating gates independently measured `5.361 -> 5.743ms` and `5.566 -> 6.007ms`, regressions of about `7.1%` and `7.9%`.
+  verified_at: 2026-09-02
+  decay_trigger: Q4_K packed arithmetic, verifier batch shape, Metal compiler/runtime, device, or baseline GEMV route changes
+  trust: {F:0.98,G:0.03,R:0.96}
+
+**Adversary:** The same-process wall includes host readback and allocation overhead, and absolute latency varied across fresh processes. Those costs are symmetric within each alternating pair, every candidate comparison still lost, and exact output parity rules out a hidden quality trade. The remaining explanation is a hardware scheduling limit: four live accumulators and fewer independent output-row threadgroups cost more than the shared packed-weight loads save.
+
+**Value proxy:** Reduced logical weight loads was only the mechanism. Standalone latency was the admission gate, and it regressed in both fresh-process and balanced same-process frames.
+
+**LTP/WBA:** Not claimed. This was the final ordinary batch-four kernel falsifier after the dequantized `mul_mv_ext` port failed.
+
+**decision:** Close the current Q4_K batch-four weight-sharing family on Apple M2 Max. Do not retry dequantized, packed-integer, H16, Q5, or Q6 variants without a materially different ownership schedule. Move to exact layer-resident work elimination across the FFN diamond, where complete intermediate writes, reads, or dispatches can be removed.
