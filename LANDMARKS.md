@@ -26423,3 +26423,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary exact speculative decoding with explicit verifier, checkpoint, and state-recovery boundaries. Any future LTP/WBA interpretation would require a separate transport/descent certificate over the complete proposal-verification-recovery corridor.
 
 **decision:** Keep both routes default-off and do not yet modify product generation. The next gate must use a broader coding prompt set and longer token horizon, preserve exact ids plus full state/recovery invariants, repeat both measurement orders, count setup all-in, and retain a material lower bound despite host variance. If it passes, replace scalar serial verification with a chunk-preserving early-stop design: verify the first risky row, continue through the fused chunk corridor only while legal, and recover from an exact accepted-boundary checkpoint. Reopen kernel work only after measured verifier/body attribution identifies a dominant remaining cost.
+
+#### [LM-QWEN38-MTP-STAGED-BROAD32-NOGO-1010] The short-horizon staged MTP win does not survive broader coding continuations
+**context:** ml / Qwen3.8-27B / MTP staged verifier / four-prompt coding gate / Apple M2 Max
+**state:** bounded candidate rejected; measurement infrastructure retained; production generation unchanged
+
+- claim: "The exact staged MTP package that won the two-prompt sixteen-token screen is slower than plain exact generation on a broader thirty-two-token coding gate."
+  source: one guarded plain-first process used four distinct Crystal coding tasks, 32 generated tokens each, gamma four, stage-two lazy drafting, exact-hidden resynchronization, persistent MTP state, recurrent checkpoint replay, and state-slot backup elimination. It preserved exact output parity on `4/4` rows, accepted `91/123` draft tokens (`73.98%`), executed 143 verifier tokens and two replay tokens, and completed without a device error. Every prompt lost after charging persistent setup: per-row all-in speedups were `0.948x`, `0.930x`, `0.915x`, and `0.992x`. Pooled plain exact wall was `18,738.513 ms` versus `19,840.809 ms` all-in MTP wall, an all-in speedup of `0.944x`, or about `5.88%` more latency.
+  verified_at: 2026-09-02
+  decay_trigger: prompt suite, token horizon, controller composition, setup lifecycle, verifier/body implementation, model/device/compiler/runtime, or host-load distribution changes
+  trust: {F:0.98,G:0.03,R:0.94}
+
+- claim: "Reversing measurement order does not rescue the first broader prompt, and the current long multi-prompt corridor can cross the Metal watchdog boundary."
+  source: the reverse-order process completed the LRU row with exact parity, `74.19%` acceptance, and `0.932x` all-in speedup, then the fail-closed Metal watchdog terminated the process during the following topological-sort row. The run-safe wrapper exited `124`; no memory-floor violation or machine restart occurred. The remaining two planned processes were intentionally not launched because the already negative full row plus the watchdog event were sufficient to reject the candidate without weakening safety guards.
+  verified_at: 2026-09-02
+  decay_trigger: command-buffer/watchdog implementation, prompt isolation, verifier scheduling, model/device/compiler/runtime, or safety limits change
+  trust: {F:0.97,G:0.02,R:0.92}
+
+**Adversary:** The completed broad evidence is one process order rather than a full A/B/B/A performance certificate, and the reverse process stopped before suite aggregation. That incompleteness cannot support a positive speed claim, but it does not weaken the negative decision: the completed four-prompt row lost on every task, and the reverse-order LRU row independently lost. Host noise may exaggerate the magnitude, while the watchdog demonstrates that simply collecting more identical long-process samples is not free or riskless.
+
+**Value proxy:** The earlier `80%` acceptance and short-horizon `1.1535x` pooled result were useful mechanism signals, not product value. The broader exact all-in wall, per-prompt win/loss distribution, and watchdog behavior dominate the promotion decision.
+
+**LTP/WBA:** Not claimed. This remains ordinary speculative generation and verifier scheduling; the fail-closed watchdog is a safety boundary, not evidence of global descent.
+
+**decision:** Reject the current staged package as a product speed mode and keep all controls default-off. Preserve the order/all-in harness because it exposed the reversal. Continue only with a verifier-body change that removes work: a bounded first-risk-row guard plus chunk-preserving fused continuation and exact accepted-boundary recovery. Its first gate must prove state equivalence and lower verifier wall before any broader model run; do not lengthen command buffers or weaken the watchdog to obtain a pass.
