@@ -26357,3 +26357,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary live-prefix-gated kernel selection with the legacy reducer as the operational rollback.
 
 **decision:** Automatically select fused stage two for uniform P4 only on exact `Apple M2 Max` when the live prefix is at least `6,144` and P4 T8 is enabled. Preserve the existing automatic BF16 route. `QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED=0` forces the legacy reducer for all tiers; `=1` remains an experimental force switch. Keep SG2 out of the production runtime and reopen only with a mechanism that beats fused rather than legacy.
+
+#### [LM-QWEN38-DECODE-FFN-CONCURRENT-NOGO-1007] Concurrent gate/up GEMVs are below the whole-token materiality gate
+**context:** ml / Qwen3.8-27B / Metal decode / recurrent and full FFN / concurrent dispatch
+**state:** bounded scheduling candidate measured and rejected; production encoder order restored
+
+- claim: "Running the independent Q4_K gate and up GEMVs inside one concurrent Metal compute pass produces a small repeatable wall-clock improvement, but it is not material enough to admit."
+  source: a temporary opt-in route changed only the FFN projection encoder from serial to `MTLDispatchTypeConcurrent`; both GEMVs still read the same normalized hidden vector, wrote disjoint outputs, and the dependent SwiGLU remained in the next encoder pass. A guarded Qwen3.8-27B Q4_K_M body-only run used one loaded model, prompt 64, generation 16, one warmup, and ten interleaved baseline/candidate pairs under a 24 GiB process-tree cap and 35% free-memory floor. Baseline/candidate averages were `896.43/890.46 ms`, a `0.666%` improvement; medians were `894.64/887.95 ms`, and the candidate won `8/10` pairs. The candidate failed the predeclared `>=3%` whole-body gate and was removed.
+  verified_at: 2026-09-02
+  decay_trigger: FFN projection kernels, encoder scheduling, model shape, device/compiler/runtime, decode-wave boundaries, or materiality gate changes
+  trust: {F:0.98,G:0.04,R:0.93}
+
+**Adversary:** The result is consistent with both GEMVs contending for the same unified-memory bandwidth: concurrent issue can hide a little dispatch or occupancy slack but cannot remove either weight stream. The probe did not run a separate token/logit parity certificate because the route failed the cheaper performance gate and was not retained. Ten pairs on one host do not prove the effect is universal, but they are sufficient to reject promotion when the observed gain is less than one quarter of the admission threshold.
+
+**Value proxy:** Concurrent issue and pair wins are mechanism coordinates. Whole-body wall time and the materiality threshold are the admission boundary; output parity would have become mandatory only after passing that boundary.
+
+**LTP/WBA:** Not claimed. This was ordinary independent-operation scheduling with serial encoder order as the exact rollback frame.
+
+**decision:** Keep serial FFN projection encoding. Do not promote or retry gate/up concurrency without a new mechanism that removes work or demonstrates a materially larger ceiling. Do not widen the experiment to the smaller recurrent projections: they carry less logical traffic and share the same bandwidth contention, so the observed upper bound is already below the whole-token gate.
