@@ -26471,3 +26471,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is an ordinary exact speculative-decoding recovery oracle.
 
 **decision:** Require this opt-in state gate before promoting any future MTP verifier, checkpoint, rollback, or state-slot optimization. Keep `1e-4` scoped to the current F32 numerical routes, require production continuation IDs, and retain ECS as a separately reported diagnostic. Do not infer speed or long-horizon equivalence from this bounded certificate.
+
+#### [LM-QWEN38-DECODE-GPU-COMMAND-PROFILE-1012] Decode attribution now observes existing Metal command intervals
+**context:** ml / Qwen3.8-27B / Metal decode / command-buffer attribution / Apple M2 Max
+**state:** opt-in diagnostic verified; runtime scheduling and production defaults unchanged
+
+- claim: "The decode profiler can attribute GPU execution intervals to the existing layer-pair command buffers without inserting a dispatch, barrier, command buffer, or additional synchronization boundary."
+  source: `CommandBuffer#wait_gpu_elapsed_seconds?` reuses the already mandatory wait for an asynchronously committed command, reads `GPUStartTime` and `GPUEndTime` before ARC releases the native handle, caches the optional result, and preserves completion-status validation. `QWEN35_METAL_GPU_TIMING=1` plus `Qwen35Metal::Profile.enable!` is required before labels are allocated or the timing-aware wait is selected. A real Qwen3.8-27B Q4_K_M run with two greedy decode tokens reported 64 completed command intervals, `152.94 ms` summed GPU execution, `27.63 ms` host encode, `133.27 ms` host wait, and `172.00 ms` profiled wall time; the process exited zero under the 35% free-memory floor and 24 GiB tree cap.
+  verified_at: 2026-09-02
+  decay_trigger: Metal timestamp semantics, command-buffer ownership/wait lifecycle, decode-wave chunking, profiler gate, model/device/compiler/runtime, or report aggregation changes
+  trust: {F:0.98,G:0.03,R:0.94}
+
+**Adversary:** Command start/end timestamps describe whole command-buffer execution intervals, not encoder occupancy, bandwidth, or individual kernel time. Summed intervals are not a wall-clock speed certificate, and one guarded run cannot rank alternative wave sizes. Missing timestamps deliberately omit a sample rather than failing otherwise successful inference. The profile gate still carries host-side tracing overhead, so performance admission must use separate profile-off, order-balanced wall measurements.
+
+**Value proxy:** Command interval share identifies where to ask the next question. It does not prove that reducing command count, fusing kernels, or changing layer grouping will reduce complete token latency.
+
+**LTP/WBA:** Not claimed. This is ordinary opt-in instrumentation over existing Metal scheduling boundaries.
+
+**decision:** Keep counter sampling and per-encoder barriers out of the runtime. Use the new command-level evidence to falsify bounded wave sizes before changing kernels: compare the current two-layer wave against four and eight layers with exact output/state parity, unchanged work, guarded peak memory, and order-balanced profile-off wall timing. Retain two layers unless a candidate clears the materiality and watchdog gates.

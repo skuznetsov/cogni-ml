@@ -135,6 +135,16 @@ static int32_t command_completion_status(id<MTLCommandBuffer> cmd) {
     return -((int32_t)status + 1);
 }
 
+static void command_gpu_elapsed(id<MTLCommandBuffer> cmd, double* elapsed_seconds) {
+    if (elapsed_seconds == nullptr) return;
+    *elapsed_seconds = 0.0;
+    CFTimeInterval start = cmd.GPUStartTime;
+    CFTimeInterval end = cmd.GPUEndTime;
+    if (start > 0.0 && end >= start) {
+        *elapsed_seconds = end - start;
+    }
+}
+
 extern "C" int32_t init_device_impl();
 
 static int32_t ensure_device() {
@@ -477,6 +487,23 @@ extern "C" int32_t gs_wait_command_buffer_status(void* cmd_handle) {
     return command_completion_status(cmd);
 }
 
+// Wait for an already committed command and capture its GPU execution
+// interval before ARC releases the retained native handle. Zero means the
+// platform did not provide timestamps; command completion remains valid.
+extern "C" int32_t gs_wait_command_buffer_status_gpu_elapsed(
+    void* cmd_handle,
+    double* elapsed_seconds
+) {
+    if (elapsed_seconds != nullptr) *elapsed_seconds = 0.0;
+    if (cmd_handle == nullptr) return -1;
+    id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)cmd_handle;
+    wait_for_command_completion(cmd, false);
+    int32_t status = command_completion_status(cmd);
+    if (status != 0) return status;
+    command_gpu_elapsed(cmd, elapsed_seconds);
+    return 0;
+}
+
 extern "C" void commit_and_wait_impl(void* cmd_handle) {
     if (cmd_handle == nullptr) return;
     id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)cmd_handle;
@@ -503,13 +530,7 @@ extern "C" int32_t gs_commit_and_wait_status_gpu_elapsed(
     wait_for_command_completion(cmd, true);
     int32_t status = command_completion_status(cmd);
     if (status != 0) return status;
-    if (elapsed_seconds != nullptr) {
-        CFTimeInterval start = cmd.GPUStartTime;
-        CFTimeInterval end = cmd.GPUEndTime;
-        if (start > 0.0 && end >= start) {
-            *elapsed_seconds = end - start;
-        }
-    }
+    command_gpu_elapsed(cmd, elapsed_seconds);
     return 0;
 }
 

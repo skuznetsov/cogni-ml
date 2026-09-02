@@ -77,6 +77,10 @@
           raise "Metal disabled (cpu_only)"
         end
 
+        def wait_gpu_elapsed_seconds? : Float64?
+          raise "Metal disabled (cpu_only)"
+        end
+
         def completed? : Bool
           false
         end
@@ -278,6 +282,7 @@ module ML
       @committed : Bool = false
       @completed : Bool = false
       @completion_status : Int32? = nil
+      @gpu_elapsed_seconds : Float64? = nil
 
       def initialize(fast : Bool = false, queue : CommandQueue? = nil)
         raise "Metal not available" unless Device.available?
@@ -330,7 +335,30 @@ module ML
         unless elapsed_seconds.finite? && elapsed_seconds > 0.0
           raise "Metal GPU execution timestamps unavailable"
         end
+        @gpu_elapsed_seconds = elapsed_seconds
         elapsed_seconds
+      end
+
+      # Wait for an already committed command and opportunistically capture
+      # Metal's GPU interval. Missing timestamps do not turn successful work
+      # into an inference failure; callers can omit that profile sample.
+      def wait_gpu_elapsed_seconds? : Float64?
+        if @completed
+          verify_completion!
+          return @gpu_elapsed_seconds
+        end
+        raise ArgumentError.new("cannot GPU-time an uncommitted Metal command buffer") unless @committed
+
+        elapsed_seconds = 0.0_f64
+        @completion_status = MetalDeviceFFI.wait_command_buffer_status_gpu_elapsed(
+          @handle, pointerof(elapsed_seconds),
+        )
+        @completed = true
+        verify_completion!
+        if elapsed_seconds.finite? && elapsed_seconds > 0.0
+          @gpu_elapsed_seconds = elapsed_seconds
+        end
+        @gpu_elapsed_seconds
       end
 
       # Commit without waiting (async GPU execution)
@@ -475,6 +503,7 @@ lib MetalDeviceFFI
   fun commit_command_buffer = gs_commit_command_buffer(cmd : Pointer(Void)) : Void
   fun wait_command_buffer = gs_wait_command_buffer(cmd : Pointer(Void)) : Void
   fun wait_command_buffer_status = gs_wait_command_buffer_status(cmd : Pointer(Void)) : Int32
+  fun wait_command_buffer_status_gpu_elapsed = gs_wait_command_buffer_status_gpu_elapsed(cmd : Pointer(Void), elapsed_seconds : Pointer(Float64)) : Int32
   fun commit_and_wait = gs_commit_and_wait(cmd_buffer : Pointer(Void)) : Void
   fun commit_and_wait_status = gs_commit_and_wait_status(cmd_buffer : Pointer(Void)) : Int32
   fun commit_and_wait_status_gpu_elapsed = gs_commit_and_wait_status_gpu_elapsed(cmd_buffer : Pointer(Void), elapsed_seconds : Pointer(Float64)) : Int32
@@ -509,6 +538,7 @@ lib MetalDeviceFFI
   fun commit_command_buffer = gs_commit_command_buffer(cmd : Pointer(Void)) : Void
   fun wait_command_buffer = gs_wait_command_buffer(cmd : Pointer(Void)) : Void
   fun wait_command_buffer_status = gs_wait_command_buffer_status(cmd : Pointer(Void)) : Int32
+  fun wait_command_buffer_status_gpu_elapsed = gs_wait_command_buffer_status_gpu_elapsed(cmd : Pointer(Void), elapsed_seconds : Pointer(Float64)) : Int32
   fun commit_and_wait = gs_commit_and_wait(cmd_buffer : Pointer(Void)) : Void
   fun commit_and_wait_status = gs_commit_and_wait_status(cmd_buffer : Pointer(Void)) : Int32
   fun commit_and_wait_status_gpu_elapsed = gs_commit_and_wait_status_gpu_elapsed(cmd_buffer : Pointer(Void), elapsed_seconds : Pointer(Float64)) : Int32

@@ -373,11 +373,17 @@ module ML
           @@matmul_weight_bytes = Hash(String, Int64).new(0_i64)
           @@conversion_counts = Hash(String, Int64).new(0_i64)
           @@conversion_bytes = Hash(String, Int64).new(0_i64)
+          @@gpu_command_counts = Hash(String, Int64).new(0_i64)
+          @@gpu_command_ns = Hash(String, Int64).new(0_i64)
           @@scope_stack = [] of String
 
           def self.enabled? : Bool; @@enabled end
           def self.enable!  : Nil ; @@enabled = true end
           def self.disable! : Nil ; @@enabled = false end
+
+          def self.gpu_command_timing_enabled? : Bool
+            @@enabled && ENV["QWEN35_METAL_GPU_TIMING"]? == "1"
+          end
 
           def self.reset : Nil
             @@gemv_count = @@gemm_count = @@dn_count = @@attn_count = 0_i64
@@ -401,6 +407,8 @@ module ML
             @@matmul_weight_bytes.clear
             @@conversion_counts.clear
             @@conversion_bytes.clear
+            @@gpu_command_counts.clear
+            @@gpu_command_ns.clear
             @@scope_stack.clear
           end
 
@@ -518,6 +526,15 @@ module ML
             @@conversion_bytes[scoped_name] += traffic_bytes
           end
 
+          # GPUStartTime/GPUEndTime cover a completed command buffer. They do
+          # not expose occupancy, bandwidth, or individual encoder durations.
+          def self.bump_gpu_command(name : String, elapsed_seconds : Float64) : Nil
+            return unless gpu_command_timing_enabled?
+            return unless elapsed_seconds.finite? && elapsed_seconds > 0.0
+            @@gpu_command_counts[name] += 1
+            @@gpu_command_ns[name] += (elapsed_seconds * 1_000_000_000.0).round.to_i64
+          end
+
           def self.report_io : String
             String.build do |s|
               total_group_syncs = @@group_counts.values.sum
@@ -592,6 +609,17 @@ module ML
                 end
                 s << sprintf("    %-34s      total  %.2f MiB logical traffic\n",
                              "conversion", total_conversion_bytes / 1_048_576.0)
+              end
+              unless @@gpu_command_counts.empty?
+                total_gpu_ns = @@gpu_command_ns.values.sum
+                s << "  GPU command buffers (execution intervals):\n"
+                @@gpu_command_counts.keys.sort_by { |name| {-@@gpu_command_ns[name], name} }.each do |name|
+                  pct = total_gpu_ns > 0 ? @@gpu_command_ns[name] * 100.0 / total_gpu_ns : 0.0
+                  s << sprintf("    %-34s %4d calls  %.2f ms  %.2f%%\n",
+                               name, @@gpu_command_counts[name], @@gpu_command_ns[name] / 1_000_000.0, pct)
+                end
+                s << sprintf("    %-34s      total  %.2f ms\n",
+                             "command buffers", total_gpu_ns / 1_000_000.0)
               end
               unless @@matmul_weight_bytes.empty? && @@conversion_bytes.empty?
                 total_weight_bytes = @@matmul_weight_bytes.values.sum
@@ -3244,11 +3272,25 @@ module ML
           output_dim : Int32,
           retained_bufs : Array(ML::MetalBuffer),
           profile_t0 : Time::Instant?,
-          profile_tenc : Time::Instant?
+          profile_tenc : Time::Instant?,
+          profile_command_labels : Array(String)
 
         def self.wait_forward_decode_wave(submission : DecodeWaveSubmission) : Array(Float32)
-          submission.pending_cmds.each(&.wait)
-          submission.cmd.wait
+          profile_gpu_timing = Profile.gpu_command_timing_enabled? &&
+                               submission.profile_command_labels.size == submission.pending_cmds.size + 1
+          if profile_gpu_timing
+            submission.pending_cmds.each_with_index do |command, index|
+              if elapsed = command.wait_gpu_elapsed_seconds?
+                Profile.bump_gpu_command(submission.profile_command_labels[index], elapsed)
+              end
+            end
+            if elapsed = submission.cmd.wait_gpu_elapsed_seconds?
+              Profile.bump_gpu_command(submission.profile_command_labels.last, elapsed)
+            end
+          else
+            submission.pending_cmds.each(&.wait)
+            submission.cmd.wait
+          end
           t_wait = Time.instant if Profile.enabled?
           result = if submission.emit_head
                      if submission.use_head_top2
@@ -3315,6 +3357,18 @@ module ML
           return 2 unless raw
           value = raw.to_i? || 0
           value > 0 ? value : 0
+        end
+
+        private def self.decode_command_profile_label(layers : Array(Qwen35LayerWeights),
+                                                      first_layer : Int32,
+                                                      last_layer : Int32,
+                                                      emit_head : Bool) : String
+          kinds = String.build do |io|
+            (first_layer..last_layer).each do |layer_index|
+              io << (layers[layer_index].is_a?(Qwen35FullAttnWeights) ? 'f' : 'r')
+            end
+          end
+          "decode.layers.#{first_layer}-#{last_layer}.#{kinds}#{emit_head ? "+head" : ""}"
         end
 
         private def self.attn_splitk_min_context : Int32
@@ -10204,6 +10258,8 @@ module ML
           use_conv_shift_fused = recurrent_conv_shift_fused_enabled?
           chunk_layers = (append_command_buffer || adaptive_decode_encoders) ? 0 : wave_chunk_layers
           pending_cmds = [] of ML::Metal::CommandBuffer
+          profile_command_labels = [] of String
+          command_first_layer = 0_i32
 
           lr_set = lowrank_layer_indices
           lr_states = lowrank_state_bufs
@@ -10826,6 +10882,10 @@ module ML
             if chunk_layers > 0 && il + 1 < layers.size && (il + 1) % chunk_layers == 0
               cmd.commit
               pending_cmds << cmd
+              if Profile.gpu_command_timing_enabled?
+                profile_command_labels << decode_command_profile_label(layers, command_first_layer, il, false)
+              end
+              command_first_layer = il + 1
               cmd = ML::Metal::CommandBuffer.new(queue: cmd_queue, fast: wave_fast_command_buffer_enabled?)
             end
           end
@@ -10928,10 +10988,15 @@ module ML
 
           t_enc = Time.instant if Profile.enabled?
           cmd.commit unless append_command_buffer || adaptive_decode_encoders
+          if Profile.gpu_command_timing_enabled?
+            profile_command_labels << decode_command_profile_label(
+              layers, command_first_layer, layers.size - 1, emit_head,
+            )
+          end
           DecodeWaveSubmission.new(
             cmd, pending_cmds, emit_head, use_head_top1, use_head_top2,
             logits_buf, top1_id_buf, top1_value_buf, second_id_buf, second_value_buf, output_qw.out_dim,
-            retained_scratch || [] of ML::MetalBuffer, t0, t_enc)
+            retained_scratch || [] of ML::MetalBuffer, t0, t_enc, profile_command_labels)
         end
 
         # Shared GEMV machinery: takes pre-allocated weight buffer and a

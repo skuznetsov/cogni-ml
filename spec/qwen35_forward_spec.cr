@@ -48,6 +48,39 @@ ensure
 end
 
 describe ML::GGUF::Qwen35Metal, "route policies" do
+  it "reports optional GPU command timing separately from host wait timing" do
+    profile = ML::GGUF::Qwen35Metal::Profile
+    old_gpu_timing = ENV["QWEN35_METAL_GPU_TIMING"]?
+    profile.reset
+    profile.enable!
+    begin
+      ENV.delete("QWEN35_METAL_GPU_TIMING")
+      profile.bump_gpu_command("disabled", 1.0_f64)
+      profile.report_io.should_not contain("GPU command buffers")
+
+      ENV["QWEN35_METAL_GPU_TIMING"] = "1"
+      profile.bump_gpu_command("decode.layers.0-1.rr", 0.001_f64)
+      profile.bump_gpu_command("decode.layers.0-1.rr", 0.002_f64)
+      profile.bump_gpu_command("decode.layers.2-3.rf", 0.004_f64)
+
+      report = profile.report_io
+      report.should contain("GPU command buffers")
+      report.should contain("decode.layers.0-1.rr")
+      report.should contain("2 calls")
+      report.should contain("3.00 ms")
+      report.should contain("decode.layers.2-3.rf")
+      report.should contain("4.00 ms")
+    ensure
+      if old_gpu_timing
+        ENV["QWEN35_METAL_GPU_TIMING"] = old_gpu_timing
+      else
+        ENV.delete("QWEN35_METAL_GPU_TIMING")
+      end
+      profile.disable!
+      profile.reset
+    end
+  end
+
   it "bounds automatic B64 tail fusion padding on M2 Max" do
     metal = ML::GGUF::Qwen35Metal
 
