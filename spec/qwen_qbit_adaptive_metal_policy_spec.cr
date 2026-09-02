@@ -44,17 +44,20 @@ describe ML::GGUF::QwenQBitAdaptiveMetalPolicy do
   it "scopes fused split-K stage2 to the measured M2 Max corridor" do
     policy = ML::GGUF::QwenQBitAdaptiveMetalPolicy
 
-    policy.splitk_stage2_fused?("Apple M2 Max", true).should be_true
-    policy.splitk_stage2_fused?("Apple M2 Max", false).should be_false
-    policy.splitk_stage2_fused?("Apple M2 Pro", true).should be_false
-    policy.splitk_stage2_fused?("Unknown Metal Device", true).should be_false
-    policy.splitk_stage2_fused?("Apple M2 Max", true, "0").should be_false
-    policy.splitk_stage2_fused?("Apple M2 Pro", false, "1").should be_true
+    policy.splitk_stage2_fused?("Apple M2 Max", false, true, 255).should be_true
+    policy.splitk_stage2_fused?("Apple M2 Max", true, false, 6_143).should be_false
+    policy.splitk_stage2_fused?("Apple M2 Max", true, false, 6_144).should be_true
+    policy.splitk_stage2_fused?("Apple M2 Max", true, false, 8_192, "0").should be_false
+    policy.splitk_stage2_fused?("Apple M2 Max", true, false, 6_143, "1").should be_false
+    policy.splitk_stage2_fused?("Apple M2 Pro", true, false, 8_192).should be_false
+    policy.splitk_stage2_fused?("Unknown Metal Device", false, true, 8_192).should be_false
+    policy.splitk_stage2_fused?("Apple M2 Max", true, false, 8_192, nil, "0").should be_false
+    policy.splitk_stage2_fused?("Apple M2 Pro", false, false, 1, nil, "1").should be_true
     expect_raises(ArgumentError, /QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED/) do
-      policy.splitk_stage2_fused?("Apple M2 Max", true, "")
+      policy.splitk_stage2_fused?("Apple M2 Max", true, false, 8_192, nil, "")
     end
     expect_raises(ArgumentError, /QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED/) do
-      policy.splitk_stage2_fused?("Apple M2 Max", true, "true")
+      policy.splitk_stage2_fused?("Apple M2 Max", true, false, 8_192, nil, "true")
     end
   end
 

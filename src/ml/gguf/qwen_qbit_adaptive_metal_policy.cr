@@ -53,11 +53,19 @@ module ML::GGUF
     end
 
     def self.splitk_stage2_fused?(device_name : String,
+                                  uniform_p4 : Bool,
                                   uniform_bf16 : Bool,
-                                  override : String? = nil) : Bool
-      return device_name == "Apple M2 Max" && uniform_bf16 unless override
+                                  packed_len : Int32,
+                                  p4_t8_override : String? = nil,
+                                  fused_override : String? = nil) : Bool
+      unless fused_override
+        return false unless device_name == "Apple M2 Max"
+        return true if uniform_bf16
+        return uniform_p4 && packed_len >= SPLITK_T8_MIN_CONTEXT &&
+          p4_splitk_t8?(device_name, packed_len, p4_t8_override)
+      end
 
-      case override.strip
+      case fused_override.strip
       when "0" then false
       when "1" then true
       else

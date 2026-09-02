@@ -26333,3 +26333,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was an ordinary kernel schedule experiment with the current single-lane-per-row P4 T8 kernel as the rollback frame.
 
 **decision:** Keep the production P4 T8 stage-one score schedule. Do not add the query threadgroup cache or two-lane pair reduction, and do not retry lane repartitioning without a new mechanism that avoids the added barrier/shared-memory cost. Continue from work elimination or a different kernel boundary rather than increasing cooperation around the same QK dot.
+
+#### [LM-QWEN38-ADAPTIVE-P4-T8-FUSED-STAGE2-1006] Long-context P4 T8 reuses the fused reducer
+**context:** ml / Qwen3.8-27B / adaptive QBit KV / Metal split-K decode / Apple M2 Max
+**state:** bounded automatic promotion verified; SG2 alternative rejected and removed
+
+- claim: "The existing fused stage-two reducer improves full-token decode when P4 uses the admitted long-context T8 loader."
+  source: an initial mixed-map `3.954%` screen was rejected because it changed T8 loaders together with stage two. The corrected `--compare-stage2 --resident-map p4` probe held T8 enabled in both branches and isolated legacy versus automatic fused stage two across all 16 P4 owners. Two fresh opposite-order release processes at the same 8,305-token prompt, chunk 512, one append group, 100 ms cooldown, pooled scratch, and GC guard measured `75.769 -> 71.600 ms` (`+5.502%`, `10/10`) and `84.538 -> 80.477 ms` (`+4.803%`, `9/10`). Pooled means were `80.153 -> 76.039 ms`, a `5.134%` improvement with `19/20` wins. Every pair preserved top-1 and observed logit. A two-SIMD-group alternative lost to fused by `0.371%` with only `3/10` wins and was removed from the runtime.
+  verified_at: 2026-09-02
+  decay_trigger: P4 or BF16 T8 route, fused reducer, stage-one summaries, context threshold, adaptive map, prefill safety profile, device/compiler/runtime, or model changes
+  trust: {F:0.98,G:0.06,R:0.95}
+
+- claim: "Automatic P4 fused selection is bounded by live T8 admission, while long-context adaptive quality remains stable across the tested prefill chunk sizes."
+  source: policy falsifiers require legacy at live prefix `6,143`, fused at `6,144`, non-M2 devices legacy, P4 T8 override `0` legacy, and global fused override `0` legacy. The 8K resident Metal contract preserves the CPU/serial numerical bounds, packed cache bytes, and scratch reuse. Fresh chunk-512 and chunk-1024 quality runs used the same 11,495-token prompt SHA-256 `927649b8afec3a46f328274f88462da89c00e47762ae00b0125b95b3e6226e88`; their F32 token trajectories and teacher-forced adaptive metrics were identical: top-1 `59/64`, ranked top-2 `107/126`, exact token covered by top-2 `63/63`, ECS mean `0.938380`, all 16 adaptive owners, no Float32 owner, consistent publication, and `3.7647x` logical density. Free continuations diverged after four tokens but both coherently selected KV quantization; neither reached EOS in 64 tokens.
+  verified_at: 2026-09-02
+  decay_trigger: prompt bytes or tokenizer/template, quality metric implementation, cache quantizer/tier map, prefill chunking, T8/fused policy, model/device/compiler/runtime, or a wider semantic claim
+  trust: {F:0.98,G:0.05,R:0.94}
+
+**Adversary:** The older non-T8/isolated P4 fused screen was negative, so saved exponentials are not a context-free speed proxy. The positive timing result is one device, model, uniform-P4 map, repeated prompt family, and 20 positions; the mixed-map quality result is separate evidence. The 64-token free generations did not reach EOS, and ECS is a position-aligned embedding proxy rather than proof of semantic equivalence. No cross-device, short-context, whole-session, or coding-quality claim follows.
+
+**Value proxy:** Fused arithmetic and SG2 lane count are mechanism coordinates. Matched full-token wall, route provenance, output/logit checks, top-2/ECS, meaning inspection, cache ownership/publication, and rollback are separate admission coordinates.
+
+**LTP/WBA:** Not claimed. This is ordinary live-prefix-gated kernel selection with the legacy reducer as the operational rollback.
+
+**decision:** Automatically select fused stage two for uniform P4 only on exact `Apple M2 Max` when the live prefix is at least `6,144` and P4 T8 is enabled. Preserve the existing automatic BF16 route. `QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED=0` forces the legacy reducer for all tiers; `=1` remains an experimental force switch. Keep SG2 out of the production runtime and reopen only with a mechanism that beats fused rather than legacy.

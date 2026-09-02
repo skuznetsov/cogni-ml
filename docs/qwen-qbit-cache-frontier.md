@@ -3839,3 +3839,65 @@ explicit pointer cast can instead constrain scheduling. Keep the existing
 scalar-source T8 stores and require compiler-level evidence before revisiting
 this store-shape experiment. The next candidate must remove work or bytes that
 remain visible after compiler optimization.
+
+### P4 T8 admits the existing fused stage-two reducer at long context (2026-09-02)
+
+A two-SIMD-group reducer was tested as an alternative to the existing legacy
+and fused stage-two kernels. It improved over legacy at the 8K product shape,
+but it did not beat the already-shipped fused reducer: the matched chunk-512
+screen measured `70.074 -> 70.334 ms` (`-0.371%`, `3/10` wins). The SG2 runtime
+route was therefore removed. Its useful result is negative evidence that more
+parallel lanes do not offset the extra barrier and shared state here.
+
+An initial product-map screen changed the P4 and BF16 T8 loaders together with
+P4 stage two. Its pooled `3.954%` result was therefore rejected as confounded
+promotion evidence. The corrected `--compare-stage2 --resident-map p4` probe
+held T8 enabled in both branches and used 16 uniform-P4 owners so the global
+legacy override could not also change BF16. Baseline forced legacy stage two;
+candidate used the automatic fused policy. Two fresh, opposite-order processes
+used the same 8,305-token prompt, chunk 512, one append group, a 100 ms
+compositor cooldown, pooled scratch, and the GC guard. They measured
+`75.769 -> 71.600 ms` (`+5.502%`, `10/10`) and `84.538 -> 80.477 ms`
+(`+4.803%`, `9/10`). Pooled means improved from `80.153` to `76.039 ms`, or
+`5.134%` over 20 isolated pairs with `19/20` wins. Every matched step preserved
+its top-1 token and observed logit. These are complete `forward_top1` wall
+times, not an isolated stage-two or whole-session percentage.
+
+The quality probe now supports a repeated prompt with a recorded SHA-256 and
+reads tokenizer metadata without mapping the model tensors a second time. On
+prompt hash `927649b8afec3a46f328274f88462da89c00e47762ae00b0125b95b3e6226e88`
+(`11,495` chat tokens), fresh chunk-512 and chunk-1024 runs produced identical
+64-token F32 trajectories and identical teacher-forced adaptive metrics:
+`59/64` top-1, `107/126` ranked top-2, the exact token covered by adaptive top-2
+at `63/63` positions, and output-embedding ECS mean `0.938380`. Both runs kept
+all 16 adaptive owners, no Float32 owner, consistent cache publication, and a
+`3.7647x` logical cache ratio. Free adaptive generation diverged after four
+tokens, but both continuations selected KV quantization and gave a coherent
+safety explanation. Neither reached EOS in the 64-token window, so this is a
+bounded meaning check rather than a general semantic-equivalence certificate.
+
+Chunk 1024 was faster on this same prompt: F32/adaptive/teacher-forced prefill
+was `141.407/157.588/157.506 s`, versus `191.461/177.939/177.739 s` at chunk
+512. Chunk 512 remains a guarded watchdog profile, not a throughput claim.
+
+Automatic P4 fused stage two is now admitted only on exact `Apple M2 Max`, for
+a uniform P4 row plan, when the live prefix is at least `6,144` and the P4 T8
+loader is actually enabled. This reuses the existing T8 live-prefix boundary;
+capacity alone cannot admit the route, and `QWEN35_ADAPTIVE_P4_SPLITK_T8=0`
+also suppresses automatic P4 fusion. Existing automatic BF16 behavior is
+unchanged. `QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED=0` remains the exact legacy
+rollback for all tiers, while `=1` is an explicit experimental force switch.
+
+**Adversary:** The positive isolated timing evidence covers one M2 Max, one
+Qwen3.8-27B quant, a uniform-P4 timing map, one repeated prompt family, and 20
+decode positions. The mixed production-map quality run is a separate
+certificate, not timing attribution. The older isolated P4 result was negative
+without this T8 corridor, so the policy must not widen below 6,144 tokens, to
+non-T8 P4, or to another device. The repeated prompt is intentionally a
+long-context stressor rather than a natural coding session, and the free
+answers did not reach EOS. Re-run the matched timing and quality gates after
+changes to T8, stage-one summaries, the fused reducer, cache layout,
+compiler/runtime, device, or model.
+
+**LTP/WBA:** Not claimed. This is ordinary context-gated kernel selection with
+the legacy reducer as a fail-safe runtime frame.

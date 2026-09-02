@@ -463,7 +463,7 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
         {cache: scalar_splitk, splitk: "1", dequant_t4: "0", stage2_fused: "auto", p4_t8: "0"},
         {cache: t4_splitk, splitk: "1", dequant_t4: "1", stage2_fused: "1", p4_t8: "0"},
         {cache: legacy_splitk, splitk: "1", dequant_t4: "0", stage2_fused: "0", p4_t8: "0"},
-        {cache: t8_splitk, splitk: "1", dequant_t4: "1", stage2_fused: "0", p4_t8: "1"},
+        {cache: t8_splitk, splitk: "1", dequant_t4: "1", stage2_fused: "auto", p4_t8: "1"},
       ]
       cases.each do |candidate|
         ENV["QWEN35_ADAPTIVE_SPLITK"] = candidate[:splitk]

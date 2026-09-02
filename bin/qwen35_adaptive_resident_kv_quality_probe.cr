@@ -7,6 +7,7 @@
 
 require "json"
 require "option_parser"
+require "digest/sha256"
 
 require "../src/ml/gguf/qwen35_chat"
 require "../src/ml/gguf/qwen35_cpu"
@@ -176,6 +177,7 @@ n_gen = 128
 requested_max_seq = 0
 resident_maps = [] of String
 chat_mode = true
+prompt_repeats = 1
 
 OptionParser.parse do |parser|
   parser.banner = "Usage: qwen35_adaptive_resident_kv_quality_probe [options] [prompt]"
@@ -184,6 +186,7 @@ OptionParser.parse do |parser|
   parser.on("--gen N", "Maximum generated tokens including prefill top-1") { |value| n_gen = value.to_i }
   parser.on("--max-seq N", "Cache capacity; 0 selects prompt+gen+1") { |value| requested_max_seq = value.to_i }
   parser.on("--resident-map MAP", "Resident tier map; may be repeated") { |value| resident_maps << value }
+  parser.on("--repeat-prompt N", "Repeat prompt text before rendering (default: 1)") { |value| prompt_repeats = value.to_i }
   parser.on("--raw", "Do not render the Qwen chat template") { chat_mode = false }
   parser.on("-h", "--help", "Show this help") do
     puts parser
@@ -202,19 +205,21 @@ resident_maps << DEFAULT_RESIDENT_MAP if resident_maps.empty?
 raise "model does not exist: #{model_path}" unless File.file?(model_path)
 raise "--gen must be at least 2" unless n_gen >= 2
 raise "--max-seq cannot be negative" if requested_max_seq < 0
+raise "--repeat-prompt must be positive" unless prompt_repeats > 0
 raise "resident map cannot be empty" if resident_maps.any?(&.strip.empty?)
 raise "duplicate resident maps" unless resident_maps.uniq.size == resident_maps.size
 raise "Metal is unavailable" unless ML::GGUF::Qwen35Metal.available?
 
 startup_started = Time.instant
-gguf = ML::GGUF::GGUFFile.new(model_path)
+gguf = ML::GGUF::GGUFFile.new(model_path, mmap_tensors: false)
 tokenizer = ML::GGUF::Qwen35Tokenizer.from_gguf(gguf, model_path)
 weights = ML::GGUF::Qwen35Weights.from_gguf(model_path)
 startup_ms = (Time.instant - startup_started).total_milliseconds
 hp = weights.hparams
 raise "resident quality probe requires Qwen3.8 head dimension 256" unless hp.head_dim == 256
 
-model_prompt = chat_mode ? ML::GGUF::Qwen35Chat.render_user_prompt(prompt, enable_thinking: false) : prompt
+repeated_prompt = Array.new(prompt_repeats, prompt).join("\n\n")
+model_prompt = chat_mode ? ML::GGUF::Qwen35Chat.render_user_prompt(repeated_prompt, enable_thinking: false) : repeated_prompt
 tokens = tokenizer.encode(model_prompt)
 raise "prompt encoded to zero tokens" if tokens.empty?
 # Use one row geometry for both sides of the quality comparison. Otherwise the
@@ -257,7 +262,8 @@ exact_text = tokenizer.decode(exact_ids)
 puts "qwen35_adaptive_resident_kv_quality_probe"
 puts "  model=#{model_path}"
 prompt_label = prompt_file ? "@#{prompt_file}" : prompt.inspect
-puts "  prompt=#{prompt_label} chat=#{chat_mode} prompt_tokens=#{tokens.size} requested_gen=#{n_gen} observed_gen=#{exact_ids.size} max_seq=#{max_seq} prefill_chunk_size=#{prefill_chunk_size} prefill_append_max_groups=#{prefill_append_max_groups} prefill_append_cooldown_ms=#{prefill_append_cooldown_ms}"
+prompt_sha256 = Digest::SHA256.hexdigest(repeated_prompt.to_slice)
+puts "  prompt=#{prompt_label} prompt_repeats=#{prompt_repeats} prompt_sha256=#{prompt_sha256} chat=#{chat_mode} prompt_tokens=#{tokens.size} requested_gen=#{n_gen} observed_gen=#{exact_ids.size} max_seq=#{max_seq} prefill_chunk_size=#{prefill_chunk_size} prefill_append_max_groups=#{prefill_append_max_groups} prefill_append_cooldown_ms=#{prefill_append_cooldown_ms}"
 puts "  layers=#{hp.n_layer} full_attention_layers=#{hp.full_attention_layers.size} n_head_kv=#{hp.n_head_kv} head_dim=#{hp.head_dim}"
 puts "  startup_ms=#{startup_ms.round(3)} exact_prefill_ms=#{exact_prefill_ms.round(3)} exact_decode_ms=#{exact_decode_ms.round(3)} exact_first_id=#{exact_first_id} exact_first_logit=#{exact_first_logit.round(6)}"
 puts "  exact_ids=#{exact_ids.join(',')} exact_text=#{exact_text.inspect}"
@@ -367,6 +373,8 @@ resident_maps.each do |resident_map|
       json.field "execution_mode", "resident_gpu"
       json.field "model", File.basename(model_path)
       json.field "prompt", prompt
+      json.field "prompt_repeats", prompt_repeats
+      json.field "prompt_sha256", prompt_sha256
       json.field "prompt_tokens", tokens.size
       json.field "prefill_chunk_size", prefill_chunk_size
       json.field "prefill_append_max_groups", prefill_append_max_groups

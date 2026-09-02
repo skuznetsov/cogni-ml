@@ -1198,7 +1198,7 @@ module ML::GGUF
         stage1_pipeline = decode_splitk_stage1_pipeline(
           uniform_tier, k_sidecar, v_sidecar, packed_len,
         )
-        stage2_pipeline = decode_splitk_stage2_pipeline(uniform_tier)
+        stage2_pipeline = decode_splitk_stage2_pipeline(uniform_tier, packed_len)
 
         stage1 = ML::Metal::ComputeEncoder.new(command)
         stage1.set_pipeline(stage1_pipeline)
@@ -1381,10 +1381,14 @@ module ML::GGUF
         !pointer.null? && pointer.address % 16_u64 == 0_u64
       end
 
-      private def decode_splitk_stage2_pipeline(uniform_tier : QwenQBitAdaptiveKV::Tier) : ML::Metal::ComputePipeline
+      private def decode_splitk_stage2_pipeline(uniform_tier : QwenQBitAdaptiveKV::Tier,
+                                                packed_len : Int32) : ML::Metal::ComputePipeline
         fused = QwenQBitAdaptiveMetalPolicy.splitk_stage2_fused?(
           ML::Metal::Device.instance.name,
+          uniform_tier == QwenQBitAdaptiveKV::Tier::P4,
           uniform_tier == QwenQBitAdaptiveKV::Tier::BF16,
+          packed_len,
+          ENV["QWEN35_ADAPTIVE_P4_SPLITK_T8"]?,
           ENV["QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED"]?,
         )
         suffix = fused ? "_fused" : ""
