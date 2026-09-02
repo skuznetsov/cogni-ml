@@ -26482,10 +26482,16 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   decay_trigger: Metal timestamp semantics, command-buffer ownership/wait lifecycle, decode-wave chunking, profiler gate, model/device/compiler/runtime, or report aggregation changes
   trust: {F:0.98,G:0.03,R:0.94}
 
+- claim: "Larger decode waves do not recover a material scheduler margin on the current Qwen3.8-27B path."
+  source: guarded same-process, alternating-order A/B screens used prompt 64, generation 16, one warmup, and four pairs. The current two-layer wave beat four layers in `3/4` pairs by `0.178 ms/token` on mean (`58.569` versus `58.747 ms/token`, about `0.30%`) and beat eight layers in `3/4` pairs by `0.437 ms/token` (`59.003` versus `59.440 ms/token`, about `0.74%`). Both effects are below the `>=3%` materiality gate; no runtime change was made.
+  verified_at: 2026-09-02
+  decay_trigger: decode kernels, command-buffer implementation, model/device/compiler/runtime, host-load distribution, or materiality threshold changes
+  trust: {F:0.96,G:0.03,R:0.90}
+
 **Adversary:** Command start/end timestamps describe whole command-buffer execution intervals, not encoder occupancy, bandwidth, or individual kernel time. Summed intervals are not a wall-clock speed certificate, and one guarded run cannot rank alternative wave sizes. Missing timestamps deliberately omit a sample rather than failing otherwise successful inference. The profile gate still carries host-side tracing overhead, so performance admission must use separate profile-off, order-balanced wall measurements.
 
 **Value proxy:** Command interval share identifies where to ask the next question. It does not prove that reducing command count, fusing kernels, or changing layer grouping will reduce complete token latency.
 
 **LTP/WBA:** Not claimed. This is ordinary opt-in instrumentation over existing Metal scheduling boundaries.
 
-**decision:** Keep counter sampling and per-encoder barriers out of the runtime. Use the new command-level evidence to falsify bounded wave sizes before changing kernels: compare the current two-layer wave against four and eight layers with exact output/state parity, unchanged work, guarded peak memory, and order-balanced profile-off wall timing. Retain two layers unless a candidate clears the materiality and watchdog gates.
+**decision:** Keep counter sampling and per-encoder barriers out of the runtime. Retain the two-layer wave: four and eight layers failed the performance screen, so the remaining decode margin is not in this scheduler knob. Continue from operations that remove dominant quantized weight traffic or instructions; require exact output/state parity before promoting any such implementation.
