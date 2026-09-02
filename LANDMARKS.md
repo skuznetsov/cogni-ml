@@ -26495,3 +26495,23 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary opt-in instrumentation over existing Metal scheduling boundaries.
 
 **decision:** Keep counter sampling and per-encoder barriers out of the runtime. Retain the two-layer wave: four and eight layers failed the performance screen, so the remaining decode margin is not in this scheduler knob. Continue from operations that remove dominant quantized weight traffic or instructions; require exact output/state parity before promoting any such implementation.
+
+#### [LM-QWEN38-Q6-HEAD-INPUT-REUSE-1013] Q6 head activation reuse is exact but sub-material
+**context:** ml / Qwen3.8-27B / Q6_K greedy lm-head / Apple M2 Max
+**state:** bounded candidate rejected; temporary implementation removed; production generation unchanged
+
+- claim: "Sharing each activation load across three Q6 output rows improves the isolated greedy head but cannot meet the current complete-token materiality gate."
+  source: a default-off kernel kept the existing twelve-row tile, preserved exact top1/logit behavior, and retained a 1024-thread pipeline limit. Alternating isolated measurements improved mean head wall from `3.5068ms` to `3.2184ms` (`8.223%`, `12/12` wins). With the head accounting for about `6.6%` of decode wall, a `>=3%` complete-token improvement requires roughly `45.5%` head acceleration.
+  verified_at: 2026-09-02
+  decay_trigger: lm-head share, Q6 kernel geometry, model/device/compiler/runtime, or materiality threshold changes
+  trust: {F:0.97,G:0.03,R:0.93}
+
+- claim: "The complete-decode screen does not overturn the ceiling argument."
+  source: guarded six-pair generation reported about `1.43%` mean improvement and `4/6` candidate wins while unrelated host work drove total CPU to `186%`. This noisy row is only a screen; the isolated share/ceiling result is the rejection anchor.
+  verified_at: 2026-09-02
+  decay_trigger: same as above, or a lower-noise complete-token gate reports a materially larger effect
+  trust: {F:0.94,G:0.02,R:0.86}
+
+**Adversary:** The kernel win is real within the isolated head, but promoting it would optimize a proxy rather than the complete token. Host noise can move the full-decode estimate, but it cannot turn an `8.223%` head-only win into the roughly `45.5%` head win needed for the current materiality threshold.
+
+**decision:** Remove the candidate and close the current GEMV microgeometry frontier. A BF16 direct-pack path also remains below the active mixed-map token ceiling. Continue only from work-elimination across a larger exact boundary, starting with a layer-resident FFN intermediate/pass falsifier.
