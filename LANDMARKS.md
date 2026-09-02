@@ -26237,3 +26237,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is an ordinary context-selective runtime policy with exact fallback.
 
 **decision:** Gate automatic P4 and aligned-BF16 T8 split-K loaders at `packed_len >= 6,144` on exact Apple M2 Max. Preserve `QWEN35_ADAPTIVE_{P4,BF16}_SPLITK_T8=0` as rollback and `=1` as explicit experimental force. Keep shorter contexts on the existing loaders and revisit the threshold only with matched evidence that crosses the same parity and `>=3%`, `>=8/10` gates.
+
+#### [LM-QWEN38-Q4K-B64-SUBBLOCK-LAYOUT-1001] Neither record nor payload tiling accelerates the Q4_K B64 gate projection
+**context:** ml / Qwen3.8-27B / Metal / recurrent FFN / Q4_K B64 / weight layout
+**state:** both exact-size weight-layout candidates measured and rejected on the bounded Apple M2 Max operator corridor
+
+- claim: "Moving complete 144-byte Q4_K records into a 64-row tile is exact but does not materially accelerate the dominant B64 gate projection."
+  source: a guarded real `5120 -> 17408`, batch-1024 operator run used the production B64 arithmetic and changed only the weight address. It compared every Float32 output bit, then ran two warmups and nine ABBA cycles. The row-major and record-tile GPU p50s were `22.396375/22.155542 ms`, only `1.075%` local improvement. Even projecting the same delta across both gate and up in all 64 layers gives only about `0.44%` of the measured `7,005.64 ms` prefill body. The candidate failed the predeclared `>=7.5%` local gate. Packing retained exactly `50,135,040` bytes and took `7.592 ms` for the one tensor.
+  verified_at: 2026-09-01
+  decay_trigger: Q4_K record layout, B64 loader ownership, model shape, device/compiler/runtime, timing gate, or prefill attribution changes
+  trust: {F:0.98,G:0.03,R:0.93}
+
+- claim: "Separating metadata and quant payloads within each 64-row tile preserves exact output but is slightly slower than the production row-major layout."
+  source: after explicit operator authorization, one protected exact-shape run used a 120-second timeout, 4 GiB process-tree cap, 35% free-memory floor, five warmups, and ten ABBA cycles without waiting for a quiet WindowServer. The inverse pack check covered all `50,135,040` bytes, both pipelines compiled, and every Float32 output bit matched. Production row-major versus subblock-major GPU p50 was `21.779375/21.922875 ms`: the candidate regressed by `0.659%`, won only `5/10` pairs, and failed the predeclared `>=7.5%`, `>=8/10` gate. Applying that measured delta hypothetically to all 128 main gate/up projections would regress the measured prefill body by about `0.262%`; this remains arithmetic, not production-route coverage.
+  verified_at: 2026-09-01
+  decay_trigger: payload mapping, Q4_K metadata or nibble semantics, B64 kernel, model shape, Metal compiler/runtime, timing protocol, or device changes
+  trust: {F:0.98,G:0.03,R:0.94}
+
+**Adversary:** One tensor and one process do not estimate cross-device variance, but the candidate is negative, splits pair wins evenly, and misses the local admission threshold by more than eight percentage points; repetition cannot make it a KISS `>=7.5%` route without a new mechanism. Metadata-only inspection of the real GGUF also found 130 Q4_K gate/up tensors with `6.07 GiB` total bytes. Retaining both row-major and packed representations would therefore impose a large memory cost even if timing had been positive.
+
+**Value proxy:** Coalesced source addresses and unchanged byte count explain the mechanism. Full-output parity, completed-command ABBA time, stable wins, load-time cost, and non-duplicated resident memory are separate admission coordinates.
+
+**LTP/WBA:** Not claimed. This is an ordinary representation and loader experiment with the current row-major kernel as the exact rollback frame.
+
+**decision:** Do not retry either weight-layout permutation and do not add a production prepack or resident duplicate. Keep the production row-major B64 kernel as the rollback frame. Reopen weight layout only if a different mechanism establishes a credible local ceiling before implementation; address reshuffling by itself is now falsified on this corridor.
