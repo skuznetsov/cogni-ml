@@ -26279,3 +26279,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary exact loader scheduling with the production B64 kernel as rollback.
 
 **decision:** Keep the production Q4_K B64 loader. Do not add scalar or vector register q-cache state and do not retry this low/high-nibble reuse without new compiler-level evidence that removes the register-pressure cost. Continue from optimizations that eliminate a material dispatch, intermediate, or higher-level scheduling boundary rather than source-visible loads already served by the cache/compiler.
+
+#### [LM-QWEN38-Q4K-B64-SEQUENTIAL-COMPILE-NOGO-1003] Sequential gate then up fails the conservative compiler-resource gate
+**context:** ml / Qwen3.8-27B / Metal / recurrent FFN / Q4_K B64 / sequential fusion
+**state:** compile-only candidate rejected before any model allocation, command encoding, or GPU dispatch; production kernels unchanged
+
+- claim: "A sequential B64 gate-then-up kernel removes dual-live accumulators but requires twice the production threadgroup storage and reduces the compiler-reported thread limit."
+  source: a compile-only Apple M2 Max probe extracted the current production B64 compute phase, reused one `simdgroup_float8x8 mc[8]` field for gate and then up, retained the complete `64x64` Float32 gate tile in the upper threadgroup region, reused the lower region for the up tile, and emitted H16 SwiGLU. All three Metal pipelines compiled without allocating model buffers, encoding commands, or dispatching GPU work. The production and fused-consumer pipelines each reported `maxTotalThreadsPerThreadgroup=896`; the sequential candidate reported `832`. Dynamic threadgroup storage increased from `16,384` to `32,768` bytes. The required 256-thread launch remains legal, so this result does not prove a slowdown, but it fails the predeclared conservative no-resource-regression gate.
+  verified_at: 2026-09-01
+  decay_trigger: B64 accumulator/staging layout, Metal compiler/runtime, threadgroup-memory budget, device, or admission policy changes
+  trust: {F:0.99,G:0.03,R:0.96}
+
+**Adversary:** `maxTotalThreadsPerThreadgroup` is compiler headroom rather than an occupancy counter. Both `832` and `896` remain above the actual 256-thread launch, and the compile-only probe measured no execution time. The stronger structural warning is the doubled 32 KiB threadgroup allocation, but the current bridge exposes no direct occupancy certificate. Therefore the evidence rejects this candidate under the declared KISS/resource gate; it does not establish that the kernel would be slower.
+
+**Value proxy:** Removing one device-memory gate intermediate and one dispatch is the intended value. Pipeline compilation, threadgroup bytes, and compiler thread limit are only cheap resource-risk filters; they are not substitutes for parity and paired GPU timing.
+
+**LTP/WBA:** Not claimed. This was an ordinary compile-only fusion falsifier with the two production dispatches as the exact rollback frame.
+
+**decision:** Do not dispatch or promote the 32 KiB sequential B64 candidate. Reopen sequential fusion only with a lower-threadgroup-memory schedule that passes the compiler-resource gate, or with a new hardware counter that justifies revising the gate before observing timing. Continue looking for work elimination rather than moving the same two GEMMs behind a riskier resource shape.
