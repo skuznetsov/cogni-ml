@@ -26297,3 +26297,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was an ordinary compile-only fusion falsifier with the two production dispatches as the exact rollback frame.
 
 **decision:** Do not dispatch or promote the 32 KiB sequential B64 candidate. Reopen sequential fusion only with a lower-threadgroup-memory schedule that passes the compiler-resource gate, or with a new hardware counter that justifies revising the gate before observing timing. Continue looking for work elimination rather than moving the same two GEMMs behind a riskier resource shape.
+
+#### [LM-QWEN38-Q4K-B32-SEQUENTIAL-COMPILE-NOGO-1004] Lower-memory sequential fusion still fails the compiler-resource gate
+**context:** ml / Qwen3.8-27B / Metal / recurrent FFN / Q4_K B32 / sequential fusion
+**state:** compile-only candidate rejected before model allocation, command encoding, or GPU dispatch; production kernels unchanged
+
+- claim: "A sequential B32 gate-then-up kernel can preserve production double buffering in 20 KiB, but it still reduces compiler-reported resource headroom."
+  source: a model-free CPU oracle preserved every staged gate Float32 bit and final H16 SwiGLU bit over zero, signed, small, and large values; it also kept partial input, output, and batch shapes on the existing fallback. The compile-only Apple M2 Max probe extracted the current production B32 compute phase, retained its two 6 KiB staging buffers and one `simdgroup_float8x8 mc[8]` field, stored the complete `64x32` gate tile above the 12 KiB work area, reused the work area for up, and emitted H16 activation. Both pipelines compiled without allocating model buffers, encoding commands, or dispatching GPU work. Dynamic threadgroup storage increased from `16,384` to `20,480` bytes, while `maxTotalThreadsPerThreadgroup` fell from `896` to `832`; the candidate therefore failed the predeclared no-resource-regression gate.
+  verified_at: 2026-09-01
+  decay_trigger: B32 staging or accumulator layout, Metal compiler/runtime, device, threadgroup-memory budget, or admission policy changes
+  trust: {F:0.99,G:0.03,R:0.96}
+
+**Adversary:** The actual 128-thread launch remains legal and `832` is not an occupancy or speed measurement. However, this B32 design also doubles the number of up-projection threadgroups relative to the current B64 consumer and executes both complete GEMMs serially inside each group. Its only intended saving is the gate device round-trip and one launch. That is not a strong enough mechanism to override the conservative resource failure with a new long-running custom dispatch.
+
+**Value proxy:** Lower threadgroup storage than the rejected 32 KiB B64 variant is only a mechanism coordinate. The gate requires no compiler-resource regression before paying for parity and timing; the candidate failed that cheap discriminator.
+
+**LTP/WBA:** Not claimed. This was an ordinary compile-only fusion falsifier with the current B32 gate plus B64 up route as the rollback frame.
+
+**decision:** Do not dispatch or integrate sequential B32 gate/up fusion. B64 and B32 sequential schedules are now closed under the current compiler-resource gate. Reopen only with a mechanism that eliminates material GEMM work, avoids storing the full gate tile, or provides a direct hardware counter that justifies a different resource gate before timing.
