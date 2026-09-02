@@ -26515,3 +26515,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **Adversary:** The kernel win is real within the isolated head, but promoting it would optimize a proxy rather than the complete token. Host noise can move the full-decode estimate, but it cannot turn an `8.223%` head-only win into the roughly `45.5%` head win needed for the current materiality threshold.
 
 **decision:** Remove the candidate and close the current GEMV microgeometry frontier. A BF16 direct-pack path also remains below the active mixed-map token ceiling. Continue only from work-elimination across a larger exact boundary, starting with a layer-resident FFN intermediate/pass falsifier.
+
+#### [LM-QWEN38-MTP-Q4-SMALL-BATCH-REUSE-NOGO-1014] Q4 verifier weight sharing loses to the existing batch GEMV
+**context:** ml / Qwen3.8-27B / MTP verifier body / Q4_K FFN / Apple M2 Max
+**state:** llama.cpp-inspired candidate rejected; temporary implementation removed; production routing unchanged
+
+- claim: "Sharing one Q4_K dequantized weight slice across four verifier rows is numerically sound but slower than the current four-row GEMV route."
+  source: a temporary default-off Metal kernel adapted the `mul_mv_ext` ownership shape to cogni-ml's flat Q4_K layout. On the real Qwen3.5-9B `blk.0.ffn_up.weight`, it matched the existing Metal route with cosine similarity `1.0` and maximum absolute delta `4.4703484e-7`. A guarded fresh-process A/B/B/A operator gate on the Qwen3.8-27B Q4_K_M `5120 -> 17408` FFN shape used batch four, five warmups, and fifteen measured runs per process. Baseline p50 was `1.245/0.946ms`; the candidate was `1.486/1.520ms`. The candidate lost every ordered comparison and increased mean standalone latency by about `37.2%`.
+  verified_at: 2026-09-02
+  decay_trigger: Q4_K kernel geometry, verifier batch shape, Metal compiler/runtime, device, or baseline GEMV route changes
+  trust: {F:0.97,G:0.03,R:0.95}
+
+**Adversary:** Fewer repeated weight reads are not a speed certificate. The four-row accumulators increase register pressure, and processing four RHS rows inside one threadgroup reduces the independent work exposed to the GPU. Host variance widened the two baseline rows, but both candidate rows were slower than both baselines, so a full MTP run cannot rescue this implementation.
+
+**Value proxy:** Logical weight-byte reuse describes the mechanism; standalone wall time decides whether this kernel deserves a more expensive end-to-end gate. It failed before product integration.
+
+**LTP/WBA:** Not claimed. This was an ordinary small-batch Metal kernel experiment.
+
+**decision:** Keep the existing Q4_K batch-four GEMV and do not port `mul_mv_ext` mechanically. The next verifier optimization must remove work across a larger control-flow or layer boundary rather than trade bandwidth for register pressure inside the same FFN matmul.
