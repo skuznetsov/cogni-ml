@@ -26261,3 +26261,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is an ordinary representation and loader experiment with the current row-major kernel as the exact rollback frame.
 
 **decision:** Do not retry either weight-layout permutation and do not add a production prepack or resident duplicate. Keep the production row-major B64 kernel as the rollback frame. Reopen weight layout only if a different mechanism establishes a credible local ceiling before implementation; address reshuffling by itself is now falsified on this corridor.
+
+#### [LM-QWEN38-Q4K-B64-REGISTER-QCACHE-FALSIFIED-1002] Retaining Q4_K payload bytes in thread registers slows the B64 gate projection
+**context:** ml / Qwen3.8-27B / Metal / recurrent FFN / Q4_K B64 / loader scheduling
+**state:** exact scalar register-cache candidate measured and rejected; production loader retained
+
+- claim: "Caching each 16-byte Q4_K payload slice across the existing low/high-nibble loader iterations preserves exact output but materially slows the measured B64 operator."
+  source: a CPU schedule oracle first checked all 1,280 row-blocks from the real `5120x17408` Qwen3.8 gate tensor: `327,680` values matched the independent Q4_K dequantization reference exactly in Float32 and host Float16, while logical payload reads fell from two to one per byte. A compile-only Metal probe then compiled the production, scalar-cache, and vector-cache pipelines without model buffers or command buffers; the scalar and vector candidates reduced `maxTotalThreadsPerThreadgroup` from `896` to `704`, exposing register pressure before dispatch. After explicit operator authorization, one protected scalar-candidate run used the exact production shape and batch 1,024, a 120-second timeout, 4 GiB process-tree cap, 35% free-memory floor, five warmups, and ten ABBA cycles. All `17,825,792` synthetic-fixture Float32 output bits matched. Baseline/candidate paired GPU p50s were `19.597687/22.162917 ms`; the candidate regressed by `12.752%`, won `0/10` cycles, and failed the predeclared `>=7.5%`, `>=8/10` gate.
+  verified_at: 2026-09-01
+  decay_trigger: Q4_K B64 loader order, compiler register allocation or load CSE, model shape, device/runtime, or timing harness changes
+  trust: {F:0.98,G:0.03,R:0.94}
+
+**Adversary:** Halving source-level payload reads did not establish fewer physical memory transactions: the production compiler/cache may already reuse the bytes cheaply. The explicit 16-byte per-thread live range lowered the pipeline's reported thread limit and plausibly reduced occupancy or caused spills. The timing fixture used synthetic Q4_K bytes and one operator rather than a full model route, but that limits positive generalization; it does not weaken the decisive negative result on the exact production geometry.
+
+**Value proxy:** Logical payload-read count is a mechanism coordinate. Exhaustive differential output parity, paired completed-GPU time, stable wins, and the predeclared materiality gate are the admission boundary; timing failed in every cycle.
+
+**LTP/WBA:** Not claimed. This was ordinary exact loader scheduling with the production B64 kernel as rollback.
+
+**decision:** Keep the production Q4_K B64 loader. Do not add scalar or vector register q-cache state and do not retry this low/high-nibble reuse without new compiler-level evidence that removes the register-pressure cost. Continue from optimizations that eliminate a material dispatch, intermediate, or higher-level scheduling boundary rather than source-visible loads already served by the cache/compiler.
