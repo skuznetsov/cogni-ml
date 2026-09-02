@@ -26375,3 +26375,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary independent-operation scheduling with serial encoder order as the exact rollback frame.
 
 **decision:** Keep serial FFN projection encoding. Do not promote or retry gate/up concurrency without a new mechanism that removes work or demonstrates a materially larger ceiling. Do not widen the experiment to the smaller recurrent projections: they carry less logical traffic and share the same bandwidth contention, so the observed upper bound is already below the whole-token gate.
+
+#### [LM-QWEN38-MTP-Q6-SMALL-BATCH-REUSE-NOGO-1008] Q6 head weight reuse is locally fast but below the MTP wall gate
+**context:** ml / Qwen3.8-27B / MTP verifier / Q6_K output head / Apple M2 Max
+**state:** exact opt-in candidate measured and rejected; production runtime restored
+
+- claim: "Reusing each Q6_K weight block across four or five verifier rows materially accelerates the isolated top-1 head, but only slightly improves complete speculative decoding."
+  source: a temporary shape-gated Metal kernel preserved exact token ids and reported zero maximum logit delta for both supported row counts. Twelve paired isolated cycles measured `12.8318 -> 9.3294 ms` for four rows (`1.3754x` versus serial, `1.1405x` versus the existing batch kernel) and `16.0267 -> 11.5454 ms` for five rows (`1.3881x` versus serial, `1.1729x` versus existing batch), with `12/12` wins in both comparisons. The focused real-model verifier contract also passed for four and five rows.
+  verified_at: 2026-09-02
+  decay_trigger: Q6_K head layout, verifier batch shape, Metal kernel/compiler/runtime, device, or timing protocol changes
+  trust: {F:0.98,G:0.04,R:0.94}
+
+- claim: "The isolated kernel win does not meet the whole-MTP materiality gate."
+  source: two coding prompts, gamma four, and sixteen generated tokens were run in fresh-process A/B/B/A order. All four candidate comparisons preserved exact speculative-versus-plain output parity. Baseline/candidate mean speculative wall time was `4629.6405/4576.5615 ms`, a `1.16%` latency reduction; verifier time improved by about `2.15%`. This failed the predeclared `>=3%` whole-wall gate, so the kernel and runtime switch were removed.
+  verified_at: 2026-09-02
+  decay_trigger: verifier body/replay architecture, accepted-token distribution, head share of total wall time, model/device/compiler/runtime, prompt set, gamma, or admission threshold changes
+  trust: {F:0.98,G:0.03,R:0.93}
+
+**Adversary:** The isolated probe establishes a real small-batch head optimization on one model and device, but the verifier body and recurrent-state replay dominate complete MTP wall time. Two prompts and four ordered runs are not a broad performance certificate. They are sufficient for the negative decision because the measured whole-wall gain is less than half of the admission threshold despite exact parity.
+
+**Value proxy:** Head-kernel latency is a mechanism coordinate. Complete speculative wall time, output parity, accepted-token behavior, and the materiality threshold are the admission boundary.
+
+**LTP/WBA:** Not claimed. This was ordinary small-batch weight reuse with the existing Q6_K top-1 routes as the exact rollback frame.
+
+**decision:** Keep the production Q6_K head kernels unchanged. Reopen cross-row weight reuse only if verifier-body/replay work is removed or the head becomes a materially larger share of complete MTP wall time. Continue from verifier control flow and state handling rather than another sub-percent kernel refinement.
