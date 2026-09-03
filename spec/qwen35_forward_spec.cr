@@ -790,6 +790,10 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
       undersized.layers[hp.full_attention_layers.first].k_cache = [0.0_f32]
       ML::GGUF::Qwen35CPU.prefill_full_logits_last_supported?(w, undersized, prompt.size, 0).should be_false
 
+      stale = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      stale.layers.first.position = 1
+      ML::GGUF::Qwen35CPU.prefill_full_logits_last_supported?(w, stale, prompt.size, 0).should be_false
+
       fast = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
       ENV.delete("QWEN35_FINAL_FULL_LAST_OFF")
       fast_top, fast_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, fast)

@@ -26663,3 +26663,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is an ordinary schedule specialization with an explicit boundary invariant and fallback.
 
 **decision:** Keep the strict terminal-row candidate and its capability signal without a prompt-size tuner. Treat pp1024 as near-neutral until stronger evidence changes the boundary. Next test the resident `N x hidden` handoff into the final layer so the same specialization no longer performs a GPU-to-host-to-GPU round trip.
+
+#### [LM-QWEN35-TERMINAL-RESIDENT-HANDOFF-NOGO-1021] Unified-memory resident prefix does not accelerate terminal full logits
+**context:** ml / Qwen3.5-9B / same-token prefill / terminal full-attention handoff / Apple M2 Max
+**state:** candidate falsified and removed; terminal-route admission hardened
+
+- claim: "Keeping the complete prefix hidden matrix in a caller-owned Metal buffer before the terminal full-attention specialization is exact but does not materially reduce prefill wall time on Apple M2 Max."
+  source: a temporary resident route reused the established recurrent-run output-buffer corridor and passed a real-model three-way check against both the host-prefix terminal route and the old final-token fallback. Every vocabulary logit and four continuation steps matched within `1e-4`. A guarded same-process RH/HR ABBA used one loaded Qwen3.5-9B Q4_K_M model, separate reset states, two warmups, and eight measured pairs per size. Resident versus host-prefix mean gains were `+0.020%`, `-0.019%`, `-0.060%`, and `+0.074%` at pp256/512/1024/2048; paired median gains were `+0.055%`, `+0.527%`, `-0.007%`, and `+0.647%`, with wins `5/8`, `5/8`, `3/8`, and `4/8`. Full-logit maximum absolute difference was `0.0`, cosine was `1.0`, and top-2 IDs matched for every pair. The guarded process exited zero under the 35% free-memory floor and 24 GiB tree cap.
+  verified_at: 2026-09-03
+  decay_trigger: Metal buffer storage mode, host/GPU coherence behavior, hidden representation, final-layer route, model/device/compiler/runtime, or benchmark method changes
+  trust: {F:0.98,G:0.06,R:0.95}
+
+- claim: "The terminal-row optimization now rejects stale states and unavailable concrete Metal pipelines before prompt-state mutation."
+  source: preflight requires every layer position to be zero and calls the same quantized GEMV pipeline capability query used by the terminal helper. The focused preflight and real-model full-logit continuation specs pass, preserving the explicit legacy fallback before mutation.
+  verified_at: 2026-09-03
+  decay_trigger: state-position semantics, terminal helper pipeline selection, quantized weight support, or fallback ordering changes
+  trust: {F:0.98,G:0.20,R:0.96}
+
+**Adversary:** Avoided logical copies are not a speed certificate on unified memory. The resident and host paths can touch the same physical memory without a discrete-device transfer, and the remaining host array copy is small relative to the complete model matmul work. Alternating order, exact marker checks, and four prompt sizes failed to reveal a directional effect; keeping the branch would add policy and lifetime surface without measured value.
+
+**Value proxy:** `2 * tokens * hidden * sizeof(Float32)` describes avoided logical traffic, not DRAM traffic or wall time. Same-process paired wall is the admission gate, and it remained within noise.
+
+**LTP/WBA:** Not claimed. This was an ordinary buffer-handoff experiment.
+
+**decision:** Remove the resident terminal-prefix branch and retain the simpler host-prefix route. Keep only the fail-closed preflight hardening. Do not retry this seam on unified-memory Apple devices unless storage mode or the hidden representation changes; move the pp search to actual compute elimination, fused recurrent work, or intermediate precision/layout.

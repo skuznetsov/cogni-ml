@@ -2136,6 +2136,7 @@ module ML::GGUF
         hp = weights.hparams
         return false unless weights.layers.size == hp.n_layer
         return false unless state.layers.size == weights.layers.size
+        return false unless state.layers.all? { |layer| layer.position == 0 }
         return false unless hp.n_head > 0 && hp.n_head_kv > 0
         return false unless hp.n_head % hp.n_head_kv == 0
 
@@ -2176,6 +2177,11 @@ module ML::GGUF
                     metal_qw_supported?(last_layer.ffn_up_qw) &&
                     metal_qw_supported?(last_layer.ffn_down_qw)
         return false unless supported
+        return false unless Qwen35Metal.full_attn_layer_chunk_project_last_supported?(
+                              last_layer.attn_q_qw, last_layer.attn_k_qw, last_layer.attn_v_qw,
+                              last_layer.attn_output_qw, last_layer.ffn_gate_qw,
+                              last_layer.ffn_up_qw, last_layer.ffn_down_qw,
+                            )
 
         required_kv_values = state.max_seq.to_i64 * kv_dim.to_i64
         required_kv_bytes = required_kv_values * sizeof(Float32)

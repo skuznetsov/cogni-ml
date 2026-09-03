@@ -6952,6 +6952,22 @@ module ML
         # row; only the last row's hidden state is needed for next-token logits.
         # This route therefore projects K/V for the whole chunk, but computes
         # Q/attention/FFN output only for the final row.
+        def self.full_attn_layer_chunk_project_last_supported?(q_qw : QuantWeight,
+                                                                k_qw : QuantWeight,
+                                                                v_qw : QuantWeight,
+                                                                out_qw : QuantWeight,
+                                                                ffn_gate_qw : QuantWeight,
+                                                                ffn_up_qw : QuantWeight,
+                                                                ffn_down_qw : QuantWeight) : Bool
+          !gemv_pipeline_for(q_qw).nil? &&
+            !gemv_pipeline_for(k_qw).nil? &&
+            !gemv_pipeline_for(v_qw).nil? &&
+            !gemv_pipeline_for(out_qw).nil? &&
+            !gemv_pipeline_for(ffn_gate_qw).nil? &&
+            !gemv_pipeline_for(ffn_up_qw).nil? &&
+            !gemv_pipeline_for(ffn_down_qw).nil?
+        end
+
         def self.full_attn_layer_chunk_project_last(inp : Array(Float32),
                                                     q_qw : QuantWeight,
                                                     k_qw : QuantWeight,
@@ -6977,6 +6993,9 @@ module ML
                                                     eps : Float32,
                                                     scale : Float32,
                                                     input_buf : ML::MetalBuffer? = nil) : Array(Float32)?
+          return nil unless full_attn_layer_chunk_project_last_supported?(
+            q_qw, k_qw, v_qw, out_qw, ffn_gate_qw, ffn_up_qw, ffn_down_qw,
+          )
           q_pipe = gemv_pipeline_for(q_qw)
           k_pipe = gemv_pipeline_for(k_qw)
           v_pipe = gemv_pipeline_for(v_qw)
@@ -6984,8 +7003,6 @@ module ML
           ffn_gate_pipe = gemv_pipeline_for(ffn_gate_qw)
           ffn_up_pipe = gemv_pipeline_for(ffn_up_qw)
           ffn_down_pipe = gemv_pipeline_for(ffn_down_qw)
-          return nil if q_pipe.nil? || k_pipe.nil? || v_pipe.nil? || out_pipe.nil? ||
-                        ffn_gate_pipe.nil? || ffn_up_pipe.nil? || ffn_down_pipe.nil?
           return nil unless n_tokens > 0
 
           ML::Metal::Device.init!
