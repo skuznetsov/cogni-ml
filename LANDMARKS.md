@@ -26611,3 +26611,25 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary block-size tuning with explicit baseline/candidate execution frames.
 
 **decision:** Retain split-K chunk 64 as the production default and keep explicit comparison probes. Remove the temporary automatic chunk-60 route. Require a new candidate to remove work or bytes across a larger exact decode boundary before another product A/B.
+
+#### [LM-QWEN-BENCHMARK-CONTRACT-1019] Native-vs-llama gaps now require matched output work and statistics
+**context:** ml / Qwen benchmark / llama.cpp / value-proxy boundary
+**state:** diagnostic contract corrected and guarded smoke verified; historical strict gaps invalidated
+
+- claim: "Unmodified llama-bench pp/tg is not a decoder-body-only workload."
+  source: `llama-bench.cpp:test_prompt/test_gen` submits batches with a null logits mask, while `llama-batch.cpp` converts that null mask into a requested final output row. Prompt processing therefore exposes final-token logits per batch and token generation exposes logits for each one-token batch. Native `Qwen35CPU.prefill_token/prefill_tokens` explicitly skips output RMSNorm and lm-head work.
+  verified_at: 2026-09-03
+  decay_trigger: llama.cpp batch output-mask semantics, llama-bench prompt/generation loops, or native head routing changes
+  trust: {F:0.99,G:0.90,R:0.98}
+
+- claim: "The corrected wrapper separates output-matched full-logit diagnostics, product-top1, body lower-bound, and cache-restore measurements."
+  source: full logits is now the native default for pp and tg; native Metal state preparation and `--decode-depth` seeding occur outside the timer; body/top1/cache modes do not print a llama.cpp percentage; native mean per-repetition throughput is compared with `avg_ts`; and the parsed llama result must contain exactly one row with the requested prompt, generation, and depth shape. Because token streams and seeded states differ, full-logit mode prints `diagnostic mean delta`, not `gap`. Focused contract specs passed (`6 examples, 0 failures`), the release build passed, and guarded Qwen3.5-9B smokes exited zero. The contextual full-logit smoke reported the expected diagnostic scope, while the body-only smoke printed `not comparable` for both pp and tg. A guarded relaxed-host pp64/tg64 row with three repetitions and one warmup measured native `398.16/47.43 tok/s` versus llama.cpp `459.14/48.74 tok/s`, diagnostic deltas `-13.28%/-2.69%`.
+  verified_at: 2026-09-03
+  decay_trigger: benchmark CLI, native prefill/decode routes, llama-bench JSON/statistic semantics, model/runtime, or comparison labels change
+  trust: {F:0.98,G:0.80,R:0.96}
+
+**Adversary:** Full-logit mode matches the closest observable output policy and timed context depth, not exact input values, setup lifecycle, or internal scheduling. The engines still consume different deterministic/random synthetic token streams; native pp reaches the final head through a prefix-body plus final-token call, while llama.cpp may emit another logits row at each internal batch boundary; and prepared-state allocation/graph reuse differs. A one-repetition smoke is not speed evidence. Product greedy top1 does less output work and feeds dependent model outputs; cache restore avoids prompt compute. Neither may inherit a llama-bench gap.
+
+**Value proxy:** A high body-only tokens-per-second number measures a useful lower bound, not the speed of unmodified llama-bench's workload. Cache restore measures the cache engine, not first-run pp. Mean full-logit throughput at matched output policy and depth is a useful diagnostic delta, but a strict raw-engine gap also requires the same token stream and seeded state. Product latency remains a separate benchmark.
+
+**decision:** Invalidate earlier body-only and mixed-statistic percentage gaps as strict comparisons. Keep them only as historical diagnostics. Re-run quiet-host, balanced full-logit pp/tg as diagnostic ranges, label depth-zero versus contextual decode separately, and require a same-token llama helper before printing a strict gap.

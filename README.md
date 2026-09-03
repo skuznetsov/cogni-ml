@@ -1031,7 +1031,7 @@ crystal build --release --no-debug \
   -o build/benchmark_qwen_vs_llama
 ```
 
-Run a normal first-run prefill/decode comparison:
+Run the default prepared-state, full-logit diagnostic:
 
 ```sh
 ./build/benchmark_qwen_vs_llama \
@@ -1040,17 +1040,17 @@ Run a normal first-run prefill/decode comparison:
   --prompt=64 \
   --gen=64 \
   --reps=5 \
-  --warmup=2
+  --warmup=1
 ```
 
-For publishable measurements, wait for a quiet host:
+For less noisy diagnostic measurements, wait for a quiet host:
 
 ```sh
 ./build/benchmark_qwen_vs_llama \
   --prompt=64 \
   --gen=64 \
   --reps=5 \
-  --warmup=2 \
+  --warmup=1 \
   --wait-quiet-ms=60000 \
   --require-quiet
 ```
@@ -1058,14 +1058,26 @@ For publishable measurements, wait for a quiet host:
 Additional benchmark modes:
 
 ```sh
-# Default native decode now matches llama-bench `tg`: decoder body only,
-# with no output logits/head readback. Product-shaped greedy decode is:
+# The default is the closest executable comparison to unmodified llama-bench:
+# final-token full logits for pp and full logits for every timed tg token.
+# Match contextual decode by seeding both KV states outside the timed region:
+./build/benchmark_qwen_vs_llama --decode-depth=4096
+
+# Native decoder-body numbers are useful lower bounds, but llama-bench still
+# computes and copies logits, so the wrapper deliberately prints no gap:
+./build/benchmark_qwen_vs_llama \
+  --native-prefill-body-only \
+  --native-decode-body-only
+
+# Product-shaped greedy top1 feeds each native output token into the next step.
+# It is reported separately because llama-bench uses synthetic input tokens and
+# copies full logits instead of sampling:
 ./build/benchmark_qwen_vs_llama --native-decode-top1
 
-# Fresh State per repetition, but Metal state buffers are prepared before
-# the timed prefill. This measures prompt ingest without first-touch buffer
-# allocation/zeroing in the timed region.
-./build/benchmark_qwen_vs_llama --native-prefill-prepare-state
+# Fresh State per repetition with Metal state buffers prepared before timing is
+# the default, matching llama-bench's exclusion of context setup. Include native
+# first-touch allocation only as a separate diagnostic:
+./build/benchmark_qwen_vs_llama --native-prefill-first-touch
 
 # State buffers allocated once, then reset between reps.
 ./build/benchmark_qwen_vs_llama --native-prefill-prealloc
@@ -1077,17 +1089,34 @@ Additional benchmark modes:
 ./build/benchmark_qwen_vs_llama --native-prefill-cache-prefix-suffix=8
 ```
 
-Latest guarded relaxed-host Qwen3.5-9B Q4_K_M body-only rows on M2 Max:
+`llama-bench`'s null logits mask means “emit the last row,” not “skip the
+output head.” Its default pp path therefore emits final-token full logits, and
+its tg path emits full logits on every timed token. Historical rows that called
+native body-only pp/tg “llama-compatible” were a useful native lower bound but
+not an apples-to-apples speed comparison. They are invalidated as strict gap
+evidence and must be rerun with the corrected contract before publication.
 
-| prompt/gen | cogni-ml pp | llama.cpp pp | pp gap | cogni-ml tg | llama.cpp tg | tg gap |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 64/64 | 480.06 tok/s | 458.85 tok/s | +4.62% | 53.75 tok/s | 48.15 tok/s | +11.63% |
-| 256/64 | 567.60 tok/s | 566.21 tok/s | +0.25% | 53.43 tok/s | 48.26 tok/s | +10.72% |
-| 1024/64 | 582.74 tok/s | 574.77 tok/s | +1.39% | 53.14 tok/s | 48.24 tok/s | +10.16% |
+The wrapper compares the arithmetic mean of per-repetition throughput with
+`llama-bench`'s `avg_ts`. It rejects output that contains more than one result
+row or whose prompt, generation, or depth shape was changed by extra arguments.
+Token values remain synthetic and differ between the two engines, so full-logit
+mode prints only a `diagnostic mean delta`, never a strict apples-to-apples gap.
+For prompts spanning multiple llama.cpp batches, the engines may also emit a
+different number of intermediate output rows; prepared-state allocation and
+graph-reuse lifecycles differ as well.
 
-These rows use `--native-prefill-prealloc`, `--threads=8`, and disabled load
-warnings. Treat them as guarded relaxed measurements, not publishable quiet-host
-ABBA evidence.
+Current guarded relaxed-host diagnostic on Apple M2 Max, Qwen3.5-9B Q4_K_M,
+prepared native state, full logits, `prompt=64`, `gen=64`, `reps=3`, and one
+warmup:
+
+| Phase | cogni-ml mean | llama.cpp `avg_ts` | Diagnostic delta |
+| --- | ---: | ---: | ---: |
+| pp64 | 398.16 tok/s | 459.14 tok/s | -13.28% |
+| tg64, depth 0 | 47.43 tok/s | 48.74 tok/s | -2.69% |
+
+This is a current branch-selection row, not a public speed claim. A strict row
+still needs the same token stream and seeded state in both engines, plus a
+quiet/order-balanced run.
 
 For Qwen3.6 MTP / quant baselines, first inspect the local/HF matrix:
 
@@ -1122,26 +1151,12 @@ Boundary: native `cogni-ml` currently supports the K-quants used by our
 Q4_K_M/Q5_K/Q6_K/Q8_0 paths. IQ/UD MTP GGUFs are external llama.cpp baselines
 until native IQ/UD quant loaders are implemented.
 
-Fresh local M2 Max 64GB relaxed-load snapshot after the shared-H16 recurrent projection cleanup, Qwen 3.5 9B Q4_K_M, llama.cpp `llama-bench`, `prompt=64`, `gen=64`, `reps=3`, `warmup=1`, flash-attention off:
-
-| Mode | cogni-ml | llama.cpp | Gap |
-|---|---:|---:|---:|
-| First-run prefill | 426.70 tok/s p50 | 455.10 tok/s avg | -6.24% |
-| Fresh state, prepared Metal buffers | 449.73 tok/s p50 | 464.78 tok/s avg | -3.24% |
-| Prefill with preallocated state | 448.60 tok/s p50 | 465.91 tok/s avg | -3.71% |
-| Prompt-cache restore | 1350.65 tok/s p50 | 465.80 tok/s avg | +189.97% |
-| Plain greedy decode, first-run bench | 48.67 tok/s p50 | 46.67 tok/s avg | +4.29% |
-| Plain greedy decode, prepared-state bench | 48.59 tok/s p50 | 46.43 tok/s avg | +4.67% |
-| Plain greedy decode, preallocated bench | 48.51 tok/s p50 | 46.63 tok/s avg | +4.05% |
-| Plain greedy decode, prompt-cache bench | 48.52 tok/s p50 | 46.58 tok/s avg | +4.18% |
-
-Notes:
-
-- The table is a local engineering snapshot, not a lab-clean public benchmark.
-- First-run prefill is still behind llama.cpp on this machine. The native wins currently come from state reuse, prompt-cache restore, and exact speculative decode.
-- `--native-prefill-prepare-state` uses a fresh `State` per repetition but calls `Qwen35CPU.prepare_state_metal!` before timing. This is useful for server-style latency where a session object can be prepared before the prompt arrives.
-- `--native-prefill-cache` measures exact restore of a previously computed prompt state; it is not a first-run prefill replacement.
-- Short decode runs are noisy on a desktop system. The two plain decode rows above are intentionally both shown: treat plain decode as parity-to-faster, not as a stable public margin without a quiet rerun.
+The older local M2 Max snapshot in this section mixed native p50 with
+`llama-bench` mean throughput, compared body/top1 work with full-logit work, and
+treated cache restore as prompt processing. It is retained only in git history;
+none of its percentage gaps are current evidence. Prepared-state prefill is now
+the default; `--native-prefill-prealloc` remains a useful reuse diagnostic, while
+prompt-cache restore remains a separate cache-engine metric.
 
 Same-host CUDA snapshot, RTX 5060 Ti, Qwen 3.5 9B Q4_K_M, `gen=64`:
 
