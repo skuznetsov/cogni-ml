@@ -9,6 +9,12 @@ module ML
     lib LlamaFFI
       # Type aliases
       alias LlamaToken = Int32
+
+      # Stable ggml_type values used by llama_context_params::type_k/type_v.
+      enum GgmlType : Int32
+        F32 = 0
+        F16 = 1
+      end
       alias LlamaPos = Int32
       alias LlamaSeqId = Int32
 

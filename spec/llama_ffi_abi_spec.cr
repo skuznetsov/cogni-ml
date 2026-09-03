@@ -2,6 +2,11 @@ require "spec"
 require "../src/ml/llm/llama_ffi"
 
 describe "ML::LLM::LlamaFFI ABI" do
+  it "matches the ggml cache type values used by llama context parameters" do
+    ML::LLM::LlamaFFI::GgmlType::F32.value.should eq(0)
+    ML::LLM::LlamaFFI::GgmlType::F16.value.should eq(1)
+  end
+
   it "matches llama.cpp b9960 by-value parameter struct sizes" do
     sizeof(ML::LLM::LlamaFFI::LlamaModelParams).should eq(72)
     sizeof(ML::LLM::LlamaFFI::LlamaContextParams).should eq(160)

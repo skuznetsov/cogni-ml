@@ -243,9 +243,11 @@ module ML
         n_ubatch : Int32 = 0,
         n_threads : Int32 = 0,
         flash_attn : Bool = true,
-        embeddings : Bool = false
+        embeddings : Bool = false,
+        cache_type_k : LlamaFFI::GgmlType? = nil,
+        cache_type_v : LlamaFFI::GgmlType? = nil
       ) : Context
-        Context.new(self, n_ctx: n_ctx, n_batch: n_batch, n_ubatch: n_ubatch, n_threads: n_threads, flash_attn: flash_attn, embeddings: embeddings)
+        Context.new(self, n_ctx: n_ctx, n_batch: n_batch, n_ubatch: n_ubatch, n_threads: n_threads, flash_attn: flash_attn, embeddings: embeddings, cache_type_k: cache_type_k, cache_type_v: cache_type_v)
       end
 
       def handle : LlamaFFI::LlamaModel
@@ -275,7 +277,9 @@ module ML
         n_ubatch : Int32 = 0,
         n_threads : Int32 = 0,
         flash_attn : Bool = true,
-        embeddings : Bool = false
+        embeddings : Bool = false,
+        cache_type_k : LlamaFFI::GgmlType? = nil,
+        cache_type_v : LlamaFFI::GgmlType? = nil
       )
         params = LlamaFFI.llama_context_default_params
         params.n_ctx = n_ctx > 0 ? n_ctx.to_u32 : @model.n_ctx_train.to_u32
@@ -286,6 +290,8 @@ module ML
         params.embeddings = embeddings
         params.offload_kqv = true
         params.flash_attn_type = flash_attn ? LlamaFFI::LlamaFlashAttnType::Enabled : LlamaFFI::LlamaFlashAttnType::Disabled
+        params.type_k = cache_type_k.value if cache_type_k
+        params.type_v = cache_type_v.value if cache_type_v
 
         @handle = LlamaFFI.llama_init_from_model(@model.handle, params)
         raise "Failed to create context" if @handle.null?

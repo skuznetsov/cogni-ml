@@ -89,7 +89,8 @@ class LlamaPrefillRunner
                  n_batch : Int32,
                  n_ubatch : Int32,
                  n_threads : Int32,
-                 flash_attn : Bool)
+                 flash_attn : Bool,
+                 cache_type : ML::LLM::LlamaFFI::GgmlType)
     raise "same-token prefill requires one llama logical batch" if @tokens.size > n_batch
 
     @output_width = @model.vocab_size
@@ -99,6 +100,8 @@ class LlamaPrefillRunner
       n_ubatch: n_ubatch,
       n_threads: n_threads,
       flash_attn: flash_attn,
+      cache_type_k: cache_type,
+      cache_type_v: cache_type,
     )
     raise "same-token prefill requires one effective llama logical batch" if @tokens.size > @context.n_batch
   end
@@ -265,6 +268,7 @@ n_batch = 2048
 n_ubatch = 512
 n_threads = 8
 flash_attn = false
+llama_cache_type = ML::LLM::LlamaFFI::GgmlType::F16
 
 OptionParser.parse do |parser|
   parser.banner = "Usage: benchmark_qwen_prefill_vs_llama_same_token [options]"
@@ -279,6 +283,13 @@ OptionParser.parse do |parser|
   parser.on("--n-ubatch=N", "llama.cpp physical microbatch size (default: 512)") { |value| n_ubatch = value.to_i }
   parser.on("--threads=N", "llama.cpp CPU threads (default: 8)") { |value| n_threads = value.to_i }
   parser.on("--flash-attn", "Enable llama.cpp flash attention") { flash_attn = true }
+  parser.on("--llama-kv=TYPE", "llama.cpp K/V cache type: f16 or f32 (default: f16)") do |value|
+    llama_cache_type = case value
+                       when "f16" then ML::LLM::LlamaFFI::GgmlType::F16
+                       when "f32" then ML::LLM::LlamaFFI::GgmlType::F32
+                       else            raise "unsupported --llama-kv type: #{value}"
+                       end
+  end
   parser.on("-h", "--help", "Show help") do
     puts parser
     exit
@@ -304,7 +315,7 @@ begin
 
   puts "Qwen same-token prefill external workload vs llama.cpp"
   puts "model: #{model_path}"
-  puts "settings: prompts=#{prompt_sizes.join(',')} reps=#{reps} warmup=#{warmup} order=ABBA ngl=#{n_gpu_layers} n_batch=#{n_batch} n_ubatch=#{n_ubatch} threads=#{n_threads} flash_attn=#{flash_attn} output=one_final_full_logits_with_host_copy state=reused_cleared native_kv=f32 llama_kv=default"
+  puts "settings: prompts=#{prompt_sizes.join(',')} reps=#{reps} warmup=#{warmup} order=ABBA ngl=#{n_gpu_layers} n_batch=#{n_batch} n_ubatch=#{n_ubatch} threads=#{n_threads} flash_attn=#{flash_attn} output=one_final_full_logits_with_host_copy state=reused_cleared native_kv=f32 llama_kv=#{llama_cache_type.to_s.downcase}"
   puts
   puts "# pp  token_sha256  native_tok/s  llama_tok/s  gap  min_logits_cosine  native_top2  llama_top2  contract"
 
@@ -320,6 +331,7 @@ begin
       n_ubatch,
       n_threads,
       flash_attn,
+      llama_cache_type,
     )
 
     begin
