@@ -49,6 +49,7 @@ end
 
 class NativePrefillRunner
   getter output_width : Int32
+  getter terminal_last_used : Bool
 
   def initialize(@weights : ML::GGUF::Qwen35Weights, @tokens : Array(Int32))
     hp = @weights.hparams
@@ -60,6 +61,7 @@ class NativePrefillRunner
       clear: true,
       admit_adaptive_resident_kv: false,
     )
+    @terminal_last_used = false
   end
 
   def reset! : Nil
@@ -67,15 +69,9 @@ class NativePrefillRunner
   end
 
   def run : Array(Float32)
-    if @tokens.size > 1
-      ML::GGUF::Qwen35CPU.prefill_tokens(@weights, @tokens[0...-1], 0, @state)
-    end
-    logits = ML::GGUF::Qwen35CPU.forward(
-      @weights,
-      @tokens[-1],
-      @tokens.size.to_i32 - 1,
-      @state,
-    )
+    route_used = [false]
+    logits = ML::GGUF::Qwen35CPU.prefill_tokens_logits(@weights, @tokens, 0, @state, route_used)
+    @terminal_last_used = route_used[0]
     raise "native full-logit width mismatch" unless logits.size == @output_width
     logits
   end
@@ -315,9 +311,9 @@ begin
 
   puts "Qwen same-token prefill external workload vs llama.cpp"
   puts "model: #{model_path}"
-  puts "settings: prompts=#{prompt_sizes.join(',')} reps=#{reps} warmup=#{warmup} order=ABBA ngl=#{n_gpu_layers} n_batch=#{n_batch} n_ubatch=#{n_ubatch} threads=#{n_threads} flash_attn=#{flash_attn} output=one_final_full_logits_with_host_copy state=reused_cleared native_kv=f32 llama_kv=#{llama_cache_type.to_s.downcase}"
+  puts "settings: prompts=#{prompt_sizes.join(',')} reps=#{reps} warmup=#{warmup} order=ABBA ngl=#{n_gpu_layers} n_batch=#{n_batch} n_ubatch=#{n_ubatch} threads=#{n_threads} flash_attn=#{flash_attn} output=one_terminal_full_logits_with_host_copy state=reused_cleared native_kv=f32 llama_kv=#{llama_cache_type.to_s.downcase}"
   puts
-  puts "# pp  token_sha256  native_tok/s  llama_tok/s  gap  min_logits_cosine  native_top2  llama_top2  contract"
+  puts "# pp  token_sha256  native_tok/s  llama_tok/s  gap  min_logits_cosine  native_top2  llama_top2  terminal_last  contract"
 
   prompt_sizes.each do |prompt_size|
     canonical = BenchmarkContract.synthetic_prefill_tokens(prompt_size.to_i32, native_vocab)
@@ -362,7 +358,7 @@ begin
       )
       gap = ((native_stats.mean_ts / llama_stats.mean_ts) - 1.0) * 100.0
       hash = BenchmarkContract.token_stream_sha256(native_tokens)
-      puts "#{prompt_size.to_s.rjust(4)}  #{hash[0, 16]}  #{native_stats.mean_ts.round(2).to_s.rjust(12)}  #{llama_stats.mean_ts.round(2).to_s.rjust(11)}  #{gap.round(2).to_s.rjust(6)}%  #{result_quality.cosine.round(8)}  #{result_quality.native_top1}/#{result_quality.native_top2}  #{result_quality.llama_top1}/#{result_quality.llama_top2}  #{comparison.scope}"
+      puts "#{prompt_size.to_s.rjust(4)}  #{hash[0, 16]}  #{native_stats.mean_ts.round(2).to_s.rjust(12)}  #{llama_stats.mean_ts.round(2).to_s.rjust(11)}  #{gap.round(2).to_s.rjust(6)}%  #{result_quality.cosine.round(8)}  #{result_quality.native_top1}/#{result_quality.native_top2}  #{result_quality.llama_top1}/#{result_quality.llama_top2}  #{native_runner.terminal_last_used}  #{comparison.scope}"
     ensure
       llama_runner.close
     end

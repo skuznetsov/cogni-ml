@@ -2116,6 +2116,91 @@ module ML::GGUF
       {% end %}
     end
 
+    # Admit the terminal-row prefill shortcut only when the complete final
+    # layer contract is known before any prompt state is mutated. The shortcut
+    # is deliberately limited to a position-zero, single chunk: longer/non-zero
+    # spans retain the ordinary prefill + final-token decode path.
+    def prefill_full_logits_last_supported?(weights : Qwen35Weights,
+                                            state : State,
+                                            rows : Int32,
+                                            start_pos : Int32) : Bool
+      {% unless flag?(:cpu_only) %}
+        return false unless rows > 1 && start_pos == 0
+        return false if ENV["QWEN35_FINAL_FULL_LAST_OFF"]? == "1"
+        return false if ENV["QWEN35_PREFILL_CHUNK_OFF"]? == "1"
+        return false unless rows <= prefill_chunk_size(false)
+        return false unless rows <= state.max_seq
+        return false unless Qwen35Metal.available?
+        return false if state.adaptive_kv?
+
+        hp = weights.hparams
+        return false unless weights.layers.size == hp.n_layer
+        return false unless state.layers.size == weights.layers.size
+        return false unless hp.n_head > 0 && hp.n_head_kv > 0
+        return false unless hp.n_head % hp.n_head_kv == 0
+
+        last_layer = weights.layers.last.as?(Qwen35FullAttnWeights)
+        return false unless last_layer
+        last_state = state.layers.last
+        return false if last_state.adaptive_kv
+
+        hidden_dim = hp.n_embd
+        q_dim = hp.n_head * hp.head_dim
+        kv_dim = hp.n_head_kv * hp.head_dim
+        ffn_dim = last_layer.ffn_gate_qw.out_dim
+        return false unless last_layer.attn_norm.size == hidden_dim
+        return false unless last_layer.attn_q_norm.size == hp.head_dim
+        return false unless last_layer.attn_k_norm.size == hp.head_dim
+        return false unless last_layer.post_attention_norm.size == hidden_dim
+        return false unless last_layer.attn_q_qw.in_dim == hidden_dim &&
+                            last_layer.attn_q_qw.out_dim == 2 * q_dim
+        return false unless last_layer.attn_k_qw.in_dim == hidden_dim &&
+                            last_layer.attn_k_qw.out_dim == kv_dim
+        return false unless last_layer.attn_v_qw.in_dim == hidden_dim &&
+                            last_layer.attn_v_qw.out_dim == kv_dim
+        return false unless last_layer.attn_output_qw.in_dim == q_dim &&
+                            last_layer.attn_output_qw.out_dim == hidden_dim
+        return false unless last_layer.ffn_gate_qw.in_dim == hidden_dim && ffn_dim > 0
+        return false unless last_layer.ffn_up_qw.in_dim == hidden_dim &&
+                            last_layer.ffn_up_qw.out_dim == ffn_dim
+        return false unless last_layer.ffn_down_qw.in_dim == ffn_dim &&
+                            last_layer.ffn_down_qw.out_dim == hidden_dim
+        return false unless weights.output_norm.size == hidden_dim
+        return false unless weights.output.in_dim == hidden_dim
+
+        supported = metal_qw_supported?(last_layer.attn_q_qw) &&
+                    metal_qw_supported?(last_layer.attn_k_qw) &&
+                    metal_qw_supported?(last_layer.attn_v_qw) &&
+                    metal_qw_supported?(last_layer.attn_output_qw) &&
+                    metal_qw_supported?(last_layer.ffn_gate_qw) &&
+                    metal_qw_supported?(last_layer.ffn_up_qw) &&
+                    metal_qw_supported?(last_layer.ffn_down_qw)
+        return false unless supported
+
+        required_kv_values = state.max_seq.to_i64 * kv_dim.to_i64
+        required_kv_bytes = required_kv_values * sizeof(Float32)
+        qkv_dim = 2 * hp.ssm_group_count * hp.ssm_state_size + hp.ssm_time_step_rank * hp.ssm_state_size
+        required_conv_values = (hp.ssm_conv_kernel - 1).to_i64 * qkv_dim.to_i64
+        required_ssm_values = hp.ssm_time_step_rank.to_i64 * hp.ssm_state_size.to_i64 * hp.ssm_state_size.to_i64
+        state.layers.each_with_index do |layer, layer_index|
+          if hp.full_attention?(layer_index)
+            return false if (cache = layer.k_cache) && cache.size < required_kv_values
+            return false if (cache = layer.v_cache) && cache.size < required_kv_values
+            return false if (buf = layer.k_cache_buf) && buf.size < required_kv_bytes
+            return false if (buf = layer.v_cache_buf) && buf.size < required_kv_bytes
+          else
+            return false if (conv = layer.conv_state) && conv.size < required_conv_values
+            return false if (ssm = layer.ssm_state) && ssm.size < required_ssm_values
+            return false if (buf = layer.conv_state_buf) && buf.size < required_conv_values * sizeof(Float32)
+            return false if (buf = layer.ssm_state_buf) && buf.size < required_ssm_values * sizeof(Float32)
+          end
+        end
+        true
+      {% else %}
+        false
+      {% end %}
+    end
+
     # ─────────────────────────────────────────────────────────────────────
     # Full-attention layer forward (single-token decode)
     # ─────────────────────────────────────────────────────────────────────
@@ -3119,6 +3204,53 @@ module ML::GGUF
       end
 
       prefill_tokens_hidden(weights, token_ids, start_pos, state, need_output: false)
+    end
+
+    # Prefill one prompt and return the complete next-token logits vector.
+    #
+    # For a position-zero, single-chunk prompt whose final layer is full
+    # attention, the final layer only computes K/V for intermediate rows;
+    # Q/attention/FFN are required only for the last row consumed by the output
+    # head. Unsupported shapes fall back before mutation to the ordinary N-1
+    # prefill plus decode.
+    def prefill_tokens_logits(weights : Qwen35Weights,
+                              token_ids : Array(Int32),
+                              start_pos : Int32,
+                              state : State,
+                              terminal_last_used : Array(Bool)? = nil) : Array(Float32)
+      raise ArgumentError.new("prefill_tokens_logits token_ids must not be empty") if token_ids.empty?
+      terminal_last_used.try { |used| used[0] = false }
+      if token_ids.size > 1 && prefill_gc_guard_enabled? && !@@prefill_gc_guard_active
+        return with_prefill_gc_guard do
+          prefill_tokens_logits(weights, token_ids, start_pos, state, terminal_last_used)
+        end
+      end
+
+      if prefill_full_logits_last_supported?(weights, state, token_ids.size, start_pos)
+        last_layer = weights.layers.last.as(Qwen35FullAttnWeights)
+        prefix = prefill_tokens_hidden(
+          weights, token_ids, start_pos, state,
+          stop_layer: weights.layers.size - 1,
+        )
+        last = final_full_attn_layer_chunk_last_routed(
+          prefix, token_ids.size, start_pos, state.layers.last,
+          last_layer, weights.hparams, state.max_seq,
+        )
+        raise "terminal-row full-logit route failed after prompt state mutation" unless last
+        terminal_last_used.try { |used| used[0] = true }
+
+        hp = weights.hparams
+        if logits = output_project_routed(last, weights.output_norm, weights.output, hp.rms_eps)
+          return logits
+        end
+        rms_norm!(last, weights.output_norm, hp.rms_eps)
+        return qmatvec_nobias(weights.output, last)
+      end
+
+      if token_ids.size > 1
+        prefill_tokens(weights, token_ids[0...-1], start_pos, state)
+      end
+      forward(weights, token_ids[-1], start_pos + token_ids.size - 1, state)
     end
 
     def prefill_tokens_top1(weights : Qwen35Weights,

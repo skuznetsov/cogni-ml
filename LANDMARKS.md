@@ -26639,3 +26639,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **Value proxy:** A high body-only tokens-per-second number measures a useful lower bound, not the speed of unmodified llama-bench's workload. Cache restore measures the cache engine, not first-run pp. Same-token full-logit prefill measures a matched external engine workload; it does not measure product greedy generation, cache restore, or identical internal cache policy. Product latency remains a separate benchmark.
 
 **decision:** Invalidate earlier body-only, mixed-statistic, and unrelated-token percentage gaps as strict comparisons. Use the same-token helper for future raw prefill comparisons and keep unmodified llama-bench rows as diagnostics. Current branch direction: pp256/512/2048 still have a real likely gap, while pp1024 is unresolved near parity under host noise. Keep product top1, cache restore, and contextual decode as separate benchmarks.
+
+#### [LM-QWEN35-TERMINAL-FULL-LOGITS-1020] Final full-attention layer computes only the requested output row
+**context:** ml / Qwen3.5-9B / same-token prefill / Apple M2 Max / llama.cpp comparison
+**state:** candidate implemented behind a strict preflight and explicit fallback; causal native A/B verified; cross-engine ranking remains noise-sensitive
+
+- claim: "The native full-logit prefill path can avoid computing unused query, attention, and FFN rows in the final full-attention layer while preserving the complete final-row logits and four-step continuation behavior."
+  source: the strict candidate runs the prefix through every layer before the final full-attention layer, then executes that last layer only for the requested terminal row while retaining K/V publication for the complete prompt. The preflight rejects unsupported shapes or state-buffer capacities, adaptive state, chunked/non-position-zero prefixes, missing Metal, non-final full-attention placement, and unsupported quantized weights before state mutation; `QWEN35_FINAL_FULL_LAST_OFF=1` restores the previous `N-1` prefill plus terminal `forward` route. A real-model spec compares every vocabulary logit at `1e-4` for the initial 8-token prompt and four continued tokens, and requires an execution marker proving that the candidate ran while the explicit fallback did not.
+  verified_at: 2026-09-03
+  decay_trigger: Qwen layer topology, final-layer kernels, cache/state publication, prefill chunking, output-head routing, model/device/compiler/runtime, or capability preflight changes
+  trust: {F:0.98,G:0.08,R:0.95}
+
+- claim: "The eliminated terminal-layer work is a useful but shape-dependent native speedup, not a universal 25% gain."
+  source: guarded same-process ABBA on Qwen3.5-9B measured candidate versus the explicit fallback at pp256 `369.52 vs 344.20 tok/s` (`+7.36%`, 16 repetitions) and pp1024 `414.82 vs 412.43 tok/s` (`+0.58%`, 16 repetitions). An all-size 8-repetition screen measured `+6.75/+4.45/+0.21/+5.76%` at pp256/512/1024/2048. Full-logit cosine remained at least `0.999999821`, top-2 IDs matched, and maximum absolute logit delta was at most `0.0113831` in the performance screen; the stricter continuation spec is the correctness gate.
+  verified_at: 2026-09-03
+  decay_trigger: benchmark route, token vector, repetition/order policy, model/device/compiler/runtime, host contention, or terminal-layer implementation changes
+  trust: {F:0.97,G:0.08,R:0.92}
+
+**Adversary:** The native candidate and llama.cpp receive the same external token vector and return one final full-logit row, but they do not execute equal internal FLOPs. This optimization deliberately eliminates work that the native public result does not consume. Separate-process llama comparisons varied materially with host state, so they do not prove a stable cross-engine lead or deficit. The evidence is limited to the 9B model on one M2 Max; it does not establish the Qwen3.8-27B result. The current implementation still materializes the `N x hidden` prefix on the host and uploads it again before the final layer, leaving a larger bandwidth and synchronization opportunity. Late Metal failure follows the existing non-transactional prefill-state contract.
+
+**Value proxy:** Same-process candidate-versus-rollback wall isolates the local work-elimination effect. Same-token native-versus-llama wall answers the broader engine question but is more sensitive to process and thermal state. Neither substitutes for product greedy generation or long-session adaptive-cache latency.
+
+**LTP/WBA:** Not claimed. This is an ordinary schedule specialization with an explicit boundary invariant and fallback.
+
+**decision:** Keep the strict terminal-row candidate and its capability signal without a prompt-size tuner. Treat pp1024 as near-neutral until stronger evidence changes the boundary. Next test the resident `N x hidden` handoff into the final layer so the same specialization no longer performs a GPU-to-host-to-GPU round trip.

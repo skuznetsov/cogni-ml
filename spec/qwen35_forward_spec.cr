@@ -786,6 +786,10 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     old_final = ENV["QWEN35_FINAL_FULL_LAST_OFF"]?
     ENV.delete("QWEN35_PREFILL_CHUNK_OFF")
     begin
+      undersized = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      undersized.layers[hp.full_attention_layers.first].k_cache = [0.0_f32]
+      ML::GGUF::Qwen35CPU.prefill_full_logits_last_supported?(w, undersized, prompt.size, 0).should be_false
+
       fast = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
       ENV.delete("QWEN35_FINAL_FULL_LAST_OFF")
       fast_top, fast_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(w, prompt, 0, fast)
@@ -800,6 +804,59 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
       fast_logit.should be_close(fallback_logit, 1e-4_f32)
       fast_next_top.should eq(fallback_next_top)
       fast_next_logit.should be_close(fallback_next_logit, 1e-4_f32)
+    ensure
+      if old_chunk
+        ENV["QWEN35_PREFILL_CHUNK_OFF"] = old_chunk
+      else
+        ENV.delete("QWEN35_PREFILL_CHUNK_OFF")
+      end
+
+      if old_final
+        ENV["QWEN35_FINAL_FULL_LAST_OFF"] = old_final
+      else
+        ENV.delete("QWEN35_FINAL_FULL_LAST_OFF")
+      end
+    end
+  end
+
+  it "final-row full-logit prefill preserves the complete logits and continuation" do
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
+    hp = w.hparams
+    prompt = [760_i32, 6511_i32, 314_i32, 9338_i32, 369_i32, 279_i32, 9821_i32, 13_i32]
+    continuation = [11751_i32, 42_i32, 997_i32, 314_i32]
+
+    old_chunk = ENV["QWEN35_PREFILL_CHUNK_OFF"]?
+    old_final = ENV["QWEN35_FINAL_FULL_LAST_OFF"]?
+    ENV.delete("QWEN35_PREFILL_CHUNK_OFF")
+    begin
+      fast = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      ENV.delete("QWEN35_FINAL_FULL_LAST_OFF")
+      ML::GGUF::Qwen35CPU.prefill_full_logits_last_supported?(w, fast, prompt.size, 0).should be_true
+      fast_route = [false]
+      fast_logits = ML::GGUF::Qwen35CPU.prefill_tokens_logits(w, prompt, 0, fast, fast_route)
+      fast_route[0].should be_true
+
+      fallback = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+      ENV["QWEN35_FINAL_FULL_LAST_OFF"] = "1"
+      ML::GGUF::Qwen35CPU.prefill_full_logits_last_supported?(w, fallback, prompt.size, 0).should be_false
+      fallback_route = [true]
+      fallback_logits = ML::GGUF::Qwen35CPU.prefill_tokens_logits(w, prompt, 0, fallback, fallback_route)
+      fallback_route[0].should be_false
+
+      fast_logits.size.should eq(fallback_logits.size)
+      fast_logits.each_with_index do |value, index|
+        value.should be_close(fallback_logits[index], 1.0e-4_f32)
+      end
+
+      continuation.each_with_index do |token, index|
+        pos = prompt.size.to_i32 + index
+        fast_next = ML::GGUF::Qwen35CPU.forward(w, token, pos, fast)
+        fallback_next = ML::GGUF::Qwen35CPU.forward(w, token, pos, fallback)
+        fast_next.size.should eq(fallback_next.size)
+        fast_next.each_with_index do |value, logit_index|
+          value.should be_close(fallback_next[logit_index], 1.0e-4_f32)
+        end
+      end
     ensure
       if old_chunk
         ENV["QWEN35_PREFILL_CHUNK_OFF"] = old_chunk
