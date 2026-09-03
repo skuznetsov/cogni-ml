@@ -11,8 +11,8 @@ describe ML::QwenVsLlamaBenchmarkContract do
     decode = contract.decode_comparison(ML::QwenVsLlamaBenchmarkContract::HeadMode::FullLogits)
     prefill.level.diagnostic?.should be_true
     decode.level.diagnostic?.should be_true
-    prefill.level.strict?.should be_false
-    decode.level.strict?.should be_false
+    prefill.level.same_token?.should be_false
+    decode.level.same_token?.should be_false
     prefill.reason.should contain("output-row count")
     decode.reason.should contain("state-buffer lifecycle")
   end
@@ -61,5 +61,78 @@ describe ML::QwenVsLlamaBenchmarkContract do
     contract = ML::QwenVsLlamaBenchmarkContract
     # llama-bench avg_ts is mean(tokens / sample_time), not tokens / mean(sample_time).
     contract.mean_throughput([100.0, 200.0], 10).should be_close(75.0, 1e-9)
+  end
+
+  it "admits same-token prefill only for the same explicit stream and timing contract" do
+    contract = ML::QwenVsLlamaBenchmarkContract
+    tokens = contract.synthetic_prefill_tokens(4, 1000)
+    tokens.should eq([11, 18, 25, 32])
+
+    declaration = ML::QwenVsLlamaBenchmarkContract::PrefillWorkloadDeclaration.new(
+      tokens: tokens,
+      initial_depth: 0,
+      final_depth: 4,
+      logical_prompts: 1,
+      output_rows: 1,
+      output_width: 1000,
+      full_logits: true,
+      synchronized: true,
+      state_reused: true,
+      setup_outside_timing: true,
+      host_copy_inside_timing: true,
+      warmup_runs: 1,
+    )
+
+    comparison = contract.same_token_prefill_comparison(declaration, declaration)
+    comparison.level.same_token?.should be_true
+    comparison.scope.should eq("same_token_prefill_external_workload")
+  end
+
+  it "fails closed when one same-token prefill token changes" do
+    contract = ML::QwenVsLlamaBenchmarkContract
+    native_tokens = [11, 18, 25, 32]
+    llama_tokens = native_tokens.dup
+    llama_tokens[2] = 26
+
+    native = ML::QwenVsLlamaBenchmarkContract::PrefillWorkloadDeclaration.new(
+      tokens: native_tokens,
+      initial_depth: 0,
+      final_depth: 4,
+      logical_prompts: 1,
+      output_rows: 1,
+      output_width: 1000,
+      full_logits: true,
+      synchronized: true,
+      state_reused: true,
+      setup_outside_timing: true,
+      host_copy_inside_timing: true,
+      warmup_runs: 1,
+    )
+    llama = native.copy_with(tokens: llama_tokens)
+
+    comparison = contract.same_token_prefill_comparison(native, llama)
+    comparison.level.diagnostic?.should be_true
+    comparison.reason.should contain("token stream")
+  end
+
+  it "fails closed on extra output rows or a mismatched timer boundary" do
+    contract = ML::QwenVsLlamaBenchmarkContract
+    base = ML::QwenVsLlamaBenchmarkContract::PrefillWorkloadDeclaration.new(
+      tokens: [11, 18, 25, 32],
+      initial_depth: 0,
+      final_depth: 4,
+      logical_prompts: 1,
+      output_rows: 1,
+      output_width: 1000,
+      full_logits: true,
+      synchronized: true,
+      state_reused: true,
+      setup_outside_timing: true,
+      host_copy_inside_timing: true,
+      warmup_runs: 1,
+    )
+
+    contract.same_token_prefill_comparison(base, base.copy_with(logical_prompts: 2, output_rows: 2)).level.diagnostic?.should be_true
+    contract.same_token_prefill_comparison(base, base.copy_with(host_copy_inside_timing: false)).level.diagnostic?.should be_true
   end
 end

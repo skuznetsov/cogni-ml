@@ -8,8 +8,10 @@ UNAME_S := $(shell uname -s)
 IS_DARWIN := $(filter Darwin,$(UNAME_S))
 BREW_PREFIX := $(shell if command -v brew >/dev/null 2>&1; then brew --prefix; fi)
 LLAMA_LIB_DIR ?= $(firstword \
+	$(dir $(wildcard $(LLAMA_BUILD)/bin/libllama.*)) \
 	$(dir $(wildcard $(LLAMA_BUILD)/src/libllama.*)) \
 	$(dir $(wildcard $(LLAMA_BUILD)/lib/libllama.*)) \
+	$(dir $(wildcard $(LLAMA_DIR)/build/bin/libllama.*)) \
 	$(dir $(wildcard $(LLAMA_DIR)/build/src/libllama.*)) \
 	$(dir $(wildcard $(LLAMA_DIR)/build/lib/libllama.*)) \
 	$(if $(BREW_PREFIX),$(dir $(wildcard $(BREW_PREFIX)/lib/libllama.*)),) \
@@ -24,7 +26,7 @@ BRIDGE_OBJ := $(BUILD_DIR)/bridge.o
 
 LINK_FLAGS := -framework Metal -framework Foundation -lc++
 
-.PHONY: all spec build spec_cpu build_cpu llama llama_env profile_nomic profile_nomic_layers profile_nomic_vs_llama q4k_ref clean help
+.PHONY: all spec build spec_cpu build_cpu llama llama_env profile_nomic profile_nomic_layers profile_nomic_vs_llama benchmark_qwen_prefill_vs_llama_same_token q4k_ref clean help
 
 all: spec
 
@@ -65,6 +67,17 @@ profile_nomic_vs_llama: $(BRIDGE_OBJ)
 	$(CRYSTAL) run bin/profile_nomic_vs_llama.cr \
 		--link-flags="$(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS) -L$(LLAMA_LIB_DIR)" \
 		-- $(ARGS)
+
+benchmark_qwen_prefill_vs_llama_same_token: $(BUILD_DIR)/benchmark_qwen_prefill_vs_llama_same_token
+$(BUILD_DIR)/benchmark_qwen_prefill_vs_llama_same_token: bin/benchmark_qwen_prefill_vs_llama_same_token.cr $(BRIDGE_OBJ)
+	@if [ -z "$(LLAMA_LIB_DIR)" ]; then \
+		echo "ERROR: libllama not detected. Set LLAMA_DIR or LLAMA_LIB_DIR."; \
+		exit 1; \
+	fi
+	LIBRARY_PATH="$(LLAMA_LIB_DIR):$$LIBRARY_PATH" \
+	$(CRYSTAL) build bin/benchmark_qwen_prefill_vs_llama_same_token.cr \
+		-o $(BUILD_DIR)/benchmark_qwen_prefill_vs_llama_same_token \
+		--link-flags="$(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS) -L$(LLAMA_LIB_DIR) -Wl,-rpath,$(LLAMA_LIB_DIR)"
 
 spec_cpu:
 	$(CRYSTAL) spec -Dcpu_only
@@ -122,6 +135,7 @@ help:
 	@echo "  profile_nomic - run native Metal stage profiler for nomic GGUF"
 	@echo "  profile_nomic_layers - run per-layer native Metal profiler for nomic GGUF"
 	@echo "  profile_nomic_vs_llama - compare native Metal embeddings against llama.cpp"
+	@echo "  benchmark_qwen_prefill_vs_llama_same_token - build same-token Qwen prefill benchmark"
 	@echo "  llama - build llama.cpp shared library (requires LLAMA_DIR)"
 	@echo "  llama_env - print env vars for libllama discovery"
 	@echo "  clean - remove build artifacts"

@@ -1,3 +1,5 @@
+require "digest/sha256"
+
 module ML::QwenVsLlamaBenchmarkContract
   enum HeadMode
     DecoderBodyLowerBound
@@ -8,7 +10,7 @@ module ML::QwenVsLlamaBenchmarkContract
   enum ComparisonLevel
     Incomparable
     Diagnostic
-    Strict
+    SameToken
   end
 
   record Comparison,
@@ -16,8 +18,98 @@ module ML::QwenVsLlamaBenchmarkContract
     scope : String,
     reason : String
 
+  # This is a harness declaration, not an execution certificate. It describes
+  # the externally observable work that the runner checks while executing.
+  # Internal kernels, cache formats, and physical tiling may differ: those
+  # differences are what the benchmark is intended to measure.
+  record PrefillWorkloadDeclaration,
+    tokens : Array(Int32),
+    initial_depth : Int32,
+    final_depth : Int32,
+    logical_prompts : Int32,
+    output_rows : Int32,
+    output_width : Int32,
+    full_logits : Bool,
+    synchronized : Bool,
+    state_reused : Bool,
+    setup_outside_timing : Bool,
+    host_copy_inside_timing : Bool,
+    warmup_runs : Int32
+
   DEFAULT_PREFILL_HEAD = HeadMode::FullLogits
   DEFAULT_DECODE_HEAD  = HeadMode::FullLogits
+  TOKEN_STREAM_DOMAIN  = "cogni-ml-qwen-vs-llama-token-stream-v1\0"
+
+  def self.synthetic_prefill_tokens(count : Int32, vocab_size : Int32) : Array(Int32)
+    raise ArgumentError.new("token count must be positive") unless count > 0
+    raise ArgumentError.new("vocabulary size must be positive") unless vocab_size > 0
+
+    modulus = Math.min(vocab_size, 1000)
+    Array(Int32).new(count) { |i| ((i.to_i64 * 7 + 11) % modulus).to_i32 }
+  end
+
+  def self.token_stream_sha256(tokens : Array(Int32)) : String
+    raise ArgumentError.new("token stream must not be empty") if tokens.empty?
+
+    io = IO::Memory.new
+    io << TOKEN_STREAM_DOMAIN
+    io.write_bytes(tokens.size.to_i32, IO::ByteFormat::LittleEndian)
+    tokens.each { |token| io.write_bytes(token, IO::ByteFormat::LittleEndian) }
+    Digest::SHA256.hexdigest(io.to_slice)
+  end
+
+  def self.same_token_prefill_comparison(native : PrefillWorkloadDeclaration,
+                                         llama : PrefillWorkloadDeclaration) : Comparison
+    mismatch = same_token_prefill_mismatch(native, llama)
+    if mismatch
+      return Comparison.new(
+        ComparisonLevel::Diagnostic,
+        "prefill_workload_mismatch",
+        mismatch,
+      )
+    end
+
+    Comparison.new(
+      ComparisonLevel::SameToken,
+      "same_token_prefill_external_workload",
+      "same declared token stream, empty logical state, one final full-logit row, reused-cleared state, and timer boundary; the runner supplies execution checks, while internal cache formats and kernel scheduling may differ",
+    )
+  end
+
+  private def self.same_token_prefill_mismatch(native : PrefillWorkloadDeclaration,
+                                               llama : PrefillWorkloadDeclaration) : String?
+    unless native.tokens == llama.tokens
+      return "native and llama token streams differ"
+    end
+    token_count = native.tokens.size
+    return "same-token prefill requires a non-empty token stream" unless token_count > 0
+
+    unless native.initial_depth == 0 && llama.initial_depth == 0 &&
+           native.final_depth == token_count &&
+           llama.final_depth == token_count
+      return "prefill state depth does not match the consumed token stream"
+    end
+
+    unless native.logical_prompts == 1 && llama.logical_prompts == 1 &&
+           native.output_rows == 1 && llama.output_rows == 1
+      return "same-token prefill requires one logical prompt and one final output row"
+    end
+
+    unless native.output_width > 0 && native.output_width == llama.output_width &&
+           native.full_logits && llama.full_logits
+      return "same-token prefill requires the same full-logit output width"
+    end
+
+    unless native.synchronized && llama.synchronized &&
+           native.state_reused && llama.state_reused &&
+           native.setup_outside_timing && llama.setup_outside_timing &&
+           native.host_copy_inside_timing && llama.host_copy_inside_timing &&
+           native.warmup_runs == llama.warmup_runs
+      return "native and llama timing or state-reuse boundaries differ"
+    end
+
+    nil
+  end
 
   def self.prefill_label(mode : HeadMode) : String
     case mode
