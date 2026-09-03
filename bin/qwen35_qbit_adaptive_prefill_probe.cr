@@ -117,7 +117,8 @@ module Qwen35QBitAdaptivePrefillProbe
 
   def run(prefixes : Array(Int32), repeats : Int32,
           token_count : Int32, tier_names : Array(String),
-          compare_p4_t8 : Bool, compare_bf16_t8 : Bool) : Nil
+          compare_p4_t8 : Bool, compare_bf16_t8 : Bool,
+          compare_splitk_chunks : Tuple(Int32, Int32)?) : Nil
     raise "Metal not available" unless ML::GGUF::Qwen35Metal.available?
     unless repeats > 0 && repeats <= MAX_REPEATS
       raise ArgumentError.new("repeats must be in 1..#{MAX_REPEATS}")
@@ -132,9 +133,20 @@ module Qwen35QBitAdaptivePrefillProbe
       raise ArgumentError.new("select only one split-K T8 comparison")
     end
     compare_t8_tier = compare_p4_t8 ? "p4" : (compare_bf16_t8 ? "bf16" : nil)
+    if compare_t8_tier && compare_splitk_chunks
+      raise ArgumentError.new("select either a T8 or split-K chunk comparison")
+    end
     if comparison_tier = compare_t8_tier
       unless repeats == 10 && token_count == 1 && tier_names == [comparison_tier]
         raise ArgumentError.new("the T8 comparison requires --repeats 10 --chunk 1 --tiers #{comparison_tier}")
+      end
+    end
+    if chunk_pair = compare_splitk_chunks
+      unless repeats == 10 && token_count == 1 && tier_names.size == 1
+        raise ArgumentError.new("the split-K chunk comparison requires --repeats 10 --chunk 1 and one tier")
+      end
+      unless chunk_pair[0] > 0 && chunk_pair[1] > 0 && chunk_pair[0] != chunk_pair[1]
+        raise ArgumentError.new("split-K chunk sizes must be distinct positive integers")
       end
     end
     tier_names.each { |name| tier_for(name) }
@@ -308,6 +320,82 @@ module Qwen35QBitAdaptivePrefillProbe
             next
           end
 
+          if chunk_pair = compare_splitk_chunks
+            previous_chunk = ENV["QWEN35_ADAPTIVE_SPLITK_CHUNK"]?
+            baseline_chunk = chunk_pair[0]
+            candidate_chunk = chunk_pair[1]
+            baseline_wall = [] of Float64
+            baseline_gpu = [] of Float64
+            candidate_wall = [] of Float64
+            candidate_gpu = [] of Float64
+            max_output_delta = 0.0_f32
+            begin
+              # Compile and execute both variants before collecting samples.
+              [baseline_chunk, candidate_chunk].each do |splitk_chunk|
+                ENV["QWEN35_ADAPTIVE_SPLITK_CHUNK"] = splitk_chunk.to_s
+                timed_restored_sample(
+                  plan, snapshot_k, snapshot_v, prefix, capacity,
+                  q_buffer, gate_buffer, k_buffer, v_buffer, output,
+                  token_count, n_head, n_head_kv, head_dim, heads_per_group, scale,
+                )
+              end
+
+              repeats.times do |pair_index|
+                order = pair_index.even? ? [baseline_chunk, candidate_chunk] : [candidate_chunk, baseline_chunk]
+                pair = Hash(Int32, Tuple(Float64, Float64, Array(Float32))).new
+                order.each do |splitk_chunk|
+                  ENV["QWEN35_ADAPTIVE_SPLITK_CHUNK"] = splitk_chunk.to_s
+                  wall_ms, gpu_ms = timed_restored_sample(
+                    plan, snapshot_k, snapshot_v, prefix, capacity,
+                    q_buffer, gate_buffer, k_buffer, v_buffer, output,
+                    token_count, n_head, n_head_kv, head_dim, heads_per_group, scale,
+                  )
+                  pair[splitk_chunk] = {
+                    wall_ms,
+                    gpu_ms,
+                    output.read(token_count * n_head * head_dim),
+                  }
+                end
+                baseline = pair[baseline_chunk]
+                candidate = pair[candidate_chunk]
+                baseline_wall << baseline[0]
+                baseline_gpu << baseline[1]
+                candidate_wall << candidate[0]
+                candidate_gpu << candidate[1]
+                baseline[2].each_with_index do |value, index|
+                  delta = (value - candidate[2][index]).abs
+                  max_output_delta = delta if delta > max_output_delta
+                end
+                printf "paired_splitk_chunk pair=%d order=%s baseline_wall_ms=%.3f candidate_wall_ms=%.3f baseline_gpu_ms=%.3f candidate_gpu_ms=%.3f max_output_delta=%.8f\n",
+                  pair_index + 1, order.join(","), baseline[0], candidate[0], baseline[1], candidate[1], max_output_delta
+              end
+            ensure
+              if previous_chunk
+                ENV["QWEN35_ADAPTIVE_SPLITK_CHUNK"] = previous_chunk
+              else
+                ENV.delete("QWEN35_ADAPTIVE_SPLITK_CHUNK")
+              end
+            end
+
+            baseline_wall_mean = mean(baseline_wall)
+            baseline_gpu_mean = mean(baseline_gpu)
+            candidate_wall_mean = mean(candidate_wall)
+            candidate_gpu_mean = mean(candidate_gpu)
+            wall_improvement = 1.0 - candidate_wall_mean / baseline_wall_mean
+            gpu_improvement = 1.0 - candidate_gpu_mean / baseline_gpu_mean
+            wall_wins = baseline_wall.zip(candidate_wall).count { |base, candidate| candidate < base }
+            gpu_wins = baseline_gpu.zip(candidate_gpu).count { |base, candidate| candidate < base }
+            printf "paired_splitk_chunk_summary baseline_chunk=%d candidate_chunk=%d baseline_wall_mean_ms=%.3f candidate_wall_mean_ms=%.3f wall_improvement_pct=%.3f wall_wins=%d/10 baseline_gpu_mean_ms=%.3f candidate_gpu_mean_ms=%.3f gpu_improvement_pct=%.3f gpu_wins=%d/10 max_output_delta=%.8f\n",
+              baseline_chunk, candidate_chunk, baseline_wall_mean, candidate_wall_mean, wall_improvement * 100.0, wall_wins,
+              baseline_gpu_mean, candidate_gpu_mean, gpu_improvement * 100.0, gpu_wins, max_output_delta
+            raise "split-K chunk output tolerance failed" if max_output_delta > 1e-4_f32
+            unless wall_improvement >= 0.03 && gpu_improvement >= 0.03 &&
+                   wall_wins >= 8 && gpu_wins >= 8
+              raise "split-K chunk paired promotion gate failed"
+            end
+            next
+          end
+
           warmup_cache = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
             plan, plan, capacity, n_head_kv, head_dim,
           )
@@ -369,6 +457,7 @@ token_count = Qwen35QBitAdaptivePrefillProbe::SOURCE_CHUNK
 tier_names = ["p4", "bf16", "f32"]
 compare_p4_t8 = false
 compare_bf16_t8 = false
+compare_splitk_chunks = nil.as(Tuple(Int32, Int32)?)
 OptionParser.parse do |parser|
   parser.banner = "Usage: qwen35_qbit_adaptive_prefill_probe [options]"
   parser.on("--prefixes LIST", "Comma-separated 64-aligned prefixes") do |value|
@@ -385,6 +474,13 @@ OptionParser.parse do |parser|
   parser.on("--compare-bf16-t8", "Run the same-process 10-pair BF16 split-K T8 promotion gate") do
     compare_bf16_t8 = true
   end
+  parser.on("--compare-splitk-chunks BASE,CANDIDATE", "Run a same-process 10-pair split-K chunk-size gate") do |value|
+    chunks = value.split(',').map(&.to_i?)
+    unless chunks.size == 2 && chunks.all?
+      raise ArgumentError.new("--compare-splitk-chunks requires two integers")
+    end
+    compare_splitk_chunks = {chunks[0].not_nil!, chunks[1].not_nil!}
+  end
   parser.on("-h", "--help", "Show this help") do
     puts parser
     exit
@@ -393,4 +489,5 @@ end
 
 Qwen35QBitAdaptivePrefillProbe.run(
   prefixes, repeats, token_count, tier_names, compare_p4_t8, compare_bf16_t8,
+  compare_splitk_chunks,
 )

@@ -3,6 +3,11 @@
 # Both states follow the same forced greedy trajectory. The execution order is
 # alternated per position so model loading, prefill, and token drift cannot be
 # mistaken for a loader speedup.
+#
+# `--synthetic-prefix` restores a canonical zero-valued adaptive cache into the
+# real model state. It isolates long-context decode shape and scheduling without
+# the quadratic prefill cost; it is performance/correctness evidence, not a
+# semantic-quality substitute for a real prompt.
 
 require "json"
 require "option_parser"
@@ -15,7 +20,7 @@ require "../src/ml/gguf/qwen35_weights"
 
 DEFAULT_QWEN38_MODEL       = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf"
 DEFAULT_RESIDENT_MAP       = "p4;27=bf16,43=bf16,47=bf16,51=bf16"
-PRODUCT_PREFILL_CHUNK_SIZE = 512
+PRODUCT_PREFILL_CHUNK_SIZE = ENV.fetch("QWEN35_ADAPTIVE_PROBE_PREFILL_CHUNK_SIZE", "512").to_i32
 PRODUCT_APPEND_MAX_GROUPS  =   1
 PRODUCT_APPEND_COOLDOWN_MS = 100
 T8_ENV_KEYS                = [
@@ -49,6 +54,8 @@ ADAPTIVE_ENV_KEYS = [
 
 RELEASE_BUILD = {% if flag?(:release) %} true {% else %} false {% end %}
 
+raise "QWEN35_ADAPTIVE_PROBE_PREFILL_CHUNK_SIZE must be positive" unless PRODUCT_PREFILL_CHUNK_SIZE > 0
+
 record DecodeSample,
   index : Int32,
   order : String,
@@ -66,6 +73,7 @@ record RouteCertificate,
 private def with_adaptive_probe_env(resident_map : String,
                                     candidate : Bool,
                                     compare_stage2 : Bool,
+                                    compare_splitk_chunk : Bool,
                                     &)
   old = ADAPTIVE_ENV_KEYS.to_h { |key| {key, ENV[key]?} }
   ADAPTIVE_ENV_KEYS.each { |key| ENV.delete(key) }
@@ -77,12 +85,18 @@ private def with_adaptive_probe_env(resident_map : String,
   ENV["QWEN35_SCRATCH_OFF"] = "0"
   ENV["QWEN35_ADAPTIVE_SPLITK"] = "1"
   ENV["QWEN35_ADAPTIVE_SPLITK_MIN_CTX"] = "256"
-  ENV["QWEN35_ADAPTIVE_SPLITK_CHUNK"] = "64"
   ENV["QWEN35_ADAPTIVE_UNIFORM_PREFILL_OFF"] = "0"
-  if compare_stage2
+  if compare_splitk_chunk
+    T8_ENV_KEYS.each { |key| ENV[key] = "1" }
+    ENV["QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED"] = "1"
+    ENV["QWEN35_ADAPTIVE_GQA6_TILE"] = "15"
+    ENV["QWEN35_ADAPTIVE_SPLITK_CHUNK"] = candidate ? "60" : "64"
+  elsif compare_stage2
+    ENV["QWEN35_ADAPTIVE_SPLITK_CHUNK"] = "64"
     T8_ENV_KEYS.each { |key| ENV[key] = "1" }
     ENV["QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED"] = "0" unless candidate
   else
+    ENV["QWEN35_ADAPTIVE_SPLITK_CHUNK"] = "64"
     ENV["QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED"] = "0"
     value = candidate ? "1" : "0"
     T8_ENV_KEYS.each { |key| ENV[key] = value }
@@ -111,13 +125,14 @@ end
 private def verify_candidate_t8_route!(state : ML::GGUF::Qwen35CPU::State,
                                        hp : ML::GGUF::Qwen35Hparams,
                                        resident_map : String,
-                                       compare_stage2 : Bool) : RouteCertificate
+                                       compare_stage2 : Bool,
+                                       compare_splitk_chunk : Bool) : RouteCertificate
   device_name = ML::Metal::Device.instance.name
   p4_owners = 0_i32
   bf16_owners = 0_i32
   packed_len = -1_i32
 
-  with_adaptive_probe_env(resident_map, true, compare_stage2) do
+  with_adaptive_probe_env(resident_map, true, compare_stage2, compare_splitk_chunk) do
     hp.full_attention_layers.each do |layer_index|
       cache = state.layers[layer_index].adaptive_kv
       raise "adaptive KV is missing layer #{layer_index}" unless cache
@@ -138,6 +153,9 @@ private def verify_candidate_t8_route!(state : ML::GGUF::Qwen35CPU::State,
 
         case tier
         when ML::GGUF::QwenQBitAdaptiveKV::Tier::P4
+          if compare_splitk_chunk && ENV["QWEN35_ADAPTIVE_SPLITK_CHUNK"]? != "60"
+            raise "candidate split-K chunk 60 route is inactive at layer #{layer_index}"
+          end
           unless ML::GGUF::QwenQBitAdaptiveMetalPolicy.p4_splitk_t8?(
                    device_name, cache_len, ENV["QWEN35_ADAPTIVE_P4_SPLITK_T8"]?,
                  )
@@ -152,6 +170,9 @@ private def verify_candidate_t8_route!(state : ML::GGUF::Qwen35CPU::State,
           end
           p4_owners += 1
         when ML::GGUF::QwenQBitAdaptiveKV::Tier::BF16
+          if compare_splitk_chunk && ENV["QWEN35_ADAPTIVE_SPLITK_CHUNK"]? != "60"
+            raise "candidate split-K chunk 60 route is inactive at layer #{layer_index}"
+          end
           unless !k_sidecar.contents.null? && k_sidecar.contents.address % 16_u64 == 0_u64 &&
                  !v_sidecar.contents.null? && v_sidecar.contents.address % 16_u64 == 0_u64
             raise "BF16 T8 sidecar alignment is invalid at layer #{layer_index}"
@@ -201,10 +222,74 @@ private def verify_resident_state!(state : ML::GGUF::Qwen35CPU::State,
   hp.full_attention_layers.each do |layer_index|
     cache = state.layers[layer_index].adaptive_kv
     raise "adaptive KV is missing layer #{layer_index}" unless cache
-    unless cache.cache_len == expected_tokens
-      raise "adaptive KV layer #{layer_index} has #{cache.cache_len} tokens, expected #{expected_tokens}"
+    cache.with_snapshot_buffers do |_k_base, _k_sidecar, _v_base, _v_sidecar, _k_plan, _v_plan, cache_len|
+      unless cache_len == expected_tokens
+        raise "adaptive KV layer #{layer_index} has #{cache_len} tokens, expected #{expected_tokens}"
+      end
     end
   end
+
+  state.layers.each_with_index do |layer, layer_index|
+    unless layer.position == expected_tokens
+      raise "layer #{layer_index} position is #{layer.position}, expected #{expected_tokens}"
+    end
+  end
+end
+
+private def verify_independent_states!(baseline : ML::GGUF::Qwen35CPU::State,
+                                       candidate : ML::GGUF::Qwen35CPU::State,
+                                       hp : ML::GGUF::Qwen35Hparams) : Nil
+  raise "baseline and candidate state objects alias" if baseline.same?(candidate)
+  baseline.layers.each_with_index do |baseline_layer, layer_index|
+    candidate_layer = candidate.layers[layer_index]
+    raise "baseline and candidate layer #{layer_index} alias" if baseline_layer.same?(candidate_layer)
+    if hp.full_attention?(layer_index)
+      baseline_cache = baseline_layer.adaptive_kv
+      candidate_cache = candidate_layer.adaptive_kv
+      unless baseline_cache && candidate_cache
+        raise "adaptive KV is missing layer #{layer_index}"
+      end
+      if baseline_cache.same?(candidate_cache)
+        raise "baseline and candidate adaptive KV layer #{layer_index} alias"
+      end
+    else
+      if (baseline_conv = baseline_layer.conv_state_buf) && baseline_conv.same?(candidate_layer.conv_state_buf)
+        raise "baseline and candidate recurrent conv layer #{layer_index} alias"
+      end
+      if (baseline_ssm = baseline_layer.ssm_state_buf) && baseline_ssm.same?(candidate_layer.ssm_state_buf)
+        raise "baseline and candidate recurrent SSM layer #{layer_index} alias"
+      end
+    end
+  end
+end
+
+private def seed_synthetic_adaptive_prefix!(state : ML::GGUF::Qwen35CPU::State,
+                                            hp : ML::GGUF::Qwen35Hparams,
+                                            prefix_tokens : Int32) : Nil
+  raise "synthetic prefix must be positive" unless prefix_tokens > 0
+  prefix_rows64 = prefix_tokens.to_i64 * hp.n_head_kv
+  raise "synthetic prefix row count exceeds Int32" if prefix_rows64 > Int32::MAX
+  prefix_rows = prefix_rows64.to_i32
+
+  hp.full_attention_layers.each do |layer_index|
+    cache = state.layers[layer_index].adaptive_kv
+    raise "adaptive KV is missing layer #{layer_index}" unless cache
+
+    k_plan = nil.as(ML::GGUF::QwenQBitAdaptiveKV::Plan?)
+    v_plan = nil.as(ML::GGUF::QwenQBitAdaptiveKV::Plan?)
+    cache.with_snapshot_buffers do |_k_base, _k_sidecar, _v_base, _v_sidecar, current_k_plan, current_v_plan, cache_len|
+      raise "synthetic prefix target is not empty at layer #{layer_index}" unless cache_len == 0
+      k_plan = current_k_plan
+      v_plan = current_v_plan
+    end
+
+    k = ML::GGUF::QwenQBitAdaptiveKV.empty_encoded(k_plan.not_nil!, prefix_rows)
+    v = ML::GGUF::QwenQBitAdaptiveKV.empty_encoded(v_plan.not_nil!, prefix_rows)
+    ML::GGUF::QwenQBitAdaptiveResidentKV.restore_snapshot!(cache, k, v, prefix_tokens)
+  end
+
+  state.layers.each { |layer| layer.position = prefix_tokens }
+  verify_resident_state!(state, hp, prefix_tokens)
 end
 
 private def prepare_state(weights : ML::GGUF::Qwen35Weights,
@@ -212,18 +297,28 @@ private def prepare_state(weights : ML::GGUF::Qwen35Weights,
                           max_seq : Int32,
                           resident_map : String,
                           candidate : Bool,
-                          compare_stage2 : Bool)
+                          compare_stage2 : Bool,
+                          compare_splitk_chunk : Bool,
+                          synthetic_prefix : Int32)
   state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: max_seq)
   begin
     first_id = -1_i32
     first_logit = Float32::NAN
-    with_adaptive_probe_env(resident_map, candidate, compare_stage2) do
+    with_adaptive_probe_env(resident_map, candidate, compare_stage2, compare_splitk_chunk) do
       ML::GGUF::Qwen35CPU.prepare_state_metal!(state, weights.hparams)
-      first_id, first_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(
-        weights, tokens, 0, state,
-      )
+      if synthetic_prefix > 0
+        seed_synthetic_adaptive_prefix!(state, weights.hparams, synthetic_prefix)
+        first_id = tokens.last
+        first_logit = 0.0_f32
+      else
+        first_id, first_logit = ML::GGUF::Qwen35CPU.prefill_tokens_top1(
+          weights, tokens, 0, state,
+        )
+      end
     end
-    verify_resident_state!(state, weights.hparams, tokens.size.to_i32)
+    expected_tokens = synthetic_prefix > 0 ? synthetic_prefix : tokens.size.to_i32
+    state.layers.each { |layer| layer.position = expected_tokens }
+    verify_resident_state!(state, weights.hparams, expected_tokens)
     {state, first_id, first_logit}
   rescue ex
     release_state!(state)
@@ -237,15 +332,17 @@ private def decode_step(weights : ML::GGUF::Qwen35Weights,
                         position : Int32,
                         resident_map : String,
                         candidate : Bool,
-                        compare_stage2 : Bool)
+                        compare_stage2 : Bool,
+                        compare_splitk_chunk : Bool)
   output_id = -1_i32
   output_logit = Float32::NAN
   elapsed_ms = 0.0_f64
-  with_adaptive_probe_env(resident_map, candidate, compare_stage2) do
+  with_adaptive_probe_env(resident_map, candidate, compare_stage2, compare_splitk_chunk) do
     started = Time.instant
     output_id, output_logit = ML::GGUF::Qwen35CPU.forward_top1(
       weights, token_id, position, state,
     )
+    state.layers.each { |layer| layer.position = position + 1 }
     elapsed_ms = (Time.instant - started).total_milliseconds
   end
   {output_id, output_logit, elapsed_ms}
@@ -268,6 +365,8 @@ prompt_repeats = 1
 chat_mode = true
 candidate_first = false
 compare_stage2 = false
+compare_splitk_chunk = false
+synthetic_prefix = 0
 
 OptionParser.parse do |parser|
   parser.banner = "Usage: qwen35_adaptive_t8_decode_probe [options] [prompt]"
@@ -278,6 +377,8 @@ OptionParser.parse do |parser|
   parser.on("--repeat-prompt N", "Repeat prompt text before rendering (default: 1)") { |value| prompt_repeats = value.to_i }
   parser.on("--resident-map MAP", "Adaptive resident tier map") { |value| resident_map = value }
   parser.on("--compare-stage2", "Hold T8 on and compare legacy stage2 with automatic policy") { compare_stage2 = true }
+  parser.on("--compare-splitk-chunk", "Compare explicit split-K chunks 64 and 60") { compare_splitk_chunk = true }
+  parser.on("--synthetic-prefix N", "Restore a zero-valued adaptive prefix for decode-only timing") { |value| synthetic_prefix = value.to_i }
   parser.on("--raw", "Do not render the Qwen chat template") { chat_mode = false }
   parser.on("--candidate-first", "Run candidate first during warmup and the first measured pair") { candidate_first = true }
   parser.on("-h", "--help", "Show this help") do
@@ -298,7 +399,12 @@ raise "model does not exist: #{model_path}" unless File.file?(model_path)
 raise "--samples must be at least 10" unless sample_count >= 10
 raise "--repeat-prompt must be positive" unless prompt_repeats > 0
 raise "--max-seq cannot be negative" if requested_max_seq < 0
+raise "--synthetic-prefix cannot be negative" if synthetic_prefix < 0
 raise "resident map cannot be empty" if resident_map.strip.empty?
+raise "select only one comparison" if compare_stage2 && compare_splitk_chunk
+if synthetic_prefix > 0 && !compare_splitk_chunk
+  raise "--synthetic-prefix currently requires --compare-splitk-chunk"
+end
 raise "Metal is unavailable" unless ML::GGUF::Qwen35Metal.available?
 
 tokenizer_gguf = ML::GGUF::GGUFFile.new(model_path, mmap_tensors: false)
@@ -319,44 +425,55 @@ begin
   model_prompt = chat_mode ? ML::GGUF::Qwen35Chat.render_user_prompt(repeated_prompt, enable_thinking: false) : repeated_prompt
   tokens = tokenizer.encode(model_prompt)
   raise "prompt encoded to zero tokens" if tokens.empty?
-  minimum_max_seq = tokens.size + sample_count + 2
+  prefix_tokens = synthetic_prefix > 0 ? synthetic_prefix : tokens.size.to_i32
+  minimum_max_seq = prefix_tokens + sample_count + 2
   max_seq = requested_max_seq == 0 ? minimum_max_seq : requested_max_seq
-  raise "prompt plus warmup and samples exceeds --max-seq" if max_seq < minimum_max_seq
+  raise "prefix plus warmup and samples exceeds --max-seq" if max_seq < minimum_max_seq
 
   baseline_state, baseline_first_id, baseline_first_logit = prepare_state(
-    weights, tokens, max_seq, resident_map, false, compare_stage2,
+    weights, tokens, max_seq, resident_map, false, compare_stage2, compare_splitk_chunk, synthetic_prefix.to_i32,
   )
   candidate_state, candidate_first_id, candidate_first_logit = prepare_state(
-    weights, tokens, max_seq, resident_map, true, compare_stage2,
+    weights, tokens, max_seq, resident_map, true, compare_stage2, compare_splitk_chunk, synthetic_prefix.to_i32,
   )
+  verify_independent_states!(baseline_state, candidate_state, hp)
   unless baseline_first_id == candidate_first_id
     raise "prefill top-1 mismatch: #{baseline_first_id} != #{candidate_first_id}"
   end
-  verify_finite_top1!("baseline prefill", baseline_first_id, baseline_first_logit, vocab_size)
-  verify_finite_top1!("candidate prefill", candidate_first_id, candidate_first_logit, vocab_size)
+  semantic_quality_valid = synthetic_prefix == 0
+  if semantic_quality_valid
+    verify_finite_top1!("baseline prefill", baseline_first_id, baseline_first_logit, vocab_size)
+    verify_finite_top1!("candidate prefill", candidate_first_id, candidate_first_logit, vocab_size)
+  elsif baseline_first_id < 0 || baseline_first_id >= vocab_size
+    raise "synthetic seed token is outside the vocabulary: #{baseline_first_id}"
+  end
   prefill_logit_delta = (baseline_first_logit - candidate_first_logit).abs
-  raise "prefill logit mismatch: #{prefill_logit_delta}" if prefill_logit_delta > 1e-4_f32
-  route_certificate = verify_candidate_t8_route!(candidate_state, hp, resident_map, compare_stage2)
+  if semantic_quality_valid && prefill_logit_delta > 1e-4_f32
+    raise "prefill logit mismatch: #{prefill_logit_delta}"
+  end
+  route_certificate = verify_candidate_t8_route!(
+    candidate_state, hp, resident_map, compare_stage2, compare_splitk_chunk,
+  )
 
   input_id = baseline_first_id
-  position = tokens.size.to_i32
+  position = prefix_tokens.to_i32
   baseline_warm_id = -1_i32
   baseline_warm_logit = Float32::NAN
   candidate_warm_id = -1_i32
   candidate_warm_logit = Float32::NAN
   if candidate_first
     candidate_warm_id, candidate_warm_logit, _ = decode_step(
-      weights, candidate_state, input_id, position, resident_map, true, compare_stage2,
+      weights, candidate_state, input_id, position, resident_map, true, compare_stage2, compare_splitk_chunk,
     )
     baseline_warm_id, baseline_warm_logit, _ = decode_step(
-      weights, baseline_state, input_id, position, resident_map, false, compare_stage2,
+      weights, baseline_state, input_id, position, resident_map, false, compare_stage2, compare_splitk_chunk,
     )
   else
     baseline_warm_id, baseline_warm_logit, _ = decode_step(
-      weights, baseline_state, input_id, position, resident_map, false, compare_stage2,
+      weights, baseline_state, input_id, position, resident_map, false, compare_stage2, compare_splitk_chunk,
     )
     candidate_warm_id, candidate_warm_logit, _ = decode_step(
-      weights, candidate_state, input_id, position, resident_map, true, compare_stage2,
+      weights, candidate_state, input_id, position, resident_map, true, compare_stage2, compare_splitk_chunk,
     )
   end
   unless baseline_warm_id == candidate_warm_id
@@ -366,8 +483,8 @@ begin
   verify_finite_top1!("candidate warmup", candidate_warm_id, candidate_warm_logit, vocab_size)
   warm_logit_delta = (baseline_warm_logit - candidate_warm_logit).abs
   raise "warmup logit mismatch: #{warm_logit_delta}" if warm_logit_delta > 1e-4_f32
-  verify_resident_state!(baseline_state, hp, (tokens.size + 1).to_i32)
-  verify_resident_state!(candidate_state, hp, (tokens.size + 1).to_i32)
+  verify_resident_state!(baseline_state, hp, (prefix_tokens + 1).to_i32)
+  verify_resident_state!(candidate_state, hp, (prefix_tokens + 1).to_i32)
   input_id = baseline_warm_id
   position += 1
 
@@ -385,17 +502,17 @@ begin
 
     if run_candidate_first
       candidate_id, candidate_logit, candidate_ms = decode_step(
-        weights, candidate_state, input_id, position, resident_map, true, compare_stage2,
+        weights, candidate_state, input_id, position, resident_map, true, compare_stage2, compare_splitk_chunk,
       )
       baseline_id, baseline_logit, baseline_ms = decode_step(
-        weights, baseline_state, input_id, position, resident_map, false, compare_stage2,
+        weights, baseline_state, input_id, position, resident_map, false, compare_stage2, compare_splitk_chunk,
       )
     else
       baseline_id, baseline_logit, baseline_ms = decode_step(
-        weights, baseline_state, input_id, position, resident_map, false, compare_stage2,
+        weights, baseline_state, input_id, position, resident_map, false, compare_stage2, compare_splitk_chunk,
       )
       candidate_id, candidate_logit, candidate_ms = decode_step(
-        weights, candidate_state, input_id, position, resident_map, true, compare_stage2,
+        weights, candidate_state, input_id, position, resident_map, true, compare_stage2, compare_splitk_chunk,
       )
     end
 
@@ -406,7 +523,7 @@ begin
     verify_finite_top1!("candidate sample #{index}", candidate_id, candidate_logit, vocab_size)
     logit_delta = (baseline_logit - candidate_logit).abs
     raise "measured logit mismatch at sample #{index}: #{logit_delta}" if logit_delta > 1e-4_f32
-    expected_tokens = (tokens.size + index + 2).to_i32
+    expected_tokens = (prefix_tokens + index + 2).to_i32
     verify_resident_state!(baseline_state, hp, expected_tokens)
     verify_resident_state!(candidate_state, hp, expected_tokens)
 
@@ -424,14 +541,17 @@ begin
   wins = samples.count { |sample| sample.candidate_ms < sample.baseline_ms }
   gate_passed = RELEASE_BUILD && improvement_pct >= 3.0 && wins >= 8
   prompt_sha256 = Digest::SHA256.hexdigest(repeated_prompt.to_slice)
-  comparison = compare_stage2 ? "p4_stage2" : "t8_loaders"
-  baseline_stage2 = "legacy"
-  candidate_stage2 = compare_stage2 ? "automatic" : "legacy"
+  comparison = compare_splitk_chunk ? "splitk_chunk" : (compare_stage2 ? "p4_stage2" : "t8_loaders")
+  state_source = synthetic_prefix > 0 ? "synthetic_zero_prefix" : "real_prompt_prefill"
+  baseline_stage2 = compare_splitk_chunk ? "automatic" : "legacy"
+  candidate_stage2 = (compare_stage2 || compare_splitk_chunk) ? "automatic" : "legacy"
 
   puts "qwen35_adaptive_t8_decode_probe"
-  puts "  release_build=#{RELEASE_BUILD} device=#{device_name.inspect} comparison=#{comparison} prompt_sha256=#{prompt_sha256}"
+  puts "  release_build=#{RELEASE_BUILD} device=#{device_name.inspect} comparison=#{comparison} state_source=#{state_source} prompt_sha256=#{prompt_sha256}"
+  puts "  semantic_quality_valid=#{semantic_quality_valid}"
   puts "  baseline_stage2=#{baseline_stage2} candidate_stage2=#{candidate_stage2}"
-  puts "  prompt_tokens=#{tokens.size} prompt_repeats=#{prompt_repeats} samples=#{sample_count} max_seq=#{max_seq} full_attention_layers=#{hp.full_attention_layers.size}"
+  puts "  baseline_splitk_chunk=64 candidate_splitk_chunk=#{compare_splitk_chunk ? 60 : 64}"
+  puts "  prompt_tokens=#{tokens.size} seeded_prefix_tokens=#{prefix_tokens} prompt_repeats=#{prompt_repeats} samples=#{sample_count} max_seq=#{max_seq} full_attention_layers=#{hp.full_attention_layers.size}"
   puts "  prefill_chunk_size=#{PRODUCT_PREFILL_CHUNK_SIZE} append_max_groups=#{PRODUCT_APPEND_MAX_GROUPS} append_cooldown_ms=#{PRODUCT_APPEND_COOLDOWN_MS} pooled_scratch=true gc_guard=true"
   puts "  automatic_t8_min_context=#{ML::GGUF::QwenQBitAdaptiveMetalPolicy::SPLITK_T8_MIN_CONTEXT}"
   puts "  candidate_t8_route_owners=p4:#{route_certificate.p4_t8_owners},bf16:#{route_certificate.bf16_t8_owners} packed_len=#{route_certificate.packed_len}"
@@ -441,8 +561,10 @@ begin
 
   payload = JSON.build do |json|
     json.object do
-      json.field "schema", "qwen-adaptive-t8-decode-ab-v2"
+      json.field "schema", "qwen-adaptive-t8-decode-ab-v4"
       json.field "comparison", comparison
+      json.field "state_source", state_source
+      json.field "semantic_quality_valid", semantic_quality_valid
       json.field "baseline_stage2", baseline_stage2
       json.field "candidate_stage2", candidate_stage2
       json.field "release_build", RELEASE_BUILD
@@ -452,11 +574,13 @@ begin
       json.field "resident_map", resident_map
       json.field "effective_splitk", true
       json.field "effective_splitk_min_context", 256
-      json.field "effective_splitk_chunk", 64
+      json.field "baseline_splitk_chunk", 64
+      json.field "candidate_splitk_chunk", compare_splitk_chunk ? 60 : 64
       json.field "automatic_t8_min_context", ML::GGUF::QwenQBitAdaptiveMetalPolicy::SPLITK_T8_MIN_CONTEXT
       json.field "candidate_p4_t8_owners", route_certificate.p4_t8_owners
       json.field "candidate_bf16_t8_owners", route_certificate.bf16_t8_owners
       json.field "prompt_tokens", tokens.size
+      json.field "seeded_prefix_tokens", prefix_tokens
       json.field "prompt_repeats", prompt_repeats
       json.field "candidate_first", candidate_first
       json.field "samples", sample_count

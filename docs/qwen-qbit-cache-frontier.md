@@ -3901,3 +3901,50 @@ compiler/runtime, device, or model.
 
 **LTP/WBA:** Not claimed. This is ordinary context-gated kernel selection with
 the legacy reducer as a fail-safe runtime frame.
+
+### Split-K chunk alignment does not improve complete-token decode (2026-09-02)
+
+The cache-only probe now supports an explicit same-process split-K chunk A/B.
+It prewarms both pipelines, restores the same snapshot before every sample,
+alternates order over ten pairs, compares the complete adaptive command's wall
+and GPU intervals, and rejects any output delta above `1e-4`.
+
+For uniform P4 at prefix 8,192, chunk `64 -> 60` aligned each block with four
+tile-15 passes and reproduced a local win twice: wall improved by `3.937%` and
+`4.218%`, GPU interval by `5.581%` and `5.232%`, with `10/10` wins in both
+runs. The same setting regressed at prefix 6,144 and 4,096. BF16 at 8,256 was
+inconsistent: one row passed at `3.238%` wall and `4.524%` GPU, while its repeat
+fell to `1.259%` and `1.987%`.
+
+That local P4 result did not survive the complete model corridor. Four guarded
+real-prompt attempts using prefill chunks 128, 256, 512, and 1,024 all stopped
+at the unchanged native 120-second Metal command watchdog before a decode A/B
+could be collected. The probe therefore gained `--synthetic-prefix`: it
+allocates the real 27B state, restores canonical zero-valued adaptive payloads
+through the ordinary strict snapshot validator, sets every layer position, and
+then runs matched `forward_top1` steps. It exercises real model weights,
+recurrent state, adaptive attention, append, publication, logits, and top-1,
+but it is explicitly not semantic-quality evidence for a natural prompt.
+The probe records that boundary as `semantic_quality_valid=false`, keeps
+baseline and candidate state/buffer ownership independent, advances the
+caller-owned layer positions after every successful decode, and verifies both
+position/cache-length agreement and the absence of pending cache reservations.
+
+At 8,256 live synthetic tokens, the intended tier-selective P4 `60` / BF16
+`64` route measured `-0.062%` and `+0.035%` in opposite-order processes, both
+with `6/10` candidate wins. A current-source explicit all-tier `64 -> 60`
+control measured `+1.256%` with `5/10` wins and `+0.119%` with `7/10` wins.
+All four runs preserved every top-1 token, published cache length, sole adaptive
+ownership, and the `1e-4` logit bound. None met the `>=3%`, `>=8/10` gate.
+
+**Adversary:** Kernel block alignment and isolated adaptive-command time are
+mechanism coordinates, not token latency. Twelve adaptive P4 layers are only
+part of sixteen attention owners and sixty-four model layers; the complete
+token is dominated by work untouched by this knob. Synthetic zero state also
+cannot certify natural-prompt quality, although Metal execution cost depends on
+the same shape, tier, and live-prefix layout.
+
+**decision:** Keep the production default at split-K chunk 64 and remove the
+temporary automatic tier-specific policy. Retain both probes as reproducible
+diagnostics. Do not retry nearby chunk sizes without a new whole-token ceiling;
+the next candidate must remove work or bytes across a larger decode boundary.

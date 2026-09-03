@@ -26587,3 +26587,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. No local transformation obtained both route-equivalent state and recomputed global wall descent.
 
 **decision:** Keep the additive rejected-tail telemetry, retain the `1e-4` state gate, and do not promote the serial verifier or weaken state equivalence to token/ECS parity. Treat the current MTP route as experimental/default-off. A future verifier must capture hidden/state through a route-equivalent decode path and first prove enough end-to-end ceiling to clear the `1.03x` gate; otherwise pivot to a different inference boundary.
+
+#### [LM-QWEN38-ADAPTIVE-SPLITK-CHUNK-NOGO-1018] Tile-aligned split-K blocks are a kernel-only win
+**context:** ml / Qwen3.8-27B / adaptive QBit / split-K decode / Apple M2 Max
+**state:** automatic chunk-60 candidate rejected; diagnostics retained; production chunk policy unchanged
+
+- claim: "A repeatable P4 adaptive-command gain from chunk 60 does not produce a material complete-token gain."
+  source: same-process cache-only A/B at prefix 8,192 measured `64 -> 60` P4 wall improvements of `3.937%` and `4.218%`, GPU improvements of `5.581%` and `5.232%`, and `10/10` wins in both repeats. A full real Qwen3.8-27B synthetic-prefix route then restored canonical zero-valued adaptive state at 8,256 live tokens and ran matched `forward_top1` trajectories. The intended P4-60/BF16-64 candidate measured `-0.062%` and `+0.035%` in opposite-order processes, both `6/10`; an explicit all-tier chunk-60 control measured `+1.256%` (`5/10`) and `+0.119%` (`7/10`). Every row preserved top-1, the `1e-4` logit bound, cache length, all 16 adaptive owners, and no Float32 owner. None met the `>=3%`, `>=8/10` gate.
+  verified_at: 2026-09-02
+  decay_trigger: split-K kernel, chunk/tile geometry, adaptive tier map, model/device/compiler/runtime, whole-token route, or timing method changes
+  trust: {F:0.98,G:0.03,R:0.95}
+
+- claim: "A synthetic restored prefix is a useful full-route performance falsifier but not a semantic-quality certificate."
+  source: `--synthetic-prefix` allocates two independent real model states, builds canonical tier metadata with `QwenQBitAdaptiveKV.empty_encoded`, admits it through strict resident snapshot restoration, records `semantic_quality_valid=false`, advances caller-owned layer positions after each successful decode, and verifies position/cache-length agreement plus no pending cache reservations after every real decode step. Four real 8K prefill attempts at chunk sizes 128, 256, 512, and 1,024 instead hit the unchanged native 120-second Metal watchdog before decode evidence was available.
+  verified_at: 2026-09-02
+  decay_trigger: state preparation, snapshot format/admission, recurrent initialization, position semantics, watchdog, or full decode routing changes
+  trust: {F:0.97,G:0.03,R:0.93}
+
+**Adversary:** The zero prefix preserves execution geometry rather than natural activations, so it cannot establish answer quality, top-2 behavior, or ECS against a real session. Conversely, the complete-token timing includes all sixty-four model layers and the output head, making it the correct gate for an engine-speed claim. The isolated P4 improvement is real but below the larger corridor's measurable materiality floor.
+
+**Value proxy:** Block divisibility and adaptive-command GPU time explain the local mechanism. Matched complete-token wall, output parity, and state publication decide runtime promotion.
+
+**LTP/WBA:** Not claimed. This is ordinary block-size tuning with explicit baseline/candidate execution frames.
+
+**decision:** Retain split-K chunk 64 as the production default and keep explicit comparison probes. Remove the temporary automatic chunk-60 route. Require a new candidate to remove work or bytes across a larger exact decode boundary before another product A/B.
