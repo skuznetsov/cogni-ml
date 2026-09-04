@@ -26831,3 +26831,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is a narrowly gated scheduling-policy correction.
 
 **decision:** Default to zero cooldown only for the exact measured 9B Flash corridor. Preserve `QWEN35_PREFILL_APPEND_COOLDOWN_MS=50` as immediate rollback and retain 50 ms everywhere else. Continue the llama.cpp comparison at recurrent FFN/projection compute and command-boundary scheduling; do not generalize this watchdog result by model size alone.
+
+#### [LM-QWEN35-Q4K-FAST-MATH-1028] llama.cpp compiler math mode does not explain the remaining short-prefill gap
+**context:** ml / Qwen3.5-9B / Q4_K prefill GEMM / Apple M2 Max / same-token external benchmark
+**state:** candidate falsified and removed; global safe math retained
+
+- claim: "Compiling only the native `simd_mm_q4k_*` pipelines with Metal fast math does not produce a material pp256/512 throughput win."
+  source: a temporary opt-in left every reduction and stateful recurrent kernel in safe mode and switched only the three exercised Q4_K batch-GEMM pipelines to `MTLMathModeFast`. Runtime diagnostics confirmed activation for `simd_mm_q4k_h16`, `simd_mm_q4k_h16_b64`, and `simd_mm_q4k_h16_b64_swiglu_h16`. Against the same temporary binary with the opt-in unset, the first stable guarded pair measured safe/fast native throughput of `564.41/565.36 tok/s` at pp256 and `580.46/580.64 tok/s` at pp512. The corresponding same-process llama controls also moved from `577.10/578.73` and `598.32/599.02 tok/s`, so normalized Q4_K fast-math movement was slightly negative and far below the `3%` admission gate. Top-2 stayed identical; full-logit cosine versus llama.cpp remained `0.99999437` at pp256 and `0.99999494` at pp512.
+  verified_at: 2026-09-04
+  decay_trigger: Q4_K kernel arithmetic, Metal compiler defaults, model/device, benchmark contract, or dominant prefill dataflow changes
+  trust: {F:0.97,G:0.04,R:0.91}
+
+**Adversary:** A later pp512 fast run and its following safe control both lost roughly the same absolute throughput in both engines, while pp256 remained stable. Those rows diagnose shared host/GPU disturbance and are excluded from compiler-mode attribution. The test proves only that the current three Q4_K pipelines do not benefit materially on this model/device; it does not justify global fast math or make a numerical guarantee for other kernels.
+
+**Value proxy:** Matching llama.cpp's default Metal compile mode is not itself progress. The relevant value is normalized end-to-end throughput with unchanged output decisions; this candidate did not improve it.
+
+**LTP/WBA:** Not claimed. This was an ordinary compiler-mode ablation.
+
+**decision:** Keep global safe math and remove the Q4_K opt-in. Do not revisit compiler flags unless kernel arithmetic or the target GPU changes. Continue with an actual Q4_K dataflow or scheduling difference, not a wider precision relaxation.
