@@ -26987,3 +26987,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. Process isolation and measurement-contract validation are ordinary benchmark controls.
 
 **decision:** Retain the split-process harness as the 27B comparison gate. Treat pp256 as practical parity and the pp512-2048 native lead as encouraging but host-sensitive bounded evidence, not a stable public speed ratio. A temporary RMSNorm-plus-RoPE fusion measured only about `0.02-0.03%` at pp256/pp2048, with pp2048 median regression, and was removed. Continue with a phase-local transformation that removes substantive GPU work or memory traffic; first falsify a fused QG-split plus Q-RMSNorm-plus-Q-RoPE path before any performance promotion.
+
+#### [LM-QWEN38-QG-NORM-ROPE-FALSIFIED-1035] Fusing Q/G split, Q normalization, and Q RoPE is not a prefill win
+**context:** ml / Qwen3.8-27B / full-attention prefill / Apple M2 Max / same-process Metal ABBA
+**state:** candidate falsified and removed; established three-kernel route retained
+
+- claim: "A single token-major kernel can reproduce the existing Q/G split, Q RMSNorm, and partial Q RoPE arithmetic exactly, but it does not improve end-to-end prefill wall time."
+  source: the temporary kernel wrote raw gate rows while normalizing and rotating Q directly from the interleaved Q/G projection. A staged-GPU-versus-fused-GPU primitive measured maximum Q and gate absolute differences of `0.0` at pp256/512/1024/2048 geometry. A guarded Qwen3.8-27B paired body-prefill A/B at pp256 measured fused/default-off means of `1815.87/1816.30 ms` with only `4/8` fused wins. The opposite pp2048 boundary measured `16595.22/16292.83 ms`, with the fused route slower by `302.39 ms` on average and its p50 slower by about `662 ms`. Both runs exited zero under the unchanged 35% free-memory floor and 24 GiB process-tree cap.
+  verified_at: 2026-09-04
+  decay_trigger: full-attention Q/G layout, RMSNorm or RoPE implementation, Metal compiler/device, model topology, or benchmark route changes
+  trust: {F:0.98,G:0.04,R:0.92}
+
+**Adversary:** The pp2048 run was noisy and the fused route won `3/4` individual pairs despite worse aggregate and median timing, so it is not evidence of a stable exact regression constant. Combined with the pp256 tie and the prior norm-plus-RoPE-only null result, however, it decisively rejects a promotable speedup. Numerical correctness and fewer dispatches are not sufficient value evidence.
+
+**Value proxy:** Kernel count and eliminated Q scratch traffic are mechanisms, not the objective. The full 27B prefill wall boundary stayed flat at pp256 and worsened at pp2048.
+
+**LTP/WBA:** Not claimed. This was ordinary operation fusion.
+
+**decision:** Remove the fused kernel, policy, rollback, and tests. Do not spend pp512/1024 model runs on a candidate already rejected at both boundary sizes. The next candidate must attack a dominant matmul/conversion or a real resident handoff rather than the sub-percent Q preparation tail.
