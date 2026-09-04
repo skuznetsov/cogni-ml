@@ -4019,3 +4019,29 @@ projection geometry, Metal compiler/runtime, or device changes.
 Do not generalize by output width, and do not report threadgroup-count reduction
 as the speedup. Continue at recurrent FFN-down/projection with a new
 layout or fusion that removes different work.
+
+### Transposed Q4 FFN-down tile is exact but not faster (2026-09-04)
+
+The recurrent Q4 `17408 -> 5120` FFN-down corridor was tested with the reuse
+direction reversed: one 64-row H16 activation tile was shared across two
+64-output weight bands. The exact-shape kernel used eight SIMD groups, 256
+threads, and 24 KiB of threadgroup memory. It reduced staged activation bytes
+per paired weight tile, while retaining two independent output accumulator
+bands.
+
+A guarded same-process candidate/rollback ABBA used Qwen3.8-27B Q4_K_M, F16
+KV, two measured pairs, the unchanged 35% free-memory floor, and a 24 GiB
+process-tree cap. The route executed exactly 32 times per pass and produced
+bitwise-identical full terminal logits: ordered top-2 matched, cosine was
+`1.0`, and maximum absolute error was `0.0`. Candidate/rollback throughput was
+`171.73/173.16 tok/s` at pp256 (`-0.83%`) and `140.29/139.18 tok/s` at pp2048
+(`+0.79%`, paired median `+1.40%`).
+
+**Adversary:** Reusing the input tile is not free. The second weight band adds
+matrix fragments and accumulator state, which can lower occupancy or increase
+register pressure. The boundary results are well below the 3% promotion gate;
+the exact positive pp2048 percentage is not stable speed evidence.
+
+**decision:** Remove the kernel, policy, route, and spec. Do not retry the same
+output-wide tile without a mechanism that demonstrably reduces register state
+or changes the arithmetic/dataflow ceiling.

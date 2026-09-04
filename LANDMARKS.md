@@ -27071,3 +27071,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary quantized-GEMM tiling and producer-consumer fusion.
 
 **decision:** Enable SG8-B128 automatically only on the measured M2 Max `5120 -> observed_output` pp256+ corridor. Reject automatic `out_dim == 5120` widening. Retain the durable ABBA harness and rollback, and continue with the remaining recurrent FFN-down/projection bottleneck using a different mechanism rather than a broader version of this tile.
+
+#### [LM-QWEN38-Q4-O128-B64-FALSIFIED-1039] Output-wide Q4 FFN-down reuse misses the wall-time gate
+**context:** ml / Qwen3.8-27B Q4_K_M / recurrent Q4 FFN-down / Apple M2 Max
+**state:** candidate falsified and removed; established B64 route retained
+
+- claim: "Sharing one 64-row H16 activation tile across two 64-output weight bands is numerically exact but not a material prefill acceleration."
+  source: a temporary exact `17408 -> 5120` Metal kernel used eight SIMD groups, 256 threads, and 24 KiB threadgroup storage. A guarded same-process candidate/rollback ABBA executed the candidate exactly 32 times per pass. Full terminal logits were bitwise equal, ordered top-2 matched, cosine was `1.0`, and maximum absolute error was `0.0`. Candidate/rollback throughput was `171.73/173.16 tok/s` at pp256 and `140.29/139.18 tok/s` at pp2048, or `-0.83%/+0.79%`; pp2048 paired median was `+1.40%`. Both points miss the 3% promotion gate.
+  verified_at: 2026-09-04
+  decay_trigger: Q4 dequantization arithmetic, accumulator/register layout, Metal compiler/device, or recurrent FFN-down geometry changes
+  trust: {F:0.99,G:0.03,R:0.96}
+
+**Adversary:** The candidate reduced activation staging but retained a second set of weight fragments and accumulators; occupancy/register cost can erase the byte saving. A small positive boundary result is not a stable speedup.
+
+**Value proxy:** Theoretical staging-byte reduction was only a mechanism prediction. The complete full-logit prefill boundary did not improve materially.
+
+**LTP/WBA:** Not claimed. This was ordinary quantized-GEMM tiling.
+
+**decision:** Remove the kernel, host route, policy, and spec. Do not retry the same transposed tile without a new mechanism that reduces register state or the dominant arithmetic/weight traffic.
