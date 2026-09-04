@@ -76,6 +76,7 @@ module ML::GGUF
     getter output_norm : Array(Float32) # [n_embd]
     getter output : QuantWeight         # [n_embd, vocab_size]  (lm_head)
     getter layers : Array(Qwen35LayerWeights)
+    getter gguf_file_type : Int64?
 
     # Kept alive so the mmap region backing every QuantWeight.raw stays
     # mapped until this weight set is explicitly closed. Closing it invalidates
@@ -92,6 +93,7 @@ module ML::GGUF
     def initialize(@gguf : GGUFFile, @hparams : Qwen35Hparams)
       @closed = false
       @close_mutex = Mutex.new
+      @gguf_file_type = @gguf.get_int("general.file_type")
       @q4_gemv_x16_capability = self.class.q4_gemv_x16_capability_for(
         @gguf.get_string("general.name"),
         @gguf.get_string("general.basename")

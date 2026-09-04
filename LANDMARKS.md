@@ -27149,3 +27149,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary quantized-GEMM tiling and numeric epilogue scheduling.
 
 **decision:** Remove the kernel, policy, epilogues, and tests. Do not revisit Q6 SG8-B128 with raw-F32 output plus a flat rounding epilogue on M2 Max without a new dataflow, architecture, or device-level reason that directly addresses register pressure and epilogue traffic.
+
+#### [LM-QWEN38-ZERO-COOLDOWN-1043] Exact Qwen3.8 Q4_K_M prefill no longer pays compositor idle time
+**context:** ml / Qwen3.8-27B Q4_K_M / non-adaptive F16 prefill / Apple M2 Max
+**state:** zero cooldown enabled for the exact measured pp1024/pp2048 terminal-row corridor with immediate rollback
+
+- claim: "Removing only the inter-command compositor pause is a material prefill win on the measured Qwen3.8 route without changing model output."
+  source: the 64-layer terminal-row prefix rotates seven commands at pp1024 and fourteen at pp2048, so the previous default inserted 350/700 ms of host idle time after already completed GPU commands. A guarded same-process ABBA on the real Qwen3.8-27B Q4_K_M model used one warmup per mode and four alternating pairs. Automatic-zero versus explicit-50 throughput was `181.30/168.38 tok/s` at pp1024 (`+7.67%`, paired median `+7.67%`) and `183.95/171.43 tok/s` at pp2048 (`+7.30%`, paired median `+7.66%`). Full terminal logits matched bitwise, ordered top-2 matched, cosine was `1.0`, maximum absolute difference was `0.0`, and the protected run exited zero under the unchanged 35% free-memory floor and 24 GiB process-tree cap.
+  verified_at: 2026-09-04
+  decay_trigger: command grouping or completion semantics, model metadata/topology/quantization, Metal compiler/device, benchmark contract, or host scheduling changes
+  trust: {F:0.99,G:0.02,R:0.95}
+
+- claim: "Automatic admission fails closed outside the measured model and execution corridor."
+  source: the policy requires Apple M2 Max, start position zero, exactly 1024 or 2048 rows, the 63-layer prefix of a 64-layer terminal-row route, the exact Qwen3.8 metadata capability, GGUF file type Q4_K_M, dimensions `5120/17408`, heads `24/4`, head dimension 256, interval four, F16 non-adaptive KV, and no checkpoint, boundary profile, CogniGraph flight, or explicit group/chunk override. Explicit cooldown remains authoritative. Focused policy tests mutate each guard, including unknown model capability and a different GGUF file type; they passed. The 14-example native-versus-llama benchmark-contract suite, CPU-only no-codegen library build, format check, and diff check also passed.
+  verified_at: 2026-09-04
+  decay_trigger: GGUF identity metadata, capability derivation, policy signature/call site, topology, or execution-mode ownership changes
+  trust: {F:0.99,G:0.02,R:0.96}
+
+**Adversary:** The ABBA controls same-process model state and alternates order, but the host was not required to be quiet. Observed wall reductions exceed the nominal sleep amounts by roughly 83/113 ms, so the exact percentages include scheduler noise or secondary command-timing effects and are not stable constants. Metadata capability plus GGUF file type is a fail-closed compatibility certificate, not a cryptographic file identity. The evidence covers one model file, device, quantization, and two prompt sizes; it does not justify pp4096+, adaptive KV, checkpoints, another GPU, or a concurrent caller that mutates process-wide environment variables. GPU completion, error/status checks, and cache publication remain unchanged. `QWEN35_PREFILL_APPEND_COOLDOWN_MS=50` is the immediate rollback.
+
+**Value proxy:** Deleted sleep time is only the mechanism. Promotion rests on complete terminal-logit parity plus paired end-to-end throughput and protected process completion, not on fewer idle milliseconds alone.
+
+**LTP/WBA:** Not claimed. This is an ordinary scheduling-policy correction after a completed command.
+
+**decision:** Default to zero cooldown only for the exact Qwen3.8-27B Q4_K_M pp1024/pp2048 corridor on Apple M2 Max. Preserve every completion fence and explicit rollback. Refresh the strict current native-versus-llama matrix before attributing a new cross-engine lead, and keep longer contexts guarded until independently measured.

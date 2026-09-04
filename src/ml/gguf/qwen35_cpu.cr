@@ -45,10 +45,11 @@ module ML::GGUF
     {% end %}
     # Keep prompt chunks large enough to avoid CPU-side boundary overhead while
     # preserving an env override for small-memory experiments.
-    FALLBACK_PREFILL_CHUNK_SIZE          = 4096
-    ADAPTIVE_RESIDENT_PREFILL_CHUNK_SIZE = 2048
-    PREFILL_APPEND_ROW_GROUP_BUDGET      = 2048
-    PREFILL_APPEND_COOLDOWN_MS           =   50
+    FALLBACK_PREFILL_CHUNK_SIZE          =   4096
+    ADAPTIVE_RESIDENT_PREFILL_CHUNK_SIZE =   2048
+    PREFILL_APPEND_ROW_GROUP_BUDGET      =   2048
+    PREFILL_APPEND_COOLDOWN_MS           =     50
+    QWEN38_Q4_K_M_FILE_TYPE              = 15_i64
     GIB                                  = 1024_u64 * 1024_u64 * 1024_u64
     @@default_prefill_chunk_size : Int32?
     @@prefill_gc_guard_active = false
@@ -112,10 +113,10 @@ module ML::GGUF
       value
     end
 
-    # Remove the compositor pause automatically only in the exact 9B corridor
-    # measured on M2 Max. Every unknown shape or execution mode keeps the
-    # conservative default; the existing cooldown setting is the immediate
-    # explicit override and rollback.
+    # Remove the compositor pause automatically only in exact measured
+    # Qwen3.5-9B and Qwen3.8-27B corridors on M2 Max. Every unknown shape or
+    # execution mode keeps the conservative default; the existing cooldown
+    # setting is the immediate explicit override and rollback.
     def prefill_append_cooldown_policy_ms(
       cooldown_configured : String? = ENV["QWEN35_PREFILL_APPEND_COOLDOWN_MS"]?,
       group_limit_configured : String? = ENV["QWEN35_PREFILL_APPEND_MAX_GROUPS"]?,
@@ -138,23 +139,29 @@ module ML::GGUF
       boundary_profile : Bool,
       graph_depth : Int32,
       flash_d256 : Bool,
+      model_capability : Q4GemvX16Capability = Q4GemvX16Capability::Unknown,
+      gguf_file_type : Int64? = nil,
     ) : Int32
       return prefill_append_cooldown_ms(cooldown_configured) if cooldown_configured
       return PREFILL_APPEND_COOLDOWN_MS if group_limit_configured || chunk_size_configured
       return PREFILL_APPEND_COOLDOWN_MS unless device_name == "Apple M2 Max"
       return PREFILL_APPEND_COOLDOWN_MS unless start_pos == 0
       return PREFILL_APPEND_COOLDOWN_MS unless n_tokens == 1024 || n_tokens == 2048
-      # Full-logit/top-1 prefill handles the final full-attention layer through
-      # its terminal-row kernel after this 31-layer prefix. That exact route is
-      # the measured corridor; a complete 32-layer hidden prefill stays guarded.
-      return PREFILL_APPEND_COOLDOWN_MS unless n_layer == 32 && layer_limit == 31
-      return PREFILL_APPEND_COOLDOWN_MS unless n_embd == 4096 && n_ff == 12288
-      return PREFILL_APPEND_COOLDOWN_MS unless n_head == 16 && n_head_kv == 4 && head_dim == 256
       return PREFILL_APPEND_COOLDOWN_MS unless full_attention_interval == 4
       return PREFILL_APPEND_COOLDOWN_MS unless kv_cache_f16 && !resident_adaptive
       return PREFILL_APPEND_COOLDOWN_MS if checkpoint_requested || boundary_profile || graph_depth != 0
-      return PREFILL_APPEND_COOLDOWN_MS unless flash_d256
-      0
+
+      # Full-logit/top-1 prefill handles the final full-attention layer through
+      # its terminal-row kernel. Complete hidden-prefill routes stay guarded.
+      measured_9b = n_layer == 32 && layer_limit == 31 &&
+                    n_embd == 4096 && n_ff == 12288 &&
+                    n_head == 16 && n_head_kv == 4 && head_dim == 256 &&
+                    flash_d256
+      measured_27b = n_layer == 64 && layer_limit == 63 &&
+                     n_embd == 5120 && n_ff == 17408 &&
+                     n_head == 24 && n_head_kv == 4 && head_dim == 256 &&
+                     model_capability.qwen38? && gguf_file_type == QWEN38_Q4_K_M_FILE_TYPE
+      measured_9b || measured_27b ? 0 : PREFILL_APPEND_COOLDOWN_MS
     end
 
     # The last command of a chunk is followed by the first command of the next
@@ -4034,6 +4041,8 @@ module ML::GGUF
         boundary_profile: prefill_boundary_profile,
         graph_depth: prefill_graph_depth,
         flash_d256: cooldown_flash_d256,
+        model_capability: weights.output.q4_gemv_x16_capability,
+        gguf_file_type: weights.gguf_file_type,
       )
       append_prefill_started = nil.as(Time::Instant?)
       pending_adaptive_caches = [] of QwenQBitAdaptiveResidentKV::Cache
