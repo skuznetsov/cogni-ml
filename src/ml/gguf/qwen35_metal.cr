@@ -6952,20 +6952,88 @@ module ML
         # row; only the last row's hidden state is needed for next-token logits.
         # This route therefore projects K/V for the whole chunk, but computes
         # Q/attention/FFN output only for the final row.
+        private def self.gemv_route_pipeline_supported?(qw : QuantWeight,
+                                                        batch : Int32,
+                                                        route_qw : QuantWeight?) : Bool
+          pipeline = gemv_pipeline_for(qw)
+          return false unless pipeline
+
+          if q4_gemv_x16_enabled?(route_qw) && batch <= GEMM_BATCH_THRESHOLD &&
+             pipeline.same?(mv_pipeline) && (qw.in_dim % QK_K == 0)
+            mv_q4_x16_pipeline
+          elsif q4_gemv_shape_layout_enabled?(route_qw) && batch <= GEMM_BATCH_THRESHOLD &&
+                pipeline.same?(mv_pipeline)
+            if layout = q4_gemv_shape_layout(qw.in_dim, qw.out_dim)
+              mv_q4_layout_pipeline(layout[0], layout[1])
+            end
+          elsif q6_gemv_shape_layout_enabled? && batch <= GEMM_BATCH_THRESHOLD &&
+                pipeline.same?(mv6_pipeline)
+            if layout = q6_gemv_shape_layout(qw.in_dim, qw.out_dim)
+              mv_q6_layout_pipeline(layout[0], layout[1])
+            end
+          end
+          true
+        end
+
+        private def self.matmul_pipeline_supported?(qw : QuantWeight, batch : Int32) : Bool
+          return false unless gemv_pipeline_for(qw)
+
+          force_small_q4_gemv = small_q4_gemv_enabled? && qw.type.q4_k? && qw.out_dim <= 64
+          if qw.type.q4_k? && batch > GEMM_BATCH_THRESHOLD && !force_small_q4_gemv
+            if q4_h16_gemm_enabled?
+              f32_to_f16_pipeline
+              mm_h16_pipeline
+            else
+              mm_pipeline
+            end
+          elsif q56_batch_gemm_enabled? && qw.type.q5_k? && batch > GEMM_BATCH_THRESHOLD
+            f32_to_f16_pipeline
+            mm5_f32out_pipeline
+          elsif q56_batch_gemm_enabled? && qw.type.q6_k? && batch > GEMM_BATCH_THRESHOLD
+            f32_to_f16_pipeline
+            mm6_f32out_pipeline
+          else
+            return gemv_route_pipeline_supported?(qw, batch, qw)
+          end
+          true
+        end
+
+        # Compile every pipeline selected by the exact terminal-layer route
+        # before its caller mutates recurrent or KV state. Pipeline creation is
+        # lazy and raises on failure, so this admission query must be total.
         def self.full_attn_layer_chunk_project_last_supported?(q_qw : QuantWeight,
                                                                 k_qw : QuantWeight,
                                                                 v_qw : QuantWeight,
                                                                 out_qw : QuantWeight,
                                                                 ffn_gate_qw : QuantWeight,
                                                                 ffn_up_qw : QuantWeight,
-                                                                ffn_down_qw : QuantWeight) : Bool
-          !gemv_pipeline_for(q_qw).nil? &&
-            !gemv_pipeline_for(k_qw).nil? &&
-            !gemv_pipeline_for(v_qw).nil? &&
-            !gemv_pipeline_for(out_qw).nil? &&
-            !gemv_pipeline_for(ffn_gate_qw).nil? &&
-            !gemv_pipeline_for(ffn_up_qw).nil? &&
-            !gemv_pipeline_for(ffn_down_qw).nil?
+                                                                ffn_down_qw : QuantWeight,
+                                                                n_tokens : Int32) : Bool
+          return false unless n_tokens > 0
+
+          ML::Metal::Device.init!
+          return false unless gemv_pipeline_for(q_qw)
+          return false unless matmul_pipeline_supported?(k_qw, n_tokens)
+          return false unless matmul_pipeline_supported?(v_qw, n_tokens)
+          return false unless gemv_route_pipeline_supported?(out_qw, 1, nil)
+          return false unless gemv_route_pipeline_supported?(ffn_gate_qw, 1, nil)
+          return false unless gemv_route_pipeline_supported?(ffn_up_qw, 1, nil)
+          return false unless gemv_route_pipeline_supported?(ffn_down_qw, 1, nil)
+
+          rmsnorm_rows_pipeline
+          split_qgate_pipeline
+          rmsnorm_heads_pipeline
+          rmsnorm_heads_rows_pipeline
+          rope_partial_pipeline
+          rope_partial_rows_pipeline
+          kv_write_rows_pipeline
+          attn_pipeline
+          add_rmsnorm_pipeline
+          ffn_swiglu_pipeline
+          add_vec_pipeline
+          true
+        rescue
+          false
         end
 
         def self.full_attn_layer_chunk_project_last(inp : Array(Float32),
@@ -6994,7 +7062,7 @@ module ML
                                                     scale : Float32,
                                                     input_buf : ML::MetalBuffer? = nil) : Array(Float32)?
           return nil unless full_attn_layer_chunk_project_last_supported?(
-            q_qw, k_qw, v_qw, out_qw, ffn_gate_qw, ffn_up_qw, ffn_down_qw,
+            q_qw, k_qw, v_qw, out_qw, ffn_gate_qw, ffn_up_qw, ffn_down_qw, n_tokens,
           )
           q_pipe = gemv_pipeline_for(q_qw)
           k_pipe = gemv_pipeline_for(k_qw)

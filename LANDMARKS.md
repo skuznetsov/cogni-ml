@@ -26674,8 +26674,8 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   decay_trigger: Metal buffer storage mode, host/GPU coherence behavior, hidden representation, final-layer route, model/device/compiler/runtime, or benchmark method changes
   trust: {F:0.98,G:0.06,R:0.95}
 
-- claim: "The terminal-row optimization now rejects stale states and unavailable concrete Metal pipelines before prompt-state mutation."
-  source: preflight requires every layer position to be zero and calls the same quantized GEMV pipeline capability query used by the terminal helper. The focused preflight and real-model full-logit continuation specs pass, preserving the explicit legacy fallback before mutation.
+- claim: "The terminal-row optimization now rejects stale states and unavailable route-selected Metal pipelines before prompt-state mutation."
+  source: preflight requires every layer position to be zero and eagerly compiles the exact batch GEMM/GEMV route plus every norm, split, RoPE, KV-write, attention, activation, and residual pipeline used by the terminal helper. The capability query catches lazy pipeline compilation failures and returns false, so the legacy route is selected before mutation. Runtime resource or command execution failure remains fatal under the engine's ordinary non-transactional state contract. The focused preflight and real-model full-logit continuation specs pass.
   verified_at: 2026-09-03
   decay_trigger: state-position semantics, terminal helper pipeline selection, quantized weight support, or fallback ordering changes
   trust: {F:0.98,G:0.20,R:0.96}

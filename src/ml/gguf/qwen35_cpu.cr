@@ -2181,6 +2181,7 @@ module ML::GGUF
                               last_layer.attn_q_qw, last_layer.attn_k_qw, last_layer.attn_v_qw,
                               last_layer.attn_output_qw, last_layer.ffn_gate_qw,
                               last_layer.ffn_up_qw, last_layer.ffn_down_qw,
+                              rows,
                             )
 
         required_kv_values = state.max_seq.to_i64 * kv_dim.to_i64
