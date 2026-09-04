@@ -63,16 +63,21 @@ class NativePrefillRunner
       max_seq: @tokens.size.to_i32 + 4,
       kv_cache_f16: kv_cache_f16,
     )
-    with_flash_d256 do
-      ML::GGUF::Qwen35CPU.prepare_state_metal!(
-        @state,
-        hp,
-        clear: true,
-        admit_adaptive_resident_kv: false,
-      )
-    end
     @terminal_last_used = false
     @closed = false
+    begin
+      with_flash_d256 do
+        ML::GGUF::Qwen35CPU.prepare_state_metal!(
+          @state,
+          hp,
+          clear: true,
+          admit_adaptive_resident_kv: false,
+        )
+      end
+    rescue ex
+      close
+      raise ex
+    end
   end
 
   def reset! : Nil
@@ -131,7 +136,12 @@ class LlamaPrefillRunner
       cache_type_k: cache_type,
       cache_type_v: cache_type,
     )
-    raise "same-token prefill requires one effective llama logical batch" if @tokens.size > @context.n_batch
+    begin
+      raise "same-token prefill requires one effective llama logical batch" if @tokens.size > @context.n_batch
+    rescue ex
+      @context.free
+      raise ex
+    end
   end
 
   def reset! : Nil
@@ -156,6 +166,18 @@ class LlamaPrefillRunner
   def close : Nil
     @context.free
   end
+end
+
+def run_cleanups(cleanups : Enumerable(Proc(Nil))) : Nil
+  first_error : Exception? = nil
+  cleanups.each do |cleanup|
+    begin
+      cleanup.call
+    rescue ex
+      first_error ||= ex
+    end
+  end
+  raise first_error.not_nil! if first_error
 end
 
 def timed(&block : -> Array(Float32)) : TimedLogits
@@ -396,13 +418,20 @@ raise "--native-kv-ab requires --native-kv=f16" if native_cache_ab && !native_ca
 raise "--native-flash requires --native-kv=f16" if native_flash && !native_cache_f16
 raise "--native-flash-ab requires --native-kv=f16" if native_flash_ab && !native_cache_f16
 
-native_weights = ML::GGUF::Qwen35Weights.from_gguf(model_path)
-ML::LLM.init
-llama_model = ML::LLM::Model.new(model_path, n_gpu_layers: n_gpu_layers)
+native_weights : ML::GGUF::Qwen35Weights? = nil
+llama_model : ML::LLM::Model? = nil
+llama_backend_initialized = false
 
 begin
-  native_vocab = native_weights.output.out_dim
-  llama_vocab = llama_model.vocab_size
+  native_weights = ML::GGUF::Qwen35Weights.from_gguf(model_path)
+  ML::LLM.init
+  llama_backend_initialized = true
+  llama_model = ML::LLM::Model.new(model_path, n_gpu_layers: n_gpu_layers)
+  weights = native_weights.not_nil!
+  model = llama_model.not_nil!
+
+  native_vocab = weights.output.out_dim
+  llama_vocab = model.vocab_size
   raise "model vocabulary mismatch: native=#{native_vocab} llama=#{llama_vocab}" unless native_vocab == llama_vocab
 
   puts "Qwen same-token prefill external workload vs llama.cpp"
@@ -418,49 +447,57 @@ begin
     canonical = BenchmarkContract.synthetic_prefill_tokens(prompt_size.to_i32, native_vocab)
     native_tokens = canonical.dup
     llama_tokens = canonical.dup
-    native_runner = NativePrefillRunner.new(native_weights, native_tokens, native_cache_f16, native_flash)
-    native_f32_runner = NativePrefillRunner.new(native_weights, native_tokens, false) if native_cache_ab
-    native_flash_runner = NativePrefillRunner.new(native_weights, native_tokens, true, true) if native_flash_ab
-    native_flash_baseline_runner = NativePrefillRunner.new(native_weights, native_tokens, true, false) if native_flash_ab
-    llama_runner = LlamaPrefillRunner.new(
-      llama_model,
-      llama_tokens,
-      n_batch,
-      n_ubatch,
-      n_threads,
-      flash_attn,
-      llama_cache_type,
-    )
+    native_runner : NativePrefillRunner? = nil
+    native_f32_runner : NativePrefillRunner? = nil
+    native_flash_runner : NativePrefillRunner? = nil
+    native_flash_baseline_runner : NativePrefillRunner? = nil
+    llama_runner : LlamaPrefillRunner? = nil
 
     begin
+      native_runner = NativePrefillRunner.new(weights, native_tokens, native_cache_f16, native_flash)
+      native_f32_runner = NativePrefillRunner.new(weights, native_tokens, false) if native_cache_ab
+      native_flash_runner = NativePrefillRunner.new(weights, native_tokens, true, true) if native_flash_ab
+      native_flash_baseline_runner = NativePrefillRunner.new(weights, native_tokens, true, false) if native_flash_ab
+      llama_runner = LlamaPrefillRunner.new(
+        model,
+        llama_tokens,
+        n_batch,
+        n_ubatch,
+        n_threads,
+        flash_attn,
+        llama_cache_type,
+      )
+      native = native_runner.not_nil!
+      llama = llama_runner.not_nil!
+
       warmup.times do |index|
         if index.even?
-          native_runner.reset!
-          native_runner.run
-          llama_runner.reset!
-          llama_runner.run
+          native.reset!
+          native.run
+          llama.reset!
+          llama.run
         else
-          llama_runner.reset!
-          llama_runner.run
-          native_runner.reset!
-          native_runner.run
+          llama.reset!
+          llama.run
+          native.reset!
+          native.run
         end
       end
 
-      native_declaration = declaration(native_tokens, native_runner.output_width, warmup)
-      llama_declaration = declaration(llama_tokens, llama_runner.output_width, warmup)
+      native_declaration = declaration(native_tokens, native.output_width, warmup)
+      llama_declaration = declaration(llama_tokens, llama.output_width, warmup)
       comparison = BenchmarkContract.same_token_prefill_comparison(native_declaration, llama_declaration)
       raise "same-token workload declaration rejected: #{comparison.reason}" unless comparison.level.same_token?
 
       native_stats, llama_stats, result_quality = measure_abba(
-        native_runner,
-        llama_runner,
+        native,
+        llama,
         prompt_size.to_i32,
         reps,
       )
       gap = ((native_stats.mean_ts / llama_stats.mean_ts) - 1.0) * 100.0
       hash = BenchmarkContract.token_stream_sha256(native_tokens)
-      hp = native_weights.hparams
+      hp = weights.hparams
       native_boundary_profile = ENV["QWEN35_PREFILL_BOUNDARY_PROFILE"]? == "1"
       native_graph_depth = ML::GGUF::Qwen35CPU.prefill_graph_max_inflight(
         false, false, native_boundary_profile,
@@ -470,7 +507,7 @@ begin
         hp.n_head_kv, hp.head_dim, native_cache_f16, false,
         native_flash ? "1" : "0",
       )
-      native_cooldown = unless native_runner.terminal_last_used
+      native_cooldown = unless native.terminal_last_used
         "n/a"
       else
         cooldown_ms = if ML::GGUF::Qwen35CPU.prefill_append_group_limit(prompt_size.to_i32) == 0
@@ -498,13 +535,13 @@ begin
                       end
         cooldown_ms.to_s
       end
-      puts "#{prompt_size.to_s.rjust(4)}  #{hash[0, 16]}  #{native_stats.mean_ts.round(2).to_s.rjust(12)}  #{llama_stats.mean_ts.round(2).to_s.rjust(11)}  #{gap.round(2).to_s.rjust(6)}%  #{native_cooldown.rjust(18)}  #{result_quality.cosine.round(8)}  #{result_quality.native_top1}/#{result_quality.native_top2}  #{result_quality.llama_top1}/#{result_quality.llama_top2}  #{native_runner.terminal_last_used}  #{comparison.scope}"
+      puts "#{prompt_size.to_s.rjust(4)}  #{hash[0, 16]}  #{native_stats.mean_ts.round(2).to_s.rjust(12)}  #{llama_stats.mean_ts.round(2).to_s.rjust(11)}  #{gap.round(2).to_s.rjust(6)}%  #{native_cooldown.rjust(18)}  #{result_quality.cosine.round(8)}  #{result_quality.native_top1}/#{result_quality.native_top2}  #{result_quality.llama_top1}/#{result_quality.llama_top2}  #{native.terminal_last_used}  #{comparison.scope}"
 
       if f32_runner = native_f32_runner
         f32_runner.reset!
         f32_runner.run
         f16_stats, f32_stats, cache_quality = measure_native_route_abba(
-          native_runner,
+          native,
           f32_runner,
           prompt_size.to_i32,
           reps,
@@ -531,15 +568,19 @@ begin
         puts "native-flash-ab: #{prompt_size} #{flash_stats.mean_ts.round(2)} #{baseline_stats.mean_ts.round(2)} #{gain.round(2)}% #{flash_quality.cosine.round(8)} #{flash_quality.native_top1}/#{flash_quality.native_top2} #{flash_quality.llama_top1}/#{flash_quality.llama_top2}"
       end
     ensure
-      llama_runner.close
-      native_runner.close
-      native_f32_runner.try(&.close)
-      native_flash_runner.try(&.close)
-      native_flash_baseline_runner.try(&.close)
+      run_cleanups([
+        -> { llama_runner.try(&.close) },
+        -> { native_runner.try(&.close) },
+        -> { native_f32_runner.try(&.close) },
+        -> { native_flash_runner.try(&.close) },
+        -> { native_flash_baseline_runner.try(&.close) },
+      ])
     end
   end
 ensure
-  llama_model.free
-  native_weights.close
-  ML::LLM.cleanup
+  run_cleanups([
+    -> { ML::LLM.cleanup if llama_backend_initialized },
+    -> { llama_model.try(&.free) },
+    -> { native_weights.try(&.close) },
+  ])
 end

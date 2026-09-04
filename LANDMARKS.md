@@ -26897,7 +26897,7 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
   trust: {F:0.98,G:0.08,R:0.94}
 
 - claim: "The same-model benchmark must release each native Metal state before constructing the next prompt-size runners."
-  source: the first combined 27B run retained multiple capacity-sized native states while also holding llama.cpp state and was stopped by the existing 35% free-memory guard after pp256. `NativePrefillRunner#close` now idempotently calls `release_state_metal!`; each prompt-size ensure closes every native runner, and the outer ensure closes the native weights. Native-only pp256/512 and pp1024/2048 reruns then exited zero under the unchanged guard.
+  source: the first combined 27B run retained multiple capacity-sized native states while also holding llama.cpp state and was stopped by the existing 35% free-memory guard after pp256. `NativePrefillRunner#close` now idempotently calls `release_state_metal!`; each prompt-size ensure covers construction as well as execution and attempts to close every runner that was successfully acquired even when an earlier close raises. Native and llama runner constructors release their owned state/context if post-allocation setup fails, while the outer ensure attempts cleanup of successfully returned weights/model and of the backend after `ML::LLM.init` returns. Native-only pp256/512 and pp1024/2048 reruns then exited zero under the unchanged guard.
   verified_at: 2026-09-04
   decay_trigger: benchmark runner ownership, native state allocation/release, model lifecycle, or guarded-run memory policy changes
   trust: {F:0.99,G:0.30,R:0.95}

@@ -7,15 +7,29 @@ describe ML::QwenVsLlamaBenchmarkContract do
     source.includes?("@context.kv_clear(data: false)").should be_true
     source.includes?("LlamaFFI.llama_synchronize(@context.handle)").should be_false
     source.includes?("native_cooldown_ms").should be_true
-    source.includes?("unless native_runner.terminal_last_used").should be_true
+    source.includes?("unless native.terminal_last_used").should be_true
     source.includes?(%q{"n/a"}).should be_true
   end
 
   it "releases native Metal state between prompt sizes" do
     source = File.read(Path[__DIR__] / "../bin/benchmark_qwen_prefill_vs_llama_same_token.cr")
     source.includes?("Qwen35CPU.release_state_metal!(@state)").should be_true
-    source.includes?("native_runner.close").should be_true
-    source.includes?("native_weights.close").should be_true
+    source.includes?("native_runner : NativePrefillRunner? = nil").should be_true
+    source.index("native_runner = NativePrefillRunner.new").not_nil!.should be < source.index("warmup.times").not_nil!
+    source.includes?("-> { native_runner.try(&.close) }").should be_true
+    source.includes?("-> { native_weights.try(&.close) }").should be_true
+  end
+
+  it "covers partial benchmark construction with cleanup boundaries" do
+    source = File.read(Path[__DIR__] / "../bin/benchmark_qwen_prefill_vs_llama_same_token.cr")
+    source.includes?("rescue ex\n      close\n      raise ex").should be_true
+    source.includes?("rescue ex\n      @context.free\n      raise ex").should be_true
+    source.includes?("native_weights : ML::GGUF::Qwen35Weights? = nil").should be_true
+    source.includes?("llama_model : ML::LLM::Model? = nil").should be_true
+    source.includes?("ML::LLM.cleanup if llama_backend_initialized").should be_true
+    source.includes?("def run_cleanups(cleanups : Enumerable(Proc(Nil))) : Nil").should be_true
+    source.includes?("first_error ||= ex").should be_true
+    source.index("-> { ML::LLM.cleanup if llama_backend_initialized }").not_nil!.should be < source.index("-> { llama_model.try(&.free) }").not_nil!
   end
 
   it "defaults to full logits without claiming strict apples-to-apples parity" do
