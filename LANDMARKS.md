@@ -26789,3 +26789,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is benchmark-contract alignment.
 
 **decision:** Retain the corrected reset/synchronization contract. Treat the four current rows as a bounded external target, not a stable causal decomposition. Continue with phase-local recurrent FFN/projection falsifiers and require end-to-end ABBA plus semantic parity before promotion.
+
+#### [LM-QWEN35-Q4-PAIR-CONCURRENCY-1026] Concurrent gate/up dispatch is real but too small and collapses with batch size
+**context:** ml / Qwen3.5-9B / Q4_K FFN prefill / same-process Metal ABBA / Apple M2 Max
+**state:** candidate falsified and removed; no production route or feature flag retained
+
+- claim: "Replacing the established fused Q4 gate/up plus SwiGLU route with two independent concurrent Q4 GEMMs does not produce a material prefill win."
+  source: a temporary exact opt-in routed only Qwen FFN gate/up pairs through a concurrent Metal encoder, inserted the required post-conversion barrier, and deliberately bypassed the fused up-plus-SwiGLU candidates so the experiment exercised different work. A guarded same-process ABBA used Qwen3.5-9B, prepared state, two warmups, and ten measured pairs. At pp256 the candidate improved mean body time from `450.18 ms` to `444.63 ms` (`+1.25%`, candidate won `10/10`); at pp512 it improved `867.25 ms` to `865.02 ms` (`+0.26%`, candidate won `9/10`). Both are below the `3%` admission gate, and the effect shrank with batch size.
+  verified_at: 2026-09-04
+  decay_trigger: FFN fusion/dataflow, Q4 kernel, concurrent encoder semantics, model shape, Metal compiler/GPU, or benchmark contract changes
+  trust: {F:0.98,G:0.06,R:0.93}
+
+**Adversary:** The pp256 ordering is consistent, so concurrency is not a no-op. But its small gain disappears as the workload becomes more bandwidth-bound, and it loses the existing producer-consumer fusion. A semantic run was intentionally skipped after the performance admission gate failed; therefore the result rejects promotion, not mathematical correctness of the temporary path.
+
+**Value proxy:** Independent dispatches and a concurrent encoder are not evidence of useful GPU overlap. The complete competing FFN corridor and its end-to-end wall time are the relevant metrics.
+
+**LTP/WBA:** Not claimed. This was ordinary parallel command encoding.
+
+**decision:** Keep the fused Q4 gate/up plus SwiGLU path. Do not retry pair concurrency unless a new dataflow also removes activation or weight traffic. Use llama.cpp graph concurrency only as a bounded scheduling clue: disabling it reduced llama pp256/512 throughput by roughly `2.65%/1.38%`, so it cannot explain the full current cross-engine gap.
