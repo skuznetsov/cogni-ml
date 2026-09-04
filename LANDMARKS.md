@@ -26867,3 +26867,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was an ordinary dataflow ablation with the staged kernel as rollback.
 
 **decision:** Keep the established F32-to-H16 staging plus B64 Q4_K kernels. Do not merge F32 tile conversion or widen it to other quantized kernels without a materially different load schedule. Continue with command scheduling at pp256/512 or with transformations that remove an entire intermediate/dispatch rather than moving the same conversion into the GEMM.
+
+#### [LM-QWEN35-REC-PREP-SINGLE-ENCODER-FALSIFIED-1030] Recurrent prep encoder coalescing is timing-neutral
+**context:** ml / Qwen3.5-9B / recurrent prefill / Metal command encoding / Apple M2 Max
+**state:** candidate falsified and removed; four historical serial encoder boundaries retained
+
+- claim: "Encoding recurrent conv-shift, Q normalization, K normalization, and alpha/beta preparation through one serial Metal compute encoder preserves the full prefill result but does not materially improve wall time."
+  source: a temporary default-off route preserved kernel order, buffers, arithmetic, command-buffer ownership, and all downstream boundaries while removing three encoder transitions per recurrent layer. A guarded same-process ABBA used the real Qwen3.5-9B Q4_K_M model, F16 KV, the admitted Flash route, one warmup, and eight pairs at each prompt size. Single/split throughput was `564.58/564.91 tok/s` at pp256 (`-0.06%`), `586.97/586.65` at pp512 (`+0.05%`), `605.25/604.75` at pp1024 (`+0.08%`), and `572.49/571.73` at pp2048 (`+0.13%`). Every pair retained exact full-logit cosine `1.0` and identical ordered top-2. The run exited zero under the 35% free-memory floor and 24 GiB process-tree cap.
+  verified_at: 2026-09-04
+  decay_trigger: Metal encoder creation cost, recurrent prep topology, command-buffer structure, model/device/compiler, or benchmark timing changes
+  trust: {F:0.99,G:0.06,R:0.95}
+
+**Adversary:** Removing 72 encoder transitions from the 24 recurrent layers is a large mechanism count, but all four end-to-end effects stayed within `0.13%`. The result does not prove encoder creation is universally free; it proves this serial-boundary-only transformation is not the missing pp256/512 acceleration on the measured corridor.
+
+**Value proxy:** Encoder count is not the objective. Same-process full-prefill wall with exact output parity is the product boundary, and it stayed flat.
+
+**LTP/WBA:** Not claimed. This was ordinary serial command encoding.
+
+**decision:** Remove the policy, benchmark switch, and coalesced route. Keep the clearer split encoders. Do not repeat boundary-only coalescing for the smaller full-attention preparation slice unless profiling first isolates encoder setup as material. Prefer operation fusion, reduced intermediate traffic, or a reusable precompiled graph that removes substantive host or GPU work.
