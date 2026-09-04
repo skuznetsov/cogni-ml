@@ -83,6 +83,28 @@ private def qwen35_logits_cosine(a : Array(Float32), b : Array(Float32)) : Float
 end
 
 describe ML::GGUF::Qwen35Metal, "route policies" do
+  it "admits shared H16 staging only for eligible sibling projections" do
+    metal = ML::GGUF::Qwen35Metal
+    q4 = ML::GGUF::QuantWeight.new(Bytes.empty, ML::GGUF::TensorType::Q4_K, 6144, 5120)
+    q6 = ML::GGUF::QuantWeight.new(Bytes.empty, ML::GGUF::TensorType::Q6_K, 10240, 5120)
+    mismatched = ML::GGUF::QuantWeight.new(Bytes.empty, ML::GGUF::TensorType::Q4_K, 6144, 4096)
+    narrow = ML::GGUF::QuantWeight.new(Bytes.empty, ML::GGUF::TensorType::Q4_K, 48, 5120)
+    f32 = ML::GGUF::QuantWeight.new(Bytes.empty, ML::GGUF::TensorType::F32, 6144, 5120)
+
+    metal.prefill_shared_projection_h16_policy?([q4, q6], 256, false, "Apple M2 Max", "1").should be_true
+    metal.prefill_shared_projection_h16_policy?([q4, q6], 256, false, "Apple M2 Max", nil).should be_true
+    metal.prefill_shared_projection_h16_policy?([q4, q6], 256, false, "Apple M3 Max", nil).should be_false
+    metal.prefill_shared_projection_h16_policy?([q4, q6], 256, false, "Apple M2 Max", "0").should be_false
+    metal.prefill_shared_projection_h16_policy?([q4, q6], 8, false, "Apple M2 Max", "1").should be_false
+    metal.prefill_shared_projection_h16_policy?([q4, q6], 256, true, "Apple M2 Max", "1").should be_false
+    metal.prefill_shared_projection_h16_policy?([q4, mismatched], 256, false, "Apple M2 Max", "1").should be_false
+    metal.prefill_shared_projection_h16_policy?([q4, narrow], 256, false, "Apple M2 Max", "1").should be_false
+    metal.prefill_shared_projection_h16_policy?([q4, f32], 256, false, "Apple M2 Max", "1").should be_false
+    expect_raises(ArgumentError, /must be 0 or 1/) do
+      metal.prefill_shared_projection_h16_policy?([q4, q6], 256, false, "Apple M2 Max", "yes")
+    end
+  end
+
   it "pins the ordinary KV element type across state copies" do
     f16 = ML::GGUF::Qwen35CPU::LayerState.new(kv_cache_f16: true)
     f16.fork.kv_cache_f16.should be_true
@@ -443,6 +465,44 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     ML::GGUF::Qwen35CPU.release_state_metal!(expected_state) if expected_state
     ML::GGUF::Qwen35CPU.release_state_metal!(actual_state) if actual_state
     weights.try(&.close)
+  end
+
+  it "keeps Qwen3.8 logits stable when sibling projections share H16 staging" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+    pending!("Qwen3.8 27B model not present") unless File.exists?(QWEN_38_27B_FWD)
+
+    weights = ML::GGUF::Qwen35Weights.from_gguf(QWEN_38_27B_FWD)
+    hp = weights.hparams
+    prompt = Array.new(256) { |index| ((index * 7919 + 17) % weights.output.out_dim).to_i32 }
+    baseline = nil.as(ML::GGUF::Qwen35CPU::State?)
+    candidate = nil.as(ML::GGUF::Qwen35CPU::State?)
+    old_shared = ENV["QWEN35_PREFILL_SHARED_PROJECTION_H16"]?
+    begin
+      ENV["QWEN35_PREFILL_SHARED_PROJECTION_H16"] = "0"
+      baseline = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 272, kv_cache_f16: true)
+      baseline_logits = ML::GGUF::Qwen35CPU.prefill_tokens_logits(weights, prompt, 0, baseline)
+
+      ENV["QWEN35_PREFILL_SHARED_PROJECTION_H16"] = "1"
+      candidate = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 272, kv_cache_f16: true)
+      candidate_logits = ML::GGUF::Qwen35CPU.prefill_tokens_logits(weights, prompt, 0, candidate)
+
+      qwen35_logits_top2(candidate_logits).should eq(qwen35_logits_top2(baseline_logits))
+      qwen35_logits_cosine(candidate_logits, baseline_logits).should be >= 0.999999
+
+      baseline_next = ML::GGUF::Qwen35CPU.forward(weights, 42_i32, 256, baseline)
+      candidate_next = ML::GGUF::Qwen35CPU.forward(weights, 42_i32, 256, candidate)
+      qwen35_logits_top2(candidate_next).should eq(qwen35_logits_top2(baseline_next))
+      qwen35_logits_cosine(candidate_next, baseline_next).should be >= 0.999999
+    ensure
+      if old_shared
+        ENV["QWEN35_PREFILL_SHARED_PROJECTION_H16"] = old_shared
+      else
+        ENV.delete("QWEN35_PREFILL_SHARED_PROJECTION_H16")
+      end
+      ML::GGUF::Qwen35CPU.release_state_metal!(baseline) if baseline
+      ML::GGUF::Qwen35CPU.release_state_metal!(candidate) if candidate
+      weights.close
+    end
   end
 
   it "projects top-1 directly from a selected resident hidden row" do

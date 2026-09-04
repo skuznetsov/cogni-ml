@@ -27005,3 +27005,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary operation fusion.
 
 **decision:** Remove the fused kernel, policy, rollback, and tests. Do not spend pp512/1024 model runs on a candidate already rejected at both boundary sizes. The next candidate must attack a dominant matmul/conversion or a real resident handoff rather than the sub-percent Q preparation tail.
+
+#### [LM-QWEN38-SHARED-PROJECTION-H16-1036] Sibling projections reuse one H16 activation staging buffer
+**context:** ml / Qwen3.8-27B Q4_K_M / full and recurrent prefill projections / Apple M2 Max
+**state:** exact shared-staging route enabled by default on the measured device with an immediate rollback
+
+- claim: "Eligible sibling Q/K/V and recurrent QKV/gate projections can consume one shared F32-to-H16 conversion without changing the established GEMM arithmetic."
+  source: the new route converts the common F32 activation once, then calls the same H16-input/F32-output Q4_K/Q5_K/Q6_K GEMM encoders that the previous per-projection routes used. It requires at least two same-input-width eligible projections, batch at least 256, and no checkpoint. Narrow recurrent projections and unsupported tensor types retain the old path. At pp2048 the profile reduced modelled logical conversion traffic from 16,896 MiB to 12,216 MiB, eliminating 4,680 MiB across 48 recurrent and 15 full-attention projection groups. A real Qwen3.8-27B regression compared complete terminal logits and the next decode step: ordered top-2 matched and full-logit cosine was at least 0.999999.
+  verified_at: 2026-09-04
+  decay_trigger: projection topology, H16-input GEMM arithmetic, checkpoint routing, model quantization, Metal command or scratch lifetime, compiler/runtime, or device changes
+  trust: {F:0.99,G:0.04,R:0.95}
+
+- claim: "Shared staging is consistently faster across the measured pp256-2048 matrix on Apple M2 Max."
+  source: guarded same-binary paired runs measured median throughput improvements of approximately `+0.9/+1.1/+1.3/+2.3%` at pp256/512/1024/2048. The candidate won `8/8`, `6/6`, `6/6`, and `3/4` pairs respectively, while preserving top-1 and its logit within `1e-4` in every pair. After making the exact-device route automatic, a rebuilt pp1024 binary compared default-on against `QWEN35_PREFILL_SHARED_PROJECTION_H16=0`; default won `6/6` pairs and measured `159.47` versus `153.07 tok/s`, with the same output check. The larger final delta is treated as host-noise-sensitive confirmation, not as the promoted speed constant.
+  verified_at: 2026-09-04
+  decay_trigger: benchmark binary/source, host/GPU load, model/device, prompt geometry, state preparation, or terminal-output timing contract changes
+  trust: {F:0.98,G:0.03,R:0.91}
+
+**Adversary:** Logical conversion bytes are a mechanism counter, not a physical-memory or wall-time measurement. The host was not quiet, the pp2048 candidate won only three of four pairs, and all performance evidence covers one model quantization and one Apple GPU. The exact output regression exercises pp256 with F16 KV and one continuation token; it does not certify checkpoints, another quantization, another device, or every prompt distribution. Automatic admission is therefore restricted to exact `Apple M2 Max`; `QWEN35_PREFILL_SHARED_PROJECTION_H16=0` restores the previous route, while `=1` remains an explicit cross-device experiment.
+
+**Value proxy:** Fewer conversions matter only because the complete prompt-plus-terminal-head boundary improved with preserved output decisions. The admitted value is the bounded wall-time reduction, not the number of eliminated dispatches or logical bytes alone.
+
+**LTP/WBA:** Not claimed. This is ordinary producer-consumer reuse in one ordered Metal command stream.
+
+**decision:** Enable shared sibling-projection H16 staging by default only on Apple M2 Max for batch sizes at least 256 and non-checkpoint prefill. Preserve the exact rollback and require a fresh paired matrix before widening the device or model scope. Continue the comparison with an optimization that attacks attention or quantized GEMM work rather than another sub-percent preparation fusion.

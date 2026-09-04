@@ -135,6 +135,40 @@ module ML
           (n_head == 24 && n_tokens == 2048)
       end
 
+      # Convert one normalized activation row set to H16 once and reuse it
+      # across sibling Q/K/V or recurrent projections. Automatic admission is
+      # limited to the measured M2 Max route; 0 is rollback and 1 is an
+      # explicit cross-device experiment.
+      # The established per-matmul routes already round these inputs to H16;
+      # this changes only where that identical conversion is materialized.
+      def self.prefill_shared_projection_h16_policy?(qws : Array(QuantWeight),
+                                                     batch : Int32,
+                                                     checkpoint_requested : Bool,
+                                                     device_name : String,
+                                                     override : String?) : Bool
+        enabled = case override
+                  when "1" then true
+                  when "0" then false
+                  when nil then device_name == "Apple M2 Max"
+                  else
+                    raise ArgumentError.new("QWEN35_PREFILL_SHARED_PROJECTION_H16 must be 0 or 1")
+                  end
+        return false unless enabled && !checkpoint_requested && batch >= 256 && qws.size >= 2
+
+        in_dim = qws[0].in_dim
+        qws.all? do |qw|
+          next false unless qw.in_dim == in_dim
+          case qw.type
+          when TensorType::Q4_K
+            qw.out_dim > 64
+          when TensorType::Q5_K, TensorType::Q6_K
+            true
+          else
+            false
+          end
+        end
+      end
+
       {% if flag?(:cpu_only) %}
         def self.available? : Bool
           false
@@ -2913,6 +2947,40 @@ module ML
           force_small_q4_gemv = small_q4_gemv_enabled? && qw.type.q4_k? && qw.out_dim <= 64
           (q4_h16_gemm_enabled? && qw.type.q4_k? && !force_small_q4_gemv) ||
             (q56_batch_gemm_enabled? && (qw.type.q5_k? || qw.type.q6_k?))
+        end
+
+        private def self.prefill_shared_projection_h16_candidate?(qws : Array(QuantWeight),
+                                                                  batch : Int32,
+                                                                  checkpoint_requested : Bool) : Bool
+          prefill_shared_projection_h16_policy?(
+            qws, batch, checkpoint_requested, ML::Metal::Device.instance.name,
+            ENV["QWEN35_PREFILL_SHARED_PROJECTION_H16"]?
+          ) && qws.all? { |qw| h16_batch_gemm_candidate?(qw, batch) }
+        end
+
+        private def self.encode_shared_projection_h16(enc : ML::Metal::ComputeEncoder,
+                                                       qws : Array(QuantWeight),
+                                                       x_buf : ML::MetalBuffer,
+                                                       out_bufs : Array(ML::MetalBuffer),
+                                                       batch : Int32,
+                                                       scratch_tag : String) : Nil
+          raise ArgumentError.new("shared projection arity mismatch") unless qws.size == out_bufs.size && qws.size >= 2
+          in_dim = qws[0].in_dim
+          x16_buf = Scratch.get(scratch_tag, batch.to_i64 * in_dim * 2_i64)
+          Profile.bump_conversion("f32_to_f16 shared_projection_input #{in_dim} b#{batch}", (batch * in_dim).to_i64 * 6_i64)
+          enc.set_pipeline(f32_to_f16_pipeline)
+          enc.set_buffer(x_buf, 0)
+          enc.set_buffer(x16_buf, 1, ML::Metal::BufferAccess::Write)
+          enc.set_value((batch * in_dim).to_u32, 2)
+          enc.dispatch_1d(batch * in_dim, 256)
+
+          qws.each_with_index do |qw, i|
+            w_buf, w_offset = weight_slot(qw)
+            unless encode_matmul_from_h16(enc, qw, x16_buf, out_bufs[i], w_buf, w_offset,
+                                         qw.in_dim, qw.out_dim, batch)
+              raise "unsupported shared H16 projection #{qw.type.name} #{qw.in_dim}x#{qw.out_dim} b#{batch}"
+            end
+          end
         end
 
         private def self.encode_matmul_from_h16(enc : ML::Metal::ComputeEncoder,
@@ -6405,7 +6473,11 @@ module ML
               qkv_h16 = !checkpoint_requested && q5_qkv_h16_conv_enabled? && q56_batch_gemm_enabled? && lw.attn_qkv_qw.type.q5_k? && n_tokens > GEMM_BATCH_THRESHOLD
               shared_h16 = rec_proj_shared_h16_enabled? && qkv_h16 && q4_h16_gemm_enabled? &&
                            lw.attn_gate_qw.type.q4_k? && n_tokens > GEMM_BATCH_THRESHOLD
-              if shared_h16 && norm_h16_proj
+              rec_projection_qws = [lw.attn_qkv_qw, lw.attn_gate_qw]
+              if !qkv_h16 && !norm_h16_proj && prefill_shared_projection_h16_candidate?(rec_projection_qws, n_tokens, checkpoint_requested)
+                encode_shared_projection_h16(proj_enc, rec_projection_qws, cur_buf,
+                  [qkv_buf, z_buf], n_tokens, "rec_chunk_projection_x16")
+              elsif shared_h16 && norm_h16_proj
                 Profile.bump_matmul_shape("q5_h16_gemm #{lw.attn_qkv_qw.type.name} #{lw.attn_qkv_qw.in_dim}x#{lw.attn_qkv_qw.out_dim} b#{n_tokens}", lw.attn_qkv_qw.raw.size.to_i64)
                 encode_q56k_gemm_h16_from_h16(proj_enc, mm5_pipeline, cur_h16_buf, qkv_h16_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, n_tokens)
                 Profile.bump_matmul_shape("q4_h16_gemm #{lw.attn_gate_qw.type.name} #{lw.attn_gate_qw.in_dim}x#{lw.attn_gate_qw.out_dim} b#{n_tokens}", lw.attn_gate_qw.raw.size.to_i64)
@@ -7926,9 +7998,15 @@ module ML
           norm_enc.end_encoding
 
           proj_enc = ML::Metal::ComputeEncoder.new(cmd)
-          encode_matmul(proj_enc, q_pipe.not_nil!, q_qw, cur_buf, qfull_buf, q_w_buf, q_w_off, q_qw.in_dim, q_qw.out_dim, n_tokens)
-          encode_matmul(proj_enc, k_pipe.not_nil!, k_qw, cur_buf, k_buf, k_w_buf, k_w_off, k_qw.in_dim, k_qw.out_dim, n_tokens)
-          encode_matmul(proj_enc, v_pipe.not_nil!, v_qw, cur_buf, v_buf, v_w_buf, v_w_off, v_qw.in_dim, v_qw.out_dim, n_tokens)
+          full_projection_qws = [q_qw, k_qw, v_qw]
+          if prefill_shared_projection_h16_candidate?(full_projection_qws, n_tokens, false)
+            encode_shared_projection_h16(proj_enc, full_projection_qws, cur_buf,
+              [qfull_buf, k_buf, v_buf], n_tokens, "full_chunk_projection_x16")
+          else
+            encode_matmul(proj_enc, q_pipe.not_nil!, q_qw, cur_buf, qfull_buf, q_w_buf, q_w_off, q_qw.in_dim, q_qw.out_dim, n_tokens)
+            encode_matmul(proj_enc, k_pipe.not_nil!, k_qw, cur_buf, k_buf, k_w_buf, k_w_off, k_qw.in_dim, k_qw.out_dim, n_tokens)
+            encode_matmul(proj_enc, v_pipe.not_nil!, v_qw, cur_buf, v_buf, v_w_buf, v_w_off, v_qw.in_dim, v_qw.out_dim, n_tokens)
+          end
           proj_enc.end_encoding
 
           split_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -8516,20 +8594,26 @@ module ML
 
           Profile.trace("prefill.full.qkv") do
             proj_enc = ML::Metal::ComputeEncoder.new(cmd)
-            if full_norm_h16_proj && h16_batch_gemm_candidate?(q_qw, n_tokens)
-              raise "unsupported h16 full q route" unless encode_matmul_from_h16(proj_enc, q_qw, full_cur_h16_buf, full_qfull_buf, q_w_buf, q_w_off, q_qw.in_dim, q_qw.out_dim, n_tokens)
+            full_projection_qws = [q_qw, k_qw, v_qw]
+            if !full_norm_h16_proj && prefill_shared_projection_h16_candidate?(full_projection_qws, n_tokens, checkpoint_requested)
+              encode_shared_projection_h16(proj_enc, full_projection_qws, full_cur_buf,
+                [full_qfull_buf, full_k_buf, full_v_buf], n_tokens, "frec_full_projection_x16")
             else
-              encode_matmul(proj_enc, q_pipe.not_nil!, q_qw, full_cur_buf, full_qfull_buf, q_w_buf, q_w_off, q_qw.in_dim, q_qw.out_dim, n_tokens)
-            end
-            if full_norm_h16_proj && h16_batch_gemm_candidate?(k_qw, n_tokens)
-              raise "unsupported h16 full k route" unless encode_matmul_from_h16(proj_enc, k_qw, full_cur_h16_buf, full_k_buf, k_w_buf, k_w_off, k_qw.in_dim, k_qw.out_dim, n_tokens)
-            else
-              encode_matmul(proj_enc, k_pipe.not_nil!, k_qw, full_cur_buf, full_k_buf, k_w_buf, k_w_off, k_qw.in_dim, k_qw.out_dim, n_tokens)
-            end
-            if full_norm_h16_proj && h16_batch_gemm_candidate?(v_qw, n_tokens)
-              raise "unsupported h16 full v route" unless encode_matmul_from_h16(proj_enc, v_qw, full_cur_h16_buf, full_v_buf, v_w_buf, v_w_off, v_qw.in_dim, v_qw.out_dim, n_tokens)
-            else
-              encode_matmul(proj_enc, v_pipe.not_nil!, v_qw, full_cur_buf, full_v_buf, v_w_buf, v_w_off, v_qw.in_dim, v_qw.out_dim, n_tokens)
+              if full_norm_h16_proj && h16_batch_gemm_candidate?(q_qw, n_tokens)
+                raise "unsupported h16 full q route" unless encode_matmul_from_h16(proj_enc, q_qw, full_cur_h16_buf, full_qfull_buf, q_w_buf, q_w_off, q_qw.in_dim, q_qw.out_dim, n_tokens)
+              else
+                encode_matmul(proj_enc, q_pipe.not_nil!, q_qw, full_cur_buf, full_qfull_buf, q_w_buf, q_w_off, q_qw.in_dim, q_qw.out_dim, n_tokens)
+              end
+              if full_norm_h16_proj && h16_batch_gemm_candidate?(k_qw, n_tokens)
+                raise "unsupported h16 full k route" unless encode_matmul_from_h16(proj_enc, k_qw, full_cur_h16_buf, full_k_buf, k_w_buf, k_w_off, k_qw.in_dim, k_qw.out_dim, n_tokens)
+              else
+                encode_matmul(proj_enc, k_pipe.not_nil!, k_qw, full_cur_buf, full_k_buf, k_w_buf, k_w_off, k_qw.in_dim, k_qw.out_dim, n_tokens)
+              end
+              if full_norm_h16_proj && h16_batch_gemm_candidate?(v_qw, n_tokens)
+                raise "unsupported h16 full v route" unless encode_matmul_from_h16(proj_enc, v_qw, full_cur_h16_buf, full_v_buf, v_w_buf, v_w_off, v_qw.in_dim, v_qw.out_dim, n_tokens)
+              else
+                encode_matmul(proj_enc, v_pipe.not_nil!, v_qw, full_cur_buf, full_v_buf, v_w_buf, v_w_off, v_qw.in_dim, v_qw.out_dim, n_tokens)
+              end
             end
             proj_enc.end_encoding
           end
@@ -8845,7 +8929,11 @@ module ML
               qkv_h16 = !checkpoint_requested && q5_qkv_h16_conv_enabled? && q56_batch_gemm_enabled? && lw.attn_qkv_qw.type.q5_k? && n_tokens > GEMM_BATCH_THRESHOLD
               shared_h16 = rec_proj_shared_h16_enabled? && qkv_h16 && q4_h16_gemm_enabled? &&
                            lw.attn_gate_qw.type.q4_k? && n_tokens > GEMM_BATCH_THRESHOLD
-              if shared_h16 && rec_norm_h16_proj
+              rec_projection_qws = [lw.attn_qkv_qw, lw.attn_gate_qw]
+              if !qkv_h16 && !rec_norm_h16_proj && prefill_shared_projection_h16_candidate?(rec_projection_qws, n_tokens, checkpoint_requested)
+                encode_shared_projection_h16(rec_proj_enc, rec_projection_qws, rec_cur_buf,
+                  [rec_qkv_buf, rec_z_buf], n_tokens, "frec_rec_projection_x16")
+              elsif shared_h16 && rec_norm_h16_proj
                 Profile.bump_matmul_shape("q5_h16_gemm #{lw.attn_qkv_qw.type.name} #{lw.attn_qkv_qw.in_dim}x#{lw.attn_qkv_qw.out_dim} b#{n_tokens}", lw.attn_qkv_qw.raw.size.to_i64)
                 encode_q56k_gemm_h16_from_h16(rec_proj_enc, mm5_pipeline, rec_cur_h16_buf, rec_qkv_h16_buf, qkv_w_buf, qkv_w_off, lw.attn_qkv_qw.in_dim, lw.attn_qkv_qw.out_dim, n_tokens)
                 Profile.bump_matmul_shape("q4_h16_gemm #{lw.attn_gate_qw.type.name} #{lw.attn_gate_qw.in_dim}x#{lw.attn_gate_qw.out_dim} b#{n_tokens}", lw.attn_gate_qw.raw.size.to_i64)
