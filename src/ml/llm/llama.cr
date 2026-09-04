@@ -263,6 +263,7 @@ module ML
       getter model : Model
       getter n_ctx : UInt32
       getter n_batch : UInt32
+      getter n_ubatch : UInt32
 
       @handle : LlamaFFI::LlamaContext
       @sampler : LlamaFFI::LlamaSampler?
@@ -297,6 +298,7 @@ module ML
 
         @n_ctx = LlamaFFI.llama_n_ctx(@handle)
         @n_batch = LlamaFFI.llama_n_batch(@handle)
+        @n_ubatch = LlamaFFI.llama_n_ubatch(@handle)
         ML::LLM.register_context(self)
       end
 

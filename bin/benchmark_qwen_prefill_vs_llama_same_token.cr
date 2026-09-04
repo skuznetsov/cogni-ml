@@ -1,3 +1,4 @@
+require "json"
 require "option_parser"
 require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_weights"
@@ -7,6 +8,8 @@ require "../src/ml/qwen_vs_llama_benchmark_contract"
 DEFAULT_MODEL        = (Path.home / ".cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf").to_s
 FLASH_D256_ENV       = "QWEN35_PREFILL_ATTN_FLASH_D256"
 GPU_Q4_EMBED_OFF_ENV = "QWEN35_PREFILL_GPU_Q4_EMBED_OFF"
+SPLIT_WORKER_SCHEMA  = "cogni-ml/qwen-prefill-split-worker-v2"
+SPLIT_PROCESS_ORDER  = ["native", "llama", "llama", "native"]
 
 alias BenchmarkContract = ML::QwenVsLlamaBenchmarkContract
 
@@ -24,6 +27,48 @@ record Quality,
   native_top2 : Int32,
   llama_top1 : Int32,
   llama_top2 : Int32
+
+class SplitPromptResult
+  include JSON::Serializable
+
+  getter prompt_size : Int32
+  getter token_sha256 : String
+  getter samples_ms : Array(Float64)
+  getter output_width : Int32
+  getter logits : Array(Float32)
+  getter terminal_last_used : Bool
+  getter native_cooldown_ms : String
+  getter effective_n_batch : Int32?
+  getter effective_n_ubatch : Int32?
+
+  def initialize(@prompt_size : Int32,
+                 @token_sha256 : String,
+                 @samples_ms : Array(Float64),
+                 @output_width : Int32,
+                 @logits : Array(Float32),
+                 @terminal_last_used : Bool,
+                 @native_cooldown_ms : String,
+                 @effective_n_batch : Int32?,
+                 @effective_n_ubatch : Int32?)
+  end
+end
+
+class SplitWorkerResult
+  include JSON::Serializable
+
+  getter schema : String
+  getter engine : String
+  getter prompts : Array(SplitPromptResult)
+
+  def initialize(@engine : String,
+                 @prompts : Array(SplitPromptResult),
+                 @schema : String = SPLIT_WORKER_SCHEMA)
+  end
+end
+
+record SingleEngineMeasurement,
+  samples_ms : Array(Float64),
+  logits : Array(Float32)
 
 def clear_float_buffer(buffer : ML::MetalBuffer?) : Nil
   return unless value = buffer
@@ -53,6 +98,8 @@ class NativePrefillRunner
   getter output_width : Int32
   getter terminal_last_used : Bool
 
+  @observed_terminal_last_used : Bool?
+
   def initialize(@weights : ML::GGUF::Qwen35Weights,
                  @tokens : Array(Int32),
                  kv_cache_f16 : Bool,
@@ -66,6 +113,7 @@ class NativePrefillRunner
       kv_cache_f16: kv_cache_f16,
     )
     @terminal_last_used = false
+    @observed_terminal_last_used = nil
     @closed = false
     begin
       with_native_route do
@@ -92,6 +140,11 @@ class NativePrefillRunner
       ML::GGUF::Qwen35CPU.prefill_tokens_logits(@weights, @tokens, 0, @state, route_used)
     end
     @terminal_last_used = route_used[0]
+    if observed = @observed_terminal_last_used
+      raise "native terminal route changed between repetitions" unless observed == @terminal_last_used
+    else
+      @observed_terminal_last_used = @terminal_last_used
+    end
     raise "native full-logit width mismatch" unless logits.size == @output_width
     logits
   end
@@ -129,6 +182,14 @@ end
 
 class LlamaPrefillRunner
   getter output_width : Int32
+
+  def effective_n_batch : Int32
+    @context.n_batch.to_i32
+  end
+
+  def effective_n_ubatch : Int32
+    @context.n_ubatch.to_i32
+  end
 
   def initialize(@model : ML::LLM::Model,
                  @tokens : Array(Int32),
@@ -264,6 +325,351 @@ def quality(native : Array(Float32), llama : Array(Float32)) : Quality
   )
 end
 
+def measure_single_engine(runner : NativePrefillRunner | LlamaPrefillRunner,
+                          warmup : Int32,
+                          reps : Int32) : SingleEngineMeasurement
+  warmup.times do
+    runner.reset!
+    runner.run
+  end
+
+  samples = Array(Float64).new(reps)
+  last_logits = nil.as(Array(Float32)?)
+  expected_top2 = nil.as({Int32, Int32}?)
+  reps.times do
+    runner.reset!
+    result = timed { runner.run }
+    samples << result.milliseconds
+    measured_top2 = top2(result.logits)
+    if expected = expected_top2
+      raise "split worker top-2 changed between repetitions" unless expected == measured_top2
+    else
+      expected_top2 = measured_top2
+    end
+    last_logits = result.logits
+  end
+
+  SingleEngineMeasurement.new(samples, last_logits.not_nil!)
+end
+
+def native_cooldown_label(native : NativePrefillRunner,
+                          weights : ML::GGUF::Qwen35Weights,
+                          prompt_size : Int32,
+                          native_cache_f16 : Bool,
+                          native_flash : Bool) : String
+  return "n/a" unless native.terminal_last_used
+
+  hp = weights.hparams
+  boundary_profile = ENV["QWEN35_PREFILL_BOUNDARY_PROFILE"]? == "1"
+  graph_depth = ML::GGUF::Qwen35CPU.prefill_graph_max_inflight(
+    false, false, boundary_profile,
+  )
+  flash_enabled = ML::GGUF::Qwen35Metal.prefill_attn_flash_d256_policy?(
+    ML::Metal::Device.instance.name, 0, prompt_size, hp.n_head,
+    hp.n_head_kv, hp.head_dim, native_cache_f16, false,
+    native_flash ? "1" : "0",
+  )
+  cooldown_ms = if ML::GGUF::Qwen35CPU.prefill_append_group_limit(prompt_size) == 0
+                  0
+                else
+                  ML::GGUF::Qwen35CPU.prefill_append_cooldown_policy_ms(
+                    device_name: ML::Metal::Device.instance.name,
+                    start_pos: 0,
+                    n_tokens: prompt_size,
+                    n_layer: hp.n_layer,
+                    layer_limit: hp.n_layer - 1,
+                    n_embd: hp.n_embd,
+                    n_ff: hp.n_ff,
+                    n_head: hp.n_head,
+                    n_head_kv: hp.n_head_kv,
+                    head_dim: hp.head_dim,
+                    full_attention_interval: hp.full_attention_interval,
+                    kv_cache_f16: native_cache_f16,
+                    resident_adaptive: false,
+                    checkpoint_requested: false,
+                    boundary_profile: boundary_profile,
+                    graph_depth: graph_depth,
+                    flash_d256: flash_enabled,
+                  )
+                end
+  cooldown_ms.to_s
+end
+
+def split_cache_type_name(cache_type : ML::LLM::LlamaFFI::GgmlType) : String
+  case cache_type
+  when ML::LLM::LlamaFFI::GgmlType::F16 then "f16"
+  when ML::LLM::LlamaFFI::GgmlType::F32 then "f32"
+  else                                       raise "unsupported split-process llama K/V type: #{cache_type}"
+  end
+end
+
+def write_split_worker_result(path : String, result : SplitWorkerResult) : Nil
+  temporary = "#{path}.tmp.#{Process.pid}"
+  begin
+    File.open(temporary, "w") { |file| result.to_json(file) }
+    File.rename(temporary, path)
+  ensure
+    File.delete(temporary) if File.exists?(temporary)
+  end
+end
+
+def run_split_worker!(engine : String,
+                      result_path : String,
+                      model_path : String,
+                      prompt_sizes : Array(Int32),
+                      reps : Int32,
+                      warmup : Int32,
+                      n_gpu_layers : Int32,
+                      n_batch : Int32,
+                      n_ubatch : Int32,
+                      n_threads : Int32,
+                      flash_attn : Bool,
+                      native_cache_f16 : Bool,
+                      native_flash : Bool,
+                      native_gpu_q4_embed : Bool,
+                      llama_cache_type : ML::LLM::LlamaFFI::GgmlType) : Nil
+  prompts = [] of SplitPromptResult
+
+  case engine
+  when "native"
+    weights : ML::GGUF::Qwen35Weights? = nil
+    begin
+      weights = ML::GGUF::Qwen35Weights.from_gguf(model_path)
+      loaded = weights.not_nil!
+      prompt_sizes.each do |prompt_size|
+        tokens = BenchmarkContract.synthetic_prefill_tokens(prompt_size, loaded.output.out_dim)
+        runner : NativePrefillRunner? = nil
+        begin
+          runner = NativePrefillRunner.new(
+            loaded, tokens, native_cache_f16, native_flash, native_gpu_q4_embed,
+          )
+          native = runner.not_nil!
+          measured = measure_single_engine(native, warmup, reps)
+          prompts << SplitPromptResult.new(
+            prompt_size,
+            BenchmarkContract.token_stream_sha256(tokens),
+            measured.samples_ms,
+            native.output_width,
+            measured.logits,
+            native.terminal_last_used,
+            native_cooldown_label(native, loaded, prompt_size, native_cache_f16, native_flash),
+            nil,
+            nil,
+          )
+        ensure
+          runner.try(&.close)
+        end
+      end
+    ensure
+      weights.try(&.close)
+    end
+  when "llama"
+    model : ML::LLM::Model? = nil
+    backend_initialized = false
+    begin
+      ML::LLM.init
+      backend_initialized = true
+      model = ML::LLM::Model.new(model_path, n_gpu_layers: n_gpu_layers)
+      loaded = model.not_nil!
+      prompt_sizes.each do |prompt_size|
+        tokens = BenchmarkContract.synthetic_prefill_tokens(prompt_size, loaded.vocab_size)
+        runner : LlamaPrefillRunner? = nil
+        begin
+          runner = LlamaPrefillRunner.new(
+            loaded, tokens, n_batch, n_ubatch, n_threads, flash_attn, llama_cache_type,
+          )
+          llama = runner.not_nil!
+          measured = measure_single_engine(llama, warmup, reps)
+          prompts << SplitPromptResult.new(
+            prompt_size,
+            BenchmarkContract.token_stream_sha256(tokens),
+            measured.samples_ms,
+            llama.output_width,
+            measured.logits,
+            false,
+            "n/a",
+            llama.effective_n_batch,
+            llama.effective_n_ubatch,
+          )
+        ensure
+          runner.try(&.close)
+        end
+      end
+    ensure
+      model.try(&.free)
+      ML::LLM.cleanup if backend_initialized
+    end
+  else
+    raise "unsupported split worker engine: #{engine}"
+  end
+
+  write_split_worker_result(result_path, SplitWorkerResult.new(engine, prompts))
+end
+
+def validate_split_worker_result!(result : SplitWorkerResult,
+                                  expected_engine : String,
+                                  prompt_sizes : Array(Int32),
+                                  reps : Int32) : Nil
+  raise "split worker schema mismatch" unless result.schema == SPLIT_WORKER_SCHEMA
+  raise "split worker engine mismatch" unless result.engine == expected_engine
+  raise "split worker prompt count mismatch" unless result.prompts.size == prompt_sizes.size
+
+  result.prompts.each_with_index do |prompt, index|
+    raise "split worker prompt order mismatch" unless prompt.prompt_size == prompt_sizes[index]
+    raise "split worker sample count mismatch" unless prompt.samples_ms.size == reps
+    raise "split worker non-positive timing" unless prompt.samples_ms.all? { |sample| sample > 0.0 && sample.finite? }
+    raise "split worker output width mismatch" unless prompt.output_width > 0 && prompt.logits.size == prompt.output_width
+    expected_tokens = BenchmarkContract.synthetic_prefill_tokens(prompt.prompt_size, prompt.output_width)
+    expected_hash = BenchmarkContract.token_stream_sha256(expected_tokens)
+    raise "split worker token stream mismatch" unless prompt.token_sha256 == expected_hash
+    if expected_engine == "llama"
+      effective_n_batch = prompt.effective_n_batch || raise "split worker llama batch geometry missing"
+      effective_n_ubatch = prompt.effective_n_ubatch || raise "split worker llama batch geometry missing"
+      unless effective_n_batch >= prompt.prompt_size &&
+             effective_n_ubatch > 0 &&
+             effective_n_ubatch <= effective_n_batch
+        raise "split worker llama batch geometry invalid"
+      end
+    elsif prompt.effective_n_batch || prompt.effective_n_ubatch
+      raise "split worker native batch geometry unexpectedly present"
+    end
+    top2(prompt.logits)
+  end
+end
+
+def split_worker_args(engine : String,
+                      result_path : String,
+                      model_path : String,
+                      prompt_sizes : Array(Int32),
+                      reps : Int32,
+                      warmup : Int32,
+                      n_gpu_layers : Int32,
+                      n_batch : Int32,
+                      n_ubatch : Int32,
+                      n_threads : Int32,
+                      flash_attn : Bool,
+                      native_cache_f16 : Bool,
+                      native_flash : Bool,
+                      native_gpu_q4_embed : Bool,
+                      llama_cache_type : ML::LLM::LlamaFFI::GgmlType) : Array(String)
+  args = [
+    "--worker=#{engine}",
+    "--worker-result=#{result_path}",
+    "--model=#{model_path}",
+    "--prompts=#{prompt_sizes.join(',')}",
+    "--reps=#{reps}",
+    "--warmup=#{warmup}",
+    "--ngl=#{n_gpu_layers}",
+    "--n-batch=#{n_batch}",
+    "--n-ubatch=#{n_ubatch}",
+    "--threads=#{n_threads}",
+    "--native-kv=#{native_cache_f16 ? "f16" : "f32"}",
+    "--llama-kv=#{split_cache_type_name(llama_cache_type)}",
+  ]
+  args << "--flash-attn" if flash_attn
+  args << "--native-flash" if native_flash
+  args << "--native-gpu-q4-embed-off" unless native_gpu_q4_embed
+  args
+end
+
+def run_split_process!(model_path : String,
+                       prompt_sizes : Array(Int32),
+                       reps : Int32,
+                       warmup : Int32,
+                       n_gpu_layers : Int32,
+                       n_batch : Int32,
+                       n_ubatch : Int32,
+                       n_threads : Int32,
+                       flash_attn : Bool,
+                       native_cache_f16 : Bool,
+                       native_flash : Bool,
+                       native_gpu_q4_embed : Bool,
+                       llama_cache_type : ML::LLM::LlamaFFI::GgmlType) : Nil
+  worker_executable = Process.executable_path || raise "cannot resolve split worker executable"
+  model_identity = File.info(model_path)
+  worker_reps = reps // 2
+  result_paths = [] of String
+  results = [] of SplitWorkerResult
+  begin
+    SPLIT_PROCESS_ORDER.each_with_index do |engine, index|
+      current_identity = File.info(model_path)
+      unless model_identity.same_file?(current_identity) &&
+             model_identity.size == current_identity.size &&
+             model_identity.modification_time == current_identity.modification_time
+        raise "model identity changed between split workers"
+      end
+      result_path = File.tempname("qwen-prefill-#{engine}-#{index}", ".json")
+      result_paths << result_path
+      args = split_worker_args(
+        engine, result_path, model_path, prompt_sizes, worker_reps, warmup,
+        n_gpu_layers, n_batch, n_ubatch, n_threads, flash_attn,
+        native_cache_f16, native_flash, native_gpu_q4_embed, llama_cache_type,
+      )
+      status = Process.run(worker_executable, args, output: STDOUT, error: STDERR)
+      raise "split worker #{engine}[#{index}] failed: #{status.exit_reason}" unless status.success?
+      current_identity = File.info(model_path)
+      unless model_identity.same_file?(current_identity) &&
+             model_identity.size == current_identity.size &&
+             model_identity.modification_time == current_identity.modification_time
+        raise "model identity changed while split worker was running"
+      end
+      raise "split worker #{engine}[#{index}] produced no result" unless File.file?(result_path)
+      result = SplitWorkerResult.from_json(File.read(result_path))
+      validate_split_worker_result!(result, engine, prompt_sizes, worker_reps)
+      results << result
+    end
+
+    native_results = results.select { |result| result.engine == "native" }
+    llama_results = results.select { |result| result.engine == "llama" }
+    raise "split process order did not yield two results per engine" unless native_results.size == 2 && llama_results.size == 2
+
+    puts "Qwen same-token prefill external workload vs llama.cpp"
+    puts "model: #{model_path}"
+    native_cache_name = native_cache_f16 ? "f16" : "f32"
+    puts "settings: prompts=#{prompt_sizes.join(',')} reps=#{reps} warmup=#{warmup} order=process-#{SPLIT_PROCESS_ORDER.join('-')} ngl=#{n_gpu_layers} n_batch=#{n_batch} n_ubatch=#{n_ubatch} threads=#{n_threads} flash_attn=#{flash_attn} output=one_terminal_full_logits_with_host_copy state=reused_cleared native_kv=#{native_cache_name} native_flash=#{native_flash} native_gpu_q4_embed=#{native_gpu_q4_embed} llama_kv=#{split_cache_type_name(llama_cache_type)}"
+    puts
+    puts "# pp  token_sha256  native_tok/s  llama_tok/s  gap  llama_batch/ubatch  native_cooldown_ms  min_logits_cosine  native_top2  llama_top2  terminal_last  contract"
+
+    prompt_sizes.each_with_index do |prompt_size, prompt_index|
+      native_rows = native_results.map { |result| result.prompts[prompt_index] }
+      llama_rows = llama_results.map { |result| result.prompts[prompt_index] }
+      output_widths = (native_rows + llama_rows).map(&.output_width).uniq
+      raise "split worker output width mismatch" unless output_widths.size == 1
+      hashes = (native_rows + llama_rows).map(&.token_sha256).uniq
+      raise "split worker token stream mismatch" unless hashes.size == 1
+      raise "native split worker top-2 changed across processes" unless native_rows.map { |row| top2(row.logits) }.uniq.size == 1
+      raise "llama split worker top-2 changed across processes" unless llama_rows.map { |row| top2(row.logits) }.uniq.size == 1
+      cooldowns = native_rows.map(&.native_cooldown_ms).uniq
+      raise "native split worker cooldown changed across processes" unless cooldowns.size == 1
+      llama_geometries = llama_rows.map { |row| {row.effective_n_batch, row.effective_n_ubatch} }.uniq
+      raise "llama split worker batch geometry changed across processes" unless llama_geometries.size == 1
+      llama_batch, llama_ubatch = llama_geometries[0]
+
+      native_samples = native_rows.flat_map(&.samples_ms)
+      llama_samples = llama_rows.flat_map(&.samples_ms)
+      raise "split process sample count mismatch" unless native_samples.size == reps && llama_samples.size == reps
+      native_stats = summarize(native_samples, prompt_size)
+      llama_stats = summarize(llama_samples, prompt_size)
+      qualities = native_rows.flat_map do |native_row|
+        llama_rows.map { |llama_row| quality(native_row.logits, llama_row.logits) }
+      end
+      result_quality = qualities.min_by(&.cosine)
+      canonical = BenchmarkContract.synthetic_prefill_tokens(prompt_size, output_widths[0])
+      comparison = BenchmarkContract.same_token_prefill_comparison(
+        declaration(canonical.dup, output_widths[0], warmup),
+        declaration(canonical.dup, output_widths[0], warmup),
+      )
+      raise "same-token workload declaration rejected: #{comparison.reason}" unless comparison.level.same_token?
+      gap = ((native_stats.mean_ts / llama_stats.mean_ts) - 1.0) * 100.0
+      terminal_last = native_rows.all?(&.terminal_last_used)
+      geometry = "#{llama_batch}/#{llama_ubatch}"
+      puts "#{prompt_size.to_s.rjust(4)}  #{hashes[0][0, 16]}  #{native_stats.mean_ts.round(2).to_s.rjust(12)}  #{llama_stats.mean_ts.round(2).to_s.rjust(11)}  #{gap.round(2).to_s.rjust(6)}%  #{geometry.rjust(18)}  #{cooldowns[0].rjust(18)}  #{result_quality.cosine.round(8)}  #{result_quality.native_top1}/#{result_quality.native_top2}  #{result_quality.llama_top1}/#{result_quality.llama_top2}  #{terminal_last}  #{comparison.scope}"
+    end
+  ensure
+    result_paths.each { |path| File.delete(path) if File.exists?(path) }
+  end
+end
+
 def declaration(tokens : Array(Int32), output_width : Int32, warmup : Int32) : BenchmarkContract::PrefillWorkloadDeclaration
   BenchmarkContract::PrefillWorkloadDeclaration.new(
     tokens: tokens,
@@ -385,6 +791,9 @@ native_flash = false
 native_flash_ab = false
 native_gpu_q4_embed = true
 native_gpu_q4_embed_ab = false
+split_process = false
+worker_engine : String? = nil
+worker_result_path : String? = nil
 
 OptionParser.parse do |parser|
   parser.banner = "Usage: benchmark_qwen_prefill_vs_llama_same_token [options]"
@@ -411,6 +820,9 @@ OptionParser.parse do |parser|
   parser.on("--native-flash-ab", "Also measure opt-in d256 Flash-MMA versus the native baseline in-process") { native_flash_ab = true }
   parser.on("--native-gpu-q4-embed-off", "Disable native Q4 token embedding on GPU") { native_gpu_q4_embed = false }
   parser.on("--native-gpu-q4-embed-ab", "Also measure native GPU versus CPU Q4 token embedding in-process") { native_gpu_q4_embed_ab = true }
+  parser.on("--split-process", "Run native/llama workers sequentially in NLLN order; never co-resident") { split_process = true }
+  parser.on("--worker=ENGINE", "Internal split-process worker: native or llama") { |value| worker_engine = value }
+  parser.on("--worker-result=PATH", "Internal split-process result path") { |value| worker_result_path = value }
   parser.on("--llama-kv=TYPE", "llama.cpp K/V cache type: f16 or f32 (default: f16)") do |value|
     llama_cache_type = case value
                        when "f16" then ML::LLM::LlamaFFI::GgmlType::F16
@@ -425,8 +837,13 @@ OptionParser.parse do |parser|
 end
 
 raise "model not found: #{model_path}" unless File.exists?(model_path)
+model_path = File.realpath(model_path)
 raise "prompt sizes must be positive" if prompt_sizes.empty? || prompt_sizes.any? { |size| size <= 0 }
-raise "--reps must be positive and divisible by four" unless reps > 0 && reps % 4 == 0
+if worker_engine
+  raise "--worker reps must be positive" unless reps > 0
+else
+  raise "--reps must be positive and divisible by four" unless reps > 0 && reps % 4 == 0
+end
 raise "--warmup must be non-negative" unless warmup >= 0
 raise "--n-batch must cover the largest prompt so llama emits one output row" unless n_batch >= prompt_sizes.max
 raise "--n-ubatch must be positive and no larger than --n-batch" unless n_ubatch > 0 && n_ubatch <= n_batch
@@ -435,6 +852,52 @@ raise "--native-kv-ab requires --native-kv=f16" if native_cache_ab && !native_ca
 raise "--native-flash requires --native-kv=f16" if native_flash && !native_cache_f16
 raise "--native-flash-ab requires --native-kv=f16" if native_flash_ab && !native_cache_f16
 raise "--native-gpu-q4-embed-ab conflicts with --native-gpu-q4-embed-off" if native_gpu_q4_embed_ab && !native_gpu_q4_embed
+raise "--split-process conflicts with --worker" if split_process && worker_engine
+raise "--worker-result requires --worker" if worker_result_path && !worker_engine
+raise "--worker requires --worker-result" if worker_engine && !worker_result_path
+if split_process || worker_engine
+  raise "split-process mode does not support in-process native A/B flags" if native_cache_ab || native_flash_ab || native_gpu_q4_embed_ab
+end
+
+if worker = worker_engine
+  run_split_worker!(
+    worker,
+    worker_result_path.not_nil!,
+    model_path,
+    prompt_sizes,
+    reps,
+    warmup,
+    n_gpu_layers,
+    n_batch,
+    n_ubatch,
+    n_threads,
+    flash_attn,
+    native_cache_f16,
+    native_flash,
+    native_gpu_q4_embed,
+    llama_cache_type,
+  )
+  exit
+end
+
+if split_process
+  run_split_process!(
+    model_path,
+    prompt_sizes,
+    reps,
+    warmup,
+    n_gpu_layers,
+    n_batch,
+    n_ubatch,
+    n_threads,
+    flash_attn,
+    native_cache_f16,
+    native_flash,
+    native_gpu_q4_embed,
+    llama_cache_type,
+  )
+  exit
+end
 
 native_weights : ML::GGUF::Qwen35Weights? = nil
 llama_model : ML::LLM::Model? = nil
@@ -520,44 +983,9 @@ begin
       )
       gap = ((native_stats.mean_ts / llama_stats.mean_ts) - 1.0) * 100.0
       hash = BenchmarkContract.token_stream_sha256(native_tokens)
-      hp = weights.hparams
-      native_boundary_profile = ENV["QWEN35_PREFILL_BOUNDARY_PROFILE"]? == "1"
-      native_graph_depth = ML::GGUF::Qwen35CPU.prefill_graph_max_inflight(
-        false, false, native_boundary_profile,
+      native_cooldown = native_cooldown_label(
+        native, weights, prompt_size.to_i32, native_cache_f16, native_flash,
       )
-      native_flash_enabled = ML::GGUF::Qwen35Metal.prefill_attn_flash_d256_policy?(
-        ML::Metal::Device.instance.name, 0, prompt_size.to_i32, hp.n_head,
-        hp.n_head_kv, hp.head_dim, native_cache_f16, false,
-        native_flash ? "1" : "0",
-      )
-      native_cooldown = unless native.terminal_last_used
-        "n/a"
-      else
-        cooldown_ms = if ML::GGUF::Qwen35CPU.prefill_append_group_limit(prompt_size.to_i32) == 0
-                        0
-                      else
-                        ML::GGUF::Qwen35CPU.prefill_append_cooldown_policy_ms(
-                          device_name: ML::Metal::Device.instance.name,
-                          start_pos: 0,
-                          n_tokens: prompt_size.to_i32,
-                          n_layer: hp.n_layer,
-                          layer_limit: hp.n_layer - 1,
-                          n_embd: hp.n_embd,
-                          n_ff: hp.n_ff,
-                          n_head: hp.n_head,
-                          n_head_kv: hp.n_head_kv,
-                          head_dim: hp.head_dim,
-                          full_attention_interval: hp.full_attention_interval,
-                          kv_cache_f16: native_cache_f16,
-                          resident_adaptive: false,
-                          checkpoint_requested: false,
-                          boundary_profile: native_boundary_profile,
-                          graph_depth: native_graph_depth,
-                          flash_d256: native_flash_enabled,
-                        )
-                      end
-        cooldown_ms.to_s
-      end
       puts "#{prompt_size.to_s.rjust(4)}  #{hash[0, 16]}  #{native_stats.mean_ts.round(2).to_s.rjust(12)}  #{llama_stats.mean_ts.round(2).to_s.rjust(11)}  #{gap.round(2).to_s.rjust(6)}%  #{native_cooldown.rjust(18)}  #{result_quality.cosine.round(8)}  #{result_quality.native_top1}/#{result_quality.native_top2}  #{result_quality.llama_top1}/#{result_quality.llama_top2}  #{native.terminal_last_used}  #{comparison.scope}"
 
       if f32_runner = native_f32_runner

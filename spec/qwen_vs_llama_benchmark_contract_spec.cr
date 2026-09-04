@@ -2,6 +2,31 @@ require "./spec_helper"
 require "../src/ml/qwen_vs_llama_benchmark_contract"
 
 describe ML::QwenVsLlamaBenchmarkContract do
+  it "isolates comparison engines in sequential worker processes" do
+    source = File.read(Path[__DIR__] / "../bin/benchmark_qwen_prefill_vs_llama_same_token.cr")
+    source.includes?(%q{parser.on("--split-process"}).should be_true
+    source.includes?(%q{parser.on("--worker=ENGINE"}).should be_true
+    source.includes?(%q{SPLIT_PROCESS_ORDER  = ["native", "llama", "llama", "native"]}).should be_true
+    source.index("if split_process").not_nil!.should be < source.index("native_weights : ML::GGUF::Qwen35Weights? = nil").not_nil!
+    source.includes?(%q{Process.run(worker_executable}).should be_true
+    source.includes?(%q{model_identity.same_file?(current_identity)}).should be_true
+  end
+
+  it "moves a fail-closed same-token and full-logit certificate across workers" do
+    source = File.read(Path[__DIR__] / "../bin/benchmark_qwen_prefill_vs_llama_same_token.cr")
+    source.includes?("SPLIT_WORKER_SCHEMA").should be_true
+    source.includes?("token_sha256 : String").should be_true
+    source.includes?("samples_ms : Array(Float64)").should be_true
+    source.includes?("logits : Array(Float32)").should be_true
+    source.includes?("validate_split_worker_result!").should be_true
+    source.includes?("split worker token stream mismatch").should be_true
+    source.includes?("split worker output width mismatch").should be_true
+    source.includes?("effective_n_batch : Int32?").should be_true
+    source.includes?("effective_n_ubatch : Int32?").should be_true
+    source.includes?("split worker llama batch geometry missing").should be_true
+    source.includes?("llama split worker batch geometry changed across processes").should be_true
+  end
+
   it "matches llama-bench reset and performs only the getter synchronization" do
     source = File.read(Path[__DIR__] / "../bin/benchmark_qwen_prefill_vs_llama_same_token.cr")
     source.includes?("@context.kv_clear(data: false)").should be_true
@@ -15,7 +40,8 @@ describe ML::QwenVsLlamaBenchmarkContract do
     source = File.read(Path[__DIR__] / "../bin/benchmark_qwen_prefill_vs_llama_same_token.cr")
     source.includes?("Qwen35CPU.release_state_metal!(@state)").should be_true
     source.includes?("native_runner : NativePrefillRunner? = nil").should be_true
-    source.index("native_runner = NativePrefillRunner.new").not_nil!.should be < source.index("warmup.times").not_nil!
+    in_process_main = source[source.index("native_runner : NativePrefillRunner? = nil").not_nil!..]
+    in_process_main.index("native_runner = NativePrefillRunner.new").not_nil!.should be < in_process_main.index("warmup.times").not_nil!
     source.includes?("-> { native_runner.try(&.close) }").should be_true
     source.includes?("-> { native_weights.try(&.close) }").should be_true
   end

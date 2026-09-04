@@ -26957,3 +26957,33 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary producer-consumer reuse inside an existing command stream.
 
 **decision:** Keep the eligible recurrent-many Q4_K/Q6_K H16-input reuse under `QWEN35_RMSNORM_H16_PROJ=1`; keep the default unchanged. Do not promote the whole H16 policy until a source-isolated ABBA reaches the performance gate with full hidden/recurrent-state parity, and do not combine it with Q4 Tensor. Build a split-process same-token 27B harness before making a safe native-versus-llama.cpp claim; do not lower the 35% memory floor to force a dual-resident result.
+
+#### [LM-QWEN38-SPLIT-PREFILL-1034] Split-process comparison narrows the current 27B prefill frontier
+**context:** ml / Qwen3.8-27B Q4_K_M / native versus llama.cpp `7e4c0a968` / Apple M2 Max
+**state:** isolated benchmark contract verified; native leads the bounded pp512-2048 screen while pp256 remains noise-level parity
+
+- claim: "The same-token comparison no longer requires native and llama.cpp to hold the 27B model concurrently."
+  source: `--split-process` runs fresh native, llama, llama, and native workers sequentially. The parent loads neither model, checks model file identity before and after each worker, validates schema, prompt order, sample count, token digest, output width, finite terminal logits, stable top-2, route stability, and then compares the two engines. The worker certificate also records effective llama `n_batch/n_ubatch`; missing, invalid, or cross-process-changing geometry fails closed. A release build against llama.cpp `7e4c0a968` and a guarded four-prompt real-model run exited zero; the focused benchmark suite passed with `14 examples, 0 failures` and the combined benchmark plus ABI suite passed with `19 examples, 0 failures`.
+  verified_at: 2026-09-04
+  decay_trigger: worker lifecycle, model loading, result schema, benchmark timing boundary, token generator, llama.cpp revision, or model file changes
+  trust: {F:0.98,G:0.08,R:0.95}
+
+- claim: "On the strict terminal-full-logit workload, the current native engine leads llama.cpp at pp512-2048 in the latest bounded screen; pp256 is parity within host noise."
+  source: guarded log `/private/tmp/qwen_vs_llama_geometry_matrix_auto.log` from one four-repetition NLLN run with identical synthetic tokens, F16 KV, admitted Flash Attention enabled in both engines, 12 CPU threads, native auto cooldown policy, and requested llama `n_batch=2048,n_ubatch=512`. Native/llama throughput was `161.45/162.83`, `153.42/147.57`, `147.82/146.03`, and `150.57/141.71 tok/s` at pp256/512/1024/2048, giving native gaps of `-0.85%/+3.97%/+1.22%/+6.26%`. The certified effective llama batch geometry was `260/260`, `516/512`, `1028/512`, and `2048/512`; native cooldown was `0/0/50/50 ms`. Minimum full-logit cosine was at least `0.99994253`, ordered top-2 matched, and the native terminal-last route stayed active. An earlier post-ABI run was faster in absolute terms and positive at all four sizes, so only the pp512-2048 direction is retained here; no stable percentage constant is promoted.
+  verified_at: 2026-09-04
+  decay_trigger: either engine, worker order, host/GPU load, model/device/compiler/runtime, or benchmark settings change
+  trust: {F:0.97,G:0.05,R:0.87}
+
+- claim: "The stock llama-bench display is a distinct, slightly cheaper measurement contract."
+  source: the same current llama.cpp build, run separately with `-fa off`, measured `170.29/175.42/170.03/161.29 tok/s` at pp256/512/1024/2048. Its timer covers prompt decode plus final synchronization but does not call the public logits getter or copy the terminal vector into a Crystal array. The pp1024 row had `5.46 tok/s` standard deviation. These rows neither share the strict harness's Flash-Attention setting nor its terminal-vector host copy and are not used to calculate a native gap.
+  verified_at: 2026-09-04
+  decay_trigger: llama-bench source, output policy, tokens, build flags, model/device/runtime, or host load changes
+  trust: {F:0.99,G:0.05,R:0.88}
+
+**Adversary:** Split processes prevent model co-residency but introduce order and thermal drift; NLLN is balanced only at the process-order level. The result stores one terminal full-logit vector per worker, not every repetition. Effective llama batch geometry is read back, but the public API has no equivalent effective-Flash getter; the exact ABI plus runtime logs establish the requested/selected route for this model and build, not a universal backend-kernel guarantee. Model identity uses file identity, size, and modification time rather than hashing 16.8 GB of weights. The outer guarded runner owns timeout and process-tree cleanup. One rejected run with explicit `QWEN35_PREFILL_APPEND_MAX_GROUPS=1` correctly exposed `50 ms` cooldown at pp256/512 and is not benchmark evidence. These limits make the accepted matrix a bounded current screen, not a stable universal ranking or an exact reproduction of stock llama-bench.
+
+**Value proxy:** Tokens per second is useful only after matching tokens, KV type, logical batch geometry, output policy, synchronization, and state reset. Stock llama-bench and the strict external workload are therefore reported separately rather than averaged into one score.
+
+**LTP/WBA:** Not claimed. Process isolation and measurement-contract validation are ordinary benchmark controls.
+
+**decision:** Retain the split-process harness as the 27B comparison gate. Treat pp256 as practical parity and the pp512-2048 native lead as encouraging but host-sensitive bounded evidence, not a stable public speed ratio. A temporary RMSNorm-plus-RoPE fusion measured only about `0.02-0.03%` at pp256/pp2048, with pp2048 median regression, and was removed. Continue with a phase-local transformation that removes substantive GPU work or memory traffic; first falsify a fused QG-split plus Q-RMSNorm-plus-Q-RoPE path before any performance promotion.
