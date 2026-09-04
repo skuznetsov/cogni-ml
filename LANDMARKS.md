@@ -26687,3 +26687,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was an ordinary buffer-handoff experiment.
 
 **decision:** Remove the resident terminal-prefix branch and retain the simpler host-prefix route. Keep only the fail-closed preflight hardening. Do not retry this seam on unified-memory Apple devices unless storage mode or the hidden representation changes; move the pp search to actual compute elimination, fused recurrent work, or intermediate precision/layout.
+
+#### [LM-QWEN35-Q4-B64-DOWN-ADD-NOGO-1022] Exact Q4 B64 residual fusion loses its bandwidth saving to tile staging
+**context:** ml / Qwen3.5-9B / Q4_K FFN down / same-process Metal microbenchmark / Apple M2 Max
+**state:** candidate falsified and removed; no production route or feature flag retained
+
+- claim: "Replacing the current B64 Q4_K down projection plus `qwen35_add_vec` with a dedicated exact fused kernel is neutral or slower at product prefill shapes."
+  source: a temporary kernel preserved the existing B64 dequantization and matrix arithmetic, staged every output tile through threadgroup memory, then added the F32 residual at the final write. A real-model spec compared every F32 output bit against the established two-dispatch route and passed. A guarded same-process ABBA used `blk.4.ffn_down.weight` from Qwen3.5-9B Q4_K_M, identical H16 input and F32 residual bytes, two warmups, and 20 measured pairs per shape. Candidate mean gains at batches 256/512/1024/2048 were `-0.055%/-1.326%/-0.688%/-1.079%`; paired median gains were `-1.141%/-3.075%/-1.826%/-0.923%`, with candidate wins `9/20`, `6/20`, `8/20`, and `8/20`. The guarded process exited zero under the 35% free-memory floor and 24 GiB tree cap.
+  verified_at: 2026-09-03
+  decay_trigger: Q4 B64 output-store strategy, residual representation, Metal compiler/GPU, tensor shape, or benchmark method changes
+  trust: {F:0.99,G:0.05,R:0.96}
+
+**Adversary:** The fused kernel removes an intermediate device write/read and one dispatch, but the established B64 kernel directly stores complete tiles from simdgroup accumulators. Exact post-GEMM residual addition requires materializing those accumulators first; mandatory threadgroup staging and synchronization consumed more time than the avoided bandwidth across every repeated product shape. Initial eight-pair measurements contained isolated positive means, but the longer balanced run reversed them, so the short screen was correctly treated as a hypothesis rather than promotion evidence.
+
+**Value proxy:** Saved logical bytes and dispatch count are not wall-clock improvements when the fusion changes the producer's store path. GPU timestamps on the complete competing corridors are the relevant local metric; end-to-end prefill was not run because the microkernel admission gate failed.
+
+**LTP/WBA:** Not claimed. This was an ordinary exact producer-consumer fusion experiment.
+
+**decision:** Keep the direct-store B64 GEMM plus separate residual add. Do not add a batch threshold for the rejected kernel. Revisit only if the residual can be consumed without forcing full-tile staging or if the hidden/residual representation changes; continue the llama.cpp comparison at a boundary that removes compute rather than merely dispatches.
