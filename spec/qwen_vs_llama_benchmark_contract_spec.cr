@@ -6,6 +6,9 @@ describe ML::QwenVsLlamaBenchmarkContract do
     source = File.read(Path[__DIR__] / "../bin/benchmark_qwen_prefill_vs_llama_same_token.cr")
     source.includes?("@context.kv_clear(data: false)").should be_true
     source.includes?("LlamaFFI.llama_synchronize(@context.handle)").should be_false
+    source.includes?("native_cooldown_ms").should be_true
+    source.includes?("unless native_runner.terminal_last_used").should be_true
+    source.includes?(%q{"n/a"}).should be_true
   end
 
   it "defaults to full logits without claiming strict apples-to-apples parity" do

@@ -402,7 +402,7 @@ begin
   native_cache_name = native_cache_f16 ? "f16" : "f32"
   puts "settings: prompts=#{prompt_sizes.join(',')} reps=#{reps} warmup=#{warmup} order=ABBA ngl=#{n_gpu_layers} n_batch=#{n_batch} n_ubatch=#{n_ubatch} threads=#{n_threads} flash_attn=#{flash_attn} output=one_terminal_full_logits_with_host_copy state=reused_cleared native_kv=#{native_cache_name} native_flash=#{native_flash} llama_kv=#{llama_cache_type.to_s.downcase}"
   puts
-  puts "# pp  token_sha256  native_tok/s  llama_tok/s  gap  min_logits_cosine  native_top2  llama_top2  terminal_last  contract"
+  puts "# pp  token_sha256  native_tok/s  llama_tok/s  gap  native_cooldown_ms  min_logits_cosine  native_top2  llama_top2  terminal_last  contract"
   puts "# native-kv-ab: pp f16_tok/s f32_tok/s f16_gain min_logits_cosine f16_top2 f32_top2" if native_cache_ab
   puts "# native-flash-ab: pp flash_tok/s baseline_tok/s flash_gain min_logits_cosine flash_top2 baseline_top2" if native_flash_ab
 
@@ -452,7 +452,45 @@ begin
       )
       gap = ((native_stats.mean_ts / llama_stats.mean_ts) - 1.0) * 100.0
       hash = BenchmarkContract.token_stream_sha256(native_tokens)
-      puts "#{prompt_size.to_s.rjust(4)}  #{hash[0, 16]}  #{native_stats.mean_ts.round(2).to_s.rjust(12)}  #{llama_stats.mean_ts.round(2).to_s.rjust(11)}  #{gap.round(2).to_s.rjust(6)}%  #{result_quality.cosine.round(8)}  #{result_quality.native_top1}/#{result_quality.native_top2}  #{result_quality.llama_top1}/#{result_quality.llama_top2}  #{native_runner.terminal_last_used}  #{comparison.scope}"
+      hp = native_weights.hparams
+      native_boundary_profile = ENV["QWEN35_PREFILL_BOUNDARY_PROFILE"]? == "1"
+      native_graph_depth = ML::GGUF::Qwen35CPU.prefill_graph_max_inflight(
+        false, false, native_boundary_profile,
+      )
+      native_flash_enabled = ML::GGUF::Qwen35Metal.prefill_attn_flash_d256_policy?(
+        ML::Metal::Device.instance.name, 0, prompt_size.to_i32, hp.n_head,
+        hp.n_head_kv, hp.head_dim, native_cache_f16, false,
+        native_flash ? "1" : "0",
+      )
+      native_cooldown = unless native_runner.terminal_last_used
+        "n/a"
+      else
+        cooldown_ms = if ML::GGUF::Qwen35CPU.prefill_append_group_limit(prompt_size.to_i32) == 0
+                        0
+                      else
+                        ML::GGUF::Qwen35CPU.prefill_append_cooldown_policy_ms(
+                          device_name: ML::Metal::Device.instance.name,
+                          start_pos: 0,
+                          n_tokens: prompt_size.to_i32,
+                          n_layer: hp.n_layer,
+                          layer_limit: hp.n_layer - 1,
+                          n_embd: hp.n_embd,
+                          n_ff: hp.n_ff,
+                          n_head: hp.n_head,
+                          n_head_kv: hp.n_head_kv,
+                          head_dim: hp.head_dim,
+                          full_attention_interval: hp.full_attention_interval,
+                          kv_cache_f16: native_cache_f16,
+                          resident_adaptive: false,
+                          checkpoint_requested: false,
+                          boundary_profile: native_boundary_profile,
+                          graph_depth: native_graph_depth,
+                          flash_d256: native_flash_enabled,
+                        )
+                      end
+        cooldown_ms.to_s
+      end
+      puts "#{prompt_size.to_s.rjust(4)}  #{hash[0, 16]}  #{native_stats.mean_ts.round(2).to_s.rjust(12)}  #{llama_stats.mean_ts.round(2).to_s.rjust(11)}  #{gap.round(2).to_s.rjust(6)}%  #{native_cooldown.rjust(18)}  #{result_quality.cosine.round(8)}  #{result_quality.native_top1}/#{result_quality.native_top2}  #{result_quality.llama_top1}/#{result_quality.llama_top2}  #{native_runner.terminal_last_used}  #{comparison.scope}"
 
       if f32_runner = native_f32_runner
         f32_runner.reset!

@@ -222,6 +222,49 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
     end
   end
 
+  it "removes the default compositor cooldown only for the measured 9B Flash prefill corridor" do
+    qwen = ML::GGUF::Qwen35CPU
+    ordinary_9b = {
+      device_name:             "Apple M2 Max",
+      start_pos:               0,
+      n_tokens:                1024,
+      n_layer:                 32,
+      layer_limit:             31,
+      n_embd:                  4096,
+      n_ff:                    12288,
+      n_head:                  16,
+      n_head_kv:               4,
+      head_dim:                256,
+      full_attention_interval: 4,
+      kv_cache_f16:            true,
+      resident_adaptive:       false,
+      checkpoint_requested:    false,
+      boundary_profile:        false,
+      graph_depth:             0,
+      flash_d256:              true,
+    }
+
+    qwen.prefill_append_cooldown_policy_ms(nil, nil, nil, **ordinary_9b).should eq(0)
+    qwen.prefill_append_cooldown_policy_ms(nil, nil, nil, **ordinary_9b.merge({n_tokens: 2048})).should eq(0)
+    qwen.prefill_append_cooldown_policy_ms("50", nil, nil, **ordinary_9b).should eq(50)
+    qwen.prefill_append_cooldown_policy_ms(nil, "1", nil, **ordinary_9b).should eq(50)
+    qwen.prefill_append_cooldown_policy_ms(nil, nil, "1024", **ordinary_9b).should eq(50)
+    qwen.prefill_append_cooldown_policy_ms(nil, nil, nil, **ordinary_9b.merge({device_name: "Apple M3 Max"})).should eq(50)
+    qwen.prefill_append_cooldown_policy_ms(nil, nil, nil, **ordinary_9b.merge({start_pos: 1})).should eq(50)
+    qwen.prefill_append_cooldown_policy_ms(nil, nil, nil, **ordinary_9b.merge({n_tokens: 512})).should eq(50)
+    qwen.prefill_append_cooldown_policy_ms(nil, nil, nil, **ordinary_9b.merge({n_tokens: 2049})).should eq(50)
+    qwen.prefill_append_cooldown_policy_ms(nil, nil, nil, **ordinary_9b.merge({n_layer: 64})).should eq(50)
+    qwen.prefill_append_cooldown_policy_ms(nil, nil, nil, **ordinary_9b.merge({layer_limit: 32})).should eq(50)
+    qwen.prefill_append_cooldown_policy_ms(nil, nil, nil, **ordinary_9b.merge({n_head: 24})).should eq(50)
+    qwen.prefill_append_cooldown_policy_ms(nil, nil, nil, **ordinary_9b.merge({full_attention_interval: 3})).should eq(50)
+    qwen.prefill_append_cooldown_policy_ms(nil, nil, nil, **ordinary_9b.merge({kv_cache_f16: false})).should eq(50)
+    qwen.prefill_append_cooldown_policy_ms(nil, nil, nil, **ordinary_9b.merge({resident_adaptive: true})).should eq(50)
+    qwen.prefill_append_cooldown_policy_ms(nil, nil, nil, **ordinary_9b.merge({checkpoint_requested: true})).should eq(50)
+    qwen.prefill_append_cooldown_policy_ms(nil, nil, nil, **ordinary_9b.merge({boundary_profile: true})).should eq(50)
+    qwen.prefill_append_cooldown_policy_ms(nil, nil, nil, **ordinary_9b.merge({graph_depth: 1})).should eq(50)
+    qwen.prefill_append_cooldown_policy_ms(nil, nil, nil, **ordinary_9b.merge({flash_d256: false})).should eq(50)
+  end
+
   it "keeps the compositor cooldown across long-prefill chunk boundaries" do
     ML::GGUF::Qwen35CPU.prefill_chunk_boundary_cooldown_ms(1024, true, true, nil, nil).should eq(50)
     ML::GGUF::Qwen35CPU.prefill_chunk_boundary_cooldown_ms(1024, true, true, "1", "100").should eq(100)

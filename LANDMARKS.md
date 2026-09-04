@@ -26807,3 +26807,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary parallel command encoding.
 
 **decision:** Keep the fused Q4 gate/up plus SwiGLU path. Do not retry pair concurrency unless a new dataflow also removes activation or weight traffic. Use llama.cpp graph concurrency only as a bounded scheduling clue: disabling it reduced llama pp256/512 throughput by roughly `2.65%/1.38%`, so it cannot explain the full current cross-engine gap.
+
+#### [LM-QWEN35-9B-PREFILL-COOLDOWN-1027] Exact 9B Flash prefill no longer pays the adaptive-watchdog idle tax
+**context:** ml / Qwen3.5-9B / ordinary F16 KV / exact Flash-MMA prefill / Apple M2 Max
+**state:** exact measured corridor enabled by default; conservative pause retained elsewhere
+
+- claim: "The 50 ms compositor cooldown is a safety policy for heavier prefill corridors, not useful work in the measured 9B pp1024/pp2048 Flash route."
+  source: boundary profiling of Qwen3.5-9B pp2048 with the cooldown explicitly disabled showed six meaningful completed command groups, the first near `0.75 s` and the remaining groups near `0.42 s`, and exited zero under the 35% free-memory floor and 24 GiB process-tree cap. In sequential guarded current-binary pairs, automatic zero cooldown versus explicit `50 ms` raised native pp1024 from `520.92` to `573.39 tok/s` (`+10.07%`) while llama.cpp remained `596.44/596.77 tok/s`; pp2048 rose from `525.65` to `576.47 tok/s` (`+9.67%`) against llama.cpp `591.34/579.83 tok/s`. All four runs exited zero, preserved the same top-2 as llama.cpp, and produced full-logit cosine `0.99987532/0.99985418`.
+  verified_at: 2026-09-04
+  decay_trigger: command grouping, Flash admission, model topology, KV representation, watchdog behavior, Metal compiler/device, benchmark timing, or host-load policy changes
+  trust: {F:0.98,G:0.04,R:0.90}
+
+- claim: "Automatic zero cooldown is fail-closed outside the exact measured corridor."
+  source: the policy requires Apple M2 Max, `start_pos=0`, exactly 1024 or 2048 rows, the 31-layer prefix of the terminal-row route in the 32-layer Qwen3.5-9B topology, F16 non-adaptive KV, the admitted d256 Flash kernel, no checkpoint or boundary profile, CogniGraph depth zero, and no explicit group/chunk override. A complete 32-layer hidden-prefill route retains the pause, and an explicit cooldown value always wins. The focused cooldown matrix passed (`3 examples, 0 failures`), the benchmark contract passed (`10 examples, 0 failures`), and a CPU-only library build succeeded.
+  verified_at: 2026-09-04
+  decay_trigger: policy predicate, model metadata, environment-control semantics, chunk/group routing, checkpoint/graph route, or Flash admission changes
+  trust: {F:0.99,G:0.03,R:0.97}
+
+**Adversary:** These are sequential same-host process pairs, not an in-process causal ABBA, and cross-process absolute throughput still moved with host activity: the pp1024 llama control was essentially stable while the pp2048 llama control moved by about `1.95%`. The corrected automatic route remains `3.92%` behind llama.cpp at pp1024 and `0.58%` behind at pp2048, so it establishes a native idle-tax reduction and near parity at pp2048, not a stable cross-engine win. The benchmark emits `n/a` instead of attributing this policy when terminal-last falls back. The execution policy assumes process-wide environment controls remain stable during a prefill; concurrent mutation is outside this certificate. No claim extends to 27B, adaptive QBit, continuation prefill, complete 32-layer hidden prefill, F32 KV, other Apple GPUs, longer contexts, or altered group/chunk policies.
+
+**Value proxy:** Removing known idle time is a real latency improvement for the admitted route, but it does not make the kernels faster and does not by itself prove an end-to-end lead over llama.cpp. Same-process policy A/B or phase-local GPU timing remains the stronger causal measure.
+
+**LTP/WBA:** Not claimed. This is a narrowly gated scheduling-policy correction.
+
+**decision:** Default to zero cooldown only for the exact measured 9B Flash corridor. Preserve `QWEN35_PREFILL_APPEND_COOLDOWN_MS=50` as immediate rollback and retain 50 ms everywhere else. Continue the llama.cpp comparison at recurrent FFN/projection compute and command-boundary scheduling; do not generalize this watchdog result by model size alone.

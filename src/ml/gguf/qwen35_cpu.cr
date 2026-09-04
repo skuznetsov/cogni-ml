@@ -112,6 +112,51 @@ module ML::GGUF
       value
     end
 
+    # Remove the compositor pause automatically only in the exact 9B corridor
+    # measured on M2 Max. Every unknown shape or execution mode keeps the
+    # conservative default; the existing cooldown setting is the immediate
+    # explicit override and rollback.
+    def prefill_append_cooldown_policy_ms(
+      cooldown_configured : String? = ENV["QWEN35_PREFILL_APPEND_COOLDOWN_MS"]?,
+      group_limit_configured : String? = ENV["QWEN35_PREFILL_APPEND_MAX_GROUPS"]?,
+      chunk_size_configured : String? = ENV["QWEN35_PREFILL_CHUNK_SIZE"]?,
+      *,
+      device_name : String,
+      start_pos : Int32,
+      n_tokens : Int32,
+      n_layer : Int32,
+      layer_limit : Int32,
+      n_embd : Int32,
+      n_ff : Int32,
+      n_head : Int32,
+      n_head_kv : Int32,
+      head_dim : Int32,
+      full_attention_interval : Int32,
+      kv_cache_f16 : Bool,
+      resident_adaptive : Bool,
+      checkpoint_requested : Bool,
+      boundary_profile : Bool,
+      graph_depth : Int32,
+      flash_d256 : Bool,
+    ) : Int32
+      return prefill_append_cooldown_ms(cooldown_configured) if cooldown_configured
+      return PREFILL_APPEND_COOLDOWN_MS if group_limit_configured || chunk_size_configured
+      return PREFILL_APPEND_COOLDOWN_MS unless device_name == "Apple M2 Max"
+      return PREFILL_APPEND_COOLDOWN_MS unless start_pos == 0
+      return PREFILL_APPEND_COOLDOWN_MS unless n_tokens == 1024 || n_tokens == 2048
+      # Full-logit/top-1 prefill handles the final full-attention layer through
+      # its terminal-row kernel after this 31-layer prefix. That exact route is
+      # the measured corridor; a complete 32-layer hidden prefill stays guarded.
+      return PREFILL_APPEND_COOLDOWN_MS unless n_layer == 32 && layer_limit == 31
+      return PREFILL_APPEND_COOLDOWN_MS unless n_embd == 4096 && n_ff == 12288
+      return PREFILL_APPEND_COOLDOWN_MS unless n_head == 16 && n_head_kv == 4 && head_dim == 256
+      return PREFILL_APPEND_COOLDOWN_MS unless full_attention_interval == 4
+      return PREFILL_APPEND_COOLDOWN_MS unless kv_cache_f16 && !resident_adaptive
+      return PREFILL_APPEND_COOLDOWN_MS if checkpoint_requested || boundary_profile || graph_depth != 0
+      return PREFILL_APPEND_COOLDOWN_MS unless flash_d256
+      0
+    end
+
     # The last command of a chunk is followed by the first command of the next
     # chunk, so it needs the same compositor window as an in-chunk rotation.
     def prefill_chunk_boundary_cooldown_ms(
@@ -3898,7 +3943,8 @@ module ML::GGUF
       n_tokens = token_ids.size
       raise ArgumentError.new("prefill span exceeds max_seq") if start_pos < 0 || start_pos + n_tokens > max_seq
 
-      chunk_size = prefill_chunk_size(state.adaptive_kv_layer_indices.any?)
+      resident_adaptive = state.adaptive_kv_layer_indices.any?
+      chunk_size = prefill_chunk_size(resident_adaptive)
       if n_tokens > chunk_size
         offset = 0
         x = nil.as(Array(Float32)?)
@@ -3945,10 +3991,40 @@ module ML::GGUF
       append_prefill_gpu_work = false
       append_prefill_group_count = 0
       append_prefill_group_limit = prefill_append_group_limit(n_tokens)
-      append_prefill_cooldown_ms = prefill_append_cooldown_ms
       prefill_boundary_profile = ENV["QWEN35_PREFILL_BOUNDARY_PROFILE"]? == "1"
       prefill_graph_depth = prefill_graph_max_inflight(
-        state.adaptive_kv_layer_indices.any?, checkpoint_requested, prefill_boundary_profile,
+        resident_adaptive, checkpoint_requested, prefill_boundary_profile,
+      )
+      cooldown_device_name = ""
+      cooldown_flash_d256 = false
+      {% unless flag?(:cpu_only) %}
+        if Qwen35Metal.available?
+          cooldown_device_name = ML::Metal::Device.instance.name
+          cooldown_flash_d256 = Qwen35Metal.prefill_attn_flash_d256_policy?(
+            cooldown_device_name, start_pos, n_tokens, hp.n_head, hp.n_head_kv,
+            hp.head_dim, state.kv_cache_f16?, resident_adaptive,
+            ENV["QWEN35_PREFILL_ATTN_FLASH_D256"]?,
+          )
+        end
+      {% end %}
+      append_prefill_cooldown_ms = prefill_append_cooldown_policy_ms(
+        device_name: cooldown_device_name,
+        start_pos: start_pos,
+        n_tokens: n_tokens,
+        n_layer: hp.n_layer,
+        layer_limit: layer_limit,
+        n_embd: hp.n_embd,
+        n_ff: hp.n_ff,
+        n_head: hp.n_head,
+        n_head_kv: hp.n_head_kv,
+        head_dim: hp.head_dim,
+        full_attention_interval: hp.full_attention_interval,
+        kv_cache_f16: state.kv_cache_f16?,
+        resident_adaptive: resident_adaptive,
+        checkpoint_requested: checkpoint_requested,
+        boundary_profile: prefill_boundary_profile,
+        graph_depth: prefill_graph_depth,
+        flash_d256: cooldown_flash_d256,
       )
       append_prefill_started = nil.as(Time::Instant?)
       pending_adaptive_caches = [] of QwenQBitAdaptiveResidentKV::Cache
