@@ -26849,3 +26849,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was an ordinary compiler-mode ablation.
 
 **decision:** Keep global safe math and remove the Q4_K opt-in. Do not revisit compiler flags unless kernel arithmetic or the target GPU changes. Continue with an actual Q4_K dataflow or scheduling difference, not a wider precision relaxation.
+
+#### [LM-QWEN35-Q4K-DIRECT-F32-B64-FALSIFIED-1029] Direct F32 tile conversion is slower than the established H16 staging corridor
+**context:** ml / Qwen3.5-9B / recurrent Q4_K FFN prefill / Apple M2 Max / same-process Metal ABBA
+**state:** candidate falsified and removed; staged H16 B64 route retained
+
+- claim: "Reading the F32 activation directly in the B64 Q4_K gate/up kernels and converting each tile to H16 does not accelerate the dominant `4096 -> 12288` prefill shape."
+  source: a temporary candidate preserved the production B64 geometry, Q4_K dequantization, matrix arithmetic, and H16 SwiGLU boundary, but replaced the global F32-to-H16 staging pass with F32 tile loads and in-kernel conversion. Full gate Float32-bit and activation Float16-bit validation passed. Guarded same-process alternating A/B used the real Qwen3.5-9B Q4_K_M tensor, two warmups, and ten measured pairs. At batch 1,024 the staged/direct GPU medians were `21.451/22.068 ms` (`-2.79%`, direct won `0/10`); at batch 2,048 they were `42.837/44.109 ms` (`-2.88%`, direct won `0/10`). Both processes exited zero under the 35% free-memory floor and 16 GiB process-tree cap.
+  verified_at: 2026-09-04
+  decay_trigger: B64 input layout, staging implementation, Metal compiler conversion/load behavior, model shape, device/runtime, or timing harness changes
+  trust: {F:0.99,G:0.04,R:0.96}
+
+**Adversary:** Removing about 8 MiB of nominal activation traffic at batch 1,024 and 16 MiB at batch 2,048 did not reduce execution time. Direct F32 loads double the tile input width and add conversion inside the kernel's critical load schedule; the production staging corridor can amortize conversion and feed denser H16 reads. One operator and device do not establish cross-device behavior, but exact parity plus two consistent `0/10` losses decisively reject this local promotion.
+
+**Value proxy:** Eliminated source-visible bytes are not equivalent to fewer costly physical transactions. The paired GPU interval is the local admission metric; it regressed at both requested long-prefill sizes.
+
+**LTP/WBA:** Not claimed. This was an ordinary dataflow ablation with the staged kernel as rollback.
+
+**decision:** Keep the established F32-to-H16 staging plus B64 Q4_K kernels. Do not merge F32 tile conversion or widen it to other quantized kernels without a materially different load schedule. Continue with command scheduling at pp256/512 or with transformations that remove an entire intermediate/dispatch rather than moving the same conversion into the GEMM.
