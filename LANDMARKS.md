@@ -27131,3 +27131,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary quantized-GEMM tiling.
 
 **decision:** Remove the 512-thread route and do not repeat that geometry. Any renewed B256 attempt must retain 256-thread occupancy and independently prove a wall-time gain over SG8-B128.
+
+#### [LM-QWEN38-Q6-B128-SG8-FALSIFIED-1042] Dual-band Q6 reuse is exact but loses the short-prompt boundary
+**context:** ml / Qwen3.8-27B Q4_K_M / Q6 projection GEMM / Apple M2 Max
+**state:** candidate falsified and removed; established Q6 B32 route retained
+
+- claim: "Reusing one Q6 weight tile across two 64-row activation bands preserves the production arithmetic but is not a safe pp256-2048 speedup."
+  source: the temporary exact-shape route used eight SIMD groups, 256 threads, 24 KiB threadgroup memory, raw F32 stores, and a same-encoder in-place `F32 -> F16 -> F32` epilogue. The real device compiled all three pipelines and reported a 704-thread pipeline limit. Production-tile tests compared all output elements bitwise and passed three examples. Same-process isolated ABBA on the real `17408 -> 5120` Q6 FFN-down tensor measured candidate/baseline deltas of `-0.41/+2.82/+0.59/+0.51%` at pp256/512/1024/2048. The real `5120 -> 10240` Q6 QKV tensor measured `-4.24/+3.28/+2.03/+1.19%`. Every isolated row remained bitwise equal.
+  verified_at: 2026-09-04
+  decay_trigger: Q6 dequantization/dataflow, epilogue representation, Metal register allocation/compiler/device, projection geometry, or benchmark boundary changes
+  trust: {F:0.99,G:0.03,R:0.96}
+
+**Adversary:** Two accumulation bands double per-SIMD-group accumulator state while Q6 dequantization already creates substantial register pressure. The flat epilogue also adds one full F32 read/write pass, about 10.5 MB for pp256 at output width 5,120. A positive pp512 point cannot rescue regressions at pp256 or establish a general speedup.
+
+**Value proxy:** Weight-tile reuse and bitwise parity establish mechanism and correctness only. The bounded wall-time matrix is mixed and violates the short-prompt performance requirement.
+
+**LTP/WBA:** Not claimed. This was ordinary quantized-GEMM tiling and numeric epilogue scheduling.
+
+**decision:** Remove the kernel, policy, epilogues, and tests. Do not revisit Q6 SG8-B128 with raw-F32 output plus a flat rounding epilogue on M2 Max without a new dataflow, architecture, or device-level reason that directly addresses register pressure and epilogue traffic.
