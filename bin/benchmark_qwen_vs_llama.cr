@@ -523,7 +523,7 @@ end
 if np = native_prefill
   if lp = llama_prefill
     case prefill_comparison.level
-    in .strict?
+    in .same_token?
       puts "  comparison: #{prefill_comparison.scope} (#{prefill_comparison.reason})"
       puts "  mean gap vs llama.cpp avg_ts: #{pct_gap(np.mean_ts, lp.avg_ts).round(2)}%"
     in .diagnostic?
@@ -549,7 +549,7 @@ end
 if nd = native_decode
   if ld = llama_decode
     case decode_comparison.level
-    in .strict?
+    in .same_token?
       puts "  comparison: #{decode_comparison.scope} depth=#{ld.n_depth} (#{decode_comparison.reason})"
       puts "  mean gap vs llama.cpp avg_ts: #{pct_gap(nd.mean_ts, ld.avg_ts).round(2)}%"
     in .diagnostic?
