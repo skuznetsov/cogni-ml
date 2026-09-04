@@ -14,7 +14,7 @@ module ML
     def self.init
       @@backend_mutex.synchronize do
         next if @@backend_initialized
-        LlamaFFI.ggml_backend_load_all  # Load Metal/CUDA/etc backends (required since b8200)
+        LlamaFFI.ggml_backend_load_all # Load Metal/CUDA/etc backends (required since b8200)
         LlamaFFI.llama_backend_init
         @@backend_initialized = true
       end
@@ -88,8 +88,7 @@ module ML
       def initialize(@path : String, n_gpu_layers : Int32 = 99, use_mlock : Bool = false)
         params = LlamaFFI.llama_model_default_params
         params.n_gpu_layers = n_gpu_layers
-        params.use_mmap = true
-        params.use_mlock = use_mlock
+        params.load_mode = use_mlock ? LlamaFFI::LlamaLoadMode::MmapMlock : LlamaFFI::LlamaLoadMode::Mmap
 
         @handle = LlamaFFI.llama_model_load_from_file(@path.to_unsafe, params)
         raise "Failed to load model: #{@path}" if @handle.null?
@@ -245,7 +244,7 @@ module ML
         flash_attn : Bool = true,
         embeddings : Bool = false,
         cache_type_k : LlamaFFI::GgmlType? = nil,
-        cache_type_v : LlamaFFI::GgmlType? = nil
+        cache_type_v : LlamaFFI::GgmlType? = nil,
       ) : Context
         Context.new(self, n_ctx: n_ctx, n_batch: n_batch, n_ubatch: n_ubatch, n_threads: n_threads, flash_attn: flash_attn, embeddings: embeddings, cache_type_k: cache_type_k, cache_type_v: cache_type_v)
       end
@@ -279,7 +278,7 @@ module ML
         flash_attn : Bool = true,
         embeddings : Bool = false,
         cache_type_k : LlamaFFI::GgmlType? = nil,
-        cache_type_v : LlamaFFI::GgmlType? = nil
+        cache_type_v : LlamaFFI::GgmlType? = nil,
       )
         params = LlamaFFI.llama_context_default_params
         params.n_ctx = n_ctx > 0 ? n_ctx.to_u32 : @model.n_ctx_train.to_u32
@@ -323,7 +322,7 @@ module ML
         top_k : Int32 = 40,
         top_p : Float32 = 0.95_f32,
         min_p : Float32 = 0.05_f32,
-        seed : UInt32 = LlamaFFI::LLAMA_DEFAULT_SEED
+        seed : UInt32 = LlamaFFI::LLAMA_DEFAULT_SEED,
       )
         if sampler = @sampler
           LlamaFFI.llama_sampler_free(sampler)
@@ -564,9 +563,9 @@ module ML
 
     # Prompt formatting modes
     enum PromptMode
-      Raw        # No formatting, use prompt as-is
-      ChatML     # Standard ChatML format
-      GptOss     # gpt-oss format with channel control
+      Raw          # No formatting, use prompt as-is
+      ChatML       # Standard ChatML format
+      GptOss       # gpt-oss format with channel control
       GptOssDirect # gpt-oss direct mode (skip reasoning)
     end
 
@@ -676,7 +675,7 @@ module ML
         question : String,
         system : String? = nil,
         max_tokens : Int32 = 256,
-        temperature : Float32 = 0.7_f32
+        temperature : Float32 = 0.7_f32,
       ) : String
         @context.reset
         @context.setup_sampler(temperature: temperature, seed: @seed)
@@ -733,7 +732,7 @@ module ML
         # For GptOss: need to wait for and skip past <|channel|>final marker
         # For others: pass through directly
         buffer = IO::Memory.new
-        in_final = !@prompt_mode.gpt_oss?  # Direct mode starts in final immediately
+        in_final = !@prompt_mode.gpt_oss? # Direct mode starts in final immediately
         final_marker = "<|channel|>final"
         tokens_streamed = 0
 
@@ -785,7 +784,7 @@ module ML
         stop_strings : Array(String)? = nil,
         temperature : Float32 = 0.8_f32,
         top_k : Int32 = 40,
-        top_p : Float32 = 0.95_f32
+        top_p : Float32 = 0.95_f32,
       ) : String
         @context.reset
         @token_logprobs.clear
@@ -796,7 +795,7 @@ module ML
 
         output = IO::Memory.new
         generated = 0
-        recent_buffer = IO::Memory.new  # Buffer for stop string detection
+        recent_buffer = IO::Memory.new # Buffer for stop string detection
 
         while generated < max_tokens
           token = @context.sample

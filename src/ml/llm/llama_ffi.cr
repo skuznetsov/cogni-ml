@@ -1,5 +1,5 @@
 # Crystal FFI bindings for llama.cpp
-# Version: 9960 (Jul 2026)
+# Version: b10434 / 7e4c0a96880dae4fc4268ad441f8a6446bd5460a (Aug 2026)
 # API docs: https://github.com/ggml-org/llama.cpp/blob/master/include/llama.h
 
 module ML
@@ -27,21 +27,31 @@ module ML
 
       # Constants
       LLAMA_DEFAULT_SEED = 0xFFFFFFFF_u32
-      LLAMA_TOKEN_NULL   = -1
+      LLAMA_TOKEN_NULL   =             -1
 
       # Enums
       enum LlamaSplitMode
-        None  = 0
-        Layer = 1
-        Row   = 2
+        None   = 0
+        Layer  = 1
+        Row    = 2
+        Tensor = 3
+      end
+
+      enum LlamaLoadMode
+        Auto      = -1
+        None      =  0
+        Mmap      =  1
+        Mlock     =  2
+        MmapMlock =  3
+        DirectIO  =  4
       end
 
       enum LlamaRopeScalingType
         Unspecified = -1
-        None        = 0
-        Linear      = 1
-        Yarn        = 2
-        LongRope    = 3
+        None        =  0
+        Linear      =  1
+        Yarn        =  2
+        LongRope    =  3
       end
 
       enum LlamaContextType
@@ -51,23 +61,23 @@ module ML
 
       enum LlamaPoolingType
         Unspecified = -1
-        None        = 0
-        Mean        = 1
-        Cls         = 2
-        Last        = 3
-        Rank        = 4
+        None        =  0
+        Mean        =  1
+        Cls         =  2
+        Last        =  3
+        Rank        =  4
       end
 
       enum LlamaAttentionType
         Unspecified = -1
-        Causal      = 0
-        NonCausal   = 1
+        Causal      =  0
+        NonCausal   =  1
       end
 
       enum LlamaFlashAttnType
         Auto     = -1
-        Disabled = 0
-        Enabled  = 1
+        Disabled =  0
+        Enabled  =  1
       end
 
       # Batch structure for token processing
@@ -87,19 +97,18 @@ module ML
         tensor_buft_overrides : Void*
         n_gpu_layers : Int32
         split_mode : LlamaSplitMode
+        load_mode : LlamaLoadMode
         main_gpu : Int32
         tensor_split : Float32*
         progress_callback : Void*
         progress_callback_user_data : Void*
         kv_overrides : Void*
         vocab_only : Bool
-        use_mmap : Bool
-        use_direct_io : Bool
-        use_mlock : Bool
         check_tensors : Bool
         use_extra_bufts : Bool
         no_host : Bool
         no_alloc : Bool
+        load_mtp : Bool
       end
 
       # Context parameters
@@ -110,6 +119,7 @@ module ML
         n_seq_max : UInt32
         n_rs_seq : UInt32
         n_outputs_max : UInt32
+        n_outputs_max_per_seq : UInt32
         n_threads : Int32
         n_threads_batch : Int32
         ctx_type : LlamaContextType
@@ -127,8 +137,8 @@ module ML
         defrag_thold : Float32
         cb_eval : Void*
         cb_eval_user_data : Void*
-        type_k : Int32  # ggml_type
-        type_v : Int32  # ggml_type
+        type_k : Int32 # ggml_type
+        type_v : Int32 # ggml_type
         abort_callback : Void*
         abort_callback_data : Void*
         embeddings : Bool
@@ -138,7 +148,7 @@ module ML
         swa_full : Bool
         kv_unified : Bool
         # Experimental: backend sampler chain configuration.
-        samplers : Void*  # llama_sampler_seq_config*
+        samplers : Void* # llama_sampler_seq_config*
         n_samplers : LibC::SizeT
         ctx_other : LlamaContext
       end
@@ -213,7 +223,7 @@ module ML
         tokens : LlamaToken*,
         n_tokens_max : Int32,
         add_special : Bool,
-        parse_special : Bool
+        parse_special : Bool,
       ) : Int32
 
       fun llama_token_to_piece(
@@ -222,7 +232,7 @@ module ML
         buf : LibC::Char*,
         length : Int32,
         lstrip : Int32,
-        special : Bool
+        special : Bool,
       ) : Int32
 
       fun llama_detokenize(
@@ -232,7 +242,7 @@ module ML
         text : LibC::Char*,
         text_len_max : Int32,
         remove_special : Bool,
-        unparse_special : Bool
+        unparse_special : Bool,
       ) : Int32
 
       # Batch operations
