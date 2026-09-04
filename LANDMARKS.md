@@ -27113,3 +27113,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is an ordinary tensor-layout correction and bounded kernel comparison.
 
 **decision:** Preserve `QWEN35_Q4K_TENSOR_MM=1` only as an explicit experiment and keep it off by default on M2 Max. Use SG8-B128 as the next-candidate baseline.
+
+#### [LM-QWEN38-Q4-B256-SG16-FALSIFIED-1041] Parallel B256 weight reuse loses to SG8-B128
+**context:** ml / Qwen3.8-27B Q4_K_M / direct recurrent Q4 FFN-down / Apple M2 Max
+**state:** candidate falsified and removed; accepted SG8-B128 route retained
+
+- claim: "A 512-thread B256 tile is numerically exact but slower at both measured prefill boundaries."
+  source: the temporary kernel shared each dequantized weight tile across two concurrent B128 activation bands using 16 SIMD groups and 24 KiB threadgroup memory. The device reported a 704-thread pipeline limit, and a bounded synthetic comparison matched all 16,384 F32 output elements bitwise. Guarded full-model candidate/rollback runs recorded exactly 24 direct recurrent route hits versus zero, bitwise-equal terminal logits, ordered top-2 equality, cosine `1.0`, and throughput deltas of `-4.22%` at pp256 (`167.72/175.10 tok/s`) and `-1.14%` at pp2048 (`164.74/166.64 tok/s`).
+  verified_at: 2026-09-04
+  decay_trigger: Q4 tile geometry, accumulator/register allocation, Metal compiler/device, recurrent FFN routing, or benchmark contract changes
+  trust: {F:0.99,G:0.03,R:0.95}
+
+**Adversary:** Halving modelled weight loads is a mechanism, not value evidence. The doubled active thread/accumulator front and full-threadgroup synchronization can lower occupancy enough to dominate the saved bytes. The 24-hit certificate covers only the direct non-fused Q4 down route.
+
+**Value proxy:** Promotion depends on end-to-end prefill wall time with preserved logits. Both measured boundaries regressed.
+
+**LTP/WBA:** Not claimed. This was ordinary quantized-GEMM tiling.
+
+**decision:** Remove the 512-thread route and do not repeat that geometry. Any renewed B256 attempt must retain 256-thread occupancy and independently prove a wall-time gain over SG8-B128.

@@ -4068,3 +4068,32 @@ about newer Apple GPUs where llama.cpp admits the tensor path.
 **decision:** Keep the layout correction and the existing explicit opt-in, but
 do not enable Tensor Q4 automatically on M2 Max. Continue from the faster
 SG8-B128 baseline and require a new dataflow mechanism before retesting.
+
+### Sixteen-SIMD-group B256 Q4 reuse is exact but slower (2026-09-04)
+
+A temporary recurrent FFN-down experiment reused each dequantized Q4 weight
+tile across 256 activation rows. The kernel launched 16 SIMD groups (512
+threads), split into two concurrent B128 accumulator sets, and used 24 KiB of
+threadgroup memory. Admission was default-off and restricted to Apple M2 Max,
+complete 256-row batches, and the exact `17408 -> 5120` Q4 shape.
+
+The device accepted the 512-thread launch (`maxTotalThreadsPerThreadgroup=704`).
+A bounded synthetic comparison produced bitwise-identical output for all
+16,384 F32 elements. A guarded full-model candidate/rollback comparison then
+recorded exactly 24 direct recurrent Q4 FFN-down route hits versus zero in the
+rollback, with bitwise-identical terminal logits, ordered top-2, and cosine
+`1.0`. Throughput was `167.72/175.10 tok/s` at pp256 (`-4.22%`) and
+`164.74/166.64 tok/s` at pp2048 (`-1.14%`).
+
+**Adversary:** The candidate halves weight-tile loads for its admitted rows,
+but doubles the active thread and accumulator front. The measured regression at
+both boundaries shows that theoretical bandwidth reduction is not the product
+objective; occupancy, register pressure, and full-threadgroup barriers erase
+the saving on this M2 Max route. The 24-hit scope excludes the separate fused
+down-add path and must not be misreported as every recurrent FFN-down call.
+
+**decision:** Remove the kernel, policy, route, spec, and probe. Do not retry
+this 512-thread geometry. A future B256 experiment must retain the established
+256-thread occupancy, for example by processing two B128 bands serially, and
+must beat the current SG8-B128 wall-time boundary rather than only reduce
+modelled bytes.
