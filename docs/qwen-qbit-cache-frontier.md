@@ -4045,3 +4045,26 @@ the exact positive pp2048 percentage is not stable speed evidence.
 **decision:** Remove the kernel, policy, route, and spec. Do not retry the same
 output-wide tile without a mechanism that demonstrably reduces register state
 or changes the arithmetic/dataflow ceiling.
+
+### Tensor Q4 layout repair does not justify M2 admission (2026-09-04)
+
+The experimental `simd_mm_q4k_tensor_f32out` kernel described its cooperative
+tensor as `(K tile, output rows)` but populated threadgroup memory in the
+opposite order. Matching llama.cpp's `row * K_tile + k` layout repaired the
+route: a Qwen3.8-27B full-terminal-logit comparison changed from a top-2
+failure to bitwise equality at every measured prompt size.
+
+The corrected route still lost to the accepted SG8-B128 kernel on M2 Max.
+Candidate/baseline throughput deltas were `-4.82%`, `+0.83%`, `-3.63%`, and
+`-6.29%` at pp256/512/1024/2048. The pp512 result is noise-sized and does not
+offset the three regressions. Current llama.cpp likewise keeps tensor ops out
+of its pre-M5 default route.
+
+**Adversary:** Successful compilation and exact output do not establish that
+the hardware executes this tensor formulation efficiently. The comparison is
+limited to one M2 Max and the Qwen3.8 Q4_K_M gate/up corridor; it says nothing
+about newer Apple GPUs where llama.cpp admits the tensor path.
+
+**decision:** Keep the layout correction and the existing explicit opt-in, but
+do not enable Tensor Q4 automatically on M2 Max. Continue from the faster
+SG8-B128 baseline and require a new dataflow mechanism before retesting.

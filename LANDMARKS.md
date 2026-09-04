@@ -27089,3 +27089,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary quantized-GEMM tiling.
 
 **decision:** Remove the kernel, host route, policy, and spec. Do not retry the same transposed tile without a new mechanism that reduces register state or the dominant arithmetic/weight traffic.
+
+#### [LM-QWEN38-Q4-TENSOR-LAYOUT-1040] Tensor Q4 is repaired but remains slower on M2 Max
+**context:** ml / Qwen3.8-27B Q4_K_M / experimental Metal tensor Q4 prefill / Apple M2 Max
+**state:** arithmetic layout fixed; explicit-only route retained; automatic admission rejected
+
+- claim: "The experimental Tensor Q4 path now agrees bitwise with the SG8-B128 baseline on the measured full-logit boundary."
+  source: the cooperative tensor declares a `(K tile, output rows)` threadgroup tensor and now stores each dequantized row as `row * K_tile + k`, matching current llama.cpp. Before the change, the guarded pp256 comparison failed because ordered top-2 changed. After rebuilding, pp256/512/1024/2048 all reported cosine `1.0`, maximum absolute difference `0.0`, and identical ordered top-2.
+  verified_at: 2026-09-04
+  decay_trigger: tensor extents/strides, Q4_K dequantization, Metal tensor API/compiler, model shape, benchmark boundary, or device changes
+  trust: {F:0.99,G:0.03,R:0.95}
+
+- claim: "Correct Tensor Q4 is not a prefill speedup over SG8-B128 on the measured M2 Max."
+  source: guarded same-process comparisons measured candidate/baseline deltas of `-4.82%`, `+0.83%`, `-3.63%`, and `-6.29%` at pp256/512/1024/2048. The first point used one pair and the remaining points two pairs; all retained full-logit equality. Current llama.cpp also disables its tensor route by default before M5-class devices.
+  verified_at: 2026-09-04
+  decay_trigger: kernel tile/dataflow, Metal compiler/runtime, model/device, host load, or benchmark contract changes
+  trust: {F:0.98,G:0.03,R:0.91}
+
+**Adversary:** This repairs correctness, not performance. The pp512 positive row is below the promotion threshold and contradicted by three negative boundaries. Compile support is not evidence of hardware tensor acceleration.
+
+**Value proxy:** Tensor API use and a larger tile are implementation coordinates. The admitted value remains end-to-end prompt throughput with preserved logits, which did not improve.
+
+**LTP/WBA:** Not claimed. This is an ordinary tensor-layout correction and bounded kernel comparison.
+
+**decision:** Preserve `QWEN35_Q4K_TENSOR_MM=1` only as an explicit experiment and keep it off by default on M2 Max. Use SG8-B128 as the next-candidate baseline.

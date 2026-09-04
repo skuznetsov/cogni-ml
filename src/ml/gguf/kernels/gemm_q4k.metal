@@ -2564,7 +2564,7 @@ kernel void simd_mm_q4k_tensor_f32out(
             const int k_chunk = work % TQ4_N_MM_NK;
             const int k_pos = loop_k + k_chunk * 16;
             const short k_base = short(k_chunk * 16);
-            threadgroup half* dst = sa + int(k_base) * NRA + row;
+            threadgroup half* dst = sa + row * NK + int(k_base);
 
             if (ra + row < M) {
                 const int block_idx = k_pos / int(QK_K);
@@ -2573,11 +2573,11 @@ kernel void simd_mm_q4k_tensor_f32out(
                 half4x4 temp_a;
                 dequantize_q4_K_fn(row_ptr + block_idx, il, temp_a);
                 FOR_UNROLL for (short i = 0; i < 16; i++) {
-                    dst[int(i) * NRA] = (k_pos + int(i) < K) ? temp_a[i/4][i%4] : half(0.0h);
+                    dst[int(i)] = (k_pos + int(i) < K) ? temp_a[i/4][i%4] : half(0.0h);
                 }
             } else {
                 FOR_UNROLL for (short i = 0; i < 16; i++) {
-                    dst[int(i) * NRA] = half(0.0h);
+                    dst[int(i)] = half(0.0h);
                 }
             }
         }
