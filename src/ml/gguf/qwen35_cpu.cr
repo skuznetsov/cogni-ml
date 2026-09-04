@@ -211,6 +211,19 @@ module ML::GGUF
       yield
     end
 
+    {% unless flag?(:cpu_only) %}
+      private def cleanup_prefill_command_setup(
+        queue : ML::Metal::GraphSubmissionQueue(ML::Metal::CommandBuffer, Qwen35Metal::Scratch::Arena)?,
+        command : ML::Metal::CommandBuffer?,
+      ) : Nil
+        if active_queue = queue
+          active_queue.abort unless active_queue.failed?
+        elsif active_command = command
+          active_command.discard unless active_command.committed?
+        end
+      end
+    {% end %}
+
     private def prefill_gc_guard_enabled? : Bool
       ENV["QWEN35_PREFILL_GC_GUARD_OFF"]? != "1"
     end
@@ -3974,11 +3987,7 @@ module ML::GGUF
         return need_output ? x.not_nil! : [] of Float32
       end
 
-      x = Array(Float32).new(n_tokens * hp.n_embd, 0.0_f32)
-      token_ids.each_with_index do |token_id, t|
-        emb = embedding_lookup(weights.token_embd, token_id)
-        hp.n_embd.times { |i| x[t * hp.n_embd + i] = emb[i] }
-      end
+      x = [] of Float32
 
       il = 0
       layer_limit = stop_layer || weights.layers.size
@@ -4041,25 +4050,32 @@ module ML::GGUF
         prefill_graph_lease = nil.as(ML::Metal::GraphSubmissionLease(ML::Metal::CommandBuffer, Qwen35Metal::Scratch::Arena)?)
         prefill_graph_pending_flights = [] of {ML::Metal::GraphSubmissionLease(ML::Metal::CommandBuffer, Qwen35Metal::Scratch::Arena), Array(QwenQBitAdaptiveResidentKV::Cache)}
         prefill_graph_submitted_gpu_work = false
+      {% end %}
+      {% unless flag?(:cpu_only) %}
         append_command_available = ENV["QWEN35_PREFILL_APPEND_CMD_OFF"]? != "1" &&
                                    resident_boundary_ok && Qwen35Metal.available?
         if prefill_graph_depth > 0 && !append_command_available
           raise ArgumentError.new("CogniGraph prefill enqueue requires the resident Metal append-command route")
         end
-        if prefill_graph_depth > 0
-          command_queue = ML::Metal::CommandQueue.new
-          prefill_graph_queue = ML::Metal::GraphSubmissionQueue(ML::Metal::CommandBuffer, Qwen35Metal::Scratch::Arena).new(prefill_graph_depth) do |slot, sequence|
-            ML::Metal::CommandBuffer.new(queue: command_queue)
+        begin
+          if prefill_graph_depth > 0
+            command_queue = ML::Metal::CommandQueue.new
+            prefill_graph_queue = ML::Metal::GraphSubmissionQueue(ML::Metal::CommandBuffer, Qwen35Metal::Scratch::Arena).new(prefill_graph_depth) do |slot, sequence|
+              ML::Metal::CommandBuffer.new(queue: command_queue)
+            end
+            prefill_graph_lease = prefill_graph_queue.not_nil!.begin_submission
+            prefill_graph_scratch_arena = Qwen35Metal::Scratch::Arena.new(
+              "qwen35_prefill:#{Thread.current.object_id}:#{prefill_graph_lease.not_nil!.sequence}",
+            )
+            prefill_graph_lease.not_nil!.retain(prefill_graph_scratch_arena.not_nil!, &.release)
+            append_prefill_cmd = prefill_graph_lease.not_nil!.command
+          elsif append_command_available
+            append_prefill_cmd = ML::Metal::CommandBuffer.new
+            append_prefill_started = Time.instant if prefill_boundary_profile
           end
-          prefill_graph_lease = prefill_graph_queue.not_nil!.begin_submission
-          prefill_graph_scratch_arena = Qwen35Metal::Scratch::Arena.new(
-            "qwen35_prefill:#{Thread.current.object_id}:#{prefill_graph_lease.not_nil!.sequence}",
-          )
-          prefill_graph_lease.not_nil!.retain(prefill_graph_scratch_arena.not_nil!, &.release)
-          append_prefill_cmd = prefill_graph_lease.not_nil!.command
-        elsif append_command_available
-          append_prefill_cmd = ML::Metal::CommandBuffer.new
-          append_prefill_started = Time.instant if prefill_boundary_profile
+        rescue ex
+          cleanup_prefill_command_setup(prefill_graph_queue, append_prefill_cmd)
+          raise ex
         end
         flush_prefill_cmd = -> {
           if queue = prefill_graph_queue
@@ -4186,6 +4202,42 @@ module ML::GGUF
         end
       {% end %}
       begin
+        gpu_q4_embedding = false
+        {% unless flag?(:cpu_only) %}
+          if ENV["QWEN35_PREFILL_GPU_Q4_EMBED_OFF"]? != "1" &&
+             weights.token_embd.type.q4_k? && append_prefill_cmd
+            token_ids.each do |token_id|
+              unless token_id >= 0 && token_id < weights.token_embd.out_dim
+                raise "embedding: token_id #{token_id} out of range"
+              end
+            end
+
+            token_ids_buf = ML::MetalBuffer.new(n_tokens.to_i64 * sizeof(UInt32))
+            token_ids_ptr = token_ids_buf.contents.as(Pointer(UInt32))
+            token_ids.each_with_index { |token_id, index| token_ids_ptr[index] = token_id.to_u32 }
+            embedding_buf = ML::MetalBuffer.new(handoff_bytes)
+            embedding_enc = ML::Metal::ComputeEncoder.new(append_prefill_cmd.not_nil!)
+            begin
+              Qwen35Metal.encode_embedding_q4k_rows_to_buffer(
+                embedding_enc, weights.token_embd, token_ids_buf, embedding_buf, n_tokens,
+              )
+            ensure
+              embedding_enc.end_encoding
+            end
+            append_prefill_gpu_work = true
+            gpu_hidden = embedding_buf
+            gpu_q4_embedding = true
+            Qwen35Metal::Profile.bump_route_marker("prefill_gpu_q4_embedding")
+          end
+        {% end %}
+        unless gpu_q4_embedding
+          x = Array(Float32).new(n_tokens * hp.n_embd, 0.0_f32)
+          token_ids.each_with_index do |token_id, t|
+            emb = embedding_lookup(weights.token_embd, token_id)
+            hp.n_embd.times { |i| x[t * hp.n_embd + i] = emb[i] }
+          end
+        end
+
         while il < layer_limit
           lw = weights.layers[il]
           case lw
@@ -4613,6 +4665,19 @@ module ML::GGUF
               flight[1].each { |cache| cleanup_caches << cache unless cleanup_caches.includes?(cache) }
             end
             cleanup_caches.each { |cache| QwenQBitAdaptiveResidentKV.discard_pending_appends!(cache) }
+          elsif cmd = append_prefill_cmd
+            unless cmd.committed?
+              pending_adaptive_caches.reverse_each do |cache|
+                begin
+                  QwenQBitAdaptiveResidentKV.cancel_pending_append!(cache, cmd)
+                rescue
+                end
+              end
+              begin
+                cmd.discard
+              rescue
+              end
+            end
           end
         {% end %}
         raise ex

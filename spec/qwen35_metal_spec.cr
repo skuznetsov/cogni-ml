@@ -4,8 +4,9 @@ require "../src/ml/gguf/qwen35_metal"
 require "../src/ml/gguf/quant_matmul"
 require "../src/ml/gguf/reader"
 
-QWEN_9B_METAL  = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
-QWEN_08B_METAL = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q8_0.gguf"
+QWEN_9B_METAL     = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
+QWEN_08B_METAL    = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-0.8B-GGUF/Qwen3.5-0.8B-Q8_0.gguf"
+QWEN_38_27B_METAL = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf"
 
 # Borrow a real quantized weight from the 9B model and return raw bytes
 # + dimensions. Caller asserts the expected TensorType.
@@ -50,6 +51,48 @@ end
 describe ML::GGUF::Qwen35Metal do
   pending!("9B model not present") unless File.exists?(QWEN_9B_METAL)
   pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+  it "embeds Q4 token-id batches like the existing per-token Metal path" do
+    raw, hidden, vocab = q4k_tensor_bytes(QWEN_9B_METAL, "token_embd.weight")
+    token_embd = ML::GGUF::QuantWeight.new(raw, ML::GGUF::TensorType::Q4_K, vocab, hidden)
+    token_ids = [42_i32, 43_i32, 44_i32, 45_i32]
+    expected = token_ids.flat_map do |token_id|
+      ML::GGUF::Qwen35Metal.embedding_q4k_from_token_id(token_embd, token_id).not_nil!
+    end
+
+    out_buf = ML::MetalBuffer.new(token_ids.size.to_i64 * hidden * sizeof(Float32))
+    ML::GGUF::Qwen35Metal.embedding_q4k_rows_to_buffer(token_embd, token_ids, out_buf)
+    actual = out_buf.read(token_ids.size * hidden)
+
+    max_abs_diff(actual, expected).should eq(0.0_f32)
+  end
+
+  it "rejects an invalid token before dispatching a Q4 embedding batch" do
+    raw, hidden, vocab = q4k_tensor_bytes(QWEN_9B_METAL, "token_embd.weight")
+    token_embd = ML::GGUF::QuantWeight.new(raw, ML::GGUF::TensorType::Q4_K, vocab, hidden)
+    out_buf = ML::MetalBuffer.new(hidden.to_i64 * sizeof(Float32))
+
+    expect_raises(Exception, "embedding: token_id #{vocab} out of range") do
+      ML::GGUF::Qwen35Metal.embedding_q4k_rows_to_buffer(token_embd, [vocab], out_buf)
+    end
+  end
+
+  it "embeds Qwen3.8-27B Q4 token-id batches like the per-token Metal path" do
+    pending!("Qwen3.8-27B model not present") unless File.exists?(QWEN_38_27B_METAL)
+    raw, hidden, vocab = q4k_tensor_bytes(QWEN_38_27B_METAL, "token_embd.weight")
+    token_embd = ML::GGUF::QuantWeight.new(raw, ML::GGUF::TensorType::Q4_K, vocab, hidden)
+    token_ids = [42_i32, 248046_i32]
+    expected = token_ids.flat_map do |token_id|
+      ML::GGUF::Qwen35Metal.embedding_q4k_from_token_id(token_embd, token_id).not_nil!
+    end
+
+    out_buf = ML::MetalBuffer.new(token_ids.size.to_i64 * hidden * sizeof(Float32))
+    ML::GGUF::Qwen35Metal.embedding_q4k_rows_to_buffer(token_embd, token_ids, out_buf)
+    actual = out_buf.read(token_ids.size * hidden)
+
+    hidden.should eq(5120)
+    max_abs_diff(actual, expected).should eq(0.0_f32)
+  end
 
   it "matmul_q4k GEMV (batch=1) matches CPU reference" do
     w_raw, in_dim, out_dim = q4k_tensor_bytes(QWEN_9B_METAL, "blk.0.ffn_up.weight")

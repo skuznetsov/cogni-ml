@@ -85,6 +85,43 @@ kernel void embed_q4k_f32_from_token_id(
     output[tid] = float(blk->d) * float(sc_min.x) * qv - float(blk->dmin) * float(sc_min.y);
 }
 
+kernel void embed_q4k_f32_from_token_ids(
+    device const uint8_t* w_raw      [[buffer(0)]],
+    device const uint*    token_ids  [[buffer(1)]],
+    device       float*   output     [[buffer(2)]],
+    constant     uint&    hidden_dim [[buffer(3)]],
+    constant     uint&    vocab_size [[buffer(4)]],
+    constant     uint&    batch      [[buffer(5)]],
+    uint tid [[thread_position_in_grid]])
+{
+    const uint total = hidden_dim * batch;
+    if (tid >= total) return;
+
+    const uint row_idx = tid / hidden_dim;
+    const uint col = tid - row_idx * hidden_dim;
+    const uint token_id = token_ids[row_idx];
+    if (token_id >= vocab_size) {
+        output[tid] = 0.0f;
+        return;
+    }
+
+    const uint nb = hidden_dim / QK_K;
+    const uint row_bytes = nb * 144;
+    const uint block_id = col / QK_K;
+    const uint within = col - block_id * QK_K;
+    const uint group = within / 64;
+    const uint rem = within - group * 64;
+    const uint lane = rem & 31;
+    const uint scale_idx = group * 2 + (rem >= 32 ? 1 : 0);
+
+    device const block_q4_K * row = (device const block_q4_K *)(w_raw + token_id * row_bytes);
+    device const block_q4_K * blk = row + block_id;
+    const uchar2 sc_min = get_scale_min_k4_scalar(scale_idx, blk->scales);
+    const uchar q = blk->qs[group * 32 + lane];
+    const float qv = rem < 32 ? float(q & 0x0F) : float(q >> 4);
+    output[tid] = float(blk->d) * float(sc_min.x) * qv - float(blk->dmin) * float(sc_min.y);
+}
+
 // Dequantize 16 elements of sub-block `il` (0..15) into a 4x4 half register.
 // Matches llama.cpp dequantize_q4_K.
 void dequantize_q4_K_fn(device const block_q4_K *xb, short il, thread half4x4 & reg) {

@@ -26909,3 +26909,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was an ordinary kernel-layout experiment.
 
 **decision:** Remove the token-parallel kernels, route, environment control, and tests. Keep the simpler serial convolution. Retain the benchmark lifecycle correction so large-model comparisons do not accumulate native GPU state across prompt sizes. Continue the llama.cpp comparison at a dominant projection or FFN dataflow boundary rather than convolution scheduling.
+
+#### [LM-QWEN35-Q4-GPU-EMBED-1032] Q4 prefill embedding now enters the first resident Metal command directly
+**context:** ml / Qwen3.5-9B / Q4_K token embedding / Metal prefill / Apple M2 Max
+**state:** exact Q4 resident route enabled by default with an immediate CPU rollback
+
+- claim: "A batched Q4_K embedding kernel can replace host dequantization and the temporary host F32 activation without changing the prefill result."
+  source: the new kernel decodes every `(token, hidden)` element with the same scalar Q4_K scale/min and nibble mapping as the established per-token Metal embedding oracle, then writes the rows into the first existing prefill command buffer. A four-token Qwen3.5-9B primitive and a two-token Qwen3.8-27B primitive at hidden width 5,120 both matched the old Metal path with maximum absolute difference `0.0`; the invalid-token test rejects before dispatch. The public encoder also rejects undersized token and output buffers. Adjacent exception transactions cover setup and inference: setup aborts a CogniGraph lease or discards an uncommitted simple command, while inference reverse-cancels cache reservations before discarding its uncommitted simple command. CPU-only compilation, the focused Metal tests, the 12-example benchmark-contract suite, format, and diff checks passed.
+  verified_at: 2026-09-04
+  decay_trigger: Q4_K byte layout, embedding tensor orientation, Metal buffer lifetime, prefill command ownership, or token validation changes
+  trust: {F:0.99,G:0.08,R:0.96}
+
+- claim: "Removing the host embedding boundary is a small isolated compute win and a larger unified-memory-pressure win; those are separate certificates."
+  source: a native-only same-process ABBA measured GPU/CPU embedding-route gains of `+0.60/+0.71/+0.41/+0.40%` at pp256/512/1024/2048. The durable comparison harness, which also held llama.cpp and a second native state, measured `+4.78/+6.00/+4.74/+3.82%` with full-logit cosine `1.0` and identical ordered top-2. The eliminated host F32 matrix is 4/8/16/32 MiB at those prompt sizes. A final eight-repetition candidate-versus-llama ABBA after the graph-lease lifecycle correction measured native/llama throughput of `567.37/576.91`, `583.99/598.33`, `605.65/589.39`, and `603.12/557.25 tok/s`, or `-1.65%/-2.40%/+2.76%/+8.23%`; full-logit cosine was at least `0.99985418` and ordered top-2 matched on every row. The subsequent encoder-finalization and uncommitted-command cleanup guards change only exception paths and the rebuilt focused tests remained green.
+  verified_at: 2026-09-04
+  decay_trigger: model/device, allocator or GC pressure, benchmark co-residency, prefill kernels, llama.cpp build, host activity, or timing contract changes
+  trust: {F:0.98,G:0.05,R:0.90}
+
+**Adversary:** The larger `3.82-6.00%` route gain appears only when extra native and llama state compete for unified memory; it must not be presented as the isolated kernel speedup. The native-only result is positive but below the project's usual `3%` compute admission threshold. Promotion is justified by exact arithmetic, removal of a prompt-sized host allocation and copy boundary, no measured regression, and a simple fail-closed rollback rather than by claiming a universal `5%` speedup. The performance certificate does not yet cover 27B, non-Q4 embeddings, another Apple GPU, CPU-only inference, checkpoint prefill, or a command-disabled fallback; the 27B evidence is semantic kernel parity only. Routes without the eligible resident Q4 Metal command retain the old CPU embedding path.
+
+**Value proxy:** Fewer allocated bytes are useful only because the end-to-end route avoids host materialization and remains semantically identical. The stable product signals are full prefill wall time, output parity, and bounded memory behavior; kernel launch count alone is not the objective.
+
+**LTP/WBA:** Not claimed. This is ordinary producer placement and command-buffer fusion.
+
+**decision:** Enable the Q4_K GPU embedding route when the resident Metal append command is available. Preserve `QWEN35_PREFILL_GPU_Q4_EMBED_OFF=1` as immediate rollback. Treat `0.4-0.7%` as the isolated native speed result and `3.8-6.0%` as the co-resident memory-pressure result. The next material frontier is an algebraically new FFN dataflow or an adaptive resident handoff that removes actual readback, not more encoder-count reduction.

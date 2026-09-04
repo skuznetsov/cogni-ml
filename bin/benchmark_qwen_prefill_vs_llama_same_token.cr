@@ -4,8 +4,9 @@ require "../src/ml/gguf/qwen35_weights"
 require "../src/ml/llm/llama"
 require "../src/ml/qwen_vs_llama_benchmark_contract"
 
-DEFAULT_MODEL  = (Path.home / ".cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf").to_s
-FLASH_D256_ENV = "QWEN35_PREFILL_ATTN_FLASH_D256"
+DEFAULT_MODEL        = (Path.home / ".cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf").to_s
+FLASH_D256_ENV       = "QWEN35_PREFILL_ATTN_FLASH_D256"
+GPU_Q4_EMBED_OFF_ENV = "QWEN35_PREFILL_GPU_Q4_EMBED_OFF"
 
 alias BenchmarkContract = ML::QwenVsLlamaBenchmarkContract
 
@@ -55,7 +56,8 @@ class NativePrefillRunner
   def initialize(@weights : ML::GGUF::Qwen35Weights,
                  @tokens : Array(Int32),
                  kv_cache_f16 : Bool,
-                 @flash_d256 : Bool = false)
+                 @flash_d256 : Bool = false,
+                 @gpu_q4_embed : Bool = true)
     hp = @weights.hparams
     @output_width = @weights.output.out_dim
     @state = ML::GGUF::Qwen35CPU::State.new(
@@ -66,7 +68,7 @@ class NativePrefillRunner
     @terminal_last_used = false
     @closed = false
     begin
-      with_flash_d256 do
+      with_native_route do
         ML::GGUF::Qwen35CPU.prepare_state_metal!(
           @state,
           hp,
@@ -86,7 +88,7 @@ class NativePrefillRunner
 
   def run : Array(Float32)
     route_used = [false]
-    logits = with_flash_d256 do
+    logits = with_native_route do
       ML::GGUF::Qwen35CPU.prefill_tokens_logits(@weights, @tokens, 0, @state, route_used)
     end
     @terminal_last_used = route_used[0]
@@ -101,15 +103,26 @@ class NativePrefillRunner
     @closed = true
   end
 
-  private def with_flash_d256(&)
-    old = ENV[FLASH_D256_ENV]?
+  private def with_native_route(&)
+    old_flash = ENV[FLASH_D256_ENV]?
+    old_embed_off = ENV[GPU_Q4_EMBED_OFF_ENV]?
     ENV[FLASH_D256_ENV] = @flash_d256 ? "1" : "0"
+    if @gpu_q4_embed
+      ENV.delete(GPU_Q4_EMBED_OFF_ENV)
+    else
+      ENV[GPU_Q4_EMBED_OFF_ENV] = "1"
+    end
     yield
   ensure
-    if old
-      ENV[FLASH_D256_ENV] = old
+    if old_flash
+      ENV[FLASH_D256_ENV] = old_flash
     else
       ENV.delete(FLASH_D256_ENV)
+    end
+    if old_embed_off
+      ENV[GPU_Q4_EMBED_OFF_ENV] = old_embed_off
+    else
+      ENV.delete(GPU_Q4_EMBED_OFF_ENV)
     end
   end
 end
@@ -370,6 +383,8 @@ native_cache_f16 = false
 native_cache_ab = false
 native_flash = false
 native_flash_ab = false
+native_gpu_q4_embed = true
+native_gpu_q4_embed_ab = false
 
 OptionParser.parse do |parser|
   parser.banner = "Usage: benchmark_qwen_prefill_vs_llama_same_token [options]"
@@ -394,6 +409,8 @@ OptionParser.parse do |parser|
   parser.on("--native-kv-ab", "Also measure native F16 versus F32 KV in-process") { native_cache_ab = true }
   parser.on("--native-flash", "Use the admitted d256 Flash-MMA route for the native-vs-llama comparison") { native_flash = true }
   parser.on("--native-flash-ab", "Also measure opt-in d256 Flash-MMA versus the native baseline in-process") { native_flash_ab = true }
+  parser.on("--native-gpu-q4-embed-off", "Disable native Q4 token embedding on GPU") { native_gpu_q4_embed = false }
+  parser.on("--native-gpu-q4-embed-ab", "Also measure native GPU versus CPU Q4 token embedding in-process") { native_gpu_q4_embed_ab = true }
   parser.on("--llama-kv=TYPE", "llama.cpp K/V cache type: f16 or f32 (default: f16)") do |value|
     llama_cache_type = case value
                        when "f16" then ML::LLM::LlamaFFI::GgmlType::F16
@@ -417,6 +434,7 @@ raise "--threads must be positive" unless n_threads > 0
 raise "--native-kv-ab requires --native-kv=f16" if native_cache_ab && !native_cache_f16
 raise "--native-flash requires --native-kv=f16" if native_flash && !native_cache_f16
 raise "--native-flash-ab requires --native-kv=f16" if native_flash_ab && !native_cache_f16
+raise "--native-gpu-q4-embed-ab conflicts with --native-gpu-q4-embed-off" if native_gpu_q4_embed_ab && !native_gpu_q4_embed
 
 native_weights : ML::GGUF::Qwen35Weights? = nil
 llama_model : ML::LLM::Model? = nil
@@ -437,11 +455,12 @@ begin
   puts "Qwen same-token prefill external workload vs llama.cpp"
   puts "model: #{model_path}"
   native_cache_name = native_cache_f16 ? "f16" : "f32"
-  puts "settings: prompts=#{prompt_sizes.join(',')} reps=#{reps} warmup=#{warmup} order=ABBA ngl=#{n_gpu_layers} n_batch=#{n_batch} n_ubatch=#{n_ubatch} threads=#{n_threads} flash_attn=#{flash_attn} output=one_terminal_full_logits_with_host_copy state=reused_cleared native_kv=#{native_cache_name} native_flash=#{native_flash} llama_kv=#{llama_cache_type.to_s.downcase}"
+  puts "settings: prompts=#{prompt_sizes.join(',')} reps=#{reps} warmup=#{warmup} order=ABBA ngl=#{n_gpu_layers} n_batch=#{n_batch} n_ubatch=#{n_ubatch} threads=#{n_threads} flash_attn=#{flash_attn} output=one_terminal_full_logits_with_host_copy state=reused_cleared native_kv=#{native_cache_name} native_flash=#{native_flash} native_gpu_q4_embed=#{native_gpu_q4_embed} llama_kv=#{llama_cache_type.to_s.downcase}"
   puts
   puts "# pp  token_sha256  native_tok/s  llama_tok/s  gap  native_cooldown_ms  min_logits_cosine  native_top2  llama_top2  terminal_last  contract"
   puts "# native-kv-ab: pp f16_tok/s f32_tok/s f16_gain min_logits_cosine f16_top2 f32_top2" if native_cache_ab
   puts "# native-flash-ab: pp flash_tok/s baseline_tok/s flash_gain min_logits_cosine flash_top2 baseline_top2" if native_flash_ab
+  puts "# native-gpu-q4-embed-ab: pp gpu_tok/s cpu_tok/s gpu_gain min_logits_cosine gpu_top2 cpu_top2" if native_gpu_q4_embed_ab
 
   prompt_sizes.each do |prompt_size|
     canonical = BenchmarkContract.synthetic_prefill_tokens(prompt_size.to_i32, native_vocab)
@@ -451,13 +470,17 @@ begin
     native_f32_runner : NativePrefillRunner? = nil
     native_flash_runner : NativePrefillRunner? = nil
     native_flash_baseline_runner : NativePrefillRunner? = nil
+    native_gpu_q4_embed_baseline_runner : NativePrefillRunner? = nil
     llama_runner : LlamaPrefillRunner? = nil
 
     begin
-      native_runner = NativePrefillRunner.new(weights, native_tokens, native_cache_f16, native_flash)
+      native_runner = NativePrefillRunner.new(weights, native_tokens, native_cache_f16, native_flash, native_gpu_q4_embed)
       native_f32_runner = NativePrefillRunner.new(weights, native_tokens, false) if native_cache_ab
       native_flash_runner = NativePrefillRunner.new(weights, native_tokens, true, true) if native_flash_ab
       native_flash_baseline_runner = NativePrefillRunner.new(weights, native_tokens, true, false) if native_flash_ab
+      native_gpu_q4_embed_baseline_runner = NativePrefillRunner.new(
+        weights, native_tokens, native_cache_f16, native_flash, false,
+      ) if native_gpu_q4_embed_ab
       llama_runner = LlamaPrefillRunner.new(
         model,
         llama_tokens,
@@ -567,6 +590,23 @@ begin
         gain = ((flash_stats.mean_ts / baseline_stats.mean_ts) - 1.0) * 100.0
         puts "native-flash-ab: #{prompt_size} #{flash_stats.mean_ts.round(2)} #{baseline_stats.mean_ts.round(2)} #{gain.round(2)}% #{flash_quality.cosine.round(8)} #{flash_quality.native_top1}/#{flash_quality.native_top2} #{flash_quality.llama_top1}/#{flash_quality.llama_top2}"
       end
+
+      if embed_baseline = native_gpu_q4_embed_baseline_runner
+        warmup.times do
+          native.reset!
+          native.run
+          embed_baseline.reset!
+          embed_baseline.run
+        end
+        gpu_stats, cpu_stats, embed_quality = measure_native_route_abba(
+          native,
+          embed_baseline,
+          prompt_size.to_i32,
+          reps,
+        )
+        gain = ((gpu_stats.mean_ts / cpu_stats.mean_ts) - 1.0) * 100.0
+        puts "native-gpu-q4-embed-ab: #{prompt_size} #{gpu_stats.mean_ts.round(2)} #{cpu_stats.mean_ts.round(2)} #{gain.round(2)}% #{embed_quality.cosine.round(8)} #{embed_quality.native_top1}/#{embed_quality.native_top2} #{embed_quality.llama_top1}/#{embed_quality.llama_top2}"
+      end
     ensure
       run_cleanups([
         -> { llama_runner.try(&.close) },
@@ -574,6 +614,7 @@ begin
         -> { native_f32_runner.try(&.close) },
         -> { native_flash_runner.try(&.close) },
         -> { native_flash_baseline_runner.try(&.close) },
+        -> { native_gpu_q4_embed_baseline_runner.try(&.close) },
       ])
     end
   end
