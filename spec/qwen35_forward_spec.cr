@@ -176,6 +176,28 @@ describe ML::GGUF::Qwen35Metal, "route policies" do
     expect_raises(ArgumentError) { metal.q4_h16_b64_tail_policy?(360, "Apple M2 Max", "999999999999999999999999") }
   end
 
+  it "admits the SG8 B128 Q4 prefill tile only on measured automatic shapes" do
+    metal = ML::GGUF::Qwen35Metal
+
+    metal.q4_h16_b128_sg8_policy?(128, 5120, 12288, "Apple M2 Max", nil).should be_false
+    metal.q4_h16_b128_sg8_policy?(256, 5120, 12288, "Apple M2 Max", nil).should be_true
+    metal.q4_h16_b128_sg8_policy?(256, 5120, 17408, "Apple M2 Max", nil).should be_true
+    metal.q4_h16_b128_sg8_policy?(256, 5120, 1024, "Apple M2 Max", nil).should be_true
+    metal.q4_h16_b128_sg8_policy?(256, 5120, 8192, "Apple M2 Max", nil).should be_false
+    metal.q4_h16_b128_sg8_policy?(256, 17408, 5120, "Apple M2 Max", nil).should be_false
+    metal.q4_h16_b128_sg8_policy?(256, 4096, 12288, "Apple M2 Max", nil).should be_false
+    metal.q4_h16_b128_sg8_policy?(256, 5120, 12288, "Apple M3 Max", nil).should be_false
+    metal.q4_h16_b128_sg8_policy?(256, 5120, 12288, "Apple M2 Max", "0").should be_false
+    metal.q4_h16_b128_sg8_policy?(128, 5120, 12288, "Apple M3 Max", "1").should be_true
+    metal.q4_h16_b128_sg8_policy?(192, 5120, 12288, "Apple M2 Max", "1").should be_false
+    metal.q4_h16_b128_sg8_policy?(128, 5119, 12288, "Apple M2 Max", "1").should be_false
+    metal.q4_h16_b128_sg8_policy?(128, 5120, 12280, "Apple M2 Max", "1").should be_false
+
+    expect_raises(ArgumentError, /must be 0 or 1/) do
+      metal.q4_h16_b128_sg8_policy?(128, 5120, 12288, "Apple M2 Max", "yes")
+    end
+  end
+
   it "keeps automatic Flash-MMA admission measured while allowing exact-ABI experiments" do
     metal = ML::GGUF::Qwen35Metal
     admit = ->(device : String, start_pos : Int32, tokens : Int32, heads : Int32, kv_heads : Int32, dim : Int32, f16 : Bool, adaptive : Bool, override : String?) do

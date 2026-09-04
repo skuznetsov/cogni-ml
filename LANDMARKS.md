@@ -27047,3 +27047,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is an ordinary shape-gated attention-kernel experiment.
 
 **decision:** Keep automatic admission at the previously measured points. Allow explicit `QWEN35_PREFILL_ATTN_FLASH_D256=1` only for exact Apple M2 Max, F16 non-adaptive d256 ABI experiments at pp256/512/1024/2048 with 16 or 24 query heads. Preserve `=0` as rollback. Revisit pp1024 only after an independent repeated matrix or a kernel change moves it clearly above the threshold.
+
+#### [LM-QWEN38-Q4-B128-SG8-1038] A dual-band Q4 tile materially accelerates measured M2 Max prefill
+**context:** ml / Qwen3.8-27B Q4_K_M / H16 prefill GEMM / Apple M2 Max / current llama.cpp `7e4c0a968`
+**state:** exact measured producer shapes enabled by default with immediate rollback
+
+- claim: "Reusing one dequantized 64x32 Q4 weight tile across two independent 64-row activation bands is a material end-to-end prefill win on the measured route."
+  source: the new 64x128 kernel retains eight SIMD groups and 256 threads, adds a second accumulator band, and uses 24 KiB of double-buffered threadgroup storage. The automatic policy is limited to exact 128-row tiles at pp256+, exact `Apple M2 Max`, input width 5,120, and the five observed output widths 1,024/6,144/10,240/12,288/17,408. A guarded same-process production-auto/rollback ABBA used the real Qwen3.8-27B Q4_K_M model, F16 KV, one warmup pair, four measured pairs, full terminal logits, and the unchanged 35% free-memory floor. Candidate/rollback throughput was `121.09/115.65`, `130.61/127.26`, `119.00/112.46`, and `93.23/88.50 tok/s` at pp256/512/1024/2048, for mean gains of `+4.70/+2.64/+5.81/+5.34%` and paired-median gains of `+5.11/+3.87/+4.00/+6.39%`. The automatic route executed 173 regular and 63 fused SwiGLU SG8 calls per pass; the rollback executed none. Every terminal logit was bitwise equal, ordered top-2 matched, cosine was `1.0`, and the guarded run exited zero.
+  verified_at: 2026-09-04
+  decay_trigger: Q4_K layout or arithmetic, H16 staging, projection shapes, model/device, Metal compiler/runtime, benchmark contract, or route policy changes
+  trust: {F:0.99,G:0.03,R:0.95}
+
+- claim: "The downstream `17408 -> 5120` Q4 FFN-down matrices do not justify widening automatic admission."
+  source: a direct same-process ABBA compared explicit-all exact shapes with the accepted automatic route. It added exactly 32 regular calls per pass (`205` versus `173`) and kept the same 63 fused calls, matching the model's 32 Q4 recurrent FFN-down tensors. The default-off H16 output-projection corridor was not active and is not attributed to this delta. The wider route measured `-0.44%` at pp256 and `+1.78%` at pp2048, with paired medians `-0.45%/+1.09%`; full logits remained bitwise equal. Both points miss the 3% promotion threshold.
+  verified_at: 2026-09-04
+  decay_trigger: downstream projection mix, kernel occupancy, model/device/compiler, or benchmark route changes
+  trust: {F:0.99,G:0.03,R:0.96}
+
+**Adversary:** The mechanism halves weight dequantization and cooperative weight-tile loading per 128 activation rows, but doubles accumulator state and raises threadgroup memory from the B64 route's 16 KiB to 24 KiB. Those costs explain why mathematically compatible downstream shapes do not share the producer-side win. The evidence covers one quantization, model, Apple GPU, exact prompt sizes, and one busy-host ABBA matrix; pp512's mean is below 3% even though its paired median is above it. The full-logit equality is stronger than top-1 evidence but does not establish a speedup on another device or shape. `QWEN35_Q4K_H16_B128_SG8=0` is the exact rollback; `=1` remains a wider experiment.
+
+**Value proxy:** Halved threadgroup count and weight-tile reuse are mechanism evidence. Promotion rests on paired end-to-end prefill wall time with full-logit parity, not on dispatch count or theoretical bandwidth alone.
+
+**LTP/WBA:** Not claimed. This is ordinary quantized-GEMM tiling and producer-consumer fusion.
+
+**decision:** Enable SG8-B128 automatically only on the measured M2 Max `5120 -> observed_output` pp256+ corridor. Reject automatic `out_dim == 5120` widening. Retain the durable ABBA harness and rollback, and continue with the remaining recurrent FFN-down/projection bottleneck using a different mechanism rather than a broader version of this tile.

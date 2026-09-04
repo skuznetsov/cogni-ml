@@ -73,6 +73,9 @@ module ML
       MM112_NR1       =   112
       MM112_TG        =   448 # threads per threadgroup (14 simdgroups × 32)
       MM112_SHMEM     = 28672 # bytes: max double-buffered tile and 64×112 f32 edge scratch
+      MM128_SG8_NR1   =   128
+      MM128_SG8_TG    =   256 # 8 simdgroups; each keeps two 16-row accumulator bands
+      MM128_SG8_SHMEM = 24576 # bytes: 2 × (4096-byte weights + 8192-byte inputs)
       Q4_TENSOR_NR1   =   128
       Q4_TENSOR_TG    =   128 # 4 simdgroups × 32, matches simd_mm_q4k_tensor_f32out
       Q4_TENSOR_SHMEM =  4096 # one 64×32 H16 dequantized A tile
@@ -102,6 +105,30 @@ module ML
         live_batch = batch.to_i64
         padded_batch = ((live_batch + MM64_NR1 - 1) // MM64_NR1) * MM64_NR1
         padded_batch * 8_i64 <= live_batch * 9_i64
+      end
+
+      # M2 Max Qwen3.8 prefill alternative to the refuted 16-simdgroup B128
+      # tile. Keep the threadgroup at 8 simdgroups and let each simdgroup
+      # accumulate two independent 16-row bands. Automatic admission stays on
+      # measured Qwen3.8 projection shapes and pp256+ exact tiles; explicit "1"
+      # retains the wider exact-shape experiment, while "0" is the immediate
+      # rollback.
+      def self.q4_h16_b128_sg8_policy?(batch : Int32,
+                                       in_dim : Int32,
+                                       out_dim : Int32,
+                                       device_name : String,
+                                       override : String?) : Bool
+        measured_shape = in_dim == 5120 && {1024, 6144, 10240, 12288, 17408}.includes?(out_dim)
+        enabled = case override
+                  when nil
+                    device_name == "Apple M2 Max" && batch >= 256 && measured_shape
+                  when "0" then false
+                  when "1" then true
+                  else
+                    raise ArgumentError.new("QWEN35_Q4K_H16_B128_SG8 must be 0 or 1")
+                  end
+        enabled && batch >= MM128_SG8_NR1 && batch % MM128_SG8_NR1 == 0 &&
+          in_dim % QK_K == 0 && out_dim % MM_NR0 == 0
       end
 
       # The Flash-MMA kernel has a deliberately exact ABI. Automatic admission
@@ -315,6 +342,8 @@ module ML
         @@mm_h16_pipeline : ML::Metal::ComputePipeline?
         @@mm_h16_b48_pipeline : ML::Metal::ComputePipeline?
         @@mm_h16_b64_pipeline : ML::Metal::ComputePipeline?
+        @@mm_h16_b128_sg8_pipeline : ML::Metal::ComputePipeline?
+        @@mm_h16_b128_sg8_swiglu_h16_pipeline : ML::Metal::ComputePipeline?
         @@mm_h16_b64_swiglu_pipeline : ML::Metal::ComputePipeline?
         @@mm_h16_b64_gelu_mul_pipeline : ML::Metal::ComputePipeline?
         @@mm_h16_b64_swiglu_h16_pipeline : ML::Metal::ComputePipeline?
@@ -1438,6 +1467,18 @@ module ML
           }
         end
 
+        private def self.mm_h16_b128_sg8_pipeline : ML::Metal::ComputePipeline
+          @@mm_h16_b128_sg8_pipeline ||= ML::Metal::PipelineCache.get("simd_mm_q4k_h16_b128_sg8") {
+            ML::Metal::ComputePipeline.new("simd_mm_q4k_h16_b128_sg8", GEMM_Q4K_SOURCE)
+          }
+        end
+
+        private def self.mm_h16_b128_sg8_swiglu_h16_pipeline : ML::Metal::ComputePipeline
+          @@mm_h16_b128_sg8_swiglu_h16_pipeline ||= ML::Metal::PipelineCache.get("simd_mm_q4k_h16_b128_sg8_swiglu_h16") {
+            ML::Metal::ComputePipeline.new("simd_mm_q4k_h16_b128_sg8_swiglu_h16", GEMM_Q4K_SOURCE)
+          }
+        end
+
         private def self.mm_h16_b64_swiglu_pipeline : ML::Metal::ComputePipeline
           @@mm_h16_b64_swiglu_pipeline ||= ML::Metal::PipelineCache.get("simd_mm_q4k_h16_b64_swiglu") {
             ML::Metal::ComputePipeline.new("simd_mm_q4k_h16_b64_swiglu", GEMM_Q4K_SOURCE)
@@ -2514,6 +2555,24 @@ module ML
             }, {MM112_TG, 1, 1})
             return
           end
+          if q4_h16_b128_sg8_policy?(batch, in_dim, out_dim, ML::Metal::Device.instance.name,
+               ENV["QWEN35_Q4K_H16_B128_SG8"]?)
+            Profile.bump_route_marker("q4_h16_b128_sg8")
+            enc.set_pipeline(mm_h16_b128_sg8_pipeline)
+            enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_offset)
+            enc.set_buffer(x16_buf, 1)
+            enc.set_buffer(out_buf, 2, ML::Metal::BufferAccess::Write)
+            enc.set_value(in_dim.to_u32, 3)
+            enc.set_value(out_dim.to_u32, 4)
+            enc.set_value(batch.to_u32, 5)
+            enc.set_threadgroup_memory(MM128_SG8_SHMEM, 0)
+            enc.dispatch_threadgroups({
+              batch // MM128_SG8_NR1,
+              out_dim // MM_NR0,
+              1,
+            }, {MM128_SG8_TG, 1, 1})
+            return
+          end
 
           use_b64_tail = q4_h16_b64_tail_candidate?(batch)
           if q4_h16_b64_gemm_enabled? && batch >= MM64_NR1 && ((batch % MM64_NR1) == 0 || use_b64_tail)
@@ -2632,7 +2691,10 @@ module ML
                                                                      in_dim : Int32,
                                                                      out_dim : Int32,
                                                                      batch : Int32) : Nil
-          enc.set_pipeline(mm_h16_b64_swiglu_h16_pipeline)
+          use_b128_sg8 = q4_h16_b128_sg8_policy?(batch, in_dim, out_dim, ML::Metal::Device.instance.name,
+            ENV["QWEN35_Q4K_H16_B128_SG8"]?)
+          Profile.bump_route_marker("q4_h16_b128_sg8_swiglu_h16") if use_b128_sg8
+          enc.set_pipeline(use_b128_sg8 ? mm_h16_b128_sg8_swiglu_h16_pipeline : mm_h16_b64_swiglu_h16_pipeline)
           enc.set_buffer(w_buf, 0, ML::Metal::BufferAccess::Read, offset: w_offset)
           enc.set_buffer(x16_buf, 1)
           enc.set_buffer(gate_buf, 2)
@@ -2640,12 +2702,21 @@ module ML
           enc.set_value(in_dim.to_u32, 4)
           enc.set_value(out_dim.to_u32, 5)
           enc.set_value(batch.to_u32, 6)
-          enc.set_threadgroup_memory(MM64_SHMEM, 0)
-          enc.dispatch_threadgroups({
-            (batch + MM64_NR1 - 1) // MM64_NR1,
-            (out_dim + MM_NR0 - 1) // MM_NR0,
-            1,
-          }, {MM64_TG, 1, 1})
+          if use_b128_sg8
+            enc.set_threadgroup_memory(MM128_SG8_SHMEM, 0)
+            enc.dispatch_threadgroups({
+              batch // MM128_SG8_NR1,
+              out_dim // MM_NR0,
+              1,
+            }, {MM128_SG8_TG, 1, 1})
+          else
+            enc.set_threadgroup_memory(MM64_SHMEM, 0)
+            enc.dispatch_threadgroups({
+              (batch + MM64_NR1 - 1) // MM64_NR1,
+              (out_dim + MM_NR0 - 1) // MM_NR0,
+              1,
+            }, {MM64_TG, 1, 1})
+          end
         end
 
         private def self.encode_q4k_gemm_h16_pair_b64_swiglu(enc : ML::Metal::ComputeEncoder,

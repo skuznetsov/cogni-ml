@@ -3973,3 +3973,49 @@ the robust conclusion is only that neither boundary showed a material gain.
 retry Q/K/V fan-out concurrency without a new mechanism that reduces GEMM work
 or bytes. Continue with a dominant matmul/kernel dataflow candidate rather than
 more dispatch-only overlap.
+
+### Dual-band SG8 Q4 prefill tile (2026-09-04)
+
+The accepted Q4_K H16 kernel keeps the established eight-SIMD-group launch but
+lets each group accumulate two independent 16-row bands. A dequantized 64x32
+weight tile is therefore reused across 128 activation rows. Compared with the
+B64 route, the threadgroup count is halved while threadgroup storage rises from
+16 to 24 KiB and each lane retains a second accumulator band.
+
+Automatic admission is deliberately exact: Apple M2 Max, pp256 or larger,
+complete 128-row tiles, input width 5,120, and an observed Qwen3.8 output width
+of 1,024, 6,144, 10,240, 12,288, or 17,408. `QWEN35_Q4K_H16_B128_SG8=0`
+restores B64; `=1` permits wider exact-tile experiments.
+
+A guarded same-process production-auto/rollback ABBA on Qwen3.8-27B Q4_K_M
+measured mean throughput gains of `+4.70/+2.64/+5.81/+5.34%` at
+pp256/512/1024/2048; paired medians were `+5.11/+3.87/+4.00/+6.39%`.
+Every full terminal-logit vector was bitwise equal, ordered top-2 matched, and
+the automatic route recorded 173 regular plus 63 fused SwiGLU calls per pass.
+
+The mathematically compatible downstream widening was separately falsified.
+Explicit admission added exactly 32 calls, matching the model's 32 Q4
+`17408 -> 5120` recurrent FFN-down tensors, but measured `-0.44%` at pp256
+and only `+1.78%` at pp2048 versus the accepted auto route. The default-off
+H16 output-projection corridor was not active and is not attributed to this
+delta. Wider exact shapes remain experiment-only.
+
+Current strict split-process screens against llama.cpp `7e4c0a968` found native
+ahead at every pp256-2048 point both with the entire SG8 route forced and with
+it disabled. That establishes a bounded directional lead under the matched
+token/KV/terminal-logit contract, not a stable percentage attributable to this
+kernel: the separate processes showed substantial host drift. The active
+llama.cpp M2 Max route is its 64x32, four-SIMD-group fallback; its Metal tensor
+path is rejected by the current pre-M5 device gate even though the runtime
+reports Metal 4 support.
+
+**Adversary:** Weight-tile reuse does not guarantee a win when the second
+accumulator band reduces occupancy. The direct downstream failure is the
+counterexample. This certificate is limited to one M2 Max, model quantization,
+and measured shape set. Re-run the ABBA after kernel arithmetic, H16 staging,
+projection geometry, Metal compiler/runtime, or device changes.
+
+**decision:** Keep the exact producer-side auto gate and immediate rollback.
+Do not generalize by output width, and do not report threadgroup-count reduction
+as the speedup. Continue at recurrent FFN-down/projection with a new
+layout or fusion that removes different work.
