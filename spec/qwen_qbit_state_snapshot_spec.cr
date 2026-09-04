@@ -3,6 +3,8 @@ require "../src/ml/gguf/qwen_qbit_state_snapshot"
 
 private alias QBitStateRecordKind = ML::GGUF::Qwen35StateSnapshot::RecordKind
 
+QWEN_9B_QBIT_STATE = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
+
 private def qbit_state_bytes(values : Array(Float32)) : Bytes
   bytes = Bytes.new(values.size * sizeof(Float32))
   bytes.copy_from(Slice.new(values.to_unsafe.as(Pointer(UInt8)), bytes.size))
@@ -17,6 +19,30 @@ end
 
 describe ML::GGUF::QwenQBitStateSnapshot do
   state_codec = ML::GGUF::QwenQBitStateSnapshot
+
+  it "rejects RawF32 QBit restore into an F16 KV owner before route selection" do
+    pending!("9B model metadata not present") unless File.exists?(QWEN_9B_QBIT_STATE)
+
+    gguf = ML::GGUF::GGUFFile.new(QWEN_9B_QBIT_STATE, mmap_tensors: false)
+    begin
+      hp = ML::GGUF::Qwen35Hparams.new(gguf)
+      state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 8, kv_cache_f16: true)
+      snapshot = ML::GGUF::QwenQBitStateSnapshot::Snapshot.new(
+        8,
+        hp.n_layer,
+        Array(Int32).new(hp.n_layer, 0_i32),
+        [] of ML::GGUF::QwenQBitStateSnapshot::EncodedRecord,
+        8,
+        7,
+      )
+
+      expect_raises(ArgumentError, /RawF32 QBit snapshot cannot be restored into an F16 KV owner/) do
+        state_codec.restore_into(snapshot, hp, state, prefer_metal: true)
+      end
+    ensure
+      gguf.close
+    end
+  end
 
   it "keeps live KV exact while encoding recurrent records as p7 tiles" do
     kv = [1.0_f32, -2.0_f32, 3.0_f32, -4.0_f32]

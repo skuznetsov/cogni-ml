@@ -527,6 +527,7 @@ module ML::GGUF
                                             cache_id : UInt64,
                                             hp : Qwen35Hparams,
                                             state : Qwen35CPU::State) : Nil
+      reject_f16_kv_restore!(state)
       raise ArgumentError.new("QBit admitted state layer count mismatch") unless exact.layer_count == hp.n_layer && state.layers.size == hp.n_layer
       raise ArgumentError.new("QBit admitted state max_seq mismatch") unless exact.max_seq == state.max_seq
       raise ArgumentError.new("QBit admitted state position count mismatch") unless exact.positions.size == hp.n_layer
@@ -623,6 +624,7 @@ module ML::GGUF
                                                      cache_id : UInt64,
                                                      hp : Qwen35Hparams,
                                                      state : Qwen35CPU::State) : Nil
+      reject_f16_kv_restore!(state)
       raise ArgumentError.new("QBit adaptive state layer count mismatch") unless exact.layer_count == hp.n_layer && state.layers.size == hp.n_layer
       raise ArgumentError.new("QBit adaptive state max_seq mismatch") unless exact.max_seq == state.max_seq
       raise ArgumentError.new("QBit adaptive state position count mismatch") unless exact.positions.size == hp.n_layer
@@ -764,6 +766,7 @@ module ML::GGUF
       hp : Qwen35Hparams,
       state : Qwen35CPU::State,
     ) : Nil
+      reject_f16_kv_restore!(state)
       unless compact.layer_count == hp.n_layer && state.layers.size == hp.n_layer
         raise ArgumentError.new("QBit compact adaptive state layer count mismatch")
       end
@@ -921,10 +924,17 @@ module ML::GGUF
     end
 
     private def validate_for_state(snapshot : Snapshot, hp : Qwen35Hparams, state : Qwen35CPU::State) : Nil
+      reject_f16_kv_restore!(state)
       validate(snapshot)
       raise ArgumentError.new("layer count mismatch: snapshot=#{snapshot.layer_count}, hp=#{hp.n_layer}") unless snapshot.layer_count == hp.n_layer
       raise ArgumentError.new("state layer count mismatch") unless snapshot.layer_count == state.layers.size
       raise ArgumentError.new("state max_seq mismatch") unless snapshot.max_seq == state.max_seq
+    end
+
+    private def reject_f16_kv_restore!(state : Qwen35CPU::State) : Nil
+      if state.kv_cache_f16?
+        raise ArgumentError.new("RawF32 QBit snapshot cannot be restored into an F16 KV owner")
+      end
     end
 
     private def recurrent_record?(kind : RecordKind) : Bool
