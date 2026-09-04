@@ -6,6 +6,22 @@ require "../src/ml/gguf/qwen35_weights"
 QWEN_9B_SNAPSHOT = "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
 
 describe ML::GGUF::Qwen35StateSnapshot do
+  it "rejects F16 KV capture before interpreting cache bytes as RawF32" do
+    pending!("9B model metadata not present") unless File.exists?(QWEN_9B_SNAPSHOT)
+
+    gguf = ML::GGUF::GGUFFile.new(QWEN_9B_SNAPSHOT, mmap_tensors: false)
+    begin
+      hp = ML::GGUF::Qwen35Hparams.new(gguf)
+      state = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 8, kv_cache_f16: true)
+
+      expect_raises(ArgumentError, /F16 KV snapshot is unsupported/) do
+        ML::GGUF::Qwen35StateSnapshot.capture(state)
+      end
+    ensure
+      gguf.close
+    end
+  end
+
   it "keeps raw v1 artifacts as the default durable format" do
     snapshot = synthetic_snapshot([1.0_f32, -2.5_f32, 0.0_f32, 128.0_f32])
     path = File.tempname("qwen35-state-raw", ".qkv")

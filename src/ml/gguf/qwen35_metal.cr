@@ -224,9 +224,11 @@ module ML
         DELTA_NET_SOURCE = {{ read_file("#{__DIR__}/kernels/delta_net.metal") }}
         FFN_UPDOWN_Q8_SOURCE = {{ read_file("#{__DIR__}/kernels/ffn_updown_q8.metal") }}
         ATTN_DECODE_SOURCE = {{ read_file("#{__DIR__}/kernels/attn_decode_qwen35.metal") }}
+        ATTN_DECODE_H16_SOURCE = "#define QWEN35_KV_CACHE_F16 1\n" + ATTN_DECODE_SOURCE
         FFN_SOURCE = {{ read_file("#{__DIR__}/kernels/ffn_qwen35.metal") }}
         RECURRENT_SOURCE = {{ read_file("#{__DIR__}/kernels/recurrent_qwen35.metal") }}
         FULLATTN_SOURCE = {{ read_file("#{__DIR__}/kernels/fullattn_qwen35.metal") }}
+        FULLATTN_H16_SOURCE = "#define QWEN35_KV_CACHE_F16 1\n" + FULLATTN_SOURCE
         MTP_SOURCE = {{ read_file("#{__DIR__}/kernels/mtp_qwen35.metal") }}
 
         @@mv_pipeline   : ML::Metal::ComputePipeline?
@@ -299,8 +301,11 @@ module ML
         @@ffn_pca_updown_fused_rows_pipeline : ML::Metal::ComputePipeline?
         @@ffn_pca_updown_fused_rows_q8_pipeline : ML::Metal::ComputePipeline?
         @@attn_pipeline : ML::Metal::ComputePipeline?
+        @@attn_h16_pipeline : ML::Metal::ComputePipeline?
         @@attn_gqa4_pipeline : ML::Metal::ComputePipeline?
+        @@attn_gqa4_h16_pipeline : ML::Metal::ComputePipeline?
         @@attn_splitk_stage1_pipeline : ML::Metal::ComputePipeline?
+        @@attn_splitk_stage1_h16_pipeline : ML::Metal::ComputePipeline?
         @@attn_splitk_stage2_pipeline : ML::Metal::ComputePipeline?
         @@f32_to_f16_pipeline : ML::Metal::ComputePipeline?
         @@f16_to_f32_pipeline : ML::Metal::ComputePipeline?
@@ -330,10 +335,15 @@ module ML
         @@rope_partial_pipeline : ML::Metal::ComputePipeline?
         @@rope_partial_rows_pipeline : ML::Metal::ComputePipeline?
         @@kv_write_pipeline : ML::Metal::ComputePipeline?
+        @@kv_write_h16_pipeline : ML::Metal::ComputePipeline?
         @@kv_write_rows_pipeline : ML::Metal::ComputePipeline?
+        @@kv_write_rows_h16_pipeline : ML::Metal::ComputePipeline?
         @@attn_rows_pipeline : ML::Metal::ComputePipeline?
+        @@attn_rows_h16_pipeline : ML::Metal::ComputePipeline?
         @@attn_rows_sg4_pipeline : ML::Metal::ComputePipeline?
+        @@attn_rows_sg4_h16_pipeline : ML::Metal::ComputePipeline?
         @@attn_rows_sg4_pregate_pipeline : ML::Metal::ComputePipeline?
+        @@attn_rows_sg4_pregate_h16_pipeline : ML::Metal::ComputePipeline?
 
         # ── Phase 4.0 instrumentation ─────────────────────────────────
         # Counters and nanosecond timers broken down by dispatch type
@@ -1688,15 +1698,33 @@ module ML
           }
         end
 
+        private def self.attn_h16_pipeline : ML::Metal::ComputePipeline
+          @@attn_h16_pipeline ||= ML::Metal::PipelineCache.get("qwen35_attn_decode_kv_h16") {
+            ML::Metal::ComputePipeline.new("qwen35_attn_decode", ATTN_DECODE_H16_SOURCE)
+          }
+        end
+
         private def self.attn_gqa4_pipeline : ML::Metal::ComputePipeline
           @@attn_gqa4_pipeline ||= ML::Metal::PipelineCache.get("qwen35_attn_decode_gqa4") {
             ML::Metal::ComputePipeline.new("qwen35_attn_decode_gqa4", ATTN_DECODE_SOURCE)
           }
         end
 
+        private def self.attn_gqa4_h16_pipeline : ML::Metal::ComputePipeline
+          @@attn_gqa4_h16_pipeline ||= ML::Metal::PipelineCache.get("qwen35_attn_decode_gqa4_kv_h16") {
+            ML::Metal::ComputePipeline.new("qwen35_attn_decode_gqa4", ATTN_DECODE_H16_SOURCE)
+          }
+        end
+
         private def self.attn_splitk_stage1_pipeline : ML::Metal::ComputePipeline
           @@attn_splitk_stage1_pipeline ||= ML::Metal::PipelineCache.get("qwen35_attn_decode_splitk_stage1") {
             ML::Metal::ComputePipeline.new("qwen35_attn_decode_splitk_stage1", ATTN_DECODE_SOURCE)
+          }
+        end
+
+        private def self.attn_splitk_stage1_h16_pipeline : ML::Metal::ComputePipeline
+          @@attn_splitk_stage1_h16_pipeline ||= ML::Metal::PipelineCache.get("qwen35_attn_decode_splitk_stage1_kv_h16") {
+            ML::Metal::ComputePipeline.new("qwen35_attn_decode_splitk_stage1", ATTN_DECODE_H16_SOURCE)
           }
         end
 
@@ -1874,9 +1902,21 @@ module ML
           }
         end
 
+        private def self.kv_write_h16_pipeline : ML::Metal::ComputePipeline
+          @@kv_write_h16_pipeline ||= ML::Metal::PipelineCache.get("qwen35_kv_write_h16") {
+            ML::Metal::ComputePipeline.new("qwen35_kv_write", FULLATTN_H16_SOURCE)
+          }
+        end
+
         private def self.kv_write_rows_pipeline : ML::Metal::ComputePipeline
           @@kv_write_rows_pipeline ||= ML::Metal::PipelineCache.get("qwen35_kv_write_rows") {
             ML::Metal::ComputePipeline.new("qwen35_kv_write_rows", FULLATTN_SOURCE)
+          }
+        end
+
+        private def self.kv_write_rows_h16_pipeline : ML::Metal::ComputePipeline
+          @@kv_write_rows_h16_pipeline ||= ML::Metal::PipelineCache.get("qwen35_kv_write_rows_h16") {
+            ML::Metal::ComputePipeline.new("qwen35_kv_write_rows", FULLATTN_H16_SOURCE)
           }
         end
 
@@ -1886,15 +1926,33 @@ module ML
           }
         end
 
+        private def self.attn_rows_h16_pipeline : ML::Metal::ComputePipeline
+          @@attn_rows_h16_pipeline ||= ML::Metal::PipelineCache.get("qwen35_attn_decode_rows_kv_h16") {
+            ML::Metal::ComputePipeline.new("qwen35_attn_decode_rows", FULLATTN_H16_SOURCE)
+          }
+        end
+
         private def self.attn_rows_sg4_pipeline : ML::Metal::ComputePipeline
           @@attn_rows_sg4_pipeline ||= ML::Metal::PipelineCache.get("qwen35_attn_decode_rows_sg4") {
             ML::Metal::ComputePipeline.new("qwen35_attn_decode_rows_sg4", FULLATTN_SOURCE)
           }
         end
 
+        private def self.attn_rows_sg4_h16_pipeline : ML::Metal::ComputePipeline
+          @@attn_rows_sg4_h16_pipeline ||= ML::Metal::PipelineCache.get("qwen35_attn_decode_rows_sg4_kv_h16") {
+            ML::Metal::ComputePipeline.new("qwen35_attn_decode_rows_sg4", FULLATTN_H16_SOURCE)
+          }
+        end
+
         private def self.attn_rows_sg4_pregate_pipeline : ML::Metal::ComputePipeline
           @@attn_rows_sg4_pregate_pipeline ||= ML::Metal::PipelineCache.get("qwen35_attn_decode_rows_sg4_pregate") {
             ML::Metal::ComputePipeline.new("qwen35_attn_decode_rows_sg4_pregate", FULLATTN_SOURCE)
+          }
+        end
+
+        private def self.attn_rows_sg4_pregate_h16_pipeline : ML::Metal::ComputePipeline
+          @@attn_rows_sg4_pregate_h16_pipeline ||= ML::Metal::PipelineCache.get("qwen35_attn_decode_rows_sg4_pregate_kv_h16") {
+            ML::Metal::ComputePipeline.new("qwen35_attn_decode_rows_sg4_pregate", FULLATTN_H16_SOURCE)
           }
         end
 
@@ -6998,6 +7056,24 @@ module ML
           true
         end
 
+        # Compile the complete ordinary F16 KV ABI before a caller allocates
+        # or mutates typed cache state. A single missing pipeline must reject
+        # the route instead of falling back to an F32 cache kernel.
+        def self.kv_cache_f16_pipelines_supported? : Bool
+          ML::Metal::Device.init!
+          kv_write_h16_pipeline
+          kv_write_rows_h16_pipeline
+          attn_h16_pipeline
+          attn_gqa4_h16_pipeline
+          attn_splitk_stage1_h16_pipeline
+          attn_rows_h16_pipeline
+          attn_rows_sg4_h16_pipeline
+          attn_rows_sg4_pregate_h16_pipeline
+          true
+        rescue
+          false
+        end
+
         # Compile every pipeline selected by the exact terminal-layer route
         # before its caller mutates recurrent or KV state. Pipeline creation is
         # lazy and raises on failure, so this admission query must be total.
@@ -7008,7 +7084,8 @@ module ML
                                                                 ffn_gate_qw : QuantWeight,
                                                                 ffn_up_qw : QuantWeight,
                                                                 ffn_down_qw : QuantWeight,
-                                                                n_tokens : Int32) : Bool
+                                                                n_tokens : Int32,
+                                                                kv_cache_f16 : Bool = false) : Bool
           return false unless n_tokens > 0
 
           ML::Metal::Device.init!
@@ -7026,8 +7103,16 @@ module ML
           rmsnorm_heads_rows_pipeline
           rope_partial_pipeline
           rope_partial_rows_pipeline
-          kv_write_rows_pipeline
-          attn_pipeline
+          if kv_cache_f16
+            kv_write_rows_h16_pipeline
+            attn_h16_pipeline
+            attn_rows_h16_pipeline
+            attn_rows_sg4_h16_pipeline
+            attn_rows_sg4_pregate_h16_pipeline
+          else
+            kv_write_rows_pipeline
+            attn_pipeline
+          end
           add_rmsnorm_pipeline
           ffn_swiglu_pipeline
           add_vec_pipeline
@@ -7060,9 +7145,11 @@ module ML
                                                     rope_freq_base : Float32,
                                                     eps : Float32,
                                                     scale : Float32,
-                                                    input_buf : ML::MetalBuffer? = nil) : Array(Float32)?
+                                                    input_buf : ML::MetalBuffer? = nil,
+                                                    kv_cache_f16 : Bool = false) : Array(Float32)?
           return nil unless full_attn_layer_chunk_project_last_supported?(
             q_qw, k_qw, v_qw, out_qw, ffn_gate_qw, ffn_up_qw, ffn_down_qw, n_tokens,
+            kv_cache_f16,
           )
           q_pipe = gemv_pipeline_for(q_qw)
           k_pipe = gemv_pipeline_for(k_qw)
@@ -7200,7 +7287,7 @@ module ML
           krope_enc.end_encoding
 
           kvwrite_enc = ML::Metal::ComputeEncoder.new(cmd)
-          kvwrite_enc.set_pipeline(kv_write_rows_pipeline)
+          kvwrite_enc.set_pipeline(kv_cache_f16 ? kv_write_rows_h16_pipeline : kv_write_rows_pipeline)
           kvwrite_enc.set_buffer(k_buf, 0)
           kvwrite_enc.set_buffer(v_buf, 1)
           kvwrite_enc.set_buffer(k_cache_buf, 2, ML::Metal::BufferAccess::ReadWrite)
@@ -7212,7 +7299,7 @@ module ML
           kvwrite_enc.end_encoding
 
           attn_enc = ML::Metal::ComputeEncoder.new(cmd)
-          attn_enc.set_pipeline(attn_pipeline)
+          attn_enc.set_pipeline(kv_cache_f16 ? attn_h16_pipeline : attn_pipeline)
           attn_enc.set_buffer(q_buf, 0)
           attn_enc.set_buffer(gate_buf, 1)
           attn_enc.set_buffer(k_cache_buf, 2)
@@ -7312,7 +7399,12 @@ module ML
                                                     scale : Float32,
                                                     output_norm : Array(Float32),
                                                     output_qw : QuantWeight,
-                                                    input_buf : ML::MetalBuffer? = nil) : {Int32, Float32}?
+                                                    input_buf : ML::MetalBuffer? = nil,
+                                                    kv_cache_f16 : Bool = false) : {Int32, Float32}?
+          return nil unless full_attn_layer_chunk_project_last_supported?(
+            q_qw, k_qw, v_qw, out_qw, ffn_gate_qw, ffn_up_qw, ffn_down_qw, n_tokens,
+            kv_cache_f16,
+          )
           q_pipe = gemv_pipeline_for(q_qw)
           k_pipe = gemv_pipeline_for(k_qw)
           v_pipe = gemv_pipeline_for(v_qw)
@@ -7463,7 +7555,7 @@ module ML
           krope_enc.end_encoding
 
           kvwrite_enc = ML::Metal::ComputeEncoder.new(cmd)
-          kvwrite_enc.set_pipeline(kv_write_rows_pipeline)
+          kvwrite_enc.set_pipeline(kv_cache_f16 ? kv_write_rows_h16_pipeline : kv_write_rows_pipeline)
           kvwrite_enc.set_buffer(k_buf, 0)
           kvwrite_enc.set_buffer(v_buf, 1)
           kvwrite_enc.set_buffer(k_cache_buf, 2, ML::Metal::BufferAccess::ReadWrite)
@@ -7475,7 +7567,7 @@ module ML
           kvwrite_enc.end_encoding
 
           attn_enc = ML::Metal::ComputeEncoder.new(cmd)
-          attn_enc.set_pipeline(attn_pipeline)
+          attn_enc.set_pipeline(kv_cache_f16 ? attn_h16_pipeline : attn_pipeline)
           attn_enc.set_buffer(q_buf, 0)
           attn_enc.set_buffer(gate_buf, 1)
           attn_enc.set_buffer(k_cache_buf, 2)
@@ -7603,7 +7695,8 @@ module ML
                                                output_buf : ML::MetalBuffer? = nil,
                                                input_buf : ML::MetalBuffer? = nil,
                                                append_command_buffer : ML::Metal::CommandBuffer? = nil,
-                                               adaptive_prefill_encoder : AdaptiveDecodeEncoder? = nil) : Array(Float32)?
+                                               adaptive_prefill_encoder : AdaptiveDecodeEncoder? = nil,
+                                               kv_cache_f16 : Bool = false) : Array(Float32)?
           q_pipe = gemv_pipeline_for(q_qw)
           k_pipe = gemv_pipeline_for(k_qw)
           v_pipe = gemv_pipeline_for(v_qw)
@@ -7616,6 +7709,7 @@ module ML
           return nil unless n_tokens > 0
           return nil if append_command_buffer && read_output
           if adaptive_prefill_encoder
+            raise ArgumentError.new("adaptive resident QBit KV cannot coexist with F16 KV buffers") if kv_cache_f16
             raise ArgumentError.new("adaptive resident QBit KV cannot coexist with F32 KV buffers") if k_cache_buf || v_cache_buf
           else
             return nil unless k_cache_buf && v_cache_buf
@@ -7744,7 +7838,7 @@ module ML
             adaptive_encoder.call(cmd, q_buf, gate_buf, k_buf, v_buf, attn_buf)
           else
             kvwrite_enc = ML::Metal::ComputeEncoder.new(cmd)
-            kvwrite_enc.set_pipeline(kv_write_rows_pipeline)
+            kvwrite_enc.set_pipeline(kv_cache_f16 ? kv_write_rows_h16_pipeline : kv_write_rows_pipeline)
             kvwrite_enc.set_buffer(k_buf, 0)
             kvwrite_enc.set_buffer(v_buf, 1)
             kvwrite_enc.set_buffer(k_cache_buf.not_nil!, 2, ML::Metal::BufferAccess::ReadWrite)
@@ -7758,8 +7852,13 @@ module ML
             attn_enc = ML::Metal::ComputeEncoder.new(cmd)
             use_attn_sg4 = prefill_attn_rows_sg4_enabled? && n_tokens >= 4
             use_direct_gate = !prefill_attn_rows_sg4_pregate_enabled? && prefill_attn_rows_sg4_direct_gate_enabled?(n_tokens)
-            attn_sg4_pipeline = use_direct_gate ? attn_rows_sg4_pipeline : attn_rows_sg4_pregate_pipeline
-            attn_enc.set_pipeline(use_attn_sg4 ? attn_sg4_pipeline : attn_rows_pipeline)
+            attn_sg4_pipeline = if kv_cache_f16
+                                  use_direct_gate ? attn_rows_sg4_h16_pipeline : attn_rows_sg4_pregate_h16_pipeline
+                                else
+                                  use_direct_gate ? attn_rows_sg4_pipeline : attn_rows_sg4_pregate_pipeline
+                                end
+            attn_rows_selected = kv_cache_f16 ? attn_rows_h16_pipeline : attn_rows_pipeline
+            attn_enc.set_pipeline(use_attn_sg4 ? attn_sg4_pipeline : attn_rows_selected)
             attn_enc.set_buffer(q_buf, 0)
             attn_enc.set_buffer(gate_buf, 1)
             attn_enc.set_buffer(k_cache_buf.not_nil!, 2)
@@ -7931,7 +8030,8 @@ module ML
                                                      rope_freq_base : Float32,
                                                      eps : Float32,
                                                      input_buf : ML::MetalBuffer? = nil,
-                                                     append_command_buffer : ML::Metal::CommandBuffer? = nil) : Bool
+                                                     append_command_buffer : ML::Metal::CommandBuffer? = nil,
+                                                     kv_cache_f16 : Bool = false) : Bool
           k_pipe = gemv_pipeline_for(k_qw)
           v_pipe = gemv_pipeline_for(v_qw)
           return false if k_pipe.nil? || v_pipe.nil?
@@ -8019,7 +8119,7 @@ module ML
           krope_enc.end_encoding
 
           kvwrite_enc = ML::Metal::ComputeEncoder.new(cmd)
-          kvwrite_enc.set_pipeline(kv_write_rows_pipeline)
+          kvwrite_enc.set_pipeline(kv_cache_f16 ? kv_write_rows_h16_pipeline : kv_write_rows_pipeline)
           kvwrite_enc.set_buffer(k_buf, 0)
           kvwrite_enc.set_buffer(v_buf, 1)
           kvwrite_enc.set_buffer(k_cache_buf, 2, ML::Metal::BufferAccess::ReadWrite)
@@ -8095,7 +8195,8 @@ module ML
                                                              output_buf : ML::MetalBuffer? = nil,
                                                              read_output : Bool = true,
                                                              append_command_buffer : ML::Metal::CommandBuffer? = nil,
-                                                             adaptive_prefill_encoder : Proc(ML::Metal::CommandBuffer, ML::MetalBuffer, ML::MetalBuffer, ML::MetalBuffer, ML::MetalBuffer, ML::MetalBuffer, Nil)? = nil) : Array(Float32)?
+                                                             adaptive_prefill_encoder : Proc(ML::Metal::CommandBuffer, ML::MetalBuffer, ML::MetalBuffer, ML::MetalBuffer, ML::MetalBuffer, ML::MetalBuffer, Nil)? = nil,
+                                                             kv_cache_f16 : Bool = false) : Array(Float32)?
           q_pipe = gemv_pipeline_for(q_qw)
           k_pipe = gemv_pipeline_for(k_qw)
           v_pipe = gemv_pipeline_for(v_qw)
@@ -8109,6 +8210,7 @@ module ML
           return nil if rec_layers.empty?
           return nil if append_command_buffer && read_output
           if adaptive_prefill_encoder
+            raise ArgumentError.new("adaptive resident QBit KV cannot coexist with F16 KV buffers") if kv_cache_f16
             raise ArgumentError.new("adaptive resident QBit KV cannot coexist with F32 KV buffers") if k_cache_buf || v_cache_buf
           else
             return nil unless k_cache_buf && v_cache_buf
@@ -8354,7 +8456,7 @@ module ML
             )
           else
             kvwrite_enc = ML::Metal::ComputeEncoder.new(cmd)
-            kvwrite_enc.set_pipeline(kv_write_rows_pipeline)
+            kvwrite_enc.set_pipeline(kv_cache_f16 ? kv_write_rows_h16_pipeline : kv_write_rows_pipeline)
             kvwrite_enc.set_buffer(full_k_buf, 0)
             kvwrite_enc.set_buffer(full_v_buf, 1)
             kvwrite_enc.set_buffer(k_cache_buf.not_nil!, 2, ML::Metal::BufferAccess::ReadWrite)
@@ -8373,8 +8475,13 @@ module ML
             attn_enc = ML::Metal::ComputeEncoder.new(cmd)
             use_attn_sg4 = prefill_attn_rows_sg4_enabled? && n_tokens >= 4
             use_direct_gate = !prefill_attn_rows_sg4_pregate_enabled? && prefill_attn_rows_sg4_direct_gate_enabled?(n_tokens)
-            attn_sg4_pipeline = use_direct_gate ? attn_rows_sg4_pipeline : attn_rows_sg4_pregate_pipeline
-            attn_enc.set_pipeline(use_attn_sg4 ? attn_sg4_pipeline : attn_rows_pipeline)
+            attn_sg4_pipeline = if kv_cache_f16
+                                  use_direct_gate ? attn_rows_sg4_h16_pipeline : attn_rows_sg4_pregate_h16_pipeline
+                                else
+                                  use_direct_gate ? attn_rows_sg4_pipeline : attn_rows_sg4_pregate_pipeline
+                                end
+            attn_rows_selected = kv_cache_f16 ? attn_rows_h16_pipeline : attn_rows_pipeline
+            attn_enc.set_pipeline(use_attn_sg4 ? attn_sg4_pipeline : attn_rows_selected)
             attn_enc.set_buffer(full_q_buf, 0)
             attn_enc.set_buffer(full_gate_buf, 1)
             attn_enc.set_buffer(k_cache_buf.not_nil!, 2)
@@ -10040,7 +10147,8 @@ module ML
                                      lowrank_layer_indices : Set(Int32)? = nil,
                                      lowrank_state_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
                                      lowrank_basis_bufs : Hash(Int32, ML::MetalBuffer)? = nil,
-                                     lowrank_rank : Int32 = 0) : Array(Float32)?
+                                     lowrank_rank : Int32 = 0,
+                                     kv_cache_f16 : Bool = false) : Array(Float32)?
           if submission = forward_decode_wave_async(
                emb, layers,
                k_cache_bufs, v_cache_bufs, conv_state_bufs, ssm_state_bufs,
@@ -10049,7 +10157,8 @@ module ML
                lowrank_layer_indices: lowrank_layer_indices,
                lowrank_state_bufs: lowrank_state_bufs,
                lowrank_basis_bufs: lowrank_basis_bufs,
-               lowrank_rank: lowrank_rank)
+               lowrank_rank: lowrank_rank,
+               kv_cache_f16: kv_cache_f16)
             wait_forward_decode_wave(submission)
           end
         end
@@ -10095,7 +10204,8 @@ module ML
                                            top1_store_index : Int32 = -1,
                                            command_queue_name : String? = nil,
                                            append_command_buffer : ML::Metal::CommandBuffer? = nil,
-                                           adaptive_decode_encoders : AdaptiveDecodeEncoders? = nil) : DecodeWaveSubmission?
+                                           adaptive_decode_encoders : AdaptiveDecodeEncoders? = nil,
+                                           kv_cache_f16 : Bool = false) : DecodeWaveSubmission?
           # Two-lane callers can request fresh scratch so multiple submitted waves
           # do not race through the pooled temporary buffers before wait/readback.
           if fresh_scratch
@@ -10130,7 +10240,8 @@ module ML
                 top1_store_index: top1_store_index,
                 command_queue_name: command_queue_name,
                 append_command_buffer: append_command_buffer,
-                adaptive_decode_encoders: adaptive_decode_encoders)
+                adaptive_decode_encoders: adaptive_decode_encoders,
+                kv_cache_f16: kv_cache_f16)
             end
           end
           if namespace = scratch_namespace
@@ -10165,12 +10276,14 @@ module ML
                 top1_store_index: top1_store_index,
                 command_queue_name: command_queue_name,
                 append_command_buffer: append_command_buffer,
-                adaptive_decode_encoders: adaptive_decode_encoders)
+                adaptive_decode_encoders: adaptive_decode_encoders,
+                kv_cache_f16: kv_cache_f16)
             end
           end
 
           top1 = true if top2
           if adaptive = adaptive_decode_encoders
+            raise ArgumentError.new("adaptive resident QBit KV cannot coexist with F16 KV buffers") if kv_cache_f16
             raise ArgumentError.new("adaptive decode encoder map cannot be empty") if adaptive.empty?
             adaptive.each_key do |adaptive_layer|
               unless adaptive_layer >= 0 && adaptive_layer < layers.size &&
@@ -10490,7 +10603,7 @@ module ML
                   end
                 else
                   kvwrite_enc = ML::Metal::ComputeEncoder.new(cmd)
-                  kvwrite_enc.set_pipeline(kv_write_pipeline)
+                  kvwrite_enc.set_pipeline(kv_cache_f16 ? kv_write_h16_pipeline : kv_write_pipeline)
                   kvwrite_enc.set_buffer(k_buf, 0)
                   kvwrite_enc.set_buffer(v_buf, 1)
                   kvwrite_enc.set_buffer(k_cache_buf.not_nil!, 2, ML::Metal::BufferAccess::ReadWrite)
@@ -10505,7 +10618,7 @@ module ML
                                     hp.head_dim <= 256
                   if use_splitk_attn
                     split1_enc = ML::Metal::ComputeEncoder.new(cmd)
-                    split1_enc.set_pipeline(attn_splitk_stage1_pipeline)
+                    split1_enc.set_pipeline(kv_cache_f16 ? attn_splitk_stage1_h16_pipeline : attn_splitk_stage1_pipeline)
                     split1_enc.set_buffer(q_buf, 0)
                     split1_enc.set_buffer(k_cache_buf.not_nil!, 1)
                     split1_enc.set_buffer(v_cache_buf.not_nil!, 2)
@@ -10538,7 +10651,12 @@ module ML
                   else
                     attn_enc = ML::Metal::ComputeEncoder.new(cmd)
                     use_gqa4_attn = hp.n_head // hp.n_head_kv == 4 && hp.head_dim <= 128 && attn_gqa4_enabled?
-                    attn_enc.set_pipeline(use_gqa4_attn ? attn_gqa4_pipeline : attn_pipeline)
+                    attn_pipeline_selected = if kv_cache_f16
+                                               use_gqa4_attn ? attn_gqa4_h16_pipeline : attn_h16_pipeline
+                                             else
+                                               use_gqa4_attn ? attn_gqa4_pipeline : attn_pipeline
+                                             end
+                    attn_enc.set_pipeline(attn_pipeline_selected)
                     attn_enc.set_buffer(q_buf, 0)
                     attn_enc.set_buffer(gate_buf, 1)
                     attn_enc.set_buffer(k_cache_buf.not_nil!, 2)

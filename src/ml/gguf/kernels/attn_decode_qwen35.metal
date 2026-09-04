@@ -22,6 +22,14 @@
 #include <metal_stdlib>
 using namespace metal;
 
+#ifdef QWEN35_KV_CACHE_F16
+typedef half qwen35_kv_cache_t;
+typedef half4 qwen35_kv_cache4_t;
+#else
+typedef float qwen35_kv_cache_t;
+typedef float4 qwen35_kv_cache4_t;
+#endif
+
 constant ushort QA_SG   =  32;    // threads per threadgroup = 1 simdgroup
 constant uint   QA_HD   = 256;    // compile-time upper bound on head_dim
 constant uint   QA_GQA4_HD = 128; // specialized Qwen3.5/3.6 9B head_dim
@@ -29,8 +37,8 @@ constant uint   QA_GQA4_HD = 128; // specialized Qwen3.5/3.6 9B head_dim
 kernel void qwen35_attn_decode(
     device const float* Q        [[buffer(0)]],
     device const float* gate     [[buffer(1)]],
-    device const float* k_cache  [[buffer(2)]],
-    device const float* v_cache  [[buffer(3)]],
+    device const qwen35_kv_cache_t* k_cache [[buffer(2)]],
+    device const qwen35_kv_cache_t* v_cache [[buffer(3)]],
     device       float* out      [[buffer(4)]],
     constant     uint&  cache_len      [[buffer(5)]],
     constant     uint&  n_head         [[buffer(6)]],
@@ -74,12 +82,12 @@ kernel void qwen35_attn_decode(
         // 1) Score for this lane's position j (or -inf if past end).
         float score = -1e30f;
         if (j < cache_len) {
-            device const float4* kj4 = (device const float4*)(
+            device const qwen35_kv_cache4_t* kj4 = (device const qwen35_kv_cache4_t*)(
                 k_cache + j * kv_dim + kv_h * head_dim);
             threadgroup const float4* qv4 = (threadgroup const float4*)q_tg;
             float dot = 0.0f;
             for (uint d = 0; d < hd4; d++) {
-                float4 k = kj4[d];
+                float4 k = float4(kj4[d]);
                 float4 q = qv4[d];
                 dot += q.x * k.x + q.y * k.y + q.z * k.z + q.w * k.w;
             }
@@ -104,7 +112,7 @@ kernel void qwen35_attn_decode(
             if (d >= head_dim) break;
             float acc = 0.0f;
             for (uint s = 0; s < tile_len; s++) {
-                float vv = v_cache[(tile_start + s) * kv_dim + kv_h * head_dim + d];
+                float vv = float(v_cache[(tile_start + s) * kv_dim + kv_h * head_dim + d]);
                 acc += tile_scores[s] * vv;
             }
             o[dl] = o[dl] * correction + acc;
@@ -133,8 +141,8 @@ kernel void qwen35_attn_decode(
 kernel void qwen35_attn_decode_gqa4(
     device const float* Q        [[buffer(0)]],
     device const float* gate     [[buffer(1)]],
-    device const float* k_cache  [[buffer(2)]],
-    device const float* v_cache  [[buffer(3)]],
+    device const qwen35_kv_cache_t* k_cache [[buffer(2)]],
+    device const qwen35_kv_cache_t* v_cache [[buffer(3)]],
     device       float* out      [[buffer(4)]],
     constant     uint&  cache_len      [[buffer(5)]],
     constant     uint&  n_head         [[buffer(6)]],
@@ -181,8 +189,8 @@ kernel void qwen35_attn_decode_gqa4(
         for (uint idx = linear; idx < tile_len * head_dim; idx += 4 * QA_SG) {
             const uint s = idx / head_dim;
             const uint d = idx - s * head_dim;
-            k_tile[s * head_dim + d] =
-                k_cache[(tile_start + s) * kv_dim + kv_h * head_dim + d];
+            k_tile[s * head_dim + d] = float(
+                k_cache[(tile_start + s) * kv_dim + kv_h * head_dim + d]);
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -215,7 +223,7 @@ kernel void qwen35_attn_decode_gqa4(
             if (d >= head_dim) break;
             float acc = 0.0f;
             for (uint s = 0; s < tile_len; s++) {
-                float vv = v_cache[(tile_start + s) * kv_dim + kv_h * head_dim + d];
+                float vv = float(v_cache[(tile_start + s) * kv_dim + kv_h * head_dim + d]);
                 acc += tile_scores[s] * vv;
             }
             o[dl] = o[dl] * correction + acc;
@@ -245,8 +253,8 @@ kernel void qwen35_attn_decode_gqa4(
 // cannot use.
 kernel void qwen35_attn_decode_splitk_stage1(
     device const float* Q          [[buffer(0)]],
-    device const float* k_cache    [[buffer(1)]],
-    device const float* v_cache    [[buffer(2)]],
+    device const qwen35_kv_cache_t* k_cache [[buffer(1)]],
+    device const qwen35_kv_cache_t* v_cache [[buffer(2)]],
     device       float* partial_o  [[buffer(3)]],
     device       float* partial_m  [[buffer(4)]],
     device       float* partial_l  [[buffer(5)]],
@@ -290,12 +298,12 @@ kernel void qwen35_attn_decode_splitk_stage1(
 
         float score = -1e30f;
         if (j < block_end) {
-            device const float4* kj4 = (device const float4*)(
+            device const qwen35_kv_cache4_t* kj4 = (device const qwen35_kv_cache4_t*)(
                 k_cache + j * kv_dim + kv_h * head_dim);
             threadgroup const float4* qv4 = (threadgroup const float4*)q_tg;
             float dot = 0.0f;
             for (uint d = 0; d < hd4; d++) {
-                float4 k = kj4[d];
+                float4 k = float4(kj4[d]);
                 float4 q = qv4[d];
                 dot += q.x * k.x + q.y * k.y + q.z * k.z + q.w * k.w;
             }
@@ -317,7 +325,7 @@ kernel void qwen35_attn_decode_splitk_stage1(
             if (d >= head_dim) break;
             float acc = 0.0f;
             for (uint s = 0; s < tile_len; s++) {
-                float vv = v_cache[(tile_start + s) * kv_dim + kv_h * head_dim + d];
+                float vv = float(v_cache[(tile_start + s) * kv_dim + kv_h * head_dim + d]);
                 acc += tile_scores[s] * vv;
             }
             o[dl] = o[dl] * correction + acc;

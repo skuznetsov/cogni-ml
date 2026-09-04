@@ -1,6 +1,14 @@
 #include <metal_stdlib>
 using namespace metal;
 
+#ifdef QWEN35_KV_CACHE_F16
+typedef half qwen35_kv_cache_t;
+typedef half4 qwen35_kv_cache4_t;
+#else
+typedef float qwen35_kv_cache_t;
+typedef float4 qwen35_kv_cache4_t;
+#endif
+
 kernel void qwen35_split_qgate(
     device const float* q_full   [[buffer(0)]],
     device       float* q_out    [[buffer(1)]],
@@ -151,8 +159,8 @@ kernel void qwen35_rope_partial_rows(
 kernel void qwen35_kv_write(
     device const float* k       [[buffer(0)]],
     device const float* v       [[buffer(1)]],
-    device       float* k_cache [[buffer(2)]],
-    device       float* v_cache [[buffer(3)]],
+    device qwen35_kv_cache_t* k_cache [[buffer(2)]],
+    device qwen35_kv_cache_t* v_cache [[buffer(3)]],
     constant     uint&  base    [[buffer(4)]],
     constant     uint&  kv_dim  [[buffer(5)]],
     uint gid [[thread_position_in_grid]])
@@ -165,8 +173,8 @@ kernel void qwen35_kv_write(
 kernel void qwen35_kv_write_rows(
     device const float* k        [[buffer(0)]],
     device const float* v        [[buffer(1)]],
-    device       float* k_cache  [[buffer(2)]],
-    device       float* v_cache  [[buffer(3)]],
+    device qwen35_kv_cache_t* k_cache  [[buffer(2)]],
+    device qwen35_kv_cache_t* v_cache  [[buffer(3)]],
     constant     uint&  base_pos [[buffer(4)]],
     constant     uint&  kv_dim   [[buffer(5)]],
     constant     uint&  n_tokens [[buffer(6)]],
@@ -185,8 +193,8 @@ kernel void qwen35_kv_write_rows(
 kernel void qwen35_attn_decode_rows(
     device const float* Q         [[buffer(0)]],
     device const float* gate      [[buffer(1)]],
-    device const float* k_cache   [[buffer(2)]],
-    device const float* v_cache   [[buffer(3)]],
+    device const qwen35_kv_cache_t* k_cache [[buffer(2)]],
+    device const qwen35_kv_cache_t* v_cache [[buffer(3)]],
     device       float* out       [[buffer(4)]],
     constant     uint&  base_pos       [[buffer(5)]],
     constant     uint&  n_tokens       [[buffer(6)]],
@@ -228,12 +236,12 @@ kernel void qwen35_attn_decode_rows(
 
         float score = -1e30f;
         if (j < cache_len) {
-            device const float4* kj4 = (device const float4*)(
+            device const qwen35_kv_cache4_t* kj4 = (device const qwen35_kv_cache4_t*)(
                 k_cache + j * kv_dim + kv_h * head_dim);
             threadgroup const float4* qv4 = (threadgroup const float4*)q_tg;
             float dot = 0.0f;
             for (uint d = 0; d < hd4; d++) {
-                float4 k4 = kj4[d];
+                float4 k4 = float4(kj4[d]);
                 float4 q4 = qv4[d];
                 dot += q4.x * k4.x + q4.y * k4.y + q4.z * k4.z + q4.w * k4.w;
             }
@@ -255,8 +263,8 @@ kernel void qwen35_attn_decode_rows(
             if (d >= head_dim) break;
             float acc = 0.0f;
             for (uint s = 0; s < tile_len; s++) {
-                acc += tile_scores[s] *
-                    v_cache[(tile_start + s) * kv_dim + kv_h * head_dim + d];
+                acc += tile_scores[s] * float(
+                    v_cache[(tile_start + s) * kv_dim + kv_h * head_dim + d]);
             }
             o[dl] = o[dl] * correction + acc;
         }
@@ -283,8 +291,8 @@ kernel void qwen35_attn_decode_rows(
 kernel void qwen35_attn_decode_rows_sg4(
     device const float* Q         [[buffer(0)]],
     device const float* gate      [[buffer(1)]],
-    device const float* k_cache   [[buffer(2)]],
-    device const float* v_cache   [[buffer(3)]],
+    device const qwen35_kv_cache_t* k_cache [[buffer(2)]],
+    device const qwen35_kv_cache_t* v_cache [[buffer(3)]],
     device       float* out       [[buffer(4)]],
     constant     uint&  base_pos       [[buffer(5)]],
     constant     uint&  n_tokens       [[buffer(6)]],
@@ -327,12 +335,12 @@ kernel void qwen35_attn_decode_rows_sg4(
 
         float score = -1e30f;
         if (j < cache_len) {
-            device const float4* kj4 = (device const float4*)(
+            device const qwen35_kv_cache4_t* kj4 = (device const qwen35_kv_cache4_t*)(
                 k_cache + j * kv_dim + kv_h * head_dim);
             threadgroup const float4* qv4 = (threadgroup const float4*)q_tg;
             float dot = 0.0f;
             for (uint d = 0; d < hd4; d++) {
-                float4 k4 = kj4[d];
+                float4 k4 = float4(kj4[d]);
                 float4 q4 = qv4[d];
                 dot += q4.x * k4.x + q4.y * k4.y + q4.z * k4.z + q4.w * k4.w;
             }
@@ -354,8 +362,8 @@ kernel void qwen35_attn_decode_rows_sg4(
             if (d >= head_dim) break;
             float acc = 0.0f;
             for (uint s = 0; s < tile_len; s++) {
-                acc += tile_scores[s] *
-                    v_cache[(tile_start + s) * kv_dim + kv_h * head_dim + d];
+                acc += tile_scores[s] * float(
+                    v_cache[(tile_start + s) * kv_dim + kv_h * head_dim + d]);
             }
             o[dl] = o[dl] * correction + acc;
         }
@@ -381,8 +389,8 @@ kernel void qwen35_attn_decode_rows_sg4(
 kernel void qwen35_attn_decode_rows_sg4_pregate(
     device const float* Q         [[buffer(0)]],
     device const float* gate      [[buffer(1)]],
-    device const float* k_cache   [[buffer(2)]],
-    device const float* v_cache   [[buffer(3)]],
+    device const qwen35_kv_cache_t* k_cache [[buffer(2)]],
+    device const qwen35_kv_cache_t* v_cache [[buffer(3)]],
     device       float* out       [[buffer(4)]],
     constant     uint&  base_pos       [[buffer(5)]],
     constant     uint&  n_tokens       [[buffer(6)]],
@@ -428,12 +436,12 @@ kernel void qwen35_attn_decode_rows_sg4_pregate(
 
         float score = -1e30f;
         if (j < cache_len) {
-            device const float4* kj4 = (device const float4*)(
+            device const qwen35_kv_cache4_t* kj4 = (device const qwen35_kv_cache4_t*)(
                 k_cache + j * kv_dim + kv_h * head_dim);
             threadgroup const float4* qv4 = (threadgroup const float4*)q_tg;
             float dot = 0.0f;
             for (uint d = 0; d < hd4; d++) {
-                float4 k4 = kj4[d];
+                float4 k4 = float4(kj4[d]);
                 float4 q4 = qv4[d];
                 dot += q4.x * k4.x + q4.y * k4.y + q4.z * k4.z + q4.w * k4.w;
             }
@@ -455,8 +463,8 @@ kernel void qwen35_attn_decode_rows_sg4_pregate(
             if (d >= head_dim) break;
             float acc = 0.0f;
             for (uint s = 0; s < tile_len; s++) {
-                acc += tile_scores[s] *
-                    v_cache[(tile_start + s) * kv_dim + kv_h * head_dim + d];
+                acc += tile_scores[s] * float(
+                    v_cache[(tile_start + s) * kv_dim + kv_h * head_dim + d]);
             }
             o[dl] = o[dl] * correction + acc;
         }

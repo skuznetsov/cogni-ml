@@ -188,6 +188,10 @@ module ML::GGUF
     # recurrent (DeltaNet) layers.
     # ─────────────────────────────────────────────────────────────────────
     class LayerState
+      # Ordinary full-attention cache element type. This is authoritative:
+      # buffer size alone must never select a Metal kernel ABI.
+      getter kv_cache_f16 : Bool
+
       # Full-attn: KV cache. Populated position-by-position during decode.
       # k_cache[pos * kv_dim + h * head_dim + d], same for v.
       property k_cache : Array(Float32)?
@@ -217,19 +221,30 @@ module ML::GGUF
       # in place.
       property ssm_state_buf : ML::MetalBuffer?
 
-      def initialize
+      def initialize(@kv_cache_f16 : Bool = false)
+      end
+
+      def kv_cache_element_bytes : Int64
+        @kv_cache_f16 ? 2_i64 : sizeof(Float32).to_i64
+      end
+
+      def kv_cache_bytes(max_seq : Int32, kv_dim : Int32) : Int64
+        max_seq.to_i64 * kv_dim.to_i64 * kv_cache_element_bytes
       end
 
       # Deep-copy per-layer decode state. This is the minimal primitive
       # needed by exact speculative verification: each branch must mutate
       # its own KV/SSM buffers, not alias the parent sequence.
       def fork : LayerState
-        copy = LayerState.new
+        copy = LayerState.new(@kv_cache_f16)
         copy.copy_from!(self)
         copy
       end
 
       def copy_from!(src : LayerState) : Nil
+        unless @kv_cache_f16 == src.kv_cache_f16
+          raise ArgumentError.new("KV cache element type mismatch")
+        end
         if @adaptive_kv || src.adaptive_kv
           raise ArgumentError.new("adaptive resident QBit KV fork/copy is unsupported")
         end
@@ -291,8 +306,8 @@ module ML::GGUF
       getter layers : Array(LayerState)
       getter max_seq : Int32
 
-      def initialize(hp : Qwen35Hparams, @max_seq : Int32 = 1024)
-        @layers = Array(LayerState).new(hp.n_layer) { LayerState.new }
+      def initialize(hp : Qwen35Hparams, @max_seq : Int32 = 1024, kv_cache_f16 : Bool = false)
+        @layers = Array(LayerState).new(hp.n_layer) { LayerState.new(kv_cache_f16) }
       end
 
       protected def initialize(@layers : Array(LayerState), @max_seq : Int32)
@@ -316,6 +331,14 @@ module ML::GGUF
 
       def adaptive_kv? : Bool
         @layers.any? { |layer| !layer.adaptive_kv.nil? }
+      end
+
+      def kv_cache_f16? : Bool
+        selected = @layers.first?.try(&.kv_cache_f16) || false
+        unless @layers.all? { |layer| layer.kv_cache_f16 == selected }
+          raise ArgumentError.new("mixed KV cache element types in one state")
+        end
+        selected
       end
 
       def adaptive_kv_layer_indices : Array(Int32)
@@ -361,7 +384,13 @@ module ML::GGUF
         adaptive_config = if admit_adaptive_resident_kv
                             adaptive_resident_kv_config(hp, state.max_seq)
                           end
+        if adaptive_config && state.kv_cache_f16?
+          raise ArgumentError.new("adaptive resident QBit KV cannot coexist with an F16 KV owner")
+        end
         adaptive_indices = state.adaptive_kv_layer_indices
+        if state.kv_cache_f16? && !adaptive_indices.empty?
+          raise ArgumentError.new("adaptive resident QBit KV cannot coexist with an F16 KV owner")
+        end
         if config = adaptive_config
           row_count64 = state.max_seq.to_i64 * hp.n_head_kv
           if row_count64 > Int32::MAX
@@ -420,8 +449,6 @@ module ML::GGUF
         qkv_dim = 2 * hp.ssm_group_count * hp.ssm_state_size + hp.ssm_time_step_rank * hp.ssm_state_size
         conv_bytes = ((hp.ssm_conv_kernel - 1) * qkv_dim).to_i64 * sizeof(Float32)
         ssm_bytes = (hp.ssm_time_step_rank * hp.ssm_state_size * hp.ssm_state_size).to_i64 * sizeof(Float32)
-        kv_bytes = (state.max_seq * kv_dim).to_i64 * sizeof(Float32)
-
         state.layers.each_with_index do |layer, il|
           layer.position = 0
           if hp.full_attention?(il)
@@ -430,8 +457,15 @@ module ML::GGUF
                 raise ArgumentError.new("adaptive resident QBit KV cannot coexist with an F32 owner")
               end
             else
+              if layer.kv_cache_f16 && (layer.k_cache || layer.v_cache)
+                raise ArgumentError.new("F16 KV cache cannot coexist with F32 host cache arrays")
+              end
+              kv_bytes = layer.kv_cache_bytes(state.max_seq, kv_dim)
               layer.k_cache_buf ||= ML::MetalBuffer.new(kv_bytes)
               layer.v_cache_buf ||= ML::MetalBuffer.new(kv_bytes)
+              unless layer.k_cache_buf.not_nil!.size == kv_bytes && layer.v_cache_buf.not_nil!.size == kv_bytes
+                raise ArgumentError.new("KV cache buffer size does not match its declared element type")
+              end
               if clear
                 clear_metal_buffer(layer.k_cache_buf)
                 clear_metal_buffer(layer.v_cache_buf)
@@ -641,11 +675,11 @@ module ML::GGUF
         raise "clear_kv_tail_metal requires Metal"
       {% else %}
         raise "clear_kv_tail_metal requires Metal" unless Qwen35Metal.available?
-        row_bytes = (hp.head_dim * hp.n_head_kv).to_i64 * sizeof(Float32)
-        offset = live_tokens.to_i64 * row_bytes
         ML::Metal::Dispatch.execute_blit do |enc|
           state.layers.each_with_index do |layer, il|
             next unless hp.full_attention?(il)
+            row_bytes = (hp.head_dim * hp.n_head_kv).to_i64 * layer.kv_cache_element_bytes
+            offset = live_tokens.to_i64 * row_bytes
             k_buf = layer.k_cache_buf.not_nil!
             v_buf = layer.v_cache_buf.not_nil!
             tail_bytes = k_buf.size - offset
@@ -779,9 +813,11 @@ module ML::GGUF
         raise ArgumentError.new("max_seq mismatch: #{dst.max_seq} != #{src.max_seq}") unless dst.max_seq == src.max_seq
         raise ArgumentError.new("layer count mismatch: #{dst.layers.size} != #{src.layers.size}") unless dst.layers.size == src.layers.size
 
-        kv_row_bytes = (hp.head_dim * hp.n_head_kv).to_i64 * sizeof(Float32)
         src.layers.each_with_index do |src_layer, il|
           dst_layer = dst.layers[il]
+          unless dst_layer.kv_cache_f16 == src_layer.kv_cache_f16
+            raise ArgumentError.new("KV cache element type mismatch at layer #{il}")
+          end
           dst_layer.position = src_layer.position
 
           if hp.full_attention?(il)
@@ -792,6 +828,7 @@ module ML::GGUF
             dst_k = dst_layer.k_cache_buf.not_nil!
             dst_v = dst_layer.v_cache_buf.not_nil!
             live_tokens = used_tokens || src_layer.position
+            kv_row_bytes = (hp.head_dim * hp.n_head_kv).to_i64 * src_layer.kv_cache_element_bytes
             bytes = full_kv_capacity ? src_k.size : live_tokens.to_i64 * kv_row_bytes
             raise ArgumentError.new("live KV bytes exceed source buffer at layer #{il}: #{bytes} > #{src_k.size}") if bytes > src_k.size || bytes > src_v.size
             raise ArgumentError.new("live KV bytes exceed destination buffer at layer #{il}: #{bytes} > #{dst_k.size}") if bytes > dst_k.size || bytes > dst_v.size
@@ -1180,6 +1217,9 @@ module ML::GGUF
                                    head_dim : Int32, heads_per_group : Int32,
                                    kv_dim : Int32, max_seq : Int32,
                                    scale : Float32) : Array(Float32)
+      if lstate.kv_cache_f16
+        raise ArgumentError.new("F16 KV cache requires the whole-wave Metal decode route")
+      end
       q_dim = n_head * head_dim
       base = pos * kv_dim
 
@@ -1252,6 +1292,9 @@ module ML::GGUF
                                            head_dim : Int32, heads_per_group : Int32,
                                            kv_dim : Int32, max_seq : Int32,
                                            scale : Float32) : Array(Float32)?
+      if lstate.kv_cache_f16
+        raise ArgumentError.new("F16 KV cache requires the whole-wave Metal decode route")
+      end
       {% unless flag?(:cpu_only) %}
         return nil if ENV["QWEN35_ATTN_CPU"]? == "1"
         return nil if ENV["QWEN35_ATTN_FUSE_OFF"]? == "1"
@@ -1259,7 +1302,7 @@ module ML::GGUF
         return nil unless Qwen35Metal.available?
 
         base = pos * kv_dim
-        bytes = (max_seq * kv_dim).to_i64 * sizeof(Float32)
+        bytes = lstate.kv_cache_bytes(max_seq, kv_dim)
         k_buf = lstate.k_cache_buf
         v_buf = lstate.v_cache_buf
         if k_buf.nil?
@@ -1298,6 +1341,9 @@ module ML::GGUF
                                                heads_per_group : Int32,
                                                kv_dim : Int32,
                                                max_seq : Int32) : Array(Float32)?
+      if lstate.kv_cache_f16
+        raise ArgumentError.new("F16 KV cache requires the whole-wave Metal decode route")
+      end
       {% unless flag?(:cpu_only) %}
         return nil if ENV["QWEN35_FULL_LAYER_FUSE_OFF"]? == "1"
         return nil unless Qwen35Metal.available?
@@ -1310,7 +1356,7 @@ module ML::GGUF
                     metal_qw_supported?(lw.ffn_down_qw)
         return nil unless supported
 
-        bytes = (max_seq * kv_dim).to_i64 * sizeof(Float32)
+        bytes = lstate.kv_cache_bytes(max_seq, kv_dim)
         k_buf = lstate.k_cache_buf
         v_buf = lstate.v_cache_buf
         if k_buf.nil?
@@ -1365,7 +1411,7 @@ module ML::GGUF
         return nil unless supported
 
         kv_dim = hp.head_dim * hp.n_head_kv
-        bytes = (max_seq * kv_dim).to_i64 * sizeof(Float32)
+        bytes = lstate.kv_cache_bytes(max_seq, kv_dim)
         adaptive_cache = lstate.adaptive_kv
         k_buf = nil.as(ML::MetalBuffer?)
         v_buf = nil.as(ML::MetalBuffer?)
@@ -1422,6 +1468,7 @@ module ML::GGUF
               input_buf: input_buf,
               append_command_buffer: append_command_buffer,
               adaptive_prefill_encoder: adaptive_encoder,
+              kv_cache_f16: lstate.kv_cache_f16,
             )
           end
         rescue ex
@@ -1466,7 +1513,7 @@ module ML::GGUF
         return nil unless supported
 
         kv_dim = hp.head_dim * hp.n_head_kv
-        bytes = (max_seq * kv_dim).to_i64 * sizeof(Float32)
+        bytes = lstate.kv_cache_bytes(max_seq, kv_dim)
         k_buf = lstate.k_cache_buf
         v_buf = lstate.v_cache_buf
         if k_buf.nil?
@@ -1491,6 +1538,7 @@ module ML::GGUF
           hp.n_head, hp.n_head_kv, hp.head_dim, hp.rope_dim_count,
           hp.n_head // hp.n_head_kv, hp.rope_freq_base, hp.rms_eps, scale,
           input_buf: input_buf,
+          kv_cache_f16: lstate.kv_cache_f16,
         )
       {% else %}
         nil
@@ -1521,7 +1569,7 @@ module ML::GGUF
         return nil unless supported
 
         kv_dim = hp.head_dim * hp.n_head_kv
-        bytes = (max_seq * kv_dim).to_i64 * sizeof(Float32)
+        bytes = lstate.kv_cache_bytes(max_seq, kv_dim)
         k_buf = lstate.k_cache_buf
         v_buf = lstate.v_cache_buf
         if k_buf.nil?
@@ -1547,6 +1595,7 @@ module ML::GGUF
           hp.n_head // hp.n_head_kv, hp.rope_freq_base, hp.rms_eps, scale,
           output_norm, output_qw,
           input_buf: input_buf,
+          kv_cache_f16: lstate.kv_cache_f16,
         )
       {% else %}
         nil
@@ -1573,7 +1622,7 @@ module ML::GGUF
         return false unless supported
 
         kv_dim = hp.head_dim * hp.n_head_kv
-        bytes = (max_seq * kv_dim).to_i64 * sizeof(Float32)
+        bytes = lstate.kv_cache_bytes(max_seq, kv_dim)
         k_buf = lstate.k_cache_buf
         v_buf = lstate.v_cache_buf
         if k_buf.nil?
@@ -1598,6 +1647,7 @@ module ML::GGUF
             hp.rope_freq_base, hp.rms_eps,
             input_buf: input_buf,
             append_command_buffer: append_command_buffer,
+            kv_cache_f16: lstate.kv_cache_f16,
           )
         end
       {% else %}
@@ -1729,7 +1779,7 @@ module ML::GGUF
         return nil unless supported
 
         kv_dim = hp.head_dim * hp.n_head_kv
-        bytes = (max_seq * kv_dim).to_i64 * sizeof(Float32)
+        bytes = full_state.kv_cache_bytes(max_seq, kv_dim)
         k_buf = nil.as(ML::MetalBuffer?)
         v_buf = nil.as(ML::MetalBuffer?)
         adaptive_encoder = nil.as(AdaptivePrefillEncoder?)
@@ -1788,7 +1838,8 @@ module ML::GGUF
               output_buf: output_buf,
               read_output: read_output,
               append_command_buffer: append_command_buffer,
-              adaptive_prefill_encoder: adaptive_encoder)
+              adaptive_prefill_encoder: adaptive_encoder,
+              kv_cache_f16: full_state.kv_cache_f16)
           end
         rescue ex
           if cmd = append_command_buffer
@@ -1825,6 +1876,9 @@ module ML::GGUF
                                          kv_dim : Int32,
                                          max_seq : Int32,
                                          scale : Float32) : Array(Float32)?
+      if lstate.kv_cache_f16
+        raise ArgumentError.new("F16 KV cache requires the whole-wave Metal decode route")
+      end
       {% unless flag?(:cpu_only) %}
         return nil if ENV["QWEN35_FULL_ATTN_FUSE_OFF"]? == "1"
         return nil unless Qwen35Metal.available?
@@ -2000,10 +2054,10 @@ module ML::GGUF
     end
 
     private def output_project_top1_resident_routed(x_buf : ML::MetalBuffer,
-                                                     row : Int32,
-                                                     norm_weight : Array(Float32),
-                                                     out_qw : QuantWeight,
-                                                     eps : Float32) : {Int32, Float32}?
+                                                    row : Int32,
+                                                    norm_weight : Array(Float32),
+                                                    out_qw : QuantWeight,
+                                                    eps : Float32) : {Int32, Float32}?
       {% unless flag?(:cpu_only) %}
         return nil if row < 0
         return nil if ENV["QWEN35_HEAD_TOP1_FUSED"]? == "0"
@@ -2182,15 +2236,17 @@ module ML::GGUF
                               last_layer.attn_output_qw, last_layer.ffn_gate_qw,
                               last_layer.ffn_up_qw, last_layer.ffn_down_qw,
                               rows,
+                              state.kv_cache_f16?,
                             )
 
         required_kv_values = state.max_seq.to_i64 * kv_dim.to_i64
-        required_kv_bytes = required_kv_values * sizeof(Float32)
         qkv_dim = 2 * hp.ssm_group_count * hp.ssm_state_size + hp.ssm_time_step_rank * hp.ssm_state_size
         required_conv_values = (hp.ssm_conv_kernel - 1).to_i64 * qkv_dim.to_i64
         required_ssm_values = hp.ssm_time_step_rank.to_i64 * hp.ssm_state_size.to_i64 * hp.ssm_state_size.to_i64
         state.layers.each_with_index do |layer, layer_index|
           if hp.full_attention?(layer_index)
+            required_kv_bytes = required_kv_values * layer.kv_cache_element_bytes
+            return false if layer.kv_cache_f16 && (layer.k_cache || layer.v_cache)
             return false if (cache = layer.k_cache) && cache.size < required_kv_values
             return false if (cache = layer.v_cache) && cache.size < required_kv_values
             return false if (buf = layer.k_cache_buf) && buf.size < required_kv_bytes
@@ -2603,6 +2659,9 @@ module ML::GGUF
       if logits = forward_decode_wave_routed(weights, token_id, pos, state)
         return logits
       end
+      if state.kv_cache_f16?
+        raise ArgumentError.new("F16 KV cache requires the whole-token Metal decode route")
+      end
 
       hp = weights.hparams
       max_seq = state.max_seq
@@ -2633,6 +2692,9 @@ module ML::GGUF
     # correctness/probe helper, not the hot decode path.
     def forward_hidden(weights : Qwen35Weights, token_id : Int32, pos : Int32,
                        state : State) : Array(Float32)
+      if state.kv_cache_f16?
+        raise ArgumentError.new("F16 KV cache does not support host-materialized single-token hidden output")
+      end
       hp = weights.hparams
       max_seq = state.max_seq
 
@@ -3179,6 +3241,9 @@ module ML::GGUF
                       state : State) : Nil
       if forward_decode_wave_routed(weights, token_id, pos, state, emit_head: false)
         return
+      end
+      if state.kv_cache_f16?
+        raise ArgumentError.new("F16 KV cache requires the whole-token Metal decode route")
       end
 
       hp = weights.hparams
@@ -3788,6 +3853,15 @@ module ML::GGUF
         raise ArgumentError.new("prefill_tokens_hidden checkpoint index out of range") unless checkpoint_index.not_nil! >= 0 && checkpoint_index.not_nil! < token_ids.size
       end
 
+      if state.kv_cache_f16?
+        unless f16_kv_prefill_supported?(weights)
+          raise ArgumentError.new("F16 KV cache requires the complete Metal prefill route")
+        end
+        if ENV["QWEN35_PREFILL_CHUNK_OFF"]? == "1" || token_ids.size == 1
+          raise ArgumentError.new("F16 KV cache does not support serial prefill")
+        end
+      end
+
       if ENV["QWEN35_PREFILL_CHUNK_OFF"]? == "1" || token_ids.size == 1
         hp = weights.hparams
         max_seq = state.max_seq
@@ -3889,10 +3963,7 @@ module ML::GGUF
         append_prefill_cmd = nil.as(ML::Metal::CommandBuffer?)
         prefill_graph_queue = nil.as(ML::Metal::GraphSubmissionQueue(ML::Metal::CommandBuffer, Qwen35Metal::Scratch::Arena)?)
         prefill_graph_lease = nil.as(ML::Metal::GraphSubmissionLease(ML::Metal::CommandBuffer, Qwen35Metal::Scratch::Arena)?)
-        prefill_graph_pending_flights = [] of {
-          ML::Metal::GraphSubmissionLease(ML::Metal::CommandBuffer, Qwen35Metal::Scratch::Arena),
-          Array(QwenQBitAdaptiveResidentKV::Cache),
-        }
+        prefill_graph_pending_flights = [] of {ML::Metal::GraphSubmissionLease(ML::Metal::CommandBuffer, Qwen35Metal::Scratch::Arena), Array(QwenQBitAdaptiveResidentKV::Cache)}
         prefill_graph_submitted_gpu_work = false
         append_command_available = ENV["QWEN35_PREFILL_APPEND_CMD_OFF"]? != "1" &&
                                    resident_boundary_ok && Qwen35Metal.available?
@@ -4042,409 +4113,412 @@ module ML::GGUF
         while il < layer_limit
           lw = weights.layers[il]
           case lw
-        in Qwen35FullAttnWeights
-          fused_read_output = true
-          fused_output_buf = nil.as(ML::MetalBuffer?)
-          fused_resident_final = false
-          # LTP/WBA corridor: carry hidden rows across supported prefill groups
-          # without exposing them to the host unless this is the final requested output.
-          if resident_boundary_ok
-            predicted_run_end = il + 1
-            while predicted_run_end < weights.layers.size
-              break unless weights.layers[predicted_run_end].is_a?(Qwen35RecurrentWeights)
-              predicted_run_end += 1
-            end
-            fused_read_output = need_output && predicted_run_end >= layer_limit
-            if !fused_read_output && predicted_run_end < layer_limit
-              if handoff_flip
-                handoff_a ||= ML::MetalBuffer.new(handoff_bytes)
-                fused_output_buf = handoff_a
-              else
-                handoff_b ||= ML::MetalBuffer.new(handoff_bytes)
-                fused_output_buf = handoff_b
+          in Qwen35FullAttnWeights
+            fused_read_output = true
+            fused_output_buf = nil.as(ML::MetalBuffer?)
+            fused_resident_final = false
+            # LTP/WBA corridor: carry hidden rows across supported prefill groups
+            # without exposing them to the host unless this is the final requested output.
+            if resident_boundary_ok
+              predicted_run_end = il + 1
+              while predicted_run_end < weights.layers.size
+                break unless weights.layers[predicted_run_end].is_a?(Qwen35RecurrentWeights)
+                predicted_run_end += 1
               end
-              handoff_flip = !handoff_flip
-            elsif !fused_read_output && predicted_run_end >= layer_limit
-              if rb = resident_output_buf
-                fused_output_buf = rb
-                fused_resident_final = true
+              fused_read_output = need_output && predicted_run_end >= layer_limit
+              if !fused_read_output && predicted_run_end < layer_limit
+                if handoff_flip
+                  handoff_a ||= ML::MetalBuffer.new(handoff_bytes)
+                  fused_output_buf = handoff_a
+                else
+                  handoff_b ||= ML::MetalBuffer.new(handoff_bytes)
+                  fused_output_buf = handoff_b
+                end
+                handoff_flip = !handoff_flip
+              elsif !fused_read_output && predicted_run_end >= layer_limit
+                if rb = resident_output_buf
+                  fused_output_buf = rb
+                  fused_resident_final = true
+                end
               end
             end
-          end
-          flush_prefill_cmd.call if fused_read_output && !state.layers[il].adaptive_kv
+            flush_prefill_cmd.call if fused_read_output && !state.layers[il].adaptive_kv
 
-          if fused = full_attn_then_recurrent_chunk_project_many_routed(
-               x, n_tokens, start_pos, state, weights, il, hp, max_seq,
-               checkpoint_index: checkpoint_index, checkpoint_state: checkpoint_state,
-               checkpoint_rollback_log: checkpoint_rollback_log,
-               input_buf: gpu_hidden,
-               output_buf: fused_output_buf,
-               read_output: fused_read_output,
-               append_command_buffer: fused_read_output ? nil : append_prefill_cmd,
-               pending_adaptive_caches: pending_adaptive_caches,
-               scratch_arena: fused_read_output ? nil : prefill_graph_scratch_arena)
-            fused_appended = !fused_read_output && !append_prefill_cmd.nil?
-            append_prefill_gpu_work = true unless fused_read_output
-            il = fused[1]
-            if fused_read_output
-              x = fused[0]
-              gpu_hidden = nil
-            elsif ob = fused_output_buf
-              x = [] of Float32
-              gpu_hidden = ob
-              resident_output_written.try { |flag| flag[0] = true } if fused_resident_final
-            else
-              flush_prefill_cmd.call
-              return [] of Float32 unless need_output
-              x = fused[0]
-              gpu_hidden = nil
-            end
-            if fused_appended && !gpu_hidden.nil? && append_prefill_group_limit > 0
-              append_prefill_group_count += 1
-              if append_prefill_group_count >= append_prefill_group_limit && il < layer_limit
-                {% unless flag?(:cpu_only) %}
-                  if queue = prefill_graph_queue
-                    cmd = append_prefill_cmd.not_nil!
-                    lease = prefill_graph_lease.not_nil!
-                    pending_adaptive_caches.each do |cache|
-                      QwenQBitAdaptiveResidentKV.finalize_pending_append(cmd, cache)
+            if fused = full_attn_then_recurrent_chunk_project_many_routed(
+                 x, n_tokens, start_pos, state, weights, il, hp, max_seq,
+                 checkpoint_index: checkpoint_index, checkpoint_state: checkpoint_state,
+                 checkpoint_rollback_log: checkpoint_rollback_log,
+                 input_buf: gpu_hidden,
+                 output_buf: fused_output_buf,
+                 read_output: fused_read_output,
+                 append_command_buffer: fused_read_output ? nil : append_prefill_cmd,
+                 pending_adaptive_caches: pending_adaptive_caches,
+                 scratch_arena: fused_read_output ? nil : prefill_graph_scratch_arena)
+              fused_appended = !fused_read_output && !append_prefill_cmd.nil?
+              append_prefill_gpu_work = true unless fused_read_output
+              il = fused[1]
+              if fused_read_output
+                x = fused[0]
+                gpu_hidden = nil
+              elsif ob = fused_output_buf
+                x = [] of Float32
+                gpu_hidden = ob
+                resident_output_written.try { |flag| flag[0] = true } if fused_resident_final
+              else
+                flush_prefill_cmd.call
+                return [] of Float32 unless need_output
+                x = fused[0]
+                gpu_hidden = nil
+              end
+              if fused_appended && !gpu_hidden.nil? && append_prefill_group_limit > 0
+                append_prefill_group_count += 1
+                if append_prefill_group_count >= append_prefill_group_limit && il < layer_limit
+                  {% unless flag?(:cpu_only) %}
+                    if queue = prefill_graph_queue
+                      cmd = append_prefill_cmd.not_nil!
+                      lease = prefill_graph_lease.not_nil!
+                      pending_adaptive_caches.each do |cache|
+                        QwenQBitAdaptiveResidentKV.finalize_pending_append(cmd, cache)
+                      end
+                      prefill_graph_pending_flights << {lease, pending_adaptive_caches.dup}
+                      queue.submit(lease)
+                      prefill_graph_submitted_gpu_work = true
+                      append_prefill_cmd = nil
+                      prefill_graph_lease = nil
+                      prefill_graph_scratch_arena = nil
+                      pending_adaptive_caches.clear
+                      append_prefill_gpu_work = false
+                      append_prefill_group_count = 0
+                      if queue.pending_count >= queue.max_in_flight
+                        completed_flight = prefill_graph_pending_flights.first
+                        completed_lease = completed_flight[0]
+                        completed_caches = completed_flight[1]
+                        queue.await(completed_lease)
+                        QwenQBitAdaptiveResidentKV.finish_pending_appends!(completed_caches, completed_lease.command)
+                        prefill_graph_pending_flights.shift
+                      end
+                      next_lease = queue.begin_submission
+                      next_arena = Qwen35Metal::Scratch::Arena.new(
+                        "qwen35_prefill:#{Thread.current.object_id}:#{next_lease.sequence}",
+                      )
+                      next_lease.retain(next_arena, &.release)
+                      prefill_graph_lease = next_lease
+                      prefill_graph_scratch_arena = next_arena
+                      append_prefill_cmd = next_lease.command
+                    else
+                      flush_prefill_cmd.call
+                      sleep append_prefill_cooldown_ms.milliseconds if append_prefill_cooldown_ms > 0
+                      append_prefill_cmd = ML::Metal::CommandBuffer.new
+                      append_prefill_started = Time.instant if prefill_boundary_profile
                     end
-                    prefill_graph_pending_flights << {lease, pending_adaptive_caches.dup}
-                    queue.submit(lease)
-                    prefill_graph_submitted_gpu_work = true
-                    append_prefill_cmd = nil
-                    prefill_graph_lease = nil
-                    prefill_graph_scratch_arena = nil
-                    pending_adaptive_caches.clear
-                    append_prefill_gpu_work = false
-                    append_prefill_group_count = 0
-                    if queue.pending_count >= queue.max_in_flight
-                      completed_flight = prefill_graph_pending_flights.first
-                      completed_lease = completed_flight[0]
-                      completed_caches = completed_flight[1]
-                      queue.await(completed_lease)
-                      QwenQBitAdaptiveResidentKV.finish_pending_appends!(completed_caches, completed_lease.command)
-                      prefill_graph_pending_flights.shift
-                    end
-                    next_lease = queue.begin_submission
-                    next_arena = Qwen35Metal::Scratch::Arena.new(
-                      "qwen35_prefill:#{Thread.current.object_id}:#{next_lease.sequence}",
-                    )
-                    next_lease.retain(next_arena, &.release)
-                    prefill_graph_lease = next_lease
-                    prefill_graph_scratch_arena = next_arena
-                    append_prefill_cmd = next_lease.command
-                  else
+                  {% else %}
                     flush_prefill_cmd.call
                     sleep append_prefill_cooldown_ms.milliseconds if append_prefill_cooldown_ms > 0
-                    append_prefill_cmd = ML::Metal::CommandBuffer.new
-                    append_prefill_started = Time.instant if prefill_boundary_profile
-                  end
-                {% else %}
-                  flush_prefill_cmd.call
-                  sleep append_prefill_cooldown_ms.milliseconds if append_prefill_cooldown_ms > 0
-                {% end %}
-              end
-            end
-            next
-          end
-
-          if state.layers[il].adaptive_kv
-            cmd = append_prefill_cmd
-            unless cmd
-              raise ArgumentError.new("adaptive resident QBit KV lost its shared prefill command")
-            end
-            adaptive_read_output = need_output || il + 1 < layer_limit
-            adaptive_output_buf = if adaptive_read_output
-                                    ML::MetalBuffer.new(handoff_bytes)
-                                  elsif rb = resident_output_buf
-                                    rb
-                                  else
-                                    nil
-                                  end
-            adaptive_input = gpu_hidden ? [] of Float32 : x
-            adaptive_result = full_attn_layer_chunk_project_routed(
-              adaptive_input, n_tokens, start_pos, state.layers[il], lw, hp, max_seq,
-              read_output: false,
-              output_buf: adaptive_output_buf,
-              input_buf: gpu_hidden,
-              append_command_buffer: cmd,
-              pending_adaptive_caches: pending_adaptive_caches,
-              scratch_arena: prefill_graph_scratch_arena,
-            )
-            unless adaptive_result
-              raise ArgumentError.new("adaptive resident QBit KV full-attention prefill route is unavailable")
-            end
-            append_prefill_gpu_work = true
-            if top1_append = resident_top1_append
-              if prefill_resident_top1_append_layer?(il, layer_limit)
-                unless adaptive_output_buf
-                  pending_adaptive_caches.each do |cache|
-                    QwenQBitAdaptiveResidentKV.cancel_pending_append!(cache, cmd)
-                  end
-                  pending_adaptive_caches.clear
-                  raise ArgumentError.new("resident top-1 append did not reach the final adaptive output")
+                  {% end %}
                 end
-                begin
-                  encoded = with_prefill_scratch_arena(prefill_graph_scratch_arena) do
-                    if allowed_ids = top1_append.allowed_ids
-                      Qwen35Metal.encode_rmsnorm_project_top1_allowed_ids_buffer(
-                        cmd, adaptive_output_buf.not_nil!,
-                        (n_tokens - 1).to_i64 * hp.n_embd.to_i64,
-                        weights.output_norm, weights.output, hp.rms_eps,
-                        allowed_ids,
-                        top1_append.id_buf, top1_append.value_buf,
-                      )
-                    else
-                      Qwen35Metal.encode_rmsnorm_project_top1_buffer(
-                        cmd, adaptive_output_buf.not_nil!,
-                        (n_tokens - 1).to_i64 * hp.n_embd.to_i64,
-                        weights.output_norm, weights.output, hp.rms_eps,
-                        top1_append.id_buf, top1_append.value_buf,
-                      )
-                    end
-                  end
-                  unless encoded
+              end
+              next
+            end
+
+            if state.layers[il].adaptive_kv
+              cmd = append_prefill_cmd
+              unless cmd
+                raise ArgumentError.new("adaptive resident QBit KV lost its shared prefill command")
+              end
+              adaptive_read_output = need_output || il + 1 < layer_limit
+              adaptive_output_buf = if adaptive_read_output
+                                      ML::MetalBuffer.new(handoff_bytes)
+                                    elsif rb = resident_output_buf
+                                      rb
+                                    else
+                                      nil
+                                    end
+              adaptive_input = gpu_hidden ? [] of Float32 : x
+              adaptive_result = full_attn_layer_chunk_project_routed(
+                adaptive_input, n_tokens, start_pos, state.layers[il], lw, hp, max_seq,
+                read_output: false,
+                output_buf: adaptive_output_buf,
+                input_buf: gpu_hidden,
+                append_command_buffer: cmd,
+                pending_adaptive_caches: pending_adaptive_caches,
+                scratch_arena: prefill_graph_scratch_arena,
+              )
+              unless adaptive_result
+                raise ArgumentError.new("adaptive resident QBit KV full-attention prefill route is unavailable")
+              end
+              append_prefill_gpu_work = true
+              if top1_append = resident_top1_append
+                if prefill_resident_top1_append_layer?(il, layer_limit)
+                  unless adaptive_output_buf
                     pending_adaptive_caches.each do |cache|
                       QwenQBitAdaptiveResidentKV.cancel_pending_append!(cache, cmd)
                     end
                     pending_adaptive_caches.clear
-                    raise ArgumentError.new("resident top-1 append encoder rejected the final adaptive output")
+                    raise ArgumentError.new("resident top-1 append did not reach the final adaptive output")
                   end
-                  top1_append.encoded[0] = true
-                rescue ex
-                  pending_adaptive_caches.each do |cache|
-                    QwenQBitAdaptiveResidentKV.cancel_pending_append!(cache, cmd)
+                  begin
+                    encoded = with_prefill_scratch_arena(prefill_graph_scratch_arena) do
+                      if allowed_ids = top1_append.allowed_ids
+                        Qwen35Metal.encode_rmsnorm_project_top1_allowed_ids_buffer(
+                          cmd, adaptive_output_buf.not_nil!,
+                          (n_tokens - 1).to_i64 * hp.n_embd.to_i64,
+                          weights.output_norm, weights.output, hp.rms_eps,
+                          allowed_ids,
+                          top1_append.id_buf, top1_append.value_buf,
+                        )
+                      else
+                        Qwen35Metal.encode_rmsnorm_project_top1_buffer(
+                          cmd, adaptive_output_buf.not_nil!,
+                          (n_tokens - 1).to_i64 * hp.n_embd.to_i64,
+                          weights.output_norm, weights.output, hp.rms_eps,
+                          top1_append.id_buf, top1_append.value_buf,
+                        )
+                      end
+                    end
+                    unless encoded
+                      pending_adaptive_caches.each do |cache|
+                        QwenQBitAdaptiveResidentKV.cancel_pending_append!(cache, cmd)
+                      end
+                      pending_adaptive_caches.clear
+                      raise ArgumentError.new("resident top-1 append encoder rejected the final adaptive output")
+                    end
+                    top1_append.encoded[0] = true
+                  rescue ex
+                    pending_adaptive_caches.each do |cache|
+                      QwenQBitAdaptiveResidentKV.cancel_pending_append!(cache, cmd)
+                    end
+                    pending_adaptive_caches.clear
+                    raise ex
                   end
-                  pending_adaptive_caches.clear
-                  raise ex
                 end
               end
-            end
-            flush_prefill_cmd.call
-            gpu_hidden = nil
-            if adaptive_read_output
-              {% unless flag?(:cpu_only) %}
-                Qwen35Metal::Profile.bump_group_transfer(
-                  "adaptive_standalone.boundary", 0_i64, handoff_bytes,
-                )
-              {% end %}
-              x = adaptive_output_buf.not_nil!.read(n_tokens * hp.n_embd)
-            else
-              resident_output_written.try { |flag| flag[0] = true } if resident_output_buf
-              x = [] of Float32
-            end
-            il += 1
-            next
-          end
-
-          if gb = gpu_hidden
-            full_output_buf = nil.as(ML::MetalBuffer?)
-            if resident_boundary_ok && !need_output && il + 1 >= layer_limit
-              full_output_buf = resident_output_buf
-            end
-            if !need_output && il + 1 >= layer_limit && !checkpoint_requested && full_output_buf.nil? &&
-               final_full_attn_layer_chunk_kv_cache_only_routed([] of Float32, n_tokens, start_pos, state.layers[il], lw, hp, max_seq,
-                 input_buf: gb, append_command_buffer: append_prefill_cmd,
-                 scratch_arena: prefill_graph_scratch_arena)
-              append_prefill_gpu_work = true
-              x = [] of Float32
+              flush_prefill_cmd.call
               gpu_hidden = nil
+              if adaptive_read_output
+                {% unless flag?(:cpu_only) %}
+                  Qwen35Metal::Profile.bump_group_transfer(
+                    "adaptive_standalone.boundary", 0_i64, handoff_bytes,
+                  )
+                {% end %}
+                x = adaptive_output_buf.not_nil!.read(n_tokens * hp.n_embd)
+              else
+                resident_output_written.try { |flag| flag[0] = true } if resident_output_buf
+                x = [] of Float32
+              end
               il += 1
               next
             end
-            flush_prefill_cmd.call
-            x = gb.read(n_tokens * hp.n_embd)
-            gpu_hidden = nil
-          elsif !need_output && il + 1 >= layer_limit && !checkpoint_requested && resident_output_buf.nil? &&
-                final_full_attn_layer_chunk_kv_cache_only_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq,
-                  append_command_buffer: append_prefill_cmd,
-                  scratch_arena: prefill_graph_scratch_arena)
-            append_prefill_gpu_work = true
-            x = [] of Float32
-            il += 1
-            next
-          end
 
-          read_output = need_output || il + 1 < layer_limit
-          full_resident_final = false
-          full_output_buf = nil.as(ML::MetalBuffer?)
-          if resident_boundary_ok && !read_output && il + 1 >= layer_limit
-            if rb = resident_output_buf
-              full_output_buf = rb
-              full_resident_final = true
-            end
-          end
-          flush_prefill_cmd.call if read_output
-          if gpu_out = full_attn_layer_chunk_project_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq, read_output: read_output, output_buf: full_output_buf)
-            flush_prefill_cmd.call unless read_output
-            if read_output
-              x = gpu_out
-            elsif full_resident_final
-              resident_output_written.try { |flag| flag[0] = true }
+            if gb = gpu_hidden
+              full_output_buf = nil.as(ML::MetalBuffer?)
+              if resident_boundary_ok && !need_output && il + 1 >= layer_limit
+                full_output_buf = resident_output_buf
+              end
+              if !need_output && il + 1 >= layer_limit && !checkpoint_requested && full_output_buf.nil? &&
+                 final_full_attn_layer_chunk_kv_cache_only_routed([] of Float32, n_tokens, start_pos, state.layers[il], lw, hp, max_seq,
+                   input_buf: gb, append_command_buffer: append_prefill_cmd,
+                   scratch_arena: prefill_graph_scratch_arena)
+                append_prefill_gpu_work = true
+                x = [] of Float32
+                gpu_hidden = nil
+                il += 1
+                next
+              end
+              flush_prefill_cmd.call
+              x = gb.read(n_tokens * hp.n_embd)
+              gpu_hidden = nil
+            elsif !need_output && il + 1 >= layer_limit && !checkpoint_requested && resident_output_buf.nil? &&
+                  final_full_attn_layer_chunk_kv_cache_only_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq,
+                    append_command_buffer: append_prefill_cmd,
+                    scratch_arena: prefill_graph_scratch_arena)
+              append_prefill_gpu_work = true
               x = [] of Float32
+              il += 1
+              next
+            end
+
+            read_output = need_output || il + 1 < layer_limit
+            full_resident_final = false
+            full_output_buf = nil.as(ML::MetalBuffer?)
+            if resident_boundary_ok && !read_output && il + 1 >= layer_limit
+              if rb = resident_output_buf
+                full_output_buf = rb
+                full_resident_final = true
+              end
+            end
+            flush_prefill_cmd.call if read_output
+            if gpu_out = full_attn_layer_chunk_project_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq, read_output: read_output, output_buf: full_output_buf)
+              flush_prefill_cmd.call unless read_output
+              if read_output
+                x = gpu_out
+              elsif full_resident_final
+                resident_output_written.try { |flag| flag[0] = true }
+                x = [] of Float32
+              else
+                return [] of Float32
+              end
             else
-              return [] of Float32
+              if state.layers[il].kv_cache_f16
+                raise ArgumentError.new("F16 KV cache full-attention prefill route became unavailable")
+              end
+              out = Array(Float32).new(n_tokens * hp.n_embd, 0.0_f32)
+              n_tokens.times do |t|
+                row = x[t * hp.n_embd, hp.n_embd]
+                y = forward_full_attn_layer(row, start_pos + t, lw, state.layers[il], hp, max_seq)
+                hp.n_embd.times { |i| out[t * hp.n_embd + i] = y[i] }
+              end
+              flush_prefill_cmd.call unless read_output
+              return [] of Float32 unless read_output
+              x = out
             end
-          else
-            out = Array(Float32).new(n_tokens * hp.n_embd, 0.0_f32)
-            n_tokens.times do |t|
-              row = x[t * hp.n_embd, hp.n_embd]
-              y = forward_full_attn_layer(row, start_pos + t, lw, state.layers[il], hp, max_seq)
-              hp.n_embd.times { |i| out[t * hp.n_embd + i] = y[i] }
-            end
-            flush_prefill_cmd.call unless read_output
-            return [] of Float32 unless read_output
-            x = out
-          end
-          il += 1
-        in Qwen35RecurrentWeights
-          if ENV["QWEN35_PREFILL_REC_RUN_OFF"]? != "1"
-            run_end = il
-            while run_end < weights.layers.size
-              break unless weights.layers[run_end].is_a?(Qwen35RecurrentWeights)
-              run_end += 1
-            end
+            il += 1
+          in Qwen35RecurrentWeights
+            if ENV["QWEN35_PREFILL_REC_RUN_OFF"]? != "1"
+              run_end = il
+              while run_end < weights.layers.size
+                break unless weights.layers[run_end].is_a?(Qwen35RecurrentWeights)
+                run_end += 1
+              end
 
-            if run_end - il > 1 || checkpoint_requested
-              {% unless flag?(:cpu_only) %}
-                rec_layers = [] of Qwen35RecurrentWeights
-                conv_bufs = [] of ML::MetalBuffer
-                ssm_bufs = [] of ML::MetalBuffer
-                checkpoint_conv_bufs = [] of ML::MetalBuffer
-                checkpoint_ssm_bufs = [] of ML::MetalBuffer
-                h_k = hp.ssm_group_count
-                h_v = hp.ssm_time_step_rank
-                s = hp.ssm_state_size
-                qkv_dim = 2 * h_k * s + h_v * s
-                conv_k = hp.ssm_conv_kernel
-                supported = Qwen35Metal.available?
+              if run_end - il > 1 || checkpoint_requested
+                {% unless flag?(:cpu_only) %}
+                  rec_layers = [] of Qwen35RecurrentWeights
+                  conv_bufs = [] of ML::MetalBuffer
+                  ssm_bufs = [] of ML::MetalBuffer
+                  checkpoint_conv_bufs = [] of ML::MetalBuffer
+                  checkpoint_ssm_bufs = [] of ML::MetalBuffer
+                  h_k = hp.ssm_group_count
+                  h_v = hp.ssm_time_step_rank
+                  s = hp.ssm_state_size
+                  qkv_dim = 2 * h_k * s + h_v * s
+                  conv_k = hp.ssm_conv_kernel
+                  supported = Qwen35Metal.available?
 
-                j = il
-                while j < run_end
-                  rw = weights.layers[j].as(Qwen35RecurrentWeights)
-                  supported &&= metal_qw_supported?(rw.attn_qkv_qw) &&
-                                metal_qw_supported?(rw.attn_gate_qw) &&
-                                metal_qw_supported?(rw.ssm_alpha_qw) &&
-                                metal_qw_supported?(rw.ssm_beta_qw) &&
-                                metal_qw_supported?(rw.ssm_out_qw) &&
-                                metal_qw_supported?(rw.ffn_gate_qw) &&
-                                metal_qw_supported?(rw.ffn_up_qw) &&
-                                metal_qw_supported?(rw.ffn_down_qw)
-                  rec_layers << rw
+                  j = il
+                  while j < run_end
+                    rw = weights.layers[j].as(Qwen35RecurrentWeights)
+                    supported &&= metal_qw_supported?(rw.attn_qkv_qw) &&
+                                  metal_qw_supported?(rw.attn_gate_qw) &&
+                                  metal_qw_supported?(rw.ssm_alpha_qw) &&
+                                  metal_qw_supported?(rw.ssm_beta_qw) &&
+                                  metal_qw_supported?(rw.ssm_out_qw) &&
+                                  metal_qw_supported?(rw.ffn_gate_qw) &&
+                                  metal_qw_supported?(rw.ffn_up_qw) &&
+                                  metal_qw_supported?(rw.ffn_down_qw)
+                    rec_layers << rw
 
-                  lstate = state.layers[j]
-                  conv_bytes = ((conv_k - 1) * qkv_dim).to_i64 * sizeof(Float32)
-                  conv_buf = lstate.conv_state_buf
-                  if conv_buf.nil?
-                    conv_buf = ML::MetalBuffer.new(conv_bytes)
-                    if conv_state = lstate.conv_state
-                      conv_buf.write(conv_state)
-                    else
-                      conv_buf.contents.as(Pointer(UInt8)).clear(conv_bytes)
-                    end
-                    lstate.conv_state_buf = conv_buf
-                  end
-                  conv_bufs << conv_buf
-                  if checkpoint_requested
-                    checkpoint_conv_bufs << checkpoint_state.not_nil!.layers[j].conv_state_buf.not_nil!
-                  end
-
-                  ssm_bytes = (h_v * s * s).to_i64 * sizeof(Float32)
-                  ssm_buf = lstate.ssm_state_buf
-                  if ssm_buf.nil?
-                    ssm_buf = ML::MetalBuffer.new(ssm_bytes)
-                    if ssm_state = lstate.ssm_state
-                      ssm_buf.write(ssm_state)
-                    else
-                      ssm_buf.contents.as(Pointer(UInt8)).clear(ssm_bytes)
-                    end
-                    lstate.ssm_state_buf = ssm_buf
-                  end
-                  ssm_bufs << ssm_buf
-                  if checkpoint_requested
-                    checkpoint_ssm_bufs << checkpoint_state.not_nil!.layers[j].ssm_state_buf.not_nil!
-                  end
-                  j += 1
-                end
-
-                if supported
-                  rec_read_output = true
-                  rec_output_buf = nil.as(ML::MetalBuffer?)
-                  rec_resident_final = false
-                  if resident_boundary_ok
-                    rec_read_output = need_output && run_end >= layer_limit
-                    if !rec_read_output && run_end < layer_limit
-                      if handoff_flip
-                        handoff_a ||= ML::MetalBuffer.new(handoff_bytes)
-                        rec_output_buf = handoff_a
+                    lstate = state.layers[j]
+                    conv_bytes = ((conv_k - 1) * qkv_dim).to_i64 * sizeof(Float32)
+                    conv_buf = lstate.conv_state_buf
+                    if conv_buf.nil?
+                      conv_buf = ML::MetalBuffer.new(conv_bytes)
+                      if conv_state = lstate.conv_state
+                        conv_buf.write(conv_state)
                       else
-                        handoff_b ||= ML::MetalBuffer.new(handoff_bytes)
-                        rec_output_buf = handoff_b
+                        conv_buf.contents.as(Pointer(UInt8)).clear(conv_bytes)
                       end
-                      handoff_flip = !handoff_flip
-                    elsif !rec_read_output && run_end >= layer_limit
-                      if rb = resident_output_buf
-                        rec_output_buf = rb
-                        rec_resident_final = true
-                      end
+                      lstate.conv_state_buf = conv_buf
                     end
-                  end
-                  flush_prefill_cmd.call if rec_read_output
-                  gpu_out = with_prefill_scratch_arena(rec_read_output ? nil : prefill_graph_scratch_arena) do
-                    Qwen35Metal.recurrent_layer_chunk_project_many(
-                      x, conv_bufs, ssm_bufs, rec_layers,
-                      h_k, h_v, s, conv_k, n_tokens, hp.rms_eps,
-                      "rec#{il}-#{run_end - 1}",
-                      checkpoint_index: checkpoint_index,
-                      checkpoint_conv_state_bufs: checkpoint_requested ? checkpoint_conv_bufs : nil,
-                      checkpoint_ssm_state_bufs: checkpoint_requested ? checkpoint_ssm_bufs : nil,
-                      checkpoint_rollback_log: checkpoint_rollback_log,
-                      input_buf: gpu_hidden,
-                      output_buf: rec_output_buf,
-                      read_output: rec_read_output,
-                      append_command_buffer: rec_read_output ? nil : append_prefill_cmd)
-                  end
-                  if gpu_out
-                    append_prefill_gpu_work = true unless rec_read_output
-                    il = run_end
-                    if rec_read_output
-                      x = gpu_out
-                      gpu_hidden = nil
-                    elsif ob = rec_output_buf
-                      x = [] of Float32
-                      gpu_hidden = ob
-                      resident_output_written.try { |flag| flag[0] = true } if rec_resident_final
-                    else
-                      flush_prefill_cmd.call
-                      return [] of Float32 unless need_output
-                      x = gpu_out
-                      gpu_hidden = nil
+                    conv_bufs << conv_buf
+                    if checkpoint_requested
+                      checkpoint_conv_bufs << checkpoint_state.not_nil!.layers[j].conv_state_buf.not_nil!
                     end
-                    next
-                  elsif checkpoint_requested
-                    raise "prefill recurrent checkpoint unsupported for recurrent run #{il}..#{run_end - 1}"
-                  end
-                elsif checkpoint_requested
-                  raise "prefill recurrent checkpoint requires Metal-supported recurrent run #{il}..#{run_end - 1}"
-                end
-              {% else %}
-                if checkpoint_requested
-                  raise "prefill recurrent checkpoint requires Metal-supported recurrent run #{il}..#{run_end - 1}"
-                end
-              {% end %}
-            end
-          elsif checkpoint_requested
-            raise "prefill recurrent checkpoint requires QWEN35_PREFILL_REC_RUN_OFF != 1"
-          end
 
-          if gb = gpu_hidden
-            flush_prefill_cmd.call
-            x = gb.read(n_tokens * hp.n_embd)
-            gpu_hidden = nil
-          end
-          x = forward_recurrent_layer_chunk(x, n_tokens, lw, state.layers[il], hp, max_seq)
-          il += 1
+                    ssm_bytes = (h_v * s * s).to_i64 * sizeof(Float32)
+                    ssm_buf = lstate.ssm_state_buf
+                    if ssm_buf.nil?
+                      ssm_buf = ML::MetalBuffer.new(ssm_bytes)
+                      if ssm_state = lstate.ssm_state
+                        ssm_buf.write(ssm_state)
+                      else
+                        ssm_buf.contents.as(Pointer(UInt8)).clear(ssm_bytes)
+                      end
+                      lstate.ssm_state_buf = ssm_buf
+                    end
+                    ssm_bufs << ssm_buf
+                    if checkpoint_requested
+                      checkpoint_ssm_bufs << checkpoint_state.not_nil!.layers[j].ssm_state_buf.not_nil!
+                    end
+                    j += 1
+                  end
+
+                  if supported
+                    rec_read_output = true
+                    rec_output_buf = nil.as(ML::MetalBuffer?)
+                    rec_resident_final = false
+                    if resident_boundary_ok
+                      rec_read_output = need_output && run_end >= layer_limit
+                      if !rec_read_output && run_end < layer_limit
+                        if handoff_flip
+                          handoff_a ||= ML::MetalBuffer.new(handoff_bytes)
+                          rec_output_buf = handoff_a
+                        else
+                          handoff_b ||= ML::MetalBuffer.new(handoff_bytes)
+                          rec_output_buf = handoff_b
+                        end
+                        handoff_flip = !handoff_flip
+                      elsif !rec_read_output && run_end >= layer_limit
+                        if rb = resident_output_buf
+                          rec_output_buf = rb
+                          rec_resident_final = true
+                        end
+                      end
+                    end
+                    flush_prefill_cmd.call if rec_read_output
+                    gpu_out = with_prefill_scratch_arena(rec_read_output ? nil : prefill_graph_scratch_arena) do
+                      Qwen35Metal.recurrent_layer_chunk_project_many(
+                        x, conv_bufs, ssm_bufs, rec_layers,
+                        h_k, h_v, s, conv_k, n_tokens, hp.rms_eps,
+                        "rec#{il}-#{run_end - 1}",
+                        checkpoint_index: checkpoint_index,
+                        checkpoint_conv_state_bufs: checkpoint_requested ? checkpoint_conv_bufs : nil,
+                        checkpoint_ssm_state_bufs: checkpoint_requested ? checkpoint_ssm_bufs : nil,
+                        checkpoint_rollback_log: checkpoint_rollback_log,
+                        input_buf: gpu_hidden,
+                        output_buf: rec_output_buf,
+                        read_output: rec_read_output,
+                        append_command_buffer: rec_read_output ? nil : append_prefill_cmd)
+                    end
+                    if gpu_out
+                      append_prefill_gpu_work = true unless rec_read_output
+                      il = run_end
+                      if rec_read_output
+                        x = gpu_out
+                        gpu_hidden = nil
+                      elsif ob = rec_output_buf
+                        x = [] of Float32
+                        gpu_hidden = ob
+                        resident_output_written.try { |flag| flag[0] = true } if rec_resident_final
+                      else
+                        flush_prefill_cmd.call
+                        return [] of Float32 unless need_output
+                        x = gpu_out
+                        gpu_hidden = nil
+                      end
+                      next
+                    elsif checkpoint_requested
+                      raise "prefill recurrent checkpoint unsupported for recurrent run #{il}..#{run_end - 1}"
+                    end
+                  elsif checkpoint_requested
+                    raise "prefill recurrent checkpoint requires Metal-supported recurrent run #{il}..#{run_end - 1}"
+                  end
+                {% else %}
+                  if checkpoint_requested
+                    raise "prefill recurrent checkpoint requires Metal-supported recurrent run #{il}..#{run_end - 1}"
+                  end
+                {% end %}
+              end
+            elsif checkpoint_requested
+              raise "prefill recurrent checkpoint requires QWEN35_PREFILL_REC_RUN_OFF != 1"
+            end
+
+            if gb = gpu_hidden
+              flush_prefill_cmd.call
+              x = gb.read(n_tokens * hp.n_embd)
+              gpu_hidden = nil
+            end
+            x = forward_recurrent_layer_chunk(x, n_tokens, lw, state.layers[il], hp, max_seq)
+            il += 1
           end
         end
         if gb = gpu_hidden
@@ -4467,6 +4541,31 @@ module ML::GGUF
         {% end %}
         raise ex
       end
+    end
+
+    private def f16_kv_prefill_supported?(weights : Qwen35Weights) : Bool
+      {% if flag?(:cpu_only) %}
+        false
+      {% else %}
+        return false if ENV["QWEN35_FULL_PREFILL_CHUNK_OFF"]? == "1"
+        return false unless Qwen35Metal.available?
+        return false unless Qwen35Metal.kv_cache_f16_pipelines_supported?
+
+        weights.layers.all? do |layer|
+          case layer
+          in Qwen35FullAttnWeights
+            metal_qw_supported?(layer.attn_q_qw) &&
+              metal_qw_supported?(layer.attn_k_qw) &&
+              metal_qw_supported?(layer.attn_v_qw) &&
+              metal_qw_supported?(layer.attn_output_qw) &&
+              metal_qw_supported?(layer.ffn_gate_qw) &&
+              metal_qw_supported?(layer.ffn_up_qw) &&
+              metal_qw_supported?(layer.ffn_down_qw)
+          in Qwen35RecurrentWeights
+            true
+          end
+        end
+      {% end %}
     end
 
     # Embedding lookup for a single token id → Array(Float32)[n_embd].
@@ -4610,6 +4709,10 @@ module ML::GGUF
                                                  adaptive_decode : Bool = false)
       {% unless flag?(:cpu_only) %}
         adaptive_indices = state.adaptive_kv_layer_indices
+        kv_cache_f16 = state.kv_cache_f16?
+        if kv_cache_f16 && !adaptive_indices.empty?
+          raise ArgumentError.new("adaptive resident QBit KV cannot coexist with an F16 KV owner")
+        end
         if !adaptive_indices.empty? && !adaptive_decode
           raise ArgumentError.new("adaptive resident QBit KV decode requires the synchronous whole-token Metal route")
         end
@@ -4618,6 +4721,7 @@ module ML::GGUF
         end
         return nil if ENV["QWEN35_DECODE_WAVE_OFF"]? == "1"
         return nil unless Qwen35Metal.available?
+        return nil if kv_cache_f16 && !Qwen35Metal.kv_cache_f16_pipelines_supported?
         return nil unless metal_qw_supported?(weights.output)
 
         weights.layers.each do |lw|
@@ -4666,6 +4770,30 @@ module ML::GGUF
           adaptive_encoders = encoders
         end
 
+        # Validate every externally supplied cache owner before allocating any
+        # missing state or encoding work. Buffer length is not an admissible
+        # substitute for the state's declared element type.
+        weights.layers.each_with_index do |lw, il|
+          next unless lw.is_a?(Qwen35FullAttnWeights)
+          layer = state.layers[il]
+          if adaptive_decode && adaptive_indices.includes?(il)
+            if layer.k_cache || layer.v_cache || layer.k_cache_buf || layer.v_cache_buf
+              raise ArgumentError.new("adaptive resident QBit KV cannot coexist with an ordinary KV owner")
+            end
+          else
+            if layer.kv_cache_f16 && (layer.k_cache || layer.v_cache)
+              raise ArgumentError.new("F16 KV cache cannot coexist with F32 host cache arrays")
+            end
+            expected_bytes = layer.kv_cache_bytes(max_seq, kv_dim)
+            if (buffer = layer.k_cache_buf) && buffer.size != expected_bytes
+              raise ArgumentError.new("K cache buffer size does not match its declared element type")
+            end
+            if (buffer = layer.v_cache_buf) && buffer.size != expected_bytes
+              raise ArgumentError.new("V cache buffer size does not match its declared element type")
+            end
+          end
+        end
+
         weights.layers.each_with_index do |lw, il|
           case lw
           in Qwen35FullAttnWeights
@@ -4675,7 +4803,7 @@ module ML::GGUF
                 raise ArgumentError.new("adaptive resident QBit KV cannot coexist with an F32 owner")
               end
             else
-              bytes = (max_seq * kv_dim).to_i64 * sizeof(Float32)
+              bytes = state.layers[il].kv_cache_bytes(max_seq, kv_dim)
               k_buf = state.layers[il].k_cache_buf
               if k_buf.nil?
                 k_buf = ML::MetalBuffer.new(bytes)
@@ -4743,7 +4871,8 @@ module ML::GGUF
           top1_store_index: top1_store_index,
           command_queue_name: command_queue_name,
           append_command_buffer: append_command_buffer,
-          adaptive_decode_encoders: adaptive_encoders)
+          adaptive_decode_encoders: adaptive_encoders,
+          kv_cache_f16: kv_cache_f16)
       {% else %}
         nil
       {% end %}

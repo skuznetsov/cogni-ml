@@ -26705,3 +26705,33 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was an ordinary exact producer-consumer fusion experiment.
 
 **decision:** Keep the direct-store B64 GEMM plus separate residual add. Do not add a batch threshold for the rejected kernel. Revisit only if the residual can be consumed without forcing full-tile staging or if the hidden/residual representation changes; continue the llama.cpp comparison at a boundary that removes compute rather than merely dispatches.
+
+#### [LM-QWEN35-F16-KV-1023] Native F16 KV halves ordinary-cache storage and isolates llama.cpp Flash Attention as the remaining long-prefill gap
+**context:** ml / Qwen3.5-9B / ordinary full-attention KV / same-token prefill / Apple M2 Max
+**state:** opt-in implementation verified; cross-engine cause localized; Qwen-specific Flash Attention remains open
+
+- claim: "The ordinary full-attention cache can remain F16 from publication through prefill and decode without an intermediate F32 cache owner."
+  source: compile-time F16 variants cover the ordinary KV writers and prefill/decode readers, while state allocation, clearing, cloning, buffer-size checks, and route preflight use the selected element width. The route rejects adaptive QBit ownership, F32 host-cache aliases, mixed per-layer cache types, RawF32 full-cache snapshot capture/restore, unsupported CPU fallbacks, and malformed existing buffers before encoding. The complete affected forward/snapshot suite passed under the guarded Metal runner (`52 examples, 0 failures, 0 errors, 0 pending`), and the real-model test preserves top-2 across prefill plus four decode steps with logit cosine at least `0.9999` while requiring exactly half-sized K/V buffers.
+  verified_at: 2026-09-03
+  decay_trigger: KV layout or ownership, snapshot encoding, ordinary/adaptive routing, Metal pipeline selection, model shape, compiler, or device changes
+  trust: {F:0.98,G:0.12,R:0.96}
+
+- claim: "F16 KV is primarily a capacity improvement and a shape-dependent speedup, not the complete explanation for llama.cpp throughput."
+  source: same-process native F16/F32 ABBA on Qwen3.5-9B Q4_K_M measured F16 at `+0.78%` for pp1024 and `+3.42%` for pp2048, with top-2 unchanged and logit cosine `0.99999945/0.99999988`. At max_seq 2048 the eight full-attention layers use 64 MiB instead of 128 MiB. For the verified Qwen3.8-27B topology, the corresponding logical ordinary-cache saving is 128 MiB at 2048 tokens and 1 GiB at 16K.
+  verified_at: 2026-09-03
+  decay_trigger: cache layout, topology metadata, benchmark route, prompt vector, model/device/compiler/runtime, or host contention changes
+  trust: {F:0.98,G:0.10,R:0.92}
+
+- claim: "With equal F16 KV and identical external tokens, llama.cpp's Flash Attention is the discriminating long-prefill advantage in the current comparison."
+  source: with llama Flash Attention enabled, a guarded twelve-repetition screen measured native versus llama gaps of `-13.81%` at pp1024 and `-5.46%` at pp2048. Disabling only llama Flash Attention in a separate guarded eight-repetition run reversed the ranking: native `351.99` versus llama `335.39 tok/s` at pp1024 (`+4.95%`) and native `334.66` versus llama `313.93 tok/s` at pp2048 (`+6.61%`). Both rows preserved top-2 and full-logit cosine `0.99987163/0.99985240`. Both engines used F16 KV, `n_ubatch=512`, one terminal full-logit output, reused cleared state, and the same token vector.
+  verified_at: 2026-09-03
+  decay_trigger: either attention kernel, benchmark contract, llama graph/fusion policy, cache format, model/device/compiler/runtime, or host contention changes
+  trust: {F:0.97,G:0.08,R:0.91}
+
+**Adversary:** The enabled/disabled comparison changes llama's attention algorithm and its surrounding graph, so it localizes the useful boundary but does not attribute every millisecond to one Metal kernel. Absolute throughput moved with host load; the sign reversal and same-process native F16/F32 rows are stronger than any single published rate. The numerical gate is logit/top-2 based; product coding semantics and embedding cosine similarity remain unmeasured. The implementation is verified on the 9B model and only statically sized for 27B.
+
+**Value proxy:** Halved cache bytes are a real capacity result. Same-token prefill throughput measures engine execution for one external contract, not product coding quality, greedy generation, or cold-cache restore. A Flash Attention microkernel must first win an isolated exact-shape row benchmark and preserve logits/state before it can support an end-to-end claim.
+
+**LTP/WBA:** Not claimed. Persistent F16 KV and the proposed attention specialization are ordinary representation and kernel optimizations.
+
+**decision:** Keep F16 KV opt-in and fail-closed at every unsupported ownership boundary. Do not port llama.cpp's generic Flash Attention framework. Next falsify a narrow causal F16 `d256/GQA4` causal attention kernel at pp1024/2048; retain the existing online-softmax row kernel as rollback. If the isolated row cannot explain at least a material fraction of the measured gap, pivot to recurrent projection/fusion rather than widening the attention rewrite.

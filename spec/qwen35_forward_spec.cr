@@ -47,7 +47,51 @@ ensure
   end
 end
 
+private def qwen35_logits_top2(logits : Array(Float32)) : {Int32, Int32}
+  best_id = -1
+  second_id = -1
+  best = -Float32::INFINITY
+  second = -Float32::INFINITY
+  logits.each_with_index do |value, index|
+    if value > best
+      second = best
+      second_id = best_id
+      best = value
+      best_id = index
+    elsif value > second
+      second = value
+      second_id = index
+    end
+  end
+  {best_id.to_i32, second_id.to_i32}
+end
+
+private def qwen35_logits_cosine(a : Array(Float32), b : Array(Float32)) : Float64
+  raise "logit width mismatch" unless a.size == b.size
+
+  dot = 0.0_f64
+  aa = 0.0_f64
+  bb = 0.0_f64
+  a.each_with_index do |value, index|
+    av = value.to_f64
+    bv = b[index].to_f64
+    dot += av * bv
+    aa += av * av
+    bb += bv * bv
+  end
+  dot / Math.sqrt(aa * bb)
+end
+
 describe ML::GGUF::Qwen35Metal, "route policies" do
+  it "pins the ordinary KV element type across state copies" do
+    f16 = ML::GGUF::Qwen35CPU::LayerState.new(kv_cache_f16: true)
+    f16.fork.kv_cache_f16.should be_true
+
+    expect_raises(ArgumentError, /element type mismatch/) do
+      ML::GGUF::Qwen35CPU::LayerState.new.copy_from!(f16)
+    end
+  end
+
   it "reports optional GPU command timing separately from host wait timing" do
     profile = ML::GGUF::Qwen35Metal::Profile
     old_gpu_timing = ENV["QWEN35_METAL_GPU_TIMING"]?
@@ -874,6 +918,60 @@ describe ML::GGUF::Qwen35CPU, "full decoder forward" do
         ENV.delete("QWEN35_FINAL_FULL_LAST_OFF")
       end
     end
+  end
+
+  it "keeps F16 KV prefill and decode numerically aligned with F32 KV" do
+    pending!("Metal not available") unless ML::GGUF::Qwen35Metal.available?
+
+    w = ML::GGUF::Qwen35Weights.from_gguf(QWEN_9B_FWD)
+    hp = w.hparams
+    prompt = [760_i32, 6511_i32, 314_i32, 9338_i32, 369_i32, 279_i32, 9821_i32, 13_i32]
+    continuation = [11751_i32, 42_i32, 997_i32, 314_i32]
+
+    f32 = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32)
+    f16 = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32, kv_cache_f16: true)
+    ML::GGUF::Qwen35CPU.prepare_state_metal!(f32, hp, admit_adaptive_resident_kv: false)
+
+    first_full_layer = hp.full_attention_layers.first
+    mixed = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32, kv_cache_f16: true)
+    mixed.layers[first_full_layer] = ML::GGUF::Qwen35CPU::LayerState.new
+    expect_raises(ArgumentError, /mixed KV cache element types/) do
+      mixed.kv_cache_f16?
+    end
+
+    wrong_size = ML::GGUF::Qwen35CPU::State.new(hp, max_seq: 32, kv_cache_f16: true)
+    wrong_size.layers[first_full_layer].k_cache_buf = ML::MetalBuffer.new(4_i64)
+    expect_raises(ArgumentError, /K cache buffer size/) do
+      ML::GGUF::Qwen35CPU.forward(w, prompt.first, 0, wrong_size)
+    end
+    wrong_size.layers[0].conv_state_buf.should be_nil
+
+    f16.layers[first_full_layer].k_cache = [0.0_f32]
+    expect_raises(ArgumentError, /cannot coexist with F32 host cache arrays/) do
+      ML::GGUF::Qwen35CPU.prepare_state_metal!(f16, hp, admit_adaptive_resident_kv: false)
+    end
+    f16.layers[first_full_layer].k_cache = nil
+    ML::GGUF::Qwen35CPU.prepare_state_metal!(f16, hp, admit_adaptive_resident_kv: false)
+
+    f32_logits = ML::GGUF::Qwen35CPU.prefill_tokens_logits(w, prompt, 0, f32)
+    f16_logits = ML::GGUF::Qwen35CPU.prefill_tokens_logits(w, prompt, 0, f16)
+    qwen35_logits_top2(f16_logits).should eq(qwen35_logits_top2(f32_logits))
+    qwen35_logits_cosine(f16_logits, f32_logits).should be >= 0.9999
+
+    continuation.each_with_index do |token, index|
+      pos = prompt.size.to_i32 + index
+      f32_logits = ML::GGUF::Qwen35CPU.forward(w, token, pos, f32)
+      f16_logits = ML::GGUF::Qwen35CPU.forward(w, token, pos, f16)
+      qwen35_logits_top2(f16_logits).should eq(qwen35_logits_top2(f32_logits))
+      qwen35_logits_cosine(f16_logits, f32_logits).should be >= 0.9999
+    end
+
+    f16.layers[first_full_layer].k_cache_buf.not_nil!.size.should eq(
+      f32.layers[first_full_layer].k_cache_buf.not_nil!.size // 2
+    )
+    f16.layers[first_full_layer].v_cache_buf.not_nil!.size.should eq(
+      f32.layers[first_full_layer].v_cache_buf.not_nil!.size // 2
+    )
   end
 
   it "long prompt suffix chunk top1 matches final-token fallback" do

@@ -341,6 +341,9 @@ module ML::GGUF
       if state.adaptive_kv?
         raise ArgumentError.new("adaptive resident QBit KV snapshot is unsupported")
       end
+      if state.kv_cache_f16?
+        raise ArgumentError.new("F16 KV snapshot is unsupported by the RawF32 artifact ABI")
+      end
       records = [] of Record
       positions = Array(Int32).new(state.layers.size)
       state.layers.each_with_index do |layer, i|
@@ -421,6 +424,9 @@ module ML::GGUF
       raise ArgumentError.new("layer count mismatch: snapshot=#{snapshot.layer_count}, hp=#{hp.n_layer}") unless snapshot.layer_count == hp.n_layer
       raise ArgumentError.new("state layer count mismatch: snapshot=#{snapshot.layer_count}, state=#{state.layers.size}") unless snapshot.layer_count == state.layers.size
       raise ArgumentError.new("state max_seq mismatch: snapshot=#{snapshot.max_seq}, state=#{state.max_seq}") unless snapshot.max_seq == state.max_seq
+      if state.kv_cache_f16?
+        raise ArgumentError.new("RawF32 snapshot cannot be restored into an F16 KV owner")
+      end
 
       snapshot.positions.each_with_index do |position, i|
         state.layers[i].position = position
@@ -465,6 +471,9 @@ module ML::GGUF
       raise ArgumentError.new("layer count mismatch: snapshot=#{encoded.layer_count}, hp=#{hp.n_layer}") unless encoded.layer_count == hp.n_layer
       raise ArgumentError.new("state layer count mismatch: snapshot=#{encoded.layer_count}, state=#{state.layers.size}") unless encoded.layer_count == state.layers.size
       raise ArgumentError.new("state max_seq mismatch: snapshot=#{encoded.max_seq}, state=#{state.max_seq}") unless encoded.max_seq == state.max_seq
+      if state.kv_cache_f16?
+        raise ArgumentError.new("RawF32 snapshot cannot be restored into an F16 KV owner")
+      end
 
       unless prefer_metal && Qwen35Metal.available?
         restore_into(decode_encoded_snapshot(encoded), hp, state, prefer_metal: false)
