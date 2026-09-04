@@ -11,6 +11,13 @@ describe ML::QwenVsLlamaBenchmarkContract do
     source.includes?(%q{"n/a"}).should be_true
   end
 
+  it "releases native Metal state between prompt sizes" do
+    source = File.read(Path[__DIR__] / "../bin/benchmark_qwen_prefill_vs_llama_same_token.cr")
+    source.includes?("Qwen35CPU.release_state_metal!(@state)").should be_true
+    source.includes?("native_runner.close").should be_true
+    source.includes?("native_weights.close").should be_true
+  end
+
   it "defaults to full logits without claiming strict apples-to-apples parity" do
     contract = ML::QwenVsLlamaBenchmarkContract
     ML::QwenVsLlamaBenchmarkContract::DEFAULT_PREFILL_HEAD.should eq(ML::QwenVsLlamaBenchmarkContract::HeadMode::FullLogits)

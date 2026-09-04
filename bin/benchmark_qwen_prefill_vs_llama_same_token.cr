@@ -72,6 +72,7 @@ class NativePrefillRunner
       )
     end
     @terminal_last_used = false
+    @closed = false
   end
 
   def reset! : Nil
@@ -86,6 +87,13 @@ class NativePrefillRunner
     @terminal_last_used = route_used[0]
     raise "native full-logit width mismatch" unless logits.size == @output_width
     logits
+  end
+
+  def close : Nil
+    return if @closed
+
+    ML::GGUF::Qwen35CPU.release_state_metal!(@state)
+    @closed = true
   end
 
   private def with_flash_d256(&)
@@ -315,7 +323,7 @@ def measure_native_route_abba(left : NativePrefillRunner,
              previous.native_top2 == measured_quality.native_top2 &&
              previous.llama_top1 == measured_quality.llama_top1 &&
              previous.llama_top2 == measured_quality.llama_top2
-        raise "F16/F32 top-2 output changed between measured repetitions"
+        raise "native route top-2 output changed between measured repetitions"
       end
       last_quality = previous.copy_with(cosine: Math.min(previous.cosine, measured_quality.cosine))
     else
@@ -524,9 +532,14 @@ begin
       end
     ensure
       llama_runner.close
+      native_runner.close
+      native_f32_runner.try(&.close)
+      native_flash_runner.try(&.close)
+      native_flash_baseline_runner.try(&.close)
     end
   end
 ensure
   llama_model.free
+  native_weights.close
   ML::LLM.cleanup
 end

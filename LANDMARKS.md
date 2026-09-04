@@ -26885,3 +26885,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This was ordinary serial command encoding.
 
 **decision:** Remove the policy, benchmark switch, and coalesced route. Keep the clearer split encoders. Do not repeat boundary-only coalescing for the smaller full-attention preparation slice unless profiling first isolates encoder setup as material. Prefer operation fusion, reduced intermediate traffic, or a reusable precompiled graph that removes substantive host or GPU work.
+
+#### [LM-QWEN35-REC-CONV-TOKEN-PARALLEL-FALSIFIED-1031] llama-style token-parallel recurrent convolution is correct but immaterial
+**context:** ml / Qwen3.5-9B and Qwen3.8-27B / recurrent prefill / Apple M2 Max / same-process Metal ABBA
+**state:** candidate falsified and removed; benchmark state lifetime corrected
+
+- claim: "A separate K=4 token-parallel convolution plus final-state kernel preserves the tested recurrent state and outputs but does not produce a material end-to-end prefill win."
+  source: the temporary route reconstructed the immutable K=4 history per `(token, channel)` and finalized the last three input rows in a second kernel. An eight-token F32 Metal-to-CPU oracle kept Q/K/V/gate/beta maximum absolute differences near `1e-7` with exact final state; serial-versus-parallel short chunks at 2 and 3 tokens also matched. Two guarded 9B ABBA matrices measured gains of `+0.88/+0.70/+0.65/+0.89%` and `+1.35/+0.50/+0.81/+1.18%` at pp256/512/1024/2048. Guarded native-only 27B ABBA measured `+0.79/+0.75/+0.19/+0.20%` at the same sizes, with identical ordered top-2 and full-logit cosine at least `0.99999987`. Every result is below the project's approximate `3%` admission threshold, and the effect collapses at long 27B prompts.
+  verified_at: 2026-09-04
+  decay_trigger: recurrent convolution dataflow, model topology, Metal compiler/device, benchmark route, or admission threshold changes
+  trust: {F:0.98,G:0.08,R:0.94}
+
+- claim: "The same-model benchmark must release each native Metal state before constructing the next prompt-size runners."
+  source: the first combined 27B run retained multiple capacity-sized native states while also holding llama.cpp state and was stopped by the existing 35% free-memory guard after pp256. `NativePrefillRunner#close` now idempotently calls `release_state_metal!`; each prompt-size ensure closes every native runner, and the outer ensure closes the native weights. Native-only pp256/512 and pp1024/2048 reruns then exited zero under the unchanged guard.
+  verified_at: 2026-09-04
+  decay_trigger: benchmark runner ownership, native state allocation/release, model lifecycle, or guarded-run memory policy changes
+  trust: {F:0.99,G:0.30,R:0.95}
+
+**Adversary:** The first combined 27B pp256 observation of `+2.42%` is excluded from attribution because retained state and mixed-engine memory pressure made that process incomparable with the later native-only ABBA. The semantic certificate is scoped to the exercised F32 single-sequence route; H16, checkpoint, replay, multi-sequence, and cross-device behavior were not promoted. Those gaps do not justify more test machinery because the performance gate already rejected the production candidate.
+
+**Value proxy:** Token parallelism, dispatch width, and similarity to llama.cpp's graph are not the objective. End-to-end balanced wall time with preserved state and output decisions is the admission boundary; it remained sub-percent on the most important 27B long-prefill rows.
+
+**LTP/WBA:** Not claimed. This was an ordinary kernel-layout experiment.
+
+**decision:** Remove the token-parallel kernels, route, environment control, and tests. Keep the simpler serial convolution. Retain the benchmark lifecycle correction so large-model comparisons do not accumulate native GPU state across prompt sizes. Continue the llama.cpp comparison at a dominant projection or FFN dataflow boundary rather than convolution scheduling.
