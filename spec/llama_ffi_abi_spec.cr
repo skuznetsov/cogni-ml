@@ -2,6 +2,16 @@ require "spec"
 require "../src/ml/llm/llama_ffi"
 
 describe "ML::LLM::LlamaFFI ABI" do
+  it "links the backend registry through its owning ggml library" do
+    ffi_source = File.read(Path[__DIR__] / "../src/ml/llm/llama_ffi.cr")
+    wrapper_source = File.read(Path[__DIR__] / "../src/ml/llm/llama.cr")
+
+    ffi_source.includes?(%q{@[Link("ggml")]}).should be_true
+    ffi_source.includes?("lib GgmlFFI").should be_true
+    wrapper_source.includes?("GgmlFFI.ggml_backend_load_all").should be_true
+    wrapper_source.includes?("LlamaFFI.ggml_backend_load_all").should be_false
+  end
+
   it "matches the ggml cache type values used by llama context parameters" do
     ML::LLM::LlamaFFI::GgmlType::F32.value.should eq(0)
     ML::LLM::LlamaFFI::GgmlType::F16.value.should eq(1)

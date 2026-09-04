@@ -4,6 +4,12 @@
 
 module ML
   module LLM
+    # Backend registry lives in libggml, not libllama.
+    @[Link("ggml")]
+    lib GgmlFFI
+      fun ggml_backend_load_all : Void
+    end
+
     # Link against llama library
     @[Link("llama")]
     lib LlamaFFI
@@ -177,7 +183,6 @@ module ML
       # Backend initialization
       fun llama_backend_init : Void
       fun llama_backend_free : Void
-      fun ggml_backend_load_all : Void
 
       # Model loading/freeing
       fun llama_model_load_from_file(path_model : LibC::Char*, params : LlamaModelParams) : LlamaModel
