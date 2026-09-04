@@ -26735,3 +26735,33 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. Persistent F16 KV and the proposed attention specialization are ordinary representation and kernel optimizations.
 
 **decision:** Keep F16 KV opt-in and fail-closed at every unsupported ownership boundary. Do not port llama.cpp's generic Flash Attention framework. Next falsify a narrow causal F16 `d256/GQA4` causal attention kernel at pp1024/2048; retain the existing online-softmax row kernel as rollback. If the isolated row cannot explain at least a material fraction of the measured gap, pivot to recurrent projection/fusion rather than widening the attention rewrite.
+
+#### [LM-QWEN35-FLASH-D256-1024] Exact-shape Flash-MMA closes most of the long-prefill attention gap without widening the cache contract
+**context:** ml / Qwen3.5-9B and Qwen3.8-27B / ordinary F16 KV / full-attention prefill / Apple M2 Max
+**state:** exact measured points enabled by default; short-prefill FFN/projection gap remains open
+
+- claim: "A narrow d256 Flash-MMA attention kernel is faster than the existing causal row kernel and preserves the admitted F16 KV semantics."
+  source: the isolated attention probe measured `2.998x` at pp1024 and `3.165x` at pp2048, with cosine `1.0` and maximum absolute difference below `7.7e-7`. Native-only ABBA measured Qwen3.5-9B gains of `+2.57%` at pp1024 and `+5.54%` at pp2048; Qwen3.8-27B pp2048 measured `+3.95%` mean and `+4.21%` paired-median gain across eight repetitions. The 27B pp1024 result was neutral and is deliberately not admitted.
+  verified_at: 2026-09-03
+  decay_trigger: attention kernel, F16 KV layout, admitted shapes, Metal compiler, device, model topology, or benchmark contract changes
+  trust: {F:0.98,G:0.10,R:0.94}
+
+- claim: "The admitted route preserves the tested continuation decisions, not merely one terminal logit row."
+  source: independent baseline and Flash F16 states matched top-1 for all `8/8` teacher-forced continuation positions and ranked top-2 for all `16/16` candidates on Qwen3.5-9B pp1024, Qwen3.5-9B pp2048, and Qwen3.8-27B pp2048. The output-embedding cosine was `1.0` at every step and decoded token sequences were identical. These are synthetic-token semantic checks, not a natural-language coding-quality evaluation.
+  verified_at: 2026-09-03
+  decay_trigger: prompt/token fixture, output embeddings, continuation scorer, kernel, cache state, model, compiler, or device changes
+  trust: {F:0.97,G:0.08,R:0.93}
+
+- claim: "The remaining pp256/512 gap to llama.cpp is not explained by llama Flash Attention."
+  source: on Qwen3.5-9B with equal F16 KV and identical external tokens, llama Flash Attention enabled produced native gaps of `-5.55%` at pp256 and `-6.69%` at pp512; disabling only llama Flash Attention produced essentially unchanged gaps of `-5.40%` and `-6.73%`. Phase attribution places the largest recurring costs in recurrent FFN up/gate, recurrent projections, and FFN down projections rather than DeltaNet recurrence. Absolute rates drifted between guarded runs, but the normalized short-prefill gap was stable.
+  verified_at: 2026-09-03
+  decay_trigger: either engine's FFN/projection kernels, graph scheduling, benchmark contract, model/device/compiler/runtime, or host contention changes
+  trust: {F:0.96,G:0.08,R:0.90}
+
+**Adversary:** The kernel is admitted only for M2 Max, F16 non-adaptive cache, `start_pos=0`, exact d256/GQA4-or-GQA6 topology, and the three measured model/batch points. Pipeline creation is part of preflight before typed cache mutation; malformed controls fail closed and `QWEN35_PREFILL_ATTN_FLASH_D256=0` is the rollback. The benchmark environment override is process-global and the benchmark tools are intentionally single-threaded. One device and synthetic continuation do not establish cross-device or product-level coding quality.
+
+**Value proxy:** The microkernel speedup explains the local attention boundary, while end-to-end ABBA is the promotion metric. Cross-engine tokens/s remains a compound engine metric; the stable pp256/512 gap with llama Flash Attention both on and off redirects work toward FFN/projection compute rather than rewarding a visually impressive isolated kernel number.
+
+**LTP/WBA:** Not claimed. This is an ordinary exact-shape kernel specialization with a typed admission gate.
+
+**decision:** Auto-enable Flash-MMA only for Qwen3.5-9B pp1024/pp2048 and Qwen3.8-27B pp2048 on Apple M2 Max. Preserve the baseline row kernel for every other shape and for explicit rollback. Continue the llama.cpp comparison at the recurrent FFN and quantized projection boundary; do not retry already-refuted H16 staging or B32 tile substitutions without a materially different dataflow.

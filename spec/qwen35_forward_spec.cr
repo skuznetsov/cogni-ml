@@ -153,6 +153,37 @@ describe ML::GGUF::Qwen35Metal, "route policies" do
     expect_raises(ArgumentError) { metal.q4_h16_b64_tail_policy?(360, "Apple M2 Max", "abc") }
     expect_raises(ArgumentError) { metal.q4_h16_b64_tail_policy?(360, "Apple M2 Max", "999999999999999999999999") }
   end
+
+  it "admits Flash-MMA prefill only for its exact measured ABI" do
+    metal = ML::GGUF::Qwen35Metal
+    admit = ->(device : String, start_pos : Int32, tokens : Int32, heads : Int32, kv_heads : Int32, dim : Int32, f16 : Bool, adaptive : Bool, override : String?) do
+      metal.prefill_attn_flash_d256_policy?(
+        device, start_pos, tokens, heads, kv_heads, dim, f16, adaptive, override,
+      )
+    end
+
+    admit.call("Apple M2 Max", 0, 1024, 16, 4, 256, true, false, "1").should be_true
+    admit.call("Apple M2 Max", 0, 2048, 24, 4, 256, true, false, "1").should be_true
+    admit.call("Apple M2 Max", 0, 1024, 24, 4, 256, true, false, "1").should be_false
+    admit.call("Apple M2 Max", 0, 1024, 16, 4, 256, true, false, nil).should be_true
+    admit.call("Apple M2 Max", 0, 2048, 24, 4, 256, true, false, nil).should be_true
+    admit.call("Apple M2 Max", 0, 1024, 24, 4, 256, true, false, nil).should be_false
+    admit.call("Apple M2 Max", 0, 1088, 16, 4, 256, true, false, nil).should be_false
+    admit.call("Apple M2 Max", 0, 4096, 16, 4, 256, true, false, nil).should be_false
+    admit.call("Apple M2 Max", 0, 1024, 16, 4, 256, true, false, "0").should be_false
+    admit.call("Apple M3 Max", 0, 1024, 16, 4, 256, true, false, "1").should be_false
+    admit.call("Apple M2 Max", 1, 1024, 16, 4, 256, true, false, "1").should be_false
+    admit.call("Apple M2 Max", 0, 1025, 16, 4, 256, true, false, "1").should be_false
+    admit.call("Apple M2 Max", 0, 512, 16, 4, 256, true, false, "1").should be_false
+    admit.call("Apple M2 Max", 0, 1024, 16, 4, 128, true, false, "1").should be_false
+    admit.call("Apple M2 Max", 0, 1024, 16, 4, 256, false, false, "1").should be_false
+    admit.call("Apple M2 Max", 0, 1024, 16, 4, 256, true, true, "1").should be_false
+    admit.call("Apple M2 Max", 0, 1024, 20, 4, 256, true, false, "1").should be_false
+    admit.call("Apple M2 Max", 0, 1024, 16, 2, 256, true, false, "1").should be_false
+    expect_raises(ArgumentError, /must be 0 or 1/) do
+      admit.call("Apple M2 Max", 0, 1024, 16, 4, 256, true, false, "true")
+    end
+  end
 end
 
 describe ML::GGUF::Qwen35CPU, "full decoder forward" do

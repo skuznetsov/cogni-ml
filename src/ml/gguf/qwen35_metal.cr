@@ -104,6 +104,37 @@ module ML
         padded_batch * 8_i64 <= live_batch * 9_i64
       end
 
+      # The Flash-MMA kernel has a deliberately exact ABI. Enable it only for
+      # measured model/device shapes; "0" is the production rollback and
+      # malformed controls fail closed instead of silently changing execution.
+      def self.prefill_attn_flash_d256_policy?(device_name : String,
+                                               start_pos : Int32,
+                                               n_tokens : Int32,
+                                               n_head : Int32,
+                                               n_head_kv : Int32,
+                                               head_dim : Int32,
+                                               kv_cache_f16 : Bool,
+                                               adaptive : Bool,
+                                               override : String?) : Bool
+        enabled = case override
+                  when nil, "1" then true
+                  when "0"      then false
+                  else
+                    raise ArgumentError.new("QWEN35_PREFILL_ATTN_FLASH_D256 must be 0 or 1")
+                  end
+        return false unless enabled
+        return false unless device_name == "Apple M2 Max"
+        return false unless kv_cache_f16 && !adaptive
+        return false unless start_pos == 0 && n_tokens % 64 == 0
+        return false unless head_dim == 256 && n_head_kv == 4
+
+        # Admit only measured model/batch points. The kernel ABI can execute
+        # other multiples of 64, but numerical validity alone is not a speed
+        # certificate and the 27B GQA6 route is neutral at pp1024.
+        (n_head == 16 && (n_tokens == 1024 || n_tokens == 2048)) ||
+          (n_head == 24 && n_tokens == 2048)
+      end
+
       {% if flag?(:cpu_only) %}
         def self.available? : Bool
           false
@@ -229,6 +260,7 @@ module ML
         RECURRENT_SOURCE = {{ read_file("#{__DIR__}/kernels/recurrent_qwen35.metal") }}
         FULLATTN_SOURCE = {{ read_file("#{__DIR__}/kernels/fullattn_qwen35.metal") }}
         FULLATTN_H16_SOURCE = "#define QWEN35_KV_CACHE_F16 1\n" + FULLATTN_SOURCE
+        ATTN_FLASH_D256_SOURCE = {{ read_file("#{__DIR__}/kernels/qwen35_attn_flash_d256.metal") }}
         MTP_SOURCE = {{ read_file("#{__DIR__}/kernels/mtp_qwen35.metal") }}
 
         @@mv_pipeline   : ML::Metal::ComputePipeline?
@@ -344,6 +376,7 @@ module ML
         @@attn_rows_sg4_h16_pipeline : ML::Metal::ComputePipeline?
         @@attn_rows_sg4_pregate_pipeline : ML::Metal::ComputePipeline?
         @@attn_rows_sg4_pregate_h16_pipeline : ML::Metal::ComputePipeline?
+        @@attn_flash_d256_pipeline : ML::Metal::ComputePipeline?
 
         # ── Phase 4.0 instrumentation ─────────────────────────────────
         # Counters and nanosecond timers broken down by dispatch type
@@ -490,6 +523,10 @@ module ML
           def self.bump_route_marker(label : String) : Nil
             return unless @@enabled
             @@route_counts[label] += 1
+          end
+
+          def self.route_count(label : String) : Int64
+            @@route_counts[label]
           end
 
           def self.bump_cpu_fallback : Nil
@@ -1956,6 +1993,12 @@ module ML
           }
         end
 
+        private def self.attn_flash_d256_pipeline : ML::Metal::ComputePipeline
+          @@attn_flash_d256_pipeline ||= ML::Metal::PipelineCache.get("qwen35_attn_flash_d256") {
+            ML::Metal::ComputePipeline.new("qwen35_attn_flash_d256", ATTN_FLASH_D256_SOURCE)
+          }
+        end
+
         private def self.gemv_pipeline_for(qw : QuantWeight) : ML::Metal::ComputePipeline?
           case qw.type
           when .q4_k? then mv_pipeline
@@ -3033,6 +3076,20 @@ module ML
         private def self.prefill_attn_rows_sg4_direct_gate_enabled?(n_tokens : Int32) : Bool
           ENV["QWEN35_PREFILL_ATTN_ROWS_SG4_DIRECT_GATE_OFF"]? != "1" &&
             n_tokens >= prefill_attn_rows_sg4_direct_gate_min_tokens
+        end
+
+        private def self.prefill_attn_flash_d256_enabled?(start_pos : Int32,
+                                                          n_tokens : Int32,
+                                                          n_head : Int32,
+                                                          n_head_kv : Int32,
+                                                          head_dim : Int32,
+                                                          kv_cache_f16 : Bool) : Bool
+          override = ENV["QWEN35_PREFILL_ATTN_FLASH_D256"]?
+          device_name = override == "0" ? "" : ML::Metal::Device.instance.name
+          prefill_attn_flash_d256_policy?(
+            device_name, start_pos, n_tokens, n_head, n_head_kv, head_dim,
+            kv_cache_f16, false, override,
+          )
         end
 
         private def self.prefill_phase_checkpoint(cmd : ML::Metal::CommandBuffer,
@@ -7069,6 +7126,19 @@ module ML
           attn_rows_h16_pipeline
           attn_rows_sg4_h16_pipeline
           attn_rows_sg4_pregate_h16_pipeline
+          case override = ENV["QWEN35_PREFILL_ATTN_FLASH_D256"]?
+          when nil, "1"
+            # The exact-shape policy is automatic only on M2 Max. Compile the
+            # optional pipeline here, before typed F16 KV state is mutated, so
+            # a Metal compiler/runtime rejection becomes ordinary route
+            # rejection rather than a late prefill failure.
+            if ML::Metal::Device.instance.name == "Apple M2 Max"
+              attn_flash_d256_pipeline
+            end
+          when "0"
+          else
+            raise ArgumentError.new("QWEN35_PREFILL_ATTN_FLASH_D256 must be 0 or 1")
+          end
           true
         rescue
           false
@@ -7850,6 +7920,10 @@ module ML
             kvwrite_enc.end_encoding
 
             attn_enc = ML::Metal::ComputeEncoder.new(cmd)
+            use_flash_d256 = prefill_attn_flash_d256_enabled?(
+              start_pos, n_tokens, n_head, n_head_kv, head_dim, kv_cache_f16,
+            )
+            Profile.bump_route_marker("prefill_attn_flash_d256") if use_flash_d256
             use_attn_sg4 = prefill_attn_rows_sg4_enabled? && n_tokens >= 4
             use_direct_gate = !prefill_attn_rows_sg4_pregate_enabled? && prefill_attn_rows_sg4_direct_gate_enabled?(n_tokens)
             attn_sg4_pipeline = if kv_cache_f16
@@ -7858,7 +7932,7 @@ module ML
                                   use_direct_gate ? attn_rows_sg4_pipeline : attn_rows_sg4_pregate_pipeline
                                 end
             attn_rows_selected = kv_cache_f16 ? attn_rows_h16_pipeline : attn_rows_pipeline
-            attn_enc.set_pipeline(use_attn_sg4 ? attn_sg4_pipeline : attn_rows_selected)
+            attn_enc.set_pipeline(use_flash_d256 ? attn_flash_d256_pipeline : (use_attn_sg4 ? attn_sg4_pipeline : attn_rows_selected))
             attn_enc.set_buffer(q_buf, 0)
             attn_enc.set_buffer(gate_buf, 1)
             attn_enc.set_buffer(k_cache_buf.not_nil!, 2)
@@ -7871,7 +7945,10 @@ module ML
             attn_enc.set_value(head_dim.to_u32, 9)
             attn_enc.set_value(heads_per_group.to_u32, 10)
             attn_enc.set_value(scale, 11)
-            if use_attn_sg4
+            if use_flash_d256
+              attn_enc.set_threadgroup_memory(16 * 1024, 0)
+              attn_enc.dispatch_threadgroups({(n_tokens + 7) // 8, n_head, 1}, {32, 4, 1})
+            elsif use_attn_sg4
               attn_enc.dispatch_threadgroups({n_head, (n_tokens + 3) // 4, 1}, {128, 1, 1})
             else
               attn_enc.dispatch_threadgroups({n_head, n_tokens, 1}, {32, 1, 1})
@@ -8473,6 +8550,10 @@ module ML
             end
 
             attn_enc = ML::Metal::ComputeEncoder.new(cmd)
+            use_flash_d256 = prefill_attn_flash_d256_enabled?(
+              start_pos, n_tokens, n_head, n_head_kv, head_dim, kv_cache_f16,
+            )
+            Profile.bump_route_marker("prefill_attn_flash_d256") if use_flash_d256
             use_attn_sg4 = prefill_attn_rows_sg4_enabled? && n_tokens >= 4
             use_direct_gate = !prefill_attn_rows_sg4_pregate_enabled? && prefill_attn_rows_sg4_direct_gate_enabled?(n_tokens)
             attn_sg4_pipeline = if kv_cache_f16
@@ -8481,7 +8562,7 @@ module ML
                                   use_direct_gate ? attn_rows_sg4_pipeline : attn_rows_sg4_pregate_pipeline
                                 end
             attn_rows_selected = kv_cache_f16 ? attn_rows_h16_pipeline : attn_rows_pipeline
-            attn_enc.set_pipeline(use_attn_sg4 ? attn_sg4_pipeline : attn_rows_selected)
+            attn_enc.set_pipeline(use_flash_d256 ? attn_flash_d256_pipeline : (use_attn_sg4 ? attn_sg4_pipeline : attn_rows_selected))
             attn_enc.set_buffer(full_q_buf, 0)
             attn_enc.set_buffer(full_gate_buf, 1)
             attn_enc.set_buffer(k_cache_buf.not_nil!, 2)
@@ -8494,7 +8575,10 @@ module ML
             attn_enc.set_value(head_dim.to_u32, 9)
             attn_enc.set_value(heads_per_group.to_u32, 10)
             attn_enc.set_value(scale, 11)
-            if use_attn_sg4
+            if use_flash_d256
+              attn_enc.set_threadgroup_memory(16 * 1024, 0)
+              attn_enc.dispatch_threadgroups({(n_tokens + 7) // 8, n_head, 1}, {32, 4, 1})
+            elsif use_attn_sg4
               attn_enc.dispatch_threadgroups({n_head, (n_tokens + 3) // 4, 1}, {128, 1, 1})
             else
               attn_enc.dispatch_threadgroups({n_head, n_tokens, 1}, {32, 1, 1})

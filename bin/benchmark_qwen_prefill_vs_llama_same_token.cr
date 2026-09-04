@@ -4,7 +4,8 @@ require "../src/ml/gguf/qwen35_weights"
 require "../src/ml/llm/llama"
 require "../src/ml/qwen_vs_llama_benchmark_contract"
 
-DEFAULT_MODEL = (Path.home / ".cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf").to_s
+DEFAULT_MODEL  = (Path.home / ".cache/lm-studio/models/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf").to_s
+FLASH_D256_ENV = "QWEN35_PREFILL_ATTN_FLASH_D256"
 
 alias BenchmarkContract = ML::QwenVsLlamaBenchmarkContract
 
@@ -53,7 +54,8 @@ class NativePrefillRunner
 
   def initialize(@weights : ML::GGUF::Qwen35Weights,
                  @tokens : Array(Int32),
-                 kv_cache_f16 : Bool)
+                 kv_cache_f16 : Bool,
+                 @flash_d256 : Bool = false)
     hp = @weights.hparams
     @output_width = @weights.output.out_dim
     @state = ML::GGUF::Qwen35CPU::State.new(
@@ -61,12 +63,14 @@ class NativePrefillRunner
       max_seq: @tokens.size.to_i32 + 4,
       kv_cache_f16: kv_cache_f16,
     )
-    ML::GGUF::Qwen35CPU.prepare_state_metal!(
-      @state,
-      hp,
-      clear: true,
-      admit_adaptive_resident_kv: false,
-    )
+    with_flash_d256 do
+      ML::GGUF::Qwen35CPU.prepare_state_metal!(
+        @state,
+        hp,
+        clear: true,
+        admit_adaptive_resident_kv: false,
+      )
+    end
     @terminal_last_used = false
   end
 
@@ -76,10 +80,24 @@ class NativePrefillRunner
 
   def run : Array(Float32)
     route_used = [false]
-    logits = ML::GGUF::Qwen35CPU.prefill_tokens_logits(@weights, @tokens, 0, @state, route_used)
+    logits = with_flash_d256 do
+      ML::GGUF::Qwen35CPU.prefill_tokens_logits(@weights, @tokens, 0, @state, route_used)
+    end
     @terminal_last_used = route_used[0]
     raise "native full-logit width mismatch" unless logits.size == @output_width
     logits
+  end
+
+  private def with_flash_d256(&)
+    old = ENV[FLASH_D256_ENV]?
+    ENV[FLASH_D256_ENV] = @flash_d256 ? "1" : "0"
+    yield
+  ensure
+    if old
+      ENV[FLASH_D256_ENV] = old
+    else
+      ENV.delete(FLASH_D256_ENV)
+    end
   end
 end
 
@@ -261,34 +279,34 @@ def measure_abba(native : NativePrefillRunner,
   {summarize(native_times, token_count), summarize(llama_times, token_count), last_quality.not_nil!}
 end
 
-def measure_native_cache_abba(f16 : NativePrefillRunner,
-                              f32 : NativePrefillRunner,
+def measure_native_route_abba(left : NativePrefillRunner,
+                              right : NativePrefillRunner,
                               token_count : Int32,
                               reps : Int32) : {Summary, Summary, Quality}
-  f16_times = Array(Float64).new(reps)
-  f32_times = Array(Float64).new(reps)
+  left_times = Array(Float64).new(reps)
+  right_times = Array(Float64).new(reps)
   last_quality = nil.as(Quality?)
 
   reps.times do |index|
-    f16.reset!
-    f32.reset!
-    f16_result = nil.as(TimedLogits?)
-    f32_result = nil.as(TimedLogits?)
+    left.reset!
+    right.reset!
+    left_result = nil.as(TimedLogits?)
+    right_result = nil.as(TimedLogits?)
 
-    f16_first = {true, false, false, true}[index % 4]
-    if f16_first
-      f16_result = timed { f16.run }
-      f32_result = timed { f32.run }
+    left_first = {true, false, false, true}[index % 4]
+    if left_first
+      left_result = timed { left.run }
+      right_result = timed { right.run }
     else
-      f32_result = timed { f32.run }
-      f16_result = timed { f16.run }
+      right_result = timed { right.run }
+      left_result = timed { left.run }
     end
 
-    f16_value = f16_result.not_nil!
-    f32_value = f32_result.not_nil!
-    f16_times << f16_value.milliseconds
-    f32_times << f32_value.milliseconds
-    measured_quality = quality(f16_value.logits, f32_value.logits)
+    left_value = left_result.not_nil!
+    right_value = right_result.not_nil!
+    left_times << left_value.milliseconds
+    right_times << right_value.milliseconds
+    measured_quality = quality(left_value.logits, right_value.logits)
     if previous = last_quality
       unless previous.native_top1 == measured_quality.native_top1 &&
              previous.native_top2 == measured_quality.native_top2 &&
@@ -302,7 +320,7 @@ def measure_native_cache_abba(f16 : NativePrefillRunner,
     end
   end
 
-  {summarize(f16_times, token_count), summarize(f32_times, token_count), last_quality.not_nil!}
+  {summarize(left_times, token_count), summarize(right_times, token_count), last_quality.not_nil!}
 end
 
 model_path = DEFAULT_MODEL
@@ -317,6 +335,8 @@ flash_attn = false
 llama_cache_type = ML::LLM::LlamaFFI::GgmlType::F16
 native_cache_f16 = false
 native_cache_ab = false
+native_flash = false
+native_flash_ab = false
 
 OptionParser.parse do |parser|
   parser.banner = "Usage: benchmark_qwen_prefill_vs_llama_same_token [options]"
@@ -339,6 +359,8 @@ OptionParser.parse do |parser|
                        end
   end
   parser.on("--native-kv-ab", "Also measure native F16 versus F32 KV in-process") { native_cache_ab = true }
+  parser.on("--native-flash", "Use the admitted d256 Flash-MMA route for the native-vs-llama comparison") { native_flash = true }
+  parser.on("--native-flash-ab", "Also measure opt-in d256 Flash-MMA versus the native baseline in-process") { native_flash_ab = true }
   parser.on("--llama-kv=TYPE", "llama.cpp K/V cache type: f16 or f32 (default: f16)") do |value|
     llama_cache_type = case value
                        when "f16" then ML::LLM::LlamaFFI::GgmlType::F16
@@ -360,6 +382,8 @@ raise "--n-batch must cover the largest prompt so llama emits one output row" un
 raise "--n-ubatch must be positive and no larger than --n-batch" unless n_ubatch > 0 && n_ubatch <= n_batch
 raise "--threads must be positive" unless n_threads > 0
 raise "--native-kv-ab requires --native-kv=f16" if native_cache_ab && !native_cache_f16
+raise "--native-flash requires --native-kv=f16" if native_flash && !native_cache_f16
+raise "--native-flash-ab requires --native-kv=f16" if native_flash_ab && !native_cache_f16
 
 native_weights = ML::GGUF::Qwen35Weights.from_gguf(model_path)
 ML::LLM.init
@@ -373,17 +397,20 @@ begin
   puts "Qwen same-token prefill external workload vs llama.cpp"
   puts "model: #{model_path}"
   native_cache_name = native_cache_f16 ? "f16" : "f32"
-  puts "settings: prompts=#{prompt_sizes.join(',')} reps=#{reps} warmup=#{warmup} order=ABBA ngl=#{n_gpu_layers} n_batch=#{n_batch} n_ubatch=#{n_ubatch} threads=#{n_threads} flash_attn=#{flash_attn} output=one_terminal_full_logits_with_host_copy state=reused_cleared native_kv=#{native_cache_name} llama_kv=#{llama_cache_type.to_s.downcase}"
+  puts "settings: prompts=#{prompt_sizes.join(',')} reps=#{reps} warmup=#{warmup} order=ABBA ngl=#{n_gpu_layers} n_batch=#{n_batch} n_ubatch=#{n_ubatch} threads=#{n_threads} flash_attn=#{flash_attn} output=one_terminal_full_logits_with_host_copy state=reused_cleared native_kv=#{native_cache_name} native_flash=#{native_flash} llama_kv=#{llama_cache_type.to_s.downcase}"
   puts
   puts "# pp  token_sha256  native_tok/s  llama_tok/s  gap  min_logits_cosine  native_top2  llama_top2  terminal_last  contract"
   puts "# native-kv-ab: pp f16_tok/s f32_tok/s f16_gain min_logits_cosine f16_top2 f32_top2" if native_cache_ab
+  puts "# native-flash-ab: pp flash_tok/s baseline_tok/s flash_gain min_logits_cosine flash_top2 baseline_top2" if native_flash_ab
 
   prompt_sizes.each do |prompt_size|
     canonical = BenchmarkContract.synthetic_prefill_tokens(prompt_size.to_i32, native_vocab)
     native_tokens = canonical.dup
     llama_tokens = canonical.dup
-    native_runner = NativePrefillRunner.new(native_weights, native_tokens, native_cache_f16)
+    native_runner = NativePrefillRunner.new(native_weights, native_tokens, native_cache_f16, native_flash)
     native_f32_runner = NativePrefillRunner.new(native_weights, native_tokens, false) if native_cache_ab
+    native_flash_runner = NativePrefillRunner.new(native_weights, native_tokens, true, true) if native_flash_ab
+    native_flash_baseline_runner = NativePrefillRunner.new(native_weights, native_tokens, true, false) if native_flash_ab
     llama_runner = LlamaPrefillRunner.new(
       llama_model,
       llama_tokens,
@@ -427,7 +454,7 @@ begin
       if f32_runner = native_f32_runner
         f32_runner.reset!
         f32_runner.run
-        f16_stats, f32_stats, cache_quality = measure_native_cache_abba(
+        f16_stats, f32_stats, cache_quality = measure_native_route_abba(
           native_runner,
           f32_runner,
           prompt_size.to_i32,
@@ -435,6 +462,24 @@ begin
         )
         gain = ((f16_stats.mean_ts / f32_stats.mean_ts) - 1.0) * 100.0
         puts "native-kv-ab: #{prompt_size} #{f16_stats.mean_ts.round(2)} #{f32_stats.mean_ts.round(2)} #{gain.round(2)}% #{cache_quality.cosine.round(8)} #{cache_quality.native_top1}/#{cache_quality.native_top2} #{cache_quality.llama_top1}/#{cache_quality.llama_top2}"
+      end
+
+      if flash_runner = native_flash_runner
+        flash_baseline = native_flash_baseline_runner.not_nil!
+        warmup.times do
+          flash_runner.reset!
+          flash_runner.run
+          flash_baseline.reset!
+          flash_baseline.run
+        end
+        flash_stats, baseline_stats, flash_quality = measure_native_route_abba(
+          flash_runner,
+          flash_baseline,
+          prompt_size.to_i32,
+          reps,
+        )
+        gain = ((flash_stats.mean_ts / baseline_stats.mean_ts) - 1.0) * 100.0
+        puts "native-flash-ab: #{prompt_size} #{flash_stats.mean_ts.round(2)} #{baseline_stats.mean_ts.round(2)} #{gain.round(2)}% #{flash_quality.cosine.round(8)} #{flash_quality.native_top1}/#{flash_quality.native_top2} #{flash_quality.llama_top1}/#{flash_quality.llama_top2}"
       end
     ensure
       llama_runner.close
