@@ -3948,3 +3948,28 @@ the same shape, tier, and live-prefix layout.
 temporary automatic tier-specific policy. Retain both probes as reproducible
 diagnostics. Do not retry nearby chunk sizes without a new whole-token ceiling;
 the next candidate must remove work or bytes across a larger decode boundary.
+
+### Concurrent full-attention Q/K/V fan-out is not a material prefill win (2026-09-04)
+
+An opt-in M2 Max experiment converted the normalized activation to the existing
+shared H16 staging buffer, inserted the required buffer barrier, and then issued
+the three independent Q/K/V GEMMs through a concurrent Metal compute pass. The
+serial production path and candidate produced bitwise-identical terminal logits:
+ordered top-2 matched, cosine was `1.0`, and maximum absolute error was `0.0`.
+
+A guarded same-process ABBA falsifier used Qwen3.8-27B Q4_K_M, F16 KV, one
+warmup pair, four measured pairs, the unchanged 35% free-memory floor, and a
+24 GiB process-tree cap. Candidate/baseline throughput was `139.84/138.86`
+tok/s at pp256 and `139.11/138.52` tok/s at pp2048. Paired-median gains were
+only `+0.35%` and `+0.52%`, far below the `3%` promotion threshold.
+
+**Adversary:** A concurrent encoder does not create additional arithmetic
+capacity. Each large quantized GEMM already occupies the GPU, so overlapping
+three sibling projections mostly changes scheduling rather than removing work
+or memory traffic. The exact positive timing percentages are host-sensitive;
+the robust conclusion is only that neither boundary showed a material gain.
+
+**decision:** Remove the experimental route, env policy, test, and probe. Do not
+retry Q/K/V fan-out concurrency without a new mechanism that reduces GEMM work
+or bytes. Continue with a dominant matmul/kernel dataflow candidate rather than
+more dispatch-only overlap.
