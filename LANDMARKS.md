@@ -26765,3 +26765,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is an ordinary exact-shape kernel specialization with a typed admission gate.
 
 **decision:** Auto-enable Flash-MMA only for Qwen3.5-9B pp1024/pp2048 and Qwen3.8-27B pp2048 on Apple M2 Max. Preserve the baseline row kernel for every other shape and for explicit rollback. Continue the llama.cpp comparison at the recurrent FFN and quantized projection boundary; do not retry already-refuted H16 staging or B32 tile substitutions without a materially different dataflow.
+
+#### [LM-QWEN-BENCHMARK-RESET-SYNC-1025] Same-token llama runner now matches llama-bench reset and synchronization semantics
+**context:** ml / Qwen3.5-9B / external same-token prefill contract / exact llama.cpp b10330 source comparison
+**state:** benchmark-contract correction verified; current throughput gap remains open
+
+- claim: "The external llama runner invalidates logical state like llama-bench and pays exactly one getter synchronization inside the timed boundary."
+  source: exact llama.cpp b10330 calls `llama_memory_clear(..., false)` outside the timer, while `llama_get_logits_ith` itself calls `ctx->synchronize()`. The Crystal wrapper now exposes the memory-clear data flag without changing its safe default, the benchmark uses `data: false`, and it no longer calls an explicit synchronization immediately before the synchronizing logits getter. The focused benchmark-contract suite passed with `10 examples, 0 failures`; a rebuilt guarded real-model run exited zero and preserved identical top-2 decisions with full-logit cosine at least `0.99985` for pp256/512/1024/2048.
+  verified_at: 2026-09-03
+  decay_trigger: llama.cpp benchmark/reset/getter semantics, Crystal FFI binding, benchmark timing boundary, or external workload contract changes
+  trust: {F:0.99,G:0.10,R:0.96}
+
+- claim: "The corrected current external screen still has a material native prefill deficit on Qwen3.5-9B."
+  source: one guarded eight-repetition ABBA run with identical tokens, F16 KV, Flash Attention enabled, `n_batch=2048`, and `n_ubatch=512` measured native/llama throughput of `540.28/578.82`, `552.27/597.71`, `521.35/579.62`, and `525.92/569.52` tok/s at pp256/512/1024/2048, corresponding to native gaps of `-6.66%/-7.60%/-10.05%/-7.65%`.
+  verified_at: 2026-09-03
+  decay_trigger: either engine, benchmark settings, model/device/compiler/runtime, or host contention changes
+  trust: {F:0.96,G:0.06,R:0.82}
+
+**Adversary:** Removing a redundant post-decode synchronization should not make native slower, yet the normalized gaps moved relative to earlier screens. The correction is therefore a contract fix, not a causal performance result. Absolute throughput and cross-run gap movement remain host-sensitive; only same-process balanced rows are admitted as the current external observation.
+
+**Value proxy:** Matching `llama-bench` reset and synchronization semantics removes one avoidable measurement asymmetry, but cross-engine tokens/s still combines graph construction, batching, terminal-row pruning, kernels, synchronization, and host-copy policy. It does not identify the next kernel by itself.
+
+**LTP/WBA:** Not claimed. This is benchmark-contract alignment.
+
+**decision:** Retain the corrected reset/synchronization contract. Treat the four current rows as a bounded external target, not a stable causal decomposition. Continue with phase-local recurrent FFN/projection falsifiers and require end-to-end ABBA plus semantic parity before promotion.

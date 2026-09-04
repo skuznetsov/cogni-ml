@@ -513,9 +513,10 @@ module ML
         LlamaFFI.llama_memory_seq_pos_max(memory, seq_id)
       end
 
-      # Clear entire memory (KV cache + recurrent state)
-      def kv_clear : Nil
-        LlamaFFI.llama_memory_clear(memory, true)
+      # Clear logical memory state. Pass data: false for benchmark-style reuse
+      # when every consumed row is overwritten before it can be read.
+      def kv_clear(data : Bool = true) : Nil
+        LlamaFFI.llama_memory_clear(memory, data)
         @pos = 0
       end
 

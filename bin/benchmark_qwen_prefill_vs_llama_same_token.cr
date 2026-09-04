@@ -127,16 +127,19 @@ class LlamaPrefillRunner
   end
 
   def reset! : Nil
-    @context.kv_clear
+    # Match llama-bench: invalidate logical state without clearing backing
+    # bytes. The timed prompt overwrites every row before reading it.
+    @context.kv_clear(data: false)
   end
 
   def run : Array(Float32)
     raise "llama.cpp prefill failed" unless @context.eval(@tokens)
-    ML::LLM::LlamaFFI.llama_synchronize(@context.handle)
     raise "llama.cpp logical depth mismatch" unless @context.position == @tokens.size
 
     # Native full logits are materialized as a host Array inside its timed call.
-    # Copy llama's final full-logit row inside the same timing boundary.
+    # llama_get_logits_ith performs the one required synchronization. Copy the
+    # final full-logit row inside the same timing boundary without a redundant
+    # explicit synchronize call first.
     logits = @context.get_logits.to_a
     raise "llama.cpp full-logit width mismatch" unless logits.size == @output_width
     logits

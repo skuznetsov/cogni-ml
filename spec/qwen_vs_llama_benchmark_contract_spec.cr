@@ -2,6 +2,12 @@ require "./spec_helper"
 require "../src/ml/qwen_vs_llama_benchmark_contract"
 
 describe ML::QwenVsLlamaBenchmarkContract do
+  it "matches llama-bench reset and performs only the getter synchronization" do
+    source = File.read(Path[__DIR__] / "../bin/benchmark_qwen_prefill_vs_llama_same_token.cr")
+    source.includes?("@context.kv_clear(data: false)").should be_true
+    source.includes?("LlamaFFI.llama_synchronize(@context.handle)").should be_false
+  end
+
   it "defaults to full logits without claiming strict apples-to-apples parity" do
     contract = ML::QwenVsLlamaBenchmarkContract
     ML::QwenVsLlamaBenchmarkContract::DEFAULT_PREFILL_HEAD.should eq(ML::QwenVsLlamaBenchmarkContract::HeadMode::FullLogits)
