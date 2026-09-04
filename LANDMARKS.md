@@ -26933,3 +26933,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary producer placement and command-buffer fusion.
 
 **decision:** Enable the Q4_K GPU embedding route when the resident Metal append command is available. Preserve `QWEN35_PREFILL_GPU_Q4_EMBED_OFF=1` as immediate rollback. Treat `0.4-0.7%` as the isolated native speed result and `3.8-6.0%` as the co-resident memory-pressure result. The next material frontier is an algebraically new FFN dataflow or an adaptive resident handoff that removes actual readback, not more encoder-count reduction.
+
+#### [LM-QWEN38-REC-PROJ-H16-1033] Recurrent projections reuse the opt-in RMSNorm H16 output
+**context:** ml / Qwen3.8-27B / recurrent Q4_K and Q6_K prefill projections / Apple M2 Max
+**state:** exact dataflow reuse retained under the existing opt-in; default promotion rejected
+
+- claim: "When `QWEN35_RMSNORM_H16_PROJ=1`, recurrent Q4_K/Q6_K QKV and gate projections can consume the H16 rows already emitted by RMSNorm instead of materializing the same rows again."
+  source: both recurrent-many implementations now call the established H16-input/F32-output quantized GEMM dispatcher when no checkpoint is requested, while unsupported weights and the default route retain the original F32-input fallback. At pp512, the candidate profile removed exactly 72 Q4 conversion calls (`1,080 MiB`) and 24 Q6 conversion calls (`360 MiB`), reducing reported logical conversion traffic by `1,440 MiB`; no new buffer was allocated. The candidate release build, format check, and diff check passed. With the opt-in enabled, the focused forward plus DeltaNet suites passed (`40 examples, 0 failures`), including Metal state/output deltas around `1e-7` to `1e-8`; the recurrent checkpoint suite also passed (`2 examples, 0 failures`).
+  verified_at: 2026-09-04
+  decay_trigger: RMSNorm dual-output bytes, Q4_K/Q6_K GEMM input contract, recurrent projection topology, checkpoint routing, model quantization, Metal compiler/device, or environment-policy semantics change
+  trust: {F:0.98,G:0.04,R:0.94}
+
+- claim: "The complete RMSNorm-H16 opt-in is consistently faster on the measured 27B prefill matrix, but the new recurrent-projection reuse alone has not crossed the project's `3%` promotion threshold."
+  source: guarded same-binary paired runs compared the default route with `QWEN35_RMSNORM_H16_PROJ=1`. Candidate/default mean wall times were `1492.55/1508.54 ms` at pp256, `2969.76/3015.62 ms` at pp512, `6323.66/6414.34 ms` at pp1024, and `14611.40/14894.11 ms` at pp2048. The opt-in won every measured pair (`8/8`, `8/8`, `6/6`, and `4/4`) and preserved top-1 plus its logit within `1e-4` in every pair. A pre-patch/candidate pp512 comparison with the opt-in already enabled improved one representative wall row from `2918.88` to `2892.51 ms` (about `0.9%`), so the larger default-versus-opt-in deltas must not be attributed solely to this patch.
+  verified_at: 2026-09-04
+  decay_trigger: benchmark binary/source, host/GPU load, model/device, prompt-state preparation, output-head contract, or any other RMSNorm-H16 consumer changes
+  trust: {F:0.96,G:0.03,R:0.88}
+
+**Adversary:** The paired matrix validates the whole pre-existing H16 policy plus this new consumer, not an isolated source toggle for the consumer. Only final top-1 and its logit were compared in the large-model A/B; focused primitive suites supply the separate recurrent state evidence. A strict same-process 27B native-versus-llama.cpp run tried to hold both model implementations at once and was correctly killed by `run_safe` when free memory reached the unchanged 35% floor, before producing a timing row. No evidence here establishes a cross-engine win, default-on readiness, another quantization, or another Apple GPU. If the already experimental and rejected Q4 Tensor route is explicitly enabled, recurrent Q4 projections retain their established F32-input dispatcher instead of widening that experiment through the new H16 reuse; this guard does not establish Q4 Tensor correctness. A guarded pp256 combined-flag falsifier confirmed the boundary: the profile retained the recurrent Q4 conversion calls, but the whole pre-existing RMSNorm-H16 plus Q4-Tensor combination still diverged (`top1 96515` versus `220`) through other H16 consumers. That combination remains rejected.
+
+**Value proxy:** Removing `1.44 GiB` of logical conversion traffic is a real mechanism change, but bytes removed are not wall-time removed. Quantized GEMM remains dominant, and the observed isolated gain is approximately one percent.
+
+**LTP/WBA:** Not claimed. This is ordinary producer-consumer reuse inside an existing command stream.
+
+**decision:** Keep the recurrent Q4_K/Q6_K H16-input reuse under `QWEN35_RMSNORM_H16_PROJ=1`; keep the default unchanged. Do not promote the whole H16 policy until a source-isolated ABBA reaches the performance gate with full hidden/recurrent-state parity. Build a split-process same-token 27B harness before making a safe native-versus-llama.cpp claim; do not lower the 35% memory floor to force a dual-resident result.
