@@ -27197,3 +27197,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is a conventional matched-workload benchmark plus a reporting-contract repair.
 
 **decision:** Treat cogni-ml as locally ahead on pp256-2048 under this exact strict contract, with the direction more reliable than any single percentage. Keep same-process ABBA as the admission gate for individual optimizations. Re-run the matrix after either engine or benchmark contract changes before repeating the cross-engine claim.
+
+#### [LM-QWEN38-Q4-B128-LOCAL-EPILOGUE-FALSIFIED-1045] SIMD-local epilogue does not improve SG8-B128
+**context:** ml / Qwen3.8-27B Q4_K_M / Q4 SG8-B128 fused SwiGLU epilogue / Apple M2 Max
+**state:** candidate falsified in an isolated production-tensor microbenchmark; production code unchanged
+
+- claim: "Replacing the full-threadgroup epilogue fence and flattened 256-thread conversion with disjoint SIMD-group-local conversion is bitwise exact but not faster on the measured kernel."
+  source: a temporary kernel variant gave each of the eight SIMD groups sole ownership of its 512-element `32 x 16` output tile, replaced the threadgroup-wide fence with a SIMD-group fence, and converted/stored both 64-row bands locally. Both baseline and candidate compiled with a reported 832-thread pipeline limit. A protected same-process ABBA used the actual `blk.0.ffn_up.weight` tensor (`5120 -> 17408`), batch 1024, five warmups, ten paired samples, and compared all 17,825,792 H16 outputs bitwise. Baseline/candidate time was approximately `18.2397/18.2493 ms`; paired median delta was `-0.052%`, and the candidate won zero of ten pairs. The run exited zero under the 35% free-memory floor and 4 GiB process-tree cap.
+  verified_at: 2026-09-04
+  decay_trigger: fused epilogue ownership, threadgroup-memory aliasing, compiler/device, tensor geometry, or benchmark contract changes
+  trust: {F:0.99,G:0.03,R:0.97}
+
+**Adversary:** Current llama.cpp uses SIMD-group-local synchronization in legal disjoint-tile corridors, but that structural analogy does not establish a speedup here. The existing global 256-thread epilogue already balances conversion/store work well, and the measured full-threadgroup fence is not a material bottleneck. The tiny negative delta is below timing resolution as a universal performance statement; the decisive evidence is exact parity with zero wins across the paired samples and no positive wall-time signal.
+
+**Value proxy:** Reducing synchronization scope is only a mechanism prediction. Promotion requires lower measured GPU time with unchanged output, which this candidate did not provide.
+
+**LTP/WBA:** Not claimed. This was ordinary epilogue scheduling.
+
+**decision:** Keep the current flattened threadgroup epilogue. Do not revisit SIMD-local conversion without a new compiler/device or a changed ownership/dataflow reason. Search next for reductions in dominant quantized arithmetic or global traffic rather than micro-barriers.
