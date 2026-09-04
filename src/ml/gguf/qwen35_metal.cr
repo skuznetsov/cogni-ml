@@ -104,9 +104,9 @@ module ML
         padded_batch * 8_i64 <= live_batch * 9_i64
       end
 
-      # The Flash-MMA kernel has a deliberately exact ABI. Enable it only for
-      # measured model/device shapes; "0" is the production rollback and
-      # malformed controls fail closed instead of silently changing execution.
+      # The Flash-MMA kernel has a deliberately exact ABI. Automatic admission
+      # stays limited to measured model/device shapes. Explicit "1" admits only
+      # bounded ABI-compatible prompt sizes for experiments; "0" is rollback.
       def self.prefill_attn_flash_d256_policy?(device_name : String,
                                                start_pos : Int32,
                                                n_tokens : Int32,
@@ -128,9 +128,15 @@ module ML
         return false unless start_pos == 0 && n_tokens % 64 == 0
         return false unless head_dim == 256 && n_head_kv == 4
 
+        if override == "1"
+          return false unless n_head == 16 || n_head == 24
+          return n_tokens == 256 || n_tokens == 512 || n_tokens == 1024 || n_tokens == 2048
+        end
+
         # Admit only measured model/batch points. The kernel ABI can execute
         # other multiples of 64, but numerical validity alone is not a speed
-        # certificate and the 27B GQA6 route is neutral at pp1024.
+        # certificate and the shorter 27B GQA6 points remain below the current
+        # production admission threshold.
         (n_head == 16 && (n_tokens == 1024 || n_tokens == 2048)) ||
           (n_head == 24 && n_tokens == 2048)
       end

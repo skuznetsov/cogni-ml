@@ -27029,3 +27029,21 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is ordinary producer-consumer reuse in one ordered Metal command stream.
 
 **decision:** Enable shared sibling-projection H16 staging by default only on Apple M2 Max for batch sizes at least 256 and non-checkpoint prefill. Preserve the exact rollback and require a fresh paired matrix before widening the device or model scope. Continue the comparison with an optimization that attacks attention or quantized GEMM work rather than another sub-percent preparation fusion.
+
+#### [LM-QWEN38-FLASH-D256-SHORT-1037] Short GQA6 Flash-MMA experiments remain explicit-only
+**context:** ml / Qwen3.8-27B Q4_K_M / F16 KV / full-attention prefill / Apple M2 Max
+**state:** exact-ABI experiment gate widened; production-default admission unchanged
+
+- claim: "The existing d256 Flash-MMA kernel preserves the measured Qwen3.8 short-prefill outputs but does not yet clear the production speed threshold."
+  source: guarded same-binary ABBA runs used one fresh process per prompt size, one warmup, eight measured pairs, the exact 24/4-head and head-dim-256 route, and the unchanged 35% free-memory floor. Flash/default throughput was `173.98/171.75`, `168.60/165.95`, and `161.16/157.19 tok/s` at pp256/512/1024, for mean gains of `+1.30/+1.59/+2.53%` and paired-median gains of `+1.33/+2.02/+2.35%`. Ordered top-2 matched at every point, minimum full-logit cosine was at least `0.9999999`, maximum absolute logit difference was at most `0.00622559`, and all guarded runs exited zero. Every short point remains below the project's approximate `3%` automatic-admission threshold.
+  verified_at: 2026-09-04
+  decay_trigger: Flash-MMA kernel, attention routing, model topology, KV type, Metal compiler/device, benchmark contract, host load, or admission threshold changes
+  trust: {F:0.98,G:0.03,R:0.92}
+
+**Adversary:** The three rows are positive and pp1024 approaches the threshold, but one host/device/model matrix cannot distinguish a stable sub-three-percent win from thermal or scheduling drift strongly enough to widen the automatic route. Exact logits are close rather than bitwise equal, and the experiment does not cover adaptive KV, nonzero start positions, another prompt distribution, or another Apple GPU.
+
+**Value proxy:** Kernel-local Flash acceleration is not the product objective. The admission signal is end-to-end prompt-plus-terminal-head wall time with preserved output decisions; that signal improved, but not enough for a broader production default.
+
+**LTP/WBA:** Not claimed. This is an ordinary shape-gated attention-kernel experiment.
+
+**decision:** Keep automatic admission at the previously measured points. Allow explicit `QWEN35_PREFILL_ATTN_FLASH_D256=1` only for exact Apple M2 Max, F16 non-adaptive d256 ABI experiments at pp256/512/1024/2048 with 16 or 24 query heads. Preserve `=0` as rollback. Revisit pp1024 only after an independent repeated matrix or a kernel change moves it clearly above the threshold.
