@@ -390,6 +390,8 @@ def native_cooldown_label(native : NativePrefillRunner,
                     boundary_profile: boundary_profile,
                     graph_depth: graph_depth,
                     flash_d256: flash_enabled,
+                    model_capability: weights.output.q4_gemv_x16_capability,
+                    gguf_file_type: weights.gguf_file_type,
                   )
                 end
   cooldown_ms.to_s

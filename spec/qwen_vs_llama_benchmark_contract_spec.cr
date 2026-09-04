@@ -34,6 +34,8 @@ describe ML::QwenVsLlamaBenchmarkContract do
     source.includes?("native_cooldown_ms").should be_true
     source.includes?("unless native.terminal_last_used").should be_true
     source.includes?(%q{"n/a"}).should be_true
+    source.includes?("model_capability: weights.output.q4_gemv_x16_capability").should be_true
+    source.includes?("gguf_file_type: weights.gguf_file_type").should be_true
   end
 
   it "releases native Metal state between prompt sizes" do

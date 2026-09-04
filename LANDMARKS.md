@@ -27173,3 +27173,27 @@ Conclusion: this is not an exact inference route. The five-layer read-logits gat
 **LTP/WBA:** Not claimed. This is an ordinary scheduling-policy correction after a completed command.
 
 **decision:** Default to zero cooldown only for the exact Qwen3.8-27B Q4_K_M pp1024/pp2048 corridor on Apple M2 Max. Preserve every completion fence and explicit rollback. Refresh the strict current native-versus-llama matrix before attributing a new cross-engine lead, and keep longer contexts guarded until independently measured.
+
+#### [LM-QWEN38-STRICT-LLAMA-PREFILL-1044] Current strict prefill comparison leads llama.cpp on the measured M2 Max corridor
+**context:** ml / Qwen3.8-27B Q4_K_M / full terminal logits / cogni-ml `dc2305b4` versus llama.cpp `7e4c0a968`
+**state:** bounded same-token comparison verified; benchmark cooldown certificate corrected
+
+- claim: "The current native engine is faster than current llama.cpp at all four measured prompt sizes under the same-token full-output contract."
+  source: protected fresh-process `native-llama-llama-native` measurements used the same deterministic token stream, F16 KV, admitted d256 Flash route on both engines, `n_batch=2048`, `n_ubatch=512`, 12 CPU threads, one warmup, four total samples, one terminal full-logit row with host copy, the 35% free-memory floor, and a 24 GiB process-tree cap. Native/llama throughput was `176.20/162.87`, `182.33/156.71`, `177.61/165.25`, and `167.93/153.67 tok/s` at pp256/512/1024/2048, or `+8.19/+16.35/+7.48/+9.28%`. Ordered top-2 matched at every point; minimum full-logit cosine was `0.99994253`; both guarded runs exited zero.
+  verified_at: 2026-09-04
+  decay_trigger: either engine revision, model file, Metal compiler/runtime/device, KV/Flash/batch settings, output-copy contract, host load, or benchmark harness changes
+  trust: {F:0.99,G:0.02,R:0.91}
+
+- claim: "The benchmark now reports the same model identity inputs used by the production cooldown policy."
+  source: the reporting helper previously omitted Qwen3.8 capability and GGUF file type, so it printed the conservative `50` even though the production call executed with zero cooldown. The helper now passes `weights.output.q4_gemv_x16_capability` and `weights.gguf_file_type`. A rebuilt pp1024/pp2048 run reported zero and preserved the same quality contract; the 14-example benchmark-contract suite, format check, diff check, and binary rebuild passed.
+  verified_at: 2026-09-04
+  decay_trigger: cooldown policy signature, model-capability derivation, benchmark reporting, or worker serialization changes
+  trust: {F:0.99,G:0.02,R:0.97}
+
+**Adversary:** The result is a strong local comparison, not a universal throughput ranking. The host was intentionally not required to be quiet, and earlier fresh-process matrices moved individual gaps by several percentage points. The paired engine order limits monotonic drift but cannot remove workload interference, thermal history, or Metal scheduling noise. Enabling the admitted Flash route on both sides makes the kernel policy symmetric, but it is not the native production-auto policy at every short prompt. The result covers one model, quantization, device, output shape, and current revisions; decode/tg, adaptive QBit KV, longer contexts, and concurrency remain separate claims.
+
+**Value proxy:** Stock `llama-bench` prompt processing synchronizes after decode but does not require a public full-logit materialization and host-copy parity certificate. This stricter harness intentionally pays that common output obligation and checks semantic/numeric agreement; tokens per second alone is not promoted without it.
+
+**LTP/WBA:** Not claimed. This is a conventional matched-workload benchmark plus a reporting-contract repair.
+
+**decision:** Treat cogni-ml as locally ahead on pp256-2048 under this exact strict contract, with the direction more reliable than any single percentage. Keep same-process ABBA as the admission gate for individual optimizations. Re-run the matrix after either engine or benchmark contract changes before repeating the cross-engine claim.
