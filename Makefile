@@ -26,7 +26,7 @@ BRIDGE_OBJ := $(BUILD_DIR)/bridge.o
 
 LINK_FLAGS := -framework Metal -framework Foundation -lc++
 
-.PHONY: all spec build spec_cpu build_cpu llama llama_env profile_nomic profile_nomic_layers profile_nomic_vs_llama benchmark_qwen_prefill_vs_llama_same_token q4k_ref clean help
+.PHONY: all spec build spec_cpu build_cpu llama llama_env profile_nomic profile_nomic_layers profile_nomic_vs_llama benchmark_qwen_prefill_vs_llama_same_token benchmark_qwen_decode_vs_llama_same_token q4k_ref clean help
 
 all: spec
 
@@ -77,6 +77,17 @@ $(BUILD_DIR)/benchmark_qwen_prefill_vs_llama_same_token: bin/benchmark_qwen_pref
 	LIBRARY_PATH="$(LLAMA_LIB_DIR):$$LIBRARY_PATH" \
 	$(CRYSTAL) build bin/benchmark_qwen_prefill_vs_llama_same_token.cr \
 		-o $(BUILD_DIR)/benchmark_qwen_prefill_vs_llama_same_token \
+		--link-flags="$(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS) -L$(LLAMA_LIB_DIR) -Wl,-rpath,$(LLAMA_LIB_DIR)"
+
+benchmark_qwen_decode_vs_llama_same_token: $(BUILD_DIR)/benchmark_qwen_decode_vs_llama_same_token
+$(BUILD_DIR)/benchmark_qwen_decode_vs_llama_same_token: bin/benchmark_qwen_decode_vs_llama_same_token.cr $(BRIDGE_OBJ)
+	@if [ -z "$(LLAMA_LIB_DIR)" ]; then \
+		echo "ERROR: libllama not detected. Set LLAMA_DIR or LLAMA_LIB_DIR."; \
+		exit 1; \
+	fi
+	LIBRARY_PATH="$(LLAMA_LIB_DIR):$$LIBRARY_PATH" \
+	$(CRYSTAL) build bin/benchmark_qwen_decode_vs_llama_same_token.cr \
+		-o $(BUILD_DIR)/benchmark_qwen_decode_vs_llama_same_token \
 		--link-flags="$(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS) -L$(LLAMA_LIB_DIR) -Wl,-rpath,$(LLAMA_LIB_DIR)"
 
 spec_cpu:
@@ -136,6 +147,7 @@ help:
 	@echo "  profile_nomic_layers - run per-layer native Metal profiler for nomic GGUF"
 	@echo "  profile_nomic_vs_llama - compare native Metal embeddings against llama.cpp"
 	@echo "  benchmark_qwen_prefill_vs_llama_same_token - build same-token Qwen prefill benchmark"
+	@echo "  benchmark_qwen_decode_vs_llama_same_token - build same-token forced Qwen decode benchmark"
 	@echo "  llama - build llama.cpp shared library (requires LLAMA_DIR)"
 	@echo "  llama_env - print env vars for libllama discovery"
 	@echo "  clean - remove build artifacts"

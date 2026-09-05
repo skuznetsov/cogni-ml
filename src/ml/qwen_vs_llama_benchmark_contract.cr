@@ -36,6 +36,20 @@ module ML::QwenVsLlamaBenchmarkContract
     host_copy_inside_timing : Bool,
     warmup_runs : Int32
 
+  record DecodeWorkloadDeclaration,
+    seed_tokens : Array(Int32),
+    forced_tokens : Array(Int32),
+    initial_depth : Int32,
+    final_depth : Int32,
+    logical_sequences : Int32,
+    output_rows_per_token : Int32,
+    output_width : Int32,
+    full_logits : Bool,
+    synchronized_per_token : Bool,
+    state_seeded_outside_timing : Bool,
+    host_copy_per_token_inside_timing : Bool,
+    warmup_runs : Int32
+
   DEFAULT_PREFILL_HEAD = HeadMode::FullLogits
   DEFAULT_DECODE_HEAD  = HeadMode::FullLogits
   TOKEN_STREAM_DOMAIN  = "cogni-ml-qwen-vs-llama-token-stream-v1\0"
@@ -46,6 +60,13 @@ module ML::QwenVsLlamaBenchmarkContract
 
     modulus = Math.min(vocab_size, 1000)
     Array(Int32).new(count) { |i| ((i.to_i64 * 7 + 11) % modulus).to_i32 }
+  end
+
+  def self.synthetic_decode_tokens(count : Int32, vocab_size : Int32) : Array(Int32)
+    raise ArgumentError.new("token count must be positive") unless count > 0
+    raise ArgumentError.new("vocabulary size must be positive") unless vocab_size > 0
+
+    Array(Int32).new(count) { |i| ((i.to_i64 * 13 + 11751) % vocab_size).to_i32 }
   end
 
   def self.token_stream_sha256(tokens : Array(Int32)) : String
@@ -73,6 +94,24 @@ module ML::QwenVsLlamaBenchmarkContract
       ComparisonLevel::SameToken,
       "same_token_prefill_external_workload",
       "same declared token stream, empty logical state, one final full-logit row, reused-cleared state, and timer boundary; the runner supplies execution checks, while internal cache formats and kernel scheduling may differ",
+    )
+  end
+
+  def self.same_token_decode_comparison(native : DecodeWorkloadDeclaration,
+                                        llama : DecodeWorkloadDeclaration) : Comparison
+    mismatch = same_token_decode_mismatch(native, llama)
+    if mismatch
+      return Comparison.new(
+        ComparisonLevel::Diagnostic,
+        "decode_workload_mismatch",
+        mismatch,
+      )
+    end
+
+    Comparison.new(
+      ComparisonLevel::SameToken,
+      "same_token_decode_external_workload",
+      "same seeded token history, forced continuation, one synchronized full-logit row copied to the host per token, and timer boundary; internal cache formats and kernel scheduling may differ",
     )
   end
 
@@ -106,6 +145,40 @@ module ML::QwenVsLlamaBenchmarkContract
            native.host_copy_inside_timing && llama.host_copy_inside_timing &&
            native.warmup_runs == llama.warmup_runs
       return "native and llama timing or state-reuse boundaries differ"
+    end
+
+    nil
+  end
+
+  private def self.same_token_decode_mismatch(native : DecodeWorkloadDeclaration,
+                                              llama : DecodeWorkloadDeclaration) : String?
+    return "native and llama seed token streams differ" unless native.seed_tokens == llama.seed_tokens
+    return "native and llama forced token streams differ" unless native.forced_tokens == llama.forced_tokens
+    return "same-token decode requires a non-empty seed token stream" if native.seed_tokens.empty?
+    return "same-token decode requires a non-empty forced token stream" if native.forced_tokens.empty?
+
+    seed_count = native.seed_tokens.size
+    final_depth = seed_count + native.forced_tokens.size
+    unless native.initial_depth == seed_count && llama.initial_depth == seed_count &&
+           native.final_depth == final_depth && llama.final_depth == final_depth
+      return "decode state depth does not match the seeded and forced token streams"
+    end
+
+    unless native.logical_sequences == 1 && llama.logical_sequences == 1 &&
+           native.output_rows_per_token == 1 && llama.output_rows_per_token == 1
+      return "same-token decode requires one logical sequence and one output row per token"
+    end
+
+    unless native.output_width > 0 && native.output_width == llama.output_width &&
+           native.full_logits && llama.full_logits
+      return "same-token decode requires the same full-logit output width"
+    end
+
+    unless native.synchronized_per_token && llama.synchronized_per_token &&
+           native.state_seeded_outside_timing && llama.state_seeded_outside_timing &&
+           native.host_copy_per_token_inside_timing && llama.host_copy_per_token_inside_timing &&
+           native.warmup_runs == llama.warmup_runs
+      return "native and llama decode timing boundaries differ"
     end
 
     nil
