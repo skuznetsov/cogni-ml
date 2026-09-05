@@ -2,9 +2,10 @@
 using namespace metal;
 
 // Exact-shape Qwen prefill attention kernel. Host admission is deliberately
-// narrow: d256, F16 K/V, a multiple-of-64 causal chunk, no pre-existing prefix,
-// and GQA4/GQA6 on the profiled device. The kernel repeats the guards so a
-// mismatched dispatch fails without out-of-bounds access.
+// narrow: d256, F16 K/V and GQA4/GQA6 on the profiled device. Prefixes and
+// partial tiles are explicit host experiments only. Full key tiles use MMA;
+// the final partial tile uses bounded SIMD attention without cache padding.
+// The caller must provide base_pos+n_tokens complete K/V rows.
 
 constant short QWEN35_FLASH_DK = 256;
 constant short QWEN35_FLASH_DV = 256;
@@ -39,8 +40,9 @@ kernel void qwen35_attn_flash_d256(
     if (h >= n_head || n_head_kv == 0 || n_head % n_head_kv != 0 ||
         heads_per_group != n_head / n_head_kv ||
         (heads_per_group != 4 && heads_per_group != 6) ||
-        head_dim != QWEN35_FLASH_DK || base_pos != 0 ||
-        n_tokens % QWEN35_FLASH_C != 0 || iq1 >= n_tokens) {
+        head_dim != QWEN35_FLASH_DK || n_head_kv != 4 ||
+        n_tokens == 0 || n_tokens > 2048 || base_pos > 8192 - n_tokens ||
+        iq1 >= n_tokens) {
         return;
     }
 
@@ -48,6 +50,8 @@ kernel void qwen35_attn_flash_d256(
     if (kv_h >= n_head_kv) return;
 
     const uint kv_dim = n_head_kv * QWEN35_FLASH_DK;
+    const uint total_keys = base_pos + n_tokens;
+    const uint full_key_end = total_keys / QWEN35_FLASH_C * QWEN35_FLASH_C;
     constexpr short DK4 = QWEN35_FLASH_DK / 4;
     constexpr short DK8 = QWEN35_FLASH_DK / 8;
     constexpr short DV4 = QWEN35_FLASH_DV / 4;
@@ -66,10 +70,14 @@ kernel void qwen35_attn_flash_d256(
     // reuses the complete eight-row tile while simdgroups split key columns.
     for (short jj = 0; jj < QWEN35_FLASH_NQ; ++jj) {
         const short j = jj * QWEN35_FLASH_NSG + sgitg;
-        device const float4* q4 = (device const float4*)(
-            Q + ((iq1 + j) * n_head + h) * QWEN35_FLASH_DK);
         for (short i = tiisg; i < DK4; i += QWEN35_FLASH_NW) {
-            sq4[j * DK4 + i] = half4(q4[i]);
+            if (iq1 + j < n_tokens) {
+                device const float4* q4 = (device const float4*)(
+                    Q + ((iq1 + j) * n_head + h) * QWEN35_FLASH_DK);
+                sq4[j * DK4 + i] = half4(q4[i]);
+            } else {
+                sq4[j * DK4 + i] = half4(0.0h);
+            }
         }
         for (short i = tiisg; i < DV4; i += QWEN35_FLASH_NW) {
             so4[j * PV4 + i] = float4(0.0f);
@@ -83,7 +91,7 @@ kernel void qwen35_attn_flash_d256(
     float S[QWEN35_FLASH_NQ] = {0.0f, 0.0f};
     float M[QWEN35_FLASH_NQ] = {-FLT_MAX / 2, -FLT_MAX / 2};
 
-    for (uint ic = 0; ic < n_tokens; ic += QWEN35_FLASH_C) {
+    for (uint ic = 0; ic < full_key_end; ic += QWEN35_FLASH_C) {
         // Q*K^T. Four simdgroups split the 64 key columns while sharing the
         // same eight queries. K rows are strided by the GQA cache row width.
         device const half* pk = k_cache + ic * kv_dim + kv_h * QWEN35_FLASH_DK;
@@ -122,7 +130,7 @@ kernel void qwen35_attn_flash_d256(
             const float old_m = M[jj];
             float2 scores = ss2[j * (QWEN35_FLASH_SH / 2) + tiisg] * scale;
             const uint key0 = ic + 2 * tiisg;
-            const uint query_pos = iq1 + j;
+            const uint query_pos = base_pos + iq1 + j;
             if (key0 > query_pos) scores[0] = -FLT_MAX / 2;
             if (key0 + 1 > query_pos) scores[1] = -FLT_MAX / 2;
 
@@ -184,7 +192,47 @@ kernel void qwen35_attn_flash_d256(
 
     for (short jj = 0; jj < QWEN35_FLASH_NQ; ++jj) {
         const short j = jj * QWEN35_FLASH_NSG + sgitg;
+        // No barriers follow: skipping a whole SIMD-owned inactive row is
+        // safe, unlike returning before the shared MMA phases above.
+        if (iq1 + j >= n_tokens) continue;
         const uint row = (iq1 + j) * n_head + h;
+        if (full_key_end < total_keys) {
+            // At most 63 keys. Each lane owns eight output dimensions. Keep
+            // the same H16 query representation as MMA, and never read beyond
+            // the visible causal row (including a sub-64 total context).
+            float acc[QWEN35_FLASH_DV / QWEN35_FLASH_NW];
+            float query[QWEN35_FLASH_DK / QWEN35_FLASH_NW];
+            for (short i = 0; i < QWEN35_FLASH_DV / QWEN35_FLASH_NW; ++i) {
+                const short d = tiisg + i * QWEN35_FLASH_NW;
+                acc[i] = so[j * QWEN35_FLASH_PV + d];
+                query[i] = float(sq[j * QWEN35_FLASH_DK + d]);
+            }
+            const uint causal_end = base_pos + iq1 + j + 1;
+            for (uint key = full_key_end; key < causal_end; ++key) {
+                const uint offset = key * kv_dim + kv_h * QWEN35_FLASH_DK;
+                float dot = 0.0f;
+                for (short i = 0; i < QWEN35_FLASH_DK / QWEN35_FLASH_NW; ++i) {
+                    dot += query[i] * float(k_cache[offset + tiisg + i * QWEN35_FLASH_NW]);
+                }
+                const float score = simd_sum(dot) * scale;
+                const float next_m = max(M[jj], score);
+                const float correction = exp(M[jj] - next_m);
+                const float probability = exp(score - next_m);
+                S[jj] = S[jj] * correction + probability;
+                M[jj] = next_m;
+                for (short i = 0; i < QWEN35_FLASH_DV / QWEN35_FLASH_NW; ++i) {
+                    acc[i] = acc[i] * correction + probability *
+                        float(v_cache[offset + tiisg + i * QWEN35_FLASH_NW]);
+                }
+            }
+            const float inv_s = S[jj] > 0.0f ? 1.0f / S[jj] : 0.0f;
+            for (short i = 0; i < QWEN35_FLASH_DV / QWEN35_FLASH_NW; ++i) {
+                const uint d = tiisg + i * QWEN35_FLASH_NW;
+                out[row * QWEN35_FLASH_DV + d] = acc[i] * inv_s /
+                    (1.0f + exp(-gate[row * QWEN35_FLASH_DV + d]));
+            }
+            continue;
+        }
         const float inv_s = S[jj] > 0.0f ? 1.0f / S[jj] : 0.0f;
         device const float4* gate4 = (device const float4*)(gate + row * QWEN35_FLASH_DV);
         device float4* out4 = (device float4*)(out + row * QWEN35_FLASH_DV);

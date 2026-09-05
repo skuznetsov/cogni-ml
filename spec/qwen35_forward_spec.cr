@@ -220,8 +220,17 @@ describe ML::GGUF::Qwen35Metal, "route policies" do
     admit.call("Apple M2 Max", 0, 4096, 16, 4, 256, true, false, nil).should be_false
     admit.call("Apple M2 Max", 0, 1024, 16, 4, 256, true, false, "0").should be_false
     admit.call("Apple M3 Max", 0, 1024, 16, 4, 256, true, false, "1").should be_false
-    admit.call("Apple M2 Max", 1, 1024, 16, 4, 256, true, false, "1").should be_false
-    admit.call("Apple M2 Max", 0, 1025, 16, 4, 256, true, false, "1").should be_false
+    admit.call("Apple M2 Max", 1, 1024, 16, 4, 256, true, false, "1").should be_true
+    admit.call("Apple M2 Max", 0, 1025, 16, 4, 256, true, false, "1").should be_true
+    {1, 7, 8, 63, 64, 65, 2048}.each do |tokens|
+      {0, 1, 63, 64, 65, 6144}.each do |prefix|
+        admit.call("Apple M2 Max", prefix, tokens, 24, 4, 256, true, false, "1").should be_true
+        admit.call("Apple M2 Max", prefix, tokens, 24, 4, 256, true, false, nil).should eq(prefix == 0 && tokens == 2048)
+      end
+    end
+    [{-1, 64}, {0, 0}, {0, -1}, {0, 2049}, {8192, 1}, {Int32::MAX, 64}].each do |shape|
+      admit.call("Apple M2 Max", shape[0], shape[1], 24, 4, 256, true, false, "1").should be_false
+    end
     admit.call("Apple M2 Max", 0, 512, 16, 4, 256, true, false, "1").should be_true
     admit.call("Apple M2 Max", 0, 1024, 16, 4, 128, true, false, "1").should be_false
     admit.call("Apple M2 Max", 0, 1024, 16, 4, 256, false, false, "1").should be_false

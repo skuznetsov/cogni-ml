@@ -27235,3 +27235,44 @@ Reproduction: build with `CRYSTAL_CACHE_DIR=/private/tmp/cogni_qwen_decode_build
 **Safety:** Model workers run sequentially through `scripts/run_safe.sh`, with a 24 GiB process-tree cap and 35% free-memory floor. Quiet-host admission is disabled per standing user authorization. Foreign processes are not stopped. This preserves the resource guard, but permits timing interference.
 
 **Adversary / decision:** The unfenced comparison is BROKEN. The corrected harness must be evaluated separately from statistical speed attribution; a fixed percentage or universal decode lead remains VULNERABLE to host drift and setting differences, including after the reversed-order and Flash-on checks. The prior strict prefill matrix in LM1044 is a separate measured workload and is not rerun by these decode checks. Preserve its existing narrow scope. Refresh after either engine, model, compiler, device, timer boundary, or runtime settings change. Further noisy repetitions alone do not close the speed claim; require sufficiently stable per-worker samples before promoting a percentage.
+
+#### [LM-QWEN-FLASH-PREFIX-TAIL-1047] Prefix Flash operator passes the bounded gate; full-model promotion remains open
+**context:** nonadaptive F16 KV / D256 / GQA4 and GQA6 / Apple M2 Max / parent `28bf622b`
+**state:** explicit operator experiment implemented; automatic policy unchanged
+
+- Change: `QWEN35_PREFILL_ATTN_FLASH_D256=1` admits 1..2048 appended tokens
+  and nonnegative prefix with at most 8192 visible tokens. The existing MMA
+  loop uses absolute causal positions; inactive query rows are zero-filled,
+  and the final at-most-63 keys use SIMD online attention without cache padding
+  or increasing the 16 KiB shared workspace. Adaptive QBit remains excluded.
+- Falsifiers: the policy spec failed before the change, then admission and
+  cooldown specs passed 3/3. The committed no-model prefix probe passed 32
+  shape/GQA checks (including 8191/8192-token boundaries), with 12 CPU-oracle
+  checks per GPU path, poisoned padding and output sentinels. Maximum observed
+  Flash/SG4 error was `1.2e-7`. The parent shader fails the same probe on P0/T1
+  with 4096 unwritten output values; the gate does not accept a no-op.
+- Regression control: temporary same-process parent/new Flash ABBA at GQA4/6,
+  T1024/2048, 16 samples/path produced bit-identical outputs. Old/new p50 ratios
+  were `0.9721..1.0199`, with a GQA4 timing outlier; no statistical universal
+  no-regression claim. Temporary control: `/private/tmp/qwen35_flash_prefix_sameprocess_control.cr`.
+- Timing signal: two four-block SG4/Flash ABBA runs at GQA6, P1024/4096,
+  T256/512 yielded operator ratios `5.97..11.08x`. Host drift was visible.
+  These are completed-dispatch wall times on synthetic data, not model pp/tg,
+  comparison to llama.cpp, or token/top-2/ECS quality evidence.
+- Safety: protected sequential GPU processes, 180 seconds / 4096 MiB,
+  35% free-memory floor; quiet waiting disabled under standing user authority.
+  No foreign processes stopped. Source, reproduction and detailed timing:
+  `docs/qwen35-engine-frontier.md`, section Experimental prefix Flash-prefill.
+- Correlated Luna review: ROBUST for causal bounds, synchronization and the
+  existing outer allocation contract. Documentation was narrowed: policy-false
+  selects row attention; Flash compilation/command failures are NOT retried.
+  The probe pads its SG4 comparator's partial groups, so it does not certify
+  production SG4 partial-group behavior. No general memory-sanitizer claim.
+
+**Decision / next signal:** Keep automatic prefix admission off. Run a fenced
+full-model prefix append and subsequent continuation, comparing state, top-2,
+token ECS and complete prefill latency before promotion. Then consider adaptive
+QBit query tiling as a separate slice. This is ordinary tiled attention, not a
+certified LTP/WBA move. Refresh after kernel, dispatch, representation,
+compiler/device or fixture changes; do not reuse the operator multiplier as an
+end-to-end gain.

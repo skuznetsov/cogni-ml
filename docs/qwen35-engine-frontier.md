@@ -9,6 +9,8 @@ advanced experimental CUDA full-model mixed-stack/semantic-loop probe without
 an admitted engine adapter. Cross-process Metal single-flight and killable
 command-buffer waits are an admitted safety slice; in-process recovery after a
 GPU timeout remains rejected because Metal exposes no command-buffer cancel.
+Nonadaptive prefix/tail Flash-prefill is an explicit operator-tested experiment;
+automatic continuation admission and full-model quality remain guard-only.
 Bounded context: reusable Qwen 3.5/3.8 inference consumed by `cogni-ml` CLIs and
 resident services such as Cogniformerus `cfmodeld`
 
@@ -274,3 +276,75 @@ resident services such as Cogniformerus `cfmodeld`
 - Slice: Cogniformerus migration
   - Status: ready, with no-commit preservation required for the dirty and
     partly untracked consumer tree
+
+## Experimental prefix Flash-prefill
+
+- Status: operator-tested, explicit-opt-in only; automatic admission unchanged.
+- Scope: Apple M2 Max, nonadaptive F16 KV, D256, four KV heads and 16/24
+  query heads; `QWEN35_PREFILL_ATTN_FLASH_D256=1`, 1..2048 appended tokens,
+  nonnegative prefix, at most 8192 total visible tokens. `0` is rollback.
+- Change: reuse the existing 64-key MMA path over an absolute causal prefix;
+  handle incomplete query tiles without external reads/writes and the final
+  key tail without reading padding or expanding the 16 KiB shared workspace.
+- Risk/guard: an offset mask or tail error can silently corrupt continuation.
+  Require fail-closed synthetic comparisons against row attention and an
+  independent CPU oracle, including boundary shapes and output canaries;
+  retain the old automatic policy and row-attention route for policy-rejected
+  shapes. This is dispatch selection, not recovery: pipeline/command failures
+  still propagate through the existing failure path without retrying attention.
+- DoD: focused Flash admission spec passes; the guarded no-model
+  `qwen35_attn_flash_d256_prefix_probe` exits zero on correctness cases.
+  Operator ABBA timing is a separate measurement, not an engine-speed claim.
+- Nonclaims: no adaptive QBit support, automatic prefix promotion, full-model
+  continuation certificate, or certified LTP/WBA transformation in this slice.
+- Evidence (2026-09-05, Apple M2 Max): admission red test reproduced the old
+  nonzero-prefix rejection; the updated admission/cooldown specs passed 3/3.
+  The no-model probe passed 32 shape/GQA cases, including 8191/8192-token
+  boundaries, and 12 CPU-oracle comparisons per GPU path. Maximum Flash-vs-SG4
+  error was `1.2e-7`; poisoned input guards and output sentinels passed. The
+  same probe with the parent shader failed as expected on the first one-token
+  case (4096 unwritten output values), so a no-op kernel cannot pass.
+- Aligned-path regression control: parent/new shaders in one process gave
+  bit-identical outputs for GQA4/GQA6 at T1024/2048, 16 timed samples per path.
+  Old/new p50 ratios were `0.9721..1.0199`; a GQA4 timing outlier prevents a
+  strong statistical no-regression claim. No automatic policy was expanded.
+- Prefix operator timing: two bounded ABBA runs (four blocks, eight samples per
+  path) used GQA6, P1024/4096, T256/512 and identical synthetic inputs. The
+  second run's SG4/Flash p50 milliseconds were `11.4242/1.7599`,
+  `22.8012/3.8222`, `60.4690/5.4812`, `102.1703/10.9995` respectively. Across
+  both runs the operator ratios ranged `5.97..11.08x`; host drift was visible.
+  These are completed-dispatch wall times, not GPU intervals, model pp/tg,
+  llama.cpp comparisons, or token/ECS quality evidence.
+- Comparator boundary: partial SG4 queries are padded to four rows to avoid
+  relying on its partial-threadgroup barrier behavior; only the requested
+  rows are compared. Flash receives the actual unpadded token count. The CPU
+  oracle uses exactly representable H16 fixture Q/K/V, not arbitrary model
+  activations. Guard poisoning is not a general GPU memory sanitizer.
+- Source review: correlated Luna review found no causal-mask, synchronization
+  or OOB blocker within the host allocation contract. The kernel cannot inspect
+  actual buffer lengths; the outer `start_pos + n_tokens <= max_seq` check
+  remains mandatory. Its documentation objection was resolved by explicitly
+  distinguishing policy fallback from unavailable GPU-error recovery.
+- Safety: every GPU run used `scripts/run_safe.sh`, 180 seconds, a 4096 MiB
+  process-tree cap and the 35% free-memory floor. Quiet-host waiting was
+  disabled under standing user authorization; no foreign process was stopped.
+- Refresh after shader, host dispatch, cache representation, compiler/device,
+  or fixture changes. Before automatic promotion, require a fenced full-model
+  prefix append with state/continuation, top-2 and token-ECS quality checks,
+  plus stable same-process whole-prefill timing.
+
+Reproduce the bounded operator gate from the repository root:
+
+```sh
+CRYSTAL_CACHE_DIR=/private/tmp/qwen_flash_prefix_build crystal build \
+  bin/qwen35_attn_flash_d256_prefix_probe.cr --release \
+  -o /private/tmp/qwen35_attn_flash_d256_prefix_probe \
+  --link-flags="$PWD/build/bridge.o -framework Metal -framework Foundation -lc++"
+COGNI_RUN_SAFE_REQUIRE_QUIET=0 COGNI_RUN_SAFE_WAIT_QUIET_SEC=0 \
+  COGNI_RUN_SAFE_MIN_FREE_PCT=35 scripts/run_safe.sh \
+  /private/tmp/qwen35_attn_flash_d256_prefix_probe 180 4096 --perf
+CRYSTAL_CACHE_DIR=/private/tmp/qwen_flash_prefix_spec crystal spec \
+  spec/qwen35_forward_spec.cr:201 spec/qwen35_forward_spec.cr:282 \
+  spec/qwen35_forward_spec.cr:364 \
+  --link-flags="$PWD/build/bridge.o -framework Metal -framework Foundation -lc++"
+```

@@ -152,14 +152,18 @@ module ML
         return false unless enabled
         return false unless device_name == "Apple M2 Max"
         return false unless kv_cache_f16 && !adaptive
-        return false unless start_pos == 0 && n_tokens % 64 == 0
         return false unless head_dim == 256 && n_head_kv == 4
 
         if override == "1"
           return false unless n_head == 16 || n_head == 24
-          return n_tokens == 256 || n_tokens == 512 || n_tokens == 1024 || n_tokens == 2048
+          # Prefix/tail support is an operator-validated experiment, not an
+          # automatic continuation-speed certificate. Subtraction avoids
+          # overflowing an externally supplied start position.
+          return start_pos >= 0 && n_tokens >= 1 && n_tokens <= 2048 &&
+            start_pos <= 8192 - n_tokens
         end
 
+        return false unless start_pos == 0 && n_tokens % 64 == 0
         # Admit only measured model/batch points. The kernel ABI can execute
         # other multiples of 64, but numerical validity alone is not a speed
         # certificate and the shorter 27B GQA6 points remain below the current
