@@ -27276,3 +27276,47 @@ QBit query tiling as a separate slice. This is ordinary tiled attention, not a
 certified LTP/WBA move. Refresh after kernel, dispatch, representation,
 compiler/device or fixture changes; do not reuse the operator multiplier as an
 end-to-end gain.
+
+#### [LM-QWEN-FLASH-PREFIX-MODEL-1048] Full-model continuation matches, but the conservative state-value gate is red
+**context:** Qwen3.8-27B Q4_K_M / Apple M2 Max / nonadaptive F16 KV / engine `f4a29e1b`
+**state:** reproducible model falsifier implemented; automatic prefix admission unchanged
+
+- `bin/qwen35_flash_prefix_model_probe.cr` uses identical Flash-off prefixes,
+  independent states, full-width appended rows plus a fenced GPU full-logit
+  head, and executed Flash markers (0 versus all16 attention layers).
+  It checks live F16 KV and all conv/recurrent buffers directly; state position
+  fields are not live-length certificates. The normal logits prefill API's
+  nonzero-prefix T-1 plus decode behavior is deliberately not used.
+- P256/T65/gen8, repeated including final shape warmup: top1 8/8, ranked top2
+  16/16, token ECS1, minimum full-logit cosine0.9999999029, max logit error
+  0.0039978, fresh greedy IDs/text identical. State K/V have 5639/7147 values
+  outside the prospective 0.02 absolute + 1% reference-relative budget;
+  max errors0.9921875/1.4296875. Conv/SSM pass. No tolerance was relaxed.
+- Aligned P256/T64 also has state outliers (including two SSM values), with
+  matching short continuation. A tail is therefore not necessary. Late-layer
+  amplification of Q half-rounding/reduction-order changes is a hypothesis;
+  no kernel corruption or semantic failure is established by this gate.
+- Qualification on final source: release build and no-model comparator
+  self-test pass. Warmed Flash-off A/A control exits0 with zero state/logit
+  differences; warmed candidate exits1 with state_passed=false,
+  teacher_passed=true and free_match=true. Format and diff checks pass.
+  Source SHA256: `8ef799b034ebd23ea44583899fd758cafb2aca3049619519d2def76ea48cf222`.
+  Logs: `/private/tmp/qwen_flash_model_final_{control,candidate}.log`.
+- Timing is diagnostic only: final warmed same-path A/A ratio1.131x versus
+  candidate1.162x; an earlier un-warmed A/A ratio1.154x refutes simple speed
+  attribution. No pp/tg or llama.cpp claim. Raw fixed-token fixture, eight
+  generated positions, no EOS stopping or held-out coding-task score; ECS1
+  for identical IDs is tautological, not a separate semantic certificate.
+- Safety: sequential `scripts/run_safe.sh`, 600s/24576MiB, 35% free-memory
+  floor, quiet waiting off under standing user authority; no foreign process
+  stopped. Exact build/run commands and detailed measurements are in
+  `docs/qwen35-engine-frontier.md`, Full-model prefix falsifier.
+
+**Adversary / decision:** Correlated Luna review plus A/A and aligned controls
+support the bounded comparator/route certificate (ROBUST); automatic model
+promotion and speed/semantic generalization remain VULNERABLE. Keep the
+operator experiment opt-in, and keep the red state gate distinct from green
+short continuation. Next discriminator: replay identical real-layer Q/K/V
+with ordinary row, half-rounded-Q row and Flash paths before any kernel fix.
+No LTP/WBA certificate or production engine change in this slice. Refresh
+after model, source, compiler/device, fixture or comparator changes.

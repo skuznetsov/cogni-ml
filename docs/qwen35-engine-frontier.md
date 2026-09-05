@@ -333,6 +333,92 @@ resident services such as Cogniformerus `cfmodeld`
   prefix append with state/continuation, top-2 and token-ECS quality checks,
   plus stable same-process whole-prefill timing.
 
+### Full-model prefix falsifier
+
+The full-model state-value gate is **red**, while the bounded eight-token
+continuation gate passes (2026-09-05, engine `f4a29e1b`, Qwen3.8-27B Q4_K_M,
+Apple M2 Max). This does not establish corrupt state or a semantic regression:
+matching every downstream cache value is stronger than matching model output.
+Do not relax the state tolerance from these observations or promote automatic
+prefix admission. No production engine/kernel changed in this test slice.
+
+`bin/qwen35_flash_prefix_model_probe.cr` builds the same raw code-token prefix
+with Flash disabled in two independent states, then compares append policy
+`0` versus `1`. It uses full-width `prefill_tokens_last_hidden` plus the full
+GPU logit head, with device fences. The nonzero-prefix `prefill_tokens_logits`
+API instead processes T-1 prefill rows plus a terminal decode, so it would not
+measure the declared T-row Flash shape. Actual route markers must be 0 versus
+16. The probe checks live F16 KV owners and all recurrent/conv state buffers;
+caller-maintained position fields are not treated as live-length certificates.
+
+State/logit budgets were fixed before model execution: each state value must satisfy
+`abs(delta) <= 0.02 + 0.01*abs(reference)`, with no nonfinite values; each full
+logit vector must have max absolute difference <=0.1 and cosine >=0.9999.
+Baseline top1 must be covered by candidate top2; token ECS must be >=0.99
+(made explicit before the final control/candidate rerun; no threshold relaxed);
+fresh free continuation must match baseline IDs. Ranked top2 is diagnostic.
+Token ECS uses `token_embd.weight`, not output logits. Identical token IDs have
+ECS=1 by construction; this is not an independent semantic-quality score.
+State and continuation verdicts are emitted separately, then combined.
+
+- P256/T65, repeated: all 8 top1 IDs and 16 ranked top2 entries matched,
+  minimum full-logit cosine `0.9999999029`, maximum logit error `0.0039978`,
+  ECS=1. Fresh greedy text matched: ` seen = set()\n     result =`.
+  After append, K/V had 5,639/7,147 values outside the state budget;
+  max errors `0.9921875/1.4296875`, RMSE `0.00289566/0.00374892`.
+  Conv/SSM stayed within budget. First above-budget K appeared at layer31;
+  later outliers were not restricted to the final query row.
+- P256/T64 with shape warmup: continuation/top2/ECS still matched, but K/V
+  and two SSM values exceeded the budget after teacher continuation.
+  Max K/V error `2.640625/3.5625`; max SSM error `0.0415637`.
+  Thus a partial query/key tail is not necessary for the observed discrepancy.
+- P256/T65 Flash-off A/A control: all compared state values/logits had zero
+  numerical difference. The same-path un-warmed AB timing nevertheless showed
+  an apparent `1.154x` ratio. Candidate un-warmed ratios varied `1.184..1.577x`;
+  the warmed aligned sample was `1.200x`. These are diagnostic wall times,
+  not a defensible speedup, pp/tg measurement, or llama.cpp comparison.
+- Final probe qualification: no-model self-test and warmed P256/T65 A/A
+  control passed; the warmed control still showed an apparent `1.131x` ratio.
+  Its full-logit max error and every state max error were zero.
+  The warmed Flash candidate reproduced the same state outliers and passed
+  teacher/free continuation, exiting1 as intended; its diagnostic ratio was
+  `1.162x`. Final logs: `/private/tmp/qwen_flash_model_final_control.log` and
+  `/private/tmp/qwen_flash_model_final_candidate.log`.
+
+Partial SG4 groups explicitly use row attention in both arms; aligned T64
+uses the default SG4 comparator. The raw fixed-length fixture is not a held-out
+coding test, ignores EOS stopping and only generates eight tokens. No long
+session or semantic task certificate follows. Flash rounds Q to half at
+`qwen35_attn_flash_d256.metal:77` and changes reduction order; amplification
+through later layers is a hypothesis, not an established cause. Next useful
+falsifier: replay a real layer's identical Q/K/V through both operators and a
+row control with Q explicitly rounded to half, before changing kernels.
+
+Model runs are sequential through `scripts/run_safe.sh`, 600 seconds,
+24,576 MiB process-tree cap and 35% free-memory floor; quiet waiting disabled
+under standing authority. No foreign process is stopped. Temporary evidence:
+`/private/tmp/qwen_flash_model_p256_t65_trace.log`,
+`/private/tmp/qwen_flash_model_p256_t65_control.log`,
+`/private/tmp/qwen_flash_model_p256_t64.log`. Refresh after source, compiler,
+model, device, fixture or comparator changes. A green comparator qualification
+does not turn the red model state gate green.
+
+Build and reproduce (control expects exit0; the candidate state falsifier
+currently expects exit1, with continuation passing):
+
+```sh
+CRYSTAL_CACHE_DIR=/private/tmp/qwen_flash_model_build crystal build \
+  bin/qwen35_flash_prefix_model_probe.cr --release \
+  -o /private/tmp/qwen35_flash_prefix_model_probe \
+  --link-flags="$PWD/build/bridge.o -framework Metal -framework Foundation -lc++"
+/private/tmp/qwen35_flash_prefix_model_probe --self-test
+COGNI_RUN_SAFE_REQUIRE_QUIET=0 COGNI_RUN_SAFE_WAIT_QUIET_SEC=0 \
+  COGNI_RUN_SAFE_MIN_FREE_PCT=35 scripts/run_safe.sh \
+  /private/tmp/qwen35_flash_prefix_model_probe 600 24576 \
+  --prefix 256 --append 65 --gen 8 --warmup --control
+# Repeat the guarded command without --control; use --append 64 for alignment.
+```
+
 Reproduce the bounded operator gate from the repository root:
 
 ```sh
