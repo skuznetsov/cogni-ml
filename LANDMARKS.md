@@ -27360,3 +27360,61 @@ certificate after scratch ownership/routing, shader, compiler/device, model
 or fixture changes. Correlated Luna source review returned ROBUST for this
 single-flight final-layer capture; Scratch has no epoch label, so static
 route/lifetime evidence and exact replay must both hold. No LTP/WBA claim.
+
+#### [LM-QWEN-FLASH-CODING-VALUE-1050] Existing Flash preserves three smoke outputs; speed remains provisional
+**context:** engine `651cb25e` / Qwen3.8-27B Q4_K_M / M2 Max / nonadaptive F16 prefix Flash / 2026-09-05
+**state:** diagnostic/scorer/fixtures implemented; production kernel and automatic admission unchanged
+
+- User correction supersedes LM1049's immediate Q-precision-correction plan:
+  establish useful task quality and latency before paying for lower internal
+  numerical error. The state gate remains unchanged and diagnostic, not a
+  validated semantic-quality boundary. Q_hi/Q_lo correction is deferred.
+- Probe `bin/qwen35_flash_prefix_model_probe.cr` adds bounded untruncated
+  no-thinking chat input and independent EOS stopping. Baseline is already
+  free greedy (consumes its own argmax); only the comparison candidate is
+  teacher-forced. Fresh candidate independently generates to EOS. Denominators
+  and live state coverage use actual generated length.
+- Three author-created coding smokes, prefix64, appended73/94/104 tokens,
+  generation cap256: stable_unique88, lower_bound102, merge_ranges195 tokens,
+  all including EOS. Full free output and 385/385 top1 tokens match; ranked
+  top2 matches769/770, ECS1. The latter is tautological for identical IDs.
+  Both paths pass the first two external tasks (2 specs each) and fail both
+  merge_ranges specs: they merge adjacent intervals against the prompt.
+  Thus no observed Flash-specific quality loss in this small scope, but
+  identical tokens/high ECS are not semantic correctness or general ability.
+- `scripts/qwen_flash_coding_score.py` reuses the QBit external runner;
+  baseline failure is invalid comparison, never a Flash pass/regression.
+  Probe state/teacher metrics stay separate. This is not a sandbox; actual
+  generated source and fixtures were inspected before execution. Parser
+  rejects malformed/missing/duplicate records, missing EOS and wrong fixture;
+  control mode cannot promote Flash. Seven Python tests pass, including
+  executable correct/wrong seeds for all three real fixtures.
+- Warmed raw P256/T512, gen2, fresh processes: A/A ratio1.0553; A/B1.1992;
+  B/A0.9987; reversed A/A0.9524. Balanced candidate mean4245.011->3870.996ms
+  (8.81% less append+full-logit time); balanced control means differ0.24%.
+  Reverse candidate is a tie and individual controls vary about5%; one
+  balanced sample is not a stable speed certificate. An earlier coding
+  run's 8653ms candidate outlier is retained, with cause unestablished.
+  No product pp/tg, adaptive-QBit, cold-start or llama.cpp claim.
+- All three coding teacher diagnostics pass; retained state gate fails.
+  Timing A/A processes exit0 with exact state/logits; Flash processes exit1
+  only on state diagnostics, matching both tokens and all top2 positions.
+  All guarded model processes complete without runner kill/timeout. Safety:
+  sequential scripts/run_safe.sh600s/24576MiB, free floor35%, no quiet wait,
+  group1/cooldown50ms included in timing; no foreign processes stopped.
+- DoD observed: release build and no-model self-test pass; Python seven-test
+  suite (13.788s), Crystal format and diff checks pass. Temporary log/report
+  paths, timing table, binary identity, scorer reproduction and boundaries:
+  docs/qwen35-engine-frontier.md, Flash coding-value check. This compact
+  source-linked record is the evidence index, not an independent replication.
+
+**Adversary / next signal:** ROBUST for the bounded measurement separation
+and tested scorer; VULNERABLE for general quality, automatic admission or
+stable speed promotion. Correlated Luna review points to skipping fully
+future key blocks per query tile as the next smallest kernel candidate:
+first oracle/guards at63/64/65 and long-prefix boundaries, preserving uniform
+barriers and the global scalar tail. It is not implemented yet. A second
+candidate is terminal-row-only resident output instead of full last-chunk
+readback. Preserve fallback/lifetimes; do not add precision work without a
+task-quality justification. Refresh after model, shader, route, compiler,
+device, prompt or scorer changes. No LTP/WBA certificate claimed.

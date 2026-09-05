@@ -4,6 +4,7 @@ require "option_parser"
 require "digest/sha256"
 require "../src/ml/gguf/qwen35_cpu"
 require "../src/ml/gguf/qwen35_tokenizer"
+require "../src/ml/gguf/qwen35_chat"
 require "../src/ml/gguf/qwen35_weights"
 require "../src/ml/gguf/qwen_qbit_quality_metrics"
 
@@ -182,6 +183,7 @@ warmup = false
 reverse = false
 test_only = false
 control = false
+prompt_path = nil.as(String?)
 OptionParser.parse do |p|
   p.on("--model PATH", "GGUF path") { |v| model = v }
   p.on("--prefix N", "Common prefix token count") { |v| prefix_count = v.to_i }
@@ -191,19 +193,18 @@ OptionParser.parse do |p|
   p.on("--reverse", "Measure candidate before baseline") { reverse = true }
   p.on("--self-test", "No-model comparator qualification") { test_only = true }
   p.on("--control", "A/A control: keep Flash off in candidate too") { control = true }
+  p.on("--prompt-file PATH", "Chat coding prompt; derive append length, stop at EOS") { |v| prompt_path = v }
   p.on("--help", "Show help") { puts p; exit }
 end
 self_test
 exit if test_only
-raise "bounded shape required" unless (2..2048).includes?(prefix_count) && (2..2048).includes?(append_count) && (2..32).includes?(generation) && prefix_count + append_count + generation <= 8192
+raise "bounded shape required" unless (2..2048).includes?(prefix_count) && (2..2048).includes?(append_count) && (2..512).includes?(generation) && prefix_count + append_count + generation <= 8192
 
 # Pin the relevant route controls, without disabling memory/watchdog guards.
 ENV.keys.select { |k| k.starts_with?("QWEN35_") }.each { |k| ENV.delete(k) }
 ENV["QWEN35_PREFILL_CHUNK_SIZE"] = "2048"
 ENV["QWEN35_PREFILL_APPEND_MAX_GROUPS"] = "1"
 ENV["QWEN35_PREFILL_APPEND_COOLDOWN_MS"] = "50"
-partial = prefix_count % 4 != 0 || append_count % 4 != 0
-ENV["QWEN35_PREFILL_ATTN_ROWS_SG4_OFF"] = partial ? "1" : "0"
 ENV["QWEN35_PREFILL_ATTN_FLASH_D256"] = "1"
 gguf = ML::GGUF::GGUFFile.new(model, mmap_tensors: false)
 begin
@@ -211,20 +212,32 @@ begin
 ensure
   gguf.close
 end
+tokens = if path = prompt_path
+           raise "bounded prompt bytes required" unless File.size(path) <= 32768
+           prompt = File.read(path)
+           raise "bounded prompt bytes required" unless prompt.bytesize <= 32768
+           tokenizer.encode(ML::GGUF::Qwen35Chat.render_user_prompt(prompt, enable_thinking: false))
+         else
+           filler = tokenizer.encode("# Keep insertion order and remove repeated integers.\nvalues = [3, 1, 3, 2, 1]\n" * 300)
+           suffix = tokenizer.encode("\n# Return unique integers in their original order.\ndef stable_unique(values):\n    ")
+           raise "fixture suffix exceeds append" unless suffix.size < append_count
+           filler.first(prefix_count + append_count - suffix.size) + suffix
+         end
+append_count = tokens.size - prefix_count if prompt_path
+raise "bounded actual shape required" unless (2..2048).includes?(append_count) && tokens.size + generation <= 8192
+raise "fixture token count mismatch" unless tokens.size == prefix_count + append_count
+partial = prefix_count % 4 != 0 || append_count % 4 != 0
+ENV["QWEN35_PREFILL_ATTN_ROWS_SG4_OFF"] = partial ? "1" : "0"
 raise "Flash F16 pipelines unavailable" unless GPU.kv_cache_f16_pipelines_supported?
 weights = ML::GGUF::Qwen35Weights.from_gguf(model)
 hp = weights.hparams
 raise "model/device not admitted" unless GPU.prefill_attn_flash_d256_policy?(ML::Metal::Device.instance.name, prefix_count, append_count, hp.n_head, hp.n_head_kv, hp.head_dim, true, false, "1")
-capacity = prefix_count + append_count + generation
-filler = tokenizer.encode("# Keep insertion order and remove repeated integers.\nvalues = [3, 1, 3, 2, 1]\n" * 300)
-suffix = tokenizer.encode("\n# Return unique integers in their original order.\ndef stable_unique(values):\n    ")
-raise "fixture suffix exceeds append" unless suffix.size < append_count
-tokens = filler.first(prefix_count + append_count - suffix.size) + suffix
-raise "fixture token count mismatch" unless tokens.size == prefix_count + append_count
+capacity = tokens.size + generation
 prefix, appended = tokens.first(prefix_count), tokens[prefix_count, append_count]
 puts({event: "config", model: model, device: ML::Metal::Device.instance.name, layers: hp.n_layer,
       prefix: prefix_count, append: append_count, generation: generation, capacity: capacity,
-      fixture: "raw_code_completion_fixed_token_count", tokens_sha256: Digest::SHA256.hexdigest(tokens.join(",")),
+      fixture: prompt_path ? "chat_prompt_file_no_thinking" : "raw_code_completion_fixed_token_count", prompt_path: prompt_path,
+      tokens_sha256: Digest::SHA256.hexdigest(tokens.join(",")),
       comparator: partial ? "rows_partial_group_guard" : "default_sg4", ecs_basis: "token_embd.weight",
       timing_contract: "full_width_last_hidden_plus_full_gpu_logits_fenced", warmup: warmup, reverse: reverse, control: control,
       state_atol: STATE_ATOL, state_rtol: STATE_RTOL, logit_atol: LOGIT_ATOL, logit_cosine_min: LOGIT_COS,
@@ -267,6 +280,8 @@ begin
   ranked = covered = 0
   min_ecs = min_cos = 1.0
   max_logit_delta = 0.0
+  # Baseline is free greedy: it always consumes its own argmax. Only the
+  # candidate in this loop is teacher-forced; a fresh candidate runs below.
   generation.times do |step|
     a, b = QM.top2(base_logits), QM.top2(cand_logits)
     delta = Delta.new
@@ -284,6 +299,7 @@ begin
     teacher_ids << b.first_id
     puts({event: "teacher", step: step, baseline_top2: {a.first_id, a.second_id}, candidate_top2: {b.first_id, b.second_id},
           token_ecs: ecs, logit_cosine: cosine, delta: delta.summary}.to_json)
+    break if prompt_path && a.first_id == tokenizer.eos_id
     if step + 1 < generation
       pos = tokens.size + step
       base_logits = CPU.forward(weights, a.first_id, pos, baseline)
@@ -291,7 +307,7 @@ begin
       ML::Metal::Device.synchronize
     end
   end
-  state_passed &= compare_state(baseline, candidate, hp, tokens.size + generation - 1, "after_teacher")
+  state_passed &= compare_state(baseline, candidate, hp, tokens.size + base_ids.size - 1, "after_teacher")
   states.each { |s| release_state(s) }
   states.clear
   free, _ = prefill_prefix(weights, prefix, capacity)
@@ -301,6 +317,7 @@ begin
   generation.times do |step|
     id = QM.top2(free_logits).first_id
     free_ids << id
+    break if prompt_path && id == tokenizer.eos_id
     if step + 1 < generation
       free_logits = CPU.forward(weights, id, tokens.size + step, free)
     end
@@ -311,11 +328,13 @@ begin
         baseline_prefix_ms: base_prefix_ms, candidate_prefix_ms: cand_prefix_ms,
         baseline_append_ms: base_ms, candidate_append_ms: cand_ms, append_ratio: base_ms / cand_ms,
         timing_is_diagnostic: true, top1_matches: base_ids.zip(teacher_ids).count { |a, b| a == b },
-        top2_ranked_matches: ranked, top2_ranked_count: 2 * generation, exact_top1_covered: covered,
+        top1_count: base_ids.size, candidate_free_count: free_ids.size,
+        top2_ranked_matches: ranked, top2_ranked_count: 2 * base_ids.size, exact_top1_covered: covered,
         token_ecs_min: min_ecs, logit_cosine_min: min_cos, logit_max_abs: max_logit_delta,
         free_match: free_match, baseline_ids: base_ids, candidate_free_ids: free_ids,
         baseline_text: tokenizer.decode(base_ids), candidate_text: tokenizer.decode(free_ids),
-        eos_stopping: false, semantic_task_scored: false}.to_json)
+        eos_stopping: !!prompt_path, baseline_eos: base_ids.last? == tokenizer.eos_id,
+        candidate_eos: free_ids.last? == tokenizer.eos_id, semantic_task_scored: false}.to_json)
   raise "full-model prefix gate FAILED; retain explicit-only admission" unless passed
 ensure
   states.each { |s| release_state(s) }

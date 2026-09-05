@@ -9,8 +9,9 @@ advanced experimental CUDA full-model mixed-stack/semantic-loop probe without
 an admitted engine adapter. Cross-process Metal single-flight and killable
 command-buffer waits are an admitted safety slice; in-process recovery after a
 GPU timeout remains rejected because Metal exposes no command-buffer cancel.
-Nonadaptive prefix/tail Flash-prefill is an explicit operator-tested experiment;
-automatic continuation admission and full-model quality remain guard-only.
+Nonadaptive prefix/tail Flash-prefill is an explicit operator-tested experiment
+with bounded coding-smoke evidence; automatic continuation admission and
+general full-model quality remain guard-only.
 Bounded context: reusable Qwen 3.5/3.8 inference consumed by `cogni-ml` CLIs and
 resident services such as Cogniformerus `cfmodeld`
 
@@ -451,7 +452,8 @@ the sampled comparisons. After matching Q precision, residual RMSE is about
 120–123 times smaller. This supports **local Q-rounding dominance**, not a
 claim that 99% of the whole model's state error is explained or fixed. Layer63
 here receives baseline inputs; it does not replay the divergent Flash history.
-No performance, coding-quality or automatic-admission claim follows.
+No performance, coding-quality or automatic-admission claim follows from this
+local rounding discriminator alone.
 Correlated Luna source review returned ROBUST for capture in this corridor:
 the final full-attention layer completes without an arena, and later FFN work
 uses different scratch tags. Scratch itself has no layer/epoch identity, so
@@ -462,9 +464,14 @@ substituting its source/output name; run `--self-test`, then the same guarded
 600s/24576MiB command with `--append 65` and separately `--append 64` (no other
 shape/generation flags). Keep the 35% free-memory floor and no quiet waiting.
 Temporary logs: `/private/tmp/qwen_real_q_replay_t65.log` and
-`/private/tmp/qwen_real_q_replay_t64.log`. The remaining falsifier is an isolated
-whole-model Q-precision ablation or an accuracy-preserving Flash candidate,
-followed by the original state/continuation gate; no tolerance relaxation.
+`/private/tmp/qwen_real_q_replay_t64.log`. Current next discriminator (user
+correction): measure the existing Flash path on longer coding continuations
+with external executable tests, top2/ECS diagnostics, and warmed order-balanced
+whole-append timing with A/A controls. Internal state tolerance is not an
+established semantic-quality boundary. Defer a Q-precision correction until
+task-quality loss justifies its cost; retain the state diagnostic unchanged.
+Automatic admission remains off. Three small author-created fixtures are
+smoke tests, not held-out benchmarks or evidence of general coding ability.
 Refresh after scratch routing/lifetimes, shader, compiler, model or fixture
 changes. A scratch-layout change must invalidate capture rather than silently
 switch to synthetic inputs. This is ordinary numerical analysis, not LTP/WBA.
@@ -484,3 +491,135 @@ CRYSTAL_CACHE_DIR=/private/tmp/qwen_flash_prefix_spec crystal spec \
   spec/qwen35_forward_spec.cr:364 \
   --link-flags="$PWD/build/bridge.o -framework Metal -framework Foundation -lc++"
 ```
+
+### Flash coding-value check (2026-09-05)
+
+This slice supersedes the immediate Q-precision-correction plan in LM1049.
+The user objective is useful coding output at useful latency, not minimum
+internal state error. No engine/shader/policy or numerical tolerance changed.
+`bin/qwen35_flash_prefix_model_probe.cr --prompt-file` renders an untruncated
+no-thinking chat prompt, derives its actual append length, and stops baseline
+and fresh-candidate greedy continuations independently at EOS. The baseline
+always consumes its own argmax; only the comparison candidate is teacher-forced.
+Top2 denominators and final state coverage use the actual continuation length.
+Prompt bytes, actual token counts and generation remain bounded before model
+weight allocation. Raw fixed-token timing fixtures retain their old behavior.
+
+`scripts/qwen_flash_coding_score.py` reuses the QBit scorer's Crystal extraction
+and copied-project test runner. It rejects missing/duplicate config/summary,
+non-chat fixtures, missing EOS and malformed records. A/A controls do not
+promote Flash. External baseline failure is `invalid_flash_baseline`, never a
+Flash regression or pass. Internal state and teacher metrics remain separate
+diagnostics. The runner is **not a sandbox**: inspect generated source and the
+fixture before execution. The three actual outputs were inspected as pure
+array/set/search code before running them.
+
+These are three small author-created smoke fixtures, not held-out tasks or a
+general coding benchmark. Conditions: engine `651cb25e`, unchanged Flash
+kernel, Qwen3.8-27B Q4_K_M, Apple M2 Max, common Flash-off prefix64,
+`--gen 256 --warmup`, group limit1/cooldown50ms. Actual append lengths below
+come from chat tokenization, not prompt-file bytes. Lower-bound used reverse
+timing order. Fresh candidate generation and external tests ran for each task.
+
+| Fixture | Append tokens | EOS tokens, each path | Top1 match | Ranked top2 match | External specs, each path |
+| --- | ---: | ---: | ---: | ---: | --- |
+| stable_unique | 73 | 88 | 88/88 | 175/176 | 2 examples, 0 failures |
+| lower_bound | 94 | 102 | 102/102 | 204/204 | 2 examples, 0 failures |
+| merge_ranges | 104 | 195 | 195/195 | 390/390 | 2 examples, 2 failures |
+
+All three complete greedy outputs, including EOS, are identical across paths:
+385/385 top1 tokens and 769/770 ranked top2 positions match. Token-embedding
+ECS is 1 throughout, which is tautological for identical IDs. Both merge-ranges
+outputs incorrectly merge adjacent intervals (`start <= current_end + 1`),
+contrary to the prompt. This is a concrete counterexample to treating ECS or
+baseline agreement as semantic correctness. No Flash-specific quality loss
+was observed here; only two tasks have valid successful baselines.
+
+All three teacher diagnostics pass, while the unchanged state tolerance still
+fails. Minimum logit cosine is 0.9999950 across these runs; maximum absolute
+logit difference is 0.070064. Their probe exit1 is the retained state gate,
+not an external-test result. Do not turn it green by loosening the tolerance
+or describe it as a proven semantic-quality loss. No automatic admission.
+
+Temporary evidence: `/private/tmp/qwen_flash_value_{unique,lower,merge}.log`
+and `/private/tmp/qwen_flash_scored_{unique,lower,merge}/report.json`.
+First two model runs used the initial probe build; the final build additionally
+avoids constructing discarded raw fixtures for chat and checks file size before
+read. Inference/metric logic was unchanged. The final binary SHA256 is
+`9e59ab8723b300e72e7ee843e86e7f29d0143133dc7d2abdc174e0f6cacbb892`;
+the later baseline-greedy source comment is behavior-neutral.
+
+Reproduction after the release build above (substitute each fixture name):
+
+```sh
+/private/tmp/qwen35_flash_prefix_model_probe --self-test
+COGNI_RUN_SAFE_REQUIRE_QUIET=0 COGNI_RUN_SAFE_WAIT_QUIET_SEC=0 \
+  COGNI_RUN_SAFE_MIN_FREE_PCT=35 scripts/run_safe.sh \
+  /private/tmp/qwen35_flash_prefix_model_probe 600 24576 \
+  --prefix 64 --gen 256 --warmup \
+  --prompt-file spec/fixtures/qwen_flash_coding/stable_unique/prompt.txt
+# Save the log, inspect its generated source, then use a fresh output directory:
+python3 scripts/qwen_flash_coding_score.py \
+  --probe-log /private/tmp/qwen_flash_value_unique.log \
+  --project spec/fixtures/qwen_flash_coding/stable_unique \
+  --hidden-spec spec/fixtures/qwen_flash_coding/stable_unique/check.cr \
+  --source src/answer.cr --output /private/tmp/qwen_flash_scored_unique_new \
+  --timeout 45
+python3 -m unittest spec/qwen_flash_coding_score_spec.py
+```
+
+The scorer's seven tests cover parser rejection, control/baseline/regression
+classification and actual execution of all three checked-in fixtures against
+both known-correct and deliberately incorrect implementations. Incorrect seeds
+must fail assertions rather than merely fail compilation. Fixtures include
+deterministic randomized cases and no-input-mutation checks.
+
+Warmed timing follow-up used four fresh sequential processes with raw P256/T512,
+`--gen 2 --warmup`, the same release binary and pinned group1/cooldown50ms.
+A and B denote row/SG4 and Flash respectively; A/A keeps Flash off in both
+states. State allocation and common prefix are outside append timing; the
+measured interval includes full-width appended prefill, terminal hidden
+readback, full GPU logits, synchronization, and any policy cooldown inside
+that work. It is not cold start, product pp/tg, adaptive-QBit timing, or a
+llama.cpp comparison. Warmup covers both paths. No own compilation was run
+during this four-process batch; the shared host was not required to be idle.
+
+| Process / execution order | Baseline append ms | Candidate append ms | Baseline/candidate |
+| --- | ---: | ---: | ---: |
+| Same-path A/A | 4117.257 | 3901.633 | 1.0553 |
+| Flash A/B | 4534.913 | 3781.700 | 1.1992 |
+| Flash B/A | 3955.110 | 3960.293 | 0.9987 |
+| Same-path A/A, reversed labels | 3933.984 | 4130.723 | 0.9524 |
+
+The two Flash comparisons together form one order-balanced ABBA sample:
+mean baseline4245.011ms versus Flash3870.996ms (8.81% shorter time, 1.0966x
+ratio). Balanced A/A means differ by 0.24%, but individual A/A rows vary by
+about 5%. Flash's reverse comparison is a tie. Thus the balanced mean is a
+promising observation, **not a stable speed certificate**; repeated balanced
+batches are still needed. The earlier lower-bound coding run also contained
+an 8653ms candidate outlier versus1596ms baseline, despite about1510ms warmup
+and1610ms fresh-candidate prefill. Its cause is unestablished; do not discard
+it to promote the faster rows. Coding timings are not used for a speed claim.
+
+Both A/A processes exit0 with zero state/logit difference. Both Flash
+processes exit1 solely on the retained state diagnostic, with matching two
+greedy tokens, all four ranked top2 positions and ECS1. All processes finish
+without runner kill/timeout; retain `scripts/run_safe.sh` 600s/24576MiB and
+35% free-memory floor, with quiet waiting off and no foreign process stopped.
+Logs: `/private/tmp/qwen_flash_value_pp512_{aa,ab,ba,aa_reverse}.log`.
+Reproduce with `--prefix 256 --append 512 --gen 2 --warmup`, adding
+`--control`, neither flag, `--reverse`, and `--control --reverse` respectively
+to the same guarded invocation. Do not disable cooldown to improve the row.
+
+Next smallest optimization candidate is a per-query-tile causal key bound in
+`src/ml/gguf/kernels/qwen35_attn_flash_d256.metal`: currently each tile visits
+all full key blocks and masks future scores only after QK. Skipping fully
+future blocks could reduce work without introducing extra Q rounding. Keep
+the existing global scalar tail, ensure uniform barrier control, and first
+test output guards and a separate oracle at 63/64/65 boundaries and long
+prefixes. This is a proposal, not an implemented or measured speedup. A second
+candidate is avoiding full last-chunk hidden readback when only the terminal
+row is needed (`prefill_tokens_last_hidden`); preserve resident ownership and
+CPU fallback semantics. Q_hi/Q_lo correction stays deferred until evidence
+of useful quality loss warrants its cost. Refresh after shader, routing,
+compiler/device, model, prompt or scorer changes. No LTP/WBA claim.
