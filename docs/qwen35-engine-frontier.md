@@ -419,6 +419,56 @@ COGNI_RUN_SAFE_REQUIRE_QUIET=0 COGNI_RUN_SAFE_WAIT_QUIET_SEC=0 \
 # Repeat the guarded command without --control; use --append 64 for alignment.
 ```
 
+### Real-Q rounding discriminator
+
+`bin/qwen35_flash_real_q_replay_probe.cr` isolates the last attention layer63
+on the same fixed-token P256/T64 or T65 fixture. It does not modify the engine:
+after synchronized Flash-off prefill it reads existing scratch slots (missing
+slots fail, never allocate) and layer63 F16 K/V. Ordinary row replay must
+exactly reproduce all stored attention output values before attribution is
+allowed. SG4 is explicitly off for **both** shapes, unlike the earlier aligned
+full-model SG4 comparator. The probe is single-process/single-flight only.
+
+Four replays hold gate/K/V fixed: row(Q), row(float(half(Q))), Flash(Q), and
+Flash(float(half(Q))). The last pair must match exactly. A separately written
+Float64 CPU oracle checks 12 complete query/head rows (3,072 values) for each
+of ordinary row, rounded row and Flash-with-rounded-Q semantics. Its budget
+is `0.001 + 0.0001*abs(reference)`; this is an operator check, not the earlier
+model-state tolerance. Output guards, seeded comparator perturbation and
+nonfinite rejection are also checked.
+
+Observed on engine `5d33af99`, Qwen3.8-27B Q4_K_M, M2 Max (2026-09-05):
+
+| Appended rows | Row / Flash RMSE | Rounded-row / Flash RMSE | Residual fraction |
+| --- | --- | --- | --- |
+| 65 | 7.85448e-5 | 6.40833e-7 | 0.008159 |
+| 64 | 7.64759e-5 | 6.38485e-7 | 0.008349 |
+
+Both captures reproduced the executed output with zero numerical difference
+(399,360 and 393,216 values); both Flash round-idempotence controls also had
+zero difference. CPU oracle maximum errors were at most `7.87e-6` across
+the sampled comparisons. After matching Q precision, residual RMSE is about
+120–123 times smaller. This supports **local Q-rounding dominance**, not a
+claim that 99% of the whole model's state error is explained or fixed. Layer63
+here receives baseline inputs; it does not replay the divergent Flash history.
+No performance, coding-quality or automatic-admission claim follows.
+Correlated Luna source review returned ROBUST for capture in this corridor:
+the final full-attention layer completes without an arena, and later FFN work
+uses different scratch tags. Scratch itself has no layer/epoch identity, so
+the static last-layer route plus exact output replay are both required.
+
+Reproduction: build the replay probe using the full-model build command above,
+substituting its source/output name; run `--self-test`, then the same guarded
+600s/24576MiB command with `--append 65` and separately `--append 64` (no other
+shape/generation flags). Keep the 35% free-memory floor and no quiet waiting.
+Temporary logs: `/private/tmp/qwen_real_q_replay_t65.log` and
+`/private/tmp/qwen_real_q_replay_t64.log`. The remaining falsifier is an isolated
+whole-model Q-precision ablation or an accuracy-preserving Flash candidate,
+followed by the original state/continuation gate; no tolerance relaxation.
+Refresh after scratch routing/lifetimes, shader, compiler, model or fixture
+changes. A scratch-layout change must invalidate capture rather than silently
+switch to synthetic inputs. This is ordinary numerical analysis, not LTP/WBA.
+
 Reproduce the bounded operator gate from the repository root:
 
 ```sh

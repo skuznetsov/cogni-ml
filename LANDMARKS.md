@@ -27320,3 +27320,43 @@ short continuation. Next discriminator: replay identical real-layer Q/K/V
 with ordinary row, half-rounded-Q row and Flash paths before any kernel fix.
 No LTP/WBA certificate or production engine change in this slice. Refresh
 after model, source, compiler/device, fixture or comparator changes.
+
+#### [LM-QWEN-FLASH-REAL-Q-1049] Real-layer replay isolates Q half-rounding as the dominant local difference
+**context:** engine `5d33af99` / Qwen3.8-27B Q4_K_M / Apple M2 Max / baseline layer63 / P256,T64 or T65
+**state:** diagnostic implemented; no engine/kernel or automatic-policy change
+
+- Probe: `bin/qwen35_flash_real_q_replay_probe.cr`. Synchronized full-width
+  Flash-off prefill leaves final-layer Q/gate/attention scratch and F16 K/V.
+  Probe-only existing-slot access refuses missing capture; ordinary row
+  replay must reproduce all stored output values exactly. Both shapes pin
+  SG4 off, so the aligned comparator differs from LM1048's SG4 path.
+- Interventions: row(Q), row(float(half(Q))), Flash(Q), and Flash(roundedQ),
+  holding gate/K/V fixed. Flash round-idempotence is exact for both shapes.
+  T65 row/Flash RMSE 7.85448e-5 becomes 6.40833e-7 after matching Q precision;
+  T64 RMSE 7.64759e-5 becomes 6.38485e-7. Residual fractions 0.008159/0.008349
+  support local Q-rounding dominance (about 120–123x smaller residual).
+- Capture equality covers 399360/393216 values. Independent Float64 oracle
+  covers 12 query/head rows (3072 values) per operator/shape, max error 7.87e-6,
+  within prospective 0.001+0.0001*abs(reference). No-model self-test detects a
+  seeded perturbation/nonfinite and checks equal data plus half decoding;
+  GPU output guards pass. Both guarded model processes exit 0.
+- Scope boundary: these are baseline-history layer63 activations, not the
+  divergent all-Flash history. Local attribution does not prove or repair
+  LM1048's whole-model state gap. No token/semantic-quality or speed claim.
+  The global state gate remains red and automatic prefix admission stays off.
+- Evidence/reproduction: docs/qwen35-engine-frontier.md, Real-Q rounding
+  discriminator; temporary `/private/tmp/qwen_real_q_replay_t{64,65}.log`.
+  Release build, format and diff checks pass. Model runs are sequential,
+  scripts/run_safe.sh 600s/24576MiB with 35% free-memory floor, quiet waiting
+  disabled under standing authority; no foreign process stopped.
+  Final probe source SHA256:
+  `b8fcf76e5ab5a4b108999d50d11971a033f271420c2d19a92bdc9b3ff3ac47b6`;
+  final reruns: `/private/tmp/qwen_real_q_replay_final_t{64,65}.log`.
+
+**Decision / next signal:** Test a whole-model Q-precision ablation or an
+accuracy-preserving Flash candidate, then rerun the original full-model
+state/continuation gate without relaxing tolerance. Refresh this local
+certificate after scratch ownership/routing, shader, compiler/device, model
+or fixture changes. Correlated Luna source review returned ROBUST for this
+single-flight final-layer capture; Scratch has no epoch label, so static
+route/lifetime evidence and exact replay must both hold. No LTP/WBA claim.
