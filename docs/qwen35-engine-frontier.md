@@ -11,7 +11,9 @@ command-buffer waits are an admitted safety slice; in-process recovery after a
 GPU timeout remains rejected because Metal exposes no command-buffer cancel.
 Nonadaptive prefix/tail Flash-prefill is an explicit operator-tested experiment
 with bounded coding-smoke evidence; automatic continuation admission and
-general full-model quality remain guard-only.
+general full-model quality remain guard-only. Tile-local causal block skipping
+is operator-verified with unchanged coding-smoke outputs; its whole-model
+speed gate remains open after guarded memory-pressure stops.
 Bounded context: reusable Qwen 3.5/3.8 inference consumed by `cogni-ml` CLIs and
 resident services such as Cogniformerus `cfmodeld`
 
@@ -623,3 +625,130 @@ row is needed (`prefill_tokens_last_hidden`); preserve resident ownership and
 CPU fallback semantics. Q_hi/Q_lo correction stays deferred until evidence
 of useful quality loss warrants its cost. Refresh after shader, routing,
 compiler/device, model, prompt or scorer changes. No LTP/WBA claim.
+
+### Causal full-key block bound: operator verified, whole-model speed open
+
+Prospective gate: change only the Flash MMA loop bound, keeping the global
+scalar-tail origin, ABI, Q precision, allocations and host admission unchanged.
+For bounded finite fixtures, old/new Flash must match bit-for-bit over GQA4/GQA6
+query/key boundary and long-prefix cases; the existing Float64 causal oracle
+and output canaries remain required. A deliberately rounded-down bound must
+fail the comparator. Measure old/new Flash in warmed ABBA microbenchmarks;
+only then run guarded full-model coding/EOS and append timing checks. Reject
+numerical regression or a slower/no-benefit kernel rather than relax gates.
+Risk: dropping the last visible key block, changing scalar-tail ownership, or
+divergent barriers. Rollback is the prior shader; no wider Flash admission.
+
+Operator evidence on M2 Max (2026-09-05): the shader now uses the minimum of
+global full-key end and the 64-key ceiling of the active query tile's exclusive
+causal end. The unchanged scalar tail still begins at the global end. Forty
+cases (20 shapes x GQA4/GQA6) match the prior Flash bit-for-bit, including
+base0 T1024/2048 and context8192; eight shapes x both GQA ratios also pass the
+separately computed Float64 causal oracle. Output padding remains sentinel.
+Old/old control passes; a floor-instead-of-ceiling mutant fails at P0/T64,
+first output `-0.030496921` versus0. The exact comparator also rejects seeded
+perturbation/nonfinite values. No tolerance was changed.
+
+The probe's optional `--flash-reference=PATH` compiles an independent pipeline
+from an old shader, rather than comparing the new kernel against itself.
+Normal mode retains the SG4 comparator. Timings use one dispatch per completed
+command buffer, reporting both fenced host wall and Metal GPU execution
+intervals; shader compilation and buffer initialization are outside timing.
+Below: deterministic synthetic inputs, warmup1, 12 ABBA blocks, 24 samples per
+path, old shader from `2451a4fa`.
+These are **attention-kernel** measurements, not full-model pp/tg.
+
+| Prefix / appended rows | Old GPU p50 ms | New GPU p50 ms | Ratio |
+| --- | ---: | ---: | ---: |
+| 0 / 256 | 0.5802 | 0.3399 | 1.7071x |
+| 0 / 512 | 1.2650 | 0.7736 | 1.6352x |
+| 0 / 1024 | 5.5835 | 2.9886 | 1.8683x |
+| 0 / 2048 | 22.7317 | 11.2613 | 2.0186x |
+| 256 / 512 | 2.0039 | 1.3608 | 1.4726x |
+| 1024 / 256 | 1.8007 | 1.4815 | 1.2155x |
+| 1024 / 512 | 4.2055 | 3.5299 | 1.1914x |
+| 4096 / 256 | 6.4513 | 5.8895 | 1.0954x |
+| 4096 / 512 | 13.2349 | 12.5915 | 1.0511x |
+
+Base0 same-shader A/A GPU ratios are 0.9743/1.0929/1.0150/1.0173 for
+256/512/1024/2048 rows. Earlier host-only prefix samples varied, including a
+0.9561x row at P4096/T256; gains at long prefixes are small relative to noise.
+Do not extrapolate the approximately 2x T2048 operator result to the trunk or
+adaptive-QBit path. The main structural benefit is eliminating nearly half
+the full-key-block iterations at base0; a long prefix remains visible and
+cannot be skipped. Inputs with nonfinite future V are outside exact old/new
+equivalence: removing masked `0*NaN` work may change those outputs, and a
+partially future block is still read. No nonfinite-safety claim is made.
+
+Full-model regression on the same three coding prompts preserves all previous
+outputs: stable_unique 88, lower_bound 102, merge_ranges 195 tokens including EOS.
+All 385 emitted teacher records and all 9 emitted state-diagnostic records are
+identical to the prior Flash runs, as are both paths' token IDs and full text.
+This compares published diagnostics, not a new full-state byte dump. Ranked
+top2 remains 769/770 and ECS 1; identical IDs do not establish task correctness.
+The retained state gate still fails, unchanged; teacher diagnostics pass.
+Processes exit1 on that diagnostic only, without kill/timeout. Coding timings
+contain outliers and are not used as speed evidence.
+
+After inspecting the unchanged generated source, external specs were rerun:
+stable_unique and lower_bound each pass 2 specs on both paths; merge_ranges
+fails both specs on both paths by merging adjacent intervals. Its scorer
+verdict remains `invalid_flash_baseline`, not a Flash success or regression.
+Reports: `/private/tmp/qwen_flash_causal_scored_{unique,lower,merge}/report.json`.
+Reproduce with the existing scorer command above, substituting these logs and
+fresh output directories. These are the same author-created smoke fixtures,
+not an independent held-out benchmark.
+
+The subsequent old/new full-model timing attempt at P256/T512, gen2, warmed,
+was stopped by the unchanged system free-memory floor: old process 33% after
+about 4s; the already-started candidate process 35% after about 4s. Neither
+produced an append summary, so there is no complete ABBA or new whole-model
+speed result. Stop the heavy batch here, do not retry with weaker guards.
+This is separate from the three completed coding processes above. Runner
+limits remain 600s/24576MiB for the model and 180s/4096MiB for the operator,
+minimum free 35%, quiet waiting off; no foreign process was stopped.
+
+Reproduction / local evidence index (temporary paths can expire):
+
+- Build the operator and model probes using the commands above. The measured
+  operator binary SHA256 is
+  `188ec568943baecce3b1e7be9731b5fdf1c6fc3835397d518ff41ab53884972e`;
+  new model binary
+  `4a96010546bb2fb19b4d4c1c0ede4b21f6e89e2dc5df4cfde717c8ebbc653d1a`.
+- Save the shader from `git show 2451a4fa:src/ml/gguf/kernels/qwen35_attn_flash_d256.metal`
+  as `/private/tmp/qwen35_flash_before_causal_bound.metal`; expected SHA256
+  `45394daf276f42a7bb2007c5e5a20fe5060a816745f817213e9ede534895034f`.
+  Candidate shader SHA256 is
+  `59b7f2723eef7ee35fc6e4b87ec38698b1127c5bd7d2abbd1f94babfc2ba4534`.
+- Run the guarded operator with
+  `--flash-reference=/private/tmp/qwen35_flash_before_causal_bound.metal --perf --reps=12`,
+  then replace `--perf` with `--perf-only` for base0. A/A adds
+  `--flash-source=/private/tmp/qwen35_flash_before_causal_bound.metal`.
+  Logs `/private/tmp/qwen_flash_causal_final_{prefix,base0,aa}.log` all exit0.
+- Negative control: change the old shader's MMA bound to
+  `min(full_key_end, (base_pos + iq1 + min(uint(QWEN35_FLASH_Q), n_tokens - iq1)) / QWEN35_FLASH_C * QWEN35_FLASH_C)`
+  (floor, not ceiling), and pass it as `--flash-source` with the old reference.
+  `/private/tmp/qwen_flash_causal_final_red.log` exits1 at P0/T64 as expected.
+  The final default SG4/oracle mode also exits0:
+  `/private/tmp/qwen_flash_causal_default.log`. GPU timestamps are required
+  even in correctness mode; portability to devices without them is untested.
+- Model coding commands retain `--prefix 64 --gen 256 --warmup --prompt-file`
+  with the three checked-in fixtures; lower_bound also uses `--reverse`.
+  Logs `/private/tmp/qwen_flash_causal_{unique,lower,merge}.log` compare against
+  `/private/tmp/qwen_flash_value_{unique,lower,merge}.log` from the prior slice.
+- The incomplete full-model timing logs are
+  `/private/tmp/qwen_flash_causal_full_{a1,b1}.log`; arguments
+  `--prefix 256 --append 512 --gen 2 --warmup`. Old model binary SHA256:
+  `9e59ab8723b300e72e7ee843e86e7f29d0143133dc7d2abdc174e0f6cacbb892`.
+
+DoD: both release builds, model-probe no-model self-test, the final operator
+gates and `crystal spec spec/qwen35_forward_spec.cr:201` with bridge link flags
+pass; the latter is 1 example/0 failures. Crystal format and diff checks pass.
+Correlated Luna adversary review finds no causal-end, barrier, global-tail,
+pipeline-alias or timer defect in this bounded slice. Verdict: ROBUST for
+the tested operator transformation; VULNERABLE for a whole-model speed,
+general coding-quality or broader-admission claim. No automatic policy,
+adaptive-QBit route or Q precision changed. Refresh after shader, route,
+compiler, device, model, fixture or comparator changes. Next signal: repeat
+the guarded full-model speed comparison only with adequate memory headroom;
+terminal-row-only output remains a separate candidate, not part of this edit.

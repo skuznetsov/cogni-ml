@@ -27418,3 +27418,47 @@ candidate is terminal-row-only resident output instead of full last-chunk
 readback. Preserve fallback/lifetimes; do not add precision work without a
 task-quality justification. Refresh after model, shader, route, compiler,
 device, prompt or scorer changes. No LTP/WBA certificate claimed.
+
+#### [LM-QWEN-FLASH-CAUSAL-BOUND-1051] Skip wholly future blocks; operator speed improves, model speed gate stays open
+**context:** parent 2451a4fa / Qwen3.8-27B Q4_K_M / M2 Max / nonadaptive F16 Flash / 2026-09-05
+**state:** bounded kernel transformation verified; no automatic-admission expansion
+
+- `qwen35_attn_flash_d256.metal` now limits the MMA loop to the 64-key ceiling
+  of each 8-query tile's last active causal endpoint, capped by the global
+  full-key end. Preserve global scalar-tail origin, uniform barrier control,
+  Q precision, ABI, allocations and host policy. Rollback is the prior shader.
+- Extended prefix probe compiles an old Flash reference independently and
+  compares active Float32 bits. Forty cases (20 shapes x GQA4/GQA6) pass;
+  eight shapes x both ratios also pass the Float64 CPU oracle. Sentinel
+  padding passes. Same-shader A/A passes; seeded perturbation/NaN and an
+  intentionally floored bound are rejected (first mutant failure P0/T64).
+  Default SG4 comparator/oracle mode remains green. Finite bounded fixtures
+  do not establish behavior for nonfinite/overflowing activations.
+- Warmed 12-block ABBA, 24 samples/path, deterministic synthetic attention:
+  base0 T256/512/1024/2048 GPU p50 ratios 1.7071/1.6352/1.8683/2.0186.
+  P256/T512 ratio 1.4726; P4096/T512 only 1.0511. Same-shader controls range
+  0.9743..1.0929; an earlier P4096/T256 host row regressed to 0.9561x. This is
+  operator evidence, not whole-model pp/tg, adaptive-QBit or llama.cpp speed.
+- All 385 coding teacher records and 9 published state diagnostics match the
+  preceding Flash logs, as do IDs/full outputs through EOS. Top2 stays 769/770,
+  ECS 1. External rerun: stable_unique/lower_bound pass 2 specs each on both paths;
+  merge_ranges fails 2 specs on both (adjacent-range bug, invalid baseline).
+  State gate still fails, teacher passes; no semantic-quality improvement
+  or general model/state-byte equivalence inferred.
+- Full-model P256/T512 warmed old/new timing attempts were killed by the
+  unchanged 35% system-free floor: old 33%, candidate 35%, each about 4s. No
+  append summaries, no completed ABBA. Heavy batch stopped; no guard weakened
+  or foreign process stopped. Earlier three coding runs completed without
+  guard kill/timeout. Keep 600s/24576MiB model and 180s/4096MiB operator limits.
+- DoD: release builds, no-model self-test, final operator reference/default
+  gates, policy spec:201 (1 example/0 failures), format and diff checks pass.
+  Source/binary hashes, commands, timing table, logs and reports are indexed
+  in `docs/qwen35-engine-frontier.md`, causal full-key block-bound section.
+  Temporary logs can expire; this record is not independent replication.
+
+**Adversary / next signal:** correlated Luna review ROBUST for tested causal
+end/barriers/tail/pipeline/timer behavior; whole-model speed and broader quality
+remain VULNERABLE claims. Refresh after shader, route, compiler, device, model,
+fixture or comparator changes. Resume full-model ABBA only with sufficient
+memory headroom; terminal-row-only output is a separate next candidate.
+No Q_hi/Q_lo work, adaptive changes or LTP/WBA claim in this slice.

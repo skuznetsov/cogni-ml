@@ -52,6 +52,14 @@ kernel void qwen35_attn_flash_d256(
     const uint kv_dim = n_head_kv * QWEN35_FLASH_DK;
     const uint total_keys = base_pos + n_tokens;
     const uint full_key_end = total_keys / QWEN35_FLASH_C * QWEN35_FLASH_C;
+    // Uniform across this threadgroup, including inactive query lanes. Keep
+    // the block containing the last active row's current key; later full
+    // blocks are wholly causal-masked. The scalar tail still starts at the
+    // GLOBAL full_key_end, not this tile-local MMA bound.
+    const uint active_rows = min(uint(QWEN35_FLASH_Q), n_tokens - iq1);
+    const uint tile_causal_end = base_pos + iq1 + active_rows;
+    const uint tile_full_key_end = min(full_key_end,
+        (tile_causal_end + QWEN35_FLASH_C - 1) / QWEN35_FLASH_C * QWEN35_FLASH_C);
     constexpr short DK4 = QWEN35_FLASH_DK / 4;
     constexpr short DK8 = QWEN35_FLASH_DK / 8;
     constexpr short DV4 = QWEN35_FLASH_DV / 4;
@@ -91,7 +99,7 @@ kernel void qwen35_attn_flash_d256(
     float S[QWEN35_FLASH_NQ] = {0.0f, 0.0f};
     float M[QWEN35_FLASH_NQ] = {-FLT_MAX / 2, -FLT_MAX / 2};
 
-    for (uint ic = 0; ic < full_key_end; ic += QWEN35_FLASH_C) {
+    for (uint ic = 0; ic < tile_full_key_end; ic += QWEN35_FLASH_C) {
         // Q*K^T. Four simdgroups split the 64 key columns while sharing the
         // same eight queries. K rows are strided by the GQA cache row width.
         device const half* pk = k_cache + ic * kv_dim + kv_h * QWEN35_FLASH_DK;
