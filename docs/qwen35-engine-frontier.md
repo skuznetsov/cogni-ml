@@ -13,7 +13,7 @@ Nonadaptive prefix/tail Flash-prefill is an explicit operator-tested experiment
 with bounded coding-smoke evidence; automatic continuation admission and
 general full-model quality remain guard-only. Tile-local causal block skipping
 is operator-verified with unchanged coding-smoke outputs; its whole-model
-speed gate remains open after guarded memory-pressure stops.
+speed gate remains open: completed guarded repeats do not establish a gain.
 Bounded context: reusable Qwen 3.5/3.8 inference consumed by `cogni-ml` CLIs and
 resident services such as Cogniformerus `cfmodeld`
 
@@ -752,3 +752,65 @@ adaptive-QBit route or Q precision changed. Refresh after shader, route,
 compiler, device, model, fixture or comparator changes. Next signal: repeat
 the guarded full-model speed comparison only with adequate memory headroom;
 terminal-row-only output remains a separate candidate, not part of this edit.
+
+### Causal-bound full-model timing resumed (2026-09-05 local / September 6 UTC)
+
+Memory preflight now reports 86% free. Rebuilt the expired temporary binaries:
+old source from `git archive 2451a4fa src bin shard.yml shard.lock`, candidate
+from `d0a9cd08`, Crystal 1.21.0 / LLVM 22.1.8, release mode and the same bridge.
+The inference source differs only in the causal-bound shader; the full-model
+probe source is byte-identical. No engine or policy changes in this follow-up.
+Both no-model self-tests pass. No compilation overlaps model timing.
+
+Same Qwen3.8-27B Q4_K_M / M2 Max, raw P256/T512, gen2, `--warmup`;
+timed interval includes full-width append and the fenced full-logit GPU head,
+not prefix setup, model loading or compilation. Each process also measures
+the unchanged Flash-off row path. Four fresh processes ABBA, then one final
+BAAB batch declared before execution to check the first batch's variability:
+
+| Order / version | Flash append ms | Unchanged row append ms |
+| --- | ---: | ---: |
+| A1 old | 4044.772 | 4458.457 |
+| B1 new | 4017.566 | 4476.637 |
+| B2 new | 5170.500 | 5296.160 |
+| A2 old | 3773.282 | 4119.684 |
+| B3 new | 3716.692 | 4095.907 |
+| A3 old | 3696.149 | 4093.323 |
+| A4 old | 3740.824 | 4086.441 |
+| B4 new | 3776.187 | 4114.421 |
+
+ABBA means: old 3909.027ms, new 4594.033ms (+17.52% time); corresponding
+unchanged-row means rise 13.93%. BAAB means: old 3718.486ms, new 3746.440ms
+(+0.75% time), row means rise 0.37%. All samples retained: old 3813.757ms,
+new 4170.236ms (+9.35% time), row means rise 7.31%. **No measured full-model
+speedup.** The row variation is a countercheck, not a correction to subtract
+or proof that host load caused the slowdown. The second batch is near parity;
+neither it nor the noisy first batch identifies a causal regression magnitude.
+Do not promote the earlier operator ratio into pp/tg or adaptive-QBit speed.
+
+All eight runs have identical config, emitted teacher/state diagnostic
+records, token IDs and text (` seen =`). Each has top1 2/2, ranked top2 4/4,
+ECS 1 and a matching free continuation; Flash dispatch counts are exactly 16
+when on and 0 when off. This two-token timing fixture is not a coding-quality
+test or a fresh EOS certificate. Existing strict state diagnostics remain
+red; each process exits1 only on that expected diagnostic, with no runner
+kill/timeout. Keep 600s/24576MiB, minimum free 35%, quiet waiting off, sequential
+processes and no foreign-process interference. Peak memory was not measured.
+
+Temporary reproduction directory: `/private/tmp/qwen-flash-resume.jHg6ks`.
+Logs are `{a1,b1,b2,a2,b3,a3,a4,b4}.log`, binaries `old` and `new`; run the
+guarded model command above with `--prefix 256 --append 512 --gen 2 --warmup`
+in that order. Old binary SHA256:
+`cdb1903faafa245a2c9b29c55f10869d37ef93f9b672c1e4f3e448d8a5efd871`;
+new: `8ce8e993758eff3f6a1c60ee7ae30298960401461aa4a91a2d389f9b88374707`.
+Bridge SHA256:
+`48bb1469e2a473d30a94ab102df91268d549a4dd3710b076a0e59d137691005a`.
+Temporary artifacts may expire; source revisions and commands are the rebuild
+path. DoD: both builds/self-tests, all eight bounded runs, parser assertions
+for unique summaries/no kills/exact route counts/cross-run diagnostics, and
+diff checks pass. Adversary verdict ROBUST for this observation; VULNERABLE
+for stable whole-model speed or causal attribution. No further timing batch
+in this slice. Next useful move is phase-level attribution of the full append
+before another optimization; terminal-row-only output remains a candidate,
+not an established bottleneck. Refresh on source/toolchain/device/model or
+workload changes. No LTP/WBA or automatic-admission claim.

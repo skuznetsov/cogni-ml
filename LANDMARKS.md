@@ -27462,3 +27462,30 @@ remain VULNERABLE claims. Refresh after shader, route, compiler, device, model,
 fixture or comparator changes. Resume full-model ABBA only with sufficient
 memory headroom; terminal-row-only output is a separate next candidate.
 No Q_hi/Q_lo work, adaptive changes or LTP/WBA claim in this slice.
+
+#### [LM-QWEN-FLASH-CAUSAL-TIMING-1052] Memory permits full append repeats; global speedup is not established
+**context:** old 2451a4fa vs new d0a9cd08 / Qwen3.8-27B Q4_K_M / M2 Max / 2026-09-05 local
+
+- Memory preflight 86%; rebuilt expired temporary binaries with the same
+  Crystal 1.21.0/LLVM 22.1.8 and bridge. Only inference difference is the shader
+  bound. Both self-tests pass; no compilation during model timing.
+- Raw P256/T512, gen2, warmed full-width append plus fenced full-logit head.
+  Fresh ABBA: old 3909.027ms/new 4594.033ms (+17.52% time), unchanged-row control
+  means +13.93%. One predeclared final BAAB: old 3718.486ms/new 3746.440ms
+  (+0.75%), row +0.37%. All eight samples retained: old 3813.757ms/new 4170.236ms
+  (+9.35%), row +7.31%. No measured whole-model gain; do not subtract control
+  variation as a causal correction or discard the slow B2 sample.
+- All eight configs, emitted teacher/state records and output IDs/text agree.
+  Per run: top1 2/2, ranked top2 4/4, ECS 1, free match; exact 16/0 Flash route
+  counts. State diagnostic still red, not weakened. Exit1 is expected; all
+  eight processes complete without kill/timeout at 600s/24576MiB/free 35%.
+  No foreign processes touched; quiet waiting off. Not a new semantic/EOS test.
+- Source/binary hashes, table, guarded reproduction and temporary log directory
+  are in `docs/qwen35-engine-frontier.md`, resumed causal-bound timing section.
+  Parser assertions and diff checks pass. No production code change.
+
+**Decision:** ROBUST bounded observation, VULNERABLE global-speed/attribution
+claim. Stop repetitions here. Profile the full append's phase costs before
+the next optimization; terminal-row output is only a candidate. Earlier
+operator gain is not invalidated, but does not imply pp/tg or adaptive speed.
+Refresh after source/toolchain/device/model/workload changes.
