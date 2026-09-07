@@ -27522,3 +27522,35 @@ Refresh after source/toolchain/device/model/workload changes.
   "Full append attribution and profiling command lifetime". Rollback by keeping
   profiling off; do not reintroduce terminal successor allocations. Refresh
   after source/model/device/toolchain/workload/scheduling changes.
+
+#### [LM-QWEN38-APPEND-Q6-DOWN-ADD-1054] Exact bounded fusion control does not establish a speedup
+**context:** ml / Qwen3.8-27B Q4_K_M / Apple M2 Max / nonadaptive F16 P256/T512 append
+**state:** existing opt-in down/add retained off by default; comparator added
+
+- Existing Q6 FFN down/add fusion was already neutral on the older 9B baseline
+  (LM-410). A current-model control keeps Flash on in both arms and changes
+  down/add only for candidate append; prefix and decode remain unchanged.
+  Executed route certificate is 31 Q6-add calls versus zero, 16 Flash calls
+  in both arms. This does not imply every FFN-down tensor uses Q6.
+- One quality preflight followed by four fresh AB/BA/BA/AB pairs, each with
+  warmup, gen16 and profiling off, completes under the unchanged 35% free-memory
+  floor / 24GiB cap / 180s timeout. No concurrent model runs or compilation.
+  Excluding the preflight, means are 3996.080229ms off / 4007.177333ms on:
+  throughput -0.277%, paired median +0.200%, 2/4 wins. Gains by pair are
+  +4.192/-3.793/-5.163/+4.920%; order sensitivity defeats speed promotion.
+- All five processes exit0. Checked live K/V, conv and SSM values and logits
+  match exactly; teacher top1 16/16, ordered top2 32/32, ECS1, identical free
+  IDs/text. The raw code completion is unfinished: no EOS or external coding
+  score. This is not the old Flash-versus-SG4 state diagnostic being fixed,
+  nor a certificate for adaptive QBit or other workloads.
+- Only probe controls and two route markers change; kernels, precision, cache,
+  scheduler and production defaults do not. The measured binary's stale SG4
+  comparator label is corrected after the batch; explicit experiment/Flash
+  route fields identify the actual measured arms. Binary lineage, commands,
+  table and temporary evidence are in the engine frontier section
+  "Existing Q6 FFN down/add: exact bounded control, no speed promotion".
+- Adversary: ROBUST for isolated route attribution and sampled value parity;
+  no credible speedup. Keep the toggle off. Next inspect FFN up/gate dataflow
+  versus llama.cpp, accounting for earlier refutations; LM-1042 already rejects
+  naive Q6 SG8-B128/raw-F32 plus rounding-epilogue reuse on this device.
+  Refresh after source/model/device/toolchain/workload/scheduling changes.

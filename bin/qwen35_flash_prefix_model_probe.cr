@@ -159,10 +159,15 @@ private def profile_controls(mode : String) : Hash(String, String)
   end
 end
 
-private def append_logits(weights : ML::GGUF::Qwen35Weights, state : CPU::State, ids : Array(Int32), prefix : Int32, flash : Bool, profile : String, label : String)
+private def experiment_arm(candidate : Bool, control : Bool, compare_down_add : Bool) : {Bool, Bool}
+  compare_down_add ? {true, candidate && !control} : {candidate && !control, false}
+end
+
+private def append_logits(weights : ML::GGUF::Qwen35Weights, state : CPU::State, ids : Array(Int32), prefix : Int32, flash : Bool, profile : String, label : String, down_add : Bool = false)
   controls = profile_controls(profile)
   controls.each { |key, value| ENV[key] = value }
   ENV["QWEN35_PREFILL_ATTN_FLASH_D256"] = flash ? "1" : "0"
+  ENV["QWEN35_PREFILL_FFN_DOWN_ADD_FUSED"] = down_add ? "1" : "0"
   GPU::Profile.reset
   GPU::Profile.enable!
   ML::Metal::Device.synchronize
@@ -181,8 +186,9 @@ private def append_logits(weights : ML::GGUF::Qwen35Weights, state : CPU::State,
   ML::Metal::Device.synchronize
   elapsed = (Time.instant - started).total_milliseconds
   count = GPU::Profile.route_count("prefill_attn_flash_d256")
+  down_add_count = GPU::Profile.route_count("q6_gemm_add")
   puts({event: "append", label: label, profile: profile, flash: flash, prefix_tokens: prefix, actual_prefill_rows: ids.size,
-        flash_dispatches: count, wall_ms: elapsed}.to_json)
+        flash_dispatches: count, down_add: down_add, q6_gemm_add_dispatches: down_add_count, wall_ms: elapsed}.to_json)
   unless profile == "off"
     hidden_ms = (hidden_finished - started).total_milliseconds
     puts({event: "append_profile", label: label, mode: profile, flash: flash,
@@ -195,10 +201,12 @@ private def append_logits(weights : ML::GGUF::Qwen35Weights, state : CPU::State,
           report: GPU::Profile.report_io}.to_json)
   end
   raise "wrong executed Flash route count" unless route_ok?(count, flash, weights.hparams.full_attention_layers.size)
+  raise "wrong executed Q6 down/add route" unless down_add ? down_add_count > 0 : down_add_count == 0
   {logits, elapsed}
 ensure
   GPU::Profile.disable!
   controls.try &.each_key { |key| ENV.delete(key) }
+  ENV.delete("QWEN35_PREFILL_FFN_DOWN_ADD_FUSED")
   STDERR.puts("qwen35_append_profile_end label=#{label}") if profile == "boundary"
 end
 
@@ -223,7 +231,10 @@ private def self_test
     rejected = true
   end
   raise "unknown profile accepted" unless rejected
-  puts "self_test=PASS (equal, perturbed, nonfinite, route, half decoder, top2, profile controls)"
+  raise "Flash experiment changed" unless experiment_arm(false, false, false) == {false, false} && experiment_arm(true, false, false) == {true, false}
+  raise "down/add experiment changes Flash" unless experiment_arm(false, false, true) == {true, false} && experiment_arm(true, false, true) == {true, true}
+  raise "down/add control is not A/A" unless experiment_arm(true, true, true) == {true, false} && experiment_arm(false, true, true) == {true, false}
+  puts "self_test=PASS (equal, perturbed, nonfinite, route, half decoder, top2, profile controls, experiment arms)"
 end
 
 model = ENV["QWEN35_MODEL"]? || "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf"
@@ -235,6 +246,7 @@ reverse = false
 test_only = false
 control = false
 profile = "off"
+compare_down_add = false
 prompt_path = nil.as(String?)
 OptionParser.parse do |p|
   p.on("--model PATH", "GGUF path") { |v| model = v }
@@ -244,13 +256,15 @@ OptionParser.parse do |p|
   p.on("--warmup", "Warm both full append shapes before measurements") { warmup = true }
   p.on("--reverse", "Measure candidate before baseline") { reverse = true }
   p.on("--self-test", "No-model comparator qualification") { test_only = true }
-  p.on("--control", "A/A control: keep Flash off in candidate too") { control = true }
+  p.on("--control", "A/A control: disable the selected candidate change in both arms") { control = true }
+  p.on("--compare-ffn-down-add", "Compare existing Q6 down/add fusion; Flash on in both arms, append only") { compare_down_add = true }
   p.on("--profile MODE", "off (default), boundary (shared commands), detail (perturbed split-command waits)") { |v| profile_controls(v); profile = v }
   p.on("--prompt-file PATH", "Chat coding prompt; derive append length, stop at EOS") { |v| prompt_path = v }
   p.on("--help", "Show help") { puts p; exit }
 end
 self_test
 exit if test_only
+raise "down/add experiment is bounded to raw P256/T512" if compare_down_add && (prefix_count != 256 || append_count != 512 || prompt_path)
 raise "bounded shape required" unless (2..2048).includes?(prefix_count) && (2..2048).includes?(append_count) && (2..512).includes?(generation) && prefix_count + append_count + generation <= 8192
 
 # Pin the relevant route controls, without disabling memory/watchdog guards.
@@ -291,9 +305,10 @@ puts({event: "config", model: model, device: ML::Metal::Device.instance.name, la
       prefix: prefix_count, append: append_count, generation: generation, capacity: capacity,
       fixture: prompt_path ? "chat_prompt_file_no_thinking" : "raw_code_completion_fixed_token_count", prompt_path: prompt_path,
       tokens_sha256: Digest::SHA256.hexdigest(tokens.join(",")),
-      comparator: partial ? "rows_partial_group_guard" : "default_sg4", ecs_basis: "token_embd.weight",
+      comparator: compare_down_add ? "flash_d256_down_add_off" : (partial ? "rows_partial_group_guard" : "default_sg4"), ecs_basis: "token_embd.weight",
       timing_contract: "full_width_last_hidden_plus_full_gpu_logits_fenced", warmup: warmup, reverse: reverse, control: control,
       profile: profile, profile_controls: profile_controls(profile), profile_scope: "append_only_not_prefix_or_decode",
+      experiment: compare_down_add ? "q6_ffn_down_add" : "flash_attention", baseline_flash: compare_down_add,
       state_atol: STATE_ATOL, state_rtol: STATE_RTOL, logit_atol: LOGIT_ATOL, logit_cosine_min: LOGIT_COS,
       teacher_ecs_min: TOKEN_ECS_MIN, state_gate: "conservative_value_equivalence_not_semantic_quality",
       ranked_top2_is_diagnostic: true}.to_json)
@@ -305,7 +320,8 @@ begin
     [false, true].each do |flash|
       state, _ = prefill_prefix(weights, prefix, capacity)
       begin
-        append_logits(weights, state, appended, prefix_count, flash && !control, profile, flash ? "warmup_candidate" : "warmup_baseline")
+        flash_mode, down_add = experiment_arm(flash, control, compare_down_add)
+        append_logits(weights, state, appended, prefix_count, flash_mode, profile, flash ? "warmup_candidate" : "warmup_baseline", down_add)
       ensure
         release_state(state)
       end
@@ -321,7 +337,8 @@ begin
   cand_logits = [] of Float32
   base_ms = cand_ms = 0.0
   (reverse ? [true, false] : [false, true]).each do |flash|
-    logits, ms = append_logits(weights, flash ? candidate : baseline, appended, prefix_count, flash && !control, profile, flash ? "candidate" : "baseline")
+    flash_mode, down_add = experiment_arm(flash, control, compare_down_add)
+    logits, ms = append_logits(weights, flash ? candidate : baseline, appended, prefix_count, flash_mode, profile, flash ? "candidate" : "baseline", down_add)
     if flash
       cand_logits, cand_ms = logits, ms
     else
@@ -366,7 +383,8 @@ begin
   states.clear
   free, _ = prefill_prefix(weights, prefix, capacity)
   states << free
-  free_logits, _ = append_logits(weights, free, appended, prefix_count, !control, profile, "free_candidate")
+  flash_mode, down_add = experiment_arm(true, control, compare_down_add)
+  free_logits, _ = append_logits(weights, free, appended, prefix_count, flash_mode, profile, "free_candidate", down_add)
   free_ids = [] of Int32
   generation.times do |step|
     id = QM.top2(free_logits).first_id

@@ -3003,6 +3003,7 @@ module ML
           Profile.bump_matmul_shape("#{route} #{qw.type.name} #{in_dim}x#{out_dim} b#{batch}#{profile_route_tag(qw)}", qw.raw.size.to_i64)
 
           if q56_batch_gemm_enabled? && qw.type.q6_k? && batch > GEMM_BATCH_THRESHOLD
+            Profile.bump_route_marker("q6_gemm_add")
             encode_q56k_gemm_f32_add(enc, mm6_f32out_add_pipeline, x_buf, residual_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
           elsif batch <= GEMM_BATCH_THRESHOLD && (add_pipe = gemv_add_pipeline_for(qw))
             encode_gemv_add(enc, add_pipe, x_buf, residual_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch, profile_shape: false)
@@ -3109,6 +3110,7 @@ module ML
           return false unless q56_batch_gemm_enabled? && qw.type.q6_k? && batch > GEMM_BATCH_THRESHOLD
 
           Profile.bump_matmul_shape("q6_gemm_add #{qw.type.name} #{in_dim}x#{out_dim} b#{batch}", qw.raw.size.to_i64)
+          Profile.bump_route_marker("q6_gemm_add")
           encode_q56k_gemm_f32_add_from_h16(enc, mm6_f32out_add_pipeline, x16_buf, residual_buf, out_buf, w_buf, w_offset, in_dim, out_dim, batch)
           true
         end

@@ -14,6 +14,8 @@ with bounded coding-smoke evidence; automatic continuation admission and
 general full-model quality remain guard-only. Tile-local causal block skipping
 is operator-verified with unchanged coding-smoke outputs; its whole-model
 speed gate remains open: completed guarded repeats do not establish a gain.
+Existing Q6 FFN down/add fusion remains opt-in: the bounded P256/T512 append
+comparison preserves values but does not establish a speedup.
 Bounded context: reusable Qwen 3.5/3.8 inference consumed by `cogni-ml` CLIs and
 resident services such as Cogniformerus `cfmodeld`
 
@@ -905,3 +907,87 @@ and the terminal/continuing-command falsifier support a ROBUST verdict for
 this profiling-lifetime fix; global speed and general numerical equivalence
 remain VULNERABLE claims. Coarse-phase terminal routing is source-reviewed,
 not separately exercised by a full-model coarse-only run.
+
+### Existing Q6 FFN down/add: exact bounded control, no speed promotion (2026-09-07)
+
+Predeclared hypothesis: opt-in `QWEN35_PREFILL_FFN_DOWN_ADD_FUSED=1` may reduce
+current 27B/P256/T512 append wall time. LM-410 refuted this as a primary lever
+on an older 9B/pp1024 baseline; do not forget or generalize away that result.
+Use Flash on in both arms, change down/add only in candidate append, preserve
+prefix/decode controls, measure executed Q6-add routes and retain strict state,
+teacher top2/ECS and free-generation gates. Start with one quality falsifier;
+only if it passes run bounded fresh-process ABBA. Keep 35% free memory,
+24GiB cap, sequential runs and current cooldowns. No kernel/default/cache or
+queue changes. A neutral/regressing result rejects further down/add promotion
+in this slice; a positive row alone cannot change production admission.
+
+The quality preflight passed, followed by four fresh paired processes in the
+predeclared AB/BA/BA/AB order. A is down/add off, B is on; Flash executes in
+both. Each process warms both modes, reconstructs independent prefix states,
+measures full-width append plus fenced full logits, then checks 16 teacher
+tokens and a fresh free-generation state. Profiling stays off. This is an
+F16 nonadaptive raw completion fixture, not terminal-row pp or adaptive KV.
+
+| Pair | Order | A append ms | B append ms | Throughput change A/B - 1 |
+| --- | --- | ---: | ---: | ---: |
+| 1 | AB | 3915.488000 | 3757.946708 | +4.192% |
+| 2 | BA | 4083.904333 | 4244.918125 | -3.793% |
+| 3 | BA | 4098.755959 | 4321.906291 | -5.163% |
+| 4 | AB | 3886.172625 | 3703.938209 | +4.920% |
+
+Pair means are A 3996.080229ms and B 4007.177333ms: throughput -0.277%,
+time +0.278%, paired median throughput +0.200%, two wins out of four.
+The preliminary quality run (3856.386416/3673.496084ms, apparent +4.979%)
+is excluded from those means. The sign tracks measured order; fixed warmup
+and prefix-creation order plus uncontrolled host noise remain confounders.
+Neither a speedup nor a statistically resolved slowdown is established.
+
+All five processes exit0 without guard termination. Every append reports
+16 Flash dispatches and 31 Q6-add routes when enabled versus zero when off.
+This proves the selected route executed, not coverage of all 63 FFN-down
+projections. All checked live K/V, convolution and SSM values match exactly
+at common prefix, after append (768 tokens), and after teacher (783 tokens).
+All compared logits have max_abs=0; top1 is 16/16, ordered top2 32/32, token
+embedding cosine minimum 1.0. Independent free IDs and text match across
+all processes. The short text starts ` seen = set()` and ends
+`for value in values:`; it is unfinished, EOS was not reached, and no external
+coding scorer ran. This does not resolve the separate Flash-versus-SG4 strict
+state mismatch or certify general coding quality.
+
+Reproduce with the preceding release-build/link recipe and:
+`scripts/run_safe.sh <probe> 180 24576 --model <Qwen3.8-27B-Q4_K_M.gguf>
+--prefix 256 --append 512 --gen 16 --warmup --compare-ffn-down-add`, adding
+`--reverse` for BA. Preserve the preceding runner environment: no quiet wait,
+35% minimum free memory, sequential workloads, no concurrent compilation or
+foreign-process interference. The probe pins chunk2048/group1/cooldown50ms.
+Device: Apple M2 Max; Crystal 1.21.0/LLVM22.1.8; token SHA256
+`5b3bcbe45fbd2fdaa78a5454ccbf671d9e31607189e50fb3aaea55e7e91b9c06`.
+Temporary evidence: `/private/tmp/qwen-ffn-downadd.hNj4mb/`, `gate.log`,
+`ab1.log`, `ba1.log`, `ba2.log`, `ab2.log`, and `analyze.py` (checks routes,
+order, guard completion, cross-run quality, and excludes gate from means).
+Timing binary SHA256:
+`dd9e6404715f9b66dbefea0f542dd3382565234a0b59603d42361109cc4bfdba`;
+bridge SHA256 remains
+`48bb1469e2a473d30a94ab102df91268d549a4dd3710b076a0e59d137691005a`.
+The timing binary retained the old `comparator=default_sg4` label; its explicit
+`experiment=q6_ffn_down_add`, `baseline_flash=true`, and every append's Flash
+route fields establish the actual comparator. After the batch, only that
+label and the self-test success text changed; the corrected comparator is
+`flash_d256_down_add_off`. The final release binary SHA256 is
+`93b1f212ada3e00eae0ed17cf093e3e5574ccd3c540c514011cf1f0269fa80ac`;
+its no-model self-test passes and `--compare-ffn-down-add --append 65` rejects
+the unsupported shape before model loading. Final format/diff checks pass.
+The first final rebuild lost its prior temporary Crystal cache directory;
+a fresh isolated cache rebuild passed. No model workload ran during builds.
+Temporary files can expire; tracked probe/fixture and arguments are the rebuild
+path. DoD is the release build/self-test, bounded-shape rejection, five completed
+route/quality checks, predeclared four-pair comparison, and format/diff checks.
+
+Decision: keep the existing fusion disabled by default; retain only the
+bounded comparator and two executed-route markers. No kernel, precision,
+scheduler, cache layout or default changes. Source audit and executed gates
+support ROBUST scoped route attribution and sampled value equivalence;
+a speedup claim is VULNERABLE. Refresh on source/model/device/toolchain,
+workload or scheduling changes. Next falsifier starts from FFN up/gate GEMM
+dataflow versus llama.cpp at the same shape, not another broad tile switch:
+LM-1042 already rejected Q6 SG8-B128 with a raw-F32 rounding epilogue.
