@@ -27554,3 +27554,29 @@ Refresh after source/toolchain/device/model/workload changes.
   versus llama.cpp, accounting for earlier refutations; LM-1042 already rejects
   naive Q6 SG8-B128/raw-F32 plus rounding-epilogue reuse on this device.
   Refresh after source/model/device/toolchain/workload/scheduling changes.
+
+### LM-1055 — Q4 SG8-B128 single-buffer staging loses the bounded FFN pair gate
+
+- Local llama.cpp non-tensor Metal uses 64x32 / 6-KiB staging; our current
+  64x128 path already reuses weights over more rows and fuses up+SwiGLU after
+  a separate gate. This source comparison is not a runtime speed certificate.
+- Reopened the older single-buffer negative only for the changed B128 footprint:
+  24 KiB baseline versus 12-KiB gate / 16-KiB fused candidate, identical MMA
+  order and explicit full-threadgroup read-before-overwrite barrier.
+- Final real blk.0 Q4 gate/up 5120x17408, row-varying H16 input, M2 Max,
+  batches 256/512/1024/2048, five warmup and ten measured ABBA cycles: gate+up
+  command median time increases 12.452/15.184/8.427/10.496%; candidate wins
+  2/0/0/0 of ten. Alternative cycle-mean aggregation also rejects. Initial
+  repeating-row measurements are superseded, not combined with final data.
+- Finite F32 gate and H16 output bits match throughout all final runs; NaN
+  poisoning and source/value negative controls are qualified. Headroom remains
+  704 regular / 832 fused, unchanged by candidate. All guarded runs exit0;
+  memory floor 35%, 4-GiB process cap, no full model or foreign process changes.
+- Retain only `bin/qwen35_q4_b128_single_buffer_probe.cr` as an isolated
+  reproducible falsifier; production shaders/defaults are unchanged. Detailed
+  commands, hashes, raw-log pointers and scoped DoD are in
+  `docs/qwen35-engine-frontier.md`, "Q4 SG8-B128 staging falsifier".
+- ROBUST bounded rejection, not general model quality or pp/tg evidence.
+  Stop single-buffer retuning without a new hardware/compiler/bottleneck
+  premise. Other FFN opportunities remain unproven, not exhausted. Refresh
+  after source/model/input/device/toolchain/scheduling changes.

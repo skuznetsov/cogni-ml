@@ -16,6 +16,8 @@ is operator-verified with unchanged coding-smoke outputs; its whole-model
 speed gate remains open: completed guarded repeats do not establish a gain.
 Existing Q6 FFN down/add fusion remains opt-in: the bounded P256/T512 append
 comparison preserves values but does not establish a speedup.
+Q4 SG8-B128 single-buffer staging is measured-red in the isolated FFN pair
+falsifier; production staging and all dispatch defaults remain unchanged.
 Bounded context: reusable Qwen 3.5/3.8 inference consumed by `cogni-ml` CLIs and
 resident services such as Cogniformerus `cfmodeld`
 
@@ -991,3 +993,119 @@ a speedup claim is VULNERABLE. Refresh on source/model/device/toolchain,
 workload or scheduling changes. Next falsifier starts from FFN up/gate GEMM
 dataflow versus llama.cpp at the same shape, not another broad tile switch:
 LM-1042 already rejected Q6 SG8-B128 with a raw-F32 rounding epilogue.
+
+### Q4 SG8-B128 staging falsifier (2026-09-07, predeclared)
+
+Hypothesis, not an admitted speed claim: keeping the current 64x128 tile and
+MMA order while reducing double-buffered staging from 24 KiB to 12 KiB for
+gate and 16 KiB for up+SwiGLU may improve occupancy enough to pay for an extra
+threadgroup barrier per K iteration. The fused epilogue still needs 16 KiB.
+This is ordinary kernel staging, not LTP/WBA. Compiler maximum launch threads
+are a resource warning signal, not an occupancy measurement.
+
+The local llama.cpp non-tensor Metal path uses a 64x32 tile with 6 KiB staging
+for complete tiles (`ggml-metal-device.cpp`, `get_pipeline_mul_mm`;
+`ggml-metal.metal`, `kernel_mul_mm`). Our path already reuses a weight tile over
+128 input rows and fuses up with SwiGLU, after a separate gate GEMM. Neither
+fact establishes a speed advantage. Earlier single-buffer Q4 F32 and H16
+experiments were negative (LM-prefill-Q4-SINGLE-BUFFER-FALSIFIER and
+decision_update_203); the changed 24-KiB B128 staging footprint is the only
+reason to reopen this bounded operator experiment. Full F16 weight expansion,
+per-thread quant caching and epilogue micro-barriers remain rejected by their
+existing falsifiers, not silently retried here.
+
+Risk: CAUTION, experimental synchronization. Keep the full-threadgroup barrier
+before overwriting the shared K tile, the existing barrier after publishing
+that tile, exact accumulator order, F32 gate boundary and H16 SwiGLU rounding.
+No production source, cache/state lifetime, queue depth or precision changes.
+Rollback is to discard the probe variant; the default engine is untouched.
+
+DoD: build a standalone probe; qualify its source-transform and value checker
+with negative controls; compile baseline/candidate regular and fused pipelines
+without dispatch; reject reduced maximum-launch-thread headroom. Only then run
+fresh, sequential guarded processes for batches 256/512/1024/2048, with the
+same actual Qwen3.8-27B Q4_K gate/up tensors (5120x17408), deterministic H16
+inputs, five warmups and ten balanced ABBA cycles per batch. Check every finite
+F32 gate and H16 activation bit before and after timing. The primary timing is
+the GPU interval of both dispatches in one command, not host phase wait time.
+Record source/tensor digests and all cycle times. Reject a batch for nonpositive
+timings, any mismatch, launch-resource regression or guard termination.
+
+Predeclared continuation gate: at least 7.5% reduction in pair median GPU time
+and at least 8/10 balanced-cycle wins at both 512 and 1024, with no >3% median
+regression at 256 or 2048. Passing admits only a later whole-append A/B candidate,
+never a default or whole-model speed claim. Otherwise stop this staging route.
+Use `scripts/run_safe.sh <probe> 120 4096`, the 35% free-memory floor, no quiet
+wait under standing user authority, and no concurrent compilation or model
+workloads. The runner cannot cancel an already executing Metal kernel; static
+uniform-barrier review and small bounded buffers remain necessary guards.
+
+#### Result: reject single-buffer staging, retain the bounded falsifier
+
+Final row-varying fixture, Apple M2 Max, Qwen3.8-27B Q4_K_M, one fresh process
+per batch, five ABBA warmup cycles and ten measured ABBA cycles:
+
+| Batch | Baseline gate+up median ms | Single-buffer median ms | Time increase | Candidate cycle wins |
+| --- | ---: | ---: | ---: | ---: |
+| 256 | 10.659229 | 11.986563 | 12.452% | 2/10 |
+| 512 | 20.468833 | 23.576896 | 15.184% | 0/10 |
+| 1024 | 41.338833 | 44.822292 | 8.427% | 0/10 |
+| 2048 | 81.883375 | 90.477583 | 10.496% | 0/10 |
+
+Here "pair" means the two FFN dispatches in one GPU command. Each median uses
+20 such command intervals per arm, not the median of ten ABBA cycle means.
+The latter alternative aggregation also rejects: time increases are
+7.217/13.912/8.429/10.504%, respectively. Independent Python recomputation
+checks all raw cycles, summary arithmetic, tensor/source identities, headroom,
+quality fields and successful runner exits. This is operator time, not pp/tg,
+full-append speed, an occupancy counter, or a current llama.cpp runtime score.
+
+Every checked finite F32 gate and H16 activation matches bitwise before and
+after timing, including fresh NaN-poisoned reruns in reverse order. Per output
+type, checked element counts are 4,456,448 / 8,912,896 / 17,825,792 / 35,651,584.
+Host negative controls detect source mutation, corruption, NaN and unwritten
+all-zero results. Maximum launch threads remain 704/704 for gate and 832/832
+for fused up. All four final guarded processes exit0; no guard is weakened.
+No full-model generation, top1/top2/ECS or coding scorer ran in this slice;
+operator equivalence on one layer and deterministic inputs is not model-wide
+quality evidence. The extra barriers are a plausible explanation for the loss,
+not measured causal attribution. No new production route is admitted.
+
+The first compile exposed character-index versus byte-slice extraction of
+UTF-8 shader text; byte-index extraction and a boundary assertion fix the
+probe. The first completed sweep used repeating input rows and is superseded
+by the final high-LCG-bit fixture, whose first two rows are checked distinct.
+Both sweeps lost; only the final sweep appears in the table. Both tensor
+metadata entries now validate before either payload is read. A missing
+advisory environment marker rejected an initial invocation before Metal/model
+work; it is not an actual containment credential, and the runner does not set
+it automatically.
+
+Rebuild `bin/qwen35_q4_b128_single_buffer_probe.cr` with Crystal 1.21.0,
+`--release`, a fresh `CRYSTAL_CACHE_DIR`, and the bridge link recipe above.
+Run `--self-test`; `--self-test --batch=257` must reject before model/Metal.
+Run `--compile-only` under the guarded runner, then `--run --batch=N` in four
+sequential fresh processes. Set `COGNI_RUN_SAFE_ACTIVE=1` (advisory),
+`COGNI_RUN_SAFE_REQUIRE_QUIET=0`, `COGNI_RUN_SAFE_WAIT_QUIET_SEC=0`,
+`COGNI_RUN_SAFE_MIN_FREE_PCT=35`, `RUN_SAFE_PASSTHROUGH_STDIO=1`; keep the
+120-second / 4096-MiB runner caps. Source hashes emitted by every process:
+baseline `1167773b32064b8983d93b6850d7feabe919017b98a350a5aa7ca8dd7d8839e5`,
+candidate `97b5b0605b7081ac485dc8c70340880f527af886bba44987167b75f5577102db`.
+Final binary SHA256:
+`38b39fabec60861d34f62c67f0207190f9259b0d3bf82c7e31ba5ba27ae25ed4`.
+Bridge SHA256 remains `48bb1469e2a473d30a94ab102df91268d549a4dd3710b076a0e59d137691005a`.
+Each of the two metadata-only tensor payloads is 50,135,040 bytes; their
+digests and deterministic input digests are emitted by the tracked probe.
+Temporary evidence: `/private/tmp/qwen-b128-staging.0e44Tv/`, final `b256.log`,
+`b512.log`, `b1024.log`, `b2048.log`, `compile.log`, `analyze.py`; `initial-*`
+logs are superseded. Temporary files may expire; the probe is the rerun path.
+
+Adversary: ROBUST for this bounded negative gate and sampled value comparison;
+VULNERABLE as any global performance/quality claim. Source review confirms
+uniform barriers before alias overwrite and unchanged ordinary-encoder
+gate-to-up dependencies. Final self-test, shape rejection, format and diff
+checks pass. Keep double buffering; do not retry staging-memory reduction
+without a changed hardware/compiler or measured bottleneck premise. Remaining
+FFN up/gate opportunities are unproven; this does not establish that all
+optimization routes are exhausted. Refresh on kernel/model/input/device,
+compiler/driver or scheduling changes.
