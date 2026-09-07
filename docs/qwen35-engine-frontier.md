@@ -814,3 +814,94 @@ in this slice. Next useful move is phase-level attribution of the full append
 before another optimization; terminal-row-only output remains a candidate,
 not an established bottleneck. Refresh on source/toolchain/device/model or
 workload changes. No LTP/WBA or automatic-admission claim.
+
+### Full append attribution and profiling command lifetime (2026-09-07)
+
+The next bounded slice adds `--profile off|boundary|detail` to
+`bin/qwen35_flash_prefix_model_probe.cr`; default `off` leaves the existing
+route controls unchanged. Profiles cover append only, not prefix or decode.
+Boundary mode retains shared commands and labels GPU intervals on stderr with
+same-stream begin/end markers (the safe runner captures stderr separately).
+Detail mode deliberately splits commands, waits per phase, uses CPU embedding
+and removes shared-command rotation cooldowns. Its faster wall time is **not
+an inference speedup**. Trace times are nested host wall time; phase waits are
+host commit/wait, not kernel GPU timestamps. Never add GPU time to host waits.
+
+Before accepting the profile, the first detail process stalled on its fourth
+append. A stack sample localized the stall to native command creation, not a
+GPU completion wait. Explicitly discarding unused terminal successors did
+not resolve it in a bounded retry. A no-model test with GC disabled stalled
+at the 65th create/discard command; 80 create/commit/wait commands completed.
+This is evidence for command-slot retention, not a model-memory shortage;
+native autorelease timing is an explanation, not a measured internal cause.
+
+The fix avoids creating a successor after the final recurrent FFN checkpoint,
+both in recurrent-only and full+recurrent detail paths, and after the last
+coarse full+recurrent phase. Intermediate checkpoints still allocate their
+required successor. The final command has completed before output copy/read.
+Non-profiled command scheduling, kernels and numerical policies are unchanged.
+`spec/qwen35_prefill_phase_lifecycle_spec.cr` exercises 80 terminal checkpoints
+and a continuing-to-terminal pair without loading a model: 2 examples pass.
+
+Scope: Qwen3.8-27B Q4_K_M, M2 Max, Crystal 1.21.0/LLVM 22.1.8,
+raw P256/T512, gen2, warmed five-append process. A boundary-mode candidate
+measured 4087.050ms hidden-call wall plus 3.898ms head/final fence. Its 16
+shared commands summed to 7.388ms host encode, 3211.885ms submit/wait and
+3195.532ms GPU intervals. Source policy adds 16 configured 50ms pauses
+(800ms inferred from route/count, not independently measured sleep time).
+These intervals cover 63 grouped layers; the last standalone full layer and
+head are outside the grouped GPU sum.
+
+The completed post-fix detail candidate gives these phase host-wait sums:
+
+| Phase | Calls | Wait ms |
+| --- | ---: | ---: |
+| FFN up/gate + activation | 63 | 1194.99 |
+| FFN down | 63 | 649.62 |
+| Recurrent input projections | 48 | 474.46 |
+| Recurrent post/O projection | 48 | 189.50 |
+| Full-attention QKV | 15 | 123.88 |
+| DeltaNet | 48 | 81.33 |
+| Full-attention O projection | 15 | 58.36 |
+| Recurrent preparation | 48 | 47.12 |
+| Flash attention | 15 | 22.69 |
+
+This is a bottleneck hypothesis under diagnostic scheduling, not hardware
+counter attribution or a global speed certificate. The existing fused
+`q4_h16_b128_sg8_swiglu_h16` route already serves the 63 up/gate calls;
+do not propose that fusion as new. FFN GEMM is the next optimization target,
+before further attention-only work. Head pruning has little support here.
+
+Off, boundary and completed detail runs have identical emitted state and
+teacher records and identical non-timing summaries: top1 2/2, ranked top2
+4/4, ECS 1, matching IDs `[3753, 283]` and text ` seen =`. The existing strict
+state diagnostic remains red; completed model runs exit1 on that diagnostic,
+not a timeout. No general coding, EOS, state-byte or adaptive-QBit claim.
+
+Reproduction: release-build the probe with `build/bridge.o` and
+`-framework Metal -framework Foundation -lc++`; run `--self-test`, then
+`scripts/run_safe.sh <probe> 180 24576 --model <Qwen3.8-27B-Q4_K_M.gguf>
+--prefix 256 --append 512 --gen 2 --warmup --profile detail`. Set
+`COGNI_RUN_SAFE_REQUIRE_QUIET=0`, `COGNI_RUN_SAFE_WAIT_QUIET_SEC=0`,
+`COGNI_RUN_SAFE_MIN_FREE_PCT=35`, `RUN_SAFE_PASSTHROUGH_STDIO=1`.
+Boundary/off controls used 600s originally; final checks use 180s. Runs are
+sequential, no concurrent compilation or interference with foreign processes.
+Temporary evidence: `/private/tmp/qwen-append-profile.bNoKlm/`, logs `off.log`,
+`boundary-final.log`, `detail-no-tail.log`; rejected attempts `detail.log`,
+`detail-fixed.log`, stack `detail-sample.txt`, no-model `tail-{discard,commit}.log`.
+Final-binary shared-command regression `boundary-no-tail.log` also completes
+all five appends with identical non-timing diagnostics (candidate 3726.286ms,
+including 3.834ms head/fence). This extra row is not a balanced speed trial.
+Final binary `probe-no-tail` SHA256:
+`c4682d0d34380406a6c20c8de2662ff999ab351dcf6eab37052088cfd63a9a97`;
+bridge SHA256 unchanged from the preceding section. Temporary artifacts may
+expire; tracked source and arguments are the rebuild path. Rollback: keep
+profiling off; do not restore unused terminal command allocations. Refresh
+on source, model, device, toolchain, workload or scheduling-policy changes.
+DoD: release build and no-model self-test, unknown-mode rejection before model
+loading, two lifecycle specs, completed detail/shared-command runs, exact
+non-timing diagnostic comparison and format/diff checks pass. Source audit
+and the terminal/continuing-command falsifier support a ROBUST verdict for
+this profiling-lifetime fix; global speed and general numerical equivalence
+remain VULNERABLE claims. Coarse-phase terminal routing is source-reviewed,
+not separately exercised by a full-model coarse-only run.

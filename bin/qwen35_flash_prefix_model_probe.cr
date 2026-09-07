@@ -141,24 +141,65 @@ rescue ex
   raise ex
 end
 
-private def append_logits(weights : ML::GGUF::Qwen35Weights, state : CPU::State, ids : Array(Int32), prefix : Int32, flash : Bool)
+private def profile_controls(mode : String) : Hash(String, String)
+  case mode
+  when "off"
+    {} of String => String
+  when "boundary"
+    {"QWEN35_PREFILL_BOUNDARY_PROFILE" => "1"}
+  when "detail"
+    # Phase checkpoints only execute without a shared append command. This
+    # also switches embedding to CPU and removes shared-command rotation
+    # cooldowns. Neither wall time nor phase waits are kernel GPU times.
+    {"QWEN35_PREFILL_APPEND_CMD_OFF"      => "1",
+     "QWEN35_PREFILL_PHASE_PROFILE"       => "1",
+     "QWEN35_PREFILL_FULL_DETAIL_PROFILE" => "1"}
+  else
+    raise ArgumentError.new("profile must be off, boundary, or detail")
+  end
+end
+
+private def append_logits(weights : ML::GGUF::Qwen35Weights, state : CPU::State, ids : Array(Int32), prefix : Int32, flash : Bool, profile : String, label : String)
+  controls = profile_controls(profile)
+  controls.each { |key, value| ENV[key] = value }
   ENV["QWEN35_PREFILL_ATTN_FLASH_D256"] = flash ? "1" : "0"
   GPU::Profile.reset
   GPU::Profile.enable!
   ML::Metal::Device.synchronize
+  unless profile == "off"
+    puts({event: "append_profile_begin", label: label, mode: profile, flash: flash}.to_json)
+    STDOUT.flush
+  end
+  # The safe runner captures stderr separately. Delimit its boundary samples
+  # on that same stream; stdout ordering cannot associate them with an append.
+  STDERR.puts("qwen35_append_profile_begin label=#{label}") if profile == "boundary"
   started = Time.instant
   hidden = CPU.prefill_tokens_last_hidden(weights, ids, prefix, state)
+  hidden_finished = Time.instant
   logits = GPU.rmsnorm_project(hidden, weights.output_norm, weights.output, weights.hparams.rms_eps)
   raise "full-logit GPU head unavailable" unless logits
   ML::Metal::Device.synchronize
   elapsed = (Time.instant - started).total_milliseconds
   count = GPU::Profile.route_count("prefill_attn_flash_d256")
-  puts({event: "append", flash: flash, prefix_tokens: prefix, actual_prefill_rows: ids.size,
+  puts({event: "append", label: label, profile: profile, flash: flash, prefix_tokens: prefix, actual_prefill_rows: ids.size,
         flash_dispatches: count, wall_ms: elapsed}.to_json)
+  unless profile == "off"
+    hidden_ms = (hidden_finished - started).total_milliseconds
+    puts({event: "append_profile", label: label, mode: profile, flash: flash,
+          scheduling_perturbed: profile == "detail", hidden_call_wall_ms: hidden_ms,
+          diagnostic_perturbations: profile == "detail" ? ["split_commands_and_phase_waits", "cpu_embedding", "no_shared_command_rotation_cooldowns"] : [] of String,
+          head_and_final_fence_wall_ms: elapsed - hidden_ms,
+          trace_clock: "host_wall_nested_not_additive",
+          group_wait_clock: "host_commit_wait_not_gpu_kernel_time",
+          boundary_clock: profile == "boundary" ? "completed_command_gpu_interval_on_stderr" : "not_collected",
+          report: GPU::Profile.report_io}.to_json)
+  end
   raise "wrong executed Flash route count" unless route_ok?(count, flash, weights.hparams.full_attention_layers.size)
   {logits, elapsed}
 ensure
   GPU::Profile.disable!
+  controls.try &.each_key { |key| ENV.delete(key) }
+  STDERR.puts("qwen35_append_profile_end label=#{label}") if profile == "boundary"
 end
 
 private def self_test
@@ -172,7 +213,17 @@ private def self_test
   raise "route self-test failed" unless route_ok?(16_i64, true, 16) && !route_ok?(0_i64, true, 16)
   raise "half decoder self-test failed" unless half_value(0x3c00_u16) == 1.0 && half_value(0xbc00_u16) == -1.0 && half_value(0x0001_u16) == 2.0 ** -24 && half_value(0x7e00_u16).nan?
   raise "top2 self-test failed" unless QM.top2([1.0_f32, 2.0_f32, 0.0_f32]).first_id == 1
-  puts "self_test=PASS (equal, perturbed, nonfinite, route, half decoder, top2)"
+  raise "profile off changed controls" unless profile_controls("off").empty?
+  raise "boundary profile changed scheduling controls" unless profile_controls("boundary") == {"QWEN35_PREFILL_BOUNDARY_PROFILE" => "1"}
+  raise "detail profile did not opt into split commands" unless profile_controls("detail")["QWEN35_PREFILL_APPEND_CMD_OFF"] == "1" && profile_controls("detail").size == 3
+  rejected = false
+  begin
+    profile_controls("typo")
+  rescue ArgumentError
+    rejected = true
+  end
+  raise "unknown profile accepted" unless rejected
+  puts "self_test=PASS (equal, perturbed, nonfinite, route, half decoder, top2, profile controls)"
 end
 
 model = ENV["QWEN35_MODEL"]? || "#{ENV["HOME"]}/.cache/lm-studio/models/lmstudio-community/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf"
@@ -183,6 +234,7 @@ warmup = false
 reverse = false
 test_only = false
 control = false
+profile = "off"
 prompt_path = nil.as(String?)
 OptionParser.parse do |p|
   p.on("--model PATH", "GGUF path") { |v| model = v }
@@ -193,6 +245,7 @@ OptionParser.parse do |p|
   p.on("--reverse", "Measure candidate before baseline") { reverse = true }
   p.on("--self-test", "No-model comparator qualification") { test_only = true }
   p.on("--control", "A/A control: keep Flash off in candidate too") { control = true }
+  p.on("--profile MODE", "off (default), boundary (shared commands), detail (perturbed split-command waits)") { |v| profile_controls(v); profile = v }
   p.on("--prompt-file PATH", "Chat coding prompt; derive append length, stop at EOS") { |v| prompt_path = v }
   p.on("--help", "Show help") { puts p; exit }
 end
@@ -240,6 +293,7 @@ puts({event: "config", model: model, device: ML::Metal::Device.instance.name, la
       tokens_sha256: Digest::SHA256.hexdigest(tokens.join(",")),
       comparator: partial ? "rows_partial_group_guard" : "default_sg4", ecs_basis: "token_embd.weight",
       timing_contract: "full_width_last_hidden_plus_full_gpu_logits_fenced", warmup: warmup, reverse: reverse, control: control,
+      profile: profile, profile_controls: profile_controls(profile), profile_scope: "append_only_not_prefix_or_decode",
       state_atol: STATE_ATOL, state_rtol: STATE_RTOL, logit_atol: LOGIT_ATOL, logit_cosine_min: LOGIT_COS,
       teacher_ecs_min: TOKEN_ECS_MIN, state_gate: "conservative_value_equivalence_not_semantic_quality",
       ranked_top2_is_diagnostic: true}.to_json)
@@ -251,7 +305,7 @@ begin
     [false, true].each do |flash|
       state, _ = prefill_prefix(weights, prefix, capacity)
       begin
-        append_logits(weights, state, appended, prefix_count, flash && !control)
+        append_logits(weights, state, appended, prefix_count, flash && !control, profile, flash ? "warmup_candidate" : "warmup_baseline")
       ensure
         release_state(state)
       end
@@ -267,7 +321,7 @@ begin
   cand_logits = [] of Float32
   base_ms = cand_ms = 0.0
   (reverse ? [true, false] : [false, true]).each do |flash|
-    logits, ms = append_logits(weights, flash ? candidate : baseline, appended, prefix_count, flash && !control)
+    logits, ms = append_logits(weights, flash ? candidate : baseline, appended, prefix_count, flash && !control, profile, flash ? "candidate" : "baseline")
     if flash
       cand_logits, cand_ms = logits, ms
     else
@@ -312,7 +366,7 @@ begin
   states.clear
   free, _ = prefill_prefix(weights, prefix, capacity)
   states << free
-  free_logits, _ = append_logits(weights, free, appended, prefix_count, !control)
+  free_logits, _ = append_logits(weights, free, appended, prefix_count, !control, profile, "free_candidate")
   free_ids = [] of Int32
   generation.times do |step|
     id = QM.top2(free_logits).first_id

@@ -3323,7 +3323,8 @@ module ML
 
         private def self.prefill_phase_checkpoint(cmd : ML::Metal::CommandBuffer,
                                                   label : String,
-                                                  started_at : Time::Instant) : {ML::Metal::CommandBuffer, Time::Instant}
+                                                  started_at : Time::Instant,
+                                                  *, next_command : Bool = true) : {ML::Metal::CommandBuffer, Time::Instant}
           tenc = Time.instant
           cmd.commit
           cmd.wait
@@ -3332,7 +3333,9 @@ module ML
             (tenc - started_at).total_nanoseconds.to_i64,
             (twait - tenc).total_nanoseconds.to_i64,
             0_i64)
-          {ML::Metal::CommandBuffer.new, Time.instant}
+          # Do not allocate an unused terminal successor: releasing an
+          # uncommitted Metal command need not immediately return its queue slot.
+          {next_command ? ML::Metal::CommandBuffer.new : cmd, Time.instant}
         end
 
         private def self.small_q4_gemv_enabled? : Bool
@@ -6826,7 +6829,8 @@ module ML
             end
             if full_detail_profile
               checkpoint_name = fused_down_add ? "ffn_down_add" : "ffn_down"
-              checked = prefill_phase_checkpoint(cmd, "#{profile_label}.rec#{local_i}.#{checkpoint_name}", phase_t0)
+              checked = prefill_phase_checkpoint(cmd, "#{profile_label}.rec#{local_i}.#{checkpoint_name}", phase_t0,
+                next_command: local_i + 1 < layers.size)
               cmd = checked[0]
               phase_t0 = checked[1]
             end
@@ -6835,6 +6839,7 @@ module ML
           end
 
           if full_detail_profile
+            # The terminal checkpoint completed all work without a successor.
             if ob = output_buf
               ob.copy_from(src_buf, hidden_bytes)
             end
@@ -9282,7 +9287,8 @@ module ML
             end
             if full_detail_profile
               checkpoint_name = fused_down_add ? "ffn_down_add" : "ffn_down"
-              checked = prefill_phase_checkpoint(cmd, "#{profile_label}.rec#{local_i}.#{checkpoint_name}", phase_t0)
+              checked = prefill_phase_checkpoint(cmd, "#{profile_label}.rec#{local_i}.#{checkpoint_name}", phase_t0,
+                next_command: local_i + 1 < rec_layers.size)
               cmd = checked[0]
               phase_t0 = checked[1]
             end
@@ -9298,12 +9304,13 @@ module ML
                 (phase_tenc - phase_t0).total_nanoseconds.to_i64,
                 (phase_twait - phase_tenc).total_nanoseconds.to_i64,
                 0_i64)
-              cmd = ML::Metal::CommandBuffer.new
+              cmd = ML::Metal::CommandBuffer.new if local_i + 1 < rec_layers.size
               phase_t0 = Time.instant
             end
           end
 
           if phase_profile
+            # Both profiling modes finish with the last completed command.
             if ob = output_buf
               ob.copy_from(src_buf, hidden_bytes)
             end

@@ -27489,3 +27489,36 @@ claim. Stop repetitions here. Profile the full append's phase costs before
 the next optimization; terminal-row output is only a candidate. Earlier
 operator gain is not invalidated, but does not imply pp/tg or adaptive speed.
 Refresh after source/toolchain/device/model/workload changes.
+
+#### [LM-QWEN-APPEND-PROFILE-1053] Attribute FFN cost; eliminate terminal profiling command allocations
+**context:** Qwen3.8-27B Q4_K_M / M2 Max / P256 T512 / 2026-09-07
+
+- Probe now has off/boundary/detail modes. Default off preserves controls;
+  boundary keeps shared scheduling and labels stderr GPU intervals. Detail
+  splits commands, switches embedding to CPU and removes rotation cooldowns:
+  its lower wall time must not be promoted to inference speed.
+- Boundary candidate: 4087.050ms hidden call, 3.898ms head/fence; 16 grouped
+  commands sum 3195.532ms GPU and 7.388ms host encode. Configured 16x50ms
+  rotation waits are inferred from policy, not separately measured. Grouped
+  coverage excludes the final standalone full-attention layer and head.
+- First detailed process stalled in native CommandBuffer.new at append four;
+  explicit terminal discard retry did not fix it. No-model GC-disabled loop
+  stalls at create/discard number65, whereas commit/wait80 completes. Avoid
+  allocating unused terminal successors; leave all actual phase waits intact.
+  Native autorelease causation is inferred; default scheduling is unchanged.
+- Final detail completes five appends in ~31s, plus a final shared-command
+  regression completes. Off/boundary/detail state and teacher records and
+  non-timing summaries match exactly: top1 2/2, top2 4/4, ECS1, same free text.
+  Strict state diagnostic remains red/expected exit1, not semantic failure
+  closure. No broad coding, EOS, adaptive or global speed certificate.
+- Phase host waits: FFN up/gate1194.99ms + down649.62ms (63 layers), recurrent
+  projection474.46ms, Flash attention22.69ms (15 layers). Existing H16/SwiGLU
+  fusion already executes. Next narrow target: FFN GEMM, not more attention-only
+  tuning. Detail waits include host submission; nested traces are not additive.
+- Release build/self-test, 2 no-model Metal lifecycle specs, full-run route/
+  diagnostic comparisons and format/diff checks pass. Keep 35% free-memory
+  floor, 24GiB model cap, sequential workloads; do not touch foreign processes.
+  Reproduction, hashes and failed-attempt lineage are in the frontier section
+  "Full append attribution and profiling command lifetime". Rollback by keeping
+  profiling off; do not reintroduce terminal successor allocations. Refresh
+  after source/model/device/toolchain/workload/scheduling changes.
