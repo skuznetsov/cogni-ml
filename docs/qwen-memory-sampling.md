@@ -248,3 +248,85 @@ consumers keep their previous selected destination; H16 consumers retain their
 separate combined buffer. ROBUST for lazy setup selection under stable route
 configuration. End-to-end numerical parity and physical-memory improvement are
 not certified by the helper/source-order tests or metadata-only dry run.
+
+## Guarded lazy-allocation replay (2026-09-09)
+
+One fresh-process replay at source `0c314c19`, using the binary above, completed
+both calls with exit 0. The 35% free-memory floor, 24,576-MiB tree cap,
+300-second timeout, 2,048-row chunks, append group limit 1 and 50-ms cooldown
+were unchanged. Quiet preflight remained explicitly disabled as previously
+authorized. This is the ordinary F32 KV provider route, not adaptive QBit.
+No retry or additional GPU experiment was performed.
+
+At both the first chunk end and the second chunk's layer-loop index 0, the
+matched baseline/candidate comparison gives:
+
+| Counter | Baseline | Lazy allocation | Difference |
+| --- | ---: | ---: | ---: |
+| Scratch entries | 425 | 422 | -3 |
+| Scratch bytes | 3,561,280,512 | 3,133,461,504 | -427,819,008 |
+| Pipeline keys | 31 | 31 | 0 |
+
+Tracked live-buffer bytes and `MTLDevice.currentAllocatedSize` each decrease
+by the same **427,819,008 bytes (408 MiB)** at these boundaries. This matches
+the three-buffer prediction and reduces retained Scratch by 12.01%. These
+overlapping counters must not be added together or equated with an identical
+change in system free/resident memory.
+
+The first call processed 7,813 prompt tokens and produced 27 output tokens;
+the probe's captured first-output assertion passed. The second call reused
+7,839 cached tokens, processed a 196-token suffix, and produced 27 output tokens
+with `resident_prefix_hit=1`. Its content SHA256 was
+`ed251864987c367e9641fbdc89c1d83e9bf0fa2e3eecef8f301c79f619bfac81`, matching
+both previous successful `fresh-gpu` and `reuse-gpu` outputs in the baseline
+artifact directory; all three report an empty second-call tool list.
+The recorded tool result was replayed, not executed as an external tool.
+This probe does not measure top-2 or embedding cosine similarity.
+
+Launcher monotonic wall time was 100.667 seconds, including a fixed 7.1-second
+replay gap. Provider totals were 81.266 seconds and 11.633 seconds. There were
+50 external samples, zero collection errors, and a sampled minimum of 47%
+free memory. The process started at 80%, versus 72% in the guard-stopped
+baseline, so successful completion cannot be attributed solely to this change.
+This is not a balanced speed comparison or a general stability certificate.
+
+### Next discriminator: tail-size buffer retention
+
+| Chunk start | Logical rows | Pipeline keys | Scratch entries | Scratch bytes |
+| --- | ---: | ---: | ---: | ---: |
+| 0 | 2,048 | 31 | 422 | 3,133,461,504 |
+| 2,048 | 2,048 | 31 | 422 | 3,133,461,504 |
+| 4,096 | 2,048 | 31 | 422 | 3,133,461,504 |
+| 6,144 | 1,668 | 32 | 494 | 5,676,934,656 |
+
+Equal-size chunks do not grow retained Scratch. The 1,668-row tail adds
+2,543,473,152 bytes (2.369 GiB) and 72 entries, versus one pipeline key.
+The eight largest scratch tag groups each acquire a second size entry;
+each of the six visible FFN gate/up groups grows from 142,606,336 to
+258,752,512 bytes. This supports exact-size scratch duplication as the next
+target, rather than widespread per-length pipeline compilation. It does not
+exclude native compiler memory outside these counters.
+
+Next falsifier: audit a narrow capacity-reuse path that can serve 1,668 logical
+rows from existing 2,048-row buffers. Keep dispatch dimensions, strides,
+logical token counts, KV publication and DeltaNet steps correct for the actual
+rows; do not introduce padded tokens or unsafe aliases across pending commands.
+Require per-buffer bounds/lifetime checks and output/state parity before
+promotion. The whole 2.369 GiB is not yet certified recoverable. Later small
+constraint spans and the second call also create size variants; the last
+instrumented boundary has 6,022,161,112 Scratch bytes, not a post-decode snapshot.
+
+Evidence: `/private/tmp/qwen-ffn-lazy.IzgaS4/run_inventory.py`,
+`summarize.py`, `reuse-lazy-inventory-{dry,gpu}.{stdout.log,stderr.log}`,
+GPU `.samples.jsonl` and `.json`. Execute the pinned launcher with
+`python3 /private/tmp/qwen-ffn-lazy.IzgaS4/run_inventory.py --run`; it verifies
+the binary, input and source identities before invoking the guarded runner.
+Baseline inventory and successful output references remain under
+`/private/tmp/qwen-two-call.HVIZvS/`. These are local temporary artifacts, not
+a portable fixture; refresh if they disappear or source, model, device,
+toolchain, route or context changes.
+
+Adversary verdict: ROBUST for the matched allocation reduction and this
+two-call output/cache-hit replay. General speed, reboot prevention, adaptive
+KV behavior and capacity-reuse gains remain unproven. No allocation policy
+beyond the already committed lazy-selection change was modified in this run.
