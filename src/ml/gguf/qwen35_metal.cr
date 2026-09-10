@@ -9,6 +9,7 @@
 
 require "./reader"
 require "./qwen35_weights"
+require "json"
 
 {% unless flag?(:cpu_only) %}
   require "../metal/device"
@@ -20,6 +21,24 @@ require "./qwen35_weights"
 module ML
   module GGUF
     module Qwen35Metal
+      # Opt-in, same-owner-thread observation. No command submission, waits,
+      # device initialization, pool clearing, or allocation-policy changes.
+      def self.trace_memory(stage : String, start_pos : Int32, rows : Int32, layer : Int32 = -1, output : IO = STDERR) : Nil
+        {% unless flag?(:cpu_only) %}
+          return unless ENV["QWEN35_MEMORY_TRACE"]? == "1"
+          scratch = Scratch.memory_inventory
+          largest = scratch[:by_tag].to_a.sort_by { |tag, values| {-values[:bytes], tag} }.first(8).to_h
+          output.puts({event: "qwen_memory", stage: stage, start_pos: start_pos, rows: rows, layer: layer,
+                       wall_time_ms: Time.utc.to_unix_ms,
+                       pipeline_entries: ML::Metal::PipelineCache.entry_count,
+                       scratch_entries: scratch[:entries], scratch_retained_bytes: scratch[:retained_bytes],
+                       scratch_largest_tags: largest,
+                       metal_buffers: ML::MetalBuffer.stats,
+                       metal_allocated_bytes: ML::Metal::Device.current_allocated_size_if_initialized}.to_json)
+          output.flush
+        {% end %}
+      end
+
       {% unless flag?(:cpu_only) %}
         alias AdaptiveDecodeEncoder = Proc(
           ML::Metal::CommandBuffer,
@@ -930,6 +949,28 @@ module ML
 
           def self.stats : {Int64, Int64}
             @@mutex.synchronize { {@@hits, @@misses} }
+          end
+
+          # Nominal byte lengths retained by the exact-size pools. Fresh arenas
+          # and driver allocations are excluded; aliases are not deduplicated.
+          def self.memory_inventory
+            @@mutex.synchronize do
+              by_tag = {} of String => NamedTuple(entries: Int32, bytes: Int64)
+              total = 0_i64
+              @@pool.each do |key, buffer|
+                tag = "symbol:#{key[0]}"
+                previous = by_tag[tag]? || {entries: 0, bytes: 0_i64}
+                by_tag[tag] = {entries: previous[:entries] + 1, bytes: previous[:bytes] + buffer.size}
+                total += buffer.size
+              end
+              @@pool_s.each do |key, buffer|
+                tag = "string:#{key[0]}"
+                previous = by_tag[tag]? || {entries: 0, bytes: 0_i64}
+                by_tag[tag] = {entries: previous[:entries] + 1, bytes: previous[:bytes] + buffer.size}
+                total += buffer.size
+              end
+              {entries: @@pool.size + @@pool_s.size, retained_bytes: total, by_tag: by_tag}
+            end
           end
 
           def self.clear : Nil

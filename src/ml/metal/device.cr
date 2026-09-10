@@ -13,6 +13,10 @@
           false
         end
 
+        def self.current_allocated_size_if_initialized : Int64?
+          nil
+        end
+
         def self.init! : Bool
           false
         end
@@ -177,6 +181,11 @@ module ML
 
       def self.instance : Device
         @@instance ||= new
+      end
+
+      # Observation must not create a device or compile its first pipeline.
+      def self.current_allocated_size_if_initialized : Int64?
+        @@instance.try { |device| device.available? ? device.current_allocated_size : nil }
       end
 
       def self.available? : Bool
@@ -452,6 +461,11 @@ module ML
     # Pipeline cache for reusing compiled kernels
     class PipelineCache
       @@cache = Hash(String, ComputePipeline).new
+
+      # Cache keys, not driver compiler variants or pipeline allocation bytes.
+      def self.entry_count : Int32
+        @@cache.size
+      end
 
       def self.get(name : String, &block : -> ComputePipeline) : ComputePipeline
         @@cache[name] ||= yield

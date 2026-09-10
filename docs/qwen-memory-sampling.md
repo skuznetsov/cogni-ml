@@ -53,6 +53,53 @@ Refresh qualification after changes to macOS command output, process ancestry,
 sampler semantics, or probe event schema. No inference-engine behavior or
 production default changes are part of this diagnostic.
 
+## Opt-in in-process inventories
+
+`QWEN35_MEMORY_TRACE=1` emits JSONL `qwen_memory` records to stderr on entry to
+the chunked prefill helper, around recursive chunks, and before each eighth
+layer on its optimized layer loop. It does not add device initialization,
+command submission/waits, pool eviction, padding, or changes to GPU lifetimes.
+Omit the flag for rollback. JSON construction and output have observer cost;
+do not use this diagnostic to promote a speed comparison.
+
+Fields distinguish three overlapping views; **do not sum them**:
+
+- `pipeline_entries`: Crystal pipeline-cache key count, not driver-internal
+  compiler variants, number of unique native objects, or compiled-code bytes.
+- `scratch_entries`, `scratch_retained_bytes`, `scratch_largest_tags`: exact-size
+  pool entry count and nominal buffer lengths, with the largest eight tag
+  groups. Symbol and string tags remain distinct. Multiple sizes under one tag
+  increase its entry count. Fresh asynchronous arenas are excluded; aliases
+  are not deduplicated, and this is not a physical-residency measurement.
+- `metal_buffers`: existing live-buffer count, nominal live bytes and lifetime
+  peak, including no-copy wrappers. `metal_allocated_bytes`: existing device
+  allocation counter, null before device initialization or if unavailable.
+
+Snapshots run on the existing inference owner thread, not a new sampling
+thread. Scratch is read under its existing mutex; the other counters and wall
+timestamp are sequential observations, not an atomic global snapshot. These
+hooks do not instrument model loading, state construction, every allocation,
+single-token decode, or every fallback route. An absent later record can mean
+the process was stopped before reaching that boundary. Short peaks and native
+compiler memory can remain invisible.
+
+The optimized loop may advance across a fused group of layers in one step.
+Therefore the every-eight-index hook samples only visited loop indices; it is
+not a per-eight-executed-layer guarantee and does not attribute fused internals.
+
+No-GPU qualification (invalid placeholders never create native handles):
+
+```sh
+CRYSTAL_CACHE_DIR=/private/tmp/qwen-memory-inventory-cache \
+  crystal spec spec/qwen_memory_inventory_spec.cr \
+  --link-flags="$PWD/build/bridge.o -framework Metal -framework Foundation -lc++"
+```
+
+The focused spec checks same-key reuse, new-size retention, symbol/string
+separation, detached inventory results, pipeline-key counts, opt-in output,
+and unavailable-as-null without initializing Metal. It is a standalone test
+process; its fake-cache fixtures must not be used in a live inference process.
+
 ## One guarded unprofiled reuse observation (2026-09-08)
 
 The existing two-call provider probe was run once with profiling off, ordinary
@@ -92,3 +139,53 @@ already exposes `MTLDevice.currentAllocatedSize` from `src/ml/metal/bridge.mm`;
 its diagnostic insertion and coverage remain untested here. Do not weaken the
 guard, infer a profiling regression, blame external workloads, or change
 production defaults from this observation.
+
+## In-process inventory observation (2026-09-09)
+
+One newly built release probe used the same captured input and guard settings,
+with only the diagnostic flag added. Metadata-only dry validation passed:
+7,813 first-prompt tokens and the same prompt/tools/session hashes. The prefill
+helper received 7,812 rows (the provider handles the final prompt token
+separately), split into 2,048-row chunks. This is ordinary F32 KV, not adaptive
+QBit. No model, kernel, allocation policy, or guard was changed.
+
+| Observed boundary | Pipeline keys | Scratch entries | Scratch GiB | Tracked buffer GiB | Device allocated GiB |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Prefill entry | 0 | 0 | 0 | 16.8820 | 16.8831 |
+| First 2,048-row chunk end | 31 | 425 | 3.3167 | 20.3159 | 20.3186 |
+| Second chunk, layer-loop index 0 | 31 | 425 | 3.3167 | 20.3550 | 20.3577 |
+
+The guard stopped the process at 35% free memory, exit 1, launcher monotonic
+wall 24.031 s (runner loop-counter message `after ~16s`). It started at 72%.
+There were eight in-process records and 13 external samples with no collection
+errors; the final external sample saw the root gone and free memory at 65%.
+No call completed and no second provider request ran. There was no retry.
+
+The eight largest recorded scratch tag groups each contain **one** size entry
+of 142,606,336 bytes (136 MiB), including full/recurrent FFN gate, up and combined
+activation buffers. The visible multi-GiB increase already exists after the
+first canonical-size chunk. The next equal-size chunk begins without additional
+pipeline keys or retained scratch entries. This weakens the varying-prompt-size
+explanation for this observed stop; it does not rule out unobserved native
+compiler memory, transient peaks, or later accumulation across other sizes.
+
+Next candidate: audit eager alternative-path FFN allocation before padding.
+For example, `frec_full_ffn_comb`, `frec_rec_ffn_comb`, and
+`rec_chunk_many_ffn_comb` are allocated before their consumers select in-place
+SwiGLU. The default in-place route selects the up buffer instead of the F32
+combined buffer. Eliminating these three allocations could save 408 MiB at
+this shape, **if** all consumers/fallbacks and lifetime constraints permit it.
+That is a static candidate, not an implemented or measured saving. Keep the
+kernel math, logical token counts, and fallback semantics unchanged in any
+future falsifier. Do not widen buffer aliases across pending commands.
+
+Evidence: `/private/tmp/qwen-two-call.HVIZvS/run_inventory.py`,
+`reuse-inventory-{dry,gpu}.{stdout.log,stderr.log}`, GPU `.samples.jsonl` and
+`.json`; new binary `probe-inventory`, SHA256
+`3df7ba47b0ad8efde650666776059c2ec3151a9a9aec668da9afba5a4fbe39c1`.
+Build uses the existing CrystalBall two-call probe and unchanged bridge object,
+with the inventory source changes in this commit. Four focused no-GPU specs,
+CPU-only trace-no-op evaluation, nine external sampler tests, release build,
+and format/diff checks passed. ROBUST for these bounded inventory observations;
+root-cause closure, a memory fix, quality parity and speed promotion remain open.
+Refresh after code/model/device/toolchain, route, context, or host-load changes.

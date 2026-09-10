@@ -3901,6 +3901,7 @@ module ML::GGUF
                                       resident_top1_append : PrefillResidentTop1Append? = nil,
                                       shared_command_completed : Array(Bool)? = nil) : Array(Float32)
       raise ArgumentError.new("prefill_tokens_hidden token_ids must not be empty") if token_ids.empty?
+      Qwen35Metal.trace_memory("prefill_enter", start_pos, token_ids.size)
       if resident_top1_append
         if need_output || resident_output_buf.nil? || resident_output_written.nil?
           raise ArgumentError.new("resident top-1 append requires a resident output-only prefill")
@@ -3980,11 +3981,13 @@ module ML::GGUF
           end
           chunk_need_output = need_output && offset + len >= n_tokens
           chunk_shared_command_completed = [false]
+          Qwen35Metal.trace_memory("prefill_chunk_begin", start_pos + offset, len)
           x = prefill_tokens_hidden(weights, token_ids[offset, len], start_pos + offset, state,
             stop_layer: stop_layer, checkpoint_index: local_checkpoint_index, checkpoint_state: local_checkpoint_state,
             checkpoint_rollback_log: checkpoint_rollback_log,
             need_output: chunk_need_output,
             shared_command_completed: chunk_shared_command_completed)
+          Qwen35Metal.trace_memory("prefill_chunk_end", start_pos + offset, len)
           offset += len
           boundary_cooldown_ms = prefill_chunk_boundary_cooldown_ms(
             len, offset < n_tokens, chunk_shared_command_completed[0],
@@ -4248,6 +4251,7 @@ module ML::GGUF
         end
 
         while il < layer_limit
+          Qwen35Metal.trace_memory("prefill_layer", start_pos, n_tokens, il) if il % 8 == 0
           lw = weights.layers[il]
           case lw
           in Qwen35FullAttnWeights
