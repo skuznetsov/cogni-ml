@@ -189,3 +189,62 @@ CPU-only trace-no-op evaluation, nine external sampler tests, release build,
 and format/diff checks passed. ROBUST for these bounded inventory observations;
 root-cause closure, a memory fix, quality parity and speed promotion remain open.
 Refresh after code/model/device/toolchain, route, context, or host-load changes.
+
+## Lazy F32 FFN fallback allocation: bounded contract
+
+This slice is limited to `rec_chunk_many_ffn_comb`, `frec_full_ffn_comb`,
+and `frec_rec_ffn_comb`. In-place SwiGLU must select the existing up buffer
+without requesting its unused F32 combined alternative. With
+`QWEN35_SWIGLU_INPLACE_OFF=1`, preserve the original combined tag, size, and
+consumer destination. H16 buffers, kernels, token counts, command ordering,
+and cross-command reuse are outside this change. No pool eviction is admitted.
+
+Selection happens during the original scratch-setup phase, before this route
+encodes work. This avoids moving allocation failure after a profiling
+checkpoint that may already have mutated KV/recurrent state. The setting is
+sampled during setup, not re-read for every recurrent layer; changing process
+environment during an in-flight route is not supported. Existing retained
+combined buffers from earlier out-of-place calls are not evicted.
+
+The falsifier is a no-GPU lazy-selection test: default/explicit enabled mode
+must not invoke a fallback allocator; disabled mode must return its buffer and
+propagate allocation failure. Check all three call sites and compile the real
+provider probe. Rollback is reverting this slice; the existing environment
+switch restores out-of-place selection and allocation during scratch setup.
+Do not claim physical-memory savings, completed-call parity, or speed from
+these checks alone. A future fresh-process guarded replay must establish them.
+
+Implementation evidence (2026-09-09): all three call sites now use
+`prefill_ffn_activation_buffer` during setup. Keeping selection outside the
+recurrent loop also preserves one fallback allocation per route when
+`QWEN35_SCRATCH_OFF=1` or fresh scratch is active. The seven focused specs pass:
+three lazy-routing/source-order checks in one example, selection identity and
+allocator-call counts, failure propagation, and four inventory examples.
+The test initially failed on the missing selector. CPU-only compilation/no-op
+and format/diff checks pass. The real CrystalBall release two-call probe builds;
+its metadata-only run reports `run_gpu=false`, 7,813 tokens and unchanged
+prompt/tools/session hashes. No GPU workload ran for this slice.
+
+Build command, run from the neighboring `crystal_ball` repository:
+
+```sh
+CRYSTAL_CACHE_DIR=/private/tmp/qwen-two-call-memory-build crystal build \
+  scripts/cogni_qwen_two_call_probe.cr --release \
+  -o /private/tmp/qwen-ffn-lazy.IzgaS4/probe \
+  --link-flags="-framework Metal -framework Foundation -lc++"
+```
+
+That local binary has SHA256
+`f4558cdabda523f05cb6b3007819df2bad2b2e425203e5ebf67a8eb122418fcc`.
+The 408-MiB reduction remains a nominal allocation prediction at the previously
+observed 2,048-row shape, not a measured physical-memory or speed improvement.
+Next gate: a fresh-process replay under the unchanged 35% free-memory floor,
+24,576-MiB tree cap and 300-second timeout, checking inventory and completed-call
+output before interpreting performance. Stop on the first guard/Metal failure;
+do not lower the floor to obtain a complete call.
+
+Scoped source review: F32 fused/unfused SwiGLU and fused/unfused down-projection
+consumers keep their previous selected destination; H16 consumers retain their
+separate combined buffer. ROBUST for lazy setup selection under stable route
+configuration. End-to-end numerical parity and physical-memory improvement are
+not certified by the helper/source-order tests or metadata-only dry run.

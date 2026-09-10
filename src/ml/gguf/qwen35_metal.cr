@@ -3313,6 +3313,13 @@ module ML
           ENV["QWEN35_SWIGLU_INPLACE_OFF"]? != "1"
         end
 
+        # The F32 alternative can be large; request it only when selected.
+        # H16 output selection and the existing up-buffer lifetime are unchanged.
+        # Select during scratch setup, before encoding state-mutating work.
+        private def self.prefill_ffn_activation_buffer(up_buf : ML::MetalBuffer, &fallback : -> ML::MetalBuffer) : ML::MetalBuffer
+          swiglu_inplace_enabled? ? up_buf : fallback.call
+        end
+
         private def self.decode_swiglu_inplace_enabled? : Bool
           ENV["QWEN35_DECODE_SWIGLU_INPLACE"]? == "1"
         end
@@ -6542,7 +6549,9 @@ module ML
           normed_h16_buf = Scratch.get(:rec_chunk_many_normed_h16, hidden_elems.to_i64 * 2_i64)
           ffn_gate_buf = Scratch.get(:rec_chunk_many_ffn_gate, (n_tokens * ffn_dim).to_i64 * sizeof(Float32))
           ffn_up_buf = Scratch.get(:rec_chunk_many_ffn_up, (n_tokens * ffn_dim).to_i64 * sizeof(Float32))
-          ffn_comb_buf = Scratch.get(:rec_chunk_many_ffn_comb, (n_tokens * ffn_dim).to_i64 * sizeof(Float32))
+          ffn_act_buf = prefill_ffn_activation_buffer(ffn_up_buf) do
+            Scratch.get(:rec_chunk_many_ffn_comb, (n_tokens * ffn_dim).to_i64 * sizeof(Float32))
+          end
           ffn_comb_h16_buf = Scratch.get(:rec_chunk_many_ffn_comb_h16, (n_tokens * ffn_dim).to_i64 * 2_i64)
           ffn_out_buf = Scratch.get(:rec_chunk_many_ffn_out, hidden_bytes)
 
@@ -6781,7 +6790,6 @@ module ML
             end
             addnorm_enc.end_encoding
 
-            ffn_act_buf = swiglu_inplace_enabled? ? ffn_up_buf : ffn_comb_buf
             ffn_down_h16 = prefill_swiglu_h16_down_candidate?(lw.ffn_down_qw, n_tokens) ||
               q4_b64_up_swiglu_h16_down_candidate?(lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw, n_tokens)
             up_swiglu_fused = false
@@ -8651,7 +8659,9 @@ module ML
           full_normed_h16_buf = Scratch.get(:frec_full_normed_h16, hidden_elems.to_i64 * 2_i64)
           full_ffn_gate_buf = Scratch.get(:frec_full_ffn_gate, (n_tokens * full_ffn_dim).to_i64 * sizeof(Float32))
           full_ffn_up_buf = Scratch.get(:frec_full_ffn_up, (n_tokens * full_ffn_dim).to_i64 * sizeof(Float32))
-          full_ffn_comb_buf = Scratch.get(:frec_full_ffn_comb, (n_tokens * full_ffn_dim).to_i64 * sizeof(Float32))
+          full_ffn_act_buf = prefill_ffn_activation_buffer(full_ffn_up_buf) do
+            Scratch.get(:frec_full_ffn_comb, (n_tokens * full_ffn_dim).to_i64 * sizeof(Float32))
+          end
           full_ffn_comb_h16_buf = Scratch.get(:frec_full_ffn_comb_h16, (n_tokens * full_ffn_dim).to_i64 * 2_i64)
           full_ffn_out_buf = Scratch.get(:frec_full_ffn_out, (n_tokens * ffn_down_qw.out_dim).to_i64 * sizeof(Float32))
           full_out_buf = Scratch.get(:frec_full_out, hidden_bytes)
@@ -8676,7 +8686,9 @@ module ML
           rec_normed_h16_buf = Scratch.get(:frec_rec_normed_h16, hidden_elems.to_i64 * 2_i64)
           rec_ffn_gate_buf = Scratch.get(:frec_rec_ffn_gate, (n_tokens * rec_ffn_dim).to_i64 * sizeof(Float32))
           rec_ffn_up_buf = Scratch.get(:frec_rec_ffn_up, (n_tokens * rec_ffn_dim).to_i64 * sizeof(Float32))
-          rec_ffn_comb_buf = Scratch.get(:frec_rec_ffn_comb, (n_tokens * rec_ffn_dim).to_i64 * sizeof(Float32))
+          rec_ffn_act_buf = prefill_ffn_activation_buffer(rec_ffn_up_buf) do
+            Scratch.get(:frec_rec_ffn_comb, (n_tokens * rec_ffn_dim).to_i64 * sizeof(Float32))
+          end
           rec_ffn_comb_h16_buf = Scratch.get(:frec_rec_ffn_comb_h16, (n_tokens * rec_ffn_dim).to_i64 * 2_i64)
           rec_ffn_out_buf = Scratch.get(:frec_rec_ffn_out, hidden_bytes)
 
@@ -8908,7 +8920,6 @@ module ML
           end
           addnorm_enc.end_encoding
 
-          full_ffn_act_buf = swiglu_inplace_enabled? ? full_ffn_up_buf : full_ffn_comb_buf
           full_ffn_down_h16 = prefill_swiglu_h16_down_candidate?(ffn_down_qw, n_tokens) ||
             q4_b64_up_swiglu_h16_down_candidate?(ffn_gate_qw, ffn_up_qw, ffn_down_qw, n_tokens)
           full_up_swiglu_fused = false
@@ -9239,7 +9250,6 @@ module ML
             end
             rec_addnorm_enc.end_encoding
 
-            rec_ffn_act_buf = swiglu_inplace_enabled? ? rec_ffn_up_buf : rec_ffn_comb_buf
             rec_ffn_down_h16 = prefill_swiglu_h16_down_candidate?(lw.ffn_down_qw, n_tokens) ||
               q4_b64_up_swiglu_h16_down_candidate?(lw.ffn_gate_qw, lw.ffn_up_qw, lw.ffn_down_qw, n_tokens)
             rec_up_swiglu_fused = false

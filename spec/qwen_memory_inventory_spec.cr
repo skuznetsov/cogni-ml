@@ -64,6 +64,79 @@ class ML::Metal::Device
   end
 end
 
+module ML::GGUF::Qwen35Metal
+  def self.inventory_spec_ffn_activation(up : ML::MetalBuffer, &fallback : -> ML::MetalBuffer)
+    prefill_ffn_activation_buffer(up) { fallback.call }
+  end
+end
+
+describe "Qwen lazy F32 FFN fallback" do
+  # Source-order guard supplements selection behavior; it is not GPU parity.
+  it "keeps all three exact-tag allocations inside lazy setup before command encoding" do
+    source = File.read(File.expand_path("../src/ml/gguf/qwen35_metal.cr", __DIR__))
+    [
+      {"recurrent_layer_chunk_project_many", "ffn", "rec_chunk_many_ffn_comb", "ffn_dim"},
+      {"full_attn_then_recurrent_chunk_project_many", "full_ffn", "frec_full_ffn_comb", "full_ffn_dim"},
+      {"full_attn_then_recurrent_chunk_project_many", "rec_ffn", "frec_rec_ffn_comb", "rec_ffn_dim"},
+    ].each do |method_name, prefix, tag, dimension|
+      route = source.split("def self.#{method_name}(", 2)[1].split("\n        def self.", 2)[0]
+      command_parts = route.split("cmd = append_command_buffer", 2)
+      command_parts.size.should eq(2)
+      setup = command_parts[0]
+      pattern = Regex.new("#{prefix}_act_buf = prefill_ffn_activation_buffer\\(#{prefix}_up_buf\\) do\\s+Scratch.get\\(:#{tag}, \\(n_tokens \\* #{dimension}\\).to_i64 \\* sizeof\\(Float32\\)\\)\\s+end")
+      setup.should match(pattern)
+      route.scan(/prefill_ffn_activation_buffer\(#{prefix}_up_buf\)/).size.should eq(1)
+      source.scan(/Scratch.get\(:#{tag},/).size.should eq(1)
+    end
+  end
+
+  it "does not request an alternative in-place, and preserves the disabled-mode destination" do
+    previous = ENV["QWEN35_SWIGLU_INPLACE_OFF"]?
+    up = ML::MetalBuffer.inventory_placeholder(64_i64)
+    alternative = ML::MetalBuffer.inventory_placeholder(64_i64)
+    calls = 0
+    begin
+      [nil, "0", "1"].each do |setting|
+        if setting
+          ENV["QWEN35_SWIGLU_INPLACE_OFF"] = setting
+        else
+          ENV.delete("QWEN35_SWIGLU_INPLACE_OFF")
+        end
+        selected = ML::GGUF::Qwen35Metal.inventory_spec_ffn_activation(up) do
+          calls += 1
+          alternative
+        end
+        selected.same?(setting == "1" ? alternative : up).should be_true
+        calls.should eq(setting == "1" ? 1 : 0)
+      end
+    ensure
+      if previous
+        ENV["QWEN35_SWIGLU_INPLACE_OFF"] = previous
+      else
+        ENV.delete("QWEN35_SWIGLU_INPLACE_OFF")
+      end
+    end
+  end
+
+  it "does not swallow an out-of-place allocation failure" do
+    previous = ENV["QWEN35_SWIGLU_INPLACE_OFF"]?
+    begin
+      ENV["QWEN35_SWIGLU_INPLACE_OFF"] = "1"
+      expect_raises(Exception, "fallback allocation failed") do
+        ML::GGUF::Qwen35Metal.inventory_spec_ffn_activation(ML::MetalBuffer.inventory_placeholder(64_i64)) do
+          raise "fallback allocation failed"
+        end
+      end
+    ensure
+      if previous
+        ENV["QWEN35_SWIGLU_INPLACE_OFF"] = previous
+      else
+        ENV.delete("QWEN35_SWIGLU_INPLACE_OFF")
+      end
+    end
+  end
+end
+
 describe "Qwen read-only memory inventory" do
   it "counts exact-size entries, separates tag namespaces, and returns detached data" do
     scratch = ML::GGUF::Qwen35Metal::Scratch
