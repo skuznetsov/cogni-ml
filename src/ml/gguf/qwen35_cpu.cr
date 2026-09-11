@@ -3,6 +3,7 @@ require "./qwen35_weights"
 require "./quant_matmul"
 require "./qwen35_metal"
 require "./qwen_qbit_adaptive_resident_kv"
+require "./qwen_prefill_command_trace"
 
 # Qwen 3.5 / 3.6 CPU reference forward pass.
 #
@@ -4010,6 +4011,10 @@ module ML::GGUF
       append_prefill_gpu_work = false
       append_prefill_group_count = 0
       append_prefill_group_limit = prefill_append_group_limit(n_tokens)
+      prefill_command_trace = QwenPrefillCommandTrace.enabled? ? QwenPrefillCommandTrace.new : nil
+      # Loop cursors localize a flush, not an exact encoded layer interval:
+      # standalone adaptive work flushes before advancing its current layer.
+      append_prefill_cursor_before = 0
       prefill_boundary_profile = ENV["QWEN35_PREFILL_BOUNDARY_PROFILE"]? == "1"
       prefill_graph_depth = prefill_graph_max_inflight(
         resident_adaptive, checkpoint_requested, prefill_boundary_profile,
@@ -4159,11 +4164,24 @@ module ML::GGUF
               finalize_finished = prefill_boundary_profile ? Time.instant : nil
               gpu_elapsed_ms = 0.0_f64
               gpu_timed = prefill_boundary_profile && append_prefill_gpu_work
-              if gpu_timed
-                gpu_elapsed_ms = cmd.commit_and_wait_gpu_elapsed_seconds * 1000.0
+              if trace = prefill_command_trace
+                gpu_elapsed_ms = trace.observe(cmd.object_id, start_pos, n_tokens,
+                  append_prefill_cursor_before, il, append_prefill_group_count) do
+                  if gpu_timed
+                    cmd.commit_and_wait_gpu_elapsed_seconds * 1000.0
+                  else
+                    cmd.commit
+                    cmd.wait
+                    0.0_f64
+                  end
+                end
               else
-                cmd.commit
-                cmd.wait
+                if gpu_timed
+                  gpu_elapsed_ms = cmd.commit_and_wait_gpu_elapsed_seconds * 1000.0
+                else
+                  cmd.commit
+                  cmd.wait
+                end
               end
               submit_wait_finished = prefill_boundary_profile ? Time.instant : nil
               QwenQBitAdaptiveResidentKV.finish_pending_appends!(pending_adaptive_caches, cmd)
@@ -4202,6 +4220,7 @@ module ML::GGUF
               append_prefill_cmd = nil
               append_prefill_gpu_work = false
               append_prefill_group_count = 0
+              append_prefill_cursor_before = il
             end
           elsif pending_adaptive_caches.any?
             pending_adaptive_caches.clear
