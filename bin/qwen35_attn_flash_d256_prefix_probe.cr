@@ -249,10 +249,9 @@ private def run_baseline(pipe : ML::Metal::ComputePipeline,
   enc.set_buffer(v, 3)
   enc.set_buffer(output, 4, ML::Metal::BufferAccess::Write)
   enc.set_value(shape.base_pos.to_u32, 5)
-  # qwen35_attn_decode_rows_sg4 returns before its threadgroup barrier when
-  # an SG4 lane is past n_tokens. Pad this legacy dispatch to four rows so
-  # the comparison remains bounded and does not rely on its partial-group
-  # barrier behavior. Only the requested shape.n_tokens rows are compared.
+  # Preserve the historical padded Flash comparator. It originally avoided
+  # SG4's partial-group barrier defect (now corrected). Unpadded SG4 coverage
+  # belongs to qwen35_sg4_tail_probe; only shape.n_tokens rows are compared here.
   enc.set_value(dispatch_tokens.to_u32, 6)
   enc.set_value(n_head.to_u32, 7)
   enc.set_value(n_head_kv.to_u32, 8)

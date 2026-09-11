@@ -323,7 +323,8 @@ kernel void qwen35_attn_decode_rows_sg4(
     for (uint d = lane; d < head_dim; d += 32) {
         q_tg[d] = Q[(t * n_head + h) * head_dim + d];
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    // Tail rows may retire entire SIMD groups; each group owns its scratch.
+    simdgroup_barrier(mem_flags::mem_threadgroup);
 
     float m = -1e30f;
     float l = 0.0f;
@@ -424,7 +425,8 @@ kernel void qwen35_attn_decode_rows_sg4_pregate(
         q_tg[d] = Q[(t * n_head + h) * head_dim + d];
         gate_tg[d] = gate[(t * n_head + h) * head_dim + d];
     }
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    // Tail rows may retire entire SIMD groups; each group owns its scratch.
+    simdgroup_barrier(mem_flags::mem_threadgroup);
 
     float m = -1e30f;
     float l = 0.0f;

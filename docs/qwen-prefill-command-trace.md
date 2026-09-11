@@ -107,3 +107,112 @@ encoded operations at cursor 11 / 15 before designing a smaller-command
 falsifier. No scheduling change, default enablement or further GPU run is
 justified merely by this location. Temporary artifact loss or changes to the
 source/model/device/route require refreshed evidence.
+
+## SG4 partial-group barrier correction (2026-09-11)
+
+Source inspection found a synchronization defect in both SG4 attention kernels:
+each SIMD group owns a query row and private threadgroup-memory slices, but an
+out-of-range group returns before the initial whole-threadgroup barrier. A
+195-row dispatch leaves only three participating SIMD groups in its final
+threadgroup; the first request's 2,048/1,668-row chunks are both divisible by
+four. The existing Flash comparison probe already pads its SG4 reference to
+avoid this condition, so that comparison did not certify unpadded production.
+
+CAUTION scope: replace only the two initial barriers with SIMD-group barriers,
+retaining the threadgroup-memory fence. No padding, math, allocation, queue,
+cache representation or admission changes. Each active SIMD group must have
+32 lanes, and scratch ownership must remain disjoint by `sgitg`; introducing
+cross-group scratch consumers invalidates this correction. Rollback is a
+revert of this slice, not a recommendation to execute the unsafe tail kernel.
+
+Falsifier-first: `crystal spec spec/qwen35_sg4_tail_safety_spec.cr` failed two
+kernel checks before the change (three examples total). The guard rejects
+whole-threadgroup barriers after per-SIMD-group retirement and checks scratch
+partitioning and initialization-before-consumption. This is a structural
+regression test, not a Metal execution proof.
+
+DoD: the static test must pass; the model-free SG4 tail probe must match its
+independent CPU oracle with exact row counts, untouched output guards, both
+gate variants and F32/F16 KV. Then perform one source-pinned original two-call
+replay under the existing guards. Stop on the first GPU failure. Until that
+replay completes, the synchronization defect is a root-cause candidate, not
+proof that it caused the observed interactivity error. No speed claim follows.
+
+The synchronization choice follows Apple's distinction between SIMD-local
+memory ordering and cross-SIMD-group communication in
+[Threadgroup memory synchronization (WWDC20)](https://developer.apple.com/videos/play/wwdc2020/10631/).
+The GPU probe is bounded to the existing Apple-GPU/32-lane, d256, GQA6 contract,
+not a new cross-device capability certificate.
+
+Executed kernel checks on Apple M2 Max:
+
+```sh
+CRYSTAL_CACHE_DIR=/private/tmp/qwen-sg4-tail-spec crystal spec spec/qwen35_sg4_tail_safety_spec.cr spec/qwen_prefill_command_trace_spec.cr
+CRYSTAL_CACHE_DIR=/private/tmp/qwen-sg4-tail-build crystal build bin/qwen35_sg4_tail_probe.cr --release -o /private/tmp/qwen-sg4-fix.qcyAuV/tail-probe --link-flags="/Users/sergey/Projects/Crystal/cogni-ml/build/bridge.o -framework Metal -framework Foundation -lc++"
+COGNI_RUN_SAFE_REQUIRE_QUIET=0 COGNI_RUN_SAFE_WAIT_QUIET_SEC=0 COGNI_RUN_SAFE_MIN_FREE_PCT=35 COGNI_METAL_COMMAND_TIMEOUT_MS=180000 scripts/run_safe.sh /private/tmp/qwen-sg4-fix.qcyAuV/tail-probe 300 24576 --run
+```
+
+Nine spec examples passed. All 48 model-free GPU cases passed, including exact
+193/194/195/196-row shapes and 195 rows at base 7,839. F32/F16 KV and direct/
+pregate kernels matched the non-uniform Float64 CPU oracle within the declared
+1e-5 absolute tolerance; worst observed error was 1.0808095e-6. All output guard
+rows remained unchanged. The runner reported exit 0 after approximately one
+second, preflight free memory 75%; no model weights were loaded. Probe binary
+SHA256: `ba76db164abd94cbd398bc76ce9659a771b3d289f63cbd30599314d54d81cfe7`.
+The synthetic KV values are exactly representable in binary16: this validates
+both storage variants, not arbitrary F32-to-F16 quantization quality.
+
+### Original two-call replay: still failing
+
+The corrected release provider, with FFN capacity reuse still OFF, passed the
+metadata-only dry check but the single guarded GPU replay exited 1. The first
+call matched the captured tool call and 27-token count, taking 88,445.4 ms.
+The second call again reached the exact 7,839-token cached prefix / 196-token
+suffix (195 helper rows), then failed with `Impacting Interactivity`. This time
+it failed in the **first** suffix command, cursor 0 / 7, at 517.172 ms host
+submit/wait time; the prior trace failed at cursor 11 / 15. There is no second
+output and no completed two-call parity certificate. No retry followed.
+
+Trace pairing: 129 begins / 129 terminals, one failed terminal, no unmatched
+identities. Observer: 48 samples, zero collection errors, sampled free memory
+75% initially / minimum 42%; no memory-floor kill. Monotonic launcher wall time
+was 96,705.197 ms. The runner's approximate tick counter printed `~69s`; use
+the launcher clock for elapsed time, not that label.
+
+Evidence: `/private/tmp/qwen-sg4-fix.qcyAuV/`, `run_inventory.py`,
+`sg4-fix-off-{dry,gpu}` logs/results/samples, `check_replay.py`, and the two
+source manifests. The checker correctly exits nonzero for the failed replay
+even though trace pairing passes. Provider binary SHA256:
+`f8539c3493eac0d60f1c549e6792eeca0f3d3df5bf130b63430aad63a94b666c`.
+Shader SHA256:
+`a53054dd97bdfdbfa2e4a8cdc160898f9c7e6c7a5907fbb6b1884bfa1dd2eff1`.
+Source manifests were captured before the build and rechecked after it; the
+launcher revalidates them and the pinned input/binary identities before use.
+The separate uncommitted FFN capacity helper remained present but disabled.
+
+**Decision:** retain the two-barrier correctness correction and its passing
+kernel regression gate. Reject the hypothesis that this correction alone
+resolves the provider's interactivity failure. The full two-call DoD is red;
+do not promote stability, memory reuse, or speed. Moving failure location also
+weakens any diagnosis specific to layer 11. Next discriminator is a bounded
+separation of operations inside the first suffix shared command (including
+the full-attention/recurrent fused handoff), with identical math and input,
+not another repetition or arbitrary padding. This is proposed only; no such
+scheduling edit or additional GPU experiment was made in this slice.
+
+The existing `QWEN35_PREFILL_FUSE_FULL_REC_OFF=1` switch returns from the fused
+route before encoding (`qwen35_cpu.cr`, `full_attn_then_recurrent_chunk_project_many_routed`)
+and is the first candidate for a no-new-code ablation. It changes routing and
+may alter scratch/timing, so a pass would localize the issue, not prove a
+particular kernel defect. This applies to this ordinary F32-KV replay only:
+adaptive QBit admission explicitly rejects disabling the fused corridor.
+
+Post-run adversary review added two probe-only guards: validate the embedded
+corrected shader SHA256 before Metal initialization, and acquire the existing
+cross-process Metal lease before GPU use. Rebuilt as `tail-probe-guarded`;
+dry mode and `--self-test` pass, including rejection of one-byte source drift
+and whole-threadgroup-barrier substitution. The combined static/trace/lease
+suite passes 11 examples. These final launcher guards were checked without
+another GPU run; the 48-case GPU evidence above uses the earlier probe binary
+with identical shader bytes. The lease coordinates only cooperating clients,
+not arbitrary third-party GPU workloads or WindowServer.

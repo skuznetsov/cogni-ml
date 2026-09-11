@@ -6,6 +6,31 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-QWEN35-SG4-TAIL-BARRIER-2026-09-11] SIMD-local barrier fix; provider failure still open
+
+- Both SG4 attention kernels retired out-of-range SIMD groups before a
+  whole-threadgroup initialization barrier. Scratch is disjoint by `sgitg`;
+  replace only those two barriers with SIMD-group barriers and retain the
+  threadgroup-memory fence. No math, padding, allocation or scheduling change.
+- The new static tail spec failed twice before the patch and passed afterward;
+  together with command-trace specs, 9 examples pass. The model-free
+  `bin/qwen35_sg4_tail_probe.cr` passed all 48 Apple M2 Max / d256 / GQA6 cases,
+  both gate variants and F32/F16 KV, including unpadded 195 rows at base 7,839.
+  CPU-oracle worst absolute error 1.0808095e-6; output guards unchanged.
+- The source-pinned original two-call replay still failed on the second
+  request with Impacting Interactivity, now cursor 0/7 rather than 11/15.
+  First-call tool output/count passed; second output is absent. 129 command
+  begin/terminal pairs, one failure; 48 memory samples, no collection errors,
+  minimum free 42% with the unchanged 35% floor / 24-GiB cap / 300s limit.
+  No retry. FFN capacity reuse stays OFF and uncommitted.
+- ROBUST for the bounded SG4 correction; the hypothesis that this alone fixes
+  the provider failure is refuted. Keep full two-call stability and speed open.
+  Next: discriminate operations inside the first suffix fused shared command,
+  not another identical GPU replay. Commands/hashes/limits are in
+  `docs/qwen-prefill-command-trace.md`; temporary evidence root is
+  `/private/tmp/qwen-sg4-fix.qcyAuV/`. Refresh after source/device/shape/compiler
+  changes; cross-SIMD scratch sharing invalidates the barrier proof.
+
 ### [LM-QWEN38-REASONING-EFFORT-2026-08-14] Typed reasoning effort with exact cold-prefix reuse
 **Document status:** verified for embedded Qwen 3.8 text generation
 **Current frontier:** `None`, `Low`, `Medium`, and `XHigh` request/result routing through `Qwen35Engine` and `Qwen35NativeRuntime`
