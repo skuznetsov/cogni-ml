@@ -6,6 +6,26 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-QWEN35-FUSION-OFF-2026-09-11] Disabling fusion does not resolve the two-call failure
+
+- One source-pinned replay with only `QWEN35_PREFILL_FUSE_FULL_REC_OFF=1`
+  changed still exits 1 with Impacting Interactivity. Same corrected-SG4
+  provider binary; FFN capacity reuse OFF. First tool-call/count gate passes;
+  second request has no completed output. No retry or engine edit.
+- Suffix shared command cursor 0 to 3 completes in 291.386 ms; later memory
+  events reach layer 24 before failure in standalone full-attention helper.
+  This is not evidence that layer 3 or SG4 itself failed. Nine trace pairs
+  succeed because standalone commands are not covered by ordinary tracing;
+  the replay checker correctly rejects exit 1.
+- 47 memory samples, no sampling errors, minimum free 42%; unchanged 35%
+  floor / 24-GiB cap / 300s timeout. No memory-floor kill, not proof of absent
+  GPU pressure. ROBUST negative ablation, root cause and speed still open.
+- Next: standalone layer/command failure attribution, then a bounded stage
+  discriminator. This supersedes the prior proposed fusion-off experiment.
+  Details and lineage: `docs/qwen-prefill-command-trace.md`, temporary evidence
+  `/private/tmp/qwen-fusion-off.ikJywu/`. Refresh after source/model/device/input
+  or scheduling changes; the flag also changes scratch/readbacks/cooldowns.
+
 ### [LM-QWEN35-SG4-TAIL-BARRIER-2026-09-11] SIMD-local barrier fix; provider failure still open
 
 - Both SG4 attention kernels retired out-of-range SIMD groups before a

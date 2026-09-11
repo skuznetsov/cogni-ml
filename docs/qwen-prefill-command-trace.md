@@ -216,3 +216,47 @@ suite passes 11 examples. These final launcher guards were checked without
 another GPU run; the 48-case GPU evidence above uses the earlier probe binary
 with identical shader bytes. The lease coordinates only cooperating clients,
 not arbitrary third-party GPU workloads or WindowServer.
+
+### Fusion-off ablation: standalone full-attention failure remains
+
+One further authorized replay reused the identical provider binary and source
+manifests above. The only execution-environment change was
+`QWEN35_PREFILL_FUSE_FULL_REC_OFF=1`; FFN capacity reuse remained OFF. Dry mode
+passed. The single GPU run exited 1 with `Impacting Interactivity`, so disabling
+the fused corridor is not a sufficient workaround. No retry followed.
+
+The first request passed the captured tool-call and 27-output-token checks
+(84,223.7 ms); this is not full-logit parity or a speed comparison. The second
+request retained the 7,839-token prefix / 196-token suffix / 195 helper rows.
+Its initial traced shared command, cursor 0 to 3, completed in 291.386 ms.
+Subsequent memory events reached layer cursors 8, 16 and 24 before the failure.
+The exception stack names the standalone `full_attn_layer_chunk_project` wait,
+called through the ordinary F32 route. It does **not** identify the first full
+layer, an exact failing layer, or the attention kernel within that helper.
+The helper also encodes projections, normalization, cache writes and FFN work.
+
+Only nine ordinary shared-command begin/terminal pairs were traced, with no
+unmatched or failed trace records. Standalone helper commands are outside that
+trace: successful pairing does not certify the GPU replay. `check_replay.py`
+correctly rejects the run using its nonzero exit and missing second completion.
+The observer collected 47 samples without errors, minimum free memory 42%
+(initial 75%), under the unchanged 35% floor / 24-GiB cap / 300s timeout.
+No memory-floor kill occurred; this does not exclude GPU resource pressure.
+Monotonic launcher wall time was 94,330.570 ms.
+
+Evidence: `/private/tmp/qwen-fusion-off.ikJywu/`, `run_inventory.py`,
+`fusion-off-{dry,gpu}` logs/results/samples and `check_replay.py`. The launcher
+rechecks the previous source/input/binary identities. Executed commands were
+`python3 /private/tmp/qwen-fusion-off.ikJywu/run_inventory.py --dry` and `--run`.
+The launcher refuses to overwrite existing evidence; any future authorized run
+needs a fresh output directory and refreshed identity checks. Temporary artifacts
+are not a permanent fixture; refresh if those inputs become unavailable.
+
+**Decision:** ROBUST for the bounded negative result, not root-cause closure.
+The flag changes both requests, scratch usage, host readbacks and fused-group
+rotation/cooldowns; it is not a pure one-command scheduling intervention.
+Keep production defaults unchanged. Next add narrowly scoped standalone-command
+layer/failure attribution before attempting a stage-level discriminator; do not
+infer an SG4 defect from the enclosing helper stack or claim a speedup from
+this single failed run. Refresh after source/model/device/input/scheduling
+changes. The full two-call stability gate remains red.
