@@ -74,6 +74,84 @@ describe ML::GGUF::QwenPrefillCommandTrace do
     io.to_s.should contain("sequence=2 command_id=17")
   end
 
+  it "attributes the full-layer call without pretending to time a command wait" do
+    io = TraceFlushSpy.new
+    trace = ML::GGUF::QwenPrefillCommandTrace.new(io)
+    expected = [] of Float32
+    result = trace.observe_full_layer(7839, 195, 27) do
+      io.to_s.should contain("qwen35_prefill_layer phase=call_begin")
+      io.flush_count.should eq(1)
+      expected
+    end
+    result.should be(expected)
+    io.to_s.should contain("route=full_attn_chunk_routed start_pos=7839 rows=195 layer=27")
+    io.to_s.should contain("phase=call_end")
+    io.to_s.should_not contain("phase=call_declined")
+    io.to_s.should_not contain("command_id=")
+    io.to_s.should_not contain("submit_wait")
+    io.flush_count.should eq(2)
+  end
+
+  it "distinguishes a declined full-layer route from a completed call" do
+    io = IO::Memory.new
+    trace = ML::GGUF::QwenPrefillCommandTrace.new(io)
+    trace.observe_full_layer(0, 4, 3) { nil }.should be_nil
+    io.to_s.should contain("phase=call_declined")
+    io.to_s.should_not contain("phase=call_end")
+    io.to_s.should_not contain("phase=call_failed")
+  end
+
+  it "pairs full-layer failures and preserves the exception without logging its payload" do
+    io = IO::Memory.new
+    trace = ML::GGUF::QwenPrefillCommandTrace.new(io)
+    original = Exception.new("private payload")
+    caught = nil.as(Exception?)
+    begin
+      trace.observe_full_layer(7839, 195, 31) { raise original }
+    rescue ex
+      caught = ex
+    end
+    caught.should be(original)
+    lines = io.to_s.lines
+    lines.size.should eq(2)
+    lines[0].should contain("phase=call_begin")
+    lines[1].should contain("phase=call_failed")
+    lines.all? { |line| line.includes?("sequence=1 route=full_attn_chunk_routed start_pos=7839 rows=195 layer=31") }.should be_true
+    io.to_s.should_not contain("private payload")
+    io.to_s.should_not contain("phase=call_end")
+  end
+
+  it "preserves full-layer calls with a broken diagnostic sink" do
+    io = IO::Memory.new
+    io.close
+    trace = ML::GGUF::QwenPrefillCommandTrace.new(io)
+    trace.observe_full_layer(0, 1, 3) { [1.0_f32] }.should eq([1.0_f32])
+    trace.observe_full_layer(0, 1, 3) { nil }.should be_nil
+    original = Exception.new("failed")
+    caught = nil.as(Exception?)
+    begin
+      trace.observe_full_layer(0, 1, 3) { raise original }
+    rescue ex
+      caught = ex
+    end
+    caught.should be(original)
+  end
+
+  it "wraps only the ordinary routed full-layer call after the existing flush" do
+    source = File.read(File.join(__DIR__, "../src/ml/gguf/qwen35_cpu.cr"))
+    source.scan("trace.observe_full_layer(").size.should eq(1)
+    observe = source.index("trace.observe_full_layer(start_pos, n_tokens, il)").not_nil!
+    boundary = source.rindex("flush_prefill_cmd.call if read_output", observe).not_nil!
+    source[boundary...observe].should contain("if trace = prefill_command_trace")
+    finish = source.index("if gpu_out = full_result", observe).not_nil!
+    body = source[observe...finish]
+    # One call in each exclusive branch: enabled and default-off.
+    body.scan("full_attn_layer_chunk_project_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq, read_output: read_output, output_buf: full_output_buf)").size.should eq(2)
+    body.should_not contain("append_command_buffer:")
+    body.should_not contain("flush_prefill_cmd.call")
+    body.should_not contain("il +=")
+  end
+
   it "wraps only ordinary submit/wait and does not claim an encoded layer interval" do
     source = File.read(File.join(__DIR__, "../src/ml/gguf/qwen35_cpu.cr"))
     source.scan("trace.observe(").size.should eq(1)

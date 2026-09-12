@@ -1,7 +1,8 @@
 # Ordinary prefill command diagnostics
 
 `QWEN35_PREFILL_COMMAND_TRACE=1` adds flushed stderr records around the existing
-ordinary shared-command commit/wait in `qwen35_cpu.cr`. Unset, zero and other
+ordinary shared-command commit/wait and ordinary routed full-layer call in
+`qwen35_cpu.cr`. Unset, zero and other
 values disable it. It does not enable GPU timing, change command grouping,
 insert sleeps or retries, alter cache publication, or modify CogniGraph.
 
@@ -23,9 +24,29 @@ Cursor positions localize control flow; they are not an exact encoded layer
 interval. For example, standalone adaptive work flushes before incrementing
 the current layer. Group count likewise is the existing rotation counter, not
 an exhaustive dispatch or layer count. Trace identity is local to one process.
-CogniGraph, private/internal command buffers, finalization before submission,
-publication after wait, and hard process/device termination are not covered.
+These command records do not cover CogniGraph, private/internal command buffers,
+finalization before submission, publication after wait, or hard process/device
+termination. The additional full-layer call records below have a different scope.
 A successful wait record does not certify successful cache publication.
+
+### Routed full-layer call records
+
+`qwen35_prefill_layer` is a separate record type around the ordinary
+`full_attn_layer_chunk_project_routed` call, after its existing pre-call flush.
+It carries `route=full_attn_chunk_routed`, exact zero-based `layer`, `start_pos`,
+logical `rows`, and trace-local identity/sequence. Phases are `call_begin`, then
+`call_end` for a returned array (including an empty array), `call_declined` for
+nil, or `call_failed` before rethrowing the original exception. A declined call
+can fall back to CPU; do not count it as successful GPU work.
+
+This boundary includes setup, encoding, private command commit/wait and readback.
+Its host elapsed time is **not** a wait-only or GPU duration. A failure record
+identifies the routed call's layer, not which operation failed inside it or
+whether submission occurred. These records deliberately omit command identity.
+Fused full/recurrent, adaptive/shared, final-layer-specialized and recurrent-only
+calls are not covered by this added wrapper. Hard termination or a broken stderr
+sink can still leave incomplete evidence. The default-off branch calls the same
+helper directly; command grouping, math and cache handling are unchanged.
 
 Logging is best-effort and flushed before submission. Logging exceptions are
 suppressed; command exceptions are rethrown unchanged without logging their
@@ -35,11 +56,14 @@ in the caller's log. Do not use diagnostic timing as a performance promotion.
 
 ## Verification and rollback
 
-Six no-GPU specs exercise explicit opt-in, pre-submit visibility/flush, result
+Eleven no-GPU specs exercise explicit opt-in, pre-submit visibility/flush, result
 preservation, failed-wait emission/original exception identity, broken logging
 and repeated command identity. A source guard checks ordinary-branch placement
 before publication and the adaptive flush-before-cursor-increment distinction;
-it is not runtime route coverage. Commands:
+it is not runtime route coverage. Added full-layer tests check nil versus empty
+array, original exception identity with no payload, failed logging, exact layer
+metadata and exclusive enabled/default-off source wiring after the existing
+flush. Commands:
 
 ```sh
 CRYSTAL_CACHE_DIR=/private/tmp/qwen-command-trace-spec crystal spec spec/qwen_prefill_command_trace_spec.cr
@@ -260,3 +284,76 @@ layer/failure attribution before attempting a stage-level discriminator; do not
 infer an SG4 defect from the enclosing helper stack or claim a speedup from
 this single failed run. Refresh after source/model/device/input/scheduling
 changes. The full two-call stability gate remains red.
+
+### Full-layer attribution extension: local checks
+
+The missing `observe_full_layer` regression initially failed to compile. After
+adding the wrapper, all 11 command/layer trace examples passed; the combined
+trace, SG4-tail and Metal process-lease suite passed 16 examples without GPU.
+Formatting and `git diff --check` passed. A CPU-only executable and the actual
+release two-call provider both built successfully:
+
+```sh
+CRYSTAL_CACHE_DIR=/private/tmp/qwen-standalone-trace-spec crystal spec spec/qwen_prefill_command_trace_spec.cr spec/qwen35_sg4_tail_safety_spec.cr spec/metal_process_lease_spec.cr --no-color
+CRYSTAL_CACHE_DIR=/private/tmp/qwen-layer-trace.s9ILiM/cpu-cache crystal build -Dcpu_only bin/qwen35_generate.cr -o /private/tmp/qwen-layer-trace.s9ILiM/cpu-probe
+# From ../crystal_ball; the provider annotation already links build/bridge.o.
+CRYSTAL_CACHE_DIR=/private/tmp/qwen-layer-trace.s9ILiM/metal-cache crystal build scripts/cogni_qwen_two_call_probe.cr --release -o /private/tmp/qwen-layer-trace.s9ILiM/probe
+```
+
+The initial provider link attempt supplied bridge.o a second time and failed
+with duplicate symbols; removing that redundant build flag succeeded, without
+source changes. Source manifests were captured before compilation and rechecked
+after it; the metadata-only replay also passed. New provider binary SHA256:
+`45ad10677acedf5174a577f45f7fae385b481fd29e8d4ec926742a8771fdd1e2`.
+The Metal implementation and separate dirty FFN capacity experiment are
+unchanged. Review verdict is ROBUST for the bounded instrumentation contract,
+not for GPU stability. The runtime gate is reported separately below.
+
+### Instrumented fusion-off replay: layer 7 call attributed
+
+The single guarded replay with this binary still exited 1. First-call captured
+tool/count checks passed (27 output tokens, 80,205.5 ms); second input identities
+remained unchanged: prefix 7,839, suffix 196, helper rows 195, capacity 8,845.
+No second output or full two-call parity certificate exists. The new records
+localize this run as follows, with host wall times rather than GPU times:
+
+| Boundary | Host ms | Result |
+| --- | ---: | --- |
+| Ordinary shared command, cursor 0 to 3 | 467.763 | wait returned |
+| Routed full-attention call, layer 3 | 240.800 | call returned |
+| Routed full-attention call, layer 7 | 113.584 | call failed |
+
+The native exception again originates from the private full-attention helper's
+wait and reports `Impacting Interactivity`. There are 122 full-layer begin/terminal
+pairs, exactly one `call_failed`, and no unmatched identities. All nine ordinary
+shared-command pairs end successfully: the added layer wrapper catches the
+previously invisible failure. The checker verifies both pairings but rejects
+the failed replay; trace completeness is not success.
+
+The preceding uninstrumented fusion-off replay reached a layer-24 memory event,
+whereas this replay fails at layer 7. Do not label layer 7 a deterministic bad
+layer, blame a particular attention kernel, or infer a watchdog duration from
+the failed call's elapsed time. Logging, rebuild and host scheduling are possible
+confounders; this is attribution for one run, not causal isolation.
+
+Observer: 45 samples, zero collection errors, free memory initially 76%, minimum
+41%; no memory-floor kill. The existing 35% floor / 24-GiB process-tree cap /
+300s timeout / 2,048-row chunks / group limit 1 / cooldown 50ms were unchanged.
+The cooperating-client Metal lease spans both calls. Launcher wall time was
+89,175.155 ms (the runner's approximate tick label was `~64s`). No retries or
+further GPU workloads followed the failure.
+
+Evidence root: `/private/tmp/qwen-layer-trace.s9ILiM/`; source manifests,
+`run_inventory.py`, `layer-trace-{dry,gpu}` logs/results/samples and
+`check_replay.py`. The launcher differs from the prior fusion-off launcher only
+in binary/source-manifest identities and output paths; execution flags and
+pinned session/model are retained. GPU command was
+`python3 /private/tmp/qwen-layer-trace.s9ILiM/run_inventory.py --run`.
+
+**Decision:** the diagnostic extension is verified for this scoped failure
+attribution plus the model-free contracts. GPU stability remains unresolved;
+no speed promotion. Next inspect a bounded stage-level discriminator inside
+the standalone full-attention helper. Any stage splitting changes scheduling
+and must be treated as a diagnostic intervention, not a drop-in fix. Refresh
+after source/device/model/input/toolchain/scheduling changes; do not replay
+merely to obtain a different failing layer.

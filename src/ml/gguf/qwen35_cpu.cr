@@ -4507,7 +4507,14 @@ module ML::GGUF
               end
             end
             flush_prefill_cmd.call if read_output
-            if gpu_out = full_attn_layer_chunk_project_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq, read_output: read_output, output_buf: full_output_buf)
+            full_result = if trace = prefill_command_trace
+                            trace.observe_full_layer(start_pos, n_tokens, il) do
+                              full_attn_layer_chunk_project_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq, read_output: read_output, output_buf: full_output_buf)
+                            end
+                          else
+                            full_attn_layer_chunk_project_routed(x, n_tokens, start_pos, state.layers[il], lw, hp, max_seq, read_output: read_output, output_buf: full_output_buf)
+                          end
+            if gpu_out = full_result
               flush_prefill_cmd.call unless read_output
               if read_output
                 x = gpu_out

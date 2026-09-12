@@ -6,6 +6,30 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-QWEN35-FULL-LAYER-TRACE-2026-09-11] Ordinary full-layer failure attribution reaches the real replay
+
+- Added default-off `qwen35_prefill_layer` call records around only the ordinary
+  routed full-attention helper. Exact zero-based layer; nil means declined,
+  arrays including empty mean returned, exception means failed with original
+  identity preserved. Host call duration is not GPU/wait-only time. No Metal,
+  math, scheduling, cache or dirty FFN capacity implementation changes.
+- Missing-method regression failed before implementation; 11 trace specs and
+  16 combined trace/SG4/lease specs pass without GPU. CPU-only executable and
+  release provider builds pass, as do source checks and metadata-only dry run.
+- One guarded fusion-off replay: first tool/count gate passes; second suffix
+  layer 3 returns and layer 7 fails with Impacting Interactivity. All 122 layer
+  pairs complete with exactly one failure, while nine shared-command pairs
+  succeed. This closes the observation gap for this call, not GPU stability.
+  The previous run reached layer 24, so no deterministic bad-layer claim.
+- 45 samples, no collection errors, minimum free 41%, unchanged 35% floor /
+  24-GiB cap / 300s timeout. No retry. ROBUST bounded diagnostic contract;
+  full replay remains red and no speedup is certified. Next: bounded stage
+  discrimination, accounting for its scheduling intervention.
+- Details/lineage: `docs/qwen-prefill-command-trace.md`; evidence root
+  `/private/tmp/qwen-layer-trace.s9ILiM/`. Refresh after source/device/model/input/
+  toolchain/scheduling changes. Fused, adaptive, recurrent-only and final-layer
+  specialized calls remain outside the new call wrapper.
+
 ### [LM-QWEN35-FUSION-OFF-2026-09-11] Disabling fusion does not resolve the two-call failure
 
 - One source-pinned replay with only `QWEN35_PREFILL_FUSE_FULL_REC_OFF=1`
@@ -14,8 +38,8 @@ Rich landmarks include full State/Relations/Evidence structure.
   second request has no completed output. No retry or engine edit.
 - Suffix shared command cursor 0 to 3 completes in 291.386 ms; later memory
   events reach layer 24 before failure in standalone full-attention helper.
-  This is not evidence that layer 3 or SG4 itself failed. Nine trace pairs
-  succeed because standalone commands are not covered by ordinary tracing;
+  This is not evidence that layer 3 or SG4 itself failed. Nine ordinary shared-
+  command pairs succeed; standalone commands are not covered by ordinary tracing;
   the replay checker correctly rejects exit 1.
 - 47 memory samples, no sampling errors, minimum free 42%; unchanged 35%
   floor / 24-GiB cap / 300s timeout. No memory-floor kill, not proof of absent
