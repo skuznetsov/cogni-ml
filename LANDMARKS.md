@@ -27750,3 +27750,26 @@ Refresh after source/toolchain/device/model/workload changes.
 - Commands/hashes/controls: `docs/qwen-prefill-command-trace.md`, "Two-stage
   replay"; `/private/tmp/qwen-two-stage.vlxfep/`. Refresh after source/model/
   device/input/toolchain/scheduling drift or loss of temporary evidence.
+
+### LM-1060 — Matched prefill traces select a long-prefix SG4 operator probe
+
+- Read-only comparison of LM-1059 and prior pinned captures; no GPU run or
+  production change. Matched all 195 successful instrumented layer keys.
+  Prefix7839/rows195: 15 enclosing full-layer calls total2715.734/2714.097ms
+  for three/two stages; three-stage attention waits2385.079ms (87.8% of that
+  subset, not the request). These are host waits, not isolated GPU intervals.
+- Nine suffix memory inventories match; pipelines remain53. This narrows
+  measured cache growth, not hidden driver allocation or watchdog causality.
+- Source/config selects F32 SG4 pregate for rows195 and direct-gate for
+  rows1668; threshold1024 ignores prefix length. Luna corroborated routing;
+  correlated review, not independent performance evidence. LM-414 short-pp64
+  regression/noise remains a reason not to lower the global threshold.
+- Next PROPOSED: no-model F32 direct/pregate oracle/canary check then balanced
+  timing at prefix7839/rows193..196, with prefix0/rows64 and195 controls.
+  Keep defaults/precision unchanged; stop on failed correctness or inconclusive
+  benefit. Only repeatable operator benefit admits a separate model-state gate.
+- Comparison script, three SG4 source-safety specs and unchanged-manifest
+  verifier pass. ROBUST for accounting/routing only, no speed or causal fix.
+  Commands/digests: docs/qwen-prefill-command-trace.md, "Matched-shape trace
+  inspection". Refresh on source/config/input/device/toolchain drift or lost
+  evidence; retain35%/24GiB/300s and first-failure stop for future GPU probes.

@@ -702,3 +702,67 @@ by default; do not combine this scheduling result with the separate FFN reuse
 experiment. Next use existing traces to choose any further discriminating
 experiment, rather than promote or immediately repeat this run. Refresh on
 source/model/device/input/toolchain/scheduling drift or evidence loss.
+
+### Matched-shape trace inspection: select an operator probe (2026-09-12)
+
+Read-only follow-up to the two-stage replay; no new GPU run, kernel or policy
+change. `python3 /private/tmp/qwen-two-stage.vlxfep/compare_stages.py` verifies
+the three pinned stderr digests and matches the 195 successful layer keys
+`(start_pos, rows, layer)` between the two split captures. Coverage below is
+15 ordinary full-attention layers per shape, not every model operation.
+
+| Host-time accounting, sum over 15 layers | Three-stage | Two-stage |
+| --- | ---: | ---: |
+| Prefix7839 / rows195: enclosing calls | 2715.734 ms | 2714.097 ms |
+| Same shape: prepare + attention waits | 2456.592 ms | 2454.882 ms |
+| Same shape: output/FFN waits | 244.986 ms | 245.233 ms |
+| Same shape: enclosing time outside stage waits | 14.156 ms | 13.982 ms |
+| Prefix6144 / rows1668: enclosing calls | 11420.761 ms | 11430.525 ms |
+
+The three-stage attention-only sum for rows195 is 2385.079ms, about 87.8%
+of those enclosing calls, not 87.8% of full request time. Removing the early
+boundary produces no material observed time difference. These host waits do
+not isolate GPU execution or establish a kernel-speed ranking. OFF supplies
+no internal stage timing: it completes only one suffix layer before layer7
+fails, so its truncated suffix cannot be compared as a completed workload.
+
+All nine suffix inventory snapshots in the two successful captures match
+after removing timestamps: stage/position/layer, pipeline entries, Scratch
+entries/bytes, live/peak Metal buffers and device-allocated bytes. All three
+captures also match at suffix entrance. Pipelines remain53, Scratch entries
+915/959/960 in both successful suffixes. This narrows the measured cache-growth
+hypothesis, not hidden driver allocation, command lifetime or watchdog cause.
+
+Source-resolved route under captured controls: `qwen35_metal.cr` SG4 policy
+(default direct-gate minimum1024) and the standalone attention dispatch select
+F32 `qwen35_attn_decode_rows_sg4_pregate` for rows195, but direct-gate
+`qwen35_attn_decode_rows_sg4` for rows1668. Prefix length is absent from this
+threshold. This is inferred from pinned source/config, not a kernel-name event
+in the capture. LM-414 retains the historical short-pp64 direct-gate regression/
+noise caveat; a short continuation after 7839 cached tokens is a different,
+unmeasured regime, not grounds to remove that guard.
+
+**Next discriminator, PROPOSED:** a no-model F32 operator comparison using the
+existing two SG4 kernels, identical Q/gate/K/V inputs, heads24/KV4/D256 and
+prefix7839/rows193..196, plus prefix0/rows64 as the historical short control
+and prefix0/rows195 to isolate prefix length at the observed continuation size.
+Reuse the corrected partial-SIMD-group synchronization and CPU oracle/canaries
+from `bin/qwen35_sg4_tail_probe.cr`. Require finite output, oracle agreement and
+direct/pregate equality before warmed, balanced ABBA timing. No global routing
+change, precision conversion, extra padding or command-overlap experiment.
+If the candidate is slower, inconclusive or fails correctness, keep the current
+route and stop this candidate; do not widen the benchmark until it looks good.
+The direct-gate minimum override affects all eligible chunks, not just rows195;
+do not describe a whole-session `MIN=1` replay as a single-shape intervention.
+Only a repeatable operator win would justify a separate two-call output/state
+gate. Retain the existing first-failure and memory/time guards.
+
+Flash MMA is not a drop-in control here: its present admission requires F16
+KV, and the prefix model-state discrepancy remains recorded in
+`qwen35-engine-frontier.md`. Do not change representation or relax that gate
+to accelerate this F32 diagnostic. The current three SG4 source-safety specs
+pass; source/binary manifests remain unchanged. Scoped verdict: ROBUST for
+trace accounting and route selection, not a causal fix or speed claim.
+Comparison script SHA256:
+`56c4b184671febc56e1aa13e188bcb178d0331c24de68cb83d514e6ab8ea2d7e`.
+Refresh after source/config/input/device/toolchain drift or evidence loss.
