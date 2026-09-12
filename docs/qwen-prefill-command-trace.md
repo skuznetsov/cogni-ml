@@ -1,5 +1,40 @@
 # Ordinary prefill command diagnostics
 
+## Active diagnostic frontier: standalone stage split
+
+Default-off diagnostic, not a production fix: `QWEN35_FULL_PREFILL_STAGE_SPLIT=1`
+splits only standalone ordinary F32 full-attention into synchronous
+`prepare_kv`, `attention`, and `output_ffn` commands. Shared, adaptive and F16
+routes remain unchanged; unset or other values preserve the original command.
+Each successor is created only after the previous encoder has ended and its
+command wait succeeded; the final stage allocates no successor. Tensor buffers,
+shapes, kernel selection, precision and operation order are unchanged. There
+are no new sleeps, retries or concurrent commands. A failed stage must propagate
+the original exception; partial state is not reusable or a checkpoint.
+
+The three stages are norm/QKV/QK normalization/RoPE/KV write; attention alone;
+then O projection/add-normalization/FFN/final add/output copy. Stage records
+carry command identity, start/rows and stage, and nest inside the existing
+exact-layer call records on the serial provider path when
+`QWEN35_PREFILL_COMMAND_TRACE=1` is also set. Without that outer trace, stage
+records alone do not identify the layer. They time host commit/wait, not GPU
+execution. No exact failing kernel is inferred within a multi-op stage. The
+existing aggregate encode profile includes the new intermediate waits; do not
+interpret that profile as encode-only or use this mode for speed comparisons.
+
+DoD: fake-command success and failure at each stage, unchanged exception with
+broken logging, stage routing/default-off checks, source placement/ended-encoder
+guards, CPU-only and Metal builds. Then at most one guarded same-input replay,
+retaining fusion OFF, FFN capacity reuse OFF and existing memory/timeout limits.
+Stop after its first GPU failure. A pass is scheduling-sensitive diagnostic
+evidence, not root cause, state parity, speed or production-stability closure.
+Rollback is unset `QWEN35_FULL_PREFILL_STAGE_SPLIT`; do not promote the splitter.
+
+Current evidence: the single 2026-09-12 guarded split replay completed both
+calls and matched the saved second-output digest (details below). The earlier
+unsplit failure was a different process/build/time, not a matched control.
+Production stability, causal attribution and any speed claim remain open.
+
 `QWEN35_PREFILL_COMMAND_TRACE=1` adds flushed stderr records around the existing
 ordinary shared-command commit/wait and ordinary routed full-layer call in
 `qwen35_cpu.cr`. Unset, zero and other
@@ -357,3 +392,74 @@ the standalone full-attention helper. Any stage splitting changes scheduling
 and must be treated as a diagnostic intervention, not a drop-in fix. Refresh
 after source/device/model/input/toolchain/scheduling changes; do not replay
 merely to obtain a different failing layer.
+
+### Standalone stage split: one successful two-call replay (2026-09-12)
+
+The missing stage-split helper first produced a compile failure. After adding
+the helper and its three guarded call sites, the combined model-free suite
+passed 21 examples, with no failures/errors/pending:
+
+```sh
+CRYSTAL_CACHE_DIR=/private/tmp/qwen-stage-split.NCS57S/spec-cache crystal spec spec/qwen_prefill_stage_split_spec.cr spec/qwen_prefill_command_trace_spec.cr spec/qwen35_sg4_tail_safety_spec.cr spec/metal_process_lease_spec.cr --no-color
+CRYSTAL_CACHE_DIR=/private/tmp/qwen-stage-split.NCS57S/cpu-cache crystal build -Dcpu_only bin/qwen35_generate.cr -o /private/tmp/qwen-stage-split.NCS57S/cpu-probe
+# From ../crystal_ball; its link annotation supplies the bridge.
+CRYSTAL_CACHE_DIR=/private/tmp/qwen-stage-split.NCS57S/metal-cache crystal build scripts/cogni_qwen_two_call_probe.cr --release -o /private/tmp/qwen-stage-split.NCS57S/probe
+python3 /private/tmp/qwen-stage-split.NCS57S/run_stage_split.py --dry
+python3 /private/tmp/qwen-stage-split.NCS57S/run_stage_split.py --run
+python3 /private/tmp/qwen-stage-split.NCS57S/check_stage_split.py
+```
+
+Both builds, formatting and diff checks passed. Fake commands cover each failed
+stage, exact exception identity, commit failure without wait, and closed logging;
+source guards cover bypass conditions, ended encoders and successor placement.
+These are not GPU numerical tests. The source review found no hidden command
+submission inside reachable `encode_matmul` helpers. Scratch survives all three
+stages under the existing serialized route. The replay holds the Metal lease
+across both calls and closes the provider on failure; low-level callers must
+likewise discard failed state, because partial F32 KV writes are not rolled back.
+
+The one GPU replay exited 0, with all 585 stage begin/terminal pairs nested
+within 195 successful exact-layer call pairs. No stage failed or lacked a
+terminal record. The first call matched the captured tool output and 27-token
+count. The second input retained 8,035 prompt tokens, 7,839 cached tokens,
+196 suffix tokens (195 full-helper rows), and capacity 8,845. It used
+`resident_prefix_hit=1`, emitted no tool calls, and its content SHA256 matched
+the saved successful baseline:
+`ed251864987c367e9641fbdc89c1d83e9bf0fa2e3eecef8f301c79f619bfac81`.
+
+Observed first/second provider wall times were 75,804.9 / 7,048.7 ms; second
+prefill/top1 was 4,071.3 ms and decode body 2,904.3 ms. Launcher wall time was
+90,650.485 ms, including the fixed 7.1-second captured-tool delay. The runner's
+approximate `~66s` tick label is not the wall-clock duration. Do not compare
+these diagnostic timings as a speedup against an earlier failed run.
+
+Observer: 45 samples, zero collection errors, initial free memory 79%, minimum
+48%, no guard kill or native GPU error. Controls stayed at 35% free-memory
+floor, 24,576-MiB process-tree cap, 300-second timeout, 2,048-row chunks,
+group limit 1 and 50ms cooldown; fusion and FFN capacity reuse remained OFF.
+Quiet-host waiting remained disabled under the existing operator authorization;
+this is not quiet-host benchmark evidence. No second GPU run was made.
+
+Evidence root: `/private/tmp/qwen-stage-split.NCS57S/`, containing source
+manifests, launcher/checker, `stage-split-{dry,gpu}` logs/results and samples.
+Manifests were checked before execution and again afterward with no drift.
+The measured checkout includes the separate dirty FFN experiment, explicitly
+disabled at runtime; that WIP is excluded from the diagnostic commit.
+
+- Provider binary SHA256: `cc179fcbb521309c25afb44f73d6a619529e403c2eab8f347636b41c6c0d22fd`.
+- Measured Metal source SHA256: `430bfa229045e6a2cc0733bf3cd2de88323877b8af0cc5b4a75440ce74960633`.
+- Stage helper SHA256: `2bb8a85dae2858530db53622c3d8722e75fda5620be4bd983f56cdfe963885b6`.
+- GPU stderr SHA256: `0f0842fab0a91540198b8be7e14379db89b9d09f3f3618888205f94faea5e7a4`.
+- GPU stdout SHA256: `50857cca738b084545c02593c04f29c8e0e75692bfed7f3db109e4c1804abca3`.
+
+**Decision:** ROBUST for the default-off diagnostic contract and this one
+output-replay pass, supported by local checks and correlated Luna source review.
+Not a state-tensor parity certificate, production fix, deterministic kernel
+localization or watchdog-causality proof. Splitting changes submission,
+completion and host-encoding timing, including lazy pipeline setup placement;
+host conditions and different prior binaries remain confounders. Keep defaults
+unchanged. The next discriminator is a same-binary, same-input unsplit/split
+comparison under the existing first-failure stop policy, not another kernel
+rewrite. Only after reproducing a schedule-dependent difference should a
+smaller two-stage cut be investigated. Refresh after source/device/model/input/
+toolchain/scheduling changes or loss of the temporary evidence.

@@ -27649,3 +27649,27 @@ Refresh after source/toolchain/device/model/workload changes.
   Stop single-buffer retuning without a new hardware/compiler/bottleneck
   premise. Other FFN opportunities remain unproven, not exhausted. Refresh
   after source/model/input/device/toolchain/scheduling changes.
+
+### LM-1056 — Standalone full-prefill stage split passes one two-call diagnostic
+
+- Added default-off `QWEN35_FULL_PREFILL_STAGE_SPLIT=1` only for standalone
+  ordinary F32 full attention: prepare/KV write, attention, output/FFN. Each
+  ended stage waits successfully before a successor is allocated. Shared,
+  adaptive and F16 routes bypass it; failed partial KV is not reusable.
+- Model-free combined suite: 21 examples, no failures/errors/pending; CPU-only
+  and release-provider builds pass. Correlated Luna review found no blocker
+  for one guarded serialized replay, not production stability.
+- One replay completed both calls: 585 paired stage records / 195 layer calls;
+  captured first tool/count match, second resident-prefix hit and saved output
+  digest match. Second input: 8035 prompt / 7839 cached / 196 suffix / 8845
+  capacity. Second provider wall 7048.7ms; no speed comparison is admitted.
+- All memory/timeout guards retained, fusion/FFN reuse OFF; 45 observer samples,
+  zero errors, minimum free 48%. No retries or additional GPU workloads.
+- ROBUST scoped diagnostic/output result; no root-cause, state parity or
+  production-fix claim. Prior unsplit failures are different builds/processes/
+  host times. Next: same-binary unsplit/split discriminator, retaining stop on
+  first GPU failure, before reducing to a two-stage cut or changing kernels.
+- Source/binary/log hashes and commands: `docs/qwen-prefill-command-trace.md`,
+  "Standalone stage split: one successful two-call replay". Temporary root
+  `/private/tmp/qwen-stage-split.NCS57S/`; refresh on source/model/device/input/
+  toolchain/scheduling drift or loss of evidence. Existing FFN WIP stays uncommitted.

@@ -1,0 +1,51 @@
+module ML::GGUF
+  # Diagnostic scheduling only: the caller owns ended encoders and creates a
+  # successor command only after finish succeeds. Failed state is not reusable.
+  class QwenPrefillStageSplit
+    enum Stage
+      PrepareKV
+      Attention
+      OutputFFN
+    end
+
+    @sequence = 0_u64
+
+    def self.enabled?(standalone : Bool, ordinary_f32 : Bool,
+                      configured : String? = ENV["QWEN35_FULL_PREFILL_STAGE_SPLIT"]?) : Bool
+      configured == "1" && standalone && ordinary_f32
+    end
+
+    def initialize(@start_pos : Int32, @rows : Int32, @io : IO = STDERR)
+    end
+
+    def finish(command, stage : Stage)
+      @sequence += 1
+      name = case stage
+             when .prepare_kv? then "prepare_kv"
+             when .attention?  then "attention"
+             else                   "output_ffn"
+             end
+      fields = "trace_id=#{object_id} sequence=#{@sequence} command_id=#{command.object_id} " \
+               "stage=#{name} start_pos=#{@start_pos} rows=#{@rows}"
+      emit("submit_wait_begin", fields)
+      started = Time.instant
+      begin
+        command.commit
+        command.wait
+      rescue ex
+        emit("submit_wait_failed", fields, (Time.instant - started).total_milliseconds)
+        raise ex
+      end
+      emit("submit_wait_end", fields, (Time.instant - started).total_milliseconds)
+    end
+
+    private def emit(phase : String, fields : String, host_elapsed_ms : Float64? = nil)
+      line = "qwen35_prefill_stage phase=#{phase} #{fields}"
+      line += " host_elapsed_ms=#{host_elapsed_ms.round(3)}" if host_elapsed_ms
+      @io.puts(line)
+      @io.flush
+    rescue
+      # Logging must not prevent submission or replace the original exception.
+    end
+  end
+end

@@ -9,6 +9,7 @@
 
 require "./reader"
 require "./qwen35_weights"
+require "./qwen_prefill_stage_split"
 require "json"
 
 {% unless flag?(:cpu_only) %}
@@ -8129,6 +8130,9 @@ module ML
           t0 = Time.instant if Profile.enabled?
           cmd = append_command_buffer || ML::Metal::CommandBuffer.new
           appended = !append_command_buffer.nil?
+          stage_split = if QwenPrefillStageSplit.enabled?(append_command_buffer.nil?, adaptive_prefill_encoder.nil? && !kv_cache_f16)
+                          QwenPrefillStageSplit.new(start_pos, n_tokens)
+                        end
 
           norm_enc = ML::Metal::ComputeEncoder.new(cmd)
           encode_rmsnorm_rows(norm_enc, inp_buf, norm_w_buf, cur_buf, hidden_dim, n_tokens, eps)
@@ -8218,6 +8222,11 @@ module ML
             kvwrite_enc.dispatch_1d(n_tokens * kv_dim, 256)
             kvwrite_enc.end_encoding
 
+            if split = stage_split
+              split.finish(cmd, QwenPrefillStageSplit::Stage::PrepareKV)
+              cmd = ML::Metal::CommandBuffer.new
+            end
+
             attn_enc = ML::Metal::ComputeEncoder.new(cmd)
             use_flash_d256 = prefill_attn_flash_d256_enabled?(
               start_pos, n_tokens, n_head, n_head_kv, head_dim, kv_cache_f16,
@@ -8253,6 +8262,11 @@ module ML
               attn_enc.dispatch_threadgroups({n_head, n_tokens, 1}, {32, 1, 1})
             end
             attn_enc.end_encoding
+          end
+
+          if split = stage_split
+            split.finish(cmd, QwenPrefillStageSplit::Stage::Attention)
+            cmd = ML::Metal::CommandBuffer.new
           end
 
           outproj_enc = ML::Metal::ComputeEncoder.new(cmd)
@@ -8300,8 +8314,12 @@ module ML
           return [] of Float32 if appended
 
           t_enc = Time.instant if Profile.enabled?
-          cmd.commit
-          cmd.wait
+          if split = stage_split
+            split.finish(cmd, QwenPrefillStageSplit::Stage::OutputFFN)
+          else
+            cmd.commit
+            cmd.wait
+          end
           t_wait = Time.instant if Profile.enabled?
           result = read_output ? read_shared_f32(out_buf, n_tokens * hidden_dim) : [] of Float32
           if Profile.enabled?
