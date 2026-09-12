@@ -463,3 +463,73 @@ comparison under the existing first-failure stop policy, not another kernel
 rewrite. Only after reproducing a schedule-dependent difference should a
 smaller two-stage cut be investigated. Refresh after source/device/model/input/
 toolchain/scheduling changes or loss of the temporary evidence.
+
+### Same-binary unsplit control fails; series stopped (2026-09-12)
+
+The next diagnostic reused the exact successful stage-split binary above
+(`cc179fcb...c0d22fd`), with the same pinned session, prompt/tool identities,
+model path and literal runtime controls, except stage split OFF. Both metadata-only
+arm checks passed. No rebuild or production-code edit was made. Source/provider/
+binary manifests matched before execution and again afterward; model identity
+was checked by device/inode/size/mtime, not a full weight-file digest. The binary
+still includes the separate dirty FFN experiment, disabled at runtime.
+
+The one GPU OFF arm exited 1. Call 1 matched the captured tool/count (27 output
+tokens). Call 2 retained 8035 prompt / 7839 cached / 196 suffix / 8845 capacity,
+then failed in `full_attn_chunk_routed`, layer 7, start position 7839, 195 rows:
+`Impacting Interactivity (0000000e:kIOGPUCommandBufferCallbackErrorImpactingInteractivity)`.
+Layer 3 had completed; all 122 layer calls have terminal records, with zero
+stage records as expected for OFF. There is no second-call output. The checker
+correctly returns exit 1: complete failure attribution is not a replay pass.
+The series stopped immediately; no new ON GPU arm or retry was run.
+
+At second `prefill_enter`, both this OFF and the earlier successful ON report
+identical inventories (apart from timestamp): 53 pipeline entries, 915 scratch
+entries, 4,342,707,224 retained scratch bytes, 1076 live buffers,
+22,950,743,664 live/peak buffer bytes and 22,955,573,248 Metal-allocated bytes.
+Thus a difference in these recorded entrance inventories does not explain the
+contrast. This does not measure hidden driver state, within-command pressure,
+or exclude a resource mechanism elsewhere.
+
+Observer: 49 samples, zero errors, initial free 76%, minimum 43%; no guard kill.
+The 35% floor / 24,576-MiB tree cap / 300s timeout / 2048-row chunks / group 1 /
+50ms cooldown, disabled fusion/FFN reuse, and process-spanning Metal lease were
+retained. Quiet-host waiting stayed disabled under standing authorization.
+Launcher wall time was 98,009.429 ms; the runner's `~71s` tick is not wall time.
+First-call provider time was 89,537.8 ms. Neither it nor the 151.708-ms failed
+layer elapsed time establishes a speed comparison or watchdog threshold.
+
+Evidence root: `/private/tmp/qwen-stage-ab.kIMKDt/`; `off-gpu` logs/results/
+samples, input-control snapshots, `off-check.json`, and launcher/checker controls.
+Commands:
+
+```sh
+python3 /private/tmp/qwen-stage-ab.kIMKDt/qualify_check.py
+python3 /private/tmp/qwen-stage-ab.kIMKDt/run_ab.py off --dry
+python3 /private/tmp/qwen-stage-ab.kIMKDt/run_ab.py on --dry
+python3 /private/tmp/qwen-stage-ab.kIMKDt/run_ab.py off --run
+python3 /private/tmp/qwen-stage-ab.kIMKDt/check_ab.py off
+```
+
+The final two commands return 1 as expected for this negative diagnostic; do not
+rerun them merely to reproduce a pass. Checker qualification accepts the prior
+ON positive, rejects the prior failed OFF and wrong-arm trace, and rejects an
+ON trace with a whole layer's stage triplet removed. Successful ON must contain
+exactly three paired stages per paired layer call. These are trace/result checks,
+not state-tensor parity checks.
+
+- Launcher SHA256: `4e6a11df82f63e9a8ba0a484343e43250f0f053abd03273fc06176d5ce24dfe2`.
+- Checker SHA256: `108cfdfdd15ac7465804bf4f6e8e7717578f0f26898c3810a18d815bd9d83664`.
+- Qualifier SHA256: `1460a1383e484e6bc239949d3a9cbb9bffaa9204cc964d71190dc61b23a9c4ef`.
+- OFF stderr SHA256: `7490e59e3dd0998c80494d90542cac7b1016791e5e46a9c58acd52745d3a9e7c`.
+- OFF stdout SHA256: `347dcc34e0259ef1a4aa4fe2d59b9fad91f60f935fec405452542738b7d42502`.
+
+**Decision:** ROBUST for the observed same-binary ON-pass/OFF-failure contrast
+and stopping policy. The prior ON and current OFF occurred hours apart, not as
+a completed contemporaneous OFF/ON pair. Rebuild differences no longer explain
+this contrast, but host/time/order and driver state remain confounders. No
+deterministic layer fault, root cause, stability fix, state parity or speedup
+is established. Keep stage split default OFF. Next inspect the existing three
+stage boundaries and pipeline-setup placement for a smaller diagnostic cut;
+any new GPU experiment remains separate and must retain the first-failure stop.
+Refresh on source/model/device/input/toolchain/scheduling drift or evidence loss.

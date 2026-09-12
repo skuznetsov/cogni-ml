@@ -27673,3 +27673,27 @@ Refresh after source/toolchain/device/model/workload changes.
   "Standalone stage split: one successful two-call replay". Temporary root
   `/private/tmp/qwen-stage-split.NCS57S/`; refresh on source/model/device/input/
   toolchain/scheduling drift or loss of evidence. Existing FFN WIP stays uncommitted.
+
+### LM-1057 — Same-binary unsplit control fails; diagnostic series stopped
+
+- Reused LM-1056's successful ON binary, pinned inputs and runtime controls with
+  stage split OFF; manifests unchanged, no rebuild. Model identity is stat-based.
+  Metadata-only checks pass; one GPU OFF exits1, call1 captured tool/count pass,
+  call2 fails Impacting Interactivity at full layer7, start7839/rows195.
+  122 paired layer calls, zero stages; checker rejects replay. No new ON or retry.
+- Second-prefill entrance inventories exactly match prior ON: pipelines53,
+  scratch915/4,342,707,224B, live1076/22,950,743,664B, Metal22,955,573,248B.
+  This narrows recorded-cache-growth explanations at that boundary only;
+  hidden driver state and within-command resource pressure remain unmeasured.
+- Guards unchanged:35% free/24GiB/300s/chunk2048/group1/cooldown50ms, fusion and
+  FFN reuse OFF. 49 samples, zero errors, minimum free43%, no guard kill.
+  Checker controls cover positive, failed replay, wrong arm and missing full
+  stage triplet. Source/binary manifests rechecked after run without drift.
+- ROBUST observed contrast, not causal isolation: prior ON was hours earlier.
+  Rebuild confound removed; host/time/order remain. No fix, tensor-parity or
+  speed claim; defaults unchanged. Next inspect a smaller stage cut and lazy
+  pipeline placement read-only before a separate guarded experiment.
+- Commands/hashes/claim bounds: `docs/qwen-prefill-command-trace.md`,
+  "Same-binary unsplit control fails; series stopped"; temporary evidence
+  `/private/tmp/qwen-stage-ab.kIMKDt/` plus LM-1056's ON root. Refresh after
+  source/model/device/input/toolchain/scheduling drift or loss of evidence.
