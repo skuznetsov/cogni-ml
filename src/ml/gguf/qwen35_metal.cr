@@ -8130,9 +8130,10 @@ module ML
           t0 = Time.instant if Profile.enabled?
           cmd = append_command_buffer || ML::Metal::CommandBuffer.new
           appended = !append_command_buffer.nil?
-          stage_split = if QwenPrefillStageSplit.enabled?(append_command_buffer.nil?, adaptive_prefill_encoder.nil? && !kv_cache_f16)
-                          QwenPrefillStageSplit.new(start_pos, n_tokens)
-                        end
+          stage_split = QwenPrefillStageSplit.build(
+            append_command_buffer.nil?, adaptive_prefill_encoder.nil? && !kv_cache_f16,
+            start_pos, n_tokens,
+          )
 
           norm_enc = ML::Metal::ComputeEncoder.new(cmd)
           encode_rmsnorm_rows(norm_enc, inp_buf, norm_w_buf, cur_buf, hidden_dim, n_tokens, eps)
@@ -8223,8 +8224,9 @@ module ML
             kvwrite_enc.end_encoding
 
             if split = stage_split
-              split.finish(cmd, QwenPrefillStageSplit::Stage::PrepareKV)
-              cmd = ML::Metal::CommandBuffer.new
+              if split.finish(cmd, QwenPrefillStageSplit::Stage::PrepareKV)
+                cmd = ML::Metal::CommandBuffer.new
+              end
             end
 
             attn_enc = ML::Metal::ComputeEncoder.new(cmd)

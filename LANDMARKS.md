@@ -27705,3 +27705,20 @@ Refresh after source/toolchain/device/model/workload changes.
   next discriminator: keep only the cut after attention, no precision/kernel
   changes. This is not implemented or a stability/speed certificate. See the
   diagnostic document's "Stage-boundary inspection"; 21 model-free specs pass.
+
+### LM-1058 — Two-stage prefill diagnostic implemented, GPU gate still open
+
+- `QWEN35_FULL_PREFILL_STAGE_SPLIT=after_attention` combines PrepareKV and
+  attention, retaining only the cut before output/FFN. The skipped cut keeps
+  the same unsubmitted command; a failed wait cannot allocate a successor.
+  Mode is captured once. Legacy `1`, standalone/F32 admission and default OFF
+  remain unchanged; no kernel, precision, layout or operation-order change.
+- RED: new factory missing. GREEN: 25 model-free stage/trace/tail/lease specs,
+  format checks, diff check, CPU-only generator and release Metal provider
+  builds. Bounded Luna source review ROBUST for admission/control flow only.
+- No GPU workload or stability/parity/speed promotion. Next: separate guarded
+  two-call replay with fresh identity and a two-stage-aware trace checker;
+  retain 35% free/24GiB/300s and first-failure stop, fusion/FFN reuse OFF.
+- Evidence/commands: `docs/qwen-prefill-command-trace.md`, "Two-stage
+  implementation". Builds include pre-existing separate FFN WIP; that WIP
+  stays outside this commit. Refresh on source/toolchain/device/input drift.

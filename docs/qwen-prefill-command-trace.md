@@ -2,10 +2,21 @@
 
 ## Active diagnostic frontier: standalone stage split
 
+Implemented diagnostic: `QWEN35_FULL_PREFILL_STAGE_SPLIT=after_attention`
+keeps only the boundary after attention (prepare/KV + attention, then output/FFN).
+`1` retains three commands; unset/invalid values disable the diagnostic. Parse
+the selected mode once for each helper invocation, keep existing standalone/F32
+admission, and label the combined command `prepare_kv_attention` in traces.
+No successor may be created at the skipped KV-write cut or after a failed wait.
+DoD for implementation: mode/routing, fake-command identity/order/failure tests,
+source call-site guards, the existing model-free suite, CPU-only and Metal
+compile checks. GPU parity/stability remains a separate guarded experiment.
+
 Default-off diagnostic, not a production fix: `QWEN35_FULL_PREFILL_STAGE_SPLIT=1`
 splits only standalone ordinary F32 full-attention into synchronous
 `prepare_kv`, `attention`, and `output_ffn` commands. Shared, adaptive and F16
-routes remain unchanged; unset or other values preserve the original command.
+routes remain unchanged; values other than `1` or `after_attention` preserve
+the original command.
 Each successor is created only after the previous encoder has ended and its
 command wait succeeded; the final stage allocates no successor. Tensor buffers,
 shapes, kernel selection, precision and operation order are unchanged. There
@@ -578,3 +589,48 @@ by itself separate scheduler effects from command resource lifetime. Admission
 would require default-off policy and fake-command tests before a separate
 guarded replay with the existing failure-stop rule. A pass is not stability or
 speed promotion; a failure does not prove attention itself is defective.
+
+### Two-stage implementation: model-free gate (2026-09-12)
+
+`after_attention` now retains the same unsubmitted command through PrepareKV,
+then waits once for `prepare_kv_attention` before constructing `output_ffn`.
+The helper factory snapshots the mode once. Existing `1` semantics and the
+standalone ordinary-F32 gate remain unchanged; default is still OFF.
+
+The new tests first failed because the factory did not exist. After implementation:
+
+```sh
+CRYSTAL_CACHE_DIR=/private/tmp/qwen-two-stage-spec crystal spec \
+  spec/qwen_prefill_stage_split_spec.cr \
+  spec/qwen_prefill_command_trace_spec.cr \
+  spec/qwen35_sg4_tail_safety_spec.cr \
+  spec/metal_process_lease_spec.cr --no-color
+# 25 examples, 0 failures, 0 errors, 0 pending
+CRYSTAL_CACHE_DIR=/private/tmp/qwen-stage-split.NCS57S/cpu-cache \
+  crystal build -Dcpu_only bin/qwen35_generate.cr \
+  -o /private/tmp/qwen-two-stage.vlxfep/cpu-probe
+# exit 0
+# From ../crystal_ball:
+CRYSTAL_CACHE_DIR=/private/tmp/qwen-stage-split.NCS57S/metal-cache \
+  crystal build scripts/cogni_qwen_two_call_probe.cr --release \
+  -o /private/tmp/qwen-two-stage.vlxfep/probe
+# exit 0
+```
+
+Format checks for the helper, spec and Metal caller, plus `git diff --check`,
+pass. Tests cover admission, retained command identity, paired stage records,
+mode snapshot and original exception propagation for commit/wait failures in
+both commands; source guards cover the conditional successor allocation.
+Bounded Luna source review: ROBUST for this control flow, not independent
+runtime evidence. Builds used the working checkout, including separate FFN
+WIP that is excluded from this change's commit.
+
+No GPU workload was run for this implementation. Stability, tensor parity and
+speed remain open. Before a separate guarded two-call replay, refresh source/
+binary/input identity and adapt the trace checker: require exactly two stages,
+each with paired begin/terminal records per admitted standalone call, named
+`prepare_kv_attention` and
+`output_ffn`, with no separate `prepare_kv`. The old three-stage checker is not
+a valid oracle for this mode. Retain fusion/FFN reuse OFF, the 35% free-memory
+floor, 24GiB cap, 300s timeout and first-GPU-failure stop. Unset the option for
+rollback. Refresh evidence after source, toolchain, device or input drift.
