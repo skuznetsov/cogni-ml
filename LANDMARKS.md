@@ -27697,3 +27697,11 @@ Refresh after source/toolchain/device/model/workload changes.
   "Same-binary unsplit control fails; series stopped"; temporary evidence
   `/private/tmp/qwen-stage-ab.kIMKDt/` plus LM-1056's ON root. Refresh after
   source/model/device/input/toolchain/scheduling drift or loss of evidence.
+- Read-only follow-up (same source/logs): the 15 standalone suffix layers have
+  median prepare/attention/output waits 4.860/159.103/16.322ms; whole-layer time
+  outside these waits is only 0.721..1.412ms. Earlier attention waits exceed600ms
+  successfully; all nine suffix memory samples keep pipelines53. No new GPU run.
+  Native owned-reference release moves with waits; Scratch stays retained. Proposed
+  next discriminator: keep only the cut after attention, no precision/kernel
+  changes. This is not implemented or a stability/speed certificate. See the
+  diagnostic document's "Stage-boundary inspection"; 21 model-free specs pass.

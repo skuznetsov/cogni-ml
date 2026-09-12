@@ -31,9 +31,11 @@ evidence, not root cause, state parity, speed or production-stability closure.
 Rollback is unset `QWEN35_FULL_PREFILL_STAGE_SPLIT`; do not promote the splitter.
 
 Current evidence: the single 2026-09-12 guarded split replay completed both
-calls and matched the saved second-output digest (details below). The earlier
-unsplit failure was a different process/build/time, not a matched control.
-Production stability, causal attribution and any speed claim remain open.
+calls and matched the saved second-output digest. A later OFF control using
+the same binary failed on call 2; the series stopped. This removes the rebuild
+confound, not host/time/order differences. The read-only stage inspection below
+narrows the next discriminator; production stability, causal attribution and
+any speed claim remain open.
 
 `QWEN35_PREFILL_COMMAND_TRACE=1` adds flushed stderr records around the existing
 ordinary shared-command commit/wait and ordinary routed full-layer call in
@@ -533,3 +535,46 @@ is established. Keep stage split default OFF. Next inspect the existing three
 stage boundaries and pipeline-setup placement for a smaller diagnostic cut;
 any new GPU experiment remains separate and must retain the first-failure stop.
 Refresh on source/model/device/input/toolchain/scheduling drift or evidence loss.
+
+### Stage-boundary inspection: narrow the cut, not the precision (2026-09-12)
+
+No new GPU replay or production edit. Reanalysis of the pinned successful ON
+stderr above pairs the enclosing layer trace with its three stage terminals.
+At start 7839 / rows 195, coverage is 15 standalone calls, layers 3,7,...,59;
+the final specialized full layer is not covered by this timing wrapper.
+
+| Host commit/wait stage | Median ms | Sum across 15 calls, ms |
+| --- | ---: | ---: |
+| Prepare/KV | 4.860 | 71.513 |
+| Attention | 159.103 | 2385.079 |
+| Output/FFN | 16.322 | 244.986 |
+
+Whole-layer time totals 2715.734 ms; subtracting the three waits per call leaves
+0.721..1.412 ms (median 0.940) for setup, encoding, readback and trace overhead.
+This is host-time accounting, not GPU utilization, and it does not measure OFF
+internals. Earlier successful attention-only commands at start 6144 / rows1668
+had median 606.643 ms and maximum 613.486 ms. A universal 150-ms host-wait cutoff
+does not fit these observations; no native GPU watchdog threshold is inferred.
+All nine recorded second-prefill memory samples retain 53 pipeline entries,
+while scratch entries grow from 915 to 960. Do not confuse scratch shape keys
+with compiled pipeline variants or generalize these samples to hidden driver
+allocations.
+
+The current cuts follow ended KV-write and attention encoders
+(`qwen35_metal.cr`, `full_attn_layer_chunk_project`); no new tensor readback is
+inserted. Each wait succeeds before successor construction. The native wait
+path consumes the retained command handle (`device.cr`, `CommandBuffer#wait`;
+`bridge.mm`, `gs_wait_command_buffer_status`), so splitting also changes when
+the engine relinquishes its native command reference. This is not a measurement
+of immediate driver resource reclamation. Scratch stays retained across the
+cuts; equal buffer inventories do not establish equal transient driver resource
+lifetimes.
+
+**Next candidate, PROPOSED only:** retain the cut after attention and combine
+prepare/KV with attention, leaving output/FFN separate. This removes one of two
+extra boundaries without changing kernels, shapes, cache precision or operation
+order. It tests whether the early KV-write boundary is necessary; it does not
+by itself separate scheduler effects from command resource lifetime. Admission
+would require default-off policy and fake-command tests before a separate
+guarded replay with the existing failure-stop rule. A pass is not stability or
+speed promotion; a failure does not prove attention itself is defective.
