@@ -27722,3 +27722,31 @@ Refresh after source/toolchain/device/model/workload changes.
 - Evidence/commands: `docs/qwen-prefill-command-trace.md`, "Two-stage
   implementation". Builds include pre-existing separate FFN WIP; that WIP
   stays outside this commit. Refresh on source/toolchain/device/input drift.
+
+### LM-1059 — Two-stage prefill passes one guarded two-call replay
+
+- One GPU attempt on LM-1058 implementation `23b6acf4`; no production edits.
+  Metadata-only input equals prior dry capture; source/bridge/runner/sampler/
+  binary/input hashes checked pre/post, model identity stat-based and unchanged.
+  Existing separate FFN WIP present in build, fusion and FFN reuse OFF.
+- Exit0/sampler0: 195 returned instrumented layers, 390 paired stage waits;
+  no separate PrepareKV stage. First tool/count assertion passes; second uses
+  resident prefix (8035 prompt/7839 cached/196 suffix/8845 capacity), no tools,
+  saved output SHA match. Independent awk count agrees with trace checker.
+- Checker qualification passes: synthetic transformed positive (not GPU
+  evidence), actual failed replay negative, missing terminal/whole-layer stages
+  and old-mode rejection. Parent reran Luna-authored checks; correlated review.
+  25 model-free specs pass. ROBUST scoped output/trace result, not a fix.
+- Provider walls 76,713.4/7,013.2ms; launcher 91,208.225ms includes fixed7.1s
+  tool delay. Prior three-stage second wall7,048.7ms is not balanced speed
+  evidence. No tensor/state parity or causal watchdog-fix claim.
+- All safety bounds retained:35%/24GiB/300s, chunk2048/group1/cooldown50ms.
+  Observer46 samples, errors0, free79% initial/min45%, no kill or GPU failure;
+  no second attempt. Quiet waiting disabled under standing operator authority.
+- Scope: successful single diagnostic, not production stability. Earlier KV
+  cut was unnecessary for this observed pass; the remaining cut is not proven
+  to prevent the intermittent failure. Defaults remain OFF. Next inspect the
+  existing traces before selecting further experiments; do not mix FFN work.
+- Commands/hashes/controls: `docs/qwen-prefill-command-trace.md`, "Two-stage
+  replay"; `/private/tmp/qwen-two-stage.vlxfep/`. Refresh after source/model/
+  device/input/toolchain/scheduling drift or loss of temporary evidence.

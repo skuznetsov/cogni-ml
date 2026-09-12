@@ -41,12 +41,12 @@ Stop after its first GPU failure. A pass is scheduling-sensitive diagnostic
 evidence, not root cause, state parity, speed or production-stability closure.
 Rollback is unset `QWEN35_FULL_PREFILL_STAGE_SPLIT`; do not promote the splitter.
 
-Current evidence: the single 2026-09-12 guarded split replay completed both
-calls and matched the saved second-output digest. A later OFF control using
-the same binary failed on call 2; the series stopped. This removes the rebuild
-confound, not host/time/order differences. The read-only stage inspection below
-narrows the next discriminator; production stability, causal attribution and
-any speed claim remain open.
+Current evidence: the three-stage replay completed both calls; a later OFF
+control using that same binary failed on call 2 and that series stopped.
+The new two-stage implementation also completed one separately authorized
+guarded replay with the saved second-output digest. This is not a same-binary
+two-stage/OFF comparison. Production stability, causal attribution and speed
+remain open; both diagnostics stay default OFF. Details and provenance below.
 
 `QWEN35_PREFILL_COMMAND_TRACE=1` adds flushed stderr records around the existing
 ordinary shared-command commit/wait and ordinary routed full-layer call in
@@ -634,3 +634,71 @@ each with paired begin/terminal records per admitted standalone call, named
 a valid oracle for this mode. Retain fusion/FFN reuse OFF, the 35% free-memory
 floor, 24GiB cap, 300s timeout and first-GPU-failure stop. Unset the option for
 rollback. Refresh evidence after source, toolchain, device or input drift.
+
+### Two-stage replay: one successful two-call diagnostic (2026-09-12)
+
+One GPU attempt on implementation `23b6acf4`, using the previously compiled
+release provider with the separate FFN WIP present but disabled. No production
+source changed in this experiment. Source, bridge, runner, sampler, binary and
+pinned input manifests were verified before and after execution; the model
+identity is stat-based, not a full weights digest. Metadata-only output matches
+the earlier three-stage dry run byte-for-byte (first prompt: 7,813 tokens).
+
+```sh
+python3 /private/tmp/qwen-two-stage.vlxfep/run_two_stage.py --dry
+python3 /private/tmp/qwen-two-stage.vlxfep/run_two_stage.py --run
+python3 /private/tmp/qwen-two-stage.vlxfep/run_two_stage.py --verify
+python3 /private/tmp/qwen-two-stage.vlxfep/qualify_check.py
+python3 /private/tmp/qwen-two-stage.vlxfep/check_two_stage.py
+```
+
+The GPU runner and sampler exited 0. All 195 instrumented standalone layer
+calls returned, with 390 stage begin/terminal pairs: one
+`prepare_kv_attention` and one `output_ffn` per call. A separate awk tally
+agrees with these counts. The first call matched the captured tool output and
+27-token count (asserted by the pinned probe before its call-end event).
+The second used `resident_prefix_hit=1`, with 8,035 prompt / 7,839 cached /
+196 suffix tokens and capacity 8,845; no tool calls were emitted. Its output
+SHA256 matches the saved successful baseline:
+`ed251864987c367e9641fbdc89c1d83e9bf0fa2e3eecef8f301c79f619bfac81`.
+
+Observed first/second provider wall times: 76,713.4 / 7,013.2 ms; second
+prefill/top1: 4,061.5 ms, decode body: 2,878.1 ms. Launcher wall was
+91,208.225 ms, including the fixed 7.1-second tool-result delay. These are
+diagnostic timings, not speed evidence: the earlier three-stage second call
+was 7,048.7 ms, but the runs differ in time/order/build and are not balanced.
+Fewer commands did not establish a material wall-time gain.
+
+All guards were retained: 35% free-memory floor, 24,576-MiB process-tree cap,
+300-second timeout, chunk 2,048 / group 1 / cooldown 50ms, fusion and FFN
+reuse OFF. Quiet waiting remains disabled under standing operator authority;
+no quiet-host claim. Observer: 46 samples, zero collection errors, initial
+free 79%, minimum 45%; no guard kill or GPU failure. No second GPU attempt.
+
+The two-stage checker returns `replay_pass=true`. Its qualification accepts
+an explicitly synthetic, in-memory transformed copy of the older successful
+trace, rejects the actual earlier failed replay, and rejects a missing stage
+terminal, all stages missing from one successful layer, and the old three-stage
+format even when relabeled. The synthetic positive tests the checker, not GPU
+behavior. Parent reread and reran the Luna-authored checker and controls;
+this is correlated review, not independent replication. The 25 model-free
+stage/trace/tail/lease specs and `git diff --check` also pass.
+
+Evidence root: `/private/tmp/qwen-two-stage.vlxfep/`, with launcher, manifests,
+input controls, `two-stage-{dry,gpu}` results/logs and sampler records.
+
+- Binary SHA256: `5daf2e7ee7535bac7156eb6b07705dc747cdec96ad1518206b1b95775de86bcd`.
+- Metal source SHA256: `9ce459301e9a6a867ffbb64b648cca6c1ca2f629dcbdb6381acfdcc6aa22dd13`.
+- Helper SHA256: `ba0002d15cf3c8972b66dd1d8628418e77e64a65e7a3117d6c9151a4a0218768`.
+- GPU stderr SHA256: `db1a3c814abf0942ed6302fc120f71254f0d843d780b721ca65e5760765bc95d`.
+- GPU stdout SHA256: `eb875dc83f3ad023ab69d19a6176dd7cede6e42f76443728f3eca5759b2dceae`.
+
+**Scoped verdict: ROBUST** for the observed two-call output/trace pass and guard
+record, not a production fix. The earlier PrepareKV boundary is not necessary for this
+one successful observed replay. That does not establish that the remaining
+boundary prevents the intermittent error, or identify attention as its cause.
+No full hidden/KV/recurrent-state comparison was performed. Keep the mode OFF
+by default; do not combine this scheduling result with the separate FFN reuse
+experiment. Next use existing traces to choose any further discriminating
+experiment, rather than promote or immediately repeat this run. Refresh on
+source/model/device/input/toolchain/scheduling drift or evidence loss.
