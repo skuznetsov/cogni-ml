@@ -6,6 +6,27 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-QWEN35-SG4-OPERATOR-2026-09-14] Model-free benchmark reproduces interactivity failure
+
+- Current frontier: measured-red standalone F32 SG4 operator experiment;
+  supersedes trace-only selection in LM-1060. No production routing change.
+- Prefix7839/rows193: direct/pregate oracle error1.0808095e-6, pair0,
+  canaries intact, six timed samples then Impacting Interactivity/exit1.
+  Next pregate command inferred from loop order, not a pre-submit event.
+- One guarded attempt; preflight free77%,35%/24GiB/300s retained, no retry.
+  Two compiled pipelines, one shape, no model/provider; explicit GPU buffers
+  statically76.414MiB, not driver memory telemetry. Same callback does not
+  establish the same root cause as provider failures or a kernel-speed ranking.
+- Diagnostic runner checks pass: Metal/CPU-only builds, seven negative
+  self-controls,12specs, unchanged manifests; correlated review ROBUST for
+  runner only. Full72-sample benchmark incomplete and checker rejects it.
+- Next proposed: prove <=64-query-row slicing with F32/causal/offset invariants,
+  then separate bounded safety experiment. No global direct-gate threshold
+  change, precision conversion, automatic retry or lowered resource guards.
+- Evidence/commands/hashes: docs/qwen-prefill-command-trace.md, "Bounded F32
+  SG4 operator experiment"; /private/tmp/qwen-sg4-operator.wYIRes/. Refresh
+  after source/build/device/driver/input/scheduling drift or evidence loss.
+
 ### [LM-QWEN35-FULL-LAYER-TRACE-2026-09-11] Ordinary full-layer failure attribution reaches the real replay
 
 - Added default-off `qwen35_prefill_layer` call records around only the ordinary

@@ -1,6 +1,16 @@
 # Ordinary prefill command diagnostics
 
-## Active diagnostic frontier: standalone stage split
+## Active diagnostic frontier: model-free SG4 reproduces the GPU failure
+
+The 2026-09-14 operator benchmark is **measured-red**: at prefix7839/rows193,
+both F32 gate variants passed the CPU oracle and six timed samples completed;
+the next command failed with `Impacting Interactivity`. No retry, no completed
+72-sample comparison and no speed promotion. The model/provider path is not
+required to reproduce this callback on the observed host. The next proposed
+discriminator is bounded query-row slicing, not a routing-threshold change.
+See "Bounded F32 SG4 operator experiment" below for exact scope and evidence.
+
+### Existing standalone stage-split diagnostic
 
 Implemented diagnostic: `QWEN35_FULL_PREFILL_STAGE_SPLIT=after_attention`
 keeps only the boundary after attention (prepare/KV + attention, then output/FFN).
@@ -766,3 +776,87 @@ trace accounting and route selection, not a causal fix or speed claim.
 Comparison script SHA256:
 `56c4b184671febc56e1aa13e188bcb178d0331c24de68cb83d514e6ab8ea2d7e`.
 Refresh after source/config/input/device/toolchain drift or evidence loss.
+
+### Bounded F32 SG4 operator experiment (2026-09-14)
+
+Admission is diagnostic only: extend `bin/qwen35_sg4_tail_probe.cr` with an
+explicit benchmark mode, preserving the old dry/self-test and 48-case regression
+mode. No inference policy, shader, precision, allocation layout or defaults
+change. Rollback is removal of the benchmark mode, not a production switch.
+
+Predeclared comparison: heads24/KV4/D256; prefix7839/rows193..196 and
+prefix0/rows64,195. Direct and pregate share input/output allocations within
+each shape. Before timing, re-poison output and require both kernels to satisfy
+the Float64 CPU oracle (max absolute error <=1e-5), trailing write canary,
+finite output and mutual max absolute difference <=1e-6. GPU-free injected
+output/canary defects must be rejected by the same validation code.
+
+Warm both kernels, then record three fixed ABBA blocks per shape (72 timed
+commands total). Each sample is one completed command, not a batch with hidden
+overlap. Collect completed-command Metal GPU intervals and host encode/commit/
+wait time separately; exclude compilation, CPU oracle and buffer initialization
+from operator timing. Use the same synthetic data for both routes, and report
+the data/model generality limit rather than equating this with inference speed.
+
+One guarded benchmark attempt: `scripts/run_safe.sh`, 300s/24576MiB/35% free,
+shared Metal process lease, terminal first error, no retry or guard relaxation.
+Quiet waiting stays disabled under standing operator authority; do not claim a
+quiet host. A failed correctness gate stops timing for that shape; inconclusive
+or negative speed evidence does not admit a lower production threshold.
+Even a consistent operator win requires a separate model output/state gate.
+
+Implementation checks: Metal release build and CPU-only build pass. Both
+`--self-test` binaries accept clean output and reject two source mutations plus
+five validation defects (NaN, canary overwrite, unwritten sentinel, wrong finite
+output, pair mismatch), without Metal initialization. The CPU-only build
+rejects GPU modes. The 12 SG4-tail/stage-split specs and format/diff checks pass.
+The original 48-case GPU regression mode remains available but was not rerun.
+
+Executed once:
+
+```sh
+env -u COGNI_METAL_LEASE_PATH COGNI_METAL_LEASE_WAIT_MS=0 COGNI_RUN_SAFE_REQUIRE_QUIET=0 COGNI_RUN_SAFE_WAIT_QUIET_SEC=0 COGNI_RUN_SAFE_MIN_FREE_PCT=35 COGNI_METAL_COMMAND_TIMEOUT_MS=180000 scripts/run_safe.sh /private/tmp/qwen-sg4-operator.wYIRes/probe 300 24576 --benchmark
+```
+
+**Result: measured-red, exit1 after approximately2s.** Apple M2 Max, preflight
+free77%; no memory-floor kill or retry. At prefix7839/rows193 both initial
+outputs have max oracle error `1.080809547859829e-6`, mutual difference0 and
+intact canaries. Six timed samples also pass. Their observed GPU intervals
+span115.443–216.849ms; these are truncated observations, not a kernel ranking.
+The next command raises completion_status=-6, native status5/error_code1,
+`Impacting Interactivity`. From fixed loop order and the dispatch stack, the
+next command is inferred to be pregate/block1/order2; the log does not contain
+a pre-submit kernel event. No shape summary or final benchmark PASS is emitted.
+
+The pinned shader is unchanged, both pipelines are compiled before the loop,
+and only one shape was reached. This reproduces the callback without model
+weights, a provider session, or increasing pipeline variants within the loop.
+The fixture's five explicit Metal buffers sum80,125,952B (~76.414MiB), computed
+from allocation sizes, not total driver/GPU memory telemetry. CPU arrays,
+pipeline/driver resources and other applications remain outside that number.
+This narrows necessary conditions; it does not prove gate staging, memory
+pressure or command duration is the cause, nor rule out host/driver history.
+
+Source/bridge/binary/runner manifests match before and after. The independent
+capture checker rejects the actual incomplete run; its synthetic72-row parser
+fixture and six negative controls pass (parser qualification, not GPU evidence).
+Bounded correlated Luna review finds the runner ROBUST as a diagnostic, not a
+successful benchmark. Per-sample `pair_max_abs` means difference from the
+initial validated pregate output, not a fresh paired sample; shape-summary
+oracle fields are preflight values, not aggregate timed statistics.
+
+Next, PROPOSED only: prove query-row slicing with identical F32 Q/gate/K/V and
+global causal bounds. Existing buffer-offset binding can advance Q/gate/output
+while keeping K/V unchanged and advancing base_pos; a <=64-row command is a
+candidate, not an admitted policy or known fix. Require oracle/canary equality
+and explicit progress traces before a separately guarded experiment. Keep the
+production threshold, precision, stage-split defaults and all guards unchanged.
+
+Evidence root `/private/tmp/qwen-sg4-operator.wYIRes/` (temporary):
+
+- Probe source SHA256: `50fede1e4c3a2ccb93360038a909ca9482019d86a8a02b6f007c63d12e32c47f`.
+- Probe binary SHA256: `ec9d228e33e5b4091f3214cfc22e27e49c55a6af606ec67d56b1616922953083`.
+- Combined log SHA256: `3edce19b1d082545b8184be13b6985398292d802a489118fe68b41e8d683af7f`.
+- Checker SHA256: `e1fc182eb93f20579fd0bd22186a6b93ddf77e4f32db1179f1e0b5eb793eb07e`.
+
+Refresh on source/build/device/driver/input/scheduling drift or evidence loss.
