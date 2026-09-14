@@ -6,6 +6,28 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-QWEN35-SG4-SLICES-2026-09-14] 64-row slicing does not prevent the callback
+
+- Current frontier supersedes the operator entry below: model-free F32
+  `--slice-check` is measured-red, not a production fix or speed result.
+- Direct prefix7839/rows193 passes64+64+64+1 query rows, oracle max1.08081e-6,
+  exact earlier-prefix and future/trailing canaries. First pregate64-row
+  command fails with Impacting Interactivity, start0/base7839/offset0, now
+  identified by a flushed pre-submit event. No pair or finalPASS; no GPU retry.
+- Free78%,35%/24GiB/300s guards retained, no cooldown. Initial sandbox launch
+  aborted containment because ps was denied; authorized guarded launch then
+  produced the GPU evidence. Source/build manifest unchanged throughout.
+- Instrument checks: CPU/Metal builds,16 slice plans, four slice mutation
+  controls plus seven existing controls,12 source specs; incomplete capture
+  rejected. GPU coverage is one direct kernel, not pregate/all six shapes.
+- Decision: slicing64 alone is insufficient. The failing command requires
+  neither nonzero offset nor partial tail, but kernel identity is confounded
+  with command order/host history. Next proposed: fresh-process single-command
+  order discriminator; no further slicing tweaks or production threshold edit.
+- Source and evidence: bin/qwen35_sg4_tail_probe.cr; docs/qwen-prefill-command-trace.md,
+  "Query-row slicing diagnostic"; /private/tmp/qwen-sg4-slices.XIoCjM/ (temporary).
+  Refresh on source/build/device/driver/input/scheduling drift or evidence loss.
+
 ### [LM-QWEN35-SG4-OPERATOR-2026-09-14] Model-free benchmark reproduces interactivity failure
 
 - Current frontier: measured-red standalone F32 SG4 operator experiment;

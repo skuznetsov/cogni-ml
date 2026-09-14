@@ -21,6 +21,20 @@ BENCHMARK_BLOCKS = 3
 CANARY_COUNT     = 4 * HEADS * DIM
 ORACLE_LIMIT     = 1.0e-5_f64
 PAIR_LIMIT       = 1.0e-6_f64
+SLICE_ROWS       =         64
+
+# Offsets apply only to Q, gate and output. K/V remain global and immutable.
+private def query_slices(base : Int32, rows : Int32) : Array(Tuple(Int32, Int32, Int32, Int64))
+  raise ArgumentError.new("invalid slice extent") unless base >= 0 && rows > 0 && base.to_i64 + rows <= Int32::MAX
+  result = [] of Tuple(Int32, Int32, Int32, Int64)
+  start = 0
+  while start < rows
+    size = Math.min(SLICE_ROWS, rows - start)
+    result << {start, size, base + start, start.to_i64 * HEADS * DIM * sizeof(Float32)}
+    start += size
+  end
+  result
+end
 
 # A future rebuild must explicitly requalify changed shader bytes. In
 # particular, never execute an old divergent whole-threadgroup barrier.
@@ -145,23 +159,49 @@ private def max_pair_difference!(direct : Array(Float32), pregate : Array(Float3
   max_error
 end
 
-private def dispatch!(pipe : ML::Metal::ComputePipeline, fixture : ShapeFixture, timed : Bool) : Tuple(Float64, Float64?)
+private def validate_slice_output!(actual : Array(Float32), expected : Array(Float64), completed : Int32, previous : Array(Float32)) : Float64
+  raise "slice output extent" unless actual.size == expected.size + CANARY_COUNT && previous.size <= completed <= expected.size
+  max_error = 0.0_f64
+  actual.each_with_index do |value, i|
+    if i < completed
+      raise "slice non-finite/unwritten output #{i}" unless value.finite? && value != SENTINEL && expected[i].finite?
+      raise "slice overwrote completed prefix #{i}" if i < previous.size && value != previous[i]
+      max_error = Math.max(max_error, (value.to_f64 - expected[i]).abs)
+    else
+      raise "slice premature/trailing write #{i}" unless value == SENTINEL
+    end
+  end
+  raise "slice CPU oracle mismatch #{max_error}" unless max_error <= ORACLE_LIMIT
+  max_error
+end
+
+private def dispatch!(pipe : ML::Metal::ComputePipeline, fixture : ShapeFixture, timed : Bool,
+                      row_start : Int32 = 0, row_count : Int32 = fixture.rows,
+                      poison : Bool = true, trace : Bool = false) : Tuple(Float64, Float64?)
+  raise "dispatch query extent" unless row_start >= 0 && row_count > 0 && row_start.to_i64 + row_count <= fixture.rows
+  offset = row_start.to_i64 * HEADS * DIM * sizeof(Float32)
   # This write is deliberately outside the timed interval. A no-op/stale
   # output must fail validation after every sample, including equality checks.
-  fixture.poison_output!
+  fixture.poison_output! if poison
+  if trace
+    puts "sg4_slice_submit kernel=#{pipe.name} base=#{fixture.base} rows=#{fixture.rows} start=#{row_start} slice_rows=#{row_count} slice_base=#{fixture.base + row_start} offset_bytes=#{offset} kv_offset_bytes=0"
+    STDOUT.flush
+  end
   started = Time.instant
   command = ML::Metal::CommandBuffer.new
   enc = ML::Metal::ComputeEncoder.new(command)
   enc.set_pipeline(pipe)
-  fixture.buffers.each_with_index { |buffer, i| enc.set_buffer(buffer, i) }
-  enc.set_value(fixture.base.to_u32, 5)
-  enc.set_value(fixture.rows.to_u32, 6)
+  fixture.buffers.each_with_index do |buffer, i|
+    enc.set_buffer(buffer, i, offset: (i == 0 || i == 1 || i == 4) ? offset : 0_i64)
+  end
+  enc.set_value((fixture.base + row_start).to_u32, 5)
+  enc.set_value(row_count.to_u32, 6)
   enc.set_value(HEADS.to_u32, 7)
   enc.set_value(KV_HEADS.to_u32, 8)
   enc.set_value(DIM.to_u32, 9)
   enc.set_value((HEADS // KV_HEADS).to_u32, 10)
   enc.set_value(1.0_f32 / 16, 11)
-  enc.dispatch_threadgroups({HEADS, (fixture.rows + 3) // 4, 1}, {128, 1, 1})
+  enc.dispatch_threadgroups({HEADS, (row_count + 3) // 4, 1}, {128, 1, 1})
   enc.end_encoding
   gpu_ms = if timed
              command.commit_and_wait_gpu_elapsed_seconds * 1000.0_f64
@@ -171,6 +211,39 @@ private def dispatch!(pipe : ML::Metal::ComputePipeline, fixture : ShapeFixture,
            end
   host_ms = (Time.instant - started).total_milliseconds
   {host_ms, gpu_ms}
+end
+
+private def run_sliced_shape!(direct_pipe : ML::Metal::ComputePipeline,
+                              pregate_pipe : ML::Metal::ComputePipeline, base : Int32, rows : Int32) : Nil
+  fixture = ShapeFixture.new(base, rows, false)
+  begin
+    direct_actual = [] of Float32
+    {direct_pipe, pregate_pipe}.each do |pipe|
+      fixture.poison_output!
+      previous = [] of Float32
+      query_slices(base, rows).each do |start, size, _slice_base, _offset|
+        host_ms, gpu_ms = dispatch!(pipe, fixture, true, start, size, poison: false, trace: true)
+        actual = fixture.read_output
+        completed = (start + size) * HEADS * DIM
+        max_error = validate_slice_output!(actual, fixture.expected, completed, previous)
+        previous = actual[0, completed]
+        puts "sg4_slice_complete kernel=#{pipe.name} base=#{base} rows=#{rows} start=#{start} slice_rows=#{size} gpu_ms=#{gpu_ms.not_nil!} host_ms=#{host_ms} max_abs=#{max_error} guard=PASS prefix=PASS oracle=PASS"
+        STDOUT.flush
+      end
+      actual = fixture.read_output
+      max_error = validate_output!(actual, fixture.expected, fixture.count, pipe.name)
+      puts "sg4_slice_kernel kernel=#{pipe.name} base=#{base} rows=#{rows} max_abs=#{max_error} guard=PASS oracle=PASS"
+      if pipe == direct_pipe
+        direct_actual = actual
+      else
+        pair_error = max_pair_difference!(direct_actual, actual, fixture.count)
+        puts "sg4_slice_pair base=#{base} rows=#{rows} pair_max_abs=#{pair_error} difference=PASS"
+      end
+      STDOUT.flush
+    end
+  ensure
+    fixture.release
+  end
 end
 
 private def run_case(pipe : ML::Metal::ComputePipeline, half : Bool, base : Int32, rows : Int32)
@@ -239,6 +312,37 @@ private def reject_validation!(label : String, actual : Array(Float32), expected
 end
 
 private def run_self_test : Nil
+  {0, 7839}.each do |base|
+    {1, 63, 64, 65, 193, 194, 195, 196}.each do |rows|
+      seen = [] of Int32
+      query_slices(base, rows).each do |start, size, slice_base, offset|
+        raise "slice size" unless 1 <= size <= 64
+        raise "slice buffer bounds" unless offset >= 0 && offset + size.to_i64 * HEADS * DIM * 4 <= rows.to_i64 * HEADS * DIM * 4
+        size.times do |local|
+          raise "slice Q/gate/output offset" unless offset // 4 + local * HEADS * DIM == (start + local) * HEADS * DIM
+          raise "slice causal end" unless slice_base + local + 1 == base + start + local + 1
+          seen << start + local
+        end
+      end
+      raise "slice coverage" unless seen == (0...rows).to_a
+    end
+  end
+  expected_slice = [1.0_f64, 2.0_f64, 3.0_f64]
+  previous = [1.0_f32]
+  clean = [1.0_f32, 2.0_f32, SENTINEL] + Array(Float32).new(CANARY_COUNT, SENTINEL)
+  validate_slice_output!(clean, expected_slice, 2, previous)
+  {0, 1, 2, 3}.each do |index|
+    corrupt = clean.dup
+    # A tiny earlier-prefix change must fail even within oracle tolerance.
+    corrupt[index] = index == 0 ? 1.000001_f32 : 0.0_f32
+    rejected = false
+    begin
+      validate_slice_output!(corrupt, expected_slice, 2, previous)
+    rescue
+      rejected = true
+    end
+    raise "slice validator failed open at #{index}" unless rejected
+  end
   {SOURCE + "\n", SOURCE.gsub("simdgroup_barrier(", "threadgroup_barrier(")}.each do |changed|
     rejected = false
     begin
@@ -272,7 +376,7 @@ private def run_self_test : Nil
     rejected = true
   end
   raise "pair validator failed open" unless rejected
-  puts "source_guard=PASS negative_controls=2 validation_controls=5 gpu=not_initialized"
+  puts "source_guard=PASS negative_controls=2 validation_controls=5 slice_shapes=16 slice_negative_controls=4 gpu=not_initialized"
 end
 
 validate_source!(SOURCE)
@@ -285,6 +389,26 @@ end
   abort "CPU-only probe supports only --self-test or dry invocation" unless ARGV.empty?
   puts "dry: GPU modes unavailable in CPU-only build"
 {% else %}
+  if ARGV == ["--slice-check"]
+    lease = ML::Metal::ProcessLease.acquire
+    begin
+      device = ML::Metal::Device.instance
+      raise "probe requires Apple GPU" unless device.name.starts_with?("Apple")
+      puts "sg4_slice_check source_sha256=#{Digest::SHA256.hexdigest(SOURCE)} device=#{device.name.gsub(/\s+/, "_")} precision=f32 heads=#{HEADS} kv_heads=#{KV_HEADS} head_dim=#{DIM} max_slice_rows=#{SLICE_ROWS} cooldown_ms=0 per_slice_validation=true"
+      STDOUT.flush
+      direct_pipe = ML::Metal::ComputePipeline.new("qwen35_attn_decode_rows_sg4", SOURCE)
+      pregate_pipe = ML::Metal::ComputePipeline.new("qwen35_attn_decode_rows_sg4_pregate", SOURCE)
+      BENCHMARK_CASES.each do |base, rows|
+        run_sliced_shape!(direct_pipe, pregate_pipe, base, rows)
+        GC.collect
+      end
+    ensure
+      lease.close
+    end
+    puts "slice_check=PASS shapes=#{BENCHMARK_CASES.size} kernels=#{BENCHMARK_CASES.size * 2} commands=#{BENCHMARK_CASES.sum { |_, rows| ((rows + SLICE_ROWS - 1) // SLICE_ROWS) * 2 }}"
+    exit
+  end
+
   if ARGV == ["--benchmark"]
     lease = ML::Metal::ProcessLease.acquire
     begin
@@ -307,7 +431,7 @@ end
   end
 
   unless ARGV == ["--run"]
-    abort "usage: qwen35_sg4_tail_probe [--run|--benchmark|--self-test]" unless ARGV.empty?
+    abort "usage: qwen35_sg4_tail_probe [--run|--benchmark|--slice-check|--self-test]" unless ARGV.empty?
     puts "dry: #{CASES.size * 4} bounded SG4 cases; no Metal initialization; use --run under scripts/run_safe.sh"
     exit
   end

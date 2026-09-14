@@ -1,14 +1,15 @@
 # Ordinary prefill command diagnostics
 
-## Active diagnostic frontier: model-free SG4 reproduces the GPU failure
+## Active diagnostic frontier: 64-row slicing is insufficient
 
-The 2026-09-14 operator benchmark is **measured-red**: at prefix7839/rows193,
-both F32 gate variants passed the CPU oracle and six timed samples completed;
-the next command failed with `Impacting Interactivity`. No retry, no completed
-72-sample comparison and no speed promotion. The model/provider path is not
-required to reproduce this callback on the observed host. The next proposed
-discriminator is bounded query-row slicing, not a routing-threshold change.
-See "Bounded F32 SG4 operator experiment" below for exact scope and evidence.
+The 2026-09-14 model-free F32 `--slice-check` is **measured-red**. At
+prefix7839/rows193, direct SG4 passes all64+64+64+1 rows against the CPU oracle;
+the first pregate64-row command fails with `Impacting Interactivity`. Its
+pre-submit identity has offset0 and an aligned row count. Slicing alone did not
+prevent the callback. No retry after the GPU failure, no complete pair or speed
+promotion. Kernel identity remains confounded with order/host history. Next:
+design a fresh-process single-command order discriminator, not smaller slices
+or a production routing change. See "Query-row slicing diagnostic" below.
 
 ### Existing standalone stage-split diagnostic
 
@@ -860,3 +861,85 @@ Evidence root `/private/tmp/qwen-sg4-operator.wYIRes/` (temporary):
 - Checker SHA256: `e1fc182eb93f20579fd0bd22186a6b93ddf77e4f32db1179f1e0b5eb793eb07e`.
 
 Refresh on source/build/device/driver/input/scheduling drift or evidence loss.
+
+### Query-row slicing diagnostic (2026-09-14, predeclared)
+
+Hypothesis: reducing each SG4 command to at most64 query rows can preserve
+F32 attention results while shortening individual GPU intervals. It is not a
+root-cause claim: aggregate GPU load, driver history and host scheduling remain
+alternatives. Add diagnostic-only `--slice-check`; no production changes.
+
+For each existing six-shape benchmark fixture, run direct then pregate once.
+Bind Q/gate/output at `row_start * 24 * 256 * 4` bytes, keep K/V at zero,
+and pass `base_pos + row_start` with the slice row count. The local causal end
+then equals the original global end. All slices are synchronous; poison once
+per kernel sequence. Check CPU oracle, unchanged completed prefix, and unwritten
+future rows plus trailing canaries after every slice. Emit flushed pre-submit
+identity and post-validation events. No added cooldown or retry.
+
+DoD: CPU-only/Metal builds and self-tests pass, including slice coverage/offset
+checks and seeded premature/overwritten output rejection; existing12 source
+specs remain green. Then one guarded GPU attempt using the same35% free,
+24GiB/300s and zero-wait process lease controls. First error is terminal. A
+complete capture must contain all42 slice submit/completion pairs,12 kernel
+checks,6 shape pairs and finalPASS. These are correctness diagnostics, not
+balanced speed samples; per-slice readback/validation changes host pacing.
+Rollback: remove this opt-in probe mode. Even all-pass does not admit a
+production scheduling policy or prove the watchdog cause.
+
+#### Observed result and decision
+
+Instrument checks pass: the new self-test initially failed at missing
+`query_slices`; CPU-only and Metal release builds now pass. Both self-tests
+cover16 slice plans, four injected slice-output defects, and the existing
+seven source/output controls without Metal initialization. The12 SG4/stage-split
+specs, format and diff checks pass; CPU-only rejects `--slice-check`.
+
+The sandbox launch aborted with exit75 because `ps` was prohibited and the
+runner could not verify process-group isolation. Its log contains no Metal
+initialization or submission records. An authorized outside-sandbox launch
+used the identical binary and guards, without bypassing containment:
+
+```sh
+env -u COGNI_METAL_LEASE_PATH COGNI_METAL_LEASE_WAIT_MS=0 COGNI_RUN_SAFE_REQUIRE_QUIET=0 COGNI_RUN_SAFE_WAIT_QUIET_SEC=0 COGNI_RUN_SAFE_MIN_FREE_PCT=35 COGNI_METAL_COMMAND_TIMEOUT_MS=180000 scripts/run_safe.sh /private/tmp/qwen-sg4-slices.XIoCjM/probe 300 24576 --slice-check
+```
+
+**GPU result: measured-red, exit1.** Apple M2 Max, preflight and postrun free78%,
+no guard kill or added cooldown. Direct prefix7839/rows193 completes slices
+64+64+64+1, with GPU intervals78.256/50.278/54.247/25.990ms. Every slice passes
+the oracle, exact earlier-prefix comparison, future sentinel and trailing
+canary. The complete direct output max error is `1.080809547859829e-6`.
+These intervals are diagnostic observations, not balanced performance data.
+
+The next pre-submit event identifies
+`qwen35_attn_decode_rows_sg4_pregate`, start0, rows64, base7839, offset0.
+It fails with native status5/error_code1, completion_status=-6,
+`Impacting Interactivity (0000000e:kIOGPUCommandBufferCallbackErrorImpactingInteractivity)`.
+There are5 submit events,4 completed/validated slices and1 completed kernel;
+no shape pair or finalPASS. No further GPU attempt was made. The complete-run
+checker correctly rejects this capture; its synthetic42-command fixture and
+seven mutation controls qualify only the parser, not GPU behavior.
+
+Decision: reject64-row slicing as a sufficient prevention policy on this
+observed route. Nonzero binding offset and partial SG4 tail are not necessary
+properties of the failing command; prior direct work/driver history can still
+matter. Do not conclude that pregate itself is defective: it runs second, and
+both kernels succeeded before the earlier unsliced failure. The live GPU result
+certifies only the tested direct output, not all six shapes, pregate slicing,
+production state, adaptive cache behavior, or overall stability/speed.
+
+Next proposed discriminator: single-kernel, single64-row-command fresh-process
+fixtures, with order explicitly counterbalanced and the same first-failure
+stop rule. Design and source review come before any further GPU workload.
+Do not keep reducing slice size or introduce sleeps as an unlabelled fix.
+
+Evidence root `/private/tmp/qwen-sg4-slices.XIoCjM/` is temporary; the unchanged
+pre/post manifest covers probe, shader, buffer/Metal wrappers, bridge, runner
+and binary. Refresh after source/build/device/driver/input/scheduling drift or
+evidence loss. No production source was changed by this slice.
+
+- Probe source SHA256: `ee895551d0e1d32516a473bf777763dd8a9b1e715228e90a83b998145802d683`.
+- Probe binary SHA256: `845972bcb9f2bc139de90f61cf2107f8681a02b6b508dd03b42af858c3dd7d5b`.
+- Authorized GPU log SHA256: `25e1383f9ea53409973ae1a5f69639236374ec4df323ac4e08301306bd8dc6c6`.
+- Sandbox abort log SHA256: `8706aaef203ca35d880451dfb1d25e5d2f4a8f686d711ed9ceb0c76a04a10494`.
+- Capture checker SHA256: `46036b46ccbb821912e5ea85240c12045c49353815199afb5cdc8a24cd87e58e`.
