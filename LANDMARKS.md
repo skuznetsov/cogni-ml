@@ -6,6 +6,24 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-QWEN35-SG4-REGISTER-2026-09-15] Thread-local gate bounded pass
+
+- Diagnostic-only `QWEN35_SG4_REGISTER_GATE=1` moves eight gate values per lane
+  out of shared storage. M2 Max compiled static bytes4,608 versus pregate8,704;
+  SIMD32/max1,024 unchanged. Thread-local does not mean proven register-only.
+- Exactly one F32 candidate command, base7839/fixture193/selected64 rows,
+  passes CPU oracle max1.064646237225464e-6 and future/canary guards. GPU55.5052ms,
+  host58.1411ms; exit0/free78%, no retries. No speed/stability promotion.
+- Default/0/2 preprocessed pregate equals prior HEAD0ba87a39; no production
+  switch added. New test red before patch;14 specs and CPU/Metal builds green.
+- Correlated Luna audit ROBUST for fixedD256 lane ownership/isolation only;
+  no in-kernel D<=256 guard, so no arbitrary-shape admission.
+- Prior interactivity failure remains open. Next: bounded tail/offset checks,
+  then equal-compilation-set balanced timing; register/spill behavior unknown.
+- Evidence/hashes: docs/qwen-prefill-command-trace.md active section and
+  /private/tmp/qwen-sg4-register.Md08Ji/ (temporary). Refresh on source/compiler/
+  device/driver/shape drift or evidence loss.
+
 ### [LM-QWEN35-SG4-RESOURCES-2026-09-15] Compiled static allocation confirmed
 
 - Compile-only `--pipeline-info`, same F32 source/options and direct/pregate

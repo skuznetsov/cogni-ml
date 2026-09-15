@@ -8,6 +8,21 @@ private def sg4_kernel(name : String) : String
 end
 
 describe "Qwen35 SG4 partial-row synchronization" do
+  it "keeps experimental gate staging lane-local and opt-in" do
+    kernel = sg4_kernel("qwen35_attn_decode_rows_sg4_pregate")
+    kernel.should contain("#if defined(QWEN35_SG4_REGISTER_GATE) && QWEN35_SG4_REGISTER_GATE == 1")
+    kernel.should contain("float gate_local[8];")
+    kernel.should contain("gate_local[d / 32] = gate[(t * n_head + h) * head_dim + d];")
+    kernel.should contain("const float g = gate_local[dl];")
+    {4, 32, 64, 128, 252, 256}.each do |dim|
+      32.times do |lane|
+        loaded = (lane...dim).step(32).map { |d| {d // 32, d} }.to_a
+        consumed = (0...8).map { |dl| {dl, lane + dl * 32} }.select { |_, d| d < dim }
+        loaded.should eq(consumed)
+      end
+    end
+  end
+
   it "keeps pipeline inspection on a terminating compile-only branch" do
     source = File.read(Path[__DIR__] / "../bin/qwen35_sg4_tail_probe.cr")
     start = source.index(%(  if ARGV == ["--pipeline-info"])).not_nil!

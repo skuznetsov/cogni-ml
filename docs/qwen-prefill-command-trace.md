@@ -1,6 +1,63 @@
 # Ordinary prefill command diagnostics
 
-## Active diagnostic frontier: compiled resource difference, failure unresolved
+## Active diagnostic frontier: thread-local gate passes one bounded case
+
+Register-gate experiment (2026-09-15, predeclared): keep pregate's early loads
+but store each lane's eight values in thread-local storage. Define
+`QWEN35_SG4_REGISTER_GATE=1` only in the diagnostic compiler input; no runtime
+environment switch or production admission. Compare default preprocessed
+kernel with HEAD, test lane-to-slot ownership, build both probe targets, then
+compile three metadata pipelines. If static bytes fall to4,608 and SIMD32/max
+threads admit128, allow exactly one candidate64-row command, base7839/F32,
+fixture193, CPU oracle and untouched future/canaries. Preserve35%/24GiB/300s,
+lease/no quiet wait, no warmup/retry; stop on first error. Rollback: omit the
+macro. One pass/time is not stability or speed promotion. Metal's available
+getters do not report registers/spills: this limitation remains explicit.
+
+Result: compiled candidate4,608B, direct4,608B, pregate8,704B; all SIMD32 and
+max1,024 threads. One candidate dispatch on M2 Max passes: oracle max absolute
+error1.064646237225464e-6, all129 future query rows and trailing canaries intact,
+GPU55.505208ms / host58.141083ms, exit0, preflight free78%. No model, warmup,
+retry or further dispatch. Timing is diagnostic only: historical direct and
+pregate results are not a contemporaneous balanced comparison. The prior
+interactivity failure remains open; partial-row GPU coverage, register/spill
+behavior, repeatability and speed promotion are not admitted.
+
+Verification: the new lane-ownership test failed before implementation;
+14 SG4/stage-split specs and both CPU/Metal builds/self-tests pass. CPU-only
+candidate metadata and malformed selectors reject before Metal initialization.
+Clang-preprocessed pregate with macro unset/0/2 matches HEAD `0ba87a39`
+byte-for-byte (SHA31303beb4873596f51af36ad3b958b7ce98dffe2cdba1ab4a0cd23f60aed72e8).
+The enabled preprocessed diff changes only gate declaration/pointer/load/read;
+attention arithmetic, output expression and SIMD-group barriers are unchanged.
+This proves the default source boundary, not binary identity across compilers.
+Correlated Luna review: ROBUST for lane ownership/default-off isolation in
+the fixed D256 probe. There is no kernel-level D<=256 guard; larger dimensions
+exceed both the candidate's eight slots and the existing Q scratch. Do not
+route arbitrary shapes into this candidate. Partial-tail GPU behavior has
+not been measured here despite the unchanged, statically reviewed barriers.
+
+Evidence: `/private/tmp/qwen-sg4-register.Md08Ji/{metadata,single}.log`;
+runner commands use the existing `300 24576` limits and respectively
+`--pipeline-info-register` / `--single-command=register`. Lease wait0, quiet
+requirement/wait0, memory floor35%, command timeout180000ms; private bridge
+and Command Line Tools builds. Captured hashes unchanged before/after:
+
+```text
+probe-source 800b6262ca67b107140dfaadc401272b2ca839cd6cf3a9dc1b2f7a5ef220549d
+shader 824f224369ce719cb05ad766717006915a7b25536926e9b1f3eaca913ffdf682
+candidate-input f1b45404dd4069efd96f2579304dcae4106b990257a33ad93f094b196165bd18
+probe-binary e9ac3652bb0fd3fb01daf3ea8304d37669b6dca895eac6b5d1e76a97b23e0773
+bridge-object a681a678ba98e1c0c6c62e8eed84777437a213ae4c8891f975cb87d693f97663
+metadata.log 0dde25ef8e148b505ade2abf41ea3efdde961a10249c867df6c92ff2cae47267
+single.log f878fa2a66f8b8550c1f4030ab395fbf8d8fca91511b2f14e150b548568ccb20
+```
+
+Next: bounded tail/offset checks before a same-binary balanced direct/candidate
+comparison with equal compilation sets. Do not promote from one55.5ms sample.
+Refresh on source/compiler/device/driver/shape drift or temporary evidence loss.
+
+### Previous compile-only resource measurement
 
 Bounded diagnostic (2026-09-15): `qwen35_sg4_tail_probe --pipeline-info` compiles
 the same F32 source in direct/pregate order and reads compiled static

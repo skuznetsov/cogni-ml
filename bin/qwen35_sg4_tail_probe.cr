@@ -8,13 +8,15 @@ require "../src/ml/metal/dispatch"
 require "../src/ml/metal/process_lease"
 require "digest/sha256"
 
-SOURCE   = {{ read_file("#{__DIR__}/../src/ml/gguf/kernels/fullattn_qwen35.metal") }}
-DIM      =         256
-HEADS    =          24
-KV_HEADS =           4
-SENTINEL = 12345.0_f32
-CASES    = [{0, 1}, {0, 2}, {0, 3}, {0, 4}, {17, 5}, {17, 6}, {17, 7},
-            {63, 193}, {63, 194}, {63, 195}, {63, 196}, {7839, 195}]
+SOURCE          = {{ read_file("#{__DIR__}/../src/ml/gguf/kernels/fullattn_qwen35.metal") }}
+REGISTER_SOURCE = "#define QWEN35_SG4_REGISTER_GATE 1\n" + SOURCE
+REGISTER_KERNEL = "qwen35_attn_decode_rows_sg4_register"
+DIM             =         256
+HEADS           =          24
+KV_HEADS        =           4
+SENTINEL        = 12345.0_f32
+CASES           = [{0, 1}, {0, 2}, {0, 3}, {0, 4}, {17, 5}, {17, 6}, {17, 7},
+                   {63, 193}, {63, 194}, {63, 195}, {63, 196}, {7839, 195}]
 BENCHMARK_CASES = [{7839, 193}, {7839, 194}, {7839, 195}, {7839, 196},
                    {0, 64}, {0, 195}]
 BENCHMARK_BLOCKS = 3
@@ -25,9 +27,10 @@ SLICE_ROWS       =         64
 
 private def single_command_kernel(selector : String) : String
   case selector
-  when "--single-command=direct"  then "qwen35_attn_decode_rows_sg4"
-  when "--single-command=pregate" then "qwen35_attn_decode_rows_sg4_pregate"
-  else                                 raise ArgumentError.new("single-command requires exactly direct or pregate")
+  when "--single-command=direct"   then "qwen35_attn_decode_rows_sg4"
+  when "--single-command=pregate"  then "qwen35_attn_decode_rows_sg4_pregate"
+  when "--single-command=register" then REGISTER_KERNEL
+  else                                  raise ArgumentError.new("single-command requires exactly direct, pregate or register")
   end
 end
 
@@ -47,7 +50,7 @@ end
 # A future rebuild must explicitly requalify changed shader bytes. In
 # particular, never execute an old divergent whole-threadgroup barrier.
 private def validate_source!(source : String)
-  unless Digest::SHA256.hexdigest(source) == "a53054dd97bdfdbfa2e4a8cdc160898f9c7e6c7a5907fbb6b1884bfa1dd2eff1"
+  unless Digest::SHA256.hexdigest(source) == "824f224369ce719cb05ad766717006915a7b25536926e9b1f3eaca913ffdf682"
     raise ArgumentError.new("SG4 probe shader changed; requalify its synchronization before GPU use")
   end
 end
@@ -322,6 +325,7 @@ end
 private def run_self_test : Nil
   raise "direct selector" unless single_command_kernel("--single-command=direct") == "qwen35_attn_decode_rows_sg4"
   raise "pregate selector" unless single_command_kernel("--single-command=pregate") == "qwen35_attn_decode_rows_sg4_pregate"
+  raise "register selector" unless single_command_kernel("--single-command=register") == REGISTER_KERNEL
   {"--single-command", "--single-command=", "--single-command=Direct", "--single-command=both", "--single-command=pregate ", "--single-command=direct=extra"}.each do |bad|
     rejected = false
     begin
@@ -408,7 +412,7 @@ end
   abort "CPU-only probe supports only --self-test or dry invocation" unless ARGV.empty?
   puts "dry: GPU modes unavailable in CPU-only build"
 {% else %}
-  if ARGV == ["--pipeline-info"]
+  if ARGV == ["--pipeline-info"] || ARGV == ["--pipeline-info-register"]
     lease = ML::Metal::ProcessLease.acquire
     begin
       device = ML::Metal::Device.instance
@@ -426,10 +430,18 @@ end
         puts "sg4_pipeline kernel=#{name} static_threadgroup_bytes=#{bytes} thread_execution_width=#{width} max_total_threads=#{max_threads}"
         STDOUT.flush
       end
+      if ARGV == ["--pipeline-info-register"]
+        pipe = ML::Metal::ComputePipeline.new(REGISTER_KERNEL, REGISTER_SOURCE, "qwen35_attn_decode_rows_sg4_pregate")
+        bytes = pipe.static_threadgroup_memory_length
+        width = pipe.thread_execution_width
+        max_threads = pipe.max_total_threads_per_threadgroup
+        puts "sg4_pipeline kernel=#{pipe.name} compiled_source_sha256=#{Digest::SHA256.hexdigest(REGISTER_SOURCE)} static_threadgroup_bytes=#{bytes} thread_execution_width=#{width} max_total_threads=#{max_threads}"
+        raise "register candidate misses resource gate" unless bytes == 4608 && width == 32 && max_threads >= 128
+      end
     ensure
       lease.close
     end
-    puts "pipeline_info=PASS pipelines=2 compute_commands=0"
+    puts "pipeline_info=PASS pipelines=#{ARGV == ["--pipeline-info-register"] ? 3 : 2} compute_commands=0"
     exit
   end
 
@@ -442,10 +454,16 @@ end
       raise "probe requires Apple GPU" unless device.name.starts_with?("Apple")
       puts "sg4_single_command kernel=#{kernel} pid=#{Process.pid} source_sha256=#{Digest::SHA256.hexdigest(SOURCE)} device=#{device.name.gsub(/\s+/, "_")} precision=f32 base=7839 fixture_rows=193 command_rows=64 heads=#{HEADS} kv_heads=#{KV_HEADS} head_dim=#{DIM} warmups=0 cooldown_ms=0"
       STDOUT.flush
-      # Preserve the previous experiment's compilation order and pipeline set.
+      # Controls always compile first; the candidate adds one flagged pipeline.
       direct_pipe = ML::Metal::ComputePipeline.new("qwen35_attn_decode_rows_sg4", SOURCE)
       pregate_pipe = ML::Metal::ComputePipeline.new("qwen35_attn_decode_rows_sg4_pregate", SOURCE)
       pipe = kernel == direct_pipe.name ? direct_pipe : pregate_pipe
+      if kernel == REGISTER_KERNEL
+        pipe = ML::Metal::ComputePipeline.new(REGISTER_KERNEL, REGISTER_SOURCE, "qwen35_attn_decode_rows_sg4_pregate")
+        raise "register candidate misses resource gate" unless pipe.static_threadgroup_memory_length == 4608 && pipe.thread_execution_width == 32 && pipe.max_total_threads_per_threadgroup >= 128
+        puts "sg4_candidate compiled_source_sha256=#{Digest::SHA256.hexdigest(REGISTER_SOURCE)} storage=thread_local register_allocation=unmeasured"
+        STDOUT.flush
+      end
       fixture = ShapeFixture.new(7839, 193, false)
       begin
         host_ms, gpu_ms = dispatch!(pipe, fixture, true, 0, 64, trace: true)
@@ -504,7 +522,7 @@ end
   end
 
   unless ARGV == ["--run"]
-    abort "usage: qwen35_sg4_tail_probe [--run|--benchmark|--slice-check|--single-command=direct|--single-command=pregate|--pipeline-info|--self-test]" unless ARGV.empty?
+    abort "usage: qwen35_sg4_tail_probe [--run|--benchmark|--slice-check|--single-command=direct|--single-command=pregate|--single-command=register|--pipeline-info|--pipeline-info-register|--self-test]" unless ARGV.empty?
     puts "dry: #{CASES.size * 4} bounded SG4 cases; no Metal initialization; use --run under scripts/run_safe.sh"
     exit
   end

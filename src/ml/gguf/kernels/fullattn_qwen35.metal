@@ -415,15 +415,27 @@ kernel void qwen35_attn_decode_rows_sg4_pregate(
     const uint cache_len = base_pos + t + 1;
 
     threadgroup float q_tg_all[4][256];
+#if defined(QWEN35_SG4_REGISTER_GATE) && QWEN35_SG4_REGISTER_GATE == 1
+    // Diagnostic only: the loading lane is also the sole gate consumer.
+    // Thread-local storage may spill; no register-allocation claim is implied.
+    float gate_local[8];
+#else
     threadgroup float gate_tg_all[4][256];
+#endif
     threadgroup float tile_scores_all[4][32];
     threadgroup float* q_tg = q_tg_all[sgitg];
+#if !defined(QWEN35_SG4_REGISTER_GATE) || QWEN35_SG4_REGISTER_GATE != 1
     threadgroup float* gate_tg = gate_tg_all[sgitg];
+#endif
     threadgroup float* tile_scores = tile_scores_all[sgitg];
 
     for (uint d = lane; d < head_dim; d += 32) {
         q_tg[d] = Q[(t * n_head + h) * head_dim + d];
+#if defined(QWEN35_SG4_REGISTER_GATE) && QWEN35_SG4_REGISTER_GATE == 1
+        gate_local[d / 32] = gate[(t * n_head + h) * head_dim + d];
+#else
         gate_tg[d] = gate[(t * n_head + h) * head_dim + d];
+#endif
     }
     // Tail rows may retire entire SIMD groups; each group owns its scratch.
     simdgroup_barrier(mem_flags::mem_threadgroup);
@@ -480,7 +492,11 @@ kernel void qwen35_attn_decode_rows_sg4_pregate(
     for (uint dl = 0; dl < 8; dl++) {
         uint d = lane + dl * 32;
         if (d >= head_dim) break;
+#if defined(QWEN35_SG4_REGISTER_GATE) && QWEN35_SG4_REGISTER_GATE == 1
+        const float g = gate_local[dl];
+#else
         const float g = gate_tg[d];
+#endif
         const float sig_g = 1.0f / (1.0f + exp(-g));
         out[out_base + d] = o[dl] * inv_l * sig_g;
     }
