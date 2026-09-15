@@ -123,6 +123,14 @@
         def max_total_threads_per_threadgroup : Int32
           1
         end
+
+        def thread_execution_width : Int32
+          raise "Metal disabled (cpu_only)"
+        end
+
+        def static_threadgroup_memory_length : Int64
+          raise "Metal disabled (cpu_only)"
+        end
       end
 
       class PipelineCache
@@ -456,6 +464,19 @@ module ML
       def max_total_threads_per_threadgroup : Int32
         MetalDeviceFFI.pipeline_max_threads(@handle)
       end
+
+      def thread_execution_width : Int32
+        width = MetalDeviceFFI.pipeline_thread_execution_width(@handle)
+        raise "Invalid Metal pipeline execution width" unless width > 0
+        width
+      end
+
+      # Compiled static allocation in bytes, not registers or runtime occupancy.
+      def static_threadgroup_memory_length : Int64
+        bytes = MetalDeviceFFI.pipeline_static_threadgroup_memory_length(@handle)
+        raise "Invalid Metal pipeline static threadgroup memory" if bytes < 0
+        bytes
+      end
     end
 
     # Pipeline cache for reusing compiled kernels
@@ -528,6 +549,8 @@ lib MetalDeviceFFI
   fun create_pipeline_from_library = gs_create_pipeline_from_library(library_path : Pointer(UInt8), function_name : Pointer(UInt8)) : Pointer(Void)
   fun create_pipeline_from_default_library = gs_create_pipeline_from_default_library(function_name : Pointer(UInt8)) : Pointer(Void)
   fun pipeline_max_threads = gs_pipeline_max_threads(pipeline : Pointer(Void)) : Int32
+  fun pipeline_thread_execution_width = gs_pipeline_thread_execution_width(pipeline : Pointer(Void)) : Int32
+  fun pipeline_static_threadgroup_memory_length = gs_pipeline_static_threadgroup_memory_length(pipeline : Pointer(Void)) : Int64
 end
 {% else %}
 # Stubs for non-Darwin platforms
@@ -561,6 +584,8 @@ lib MetalDeviceFFI
   fun create_pipeline_from_library = gs_create_pipeline_from_library(library_path : Pointer(UInt8), function_name : Pointer(UInt8)) : Pointer(Void)
   fun create_pipeline_from_default_library = gs_create_pipeline_from_default_library(function_name : Pointer(UInt8)) : Pointer(Void)
   fun pipeline_max_threads = gs_pipeline_max_threads(pipeline : Pointer(Void)) : Int32
+  fun pipeline_thread_execution_width = gs_pipeline_thread_execution_width(pipeline : Pointer(Void)) : Int32
+  fun pipeline_static_threadgroup_memory_length = gs_pipeline_static_threadgroup_memory_length(pipeline : Pointer(Void)) : Int64
 end
 {% end %}
 {% end %}

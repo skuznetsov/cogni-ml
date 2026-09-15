@@ -1,6 +1,58 @@
 # Ordinary prefill command diagnostics
 
-## Active diagnostic frontier: fresh-process first-command failure
+## Active diagnostic frontier: compiled resource difference, failure unresolved
+
+Bounded diagnostic (2026-09-15): `qwen35_sg4_tail_probe --pipeline-info` compiles
+the same F32 source in direct/pregate order and reads compiled static
+threadgroup bytes, execution width and maximum threads. No tensor fixture,
+compute command, encoder or dispatch is admitted. Additive read-only bridge
+getters; production routing and shader bytes stay unchanged. Rollback: omit
+the diagnostic mode. DoD: CPU/Metal builds, source branch guard, existing
+self-tests/specs, malformed-mode rejection, then one leased compile-only run
+under the existing 35% free/24GiB/300s guard (quiet wait disabled). Stop on
+error; no compute retry. Source predicts 4,608 versus 8,704 bytes, but report
+the compiled values even if different. Neither equal nor different metadata
+establishes runtime occupancy, register pressure or watchdog causality.
+
+Measured on Apple M2 Max: direct **4,608 bytes**, pregate **8,704 bytes**;
+both execution width **32**, maximum threads **1,024**. Compiled static
+threadgroup storage therefore preserves the source's extra 4,096-byte gate
+array (1.889x), not a measured occupancy or speed ratio. `compute_commands=0`
+is the inspected branch contract, not a driver-wide activity counter: device
+initialization still creates a command queue and compilation uses the driver.
+The branch and its callees create no compute command or tensor fixture.
+This closes the static-allocation question only; the earlier callback remains
+unresolved. Next candidate is removing shared gate staging, with explicit
+register-pressure and numerical checks before any production promotion.
+
+Verification: 13 SG4/stage-split specs pass (new branch guard failed before
+implementation), CPU-only and Metal release builds/self-tests pass; CPU-only
+metadata mode and malformed/extra arguments reject before initialization.
+A temporary native-FFI check confirms null handles return invalid sentinels
+(width0, bytes-1) without initializing the device.
+One leased compile-only run exits 0, preflight free78%, guards unchanged.
+Build used `DEVELOPER_DIR=/Library/Developer/CommandLineTools` and a private
+bridge object; default Xcode required license acceptance, which was not changed.
+Command: `scripts/run_safe.sh /private/tmp/qwen-sg4-metadata.AJb8qV/probe 300
+24576 --pipeline-info`, with lease wait0, quiet requirement/wait0 and free35%.
+Evidence directory is temporary; refresh on source/build/device/driver drift
+or evidence loss.
+
+Luna's correlated review found no P1 and returned ROBUST for API wiring and
+the application-level no-dispatch route. Afterwards only a probe comment was
+clarified to distinguish command queues from command buffers; capture hashes
+below refer to the measured build, not that comment-only revision. SHA256
+before/after measurement unchanged:
+
+```text
+probe-source e5a34f130d203bf6202644d3d05d4450998db74e365e826e6c8823b33883d7c3
+bridge-source 8100559599f0857e2e4d9bfedb616f52de124761dce2476ca592fd0a621d949c
+device-source ecc5d96332833a8a94d9a55914d515b5e34efe001f762d65aaa7c919b907c934
+shader a53054dd97bdfdbfa2e4a8cdc160898f9c7e6c7a5907fbb6b1884bfa1dd2eff1
+bridge-object a681a678ba98e1c0c6c62e8eed84777437a213ae4c8891f975cb87d693f97663
+probe-binary d89152e6d92669287223a37d4f2b62e1d408fdc83031dcf127b5f45382e591b9
+pipeline-info.log b2a27f5c43b3f928b69704e9269dea7ea2c72f57ad597512d48cfeaca00698e5
+```
 
 The 2026-09-14 model-free F32 single-command BAAB series is **measured-red**:
 pregate/direct/direct pass, then pregate fails on the first and only dispatch

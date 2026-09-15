@@ -6,6 +6,22 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-QWEN35-SG4-RESOURCES-2026-09-15] Compiled static allocation confirmed
+
+- Compile-only `--pipeline-info`, same F32 source/options and direct/pregate
+  order: Apple M2 Max reports 4,608/8,704 static threadgroup bytes; both SIMD32,
+  max1,024 threads. No tensor fixture or compute submission. Driver compilation
+  and device/queue initialization still occur; no occupancy or speed claim.
+- Extra4KiB gate staging survives compilation. Prior fresh-process callback
+  below remains unresolved; metadata is not causal evidence. Next candidate:
+  remove shared gate staging, check register tradeoff and numerical parity.
+- CPU/Metal builds/self-tests,13 source/stage-split specs pass; new branch
+  guard red before implementation. One guarded metadata run exits0, free78%,
+  unchanged35%/24GiB/300s safety limits, no retry or production shader change.
+- Evidence/hashes: docs/qwen-prefill-command-trace.md active section and
+  /private/tmp/qwen-sg4-metadata.AJb8qV/pipeline-info.log (temporary). Refresh
+  on source/build/device/driver drift or evidence loss.
+
 ### [LM-QWEN35-SG4-SINGLE-2026-09-14] Fresh-process first-command failure
 
 - Supersedes the slice entry below. Model-free F32 single-command BAAB:

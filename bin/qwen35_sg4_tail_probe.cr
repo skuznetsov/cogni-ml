@@ -408,6 +408,31 @@ end
   abort "CPU-only probe supports only --self-test or dry invocation" unless ARGV.empty?
   puts "dry: GPU modes unavailable in CPU-only build"
 {% else %}
+  if ARGV == ["--pipeline-info"]
+    lease = ML::Metal::ProcessLease.acquire
+    begin
+      device = ML::Metal::Device.instance
+      raise "probe requires Apple GPU" unless device.name.starts_with?("Apple")
+      puts "sg4_pipeline_info pid=#{Process.pid} source_sha256=#{Digest::SHA256.hexdigest(SOURCE)} device=#{device.name.gsub(/\s+/, "_")} precision=f32"
+      STDOUT.flush
+      # Same source, options and compilation order as --single-command.
+      # No fixture, tensor allocation, command-buffer creation or compute submission.
+      {"qwen35_attn_decode_rows_sg4", "qwen35_attn_decode_rows_sg4_pregate"}.each do |name|
+        pipe = ML::Metal::ComputePipeline.new(name, SOURCE)
+        bytes = pipe.static_threadgroup_memory_length
+        width = pipe.thread_execution_width
+        max_threads = pipe.max_total_threads_per_threadgroup
+        raise "Invalid pipeline thread limit" unless max_threads >= width
+        puts "sg4_pipeline kernel=#{name} static_threadgroup_bytes=#{bytes} thread_execution_width=#{width} max_total_threads=#{max_threads}"
+        STDOUT.flush
+      end
+    ensure
+      lease.close
+    end
+    puts "pipeline_info=PASS pipelines=2 compute_commands=0"
+    exit
+  end
+
   if ARGV.any? { |arg| arg.starts_with?("--single-command") }
     abort "single-command takes exactly one selector argument" unless ARGV.size == 1
     kernel = single_command_kernel(ARGV[0])
@@ -479,7 +504,7 @@ end
   end
 
   unless ARGV == ["--run"]
-    abort "usage: qwen35_sg4_tail_probe [--run|--benchmark|--slice-check|--single-command=direct|--single-command=pregate|--self-test]" unless ARGV.empty?
+    abort "usage: qwen35_sg4_tail_probe [--run|--benchmark|--slice-check|--single-command=direct|--single-command=pregate|--pipeline-info|--self-test]" unless ARGV.empty?
     puts "dry: #{CASES.size * 4} bounded SG4 cases; no Metal initialization; use --run under scripts/run_safe.sh"
     exit
   end

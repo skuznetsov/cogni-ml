@@ -8,6 +8,23 @@ private def sg4_kernel(name : String) : String
 end
 
 describe "Qwen35 SG4 partial-row synchronization" do
+  it "keeps pipeline inspection on a terminating compile-only branch" do
+    source = File.read(Path[__DIR__] / "../bin/qwen35_sg4_tail_probe.cr")
+    start = source.index(%(  if ARGV == ["--pipeline-info"])).not_nil!
+    finish = source.index("\n  if ARGV.any?", start).not_nil!
+    branch = source[start...finish]
+    branch.should contain(%({"qwen35_attn_decode_rows_sg4", "qwen35_attn_decode_rows_sg4_pregate"}))
+    branch.should contain("ComputePipeline.new(name, SOURCE)")
+    branch.should contain("pipe.static_threadgroup_memory_length")
+    branch.should contain("pipe.thread_execution_width")
+    branch.should contain("pipe.max_total_threads_per_threadgroup")
+    branch.should contain("lease.close")
+    branch.should end_with("    exit\n  end\n")
+    {"ShapeFixture", "Buffer.new", "CommandBuffer", "Encoder", "dispatch!", "synchronize"}.each do |forbidden|
+      branch.should_not contain(forbidden)
+    end
+  end
+
   {"qwen35_attn_decode_rows_sg4", "qwen35_attn_decode_rows_sg4_pregate"}.each do |name|
     it "keeps #{name} barriers within independently active SIMD groups" do
       kernel = sg4_kernel(name)
