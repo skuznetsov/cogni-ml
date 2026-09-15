@@ -6,6 +6,27 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-QWEN35-SG4-SINGLE-2026-09-14] Fresh-process first-command failure
+
+- Supersedes the slice entry below. Model-free F32 single-command BAAB:
+  pregate/direct/direct PASS, then pregate fails on its first/only dispatch
+  in a fourth fresh process. Thus prior dispatches in the failing process are
+  not required; driver/host history and kernel resource sensitivity remain open.
+- Same prefix7839/fixture193, selected64 rows/start0; both pipelines compile
+  in fixed order before one selected command. Successful prefixes have oracle
+  max1.06465e-6 and129 future rows/trailing canaries intact. Failure is the
+  same Impacting Interactivity callback. No fourth result, no GPU retry.
+- Free76%, unchanged35%/24GiB/300s guards, zero warmup/cooldown; source/binary
+  manifests unchanged. CPU/Metal builds, selector/slice/output self-tests,
+  12 specs and capture controls pass. Luna: ROBUST for instrument only.
+- Measured-red, not a speed or production certificate. Fresh process reset and
+  smaller row counts are not sufficient fixes. Next: read-only kernel/resource
+  boundary audit before any further workload; do not infer deterministic
+  pregate failure from this mixed result.
+- Evidence: docs/qwen-prefill-command-trace.md, "Fresh-process single-command
+  discriminator"; /private/tmp/qwen-sg4-single.uIaps6/ (temporary). Refresh on
+  source/build/device/driver/input/scheduling drift or evidence loss.
+
 ### [LM-QWEN35-SG4-SLICES-2026-09-14] 64-row slicing does not prevent the callback
 
 - Current frontier supersedes the operator entry below: model-free F32

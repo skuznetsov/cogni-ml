@@ -1,15 +1,15 @@
 # Ordinary prefill command diagnostics
 
-## Active diagnostic frontier: 64-row slicing is insufficient
+## Active diagnostic frontier: fresh-process first-command failure
 
-The 2026-09-14 model-free F32 `--slice-check` is **measured-red**. At
-prefix7839/rows193, direct SG4 passes all64+64+64+1 rows against the CPU oracle;
-the first pregate64-row command fails with `Impacting Interactivity`. Its
-pre-submit identity has offset0 and an aligned row count. Slicing alone did not
-prevent the callback. No retry after the GPU failure, no complete pair or speed
-promotion. Kernel identity remains confounded with order/host history. Next:
-design a fresh-process single-command order discriminator, not smaller slices
-or a production routing change. See "Query-row slicing diagnostic" below.
+The 2026-09-14 model-free F32 single-command BAAB series is **measured-red**:
+pregate/direct/direct pass, then pregate fails on the first and only dispatch
+in its fresh process. Previous dispatches within that process are not required
+for the callback. The same pregate fixture both passes and fails across this
+series; driver/host history and kernel resource sensitivity remain unresolved.
+No retry after GPU failure, production change or speed promotion. Stop varying
+row size/process reset as assumed fixes; inspect the kernel/resource boundary
+before another workload. See "Fresh-process single-command discriminator".
 
 ### Existing standalone stage-split diagnostic
 
@@ -943,3 +943,104 @@ evidence loss. No production source was changed by this slice.
 - Authorized GPU log SHA256: `25e1383f9ea53409973ae1a5f69639236374ec4df323ac4e08301306bd8dc6c6`.
 - Sandbox abort log SHA256: `8706aaef203ca35d880451dfb1d25e5d2f4a8f686d711ed9ceb0c76a04a10494`.
 - Capture checker SHA256: `46036b46ccbb821912e5ea85240c12045c49353815199afb5cdc8a24cd87e58e`.
+
+### Fresh-process single-command discriminator (predeclared 2026-09-14)
+
+Hypothesis: the pregate failure depends on prior dispatches in its process.
+Prediction: its first64-row command succeeds in a fresh process. A failure
+before any direct dispatch refutes the need for that process-local predecessor,
+not driver/host history or all accumulation effects.
+
+Add diagnostic-only `--single-command=direct|pregate`. Keep the exact previous
+prefix7839/rows193 F32 fixture and compile both pipelines in direct/pregate
+order, then submit only selected kernel/start0/rows64 once, without warmup.
+Validate the64-row output prefix against the CPU oracle and require all129
+future rows plus trailing canaries to remain poisoned. Record selected kernel,
+PID, pre-submit identity, completed-command timing, oracle and guard outcome.
+No production source, shader, shape, precision, or allocation-layout changes.
+
+Predeclare at most four fresh guarded processes in order pregate/direct/direct/
+pregate (BAAB). First nonzero exit, missing completion or failed validation
+stops the entire series; no alternate-kernel fallback or retry after failure.
+Retain35% free memory,24GiB/300s, command timeout180s, zero-wait process lease
+and disabled quiet wait under standing authority. No added sleeps. Launch
+outside the sandbox so the unchanged runner can inspect process groups.
+
+Instrument DoD: CPU/Metal builds, strict selector negative controls and existing
+self-tests/12 source specs pass; capture requires exactly one submit and one
+validated completion per admitted process. GPU DoD is conditional: all four
+completed commands for a bounded success, otherwise record measured-red and
+stop. Even four passes cannot establish production stability or speed; fresh
+processes retain OS/driver history and setup changes host pacing. Rollback is
+removal of the opt-in mode. A pregate-first failure requires a frame change
+away from repeatedly shrinking row batches.
+
+#### Result: process-local dispatch history is not necessary
+
+CPU-only and Metal release builds pass. Self-tests initially failed at the
+missing selector and now pass both valid selectors, six malformed selectors,
+16 slice plans and the11 existing source/output mutation controls. The12
+SG4/stage-split specs, format/diff checks and invalid-mode CLI checks pass;
+CPU-only rejects the GPU mode. Correlated Luna source review found no P1
+instrumentation blocker (ROBUST within this diagnostic contract).
+
+The external launcher used `set -e` around each guarded process and its capture
+checker, in the predeclared BAAB order. Exact per-trial invocation:
+
+```sh
+env -u COGNI_METAL_LEASE_PATH COGNI_METAL_LEASE_WAIT_MS=0 COGNI_RUN_SAFE_REQUIRE_QUIET=0 COGNI_RUN_SAFE_WAIT_QUIET_SEC=0 COGNI_RUN_SAFE_MIN_FREE_PCT=35 COGNI_METAL_COMMAND_TIMEOUT_MS=180000 scripts/run_safe.sh /private/tmp/qwen-sg4-single.uIaps6/probe 300 24576 --single-command=pregate
+```
+
+Replace only selector with `direct` for trials2/3. All trials used Apple M2 Max,
+prefix7839, full fixture193 rows, selected first64 query rows and distinct
+process IDs. Preflight free76% on all four; postrun free76%. No guard kill,
+warmup, sleep, model weights or production inference session.
+
+| Trial | Kernel | PID | Result | Completed GPU interval |
+|---|---|---|---|---|
+| 1 | pregate | 22637 | oracle/guard PASS, exit0 | 110.453ms |
+| 2 | direct | 22691 | oracle/guard PASS, exit0 | 57.823ms |
+| 3 | direct | 22767 | oracle/guard PASS, exit0 | 59.716ms |
+| 4 | pregate | 22821 | first dispatch fails, exit1 | unavailable |
+
+Each successful64-row prefix has max oracle error `1.064646237225464e-6`;
+all129 unwritten rows and trailing canaries remain intact. Trial4 emits one
+pre-submit record for pregate/start0/rows64/base7839/offset0, then native
+status5/error_code1, completion_status=-6, `Impacting Interactivity` with the
+same callback code `0000000e`. There is no result/PASS record for that trial.
+The launcher stops with exit1; no further GPU run follows.
+
+The checker accepts the three complete captures and rejects trial4; its eight
+mutation controls are parser qualification only. Source/bridge/binary/runner/
+checker manifests match before and after. Timings are cold first-command
+diagnostics from an incomplete balanced series, not a throughput comparison or
+evidence to change the production gate threshold.
+
+Decision: a direct predecessor or multiple dispatches in the *failing process*
+are not necessary conditions. Fresh process isolation is insufficient on this
+host. One successful and one failed pregate run also prevents an unconditional
+"this shape always fails" claim. OS/driver history, compile-order effects and
+kernel-resource sensitivity remain open; no specific root cause is established.
+Next is a read-only kernel/resource-boundary audit, not more identical runs,
+smaller query slices or unlabelled cooldown changes.
+
+Read-only next-step anchor: `fullattn_qwen35.metal` declares4608B of static
+threadgroup arrays in direct (Q+scores) and8704B in pregate (Q+gate+scores).
+These are source sums, not compiled allocation or measured occupancy. The
+bridge currently exposes `maxTotalThreadsPerThreadgroup` but not
+`staticThreadgroupMemoryLength`/`threadExecutionWidth`. A separately reviewed
+metadata-only pipeline probe, with no compute dispatch, can establish the
+compiled properties before considering a resource-reduction change. Equal
+metadata would not rule out register pressure or driver/history effects;
+different metadata alone would not prove watchdog causality.
+
+Evidence `/private/tmp/qwen-sg4-single.uIaps6/` is temporary. Refresh on source,
+build/device/driver/input/scheduling drift or evidence loss. SHA256:
+
+- Probe source: `704beb574b2f3eee309bc675b5ae949956d6718faf4994fb3d36c992d4c3d557`.
+- Probe binary: `4e2d7c00c4bca18c9fdf28ab29b1e878928ecb41d5dd5bf867e658ea20914190`.
+- Checker: `d5408da220045c961afb2c3cff9cbca91cdd5185e8f3e42099982fac6a593dc2`.
+- Trial1 log: `07d9249a1147f2f3af611ae8b8d17c8eef5d26560bf0927c707afc9de9d6879b`.
+- Trial2 log: `b31c3e376b02d855416f185ccb63e0d5d93555a9d98ad9aee5adaa4b9e08cf10`.
+- Trial3 log: `55a8df85e5bdd8cf25b4ec6f22ebbaca66f081c9739042232aef9667e424958b`.
+- Trial4 log: `6caaa461f1d1e6fbaf4063b0609ece97dadbe93bc187c2e67c6a19992141fece`.

@@ -23,6 +23,14 @@ ORACLE_LIMIT     = 1.0e-5_f64
 PAIR_LIMIT       = 1.0e-6_f64
 SLICE_ROWS       =         64
 
+private def single_command_kernel(selector : String) : String
+  case selector
+  when "--single-command=direct"  then "qwen35_attn_decode_rows_sg4"
+  when "--single-command=pregate" then "qwen35_attn_decode_rows_sg4_pregate"
+  else                                 raise ArgumentError.new("single-command requires exactly direct or pregate")
+  end
+end
+
 # Offsets apply only to Q, gate and output. K/V remain global and immutable.
 private def query_slices(base : Int32, rows : Int32) : Array(Tuple(Int32, Int32, Int32, Int64))
   raise ArgumentError.new("invalid slice extent") unless base >= 0 && rows > 0 && base.to_i64 + rows <= Int32::MAX
@@ -312,6 +320,17 @@ private def reject_validation!(label : String, actual : Array(Float32), expected
 end
 
 private def run_self_test : Nil
+  raise "direct selector" unless single_command_kernel("--single-command=direct") == "qwen35_attn_decode_rows_sg4"
+  raise "pregate selector" unless single_command_kernel("--single-command=pregate") == "qwen35_attn_decode_rows_sg4_pregate"
+  {"--single-command", "--single-command=", "--single-command=Direct", "--single-command=both", "--single-command=pregate ", "--single-command=direct=extra"}.each do |bad|
+    rejected = false
+    begin
+      single_command_kernel(bad)
+    rescue ArgumentError
+      rejected = true
+    end
+    raise "single-command selector failed open" unless rejected
+  end
   {0, 7839}.each do |base|
     {1, 63, 64, 65, 193, 194, 195, 196}.each do |rows|
       seen = [] of Int32
@@ -376,7 +395,7 @@ private def run_self_test : Nil
     rejected = true
   end
   raise "pair validator failed open" unless rejected
-  puts "source_guard=PASS negative_controls=2 validation_controls=5 slice_shapes=16 slice_negative_controls=4 gpu=not_initialized"
+  puts "source_guard=PASS negative_controls=2 validation_controls=5 slice_shapes=16 slice_negative_controls=4 selector_negative_controls=6 gpu=not_initialized"
 end
 
 validate_source!(SOURCE)
@@ -389,6 +408,35 @@ end
   abort "CPU-only probe supports only --self-test or dry invocation" unless ARGV.empty?
   puts "dry: GPU modes unavailable in CPU-only build"
 {% else %}
+  if ARGV.any? { |arg| arg.starts_with?("--single-command") }
+    abort "single-command takes exactly one selector argument" unless ARGV.size == 1
+    kernel = single_command_kernel(ARGV[0])
+    lease = ML::Metal::ProcessLease.acquire
+    begin
+      device = ML::Metal::Device.instance
+      raise "probe requires Apple GPU" unless device.name.starts_with?("Apple")
+      puts "sg4_single_command kernel=#{kernel} pid=#{Process.pid} source_sha256=#{Digest::SHA256.hexdigest(SOURCE)} device=#{device.name.gsub(/\s+/, "_")} precision=f32 base=7839 fixture_rows=193 command_rows=64 heads=#{HEADS} kv_heads=#{KV_HEADS} head_dim=#{DIM} warmups=0 cooldown_ms=0"
+      STDOUT.flush
+      # Preserve the previous experiment's compilation order and pipeline set.
+      direct_pipe = ML::Metal::ComputePipeline.new("qwen35_attn_decode_rows_sg4", SOURCE)
+      pregate_pipe = ML::Metal::ComputePipeline.new("qwen35_attn_decode_rows_sg4_pregate", SOURCE)
+      pipe = kernel == direct_pipe.name ? direct_pipe : pregate_pipe
+      fixture = ShapeFixture.new(7839, 193, false)
+      begin
+        host_ms, gpu_ms = dispatch!(pipe, fixture, true, 0, 64, trace: true)
+        max_error = validate_slice_output!(fixture.read_output, fixture.expected, 64 * HEADS * DIM, [] of Float32)
+        puts "sg4_single_result kernel=#{kernel} pid=#{Process.pid} commands=1 completed_rows=64 max_abs=#{max_error} gpu_ms=#{gpu_ms.not_nil!} host_ms=#{host_ms} guard=PASS oracle=PASS"
+        STDOUT.flush
+      ensure
+        fixture.release
+      end
+    ensure
+      lease.close
+    end
+    puts "single_command=PASS kernel=#{kernel} commands=1"
+    exit
+  end
+
   if ARGV == ["--slice-check"]
     lease = ML::Metal::ProcessLease.acquire
     begin
@@ -431,7 +479,7 @@ end
   end
 
   unless ARGV == ["--run"]
-    abort "usage: qwen35_sg4_tail_probe [--run|--benchmark|--slice-check|--self-test]" unless ARGV.empty?
+    abort "usage: qwen35_sg4_tail_probe [--run|--benchmark|--slice-check|--single-command=direct|--single-command=pregate|--self-test]" unless ARGV.empty?
     puts "dry: #{CASES.size * 4} bounded SG4 cases; no Metal initialization; use --run under scripts/run_safe.sh"
     exit
   end
