@@ -1,6 +1,102 @@
 # Ordinary prefill command diagnostics
 
-## Active diagnostic frontier: thread-local gate passes one bounded case
+## Tail/offset and balanced timing gate (2026-09-15, predeclared)
+
+No shader or production routing change. First, one register-candidate process
+executes 1+2+3+58 query rows at base7839/fixture193, F32/D256/heads24/KV4.
+Each command advances only Q/gate/output bindings; K/V stays global. Validate
+CPU oracle, exact prior prefix, untouched future rows and trailing canaries
+after each command. Stop on first error; only a complete four-command pass
+admits timing. Then eight fresh single-command processes, order ABBA BAAB
+(A=direct, B=register), same binary/three-pipeline compilation order/fixture,
+selected64 rows, no warmup/cooldown. Keep lease,35%/24GiB/300s and no quiet wait.
+Any failure stops the entire series; no replacement samples. Compare within
+blocks and report raw GPU/host times, never production/general speed from
+this one model-free shape. DoD: source/selector/offset self-tests, CPU/Metal
+builds, guarded logs and a complete-series check. Rollback: omit new modes.
+
+Result: all four tail commands pass (completed rows 1/3/6/64), including
+nonzero Q/gate/output offsets 24,576/73,728/147,456 bytes. Prior output remains
+exactly unchanged; future rows and trailing canaries remain poisoned. Maximum
+CPU-oracle absolute error is 1.064646237225464e-6. Eight fresh paired processes
+also pass with that same maximum error, exit0, no replacements or GPU errors.
+This is per-run oracle agreement, not saved-array bitwise direct/candidate
+equivalence or real-model quality evidence.
+
+Raw times in execution order (milliseconds):
+
+| Sample | Kernel | GPU | Host |
+| --- | --- | ---: | ---: |
+| 1 | direct | 58.161917 | 62.585417 |
+| 2 | register | 88.589667 | 91.765292 |
+| 3 | register | 60.205875 | 63.070416 |
+| 4 | direct | 59.962625 | 62.750000 |
+| 5 | register | 60.275167 | 63.822833 |
+| 6 | direct | 61.130250 | 65.100792 |
+| 7 | direct | 79.047250 | 82.414875 |
+| 8 | register | 65.665750 | 68.724125 |
+
+Block1 GPU means: direct59.062271 vs register74.397771ms (candidate25.97%
+slower); block2: direct70.088750 vs register62.970458ms (candidate10.16%
+faster). Host signs agree. No samples excluded. **No repeatable speed win**;
+the opposing signs and visible variability preclude promotion. Equal compile
+sets remove one known asymmetry but not driver caching, clock or host noise.
+Do not repeat this series merely to seek a favorable result. Next: inspect
+available compiler/occupancy/spill diagnostics without compute; if unavailable,
+park this candidate and select a different measured bottleneck. Production
+routing is unchanged; prior intermittent interactivity failures remain open.
+
+Verification: source-contract test observed red before implementation, then
+15 SG4/stage-split specs pass; CPU-only and Metal release builds plus both
+self-tests pass. Six new malformed paired selectors are rejected, alongside
+existing six selector negatives and four prefix/future/canary negatives.
+Malformed Metal CLI and valid GPU modes on CPU-only builds reject. Temporary
+series checker verifies all eight terminal results, distinct PIDs, mode/order,
+source/shape, bounds, finite times and oracle guards; six mutated-log negatives
+reject. Parent also inspected the tail log and complete raw series. Build uses
+private bridge/cache with CommandLineTools (no shared build artifacts changed).
+Parent adversary verdict: ROBUST for these bounded diagnostic runs and exact
+CLI selection; VULNERABLE as a speed/stability generalization. The source-text
+spec does not itself prove execution, and equal maximum errors do not prove
+pairwise equality; executed oracle/canary checks supply the scoped evidence.
+Correlated read-only Luna review also returned ROBUST for CLI, tail offsets,
+prefix guards and equal compilation order, with no P1 blocker. The temporary
+checker qualifies log rejection, not injected live GPU fail-fast behavior.
+Guards: lease,35% free/24GiB/300s; quiet wait disabled; preflight76% for tail,
+78% for every paired run. No model weights loaded. Refresh evidence after
+source/compiler/device/driver/shape drift or loss of temporary artifacts.
+
+Reproduction: build `bin/qwen35_sg4_tail_probe.cr --release` with a private
+`bridge.o` and Metal/Foundation/c++ link flags, using
+`DEVELOPER_DIR=/Library/Developer/CommandLineTools`. Under `scripts/run_safe.sh
+<probe> 300 24576`, run `--register-tail-check`, then only on complete success
+`--paired-command=direct/register` in the table order. Environment:
+`COGNI_METAL_LEASE_WAIT_MS=0`, unset `COGNI_METAL_LEASE_PATH`,
+`COGNI_RUN_SAFE_REQUIRE_QUIET=0`, `COGNI_RUN_SAFE_WAIT_QUIET_SEC=0`,
+`COGNI_RUN_SAFE_MIN_FREE_PCT=35`, `COGNI_METAL_COMMAND_TIMEOUT_MS=180000`.
+
+Evidence directory: `/private/tmp/qwen-sg4-tail-pair.SWABsJ/` (temporary).
+SHA256 provenance:
+
+```text
+probe source b158c93b69a976738d827360b3929985f6fc9f8fbf4b610a2dbbf6cd7aad7083
+shader 824f224369ce719cb05ad766717006915a7b25536926e9b1f3eaca913ffdf682
+flagged input f1b45404dd4069efd96f2579304dcae4106b990257a33ad93f094b196165bd18
+probe binary d5ef15571d8bd565f43d4e9631e426c4e94301dca6814e7b082903090b465e63
+bridge a681a678ba98e1c0c6c62e8eed84777437a213ae4c8891f975cb87d693f97663
+tail.log 26e20ef1000f410256fe1796ff4746edaec235a88998474f3f91c9fa43a80328
+check.py a297f11d71f03fd4df97979b45bfd8168b03e348575ade64293f359b3422ce23
+1-direct.log c46e9b9681514613e505189073282140fecf2ed982c96ff15f9e59e0feead8d0
+2-register.log 3cdc7e02d7e88098b4357282eeb10a3afcd262c31ec0175e94d530d237bbea72
+3-register.log c22d6bb828463118ed18ed2e76f76e5345e62734909fd61a4fa13261586e9959
+4-direct.log 2237dd46f8195e26a1729b70694c0658df28c2d9d7d4e3134bf29771b430fea9
+5-register.log b21e14757e28db9defdb865d4587a3d48cce32a3c97b5dd8c9ae23b3cbfc9f85
+6-direct.log cff681b7d50ee6d5e2ead22e68777604d68165cc55cff4b46946397c0d6fd22e
+7-direct.log 0801564102dc062db587d678e57eb1916f694b549889f979ed51732c349a7744
+8-register.log 2de88e6022ca16cca671c29a77a4c5ee7532fbeb7bbb4ef7730ac4b83d8a826d
+```
+
+## Earlier diagnostic: thread-local gate passes one bounded case
 
 Register-gate experiment (2026-09-15, predeclared): keep pregate's early loads
 but store each lane's eight values in thread-local storage. Define

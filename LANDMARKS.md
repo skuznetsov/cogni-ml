@@ -6,6 +6,29 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-QWEN35-SG4-TAIL-PAIR-2026-09-15] Tail pass, no repeatable speed win
+
+- Diagnostic-only extension; no shader or production routing change. Register
+  candidate passes 1+2+3+58-row commands at base7839/fixture193/F32/D256,
+  with nonzero Q/gate/output offsets, exact previous prefix, future/canary
+  guards and CPU-oracle max1.064646237225464e-6.
+- Eight fresh processes ABBA BAAB compile identical direct/pregate/register
+  pipelines; selected64 rows all pass, distinct PIDs, no retries/errors.
+  Block1 GPU direct59.0623/register74.3978ms, block2 70.0888/62.9705ms:
+  opposing signs, no repeatable speed promotion; keep all samples.
+- Source contract red then15 specs green; CPU/Metal builds/self-tests pass.
+  Six mutated-log controls reject. Guards35%/24GiB/300s, lease; quiet wait OFF
+  under standing authority. No model loaded; shared build/WIP untouched.
+- Parent and correlated Luna adversary: ROBUST for the bounded diagnostic
+  contract only; source assertions/log checker do not prove live failure paths.
+- Next: read-only compiler/resource diagnostics if available; otherwise park
+  this candidate for a different measured bottleneck, not favorable reruns.
+  No production/model-state/stability/bitwise pair claim. Earlier interactivity
+  failure and register/spill behavior remain unresolved.
+- Commands, raw times and hashes: docs/qwen-prefill-command-trace.md top gate;
+  /private/tmp/qwen-sg4-tail-pair.SWABsJ/ temporary artifacts. Refresh on source,
+  compiler/device/driver/shape drift or loss of evidence.
+
 ### [LM-QWEN35-SG4-REGISTER-2026-09-15] Thread-local gate bounded pass
 
 - Diagnostic-only `QWEN35_SG4_REGISTER_GATE=1` moves eight gate values per lane

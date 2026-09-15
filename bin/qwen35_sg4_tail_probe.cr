@@ -25,6 +25,16 @@ ORACLE_LIMIT     = 1.0e-5_f64
 PAIR_LIMIT       = 1.0e-6_f64
 SLICE_ROWS       =         64
 
+REGISTER_TAIL_ROWS = {1, 2, 3, 58}
+
+private def paired_command_kernel(selector : String) : String
+  case selector
+  when "--paired-command=direct"   then "qwen35_attn_decode_rows_sg4"
+  when "--paired-command=register" then REGISTER_KERNEL
+  else                                  raise ArgumentError.new("paired-command requires exactly direct or register")
+  end
+end
+
 private def single_command_kernel(selector : String) : String
   case selector
   when "--single-command=direct"   then "qwen35_attn_decode_rows_sg4"
@@ -323,6 +333,18 @@ private def reject_validation!(label : String, actual : Array(Float32), expected
 end
 
 private def run_self_test : Nil
+  raise "paired direct selector" unless paired_command_kernel("--paired-command=direct") == "qwen35_attn_decode_rows_sg4"
+  raise "paired register selector" unless paired_command_kernel("--paired-command=register") == REGISTER_KERNEL
+  {"--paired-command", "--paired-command=", "--paired-command=pregate", "--paired-command=Direct", "--paired-command=register ", "--paired-command=direct=extra"}.each do |bad|
+    rejected = false
+    begin
+      paired_command_kernel(bad)
+    rescue ArgumentError
+      rejected = true
+    end
+    raise "paired-command selector failed open" unless rejected
+  end
+  raise "register tail budget" unless REGISTER_TAIL_ROWS.sum == SLICE_ROWS && REGISTER_TAIL_ROWS.all? { |rows| 0 < rows <= SLICE_ROWS }
   raise "direct selector" unless single_command_kernel("--single-command=direct") == "qwen35_attn_decode_rows_sg4"
   raise "pregate selector" unless single_command_kernel("--single-command=pregate") == "qwen35_attn_decode_rows_sg4_pregate"
   raise "register selector" unless single_command_kernel("--single-command=register") == REGISTER_KERNEL
@@ -399,7 +421,7 @@ private def run_self_test : Nil
     rejected = true
   end
   raise "pair validator failed open" unless rejected
-  puts "source_guard=PASS negative_controls=2 validation_controls=5 slice_shapes=16 slice_negative_controls=4 selector_negative_controls=6 gpu=not_initialized"
+  puts "source_guard=PASS negative_controls=2 validation_controls=5 slice_shapes=16 slice_negative_controls=4 selector_negative_controls=12 register_tail_commands=4 gpu=not_initialized"
 end
 
 validate_source!(SOURCE)
@@ -445,30 +467,49 @@ end
     exit
   end
 
-  if ARGV.any? { |arg| arg.starts_with?("--single-command") }
-    abort "single-command takes exactly one selector argument" unless ARGV.size == 1
-    kernel = single_command_kernel(ARGV[0])
+  if ARGV.any? { |arg| arg.starts_with?("--single-command") || arg.starts_with?("--paired-command") || arg.starts_with?("--register-tail-check") }
+    abort "command probe takes exactly one selector argument" unless ARGV.size == 1
+    tail = ARGV == ["--register-tail-check"]
+    paired = tail || ARGV[0].starts_with?("--paired-command")
+    kernel = tail ? REGISTER_KERNEL : (paired ? paired_command_kernel(ARGV[0]) : single_command_kernel(ARGV[0]))
     lease = ML::Metal::ProcessLease.acquire
     begin
       device = ML::Metal::Device.instance
       raise "probe requires Apple GPU" unless device.name.starts_with?("Apple")
       puts "sg4_single_command kernel=#{kernel} pid=#{Process.pid} source_sha256=#{Digest::SHA256.hexdigest(SOURCE)} device=#{device.name.gsub(/\s+/, "_")} precision=f32 base=7839 fixture_rows=193 command_rows=64 heads=#{HEADS} kv_heads=#{KV_HEADS} head_dim=#{DIM} warmups=0 cooldown_ms=0"
       STDOUT.flush
-      # Controls always compile first; the candidate adds one flagged pipeline.
+      # Paired modes compile the same three pipelines in the same order.
       direct_pipe = ML::Metal::ComputePipeline.new("qwen35_attn_decode_rows_sg4", SOURCE)
       pregate_pipe = ML::Metal::ComputePipeline.new("qwen35_attn_decode_rows_sg4_pregate", SOURCE)
       pipe = kernel == direct_pipe.name ? direct_pipe : pregate_pipe
-      if kernel == REGISTER_KERNEL
-        pipe = ML::Metal::ComputePipeline.new(REGISTER_KERNEL, REGISTER_SOURCE, "qwen35_attn_decode_rows_sg4_pregate")
-        raise "register candidate misses resource gate" unless pipe.static_threadgroup_memory_length == 4608 && pipe.thread_execution_width == 32 && pipe.max_total_threads_per_threadgroup >= 128
+      if paired || kernel == REGISTER_KERNEL
+        candidate = ML::Metal::ComputePipeline.new(REGISTER_KERNEL, REGISTER_SOURCE, "qwen35_attn_decode_rows_sg4_pregate")
+        raise "register candidate misses resource gate" unless candidate.static_threadgroup_memory_length == 4608 && candidate.thread_execution_width == 32 && candidate.max_total_threads_per_threadgroup >= 128
+        pipe = candidate if kernel == REGISTER_KERNEL
         puts "sg4_candidate compiled_source_sha256=#{Digest::SHA256.hexdigest(REGISTER_SOURCE)} storage=thread_local register_allocation=unmeasured"
         STDOUT.flush
       end
+      puts "sg4_command_mode paired=#{paired} tail=#{tail} pipelines=#{paired || kernel == REGISTER_KERNEL ? 3 : 2} compile_order=direct,pregate#{paired || kernel == REGISTER_KERNEL ? ",register" : ""}"
       fixture = ShapeFixture.new(7839, 193, false)
       begin
-        host_ms, gpu_ms = dispatch!(pipe, fixture, true, 0, 64, trace: true)
-        max_error = validate_slice_output!(fixture.read_output, fixture.expected, 64 * HEADS * DIM, [] of Float32)
-        puts "sg4_single_result kernel=#{kernel} pid=#{Process.pid} commands=1 completed_rows=64 max_abs=#{max_error} gpu_ms=#{gpu_ms.not_nil!} host_ms=#{host_ms} guard=PASS oracle=PASS"
+        if tail
+          fixture.poison_output!
+          completed = 0
+          previous = [] of Float32
+          REGISTER_TAIL_ROWS.each_with_index do |rows, index|
+            host_ms, gpu_ms = dispatch!(pipe, fixture, true, completed, rows, poison: false, trace: true)
+            completed += rows
+            actual = fixture.read_output
+            max_error = validate_slice_output!(actual, fixture.expected, completed * HEADS * DIM, previous)
+            previous = actual[0, completed * HEADS * DIM]
+            puts "sg4_tail_result command=#{index + 1} completed_rows=#{completed} max_abs=#{max_error} gpu_ms=#{gpu_ms.not_nil!} host_ms=#{host_ms} guard=PASS oracle=PASS prefix=PASS"
+            STDOUT.flush
+          end
+        else
+          host_ms, gpu_ms = dispatch!(pipe, fixture, true, 0, 64, trace: true)
+          max_error = validate_slice_output!(fixture.read_output, fixture.expected, 64 * HEADS * DIM, [] of Float32)
+          puts "sg4_single_result kernel=#{kernel} pid=#{Process.pid} commands=1 completed_rows=64 max_abs=#{max_error} gpu_ms=#{gpu_ms.not_nil!} host_ms=#{host_ms} guard=PASS oracle=PASS"
+        end
         STDOUT.flush
       ensure
         fixture.release
@@ -476,7 +517,7 @@ end
     ensure
       lease.close
     end
-    puts "single_command=PASS kernel=#{kernel} commands=1"
+    puts "#{tail ? "register_tail_check" : (paired ? "paired_command" : "single_command")}=PASS kernel=#{kernel} commands=#{tail ? 4 : 1}"
     exit
   end
 
@@ -522,7 +563,7 @@ end
   end
 
   unless ARGV == ["--run"]
-    abort "usage: qwen35_sg4_tail_probe [--run|--benchmark|--slice-check|--single-command=direct|--single-command=pregate|--single-command=register|--pipeline-info|--pipeline-info-register|--self-test]" unless ARGV.empty?
+    abort "usage: qwen35_sg4_tail_probe [--run|--benchmark|--slice-check|--register-tail-check|--paired-command=direct|--paired-command=register|--single-command=direct|--single-command=pregate|--single-command=register|--pipeline-info|--pipeline-info-register|--self-test]" unless ARGV.empty?
     puts "dry: #{CASES.size * 4} bounded SG4 cases; no Metal initialization; use --run under scripts/run_safe.sh"
     exit
   end

@@ -8,6 +8,15 @@ private def sg4_kernel(name : String) : String
 end
 
 describe "Qwen35 SG4 partial-row synchronization" do
+  it "pins the register tail and paired-command diagnostic boundaries" do
+    source = File.read(Path[__DIR__] / "../bin/qwen35_sg4_tail_probe.cr")
+    source.should contain("REGISTER_TAIL_ROWS = {1, 2, 3, 58}")
+    source.should contain("previous = actual[0, completed * HEADS * DIM]")
+    source.should contain("validate_slice_output!(actual, fixture.expected, completed * HEADS * DIM, previous)")
+    source.should contain("if paired || kernel == REGISTER_KERNEL")
+    source.should contain("pipe = candidate if kernel == REGISTER_KERNEL")
+  end
+
   it "keeps experimental gate staging lane-local and opt-in" do
     kernel = sg4_kernel("qwen35_attn_decode_rows_sg4_pregate")
     kernel.should contain("#if defined(QWEN35_SG4_REGISTER_GATE) && QWEN35_SG4_REGISTER_GATE == 1")
