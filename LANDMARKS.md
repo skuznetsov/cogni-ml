@@ -6,6 +6,23 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-QWEN35-SG4-TELEMETRY-2026-09-15] Park register candidate pending evidence
+
+- Read-only tooling/API check: CLT cannot find metal/metal-objdump; Xcode's
+  metal resolution exits69 on unaccepted license. No license/toolchain change,
+  compilation, GPU submission or model load. Inspected pipeline/reflection and
+  four companion SDK headers expose no register/spill getter; this is not a
+  claim about every possible tool or private API.
+- Apple documents spill statistics in GPU profiling, not our current getters;
+  M3/A17 Shader Cost Graph is not an M2 Max certificate. Keep register/spill
+  values unknown, candidate diagnostic-only and prior noisy timing unpromoted.
+- Existing hash-pinned compare_stages.py rerun passes195 matched layer keys;
+  attention2385.079ms/2715.734ms over15 suffix full layers remains the measured
+  target (host waits, not full-request fraction or a new benchmark).
+- Details, official links and refresh boundaries: top of
+  docs/qwen-prefill-command-trace.md. Reopen after tooling/license/SDK/device
+  changes or a genuinely different discriminating method, not identical reruns.
+
 ### [LM-QWEN35-SG4-TAIL-PAIR-2026-09-15] Tail pass, no repeatable speed win
 
 - Diagnostic-only extension; no shader or production routing change. Register

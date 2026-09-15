@@ -1,5 +1,43 @@
 # Ordinary prefill command diagnostics
 
+## Current frontier: register telemetry unavailable in the inspected route (2026-09-15)
+
+Read-only follow-up to the tail/paired gate; no compilation, GPU submission,
+model load or toolchain change. `DEVELOPER_DIR=/Library/Developer/CommandLineTools
+xcrun --find metal` and `--find metal-objdump` both fail with utility-not-found.
+An inventory of Xcode's toolchain/usr bin directories and CLT/usr/bin finds
+Xcode `metal` and `xctrace`, but no `metal-objdump`. Default `xcrun --find metal`
+exits69 requiring Xcode license acceptance. Do not accept or bypass that gate
+automatically; no claim is made about optional/uninstalled toolchain packages.
+
+The installed SDK's `MTLComputePipeline.h` exposes resource/thread limits and
+reflection bindings/arguments, not register/spill counts. Inspected companion
+headers: `MTL4ComputePipeline.h`, `MTL4CompilerTask.h`,
+`MTL4PipelineDataSetSerializer.h`, `MTLCounters.h`. Compiler tasks expose status;
+dataset serialization is opaque; common counter structs do not add register
+statistics. This bounded API inspection is not proof that no tool/private API
+can report them. No runtime counter enumeration or capture was performed.
+
+Apple's [Metal Compute on MacBook Pro](https://developer.apple.com/videos/play/tech-talks/10580/)
+describes compiler spilled-byte statistics through GPU profiling, and explains
+why private arrays with dynamic indices can spill. Neither statement measures
+our candidate. Its threadgroup-size and constant-index suggestions remain
+hypotheses here. The newer [Shader Cost Graph workflow](https://developer.apple.com/videos/play/tech-talks/111374/)
+is described for M3/A17 Pro (Apple family9), not an M2 Max capability certificate.
+
+Decision: park the register candidate's optimization claim; do not add guessed
+spill telemetry or repeat the same noisy timing series. Reopen after an actually
+available M2-compatible statistics/capture path, or a new discriminating method.
+The existing bridge's safe math and production routing remain unchanged.
+`python3 /private/tmp/qwen-two-stage.vlxfep/compare_stages.py` was rerun: pinned
+capture hashes and195 matched layer keys pass; suffix attention still accounts
+for2385.079/2715.734ms across15 instrumented full-layer calls (host time, not
+whole-request or new performance data). Source state: `5f2624ba` plus unrelated
+pre-existing WIP. Refresh tooling findings after SDK/Xcode/license/device change.
+Adversary verdict: ROBUST for the inspected-route limitation; a universal
+"Metal cannot expose spills" claim would be unsupported. The 195-key/hash check
+passes and `git diff --check` is clean; neither proves a new optimization.
+
 ## Tail/offset and balanced timing gate (2026-09-15, predeclared)
 
 No shader or production routing change. First, one register-candidate process
