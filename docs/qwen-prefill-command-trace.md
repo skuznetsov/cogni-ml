@@ -1,5 +1,46 @@
 # Ordinary prefill command diagnostics
 
+## Follow-up: offline diagnostic flags yield no statistics (2026-09-15)
+
+At source state `ee027ccf` plus unrelated WIP, the installed `air-nt -mllvm
+--help-hidden` lists `--print-detailed-perf-diags`, `--print-regusage`, and
+`--scalar-opt-harvest-stats`. One compile-only experiment passed all three via
+`-mllvm`, with the previous register.metallib/pipeline script, applegpu_g14s,
+macos26.0/SDK27.0 and one compiler thread. It ran under scripts/run_safe.sh
+with120s/8GiB/free35%, quiet wait OFF; preflight free72%, exit0. No compute,
+capture, Replay or Profile was launched. Captured stdout and stderr were empty.
+This invocation did not deliver the requested register/spill measurements;
+empty output is not a zero-spill result or evidence that every compiler route
+is unavailable. A descriptor read confirms both expected pipeline names only.
+
+Temporary outputs: `/private/tmp/qwen-sg4-compiler-stats.19GGMy/register.log`
+SHA256 `caab6b22a917b098a7d415e5fe26606ddc9771204e44d59b7d2bc94a187c3b9d`;
+`register.gpu` SHA256
+`8b504c82570fe8d142f2d1fd942777c77d807397a92e38b0374fa418adbf312b`.
+Native output differs from the earlier archive; no code-equivalence claim or
+runtime promotion follows. No identical diagnostic reruns are warranted.
+
+Containment inspection: scripts/run_safe.sh tracks the workload process group,
+not arbitrary launchd/XPC services. Launching another Xcode under that runner
+alone is therefore not a containment certificate for its replay services.
+Apple's [Replay documentation](https://developer.apple.com/documentation/xcode/replaying-a-gpu-trace-file)
+separates replay from optional profiling; a successful replay by itself does
+not promise compiler statistics. Preserve the existing trace while resolving
+the replay execution boundary; do not terminate or attach guards to the user's
+existing Xcode session. Register allocation and spills remain unknown.
+
+Correlated Luna read-only inventory found no supported replay CLI in the
+inspected Xcode installation. Parent rechecks: xcrun cannot resolve gpudebug
+or gpucapture; GPUDebugger.xcplugindata registers ReplayCapture as the Xcode
+GUI action `GPUDebugger_replayCapture:`. This bounded discovery is not proof
+that no private or future route exists. Do not execute private agent/XPC
+binaries with guessed arguments. The observed GUI route remains outside the
+runner's current automatic timeout/RSS/pressure protection. Next decision:
+explicitly authorize a single GUI replay with this limitation (Profile OFF,
+no retries or unrelated process control), or park this diagnostic candidate.
+No GPU execution was admitted in this follow-up. Scoped verdict: ROBUST for
+the recorded compile outcome and runner boundary, not for safe replay or spills.
+
 ## Current frontier: one-command capture opens in Xcode; replay/statistics still pending (2026-09-15)
 
 One model-free register-candidate command was captured on Apple M2 Max using

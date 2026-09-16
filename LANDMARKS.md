@@ -6,6 +6,19 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-QWEN35-SG4-STATS-GATE-2026-09-15] Offline diagnostics silent; GUI exception unresolved
+
+- One guarded offline translation with three advertised diagnostic flags exits0
+  but emits no stdout/stderr statistics. Not a zero-spill result; no GPU run.
+- run_safe tracks process groups, not arbitrary launchd/XPC services. Wrapping
+  another Xcode does not establish replay containment. No supported standalone
+  replay CLI found in bounded inventory; Xcode's ReplayCapture is a GUI action.
+- Next requires explicit single-GUI-replay exception to automatic runner guards
+  (Profile OFF, no retries/unrelated process control), or park the diagnostic.
+  Do not replace this decision with private-service reverse engineering.
+- Commands, hashes and scope: docs/qwen-prefill-command-trace.md follow-up;
+  /private/tmp/qwen-sg4-compiler-stats.19GGMy. Refresh on tooling/runner changes.
+
 ### [LM-QWEN35-SG4-CAPTURE-2026-09-15] Trace saved; compiler statistics still open
 
 - One guarded model-free register-candidate64-row command passes CPU oracle
