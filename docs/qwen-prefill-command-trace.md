@@ -1,6 +1,72 @@
 # Ordinary prefill command diagnostics
 
-## Current frontier: offline native compilation available; spill counts still unknown (2026-09-15)
+## Current frontier: one-command capture opens in Xcode; replay/statistics still pending (2026-09-15)
+
+One model-free register-candidate command was captured on Apple M2 Max using
+`MTLCaptureManager`, restricted to the probe's default command queue. The
+unchanged `--single-command=register` probe compiled the same three pipelines,
+then dispatched64 rows at base7839/fixture193, F32/D256/heads24/KV4. CPU oracle
+max error1.064646237225464e-6 and future/trailing guards pass; command status0,
+runner exit0. Capture timing is instrumented and is **not benchmark evidence**.
+No model load, production shader/routing edit, or capture replay was performed.
+
+Temporary evidence: `/private/tmp/qwen-sg4-capture.Bwt7d7/` contains
+`capture_bridge.mm`, private `bridge.o`, `probe`, `capture.log` and
+`register.gputrace` (about77MiB allocated). Its binary plist metadata records
+`captured_frames_count=1`; this is not an independently decoded command count
+or a register/spill report. The private wrapper macro-renames the original
+`gs_create_command_buffer` and `gs_commit_and_wait_status_gpu_elapsed`, starts
+queue capture before creating the command, and stops after the original
+watchdog-protected terminal wait. It refuses a second wrapped command, an
+existing output path, active capture or unsupported destination. These are
+guards for this single-threaded diagnostic, not a general capture API.
+
+Build: `xcrun clang++ -c "$PROBE/capture_bridge.mm" -o "$PROBE/bridge.o"
+-std=c++17 -fobjc-arc -fPIC -O2`; then build the existing Crystal probe with
+`DEVELOPER_DIR=/Library/Developer/CommandLineTools`, private Crystal cache and
+`--link-flags="$PROBE/bridge.o -framework Metal -framework Foundation -lc++"`.
+The initial default-Xcode link failed because Crystal's lld cannot parse SDK27
+`arm64e.x1` TAPI entries; switching only this build to installed CLT passed.
+The unchanged `--self-test` passes without initializing GPU. Shared build
+outputs and unrelated worktree changes were not touched.
+
+Executed once, with `PROBE=/private/tmp/qwen-sg4-capture.Bwt7d7`:
+
+```sh
+env -u COGNI_METAL_LEASE_PATH MTL_CAPTURE_ENABLED=1 \
+  SG4_CAPTURE_PATH="$PROBE/register.gputrace" COGNI_METAL_LEASE_WAIT_MS=0 \
+  COGNI_RUN_SAFE_REQUIRE_QUIET=0 COGNI_RUN_SAFE_WAIT_QUIET_SEC=0 \
+  COGNI_RUN_SAFE_MIN_FREE_PCT=35 COGNI_METAL_COMMAND_TIMEOUT_MS=180000 \
+  scripts/run_safe.sh "$PROBE/probe" 300 24576 --single-command=register
+```
+
+Preflight free memory72%; no retries or lowered guards. Log SHA256
+`9d937c0488aec4b8eda3e2ec40dfbb04c999666a835f1c1ac092ba9ee433d6a2`;
+probe `e30692960b767fdb664ab2e7fb9a46d46ce5724efcf0b5c54f1f9f7a24f6cb99`;
+wrapper `d1f05b5dca14f8cf3d7e3a072b8f4b4c885b2c9bbd3016a2df0dd9a691ed0bba`;
+capture metadata `487e28f97b9dc9c0a936b1d8f8d9ef91e33a29709e9806e2589b41b2a6542d51`.
+The metadata hash does not cover all capture payloads.
+
+On current macOS26.6.2, `xcrun --find gpucapture` / `gpudebug` fail; Apple
+[documents gpucapture as macOS27+](https://github.com/apple/game-porting-toolkit/blob/main/game-porting-skills/skills/using-gpucapture/SKILL.md).
+Xcode initially opened an **Install Required** dialog. No installation was
+initiated by this probe. A later read-only `xcodebuild -checkFirstLaunchStatus`
+returned0 and GUI advanced to onboarding; its **External Agent Access** choice
+was left to the user rather than confirming the preselected Always permission.
+The user then completed setup. Xcode opened this trace and displayed its Apple
+M2 Max/macOS26.6.2 origin, a Replay button, and Profile after replay unchecked.
+No Replay/Profile action was taken: that would execute in Xcode outside the
+existing runner and requires a separately contained workload boundary. Next:
+establish that replay boundary, then inspect compiler statistics from this trace.
+Do not repeat capture or timing just to obtain favorable numbers.
+Register counts, spills, causality of prior interactivity failures and speed
+benefit remain unknown. Refresh on source/compiler/driver/device drift or loss
+of temporary artifacts. Capture creation is evidenced; useful compiler
+statistics remain an open capability, not a completion claim. Parent source/log
+checks and correlated Luna read-only audit are ROBUST for this one-command
+capture success path only; Xcode recognition is not replay certification.
+
+## Offline native compilation available; spill counts still unknown (2026-09-15)
 
 After the user accepted the Xcode license and installed Metal Toolchain,
 `xcrun metal --version` reports 32023.921 (metalfe-32023.921.6). The earlier

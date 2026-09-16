@@ -6,6 +6,26 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-QWEN35-SG4-CAPTURE-2026-09-15] Trace saved; compiler statistics still open
+
+- One guarded model-free register-candidate64-row command passes CPU oracle
+  (max1.064646237225464e-6), future/canary guards and terminal status0. Queue-only
+  MTLCaptureManager trace saved (~77MiB); metadata reports one captured frame,
+  not independently decoded command count or register/spill values.
+- Private wrapper/build only, same shader and three-pipeline compilation order;
+  no production edit, model load or replay. Capture timing is not a benchmark.
+  Guards35%/24GiB/300s, lease, quiet wait OFF under standing authority; free72%.
+- User completed Xcode onboarding. Xcode recognizes the trace's M2 Max origin
+  and offers Replay with Profile after replay unchecked. No replay performed:
+  it runs outside the existing runner and needs a separate containment gate.
+  gpucapture/gpudebug were not found by xcrun or PATH.
+- Parent and correlated Luna checks ROBUST for capture success only; no replay
+  certification or compiler-statistics claim. Inspect this trace after bounding
+  replay, rather than repeating capture/timing.
+- Evidence/commands/hashes: docs/qwen-prefill-command-trace.md current section,
+  /private/tmp/qwen-sg4-capture.Bwt7d7. Register/spills/speed remain unknown;
+  refresh after artifact loss or source/compiler/driver/device changes.
+
 ### [LM-QWEN35-SG4-OFFLINE-2026-09-15] Native compile available, spills unknown
 
 - User resolved license and installed Metal Toolchain32023.921. Earlier
