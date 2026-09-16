@@ -1,6 +1,57 @@
 # Ordinary prefill command diagnostics
 
-## Current frontier: register telemetry unavailable in the inspected route (2026-09-15)
+## Current frontier: offline native compilation available; spill counts still unknown (2026-09-15)
+
+After the user accepted the Xcode license and installed Metal Toolchain,
+`xcrun metal --version` reports 32023.921 (metalfe-32023.921.6). The earlier
+license/toolchain blocker below is historical. The installed asset contains
+`air-nt`, `air-objdump`, and their Metal-named manuals even though
+`xcrun --find metal-objdump` / `metal-tt` still fail. Direct `air-arch -name`
+identifies `applegpu_g14s (Apple M2 Max)`; this is device enumeration, not compute.
+
+Bounded compile-only probe in `/private/tmp/qwen-sg4-offline.TGRulx`:
+
+```sh
+xcrun metal -fmodules-cache-path="$PROBE/modules" -fmetal-math-mode=safe \
+  "$SOURCE" -o "$PROBE/baseline.metallib"
+xcrun metal -fmodules-cache-path="$PROBE/modules" -fmetal-math-mode=safe \
+  -DQWEN35_SG4_REGISTER_GATE=1 "$SOURCE" -o "$PROBE/register.metallib"
+# TOOLBIN is the installed Metal.xctoolchain/usr/bin, not Xcode's wrapper bin.
+"$TOOLBIN/air-nt" -arch applegpu_g14s -platform_version macos 26.0 27.0 \
+  -j 1 "$PROBE/baseline.metallib" -N "$PROBE/sg4.mtlp-json" -o "$PROBE/baseline.gpu"
+# The identical native command with register input/output also passes.
+```
+
+`SOURCE` is `src/ml/gguf/kernels/fullattn_qwen35.metal`, SHA256
+`824f224369ce719cb05ad766717006915a7b25536926e9b1f3eaca913ffdf682`.
+The script contains only `pipelines.compute_pipelines`, with two objects whose
+`compute_function` values are `qwen35_attn_decode_rows_sg4` and
+`qwen35_attn_decode_rows_sg4_pregate`; other descriptor fields use defaults.
+Both native translations exit0. Initial compilation needed a private module
+cache; native translation needed an explicit platform version and pipeline
+script (defaults rejected AIR2.8 versus2.5, then a bare function script).
+
+`air-objdump --macho --descriptor --reflection` reads both native outputs.
+Static local allocations sum to direct4608/pregate8704/candidate4608 bytes,
+consistent with earlier runtime getters. These are shared-memory allocations,
+not private spills. The inspected dumps provide no register/spill count.
+Native disassembly fails for both outputs: `g14s-b0` is not recognized and
+the disassembler cannot initialize `applegpu_g14s-apple-ios`. A separate
+`air-nt -S` attempt on a metallib parses binary input as assembly and fails;
+that invalid invocation is not evidence that assembly emission is impossible.
+`air-binary-perf --help` advertises section-loading timing, not shader statistics.
+
+Native output SHA256 baseline:
+`2b0eba3197e773e482cef70cc3352b4bef960be16a05e326b5bebcf1e9f0d4de`;
+candidate: `0f510ec4cdfb32b3c1fe3b08c4aa4539d666276a8ccd6bec1ef35b69089d8409`.
+No GPU dispatch, model load, production edit, or speed claim. Offline compiler
+output is not certified identical to runtime driver compilation. ROBUST only
+for this compile/tooling boundary; register pressure, spills and their relation
+to prior timing remain unknown. Next discriminating route is an M2-compatible
+compiler-statistics capture, not identical timing reruns. Refresh after toolchain,
+driver, source, descriptor or device changes; temporary artifacts are not durable.
+
+## Historical tooling gate before installation (2026-09-15)
 
 Read-only follow-up to the tail/paired gate; no compilation, GPU submission,
 model load or toolchain change. `DEVELOPER_DIR=/Library/Developer/CommandLineTools

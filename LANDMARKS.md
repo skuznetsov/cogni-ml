@@ -6,6 +6,23 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-QWEN35-SG4-OFFLINE-2026-09-15] Native compile available, spills unknown
+
+- User resolved license and installed Metal Toolchain32023.921. Earlier
+  license/toolchain blocker is historical; direct installed air-nt/air-objdump
+  work although xcrun cannot resolve the Metal-named tools.
+- air-arch identifies M2 Max as applegpu_g14s. Safe-math baseline and register
+  macro shaders compile to native GPU archives with explicit pipeline script,
+  platform macos26.0/SDK27.0 and one compiler thread; no compute/model load.
+- Reflection confirms shared bytes4608/8704/4608, not spill counts. Native
+  disassembly rejects g14s-b0; no register/spill values obtained. Offline
+  translation is not proven identical to runtime compilation; no speed promotion.
+- ROBUST for bounded compile/tool inspection only. Reopen via M2-compatible
+  compiler-statistics capture or genuinely new method, not noisy timing reruns.
+  Commands/hashes/limitations: docs/qwen-prefill-command-trace.md current section;
+  temporary evidence /private/tmp/qwen-sg4-offline.TGRulx. Refresh on compiler,
+  driver, descriptor, source/device drift or artifact loss.
+
 ### [LM-QWEN35-SG4-TELEMETRY-2026-09-15] Park register candidate pending evidence
 
 - Read-only tooling/API check: CLT cannot find metal/metal-objdump; Xcode's
