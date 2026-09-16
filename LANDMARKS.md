@@ -6,16 +6,39 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
-### [LM-QWEN35-SG4-STATS-GATE-2026-09-15] Offline diagnostics silent; GUI exception unresolved
+### [LM-QWEN35-SG4-REPLAY-STATS-2026-09-15] One replay exposes 40 temporary registers; spills unknown
+
+- User explicitly authorized one model-free GUI replay outside automatic runner
+  limits, Profile OFF/no repeats/unrelated process control. Exception consumed;
+  free-memory snapshots 73% before and 70% after are not peak/continuous guards.
+- Xcode reaches Debugging GPU Workload on saved M2 Max/macOS26.6.2 trace;
+  Summary confirms 1 command buffer/1 compute encoder/1 dispatch, grid 24x16x1,
+  threads 128x1x1. No Profile/new capture/model load or production edit.
+- Compute Function Statistics shows temporary registers 40, instructions 554,
+  device load/store 11/8 and threadgroup load/store 9/2. No explicit spill count.
+  Register count alone proves neither zero spills nor occupancy/speed benefit;
+  unprofiled 0.00 ns and descriptor zeros are not measured runtime properties.
+- Displayed pregate function name is shared by the macro variant; identity
+  relies on capture lineage, not the label. Shader/probe/metadata hashes match
+  prior evidence. Replay does not rerun the CPU oracle; no new parity claim.
+- ROBUST for UI replay/static fields only; candidate remains diagnostic-only.
+  Next useful compiler comparison needs matched baseline evidence, not repeated
+  noisy timing; no further execution is covered by the consumed exception.
+- Details: docs/qwen-prefill-command-trace.md current frontier. Refresh after
+  source/options/compiler/driver/device drift or temporary artifact loss.
+
+### [LM-QWEN35-SG4-STATS-GATE-2026-09-15] Historical gate: offline diagnostics silent
 
 - One guarded offline translation with three advertised diagnostic flags exits0
   but emits no stdout/stderr statistics. Not a zero-spill result; no GPU run.
 - run_safe tracks process groups, not arbitrary launchd/XPC services. Wrapping
   another Xcode does not establish replay containment. No supported standalone
   replay CLI found in bounded inventory; Xcode's ReplayCapture is a GUI action.
-- Next requires explicit single-GUI-replay exception to automatic runner guards
+- At this earlier gate, next required a single-GUI-replay exception to runner guards
   (Profile OFF, no retries/unrelated process control), or park the diagnostic.
   Do not replace this decision with private-service reverse engineering.
+- Superseded by LM-QWEN35-SG4-REPLAY-STATS-2026-09-15 for the one authorized
+  replay; the underlying automatic-containment limitation remains unchanged.
 - Commands, hashes and scope: docs/qwen-prefill-command-trace.md follow-up;
   /private/tmp/qwen-sg4-compiler-stats.19GGMy. Refresh on tooling/runner changes.
 

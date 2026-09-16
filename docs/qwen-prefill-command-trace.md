@@ -1,5 +1,65 @@
 # Ordinary prefill command diagnostics
 
+## Current frontier: one GUI replay exposes compiler statistics, not spill evidence (2026-09-15)
+
+At source state `e1e4562f` plus unrelated WIP, the user explicitly authorized
+one replay of the saved model-free trace outside the runner's automatic
+limits, with Profile OFF, no repeat execution and no unrelated process control.
+Preflight memory free 73%; after inspection 70%. These snapshots are not peak
+memory or continuous pressure monitoring. No production source was changed.
+
+Xcode opened `/private/tmp/qwen-sg4-capture.Bwt7d7/register.gputrace` on the
+same Apple M2 Max/macOS26.6.2, with Profile after replay unchecked. An initial
+UI action was refused because the app state changed; the refreshed UI still
+showed the replay landing page. One subsequent Replay entered Preparing frame,
+then Debugging GPU Workload without a visible replay error. No second execution,
+Profile, Debug Shader, new capture or model load was requested.
+
+The replay Summary reports **1 command buffer, 1 compute encoder, 1 dispatch**;
+the API list shows dispatchThreadgroups `{24,16,1}` with threadsPerThreadgroup
+`{128,1,1}`, followed by endEncoding, commit and waitUntilCompleted. This now
+corroborates command count independently of the capture plist's frame count.
+Summary buffer allocation is 76.44 MiB, not total host/GPU process memory.
+
+Navigation: dispatch 15 -> Bound Resources -> MTLComputePipelineState 1 ->
+Compute Function -> Statistics. Xcode exposes the following static compiler
+fields without Profile:
+
+| Displayed field | Value |
+| --- | ---: |
+| Instructions | 554 |
+| ALU | 387 |
+| FP16 / FP32 instructions | 46 / 102 |
+| Int16 / Int32 instructions | 107 / 103 |
+| Branch / Wait | 39 / 10 |
+| Threadgroup Load / Store Instructions | 9 / 2 |
+| Device Load / Store Instructions | 11 / 8 |
+| Temporary Registers | 40 |
+
+The function is displayed as `qwen35_attn_decode_rows_sg4_pregate`: the probe
+uses that entry point for the register-macro variant too, so the label alone
+does not distinguish baseline from candidate. Candidate identity depends on
+the prior capture log, pinned binary and macro source lineage below. Current
+shader, probe and capture-metadata SHA256 values were rechecked and match the
+recorded values; the metadata digest still does not cover all trace payloads.
+
+Adversary scope: ROBUST for successful UI replay and these displayed fields
+only. There is no explicit spill counter in this Statistics list; 40 temporary
+registers does not prove register-only gate storage, occupancy, absence of
+spill, or improvement over the uncaptured baseline. Device load/store counts
+are not spill counts. The unprofiled Performance value 0.00 ns is not a timing
+measurement; displayed descriptor width/thread-limit zeros are not runtime
+hardware limits. Replay did not rerun the probe's CPU oracle assertion.
+
+This consumes the single-replay exception. Compiler register count is now
+observed, but spills, the cause of prior interactivity failures and a repeatable
+speed win remain open. Keep the candidate diagnostic-only. A useful future
+comparison would need matched baseline/candidate compiler evidence, not another
+unbalanced timing sample; it is not authorized by this one-shot replay grant.
+Refresh on source, compilation options, driver/toolchain/device changes or loss
+of temporary artifacts. Earlier sections below describe historical boundaries,
+not the current replay capability.
+
 ## Follow-up: offline diagnostic flags yield no statistics (2026-09-15)
 
 At source state `ee027ccf` plus unrelated WIP, the installed `air-nt -mllvm
@@ -41,7 +101,7 @@ no retries or unrelated process control), or park this diagnostic candidate.
 No GPU execution was admitted in this follow-up. Scoped verdict: ROBUST for
 the recorded compile outcome and runner boundary, not for safe replay or spills.
 
-## Current frontier: one-command capture opens in Xcode; replay/statistics still pending (2026-09-15)
+## Earlier frontier: one-command capture opens in Xcode; replay/statistics pending (2026-09-15)
 
 One model-free register-candidate command was captured on Apple M2 Max using
 `MTLCaptureManager`, restricted to the probe's default command queue. The
