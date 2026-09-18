@@ -28004,3 +28004,17 @@ Refresh after source/toolchain/device/model/workload changes.
   unguarded Xcode replay. Refresh source/model/device/input identity first.
 - Details, exact commands/digests and scope: `docs/qwen-prefill-command-trace.md`,
   "Direct-gate two-call discriminator"; ephemeral `/private/tmp/qwen-direct-replay.zsmdyT/`.
+
+### Continuation 2026-09-17 — Reject low-headroom replay before model load
+
+- Added explicit read-only `scripts/qwen_two_call_preflight.py` for this
+  64-GiB ordinary-F32 replay, not a global runner change. Initial target80%
+  = runtime35% + observed37pp + policy reserve8pp; heuristic, not a demand
+  bound, physical-GiB calculation or stable-inference certificate.
+- Five unit test methods pass after the missing-script red. Live query61%
+  rejected with exit75; no GPU/build followed. Runtime guard/cap/timeout/lease
+  remain mandatory; snapshot admission neither reserves memory nor checks
+  model/device/route identity. Existing launcher attempt remains consumed.
+- Next: adequate initial headroom, fresh identity check and separately bounded
+  direct-gate replay. Do not lower safeguards or stop unrelated processes.
+  Details and removal/recalibration trigger: `docs/qwen-prefill-command-trace.md`.

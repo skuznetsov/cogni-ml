@@ -1,5 +1,44 @@
 # Ordinary prefill command diagnostics
 
+## Initial-memory admission for this replay (2026-09-17)
+
+Before a new bounded attempt, run `python3 scripts/qwen_two_call_preflight.py`.
+Exit 0 admits only this memory snapshot; 75 rejects low headroom; 2 rejects a
+missing/malformed report, query failure or non-64-GiB host. This read-only
+check launches no workload. It is an explicit prerequisite for the next
+one-shot launcher, not a new global rule in `run_safe.sh`; the old consumed
+launcher must not be reset or treated as a fresh attempt.
+
+The initial target is **80%** on the `memory_pressure -Q` scale: runtime floor
+35% + observed 37-percentage-point decline + chosen 8-point reserve. The
+37-point observation uses one observer's 67->30 samples from the stopped run,
+not the runner's differently timed 66% preflight. Historical complete runs
+had 80->47 and 79->45 samples. These sparse, system-wide observations include
+other activity and stop latency; they do not bound future model demand.
+The 8-point reserve is policy, not a measured guarantee. Do not turn these
+percentages into physical free GiB or add overlapping RSS/Metal/Scratch counts.
+
+Scope: this M2 Max / 64-GiB / Qwen3.8-27B Q4_K_M / ordinary F32 / 7,813-token
+two-call replay, with the existing chunk/group/precision controls. The checker
+verifies only capacity and the pressure report, not model, device identity or
+runtime configuration; the launcher's identity checks are still mandatory.
+Keep the runtime 35% guard, 24-GiB cap, timeout, lease and first-failure stop.
+A snapshot reserves no memory and can become stale immediately. Recalibrate
+or remove this temporary threshold after changed workload/source/device or
+better peak-demand evidence; never equate admission with stable inference.
+
+Verification: the new tests first failed because the checker was absent;
+after implementation, all five test methods pass, including 79/80 boundaries,
+low-memory cases, malformed/duplicate/out-of-range reports, unsupported host
+capacity and command failures. The mocked command check confirms only
+`memory_pressure -Q` is invoked. Live check returned 75 at 61%, before model
+load; no build or GPU attempt followed. The direct-gate question remains open.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s spec -p qwen_two_call_preflight_spec.py -v
+python3 scripts/qwen_two_call_preflight.py
+```
+
 ## Direct-gate two-call discriminator (predeclared 2026-09-17)
 
 Return to the provider's two-call failure, not the parked register experiment.
