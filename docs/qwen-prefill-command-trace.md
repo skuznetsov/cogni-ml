@@ -1,6 +1,96 @@
 # Ordinary prefill command diagnostics
 
-## Current frontier: one GUI replay exposes compiler statistics, not spill evidence (2026-09-15)
+## Direct-gate two-call discriminator (predeclared 2026-09-17)
+
+Return to the provider's two-call failure, not the parked register experiment.
+Hypothesis: the ordinary F32 short-suffix pregate route is necessary for the
+observed failure on this replay. Test the existing
+`QWEN35_PREFILL_ATTN_ROWS_SG4_DIRECT_GATE_MIN=1` override, without production
+code changes. For SG4-eligible rows this selects the existing direct kernel;
+the first prompt's expected 2,048/1,668-row batches already meet the default
+threshold. The override is process-global: any other eligible short batch
+would also change. Inspect the emitted row counts rather than assume a
+suffix-only intervention. This is not a new attention layout.
+A failure falsifies this route as sufficient recovery under the tested state;
+a single success does not establish causality or production stability.
+
+Keep ordinary F32 KV, fusion OFF, FFN capacity reuse OFF, stage splitting OFF,
+chunk 2,048 / append groups 1 / cooldown 50 ms, 180-second command watchdog,
+35% free-memory floor, 24,576-MiB process-tree cap and 300-second runner limit.
+No quiet wait under standing operator authority; no quiet-host/speed claim.
+Zero-wait Metal lease avoids overlapping another cooperating GPU workload.
+No Xcode replay, profiling, repeated model runs, or unrelated process control.
+
+Before GPU: rebuild with source/binary identity, pass the metadata-only probe
+against the saved session/prompt/tools hashes, and run the existing no-GPU
+SG4/command-trace specs. Then admit at most one guarded two-call attempt and
+stop at the first failure. The probe replays the saved tool result; it executes
+no shell tool or code edit. Require both call-end events and completion, the
+7,839-token resident hit / 196-token suffix, and the previously recorded second
+output digest. This tests output replay, not hidden/KV/recurrent tensor parity
+or successful completion of a coding task. Preserve failure outcomes.
+
+Some historical temporary launchers/binaries have expired. The original
+session remains available; its identity must match the retained dry-run log.
+New artifacts are isolated under `/private/tmp/qwen-direct-replay.zsmdyT/`.
+Source/model/device/toolchain drift or artifact loss invalidates reuse of this
+experiment's certificate. Rollback is removal of the environment override;
+no production default is admitted by this test.
+
+### Result: memory guard stopped call one; route hypothesis remains untested
+
+Source base `66b32027`, CrystalBall `b79052cc63805c9d5502190b2a5067f95afbd646`,
+with the pre-existing default-off FFN WIP retained. A fresh release build
+passed; a second build pinned a source manifest before/after compilation.
+The manifest covers both repositories' source trees, bridge, probe, runner,
+sampler and session; model identity is stat-based, not a complete weight hash.
+The 17 SG4-safety/command-trace specs passed. Metadata-only replay passed and
+matched the retained prompt/tools/session hashes (7,813 prompt tokens).
+
+One guarded model attempt exited 1 after 12,822.552 ms launcher wall.
+Runner preflight reported 66% free memory, then issued `[KILL]` at 34%, below
+the retained 35% threshold. The observer exited 0, collected seven error-free
+samples and observed a minimum of 30%; the guard is sampled/reactive, not a
+guarantee that memory never crosses its threshold. Its final sample was 57%.
+The probe process was confirmed absent after termination. No repeat followed.
+
+Only `input` and `call_begin(1)` appeared; there was no first-call result,
+second-call input, output digest or completion event. The last trace is the
+first shared submit/wait at start0/rows2048/cursor0->3. The first chunk already
+selects direct SG4 under the default threshold, so this attempt never reached
+the intended short-suffix intervention. No Metal `completion_status=-6` was
+recorded. Neither improvement nor regression of the direct-gate override was
+tested; memory pressure is not evidence for a kernel-specific cause.
+
+The launcher explicitly rejected the nonzero runner exit and records
+`passed=false`. Source/model/binary identities still matched after execution.
+This is ROBUST evidence of this bounded guard-triggered stop, not proof of
+reboot prevention, full GPU cancellation, tensor parity, stability or speed.
+No production code/default change or FFN-WIP commit is admitted. Next: recover
+adequate initial headroom and budget model plus workspace before a separately
+bounded repeat of this still-open discriminator; never lower the 35% guard.
+The observed free-memory swing exceeds 30 percentage points, so merely being
+above the floor at startup is insufficient for this 27B replay.
+
+Commands (launcher clears inherited experimental switches; no tools run):
+
+```sh
+python3 /private/tmp/qwen-direct-replay.zsmdyT/run.py build
+python3 /private/tmp/qwen-direct-replay.zsmdyT/run.py dry
+python3 /private/tmp/qwen-direct-replay.zsmdyT/run.py run
+CRYSTAL_CACHE_DIR=/private/tmp/qwen-direct-replay.zsmdyT/spec-cache crystal spec spec/qwen35_sg4_tail_safety_spec.cr spec/qwen_prefill_command_trace_spec.cr --no-color
+```
+
+The first command pins a build; the last qualifies the existing instrument.
+The `run` command permits one attempt only and is consumed. Artifacts remain
+ephemeral, not portable fixtures. SHA256:
+
+- Binary: `1a118d5ebf4e54b92cd0474801c2807ff38bab873864ba21822770c8dc38a277`.
+- Manifest: `26de1d8650a43fb499240923886afc9f0ddbdbe3964c0e25ce1ded849c544a5c`.
+- Run stdout: `c782f38d09900fddd99a091c5033b8f0de8dcce4acb7f147b7c2aa7df55b98d2`.
+- Run stderr: `134144393e2bba2d26f59e90594b56d60ad21347197159a7754790236fca7a5e`.
+
+## Earlier frontier: one GUI replay exposes compiler statistics, not spill evidence (2026-09-15)
 
 At source state `e1e4562f` plus unrelated WIP, the user explicitly authorized
 one replay of the saved model-free trace outside the runner's automatic

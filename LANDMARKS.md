@@ -27984,3 +27984,23 @@ Refresh after source/toolchain/device/model/workload changes.
   Commands/digests: docs/qwen-prefill-command-trace.md, "Matched-shape trace
   inspection". Refresh on source/config/input/device/toolchain drift or lost
   evidence; retain35%/24GiB/300s and first-failure stop for future GPU probes.
+
+### Continuation 2026-09-17 — Direct-gate provider replay stopped by memory guard
+
+- Active goal remains reliable two-call coding replay; register experiments
+  and Random Attention are not implementation priorities. Existing env-only
+  `QWEN35_PREFILL_ATTN_ROWS_SG4_DIRECT_GATE_MIN=1` is the next route discriminator,
+  not a default change or established fix. FFN capacity reuse stays OFF.
+- Fresh pinned build, retained session/prompt/tools identity and metadata-only
+  replay pass; 17 SG4/trace specs pass. One model run stopped in call one's
+  first chunk: preflight free66%, runner kill34% at35% threshold, observer
+  min30%, final57%; exit1, launcher12.823s, no second call. Probe exited.
+- The sampled guard can overshoot. No Metal -6 or short-suffix route outcome
+  was observed; neither direct-gate benefit nor regression is established.
+  Stop-on-first-failure honored; no repeat or weakened safety limits.
+- Next: budget initial model/workspace headroom before a separately bounded
+  replay of the still-open discriminator. Standing authority permits safe
+  local tests, not weakening guards, unrelated process control or another
+  unguarded Xcode replay. Refresh source/model/device/input identity first.
+- Details, exact commands/digests and scope: `docs/qwen-prefill-command-trace.md`,
+  "Direct-gate two-call discriminator"; ephemeral `/private/tmp/qwen-direct-replay.zsmdyT/`.
