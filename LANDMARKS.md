@@ -28393,3 +28393,29 @@ Refresh after source/toolchain/device/model/workload changes.
   test. Later residency timing must include setup/total time and original model
   guards. Root cause/TTFT/speed remain open. Refresh on OS/device/backing/size/
   lifecycle/concurrency changes; preserve unrelated WIP.
+
+### Continuation 2026-09-19 — Residency mapping counter discriminator
+
+- Diagnostic-only64MiB linked-file control/request, one lifecycle each, no
+  model/queue/GPU commands. mincore sees4096/4096 pages before/after request
+  through object release; untouched anonymous negative sees0. Request-step
+  RSS and external both fall exactly67,108,864B with all pages still in-core.
+  Thus low requested RSS does not mean loss of in-core pages.
+- Set allocatedSize64MiB already before request and after end, then0 on remove:
+  inventory, not pin state. Device/graphics/compressed ledgers show no payload
+  delta. Host wired request step+64,241,664B, settled+64,880,640B; no-request
+  control also drifts+42,860,544B. Global correlation is not owned retention.
+- All mapped mincore samples stay full even after end/object release. That
+  cannot distinguish file caching from wiring. Unmapped mincore=null, not0.
+  Verdict ROBUST for scoped counter observations, unpinning/reclamation UNKNOWN;
+  no production residency, heartbeat, model safety or speed promotion.
+- Warning-free build,9CLI negatives,12 existing checker tests and separate
+  offline phase/finite/5s/inventory/fixture assertions pass. Guarded runs exit0,
+  startup78/79%,512MiB/60s/floor30%, quiet bypass. Source base68d1f697; exact
+  identities/commands/hash lineage: docs/qwen-prefill-command-trace.md counter
+  result; raw artifacts `/private/tmp/qwen-residency-counters.ZwifQd/`.
+- Next: allocation-attributed wiring/reclaimability discriminator, not another
+  RSS endpoint or larger workload. Keep root cause/TTFT open, model70/30%,24GiB
+  guards and unrelated WIP. Refresh on OS/device/backing/lifecycle/size/
+  concurrency change. This counter set is not an exhaustive API impossibility
+  claim; global wired noise alone cannot clear the full-model residency gate.

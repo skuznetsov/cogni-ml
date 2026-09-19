@@ -1,5 +1,127 @@
 # Ordinary prefill command diagnostics
 
+## Counter result: live pages visible, unpinning still unknown (2026-09-19)
+
+The new mapping-scoped counter sees the requested live allocation where task
+RSS does not. It does **not** qualify a release/retention detector. One fresh
+control and one request process ran sequentially on M2 Max/macOS26.6.2 (25G83),
+source base68d1f697 plus the diagnostic-only change below. No model, command
+queue, GPU command, heartbeat or production engine change was involved.
+
+| Observation | Control | Request |
+| --- | ---: | ---: |
+| Untouched anonymous mincore pages | 0 | 0 |
+| Touched through objects-released mincore pages | 4096/4096 | 4096/4096 |
+| Request-step RSS/external delta | 0 B | -67,108,864 B each |
+| Request-step host wired delta | 0 B | +64,241,664 B |
+| Settled minus baseline host wired | +42,860,544 B | +64,880,640 B |
+| Settled minus baseline task RSS | +81,920 B | +114,688 B |
+
+Page size is16,384B, so4096 pages represent the entire64MiB mapping. No CPU
+read-touch occurs after the initial touch. mincore itself is an observation
+with VM-query overhead (roughly1.1-1.4ms per mapped sample), not an eviction or
+GPU-readiness test. It remains positive after endResidency, allocation removal
+and object release while the mapping remains live. Ordinary file caching can
+explain continued presence; after unmap its value is null, not a zero-memory
+certificate. This refutes interpreting the RSS drop as loss of in-core pages,
+without establishing pinning, physical release, driver ownership or a leak.
+
+The set reports67,108,864B before request and still after endResidency, then0
+after removal. It is membership/allocation inventory, not a pin-state oracle.
+Metal allocated size similarly returns to65,536B after object release, while
+mincore stays full. Task device/compressed and all four graphics ledger deltas
+are0 throughout both runs; task footprint is unchanged across the request.
+Those task ledgers do not recover the missing64MiB attribution in this probe.
+
+Host wiring has a request-adjacent positive signal and remains elevated at the
+five-second endpoint, but the no-request process also drifts by40.875MiB.
+These are different process/time windows and sequential, non-atomic samples;
+neither subtracting their endpoints nor the near-payload request step proves
+allocation-specific retention. Even a quiet global counter would not identify
+the owner. No claim that all possible public/driver counters are exhausted.
+
+Verification: warning-free native build with -Wall -Wextra -Werror; nine CLI
+negatives exit64 before device creation;12 existing checker tests pass (old
+modes only). A separate offline assertion pass on these raw logs checked both
+13-record streams, exact phase order, finite metrics, increasing timestamps,
+both>=5s intervals, negative/positive mincore controls, set membership/bytes,
+Metal endpoint inventory, exit0/no kill and absence of both exact fixtures.
+Both guarded runs exit0, preflight78/79%, floor30%, cap512MiB/60s, quiet bypass.
+Use native elapsed_ms (~10s), not the runner's approximate '~7s' wall label.
+
+```sh
+# Reuse the native build command documented below, output to a fresh directory.
+# Run separately and sequentially, replacing the mode for the second process.
+env COGNI_RUN_SAFE_MIN_FREE_PCT=30 COGNI_RUN_SAFE_REQUIRE_QUIET=0 \
+  COGNI_RUN_SAFE_WAIT_QUIET_SEC=0 scripts/run_safe.sh \
+  /private/tmp/qwen-residency-counters.ZwifQd/probe 60 512 --file-accounting-control
+# Second mode: --file-accounting-request
+PYTHONDONTWRITEBYTECODE=1 python3 spec/metal_residency_footprint_spec.py
+```
+
+Artifacts: `/private/tmp/qwen-residency-counters.ZwifQd/` (ephemeral).
+SHA256: source `e0ba7236842fba7a6f0da000c393c77de1b35875173b55e54791a6c2b75b6f36`;
+binary `d54857d784a92f98774fc6a911ba0fd22b254b70584953f2df616cd5c293a947`;
+control.log `d79e51a0da57f1439e4f5f840e50e111feb5ca6abad8ca39c0a5927c26f3778a`;
+request.log `a1793873687fe8d677079a50741a4440fb9dc1ea6a1a50a6198f9c0f2ac68acf`.
+
+Decision: retain the scoped observability result; residency reclamation and
+full-model safety remain unqualified. Next discriminator needs attribution
+of wiring/reclaimability rather than another RSS endpoint or a larger mapping.
+Do not add a heartbeat/workaround or enable production residency from this
+evidence. Timing/TTFT/root cause remain open. Refresh after changes to OS,
+device, backing, lifecycle, size or concurrency; preserve model70/30%,24GiB
+guards and unrelated engine WIP.
+
+Correlated Luna review found no diagnostic code blocker and agreed with this
+narrow verdict. Its suggested vm_region_recurse_64 `pages_wired` follow-up was
+rejected on direct SDK inspection: vm_region_submap_info_64 has no such field.
+It has user_wired_count, which must not be assumed to count driver/GPU wiring.
+Also, endResidency-to-removal is immediate here; no delayed still-mapped
+post-end sample was taken. Identify a valid attributed signal before extending
+the experiment; do not turn review agreement into a release certificate.
+
+## Mapping/object/host counter discriminator (2026-09-19, predeclared)
+
+Add diagnostic-only --file-accounting-control/request: one fresh64MiB linked
+readonly private file mapping, no model/queue/GPU commands. Sample touched,
+wrapped, before request, requested, held5s, ended, removed, objects released,
+mapping released and settled5s. Preserve the same ownership/teardown order;
+no CPU re-touch between request and unmap. A temporary untouched anonymous
+mapping first qualifies mincore's zero response and is unmapped immediately.
+
+Candidate counters have different scopes, not interchangeable meanings:
+
+- mincore MINCORE_INCORE counts pages in-core for this mapping; it does not
+  report wiring, GPU readiness or ownership. Unmapped samples are null, not0.
+- MTLResidencySet.allocatedSize is the last-commit allocation footprint per
+  local SDK; compare before request and after end to catch an inventory proxy.
+- TASK_VM_INFO rev3 graphics ledgers, device/internal/external/compressed and
+  existing RSS/footprint are process counters; missing API revision fails.
+- HOST_VM_INFO64 wire_count is system-wide wired pages, multiplied by the
+  host page size. It includes unrelated apps/kernel activity and cannot
+  attribute memory to this allocation. Queries are sequential, not atomic;
+  record sample duration and release the host send right every time.
+
+Prediction: a useful candidate must see the known-live requested64MiB mapping
+where RSS does not, while distinguishing release from ordinary file caching.
+Touched and held positive signals>=48MiB qualify visibility only. Even a full
+64MiB mincore signal after end cannot establish a leak: file pages may remain
+cached. Host-wire change is exploratory/correlative, never a standalone gate.
+Missing positive sensitivity or a counter unchanged across ownership stages
+narrows/refutes its proposed detector role; do not enlarge the workload.
+
+Run fresh sequential control/request processes with512MiB/60s/floor30%, quiet
+bypass, five-second holds and settle; no model-sized work. DoD: warning-free
+native build, strict CLI negatives, previous checker tests, ordered complete
+raw records/finite metrics/5s intervals, negative mincore0 and touched positive,
+exact fixture cleanup. Rollback removes only diagnostic changes. This is a
+counter selection experiment, not residency safety or speed promotion.
+Primary references: local macOS SDK mach/task_info.h, mach/vm_statistics.h,
+sys/mman.h, Metal/MTLResidencySet.h; Apple's mincore and requestResidency docs:
+https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/mincore.2.html
+https://developer.apple.com/documentation/metal/mtlresidencyset/requestresidency()
+
 ## Small file-backed result (2026-09-19)
 
 **RSS is not a qualified residency-retention detector in this experiment.**
