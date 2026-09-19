@@ -53,12 +53,14 @@ end
 private def parse_shape(args : Array(String)) : {Int32, Int32, Bool, Bool, Bool, Bool}
   timing = args.includes?("--timing")
   prefix_profile = args.includes?("--prefix-profile")
+  split_submit = args.includes?("--split-submit")
+  raise ArgumentError.new("split submit requires prefix profile") if split_submit && !prefix_profile
   prefix_trace = args.includes?("--prefix-trace") || prefix_profile
   raise ArgumentError.new("timing and prefix trace are exclusive") if timing && prefix_trace
   dry = args.last? == "--dry-run"
   mode = timing ? ["--timing"] : (prefix_profile ? ["--prefix-profile"] : (prefix_trace ? ["--prefix-trace"] : [] of String))
-  expected_tail = mode + (dry ? ["--dry-run"] : [] of String)
-  raise ArgumentError.new("expected shape [--timing|--prefix-trace|--prefix-profile] [--dry-run]") unless args.size == 1 + expected_tail.size && args.skip(1) == expected_tail
+  expected_tail = mode + (split_submit ? ["--split-submit"] : [] of String) + (dry ? ["--dry-run"] : [] of String)
+  raise ArgumentError.new("expected shape [--timing|--prefix-trace|--prefix-profile [--split-submit]] [--dry-run]") unless args.size == 1 + expected_tail.size && args.skip(1) == expected_tail
   raise ArgumentError.new("prefix trace admits only 7839:193") if prefix_trace && args.first != "--shape=7839:193"
   case args.first
   when "--shape=256:195"  then {256, 195, dry, timing, prefix_trace, prefix_profile}
@@ -78,6 +80,7 @@ private def self_test
   raise "timing parse failed" unless parse_shape(["--shape=256:195", "--timing", "--dry-run"]) == {256, 195, true, true, false, false}
   raise "prefix trace parse failed" unless parse_shape(["--shape=7839:193", "--prefix-trace", "--dry-run"]) == {7839, 193, true, false, true, false}
   raise "prefix profile parse failed" unless parse_shape(["--shape=7839:193", "--prefix-profile", "--dry-run"]) == {7839, 193, true, false, true, true}
+  raise "split submit parse failed" unless parse_shape(["--shape=7839:193", "--prefix-profile", "--split-submit", "--dry-run"]) == {7839, 193, true, false, true, true}
   raise "unbalanced timing" unless TIMING_ORDER.size == 16 && TIMING_ORDER.count("baseline") == 8 && TIMING_WARMUP.count("baseline") == 2 && TIMING_WARMUP.count("candidate") == 2
   timing_quality!([1.0_f32, 2.0_f32], [1.0_f32, 2.0_f32], "same", "same")
   failures = 0
@@ -97,14 +100,18 @@ private def self_test
    ["--shape=7839:193", "--prefix-trace", "--prefix-trace"], ["--shape=7839:193", "--dry-run", "--prefix-trace"],
    ["--shape=256:195", "--prefix-profile"], ["--shape=7839:193", "--prefix-profile", "--timing"],
    ["--shape=7839:193", "--prefix-profile", "--prefix-trace"], ["--shape=7839:193", "--prefix-profile", "--prefix-profile"],
-   ["--shape=7839:193", "--dry-run", "--prefix-profile"]].each do |args|
+   ["--shape=7839:193", "--dry-run", "--prefix-profile"],
+   ["--shape=7839:193", "--split-submit"], ["--shape=7839:193", "--prefix-trace", "--split-submit"],
+   ["--shape=7839:193", "--prefix-profile", "--split-submit", "--split-submit"],
+   ["--shape=7839:193", "--split-submit", "--prefix-profile"],
+   ["--shape=7839:193", "--prefix-profile", "--dry-run", "--split-submit"]].each do |args|
     begin
       parse_shape(args)
     rescue ArgumentError
       rejected += 1
     end
   end
-  raise "invalid CLI accepted" unless rejected == 17
+  raise "invalid CLI accepted" unless rejected == 22
   puts({event: "self_test", passed: true, rejected_cli: rejected, gpu: false}.to_json)
 end
 
@@ -257,8 +264,11 @@ if ARGV == ["--self-test"]
   exit
 end
 prefix_count, append_count, dry, timing, prefix_trace, prefix_profile = parse_shape(ARGV)
+split_submit = ARGV.includes?("--split-submit")
 model = ENV["QWEN35_MODEL"]? || "/Users/sergey/.cache/lm-studio/models/lmstudio-community/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf"
 ENV.keys.select { |k| k.starts_with?("QWEN35_") }.each { |k| ENV.delete(k) }
+ENV.delete("COGNI_METAL_SUBMIT_PROFILE")
+ENV["COGNI_METAL_SUBMIT_PROFILE"] = "1" if split_submit
 ENV["QWEN35_PREFILL_CHUNK_SIZE"] = "2048"
 ENV["QWEN35_PREFILL_APPEND_MAX_GROUPS"] = "1"
 ENV["QWEN35_PREFILL_APPEND_COOLDOWN_MS"] = "50"
@@ -288,9 +298,9 @@ puts({event: "config", model: model, prefix_tokens: prefix_count, append_tokens:
       baseline: "ordinary_rows", candidate: "direct_sg4", prefix: "shared_direct_prefill_deep_copy",
       state_atol: STATE_ATOL, state_rtol: STATE_RTOL, logit_atol: LOGIT_ATOL, logit_cosine_min: LOGIT_COS,
       token_ecs_min: TOKEN_ECS_MIN, dry_run: dry, timing: timing, timing_order: timing ? TIMING_ORDER : nil,
-      warmup_order: timing ? TIMING_WARMUP : nil, prefix_trace: prefix_trace, prefix_profile: prefix_profile,
+      warmup_order: timing ? TIMING_WARMUP : nil, prefix_trace: prefix_trace, prefix_profile: prefix_profile, split_submit: split_submit,
       prefix_token_sha256: Digest::SHA256.hexdigest(tokens.first(prefix_count).join(",")),
-      controls: ENV.select { |k, _| k.starts_with?("QWEN35_") }.to_h, semantic_task_scored: false}.to_json)
+      controls: ENV.select { |k, _| k.starts_with?("QWEN35_") || k == "COGNI_METAL_SUBMIT_PROFILE" }.to_h, semantic_task_scored: false}.to_json)
 STDOUT.flush
 exit if dry
 

@@ -112,13 +112,37 @@ static void unregister_command_wait(GSCommandWaitRecord* record) {
     if (found != gs_command_waits.end()) gs_command_waits.erase(found);
 }
 
-static void wait_for_command_completion(id<MTLCommandBuffer> cmd, bool commit) {
+struct GSCommandSubmitProfile {
+    double setup_ms = 0.0;
+    double commit_ms = 0.0;
+    double wait_ms = 0.0;
+    double retire_ms = 0.0;
+};
+
+static bool command_submit_profile_enabled() {
+    const char* raw = std::getenv("COGNI_METAL_SUBMIT_PROFILE");
+    return raw != nullptr && raw[0] == '1' && raw[1] == '\0';
+}
+
+static void wait_for_command_completion(id<MTLCommandBuffer> cmd, bool commit,
+                                        GSCommandSubmitProfile* profile = nullptr) {
+    uint64_t entered = profile ? monotonic_time_ns() : 0;
     int64_t timeout_ms = command_timeout_ms();
     GSCommandWaitRecord record;
     if (timeout_ms > 0) register_command_wait(&record, timeout_ms);
+    uint64_t ready = profile ? monotonic_time_ns() : 0;
     if (commit) [cmd commit];
+    uint64_t committed = profile ? monotonic_time_ns() : 0;
     [cmd waitUntilCompleted];
+    uint64_t completed = profile ? monotonic_time_ns() : 0;
     if (timeout_ms > 0) unregister_command_wait(&record);
+    if (profile != nullptr) {
+        uint64_t retired = monotonic_time_ns();
+        profile->setup_ms = (ready - entered) / 1e6;
+        profile->commit_ms = (committed - ready) / 1e6;
+        profile->wait_ms = (completed - committed) / 1e6;
+        profile->retire_ms = (retired - completed) / 1e6;
+    }
 }
 
 static int32_t command_completion_status(id<MTLCommandBuffer> cmd) {
@@ -527,8 +551,19 @@ extern "C" int32_t gs_commit_and_wait_status_gpu_elapsed(
     if (elapsed_seconds != nullptr) *elapsed_seconds = 0.0;
     if (cmd_handle == nullptr) return -1;
     id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)cmd_handle;
-    wait_for_command_completion(cmd, true);
+    // Diagnostic only: preserve the existing synchronous wait and watchdog.
+    // Emit after completion; no logging or additional synchronization splits
+    // commit from wait. GPU intervals can overlap both host phases.
+    GSCommandSubmitProfile profile;
+    bool profile_enabled = command_submit_profile_enabled();
+    wait_for_command_completion(cmd, true, profile_enabled ? &profile : nullptr);
     int32_t status = command_completion_status(cmd);
+    if (profile_enabled) {
+        std::fprintf(stderr,
+                     "gs_metal_submit_profile status=%d setup_ms=%.6f commit_ms=%.6f wait_ms=%.6f retire_ms=%.6f\n",
+                     status, profile.setup_ms, profile.commit_ms, profile.wait_ms, profile.retire_ms);
+        std::fflush(stderr);
+    }
     if (status != 0) return status;
     command_gpu_elapsed(cmd, elapsed_seconds);
     return 0;

@@ -1,5 +1,109 @@
 # Ordinary prefill command diagnostics
 
+## Native commit/wait discriminator (2026-09-19, predeclared)
+
+Extend prefix profile with optional `--split-submit`, allowed only after
+`--prefix-profile`. Set exact opt-in `COGNI_METAL_SUBMIT_PROFILE=1`; explicitly
+clear it in all other probe modes. Only the bridge's GPU-timed commit/wait
+entry point admits the native profile. No ABI, shader, routing or extra wait.
+Record monotonic host setup (timeout/watchdog registration), commit, completion
+wait and retire (watchdog unregister) durations; print after the wait. Preserve
+watchdog coverage of commit and wait, completion status and native ownership.
+GPU execution can overlap both host phases: do not subtract the GPU interval
+from wait alone or call a host phase pure compilation/CPU execution.
+
+Competing predictions: a dominant commit interval localizes the extra delay
+inside synchronous submission; a short commit plus long wait localizes it
+after submission returns; a long setup/retire interval points to host-side
+watchdog bookkeeping instead. None uniquely establishes driver compilation or
+the cause of the earlier intermittent Metal failure.
+
+DoD: qualify split intervals using a fake native command with separate seeded
+commit/wait delays, status failure, disabled profiling, already-committed wait
+and active watchdog-registration assertions (no GPU). Build a fresh private
+bridge and probe, run CLI/dry and trace specs, then at most one guarded actual
+7839-token prefix. Require 64 ordered trace/native/profile triples, matching
+completion, positive GPU intervals and bounded accounting residuals; missing
+or failed records are not zero-cost results. Preserve model/tokens/F32 capacity,
+chunk2048/group1/cooldown50/graph0, startup70/runtime30%,24GiB,300s process,
+180s watchdog,lease0,quiet bypass. Stop on first failure; no retry. Artifacts:
+`/private/tmp/qwen-prefix-submit.646NF9/`. Pin all other production sources
+against the preceding profile; explicitly repin the changed bridge and probe.
+Rollback is removal of this opt-in instrumentation. Long warm timing and
+uninstrumented stability remain open regardless of a profiled completion.
+
+### Result: submission returns quickly; the delay remains in completion wait
+
+One admitted attempt completes all 7839 prefix tokens and 64 paired
+trace/native/boundary records. First command, chunk0/rows2048/cursors0->7:
+
+| Native host phase | Duration ms |
+| --- | ---: |
+| Timeout/watchdog setup | 0.016 |
+| Synchronous commit | 0.029 |
+| waitUntilCompleted | 9423.567 |
+| Watchdog retirement | 0.001 |
+
+The enclosing boundary submit/wait is 9423.877ms; GPU execution interval is
+1389.812ms, leaving 8034.065ms outside that interval. Encode is separately
+22.627ms. GPU execution overlaps host waiting; these are not additive phases.
+The next chunks' first commit durations are 0.007/0.005/0.007ms and enclosing
+host-minus-GPU differences 1.608/1.461/1.766ms. All 64 commits total 0.526ms
+(maximum 0.029ms); watchdog setup/retire total 0.075/0.137ms. Boundary host
+durations total 76608.646ms versus GPU intervals 68495.186ms. The residual
+between boundary host and summed native phases totals 26.146ms (maximum
+20.072ms); logging, FFI and scheduling outside the native timestamps remain
+included in the enclosing measurement. Do not interpret this as zero cost.
+
+This rules out synchronous commit and watchdog bookkeeping as the dominant
+delay in this run. It does not distinguish waiting before GPU execution from
+completion-notification delivery afterwards, nor establish compilation,
+residency, or the earlier intermittent failure's cause. No kernel/default
+promotion, throughput comparison or stability fix follows from this result.
+
+Release probe/private bridge build, metadata dry-run, 22 CLI negative cases,
+11 trace specs and the native fake-command test pass. The fake tests require
+one commit/wait under watchdog registration, separately delayed commit/wait,
+the unprofiled and already-committed paths, and success/failure propagation;
+they request no Metal device. Reproduce the native test standalone (do not
+link another bridge object):
+
+```sh
+env DEVELOPER_DIR=/Library/Developer/CommandLineTools xcrun clang++ \
+  -isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 \
+  -std=c++17 -fobjc-arc spec/metal_submit_profile_test.mm \
+  -framework Metal -framework Foundation -o /private/tmp/metal-submit-profile-test
+/private/tmp/metal-submit-profile-test
+```
+
+The offline checker pairs all 64 records and rejects seven mutations (missing
+native/boundary, failed native/trace status, nonfinite native/GPU duration,
+untimed flag). Independent raw-log totals and pinned identity checks agree.
+Native status is the existing mapped completion result, not raw Metal enum;
+GPU interval remains in the boundary record. Pairing is positional in this
+single-submitter graph0 probe, not a concurrent telemetry contract. Fake tests
+do not assert stderr schema; this run's checker checks the observed records.
+
+Exit0/observer0, startup78%, minimum44%, 40 clean memory samples, final process
+tree absent. All guards unchanged; no failure, kill, timeout or retry. Launcher
+wall81.010s includes setup/cleanup and is not pp/tg. Correlated Luna review and
+direct checks: ROBUST for this bounded separation and preserved wait/watchdog
+path; long warm timing and uninstrumented stability remain IN_PROGRESS.
+
+Next discriminator: locate the pre-execution versus post-execution part of the
+gap using verified timestamp semantics. Do not subtract unrelated clock epochs
+or add waitUntilScheduled as if it were passive instrumentation. No additional
+GPU attempt is authorized by this result alone; retain the bounded run policy.
+Evidence: `/private/tmp/qwen-prefix-submit.646NF9/` (temporary); refresh on
+source/model/input/device/toolchain drift or evidence loss. SHA256:
+
+- manifest: `46791356fdb1bf55ea1200d298e80999abfb75611cfb29d215fadead0d7e5c6e`
+- private bridge: `757be2d91a8388357f27e3b6a0d8f1dca39935d35a3911a490822baecebfda00`
+- binary: `6573d564fc9f2bdbce190ce3a5705b18d35c53a6bf3f2a813d2d27ae7c7f0103`
+- launcher: `10a10e1628fd4ce0b1bbdc47b436e71b858d9b23d4a6b49cc7e118ff30e1bf3d`
+- checker: `c9182666d3cd2e4139f009ee6f14a0702a91c130dd3c5392482f2304a6f09d45`
+- stderr: `ced86eb0c54a88a99f2ca10aa1e47059fb57ae8ae076d3ca482d30f599b888a1`
+
 ## Initial-prefix host/GPU interval discriminator (2026-09-19, predeclared)
 
 Add `--shape=7839:193 --prefix-profile [--dry-run]`: the same prefix-only

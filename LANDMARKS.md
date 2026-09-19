@@ -28253,3 +28253,26 @@ Refresh after source/toolchain/device/model/workload changes.
   same watchdog, only in a separately bounded diagnostic; no kernel changes.
   Evidence/identity/decay: docs/qwen-prefill-command-trace.md host/GPU section,
   `/private/tmp/qwen-prefix-profile.KBHkT1/`. Preserve unrelated WIP.
+
+### Continuation 2026-09-19 — Native prefix commit/wait split
+
+- Opt-in `--prefix-profile --split-submit` measures native setup/commit/wait/
+  retire with the existing watchdog and wait sequence. No ABI/kernel/routing
+  change; exact env opt-in is scrubbed in other probe modes. Fake commands
+  qualify delayed phases, status propagation and registration without GPU.
+- One guarded 7839-token attempt completes64 paired records. First commit
+  0.029ms, wait9423.567ms, setup0.016ms, retire0.001ms; enclosing host9423.877ms
+  versus GPU1389.812ms. All64 commits total0.526ms. The ~8.034s outside GPU
+  execution lies after fast commit returns, not in synchronous commit or
+  watchdog bookkeeping. Before-execution versus completion delivery is open;
+  no compilation/residency/root-cause or speedup claim.
+- Exit0/observer0, startup78/min44%,40 clean samples, tree absent; unchanged
+  70/30%,24GiB,300s/180s,lease0,quiet bypass. Attempt consumed, no retry.
+  Native test/build/dry/22 CLI negatives/11 trace specs pass; checker64 triples
+  and seven mutation rejects plus independent raw totals/identity agree.
+- ROBUST bounded diagnostic, not concurrent telemetry: mapped status and
+  positional pairing in single-submitter graph0 scope. Uninstrumented
+  stability/long warm timing remain IN_PROGRESS. Next: verify clock semantics
+  and separate pre-GPU delay from completion delivery without an extra wait;
+  no blind rerun. Evidence/hashes/decay: docs/qwen-prefill-command-trace.md native
+  split result, `/private/tmp/qwen-prefix-submit.646NF9/`. Preserve unrelated WIP.
