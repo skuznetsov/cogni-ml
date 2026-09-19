@@ -28324,3 +28324,26 @@ Refresh after source/toolchain/device/model/workload changes.
   Long warm timing/uninstrumented stability remain IN_PROGRESS. Evidence and
   decay: docs/qwen-prefill-command-trace.md scheduling result;
   `/private/tmp/qwen-prefix-schedule.GmVlc7/`. Preserve unrelated WIP.
+
+### Continuation 2026-09-19 — Residency mechanism and teardown gate
+
+- Compared current no-copy registration/close ownership with llama.cpp
+  7e4c0a96880dae4fc4268ad441f8a6446bd5460a: llama uses requestResidency plus
+  nominal5ms heartbeat/180s keep-alive, not queue residency attachment. Both
+  may use one large no-copy buffer. Our registry is shared with MTP/Gemma;
+  preserve unrelated dirty qwen35_metal.cr and avoid a global experiment toggle.
+- New explicit one-page native request-only qualification passes on M2 Max:
+  16384B, membership0->1->0, weak objects released, backing bytes intact,
+  no queue/GPU commands/model. Three CLI negatives and NDEBUG compile rejection
+  pass; guarded30s/512MiB run exit0, startup77%, memory floor30%.
+- Critical boundary: weak-object release is not physical-footprint recovery.
+  Llama has dummy-GPU-work workaround for upstream reported request-then-unload
+  without inference memory retention (Apple forums839089 / llama issue25937).
+  Not locally reproduced. Next: small capped footprint/control/abort falsifier
+  before model-sized residency; no production residency or heartbeat added.
+- Later model A/B must include setup and total elapsed, distinguish relocated
+  cost, and use output parity for TTFT (existing prefix probe produces no token).
+  Existing 70/30%,24GiB model guards remain. Root cause and speed remain open.
+  Evidence/commands/identities/decay: docs/qwen-prefill-command-trace.md residency
+  audit; spec/metal_residency_lifecycle_test.mm; artifacts
+  `/private/tmp/qwen-residency-audit.kT3vP3/`. Preserve unrelated WIP.

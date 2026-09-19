@@ -1,5 +1,91 @@
 # Ordinary prefill command diagnostics
 
+## Residency audit and bounded API qualification (2026-09-19)
+
+Hypothesis, not root cause: explicitly preparing weight residency could reduce
+the first command's long scheduling interval. Apple says `requestResidency`
+does preparatory work under current system conditions and may defer work when
+other applications compete. It does not certify readiness or eliminate cost:
+https://developer.apple.com/documentation/metal/mtlresidencyset/requestresidency()
+
+Source comparison at cogni-ml `4344527c` plus preserved unrelated working-tree
+changes, and local llama.cpp `7e4c0a96880dae4fc4268ad441f8a6446bd5460a`:
+
+- `Qwen35Metal.register_mmap` wraps the model region as one shared no-copy
+  buffer; all in-range weight slices use offsets into it. The registry is
+  process-global and also used by MTP and Gemma loaders. It is not a safe
+  model-specific experiment switch by itself. `Qwen35Weights.close` unregisters
+  the wrapper before GGUF unmap; callers must already have quiesced inference.
+- `src/ml/metal/bridge.mm:create_buffer_no_copy_impl` creates only the wrapper
+  with nil deallocator; no residency set/request is present in that path.
+- Llama's `ggml-metal-device.m:ggml_metal_buffer_rset_init` adds buffer
+  allocations, commits the set, then requests residency (SDK/runtime gated;
+  `GGML_METAL_NO_RESIDENCY` disables). Its collection repeats requests on a
+  nominal 5ms loop while active, default keep-alive 180s, extended by graph
+  computation. Teardown removes the set from the locked collection, then ends
+  residency, removes allocations and commits before releasing backing memory.
+- The inspected llama Metal subtree has no `addResidencySet`,
+  `useResidencySet` or `removeResidencySet` calls. Queue attachment is a separate
+  Apple API option, not this checkout's mechanism. Do not combine it with the
+  first candidate or describe it as equivalent. Llama can also wrap one large
+  no-copy buffer; it only splits host views when exceeding maxBufferLength.
+
+Safety finding: local llama `ggml_metal_rsets_init` also submits a tiny dummy
+GPU operation as a workaround for reported memory retention when residency is
+requested but the process never performs GPU work. Upstream report reproduces
+retained physical footprint despite object teardown on macOS 26.5.2. This is
+reported upstream, not reproduced on this host; object release alone cannot
+certify physical-memory reclamation:
+https://developer.apple.com/forums/thread/839089
+https://github.com/ggml-org/llama.cpp/issues/25937
+
+`spec/metal_residency_lifecycle_test.mm` qualifies only the request-only API on
+one host page, with no model, queue, commands, heartbeat or production change.
+It checks allocation membership 0->1->0, weak set/buffer release, and intact
+caller-owned bytes after nil-deallocator wrapper teardown. Explicit CLI opt-in,
+unsupported exit77 (not pass), and compile rejection with NDEBUG keep missing
+execution from masquerading as a pass. DoD commands:
+
+```sh
+env DEVELOPER_DIR=/Library/Developer/CommandLineTools xcrun clang++ \
+  -isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 \
+  -std=c++17 -fobjc-arc -Wall -Wextra spec/metal_residency_lifecycle_test.mm \
+  -framework Metal -framework Foundation -o /private/tmp/metal-residency-test
+env COGNI_RUN_SAFE_MIN_FREE_PCT=30 COGNI_RUN_SAFE_REQUIRE_QUIET=0 \
+  COGNI_RUN_SAFE_WAIT_QUIET_SEC=0 scripts/run_safe.sh \
+  /private/tmp/metal-residency-test 30 512 --tiny-residency
+```
+
+Observed on Apple M2 Max, macOS26.6.2 (25G83): bytes16384, allocations1->0, objects released,
+gpu_commands0, queue_attachment0, exit0; startup free77%. Three malformed CLI
+controls reject before device creation; NDEBUG compilation rejects as intended.
+An earlier tiny queue-attachment variant also passed but is not the final
+request-only test or evidence of llama equivalence. Artifacts:
+`/private/tmp/qwen-residency-audit.kT3vP3/`; final source SHA256
+`d39b93538dca39f4a6e95cc33afe56203624dcf5c73e68107abdbefbaf729488`,
+binary `0cce028c15faafcb99a3cd8db12b67e0c7af06a0fef4fe269777ffcbc1f1f9ac`.
+No model-sized residency or inference was run. No physical-footprint, speed,
+readiness or whole-engine lifetime claim follows from this test.
+
+Next falsifier: bounded physical-footprint teardown comparison, including
+request then abort-before-inference, versus no-request control; retain an
+optional tiny completed-GPU-work arm only if needed to distinguish the reported
+workaround. Use small capped allocations, not the upstream 4GiB reproduction.
+Only after this gate may a probe-owned, single-model, quiescent residency lease
+be added; cleanup must precede wrapper release/unmap and occur on load failure
+and normal close. Unsupported/failure must be explicit, not a timed fallback.
+Do not add a global no-copy toggle, periodic heartbeat or default enablement.
+
+Later matched fresh-process on/off runs must separately report model loading,
+residency preparation, state setup, first scheduling/GPU intervals, memory and
+total completion time; unchanged totals mean cost relocation, not cold-start
+speedup. The current prefix-only probe returns no logits/token, so its endpoint
+is not TTFT. Actual cold first-token claims need an output endpoint and parity;
+fresh process also does not imply cold OS file/pipeline caches. Preserve the
+70% startup/30% runtime, 24GiB model-run guards and identity controls. Refresh
+this audit on source/SDK/OS/device drift; the release report remains an open
+local falsifier, not evidence that this host necessarily has the bug.
+
 ## CPU scheduling interval discriminator (2026-09-19, predeclared)
 
 Read kernelStartTime/kernelEndTime only after the existing completion, under
