@@ -28206,3 +28206,26 @@ Refresh after source/toolchain/device/model/workload changes.
   lease0 and authorized quiet bypass; no blind replay or routing promotion.
   Evidence/hashes/identity-drift refresh: docs/qwen-prefill-command-trace.md warm
   timing section, `/private/tmp/qwen-sg4-timing.oUzWgP/`. Unrelated WIP preserved.
+
+### Continuation 2026-09-19 — Prefix-only command trace completes
+
+- Added exact7839/193 `--prefix-trace` mode: same initial prefix and F32
+  capacity8036; existing command tracing only, no copy/append/timing afterwards.
+  Exclusive CLI modes, explicit control object and prefix token hash. No
+  production/kernel/default change. Source/model/bridge matches failed timing.
+- One GPU attempt completes:64 paired ordinary command waits,16 per chunk
+  (0/2048,2048/2048,4096/2048,6144/1695). No failure reproduced; no kernel
+  attribution. First host commit/wait9052.165ms, cursors0->7; following chunk
+  maxima1482.338/1730.654/1689.600ms. These are not GPU execution intervals.
+- Exit0/observer0, startup81%, min48%,38 clean memory samples, final tree absent;
+  guards70/30%,24GiB,300s/180s,lease0 unchanged. No retry. Build/dry/self-test
+  (12 CLI negatives),11 trace specs, format/diff and separate pairing/identity
+  checks pass. Dry-only JSON array/object mismatch fixed before GPU admission.
+- ROBUST one traced completion; intermittent untraced failure remains open.
+  A pass does not show tracing fixed the failure or first command caused it.
+  Next: separately instrument host wait versus completed GPU interval through
+  existing boundary profiler, keeping explicit cooldown/graph policy fixed;
+  do not turn missing GPU timestamps into zeros or infer compilation uniquely.
+  Details/hashes/refresh: docs/qwen-prefill-command-trace.md initial-prefix
+  section, `/private/tmp/qwen-prefix-trace.8nRDsz/`. Earlier attempts consumed;
+  unrelated WIP preserved. Long two-shape timing is still IN_PROGRESS.

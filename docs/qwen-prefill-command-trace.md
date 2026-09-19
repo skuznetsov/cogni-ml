@@ -1,5 +1,98 @@
 # Ordinary prefill command diagnostics
 
+## Initial-prefix command localization (2026-09-19, predeclared)
+
+The warm timing series failed before constructing its shared7839-token prefix.
+Use a separate `--shape=7839:193 --prefix-trace` mode with the same public
+tokens, actual model, F32 capacity8036, direct SG4, Flash off, chunk2048,
+group1 and cooldown50ms. Enable only the existing host command trace, recording
+its control settings and prefix token hash. Stop after the initial prefix:
+no state copy, append, warmup or timing comparison. No production code change.
+
+Competing explanations remain: a particular shared-command/shape boundary,
+cumulative pressure later in the prefix, or scheduling/interactivity sensitivity.
+A failed begin/terminal pair can identify start_pos, rows and loop cursors;
+those cursors are not an exact encoded layer interval or an offending kernel.
+A pass with tracing narrows repeatability only, not the failure's cause. Existing
+trace covers ordinary shared-command waits and routed full-layer calls, not
+every GPU setup, standalone recurrent command or CogniGraph flight.
+
+DoD for the diagnostic: self-test rejects incompatible modes, metadata dry-run
+matches input/config identity, existing trace exception/flush/placement specs
+pass, and at most one fresh guarded process produces either completed prefix
+records or a localizable failure. Inspect raw stderr pairing and failure stack
+separately; an untraced failure remains unresolved. Never use traced host wait
+times for GPU-kernel speed or repeat a failure to obtain a pass.
+
+Preserve startup70%/runtime30%,24GiB,300s/180s watchdog, lease0 and authorized
+quiet bypass. Stop on first GPU failure, no automatic retry. Pin production
+source/bridge against the failed timing manifest and pin the new probe/binary,
+model stat and launcher. Artifacts: `/private/tmp/qwen-prefix-trace.8nRDsz/`.
+The earlier dry-only scope `qwen-prefix-trace.D06S7O` caught a controls JSON
+array/object mismatch; it launched no GPU workload. Controls now serialize as
+an explicit object, rebuilt and repinned before admission.
+The earlier series is consumed and untouched. Rollback removes this diagnostic
+mode; long-prefix stability and two-shape timing remain open until new evidence.
+
+### Result: traced prefix completes; failing command not reproduced
+
+The one admitted GPU attempt completed prefix7839, with no state copy or
+append. All64 ordinary shared-command waits have matching begin/end records:
+16 per recursive chunk, each with its own trace identity and sequence1..16.
+There are no failed/unmatched records, standalone layer records, Metal errors,
+guard kills or timeouts. Separate raw-log pairing checks reproduce the counts
+and verify all begin/terminal fields agree. This validates trace accounting
+for this run, not coverage of every internal GPU command.
+
+| start_pos | rows | Completed traced waits | Longest host wait ms |
+| ---: | ---: | ---: | ---: |
+| 0 | 2048 | 16 | 9052.165 |
+| 2048 | 2048 | 16 | 1482.338 |
+| 4096 | 2048 | 16 | 1730.654 |
+| 6144 | 1695 | 16 | 1689.600 |
+
+The9052.165ms observation is sequence1, cursors0->7, groups1 in the first
+chunk; the median over that chunk's16 waits is759.087ms. It is host
+commit/wait time, not measured GPU
+execution or proof of driver compilation. It does not identify the command
+that failed in the earlier untraced run. A deterministic inevitable failure
+at this input is not supported; intermittent failure and scheduling/host
+effects remain possible. Tracing did not prove that it caused the pass.
+
+Process/observer exit0, source/binary/model identity unchanged, startup81%,
+minimum48%,38 error-free memory samples, final process tree absent. Launcher
+wall76.772s includes model/setup/cleanup; not a prefill throughput measurement.
+Both prefix markers and the narrowly scoped completion summary are present.
+Input prefix SHA256 is
+`c846e1cf9311d1e56905afa56c3c775bcd04957d0b945c60bbbc71202dafea9d`.
+
+Build, corrected dry-run and self-test pass (12 rejected CLI combinations);
+11 focused trace specs cover failure logging, exception preservation, broken
+sink behavior and source placement. Format/diff checks pass. The initial
+dry-only JSON mismatch was corrected before any GPU attempt, not hidden by
+repeating a GPU failure. Correlated Luna source review found no scoped blocker.
+Verdict ROBUST for one traced prefix completion; failure localization remains
+IN_PROGRESS. No engine/kernel/routing fix or speed improvement is claimed.
+
+Artifacts in the directory above include the consumed `attempt.json`, manifest,
+config dry/live records, paired trace, exit result and memory observations.
+SHA256:
+
+- manifest: `8b1cd0c87c7d1dc93fe87c6ac53af553d5ba003cf68f19468e2bca8265c186c6`
+- binary: `262318c419b2a291dfd11d5d100c666b5ecb3f40fc540e6d016f9ccd38a2d54c`
+- probe: `42f126df4e48c1e2ae721cd94255db25c69ddcd98bc5a899492383b012c58719`
+- launcher: `72dbef2af78740bbf6e38a3c1757de28aaef40d0ce588294e4808159dd961df5`
+
+Next discriminator is a separately bounded prefix profile comparing host wait
+with Metal's completed-command GPU interval, especially the first command.
+Existing `QWEN35_PREFILL_BOUNDARY_PROFILE` provides this without new kernels;
+the probe currently scrubs external overrides, so a future diagnostic must
+admit that control explicitly and repin identity. Explicit cooldown50 and
+disabled CogniGraph must remain fixed. Missing/failed GPU timestamps are not
+zero-cost execution; host-minus-GPU time does not uniquely identify compilation.
+No second GPU attempt was made. Refresh after source/model/input/device/toolchain
+drift; long timing and uninstrumented stability remain open.
+
 ## Warm balanced append timing (2026-09-19, predeclared)
 
 Extend the real-model probe with `--timing` for the same two admitted shapes,

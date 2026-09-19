@@ -50,14 +50,18 @@ class Delta
   end
 end
 
-private def parse_shape(args : Array(String)) : {Int32, Int32, Bool, Bool}
+private def parse_shape(args : Array(String)) : {Int32, Int32, Bool, Bool, Bool}
   timing = args.includes?("--timing")
+  prefix_trace = args.includes?("--prefix-trace")
+  raise ArgumentError.new("timing and prefix trace are exclusive") if timing && prefix_trace
   dry = args.last? == "--dry-run"
-  expected_tail = (timing ? ["--timing"] : [] of String) + (dry ? ["--dry-run"] : [] of String)
-  raise ArgumentError.new("expected shape [--timing] [--dry-run]") unless args.size == 1 + expected_tail.size && args.skip(1) == expected_tail
+  mode = timing ? ["--timing"] : (prefix_trace ? ["--prefix-trace"] : [] of String)
+  expected_tail = mode + (dry ? ["--dry-run"] : [] of String)
+  raise ArgumentError.new("expected shape [--timing|--prefix-trace] [--dry-run]") unless args.size == 1 + expected_tail.size && args.skip(1) == expected_tail
+  raise ArgumentError.new("prefix trace admits only 7839:193") if prefix_trace && args.first != "--shape=7839:193"
   case args.first
-  when "--shape=256:195"  then {256, 195, dry, timing}
-  when "--shape=7839:193" then {7839, 193, dry, timing}
+  when "--shape=256:195"  then {256, 195, dry, timing, prefix_trace}
+  when "--shape=7839:193" then {7839, 193, dry, timing, prefix_trace}
   else                         raise ArgumentError.new("only 256:195 and 7839:193 are admitted")
   end
 end
@@ -69,8 +73,9 @@ private def self_test
   nan.add(1.0, Float64::NAN, STATE_ATOL, STATE_RTOL)
   raise "comparator self-test failed" unless same.passed? && !bad.passed? && !nan.passed? && !empty.passed?
   raise "top2 self-test failed" unless QM.top2([1.0_f32, 2.0_f32, 0.0_f32]).first_id == 1
-  raise "shape parse failed" unless parse_shape(["--shape=256:195"]) == {256, 195, false, false} && parse_shape(["--shape=7839:193", "--dry-run"]) == {7839, 193, true, false}
-  raise "timing parse failed" unless parse_shape(["--shape=256:195", "--timing", "--dry-run"]) == {256, 195, true, true}
+  raise "shape parse failed" unless parse_shape(["--shape=256:195"]) == {256, 195, false, false, false} && parse_shape(["--shape=7839:193", "--dry-run"]) == {7839, 193, true, false, false}
+  raise "timing parse failed" unless parse_shape(["--shape=256:195", "--timing", "--dry-run"]) == {256, 195, true, true, false}
+  raise "prefix trace parse failed" unless parse_shape(["--shape=7839:193", "--prefix-trace", "--dry-run"]) == {7839, 193, true, false, true}
   raise "unbalanced timing" unless TIMING_ORDER.size == 16 && TIMING_ORDER.count("baseline") == 8 && TIMING_WARMUP.count("baseline") == 2 && TIMING_WARMUP.count("candidate") == 2
   timing_quality!([1.0_f32, 2.0_f32], [1.0_f32, 2.0_f32], "same", "same")
   failures = 0
@@ -85,14 +90,16 @@ private def self_test
   rejected = 0
   [[] of String, ["--shape=256:194"], ["--shape=07839:193"], ["--shape=7839:195"],
    ["--shape=256:195", "--warmup"], ["--self-test", "--shape=256:195"],
-   ["--shape=256:195", "--dry-run", "--dry-run"], ["--dry-run"]].each do |args|
+   ["--shape=256:195", "--dry-run", "--dry-run"], ["--dry-run"],
+   ["--shape=256:195", "--prefix-trace"], ["--shape=7839:193", "--prefix-trace", "--timing"],
+   ["--shape=7839:193", "--prefix-trace", "--prefix-trace"], ["--shape=7839:193", "--dry-run", "--prefix-trace"]].each do |args|
     begin
       parse_shape(args)
     rescue ArgumentError
       rejected += 1
     end
   end
-  raise "invalid CLI accepted" unless rejected == 8
+  raise "invalid CLI accepted" unless rejected == 12
   puts({event: "self_test", passed: true, rejected_cli: rejected, gpu: false}.to_json)
 end
 
@@ -244,7 +251,7 @@ if ARGV == ["--self-test"]
   self_test
   exit
 end
-prefix_count, append_count, dry, timing = parse_shape(ARGV)
+prefix_count, append_count, dry, timing, prefix_trace = parse_shape(ARGV)
 model = ENV["QWEN35_MODEL"]? || "/Users/sergey/.cache/lm-studio/models/lmstudio-community/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf"
 ENV.keys.select { |k| k.starts_with?("QWEN35_") }.each { |k| ENV.delete(k) }
 ENV["QWEN35_PREFILL_CHUNK_SIZE"] = "2048"
@@ -253,6 +260,7 @@ ENV["QWEN35_PREFILL_APPEND_COOLDOWN_MS"] = "50"
 ENV["QWEN35_PREFILL_ATTN_FLASH_D256"] = "0"
 ENV["QWEN35_PREFILL_ATTN_ROWS_SG4_OFF"] = "0"
 ENV["QWEN35_PREFILL_ATTN_ROWS_SG4_DIRECT_GATE_MIN"] = "1"
+ENV["QWEN35_PREFILL_COMMAND_TRACE"] = "1" if prefix_trace
 ENV["COGNI_METAL_LEASE_WAIT_MS"] = "0"
 gguf = ML::GGUF::GGUFFile.new(model, mmap_tensors: false)
 begin
@@ -274,7 +282,9 @@ puts({event: "config", model: model, prefix_tokens: prefix_count, append_tokens:
       baseline: "ordinary_rows", candidate: "direct_sg4", prefix: "shared_direct_prefill_deep_copy",
       state_atol: STATE_ATOL, state_rtol: STATE_RTOL, logit_atol: LOGIT_ATOL, logit_cosine_min: LOGIT_COS,
       token_ecs_min: TOKEN_ECS_MIN, dry_run: dry, timing: timing, timing_order: timing ? TIMING_ORDER : nil,
-      warmup_order: timing ? TIMING_WARMUP : nil, semantic_task_scored: false}.to_json)
+      warmup_order: timing ? TIMING_WARMUP : nil, prefix_trace: prefix_trace,
+      prefix_token_sha256: Digest::SHA256.hexdigest(tokens.first(prefix_count).join(",")),
+      controls: ENV.select { |k, _| k.starts_with?("QWEN35_") }.to_h, semantic_task_scored: false}.to_json)
 STDOUT.flush
 exit if dry
 
@@ -289,56 +299,66 @@ begin
   baseline = CPU::State.new(hp, capacity, kv_cache_f16: false)
   states << baseline
   CPU.prepare_state_metal!(baseline, hp, admit_adaptive_resident_kv: false)
+  if prefix_trace
+    puts({event: "prefix", phase: "begin", tokens: prefix_count, capacity: capacity}.to_json)
+    STDOUT.flush
+  end
   CPU.prefill_tokens(loaded, tokens.first(prefix_count), 0, baseline)
   ML::Metal::Device.synchronize
-  candidate = CPU::State.new(hp, capacity, kv_cache_f16: false)
-  states << candidate
-  candidate.copy_from!(baseline)
-  raise "copied prefix is not exact" unless compare_state(baseline, candidate, hp, prefix_count, "common_prefix", exact: true)
-  appended = tokens[prefix_count, append_count]
-  if timing
-    timing_run(loaded, baseline, candidate, appended, prefix_count)
+  if prefix_trace
+    puts({event: "prefix", phase: "end", tokens: prefix_count, capacity: capacity}.to_json)
+    puts({event: "summary", mode: "prefix_trace", passed: true,
+          scope: "prefix_completion_only_not_parity_speed_or_stability"}.to_json)
   else
-    base_logits, base_ms = append_logits(loaded, baseline, appended, prefix_count, "baseline")
-    cand_logits, cand_ms = append_logits(loaded, candidate, appended, prefix_count, "candidate")
-    raise "append state parity failed" unless compare_state(baseline, candidate, hp, tokens.size, "after_append")
-    base_ids, cand_ids = [] of Int32, [] of Int32
-    ranked = covered = 0
-    min_ecs = min_cos = 1.0
-    max_delta = 0.0
-    GENERATION.times do |step|
-      a, b = QM.top2(base_logits), QM.top2(cand_logits)
-      delta = Delta.new
-      raise "logit width mismatch" unless base_logits.size == cand_logits.size
-      base_logits.each_with_index { |v, i| delta.add(v.to_f64, cand_logits[i].to_f64, LOGIT_ATOL) }
-      cosine = QM.embedding_cosine(base_logits, cand_logits)
-      ecs = a.first_id == b.first_id ? 1.0 : QM.embedding_cosine(CPU.embedding_lookup(loaded.token_embd, a.first_id), CPU.embedding_lookup(loaded.token_embd, b.first_id))
-      cmp = QM.compare_top2(a, b)
-      ranked += cmp.ranked_matches
-      covered += 1 if cmp.exact_top1_covered
-      min_ecs, min_cos = Math.min(min_ecs, ecs), Math.min(min_cos, cosine)
-      max_delta = Math.max(max_delta, delta.max_abs)
-      base_ids << a.first_id
-      cand_ids << b.first_id
-      passed = delta.passed? && cosine >= LOGIT_COS && cmp.exact_top1_covered && ecs >= TOKEN_ECS_MIN && a.first_id == b.first_id
-      puts({event: "greedy", step: step, passed: passed, baseline_top2: {a.first_id, a.second_id}, candidate_top2: {b.first_id, b.second_id},
-            token_ecs: ecs, logit_cosine: cosine, delta: delta.summary}.to_json)
-      STDOUT.flush
-      raise "greedy/logit gate failed; histories must not diverge" unless passed
-      if step + 1 < GENERATION
-        # Independent greedy consumers; equal histories are checked above.
-        base_logits = CPU.forward(loaded, a.first_id, tokens.size + step, baseline)
-        cand_logits = CPU.forward(loaded, b.first_id, tokens.size + step, candidate)
-        ML::Metal::Device.synchronize
+    candidate = CPU::State.new(hp, capacity, kv_cache_f16: false)
+    states << candidate
+    candidate.copy_from!(baseline)
+    raise "copied prefix is not exact" unless compare_state(baseline, candidate, hp, prefix_count, "common_prefix", exact: true)
+    appended = tokens[prefix_count, append_count]
+    if timing
+      timing_run(loaded, baseline, candidate, appended, prefix_count)
+    else
+      base_logits, base_ms = append_logits(loaded, baseline, appended, prefix_count, "baseline")
+      cand_logits, cand_ms = append_logits(loaded, candidate, appended, prefix_count, "candidate")
+      raise "append state parity failed" unless compare_state(baseline, candidate, hp, tokens.size, "after_append")
+      base_ids, cand_ids = [] of Int32, [] of Int32
+      ranked = covered = 0
+      min_ecs = min_cos = 1.0
+      max_delta = 0.0
+      GENERATION.times do |step|
+        a, b = QM.top2(base_logits), QM.top2(cand_logits)
+        delta = Delta.new
+        raise "logit width mismatch" unless base_logits.size == cand_logits.size
+        base_logits.each_with_index { |v, i| delta.add(v.to_f64, cand_logits[i].to_f64, LOGIT_ATOL) }
+        cosine = QM.embedding_cosine(base_logits, cand_logits)
+        ecs = a.first_id == b.first_id ? 1.0 : QM.embedding_cosine(CPU.embedding_lookup(loaded.token_embd, a.first_id), CPU.embedding_lookup(loaded.token_embd, b.first_id))
+        cmp = QM.compare_top2(a, b)
+        ranked += cmp.ranked_matches
+        covered += 1 if cmp.exact_top1_covered
+        min_ecs, min_cos = Math.min(min_ecs, ecs), Math.min(min_cos, cosine)
+        max_delta = Math.max(max_delta, delta.max_abs)
+        base_ids << a.first_id
+        cand_ids << b.first_id
+        passed = delta.passed? && cosine >= LOGIT_COS && cmp.exact_top1_covered && ecs >= TOKEN_ECS_MIN && a.first_id == b.first_id
+        puts({event: "greedy", step: step, passed: passed, baseline_top2: {a.first_id, a.second_id}, candidate_top2: {b.first_id, b.second_id},
+              token_ecs: ecs, logit_cosine: cosine, delta: delta.summary}.to_json)
+        STDOUT.flush
+        raise "greedy/logit gate failed; histories must not diverge" unless passed
+        if step + 1 < GENERATION
+          # Independent greedy consumers; equal histories are checked above.
+          base_logits = CPU.forward(loaded, a.first_id, tokens.size + step, baseline)
+          cand_logits = CPU.forward(loaded, b.first_id, tokens.size + step, candidate)
+          ML::Metal::Device.synchronize
+        end
       end
+      raise "continuation state parity failed" unless compare_state(baseline, candidate, hp, tokens.size + GENERATION - 1, "after_greedy")
+      puts({event: "summary", passed: true, device: device, top1_matches: GENERATION,
+            top1_count: GENERATION, top2_ranked_matches: ranked, top2_ranked_count: 2 * GENERATION,
+            exact_top1_covered: covered, token_ecs_min: min_ecs, logit_cosine_min: min_cos, logit_max_abs: max_delta,
+            baseline_ids: base_ids, candidate_ids: cand_ids, baseline_text: tokenizer.decode(base_ids), candidate_text: tokenizer.decode(cand_ids),
+            baseline_append_ms: base_ms, candidate_append_ms: cand_ms, timing_is_diagnostic: true,
+            eos_stopping: false, semantic_task_scored: false}.to_json)
     end
-    raise "continuation state parity failed" unless compare_state(baseline, candidate, hp, tokens.size + GENERATION - 1, "after_greedy")
-    puts({event: "summary", passed: true, device: device, top1_matches: GENERATION,
-          top1_count: GENERATION, top2_ranked_matches: ranked, top2_ranked_count: 2 * GENERATION,
-          exact_top1_covered: covered, token_ecs_min: min_ecs, logit_cosine_min: min_cos, logit_max_abs: max_delta,
-          baseline_ids: base_ids, candidate_ids: cand_ids, baseline_text: tokenizer.decode(base_ids), candidate_text: tokenizer.decode(cand_ids),
-          baseline_append_ms: base_ms, candidate_append_ms: cand_ms, timing_is_diagnostic: true,
-          eos_stopping: false, semantic_task_scored: false}.to_json)
   end
 rescue ex
   puts({event: "summary", passed: false, error: ex.message}.to_json)
