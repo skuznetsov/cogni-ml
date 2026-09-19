@@ -28229,3 +28229,27 @@ Refresh after source/toolchain/device/model/workload changes.
   Details/hashes/refresh: docs/qwen-prefill-command-trace.md initial-prefix
   section, `/private/tmp/qwen-prefix-trace.8nRDsz/`. Earlier attempts consumed;
   unrelated WIP preserved. Long two-shape timing is still IN_PROGRESS.
+
+### Continuation 2026-09-19 — Prefix host/GPU separation measured
+
+- Added long-shape-only `--prefix-profile`: existing trace plus boundary GPU
+  interval profiler, one F32 state, no append/copy/timing. Old trace mode and
+  production/kernel/routing unchanged. Same tokens/capacity/chunk/group/cooldown;
+  source/bridge/model pinned against failed timing, new probe/binary pinned.
+- One run passes64 paired waits/profiles. First host wait9793.106ms versus
+  GPU1417.325ms:8375.781ms outside GPU interval (85.5%), encode106.789ms separate.
+  Next chunk first residuals1.560/1.549/1.463ms; all remaining63 residuals total
+  53.944ms. This supports an outside-execution startup delay, not unique
+  compilation, CPU-compute attribution or the cause of the previous failure.
+- Exit0/observer0, startup80/min48%,39 clean samples, tree absent; unchanged
+  70/30%,24GiB,300s/180s,lease0,quiet bypass. Attempt consumed, no retry.
+  Build/dry/17 CLI negatives/11 trace specs/format/diff pass; offline pairing
+  and four mutation rejects plus separate totals/identity checks pass. Checker
+  groups1 assumption corrected to admit source-backed terminal seq16/groups0;
+  no GPU evidence changed or rerun.
+- ROBUST scoped diagnostic; profiled success is not uninstrumented stability,
+  correctness parity, watchdog fix or speedup. Long warm timing still open.
+  Next: separate native commit host duration from completion wait under the
+  same watchdog, only in a separately bounded diagnostic; no kernel changes.
+  Evidence/identity/decay: docs/qwen-prefill-command-trace.md host/GPU section,
+  `/private/tmp/qwen-prefix-profile.KBHkT1/`. Preserve unrelated WIP.

@@ -1,5 +1,86 @@
 # Ordinary prefill command diagnostics
 
+## Initial-prefix host/GPU interval discriminator (2026-09-19, predeclared)
+
+Add `--shape=7839:193 --prefix-profile [--dry-run]`: the same prefix-only
+diagnostic as trace mode, plus the existing boundary profiler. Preserve trace
+mode unchanged, reject mixed modes, and report both controls explicitly.
+The profiler switches to a timed synchronous wait; it measures completed Metal
+GPUStartTime to GPUEndTime, not per-kernel activity, occupancy or throughput.
+No production source, kernel, routing, precision or allocation changes.
+
+Prediction: if the first long host wait is mostly outside the GPU execution
+interval, `submit_wait_ms - gpu_ms` will dominate; otherwise GPU execution is
+the stronger lead. Neither outcome uniquely identifies compilation or the
+earlier intermittent failing command. Trace begin/end must remain enabled
+because boundary profiles are emitted only after successful completion.
+
+DoD: release build and strict CLI self-test pass, metadata dry/live controls
+and token hashes agree, and one guarded attempt yields paired command records
+with finite positive GPU intervals or a preserved failure. Independently pair
+all64 expected waits with profiles in emission order and chunk identity;
+missing/untimed/nonfinite records are inconclusive, never zero GPU cost.
+Keep startup70/runtime30%,24GiB,300s/180s watchdog,lease0,quiet bypass,
+chunk2048/group1/cooldown50 and graph disabled. Stop on first failure, no retry.
+Pin production/bridge/model against the failed timing manifest and repin probe,
+binary and launcher. Artifacts: `/private/tmp/qwen-prefix-profile.KBHkT1/`.
+Rollback removes only the opt-in diagnostic. A successful run is not a fix,
+stability certificate, correctness comparison or warm append speed result.
+
+### Result: first-command delay is mostly outside its GPU interval
+
+One admitted attempt completed all7839 prefix tokens. Every one of64 traced
+shared waits pairs with one finite positive completed-command GPU interval.
+All controls and input/source/bridge/model/binary identities match the pinned
+manifest; explicit cooldown remains50ms and CogniGraph remains disabled.
+
+| Chunk start | First host submit/wait ms | First GPU interval ms | Difference ms |
+| ---: | ---: | ---: | ---: |
+| 0 | 9793.106 | 1417.325 | 8375.781 |
+| 2048 | 1570.931 | 1569.371 | 1.560 |
+| 4096 | 1772.827 | 1771.278 | 1.549 |
+| 6144 | 1752.675 | 1751.212 | 1.463 |
+
+The first command has cursors0->7, groups1 and separately measured encode time
+106.789ms. About85.5% of its host submit/wait lies outside its GPU execution
+interval. Across all64 waits, host time sums74232.581ms and GPU intervals
+65802.856ms; after excluding the first command, their residual totals53.944ms.
+These are instrumented intervals, not end-to-end pp/tg or a speed comparison.
+The residual may include commit/driver/queue/scheduling/completion overhead;
+it is not measured CPU computation and does not uniquely identify compilation.
+This observation cannot be retroactively assigned to the earlier failed run.
+
+Process/observer exit0, startup80%, minimum48%,39 error-free memory samples,
+final process tree absent. Launcher wall78.861s includes setup and cleanup.
+No Metal failure, memory kill or timeout; no retry or second GPU attempt.
+Release build, metadata dry-run,17 CLI negatives,11 trace specs, format and
+diff checks pass. Independent raw-log totals and pinned-hash checks pass.
+The offline checker pairs trace/profile order and chunk identity and rejects
+four mutations: missing profile, untimed flag, failed terminal and NaN interval.
+Its initial overly strict groups1 assertion rejected the final command of each
+chunk; source and the previous trace establish terminal cursors63->64/groups0.
+The checker was corrected offline, without rerunning or changing GPU evidence.
+
+Verdict ROBUST for this profiled completion and measured host/GPU separation.
+The profiler changes the wait API and logging can perturb scheduling; neither
+this pass nor the previous traced pass proves uninstrumented stability or a
+watchdog fix. Root cause and long warm append timing remain IN_PROGRESS.
+Next narrow discriminator: inspect/instrument the host duration of native
+`[cmd commit]` separately from `[cmd waitUntilCompleted]`, preserving wait and
+watchdog behavior. Only a newly bounded probe may run it. If commit is short,
+the remaining scheduling/completion gap needs a different observation; neither
+branch alone certifies compiler causality. Do not modify kernels on this result.
+
+Artifacts: `/private/tmp/qwen-prefix-profile.KBHkT1/`; temporary availability,
+refresh on source/model/input/device/toolchain drift or evidence loss. SHA256:
+
+- manifest: `cdb1dc4f78c4fe4dfa8d8357c7530045585c33a58908a1b1794f776bebf075be`
+- binary: `3bbe7700c932ffdba876f16427a52c529c4859471d093f48e1dc1ac12897fa16`
+- probe: `00363347c2a994918eb1fc448c9b2722f00b1675ad5f9bbddd33e562f8c778d5`
+- launcher: `2f2324238e1ff1c40d0be2c6e5b603263aa7e95f044da752cb7b569e527adb90`
+- corrected checker: `45e59d5973d8fdf2d87eff57ad3239fc2fb96038c4b79a865d067417e8104984`
+- stderr: `da14a27252615b8ca0d9ca6e7bd9941226868809e49fa86a4ea9a1d7d193284d`
+
 ## Initial-prefix command localization (2026-09-19, predeclared)
 
 The warm timing series failed before constructing its shared7839-token prefix.
