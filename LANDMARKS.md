@@ -28465,3 +28465,29 @@ Refresh after source/toolchain/device/model/workload changes.
   sample its first wait. Root cause/TTFT/stability remain open; residency parked.
   Preserve70/30%,24GiB guards/unrelated WIP; refresh on source/model/device/OS/
   input drift or evidence loss.
+
+### Continuation 2026-09-19 — First-command-only stack discriminator
+
+- Added compile-only qwen_first_command_probe hook after successful ordinary
+  flush wait/publication/cleanup, before rotation. Dedicated probe CLI requires
+  --first-command with original7839:193/profile/split; ordinary builds reject it.
+  No shortened prompt/state/layer limit. Partial state is destroyed, never
+  resumed; mismatched boundary or command failure cannot pass as early stop.
+- One guarded attempt: exactly1 begin/end/native/boundary, no prefix completion,
+  exit0/observer0, startup79/minimum sampled48%,6clean samples, tree absent.
+  Commit0.036ms, preGPU7871.398ms, GPU1380.905ms, overlapping scheduling8082.574ms.
+- Sample of own PID launched5.118ms after before-commit and returned3625.008ms
+  before GPU start.272 main-thread stacks waitUntilCompleted/condwait;272 Metal
+  submission-thread stacks IOGPUCommandQueueSubmitCommandBuffers/iokit trap.
+  Localizes sampled client path, not kernel cause, residency, compilation,
+  whole-window activity, speed, quality or stability. No second model attempt.
+- DoD:14focused Crystal specs,25invalid CLI cases, preserved dry config, normal
+  no-codegen build,5relay CPU tests, raw checker rejects8mutations. Evidence
+  and hashes: docs/qwen-prefill-command-trace.md and
+  /private/tmp/qwen-first-stop.HJ9I89/. Sampler phase labels do not understand
+  prefix events; use counters/timestamps. Source/model/bridge pinned.
+- Next: source-first narrow resource-submission discriminator with this short
+  reproducer; do not infer driver-internal cause from trap stacks or repeat
+  full-prefix sampling. Residency remains parked pending reclaim/ownership
+  evidence. Preserve70/30%,24GiB guards and unrelated WIP. Refresh on source/
+  model/input/device/OS/observer change or evidence loss.

@@ -4,6 +4,9 @@ require "./quant_matmul"
 require "./qwen35_metal"
 require "./qwen_qbit_adaptive_resident_kv"
 require "./qwen_prefill_command_trace"
+{% if flag?(:qwen_first_command_probe) %}
+  require "./qwen_first_command_probe"
+{% end %}
 
 # Qwen 3.5 / 3.6 CPU reference forward pass.
 #
@@ -4156,6 +4159,11 @@ module ML::GGUF
               append_prefill_group_count = 0
             end
           elsif cmd = append_prefill_cmd
+            {% if flag?(:qwen_first_command_probe) %}
+              diagnostic_boundary = {append_prefill_gpu_work, start_pos, n_tokens,
+                                     append_prefill_cursor_before, il, append_prefill_group_count,
+                                     pending_adaptive_caches.size}
+            {% end %}
             begin
               finalize_started = prefill_boundary_profile ? Time.instant : nil
               pending_adaptive_caches.each do |cache|
@@ -4222,6 +4230,11 @@ module ML::GGUF
               append_prefill_group_count = 0
               append_prefill_cursor_before = il
             end
+            {% if flag?(:qwen_first_command_probe) %}
+              # No exception from commit/wait/publication can reach this point.
+              # Cleanup has detached the terminal command; stop before rotation.
+              QwenFirstCommandProbe.after_flush!(diagnostic_boundary)
+            {% end %}
           elsif pending_adaptive_caches.any?
             pending_adaptive_caches.clear
             raise ArgumentError.new("adaptive resident QBit KV lost its shared prefill command")

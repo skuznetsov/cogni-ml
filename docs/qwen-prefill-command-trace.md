@@ -1,5 +1,94 @@
 # Ordinary prefill command diagnostics
 
+## First-command-only sample localizes the client submission path (2026-09-19)
+
+The new diagnostic build stops after the first successful ordinary shared
+command, not after a shortened prompt. Compile with
+`-Dqwen_first_command_probe` and run the probe with
+`--shape=7839:193 --prefix-profile --split-submit --first-command`.
+The build refuses other invocation modes before loading weights (self-test is
+CPU-only). A normal build rejects `--first-command`. No production runtime
+switch, scheduling, residency or kernel change. Rollback: omit the build flag.
+
+Contract: keep the original 7,839 prefix tokens, 8,036-token F32 state capacity,
+2,048-row initial chunk, layer limit, input hashes and controls. The hook is
+after successful commit/wait, publication and the ordinary flush's cleanup,
+before rotation/cooldown/next-command creation. It accepts only the observed
+first boundary: start0/rows2048/cursors0->7/groups1/caches0 with GPU work.
+An error during wait/publication propagates, not a diagnostic success. The
+dedicated unwind is caught only by this probe; partial state is destroyed by
+the existing ensure, never resumed. Missing stop or mismatched boundary is an
+error. This is not a general cancellation API or an adaptive/graph capability.
+
+One fresh attempt completed exactly one shared wait and one native timing
+record, then exited0. No prefix-end, append, logits, generation or quality
+result was produced. Live stderr used the qualified same-PID relay. Full
+config/token hashes match the previous probe except the explicit diagnostic
+mode; prior source/bridge identities match except the CPU hook and new helper.
+This preserves the inspected first-command construction path, not bitwise
+equality of rebuilt executables, driver resources or an observer-free timing
+comparison. The release binary and current source inventory are pinned below.
+
+Measured: commit0.036ms; before-commit-to-GPU-start7871.398ms;
+GPU1380.905ms; Metal scheduling elapsed8082.574ms. These overlap and must not
+be added. Sample launch was5.118ms after before-commit and sample returned
+3625.008ms before GPU start. Thus the collected stacks are bounded entirely
+inside the pre-GPU interval; this does not sample all7.871s. The own-PID sample
+ran once for3s/10ms and reported272 snapshots per thread:
+
+- Main thread:272 `waitUntilCompleted -> _pthread_cond_wait -> __psynch_cvwait`.
+- Metal submission thread:272 `_submitAvailableCommandBuffers ->
+  IOGPUCommandQueueSubmitCommandBuffers -> iokit_user_client_trap`.
+- GC marker threads were waiting in the sampled window.
+
+This localizes the observed client-side path to a driver submission call while
+the main thread awaits completion. It does not reveal kernel-side execution,
+identify a resource fault/residency cause, exclude work in other processes,
+establish driver CPU consumption, or prove compilation absent outside this
+window. Treat memory pinning/page-in, driver scheduling and other kernel-side
+work as hypotheses, not conclusions. The sample is intrusive; no speed claim.
+
+Safety/accounting: initial79%, minimum sampled48%,6 clean memory observations,
+final runner tree absent, observer0, no guard kill/timeout. Wall10.625s is
+launcher elapsed, not pp/tg. Memory sampler's legacy `before_call_1` phase does
+not understand prefix events; use its counters/timestamps, not that phase as
+attribution. Guards remained70% initial/30% runtime/24GiB/180s native watchdog.
+No full-prefix retry, stability closure or residency change.
+
+Verification:14 focused Crystal specs pass, including7 rejected boundary
+variants and source-order checks; the latter are structural, not fake GPU
+failure execution. Existing trace tests preserve failed-wait errors. Probe
+self-test rejects25 malformed CLIs; metadata-only dry-run matches the original
+fixture and diagnostic-build refusal is exercised. Ordinary no-codegen build,
+format and diff checks pass; live-relay5 CPU tests pass. Independent raw-record
+checker accepts this one-command result and rejects8 seeded defects (duplicate
+command, invalid timestamps, failed status, nonfinite GPU time, full-prefix
+claim, late sample, live process and missing submission stack).
+Correlated Luna source/log review returned GO with no cleanup blocker for this
+exact invocation. This is not independent runtime replication. Residual: the
+post-prefill missing-stop check detects a bypass only after return; the hook is
+not a universal one-command cap for changed/fallback/graph routes. Only reuse
+the pinned ordinary route after qualification, not arbitrary same-geometry
+models or changed routing. The observed single boundary establishes this run.
+
+Artifacts: `/private/tmp/qwen-first-stop.HJ9I89/`; source/model/runner/bridge
+identity in `manifest.json`, owned-PID/clock bounds in `sample.json`, raw stacks
+in `first.sample.txt`. SHA256:
+
+- Binary: `2d1e58a5135cb7aa8ea7e07482d02486e35b62aa2356373dc9968f1b7589ea43`.
+- Manifest: `bfc231d36e739abb7afa3baaf65c300f50e4807ee2878d3374908d8ab146f65c`.
+- Live log: `4a8bef65feeeaac185a56307c2b63b131014700ee2f8122e493aca0ee7790f2d`.
+- Sample: `6de0b792133f0a332e33452630d6268c6d75808298e5b97e34f2f2788b1492fd`.
+- Checker: `ca89c81ced10e3f6bda8ec919520bc69b074d3739decb6404c303d94915ee4fd`.
+- Launcher: `9bc0c19d8baed30de9a2de195b8b170bed5bb9c4d8d2ec259cc906ce2980ce1b`.
+
+Next: inspect a narrowly scoped resource-submission discriminator using this
+one-command reproducer, with the driver-facing resource footprint as a
+hypothesis. Do not repeat full-prefix sampling or optimize Crystal wait code
+based on these blocked stacks. Reopening model-sized residency still requires
+the previously missing safe reclaim/ownership evidence. Refresh on source,
+model, input, device, OS/SDK or observer changes and evidence loss.
+
 ## Stack attempt missed; instrumented prefix failure reproduced (2026-09-19)
 
 The one admitted replay reused scheduling binary SHA256

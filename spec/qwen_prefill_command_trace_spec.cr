@@ -155,7 +155,7 @@ describe ML::GGUF::QwenPrefillCommandTrace do
   it "wraps only ordinary submit/wait and does not claim an encoded layer interval" do
     source = File.read(File.join(__DIR__, "../src/ml/gguf/qwen35_cpu.cr"))
     source.scan("trace.observe(").size.should eq(1)
-    ordinary = source.index("elsif cmd = append_prefill_cmd\n            begin").not_nil!
+    ordinary = source.index("elsif cmd = append_prefill_cmd\n", source.index("flush_prefill_cmd = -> {").not_nil!).not_nil!
     observe = source.index("gpu_elapsed_ms = trace.observe(").not_nil!
     publish = source.index("QwenQBitAdaptiveResidentKV.finish_pending_appends!(pending_adaptive_caches, cmd)", observe).not_nil!
     ordinary.should be < observe
