@@ -28180,3 +28180,29 @@ Refresh after source/toolchain/device/model/workload changes.
   Next: predeclare balanced timing discriminator; keep default routing unchanged.
   Evidence/hashes/decay: docs/qwen-prefill-command-trace.md real-model section;
   `/private/tmp/qwen-sg4-model.h5PWz3/`. Rollback removes only the new probe.
+
+### Continuation 2026-09-19 — Warm balanced timing narrows the speed claim
+
+- Added optional `--timing` to the bounded real-model probe: immutable prefix,
+  one reset working state, warmABBA then measuredABBA/BAAB twice; eight samples
+  per arm. Time append+head+fence only; reset/hash checks outside timer, trace
+  disabled, no production/default/kernel changes. No trimming or retries.
+- Short256/195 completes: row median2380.081ms, directSG4 median2328.562ms,
+  latency reduction2.1646%, ratio1.02212. All four blocks favor SG4 but none
+  meets predeclared >3% gate. Prior unwarmed large difference is not retained
+  as speed evidence. All20 passes match tensor-byte hashes and full logits;
+  measured pipeline entries33 unchanged. Position is not part of the hash.
+- Long7839/193 fails during initial shared-prefix construction with Metal
+  Impacting Interactivity/completion_status=-6, before copy/arm/warmup/timing.
+  Zero timing samples: no long speed/parity claim. Initial81%, minimum50%,
+  observer0/process1; short82%/54%, both final trees absent. No memory kill or
+  process timeout. This reopens prefix stability; command/layer/cause unknown.
+- Build/dry/self-test/report negatives/statistics controls pass;19 focused
+  Crystal examples,5 Python admission tests, format/diff and separate raw-log
+  statistics/identity checks pass. Correlated Luna verdict ROBUST short-only;
+  overall two-shape timing IN_PROGRESS. Series consumed, no complete marker.
+- Next: instrument initial-prefix command boundaries in a separately declared
+  diagnostic before another long timing attempt. Keep70/30%,24GiB,300s/180s,
+  lease0 and authorized quiet bypass; no blind replay or routing promotion.
+  Evidence/hashes/identity-drift refresh: docs/qwen-prefill-command-trace.md warm
+  timing section, `/private/tmp/qwen-sg4-timing.oUzWgP/`. Unrelated WIP preserved.

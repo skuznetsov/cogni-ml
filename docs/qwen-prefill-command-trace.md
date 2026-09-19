@@ -1,5 +1,119 @@
 # Ordinary prefill command diagnostics
 
+## Warm balanced append timing (2026-09-19, predeclared)
+
+Extend the real-model probe with `--timing` for the same two admitted shapes,
+256/195 then 7839/193, without changing production kernels or routing. The
+previous fixed-order unwarmed times are not the performance baseline.
+
+Use two states only: an immutable synchronized direct-prefilled prefix and one
+working state. Restore the latter from the former before every append, outside
+the timer. Warm up in ABBA order, then measure ABBA/BAAB/ABBA/BAAB (A=ordinary
+rows, B=direct SG4): two warmups and eight measured samples per arm. No adaptive
+stopping, trimming, retries or best-of selection. Keep every sample.
+
+Time the complete full-width append plus full output head and final GPU fence,
+in host milliseconds. Exclude prefix construction, state reset, state/logit
+validation and diagnostic output. Disable pipeline-binding logging before
+process startup; underlying production source must match the previously traced
+parity run. Reject measured samples that grow the application pipeline cache
+(this observes application entries, not hidden driver compiler variants).
+
+After every warmup and measurement, require exact logits and SHA256 agreement
+over all live F32 KV and complete conv/SSM values against the first row warmup;
+that reference is also checked for nonfinite values. Confirm the immutable
+prefix remains unchanged. This is append parity, not a new four-token decoding
+quality claim. Pipeline route tracing and prior greedy parity remain separate
+evidence; no per-dispatch logging is included in the timed run.
+
+Report median, quartiles, min/max, four balanced-block ratios and paired-order
+ratios. A consistent local latency gain requires >3% reduction in every block
+and in both AB/BA pair-order medians; otherwise report mixed/inconclusive or a
+regression. Eight samples in one process are correlated, not independent trials
+or a basis for broad confidence intervals. Do not infer full pp/tg, isolated
+attention GPU time, llama.cpp competitiveness, or general production speed.
+Reset/copy and validation can perturb caches despite being outside the timer.
+
+One fresh process per shape, stop the entire series on first failure. Retain
+startup free>=70%, runtime floor30%, 24GiB tree cap, 300s process timeout, 180s
+command watchdog and zero-wait Metal lease. User-authorized quiet bypass stays
+in force; read-only memory and decaying `ps` CPU snapshots annotate host noise
+but cannot exclude external GPU load. Source/model-stat/input/binary identity
+is pinned. Artifacts: `/private/tmp/qwen-sg4-timing.oUzWgP/`; consumed earlier
+series remain untouched. Rollback removes timing mode; defaults stay unchanged.
+
+### Result: small short-prefix gain; long-prefix timing unavailable
+
+The first series attempt is consumed. Short shape256/195 completed all four
+warmups and16 measurements. Separate raw-log recomputation agrees with the
+launcher; no samples were omitted. Times include append, output head and fence:
+
+| Arm | Median ms | Q1–Q3 ms | Min–max ms | Measured n |
+| --- | ---: | ---: | ---: | ---: |
+| Ordinary rows | 2380.081 | 2369.126–2383.051 | 2365.223–2396.498 | 8 |
+| Direct SG4 | 2328.562 | 2324.808–2342.564 | 2316.927–2377.420 | 8 |
+
+Median latency reduction is2.1646% (ratio1.02212), not the large apparent gain
+in the prior fixed-order/unwarmed run. All four balanced-block ratios favor SG4
+(1.01652,1.01558,1.02288,1.01652), but **none meets the predeclared >3% gate**.
+Report a small observed local difference, not a promoted material speedup.
+Warmup row timings were2597.346/2368.151ms; SG4 was2323.090/2311.940ms.
+This supports using warmed/order-balanced evidence, but does not isolate the
+cause of every difference from the earlier process.
+
+All20 passes have identical live KV/conv/SSM byte hashes and numerically exact
+full logits, with top2 `[3753,653]`; measured application pipeline counts stay33.
+The immutable prefix hash remains unchanged. The hash covers tensor values,
+not `LayerState#position`: position equality is checked at the initial deep
+copy, subsequent `copy_from!` assigns it, and append receives explicit prefix256.
+Do not interpret the tensor hash as a complete serialization/state certificate.
+Route controls are set by pinned probe source after clearing QWEN overrides;
+production source matches the prior traced run. There is no new per-dispatch
+route trace or general runtime-control attestation in this timing process.
+
+Long shape7839/193 failed while constructing the initial shared prefix, before
+the common-prefix comparison, warmups or either timed append arm. Metal reports
+`Impacting Interactivity`, completion_status=-6; process exit1, observer exit0.
+There are zero timing samples, not a slow candidate result. Source/binary
+identity did not change. This reopens long-prefix stability despite the prior
+successful parity run; neither SG4-versus-row causality nor the offending
+command/layer is established by this uninstrumented stack. No retry was made.
+
+Short startup82%, minimum54%,33 memory samples; long startup81%, minimum50%,34
+samples. All observer records are error-free and both final process trees are
+absent. No run_safe memory kill or process timeout is reported. These snapshots
+do not establish absence of GPU resource pressure. Decaying CPU totals ranged
+125.4–572.6% (short) and82.6–243.6% (long); they are noise annotations, not GPU
+load or independent interval utilization. Guards remain70/30,24GiB,300s/180s.
+
+Verification: launcher `check`, `build` and `dry` pass; comparator/CLI/timing
+self-test, six report-checker negatives and synthetic statistics controls pass.
+Nineteen focused Crystal metrics/trace/shape examples, five Python admission
+tests, format and diff checks also pass. The first sandboxed spec launch was
+refused at process-group isolation; the contained approved run passes without
+loading a model or rerunning GPU timing.
+`run` returns failure at the long case as predeclared; no `complete.json` exists.
+The short timing/quality gate passes, but its >3% gain gate does not. Separate
+post-run checks authenticate source/binary identity and recompute raw medians.
+Correlated Luna pre/post review is ROBUST for the completed short diagnostic,
+not for a complete two-shape result. The complete two-shape timing objective
+remains IN_PROGRESS, not VERIFIED performance improvement.
+
+Artifacts: `/private/tmp/qwen-sg4-timing.oUzWgP/`, including manifest, consumed
+series marker, dry inputs, per-case logs/exit records, memory/CPU observations
+and short-case report. SHA256:
+
+- manifest: `896ce573b53e68370c765e907dab4ea0bd5b11c95f9dd3be41697b87b4f610ab`
+- binary: `b17854cfa95c8f8a7bed3e35b416df676bb6c7ff42a04a5f2ca9f262f252df7e`
+- probe: `826b9d9b8a4b9c67e2e66c490b572c3d3bc9b9ed1223116713003e0bf924b404`
+- launcher: `5c3cfcd85c1bbe84aac1343a027175fadec2ab5fa4b3a7154fbc0b2c010448a2`
+
+Next discriminator: separately instrument initial-prefix command boundaries
+before attempting another long-context timing comparison. Do not lower guards,
+replay the consumed series or promote production routing. New source/model,
+device, input or toolchain requires a new evidence scope; no global pp/tg,
+llama.cpp comparison, adaptive-QBit or broad stability claim is admitted.
+
 ## Real-model direct versus row attention (2026-09-19, predeclared)
 
 Next test two F32 full-width append shapes, in order: prefix256/rows195, then
