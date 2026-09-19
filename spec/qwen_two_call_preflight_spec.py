@@ -12,20 +12,20 @@ preflight = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(preflight)
 
 
-def report(pct=80, physical_bytes=64 * 1024**3):
+def report(pct=75, physical_bytes=64 * 1024**3):
     return (f"The system has {physical_bytes} (4194304 pages with a page size of 16384).\n"
             f"System-wide memory free percentage: {pct}%\n")
 
 
 class PreflightTest(unittest.TestCase):
     def test_boundary_and_observed_pressure_stop(self):
-        for pct, expected in ((30, False), (61, False), (66, False), (79, False),
-                              (80, True), (100, True)):
+        for pct, expected in ((30, False), (61, False), (66, False), (74, False),
+                              (75, True), (79, True), (80, True), (100, True)):
             with self.subTest(pct=pct):
                 result = preflight.assess(report(pct))
                 self.assertEqual(result['memory_preflight_pass'], expected)
-                self.assertEqual(result['runtime_floor_pct'], 35)
-                self.assertEqual(result['required_initial_pct'], 80)
+                self.assertEqual(result['runtime_floor_pct'], 30)
+                self.assertEqual(result['required_initial_pct'], 75)
                 self.assertTrue(result['runtime_guard_still_required'])
 
     def test_other_capacity_is_not_certified(self):
@@ -42,7 +42,7 @@ class PreflightTest(unittest.TestCase):
                 preflight.assess(text)
 
     def test_cli_only_queries_pressure_and_returns_admission_status(self):
-        for pct, code in ((61, 75), (80, 0)):
+        for pct, code in ((61, 75), (74, 75), (75, 0), (79, 0)):
             with self.subTest(pct=pct), patch.object(preflight.subprocess, 'run') as run:
                 run.return_value = subprocess.CompletedProcess([], 0, report(pct), '')
                 with redirect_stdout(io.StringIO()):

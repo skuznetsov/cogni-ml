@@ -28032,3 +28032,14 @@ Refresh after source/toolchain/device/model/workload changes.
   rows4; causal attribution and tensor parity remain open. Next discriminator:
   separately admitted same-input default-gate control, not default promotion.
   See `docs/qwen-prefill-command-trace.md`; refresh on identity/artifact drift.
+
+### Continuation 2026-09-18 — Operator selects replay admission75/runtime30
+
+- Supersedes the earlier80/35 replay profile, not global runner defaults.
+  New74/75 boundary tests went red then all five methods passed. Cap24GiB,
+  timeout300s, command watchdog180s, lease and one-attempt stop rule retained.
+- Default-gate control prepared at `/private/tmp/qwen-default-gate.KW6gCL/`:
+  pinned binary/source/model verified, metadata dry passed; only gate override
+  removal and runtime floor30 differ. Live launch admission74% rejected before
+  model load; no GPU attempt consumed. Next: same control at >=75 with fresh
+  identity check. No new timing, parity or runtime-shutdown evidence.

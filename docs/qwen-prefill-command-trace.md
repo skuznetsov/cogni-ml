@@ -1,5 +1,37 @@
 # Ordinary prefill command diagnostics
 
+## Current admission policy: operator-selected 75% / 30% (2026-09-18)
+
+The operator superseded the earlier 80% initial / 35% runtime policy for this
+bounded replay: require initial memory pressure free percentage >=75; stop at
+<=30 during execution. These are policy thresholds, not a measured safety
+bound. Keep the 24-GiB tree cap, 300-second timeout, 180-second command watchdog,
+zero-wait Metal lease, and one-attempt/first-failure rule. No global runner
+default changes or unrelated process control are authorized by this slice.
+The read-only checker reports the runtime floor; the launcher's environment
+must actually set `COGNI_RUN_SAFE_MIN_FREE_PCT=30`.
+
+Next control uses the same pinned binary/input with the direct-gate minimum
+override removed (source default1024), not the successful override1. The
+runtime-floor change is an additional safety-policy difference, so the pair
+is not strictly single-variable; if neither guard fires, it does not itself
+change numerical routing. Require source/binary/input identities, both call
+ends, completion, resident7,839/suffix196 and the recorded output digest.
+Below75%, failed pressure query or identity drift rejects before model load.
+Tests must reject74 and admit75, retaining malformed-report rejection.
+Rollback restores the prior profile; changing host/workload requires review.
+
+Verification: changed-boundary tests failed against the old constants, then
+all five test methods passed after the policy update. The new control wrapper
+`/private/tmp/qwen-default-gate.KW6gCL/replay.py` checks the original pinned
+source/model/binary identity, admits only the two declared control differences,
+and passed metadata-only replay. At the actual launch gate free memory was74%,
+so it exited75 before creating any GPU-attempt marker or loading the model.
+The control remains unmeasured; the prepared wrapper is unconsumed and must
+revalidate identity and pressure on any future invocation. Global runner
+defaults are unchanged. ROBUST for the tested admission boundaries only,
+not a demonstration of runtime30% shutdown or safety under GPU load.
+
 ## Operator-admitted 79% replay passed (2026-09-18)
 
 The operator explicitly authorized one attempt at 79% initial free-memory

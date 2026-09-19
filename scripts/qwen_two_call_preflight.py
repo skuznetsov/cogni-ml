@@ -2,8 +2,8 @@
 """Pressure-only admission check for the documented 64-GiB Qwen two-call replay.
 
 Never launches a workload or changes a process. Exit 0 means this one snapshot
-meets a conservative initial threshold, NOT that a GPU run is safe or correct.
-Keep run_safe.sh's 35% runtime guard, 24-GiB cap, timeout and Metal lease.
+meets the operator-selected threshold, NOT that a GPU run is safe or correct.
+Launch with a 30% runtime guard, 24-GiB cap, timeout and Metal lease.
 See docs/qwen-prefill-command-trace.md for workload scope and refresh triggers.
 """
 
@@ -12,10 +12,10 @@ import re
 import subprocess
 
 PROFILE_BYTES = 64 * 1024**3
-RUNTIME_FLOOR_PCT = 35
-# Observed 67 -> 30 includes host activity and stop latency, not isolated model
-# demand. 35 + 37 + 8 = 80 is a policy margin, not a measured upper bound.
-REQUIRED_INITIAL_PCT = 80
+RUNTIME_FLOOR_PCT = 30
+# Explicit operator policy (2026-09-18), not a measured demand bound.
+# This checker reports the runtime floor but does not configure the runner.
+REQUIRED_INITIAL_PCT = 75
 
 
 def assess(report):
