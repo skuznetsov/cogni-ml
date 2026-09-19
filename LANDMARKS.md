@@ -28491,3 +28491,25 @@ Refresh after source/toolchain/device/model/workload changes.
   full-prefix sampling. Residency remains parked pending reclaim/ownership
   evidence. Preserve70/30%,24GiB guards and unrelated WIP. Refresh on source/
   model/input/device/OS/observer change or evidence loss.
+
+### Continuation 2026-09-19 — Compilation API discriminator
+
+- Added exact-opt-in COGNI_METAL_PIPELINE_PROFILE=1; same-Mach-clock JSON
+  intervals for library/function/PSO APIs, including default-library startup.
+  No kernel/math/cache/scheduling change; unset is rollback. Timings are API
+  elapsed, not compiler CPU time; logging perturbs execution. File cache-hit
+  does not certify OS shader-cache or Crystal pipeline-cache state.
+- One original-input first-command-only run:30 source pipelines/91 intervals,
+  source-library655.776ms, function0.111ms, PSO5.976ms. Every interval precedes
+  commit; separate preGPU8022.636ms and GPU1423.585ms. Measured synchronous
+  creation calls do not account for the postcommit gap. Deferred driver/other
+  process compiler work remains unknown; precompilation benefit is unmeasured.
+- Native fake-device/output tests pass20 intervals incl known delays/failure/
+  cache/escaping; existing submit test and14 Crystal specs pass. Release/dry/
+  CLI checks pass; run checker rejects7seeded defects. Exit0/observer0,
+  initial78/minimum sampled47%,7clean samples, final tree absent. No sample
+  attachment, full-prefix retry, quality, stability or speed claim.
+- Evidence/hashes: docs/qwen-prefill-command-trace.md and
+  /private/tmp/qwen-pipeline-profile.hB85Yk/. Reuse only after identity refresh.
+  Return to narrow resource-submission diagnosis; cold-start precompilation
+  remains a separate opportunity. Keep70/30%,24GiB guards and unrelated WIP.

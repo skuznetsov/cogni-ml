@@ -1,5 +1,92 @@
 # Ordinary prefill command diagnostics
 
+## Pipeline API time is separate from the first-submit gap (2026-09-19)
+
+Hypothesis: synchronous Metal source compilation / pipeline creation accounts
+for the observed roughly8s first-command pre-GPU pause. Discriminator: record
+each API interval on the same Mach clock as commit/GPU-start, using the already
+qualified first-command-only route. No precompilation, archive, kernel, math,
+cache-policy, residency or scheduling change was made.
+
+`COGNI_METAL_PIPELINE_PROFILE=1` enables JSON stderr records for source-library,
+function and pipeline creation, file-library load/cache-hit, and default-library
+function/pipeline creation. The startup record covers `newDefaultLibrary` only,
+not device/queue initialization. Only exact `1` enables it; unset is rollback.
+The `cache_hit` field means the bridge's file-library dictionary hit, not the
+Crystal pipeline cache or Apple's shader cache. Argument/device failures before
+an API call have no record; a returned nil has `success:false`. A missing startup
+default library is normal source fallback, not a fatal compilation failure.
+
+The timer brackets each API call and logs afterward. This measures host API
+elapsed time, not compiler CPU time. JSON/logging overhead is outside the
+reported intervals but perturbs execution: do not use this mode for speed A/B.
+No thread/operation IDs are supplied; the following sums require the checked
+nonoverlapping intervals of this single-threaded probe, not concurrent inference.
+System shader caches were not cleared: fresh process does not mean cold OS cache.
+
+One guarded run preserved the previous original7839-token prompt,8036-token
+capacity and first ordinary boundary start0/rows2048/cursors0->7/groups1/caches0.
+All previous engine source hashes match except bridge instrumentation. It
+completed one command and destroyed partial state, without prefix completion,
+append, generation or quality result. Unlike the prior run, no `sample` attached.
+
+Measured91 valid, ordered, nonoverlapping intervals: one expected missing startup
+default library plus30 successful source pipelines, each with three API stages:
+
+| Stage | Total host API time |
+| --- | ---: |
+| Startup default-library lookup | 0.012ms |
+| Source-library creation | 655.776ms |
+| Function creation | 0.111ms |
+| Compute-pipeline creation | 5.976ms |
+| Before-commit to GPU-start (separate interval) | 8022.636ms |
+| GPU execution (separate interval) | 1423.585ms |
+
+Every library/function/pipeline interval ended before commit; the last ended
+0.596ms before it. Commit itself took0.037ms. Thus the measured synchronous API
+calls do not account for the first-submit pre-GPU gap in this run. They do
+incur approximately0.662s before it.
+This does not exclude deferred compiler/driver work outside these calls or
+identify the driver-global cause. Precompiled libraries/binary archives may
+reduce startup, but no saving has been demonstrated; removing the8s pause is
+not justified by this evidence. Do not compare this diagnostic run's timing
+against the prior sampled process as a performance result.
+
+Verification: native fake-device test went red on the missing profiler, then
+passed. `spec/metal_pipeline_profile_output_test.py <native-test>` checks20
+actual JSON intervals, disabled silence, known5ms delays, file-library hit,
+three failed API stages and escaped names. No GPU is used by those tests.
+Existing native submit test and14 Crystal boundary/trace specs pass. Release
+build,25-case CLI self-test and metadata dry-run pass. Raw run checker rejects7
+seeded defects (missing/duplicate profiles, invalid timeline/status, late stage,
+false prefix completion, live process). Live startup nil behavior is recorded.
+Correlated Luna source/raw-record review returned ROBUST for this narrow API
+timing claim, not for exclusion of all compiler/driver work. The checker counts
+30 distinct function names, not an independently specified function roster;
+same-process attribution relies on the controlled exec/log harness. It does
+not establish completeness of uninstrumented or asynchronous work.
+
+Safety: admission78%, minimum sampled47%,7 clean observations, exit0/observer0,
+tree absent, no kill/timeout. Preserved70% admission/30% runtime floor/24GiB
+tree cap/180s native watchdog; no full-prefix retry. The first sandboxed build
+aborted on process-group inspection, then the same guarded build ran outside
+that restriction; no GPU work was attempted by that aborted build.
+
+Artifacts: `/private/tmp/qwen-pipeline-profile.hB85Yk/`; launcher `run.py`,
+source/model/binary/bridge/config identity `manifest.json`, raw `live.stderr.log`,
+memory `run.memory.jsonl`, qualifier `check.py`. SHA256:
+
+- Manifest: `a76c658fa2920d7a985a1ac744a3f86a207b09caf46d29cb72b817634c6cdfc0`.
+- Binary: `7964407792c86e4ae24d30f0f159c10d98a384a2775a757a207d22c8a12c1fac`.
+- Bridge: `4ab7dfe09c6a6ff1b8fa807231103300e6b738e78b1e09a040e096ffac6aa7f3`.
+- Live log: `b753fcbf6e2a3502d908ede39e78d4e21927e9cd8bf2cd2fa848ed7e19d46532`.
+- Checker: `0957da8ceef4e28ac8b80bba5674cb67d61d3dcb4b5ab59a18472027600f5e72`.
+
+Next: keep precompilation as a separate cold-start opportunity; return to a
+narrow source-first resource-submission discriminator for the dominant gap.
+No model-sized residency without reclaim/ownership qualification. Refresh this
+evidence on source/model/input/device/OS/SDK/observer changes or evidence loss.
+
 ## First-command-only sample localizes the client submission path (2026-09-19)
 
 The new diagnostic build stops after the first successful ordinary shared

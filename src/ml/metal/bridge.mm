@@ -134,6 +134,38 @@ static double command_mach_seconds() {
     return (double)mach_absolute_time() * seconds_per_tick;
 }
 
+static bool pipeline_profile_enabled() {
+    const char* raw = std::getenv("COGNI_METAL_PIPELINE_PROFILE");
+    return raw != nullptr && raw[0] == '1' && raw[1] == '\0';
+}
+
+// Diagnostic only: elapsed host API time, not compiler CPU time or GPU work.
+// Use the submit profiler's Mach clock so intervals can be compared, not added.
+// Log only after the measured call; never log source text or library paths.
+template <typename Operation>
+static auto profile_pipeline_stage(bool enabled, const char* route, const char* stage,
+                                   NSString* function, bool cache_hit, Operation operation)
+    -> decltype(operation()) {
+    if (!enabled) return operation();
+    double begin = command_mach_seconds();
+    auto result = operation();
+    double end = command_mach_seconds();
+    bool valid = std::isfinite(begin) && std::isfinite(end) && begin > 0 && end >= begin;
+    NSDictionary* record = @{
+        @"event": @"metal_pipeline_profile", @"route": @(route), @"stage": @(stage),
+        @"function": function ?: @"", @"cache_hit": @(cache_hit),
+        @"success": @(result != nil), @"mach_begin_s": @(valid ? begin : 0.0),
+        @"mach_end_s": @(valid ? end : 0.0), @"elapsed_ms": @(valid ? (end - begin) * 1000.0 : 0.0),
+        @"timing_valid": @(valid)
+    };
+    NSData* json = [NSJSONSerialization dataWithJSONObject:record options:0 error:nil];
+    if (json) {
+        std::fprintf(stderr, "%.*s\n", (int)json.length, (const char*)json.bytes);
+        std::fflush(stderr);
+    }
+    return result;
+}
+
 static bool command_timeline_valid(double before, double start, double end, double after) {
     // Preserve raw signed deltas; allow 1ms timestamp uncertainty, never clamp.
     return std::isfinite(before) && std::isfinite(start) && std::isfinite(end) &&
@@ -230,7 +262,8 @@ extern "C" int32_t init_device_impl() {
     gs_libraries = [NSMutableDictionary new];
 
     // Try to load default library (for pre-compiled kernels)
-    gs_default_library = [gs_device newDefaultLibrary];
+    gs_default_library = profile_pipeline_stage(pipeline_profile_enabled(), "startup", "library", nil, false,
+        [&]() { return [gs_device newDefaultLibrary]; });
     if (gs_default_library == nil) {
         NSLog(@"GS: No default Metal library found (will compile from source)");
     }
@@ -628,6 +661,7 @@ extern "C" void* create_pipeline_impl(const char* source, const char* function_n
 
     NSString* sourceStr = [NSString stringWithUTF8String:source];
     NSString* funcName = [NSString stringWithUTF8String:function_name];
+    const bool profile = pipeline_profile_enabled();
 
     NSError* error = nil;
     MTLCompileOptions* options = [[MTLCompileOptions alloc] init];
@@ -641,22 +675,22 @@ extern "C" void* create_pipeline_impl(const char* source, const char* function_n
         #pragma clang diagnostic pop
     }
 
-    id<MTLLibrary> library = [gs_device newLibraryWithSource:sourceStr
-                                                    options:options
-                                                      error:&error];
+    id<MTLLibrary> library = profile_pipeline_stage(profile, "source", "library", funcName, false,
+        [&]() { return [gs_device newLibraryWithSource:sourceStr options:options error:&error]; });
     if (library == nil) {
         NSLog(@"GS: Failed to compile shader: %@", error.localizedDescription);
         return nullptr;
     }
 
-    id<MTLFunction> function = [library newFunctionWithName:funcName];
+    id<MTLFunction> function = profile_pipeline_stage(profile, "source", "function", funcName, false,
+        [&]() { return [library newFunctionWithName:funcName]; });
     if (function == nil) {
         NSLog(@"GS: Function '%@' not found in compiled library", funcName);
         return nullptr;
     }
 
-    id<MTLComputePipelineState> pipeline = [gs_device newComputePipelineStateWithFunction:function
-                                                                                    error:&error];
+    id<MTLComputePipelineState> pipeline = profile_pipeline_stage(profile, "source", "pipeline", funcName, false,
+        [&]() { return [gs_device newComputePipelineStateWithFunction:function error:&error]; });
     if (pipeline == nil) {
         NSLog(@"GS: Failed to create pipeline: %@", error.localizedDescription);
         return nullptr;
@@ -671,29 +705,31 @@ extern "C" void* create_pipeline_from_library_impl(const char* library_path, con
 
     NSString* path = [NSString stringWithUTF8String:library_path];
     NSString* funcName = [NSString stringWithUTF8String:function_name];
+    const bool profile = pipeline_profile_enabled();
 
     // Check cache
     id<MTLLibrary> library = gs_libraries[path];
+    bool cache_hit = library != nil;
+    NSError* library_error = nil;
+    library = profile_pipeline_stage(profile, "file", "library", funcName, cache_hit, [&]() {
+        return cache_hit ? library : [gs_device newLibraryWithURL:[NSURL fileURLWithPath:path] error:&library_error];
+    });
     if (library == nil) {
-        NSError* error = nil;
-        NSURL* url = [NSURL fileURLWithPath:path];
-        library = [gs_device newLibraryWithURL:url error:&error];
-        if (library == nil) {
-            NSLog(@"GS: Failed to load library from %@: %@", path, error.localizedDescription);
-            return nullptr;
-        }
-        gs_libraries[path] = library;
+        NSLog(@"GS: Failed to load library from %@: %@", path, library_error.localizedDescription);
+        return nullptr;
     }
+    if (!cache_hit) gs_libraries[path] = library;
 
-    id<MTLFunction> function = [library newFunctionWithName:funcName];
+    id<MTLFunction> function = profile_pipeline_stage(profile, "file", "function", funcName, false,
+        [&]() { return [library newFunctionWithName:funcName]; });
     if (function == nil) {
         NSLog(@"GS: Function '%@' not found in library", funcName);
         return nullptr;
     }
 
     NSError* error = nil;
-    id<MTLComputePipelineState> pipeline = [gs_device newComputePipelineStateWithFunction:function
-                                                                                    error:&error];
+    id<MTLComputePipelineState> pipeline = profile_pipeline_stage(profile, "file", "pipeline", funcName, false,
+        [&]() { return [gs_device newComputePipelineStateWithFunction:function error:&error]; });
     if (pipeline == nil) {
         NSLog(@"GS: Failed to create pipeline: %@", error.localizedDescription);
         return nullptr;
@@ -707,16 +743,18 @@ extern "C" void* create_pipeline_from_default_library_impl(const char* function_
     if (gs_default_library == nil || function_name == nullptr) return nullptr;
 
     NSString* funcName = [NSString stringWithUTF8String:function_name];
+    const bool profile = pipeline_profile_enabled();
 
-    id<MTLFunction> function = [gs_default_library newFunctionWithName:funcName];
+    id<MTLFunction> function = profile_pipeline_stage(profile, "default", "function", funcName, false,
+        [&]() { return [gs_default_library newFunctionWithName:funcName]; });
     if (function == nil) {
         NSLog(@"GS: Function '%@' not found in default library", funcName);
         return nullptr;
     }
 
     NSError* error = nil;
-    id<MTLComputePipelineState> pipeline = [gs_device newComputePipelineStateWithFunction:function
-                                                                                    error:&error];
+    id<MTLComputePipelineState> pipeline = profile_pipeline_stage(profile, "default", "pipeline", funcName, false,
+        [&]() { return [gs_device newComputePipelineStateWithFunction:function error:&error]; });
     if (pipeline == nil) {
         NSLog(@"GS: Failed to create pipeline: %@", error.localizedDescription);
         return nullptr;
