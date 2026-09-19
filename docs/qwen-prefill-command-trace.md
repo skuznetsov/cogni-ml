@@ -1,5 +1,89 @@
 # Ordinary prefill command diagnostics
 
+## CPU scheduling interval discriminator (2026-09-19, predeclared)
+
+Read kernelStartTime/kernelEndTime only after the existing completion, under
+the same split-submit opt-in. Apple defines their difference as the interval
+the CPU/kernel spends scheduling the command buffer, not GPU execution:
+https://developer.apple.com/documentation/metal/mtlcommandbuffer/kernelstarttime
+https://developer.apple.com/documentation/metal/mtlcommandbuffer/kernelendtime
+No new callbacks/waits, allocations, ABI, inference route or default changes.
+Emit raw pair and validity; finite positive endpoints with end>=start admit
+resolution-limited zero duration, while zero endpoints are unavailable.
+
+Prediction: if scheduling duration is comparable to the first ~7.5s pre-GPU
+gap, CPU scheduling is implicated as an elapsed interval, not proof of active
+CPU work or compilation. If it is tiny, that reported interval does not
+account for the pause. Retain possible overlap: do not assert kernelEndTime
+precedes GPUStartTime, subtract cross-family endpoints, or label their
+duration difference a distinct phase. No common epoch is assumed for these
+new endpoints. Missing/invalid data leaves this discriminator inconclusive.
+
+DoD: native positive/zero-duration/invalid pair tests and fake completion
+success/failure pass; fresh bridge/release build, CLI/dry and trace specs pass.
+One guarded7839-token run at most, all64 ordered trace/native/timeline/
+schedule/boundary groups with valid finite intervals and preserved prior
+Mach accounting. Reject missing/failed/nonfinite/reversed pair mutations.
+Sources except declared bridge/spec changes remain pinned; same model/tokens/
+F32 capacity8036/chunk2048/group1/cooldown50/graph0. Keep startup70/runtime30%,
+24GiB,300s/180s,lease0,quiet bypass; no retry or extra GPU workload. Artifacts:
+`/private/tmp/qwen-prefix-schedule.GmVlc7/`. Rollback removes this opt-in pair
+log/helper only. No stability fix, quality or throughput claim is admitted.
+
+### Result: scheduling itself has a long first-command interval
+
+One guarded 7839-token attempt completes all 64 ordered trace/native/timeline/
+schedule/boundary groups. First-command scheduling is 7836.884ms, pre-GPU
+7672.387ms, GPU execution 1417.449ms, and post-GPU return 0.109ms. These are
+overlapping intervals, not additive phases. Scheduling is calculated only
+from its own endpoint pair; no cross-family clock subtraction is admitted.
+Native commit is 0.032ms and wait 9089.956ms; enclosing host is 9090.866ms,
+Mach host bounds 9089.945ms, and separate encode 652.537ms.
+
+| Chunk start | First scheduling ms | First pre-GPU ms | First GPU ms |
+| --- | ---: | ---: | ---: |
+| 0 | 7836.884 | 7672.387 | 1417.449 |
+| 2048 | 21.398 | 2.117 | 1587.277 |
+| 4096 | 20.744 | 1.520 | 1872.102 |
+| 6144 | 95.025 | 1.696 | 1827.058 |
+
+Other 63 scheduling intervals total 271.132ms (maximum 95.025ms). The first
+reported CPU/driver scheduling interval is itself anomalously long and
+comparable to the pre-GPU pause. This is elapsed scheduling, not active CPU
+time, proof of compilation, a complete root cause, or a speedup/stability fix.
+
+Native pair tests red then green; separate fake-command stderr check verifies
+success valid=1 and failed-command valid=0 with raw endpoints retained. Fresh
+bridge/release build, metadata dry-run, 22 CLI rejection controls and 11 trace
+specs pass. Offline checker passes 64 groups and rejects 17 evidence mutations;
+separate raw arithmetic and source/model/binary identity checks agree.
+Correlated Luna source review: ROBUST for the bounded opt-in diagnostic.
+Exit0/observer0; startup78%, minimum44%, 41 clean memory samples, final tree
+absent. No Metal failure, guard kill, timeout or retry. Launcher wall83.218s
+is not pp/tg or matched speed evidence. This attempt is consumed.
+
+Next: inspect weight residency as a discriminating hypothesis. Our
+`Qwen35Metal.register_mmap` wraps model mmap as one shared no-copy buffer;
+`create_buffer_no_copy_impl` does not explicitly request residency. Current
+local llama.cpp `ggml-metal-device.m:ggml_metal_buffer_rset_init` conditionally
+creates a residency set, adds allocations, commits and requests residency,
+with corresponding release lifecycle. Llama can also use one large no-copy
+buffer; buffer splitting alone is not the distinguishing fact. Audit that
+lifecycle and design a bounded test before changing it. Measure total cold
+load-to-output time, not only a shortened first submit: moving preparation
+earlier is not removing it. No broad warmup or weight pinning is admitted yet.
+
+Reproduction: artifact directory above, `python3 check.py` for offline evidence;
+native spec is `spec/metal_submit_profile_test.mm`, trace spec is
+`spec/qwen_prefill_command_trace_spec.cr`. Refresh on source/model/input/device/
+toolchain drift or temporary evidence loss. SHA256:
+
+- manifest: `d879b1beb2de86e41a23c821a9df34369aa9d0dfc21415794365142ae9f6d73a`
+- bridge: `c6bc885cdca873ad43836fa6a27ad49f6a54be526f1f614c8d3847585fcb7b80`
+- binary: `712f196f4c869dbc4a6bf617962fe7668589a3b0dd553e39a4477bc2c0568e45`
+- checker: `b65b790bc1088840d185771db4d67b34c4ae6c6db109df645029df43aff9fe6d`
+- stderr: `32337d9d3ed831892b1f3ec4923909a8b0af9cae52646b649f0650a9cf1b4487`
+
 ## Mach timeline discriminator (2026-09-19, predeclared)
 
 Extend the existing opt-in split-submit diagnostic only: record host Mach

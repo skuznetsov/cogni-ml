@@ -141,6 +141,11 @@ static bool command_timeline_valid(double before, double start, double end, doub
            after >= before && start >= before - 0.001 && end <= after + 0.001;
 }
 
+static bool command_schedule_valid(double start, double end) {
+    // Pair-local CPU scheduling interval; no assumed ordering against GPU times.
+    return std::isfinite(start) && std::isfinite(end) && start > 0 && end >= start;
+}
+
 static bool command_submit_profile_enabled() {
     const char* raw = std::getenv("COGNI_METAL_SUBMIT_PROFILE");
     return raw != nullptr && raw[0] == '1' && raw[1] == '\0';
@@ -593,6 +598,12 @@ extern "C" int32_t gs_commit_and_wait_status_gpu_elapsed(
         std::fprintf(stderr,
                      "gs_metal_submit_timeline valid=%d before_commit_s=%.9f gpu_start_s=%.9f gpu_end_s=%.9f after_wait_s=%.9f\n",
                      valid, profile.mach_before_commit, gpu_start, gpu_end, profile.mach_after_wait);
+        double schedule_start = cmd.kernelStartTime;
+        double schedule_end = cmd.kernelEndTime;
+        bool schedule_valid = status == 0 && command_schedule_valid(schedule_start, schedule_end);
+        std::fprintf(stderr,
+                     "gs_metal_submit_schedule valid=%d kernel_start_s=%.9f kernel_end_s=%.9f\n",
+                     schedule_valid, schedule_start, schedule_end);
         std::fflush(stderr);
     }
     if (status != 0) return status;

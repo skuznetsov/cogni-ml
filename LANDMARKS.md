@@ -28299,3 +28299,28 @@ Refresh after source/toolchain/device/model/workload changes.
   Evidence, initial build/SDK issues and refresh triggers recorded in
   docs/qwen-prefill-command-trace.md Mach result; artifacts
   `/private/tmp/qwen-prefix-mach.HZ3gZn/`. Preserve unrelated WIP.
+
+### Continuation 2026-09-19 — Long CPU/driver scheduling interval measured
+
+- Existing opt-in reads kernelStartTime/kernelEndTime after completion; no
+  new waits/callbacks/ABI/routing. Pair-local duration only: no assumed epoch
+  or ordering relative to GPU timestamps, no additive phase attribution.
+- One guarded 7839-token run passes 64 ordered diagnostic groups. First
+  scheduling7836.884ms, pre-GPU7672.387ms, GPU1417.449ms, post-GPU0.109ms;
+  commit0.032ms. Other63 scheduling intervals total271.132ms, max95.025ms.
+  Scheduling itself is anomalously long, not proof of active CPU work,
+  compilation, residency causality, stability or speedup.
+- Native tests/schema check, fresh build/dry/22 CLI rejects/11 trace specs
+  pass; offline checker rejects17 mutations, raw totals/identities agree.
+  Correlated Luna review ROBUST within diagnostic scope. Exit0/observer0,
+  startup78/min44%,41 clean samples, tree absent; unchanged70/30%,24GiB,
+  300s/180s,lease0,quiet bypass. Attempt consumed; no further GPU run.
+- Next frontier: read-only residency/lifecycle comparison. Our shared no-copy
+  model buffer lacks explicit residency requests; local llama.cpp conditionally
+  uses residency sets (and can also use a single large buffer). This is a
+  hypothesis, not causality. A later bounded falsifier must include total cold
+  load-to-output latency to reject merely moving first-use cost earlier;
+  preserve memory guards and cleanup, no blind warmup/full-weight pinning.
+  Long warm timing/uninstrumented stability remain IN_PROGRESS. Evidence and
+  decay: docs/qwen-prefill-command-trace.md scheduling result;
+  `/private/tmp/qwen-prefix-schedule.GmVlc7/`. Preserve unrelated WIP.

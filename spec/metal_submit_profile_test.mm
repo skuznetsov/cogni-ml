@@ -12,6 +12,8 @@
 @property MTLCommandBufferStatus status;
 @property CFTimeInterval GPUStartTime;
 @property CFTimeInterval GPUEndTime;
+@property CFTimeInterval kernelStartTime;
+@property CFTimeInterval kernelEndTime;
 - (void)commit;
 - (void)waitUntilCompleted;
 - (NSError*)error;
@@ -39,6 +41,8 @@ static SubmitProfileFake* fake(useconds_t commit, useconds_t wait) {
     cmd.status = MTLCommandBufferStatusCompleted;
     cmd.GPUStartTime = 1.0;
     cmd.GPUEndTime = 1.001;
+    cmd.kernelStartTime = 10.0;
+    cmd.kernelEndTime = 17.5;
     return cmd;
 }
 
@@ -53,6 +57,16 @@ int main() {
         }
         setenv("COGNI_METAL_SUBMIT_PROFILE", "1", 1);
         assert(command_submit_profile_enabled());
+
+        // Scheduling duration is a pair-local interval, not GPU ordering.
+        assert(command_schedule_valid(10.0, 17.5));
+        assert(command_schedule_valid(10.0, 10.0)); // Resolution-limited zero duration.
+        assert(!command_schedule_valid(0.0, 0.0)); // Unavailable, not zero cost.
+        assert(!command_schedule_valid(0.0, 10.0));
+        assert(!command_schedule_valid(-1.0, 10.0));
+        assert(!command_schedule_valid(10.0, 9.0));
+        assert(!command_schedule_valid(NAN, 10.0));
+        assert(!command_schedule_valid(10.0, INFINITY));
 
         // Same-clock timeline bounds, including unavailable or corrupt GPU data.
         assert(command_timeline_valid(10.0, 18.0, 19.0, 19.002));
