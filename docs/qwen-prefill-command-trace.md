@@ -1,5 +1,111 @@
 # Ordinary prefill command diagnostics
 
+## Stack attempt missed; instrumented prefix failure reproduced (2026-09-19)
+
+The one admitted replay reused scheduling binary SHA256
+`712f196f4c869dbc4a6bf617962fe7668589a3b0dd553e39a4477bc2c0568e45`.
+All source/bridge hashes in its prior manifest, model stat identity and runtime
+config/token hashes still match. No model sample attached: the launcher watched
+wrapper stderr, which is buffered until teardown. Its `sample_attempted=false`
+and missing sample file mean no new stack evidence, not absence of client work.
+
+The workload itself fails separately:59 commands complete; command60 at
+start6144/rows1695/sequence12/cursors47->51 returns native status5/error1,
+`Impacting Interactivity`, mapped completion_status=-6. The prior claim that
+instrumentation does not establish stability remains necessary: the exact
+previously successful binary now fails without an attached sampler. This is
+not proof of the failure's cause or of observer neutrality (launcher polling
+and memory observation still run). Failed command timestamps are marked invalid
+and are not used as successful timing evidence.
+
+The first command succeeds: commit0.049ms, pre-GPU9303.029ms,
+GPU1487.962ms, scheduling9600.893ms. Scheduling overlaps the other intervals;
+do not add it. This preserves the first-command delay observation but does not
+explain it. Full prefix, stack discriminator, speed and stability gates FAIL
+or remain unknown; do not summarize this attempt as a pass.
+
+Runner exit1, observer exit0; startup79%, minimum48%,39 clean memory samples,
+final process tree absent, no guard kill/timeout. Launcher elapsed79.107s,
+not the runner's approximate56s label and not pp/tg. No retry or further GPU
+workload. Separate raw-record checker confirms60 begins/59 ends/one failure,
+59 valid schedules/timelines plus one invalid terminal pair, unchanged config
+and no sampled-model artifact. Artifacts: `/private/tmp/qwen-prefix-stacks.L9DTcy/`.
+SHA256: launcher `91633c8ed210cb2a892aa3d05c7473cd38317f0d1c95d975a653b82000b87876`;
+stderr `d1cfd37206f9bc6702fc437004b1b5db445323438c72d7cdc2f815b012aab8dd`;
+memory `35931f3895c1de2773f04ddf9b1a933aa9e36159366c599b63eebbaa1e900e33`;
+checker `b3664a2d48ca936ad8ec2f4e4327fcdcc288c298c123a842f0e8342b90add791`.
+
+Next: qualify live trace delivery below, then re-scope any future model
+discriminator to the earliest useful boundary rather than repeat the entire
+failing prefix solely to sample its first command. A shorter route must first
+preserve that command's input/state/resource identity; do not simply equate a
+smaller prompt with the same experiment. Residency remains parked. Refresh on
+source/model/device/OS/input changes or evidence loss; preserve unrelated WIP.
+
+## Live trace transport repair (2026-09-19)
+
+The stack attempt below exposed a launcher assumption, not a missing engine
+timer: run_safe.sh:326-329 redirects child stderr to its private temporary
+file even with RUN_SAFE_PASSTHROUGH_STDIO=1. dump_captured_output emits it only
+at teardown. Polling the wrapper's stderr cannot trigger on a live command.
+
+Small diagnostic-only repair: `scripts/qwen_live_stderr_exec.py` opens one
+explicit new `0600` log with exclusive creation, redirects fd2, then execs the
+absolute target without a shell or child process. The runner still owns the
+same PID/process group/exit status and guards. Read the live log separately
+from wrapper stderr; target and post-redirection exec errors go to the live
+log. This does not force buffering applications to flush.
+No runner default, GPU scheduling, inference or residency change. Rollback
+removes this opt-in helper and its tests. Reject existing log/symlink targets
+and relative paths. DoD: CPU-only tests prove exact argv/PID/exit preservation
+and a marker observed through the real runner before a handshaked child may
+exit. Only that transport is admitted; another model attempt is not part of
+this repair and must retain the original guards and fresh artifact identity.
+
+Verification: missing-helper tests fail first; final5 CPU-only tests pass,
+including real-runner handshaked delivery, unchanged PID/group/exit7, exact
+argv,0600 mode, existing file/symlink preservation and exec failure126.
+Command: `PYTHONDONTWRITEBYTECODE=1 python3 spec/qwen_live_stderr_exec_spec.py`.
+Run where the existing runner can inspect process groups; sandbox rejection
+is not a relay pass. `git diff --check` passes. No second model test is implied.
+Correlated Luna source review found no blocker for this bounded relay and
+failure-accounting scope; it is not an independent runtime replication.
+
+## First-wait stack discriminator (2026-09-19, predeclared)
+
+Return from the parked residency branch to the observed first-command pause.
+Reuse the exact pinned scheduling probe/bridge from
+`/private/tmp/qwen-prefix-schedule.GmVlc7/`: all recorded source hashes and the
+binary still match. No rebuild, engine edit, residency request or warmup.
+Existing intervals already separate fast commit, long pre-GPU scheduling and
+GPU execution; another elapsed timer would not discriminate their cause.
+
+One fresh guarded prefix replay may attach `/usr/bin/sample` to that owned
+probe PID once, on the first submit-begin record, for3s at10ms intervals.
+Verify exact executable and descent from this runner; never sample other apps
+or system/driver processes. Record sampler launch/return in Mach seconds and
+compare with the command's existing Mach/GPU endpoints. A return before GPU
+start bounds every collected stack to the pre-GPU window; otherwise do not
+attribute the aggregate to that window alone. Sample is an intrusive observer,
+not proof of unchanged performance. Stop after one attempt, including failure.
+
+Prediction: client compilation frames, resource/IOKit calls, or blocked wait
+frames narrow different client-side paths. A blocked user stack does not show
+kernel activity, identify the blocked resource, exclude external compilation,
+or prove passive CPU idle. Missing/private symbols remain unknown. Do not
+infer residency or a root cause from a generic driver frame.
+
+Instrument controls: successful1s/10ms samples of our five-second busy-loop
+and sleep processes show `busy_control` (77 samples) versus
+`__semwait_signal` (92 samples). Sandbox attachment failed before any model
+work; the same owned-process check works with tool-approved unsandboxed access.
+Model admission remains70% initial/30% runtime,24GiB/300s,180s native watchdog,
+lease0, quiet bypass, same7839 tokens/F32 capacity8036/chunk2048/group1/cooldown50.
+DoD: unchanged identities,64 complete valid command groups, owned sample and
+time-window evidence, exit0/observer0/no kills, final tree absent. Failure or
+incomplete stacks is preserved without replay. Artifacts:
+`/private/tmp/qwen-prefix-stacks.L9DTcy/`. No speed or stability claim.
+
 ## Reclaimability instrument rejected on a one-page control (2026-09-19)
 
 The proposed `msync(MS_SYNC | MS_INVALIDATE)` plus mincore discriminator fails

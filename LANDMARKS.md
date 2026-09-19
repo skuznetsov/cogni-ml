@@ -28441,3 +28441,27 @@ Refresh after source/toolchain/device/model/workload changes.
   Performance return pointer remains first-command scheduling (~7.8s elapsed,
   not a root-cause certificate); TTFT/speed remain open. Preserve model70/30%,
   24GiB guards and unrelated WIP. Refresh on OS/SDK/backing/lifecycle changes.
+
+### Continuation 2026-09-19 — Live trace transport and failed prefix replay
+
+- One same-binary/source/model/config replay, no rebuild/residency change.
+  First command succeeds with pre-GPU9303.029ms, scheduling9600.893ms,
+  GPU1487.962ms; overlapping intervals, no root-cause or speed attribution.
+- No model sample attached: run_safe PASSTHROUGH streams stdout but buffers
+  stderr until teardown. Launcher watched the wrong transport. CPU sample
+  controls distinguish a busy loop from sleeping, not the missed model wait.
+- Independently, command60 fails Impacting Interactivity at start6144,
+  rows1695,sequence12,cursors47->51 after59 successes. Exit1/observer0,
+  startup79/minimum48%,39 clean memory samples, tree absent, no guard kill.
+  Identical earlier successful instrumentation/binary is not a stability fix.
+- Added diagnostic qwen_live_stderr_exec.py: exclusive0600 log, fd2 redirect,
+  exec same PID/group; no runner or engine behavior/default edit. Five CPU
+  tests pass incl live handshaked event through real runner, PID/group/exit
+  preservation, argv, overwrite/symlink rejection, exec failure. No GPU retry.
+- Evidence/hash lineage and limitations: docs/qwen-prefill-command-trace.md;
+  `/private/tmp/qwen-prefix-stacks.L9DTcy/`. Failed run.py is historical evidence,
+  not a next-run recipe. Next re-scope to earliest identity-preserving boundary
+  before any new model attempt; do not repeat the full failing prefix just to
+  sample its first wait. Root cause/TTFT/stability remain open; residency parked.
+  Preserve70/30%,24GiB guards/unrelated WIP; refresh on source/model/device/OS/
+  input drift or evidence loss.
