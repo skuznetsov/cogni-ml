@@ -28134,3 +28134,24 @@ Refresh after source/toolchain/device/model/workload changes.
   justified universal threshold. Earlier splits are not a new discriminator.
   Evidence/hash/decay scope: docs/qwen-prefill-command-trace.md top section,
   `/private/tmp/qwen-suffix195.3gnnjT/`. Preserve unrelated FFN/memory WIP.
+
+### Continuation 2026-09-19 — Direct full-shape neighbors pass synthetic oracle
+
+- Model-free diagnostic adds six exact F32 shapes: prefix7839/rows193..196,
+  prefix0/rows64,195. Unlike legacy single-command64-row slice, new mode checks
+  every row. No production route/kernel/default change; no27B weights loaded.
+- Six fresh PIDs, one command each, all first attempts pass Float64 oracle and
+  trailing canaries; max absolute error1.081e-6 <1e-5. Source/binary identity
+  stable; admission79%, configured70/30, cap2GiB,120s, watchdog180s, lease0.
+  No Metal error/kill/timeout. Series consumed; no retries.19 focused specs,
+  self-test negative controls, invalid CLI, format and diff checks pass.
+- Private current bridge built with Xcode (shared object lacks metadata symbols;
+  CLT native headers unavailable). Shared bridge and unrelated WIP untouched.
+- ROBUST bounded synthetic direct execution, correlated Luna review, separate
+  six-log/PID check. Not model parity, root cause, speed or stability. Separable
+  K/V fixture and single submissions limit generality. Next inspect context-aware
+  route/cost boundary and real-input neighboring shapes with short-prefix controls;
+  do not promote195 as universal threshold or repeat consumed experiments.
+- Evidence, hashes and identity-drift refresh: docs/qwen-prefill-command-trace.md
+  top section; `/private/tmp/qwen-direct-neighbors-build.LYTGib/` and launcher
+  `/private/tmp/qwen-direct-neighbors.pTeZdX/run.py`. Rollback removes probe mode.

@@ -7,6 +7,7 @@ require "../src/ml/metal/device"
 require "../src/ml/metal/dispatch"
 require "../src/ml/metal/process_lease"
 require "digest/sha256"
+require "./support/qwen_sg4_probe_shape"
 
 SOURCE          = {{ read_file("#{__DIR__}/../src/ml/gguf/kernels/fullattn_qwen35.metal") }}
 REGISTER_SOURCE = "#define QWEN35_SG4_REGISTER_GATE 1\n" + SOURCE
@@ -425,6 +426,7 @@ private def run_self_test : Nil
 end
 
 validate_source!(SOURCE)
+direct_shape = QwenSG4ProbeShape.parse(ARGV)
 if ARGV == ["--self-test"]
   run_self_test
   exit
@@ -434,6 +436,30 @@ end
   abort "CPU-only probe supports only --self-test or dry invocation" unless ARGV.empty?
   puts "dry: GPU modes unavailable in CPU-only build"
 {% else %}
+  if shape = direct_shape
+    base, rows = shape
+    lease = ML::Metal::ProcessLease.acquire
+    begin
+      device = ML::Metal::Device.instance
+      raise "probe requires Apple GPU" unless device.name.starts_with?("Apple")
+      puts "sg4_direct_shape pid=#{Process.pid} source_sha256=#{Digest::SHA256.hexdigest(SOURCE)} device=#{device.name.gsub(/\s+/, "_")} precision=f32 base=#{base} rows=#{rows} heads=#{HEADS} kv_heads=#{KV_HEADS} head_dim=#{DIM} warmups=0"
+      STDOUT.flush
+      pipe = ML::Metal::ComputePipeline.new("qwen35_attn_decode_rows_sg4", SOURCE)
+      fixture = ShapeFixture.new(base, rows, false)
+      begin
+        host_ms, gpu_ms = dispatch!(pipe, fixture, true, 0, rows, trace: true)
+        max_error = validate_output!(fixture.read_output, fixture.expected, fixture.count, "direct-shape")
+        puts "direct_shape=PASS base=#{base} rows=#{rows} completed_rows=#{rows} commands=1 max_abs=#{max_error} gpu_ms=#{gpu_ms.not_nil!} host_ms=#{host_ms} guard=PASS oracle=PASS"
+        STDOUT.flush
+      ensure
+        fixture.release
+      end
+    ensure
+      lease.close
+    end
+    exit
+  end
+
   if ARGV == ["--pipeline-info"] || ARGV == ["--pipeline-info-register"]
     lease = ML::Metal::ProcessLease.acquire
     begin
@@ -563,7 +589,7 @@ end
   end
 
   unless ARGV == ["--run"]
-    abort "usage: qwen35_sg4_tail_probe [--run|--benchmark|--slice-check|--register-tail-check|--paired-command=direct|--paired-command=register|--single-command=direct|--single-command=pregate|--single-command=register|--pipeline-info|--pipeline-info-register|--self-test]" unless ARGV.empty?
+    abort "usage: qwen35_sg4_tail_probe [--direct-shape=base:rows|--run|--benchmark|--slice-check|--register-tail-check|--paired-command=direct|--paired-command=register|--single-command=direct|--single-command=pregate|--single-command=register|--pipeline-info|--pipeline-info-register|--self-test]" unless ARGV.empty?
     puts "dry: #{CASES.size * 4} bounded SG4 cases; no Metal initialization; use --run under scripts/run_safe.sh"
     exit
   end

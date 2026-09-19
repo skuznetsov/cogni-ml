@@ -1,5 +1,85 @@
 # Ordinary prefill command diagnostics
 
+## Direct full-shape neighbors (2026-09-19, predeclared)
+
+The next discriminator is model-free, not another 27B replay. Extend the existing
+SG4 tail probe with exact `--direct-shape=base:rows` admission for
+`7839:193`, `7839:194`, `7839:195`, `7839:196`, `0:64`, `0:195` only.
+Unlike legacy `--single-command`, this dispatches and validates every row,
+not the first 64 of a 193-row fixture. Each fresh process compiles only the
+direct F32 pipeline and submits one full-shape command, without warmups.
+The existing Float64 synthetic oracle, finite/unwritten checks and four-row
+trailing canary must pass. This checks synthetic shape correctness/execution;
+it cannot prove model parity, root cause, speed or production stability.
+
+One six-case series, stop on the first nonzero status or validation failure;
+no retries or consumed replay reuse. Start >=70% free, runtime floor 30%,
+model-free process-tree cap 2GiB, 120s per case, watchdog 180s, lease 0, quiet gate
+disabled. Clear inherited Qwen/Metal/runner controls, pin source/binary/bridge
+hashes before and after, and require six distinct PIDs. A private bridge is
+built with installed Xcode because the root object lacks pipeline metadata
+symbols and CLT native compilation cannot find C++ headers. Neither the shared
+bridge nor production routing/kernel/defaults changes. Launcher/evidence:
+`/private/tmp/qwen-direct-neighbors.pTeZdX/run.py` and
+`/private/tmp/qwen-direct-neighbors-build.LYTGib/`.
+
+### Result: six full-shape direct checks pass
+
+All six first attempts passed on Apple M2 Max at 79% initial free memory, in
+six distinct PIDs, one command each; no Metal error, guard violation, memory
+kill or timeout. The 131 pinned source/bridge/launcher artifacts and binary
+identity matched before/after each run. Series is consumed. The admission
+checker's 27B profile label supplies only the conservative 70/30 memory check;
+it is not geometry or demand certification for this model-free experiment.
+
+| Prefix | Rows validated | Maximum absolute error | GPU ms (single diagnostic) |
+| ---: | ---: | ---: | ---: |
+| 7839 | 193 | 1.081e-6 | 113.346 |
+| 7839 | 194 | 1.081e-6 | 109.145 |
+| 7839 | 195 | 1.081e-6 | 114.394 |
+| 7839 | 196 | 1.081e-6 | 116.839 |
+| 0 | 64 | 1.073e-7 | 0.480 |
+| 0 | 195 | 1.073e-7 | 2.795 |
+
+All output values satisfy the 1e-5 Float64 oracle tolerance; trailing canaries
+remain untouched. CPU self-test rejects seeded source/output/guard corruption;
+the new malformed CLI rejects before Metal. Nineteen focused shape/safety/stage
+specs, formatting and diff checks pass. Luna's correlated review found no blocker
+for this diagnostic contract; a separate six-log check confirms unique PIDs,
+one PASS each and exit 0. The launcher seals the series before first submission
+and checks exit, full-row trace, oracle/canary result and source identity before
+allowing a successor.
+
+Reproducible CPU-only DoD (no GPU submission):
+
+```sh
+DEVELOPER_DIR=/Library/Developer/CommandLineTools CRYSTAL_CACHE_DIR=/private/tmp/qwen-neighbor-spec-cache crystal spec spec/qwen_sg4_probe_shape_spec.cr spec/qwen35_sg4_tail_safety_spec.cr spec/qwen_prefill_stage_split_spec.cr --no-color
+DEVELOPER_DIR=/Library/Developer/CommandLineTools CRYSTAL_CACHE_DIR=/private/tmp/qwen-neighbor-spec-cache crystal run -Dcpu_only bin/qwen35_sg4_tail_probe.cr -- --self-test
+```
+
+ROBUST only for these synthetic F32 shapes. The separable, repeated synthetic
+K/V values do not cover arbitrary model distributions, layer composition,
+FP16/QBit, repeated-process stability or performance comparison. The full-model
+intermittent failure remains unresolved. Next discriminating step is real-input
+neighbor-shape validation of an opt-in routing candidate, including short-prefix
+regression controls; first inspect the route/cost boundary, do not make 195 a
+universal default or repeat the consumed experiments. Refresh on shader, bridge,
+device/toolchain/input drift or artifact loss. Rollback removes this diagnostic
+mode; production behavior is unchanged.
+
+Evidence SHA256 (logs and manifest under the build directory above):
+
+- Binary: `b9670e2017f831ba2f5f4072aa031f495e55bd4cbcba976267a59853be0d2b31`.
+- Private bridge: `7329853fc218a89cff768b2fbdb217449958625e5dd3d567ce0de0f31c305a6f`.
+- Manifest: `bd14543ddb8de47932e24379b4811510cc7295db59074dd2e539935e8ad1ff5e`.
+- Launcher: `fa293ca03abf55ed82b76b6c39cd2921cd386f84b0873a639743e996fb70d05b`.
+- `1-7839-193.log`: `7ed988b38c28af8aa62bab99baf2c9df0fbc2e5875eafed2f89dde95bb0f72d0`.
+- `2-7839-194.log`: `5b96f8ba1d697d499c08f26f77d6471da3c361cbd2212de55d8fa842b9e65cda`.
+- `3-7839-195.log`: `728d8df3611128436c9522e95dc227ce3650beccc74273e388ffd24aff8b4618`.
+- `4-7839-196.log`: `73d68c520388ad71fee0cabf56357525c6bf3c60866576ec910e7f7fd33278d4`.
+- `5-0-64.log`: `9566f3f04042065ca250db7d27ed7c17b6a87b00b4ff1d1c7b394fc98cf48996`.
+- `6-0-195.log`: `6c80263bf0f384152525609f606b40375a88cbf34f4801220d0bbcbeb8374ebe`.
+
 ## Suffix-only route discriminator (2026-09-18, predeclared)
 
 Re-reading the completed direct trace identifies standalone rows2048,1668,195,
