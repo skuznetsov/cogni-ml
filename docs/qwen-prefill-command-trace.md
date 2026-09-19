@@ -1,5 +1,90 @@
 # Ordinary prefill command diagnostics
 
+## Real-model direct versus row attention (2026-09-19, predeclared)
+
+Next test two F32 full-width append shapes, in order: prefix256/rows195, then
+prefix7839/rows193. Use public code-completion tokens and actual Qwen3.8-27B
+Q4_K_M weights, not the separable synthetic attention fixture. This is not the
+saved tool-session replay. The reference is ordinary one-row-per-group attention
+(`SG4_OFF=1`), not the intermittently failing pregate kernel. Candidate uses
+direct SG4 (`SG4_OFF=0`, direct minimum1); Flash remains off. Production defaults
+are unchanged. A shared direct-prefilled prefix is synchronized and deep-copied
+into a second nonaliasing F32 state; compare the live prefix exactly before
+either append. No extra prefix replay, warmup or retry.
+
+Gate all live K/V and recurrent state after append, full logits, top2 coverage,
+token ECS, and four independent greedy steps with equal token histories.
+Reuse existing diagnostic tolerances: state0.02+0.01*abs(reference), logits0.1,
+logit cosine>=0.9999, reference top1 covered, token ECS>=0.99; also require
+identical greedy token IDs. Do not relax a tolerance after seeing results.
+Bindings within completed append intervals must show16 row kernels versus16
+direct SG4 kernels. Binding telemetry alone is not execution proof.
+
+One fresh process per shape; first failure stops the entire series. Initial
+free memory>=70%, runtime floor30%, tree cap24GiB,300s process limit,180s command
+watchdog, lease0, quiet gate disabled. Preserve existing consumed attempts.
+Pin all compiled sources, private bridge, input token hash, model stat and
+binary; record process-tree memory observations. The current unrelated FFN
+capacity-reuse WIP is left untouched and its opt-in environment flag cleared.
+This gate checks bounded numerical agreement, not broad coding quality, model
+accuracy, speed, stability or the cause of earlier Metal failures. Four tokens
+do not establish sentence-level semantic quality. Artifacts:
+`/private/tmp/qwen-sg4-model.h5PWz3/`. Next action depends on observed parity;
+do not widen production routing on this two-case result alone.
+
+### Result: both real-model append comparisons pass
+
+`bin/qwen35_sg4_model_probe.cr` completed both first attempts on Apple M2 Max.
+For each case the synchronized common prefix was numerically exact after deep
+copy, with 256 distinct state-buffer addresses. All live F32 K/V values and all
+conv/SSM values remained numerically exact after the append and three consumed
+continuation tokens (max absolute difference0, no nonfinite/out-of-tolerance
+values). All248,320 logits at each of four greedy positions also had difference0.
+Each case matched top1 4/4, ranked top2 8/8, reference-top1 coverage4/4 and ECS1;
+both branches emitted ` seen = set()`. ECS1 follows identical token IDs; this
+does not test the semantic tolerance of different tokens or complete the task.
+
+| Prefix / append | Live tokens after continuation | Initial / minimum free | Row / direct append wall |
+| --- | ---: | ---: | ---: |
+| 256 / 195 | 454 | 80% / 52% | 4.489 / 2.363s |
+| 7839 / 193 | 8035 | 78% / 42% | 6.458 / 4.044s |
+
+Both processes and observers exited0; memory observations13/59, no collection
+errors, Metal failure, guard kill or timeout, and final workload trees absent.
+Each completed append interval bound exactly16 ordinary-row or16 direct-SG4
+pipelines as declared. Dry/live token hashes matched; all131 pinned source,
+bridge and launcher artifacts, binary and model stat identity remained stable.
+The series is consumed; neither case may be repeated through this launcher.
+
+DoD: `python3 /private/tmp/qwen-sg4-model.h5PWz3/run.py build`, `dry`, then `run`
+all passed. Standalone self-test rejects perturbed/nonfinite/empty comparisons
+and eight invalid CLI combinations; trace checker passes one positive and five
+negative controls. Additional13 Crystal metrics/trace/shape examples and five
+Python pressure-admission tests pass; type-only build, format and diff checks
+pass. Separate post-run log checks confirmed all component/step counts and
+zero differences. Correlated Luna source review found no scoped blocker.
+
+Artifacts are the directory above: `manifest.json`, `dry-*-input.json`,
+`run-*.{stdout.log,stderr.log,memory.jsonl}`, per-case exit/pass certificates,
+`series-attempt.json`, and `complete.json`. SHA256:
+
+- manifest: `ab6be1725671bb307e2ef639ddc40e397c0bbe5a68660959c8a35489974b3a94`
+- binary: `9c9a5f68ad536374d64c7496b94482758490c08949165fc7bb0023b7266aded2`
+- probe source: `8e11064c426b425aa29b007e569468ff2553aae7673bec158bc683fdad275b07`
+- launcher: `75773c7268a2d38e411b4e5bfa4eeee85149b58392efa0fa77c8a1ed6c34ff9f`
+
+Verdict: ROBUST for append-path numerical agreement on these two public-token
+fixtures and four continuation positions. The shared direct prefix is not a
+direct-versus-row prefix comparison. Timings are single, fixed-order, unwarmed
+host-wall measurements including the output head/fence and possible pipeline
+compilation; they do not establish a speedup. Root cause of prior pregate
+failures, broader stability, independent model correctness, adaptive-QBit
+behavior and default routing remain open. Next discriminator is a separately
+declared balanced timing test, not promotion of a195-row threshold. Refresh
+requires a new evidence scope after source/model/device/input/toolchain drift;
+do not silently reuse consumed attempts. Rollback removes the standalone probe;
+production kernels, policies and unrelated FFN-capacity WIP are unchanged.
+
 ## Direct full-shape neighbors (2026-09-19, predeclared)
 
 The next discriminator is model-free, not another 27B replay. Extend the existing

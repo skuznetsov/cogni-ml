@@ -28155,3 +28155,28 @@ Refresh after source/toolchain/device/model/workload changes.
 - Evidence, hashes and identity-drift refresh: docs/qwen-prefill-command-trace.md
   top section; `/private/tmp/qwen-direct-neighbors-build.LYTGib/` and launcher
   `/private/tmp/qwen-direct-neighbors.pTeZdX/run.py`. Rollback removes probe mode.
+
+### Continuation 2026-09-19 — Real-model direct SG4 append parity passes
+
+- Added standalone F32 two-state diagnostic for prefix256/append195 and
+  prefix7839/append193, public code tokens, actual Qwen3.8-27B Q4_K_M weights.
+  One synchronized direct prefix is deep-copied; ordinary rows versus direct
+  full-width append, Flash off, no warmup/retry or production/default change.
+- Both first attempts pass:256 distinct state buffers; all live KV/conv/SSM
+  and four full-logit vectors numerically exact (max difference0); top1 4/4,
+  ranked top2 8/8, ECS1 per case, identical ` seen = set()` continuation.
+  Long case checks8032 live rows after append,8035 after three consumed tokens.
+  Sixteen row/direct bindings per completed interval; dry/live input hashes and
+  all131 source/bridge/launcher identities plus binary/model stat unchanged.
+- Startup80/78%, minimum52/42%, configured70/30;24GiB/300s/180s watchdog/lease0.
+  Processes and observers exit0,13/59 error-free samples, no Metal failure,
+  guard kill or timeout; final trees absent. Series consumed, no replay.
+- Build/dry/run pass; comparator/CLI self-test,13 focused Crystal examples,
+  five preflight tests, trace negatives, format/diff and separate log checks
+  pass. Correlated Luna review ROBUST for the scoped append agreement.
+- Row/direct append wall4.489/2.363s and6.458/4.044s are fixed-order/unwarmed
+  diagnostics, not speedup evidence. Shared prefix masks common-prefix errors;
+  no independent correctness, complete coding quality, QBit or stability claim.
+  Next: predeclare balanced timing discriminator; keep default routing unchanged.
+  Evidence/hashes/decay: docs/qwen-prefill-command-trace.md real-model section;
+  `/private/tmp/qwen-sg4-model.h5PWz3/`. Rollback removes only the new probe.
