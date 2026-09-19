@@ -12,22 +12,70 @@ spec.loader.exec_module(check)
 
 
 def fixture(mode):
+    plain_mode = mode.removeprefix("file-")
     phases = ["baseline", "touched", "prepared"]
     phases += (["retained", "after_250ms", "after_1000ms", "after_5000ms", "released"]
-               if mode == "hold" else ["released", "after_250ms", "after_1000ms", "after_5000ms"])
+               if plain_mode == "hold" else ["released", "after_250ms", "after_1000ms", "after_5000ms"])
     batches = []
-    for cycle in range(1 if mode == "hold" else 3):
+    for cycle in range(1 if plain_mode == "hold" else 3):
         batch = {}
         for i, phase in enumerate(phases):
-            live = phase in ("touched", "prepared", "retained") or (mode == "hold" and phase.startswith("after_"))
+            live = phase in ("touched", "prepared", "retained") or (plain_mode == "hold" and phase.startswith("after_"))
             batch[phase] = dict(event="sample", mode=mode, cycle=cycle, phase=phase, bytes=check.SIZE,
                                 elapsed_ms=cycle * 20000 + i * 2000, footprint=(16 << 20) + live * check.SIZE,
-                                resident=16 << 20, metal_allocated=0)
+                                resident=(16 << 20) + live * check.SIZE, metal_allocated=0)
         batches.append(batch)
     return batches
 
 
 class ResidencyCheckerTest(unittest.TestCase):
+    def test_file_resident_metric_with_insensitive_footprint(self):
+        runs = [fixture("file-" + mode) for mode in ("control", "request", "hold")]
+        for run in runs:
+            for batch in run:
+                for row in batch.values():
+                    row["footprint"] = 16 << 20
+        result = check.evaluate(*runs, file_backed=True)
+        self.assertTrue(result["bounded_task_accounting_recovery"])
+        self.assertFalse(result["system_reclamation_proven"])
+        runs[1][2]["after_5000ms"]["resident"] += check.SIZE
+        self.assertFalse(check.evaluate(*runs, file_backed=True)["bounded_task_accounting_recovery"])
+
+    def test_file_requires_held_resident_signal(self):
+        runs = [fixture("file-" + mode) for mode in ("control", "request", "hold")]
+        runs[2][0]["after_5000ms"]["resident"] -= check.SIZE
+        with self.assertRaises(ValueError):
+            check.evaluate(*runs, file_backed=True)
+
+    def test_file_live_requested_mapping_can_be_invisible(self):
+        runs = [fixture("file-" + mode) for mode in ("control", "request", "hold")]
+        for batch in runs[1]:
+            batch["prepared"]["resident"] = batch["baseline"]["resident"]
+        result = check.evaluate(*runs, file_backed=True)
+        self.assertTrue(result["bounded_task_accounting_recovery"])
+        self.assertFalse(result["requested_live_resident_signal_detected"])
+        self.assertEqual(result["residency_retention_verdict"], "unqualified")
+
+    def test_file_matched_control_bound_is_independent(self):
+        runs = [fixture("file-" + mode) for mode in ("control", "request", "hold")]
+        runs[0][0]["after_5000ms"]["resident"] -= 7 << 20
+        runs[1][0]["after_5000ms"]["resident"] += 7 << 20
+        self.assertFalse(check.evaluate(*runs, file_backed=True)["bounded_task_accounting_recovery"])
+
+    def test_file_reader_identity(self):
+        for mode in ("file-control", "file-request", "file-hold"):
+            rows = [dict(event="config", mode=mode, bytes=check.SIZE,
+                         cycles=1 if mode == "file-hold" else 3,
+                         device="Apple M2 Max", gpu_commands=0)]
+            rows += [x for b in fixture(mode) for x in b.values()]
+            rows += [dict(event="complete", mode=mode, gpu_commands=0)]
+            with tempfile.TemporaryDirectory() as folder:
+                path = Path(folder) / "run.log"
+                path.write_text("\n".join(map(json.dumps, rows)) + "\n[EXIT: 0]")
+                self.assertEqual(len(check.read_run(path, mode)), rows[0]["cycles"])
+                with self.assertRaises(ValueError):
+                    check.read_run(path, mode.removeprefix("file-"))
+
     def evaluate(self, request=None, control=None, hold=None):
         return check.evaluate(control or fixture("control"), request or fixture("request"), hold or fixture("hold"))
 

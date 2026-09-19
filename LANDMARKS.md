@@ -28369,3 +28369,27 @@ Refresh after source/toolchain/device/model/workload changes.
   Root cause/TTFT/speed remain open; no heartbeat/dummy-GPU workaround admitted.
   Refresh after OS/device/backing/lifecycle/size/concurrency changes. Preserve
   unrelated WIP and existing70/30%,24GiB model guards.
+
+### Continuation 2026-09-19 — File-backed residency RSS blind spot
+
+- Synthetic linked64MiB file, PROT_READ/MAP_PRIVATE/MADV_RANDOM like GGUF,
+  warm from creation, no model/queue/GPU. Three control/request cycles5s,
+  same backing reused. Four guarded processes including anonymous regression
+  exit0; all three exact file fixtures removed. Cap512MiB/60s/floor30%.
+- Ordinary file hold: resident+67,174,400B but footprint only+49,200B;
+  released resident+81,920B. Endpoint RSS residuals control[64,48,48]KiB,
+  request[128,112,112]KiB. Weak task-accounting endpoint check passes.
+- Critical falsifier: after requestResidency, BEFORE teardown, resident size
+  drops near baseline despite live64MiB wrapper/mmap. Prepared signals across
+  cycles[114688,0,0]B. A no-request hold does not qualify the post-request
+  detector. Checker explicitly reports retention verdict=unqualified; neither
+  low RSS nor low footprint proves global release/pinning/eviction here.
+- Native build,6CLI negatives,12checker tests pass; source/raw-log inspection
+  and correlated Luna review support only the narrow task-accounting result.
+  Evidence/hashes/commands: docs/qwen-prefill-command-trace.md file result;
+  `/private/tmp/qwen-residency-file.nRcgXY/`. No production changes.
+- Next discriminator must detect the known-live requested mapping with
+  driver/ownership-aware accounting; do not enlarge/repeat an insensitive RSS
+  test. Later residency timing must include setup/total time and original model
+  guards. Root cause/TTFT/speed remain open. Refresh on OS/device/backing/size/
+  lifecycle/concurrency changes; preserve unrelated WIP.

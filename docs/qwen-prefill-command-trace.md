@@ -1,5 +1,112 @@
 # Ordinary prefill command diagnostics
 
+## Small file-backed result (2026-09-19)
+
+**RSS is not a qualified residency-retention detector in this experiment.**
+The weaker task resident-size endpoint check passed on M2 Max/macOS26.6.2
+(25G83), not system-wide physical reclamation. Source base1813ffd9 plus diagnostic-only
+changes below; unrelated engine WIP was not included in this native build.
+At each five-second endpoint, relative to the initial process baseline:
+
+| Mode | Cycle 1 | Cycle 2 | Cycle 3 |
+| --- | ---: | ---: | ---: |
+| Control resident residual | 65,536 B | 49,152 B | 49,152 B |
+| Request resident residual | 131,072 B | 114,688 B | 114,688 B |
+| Request minus control | 65,536 B | 65,536 B | 65,536 B |
+
+The held-positive signal was resident+67,174,400B but footprint+49,200B.
+After hold release, resident residual was81,920B. This directly demonstrates
+why the anonymous phys_footprint sensitivity criterion must not be transferred
+to this clean-file experiment. Control footprint residuals were[0,-16384,-16384]B;
+request[16384,0,0]B. Metal allocated size returned to its baseline in all cycles.
+The same backing file is reused across cycles: this tests repeated map/unmap of
+one file, not accumulation of distinct pinned file payloads. No claim about
+kernel-retained pages after unmap or file-cache eviction follows from task RSS.
+
+Critical counterexample found while auditing the intermediate samples:
+request cycle1 resident size goes11,649,024B baseline ->78,774,272B touched
+->11,763,712B prepared, while the64MiB Metal wrapper and mapping are still live.
+Prepared-minus-cycle-baseline resident signals are[114688,0,0]B, not64MiB.
+Thus the no-request held control qualifies RSS only in that other ownership
+state. The checker now reports requested_live_resident_signal_detected=false
+and residency_retention_verdict=unqualified, alongside the weaker endpoint pass.
+This counterexample prevents promoting the earlier endpoint-only interpretation
+to a memory-release certificate. It does not identify what the driver did with
+the pages; no claim of eviction, pinning, ownership transfer or its cause.
+
+Native build (same clang command as anonymous probe, new artifact directory),
+six CLI negatives, twelve checker tests and all three guarded file runs passed.
+New file tests first failed before implementation. All file runs started with
+79% free memory; exit0, no kill/abort; no GPU commands. Checked all three exact
+fixture paths from stderr absent after completion. Checker accepts the earlier
+anonymous logs unchanged and rejects file logs when --file is omitted.
+Two review-driven tests additionally distinguish matched-control tolerance
+from initial-baseline tolerance and preserve the known-live invisible-mapping
+counterexample. A fresh anonymous-hold regression also exits0: footprint hold
+signal67,141,680B, released residual0B (anonymous-hold.log).
+
+```sh
+# Same sequential60s/512MiB/floor30% runner settings as predeclared below.
+# Repeat --file-hold, --file-control, --file-request in fresh processes.
+env COGNI_RUN_SAFE_MIN_FREE_PCT=30 COGNI_RUN_SAFE_REQUIRE_QUIET=0 \
+  COGNI_RUN_SAFE_WAIT_QUIET_SEC=0 scripts/run_safe.sh \
+  /private/tmp/qwen-residency-file.nRcgXY/probe 60 512 --file-request
+PYTHONDONTWRITEBYTECODE=1 python3 spec/metal_residency_footprint_spec.py
+python3 scripts/check_metal_residency_footprint.py --file \
+  /private/tmp/qwen-residency-file.nRcgXY/control.log \
+  /private/tmp/qwen-residency-file.nRcgXY/request.log \
+  /private/tmp/qwen-residency-file.nRcgXY/hold.log
+```
+
+Evidence SHA256 (binary/logs in the directory above):
+
+```text
+probe source 737c5fe661e5a350da2b8c71344d44e922f1c0ea0c321ab95ace39b9468c417f
+probe binary 4fb05551e0293b95048dfb5dae916047c2a06a3f305fea202e477502c224f5e3
+hold.log     3d8d694e31b159be6091248f9cc5affce4fe05f9a33e63fbe3a79d5611338332
+control.log  0a744e1b75f7f44ac51ad6770cc55d597fd44a753910f603402201869aa1f970
+request.log  82f898f080109e93bd4ec2798bef72fcf481a47e1aea5d6e6e829fbaffb74dca
+```
+
+Decision: lifecycle checks completed, but the residency retention question
+remains open. Correlated Luna review supports the weak task-accounting result;
+live source/log inspection refutes the stronger RSS-detector interpretation.
+Next: inspect a driver/ownership-aware measurement that can detect this known
+live requested mapping. Do not repeat the same RSS test or increase its size
+to claim greater confidence. Any later isolated opt-in residency A/B must use
+matched end-to-end timing including request/setup, preserve teardown ownership,
+runtime/SDK gating and existing model memory/watchdog guards. No engine change
+or model-sized run is admitted by this diagnostic alone.
+Refresh after OS/device/backing/size/lifecycle/concurrency changes.
+
+## Small file-backed task-accounting falsifier (2026-09-19, predeclared)
+
+Extend the diagnostic with explicit --file-control/request/hold modes, using
+one synthetic linked64MiB file per process, fully written/synced/closed before
+the initial baseline. Reopen readonly; map PROT_READ/MAP_PRIVATE/MADV_RANDOM,
+matching reader.cr:setup_mmap; read one byte per host page without dirty COW.
+Reuse this file across three control/request cycles; hold uses one cycle.
+File stays linked through all observations, then closes/unlinks on success.
+Failures exit65 with best-effort atexit unlink; SIGKILL can leave the printed
+unique /private/tmp/cogni-residency-file-* fixture for explicit cleanup.
+
+Same64MiB/three cycles/five-second endpoints and512MiB/60s/floor30% runner;
+fresh sequential processes, quiet bypass, no model/queue/GPU work. Positive
+held control must first detect>=48MiB **task resident size**, then recover
+within8MiB. Require that signal on each touched cycle; control/request residuals
+must be within8MiB of initial baseline, request also within8MiB of matched
+control. Missing sensitivity/control drift is inconclusive, never pass. Keep
+phys_footprint/Metal size as raw telemetry; do not substitute their zero for
+evidence that clean file pages were reclaimed. The file is already warm from
+creation: this is not a cold file-I/O benchmark.
+
+DoD: native build, strict CLI negatives, ten checker tests including file-mode
+identity/insensitive footprint/retained resident negatives, held-positive then
+control/request guarded runs, offline --file checker, fixture cleanup. A pass
+means bounded task-accounting recovery only, not physical-global unpinning,
+cache eviction, actual residency preparation,16.8GB model safety or TTFT gain.
+Rollback is diagnostic-only. Artifacts: `/private/tmp/qwen-residency-file.nRcgXY/`.
+
 ## Small physical-footprint result (2026-09-19)
 
 Bounded reclamation gate passed on Apple M2 Max, macOS26.6.2 (25G83).
