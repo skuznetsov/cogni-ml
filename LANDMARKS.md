@@ -28115,3 +28115,22 @@ Refresh after source/toolchain/device/model/workload changes.
 - Next inspect multi-kernel command stage/budget, not repeat the same replay.
   Root cause, speedup/default promotion remain open. Evidence/hashes and decay:
   docs/qwen-prefill-command-trace.md, top section; pair directory above.
+
+### Continuation 2026-09-18 — Suffix-only direct succeeds with tiny pregate retained
+
+- Existing gate195 is a new discriminator, not another split or consumed retry:
+  observed rows195 switch to direct; earlier/later4/8 stay pregate. No engine
+  edits/default promotion. All260 compiled/input hashes and binary/model identity
+  match; metadata dry and31 focused specs pass (CLT, isolated Crystal cache).
+- One attempt admitted78%,70/30 controls retained; exit0/observer0, both calls
+  complete, expected second-output digest. Route checker covers195 standalone
+  calls:15 suffix direct,60 tiny pregate. Synthetic positive +4 negatives qualify
+  checker only.44 samples78->min45->76%, no errors/kill/timeout; tree exits.
+- Call2 6.234s, prefill+top1 3.311s, decode-body9.43 tokens/s; not a speedup
+  comparison. ROBUST bounded replay: tiny route changes unnecessary for this
+  success, not causal/stability proof. Luna review is correlated, not replication.
+- Attempt consumed. Next investigate context-aware routing across suffix lengths
+  and short-prefix regression controls;195 is a diagnostic separator, not a
+  justified universal threshold. Earlier splits are not a new discriminator.
+  Evidence/hash/decay scope: docs/qwen-prefill-command-trace.md top section,
+  `/private/tmp/qwen-suffix195.3gnnjT/`. Preserve unrelated FFN/memory WIP.

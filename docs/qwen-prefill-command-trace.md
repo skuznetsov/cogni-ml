@@ -1,5 +1,73 @@
 # Ordinary prefill command diagnostics
 
+## Suffix-only route discriminator (2026-09-18, predeclared)
+
+Re-reading the completed direct trace identifies standalone rows2048,1668,195,
+8,4,3; the default trace stops during195. In both, rows8/4 already occur before
+the second call. Thus gate1 versus default1024 changes earlier short commands,
+not only the failing195-row interval. Prior three/two-stage successes and the
+fresh-process attention-only pregate failure make another identical stage split
+weakly discriminating; do not repeat that experiment.
+
+Use the existing gate195, no engine/kernel edit: rows195 select direct, rows8/4
+retain default pregate, rows3 retain scalar-row attention, and initial2048/1668
+remain direct. This is suffix-only for the observed trace, not a context-aware
+production policy: any newly observed row count195..1023 would also change.
+Prediction: if changing195 alone suffices for this observed replay, both calls
+complete with the saved second-output digest despite earlier/later pregate8/4.
+A failure rejects that bounded recovery attempt, not all future executions.
+A pass does not establish causality, hidden-state parity, speed or stability.
+
+One fresh attempt, preserving consumed earlier pairs; gate70/30, cap24GiB,
+timeout300s/watchdog180s, lease0 and first-failure stop. Reuse the instrumented
+binary only after all compiled-source/bridge/input hashes and model stat match;
+new manifest pins the wrapper and updated admission checker separately. Actual
+pipeline names must corroborate195 direct and8/4 pregate within enclosing calls.
+No saved-session tools execute. Metadata-only validation and31 focused
+stage/trace/tail specs pass; a sandbox process-group admission refusal is kept
+separately, not counted as a GPU attempt. Artifacts:
+`/private/tmp/qwen-suffix195.3gnnjT/` (launcher) and `attempt/` (validated dry run).
+Rollback removes the environment override; no production default is changed.
+
+### Result: suffix195 direct passes while tiny batches remain pregate
+
+One attempt was admitted at78%, with the same binary SHA256
+`c9f10d244f5f6382c0c04c913e0c80067b686f3b02071fce123ddbafe4714661`.
+All260 source/input/bridge hashes, model stat identity and binary identity
+matched before and after. Both calls and final completion passed the launcher's
+assertions; call2 output SHA256 remains
+`ed251864987c367e9641fbdc89c1d83e9bf0fa2e3eecef8f301c79f619bfac81`.
+No tool calls. Exit0, observer0, wall89,235.810ms; call1 total75,107.1ms,
+call2 total6,233.9ms (prefill+top1 3,311.2ms, decode-body9.43 tokens/s).
+Unbalanced diagnostic timings are not speedup evidence.
+
+The route checker verifies all195 standalone intervals:15 suffix195 direct
+bindings,60 rows4/8 pregate bindings, remaining scalar/large direct routes
+unchanged. It checks exact shape/layer sets and completed enclosing calls,
+not GPU-internal attribution or the specialized final layer. Qualification
+accepts an explicitly synthetic relabelled positive and rejects the actual
+gate1 trace, failed default trace, wrong tiny binding and missing terminal.
+Those controls qualify parsing only; the new complete run is the live positive.
+Forty-four samples:78->min45->76%, no collection errors, Metal error, memory
+kill or timeout; final observer sees no workload tree. Attempt is consumed.
+
+ROBUST for this bounded successful replay with tiny4/8 still pregate. Changing
+tiny batches was not required for this success; this is not a proof that the
+195-row pregate kernel causes the intermittent error. Whole-command budget,
+resource lifetime and host/driver history remain confounders. Do not promote
+195 as a production threshold: it was chosen to separate observed shapes.
+Next candidate policy must include prefix/context and validate other suffix
+lengths plus short-prefix regressions; no such policy is implemented here.
+Refresh after source/model/input/device/toolchain drift or artifact loss.
+SHA256 (paths relative to the experiment root above):
+
+- `replay.py`: `a046d1295305990ebda6665c57432078a94e847788f75f29032b3e2e350c51dc`.
+- `check_routes.py`: `8444c0c71a9a04a6a7d2f094c3cf6eb1d847c9b9f63cb875a8f05cbd991bff63`.
+- `attempt/manifest.json`: `29b56f68ffad113fad0b9a1250866b17ec2533c5aeef658937f1cd220633fc47`.
+- `attempt/run.stdout.log`: `9ff40b7b764083fd3fd55bc2d4458b5c2d0a318f0212d590090975e4d93cd3f5`.
+- `attempt/run.stderr.log`: `c524dcdf7a90af262ef161477d6d4b17f78b335e7c684570163c077abf92e35a`.
+- `attempt/memory.jsonl`: `5aaf70c53dccff361aa366c2c531da40a4f1b3bb9d5f543d51b98659e3d87289`.
+
 ## Instrumented default fails; scoped admission is now70/30 (2026-09-18)
 
 The operator authorized initial free memory >=70%, retaining the30% runtime
