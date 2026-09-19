@@ -1,5 +1,53 @@
 # Ordinary prefill command diagnostics
 
+## Instrumented default fails; scoped admission is now70/30 (2026-09-18)
+
+The operator authorized initial free memory >=70%, retaining the30% runtime
+floor, 24GiB cap, 300s workload timeout, 180s command watchdog, zero-wait lease
+and first-failure stop. This changes only the documented64GiB replay profile,
+not global runner defaults. Admission actually observed78%; this attempt
+would also have passed the prior75% gate. It supplies no evidence about
+starting below75%, and the earlier43% minimum is not a guaranteed demand bound.
+
+One default attempt used the pinned instrumented binary/input/source of the
+direct attempt below. Effective numerical controls differ only by the direct
+gate override; admission policy and host/order differ. Call1 completed:
+total81,179.5ms, prefill+top1 77,708.9ms, pp_top1 100.54 tokens/s, decode-body
+8.69 tokens/s, output27 tokens. The second input matched8,035 prompt tokens,
+7,839 cached,196 suffix, capacity8,845. No saved-session tools were executed.
+
+Call2 failed at start7839/rows195/layer23, sequence7. Its actual binding was
+`qwen35_attn_decode_rows_sg4_pregate`, followed by `Impacting Interactivity`
+and completion_status=-6. Direct completed the matching layer23 interval
+(host155.173ms), as well as layer35. The earlier uninstrumented default failed
+at layer35 instead: do not attach the failure to one fixed layer. Binding
+telemetry is not kernel execution attribution; the failed command also owns
+projections, normalization, FFN and final add. No second-call completion or
+output-parity result exists for default, and no speedup is established.
+
+Default exit1, observer0, monotonic wall91,627.484ms. Its45 memory samples were
+78% -> minimum45% ->75%, with no collection errors, memory kill or runner
+timeout. Final observer reports the workload tree absent. This does not rule
+out memory-related GPU effects. Both attempt markers are consumed and
+`pair-stopped.json` forbids retry. ROBUST bounded failure reproduction and
+stop behavior; causal attribution and default promotion remain open.
+Next discriminate command-stage/budget effects before another GPU experiment.
+
+The70% admission sidecar preserved the pinned launcher and post-run identity
+checks. Only after that run ended was the repository checker changed75->70;
+its old manifest hash is now intentionally stale, not a historical mismatch.
+Boundary/CLI tests failed against75 and then passed all5 methods against70;
+refusal exit code75 remains unchanged. Policy rollback is restoring75, never
+resetting consumed attempts. Historical pending instructions below are superseded.
+
+Artifacts: `/private/tmp/qwen-pipeline-pair.JKEUrc/default/` (ephemeral); refresh
+on artifact loss or source/model/input/device/toolchain drift. SHA256:
+
+- Admission sidecar: `00b15e99bce0a8a6ec75957b28388dc26fe6d54d63d8855a216906b5c48ec10e`.
+- Default stdout: `0e530fbb6807bad4a041e390d54f9becb97533922dab34775df38803261f0071`.
+- Default stderr: `bcc3908630e9556b2947f95eb4b411fdabd7f59b13026c4261ab2611db5c7b6f`.
+- Default memory: `de1e346aa5c5522accd0a9225f7fd2dd29d3bbbcaf3a6ea10a62fe077da2839b`.
+
 ## Instrumented direct passes; default admission pending (2026-09-18)
 
 At HEAD `5c13d27f` plus the unchanged pre-existing FFN WIP, a fresh release

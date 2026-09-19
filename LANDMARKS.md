@@ -28097,3 +28097,21 @@ Refresh after source/toolchain/device/model/workload changes.
   parity beyond checked output and default promotion remain open. Artifacts,
   hashes, exact continuation: docs/qwen-prefill-command-trace.md, top section;
   `/private/tmp/qwen-pipeline-pair.JKEUrc/`. Refresh on identity/artifact drift.
+
+### Continuation 2026-09-18 — Traced default failure; operator admission70/30
+
+- Operator reduced scoped64GiB replay admission75->70, runtime30 unchanged.
+  Actual admission78; no below75 startup evidence. Cap/timeout/watchdog/lease
+  and pinned binary/input/numerical controls preserved. No global runner edit.
+- Default call1 completed, call2 failed start7839/rows195/layer23 sequence7,
+  actual SG4 pregate binding, Impacting Interactivity/-6. Direct completed
+  the same shape/layer. Earlier default failed layer35: location is variable.
+- Exit1/observer0, wall91.627s;45 samples78->min45->75%, no collection errors,
+  memory kill or timeout, final workload tree absent. Both attempts consumed;
+  pair-stopped forbids retry. ROBUST scoped reproduction/stop, not kernel blame.
+- Checker changed only after post-run identity validation. Red75->green70
+  admission specs:5 methods pass; refusal exit code75 retained. Old manifests
+  intentionally stale and consumed. Rollback policy to75 without resetting runs.
+- Next inspect multi-kernel command stage/budget, not repeat the same replay.
+  Root cause, speedup/default promotion remain open. Evidence/hashes and decay:
+  docs/qwen-prefill-command-trace.md, top section; pair directory above.

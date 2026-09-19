@@ -15,7 +15,7 @@ PROFILE_BYTES = 64 * 1024**3
 RUNTIME_FLOOR_PCT = 30
 # Explicit operator policy (2026-09-18), not a measured demand bound.
 # This checker reports the runtime floor but does not configure the runner.
-REQUIRED_INITIAL_PCT = 75
+REQUIRED_INITIAL_PCT = 70
 
 
 def assess(report):
