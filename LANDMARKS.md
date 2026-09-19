@@ -28419,3 +28419,25 @@ Refresh after source/toolchain/device/model/workload changes.
   guards and unrelated WIP. Refresh on OS/device/backing/lifecycle/size/
   concurrency change. This counter set is not an exhaustive API impossibility
   claim; global wired noise alone cannot clear the full-model residency gate.
+
+### Continuation 2026-09-19 — Reclaim detector fails its CPU-only control
+
+- Public mincore/page disposition reports presence, not driver wiring; region
+  submap info has user_wired_count but no pages_wired. Scope is these inspected
+  SDK/XNU interfaces, not an exhaustive impossibility result or shipped-source
+  certificate. Do not implement the earlier nonexistent-field suggestion.
+- New spec/vm_msync_reclaim_control.c: one16KiB readonly/private temporary file
+  mapping, no Metal. Before mlock, while locked, and after successful munlock,
+  MS_SYNC|MS_INVALIDATE returns0/errno0 and mincore remains1. Thus this recipe
+  cannot qualify eviction or distinguish wiring here. Archived EBUSY wording
+  is not a valid gate on the tested host. First byte intact, fixtures removed.
+- Initial and strengthened controls exit0 with15s/128MiB/floor30%, startup79%;
+  warning-free builds and byte-identical persisted reproducer. No engine edits,
+  GPU work or memory-pressure experiment. Evidence/source links/hash lineage:
+  docs/qwen-prefill-command-trace.md reclaimability result;
+  `/private/tmp/qwen-vm-reclaim.bwq07D/`. Base8d067138.
+- Park model-sized residency rather than grow an insensitive measurement.
+  Reopen for a qualified attributed signal or different safe discriminator.
+  Performance return pointer remains first-command scheduling (~7.8s elapsed,
+  not a root-cause certificate); TTFT/speed remain open. Preserve model70/30%,
+  24GiB guards and unrelated WIP. Refresh on OS/SDK/backing/lifecycle changes.

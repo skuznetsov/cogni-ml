@@ -1,5 +1,84 @@
 # Ordinary prefill command diagnostics
 
+## Reclaimability instrument rejected on a one-page control (2026-09-19)
+
+The proposed `msync(MS_SYNC | MS_INVALIDATE)` plus mincore discriminator fails
+before involving Metal. On this host (Darwin25.6.0/build25G83,16KiB pages),
+`spec/vm_msync_reclaim_control.c` creates one unique linked file, writes/syncs
+it, opens it read-only and maps PROT_READ/MAP_PRIVATE. The strengthened run
+observes all three states; mlock and munlock both succeed:
+
+| State | msync return | errno | mincore in-core |
+| --- | ---: | ---: | ---: |
+| Never locked, touched | 0 | 0 | 1 |
+| mlock held | 0 | 0 | 1 |
+| After munlock | 0 | 0 | 1 |
+
+This rejects success/EBUSY as a wiring detector here, and provides no eviction
+sensitivity in the clean control. It does not show that an unlocked page is
+pinned. The final first-byte reread is correct; its historical output label
+`refault` does not establish a page fault, since mincore remained positive.
+No counterfactual about GPU ownership follows from a CPU mlock control.
+Stop this route without enlarging it, adding a GPU workload, or using global
+memory pressure. The experiment is not an engine optimization or bug fix.
+
+Source cross-checks (upstream XNU main inspected2026-09-19, not a certified
+source match for the installed kernel):
+
+- [mincore implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_mman.c#L1519-L1542)
+  derives MINCORE_INCORE from page-query PRESENT. Its msync syscall wrapper
+  maps Mach return codes without an EBUSY case, unlike the
+  [archived msync manual](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/msync.2.html).
+- [vm_map_msync](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/vm/vm_map.c#L20163-L20218)
+  can skip objects without a pager or marked internal/private and still
+  return success. This is a possible mechanism, not the established cause of
+  this local observation; the probe did not inspect its backing object graph.
+- [memory_object_lock_page](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/vm/memory_object.c#L184-L195)
+  does not flush wired pages. That internal kernel predicate is not exposed
+  by the public page disposition used above.
+- Installed SDK vm_region_submap_info_64 exposes user_wired_count, not
+  pages_wired. VM_PAGE_INFO_BASIC disposition flags in vm_statistics.h have
+  no wired bit. XNU's [add_wire_counts](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/vm/vm_map.c#L6023-L6095)
+  updates a separate wired_count for kernel wiring without incrementing
+  user_wired_count. Thus a zero user count cannot rule out kernel wiring.
+  Installed vm_map.defs:380-427 labels mach_vm_region_info as debug-kernel
+  only and its 64-bit variant obsolete; that is not a qualified production
+  fallback. This review covers those APIs, not every possible private
+  driver tool. Metal allocatedSize remains inventory; endResidency permits
+  reuse rather than promising immediate OS eviction
+  ([Apple contract](https://developer.apple.com/documentation/metal/mtlresidencyset/endresidency())).
+
+Validation: warnings-as-errors C build, successful owned-file lifecycle,
+first-byte reread and exact cleanup; both initial and strengthened controls exit0
+under15s/128MiB/floor30%, startup79%, quiet bypass. Each locks just16KiB and
+uses no Metal/GPU/queue. Exit0 means the observation completed, not reclamation
+passed. The first run lacked the pre-mlock clean control; the second added it.
+Source base8d067138, no production or unrelated WIP edits. Reproduce with:
+
+```sh
+env DEVELOPER_DIR=/Library/Developer/CommandLineTools xcrun clang \
+  -std=c11 -Wall -Wextra -Werror spec/vm_msync_reclaim_control.c \
+  -o /private/tmp/qwen-vm-reclaim.bwq07D/control_v2
+env COGNI_RUN_SAFE_MIN_FREE_PCT=30 COGNI_RUN_SAFE_REQUIRE_QUIET=0 \
+  COGNI_RUN_SAFE_WAIT_QUIET_SEC=0 scripts/run_safe.sh \
+  /private/tmp/qwen-vm-reclaim.bwq07D/control_v2 15 128
+```
+
+Ephemeral artifacts: `/private/tmp/qwen-vm-reclaim.bwq07D/`.
+Final source SHA256 `e0c3a1dd35c752595a5e3ed3aee73c7fe7d741a5ef41df0b6e02e6c95ee06924`;
+binary `6f7661234fd4f4f788abea26e48bad74833351cd662762b6eb8228d2efe5635b`;
+control_v2.log `0944ec41657c79f945450417b968d2af63717940472308930ab7122b5bc24620`.
+
+Decision: the inspected public counters and this invalidate recipe do not
+qualify a driver-release gate. Park model-sized residency integration; reopen
+only for a newly qualified attributed signal or a materially different safe
+experiment, not repeated RSS/global-wire endpoints. Preserve the earlier
+first-command scheduling observation as the performance return pointer;
+its cause and any TTFT benefit remain open. Refresh this bounded rejection
+on OS/SDK/backing/lifecycle changes. No general API-impossibility claim.
+Correlated Luna source/reproducer review found no blocker for this narrow
+result; it does not independently replicate the runtime measurement.
+
 ## Counter result: live pages visible, unpinning still unknown (2026-09-19)
 
 The new mapping-scoped counter sees the requested live allocation where task
