@@ -1,5 +1,57 @@
 # Ordinary prefill command diagnostics
 
+## Instrumented direct passes; default admission pending (2026-09-18)
+
+At HEAD `5c13d27f` plus the unchanged pre-existing FFN WIP, a fresh release
+build passed under run_safe300s/8GiB with CLT. Both metadata-only routes and
+the22 pipeline/command/SG4 specs passed. The two manifests have identical
+source hashes, model identity, binary and input; their controls differ only
+in `QWEN35_PREFILL_ATTN_ROWS_SG4_DIRECT_GATE_MIN` (direct1 versus absent/default).
+Both use `COGNI_METAL_PIPELINE_TRACE_PREFIX=qwen35_attn_`, initial75%, runtime30%,
+24GiB cap, 300s workload timeout, 180s command watchdog and zero-wait lease.
+No saved-session tool is executed. The launcher separately waits for its
+observer; workload timeout and launcher wall time are not interchangeable.
+
+Direct was admitted at75% and completed both calls. The actual second-call
+start7839/rows195/layer35 interval contains
+`pipeline="qwen35_attn_decode_rows_sg4"`, followed by `call_end`, host130.216ms.
+This is now an observed host pipeline binding, not routing inference or a
+per-kernel GPU timer. Traces also show direct SG4 for the later4-row batches,
+so the override is not isolated to the195-row suffix.
+
+Call1: total77,936.5ms, prefill+top1 74,691.6ms, reported104.60 pp_top1 tokens/s
+and9.39 decode-body tokens/s. Call2: total6,409.0ms, prefill+top1 3,431.9ms,
+decode-body9.30 tokens/s. Both output27 tokens. Input matched prompt8,035,
+cached7,839, suffix196, capacity8,845; second content SHA256 remained
+`ed251864987c367e9641fbdc89c1d83e9bf0fa2e3eecef8f301c79f619bfac81`, no tool calls.
+Exit0, observer0, `run_pass=true`; monotonic launcher wall93,767.110ms.
+Forty-six samples: first75%, minimum43%, final72%, no collection errors.
+No Metal failure, memory kill or timeout signature; final observer reports
+root absent and no workload-tree PIDs. Sampled headroom is not a safety bound.
+
+The subsequent default launch returned75 at admission72%, before any attempt
+marker, model load or GPU work. Default's dry result remains valid; direct
+is consumed and must not be repeated. Admission refusal is not a launched
+attempt: later admission may be retried only under the unchanged75% gate and
+fresh identity check. A launched workload/validation failure seals the pair.
+This distinction was explicitly checked during Luna's bounded wrapper review.
+
+Verdict: ROBUST bounded direct replay and observed pipeline selection only.
+The same-guard comparison is incomplete; root cause, pregate culpability,
+speedup and default promotion remain open. Host/order/logging confounds persist.
+Next command when admitted: `python3 /private/tmp/qwen-pipeline-pair.JKEUrc/replay.py run default`.
+Do not lower the gate, modify pinned sources or reuse older consumed launchers.
+
+Artifacts are ephemeral in `/private/tmp/qwen-pipeline-pair.JKEUrc/`; refresh
+on source/model/device/input/toolchain drift or artifact loss. SHA256:
+
+- Binary: `c9f10d244f5f6382c0c04c913e0c80067b686f3b02071fce123ddbafe4714661`.
+- Build manifest: `6bdac840fd5c1fdb6313481aa8dd8ea2938750f96e6833ca48363d2367669a33`.
+- Wrapper: `b43c6a3ce6d7621906dac7a819bd0aa5d8ec7f3a60e418135852019dc03bfedb`.
+- Direct stdout: `6fd7ebbaae82332a3cd1b27c072631e304aebbe25b13c01be8aaece44ccfec62`.
+- Direct stderr: `3b978db5e3c09d4ac1e9067fec6a70645208ff9624fc2c1d835f9def479b682e`.
+- Direct memory: `e4f097512c088db89c68aae741bfecc24109b478dba78c15504bb16577dbd341`.
+
 ## Actual pipeline selection telemetry (2026-09-18)
 
 The next discriminator must observe the actual bound pipeline, not infer it

@@ -28079,3 +28079,21 @@ Refresh after source/toolchain/device/model/workload changes.
   Root cause, parity and default promotion remain open. Refresh on encoder,
   routing/model/input/device/toolchain drift; unset prefix to disable tracing.
   Details and remaining claim boundaries: `docs/qwen-prefill-command-trace.md`.
+
+### Continuation 2026-09-18 — Instrumented direct succeeds; control awaits75%
+
+- Fresh release build plus both metadata dry routes and22 focused specs pass.
+  Source/binary/input identical across prepared arms; only direct-gate minimum
+  differs. Shared trace prefix and75/30, cap24GiB/300s/watchdog180s/lease0 retained.
+- One direct attempt passes both calls; layer35/start7839/rows195 explicitly
+  binds SG4 direct and returns. Second content digest matches, no tool calls.
+  Launcher93.767s; call1 77.937s, call2 6.409s.46 samples75->min43->72%, no errors
+  or failure signatures; final observer sees no workload tree. Not a speed claim.
+- Default admission72% returned75 before attempt/model/GPU. Direct consumed;
+  default pending, with dry/manifest ready. Admission refusal is not an attempt;
+  first launched failure seals pair. Next unchanged wrapper `run default` only
+  at>=75 with fresh identity check. No lower guard or unrelated process control.
+- ROBUST direct replay/actual binding; same-guard pair, causal attribution,
+  parity beyond checked output and default promotion remain open. Artifacts,
+  hashes, exact continuation: docs/qwen-prefill-command-trace.md, top section;
+  `/private/tmp/qwen-pipeline-pair.JKEUrc/`. Refresh on identity/artifact drift.
