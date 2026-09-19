@@ -1,5 +1,98 @@
 # Ordinary prefill command diagnostics
 
+## Small physical-footprint result (2026-09-19)
+
+Bounded reclamation gate passed on Apple M2 Max, macOS26.6.2 (25G83).
+Fresh processes, anonymous no-copy 64MiB, three control/request cycles,
+five-second observations, no GPU commands. Residual phys_footprint relative
+to each process's **initial** baseline:
+
+| Mode | Cycle 1 | Cycle 2 | Cycle 3 |
+| --- | ---: | ---: | ---: |
+| Control | 0 B | 0 B | 0 B |
+| Request residency | 32,768 B | 16,384 B | 16,384 B |
+
+The held-positive control remained 67,158,064B above baseline at five seconds,
+then returned to +16,384B after release. Thus this measurement detects a held
+64MiB allocation; the result is not merely weak-object teardown. Requested
+payloads did not accumulate at the sampled endpoints. All three guarded runs
+exit0, startup free78/78/79% (hold/control/request), no kill/abort. Each uses
+60s/512MiB and floor30%, not the model-sized benchmark guard budget.
+
+Verification: native build with ARC/Wall/Wextra; three CLI negatives exit64
+before device creation; seven checker tests pass, including retained payload,
+cumulative baseline, insensitive positive control and malformed/duplicate exit
+records; checker on the three raw logs returns bounded_reclamation=true and
+model_safety_proven=false. Native source unchanged between build and runs.
+Correlated Luna review: ROBUST for this observed lifecycle/result. The checker
+validates measurements, not log provenance or the self-reported no-GPU field;
+those claims also rely on inspecting the native source and observed invocation.
+
+```sh
+env DEVELOPER_DIR=/Library/Developer/CommandLineTools xcrun clang++ \
+  -isystem /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 \
+  -std=c++17 -fobjc-arc -Wall -Wextra bin/metal_residency_footprint_probe.mm \
+  -framework Metal -framework Foundation -o /private/tmp/qwen-residency-footprint.G1Ogcw/probe
+# Run each mode sequentially in a fresh process; preserve its complete runner log.
+env COGNI_RUN_SAFE_MIN_FREE_PCT=30 COGNI_RUN_SAFE_REQUIRE_QUIET=0 \
+  COGNI_RUN_SAFE_WAIT_QUIET_SEC=0 scripts/run_safe.sh \
+  /private/tmp/qwen-residency-footprint.G1Ogcw/probe 60 512 --request
+PYTHONDONTWRITEBYTECODE=1 python3 spec/metal_residency_footprint_spec.py
+python3 scripts/check_metal_residency_footprint.py \
+  /private/tmp/qwen-residency-footprint.G1Ogcw/control.log \
+  /private/tmp/qwen-residency-footprint.G1Ogcw/request.log \
+  /private/tmp/qwen-residency-footprint.G1Ogcw/hold.log
+```
+
+Evidence SHA256, all logs/binary in the artifact directory above:
+
+```text
+probe source b155ee0f810b8fed0b093e6873aab826c4374137b9632baeb42c6c40119f50ff
+probe binary 32c70ac3f5e6a73abdcaac37fcfbb8957455cbd794d0947571e5da8b0059eec2
+hold.log     22d057eab10bb184565e9aa758dbcf463b02c5983f8ad53308a4e19d97487c14
+control.log  216c8f855591090daa8f0b722589500ac745f9124193c7e501d25af9e1f648ee
+request.log  16d754b1eeb15c496ed47d85a4f574ee3bb5f9c489d44ef6e9f1d8a30c12aab5
+```
+
+This does not refute the upstream retention report on a different OS/workload,
+prove requestResidency actually prepared every page, or qualify file-backed
+16.8GB model memory. No production residency change, dummy GPU workaround,
+heartbeat, throughput or first-output benefit is admitted. Next discriminator:
+small file-backed mmap with its own positive measurement control; clean file
+pages need not have anonymous-memory phys_footprint accounting. Keep the same
+small allocation/cap rather than jumping to model size. Refresh this result if
+OS/device, backing/storage mode, lifecycle, allocation size or concurrency changes.
+
+## Small physical-footprint falsifier (2026-09-19, predeclared)
+
+`bin/metal_residency_footprint_probe.mm` runs fresh-process control, request-only,
+and positive-hold modes. Each allocation is a touched anonymous 64MiB mmap,
+wrapped as shared no-copy Metal memory with nil deallocator. Control/request
+perform three sequential teardown cycles; hold retains one allocation for the
+same observation interval before freeing it. No model, queue, GPU commands,
+heartbeat or production changes. Per-process cap512MiB/60s; memory floor30%,
+quiet bypass, sequential runs only. At most 192MiB could accumulate from the
+three requested payloads; process termination is the recovery boundary.
+
+Record task_vm_info phys_footprint, resident size and Metal allocated size before
+allocation, after touching, after setup, after teardown and at 250/1000/5000ms.
+Use the first baseline for every cycle so leaked prefixes cannot disappear into
+a raised baseline. Predeclared checker thresholds: touched/held positive signal
+at least48MiB; control residual within8MiB of initial baseline; request residual
+within8MiB of its initial baseline AND matched control at all three 5s endpoints.
+Missing records, invalid metrics, insufficient signal, drifted controls or short
+observation periods are inconclusive. Exceeding request tolerance with valid
+controls rejects this bounded reclamation hypothesis. No tolerance widening
+after observing results. Retain raw values and auxiliary metrics, not just pass.
+
+DoD: native build; strict CLI negatives; seven Python checker tests including
+retention, rising baseline, held-positive failure, drift and malformed evidence;
+guarded hold/control/request completions and offline checker. An intentional
+64MiB hold must be visible and then recover. Rollback removes diagnostic files
+only. Even a pass is not file-backed 16.8GB model safety, residency readiness,
+physical-system-wide free memory, throughput or a cold-start improvement.
+Artifacts: `/private/tmp/qwen-residency-footprint.G1Ogcw/`.
+
 ## Residency audit and bounded API qualification (2026-09-19)
 
 Hypothesis, not root cause: explicitly preparing weight residency could reduce

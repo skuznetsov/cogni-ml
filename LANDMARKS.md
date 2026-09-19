@@ -28347,3 +28347,25 @@ Refresh after source/toolchain/device/model/workload changes.
   Evidence/commands/identities/decay: docs/qwen-prefill-command-trace.md residency
   audit; spec/metal_residency_lifecycle_test.mm; artifacts
   `/private/tmp/qwen-residency-audit.kT3vP3/`. Preserve unrelated WIP.
+
+### Continuation 2026-09-19 — Bounded residency footprint reclamation
+
+- Added standalone anonymous no-copy64MiB diagnostic: fresh hold/control/request
+  processes, three request/control cycles, five-second endpoints, no model,
+  queue, GPU commands or production engine changes. M2 Max/macOS26.6.2 only.
+- Held-positive signal67,158,064B, released residual16,384B; control residuals
+  [0,0,0], request [32768,16384,16384]B against initial process baseline.
+  All guarded runs exit0; startup78/78/79%, floor30%, cap512MiB/60s. No payload
+  accumulation at sampled endpoints; no inference about system-wide free RAM.
+- Native build and three CLI negatives pass; seven offline checker tests pass;
+  actual logs pass the predeclared8MiB tolerance with positive signal>=48MiB.
+  Checker rejects drifted controls, missing/invalid evidence and duplicate exit
+  records. Source/binary/log hashes and commands in
+  docs/qwen-prefill-command-trace.md; artifacts
+  `/private/tmp/qwen-residency-footprint.G1Ogcw/`.
+- Next: small file-backed mmap discriminator with a backing-appropriate positive
+  measurement control. Anonymous phys_footprint accounting is not clean-file
+  page accounting; do not promote to16.8GB model safety or effective residency.
+  Root cause/TTFT/speed remain open; no heartbeat/dummy-GPU workaround admitted.
+  Refresh after OS/device/backing/lifecycle/size/concurrency changes. Preserve
+  unrelated WIP and existing70/30%,24GiB model guards.
