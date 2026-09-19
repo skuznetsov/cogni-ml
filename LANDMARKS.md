@@ -28043,3 +28043,18 @@ Refresh after source/toolchain/device/model/workload changes.
   removal and runtime floor30 differ. Live launch admission74% rejected before
   model load; no GPU attempt consumed. Next: same control at >=75 with fresh
   identity check. No new timing, parity or runtime-shutdown evidence.
+
+### Continuation 2026-09-18 — Default-gate control fails at second-call layer35
+
+- Operator said proceed after74% refusal; actual launch75% passed the unchanged
+  profile. One attempt, runtime30/cap24GiB/timeout300s/lease retained. Pinned
+  source/model/binary matched. No retry; wrapper now consumed.
+- Call1 completed80.767s; call2 input matched cached7,839/suffix196. At
+  start7839/rows195/layer35, Metal Impacting Interactivity -> completion -6.
+  No second result. Exit1, observer0, wall93.716s;46 samples75->min39->71%,
+  no collection errors, memory kill or runner timeout. Known processes exited.
+- ROBUST reproduction, not causal proof or speed evidence. Candidate direct
+  route passed but host/headroom/order/runtime floor differ; failed layer is
+  not a per-kernel attribution. Next inspect failed command and qualify a
+  same-guard route discriminator. Do not promote defaults from this pair.
+  Logs/hashes/scope: `docs/qwen-prefill-command-trace.md`, default-gate result.

@@ -1,5 +1,49 @@
 # Ordinary prefill command diagnostics
 
+## Default-gate control reproduces second-call Metal failure (2026-09-18)
+
+At source HEAD `f0611c69` plus unchanged FFN WIP, the prepared default-gate
+control was authorized to proceed despite the previous74% snapshot. Actual
+launch admission was75%, so no exception or launcher modification was needed.
+One attempt ran with runtime floor30%, cap24GiB, timeout300s and zero-wait
+Metal lease. Source/model/binary identities matched before and after execution.
+The metadata dry result remained valid. No rebuild or production change.
+
+Call1 completed: total80,767.4ms, prefill+top1 77,493.6ms, reported100.82
+pp_top1 tokens/s and9.24 decode-body tokens/s, output27 tokens. The second
+input matched the candidate's hash and dimensions: prompt8,035, cached7,839,
+suffix196, capacity8,845. Call2 failed at start7839/rows195, full-attention
+layer35, trace sequence10. The previous layer31 returned; the failed layer
+recorded142.547ms host time. Metal reported `status=5 error_code=1`,
+`Impacting Interactivity (0000000e:kIOGPUCommandBufferCallbackErrorImpactingInteractivity)`,
+then `completion_status=-6`. There was no second call-end, completion event
+or second-output digest. The layer timer covers its routed command, not a
+per-kernel GPU interval; this does not identify an individual faulty kernel.
+
+Runner exit1, observer0, `passed=false`, monotonic launcher wall93,715.884ms.
+The approximate runner counter `~66s` is not elapsed-time authority. Forty-six
+observer samples had no collection errors: first75%, minimum39%, final71%.
+No runtime memory kill or runner timeout occurred; sampled pressure does not
+exclude a transient driver/resource issue. Known runner/probe/watchdog PIDs
+were absent after exit. The attempt is consumed; no retry was performed.
+
+Together with the direct-gate success above, this strengthens the short-row
+route hypothesis but does not prove pregate is the root cause. The same binary
+and input are controlled; host state, initial headroom, order and runtime
+floor differ. The gate override also affects other short constrained batches.
+Source selection with the default1024 threshold points to pregate for195 rows;
+this is source/control inference, not a captured kernel-level failure. Verdict:
+ROBUST bounded reproduction; VULNERABLE as causal proof, speed comparison or
+production-default justification. Next narrow step: inspect the failed command's
+contents and qualify a same-guard route discriminator before another GPU run.
+
+Artifacts: `/private/tmp/qwen-default-gate.KW6gCL/` (ephemeral). Refresh on
+source/model/device/input drift; do not reuse this consumed attempt. SHA256:
+- Manifest: `4021ff71428f44e738bdfe4723098ce4430d8519576b524c3d95a3b1cdad3ed0`.
+- Stdout: `b6c5a06f07bbc087a698cc37beee540b6fbc0abf4acd21c08dead19b313d9a0b`.
+- Stderr: `4203bcfe0bf256b23a174afeab7f7ed7db0dae59122f7ef9c6b37a3a22c09626`.
+- Memory: `592745a7e9b81002163738c4d112f01aafcb2b3a6b70d08e3989e57658faba2b`.
+
 ## Current admission policy: operator-selected 75% / 30% (2026-09-18)
 
 The operator superseded the earlier 80% initial / 35% runtime policy for this
@@ -11,7 +55,7 @@ default changes or unrelated process control are authorized by this slice.
 The read-only checker reports the runtime floor; the launcher's environment
 must actually set `COGNI_RUN_SAFE_MIN_FREE_PCT=30`.
 
-Next control uses the same pinned binary/input with the direct-gate minimum
+The control uses the same pinned binary/input with the direct-gate minimum
 override removed (source default1024), not the successful override1. The
 runtime-floor change is an additional safety-policy difference, so the pair
 is not strictly single-variable; if neither guard fires, it does not itself
@@ -27,10 +71,10 @@ all five test methods passed after the policy update. The new control wrapper
 source/model/binary identity, admits only the two declared control differences,
 and passed metadata-only replay. At the actual launch gate free memory was74%,
 so it exited75 before creating any GPU-attempt marker or loading the model.
-The control remains unmeasured; the prepared wrapper is unconsumed and must
-revalidate identity and pressure on any future invocation. Global runner
-defaults are unchanged. ROBUST for the tested admission boundaries only,
-not a demonstration of runtime30% shutdown or safety under GPU load.
+That preparation did not consume an attempt; the subsequent measured attempt
+is recorded above and is now consumed. Global runner defaults are unchanged.
+The admission tests establish only the tested boundaries, not runtime30%
+shutdown or safety under GPU load.
 
 ## Operator-admitted 79% replay passed (2026-09-18)
 
