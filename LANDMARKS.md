@@ -28058,3 +28058,24 @@ Refresh after source/toolchain/device/model/workload changes.
   not a per-kernel attribution. Next inspect failed command and qualify a
   same-guard route discriminator. Do not promote defaults from this pair.
   Logs/hashes/scope: `docs/qwen-prefill-command-trace.md`, default-gate result.
+
+### Continuation 2026-09-18 — Opt-in actual pipeline binding trace
+
+- Source/log audit scopes layer35 failure to one standalone multi-kernel
+  command through FFN/final add; the earlier shared append ID is not its ID.
+  ROBUST bounded inventory, not attention-kernel causal attribution.
+- Added cached-prefix `COGNI_METAL_PIPELINE_TRACE_PREFIX` diagnostic at the
+  actual non-CPU `ComputeEncoder#set_pipeline` binding. Names are escaped;
+  records flush with native command/encoder handles, sink failures are ignored.
+  Unset/empty is off. No new GPU scheduling or routing operation.
+- Red missing-helper spec followed by22 passing pipeline/command/SG4 tests;
+  normal two-call provider `--no-codegen` passed from crystal_ball with CLT.
+  CPU-only provider check blocked at undefined Device in qwen35_cpu.cr:556;
+  no CPU-only success claimed. No GPU/model load or linked build this slice.
+- Selection is not execution or failure attribution; handles can be reused,
+  synchronous logging can perturb timing. Next rebuild/pin one instrumented
+  binary for same-input/same-trace direct/default comparison at75/30 with
+  existing cap/timeout/lease/first-failure safeguards. Prior attempts consumed.
+  Root cause, parity and default promotion remain open. Refresh on encoder,
+  routing/model/input/device/toolchain drift; unset prefix to disable tracing.
+  Details and remaining claim boundaries: `docs/qwen-prefill-command-trace.md`.

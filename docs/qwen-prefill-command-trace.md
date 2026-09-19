@@ -1,5 +1,65 @@
 # Ordinary prefill command diagnostics
 
+## Actual pipeline selection telemetry (2026-09-18)
+
+The next discriminator must observe the actual bound pipeline, not infer it
+from `full_attn_chunk_routed`. `ComputeEncoder#set_pipeline` now records
+`pipeline.name` immediately after the host FFI binding when the process-start
+environment contains a nonempty matching prefix:
+
+```sh
+COGNI_METAL_PIPELINE_TRACE_PREFIX=qwen35_attn_
+```
+
+Each flushed stderr record contains `phase=selected`, native command/encoder
+handles, and the escaped pipeline name. Configuration is cached once; unset
+or empty disables output. No command boundary, barrier, wait, routing decision
+or GPU dispatch is added. Sink exceptions are swallowed, but synchronous I/O
+can still block or perturb host timing: use a regular local log file, not a
+slow pipe, and do not treat traced timings as an uninstrumented benchmark.
+Handles can be reused and are not durable unique IDs. Correlate only within
+the current synchronous layer-call interval. A binding is not dispatch,
+execution or completion; even the last selected pipeline is not necessarily
+the cause of a command-buffer failure.
+Names alone do not identify compilation variants sharing one function name;
+pin the source/build controls as well. The attention prefix is not a full
+inventory of all kernels encoded in the command.
+
+Read-only failure reconstruction: the earlier log's `command_id=23205873696`
+belongs to a shared layers0-2 append, not layer35. The `read_output=true` path
+flushes before the standalone routed call (`qwen35_cpu.cr:4500-4513`). With
+stage splitting disabled, its one command includes normalization, Q/K/V
+projections, split/QK norms/RoPE, F32 KV write, attention, output projection,
+residual/RMSNorm, FFN gate/up, SwiGLU, down and final add
+(`qwen35_metal.cr:8158-8341`). Commit/wait at8349-8350 precedes readback at8353.
+Thus the observed completion failure covers this whole sequence, not only
+attention. Source predicts SG4 pregate for195 rows; the historical log does
+not capture that binding. Luna's bounded read-only audit agrees; exact
+non-attention kernel variants and the causal culprit remain unknown.
+
+Verification (no GPU or model load): the new spec first failed because the
+helper did not exist; after implementation, the pipeline, prefill-command and
+SG4 safety suites passed together: 22 examples, zero failures/errors. Tests
+cover prefix filtering, distinct direct/pregate/H16/flash names, escaped names,
+sink failure, flush and the source binding hook. The two-call provider probe
+passed `crystal build scripts/cogni_qwen_two_call_probe.cr --no-codegen` from
+`../crystal_ball`, with `DEVELOPER_DIR=/Library/Developer/CommandLineTools`.
+Running that command from cogni-ml first failed shard lookup (`db`); using the
+owning project resolved it. This establishes typechecking, not a linked build
+or live Metal trace. New helper/spec formatting and `git diff --check` pass.
+An additional `-Dcpu_only --no-codegen` provider check is blocked by undefined
+`ML::Metal::Device` at `qwen35_cpu.cr:556`; no CPU-provider success is claimed.
+The new binding hook is confined to the non-CPU encoder branch.
+
+Next: rebuild and pin one instrumented binary, then qualify the same-input
+direct/default discriminator with identical tracing and 75%/30% guards.
+Prior consumed manifests/binaries do not cover this dispatch-source change.
+Retain cap24GiB, timeout300s, command watchdog180s, zero-wait lease and
+first-failure stop; do not promote the route default or claim a speedup.
+Rollback: unset the prefix; remove the helper and single binding hook if this
+telemetry stops providing discriminating evidence. Refresh on encoder/routing,
+model, input, device or toolchain changes. The Metal root cause remains open.
+
 ## Default-gate control reproduces second-call Metal failure (2026-09-18)
 
 At source HEAD `f0611c69` plus unchanged FFN WIP, the prepared default-gate

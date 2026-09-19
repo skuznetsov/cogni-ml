@@ -164,6 +164,7 @@ end
 
 require "./device"
 require "../core/tensor"
+require "./pipeline_selection_trace"
 
 module ML
   module Metal
@@ -199,6 +200,7 @@ module ML
       def set_pipeline(pipeline : ComputePipeline) : self
         @pipeline = pipeline
         MetalDispatchFFI.encoder_set_pipeline(@encoder, pipeline.handle)
+        PipelineSelectionTrace.record(@cmd_buffer.address, @encoder.address, pipeline.name)
         self
       end
 
