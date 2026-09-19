@@ -1,5 +1,50 @@
 # Ordinary prefill command diagnostics
 
+## Operator-admitted 79% replay passed (2026-09-18)
+
+The operator explicitly authorized one attempt at 79% initial free-memory
+pressure instead of the temporary 80% target. This is a one-shot exception,
+not a change to `qwen_two_call_preflight.py`. Runtime floor35%, tree cap24GiB,
+300-second timeout, 180-second command watchdog and zero-wait Metal lease
+remained unchanged; no unrelated process was stopped and no retry followed.
+
+At HEAD `d4b4874e` with the pre-existing FFN WIP preserved, the original pinned
+binary still matched its source/model/control manifest before and after the
+run. No rebuild was needed. Metadata-only input verification passed; 17
+SG4/command-trace specs passed with `DEVELOPER_DIR=/Library/Developer/CommandLineTools`.
+The default Xcode SDK failed the test link on `arm64e.x1`; this was not a test
+assertion failure. An initial sandboxed dry run could not isolate its process
+group; it was retained, and dry/run used authorized unsandboxed isolation.
+
+Fresh one-shot wrapper: `/private/tmp/qwen-direct-replay-79.tqxjyp/replay.py`.
+It validates the original launcher and binary, writes only to the new directory,
+requires at least79% immediately before launch, and retains exclusive attempt
+markers. Both call-end events and completion were observed: exit0, observer0,
+`passed=true`, launcher monotonic wall101,907.060ms. The runner's approximate
+`~72s` counter is not the elapsed-time authority. Fifty observer samples had
+no collection errors: first79%, minimum41%, final73%. No memory kill, timeout
+or Metal completion error was recorded. Sampled headroom is not a guarantee
+against transient pressure or reboot.
+
+Call1: 7,813 prompt tokens, total85,152.8ms, prefill+top1 81,730.5ms,
+reported95.59 pp_top1 tokens/s, decode-body8.88 tokens/s. Call2: resident hit
+7,839 tokens, prompt8,035, suffix196, capacity8,845; total8,416.5ms,
+prefill+top1 5,260.7ms, decode-body8.73 tokens/s, output27 tokens. Its output
+SHA256 matched `ed251864987c367e9641fbdc89c1d83e9bf0fa2e3eecef8f301c79f619bfac81`.
+The layer trace includes rows195 at start7839 and later constrained rows4;
+the direct-gate override is process-global, not a suffix-only intervention.
+
+Verdict: ROBUST for one bounded output replay with the direct-gate override;
+not causal proof of pregate failure, tensor parity, general stability or a
+speedup. No matched control/ABBA or quiet-host comparison was run. Next useful
+discriminator is a separately bounded same-input default-gate control, subject
+to fresh memory/identity admission, not promotion of a production default.
+Identity drift invalidates this certificate; temporary artifacts may expire.
+Manifest/stdout/stderr SHA256 respectively:
+`13555464d29f24d95fc53256b7065d321a08ed3ea68e7060d782dca11e70f5d7`,
+`100618207a5964ed6c962f3abc632c418fad36e916d0d566ada14dbcba0c4862`,
+`0193fa582c40f99e93266d3893dc40ac005bf00612ef99cd271b274024447eb4`.
+
 ## Initial-memory admission for this replay (2026-09-17)
 
 Before a new bounded attempt, run `python3 scripts/qwen_two_call_preflight.py`.

@@ -28018,3 +28018,17 @@ Refresh after source/toolchain/device/model/workload changes.
 - Next: adequate initial headroom, fresh identity check and separately bounded
   direct-gate replay. Do not lower safeguards or stop unrelated processes.
   Details and removal/recalibration trigger: `docs/qwen-prefill-command-trace.md`.
+
+### Continuation 2026-09-18 — One operator-admitted direct-gate replay passes
+
+- Operator allowed one79% start; runtime35%/24GiB/timeout/lease unchanged.
+  Both calls completed, cached7,839/suffix196 and second output digest matched.
+  Observer50 samples: 79->minimum41->73%, no errors; launcher101.907s, exit0.
+  Call1 total85.153s; call2 total8.417s. Not a speed comparison.
+- Pinned binary/source identity revalidated; metadata dry and17 no-GPU specs
+  passed. Existing FFN WIP untouched. Fresh one-shot artifact directory:
+  `/private/tmp/qwen-direct-replay-79.tqxjyp/`; attempt consumed, no repeat.
+- ROBUST bounded replay only. Global direct-gate switch also covers later
+  rows4; causal attribution and tensor parity remain open. Next discriminator:
+  separately admitted same-input default-gate control, not default promotion.
+  See `docs/qwen-prefill-command-trace.md`; refresh on identity/artifact drift.
