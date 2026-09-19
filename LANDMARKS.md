@@ -28276,3 +28276,26 @@ Refresh after source/toolchain/device/model/workload changes.
   and separate pre-GPU delay from completion delivery without an extra wait;
   no blind rerun. Evidence/hashes/decay: docs/qwen-prefill-command-trace.md native
   split result, `/private/tmp/qwen-prefix-submit.646NF9/`. Preserve unrelated WIP.
+
+### Continuation 2026-09-19 — First-command gap is before GPU execution
+
+- Existing split-submit opt-in now adds Mach-seconds host bounds around
+  commit/wait; Metal GPU timestamps use system Mach time. Watchdog remains
+  CLOCK_MONOTONIC; no new waits/callbacks/routing. Invalid timelines are not
+  zero-cost evidence. Signed differences retained with1ms bounds tolerance.
+- One guarded7839-token run completes64 valid trace/native/timeline/boundary
+  quartets: first pre-GPU7566.682ms, GPU1324.569ms, post-GPU0.138ms; native
+  commit0.031ms. Other63 pre-GPU sum53.557ms; all post-GPU sum10.115ms,
+  max0.221ms. Dominant completion-return delay refuted for this run; driver
+  preparation/queue/residency/compilation are not yet distinguished.
+- Build/dry/22 CLI negatives/11 trace specs/native fake tests pass;12 offline
+  mutations rejected, direct raw totals/source identities agree. Correlated
+  Luna review ROBUST in bounded single-submitter scope. Exit0/observer0,
+  startup80/min46%,38 clean memory samples, final tree absent; unchanged
+  70/30%,24GiB,300s/180s,lease0,quiet bypass. One attempt consumed, no retry.
+- Long warm timing/uninstrumented stability remain IN_PROGRESS, no speedup or
+  watchdog-fix claim. Next: passive kernelStartTime/kernelEndTime scheduling
+  discriminator after checking semantics, not broad warmup or blind rerun.
+  Evidence, initial build/SDK issues and refresh triggers recorded in
+  docs/qwen-prefill-command-trace.md Mach result; artifacts
+  `/private/tmp/qwen-prefix-mach.HZ3gZn/`. Preserve unrelated WIP.

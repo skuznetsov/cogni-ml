@@ -1,5 +1,92 @@
 # Ordinary prefill command diagnostics
 
+## Mach timeline discriminator (2026-09-19, predeclared)
+
+Extend the existing opt-in split-submit diagnostic only: record host Mach
+seconds immediately before commit and immediately after wait returns, then
+read GPUStartTime/GPUEndTime after completion. Apple documents GPU timestamps
+as seconds relative to system Mach time:
+https://developer.apple.com/documentation/metal/mtlcommandbuffer/gpustarttime?language=objc
+Convert mach_absolute_time with mach_timebase_info; do not subtract watchdog
+CLOCK_MONOTONIC timestamps from Metal values. No callbacks or extra waits.
+
+Prediction: start-minus-before dominates if the gap precedes GPU execution;
+after-minus-end dominates if it follows execution. The latter includes host
+thread wakeup/scheduling and is not notification latency alone. The former
+includes the small commit interval and does not isolate driver compilation,
+queue contention, memory residency, or other causes. GPU end-minus-start is
+execution interval, not kernel occupancy. Preserve raw signed differences.
+
+DoD: native synthetic before/after cases and invalid timestamp controls pass;
+fresh private bridge/release probe, unchanged-source identity, metadata dry
+and CLI checks pass; at most one guarded 7839-token attempt. Require all64
+trace/native/timeline/boundary records, finite positive Mach endpoints, strict
+GPU duration and enclosing bounds (1ms uncertainty, no clamping). Missing,
+invalid or mismatched evidence blocks attribution, not inference execution.
+Preserve startup70/runtime30%,24GiB,300s/180s,lease0,quiet bypass and the prior
+model/input/F32 capacity8036/chunk2048/group1/cooldown50/graph0. No retry.
+Artifacts: `/private/tmp/qwen-prefix-mach.HZ3gZn/`; rollback removes only
+the opt-in Mach fields/helper/log. Uninstrumented stability remains open.
+
+### Result: the first-command gap precedes GPU execution
+
+One attempt completes all7839 tokens and64 ordered trace/native/timeline/
+boundary records, all timeline-valid. Same model/input/source identities
+(except declared bridge/spec instrumentation) and controls as the prior run.
+
+| First command interval | ms |
+| --- | ---: |
+| Before commit to GPU start | 7566.682 |
+| GPU start to GPU end | 1324.569 |
+| GPU end to return from wait | 0.138 |
+
+Native synchronous commit is0.031ms. Enclosing host submit/wait8892.274ms
+includes logging/FFI/bookkeeping outside the Mach interval8891.389ms; encode
+99.331ms is separate. Do not add overlapping native and GPU intervals.
+For the next chunks, first pre-GPU intervals are1.403/3.938/1.227ms and
+post-GPU0.158/0.157/0.139ms. Across all64 commands, post-GPU sums10.115ms
+(max0.221ms); pre-GPU excluding the first totals53.557ms.
+
+This falsifies a dominant post-GPU completion-return tail for the observed
+first-command delay. It localizes the pause before GPU execution, not to a
+particular driver subsystem. Queue waiting, CPU scheduling/preparation,
+resource residency and compilation remain competing explanations. The
+uninstrumented failure and any general stability/speed claim remain open.
+
+Native test red (missing helper/fields) then green; release build, metadata
+dry-run,22 CLI rejects and11 trace specs pass. Synthetic timestamps exercise
+both gap positions and reject missing/nonfinite/misordered endpoints. Fake
+FFI success still uses timestamps1.0/1.001 and consequently emits valid=0;
+it checks completion behavior, not a valid same-epoch stderr schema. The live
+checker requires valid=1 for every quartet, agrees with GPU duration and
+native elapsed intervals, and rejects12 missing/failed/nonfinite/misaligned
+record mutations. Separate raw-log arithmetic and pinned-hash checks agree.
+Correlated Luna source review: ROBUST within this opt-in single-submitter scope.
+
+Exit0/observer0, startup80%, minimum46%,38 clean samples, final tree absent.
+No Metal failure, memory kill, timeout or retry. Launcher wall77.023s is not
+pp/tg or comparable speed evidence. Preparation initially hit sandbox process
+group isolation (before workload) and an Xcode SDK TAPI incompatibility in the
+standalone trace test. The guarded build ran outside that sandbox restriction;
+trace specs passed with the same Command Line Tools SDK used for the build.
+No safety thresholds were changed. Aborted build-only artifacts are retained
+at `/private/tmp/qwen-prefix-timeline.pf2KbP/`; no GPU attempt occurred there.
+
+Next narrow discriminator: inspect Metal kernelStartTime/kernelEndTime CPU
+scheduling semantics and, if usable, read them after the existing completion
+without new waits. A long scheduling interval still would not uniquely prove
+compilation. Avoid blind replay or a broad memory warmup until its causal
+question, memory budget and comparison are explicit. Current attempt consumed.
+Refresh on source/model/input/device/toolchain drift or temporary evidence loss.
+Artifact directory above; SHA256:
+
+- manifest: `5f5f315fa91a1737b6e83a52e7e3fb2e2d56c31a99682938f3da9a9d7128cc42`
+- bridge: `1c7ddcdf2a82fffa5564d1bc8effbd4f1a34516053797b0824e3bbb5a9b9be09`
+- binary: `f6a4ebd2d24baa180ca893edce2f4a31309f6fe86f2fcdb7accba1cd3fed0d41`
+- launcher: `0ef427a94c362f82f340f34b9d1e4a458a90e1fd89b921d5f0fe6cf785c810da`
+- checker: `c4bffed18906d20e25fa8f9ea904570f7f7e23748182747ae18bb076fe209128`
+- stderr: `304599c64bf36da380ed2948f883444d530cbc055adce81b7909f60ff0cc9f69`
+
 ## Native commit/wait discriminator (2026-09-19, predeclared)
 
 Extend prefix profile with optional `--split-submit`, allowed only after

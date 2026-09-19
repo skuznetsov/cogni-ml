@@ -4,10 +4,12 @@
 #import <Metal/Metal.h>
 #import <Foundation/Foundation.h>
 #import <dispatch/dispatch.h>
+#include <mach/mach_time.h>
 
 #include <algorithm>
 #include <cerrno>
 #include <climits>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
@@ -117,7 +119,27 @@ struct GSCommandSubmitProfile {
     double commit_ms = 0.0;
     double wait_ms = 0.0;
     double retire_ms = 0.0;
+    double mach_before_commit = 0.0;
+    double mach_after_wait = 0.0;
 };
+
+// Metal GPUStartTime/GPUEndTime are seconds relative to system mach time.
+// Keep this diagnostic clock separate from the CLOCK_MONOTONIC watchdog.
+static double command_mach_seconds() {
+    static const double seconds_per_tick = []() {
+        mach_timebase_info_data_t info;
+        if (mach_timebase_info(&info) != KERN_SUCCESS || info.denom == 0) return 0.0;
+        return (double)info.numer / (double)info.denom / 1e9;
+    }();
+    return (double)mach_absolute_time() * seconds_per_tick;
+}
+
+static bool command_timeline_valid(double before, double start, double end, double after) {
+    // Preserve raw signed deltas; allow 1ms timestamp uncertainty, never clamp.
+    return std::isfinite(before) && std::isfinite(start) && std::isfinite(end) &&
+           std::isfinite(after) && before > 0 && start > 0 && end > start &&
+           after >= before && start >= before - 0.001 && end <= after + 0.001;
+}
 
 static bool command_submit_profile_enabled() {
     const char* raw = std::getenv("COGNI_METAL_SUBMIT_PROFILE");
@@ -131,9 +153,11 @@ static void wait_for_command_completion(id<MTLCommandBuffer> cmd, bool commit,
     GSCommandWaitRecord record;
     if (timeout_ms > 0) register_command_wait(&record, timeout_ms);
     uint64_t ready = profile ? monotonic_time_ns() : 0;
+    if (profile) profile->mach_before_commit = command_mach_seconds();
     if (commit) [cmd commit];
     uint64_t committed = profile ? monotonic_time_ns() : 0;
     [cmd waitUntilCompleted];
+    if (profile) profile->mach_after_wait = command_mach_seconds();
     uint64_t completed = profile ? monotonic_time_ns() : 0;
     if (timeout_ms > 0) unregister_command_wait(&record);
     if (profile != nullptr) {
@@ -562,6 +586,13 @@ extern "C" int32_t gs_commit_and_wait_status_gpu_elapsed(
         std::fprintf(stderr,
                      "gs_metal_submit_profile status=%d setup_ms=%.6f commit_ms=%.6f wait_ms=%.6f retire_ms=%.6f\n",
                      status, profile.setup_ms, profile.commit_ms, profile.wait_ms, profile.retire_ms);
+        double gpu_start = cmd.GPUStartTime;
+        double gpu_end = cmd.GPUEndTime;
+        bool valid = status == 0 && command_timeline_valid(
+            profile.mach_before_commit, gpu_start, gpu_end, profile.mach_after_wait);
+        std::fprintf(stderr,
+                     "gs_metal_submit_timeline valid=%d before_commit_s=%.9f gpu_start_s=%.9f gpu_end_s=%.9f after_wait_s=%.9f\n",
+                     valid, profile.mach_before_commit, gpu_start, gpu_end, profile.mach_after_wait);
         std::fflush(stderr);
     }
     if (status != 0) return status;

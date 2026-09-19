@@ -54,6 +54,18 @@ int main() {
         setenv("COGNI_METAL_SUBMIT_PROFILE", "1", 1);
         assert(command_submit_profile_enabled());
 
+        // Same-clock timeline bounds, including unavailable or corrupt GPU data.
+        assert(command_timeline_valid(10.0, 18.0, 19.0, 19.002));
+        assert(command_timeline_valid(10.0, 10.001, 11.0, 19.0));
+        assert(!command_timeline_valid(0.0, 18.0, 19.0, 20.0));
+        assert(!command_timeline_valid(10.0, 0.0, 19.0, 20.0));
+        assert(!command_timeline_valid(10.0, 9.0, 19.0, 20.0));
+        assert(!command_timeline_valid(10.0, 18.0, 17.0, 20.0));
+        assert(!command_timeline_valid(10.0, 18.0, 21.0, 20.0));
+        assert(!command_timeline_valid(10.0, NAN, 19.0, 20.0));
+        assert(!command_timeline_valid(10.0, 18.0, INFINITY, 20.0));
+        assert(!command_timeline_valid(10.0, 18.0, 19.0, NAN));
+
         for (bool slow_commit : {true, false}) {
             SubmitProfileFake* cmd = fake(slow_commit ? 20000 : 0, slow_commit ? 0 : 20000);
             GSCommandSubmitProfile profile;
@@ -61,6 +73,8 @@ int main() {
             assert(cmd.commits == 1 && cmd.waits == 1 && gs_command_waits.empty());
             assert(profile.setup_ms >= 0 && profile.retire_ms >= 0);
             assert(profile.commit_ms >= 0 && profile.wait_ms >= 0);
+            assert(profile.mach_before_commit > 0);
+            assert(profile.mach_after_wait >= profile.mach_before_commit);
             assert((slow_commit ? profile.commit_ms : profile.wait_ms) >= 19.0);
         }
         // The uninstrumented path retains one commit/wait and registration.
