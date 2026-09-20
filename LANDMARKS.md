@@ -28866,3 +28866,41 @@ Refresh after source/toolchain/device/model/workload changes.
   `15f92e9f3da90d3b25187885fc225565b817af1af89be81dc18c907c2c7c2a50`;
   no raw log was retained. Refresh on Q6 body/layout, compiler/toolchain,
   device, model tensor, timing method, or loss of the recorded observation.
+
+### Continuation 2026-09-20 — Exact activation-once FFN streaming is traffic-dominated
+
+- The remaining large prefill candidate was an exact activation-once FFN
+  diamond: produce bounded SwiGLU slices and consume them in the down
+  projection without retaining the full `[tokens, 17408]` activation. This is
+  the non-recompute reopening condition from `LM-WBA-FFN-DIAMOND-1`.
+- Under the current Metal execution model, an activation shared by independent
+  down-output threadgroups must cross device memory. Slicing therefore does
+  not reduce its H16 write-plus-read traffic: it remains `4 * B * 17408`
+  bytes. Exact accumulation across `S` intermediate slices additionally has
+  an optimistic lower bound of one F32 `[B, 5120]` write plus `S-1` reads and
+  rewrites, or `8 * B * 5120 * (S-1)` bytes beyond the materialized baseline.
+  This assumes in-place accumulation and ignores dispatch, hazard and partial
+  reduction overhead, so it is favorable to the candidate.
+- A model-free arithmetic oracle enumerated intermediate tiles from 256 to
+  17408 at batches 512 and 1024. At batch 512, the current H16 interface lower
+  bound is 44 MiB. Tiles 256/512/1024/2048/4096/8704 require at least
+  1384/704/364/204/124/64 MiB respectively; only the single 17408-wide slice
+  returns to 44 MiB, which is the current full materialization. Batch 1024
+  scales identically: 88 MiB current versus 2768/1408/728/408/248/128 MiB.
+- Keeping the activation in threadgroup memory avoids that transfer only by
+  making each down-output owner recompute it. The existing operator falsifier
+  already measures the output-tile recompute formulation at about 41x slower.
+  Metal provides no current cross-threadgroup multicast/barrier that changes
+  this ownership tradeoff. Atomics or explicit partial reductions weaken
+  exactness and add at least the same global output traffic.
+- Verdict: ROBUST as a lower-bound rejection for exact activation-once
+  streaming on the current Qwen3.8 dimensions and Metal producer/consumer
+  model; BROKEN as a speed candidate. It can reduce peak activation capacity,
+  but not bandwidth or dispatch cost, and therefore cannot support the 8%
+  local FFN gate. Park this paradigm until a new cross-threadgroup sharing
+  primitive, exact algebraic factorization, or changed ownership model removes
+  the accumulation term. Oracle source SHA256:
+  `86adcdafb5c50fe35aa35490d883359e0c42246eaa9720362466dd57e492564f`.
+  Refresh on Metal synchronization semantics, FFN dimensions/precision,
+  accepted down-projection topology, or the discovery of an exact schedule
+  outside the two ownership cases above.
