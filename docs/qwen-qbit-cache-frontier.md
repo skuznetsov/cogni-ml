@@ -4800,3 +4800,39 @@ Repeat evidence:
 
 Refresh on T8 tile ownership, head shape, Metal compiler/toolchain, device,
 timing method, or evidence loss.
+
+### Packed-prefix P4 T8 tile specialization is rejected (2026-09-20)
+
+A temporary default-off P4 T8 helper removed the per-vector exact-current-row
+branch only for K/V tiles proven wholly inside the immutable packed prefix.
+Mixed tail tiles retained the existing loader, including the exact FP32 current
+row. The experiment ran on top of the admitted contiguous-V route and changed
+neither the cache representation nor the floating-point accumulation order.
+
+Two same-process AB/BA sequences covered 14K and 16K visible prefixes with ten
+pairs per row. Every pair retained canonical K/V bytes and reported
+`max_output_delta=0`, but no row met the predeclared `>=3%` and `>=8/10`
+wall-and-GPU gate. The first sequence regressed at 14K by `1.43%` wall and
+`1.40%` GPU (`4/10`, `3/10` wins), and at 16K by `9.67%` wall and `14.85%`
+GPU (`4/10`, `4/10`). The independent repeat showed only unstable mean gains:
+14K improved by `2.86%` wall and `4.09%` GPU with `5/10` and `6/10` wins;
+16K improved by `1.07%` and `1.82%` with `4/10` and `6/10` wins.
+
+**decision:** correctness is ROBUST, but the performance claim is BROKEN on
+Apple M2 Max with this compiler/toolchain. The source helper, pipeline variant,
+policy, probe option, and spec were removed. Together with the rejected BF16
+contiguous-V and P4 row-stride variants, this closes the current split-K loader
+micro-optimization corridor: the next candidate must remove a larger data
+movement or dispatch boundary. No compiler or cache mechanism is inferred
+without hardware-counter or generated-code evidence.
+
+Repeat evidence:
+
+- `/private/tmp/qwen_p4_packed_tile_14k.log`,
+  `0b9937ef0ac430882b461bccf3523b05196b941ce3f52451ecce399c514741a2`;
+- `/private/tmp/qwen_p4_packed_tile_16k.log`,
+  `1ead68c190a0b44e56670dad5ea9478acf54345fbc9c75ca7eac53a80ff20dc8`.
+
+Refresh on packed-prefix layout, exact-tail ownership, P4 T8 loader or
+contiguous-V implementation, Metal compiler/toolchain, device, timing method,
+gate, or evidence loss.

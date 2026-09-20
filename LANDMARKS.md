@@ -29212,3 +29212,21 @@ Refresh after source/toolchain/device/model/workload changes.
   changes were removed. Reopen only with assembly evidence or a lower-noise
   discriminator on changed compiler/device conditions. Full measurements,
   hashes, and refresh conditions are in `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-20 — Packed-prefix P4 T8 tiles are rejected
+
+- A temporary default-off helper removed the exact-current-row branch only
+  from P4 T8 K/V tiles wholly inside the packed prefix. Mixed tail tiles kept
+  the existing exact-current-row loader, and the accepted contiguous-V route
+  was held constant.
+- Two ten-pair same-process AB/BA sequences at 14K and 16K retained canonical
+  K/V bytes and zero output delta. No row met the `>=3%` and `>=8/10`
+  wall-and-GPU gate. The first sequence regressed by `1.43/1.40%` at 14K and
+  `9.67/14.85%` at 16K. Repeat mean gains were unstable: `2.86/4.09%` with
+  `5/10`, `6/10` wins at 14K and `1.07/1.82%` with `4/10`, `6/10` at 16K.
+- Verdict: ROBUST for bounded correctness and BROKEN for performance promotion
+  on Apple M2 Max with this toolchain. All temporary source, policy, probe, and
+  spec changes were removed. This closes the current loader-microoptimization
+  corridor; move next to a larger data-movement or dispatch boundary. Full
+  measurements, hashes, and refresh conditions are in
+  `docs/qwen-qbit-cache-frontier.md`.
