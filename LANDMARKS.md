@@ -29308,3 +29308,21 @@ Refresh after source/toolchain/device/model/workload changes.
   direct-QK default-off; revisit only if a new primitive preserves order
   without the serial shuffle chain. Full evidence and refresh conditions are
   in `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-20 — Paired-block P4 split-K is rejected
+
+- A temporary default-off tile-15 P4 T8 kernel processed two adjacent
+  64-token split-K blocks in one 384-thread group, merged their online-softmax
+  summaries locally, and emitted one global partial. The route required
+  contiguous-V, direct-QK off, and used 32,256 bytes of threadgroup memory.
+- Policy, focused 8K Metal correctness, and odd-tail `1/6/15/16` Metal tests
+  passed. Canonical K/V bytes were unchanged; the timing discriminator's
+  maximum output delta was `1.9e-7`.
+- In ten guarded interleaved 8K pairs, wall time regressed from `2.334` to
+  `3.002 ms` (`-28.619%`, `0/10` wins), and completed-GPU time regressed from
+  `1.378` to `1.684 ms` (`-22.158%`, `1/10`).
+- Verdict: ROBUST for bounded correctness and BROKEN for performance
+  promotion on Apple M2 Max with this toolchain. All temporary runtime and
+  probe changes were removed before a 27B-model run. This rejects the current
+  384-thread/32 KiB pairing, not all hierarchical split-K designs. Full scope
+  and refresh conditions are in `docs/qwen-qbit-cache-frontier.md`.

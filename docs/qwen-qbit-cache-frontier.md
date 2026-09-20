@@ -4994,3 +4994,38 @@ Evidence: `/private/tmp/qwen_direct_qk_ordered_8k.log`, SHA-256
 `71947dfd15997621a075e43563a23897913ee49756b58887e3a6dde4dabf03a1`.
 Refresh on direct-QK reduction geometry, Metal compiler/toolchain, device,
 timing method, gate, or evidence loss.
+
+### Paired-block P4 split-K is rejected (2026-09-20)
+
+A temporary default-off P4 T8 variant kept the admitted 64-token split-K
+block width but assigned two adjacent blocks to one 384-thread threadgroup.
+The twelve SIMD groups processed the two blocks concurrently, merged their
+online-softmax summaries in ascending block order inside threadgroup memory,
+and emitted one global partial instead of two. The route was restricted to
+Apple M2 Max, tile 15, contiguous-V, direct-QK off, and a 64-token chunk. Its
+32,256-byte threadgroup footprint stayed 512 bytes below the 32 KiB limit.
+
+The policy spec passed (`13 examples, 0 failures`). Focused Metal correctness
+covered both an 8K prefix and visible lengths `1,6,15,16`, including the empty
+second slot of an odd block pair; both examples passed. Canonical K/V bytes
+were unchanged, and the paired 8K timing discriminator observed maximum
+output delta `1.9e-7`.
+
+The guarded model-free 8K fixed-snapshot A/B used ten interleaved pairs.
+Baseline/candidate mean wall time was `2.334/3.002 ms` (`-28.619%`, `0/10`
+candidate wins). Completed-GPU time was `1.378/1.684 ms` (`-22.158%`, `1/10`
+wins). The run completed with `70%` free memory under a `4096 MiB` process
+cap and `30%` memory floor.
+
+**decision:** correctness is ROBUST in the bounded synthetic scope, but the
+performance claim is BROKEN on Apple M2 Max with this toolchain. Halving the
+number of global summaries and stage-two inputs does not repay doubling the
+threadgroup width and consuming nearly the full threadgroup-memory budget.
+The candidate failed before any 27B-model escalation, so all runtime, policy,
+probe, and spec changes were removed. This rejects the current same-threadgroup
+two-block design, not every hierarchical merge. Reopen only if a smaller
+cooperative group or a different intermediate representation reduces global
+partial traffic without the 384-thread/32 KiB occupancy cost.
+
+Refresh on split-K group geometry, threadgroup-memory layout, Metal
+compiler/toolchain, device, timing method, promotion gate, or evidence loss.
