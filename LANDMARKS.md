@@ -28774,3 +28774,35 @@ Refresh after source/toolchain/device/model/workload changes.
   `/private/tmp/qwen_coarse_mode2_semantic_20260920/`. Refresh on source,
   binary/model/input, geometry, runner/observer, device/OS/storage/cache state,
   or evidence loss.
+
+### Continuation 2026-09-20 — O32/B256 Q4 FFN tile is rejected before full-model promotion
+
+- A new operator-only probe tested whether an O32/B256 Q4_K H16 tile could
+  amortize one dequantized weight tile across 256 activation rows without
+  repeating the already-rejected 512-thread B256 topology. The candidate kept
+  256 threads and eight SIMD groups, used 18 KiB of threadgroup memory versus
+  24 KiB for production B128/SG8, and retained sixteen live F32 8x8
+  accumulators per SIMD group.
+- The first draft incorrectly compacted the O32 weight tile with a 32-half
+  matrix stride. A model-free coverage oracle now proves that every weight and
+  activation staging half is written and consumed exactly once; malformed
+  coverage fails before Metal compilation or model loading. Metal compilation
+  accepted the repaired candidate with a 640-thread maximum, above its fixed
+  256-thread launch requirement.
+- Two guarded batch-256 ABBA observations used the real
+  `blk.0.ffn_gate.weight`, five warmup cycles, ten balanced cycles, a 30%
+  runtime free-memory floor, and a 24 GiB process-tree cap. Both produced exact
+  finite F32 bit parity. Production B128 medians were 4.676 ms in both runs;
+  O32/B256 medians were 5.091 and 5.095 ms, regressions of 8.88% and 8.96%,
+  with zero candidate wins in either 10-cycle run.
+- The predeclared promotion gate required at least 10% local reduction and
+  eight of ten ABBA wins. Verdict: ROBUST as a bounded negative operator
+  falsifier and BROKEN for speed promotion. The saved weight dequantization
+  does not repay the extra activation staging and uniform overwrite barrier on
+  Apple M2 Max. Batch 512 and full-model runs were intentionally skipped.
+  Do not retry this geometry without a mechanism that removes that barrier or
+  reduces activation traffic. Evidence:
+  `/private/tmp/qwen35_q4_b256_sg8_o32_batch256_20260920.log`; probe binary
+  SHA256 `e9fb5d8835433702e45abc8b7bbe11583535f23aefdf6d15696de30b947873b3`.
+  Refresh on kernel/layout, compiler/toolchain, device, model tensor, or input
+  change.
