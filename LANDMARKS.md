@@ -28610,3 +28610,36 @@ Refresh after source/toolchain/device/model/workload changes.
   current GPU work; count its total request wall time and peak memory, not only
   the shifted submit gap. Preserve the 70/30%, 24GiB envelope. Refresh on model,
   mapping policy, OS/device/storage state, input, or evidence loss.
+
+### Continuation 2026-09-19 — Metal buffer length causes the first-submit page-in scan
+
+- A compile-only diagnostic replaced the 16,810,714,336-byte whole-GGUF
+  no-copy Metal wrapper with one page-aligned 2,462,515,200-byte view covering
+  token embedding plus every quantized weight used by layers 0 through 6. The
+  probe stopped after the asserted `{start=0, rows=2048, layers=0...7,
+  groups=1}` command boundary. Any weight outside the view failed closed
+  instead of falling back to an upload.
+- Same source/model/input/bridge and fresh processes, bounded view then matched
+  whole-map control: bounded wall 4073.065ms, submit wait 2508.986ms, pre-GPU
+  interval 1123.286ms, GPU 1385.441ms, process reads 2,476,224,512 bytes;
+  control wall 9799.740ms, submit wait 8355.247ms, pre-GPU interval 6932.864ms,
+  GPU 1421.869ms, process reads 14,320,484,352 bytes. Both exited 0 after one
+  command under the 70/30%, 24GiB guard and retained an intentionally
+  incomplete, non-reusable state.
+- The ordered pair favors the control: the bounded run warmed its first 2.46GB
+  before the whole-map process. The two processes nevertheless account for
+  16,796,708,864 bytes, 99.92% of the GGUF. GPU duration differs by only
+  36.428ms while the registered-length change removes 5.810s from the pre-GPU
+  interval. Verdict ROBUST for the narrow claim that first use of the
+  whole-file Metal wrapper drives near-whole-file page-in on this host.
+- This is not a full-prefix or steady-state speed certificate. Every complete
+  inference still needs all model layers, and the earlier per-weight bounded
+  experiment reduced the first wait without improving full-prefix wall time.
+  A promotable cold-start win therefore needs coarse layer-group views plus
+  completion-safe, bounded prefetch of the next group overlapped with current
+  GPU work; it must reduce total prefix wall time rather than redistribute the
+  same I/O. The runtime prototype was removed.
+- Evidence: `/private/tmp/qwen-first-view-diagnostic-20260919` and
+  `/private/tmp/qwen-first-view-control-20260919`. Refresh on model layout,
+  Metal mapping policy, first-command grouping, OS/device/storage state,
+  source/bridge change, or evidence loss.
