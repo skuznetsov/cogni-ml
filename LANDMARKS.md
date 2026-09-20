@@ -28740,3 +28740,37 @@ Refresh after source/toolchain/device/model/workload changes.
   mode `2` stays default-off until a matched full-prefix ABBA plus bounded
   semantic pair passes. Refresh on source, model layout, registry/bridge,
   device/OS, or toolchain change.
+
+### Continuation 2026-09-20 — Paired coarse views trade first-wait memory pressure for full-prefix speed
+
+- Fresh-process mode-1/mode-2 ABBA at the fixed 7,839-token prefix completed
+  all four 64/64 command traces without Metal, timeout, guard, or interactivity
+  failure. Mode `2` nominally reduced median wall by 1.18% and traced waits by
+  0.84%, but first and later-wait medians were effectively equal and the delta
+  was smaller than mode `1`'s own 2.121-second A1/A2 drift. Verdict:
+  VULNERABLE as evidence that nine views repair the 17-view slowdown.
+- The direct mode-0/mode-2 ABBA is the speed gate. Mode `2` cut median first
+  wait from 4.459 to 2.211 seconds and retained 18--19 more points of sampled
+  system free memory, but increased median full wall from 70.991 to 72.843
+  seconds (`+2.61%`) and traced waits from 66.317 to 68.233 seconds (`+2.89%`).
+  Median later wait increased 24.2%. All four runs completed 64/64 and exit0;
+  process-tree RSS was effectively unchanged.
+- A separate fresh 256+195 mode-0/mode-2 semantic pair produced identical
+  `[3753,283,716,363]`, text, intra-process state gates, 4/4 top-1, 8/8 top-2,
+  ECS1.0, minimum cosine `0.9999999999999999`, and maximum logit delta0.0.
+- Observer prefix markers are invalid because stdout block buffering delivered
+  them together at process exit. Monotonic process wall, stderr command waits,
+  guard result, and memory samples are authoritative. One excluded B1 launch
+  returned 75 before config/Metal work because sandbox process inspection
+  prevented process-group isolation; the admitted replacement is named
+  `B1_mode2_run.log`.
+- Decision: ROBUST for bounded runtime completion, first-wait/memory trade-off,
+  and semantic parity; BROKEN for default speed promotion. Keep modes `1` and
+  `2` default-off and mode `0` as the speed default. Do not split views more
+  finely without a mechanism predicting lower later-command work. Evidence:
+  `docs/qwen-prefill-command-trace.md`,
+  `/private/tmp/qwen_coarse_views_pair_abba_20260920.FcbW7R/`,
+  `/private/tmp/qwen_coarse_mode0_mode2_abba_20260920.9B5z5e/`, and
+  `/private/tmp/qwen_coarse_mode2_semantic_20260920/`. Refresh on source,
+  binary/model/input, geometry, runner/observer, device/OS/storage/cache state,
+  or evidence loss.

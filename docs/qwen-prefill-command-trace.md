@@ -3744,3 +3744,102 @@ The read-only observer SHA256 is
 `76ed3b8734bd058138d1b4d493e288586a3e438f28c2c34bd8a289fa71a4a4b1`.
 Refresh on source/binary, model identity, input, mapping geometry, runner,
 observer, device, OS/driver, storage/cache state, or raw-evidence loss.
+
+## Nine coarse views preserve semantics but do not beat the whole-file default (2026-09-20)
+
+Revision `c14c6920` added the predeclared mode `2`: adjacent layer-group
+ranges are paired before immutable Metal views are constructed, reducing the
+17 mode-1 views to nine while leaving the output head separate. The release
+probe SHA256 is
+`500cbc619153ff73716ad1eae76944b4ee3dbd24714ad9046cba15e9ceed607e`.
+All measurements below use that same binary, Qwen3.8-27B Q4_K_M file,
+7,839-token prefix, token hashes, 2,048-row chunks, append-group limit 1,
+50 ms cooldown, 70% launch preflight, 30% runtime floor, 24 GiB process-tree
+cap, and 300-second runner timeout. Every admitted arm completed 64/64 ordered
+submit/wait pairs and exited zero without a Metal failure, timeout, guard kill,
+or `ImpactingInteractivity` error.
+
+The first fresh-process ABBA compared mode `1` (17 views) with mode `2`
+(nine views):
+
+| arm | wall | first wait | median later wait | traced waits | minimum free | peak sampled tree RSS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| A1 mode 1 | 74.317 s | 1,650.079 ms | 1,164.320 ms | 69,316.970 ms | 57% | 1,346,144 KiB |
+| B1 mode 2 | 72.647 s | 1,613.128 ms | 1,163.554 ms | 67,690.606 ms | 60% | 1,344,384 KiB |
+| B2 mode 2 | 72.132 s | 2,044.512 ms | 1,165.432 ms | 67,635.283 ms | 59% | 1,344,272 KiB |
+| A2 mode 1 | 72.196 s | 1,999.495 ms | 1,163.274 ms | 67,153.556 ms | 61% | 1,344,160 KiB |
+
+Mode `2` has a 72.389 s median wall versus 73.257 s for mode `1`, nominally
+1.18% lower, and a 0.84% lower median sum of traced waits. This does not prove
+that pairing repaired the prior mode-1 slowdown: the median first waits differ
+by only 0.22%, the median later waits by only 0.06%, and mode `1` itself moves
+2.121 seconds between A1 and A2. The apparent advantage is smaller than that
+within-mode drift and is dominated by A1's slower final chunk. The bounded
+claim is therefore near-equivalence under this run, not a speed win.
+
+The decisive second ABBA compared the unchanged mode `0` whole-file default
+with mode `2`:
+
+| arm | wall | first wait | median later wait | traced waits | minimum free | peak sampled tree RSS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| A1 mode 0 | 71.131 s | 4,612.201 ms | 944.845 ms | 66,538.160 ms | 40% | 1,344,432 KiB |
+| B1 mode 2 | 74.166 s | 2,024.222 ms | 1,209.965 ms | 69,694.174 ms | 58% | 1,343,872 KiB |
+| B2 mode 2 | 71.520 s | 2,397.556 ms | 1,133.264 ms | 66,771.708 ms | 59% | 1,344,224 KiB |
+| A2 mode 0 | 70.852 s | 4,306.751 ms | 942.075 ms | 66,095.313 ms | 40% | 1,343,776 KiB |
+
+Mode `2` cuts the median first wait from 4,459.476 to 2,210.889 ms (`-50.4%`)
+and retains 18--19 more percentage points of sampled system free memory. It
+does not compose into speed: median wall increases from 70.991 to 72.843 s
+(`+2.61%` time), median traced waits increase from 66.317 to 68.233 s
+(`+2.89%`), and the median later wait increases from 943.460 to 1,171.615 ms
+(`+24.2%`). Sampled process-tree RSS is essentially unchanged. These are
+observed trade-offs, not attribution to page-in, resource tracking, the Metal
+driver, or a physical-memory mechanism.
+
+A separate fresh-process 256+195-token mode-0/mode-2 semantic pair passed the
+same exact intra-process state gates and produced identical continuation IDs
+`[3753, 283, 716, 363]` and text ` seen = set()`. It reported 4/4 top-1,
+8/8 ordered top-2, ECS 1.0, minimum logit cosine
+`0.9999999999999999`, and maximum absolute logit delta 0.0. This is bounded
+continuation parity, not a model-quality evaluation.
+
+The observer's `prefix_begin` and `prefix_end` markers were block-buffered
+through its stdout pipe and arrived together at process exit. Their derived
+`prefix_wall_seconds` field is invalid and excluded. The observer's monotonic
+process `wall_seconds`, the 64 stderr command records, guard result, and memory
+samples are the admitted evidence. One preliminary B1 launch in the mode-1/
+mode-2 directory is also excluded: sandbox process inspection prevented
+`run_safe.sh` from isolating a process group, so it terminated the child before
+config output or Metal initialization and returned 75. The admitted B1 is
+`B1_mode2_run.log`.
+
+Adversary verdict: ROBUST for pre-inference geometry, full-prefix completion,
+the observed first-wait/memory trade-off, and bounded semantic parity;
+VULNERABLE for the claim that nine views improve on 17 views; BROKEN for a
+default speed promotion. Modes `1` and `2` remain default-off diagnostics.
+The whole-file mode `0` remains the speed default. Do not pursue still finer
+view splitting as a speed route without a new mechanism that predicts lower
+later-command cost; the next optimization should attack command/kernel work
+or cold pipeline creation instead.
+
+Evidence directories and log SHA256:
+
+- Mode 1 versus mode 2:
+  `/private/tmp/qwen_coarse_views_pair_abba_20260920.FcbW7R/`; A1
+  `91d452a81481041096499d8f782999eb58df28ec07ae3bd727a5cf3a23705703`,
+  B1 `3c7e1f29d7ba47b2c89776bda3cd74c1193b4db71d918b69de692cef829b4bf8`,
+  B2 `65160a7453726dc37ead41fe3ac086919307391ac13e78ac92c17a888945b0e9`,
+  A2 `13fd93d8fd371c4a27c8d769612e6765ec69badd6839d170e3c4f21422dc2580`.
+- Mode 0 versus mode 2:
+  `/private/tmp/qwen_coarse_mode0_mode2_abba_20260920.9B5z5e/`; A1
+  `fadf0d5b1447c3f3af868369f3c3d451129ca03c54f31789f61c4630233da9d2`,
+  B1 `e57252ab8409d997c957f04c22159726c2cf9cc5d51820ca7655e428b32359e8`,
+  B2 `f3ab30e5adb48e9bc36fd9231f669995fa987cd4de92e0ffe55ed10156246226`,
+  A2 `07d361fd4024ac95f65088cda899e30e98679ce89a82aa7a8993ab6e61d0add1`.
+- Semantic mode 0 versus mode 2:
+  `/private/tmp/qwen_coarse_mode2_semantic_20260920/`; mode 0
+  `e6ac7e2b2828f00f3daa2a4c43f18205e36001d3a2c048a7a0caaf1a5a8fe4be`,
+  mode 2 `5e7b3b8fbd8fda6bb7d3f9572c2e00c213c3e95a41919b83658e0733de1f6d92`.
+
+Refresh on source/binary, model or input identity, view geometry, runner or
+observer, device, OS/driver, storage/cache state, or raw-evidence loss.
