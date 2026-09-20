@@ -28806,3 +28806,34 @@ Refresh after source/toolchain/device/model/workload changes.
   SHA256 `e9fb5d8835433702e45abc8b7bbe11583535f23aefdf6d15696de30b947873b3`.
   Refresh on kernel/layout, compiler/toolchain, device, model tensor, or input
   change.
+
+### Continuation 2026-09-20 — Metal tensor primitives regress Qwen3.8 prefill on M2 Max
+
+- Current llama.cpp revision `7e4c0a968` contains a second quantized `mul_mm`
+  backend using Metal Performance Primitives tensor operations. Unlike the
+  legacy 64x32 simdgroup kernel, it stages only the dequantized weight tile in
+  threadgroup memory and reads the activation matrix directly from device
+  memory. Apple M2 Max reports Metal4 support and both the F16 and BF16 tensor
+  compile probes pass, so this is a real backend comparison rather than an
+  unsupported-API fallback.
+- A protected fresh-process ABBA used llama.cpp's own `llama-bench`, the local
+  Qwen3.8-27B Q4_K_M model, pp256 and pp512, three measured repetitions per
+  process, eight CPU threads, full GPU offload, a 30% runtime free-memory
+  floor, and a 24 GiB process-tree cap. The order was legacy/tensor/tensor/
+  legacy. Every process exited zero, and every preflight started at 74% free
+  memory.
+- At pp256, the two legacy observations averaged 170.779 tok/s while the two
+  tensor observations averaged 141.036 tok/s (`-17.42%`). At pp512, legacy
+  averaged 174.000 tok/s and tensor averaged 157.123 tok/s (`-9.70%`). The
+  direction reproduced in both halves of the ABBA. The first tensor process
+  also paid an 8.646-second embedded-library load, but the second loaded it in
+  0.010 seconds and retained the same prefill regression, so cold compilation
+  does not explain the measured pp result.
+- Verdict: ROBUST as a bounded negative backend falsifier and BROKEN for M2
+  Max promotion. Keep the legacy simdgroup backend; do not port the current
+  llama.cpp tensor topology into cogni-ml. This agrees with llama.cpp's own
+  pre-M5 default-off policy and its source note that the current tensor path
+  is slower on M2 Ultra. No correctness or startup-speed claim is made because
+  a speed regression is already sufficient to reject this route. Refresh on
+  Metal tensor implementation, compiler/toolchain, device generation,
+  llama.cpp backend, model, or benchmark-harness change.
