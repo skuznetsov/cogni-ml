@@ -29292,3 +29292,19 @@ Refresh after source/toolchain/device/model/workload changes.
   removes the split-K partial round trip or its conversion boundary. Full
   scope, hashes, and refresh conditions are in
   `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-20 — Ordered direct-QK reduction is rejected
+
+- A temporary direct-QK variant broadcast each lane's two four-wide dot
+  contributions in source order, reproducing the shared-K sequence of 64 F32
+  additions without materializing K.
+- The guarded model-free 8K discriminator retained canonical K/V bytes and
+  exact output (`max_output_delta=0`), but wall time regressed by `21.249%`
+  and completed-GPU time by `24.141%`; the candidate won only `2/10` pairs on
+  both measures.
+- Verdict: ROBUST for the exact-order arithmetic hypothesis and BROKEN as a
+  performance route on Apple M2 Max with this toolchain. The kernel change was
+  removed before full-model or real-prefix escalation. Keep tree-reduced
+  direct-QK default-off; revisit only if a new primitive preserves order
+  without the serial shuffle chain. Full evidence and refresh conditions are
+  in `docs/qwen-qbit-cache-frontier.md`.

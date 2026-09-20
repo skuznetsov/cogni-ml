@@ -4962,3 +4962,35 @@ Repeat evidence:
 Refresh on split-K scratch representation, stage-one/stage-two fusion boundary,
 P4/BF16 ownership, Metal compiler/toolchain, device, timing method, gate, or
 evidence loss.
+
+### Ordered direct-QK reduction is rejected (2026-09-20)
+
+The experimental P4 direct-QK route avoids shared K materialization, but its
+SIMD tree reduction changes F32 accumulation order and fails the strict
+real-prefix logit gate. A temporary variant split each lane's eight products
+into the same two four-wide contributions used by the shared-K route, then had
+all lanes broadcast those contributions in source-lane order. This reproduced
+the legacy sequence of 64 additions without adding scratch or a threadgroup
+barrier; only lane zero published the resulting score.
+
+The release build and Metal source compilation passed. In the guarded
+model-free 8K adaptive-attention discriminator, canonical K/V bytes remained
+unchanged and maximum output delta was exactly zero, confirming that the
+ordered reduction removed the local numeric difference. Performance failed
+decisively: baseline/candidate mean wall time was `2.756/3.342 ms`
+(`-21.249%`, `2/10` candidate wins), while completed-GPU time was
+`1.896/2.353 ms` (`-24.141%`, `2/10`). An earlier diagnostic run showed the
+same direction and no candidate GPU wins.
+
+**decision:** exact legacy arithmetic is attainable, but serializing the 64
+contributions through SIMD shuffles destroys the direct-QK speed mechanism.
+The performance claim is BROKEN on Apple M2 Max with this compiler/toolchain;
+the temporary kernel change was removed and no full-model or real-prefix run
+was justified. Keep the existing tree-reduced direct-QK route default-off. Do
+not retry an exact-order gather unless generated code or a new reduction
+primitive can preserve order without the long shuffle dependency chain.
+
+Evidence: `/private/tmp/qwen_direct_qk_ordered_8k.log`, SHA-256
+`71947dfd15997621a075e43563a23897913ee49756b58887e3a6dde4dabf03a1`.
+Refresh on direct-QK reduction geometry, Metal compiler/toolchain, device,
+timing method, gate, or evidence loss.
