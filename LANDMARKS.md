@@ -29276,3 +29276,19 @@ Refresh after source/toolchain/device/model/workload changes.
   unless the next design also removes material weight traffic or new evidence
   makes dispatch/intermediate traffic dominant. Full scope and refresh
   conditions are in `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-20 — H16 split-K partial output is rejected
+
+- A temporary default-off P4 T8 variant stored split-K `partial_o` scratch in
+  H16 and converted it to F32 in fused stage two. The cache representation,
+  BF16 owners, and logits ABI were unchanged.
+- The focused 8K one-layer GPU falsifier passed. Guarded 16K synthetic-prefix
+  AB and mirrored BA runs measured only `+2.099%` and `+1.728%`, with `7/10`
+  candidate wins in both orders, below the `>=3%` and `>=8/10` gate. Token IDs
+  and text matched, while top-one logit drift reached `6.389618e-4`.
+- Verdict: BROKEN for promotion on Apple M2 Max with this toolchain. All
+  temporary runtime code was removed, and no real-prefix top-two/ECS workload
+  was justified after the speed gate failed. Reopen only if a new design
+  removes the split-K partial round trip or its conversion boundary. Full
+  scope, hashes, and refresh conditions are in
+  `docs/qwen-qbit-cache-frontier.md`.

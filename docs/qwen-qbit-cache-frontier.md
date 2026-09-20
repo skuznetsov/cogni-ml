@@ -4924,3 +4924,41 @@ lower-level evidence shows launch/intermediate traffic has become dominant.
 
 Refresh on Q4_K layout, FFN shape, x16 row ownership, Metal compiler/toolchain,
 device, timing method, admission gate, or evidence loss.
+
+### H16 split-K partial output is rejected (2026-09-20)
+
+A temporary default-off adaptive-attention variant stored the split-K stage-one
+`partial_o` scratch in H16 for uniform P4 owners and converted it back to F32
+inside the fused stage-two reduction. The experiment was restricted to Apple
+M2 Max, the admitted P4 T8 route, visible prefixes of at least 6,144 tokens,
+and the current fused-stage-two plus contiguous-V configuration. BF16 owners,
+the resident cache format, logits ABI, and the baseline route were unchanged.
+
+The focused 8K one-layer GPU falsifier passed (`1 example, 0 failures`), with
+cosine greater than `0.9999999` and maximum output difference below `2e-4`.
+The guarded 16K synthetic-prefix product discriminator then used ten
+interleaved pairs in both orders. AB measured `81.592/79.880 ms` baseline
+versus candidate (`+2.099%`, `7/10` wins); mirrored BA measured
+`81.672/80.261 ms` (`+1.728%`, `7/10`). Output token IDs and text were
+identical, but the largest observed top-one logit delta was
+`6.389618e-4`.
+
+**decision:** the predeclared `>=3%` and `>=8/10` performance gate is BROKEN
+in both orders. Halving only the P4 `partial_o` scratch traffic does not repay
+the H16 conversion cost strongly enough, and it introduces measurable numeric
+drift. The runtime, policy, kernel, probe, and spec changes were fully removed.
+A real-prefix top-two/ECS run was intentionally skipped after the fail-fast
+speed rejection; therefore no semantic-quality claim is made. Reopen only if
+a new representation removes the conversion boundary or a wider design
+eliminates the partial-output round trip rather than merely narrowing it.
+
+Repeat evidence:
+
+- `/private/tmp/qwen_partial_h16_16k_ab.log`,
+  `9685a95853ead88ed57013fbc7c4b6acd7dcbef98f327a1f4ef812ba86d7dd3c`;
+- `/private/tmp/qwen_partial_h16_16k_ba.log`,
+  `41353ed72e9ce96ce5510b86ceae3e6e9c0ca5ef009004d7bac3d91fcc3753be`.
+
+Refresh on split-K scratch representation, stage-one/stage-two fusion boundary,
+P4/BF16 ownership, Metal compiler/toolchain, device, timing method, gate, or
+evidence loss.
