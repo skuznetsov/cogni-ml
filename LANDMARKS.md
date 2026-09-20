@@ -29036,3 +29036,31 @@ Refresh after source/toolchain/device/model/workload changes.
   explicit direct-QK plus P4 T8. Add real-prefix top-2/ECS evidence before
   reconsidering admission. Detailed logs and hashes are in
   `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-20 — Real-prefix top-2 attributes drift to direct-QK
+
+- Probe schema `qwen-adaptive-t8-decode-ab-v10` adds a real-prefix-only quality
+  mode with two independent self-fed states, one full-logits prefill per state,
+  boundary/warmup/measured top-two records, a complete-sample/EOS guard, and an
+  aligned-input gate over ranked top two, both logits, margin, and free-run
+  common prefix. Timing admission is disabled in quality mode.
+- A guarded contiguous-V-only run at a 6,511-token real chat prefix completed
+  all 34 positions: 68/68 ranked top-two matches, 34/34 exact top-one/top-two
+  coverage, identical generated text, and zero first-logit, second-logit, and
+  margin delta. It passed the bounded quality gate under a 30% memory floor and
+  24 GiB cap. Its `+1.792%` diagnostic timing is not speed evidence.
+- Direct-QK-only and direct-QK-plus-V logs on the same prompt have identical
+  drift sequences: maxima `0.0028953552` (first), `0.0024356842` (second), and
+  `0.0025596619` (margin), with 19/15/18 positions above `1e-4`. V-only has zero
+  drift. This attributes the observed deviation to direct-QK for the tested
+  trajectory; it does not prove general semantic equivalence.
+- ECS uses static `output.weight` rows and equals 1.0 here because IDs match; it
+  is not a semantic-task score. The full-logits prefill path differs from the
+  production top1-only path, and the route certificate proves eligibility, not
+  execution.
+- Verdict: contiguous-V is ROBUST within this bounded real-prefix certificate;
+  direct-QK and the combined bundle remain VULNERABLE for strict numeric
+  promotion. Keep both default-off. Next, decouple V from direct-QK and test
+  legacy shared-K plus contiguous-V for real-prefix quality and repeated
+  long-context speed. Evidence hashes and refresh conditions are recorded in
+  `docs/qwen-qbit-cache-frontier.md`.

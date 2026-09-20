@@ -4344,3 +4344,78 @@ should be added before any broader quality claim. Evidence and SHA-256:
 
 Refresh on kernel/policy/probe, cache map, model/tokenizer/template,
 compiler/Metal toolchain, device/OS, timing method, threshold, or evidence loss.
+
+### Real-prefix top-2 attribution isolates direct-QK drift (2026-09-20)
+
+Probe schema `qwen-adaptive-t8-decode-ab-v10` adds an explicit quality-only
+mode for real prompt prefixes. It creates two independent states, obtains the
+prefill-boundary top two from one full-logits prefill per state, and then
+self-feeds the baseline and candidate trajectories independently. The gate is
+fail-closed on early EOS or an incomplete requested sample count. While inputs
+remain aligned, it requires identical ranked top two plus first-logit,
+second-logit, and margin deltas no greater than `1e-4`; it also requires the
+entire generated common prefix. Once inputs diverge, same-input logit
+comparisons are explicitly invalid rather than being compared across different
+histories; the divergence itself is recorded as the failing certificate.
+Boundary, warmup, and measured positions are all retained in the final JSON.
+
+The guarded contiguous-V-only run used the real 6,511-token chat prefix and 32
+measured decode samples. It completed all 34 quality positions (prefill
+boundary, warmup, and 32 samples), with 68/68 ranked top-two matches, 34/34
+exact top-one and top-two coverage, identical 34-token continuations, and zero
+first-logit, second-logit, and margin delta at every position. The quality gate
+passed. It started and ended with 73% free memory under `run_safe.sh`, a 30%
+runtime floor, 24 GiB process-tree cap, and 900-second timeout. The final
+quality run reported `87.971 -> 86.395 ms` (`+1.792%`, 26/32 wins), but timing admission is
+deliberately invalid in this mode because exact top-two collection changes the
+execution path.
+
+Attribution against the same prompt is unusually strong. The previously
+captured direct-QK-only and direct-QK-plus-contiguous-V runs have the same
+per-position drift sequence: maximum first-logit delta `0.0028953552`, maximum
+second-logit delta `0.0024356842`, maximum margin delta `0.0025596619`, and
+respectively 19, 15, and 18 aligned positions above `1e-4`. Both still preserve
+68/68 ranked top-two choices and the same generated text. Since the V-only run
+has zero delta while adding V to direct-QK does not change the direct-QK drift,
+the observed real-prefix numeric deviation is attributable to direct-QK in
+this tested trajectory, not to contiguous-V.
+
+These certificates have deliberate limits. The quality prefill uses the
+full-logits path, not the production top1-only path. The route certificate
+proves policy eligibility, not actual pipeline execution. ECS is computed from
+the static `output.weight` rows and is a token-decision proxy only; it is 1.0
+here by construction because every compared token ID is identical, and no
+semantic task was scored. Diagnostic quality-mode timing is not promotable.
+
+**Adversary:** one prompt, one device, and 34 positions cannot establish broad
+semantic equivalence or a production speedup. The exact V result also does not
+make the current combined route safe because policy still requires direct-QK,
+whose strict numeric gate fails. Matching top-two ranks can hide materially
+different logits, which is why the independent numeric thresholds remain part
+of the gate.
+
+**decision:** contiguous-V is ROBUST for this bounded real-prefix quality
+certificate. Direct-QK and the combined stage-one bundle remain VULNERABLE for
+strict numeric promotion and stay default-off. Do not auto-admit either route.
+The next falsifier is to decouple contiguous-V from direct-QK, then compare
+legacy shared-K plus contiguous-V against the legacy route on both real-prefix
+quality and repeated synthetic long-context timing.
+
+Evidence and SHA-256:
+
+- final V-only v10:
+  `/private/tmp/qwen_p4_v_contiguous_real_6k5_top2_ecs_v10_final.log`,
+  `aaffb7f3caac11f0f2c29ab23261fc4637fae2bd8bc22f7b3688792b76f155e5`;
+- direct-QK-only v9:
+  `/private/tmp/qwen_p4_direct_qk_real_6k5_top2_ecs_v9.log`,
+  `a023c617b3b5b2c4ba6f780cc824841e7dd080523dd090e4753b1249ff473061`;
+- direct-QK plus contiguous-V v9:
+  `/private/tmp/qwen_p4_stage1_real_6k5_top2_ecs_v9.log`,
+  `dec20d8917db77824fda0b91416d42517e50796ccc859b5f057b41e041309d48`;
+- final release probe binary:
+  `/private/tmp/qwen35_adaptive_t8_decode_probe_top2_ecs_v10_final`,
+  `b11460af04109dcbbeec9feeafb9927a8809da5e97566da255b2a13d597d258f`.
+
+Refresh on probe or quality semantics, kernel/policy/cache layout, model,
+tokenizer/template/prompt, compiler/Metal toolchain, device/OS, thresholds,
+safety policy, or evidence loss.
