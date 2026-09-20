@@ -28577,3 +28577,36 @@ Refresh after source/toolchain/device/model/workload changes.
   toolchain/OS/device/source change or evidence loss. Return pointer remains
   the attributed model reads/page-ins between commit and GPU start; preserve
   the70/30%,24GiB safety envelope.
+
+### Continuation 2026-09-19 — Whole-GGUF WILLNEED moves cost and loses cold wall time
+
+- Current llama.cpp maps the complete model with MAP_SHARED and requests
+  POSIX_MADV_WILLNEED for the complete mapping during model load. llama-bench
+  then performs an untimed full prompt warmup before timed prompt repetitions.
+  Its reported pp numbers are therefore intentionally warm and must not be
+  compared with our first cold request as if both included the same work.
+- A temporary exact-opt-in Qwen path issued whole-mapping MADV_WILLNEED before
+  creating the weight container. macOS documents POSIX_MADV_WILLNEED as the
+  same advice as MADV_WILLNEED. Default behavior remained unchanged; malformed
+  values failed closed. The diagnostic retained the original 7,839-token
+  input but stopped after the first successful shared Metal command.
+- Same binary/model/input/controls, fresh processes, control then candidate:
+  control weight load 83.428ms, first wait 4922.200ms, GPU 1424.218ms;
+  WILLNEED weight load 2274.737ms including 2195.198ms in the hint, first wait
+  3802.612ms, GPU 1414.769ms. The hint reduced pre-GPU wait by 1109.802ms but
+  increased load-plus-first-wait from 5005.628ms to 6077.349ms (+21.4%). Both
+  exited 0 with one command, initial/final 74% free memory, no guard kill or
+  Metal failure.
+- This ordered pair is not an ABBA speed certificate and cannot establish
+  cold-disk generality; the earlier control could warm pages for the candidate.
+  That bias favors WILLNEED, yet the candidate still loses total cold wall
+  time. Verdict ROBUST for rejecting synchronous whole-file WILLNEED as a
+  default cold-start optimization on this host; VULNERABLE for claims about
+  background or bounded next-layer prefetch, MAP_SHARED, or other devices.
+- The runtime prototype was removed. Raw logs:
+  `/private/tmp/qwen35_mmap_prefetch_control.log` and
+  `/private/tmp/qwen35_mmap_prefetch_candidate.log`. Next discriminator, if
+  pursued, is bounded completion-safe next-layer-group prefetch overlapped with
+  current GPU work; count its total request wall time and peak memory, not only
+  the shifted submit gap. Preserve the 70/30%, 24GiB envelope. Refresh on model,
+  mapping policy, OS/device/storage state, input, or evidence loss.
