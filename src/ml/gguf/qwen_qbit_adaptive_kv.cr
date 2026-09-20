@@ -16,15 +16,17 @@ module ML::GGUF
   module QwenQBitAdaptiveKV
     extend self
 
-    ROW_VALUES         = 256
-    TIER_BYTES         =   4
-    OFFSET_BYTES       =   4
-    METADATA_BYTES     = TIER_BYTES + OFFSET_BYTES
-    BASE_ROW_BYTES     = 8 + 4 * (ROW_VALUES // 8)
-    P4_SIDECAR_BYTES   = 0
-    P5_SIDECAR_BYTES   = ROW_VALUES // 8
-    BF16_SIDECAR_BYTES = ROW_VALUES * sizeof(UInt16)
-    F32_SIDECAR_BYTES  = ROW_VALUES * sizeof(Float32)
+    ROW_VALUES               = 256
+    TIER_BYTES               =   4
+    OFFSET_BYTES             =   4
+    METADATA_BYTES           = TIER_BYTES + OFFSET_BYTES
+    BASE_ROW_BYTES           = 8 + 4 * (ROW_VALUES // 8)
+    P4_RUNTIME_WORDS_PER_ROW = ROW_VALUES // 8
+    P4_RUNTIME_WORD_BYTES    = sizeof(UInt32)
+    P4_SIDECAR_BYTES         = 0
+    P5_SIDECAR_BYTES         = ROW_VALUES // 8
+    BF16_SIDECAR_BYTES       = ROW_VALUES * sizeof(UInt16)
+    F32_SIDECAR_BYTES        = ROW_VALUES * sizeof(Float32)
 
     # Metadata values are stable on-wire integers. Keeping the enum's backing
     # type UInt32 prevents an accidental signed conversion at the boundary.
@@ -176,6 +178,65 @@ module ML::GGUF
       encoded.payload[sidecar_offset, sidecar.size].copy_from(sidecar) unless sidecar.empty?
       validate(encoded)
       encoded
+    end
+
+    # Convert canonical plane-major P4 rows into the runtime-only word layout.
+    # Each little-endian UInt32 contains eight adjacent four-bit prefixes, with
+    # the first value in the least-significant nibble. Row moments and the
+    # 136-byte row size are unchanged. Snapshots remain canonical and must use
+    # the inverse transform before transport or validation.
+    def p4_runtime_words_from_canonical_base(canonical : Bytes) : Bytes
+      validate_p4_base_region_size(canonical)
+      runtime = Bytes.new(canonical.size, 0_u8)
+      plane_bytes = ROW_VALUES // 8
+      row_count = canonical.size // BASE_ROW_BYTES
+
+      row_count.times do |row|
+        row_offset = row * BASE_ROW_BYTES
+        runtime[row_offset, 8].copy_from(canonical[row_offset, 8])
+        P4_RUNTIME_WORDS_PER_ROW.times do |group|
+          canonical_byte = plane_bytes - 1 - group
+          word = 0_u32
+          8.times do |within_group|
+            code = 0_u32
+            4.times do |plane|
+              plane_byte = canonical[row_offset + 8 + plane * plane_bytes + canonical_byte]
+              code |= (((plane_byte >> within_group) & 1_u8).to_u32 << (3 - plane))
+            end
+            word |= code << (within_group * 4)
+          end
+          write_u32_le(runtime, row_offset + 8 + group * P4_RUNTIME_WORD_BYTES, word)
+        end
+      end
+      runtime
+    end
+
+    # Rebuild the canonical plane-major base rows from the runtime-only word
+    # layout. This is byte-exact, including row moments, and deliberately
+    # allocates a distinct buffer so runtime storage cannot alias snapshots.
+    def p4_canonical_base_from_runtime_words(runtime : Bytes) : Bytes
+      validate_p4_base_region_size(runtime)
+      canonical = Bytes.new(runtime.size, 0_u8)
+      plane_bytes = ROW_VALUES // 8
+      row_count = runtime.size // BASE_ROW_BYTES
+
+      row_count.times do |row|
+        row_offset = row * BASE_ROW_BYTES
+        canonical[row_offset, 8].copy_from(runtime[row_offset, 8])
+        P4_RUNTIME_WORDS_PER_ROW.times do |group|
+          word = read_u32_le(runtime, row_offset + 8 + group * P4_RUNTIME_WORD_BYTES)
+          canonical_byte = plane_bytes - 1 - group
+          8.times do |within_group|
+            code = (word >> (within_group * 4)) & 0xf_u32
+            4.times do |plane|
+              next if (code & (1_u32 << (3 - plane))) == 0
+              destination = row_offset + 8 + plane * plane_bytes + canonical_byte
+              canonical[destination] |= 1_u8 << within_group
+            end
+          end
+        end
+      end
+      canonical
     end
 
     # Encode all rows as dense p4 plus the requested per-row tier.
@@ -390,6 +451,12 @@ module ML::GGUF
         raise ArgumentError.new("adaptive QBit values must be finite") unless value.finite?
       end
       nil
+    end
+
+    private def validate_p4_base_region_size(bytes : Bytes) : Nil
+      unless bytes.size % BASE_ROW_BYTES == 0
+        raise ArgumentError.new("adaptive QBit P4 base region must contain complete rows")
+      end
     end
 
     private def validate_block_size(block_size : Int32) : Nil

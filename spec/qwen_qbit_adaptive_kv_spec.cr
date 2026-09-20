@@ -36,6 +36,32 @@ module QwenQBitAdaptiveKVSpec
     bytes[offset + 2] = ((value >> 16) & 0xff_u32).to_u8
     bytes[offset + 3] = ((value >> 24) & 0xff_u32).to_u8
   end
+
+  def read_u32(bytes : Bytes, offset : Int32) : UInt32
+    bytes[offset].to_u32 |
+      (bytes[offset + 1].to_u32 << 8) |
+      (bytes[offset + 2].to_u32 << 16) |
+      (bytes[offset + 3].to_u32 << 24)
+  end
+
+  def canonical_p4_prefix(base : Bytes, row : Int32, within : Int32) : UInt8
+    row_offset = row * ML::GGUF::QwenQBitAdaptiveKV::BASE_ROW_BYTES
+    plane_bytes = ML::GGUF::QwenQBitAdaptiveKV::ROW_VALUES // 8
+    byte_offset = plane_bytes - 1 - within // 8
+    bit = within & 7
+    code = 0_u8
+    4.times do |plane|
+      plane_byte = base[row_offset + 8 + plane * plane_bytes + byte_offset]
+      code |= (((plane_byte >> bit) & 1_u8) << (3 - plane))
+    end
+    code
+  end
+
+  def runtime_p4_prefix(runtime : Bytes, row : Int32, within : Int32) : UInt8
+    row_offset = row * ML::GGUF::QwenQBitAdaptiveKV::BASE_ROW_BYTES
+    word_offset = row_offset + 8 + (within // 8) * sizeof(UInt32)
+    ((read_u32(runtime, word_offset) >> ((within & 7) * 4)) & 0xf_u32).to_u8
+  end
 end
 
 describe ML::GGUF::QwenQBitAdaptiveKV do
@@ -71,6 +97,16 @@ describe ML::GGUF::QwenQBitAdaptiveKV do
     regions.base.size.should eq(4 * ML::GGUF::QwenQBitAdaptiveKV::BASE_ROW_BYTES)
     regions.metadata.size.should eq(4 * ML::GGUF::QwenQBitAdaptiveKV::METADATA_BYTES)
     regions.sidecar.size.should eq(544 + ML::GGUF::QwenQBitAdaptiveKV::F32_SIDECAR_BYTES)
+
+    runtime_base = codec.p4_runtime_words_from_canonical_base(regions.base)
+    first_canonical_byte = regions.base[0]
+    runtime_base[0] ^= 0xff_u8
+    regions.base[0].should eq(first_canonical_byte)
+    runtime_base[0] ^= 0xff_u8
+    restored_base = codec.p4_canonical_base_from_runtime_words(runtime_base)
+    restored_base.should eq(regions.base)
+    restored = codec.encoded_from_regions(codec.plan(tiers), tiers.size, restored_base, regions.sidecar)
+    restored.payload.should eq(encoded.payload)
   end
 
   it "accounts for uniform tiers and a sparse approximately five-bit mixture exactly" do
@@ -233,6 +269,57 @@ describe ML::GGUF::QwenQBitAdaptiveKV do
       expect_raises(ArgumentError, /finite reconstruction/) do
         codec.validate(ML::GGUF::QwenQBitAdaptiveKV::Encoded.new(512, 256, malformed))
       end
+    end
+  end
+
+  it "round-trips canonical p4 bases through runtime nibble words exactly" do
+    row_count = 259
+    values = QwenQBitAdaptiveKVSpec.deterministic_values(row_count)
+    tiers = Array.new(row_count, ML::GGUF::QwenQBitAdaptiveKV::Tier::P4)
+    canonical = codec.regions(codec.encode(values, tiers)).base
+
+    runtime = codec.p4_runtime_words_from_canonical_base(canonical)
+    restored = codec.p4_canonical_base_from_runtime_words(runtime)
+
+    runtime.size.should eq(canonical.size)
+    restored.should eq(canonical)
+    [0, 1, 7, 8, 63, 64, 257, 258].each do |row|
+      [0, 1, 7, 8, 31, 63, 127, 255].each do |within|
+        QwenQBitAdaptiveKVSpec.runtime_p4_prefix(runtime, row, within).should eq(
+          QwenQBitAdaptiveKVSpec.canonical_p4_prefix(canonical, row, within)
+        )
+      end
+    end
+  end
+
+  it "uses explicit little-endian nibble order and rejects partial runtime rows" do
+    canonical = Bytes.new(ML::GGUF::QwenQBitAdaptiveKV::BASE_ROW_BYTES, 0_u8)
+    8.times { |i| canonical[i] = (0xa0 + i).to_u8 }
+    codes = (0_u8..15_u8).to_a
+    codes.each_with_index do |code, within|
+      byte_offset = 31 - within // 8
+      bit = within & 7
+      4.times do |plane|
+        next if (code & (1_u8 << (3 - plane))) == 0
+        canonical[8 + plane * 32 + byte_offset] |= 1_u8 << bit
+      end
+    end
+
+    runtime = codec.p4_runtime_words_from_canonical_base(canonical)
+    runtime[0, 8].should eq(canonical[0, 8])
+    QwenQBitAdaptiveKVSpec.read_u32(runtime, 8).should eq(0x76543210_u32)
+    QwenQBitAdaptiveKVSpec.read_u32(runtime, 12).should eq(0xfedcba98_u32)
+    codec.p4_canonical_base_from_runtime_words(runtime).should eq(canonical)
+
+    expect_raises(ArgumentError, /row/) do
+      codec.p4_runtime_words_from_canonical_base(
+        Bytes.new(ML::GGUF::QwenQBitAdaptiveKV::BASE_ROW_BYTES - 1, 0_u8)
+      )
+    end
+    expect_raises(ArgumentError, /row/) do
+      codec.p4_canonical_base_from_runtime_words(
+        Bytes.new(ML::GGUF::QwenQBitAdaptiveKV::BASE_ROW_BYTES + 1, 0_u8)
+      )
     end
   end
 end
