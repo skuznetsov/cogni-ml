@@ -72,6 +72,15 @@ private def parse_shape(args : Array(String)) : {Int32, Int32, Bool, Bool, Bool,
   end
 end
 
+private def coarse_weight_views_setting(configured : String?) : String?
+  case configured
+  when nil, "0", "1"
+    configured
+  else
+    raise ArgumentError.new("QWEN35_COARSE_WEIGHT_VIEWS must be 0 or 1")
+  end
+end
+
 private def self_test
   same, bad, nan, empty = Delta.new, Delta.new, Delta.new, Delta.new
   same.add(1.0, 1.0, STATE_ATOL, STATE_RTOL)
@@ -85,6 +94,16 @@ private def self_test
   raise "prefix profile parse failed" unless parse_shape(["--shape=7839:193", "--prefix-profile", "--dry-run"]) == {7839, 193, true, false, true, true}
   raise "split submit parse failed" unless parse_shape(["--shape=7839:193", "--prefix-profile", "--split-submit", "--dry-run"]) == {7839, 193, true, false, true, true}
   raise "first command parse failed" unless parse_shape(["--shape=7839:193", "--prefix-profile", "--split-submit", "--first-command", "--dry-run"]) == {7839, 193, true, false, true, true}
+  raise "coarse view setting parse failed" unless coarse_weight_views_setting(nil).nil? &&
+                                                  coarse_weight_views_setting("0") == "0" &&
+                                                  coarse_weight_views_setting("1") == "1"
+  expect_invalid_coarse = false
+  begin
+    coarse_weight_views_setting("yes")
+  rescue ArgumentError
+    expect_invalid_coarse = true
+  end
+  raise "invalid coarse view setting accepted" unless expect_invalid_coarse
   raise "unbalanced timing" unless TIMING_ORDER.size == 16 && TIMING_ORDER.count("baseline") == 8 && TIMING_WARMUP.count("baseline") == 2 && TIMING_WARMUP.count("candidate") == 2
   timing_quality!([1.0_f32, 2.0_f32], [1.0_f32, 2.0_f32], "same", "same")
   failures = 0
@@ -279,8 +298,10 @@ first_command = ARGV.includes?("--first-command")
   raise ArgumentError.new("--first-command requires diagnostic build") if first_command
 {% end %}
 model = ENV["QWEN35_MODEL"]? || "/Users/sergey/.cache/lm-studio/models/lmstudio-community/Qwen3.8-27B-GGUF/Qwen3.8-27B-Q4_K_M.gguf"
+coarse_weight_views = coarse_weight_views_setting(ENV["QWEN35_COARSE_WEIGHT_VIEWS"]?)
 ENV.keys.select { |k| k.starts_with?("QWEN35_") }.each { |k| ENV.delete(k) }
 ENV.delete("COGNI_METAL_SUBMIT_PROFILE")
+ENV["QWEN35_COARSE_WEIGHT_VIEWS"] = coarse_weight_views if coarse_weight_views
 ENV["COGNI_METAL_SUBMIT_PROFILE"] = "1" if split_submit
 ENV["QWEN35_PREFILL_CHUNK_SIZE"] = "2048"
 ENV["QWEN35_PREFILL_APPEND_MAX_GROUPS"] = "1"
