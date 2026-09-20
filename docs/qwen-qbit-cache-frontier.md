@@ -4255,6 +4255,11 @@ timing method, safety policy, gate, or evidence loss.
 
 ### Contiguous shared-V accelerates P4 stage one but remains opt-in (2026-09-20)
 
+Historical note: this section records the pre-decoupling implementation, where
+the only contiguous-V source variant also enabled direct-QK. It is retained as
+the evidence lineage for that experiment; the later shared-K decoupling section
+supersedes its policy requirement.
+
 True direct-V was rejected as the first move. Six GQA query heads use different
 softmax probabilities, so removing the shared V tile would require either six
 dequantizations of each V row, roughly six live output accumulators per lane,
@@ -4265,7 +4270,8 @@ two `float4` loads, then scatters them into the existing canonical partial
 output layout. Cache bytes, snapshot format, launch geometry, threadgroup
 allocation, barriers, fused stage two, and publication are unchanged.
 
-`QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS=1` is fail-closed, default-off, and is
+At this historical source state,
+`QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS=1` was fail-closed, default-off, and
 effective only with uniform P4, the P4 T8 loader, and
 `QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK=1`. AIR contains real four-wide
 threadgroup loads; it is not only a source-level rewrite. The 8K random-nonzero
@@ -4388,8 +4394,9 @@ here by construction because every compared token ID is identical, and no
 semantic task was scored. Diagnostic quality-mode timing is not promotable.
 
 **Adversary:** one prompt, one device, and 34 positions cannot establish broad
-semantic equivalence or a production speedup. The exact V result also does not
-make the current combined route safe because policy still requires direct-QK,
+semantic equivalence or a production speedup. At that source state, the exact V
+result also did not make the combined route safe because policy still required
+direct-QK,
 whose strict numeric gate fails. Matching top-two ranks can hide materially
 different logits, which is why the independent numeric thresholds remain part
 of the gate.
@@ -4419,3 +4426,81 @@ Evidence and SHA-256:
 Refresh on probe or quality semantics, kernel/policy/cache layout, model,
 tokenizer/template/prompt, compiler/Metal toolchain, device/OS, thresholds,
 safety policy, or evidence loss.
+
+### Shared-K contiguous-V decoupling clears the 16K product gate (2026-09-20)
+
+Contiguous-V no longer requires direct-QK. The Metal kernel already separated
+the two transformations: direct-QK controls K materialization and score
+accumulation, while contiguous-V controls only lane ownership during V
+accumulation. The policy now admits explicit contiguous-V for uniform P4 T8
+with legacy shared-K, and source selection retains four distinct combinations:
+legacy, direct-QK only, contiguous-V only, and direct-QK plus contiguous-V.
+Cache bytes, snapshot format, threadgroup allocation, barriers, stage two, and
+publication are unchanged. The feature remains fail-closed and default-off.
+
+The resident regression matrix preserves both the new shared-K plus
+contiguous-V route and the existing direct-QK plus contiguous-V route. The 8K
+random-nonzero oracle and visible tails 1/6/15/16 pass for both combinations,
+with byte-identical K/V payloads. The model-free isolated attention probe also
+holds direct-QK off in both arms. It measured:
+
+- 8K: wall `2.568 -> 2.178 ms` (`+15.20%`, 10/10) and completed-GPU
+  `2.041 -> 1.634 ms` (`+19.91%`, 10/10);
+- 16K: wall `3.369 -> 2.652 ms` (`+21.30%`, 10/10) and completed-GPU
+  `2.746 -> 2.002 ms` (`+27.08%`, 10/10).
+
+The guarded real-prefix quality run used a 6,511-token chat prefix, independent
+self-fed states, and 32 measured samples. Its route certificate reported zero
+direct-QK owners and 12 contiguous-V P4 owners. All 34 positions, including
+the prefill boundary and warmup, retained identical ranked top two, first and
+second logits, margins, token IDs, and generated text: 68/68 ranked top-two
+matches, 34/34 exact top-one/top-two coverage, and zero numeric delta. The
+quality gate passed. Timing from this full-top-two path is diagnostic only.
+
+Two opposite-order 20-pair full-token runs then separated the long-context
+speed boundary:
+
+- 8K: `95.161 -> 93.151 ms` (`+2.11%`, 17/20) and
+  `83.469 -> 81.350 ms` (`+2.54%`, 15/20). Both preserve identical output but
+  fail the declared 3% and 16/20-wins product gate.
+- 16K: `88.540 -> 83.897 ms` (`+5.24%`, 20/20) and
+  `85.870 -> 82.221 ms` (`+4.25%`, 20/20). Both pass the product timing gate
+  with identical output.
+
+**Adversary:** the 16K timing states use a synthetic zero-valued prefix, the
+real-prefix quality certificate covers one prompt and 34 positions, and the
+route certificate proves policy eligibility rather than executed-pipeline
+identity. The extra contiguous accumulators can also change register pressure
+on other devices. Positive isolated timing cannot promote the 8K product row,
+which missed the predeclared gate in both orders.
+
+**decision:** the decoupled shared-K plus contiguous-V route is ROBUST for the
+bounded correctness and 16K performance certificates on Apple M2 Max. Keep it
+explicit and default-off while locating a stable automatic crossover; do not
+enable it for 8K from these rows. The next falsifier is a repeated full-token
+context sweep around the crossover, followed by a matched production-boundary
+quality check before any automatic policy change. Evidence and SHA-256:
+
+- isolated attention:
+  `/private/tmp/qwen_p4_v_contiguous_legacy_qk_isolated.log`,
+  `b96494776016fd72bad20be26e255a3e95a985a3f36232f4d7d5b393701de629`;
+- real-prefix quality:
+  `/private/tmp/qwen_p4_v_contiguous_legacy_qk_real_6k5_top2.log`,
+  `64e353b639f41875caa869c7aec0e6941c814a3715afa90e04f089cae79dbbd8`;
+- 8K full-token AB/BA:
+  `/private/tmp/qwen_p4_v_contiguous_legacy_qk_fulltoken_8k_ab.log`,
+  `5eb4977f96a702b7981eb72681852489874a00d1e314cc4bd2e53cf0aaeab0b8`,
+  and `/private/tmp/qwen_p4_v_contiguous_legacy_qk_fulltoken_8k_ba.log`,
+  `405396db833a2c5312de3a85efec98a81567e00ba1c4d21b62c39c87f2ac8fcb`;
+- 16K full-token AB/BA:
+  `/private/tmp/qwen_p4_v_contiguous_legacy_qk_fulltoken_16k_ab.log`,
+  `f3a4c9df84e68cce4f4c499524322c1b8b7554e45bc04c11c3194271c31b2966`,
+  and `/private/tmp/qwen_p4_v_contiguous_legacy_qk_fulltoken_16k_ba.log`,
+  `a0383d50c43d6a01badd680f74e92b89d7b9ca88dae6bb93edce607d8b274c54`;
+- release probe binary:
+  `/private/tmp/qwen35_adaptive_t8_decode_probe_v_only_decoupled`,
+  `422ee26211f67109798355edf9206e657a17f6f03c146d3ef4e73c0ab447799c`.
+
+Refresh on kernel/source selection, policy/probe/cache layout, model or prompt,
+compiler/Metal toolchain, device/OS, timing method, thresholds, safety policy,
+or evidence loss.

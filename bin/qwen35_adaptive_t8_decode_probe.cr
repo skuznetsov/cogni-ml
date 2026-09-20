@@ -122,7 +122,7 @@ private def with_adaptive_probe_env(resident_map : String,
     ENV["QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED"] = "1"
     ENV["QWEN35_ADAPTIVE_GQA6_TILE"] = "15"
     ENV["QWEN35_ADAPTIVE_SPLITK_CHUNK"] = "64"
-    ENV[DIRECT_QK_ENV_KEY] = "1"
+    ENV[DIRECT_QK_ENV_KEY] = "0"
     ENV[V_CONTIGUOUS_ENV_KEY] = candidate ? "1" : "0"
   elsif compare_direct_qk
     T8_ENV_KEYS.each { |key| ENV[key] = "1" }
@@ -326,13 +326,12 @@ private def verify_candidate_t8_route!(state : ML::GGUF::Qwen35CPU::State,
             true,
             ENV[DIRECT_QK_ENV_KEY]?,
           )
-          if (compare_direct_qk || compare_v_contiguous || compare_p4_stage1) && !direct_qk
+          if (compare_direct_qk || compare_p4_stage1) && !direct_qk
             raise "P4 direct-QK route is inactive at layer #{layer_index}"
           end
           v_contiguous = ML::GGUF::QwenQBitAdaptiveMetalPolicy.p4_splitk_v_contiguous?(
             true,
             true,
-            direct_qk,
             ENV[V_CONTIGUOUS_ENV_KEY]?,
           )
           if (compare_v_contiguous || compare_p4_stage1) && !v_contiguous
@@ -370,7 +369,6 @@ private def verify_candidate_t8_route!(state : ML::GGUF::Qwen35CPU::State,
             raise "P4 direct-QK route leaked into BF16 layer #{layer_index}"
           end
           if ML::GGUF::QwenQBitAdaptiveMetalPolicy.p4_splitk_v_contiguous?(
-               false,
                false,
                false,
                ENV[V_CONTIGUOUS_ENV_KEY]?,
@@ -602,7 +600,7 @@ OptionParser.parse do |parser|
   parser.on("--compare-stage2", "Hold T8 on and compare legacy stage2 with automatic policy") { compare_stage2 = true }
   parser.on("--compare-splitk-chunk", "Compare explicit split-K chunks 64 and 60") { compare_splitk_chunk = true }
   parser.on("--compare-direct-qk", "Hold P4/BF16 T8 and fused stage2 on; toggle P4 direct-QK") { compare_direct_qk = true }
-  parser.on("--compare-v-contiguous", "Hold P4 direct-QK on; toggle contiguous shared-V accumulation") { compare_v_contiguous = true }
+  parser.on("--compare-v-contiguous", "Hold legacy shared-K on; toggle contiguous shared-V accumulation") { compare_v_contiguous = true }
   parser.on("--compare-p4-stage1", "Compare legacy P4 T8 stage1 with forced direct-QK plus contiguous-V") { compare_p4_stage1 = true }
   parser.on("--quality-top2", "Run real-prefix free trajectories with top-2, margin, and output-weight ECS diagnostics; disables timing admission") { quality_top2 = true }
   parser.on("--synthetic-prefix N", "Restore a zero-valued adaptive prefix for decode-only timing") { |value| synthetic_prefix = value.to_i }
@@ -917,8 +915,12 @@ begin
   puts "  quality_top2=#{quality_top2} quality_scope=#{quality_top2 ? "real_prefix_free_run" : "disabled"} prefill_boundary_mode=#{prefill_boundary_mode} timing_gate_valid=#{timing_gate_valid}"
   puts "  baseline_stage2=#{baseline_stage2} candidate_stage2=#{candidate_stage2}"
   puts "  p4_stage1_admission=#{compare_p4_stage1 ? "forced_off_vs_forced_on" : "not_compared"}"
-  baseline_direct_qk = compare_v_contiguous ? true : ((compare_direct_qk || compare_p4_stage1) ? false : nil)
-  candidate_direct_qk = (compare_direct_qk || compare_v_contiguous || compare_p4_stage1) ? true : nil
+  baseline_direct_qk = (compare_direct_qk || compare_v_contiguous || compare_p4_stage1) ? false : nil
+  candidate_direct_qk = if compare_direct_qk || compare_p4_stage1
+                          true
+                        elsif compare_v_contiguous
+                          false
+                        end
   baseline_v_contiguous = (compare_v_contiguous || compare_p4_stage1) ? false : nil
   candidate_v_contiguous = (compare_v_contiguous || compare_p4_stage1) ? true : nil
   puts "  baseline_direct_qk=#{baseline_direct_qk} candidate_direct_qk=#{candidate_direct_qk}"

@@ -483,19 +483,45 @@ module ML::GGUF
       if SOURCE_TILE15_P4_SPLITK_DIRECT_QK == SOURCE_TILE15_P4_SPLITK_T8
         raise "adaptive P4 split-K direct-QK tile-15 source patch no longer matches"
       end
-      SOURCE_P4_SPLITK_V_CONTIGUOUS = SOURCE_P4_SPLITK_DIRECT_QK.sub(
+      SOURCE_P4_SPLITK_V_CONTIGUOUS = SOURCE_P4_SPLITK_T8.sub(
         "constant bool QQA_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS = false;",
         "constant bool QQA_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS = true;",
       )
-      if SOURCE_P4_SPLITK_V_CONTIGUOUS == SOURCE_P4_SPLITK_DIRECT_QK
+      if SOURCE_P4_SPLITK_V_CONTIGUOUS == SOURCE_P4_SPLITK_T8
         raise "adaptive P4 split-K contiguous-V source patch no longer matches"
       end
-      SOURCE_TILE15_P4_SPLITK_V_CONTIGUOUS = SOURCE_TILE15_P4_SPLITK_DIRECT_QK.sub(
+      SOURCE_TILE15_P4_SPLITK_V_CONTIGUOUS = SOURCE_TILE15_P4_SPLITK_T8.sub(
         "constant bool QQA_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS = false;",
         "constant bool QQA_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS = true;",
       )
-      if SOURCE_TILE15_P4_SPLITK_V_CONTIGUOUS == SOURCE_TILE15_P4_SPLITK_DIRECT_QK
+      if SOURCE_TILE15_P4_SPLITK_V_CONTIGUOUS == SOURCE_TILE15_P4_SPLITK_T8
         raise "adaptive P4 split-K contiguous-V tile-15 source patch no longer matches"
+      end
+      SOURCE_P4_SPLITK_DIRECT_QK_V_CONTIGUOUS = SOURCE_P4_SPLITK_DIRECT_QK.sub(
+        "constant bool QQA_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS = false;",
+        "constant bool QQA_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS = true;",
+      )
+      if SOURCE_P4_SPLITK_DIRECT_QK_V_CONTIGUOUS == SOURCE_P4_SPLITK_DIRECT_QK
+        raise "adaptive P4 split-K direct-QK contiguous-V source patch no longer matches"
+      end
+      SOURCE_TILE15_P4_SPLITK_DIRECT_QK_V_CONTIGUOUS = SOURCE_TILE15_P4_SPLITK_DIRECT_QK.sub(
+        "constant bool QQA_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS = false;",
+        "constant bool QQA_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS = true;",
+      )
+      if SOURCE_TILE15_P4_SPLITK_DIRECT_QK_V_CONTIGUOUS == SOURCE_TILE15_P4_SPLITK_DIRECT_QK
+        raise "adaptive P4 split-K direct-QK contiguous-V tile-15 source patch no longer matches"
+      end
+      unless SOURCE_P4_SPLITK_V_CONTIGUOUS.includes?("constant bool QQA_ADAPTIVE_P4_SPLITK_DIRECT_QK = false;") &&
+             SOURCE_P4_SPLITK_V_CONTIGUOUS.includes?("constant bool QQA_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS = true;") &&
+             SOURCE_TILE15_P4_SPLITK_V_CONTIGUOUS.includes?("constant bool QQA_ADAPTIVE_P4_SPLITK_DIRECT_QK = false;") &&
+             SOURCE_TILE15_P4_SPLITK_V_CONTIGUOUS.includes?("constant bool QQA_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS = true;")
+        raise "adaptive P4 split-K shared-K contiguous-V source markers are inconsistent"
+      end
+      unless SOURCE_P4_SPLITK_DIRECT_QK_V_CONTIGUOUS.includes?("constant bool QQA_ADAPTIVE_P4_SPLITK_DIRECT_QK = true;") &&
+             SOURCE_P4_SPLITK_DIRECT_QK_V_CONTIGUOUS.includes?("constant bool QQA_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS = true;") &&
+             SOURCE_TILE15_P4_SPLITK_DIRECT_QK_V_CONTIGUOUS.includes?("constant bool QQA_ADAPTIVE_P4_SPLITK_DIRECT_QK = true;") &&
+             SOURCE_TILE15_P4_SPLITK_DIRECT_QK_V_CONTIGUOUS.includes?("constant bool QQA_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS = true;")
+        raise "adaptive P4 split-K direct-QK contiguous-V source markers are inconsistent"
       end
       SOURCE_BF16_SPLITK_T8 = SOURCE.sub(
         "constant bool QQA_ADAPTIVE_BF16_SPLITK_T8 = false;",
@@ -1397,7 +1423,6 @@ module ML::GGUF
         v_contiguous = QwenQBitAdaptiveMetalPolicy.p4_splitk_v_contiguous?(
           uniform_tier == QwenQBitAdaptiveKV::Tier::P4,
           p4_t8,
-          direct_qk,
           ENV["QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS"]?,
         )
         key = {tile, dequant_t4, p4_t8, bf16_t8, direct_qk, v_contiguous}
@@ -1469,6 +1494,9 @@ module ML::GGUF
           return tile == 15 ? SOURCE_TILE15_BF16_SPLITK_T8 : SOURCE_BF16_SPLITK_T8
         end
         if p4_t8
+          if direct_qk && v_contiguous
+            return tile == 15 ? SOURCE_TILE15_P4_SPLITK_DIRECT_QK_V_CONTIGUOUS : SOURCE_P4_SPLITK_DIRECT_QK_V_CONTIGUOUS
+          end
           if v_contiguous
             return tile == 15 ? SOURCE_TILE15_P4_SPLITK_V_CONTIGUOUS : SOURCE_P4_SPLITK_V_CONTIGUOUS
           end

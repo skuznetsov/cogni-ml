@@ -29009,6 +29009,10 @@ Refresh after source/toolchain/device/model/workload changes.
 
 ### Continuation 2026-09-20 — Contiguous shared-V wins locally; automatic admission is rejected
 
+- Historical scope: this entry records the pre-decoupling source state, where
+  contiguous-V required direct-QK. The later shared-K decoupling continuation
+  supersedes that policy requirement while preserving this evidence lineage.
+
 - True direct-V is not the next admissible move: six GQA heads require six
   probability streams, forcing repeated dequantization, large live
   accumulators, or more scratch/barriers. The bounded candidate keeps one
@@ -29029,7 +29033,8 @@ Refresh after source/toolchain/device/model/workload changes.
   reached `3.2424927e-4` top-1-logit drift and violated the declared `1e-4`
   gate. The run failed closed, the automatic policy was removed, and the
   threshold was not weakened after observation.
-- Verdict: ROBUST for the local vectorization, cache boundary, and repeated
+- Verdict at that source state: ROBUST for the local vectorization, cache
+  boundary, and repeated
   synthetic long-context speed; VULNERABLE for automatic production admission
   and broad semantic quality. Keep
   `QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS=1` default-off and dependent on
@@ -29064,3 +29069,27 @@ Refresh after source/toolchain/device/model/workload changes.
   legacy shared-K plus contiguous-V for real-prefix quality and repeated
   long-context speed. Evidence hashes and refresh conditions are recorded in
   `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-20 — Shared-K contiguous-V clears the 16K gate
+
+- Contiguous-V is now independent of direct-QK in policy and source selection.
+  The kernel already kept K scoring and V accumulation separate, so the change
+  requires no cache, snapshot, threadgroup, barrier, or publication rewrite.
+  Four source variants preserve legacy, direct-only, V-only, and combined
+  behavior. The option remains explicit and default-off.
+- Resident Metal regressions retain both V-only combinations: shared-K plus V
+  and direct-QK plus V. The 8K random-nonzero oracle and tails 1/6/15/16 pass
+  with byte-identical K/V payloads. Isolated shared-K plus V attention improves
+  wall/GPU time by `15.20/19.91%` at 8K and `21.30/27.08%` at 16K.
+- A guarded 6,511-token real-prefix free run reported zero direct-QK owners and
+  12 contiguous-V owners. All 34 positions retained exact ranked top two, both
+  logits, margin, token IDs, and text; the bounded quality gate passed.
+- Opposite-order full-token runs miss the product gate at 8K (`+2.11/+2.54%`)
+  but pass twice at 16K (`+5.24/+4.25%`, 20/20 wins each), with identical
+  outputs. Synthetic timing is not semantic evidence, and the route certificate
+  proves eligibility rather than actual pipeline identity.
+- Verdict: ROBUST for the bounded shared-K correctness and 16K speed
+  certificates on Apple M2 Max; VULNERABLE for broad automatic admission. Keep
+  default-off, reject 8K promotion, and locate the crossover with a repeated
+  context sweep before changing automatic policy. Evidence hashes and refresh
+  conditions are recorded in `docs/qwen-qbit-cache-frontier.md`.

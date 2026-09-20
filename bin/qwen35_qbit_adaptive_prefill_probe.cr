@@ -394,10 +394,10 @@ module Qwen35QBitAdaptivePrefillProbe
             max_output_delta = 0.0_f32
             begin
               # Compile both variants up front. The contiguous-V comparison
-              # retains direct-QK in both arms and changes only V accumulation.
+              # retains legacy shared-K in both arms and changes only V accumulation.
               ["0", "1"].each do |mode|
                 ENV["QWEN35_ADAPTIVE_P4_SPLITK_T8"] = "1"
-                ENV["QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK"] = compare_p4_v_contiguous ? "1" : mode
+                ENV["QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK"] = compare_p4_v_contiguous ? "0" : mode
                 ENV["QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS"] = compare_p4_v_contiguous ? mode : "0"
                 timed_restored_sample(
                   plan, snapshot_k, snapshot_v, prefix, capacity,
@@ -411,7 +411,7 @@ module Qwen35QBitAdaptivePrefillProbe
                 pair = Hash(String, Tuple(Float64, Float64, Array(Float32), Bytes, Bytes)).new
                 order.each do |mode|
                   ENV["QWEN35_ADAPTIVE_P4_SPLITK_T8"] = "1"
-                  ENV["QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK"] = compare_p4_v_contiguous ? "1" : mode
+                  ENV["QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK"] = compare_p4_v_contiguous ? "0" : mode
                   ENV["QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS"] = compare_p4_v_contiguous ? mode : "0"
                   sample = timed_restored_sample_with_snapshot(
                     plan, snapshot_k, snapshot_v, prefix, capacity,
@@ -633,7 +633,7 @@ OptionParser.parse do |parser|
   parser.on("--compare-p4-direct-qk", "Run the same-process 10-pair P4 direct-QK gate with T8 forced") do
     compare_p4_direct_qk = true
   end
-  parser.on("--compare-p4-v-contiguous", "Run the same-process 10-pair contiguous-V gate with P4 T8/direct-QK forced") do
+  parser.on("--compare-p4-v-contiguous", "Run the same-process 10-pair contiguous-V gate with P4 T8 and legacy shared-K forced") do
     compare_p4_v_contiguous = true
   end
   parser.on("--compare-splitk-chunks BASE,CANDIDATE", "Run a same-process 10-pair split-K chunk-size gate") do |value|

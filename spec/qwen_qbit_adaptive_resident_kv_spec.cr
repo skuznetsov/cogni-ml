@@ -440,6 +440,9 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
     v_contiguous_splitk = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
       plan, plan, capacity, n_head_kv, head_dim,
     )
+    direct_v_contiguous_splitk = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
+      plan, plan, capacity, n_head_kv, head_dim,
+    )
     initial_buffers = [
       ML::MetalBuffer.from_array(initial_k),
       ML::MetalBuffer.from_array(initial_v),
@@ -452,7 +455,7 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
     previous_v_contiguous = ENV["QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS"]?
     begin
       [baseline, t4_serial, scalar_splitk, t4_splitk, legacy_splitk, t8_splitk,
-       direct_qk_splitk, v_contiguous_splitk].each do |cache|
+       direct_qk_splitk, v_contiguous_splitk, direct_v_contiguous_splitk].each do |cache|
         ML::GGUF::QwenQBitAdaptiveResidentKV.append_from_metal(
           cache, initial_buffers[0], initial_buffers[1], packed_len,
         )
@@ -474,7 +477,8 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
         {cache: legacy_splitk, splitk: "1", dequant_t4: "0", stage2_fused: "0", p4_t8: "0", direct_qk: "0", v_contiguous: "0"},
         {cache: t8_splitk, splitk: "1", dequant_t4: "1", stage2_fused: "auto", p4_t8: "1", direct_qk: "0", v_contiguous: "0"},
         {cache: direct_qk_splitk, splitk: "1", dequant_t4: "1", stage2_fused: "auto", p4_t8: "1", direct_qk: "1", v_contiguous: "0"},
-        {cache: v_contiguous_splitk, splitk: "1", dequant_t4: "1", stage2_fused: "auto", p4_t8: "1", direct_qk: "1", v_contiguous: "1"},
+        {cache: v_contiguous_splitk, splitk: "1", dequant_t4: "1", stage2_fused: "auto", p4_t8: "1", direct_qk: "0", v_contiguous: "1"},
+        {cache: direct_v_contiguous_splitk, splitk: "1", dequant_t4: "1", stage2_fused: "auto", p4_t8: "1", direct_qk: "1", v_contiguous: "1"},
       ]
       cases.each do |candidate|
         ENV["QWEN35_ADAPTIVE_SPLITK"] = candidate[:splitk]
@@ -537,10 +541,13 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
       v_contiguous_k, v_contiguous_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(v_contiguous_splitk)
       v_contiguous_k.payload.should eq(baseline_k.payload)
       v_contiguous_v.payload.should eq(baseline_v.payload)
+      direct_v_contiguous_k, direct_v_contiguous_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(direct_v_contiguous_splitk)
+      direct_v_contiguous_k.payload.should eq(baseline_k.payload)
+      direct_v_contiguous_v.payload.should eq(baseline_v.payload)
 
       hits_after_first, misses_after_first = ML::GGUF::Qwen35Metal::Scratch.stats
       misses_after_first.should eq(misses_before + 3)
-      hits_after_first.should eq(hits_before + 15)
+      hits_after_first.should eq(hits_before + 18)
       ENV["QWEN35_ADAPTIVE_SPLITK"] = "1"
       ENV["QWEN35_ADAPTIVE_DEQUANT_T4"] = "1"
       ENV["QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED"] = "1"
@@ -607,6 +614,7 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
       t8_splitk.release
       direct_qk_splitk.release
       v_contiguous_splitk.release
+      direct_v_contiguous_splitk.release
     end
   end
 
@@ -658,9 +666,12 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
         v_contiguous = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
           plan, plan, capacity, n_head_kv, head_dim,
         )
+        direct_v_contiguous = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
+          plan, plan, capacity, n_head_kv, head_dim,
+        )
         begin
           if packed_len > 0
-            [serial, t8, direct, v_contiguous].each do |cache|
+            [serial, t8, direct, v_contiguous, direct_v_contiguous].each do |cache|
               ML::GGUF::QwenQBitAdaptiveResidentKV.append_from_metal(
                 cache, initial_k_buffer, initial_v_buffer, packed_len,
               )
@@ -677,7 +688,8 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
           [{cache: serial, splitk: "0", p4_t8: "0", direct_qk: "0", v_contiguous: "0"},
            {cache: t8, splitk: "1", p4_t8: "1", direct_qk: "0", v_contiguous: "0"},
            {cache: direct, splitk: "1", p4_t8: "1", direct_qk: "1", v_contiguous: "0"},
-           {cache: v_contiguous, splitk: "1", p4_t8: "1", direct_qk: "1", v_contiguous: "1"}].each do |candidate|
+           {cache: v_contiguous, splitk: "1", p4_t8: "1", direct_qk: "0", v_contiguous: "1"},
+           {cache: direct_v_contiguous, splitk: "1", p4_t8: "1", direct_qk: "1", v_contiguous: "1"}].each do |candidate|
             ENV["QWEN35_ADAPTIVE_SPLITK"] = candidate[:splitk]
             ENV["QWEN35_ADAPTIVE_SPLITK_MIN_CTX"] = "1"
             ENV["QWEN35_ADAPTIVE_DEQUANT_T4"] = "1"
@@ -711,17 +723,21 @@ describe ML::GGUF::QwenQBitAdaptiveResidentKV do
           t8_k, t8_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(t8)
           direct_k, direct_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(direct)
           v_contiguous_k, v_contiguous_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(v_contiguous)
+          direct_v_contiguous_k, direct_v_contiguous_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(direct_v_contiguous)
           t8_k.payload.should eq(serial_k.payload)
           t8_v.payload.should eq(serial_v.payload)
           direct_k.payload.should eq(serial_k.payload)
           direct_v.payload.should eq(serial_v.payload)
           v_contiguous_k.payload.should eq(serial_k.payload)
           v_contiguous_v.payload.should eq(serial_v.payload)
+          direct_v_contiguous_k.payload.should eq(serial_k.payload)
+          direct_v_contiguous_v.payload.should eq(serial_v.payload)
         ensure
           serial.release
           t8.release
           direct.release
           v_contiguous.release
+          direct_v_contiguous.release
         end
       end
     ensure

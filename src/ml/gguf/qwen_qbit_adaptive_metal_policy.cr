@@ -141,11 +141,10 @@ module ML::GGUF
     end
 
     # Experimental contiguous V accumulation retains the shared dequantized V
-    # tile and changes only each lane's eight output dimensions. Keep it behind
-    # direct-QK so the experiment adds one narrow pipeline variant.
+    # tile and changes only each lane's eight output dimensions. It is
+    # independent of the key-score implementation so direct-QK can remain off.
     def self.p4_splitk_v_contiguous?(uniform_p4 : Bool,
                                      p4_t8 : Bool,
-                                     direct_qk : Bool,
                                      override : String? = nil) : Bool
       enabled = case override.try(&.strip)
                 when nil then false
@@ -154,7 +153,7 @@ module ML::GGUF
                 else
                   raise ArgumentError.new("QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS must be 0 or 1")
                 end
-      enabled && uniform_p4 && p4_t8 && direct_qk
+      enabled && uniform_p4 && p4_t8
     end
   end
 end
