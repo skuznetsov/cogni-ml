@@ -4149,3 +4149,49 @@ this 512-thread geometry. A future B256 experiment must retain the established
 256-thread occupancy, for example by processing two B128 bands serially, and
 must beat the current SG8-B128 wall-time boundary rather than only reduce
 modelled bytes.
+
+### Runtime P4 nibble words are exact but below the promotion gate (2026-09-20)
+
+The canonical adaptive P4 base stores four 32-byte bitplanes after the 8-byte
+row header. A runtime-only alternative was tested at the same 136 bytes per
+row: 32 little-endian `UInt32` words, each holding eight adjacent four-bit
+prefixes with the first value in the least-significant nibble. The canonical
+snapshot layout remains unchanged. An exact CPU codec proves both directions,
+all 16 nibble values, row/group boundaries, non-aliasing, and byte-identical
+mixed P4/P5/BF16/F32 artifact reconstruction.
+
+A model-free Metal falsifier assigned one 32-thread SIMD-group to each P4 row.
+Both arms read identical headers, reconstructed all 256 values with the same
+centroid arithmetic, reduced the same Float32 row checksum, and wrote one
+output. The baseline loaded one byte from each of four canonical planes; the
+candidate loaded one packed `UInt32`. Completed-command GPU intervals used ten
+ABBA/BAAB pairs after three balanced warmups at 4 KV heads:
+
+- 6,144 tokens / 24,576 rows: `0.141292 -> 0.137667 ms`, `+2.63%`, 10/10 wins;
+- 8,192 tokens / 32,768 rows: `0.181917 -> 0.177792 ms`, `+2.32%`, 10/10 wins;
+- 16,384 tokens / 65,536 rows: `0.347500 -> 0.339042 ms`, `+2.49%`, 10/10 wins.
+
+Every row checksum was bitwise identical with zero mismatch and zero maximum
+absolute error. The guarded process began with 74% free system memory, kept a
+30% runtime floor and 1 GiB process-tree cap, used at most 18,350,080 bytes of
+probe GPU buffers, and exited zero. None of the three boundaries met the
+predeclared `>=3%` median gate, despite stable directionality.
+
+**Adversary:** This microbenchmark is favorable to the candidate: it isolates
+the loader and excludes attention score/value work, softmax, pack conversion,
+snapshot inversion, and the rest of a token. Therefore a sub-3% isolated gain
+cannot support a 3% whole-kernel or whole-token claim. The stable 10/10 win is
+evidence that the layout reduces a small local cost, not that changing the
+resident cache representation is worthwhile.
+
+**decision:** Keep the canonical plane-major resident and snapshot format; do
+not wire the nibble-word layout into Metal on its own. Retain the exact CPU
+codec and model-free probe as oracles. Reopen only if a broader transformation
+also removes metadata, dequantization, or tile traffic and independently clears
+the 3% full adaptive-attention gate. Evidence:
+`/private/tmp/qwen_qbit_p4_runtime_layout_abba.log`, SHA-256
+`43047ef7cc123c6bd15593e00accf918e19114c274ff7fbc45ffb751a3684979`.
+Probe source SHA-256:
+`452cda6e90b741b64a8f9cdb19e3b8233896f4179e6b8986a5680a14d7b242bd`.
+Refresh on layout/loader, compiler/toolchain, device, timing method, gate, or
+loss of the recorded evidence.

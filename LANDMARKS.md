@@ -28943,3 +28943,34 @@ Refresh after source/toolchain/device/model/workload changes.
   `8dc217fdc840c4715c576f24e4a2a452cbbb4fb3fd7f02556ef8314617b4ab32`.
   Refresh on source/probe, model/prompt/map, compiler, device/OS, safety policy,
   or evidence loss.
+
+### Continuation 2026-09-20 — Runtime P4 nibble words are exact but not promotable
+
+- Commit `3bb733ce` adds a byte-exact CPU oracle between the canonical adaptive
+  P4 base and a runtime-only 136-byte row layout containing 32 little-endian
+  nibble words. The persisted/snapshot representation is unchanged. Eleven
+  focused specs prove all 16 prefixes, multi-row boundaries, mixed-tier
+  artifact reconstruction, non-aliasing, partial-row rejection, and exact
+  inversion.
+- A model-free Metal probe compared the current four-plane T8 load with one
+  packed `UInt32` load while holding row headers, centroid arithmetic,
+  SIMD-group ownership, reduction, output, and byte capacity fixed. Ten
+  completed-command ABBA/BAAB pairs after three warmups were bitwise exact at
+  every boundary. Candidate gains were `+2.63%` at 6,144 tokens, `+2.32%` at
+  8,192, and `+2.49%` at 16,384, with 10/10 wins in every row.
+- The guarded run started at 74% free system memory, retained a 30% runtime
+  floor and 1 GiB process-tree cap, used at most 18,350,080 bytes of probe GPU
+  buffers, and exited zero. Stable directionality does not rescue the result:
+  every boundary missed the predeclared 3% local gate, and the isolated loader
+  omits conversion plus all other attention/token work.
+- Verdict: ROBUST as an exact layout oracle and bounded negative performance
+  falsifier; BROKEN for standalone runtime-layout promotion. Keep the canonical
+  plane-major cache. Reopen only inside a broader transformation that removes
+  additional metadata/dequant/tile traffic and clears a full adaptive-attention
+  3% gate. Evidence log:
+  `/private/tmp/qwen_qbit_p4_runtime_layout_abba.log`, SHA-256
+  `43047ef7cc123c6bd15593e00accf918e19114c274ff7fbc45ffb751a3684979`;
+  probe source SHA-256
+  `452cda6e90b741b64a8f9cdb19e3b8233896f4179e6b8986a5680a14d7b242bd`.
+  Refresh on layout/loader, compiler/toolchain, device, timing method, gate, or
+  evidence loss.
