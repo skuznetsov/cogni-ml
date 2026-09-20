@@ -4587,3 +4587,92 @@ Evidence and SHA-256:
 Refresh on probe or prefill-boundary semantics, kernel/source selection, policy,
 cache layout, model/prompt, compiler/Metal toolchain, device/OS, timing method,
 thresholds, safety policy, or evidence loss.
+
+### Automatic contiguous-V admission at the 14K boundary (2026-09-20)
+
+The policy now admits contiguous shared-V accumulation automatically only when
+all of the following hold:
+
+- the device name is exactly `Apple M2 Max`;
+- the adaptive attention tier is uniformly P4;
+- the P4 T8 split-K route is active; and
+- the visible context, `packed_len + 1`, is at least `14,336` tokens.
+
+The boundary is deliberately above the barely passing 12K crossover rows and
+matches the repeatedly passing 14K timing point. The addition uses `Int64`
+arithmetic for the visible-token check and rejects a negative packed length.
+`QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS=0` is the immediate rollback;
+`=1` remains an explicit experiment override, but cannot bypass the uniform-P4
+or P4-T8 prerequisites. Malformed or blank overrides fail closed.
+
+Probe schema `qwen-adaptive-t8-decode-ab-v12` adds
+`--compare-v-contiguous-auto`. Its baseline explicitly sets the option to zero,
+while its candidate leaves the option unset. At the
+first admitted point (`14,335` packed, `14,336` visible), the actual pipeline
+trace selected 132 legacy P4 T8 stage-one dispatches for the baseline, 132
+`p4_t8_v_contiguous` dispatches for the automatic candidate, and 88 BF16 T8
+dispatches shared across both states. The route certificate reported all 12 P4
+owners on contiguous-V, all four BF16 owners on the BF16 route, and zero
+direct-QK owners. Ten alternating full-token pairs retained identical output
+and zero logit delta; the candidate won 10/10 with a diagnostic `+4.150%` mean
+improvement. This synthetic row proves automatic route selection and bounded
+timing only; it is explicitly non-semantic and is not a new product-speed
+certificate by itself.
+
+The semantic certificate composes with the immediately preceding production
+prefill result: the automatic policy selects the same unchanged contiguous-V
+kernel whose explicit-on route retained the production boundary token/logit,
+66/66 subsequent ranked top-two choices, all numeric values, the 34-token free
+trajectory, and ECS 1.0 at a 14,311-token real prompt. Unit tests separately
+pin the exact off/on boundary, device restriction, base prerequisites,
+kill-switch, force override, overflow-safe large length, and malformed or
+negative inputs.
+
+Three fresh real-prefill attempts do not strengthen that semantic composition.
+One three-state run reached its final resident prefill and then failed closed
+after about 574 seconds; two two-state automatic-mode attempts, with prefill
+chunks 256 and 128, failed during the first baseline prefill after about 158
+and 163 seconds. All three failures were Metal `Impacting Interactivity` before
+the automatic decode route was selected. Therefore they are evidence that the
+current long-prefill validation workload remains watchdog-sensitive, not
+evidence against contiguous-V or its admission predicate. Reducing the chunk
+from 256 to 128 did not separate the failure, so that simple duration-only
+hypothesis is refuted for this host state.
+
+**Adversary:** the automatic route has direct actual-pipeline evidence at the
+boundary but not a fresh completed real-prefill auto-vs-off run. The semantic
+argument depends on the unchanged-kernel bridge to the explicit-on production
+certificate. Exact device-name admission excludes other Apple GPUs by design;
+one model, one prompt, and one host cannot establish a general policy. The
+single 10-pair automatic timing row cannot replace the repeated AB/BA crossover
+matrix. The current executable has no default metallib, so a session that
+crosses the boundary after already using the legacy P4 pipeline can pay a
+one-time source compilation for the contiguous-V variant. The in-process
+pipeline cache bounds that cost after first use, but the warm timing evidence
+does not measure it; cold-path metallib/prewarm work remains a separate slice.
+
+**decision:** the exact-M2-Max, uniform-P4, P4-T8 admission predicate is ROBUST
+within this bounded evidence composition. Enable it automatically at 14,336
+visible tokens, retain explicit zero as rollback, and keep direct-QK disabled.
+The claim remains VULNERABLE if widened to another device, tier mixture, model,
+kernel/toolchain, or broad semantic equivalence. Long real-prefill watchdog
+stability also remains open and must not be presented as closed by this change.
+
+Additional evidence and SHA-256:
+
+- automatic boundary route trace:
+  `/private/tmp/qwen_p4_v_contiguous_auto_boundary_route_v12.log`,
+  `5fa6b947868815d9edaf535dd87e0c886f7a534851a68c970671c3c5a7419335`;
+- failed three-state long-prefill attempt:
+  `/private/tmp/qwen_p4_v_contiguous_auto_14k_baseline.log`,
+  `c69482b58a43f3db1518162785865c5332a68093734579002c7fd76694e30735`;
+- failed two-state chunk-256 and chunk-128 attempts:
+  `/private/tmp/qwen_p4_v_contiguous_auto_14k_prod_quality.log`,
+  `0da7a45ff541cc976817ae048ec086f44d474b14ff66ef149b467c9a34ce06f6`,
+  and `/private/tmp/qwen_p4_v_contiguous_auto_14k_prod_quality_chunk128.log`,
+  `99a52a9ecedeacf8b4d2712ff9b10c9bd67a8aba36f6e929cf53f2f8a7c37d94`.
+
+Refresh on policy or kernel/source selection, probe semantics, cache layout,
+model/prompt, compiler/Metal toolchain, device/OS identity, timing method,
+thresholds, watchdog behavior, default-library availability, safety policy, or
+evidence loss.

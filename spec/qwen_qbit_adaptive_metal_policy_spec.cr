@@ -157,19 +157,31 @@ describe ML::GGUF::QwenQBitAdaptiveMetalPolicy do
     end
   end
 
-  it "keeps contiguous P4 V accumulation explicit but independent of direct-QK" do
+  it "enables contiguous P4 V automatically only at the measured M2 Max boundary" do
     policy = ML::GGUF::QwenQBitAdaptiveMetalPolicy
 
-    policy.p4_splitk_v_contiguous?(true, true).should be_false
-    policy.p4_splitk_v_contiguous?(true, true, "0").should be_false
-    policy.p4_splitk_v_contiguous?(true, true, "1").should be_true
-    policy.p4_splitk_v_contiguous?(false, true, "1").should be_false
-    policy.p4_splitk_v_contiguous?(true, false, "1").should be_false
+    policy.p4_splitk_v_contiguous?("Apple M2 Max", 14_334, true, true).should be_false
+    policy.p4_splitk_v_contiguous?("Apple M2 Max", 14_335, true, true).should be_true
+    policy.p4_splitk_v_contiguous?("Apple M2 Max", Int32::MAX, true, true).should be_true
+    policy.p4_splitk_v_contiguous?("Apple M2 Pro", 14_335, true, true).should be_false
+    policy.p4_splitk_v_contiguous?("Apple M2 Max", 14_335, false, true).should be_false
+    policy.p4_splitk_v_contiguous?("Apple M2 Max", 14_335, true, false).should be_false
+
+    policy.p4_splitk_v_contiguous?("Apple M2 Max", 14_335, true, true, "0").should be_false
+    policy.p4_splitk_v_contiguous?("Apple M2 Pro", 1, true, true, "1").should be_true
+    policy.p4_splitk_v_contiguous?("Apple M2 Max", 1, false, true, "1").should be_false
+    policy.p4_splitk_v_contiguous?("Apple M2 Max", 1, true, false, "1").should be_false
     expect_raises(ArgumentError, /QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS/) do
-      policy.p4_splitk_v_contiguous?(true, true, "true")
+      policy.p4_splitk_v_contiguous?("Apple M2 Max", 14_335, true, true, "true")
     end
     expect_raises(ArgumentError, /QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS/) do
-      policy.p4_splitk_v_contiguous?(true, true, "")
+      policy.p4_splitk_v_contiguous?("Apple M2 Max", 14_335, true, true, "")
+    end
+    expect_raises(ArgumentError, /packed length/) do
+      policy.p4_splitk_v_contiguous?("Apple M2 Max", -1, true, true, "1")
+    end
+    expect_raises(ArgumentError, /QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS/) do
+      policy.p4_splitk_v_contiguous?("Apple M2 Max", 14_335, true, true, "   ")
     end
   end
 end

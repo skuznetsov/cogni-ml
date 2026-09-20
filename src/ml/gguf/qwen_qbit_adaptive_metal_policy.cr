@@ -1,6 +1,7 @@
 module ML::GGUF
   module QwenQBitAdaptiveMetalPolicy
-    SPLITK_T8_MIN_CONTEXT = 6_144
+    SPLITK_T8_MIN_CONTEXT                      =  6_144
+    P4_SPLITK_V_CONTIGUOUS_MIN_VISIBLE_CONTEXT = 14_336
 
     def self.gqa6_tile(device_name : String, override : String? = nil) : Int32
       case override.try(&.strip.downcase)
@@ -140,14 +141,23 @@ module ML::GGUF
       enabled && uniform_p4 && p4_t8
     end
 
-    # Experimental contiguous V accumulation retains the shared dequantized V
-    # tile and changes only each lane's eight output dimensions. It is
-    # independent of the key-score implementation so direct-QK can remain off.
-    def self.p4_splitk_v_contiguous?(uniform_p4 : Bool,
+    # Contiguous V accumulation retains the shared dequantized V tile and
+    # changes only each lane's eight output dimensions. Replicated crossover
+    # measurements admit it automatically only on M2 Max at long context.
+    # An explicit benchmark override can still force either route, while the
+    # uniform-P4 and P4-T8 prerequisites remain mandatory.
+    def self.p4_splitk_v_contiguous?(device_name : String,
+                                     packed_len : Int32,
+                                     uniform_p4 : Bool,
                                      p4_t8 : Bool,
                                      override : String? = nil) : Bool
+      if packed_len < 0
+        raise ArgumentError.new("P4 contiguous-V packed length cannot be negative")
+      end
       enabled = case override.try(&.strip)
-                when nil then false
+                when nil
+                  device_name == "Apple M2 Max" &&
+                    packed_len.to_i64 + 1_i64 >= P4_SPLITK_V_CONTIGUOUS_MIN_VISIBLE_CONTEXT.to_i64
                 when "0" then false
                 when "1" then true
                 else

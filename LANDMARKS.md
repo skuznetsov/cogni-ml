@@ -29118,3 +29118,38 @@ Refresh after source/toolchain/device/model/workload changes.
   `14,311`, so cutoff choice and auto-route certification belong to a separate
   fail-closed policy slice. Exact logs, hashes, scope, and refresh conditions
   are recorded in `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-20 — Contiguous-V is admitted automatically at 14K
+
+- Automatic admission now requires exact `Apple M2 Max`, uniform P4, active
+  P4 T8 split-K, and at least `14,336` visible tokens (`packed_len + 1`). The
+  14K boundary stays above the barely passing repeated 12K timing rows.
+  Explicit zero is the immediate rollback; explicit one is still gated by the
+  uniform-P4 and P4-T8 prerequisites. Invalid overrides and negative packed
+  lengths fail closed.
+- Probe schema `qwen-adaptive-t8-decode-ab-v12` adds a dedicated off-vs-unset
+  mode. At the exact boundary it traced 132 baseline
+  `p4_t8`, 132 automatic-candidate `p4_t8_v_contiguous`, and 88 shared BF16 T8
+  dispatches. All 12 P4 owners selected contiguous-V automatically, all four
+  BF16 owners stayed BF16, and direct-QK stayed absent. Ten full-token pairs had
+  identical output and zero logit delta; the candidate won 10/10 with a
+  diagnostic `+4.150%` mean improvement.
+- Semantic support composes with the preceding 14,311-token production-prefill
+  certificate for the same unchanged kernel: exact boundary token/logit, 66/66
+  subsequent ranked top-two choices, zero numeric deltas, identical 34-token
+  trajectory, and ECS 1.0. The synthetic automatic row proves route and bounded
+  timing, not semantics by itself.
+- Three fresh real-prefill attempts failed closed with Metal `Impacting
+  Interactivity` before automatic decode route selection, including chunk 256
+  and 128 variants. This leaves long-prefill watchdog stability open and
+  refutes the simple claim that halving that chunk alone closes it; it does not
+  falsify the contiguous-V route.
+- The current executable reports no default metallib. Crossing the admission
+  boundary after legacy-P4 use can therefore pay one lazy source compilation
+  for the new variant; warm timing does not cover that cold-path cost. Keep
+  metallib/prewarm work separate from this policy slice.
+- Verdict: ROBUST for the bounded exact-M2-Max admission predicate and its
+  composed route/quality evidence; VULNERABLE for other devices, tiers, models,
+  broad semantic equivalence, or general long-prefill stability. Exact logs,
+  hashes, failure scope, and refresh conditions are recorded in
+  `docs/qwen-qbit-cache-frontier.md`.

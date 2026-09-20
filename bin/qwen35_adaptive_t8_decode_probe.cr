@@ -97,6 +97,7 @@ private def with_adaptive_probe_env(resident_map : String,
                                     compare_splitk_chunk : Bool,
                                     compare_direct_qk : Bool,
                                     compare_v_contiguous : Bool,
+                                    compare_v_contiguous_auto : Bool,
                                     compare_p4_stage1 : Bool,
                                     &)
   old = ADAPTIVE_ENV_KEYS.to_h { |key| {key, ENV[key]?} }
@@ -117,13 +118,15 @@ private def with_adaptive_probe_env(resident_map : String,
     ENV["QWEN35_ADAPTIVE_SPLITK_CHUNK"] = "64"
     ENV[DIRECT_QK_ENV_KEY] = candidate ? "1" : "0"
     ENV[V_CONTIGUOUS_ENV_KEY] = candidate ? "1" : "0"
-  elsif compare_v_contiguous
+  elsif compare_v_contiguous || compare_v_contiguous_auto
     T8_ENV_KEYS.each { |key| ENV[key] = "1" }
     ENV["QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED"] = "1"
     ENV["QWEN35_ADAPTIVE_GQA6_TILE"] = "15"
     ENV["QWEN35_ADAPTIVE_SPLITK_CHUNK"] = "64"
     ENV[DIRECT_QK_ENV_KEY] = "0"
-    ENV[V_CONTIGUOUS_ENV_KEY] = candidate ? "1" : "0"
+    unless candidate && compare_v_contiguous_auto
+      ENV[V_CONTIGUOUS_ENV_KEY] = candidate ? "1" : "0"
+    end
   elsif compare_direct_qk
     T8_ENV_KEYS.each { |key| ENV[key] = "1" }
     ENV["QWEN35_ADAPTIVE_SPLITK_STAGE2_FUSED"] = "1"
@@ -276,6 +279,7 @@ private def verify_candidate_t8_route!(state : ML::GGUF::Qwen35CPU::State,
                                        compare_splitk_chunk : Bool,
                                        compare_direct_qk : Bool,
                                        compare_v_contiguous : Bool,
+                                       compare_v_contiguous_auto : Bool,
                                        compare_p4_stage1 : Bool) : RouteCertificate
   device_name = ML::Metal::Device.instance.name
   p4_owners = 0_i32
@@ -284,7 +288,7 @@ private def verify_candidate_t8_route!(state : ML::GGUF::Qwen35CPU::State,
   p4_v_contiguous_owners = 0_i32
   packed_len = -1_i32
 
-  with_adaptive_probe_env(resident_map, true, compare_stage2, compare_splitk_chunk, compare_direct_qk, compare_v_contiguous, compare_p4_stage1) do
+  with_adaptive_probe_env(resident_map, true, compare_stage2, compare_splitk_chunk, compare_direct_qk, compare_v_contiguous, compare_v_contiguous_auto, compare_p4_stage1) do
     hp.full_attention_layers.each do |layer_index|
       cache = state.layers[layer_index].adaptive_kv
       raise "adaptive KV is missing layer #{layer_index}" unless cache
@@ -308,12 +312,13 @@ private def verify_candidate_t8_route!(state : ML::GGUF::Qwen35CPU::State,
           if compare_splitk_chunk && ENV["QWEN35_ADAPTIVE_SPLITK_CHUNK"]? != "60"
             raise "candidate split-K chunk 60 route is inactive at layer #{layer_index}"
           end
-          unless ML::GGUF::QwenQBitAdaptiveMetalPolicy.p4_splitk_t8?(
-                   device_name, cache_len, ENV["QWEN35_ADAPTIVE_P4_SPLITK_T8"]?,
-                 )
+          p4_t8 = ML::GGUF::QwenQBitAdaptiveMetalPolicy.p4_splitk_t8?(
+            device_name, cache_len, ENV["QWEN35_ADAPTIVE_P4_SPLITK_T8"]?,
+          )
+          unless p4_t8
             raise "P4 T8 route is inactive at layer #{layer_index}"
           end
-          if (compare_stage2 || compare_splitk_chunk || compare_direct_qk || compare_v_contiguous || compare_p4_stage1) &&
+          if (compare_stage2 || compare_splitk_chunk || compare_direct_qk || compare_v_contiguous || compare_v_contiguous_auto || compare_p4_stage1) &&
              !ML::GGUF::QwenQBitAdaptiveMetalPolicy.splitk_stage2_fused?(
                device_name, true, false, cache_len,
                ENV["QWEN35_ADAPTIVE_P4_SPLITK_T8"]?,
@@ -330,11 +335,13 @@ private def verify_candidate_t8_route!(state : ML::GGUF::Qwen35CPU::State,
             raise "P4 direct-QK route is inactive at layer #{layer_index}"
           end
           v_contiguous = ML::GGUF::QwenQBitAdaptiveMetalPolicy.p4_splitk_v_contiguous?(
+            device_name,
+            cache_len,
             true,
-            true,
+            p4_t8,
             ENV[V_CONTIGUOUS_ENV_KEY]?,
           )
-          if (compare_v_contiguous || compare_p4_stage1) && !v_contiguous
+          if (compare_v_contiguous || compare_v_contiguous_auto || compare_p4_stage1) && !v_contiguous
             raise "P4 contiguous-V route is inactive at layer #{layer_index}"
           end
           p4_direct_qk_owners += 1 if direct_qk
@@ -353,7 +360,7 @@ private def verify_candidate_t8_route!(state : ML::GGUF::Qwen35CPU::State,
                  )
             raise "BF16 T8 route is inactive at layer #{layer_index}"
           end
-          if (compare_splitk_chunk || compare_direct_qk || compare_v_contiguous || compare_p4_stage1) &&
+          if (compare_splitk_chunk || compare_direct_qk || compare_v_contiguous || compare_v_contiguous_auto || compare_p4_stage1) &&
              !ML::GGUF::QwenQBitAdaptiveMetalPolicy.splitk_stage2_fused?(
                device_name, false, true, cache_len,
                ENV["QWEN35_ADAPTIVE_BF16_SPLITK_T8"]?,
@@ -369,6 +376,8 @@ private def verify_candidate_t8_route!(state : ML::GGUF::Qwen35CPU::State,
             raise "P4 direct-QK route leaked into BF16 layer #{layer_index}"
           end
           if ML::GGUF::QwenQBitAdaptiveMetalPolicy.p4_splitk_v_contiguous?(
+               device_name,
+               cache_len,
                false,
                false,
                ENV[V_CONTIGUOUS_ENV_KEY]?,
@@ -394,7 +403,7 @@ private def verify_candidate_t8_route!(state : ML::GGUF::Qwen35CPU::State,
   if (compare_direct_qk || compare_p4_stage1) && p4_direct_qk_owners != p4_owners
     raise "P4 direct-QK coverage is incomplete: #{p4_direct_qk_owners}/#{p4_owners}"
   end
-  if (compare_v_contiguous || compare_p4_stage1) && p4_v_contiguous_owners != p4_owners
+  if (compare_v_contiguous || compare_v_contiguous_auto || compare_p4_stage1) && p4_v_contiguous_owners != p4_owners
     raise "P4 contiguous-V coverage is incomplete: #{p4_v_contiguous_owners}/#{p4_owners}"
   end
   RouteCertificate.new(p4_owners, bf16_owners, p4_direct_qk_owners, p4_v_contiguous_owners, packed_len)
@@ -500,6 +509,7 @@ private def prepare_state(weights : ML::GGUF::Qwen35Weights,
                           compare_splitk_chunk : Bool,
                           compare_direct_qk : Bool,
                           compare_v_contiguous : Bool,
+                          compare_v_contiguous_auto : Bool,
                           compare_p4_stage1 : Bool,
                           synthetic_prefix : Int32,
                           quality_top2 : Bool,
@@ -507,7 +517,7 @@ private def prepare_state(weights : ML::GGUF::Qwen35Weights,
   state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: max_seq)
   begin
     first = QM::Top2.new(-1_i32, Float32::NAN, -1_i32, Float32::NAN)
-    with_adaptive_probe_env(resident_map, candidate, compare_stage2, compare_splitk_chunk, compare_direct_qk, compare_v_contiguous, compare_p4_stage1) do
+    with_adaptive_probe_env(resident_map, candidate, compare_stage2, compare_splitk_chunk, compare_direct_qk, compare_v_contiguous, compare_v_contiguous_auto, compare_p4_stage1) do
       ML::GGUF::Qwen35CPU.prepare_state_metal!(state, weights.hparams)
       if synthetic_prefix > 0
         seed_synthetic_adaptive_prefix!(state, weights.hparams, synthetic_prefix)
@@ -543,11 +553,12 @@ private def decode_step(weights : ML::GGUF::Qwen35Weights,
                         compare_splitk_chunk : Bool,
                         compare_direct_qk : Bool,
                         compare_v_contiguous : Bool,
+                        compare_v_contiguous_auto : Bool,
                         compare_p4_stage1 : Bool,
                         quality_top2 : Bool)
   output = QM::Top2.new(-1_i32, Float32::NAN, -1_i32, Float32::NAN)
   elapsed_ms = 0.0_f64
-  with_adaptive_probe_env(resident_map, candidate, compare_stage2, compare_splitk_chunk, compare_direct_qk, compare_v_contiguous, compare_p4_stage1) do
+  with_adaptive_probe_env(resident_map, candidate, compare_stage2, compare_splitk_chunk, compare_direct_qk, compare_v_contiguous, compare_v_contiguous_auto, compare_p4_stage1) do
     started = Time.instant
     if quality_top2
       first_id, first_logit, second_id, second_logit = ML::GGUF::Qwen35CPU.forward_top2(
@@ -586,6 +597,7 @@ compare_stage2 = false
 compare_splitk_chunk = false
 compare_direct_qk = false
 compare_v_contiguous = false
+compare_v_contiguous_auto = false
 compare_p4_stage1 = false
 quality_top2 = false
 quality_top2_production_prefill = false
@@ -603,6 +615,7 @@ OptionParser.parse do |parser|
   parser.on("--compare-splitk-chunk", "Compare explicit split-K chunks 64 and 60") { compare_splitk_chunk = true }
   parser.on("--compare-direct-qk", "Hold P4/BF16 T8 and fused stage2 on; toggle P4 direct-QK") { compare_direct_qk = true }
   parser.on("--compare-v-contiguous", "Hold legacy shared-K on; toggle contiguous shared-V accumulation") { compare_v_contiguous = true }
+  parser.on("--compare-v-contiguous-auto", "Compare explicit contiguous-V off with automatic admission") { compare_v_contiguous_auto = true }
   parser.on("--compare-p4-stage1", "Compare legacy P4 T8 stage1 with forced direct-QK plus contiguous-V") { compare_p4_stage1 = true }
   parser.on("--quality-top2", "Run real-prefix free trajectories with top-2, margin, and output-weight ECS diagnostics; disables timing admission") { quality_top2 = true }
   parser.on("--quality-top2-production-prefill", "Use the production top-1 prefill boundary, then compare top-2 free trajectories; disables timing admission") { quality_top2_production_prefill = true }
@@ -631,9 +644,9 @@ raise "--synthetic-prefix cannot be negative" if synthetic_prefix < 0
 raise "resident map cannot be empty" if resident_map.strip.empty?
 raise "select only one top-2 quality prefill mode" if quality_top2 && quality_top2_production_prefill
 quality_top2 ||= quality_top2_production_prefill
-comparison_count = {compare_stage2, compare_splitk_chunk, compare_direct_qk, compare_v_contiguous, compare_p4_stage1}.count(true)
+comparison_count = {compare_stage2, compare_splitk_chunk, compare_direct_qk, compare_v_contiguous, compare_v_contiguous_auto, compare_p4_stage1}.count(true)
 raise "select only one comparison" if comparison_count > 1
-if synthetic_prefix > 0 && !(compare_splitk_chunk || compare_direct_qk || compare_v_contiguous || compare_p4_stage1)
+if synthetic_prefix > 0 && !(compare_splitk_chunk || compare_direct_qk || compare_v_contiguous || compare_v_contiguous_auto || compare_p4_stage1)
   raise "--synthetic-prefix requires a split-K stage1 comparison"
 end
 raise "--quality-top2 requires a real prompt prefix" if quality_top2 && synthetic_prefix > 0
@@ -661,15 +674,19 @@ begin
     raise "--compare-p4-stage1 requires at least #{ML::GGUF::QwenQBitAdaptiveMetalPolicy::SPLITK_T8_MIN_CONTEXT} prompt tokens; got #{tokens.size}"
   end
   prefix_tokens = synthetic_prefix > 0 ? synthetic_prefix : tokens.size.to_i32
+  if compare_v_contiguous_auto &&
+     prefix_tokens.to_i64 + 1_i64 < ML::GGUF::QwenQBitAdaptiveMetalPolicy::P4_SPLITK_V_CONTIGUOUS_MIN_VISIBLE_CONTEXT
+    raise "--compare-v-contiguous-auto requires at least #{ML::GGUF::QwenQBitAdaptiveMetalPolicy::P4_SPLITK_V_CONTIGUOUS_MIN_VISIBLE_CONTEXT} visible tokens; got #{prefix_tokens.to_i64 + 1_i64}"
+  end
   minimum_max_seq = prefix_tokens + sample_count + 2
   max_seq = requested_max_seq == 0 ? minimum_max_seq : requested_max_seq
   raise "prefix plus warmup and samples exceeds --max-seq" if max_seq < minimum_max_seq
 
   baseline_state, baseline_boundary = prepare_state(
-    weights, tokens, max_seq, resident_map, false, compare_stage2, compare_splitk_chunk, compare_direct_qk, compare_v_contiguous, compare_p4_stage1, synthetic_prefix.to_i32, quality_top2, quality_top2_production_prefill,
+    weights, tokens, max_seq, resident_map, false, compare_stage2, compare_splitk_chunk, compare_direct_qk, compare_v_contiguous, compare_v_contiguous_auto, compare_p4_stage1, synthetic_prefix.to_i32, quality_top2, quality_top2_production_prefill,
   )
   candidate_state, candidate_boundary = prepare_state(
-    weights, tokens, max_seq, resident_map, true, compare_stage2, compare_splitk_chunk, compare_direct_qk, compare_v_contiguous, compare_p4_stage1, synthetic_prefix.to_i32, quality_top2, quality_top2_production_prefill,
+    weights, tokens, max_seq, resident_map, true, compare_stage2, compare_splitk_chunk, compare_direct_qk, compare_v_contiguous, compare_v_contiguous_auto, compare_p4_stage1, synthetic_prefix.to_i32, quality_top2, quality_top2_production_prefill,
   )
   verify_independent_states!(baseline_state, candidate_state, hp)
   semantic_quality_valid = synthetic_prefix == 0
@@ -697,7 +714,7 @@ begin
     raise "prefill logit mismatch: #{prefill_logit_delta}"
   end
   route_certificate = verify_candidate_t8_route!(
-    candidate_state, hp, resident_map, compare_stage2, compare_splitk_chunk, compare_direct_qk, compare_v_contiguous, compare_p4_stage1,
+    candidate_state, hp, resident_map, compare_stage2, compare_splitk_chunk, compare_direct_qk, compare_v_contiguous, compare_v_contiguous_auto, compare_p4_stage1,
   )
 
   embedding_cache = {} of Int32 => Array(Float32)
@@ -723,20 +740,20 @@ begin
   if candidate_first
     candidate_warm, _ = decode_step(
       weights, candidate_state, candidate_input_id, position, resident_map, true, compare_stage2, compare_splitk_chunk,
-      compare_direct_qk, compare_v_contiguous, compare_p4_stage1, quality_top2,
+      compare_direct_qk, compare_v_contiguous, compare_v_contiguous_auto, compare_p4_stage1, quality_top2,
     )
     baseline_warm, _ = decode_step(
       weights, baseline_state, baseline_input_id, position, resident_map, false, compare_stage2, compare_splitk_chunk,
-      compare_direct_qk, compare_v_contiguous, compare_p4_stage1, quality_top2,
+      compare_direct_qk, compare_v_contiguous, compare_v_contiguous_auto, compare_p4_stage1, quality_top2,
     )
   else
     baseline_warm, _ = decode_step(
       weights, baseline_state, baseline_input_id, position, resident_map, false, compare_stage2, compare_splitk_chunk,
-      compare_direct_qk, compare_v_contiguous, compare_p4_stage1, quality_top2,
+      compare_direct_qk, compare_v_contiguous, compare_v_contiguous_auto, compare_p4_stage1, quality_top2,
     )
     candidate_warm, _ = decode_step(
       weights, candidate_state, candidate_input_id, position, resident_map, true, compare_stage2, compare_splitk_chunk,
-      compare_direct_qk, compare_v_contiguous, compare_p4_stage1, quality_top2,
+      compare_direct_qk, compare_v_contiguous, compare_v_contiguous_auto, compare_p4_stage1, quality_top2,
     )
   end
   baseline_warm = baseline_warm.not_nil!
@@ -789,20 +806,20 @@ begin
     if run_candidate_first
       candidate_top2, candidate_ms = decode_step(
         weights, candidate_state, candidate_input_id, position, resident_map, true, compare_stage2, compare_splitk_chunk,
-        compare_direct_qk, compare_v_contiguous, compare_p4_stage1, quality_top2,
+        compare_direct_qk, compare_v_contiguous, compare_v_contiguous_auto, compare_p4_stage1, quality_top2,
       )
       baseline_top2, baseline_ms = decode_step(
         weights, baseline_state, baseline_input_id, position, resident_map, false, compare_stage2, compare_splitk_chunk,
-        compare_direct_qk, compare_v_contiguous, compare_p4_stage1, quality_top2,
+        compare_direct_qk, compare_v_contiguous, compare_v_contiguous_auto, compare_p4_stage1, quality_top2,
       )
     else
       baseline_top2, baseline_ms = decode_step(
         weights, baseline_state, baseline_input_id, position, resident_map, false, compare_stage2, compare_splitk_chunk,
-        compare_direct_qk, compare_v_contiguous, compare_p4_stage1, quality_top2,
+        compare_direct_qk, compare_v_contiguous, compare_v_contiguous_auto, compare_p4_stage1, quality_top2,
       )
       candidate_top2, candidate_ms = decode_step(
         weights, candidate_state, candidate_input_id, position, resident_map, true, compare_stage2, compare_splitk_chunk,
-        compare_direct_qk, compare_v_contiguous, compare_p4_stage1, quality_top2,
+        compare_direct_qk, compare_v_contiguous, compare_v_contiguous_auto, compare_p4_stage1, quality_top2,
       )
     end
 
@@ -899,6 +916,8 @@ begin
   prompt_sha256 = Digest::SHA256.hexdigest(repeated_prompt.to_slice)
   comparison = if compare_p4_stage1
                  "p4_stage1_bundle"
+               elsif compare_v_contiguous_auto
+                 "p4_v_contiguous_auto"
                elsif compare_v_contiguous
                  "p4_v_contiguous"
                elsif compare_direct_qk
@@ -911,8 +930,8 @@ begin
                  "t8_loaders"
                end
   state_source = synthetic_prefix > 0 ? "synthetic_zero_prefix" : "real_prompt_prefill"
-  baseline_stage2 = (compare_splitk_chunk || compare_direct_qk || compare_v_contiguous || compare_p4_stage1) ? "forced_on" : "forced_off"
-  candidate_stage2 = if compare_splitk_chunk || compare_direct_qk || compare_v_contiguous || compare_p4_stage1
+  baseline_stage2 = (compare_splitk_chunk || compare_direct_qk || compare_v_contiguous || compare_v_contiguous_auto || compare_p4_stage1) ? "forced_on" : "forced_off"
+  candidate_stage2 = if compare_splitk_chunk || compare_direct_qk || compare_v_contiguous || compare_v_contiguous_auto || compare_p4_stage1
                        "forced_on"
                      elsif compare_stage2
                        "automatic"
@@ -938,16 +957,25 @@ begin
   puts "  quality_top2=#{quality_top2} quality_scope=#{quality_scope} prefill_boundary_mode=#{prefill_boundary_mode} timing_gate_valid=#{timing_gate_valid}"
   puts "  baseline_stage2=#{baseline_stage2} candidate_stage2=#{candidate_stage2}"
   puts "  p4_stage1_admission=#{compare_p4_stage1 ? "forced_off_vs_forced_on" : "not_compared"}"
-  baseline_direct_qk = (compare_direct_qk || compare_v_contiguous || compare_p4_stage1) ? false : nil
+  baseline_direct_qk = (compare_direct_qk || compare_v_contiguous || compare_v_contiguous_auto || compare_p4_stage1) ? false : nil
   candidate_direct_qk = if compare_direct_qk || compare_p4_stage1
                           true
-                        elsif compare_v_contiguous
+                        elsif compare_v_contiguous || compare_v_contiguous_auto
                           false
                         end
-  baseline_v_contiguous = (compare_v_contiguous || compare_p4_stage1) ? false : nil
-  candidate_v_contiguous = (compare_v_contiguous || compare_p4_stage1) ? true : nil
+  baseline_v_contiguous = (compare_v_contiguous || compare_v_contiguous_auto || compare_p4_stage1) ? false : nil
+  candidate_v_contiguous = (compare_v_contiguous || compare_v_contiguous_auto || compare_p4_stage1) ? true : nil
+  baseline_v_contiguous_override = baseline_v_contiguous.nil? ? nil : "0"
+  candidate_v_contiguous_override = if compare_v_contiguous_auto
+                                      nil
+                                    elsif candidate_v_contiguous
+                                      "1"
+                                    end
+  baseline_v_contiguous_override_display = baseline_v_contiguous_override || "unset"
+  candidate_v_contiguous_override_display = candidate_v_contiguous_override || "unset"
   puts "  baseline_direct_qk=#{baseline_direct_qk} candidate_direct_qk=#{candidate_direct_qk}"
   puts "  baseline_v_contiguous=#{baseline_v_contiguous} candidate_v_contiguous=#{candidate_v_contiguous}"
+  puts "  baseline_v_contiguous_override=#{baseline_v_contiguous_override_display} candidate_v_contiguous_override=#{candidate_v_contiguous_override_display}"
   puts "  baseline_splitk_chunk=64 candidate_splitk_chunk=#{compare_splitk_chunk ? 60 : 64}"
   puts "  prompt_tokens=#{tokens.size} seeded_prefix_tokens=#{prefix_tokens} prompt_repeats=#{prompt_repeats} requested_samples=#{sample_count} observed_samples=#{observed_samples} termination_reason=#{termination_reason} max_seq=#{max_seq} full_attention_layers=#{hp.full_attention_layers.size}"
   puts "  prefill_chunk_size=#{PRODUCT_PREFILL_CHUNK_SIZE} append_max_groups=#{PRODUCT_APPEND_MAX_GROUPS} append_cooldown_ms=#{PRODUCT_APPEND_COOLDOWN_MS} pooled_scratch=true gc_guard=true"
@@ -968,7 +996,7 @@ begin
 
   payload = JSON.build do |json|
     json.object do
-      json.field "schema", "qwen-adaptive-t8-decode-ab-v11"
+      json.field "schema", "qwen-adaptive-t8-decode-ab-v12"
       json.field "comparison", comparison
       json.field "state_source", state_source
       json.field "semantic_quality_valid", semantic_quality_valid
@@ -996,6 +1024,8 @@ begin
       json.field "candidate_direct_qk", candidate_direct_qk
       json.field "baseline_v_contiguous", baseline_v_contiguous
       json.field "candidate_v_contiguous", candidate_v_contiguous
+      json.field "baseline_v_contiguous_override", baseline_v_contiguous_override
+      json.field "candidate_v_contiguous_override", candidate_v_contiguous_override
       json.field "release_build", RELEASE_BUILD
       json.field "device", device_name
       json.field "model", File.basename(model_path)

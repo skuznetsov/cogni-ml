@@ -1421,6 +1421,8 @@ module ML::GGUF
           ENV["QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK"]?,
         )
         v_contiguous = QwenQBitAdaptiveMetalPolicy.p4_splitk_v_contiguous?(
+          ML::Metal::Device.instance.name,
+          packed_len,
           uniform_tier == QwenQBitAdaptiveKV::Tier::P4,
           p4_t8,
           ENV["QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS"]?,
