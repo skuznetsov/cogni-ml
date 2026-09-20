@@ -4772,18 +4772,19 @@ the dequantization, reduction, or stage-two accumulation order.
 Two same-process AB/BA sequences covered 6K, 14K, and 16K visible prefixes,
 ten pairs per row. Every pair retained canonical K/V bytes and reported
 `max_output_delta=0`. The first sequence failed the predeclared `>=3%` and
-`>=8/10` wall-and-GPU gate at every prefix: the 6K row was driven by two
-outliers (`+5.87%` wall, `+8.97%` GPU; `7/10`, `4/10` wins), 14K was neutral
+`>=8/10` wall-and-GPU gate at every prefix: the 6K favorable means lacked
+pairwise support (`+5.87%` wall, `+8.97%` GPU; `7/10`, `4/10` wins), 14K was neutral
 (`+0.17%`, `+0.34%`; `5/10`, `5/10`), and 16K remained below threshold
 (`+2.97%`, `+1.87%`; `6/10`, `7/10`). The independently repeated rows were
 also unstable: 6K regressed by `12.31%` wall and `18.72%` GPU, while apparent
 14K/16K mean gains had only `5/10` and at most `6/10` wins.
 
 **decision:** correctness is ROBUST, but the performance claim is BROKEN on
-Apple M2 Max with this compiler/toolchain. The compiler and memory-dominated
-loader already hide the scalar index arithmetic well enough that an extra
-shape-specific pipeline is not justified. The production source, policy,
-probe option, and spec expansion were removed. Reopen only if generated Metal
+Apple M2 Max with this compiler/toolchain. The candidate showed no stable
+measured benefit, so an extra shape-specific pipeline is not justified;
+whether the compiler strength-reduced the arithmetic or loader/dequantization
+work dominated remains unresolved. The production source, policy, probe
+option, and spec expansion were removed. Reopen only if generated Metal
 assembly or a lower-noise batched discriminator identifies a persistent
 integer-division cost on a changed compiler/device; do not promote from a
 favorable mean without pairwise stability.
