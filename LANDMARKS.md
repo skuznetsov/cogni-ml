@@ -29180,3 +29180,19 @@ Refresh after source/toolchain/device/model/workload changes.
   optimization on this device/toolchain. All production changes were removed;
   do not promote or full-token-test this route. Evidence and refresh conditions
   are recorded in `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-20 — BF16 contiguous-V is rejected
+
+- A temporary default-off BF16 T8 variant reused the accepted contiguous-V
+  ownership after shared-tile dequantization. The focused 8K resident spec
+  passed, canonical cache bytes stayed unchanged, and all timing pairs had
+  zero output delta.
+- The 8K row missed the gate (`-0.91%` wall, `+5.16%` GPU; `4/10`, `7/10`
+  wins). A first 16K row was noisy (`+2.27%` wall, `+12.06%` GPU; `8/10`,
+  `7/10`), and its repeat removed the apparent benefit (`-20.47%` wall,
+  `+1.25%` GPU; `2/10`, `5/10`).
+- Verdict: ROBUST for bounded correctness and BROKEN for performance promotion
+  on Apple M2 Max with this toolchain. All production and probe changes were
+  removed. Reopen only with a lower-noise batched kernel discriminator or new
+  compiler/device evidence. Full scope and refresh conditions are in
+  `docs/qwen-qbit-cache-frontier.md`.

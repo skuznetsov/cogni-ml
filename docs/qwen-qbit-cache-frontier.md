@@ -4729,3 +4729,32 @@ Evidence:
 
 Refresh on stage-two arithmetic or layout, Metal compiler/toolchain, device,
 timing method, or evidence loss.
+
+### BF16 contiguous-V is correct but not promotable (2026-09-20)
+
+The accepted P4 contiguous-V lane ownership is representation-independent
+after V has been materialized in the shared FP32 tile. A default-off BF16 T8
+variant therefore reused that exact branch without changing cache bytes,
+dequantization, score reduction, or stage-two layout. The focused 8K resident
+spec passed on Apple M2 Max; baseline, BF16 T8, and BF16 T8 contiguous-V kept
+the same canonical K/V payloads and stayed within the existing numerical
+oracle. Both timing probes reported `max_output_delta=0` in every pair.
+
+The performance evidence did not survive repetition:
+
+- at 8K, candidate wall time regressed by `0.91%`; completed GPU time improved
+  by `5.16%`, but only `7/10` GPU pairs and `4/10` wall pairs won;
+- the first 16K run showed `+2.27%` wall and `+12.06%` GPU with `8/10` and
+  `7/10` wins respectively, still below the predeclared gate;
+- the repeated 16K run reversed the apparent gain: wall regressed by `20.47%`,
+  GPU improved only `1.25%`, and wins fell to `2/10` and `5/10`.
+
+**decision:** correctness is ROBUST, but the performance claim is BROKEN on
+this device/toolchain. The four BF16 owners do not justify a new production
+pipeline variant without a stable local crossover. The policy, source
+variants, probe switch, and spec expansion were removed. Reopen only with a
+lower-noise batched kernel discriminator or changed compiler/device evidence;
+do not infer a whole-token benefit from the noisy first 16K mean.
+
+Refresh on V ownership, BF16 materialization, Metal compiler/toolchain,
+device, timing method, or evidence loss.
