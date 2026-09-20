@@ -28837,3 +28837,32 @@ Refresh after source/toolchain/device/model/workload changes.
   a speed regression is already sufficient to reject this route. Refresh on
   Metal tensor implementation, compiler/toolchain, device generation,
   llama.cpp backend, model, or benchmark-harness change.
+
+### Continuation 2026-09-20 — Double-buffered Q6 H16 output is rejected as a prefill optimization
+
+- A source-isolated operator probe revisited the older recurrent Q6 H16-output
+  route with the previously missing control: both arms used the current
+  double-buffered Q6_K GEMM body, while only the final representation differed
+  between F32 and H16. The real tensor was
+  `blk.0.attn_qkv.weight`, shape `5120 -> 10240`; the candidate changed no
+  production routing.
+- Exact validation at batches 65 and 257 converted the candidate H16 output
+  back to F32 and found bit-for-bit equality with the F32-output control. A
+  guarded actual-model run began at 74% system free memory, retained a 30%
+  runtime floor and 24 GiB process-tree cap, and exited zero without timeout or
+  Metal error. Ten alternating pairs after five warmups produced: batch 256
+  `-1.043%` with 5/10 wins, batch 512 `+0.065%` with 7/10 wins, batch 1024
+  `+0.048%` with 9/10 wins, and batch 2048 `+0.017%` with 6/10 wins.
+- Recurrent Q6 QKV represents only about 6.53% of the measured prefill weight
+  traffic, so a local gain near 46% would be required to support the current
+  3% whole-prefill promotion gate. The measured result is indistinguishable
+  from zero and includes a small regression at batch 256. Verdict: ROBUST as a
+  bounded negative representation falsifier and BROKEN for speed promotion.
+  Output bandwidth is not the governing cost; Q6 dequantization and matrix
+  work remain dominant.
+- The temporary kernel, benchmark API, and probe source were removed. Do not
+  retry an H16-only Q6 epilogue without a mechanism that also reduces the
+  dequantization or multiply path. The ephemeral probe binary SHA256 was
+  `15f92e9f3da90d3b25187885fc225565b817af1af89be81dc18c907c2c7c2a50`;
+  no raw log was retained. Refresh on Q6 body/layout, compiler/toolchain,
+  device, model tensor, timing method, or loss of the recorded observation.
