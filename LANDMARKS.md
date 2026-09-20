@@ -28904,3 +28904,42 @@ Refresh after source/toolchain/device/model/workload changes.
   Refresh on Metal synchronization semantics, FFN dimensions/precision,
   accepted down-projection topology, or the discovery of an exact schedule
   outside the two ownership cases above.
+
+### Continuation 2026-09-20 — Live-16K adaptive split-K is accepted on Apple M2 Max
+
+- A generated long-session Crystal coding prompt rendered to 16,109 chat
+  tokens at SHA-256
+  `379fbc737a615917a4df5cf083098127af9c0163348b8823688994067990edb3`.
+  With 68 generated tokens and 16,384 capacity, every admitted row published
+  16,176 adaptive tokens. All 16 full-attention layers had adaptive owners, no
+  Float32 owner appeared, and the probe's cache publication checks passed.
+- A fresh-process split-K-on/serial-off/serial-off/split-K-on ABBA explicitly
+  set `QWEN35_ADAPTIVE_SPLITK=1/0/0/1`; the JSON does not echo this environment
+  selector, so the launch manifest and mode-named logs preserve provenance.
+  It held the model, prompt, coarse P4/BF16 map, 1,024-row chunks, one append
+  group, 100 ms cooldown, 30% runtime floor, and 24 GiB process-tree cap fixed.
+  Every row began at 71--72% free memory and exited zero. Split-K decode took
+  `5.199/5.227 s`; serial rollback took `47.789/47.811 s`. Median adaptive
+  throughput over 67 timed post-prefill decode calls was `12.85` versus
+  `1.40 tok/s`, or `9.17x`; resident prefill-plus-decode improved 14.53%.
+  Prefill alone changed by -0.72%, which localizes the result to long-context
+  decode rather than prompt processing.
+- All four rows generated the same 68-token free-running prefix: top-1
+  `68/68`. Teacher-trajectory diagnostics retained exact-top-1 coverage
+  `67/67`, ranked top-2 and set overlap `118/134`, and output-weight embedding
+  cosine mean/minimum `1.0/1.0` with zero mismatches. Those cosine values are
+  not a general semantic-quality score. Raw F32 capacity was 2,147,483,648 bytes
+  versus 570,425,344 adaptive payload bytes (`3.7647x`), excluding the shared
+  6,340,608-byte split-K scratch.
+- Verdict: ROBUST for live-16K runtime, ownership, bounded top-1/ECS trajectory
+  agreement, and split-K speed on this Apple M2 Max, Qwen3.8-27B Q4_K_M, and
+  fixed cache map. The 68-token source stops before EOS, so complete coding
+  semantics, external Crystal specs, other devices/maps, and concurrent serving
+  remain open. Keep split-K enabled for admitted uniform P4/BF16 one-token
+  decode and preserve `QWEN35_ADAPTIVE_SPLITK=0` as rollback. Evidence:
+  `/private/tmp/qwen_qbit_16k_live_split_{on,off,off_b2,on_a2}.log`. The release
+  probe was built from revision `730ce6001d2db807ec8b51dc606b668dac1424ed`
+  and had SHA-256
+  `8dc217fdc840c4715c576f24e4a2a452cbbb4fb3fd7f02556ef8314617b4ab32`.
+  Refresh on source/probe, model/prompt/map, compiler, device/OS, safety policy,
+  or evidence loss.
