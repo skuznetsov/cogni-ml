@@ -29196,3 +29196,19 @@ Refresh after source/toolchain/device/model/workload changes.
   removed. Reopen only with a lower-noise batched kernel discriminator or new
   compiler/device evidence. Full scope and refresh conditions are in
   `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-20 — P4 T8 row-stride indexing is rejected
+
+- A temporary default-off Qwen3.8-specific loader replaced T8 vector-index
+  division/remainder with the exact `head_dim=256`, six-SIMD-group row-stride
+  mapping. Cache representation and floating-point operation order were
+  unchanged.
+- Two ten-pair same-process AB/BA sequences at 6K/14K/16K kept canonical K/V
+  bytes and zero output delta. No row met the predeclared `>=3%` and `>=8/10`
+  wall-and-GPU gate. Favorable means reversed or had only `4--7/10` wins; the
+  repeated 6K row regressed by `12.31%` wall and `18.72%` GPU.
+- Verdict: ROBUST for bounded correctness and BROKEN for performance promotion
+  on Apple M2 Max with this toolchain. All source, policy, probe, and spec
+  changes were removed. Reopen only with assembly evidence or a lower-noise
+  discriminator on changed compiler/device conditions. Full measurements,
+  hashes, and refresh conditions are in `docs/qwen-qbit-cache-frontier.md`.

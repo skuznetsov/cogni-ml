@@ -4758,3 +4758,44 @@ do not infer a whole-token benefit from the noisy first 16K mean.
 
 Refresh on V ownership, BF16 materialization, Metal compiler/toolchain,
 device, timing method, or evidence loss.
+
+### P4 T8 row-stride indexing is correct but not promotable (2026-09-20)
+
+The P4 T8 split-K tile loader derives `position_in_tile` and `d` from a
+vector index using division and remainder by `head_dim`. A default-off
+Qwen3.8-specific variant replaced that arithmetic with the exact fixed-shape
+mapping for `head_dim=256`, 192 threads, and six SIMD groups:
+`d=(thread_index&31)<<3` and
+`position_in_tile=(thread_index>>5)+6*k`. It changed neither cache bytes nor
+the dequantization, reduction, or stage-two accumulation order.
+
+Two same-process AB/BA sequences covered 6K, 14K, and 16K visible prefixes,
+ten pairs per row. Every pair retained canonical K/V bytes and reported
+`max_output_delta=0`. The first sequence failed the predeclared `>=3%` and
+`>=8/10` wall-and-GPU gate at every prefix: the 6K row was driven by two
+outliers (`+5.87%` wall, `+8.97%` GPU; `7/10`, `4/10` wins), 14K was neutral
+(`+0.17%`, `+0.34%`; `5/10`, `5/10`), and 16K remained below threshold
+(`+2.97%`, `+1.87%`; `6/10`, `7/10`). The independently repeated rows were
+also unstable: 6K regressed by `12.31%` wall and `18.72%` GPU, while apparent
+14K/16K mean gains had only `5/10` and at most `6/10` wins.
+
+**decision:** correctness is ROBUST, but the performance claim is BROKEN on
+Apple M2 Max with this compiler/toolchain. The compiler and memory-dominated
+loader already hide the scalar index arithmetic well enough that an extra
+shape-specific pipeline is not justified. The production source, policy,
+probe option, and spec expansion were removed. Reopen only if generated Metal
+assembly or a lower-noise batched discriminator identifies a persistent
+integer-division cost on a changed compiler/device; do not promote from a
+favorable mean without pairwise stability.
+
+Repeat evidence:
+
+- `/private/tmp/qwen_p4_t8_row_stride_6k.log`,
+  `144b71b08744daa59798586a682da0b70379e9dd22ef1e74282b42ed27b19d21`;
+- `/private/tmp/qwen_p4_t8_row_stride_14k.log`,
+  `17aad7060c961b5b3b359c2fb699555b38adcb141c5bacd5bca179dfe78c533f`;
+- `/private/tmp/qwen_p4_t8_row_stride_16k.log`,
+  `fb5e6b7f03f6fed2736c113dcd772dc4d6dedad678871ccc99bc502719fe4a4a`.
+
+Refresh on T8 tile ownership, head shape, Metal compiler/toolchain, device,
+timing method, or evidence loss.
