@@ -1,5 +1,115 @@
 # Ordinary prefill command diagnostics
 
+## First-submit pause includes nearly a model-file worth of reads (2026-09-19)
+
+The next discriminator reused the exact prior first-command-only binary and
+bridge, original7839:193 input,8036 capacity,2048-row chunk and controls. No
+engine rebuild, resource policy, residency request, page touching, prewarm,
+cache eviction or full-prefix attempt. The external observer reads only our
+identified child process's `proc_pid_rusage(RUSAGE_INFO_V2)` counters at roughly
+100ms intervals. It never signals, suspends or reads the target's memory.
+
+`bin/process_usage_sample.c` requires PID, expected parent and exact executable
+path, checks UID and stable process-start identity around the path/parent
+queries, and bounds observation to1..30s. Each read has Mach-clock begin/end
+bounds matching the bridge clock. Detected identity changes/errors invalidate the run;
+natural exit after valid samples is explicit. A deadline is not a target-exit
+certificate. Counters are process accounting, not system-global driver work,
+storage-device traffic, physical GPU residency or bytes used by a kernel.
+The sampler's path/parent/UID checks accepted; the JSON emits the expected
+parent, not the observed path/UID. Those identity checks are therefore backed
+by the pinned observer implementation, its tests and controlled launcher, not
+independently reconstructible from usage rows alone.
+
+One attempt completed normally. Of96 samples,83 were entirely between
+before-commit and GPU-start, covering at least8501.098ms of the8518.933ms gap.
+The observer missed15.088ms at the beginning and2.709ms at the end; maximum
+read duration0.0863ms and inter-read gap105.072ms. Reported deltas span the
+first and last enclosed readings, not the omitted edges:
+
+| Counter / interval | Observed |
+| --- | ---: |
+| Process disk-read accounting delta | 16,761,634,816 B |
+| Process page-in delta | 1,023,049 |
+| System CPU time delta | 2998.865ms |
+| User CPU time delta | 2.194ms |
+| Before-commit to GPU-start | 8518.933ms |
+| GPU execution | 1405.170ms |
+
+The read delta is99.708% of the16,810,714,336-byte model file. It also equals
+the page-in delta times the host's16,384-byte page size exactly. Reads grow
+throughout the gap: approximately2.26/8.47/14.48/16.62GB at1.06/4.17/7.27/8.31s
+after before-commit. These correlated accounting counters are not independent
+physical-I/O measurements. In particular, no per-file attribution was captured.
+
+Static source establishes that `Qwen35Weights` registers the mmap once and
+weight slices normally bind offsets into that whole-file no-copy MetalBuffer
+(`qwen35_weights.cr`, `qwen35_metal.cr:register_mmap/mmap_slot_for`). The bridge
+passes buffer and offset, not tensor length, to `setBuffer`. Combined with
+the prior sampled IOGPU submit trap and this near-whole-file page-in/read
+timeline, whole-mapping first-use preparation is now a strong hypothesis.
+The pause is not merely zero-activity waiting in the client process. This does
+not prove which file supplied every read, that I/O alone caused all8.5s, or
+that changing buffer boundaries will improve total TTFT. The uncharged driver,
+other processes and deferred compilation remain outside this observation.
+
+Do not read ordinary RSS as GPU residency: within the enclosed window RSS
+fell1,316,356,096B while phys_footprint rose only262,144B. These are not evidence
+that the model vanished or that the submission was memory-free. This run's
+source-library API total was8.903ms and pipeline creation4.277ms, all before
+commit. OS shader-cache state was not controlled; no speed comparison with
+the prior655.776ms compilation run is admitted.
+
+Qualification is CPU-only: a bounded child performs a busy loop,32MiB anonymous
+touch and8MiB `F_NOCACHE` file read. Measured CPU118.397ms agrees with `getrusage`
+within0.044%; RSS rises32MiB and disk-read accounting8MiB. Pageins were zero in
+that read control, so it does not qualify a zero-pageins negative inference.
+The kernel's current [CPU accounting implementation](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/task.c)
+supplies Mach ticks via `task_power_info_locked`; [rusage filling](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/bsd_kern.c)
+copies those values. Raw ticks/timebase are retained and runtime calibration
+checks conversion rather than assuming nanoseconds. Changes to OS accounting
+require a new control, not silent unit reuse.
+
+Reproduce the no-GPU instrument check (CLT developer directory selected):
+
+```sh
+xcrun clang -std=c11 -Wall -Wextra -Werror bin/process_usage_sample.c -o /private/tmp/usage-sampler
+xcrun clang -std=c11 -Wall -Wextra -Werror spec/process_usage_fixture.c -o /private/tmp/usage-fixture
+python3 spec/process_usage_sample_test.py /private/tmp/usage-sampler /private/tmp/usage-fixture
+```
+
+The test checks invalid PID/parent arguments, wrong path, deadline, natural exit, absent
+target, counter sensitivity and chronology. The pinned model binary's self-test
+and metadata dry-run pass without GPU; prior source/binary hashes and model
+device/inode/size/mtime match (not a fresh model-content hash). The raw-run
+checker verifies the prior one-command/91-pipeline-record
+envelope and rejects8 seeded usage defects (identity, counter, timing, terminal
+state, coverage). One safe run: initial78%, minimum sampled51%,7 clean memory
+observations, exit0 for target and both observers, final tree absent; no kill
+or timeout. Preserved70% admission/30% floor/24GiB cap/native180s watchdog.
+These are diagnostics, not quality, pp/tg, stability or performance promotion.
+Correlated Luna source/raw-record review found no safety blocker for the sole
+run and accepted the observation window. The bounded accounting observation is
+ROBUST; attributing every read or all latency to the weight mapping remains
+VULNERABLE without a file-specific or controlled buffer-boundary discriminator.
+
+Artifacts: `/private/tmp/qwen-submit-usage.ugTk9s/`; `run.py` is one-shot,
+`manifest.json` pins the previous build plus observer sources/binary/control,
+`check.py` checks raw logs and retrospective interval selection. SHA256:
+
+- Manifest: `8968f2d88d45866c3e70ef0c01cca0d415bad27fd9b35f038212f139192d625d`.
+- Native observer: `9fa1694d0d935ed291309ad3bd10db1ae5db88ce2c5b62df220f81a4d5429262`.
+- Live command log: `dc688f6210d3370cea5e0b43a7a003d0ce8c617a2cc2ea289d448173da7b7795`.
+- Usage log: `e242bc0039c3d318d5408400e0e7f16a01eb772b1a2c7fd221d11fdefba46bca`.
+- Checker: `b64e03a4950f59475a184066a9a43c705aad747925401db272cca57ce7d578e3`.
+
+Next: inspect a model-scoped, page-aligned bounded weight-buffer view experiment
+with explicit owner/lifetime and rollback before changing the global registry.
+Its falsifier must preserve input/math and distinguish first-command read
+volume from total-prefix/TTFT cost; lazy loading can merely move reads later.
+No model-sized residency or full-prefix replay is admitted by this result.
+Refresh on source/model/device/OS/input/observer drift or raw-evidence loss.
+
 ## Pipeline API time is separate from the first-submit gap (2026-09-19)
 
 Hypothesis: synchronous Metal source compilation / pipeline creation accounts

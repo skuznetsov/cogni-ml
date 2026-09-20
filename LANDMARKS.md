@@ -28513,3 +28513,34 @@ Refresh after source/toolchain/device/model/workload changes.
   /private/tmp/qwen-pipeline-profile.hB85Yk/. Reuse only after identity refresh.
   Return to narrow resource-submission diagnosis; cold-start precompilation
   remains a separate opportunity. Keep70/30%,24GiB guards and unrelated WIP.
+
+### Continuation 2026-09-19 — Process-accounted reads during first-submit gap
+
+- Exact previous first-command-only binary/bridge/input/controls, no rebuild,
+  prewarm, eviction, residency or engine change. External own-child observer
+  proc_pid_rusage v2 reads every~100ms; checks path/parent/UID/stable start and
+  timestamps each read on the bridge Mach clock. No target-memory access.
+- One successful command: preGPU8518.933ms/GPU1405.170ms.83 enclosed samples
+  cover8501.098ms; +16,761,634,816B reads,+1,023,049 pageins,+2998.865ms system
+  CPU,+2.194ms user. Reads grow through the pause and equal pageins*16384,
+  99.708% of model bytes. These are correlated process accounting, not
+  per-file attribution or proof all latency is I/O/whole-mmap first use.
+- Whole-model no-copy weight buffer plus earlier submit-trap stacks make
+  whole-mapping preparation a strong next hypothesis. Reject pure inactive
+  client waiting, not deferred/external driver work. RSS fell1.316GB while
+  footprint barely changed: neither is proof of GPU residency. This run's
+  library API8.903ms is not a cold-cache speed comparison.
+- CPU-only observer controls: CPU matches getrusage within0.044%,32MiB RSS
+  touch and8MiB uncached read detected; page-in zero not a negative control.
+  Identity/CLI/deadline/exit tests pass; source/dry/self checks pass; raw
+  checker rejects8 defects. Initial78/minimum sampled51%,7clean observations,
+  target/observers exit0, tree absent. No retry/full prefix. Luna finds no
+  scoped safety blocker; identity checks accepted internally, observed
+  path/UID are not emitted for independent reconstruction from JSON alone.
+- Evidence: docs/qwen-prefill-command-trace.md;
+  /private/tmp/qwen-submit-usage.ugTk9s/ (manifest/log/observer hashes in docs).
+  Next: inspect bounded page-aligned model-owned weight views and lifetime/
+  rollback; discriminate first-command reads AND eventual TTFT, not mere
+  deferral. No production optimization or model-sized residency authorized
+  by this evidence. Preserve70/30%,24GiB guards and unrelated WIP; refresh on
+  source/model/input/device/OS/observer drift or raw-evidence loss.
