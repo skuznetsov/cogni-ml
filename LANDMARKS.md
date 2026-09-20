@@ -28544,3 +28544,36 @@ Refresh after source/toolchain/device/model/workload changes.
   deferral. No production optimization or model-sized residency authorized
   by this evidence. Preserve70/30%,24GiB guards and unrelated WIP; refresh on
   source/model/input/device/OS/observer drift or raw-evidence loss.
+
+### Continuation 2026-09-19 — Bounded weight views and metallib refutations
+
+- Page-aligned model-owned weight views reduce the first whole-mmap submit
+  delay, but do not qualify as a production prefill optimization. In the
+  matched whole/capped pair, whole and 256MiB-capped full-prefix waits were
+  72.684s and 72.808s respectively; capped improved the first wait from
+  4.607s to 2.198s and raised minimum sampled free memory from43% to61%, but a
+  second capped run failed with ImpactingInteractivity at boundary54. Keep the
+  implementation out of the default engine; no hybrid or release/rebind path
+  has a completion-safe end-to-end win.
+- A source-addressed precompiled-metallib prototype compiled13 exact Qwen
+  source variants, including distinct F32/H16 digests. A guarded short probe
+  loaded all30 used pipelines through the file route with no source compile.
+  File library lookup was0.899ms, but pipeline-state creation was336.891ms;
+  total setup338.058ms. A same-binary matched source control used the system
+  Metal cache and needed only18.278ms total (15.693ms source-library,
+  2.468ms pipeline). Both commands completed; file/source submit waits were
+  5263.569/5444.293ms and GPU times1425.864/1414.735ms. This order is not a
+  speed comparison, but it falsifies the claim that plain metallib loading
+  removes pipeline creation or is always faster.
+- The earlier genuinely cold source trace measured661.875ms of setup, so a
+  plain metallib can at most trade front-end compile for later pipeline-state
+  creation; it does not explain the multi-second commit-to-GPU-start gap. The
+  prototype was removed rather than add an opt-in cache with a warm-process
+  regression. Do not pursue MTLBinaryArchive without a fresh discriminator:
+  Apple already persists an effective cross-process source cache on this host.
+- Raw logs: `/private/tmp/qwen35_metallib_first.log` and
+  `/private/tmp/qwen35_source_first_matched.log`; generated libraries were
+  792KiB under `/private/tmp/qwen35-metallibs-test/`. Refresh on Metal
+  toolchain/OS/device/source change or evidence loss. Return pointer remains
+  the attributed model reads/page-ins between commit and GPU start; preserve
+  the70/30%,24GiB safety envelope.
