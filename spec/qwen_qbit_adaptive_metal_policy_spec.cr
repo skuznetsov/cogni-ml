@@ -140,4 +140,20 @@ describe ML::GGUF::QwenQBitAdaptiveMetalPolicy do
       policy.bf16_splitk_t8?("Apple M2 Max", 6_144, "true")
     end
   end
+
+  it "keeps the experimental P4 direct-QK stage explicitly off unless enabled with 1" do
+    policy = ML::GGUF::QwenQBitAdaptiveMetalPolicy
+
+    policy.p4_splitk_direct_qk?(true, true).should be_false
+    policy.p4_splitk_direct_qk?(true, true, "0").should be_false
+    policy.p4_splitk_direct_qk?(true, true, "1").should be_true
+    policy.p4_splitk_direct_qk?(false, true, "1").should be_false
+    policy.p4_splitk_direct_qk?(true, false, "1").should be_false
+    expect_raises(ArgumentError, /QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK/) do
+      policy.p4_splitk_direct_qk?(true, true, "true")
+    end
+    expect_raises(ArgumentError, /QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK/) do
+      policy.p4_splitk_direct_qk?(true, true, "")
+    end
+  end
 end

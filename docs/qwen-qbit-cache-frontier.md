@@ -4195,3 +4195,60 @@ Probe source SHA-256:
 `452cda6e90b741b64a8f9cdb19e3b8233896f4179e6b8986a5680a14d7b242bd`.
 Refresh on layout/loader, compiler/toolchain, device, timing method, gate, or
 loss of the recorded evidence.
+
+### P4 direct-QK is exact and useful, but remains opt-in (2026-09-20)
+
+The P4 T8 split-K stage1 path was given a second execution geometry. Six SIMD
+groups own K rows in strides of six; every lane dequantizes eight values,
+accumulates all six GQA query heads, reduces with `simd_sum`, and writes the
+scores into the existing threadgroup tile. The V path, canonical adaptive-cache
+bytes, snapshot format, publication protocol, launch size, and threadgroup
+allocation are unchanged. `QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK=1` is an
+explicit default-off switch and is effective only for uniform P4 with the P4
+T8 loader.
+
+Model-free resident tests cover an 8K prefix plus visible tile tails 1, 6, 15,
+and 16. The direct path matches the scalar oracle, retains byte-identical K/V
+payloads, and the complete 20-example resident suite passes. In the isolated
+adaptive-attention command, two ten-pair runs improved completed-command wall
+time by `9.56--14.44%` at 8K and `20.35--20.54%` at 16K; maximum output drift
+was `4.3e-7`, with exact payload equality.
+
+The same-process full-model `forward_top1` falsifier is the product boundary.
+It loaded the model once, used independent baseline/candidate states, alternated
+AB/BA order, held P4/BF16 T8 and fused stage2 constant, and toggled only
+direct-QK on the 12 P4 owners. Pooled across two opposite-order ten-pair runs:
+
+- 8K synthetic prefix: `70.003 -> 68.275 ms`, `+2.47%`, 18/20 wins;
+- 16K synthetic prefix: `78.139 -> 75.828 ms`, `+2.96%`, 20/20 wins.
+
+One run at each boundary exceeded 3%, while the opposite-order run did not;
+the pooled results therefore miss the predeclared `>=3%` full-token gate. A
+separate real 401-token prompt-prefill run kept top-1 identical for all ten
+decode steps with maximum logit drift `7.6e-6`; it was speed-neutral/regressive
+(`-0.38%`), as expected below the long-context regime. Synthetic-zero-prefix
+runs establish route timing and baseline/candidate numerical agreement, not
+semantic quality.
+
+**Adversary:** Removing the shared K tile is a large local win, but attention is
+only part of a token. Six live query accumulators can also increase register
+pressure. Directionality is strong at long context, yet a threshold-straddling
+result must not be promoted by selecting only the passing repetitions.
+
+**decision:** Keep the exact direct-QK implementation and product A/B probe as
+a default-off experimental route. Do not enable it automatically yet. Reopen
+automatic admission only when a changed kernel/compiler/device or a broader
+transformation produces a repeated pooled full-token gain above 3% without
+weakening top-1/logit/cache checks. Evidence logs and SHA-256:
+`/private/tmp/qwen_direct_qk_full_8k.log`
+`654421923d56fb04e8d68146b5a841c9b93042aaf7c9a7901ad1875306480c3d`,
+`/private/tmp/qwen_direct_qk_full_8k_repeat.log`
+`e87da725a5a9608d4b238bc7550d55046a290bb33dc31b62335d8cbf11dc3ad5`,
+`/private/tmp/qwen_direct_qk_full_16k.log`
+`afa48b83c25396ed8efa9550bb3d1c15c66bf6fc369e1694da42033264542b00`,
+`/private/tmp/qwen_direct_qk_full_16k_repeat.log`
+`cda23650d35553241ebdc5406180aa727bd474f578e44b14ccf29034dd9f7b4c`,
+and `/private/tmp/qwen_direct_qk_full_real_prefix.log`
+`b7f6e32eeb27cd71619422dfcaf7ae9df2eee81e524fe0729f0d67a1be39166e`.
+Refresh on kernel/policy/probe, cache map, model, compiler/toolchain, device/OS,
+timing method, safety policy, gate, or evidence loss.

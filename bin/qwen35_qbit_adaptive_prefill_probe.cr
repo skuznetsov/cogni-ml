@@ -115,9 +115,53 @@ module Qwen35QBitAdaptivePrefillProbe
     end
   end
 
+  def timed_restored_sample_with_snapshot(
+    plan : ML::GGUF::QwenQBitAdaptiveKV::Plan,
+    snapshot_k : ML::GGUF::QwenQBitAdaptiveKV::Encoded,
+    snapshot_v : ML::GGUF::QwenQBitAdaptiveKV::Encoded,
+    prefix : Int32,
+    capacity : Int32,
+    q_source : ML::MetalBuffer,
+    gate_source : ML::MetalBuffer,
+    k_source : ML::MetalBuffer,
+    v_source : ML::MetalBuffer,
+    output : ML::MetalBuffer,
+    token_count : Int32,
+    n_head : Int32,
+    n_head_kv : Int32,
+    head_dim : Int32,
+    heads_per_group : Int32,
+    scale : Float32,
+  ) : {Float64, Float64, Array(Float32), Bytes, Bytes}
+    cache = ML::GGUF::QwenQBitAdaptiveResidentKV.allocate(
+      plan, plan, capacity, n_head_kv, head_dim,
+    )
+    begin
+      ML::GGUF::QwenQBitAdaptiveResidentKV.restore_snapshot!(
+        cache, snapshot_k, snapshot_v, prefix,
+      )
+      wall_ms, gpu_ms = timed_prefill_chunk_and_append(
+        cache,
+        q_source, gate_source, k_source, v_source, output,
+        token_count, n_head, heads_per_group, scale,
+      )
+      final_k, final_v = ML::GGUF::QwenQBitAdaptiveResidentKV.snapshot(cache)
+      {
+        wall_ms,
+        gpu_ms,
+        output.read(token_count * n_head * head_dim),
+        final_k.payload,
+        final_v.payload,
+      }
+    ensure
+      cache.release
+    end
+  end
+
   def run(prefixes : Array(Int32), repeats : Int32,
           token_count : Int32, tier_names : Array(String),
           compare_p4_t8 : Bool, compare_bf16_t8 : Bool,
+          compare_p4_direct_qk : Bool,
           compare_splitk_chunks : Tuple(Int32, Int32)?) : Nil
     raise "Metal not available" unless ML::GGUF::Qwen35Metal.available?
     unless repeats > 0 && repeats <= MAX_REPEATS
@@ -129,16 +173,24 @@ module Qwen35QBitAdaptivePrefillProbe
     unless !tier_names.empty? && tier_names.uniq == tier_names
       raise ArgumentError.new("tiers must be unique and non-empty")
     end
-    if compare_p4_t8 && compare_bf16_t8
-      raise ArgumentError.new("select only one split-K T8 comparison")
+    if [compare_p4_t8, compare_bf16_t8, compare_p4_direct_qk].count(&.== true) > 1
+      raise ArgumentError.new("select only one P4/BF16 split-K comparison")
     end
     compare_t8_tier = compare_p4_t8 ? "p4" : (compare_bf16_t8 ? "bf16" : nil)
-    if compare_t8_tier && compare_splitk_chunks
-      raise ArgumentError.new("select either a T8 or split-K chunk comparison")
+    if (compare_t8_tier || compare_p4_direct_qk) && compare_splitk_chunks
+      raise ArgumentError.new("select either a P4/BF16/direct-QK or split-K chunk comparison")
     end
     if comparison_tier = compare_t8_tier
       unless repeats == 10 && token_count == 1 && tier_names == [comparison_tier]
         raise ArgumentError.new("the T8 comparison requires --repeats 10 --chunk 1 --tiers #{comparison_tier}")
+      end
+    end
+    if compare_p4_direct_qk
+      unless repeats == 10 && token_count == 1 && tier_names == ["p4"]
+        raise ArgumentError.new("the direct-QK comparison requires --repeats 10 --chunk 1 --tiers p4")
+      end
+      unless prefixes == [8191, 16383]
+        raise ArgumentError.new("the direct-QK comparison requires --prefixes 8191,16383")
       end
     end
     if chunk_pair = compare_splitk_chunks
@@ -153,8 +205,11 @@ module Qwen35QBitAdaptivePrefillProbe
     unless !prefixes.empty? && prefixes == prefixes.sort && prefixes.uniq == prefixes
       raise ArgumentError.new("prefixes must be unique and sorted")
     end
-    unless prefixes.all? { |prefix| prefix > 0 && prefix <= MAX_PREFIX && prefix % SOURCE_CHUNK == 0 }
-      raise ArgumentError.new("prefixes must be 64-aligned and in 64..#{MAX_PREFIX}")
+    unless prefixes.all? do |prefix|
+             prefix > 0 && prefix <= MAX_PREFIX &&
+             (prefix % SOURCE_CHUNK == 0 || (compare_p4_direct_qk && [8191, 16383].includes?(prefix)))
+           end
+      raise ArgumentError.new("prefixes must be 64-aligned and in 64..#{MAX_PREFIX}, except direct-QK 8191,16383")
     end
 
     n_head = 24
@@ -187,7 +242,9 @@ module Qwen35QBitAdaptivePrefillProbe
     bf16_splitk_t8_mode = bf16_splitk_t8_override.nil? ? "auto" : bf16_splitk_t8_override.strip.inspect
     pack_prefix_quant_override = ENV["QWEN35_ADAPTIVE_PACK_PREFIX_QUANT"]?
     pack_prefix_quant_mode = pack_prefix_quant_override.nil? ? "auto" : pack_prefix_quant_override.strip.inspect
-    puts %(probe device=#{device_name.inspect} tile=#{tile} dequant_t4_mode=#{dequant_t4_mode} p4_splitk_t8_mode=#{p4_splitk_t8_mode} bf16_splitk_t8_mode=#{bf16_splitk_t8_mode} pack_prefix_quant_mode=#{pack_prefix_quant_mode} seed=0x#{SEED.to_s(16)} fixed_snapshot=true)
+    direct_qk_override = ENV["QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK"]?
+    direct_qk_mode = direct_qk_override.nil? ? "off" : direct_qk_override.strip.inspect
+    puts %(probe device=#{device_name.inspect} tile=#{tile} dequant_t4_mode=#{dequant_t4_mode} p4_splitk_t8_mode=#{p4_splitk_t8_mode} bf16_splitk_t8_mode=#{bf16_splitk_t8_mode} direct_qk_mode=#{direct_qk_mode} pack_prefix_quant_mode=#{pack_prefix_quant_mode} seed=0x#{SEED.to_s(16)} fixed_snapshot=true)
     puts "tier prefix chunk route    t4    pq pack_wall_ms pack_gpu_ms fused_wall_ms prefill_pack_finalize_gpu_ms non_gpu_ms"
     begin
       tier_names.each do |tier_name|
@@ -316,6 +373,90 @@ module Qwen35QBitAdaptivePrefillProbe
             unless wall_improvement >= 0.03 && gpu_improvement >= 0.03 &&
                    wall_wins >= 8 && gpu_wins >= 8
               raise "#{comparison_tier.upcase} T8 paired promotion gate failed"
+            end
+            next
+          end
+
+          if compare_p4_direct_qk
+            raise "P4 direct-QK comparison requires the split-K route" unless splitk
+            previous_t8 = ENV["QWEN35_ADAPTIVE_P4_SPLITK_T8"]?
+            previous_direct_qk = ENV["QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK"]?
+            baseline_wall = [] of Float64
+            baseline_gpu = [] of Float64
+            candidate_wall = [] of Float64
+            candidate_gpu = [] of Float64
+            max_output_delta = 0.0_f32
+            begin
+              # Compile both direct-QK variants up front with T8 forced in
+              # both arms; only the stage-1 scheduling candidate changes.
+              ["0", "1"].each do |mode|
+                ENV["QWEN35_ADAPTIVE_P4_SPLITK_T8"] = "1"
+                ENV["QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK"] = mode
+                timed_restored_sample(
+                  plan, snapshot_k, snapshot_v, prefix, capacity,
+                  q_buffer, gate_buffer, k_buffer, v_buffer, output,
+                  token_count, n_head, n_head_kv, head_dim, heads_per_group, scale,
+                )
+              end
+
+              repeats.times do |pair_index|
+                order = pair_index.even? ? ["0", "1"] : ["1", "0"]
+                pair = Hash(String, Tuple(Float64, Float64, Array(Float32), Bytes, Bytes)).new
+                order.each do |mode|
+                  ENV["QWEN35_ADAPTIVE_P4_SPLITK_T8"] = "1"
+                  ENV["QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK"] = mode
+                  sample = timed_restored_sample_with_snapshot(
+                    plan, snapshot_k, snapshot_v, prefix, capacity,
+                    q_buffer, gate_buffer, k_buffer, v_buffer, output,
+                    token_count, n_head, n_head_kv, head_dim, heads_per_group, scale,
+                  )
+                  pair[mode] = sample
+                end
+                baseline = pair["0"]
+                candidate = pair["1"]
+                unless baseline[3] == candidate[3] && baseline[4] == candidate[4]
+                  raise "P4 direct-QK canonical K/V bytes changed"
+                end
+                baseline_wall << baseline[0]
+                baseline_gpu << baseline[1]
+                candidate_wall << candidate[0]
+                candidate_gpu << candidate[1]
+                baseline[2].each_with_index do |value, index|
+                  delta = (value - candidate[2][index]).abs
+                  max_output_delta = delta if delta > max_output_delta
+                end
+                printf "paired_p4_direct_qk prefix=%d pair=%d order=%s baseline_wall_ms=%.3f candidate_wall_ms=%.3f baseline_gpu_ms=%.3f candidate_gpu_ms=%.3f max_output_delta=%.8f\n",
+                  prefix, pair_index + 1, order.join, baseline[0], candidate[0],
+                  baseline[1], candidate[1], max_output_delta
+              end
+            ensure
+              if previous_t8
+                ENV["QWEN35_ADAPTIVE_P4_SPLITK_T8"] = previous_t8
+              else
+                ENV.delete("QWEN35_ADAPTIVE_P4_SPLITK_T8")
+              end
+              if previous_direct_qk
+                ENV["QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK"] = previous_direct_qk
+              else
+                ENV.delete("QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK")
+              end
+            end
+
+            baseline_wall_mean = mean(baseline_wall)
+            baseline_gpu_mean = mean(baseline_gpu)
+            candidate_wall_mean = mean(candidate_wall)
+            candidate_gpu_mean = mean(candidate_gpu)
+            wall_improvement = 1.0 - candidate_wall_mean / baseline_wall_mean
+            gpu_improvement = 1.0 - candidate_gpu_mean / baseline_gpu_mean
+            wall_wins = baseline_wall.zip(candidate_wall).count { |base, candidate| candidate < base }
+            gpu_wins = baseline_gpu.zip(candidate_gpu).count { |base, candidate| candidate < base }
+            printf "paired_p4_direct_qk_summary prefix=%d baseline_wall_mean_ms=%.3f candidate_wall_mean_ms=%.3f wall_improvement_pct=%.3f wall_wins=%d/10 baseline_gpu_mean_ms=%.3f candidate_gpu_mean_ms=%.3f gpu_improvement_pct=%.3f gpu_wins=%d/10 max_output_delta=%.8f\n",
+              prefix, baseline_wall_mean, candidate_wall_mean, wall_improvement * 100.0, wall_wins,
+              baseline_gpu_mean, candidate_gpu_mean, gpu_improvement * 100.0, gpu_wins, max_output_delta
+            raise "P4 direct-QK output tolerance failed" if max_output_delta > 1e-4_f32
+            unless wall_improvement >= 0.03 && gpu_improvement >= 0.03 &&
+                   wall_wins >= 8 && gpu_wins >= 8
+              raise "P4 direct-QK paired promotion gate failed"
             end
             next
           end
@@ -457,6 +598,7 @@ token_count = Qwen35QBitAdaptivePrefillProbe::SOURCE_CHUNK
 tier_names = ["p4", "bf16", "f32"]
 compare_p4_t8 = false
 compare_bf16_t8 = false
+compare_p4_direct_qk = false
 compare_splitk_chunks = nil.as(Tuple(Int32, Int32)?)
 OptionParser.parse do |parser|
   parser.banner = "Usage: qwen35_qbit_adaptive_prefill_probe [options]"
@@ -474,6 +616,9 @@ OptionParser.parse do |parser|
   parser.on("--compare-bf16-t8", "Run the same-process 10-pair BF16 split-K T8 promotion gate") do
     compare_bf16_t8 = true
   end
+  parser.on("--compare-p4-direct-qk", "Run the same-process 10-pair P4 direct-QK gate with T8 forced") do
+    compare_p4_direct_qk = true
+  end
   parser.on("--compare-splitk-chunks BASE,CANDIDATE", "Run a same-process 10-pair split-K chunk-size gate") do |value|
     chunks = value.split(',').map(&.to_i?)
     unless chunks.size == 2 && chunks.all?
@@ -487,7 +632,10 @@ OptionParser.parse do |parser|
   end
 end
 
+prefixes = [8191, 16383] if compare_p4_direct_qk && prefixes == [512, 1536, 3072]
+
 Qwen35QBitAdaptivePrefillProbe.run(
   prefixes, repeats, token_count, tier_names, compare_p4_t8, compare_bf16_t8,
+  compare_p4_direct_qk,
   compare_splitk_chunks,
 )

@@ -469,6 +469,20 @@ module ML::GGUF
       if SOURCE_TILE15_P4_SPLITK_T8 == SOURCE_P4_SPLITK_T8
         raise "adaptive P4 split-K t8 tile-15 source patch no longer matches"
       end
+      SOURCE_P4_SPLITK_DIRECT_QK = SOURCE_P4_SPLITK_T8.sub(
+        "constant bool QQA_ADAPTIVE_P4_SPLITK_DIRECT_QK = false;",
+        "constant bool QQA_ADAPTIVE_P4_SPLITK_DIRECT_QK = true;",
+      )
+      if SOURCE_P4_SPLITK_DIRECT_QK == SOURCE_P4_SPLITK_T8
+        raise "adaptive P4 split-K direct-QK source patch no longer matches"
+      end
+      SOURCE_TILE15_P4_SPLITK_DIRECT_QK = SOURCE_TILE15_P4_SPLITK_T8.sub(
+        "constant bool QQA_ADAPTIVE_P4_SPLITK_DIRECT_QK = false;",
+        "constant bool QQA_ADAPTIVE_P4_SPLITK_DIRECT_QK = true;",
+      )
+      if SOURCE_TILE15_P4_SPLITK_DIRECT_QK == SOURCE_TILE15_P4_SPLITK_T8
+        raise "adaptive P4 split-K direct-QK tile-15 source patch no longer matches"
+      end
       SOURCE_BF16_SPLITK_T8 = SOURCE.sub(
         "constant bool QQA_ADAPTIVE_BF16_SPLITK_T8 = false;",
         "constant bool QQA_ADAPTIVE_BF16_SPLITK_T8 = true;",
@@ -502,7 +516,7 @@ module ML::GGUF
       @@gqa6_pipeline_mutex = Mutex.new
       @@prefill_gqa6_pipelines = Hash(Tuple(Int32, Bool), ML::Metal::ComputePipeline).new
       @@prefill_gqa6_pipeline_mutex = Mutex.new
-      @@decode_splitk_stage1_pipelines = Hash(Tuple(Int32, Bool, Bool, Bool), ML::Metal::ComputePipeline).new
+      @@decode_splitk_stage1_pipelines = Hash(Tuple(Int32, Bool, Bool, Bool, Bool), ML::Metal::ComputePipeline).new
       @@decode_splitk_stage1_pipeline_mutex = Mutex.new
       @@decode_splitk_stage2_pipelines = Hash(Bool, ML::Metal::ComputePipeline).new
       @@decode_splitk_stage2_pipeline_mutex = Mutex.new
@@ -1361,15 +1375,21 @@ module ML::GGUF
         # T8 is a complete tier-specific loader, not an additive T4 modifier.
         # Keep the pipeline identity canonical when both explicit knobs are set.
         dequant_t4 = (p4_t8 || bf16_t8) ? false : dequant_t4?(automatic: automatic_t4)
-        key = {tile, dequant_t4, p4_t8, bf16_t8}
+        direct_qk = QwenQBitAdaptiveMetalPolicy.p4_splitk_direct_qk?(
+          uniform_tier == QwenQBitAdaptiveKV::Tier::P4,
+          p4_t8,
+          ENV["QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK"]?,
+        )
+        key = {tile, dequant_t4, p4_t8, bf16_t8, direct_qk}
         suffix = dequant_t4 ? "_dequant_t4" : ""
         suffix += "_p4_t8" if p4_t8
         suffix += "_bf16_t8" if bf16_t8
+        suffix += "_direct_qk" if direct_qk
         @@decode_splitk_stage1_pipeline_mutex.synchronize do
           @@decode_splitk_stage1_pipelines[key] ||= ML::Metal::PipelineCache.get("qwen35_qbit_adaptive_decode_splitk_stage1_gqa6_tile#{tile}#{suffix}") {
             ML::Metal::ComputePipeline.new(
               "qwen35_qbit_adaptive_decode_splitk_stage1_gqa6_tile#{tile}#{suffix}",
-              gqa6_source(tile, dequant_t4, p4_t8, bf16_t8),
+              gqa6_source(tile, dequant_t4, p4_t8, bf16_t8, direct_qk),
               "qwen35_qbit_adaptive_decode_splitk_stage1_gqa6",
             )
           }
@@ -1421,11 +1441,15 @@ module ML::GGUF
       private def gqa6_source(tile : Int32,
                               dequant_t4 : Bool = false,
                               p4_t8 : Bool = false,
-                              bf16_t8 : Bool = false) : String
+                              bf16_t8 : Bool = false,
+                              direct_qk : Bool = false) : String
         if bf16_t8
           return tile == 15 ? SOURCE_TILE15_BF16_SPLITK_T8 : SOURCE_BF16_SPLITK_T8
         end
         if p4_t8
+          if direct_qk
+            return tile == 15 ? SOURCE_TILE15_P4_SPLITK_DIRECT_QK : SOURCE_P4_SPLITK_DIRECT_QK
+          end
           return tile == 15 ? SOURCE_TILE15_P4_SPLITK_T8 : SOURCE_P4_SPLITK_T8
         end
         if dequant_t4

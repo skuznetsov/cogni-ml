@@ -28974,3 +28974,35 @@ Refresh after source/toolchain/device/model/workload changes.
   `452cda6e90b741b64a8f9cdb19e3b8233896f4179e6b8986a5680a14d7b242bd`.
   Refresh on layout/loader, compiler/toolchain, device, timing method, gate, or
   evidence loss.
+
+### Continuation 2026-09-20 — P4 direct-QK is exact but stays opt-in
+
+- An experimental P4 T8 split-K stage1 geometry removes shared K-tile
+  materialization: six SIMD groups own K rows, each lane dequantizes eight
+  values and accumulates all six GQA query heads, and the existing tile stores
+  only scores before the unchanged softmax/V path. Canonical cache/snapshot
+  bytes, publication, launch size, and threadgroup allocation are unchanged.
+  `QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK=1` is explicit, default-off, and P4-T8
+  gated.
+- The 20-example resident suite covers an 8K prefix and visible tails 1/6/15/16;
+  it matches the scalar oracle and preserves byte-identical K/V payloads.
+  Isolated completed-command timing improved `9.56--14.44%` at 8K and
+  `20.35--20.54%` at 16K across two ten-pair runs, with maximum output drift
+  `4.3e-7`.
+- Two opposite-order same-process full-model runs pooled to `+2.47%` at 8K
+  (`70.003 -> 68.275 ms`, 18/20 wins) and `+2.96%` at 16K
+  (`78.139 -> 75.828 ms`, 20/20 wins). One run at each boundary crossed 3%,
+  but its opposite-order pair did not. Selecting only the passing rows would
+  violate the predeclared repeated full-token gate.
+- A real 401-token prompt-prefill comparison preserved all ten top-1 tokens
+  with maximum logit drift `7.6e-6`; its `-0.38%` timing is a short-context
+  quality certificate, not long-context speed evidence. Synthetic-prefix rows
+  are explicitly non-semantic.
+- Verdict: ROBUST for exactness, route isolation, and a repeatable local kernel
+  win; VULNERABLE for automatic product admission because the pooled full-token
+  result remains below 3%. Keep the route and A/B probe default-off. Reopen only
+  after a changed mechanism clears a repeated pooled full-token gate without
+  weakening correctness. Evidence: `/private/tmp/qwen_direct_qk_full_{8k,
+  8k_repeat,16k,16k_repeat,real_prefix}.log`; hashes are recorded in
+  `docs/qwen-qbit-cache-frontier.md`. Refresh on kernel/policy/probe, model/map,
+  compiler, device/OS, timing method, safety policy, gate, or evidence loss.

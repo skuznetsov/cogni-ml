@@ -123,5 +123,21 @@ module ML::GGUF
         raise ArgumentError.new("QWEN35_ADAPTIVE_BF16_SPLITK_T8 must be 0 or 1")
       end
     end
+
+    # Experimental P4 direct-QK is never automatic. Parse the explicit switch
+    # even when the current route is ineligible so malformed configuration
+    # cannot silently pass through an unrelated split-K path.
+    def self.p4_splitk_direct_qk?(uniform_p4 : Bool,
+                                  p4_t8 : Bool,
+                                  override : String? = nil) : Bool
+      enabled = case override.try(&.strip)
+                when nil then false
+                when "0" then false
+                when "1" then true
+                else
+                  raise ArgumentError.new("QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK must be 0 or 1")
+                end
+      enabled && uniform_p4 && p4_t8
+    end
   end
 end

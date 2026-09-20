@@ -66,6 +66,7 @@ constant bool QQA_ADAPTIVE_DEQUANT_T4 = false;
 constant bool QQA_ADAPTIVE_SPLITK_STAGE2_FUSED = false;
 constant bool QQA_ADAPTIVE_P4_SPLITK_T8 = false;
 constant bool QQA_ADAPTIVE_BF16_SPLITK_T8 = false;
+constant bool QQA_ADAPTIVE_P4_SPLITK_DIRECT_QK = false;
 
 struct QQAAdaptiveFloat8 {
     float4 low;
@@ -663,28 +664,83 @@ kernel void qwen35_qbit_adaptive_decode_splitk_stage1_gqa6(
         const uint tile_len = min(tile_start + QQA_ADAPTIVE_GQA6_TILE, block_end) - tile_start;
         const uint tile_values = tile_len * head_dim;
 
-        qqa_adaptive_fill_uniform_tile(
-            kv_tile, k_base, k_metadata, k_sidecar, current_k,
-            tile_start, tile_values, packed_len, 0u,
-            n_head_kv * head_dim, kv_h, n_head_kv, head_dim,
-            uniform_tier, thread_index);
+        if (QQA_ADAPTIVE_P4_SPLITK_DIRECT_QK) {
+            // The six SIMD groups partition key rows in strides of six. Each
+            // lane owns one eight-value P4 T8 vector, and accumulates that
+            // vector against all six queries before the group reduction. The
+            // first 6*TILE entries of kv_tile are score scratch; the same
+            // storage is overwritten by the existing V-tile fill below.
+            for (uint row_in_tile = local_h; row_in_tile < tile_len;
+                 row_in_tile += QQA_ADAPTIVE_GQA6_HEADS) {
+                const uint position = tile_start + row_in_tile;
+                const bool packed = position < packed_len;
+                const uint row = position * n_head_kv + kv_h;
+                const uint d = lane * 8u;
+                QQAAdaptiveFloat8 key_values;
+                if (packed) {
+                    key_values = qqa_adaptive_uniform_p4_value8(
+                        k_base, row, d);
+                } else {
+                    // The one visible current token remains exact F32 until
+                    // the following pack encoder publishes it.
+                    const uint source_index = kv_h * head_dim + d;
+                    key_values.low = *((device const float4*)(current_k + source_index));
+                    key_values.high = *((device const float4*)(current_k + source_index + 4u));
+                }
+
+                for (uint query_h = 0; query_h < QQA_ADAPTIVE_GQA6_HEADS; ++query_h) {
+                    const uint query_index =
+                        (kv_h * QQA_ADAPTIVE_GQA6_HEADS + query_h) * head_dim + d;
+                    const device float4* query =
+                        (device const float4*)(Q + query_index);
+                    const float4 q_low = query[0];
+                    const float4 q_high = query[1];
+                    const float partial =
+                        q_low.x * key_values.low.x +
+                        q_low.y * key_values.low.y +
+                        q_low.z * key_values.low.z +
+                        q_low.w * key_values.low.w +
+                        q_high.x * key_values.high.x +
+                        q_high.y * key_values.high.y +
+                        q_high.z * key_values.high.z +
+                        q_high.w * key_values.high.w;
+                    const float score = simd_sum(partial) * scale;
+                    if (lane == 0) {
+                        kv_tile[query_h * QQA_ADAPTIVE_GQA6_TILE + row_in_tile] = score;
+                        if (!isfinite(score)) {
+                            atomic_fetch_or_explicit(status, 64u, memory_order_relaxed);
+                        }
+                    }
+                }
+            }
+        } else {
+            qqa_adaptive_fill_uniform_tile(
+                kv_tile, k_base, k_metadata, k_sidecar, current_k,
+                tile_start, tile_values, packed_len, 0u,
+                n_head_kv * head_dim, kv_h, n_head_kv, head_dim,
+                uniform_tier, thread_index);
+        }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
         float score = -1e30f;
         if (lane < tile_len) {
-            threadgroup const float4* key =
-                (threadgroup const float4*)(kv_tile + lane * head_dim);
-            device const float4* query =
-                (device const float4*)(Q + h * head_dim);
-            float dot = 0.0f;
-            for (uint d4 = 0; d4 < head_dim / 4; ++d4) {
-                const float4 k4 = key[d4];
-                const float4 q4 = query[d4];
-                dot += q4.x * k4.x + q4.y * k4.y + q4.z * k4.z + q4.w * k4.w;
-            }
-            score = dot * scale;
-            if (!isfinite(score)) {
-                atomic_fetch_or_explicit(status, 64u, memory_order_relaxed);
+            if (QQA_ADAPTIVE_P4_SPLITK_DIRECT_QK) {
+                score = kv_tile[local_h * QQA_ADAPTIVE_GQA6_TILE + lane];
+            } else {
+                threadgroup const float4* key =
+                    (threadgroup const float4*)(kv_tile + lane * head_dim);
+                device const float4* query =
+                    (device const float4*)(Q + h * head_dim);
+                float dot = 0.0f;
+                for (uint d4 = 0; d4 < head_dim / 4; ++d4) {
+                    const float4 k4 = key[d4];
+                    const float4 q4 = query[d4];
+                    dot += q4.x * k4.x + q4.y * k4.y + q4.z * k4.z + q4.w * k4.w;
+                }
+                score = dot * scale;
+                if (!isfinite(score)) {
+                    atomic_fetch_or_explicit(status, 64u, memory_order_relaxed);
+                }
             }
         }
 
