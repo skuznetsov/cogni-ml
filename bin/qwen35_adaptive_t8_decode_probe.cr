@@ -502,7 +502,8 @@ private def prepare_state(weights : ML::GGUF::Qwen35Weights,
                           compare_v_contiguous : Bool,
                           compare_p4_stage1 : Bool,
                           synthetic_prefix : Int32,
-                          quality_top2 : Bool)
+                          quality_top2 : Bool,
+                          quality_top2_production_prefill : Bool)
   state = ML::GGUF::Qwen35CPU::State.new(weights.hparams, max_seq: max_seq)
   begin
     first = QM::Top2.new(-1_i32, Float32::NAN, -1_i32, Float32::NAN)
@@ -511,7 +512,7 @@ private def prepare_state(weights : ML::GGUF::Qwen35Weights,
       if synthetic_prefix > 0
         seed_synthetic_adaptive_prefix!(state, weights.hparams, synthetic_prefix)
         first = QM::Top2.new(tokens.last, 0.0_f32, -1_i32, -Float32::INFINITY)
-      elsif quality_top2
+      elsif quality_top2 && !quality_top2_production_prefill
         first = QM.top2(ML::GGUF::Qwen35CPU.prefill_tokens_logits(
           weights, tokens, 0, state,
         ))
@@ -587,6 +588,7 @@ compare_direct_qk = false
 compare_v_contiguous = false
 compare_p4_stage1 = false
 quality_top2 = false
+quality_top2_production_prefill = false
 synthetic_prefix = 0
 
 OptionParser.parse do |parser|
@@ -603,6 +605,7 @@ OptionParser.parse do |parser|
   parser.on("--compare-v-contiguous", "Hold legacy shared-K on; toggle contiguous shared-V accumulation") { compare_v_contiguous = true }
   parser.on("--compare-p4-stage1", "Compare legacy P4 T8 stage1 with forced direct-QK plus contiguous-V") { compare_p4_stage1 = true }
   parser.on("--quality-top2", "Run real-prefix free trajectories with top-2, margin, and output-weight ECS diagnostics; disables timing admission") { quality_top2 = true }
+  parser.on("--quality-top2-production-prefill", "Use the production top-1 prefill boundary, then compare top-2 free trajectories; disables timing admission") { quality_top2_production_prefill = true }
   parser.on("--synthetic-prefix N", "Restore a zero-valued adaptive prefix for decode-only timing") { |value| synthetic_prefix = value.to_i }
   parser.on("--raw", "Do not render the Qwen chat template") { chat_mode = false }
   parser.on("--candidate-first", "Run candidate first during warmup and the first measured pair") { candidate_first = true }
@@ -626,6 +629,8 @@ raise "--repeat-prompt must be positive" unless prompt_repeats > 0
 raise "--max-seq cannot be negative" if requested_max_seq < 0
 raise "--synthetic-prefix cannot be negative" if synthetic_prefix < 0
 raise "resident map cannot be empty" if resident_map.strip.empty?
+raise "select only one top-2 quality prefill mode" if quality_top2 && quality_top2_production_prefill
+quality_top2 ||= quality_top2_production_prefill
 comparison_count = {compare_stage2, compare_splitk_chunk, compare_direct_qk, compare_v_contiguous, compare_p4_stage1}.count(true)
 raise "select only one comparison" if comparison_count > 1
 if synthetic_prefix > 0 && !(compare_splitk_chunk || compare_direct_qk || compare_v_contiguous || compare_p4_stage1)
@@ -661,15 +666,15 @@ begin
   raise "prefix plus warmup and samples exceeds --max-seq" if max_seq < minimum_max_seq
 
   baseline_state, baseline_boundary = prepare_state(
-    weights, tokens, max_seq, resident_map, false, compare_stage2, compare_splitk_chunk, compare_direct_qk, compare_v_contiguous, compare_p4_stage1, synthetic_prefix.to_i32, quality_top2,
+    weights, tokens, max_seq, resident_map, false, compare_stage2, compare_splitk_chunk, compare_direct_qk, compare_v_contiguous, compare_p4_stage1, synthetic_prefix.to_i32, quality_top2, quality_top2_production_prefill,
   )
   candidate_state, candidate_boundary = prepare_state(
-    weights, tokens, max_seq, resident_map, true, compare_stage2, compare_splitk_chunk, compare_direct_qk, compare_v_contiguous, compare_p4_stage1, synthetic_prefix.to_i32, quality_top2,
+    weights, tokens, max_seq, resident_map, true, compare_stage2, compare_splitk_chunk, compare_direct_qk, compare_v_contiguous, compare_p4_stage1, synthetic_prefix.to_i32, quality_top2, quality_top2_production_prefill,
   )
   verify_independent_states!(baseline_state, candidate_state, hp)
   semantic_quality_valid = synthetic_prefix == 0
   if semantic_quality_valid
-    if quality_top2
+    if quality_top2 && !quality_top2_production_prefill
       verify_finite_top2!("baseline prefill", baseline_boundary, vocab_size)
       verify_finite_top2!("candidate prefill", candidate_boundary, vocab_size)
     else
@@ -679,11 +684,16 @@ begin
   elsif baseline_boundary.first_id < 0 || baseline_boundary.first_id >= vocab_size
     raise "synthetic seed token is outside the vocabulary: #{baseline_boundary.first_id}"
   end
+  quality_violations = [] of String
   prefill_logit_delta = (baseline_boundary.first_logit - candidate_boundary.first_logit).abs
-  if !quality_top2 && baseline_boundary.first_id != candidate_boundary.first_id
+  if quality_top2_production_prefill && baseline_boundary.first_id != candidate_boundary.first_id
+    quality_violations << "prefill_top1_id_mismatch"
+  elsif !quality_top2 && baseline_boundary.first_id != candidate_boundary.first_id
     raise "prefill top-1 mismatch: #{baseline_boundary.first_id} != #{candidate_boundary.first_id}"
   end
-  if !quality_top2 && semantic_quality_valid && prefill_logit_delta > QUALITY_LOGIT_TOLERANCE
+  if quality_top2_production_prefill && prefill_logit_delta > QUALITY_LOGIT_TOLERANCE
+    quality_violations << "prefill_top1_logit_delta=#{prefill_logit_delta}"
+  elsif !quality_top2 && semantic_quality_valid && prefill_logit_delta > QUALITY_LOGIT_TOLERANCE
     raise "prefill logit mismatch: #{prefill_logit_delta}"
   end
   route_certificate = verify_candidate_t8_route!(
@@ -692,8 +702,7 @@ begin
 
   embedding_cache = {} of Int32 => Array(Float32)
   quality_steps = [] of DecodeQualitySample
-  quality_violations = [] of String
-  if quality_top2
+  if quality_top2 && !quality_top2_production_prefill
     prefill_quality = compare_decode_quality(
       "prefill_boundary", -2_i32, baseline_boundary, candidate_boundary, weights, embedding_cache,
     )
@@ -880,6 +889,8 @@ begin
                         common_prefix == baseline_output_ids.size
   prefill_boundary_mode = if synthetic_prefix > 0
                             "synthetic_seed"
+                          elsif quality_top2_production_prefill
+                            "production_top1"
                           elsif quality_top2
                             "full_logits_top2"
                           else
@@ -912,7 +923,19 @@ begin
   puts "qwen35_adaptive_t8_decode_probe"
   puts "  release_build=#{RELEASE_BUILD} device=#{device_name.inspect} comparison=#{comparison} state_source=#{state_source} prompt_sha256=#{prompt_sha256}"
   puts "  semantic_quality_valid=#{semantic_quality_valid}"
-  puts "  quality_top2=#{quality_top2} quality_scope=#{quality_top2 ? "real_prefix_free_run" : "disabled"} prefill_boundary_mode=#{prefill_boundary_mode} timing_gate_valid=#{timing_gate_valid}"
+  quality_scope = if quality_top2_production_prefill
+                    "real_prefix_production_top1_then_free_run_top2"
+                  elsif quality_top2
+                    "real_prefix_free_run"
+                  else
+                    "disabled"
+                  end
+  quality_gate_kind = if quality_top2_production_prefill
+                        "production_top1_boundary_plus_aligned_top2_numeric_plus_free_prefix"
+                      elsif quality_top2
+                        "aligned_top2_numeric_plus_free_prefix"
+                      end
+  puts "  quality_top2=#{quality_top2} quality_scope=#{quality_scope} prefill_boundary_mode=#{prefill_boundary_mode} timing_gate_valid=#{timing_gate_valid}"
   puts "  baseline_stage2=#{baseline_stage2} candidate_stage2=#{candidate_stage2}"
   puts "  p4_stage1_admission=#{compare_p4_stage1 ? "forced_off_vs_forced_on" : "not_compared"}"
   baseline_direct_qk = (compare_direct_qk || compare_v_contiguous || compare_p4_stage1) ? false : nil
@@ -936,7 +959,7 @@ begin
   if quality_top2
     puts "  quality_ranked_top2_matches=#{quality_ranked_matches}/#{quality_ranked_count} min_set_overlap=#{quality_min_set_overlap} exact_top1_covered=#{quality_exact_top1_covered}/#{quality_steps.size} exact_top2_covered=#{quality_exact_top2_covered}/#{quality_steps.size}"
     puts "  quality_min_token_ecs=#{quality_min_token_ecs} max_second_logit_delta=#{quality_max_second_logit_delta} max_margin_delta=#{quality_max_margin_delta} min_baseline_margin=#{quality_min_baseline_margin}"
-    puts "  quality_gate=#{quality_gate_passed ? "PASS" : "FAIL"} kind=aligned_top2_numeric_plus_free_prefix tolerance=#{QUALITY_LOGIT_TOLERANCE} aligned_steps=#{aligned_quality_steps.size}/#{quality_steps.size} free_common_prefix=#{common_prefix}/#{baseline_output_ids.size} first_divergence_step=#{first_divergence_step} violations=#{quality_violations.join(';')}"
+    puts "  quality_gate=#{quality_gate_passed ? "PASS" : "FAIL"} kind=#{quality_gate_kind} tolerance=#{QUALITY_LOGIT_TOLERANCE} aligned_steps=#{aligned_quality_steps.size}/#{quality_steps.size} free_common_prefix=#{common_prefix}/#{baseline_output_ids.size} first_divergence_step=#{first_divergence_step} violations=#{quality_violations.join(';')}"
   end
   baseline_text = tokenizer.decode(baseline_output_ids)
   candidate_text = tokenizer.decode(candidate_output_ids)
@@ -945,14 +968,15 @@ begin
 
   payload = JSON.build do |json|
     json.object do
-      json.field "schema", "qwen-adaptive-t8-decode-ab-v10"
+      json.field "schema", "qwen-adaptive-t8-decode-ab-v11"
       json.field "comparison", comparison
       json.field "state_source", state_source
       json.field "semantic_quality_valid", semantic_quality_valid
       json.field "quality_top2", quality_top2
-      json.field "quality_scope", quality_top2 ? "real_prefix_free_run" : "disabled"
+      json.field "quality_top2_production_prefill", quality_top2_production_prefill
+      json.field "quality_scope", quality_scope
       json.field "quality_measurement_valid", quality_top2 && semantic_quality_valid
-      json.field "quality_gate_kind", quality_top2 ? "aligned_top2_numeric_plus_free_prefix" : nil
+      json.field "quality_gate_kind", quality_gate_kind
       json.field "quality_logit_tolerance", quality_top2 ? QUALITY_LOGIT_TOLERANCE : nil
       json.field "ecs_basis", quality_top2 ? "output.weight" : nil
       json.field "ecs_interpretation", quality_top2 ? "static_output_row_cosine_token_proxy" : nil
@@ -960,6 +984,11 @@ begin
       json.field "semantic_task_scored", false
       json.field "timing_gate_valid", timing_gate_valid
       json.field "prefill_boundary_mode", prefill_boundary_mode
+      json.field "prefill_boundary_top2_available", quality_top2 && !quality_top2_production_prefill
+      json.field "baseline_prefill_top1_id", baseline_boundary.first_id
+      json.field "baseline_prefill_top1_logit", baseline_boundary.first_logit
+      json.field "candidate_prefill_top1_id", candidate_boundary.first_id
+      json.field "candidate_prefill_top1_logit", candidate_boundary.first_logit
       json.field "baseline_stage2", baseline_stage2
       json.field "candidate_stage2", candidate_stage2
       json.field "p4_stage1_admission", compare_p4_stage1 ? "forced_off_vs_forced_on" : "not_compared"

@@ -4504,3 +4504,86 @@ quality check before any automatic policy change. Evidence and SHA-256:
 Refresh on kernel/source selection, policy/probe/cache layout, model or prompt,
 compiler/Metal toolchain, device/OS, timing method, thresholds, safety policy,
 or evidence loss.
+
+### Contiguous-V crossover and production-prefill certificate (2026-09-20)
+
+The repeated full-token crossover sweep kept direct-QK disabled and compared
+legacy shared-K against shared-K plus contiguous-V with the same uniform P4 T8
+route. Each row used 20 alternating-order pairs and retained identical output:
+
+- 10K (`10,239` seeded tokens): `+2.25%` with 17/20 wins and `+2.69%` with
+  18/20 wins; both fail the declared 3% product gate;
+- 12K (`12,287` seeded tokens): `+3.36%` with 20/20 wins and `+3.02%` with
+  19/20 wins; both pass, but the second row is only 0.02 percentage points
+  above the threshold;
+- 14K (`14,335` seeded tokens): `+3.80%` with 20/20 wins and `+3.84%` with
+  19/20 wins; both pass with more separation from the threshold.
+
+The first real 14K quality attempt used a 512-token prefill chunk and failed
+closed with Metal `Impacting Interactivity` before comparison. Changing only
+the probe's effective prefill chunk to 256 completed the same 14,311-token
+prefix. The full-logits diagnostic retained 68/68 ranked top-two matches,
+34/34 exact top-one/top-two positions, zero first/second-logit and margin
+deltas, identical generated text, and ECS 1.0.
+
+That full-logits path was not the production prefill boundary, so the probe now
+also provides `--quality-top2-production-prefill`. This mode obtains the
+boundary token from `prefill_tokens_top1`, records that top two is unavailable
+there, fails the quality gate on a boundary ID or logit mismatch, and uses
+`forward_top2` only for the subsequent independent warmup and free-run steps.
+It does not change the inference engine or any Metal kernel.
+
+The guarded production-boundary run at 14,311 prompt tokens reported 12
+contiguous-V P4 owners and zero direct-QK owners. Baseline and candidate
+production-prefill top one were both token `332` at logit `22.17311`, with
+zero delta. The following 33 top-two positions retained 66/66 ranked matches,
+33/33 exact top-one/top-two coverage, zero second-logit and margin deltas,
+identical 34-token free runs, and ECS 1.0. The quality gate passed. Timing from
+this full-top-two run remains diagnostic and is explicitly invalid for product
+admission.
+
+**Adversary:** one prompt and one device do not prove general semantic
+equivalence; the 12K speed row barely clears the threshold; the 14K timing
+prefix (`14,335`) and real quality prefix (`14,311`) do not identify a unique
+automatic integer cutoff; and the first 512-token-chunk run hit the watchdog.
+The probe certificate separates boundary provenance honestly, but it cannot
+manufacture a boundary top two that the production API does not return.
+
+**decision:** the shared-K contiguous-V route is ROBUST for this bounded 14K
+production-prefill quality certificate and the repeated 14K synthetic timing
+certificate on Apple M2 Max. Keep automatic admission unchanged in this slice.
+Choose and falsify an explicit conservative cutoff in a separate policy change
+with its own unset/force/kill-switch tests and an auto-mode route certificate.
+
+Evidence and SHA-256:
+
+- crossover 10K AB/BA:
+  `/private/tmp/qwen_p4_v_contiguous_crossover_10k_ab.log`,
+  `6e62c990aa4005212dbe558064a19e9b18103fd151bd015266894a57b3229340`,
+  and `/private/tmp/qwen_p4_v_contiguous_crossover_10k_ba.log`,
+  `246df003992e4d8ddb3c2b5fa5c4f785f7f3e1fee01893c83619065e9c1f9aec`;
+- crossover 12K AB/BA:
+  `/private/tmp/qwen_p4_v_contiguous_crossover_12k_ab.log`,
+  `bab19aab8db5536f895961aff74b74ffd2392c7f6d6316204f5775bd31817914`,
+  and `/private/tmp/qwen_p4_v_contiguous_crossover_12k_ba.log`,
+  `93271b8c6f54175c7166f89c7297112f81501b2ea3144103b938c7b004501cb8`;
+- crossover 14K AB/BA:
+  `/private/tmp/qwen_p4_v_contiguous_crossover_14k_ab.log`,
+  `d67ed786cb39d3d0aeed0853321b6bedeee5bc13aa6258c1c630741c9b0534ef`,
+  and `/private/tmp/qwen_p4_v_contiguous_crossover_14k_ba.log`,
+  `84928459ddb67fce9e033662e3fe546546e38ace0beaa6011ded6ab00c052270`;
+- failed 512-chunk real 14K attempt:
+  `/private/tmp/qwen_p4_v_contiguous_real_14k_top2.log`,
+  `fc81a2e60e72cead688d9d8cdb3bcd8d7c6916c7798f32675b1076cc3f5f929c`;
+- completed 256-chunk full-logits diagnostic:
+  `/private/tmp/qwen_p4_v_contiguous_real_14k_top2_chunk256.log`,
+  `ec0d7d8de375c6b7c17a4a9acf9b97b4a02af2d04aa4cf3ac9143ad234fc4919`;
+- production-prefill smoke and 14K quality runs:
+  `/private/tmp/qwen_p4_v_contiguous_prod_prefill_smoke_400_v11.log`,
+  `4604205b8658be8d321fa6c8cb47688df0bed38cd8ee80609d1b60fc97e0ad19`,
+  and `/private/tmp/qwen_p4_v_contiguous_prod_prefill_14k_top2.log`,
+  `7bb7ee976a26d93706b8b1ec382a5c9be7bce0698ed1ee7ff19128bf18cb3dbb`.
+
+Refresh on probe or prefill-boundary semantics, kernel/source selection, policy,
+cache layout, model/prompt, compiler/Metal toolchain, device/OS, timing method,
+thresholds, safety policy, or evidence loss.

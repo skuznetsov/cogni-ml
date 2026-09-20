@@ -29093,3 +29093,28 @@ Refresh after source/toolchain/device/model/workload changes.
   default-off, reject 8K promotion, and locate the crossover with a repeated
   context sweep before changing automatic policy. Evidence hashes and refresh
   conditions are recorded in `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-20 — Production-prefill quality closes the 14K evidence gap
+
+- The repeated full-token crossover sweep keeps direct-QK off. Both 10K rows
+  fail the 3% product gate (`+2.25/+2.69%`), both 12K rows narrowly pass
+  (`+3.36/+3.02%`), and both 14K rows pass with more margin
+  (`+3.80/+3.84%`). Outputs remain identical in all rows.
+- A first real 14K quality run with a 512-token prefill chunk failed closed on
+  Metal `Impacting Interactivity`. Changing only the probe chunk to 256
+  completed the 14,311-token prefix with 68/68 ranked top-two matches, 34/34
+  exact top-one/top-two positions, zero numeric deltas, identical text, and
+  ECS 1.0.
+- The probe now has a production-boundary mode: it calls
+  `prefill_tokens_top1`, does not invent a boundary top two, fails on a boundary
+  ID/logit mismatch, then uses `forward_top2` for warmup and free-run steps.
+  The 14K run matched boundary token/logit exactly and retained 66/66 ranked
+  top-two matches over all 33 post-boundary positions, zero numeric deltas,
+  identical 34-token trajectories, and ECS 1.0. Timing in this mode is
+  explicitly invalid for product admission.
+- Verdict: ROBUST for the bounded 14K production-prefill quality and repeated
+  synthetic timing certificates on Apple M2 Max. Automatic admission remains
+  open: the measured timing and semantic prefixes straddle `14,335` and
+  `14,311`, so cutoff choice and auto-route certification belong to a separate
+  fail-closed policy slice. Exact logs, hashes, scope, and refresh conditions
+  are recorded in `docs/qwen-qbit-cache-frontier.md`.
