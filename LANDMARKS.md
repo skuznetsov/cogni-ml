@@ -29164,3 +29164,19 @@ Refresh after source/toolchain/device/model/workload changes.
   broad semantic equivalence, or general long-prefill stability. Exact logs,
   hashes, failure scope, and refresh conditions are recorded in
   `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-20 — Stage-two scalar broadcast is rejected
+
+- A temporary fused split-K stage-two variant moved the common maximum scan,
+  exponential weights, and normalization sum to lane zero and broadcast them
+  with `simd_shuffle`. Output-dimension ownership and accumulation order were
+  unchanged.
+- A guarded model-free Apple M2 Max AB/BA probe used 32 dispatches per GPU
+  interval and ten pairs at 96/224/256 blocks. All outputs were bitwise equal,
+  finite, and status-clean, but candidate median GPU time regressed by
+  `18.49/20.85/22.74%` and won only `0/2/2` pairs out of ten. An earlier run
+  independently showed the same `18--22%` regression direction.
+- Verdict: ROBUST for transformation correctness and BROKEN as a performance
+  optimization on this device/toolchain. All production changes were removed;
+  do not promote or full-token-test this route. Evidence and refresh conditions
+  are recorded in `docs/qwen-qbit-cache-frontier.md`.

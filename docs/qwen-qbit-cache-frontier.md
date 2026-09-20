@@ -4692,3 +4692,40 @@ Refresh on policy or kernel/source selection, probe semantics, cache layout,
 model/prompt, compiler/Metal toolchain, device/OS identity, timing method,
 thresholds, watchdog behavior, default-library availability, safety policy, or
 evidence loss.
+
+### Split-K stage-two SIMD scalar broadcast is rejected (2026-09-20)
+
+The fused split-K stage-two kernel repeats the same maximum scan, exponential
+weight, and normalization sum in every SIMD lane. A default-off source variant
+made lane zero compute those scalar values and broadcast them with
+`simd_shuffle`, while preserving each lane's output dimensions and the
+ascending `partial_o` accumulation order.
+
+A model-free Apple M2 Max probe timed 32 dispatches per completed command and
+alternated baseline/candidate order across ten pairs at 96, 224, and 256
+split-K blocks. The outputs were bitwise identical, finite, and reported zero
+status in every row. Nevertheless, the candidate regressed median GPU time by
+`18.49%`, `20.85%`, and `22.74%`; it won only `0/10`, `2/10`, and `2/10`
+pairs. A preceding independent run showed the same direction, with regressions
+of `18--22%` and at most one win per row. The added per-block shuffle and
+lane-divergent scalar ownership cost more than the redundant lane-local
+arithmetic on this device/compiler.
+
+**decision:** the mathematical transformation is correct but the optimization
+is BROKEN for Apple M2 Max performance. The production source, policy, cache
+keys, and specs were restored to their pre-experiment state. Do not add the
+runtime option or advance this route to full-token testing. Reopen only after a
+different mechanism removes the per-block shuffle or new device/toolchain
+evidence changes the tradeoff.
+
+Evidence:
+
+- `/private/tmp/qwen_splitk_stage2_uniform_scalar_abba.log`,
+  `c2c321b9b247ddd23a89704a3225dfce7a60200ac8e92f46ffb36cd361b2e9d2`;
+- `/private/tmp/qwen35_splitk_stage2_uniform_scalar_probe.cr`,
+  `7dc7015354bac1f2785b7409519e13e327979f722b6a0b28aae56d81f607f6d4`;
+- probe executable,
+  `bc6fdea8ba2a2b7b4746d58e89df5218b6a13892272c4c44855b65929f01adf0`.
+
+Refresh on stage-two arithmetic or layout, Metal compiler/toolchain, device,
+timing method, or evidence loss.
