@@ -4646,10 +4646,23 @@ certificate. Exact device-name admission excludes other Apple GPUs by design;
 one model, one prompt, and one host cannot establish a general policy. The
 single 10-pair automatic timing row cannot replace the repeated AB/BA crossover
 matrix. The current executable has no default metallib, so a session that
-crosses the boundary after already using the legacy P4 pipeline can pay a
-one-time source compilation for the contiguous-V variant. The in-process
-pipeline cache bounds that cost after first use, but the warm timing evidence
-does not measure it; cold-path metallib/prewarm work remains a separate slice.
+crosses the boundary after already using the legacy P4 pipeline can pay one
+lazy source compilation for the contiguous-V variant. A follow-up fresh-process
+API profile with the host system shader cache retained measured that exact lazy
+variant at `0.486 ms` for source-library creation, `0.006 ms` for function
+lookup, and `0.227 ms` for pipeline-state creation: `0.719 ms` total, versus a
+subsequent candidate decode mean of `74.729 ms/token`. This rules out a material
+14K threshold cliff in the measured warm-system-cache state. It does not
+measure a first-ever compile after source/toolchain cache invalidation.
+
+The earlier source-addressed metallib falsifier remains decisive for the
+implementation choice: across 30 used pipelines, file loading plus
+pipeline-state creation cost `338.058 ms`, while the warmed source route cost
+`18.278 ms`; genuinely cold source setup was `661.875 ms`. A synchronous
+prewarm only relocates that cold work, and precompiling every possible variant
+would tax sessions that never reach the 14K route. Keep both metallib and
+per-request prewarm out of production unless a future cache-cold, all-in
+request discriminator shows a net win.
 
 **decision:** the exact-M2-Max, uniform-P4, P4-T8 admission predicate is ROBUST
 within this bounded evidence composition. Enable it automatically at 14,336
@@ -4663,6 +4676,9 @@ Additional evidence and SHA-256:
 - automatic boundary route trace:
   `/private/tmp/qwen_p4_v_contiguous_auto_boundary_route_v12.log`,
   `5fa6b947868815d9edaf535dd87e0c886f7a534851a68c970671c3c5a7419335`;
+- automatic lazy-pipeline profile with retained system shader cache:
+  `/private/tmp/qwen_p4_v_contiguous_auto_cold_profile.log`,
+  `e05b80e7cffb1058a1f1acc7030bbda5d716130abf33a407a4626cfbcc95b34b`;
 - failed three-state long-prefill attempt:
   `/private/tmp/qwen_p4_v_contiguous_auto_14k_baseline.log`,
   `c69482b58a43f3db1518162785865c5332a68093734579002c7fd76694e30735`;

@@ -29144,10 +29144,21 @@ Refresh after source/toolchain/device/model/workload changes.
   and 128 variants. This leaves long-prefill watchdog stability open and
   refutes the simple claim that halving that chunk alone closes it; it does not
   falsify the contiguous-V route.
-- The current executable reports no default metallib. Crossing the admission
-  boundary after legacy-P4 use can therefore pay one lazy source compilation
-  for the new variant; warm timing does not cover that cold-path cost. Keep
-  metallib/prewarm work separate from this policy slice.
+- The current executable reports no default metallib. A fresh-process profile
+  with the system shader cache retained measured the exact lazy contiguous-V
+  variant at `0.486/0.006/0.227 ms` for source-library/function/pipeline-state
+  creation, `0.719 ms` total, versus `74.729 ms/token` candidate decode. This
+  refutes a material 14K threshold cliff in the measured cache state. It does
+  not measure a first-ever compile after source or toolchain invalidation.
+- Do not add production metallib or synchronous per-request prewarm from this
+  evidence. The prior source-addressed metallib probe cost `338.058 ms` for 30
+  used pipelines versus `18.278 ms` through the warmed source route; the
+  genuinely cold source setup was `661.875 ms`. Prewarm relocates that work and
+  compiling every variant taxes sessions that never reach 14K. Reopen only
+  after a cache-cold, all-in request discriminator shows a net win.
+- Lazy-pipeline profile:
+  `/private/tmp/qwen_p4_v_contiguous_auto_cold_profile.log`,
+  `e05b80e7cffb1058a1f1acc7030bbda5d716130abf33a407a4626cfbcc95b34b`.
 - Verdict: ROBUST for the bounded exact-M2-Max admission predicate and its
   composed route/quality evidence; VULNERABLE for other devices, tiers, models,
   broad semantic equivalence, or general long-prefill stability. Exact logs,
