@@ -4252,3 +4252,95 @@ and `/private/tmp/qwen_direct_qk_full_real_prefix.log`
 `b7f6e32eeb27cd71619422dfcaf7ae9df2eee81e524fe0729f0d67a1be39166e`.
 Refresh on kernel/policy/probe, cache map, model, compiler/toolchain, device/OS,
 timing method, safety policy, gate, or evidence loss.
+
+### Contiguous shared-V accelerates P4 stage one but remains opt-in (2026-09-20)
+
+True direct-V was rejected as the first move. Six GQA query heads use different
+softmax probabilities, so removing the shared V tile would require either six
+dequantizations of each V row, roughly six live output accumulators per lane,
+or additional global/threadgroup scratch and synchronization. Instead, the
+bounded candidate keeps one shared dequantized V tile and changes only lane
+ownership: each lane accumulates eight contiguous output dimensions through
+two `float4` loads, then scatters them into the existing canonical partial
+output layout. Cache bytes, snapshot format, launch geometry, threadgroup
+allocation, barriers, fused stage two, and publication are unchanged.
+
+`QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS=1` is fail-closed, default-off, and is
+effective only with uniform P4, the P4 T8 loader, and
+`QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK=1`. AIR contains real four-wide
+threadgroup loads; it is not only a source-level rewrite. The 8K random-nonzero
+resident oracle and visible tails 1/6/15/16 match the scalar reference with
+cosine above `0.9999999`, maximum absolute error `3.73e-8`, and byte-identical
+K/V payloads. The combined policy/resident suite passes `32/32` examples.
+
+The isolated adaptive-attention A/B strongly favors contiguous V:
+
+- 8K: wall `2.059 -> 1.714 ms` (`+16.74%`, 9/10) and completed-GPU
+  `1.497 -> 1.131 ms` (`+24.43%`, 10/10);
+- 16K: wall `2.737 -> 2.229 ms` (`+18.56%`, 10/10) and completed-GPU
+  `2.077 -> 1.537 ms` (`+25.97%`, 10/10).
+
+All isolated pairs preserved exact K/V bytes and reported zero output delta.
+With direct-QK held on in both full-model arms, V-only pooled means were about
+`+2.19%` at 8K (37/40 wins) and `+4.68%` at 16K (40/40). The more useful
+product bundle compares legacy P4 T8 stage one with direct-QK plus contiguous
+V. Two opposite-order 20-pair runs produced:
+
+- 8K: `68.554 -> 65.645 ms` (`+4.24%`) and
+  `69.874 -> 67.060 ms` (`+4.03%`), 40/40 wins;
+- 16K: `77.285 -> 71.629 ms` (`+7.32%`) and
+  `78.388 -> 72.603 ms` (`+7.38%`), 40/40 wins.
+
+Those long-context product timings use a synthetic zero-valued prefix. They
+prove shape/scheduling benefit, not semantic quality. A proposed automatic
+M2-Max admission was therefore attacked with a real nonzero 6,511-token chat
+prefix, two independent states, and alternating decode order. The first four
+top-1 choices agreed, but sample 3 reached a top-1-logit delta of `3.2424927e-4`
+and violated the predeclared `1e-4` gate. The run failed closed; the automatic
+policy was removed rather than weakening the threshold after observing it.
+
+The preserved timing logs use probe schema `v6`. The final source advances the
+reporting schema to `v7` only to label the comparison as an explicit
+forced-off/forced-on experiment and to reject underfilled real-prefix attempts
+before model prefill; the measured kernel, routing knobs, and timing fields are
+unchanged. Treat the logs as evidence for the recorded source slice, not as a
+fresh run of the final reporting binary.
+
+**Adversary:** the vector loads reduce instruction count, not shared-memory
+bytes or V arithmetic, and their extra live accumulators may alter register
+occupancy. The local nonzero oracle is strong for attention layout, while the
+real-prefix product failure shows that small per-layer reorder error can grow
+across 64 layers. Synthetic top-1 agreement cannot overrule that boundary.
+
+**decision:** retain contiguous shared-V and the combined product probe as an
+explicit experiment. Do not enable either direct-QK or contiguous V
+automatically. Reopen admission only after a real-prefix long-context run
+passes the existing logit/top-1 checks and repeated timing gate; top-2 and ECS
+should be added before any broader quality claim. Evidence and SHA-256:
+
+- isolated: `/private/tmp/qwen_v_contiguous_isolated.log`,
+  `b3d7feba3ba63ebe38daa1d6b7da9555f18715685246d85c08d798d54bfdf755`;
+- V-only 8K: `/private/tmp/qwen_v_contiguous_full_8k.log`,
+  `c08d045389046480b0eb5abee7f2333e45a2981fbab3b48feb74b8b4d59c02d2`,
+  and `_repeat.log`,
+  `756f3067923f7fb4e43fdf8f56d91052e585a9ad998e5582f543186ac0c70ef0`;
+- V-only 16K: `/private/tmp/qwen_v_contiguous_full_16k.log`,
+  `3b1a5dc57cea7c4c0d31634e32761f1ce563f9745e291403d783b7673d3c1d8d`,
+  and `_repeat.log`,
+  `46861b5b5533b1d0c91c8691163abb2180812e1aab61acfd70d5d52d49ae384e`;
+- stage-one bundle 8K:
+  `/private/tmp/qwen_p4_stage1_bundle_full_8k.log`,
+  `1826007160dc194d2ac68d35478e0d28e405072a69b829153b09ca91f0e454c5`,
+  and `_repeat.log`,
+  `142d1208edfa860f9be69e23b57e89c58ece012eeb461bdc0d412b9b59e38a6a`;
+- stage-one bundle 16K:
+  `/private/tmp/qwen_p4_stage1_bundle_full_16k.log`,
+  `ee8b37ee747631fa3b61e096466e771aad8e6ae398760a7a142a842d115f7d9c`,
+  and `_repeat.log`,
+  `dbdbe9dd8fc1500be712998940fa8d4cdbc02a5939c701dbea4b0f77e2d0815d`;
+- rejected real-prefix admission:
+  `/private/tmp/qwen_p4_stage1_auto_real_6k5.log`,
+  `7337aa3b90684a2bfa1efc8fad476f9a8cb6e84113fd9e2961a50cbb927e02dc`.
+
+Refresh on kernel/policy/probe, cache map, model/tokenizer/template,
+compiler/Metal toolchain, device/OS, timing method, threshold, or evidence loss.

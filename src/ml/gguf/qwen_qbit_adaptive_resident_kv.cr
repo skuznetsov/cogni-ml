@@ -483,6 +483,20 @@ module ML::GGUF
       if SOURCE_TILE15_P4_SPLITK_DIRECT_QK == SOURCE_TILE15_P4_SPLITK_T8
         raise "adaptive P4 split-K direct-QK tile-15 source patch no longer matches"
       end
+      SOURCE_P4_SPLITK_V_CONTIGUOUS = SOURCE_P4_SPLITK_DIRECT_QK.sub(
+        "constant bool QQA_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS = false;",
+        "constant bool QQA_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS = true;",
+      )
+      if SOURCE_P4_SPLITK_V_CONTIGUOUS == SOURCE_P4_SPLITK_DIRECT_QK
+        raise "adaptive P4 split-K contiguous-V source patch no longer matches"
+      end
+      SOURCE_TILE15_P4_SPLITK_V_CONTIGUOUS = SOURCE_TILE15_P4_SPLITK_DIRECT_QK.sub(
+        "constant bool QQA_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS = false;",
+        "constant bool QQA_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS = true;",
+      )
+      if SOURCE_TILE15_P4_SPLITK_V_CONTIGUOUS == SOURCE_TILE15_P4_SPLITK_DIRECT_QK
+        raise "adaptive P4 split-K contiguous-V tile-15 source patch no longer matches"
+      end
       SOURCE_BF16_SPLITK_T8 = SOURCE.sub(
         "constant bool QQA_ADAPTIVE_BF16_SPLITK_T8 = false;",
         "constant bool QQA_ADAPTIVE_BF16_SPLITK_T8 = true;",
@@ -516,7 +530,7 @@ module ML::GGUF
       @@gqa6_pipeline_mutex = Mutex.new
       @@prefill_gqa6_pipelines = Hash(Tuple(Int32, Bool), ML::Metal::ComputePipeline).new
       @@prefill_gqa6_pipeline_mutex = Mutex.new
-      @@decode_splitk_stage1_pipelines = Hash(Tuple(Int32, Bool, Bool, Bool, Bool), ML::Metal::ComputePipeline).new
+      @@decode_splitk_stage1_pipelines = Hash(Tuple(Int32, Bool, Bool, Bool, Bool, Bool), ML::Metal::ComputePipeline).new
       @@decode_splitk_stage1_pipeline_mutex = Mutex.new
       @@decode_splitk_stage2_pipelines = Hash(Bool, ML::Metal::ComputePipeline).new
       @@decode_splitk_stage2_pipeline_mutex = Mutex.new
@@ -1380,16 +1394,23 @@ module ML::GGUF
           p4_t8,
           ENV["QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK"]?,
         )
-        key = {tile, dequant_t4, p4_t8, bf16_t8, direct_qk}
+        v_contiguous = QwenQBitAdaptiveMetalPolicy.p4_splitk_v_contiguous?(
+          uniform_tier == QwenQBitAdaptiveKV::Tier::P4,
+          p4_t8,
+          direct_qk,
+          ENV["QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS"]?,
+        )
+        key = {tile, dequant_t4, p4_t8, bf16_t8, direct_qk, v_contiguous}
         suffix = dequant_t4 ? "_dequant_t4" : ""
         suffix += "_p4_t8" if p4_t8
         suffix += "_bf16_t8" if bf16_t8
         suffix += "_direct_qk" if direct_qk
+        suffix += "_v_contiguous" if v_contiguous
         @@decode_splitk_stage1_pipeline_mutex.synchronize do
           @@decode_splitk_stage1_pipelines[key] ||= ML::Metal::PipelineCache.get("qwen35_qbit_adaptive_decode_splitk_stage1_gqa6_tile#{tile}#{suffix}") {
             ML::Metal::ComputePipeline.new(
               "qwen35_qbit_adaptive_decode_splitk_stage1_gqa6_tile#{tile}#{suffix}",
-              gqa6_source(tile, dequant_t4, p4_t8, bf16_t8, direct_qk),
+              gqa6_source(tile, dequant_t4, p4_t8, bf16_t8, direct_qk, v_contiguous),
               "qwen35_qbit_adaptive_decode_splitk_stage1_gqa6",
             )
           }
@@ -1442,11 +1463,15 @@ module ML::GGUF
                               dequant_t4 : Bool = false,
                               p4_t8 : Bool = false,
                               bf16_t8 : Bool = false,
-                              direct_qk : Bool = false) : String
+                              direct_qk : Bool = false,
+                              v_contiguous : Bool = false) : String
         if bf16_t8
           return tile == 15 ? SOURCE_TILE15_BF16_SPLITK_T8 : SOURCE_BF16_SPLITK_T8
         end
         if p4_t8
+          if v_contiguous
+            return tile == 15 ? SOURCE_TILE15_P4_SPLITK_V_CONTIGUOUS : SOURCE_P4_SPLITK_V_CONTIGUOUS
+          end
           if direct_qk
             return tile == 15 ? SOURCE_TILE15_P4_SPLITK_DIRECT_QK : SOURCE_P4_SPLITK_DIRECT_QK
           end

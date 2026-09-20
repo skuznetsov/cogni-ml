@@ -162,6 +162,7 @@ module Qwen35QBitAdaptivePrefillProbe
           token_count : Int32, tier_names : Array(String),
           compare_p4_t8 : Bool, compare_bf16_t8 : Bool,
           compare_p4_direct_qk : Bool,
+          compare_p4_v_contiguous : Bool,
           compare_splitk_chunks : Tuple(Int32, Int32)?) : Nil
     raise "Metal not available" unless ML::GGUF::Qwen35Metal.available?
     unless repeats > 0 && repeats <= MAX_REPEATS
@@ -173,11 +174,11 @@ module Qwen35QBitAdaptivePrefillProbe
     unless !tier_names.empty? && tier_names.uniq == tier_names
       raise ArgumentError.new("tiers must be unique and non-empty")
     end
-    if [compare_p4_t8, compare_bf16_t8, compare_p4_direct_qk].count(&.== true) > 1
+    if [compare_p4_t8, compare_bf16_t8, compare_p4_direct_qk, compare_p4_v_contiguous].count(&.== true) > 1
       raise ArgumentError.new("select only one P4/BF16 split-K comparison")
     end
     compare_t8_tier = compare_p4_t8 ? "p4" : (compare_bf16_t8 ? "bf16" : nil)
-    if (compare_t8_tier || compare_p4_direct_qk) && compare_splitk_chunks
+    if (compare_t8_tier || compare_p4_direct_qk || compare_p4_v_contiguous) && compare_splitk_chunks
       raise ArgumentError.new("select either a P4/BF16/direct-QK or split-K chunk comparison")
     end
     if comparison_tier = compare_t8_tier
@@ -185,12 +186,12 @@ module Qwen35QBitAdaptivePrefillProbe
         raise ArgumentError.new("the T8 comparison requires --repeats 10 --chunk 1 --tiers #{comparison_tier}")
       end
     end
-    if compare_p4_direct_qk
+    if compare_p4_direct_qk || compare_p4_v_contiguous
       unless repeats == 10 && token_count == 1 && tier_names == ["p4"]
-        raise ArgumentError.new("the direct-QK comparison requires --repeats 10 --chunk 1 --tiers p4")
+        raise ArgumentError.new("the P4 stage-1 comparison requires --repeats 10 --chunk 1 --tiers p4")
       end
       unless prefixes == [8191, 16383]
-        raise ArgumentError.new("the direct-QK comparison requires --prefixes 8191,16383")
+        raise ArgumentError.new("the P4 stage-1 comparison requires --prefixes 8191,16383")
       end
     end
     if chunk_pair = compare_splitk_chunks
@@ -207,9 +208,10 @@ module Qwen35QBitAdaptivePrefillProbe
     end
     unless prefixes.all? do |prefix|
              prefix > 0 && prefix <= MAX_PREFIX &&
-             (prefix % SOURCE_CHUNK == 0 || (compare_p4_direct_qk && [8191, 16383].includes?(prefix)))
+             (prefix % SOURCE_CHUNK == 0 ||
+             ((compare_p4_direct_qk || compare_p4_v_contiguous) && [8191, 16383].includes?(prefix)))
            end
-      raise ArgumentError.new("prefixes must be 64-aligned and in 64..#{MAX_PREFIX}, except direct-QK 8191,16383")
+      raise ArgumentError.new("prefixes must be 64-aligned and in 64..#{MAX_PREFIX}, except P4 stage-1 comparisons at 8191,16383")
     end
 
     n_head = 24
@@ -244,7 +246,9 @@ module Qwen35QBitAdaptivePrefillProbe
     pack_prefix_quant_mode = pack_prefix_quant_override.nil? ? "auto" : pack_prefix_quant_override.strip.inspect
     direct_qk_override = ENV["QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK"]?
     direct_qk_mode = direct_qk_override.nil? ? "off" : direct_qk_override.strip.inspect
-    puts %(probe device=#{device_name.inspect} tile=#{tile} dequant_t4_mode=#{dequant_t4_mode} p4_splitk_t8_mode=#{p4_splitk_t8_mode} bf16_splitk_t8_mode=#{bf16_splitk_t8_mode} direct_qk_mode=#{direct_qk_mode} pack_prefix_quant_mode=#{pack_prefix_quant_mode} seed=0x#{SEED.to_s(16)} fixed_snapshot=true)
+    v_contiguous_override = ENV["QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS"]?
+    v_contiguous_mode = v_contiguous_override.nil? ? "off" : v_contiguous_override.strip.inspect
+    puts %(probe device=#{device_name.inspect} tile=#{tile} dequant_t4_mode=#{dequant_t4_mode} p4_splitk_t8_mode=#{p4_splitk_t8_mode} bf16_splitk_t8_mode=#{bf16_splitk_t8_mode} direct_qk_mode=#{direct_qk_mode} v_contiguous_mode=#{v_contiguous_mode} pack_prefix_quant_mode=#{pack_prefix_quant_mode} seed=0x#{SEED.to_s(16)} fixed_snapshot=true)
     puts "tier prefix chunk route    t4    pq pack_wall_ms pack_gpu_ms fused_wall_ms prefill_pack_finalize_gpu_ms non_gpu_ms"
     begin
       tier_names.each do |tier_name|
@@ -377,21 +381,24 @@ module Qwen35QBitAdaptivePrefillProbe
             next
           end
 
-          if compare_p4_direct_qk
-            raise "P4 direct-QK comparison requires the split-K route" unless splitk
+          if compare_p4_direct_qk || compare_p4_v_contiguous
+            comparison_name = compare_p4_v_contiguous ? "p4_v_contiguous" : "p4_direct_qk"
+            raise "#{comparison_name} comparison requires the split-K route" unless splitk
             previous_t8 = ENV["QWEN35_ADAPTIVE_P4_SPLITK_T8"]?
             previous_direct_qk = ENV["QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK"]?
+            previous_v_contiguous = ENV["QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS"]?
             baseline_wall = [] of Float64
             baseline_gpu = [] of Float64
             candidate_wall = [] of Float64
             candidate_gpu = [] of Float64
             max_output_delta = 0.0_f32
             begin
-              # Compile both direct-QK variants up front with T8 forced in
-              # both arms; only the stage-1 scheduling candidate changes.
+              # Compile both variants up front. The contiguous-V comparison
+              # retains direct-QK in both arms and changes only V accumulation.
               ["0", "1"].each do |mode|
                 ENV["QWEN35_ADAPTIVE_P4_SPLITK_T8"] = "1"
-                ENV["QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK"] = mode
+                ENV["QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK"] = compare_p4_v_contiguous ? "1" : mode
+                ENV["QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS"] = compare_p4_v_contiguous ? mode : "0"
                 timed_restored_sample(
                   plan, snapshot_k, snapshot_v, prefix, capacity,
                   q_buffer, gate_buffer, k_buffer, v_buffer, output,
@@ -404,7 +411,8 @@ module Qwen35QBitAdaptivePrefillProbe
                 pair = Hash(String, Tuple(Float64, Float64, Array(Float32), Bytes, Bytes)).new
                 order.each do |mode|
                   ENV["QWEN35_ADAPTIVE_P4_SPLITK_T8"] = "1"
-                  ENV["QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK"] = mode
+                  ENV["QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK"] = compare_p4_v_contiguous ? "1" : mode
+                  ENV["QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS"] = compare_p4_v_contiguous ? mode : "0"
                   sample = timed_restored_sample_with_snapshot(
                     plan, snapshot_k, snapshot_v, prefix, capacity,
                     q_buffer, gate_buffer, k_buffer, v_buffer, output,
@@ -415,7 +423,7 @@ module Qwen35QBitAdaptivePrefillProbe
                 baseline = pair["0"]
                 candidate = pair["1"]
                 unless baseline[3] == candidate[3] && baseline[4] == candidate[4]
-                  raise "P4 direct-QK canonical K/V bytes changed"
+                  raise "#{comparison_name} canonical K/V bytes changed"
                 end
                 baseline_wall << baseline[0]
                 baseline_gpu << baseline[1]
@@ -425,8 +433,8 @@ module Qwen35QBitAdaptivePrefillProbe
                   delta = (value - candidate[2][index]).abs
                   max_output_delta = delta if delta > max_output_delta
                 end
-                printf "paired_p4_direct_qk prefix=%d pair=%d order=%s baseline_wall_ms=%.3f candidate_wall_ms=%.3f baseline_gpu_ms=%.3f candidate_gpu_ms=%.3f max_output_delta=%.8f\n",
-                  prefix, pair_index + 1, order.join, baseline[0], candidate[0],
+                printf "paired_%s prefix=%d pair=%d order=%s baseline_wall_ms=%.3f candidate_wall_ms=%.3f baseline_gpu_ms=%.3f candidate_gpu_ms=%.3f max_output_delta=%.8f\n",
+                  comparison_name, prefix, pair_index + 1, order.join, baseline[0], candidate[0],
                   baseline[1], candidate[1], max_output_delta
               end
             ensure
@@ -440,6 +448,11 @@ module Qwen35QBitAdaptivePrefillProbe
               else
                 ENV.delete("QWEN35_ADAPTIVE_P4_SPLITK_DIRECT_QK")
               end
+              if previous_v_contiguous
+                ENV["QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS"] = previous_v_contiguous
+              else
+                ENV.delete("QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS")
+              end
             end
 
             baseline_wall_mean = mean(baseline_wall)
@@ -450,13 +463,13 @@ module Qwen35QBitAdaptivePrefillProbe
             gpu_improvement = 1.0 - candidate_gpu_mean / baseline_gpu_mean
             wall_wins = baseline_wall.zip(candidate_wall).count { |base, candidate| candidate < base }
             gpu_wins = baseline_gpu.zip(candidate_gpu).count { |base, candidate| candidate < base }
-            printf "paired_p4_direct_qk_summary prefix=%d baseline_wall_mean_ms=%.3f candidate_wall_mean_ms=%.3f wall_improvement_pct=%.3f wall_wins=%d/10 baseline_gpu_mean_ms=%.3f candidate_gpu_mean_ms=%.3f gpu_improvement_pct=%.3f gpu_wins=%d/10 max_output_delta=%.8f\n",
-              prefix, baseline_wall_mean, candidate_wall_mean, wall_improvement * 100.0, wall_wins,
+            printf "paired_%s_summary prefix=%d baseline_wall_mean_ms=%.3f candidate_wall_mean_ms=%.3f wall_improvement_pct=%.3f wall_wins=%d/10 baseline_gpu_mean_ms=%.3f candidate_gpu_mean_ms=%.3f gpu_improvement_pct=%.3f gpu_wins=%d/10 max_output_delta=%.8f\n",
+              comparison_name, prefix, baseline_wall_mean, candidate_wall_mean, wall_improvement * 100.0, wall_wins,
               baseline_gpu_mean, candidate_gpu_mean, gpu_improvement * 100.0, gpu_wins, max_output_delta
-            raise "P4 direct-QK output tolerance failed" if max_output_delta > 1e-4_f32
+            raise "#{comparison_name} output tolerance failed" if max_output_delta > 1e-4_f32
             unless wall_improvement >= 0.03 && gpu_improvement >= 0.03 &&
                    wall_wins >= 8 && gpu_wins >= 8
-              raise "P4 direct-QK paired promotion gate failed"
+              raise "#{comparison_name} paired promotion gate failed"
             end
             next
           end
@@ -599,6 +612,7 @@ tier_names = ["p4", "bf16", "f32"]
 compare_p4_t8 = false
 compare_bf16_t8 = false
 compare_p4_direct_qk = false
+compare_p4_v_contiguous = false
 compare_splitk_chunks = nil.as(Tuple(Int32, Int32)?)
 OptionParser.parse do |parser|
   parser.banner = "Usage: qwen35_qbit_adaptive_prefill_probe [options]"
@@ -619,6 +633,9 @@ OptionParser.parse do |parser|
   parser.on("--compare-p4-direct-qk", "Run the same-process 10-pair P4 direct-QK gate with T8 forced") do
     compare_p4_direct_qk = true
   end
+  parser.on("--compare-p4-v-contiguous", "Run the same-process 10-pair contiguous-V gate with P4 T8/direct-QK forced") do
+    compare_p4_v_contiguous = true
+  end
   parser.on("--compare-splitk-chunks BASE,CANDIDATE", "Run a same-process 10-pair split-K chunk-size gate") do |value|
     chunks = value.split(',').map(&.to_i?)
     unless chunks.size == 2 && chunks.all?
@@ -632,10 +649,13 @@ OptionParser.parse do |parser|
   end
 end
 
-prefixes = [8191, 16383] if compare_p4_direct_qk && prefixes == [512, 1536, 3072]
+if (compare_p4_direct_qk || compare_p4_v_contiguous) && prefixes == [512, 1536, 3072]
+  prefixes = [8191, 16383]
+end
 
 Qwen35QBitAdaptivePrefillProbe.run(
   prefixes, repeats, token_count, tier_names, compare_p4_t8, compare_bf16_t8,
   compare_p4_direct_qk,
+  compare_p4_v_contiguous,
   compare_splitk_chunks,
 )

@@ -29006,3 +29006,33 @@ Refresh after source/toolchain/device/model/workload changes.
   8k_repeat,16k,16k_repeat,real_prefix}.log`; hashes are recorded in
   `docs/qwen-qbit-cache-frontier.md`. Refresh on kernel/policy/probe, model/map,
   compiler, device/OS, timing method, safety policy, gate, or evidence loss.
+
+### Continuation 2026-09-20 — Contiguous shared-V wins locally; automatic admission is rejected
+
+- True direct-V is not the next admissible move: six GQA heads require six
+  probability streams, forcing repeated dequantization, large live
+  accumulators, or more scratch/barriers. The bounded candidate keeps one
+  shared dequantized V tile and gives each lane eight contiguous dimensions
+  consumed through two `float4` loads. Cache bytes, threadgroup allocation,
+  barriers, partial-output layout, fused stage two, and publication stay fixed.
+- Random-nonzero 8K and visible-tail 1/6/15/16 resident oracles match the scalar
+  reference with maximum absolute error `3.73e-8`, cosine above `0.9999999`,
+  and byte-identical K/V. The policy/resident suite passes `32/32`. Isolated
+  attention improves wall/GPU time by `16.74/24.43%` at 8K and
+  `18.56/25.97%` at 16K.
+- V-only full-token timing pools to about `+2.19%` at 8K and `+4.68%` at 16K.
+  The combined direct-QK plus contiguous-V bundle clears the product timing
+  gate twice at both lengths: `+4.24/+4.03%` at 8K and `+7.32/+7.38%` at 16K,
+  with 40/40 wins at each length. These rows use a synthetic zero prefix.
+- A proposed exact-M2-Max automatic admission was attacked at a real nonzero
+  6,511-token chat prefix. The first four top-1 choices agreed, but sample 3
+  reached `3.2424927e-4` top-1-logit drift and violated the declared `1e-4`
+  gate. The run failed closed, the automatic policy was removed, and the
+  threshold was not weakened after observation.
+- Verdict: ROBUST for the local vectorization, cache boundary, and repeated
+  synthetic long-context speed; VULNERABLE for automatic production admission
+  and broad semantic quality. Keep
+  `QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS=1` default-off and dependent on
+  explicit direct-QK plus P4 T8. Add real-prefix top-2/ECS evidence before
+  reconsidering admission. Detailed logs and hashes are in
+  `docs/qwen-qbit-cache-frontier.md`.

@@ -67,6 +67,7 @@ constant bool QQA_ADAPTIVE_SPLITK_STAGE2_FUSED = false;
 constant bool QQA_ADAPTIVE_P4_SPLITK_T8 = false;
 constant bool QQA_ADAPTIVE_BF16_SPLITK_T8 = false;
 constant bool QQA_ADAPTIVE_P4_SPLITK_DIRECT_QK = false;
+constant bool QQA_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS = false;
 
 struct QQAAdaptiveFloat8 {
     float4 low;
@@ -759,13 +760,30 @@ kernel void qwen35_qbit_adaptive_decode_splitk_stage1_gqa6(
             uniform_tier, thread_index);
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        for (uint dl = 0; dl < QQA_ADAPTIVE_HD / QQA_ADAPTIVE_SG; ++dl) {
-            const uint d = lane + dl * QQA_ADAPTIVE_SG;
-            float acc = 0.0f;
+        if (QQA_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS) {
+            const uint d = lane * 8u;
+            float4 acc_low = 0.0f;
+            float4 acc_high = 0.0f;
             for (uint s = 0; s < tile_len; ++s) {
-                acc += probabilities[local_h][s] * kv_tile[s * head_dim + d];
+                const float probability_s = probabilities[local_h][s];
+                threadgroup const float4* value =
+                    (threadgroup const float4*)(kv_tile + s * head_dim + d);
+                acc_low += probability_s * value[0];
+                acc_high += probability_s * value[1];
             }
-            o[dl] = o[dl] * correction + acc;
+            for (uint d4 = 0; d4 < 4u; ++d4) {
+                o[d4] = o[d4] * correction + acc_low[d4];
+                o[d4 + 4u] = o[d4 + 4u] * correction + acc_high[d4];
+            }
+        } else {
+            for (uint dl = 0; dl < QQA_ADAPTIVE_HD / QQA_ADAPTIVE_SG; ++dl) {
+                const uint d = lane + dl * QQA_ADAPTIVE_SG;
+                float acc = 0.0f;
+                for (uint s = 0; s < tile_len; ++s) {
+                    acc += probabilities[local_h][s] * kv_tile[s * head_dim + d];
+                }
+                o[dl] = o[dl] * correction + acc;
+            }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
         m = m_new;
@@ -778,7 +796,9 @@ kernel void qwen35_qbit_adaptive_decode_splitk_stage1_gqa6(
     }
     const uint out_base = mb * head_dim;
     for (uint dl = 0; dl < QQA_ADAPTIVE_HD / QQA_ADAPTIVE_SG; ++dl) {
-        const uint d = lane + dl * QQA_ADAPTIVE_SG;
+        const uint d = QQA_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS
+            ? lane * 8u + dl
+            : lane + dl * QQA_ADAPTIVE_SG;
         partial_o[out_base + d] = o[dl];
     }
 }

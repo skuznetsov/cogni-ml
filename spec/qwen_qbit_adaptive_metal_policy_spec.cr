@@ -156,4 +156,21 @@ describe ML::GGUF::QwenQBitAdaptiveMetalPolicy do
       policy.p4_splitk_direct_qk?(true, true, "")
     end
   end
+
+  it "keeps contiguous P4 V accumulation behind direct-QK and an explicit switch" do
+    policy = ML::GGUF::QwenQBitAdaptiveMetalPolicy
+
+    policy.p4_splitk_v_contiguous?(true, true, true).should be_false
+    policy.p4_splitk_v_contiguous?(true, true, true, "0").should be_false
+    policy.p4_splitk_v_contiguous?(true, true, true, "1").should be_true
+    policy.p4_splitk_v_contiguous?(false, true, true, "1").should be_false
+    policy.p4_splitk_v_contiguous?(true, false, true, "1").should be_false
+    policy.p4_splitk_v_contiguous?(true, true, false, "1").should be_false
+    expect_raises(ArgumentError, /QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS/) do
+      policy.p4_splitk_v_contiguous?(true, true, true, "true")
+    end
+    expect_raises(ArgumentError, /QWEN35_ADAPTIVE_P4_SPLITK_V_CONTIGUOUS/) do
+      policy.p4_splitk_v_contiguous?(true, true, true, "")
+    end
+  end
 end
