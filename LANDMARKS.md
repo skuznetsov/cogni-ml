@@ -29260,3 +29260,19 @@ Refresh after source/toolchain/device/model/workload changes.
   was removed. Reopen only with lower-level evidence that the Q5_K row mapping
   or dequantization bottleneck changed. Full scope is in
   `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-20 — Q4_K x16 dual-SwiGLU is rejected
+
+- A temporary default-off decode kernel fused the two accepted x16 Q4_K FFN
+  gate/up GEMVs with SwiGLU, retaining each GEMV's 16-lane row ownership and
+  reduction tree while removing two intermediate arrays and one dispatch.
+- Metal compilation and the release build passed. A guarded Qwen3.8-27B
+  body-only run used eight tokens, one warmup, and six interleaved pairs.
+  Production/candidate p50 was `479.04/474.87 ms` (`16.70/16.85 tok/s`), and
+  the candidate won `4/6` pairs: only about `+0.88%`, below the `>=3%` gate.
+- Verdict: BROKEN for performance promotion on Apple M2 Max with this
+  toolchain. The temporary runtime code was removed; semantic promotion was
+  unnecessary after the fail-fast result. Do not revisit gate/up/SwiGLU fusion
+  unless the next design also removes material weight traffic or new evidence
+  makes dispatch/intermediate traffic dominant. Full scope and refresh
+  conditions are in `docs/qwen-qbit-cache-frontier.md`.

@@ -4893,3 +4893,34 @@ counter evidence that changes the bottleneck.
 
 Refresh on Q5_K dequantization, recurrent QKV shape or quantization, Metal
 compiler/toolchain, device, timing method, or evidence loss.
+
+### Q4_K x16 dual gate/up plus SwiGLU is rejected (2026-09-20)
+
+A temporary default-off decode kernel fused the two admitted x16 Q4_K FFN
+gate/up GEMVs with the following SwiGLU operation. Each 16-lane SIMD half
+retained the production row ownership and reduction tree, while the candidate
+loaded the shared normalized activation once, streamed both weight matrices,
+and wrote only the final F32 activation. This removed the two intermediate
+gate/up arrays and the standalone SwiGLU dispatch without changing the Q4_K
+weight representation or downstream FFN-down route.
+
+The Metal source and release build passed. The first guarded product-level
+performance falsifier used Qwen3.8-27B Q4_K_M on Apple M2 Max, prompt zero,
+eight body-only decode tokens, one warmup, and six interleaved pairs. Production
+measured `477.51 ms` average, `479.04 ms` p50, and `16.70 tok/s`; the fused
+candidate measured `473.47 ms` average, `474.87 ms` p50, and `16.85 tok/s`.
+The candidate won `4/6` pairs, for only about `0.85%` average and `0.88%` p50
+improvement. The run completed with `71%` free memory under the `24576 MiB`
+process-tree cap and `30%` memory floor.
+
+**decision:** the predeclared `>=3%` product gate is BROKEN on this
+device/toolchain. Although the direction was mildly positive, unchanged Q4_K
+weight traffic dominates the removed cache-served activation traffic and
+dispatch. The temporary kernel, pipeline, and selector were removed. Semantic
+parity was intentionally not promoted or claimed after the fail-fast
+performance rejection. This closes the current decode gate/up/SwiGLU fusion
+corridor; reopen only if a changed layout removes material weight traffic or
+lower-level evidence shows launch/intermediate traffic has become dominant.
+
+Refresh on Q4_K layout, FFN shape, x16 row ownership, Metal compiler/toolchain,
+device, timing method, admission gate, or evidence loss.
