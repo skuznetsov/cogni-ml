@@ -28687,3 +28687,36 @@ Refresh after source/toolchain/device/model/workload changes.
   or input drift. Strict mode currently rejects a second mmap owner, so a
   separate draft or MTP GGUF is intentionally incompatible until a safe
   multi-owner registry exists.
+
+### Continuation 2026-09-20 — Balanced coarse-view gate verifies the mechanism and rejects speed promotion
+
+- The SG4 benchmark previously scrubbed `QWEN35_COARSE_WEIGHT_VIEWS`, allowing
+  a false candidate. Revision `4ab7de85` preserves only exact `0`/`1` after the
+  scrub and rejects malformed values. The release binary is
+  `396a9e0e17b6d789c5c238316502a0565048152c661361067ef81281e9145392`.
+- Fresh-process ABBA on the same 7,839-token prefix used order whole/coarse/
+  coarse/whole. All four runs completed 64/64 command pairs, exit0, with no
+  Metal failure, timeout, guard kill, or interactivity error. Whole/coarse
+  prefix walls were `76.981/72.569` and `79.145/86.775` seconds respectively.
+  The coarse median first wait was 2.063 seconds versus 7.780 seconds whole
+  (`-73.5%`), and minimum sampled free memory was 53/57% versus 41/41%.
+- The local first-command improvement does not compose into speed: median full
+  prefix was 82.960 seconds coarse versus 74.775 seconds whole (`+10.9%`
+  time), while later-wait medians also increased. Full-prefix use touches every
+  layer. Attribution among page-in, resource tracking, thermal drift, and host
+  noise remains open; source-compiled kernels also keep this outside a
+  production cold-start claim.
+- A fresh 256+195 semantic process pair produced identical continuation IDs
+  `[3753,283,716,363]` and text, intra-process exact state gates, 4/4 top-1,
+  8/8 top-2,
+  ECS1.0, minimum cosine `0.9999999999999999`, and maximum logit delta0.0.
+- Verdict: ROBUST for bounded first-command relief, lower sampled memory
+  pressure, full-prefix completion, and 256+195 continuation parity; BROKEN for
+  default speed promotion. Keep `QWEN35_COARSE_WEIGHT_VIEWS` default-off. Next
+  falsifier is one predeclared adjacent merge from 17 views to 9, with the
+  output head separate, CPU geometry proof first, and the same end-to-end ABBA
+  gate. The actual run timeout was 900 seconds. Evidence and hashes:
+  `docs/qwen-prefill-command-trace.md` and
+  `/private/tmp/qwen_coarse_views_abba_20260920.XP69Lh/`. Refresh on source,
+  model/input, geometry, runner/observer, device/OS/storage/cache state, or
+  evidence loss.

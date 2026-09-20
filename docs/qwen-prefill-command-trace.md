@@ -3655,3 +3655,74 @@ mapping or registry policy, bridge/source, device, OS, storage state, or input
 change. Because strict mode admits only one mmap owner, a separate draft or MTP
 GGUF must remain disabled until a safe multi-owner registry is designed; the
 current behavior rejects that combination instead of degrading silently.
+
+## Fresh-process ABBA verifies first-command relief but rejects speed promotion (2026-09-20)
+
+The missing balanced gate was run from source revision `4ab7de85`, immediately
+after the feature commit `4d364171`. The gate first fixed a harness defect: the
+SG4 probe had scrubbed `QWEN35_COARSE_WEIGHT_VIEWS` together with every other
+Qwen environment control, so an apparent candidate could silently execute the
+control path. The committed probe now preserves only exact `0` or `1` and
+rejects any other value before model construction. Its release binary SHA256 is
+`396a9e0e17b6d789c5c238316502a0565048152c661361067ef81281e9145392`.
+
+Four fresh processes ran in `A(whole), B(coarse), B(coarse), A(whole)` order on
+the same Qwen3.8-27B Q4_K_M model and the same 7,839-token prefix. Every process
+reported the identical token and prefix hashes, capacity 8,036, chunk size
+2,048, append-group limit 1, and 50 ms cooldown. Every process completed all 64
+ordered submit/wait pairs and exited zero; there were no Metal failures,
+timeouts, guard kills, or `ImpactingInteractivity` errors. The initial 70% and
+runtime 30% free-memory policies, 24 GiB process-tree cap, and 900-second
+timeout were unchanged.
+
+| arm | prefix wall | first wait | median later wait | minimum free | peak sampled tree RSS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| A1 whole | 76.981 s | 9,326.903 ms | 1,006.780 ms | 41% | 1,338,208 KiB |
+| B1 coarse | 79.145 s | 2,474.099 ms | 1,206.234 ms | 53% | 1,339,792 KiB |
+| B2 coarse | 86.775 s | 1,652.822 ms | 1,375.986 ms | 57% | 1,343,856 KiB |
+| A2 whole | 72.569 s | 6,233.034 ms | 956.416 ms | 41% | 1,343,744 KiB |
+
+The result supports first-command relief consistent with deferred resource
+work: the median first wait falls from 7,779.969 ms to 2,063.461 ms, a 73.5%
+reduction, while sampled system free memory stays 12--16 percentage points
+higher. That local result does not compose into a prefix speedup. The median
+complete prefix rises from 74.775 s to 82.960 s, 10.9% slower, and the median
+of the per-process later-wait medians rises from 981.598 ms to 1,291.110 ms.
+The full prefix eventually consumes every layer. The current evidence does not
+attribute the changed timing to page-in, Metal resource tracking, thermal
+drift, or other host scheduling effects.
+
+A separate fresh-process 256+195-token semantic pair compared the whole and
+coarse registrations. Both processes passed their exact state gates and
+produced the same four continuation IDs `[3753, 283, 716, 363]` and text
+` seen = set()`. Each reported 4/4 top-1 matches, 8/8 ordered top-2 matches,
+ECS 1.0, minimum logit cosine `0.9999999999999999`, and maximum absolute logit
+difference 0.0. This is bounded 256+195 continuation parity for the exercised
+route, not cross-mode full-prefix state parity or a model-quality evaluation.
+
+Adversary verdict: ROBUST for first-command relief, lower sampled memory pressure,
+full-prefix completion, and bounded semantic parity; BROKEN as a default speed
+promotion. ABBA balances linear order, but adjacent B runs remain exposed to
+nonlinear file-cache, Metal-cache, thermal, and concurrent-host drift. The
+probe is instrumented, retains fixed cooldowns, and compiled Metal kernels from
+source because the default metallib was absent, so its absolute wall time is
+diagnostic rather than production pp/tg or production cold-start evidence. The
+default remains the whole-file path. The next smallest useful discriminator is
+one predeclared adjacent merge from 17 views to 9, keeping the output-head view
+separate. CPU geometry tests must first prove dense coverage and byte bounds;
+promotion still requires matched end-to-end ABBA, not a shorter first wait.
+
+Raw evidence is under
+`/private/tmp/qwen_coarse_views_abba_20260920.XP69Lh/`. Combined-log SHA256:
+
+- A1: `92b3de9d6e7060c90778f066a0f3a6076c82c2e2e65460e5c9a6588774ee2d0e`.
+- B1: `a40c864a3146d0f1fb921082358b60dc878c65c062d80aa7b5243440bfc08935`.
+- B2: `7b8a4cede281ab8ec0c17742c1529fd94e870bbe11707a98dd65f90ce7b936ed`.
+- A2: `227a490aa2df267f48c484be967a5119d3ca7f8dfdd74f6da95bb3648db987a6`.
+- Semantic whole: `5092bf7490b9c3f0419c7fc94bd910693e1e84c8db177a830421d4fa6d04e931`.
+- Semantic coarse: `72cd866a59e2f3419b1df5c620126cc1f1a86b2cc7db6d1a5f397a67e06482cc`.
+
+The read-only observer SHA256 is
+`76ed3b8734bd058138d1b4d493e288586a3e438f28c2c34bd8a289fa71a4a4b1`.
+Refresh on source/binary, model identity, input, mapping geometry, runner,
+observer, device, OS/driver, storage/cache state, or raw-evidence loss.
