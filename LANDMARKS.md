@@ -29230,3 +29230,19 @@ Refresh after source/toolchain/device/model/workload changes.
   corridor; move next to a larger data-movement or dispatch boundary. Full
   measurements, hashes, and refresh conditions are in
   `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-20 — Q4 x16 shared activation is rejected
+
+- A temporary default-off x16 Q4 kernel loaded activation `float4` groups in
+  only the lower 16 SIMD lanes and shuffled them to the upper half, preserving
+  the existing weight path, reduction tree, and two-row ownership.
+- A guarded Qwen3.8-27B body-only discriminator used eight tokens, one warmup,
+  and six interleaved pairs. Production/shared-X p50 was
+  `455.04/994.69 ms` (`17.58/8.04 tok/s`); the candidate lost `0/6` pairs and
+  more than doubled latency under the `24576 MiB` cap and `30%` memory floor.
+- Verdict: BROKEN as a performance route on Apple M2 Max with this toolchain.
+  The candidate was removed before semantic escalation. Do not retry x16
+  activation broadcast or threadgroup staging without compiler or hardware
+  evidence that repeated activation loads are material rather than cache hits.
+  Full scope and refresh conditions are in
+  `docs/qwen-qbit-cache-frontier.md`.

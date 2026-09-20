@@ -4836,3 +4836,30 @@ Repeat evidence:
 Refresh on packed-prefix layout, exact-tail ownership, P4 T8 loader or
 contiguous-V implementation, Metal compiler/toolchain, device, timing method,
 gate, or evidence loss.
+
+### Q4 x16 activation shuffle is rejected (2026-09-20)
+
+The admitted Q4 x16 decode kernel lets both 16-lane halves of a SIMD group
+read the same activation fragments while they process different output rows.
+A temporary default-off variant kept the existing weight loads, arithmetic,
+reduction tree, and row ownership, but loaded each activation `float4` only in
+the lower half and used eight SIMD shuffles per Q4 block to feed both rows.
+
+The release build and Metal source compilation passed, but the first guarded
+whole-body discriminator rejected the mechanism decisively. On Apple M2 Max
+with Qwen3.8-27B Q4_K_M, prompt zero, eight decode tokens, one warmup, and six
+interleaved pairs, the production x16 route measured `455.04 ms` p50
+(`17.58 tok/s`) while shared-X measured `994.69 ms` (`8.04 tok/s`). The
+candidate lost all six pairs and more than doubled latency. The run completed
+under a `24576 MiB` process-tree cap and `30%` free-memory floor.
+
+**decision:** the performance claim is BROKEN on this device/toolchain. The
+candidate kernel and selector were removed immediately; no semantic-quality
+escalation was justified after the fail-fast performance gate. The measured
+result is consistent with shuffle dependencies and register pressure costing
+far more than repeated cache-served activation loads, but no hardware counter
+attributes the cause. Do not retry activation broadcast/staging for this x16
+route without generated-code or counter evidence that changes that tradeoff.
+
+Refresh on x16 row ownership, activation layout, Metal compiler/toolchain,
+device, or availability of lower-level resource counters.
