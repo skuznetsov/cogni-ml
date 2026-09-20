@@ -1,6 +1,7 @@
 require "./reader"
 require "./compute" # for QuantWeight
 require "./qwen35_meta"
+require "./qwen35_mmap_views"
 {% unless flag?(:cpu_only) %}
   require "./qwen35_metal"
 {% end %}
@@ -98,6 +99,12 @@ module ML::GGUF
         @gguf.get_string("general.name"),
         @gguf.get_string("general.basename")
       )
+      coarse_mmap_views = self.class.coarse_mmap_views_enabled?
+      {% if flag?(:cpu_only) %}
+        if coarse_mmap_views
+          raise "QWEN35_COARSE_WEIGHT_VIEWS=1 requires a Metal-enabled build"
+        end
+      {% end %}
       {% unless flag?(:cpu_only) %}
         @mmap_base = nil
       {% end %}
@@ -119,16 +126,47 @@ module ML::GGUF
         end
       end
 
-      # Register the whole mmap region as a zero-copy Metal buffer so
-      # subsequent matmuls dispatch against a byte-offset into it
-      # instead of re-uploading weights every call. Cheap no-op in
-      # cpu_only mode.
+      # Register mmap-backed quantized weights as zero-copy Metal buffers.
+      # The established path keeps one whole-file view. The opt-in coarse path
+      # uses dense command-group views that remain alive for the model lifetime,
+      # avoiding both the whole-file first-touch and unsafe wrapper rotation.
       {% unless flag?(:cpu_only) %}
-        if Qwen35Metal.available?
+        metal_available = Qwen35Metal.available?
+        if coarse_mmap_views && !metal_available
+          raise "QWEN35_COARSE_WEIGHT_VIEWS=1 requires an available Metal device"
+        end
+        if metal_available
           if region = @gguf.mmap_region
             base, size = region
-            Qwen35Metal.register_mmap(base, size)
-            @mmap_base = base
+            if coarse_mmap_views
+              groups = build_mmap_weight_groups(base, size)
+              views = groups.flat_map(&.views).uniq { |view| {view.address, view.length} }
+              validate_mmap_weight_coverage!(views)
+              registered = false
+              begin
+                Qwen35Metal.register_mmap_views(base, size, views, strict: true)
+                registered = true
+                @mmap_base = base
+                if ENV["QWEN35_COARSE_WEIGHT_VIEW_TRACE"]? == "1"
+                  stats = Qwen35Metal.mmap_registration_stats
+                  STDERR.puts(
+                    "qwen35_coarse_weight_views groups=#{groups.size} " \
+                    "views=#{stats[:views]} view_bytes=#{stats[:view_bytes]} " \
+                    "unique_view_bytes=#{stats[:unique_view_bytes]} " \
+                    "owner_bytes=#{stats[:owner_bytes]} strict=#{stats[:strict]}",
+                  )
+                end
+              rescue ex
+                Qwen35Metal.unregister_mmap(base) if registered
+                @mmap_base = nil
+                raise ex
+              end
+            else
+              Qwen35Metal.register_mmap(base, size)
+              @mmap_base = base
+            end
+          elsif coarse_mmap_views
+            raise "QWEN35_COARSE_WEIGHT_VIEWS=1 requires mmap-backed weights"
           end
         end
       {% end %}
@@ -160,9 +198,9 @@ module ML::GGUF
     end
 
     # Release any process-global no-copy Metal wrapper before unmapping the
-    # GGUF file that backs its bytes. Callers must quiesce in-flight inference
-    # before closing a weight set; the wrapper cannot protect concurrent users
-    # after this method returns.
+    # GGUF file that backs its bytes. Callers must quiesce in-flight inference,
+    # including explicit/lane Metal queues, before closing a weight set; the
+    # wrapper cannot protect concurrent users after this method returns.
     def close : Nil
       @close_mutex.synchronize do
         return if @closed
@@ -180,6 +218,105 @@ module ML::GGUF
 
     def finalize
       close
+    end
+
+    def self.coarse_mmap_views_enabled?(
+      configured : String? = ENV["QWEN35_COARSE_WEIGHT_VIEWS"]?,
+    ) : Bool
+      case configured
+      when nil, "0" then false
+      when "1"      then true
+      else
+        raise ArgumentError.new("QWEN35_COARSE_WEIGHT_VIEWS must be 0 or 1")
+      end
+    end
+
+    private def build_mmap_weight_groups(base : Pointer(UInt8), size : UInt64) : Array(Qwen35MmapWeightGroup)
+      full_layers = @hparams.full_attention_layers
+      raise "coarse mmap views require at least one full-attention layer" if full_layers.empty?
+
+      ranges = [] of {Int32, Int32}
+      if full_layers.size == 1
+        ranges << {0_i32, (@layers.size - 1).to_i32}
+      else
+        ranges << {0_i32, (full_layers[1] - 1).to_i32}
+        (1...full_layers.size).each do |index|
+          first_layer = full_layers[index]
+          last_layer = index + 1 < full_layers.size ? full_layers[index + 1] - 1 : @layers.size - 1
+          ranges << {first_layer.to_i32, last_layer.to_i32}
+        end
+      end
+
+      groups = ranges.map_with_index do |range, index|
+        first_layer, last_layer = range
+        weights = [] of QuantWeight
+        weights << @token_embd if index == 0
+        (first_layer..last_layer).each do |layer|
+          weights.concat(quant_weights_for_layer(@layers[layer]))
+        end
+        view = Qwen35MmapWeightView.for_spans(
+          base.address,
+          size,
+          weights.map { |weight| mmap_span_for(weight) },
+        )
+        Qwen35MmapWeightGroup.new(first_layer, last_layer, [view])
+      end
+
+      unless @output.same?(@token_embd)
+        output_view = Qwen35MmapWeightView.for_spans(
+          base.address,
+          size,
+          [mmap_span_for(@output)],
+        )
+        last = groups.last
+        groups[-1] = Qwen35MmapWeightGroup.new(
+          last.first_layer,
+          last.last_layer,
+          last.views + [output_view],
+        )
+      end
+      groups
+    end
+
+    private def validate_mmap_weight_coverage!(views : Array(Qwen35MmapWeightView)) : Nil
+      weights = [@token_embd, @output]
+      @layers.each { |layer| weights.concat(quant_weights_for_layer(layer)) }
+      weights.uniq(&.object_id).each do |weight|
+        span = mmap_span_for(weight)
+        unless views.any?(&.contains?(span))
+          raise "coarse mmap views do not cover #{weight.route_tag || weight.object_id}"
+        end
+      end
+    end
+
+    private def mmap_span_for(weight : QuantWeight) : Qwen35MmapWeightSpan
+      Qwen35MmapWeightSpan.new(weight.raw.to_unsafe.address, weight.raw.size.to_i64)
+    end
+
+    private def quant_weights_for_layer(layer : Qwen35LayerWeights) : Array(QuantWeight)
+      case layer
+      in Qwen35FullAttnWeights
+        [
+          layer.attn_q_qw,
+          layer.attn_k_qw,
+          layer.attn_v_qw,
+          layer.attn_output_qw,
+          layer.ffn_gate_qw,
+          layer.ffn_up_qw,
+          layer.ffn_down_qw,
+        ]
+      in Qwen35RecurrentWeights
+        [
+          layer.attn_qkv_qw,
+          layer.attn_gate_qw,
+          layer.ssm_alpha_qw,
+          layer.ssm_beta_qw,
+          layer.ssm_out_qw,
+          layer.ffn_gate_qw,
+          layer.ffn_up_qw,
+          layer.ffn_down_qw,
+        ]
+      end
     end
 
     private def load_full_attn_layer(g : GGUFFile, il : Int32) : Qwen35FullAttnWeights

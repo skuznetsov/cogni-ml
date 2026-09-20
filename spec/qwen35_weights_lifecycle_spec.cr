@@ -41,7 +41,7 @@ describe "Qwen35 weight mmap lifecycle" do
     weights.finalize
   end
 
-  it "does not let an older mmap owner unregister its replacement" do
+  it "fails closed instead of replacing a strict mmap owner" do
     {% if flag?(:cpu_only) %}
       pending!("Metal mmap registration is unavailable in cpu_only builds")
     {% else %}
@@ -57,9 +57,19 @@ describe "Qwen35 weight mmap lifecycle" do
         second_base, second_size = second.mmap_region.not_nil!
         first_base.address.should_not eq(second_base.address)
 
-        ML::GGUF::Qwen35Metal.register_mmap(first_base, first_size)
+        page = 16_384_u64
+        first_aligned = (first_size // page) * page
+        strict_view = ML::GGUF::Qwen35MmapWeightView.new(
+          first_base.address,
+          first_aligned.to_i64,
+          first_aligned.to_i64,
+        )
+        ML::GGUF::Qwen35Metal.register_mmap_views(first_base, first_size, [strict_view], strict: true)
+        expect_raises(Exception, /strict Metal mmap registration/) do
+          ML::GGUF::Qwen35Metal.register_mmap(second_base, second_size)
+        end
+        ML::GGUF::Qwen35Metal.unregister_mmap(first_base).should be_true
         ML::GGUF::Qwen35Metal.register_mmap(second_base, second_size)
-        ML::GGUF::Qwen35Metal.unregister_mmap(first_base).should be_false
         ML::GGUF::Qwen35Metal.unregister_mmap(second_base).should be_true
       ensure
         first.close

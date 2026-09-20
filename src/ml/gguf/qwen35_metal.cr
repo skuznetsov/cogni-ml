@@ -1012,13 +1012,19 @@ module ML
           end
         end
 
-        # Whole-mmap MetalBuffer. Registered once per model load via
-        # `register_mmap`. All weights whose `raw` bytes are slices
-        # inside this region dispatch against it with a byte offset —
-        # true zero-copy on Apple Silicon unified memory.
+        private record RegisteredMmapView,
+          address : UInt64,
+          length : Int64,
+          buffer : ML::MetalBuffer
+
+        # Model-owned zero-copy Metal views. The compatibility path registers
+        # one whole-file view; the Qwen cold-start experiment registers a small
+        # immutable set of dense command-group views. Every wrapper stays alive
+        # until model close, so in-flight commands never observe view rotation.
         @@mmap_base_addr : UInt64 = 0_u64
         @@mmap_size      : Int64  = 0_i64
-        @@mmap_buf       : ML::MetalBuffer? = nil
+        @@mmap_views = [] of RegisteredMmapView
+        @@mmap_strict = false
         @@mmap_registry_mutex = Mutex.new
         @@bf16_weight_buffers = {} of String => ML::MetalBuffer
         @@bf16_weight_mutex = Mutex.new
@@ -1028,45 +1034,99 @@ module ML
           ML::Metal::Device.init!
         end
 
-        # Register the mmap'd weight file as a single zero-copy
-        # MetalBuffer. Must be called before `matmul(qw, ...)` if you
-        # want zero-copy dispatch. Idempotent on the same region;
-        # subsequent calls with a different region replace the buffer
-        # (previous one is released).
+        # Register the mmap'd weight file as a single zero-copy MetalBuffer.
+        # This remains the default and compatibility path.
         def self.register_mmap(base : Pointer(UInt8), size : UInt64) : Nil
-          return unless available?
+          page = 16384_u64
+          aligned_size = (size // page) * page
+          raise "mmap region too small (size=#{size})" if aligned_size == 0
+          register_mmap_views(base, size, [
+            Qwen35MmapWeightView.new(base.address, aligned_size.to_i64, aligned_size.to_i64),
+          ])
+        end
+
+        # Atomically replace the process-global registration with immutable,
+        # page-aligned no-copy views owned by `base`. All wrappers are created
+        # before the old registration is released, so allocation failure leaves
+        # the previous model usable. Strict coarse registrations reject a second
+        # owner instead of relying on an unenforced quiescence promise.
+        def self.register_mmap_views(base : Pointer(UInt8), size : UInt64,
+                                     views : Array(Qwen35MmapWeightView),
+                                     strict : Bool = false) : Nil
+          raise "Metal mmap registration requires an available Metal device" unless available?
           @@mmap_registry_mutex.synchronize do
             page = 16384_u64
             raise "mmap base #{base.address} not page-aligned (page=#{page})" unless base.address % page == 0
-            # newBufferWithBytesNoCopy also requires the length to be a
-            # multiple of page size. mmap'd files are page-rounded on Darwin.
-            aligned_size = ((size + page - 1) // page) * page
-            if aligned_size.to_i64 > size.to_i64
-              # safer to pass a smaller, still page-aligned length that
-              # lies entirely within the mmap region
-              aligned_size = (size // page) * page
-            end
+            raise "mmap owner address range overflows" if size > UInt64::MAX - base.address
+            aligned_size = (size // page) * page
             raise "mmap region too small (size=#{size})" if aligned_size == 0
+            raise "mmap view registration must not be empty" if views.empty?
 
-            # Construct the replacement first. If Objective-C allocation
-            # fails, the currently registered wrapper remains valid.
-            new_buf = ML::MetalBuffer.wrap_no_copy(
-              base.as(Pointer(Void)),
-              aligned_size.to_i64,
-            )
-
-            if buf = @@mmap_buf
-              # Replace previous — release the ObjC wrapper (not the bytes).
-              # Callers must quiesce users before replacing a registration.
-              buf.release
+            unique_views = views.uniq { |view| {view.address, view.length} }
+            unique_views.each do |view|
+              raise "mmap view address is not page-aligned" unless view.address % page == 0
+              unless view.length > 0 && view.length.to_u64 % page == 0
+                raise "mmap view length must be a positive page multiple"
+              end
+              raise "mmap view starts before owner" if view.address < base.address
+              relative = view.address - base.address
+              if relative > aligned_size || view.length.to_u64 > aligned_size - relative
+                raise "mmap view lies outside owner"
+              end
             end
+
+            if !@@mmap_views.empty? && (@@mmap_strict || strict)
+              raise "strict Metal mmap registration requires the current model owner to close first"
+            end
+
+            new_views = [] of RegisteredMmapView
+            begin
+              unique_views.each do |view|
+                new_views << RegisteredMmapView.new(
+                  view.address,
+                  view.length,
+                  ML::MetalBuffer.wrap_no_copy(
+                    Pointer(Void).new(view.address),
+                    view.length,
+                  ),
+                )
+              end
+            rescue ex
+              new_views.each { |view| view.buffer.release }
+              raise ex
+            end
+
+            old_views = @@mmap_views
 
             @@mmap_base_addr = base.address
             @@mmap_size = aligned_size.to_i64
-            @@mmap_buf = new_buf
+            @@mmap_views = new_views
+            @@mmap_strict = strict
             ConstCache.clear
+            old_views.each { |view| view.buffer.release }
           end
           nil
+        end
+
+        def self.mmap_registration_stats : NamedTuple(owner_bytes: Int64, views: Int32, view_bytes: Int64,
+                                                       unique_view_bytes: Int64, strict: Bool)
+          @@mmap_registry_mutex.synchronize do
+            unique_view_bytes = 0_i64
+            end_address = 0_u64
+            @@mmap_views.sort_by(&.address).each do |view|
+              view_end = view.address + view.length.to_u64
+              start = Math.max(view.address, end_address)
+              unique_view_bytes += (view_end - start).to_i64 if view_end > start
+              end_address = Math.max(end_address, view_end)
+            end
+            {
+              owner_bytes:       @@mmap_size,
+              views:             @@mmap_views.size.to_i32,
+              view_bytes:        @@mmap_views.sum(&.length),
+              unique_view_bytes: unique_view_bytes,
+              strict:            @@mmap_strict,
+            }
+          end
         end
 
         # Release the no-copy wrapper only when it still belongs to `base`.
@@ -1077,14 +1137,19 @@ module ML
         def self.unregister_mmap(base : Pointer(UInt8)) : Bool
           @@mmap_registry_mutex.synchronize do
             return false unless @@mmap_base_addr == base.address
-            buf = @@mmap_buf
-            return false unless buf
+            return false if @@mmap_views.empty?
 
-            buf.release
-            @@mmap_buf = nil
+            views = @@mmap_views
+            # Strict coarse mode does not allow owner replacement. Drain the
+            # shared queue before releasing its immutable wrappers on close.
+            # Callers must quiesce any explicit/lane queue before model close.
+            ML::Metal::Device.synchronize if @@mmap_strict
+            @@mmap_views = [] of RegisteredMmapView
             @@mmap_base_addr = 0_u64
             @@mmap_size = 0_i64
+            @@mmap_strict = false
             ConstCache.clear
+            views.each { |view| view.buffer.release }
             true
           end
         end
@@ -1094,14 +1159,21 @@ module ML
         # fall back to per-weight upload.
         private def self.mmap_slot_for(raw : Bytes) : {ML::MetalBuffer, Int64}?
           @@mmap_registry_mutex.synchronize do
-            return nil if @@mmap_buf.nil?
-            base = @@mmap_base_addr
-            size = @@mmap_size
             addr = raw.to_unsafe.address
-            return nil if addr < base
-            off = (addr - base).to_i64
-            return nil if off + raw.size > size
-            {@@mmap_buf.not_nil!, off}
+            @@mmap_views.each do |view|
+              next if addr < view.address
+              off = addr - view.address
+              next if off > view.length.to_u64
+              next if raw.size.to_u64 > view.length.to_u64 - off
+              return {view.buffer, off.to_i64}
+            end
+            if @@mmap_strict && addr >= @@mmap_base_addr
+              owner_offset = addr - @@mmap_base_addr
+              if owner_offset <= @@mmap_size.to_u64 && raw.size.to_u64 <= @@mmap_size.to_u64 - owner_offset
+                raise "strict Metal mmap registration does not cover weight span"
+              end
+            end
+            nil
           end
         end
 

@@ -28643,3 +28643,47 @@ Refresh after source/toolchain/device/model/workload changes.
   `/private/tmp/qwen-first-view-control-20260919`. Refresh on model layout,
   Metal mapping policy, first-command grouping, OS/device/storage state,
   source/bridge change, or evidence loss.
+
+### Continuation 2026-09-19 — Immutable coarse Metal views pass the bounded full-prefix falsifier
+
+- Root cause addressed: the process-global Qwen Metal registry exposed the
+  entire 16.8GB GGUF through one no-copy buffer, so first use could page in
+  weights that the current command did not reference. `QWEN35_COARSE_WEIGHT_VIEWS=1`
+  now registers a permanent, dense, page-aligned view set grouped at the real
+  full-attention boundaries. Unset/`0` preserves the original whole-file path;
+  malformed values fail closed.
+- The actual Qwen3.8-27B Q4_K_M layout yields 16 layer groups and 17 immutable
+  views. The untied output head remains separate because joining it to layer 63
+  would create an almost whole-file sparse view. All 498 loaded runtime
+  quantized weights must be covered before registration. Every wrapper lives
+  until model close. Strict mode rejects a second model owner, accepts only an
+  otherwise-empty registry, drains the shared Metal queue before release, and
+  fails closed on missing Metal/mmap or an uncovered owner span. Aliases and
+  every second strict registration are rejected because there is no owner
+  refcount. Explicit/lane queues remain a caller quiescence invariant. Default
+  non-strict registration remains compatible.
+- Guarded full-prefix A-B-A observation on the same 7,839-token input: coarse
+  views completed at approximately 62s, the intervening whole-file control
+  failed at `start_pos=6144`, sequence 12, layers 47..51 with
+  `ImpactingInteractivity` at approximately 62s, and coarse views completed
+  again at approximately 68s. This is ROBUST as a bounded local stability/
+  watchdog discriminator, not as a speed certificate: cache state was warm,
+  the order was not balanced, and standalone raw logs were not retained.
+- Background next-view `MADV_WILLNEED` is BROKEN for this route. A protected
+  trial remained alive for more than seven minutes with approximately 2.2GB
+  RSS and no useful CPU activity, versus an earlier approximately 233s
+  comparable baseline. It was stopped by the runner and the prototype was
+  removed. The admitted implementation contains no prefetch thread or ticket.
+- Exact-source verification: planner specs 6/6, Metal lifecycle specs 3/3,
+  representative Metal-linked build succeeds, and an actual-model smoke exits
+  zero with 64 layers, 498 covered runtime weights, 16 groups, 17 views,
+  16,536,633,344 summed view bytes, 16,536,387,584 unique view bytes,
+  a 16,810,704,896-byte aligned owner, and `strict=true`. The 245,760-byte
+  difference is exactly 15 shared boundary pages.
+- Decision: keep coarse views experimental and default-off. Cold/warm ABBA,
+  preserved raw logs, exact output/logit parity, full-prefix wall, failures,
+  and peak memory are required before default or speed promotion. Refresh on
+  model layout, mapping/registry policy, bridge/source, device, OS, storage,
+  or input drift. Strict mode currently rejects a second mmap owner, so a
+  separate draft or MTP GGUF is intentionally incompatible until a safe
+  multi-owner registry exists.

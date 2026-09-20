@@ -3590,3 +3590,68 @@ build/device/driver/input/scheduling drift or evidence loss. SHA256:
 - Trial2 log: `b31c3e376b02d855416f185ccb63e0d5d93555a9d98ad9aee5adaa4b9e08cf10`.
 - Trial3 log: `55a8df85e5bdd8cf25b4ec6f22ebbaca66f081c9739042232aef9667e424958b`.
 - Trial4 log: `6caaa461f1d1e6fbaf4063b0609ece97dadbe93bc187c2e67c6a19992141fece`.
+
+## Immutable coarse mmap views remove the whole-file Metal wrapper (2026-09-19)
+
+On this host, the bounded first-command probe established that Metal's no-copy buffer length,
+not the command's actual tensor subset, drove the near-whole-GGUF first touch.
+The smallest reusable response is now implemented behind the exact opt-in
+`QWEN35_COARSE_WEIGHT_VIEWS=1`: Qwen groups dense quantized tensor spans at
+full-attention boundaries and registers permanent page-aligned Metal views.
+Every view remains alive until model close. There is no view rotation, no
+per-command wrapper replacement, and no background prefetch thread. The normal
+whole-file registration remains the default and `0`/unset rollback; malformed
+values fail closed.
+
+The actual Qwen3.8-27B Q4_K_M layout produces 16 layer groups and 17 views. The
+first view covers embedding plus layers 0 through 6 (2,462,515,200 bytes), the
+middle views are approximately 893--991 MB, layer 63 has a 497,008,640-byte
+view, and the untied output head has a separate 1,042,956,288-byte view. Keeping
+the output view separate is required: its tensor lies near the beginning of the
+GGUF, so combining it with layer 63 would recreate an almost whole-file sparse
+span. All admitted views exceed 95% tensor density. Registration validates that
+all 498 runtime quantized weights are covered before publishing the new view
+set. A strict coarse owner cannot be replaced by another model; the first owner
+must close, and close drains the shared Metal queue before releasing wrappers.
+Every second strict registration is rejected, including an alias of the same
+mmap; there is no hidden owner identity or refcount. Explicit/lane queues must
+already be quiescent when the owner closes. Missing Metal, missing mmap, or a
+runtime tensor inside the owner but outside every view fails closed instead of
+silently uploading that tensor.
+
+A guarded full-prefix A-B-A screen used the same 7,839-token input, model,
+shape, 30% free-memory floor, and 24 GiB process-tree cap. Coarse views
+completed in approximately 62 seconds; the intervening whole-file control
+failed at the final chunk (`start_pos=6144`, sequence 12, layers 47 through 51)
+with `ImpactingInteractivity` after approximately 62 seconds; a second coarse
+run completed in approximately 68 seconds. This is a bounded stability and
+watchdog discriminator: two opt-in passes surround one default-path failure.
+It is not a speed comparison because prior diagnostics had warmed the page
+cache, the order was not balanced ABBA, and the raw combined runner logs were
+not preserved as standalone artifacts.
+
+A proposed completion-safe background `MADV_WILLNEED` of the next view was
+falsified. The protected process remained alive for more than seven minutes
+with roughly 2.2 GB RSS and no useful CPU activity, versus an earlier roughly
+233-second comparable baseline, and was terminated through the runner. That
+prototype was removed completely. Coarse views do not depend on prefetch.
+
+Current exact-source checks: the model-free planner spec has 6 examples and 0
+failures; the Metal weight lifecycle spec has 3 examples and 0 failures; a
+representative Metal-linked build succeeds. An actual-model registration smoke
+loads 64 layers and all 498 runtime weights, reports 16 groups, 17 views,
+16,536,633,344 summed registered bytes, 16,536,387,584 unique registered bytes,
+a 16,810,704,896-byte aligned owner, `strict=true`, and exit zero. The 245,760
+byte difference is 15 shared alignment pages between adjacent groups, not
+duplicate tensor storage. These checks establish geometry, coverage, lifecycle,
+and one real-model load, not semantic output parity or a cold TTFT improvement.
+
+Decision: retain the simple immutable-view path as default-off experimental
+infrastructure. Do not restore background prefetch and do not call the A-B-A a
+25% or other throughput gain. Promotion needs a fresh-process cold/warm ABBA
+with preserved logs, exact output/logit parity, full-prefix wall time, command
+failure count, and peak memory. Refresh this evidence on model layout, Metal
+mapping or registry policy, bridge/source, device, OS, storage state, or input
+change. Because strict mode admits only one mmap owner, a separate draft or MTP
+GGUF must remain disabled until a safe multi-owner registry is designed; the
+current behavior rejects that combination instead of degrading silently.
