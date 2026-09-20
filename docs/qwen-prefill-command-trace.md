@@ -3656,6 +3656,24 @@ change. Because strict mode admits only one mmap owner, a separate draft or MTP
 GGUF must remain disabled until a safe multi-owner registry is designed; the
 current behavior rejects that combination instead of degrading silently.
 
+Mode `2` is a narrower follow-up candidate, not a promoted default. It pairs
+adjacent mode-1 layer ranges before constructing their dense views, while the
+untied output head remains a separate ninth view. The selector admits only
+exact `0`, `1`, or `2`; unset/`0` retains the whole-file path. Pairing an odd
+command-group count, malformed layer geometry, a sparse merged range, or an
+uncovered tensor fails before registry publication. No bridge, owner,
+lifetime, rotation, or fallback-upload semantics change.
+
+The model-free planner gate has 8/8 passing examples and proves that the 16
+Qwen3.8 layer groups become eight continuous ranges covering all 64 layers.
+The release SG4 self-test passes and its dry-run retains mode `2` across the
+environment scrub. A guarded registration-only smoke on the actual 27B GGUF
+exited zero with `merge=2 groups=8 views=9`, 16,536,502,272 summed view bytes,
+16,536,387,584 unique view bytes, a 16,810,704,896-byte owner, and
+`strict=true`. It executed no inference or command buffer. This establishes
+parser, geometry, density, coverage, and registry admission only; total-prefix
+speed and semantic parity still require the matched ABBA and semantic gates.
+
 ## Fresh-process ABBA verifies first-command relief but rejects speed promotion (2026-09-20)
 
 The missing balanced gate was run from source revision `4ab7de85`, immediately

@@ -28688,7 +28688,7 @@ Refresh after source/toolchain/device/model/workload changes.
   separate draft or MTP GGUF is intentionally incompatible until a safe
   multi-owner registry exists.
 
-### Continuation 2026-09-20 — Balanced coarse-view gate verifies the mechanism and rejects speed promotion
+### Continuation 2026-09-20 — Balanced coarse-view gate verifies first-command relief and rejects speed promotion
 
 - The SG4 benchmark previously scrubbed `QWEN35_COARSE_WEIGHT_VIEWS`, allowing
   a false candidate. Revision `4ab7de85` preserves only exact `0`/`1` after the
@@ -28720,3 +28720,23 @@ Refresh after source/toolchain/device/model/workload changes.
   `/private/tmp/qwen_coarse_views_abba_20260920.XP69Lh/`. Refresh on source,
   model/input, geometry, runner/observer, device/OS/storage/cache state, or
   evidence loss.
+
+### Continuation 2026-09-20 — Paired coarse views pass the pre-inference gate
+
+- Experimental mode `QWEN35_COARSE_WEIGHT_VIEWS=2` pairs adjacent layer-group
+  ranges before constructing views. The 16 groups become eight; the untied
+  output head remains separate, for nine views total. Mode `0` and `1`
+  behavior is preserved, and every other selector value fails closed.
+- Planner specs pass 8/8, including complete 64-layer coverage, unchanged
+  mode-1 geometry, odd-group rejection, and malformed-input rejection. The
+  release SG4 self-test passes and dry-run reports the exact mode `2` after its
+  environment scrub.
+- A guarded actual-model registration-only smoke exited zero and reported
+  `merge=2 groups=8 views=9`, 16,536,502,272 summed bytes, 16,536,387,584
+  unique bytes, a 16,810,704,896-byte owner, and `strict=true`. It encoded no
+  inference work.
+- Verdict: ROBUST for the pre-inference parser/geometry/density/coverage and
+  strict-owner gate. Performance and semantic behavior remain UNVERIFIED;
+  mode `2` stays default-off until a matched full-prefix ABBA plus bounded
+  semantic pair passes. Refresh on source, model layout, registry/bridge,
+  device/OS, or toolchain change.

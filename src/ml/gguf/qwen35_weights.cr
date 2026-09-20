@@ -99,10 +99,11 @@ module ML::GGUF
         @gguf.get_string("general.name"),
         @gguf.get_string("general.basename")
       )
-      coarse_mmap_views = self.class.coarse_mmap_views_enabled?
+      coarse_mmap_view_merge = self.class.coarse_mmap_view_merge
+      coarse_mmap_views = coarse_mmap_view_merge > 0
       {% if flag?(:cpu_only) %}
         if coarse_mmap_views
-          raise "QWEN35_COARSE_WEIGHT_VIEWS=1 requires a Metal-enabled build"
+          raise "QWEN35_COARSE_WEIGHT_VIEWS=1 or 2 requires a Metal-enabled build"
         end
       {% end %}
       {% unless flag?(:cpu_only) %}
@@ -133,13 +134,13 @@ module ML::GGUF
       {% unless flag?(:cpu_only) %}
         metal_available = Qwen35Metal.available?
         if coarse_mmap_views && !metal_available
-          raise "QWEN35_COARSE_WEIGHT_VIEWS=1 requires an available Metal device"
+          raise "QWEN35_COARSE_WEIGHT_VIEWS=1 or 2 requires an available Metal device"
         end
         if metal_available
           if region = @gguf.mmap_region
             base, size = region
             if coarse_mmap_views
-              groups = build_mmap_weight_groups(base, size)
+              groups = build_mmap_weight_groups(base, size, coarse_mmap_view_merge)
               views = groups.flat_map(&.views).uniq { |view| {view.address, view.length} }
               validate_mmap_weight_coverage!(views)
               registered = false
@@ -150,7 +151,7 @@ module ML::GGUF
                 if ENV["QWEN35_COARSE_WEIGHT_VIEW_TRACE"]? == "1"
                   stats = Qwen35Metal.mmap_registration_stats
                   STDERR.puts(
-                    "qwen35_coarse_weight_views groups=#{groups.size} " \
+                    "qwen35_coarse_weight_views merge=#{coarse_mmap_view_merge} groups=#{groups.size} " \
                     "views=#{stats[:views]} view_bytes=#{stats[:view_bytes]} " \
                     "unique_view_bytes=#{stats[:unique_view_bytes]} " \
                     "owner_bytes=#{stats[:owner_bytes]} strict=#{stats[:strict]}",
@@ -166,7 +167,7 @@ module ML::GGUF
               @mmap_base = base
             end
           elsif coarse_mmap_views
-            raise "QWEN35_COARSE_WEIGHT_VIEWS=1 requires mmap-backed weights"
+            raise "QWEN35_COARSE_WEIGHT_VIEWS=1 or 2 requires mmap-backed weights"
           end
         end
       {% end %}
@@ -223,29 +224,80 @@ module ML::GGUF
     def self.coarse_mmap_views_enabled?(
       configured : String? = ENV["QWEN35_COARSE_WEIGHT_VIEWS"]?,
     ) : Bool
+      coarse_mmap_view_merge(configured) > 0
+    end
+
+    # 0 is the established whole-file wrapper, 1 is one dense view per
+    # full-attention command group, and 2 pairs adjacent command groups. The
+    # paired mode is experimental and remains behind the same exact selector.
+    def self.coarse_mmap_view_merge(
+      configured : String? = ENV["QWEN35_COARSE_WEIGHT_VIEWS"]?,
+    ) : Int32
       case configured
-      when nil, "0" then false
-      when "1"      then true
+      when nil, "0" then 0
+      when "1"      then 1
+      when "2"      then 2
       else
-        raise ArgumentError.new("QWEN35_COARSE_WEIGHT_VIEWS must be 0 or 1")
+        raise ArgumentError.new("QWEN35_COARSE_WEIGHT_VIEWS must be 0, 1, or 2")
       end
     end
 
-    private def build_mmap_weight_groups(base : Pointer(UInt8), size : UInt64) : Array(Qwen35MmapWeightGroup)
-      full_layers = @hparams.full_attention_layers
-      raise "coarse mmap views require at least one full-attention layer" if full_layers.empty?
+    def self.coarse_mmap_layer_ranges(full_layers : Array(Int32), layer_count : Int32,
+                                      merge : Int32) : Array({Int32, Int32})
+      raise ArgumentError.new("coarse mmap layer count must be positive") unless layer_count > 0
+      if full_layers.empty?
+        raise ArgumentError.new("coarse mmap views require at least one full-attention layer")
+      end
+      unless merge == 1 || merge == 2
+        raise ArgumentError.new("coarse mmap view merge must be 1 or 2")
+      end
+
+      previous = -1
+      full_layers.each do |layer|
+        unless layer >= 0 && layer < layer_count
+          raise ArgumentError.new("full-attention layer #{layer} lies outside 0...#{layer_count}")
+        end
+        unless layer > previous
+          raise ArgumentError.new("full-attention layers must be strictly increasing")
+        end
+        previous = layer
+      end
 
       ranges = [] of {Int32, Int32}
       if full_layers.size == 1
-        ranges << {0_i32, (@layers.size - 1).to_i32}
+        ranges << {0_i32, layer_count - 1}
       else
         ranges << {0_i32, (full_layers[1] - 1).to_i32}
         (1...full_layers.size).each do |index|
           first_layer = full_layers[index]
-          last_layer = index + 1 < full_layers.size ? full_layers[index + 1] - 1 : @layers.size - 1
+          last_layer = index + 1 < full_layers.size ? full_layers[index + 1] - 1 : layer_count - 1
           ranges << {first_layer.to_i32, last_layer.to_i32}
         end
       end
+
+      return ranges if merge == 1
+      unless ranges.size.even?
+        raise ArgumentError.new("paired coarse mmap views require an even command-group count")
+      end
+
+      paired = [] of {Int32, Int32}
+      index = 0
+      while index < ranges.size
+        first_layer = ranges[index][0]
+        last_layer = index + 1 < ranges.size ? ranges[index + 1][1] : ranges[index][1]
+        paired << {first_layer, last_layer}
+        index += 2
+      end
+      paired
+    end
+
+    private def build_mmap_weight_groups(base : Pointer(UInt8), size : UInt64,
+                                         merge : Int32) : Array(Qwen35MmapWeightGroup)
+      ranges = self.class.coarse_mmap_layer_ranges(
+        @hparams.full_attention_layers,
+        @layers.size.to_i32,
+        merge,
+      )
 
       groups = ranges.map_with_index do |range, index|
         first_layer, last_layer = range

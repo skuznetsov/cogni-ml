@@ -95,9 +95,58 @@ describe ML::GGUF::Qwen35Weights do
     ML::GGUF::Qwen35Weights.coarse_mmap_views_enabled?(nil).should be_false
     ML::GGUF::Qwen35Weights.coarse_mmap_views_enabled?("0").should be_false
     ML::GGUF::Qwen35Weights.coarse_mmap_views_enabled?("1").should be_true
+    ML::GGUF::Qwen35Weights.coarse_mmap_views_enabled?("2").should be_true
+
+    ML::GGUF::Qwen35Weights.coarse_mmap_view_merge(nil).should eq(0)
+    ML::GGUF::Qwen35Weights.coarse_mmap_view_merge("0").should eq(0)
+    ML::GGUF::Qwen35Weights.coarse_mmap_view_merge("1").should eq(1)
+    ML::GGUF::Qwen35Weights.coarse_mmap_view_merge("2").should eq(2)
+
+    ["", " ", "01", "3", "yes"].each do |configured|
+      expect_raises(ArgumentError) do
+        ML::GGUF::Qwen35Weights.coarse_mmap_views_enabled?(configured)
+      end
+    end
 
     expect_raises(ArgumentError) do
-      ML::GGUF::Qwen35Weights.coarse_mmap_views_enabled?("yes")
+      ML::GGUF::Qwen35Weights.coarse_mmap_view_merge("3")
+    end
+  end
+
+  it "pairs adjacent command groups without crossing the output-head boundary" do
+    full_layers = [3, 7, 11, 15, 19, 23, 27, 31, 35, 39, 43, 47, 51, 55, 59, 63]
+
+    original = ML::GGUF::Qwen35Weights.coarse_mmap_layer_ranges(full_layers, 64, 1)
+    original.size.should eq(16)
+    original.first.should eq({0, 6})
+    original.last.should eq({63, 63})
+
+    paired = ML::GGUF::Qwen35Weights.coarse_mmap_layer_ranges(full_layers, 64, 2)
+    paired.should eq([
+      {0, 10}, {11, 18}, {19, 26}, {27, 34},
+      {35, 42}, {43, 50}, {51, 58}, {59, 63},
+    ])
+    paired.each_cons_pair { |left, right| (left[1] + 1).should eq(right[0]) }
+    paired.sum { |first, last| last - first + 1 }.should eq(64)
+    # The output head is deliberately not part of these layer ranges. Runtime
+    # registration appends its ninth view after the eight paired layer views.
+  end
+
+  it "rejects malformed layer geometry before constructing Metal views" do
+    expect_raises(ArgumentError, /strictly increasing/) do
+      ML::GGUF::Qwen35Weights.coarse_mmap_layer_ranges([3, 3], 8, 2)
+    end
+
+    expect_raises(ArgumentError, /outside/) do
+      ML::GGUF::Qwen35Weights.coarse_mmap_layer_ranges([3, 8], 8, 2)
+    end
+
+    expect_raises(ArgumentError, /merge/) do
+      ML::GGUF::Qwen35Weights.coarse_mmap_layer_ranges([3, 7], 8, 3)
+    end
+
+    expect_raises(ArgumentError, /even/) do
+      ML::GGUF::Qwen35Weights.coarse_mmap_layer_ranges([1, 3, 5], 8, 2)
     end
   end
 end

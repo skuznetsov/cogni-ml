@@ -74,10 +74,10 @@ end
 
 private def coarse_weight_views_setting(configured : String?) : String?
   case configured
-  when nil, "0", "1"
+  when nil, "0", "1", "2"
     configured
   else
-    raise ArgumentError.new("QWEN35_COARSE_WEIGHT_VIEWS must be 0 or 1")
+    raise ArgumentError.new("QWEN35_COARSE_WEIGHT_VIEWS must be 0, 1, or 2")
   end
 end
 
@@ -96,14 +96,17 @@ private def self_test
   raise "first command parse failed" unless parse_shape(["--shape=7839:193", "--prefix-profile", "--split-submit", "--first-command", "--dry-run"]) == {7839, 193, true, false, true, true}
   raise "coarse view setting parse failed" unless coarse_weight_views_setting(nil).nil? &&
                                                   coarse_weight_views_setting("0") == "0" &&
-                                                  coarse_weight_views_setting("1") == "1"
-  expect_invalid_coarse = false
-  begin
-    coarse_weight_views_setting("yes")
-  rescue ArgumentError
-    expect_invalid_coarse = true
+                                                  coarse_weight_views_setting("1") == "1" &&
+                                                  coarse_weight_views_setting("2") == "2"
+  invalid_coarse = 0
+  ["", " ", "01", "3", "yes"].each do |configured|
+    begin
+      coarse_weight_views_setting(configured)
+    rescue ArgumentError
+      invalid_coarse += 1
+    end
   end
-  raise "invalid coarse view setting accepted" unless expect_invalid_coarse
+  raise "invalid coarse view setting accepted" unless invalid_coarse == 5
   raise "unbalanced timing" unless TIMING_ORDER.size == 16 && TIMING_ORDER.count("baseline") == 8 && TIMING_WARMUP.count("baseline") == 2 && TIMING_WARMUP.count("candidate") == 2
   timing_quality!([1.0_f32, 2.0_f32], [1.0_f32, 2.0_f32], "same", "same")
   failures = 0
