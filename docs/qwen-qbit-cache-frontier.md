@@ -4863,3 +4863,33 @@ route without generated-code or counter evidence that changes that tradeoff.
 
 Refresh on x16 row ownership, activation layout, Metal compiler/toolchain,
 device, or availability of lower-level resource counters.
+
+### Q5_K half-SIMD row ownership is rejected (2026-09-20)
+
+The recurrent QKV path still used the classic Q5_K GEMV mapping where a full
+32-lane SIMD group owns one output row. A temporary default-off variant used
+the newer half-SIMD idea from llama.cpp's extended matvec family: each 16-lane
+half owned an independent output row, dequantized one contiguous 16-value
+chunk per lane, and reduced over 16 lanes. The Q5_K bytes, F32 input/output
+ABI, and dispatch thread count were unchanged.
+
+The correctness discriminator passed on a real Q5_K `4096 -> 8192` tensor:
+the Metal result versus the CPU reference had cosine `1.0` and maximum
+absolute delta `5.9604645e-7`. The guarded Qwen3.8-27B body-only A/B then used
+prompt zero, eight decode tokens, one warmup, and six interleaved pairs. The
+production route measured `469.42 ms` average and `469.60 ms` p50
+(`17.04 tok/s`); the half-SIMD candidate measured `473.18 ms` average,
+`473.17 ms` p50, and `16.91 tok/s`. Production won `5/6` pairs. The run
+completed with `71%`
+free memory under the `24576 MiB` process-tree cap and `30%` memory floor.
+
+**decision:** bounded numerical correctness is ROBUST, but the performance
+claim is BROKEN on Apple M2 Max with this compiler/toolchain. Narrower
+reduction and doubled row ownership did not repay the alternative Q5_K
+dequantization/data-access path. The kernel, pipeline, and selector were
+removed; do not promote this mapping or infer a wider llama.cpp-style ext-GEMV
+benefit from its structural similarity. Reopen only with generated-code or
+counter evidence that changes the bottleneck.
+
+Refresh on Q5_K dequantization, recurrent QKV shape or quantization, Metal
+compiler/toolchain, device, timing method, or evidence loss.

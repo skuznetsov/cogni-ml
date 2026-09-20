@@ -29246,3 +29246,17 @@ Refresh after source/toolchain/device/model/workload changes.
   evidence that repeated activation loads are material rather than cache hits.
   Full scope and refresh conditions are in
   `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-20 — Q5_K half-SIMD rows are rejected
+
+- A temporary default-off Q5_K GEMV assigned one output row to each 16-lane
+  SIMD half while retaining Q5_K bytes and the F32 input/output ABI.
+- A real-tensor CPU oracle passed with cosine `1.0` and maximum absolute delta
+  `5.9604645e-7`. A guarded Qwen3.8-27B body-only run then measured production
+  versus candidate p50 `469.60/473.17 ms` (`17.04/16.91 tok/s`); production
+  won `5/6` interleaved pairs.
+- Verdict: ROBUST for bounded numerical correctness and BROKEN as a decode
+  optimization on Apple M2 Max with this toolchain. All temporary runtime code
+  was removed. Reopen only with lower-level evidence that the Q5_K row mapping
+  or dequantization bottleneck changed. Full scope is in
+  `docs/qwen-qbit-cache-frontier.md`.
