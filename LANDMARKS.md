@@ -29429,3 +29429,22 @@ Refresh after source/toolchain/device/model/workload changes.
   that preserves strict logits and predicts a complete-token win. Full scope,
   evidence hashes, and refresh conditions are in
   `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-20 — 8K adaptive decode budget is established
+
+- The existing generator/profile path measured one greedy token after a real
+  8,197-token Qwen3.8-27B Q4_K_M prefill with adaptive map
+  `p4;27=bf16,43=bf16,47=bf16,51=bf16`.
+- Adaptive decode used one Metal command buffer and one synchronization with no
+  CPU-fallback matvecs. The completed GPU interval was `68.72 ms`; wall time
+  was `81.8 ms`, including `8.53 ms` wave encoding and `69.45 ms` synchronous
+  wait.
+- The profile counted `15,078.22 MiB` of logical matmul weights. Recurrent FFN
+  up/gate was the largest named corridor at `4,590.00 MiB` (`30.44%`), while
+  recurrent FFN down/add contributed `2,820.94 MiB` (`18.71%`).
+- Verdict: ROBUST as a one-token command/traffic budget, VULNERABLE as a
+  per-phase time attribution. Logical bytes and host encoder traces are not
+  GPU phase timings. Measure a whole-token recurrent-FFN skip/replace
+  discriminator before implementing another kernel, and treat skip timing
+  only as an upper bound because it changes activations. Full scope, evidence
+  hash, and refresh conditions are in `docs/qwen-qbit-cache-frontier.md`.

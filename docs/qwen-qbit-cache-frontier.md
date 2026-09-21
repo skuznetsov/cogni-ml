@@ -5234,3 +5234,48 @@ Evidence:
 Refresh only if centroid precision/correction, matrix accumulation semantics,
 stage-one ownership, compiler/toolchain, target device, quality contract,
 full-token timing method, or retained evidence changes.
+
+### One-token 8K adaptive decode budget (2026-09-20)
+
+The existing generator/profile path measured one greedy decode step after a
+real 8,197-token Qwen3.8-27B Q4_K_M prefill. The adaptive map was
+`p4;27=bf16,43=bf16,47=bf16,51=bf16`; split-K used chunk 64, tile 15, the
+admitted P4/BF16 T8 routes, and fused stage two. The adaptive decode was one
+Metal command buffer and one Metal synchronization, with no CPU-fallback
+matvecs. Its completed GPU interval was `68.72 ms`; host wall time was
+`81.8 ms`, of which profiling recorded `8.53 ms` of wave encoding and
+`69.45 ms` in the synchronous wait. Prefill took `127.49 s` and is outside
+this decode interval.
+
+The profile counted `15,078.22 MiB` of logical matmul weight traffic. The
+largest named corridor was recurrent FFN up/gate at `4,590.00 MiB`
+(`30.44%`, 96 Q4_K GEMVs). Recurrent FFN down/add contributed another
+`2,820.94 MiB` across Q4_K and Q6_K (`18.71%`). Other large corridors were
+full-attention FFN up/gate (`10.15%`), the top-one head (`6.60%`), recurrent
+projection `5120x10240` (`11.01%` across Q4_K/Q6_K), and recurrent output
+projection (`5.37%`).
+
+This is a traffic budget, not a per-phase GPU timing decomposition. The
+profile timestamps only the complete command buffer; its encoder trace is
+host encoding time. Consequently `30.44%` recurrent-FFN up/gate traffic does
+not imply `30.44%` wall or GPU time. The next discriminator must measure the
+whole-token delta from removing or replacing recurrent FFN work before any
+new kernel is admitted. Treat such a skip experiment only as an upper bound:
+it changes hidden activations and cannot certify exact subtractive timing,
+quality, or a production optimization. A new route must still predict and
+clear a `>=3%` complete-token gate with the normal numeric, top-one, top-two,
+trajectory, text, and ECS checks.
+
+**decision:** stop inferring the next optimization from adaptive-attention
+microbenchmarks alone. Recurrent FFN is the largest observed logical-weight
+corridor and therefore the next falsifier target, but it is not yet a proven
+GPU-time bottleneck. Preserve the one-command adaptive publication boundary;
+do not split it merely to obtain prettier phase timings.
+
+Evidence: `/private/tmp/qwen35_adaptive_8k_one_token_profile.log`, SHA-256
+`ace2f25e53343e6f86ebce1b824e7b5c410129af960e3933512e1e162a763fb0`,
+source revision `8f5182483e02b5118bfc68744de5aca7223dbaba`.
+
+Refresh on model or quantization, adaptive map, prefix length, Metal route or
+compiler, profile semantics, device, command-buffer composition, or evidence
+loss.
