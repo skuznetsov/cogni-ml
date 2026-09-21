@@ -5356,17 +5356,62 @@ whether the strict numeric gate passed, and `admission_eligible` remains false
 even if all three fixtures pass. A future promotion decision needs broader
 task coverage plus a separate balanced timing refresh.
 
-Structural verification currently covers 16 Python tests across the new gate
-and the two existing coding scorers, Crystal formatting, diff hygiene, and a
-release rebuild of the probe. The rebuilt binary SHA-256 is
-`a7e5d163ebd18b5defd1b8dae931ad16589177c453a62b88df4c5183edf6ba27`.
-No model run has yet exercised this new 256-token/EOS contract.
+The first live `lower_bound` run exposed an integration bug after producing a
+passing semantic record: the terminal `elsif` still evaluated the old numeric
+gate whenever the semantic predicate itself was true. The semantic mode now
+owns that terminal branch; the legacy numeric-only branch is unchanged. The
+release binary SHA-256 after the fix is
+`45cb31554b7842d51cc6263cb875355c52317664bae53d11962071c3b73fe243`.
 
-**decision:** the gate implementation is structurally ROBUST within its
-parser/fixture scope, while direct-QK semantic suitability remains PROPOSED
-and VULNERABLE until the three real long-context runs and external specs pass.
-Keep the route default-off and do not describe a fixture pass as broad coding
-equivalence or numerical equivalence.
+Three guarded Qwen3.8-27B runs then exercised prompts of 7,679, 11,226, and
+14,735 rendered tokens. `lower_bound` and `stable_unique` reached aligned EOS
+with identical complete trajectories and text, exact ordered top two at all
+101 and 93 quality steps, and token ECS `1.0`. Their candidate diagnostic
+means were `4.47%` and `6.44%` below baseline, but these quality-mode runs are
+not a balanced speed gate. The unchanged strict numeric gate failed, with
+maximum margin deltas of `0.010690689` and `0.09759712`.
+
+`merge_ranges` also kept all 195 emitted IDs, text, top-one decisions, and EOS
+identical, but one of 194 runner-up tokens changed at sample 163: baseline
+`"\n"` versus candidate `".to"`. Ordered top-two agreement was therefore
+`387/388`, set overlap fell to one on that step, and the producer correctly
+returned failure. The two runner-up output embeddings have ECS
+`-0.017498802741005993`, so this was not a close embedding-space substitute.
+The suite scorer rejected the manifest before creating an output directory or
+executing generated Crystal.
+
+Manual source inspection allowed an independent external-spec diagnostic.
+The shared identical baseline/candidate sources passed `lower_bound` and
+`stable_unique` (`2 examples, 0 failures` each). The shared `merge_ranges`
+source failed (`2 examples, 2 failures`) because the generated implementation
+merged integer-adjacent, non-overlapping ranges through `cur_end + 1`. This is
+a shared baseline model failure, not a direct-QK regression, but it
+independently prevents a coding-quality pass.
+
+Evidence logs and SHA-256 values:
+
+- `/private/tmp/qwen_direct_qk_lower_bound_semantic_v2.log`,
+  `4ec417bbec51004f0c7dffec6253c908dbde82c042e6e800777c952b39404ab2`;
+- `/private/tmp/qwen_direct_qk_stable_unique_semantic.log`,
+  `5621436947d14b9be3ed2c8d34028068c48451d97bd0705c07daad1b61577b2d`;
+- `/private/tmp/qwen_direct_qk_merge_ranges_semantic.log`,
+  `8aed056c28995995623fd28c4e815857ad1b00424bc08fbaf3238e9ccb13751d`;
+- `/private/tmp/qwen_direct_qk_semantic_manifest.json`,
+  `d186af0487b8c0466e2f59292853f10f64f90cbf58e737b627b642856a2da2c0`;
+- `/private/tmp/qwen_direct_qk_runnerup_ecs.log`,
+  `447f7a728b97c50f0cbfc8ff726df112624a6c5a33360def1782e1b2c318b622`;
+- `/private/tmp/qwen_direct_qk_external_smoke/{lower_bound,stable_unique,merge_ranges}/qbit_external_spec.log`,
+  `be64d4b6deaf1524ff1eab49a9247e3144a2b630b0ee83d757a3ae6d3c9e2417`,
+  `7112bf5514241f2dfb142e40735378595c108e8c54a758093684f71bba9268cd`,
+  and `b842f3f7ac63b77929ad51fb8774799710f86ee53d3a91479780a395e28569a0`.
+
+**decision:** the live gate is ROBUST and fail-closed in this bounded scope;
+direct-QK coding promotion is BROKEN by the declared three-fixture contract.
+Keep direct-QK default-off. Do not weaken exact top-two after seeing the result
+or describe the identical greedy answers as broad coding equivalence. Reopen
+only with a new arithmetic-preserving direct-QK formulation or a separately
+declared, independently justified greedy-only product contract; either route
+still needs broader tasks and a quiet balanced timing refresh.
 
 Refresh on fixture or oracle changes, prompt construction, probe JSON schema,
 EOS accounting, route ownership/policy, numeric tolerance, tokenizer/template,

@@ -29514,11 +29514,24 @@ Refresh after source/toolchain/device/model/workload changes.
   preserved separately, ECS is redundant for identical IDs, and
   `admission_eligible=false` until broader evidence and an independent timing
   refresh exist.
-- Sixteen focused scorer tests, Crystal format, diff hygiene, and a release
-  probe rebuild pass. Binary SHA-256:
-  `a7e5d163ebd18b5defd1b8dae931ad16589177c453a62b88df4c5183edf6ba27`.
-  No real model run has yet exercised the new 256-token/EOS gate.
-- Verdict: ROBUST for the bounded structural harness, PROPOSED/VULNERABLE for
-  direct-QK coding semantics. Next falsifier: three guarded long-context model
-  runs followed by both-arm external Crystal specs. Refresh on fixture,
-  prompt, probe schema, EOS, route, tokenizer/model/device, or scorer changes.
+- The first live semantic pass found a terminal control-flow bug: a successful
+  semantic predicate fell through to the old numeric gate. Semantic mode now
+  owns its terminal branch while the legacy numeric-only branch is unchanged;
+  the rebuilt binary SHA-256 is
+  `45cb31554b7842d51cc6263cb875355c52317664bae53d11962071c3b73fe243`.
+- Guarded 7,679- and 11,226-token fixtures retained identical full output,
+  aligned EOS, every ordered top-two ID, and ECS `1.0`; their external specs
+  passed. The 14,735-token `merge_ranges` run retained all 195 emitted IDs and
+  text but changed one runner-up from `"\n"` to `".to"` (runner-up ECS
+  `-0.017498802741005993`), so ordered top two was `387/388` and the producer
+  failed closed.
+- The suite scorer rejected the manifest before executing generated code.
+  Separately inspected execution showed that the shared identical
+  `merge_ranges` source also failed both hidden examples by merging adjacent
+  non-overlapping integer ranges. This is a shared model failure, not an
+  optimizer regression.
+- Verdict: ROBUST for the live fail-closed harness and BROKEN for promotion by
+  the declared three-fixture contract. Direct-QK remains default-off. Reopen
+  only for new arithmetic or an explicitly different greedy-only contract,
+  with broader tasks and an independent quiet timing refresh. Evidence hashes
+  are recorded in `docs/qwen-qbit-cache-frontier.md`.

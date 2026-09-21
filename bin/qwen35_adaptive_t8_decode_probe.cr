@@ -1198,8 +1198,10 @@ begin
   end
   puts "QBIT_T8_DECODE_JSON=#{payload}"
   STDOUT.flush
-  if semantic_coding_quality && !semantic_trajectory_gate_passed
-    raise "semantic coding trajectory gate failed: #{quality_violations.join("; ")}"
+  if semantic_coding_quality
+    unless semantic_trajectory_gate_passed
+      raise "semantic coding trajectory gate failed: #{quality_violations.join("; ")}"
+    end
   elsif quality_top2 && !quality_gate_passed
     raise "quality gate failed: #{quality_violations.join("; ")}"
   end
