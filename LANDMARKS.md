@@ -29448,3 +29448,26 @@ Refresh after source/toolchain/device/model/workload changes.
   discriminator before implementing another kernel, and treat skip timing
   only as an upper bound because it changes activations. Full scope, evidence
   hash, and refresh conditions are in `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-20 — recurrent FFN is a material corridor
+
+- A temporary whole-token falsifier reused the existing recurrent-FFN skip
+  path with two warmed ordinary Metal states and one command buffer per arm.
+  Ten alternating pairs produced baseline/skip GPU means of
+  `56.779/32.956 ms`, a `23.823 ms` difference with `10/10` skip wins. Wall
+  means were `59.606/35.665 ms`, also with `10/10` wins.
+- This is an upper-bound diagnostic, not an optimization result. Skipping all
+  48 recurrent FFNs changes activations, trajectories diverged after the first
+  step, and the probe did not use the adaptive 8K state. Cross-comparing the
+  absolute difference with the separately measured `68.72 ms` adaptive GPU
+  interval gives only a rough scale, not an exact phase share or achievable
+  speedup.
+- Verdict: ROBUST for classifying recurrent FFN as a first-order optimization
+  corridor on the tested Qwen3.8-27B Q4_K_M / Apple M2 Max configuration;
+  VULNERABLE for exact adaptive attribution and BROKEN as a quality-preserving
+  speed claim. Inspect the actual Q4_K/Q6_K routes for the recurrent
+  `up/gate/down` shapes and admit only a new arithmetic-preserving mechanism.
+  Do not repeat the previously rejected shared-X, dual-SwiGLU,
+  adjacent-metadata, NR2/B2, parallel-gate/up, conversion-only H16, or
+  sequential B32/B64 variants. Full evidence and refresh conditions are in
+  `docs/qwen-qbit-cache-frontier.md`.

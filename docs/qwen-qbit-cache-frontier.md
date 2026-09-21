@@ -5279,3 +5279,46 @@ source revision `8f5182483e02b5118bfc68744de5aca7223dbaba`.
 Refresh on model or quantization, adaptive map, prefix length, Metal route or
 compiler, profile semantics, device, command-buffer composition, or evidence
 loss.
+
+### Recurrent-FFN skip falsifier (2026-09-20)
+
+A temporary diagnostic reused the existing `skip_recurrent_ffn` execution
+path with two independent ordinary Metal states. Both arms used one command
+buffer (`QWEN35_WAVE_CHUNK_LAYERS=0`), were warmed before measurement, and
+then ran ten alternating baseline/skip pairs. This was deliberately not an
+adaptive-KV or quality run: removing all 48 recurrent FFNs changes hidden
+activations and the generated trajectories diverged after the first step.
+
+The baseline/skip wall means were `59.606/35.665 ms`; the `23.942 ms`
+difference appeared in all ten pairs. Completed Metal GPU means were
+`56.779/32.956 ms`; the `23.823 ms` difference also appeared in all ten
+pairs. Wall medians were `59.673/35.694 ms`, and GPU medians were
+`57.085/33.080 ms`. The probe exited normally with no device error.
+
+This establishes that recurrent FFN is a material optimization corridor on
+this Qwen3.8-27B Q4_K_M / Apple M2 Max configuration. It does not establish
+an exact additive cost: the skipped arm changes downstream values and work,
+and this short-context ordinary state is not the 8K adaptive product route.
+Comparing the `23.823 ms` difference with the separately measured `68.72 ms`
+8K adaptive GPU interval yields only a rough ceiling (about `34.7%` of that
+interval, or an impossible-perfect-removal ceiling near `53.1%` speedup).
+Neither number is an attribution or an achievable performance claim.
+
+**decision:** recurrent FFN is now a measured first-order candidate rather
+than a traffic-only hypothesis. The next admitted implementation must preserve
+the normal arithmetic and target a genuinely new `up/gate/down` mechanism;
+do not repeat rejected shared-X, dual-SwiGLU, adjacent-metadata, NR2/B2,
+parallel-gate/up, conversion-only H16, or sequential B32/B64 variants. Before
+production edits, identify the actual Q4_K/Q6_K routes used by the exact
+`5120x17408` and `17408x5120` operators and predict a complete-token gain.
+The normal `>=3%` full-token and numeric/trajectory/text/ECS gates remain in
+force.
+
+Evidence: `/private/tmp/qwen35_recurrent_ffn_skip_probe.log`, SHA-256
+`b88c500f6f0e9bb6138b672a2ed3b458a81e8696cf0421287b1dbcdd9b9ddb45`,
+source revision `48bfbf051941696674b01697f49a6af2c48e7881`. The temporary probe source
+was removed after the run.
+
+Refresh on model or quantization, device, Metal compiler, recurrent-FFN
+routing, command-buffer composition, skip semantics, profile timing semantics,
+or evidence loss.
