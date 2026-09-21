@@ -5481,3 +5481,56 @@ Evidence:
 Refresh on model weights, source-weight availability, IQ3 codec semantics,
 adaptive selector or sidecar format, activation family, quality threshold,
 recurrent corridor share, device decoder cost, or evidence loss.
+
+### Persistent decode-wave replay is rejected as the next >=3% route (2026-09-21)
+
+A warm 64-token greedy-chain profile measured the remaining host command
+encoding corridor before adding any ICB or argument-buffer infrastructure. The
+run used the real Qwen3.8-27B Q4_K_M model on the Apple M2 Max, one warm-up
+iteration, `prompt=0`, and Metal GPU timing at source revision `872081a5`.
+The host was busy, so this is not a promotion-grade throughput benchmark; it
+is used only as a conservative upper-bound falsifier.
+
+The measured totals were:
+
+- command encoding: `125.84 ms`, or `1.966 ms/token`;
+- command completion wait: `3496.81 ms`, or `54.638 ms/token`;
+- profiled wall time: `3642.75 ms`, or `56.918 ms/token`;
+- unprofiled wall time: `3654.91 ms`, or `17.51 token/s`;
+- CPU fallback dispatches: zero; Metal synchronizations: 64.
+
+Even impossible, zero-cost removal of all measured host encoding would improve
+the profiled token wall by only `3.454%`. Clearing the `3%` whole-token gate
+would require removing at least `1.708 ms/token`, or `86.84%` of all measured
+encoding, while adding no GPU work, resource patching, synchronization, or
+lifetime cost. Host contention can inflate this encoding corridor; a quiet
+refresh that lowers it makes the replay premise weaker rather than stronger.
+
+The current bridge and the inspected llama.cpp Metal backend expose ordinary
+and indirect threadgroup dispatch, but no `MTLIndirectCommandBuffer`, argument
+encoder, inherited-pipeline/buffer, or equivalent replay implementation.
+Consequently this route would require a new bridge ABI, explicit resource
+declarations, per-token argument patching, and completion-safe lifetime
+management rather than reusing an existing mechanism. Indirect dispatch grids
+alone do not replay the Qwen layer command sequence.
+
+**decision:** a new persistent decode-wave ICB/replay subsystem is BROKEN as
+the next `>=3%` optimization. The perfect theoretical ceiling barely clears
+the gate, the required capture fraction is `86.84%`, and the implementation
+surface is large enough that nonzero patching and synchronization costs are
+unavoidable. Do not implement this route now. Reopen only if a steady-state
+quiet profile shows at least `3 ms/token` of reusable command encoding, or if
+reusable ICB/argument-buffer infrastructure arrives for an independently
+justified need. This does not claim that Metal ICB is useless in general.
+
+Evidence:
+
+- `/private/tmp/qwen35_decode_encode_refresh.log`, SHA-256
+  `c0db6ce9cc5ea59e80da767142c06b7af46ec15d14d7ed7b8b1f1d492ba1515d`;
+- `src/ml/metal/compute_graph.cr` and `src/ml/metal/dispatch.cr` indirect-grid
+  dispatch interfaces;
+- `src/ml/metal/bridge.mm` indirect-grid bridge implementation.
+
+Refresh on decode scheduling, per-token synchronization, Metal bridge replay
+support, model/device, profiling semantics, or a steady-state encoding corridor
+of at least `3 ms/token`.

@@ -29562,3 +29562,24 @@ Refresh after source/toolchain/device/model/workload changes.
   a materially different source-weight-aware or activation-compensated format,
   not another threshold sweep. Full evidence hashes and refresh conditions are
   in `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-21 — decode-wave ICB replay fails the ROI pre-gate
+
+- A warm 64-token greedy-chain profile on the real Qwen3.8-27B Q4_K_M model
+  measured `1.966 ms/token` of host command encoding inside a
+  `56.918 ms/token` profiled wall. Complete and impossible zero-cost removal
+  of the corridor would therefore save only `3.454%`.
+- A `3%` whole-token win requires eliminating at least `86.84%` of measured
+  encoding with no added GPU, argument-patching, synchronization, or lifetime
+  cost. The host was busy, so the row is an upper-bound falsifier rather than a
+  promotion benchmark; lower quiet-host encoding weakens the route.
+- The current bridge and inspected llama.cpp Metal backend provide indirect
+  threadgroup grids but no ICB, argument-buffer, or equivalent command replay
+  infrastructure. The route would require a new ABI and resource-lifetime
+  subsystem rather than a narrow reuse of existing code.
+- Verdict: ROBUST as a bounded ROI rejection and BROKEN as the next `>=3%`
+  optimization. Do not implement it now. Reopen only after a steady-state
+  quiet profile finds at least `3 ms/token` of reusable command encoding, or
+  reusable replay infrastructure appears for another justified requirement.
+  Evidence hash and refresh conditions are in
+  `docs/qwen-qbit-cache-frontier.md`.
