@@ -4693,6 +4693,84 @@ model/prompt, compiler/Metal toolchain, device/OS identity, timing method,
 thresholds, watchdog behavior, default-library availability, safety policy, or
 evidence loss.
 
+### Lower contiguous-V admission is rejected (2026-09-21)
+
+A bounded follow-up tested whether automatic P4 contiguous-V admission could
+move below `14,336` visible tokens without weakening the existing 3% product
+gate. The production kernel, cache representation, and explicit rollback were
+unchanged; only the policy cutoff and its exact-boundary spec were varied
+temporarily.
+
+At `12,288` visible tokens, two 20-pair alternating-order off-vs-auto rows
+retained identical output and zero logit delta. The candidate won 20/20 pairs
+in both rows, but mean improvements were `+3.133%` and `+2.983%`. The second
+row therefore failed the unchanged 3% gate. These zero-prefix rows have
+`semantic_quality_valid=false`; they are route/timing evidence, not a semantic
+certificate.
+
+The experiment pivoted once to `13,312` visible tokens. Two preliminary
+20-pair rows passed at `+3.787%` and `+3.452%`, each with 20/20 wins and
+identical output. A fresh release binary built for the `13,312` experiment then
+selected the automatic contiguous-V route at exactly `13,312` visible tokens
+for all 12 P4 owners and kept all four BF16 owners on their existing route, but
+repeated timing improved only `+2.801%` despite 20/20 wins. This exact-boundary
+repeat is the decisive falsifier for lowering the production cutoff. Like the
+12K rows, all three 13K timing rows use a synthetic zero prefix and carry no
+semantic-quality claim.
+
+A guarded real-prefix run at 13,336 prompt tokens did close the bounded
+numerical and 35-token trajectory question. Baseline forced contiguous-V off
+while the candidate used automatic policy. Both production prefill boundaries
+returned token `332` at logit `22.143887`; the next 34 top-two positions
+retained 68/68 ranked matches, 34/34 exact top-one and top-two coverage, zero
+logit and margin deltas, ECS 1.0, and an identical 35-token common prefix. All
+12 P4 owners selected contiguous-V, direct-QK stayed absent, and the guarded
+256-token-chunk prefill completed without a Metal watchdog failure. The run
+ended at its sample limit rather than EOS, so it is not a full semantic coding
+trajectory. Timing in this full-top-two quality mode is diagnostic and invalid
+for product admission.
+
+**Adversary:** every measured 12K/13K candidate won almost every pair, so the
+kernel is consistently faster in this bounded regime. That does not satisfy
+the declared policy contract: one opposite-order 12K row and the final exact
+13K row missed 3%. Averaging passing and failing rows would turn the gate into
+a post-hoc statistic and would hide host/toolchain sensitivity. The real-prefix
+quality pass establishes bounded numerical and prefix equivalence, not broad
+semantic equivalence or a stable speed margin.
+
+**decision:** lowering automatic admission to either 12,288 or 13,312 visible
+tokens is BROKEN under the existing repeated-row 3% product gate. Restore and
+retain the `14,336` cutoff. The unchanged explicit `=1` override remains
+available for experiments, and `=0` remains the immediate rollback. Reopen
+only if a different kernel or scheduling mechanism increases the lower-context
+margin, or if a predeclared promotion rule replaces the current per-row gate.
+
+Evidence and SHA-256:
+
+- 12K current ABBA / mirrored rows:
+  `/private/tmp/qwen_p4_v_contiguous_auto_12k_current_abba.log`,
+  `96a0d17fa0ca8666a5e9bb6bb15bf22568fd0e8b3f594a213c374edab4b47ab6`,
+  and `/private/tmp/qwen_p4_v_contiguous_auto_12k_current_baab.log`,
+  `bb611911a32d0c8960dbe30365be9c9b5fb42df75056ba38106bb4ce51fc2145`;
+- 13K preliminary ABBA / mirrored rows:
+  `/private/tmp/qwen_p4_v_contiguous_auto_13k_current_abba.log`,
+  `5986719d6b31bb952599908ff7bd9f2930f84544dd10fce5d1fd7f3081e9fa37`,
+  and `/private/tmp/qwen_p4_v_contiguous_auto_13k_current_baab.log`,
+  `5dd150887c46b86f274cf8c35245b9bc05d13a861754d5139b0824c1c1ec2865`;
+- final exact-13K boundary row:
+  `/private/tmp/qwen_p4_v_contiguous_auto_13k_final_boundary.log`,
+  `a109a1ca1f5a78d41b0c59ba383765b9144152c993c5399fba59355f01196212`;
+- real-prefix production-boundary quality:
+  `/private/tmp/qwen_p4_v_contiguous_auto_13k_prod_quality.log`,
+  `17558701d65b9198ea5b0e247b45743c767242463e460a72b7c02986d7221b66`;
+- exact-13K release probe binary:
+  `/private/tmp/qwen35_adaptive_t8_decode_probe_vcontig_13k`,
+  `d0d8b66b5905ca1dfa1e206d94e5a0bb4e15676a589488c20c522c99f3db2fd7`.
+
+Refresh on policy or kernel/source selection, probe semantics, cache layout,
+model/prompt, compiler or Metal toolchain, device/OS identity, timing method,
+promotion threshold, safety policy, or evidence loss.
+
 ### Split-K stage-two SIMD scalar broadcast is rejected (2026-09-20)
 
 The fused split-K stage-two kernel repeats the same maximum scan, exponential

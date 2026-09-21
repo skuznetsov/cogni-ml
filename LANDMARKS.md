@@ -29165,6 +29165,29 @@ Refresh after source/toolchain/device/model/workload changes.
   hashes, failure scope, and refresh conditions are recorded in
   `docs/qwen-qbit-cache-frontier.md`.
 
+### Continuation 2026-09-21 — Lower contiguous-V admission is rejected
+
+- A temporary policy moved the automatic P4 contiguous-V cutoff from 14,336
+  visible tokens first to 12,288 and then to 13,312. The 12K opposite-order
+  rows produced `+3.133/+2.983%`; the latter failed the unchanged 3% gate.
+- Two preliminary 13K rows passed (`+3.787/+3.452%`, 20/20 wins each), but a
+  fresh release binary built for the 13,312 experiment selected the automatic
+  route at exactly 13,312 visible tokens and repeated at only `+2.801%`, again
+  with identical output and 20/20 wins. That exact-boundary failure prevents
+  automatic promotion even though the direction is positive.
+- A 13,336-token production-prefill quality run completed without watchdog:
+  exact boundary token/logit, 68/68 ranked top-two matches, 34/34 exact top-one
+  and top-two positions, zero numeric deltas, identical 35-token trajectory,
+  ECS 1.0, 12 contiguous-V P4 owners, four BF16 owners, and no direct-QK. This
+  closes bounded 35-token prefix equivalence at 13K but cannot substitute for
+  the speed gate or prove full semantic completion; the run stopped at its
+  sample limit rather than EOS.
+- Verdict: ROBUST for bounded 13K numerical/trajectory equivalence; BROKEN for
+  lowering automatic admission under the current repeated-row 3% policy. The
+  production cutoff remains 14,336, explicit zero remains rollback, and all
+  experimental source/spec changes were removed. Evidence hashes and refresh
+  conditions are recorded in `docs/qwen-qbit-cache-frontier.md`.
+
 ### Continuation 2026-09-20 — Stage-two scalar broadcast is rejected
 
 - A temporary fused split-K stage-two variant moved the common maximum scan,
