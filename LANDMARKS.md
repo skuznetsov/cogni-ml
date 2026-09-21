@@ -29608,3 +29608,25 @@ Refresh after source/toolchain/device/model/workload changes.
   accounting, or source-weight plus real-hidden-state calibrated quantization.
   Evidence hashes and refresh conditions are in
   `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-21 — batch-one Q4_K mixed MMA fails the speed gate
+
+- The `30.44%` recurrent gate/up corridor requires at least `9.855%` local
+  improvement to support a `3%` whole-token claim. A standalone probe kept the
+  native Q4_K representation and every 32-value scale/min segment while using
+  four mixed half-weight/F32-activation 8x8 simdgroup MMAs per segment.
+- Batch one exposes only one useful matrix column, so the candidate performs
+  eight times the useful arithmetic and also pays Q4-to-half staging, product
+  spill, and threadgroup barriers. It does not pre-expand weights or modify the
+  production shader/routing.
+- On real `blk.0` gate/up tensors, 20 alternating pairs measured
+  `0.168896 / 1.488813 ms` and `0.147250 / 1.297937 ms` baseline/candidate
+  medians. The candidate was `8.815x` slower, won `0/40` pairs, and had maximum
+  absolute output difference `7.153e-7`.
+- Removing the scratch-reuse barriers produced `0.0558 / 0.0623` maximum
+  error, proving that the synchronization cost is required. Retaining the
+  barriers restores numerical compatibility but not speed.
+- Verdict: ROBUST bounded rejection and BROKEN as the next `>=3%` route. Reopen
+  only for packed-Q matrix hardware, a useful multi-column batch, or changed
+  model/device/corridor economics. Probe, log hashes, and refresh conditions
+  are in `docs/qwen-qbit-cache-frontier.md`.

@@ -5605,3 +5605,57 @@ Evidence:
 Refresh on source-weight availability, calibrated hidden states, IQ3 codec or
 sidecar semantics, residual representation, byte/decoder cost model, quality
 threshold, model/device, or evidence loss.
+
+### Batch-one Q4_K mixed MMA is rejected (2026-09-21)
+
+The measured recurrent gate/up corridor accounts for `30.44%` of decode time,
+so a candidate confined to that corridor must improve it by at least
+`3 / 30.44 = 9.855%` before it can plausibly deliver a `3%` whole-token win.
+The smallest exact-format matrix-engine falsifier therefore kept native Q4_K
+bytes and every independent 32-value scale/min segment, but replaced the
+production scalar `simd_mv_q4k_f32_x16` inner products with mixed half-weight,
+F32-activation simdgroup matrix operations. One SIMD group computes eight real
+adjacent rows. Since batch one provides only one useful output column, the
+8x8 primitive necessarily performs eight times the useful arithmetic.
+
+The standalone probe compiled both kernels from the same production source,
+loaded the real `blk.0.ffn_gate.weight` and `blk.0.ffn_up.weight` tensors, used
+the same packed Q4_K Metal buffer, and alternated baseline/candidate order for
+20 measured pairs per operator. With the correctness barriers retained:
+
+- gate baseline/candidate median GPU time was `0.168896 / 1.488813 ms`, a
+  `-781.50%` reduction (`8.815x` slower), with `0/20` candidate wins;
+- up baseline/candidate median GPU time was `0.147250 / 1.297937 ms`, a
+  `-781.45%` reduction (`8.815x` slower), with `0/20` candidate wins;
+- maximum absolute output difference was `7.153e-7` for both operators, well
+  within the probe's `1e-3` numerical gate but not bit-identical because the
+  F32 reduction order changed.
+
+A focused adversary removed the two barriers around scratch reuse while
+keeping the cheaper one-time zero initialization. It only modestly reduced the
+large slowdown and corrupted outputs: maximum absolute differences became
+`0.0558` and `0.0623`. The barriers are therefore required by this layout,
+not incidental benchmark overhead. Pre-expanding Q4 nibbles to half values
+would remove unpack work but increase weight traffic by about `3.67x`, losing
+the bandwidth premise before complete routing and storage costs.
+
+**decision:** the batch-one mixed-MMA Q4_K route is ROBUSTLY rejected for the
+tested Apple M2 Max and Qwen3.8-27B recurrent gate/up shapes, and BROKEN as the
+next `>=3%` decode optimization. The production shader and routing remain
+untouched; the candidate is an isolated falsifier, and its decisive speed miss
+does not admit a trajectory or token-quality run. Reopen only if the target
+offers a packed-Q matrix primitive, the batch regime supplies useful columns,
+the matrix/scalar throughput relation changes materially, or the measured
+recurrent corridor/production scalar kernel changes.
+
+Evidence:
+
+- `bin/qwen35_q4k_mma8_probe.cr`;
+- `/private/tmp/qwen35_q4k_mma8_safe_ab.log`, SHA-256
+  `373dac67bb5e3d15d6e1126399c03d9711d350c3b1359408e0b6084a9f844faa`;
+- `/private/tmp/qwen35_q4k_mma8_optimized_ab.log`, SHA-256
+  `aeb9153b980674bc7bfe96bde6674b61dade839db13dc517722192f9c3ba1916`.
+
+Refresh on Apple GPU matrix ISA or throughput, a packed-Q matrix primitive,
+batch regime, model shape or recurrent-corridor share, production x16 kernel,
+probe timing semantics, or evidence loss.
