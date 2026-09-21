@@ -5060,3 +5060,31 @@ that bounds register lifetime and first clears the same 8K gate.
 
 Refresh on P4 QK ownership, accumulator geometry, Metal compiler/toolchain,
 device, timing method, promotion gate, or evidence loss.
+
+### H16 P4 value-tile staging is rejected (2026-09-20)
+
+A temporary long-context P4 T8 variant kept the admitted shared-K and
+contiguous-V schedule but stored packed V rows in H16 inside the transient
+threadgroup tile. The visible current-token V row stayed on its exact F32
+path. The canonical adaptive cache, K path, softmax, F32 split-K partials,
+stage two, and host ABI were unchanged.
+
+The release probe and both Metal pipelines compiled. A guarded model-free
+fixed-snapshot discriminator then ran ten interleaved pairs at prefix 16,383
+under a 4 GiB process-tree cap and 30% free-memory floor. Canonical K/V bytes
+matched and maximum output delta was `1.521e-5`. Baseline/candidate mean wall
+time was `3.393/3.692 ms` (`-8.794%`, `4/10` candidate wins), while completed
+GPU time was `2.643/2.877 ms` (`-8.835%`, `3/10`).
+
+**decision:** bounded numerical behavior is acceptable, but the performance
+claim is BROKEN on Apple M2 Max with this compiler/toolchain. K still requires
+the full F32 threadgroup allocation, so H16 V staging does not improve the
+kernel's static shared-memory footprint; its conversions instead add work to
+the hot accumulation loop. The temporary kernel, runtime selector, and probe
+seam were removed. Do not retry value-tile narrowing unless a new schedule
+also removes or splits the F32 K allocation, or compiler/counter evidence
+shows a changed resource regime.
+
+Refresh on K/V tile lifetime or allocation, P4 loader, contiguous-V schedule,
+Metal compiler/toolchain, device, timing method, promotion gate, or evidence
+loss.

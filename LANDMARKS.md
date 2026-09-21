@@ -29247,6 +29247,23 @@ Refresh after source/toolchain/device/model/workload changes.
   Full scope and refresh conditions are in
   `docs/qwen-qbit-cache-frontier.md`.
 
+### Continuation 2026-09-20 — H16 P4 value-tile staging is rejected
+
+- A temporary 16K P4 T8 variant narrowed only packed V values in the
+  transient contiguous-V threadgroup tile; current-token V, the canonical
+  cache, K, softmax, split-K partials, and stage two remained F32.
+- The release build and Metal compilation passed. Ten guarded interleaved
+  model-free pairs retained canonical K/V bytes and had maximum output delta
+  `1.521e-5`, but wall time regressed from `3.393` to `3.692 ms`
+  (`-8.794%`, `4/10` wins) and completed-GPU time from `2.643` to `2.877 ms`
+  (`-8.835%`, `3/10`).
+- Verdict: ROBUST for bounded numerical compatibility and BROKEN for
+  performance promotion on Apple M2 Max with this toolchain. The temporary
+  runtime and probe code was removed. K still fixes the static threadgroup
+  allocation at F32 size, so narrowing only V adds conversions without the
+  intended occupancy benefit. Full scope and refresh conditions are in
+  `docs/qwen-qbit-cache-frontier.md`.
+
 ### Continuation 2026-09-20 — Q5_K half-SIMD rows are rejected
 
 - A temporary default-off Q5_K GEMV assigned one output row to each 16-lane
