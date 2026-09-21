@@ -29494,3 +29494,31 @@ Refresh after source/toolchain/device/model/workload changes.
   product promotion. The temporary route was removed. Do not retry a
   constants-only specialization without a compiler/device change or a larger
   composable mechanism whose predicted whole-token effect clears noise.
+
+### Continuation 2026-09-21 — direct-QK gets a separate pinned-fixture smoke gate
+
+- The existing `1e-4` numeric contract remains unchanged. Direct-QK plus
+  contiguous-V is still default-off and is not reclassified as numerically
+  equivalent.
+- `--semantic-coding-quality` now requires at least 256 requested decode
+  positions and records aligned natural EOS separately from sample-limit and
+  unaligned-EOS termination. The gate derives trajectory evidence from IDs,
+  text, every ordered top-two step, and the external fixture result; producer
+  summary booleans are only consistency checks.
+- The scorer accepts exactly the pinned `lower_bound`, `stable_unique`, and
+  `merge_ranges` fixtures, pins each `check.cr` hash and `src/answer.cr`, binds
+  the exact prompt bytes, and validates all records before running generated
+  Crystal. External execution remains explicitly unsandboxed.
+- One context must be 7K--9K and one at least 14,336 tokens. A three-fixture
+  pass is reported only as a fixture semantic smoke result. Numeric drift is
+  preserved separately, ECS is redundant for identical IDs, and
+  `admission_eligible=false` until broader evidence and an independent timing
+  refresh exist.
+- Sixteen focused scorer tests, Crystal format, diff hygiene, and a release
+  probe rebuild pass. Binary SHA-256:
+  `a7e5d163ebd18b5defd1b8dae931ad16589177c453a62b88df4c5183edf6ba27`.
+  No real model run has yet exercised the new 256-token/EOS gate.
+- Verdict: ROBUST for the bounded structural harness, PROPOSED/VULNERABLE for
+  direct-QK coding semantics. Next falsifier: three guarded long-context model
+  runs followed by both-arm external Crystal specs. Refresh on fixture,
+  prompt, probe schema, EOS, route, tokenizer/model/device, or scorer changes.

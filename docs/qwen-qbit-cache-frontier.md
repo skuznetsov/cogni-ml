@@ -5322,3 +5322,52 @@ was removed after the run.
 Refresh on model or quantization, device, Metal compiler, recurrent-FFN
 routing, command-buffer composition, skip semantics, profile timing semantics,
 or evidence loss.
+
+### Direct-QK pinned-fixture semantic smoke gate (2026-09-21)
+
+The direct-QK plus contiguous-V bundle remains default-off. Its complete-token
+gain was material at long context, but a real-prefix run exceeded the existing
+`1e-4` logit-delta contract even though token IDs, ordered top two, text, and
+token ECS remained unchanged. The numeric gate is not weakened or redefined.
+
+A separate opt-in probe mode, `--semantic-coding-quality`, now supports a
+bounded product-semantic falsifier. It requires at least 256 requested decode
+positions so all three pinned Crystal fixtures can reach natural EOS. A record
+is structurally admissible only when both independent arms reach EOS at the
+same final output position, retain the complete self-fed token trajectory and
+text, match ordered top two at every aligned step, and report the exact
+Qwen3.8-27B / Apple M2 Max direct-QK plus contiguous-V owner configuration.
+The scorer then runs both generated answers against the pinned `lower_bound`,
+`stable_unique`, and `merge_ranges` external Crystal specs. It requires one
+7K--9K context and one context at or above the route's 14,336-token boundary.
+
+The scorer pins the three repository fixture paths, `src/answer.cr`, and the
+SHA-256 of each `check.cr`. It binds every record to the exact long-prompt file
+and requires that file to end with the pinned task prompt. Probe records and
+the full suite are validated before generated Crystal is executed. That
+execution is still not sandboxed; generated source must be inspected before
+the CLI is invoked.
+
+This is deliberately a smoke certificate, not semantic equivalence. ECS is
+reported because it is part of the established diagnostic vocabulary, but it
+is redundant when the compared token IDs are identical. Numeric deltas and
+the unchanged `1e-4` tolerance remain visible, the report separately states
+whether the strict numeric gate passed, and `admission_eligible` remains false
+even if all three fixtures pass. A future promotion decision needs broader
+task coverage plus a separate balanced timing refresh.
+
+Structural verification currently covers 16 Python tests across the new gate
+and the two existing coding scorers, Crystal formatting, diff hygiene, and a
+release rebuild of the probe. The rebuilt binary SHA-256 is
+`a7e5d163ebd18b5defd1b8dae931ad16589177c453a62b88df4c5183edf6ba27`.
+No model run has yet exercised this new 256-token/EOS contract.
+
+**decision:** the gate implementation is structurally ROBUST within its
+parser/fixture scope, while direct-QK semantic suitability remains PROPOSED
+and VULNERABLE until the three real long-context runs and external specs pass.
+Keep the route default-off and do not describe a fixture pass as broad coding
+equivalence or numerical equivalence.
+
+Refresh on fixture or oracle changes, prompt construction, probe JSON schema,
+EOS accounting, route ownership/policy, numeric tolerance, tokenizer/template,
+model, device, or external scorer execution semantics.

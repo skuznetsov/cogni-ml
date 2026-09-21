@@ -601,6 +601,7 @@ compare_v_contiguous_auto = false
 compare_p4_stage1 = false
 quality_top2 = false
 quality_top2_production_prefill = false
+semantic_coding_quality = false
 synthetic_prefix = 0
 
 OptionParser.parse do |parser|
@@ -619,6 +620,10 @@ OptionParser.parse do |parser|
   parser.on("--compare-p4-stage1", "Compare legacy P4 T8 stage1 with forced direct-QK plus contiguous-V") { compare_p4_stage1 = true }
   parser.on("--quality-top2", "Run real-prefix free trajectories with top-2, margin, and output-weight ECS diagnostics; disables timing admission") { quality_top2 = true }
   parser.on("--quality-top2-production-prefill", "Use the production top-1 prefill boundary, then compare top-2 free trajectories; disables timing admission") { quality_top2_production_prefill = true }
+  parser.on("--semantic-coding-quality", "Run production-prefill top-2 trajectories until aligned EOS; numerical deltas stay diagnostic and external task scoring remains required") do
+    semantic_coding_quality = true
+    quality_top2_production_prefill = true
+  end
   parser.on("--synthetic-prefix N", "Restore a zero-valued adaptive prefix for decode-only timing") { |value| synthetic_prefix = value.to_i }
   parser.on("--raw", "Do not render the Qwen chat template") { chat_mode = false }
   parser.on("--candidate-first", "Run candidate first during warmup and the first measured pair") { candidate_first = true }
@@ -638,12 +643,16 @@ end
 
 raise "model does not exist: #{model_path}" unless File.file?(model_path)
 raise "--samples must be at least 10" unless sample_count >= 10
+if semantic_coding_quality && sample_count < 256
+  raise "--semantic-coding-quality requires --samples at least 256 so the pinned coding fixtures can reach EOS"
+end
 raise "--repeat-prompt must be positive" unless prompt_repeats > 0
 raise "--max-seq cannot be negative" if requested_max_seq < 0
 raise "--synthetic-prefix cannot be negative" if synthetic_prefix < 0
 raise "resident map cannot be empty" if resident_map.strip.empty?
 raise "select only one top-2 quality prefill mode" if quality_top2 && quality_top2_production_prefill
 quality_top2 ||= quality_top2_production_prefill
+raise "--semantic-coding-quality requires chat rendering" if semantic_coding_quality && !chat_mode
 comparison_count = {compare_stage2, compare_splitk_chunk, compare_direct_qk, compare_v_contiguous, compare_v_contiguous_auto, compare_p4_stage1}.count(true)
 raise "select only one comparison" if comparison_count > 1
 if synthetic_prefix > 0 && !(compare_splitk_chunk || compare_direct_qk || compare_v_contiguous || compare_v_contiguous_auto || compare_p4_stage1)
@@ -879,6 +888,18 @@ begin
   wins = samples.count { |sample| sample.candidate_ms < sample.baseline_ms }
   observed_samples = samples.size
   requested_samples_completed = observed_samples == sample_count
+  baseline_eos = baseline_input_id == tokenizer.eos_id
+  candidate_eos = candidate_input_id == tokenizer.eos_id
+  aligned_eos = baseline_eos && candidate_eos
+  baseline_eos_step = baseline_output_ids.index(tokenizer.eos_id)
+  candidate_eos_step = candidate_output_ids.index(tokenizer.eos_id)
+  coding_completion = if aligned_eos && baseline_eos_step == candidate_eos_step
+                        "aligned_eos"
+                      elsif baseline_eos || candidate_eos
+                        "unaligned_eos"
+                      else
+                        "sample_limit"
+                      end
   minimum_wins = (observed_samples * 4 + 4) // 5
   timing_gate_valid = !quality_top2
   gate_passed = timing_gate_valid && requested_samples_completed && RELEASE_BUILD &&
@@ -897,13 +918,27 @@ begin
     candidate_output_ids[index]? == id
   end.size
   first_divergence_step = common_prefix < baseline_output_ids.size ? common_prefix : nil
-  quality_violations << termination_reason unless requested_samples_completed
+  quality_violations << termination_reason unless requested_samples_completed || (semantic_coding_quality && aligned_eos)
   if quality_top2 && first_divergence_step
     quality_violations << "free_run_divergence_step=#{first_divergence_step}"
   end
   quality_gate_passed = quality_top2 && semantic_quality_valid && requested_samples_completed &&
                         quality_violations.empty? &&
                         common_prefix == baseline_output_ids.size
+  semantic_trajectory_gate_passed = semantic_coding_quality && semantic_quality_valid && aligned_eos &&
+                                    coding_completion == "aligned_eos" &&
+                                    common_prefix == baseline_output_ids.size && first_divergence_step.nil? &&
+                                    quality_steps.all? do |quality|
+                                      quality.paired_logits_valid &&
+                                        quality.baseline.first_id == quality.candidate.first_id &&
+                                        quality.baseline.second_id == quality.candidate.second_id &&
+                                        quality.comparison.ranked_matches == 2 &&
+                                        quality.comparison.set_overlap == 2 &&
+                                        quality.comparison.exact_top1_covered &&
+                                        quality.comparison.exact_top2_covered &&
+                                        quality.token_ecs == 1.0
+                                    end
+  strict_numeric_gate_passed = semantic_trajectory_gate_passed && quality_violations.empty?
   prefill_boundary_mode = if synthetic_prefix > 0
                             "synthetic_seed"
                           elsif quality_top2_production_prefill
@@ -955,6 +990,7 @@ begin
                         "aligned_top2_numeric_plus_free_prefix"
                       end
   puts "  quality_top2=#{quality_top2} quality_scope=#{quality_scope} prefill_boundary_mode=#{prefill_boundary_mode} timing_gate_valid=#{timing_gate_valid}"
+  puts "  semantic_coding_quality=#{semantic_coding_quality} coding_completion=#{coding_completion} baseline_eos=#{baseline_eos} candidate_eos=#{candidate_eos} aligned_eos=#{aligned_eos} semantic_trajectory_gate=#{semantic_trajectory_gate_passed ? "PASS" : "FAIL"} strict_numeric_gate=#{strict_numeric_gate_passed ? "PASS" : "FAIL"}"
   puts "  baseline_stage2=#{baseline_stage2} candidate_stage2=#{candidate_stage2}"
   puts "  p4_stage1_admission=#{compare_p4_stage1 ? "forced_off_vs_forced_on" : "not_compared"}"
   baseline_direct_qk = (compare_direct_qk || compare_v_contiguous || compare_v_contiguous_auto || compare_p4_stage1) ? false : nil
@@ -1002,6 +1038,7 @@ begin
       json.field "semantic_quality_valid", semantic_quality_valid
       json.field "quality_top2", quality_top2
       json.field "quality_top2_production_prefill", quality_top2_production_prefill
+      json.field "semantic_coding_quality", semantic_coding_quality
       json.field "quality_scope", quality_scope
       json.field "quality_measurement_valid", quality_top2 && semantic_quality_valid
       json.field "quality_gate_kind", quality_gate_kind
@@ -1010,6 +1047,8 @@ begin
       json.field "ecs_interpretation", quality_top2 ? "static_output_row_cosine_token_proxy" : nil
       json.field "ecs_equal_ids_short_circuit_to_one", quality_top2
       json.field "semantic_task_scored", false
+      json.field "semantic_trajectory_gate_passed", semantic_trajectory_gate_passed
+      json.field "strict_numeric_gate_passed", strict_numeric_gate_passed
       json.field "timing_gate_valid", timing_gate_valid
       json.field "prefill_boundary_mode", prefill_boundary_mode
       json.field "prefill_boundary_top2_available", quality_top2 && !quality_top2_production_prefill
@@ -1049,6 +1088,12 @@ begin
       json.field "observed_samples", observed_samples
       json.field "requested_samples_completed", requested_samples_completed
       json.field "termination_reason", termination_reason
+      json.field "baseline_eos", baseline_eos
+      json.field "candidate_eos", candidate_eos
+      json.field "aligned_eos", aligned_eos
+      json.field "baseline_eos_step", baseline_eos_step
+      json.field "candidate_eos_step", candidate_eos_step
+      json.field "coding_completion", coding_completion
       json.field "max_seq", max_seq
       json.field "prefill_chunk_size", PRODUCT_PREFILL_CHUNK_SIZE
       json.field "prefill_append_max_groups", PRODUCT_APPEND_MAX_GROUPS
@@ -1153,7 +1198,9 @@ begin
   end
   puts "QBIT_T8_DECODE_JSON=#{payload}"
   STDOUT.flush
-  if quality_top2 && !quality_gate_passed
+  if semantic_coding_quality && !semantic_trajectory_gate_passed
+    raise "semantic coding trajectory gate failed: #{quality_violations.join("; ")}"
+  elsif quality_top2 && !quality_gate_passed
     raise "quality gate failed: #{quality_violations.join("; ")}"
   end
 ensure
