@@ -5088,3 +5088,47 @@ shows a changed resource regime.
 Refresh on K/V tile lifetime or allocation, P4 loader, contiguous-V schedule,
 Metal compiler/toolchain, device, timing method, promotion gate, or evidence
 loss.
+
+### Split-K stage attribution closes the stage-two corridor (2026-09-20)
+
+A model-free diagnostic measured the admitted Apple M2 Max P4 split-K stages
+with the same deterministic buffers and exact production geometry: tile 15,
+T8 dequantization, shared K, contiguous V, a 64-token block, 24 query heads,
+four KV heads, head dimension 256, and fused stage two. Each reported GPU
+interval amortized 16 dispatches; ten samples were collected in rotating
+stage-one/stage-two/combined order. The combined path encoded both stages in
+one command buffer, while the isolated rows used separate command buffers.
+
+At 8K, median stage one/stage two/combined GPU time was
+`0.43955/0.03976/0.52103 ms`; stage two was `8.30%` of the sum of isolated
+stages and `7.63%` of the combined interval. At 16K the corresponding result
+was `0.83628/0.07491/0.97945 ms`, or `8.22%` and `7.65%`. Outputs were finite,
+the device status word remained zero, and a repeat made immediately before the
+recorded run gave the same conclusion (`7.55%` at 8K and `7.79%` at 16K by
+combined-interval attribution).
+
+The combined interval was `7.5--8.7%` larger than the sum of independently
+timed stages. Therefore the separate rows are diagnostic, not additive product
+timing, and the excess is not assigned to either kernel. Both attribution
+frames nevertheless put stage two below 10% and stage one near 92% of the
+visible split-K work.
+
+**decision:** the hypothesis that fused stage two remains a first-order
+optimization target is BROKEN for the measured P4 8K/16K regime. Even perfect
+removal has only about an 8% local ceiling, while any realizable rewrite saves
+less. Keep the admitted fused reducer, but stop spending optimization cycles
+on reducer micro-variants. The next adaptive-attention work must remove a
+material stage-one boundary: P4 K/V dequantization, tile traffic, query/value
+ownership, or the production command/dataflow around stage one. This does not
+claim a whole-model percentage or transfer the attribution to BF16 or another
+device.
+
+Evidence:
+
+- `/private/tmp/qwen35_splitk_stage_attribution_probe.cr`,
+  `536e320730db213bab41a41ad4006efa094cb77d9c2c9e3a048ca830fa795435`;
+- `/private/tmp/qwen_splitk_stage_attribution.log`,
+  `4687ae8bc66ee7ceea7374476888ed6a15a4080980e7ae07d03d9f8609e3f87f`.
+
+Refresh on split-K geometry, stage fusion, P4 loader or value ownership,
+Metal compiler/toolchain, device, timing method, or evidence loss.

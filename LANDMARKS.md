@@ -29363,3 +29363,24 @@ Refresh after source/toolchain/device/model/workload changes.
   without a new geometry or compiler evidence that bounds register pressure.
   Full scope and refresh conditions are in
   `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-20 — P4 split-K stage two is not the main hotspot
+
+- A model-free probe timed production-shaped tile-15 P4 T8 shared-K,
+  contiguous-V stage one, fused stage two, and their same-command composition
+  at 8K and 16K. Each interval amortized 16 dispatches and ten samples rotated
+  measurement order.
+- The recorded medians were `0.43955/0.03976/0.52103 ms` at 8K and
+  `0.83628/0.07491/0.97945 ms` at 16K for isolated stage one, isolated stage
+  two, and combined. Stage two was `7.63%` and `7.65%` of the combined
+  interval; a preceding independent run reproduced the same below-8% result.
+  Outputs were finite and device status remained zero.
+- The combined interval exceeded the isolated sum by `7.5--8.7%`, so these
+  rows are a diagnostic attribution rather than additive product timing. Both
+  frames still place stage two below 10% and stage one near 92%.
+- Verdict: ROBUST for the bounded Apple M2 Max P4 8K/16K attribution and
+  BROKEN for treating stage-two micro-optimization as the next first-order
+  route. Retain fused stage two and target a material stage-one dataflow or
+  ownership boundary. No BF16, cross-device, or whole-model percentage is
+  claimed. Evidence and refresh conditions are recorded in
+  `docs/qwen-qbit-cache-frontier.md`.
