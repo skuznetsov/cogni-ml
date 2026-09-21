@@ -5416,3 +5416,68 @@ still needs broader tasks and a quiet balanced timing refresh.
 Refresh on fixture or oracle changes, prompt construction, probe JSON schema,
 EOS accounting, route ownership/policy, numeric tolerance, tokenizer/template,
 model, device, or external scorer execution semantics.
+
+### Re-encoded IQ3 recurrent-FFN weights are rejected (2026-09-21)
+
+The recurrent Q4_K gate/up corridor has enough logical traffic for a denser
+weight format to matter, so an offline CPU-only falsifier tested a concrete
+adaptive format before any Metal implementation. The probe reads sampled rows
+from the real Qwen3.8-27B Q4_K_M `ffn_gate` and `ffn_up` tensors, dequantizes
+each native 256-value Q4_K block, and requantizes it with llama.cpp's reference
+IQ3_S and IQ3_XXS codecs. This matches the conversion available from the
+installed GGUF; source floating-point training weights are not assumed.
+
+Native Q4_K consumes 144 bytes per 256 values. IQ3_S uses 110 bytes and
+IQ3_XXS 98 bytes, giving ideal complete-token byte ceilings of `7.187%` and
+`9.724%`, respectively, when applied to the measured `30.44%` recurrent
+gate/up traffic corridor. The adaptive policy stores a one-bit native/IQ3
+selector per block and retains native Q4_K when the block's maximum
+round-trip residual divided by its native standard deviation exceeds a
+threshold. The numerical pre-gate requires at least `3%` ideal complete-token
+byte saving, minimum sampled operator cosine `0.99999`, and exact ordered top
+two across five deterministic activation families.
+
+Two independent 256-row samples rejected the route:
+
+- `blk.1.ffn_gate.weight`: all-IQ3_S reached the `7.187%` byte ceiling but its
+  minimum cosine was `0.980691` and ordered top two matched only `4/5` cases.
+  The first adaptive IQ3_S point above the byte gate compressed `44.277%` of
+  blocks for `3.156%` ideal saving, but minimum cosine was `0.993243` and
+  ordered top two matched `4/5`.
+- `blk.32.ffn_up.weight`: all-IQ3_S reached the same byte ceiling with minimum
+  cosine `0.981882`. The first sampled adaptive IQ3_S point above the byte gate
+  compressed `56.953%` of blocks for `4.067%` ideal saving, but minimum cosine
+  was `0.990372`. Even the conservative `7.559%` compressed point saved only
+  `0.517%` ideally and had minimum cosine `0.998945`, below the pre-gate.
+- IQ3_XXS was strictly less attractive in this test: it needed roughly one
+  third of blocks converted before clearing the byte gate and then produced
+  minimum cosine near `0.991--0.993`; full conversion fell near `0.972--0.974`.
+
+These operator comparisons cover sampled output rows, not token logits, ECS,
+or end-to-end generation. They are intentionally only a cheap rejection gate.
+A pass would not have established either Metal speed or model quality. The
+failure is nevertheless decisive for this implementation premise: every
+sampled policy that clears the useful byte ceiling misses the numerical gate
+by orders of magnitude, while near-native numerical points save less than one
+percent ideally before IQ3 decode and selector overhead.
+
+**decision:** adaptive Q4_K-to-IQ3_S/XXS re-encoding with a weight-only
+residual threshold is BROKEN as the next recurrent-FFN optimization. Do not
+build its Metal decoder or run model generation for this formulation. Reopen
+only with a materially different premise, such as source-weight-aware
+quantization, activation-aware error compensation, or a format whose decoder
+and measured error predict both `>=3%` complete-token gain and the existing
+quality contract. Merely tuning the present residual threshold is not new
+evidence.
+
+Evidence:
+
+- `bin/qwen35_q4_iq3_weight_probe.cr`;
+- `/private/tmp/qwen35_q4_iq3_gate_l1_rows256.log`, SHA-256
+  `d8c9a29c6530559399a4032d721d8582c15d5da307f1af28bcdd332daf5ecf9c`;
+- `/private/tmp/qwen35_q4_iq3_up_l32_rows256.log`, SHA-256
+  `2ea753c32e957892b821bdb230aa5838d46b162c9c0f52d8bd6aa83f7b0ea7f1`.
+
+Refresh on model weights, source-weight availability, IQ3 codec semantics,
+adaptive selector or sidecar format, activation family, quality threshold,
+recurrent corridor share, device decoder cost, or evidence loss.

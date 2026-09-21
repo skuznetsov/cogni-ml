@@ -29535,3 +29535,30 @@ Refresh after source/toolchain/device/model/workload changes.
   only for new arithmetic or an explicitly different greedy-only contract,
   with broader tasks and an independent quiet timing refresh. Evidence hashes
   are recorded in `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-21 — re-encoded IQ3 FFN weights fail the pre-gate
+
+- A new offline CPU-only probe used llama.cpp's reference IQ3_S and IQ3_XXS
+  codecs to re-encode sampled native Q4_K blocks from the real Qwen3.8-27B
+  gate/up tensors. It tested full conversion and a one-bit-per-block adaptive
+  native escape selected by maximum residual over native block standard
+  deviation.
+- IQ3_S and IQ3_XXS have sufficient ideal density ceilings in the measured
+  `30.44%` recurrent gate/up corridor: `7.187%` and `9.724%` complete-token
+  byte saving before decoder overhead. The useful pre-gate required `>=3%`
+  ideal saving, minimum sampled operator cosine `>=0.99999`, and exact ordered
+  top two over five deterministic activation families.
+- On 256 sampled rows from `blk.1.ffn_gate.weight`, the first adaptive IQ3_S
+  point above the byte gate compressed `44.277%` of blocks for `3.156%` ideal
+  saving, but minimum cosine was `0.993243` and ordered top two matched `4/5`.
+  On `blk.32.ffn_up.weight`, a `4.067%` ideal-saving point had minimum cosine
+  `0.990372`. Near-native numerical points saved less than one percent ideally.
+- Full IQ3_S conversion produced minimum cosine near `0.981`; full IQ3_XXS
+  fell near `0.972--0.974`. No tested policy passed both the byte and numerical
+  gates, so no Metal kernel or model run was admitted.
+- Verdict: ROBUST as a real-tensor offline rejection and BROKEN for this
+  weight-only residual-threshold formulation. Synthetic operator outputs are
+  not token/ECS evidence, but the gate is used only to reject. Reopen only for
+  a materially different source-weight-aware or activation-compensated format,
+  not another threshold sweep. Full evidence hashes and refresh conditions are
+  in `docs/qwen-qbit-cache-frontier.md`.
