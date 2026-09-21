@@ -29583,3 +29583,28 @@ Refresh after source/toolchain/device/model/workload changes.
   reusable replay infrastructure appears for another justified requirement.
   Evidence hash and refresh conditions are in
   `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-21 — affine IQ3 repair fails the quality pre-gate
+
+- The real-tensor IQ3 probe now tests F32 least-squares scale/bias correction
+  per output row and per 256-value block. The operator applies the correction
+  as `scale * dot(iq3, x) + bias * sum(x)` without materializing repaired
+  weights; adaptive block selection uses the post-correction residual.
+- Row sidecars preserve `7.103%` ideal complete-token IQ3_S saving. The more
+  expressive block sidecars reduce the ceiling to `5.496%` but provide the
+  optimistic numerical falsifier. Storage forecasts include F32 coefficients
+  and the selector, but exclude variable-block addressing and decode cost.
+- On 256 `blk.1.ffn_gate.weight` rows, the first adaptive block-affine IQ3_S
+  point above the byte gate saved `3.142%` at only `0.992404` minimum cosine.
+  On `blk.32.ffn_up.weight`, the useful point saved `3.754%` at `0.991654`.
+  Full row/block-affine policies remained near `0.981--0.988`; useful IQ3_XXS
+  points were near `0.991` and also lost ordered top two.
+- No policy passed the byte, `0.99999` cosine, and exact ordered-top-two gates.
+  Per-block affine still leaves a nonzero residual with the direct adversary
+  `x = residual`, so it cannot be exact for nearly tied rows.
+- Verdict: ROBUST as a bounded real-tensor CPU rejection and BROKEN as the next
+  recurrent-FFN optimization. Do not implement its Metal decoder. Reopen only
+  for a different residual representation that survives complete byte/decode
+  accounting, or source-weight plus real-hidden-state calibrated quantization.
+  Evidence hashes and refresh conditions are in
+  `docs/qwen-qbit-cache-frontier.md`.

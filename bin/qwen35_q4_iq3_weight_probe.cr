@@ -25,6 +25,8 @@ QK                       =             256
 NATIVE_Q4_BYTES          =             144
 IQ3_S_BYTES              =             110
 IQ3_XXS_BYTES            =              98
+AFFINE_ROW_BYTES         =               8
+AFFINE_BLOCK_BYTES       =               8
 DEFAULT_ROWS             =              64
 DEFAULT_SEED             = 0x4f31_93a7_u64
 REQUIRED_WHOLE_TOKEN_PCT =         3.0_f64
@@ -32,6 +34,43 @@ GATE_UP_CORRIDOR_PCT     =       30.44_f64
 NUMERIC_COSINE_GATE      =     0.99999_f64
 
 record Activation, name : String, values : Array(Float32)
+
+class AffineAccumulator
+  @count = 0_i64
+  @candidate_sum = 0.0_f64
+  @reference_sum = 0.0_f64
+  @candidate_square_sum = 0.0_f64
+  @candidate_reference_sum = 0.0_f64
+
+  def add(reference : Array(Float32), candidate : Array(Float32)) : Nil
+    reference.each_with_index do |value, index|
+      candidate_value = candidate[index].to_f64
+      reference_value = value.to_f64
+      @count += 1
+      @candidate_sum += candidate_value
+      @reference_sum += reference_value
+      @candidate_square_sum += candidate_value * candidate_value
+      @candidate_reference_sum += candidate_value * reference_value
+    end
+  end
+
+  # Fit reference ~= scale * candidate + bias and round the stored sidecar
+  # coefficients to F32 before applying them to the operator output.
+  def fit : {Float32, Float32}
+    return {1.0_f32, 0.0_f32} if @count == 0
+
+    count = @count.to_f64
+    denominator = count * @candidate_square_sum - @candidate_sum * @candidate_sum
+    if denominator.abs <= Float64::EPSILON * Math.max(count * @candidate_square_sum, 1.0_f64)
+      return {1.0_f32, ((@reference_sum - @candidate_sum) / count).to_f32}
+    end
+
+    scale = (count * @candidate_reference_sum - @candidate_sum * @reference_sum) / denominator
+    bias = (@reference_sum - scale * @candidate_sum) / count
+    raise ArgumentError.new("affine fit produced non-finite coefficients") unless scale.finite? && bias.finite?
+    {scale.to_f32, bias.to_f32}
+  end
+end
 
 def supported_q4_weight_name?(name : String) : Bool
   !/\Ablk\.\d+\.ffn_(gate|up)\.weight\z/.match(name).nil?
@@ -98,6 +137,19 @@ def max_residual_ratio(reference : Array(Float32), candidate : Array(Float32)) :
   max_error / standard_deviation
 end
 
+def max_affine_residual_ratio(reference : Array(Float32), candidate : Array(Float32), scale : Float32, bias : Float32) : Float64
+  standard_deviation = block_std(reference)
+  max_error = 0.0_f64
+  reference.each_with_index do |value, index|
+    reconstructed = scale.to_f64 * candidate[index].to_f64 + bias.to_f64
+    error = (value.to_f64 - reconstructed).abs
+    max_error = error if error > max_error
+  end
+  return 0.0_f64 if standard_deviation == 0.0 && max_error == 0.0
+  return Float64::INFINITY if standard_deviation == 0.0
+  max_error / standard_deviation
+end
+
 def iq3_roundtrip(values : Array(Float32), kind : Symbol) : Array(Float32)
   bytes = case kind
           when :iq3_s   then IQ3_S_BYTES
@@ -122,6 +174,14 @@ def dot_block(values : Array(Float32), activation : Array(Float32), offset : Int
   sum = 0.0_f64
   QK.times do |i|
     sum += values[i].to_f64 * activation[offset + i].to_f64
+  end
+  sum
+end
+
+def sum_block(values : Array(Float32), offset : Int32) : Float64
+  sum = 0.0_f64
+  QK.times do |i|
+    sum += values[offset + i].to_f64
   end
   sum
 end
@@ -235,14 +295,26 @@ begin
     native_outputs = Array(Array(Float64)).new(activations.size) { Array(Float64).new(rows.size, 0.0_f64) }
     iq3_s_outputs = Array(Array(Float64)).new(activations.size) { Array(Float64).new(rows.size, 0.0_f64) }
     iq3_xxs_outputs = Array(Array(Float64)).new(activations.size) { Array(Float64).new(rows.size, 0.0_f64) }
+    affine_s_outputs = Array(Array(Float64)).new(activations.size) { Array(Float64).new(rows.size, 0.0_f64) }
+    affine_xxs_outputs = Array(Array(Float64)).new(activations.size) { Array(Float64).new(rows.size, 0.0_f64) }
+    block_affine_s_outputs = Array(Array(Float64)).new(activations.size) { Array(Float64).new(rows.size, 0.0_f64) }
+    block_affine_xxs_outputs = Array(Array(Float64)).new(activations.size) { Array(Float64).new(rows.size, 0.0_f64) }
     adaptive_s_outputs = Array.new(thresholds.size) do
       Array(Array(Float64)).new(activations.size) { Array(Float64).new(rows.size, 0.0_f64) }
     end
     adaptive_xxs_outputs = Array.new(thresholds.size) do
       Array(Array(Float64)).new(activations.size) { Array(Float64).new(rows.size, 0.0_f64) }
     end
+    adaptive_block_affine_s_outputs = Array.new(thresholds.size) do
+      Array(Array(Float64)).new(activations.size) { Array(Float64).new(rows.size, 0.0_f64) }
+    end
+    adaptive_block_affine_xxs_outputs = Array.new(thresholds.size) do
+      Array(Array(Float64)).new(activations.size) { Array(Float64).new(rows.size, 0.0_f64) }
+    end
     adaptive_s_counts = Array(Int64).new(thresholds.size, 0_i64)
     adaptive_xxs_counts = Array(Int64).new(thresholds.size, 0_i64)
+    adaptive_block_s_counts = Array(Int64).new(thresholds.size, 0_i64)
+    adaptive_block_xxs_counts = Array(Int64).new(thresholds.size, 0_i64)
     s_ratio_sum = 0.0_f64
     s_ratio_max = 0.0_f64
     xxs_ratio_sum = 0.0_f64
@@ -252,8 +324,14 @@ begin
       row_native = Array(Float64).new(activations.size, 0.0_f64)
       row_s = Array(Float64).new(activations.size, 0.0_f64)
       row_xxs = Array(Float64).new(activations.size, 0.0_f64)
+      row_block_affine_s = Array(Float64).new(activations.size, 0.0_f64)
+      row_block_affine_xxs = Array(Float64).new(activations.size, 0.0_f64)
       row_adaptive_s = Array.new(thresholds.size) { Array(Float64).new(activations.size, 0.0_f64) }
       row_adaptive_xxs = Array.new(thresholds.size) { Array(Float64).new(activations.size, 0.0_f64) }
+      row_adaptive_block_affine_s = Array.new(thresholds.size) { Array(Float64).new(activations.size, 0.0_f64) }
+      row_adaptive_block_affine_xxs = Array.new(thresholds.size) { Array(Float64).new(activations.size, 0.0_f64) }
+      affine_s_fit = AffineAccumulator.new
+      affine_xxs_fit = AffineAccumulator.new
 
       blocks_per_row.times do |block|
         block_offset = (row.to_i64 * blocks_per_row * NATIVE_Q4_BYTES + block.to_i64 * NATIVE_Q4_BYTES).to_i
@@ -266,41 +344,89 @@ begin
         xxs_ratio_sum += xxs_ratio
         s_ratio_max = s_ratio if s_ratio > s_ratio_max
         xxs_ratio_max = xxs_ratio if xxs_ratio > xxs_ratio_max
+        block_s_fit = AffineAccumulator.new
+        block_s_fit.add(native, iq3_s)
+        block_s_scale, block_s_bias = block_s_fit.fit
+        block_xxs_fit = AffineAccumulator.new
+        block_xxs_fit.add(native, iq3_xxs)
+        block_xxs_scale, block_xxs_bias = block_xxs_fit.fit
+        block_s_ratio = max_affine_residual_ratio(native, iq3_s, block_s_scale, block_s_bias)
+        block_xxs_ratio = max_affine_residual_ratio(native, iq3_xxs, block_xxs_scale, block_xxs_bias)
+        affine_s_fit.add(native, iq3_s)
+        affine_xxs_fit.add(native, iq3_xxs)
 
         activations.each_with_index do |activation, activation_index|
           activation_offset = block.to_i32 * QK
+          activation_sum = sum_block(activation.values, activation_offset)
           native_dot = dot_block(native, activation.values, activation_offset)
           s_dot = dot_block(iq3_s, activation.values, activation_offset)
           xxs_dot = dot_block(iq3_xxs, activation.values, activation_offset)
+          block_affine_s_dot = block_s_scale.to_f64 * s_dot + block_s_bias.to_f64 * activation_sum
+          block_affine_xxs_dot = block_xxs_scale.to_f64 * xxs_dot + block_xxs_bias.to_f64 * activation_sum
           row_native[activation_index] += native_dot
           row_s[activation_index] += s_dot
           row_xxs[activation_index] += xxs_dot
+          row_block_affine_s[activation_index] += block_affine_s_dot
+          row_block_affine_xxs[activation_index] += block_affine_xxs_dot
           thresholds.each_with_index do |threshold, threshold_index|
-            row_adaptive_s[threshold_index][activation_index] += s_ratio <= threshold ? s_dot : native_dot
-            row_adaptive_xxs[threshold_index][activation_index] += xxs_ratio <= threshold ? xxs_dot : native_dot
+            if s_ratio <= threshold
+              row_adaptive_s[threshold_index][activation_index] += s_dot
+            else
+              row_adaptive_s[threshold_index][activation_index] += native_dot
+            end
+            if block_s_ratio <= threshold
+              row_adaptive_block_affine_s[threshold_index][activation_index] += block_affine_s_dot
+            else
+              row_adaptive_block_affine_s[threshold_index][activation_index] += native_dot
+            end
+            if xxs_ratio <= threshold
+              row_adaptive_xxs[threshold_index][activation_index] += xxs_dot
+            else
+              row_adaptive_xxs[threshold_index][activation_index] += native_dot
+            end
+            if block_xxs_ratio <= threshold
+              row_adaptive_block_affine_xxs[threshold_index][activation_index] += block_affine_xxs_dot
+            else
+              row_adaptive_block_affine_xxs[threshold_index][activation_index] += native_dot
+            end
           end
         end
 
         thresholds.each_with_index do |threshold, threshold_index|
           adaptive_s_counts[threshold_index] += 1 if s_ratio <= threshold
           adaptive_xxs_counts[threshold_index] += 1 if xxs_ratio <= threshold
+          adaptive_block_s_counts[threshold_index] += 1 if block_s_ratio <= threshold
+          adaptive_block_xxs_counts[threshold_index] += 1 if block_xxs_ratio <= threshold
         end
       end
 
+      affine_s_scale, affine_s_bias = affine_s_fit.fit
+      affine_xxs_scale, affine_xxs_bias = affine_xxs_fit.fit
       activations.each_index do |activation_index|
         native_outputs[activation_index][sampled_index] = row_native[activation_index]
         iq3_s_outputs[activation_index][sampled_index] = row_s[activation_index]
         iq3_xxs_outputs[activation_index][sampled_index] = row_xxs[activation_index]
+        activation_sum = activations[activation_index].values.sum(0.0_f64) { |value| value.to_f64 }
+        affine_s_outputs[activation_index][sampled_index] =
+          affine_s_scale.to_f64 * row_s[activation_index] + affine_s_bias.to_f64 * activation_sum
+        affine_xxs_outputs[activation_index][sampled_index] =
+          affine_xxs_scale.to_f64 * row_xxs[activation_index] + affine_xxs_bias.to_f64 * activation_sum
+        block_affine_s_outputs[activation_index][sampled_index] = row_block_affine_s[activation_index]
+        block_affine_xxs_outputs[activation_index][sampled_index] = row_block_affine_xxs[activation_index]
         thresholds.each_index do |threshold_index|
           adaptive_s_outputs[threshold_index][activation_index][sampled_index] = row_adaptive_s[threshold_index][activation_index]
           adaptive_xxs_outputs[threshold_index][activation_index][sampled_index] = row_adaptive_xxs[threshold_index][activation_index]
+          adaptive_block_affine_s_outputs[threshold_index][activation_index][sampled_index] =
+            row_adaptive_block_affine_s[threshold_index][activation_index]
+          adaptive_block_affine_xxs_outputs[threshold_index][activation_index][sampled_index] =
+            row_adaptive_block_affine_xxs[threshold_index][activation_index]
         end
       end
     end
 
     puts "probe=qwen35_q4_iq3_weight_probe mode=offline_cpu_only"
     puts "tensor=#{tensor.name} type=#{tensor.type} dims=#{tensor.dims.join('x')} sampled_rows=#{rows.size}/#{out_dim} blocks=#{total_blocks}"
-    puts "scope=reencode_dequantized_q4_values; no_source_float_weights no_metal no_model_generation"
+    puts "scope=reencode_dequantized_q4_values; optional_f32_scale_bias_per_output_row_or_block; no_source_float_weights no_metal no_model_generation"
     puts "ranking_scope=sampled_output_rows_only; top1_top2_are_operator_proxies_not_token_or_ECS_metrics"
     puts "whole_token_model=recurrent_gate_up_logical_byte_share_#{GATE_UP_CORRIDOR_PCT}% required_ideal_saving_#{REQUIRED_WHOLE_TOKEN_PCT}%"
     puts "residual_ratio=max_abs(q4-iq3)/q4_block_std iq3_s_mean=#{(s_ratio_sum / total_blocks).round(9)} iq3_s_max=#{s_ratio_max.round(9)} iq3_xxs_mean=#{(xxs_ratio_sum / total_blocks).round(9)} iq3_xxs_max=#{xxs_ratio_max.round(9)}"
@@ -308,12 +434,20 @@ begin
     policies = [
       {"all_iq3_s", IQ3_S_BYTES.to_i64 * total_blocks, total_blocks, iq3_s_outputs},
       {"all_iq3_xxs", IQ3_XXS_BYTES.to_i64 * total_blocks, total_blocks, iq3_xxs_outputs},
+      {"all_iq3_s_row_affine", IQ3_S_BYTES.to_i64 * total_blocks + AFFINE_ROW_BYTES.to_i64 * rows.size, total_blocks, affine_s_outputs},
+      {"all_iq3_xxs_row_affine", IQ3_XXS_BYTES.to_i64 * total_blocks + AFFINE_ROW_BYTES.to_i64 * rows.size, total_blocks, affine_xxs_outputs},
+      {"all_iq3_s_block_affine", (IQ3_S_BYTES + AFFINE_BLOCK_BYTES).to_i64 * total_blocks, total_blocks, block_affine_s_outputs},
+      {"all_iq3_xxs_block_affine", (IQ3_XXS_BYTES + AFFINE_BLOCK_BYTES).to_i64 * total_blocks, total_blocks, block_affine_xxs_outputs},
     ]
     thresholds.each_with_index do |threshold, index|
       s_count = adaptive_s_counts[index]
       xxs_count = adaptive_xxs_counts[index]
+      block_s_count = adaptive_block_s_counts[index]
+      block_xxs_count = adaptive_block_xxs_counts[index]
       policies << {"adaptive_iq3_s_t#{threshold}", bitmap_bytes + s_count * IQ3_S_BYTES + (total_blocks - s_count) * NATIVE_Q4_BYTES, s_count, adaptive_s_outputs[index]}
       policies << {"adaptive_iq3_xxs_t#{threshold}", bitmap_bytes + xxs_count * IQ3_XXS_BYTES + (total_blocks - xxs_count) * NATIVE_Q4_BYTES, xxs_count, adaptive_xxs_outputs[index]}
+      policies << {"adaptive_iq3_s_block_affine_t#{threshold}", bitmap_bytes + block_s_count * (IQ3_S_BYTES + AFFINE_BLOCK_BYTES) + (total_blocks - block_s_count) * NATIVE_Q4_BYTES, block_s_count, adaptive_block_affine_s_outputs[index]}
+      policies << {"adaptive_iq3_xxs_block_affine_t#{threshold}", bitmap_bytes + block_xxs_count * (IQ3_XXS_BYTES + AFFINE_BLOCK_BYTES) + (total_blocks - block_xxs_count) * NATIVE_Q4_BYTES, block_xxs_count, adaptive_block_affine_xxs_outputs[index]}
     end
 
     policies.each do |policy, forecast_bytes, compressed_blocks, outputs|

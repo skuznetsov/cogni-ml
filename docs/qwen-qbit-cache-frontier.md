@@ -5534,3 +5534,74 @@ Evidence:
 Refresh on decode scheduling, per-token synchronization, Metal bridge replay
 support, model/device, profiling semantics, or a steady-state encoding corridor
 of at least `3 ms/token`.
+
+### Row/block-affine IQ3 compensation is rejected (2026-09-21)
+
+The IQ3 pre-gate was extended with the smallest weight-domain correction that
+could plausibly preserve its density advantage. Least-squares F32 scale and
+bias pairs fit the native Q4_K-dequantized weights as
+`w ~= scale * iq3 + bias`. The corrected operator is evaluated without
+materializing repaired weights:
+
+```text
+dot(w, x) ~= scale * dot(iq3, x) + bias * sum(x)
+```
+
+Two layouts were tested. A pair per output row costs eight bytes across twenty
+256-value blocks. A more expressive pair per IQ3 block costs eight bytes per
+block. The latter reduces the ideal complete-token IQ3_S ceiling from
+`7.187%` to `5.496%`, but is the stronger numerical falsifier. Adaptive block
+selection uses the residual after applying the block-affine correction, not
+the uncorrected IQ3 residual. The storage model includes the F32 pairs and the
+existing one-bit native/IQ3 selector, but remains optimistic: it excludes
+variable-block addressing, decode arithmetic, and activation block-sum cost.
+
+The same 256 sampled rows and five deterministic activation families were run
+on both real tensors:
+
+- `blk.1.ffn_gate.weight`: all-IQ3_S row-affine retained `7.103%` ideal
+  complete-token saving but reached only `0.980627` minimum cosine and `4/5`
+  ordered top-two matches. Per-block affine improved minimum cosine to
+  `0.986061` at a `5.496%` ceiling. The first sampled adaptive block-affine
+  IQ3_S point above the byte gate saved `3.142%`, but minimum cosine was
+  `0.992404`; IQ3_XXS at `3.471%` saving reached only `0.991143` and `4/5`
+  ordered top-two matches.
+- `blk.32.ffn_up.weight`: all-IQ3_S row-affine reached `0.981872`; per-block
+  affine reached `0.987788`. The sampled adaptive IQ3_S point above the byte
+  gate saved `3.754%` at `0.991654` minimum cosine. IQ3_XXS saved `3.345%` at
+  `0.990543` and `4/5` ordered top-two matches.
+
+No policy simultaneously passed the `>=3%` ideal byte gate, minimum sampled
+operator cosine `>=0.99999`, and exact ordered top two. Per-block affine has
+strictly more local fitting freedom than one row pair, yet still misses the
+cosine gate by roughly two orders of magnitude in residual distance at the
+first useful byte points. The remaining error is therefore not predominantly
+a row/block mean-and-scale error.
+
+There is also a direct exactness adversary. For fitted residual
+`e = w - (scale * iq3 + bias)`, least squares makes `e` orthogonal to the IQ3
+vector and constant vector. Choosing activation `x = e` leaves output error
+`e dot e > 0` unless the quantization was already exact; nearly tied output
+rows can turn this into a rank flip. F32 coefficients cannot make this scheme
+exact.
+
+**decision:** F32 row-affine and block-affine repair of re-encoded IQ3_S/XXS
+is BROKEN as the next recurrent-FFN optimization. Do not build a Metal decoder
+or pay its block-sum/sidecar overhead. Reopen only with a materially different
+residual representation whose complete storage and decoder cost still predict
+`>=3%` whole-token gain, or with source weights and an activation-aware
+quantizer evaluated against real hidden-state calibration data. A larger
+correction basis is not admitted merely because it improves this CPU proxy;
+its added bytes and arithmetic must clear the same traffic gate first.
+
+Evidence:
+
+- `bin/qwen35_q4_iq3_weight_probe.cr`;
+- `/private/tmp/qwen35_q4_iq3_block_affine_gate_l1_rows256_final.log`, SHA-256
+  `4b8d233c43a531a94e1eebbbbf24b793e2a3b2585028e9cba5d5196d9c7c1a57`;
+- `/private/tmp/qwen35_q4_iq3_block_affine_up_l32_rows256_final.log`, SHA-256
+  `615394cbd12f481efdd1e254ef935c03539e5d6f0263bd950d2ac926fe82af51`.
+
+Refresh on source-weight availability, calibrated hidden states, IQ3 codec or
+sidecar semantics, residual representation, byte/decoder cost model, quality
+threshold, model/device, or evidence loss.
