@@ -5132,3 +5132,50 @@ Evidence:
 
 Refresh on split-K geometry, stage fusion, P4 loader or value ownership,
 Metal compiler/toolchain, device, timing method, or evidence loss.
+
+### P4 MMA8 H16 stage one is rejected (2026-09-20)
+
+A temporary default-off split-K stage-one kernel used 8x8 simdgroup matrices
+for the exact Qwen3.8 GQA6 shape. It padded each six-query KV-head group to
+eight H16 query rows, dequantized packed P4 K/V into H16 tiles, retained F32
+online-softmax state and F32 split-K partials, and left the canonical adaptive
+cache unchanged. Admission was restricted to Apple M2 Max, uniform P4,
+24 query heads, four KV heads, head dimension 256, chunk 64, one-token decode,
+and a visible prefix of at least 6,144 tokens.
+
+A separately captured model-free probe reported 12,576 bytes of static
+threadgroup memory, execution width 32, and a maximum 896 threads for its MMA8
+pipeline. With query conversion included, isolated stage one improved by
+`22.76%` at 8K and `18.13%` at 16K, with all ten pairs won at each length and
+maximum output delta near `1e-6`. This proves the local matrix mechanism, not
+the integrated route's product speed or strict logit quality.
+
+The guarded product discriminator did not promote the route. On the real
+Qwen3.8-27B Q4_K_M model with a 6,667-token production-prefilled prefix and
+32 alternating decode pairs, baseline/candidate mean full-token time was
+`68.545/66.671 ms` (`+2.734%`, `30/32` candidate wins). This is diagnostic
+only because quality mode deliberately marks its timing gate invalid. The
+number is below the declared `>=3%` threshold, but this run cannot certify
+timing admission. All 33 aligned decode steps retained top-one and ordered
+top-two IDs, token ECS was `1.0`, and the free trajectories shared all 34
+observed tokens. However, the declared
+`1e-4` numeric gate failed: maximum top-one, top-two, and margin deltas reached
+`0.023448944`, `0.011590958`, and `0.011857986` respectively.
+
+**decision:** the local matrix mechanism is promising, but this H16 Q/K/V
+formulation is BROKEN for strict promotion and does not establish a promotable
+product-speed result. Matching token IDs, top two, text, and ECS does not
+override the reproducible logit drift. The temporary kernel, converter,
+policy, probe, and spec wiring were removed. Preserve the architectural
+lesson—eight-row padded GQA6 MMA can materially reduce stage-one cost—but do
+not reintroduce this mixed-precision route unless a new correction or dataflow
+preserves the existing numeric contract and independently clears end-to-end
+timing.
+
+Evidence: `/private/tmp/qwen35_adaptive_p4_mma8_probe_v4.log`, SHA-256
+`16fe0e497e12f11b13beec70db05ad432897b87f12198693a3561b07faa0d94c`;
+`/private/tmp/qwen35_mma8_real_prefix_quality.log`, SHA-256
+`d8ec917bb0798582e83c5cc8f31642956a6c9c35d683dfce70e71b9c9544acfe`.
+Refresh on arithmetic precision or correction scheme, split-K ownership,
+Metal matrix primitives/compiler, device, quality contract, timing method, or
+evidence loss.

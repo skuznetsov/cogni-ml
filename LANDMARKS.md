@@ -29384,3 +29384,26 @@ Refresh after source/toolchain/device/model/workload changes.
   ownership boundary. No BF16, cross-device, or whole-model percentage is
   claimed. Evidence and refresh conditions are recorded in
   `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-20 — P4 MMA8 H16 stage one is rejected
+
+- A temporary exact-shape Apple M2 Max kernel padded each six-query GQA6 group
+  to eight rows and used H16 MMA for Q/K/V while retaining F32 softmax state,
+  split-K partials, and the canonical P4 cache.
+- A separately captured model-free probe reported 12,576 bytes of static
+  threadgroup memory and improved isolated stage-one time by `22.76%` at 8K
+  and `18.13%` at 16K with query conversion included, winning all ten pairs at
+  each length and keeping the maximum output delta near `1e-6`.
+- A protected real-model 6,667-token prefix run retained 33/33 top-one and
+  66/66 ordered top-two IDs, ECS `1.0`, and a 34/34 common trajectory. Its
+  non-promotable quality-mode timing was `68.545/66.671 ms` (`+2.734%`,
+  `30/32` wins). Because `timing_gate_valid=false`, this is not a valid timing
+  gate result; it is only numerically below the declared `>=3%` threshold. The
+  strict `1e-4` numeric gate failed: top-one/top-two/margin deltas reached
+  `0.023448944/0.011590958/0.011857986`.
+- Verdict: ROBUST for the bounded isolated-kernel speed hypothesis, but BROKEN
+  for product promotion. The temporary route was removed. Reuse the
+  eight-row GQA6 ownership idea only with a new F32-preserving correction or
+  dataflow that passes both strict logits and end-to-end speed. Full evidence,
+  hash, scope, and refresh conditions are in
+  `docs/qwen-qbit-cache-frontier.md`.
