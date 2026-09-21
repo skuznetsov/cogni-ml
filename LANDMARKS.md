@@ -29471,3 +29471,26 @@ Refresh after source/toolchain/device/model/workload changes.
   adjacent-metadata, NR2/B2, parallel-gate/up, conversion-only H16, or
   sequential B32/B64 variants. Full evidence and refresh conditions are in
   `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-21 — fixed-shape Q4 x16 specialization is product-neutral
+
+- A temporary default-off batch-one kernel specialized the recurrent Q4_K
+  `5120 -> 17408` gate/up shape by hard-coding `nb=20` and the row stride while
+  preserving the production x16 lane ownership and reduction order.
+- Route-aware operator A/B/BA on the real gate and up weights produced
+  byte-identical F32 outputs. Candidate GPU p50 improved by `1.268%` and
+  `1.233%`, respectively, with `40/40` paired wins for each matrix. The log
+  SHA-256 is
+  `aeb98c76c3bab6b002202bdfa096a0c03d95104399e3cb2a04d9c66e0cb47fd0`.
+- A product-shaped 64-token greedy decode was mixed: the candidate won only
+  `4/10` pairs and its mean total time was `9.52 ms` slower. The log SHA-256
+  is `fc098e7706878e458eb446a00520ceaed8693bc9e682a05eda9cfd9868589742`.
+- A cleaner base-state-forked 12-pair decode isolated prefill and state setup
+  from the timed region. Baseline/candidate means were
+  `72.887/72.893 ms/token`, each arm won `6/12` pairs, and the mean delta was
+  `-0.006 ms/token`. The log SHA-256 is
+  `066d45c3ff4043eafe5df4855d57662c3a1907b2428c72bd019cd74e1df98760`.
+- Verdict: ROBUST as a local exact microkernel improvement and BROKEN for
+  product promotion. The temporary route was removed. Do not retry a
+  constants-only specialization without a compiler/device change or a larger
+  composable mechanism whose predicted whole-token effect clears noise.
