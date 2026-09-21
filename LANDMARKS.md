@@ -29326,3 +29326,23 @@ Refresh after source/toolchain/device/model/workload changes.
   probe changes were removed before a 27B-model run. This rejects the current
   384-thread/32 KiB pairing, not all hierarchical split-K designs. Full scope
   and refresh conditions are in `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-20 — Centroid-space P4 QK is rejected
+
+- A temporary P4 T8 split-K key path used
+  `Q*(mean+sigma*c) = mean*sum(Q)+sigma*sum(Q*c)` to avoid per-value affine
+  reconstruction and F32 K-tile materialization while sharing decoded
+  centroids across all six GQA queries.
+- The focused 8K Metal resident spec passed, canonical K/V bytes were
+  unchanged, and the fixed-snapshot timing discriminator observed maximum
+  output delta `1.9e-7`.
+- Ten interleaved 8K pairs regressed from `2.725` to `3.132 ms` wall
+  (`-14.956%`, `1/10` wins) and from `2.250` to `2.546 ms` completed-GPU
+  (`-13.179%`, `1/10`). The 16K and model-level gates were skipped after the
+  fail-fast rejection.
+- Verdict: ROBUST for bounded numerical equivalence and BROKEN for performance
+  promotion on Apple M2 Max with this toolchain. The temporary kernel change
+  was removed. Do not retry six simultaneous centroid-domain accumulators
+  without a new geometry or compiler evidence that bounds register pressure.
+  Full scope and refresh conditions are in
+  `docs/qwen-qbit-cache-frontier.md`.

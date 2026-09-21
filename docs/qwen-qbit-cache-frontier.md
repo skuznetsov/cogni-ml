@@ -5029,3 +5029,34 @@ partial traffic without the 384-thread/32 KiB occupancy cost.
 
 Refresh on split-K group geometry, threadgroup-memory layout, Metal
 compiler/toolchain, device, timing method, promotion gate, or evidence loss.
+
+### Centroid-space P4 QK is rejected (2026-09-20)
+
+A temporary P4 T8 split-K variant tested the exact algebraic factorization
+`Q * (mean + sigma * centroid) = mean * sum(Q) + sigma * sum(Q * centroid)`.
+Each SIMD lane decoded eight centroid values once and accumulated them against
+all six GQA queries; the row affine transform was applied only after the
+256-value reduction. This removed F32 K-tile materialization from the key path
+and avoided per-value mean/sigma reconstruction, while leaving the canonical
+cache, V path, softmax, stage two, and host ABI unchanged. The current-token
+tail remained exact F32.
+
+The focused 8K Metal resident spec compiled the source and passed its numerical
+and cache-byte checks. The guarded model-free fixed-snapshot discriminator then
+ran ten interleaved pairs at prefix 8,191. The candidate retained canonical K/V
+bytes and had maximum output delta `1.9e-7`, but mean wall time regressed from
+`2.725` to `3.132 ms` (`-14.956%`, `1/10` wins) and completed-GPU time regressed
+from `2.250` to `2.546 ms` (`-13.179%`, `1/10`). The 16K boundary was skipped
+after the predeclared 8K fail-fast gate failed.
+
+**decision:** the algebra is numerically sound in the bounded test, but the
+performance route is BROKEN on Apple M2 Max with this compiler/toolchain. The
+six query sums and compressed-domain accumulators increase live register and
+reduction pressure enough to outweigh the eliminated affine work and K-tile
+traffic. The temporary kernel change was fully removed before any 27B-model or
+semantic-quality run. Do not retry centroid-space QK with six simultaneous
+query accumulators; reopen only with compiler evidence or a different geometry
+that bounds register lifetime and first clears the same 8K gate.
+
+Refresh on P4 QK ownership, accumulator geometry, Metal compiler/toolchain,
+device, timing method, promotion gate, or evidence loss.
