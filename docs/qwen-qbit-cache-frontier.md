@@ -5179,3 +5179,58 @@ Evidence: `/private/tmp/qwen35_adaptive_p4_mma8_probe_v4.log`, SHA-256
 Refresh on arithmetic precision or correction scheme, split-K ownership,
 Metal matrix primitives/compiler, device, quality contract, timing method, or
 evidence loss.
+
+### Affine-centroid P4 V-MMA is rejected (2026-09-20)
+
+A temporary default-off split-K stage-one variant used the exact P4 identity
+`sum(p * V) = sum(p * sigma * centroid) + sum(p * mean)`. K materialization,
+QK accumulation, online softmax, row means, probability-times-sigma, the exact
+current-token contribution, and the split-K partial ABI remained F32. Only the
+fixed P4 centroids crossed H16 and an 8x16-by-16x8 simdgroup matrix multiply.
+The canonical adaptive cache bytes and publication protocol were unchanged.
+Admission was restricted to Apple M2 Max, uniform P4 T8, tile 16, chunk 64,
+one-token decode, and at least 8,192 visible tokens; direct-QK and contiguous-V
+were excluded.
+
+The model-free falsifier initially found and corrected a cumulative-mean bug.
+After the fix, tile tails 1/6/15/16 and nonfinite status bits passed. Three
+fresh protected runs kept the maximum output delta at `7.7724457e-5`. Isolated
+stage one improved by `6.03--8.55%` at 8K with at least five of six pairs won,
+and by `10.48--12.46%` at 16K with all six pairs won. This established a local
+kernel opportunity within the declared `1e-4` bound, not product suitability.
+
+The integrated real-model gate falsified promotion. A production-prefilled
+8,201-token Qwen3.8-27B Q4_K_M run selected the exact affine pipeline 132
+times, covering all 12 P4 owners while the four BF16 owners remained on their
+existing route. The baseline and candidate retained all 22 ordered top-two
+IDs, 11/11 top-one IDs, a 12/12 common free trajectory, identical text, and
+token ECS `1.0`. Nevertheless, the strict numeric gate failed: maximum
+top-one, top-two, and margin deltas were `0.0029258728`, `0.002571106`, and
+`0.002527237`, respectively. The quality run's timing is diagnostic rather
+than promotable, but it also moved in the wrong direction: complete-token
+means were `112.867/114.536 ms` (`-1.478%`, only `4/10` candidate wins).
+
+**decision:** the affine decomposition is mathematically useful and the local
+MMA kernel is ROBUST within its model-free scope, but this H16-centroid route
+is BROKEN for product promotion. Exact token identity, top two, text, and ECS
+do not override either the strict logit failure or the disappearance of the
+local speedup in the complete graph. The kernel, policy, pipeline identity,
+probe mode, and specs were removed. Do not retry the same F32-K/H16-centroid
+arrangement merely with a different tile or threshold. Reopen only for a new
+arithmetic/dataflow that predicts a material full-token win and preserves the
+numeric contract before product escalation.
+
+Evidence:
+
+- `/private/tmp/qwen35_adaptive_p4_v_affine_mma_probe_v4_safe.log`, SHA-256
+  `f977a0cf30964eb13f69466c873df4b4cfc202ca0d63a711590d959e6ab0b5ec`;
+- `/private/tmp/qwen35_adaptive_p4_v_affine_mma_probe_v4_safe_r2.log`, SHA-256
+  `0491e14e11447fe4b9632402c43883cf7f05caeff8982b37bd17e1f074b0900d`;
+- `/private/tmp/qwen35_adaptive_p4_v_affine_mma_probe_v4_safe_r3.log`, SHA-256
+  `7e08631dc091be48412145d06752b7552aeac4d46efe5725dfc39bd2cd467db7`;
+- `/private/tmp/qwen35_affine_mma_quality_8k_smoke.log`, SHA-256
+  `4b5a4c381fca1b4f82ba8b34a9f7f90b2e74336eb57586aea06d923eff110712`.
+
+Refresh only if centroid precision/correction, matrix accumulation semantics,
+stage-one ownership, compiler/toolchain, target device, quality contract,
+full-token timing method, or retained evidence changes.

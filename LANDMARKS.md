@@ -29407,3 +29407,25 @@ Refresh after source/toolchain/device/model/workload changes.
   dataflow that passes both strict logits and end-to-end speed. Full evidence,
   hash, scope, and refresh conditions are in
   `docs/qwen-qbit-cache-frontier.md`.
+
+### Continuation 2026-09-20 — Affine-centroid P4 V-MMA is rejected
+
+- A temporary default-off P4 T8 stage-one kernel kept K, QK, softmax, means,
+  probability-times-sigma, current-token V, and split-K partials in F32 while
+  using H16 only for fixed P4 centroids in an 8x16-by-16x8 simdgroup MMA.
+- Three protected model-free runs passed tile-tail/nonfinite checks with
+  maximum output delta `7.7724457e-5`. Isolated stage one improved by
+  `6.03--8.55%` at 8K and `10.48--12.46%` at 16K.
+- The production-prefilled 8,201-token Qwen3.8-27B gate traced the exact
+  affine pipeline 132 times across all 12 P4 owners. All 22 ordered top-two
+  IDs, 11/11 top-one IDs, 12/12 trajectory tokens, text, and ECS `1.0`
+  matched, but top-one/top-two/margin drift reached
+  `0.0029258728/0.002571106/0.002527237`, failing the strict `1e-4` gate.
+  Diagnostic quality-mode full-token time also regressed by `1.478%` with
+  only `4/10` wins.
+- Verdict: ROBUST for the bounded local-kernel hypothesis and BROKEN for
+  product promotion. All temporary runtime and probe code was removed. Do not
+  retry the same H16-centroid arrangement without a new correction/dataflow
+  that preserves strict logits and predicts a complete-token win. Full scope,
+  evidence hashes, and refresh conditions are in
+  `docs/qwen-qbit-cache-frontier.md`.
