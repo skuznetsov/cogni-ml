@@ -1,5 +1,5 @@
 require "./qwen_image21_gguf"
-require "./qwen_image21_block"
+require "./qwen_image21_transformer"
 {% unless flag?(:cpu_only) %}
   require "./qwen35_metal"
 {% end %}
@@ -103,6 +103,34 @@ module ML::GGUF
         gguf.close
         raise ex
       end
+    end
+
+    def transformer_config : QwenImage21TransformerConfig
+      QwenImage21TransformerConfig.new(
+        input_dim: INPUT_DIM,
+        output_dim: INPUT_DIM,
+        context_dim: HIDDEN_DIM,
+        time_input_dim: TIME_EMBED_DIM,
+        block: @block_config,
+        causal_condition: true,
+      )
+    end
+
+    # Lightweight view over the mmap-backed tensors. The returned object does
+    # not own the mapping and must not outlive this loader.
+    def transformer_weights : QwenImage21TransformerWeights
+      QwenImage21TransformerWeights.new(
+        img_in: @img_in,
+        modulation: @modulation,
+        norm_out_linear: @norm_out_linear,
+        proj_out: @proj_out,
+        timestep_linear_1: @timestep_linear_1,
+        timestep_linear_2: @timestep_linear_2,
+        text_in_layer: @text_in_layer,
+        text_out_layer: @text_out_layer,
+        text_norm: @text_norm,
+        layers: @layers,
+      )
     end
 
     # Callers must quiesce in-flight Metal work before closing the loader.

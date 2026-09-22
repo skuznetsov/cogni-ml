@@ -17,6 +17,14 @@ describe ML::GGUF::QwenImage21Weights do
       weights.layers[0].gate_up.type.should eq(ML::GGUF::TensorType::Q5_K)
       weights.layers[0].gate_up.out_dim.should eq(24576)
       weights.layers[0].mlp_out.in_dim.should eq(12288)
+
+      transformer = weights.transformer_weights
+      config = weights.transformer_config
+      transformer.layers.same?(weights.layers).should be_true
+      transformer.timestep_linear_1.in_dim.should eq(256)
+      config.hidden_dim.should eq(4096)
+      config.input_dim.should eq(64)
+      config.causal_condition.should be_true
     ensure
       weights.close
     end
