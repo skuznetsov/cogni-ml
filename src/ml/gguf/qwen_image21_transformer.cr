@@ -117,6 +117,14 @@ module ML::GGUF
       weights : QwenImage21TransformerWeights,
       config : QwenImage21TransformerConfig,
     ) : Array(Float32)?
+
+    abstract def forward_resident_cached_input(
+      image_input : Array(Float32), encoder_hidden : Array(Float32),
+      projected_text : Array(Float32), time_input : Array(Float32),
+      img_mask : Array(Bool), layout : QwenImage21TokenLayout,
+      weights : QwenImage21TransformerWeights,
+      config : QwenImage21TransformerConfig, prefix_tokens : Int32,
+    ) : Array(Float32)?
   end
 
   module QwenImage21TransformerCPU
@@ -212,23 +220,28 @@ module ML::GGUF
         img_mask, img_shapes, encoder_token_count, encoder_hidden_states_mask
       )
 
-      # A causal prefix still uses the host-validated KV cache path below.
-      # Until its compatibility certificate is based on raw inputs, bypassing
-      # the projected prefix arrays would make cache reuse unsound.
+      target_start = causal_target_start(layout.target_token_mask, config.causal_condition)
       if !weights.layers.empty? &&
          (resident_backend = backend.as?(QwenImage21ResidentInputProjectionBackend)) &&
-         resident_backend.resident_input? &&
-         causal_target_start(layout.target_token_mask, config.causal_condition).nil?
+         resident_backend.resident_input?
         if resident = layer_stack_backend.as?(QwenImage21ResidentInputStackBackend)
           projected_text = project_text(
             encoder_hidden_states, encoder_token_count, weights, config, backend
           )
           time_rows = config.causal_condition ? [timestep, 0.0_f32] : [timestep]
           time_input = time_embedding(time_rows, config.time_input_dim)
-          if output = resident.forward_resident_input(
-               hidden_states, projected_text, time_input, img_mask,
-               layout, weights, config,
-             )
+          output = if prefix_tokens = target_start
+                     resident.forward_resident_cached_input(
+                       hidden_states, encoder_hidden_states, projected_text,
+                       time_input, img_mask, layout, weights, config, prefix_tokens,
+                     )
+                   else
+                     resident.forward_resident_input(
+                       hidden_states, projected_text, time_input, img_mask,
+                       layout, weights, config,
+                     )
+                   end
+          if output
             return QwenImage21TransformerResult.new(output, layout)
           end
         end

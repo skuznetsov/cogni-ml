@@ -434,6 +434,79 @@ module ML::GGUF
     end
   end
 
+  # A prefix cache is reusable only when the raw inputs that produced its
+  # hidden state and t=0 modulation are identical. Tensor objects are treated
+  # as immutable for the lifetime of the loaded model.
+  class QwenImage21MetalRawPrefixCertificate
+    @encoder_hidden : Array(Float32)
+    @projected_text : Array(Float32)
+    @text_norm : Array(Float32)
+    @source_rows : Array(Int32)
+    @prefix_image_input : Array(Float32)
+    @time_zero : Array(Float32)
+    @target_mask : Array(Bool)
+    @positions : Array(StaticArray(Int32, 3))
+    @image_ids : Array(Int32)
+    @key_valid : Array(Bool)
+
+    def self.prefix_closed?(layout : QwenImage21TokenLayout, prefix_tokens : Int32) : Bool
+      return false unless prefix_tokens > 0 && prefix_tokens < layout.token_count
+      return false unless layout.image_ids.size == layout.token_count &&
+                          layout.key_valid.size == layout.token_count
+      layout.image_ids.first(prefix_tokens).none? do |prefix_id|
+        prefix_id >= 0 && layout.image_ids[prefix_tokens..].each_with_index.any? do |target_id, index|
+          layout.key_valid[prefix_tokens + index] && target_id == prefix_id
+        end
+      end
+    end
+
+    def initialize(
+      image_input : Array(Float32), encoder_hidden : Array(Float32),
+      input : QwenImage21MetalResidentInput,
+      layout : QwenImage21TokenLayout,
+      @weights : QwenImage21TransformerWeights, @prefix_tokens : Int32,
+    )
+      @encoder_hidden = encoder_hidden.dup
+      @projected_text = input.projected_text.dup
+      @text_norm = @weights.text_norm.dup
+      @source_rows = input.source_rows.first(@prefix_tokens)
+      image_rows = @source_rows.count { |row| row < 0 }
+      @prefix_image_input = image_input.first(image_rows * input.image_weight.in_dim)
+      time_width = input.timestep_linear_1.in_dim
+      @time_zero = input.time_input.last(time_width)
+      @target_mask = layout.target_token_mask.first(@prefix_tokens)
+      @positions = layout.positions.first(@prefix_tokens)
+      @image_ids = layout.image_ids.first(@prefix_tokens)
+      @key_valid = layout.key_valid.first(@prefix_tokens)
+    end
+
+    def compatible?(
+      image_input : Array(Float32), encoder_hidden : Array(Float32),
+      input : QwenImage21MetalResidentInput,
+      layout : QwenImage21TokenLayout,
+      weights : QwenImage21TransformerWeights, prefix_tokens : Int32,
+    ) : Bool
+      return false unless prefix_tokens == @prefix_tokens
+      return false unless {weights.img_in, weights.timestep_linear_1,
+                           weights.timestep_linear_2, weights.modulation,
+                           weights.norm_out_linear, weights.text_in_layer,
+                           weights.text_out_layer, weights.proj_out}.zip({@weights.img_in, @weights.timestep_linear_1,
+                                                                          @weights.timestep_linear_2, @weights.modulation,
+                                                                          @weights.norm_out_linear, @weights.text_in_layer,
+                                                                          @weights.text_out_layer, @weights.proj_out}).all? { |current, cached| current.same?(cached) }
+      return false unless encoder_hidden == @encoder_hidden && weights.text_norm == @text_norm
+      return false unless input.projected_text == @projected_text
+      return false unless input.source_rows.first(prefix_tokens) == @source_rows
+      return false unless image_input.first(@prefix_image_input.size) == @prefix_image_input
+      return false unless input.time_rows == 2
+      return false unless input.time_input.last(@time_zero.size) == @time_zero
+      return false unless layout.target_token_mask.first(prefix_tokens) == @target_mask
+      return false unless layout.positions.first(prefix_tokens) == @positions
+      return false unless layout.image_ids.first(prefix_tokens) == @image_ids
+      layout.key_valid.first(prefix_tokens) == @key_valid
+    end
+  end
+
   class QwenImage21MetalPrefixCache
     getter prefix_tokens : Int32
     getter total_tokens : Int32
@@ -441,6 +514,7 @@ module ML::GGUF
     getter v_buffers : Array(ML::MetalBuffer)
     getter prefix_output_buffer : ML::MetalBuffer
     property prefix_output : Array(Float32)
+    property raw_certificate : QwenImage21MetalRawPrefixCertificate?
 
     @closed = false
 
@@ -465,6 +539,7 @@ module ML::GGUF
       @prefix_image_ids = image_ids.first(@prefix_tokens)
       @prefix_key_valid = key_valid.first(@prefix_tokens)
       @prefix_output = Array(Float32).new(@prefix_tokens * @dim, 0.0_f32)
+      @raw_certificate = nil
       @k_buffers = [] of ML::MetalBuffer
       @v_buffers = [] of ML::MetalBuffer
       bytes = @prefix_tokens.to_i64 * @dim * sizeof(Float32)
@@ -488,6 +563,7 @@ module ML::GGUF
       config : QwenImage21BlockConfig, target_start : Int32,
     ) : Bool
       return false if @closed
+      return false if @raw_certificate
       return false unless target_start == @prefix_tokens && token_count == @total_tokens
       return false unless config.hidden_dim == @dim && config.heads == @heads
       return false unless config.head_dim == @head_dim && config.intermediate_dim == @intermediate_dim
@@ -499,6 +575,25 @@ module ML::GGUF
       return false unless positions.first(@prefix_tokens) == @prefix_positions
       return false unless image_ids.first(@prefix_tokens) == @prefix_image_ids
       key_valid.first(@prefix_tokens) == @prefix_key_valid
+    end
+
+    def compatible_raw?(
+      image_input : Array(Float32), encoder_hidden : Array(Float32),
+      input : QwenImage21MetalResidentInput,
+      layout : QwenImage21TokenLayout,
+      weights : QwenImage21TransformerWeights,
+      config : QwenImage21BlockConfig, prefix_tokens : Int32,
+    ) : Bool
+      return false if @closed
+      return false unless certificate = @raw_certificate
+      return false unless prefix_tokens == @prefix_tokens && layout.token_count == @total_tokens
+      return false unless QwenImage21MetalRawPrefixCertificate.prefix_closed?(layout, prefix_tokens)
+      return false unless config.hidden_dim == @dim && config.heads == @heads
+      return false unless config.head_dim == @head_dim && config.intermediate_dim == @intermediate_dim
+      return false unless config.axes_dims == @axes_dims && config.eps == @eps && config.rope_theta == @rope_theta
+      return false unless weights.layers.size == @layer_refs.size
+      return false unless weights.layers.each_with_index.all? { |layer, index| layer.same?(@layer_refs[index]) }
+      certificate.compatible?(image_input, encoder_hidden, input, layout, weights, prefix_tokens)
     end
 
     def close : Nil
@@ -578,6 +673,28 @@ module ML::GGUF
         positions : Array(StaticArray(Int32, 3)), image_ids : Array(Int32),
         layers : Array(QwenImage21BlockWeights), config : QwenImage21BlockConfig,
         output_weight : QuantWeight, key_valid : Array(Bool)?,
+      ) : QwenImage21MetalProjectedResult
+        raise "Metal disabled (cpu_only)"
+      end
+
+      def self.forward_layers_resident_capture_prefix(
+        input : QwenImage21MetalResidentInput, token_count : Int32,
+        positions : Array(StaticArray(Int32, 3)), image_ids : Array(Int32),
+        layers : Array(QwenImage21BlockWeights), config : QwenImage21BlockConfig,
+        output_weight : QuantWeight, key_valid : Array(Bool)?, prefix_tokens : Int32,
+        certificate : QwenImage21MetalRawPrefixCertificate,
+      ) : Tuple(QwenImage21MetalProjectedResult, QwenImage21MetalPrefixCache)
+        raise "Metal disabled (cpu_only)"
+      end
+
+      def self.forward_layers_resident_from_prefix_cache(
+        input : QwenImage21MetalResidentInput, token_count : Int32,
+        positions : Array(StaticArray(Int32, 3)), image_ids : Array(Int32),
+        layers : Array(QwenImage21BlockWeights), config : QwenImage21BlockConfig,
+        output_weight : QuantWeight, key_valid : Array(Bool)?,
+        cache : QwenImage21MetalPrefixCache,
+        image_input : Array(Float32), encoder_hidden : Array(Float32),
+        layout : QwenImage21TokenLayout, weights : QwenImage21TransformerWeights,
       ) : QwenImage21MetalProjectedResult
         raise "Metal disabled (cpu_only)"
       end
@@ -677,6 +794,56 @@ module ML::GGUF
         result = forward_layers_impl(
           hidden, token_count, modulation, positions, image_ids,
           layers, config, key_valid, nil, scales, output_weight,
+        )
+        QwenImage21MetalProjectedResult.new(result.hidden, result.stats)
+      end
+
+      def self.forward_layers_resident_capture_prefix(
+        input : QwenImage21MetalResidentInput, token_count : Int32,
+        positions : Array(StaticArray(Int32, 3)), image_ids : Array(Int32),
+        layers : Array(QwenImage21BlockWeights), config : QwenImage21BlockConfig,
+        output_weight : QuantWeight, key_valid : Array(Bool)?, prefix_tokens : Int32,
+        certificate : QwenImage21MetalRawPrefixCertificate,
+      ) : Tuple(QwenImage21MetalProjectedResult, QwenImage21MetalPrefixCache)
+        unless prefix_tokens > 0 && prefix_tokens < token_count
+          raise ArgumentError.new("prefix_tokens must split a non-empty prefix and target")
+        end
+        valid = key_valid || Array(Bool).new(token_count, true)
+        cache = QwenImage21MetalPrefixCache.new(
+          [] of Float32, [] of Float32, positions, image_ids, valid,
+          layers, config, prefix_tokens, token_count,
+        )
+        cache.raw_certificate = certificate
+        begin
+          result = forward_layers_impl(
+            nil, token_count, nil, positions, image_ids,
+            layers, config, valid, cache, nil, output_weight, input,
+          )
+          {QwenImage21MetalProjectedResult.new(result.hidden, result.stats), cache}
+        rescue ex
+          cache.close
+          raise ex
+        end
+      end
+
+      def self.forward_layers_resident_from_prefix_cache(
+        input : QwenImage21MetalResidentInput, token_count : Int32,
+        positions : Array(StaticArray(Int32, 3)), image_ids : Array(Int32),
+        layers : Array(QwenImage21BlockWeights), config : QwenImage21BlockConfig,
+        output_weight : QuantWeight, key_valid : Array(Bool)?,
+        cache : QwenImage21MetalPrefixCache,
+        image_input : Array(Float32), encoder_hidden : Array(Float32),
+        layout : QwenImage21TokenLayout, weights : QwenImage21TransformerWeights,
+      ) : QwenImage21MetalProjectedResult
+        unless cache.compatible_raw?(
+                 image_input, encoder_hidden, input, layout, weights,
+                 config, cache.prefix_tokens,
+               )
+          raise ArgumentError.new("raw prefix cache input mismatch")
+        end
+        result = forward_layers_from_prefix_cache_impl(
+          nil, token_count, nil, positions, image_ids, layers, config,
+          key_valid, cache, nil, output_weight, input,
         )
         QwenImage21MetalProjectedResult.new(result.hidden, result.stats)
       end
@@ -790,24 +957,33 @@ module ML::GGUF
       end
 
       private def self.forward_layers_from_prefix_cache_impl(
-        hidden : Array(Float32), token_count : Int32,
-        modulation : Array(Float32),
+        hidden : Array(Float32)?, token_count : Int32,
+        modulation : Array(Float32)?,
         positions : Array(StaticArray(Int32, 3)),
         image_ids : Array(Int32),
         layers : Array(QwenImage21BlockWeights),
         config : QwenImage21BlockConfig,
         key_valid : Array(Bool)?, cache : QwenImage21MetalPrefixCache,
         final_scales : Array(Float32)?, output_weight : QuantWeight?,
+        resident_input : QwenImage21MetalResidentInput? = nil,
       ) : QwenImage21MetalBlockResult
-        validate_inputs(hidden, token_count, modulation, positions, image_ids,
-          layers, config, key_valid)
-        validate_final_head(final_scales, output_weight, token_count, config.hidden_dim)
+        if input = resident_input
+          validate_resident_input(input, token_count, positions, image_ids,
+            layers, config, key_valid, output_weight)
+          raise ArgumentError.new("raw prefix cache required") unless cache.raw_certificate
+        else
+          validate_inputs(hidden.not_nil!, token_count, modulation.not_nil!, positions, image_ids,
+            layers, config, key_valid)
+          validate_final_head(final_scales, output_weight, token_count, config.hidden_dim)
+        end
         valid = key_valid || Array(Bool).new(token_count, true)
-        unless cache.compatible?(
-                 hidden, token_count, modulation, positions, image_ids,
-                 valid, layers, config, cache.prefix_tokens,
-               )
-          raise ArgumentError.new("prefix cache input mismatch")
+        unless resident_input
+          unless cache.compatible?(
+                   hidden.not_nil!, token_count, modulation.not_nil!, positions, image_ids,
+                   valid, layers, config, cache.prefix_tokens,
+                 )
+            raise ArgumentError.new("prefix cache input mismatch")
+          end
         end
         unless cache.total_tokens == token_count && cache.k_buffers.size == layers.size && cache.v_buffers.size == layers.size
           raise ArgumentError.new("prefix cache shape mismatch")
@@ -825,15 +1001,23 @@ module ML::GGUF
         active_count = active_tokens * dim
         active_bytes = active_count.to_i64 * sizeof(Float32)
         full_hidden_bytes = token_count.to_i64 * dim * sizeof(Float32)
-        active_hidden = hidden[prefix_tokens * dim, active_count]
-        active_modulation = modulation[prefix_tokens * 4 * dim, active_tokens * 4 * dim]
+        active_hidden = hidden.try { |values| values[prefix_tokens * dim, active_count] }
+        active_modulation = modulation.try { |values| values[prefix_tokens * 4 * dim, active_tokens * 4 * dim] }
         active_positions = positions[prefix_tokens, active_tokens]
         buffers = [] of ML::MetalBuffer
 
         begin
-          current_hidden_buf = upload_f32(active_hidden, buffers)
+          current_hidden_buf = if resident_input
+                                 allocate(active_bytes, buffers)
+                               else
+                                 upload_f32(active_hidden.not_nil!, buffers)
+                               end
           next_hidden_buf = allocate(active_bytes, buffers)
-          modulation_buf = upload_f32(active_modulation, buffers)
+          modulation_buf = if resident_input
+                             allocate(active_tokens.to_i64 * 4_i64 * dim * sizeof(Float32), buffers)
+                           else
+                             upload_f32(active_modulation.not_nil!, buffers)
+                           end
           positions_buf = upload_i32(active_positions.flat_map(&.to_a), buffers)
           image_ids_buf = upload_i32(image_ids, buffers)
           key_valid_buf = upload_u8(valid.map { |value| value ? 1_u8 : 0_u8 }, buffers)
@@ -855,15 +1039,35 @@ module ML::GGUF
           fused_buf = allocate(active_tokens.to_i64 * 2_i64 * intermediate * sizeof(Float32), buffers)
           activated_buf = allocate(active_tokens.to_i64 * intermediate * sizeof(Float32), buffers)
           mlp_buf = allocate(active_bytes, buffers)
-          final_hidden_buf = final_scales ? allocate(full_hidden_bytes, buffers) : nil
-          final_scales_buf = final_scales.try { |values| upload_f32(values, buffers) }
-          final_norm_buf = final_scales ? allocate(full_hidden_bytes, buffers) : nil
+          final_hidden_buf = (final_scales || resident_input) ? allocate(full_hidden_bytes, buffers) : nil
+          final_scales_buf = if resident_input
+                               allocate(full_hidden_bytes, buffers)
+                             else
+                               final_scales.try { |values| upload_f32(values, buffers) }
+                             end
+          final_norm_buf = (final_scales || resident_input) ? allocate(full_hidden_bytes, buffers) : nil
           final_output_buf = if weight = output_weight
                                allocate(token_count.to_i64 * weight.out_dim * sizeof(Float32), buffers)
                              end
 
           command = ML::Metal::CommandBuffer.new
           encoder = ML::Metal::ComputeEncoder.new(command)
+          if input = resident_input
+            prepared_hidden_buf = allocate(full_hidden_bytes, buffers)
+            prepared_modulation_buf = allocate(token_count.to_i64 * 4_i64 * dim * sizeof(Float32), buffers)
+            encode_resident_input(
+              encoder, input, prepared_hidden_buf, prepared_modulation_buf,
+              final_scales_buf.not_nil!, token_count, dim, buffers,
+            )
+            encode_copy_f32(
+              encoder, prepared_hidden_buf, current_hidden_buf, active_count,
+              source_offset: prefix_tokens * dim,
+            )
+            encode_copy_f32(
+              encoder, prepared_modulation_buf, modulation_buf, active_tokens * 4 * dim,
+              source_offset: prefix_tokens * 4 * dim,
+            )
+          end
           prefix_values = prefix_tokens * dim
           layers.each_with_index do |weights, layer_index|
             encode_layernorm_modulate_gate(
@@ -957,7 +1161,7 @@ module ML::GGUF
                    else
                      cache.prefix_output + current_hidden_buf.read(active_count)
                    end
-          projection_dispatches = layers.size * 6 + (final_output_buf ? 1 : 0)
+          projection_dispatches = layers.size * 6 + (final_output_buf ? 1 : 0) + (resident_input ? 5 : 0)
           QwenImage21MetalBlockResult.new(
             values,
             QwenImage21MetalBlockStats.new(1, projection_dispatches, 0, 1, active_tokens),
@@ -1572,6 +1776,79 @@ module ML::GGUF
         input, layout.token_count, layout.positions, layout.image_ids,
         weights.layers, config.block, weights.proj_out, layout.key_valid,
       )
+      @last_stats = result.stats
+      @invocations += 1
+      @resident_head_invocations += 1
+      @resident_input_invocations += 1
+      result.output
+    end
+
+    def forward_resident_cached_input(
+      image_input : Array(Float32), encoder_hidden : Array(Float32),
+      projected_text : Array(Float32), time_input : Array(Float32),
+      img_mask : Array(Bool), layout : QwenImage21TokenLayout,
+      weights : QwenImage21TransformerWeights,
+      config : QwenImage21TransformerConfig, prefix_tokens : Int32,
+    ) : Array(Float32)?
+      raise ArgumentError.new("Qwen-Image Metal layer stack is closed") if @closed
+      return nil unless QwenImage21MetalBlock.available?
+      return nil unless {weights.img_in, weights.timestep_linear_1,
+                         weights.timestep_linear_2, weights.modulation,
+                         weights.norm_out_linear, weights.proj_out}.all?(&.type.bf16?)
+      return nil unless prefix_tokens > 0 && prefix_tokens < layout.token_count
+      return nil unless layout.target_token_mask.first(prefix_tokens).none? &&
+                        layout.target_token_mask[prefix_tokens..].all?
+      unless QwenImage21MetalRawPrefixCertificate.prefix_closed?(layout, prefix_tokens)
+        return forward_resident_input(
+          image_input, projected_text, time_input, img_mask, layout, weights, config,
+        )
+      end
+      source_rows = [] of Int32
+      image_row = 0
+      img_mask.each_with_index do |is_image, base_row|
+        if is_image
+          QwenImage21TransformerCPU::IMG_TOKENS_PER_SLOT.times do
+            source_rows << -(image_row + 1)
+            image_row += 1
+          end
+        else
+          source_rows << base_row
+        end
+      end
+      input = QwenImage21MetalResidentInput.new(
+        image_input, projected_text, time_input, source_rows,
+        layout.target_token_mask, weights.img_in, weights.timestep_linear_1,
+        weights.timestep_linear_2, weights.modulation, weights.norm_out_linear,
+      )
+      return nil unless input.time_rows == 2
+      valid_cache = @prefix_cache.try do |cache|
+        cache.compatible_raw?(
+          image_input, encoder_hidden, input, layout, weights,
+          config.block, prefix_tokens,
+        ) ? cache : nil
+      end
+      result = if cache = valid_cache
+                 @prefix_cache_hits += 1
+                 QwenImage21MetalBlock.forward_layers_resident_from_prefix_cache(
+                   input, layout.token_count, layout.positions, layout.image_ids,
+                   weights.layers, config.block, weights.proj_out,
+                   layout.key_valid, cache, image_input, encoder_hidden,
+                   layout, weights,
+                 )
+               else
+                 invalidate_prefix_cache
+                 certificate = QwenImage21MetalRawPrefixCertificate.new(
+                   image_input, encoder_hidden, input, layout, weights, prefix_tokens,
+                 )
+                 built, cache = QwenImage21MetalBlock.forward_layers_resident_capture_prefix(
+                   input, layout.token_count, layout.positions, layout.image_ids,
+                   weights.layers, config.block, weights.proj_out,
+                   layout.key_valid, prefix_tokens, certificate,
+                 )
+                 @prefix_cache = cache
+                 @prefix_cache_builds += 1
+                 built
+               end
       @last_stats = result.stats
       @invocations += 1
       @resident_head_invocations += 1

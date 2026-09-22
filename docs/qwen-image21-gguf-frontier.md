@@ -103,6 +103,17 @@ file name such as `Q4` as evidence of its actual tensor policy.
   the same buffer-level K-quant GEMV route as the resident stack at all batch
   sizes; the general Qwen 3.5 Q5/Q6 batch GEMM route diverged on the mixed
   nine-token probe and is not used as this reference.
+- Build and reuse causal prefix K/V with Metal-resident image projection,
+  timestep projections, joint-sequence assembly, and row selection. A raw-input
+  certificate compares encoder inputs and their projected text, condition-image
+  latents, prefix source/layout metadata, the `t=0` timestep row, top-level
+  projection tensor identities, text normalization, layer identities, and block
+  configuration, assuming loaded tensor payloads remain immutable. Changed
+  target latents and the active timestep row may hit;
+  changed encoder or condition-image inputs rebuild. Prefix queries must not
+  attend suffix keys. The real 32-layer text-prefix hit recomputed four of five
+  tokens with `max_abs=1.013279e-5` against a full reference; a mixed
+  text/condition-image prefix also hit and rebuilt on changed condition data.
 - On the same host and minimum `2x2` target, the unfused outer-forward observation
   changed from approximately `3.61` to `0.92` seconds, and two FlowMatch steps
   changed from approximately `6.76` to `1.31` seconds. These are implementation
@@ -132,9 +143,10 @@ either label.
 - A production-scale, end-to-end resident Metal pipeline, text encoders, VAE,
   or decoded image generation. On the no-prefix route, layout metadata,
   sinusoidal timestep input, and text normalization/projection are still built
-  on the CPU, and the final output is read back. For a reusable causal prefix,
-  the existing path still prepares projected inputs and selected rows on the
-  host to preserve exact cache compatibility checks.
+  on the CPU, and the final output is read back. The causal-prefix hit route
+  currently reprojects all image rows and prepares the full joint sequence on
+  the GPU before slicing the active suffix. It saves the 32-layer prefix work,
+  but has not yet eliminated redundant prefix input-projection work.
 - A representative-token performance claim for the current exact attention
   kernel. The admitted kernel is correctness-first and remains quadratic in
   token count; the minimum `2x2` target check is not a throughput benchmark.
@@ -147,11 +159,10 @@ either label.
 
 ## Guard and next transition
 
-The next transition is a raw-input prefix compatibility certificate covering
-encoder text, condition-image latents, layout, timestep `t=0` rows, and weight
-identity. Only after that guard is tested may the GPU input route build and hit
-the existing KV cache without reconstructing projected prefix arrays on the
-host. Representative-token profiling must then separate projection,
+The raw-input certificate and GPU cache build/hit are admitted only for the
+supported BF16 top-level route and a closed causal prefix. The older
+host-projected route remains for unsupported weights. The next transition is
+representative-token profiling that separates projection,
 attention, cache-copy, transfer, and launch costs before changing the
 correctness-first attention kernel. Text encoding, sampling, and VAE decode
 remain separate frontiers.
@@ -186,5 +197,8 @@ QWEN_IMAGE21_GGUF=/path/to/Qwen-Image-2.1-Q4.gguf \
   target latents and FlowMatch timestep change.
 - A changed prefix input or block configuration reuses the prior prefix cache
   instead of rebuilding it.
+- A raw-input certificate reuses K/V after an encoder, condition-image,
+  `t=0` row, prefix layout, or weight-identity change, or a prefix query can
+  attend a target key while the target is omitted from cached prefix work.
 - A later image-quality corpus shows that the selected mixed quantization
   policy is worse than its declared baseline.
