@@ -107,4 +107,28 @@ describe ML::GGUF::QwenImage21GGUFInventory do
     inventory.reader_compatible?.should be_false
     inventory.unsupported_type_labels.should eq(["Q2_K"])
   end
+
+  it "rejects a file whose tensor payload is shorter than the directory requires" do
+    metadata, tensors = qwen_image21_fixture
+    inventory = ML::GGUF::QwenImage21GGUFInventory.new(metadata, tensors)
+    data_offset = 20_704_i64
+    required = inventory.required_file_bytes(data_offset)
+
+    inventory.tensor_data_complete?(data_offset, required).should be_true
+    inventory.tensor_data_complete?(data_offset, required - 1).should be_false
+    expect_raises(ArgumentError, /tensor payload is incomplete/) do
+      inventory.ensure_tensor_data_complete!(data_offset, required - 1)
+    end
+  end
+
+  it "recovers projection dimensions from source shapes and GGUF storage shapes" do
+    metadata, tensors = qwen_image21_fixture
+    inventory = ML::GGUF::QwenImage21GGUFInventory.new(metadata, tensors)
+
+    # Comfy recorded the original torch shape as [out, in].
+    inventory.projection_dims("img_in.weight").should eq({4096, 64})
+    # Unreshaped GGUF matrices use [in, out].
+    inventory.projection_dims("transformer_blocks.0.img_mlp.gate_up.weight").should eq({24576, 4096})
+    inventory.projection_dims("transformer_blocks.0.img_mlp.out.weight").should eq({4096, 12288})
+  end
 end
