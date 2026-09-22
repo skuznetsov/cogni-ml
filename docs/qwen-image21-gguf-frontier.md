@@ -16,19 +16,26 @@ file name such as `Q4` as evidence of its actual tensor policy.
 - Validate the exact 32-block Qwen-Image 2.1 DiT tensor inventory.
 - Report whether every tensor type is readable by the current Cogni-ML GGUF
   dequantization layer.
+- Execute a parameterized one-block CPU reference with the upstream 2.1
+  equations: affine-less LayerNorm, per-head Q/K RMSNorm, three-axis RoPE,
+  block-causal attention, shared tanh modulation gates, and fused SwiGLU.
+- Multiply BF16 GGUF matrices directly in the CPU reference path.
+- Check the complete tiny block against an independent PyTorch oracle.
 
 ## Not admitted by this slice
 
-- DiT execution, text encoders, VAE, scheduler, or image generation.
+- Full 32-block DiT execution, Metal block execution, text encoders, VAE,
+  scheduler, or image generation.
 - A claim that a readable GGUF has acceptable image quality.
 - A custom weight format derived from the resident-KV adaptive QBit codec.
 - Trusting repository or file labels (`Q4`, `dynamic`, `HQ`) over tensor data.
 
 ## Guard and next transition
 
-The next implementation transition is a one-block CPU/Metal parity harness for
-the Qwen-Image 2.1 transformer. It is legal only after an actual candidate GGUF
-passes this inventory check.
+The next implementation transition is an mmap-backed weight loader followed by
+one-block CPU/Metal parity on the same tensors. It is legal only after a complete
+candidate GGUF passes this inventory check; a header-only range download is
+enough to validate structure but cannot support execution.
 
 ## Falsifiers
 
