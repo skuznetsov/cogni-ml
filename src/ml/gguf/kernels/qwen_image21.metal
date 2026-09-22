@@ -7,6 +7,46 @@ static inline float qi21_bf16_to_f32(ushort value) {
     return as_type<float>(((uint)value) << 16);
 }
 
+// One simdgroup owns one output channel and reuses each Q8_0 weight block
+// across eight adjacent input rows. The output remains row-major [batch, out].
+struct qi21_q8_0_block {
+    half scale;
+    char values[32];
+};
+
+kernel void qi21_q8_0_batch_matmul(
+    device const uchar* weights [[buffer(0)]],
+    device const float* input [[buffer(1)]],
+    device float* output [[buffer(2)]],
+    constant uint& in_dim [[buffer(3)]],
+    constant uint& out_dim [[buffer(4)]],
+    constant uint& batch [[buffer(5)]],
+    uint3 group [[threadgroup_position_in_grid]],
+    ushort lane [[thread_index_in_simdgroup]],
+    ushort simdgroup [[simdgroup_index_in_threadgroup]]) {
+    const uint output_row = group.x * 4 + simdgroup;
+    const uint first_batch = group.y * 8;
+    if (output_row >= out_dim || first_batch >= batch) return;
+
+    const uint blocks_per_row = in_dim / 32;
+    device const qi21_q8_0_block* weight_row =
+        (device const qi21_q8_0_block*)(weights + output_row * blocks_per_row * 34);
+    float sums[8] = {0.0f};
+    for (uint block = 0; block < blocks_per_row; ++block) {
+        const float scale = (float)weight_row[block].scale;
+        const float quant = (float)weight_row[block].values[lane];
+        const uint column = block * 32 + lane;
+        for (uint row = 0; row < 8 && first_batch + row < batch; ++row) {
+            const float value = input[(first_batch + row) * in_dim + column];
+            sums[row] += scale * value * quant;
+        }
+    }
+    for (uint row = 0; row < 8 && first_batch + row < batch; ++row) {
+        const float total = simd_sum(sums[row]);
+        if (lane == 0) output[(first_batch + row) * out_dim + output_row] = total;
+    }
+}
+
 // Correctness-first BF16 batch projection. Two simdgroups independently
 // compute two output rows; each row belongs to one batch item and output
 // channel. The weight matrix is row-major [out_dim, in_dim].

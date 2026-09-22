@@ -105,51 +105,95 @@ begin
        "text_tokens=1 total_tokens=#{1 + total_image_tokens} layers=#{model.layers.size} " \
        "f32_prefix_kv_bytes=#{2_i64 * model.layers.size * (1 + condition_tokens) * config.hidden_dim * sizeof(Float32)}"
   puts "normal pass: one command per DiT evaluation; diagnostic phases: split commands, synthetic latents"
+  puts "Q8_0 batch route: #{ENV["QWEN_IMAGE21_Q8_BATCH_AB"]? == "1" ? "alternating A/B" : ENV["QWEN_IMAGE21_Q8_BATCH"]? == "0" ? "disabled" : "enabled for batch >= 16"}"
 
-  build_wall = [] of Float64
-  hit_wall = [] of Float64
-  build_stats = [] of ML::GGUF::QwenImage21MetalBlockStats
-  hit_stats = [] of ML::GGUF::QwenImage21MetalBlockStats
-  ordinary_build = nil.as(Array(Float32)?)
-  ordinary_hit = nil.as(Array(Float32)?)
-  ENV["QWEN_IMAGE21_PROFILE"] = "1"
-  (samples + 1).times do |index|
-    stack = ML::GGUF::QwenImage21MetalLayerStackBackend.new
-    begin
-      pair = run_pair(model, stack,
-        ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: false),
-        hidden, encoder, shapes, mask, schedule.model_timestep(0), schedule.model_timestep(1),
-        target_tokens)
-      ordinary_build = pair[0] if index == 1
-      ordinary_hit = pair[1] if index == 1
-      next if index == 0
-      build_wall << pair[2]
-      hit_wall << pair[3]
-      build_stats << pair[4]
-      hit_stats << pair[5]
-    ensure
-      stack.close
+  if ENV["QWEN_IMAGE21_Q8_BATCH_AB"]? == "1"
+    baseline_build = [] of Float64
+    baseline_hit = [] of Float64
+    candidate_build = [] of Float64
+    candidate_hit = [] of Float64
+    (samples + 1).times do |index|
+      modes = index.even? ? ["0", "1"] : ["1", "0"]
+      outputs = Hash(String, {Array(Float32), Array(Float32)}).new
+      walls = Hash(String, {Float64, Float64}).new
+      modes.each do |mode|
+        ENV["QWEN_IMAGE21_Q8_BATCH"] = mode
+        ENV["QWEN_IMAGE21_PROFILE"] = "1"
+        stack = ML::GGUF::QwenImage21MetalLayerStackBackend.new
+        begin
+          pair = run_pair(model, stack,
+            ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: false),
+            hidden, encoder, shapes, mask, schedule.model_timestep(0), schedule.model_timestep(1),
+            target_tokens)
+          outputs[mode] = {pair[0], pair[1]}
+          walls[mode] = {pair[2], pair[3]}
+        ensure
+          stack.close
+        end
+      end
+      build_abs = outputs["0"][0].zip(outputs["1"][0]).max_of { |a, b| (a - b).abs }
+      hit_abs = outputs["0"][1].zip(outputs["1"][1]).max_of { |a, b| (a - b).abs }
+      abort "Q8_0 batch candidate changed output beyond tolerance" unless build_abs < 1.0e-3 && hit_abs < 1.0e-3
+      next if index == 0 # Both routes and their pipelines are warmed once.
+      base = walls["0"]
+      candidate = walls["1"]
+      baseline_build << base[0]
+      baseline_hit << base[1]
+      candidate_build << candidate[0]
+      candidate_hit << candidate[1]
+      puts "pair=#{index} order=#{modes.join("/")} " \
+           "rebuild_base_ms=#{base[0].round(3)} rebuild_q8_ms=#{candidate[0].round(3)} " \
+           "hit_base_ms=#{base[1].round(3)} hit_q8_ms=#{candidate[1].round(3)} " \
+           "parity_max_abs_build=#{build_abs} parity_max_abs_hit=#{hit_abs}"
     end
-  end
-  report("rebuild", build_wall, build_stats)
-  report("hit", hit_wall, hit_stats)
+    puts "paired_median_rebuild_ratio=#{median(candidate_build.zip(baseline_build).map { |a, b| a / b }).round(3)} " \
+         "paired_median_hit_ratio=#{median(candidate_hit.zip(baseline_hit).map { |a, b| a / b }).round(3)}"
+  else
+    build_wall = [] of Float64
+    hit_wall = [] of Float64
+    build_stats = [] of ML::GGUF::QwenImage21MetalBlockStats
+    hit_stats = [] of ML::GGUF::QwenImage21MetalBlockStats
+    ordinary_build = nil.as(Array(Float32)?)
+    ordinary_hit = nil.as(Array(Float32)?)
+    ENV["QWEN_IMAGE21_PROFILE"] = "1"
+    (samples + 1).times do |index|
+      stack = ML::GGUF::QwenImage21MetalLayerStackBackend.new
+      begin
+        pair = run_pair(model, stack,
+          ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: false),
+          hidden, encoder, shapes, mask, schedule.model_timestep(0), schedule.model_timestep(1),
+          target_tokens)
+        ordinary_build = pair[0] if index == 1
+        ordinary_hit = pair[1] if index == 1
+        next if index == 0
+        build_wall << pair[2]
+        hit_wall << pair[3]
+        build_stats << pair[4]
+        hit_stats << pair[5]
+      ensure
+        stack.close
+      end
+    end
+    report("rebuild", build_wall, build_stats)
+    report("hit", hit_wall, hit_stats)
 
-  ENV["QWEN_IMAGE21_PROFILE"] = "phases"
-  phase_samples.times do |index|
-    stack = ML::GGUF::QwenImage21MetalLayerStackBackend.new
-    begin
-      pair = run_pair(model, stack,
-        ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: false),
-        hidden, encoder, shapes, mask, schedule.model_timestep(0), schedule.model_timestep(1),
-        target_tokens)
-      build_abs = pair[0].zip(ordinary_build.not_nil!).max_of { |value, reference| (value - reference).abs }
-      hit_abs = pair[1].zip(ordinary_hit.not_nil!).max_of { |value, reference| (value - reference).abs }
-      abort "diagnostic command split changed output" unless build_abs < 1.0e-4 && hit_abs < 1.0e-4
-      puts "phase_sample=#{index + 1} parity_max_abs_build=#{build_abs} parity_max_abs_hit=#{hit_abs}"
-      report_phases("rebuild", pair[4])
-      report_phases("hit", pair[5])
-    ensure
-      stack.close
+    ENV["QWEN_IMAGE21_PROFILE"] = "phases"
+    phase_samples.times do |index|
+      stack = ML::GGUF::QwenImage21MetalLayerStackBackend.new
+      begin
+        pair = run_pair(model, stack,
+          ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: false),
+          hidden, encoder, shapes, mask, schedule.model_timestep(0), schedule.model_timestep(1),
+          target_tokens)
+        build_abs = pair[0].zip(ordinary_build.not_nil!).max_of { |value, reference| (value - reference).abs }
+        hit_abs = pair[1].zip(ordinary_hit.not_nil!).max_of { |value, reference| (value - reference).abs }
+        abort "diagnostic command split changed output" unless build_abs < 1.0e-4 && hit_abs < 1.0e-4
+        puts "phase_sample=#{index + 1} parity_max_abs_build=#{build_abs} parity_max_abs_hit=#{hit_abs}"
+        report_phases("rebuild", pair[4])
+        report_phases("hit", pair[5])
+      ensure
+        stack.close
+      end
     end
   end
 ensure

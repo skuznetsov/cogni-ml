@@ -24,6 +24,21 @@ private def qwen_image21_resident_matrix(out_dim : Int32, in_dim : Int32, phase 
   end
 end
 
+private def qwen_image21_resident_q8_weight(out_dim : Int32, in_dim : Int32)
+  raw = Bytes.new(out_dim * (in_dim // 32) * 34)
+  out_dim.times do |row|
+    (in_dim // 32).times do |block|
+      offset = (row * (in_dim // 32) + block) * 34
+      raw[offset] = 0x00_u8
+      raw[offset + 1] = 0x3c_u8 # IEEE binary16 1.0
+      32.times do |column|
+        raw[offset + 2 + column] = (((row * 7 + block * 11 + column * 3) % 19) - 9).to_i8.unsafe_as(UInt8)
+      end
+    end
+  end
+  ML::GGUF::QuantWeight.new(raw, ML::GGUF::TensorType::Q8_0, out_dim, in_dim)
+end
+
 private def qwen_image21_resident_time_embedding(timesteps : Array(Float32), dim : Int32)
   half = dim // 2
   output = Array(Float32).new(timesteps.size * dim, 0.0_f32)
@@ -60,6 +75,37 @@ private def qwen_image21_resident_fixture
 end
 
 describe ML::GGUF::QwenImage21MetalBlock do
+  {% unless flag?(:cpu_only) %}
+    it "matches the established Q8_0 projection across batch-tile boundaries" do
+      pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
+      weight = qwen_image21_resident_q8_weight(32, 64)
+      [1, 7, 8, 9, 16, 17, 32, 64, 256].each do |batch|
+        input = Array(Float32).new(batch * weight.in_dim) do |index|
+          (((index * 13) % 47) - 23).to_f32 / 37.0_f32
+        end
+        input_buf = ML::MetalBuffer.from_array(input)
+        reference_buf = ML::MetalBuffer.new(batch.to_i64 * weight.out_dim * sizeof(Float32))
+        candidate_buf = ML::MetalBuffer.new(batch.to_i64 * weight.out_dim * sizeof(Float32))
+        begin
+          command = ML::Metal::CommandBuffer.new
+          encoder = ML::Metal::ComputeEncoder.new(command)
+          ML::GGUF::Qwen35Metal.encode_matmul_to_buffer(encoder, weight, input_buf, reference_buf, batch).should be_true
+          ML::GGUF::QwenImage21MetalQ8.encode_matmul_to_buffer(encoder, weight, input_buf, candidate_buf, batch).should be_true
+          encoder.end_encoding
+          command.commit
+          command.wait
+          candidate_buf.read(batch * weight.out_dim).zip(reference_buf.read(batch * weight.out_dim)).each do |value, reference|
+            value.should be_close(reference, 1e-4_f32)
+          end
+        ensure
+          input_buf.release
+          reference_buf.release
+          candidate_buf.release
+        end
+      end
+    end
+  {% end %}
+
   it "requires an ordered image-only target suffix for the resident cache" do
     weight = qwen_image21_resident_bf16_weight([1.0_f32], 1, 1)
     input = ML::GGUF::QwenImage21MetalResidentInput.new(
@@ -556,6 +602,47 @@ describe ML::GGUF::QwenImage21MetalBlock do
       max_abs.should be < 2.0e-3
       cosine.should be > 0.999999
     ensure
+      model.close
+    end
+  end
+
+  it "preserves a real mixed-quant block across the Q8_0 batch route" do
+    path = ENV["QWEN_IMAGE21_GGUF"]?
+    pending!("set QWEN_IMAGE21_GGUF to run the model-backed Q8_0 batch check") unless path && File.file?(path)
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
+
+    model = ML::GGUF::QwenImage21Weights.from_gguf(path.not_nil!)
+    prior_route = ENV["QWEN_IMAGE21_Q8_BATCH"]?
+    begin
+      config = model.block_config
+      tokens = 17
+      hidden = Array(Float32).new(tokens * config.hidden_dim) do |index|
+        (((index * 17 + 11) % 257) - 128).to_f32 / 193.0_f32
+      end
+      modulation = Array(Float32).new(tokens * 4 * config.hidden_dim) do |index|
+        (((index * 13 + 7) % 101) - 50).to_f32 / 401.0_f32
+      end
+      positions = Array(StaticArray(Int32, 3)).new(tokens) { |index| StaticArray[0, index, 0] }
+      image_ids = Array(Int32).new(tokens, 0)
+      ENV["QWEN_IMAGE21_Q8_BATCH"] = "0"
+      reference = ML::GGUF::QwenImage21MetalBlock.forward(
+        hidden, tokens, modulation, positions, image_ids, model.layers[0], config,
+      )
+      ENV.delete("QWEN_IMAGE21_Q8_BATCH")
+      candidate = ML::GGUF::QwenImage21MetalBlock.forward(
+        hidden, tokens, modulation, positions, image_ids, model.layers[0], config,
+      )
+      candidate.hidden.zip(reference.hidden).each do |value, expected|
+        value.should be_close(expected, 1e-4_f32)
+      end
+      candidate.stats.command_buffers.should eq(1)
+      candidate.stats.intermediate_readbacks.should eq(0)
+    ensure
+      if prior_route
+        ENV["QWEN_IMAGE21_Q8_BATCH"] = prior_route
+      else
+        ENV.delete("QWEN_IMAGE21_Q8_BATCH")
+      end
       model.close
     end
   end

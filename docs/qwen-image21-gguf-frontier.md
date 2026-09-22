@@ -151,13 +151,29 @@ file name such as `Q4` as evidence of its actual tensor policy.
   on hit, Q=`543 ms`, K=`543 ms`, V=`38 ms`, output=`541 ms`, and
   attention=`286 ms`. This is phase attribution under extra command-buffer
   submissions, not an end-to-end speedup or a production-resolution result.
-  Q/K/output use Q8_0 GGUF tensors and the current buffer route selects Q8_0
-  GEMV for every batch size; a batched Q8_0 projection route is therefore the
-  next performance hypothesis. The F32 prefix K/V allocation at this shape
+  Q/K/output use Q8_0 GGUF tensors; at the time of this baseline, the buffer
+  route selected Q8_0 GEMV for every batch size. The F32 prefix K/V allocation at this shape
   is theoretically `269484032` bytes; that is not a measured total Metal
   working set. The profile reports host buffer preparation and final readback
   separately, but does not isolate GPU transfer or launch cost from command
-  waiting. Reproduce with `scripts/qwen_image21_prefix_profile.cr`.
+  waiting. Reproduce the old-route baseline with
+  `QWEN_IMAGE21_Q8_BATCH=0 crystal run scripts/qwen_image21_prefix_profile.cr -- MODEL.gguf 3 16 16 2`.
+- Use a Qwen-Image-local Q8_0 kernel that reuses each quantized weight block
+  across eight adjacent batch rows for Q, K, and attention output projections
+  at batch size `>=16`. Other weights and shorter batches retain the existing
+  Qwen 3.5 route. `QWEN_IMAGE21_Q8_BATCH=0` restores the prior route without a
+  weight-format change. A synthetic Q8_0 matrix test covers batch sizes
+  `1,7,8,9,16,17,32,64,256`; a real mixed-quant block and three real-weight
+  32-layer A/B shapes preserve output parity, with `max_abs=0` in the A/B
+  profiles. After one warm pair, three alternating-order pairs on M2 Max gave
+  median candidate/baseline wall ratios for rebuild/hit of `0.738/0.789` at
+  16 target + 16 condition-image tokens, `0.631/0.632` at 64+64, and
+  `0.693/0.671` at 256+256. These are scoped synthetic-latent, real-weight
+  measurements, not production-resolution or image-quality evidence. The
+  host's absolute timing drifted substantially between runs, so the paired
+  ratios are more informative than cross-run millisecond comparisons. Set
+  `QWEN_IMAGE21_Q8_BATCH_AB=1 crystal run scripts/qwen_image21_prefix_profile.cr -- MODEL.gguf 3 16 16 0`
+  for the alternating route/parity probe.
 - Reproduce the model's configured deterministic FlowMatch Euler schedule:
   linear input sigmas, exponential resolution shift over the exact
   `256..8192` sequence-length range, terminal stretching to `0.02`, and Euler
@@ -190,8 +206,9 @@ either label.
   the 513-token synthetic-input profile. The exact attention kernel remains
   correctness-first and quadratic in token count; its share may grow at larger
   target and condition-image sequences.
-- A speedup from batched Q8_0 projection. The current profile identifies a
-  candidate bottleneck but does not benchmark a replacement kernel.
+- A speedup from batched Q8_0 projection on other GPU families, quantization
+  variants, or untested sequence lengths. The default route is backed by the
+  bounded M2 Max A/B probe above, with an explicit rollback switch.
 - A compressed or bounded-memory prefix cache. The admitted implementation
   stores per-layer prefix K/V as F32 Metal buffers and therefore trades memory
   for repeated-step projection savings.
@@ -203,15 +220,13 @@ either label.
 
 The raw-input certificate and GPU cache build/hit are admitted only for the
 supported BF16 top-level route and a closed causal prefix. The older
-host-projected route remains for unsupported weights. The next transition is a
-batched/tiled Q8_0 projection candidate for Q, K, and output, guarded by
-elementwise parity against the current route for batch sizes spanning both
-sides of the existing GEMM/GEMV threshold and by repeated paired full-forward
-measurements. Preserve the existing GEMV fallback unless both correctness and
-actual latency improve without unacceptable Metal working-set growth. Repeat
-the phase profile at larger token counts before treating attention as a
-settled non-bottleneck. Text encoding, sampling, and VAE decode remain
-separate frontiers.
+host-projected route remains for unsupported weights. The local batched Q8_0
+route keeps the prior GEMV path as an environment-controlled rollback; its
+additional GPU allocation is zero because it reuses existing inputs, outputs,
+and mmap-backed weights. The next performance transition is to repeat the
+phase profile at larger token counts and realistic input distributions before
+treating attention as a settled non-bottleneck. Text encoding, sampling, and
+VAE decode remain separate frontiers.
 
 The model-backed checks are:
 
@@ -248,8 +263,8 @@ QWEN_IMAGE21_GGUF=/path/to/Qwen-Image-2.1-Q4.gguf \
   attend a target key while the target is omitted from cached prefix work.
 - A closed resident cache hit reprojects condition-image rows, or the target
   suffix is not an ordered image-only sequence and still enters the cache path.
-- Diagnostic phase splitting changes the forward output, or a proposed Q8_0
-  batch route fails parity on Q/K/output shapes or does not improve paired
-  full-forward latency at relevant token counts.
+- Diagnostic phase splitting changes the forward output, or the Q8_0 batch
+  route fails parity on Q/K/output shapes or loses its paired full-forward
+  latency advantage at the tested token counts.
 - A later image-quality corpus shows that the selected mixed quantization
   policy is worse than its declared baseline.

@@ -234,6 +234,48 @@ module ML::GGUF
     {% end %}
   end
 
+  # Experimental Q8_0 batch projection kept local to Qwen-Image. The general
+  # Qwen 3.5 quantized route and all non-Q8_0 weights remain unchanged.
+  module QwenImage21MetalQ8
+    {% if flag?(:cpu_only) %}
+      def self.encode_matmul_to_buffer(
+        encoder : ML::Metal::ComputeEncoder, weight : QuantWeight,
+        input : ML::MetalBuffer, output : ML::MetalBuffer, batch : Int32,
+      ) : Bool
+        false
+      end
+    {% else %}
+      SOURCE = {{ read_file("#{__DIR__}/kernels/qwen_image21.metal") }}
+
+      def self.encode_matmul_to_buffer(
+        encoder : ML::Metal::ComputeEncoder, weight : QuantWeight,
+        input : ML::MetalBuffer, output : ML::MetalBuffer, batch : Int32,
+      ) : Bool
+        return false unless weight.type.q8_0? && batch > 0 && weight.out_dim > 0 && weight.in_dim > 0 && weight.in_dim % 32 == 0
+        return false unless weight.raw.size.to_i64 == weight.out_dim.to_i64 * (weight.in_dim // 32) * 34_i64
+        return false if input.size < batch.to_i64 * weight.in_dim * sizeof(Float32)
+        return false if output.size < batch.to_i64 * weight.out_dim * sizeof(Float32)
+        ML::Metal::Device.init!
+        weight_buffer, weight_offset = Qwen35Metal.weight_buffer_slot(weight)
+        encoder.set_pipeline(pipeline)
+        encoder.set_buffer(weight_buffer, 0, offset: weight_offset)
+        encoder.set_buffer(input, 1)
+        encoder.set_buffer(output, 2, ML::Metal::BufferAccess::Write)
+        encoder.set_value(weight.in_dim.to_u32, 3)
+        encoder.set_value(weight.out_dim.to_u32, 4)
+        encoder.set_value(batch.to_u32, 5)
+        encoder.dispatch_threadgroups({(weight.out_dim + 3) // 4, (batch + 7) // 8, 1}, {128, 1, 1})
+        true
+      end
+
+      private def self.pipeline : ML::Metal::ComputePipeline
+        ML::Metal::PipelineCache.get("qi21_q8_0_batch_matmul") do
+          ML::Metal::ComputePipeline.new("qi21_q8_0_batch_matmul", SOURCE)
+        end
+      end
+    {% end %}
+  end
+
   # The Qwen 3.5 host-array matmul may switch Q5/Q6 batches to a separate GEMM
   # kernel. Qwen-Image's resident stack uses the buffer-level GEMV encoder, so
   # its hybrid reference must use that same numerical route at every batch size.
@@ -827,6 +869,35 @@ module ML::GGUF
         probe ? probe.rotate(command, encoder, phase) : {command, encoder}
       end
 
+      private def self.q8_batch_enabled?(batch : Int32) : Bool
+        batch >= 16 && ENV["QWEN_IMAGE21_Q8_BATCH"]? != "0"
+      end
+
+      private def self.encode_quant_projection(
+        encoder : ML::Metal::ComputeEncoder, weight : QuantWeight,
+        input : ML::MetalBuffer, output : ML::MetalBuffer, batch : Int32,
+      ) : Bool
+        if q8_batch_enabled?(batch) && weight.type.q8_0?
+          return true if QwenImage21MetalQ8.encode_matmul_to_buffer(encoder, weight, input, output, batch)
+        end
+        Qwen35Metal.encode_matmul_to_buffer(encoder, weight, input, output, batch)
+      end
+
+      private def self.encode_qkv(
+        encoder : ML::Metal::ComputeEncoder, weights : QwenImage21BlockWeights,
+        input : ML::MetalBuffer, q : ML::MetalBuffer, k : ML::MetalBuffer,
+        v : ML::MetalBuffer, batch : Int32,
+      ) : Bool
+        if q8_batch_enabled?(batch)
+          return encode_quant_projection(encoder, weights.to_q, input, q, batch) &&
+                 encode_quant_projection(encoder, weights.to_k, input, k, batch) &&
+                 encode_quant_projection(encoder, weights.to_v, input, v, batch)
+        end
+        Qwen35Metal.encode_matmul_many_to_buffers(
+          encoder, [weights.to_q, weights.to_k, weights.to_v], input, [q, k, v], batch,
+        )
+      end
+
       def self.forward(
         hidden : Array(Float32), token_count : Int32,
         modulation : Array(Float32),
@@ -1159,16 +1230,13 @@ module ML::GGUF
               { {weights.to_q, q_buf, "q_projection"},
                 {weights.to_k, active_k_buf, "k_projection"},
                 {weights.to_v, active_v_buf, "v_projection"} }.each do |weight, output, phase|
-                unless Qwen35Metal.encode_matmul_to_buffer(encoder, weight, norm1_buf, output, active_tokens)
+                unless encode_quant_projection(encoder, weight, norm1_buf, output, active_tokens)
                   raise ArgumentError.new("no resident Metal route for #{phase}")
                 end
                 command, encoder = phase_boundary(probe, command, encoder, phase)
               end
             else
-              unless Qwen35Metal.encode_matmul_many_to_buffers(
-                       encoder, [weights.to_q, weights.to_k, weights.to_v], norm1_buf,
-                       [q_buf, active_k_buf, active_v_buf], active_tokens,
-                     )
+              unless encode_qkv(encoder, weights, norm1_buf, q_buf, active_k_buf, active_v_buf, active_tokens)
                 raise ArgumentError.new("no resident Metal route for Q/K/V projections")
               end
             end
@@ -1194,7 +1262,7 @@ module ML::GGUF
               attended_buf, token_count, active_tokens, prefix_tokens, config,
             )
             command, encoder = phase_boundary(probe, command, encoder, "attention")
-            unless Qwen35Metal.encode_matmul_to_buffer(
+            unless encode_quant_projection(
                      encoder, weights.to_out, attended_buf, projected_buf, active_tokens
                    )
               raise ArgumentError.new("no resident Metal route for attention output projection")
@@ -1382,16 +1450,13 @@ module ML::GGUF
               { {weights.to_q, q_buf, "q_projection"},
                 {weights.to_k, k_buf, "k_projection"},
                 {weights.to_v, v_buf, "v_projection"} }.each do |weight, output, phase|
-                unless Qwen35Metal.encode_matmul_to_buffer(encoder, weight, norm1_buf, output, token_count)
+                unless encode_quant_projection(encoder, weight, norm1_buf, output, token_count)
                   raise ArgumentError.new("no resident Metal route for #{phase}")
                 end
                 command, encoder = phase_boundary(probe, command, encoder, phase)
               end
             else
-              unless Qwen35Metal.encode_matmul_many_to_buffers(
-                       encoder, [weights.to_q, weights.to_k, weights.to_v], norm1_buf,
-                       [q_buf, k_buf, v_buf], token_count,
-                     )
+              unless encode_qkv(encoder, weights, norm1_buf, q_buf, k_buf, v_buf, token_count)
                 raise ArgumentError.new("no resident Metal route for Q/K/V projections")
               end
             end
@@ -1412,7 +1477,7 @@ module ML::GGUF
               attended_buf, token_count, token_count, 0, config,
             )
             command, encoder = phase_boundary(probe, command, encoder, "attention")
-            unless Qwen35Metal.encode_matmul_to_buffer(
+            unless encode_quant_projection(
                      encoder, weights.to_out, attended_buf, projected_buf, token_count
                    )
               raise ArgumentError.new("no resident Metal route for attention output projection")
