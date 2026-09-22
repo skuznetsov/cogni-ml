@@ -75,6 +75,59 @@ describe ML::GGUF::QwenImage21MetalProjectionBackend do
     backend.bf16_projection_count.should eq(1)
   end
 
+  it "keeps chained BF16 text and timestep projections in one command each" do
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalProjectionBackend.available?
+    cpu = ML::GGUF::F32Backend.new
+    backend = ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: true)
+    weight = ->(out_dim : Int32, in_dim : Int32, phase : Int32) do
+      qwen_image21_metal_bf16_weight(
+        Array(Float32).new(out_dim * in_dim) do |index|
+          (((index * 7 + phase * 5) % 23) - 11).to_f32 / 13.0_f32
+        end,
+        out_dim,
+        in_dim,
+      )
+    end
+    rows = 2
+    input = Array(Float32).new(rows * 3) do |index|
+      (((index * 11) % 17) - 8).to_f32 / 9.0_f32
+    end
+    first = weight.call(4, 3, 1)
+    second = weight.call(4, 4, 2)
+    modulation = weight.call(8, 4, 3)
+    scale = weight.call(4, 4, 4)
+
+    text_hidden = cpu.matmul(input, rows, first, Array(Float32).new(4, 0.0_f32))
+    text_hidden.map! { |value| cpu.gelu(value) }
+    expected_text = cpu.matmul(text_hidden, rows, second, Array(Float32).new(4, 0.0_f32))
+    actual_text = backend.project_text_layers(input, rows, first, second).not_nil!
+
+    time_hidden = cpu.matmul(input, rows, first, Array(Float32).new(4, 0.0_f32))
+    time_hidden.map! { |value| value / (1.0_f32 + Math.exp(-value)) }
+    time_hidden = cpu.matmul(time_hidden, rows, second, Array(Float32).new(4, 0.0_f32))
+    time_hidden.map! { |value| value / (1.0_f32 + Math.exp(-value)) }
+    expected_modulation = cpu.matmul(
+      time_hidden, rows, modulation, Array(Float32).new(8, 0.0_f32)
+    )
+    expected_scale = cpu.matmul(time_hidden, rows, scale, Array(Float32).new(4, 0.0_f32))
+    actual_time = backend.project_timestep_layers(
+      input, rows, first, second, modulation, scale
+    ).not_nil!
+
+    actual_text.zip(expected_text).each do |value, reference|
+      value.should be_close(reference, 1e-4_f32)
+    end
+    actual_time[0].zip(expected_modulation).each do |value, reference|
+      value.should be_close(reference, 1e-4_f32)
+    end
+    actual_time[1].zip(expected_scale).each do |value, reference|
+      value.should be_close(reference, 1e-4_f32)
+    end
+    backend.metal_projection_count.should eq(6)
+    backend.bf16_projection_count.should eq(6)
+    backend.fused_outer_command_count.should eq(2)
+  end
+
   it "matches the CPU reference for one real mixed-quant transformer block" do
     path = ENV["QWEN_IMAGE21_GGUF"]?
     pending!("set QWEN_IMAGE21_GGUF to run the model-backed parity check") unless path && File.file?(path)
@@ -127,7 +180,7 @@ describe ML::GGUF::QwenImage21MetalProjectionBackend do
     end
   end
 
-  it "executes the complete 32-block outer transformer on a minimum valid target" do
+  it "executes the complete 32-block outer transformer with a real text prefix" do
     path = ENV["QWEN_IMAGE21_GGUF"]?
     pending!("set QWEN_IMAGE21_GGUF to run the model-backed outer-forward check") unless path && File.file?(path)
     pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalProjectionBackend.available?
@@ -138,12 +191,15 @@ describe ML::GGUF::QwenImage21MetalProjectionBackend do
       hidden = Array(Float32).new(4 * config.input_dim) do |index|
         (((index * 23 + 5) % 97) - 48).to_f32 / 127.0_f32
       end
+      encoder_hidden = Array(Float32).new(config.context_dim) do |index|
+        (((index * 31 + 9) % 103) - 51).to_f32 / 137.0_f32
+      end
       expected = ML::GGUF::QwenImage21TransformerCPU.forward(
         hidden,
-        [] of Float32,
+        encoder_hidden,
         0.5_f32,
         [StaticArray[1, 2, 2]],
-        [true],
+        [false, true],
         weights.transformer_weights,
         config,
         backend: QwenImage21CPUReferenceBF16Backend.new,
@@ -152,10 +208,10 @@ describe ML::GGUF::QwenImage21MetalProjectionBackend do
       started = Time.instant
       result = ML::GGUF::QwenImage21TransformerCPU.forward(
         hidden,
-        [] of Float32,
+        encoder_hidden,
         0.5_f32,
         [StaticArray[1, 2, 2]],
-        [true],
+        [false, true],
         weights.transformer_weights,
         config,
         backend: backend,
@@ -163,9 +219,9 @@ describe ML::GGUF::QwenImage21MetalProjectionBackend do
       elapsed = Time.instant - started
       STDERR.puts "qwen_image21_outer_forward seconds=#{elapsed.total_seconds} metal_projections=#{backend.metal_projection_count}"
 
-      result.output.size.should eq(4 * config.output_dim)
+      result.output.size.should eq(5 * config.output_dim)
       result.output.all?(&.finite?).should be_true
-      result.layout.target_token_mask.all?.should be_true
+      result.layout.target_token_mask.should eq([false, true, true, true, true])
       max_abs = 0.0_f64
       dot = 0.0_f64
       expected_norm = 0.0_f64
@@ -180,8 +236,9 @@ describe ML::GGUF::QwenImage21MetalProjectionBackend do
       STDERR.puts "qwen_image21_outer_bf16_parity max_abs=#{max_abs} cosine=#{cosine}"
       max_abs.should be < 1e-4
       cosine.should be > 0.999999
-      backend.metal_projection_count.should eq(32 * 6 + 6)
-      backend.bf16_projection_count.should eq(6)
+      backend.metal_projection_count.should eq(32 * 6 + 8)
+      backend.bf16_projection_count.should eq(8)
+      backend.fused_outer_command_count.should eq(2)
     ensure
       weights.close
     end
@@ -220,6 +277,7 @@ describe ML::GGUF::QwenImage21MetalProjectionBackend do
       result.latents.should_not eq(initial)
       backend.metal_projection_count.should eq(2 * (32 * 6 + 6))
       backend.bf16_projection_count.should eq(12)
+      backend.fused_outer_command_count.should eq(2)
     ensure
       weights.close
     end

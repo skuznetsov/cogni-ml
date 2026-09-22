@@ -71,6 +71,22 @@ module ML::GGUF
     end
   end
 
+  # Optional outer-transformer capability for keeping dependent projection
+  # chains on one accelerator command buffer. Returning nil preserves the
+  # exact generic ComputeBackend path for unsupported tensor combinations.
+  module QwenImage21FusedProjectionBackend
+    abstract def project_text_layers(
+      input : Array(Float32), rows : Int32,
+      input_weight : QuantWeight, output_weight : QuantWeight,
+    ) : Array(Float32)?
+
+    abstract def project_timestep_layers(
+      input : Array(Float32), rows : Int32,
+      first_weight : QuantWeight, second_weight : QuantWeight,
+      modulation_weight : QuantWeight, scale_weight : QuantWeight,
+    ) : {Array(Float32), Array(Float32)}?
+  end
+
   module QwenImage21TransformerCPU
     IMG_TOKENS_PER_SLOT = 4
 
@@ -176,19 +192,37 @@ module ML::GGUF
       )
 
       time_rows = config.causal_condition ? [timestep, 0.0_f32] : [timestep]
-      temb = time_embedding(time_rows, config.time_input_dim)
-      temb = backend.matmul(
-        temb, time_rows.size, weights.timestep_linear_1, zeros(config.hidden_dim)
-      )
-      temb.map! { |value| silu(value) }
-      temb = backend.matmul(
-        temb, time_rows.size, weights.timestep_linear_2, zeros(config.hidden_dim)
-      )
-
-      modulation_input = temb.map { |value| silu(value) }
-      modulation_rows = backend.matmul(
-        modulation_input, time_rows.size, weights.modulation, zeros(4 * config.hidden_dim)
-      )
+      time_input = time_embedding(time_rows, config.time_input_dim)
+      fused_time = if fused = backend.as?(QwenImage21FusedProjectionBackend)
+                     fused.project_timestep_layers(
+                       time_input, time_rows.size,
+                       weights.timestep_linear_1, weights.timestep_linear_2,
+                       weights.modulation, weights.norm_out_linear,
+                     )
+                   end
+      modulation_rows, scale_rows = if outputs = fused_time
+                                      outputs
+                                    else
+                                      temb = backend.matmul(
+                                        time_input, time_rows.size,
+                                        weights.timestep_linear_1, zeros(config.hidden_dim)
+                                      )
+                                      temb.map! { |value| silu(value) }
+                                      temb = backend.matmul(
+                                        temb, time_rows.size,
+                                        weights.timestep_linear_2, zeros(config.hidden_dim)
+                                      )
+                                      modulation_input = temb.map { |value| silu(value) }
+                                      fallback_modulation_rows = backend.matmul(
+                                        modulation_input, time_rows.size,
+                                        weights.modulation, zeros(4 * config.hidden_dim)
+                                      )
+                                      fallback_scale_rows = backend.matmul(
+                                        modulation_input, time_rows.size,
+                                        weights.norm_out_linear, zeros(config.hidden_dim)
+                                      )
+                                      {fallback_modulation_rows, fallback_scale_rows}
+                                    end
       modulation = select_rows(
         modulation_rows, time_rows.size, 4 * config.hidden_dim,
         layout.target_token_mask, config.causal_condition
@@ -224,12 +258,6 @@ module ML::GGUF
         end
       end
 
-      scale_rows = backend.matmul(
-        temb.map { |value| silu(value) },
-        time_rows.size,
-        weights.norm_out_linear,
-        zeros(config.hidden_dim),
-      )
       scales = select_rows(
         scale_rows, time_rows.size, config.hidden_dim,
         layout.target_token_mask, config.causal_condition
@@ -251,6 +279,13 @@ module ML::GGUF
       normalized = zero_center_rms_norm(
         input, rows, config.context_dim, weights.text_norm, config.block.eps
       )
+      if fused = backend.as?(QwenImage21FusedProjectionBackend)
+        if projected = fused.project_text_layers(
+             normalized, rows, weights.text_in_layer, weights.text_out_layer
+           )
+          return projected
+        end
+      end
       projected = backend.matmul(
         normalized, rows, weights.text_in_layer, zeros(config.hidden_dim)
       )

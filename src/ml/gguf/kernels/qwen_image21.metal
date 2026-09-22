@@ -34,6 +34,25 @@ kernel void qi21_bf16_batch_matmul(
     if (lane == 0) output[output_index] = total;
 }
 
+kernel void qi21_gelu_inplace(
+    device float* values [[buffer(0)]],
+    constant uint& count [[buffer(1)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= count) return;
+    const float value = values[index];
+    values[index] = 0.5f * value *
+        (1.0f + tanh(0.7978845608f * (value + 0.044715f * value * value * value)));
+}
+
+kernel void qi21_silu_inplace(
+    device float* values [[buffer(0)]],
+    constant uint& count [[buffer(1)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= count) return;
+    const float value = values[index];
+    values[index] = value / (1.0f + exp(-value));
+}
+
 inline float qi21_reduce_sum(float value,
                              threadgroup float* partials,
                              uint tid,

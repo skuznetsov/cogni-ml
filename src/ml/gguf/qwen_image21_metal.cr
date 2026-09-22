@@ -1,4 +1,4 @@
-require "./qwen_image21_block"
+require "./qwen_image21_transformer"
 require "./qwen35_metal"
 
 # Hybrid reference backend for Qwen-Image 2.1 block admission.
@@ -13,48 +13,190 @@ module ML::GGUF
       def self.matmul(qw : QuantWeight, input : Array(Float32), rows : Int32) : Array(Float32)?
         nil
       end
+
+      def self.project_text_layers(
+        input : Array(Float32), rows : Int32,
+        input_weight : QuantWeight, output_weight : QuantWeight,
+      ) : Array(Float32)?
+        nil
+      end
+
+      def self.project_timestep_layers(
+        input : Array(Float32), rows : Int32,
+        first_weight : QuantWeight, second_weight : QuantWeight,
+        modulation_weight : QuantWeight, scale_weight : QuantWeight,
+      ) : {Array(Float32), Array(Float32)}?
+        nil
+      end
     {% else %}
       SOURCE = {{ read_file("#{__DIR__}/kernels/qwen_image21.metal") }}
 
       def self.matmul(qw : QuantWeight, input : Array(Float32), rows : Int32) : Array(Float32)?
         return nil unless qw.type.bf16? && rows > 0
-        unless input.size == rows * qw.in_dim
-          raise ArgumentError.new("BF16 projection input size mismatch")
-        end
-        expected_bytes = qw.out_dim.to_i64 * qw.in_dim * 2_i64
-        unless qw.raw.size.to_i64 == expected_bytes
-          raise ArgumentError.new("BF16 projection weight size mismatch")
-        end
+        validate_input(input, rows, qw.in_dim)
+        validate_weight(qw)
         ML::Metal::Device.init!
-        weight_buf, weight_offset = Qwen35Metal.weight_buffer_slot(qw)
-        input_buf = ML::MetalBuffer.new(input.size.to_i64 * sizeof(Float32))
-        output_buf = ML::MetalBuffer.new(rows.to_i64 * qw.out_dim * sizeof(Float32))
+        buffers = [] of ML::MetalBuffer
         begin
-          input_buf.write(input)
+          input_buf = upload(input, buffers)
+          output_buf = allocate(rows.to_i64 * qw.out_dim * sizeof(Float32), buffers)
           command = ML::Metal::CommandBuffer.new
           encoder = ML::Metal::ComputeEncoder.new(command)
-          encoder.set_pipeline(pipeline)
-          encoder.set_buffer(weight_buf, 0, offset: weight_offset)
-          encoder.set_buffer(input_buf, 1)
-          encoder.set_buffer(output_buf, 2, ML::Metal::BufferAccess::Write)
-          encoder.set_value(qw.in_dim.to_u32, 3)
-          encoder.set_value(qw.out_dim.to_u32, 4)
-          encoder.set_value(rows.to_u32, 5)
-          output_rows = rows * qw.out_dim
-          encoder.dispatch_threadgroups({(output_rows + 1) // 2, 1, 1}, {64, 1, 1})
+          encode_matmul(encoder, qw, input_buf, output_buf, rows)
           encoder.end_encoding
           command.commit
           command.wait
-          output_buf.read(output_rows)
+          output_buf.read(rows * qw.out_dim)
         ensure
-          input_buf.release
-          output_buf.release
+          buffers.each(&.release)
         end
       end
 
-      private def self.pipeline : ML::Metal::ComputePipeline
+      def self.project_text_layers(
+        input : Array(Float32), rows : Int32,
+        input_weight : QuantWeight, output_weight : QuantWeight,
+      ) : Array(Float32)?
+        return nil unless bf16_weights?(input_weight, output_weight)
+        return [] of Float32 if rows == 0
+        validate_input(input, rows, input_weight.in_dim)
+        validate_chain(input_weight, output_weight)
+        ML::Metal::Device.init!
+        buffers = [] of ML::MetalBuffer
+        begin
+          input_buf = upload(input, buffers)
+          hidden_buf = allocate(rows.to_i64 * input_weight.out_dim * sizeof(Float32), buffers)
+          output_buf = allocate(rows.to_i64 * output_weight.out_dim * sizeof(Float32), buffers)
+          command = ML::Metal::CommandBuffer.new
+          encoder = ML::Metal::ComputeEncoder.new(command)
+          encode_matmul(encoder, input_weight, input_buf, hidden_buf, rows)
+          encode_activation(encoder, "qi21_gelu_inplace", hidden_buf, rows * input_weight.out_dim)
+          encode_matmul(encoder, output_weight, hidden_buf, output_buf, rows)
+          encoder.end_encoding
+          command.commit
+          command.wait
+          output_buf.read(rows * output_weight.out_dim)
+        ensure
+          buffers.each(&.release)
+        end
+      end
+
+      def self.project_timestep_layers(
+        input : Array(Float32), rows : Int32,
+        first_weight : QuantWeight, second_weight : QuantWeight,
+        modulation_weight : QuantWeight, scale_weight : QuantWeight,
+      ) : {Array(Float32), Array(Float32)}?
+        return nil unless bf16_weights?(
+                            first_weight, second_weight, modulation_weight, scale_weight
+                          )
+        return {[] of Float32, [] of Float32} if rows == 0
+        validate_input(input, rows, first_weight.in_dim)
+        validate_chain(first_weight, second_weight)
+        unless second_weight.out_dim == modulation_weight.in_dim &&
+               second_weight.out_dim == scale_weight.in_dim
+          raise ArgumentError.new("BF16 timestep projection chain shape mismatch")
+        end
+        validate_weight(modulation_weight)
+        validate_weight(scale_weight)
+        ML::Metal::Device.init!
+        buffers = [] of ML::MetalBuffer
+        begin
+          input_buf = upload(input, buffers)
+          first_buf = allocate(rows.to_i64 * first_weight.out_dim * sizeof(Float32), buffers)
+          second_buf = allocate(rows.to_i64 * second_weight.out_dim * sizeof(Float32), buffers)
+          modulation_buf = allocate(rows.to_i64 * modulation_weight.out_dim * sizeof(Float32), buffers)
+          scale_buf = allocate(rows.to_i64 * scale_weight.out_dim * sizeof(Float32), buffers)
+          command = ML::Metal::CommandBuffer.new
+          encoder = ML::Metal::ComputeEncoder.new(command)
+          encode_matmul(encoder, first_weight, input_buf, first_buf, rows)
+          encode_activation(encoder, "qi21_silu_inplace", first_buf, rows * first_weight.out_dim)
+          encode_matmul(encoder, second_weight, first_buf, second_buf, rows)
+          encode_activation(encoder, "qi21_silu_inplace", second_buf, rows * second_weight.out_dim)
+          encode_matmul(encoder, modulation_weight, second_buf, modulation_buf, rows)
+          encode_matmul(encoder, scale_weight, second_buf, scale_buf, rows)
+          encoder.end_encoding
+          command.commit
+          command.wait
+          {
+            modulation_buf.read(rows * modulation_weight.out_dim),
+            scale_buf.read(rows * scale_weight.out_dim),
+          }
+        ensure
+          buffers.each(&.release)
+        end
+      end
+
+      private def self.encode_matmul(
+        encoder : ML::Metal::ComputeEncoder, qw : QuantWeight,
+        input_buf : ML::MetalBuffer, output_buf : ML::MetalBuffer, rows : Int32,
+      ) : Nil
+        weight_buf, weight_offset = Qwen35Metal.weight_buffer_slot(qw)
+        encoder.set_pipeline(matmul_pipeline)
+        encoder.set_buffer(weight_buf, 0, offset: weight_offset)
+        encoder.set_buffer(input_buf, 1)
+        encoder.set_buffer(output_buf, 2, ML::Metal::BufferAccess::Write)
+        encoder.set_value(qw.in_dim.to_u32, 3)
+        encoder.set_value(qw.out_dim.to_u32, 4)
+        encoder.set_value(rows.to_u32, 5)
+        output_rows = rows * qw.out_dim
+        encoder.dispatch_threadgroups({(output_rows + 1) // 2, 1, 1}, {64, 1, 1})
+      end
+
+      private def self.encode_activation(
+        encoder : ML::Metal::ComputeEncoder, name : String,
+        buffer : ML::MetalBuffer, count : Int32,
+      ) : Nil
+        encoder.set_pipeline(activation_pipeline(name))
+        encoder.set_buffer(buffer, 0, ML::Metal::BufferAccess::ReadWrite)
+        encoder.set_value(count.to_u32, 1)
+        encoder.dispatch_1d(count, 256)
+      end
+
+      private def self.bf16_weights?(*weights : QuantWeight) : Bool
+        weights.all?(&.type.bf16?)
+      end
+
+      private def self.validate_input(input : Array(Float32), rows : Int32, in_dim : Int32) : Nil
+        unless input.size == rows * in_dim
+          raise ArgumentError.new("BF16 projection input size mismatch")
+        end
+      end
+
+      private def self.validate_chain(first : QuantWeight, second : QuantWeight) : Nil
+        validate_weight(first)
+        validate_weight(second)
+        unless first.out_dim == second.in_dim
+          raise ArgumentError.new("BF16 projection chain shape mismatch")
+        end
+      end
+
+      private def self.validate_weight(qw : QuantWeight) : Nil
+        expected_bytes = qw.out_dim.to_i64 * qw.in_dim * 2_i64
+        unless qw.type.bf16? && qw.raw.size.to_i64 == expected_bytes
+          raise ArgumentError.new("BF16 projection weight size mismatch")
+        end
+      end
+
+      private def self.upload(values : Array(Float32), buffers : Array(ML::MetalBuffer)) : ML::MetalBuffer
+        buffer = allocate(values.size.to_i64 * sizeof(Float32), buffers)
+        buffer.write(values)
+        buffer
+      end
+
+      private def self.allocate(bytes : Int64, buffers : Array(ML::MetalBuffer)) : ML::MetalBuffer
+        buffer = ML::MetalBuffer.new(bytes)
+        buffers << buffer
+        buffer
+      end
+
+      private def self.matmul_pipeline : ML::Metal::ComputePipeline
         ML::Metal::PipelineCache.get("qi21_bf16_batch_matmul") do
           ML::Metal::ComputePipeline.new("qi21_bf16_batch_matmul", SOURCE)
+        end
+      end
+
+      private def self.activation_pipeline(name : String) : ML::Metal::ComputePipeline
+        ML::Metal::PipelineCache.get(name) do
+          ML::Metal::ComputePipeline.new(name, SOURCE)
         end
       end
     {% end %}
@@ -62,9 +204,11 @@ module ML::GGUF
 
   class QwenImage21MetalProjectionBackend
     include ComputeBackend
+    include QwenImage21FusedProjectionBackend
 
     getter metal_projection_count = 0
     getter bf16_projection_count = 0
+    getter fused_outer_command_count = 0
 
     def initialize(@strict : Bool = true)
       @cpu = F32Backend.new
@@ -113,6 +257,38 @@ module ML::GGUF
           @cpu.matmul(x, rows, qw, bias)
         end
       {% end %}
+    end
+
+    def project_text_layers(
+      input : Array(Float32), rows : Int32,
+      input_weight : QuantWeight, output_weight : QuantWeight,
+    ) : Array(Float32)?
+      return [] of Float32 if rows == 0
+      result = QwenImage21MetalBF16.project_text_layers(
+        input, rows, input_weight, output_weight
+      )
+      if result
+        @metal_projection_count += 2
+        @bf16_projection_count += 2
+        @fused_outer_command_count += 1
+      end
+      result
+    end
+
+    def project_timestep_layers(
+      input : Array(Float32), rows : Int32,
+      first_weight : QuantWeight, second_weight : QuantWeight,
+      modulation_weight : QuantWeight, scale_weight : QuantWeight,
+    ) : {Array(Float32), Array(Float32)}?
+      result = QwenImage21MetalBF16.project_timestep_layers(
+        input, rows, first_weight, second_weight, modulation_weight, scale_weight
+      )
+      if result
+        @metal_projection_count += 4
+        @bf16_projection_count += 4
+        @fused_outer_command_count += 1
+      end
+      result
     end
 
     def layer_norm!(x : Array(Float32), n_pos : Int32, dim : Int32,
