@@ -53,6 +53,41 @@ kernel void qi21_silu_inplace(
     values[index] = value / (1.0f + exp(-value));
 }
 
+// Nonnegative source rows address projected encoder text; negative rows
+// encode image-row indices as -(row + 1). Each joint output element is written
+// exactly once, including mixed text/condition-image/target-image sequences.
+kernel void qi21_assemble_joint(
+    device const int* source_rows [[buffer(0)]],
+    device const float* projected_text [[buffer(1)]],
+    device const float* projected_images [[buffer(2)]],
+    device float* joint [[buffer(3)]],
+    constant uint& tokens [[buffer(4)]],
+    constant uint& dim [[buffer(5)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= tokens * dim) return;
+    const uint token = index / dim;
+    const uint column = index - token * dim;
+    const int row = source_rows[token];
+    joint[index] = row >= 0
+        ? projected_text[uint(row) * dim + column]
+        : projected_images[uint(-row - 1) * dim + column];
+}
+
+kernel void qi21_select_time_rows(
+    device const float* rows [[buffer(0)]],
+    device const uchar* target_mask [[buffer(1)]],
+    device float* selected [[buffer(2)]],
+    constant uint& tokens [[buffer(3)]],
+    constant uint& width [[buffer(4)]],
+    constant uint& row_count [[buffer(5)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index >= tokens * width) return;
+    const uint token = index / width;
+    const uint column = index - token * width;
+    const uint row = row_count == 2 && target_mask[token] == 0 ? 1 : 0;
+    selected[index] = rows[row * width + column];
+}
+
 inline float qi21_reduce_sum(float value,
                              threadgroup float* partials,
                              uint tid,

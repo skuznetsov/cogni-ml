@@ -91,6 +91,18 @@ file name such as `Q4` as evidence of its actual tensor policy.
   `max_abs=2.1457672e-6` and cosine `0.9999999999997731`; the real changed-target
   prefix-cache check produced `max_abs=1.013279e-5` and cosine
   `0.9999999999977098`.
+- For full passes without a reusable causal prefix, project `img_in` and the
+  available timestep rows directly into the resident stack command buffer. GPU kernels
+  assemble the mixed text/image joint sequence and select per-token modulation
+  and output-scale rows; no image or timestep projection is read back to the
+  host. Text normalization and its fused projection still return a host array.
+  The real mixed condition-image/text/target-image check produced
+  `max_abs=0.0039245486` against the hybrid reference and zero difference
+  against the former stack input route. A separate causal two-row check
+  produced `max_abs=2.3841858e-6`. The Qwen-Image hybrid reference now uses
+  the same buffer-level K-quant GEMV route as the resident stack at all batch
+  sizes; the general Qwen 3.5 Q5/Q6 batch GEMM route diverged on the mixed
+  nine-token probe and is not used as this reference.
 - On the same host and minimum `2x2` target, the unfused outer-forward observation
   changed from approximately `3.61` to `0.92` seconds, and two FlowMatch steps
   changed from approximately `6.76` to `1.31` seconds. These are implementation
@@ -118,11 +130,11 @@ either label.
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline, text encoders, VAE,
-  or decoded image generation. The admitted DiT block stack is resident, but
-  outer orchestration and sequence construction remain on CPU. The image-input
-  projection and both fused input chains still return their final arrays to the
-  host before the stack, so the outer graph is not yet resident even though the
-  stack-to-output boundary and all weights are now device-resident.
+  or decoded image generation. On the no-prefix route, layout metadata,
+  sinusoidal timestep input, and text normalization/projection are still built
+  on the CPU, and the final output is read back. For a reusable causal prefix,
+  the existing path still prepares projected inputs and selected rows on the
+  host to preserve exact cache compatibility checks.
 - A representative-token performance claim for the current exact attention
   kernel. The admitted kernel is correctness-first and remains quadratic in
   token count; the minimum `2x2` target check is not a throughput benchmark.
@@ -135,14 +147,14 @@ either label.
 
 ## Guard and next transition
 
-The next implementation transition is to hand the image-input projection and
-selected timestep modulation directly into the resident block stack. The
-stack-to-final-output half of that boundary is now admitted; the remaining
-front half requires GPU joint-sequence assembly and row selection without
-weakening prefix-cache compatibility checks. Representative-token profiling
-must then separate projection, attention, cache-copy, transfer, and launch
-costs before changing the correctness-first attention kernel. Text encoding,
-sampling, and VAE decode remain separate frontiers.
+The next transition is a raw-input prefix compatibility certificate covering
+encoder text, condition-image latents, layout, timestep `t=0` rows, and weight
+identity. Only after that guard is tested may the GPU input route build and hit
+the existing KV cache without reconstructing projected prefix arrays on the
+host. Representative-token profiling must then separate projection,
+attention, cache-copy, transfer, and launch costs before changing the
+correctness-first attention kernel. Text encoding, sampling, and VAE decode
+remain separate frontiers.
 
 The model-backed checks are:
 

@@ -103,6 +103,22 @@ module ML::GGUF
     ) : Array(Float32)?
   end
 
+  # Optional no-prefix route for projecting image latents and timestep rows
+  # directly into the resident stack. The text projection remains host-side.
+  module QwenImage21ResidentInputProjectionBackend
+    abstract def resident_input? : Bool
+  end
+
+  module QwenImage21ResidentInputStackBackend
+    abstract def forward_resident_input(
+      image_input : Array(Float32), projected_text : Array(Float32),
+      time_input : Array(Float32), img_mask : Array(Bool),
+      layout : QwenImage21TokenLayout,
+      weights : QwenImage21TransformerWeights,
+      config : QwenImage21TransformerConfig,
+    ) : Array(Float32)?
+  end
+
   module QwenImage21TransformerCPU
     IMG_TOKENS_PER_SLOT = 4
 
@@ -195,6 +211,28 @@ module ML::GGUF
       layout = build_layout(
         img_mask, img_shapes, encoder_token_count, encoder_hidden_states_mask
       )
+
+      # A causal prefix still uses the host-validated KV cache path below.
+      # Until its compatibility certificate is based on raw inputs, bypassing
+      # the projected prefix arrays would make cache reuse unsound.
+      if !weights.layers.empty? &&
+         (resident_backend = backend.as?(QwenImage21ResidentInputProjectionBackend)) &&
+         resident_backend.resident_input? &&
+         causal_target_start(layout.target_token_mask, config.causal_condition).nil?
+        if resident = layer_stack_backend.as?(QwenImage21ResidentInputStackBackend)
+          projected_text = project_text(
+            encoder_hidden_states, encoder_token_count, weights, config, backend
+          )
+          time_rows = config.causal_condition ? [timestep, 0.0_f32] : [timestep]
+          time_input = time_embedding(time_rows, config.time_input_dim)
+          if output = resident.forward_resident_input(
+               hidden_states, projected_text, time_input, img_mask,
+               layout, weights, config,
+             )
+            return QwenImage21TransformerResult.new(output, layout)
+          end
+        end
+      end
 
       projected_images = backend.matmul(
         hidden_states, image_token_count, weights.img_in, zeros(config.hidden_dim)
