@@ -114,6 +114,25 @@ file name such as `Q4` as evidence of its actual tensor policy.
   attend suffix keys. The real 32-layer text-prefix hit recomputed four of five
   tokens with `max_abs=1.013279e-5` against a full reference; a mixed
   text/condition-image prefix also hit and rebuilt on changed condition data.
+- On a resident prefix hit with an ordered image-only target suffix, `img_in`
+  uploads and projects only target rows directly into the active hidden buffer.
+  Target modulation is selected for active rows; final output scales still
+  cover the complete prefix-plus-target sequence. A nonconforming suffix takes
+  the uncached full resident route. The real condition-image check projected
+  eight image rows on build/rebuild and four on hit, while retaining output
+  parity with the full reference at `max_abs < 0.05`. An eight-pair warm profile
+  on M2 Max measured median full-forward wall time of `128.4 ms` on rebuild and
+  `85.1 ms` on hit; complete GPU command time was `123.0 ms` and `80.7 ms`.
+  The input-command encoding medians were `0.077 ms` and `0.052 ms`. This is a
+  small paired hit-versus-rebuild observation, not an old-versus-new A/B or a
+  component-level GPU attribution; DiT also processes fewer active tokens on
+  a hit. A full resident pass over nine tokens and a cached pass over four
+  cross the default eight-row GGUF GEMM/GEMV threshold: their outputs differed
+  by `0.0021353364` maximum. Two independent full passes were identical, all
+  32 prefix K/V tensors matched, and the difference survived temporary
+  restoration of the former full-input preparation. With
+  `QWEN35_GEMM_BATCH_THRESHOLD=16`, both paths used GEMV and this difference
+  disappeared. Reproduce timing with `scripts/qwen_image21_prefix_profile.cr`.
 - On the same host and minimum `2x2` target, the unfused outer-forward observation
   changed from approximately `3.61` to `0.92` seconds, and two FlowMatch steps
   changed from approximately `6.76` to `1.31` seconds. These are implementation
@@ -144,9 +163,8 @@ either label.
   or decoded image generation. On the no-prefix route, layout metadata,
   sinusoidal timestep input, and text normalization/projection are still built
   on the CPU, and the final output is read back. The causal-prefix hit route
-  currently reprojects all image rows and prepares the full joint sequence on
-  the GPU before slicing the active suffix. It saves the 32-layer prefix work,
-  but has not yet eliminated redundant prefix input-projection work.
+  skips condition-image projection for an ordered image-only target suffix,
+  but still performs the timestep projections and a full-token output head.
 - A representative-token performance claim for the current exact attention
   kernel. The admitted kernel is correctness-first and remains quadratic in
   token count; the minimum `2x2` target check is not a throughput benchmark.
@@ -200,5 +218,7 @@ QWEN_IMAGE21_GGUF=/path/to/Qwen-Image-2.1-Q4.gguf \
 - A raw-input certificate reuses K/V after an encoder, condition-image,
   `t=0` row, prefix layout, or weight-identity change, or a prefix query can
   attend a target key while the target is omitted from cached prefix work.
+- A closed resident cache hit reprojects condition-image rows, or the target
+  suffix is not an ordered image-only sequence and still enters the cache path.
 - A later image-quality corpus shows that the selected mixed quantization
   policy is worse than its declared baseline.

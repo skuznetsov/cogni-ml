@@ -60,6 +60,21 @@ private def qwen_image21_resident_fixture
 end
 
 describe ML::GGUF::QwenImage21MetalBlock do
+  it "requires an ordered image-only target suffix for the resident cache" do
+    weight = qwen_image21_resident_bf16_weight([1.0_f32], 1, 1)
+    input = ML::GGUF::QwenImage21MetalResidentInput.new(
+      [1.0_f32, 2.0_f32, 3.0_f32], [0.0_f32], [0.0_f32, 1.0_f32],
+      [0, -1, -2, -3], [false, false, true, true],
+      weight, weight, weight, weight, weight,
+    )
+    input.image_target_suffix?(2).should be_true
+    input.source_rows[2] = 0
+    input.image_target_suffix?(2).should be_false
+    input.source_rows[2] = -2
+    input.target_mask[1] = true
+    input.image_target_suffix?(2).should be_false
+  end
+
   it "certifies raw prefix inputs while ignoring changed target and target timestep" do
     _, block = qwen_image21_resident_fixture
     image_weight = qwen_image21_resident_bf16_weight(qwen_image21_resident_matrix(6, 2, 1), 6, 2)
@@ -737,6 +752,7 @@ describe ML::GGUF::QwenImage21MetalBlock do
 
     model = ML::GGUF::QwenImage21Weights.from_gguf(path.not_nil!)
     stack = ML::GGUF::QwenImage21MetalLayerStackBackend.new
+    full_stack = ML::GGUF::QwenImage21MetalLayerStackBackend.new
     begin
       config = model.transformer_config
       hidden = Array(Float32).new(8 * config.input_dim) do |index|
@@ -757,10 +773,16 @@ describe ML::GGUF::QwenImage21MetalBlock do
         hidden, encoder, 0.25_f32, shapes, mask, model.transformer_weights, config,
         backend: backend, layer_stack_backend: stack,
       )
+      stack.last_stats.not_nil!.image_projection_rows.should eq(8)
       expected = ML::GGUF::QwenImage21TransformerCPU.forward(
         changed_target, encoder, 0.75_f32, shapes, mask,
         model.transformer_weights, config,
         backend: ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: false),
+      )
+      full_resident = ML::GGUF::QwenImage21TransformerCPU.forward(
+        changed_target, encoder, 0.75_f32, shapes, mask,
+        model.transformer_weights, config,
+        backend: backend, layer_stack_backend: full_stack,
       )
       actual = ML::GGUF::QwenImage21TransformerCPU.forward(
         changed_target, encoder, 0.75_f32, shapes, mask,
@@ -770,7 +792,13 @@ describe ML::GGUF::QwenImage21MetalBlock do
       stack.prefix_cache_builds.should eq(1)
       stack.prefix_cache_hits.should eq(1)
       stack.last_stats.not_nil!.active_tokens.should eq(4)
+      stack.last_stats.not_nil!.image_projection_rows.should eq(4)
       actual.output.zip(expected.output).max_of { |value, reference| (value - reference).abs }.should be < 5.0e-2
+      # Nine full rows use the GGUF GEMM route by default; four cached rows use GEMV.
+      # Raising QWEN35_GEMM_BATCH_THRESHOLD to 16 makes this comparison exact.
+      same_matmul_route = (ENV["QWEN35_GEMM_BATCH_THRESHOLD"]?.try(&.to_i?) || 8) >= actual.layout.token_count
+      parity_limit = same_matmul_route ? 1.0e-4 : 5.0e-3
+      actual.output.zip(full_resident.output).max_of { |value, reference| (value - reference).abs }.should be < parity_limit
 
       ML::GGUF::QwenImage21TransformerCPU.forward(
         changed_condition, encoder, 0.75_f32, shapes, mask,
@@ -779,8 +807,10 @@ describe ML::GGUF::QwenImage21MetalBlock do
       )
       stack.prefix_cache_builds.should eq(2)
       stack.prefix_cache_hits.should eq(1)
+      stack.last_stats.not_nil!.image_projection_rows.should eq(8)
       stack.resident_input_invocations.should eq(3)
     ensure
+      full_stack.close
       stack.close
       model.close
     end
