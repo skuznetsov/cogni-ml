@@ -5,14 +5,14 @@
 # This matches llama.cpp's approach and gives higher precision than
 # bulk dequant→F32→matmul because intermediate values stay in registers.
 #
-# Supports: Q4_K, Q5_K, Q6_K, Q8_0, IQ4_NL, F32, F16
+# Supports: Q4_K, Q5_K, Q6_K, Q8_0, IQ4_NL, F32, F16, BF16
 
 require "./reader" # for TensorType
 
 module ML::GGUF
   module QuantMatmul
-    QK_K = 256
-    QK4_NL = 32
+    QK_K   = 256
+    QK4_NL =  32
 
     # Fused matmul: result[o] = Σ_j x[j] * dequant(W_raw[o, j]) + bias[o]
     # W_raw is quantized weight data as raw bytes, row-major [out_dim rows, in_dim cols].
@@ -23,13 +23,14 @@ module ML::GGUF
       bias : Array(Float32),
     ) : Array(Float32)
       case w_type
-      when .q4_k? then matmul_add_q4k(x, rows, in_dim, w_raw, out_dim, bias)
-      when .q5_k? then matmul_add_q5k(x, rows, in_dim, w_raw, out_dim, bias)
-      when .q6_k? then matmul_add_q6k(x, rows, in_dim, w_raw, out_dim, bias)
-      when .q8_0? then matmul_add_q8_0(x, rows, in_dim, w_raw, out_dim, bias)
+      when .q4_k?   then matmul_add_q4k(x, rows, in_dim, w_raw, out_dim, bias)
+      when .q5_k?   then matmul_add_q5k(x, rows, in_dim, w_raw, out_dim, bias)
+      when .q6_k?   then matmul_add_q6k(x, rows, in_dim, w_raw, out_dim, bias)
+      when .q8_0?   then matmul_add_q8_0(x, rows, in_dim, w_raw, out_dim, bias)
       when .iq4_nl? then matmul_add_iq4_nl(x, rows, in_dim, w_raw, out_dim, bias)
-      when .f32?  then matmul_add_f32(x, rows, in_dim, w_raw, out_dim, bias)
-      when .f16?  then matmul_add_f16(x, rows, in_dim, w_raw, out_dim, bias)
+      when .f32?    then matmul_add_f32(x, rows, in_dim, w_raw, out_dim, bias)
+      when .f16?    then matmul_add_f16(x, rows, in_dim, w_raw, out_dim, bias)
+      when .bf16?   then matmul_add_bf16(x, rows, in_dim, w_raw, out_dim, bias)
       else
         raise "Unsupported quant type for fused matmul: #{w_type.name}"
       end
@@ -356,6 +357,32 @@ module ML::GGUF
           in_dim.times do |j|
             val = Dequant.fp16_to_f32(Bytes.new(w_ptr + w_off + j * 2, 2))
             sum += x[x_off + j] * val
+          end
+          result[r_off + o] = sum.to_f32
+        end
+      end
+      result
+    end
+
+    # BF16 fused matmul. GGUF stores the upper 16 bits of IEEE-754 F32 in
+    # little-endian order, matching Dequant.dequantize_bf16.
+    private def self.matmul_add_bf16(
+      x : Array(Float32), rows : Int32, in_dim : Int32,
+      w_raw : Bytes, out_dim : Int32, bias : Array(Float32),
+    ) : Array(Float32)
+      result = Array(Float32).new(rows * out_dim, 0.0_f32)
+      w_ptr = w_raw.to_unsafe
+
+      rows.times do |r|
+        x_off = r * in_dim
+        r_off = r * out_dim
+        out_dim.times do |o|
+          sum = bias[o].to_f64
+          w_off = (o * in_dim) * 2
+          in_dim.times do |j|
+            bits = (w_ptr[w_off + j * 2].to_u32 |
+                    (w_ptr[w_off + j * 2 + 1].to_u32 << 8)) << 16
+            sum += x[x_off + j] * bits.unsafe_as(Float32)
           end
           result[r_off + o] = sum.to_f32
         end
