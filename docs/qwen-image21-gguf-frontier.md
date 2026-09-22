@@ -42,6 +42,11 @@ file name such as `Q4` as evidence of its actual tensor policy.
   minimum valid `2x2` target. The measured run used 192 Metal block projections,
   produced finite output, and completed in approximately `3.7` seconds; BF16 top-level
   projections still used the CPU fallback.
+- Reproduce the model's configured deterministic FlowMatch Euler schedule:
+  linear input sigmas, exponential resolution shift over the exact
+  `256..8192` sequence-length range, terminal stretching to `0.02`, and Euler
+  updates. A two-step model-backed loop executed 384 Metal projections across
+  two complete 32-block evaluations and produced finite changed latents.
 
 ## Pinned bootstrap artifact
 
@@ -59,8 +64,8 @@ either label.
 
 ## Not admitted by this slice
 
-- A production-scale, fully resident Metal DiT, text encoders, VAE, scheduler,
-  or image generation. The admitted route moves quantized projection matmuls to
+- A production-scale, fully resident Metal DiT, text encoders, VAE, or decoded
+  image generation. The admitted route moves quantized projection matmuls to
   Metal; block orchestration, attention, elementwise work, and top-level BF16
   projections remain on the CPU.
 - A claim that a readable GGUF has acceptable image quality.
@@ -79,7 +84,8 @@ The model-backed checks are:
 
 ```bash
 QWEN_IMAGE21_GGUF=/path/to/Qwen-Image-2.1-Q4.gguf \
-  crystal spec spec/qwen_image21_transformer_spec.cr \
+  crystal spec spec/qwen_image21_flow_match_spec.cr \
+    spec/qwen_image21_transformer_spec.cr \
     spec/qwen_image21_weights_spec.cr spec/qwen_image21_metal_spec.cr \
   --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++"
 ```

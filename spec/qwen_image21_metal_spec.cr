@@ -1,6 +1,7 @@
 require "./spec_helper"
 require "../src/ml/gguf/qwen_image21_weights"
 require "../src/ml/gguf/qwen_image21_metal"
+require "../src/ml/gguf/qwen_image21_flow_match"
 
 describe ML::GGUF::QwenImage21MetalProjectionBackend do
   it "matches the CPU reference for one real mixed-quant transformer block" do
@@ -85,6 +86,43 @@ describe ML::GGUF::QwenImage21MetalProjectionBackend do
       result.output.all?(&.finite?).should be_true
       result.layout.target_token_mask.all?.should be_true
       backend.metal_projection_count.should be >= 32 * 6
+    ensure
+      weights.close
+    end
+  end
+
+  it "runs two configured FlowMatch steps through all 32 real blocks" do
+    path = ENV["QWEN_IMAGE21_GGUF"]?
+    pending!("set QWEN_IMAGE21_GGUF to run the model-backed denoising check") unless path && File.file?(path)
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalProjectionBackend.available?
+
+    weights = ML::GGUF::QwenImage21Weights.from_gguf(path.not_nil!)
+    begin
+      config = weights.transformer_config
+      initial = Array(Float32).new(4 * config.input_dim) do |index|
+        (((index * 29 + 7) % 101) - 50).to_f32 / 131.0_f32
+      end
+      backend = ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: false)
+      started = Time.instant
+      result = ML::GGUF::QwenImage21LatentDenoiser.run(
+        initial,
+        [] of Float32,
+        [] of Float32,
+        [StaticArray[1, 2, 2]],
+        [] of Bool,
+        weights.transformer_weights,
+        config,
+        num_inference_steps: 2,
+        backend: backend,
+      )
+      elapsed = Time.instant - started
+      STDERR.puts "qwen_image21_two_step_denoise seconds=#{elapsed.total_seconds} metal_projections=#{backend.metal_projection_count}"
+
+      result.transformer_evaluations.should eq(2)
+      result.latents.size.should eq(initial.size)
+      result.latents.all?(&.finite?).should be_true
+      result.latents.should_not eq(initial)
+      backend.metal_projection_count.should be >= 2 * 32 * 6
     ensure
       weights.close
     end
