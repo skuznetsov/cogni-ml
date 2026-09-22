@@ -3,6 +3,37 @@ using namespace metal;
 
 constant uint QI21_MAX_SIMDGROUPS = 32;
 
+static inline float qi21_bf16_to_f32(ushort value) {
+    return as_type<float>(((uint)value) << 16);
+}
+
+// Correctness-first BF16 batch projection. Two simdgroups independently
+// compute two output rows; each row belongs to one batch item and output
+// channel. The weight matrix is row-major [out_dim, in_dim].
+kernel void qi21_bf16_batch_matmul(
+    device const ushort* weights [[buffer(0)]],
+    device const float* input [[buffer(1)]],
+    device float* output [[buffer(2)]],
+    constant uint& in_dim [[buffer(3)]],
+    constant uint& out_dim [[buffer(4)]],
+    constant uint& batch [[buffer(5)]],
+    uint group [[threadgroup_position_in_grid]],
+    uint lane [[thread_index_in_simdgroup]],
+    uint simdgroup [[simdgroup_index_in_threadgroup]]) {
+    const uint output_index = group * 2 + simdgroup;
+    if (output_index >= batch * out_dim) return;
+    const uint batch_row = output_index / out_dim;
+    const uint output_row = output_index - batch_row * out_dim;
+    device const ushort* weight_row = weights + output_row * in_dim;
+    device const float* input_row = input + batch_row * in_dim;
+    float sum = 0.0f;
+    for (uint column = lane; column < in_dim; column += 32) {
+        sum += qi21_bf16_to_f32(weight_row[column]) * input_row[column];
+    }
+    const float total = simd_sum(sum);
+    if (lane == 0) output[output_index] = total;
+}
+
 inline float qi21_reduce_sum(float value,
                              threadgroup float* partials,
                              uint tid,

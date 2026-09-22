@@ -8,10 +8,63 @@ require "./qwen35_metal"
 # deliberately narrow boundary supports exact one-block CPU/Metal parity before
 # the full block is fused or made resident on-device.
 module ML::GGUF
+  module QwenImage21MetalBF16
+    {% if flag?(:cpu_only) %}
+      def self.matmul(qw : QuantWeight, input : Array(Float32), rows : Int32) : Array(Float32)?
+        nil
+      end
+    {% else %}
+      SOURCE = {{ read_file("#{__DIR__}/kernels/qwen_image21.metal") }}
+
+      def self.matmul(qw : QuantWeight, input : Array(Float32), rows : Int32) : Array(Float32)?
+        return nil unless qw.type.bf16? && rows > 0
+        unless input.size == rows * qw.in_dim
+          raise ArgumentError.new("BF16 projection input size mismatch")
+        end
+        expected_bytes = qw.out_dim.to_i64 * qw.in_dim * 2_i64
+        unless qw.raw.size.to_i64 == expected_bytes
+          raise ArgumentError.new("BF16 projection weight size mismatch")
+        end
+        ML::Metal::Device.init!
+        weight_buf, weight_offset = Qwen35Metal.weight_buffer_slot(qw)
+        input_buf = ML::MetalBuffer.new(input.size.to_i64 * sizeof(Float32))
+        output_buf = ML::MetalBuffer.new(rows.to_i64 * qw.out_dim * sizeof(Float32))
+        begin
+          input_buf.write(input)
+          command = ML::Metal::CommandBuffer.new
+          encoder = ML::Metal::ComputeEncoder.new(command)
+          encoder.set_pipeline(pipeline)
+          encoder.set_buffer(weight_buf, 0, offset: weight_offset)
+          encoder.set_buffer(input_buf, 1)
+          encoder.set_buffer(output_buf, 2, ML::Metal::BufferAccess::Write)
+          encoder.set_value(qw.in_dim.to_u32, 3)
+          encoder.set_value(qw.out_dim.to_u32, 4)
+          encoder.set_value(rows.to_u32, 5)
+          output_rows = rows * qw.out_dim
+          encoder.dispatch_threadgroups({(output_rows + 1) // 2, 1, 1}, {64, 1, 1})
+          encoder.end_encoding
+          command.commit
+          command.wait
+          output_buf.read(output_rows)
+        ensure
+          input_buf.release
+          output_buf.release
+        end
+      end
+
+      private def self.pipeline : ML::Metal::ComputePipeline
+        ML::Metal::PipelineCache.get("qi21_bf16_batch_matmul") do
+          ML::Metal::ComputePipeline.new("qi21_bf16_batch_matmul", SOURCE)
+        end
+      end
+    {% end %}
+  end
+
   class QwenImage21MetalProjectionBackend
     include ComputeBackend
 
     getter metal_projection_count = 0
+    getter bf16_projection_count = 0
 
     def initialize(@strict : Bool = true)
       @cpu = F32Backend.new
@@ -30,6 +83,10 @@ module ML::GGUF
       unless bias.size == qw.out_dim
         raise ArgumentError.new("bias size #{bias.size} does not match projection output #{qw.out_dim}")
       end
+      unless x.size == rows * qw.in_dim
+        raise ArgumentError.new("projection input size mismatch")
+      end
+      return [] of Float32 if rows == 0
 
       {% if flag?(:cpu_only) %}
         if @strict
@@ -38,8 +95,14 @@ module ML::GGUF
           @cpu.matmul(x, rows, qw, bias)
         end
       {% else %}
-        if result = Qwen35Metal.matmul(qw, x, rows)
+        result = if qw.type.bf16?
+                   QwenImage21MetalBF16.matmul(qw, x, rows)
+                 else
+                   Qwen35Metal.matmul(qw, x, rows)
+                 end
+        if result
           @metal_projection_count += 1
+          @bf16_projection_count += 1 if qw.type.bf16?
           add_bias!(result, rows, qw.out_dim, bias)
           result
         elsif @strict

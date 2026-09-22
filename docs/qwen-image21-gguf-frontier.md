@@ -40,9 +40,8 @@ file name such as `Q4` as evidence of its actual tensor policy.
   blocks, and prefix output is timestep-independent under causal conditioning.
 - Execute the complete outer transformer with all 32 real mixed-quant blocks
   for a minimum valid `2x2` target. The measured hybrid run used 192 Metal block
-  projections, produced finite output, and completed in approximately `3.7`
-  seconds through the original projection-only route; BF16 top-level
-  projections and outer orchestration still used the CPU fallback.
+  projections and produced finite output. Before the top-level BF16 Metal route,
+  this minimum-size check completed in approximately `3.61` seconds.
 - Keep a complete DiT block sequence Metal-resident behind one outer-transformer
   backend call. Affine-less LayerNorm and modulation, per-head Q/K RMSNorm,
   three-axis RoPE, segmented block-causal attention, SwiGLU, residual updates,
@@ -66,10 +65,21 @@ file name such as `Q4` as evidence of its actual tensor policy.
   state, prefix modulation, prefix positions, prefix image ids, prefix key
   validity, layer objects, or block configuration changes. A tiny GPU check
   verifies both the cache-hit path and rebuild after a changed prefix value.
+- Execute all eight top-level BF16 matrix shapes with a batch-capable Metal
+  kernel; the empty-text minimum target evaluates six of them. The kernel reuses
+  the registered whole-model mmap buffer plus tensor offset rather than copying
+  weights into a second allocation, while synthetic heap-backed weights retain
+  the existing per-weight upload fallback. A full real outer-forward check
+  against a selective reference that leaves only BF16 on CPU produced
+  `max_abs=2.0712614e-6` and cosine `0.9999999999998502`.
+- On the same host and minimum `2x2` target, the unfused outer-forward observation
+  changed from approximately `3.61` to `0.92` seconds, and two FlowMatch steps
+  changed from approximately `6.76` to `1.31` seconds. These are implementation
+  smoke timings, not representative-token throughput claims.
 - Reproduce the model's configured deterministic FlowMatch Euler schedule:
   linear input sigmas, exponential resolution shift over the exact
   `256..8192` sequence-length range, terminal stretching to `0.02`, and Euler
-  updates. A two-step model-backed loop executed 384 Metal projections across
+  updates. A two-step model-backed loop executed 396 Metal projections across
   two complete 32-block evaluations and produced finite changed latents.
 
 ## Pinned bootstrap artifact
@@ -90,9 +100,10 @@ either label.
 
 - A production-scale, end-to-end resident Metal pipeline, text encoders, VAE,
   or decoded image generation. The admitted DiT block stack is resident, but
-  sequence construction, timestep/text/top-level BF16 projections, final norm
-  and output projection still cross the CPU boundary once per transformer
-  evaluation.
+  outer orchestration, sequence construction, activations, and final norm remain
+  on CPU. Each top-level BF16 projection still uploads its input and reads its
+  output back, so the outer graph is not yet resident even though its weights
+  are reused without duplication.
 - A representative-token performance claim for the current exact attention
   kernel. The admitted kernel is correctness-first and remains quadratic in
   token count; the minimum `2x2` target check is not a throughput benchmark.
@@ -105,12 +116,12 @@ either label.
 
 ## Guard and next transition
 
-The next implementation transition is a batch-capable top-level BF16 Metal
-projection route so sequence construction can stop crossing the CPU boundary
-around the resident block stack. Representative-token profiling must then
-separate projection, attention, cache-copy, and launch costs before changing
-the correctness-first attention kernel. Text encoding, sampling, and VAE decode
-remain separate frontiers.
+The next implementation transition is to retain sequence-construction and
+top-level BF16 intermediates around the resident block stack instead of
+uploading and reading back once per projection. Representative-token profiling
+must then separate projection, attention, cache-copy, transfer, and launch costs
+before changing the correctness-first attention kernel. Text encoding, sampling,
+and VAE decode remain separate frontiers.
 
 The model-backed checks are:
 

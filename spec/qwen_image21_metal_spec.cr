@@ -3,7 +3,78 @@ require "../src/ml/gguf/qwen_image21_weights"
 require "../src/ml/gguf/qwen_image21_metal"
 require "../src/ml/gguf/qwen_image21_flow_match"
 
+private def qwen_image21_metal_bf16_weight(values : Array(Float32), out_dim : Int32, in_dim : Int32)
+  raw = Bytes.new(values.size * 2)
+  values.each_with_index do |value, index|
+    bits = value.unsafe_as(UInt32) >> 16
+    raw[index * 2] = (bits & 0xff).to_u8
+    raw[index * 2 + 1] = (bits >> 8).to_u8
+  end
+  ML::GGUF::QuantWeight.new(raw, ML::GGUF::TensorType::BF16, out_dim, in_dim)
+end
+
+# Isolates the new top-level BF16 route while retaining the already-verified
+# mixed-quant Metal projections inside each transformer block.
+private class QwenImage21CPUReferenceBF16Backend
+  include ML::GGUF::ComputeBackend
+
+  def initialize
+    @cpu = ML::GGUF::F32Backend.new
+    @metal = ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: true)
+  end
+
+  def matmul(x : Array(Float32), rows : Int32, qw : ML::GGUF::QuantWeight,
+             bias : Array(Float32)) : Array(Float32)
+    if qw.type.bf16?
+      @cpu.matmul(x, rows, qw, bias)
+    else
+      @metal.matmul(x, rows, qw, bias)
+    end
+  end
+
+  def layer_norm!(x : Array(Float32), n_pos : Int32, dim : Int32,
+                  w : Array(Float32), b : Array(Float32)) : Nil
+    @cpu.layer_norm!(x, n_pos, dim, w, b)
+  end
+
+  def softmax_row!(scores : Array(Float32), offset : Int32, len : Int32) : Nil
+    @cpu.softmax_row!(scores, offset, len)
+  end
+
+  def gelu(x : Float32) : Float32
+    @cpu.gelu(x)
+  end
+
+  def dot(a : Array(Float32), a_off : Int32, b : Array(Float32),
+          b_off : Int32, len : Int32) : Float32
+    @cpu.dot(a, a_off, b, b_off, len)
+  end
+end
+
 describe ML::GGUF::QwenImage21MetalProjectionBackend do
+  it "matches the CPU reference for a BF16 batch projection" do
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalProjectionBackend.available?
+    weight = qwen_image21_metal_bf16_weight(
+      Array(Float32).new(20) { |index| (((index * 7) % 13) - 6).to_f32 / 5.0_f32 },
+      4,
+      5,
+    )
+    input = Array(Float32).new(15) do |index|
+      (((index * 11) % 17) - 8).to_f32 / 7.0_f32
+    end
+    bias = [0.25_f32, -0.5_f32, 0.75_f32, -1.0_f32]
+    expected = ML::GGUF::F32Backend.new.matmul(input, 3, weight, bias)
+    backend = ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: true)
+
+    actual = backend.matmul(input, 3, weight, bias)
+
+    actual.zip(expected).each do |value, reference|
+      value.should be_close(reference, 1e-5_f32)
+    end
+    backend.metal_projection_count.should eq(1)
+    backend.bf16_projection_count.should eq(1)
+  end
+
   it "matches the CPU reference for one real mixed-quant transformer block" do
     path = ENV["QWEN_IMAGE21_GGUF"]?
     pending!("set QWEN_IMAGE21_GGUF to run the model-backed parity check") unless path && File.file?(path)
@@ -67,6 +138,16 @@ describe ML::GGUF::QwenImage21MetalProjectionBackend do
       hidden = Array(Float32).new(4 * config.input_dim) do |index|
         (((index * 23 + 5) % 97) - 48).to_f32 / 127.0_f32
       end
+      expected = ML::GGUF::QwenImage21TransformerCPU.forward(
+        hidden,
+        [] of Float32,
+        0.5_f32,
+        [StaticArray[1, 2, 2]],
+        [true],
+        weights.transformer_weights,
+        config,
+        backend: QwenImage21CPUReferenceBF16Backend.new,
+      )
       backend = ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: false)
       started = Time.instant
       result = ML::GGUF::QwenImage21TransformerCPU.forward(
@@ -85,7 +166,22 @@ describe ML::GGUF::QwenImage21MetalProjectionBackend do
       result.output.size.should eq(4 * config.output_dim)
       result.output.all?(&.finite?).should be_true
       result.layout.target_token_mask.all?.should be_true
-      backend.metal_projection_count.should be >= 32 * 6
+      max_abs = 0.0_f64
+      dot = 0.0_f64
+      expected_norm = 0.0_f64
+      result_norm = 0.0_f64
+      result.output.zip(expected.output).each do |value, reference|
+        max_abs = Math.max(max_abs, (value - reference).abs)
+        dot += value.to_f64 * reference
+        expected_norm += reference.to_f64 ** 2
+        result_norm += value.to_f64 ** 2
+      end
+      cosine = dot / Math.sqrt(expected_norm * result_norm)
+      STDERR.puts "qwen_image21_outer_bf16_parity max_abs=#{max_abs} cosine=#{cosine}"
+      max_abs.should be < 1e-4
+      cosine.should be > 0.999999
+      backend.metal_projection_count.should eq(32 * 6 + 6)
+      backend.bf16_projection_count.should eq(6)
     ensure
       weights.close
     end
@@ -122,7 +218,8 @@ describe ML::GGUF::QwenImage21MetalProjectionBackend do
       result.latents.size.should eq(initial.size)
       result.latents.all?(&.finite?).should be_true
       result.latents.should_not eq(initial)
-      backend.metal_projection_count.should be >= 2 * 32 * 6
+      backend.metal_projection_count.should eq(2 * (32 * 6 + 6))
+      backend.bf16_projection_count.should eq(12)
     ensure
       weights.close
     end
