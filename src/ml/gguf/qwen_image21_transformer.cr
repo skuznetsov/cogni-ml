@@ -87,6 +87,22 @@ module ML::GGUF
     ) : {Array(Float32), Array(Float32)}?
   end
 
+  # Optional layer-stack capability that keeps the stack result resident
+  # through the transformer's final normalization, per-token scale, and output
+  # projection. Returning nil preserves the generic host final-head path.
+  module QwenImage21FusedLayerStackBackend
+    abstract def forward_layers_projected(
+      hidden : Array(Float32), token_count : Int32,
+      modulation : Array(Float32),
+      positions : Array(StaticArray(Int32, 3)),
+      image_ids : Array(Int32),
+      layers : Array(QwenImage21BlockWeights),
+      config : QwenImage21BlockConfig,
+      key_valid : Array(Bool)?, target_start : Int32?,
+      scales : Array(Float32), output_weight : QuantWeight,
+    ) : Array(Float32)?
+  end
+
   module QwenImage21TransformerCPU
     IMG_TOKENS_PER_SLOT = 4
 
@@ -227,9 +243,31 @@ module ML::GGUF
         modulation_rows, time_rows.size, 4 * config.hidden_dim,
         layout.target_token_mask, config.causal_condition
       )
+      scales = select_rows(
+        scale_rows, time_rows.size, config.hidden_dim,
+        layout.target_token_mask, config.causal_condition
+      )
 
       if stack = layer_stack_backend
         unless weights.layers.empty?
+          target_start = causal_target_start(layout.target_token_mask, config.causal_condition)
+          if fused_stack = stack.as?(QwenImage21FusedLayerStackBackend)
+            if output = fused_stack.forward_layers_projected(
+                 joint,
+                 layout.token_count,
+                 modulation,
+                 layout.positions,
+                 layout.image_ids,
+                 weights.layers,
+                 config.block,
+                 layout.key_valid,
+                 target_start,
+                 scales,
+                 weights.proj_out,
+               )
+              return QwenImage21TransformerResult.new(output, layout)
+            end
+          end
           joint = stack.forward_layers(
             joint,
             layout.token_count,
@@ -239,7 +277,7 @@ module ML::GGUF
             weights.layers,
             config.block,
             layout.key_valid,
-            causal_target_start(layout.target_token_mask, config.causal_condition),
+            target_start,
           )
         end
       else
@@ -258,10 +296,6 @@ module ML::GGUF
         end
       end
 
-      scales = select_rows(
-        scale_rows, time_rows.size, config.hidden_dim,
-        layout.target_token_mask, config.causal_condition
-      )
       normalized = layer_norm(joint, layout.token_count, config.hidden_dim, config.block.eps)
       normalized.size.times { |index| normalized[index] *= 1.0_f32 + scales[index] }
       output = backend.matmul(

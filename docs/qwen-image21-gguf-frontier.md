@@ -81,6 +81,16 @@ file name such as `Q4` as evidence of its actual tensor policy.
   projections; image input and final output remain separate. This is a
   structural transfer/launch reduction, not yet an independently measured
   throughput win.
+- Keep the resident block result on-device through affine-less LayerNorm,
+  per-token output scaling, and the BF16 output projection. The final head is
+  encoded as the 193rd projection dispatch in the existing stack command
+  buffer, so only the projected transformer output is read back. On a prefix
+  cache hit, the persistent prefix output and resident target output are joined
+  on-device before the final head; the target hidden state is not read back or
+  re-uploaded. The real no-text 32-layer check produced
+  `max_abs=2.1457672e-6` and cosine `0.9999999999997731`; the real changed-target
+  prefix-cache check produced `max_abs=1.013279e-5` and cosine
+  `0.9999999999977098`.
 - On the same host and minimum `2x2` target, the unfused outer-forward observation
   changed from approximately `3.61` to `0.92` seconds, and two FlowMatch steps
   changed from approximately `6.76` to `1.31` seconds. These are implementation
@@ -109,11 +119,10 @@ either label.
 
 - A production-scale, end-to-end resident Metal pipeline, text encoders, VAE,
   or decoded image generation. The admitted DiT block stack is resident, but
-  outer orchestration, sequence construction, activations, and final norm remain
-  on CPU. The image-input and final-output BF16 projections still form separate
-  upload/readback boundaries, and both fused chains return their final arrays to
-  the host, so the outer graph is not yet resident even though its weights are
-  reused without duplication.
+  outer orchestration and sequence construction remain on CPU. The image-input
+  projection and both fused input chains still return their final arrays to the
+  host before the stack, so the outer graph is not yet resident even though the
+  stack-to-output boundary and all weights are now device-resident.
 - A representative-token performance claim for the current exact attention
   kernel. The admitted kernel is correctness-first and remains quadratic in
   token count; the minimum `2x2` target check is not a throughput benchmark.
@@ -127,13 +136,13 @@ either label.
 ## Guard and next transition
 
 The next implementation transition is to hand the image-input projection and
-selected timestep modulation directly into the resident block stack, then keep
-its result resident through final LayerNorm and output projection. That removes
-the remaining outer-stack upload/readback pair without requiring text encoding
-or VAE work to cross the same boundary. Representative-token profiling must
-then separate projection, attention, cache-copy, transfer, and launch costs
-before changing the correctness-first attention kernel. Text encoding, sampling,
-and VAE decode remain separate frontiers.
+selected timestep modulation directly into the resident block stack. The
+stack-to-final-output half of that boundary is now admitted; the remaining
+front half requires GPU joint-sequence assembly and row selection without
+weakening prefix-cache compatibility checks. Representative-token profiling
+must then separate projection, attention, cache-copy, transfer, and launch
+costs before changing the correctness-first attention kernel. Text encoding,
+sampling, and VAE decode remain separate frontiers.
 
 The model-backed checks are:
 
@@ -159,6 +168,8 @@ QWEN_IMAGE21_GGUF=/path/to/Qwen-Image-2.1-Q4.gguf \
   CPU/Metal tolerance.
 - A resident stack uses more than one command buffer or performs an
   intermediate host readback for one outer-transformer evaluation.
+- The resident final head reads back a hidden state, uploads a normalized
+  intermediate, or issues a second command buffer before the output projection.
 - Prefix caching changes a prefix hidden state, key, or value when only the
   target latents and FlowMatch timestep change.
 - A changed prefix input or block configuration reuses the prior prefix cache
