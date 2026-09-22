@@ -21,8 +21,7 @@ file : ML::GGUF::GGUFFile? = nil
 begin
   file = ML::GGUF::GGUFFile.new(path, mmap_tensors: false)
   inventory = ML::GGUF::QwenImage21GGUFInventory.from_file(file)
-  required_payload_bytes = file.tensors.max_of? { |tensor| tensor.offset.to_i64 + tensor.data_bytes } || 0_i64
-  required_file_bytes = file.data_offset + required_payload_bytes
+  required_file_bytes = inventory.required_file_bytes(file.data_offset)
   actual_file_bytes = File.size(path)
 
   puts "architecture=#{inventory.architecture}"
@@ -33,7 +32,7 @@ begin
   puts "tensor_data_bytes=#{inventory.total_tensor_bytes}"
   puts "required_file_bytes=#{required_file_bytes}"
   puts "actual_file_bytes=#{actual_file_bytes}"
-  puts "tensor_data_complete=#{actual_file_bytes >= required_file_bytes}"
+  puts "tensor_data_complete=#{inventory.tensor_data_complete?(file.data_offset, actual_file_bytes)}"
   puts "reader_compatible=#{inventory.reader_compatible?}"
   puts "unsupported_types=#{inventory.unsupported_type_labels.join(",")}" unless inventory.reader_compatible?
   puts "tensor_types=#{inventory.type_counts.map { |name, count| "#{name}:#{count}" }.join(",")}"

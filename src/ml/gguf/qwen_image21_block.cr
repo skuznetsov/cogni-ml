@@ -52,6 +52,7 @@ module ML::GGUF
       weights : QwenImage21BlockWeights,
       config : QwenImage21BlockConfig,
       key_valid : Array(Bool)? = nil,
+      backend : ComputeBackend = F32Backend.new,
     ) : Array(Float32)
       dim = config.hidden_dim
       expected_hidden = token_count * dim
@@ -62,7 +63,6 @@ module ML::GGUF
       raise ArgumentError.new("key_valid size mismatch") if key_valid && key_valid.size != token_count
       validate_weights(weights, config)
 
-      backend = F32Backend.new
       zeros = Array(Float32).new(dim, 0.0_f32)
 
       norm1 = layer_norm(hidden, token_count, dim, config.eps)

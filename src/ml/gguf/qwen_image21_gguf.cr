@@ -39,6 +39,7 @@ module ML::GGUF
     getter type_counts : Hash(String, Int32)
     getter unsupported_type_labels : Array(String)
     getter total_tensor_bytes : Int64
+    getter required_payload_bytes : Int64
 
     @tensors_by_name : Hash(String, TensorInfo)
     @logical_shapes : Hash(String, Array(Int64))
@@ -73,6 +74,7 @@ module ML::GGUF
         @total_tensor_bytes += tensor.data_bytes
       end
       @unsupported_type_labels = unsupported.to_a.sort!
+      @required_payload_bytes = tensors.max_of? { |tensor| tensor.offset.to_i64 + tensor.data_bytes } || 0_i64
     end
 
     def self.from_file(file : GGUFFile) : self
@@ -81,6 +83,26 @@ module ML::GGUF
 
     def reader_compatible? : Bool
       @unsupported_type_labels.empty?
+    end
+
+    # Minimum complete-file size implied by the tensor directory. This is not
+    # the sum of tensor sizes: GGUF offsets may contain alignment gaps.
+    def required_file_bytes(data_offset : Int64) : Int64
+      raise ArgumentError.new("data offset must be non-negative") if data_offset < 0
+      data_offset + @required_payload_bytes
+    end
+
+    def tensor_data_complete?(data_offset : Int64, actual_file_bytes : Int64) : Bool
+      actual_file_bytes >= required_file_bytes(data_offset)
+    end
+
+    def ensure_tensor_data_complete!(data_offset : Int64, actual_file_bytes : Int64) : Nil
+      required = required_file_bytes(data_offset)
+      return if actual_file_bytes >= required
+
+      raise ArgumentError.new(
+        "tensor payload is incomplete: file has #{actual_file_bytes} bytes, requires at least #{required}"
+      )
     end
 
     # Source-framework shape when ComfyUI recorded a physical GGUF reshape;
@@ -92,6 +114,24 @@ module ML::GGUF
         tensor.dims
       else
         raise KeyError.new("unknown tensor #{name}")
+      end
+    end
+
+    # QuantWeight uses mathematical [out, in] dimensions. Comfy's orig_shape
+    # metadata records the source torch matrix in that order; ordinary GGUF
+    # tensor-directory dimensions use [in, out].
+    def projection_dims(name : String) : {Int32, Int32}
+      tensor = @tensors_by_name[name]? || raise KeyError.new("unknown tensor #{name}")
+      if source_shape = @logical_shapes[name]?
+        unless source_shape.size == 2
+          raise ArgumentError.new("original shape for #{name} must be a matrix, got #{source_shape}")
+        end
+        {source_shape[0].to_i32, source_shape[1].to_i32}
+      else
+        unless tensor.dims.size == 2
+          raise ArgumentError.new("tensor #{name} must be a matrix, got #{tensor.dims}")
+        end
+        {tensor.dims[1].to_i32, tensor.dims[0].to_i32}
       end
     end
 
