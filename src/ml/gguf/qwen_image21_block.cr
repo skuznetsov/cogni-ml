@@ -51,6 +51,7 @@ module ML::GGUF
       layers : Array(QwenImage21BlockWeights),
       config : QwenImage21BlockConfig,
       key_valid : Array(Bool)?,
+      target_start : Int32?,
     ) : Array(Float32)
   end
 

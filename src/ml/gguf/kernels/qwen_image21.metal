@@ -167,30 +167,33 @@ kernel void qi21_block_causal_attention(
     device const int* image_ids [[buffer(3)]],
     device const uchar* key_valid [[buffer(4)]],
     device float* output [[buffer(5)]],
-    constant uint& tokens [[buffer(6)]],
-    constant uint& heads [[buffer(7)]],
-    constant uint& head_dim [[buffer(8)]],
-    constant float& scale [[buffer(9)]],
+    constant uint& total_tokens [[buffer(6)]],
+    constant uint& query_tokens [[buffer(7)]],
+    constant uint& query_offset [[buffer(8)]],
+    constant uint& heads [[buffer(9)]],
+    constant uint& head_dim [[buffer(10)]],
+    constant float& scale [[buffer(11)]],
     uint group [[threadgroup_position_in_grid]],
     uint tid [[thread_index_in_threadgroup]],
     uint lane [[thread_index_in_simdgroup]],
     uint simdgroup [[simdgroup_index_in_threadgroup]],
     uint threads [[threads_per_threadgroup]]) {
-    const uint query_token = group / heads;
-    const uint head = group - query_token * heads;
-    if (query_token >= tokens) return;
+    const uint query_local = group / heads;
+    const uint head = group - query_local * heads;
+    if (query_local >= query_tokens) return;
+    const uint query_token = query_offset + query_local;
     threadgroup float partials[QI21_MAX_SIMDGROUPS];
     threadgroup float probability;
     threadgroup float correction;
     threadgroup float inverse_sum;
     const uint simdgroups = (threads + 31) / 32;
-    const uint qbase = (query_token * heads + head) * head_dim;
+    const uint qbase = (query_local * heads + head) * head_dim;
     const float qv = tid < head_dim ? q[qbase + tid] : 0.0f;
     float accumulator = 0.0f;
     float running_max = -INFINITY;
     float running_sum = 0.0f;
 
-    for (uint key_token = 0; key_token < tokens; ++key_token) {
+    for (uint key_token = 0; key_token < total_tokens; ++key_token) {
         const bool same_image = image_ids[query_token] >= 0 &&
                                 image_ids[query_token] == image_ids[key_token];
         const bool allowed = key_valid[key_token] != 0 &&
@@ -220,6 +223,14 @@ kernel void qi21_block_causal_attention(
     if (tid == 0) inverse_sum = 1.0f / running_sum;
     threadgroup_barrier(mem_flags::mem_threadgroup);
     if (tid < head_dim) output[qbase + tid] = accumulator * inverse_sum;
+}
+
+kernel void qi21_copy_f32(
+    device const float* input [[buffer(0)]],
+    device float* output [[buffer(1)]],
+    constant uint& count [[buffer(2)]],
+    uint index [[thread_position_in_grid]]) {
+    if (index < count) output[index] = input[index];
 }
 
 kernel void qi21_residual_layernorm_modulate_gate(

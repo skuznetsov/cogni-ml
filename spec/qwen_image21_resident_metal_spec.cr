@@ -111,6 +111,79 @@ describe ML::GGUF::QwenImage21MetalBlock do
     actual.stats.final_readbacks.should eq(1)
   end
 
+  it "reuses cached prefix K/V while recomputing only a changed target suffix" do
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
+    config, weights = qwen_image21_resident_fixture
+    token_count = 4
+    prefix_tokens = 2
+    hidden = Array(Float32).new(token_count * config.hidden_dim) do |index|
+      (((index * 19) % 31) - 15).to_f32 / 23.0_f32
+    end
+    changed = hidden.dup
+    (prefix_tokens * config.hidden_dim...changed.size).each do |index|
+      changed[index] += ((index % 5) - 2).to_f32 / 17.0_f32
+    end
+    modulation = Array(Float32).new(token_count * 4 * config.hidden_dim) do |index|
+      (((index * 5) % 37) - 18).to_f32 / 113.0_f32
+    end
+    changed_modulation = modulation.dup
+    (prefix_tokens * 4 * config.hidden_dim...changed_modulation.size).each do |index|
+      changed_modulation[index] += ((index % 7) - 3).to_f32 / 211.0_f32
+    end
+    positions = [
+      StaticArray[0, 0, 0],
+      StaticArray[1, 1, 1],
+      StaticArray[2, -1, 0],
+      StaticArray[2, 0, 0],
+    ]
+    image_ids = [-1, -1, 0, 0]
+    layers = [weights, weights]
+
+    stack = ML::GGUF::QwenImage21MetalLayerStackBackend.new
+    begin
+      stack.forward_layers(
+        hidden, token_count, modulation, positions, image_ids,
+        layers, config, nil, prefix_tokens,
+      )
+      actual = stack.forward_layers(
+        changed, token_count, changed_modulation, positions, image_ids,
+        layers, config, nil, prefix_tokens,
+      )
+      expected = layers.reduce(changed) do |state, layer|
+        ML::GGUF::QwenImage21BlockCPU.forward(
+          state, token_count, changed_modulation, positions, image_ids, layer, config
+        )
+      end
+
+      actual.zip(expected).each do |value, reference|
+        value.should be_close(reference, 8e-4_f32)
+      end
+      stack.prefix_cache_builds.should eq(1)
+      stack.prefix_cache_hits.should eq(1)
+      stack.last_stats.not_nil!.active_tokens.should eq(token_count - prefix_tokens)
+
+      changed_prefix = changed.dup
+      changed_prefix[0] += 0.25_f32
+      rebuilt = stack.forward_layers(
+        changed_prefix, token_count, changed_modulation, positions, image_ids,
+        layers, config, nil, prefix_tokens,
+      )
+      rebuilt_expected = layers.reduce(changed_prefix) do |state, layer|
+        ML::GGUF::QwenImage21BlockCPU.forward(
+          state, token_count, changed_modulation, positions, image_ids, layer, config
+        )
+      end
+      rebuilt.zip(rebuilt_expected).each do |value, reference|
+        value.should be_close(reference, 8e-4_f32)
+      end
+      stack.prefix_cache_builds.should eq(2)
+      stack.prefix_cache_hits.should eq(1)
+      stack.last_stats.not_nil!.active_tokens.should eq(token_count)
+    ensure
+      stack.close
+    end
+  end
+
   it "rejects a key mask that leaves an attention row without valid keys" do
     pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
     config, weights = qwen_image21_resident_fixture
@@ -251,7 +324,94 @@ describe ML::GGUF::QwenImage21MetalBlock do
       actual.output.all?(&.finite?).should be_true
       max_abs.should be < 5.0e-2
       cosine.should be > 0.99999
+      stack.close
     ensure
+      model.close
+    end
+  end
+
+  it "reuses a real 32-layer text prefix across changed target and timestep inputs" do
+    path = ENV["QWEN_IMAGE21_GGUF"]?
+    pending!("set QWEN_IMAGE21_GGUF to run the model-backed prefix cache check") unless path && File.file?(path)
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
+
+    model = ML::GGUF::QwenImage21Weights.from_gguf(path.not_nil!)
+    stack = ML::GGUF::QwenImage21MetalLayerStackBackend.new
+    begin
+      config = model.transformer_config
+      hidden = Array(Float32).new(4 * config.input_dim) do |index|
+        (((index * 29 + 3) % 113) - 56).to_f32 / 149.0_f32
+      end
+      changed = hidden.map_with_index do |value, index|
+        value + (((index * 7) % 17) - 8).to_f32 / 997.0_f32
+      end
+      encoder_hidden = Array(Float32).new(config.context_dim) do |index|
+        (((index * 31 + 9) % 127) - 63).to_f32 / 173.0_f32
+      end
+      shapes = [StaticArray[1, 2, 2]]
+      mask = [false, true]
+      outer_backend = ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: false)
+
+      ML::GGUF::QwenImage21TransformerCPU.forward(
+        hidden,
+        encoder_hidden,
+        0.25_f32,
+        shapes,
+        mask,
+        model.transformer_weights,
+        config,
+        backend: outer_backend,
+        layer_stack_backend: stack,
+      )
+      expected = ML::GGUF::QwenImage21TransformerCPU.forward(
+        changed,
+        encoder_hidden,
+        0.75_f32,
+        shapes,
+        mask,
+        model.transformer_weights,
+        config,
+        backend: ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: false),
+      )
+      actual = ML::GGUF::QwenImage21TransformerCPU.forward(
+        changed,
+        encoder_hidden,
+        0.75_f32,
+        shapes,
+        mask,
+        model.transformer_weights,
+        config,
+        backend: outer_backend,
+        layer_stack_backend: stack,
+      )
+
+      max_abs = 0.0_f64
+      dot = 0.0_f64
+      expected_norm = 0.0_f64
+      actual_norm = 0.0_f64
+      expected.output.each_with_index do |reference, index|
+        value = actual.output[index]
+        max_abs = Math.max(max_abs, (reference - value).abs)
+        dot += reference.to_f64 * value
+        expected_norm += reference.to_f64 ** 2
+        actual_norm += value.to_f64 ** 2
+      end
+      cosine = dot / Math.sqrt(expected_norm * actual_norm)
+      stats = stack.last_stats.not_nil!
+      STDERR.puts "qwen_image21_prefix_cache_parity max_abs=#{max_abs} cosine=#{cosine}"
+
+      stack.prefix_cache_builds.should eq(1)
+      stack.prefix_cache_hits.should eq(1)
+      stats.active_tokens.should eq(4)
+      stats.command_buffers.should eq(1)
+      stats.projection_dispatches.should eq(model.layers.size * 6)
+      stats.intermediate_readbacks.should eq(0)
+      stats.final_readbacks.should eq(1)
+      actual.output.all?(&.finite?).should be_true
+      max_abs.should be < 5.0e-2
+      cosine.should be > 0.99999
+    ensure
+      stack.close
       model.close
     end
   end
