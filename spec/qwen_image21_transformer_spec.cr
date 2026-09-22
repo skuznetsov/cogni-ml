@@ -1,5 +1,5 @@
 require "./spec_helper"
-require "../src/ml/gguf/qwen_image21_transformer"
+require "../src/ml/gguf/qwen_image21_flow_match"
 
 private def qwen_image21_transformer_f32_weight(values : Array(Float32), out_dim : Int32, in_dim : Int32)
   raw = Bytes.new(values.size * 4)
@@ -156,5 +156,28 @@ describe ML::GGUF::QwenImage21TransformerCPU do
     first.output.last(4 * fixture[:config].output_dim).should_not eq(
       second.output.last(4 * fixture[:config].output_dim)
     )
+  end
+
+  it "runs the target latents through a complete FlowMatch denoising loop" do
+    fixture = qwen_image21_transformer_fixture(include_layer: false)
+    condition_values = 4 * fixture[:config].input_dim
+    target = fixture[:image_latents].last(4 * fixture[:config].input_dim)
+    result = ML::GGUF::QwenImage21LatentDenoiser.run(
+      target,
+      fixture[:image_latents].first(condition_values),
+      fixture[:encoder_hidden],
+      fixture[:img_shapes],
+      fixture[:img_mask].first(4),
+      fixture[:weights],
+      fixture[:config],
+      num_inference_steps: 3,
+      encoder_hidden_states_mask: fixture[:encoder_valid],
+    )
+
+    result.transformer_evaluations.should eq(3)
+    result.schedule.step_count.should eq(3)
+    result.latents.size.should eq(target.size)
+    result.latents.all?(&.finite?).should be_true
+    result.latents.should_not eq(target)
   end
 end
