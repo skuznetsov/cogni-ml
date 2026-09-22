@@ -54,4 +54,39 @@ describe ML::GGUF::QwenImage21MetalProjectionBackend do
       weights.close
     end
   end
+
+  it "executes the complete 32-block outer transformer on a minimum valid target" do
+    path = ENV["QWEN_IMAGE21_GGUF"]?
+    pending!("set QWEN_IMAGE21_GGUF to run the model-backed outer-forward check") unless path && File.file?(path)
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalProjectionBackend.available?
+
+    weights = ML::GGUF::QwenImage21Weights.from_gguf(path.not_nil!)
+    begin
+      config = weights.transformer_config
+      hidden = Array(Float32).new(4 * config.input_dim) do |index|
+        (((index * 23 + 5) % 97) - 48).to_f32 / 127.0_f32
+      end
+      backend = ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: false)
+      started = Time.instant
+      result = ML::GGUF::QwenImage21TransformerCPU.forward(
+        hidden,
+        [] of Float32,
+        0.5_f32,
+        [StaticArray[1, 2, 2]],
+        [true],
+        weights.transformer_weights,
+        config,
+        backend: backend,
+      )
+      elapsed = Time.instant - started
+      STDERR.puts "qwen_image21_outer_forward seconds=#{elapsed.total_seconds} metal_projections=#{backend.metal_projection_count}"
+
+      result.output.size.should eq(4 * config.output_dim)
+      result.output.all?(&.finite?).should be_true
+      result.layout.target_token_mask.all?.should be_true
+      backend.metal_projection_count.should be >= 32 * 6
+    ensure
+      weights.close
+    end
+  end
 end

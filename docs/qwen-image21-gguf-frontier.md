@@ -29,6 +29,19 @@ file name such as `Q4` as evidence of its actual tensor policy.
 - Reuse the Qwen 3.5 Q8/Q5/Q6 Metal projection kernels inside the exact block
   reference. On two real tokens through block 0, the CPU/Metal boundary produced
   `max_abs=1.5258789e-5` and cosine `0.999999999999972` across 8192 outputs.
+- Execute the exact batch-one outer transformer contract: zero-centered text
+  RMSNorm and projection, VLM image-slot expansion, condition/target latent
+  substitution, shape-derived image block ids, centered three-axis positions,
+  padding validity, sinusoidal timestep embedding, causal `t=0` prefix
+  modulation, all transformer blocks, adaptive output norm, and output head.
+- Check that complete outer forward against an independent tiny PyTorch oracle,
+  including the appended target placeholder slots used by the official
+  pipeline. Adjacent image slots are explicitly kept as separate attention
+  blocks, and prefix output is timestep-independent under causal conditioning.
+- Execute all 32 real mixed-quant blocks plus the outer head on Metal for a
+  minimum valid `2x2` target. The measured run used 192 Metal block projections,
+  produced finite output, and completed in approximately `3.7` seconds; BF16 top-level
+  projections still used the CPU fallback.
 
 ## Pinned bootstrap artifact
 
@@ -46,10 +59,10 @@ either label.
 
 ## Not admitted by this slice
 
-- Full 32-block DiT execution, a fully resident Metal block, text encoders,
-  VAE, scheduler, or image generation. The admitted Metal parity route moves
-  only projection matmuls to Metal; block orchestration and attention remain on
-  the CPU.
+- A production-scale, fully resident Metal DiT, text encoders, VAE, scheduler,
+  or image generation. The admitted route moves quantized projection matmuls to
+  Metal; block orchestration, attention, elementwise work, and top-level BF16
+  projections remain on the CPU.
 - A claim that a readable GGUF has acceptable image quality.
 - A custom weight format derived from the resident-KV adaptive QBit codec.
 - Trusting repository or file labels (`Q4`, `dynamic`, `HQ`) over tensor data.
@@ -57,16 +70,17 @@ either label.
 ## Guard and next transition
 
 The next implementation transition is a Metal-native block with resident
-intermediates and block-causal attention, followed by all-32-block numerical
-checks. Top-level BF16 projections need a batch-capable route before the full
-DiT can avoid CPU fallback. Text encoding, sampling, and VAE decode remain
-separate frontiers.
+intermediates and segmented block-causal attention, followed by prefix KV
+caching across denoising steps. Top-level BF16 projections need a batch-capable
+route before the full DiT can avoid CPU fallback. Text encoding, sampling, and
+VAE decode remain separate frontiers.
 
 The model-backed checks are:
 
 ```bash
 QWEN_IMAGE21_GGUF=/path/to/Qwen-Image-2.1-Q4.gguf \
-  crystal spec spec/qwen_image21_weights_spec.cr spec/qwen_image21_metal_spec.cr \
+  crystal spec spec/qwen_image21_transformer_spec.cr \
+    spec/qwen_image21_weights_spec.cr spec/qwen_image21_metal_spec.cr \
   --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++"
 ```
 
