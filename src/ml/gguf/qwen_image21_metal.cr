@@ -386,9 +386,14 @@ module ML::GGUF
     getter intermediate_readbacks : Int32
     getter final_readbacks : Int32
     getter active_tokens : Int32
+    getter image_projection_rows : Int32
+    getter input_encode_ms : Float64?
+    getter gpu_command_ms : Float64?
 
     def initialize(@command_buffers, @projection_dispatches,
-                   @intermediate_readbacks, @final_readbacks, @active_tokens)
+                   @intermediate_readbacks, @final_readbacks, @active_tokens,
+                   @image_projection_rows = 0, @input_encode_ms = nil,
+                   @gpu_command_ms = nil)
     end
   end
 
@@ -431,6 +436,16 @@ module ML::GGUF
 
     def time_rows : Int32
       @time_input.size // @timestep_linear_1.in_dim
+    end
+
+    def image_target_suffix?(prefix_tokens : Int32) : Bool
+      return false unless prefix_tokens > 0 && prefix_tokens < @source_rows.size
+      return false unless @target_mask.first(prefix_tokens).none? &&
+                          @target_mask[prefix_tokens..].all?
+      prefix_image_rows = @source_rows.first(prefix_tokens).count { |row| row < 0 }
+      @source_rows[prefix_tokens..].each_with_index.all? do |row, index|
+        row == -(prefix_image_rows + index + 1)
+      end
     end
   end
 
@@ -992,6 +1007,11 @@ module ML::GGUF
         unless prefix_tokens > 0 && prefix_tokens < token_count
           raise ArgumentError.new("prefix cache must split a non-empty prefix and target")
         end
+        if input = resident_input
+          unless input.image_target_suffix?(prefix_tokens)
+            raise ArgumentError.new("resident prefix cache requires an image-only target suffix")
+          end
+        end
         validate_attention_rows(image_ids, valid)
         ML::Metal::Device.init!
 
@@ -1052,21 +1072,15 @@ module ML::GGUF
 
           command = ML::Metal::CommandBuffer.new
           encoder = ML::Metal::ComputeEncoder.new(command)
+          profile = ENV["QWEN_IMAGE21_PROFILE"]? == "1"
+          input_encode_ms = nil.as(Float64?)
           if input = resident_input
-            prepared_hidden_buf = allocate(full_hidden_bytes, buffers)
-            prepared_modulation_buf = allocate(token_count.to_i64 * 4_i64 * dim * sizeof(Float32), buffers)
-            encode_resident_input(
-              encoder, input, prepared_hidden_buf, prepared_modulation_buf,
-              final_scales_buf.not_nil!, token_count, dim, buffers,
+            input_start = Time.instant if profile
+            encode_resident_cached_target_input(
+              encoder, input, current_hidden_buf, modulation_buf,
+              final_scales_buf.not_nil!, prefix_tokens, token_count, dim, buffers,
             )
-            encode_copy_f32(
-              encoder, prepared_hidden_buf, current_hidden_buf, active_count,
-              source_offset: prefix_tokens * dim,
-            )
-            encode_copy_f32(
-              encoder, prepared_modulation_buf, modulation_buf, active_tokens * 4 * dim,
-              source_offset: prefix_tokens * 4 * dim,
-            )
+            input_encode_ms = (Time.instant - input_start.not_nil!).total_milliseconds if profile
           end
           prefix_values = prefix_tokens * dim
           layers.each_with_index do |weights, layer_index|
@@ -1154,7 +1168,12 @@ module ML::GGUF
           end
           encoder.end_encoding
           command.commit
-          command.wait
+          gpu_command_ms = if profile
+                             command.wait_gpu_elapsed_seconds?.try { |seconds| seconds * 1000.0 }
+                           else
+                             command.wait
+                             nil
+                           end
 
           values = if output_buf = final_output_buf
                      output_buf.read(token_count * output_weight.not_nil!.out_dim)
@@ -1164,7 +1183,8 @@ module ML::GGUF
           projection_dispatches = layers.size * 6 + (final_output_buf ? 1 : 0) + (resident_input ? 5 : 0)
           QwenImage21MetalBlockResult.new(
             values,
-            QwenImage21MetalBlockStats.new(1, projection_dispatches, 0, 1, active_tokens),
+            QwenImage21MetalBlockStats.new(1, projection_dispatches, 0, 1, active_tokens,
+              resident_input ? active_tokens : 0, input_encode_ms, gpu_command_ms),
           )
         ensure
           buffers.each(&.release)
@@ -1243,11 +1263,15 @@ module ML::GGUF
 
           command = ML::Metal::CommandBuffer.new
           encoder = ML::Metal::ComputeEncoder.new(command)
+          profile = ENV["QWEN_IMAGE21_PROFILE"]? == "1"
+          input_encode_ms = nil.as(Float64?)
           if input = resident_input
+            input_start = Time.instant if profile
             encode_resident_input(
               encoder, input, current_hidden_buf, modulation_buf,
               final_scales_buf.not_nil!, token_count, dim, buffers,
             )
+            input_encode_ms = (Time.instant - input_start.not_nil!).total_milliseconds if profile
           end
           layers.each_with_index do |weights, layer_index|
             encode_layernorm_modulate_gate(
@@ -1329,7 +1353,12 @@ module ML::GGUF
           end
           encoder.end_encoding
           command.commit
-          command.wait
+          gpu_command_ms = if profile
+                             command.wait_gpu_elapsed_seconds?.try { |seconds| seconds * 1000.0 }
+                           else
+                             command.wait
+                             nil
+                           end
 
           values = if output_buf = final_output_buf
                      output_buf.read(token_count * output_weight.not_nil!.out_dim)
@@ -1339,7 +1368,8 @@ module ML::GGUF
           projection_dispatches = layers.size * 6 + (final_output_buf ? 1 : 0) + (resident_input ? 5 : 0)
           QwenImage21MetalBlockResult.new(
             values,
-            QwenImage21MetalBlockStats.new(1, projection_dispatches, 0, 1, token_count),
+            QwenImage21MetalBlockStats.new(1, projection_dispatches, 0, 1, token_count,
+              resident_input.try(&.image_rows) || 0, input_encode_ms, gpu_command_ms),
           )
         ensure
           buffers.each(&.release)
@@ -1419,14 +1449,8 @@ module ML::GGUF
       ) : Nil
         image_input_buf = upload_f32(input.image_input, buffers)
         text_buf = input.projected_text.empty? ? allocate(sizeof(Float32).to_i64, buffers) : upload_f32(input.projected_text, buffers)
-        time_input_buf = upload_f32(input.time_input, buffers)
         source_rows_buf = upload_i32(input.source_rows, buffers)
-        target_mask_buf = upload_u8(input.target_mask.map { |value| value ? 1_u8 : 0_u8 }, buffers)
         image_buf = allocate(input.image_rows.to_i64 * dim * sizeof(Float32), buffers)
-        first_buf = allocate(input.time_rows.to_i64 * dim * sizeof(Float32), buffers)
-        second_buf = allocate(input.time_rows.to_i64 * dim * sizeof(Float32), buffers)
-        modulation_rows_buf = allocate(input.time_rows.to_i64 * 4_i64 * dim * sizeof(Float32), buffers)
-        scale_rows_buf = allocate(input.time_rows.to_i64 * dim * sizeof(Float32), buffers)
 
         unless QwenImage21MetalBF16.encode_matmul_to_buffer(
                  encoder, input.image_weight, image_input_buf, image_buf, input.image_rows
@@ -1441,6 +1465,53 @@ module ML::GGUF
         encoder.set_value(token_count.to_u32, 4)
         encoder.set_value(dim.to_u32, 5)
         encoder.dispatch_1d(token_count * dim, 256)
+
+        encode_resident_time_input(
+          encoder, input, modulation_buf, scales_buf, input.target_mask,
+          input.target_mask, token_count, token_count, dim, buffers,
+        )
+      end
+
+      private def self.encode_resident_cached_target_input(
+        encoder : ML::Metal::ComputeEncoder,
+        input : QwenImage21MetalResidentInput,
+        hidden_buf : ML::MetalBuffer, modulation_buf : ML::MetalBuffer,
+        scales_buf : ML::MetalBuffer, prefix_tokens : Int32,
+        token_count : Int32, dim : Int32, buffers : Array(ML::MetalBuffer),
+      ) : Nil
+        active_tokens = token_count - prefix_tokens
+        prefix_image_rows = input.source_rows.first(prefix_tokens).count { |row| row < 0 }
+        image_width = input.image_weight.in_dim
+        image_input = input.image_input[prefix_image_rows * image_width, active_tokens * image_width]
+        image_input_buf = upload_f32(image_input, buffers)
+        unless QwenImage21MetalBF16.encode_matmul_to_buffer(
+                 encoder, input.image_weight, image_input_buf, hidden_buf, active_tokens
+               )
+          raise ArgumentError.new("no resident Metal route for image input projection")
+        end
+        encode_resident_time_input(
+          encoder, input, modulation_buf, scales_buf,
+          input.target_mask[prefix_tokens, active_tokens], input.target_mask,
+          active_tokens, token_count, dim, buffers,
+        )
+      end
+
+      private def self.encode_resident_time_input(
+        encoder : ML::Metal::ComputeEncoder,
+        input : QwenImage21MetalResidentInput,
+        modulation_buf : ML::MetalBuffer, scales_buf : ML::MetalBuffer,
+        modulation_mask : Array(Bool), scale_mask : Array(Bool),
+        modulation_tokens : Int32, scale_tokens : Int32, dim : Int32,
+        buffers : Array(ML::MetalBuffer),
+      ) : Nil
+        time_input_buf = upload_f32(input.time_input, buffers)
+        modulation_mask_buf = upload_u8(modulation_mask.map { |value| value ? 1_u8 : 0_u8 }, buffers)
+        scale_mask_buf = modulation_mask.same?(scale_mask) ? modulation_mask_buf :
+                         upload_u8(scale_mask.map { |value| value ? 1_u8 : 0_u8 }, buffers)
+        first_buf = allocate(input.time_rows.to_i64 * dim * sizeof(Float32), buffers)
+        second_buf = allocate(input.time_rows.to_i64 * dim * sizeof(Float32), buffers)
+        modulation_rows_buf = allocate(input.time_rows.to_i64 * 4_i64 * dim * sizeof(Float32), buffers)
+        scale_rows_buf = allocate(input.time_rows.to_i64 * dim * sizeof(Float32), buffers)
 
         unless QwenImage21MetalBF16.encode_matmul_to_buffer(
                  encoder, input.timestep_linear_1, time_input_buf, first_buf, input.time_rows
@@ -1462,12 +1533,12 @@ module ML::GGUF
           raise ArgumentError.new("no resident Metal route for timestep output projections")
         end
         encode_select_time_rows(
-          encoder, modulation_rows_buf, target_mask_buf, modulation_buf,
-          token_count, 4 * dim, input.time_rows,
+          encoder, modulation_rows_buf, modulation_mask_buf, modulation_buf,
+          modulation_tokens, 4 * dim, input.time_rows,
         )
         encode_select_time_rows(
-          encoder, scale_rows_buf, target_mask_buf, scales_buf,
-          token_count, dim, input.time_rows,
+          encoder, scale_rows_buf, scale_mask_buf, scales_buf,
+          scale_tokens, dim, input.time_rows,
         )
       end
 
@@ -1821,6 +1892,11 @@ module ML::GGUF
         weights.timestep_linear_2, weights.modulation, weights.norm_out_linear,
       )
       return nil unless input.time_rows == 2
+      unless input.image_target_suffix?(prefix_tokens)
+        return forward_resident_input(
+          image_input, projected_text, time_input, img_mask, layout, weights, config,
+        )
+      end
       valid_cache = @prefix_cache.try do |cache|
         cache.compatible_raw?(
           image_input, encoder_hidden, input, layout, weights,
