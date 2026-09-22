@@ -1,6 +1,6 @@
 # Qwen-Image 2.1 GGUF Frontier
 
-Status: active implementation frontier (2026-09-21)
+Status: active implementation frontier (2026-09-22)
 
 ## Goal
 
@@ -38,10 +38,22 @@ file name such as `Q4` as evidence of its actual tensor policy.
   including the appended target placeholder slots used by the official
   pipeline. Adjacent image slots are explicitly kept as separate attention
   blocks, and prefix output is timestep-independent under causal conditioning.
-- Execute all 32 real mixed-quant blocks plus the outer head on Metal for a
-  minimum valid `2x2` target. The measured run used 192 Metal block projections,
-  produced finite output, and completed in approximately `3.7` seconds; BF16 top-level
-  projections still used the CPU fallback.
+- Execute the complete outer transformer with all 32 real mixed-quant blocks
+  for a minimum valid `2x2` target. The measured hybrid run used 192 Metal block
+  projections, produced finite output, and completed in approximately `3.7`
+  seconds through the original projection-only route; BF16 top-level
+  projections and outer orchestration still used the CPU fallback.
+- Keep a complete DiT block sequence Metal-resident behind one outer-transformer
+  backend call. Affine-less LayerNorm and modulation, per-head Q/K RMSNorm,
+  three-axis RoPE, segmented block-causal attention, SwiGLU, residual updates,
+  and all six mixed-quant projections per block are encoded into one command
+  buffer with shared scratch and ping-pong hidden buffers.
+- Execute all 32 real mixed-quant blocks with one command buffer, zero
+  intermediate readbacks, 192 projection dispatches, and one final hidden-state
+  readback. Against the prior hybrid reference on the minimum valid `2x2`
+  target, the outer output produced `max_abs=2.771616e-6` and cosine
+  `0.9999999999998054`. A real single-block check produced
+  `max_abs=0.00012588501` and cosine `0.999999999999791`.
 - Reproduce the model's configured deterministic FlowMatch Euler schedule:
   linear input sigmas, exponential resolution shift over the exact
   `256..8192` sequence-length range, terminal stretching to `0.02`, and Euler
@@ -64,29 +76,38 @@ either label.
 
 ## Not admitted by this slice
 
-- A production-scale, fully resident Metal DiT, text encoders, VAE, or decoded
-  image generation. The admitted route moves quantized projection matmuls to
-  Metal; block orchestration, attention, elementwise work, and top-level BF16
-  projections remain on the CPU.
+- A production-scale, end-to-end resident Metal pipeline, text encoders, VAE,
+  or decoded image generation. The admitted DiT block stack is resident, but
+  sequence construction, timestep/text/top-level BF16 projections, final norm
+  and output projection still cross the CPU boundary once per transformer
+  evaluation.
+- A representative-token performance claim for the current exact attention
+  kernel. The admitted kernel is correctness-first and remains quadratic in
+  token count; the minimum `2x2` target check is not a throughput benchmark.
+- Prefix K/V reuse across FlowMatch evaluations. The denoising driver can now
+  select the resident stack, but it still recomputes the causal prefix on every
+  step.
 - A claim that a readable GGUF has acceptable image quality.
 - A custom weight format derived from the resident-KV adaptive QBit codec.
 - Trusting repository or file labels (`Q4`, `dynamic`, `HQ`) over tensor data.
 
 ## Guard and next transition
 
-The next implementation transition is a Metal-native block with resident
-intermediates and segmented block-causal attention, followed by prefix KV
-caching across denoising steps. Top-level BF16 projections need a batch-capable
-route before the full DiT can avoid CPU fallback. Text encoding, sampling, and
-VAE decode remain separate frontiers.
+The next implementation transition is prefix K/V caching across denoising
+steps, guarded by the causal invariant that prefix tokens cannot attend the
+changing target suffix. Top-level BF16 projections need a batch-capable route
+before the full DiT can avoid its remaining CPU boundary. Text encoding,
+sampling, and VAE decode remain separate frontiers.
 
 The model-backed checks are:
 
 ```bash
 QWEN_IMAGE21_GGUF=/path/to/Qwen-Image-2.1-Q4.gguf \
+  SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk \
   crystal spec spec/qwen_image21_flow_match_spec.cr \
     spec/qwen_image21_transformer_spec.cr \
     spec/qwen_image21_weights_spec.cr spec/qwen_image21_metal_spec.cr \
+    spec/qwen_image21_resident_metal_spec.cr \
   --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++"
 ```
 
@@ -100,5 +121,9 @@ QWEN_IMAGE21_GGUF=/path/to/Qwen-Image-2.1-Q4.gguf \
   directory.
 - Any real block projection lacks a strict Metal route or exceeds the declared
   CPU/Metal tolerance.
+- A resident stack uses more than one command buffer or performs an
+  intermediate host readback for one outer-transformer evaluation.
+- Prefix caching changes a prefix hidden state, key, or value when only the
+  target latents and FlowMatch timestep change.
 - A later image-quality corpus shows that the selected mixed quantization
   policy is worse than its declared baseline.

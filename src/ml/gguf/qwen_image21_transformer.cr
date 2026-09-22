@@ -149,6 +149,7 @@ module ML::GGUF
       config : QwenImage21TransformerConfig,
       encoder_hidden_states_mask : Array(Bool)? = nil,
       backend : ComputeBackend = F32Backend.new,
+      layer_stack_backend : QwenImage21LayerStackBackend? = nil,
     ) : QwenImage21TransformerResult
       validate_weights(weights, config)
       image_token_count = img_shapes.sum { |shape| shape_tokens(shape) }
@@ -193,18 +194,33 @@ module ML::GGUF
         layout.target_token_mask, config.causal_condition
       )
 
-      weights.layers.each do |layer|
-        joint = QwenImage21BlockCPU.forward(
-          joint,
-          layout.token_count,
-          modulation,
-          layout.positions,
-          layout.image_ids,
-          layer,
-          config.block,
-          key_valid: layout.key_valid,
-          backend: backend,
-        )
+      if stack = layer_stack_backend
+        unless weights.layers.empty?
+          joint = stack.forward_layers(
+            joint,
+            layout.token_count,
+            modulation,
+            layout.positions,
+            layout.image_ids,
+            weights.layers,
+            config.block,
+            layout.key_valid,
+          )
+        end
+      else
+        weights.layers.each do |layer|
+          joint = QwenImage21BlockCPU.forward(
+            joint,
+            layout.token_count,
+            modulation,
+            layout.positions,
+            layout.image_ids,
+            layer,
+            config.block,
+            key_valid: layout.key_valid,
+            backend: backend,
+          )
+        end
       end
 
       scale_rows = backend.matmul(

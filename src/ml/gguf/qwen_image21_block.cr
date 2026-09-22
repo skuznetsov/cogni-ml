@@ -38,6 +38,22 @@ module ML::GGUF
     end
   end
 
+  # Executes a complete transformer-block sequence behind one residency
+  # boundary. Implementations may keep hidden states and scratch storage on an
+  # accelerator while the outer transformer retains the exact CPU reference
+  # for sequence construction and top-level projections.
+  module QwenImage21LayerStackBackend
+    abstract def forward_layers(
+      hidden : Array(Float32), token_count : Int32,
+      modulation : Array(Float32),
+      positions : Array(StaticArray(Int32, 3)),
+      image_ids : Array(Int32),
+      layers : Array(QwenImage21BlockWeights),
+      config : QwenImage21BlockConfig,
+      key_valid : Array(Bool)?,
+    ) : Array(Float32)
+  end
+
   module QwenImage21BlockCPU
     # `modulation` is already selected per token and laid out as
     # [mod1.scale, mod1.gate, mod2.scale, mod2.gate]. `positions` holds

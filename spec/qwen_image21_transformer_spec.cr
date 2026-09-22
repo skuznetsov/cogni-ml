@@ -68,6 +68,32 @@ private def qwen_image21_transformer_fixture(include_layer : Bool = true)
   }
 end
 
+private class QwenImage21RecordingLayerStack
+  include ML::GGUF::QwenImage21LayerStackBackend
+
+  getter calls = 0
+  getter layers_seen = 0
+
+  def forward_layers(
+    hidden : Array(Float32), token_count : Int32,
+    modulation : Array(Float32),
+    positions : Array(StaticArray(Int32, 3)),
+    image_ids : Array(Int32),
+    layers : Array(ML::GGUF::QwenImage21BlockWeights),
+    config : ML::GGUF::QwenImage21BlockConfig,
+    key_valid : Array(Bool)?,
+  ) : Array(Float32)
+    @calls += 1
+    @layers_seen = layers.size
+    layers.reduce(hidden) do |state, layer|
+      ML::GGUF::QwenImage21BlockCPU.forward(
+        state, token_count, modulation, positions, image_ids, layer, config,
+        key_valid: key_valid,
+      )
+    end
+  end
+end
+
 describe ML::GGUF::QwenImage21TransformerCPU do
   it "builds exact block boundaries, centered positions, and padding validity" do
     layout = ML::GGUF::QwenImage21TransformerCPU.build_layout(
@@ -138,6 +164,26 @@ describe ML::GGUF::QwenImage21TransformerCPU do
     end
   end
 
+  it "delegates the complete block sequence to one layer-stack backend call" do
+    fixture = qwen_image21_transformer_fixture
+    expected = ML::GGUF::QwenImage21TransformerCPU.forward(
+      fixture[:image_latents], fixture[:encoder_hidden], 0.625_f32,
+      fixture[:img_shapes], fixture[:img_mask], fixture[:weights], fixture[:config],
+      encoder_hidden_states_mask: fixture[:encoder_valid],
+    )
+    stack = QwenImage21RecordingLayerStack.new
+    actual = ML::GGUF::QwenImage21TransformerCPU.forward(
+      fixture[:image_latents], fixture[:encoder_hidden], 0.625_f32,
+      fixture[:img_shapes], fixture[:img_mask], fixture[:weights], fixture[:config],
+      encoder_hidden_states_mask: fixture[:encoder_valid],
+      layer_stack_backend: stack,
+    )
+
+    actual.output.should eq(expected.output)
+    stack.calls.should eq(1)
+    stack.layers_seen.should eq(fixture[:weights].layers.size)
+  end
+
   it "keeps prefix output timestep-independent under causal conditioning" do
     fixture = qwen_image21_transformer_fixture(include_layer: false)
     first = ML::GGUF::QwenImage21TransformerCPU.forward(
@@ -179,5 +225,28 @@ describe ML::GGUF::QwenImage21TransformerCPU do
     result.latents.size.should eq(target.size)
     result.latents.all?(&.finite?).should be_true
     result.latents.should_not eq(target)
+  end
+
+  it "reuses the selected layer-stack backend for every FlowMatch evaluation" do
+    fixture = qwen_image21_transformer_fixture
+    condition_values = 4 * fixture[:config].input_dim
+    target = fixture[:image_latents].last(4 * fixture[:config].input_dim)
+    stack = QwenImage21RecordingLayerStack.new
+    result = ML::GGUF::QwenImage21LatentDenoiser.run(
+      target,
+      fixture[:image_latents].first(condition_values),
+      fixture[:encoder_hidden],
+      fixture[:img_shapes],
+      fixture[:img_mask].first(4),
+      fixture[:weights],
+      fixture[:config],
+      num_inference_steps: 2,
+      encoder_hidden_states_mask: fixture[:encoder_valid],
+      layer_stack_backend: stack,
+    )
+
+    result.transformer_evaluations.should eq(2)
+    stack.calls.should eq(2)
+    stack.layers_seen.should eq(fixture[:weights].layers.size)
   end
 end
