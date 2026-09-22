@@ -35,6 +35,12 @@ module ML::GGUF
       ) : Bool
         false
       end
+
+      def self.encode_silu_to_buffer(
+        encoder : ML::Metal::ComputeEncoder, buffer : ML::MetalBuffer, count : Int32,
+      ) : Nil
+        raise "Metal disabled (cpu_only)"
+      end
     {% else %}
       SOURCE = {{ read_file("#{__DIR__}/kernels/qwen_image21.metal") }}
 
@@ -145,6 +151,12 @@ module ML::GGUF
         true
       end
 
+      def self.encode_silu_to_buffer(
+        encoder : ML::Metal::ComputeEncoder, buffer : ML::MetalBuffer, count : Int32,
+      ) : Nil
+        encode_activation(encoder, "qi21_silu_inplace", buffer, count)
+      end
+
       private def self.encode_matmul(
         encoder : ML::Metal::ComputeEncoder, qw : QuantWeight,
         input_buf : ML::MetalBuffer, output_buf : ML::MetalBuffer, rows : Int32,
@@ -222,16 +234,45 @@ module ML::GGUF
     {% end %}
   end
 
+  # The Qwen 3.5 host-array matmul may switch Q5/Q6 batches to a separate GEMM
+  # kernel. Qwen-Image's resident stack uses the buffer-level GEMV encoder, so
+  # its hybrid reference must use that same numerical route at every batch size.
+  module QwenImage21MetalQuantized
+    {% if flag?(:cpu_only) %}
+      def self.matmul(qw : QuantWeight, input : Array(Float32), rows : Int32) : Array(Float32)?
+        nil
+      end
+    {% else %}
+      def self.matmul(qw : QuantWeight, input : Array(Float32), rows : Int32) : Array(Float32)?
+        return nil unless rows > 0
+        input_buf = ML::MetalBuffer.from_array(input)
+        output_buf = ML::MetalBuffer.new(rows.to_i64 * qw.out_dim * sizeof(Float32))
+        begin
+          return nil unless Qwen35Metal.matmul_to_buffer(qw, input_buf, output_buf, rows)
+          output_buf.read(rows * qw.out_dim)
+        ensure
+          input_buf.release
+          output_buf.release
+        end
+      end
+    {% end %}
+  end
+
   class QwenImage21MetalProjectionBackend
     include ComputeBackend
     include QwenImage21FusedProjectionBackend
+    include QwenImage21ResidentInputProjectionBackend
 
     getter metal_projection_count = 0
     getter bf16_projection_count = 0
     getter fused_outer_command_count = 0
 
-    def initialize(@strict : Bool = true)
+    def initialize(@strict : Bool = true, @resident_input : Bool = true)
       @cpu = F32Backend.new
+    end
+
+    def resident_input? : Bool
+      @resident_input
     end
 
     def self.available? : Bool
@@ -262,7 +303,7 @@ module ML::GGUF
         result = if qw.type.bf16?
                    QwenImage21MetalBF16.matmul(qw, x, rows)
                  else
-                   Qwen35Metal.matmul(qw, x, rows)
+                   QwenImage21MetalQuantized.matmul(qw, x, rows)
                  end
         if result
           @metal_projection_count += 1
@@ -364,6 +405,32 @@ module ML::GGUF
     getter stats : QwenImage21MetalBlockStats
 
     def initialize(@output, @stats)
+    end
+  end
+
+  class QwenImage21MetalResidentInput
+    getter image_input : Array(Float32)
+    getter projected_text : Array(Float32)
+    getter time_input : Array(Float32)
+    getter source_rows : Array(Int32)
+    getter target_mask : Array(Bool)
+    getter image_weight : QuantWeight
+    getter timestep_linear_1 : QuantWeight
+    getter timestep_linear_2 : QuantWeight
+    getter modulation_weight : QuantWeight
+    getter scale_weight : QuantWeight
+
+    def initialize(@image_input, @projected_text, @time_input, @source_rows,
+                   @target_mask, @image_weight, @timestep_linear_1,
+                   @timestep_linear_2, @modulation_weight, @scale_weight)
+    end
+
+    def image_rows : Int32
+      @image_input.size // @image_weight.in_dim
+    end
+
+    def time_rows : Int32
+      @time_input.size // @timestep_linear_1.in_dim
     end
   end
 
@@ -506,6 +573,15 @@ module ML::GGUF
         raise "Metal disabled (cpu_only)"
       end
 
+      def self.forward_layers_resident(
+        input : QwenImage21MetalResidentInput, token_count : Int32,
+        positions : Array(StaticArray(Int32, 3)), image_ids : Array(Int32),
+        layers : Array(QwenImage21BlockWeights), config : QwenImage21BlockConfig,
+        output_weight : QuantWeight, key_valid : Array(Bool)?,
+      ) : QwenImage21MetalProjectedResult
+        raise "Metal disabled (cpu_only)"
+      end
+
       def self.forward_layers_capture_prefix(
         hidden : Array(Float32), token_count : Int32,
         modulation : Array(Float32),
@@ -601,6 +677,19 @@ module ML::GGUF
         result = forward_layers_impl(
           hidden, token_count, modulation, positions, image_ids,
           layers, config, key_valid, nil, scales, output_weight,
+        )
+        QwenImage21MetalProjectedResult.new(result.hidden, result.stats)
+      end
+
+      def self.forward_layers_resident(
+        input : QwenImage21MetalResidentInput, token_count : Int32,
+        positions : Array(StaticArray(Int32, 3)), image_ids : Array(Int32),
+        layers : Array(QwenImage21BlockWeights), config : QwenImage21BlockConfig,
+        output_weight : QuantWeight, key_valid : Array(Bool)?,
+      ) : QwenImage21MetalProjectedResult
+        result = forward_layers_impl(
+          nil, token_count, nil, positions, image_ids,
+          layers, config, key_valid, nil, nil, output_weight, input,
         )
         QwenImage21MetalProjectedResult.new(result.hidden, result.stats)
       end
@@ -879,18 +968,24 @@ module ML::GGUF
       end
 
       private def self.forward_layers_impl(
-        hidden : Array(Float32), token_count : Int32,
-        modulation : Array(Float32),
+        hidden : Array(Float32)?, token_count : Int32,
+        modulation : Array(Float32)?,
         positions : Array(StaticArray(Int32, 3)),
         image_ids : Array(Int32),
         layers : Array(QwenImage21BlockWeights),
         config : QwenImage21BlockConfig,
         key_valid : Array(Bool)?, capture_cache : QwenImage21MetalPrefixCache?,
         final_scales : Array(Float32)?, output_weight : QuantWeight?,
+        resident_input : QwenImage21MetalResidentInput? = nil,
       ) : QwenImage21MetalBlockResult
-        validate_inputs(hidden, token_count, modulation, positions, image_ids,
-          layers, config, key_valid)
-        validate_final_head(final_scales, output_weight, token_count, config.hidden_dim)
+        if input = resident_input
+          validate_resident_input(input, token_count, positions, image_ids,
+            layers, config, key_valid, output_weight)
+        else
+          validate_inputs(hidden.not_nil!, token_count, modulation.not_nil!, positions, image_ids,
+            layers, config, key_valid)
+          validate_final_head(final_scales, output_weight, token_count, config.hidden_dim)
+        end
         valid = key_valid || Array(Bool).new(token_count, true)
         validate_attention_rows(image_ids, valid)
         ML::Metal::Device.init!
@@ -902,9 +997,17 @@ module ML::GGUF
         buffers = [] of ML::MetalBuffer
 
         begin
-          current_hidden_buf = upload_f32(hidden, buffers)
+          current_hidden_buf = if resident_input
+                                 allocate(hidden_bytes, buffers)
+                               else
+                                 upload_f32(hidden.not_nil!, buffers)
+                               end
           next_hidden_buf = allocate(hidden_bytes, buffers)
-          modulation_buf = upload_f32(modulation, buffers)
+          modulation_buf = if resident_input
+                             allocate(token_count.to_i64 * 4_i64 * dim * sizeof(Float32), buffers)
+                           else
+                             upload_f32(modulation.not_nil!, buffers)
+                           end
           positions_buf = upload_i32(positions.flat_map(&.to_a), buffers)
           image_ids_buf = upload_i32(image_ids, buffers)
           key_valid_buf = upload_u8(valid.map { |value| value ? 1_u8 : 0_u8 }, buffers)
@@ -924,14 +1027,24 @@ module ML::GGUF
           fused_buf = allocate(token_count.to_i64 * 2_i64 * intermediate * sizeof(Float32), buffers)
           activated_buf = allocate(token_count.to_i64 * intermediate * sizeof(Float32), buffers)
           mlp_buf = allocate(hidden_bytes, buffers)
-          final_scales_buf = final_scales.try { |values| upload_f32(values, buffers) }
-          final_norm_buf = final_scales ? allocate(hidden_bytes, buffers) : nil
+          final_scales_buf = if resident_input
+                               allocate(hidden_bytes, buffers)
+                             else
+                               final_scales.try { |values| upload_f32(values, buffers) }
+                             end
+          final_norm_buf = final_scales_buf ? allocate(hidden_bytes, buffers) : nil
           final_output_buf = if weight = output_weight
                                allocate(token_count.to_i64 * weight.out_dim * sizeof(Float32), buffers)
                              end
 
           command = ML::Metal::CommandBuffer.new
           encoder = ML::Metal::ComputeEncoder.new(command)
+          if input = resident_input
+            encode_resident_input(
+              encoder, input, current_hidden_buf, modulation_buf,
+              final_scales_buf.not_nil!, token_count, dim, buffers,
+            )
+          end
           layers.each_with_index do |weights, layer_index|
             encode_layernorm_modulate_gate(
               encoder, current_hidden_buf, modulation_buf, norm1_buf, gate1_buf,
@@ -1019,7 +1132,7 @@ module ML::GGUF
                    else
                      current_hidden_buf.read(hidden_count)
                    end
-          projection_dispatches = layers.size * 6 + (final_output_buf ? 1 : 0)
+          projection_dispatches = layers.size * 6 + (final_output_buf ? 1 : 0) + (resident_input ? 5 : 0)
           QwenImage21MetalBlockResult.new(
             values,
             QwenImage21MetalBlockStats.new(1, projection_dispatches, 0, 1, token_count),
@@ -1046,6 +1159,128 @@ module ML::GGUF
         raise ArgumentError.new("Metal attention supports head_dim <= 256") unless config.head_dim <= 256
         raise ArgumentError.new("layer stack must not be empty") if layers.empty?
         layers.each { |weights| validate_layer_weights(weights, config) }
+      end
+
+      private def self.validate_resident_input(
+        input : QwenImage21MetalResidentInput, token_count : Int32,
+        positions : Array(StaticArray(Int32, 3)), image_ids : Array(Int32),
+        layers : Array(QwenImage21BlockWeights), config : QwenImage21BlockConfig,
+        key_valid : Array(Bool)?, output_weight : QuantWeight?,
+      ) : Nil
+        dim = config.hidden_dim
+        raise ArgumentError.new("token_count must be positive") unless token_count > 0
+        raise ArgumentError.new("resident image input dimension must be positive") unless input.image_weight.in_dim > 0
+        raise ArgumentError.new("resident timestep input dimension must be positive") unless input.timestep_linear_1.in_dim > 0
+        raise ArgumentError.new("positions size mismatch") unless positions.size == token_count
+        raise ArgumentError.new("image_ids size mismatch") unless image_ids.size == token_count
+        raise ArgumentError.new("key_valid size mismatch") if key_valid && key_valid.size != token_count
+        raise ArgumentError.new("Metal attention supports head_dim <= 256") unless config.head_dim <= 256
+        raise ArgumentError.new("layer stack must not be empty") if layers.empty?
+        layers.each { |weights| validate_layer_weights(weights, config) }
+        raise ArgumentError.new("resident source map size mismatch") unless input.source_rows.size == token_count
+        raise ArgumentError.new("resident target mask size mismatch") unless input.target_mask.size == token_count
+        raise ArgumentError.new("resident image input size mismatch") unless input.image_input.size.divisible_by?(input.image_weight.in_dim)
+        image_row = 0
+        input.source_rows.each do |row|
+          next unless row < 0
+          raise ArgumentError.new("resident image source order mismatch") unless row == -(image_row + 1)
+          image_row += 1
+        end
+        raise ArgumentError.new("resident image row count mismatch") unless image_row == input.image_rows
+        raise ArgumentError.new("resident text input size mismatch") unless input.projected_text.size.divisible_by?(dim)
+        text_rows = input.projected_text.size // dim
+        input.source_rows.each do |row|
+          raise ArgumentError.new("resident source map out of bounds") unless row < 0 ? -row - 1 < input.image_rows : row < text_rows
+        end
+        raise ArgumentError.new("resident timestep input size mismatch") unless input.time_input.size.divisible_by?(input.timestep_linear_1.in_dim)
+        raise ArgumentError.new("resident timestep row count mismatch") unless input.time_rows == 1 || input.time_rows == 2
+        weights = {input.image_weight, input.timestep_linear_1, input.timestep_linear_2,
+                   input.modulation_weight, input.scale_weight, output_weight.not_nil!}
+        raise ArgumentError.new("resident inputs require BF16 weights") unless weights.all?(&.type.bf16?)
+        unless input.image_weight.out_dim == dim && input.timestep_linear_1.out_dim == dim &&
+               input.timestep_linear_2.in_dim == dim && input.timestep_linear_2.out_dim == dim &&
+               input.modulation_weight.in_dim == dim && input.modulation_weight.out_dim == 4 * dim &&
+               input.scale_weight.in_dim == dim && input.scale_weight.out_dim == dim &&
+               output_weight.not_nil!.in_dim == dim
+          raise ArgumentError.new("resident projection shape mismatch")
+        end
+      end
+
+      private def self.encode_resident_input(
+        encoder : ML::Metal::ComputeEncoder,
+        input : QwenImage21MetalResidentInput,
+        hidden_buf : ML::MetalBuffer, modulation_buf : ML::MetalBuffer,
+        scales_buf : ML::MetalBuffer, token_count : Int32, dim : Int32,
+        buffers : Array(ML::MetalBuffer),
+      ) : Nil
+        image_input_buf = upload_f32(input.image_input, buffers)
+        text_buf = input.projected_text.empty? ? allocate(sizeof(Float32).to_i64, buffers) : upload_f32(input.projected_text, buffers)
+        time_input_buf = upload_f32(input.time_input, buffers)
+        source_rows_buf = upload_i32(input.source_rows, buffers)
+        target_mask_buf = upload_u8(input.target_mask.map { |value| value ? 1_u8 : 0_u8 }, buffers)
+        image_buf = allocate(input.image_rows.to_i64 * dim * sizeof(Float32), buffers)
+        first_buf = allocate(input.time_rows.to_i64 * dim * sizeof(Float32), buffers)
+        second_buf = allocate(input.time_rows.to_i64 * dim * sizeof(Float32), buffers)
+        modulation_rows_buf = allocate(input.time_rows.to_i64 * 4_i64 * dim * sizeof(Float32), buffers)
+        scale_rows_buf = allocate(input.time_rows.to_i64 * dim * sizeof(Float32), buffers)
+
+        unless QwenImage21MetalBF16.encode_matmul_to_buffer(
+                 encoder, input.image_weight, image_input_buf, image_buf, input.image_rows
+               )
+          raise ArgumentError.new("no resident Metal route for image input projection")
+        end
+        encoder.set_pipeline(pipeline("qi21_assemble_joint"))
+        encoder.set_buffer(source_rows_buf, 0)
+        encoder.set_buffer(text_buf, 1)
+        encoder.set_buffer(image_buf, 2)
+        encoder.set_buffer(hidden_buf, 3, ML::Metal::BufferAccess::Write)
+        encoder.set_value(token_count.to_u32, 4)
+        encoder.set_value(dim.to_u32, 5)
+        encoder.dispatch_1d(token_count * dim, 256)
+
+        unless QwenImage21MetalBF16.encode_matmul_to_buffer(
+                 encoder, input.timestep_linear_1, time_input_buf, first_buf, input.time_rows
+               )
+          raise ArgumentError.new("no resident Metal route for timestep projection")
+        end
+        QwenImage21MetalBF16.encode_silu_to_buffer(encoder, first_buf, input.time_rows * dim)
+        unless QwenImage21MetalBF16.encode_matmul_to_buffer(
+                 encoder, input.timestep_linear_2, first_buf, second_buf, input.time_rows
+               )
+          raise ArgumentError.new("no resident Metal route for timestep projection")
+        end
+        QwenImage21MetalBF16.encode_silu_to_buffer(encoder, second_buf, input.time_rows * dim)
+        unless QwenImage21MetalBF16.encode_matmul_to_buffer(
+                 encoder, input.modulation_weight, second_buf, modulation_rows_buf, input.time_rows
+               ) && QwenImage21MetalBF16.encode_matmul_to_buffer(
+                 encoder, input.scale_weight, second_buf, scale_rows_buf, input.time_rows
+               )
+          raise ArgumentError.new("no resident Metal route for timestep output projections")
+        end
+        encode_select_time_rows(
+          encoder, modulation_rows_buf, target_mask_buf, modulation_buf,
+          token_count, 4 * dim, input.time_rows,
+        )
+        encode_select_time_rows(
+          encoder, scale_rows_buf, target_mask_buf, scales_buf,
+          token_count, dim, input.time_rows,
+        )
+      end
+
+      private def self.encode_select_time_rows(
+        encoder : ML::Metal::ComputeEncoder,
+        rows : ML::MetalBuffer, target_mask : ML::MetalBuffer,
+        output : ML::MetalBuffer, token_count : Int32, width : Int32,
+        row_count : Int32,
+      ) : Nil
+        encoder.set_pipeline(pipeline("qi21_select_time_rows"))
+        encoder.set_buffer(rows, 0)
+        encoder.set_buffer(target_mask, 1)
+        encoder.set_buffer(output, 2, ML::Metal::BufferAccess::Write)
+        encoder.set_value(token_count.to_u32, 3)
+        encoder.set_value(width.to_u32, 4)
+        encoder.set_value(row_count.to_u32, 5)
+        encoder.dispatch_1d(token_count * width, 256)
       end
 
       private def self.validate_final_head(
@@ -1284,12 +1519,14 @@ module ML::GGUF
   class QwenImage21MetalLayerStackBackend
     include QwenImage21LayerStackBackend
     include QwenImage21FusedLayerStackBackend
+    include QwenImage21ResidentInputStackBackend
 
     getter last_stats : QwenImage21MetalBlockStats?
     getter invocations = 0
     getter prefix_cache_builds = 0
     getter prefix_cache_hits = 0
     getter resident_head_invocations = 0
+    getter resident_input_invocations = 0
 
     def initialize
       @last_stats = nil
@@ -1299,6 +1536,47 @@ module ML::GGUF
 
     def self.available? : Bool
       QwenImage21MetalBlock.available?
+    end
+
+    def forward_resident_input(
+      image_input : Array(Float32), projected_text : Array(Float32),
+      time_input : Array(Float32), img_mask : Array(Bool),
+      layout : QwenImage21TokenLayout,
+      weights : QwenImage21TransformerWeights,
+      config : QwenImage21TransformerConfig,
+    ) : Array(Float32)?
+      raise ArgumentError.new("Qwen-Image Metal layer stack is closed") if @closed
+      return nil unless QwenImage21MetalBlock.available?
+      return nil unless {weights.img_in, weights.timestep_linear_1,
+                         weights.timestep_linear_2, weights.modulation,
+                         weights.norm_out_linear, weights.proj_out}.all?(&.type.bf16?)
+      source_rows = [] of Int32
+      image_row = 0
+      img_mask.each_with_index do |is_image, base_row|
+        if is_image
+          QwenImage21TransformerCPU::IMG_TOKENS_PER_SLOT.times do
+            source_rows << -(image_row + 1)
+            image_row += 1
+          end
+        else
+          source_rows << base_row
+        end
+      end
+      input = QwenImage21MetalResidentInput.new(
+        image_input, projected_text, time_input, source_rows,
+        layout.target_token_mask, weights.img_in, weights.timestep_linear_1,
+        weights.timestep_linear_2, weights.modulation, weights.norm_out_linear,
+      )
+      invalidate_prefix_cache
+      result = QwenImage21MetalBlock.forward_layers_resident(
+        input, layout.token_count, layout.positions, layout.image_ids,
+        weights.layers, config.block, weights.proj_out, layout.key_valid,
+      )
+      @last_stats = result.stats
+      @invocations += 1
+      @resident_head_invocations += 1
+      @resident_input_invocations += 1
+      result.output
     end
 
     def forward_layers(

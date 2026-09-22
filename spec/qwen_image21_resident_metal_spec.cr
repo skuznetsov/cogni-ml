@@ -24,6 +24,20 @@ private def qwen_image21_resident_matrix(out_dim : Int32, in_dim : Int32, phase 
   end
 end
 
+private def qwen_image21_resident_time_embedding(timesteps : Array(Float32), dim : Int32)
+  half = dim // 2
+  output = Array(Float32).new(timesteps.size * dim, 0.0_f32)
+  timesteps.each_with_index do |timestep, row|
+    half.times do |index|
+      frequency = Math.exp(-Math.log(10_000.0_f64) * index / half)
+      angle = 1000.0_f64 * timestep * frequency
+      output[row * dim + index] = Math.cos(angle).to_f32
+      output[row * dim + half + index] = Math.sin(angle).to_f32
+    end
+  end
+  output
+end
+
 private def qwen_image21_resident_fixture
   config = ML::GGUF::QwenImage21BlockConfig.new(
     hidden_dim: 6,
@@ -387,8 +401,9 @@ describe ML::GGUF::QwenImage21MetalBlock do
 
       stack.invocations.should eq(1)
       stack.resident_head_invocations.should eq(1)
+      stack.resident_input_invocations.should eq(1)
       stats.command_buffers.should eq(1)
-      stats.projection_dispatches.should eq(model.layers.size * 6 + 1)
+      stats.projection_dispatches.should eq(model.layers.size * 6 + 6)
       stats.intermediate_readbacks.should eq(0)
       stats.final_readbacks.should eq(1)
       actual.output.all?(&.finite?).should be_true
@@ -396,6 +411,138 @@ describe ML::GGUF::QwenImage21MetalBlock do
       cosine.should be > 0.99999
       stack.close
     ensure
+      model.close
+    end
+  end
+
+  it "assembles mixed image and text inputs and timestep rows on the resident path" do
+    path = ENV["QWEN_IMAGE21_GGUF"]?
+    pending!("set QWEN_IMAGE21_GGUF to run the model-backed resident input check") unless path && File.file?(path)
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
+
+    model = ML::GGUF::QwenImage21Weights.from_gguf(path.not_nil!)
+    stack = ML::GGUF::QwenImage21MetalLayerStackBackend.new
+    begin
+      original = model.transformer_config
+      config = ML::GGUF::QwenImage21TransformerConfig.new(
+        original.input_dim, original.output_dim, original.context_dim,
+        original.time_input_dim, original.block, false,
+      )
+      hidden = Array(Float32).new(8 * config.input_dim) do |index|
+        (((index * 23 + 5) % 97) - 48).to_f32 / 127.0_f32
+      end
+      encoder = Array(Float32).new(2 * config.context_dim) do |index|
+        (((index * 31 + 9) % 127) - 63).to_f32 / 173.0_f32
+      end
+      shapes = [StaticArray[1, 2, 2], StaticArray[1, 2, 2]]
+      mask = [true, false, true]
+      expected = ML::GGUF::QwenImage21TransformerCPU.forward(
+        hidden, encoder, 0.625_f32, shapes, mask,
+        model.transformer_weights, config,
+        backend: ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: false),
+      )
+      legacy_stack = ML::GGUF::QwenImage21MetalLayerStackBackend.new
+      legacy = ML::GGUF::QwenImage21TransformerCPU.forward(
+        hidden, encoder, 0.625_f32, shapes, mask,
+        model.transformer_weights, config,
+        backend: ML::GGUF::QwenImage21MetalProjectionBackend.new(
+          strict: false, resident_input: false,
+        ),
+        layer_stack_backend: legacy_stack,
+      )
+      legacy_stack.close
+      backend = ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: false)
+      actual = ML::GGUF::QwenImage21TransformerCPU.forward(
+        hidden, encoder, 0.625_f32, shapes, mask,
+        model.transformer_weights, config,
+        backend: backend, layer_stack_backend: stack,
+      )
+
+      max_abs = expected.output.zip(actual.output).max_of { |reference, value| (reference - value).abs }
+      legacy_abs = legacy.output.zip(actual.output).max_of { |reference, value| (reference - value).abs }
+      STDERR.puts "qwen_image21_resident_input_parity max_abs=#{max_abs}"
+      legacy_abs.should be < 1.0e-5
+      stack.resident_input_invocations.should eq(1)
+      stack.last_stats.not_nil!.projection_dispatches.should eq(model.layers.size * 6 + 6)
+      stack.last_stats.not_nil!.command_buffers.should eq(1)
+      stack.last_stats.not_nil!.intermediate_readbacks.should eq(0)
+      stack.last_stats.not_nil!.final_readbacks.should eq(1)
+      max_abs.should be < 1.0e-2
+    ensure
+      stack.close
+      model.close
+    end
+  end
+
+  it "matches one real block on mixed image and text attention" do
+    path = ENV["QWEN_IMAGE21_GGUF"]?
+    pending!("set QWEN_IMAGE21_GGUF to run the model-backed mixed block check") unless path && File.file?(path)
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
+    model = ML::GGUF::QwenImage21Weights.from_gguf(path.not_nil!)
+    begin
+      config = model.transformer_config.block
+      layout = ML::GGUF::QwenImage21TransformerCPU.build_layout(
+        [true, false, true], [StaticArray[1, 2, 2], StaticArray[1, 2, 2]], 2,
+      )
+      hidden = Array(Float32).new(layout.token_count * config.hidden_dim) do |index|
+        (((index * 19 + 7) % 101) - 50).to_f32 / 151.0_f32
+      end
+      modulation = Array(Float32).new(layout.token_count * 4 * config.hidden_dim) do |index|
+        (((index * 7 + 3) % 67) - 33).to_f32 / 301.0_f32
+      end
+      expected = ML::GGUF::QwenImage21BlockCPU.forward(
+        hidden, layout.token_count, modulation, layout.positions, layout.image_ids,
+        model.layers[0], config, key_valid: layout.key_valid,
+        backend: ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: false),
+      )
+      f32_expected = ML::GGUF::QwenImage21BlockCPU.forward(
+        hidden, layout.token_count, modulation, layout.positions, layout.image_ids,
+        model.layers[0], config, key_valid: layout.key_valid)
+      backend_abs = expected.zip(f32_expected).max_of { |reference, value| (reference - value).abs }
+      actual = ML::GGUF::QwenImage21MetalBlock.forward(
+        hidden, layout.token_count, modulation, layout.positions, layout.image_ids,
+        model.layers[0], config, key_valid: layout.key_valid)
+      max_abs = expected.zip(actual.hidden).max_of { |reference, value| (reference - value).abs }
+      STDERR.puts "qwen_image21_mixed_block_parity max_abs=#{max_abs} backend_abs=#{backend_abs}"
+      backend_abs.should be < 0.25
+      max_abs.should be < 0.25
+    ensure
+      model.close
+    end
+  end
+
+  it "selects the causal zero-timestep prefix row on the GPU" do
+    path = ENV["QWEN_IMAGE21_GGUF"]?
+    pending!("set QWEN_IMAGE21_GGUF to run the model-backed timestep row check") unless path && File.file?(path)
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
+    model = ML::GGUF::QwenImage21Weights.from_gguf(path.not_nil!)
+    stack = ML::GGUF::QwenImage21MetalLayerStackBackend.new
+    begin
+      config = model.transformer_config
+      image_input = Array(Float32).new(8 * config.input_dim) do |index|
+        (((index * 19 + 3) % 101) - 50).to_f32 / 149.0_f32
+      end
+      encoder = Array(Float32).new(config.context_dim, 0.0_f32)
+      shapes = [StaticArray[1, 2, 2], StaticArray[1, 2, 2]]
+      mask = [true, true]
+      layout = ML::GGUF::QwenImage21TransformerCPU.build_layout(mask, shapes, 1)
+      expected = ML::GGUF::QwenImage21TransformerCPU.forward(
+        image_input, encoder, 0.75_f32, shapes, mask,
+        model.transformer_weights, config,
+        backend: ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: false),
+      )
+      actual = stack.forward_resident_input(
+        image_input, Array(Float32).new(config.hidden_dim, 0.0_f32),
+        qwen_image21_resident_time_embedding([0.75_f32, 0.0_f32], config.time_input_dim),
+        mask, layout, model.transformer_weights, config,
+      ).not_nil!
+      max_abs = expected.output.zip(actual).max_of { |reference, value| (reference - value).abs }
+      STDERR.puts "qwen_image21_resident_causal_rows_parity max_abs=#{max_abs}"
+      stack.resident_input_invocations.should eq(1)
+      stack.last_stats.not_nil!.intermediate_readbacks.should eq(0)
+      max_abs.should be < 1.0e-2
+    ensure
+      stack.close
       model.close
     end
   end
@@ -473,6 +620,7 @@ describe ML::GGUF::QwenImage21MetalBlock do
       stack.prefix_cache_builds.should eq(1)
       stack.prefix_cache_hits.should eq(1)
       stack.resident_head_invocations.should eq(2)
+      stack.resident_input_invocations.should eq(0)
       stats.active_tokens.should eq(4)
       stats.command_buffers.should eq(1)
       stats.projection_dispatches.should eq(model.layers.size * 6 + 1)
