@@ -1113,6 +1113,14 @@ module ML
           end
         end
 
+        # Reuse the registered whole-model mmap for specialized resident
+        # kernels without exposing registry internals or duplicating weights.
+        # The returned buffer and offset remain valid only while the owning
+        # model registration is alive.
+        def self.weight_buffer_slot(qw : QuantWeight) : {ML::MetalBuffer, Int64}
+          weight_slot(qw)
+        end
+
         def self.embedding_q4k_from_token_id(token_embd_qw : QuantWeight,
                                              token_id : Int32) : Array(Float32)?
           return nil unless token_embd_qw.type.q4_k?
