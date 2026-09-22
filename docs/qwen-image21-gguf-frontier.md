@@ -137,6 +137,27 @@ file name such as `Q4` as evidence of its actual tensor policy.
   changed from approximately `3.61` to `0.92` seconds, and two FlowMatch steps
   changed from approximately `6.76` to `1.31` seconds. These are implementation
   smoke timings, not representative-token throughput claims.
+- Profile the real 32-layer GGUF with 256 condition-image and 256 target-image
+  tokens plus one text token (513 joint tokens), using synthetic embeddings and
+  latents. On M2 Max, three warm paired samples measured median complete
+  forward wall time of `5398 ms` for a cache rebuild and `2797 ms` for a hit;
+  their GPU command times were `5356 ms` and `2757 ms`. A diagnostic mode
+  splits the normally single DiT command buffer at phase boundaries, and
+  matches the normal outputs exactly in this probe. Across two diagnostic
+  samples, the combined Q/K/V plus output projections accounted for roughly
+  73% of summed phase GPU time, attention roughly 12%, and cache-copy below
+  0.2%. A further single diagnostic sample split Q, K, and V: on rebuild,
+  Q=`1101 ms`, K=`1113 ms`, V=`78 ms`, output=`1107 ms`, and attention=`541 ms`;
+  on hit, Q=`543 ms`, K=`543 ms`, V=`38 ms`, output=`541 ms`, and
+  attention=`286 ms`. This is phase attribution under extra command-buffer
+  submissions, not an end-to-end speedup or a production-resolution result.
+  Q/K/output use Q8_0 GGUF tensors and the current buffer route selects Q8_0
+  GEMV for every batch size; a batched Q8_0 projection route is therefore the
+  next performance hypothesis. The F32 prefix K/V allocation at this shape
+  is theoretically `269484032` bytes; that is not a measured total Metal
+  working set. The profile reports host buffer preparation and final readback
+  separately, but does not isolate GPU transfer or launch cost from command
+  waiting. Reproduce with `scripts/qwen_image21_prefix_profile.cr`.
 - Reproduce the model's configured deterministic FlowMatch Euler schedule:
   linear input sigmas, exponential resolution shift over the exact
   `256..8192` sequence-length range, terminal stretching to `0.02`, and Euler
@@ -165,9 +186,12 @@ either label.
   on the CPU, and the final output is read back. The causal-prefix hit route
   skips condition-image projection for an ordered image-only target suffix,
   but still performs the timestep projections and a full-token output head.
-- A representative-token performance claim for the current exact attention
-  kernel. The admitted kernel is correctness-first and remains quadratic in
-  token count; the minimum `2x2` target check is not a throughput benchmark.
+- Production-resolution throughput, image-quality, or end-to-end latency from
+  the 513-token synthetic-input profile. The exact attention kernel remains
+  correctness-first and quadratic in token count; its share may grow at larger
+  target and condition-image sequences.
+- A speedup from batched Q8_0 projection. The current profile identifies a
+  candidate bottleneck but does not benchmark a replacement kernel.
 - A compressed or bounded-memory prefix cache. The admitted implementation
   stores per-layer prefix K/V as F32 Metal buffers and therefore trades memory
   for repeated-step projection savings.
@@ -179,11 +203,15 @@ either label.
 
 The raw-input certificate and GPU cache build/hit are admitted only for the
 supported BF16 top-level route and a closed causal prefix. The older
-host-projected route remains for unsupported weights. The next transition is
-representative-token profiling that separates projection,
-attention, cache-copy, transfer, and launch costs before changing the
-correctness-first attention kernel. Text encoding, sampling, and VAE decode
-remain separate frontiers.
+host-projected route remains for unsupported weights. The next transition is a
+batched/tiled Q8_0 projection candidate for Q, K, and output, guarded by
+elementwise parity against the current route for batch sizes spanning both
+sides of the existing GEMM/GEMV threshold and by repeated paired full-forward
+measurements. Preserve the existing GEMV fallback unless both correctness and
+actual latency improve without unacceptable Metal working-set growth. Repeat
+the phase profile at larger token counts before treating attention as a
+settled non-bottleneck. Text encoding, sampling, and VAE decode remain
+separate frontiers.
 
 The model-backed checks are:
 
@@ -220,5 +248,8 @@ QWEN_IMAGE21_GGUF=/path/to/Qwen-Image-2.1-Q4.gguf \
   attend a target key while the target is omitted from cached prefix work.
 - A closed resident cache hit reprojects condition-image rows, or the target
   suffix is not an ordered image-only sequence and still enters the cache path.
+- Diagnostic phase splitting changes the forward output, or a proposed Q8_0
+  batch route fails parity on Q/K/output shapes or does not improve paired
+  full-forward latency at relevant token counts.
 - A later image-quality corpus shows that the selected mixed quantization
   policy is worse than its declared baseline.

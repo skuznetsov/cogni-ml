@@ -234,6 +234,120 @@ describe ML::GGUF::QwenImage21MetalBlock do
     actual.stats.final_readbacks.should eq(1)
   end
 
+  it "attributes diagnostic GPU phases without changing the block result" do
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
+    config, weights = qwen_image21_resident_fixture
+    token_count = 4
+    hidden = Array(Float32).new(token_count * config.hidden_dim) do |index|
+      (((index * 19) % 31) - 15).to_f32 / 23.0_f32
+    end
+    modulation = Array(Float32).new(token_count * 4 * config.hidden_dim) do |index|
+      (((index * 5) % 37) - 18).to_f32 / 113.0_f32
+    end
+    positions = [StaticArray[0, 0, 0], StaticArray[1, 1, 1],
+                 StaticArray[2, -1, 0], StaticArray[2, 0, 0]]
+    image_ids = [-1, -1, 0, 0]
+    ordinary = ML::GGUF::QwenImage21MetalBlock.forward_layers(
+      hidden, token_count, modulation, positions, image_ids, [weights], config,
+    )
+
+    prior_profile = ENV["QWEN_IMAGE21_PROFILE"]?
+    begin
+      ENV["QWEN_IMAGE21_PROFILE"] = "phases"
+      profiled = ML::GGUF::QwenImage21MetalBlock.forward_layers(
+        hidden, token_count, modulation, positions, image_ids, [weights], config,
+      )
+      profiled.hidden.zip(ordinary.hidden).each do |value, reference|
+        value.should be_close(reference, 1e-5_f32)
+      end
+      profiled.stats.command_buffers.should be > 1
+      phases = profiled.stats.phase_gpu_ms.not_nil!
+      phases["q_projection"].should be > 0.0
+      phases["k_projection"].should be > 0.0
+      phases["v_projection"].should be > 0.0
+      phases["attention"].should be > 0.0
+      phases["ffn_projection"].should be > 0.0
+      phases["cache_copy"]?.should be_nil
+      profiled.stats.intermediate_readbacks.should eq(0)
+    ensure
+      if prior_profile
+        ENV["QWEN_IMAGE21_PROFILE"] = prior_profile
+      else
+        ENV.delete("QWEN_IMAGE21_PROFILE")
+      end
+    end
+  end
+
+  it "preserves resident build and cache-hit outputs in diagnostic phase mode" do
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
+    block_config, block_weights = qwen_image21_resident_fixture
+    config = ML::GGUF::QwenImage21TransformerConfig.new(2, 2, 6, 6, block_config)
+    weights = ML::GGUF::QwenImage21TransformerWeights.new(
+      qwen_image21_resident_bf16_weight(qwen_image21_resident_matrix(6, 2, 1), 6, 2),
+      qwen_image21_resident_bf16_weight(qwen_image21_resident_matrix(24, 6, 2), 24, 6),
+      qwen_image21_resident_bf16_weight(qwen_image21_resident_matrix(6, 6, 3), 6, 6),
+      qwen_image21_resident_bf16_weight(qwen_image21_resident_matrix(2, 6, 4), 2, 6),
+      qwen_image21_resident_bf16_weight(qwen_image21_resident_matrix(6, 6, 5), 6, 6),
+      qwen_image21_resident_bf16_weight(qwen_image21_resident_matrix(6, 6, 6), 6, 6),
+      qwen_image21_resident_bf16_weight(qwen_image21_resident_matrix(6, 6, 7), 6, 6),
+      qwen_image21_resident_bf16_weight(qwen_image21_resident_matrix(6, 6, 8), 6, 6),
+      Array(Float32).new(6, 1.0_f32), [block_weights],
+    )
+    image = Array(Float32).new(16) { |index| (index - 8).to_f32 / 19.0_f32 }
+    changed_image = image.dup
+    changed_image[8] += 0.125_f32
+    encoder = Array(Float32).new(12) { |index| (index - 6).to_f32 / 11.0_f32 }
+    shapes = [StaticArray[1, 2, 2], StaticArray[1, 2, 2]]
+    mask = [false, true, true]
+    backend = ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: false)
+    ordinary_stack = ML::GGUF::QwenImage21MetalLayerStackBackend.new
+    profiled_stack = ML::GGUF::QwenImage21MetalLayerStackBackend.new
+    prior_profile = ENV["QWEN_IMAGE21_PROFILE"]?
+    begin
+      ENV["QWEN_IMAGE21_PROFILE"] = "1"
+      ordinary_build = ML::GGUF::QwenImage21TransformerCPU.forward(
+        image, encoder, 0.25_f32, shapes, mask, weights, config,
+        backend: backend, layer_stack_backend: ordinary_stack,
+      )
+      ordinary_hit = ML::GGUF::QwenImage21TransformerCPU.forward(
+        changed_image, encoder, 0.75_f32, shapes, mask, weights, config,
+        backend: backend, layer_stack_backend: ordinary_stack,
+      )
+      ENV["QWEN_IMAGE21_PROFILE"] = "phases"
+      profiled_build = ML::GGUF::QwenImage21TransformerCPU.forward(
+        image, encoder, 0.25_f32, shapes, mask, weights, config,
+        backend: backend, layer_stack_backend: profiled_stack,
+      )
+      build_stats = profiled_stack.last_stats.not_nil!
+      profiled_hit = ML::GGUF::QwenImage21TransformerCPU.forward(
+        changed_image, encoder, 0.75_f32, shapes, mask, weights, config,
+        backend: backend, layer_stack_backend: profiled_stack,
+      )
+      hit_stats = profiled_stack.last_stats.not_nil!
+      profiled_build.output.zip(ordinary_build.output).each do |value, reference|
+        value.should be_close(reference, 1e-5_f32)
+      end
+      profiled_hit.output.zip(ordinary_hit.output).each do |value, reference|
+        value.should be_close(reference, 1e-5_f32)
+      end
+      profiled_stack.prefix_cache_builds.should eq(1)
+      profiled_stack.prefix_cache_hits.should eq(1)
+      build_stats.phase_gpu_ms.not_nil!["attention"].should be > 0.0
+      build_stats.phase_gpu_ms.not_nil!["input"].should be > 0.0
+      hit_stats.phase_gpu_ms.not_nil!["cache_copy"].should be > 0.0
+      hit_stats.image_projection_rows.should eq(4)
+      hit_stats.command_buffers.should be > 1
+    ensure
+      ordinary_stack.close
+      profiled_stack.close
+      if prior_profile
+        ENV["QWEN_IMAGE21_PROFILE"] = prior_profile
+      else
+        ENV.delete("QWEN_IMAGE21_PROFILE")
+      end
+    end
+  end
+
   it "keeps the final normalization and BF16 output projection in the resident stack command" do
     pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
     config, weights = qwen_image21_resident_fixture

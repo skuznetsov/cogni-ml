@@ -389,11 +389,64 @@ module ML::GGUF
     getter image_projection_rows : Int32
     getter input_encode_ms : Float64?
     getter gpu_command_ms : Float64?
+    getter phase_gpu_ms : Hash(String, Float64)?
+    getter phase_wait_ms : Hash(String, Float64)?
+    getter buffer_prepare_ms : Float64?
+    getter readback_ms : Float64?
 
     def initialize(@command_buffers, @projection_dispatches,
                    @intermediate_readbacks, @final_readbacks, @active_tokens,
                    @image_projection_rows = 0, @input_encode_ms = nil,
-                   @gpu_command_ms = nil)
+                   @gpu_command_ms = nil,
+                   @phase_gpu_ms = nil, @phase_wait_ms = nil,
+                   @buffer_prepare_ms = nil, @readback_ms = nil)
+    end
+  end
+
+  # Diagnostic-only command boundaries. GPU intervals are measured for the
+  # same kernels and buffers, but each boundary adds submission overhead, so
+  # these values attribute phases rather than predict fused-command latency.
+  class QwenImage21MetalPhaseRecorder
+    getter command_buffers = 0
+    getter phase_wait_ms = Hash(String, Float64).new(0.0)
+
+    def initialize
+      @phase_gpu_ms = Hash(String, Float64).new(0.0)
+      @timestamps_available = true
+    end
+
+    def phase_gpu_ms : Hash(String, Float64)?
+      @timestamps_available ? @phase_gpu_ms : nil
+    end
+
+    def gpu_total_ms : Float64?
+      @timestamps_available ? @phase_gpu_ms.values.sum : nil
+    end
+
+    def rotate(
+      command : ML::Metal::CommandBuffer, encoder : ML::Metal::ComputeEncoder,
+      phase : String,
+    ) : {ML::Metal::CommandBuffer, ML::Metal::ComputeEncoder}
+      finish(command, encoder, phase)
+      next_command = ML::Metal::CommandBuffer.new
+      {next_command, ML::Metal::ComputeEncoder.new(next_command)}
+    end
+
+    def finish(
+      command : ML::Metal::CommandBuffer, encoder : ML::Metal::ComputeEncoder,
+      phase : String,
+    ) : Nil
+      encoder.end_encoding
+      started = Time.instant
+      command.commit
+      elapsed = command.wait_gpu_elapsed_seconds?
+      @phase_wait_ms[phase] += (Time.instant - started).total_milliseconds
+      @command_buffers += 1
+      if gpu_ms = elapsed.try { |seconds| seconds * 1000.0 }
+        @phase_gpu_ms[phase] += gpu_ms
+      else
+        @timestamps_available = false
+      end
     end
   end
 
@@ -766,6 +819,14 @@ module ML::GGUF
     {% else %}
       SOURCE = {{ read_file("#{__DIR__}/kernels/qwen_image21.metal") }}
 
+      private def self.phase_boundary(
+        probe : QwenImage21MetalPhaseRecorder?,
+        command : ML::Metal::CommandBuffer, encoder : ML::Metal::ComputeEncoder,
+        phase : String,
+      ) : {ML::Metal::CommandBuffer, ML::Metal::ComputeEncoder}
+        probe ? probe.rotate(command, encoder, phase) : {command, encoder}
+      end
+
       def self.forward(
         hidden : Array(Float32), token_count : Int32,
         modulation : Array(Float32),
@@ -1025,6 +1086,10 @@ module ML::GGUF
         active_modulation = modulation.try { |values| values[prefix_tokens * 4 * dim, active_tokens * 4 * dim] }
         active_positions = positions[prefix_tokens, active_tokens]
         buffers = [] of ML::MetalBuffer
+        profile_mode = ENV["QWEN_IMAGE21_PROFILE"]?
+        profile = profile_mode == "1" || profile_mode == "phases"
+        probe = profile_mode == "phases" ? QwenImage21MetalPhaseRecorder.new : nil
+        prepare_started = Time.instant if profile
 
         begin
           current_hidden_buf = if resident_input
@@ -1069,10 +1134,10 @@ module ML::GGUF
           final_output_buf = if weight = output_weight
                                allocate(token_count.to_i64 * weight.out_dim * sizeof(Float32), buffers)
                              end
+          buffer_prepare_ms = (Time.instant - prepare_started.not_nil!).total_milliseconds if profile
 
           command = ML::Metal::CommandBuffer.new
           encoder = ML::Metal::ComputeEncoder.new(command)
-          profile = ENV["QWEN_IMAGE21_PROFILE"]? == "1"
           input_encode_ms = nil.as(Float64?)
           if input = resident_input
             input_start = Time.instant if profile
@@ -1081,6 +1146,7 @@ module ML::GGUF
               final_scales_buf.not_nil!, prefix_tokens, token_count, dim, buffers,
             )
             input_encode_ms = (Time.instant - input_start.not_nil!).total_milliseconds if profile
+            command, encoder = phase_boundary(probe, command, encoder, "input")
           end
           prefix_values = prefix_tokens * dim
           layers.each_with_index do |weights, layer_index|
@@ -1088,20 +1154,30 @@ module ML::GGUF
               encoder, current_hidden_buf, modulation_buf, norm1_buf, gate1_buf,
               active_tokens, dim, config.eps,
             )
-            unless Qwen35Metal.encode_matmul_many_to_buffers(
-                     encoder,
-                     [weights.to_q, weights.to_k, weights.to_v],
-                     norm1_buf,
-                     [q_buf, active_k_buf, active_v_buf],
-                     active_tokens,
-                   )
-              raise ArgumentError.new("no resident Metal route for Q/K/V projections")
+            command, encoder = phase_boundary(probe, command, encoder, "norm_qk")
+            if probe
+              { {weights.to_q, q_buf, "q_projection"},
+                {weights.to_k, active_k_buf, "k_projection"},
+                {weights.to_v, active_v_buf, "v_projection"} }.each do |weight, output, phase|
+                unless Qwen35Metal.encode_matmul_to_buffer(encoder, weight, norm1_buf, output, active_tokens)
+                  raise ArgumentError.new("no resident Metal route for #{phase}")
+                end
+                command, encoder = phase_boundary(probe, command, encoder, phase)
+              end
+            else
+              unless Qwen35Metal.encode_matmul_many_to_buffers(
+                       encoder, [weights.to_q, weights.to_k, weights.to_v], norm1_buf,
+                       [q_buf, active_k_buf, active_v_buf], active_tokens,
+                     )
+                raise ArgumentError.new("no resident Metal route for Q/K/V projections")
+              end
             end
             encode_qk_rms_rope(
               encoder, q_buf, active_k_buf,
               q_norm_weight_bufs[layer_index], k_norm_weight_bufs[layer_index],
               positions_buf, active_tokens, config,
             )
+            command, encoder = phase_boundary(probe, command, encoder, "rope")
             encode_copy_f32(encoder, cache.k_buffers[layer_index], full_k_buf, prefix_values)
             encode_copy_f32(encoder, cache.v_buffers[layer_index], full_v_buf, prefix_values)
             encode_copy_f32(
@@ -1112,33 +1188,41 @@ module ML::GGUF
               encoder, active_v_buf, full_v_buf, active_count,
               destination_offset: prefix_values,
             )
+            command, encoder = phase_boundary(probe, command, encoder, "cache_copy")
             encode_attention(
               encoder, q_buf, full_k_buf, full_v_buf, image_ids_buf, key_valid_buf,
               attended_buf, token_count, active_tokens, prefix_tokens, config,
             )
+            command, encoder = phase_boundary(probe, command, encoder, "attention")
             unless Qwen35Metal.encode_matmul_to_buffer(
                      encoder, weights.to_out, attended_buf, projected_buf, active_tokens
                    )
               raise ArgumentError.new("no resident Metal route for attention output projection")
             end
+            command, encoder = phase_boundary(probe, command, encoder, "out_projection")
             encode_residual_layernorm_modulate_gate(
               encoder, current_hidden_buf, projected_buf, gate1_buf, modulation_buf,
               state_buf, norm2_buf, gate2_buf, active_tokens, dim, config.eps,
             )
+            command, encoder = phase_boundary(probe, command, encoder, "norm_gate")
             unless Qwen35Metal.encode_matmul_to_buffer(
                      encoder, weights.gate_up, norm2_buf, fused_buf, active_tokens
                    )
               raise ArgumentError.new("no resident Metal route for gate/up projection")
             end
+            command, encoder = phase_boundary(probe, command, encoder, "ffn_projection")
             encode_swiglu(encoder, fused_buf, activated_buf, active_tokens, intermediate)
+            command, encoder = phase_boundary(probe, command, encoder, "swiglu")
             unless Qwen35Metal.encode_matmul_to_buffer(
                      encoder, weights.mlp_out, activated_buf, mlp_buf, active_tokens
                    )
               raise ArgumentError.new("no resident Metal route for MLP output projection")
             end
+            command, encoder = phase_boundary(probe, command, encoder, "ffn_out_projection")
             encode_residual_gate_add(
               encoder, state_buf, gate2_buf, mlp_buf, next_hidden_buf, active_count
             )
+            command, encoder = phase_boundary(probe, command, encoder, "residual")
 
             previous_hidden_buf = current_hidden_buf
             current_hidden_buf = next_hidden_buf
@@ -1166,25 +1250,35 @@ module ML::GGUF
               raise ArgumentError.new("no resident Metal route for final output projection")
             end
           end
-          encoder.end_encoding
-          command.commit
-          gpu_command_ms = if profile
-                             command.wait_gpu_elapsed_seconds?.try { |seconds| seconds * 1000.0 }
+          gpu_command_ms = if phase_probe = probe
+                             phase_probe.finish(command, encoder, "final_head")
+                             phase_probe.gpu_total_ms
                            else
-                             command.wait
-                             nil
+                             encoder.end_encoding
+                             command.commit
+                             if profile
+                               command.wait_gpu_elapsed_seconds?.try { |seconds| seconds * 1000.0 }
+                             else
+                               command.wait
+                               nil
+                             end
                            end
 
+          readback_started = Time.instant if profile
           values = if output_buf = final_output_buf
                      output_buf.read(token_count * output_weight.not_nil!.out_dim)
                    else
                      cache.prefix_output + current_hidden_buf.read(active_count)
                    end
+          readback_ms = (Time.instant - readback_started.not_nil!).total_milliseconds if profile
           projection_dispatches = layers.size * 6 + (final_output_buf ? 1 : 0) + (resident_input ? 5 : 0)
           QwenImage21MetalBlockResult.new(
             values,
-            QwenImage21MetalBlockStats.new(1, projection_dispatches, 0, 1, active_tokens,
-              resident_input ? active_tokens : 0, input_encode_ms, gpu_command_ms),
+            QwenImage21MetalBlockStats.new(probe.try(&.command_buffers) || 1,
+              projection_dispatches, 0, 1, active_tokens,
+              resident_input ? active_tokens : 0, input_encode_ms, gpu_command_ms,
+              probe.try(&.phase_gpu_ms), probe.try(&.phase_wait_ms),
+              buffer_prepare_ms, readback_ms),
           )
         ensure
           buffers.each(&.release)
@@ -1219,6 +1313,10 @@ module ML::GGUF
         hidden_count = token_count * dim
         hidden_bytes = hidden_count.to_i64 * sizeof(Float32)
         buffers = [] of ML::MetalBuffer
+        profile_mode = ENV["QWEN_IMAGE21_PROFILE"]?
+        profile = profile_mode == "1" || profile_mode == "phases"
+        probe = profile_mode == "phases" ? QwenImage21MetalPhaseRecorder.new : nil
+        prepare_started = Time.instant if profile
 
         begin
           current_hidden_buf = if resident_input
@@ -1260,10 +1358,10 @@ module ML::GGUF
           final_output_buf = if weight = output_weight
                                allocate(token_count.to_i64 * weight.out_dim * sizeof(Float32), buffers)
                              end
+          buffer_prepare_ms = (Time.instant - prepare_started.not_nil!).total_milliseconds if profile
 
           command = ML::Metal::CommandBuffer.new
           encoder = ML::Metal::ComputeEncoder.new(command)
-          profile = ENV["QWEN_IMAGE21_PROFILE"]? == "1"
           input_encode_ms = nil.as(Float64?)
           if input = resident_input
             input_start = Time.instant if profile
@@ -1272,58 +1370,77 @@ module ML::GGUF
               final_scales_buf.not_nil!, token_count, dim, buffers,
             )
             input_encode_ms = (Time.instant - input_start.not_nil!).total_milliseconds if profile
+            command, encoder = phase_boundary(probe, command, encoder, "input")
           end
           layers.each_with_index do |weights, layer_index|
             encode_layernorm_modulate_gate(
               encoder, current_hidden_buf, modulation_buf, norm1_buf, gate1_buf,
               token_count, dim, config.eps,
             )
-            unless Qwen35Metal.encode_matmul_many_to_buffers(
-                     encoder,
-                     [weights.to_q, weights.to_k, weights.to_v],
-                     norm1_buf,
-                     [q_buf, k_buf, v_buf],
-                     token_count,
-                   )
-              raise ArgumentError.new("no resident Metal route for Q/K/V projections")
+            command, encoder = phase_boundary(probe, command, encoder, "norm_qk")
+            if probe
+              { {weights.to_q, q_buf, "q_projection"},
+                {weights.to_k, k_buf, "k_projection"},
+                {weights.to_v, v_buf, "v_projection"} }.each do |weight, output, phase|
+                unless Qwen35Metal.encode_matmul_to_buffer(encoder, weight, norm1_buf, output, token_count)
+                  raise ArgumentError.new("no resident Metal route for #{phase}")
+                end
+                command, encoder = phase_boundary(probe, command, encoder, phase)
+              end
+            else
+              unless Qwen35Metal.encode_matmul_many_to_buffers(
+                       encoder, [weights.to_q, weights.to_k, weights.to_v], norm1_buf,
+                       [q_buf, k_buf, v_buf], token_count,
+                     )
+                raise ArgumentError.new("no resident Metal route for Q/K/V projections")
+              end
             end
             encode_qk_rms_rope(
               encoder, q_buf, k_buf,
               q_norm_weight_bufs[layer_index], k_norm_weight_bufs[layer_index],
               positions_buf, token_count, config,
             )
+            command, encoder = phase_boundary(probe, command, encoder, "rope")
             if cache = capture_cache
               prefix_values = cache.prefix_tokens * dim
               encode_copy_f32(encoder, k_buf, cache.k_buffers[layer_index], prefix_values)
               encode_copy_f32(encoder, v_buf, cache.v_buffers[layer_index], prefix_values)
+              command, encoder = phase_boundary(probe, command, encoder, "cache_copy")
             end
             encode_attention(
               encoder, q_buf, k_buf, v_buf, image_ids_buf, key_valid_buf,
               attended_buf, token_count, token_count, 0, config,
             )
+            command, encoder = phase_boundary(probe, command, encoder, "attention")
             unless Qwen35Metal.encode_matmul_to_buffer(
                      encoder, weights.to_out, attended_buf, projected_buf, token_count
                    )
               raise ArgumentError.new("no resident Metal route for attention output projection")
             end
+            command, encoder = phase_boundary(probe, command, encoder, "out_projection")
             encode_residual_layernorm_modulate_gate(
               encoder, current_hidden_buf, projected_buf, gate1_buf, modulation_buf,
               state_buf, norm2_buf, gate2_buf, token_count, dim, config.eps,
             )
+            command, encoder = phase_boundary(probe, command, encoder, "norm_gate")
             unless Qwen35Metal.encode_matmul_to_buffer(
                      encoder, weights.gate_up, norm2_buf, fused_buf, token_count
                    )
               raise ArgumentError.new("no resident Metal route for gate/up projection")
             end
+            command, encoder = phase_boundary(probe, command, encoder, "ffn_projection")
             encode_swiglu(encoder, fused_buf, activated_buf, token_count, intermediate)
+            command, encoder = phase_boundary(probe, command, encoder, "swiglu")
             unless Qwen35Metal.encode_matmul_to_buffer(
                      encoder, weights.mlp_out, activated_buf, mlp_buf, token_count
                    )
               raise ArgumentError.new("no resident Metal route for MLP output projection")
             end
+            command, encoder = phase_boundary(probe, command, encoder, "ffn_out_projection")
             encode_residual_gate_add(
               encoder, state_buf, gate2_buf, mlp_buf, next_hidden_buf, hidden_count
             )
+            command, encoder = phase_boundary(probe, command, encoder, "residual")
 
             previous_hidden_buf = current_hidden_buf
             current_hidden_buf = next_hidden_buf
@@ -1351,25 +1468,35 @@ module ML::GGUF
               raise ArgumentError.new("no resident Metal route for final output projection")
             end
           end
-          encoder.end_encoding
-          command.commit
-          gpu_command_ms = if profile
-                             command.wait_gpu_elapsed_seconds?.try { |seconds| seconds * 1000.0 }
+          gpu_command_ms = if phase_probe = probe
+                             phase_probe.finish(command, encoder, "final_head")
+                             phase_probe.gpu_total_ms
                            else
-                             command.wait
-                             nil
+                             encoder.end_encoding
+                             command.commit
+                             if profile
+                               command.wait_gpu_elapsed_seconds?.try { |seconds| seconds * 1000.0 }
+                             else
+                               command.wait
+                               nil
+                             end
                            end
 
+          readback_started = Time.instant if profile
           values = if output_buf = final_output_buf
                      output_buf.read(token_count * output_weight.not_nil!.out_dim)
                    else
                      current_hidden_buf.read(hidden_count)
                    end
+          readback_ms = (Time.instant - readback_started.not_nil!).total_milliseconds if profile
           projection_dispatches = layers.size * 6 + (final_output_buf ? 1 : 0) + (resident_input ? 5 : 0)
           QwenImage21MetalBlockResult.new(
             values,
-            QwenImage21MetalBlockStats.new(1, projection_dispatches, 0, 1, token_count,
-              resident_input.try(&.image_rows) || 0, input_encode_ms, gpu_command_ms),
+            QwenImage21MetalBlockStats.new(probe.try(&.command_buffers) || 1,
+              projection_dispatches, 0, 1, token_count,
+              resident_input.try(&.image_rows) || 0, input_encode_ms, gpu_command_ms,
+              probe.try(&.phase_gpu_ms), probe.try(&.phase_wait_ms),
+              buffer_prepare_ms, readback_ms),
           )
         ensure
           buffers.each(&.release)
