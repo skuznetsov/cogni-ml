@@ -205,6 +205,7 @@ module ML::GGUF
             weights.layers,
             config.block,
             layout.key_valid,
+            causal_target_start(layout.target_token_mask, config.causal_condition),
           )
         end
       else
@@ -255,6 +256,14 @@ module ML::GGUF
       )
       projected.map! { |value| backend.gelu(value) }
       backend.matmul(projected, rows, weights.text_out_layer, zeros(config.hidden_dim))
+    end
+
+    private def self.causal_target_start(mask : Array(Bool), causal_condition : Bool) : Int32?
+      return nil unless causal_condition
+      first = mask.index(true)
+      return nil unless first && first > 0
+      return nil unless mask[first..].all?
+      first
     end
 
     private def self.build_joint_hidden(

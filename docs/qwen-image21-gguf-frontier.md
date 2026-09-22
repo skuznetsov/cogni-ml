@@ -54,6 +54,18 @@ file name such as `Q4` as evidence of its actual tensor policy.
   target, the outer output produced `max_abs=2.771616e-6` and cosine
   `0.9999999999998054`. A real single-block check produced
   `max_abs=0.00012588501` and cosine `0.999999999999791`.
+- Cache the causal prefix K/V tensors for every DiT layer in persistent Metal
+  buffers after the first transformer evaluation. Later FlowMatch evaluations
+  recompute only the contiguous target suffix while assembling full attention
+  K/V on-device and retaining one command buffer, zero intermediate readbacks,
+  and one final readback. A real 32-layer check with an unchanged text prefix,
+  changed target latents, and changed timestep recomputed four of five tokens
+  and matched a complete hybrid reference with `max_abs=5.401671e-6` and cosine
+  `0.9999999999988506`.
+- Invalidate the prefix cache fail-closed when its token boundary, prefix hidden
+  state, prefix modulation, prefix positions, prefix image ids, prefix key
+  validity, layer objects, or block configuration changes. A tiny GPU check
+  verifies both the cache-hit path and rebuild after a changed prefix value.
 - Reproduce the model's configured deterministic FlowMatch Euler schedule:
   linear input sigmas, exponential resolution shift over the exact
   `256..8192` sequence-length range, terminal stretching to `0.02`, and Euler
@@ -84,20 +96,21 @@ either label.
 - A representative-token performance claim for the current exact attention
   kernel. The admitted kernel is correctness-first and remains quadratic in
   token count; the minimum `2x2` target check is not a throughput benchmark.
-- Prefix K/V reuse across FlowMatch evaluations. The denoising driver can now
-  select the resident stack, but it still recomputes the causal prefix on every
-  step.
+- A compressed or bounded-memory prefix cache. The admitted implementation
+  stores per-layer prefix K/V as F32 Metal buffers and therefore trades memory
+  for repeated-step projection savings.
 - A claim that a readable GGUF has acceptable image quality.
 - A custom weight format derived from the resident-KV adaptive QBit codec.
 - Trusting repository or file labels (`Q4`, `dynamic`, `HQ`) over tensor data.
 
 ## Guard and next transition
 
-The next implementation transition is prefix K/V caching across denoising
-steps, guarded by the causal invariant that prefix tokens cannot attend the
-changing target suffix. Top-level BF16 projections need a batch-capable route
-before the full DiT can avoid its remaining CPU boundary. Text encoding,
-sampling, and VAE decode remain separate frontiers.
+The next implementation transition is a batch-capable top-level BF16 Metal
+projection route so sequence construction can stop crossing the CPU boundary
+around the resident block stack. Representative-token profiling must then
+separate projection, attention, cache-copy, and launch costs before changing
+the correctness-first attention kernel. Text encoding, sampling, and VAE decode
+remain separate frontiers.
 
 The model-backed checks are:
 
@@ -125,5 +138,7 @@ QWEN_IMAGE21_GGUF=/path/to/Qwen-Image-2.1-Q4.gguf \
   intermediate host readback for one outer-transformer evaluation.
 - Prefix caching changes a prefix hidden state, key, or value when only the
   target latents and FlowMatch timestep change.
+- A changed prefix input or block configuration reuses the prior prefix cache
+  instead of rebuilding it.
 - A later image-quality corpus shows that the selected mixed quantization
   policy is worse than its declared baseline.

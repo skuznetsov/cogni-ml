@@ -73,6 +73,7 @@ private class QwenImage21RecordingLayerStack
 
   getter calls = 0
   getter layers_seen = 0
+  getter target_starts = [] of Int32?
 
   def forward_layers(
     hidden : Array(Float32), token_count : Int32,
@@ -82,9 +83,11 @@ private class QwenImage21RecordingLayerStack
     layers : Array(ML::GGUF::QwenImage21BlockWeights),
     config : ML::GGUF::QwenImage21BlockConfig,
     key_valid : Array(Bool)?,
+    target_start : Int32?,
   ) : Array(Float32)
     @calls += 1
     @layers_seen = layers.size
+    @target_starts << target_start
     layers.reduce(hidden) do |state, layer|
       ML::GGUF::QwenImage21BlockCPU.forward(
         state, token_count, modulation, positions, image_ids, layer, config,
@@ -182,6 +185,7 @@ describe ML::GGUF::QwenImage21TransformerCPU do
     actual.output.should eq(expected.output)
     stack.calls.should eq(1)
     stack.layers_seen.should eq(fixture[:weights].layers.size)
+    stack.target_starts.should eq([7])
   end
 
   it "keeps prefix output timestep-independent under causal conditioning" do
@@ -248,5 +252,6 @@ describe ML::GGUF::QwenImage21TransformerCPU do
     result.transformer_evaluations.should eq(2)
     stack.calls.should eq(2)
     stack.layers_seen.should eq(fixture[:weights].layers.size)
+    stack.target_starts.should eq([7, 7])
   end
 end
