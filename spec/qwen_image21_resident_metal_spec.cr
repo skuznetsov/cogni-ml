@@ -60,6 +60,90 @@ private def qwen_image21_resident_fixture
 end
 
 describe ML::GGUF::QwenImage21MetalBlock do
+  it "certifies raw prefix inputs while ignoring changed target and target timestep" do
+    _, block = qwen_image21_resident_fixture
+    image_weight = qwen_image21_resident_bf16_weight(qwen_image21_resident_matrix(6, 2, 1), 6, 2)
+    time_weight = qwen_image21_resident_bf16_weight(qwen_image21_resident_matrix(6, 6, 2), 6, 6)
+    modulation = qwen_image21_resident_bf16_weight(qwen_image21_resident_matrix(24, 6, 3), 24, 6)
+    scale = qwen_image21_resident_bf16_weight(qwen_image21_resident_matrix(6, 6, 4), 6, 6)
+    output = qwen_image21_resident_bf16_weight(qwen_image21_resident_matrix(2, 6, 5), 2, 6)
+    weights = ML::GGUF::QwenImage21TransformerWeights.new(
+      image_weight, modulation, scale, output, time_weight, time_weight,
+      time_weight, time_weight, Array(Float32).new(6, 1.0_f32), [block],
+    )
+    layout = ML::GGUF::QwenImage21TransformerCPU.build_layout(
+      [false, true, true], [StaticArray[1, 2, 2], StaticArray[1, 2, 2]], 2,
+    )
+    image = Array(Float32).new(16) { |index| index.to_f32 / 19.0_f32 }
+    encoder = Array(Float32).new(12) { |index| index.to_f32 / 11.0_f32 }
+    projected_text = Array(Float32).new(12) { |index| index.to_f32 / 13.0_f32 }
+    time = qwen_image21_resident_time_embedding([0.25_f32, 0.0_f32], 6)
+    source_rows = [0] + (1..8).map { |index| -index }
+    input = ML::GGUF::QwenImage21MetalResidentInput.new(
+      image, projected_text, time, source_rows, layout.target_token_mask,
+      image_weight, time_weight, time_weight, modulation, scale,
+    )
+    certificate = ML::GGUF::QwenImage21MetalRawPrefixCertificate.new(
+      image, encoder, input, layout, weights, 5,
+    )
+    certificate.compatible?(image, encoder, input, layout, weights, 5).should be_true
+    ML::GGUF::QwenImage21MetalRawPrefixCertificate.prefix_closed?(layout, 5).should be_true
+
+    changed_target = image.dup
+    changed_target[8] += 1.0_f32
+    changed_time = time.dup
+    changed_time[0] += 1.0_f32
+    changed_input = ML::GGUF::QwenImage21MetalResidentInput.new(
+      changed_target, projected_text, changed_time, source_rows,
+      layout.target_token_mask, image_weight, time_weight, time_weight,
+      modulation, scale,
+    )
+    certificate.compatible?(changed_target, encoder, changed_input, layout, weights, 5).should be_true
+
+    changed_condition = image.dup
+    changed_condition[0] += 1.0_f32
+    certificate.compatible?(changed_condition, encoder, input, layout, weights, 5).should be_false
+    changed_encoder = encoder.dup
+    changed_encoder[0] += 1.0_f32
+    certificate.compatible?(image, changed_encoder, input, layout, weights, 5).should be_false
+    changed_projected_text = projected_text.dup
+    changed_projected_text[0] += 1.0_f32
+    changed_text_input = ML::GGUF::QwenImage21MetalResidentInput.new(
+      image, changed_projected_text, time, source_rows, layout.target_token_mask,
+      image_weight, time_weight, time_weight, modulation, scale,
+    )
+    certificate.compatible?(image, encoder, changed_text_input, layout, weights, 5).should be_false
+    changed_zero = time.dup
+    changed_zero[6] += 1.0_f32
+    changed_zero_input = ML::GGUF::QwenImage21MetalResidentInput.new(
+      image, projected_text, changed_zero, source_rows, layout.target_token_mask,
+      image_weight, time_weight, time_weight, modulation, scale,
+    )
+    certificate.compatible?(image, encoder, changed_zero_input, layout, weights, 5).should be_false
+    changed_positions = layout.positions.dup
+    changed_positions[0] = StaticArray[9, 9, 9]
+    changed_layout = ML::GGUF::QwenImage21TokenLayout.new(
+      layout.image_pad_mask, layout.image_ids, layout.target_token_mask,
+      changed_positions, layout.key_valid,
+    )
+    certificate.compatible?(image, encoder, input, changed_layout, weights, 5).should be_false
+    colliding_ids = layout.image_ids.dup
+    colliding_ids[5] = layout.image_ids[1]
+    colliding_layout = ML::GGUF::QwenImage21TokenLayout.new(
+      layout.image_pad_mask, colliding_ids, layout.target_token_mask,
+      layout.positions, layout.key_valid,
+    )
+    ML::GGUF::QwenImage21MetalRawPrefixCertificate.prefix_closed?(colliding_layout, 5).should be_false
+    replacement_image_weight = qwen_image21_resident_bf16_weight(
+      qwen_image21_resident_matrix(6, 2, 1), 6, 2,
+    )
+    changed_weights = ML::GGUF::QwenImage21TransformerWeights.new(
+      replacement_image_weight, modulation, scale, output, time_weight, time_weight,
+      time_weight, time_weight, weights.text_norm, [block],
+    )
+    certificate.compatible?(image, encoder, input, layout, changed_weights, 5).should be_false
+  end
+
   it "keeps every intermediate resident while matching the exact block" do
     pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
     config, weights = qwen_image21_resident_fixture
@@ -620,15 +704,82 @@ describe ML::GGUF::QwenImage21MetalBlock do
       stack.prefix_cache_builds.should eq(1)
       stack.prefix_cache_hits.should eq(1)
       stack.resident_head_invocations.should eq(2)
-      stack.resident_input_invocations.should eq(0)
+      stack.resident_input_invocations.should eq(2)
       stats.active_tokens.should eq(4)
       stats.command_buffers.should eq(1)
-      stats.projection_dispatches.should eq(model.layers.size * 6 + 1)
+      stats.projection_dispatches.should eq(model.layers.size * 6 + 6)
       stats.intermediate_readbacks.should eq(0)
       stats.final_readbacks.should eq(1)
       actual.output.all?(&.finite?).should be_true
       max_abs.should be < 5.0e-2
       cosine.should be > 0.99999
+
+      changed_encoder = encoder_hidden.dup
+      changed_encoder[0] += 0.125_f32
+      ML::GGUF::QwenImage21TransformerCPU.forward(
+        changed, changed_encoder, 0.75_f32, shapes, mask,
+        model.transformer_weights, config,
+        backend: outer_backend, layer_stack_backend: stack,
+      )
+      stack.prefix_cache_builds.should eq(2)
+      stack.prefix_cache_hits.should eq(1)
+      stack.resident_input_invocations.should eq(3)
+    ensure
+      stack.close
+      model.close
+    end
+  end
+
+  it "invalidates a resident prefix when condition-image latents change" do
+    path = ENV["QWEN_IMAGE21_GGUF"]?
+    pending!("set QWEN_IMAGE21_GGUF to run the condition-image cache check") unless path && File.file?(path)
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
+
+    model = ML::GGUF::QwenImage21Weights.from_gguf(path.not_nil!)
+    stack = ML::GGUF::QwenImage21MetalLayerStackBackend.new
+    begin
+      config = model.transformer_config
+      hidden = Array(Float32).new(8 * config.input_dim) do |index|
+        (((index * 19 + 3) % 101) - 50).to_f32 / 149.0_f32
+      end
+      changed_target = hidden.dup
+      changed_target[4 * config.input_dim] += 0.125_f32
+      changed_condition = changed_target.dup
+      changed_condition[0] += 0.125_f32
+      encoder = Array(Float32).new(2 * config.context_dim) do |index|
+        (((index * 31 + 9) % 127) - 63).to_f32 / 173.0_f32
+      end
+      shapes = [StaticArray[1, 2, 2], StaticArray[1, 2, 2]]
+      mask = [false, true, true]
+      backend = ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: false)
+
+      ML::GGUF::QwenImage21TransformerCPU.forward(
+        hidden, encoder, 0.25_f32, shapes, mask, model.transformer_weights, config,
+        backend: backend, layer_stack_backend: stack,
+      )
+      expected = ML::GGUF::QwenImage21TransformerCPU.forward(
+        changed_target, encoder, 0.75_f32, shapes, mask,
+        model.transformer_weights, config,
+        backend: ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: false),
+      )
+      actual = ML::GGUF::QwenImage21TransformerCPU.forward(
+        changed_target, encoder, 0.75_f32, shapes, mask,
+        model.transformer_weights, config,
+        backend: backend, layer_stack_backend: stack,
+      )
+      stack.prefix_cache_builds.should eq(1)
+      stack.prefix_cache_hits.should eq(1)
+      stack.last_stats.not_nil!.active_tokens.should eq(4)
+      actual.output.zip(expected.output).max_of { |value, reference| (value - reference).abs }.should be < 5.0e-2
+
+      ML::GGUF::QwenImage21TransformerCPU.forward(
+        changed_condition, encoder, 0.75_f32, shapes, mask,
+        model.transformer_weights, config,
+        backend: backend, layer_stack_backend: stack,
+      )
+      stack.prefix_cache_builds.should eq(2)
+      stack.prefix_cache_hits.should eq(1)
+      stack.resident_input_invocations.should eq(3)
     ensure
       stack.close
       model.close
