@@ -156,6 +156,7 @@ module ML::GGUF
       encoder_hidden_states_mask : Array(Bool)? = nil,
       scheduler_config : QwenImage21FlowMatchConfig = QwenImage21FlowMatchConfig.new,
       backend : ComputeBackend = F32Backend.new,
+      layer_stack_backend : QwenImage21LayerStackBackend? = nil,
     ) : QwenImage21DenoisingResult
       raise ArgumentError.new("img_shapes must contain a target image") if img_shapes.empty?
       unless config.input_dim == config.output_dim
@@ -201,6 +202,7 @@ module ML::GGUF
           config,
           encoder_hidden_states_mask: encoder_hidden_states_mask,
           backend: backend,
+          layer_stack_backend: layer_stack_backend,
         )
         evaluations += 1
         result.output.last(target_tokens * config.output_dim)
