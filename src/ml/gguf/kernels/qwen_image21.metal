@@ -354,3 +354,38 @@ kernel void qi21_residual_gate_add(
     uint index [[thread_position_in_grid]]) {
     if (index < count) output[index] = state[index] + gate[index] * projected[index];
 }
+
+kernel void qi21_final_layernorm_scale(
+    device const float* hidden [[buffer(0)]],
+    device const float* scales [[buffer(1)]],
+    device float* output [[buffer(2)]],
+    constant uint& tokens [[buffer(3)]],
+    constant uint& dim [[buffer(4)]],
+    constant float& eps [[buffer(5)]],
+    uint row [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]],
+    uint simdgroup [[simdgroup_index_in_threadgroup]],
+    uint threads [[threads_per_threadgroup]]) {
+    if (row >= tokens) return;
+    threadgroup float partials[QI21_MAX_SIMDGROUPS];
+    const uint simdgroups = (threads + 31) / 32;
+    const uint base = row * dim;
+
+    float local_sum = 0.0f;
+    for (uint d = tid; d < dim; d += threads) local_sum += hidden[base + d];
+    const float mean = qi21_reduce_sum(local_sum, partials, tid, lane, simdgroup, simdgroups) / float(dim);
+
+    float local_var = 0.0f;
+    for (uint d = tid; d < dim; d += threads) {
+        const float delta = hidden[base + d] - mean;
+        local_var += delta * delta;
+    }
+    const float variance = qi21_reduce_sum(local_var, partials, tid, lane, simdgroup, simdgroups) / float(dim);
+    const float inv_std = rsqrt(variance + eps);
+
+    for (uint d = tid; d < dim; d += threads) {
+        output[base + d] = (hidden[base + d] - mean) * inv_std *
+                           (1.0f + scales[base + d]);
+    }
+}

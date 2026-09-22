@@ -8,6 +8,16 @@ private def qwen_image21_resident_f32_weight(values : Array(Float32), out_dim : 
   ML::GGUF::QuantWeight.new(raw, ML::GGUF::TensorType::F32, out_dim, in_dim)
 end
 
+private def qwen_image21_resident_bf16_weight(values : Array(Float32), out_dim : Int32, in_dim : Int32)
+  raw = Bytes.new(values.size * 2)
+  values.each_with_index do |value, index|
+    bits = value.unsafe_as(UInt32) >> 16
+    raw[index * 2] = (bits & 0xff).to_u8
+    raw[index * 2 + 1] = (bits >> 8).to_u8
+  end
+  ML::GGUF::QuantWeight.new(raw, ML::GGUF::TensorType::BF16, out_dim, in_dim)
+end
+
 private def qwen_image21_resident_matrix(out_dim : Int32, in_dim : Int32, phase : Int32)
   Array(Float32).new(out_dim * in_dim) do |index|
     (((index * 17 + phase * 13) % 29) - 14).to_f32 / 37.0_f32
@@ -107,6 +117,65 @@ describe ML::GGUF::QwenImage21MetalBlock do
     end
     actual.stats.command_buffers.should eq(1)
     actual.stats.projection_dispatches.should eq(12)
+    actual.stats.intermediate_readbacks.should eq(0)
+    actual.stats.final_readbacks.should eq(1)
+  end
+
+  it "keeps the final normalization and BF16 output projection in the resident stack command" do
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
+    config, weights = qwen_image21_resident_fixture
+    token_count = 4
+    hidden = Array(Float32).new(token_count * config.hidden_dim) do |index|
+      (((index * 19) % 31) - 15).to_f32 / 23.0_f32
+    end
+    modulation = Array(Float32).new(token_count * 4 * config.hidden_dim) do |index|
+      (((index * 5) % 37) - 18).to_f32 / 113.0_f32
+    end
+    scales = Array(Float32).new(token_count * config.hidden_dim) do |index|
+      (((index * 7) % 19) - 9).to_f32 / 127.0_f32
+    end
+    positions = [
+      StaticArray[0, 0, 0],
+      StaticArray[1, 1, 1],
+      StaticArray[2, -1, 0],
+      StaticArray[2, 0, 0],
+    ]
+    image_ids = [-1, -1, 0, 0]
+    output_dim = 4
+    output_weight = qwen_image21_resident_bf16_weight(
+      qwen_image21_resident_matrix(output_dim, config.hidden_dim, 7),
+      output_dim,
+      config.hidden_dim,
+    )
+
+    expected_hidden = [weights, weights].reduce(hidden) do |state, layer|
+      ML::GGUF::QwenImage21BlockCPU.forward(
+        state, token_count, modulation, positions, image_ids, layer, config
+      )
+    end
+    normalized = expected_hidden.dup
+    ML::GGUF::F32Backend.new.layer_norm!(
+      normalized,
+      token_count,
+      config.hidden_dim,
+      Array(Float32).new(config.hidden_dim, 1.0_f32),
+      Array(Float32).new(config.hidden_dim, 0.0_f32),
+    )
+    normalized.size.times { |index| normalized[index] *= 1.0_f32 + scales[index] }
+    expected = ML::GGUF::F32Backend.new.matmul(
+      normalized, token_count, output_weight, Array(Float32).new(output_dim, 0.0_f32)
+    )
+
+    actual = ML::GGUF::QwenImage21MetalBlock.forward_layers_projected(
+      hidden, token_count, modulation, positions, image_ids,
+      [weights, weights], config, scales, output_weight,
+    )
+
+    actual.output.zip(expected).each do |value, reference|
+      value.should be_close(reference, 7e-4_f32)
+    end
+    actual.stats.command_buffers.should eq(1)
+    actual.stats.projection_dispatches.should eq(13)
     actual.stats.intermediate_readbacks.should eq(0)
     actual.stats.final_readbacks.should eq(1)
   end
@@ -317,8 +386,9 @@ describe ML::GGUF::QwenImage21MetalBlock do
       STDERR.puts "qwen_image21_resident_stack_parity max_abs=#{max_abs} cosine=#{cosine}"
 
       stack.invocations.should eq(1)
+      stack.resident_head_invocations.should eq(1)
       stats.command_buffers.should eq(1)
-      stats.projection_dispatches.should eq(model.layers.size * 6)
+      stats.projection_dispatches.should eq(model.layers.size * 6 + 1)
       stats.intermediate_readbacks.should eq(0)
       stats.final_readbacks.should eq(1)
       actual.output.all?(&.finite?).should be_true
@@ -402,9 +472,10 @@ describe ML::GGUF::QwenImage21MetalBlock do
 
       stack.prefix_cache_builds.should eq(1)
       stack.prefix_cache_hits.should eq(1)
+      stack.resident_head_invocations.should eq(2)
       stats.active_tokens.should eq(4)
       stats.command_buffers.should eq(1)
-      stats.projection_dispatches.should eq(model.layers.size * 6)
+      stats.projection_dispatches.should eq(model.layers.size * 6 + 1)
       stats.intermediate_readbacks.should eq(0)
       stats.final_readbacks.should eq(1)
       actual.output.all?(&.finite?).should be_true
