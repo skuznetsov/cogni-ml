@@ -70,8 +70,17 @@ file name such as `Q4` as evidence of its actual tensor policy.
   the registered whole-model mmap buffer plus tensor offset rather than copying
   weights into a second allocation, while synthetic heap-backed weights retain
   the existing per-weight upload fallback. A full real outer-forward check
-  against a selective reference that leaves only BF16 on CPU produced
-  `max_abs=2.0712614e-6` and cosine `0.9999999999998502`.
+  with one text token exercises all eight shapes; against a selective reference
+  that leaves only BF16 on CPU it produced `max_abs=3.8146973e-6` and cosine
+  `0.9999999999996982`.
+- Keep the two dependent text projections plus GELU in one Metal command buffer,
+  and the four timestep/modulation/output-scale projections plus SiLU activations
+  in a second. These fused chains perform no intermediate host readback. A
+  synthetic chained-operator parity check covers both paths, while the real
+  outer check requires exactly two fused command buffers for the six chainable
+  projections; image input and final output remain separate. This is a
+  structural transfer/launch reduction, not yet an independently measured
+  throughput win.
 - On the same host and minimum `2x2` target, the unfused outer-forward observation
   changed from approximately `3.61` to `0.92` seconds, and two FlowMatch steps
   changed from approximately `6.76` to `1.31` seconds. These are implementation
@@ -101,9 +110,10 @@ either label.
 - A production-scale, end-to-end resident Metal pipeline, text encoders, VAE,
   or decoded image generation. The admitted DiT block stack is resident, but
   outer orchestration, sequence construction, activations, and final norm remain
-  on CPU. Each top-level BF16 projection still uploads its input and reads its
-  output back, so the outer graph is not yet resident even though its weights
-  are reused without duplication.
+  on CPU. The image-input and final-output BF16 projections still form separate
+  upload/readback boundaries, and both fused chains return their final arrays to
+  the host, so the outer graph is not yet resident even though its weights are
+  reused without duplication.
 - A representative-token performance claim for the current exact attention
   kernel. The admitted kernel is correctness-first and remains quadratic in
   token count; the minimum `2x2` target check is not a throughput benchmark.
@@ -116,10 +126,12 @@ either label.
 
 ## Guard and next transition
 
-The next implementation transition is to retain sequence-construction and
-top-level BF16 intermediates around the resident block stack instead of
-uploading and reading back once per projection. Representative-token profiling
-must then separate projection, attention, cache-copy, transfer, and launch costs
+The next implementation transition is to hand the image-input projection and
+selected timestep modulation directly into the resident block stack, then keep
+its result resident through final LayerNorm and output projection. That removes
+the remaining outer-stack upload/readback pair without requiring text encoding
+or VAE work to cross the same boundary. Representative-token profiling must
+then separate projection, attention, cache-copy, transfer, and launch costs
 before changing the correctness-first attention kernel. Text encoding, sampling,
 and VAE decode remain separate frontiers.
 
