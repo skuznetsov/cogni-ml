@@ -47,6 +47,60 @@ kernel void qi21_q8_0_batch_matmul(
     }
 }
 
+// One simdgroup computes two output channels and loads each
+// input value once for both. Each output keeps the baseline block and lane
+// reduction order; no threadgroup memory or barriers are used.
+kernel void qi21_q8_0_register_reuse_matmul(
+    device const uchar* weights [[buffer(0)]],
+    device const float* input [[buffer(1)]],
+    device float* output [[buffer(2)]],
+    constant uint& in_dim [[buffer(3)]],
+    constant uint& out_dim [[buffer(4)]],
+    constant uint& batch [[buffer(5)]],
+    uint3 group [[threadgroup_position_in_grid]],
+    ushort lane [[thread_index_in_simdgroup]],
+    ushort simdgroup [[simdgroup_index_in_threadgroup]]) {
+    const uint first_output_row = group.x * 8 + uint(simdgroup) * 2;
+    const uint first_batch = group.y * 8;
+    if (first_output_row >= out_dim || first_batch >= batch) return;
+
+    const uint blocks_per_row = in_dim / 32;
+    const uint bytes_per_row = blocks_per_row * 34;
+    device const qi21_q8_0_block* weight_row0 =
+        (device const qi21_q8_0_block*)(weights + first_output_row * bytes_per_row);
+    const bool has_second_output = first_output_row + 1 < out_dim;
+    device const qi21_q8_0_block* weight_row1 =
+        has_second_output ? weight_row0 + blocks_per_row : weight_row0;
+    float sums0[8] = {0.0f};
+    float sums1[8] = {0.0f};
+    for (uint block = 0; block < blocks_per_row; ++block) {
+        const float scale0 = (float)weight_row0[block].scale;
+        const float quant0 = (float)weight_row0[block].values[lane];
+        float scale1 = 0.0f;
+        float quant1 = 0.0f;
+        if (has_second_output) {
+            scale1 = (float)weight_row1[block].scale;
+            quant1 = (float)weight_row1[block].values[lane];
+        }
+        const uint column = block * 32 + lane;
+        for (uint row = 0; row < 8 && first_batch + row < batch; ++row) {
+            const float value = input[(first_batch + row) * in_dim + column];
+            sums0[row] += scale0 * value * quant0;
+            if (has_second_output) sums1[row] += scale1 * value * quant1;
+        }
+    }
+    for (uint row = 0; row < 8 && first_batch + row < batch; ++row) {
+        const float total0 = simd_sum(sums0[row]);
+        const float total1 = simd_sum(sums1[row]);
+        if (lane == 0) {
+            output[(first_batch + row) * out_dim + first_output_row] = total0;
+            if (has_second_output) {
+                output[(first_batch + row) * out_dim + first_output_row + 1] = total1;
+            }
+        }
+    }
+}
+
 // Correctness-first BF16 batch projection. Two simdgroups independently
 // compute two output rows; each row belongs to one batch item and output
 // channel. The weight matrix is row-major [out_dim, in_dim].

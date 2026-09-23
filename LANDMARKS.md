@@ -28563,9 +28563,22 @@ Refresh after source/toolchain/device/model/workload changes.
   exact parity held, yet warmed real-weight 513-token paired wall ratios were
   1.375 rebuild / 1.371 hit (tiled/default, `n=2`), with GPU time also worse.
   Both candidates were removed; do not revive by renaming them.
-- Full pinned GGUF/conditioning Metal suite passed 54 examples; Python bridge
-  tests passed 16 with one expected skip. Detail and reproduction boundaries:
-  `docs/qwen-image21-gguf-frontier.md`. Next useful Q8 candidate must avoid
-  shared-memory/barrier overhead and pass exact output plus paired normal
-  full-step latency gates. These observations decay on model/GGUF, prompt,
-  Metal kernel, device/OS, Python component, or test-harness changes.
+- Register-local reuse across two Q8_0 output channels avoids that tile's
+  threadgroup staging and barriers. Automatic selection is scoped to exact
+  Apple M2 Max and batch >=256; `QWEN_IMAGE21_Q8_REGISTER_REUSE=0` restores the
+  established batched Q8_0 kernel, while `=1` is a wider forced experiment.
+  Synthetic tail/scale/NaN parity and the full pinned Metal suite passed (56
+  examples, zero failures/pending); Python bridge tests from the earlier
+  unchanged bridge passed 16 with one expected skip.
+- A direct shipped-auto/rollback A/B on the real 32-layer GGUF, 513 joint
+  tokens, one warm pair and three alternating-order measured pairs, preserved
+  exact rebuild/hit outputs and one command buffer per forward. Paired median
+  wall ratios were 0.897 rebuild / 0.890 hit (auto/rollback); GPU-command
+  ratios were 0.895 / 0.887, with no order reversal. A default-auto 40-step
+  real-prompt run took 48.113 s DiT and reproduced the rollback latent SHA-256
+  exactly; two earlier forced-on runs took 48.670/49.344 s versus one rollback
+  at 57.782 s. These are bounded M2 Max/prompt/model observations, not a
+  general image-quality or end-to-end latency claim. Detail and reproduction:
+  `docs/qwen-image21-gguf-frontier.md`. Reprofile before widening to another
+  device, batch, GGUF policy, or resolution. Evidence decays on model/GGUF,
+  prompt, kernel/compiler, device/OS, Python component, or harness changes.

@@ -237,6 +237,23 @@ module ML::GGUF
   # Experimental Q8_0 batch projection kept local to Qwen-Image. The general
   # Qwen 3.5 quantized route and all non-Q8_0 weights remain unchanged.
   module QwenImage21MetalQ8
+    def self.register_reuse_enabled?(device_name : String, batch : Int32, override : String?) : Bool
+      case override
+      when "0"
+        false
+      when "1"
+        true
+      when nil
+        device_name == "Apple M2 Max" && batch >= 256
+      else
+        false
+      end
+    end
+
+    def self.kernel_name(device_name : String, batch : Int32, override : String?) : String
+      register_reuse_enabled?(device_name, batch, override) ? "qi21_q8_0_register_reuse_matmul" : "qi21_q8_0_batch_matmul"
+    end
+
     {% if flag?(:cpu_only) %}
       def self.encode_matmul_to_buffer(
         encoder : ML::Metal::ComputeEncoder, weight : QuantWeight,
@@ -256,21 +273,26 @@ module ML::GGUF
         return false if input.size < batch.to_i64 * weight.in_dim * sizeof(Float32)
         return false if output.size < batch.to_i64 * weight.out_dim * sizeof(Float32)
         ML::Metal::Device.init!
+        name = kernel_name(ML::Metal::Device.instance.name, batch, ENV["QWEN_IMAGE21_Q8_REGISTER_REUSE"]?)
         weight_buffer, weight_offset = Qwen35Metal.weight_buffer_slot(weight)
-        encoder.set_pipeline(pipeline)
+        encoder.set_pipeline(pipeline(name))
         encoder.set_buffer(weight_buffer, 0, offset: weight_offset)
         encoder.set_buffer(input, 1)
         encoder.set_buffer(output, 2, ML::Metal::BufferAccess::Write)
         encoder.set_value(weight.in_dim.to_u32, 3)
         encoder.set_value(weight.out_dim.to_u32, 4)
         encoder.set_value(batch.to_u32, 5)
-        encoder.dispatch_threadgroups({(weight.out_dim + 3) // 4, (batch + 7) // 8, 1}, {128, 1, 1})
+        if name == "qi21_q8_0_register_reuse_matmul"
+          encoder.dispatch_threadgroups({(weight.out_dim + 7) // 8, (batch + 7) // 8, 1}, {128, 1, 1})
+        else
+          encoder.dispatch_threadgroups({(weight.out_dim + 3) // 4, (batch + 7) // 8, 1}, {128, 1, 1})
+        end
         true
       end
 
-      private def self.pipeline : ML::Metal::ComputePipeline
-        ML::Metal::PipelineCache.get("qi21_q8_0_batch_matmul") do
-          ML::Metal::ComputePipeline.new("qi21_q8_0_batch_matmul", SOURCE)
+      private def self.pipeline(name : String) : ML::Metal::ComputePipeline
+        ML::Metal::PipelineCache.get(name) do
+          ML::Metal::ComputePipeline.new(name, SOURCE)
         end
       end
     {% end %}

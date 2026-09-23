@@ -12,6 +12,28 @@ private def median(values : Array(Float64)) : Float64
   (sorted[(sorted.size - 1) // 2] + sorted[sorted.size // 2]) / 2.0
 end
 
+private def format_ms(value : Float64?) : String
+  value.try(&.round(3).to_s) || "unavailable"
+end
+
+private def format_ratio(candidate : Float64?, baseline : Float64?) : String
+  return "unavailable" unless candidate && baseline
+  (candidate / baseline).round(3).to_s
+end
+
+private def median_ratio(values : Array(Float64), expected : Int32) : String
+  return "unavailable" unless expected > 0 && values.size == expected
+  median(values).round(3).to_s
+end
+
+private def restore_environment(key : String, value : String?) : Nil
+  if value
+    ENV[key] = value
+  else
+    ENV.delete(key)
+  end
+end
+
 private def report(label : String, wall : Array(Float64), stats : Array(ML::GGUF::QwenImage21MetalBlockStats)) : Nil
   gpu = stats.compact_map(&.gpu_command_ms)
   prepare = stats.compact_map(&.buffer_prepare_ms)
@@ -83,6 +105,22 @@ phase_samples = ARGV[4]?.try(&.to_i) || 1
 abort "samples must be positive" unless samples > 0
 abort "phase_samples must be nonnegative" unless phase_samples >= 0
 abort "image sides must be positive and even" unless target_side > 0 && target_side.even? && condition_side > 0 && condition_side.even?
+register_auto_ab = ENV["QWEN_IMAGE21_Q8_REGISTER_AB"]? == "1"
+register_force_ab = ENV["QWEN_IMAGE21_Q8_REGISTER_FORCE_AB"]? == "1"
+register_reuse_ab = register_auto_ab || register_force_ab
+batch_ab = ENV["QWEN_IMAGE21_Q8_BATCH_AB"]? == "1"
+abort "choose only one Q8 A/B mode" if register_reuse_ab && batch_ab
+abort "choose only one Q8 register A/B mode" if register_auto_ab && register_force_ab
+if register_reuse_ab
+  abort "register reuse AB requires at least 3 measured pairs" unless samples >= 3
+  abort "register reuse AB requires 513 total tokens" unless 1 + target_side * target_side + condition_side * condition_side == 513
+end
+if register_auto_ab
+  ML::Metal::Device.init!
+  device_name = ML::Metal::Device.instance.name
+  abort "automatic register A/B requires Apple M2 Max; found #{device_name}" unless device_name == "Apple M2 Max"
+  puts "register_reuse_device=#{device_name}"
+end
 abort "model file does not exist: #{path}" unless File.file?(path)
 
 model = ML::GGUF::QwenImage21Weights.from_gguf(path)
@@ -105,9 +143,101 @@ begin
        "text_tokens=1 total_tokens=#{1 + total_image_tokens} layers=#{model.layers.size} " \
        "f32_prefix_kv_bytes=#{2_i64 * model.layers.size * (1 + condition_tokens) * config.hidden_dim * sizeof(Float32)}"
   puts "normal pass: one command per DiT evaluation; diagnostic phases: split commands, synthetic latents"
-  puts "Q8_0 batch route: #{ENV["QWEN_IMAGE21_Q8_BATCH_AB"]? == "1" ? "alternating A/B" : ENV["QWEN_IMAGE21_Q8_BATCH"]? == "0" ? "disabled" : "enabled for batch >= 16"}"
+  q8_route = if register_auto_ab
+               "alternating AUTO vs baseline"
+             elsif register_force_ab
+               "alternating forced reuse vs baseline"
+             elsif ENV["QWEN_IMAGE21_Q8_BATCH_AB"]? == "1"
+               "alternating A/B"
+             elsif ENV["QWEN_IMAGE21_Q8_BATCH"]? == "0"
+               "disabled"
+             else
+               "enabled for batch >= 16"
+             end
+  puts "Q8_0 batch route: #{q8_route}"
 
-  if ENV["QWEN_IMAGE21_Q8_BATCH_AB"]? == "1"
+  if register_reuse_ab
+    prior_batch = ENV["QWEN_IMAGE21_Q8_BATCH"]?
+    prior_reuse = ENV["QWEN_IMAGE21_Q8_REGISTER_REUSE"]?
+    prior_profile = ENV["QWEN_IMAGE21_PROFILE"]?
+    candidate_label = register_auto_ab ? "auto" : "forced_reuse"
+    begin
+      candidate_override = register_auto_ab ? "unset_auto" : "1"
+      puts "Q8_0 #{candidate_label} vs baseline: candidate_override=#{candidate_override} " \
+           "baseline_override=0 warm_pairs=1 measured_pairs=#{samples} parity_max_abs<1e-4"
+      rebuild_wall_ratios = [] of Float64
+      hit_wall_ratios = [] of Float64
+      rebuild_gpu_ratios = [] of Float64
+      hit_gpu_ratios = [] of Float64
+      (samples + 1).times do |index|
+        modes = index.even? ? ["baseline", "candidate"] : ["candidate", "baseline"]
+        outputs = Hash(String, {Array(Float32), Array(Float32)}).new
+        walls = Hash(String, {Float64, Float64}).new
+        gpu = Hash(String, {Float64?, Float64?}).new
+        modes.each do |mode|
+          ENV["QWEN_IMAGE21_Q8_BATCH"] = "1"
+          if mode == "baseline"
+            ENV["QWEN_IMAGE21_Q8_REGISTER_REUSE"] = "0"
+          elsif register_auto_ab
+            ENV.delete("QWEN_IMAGE21_Q8_REGISTER_REUSE")
+          else
+            ENV["QWEN_IMAGE21_Q8_REGISTER_REUSE"] = "1"
+          end
+          ENV["QWEN_IMAGE21_PROFILE"] = "1"
+          stack = ML::GGUF::QwenImage21MetalLayerStackBackend.new
+          begin
+            pair = run_pair(model, stack,
+              ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: false),
+              hidden, encoder, shapes, mask, schedule.model_timestep(0), schedule.model_timestep(1),
+              target_tokens)
+            abort "register reuse AB rebuild did not use one command buffer" unless pair[4].command_buffers == 1
+            abort "register reuse AB prefix hit did not use one command buffer" unless pair[5].command_buffers == 1
+            outputs[mode] = {pair[0], pair[1]}
+            walls[mode] = {pair[2], pair[3]}
+            gpu[mode] = {pair[4].gpu_command_ms, pair[5].gpu_command_ms}
+          ensure
+            stack.close
+          end
+        end
+        build_abs = outputs["baseline"][0].zip(outputs["candidate"][0]).max_of { |a, b| (a - b).abs }
+        hit_abs = outputs["baseline"][1].zip(outputs["candidate"][1]).max_of { |a, b| (a - b).abs }
+        abort "Q8_0 #{candidate_label} changed rebuild output beyond strict parity bound" unless build_abs < 1.0e-4
+        abort "Q8_0 #{candidate_label} changed prefix-hit output beyond strict parity bound" unless hit_abs < 1.0e-4
+        next if index == 0 # Warm both routes and their pipelines once.
+
+        base = walls["baseline"]
+        candidate = walls["candidate"]
+        base_gpu = gpu["baseline"]
+        candidate_gpu = gpu["candidate"]
+        build_ratio = candidate[0] / base[0]
+        hit_ratio = candidate[1] / base[1]
+        rebuild_wall_ratios << build_ratio
+        hit_wall_ratios << hit_ratio
+        if base_gpu[0] && candidate_gpu[0]
+          rebuild_gpu_ratios << candidate_gpu[0].not_nil! / base_gpu[0].not_nil!
+        end
+        if base_gpu[1] && candidate_gpu[1]
+          hit_gpu_ratios << candidate_gpu[1].not_nil! / base_gpu[1].not_nil!
+        end
+        puts "pair=#{index} order=#{modes.map { |mode| mode == "baseline" ? "baseline" : candidate_label }.join("/")} " \
+             "rebuild_wall_baseline_ms=#{base[0].round(3)} rebuild_wall_#{candidate_label}_ms=#{candidate[0].round(3)} " \
+             "rebuild_gpu_command_baseline_ms=#{format_ms(base_gpu[0])} rebuild_gpu_command_#{candidate_label}_ms=#{format_ms(candidate_gpu[0])} " \
+             "hit_wall_baseline_ms=#{base[1].round(3)} hit_wall_#{candidate_label}_ms=#{candidate[1].round(3)} " \
+             "hit_gpu_command_baseline_ms=#{format_ms(base_gpu[1])} hit_gpu_command_#{candidate_label}_ms=#{format_ms(candidate_gpu[1])} " \
+             "rebuild_wall_ratio=#{build_ratio.round(3)} rebuild_gpu_command_ratio=#{format_ratio(candidate_gpu[0], base_gpu[0])} " \
+             "hit_wall_ratio=#{hit_ratio.round(3)} hit_gpu_command_ratio=#{format_ratio(candidate_gpu[1], base_gpu[1])} " \
+             "parity_max_abs_build=#{build_abs} parity_max_abs_hit=#{hit_abs}"
+      end
+      puts "n=#{samples} paired_median_rebuild_wall_ratio_#{candidate_label}_over_baseline=#{median_ratio(rebuild_wall_ratios, samples)} " \
+           "paired_median_hit_wall_ratio_#{candidate_label}_over_baseline=#{median_ratio(hit_wall_ratios, samples)} " \
+           "paired_median_rebuild_gpu_command_ratio_#{candidate_label}_over_baseline=#{median_ratio(rebuild_gpu_ratios, samples)} " \
+           "paired_median_hit_gpu_command_ratio_#{candidate_label}_over_baseline=#{median_ratio(hit_gpu_ratios, samples)}"
+    ensure
+      restore_environment("QWEN_IMAGE21_Q8_BATCH", prior_batch)
+      restore_environment("QWEN_IMAGE21_Q8_REGISTER_REUSE", prior_reuse)
+      restore_environment("QWEN_IMAGE21_PROFILE", prior_profile)
+    end
+  elsif ENV["QWEN_IMAGE21_Q8_BATCH_AB"]? == "1"
     baseline_build = [] of Float64
     baseline_hit = [] of Float64
     candidate_build = [] of Float64

@@ -127,9 +127,9 @@ phase time to the Q8_0 Q, K, and attention-output projections and 10% to
 attention itself. The diagnostic path splits a normal one-command-buffer step
 into 418 buffers, so those shares rank optimization targets but do not predict
 whole-step speedup. A proposed Q8_0 input-reuse tile passed exact output
-parity but failed the normal-path latency gate below. Projection cost remains
-the main measured target at this size, but its next optimization requires a
-different data-reuse or arithmetic hypothesis.
+parity but failed the normal-path latency gate below. Register-local reuse
+across two output channels subsequently passed the bounded whole-forward
+gate below on M2 Max, without staging input in threadgroup memory.
 
 ## Admitted now
 
@@ -296,6 +296,16 @@ different data-reuse or arithmetic hypothesis.
   ratios are more informative than cross-run millisecond comparisons. Set
   `QWEN_IMAGE21_Q8_BATCH_AB=1 crystal run scripts/qwen_image21_prefix_profile.cr -- MODEL.gguf 3 16 16 0`
   for the alternating route/parity probe.
+- Reuse each Q8_0 input value across two output channels within a SIMDgroup,
+  preserving the existing per-channel accumulation order and avoiding
+  threadgroup storage and barriers. The automatic route is limited to exact
+  `Apple M2 Max` and batch `>=256`; `QWEN_IMAGE21_Q8_REGISTER_REUSE=0` restores
+  the established batched Q8_0 kernel, while `=1` forces the reuse kernel for
+  eligible batched Q8_0 calls as an experiment. The outer
+  `QWEN_IMAGE21_Q8_BATCH=0` rollback to the older Qwen 3.5 route is unchanged.
+  Synthetic GPU checks compare the two Q8 kernels exactly across batch,
+  output-channel, and odd-Q8-block tails with non-unit scales and a NaN mask.
+  The bounded real-weight 513-token evidence and its scope are recorded below.
 - With that Q8_0 batch route enabled, profile the same real 32-layer GGUF at
   larger synthetic condition/target image grids, each with one text token.
   After a warm pair, the `24x24 + 24x24` (1153-token) run used two normal
@@ -387,6 +397,55 @@ This rejection is scoped to the tested tile and host, not to every Q8 tiling
 strategy or GPU. Reopen only with a distinct mechanism and a paired normal
 full-forward falsifier, not an isolated kernel timing.
 
+## Admitted Q8 register-local reuse on M2 Max
+
+The register-reuse kernel computes two output channels per SIMDgroup over
+eight adjacent batch rows. It reads each input value once for the two
+channels, retaining the existing Q8_0 weight layout, block and lane reduction
+order, and independent output ownership. It uses no threadgroup memory or
+barriers. Synthetic Metal checks matched the established Q8 batch kernel
+exactly across batch, output, and K-block tails, non-unit half scales, and
+NaN propagation. The full model-backed Qwen-Image spec suite passed 56
+examples with zero failures or pending cases after the automatic policy change.
+
+The precommitted gate required exact output parity plus one warm pair and at
+least three measured alternating-order, normal one-command-buffer A/B pairs
+at 513 joint tokens; median paired wall ratios below 0.95 on both rebuild
+and prefix hit, non-regressing GPU-command ratios, and no order reversal.
+A forced-kernel screen against the established Q8 batch route gave median
+reuse/baseline wall ratios of 0.896 on rebuild and 0.889 on hit, with GPU
+command ratios of 0.895 and 0.886. Rebuild and prefix-hit full-forward
+outputs matched exactly in every pair; the gain survived both execution
+orders. These are full 32-layer forward passes using the pinned real GGUF
+with synthetic input embeddings and latents, not an isolated projection or
+phase-only speedup. The automatic policy is narrower than the forced-kernel
+screen, so its dispatch was tested directly as well.
+
+The final harness asserted the device name `Apple M2 Max`, compared the
+automatic override-unset path against explicit rollback `=0`, and warmed both
+routes before three alternating-order measured pairs. The normal 513-token
+forward used one command buffer per rebuild and prefix hit. Median paired
+auto/baseline wall ratios were 0.897 on rebuild and 0.890 on hit; GPU-command
+ratios were 0.895 and 0.887. Every full-forward rebuild and hit output matched
+exactly (`max_abs=0`), and neither execution order reversed the gain. The Q8
+calls at this shape use 513 rows on rebuild and 256 on the hit target suffix,
+both meeting the automatic batch threshold. Reproduce with
+`QWEN_IMAGE21_Q8_REGISTER_AB=1 crystal run scripts/qwen_image21_prefix_profile.cr -- MODEL.gguf 3 16 16 0`
+with the Metal bridge linked and the pinned GGUF; the harness
+also retains `QWEN_IMAGE21_Q8_REGISTER_FORCE_AB=1` for the wider forced-on
+experiment.
+
+On the pinned real `red cube`, seed-7, 256x256, 40-step path, an automatic
+policy run with the override unset took 48.113 s for denoising. Its latent
+payload SHA-256 was identical to the rollback route's
+`d835709261d2d36870ebd564cfb55d3d4db8a1173f1f8e8d511684c8eb7fa844`.
+Two prior forced-on runs took 48.670 and 49.344 s versus one rollback run at
+57.782 s. These sequential process observations support this one prompt and
+host, but are not a paired end-to-end latency distribution; they do not
+establish image quality or gains on another device, quantization policy, or
+resolution. The unchanged latent bytes preserve the previous reference-VAE
+decode input, but no new PNG was decoded in this optimization run.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder
@@ -403,9 +462,10 @@ full-forward falsifier, not an isolated kernel timing.
   the measured 1153- and 2049-token shapes, but behavior on other input
   distributions and a faster replacement remain unproven. The tested
   one-SIMD-group replacement is explicitly rejected at the measured shapes.
-- A speedup from batched Q8_0 projection on other GPU families, quantization
-  variants, or untested sequence lengths. The default route is backed by the
-  bounded M2 Max A/B probe above, with an explicit rollback switch.
+- A speedup from either Q8_0 batch projection or register reuse on other GPU
+  families, quantization variants, or untested sequence lengths. Automatic
+  register reuse is limited to the measured M2 Max batch corridor, with an
+  explicit rollback switch.
 - A compressed or bounded-memory prefix cache. The admitted implementation
   stores per-layer prefix K/V as F32 Metal buffers and therefore trades memory
   for repeated-step projection savings.
@@ -424,12 +484,14 @@ and mmap-backed weights. Larger-token profiling still identifies attention as
 a candidate, but removing per-key barriers by assigning one SIMD group to each
 query/head did not pass the full-forward latency gate. At the tested real
 256x256 prompt, Q8_0 Q/K/output projections dominate the diagnostic phase
-profile; the first input-reuse tile failed the full-forward latency gate. A
-next projection candidate must explain how it avoids that tile's shared-memory
-and synchronization cost, preserve the original route as a rollback, and beat
-normal full-step latency in paired A/B runs while retaining output parity. A
-phase-only improvement is insufficient. Text encoding, sampling, and VAE
-decode remain separate frontiers.
+profile; the first input-reuse tile failed the full-forward latency gate, while
+register-local reuse passed the bounded 513-token gate. Keep the original
+batched kernel as the immediate rollback. Before widening beyond exact M2
+Max/batch `>=256`, repeat a full-forward paired A/B with exact output parity
+on each new device, shape, and model packing. At larger token counts,
+attention's measured share grows, so reprofile before assuming projections
+remain the dominant target. Text encoding, sampling, and VAE decode remain
+separate frontiers.
 
 The model-backed checks are:
 

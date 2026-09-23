@@ -29,8 +29,14 @@ private def qwen_image21_resident_q8_weight(out_dim : Int32, in_dim : Int32)
   out_dim.times do |row|
     (in_dim // 32).times do |block|
       offset = (row * (in_dim // 32) + block) * 34
-      raw[offset] = 0x00_u8
-      raw[offset + 1] = 0x3c_u8 # IEEE binary16 1.0
+      scale_bits = case (row + block) % 4
+                   when 0 then 0x3800_u16 # IEEE binary16 0.5
+                   when 1 then 0x3e00_u16 # IEEE binary16 1.5
+                   when 2 then 0x3a00_u16 # IEEE binary16 0.75
+                   else        0x4000_u16 # IEEE binary16 2.0
+                   end
+      raw[offset] = (scale_bits & 0xff).to_u8
+      raw[offset + 1] = (scale_bits >> 8).to_u8
       32.times do |column|
         raw[offset + 2 + column] = (((row * 7 + block * 11 + column * 3) % 19) - 9).to_i8.unsafe_as(UInt8)
       end
@@ -75,33 +81,108 @@ private def qwen_image21_resident_fixture
 end
 
 describe ML::GGUF::QwenImage21MetalBlock do
+  it "limits automatic Q8 register reuse to validated device and batch policy" do
+    q8 = ML::GGUF::QwenImage21MetalQ8
+    q8.register_reuse_enabled?("Apple M2 Max", 255, nil).should be_false
+    q8.register_reuse_enabled?("Apple M2 Max", 256, nil).should be_true
+    q8.register_reuse_enabled?("Apple M3 Max", 513, nil).should be_false
+    q8.register_reuse_enabled?("Apple M2 Max", 513, "0").should be_false
+    q8.register_reuse_enabled?("Apple M3 Max", 16, "1").should be_true
+    q8.register_reuse_enabled?("Apple M2 Max", 256, "true").should be_false
+
+    q8.kernel_name("Apple M2 Max", 256, nil).should eq("qi21_q8_0_register_reuse_matmul")
+    q8.kernel_name("Apple M2 Max", 255, nil).should eq("qi21_q8_0_batch_matmul")
+    q8.kernel_name("Apple M3 Max", 513, nil).should eq("qi21_q8_0_batch_matmul")
+  end
+
   {% unless flag?(:cpu_only) %}
-    it "matches the established Q8_0 projection across batch-tile boundaries" do
+    it "preserves exact Q8_0 results across batch, output, and block tails" do
       pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
-      weight = qwen_image21_resident_q8_weight(32, 64)
-      [1, 7, 8, 9, 16, 17, 32, 64, 256].each do |batch|
-        input = Array(Float32).new(batch * weight.in_dim) do |index|
-          (((index * 13) % 47) - 23).to_f32 / 37.0_f32
-        end
-        input_buf = ML::MetalBuffer.from_array(input)
-        reference_buf = ML::MetalBuffer.new(batch.to_i64 * weight.out_dim * sizeof(Float32))
-        candidate_buf = ML::MetalBuffer.new(batch.to_i64 * weight.out_dim * sizeof(Float32))
-        begin
-          command = ML::Metal::CommandBuffer.new
-          encoder = ML::Metal::ComputeEncoder.new(command)
-          ML::GGUF::Qwen35Metal.encode_matmul_to_buffer(encoder, weight, input_buf, reference_buf, batch).should be_true
-          ML::GGUF::QwenImage21MetalQ8.encode_matmul_to_buffer(encoder, weight, input_buf, candidate_buf, batch).should be_true
-          encoder.end_encoding
-          command.commit
-          command.wait
-          candidate_buf.read(batch * weight.out_dim).zip(reference_buf.read(batch * weight.out_dim)).each do |value, reference|
-            value.should be_close(reference, 1e-4_f32)
+      prior_reuse = ENV["QWEN_IMAGE21_Q8_REGISTER_REUSE"]?
+      begin
+        cases = [{1, 32, 64}, {7, 3, 96}, {8, 32, 64}, {9, 17, 160},
+                 {16, 32, 64}, {17, 31, 96}, {32, 32, 64}, {64, 32, 64},
+                 {256, 32, 64}]
+        cases.each do |batch, out_dim, in_dim|
+          weight = qwen_image21_resident_q8_weight(out_dim, in_dim)
+          input = Array(Float32).new(batch * weight.in_dim) do |index|
+            (((index * 13) % 47) - 23).to_f32 / 37.0_f32
           end
-        ensure
-          input_buf.release
-          reference_buf.release
-          candidate_buf.release
+          input_buf = ML::MetalBuffer.from_array(input)
+          output_bytes = batch.to_i64 * weight.out_dim * sizeof(Float32)
+          reference_buf = ML::MetalBuffer.new(output_bytes)
+          baseline_buf = ML::MetalBuffer.new(output_bytes)
+          register_reuse_buf = ML::MetalBuffer.new(output_bytes)
+          begin
+            command = ML::Metal::CommandBuffer.new
+            encoder = ML::Metal::ComputeEncoder.new(command)
+            ML::GGUF::Qwen35Metal.encode_matmul_to_buffer(encoder, weight, input_buf, reference_buf, batch).should be_true
+            ENV["QWEN_IMAGE21_Q8_REGISTER_REUSE"] = "0"
+            ML::GGUF::QwenImage21MetalQ8.encode_matmul_to_buffer(encoder, weight, input_buf, baseline_buf, batch).should be_true
+            ENV["QWEN_IMAGE21_Q8_REGISTER_REUSE"] = "1"
+            ML::GGUF::QwenImage21MetalQ8.encode_matmul_to_buffer(encoder, weight, input_buf, register_reuse_buf, batch).should be_true
+            encoder.end_encoding
+            command.commit
+            command.wait
+
+            register_reuse_buf.read(batch * weight.out_dim).should eq(baseline_buf.read(batch * weight.out_dim))
+            register_reuse_buf.read(batch * weight.out_dim).zip(reference_buf.read(batch * weight.out_dim)).each do |value, reference|
+              value.should be_close(reference, 1e-4_f32)
+            end
+          ensure
+            input_buf.release
+            reference_buf.release
+            baseline_buf.release
+            register_reuse_buf.release
+          end
         end
+      ensure
+        if prior_reuse
+          ENV["QWEN_IMAGE21_Q8_REGISTER_REUSE"] = prior_reuse
+        else
+          ENV.delete("QWEN_IMAGE21_Q8_REGISTER_REUSE")
+        end
+      end
+    end
+
+    it "preserves Q8_0 NaN propagation across paired output channels" do
+      pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
+      batch = 9
+      weight = qwen_image21_resident_q8_weight(3, 96)
+      input = Array(Float32).new(batch * weight.in_dim) do |index|
+        (((index * 13) % 47) - 23).to_f32 / 37.0_f32
+      end
+      input[3 * weight.in_dim + 37] = Float32::NAN
+      input_buf = ML::MetalBuffer.from_array(input)
+      baseline_buf = ML::MetalBuffer.new(batch.to_i64 * weight.out_dim * sizeof(Float32))
+      register_reuse_buf = ML::MetalBuffer.new(batch.to_i64 * weight.out_dim * sizeof(Float32))
+      prior_reuse = ENV["QWEN_IMAGE21_Q8_REGISTER_REUSE"]?
+      begin
+        command = ML::Metal::CommandBuffer.new
+        encoder = ML::Metal::ComputeEncoder.new(command)
+        ENV["QWEN_IMAGE21_Q8_REGISTER_REUSE"] = "0"
+        ML::GGUF::QwenImage21MetalQ8.encode_matmul_to_buffer(encoder, weight, input_buf, baseline_buf, batch).should be_true
+        ENV["QWEN_IMAGE21_Q8_REGISTER_REUSE"] = "1"
+        ML::GGUF::QwenImage21MetalQ8.encode_matmul_to_buffer(encoder, weight, input_buf, register_reuse_buf, batch).should be_true
+        encoder.end_encoding
+        command.commit
+        command.wait
+
+        baseline = baseline_buf.read(batch * weight.out_dim)
+        register_reuse = register_reuse_buf.read(batch * weight.out_dim)
+        register_reuse.zip(baseline).each do |value, expected|
+          value.nan?.should eq(expected.nan?)
+          value.should eq(expected) unless expected.nan?
+        end
+      ensure
+        if prior_reuse
+          ENV["QWEN_IMAGE21_Q8_REGISTER_REUSE"] = prior_reuse
+        else
+          ENV.delete("QWEN_IMAGE21_Q8_REGISTER_REUSE")
+        end
+        input_buf.release
+        baseline_buf.release
+        register_reuse_buf.release
       end
     end
   {% end %}
