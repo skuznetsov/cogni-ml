@@ -28544,3 +28544,28 @@ Refresh after source/toolchain/device/model/workload changes.
   deferral. No production optimization or model-sized residency authorized
   by this evidence. Preserve70/30%,24GiB guards and unrelated WIP; refresh on
   source/model/input/device/OS/observer drift or raw-evidence loss.
+
+### Continuation 2026-09-23 — Qwen-Image 2.1 real-prompt Metal optimization
+
+- The pinned real `red cube`, seed 7, 256x256 path generates a PNG through
+  reference Qwen3-VL conditioning, native GGUF/Metal DiT, and reference VAE.
+  It is hybrid, not a fully native image pipeline. The initial stage profile
+  was CPU conditioning 19.84 s, 40-step DiT 57.99 s, CPU FP32 VAE 9.65 s (`n=1`).
+- A saturated-GELU guard repaired real-prompt NaNs in the opt-in fused Metal
+  text chain. Its 40-step latents are finite with relative L2 0.000348 versus
+  the default route, but no full-run speed gain was shown. Default remains
+  separate Metal text projections plus host GELU. Mac `--device auto` now
+  selects CPU rather than the aborting default MPS grouped-query path;
+  explicit MPS eager attention remains quality-unvalidated.
+- Reject the run-local text projection cache at this scale: six real 40-step
+  runs preserved exact latent hashes, but reversed-order pairs did not show a
+  stable latency gain. Reject the 8-row by 8-Q8-block input-reuse Metal tile:
+  exact parity held, yet warmed real-weight 513-token paired wall ratios were
+  1.375 rebuild / 1.371 hit (tiled/default, `n=2`), with GPU time also worse.
+  Both candidates were removed; do not revive by renaming them.
+- Full pinned GGUF/conditioning Metal suite passed 54 examples; Python bridge
+  tests passed 16 with one expected skip. Detail and reproduction boundaries:
+  `docs/qwen-image21-gguf-frontier.md`. Next useful Q8 candidate must avoid
+  shared-memory/barrier overhead and pass exact output plus paired normal
+  full-step latency gates. These observations decay on model/GGUF, prompt,
+  Metal kernel, device/OS, Python component, or test-harness changes.
