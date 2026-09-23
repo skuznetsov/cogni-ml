@@ -1,7 +1,7 @@
 # Qwen-Image 2.1 GGUF Frontier
 
-Status: active implementation frontier; larger-token attention attribution measured
-(2026-09-22)
+Status: active implementation frontier; one-SIMD attention probe rejected by
+paired full-forward A/B on M2 Max (2026-09-22)
 
 ## Goal
 
@@ -219,6 +219,32 @@ release even though its recommended long `Q4_K_M-HQv3` label does not match the
 current short filename. The loader trusts the inspected tensor directory, not
 either label.
 
+## Rejected attention probe
+
+The one-SIMD-group-per-query/head prototype removed per-key threadgroup
+barriers while retaining online softmax, the existing block-causal/image mask,
+and O(1) per-query scratch. A real-weight, synthetic-latent full-forward A/B
+warmed both routes and alternated their order over three measured pairs at each
+shape. Median candidate/legacy wall ratios were:
+
+| Joint tokens | Rebuild | Prefix hit |
+| ---: | ---: | ---: |
+| 513 | 0.984 | 1.031 |
+| 1153 | 1.025 | 1.073 |
+| 2049 | 0.983 | 1.096 |
+
+Ratios below one favor the candidate. The 2049-token rebuild gain was only
+1.7%, while the repeated cache-hit path regressed by 9.6%; both paths
+regressed at 1153 tokens. Candidate-versus-legacy outputs had maximum
+absolute differences up to 0.133 across these probes, exceeding the existing
+0.05 resident-stack/cache parity limit despite cosine similarity above
+0.99999. That numerical drift and the hit regression falsified promotion. The
+candidate kernel, dispatch switch, and route-specific A/B harness were
+discarded; the legacy kernel remains active. Host load varied, so these are
+bounded paired observations, not a universal kernel ranking or an image-quality
+result. A mixed text/image, invalid-key, prefix-build/hit/rebuild GPU
+regression test remains as a guard for the next attention candidate.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline, text encoders, VAE,
@@ -231,7 +257,8 @@ either label.
   the synthetic-input profiles. The exact attention kernel remains
   correctness-first and quadratic in token count; its share did grow across
   the measured 1153- and 2049-token shapes, but behavior on other input
-  distributions and a faster replacement remain unproven.
+  distributions and a faster replacement remain unproven. The tested
+  one-SIMD-group replacement is explicitly rejected at the measured shapes.
 - A speedup from batched Q8_0 projection on other GPU families, quantization
   variants, or untested sequence lengths. The default route is backed by the
   bounded M2 Max A/B probe above, with an explicit rollback switch.
@@ -249,15 +276,18 @@ supported BF16 top-level route and a closed causal prefix. The older
 host-projected route remains for unsupported weights. The local batched Q8_0
 route keeps the prior GEMV path as an environment-controlled rollback; its
 additional GPU allocation is zero because it reuses existing inputs, outputs,
-and mmap-backed weights. Larger-token profiling now identifies attention as
-the next kernel candidate, not an admitted optimization. The current kernel
+and mmap-backed weights. Larger-token profiling identifies attention as a
+candidate, but removing per-key barriers by assigning one SIMD group to each
+query/head did not pass the full-forward latency gate. The current kernel
 iterates over every key for each query/head and synchronizes within each key
-step, including masked keys. The next transition is a bounded attention
-prototype that preserves image-block bidirectionality, causal cross-block
-masking, invalid-key handling, and numerical parity; it must beat the current
-full one-command-buffer forward in paired A/B measurements at the tested
-sizes, without an additional quadratic-size scratch allocation. Repeat with
-realistic input distributions before making a production-resolution claim.
+step, including masked keys. The next hypothesis is a bounded key-tiled
+attention prototype that preserves more head-dimension parallelism while
+reducing synchronization. Its discriminating test must retain image-block
+bidirectionality, causal cross-block masking, invalid-key handling, and
+numerical parity; it must beat the current full one-command-buffer forward
+on both rebuild and prefix hit in paired A/B measurements without quadratic
+scratch. A phase-only improvement is insufficient. Repeat with realistic
+input distributions before making a production-resolution claim.
 Text encoding, sampling, and VAE decode remain separate frontiers.
 
 The model-backed checks are:

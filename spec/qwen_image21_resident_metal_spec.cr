@@ -526,6 +526,93 @@ describe ML::GGUF::QwenImage21MetalBlock do
     end
   end
 
+  it "preserves mixed text and image attention with a masked key across cache rebuilds and hits" do
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
+    config, weights = qwen_image21_resident_fixture
+    token_count = 6
+    prefix_tokens = 4
+    hidden = Array(Float32).new(token_count * config.hidden_dim) do |index|
+      (((index * 23 + 7) % 43) - 21).to_f32 / 31.0_f32
+    end
+    changed_target = hidden.dup
+    (prefix_tokens * config.hidden_dim...changed_target.size).each do |index|
+      changed_target[index] += ((index % 7) - 3).to_f32 / 29.0_f32
+    end
+    changed_prefix = changed_target.dup
+    changed_prefix[0] += 0.25_f32
+    modulation = Array(Float32).new(token_count * 4 * config.hidden_dim) do |index|
+      (((index * 11 + 3) % 47) - 23).to_f32 / 131.0_f32
+    end
+    changed_modulation = modulation.dup
+    (prefix_tokens * 4 * config.hidden_dim...changed_modulation.size).each do |index|
+      changed_modulation[index] += ((index % 5) - 2).to_f32 / 173.0_f32
+    end
+    positions = Array(StaticArray(Int32, 3)).new(token_count) do |index|
+      StaticArray[index, index % 3, index % 2]
+    end
+    image_ids = [-1, -1, 0, 0, 1, 1]
+    key_valid = [true, false, true, false, true, true]
+    layers = [weights, weights]
+    stack = ML::GGUF::QwenImage21MetalLayerStackBackend.new
+    begin
+      built = stack.forward_layers(
+        hidden, token_count, modulation, positions, image_ids,
+        layers, config, key_valid, prefix_tokens,
+      )
+      built_expected = layers.reduce(hidden) do |state, layer|
+        ML::GGUF::QwenImage21BlockCPU.forward(
+          state, token_count, modulation, positions, image_ids, layer, config,
+          key_valid: key_valid,
+        )
+      end
+      built.zip(built_expected).each do |value, reference|
+        value.should be_close(reference, 8e-4_f32)
+      end
+      stack.last_stats.not_nil!.command_buffers.should eq(1)
+      stack.last_stats.not_nil!.intermediate_readbacks.should eq(0)
+
+      hit = stack.forward_layers(
+        changed_target, token_count, changed_modulation, positions, image_ids,
+        layers, config, key_valid, prefix_tokens,
+      )
+      hit_expected = layers.reduce(changed_target) do |state, layer|
+        ML::GGUF::QwenImage21BlockCPU.forward(
+          state, token_count, changed_modulation, positions, image_ids, layer, config,
+          key_valid: key_valid,
+        )
+      end
+      hit.zip(hit_expected).each do |value, reference|
+        value.should be_close(reference, 8e-4_f32)
+      end
+      stack.prefix_cache_builds.should eq(1)
+      stack.prefix_cache_hits.should eq(1)
+      stack.last_stats.not_nil!.active_tokens.should eq(token_count - prefix_tokens)
+      stack.last_stats.not_nil!.command_buffers.should eq(1)
+      stack.last_stats.not_nil!.intermediate_readbacks.should eq(0)
+
+      rebuilt = stack.forward_layers(
+        changed_prefix, token_count, changed_modulation, positions, image_ids,
+        layers, config, key_valid, prefix_tokens,
+      )
+      rebuilt_expected = layers.reduce(changed_prefix) do |state, layer|
+        ML::GGUF::QwenImage21BlockCPU.forward(
+          state, token_count, changed_modulation, positions, image_ids, layer, config,
+          key_valid: key_valid,
+        )
+      end
+      rebuilt.zip(rebuilt_expected).each do |value, reference|
+        value.should be_close(reference, 8e-4_f32)
+      end
+      stack.prefix_cache_builds.should eq(2)
+      stack.prefix_cache_hits.should eq(1)
+      stack.last_stats.not_nil!.active_tokens.should eq(token_count)
+      stack.last_stats.not_nil!.command_buffers.should eq(1)
+      stack.last_stats.not_nil!.intermediate_readbacks.should eq(0)
+    ensure
+      stack.close
+    end
+  end
+
   it "rejects a key mask that leaves an attention row without valid keys" do
     pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
     config, weights = qwen_image21_resident_fixture
