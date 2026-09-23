@@ -1,6 +1,7 @@
 # Qwen-Image 2.1 GGUF Frontier
 
-Status: active implementation frontier (2026-09-22)
+Status: active implementation frontier; larger-token attention attribution measured
+(2026-09-22)
 
 ## Goal
 
@@ -174,6 +175,30 @@ file name such as `Q4` as evidence of its actual tensor policy.
   ratios are more informative than cross-run millisecond comparisons. Set
   `QWEN_IMAGE21_Q8_BATCH_AB=1 crystal run scripts/qwen_image21_prefix_profile.cr -- MODEL.gguf 3 16 16 0`
   for the alternating route/parity probe.
+- With that Q8_0 batch route enabled, profile the same real 32-layer GGUF at
+  larger synthetic condition/target image grids, each with one text token.
+  After a warm pair, the `24x24 + 24x24` (1153-token) run used two normal
+  rebuild/hit pairs and one diagnostic split pair; the `32x32 + 32x32`
+  (2049-token) run used one normal pair and one diagnostic split pair. The
+  diagnostic path matched normal outputs exactly on both rebuild and hit
+  (`max_abs=0`). Its 418 command buffers make its phase sums unsuitable as
+  direct estimates of normal one-command-buffer latency. Within each
+  diagnostic pass, attention and the three Q8_0 Q/K/output projections took:
+
+  | Joint tokens | Attention, rebuild/hit | Q/K/output, rebuild/hit |
+  | ---: | ---: | ---: |
+  | 1153 | 29.0% / 31.3% | 54.9% / 51.1% |
+  | 2049 | 40.4% / 42.3% | 47.0% / 43.9% |
+
+  Attention is the largest individual phase at 2049 tokens and approaches
+  the three Q8_0 projections combined, but this single diagnostic sample per
+  shape does not establish a stable crossover or a new kernel's speedup. The
+  2049-token normal wall observations were `55.43 s` rebuild and `28.09 s`
+  hit (`n=1`), with noisy host load; do not compare their absolute values to
+  prior runs as an A/B. The theoretical F32 prefix K/V allocation at this
+  shape is `1074790400` bytes, not a measured total GPU working set. Reproduce
+  with `scripts/qwen_image21_prefix_profile.cr` using `1 32 32 1` for the
+  2049-token probe.
 - Reproduce the model's configured deterministic FlowMatch Euler schedule:
   linear input sigmas, exponential resolution shift over the exact
   `256..8192` sequence-length range, terminal stretching to `0.02`, and Euler
@@ -203,9 +228,10 @@ either label.
   skips condition-image projection for an ordered image-only target suffix,
   but still performs the timestep projections and a full-token output head.
 - Production-resolution throughput, image-quality, or end-to-end latency from
-  the 513-token synthetic-input profile. The exact attention kernel remains
-  correctness-first and quadratic in token count; its share may grow at larger
-  target and condition-image sequences.
+  the synthetic-input profiles. The exact attention kernel remains
+  correctness-first and quadratic in token count; its share did grow across
+  the measured 1153- and 2049-token shapes, but behavior on other input
+  distributions and a faster replacement remain unproven.
 - A speedup from batched Q8_0 projection on other GPU families, quantization
   variants, or untested sequence lengths. The default route is backed by the
   bounded M2 Max A/B probe above, with an explicit rollback switch.
@@ -223,10 +249,16 @@ supported BF16 top-level route and a closed causal prefix. The older
 host-projected route remains for unsupported weights. The local batched Q8_0
 route keeps the prior GEMV path as an environment-controlled rollback; its
 additional GPU allocation is zero because it reuses existing inputs, outputs,
-and mmap-backed weights. The next performance transition is to repeat the
-phase profile at larger token counts and realistic input distributions before
-treating attention as a settled non-bottleneck. Text encoding, sampling, and
-VAE decode remain separate frontiers.
+and mmap-backed weights. Larger-token profiling now identifies attention as
+the next kernel candidate, not an admitted optimization. The current kernel
+iterates over every key for each query/head and synchronizes within each key
+step, including masked keys. The next transition is a bounded attention
+prototype that preserves image-block bidirectionality, causal cross-block
+masking, invalid-key handling, and numerical parity; it must beat the current
+full one-command-buffer forward in paired A/B measurements at the tested
+sizes, without an additional quadratic-size scratch allocation. Repeat with
+realistic input distributions before making a production-resolution claim.
+Text encoding, sampling, and VAE decode remain separate frontiers.
 
 The model-backed checks are:
 
@@ -266,5 +298,9 @@ QWEN_IMAGE21_GGUF=/path/to/Qwen-Image-2.1-Q4.gguf \
 - Diagnostic phase splitting changes the forward output, or the Q8_0 batch
   route fails parity on Q/K/output shapes or loses its paired full-forward
   latency advantage at the tested token counts.
+- A proposed attention replacement changes same-image bidirectional,
+  cross-block causal, or invalid-key semantics; fails full-forward parity; or
+  only improves its isolated phase while regressing paired one-command-buffer
+  rebuild/hit latency or adding quadratic-size scratch.
 - A later image-quality corpus shows that the selected mixed quantization
   policy is worse than its declared baseline.
