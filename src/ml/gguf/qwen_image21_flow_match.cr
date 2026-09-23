@@ -125,7 +125,13 @@ module ML::GGUF
       latents = initial_latents.dup
       schedule.step_count.times do |index|
         model_output = yield latents, schedule.model_timestep(index), index
+        unless model_output.all?(&.finite?)
+          raise ArgumentError.new("transformer produced non-finite output at denoising step #{index}")
+        end
         latents = schedule.step(latents, model_output, index)
+        unless latents.all?(&.finite?)
+          raise ArgumentError.new("non-finite latents after denoising step #{index}")
+        end
       end
       latents
     end

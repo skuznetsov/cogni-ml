@@ -8,6 +8,85 @@ paired full-forward A/B on M2 Max (2026-09-22)
 Admit Qwen-Image 2.1 weights into the native Metal engine without treating a
 file name such as `Q4` as evidence of its actual tensor policy.
 
+## Text-to-image prototype (2026-09-22)
+
+The narrow text-to-image path uses the existing GGUF Metal DiT and FlowMatch
+driver, with the official Qwen3-VL text encoder/processor and 64-channel VAE
+running through local PyTorch/Diffusers components. Diffusers does not execute
+the transformer. This is a hybrid integration, not a fully native image engine.
+The initial route uses a deterministic seed, explicit pixel dimensions, and
+40-step guidance-free sampling.
+
+- **Admitted after evidence:** a versioned, shape-checked handoff of Qwen3-VL
+  prompt embeddings, valid-token mask, target noise, and target shape to the
+  native denoiser; a versioned, shape-checked handoff of its final latents to
+  the reference VAE decoder; and a PNG produced from an actual prompt with
+  the pinned real GGUF. On 2026-09-22, `red cube`, seed 7, 256x256, 40 native
+  DiT steps produced an RGBA PNG (SHA-256
+  `396ee177a3689ca7d9a035ab4d26ecd58a065215017df56ee64fb1d7084fd841`).
+  The official component revision was
+  `790c92633540aa0cb11d9abf19eb46d861714758`; the Diffusers source was
+  `8b3c707ebd3ec4881f4190cf42931da07eaf3b65`. The finite real-prompt
+  two-step Metal regression and all 52 Qwen-Image 2.1 Crystal examples passed;
+  the Python bridge tests passed 14 cases with one expected skip. A second
+  40-step run with the default code path reproduced both latent and PNG hashes.
+- **Guard:** Qwen-Image 2.1 consumes *unpatched* 64-channel VAE latents. Its
+  spatial sequence is `height/16 * width/16`, and each DiT token is one VAE
+  spatial location. The VLM image-placeholder mask still expands one slot to
+  four image tokens; that slot expansion is not 2x2 latent packing. Reject a
+  bridge that uses the older Qwen-Image 2x2 pack/unpack or misaligns either
+  mask with the target sequence.
+- **Reject for this transition:** image-conditioned editing, classifier-free
+  guidance, prompt rewriting, image-quality ranking, custom text-encoder/VAE
+  kernels, and further DiT speedups. These may be considered after a real
+  prompt-to-PNG run and independent layout checks.
+- **Falsifiers:** a mismatched binary length, non-finite float, wrong channel
+  order, incorrect mask/placeholder count, wrong VAE normalization, or a PNG
+  produced without executing the native GGUF denoiser. A smoke PNG is not an
+  image-quality claim; visual inspection and a reference comparison remain
+  separate checks.
+- **Known guard:** the fused BF16 text projection yields all-NaN output for
+  real Qwen3-VL embeddings on M2 Max, although its small synthetic test passes.
+  The normal transformer route now uses two separate Metal projections with
+  host GELU; `QWEN_IMAGE21_FUSED_TEXT=1` is diagnostic-only until a real-model
+  stage-by-stage parity test establishes a fix. Fused timestep and resident
+  block paths remain enabled.
+
+The observed PNG supports basic prompt adherence only; quality, reference
+parity, varied prompts and larger resolutions remain unverified. The evidence
+decays if model revisions, GGUF packing, Diffusers behavior, Metal kernels or
+the bridge schema change. Rollback is to remove the bridge and reference-side
+scripts while retaining the earlier transformer/scheduler implementation.
+
+With an isolated Python environment exposing Torch, Transformers 5.x,
+Diffusers `QwenImage21Pipeline` and Pillow, and local official model components
+under `$MODEL_DIR`, reproduce the same three boundaries as follows. `$GGUF`
+must be the pinned file below; compile the native runner with the project's
+Metal bridge before use.
+
+```sh
+MODEL_DIR=/path/to/Qwen-Image-2.1-components
+GGUF=/path/to/Qwen-Image-2.1-Q4.gguf
+crystal build --link-flags='-fuse-ld=/usr/bin/ld build/bridge.o -framework Metal -framework Foundation -lc++' \
+  scripts/qwen_image21_generate_latents.cr -o /private/tmp/qwen-image21-generate-latents
+python scripts/qwen_image21_prepare_conditioning.py \
+  --model-dir "$MODEL_DIR" --output-dir /private/tmp/qwen21-condition \
+  --prompt 'red cube' --width 256 --height 256 --seed 7
+/private/tmp/qwen-image21-generate-latents "$GGUF" \
+  /private/tmp/qwen21-condition/qwen_image21_conditioning.json \
+  /private/tmp/qwen21-latents 40
+python scripts/qwen_image21_vae_decode.py \
+  --manifest /private/tmp/qwen21-latents/qwen_image21_latents.json \
+  --model-dir "$MODEL_DIR" --output /private/tmp/qwen21-red-cube.png \
+  --device cpu --dtype float32
+```
+
+These output directories must be new or empty. The prepared bundle records
+the official model revision and payload SHA-256; the native reader checks the
+schema, payload checksum and presence of a revision before running the DiT.
+Reference components are loaded locally, without a network fallback during
+generation.
+
 ## Admitted now
 
 - Parse GGUF `qwen_image` metadata without mapping the tensor payload.
@@ -74,14 +153,12 @@ file name such as `Q4` as evidence of its actual tensor policy.
   with one text token exercises all eight shapes; against a selective reference
   that leaves only BF16 on CPU it produced `max_abs=3.8146973e-6` and cosine
   `0.9999999999996982`.
-- Keep the two dependent text projections plus GELU in one Metal command buffer,
-  and the four timestep/modulation/output-scale projections plus SiLU activations
-  in a second. These fused chains perform no intermediate host readback. A
-  synthetic chained-operator parity check covers both paths, while the real
-  outer check requires exactly two fused command buffers for the six chainable
-  projections; image input and final output remain separate. This is a
-  structural transfer/launch reduction, not yet an independently measured
-  throughput win.
+- The prototype includes a fused text-projection/GELU command buffer and a
+  separate fused timestep/modulation/output-scale command buffer. Synthetic
+  chained-operator parity covers both, but the fused text chain is disabled
+  by default after a real Qwen3-VL prompt produced NaNs; the separate BF16
+  Metal projections and host GELU are the admitted text path. The fused
+  timestep path remains in use. This is not a throughput claim.
 - Keep the resident block result on-device through affine-less LayerNorm,
   per-token output scaling, and the BF16 output projection. The final head is
   encoded as the 193rd projection dispatch in the existing stack command

@@ -364,7 +364,10 @@ module ML::GGUF
       normalized = zero_center_rms_norm(
         input, rows, config.context_dim, weights.text_norm, config.block.eps
       )
-      if fused = backend.as?(QwenImage21FusedProjectionBackend)
+      # The fused BF16 chain produces NaNs for real Qwen3-VL embeddings on M2
+      # Max, despite passing small synthetic fixtures. Keep it opt-in until a
+      # model-backed intermediate-buffer parity test explains and fixes it.
+      if ENV["QWEN_IMAGE21_FUSED_TEXT"]? == "1" && (fused = backend.as?(QwenImage21FusedProjectionBackend))
         if projected = fused.project_text_layers(
              normalized, rows, weights.text_in_layer, weights.text_out_layer
            )
