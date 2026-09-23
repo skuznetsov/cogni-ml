@@ -2,6 +2,7 @@ require "./spec_helper"
 require "../src/ml/gguf/qwen_image21_weights"
 require "../src/ml/gguf/qwen_image21_metal"
 require "../src/ml/gguf/qwen_image21_flow_match"
+require "../src/ml/gguf/qwen_image21_conditioning_bundle"
 
 private def qwen_image21_metal_bf16_weight(values : Array(Float32), out_dim : Int32, in_dim : Int32)
   raw = Bytes.new(values.size * 2)
@@ -238,7 +239,7 @@ describe ML::GGUF::QwenImage21MetalProjectionBackend do
       cosine.should be > 0.999999
       backend.metal_projection_count.should eq(32 * 6 + 8)
       backend.bf16_projection_count.should eq(8)
-      backend.fused_outer_command_count.should eq(2)
+      backend.fused_outer_command_count.should eq(1)
     ensure
       weights.close
     end
@@ -279,6 +280,40 @@ describe ML::GGUF::QwenImage21MetalProjectionBackend do
       backend.bf16_projection_count.should eq(12)
       backend.fused_outer_command_count.should eq(2)
     ensure
+      weights.close
+    end
+  end
+
+  it "keeps real Qwen3-VL text-to-image denoising finite on the default Metal route" do
+    path = ENV["QWEN_IMAGE21_GGUF"]?
+    bundle_path = ENV["QWEN_IMAGE21_CONDITIONING"]?
+    pending!("set QWEN_IMAGE21_GGUF and QWEN_IMAGE21_CONDITIONING for real prompt integration") unless path && File.file?(path) && bundle_path && File.file?(bundle_path)
+    pending!("the unsafe fused text route was explicitly enabled") if ENV["QWEN_IMAGE21_FUSED_TEXT"]? == "1"
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalProjectionBackend.available?
+
+    conditioning = ML::GGUF::QwenImage21ConditioningBundle.load(bundle_path.not_nil!)
+    weights = ML::GGUF::QwenImage21Weights.from_gguf(path.not_nil!)
+    stack = ML::GGUF::QwenImage21MetalLayerStackBackend.new
+    begin
+      result = ML::GGUF::QwenImage21LatentDenoiser.run(
+        conditioning.initial_target_latents,
+        [] of Float32,
+        conditioning.encoder_hidden_states,
+        conditioning.img_shapes,
+        conditioning.encoder_img_mask,
+        weights.transformer_weights,
+        weights.transformer_config,
+        num_inference_steps: 2,
+        encoder_hidden_states_mask: conditioning.encoder_hidden_states_mask,
+        backend: ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: true),
+        layer_stack_backend: stack,
+      )
+      result.transformer_evaluations.should eq(2)
+      result.latents.size.should eq(conditioning.initial_target_latents.size)
+      result.latents.all?(&.finite?).should be_true
+      result.latents.should_not eq(conditioning.initial_target_latents)
+    ensure
+      stack.close
       weights.close
     end
   end

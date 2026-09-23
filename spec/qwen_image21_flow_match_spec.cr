@@ -58,4 +58,13 @@ describe ML::GGUF::QwenImage21FlowMatch do
       ML::GGUF::QwenImage21FlowMatch.schedule(1, 256)
     end
   end
+
+  it "fails at the first non-finite transformer output" do
+    schedule = ML::GGUF::QwenImage21FlowMatch.schedule(2, 256)
+    expect_raises(ArgumentError, "transformer produced non-finite output at denoising step 0") do
+      ML::GGUF::QwenImage21FlowMatch.denoise([0.0_f32], schedule) do |_latents, _timestep, _index|
+        [Float32::NAN]
+      end
+    end
+  end
 end
