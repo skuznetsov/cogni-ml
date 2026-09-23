@@ -1,7 +1,7 @@
 # Qwen-Image 2.1 GGUF Frontier
 
-Status: active implementation frontier; one-SIMD attention probe rejected by
-paired full-forward A/B on M2 Max (2026-09-22)
+Status: active implementation frontier; prompt-to-PNG path admitted, with
+optimization candidates gated by real-prompt parity and paired latency checks
 
 ## Goal
 
@@ -36,20 +36,20 @@ The initial route uses a deterministic seed, explicit pixel dimensions, and
   four image tokens; that slot expansion is not 2x2 latent packing. Reject a
   bridge that uses the older Qwen-Image 2x2 pack/unpack or misaligns either
   mask with the target sequence.
-- **Reject for this transition:** image-conditioned editing, classifier-free
-  guidance, prompt rewriting, image-quality ranking, custom text-encoder/VAE
-  kernels, and further DiT speedups. These may be considered after a real
-  prompt-to-PNG run and independent layout checks.
+- **Deferred in the initial prompt-to-PNG transition:** image-conditioned
+  editing, classifier-free guidance, prompt rewriting, image-quality ranking,
+  custom text-encoder/VAE kernels, and DiT speedups. Optimization is now a
+  separate, measured transition; the other features remain deferred.
 - **Falsifiers:** a mismatched binary length, non-finite float, wrong channel
   order, incorrect mask/placeholder count, wrong VAE normalization, or a PNG
   produced without executing the native GGUF denoiser. A smoke PNG is not an
   image-quality claim; visual inspection and a reference comparison remain
   separate checks.
-- **Known guard:** the fused BF16 text projection yields all-NaN output for
-  real Qwen3-VL embeddings on M2 Max, although its small synthetic test passes.
-  The normal transformer route now uses two separate Metal projections with
-  host GELU; `QWEN_IMAGE21_FUSED_TEXT=1` is diagnostic-only until a real-model
-  stage-by-stage parity test establishes a fix. Fused timestep and resident
+- **Known guard:** the fused BF16 text projection originally yielded all-NaN
+  output for real Qwen3-VL embeddings on M2 Max. A saturated-GELU guard now
+  keeps its real projection finite, but `QWEN_IMAGE21_FUSED_TEXT=1` remains
+  opt-in because full-run latency has not improved. The default route still
+  uses separate Metal projections with host GELU. Fused timestep and resident
   block paths remain enabled.
 
 The observed PNG supports basic prompt adherence only; quality, reference
@@ -86,6 +86,50 @@ the official model revision and payload SHA-256; the native reader checks the
 schema, payload checksum and presence of a revision before running the DiT.
 Reference components are loaded locally, without a network fallback during
 generation.
+
+## Optimization evidence (2026-09-23)
+
+The pinned real `red cube`, 256x256, seed-7 path took 19.84 s for CPU prompt
+conditioning, 57.99 s for 40 native Metal DiT steps, and 9.65 s for CPU FP32
+VAE decode in one sequential cold run. These are stage observations, not a
+repeatable end-to-end speed claim. A later `--device auto` conditioning run on
+the same Mac selected CPU and reproduced the baseline binary payload SHA-256
+exactly. Automatic MPS selection was removed because the default Qwen3-VL MPS
+grouped-query attention path aborted; explicit MPS with eager attention is
+experimental. One such run produced finite embeddings
+and a PNG, but its final latents differed from CPU conditioning by relative
+L2 `0.0207`, and quality across prompts is untested. CPU remains the safe Mac
+default; CUDA selection is unchanged.
+
+The fused Metal text chain's first BF16 projection was finite; its GELU
+produced NaNs on large finite activations. Clamping only the saturated GELU
+tails (`x > 10` to `x`, `x < -10` to zero) preserved finite real-model output:
+the fused/separate text projections differed by at most `0.0002442`. The
+40-step fused run had finite latents, relative latent L2 `0.000348` against
+the default route, and a decoded PNG differing in 3216 of 65536 pixels by at
+most two channel levels. Its 58.72 s denoise observation did not establish a
+speedup against the approximately 58 s default. Keep the fused route opt-in.
+The complete post-fix Qwen-Image Metal suite passed 54 examples against the
+pinned real GGUF and conditioning bundle; the Python bridge suite passed 16
+tests with one expected skip.
+
+A run-local prompt-projection cache was prototyped and rejected for now. It
+avoided the two text matrix multiplications on later steps, and all six
+40-step runs preserved the baseline latent SHA-256. However, two on-first
+pairs favored the cache slightly while a reversed off-first pair favored
+uncached execution by 2.39 s. That falsified a robust speedup claim under
+current host noise; the added mutable state and concurrency restriction did
+not earn a place in the runtime. The evidence can be revisited if text
+projection becomes a measured bottleneck at a different prompt scale.
+
+A real 256x256 step profile attributes approximately 63% of diagnostic GPU
+phase time to the Q8_0 Q, K, and attention-output projections and 10% to
+attention itself. The diagnostic path splits a normal one-command-buffer step
+into 418 buffers, so those shares rank optimization targets but do not predict
+whole-step speedup. A proposed Q8_0 input-reuse tile passed exact output
+parity but failed the normal-path latency gate below. Projection cost remains
+the main measured target at this size, but its next optimization requires a
+different data-reuse or arithmetic hypothesis.
 
 ## Admitted now
 
@@ -154,11 +198,11 @@ generation.
   that leaves only BF16 on CPU it produced `max_abs=3.8146973e-6` and cosine
   `0.9999999999996982`.
 - The prototype includes a fused text-projection/GELU command buffer and a
-  separate fused timestep/modulation/output-scale command buffer. Synthetic
-  chained-operator parity covers both, but the fused text chain is disabled
-  by default after a real Qwen3-VL prompt produced NaNs; the separate BF16
-  Metal projections and host GELU are the admitted text path. The fused
-  timestep path remains in use. This is not a throughput claim.
+  separate fused timestep/modulation/output-scale command buffer. The real
+  Qwen3-VL fused text chain is finite after the saturated-GELU fix, but remains
+  opt-in without a measured whole-run gain; the separate BF16 Metal projections
+  and host GELU remain the default text path. The fused timestep path remains
+  in use. This is not a throughput claim.
 - Keep the resident block result on-device through affine-less LayerNorm,
   per-token output scaling, and the BF16 output projection. The final head is
   encoded as the 193rd projection dispatch in the existing stack command
@@ -322,10 +366,33 @@ bounded paired observations, not a universal kernel ranking or an image-quality
 result. A mixed text/image, invalid-key, prefix-build/hit/rebuild GPU
 regression test remains as a guard for the next attention candidate.
 
+## Rejected Q8 input-reuse tile
+
+An opt-in 8-row by 8-Q8-block Metal threadgroup tile staged each input slice
+once for four output channels, keeping the original quantized arithmetic and
+output ownership. Synthetic parity covered 16- and 17-block K dimensions,
+non-unit half scales, inactive output-channel simdgroups, and batch tails.
+Two real-prompt two-step off/on pairs in opposite orders produced identical
+latent payload hashes; the tiled route took 4.40/4.44 s versus 3.37/3.30 s
+for the existing Q8 batch route, although those process-level totals included
+pipeline setup. A warmed, alternating-order real-weight 513-token A/B then
+confirmed exact full-forward parity but median tiled/default wall ratios of
+1.375 on prefix rebuild and 1.371 on hit (`n=2` measured pairs, one warm pair).
+The corresponding median one-command-buffer GPU times were 4036/2923 ms on
+rebuild and 1999/1448 ms on hit. The candidate therefore regressed both
+paths by roughly 37%; shared-memory loads and barriers are the leading
+explanation, but their individual costs were not isolated. The prototype and
+its A/B switch were discarded.
+This rejection is scoped to the tested tile and host, not to every Q8 tiling
+strategy or GPU. Reopen only with a distinct mechanism and a paired normal
+full-forward falsifier, not an isolated kernel timing.
+
 ## Not admitted by this slice
 
-- A production-scale, end-to-end resident Metal pipeline, text encoders, VAE,
-  or decoded image generation. On the no-prefix route, layout metadata,
+- A production-scale, end-to-end resident Metal pipeline or native text encoder
+  and VAE. A decoded image exists through the hybrid reference components, but
+  is not a fully native decoded-image path. On the no-prefix route, layout
+  metadata,
   sinusoidal timestep input, and text normalization/projection are still built
   on the CPU, and the final output is read back. The causal-prefix hit route
   skips condition-image projection for an ordered image-only target suffix,
@@ -353,19 +420,16 @@ supported BF16 top-level route and a closed causal prefix. The older
 host-projected route remains for unsupported weights. The local batched Q8_0
 route keeps the prior GEMV path as an environment-controlled rollback; its
 additional GPU allocation is zero because it reuses existing inputs, outputs,
-and mmap-backed weights. Larger-token profiling identifies attention as a
-candidate, but removing per-key barriers by assigning one SIMD group to each
-query/head did not pass the full-forward latency gate. The current kernel
-iterates over every key for each query/head and synchronizes within each key
-step, including masked keys. The next hypothesis is a bounded key-tiled
-attention prototype that preserves more head-dimension parallelism while
-reducing synchronization. Its discriminating test must retain image-block
-bidirectionality, causal cross-block masking, invalid-key handling, and
-numerical parity; it must beat the current full one-command-buffer forward
-on both rebuild and prefix hit in paired A/B measurements without quadratic
-scratch. A phase-only improvement is insufficient. Repeat with realistic
-input distributions before making a production-resolution claim.
-Text encoding, sampling, and VAE decode remain separate frontiers.
+and mmap-backed weights. Larger-token profiling still identifies attention as
+a candidate, but removing per-key barriers by assigning one SIMD group to each
+query/head did not pass the full-forward latency gate. At the tested real
+256x256 prompt, Q8_0 Q/K/output projections dominate the diagnostic phase
+profile; the first input-reuse tile failed the full-forward latency gate. A
+next projection candidate must explain how it avoids that tile's shared-memory
+and synchronization cost, preserve the original route as a rollback, and beat
+normal full-step latency in paired A/B runs while retaining output parity. A
+phase-only improvement is insufficient. Text encoding, sampling, and VAE
+decode remain separate frontiers.
 
 The model-backed checks are:
 
