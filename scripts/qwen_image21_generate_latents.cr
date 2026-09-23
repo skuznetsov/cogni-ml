@@ -63,8 +63,11 @@ abort "GGUF file not found: #{gguf_path}" unless File.file?(gguf_path)
 abort "Metal backend unavailable" unless ML::GGUF::QwenImage21MetalProjectionBackend.available?
 
 conditioning = ML::GGUF::QwenImage21ConditioningBundle.load(conditioning_path)
+timing = ENV["QWEN_IMAGE21_TIMING"]? == "1"
+load_started = Time.instant
 model = ML::GGUF::QwenImage21Weights.from_gguf(gguf_path)
 stack = ML::GGUF::QwenImage21MetalLayerStackBackend.new
+loaded_at = Time.instant
 begin
   config = model.transformer_config
   puts "denoising prompt=#{conditioning.prompt.inspect} image=#{conditioning.image_width}x#{conditioning.image_height} seed=#{conditioning.seed} steps=#{steps}"
@@ -81,8 +84,15 @@ begin
     backend: ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: true),
     layer_stack_backend: stack,
   )
+  denoised_at = Time.instant
   raise "wrong number of transformer evaluations" unless result.transformer_evaluations == steps
   write_latent_bundle(output_dir, conditioning, result.latents, steps, gguf_path)
+  if timing
+    written_at = Time.instant
+    puts "timing model_load_ms=#{(loaded_at - load_started).total_milliseconds.round(3)} " \
+         "denoise_ms=#{(denoised_at - loaded_at).total_milliseconds.round(3)} " \
+         "bundle_write_ms=#{(written_at - denoised_at).total_milliseconds.round(3)}"
+  end
 ensure
   stack.close
   model.close
