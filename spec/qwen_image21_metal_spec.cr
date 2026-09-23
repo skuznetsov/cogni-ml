@@ -14,6 +14,25 @@ private def qwen_image21_metal_bf16_weight(values : Array(Float32), out_dim : In
   ML::GGUF::QuantWeight.new(raw, ML::GGUF::TensorType::BF16, out_dim, in_dim)
 end
 
+private def qwen_image21_metal_normalize_text(
+  input : Array(Float32), rows : Int32, dim : Int32,
+  weight : Array(Float32), eps : Float32,
+) : Array(Float32)
+  output = Array(Float32).new(input.size, 0.0_f32)
+  rows.times do |row|
+    offset = row * dim
+    mean_square = 0.0_f64
+    dim.times { |column| mean_square += input[offset + column].to_f64 ** 2 }
+    inv_rms = 1.0_f64 / Math.sqrt(mean_square / dim + eps)
+    dim.times do |column|
+      output[offset + column] = (
+        input[offset + column] * inv_rms * (weight[column] + 1.0_f32)
+      ).to_f32
+    end
+  end
+  output
+end
+
 # Isolates the new top-level BF16 route while retaining the already-verified
 # mixed-quant Metal projections inside each transformer block.
 private class QwenImage21CPUReferenceBF16Backend
@@ -127,6 +146,77 @@ describe ML::GGUF::QwenImage21MetalProjectionBackend do
     backend.metal_projection_count.should eq(6)
     backend.bf16_projection_count.should eq(6)
     backend.fused_outer_command_count.should eq(2)
+  end
+
+  it "keeps finite saturated GELU activations finite in the fused BF16 text chain" do
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalProjectionBackend.available?
+    first = qwen_image21_metal_bf16_weight([12.0_f32, -12.0_f32, 20.0_f32, -20.0_f32], 4, 1)
+    identity = qwen_image21_metal_bf16_weight(
+      [1.0_f32, 0.0_f32, 0.0_f32, 0.0_f32,
+       0.0_f32, 1.0_f32, 0.0_f32, 0.0_f32,
+       0.0_f32, 0.0_f32, 1.0_f32, 0.0_f32,
+       0.0_f32, 0.0_f32, 0.0_f32, 1.0_f32],
+      4,
+      4,
+    )
+    expected = [12.0_f32, 0.0_f32, 20.0_f32, 0.0_f32]
+
+    actual = ML::GGUF::QwenImage21MetalBF16.project_text_layers(
+      [1.0_f32], 1, first, identity
+    ).not_nil!
+
+    actual.count(&.finite?).should eq(actual.size)
+    actual.zip(expected).each do |value, reference|
+      value.should be_close(reference, 1e-4_f32)
+    end
+  end
+
+  it "keeps fused real Qwen3-VL text projection finite against the separated Metal route" do
+    path = ENV["QWEN_IMAGE21_GGUF"]?
+    bundle_path = ENV["QWEN_IMAGE21_CONDITIONING"]?
+    pending!("set QWEN_IMAGE21_GGUF and QWEN_IMAGE21_CONDITIONING for real text projection") unless path && File.file?(path) && bundle_path && File.file?(bundle_path)
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalProjectionBackend.available?
+
+    conditioning = ML::GGUF::QwenImage21ConditioningBundle.load(bundle_path.not_nil!)
+    weights = ML::GGUF::QwenImage21Weights.from_gguf(path.not_nil!)
+    begin
+      config = weights.transformer_config
+      rows = conditioning.encoder_hidden_states.size // config.context_dim
+      normalized = qwen_image21_metal_normalize_text(
+        conditioning.encoder_hidden_states, rows, config.context_dim,
+        weights.text_norm, config.block.eps,
+      )
+      backend = ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: true)
+      first = backend.matmul(
+        normalized, rows, weights.text_in_layer,
+        Array(Float32).new(config.hidden_dim, 0.0_f32),
+      )
+      cpu = ML::GGUF::F32Backend.new
+      first.map! { |value| cpu.gelu(value) }
+      separated = backend.matmul(
+        first, rows, weights.text_out_layer,
+        Array(Float32).new(config.hidden_dim, 0.0_f32),
+      )
+      fused = ML::GGUF::QwenImage21MetalBF16.project_text_layers(
+        normalized, rows, weights.text_in_layer, weights.text_out_layer,
+      ).not_nil!
+
+      fused_finite = fused.count(&.finite?)
+      separated_finite = separated.count(&.finite?)
+      max_abs = 0.0_f64
+      if fused_finite == fused.size && separated_finite == separated.size
+        fused.zip(separated).each do |actual, expected|
+          max_abs = Math.max(max_abs, (actual - expected).abs)
+        end
+      end
+      fused.size.should eq(rows * config.hidden_dim)
+      separated.size.should eq(fused.size)
+      separated_finite.should eq(separated.size)
+      fused_finite.should eq(fused.size)
+      max_abs.should be < 1.0e-2
+    ensure
+      weights.close
+    end
   end
 
   it "matches the CPU reference for one real mixed-quant transformer block" do
