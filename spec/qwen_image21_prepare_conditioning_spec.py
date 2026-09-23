@@ -8,6 +8,7 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -52,6 +53,41 @@ class QwenImage21PrepareConditioningSpec(unittest.TestCase):
         }
         arguments.update(overrides)
         return MODULE.write_conditioning_bundle(**arguments)
+
+    @staticmethod
+    def fake_torch(*, mps_available: bool, cuda_available: bool):
+        return SimpleNamespace(
+            backends=SimpleNamespace(
+                mps=SimpleNamespace(is_available=lambda: mps_available)
+            ),
+            cuda=SimpleNamespace(is_available=lambda: cuda_available),
+        )
+
+    def test_auto_prefers_cpu_to_unvalidated_mps_but_keeps_cuda(self) -> None:
+        mps_only = self.fake_torch(mps_available=True, cuda_available=False)
+        self.assertEqual("cpu", MODULE._resolve_device(mps_only, "auto"))
+        self.assertEqual("mps", MODULE._resolve_device(mps_only, "mps"))
+
+        mps_and_cuda = self.fake_torch(mps_available=True, cuda_available=True)
+        self.assertEqual("cuda", MODULE._resolve_device(mps_and_cuda, "auto"))
+
+    def test_mps_eager_attention_is_opt_in_and_restricted_to_mps(self) -> None:
+        self.assertEqual({}, MODULE._text_encoder_attention_kwargs("cpu", False))
+        self.assertEqual({}, MODULE._text_encoder_attention_kwargs("cuda", False))
+        with self.assertRaisesRegex(ValueError, "requires --mps-eager-attention"):
+            MODULE._text_encoder_attention_kwargs("mps", False)
+
+        with self.assertWarnsRegex(RuntimeWarning, "not yet quality-validated"):
+            self.assertEqual(
+                {"attn_implementation": "eager"},
+                MODULE._text_encoder_attention_kwargs("mps", True),
+            )
+
+        for device in ("cpu", "cuda"):
+            with self.subTest(device=device), self.assertRaisesRegex(
+                ValueError, "requires --device mps"
+            ):
+                MODULE._text_encoder_attention_kwargs(device, True)
 
     def test_writes_versioned_manifest_and_exact_little_endian_payload_layout(self) -> None:
         manifest_path = self.write_bundle()

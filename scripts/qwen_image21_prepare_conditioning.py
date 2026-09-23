@@ -7,7 +7,9 @@ or VAE, so all denoising remains in the native Crystal/Metal engine.
 
 The output directory contains `qwen_image21_conditioning.json` and
 `qwen_image21_conditioning.bin`. Tensor offsets and dtypes are described by the
-versioned JSON manifest.
+versioned JSON manifest. Automatic device selection uses CUDA when available
+and otherwise CPU. MPS must be requested explicitly with eager attention;
+MPS prompt embeddings are not yet quality-validated against the CPU path.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import importlib.metadata
 import json
 import re
 import sys
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -266,8 +269,6 @@ def _validate_model_directory(model_dir: Path) -> dict[str, Any]:
 
 def _resolve_device(torch, requested: str) -> str:
     if requested == "auto":
-        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            return "mps"
         if torch.cuda.is_available():
             return "cuda"
         return "cpu"
@@ -278,6 +279,28 @@ def _resolve_device(torch, requested: str) -> str:
     if requested == "cuda" and not torch.cuda.is_available():
         raise ValueError("CUDA was requested but is not available")
     return requested
+
+
+def _text_encoder_attention_kwargs(
+    device: str, mps_eager_attention: bool
+) -> dict[str, str]:
+    """Opt into eager attention only for explicitly selected experimental MPS."""
+    if device == "mps" and not mps_eager_attention:
+        raise ValueError(
+            "--device mps requires --mps-eager-attention; the default MPS attention "
+            "path is unsupported for Qwen3-VL conditioning"
+        )
+    if mps_eager_attention and device != "mps":
+        raise ValueError("--mps-eager-attention requires --device mps")
+    if not mps_eager_attention:
+        return {}
+    warnings.warn(
+        "Experimental MPS eager attention selected; MPS-generated embeddings are "
+        "not yet quality-validated against the CPU path.",
+        RuntimeWarning,
+        stacklevel=2,
+    )
+    return {"attn_implementation": "eager"}
 
 
 def _installed_diffusers_commit() -> str | None:
@@ -294,7 +317,12 @@ def _installed_diffusers_commit() -> str | None:
     return None
 
 
-def _load_local_pipeline(model_dir: Path, device: str, dtype_name: str):
+def _load_local_pipeline(
+    model_dir: Path,
+    device: str,
+    dtype_name: str,
+    mps_eager_attention: bool = False,
+):
     try:
         import torch
         import diffusers
@@ -312,6 +340,9 @@ def _load_local_pipeline(model_dir: Path, device: str, dtype_name: str):
         "float16": torch.float16,
         "float32": torch.float32,
     }[dtype_name]
+    attention_kwargs = _text_encoder_attention_kwargs(
+        requested_device, mps_eager_attention
+    )
     try:
         processor = AutoProcessor.from_pretrained(
             str(model_dir / "processor"), local_files_only=True
@@ -321,6 +352,7 @@ def _load_local_pipeline(model_dir: Path, device: str, dtype_name: str):
             local_files_only=True,
             torch_dtype=dtype,
             low_cpu_mem_usage=True,
+            **attention_kwargs,
         )
     except Exception as exc:
         raise RuntimeError(
@@ -352,6 +384,7 @@ def prepare_conditioning(
     revision: str | None = None,
     device: str = "auto",
     dtype_name: str = "bfloat16",
+    mps_eager_attention: bool = False,
 ) -> Path:
     """Run official prompt/noise preparation locally and write a bundle."""
     model_root = Path(model_dir)
@@ -378,7 +411,7 @@ def prepare_conditioning(
         raise ValueError("dtype must be bfloat16, float16, or float32")
 
     torch, diffusers, pipeline, device_name = _load_local_pipeline(
-        model_root, device, dtype_name
+        model_root, device, dtype_name, mps_eager_attention=mps_eager_attention
     )
     try:
         with torch.inference_mode():
@@ -444,7 +477,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--height", type=int, default=1024, help="output image height (multiple of 32)")
     parser.add_argument("--seed", type=int, default=0, help="CPU-generator seed for initial noise")
     parser.add_argument("--revision", help="full Hugging Face source commit SHA; inferred from cache if available")
-    parser.add_argument("--device", choices=("auto", "cpu", "mps", "cuda"), default="auto")
+    parser.add_argument(
+        "--device",
+        choices=("auto", "cpu", "mps", "cuda"),
+        default="auto",
+        help=(
+            "auto selects CUDA when available, otherwise CPU; MPS requires "
+            "--mps-eager-attention and is not quality-validated"
+        ),
+    )
+    parser.add_argument(
+        "--mps-eager-attention",
+        action="store_true",
+        help=(
+            "experimental: required with --device mps to use eager attention; "
+            "MPS embeddings are not yet quality-validated"
+        ),
+    )
     parser.add_argument("--dtype", choices=("bfloat16", "float16", "float32"), default="bfloat16")
     args = parser.parse_args(argv)
     try:
@@ -458,6 +507,7 @@ def main(argv: list[str] | None = None) -> int:
             revision=args.revision,
             device=args.device,
             dtype_name=args.dtype,
+            mps_eager_attention=args.mps_eager_attention,
         )
     except Exception as exc:
         print(f"qwen_image21_prepare_conditioning: error: {exc}", file=sys.stderr)
