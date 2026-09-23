@@ -27649,3 +27649,725 @@ Refresh after source/toolchain/device/model/workload changes.
   Stop single-buffer retuning without a new hardware/compiler/bottleneck
   premise. Other FFN opportunities remain unproven, not exhausted. Refresh
   after source/model/input/device/toolchain/scheduling changes.
+
+### LM-1056 — Standalone full-prefill stage split passes one two-call diagnostic
+
+- Added default-off `QWEN35_FULL_PREFILL_STAGE_SPLIT=1` only for standalone
+  ordinary F32 full attention: prepare/KV write, attention, output/FFN. Each
+  ended stage waits successfully before a successor is allocated. Shared,
+  adaptive and F16 routes bypass it; failed partial KV is not reusable.
+- Model-free combined suite: 21 examples, no failures/errors/pending; CPU-only
+  and release-provider builds pass. Correlated Luna review found no blocker
+  for one guarded serialized replay, not production stability.
+- One replay completed both calls: 585 paired stage records / 195 layer calls;
+  captured first tool/count match, second resident-prefix hit and saved output
+  digest match. Second input: 8035 prompt / 7839 cached / 196 suffix / 8845
+  capacity. Second provider wall 7048.7ms; no speed comparison is admitted.
+- All memory/timeout guards retained, fusion/FFN reuse OFF; 45 observer samples,
+  zero errors, minimum free 48%. No retries or additional GPU workloads.
+- ROBUST scoped diagnostic/output result; no root-cause, state parity or
+  production-fix claim. Prior unsplit failures are different builds/processes/
+  host times. Next: same-binary unsplit/split discriminator, retaining stop on
+  first GPU failure, before reducing to a two-stage cut or changing kernels.
+- Source/binary/log hashes and commands: `docs/qwen-prefill-command-trace.md`,
+  "Standalone stage split: one successful two-call replay". Temporary root
+  `/private/tmp/qwen-stage-split.NCS57S/`; refresh on source/model/device/input/
+  toolchain/scheduling drift or loss of evidence. Existing FFN WIP stays uncommitted.
+
+### LM-1057 — Same-binary unsplit control fails; diagnostic series stopped
+
+- Reused LM-1056's successful ON binary, pinned inputs and runtime controls with
+  stage split OFF; manifests unchanged, no rebuild. Model identity is stat-based.
+  Metadata-only checks pass; one GPU OFF exits1, call1 captured tool/count pass,
+  call2 fails Impacting Interactivity at full layer7, start7839/rows195.
+  122 paired layer calls, zero stages; checker rejects replay. No new ON or retry.
+- Second-prefill entrance inventories exactly match prior ON: pipelines53,
+  scratch915/4,342,707,224B, live1076/22,950,743,664B, Metal22,955,573,248B.
+  This narrows recorded-cache-growth explanations at that boundary only;
+  hidden driver state and within-command resource pressure remain unmeasured.
+- Guards unchanged:35% free/24GiB/300s/chunk2048/group1/cooldown50ms, fusion and
+  FFN reuse OFF. 49 samples, zero errors, minimum free43%, no guard kill.
+  Checker controls cover positive, failed replay, wrong arm and missing full
+  stage triplet. Source/binary manifests rechecked after run without drift.
+- ROBUST observed contrast, not causal isolation: prior ON was hours earlier.
+  Rebuild confound removed; host/time/order remain. No fix, tensor-parity or
+  speed claim; defaults unchanged. Next inspect a smaller stage cut and lazy
+  pipeline placement read-only before a separate guarded experiment.
+- Commands/hashes/claim bounds: `docs/qwen-prefill-command-trace.md`,
+  "Same-binary unsplit control fails; series stopped"; temporary evidence
+  `/private/tmp/qwen-stage-ab.kIMKDt/` plus LM-1056's ON root. Refresh after
+  source/model/device/input/toolchain/scheduling drift or loss of evidence.
+- Read-only follow-up (same source/logs): the 15 standalone suffix layers have
+  median prepare/attention/output waits 4.860/159.103/16.322ms; whole-layer time
+  outside these waits is only 0.721..1.412ms. Earlier attention waits exceed600ms
+  successfully; all nine suffix memory samples keep pipelines53. No new GPU run.
+  Native owned-reference release moves with waits; Scratch stays retained. Proposed
+  next discriminator: keep only the cut after attention, no precision/kernel
+  changes. This is not implemented or a stability/speed certificate. See the
+  diagnostic document's "Stage-boundary inspection"; 21 model-free specs pass.
+
+### LM-1058 — Two-stage prefill diagnostic implemented, GPU gate still open
+
+- `QWEN35_FULL_PREFILL_STAGE_SPLIT=after_attention` combines PrepareKV and
+  attention, retaining only the cut before output/FFN. The skipped cut keeps
+  the same unsubmitted command; a failed wait cannot allocate a successor.
+  Mode is captured once. Legacy `1`, standalone/F32 admission and default OFF
+  remain unchanged; no kernel, precision, layout or operation-order change.
+- RED: new factory missing. GREEN: 25 model-free stage/trace/tail/lease specs,
+  format checks, diff check, CPU-only generator and release Metal provider
+  builds. Bounded Luna source review ROBUST for admission/control flow only.
+- No GPU workload or stability/parity/speed promotion. Next: separate guarded
+  two-call replay with fresh identity and a two-stage-aware trace checker;
+  retain 35% free/24GiB/300s and first-failure stop, fusion/FFN reuse OFF.
+- Evidence/commands: `docs/qwen-prefill-command-trace.md`, "Two-stage
+  implementation". Builds include pre-existing separate FFN WIP; that WIP
+  stays outside this commit. Refresh on source/toolchain/device/input drift.
+
+### LM-1059 — Two-stage prefill passes one guarded two-call replay
+
+- One GPU attempt on LM-1058 implementation `23b6acf4`; no production edits.
+  Metadata-only input equals prior dry capture; source/bridge/runner/sampler/
+  binary/input hashes checked pre/post, model identity stat-based and unchanged.
+  Existing separate FFN WIP present in build, fusion and FFN reuse OFF.
+- Exit0/sampler0: 195 returned instrumented layers, 390 paired stage waits;
+  no separate PrepareKV stage. First tool/count assertion passes; second uses
+  resident prefix (8035 prompt/7839 cached/196 suffix/8845 capacity), no tools,
+  saved output SHA match. Independent awk count agrees with trace checker.
+- Checker qualification passes: synthetic transformed positive (not GPU
+  evidence), actual failed replay negative, missing terminal/whole-layer stages
+  and old-mode rejection. Parent reran Luna-authored checks; correlated review.
+  25 model-free specs pass. ROBUST scoped output/trace result, not a fix.
+- Provider walls 76,713.4/7,013.2ms; launcher 91,208.225ms includes fixed7.1s
+  tool delay. Prior three-stage second wall7,048.7ms is not balanced speed
+  evidence. No tensor/state parity or causal watchdog-fix claim.
+- All safety bounds retained:35%/24GiB/300s, chunk2048/group1/cooldown50ms.
+  Observer46 samples, errors0, free79% initial/min45%, no kill or GPU failure;
+  no second attempt. Quiet waiting disabled under standing operator authority.
+- Scope: successful single diagnostic, not production stability. Earlier KV
+  cut was unnecessary for this observed pass; the remaining cut is not proven
+  to prevent the intermittent failure. Defaults remain OFF. Next inspect the
+  existing traces before selecting further experiments; do not mix FFN work.
+- Commands/hashes/controls: `docs/qwen-prefill-command-trace.md`, "Two-stage
+  replay"; `/private/tmp/qwen-two-stage.vlxfep/`. Refresh after source/model/
+  device/input/toolchain/scheduling drift or loss of temporary evidence.
+
+### LM-1060 — Matched prefill traces select a long-prefix SG4 operator probe
+
+- Read-only comparison of LM-1059 and prior pinned captures; no GPU run or
+  production change. Matched all 195 successful instrumented layer keys.
+  Prefix7839/rows195: 15 enclosing full-layer calls total2715.734/2714.097ms
+  for three/two stages; three-stage attention waits2385.079ms (87.8% of that
+  subset, not the request). These are host waits, not isolated GPU intervals.
+- Nine suffix memory inventories match; pipelines remain53. This narrows
+  measured cache growth, not hidden driver allocation or watchdog causality.
+- Source/config selects F32 SG4 pregate for rows195 and direct-gate for
+  rows1668; threshold1024 ignores prefix length. Luna corroborated routing;
+  correlated review, not independent performance evidence. LM-414 short-pp64
+  regression/noise remains a reason not to lower the global threshold.
+- Next PROPOSED: no-model F32 direct/pregate oracle/canary check then balanced
+  timing at prefix7839/rows193..196, with prefix0/rows64 and195 controls.
+  Keep defaults/precision unchanged; stop on failed correctness or inconclusive
+  benefit. Only repeatable operator benefit admits a separate model-state gate.
+- Comparison script, three SG4 source-safety specs and unchanged-manifest
+  verifier pass. ROBUST for accounting/routing only, no speed or causal fix.
+  Commands/digests: docs/qwen-prefill-command-trace.md, "Matched-shape trace
+  inspection". Refresh on source/config/input/device/toolchain drift or lost
+  evidence; retain35%/24GiB/300s and first-failure stop for future GPU probes.
+
+### Continuation 2026-09-17 — Direct-gate provider replay stopped by memory guard
+
+- Active goal remains reliable two-call coding replay; register experiments
+  and Random Attention are not implementation priorities. Existing env-only
+  `QWEN35_PREFILL_ATTN_ROWS_SG4_DIRECT_GATE_MIN=1` is the next route discriminator,
+  not a default change or established fix. FFN capacity reuse stays OFF.
+- Fresh pinned build, retained session/prompt/tools identity and metadata-only
+  replay pass; 17 SG4/trace specs pass. One model run stopped in call one's
+  first chunk: preflight free66%, runner kill34% at35% threshold, observer
+  min30%, final57%; exit1, launcher12.823s, no second call. Probe exited.
+- The sampled guard can overshoot. No Metal -6 or short-suffix route outcome
+  was observed; neither direct-gate benefit nor regression is established.
+  Stop-on-first-failure honored; no repeat or weakened safety limits.
+- Next: budget initial model/workspace headroom before a separately bounded
+  replay of the still-open discriminator. Standing authority permits safe
+  local tests, not weakening guards, unrelated process control or another
+  unguarded Xcode replay. Refresh source/model/device/input identity first.
+- Details, exact commands/digests and scope: `docs/qwen-prefill-command-trace.md`,
+  "Direct-gate two-call discriminator"; ephemeral `/private/tmp/qwen-direct-replay.zsmdyT/`.
+
+### Continuation 2026-09-17 — Reject low-headroom replay before model load
+
+- Added explicit read-only `scripts/qwen_two_call_preflight.py` for this
+  64-GiB ordinary-F32 replay, not a global runner change. Initial target80%
+  = runtime35% + observed37pp + policy reserve8pp; heuristic, not a demand
+  bound, physical-GiB calculation or stable-inference certificate.
+- Five unit test methods pass after the missing-script red. Live query61%
+  rejected with exit75; no GPU/build followed. Runtime guard/cap/timeout/lease
+  remain mandatory; snapshot admission neither reserves memory nor checks
+  model/device/route identity. Existing launcher attempt remains consumed.
+- Next: adequate initial headroom, fresh identity check and separately bounded
+  direct-gate replay. Do not lower safeguards or stop unrelated processes.
+  Details and removal/recalibration trigger: `docs/qwen-prefill-command-trace.md`.
+
+### Continuation 2026-09-18 — One operator-admitted direct-gate replay passes
+
+- Operator allowed one79% start; runtime35%/24GiB/timeout/lease unchanged.
+  Both calls completed, cached7,839/suffix196 and second output digest matched.
+  Observer50 samples: 79->minimum41->73%, no errors; launcher101.907s, exit0.
+  Call1 total85.153s; call2 total8.417s. Not a speed comparison.
+- Pinned binary/source identity revalidated; metadata dry and17 no-GPU specs
+  passed. Existing FFN WIP untouched. Fresh one-shot artifact directory:
+  `/private/tmp/qwen-direct-replay-79.tqxjyp/`; attempt consumed, no repeat.
+- ROBUST bounded replay only. Global direct-gate switch also covers later
+  rows4; causal attribution and tensor parity remain open. Next discriminator:
+  separately admitted same-input default-gate control, not default promotion.
+  See `docs/qwen-prefill-command-trace.md`; refresh on identity/artifact drift.
+
+### Continuation 2026-09-18 — Operator selects replay admission75/runtime30
+
+- Supersedes the earlier80/35 replay profile, not global runner defaults.
+  New74/75 boundary tests went red then all five methods passed. Cap24GiB,
+  timeout300s, command watchdog180s, lease and one-attempt stop rule retained.
+- Default-gate control prepared at `/private/tmp/qwen-default-gate.KW6gCL/`:
+  pinned binary/source/model verified, metadata dry passed; only gate override
+  removal and runtime floor30 differ. Live launch admission74% rejected before
+  model load; no GPU attempt consumed. Next: same control at >=75 with fresh
+  identity check. No new timing, parity or runtime-shutdown evidence.
+
+### Continuation 2026-09-18 — Default-gate control fails at second-call layer35
+
+- Operator said proceed after74% refusal; actual launch75% passed the unchanged
+  profile. One attempt, runtime30/cap24GiB/timeout300s/lease retained. Pinned
+  source/model/binary matched. No retry; wrapper now consumed.
+- Call1 completed80.767s; call2 input matched cached7,839/suffix196. At
+  start7839/rows195/layer35, Metal Impacting Interactivity -> completion -6.
+  No second result. Exit1, observer0, wall93.716s;46 samples75->min39->71%,
+  no collection errors, memory kill or runner timeout. Known processes exited.
+- ROBUST reproduction, not causal proof or speed evidence. Candidate direct
+  route passed but host/headroom/order/runtime floor differ; failed layer is
+  not a per-kernel attribution. Next inspect failed command and qualify a
+  same-guard route discriminator. Do not promote defaults from this pair.
+  Logs/hashes/scope: `docs/qwen-prefill-command-trace.md`, default-gate result.
+
+### Continuation 2026-09-18 — Opt-in actual pipeline binding trace
+
+- Source/log audit scopes layer35 failure to one standalone multi-kernel
+  command through FFN/final add; the earlier shared append ID is not its ID.
+  ROBUST bounded inventory, not attention-kernel causal attribution.
+- Added cached-prefix `COGNI_METAL_PIPELINE_TRACE_PREFIX` diagnostic at the
+  actual non-CPU `ComputeEncoder#set_pipeline` binding. Names are escaped;
+  records flush with native command/encoder handles, sink failures are ignored.
+  Unset/empty is off. No new GPU scheduling or routing operation.
+- Red missing-helper spec followed by22 passing pipeline/command/SG4 tests;
+  normal two-call provider `--no-codegen` passed from crystal_ball with CLT.
+  CPU-only provider check blocked at undefined Device in qwen35_cpu.cr:556;
+  no CPU-only success claimed. No GPU/model load or linked build this slice.
+- Selection is not execution or failure attribution; handles can be reused,
+  synchronous logging can perturb timing. Next rebuild/pin one instrumented
+  binary for same-input/same-trace direct/default comparison at75/30 with
+  existing cap/timeout/lease/first-failure safeguards. Prior attempts consumed.
+  Root cause, parity and default promotion remain open. Refresh on encoder,
+  routing/model/input/device/toolchain drift; unset prefix to disable tracing.
+  Details and remaining claim boundaries: `docs/qwen-prefill-command-trace.md`.
+
+### Continuation 2026-09-18 — Instrumented direct succeeds; control awaits75%
+
+- Fresh release build plus both metadata dry routes and22 focused specs pass.
+  Source/binary/input identical across prepared arms; only direct-gate minimum
+  differs. Shared trace prefix and75/30, cap24GiB/300s/watchdog180s/lease0 retained.
+- One direct attempt passes both calls; layer35/start7839/rows195 explicitly
+  binds SG4 direct and returns. Second content digest matches, no tool calls.
+  Launcher93.767s; call1 77.937s, call2 6.409s.46 samples75->min43->72%, no errors
+  or failure signatures; final observer sees no workload tree. Not a speed claim.
+- Default admission72% returned75 before attempt/model/GPU. Direct consumed;
+  default pending, with dry/manifest ready. Admission refusal is not an attempt;
+  first launched failure seals pair. Next unchanged wrapper `run default` only
+  at>=75 with fresh identity check. No lower guard or unrelated process control.
+- ROBUST direct replay/actual binding; same-guard pair, causal attribution,
+  parity beyond checked output and default promotion remain open. Artifacts,
+  hashes, exact continuation: docs/qwen-prefill-command-trace.md, top section;
+  `/private/tmp/qwen-pipeline-pair.JKEUrc/`. Refresh on identity/artifact drift.
+
+### Continuation 2026-09-18 — Traced default failure; operator admission70/30
+
+- Operator reduced scoped64GiB replay admission75->70, runtime30 unchanged.
+  Actual admission78; no below75 startup evidence. Cap/timeout/watchdog/lease
+  and pinned binary/input/numerical controls preserved. No global runner edit.
+- Default call1 completed, call2 failed start7839/rows195/layer23 sequence7,
+  actual SG4 pregate binding, Impacting Interactivity/-6. Direct completed
+  the same shape/layer. Earlier default failed layer35: location is variable.
+- Exit1/observer0, wall91.627s;45 samples78->min45->75%, no collection errors,
+  memory kill or timeout, final workload tree absent. Both attempts consumed;
+  pair-stopped forbids retry. ROBUST scoped reproduction/stop, not kernel blame.
+- Checker changed only after post-run identity validation. Red75->green70
+  admission specs:5 methods pass; refusal exit code75 retained. Old manifests
+  intentionally stale and consumed. Rollback policy to75 without resetting runs.
+- Next inspect multi-kernel command stage/budget, not repeat the same replay.
+  Root cause, speedup/default promotion remain open. Evidence/hashes and decay:
+  docs/qwen-prefill-command-trace.md, top section; pair directory above.
+
+### Continuation 2026-09-18 — Suffix-only direct succeeds with tiny pregate retained
+
+- Existing gate195 is a new discriminator, not another split or consumed retry:
+  observed rows195 switch to direct; earlier/later4/8 stay pregate. No engine
+  edits/default promotion. All260 compiled/input hashes and binary/model identity
+  match; metadata dry and31 focused specs pass (CLT, isolated Crystal cache).
+- One attempt admitted78%,70/30 controls retained; exit0/observer0, both calls
+  complete, expected second-output digest. Route checker covers195 standalone
+  calls:15 suffix direct,60 tiny pregate. Synthetic positive +4 negatives qualify
+  checker only.44 samples78->min45->76%, no errors/kill/timeout; tree exits.
+- Call2 6.234s, prefill+top1 3.311s, decode-body9.43 tokens/s; not a speedup
+  comparison. ROBUST bounded replay: tiny route changes unnecessary for this
+  success, not causal/stability proof. Luna review is correlated, not replication.
+- Attempt consumed. Next investigate context-aware routing across suffix lengths
+  and short-prefix regression controls;195 is a diagnostic separator, not a
+  justified universal threshold. Earlier splits are not a new discriminator.
+  Evidence/hash/decay scope: docs/qwen-prefill-command-trace.md top section,
+  `/private/tmp/qwen-suffix195.3gnnjT/`. Preserve unrelated FFN/memory WIP.
+
+### Continuation 2026-09-19 — Direct full-shape neighbors pass synthetic oracle
+
+- Model-free diagnostic adds six exact F32 shapes: prefix7839/rows193..196,
+  prefix0/rows64,195. Unlike legacy single-command64-row slice, new mode checks
+  every row. No production route/kernel/default change; no27B weights loaded.
+- Six fresh PIDs, one command each, all first attempts pass Float64 oracle and
+  trailing canaries; max absolute error1.081e-6 <1e-5. Source/binary identity
+  stable; admission79%, configured70/30, cap2GiB,120s, watchdog180s, lease0.
+  No Metal error/kill/timeout. Series consumed; no retries.19 focused specs,
+  self-test negative controls, invalid CLI, format and diff checks pass.
+- Private current bridge built with Xcode (shared object lacks metadata symbols;
+  CLT native headers unavailable). Shared bridge and unrelated WIP untouched.
+- ROBUST bounded synthetic direct execution, correlated Luna review, separate
+  six-log/PID check. Not model parity, root cause, speed or stability. Separable
+  K/V fixture and single submissions limit generality. Next inspect context-aware
+  route/cost boundary and real-input neighboring shapes with short-prefix controls;
+  do not promote195 as universal threshold or repeat consumed experiments.
+- Evidence, hashes and identity-drift refresh: docs/qwen-prefill-command-trace.md
+  top section; `/private/tmp/qwen-direct-neighbors-build.LYTGib/` and launcher
+  `/private/tmp/qwen-direct-neighbors.pTeZdX/run.py`. Rollback removes probe mode.
+
+### Continuation 2026-09-19 — Real-model direct SG4 append parity passes
+
+- Added standalone F32 two-state diagnostic for prefix256/append195 and
+  prefix7839/append193, public code tokens, actual Qwen3.8-27B Q4_K_M weights.
+  One synchronized direct prefix is deep-copied; ordinary rows versus direct
+  full-width append, Flash off, no warmup/retry or production/default change.
+- Both first attempts pass:256 distinct state buffers; all live KV/conv/SSM
+  and four full-logit vectors numerically exact (max difference0); top1 4/4,
+  ranked top2 8/8, ECS1 per case, identical ` seen = set()` continuation.
+  Long case checks8032 live rows after append,8035 after three consumed tokens.
+  Sixteen row/direct bindings per completed interval; dry/live input hashes and
+  all131 source/bridge/launcher identities plus binary/model stat unchanged.
+- Startup80/78%, minimum52/42%, configured70/30;24GiB/300s/180s watchdog/lease0.
+  Processes and observers exit0,13/59 error-free samples, no Metal failure,
+  guard kill or timeout; final trees absent. Series consumed, no replay.
+- Build/dry/run pass; comparator/CLI self-test,13 focused Crystal examples,
+  five preflight tests, trace negatives, format/diff and separate log checks
+  pass. Correlated Luna review ROBUST for the scoped append agreement.
+- Row/direct append wall4.489/2.363s and6.458/4.044s are fixed-order/unwarmed
+  diagnostics, not speedup evidence. Shared prefix masks common-prefix errors;
+  no independent correctness, complete coding quality, QBit or stability claim.
+  Next: predeclare balanced timing discriminator; keep default routing unchanged.
+  Evidence/hashes/decay: docs/qwen-prefill-command-trace.md real-model section;
+  `/private/tmp/qwen-sg4-model.h5PWz3/`. Rollback removes only the new probe.
+
+### Continuation 2026-09-19 — Warm balanced timing narrows the speed claim
+
+- Added optional `--timing` to the bounded real-model probe: immutable prefix,
+  one reset working state, warmABBA then measuredABBA/BAAB twice; eight samples
+  per arm. Time append+head+fence only; reset/hash checks outside timer, trace
+  disabled, no production/default/kernel changes. No trimming or retries.
+- Short256/195 completes: row median2380.081ms, directSG4 median2328.562ms,
+  latency reduction2.1646%, ratio1.02212. All four blocks favor SG4 but none
+  meets predeclared >3% gate. Prior unwarmed large difference is not retained
+  as speed evidence. All20 passes match tensor-byte hashes and full logits;
+  measured pipeline entries33 unchanged. Position is not part of the hash.
+- Long7839/193 fails during initial shared-prefix construction with Metal
+  Impacting Interactivity/completion_status=-6, before copy/arm/warmup/timing.
+  Zero timing samples: no long speed/parity claim. Initial81%, minimum50%,
+  observer0/process1; short82%/54%, both final trees absent. No memory kill or
+  process timeout. This reopens prefix stability; command/layer/cause unknown.
+- Build/dry/self-test/report negatives/statistics controls pass;19 focused
+  Crystal examples,5 Python admission tests, format/diff and separate raw-log
+  statistics/identity checks pass. Correlated Luna verdict ROBUST short-only;
+  overall two-shape timing IN_PROGRESS. Series consumed, no complete marker.
+- Next: instrument initial-prefix command boundaries in a separately declared
+  diagnostic before another long timing attempt. Keep70/30%,24GiB,300s/180s,
+  lease0 and authorized quiet bypass; no blind replay or routing promotion.
+  Evidence/hashes/identity-drift refresh: docs/qwen-prefill-command-trace.md warm
+  timing section, `/private/tmp/qwen-sg4-timing.oUzWgP/`. Unrelated WIP preserved.
+
+### Continuation 2026-09-19 — Prefix-only command trace completes
+
+- Added exact7839/193 `--prefix-trace` mode: same initial prefix and F32
+  capacity8036; existing command tracing only, no copy/append/timing afterwards.
+  Exclusive CLI modes, explicit control object and prefix token hash. No
+  production/kernel/default change. Source/model/bridge matches failed timing.
+- One GPU attempt completes:64 paired ordinary command waits,16 per chunk
+  (0/2048,2048/2048,4096/2048,6144/1695). No failure reproduced; no kernel
+  attribution. First host commit/wait9052.165ms, cursors0->7; following chunk
+  maxima1482.338/1730.654/1689.600ms. These are not GPU execution intervals.
+- Exit0/observer0, startup81%, min48%,38 clean memory samples, final tree absent;
+  guards70/30%,24GiB,300s/180s,lease0 unchanged. No retry. Build/dry/self-test
+  (12 CLI negatives),11 trace specs, format/diff and separate pairing/identity
+  checks pass. Dry-only JSON array/object mismatch fixed before GPU admission.
+- ROBUST one traced completion; intermittent untraced failure remains open.
+  A pass does not show tracing fixed the failure or first command caused it.
+  Next: separately instrument host wait versus completed GPU interval through
+  existing boundary profiler, keeping explicit cooldown/graph policy fixed;
+  do not turn missing GPU timestamps into zeros or infer compilation uniquely.
+  Details/hashes/refresh: docs/qwen-prefill-command-trace.md initial-prefix
+  section, `/private/tmp/qwen-prefix-trace.8nRDsz/`. Earlier attempts consumed;
+  unrelated WIP preserved. Long two-shape timing is still IN_PROGRESS.
+
+### Continuation 2026-09-19 — Prefix host/GPU separation measured
+
+- Added long-shape-only `--prefix-profile`: existing trace plus boundary GPU
+  interval profiler, one F32 state, no append/copy/timing. Old trace mode and
+  production/kernel/routing unchanged. Same tokens/capacity/chunk/group/cooldown;
+  source/bridge/model pinned against failed timing, new probe/binary pinned.
+- One run passes64 paired waits/profiles. First host wait9793.106ms versus
+  GPU1417.325ms:8375.781ms outside GPU interval (85.5%), encode106.789ms separate.
+  Next chunk first residuals1.560/1.549/1.463ms; all remaining63 residuals total
+  53.944ms. This supports an outside-execution startup delay, not unique
+  compilation, CPU-compute attribution or the cause of the previous failure.
+- Exit0/observer0, startup80/min48%,39 clean samples, tree absent; unchanged
+  70/30%,24GiB,300s/180s,lease0,quiet bypass. Attempt consumed, no retry.
+  Build/dry/17 CLI negatives/11 trace specs/format/diff pass; offline pairing
+  and four mutation rejects plus separate totals/identity checks pass. Checker
+  groups1 assumption corrected to admit source-backed terminal seq16/groups0;
+  no GPU evidence changed or rerun.
+- ROBUST scoped diagnostic; profiled success is not uninstrumented stability,
+  correctness parity, watchdog fix or speedup. Long warm timing still open.
+  Next: separate native commit host duration from completion wait under the
+  same watchdog, only in a separately bounded diagnostic; no kernel changes.
+  Evidence/identity/decay: docs/qwen-prefill-command-trace.md host/GPU section,
+  `/private/tmp/qwen-prefix-profile.KBHkT1/`. Preserve unrelated WIP.
+
+### Continuation 2026-09-19 — Native prefix commit/wait split
+
+- Opt-in `--prefix-profile --split-submit` measures native setup/commit/wait/
+  retire with the existing watchdog and wait sequence. No ABI/kernel/routing
+  change; exact env opt-in is scrubbed in other probe modes. Fake commands
+  qualify delayed phases, status propagation and registration without GPU.
+- One guarded 7839-token attempt completes64 paired records. First commit
+  0.029ms, wait9423.567ms, setup0.016ms, retire0.001ms; enclosing host9423.877ms
+  versus GPU1389.812ms. All64 commits total0.526ms. The ~8.034s outside GPU
+  execution lies after fast commit returns, not in synchronous commit or
+  watchdog bookkeeping. Before-execution versus completion delivery is open;
+  no compilation/residency/root-cause or speedup claim.
+- Exit0/observer0, startup78/min44%,40 clean samples, tree absent; unchanged
+  70/30%,24GiB,300s/180s,lease0,quiet bypass. Attempt consumed, no retry.
+  Native test/build/dry/22 CLI negatives/11 trace specs pass; checker64 triples
+  and seven mutation rejects plus independent raw totals/identity agree.
+- ROBUST bounded diagnostic, not concurrent telemetry: mapped status and
+  positional pairing in single-submitter graph0 scope. Uninstrumented
+  stability/long warm timing remain IN_PROGRESS. Next: verify clock semantics
+  and separate pre-GPU delay from completion delivery without an extra wait;
+  no blind rerun. Evidence/hashes/decay: docs/qwen-prefill-command-trace.md native
+  split result, `/private/tmp/qwen-prefix-submit.646NF9/`. Preserve unrelated WIP.
+
+### Continuation 2026-09-19 — First-command gap is before GPU execution
+
+- Existing split-submit opt-in now adds Mach-seconds host bounds around
+  commit/wait; Metal GPU timestamps use system Mach time. Watchdog remains
+  CLOCK_MONOTONIC; no new waits/callbacks/routing. Invalid timelines are not
+  zero-cost evidence. Signed differences retained with1ms bounds tolerance.
+- One guarded7839-token run completes64 valid trace/native/timeline/boundary
+  quartets: first pre-GPU7566.682ms, GPU1324.569ms, post-GPU0.138ms; native
+  commit0.031ms. Other63 pre-GPU sum53.557ms; all post-GPU sum10.115ms,
+  max0.221ms. Dominant completion-return delay refuted for this run; driver
+  preparation/queue/residency/compilation are not yet distinguished.
+- Build/dry/22 CLI negatives/11 trace specs/native fake tests pass;12 offline
+  mutations rejected, direct raw totals/source identities agree. Correlated
+  Luna review ROBUST in bounded single-submitter scope. Exit0/observer0,
+  startup80/min46%,38 clean memory samples, final tree absent; unchanged
+  70/30%,24GiB,300s/180s,lease0,quiet bypass. One attempt consumed, no retry.
+- Long warm timing/uninstrumented stability remain IN_PROGRESS, no speedup or
+  watchdog-fix claim. Next: passive kernelStartTime/kernelEndTime scheduling
+  discriminator after checking semantics, not broad warmup or blind rerun.
+  Evidence, initial build/SDK issues and refresh triggers recorded in
+  docs/qwen-prefill-command-trace.md Mach result; artifacts
+  `/private/tmp/qwen-prefix-mach.HZ3gZn/`. Preserve unrelated WIP.
+
+### Continuation 2026-09-19 — Long CPU/driver scheduling interval measured
+
+- Existing opt-in reads kernelStartTime/kernelEndTime after completion; no
+  new waits/callbacks/ABI/routing. Pair-local duration only: no assumed epoch
+  or ordering relative to GPU timestamps, no additive phase attribution.
+- One guarded 7839-token run passes 64 ordered diagnostic groups. First
+  scheduling7836.884ms, pre-GPU7672.387ms, GPU1417.449ms, post-GPU0.109ms;
+  commit0.032ms. Other63 scheduling intervals total271.132ms, max95.025ms.
+  Scheduling itself is anomalously long, not proof of active CPU work,
+  compilation, residency causality, stability or speedup.
+- Native tests/schema check, fresh build/dry/22 CLI rejects/11 trace specs
+  pass; offline checker rejects17 mutations, raw totals/identities agree.
+  Correlated Luna review ROBUST within diagnostic scope. Exit0/observer0,
+  startup78/min44%,41 clean samples, tree absent; unchanged70/30%,24GiB,
+  300s/180s,lease0,quiet bypass. Attempt consumed; no further GPU run.
+- Next frontier: read-only residency/lifecycle comparison. Our shared no-copy
+  model buffer lacks explicit residency requests; local llama.cpp conditionally
+  uses residency sets (and can also use a single large buffer). This is a
+  hypothesis, not causality. A later bounded falsifier must include total cold
+  load-to-output latency to reject merely moving first-use cost earlier;
+  preserve memory guards and cleanup, no blind warmup/full-weight pinning.
+  Long warm timing/uninstrumented stability remain IN_PROGRESS. Evidence and
+  decay: docs/qwen-prefill-command-trace.md scheduling result;
+  `/private/tmp/qwen-prefix-schedule.GmVlc7/`. Preserve unrelated WIP.
+
+### Continuation 2026-09-19 — Residency mechanism and teardown gate
+
+- Compared current no-copy registration/close ownership with llama.cpp
+  7e4c0a96880dae4fc4268ad441f8a6446bd5460a: llama uses requestResidency plus
+  nominal5ms heartbeat/180s keep-alive, not queue residency attachment. Both
+  may use one large no-copy buffer. Our registry is shared with MTP/Gemma;
+  preserve unrelated dirty qwen35_metal.cr and avoid a global experiment toggle.
+- New explicit one-page native request-only qualification passes on M2 Max:
+  16384B, membership0->1->0, weak objects released, backing bytes intact,
+  no queue/GPU commands/model. Three CLI negatives and NDEBUG compile rejection
+  pass; guarded30s/512MiB run exit0, startup77%, memory floor30%.
+- Critical boundary: weak-object release is not physical-footprint recovery.
+  Llama has dummy-GPU-work workaround for upstream reported request-then-unload
+  without inference memory retention (Apple forums839089 / llama issue25937).
+  Not locally reproduced. Next: small capped footprint/control/abort falsifier
+  before model-sized residency; no production residency or heartbeat added.
+- Later model A/B must include setup and total elapsed, distinguish relocated
+  cost, and use output parity for TTFT (existing prefix probe produces no token).
+  Existing 70/30%,24GiB model guards remain. Root cause and speed remain open.
+  Evidence/commands/identities/decay: docs/qwen-prefill-command-trace.md residency
+  audit; spec/metal_residency_lifecycle_test.mm; artifacts
+  `/private/tmp/qwen-residency-audit.kT3vP3/`. Preserve unrelated WIP.
+
+### Continuation 2026-09-19 — Bounded residency footprint reclamation
+
+- Added standalone anonymous no-copy64MiB diagnostic: fresh hold/control/request
+  processes, three request/control cycles, five-second endpoints, no model,
+  queue, GPU commands or production engine changes. M2 Max/macOS26.6.2 only.
+- Held-positive signal67,158,064B, released residual16,384B; control residuals
+  [0,0,0], request [32768,16384,16384]B against initial process baseline.
+  All guarded runs exit0; startup78/78/79%, floor30%, cap512MiB/60s. No payload
+  accumulation at sampled endpoints; no inference about system-wide free RAM.
+- Native build and three CLI negatives pass; seven offline checker tests pass;
+  actual logs pass the predeclared8MiB tolerance with positive signal>=48MiB.
+  Checker rejects drifted controls, missing/invalid evidence and duplicate exit
+  records. Source/binary/log hashes and commands in
+  docs/qwen-prefill-command-trace.md; artifacts
+  `/private/tmp/qwen-residency-footprint.G1Ogcw/`.
+- Next: small file-backed mmap discriminator with a backing-appropriate positive
+  measurement control. Anonymous phys_footprint accounting is not clean-file
+  page accounting; do not promote to16.8GB model safety or effective residency.
+  Root cause/TTFT/speed remain open; no heartbeat/dummy-GPU workaround admitted.
+  Refresh after OS/device/backing/lifecycle/size/concurrency changes. Preserve
+  unrelated WIP and existing70/30%,24GiB model guards.
+
+### Continuation 2026-09-19 — File-backed residency RSS blind spot
+
+- Synthetic linked64MiB file, PROT_READ/MAP_PRIVATE/MADV_RANDOM like GGUF,
+  warm from creation, no model/queue/GPU. Three control/request cycles5s,
+  same backing reused. Four guarded processes including anonymous regression
+  exit0; all three exact file fixtures removed. Cap512MiB/60s/floor30%.
+- Ordinary file hold: resident+67,174,400B but footprint only+49,200B;
+  released resident+81,920B. Endpoint RSS residuals control[64,48,48]KiB,
+  request[128,112,112]KiB. Weak task-accounting endpoint check passes.
+- Critical falsifier: after requestResidency, BEFORE teardown, resident size
+  drops near baseline despite live64MiB wrapper/mmap. Prepared signals across
+  cycles[114688,0,0]B. A no-request hold does not qualify the post-request
+  detector. Checker explicitly reports retention verdict=unqualified; neither
+  low RSS nor low footprint proves global release/pinning/eviction here.
+- Native build,6CLI negatives,12checker tests pass; source/raw-log inspection
+  and correlated Luna review support only the narrow task-accounting result.
+  Evidence/hashes/commands: docs/qwen-prefill-command-trace.md file result;
+  `/private/tmp/qwen-residency-file.nRcgXY/`. No production changes.
+- Next discriminator must detect the known-live requested mapping with
+  driver/ownership-aware accounting; do not enlarge/repeat an insensitive RSS
+  test. Later residency timing must include setup/total time and original model
+  guards. Root cause/TTFT/speed remain open. Refresh on OS/device/backing/size/
+  lifecycle/concurrency changes; preserve unrelated WIP.
+
+### Continuation 2026-09-19 — Residency mapping counter discriminator
+
+- Diagnostic-only64MiB linked-file control/request, one lifecycle each, no
+  model/queue/GPU commands. mincore sees4096/4096 pages before/after request
+  through object release; untouched anonymous negative sees0. Request-step
+  RSS and external both fall exactly67,108,864B with all pages still in-core.
+  Thus low requested RSS does not mean loss of in-core pages.
+- Set allocatedSize64MiB already before request and after end, then0 on remove:
+  inventory, not pin state. Device/graphics/compressed ledgers show no payload
+  delta. Host wired request step+64,241,664B, settled+64,880,640B; no-request
+  control also drifts+42,860,544B. Global correlation is not owned retention.
+- All mapped mincore samples stay full even after end/object release. That
+  cannot distinguish file caching from wiring. Unmapped mincore=null, not0.
+  Verdict ROBUST for scoped counter observations, unpinning/reclamation UNKNOWN;
+  no production residency, heartbeat, model safety or speed promotion.
+- Warning-free build,9CLI negatives,12 existing checker tests and separate
+  offline phase/finite/5s/inventory/fixture assertions pass. Guarded runs exit0,
+  startup78/79%,512MiB/60s/floor30%, quiet bypass. Source base68d1f697; exact
+  identities/commands/hash lineage: docs/qwen-prefill-command-trace.md counter
+  result; raw artifacts `/private/tmp/qwen-residency-counters.ZwifQd/`.
+- Next: allocation-attributed wiring/reclaimability discriminator, not another
+  RSS endpoint or larger workload. Keep root cause/TTFT open, model70/30%,24GiB
+  guards and unrelated WIP. Refresh on OS/device/backing/lifecycle/size/
+  concurrency change. This counter set is not an exhaustive API impossibility
+  claim; global wired noise alone cannot clear the full-model residency gate.
+
+### Continuation 2026-09-19 — Reclaim detector fails its CPU-only control
+
+- Public mincore/page disposition reports presence, not driver wiring; region
+  submap info has user_wired_count but no pages_wired. Scope is these inspected
+  SDK/XNU interfaces, not an exhaustive impossibility result or shipped-source
+  certificate. Do not implement the earlier nonexistent-field suggestion.
+- New spec/vm_msync_reclaim_control.c: one16KiB readonly/private temporary file
+  mapping, no Metal. Before mlock, while locked, and after successful munlock,
+  MS_SYNC|MS_INVALIDATE returns0/errno0 and mincore remains1. Thus this recipe
+  cannot qualify eviction or distinguish wiring here. Archived EBUSY wording
+  is not a valid gate on the tested host. First byte intact, fixtures removed.
+- Initial and strengthened controls exit0 with15s/128MiB/floor30%, startup79%;
+  warning-free builds and byte-identical persisted reproducer. No engine edits,
+  GPU work or memory-pressure experiment. Evidence/source links/hash lineage:
+  docs/qwen-prefill-command-trace.md reclaimability result;
+  `/private/tmp/qwen-vm-reclaim.bwq07D/`. Base8d067138.
+- Park model-sized residency rather than grow an insensitive measurement.
+  Reopen for a qualified attributed signal or different safe discriminator.
+  Performance return pointer remains first-command scheduling (~7.8s elapsed,
+  not a root-cause certificate); TTFT/speed remain open. Preserve model70/30%,
+  24GiB guards and unrelated WIP. Refresh on OS/SDK/backing/lifecycle changes.
+
+### Continuation 2026-09-19 — Live trace transport and failed prefix replay
+
+- One same-binary/source/model/config replay, no rebuild/residency change.
+  First command succeeds with pre-GPU9303.029ms, scheduling9600.893ms,
+  GPU1487.962ms; overlapping intervals, no root-cause or speed attribution.
+- No model sample attached: run_safe PASSTHROUGH streams stdout but buffers
+  stderr until teardown. Launcher watched the wrong transport. CPU sample
+  controls distinguish a busy loop from sleeping, not the missed model wait.
+- Independently, command60 fails Impacting Interactivity at start6144,
+  rows1695,sequence12,cursors47->51 after59 successes. Exit1/observer0,
+  startup79/minimum48%,39 clean memory samples, tree absent, no guard kill.
+  Identical earlier successful instrumentation/binary is not a stability fix.
+- Added diagnostic qwen_live_stderr_exec.py: exclusive0600 log, fd2 redirect,
+  exec same PID/group; no runner or engine behavior/default edit. Five CPU
+  tests pass incl live handshaked event through real runner, PID/group/exit
+  preservation, argv, overwrite/symlink rejection, exec failure. No GPU retry.
+- Evidence/hash lineage and limitations: docs/qwen-prefill-command-trace.md;
+  `/private/tmp/qwen-prefix-stacks.L9DTcy/`. Failed run.py is historical evidence,
+  not a next-run recipe. Next re-scope to earliest identity-preserving boundary
+  before any new model attempt; do not repeat the full failing prefix just to
+  sample its first wait. Root cause/TTFT/stability remain open; residency parked.
+  Preserve70/30%,24GiB guards/unrelated WIP; refresh on source/model/device/OS/
+  input drift or evidence loss.
+
+### Continuation 2026-09-19 — First-command-only stack discriminator
+
+- Added compile-only qwen_first_command_probe hook after successful ordinary
+  flush wait/publication/cleanup, before rotation. Dedicated probe CLI requires
+  --first-command with original7839:193/profile/split; ordinary builds reject it.
+  No shortened prompt/state/layer limit. Partial state is destroyed, never
+  resumed; mismatched boundary or command failure cannot pass as early stop.
+- One guarded attempt: exactly1 begin/end/native/boundary, no prefix completion,
+  exit0/observer0, startup79/minimum sampled48%,6clean samples, tree absent.
+  Commit0.036ms, preGPU7871.398ms, GPU1380.905ms, overlapping scheduling8082.574ms.
+- Sample of own PID launched5.118ms after before-commit and returned3625.008ms
+  before GPU start.272 main-thread stacks waitUntilCompleted/condwait;272 Metal
+  submission-thread stacks IOGPUCommandQueueSubmitCommandBuffers/iokit trap.
+  Localizes sampled client path, not kernel cause, residency, compilation,
+  whole-window activity, speed, quality or stability. No second model attempt.
+- DoD:14focused Crystal specs,25invalid CLI cases, preserved dry config, normal
+  no-codegen build,5relay CPU tests, raw checker rejects8mutations. Evidence
+  and hashes: docs/qwen-prefill-command-trace.md and
+  /private/tmp/qwen-first-stop.HJ9I89/. Sampler phase labels do not understand
+  prefix events; use counters/timestamps. Source/model/bridge pinned.
+- Next: source-first narrow resource-submission discriminator with this short
+  reproducer; do not infer driver-internal cause from trap stacks or repeat
+  full-prefix sampling. Residency remains parked pending reclaim/ownership
+  evidence. Preserve70/30%,24GiB guards and unrelated WIP. Refresh on source/
+  model/input/device/OS/observer change or evidence loss.
+
+### Continuation 2026-09-19 — Compilation API discriminator
+
+- Added exact-opt-in COGNI_METAL_PIPELINE_PROFILE=1; same-Mach-clock JSON
+  intervals for library/function/PSO APIs, including default-library startup.
+  No kernel/math/cache/scheduling change; unset is rollback. Timings are API
+  elapsed, not compiler CPU time; logging perturbs execution. File cache-hit
+  does not certify OS shader-cache or Crystal pipeline-cache state.
+- One original-input first-command-only run:30 source pipelines/91 intervals,
+  source-library655.776ms, function0.111ms, PSO5.976ms. Every interval precedes
+  commit; separate preGPU8022.636ms and GPU1423.585ms. Measured synchronous
+  creation calls do not account for the postcommit gap. Deferred driver/other
+  process compiler work remains unknown; precompilation benefit is unmeasured.
+- Native fake-device/output tests pass20 intervals incl known delays/failure/
+  cache/escaping; existing submit test and14 Crystal specs pass. Release/dry/
+  CLI checks pass; run checker rejects7seeded defects. Exit0/observer0,
+  initial78/minimum sampled47%,7clean samples, final tree absent. No sample
+  attachment, full-prefix retry, quality, stability or speed claim.
+- Evidence/hashes: docs/qwen-prefill-command-trace.md and
+  /private/tmp/qwen-pipeline-profile.hB85Yk/. Reuse only after identity refresh.
+  Return to narrow resource-submission diagnosis; cold-start precompilation
+  remains a separate opportunity. Keep70/30%,24GiB guards and unrelated WIP.
+
+### Continuation 2026-09-19 — Process-accounted reads during first-submit gap
+
+- Exact previous first-command-only binary/bridge/input/controls, no rebuild,
+  prewarm, eviction, residency or engine change. External own-child observer
+  proc_pid_rusage v2 reads every~100ms; checks path/parent/UID/stable start and
+  timestamps each read on the bridge Mach clock. No target-memory access.
+- One successful command: preGPU8518.933ms/GPU1405.170ms.83 enclosed samples
+  cover8501.098ms; +16,761,634,816B reads,+1,023,049 pageins,+2998.865ms system
+  CPU,+2.194ms user. Reads grow through the pause and equal pageins*16384,
+  99.708% of model bytes. These are correlated process accounting, not
+  per-file attribution or proof all latency is I/O/whole-mmap first use.
+- Whole-model no-copy weight buffer plus earlier submit-trap stacks make
+  whole-mapping preparation a strong next hypothesis. Reject pure inactive
+  client waiting, not deferred/external driver work. RSS fell1.316GB while
+  footprint barely changed: neither is proof of GPU residency. This run's
+  library API8.903ms is not a cold-cache speed comparison.
+- CPU-only observer controls: CPU matches getrusage within0.044%,32MiB RSS
+  touch and8MiB uncached read detected; page-in zero not a negative control.
+  Identity/CLI/deadline/exit tests pass; source/dry/self checks pass; raw
+  checker rejects8 defects. Initial78/minimum sampled51%,7clean observations,
+  target/observers exit0, tree absent. No retry/full prefix. Luna finds no
+  scoped safety blocker; identity checks accepted internally, observed
+  path/UID are not emitted for independent reconstruction from JSON alone.
+- Evidence: docs/qwen-prefill-command-trace.md;
+  /private/tmp/qwen-submit-usage.ugTk9s/ (manifest/log/observer hashes in docs).
+  Next: inspect bounded page-aligned model-owned weight views and lifetime/
+  rollback; discriminate first-command reads AND eventual TTFT, not mere
+  deferral. No production optimization or model-sized residency authorized
+  by this evidence. Preserve70/30%,24GiB guards and unrelated WIP; refresh on
+  source/model/input/device/OS/observer drift or raw-evidence loss.
+
+### Continuation 2026-09-23 — Qwen-Image 2.1 real-prompt Metal optimization
+
+- The pinned real `red cube`, seed 7, 256x256 path generates a PNG through
+  reference Qwen3-VL conditioning, native GGUF/Metal DiT, and reference VAE.
+  It is hybrid, not a fully native image pipeline. The initial stage profile
+  was CPU conditioning 19.84 s, 40-step DiT 57.99 s, CPU FP32 VAE 9.65 s (`n=1`).
+- A saturated-GELU guard repaired real-prompt NaNs in the opt-in fused Metal
+  text chain. Its 40-step latents are finite with relative L2 0.000348 versus
+  the default route, but no full-run speed gain was shown. Default remains
+  separate Metal text projections plus host GELU. Mac `--device auto` now
+  selects CPU rather than the aborting default MPS grouped-query path;
+  explicit MPS eager attention remains quality-unvalidated.
+- Reject the run-local text projection cache at this scale: six real 40-step
+  runs preserved exact latent hashes, but reversed-order pairs did not show a
+  stable latency gain. Reject the 8-row by 8-Q8-block input-reuse Metal tile:
+  exact parity held, yet warmed real-weight 513-token paired wall ratios were
+  1.375 rebuild / 1.371 hit (tiled/default, `n=2`), with GPU time also worse.
+  Both candidates were removed; do not revive by renaming them.
+- Register-local reuse across two Q8_0 output channels avoids that tile's
+  threadgroup staging and barriers. Automatic selection is scoped to exact
+  Apple M2 Max and batch >=256; `QWEN_IMAGE21_Q8_REGISTER_REUSE=0` restores the
+  established batched Q8_0 kernel, while `=1` is a wider forced experiment.
+  Synthetic tail/scale/NaN parity and the full pinned Metal suite passed (56
+  examples, zero failures/pending); Python bridge tests from the earlier
+  unchanged bridge passed 16 with one expected skip.
+- A direct shipped-auto/rollback A/B on the real 32-layer GGUF, 513 joint
+  tokens, one warm pair and three alternating-order measured pairs, preserved
+  exact rebuild/hit outputs and one command buffer per forward. Paired median
+  wall ratios were 0.897 rebuild / 0.890 hit (auto/rollback); GPU-command
+  ratios were 0.895 / 0.887, with no order reversal. A default-auto 40-step
+  real-prompt run took 48.113 s DiT and reproduced the rollback latent SHA-256
+  exactly; two earlier forced-on runs took 48.670/49.344 s versus one rollback
+  at 57.782 s. These are bounded M2 Max/prompt/model observations, not a
+  general image-quality or end-to-end latency claim. Detail and reproduction:
+  `docs/qwen-image21-gguf-frontier.md`. Reprofile before widening to another
+  device, batch, GGUF policy, or resolution. Evidence decays on model/GGUF,
+  prompt, kernel/compiler, device/OS, Python component, or harness changes.
