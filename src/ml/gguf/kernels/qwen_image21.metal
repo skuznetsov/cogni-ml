@@ -80,6 +80,17 @@ kernel void qi21_gelu_inplace(
     uint index [[thread_position_in_grid]]) {
     if (index >= count) return;
     const float value = values[index];
+    // GELU is effectively the identity/zero outside this range. Besides
+    // avoiding unnecessary transcendental work, the guard avoids NaNs from
+    // tanh implementations on large positive finite inputs.
+    if (value > 10.0f) {
+        values[index] = value;
+        return;
+    }
+    if (value < -10.0f) {
+        values[index] = 0.0f;
+        return;
+    }
     values[index] = 0.5f * value *
         (1.0f + tanh(0.7978845608f * (value + 0.044715f * value * value * value)));
 }
