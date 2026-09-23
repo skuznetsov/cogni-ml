@@ -3,6 +3,102 @@
 Status: active implementation frontier; prompt-to-PNG path admitted, with
 optimization candidates gated by real-prompt parity and paired latency checks
 
+## Local package frontier (2026-09-23)
+
+Current frontier: one local directory and one text-to-image entry point may
+compose the admitted CPU Qwen3-VL conditioning, native Metal GGUF DiT, and CPU
+VAE decode. This is a packaging/launch boundary, not a new model backend.
+
+- **Admitted target:** a versioned manifest names only package-local component
+  paths, identifies the official model revision and the mixed-quant DiT GGUF,
+  and declares the runtime as `hybrid`. A single command validates that package
+  before starting any stage, then runs the existing three stage contracts in
+  order and writes one PNG. Inputs include an explicit prompt, dimensions,
+  seed, step count, and output path. The command does not download weights.
+- **Rejected:** describing this route as a native Qwen3-VL or native VAE
+  implementation; silently accepting an old Qwen-Image model, external path
+  traversal in a static manifest, an absent component, an unknown model
+  revision, or a partial output as a successful image. Image editing and
+  guidance are still rejected.
+- **Guard-only next track:** a text-only Qwen3-VL port may replace the reference
+  encoder only after a fixture pins exact input token IDs, masks, drop index,
+  and pre-final-norm hidden states from the official pipeline, followed by
+  layer/output parity against that fixture. Native VAE follows separately.
+- **Falsifiers:** a malformed or escaping manifest, mismatched model identity,
+  missing files, wrong GGUF, failed stage, interrupted run, or an output file
+  that is not a decoded PNG. A successful launcher test does not imply a speed
+  or image-quality improvement. Real-weight smoke tests must disclose the
+  source revision, GGUF policy, prompt, shape, and sampling settings.
+
+The package evidence decays if the manifest schema, stage CLIs, official model
+revision, GGUF contents, or upstream processor/encoder semantics change.
+Rollback is to run the three already admitted stage commands directly. A
+package manifest and launcher should remain outside the repository's weight
+tree; no large weights are committed.
+This is a local-use bundle, not permission to redistribute the model; the
+[upstream Qwen Research License](https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE)
+sets separate non-commercial and redistribution conditions.
+
+The package launcher is `scripts/qwen_image21_package.py`. Initialize it with
+an already-downloaded official component snapshot, the pinned mixed-quant DiT
+GGUF, and a separately compiled macOS arm64 Metal denoiser. It hard-links the
+large files, checks available source-revision metadata and the GGUF SHA-256,
+records file hashes, and atomically publishes a new directory. The package
+still needs an external
+Python environment and the denoiser's Homebrew dynamic libraries; it is not a
+standalone application or a single-weights-file format. The tested Python
+environment used Torch 2.6.0, Transformers 5.17.0, and Diffusers 0.41.0.dev0
+from commit `8b3c707ebd3ec4881f4190cf42931da07eaf3b65`.
+
+```sh
+python scripts/qwen_image21_package.py init \
+  --package-dir /path/to/new-qwen-image21-package \
+  --model-dir /path/to/Qwen-Image-2.1-components \
+  --gguf /path/to/Qwen-Image-2.1-Q4.gguf \
+  --denoiser /path/to/compiled-qwen-image21-denoiser \
+  --revision 790c92633540aa0cb11d9abf19eb46d861714758
+python /path/to/new-qwen-image21-package/bin/qwen_image21_package.py generate \
+  --package-dir /path/to/new-qwen-image21-package \
+  --prompt 'red cube' --width 256 --height 256 --seed 7 --steps 40 \
+  --output /path/to/new-red-cube.png
+```
+
+Generation rehashes all packaged model files and the GGUF before starting a
+stage, so this integrity guard adds cold-start I/O. The manifest is editable:
+these hashes detect drift relative to that manifest, not coordinated tampering
+with both artifacts and manifest. The package directory must be trusted and
+must not be concurrently mutated by an adversary. The launcher retains the
+validated canonical root and checks its device/inode before each subprocess;
+this rejects the tested root-symlink swap, but does not eliminate races during
+file opening. The `generate` command sets Hugging Face, Transformers,
+Datasets, and Diffusers offline flags for all
+three stages and refuses to overwrite an existing PNG. Package smoke tests
+are limited to the exact prompt and settings reported below; neither this
+wrapper nor the hard-link layout improves model quality or runtime latency.
+
+The real-package `red cube` run on 2026-09-23 used the official component
+revision above and the pinned 5,959,127,264-byte GGUF with tensor policy
+`BF16:8,F32:65,Q8_0:96,Q6_K:64,Q5_K:32`. CPU BF16 conditioning, 40 native
+Metal DiT steps on M2 Max, and CPU FP32 VAE decode produced a 256x256 RGBA PNG
+with SHA-256 `396ee177a3689ca7d9a035ab4d26ecd58a065215017df56ee64fb1d7084fd841`,
+byte-identical to the earlier direct three-command path for prompt `red cube`
+and seed 7. The package CLI requires Metal access: on this host the process
+sandbox hid the device, while the same local command outside that sandbox
+completed. This is one smoke case, not general prompt or quality validation.
+
+For the next native text-encoder transition,
+`scripts/qwen_image21_text_reference.py` captures the official pipeline's raw
+processor input IDs and masks, the 14-token prefix drop, all 37 hidden states,
+and the pre-final-RMSNorm embeddings. The pinned `red cube` CPU BF16 fixture
+has 24 raw tokens, 10 retained tokens, and embeddings of shape `[1, 10, 4096]`.
+Its payload SHA-256 is
+`3edcd7bf7964237d649a43c35cd82f6d6bd7b15835fddec2b1fe42f3a89b1e07`.
+After BF16-to-F32 conversion, all 40,960 embedding scalars exactly matched
+the earlier conditioning bundle for the same prompt and model revision. The
+fixture remains outside the repository; no weights or generated tensors are
+committed. This establishes a parity target, not a native Qwen3-VL inference
+implementation.
+
 ## Goal
 
 Admit Qwen-Image 2.1 weights into the native Metal engine without treating a
