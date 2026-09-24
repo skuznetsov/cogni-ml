@@ -10,6 +10,11 @@ require "../src/ml/gguf/qwen3vl_text_block"
 private PINNED_PROMPT         = "red cube"
 private PINNED_PAYLOAD_SHA256 = "3edcd7bf7964237d649a43c35cd82f6d6bd7b15835fddec2b1fe42f3a89b1e07"
 private TOKEN_COUNT           = 2
+private PREFIX_DROP_COUNT     = 14
+private MAX_RAW_TOKEN_COUNT   = 256
+private MAX_REFERENCE_BYTES   = MAX_RAW_TOKEN_COUNT.to_i64 * ML::GGUF::Qwen3VLTextWeights::HIDDEN_SIZE * 4_i64 * 38_i64 + MAX_RAW_TOKEN_COUNT.to_i64 * 24_i64
+private SHA256_RE             = /\A[0-9a-fA-F]{64}\z/
+private PINNED_DIFFUSERS_COMMIT = "8b3c707ebd3ec4881f4190cf42931da07eaf3b65"
 
 private def qwen3vl_prefix(values : Array(Float32), scalar_count : Int32) : Array(Float32)
   raise ArgumentError.new("reference state is shorter than the requested token prefix") if values.size < scalar_count
@@ -172,6 +177,7 @@ private def qwen3vl_write_retained_bf16(
   prompt : String,
   model_revision : String,
   fixture_payload_sha256 : String,
+  fixture_manifest_sha256 : String,
   drop_idx : Int32,
   row_count : Int32,
   hidden_dim : Int32,
@@ -189,6 +195,7 @@ private def qwen3vl_write_retained_bf16(
       json.field "prompt", prompt
       json.field "model_revision", model_revision
       json.field "fixture_payload_sha256", fixture_payload_sha256
+      json.field "fixture_manifest_sha256", fixture_manifest_sha256
       json.field "drop_idx", drop_idx
       json.field "shape", [row_count, hidden_dim]
       json.field "dtype", "bfloat16-le"
@@ -223,26 +230,46 @@ end
 layers = 2
 full_prompt = false
 composed_only = false
+reference_sha256 : String? = nil
+projection_backend = ML::GGUF::Qwen3VLTextBlockConfig::ProjectionBackend::Scalar
+projection_backend_label = "scalar"
 encoder_dir = ENV["QWEN3VL_TEXT_ENCODER_DIR"]?
 reference_dir = ENV["QWEN3VL_TEXT_REFERENCE_DIR"]?
 retained_bf16_out : String? = nil
 layer0_trace_dir : String? = nil
 
 OptionParser.parse do |parser|
-  parser.banner = "Usage: crystal run scripts/qwen3vl_text_layer_sweep.cr -- [--layers N] [--full-prompt [--composed-only]] [--retained-bf16-out PATH] [--layer0-trace-dir DIR] --text-encoder-dir DIR --reference-dir DIR"
+  parser.banner = "Usage: crystal run scripts/qwen3vl_text_layer_sweep.cr -- [--layers N] [--full-prompt [--composed-only]] [--reference-sha256 SHA256] [--projection-backend scalar|accelerate] [--retained-bf16-out PATH] [--layer0-trace-dir DIR] --text-encoder-dir DIR --reference-dir DIR"
   parser.on("--layers=N", "Number of leading decoder layers to sweep (1..36, default 2)") { |value| layers = value.to_i? || abort("--layers must be an integer") }
-  parser.on("--full-prompt", "Use all raw prompt tokens (24 for the pinned fixture; default uses the first two)") { full_prompt = true }
+  parser.on("--full-prompt", "Use all raw prompt tokens (default uses the first two)") { full_prompt = true }
   parser.on("--composed-only", "Skip isolated block runs; requires --full-prompt") { composed_only = true }
-  parser.on("--retained-bf16-out=PATH", "Write final 10x4096 retained BF16 rows (requires --full-prompt and --layers=36)") { |value| retained_bf16_out = value }
-  parser.on("--layer0-trace-dir=DIR", "Write all 24-token layer-0 BF16 stages (requires --full-prompt --composed-only --layers=1)") { |value| layer0_trace_dir = value }
+  parser.on("--reference-sha256=SHA256", "Opt in to a different text reference only when its exact payload SHA-256 matches") { |value| reference_sha256 = value }
+  parser.on("--projection-backend=BACKEND", "Text projection backend (scalar default; accelerate is diagnostic opt-in)") do |value|
+    case value.downcase
+    when "scalar"
+      projection_backend = ML::GGUF::Qwen3VLTextBlockConfig::ProjectionBackend::Scalar
+      projection_backend_label = "scalar"
+    when "accelerate"
+      projection_backend = ML::GGUF::Qwen3VLTextBlockConfig::ProjectionBackend::Accelerate
+      projection_backend_label = "accelerate"
+    else
+      abort("--projection-backend must be scalar or accelerate")
+    end
+  end
+  parser.on("--retained-bf16-out=PATH", "Write final retained BF16 rows (requires --full-prompt and --layers=36)") { |value| retained_bf16_out = value }
+  parser.on("--layer0-trace-dir=DIR", "Write all raw-token layer-0 BF16 stages (requires --full-prompt --composed-only --layers=1)") { |value| layer0_trace_dir = value }
   parser.on("--text-encoder-dir=DIR", "Local Qwen3-VL text encoder checkpoint directory") { |value| encoder_dir = value }
-  parser.on("--reference-dir=DIR", "Directory containing the pinned text reference fixture") { |value| reference_dir = value }
+  parser.on("--reference-dir=DIR", "Directory containing the checksummed text reference fixture") { |value| reference_dir = value }
   parser.on("-h", "--help", "Show this help") { puts parser; exit }
 end
 
 abort("unexpected arguments: #{ARGV.join(" ")}") unless ARGV.empty?
 abort("--layers must be in 1..36") unless 1 <= layers <= ML::GGUF::Qwen3VLTextWeights::NUM_LAYERS
 abort("--composed-only requires --full-prompt") if composed_only && !full_prompt
+if sha256 = reference_sha256
+  abort("--reference-sha256 must be a 64-character SHA-256") unless SHA256_RE.matches?(sha256)
+  abort("--reference-sha256 requires --full-prompt") unless full_prompt
+end
 if retained_bf16_out && (!full_prompt || layers != ML::GGUF::Qwen3VLTextWeights::NUM_LAYERS)
   abort("--retained-bf16-out requires --full-prompt and --layers=36")
 end
@@ -267,24 +294,97 @@ reference_path = reference_dir.not_nil!
 
 begin
   manifest_path = File.join(reference_path, "qwen_image21_text_reference.json")
-  reference = ML::GGUF::Qwen3VLTextReference.load(manifest_path)
-  manifest = JSON.parse(File.read(manifest_path))
+  raise ArgumentError.new("text reference manifest must not be a symlink") if File.symlink?(manifest_path)
+  raise ArgumentError.new("text reference manifest is missing or is not a regular file") unless File.file?(manifest_path)
+  raise ArgumentError.new("text reference manifest exceeds the 2 MiB guard") if File.info(manifest_path).size > 2_i64 * 1024 * 1024
+  manifest_json = File.read(manifest_path)
+  reference_manifest_sha256 = Digest::SHA256.hexdigest(manifest_json)
+  manifest = JSON.parse(manifest_json)
+  model_metadata = manifest["model"]
+  unless model_metadata["repo"].as_s == "Qwen/Qwen-Image-2.1" &&
+         model_metadata["pipeline_class"].as_s == "QwenImage21Pipeline" &&
+         model_metadata["text_encoder_class"].as_s == "Qwen3VLForConditionalGeneration" &&
+         model_metadata["processor_class"].as_s == "Qwen3VLProcessor" &&
+         {"local_cache_metadata", "argument", "argument_and_local_cache_metadata"}.includes?(model_metadata["revision_source"].as_s)
+    raise ArgumentError.new("text reference must identify the official pinned Qwen-Image 2.1 pipeline/model classes")
+  end
+  tokenization_metadata = manifest["tokenization"]
+  sequence_metadata = manifest["sequence"]
+  embedding_metadata = manifest["embedding"]
+  runtime_metadata = manifest["runtime"]
+  expected_template = "<|im_start|>system\nComprehend and analyze the provided prompt.<|im_end|>\n" \
+                     "<|im_start|>user\n#{manifest["prompt"].as_s}<|im_end|>\n" \
+                     "<|im_start|>assistant\n"
+  processor_kwargs = tokenization_metadata["processor_kwargs"]
+  unless tokenization_metadata["raw_template_text"].as_s == expected_template &&
+         tokenization_metadata["tokenizer_truncation"].as_bool == false &&
+         processor_kwargs["padding"].as_bool &&
+         processor_kwargs["padding_side"].as_s == "left" &&
+         processor_kwargs["return_tensors"].as_s == "pt" &&
+         processor_kwargs.as_h.size == 3
+    raise ArgumentError.new("text reference prompt template or processor/truncation metadata differs from the official capture contract")
+  end
+  unless sequence_metadata["max_sequence_length_semantics"].as_s == "post-drop validation guard only; no processor truncation" &&
+         embedding_metadata["source"].as_s == "QwenImage21Pipeline._get_qwen_prompt_embeds" &&
+         embedding_metadata["rmsnorm_hook_observed_and_verified"].as_bool &&
+         embedding_metadata["source_dtype"].as_s == "bfloat16" &&
+         embedding_metadata["expected_hidden_state_count"].as_i64 == ML::GGUF::Qwen3VLTextWeights::NUM_LAYERS + 1 &&
+         embedding_metadata["expected_decoder_layer_count"].as_i64 == ML::GGUF::Qwen3VLTextWeights::NUM_LAYERS &&
+         embedding_metadata["expected_hidden_state_count_source"].as_s == "loaded text_encoder.config.text_config.num_hidden_layers + 1" &&
+         runtime_metadata["source_dtype"].as_s == "bfloat16" &&
+         runtime_metadata["device"].as_s == "cpu" &&
+         runtime_metadata["diffusers_commit"].as_s == PINNED_DIFFUSERS_COMMIT &&
+         runtime_metadata["official_source_file"].as_s == "diffusers/pipelines/qwenimage21/pipeline_qwenimage21.py"
+    raise ArgumentError.new("text reference capture source, RMSNorm, sequence guard, or runtime provenance differs from the pinned official contract")
+  end
+  payload_name = manifest["payload_file"].as_s
+  raise ArgumentError.new("text reference payload_file must name qwen_image21_text_reference.bin") unless payload_name == "qwen_image21_text_reference.bin"
+  payload_path = File.join(reference_path, payload_name)
+  raise ArgumentError.new("text reference payload must not be a symlink") if File.symlink?(payload_path)
+  raise ArgumentError.new("text reference payload is missing or is not a regular file") unless File.file?(payload_path)
   payload_sha256 = manifest["payload_sha256"].as_s.downcase
-  raise ArgumentError.new("fixture payload SHA-256 is not the pinned red-cube artifact") unless payload_sha256 == PINNED_PAYLOAD_SHA256
+  raise ArgumentError.new("text reference payload SHA-256 is invalid") unless SHA256_RE.matches?(payload_sha256)
+  payload_nbytes = manifest["payload_nbytes"].as_i64
+  raise ArgumentError.new("text reference payload length is invalid") unless payload_nbytes > 0 && File.info(payload_path).size == payload_nbytes
+  raise ArgumentError.new("text reference payload exceeds the #{MAX_REFERENCE_BYTES}-byte memory guard") if payload_nbytes > MAX_REFERENCE_BYTES
+  sequence_manifest = manifest["sequence"]
+  raw_shape = sequence_manifest["raw_input_shape"].as_a.map(&.as_i64)
+  raise ArgumentError.new("text reference raw input shape must be [1, raw_sequence_length]") unless raw_shape.size == 2 && raw_shape[0] == 1 && raw_shape[1] > 0
+  raise ArgumentError.new("text reference raw token count exceeds #{MAX_RAW_TOKEN_COUNT}") if raw_shape[1] > MAX_RAW_TOKEN_COUNT
+  if expected_sha256 = reference_sha256
+    raise ArgumentError.new("reference SHA-256 does not match --reference-sha256") unless payload_sha256 == expected_sha256.downcase
+  else
+    raise ArgumentError.new("fixture payload SHA-256 is not the pinned red-cube artifact") unless payload_sha256 == PINNED_PAYLOAD_SHA256
+  end
+  reference = ML::GGUF::Qwen3VLTextReference.load(manifest_path)
   raise ArgumentError.new("fixture model revision is not the pinned Qwen-Image 2.1 revision") unless reference.model_revision == ML::GGUF::Qwen3VLTextWeights::EXPECTED_MODEL_REVISION
-  raise ArgumentError.new("fixture prompt must be #{PINNED_PROMPT.inspect}") unless reference.prompt == PINNED_PROMPT
+  if reference_sha256.nil?
+    raise ArgumentError.new("fixture prompt must be #{PINNED_PROMPT.inspect}") unless reference.prompt == PINNED_PROMPT
+  end
   raise ArgumentError.new("fixture must contain 37 hidden states") unless reference.hidden_state_count == ML::GGUF::Qwen3VLTextWeights::NUM_LAYERS + 1
+  raise ArgumentError.new("reference retained drop_idx must equal the Qwen prefix drop count #{PREFIX_DROP_COUNT}") unless reference.drop_idx == PREFIX_DROP_COUNT
+  raise ArgumentError.new("reference retained length exceeds max_sequence_length post-drop guard") if reference.actual_sequence_length > reference.max_sequence_length
   raise ArgumentError.new("reference mask shape differs from the raw input shape") unless reference.attention_mask.size == reference.raw_sequence_length
   raise ArgumentError.new("fixture actual length does not agree with mask and drop_idx") unless reference.attention_mask.count(true) - reference.drop_idx == reference.actual_sequence_length
   raise ArgumentError.new("fixture must contain pre-final-RMSNorm embeddings") unless manifest["embedding"]["pre_final_rmsnorm"].as_bool
 
   hidden_dim = ML::GGUF::Qwen3VLTextWeights::HIDDEN_SIZE
   raise ArgumentError.new("fixture pre-final embedding shape differs from the retained row count") unless reference.pre_final_rmsnorm_embeddings.size == reference.actual_sequence_length * hidden_dim
+  reference_embedding_shape = manifest["embedding"]["shape"].as_a.map(&.as_i64)
+  raise ArgumentError.new("reference pre-final embedding shape does not match the retained rows") unless reference_embedding_shape == [1_i64, reference.actual_sequence_length.to_i64, hidden_dim.to_i64]
+  raise ArgumentError.new("reference raw input shape differs from the loaded token count") unless raw_shape == [1_i64, reference.raw_sequence_length.to_i64]
   if full_prompt
-    raise ArgumentError.new("pinned full prompt must have raw shape [1, 24]") unless reference.raw_sequence_length == 24
-    raise ArgumentError.new("pinned full prompt must retain 10 rows after dropping 14 attended rows") unless reference.actual_sequence_length == 10 && reference.drop_idx == 14
-    raise ArgumentError.new("pinned full prompt must attend all 24 raw rows") unless reference.attention_mask.all? { |attended| attended }
+    if reference_sha256.nil?
+      raise ArgumentError.new("pinned full prompt must have raw shape [1, 24]") unless reference.raw_sequence_length == 24
+      raise ArgumentError.new("pinned full prompt must retain 10 rows after dropping 14 attended rows") unless reference.actual_sequence_length == 10 && reference.drop_idx == PREFIX_DROP_COUNT
+      raise ArgumentError.new("pinned full prompt must attend all 24 raw rows") unless reference.attention_mask.all? { |attended| attended }
+      raw_shape = manifest["sequence"]["raw_input_shape"].as_a.map(&.as_i64)
+      embedding_shape = manifest["embedding"]["shape"].as_a.map(&.as_i64)
+      raise ArgumentError.new("fixture raw input shape must be [1, 24]") unless raw_shape == [1_i64, 24_i64]
+      raise ArgumentError.new("fixture pre-final embedding shape must be [1, 10, 4096]") unless embedding_shape == [1_i64, 10_i64, hidden_dim.to_i64]
+    end
   else
+    raise ArgumentError.new("--reference-sha256 requires --full-prompt") unless reference_sha256.nil?
     raise ArgumentError.new("fixture must have two leading attended tokens") unless reference.attention_mask.size >= TOKEN_COUNT && reference.attention_mask[0, TOKEN_COUNT] == [true, true]
   end
 
@@ -295,10 +395,6 @@ begin
   metric_rows = full_prompt ? retained_raw_rows : Array(Int32).new(token_count) { |index| index.to_i32 }
   raise ArgumentError.new("retained row selection does not match actual sequence length") unless retained_raw_rows.size == reference.actual_sequence_length
   if full_prompt
-    raw_shape = manifest["sequence"]["raw_input_shape"].as_a.map(&.as_i64)
-    embedding_shape = manifest["embedding"]["shape"].as_a.map(&.as_i64)
-    raise ArgumentError.new("fixture raw input shape must be [1, 24]") unless raw_shape == [1_i64, 24_i64]
-    raise ArgumentError.new("fixture pre-final embedding shape must be [1, 10, 4096]") unless embedding_shape == [1_i64, 10_i64, hidden_dim.to_i64]
     fixture_final_retained = qwen3vl_select_rows(
       reference.hidden_state(ML::GGUF::Qwen3VLTextWeights::NUM_LAYERS), retained_raw_rows, hidden_dim
     )
@@ -320,12 +416,13 @@ begin
     head_dim: ML::GGUF::Qwen3VLTextWeights::HEAD_DIM,
     intermediate_dim: ML::GGUF::Qwen3VLTextWeights::INTERMEDIATE_SIZE,
     attention_arithmetic: ML::GGUF::Qwen3VLTextBlockConfig::AttentionArithmetic::SdpaF32,
+    projection_backend: projection_backend,
   )
 
+  puts "reference_validation=passed model_revision=#{reference.model_revision} prompt=#{reference.prompt.inspect} payload_sha256=#{payload_sha256} manifest_sha256=#{reference_manifest_sha256} raw_tokens=#{reference.raw_sequence_length} retained_tokens=#{reference.actual_sequence_length} drop_idx=#{reference.drop_idx} retained_rows=#{retained_raw_rows.inspect} layers=#{layers} tokens=#{token_count} attention_mask=#{attention_mask.count(true)}/#{token_count} attention_arithmetic=SdpaF32 projection_backend=#{projection_backend_label} composed_only=#{composed_only}"
   weights = ML::GGUF::Qwen3VLTextWeights.from_directory(encoder_path)
   begin
     composed_input = qwen3vl_prefix(reference.hidden_state(0), scalar_count)
-    puts "model_revision=#{reference.model_revision} prompt=#{reference.prompt.inspect} payload_sha256=#{payload_sha256} layers=#{layers} tokens=#{token_count} attention_mask=#{attention_mask.count(true)}/#{token_count} drop_idx=#{reference.drop_idx} retained_rows=#{retained_raw_rows.inspect} attention_arithmetic=SdpaF32 composed_only=#{composed_only}"
     layers.times do |layer_index|
       isolated_input = qwen3vl_prefix(reference.hidden_state(layer_index), scalar_count)
       expected = qwen3vl_prefix(reference.hidden_state(layer_index + 1), scalar_count)
@@ -378,7 +475,8 @@ begin
         if output_path = retained_bf16_out
           artifact = qwen3vl_write_retained_bf16(
             output_path, retained_actual, reference.prompt, reference.model_revision,
-            payload_sha256, reference.drop_idx, retained_raw_rows.size.to_i32, hidden_dim
+            payload_sha256, reference_manifest_sha256, reference.drop_idx,
+            retained_raw_rows.size.to_i32, hidden_dim
           )
           puts "retained_bf16_out=#{output_path} dtype=bfloat16-le shape=#{retained_raw_rows.size}x#{hidden_dim} nbytes=#{artifact[:nbytes]} sha256=#{artifact[:sha256]} manifest=#{artifact[:manifest_path]}"
         end

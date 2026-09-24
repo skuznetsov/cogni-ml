@@ -528,6 +528,124 @@ gate passes. Refresh this evidence after checkpoint, GGUF, VAE, Diffusers,
 Metal source/driver, or conditioning-schema changes, or if the temporary
 artifacts disappear.
 
+### Multi-prompt native-conditioning diagnostic frontier (2026-09-24)
+
+Current frontier: extend the opt-in red-cube discriminator to two fixed prompts
+(an elven forest castle and a futuristic station with a `NOVA` sign), without
+changing the packaged hybrid CPU-encoder default. At each prompt, the official
+CPU/BF16 bundle is the baseline; the diagnostic native path may consume its
+official processor/embedding input and replace only the retained 36-layer text
+output. This is **not** an independent native tokenizer or full encoder.
+
+- **Admitted diagnostic behavior:** derive raw and retained token counts from a
+  checksummed official text reference rather than a red-cube constant; require
+  exact prompt, pinned model revision, prefix-drop, mask, retained shape, and
+  official BF16 embedding agreement with the baseline. Clone the baseline
+  bundle while preserving masks and initial latents byte-for-byte. Keep native
+  use explicit and outside the package's default generation command.
+- **Rejected:** silently treating a new reference as the pinned red-cube
+  fixture, relaxing source checks to accept arbitrary mismatched tokenization,
+  promoting native conditioning for production, or claiming image-quality or
+  speed parity from two prompts and one seed.
+- **Falsifiers:** a prompt/reference/sidecar mismatch; truncation or an
+  unexpected processor template; a retained-row or BF16 baseline mismatch;
+  changed masks/initial noise; non-finite native values; or a failed native
+  Metal/VAE run. Compare composition and `NOVA` legibility visually, not by
+  pixel MAE alone. A missing or unreadable sign is a task-level failure even
+  if the PNGs are numerically close.
+- **Rollback and decay:** the pinned red-cube diagnostic and official hybrid
+  path remain available. Evidence expires on checkpoint, processor/Diffusers,
+  GGUF, VAE, runner, or conditioning-schema changes. Two fixed prompts are a
+  useful discriminator, not a complete prompt or seed distribution.
+
+For this discriminator the prompts are fixed verbatim:
+
+1. `A majestic elven castle built among ancient trees in a dense forest at dawn, white stone towers with graceful arches, narrow bridges between trees, glowing windows, a winding river in the foreground, mist and shafts of golden sunlight, intricate fantasy concept art, wide view.`
+2. `A futuristic coastal city at blue hour, a silver maglev train crossing an elevated bridge toward a glass station, turquoise neon lights, flying vehicles above, wet reflective pavement, and a large clearly readable sign saying NOVA above the station entrance, cinematic science fiction concept art, wide view.`
+
+The hybrid baseline for each is 512x512, seed 7, 40 native-Metal DiT steps,
+official CPU/BF16 Qwen3-VL conditioning, and official CPU/FP32 VAE decode.
+The pinned model revision is `790c92633540aa0cb11d9abf19eb46d861714758`,
+the Q4 DiT GGUF SHA-256 is
+`51998ad7c068ce7d68e233237537900ffe874ab4d5c72e20758f5f18ceb15b8a`,
+and the VAE safetensors SHA-256 is
+`a07a1b7c4ee2966a1b3bdc37de9b4f983d56937e46619f709a80b6e490675417`.
+The castle and `NOVA` baseline conditioning payloads have SHA-256
+`be4c1701aba493f00d65d1b1a0c53ae31d765bdc3380e22165bce10c72fa3716`
+and `b2000c6c53a835c78deb9080694913e293edbc15cb20961a02d9f232a99bd00b`;
+their decoded PNGs have SHA-256
+`2111d0e555553648dfc14ff3b444fd9af0afa7cd3887443a049be421757bdd46`
+and `501ae2554be36ee4c8ae33abbc293f224ddf51db83e544228c233b1fef9ef645`.
+The initial latent tensor bytes are identical across these two baseline
+bundles (SHA-256
+`d03158064c86fd691927cf93258b00fac2fc8d09e14a578d0f28b4fe8358932c`).
+An independent offline call to the pinned local `Qwen3VLProcessor` reproduced
+each reference's complete `input_ids` and `attention_mask` byte-for-byte
+(77 raw/63 retained castle tokens; 79 raw/65 retained `NOVA` tokens); its
+`tokenizer.json` SHA-256 was
+`aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4`.
+These artifacts live under `/private/tmp/qwen21-ab-baseline-{elven-castle,nova-city}-20260924*`
+and are ephemeral; the baseline images are not official end-to-end Diffusers
+outputs. For arbitrary future prompt references, internally consistent hashes
+alone do not prove that token IDs encode the declared prompt; the capture
+process or an independent tokenizer check remains a trust boundary.
+
+The official text-reference payload SHA-256 values for castle and `NOVA` are
+`695dfc0644b0caf0626dc51c9c50f959739a157267a84e44c2232457b83eadd6`
+and `4daeaa36088ff65ff8df964b489d04606cb78ab295278c0735ef20dbf246fc56`;
+their manifest SHA-256 values are
+`c66830e454b970673d556b05a2c02f7eadbf43cc0bce1b1b7b6eebf71b523fde`
+and `4664b370f2aed97cb2591f88ee8f39dc5228577c1ef8b4991744299b48dd51a5`.
+The opt-in native 36-layer `Accelerate` text runs produced BF16 retained
+sidecars with SHA-256
+`a40d894b1332611bf456540d14d684fef034958fdbc5efc866a13829821b2b3c`
+and `8c2ef509e7864975139ecfc9aa488220e1754011509db3171e1269dea7565395`.
+Relative RMS differences from the corresponding official retained BF16
+embeddings are `0.0231506763` and `0.0218952444`; these are fidelity probes,
+not image-quality scores. Each sidecar binds the exact reference payload and
+manifest hashes. The A/B bridge accepted both, producing conditioning payload
+SHA-256 values
+`e075da7b38e511cb5ed35f3d0cfa3571169092800cc79bf932000591fda1698c`
+and `00fd51037985b8b358749335a2a2baf0a0662c506f8c251d9e00c390853b1d0b`.
+Independent byte-range checks found only `encoder_hidden_states` changed;
+the masks and initial latents are identical to each prompt's baseline.
+
+The earlier scalar castle run was interrupted after layer 0 with no output
+sidecar; that partial log is not a full-stack or backend-speed result. One
+real 77-token Accelerate layer had the same aggregate official-reference
+error counts as a prior scalar layer, but exact backend output parity was not
+established. The two completed Accelerate sweeps overlapped other work, so
+their wall times must not be used as an uncontrolled performance comparison.
+
+Both native-conditioning bundles completed the same 40-step Metal DiT and
+offline CPU/FP32 VAE path as their respective hybrid baselines. The native
+castle latent manifest and payload SHA-256 values are
+`7a8a1cc229425c781df284dd4652a6ea4eae0216a67de573aa780a2e9d47c917`
+and `1947d25fabc05b3e2b36e1e7a6a74f79ce13c87be56fd6972e80b8f08d451b30`;
+the native `NOVA` values are
+`e6e9bed0510aeba535339abe7a64d8decb4271619c65afab380f16eac04fe3f0`
+and `2ec384d8740aea6fb4eae6ff66a9c874238b06adfad92f7d19a8eea2e342fbff`.
+Each latent manifest binds the exact prompt, revision, seed 7, 512x512 image,
+40 steps, and its corresponding conditioning payload SHA-256 above. The
+decoded native PNG SHA-256 values are
+`c3841d143241bb177ebc4aa2549a734668c36c56907068ce2d01bf0f189f274d`
+and `1837d818ae2ee94d15b0c0354b161e426771988dc197301ae716eaf6ca62ad34`;
+both are 512x512 RGBA under
+`/private/tmp/qwen21-ab-native-{elven-castle,nova-city}-20260924.png`.
+Independent byte checks and PNG inspection found that the castle retained
+its towers, bridges, river, forest light, and camera composition, while the
+futuristic scene retained its maglev train, glass station, flying vehicles,
+wet pavement, and legible `NOVA` sign. RGB mean absolute error versus each
+hybrid baseline PNG was 0.191/255 for the castle and 0.606/255 for `NOVA`;
+latent relative RMS was 0.00356 and 0.01210, respectively. These image and
+latent differences are descriptive probes, not quality metrics. Two prompts
+at one seed support a narrow native-text compatibility finding, not general
+prompt fidelity, typography reliability, performance parity, or promotion of
+the native path as the default. A next falsifier would vary seeds, prompt
+length and typography while preserving this same one-tensor A/B control.
+The temporary images and manifests can disappear independently of this source
+revision, in addition to the model/processor/runner decay triggers above.
+
 ## Goal
 
 Admit Qwen-Image 2.1 weights into the native Metal engine without treating a

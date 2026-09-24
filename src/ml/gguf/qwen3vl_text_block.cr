@@ -21,6 +21,14 @@ module ML::GGUF
       SdpaF32
     end
 
+    enum ProjectionBackend
+      # Keep the reference implementation and its reduction order by default.
+      Scalar
+
+      # Opt in to Apple's row-major CBLAS SGEMM for diagnostic text sweeps.
+      Accelerate
+    end
+
     getter hidden_dim : Int32
     getter heads : Int32
     getter kv_heads : Int32
@@ -29,11 +37,13 @@ module ML::GGUF
     getter eps : Float32
     getter rope_theta : Float32
     getter attention_arithmetic : AttentionArithmetic
+    getter projection_backend : ProjectionBackend
 
     def initialize(@hidden_dim : Int32, @heads : Int32, @kv_heads : Int32,
                    @head_dim : Int32, @intermediate_dim : Int32,
                    @eps : Float32 = 1e-6_f32, @rope_theta : Float32 = 5_000_000.0_f32,
-                   @attention_arithmetic : AttentionArithmetic = AttentionArithmetic::Eager)
+                   @attention_arithmetic : AttentionArithmetic = AttentionArithmetic::Eager,
+                   @projection_backend : ProjectionBackend = ProjectionBackend::Scalar)
       raise ArgumentError.new("hidden_dim must be positive") unless @hidden_dim > 0
       raise ArgumentError.new("heads and head_dim must be positive") unless @heads > 0 && @head_dim > 0
       raise ArgumentError.new("heads * head_dim must equal hidden_dim") unless @heads * @head_dim == @hidden_dim
@@ -73,6 +83,17 @@ module ML::GGUF
   end
 
   module Qwen3VLTextBlock
+    {% if flag?(:darwin) %}
+      @[Link(framework: "Accelerate")]
+      lib LibQwen3VLAccelerate
+        fun cblas_sgemm(layout : Int32, trans_a : Int32, trans_b : Int32,
+                        m : Int32, n : Int32, k : Int32,
+                        alpha : Float32, a : Float32*, lda : Int32,
+                        b : Float32*, ldb : Int32,
+                        beta : Float32, c : Float32*, ldc : Int32) : Void
+      end
+    {% end %}
+
     # TextModel.forward constructs arange(seq_len) and repeats it over all four
     # axes when position_ids is absent. In this no-vision route that wins over
     # the attention mask; masked left-pad tokens still occupy sequence slots.
@@ -109,11 +130,20 @@ module ML::GGUF
       normalized = rms_norm_rows(residual, token_count, hidden_dim, weights.input_layernorm, config.eps)
       trace_boundary(trace, "layers.0.input_layernorm", normalized)
 
-      q = linear(normalized, token_count, hidden_dim, config.heads * config.head_dim, weights.q_proj)
+      q = linear(
+        normalized, token_count, hidden_dim, config.heads * config.head_dim,
+        weights.q_proj, config.projection_backend,
+      )
       trace_boundary(trace, "layers.0.self_attn.q_proj", q)
-      k = linear(normalized, token_count, hidden_dim, config.kv_heads * config.head_dim, weights.k_proj)
+      k = linear(
+        normalized, token_count, hidden_dim, config.kv_heads * config.head_dim,
+        weights.k_proj, config.projection_backend,
+      )
       trace_boundary(trace, "layers.0.self_attn.k_proj", k)
-      v = linear(normalized, token_count, hidden_dim, config.kv_heads * config.head_dim, weights.v_proj)
+      v = linear(
+        normalized, token_count, hidden_dim, config.kv_heads * config.head_dim,
+        weights.v_proj, config.projection_backend,
+      )
       trace_boundary(trace, "layers.0.self_attn.v_proj", v)
       q = rms_norm_heads(q, token_count, config.heads, config.head_dim, weights.q_norm, config.eps)
       trace_boundary(trace, "layers.0.self_attn.q_norm", q)
@@ -128,7 +158,8 @@ module ML::GGUF
       attended = causal_gqa_attention(q, k, v, attention_mask, token_count, config)
       trace_boundary(trace, "attended", attended)
       attention_branch = linear(
-        attended, token_count, config.hidden_dim, hidden_dim, weights.o_proj
+        attended, token_count, config.hidden_dim, hidden_dim, weights.o_proj,
+        config.projection_backend,
       )
       trace_boundary(trace, "layers.0.self_attn.o_proj", attention_branch)
       after_attention = residual_add(residual, attention_branch)
@@ -138,9 +169,15 @@ module ML::GGUF
         residual, token_count, hidden_dim, weights.post_attention_layernorm, config.eps
       )
       trace_boundary(trace, "layers.0.post_attention_layernorm", normalized)
-      gate = linear(normalized, token_count, hidden_dim, config.intermediate_dim, weights.gate_proj)
+      gate = linear(
+        normalized, token_count, hidden_dim, config.intermediate_dim, weights.gate_proj,
+        config.projection_backend,
+      )
       trace_boundary(trace, "layers.0.mlp.gate_proj", gate)
-      up = linear(normalized, token_count, hidden_dim, config.intermediate_dim, weights.up_proj)
+      up = linear(
+        normalized, token_count, hidden_dim, config.intermediate_dim, weights.up_proj,
+        config.projection_backend,
+      )
       trace_boundary(trace, "layers.0.mlp.up_proj", up)
       activated = Array(Float32).new(gate.size, 0.0_f32)
       gate.size.times do |index|
@@ -148,7 +185,8 @@ module ML::GGUF
         activated[index] = bf16(silu * up[index])
       end
       mlp_branch = linear(
-        activated, token_count, config.intermediate_dim, hidden_dim, weights.down_proj
+        activated, token_count, config.intermediate_dim, hidden_dim, weights.down_proj,
+        config.projection_backend,
       )
       trace_boundary(trace, "layers.0.mlp.down_proj", mlp_branch)
       output = residual_add(residual, mlp_branch)
@@ -209,7 +247,26 @@ module ML::GGUF
     end
 
     private def self.linear(input : Array(Float32), rows : Int32, input_dim : Int32,
-                            output_dim : Int32, weight : Array(Float32)) : Array(Float32)
+                            output_dim : Int32, weight : Array(Float32),
+                            backend : Qwen3VLTextBlockConfig::ProjectionBackend) : Array(Float32)
+      case backend
+      when .scalar?
+        linear_scalar(input, rows, input_dim, output_dim, weight)
+      when .accelerate?
+        {% if flag?(:darwin) %}
+          linear_accelerate(input, rows, input_dim, output_dim, weight)
+        {% else %}
+          raise ArgumentError.new("Accelerate projection backend requires macOS")
+        {% end %}
+      else
+        raise ArgumentError.new("unsupported Qwen3VL projection backend")
+      end
+    end
+
+    # Keep this loop unchanged: it is the scalar reference arithmetic and the
+    # default path, including its exact Float32 accumulation order.
+    private def self.linear_scalar(input : Array(Float32), rows : Int32, input_dim : Int32,
+                                   output_dim : Int32, weight : Array(Float32)) : Array(Float32)
       output = Array(Float32).new(rows * output_dim, 0.0_f32)
       rows.times do |row|
         output_dim.times do |out_index|
@@ -222,6 +279,28 @@ module ML::GGUF
           output[row * output_dim + out_index] = bf16(sum)
         end
       end
+      output
+    end
+
+    private def self.linear_accelerate(input : Array(Float32), rows : Int32, input_dim : Int32,
+                                       output_dim : Int32, weight : Array(Float32)) : Array(Float32)
+      # The official loader already exposes BF16-decoded values, but preserve
+      # the projection contract for synthetic callers too by rounding weights
+      # before SGEMM. Inputs are BF16 module values at every call site.
+      bf16_weight = Array(Float32).new(weight.size) { |index| bf16(weight[index]) }
+      output = Array(Float32).new(rows * output_dim, 0.0_f32)
+
+      # Row-major A=[rows,input_dim], B=[output_dim,input_dim], so B is
+      # transposed by CBLAS to produce C=[rows,output_dim].
+      # CBLAS enums are RowMajor=101, NoTrans=111, and Trans=112.
+      LibQwen3VLAccelerate.cblas_sgemm(
+        101_i32, 111_i32, 112_i32,
+        rows, output_dim, input_dim,
+        1.0_f32, input.to_unsafe, input_dim,
+        bf16_weight.to_unsafe, input_dim,
+        0.0_f32, output.to_unsafe, output_dim,
+      )
+      output.size.times { |index| output[index] = bf16(output[index]) }
       output
     end
 
