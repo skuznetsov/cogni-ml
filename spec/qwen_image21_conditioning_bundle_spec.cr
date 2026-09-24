@@ -78,3 +78,28 @@ describe ML::GGUF::QwenImage21ConditioningBundle do
     end
   end
 end
+
+baseline_ab_manifest = ENV["QWEN_IMAGE21_AB_BASELINE_MANIFEST"]?
+native_ab_manifest = ENV["QWEN_IMAGE21_AB_NATIVE_MANIFEST"]?
+raise ArgumentError.new("set both QWEN_IMAGE21_AB_*_MANIFEST variables") if baseline_ab_manifest.nil? != native_ab_manifest.nil?
+
+if baseline_ab_manifest && native_ab_manifest
+  describe "optional real Qwen-Image 2.1 conditioning A/B handoff" do
+    it "loads both bundles with identical masks and initial latents" do
+      baseline = ML::GGUF::QwenImage21ConditioningBundle.load(baseline_ab_manifest)
+      native = ML::GGUF::QwenImage21ConditioningBundle.load(native_ab_manifest)
+
+      native.prompt.should eq(baseline.prompt)
+      native.seed.should eq(baseline.seed)
+      native.model_revision.should eq(baseline.model_revision)
+      native.image_width.should eq(baseline.image_width)
+      native.image_height.should eq(baseline.image_height)
+      native.img_shapes.should eq(baseline.img_shapes)
+      native.encoder_hidden_states_mask.should eq(baseline.encoder_hidden_states_mask)
+      native.encoder_img_mask.should eq(baseline.encoder_img_mask)
+      native.initial_target_latents.should eq(baseline.initial_target_latents)
+      native.encoder_hidden_states.size.should eq(10 * 4096)
+      native.encoder_hidden_states.should_not eq(baseline.encoder_hidden_states)
+    end
+  end
+end

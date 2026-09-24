@@ -87,6 +87,50 @@ INTERMEDIATE_MODULES = (
     "layers.0.mlp.down_proj",
     "layers.0",
 )
+NATIVE_BOUNDARY_ORDER = (
+    "layer0_input",
+    "layers.0.input_layernorm",
+    "layers.0.self_attn.q_proj",
+    "layers.0.self_attn.k_proj",
+    "layers.0.self_attn.v_proj",
+    "layers.0.self_attn.q_norm",
+    "layers.0.self_attn.k_norm",
+    "post_rope_q",
+    "post_rope_k",
+    "attended",
+    "layers.0.self_attn.o_proj",
+    "layers.0.post_attention_layernorm",
+    "layers.0.mlp.gate_proj",
+    "layers.0.mlp.up_proj",
+    "layers.0.mlp.down_proj",
+    "layers.0",
+)
+NATIVE_BOUNDARY_WIDTHS = {
+    "layer0_input": HIDDEN_SIZE,
+    "layers.0.input_layernorm": HIDDEN_SIZE,
+    "layers.0.self_attn.q_proj": HIDDEN_SIZE,
+    "layers.0.self_attn.k_proj": 1024,
+    "layers.0.self_attn.v_proj": 1024,
+    "layers.0.self_attn.q_norm": HIDDEN_SIZE,
+    "layers.0.self_attn.k_norm": 1024,
+    "post_rope_q": HIDDEN_SIZE,
+    "post_rope_k": 1024,
+    "attended": HIDDEN_SIZE,
+    "layers.0.self_attn.o_proj": HIDDEN_SIZE,
+    "layers.0.post_attention_layernorm": HIDDEN_SIZE,
+    "layers.0.mlp.gate_proj": 12288,
+    "layers.0.mlp.up_proj": 12288,
+    "layers.0.mlp.down_proj": HIDDEN_SIZE,
+    "layers.0": HIDDEN_SIZE,
+}
+NATIVE_TRACE_SCHEMA = "qwen3vl-native-layer0-trace"
+SEQUENCE_AXIS_OVERRIDES = {
+    "attention_mask_2x2": 2,
+    "attention_probabilities": 2,
+    "reconstructed_attention_scores": 2,
+    "reconstructed_attention_probabilities": 2,
+    "reconstructed_attention_head_output": 2,
+}
 
 
 def _sha256(data: bytes) -> str:
@@ -135,7 +179,13 @@ def _bf16_values(tensor: Any) -> list[float]:
     return tensor.detach().to(device="cpu", dtype=__import__("torch").float32).reshape(-1).tolist()
 
 
-def _metrics(actual: Any, expected: Any, *, query_axis: int | None = None) -> dict[str, Any]:
+def _metrics(
+    actual: Any,
+    expected: Any,
+    *,
+    query_axis: int | None = None,
+    row_regions: list[str] | None = None,
+) -> dict[str, Any]:
     import torch
 
     left = actual.detach().to(device="cpu").contiguous()
@@ -172,9 +222,9 @@ def _metrics(actual: Any, expected: Any, *, query_axis: int | None = None) -> di
         "actual_sha256": _tensor_sha256(left),
         "expected_sha256": _tensor_sha256(right),
     }
-    if query_axis is not None and left.ndim > query_axis and left.shape[query_axis] >= 2:
+    if query_axis is not None and left.ndim > query_axis and left.shape[query_axis] >= 1:
         by_query = []
-        for query_index in range(2):
+        for query_index in range(min(2, left.shape[query_axis])):
             selection = [slice(None)] * left.ndim
             selection[query_axis] = query_index
             selected_mismatch = mismatch[tuple(selection)]
@@ -188,6 +238,36 @@ def _metrics(actual: Any, expected: Any, *, query_axis: int | None = None) -> di
                 }
             )
         result["by_query"] = by_query
+        if row_regions is not None and len(row_regions) < left.shape[query_axis]:
+            raise ValueError("row region labels are shorter than the compared sequence")
+        by_row = []
+        totals: dict[str, dict[str, int]] = {}
+        for row_index in range(left.shape[query_axis]):
+            selection = [slice(None)] * left.ndim
+            selection[query_axis] = row_index
+            selected_mismatch = mismatch[tuple(selection)]
+            selected_error = error[tuple(selection)]
+            row_entry: dict[str, Any] = {
+                "row_index": row_index,
+                "exact_mismatches": int(selected_mismatch.sum().item()),
+                "elements": int(selected_mismatch.numel()),
+                "max_abs_error": float(selected_error.max().item()) if selected_error.numel() else 0.0,
+            }
+            if row_regions is not None:
+                region = row_regions[row_index]
+                row_entry["region"] = region
+                total = totals.setdefault(
+                    region,
+                    {"rows": 0, "rows_with_mismatch": 0, "exact_mismatches": 0, "elements": 0},
+                )
+                total["rows"] += 1
+                total["rows_with_mismatch"] += int(row_entry["exact_mismatches"] > 0)
+                total["exact_mismatches"] += row_entry["exact_mismatches"]
+                total["elements"] += row_entry["elements"]
+            by_row.append(row_entry)
+        result["by_row"] = by_row
+        if row_regions is not None:
+            result["region_totals"] = totals
     return result
 
 
@@ -324,6 +404,200 @@ def _first_two(tensor: Any, *, sequence_axis: int = 1) -> Any:
     return tensor[tuple(selection)]
 
 
+def _sequence_axis(name: str) -> int:
+    return SEQUENCE_AXIS_OVERRIDES.get(name, 1)
+
+
+def _sequence_regions(attention_mask: Any, *, drop_idx: int) -> list[str]:
+    if hasattr(attention_mask, "detach"):
+        mask_values = attention_mask.detach().to(device="cpu").reshape(-1).tolist()
+    else:
+        mask_values = list(attention_mask)
+    if isinstance(drop_idx, bool) or not isinstance(drop_idx, int) or drop_idx < 0:
+        raise ValueError("drop_idx must be a non-negative integer")
+
+    regions: list[str] = []
+    attended_index = 0
+    for attended in mask_values:
+        if bool(attended):
+            regions.append("prefix" if attended_index < drop_idx else "retained")
+            attended_index += 1
+        else:
+            regions.append("masked")
+    if drop_idx > attended_index:
+        raise ValueError("drop_idx exceeds the number of attended sequence rows")
+    return regions
+
+
+def _slice_sequence(tensor: Any, name: str, count: int) -> Any:
+    selection = [slice(None)] * tensor.ndim
+    selection[_sequence_axis(name)] = slice(0, count)
+    return tensor[tuple(selection)]
+
+
+def _align_sequence_rows(name: str, left: Any, right: Any) -> tuple[Any, Any, int | None]:
+    if left.shape == right.shape or left.ndim != right.ndim:
+        return left, right, None
+    sequence_axis = _sequence_axis(name)
+    if sequence_axis >= left.ndim:
+        return left, right, None
+    if any(
+        left.shape[index] != right.shape[index]
+        for index in range(left.ndim)
+        if index != sequence_axis
+    ):
+        return left, right, None
+    compared_rows = min(left.shape[sequence_axis], right.shape[sequence_axis])
+    if compared_rows < 1:
+        return left, right, None
+    return (
+        _slice_sequence(left, name, compared_rows),
+        _slice_sequence(right, name, compared_rows),
+        compared_rows,
+    )
+
+
+def _snapshot_row_regions(name: str, row_regions: list[str], row_count: int) -> list[str]:
+    if name == "pre_final_prompt_embeddings":
+        selected = [region for region in row_regions if region == "retained"]
+        if len(selected) != row_count:
+            raise ValueError(
+                "pre-final prompt embedding rows do not match the fixture's retained sequence rows"
+            )
+        return selected
+    if row_count > len(row_regions):
+        raise ValueError(f"row region labels are shorter than the {name} sequence")
+    return row_regions[:row_count]
+
+
+def _load_native_trace(native_dir: Path, *, torch: Any, fixture_payload_sha256: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    native_root = native_dir.resolve(strict=True)
+    if not native_root.is_dir():
+        raise ValueError(f"native trace path is not a directory: {native_root}")
+    manifest_path = (native_root / "trace.json").resolve(strict=True)
+    try:
+        manifest_path.relative_to(native_root)
+    except ValueError as exc:
+        raise ValueError("native trace manifest resolves outside its directory") from exc
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for field, expected in (
+        ("schema", NATIVE_TRACE_SCHEMA),
+        ("schema_version", 1),
+        ("prompt", "red cube"),
+        ("model_revision", EXPECTED_FIXTURE["model.revision_sha"]),
+        ("fixture_payload_sha256", fixture_payload_sha256),
+        ("dtype", "bfloat16-le"),
+    ):
+        value = manifest.get(field)
+        if type(value) is not type(expected) or value != expected:
+            raise ValueError(f"native trace manifest {field} does not match the pinned fixture")
+    stages = manifest.get("stages")
+    if not isinstance(stages, dict) or set(stages) != set(NATIVE_BOUNDARY_ORDER):
+        raise ValueError("native trace stages do not match the expected layer-0 boundary set")
+    if sys.byteorder != "little":
+        raise RuntimeError("native trace tensors are little-endian; loader requires a little-endian host")
+
+    native: dict[str, Any] = {}
+    normalized_stages: dict[str, dict[str, Any]] = {}
+    for name in NATIVE_BOUNDARY_ORDER:
+        descriptor = stages[name]
+        expected_shape = [24, NATIVE_BOUNDARY_WIDTHS[name]]
+        if not isinstance(descriptor, dict) or descriptor.get("shape") != expected_shape:
+            raise ValueError(f"native trace stage {name} has an unexpected shape")
+        expected_nbytes = expected_shape[0] * expected_shape[1] * 2
+        if type(descriptor.get("nbytes")) is not int or descriptor["nbytes"] != expected_nbytes:
+            raise ValueError(f"native trace stage {name} has an unexpected byte count")
+        filename = descriptor.get("filename")
+        relative_path = Path(filename) if isinstance(filename, str) else Path("..")
+        if (
+            relative_path.is_absolute()
+            or len(relative_path.parts) != 1
+            or relative_path.name in ("", ".", "..")
+        ):
+            raise ValueError(f"native trace stage {name} filename must be a direct child")
+        stage_path = (native_root / relative_path).resolve(strict=True)
+        try:
+            stage_path.relative_to(native_root)
+        except ValueError as exc:
+            raise ValueError(f"native trace stage {name} resolves outside its directory") from exc
+        data = stage_path.read_bytes()
+        digest = _sha256(data)
+        if len(data) != expected_nbytes or descriptor.get("sha256") != digest:
+            raise ValueError(f"native trace stage {name} failed its length or SHA-256 check")
+        tensor = torch.frombuffer(bytearray(data), dtype=torch.bfloat16)
+        native[name] = tensor.reshape(expected_shape).unsqueeze(0).clone()
+        normalized_stages[name] = {
+            "filename": relative_path.name,
+            "shape": expected_shape,
+            "nbytes": expected_nbytes,
+            "sha256": digest,
+        }
+    metadata = {
+        "schema": manifest["schema"],
+        "schema_version": manifest["schema_version"],
+        "prompt": manifest["prompt"],
+        "model_revision": manifest["model_revision"],
+        "fixture_payload_sha256": manifest["fixture_payload_sha256"],
+        "dtype": manifest["dtype"],
+        "stages": normalized_stages,
+        "path": str(native_root),
+    }
+    return native, metadata
+
+
+def _native_compare_view(name: str, tensor: Any) -> Any:
+    if name in (
+        "layers.0.self_attn.q_norm",
+        "layers.0.self_attn.k_norm",
+        "post_rope_q",
+        "post_rope_k",
+    ):
+        return tensor.reshape(tensor.shape[0], tensor.shape[1], -1)
+    return tensor
+
+
+def _compare_native_stages(
+    official: dict[str, Any],
+    native: dict[str, Any],
+    *,
+    row_regions: list[str],
+) -> dict[str, Any]:
+    stages: dict[str, Any] = {}
+    first_divergent_stage: str | None = None
+    exact_prefix: list[str] = []
+    for name in NATIVE_BOUNDARY_ORDER:
+        if name not in official:
+            raise ValueError(f"official trace did not capture native boundary {name!r}")
+        actual = _native_compare_view(name, official[name])
+        expected = native[name]
+        if actual.dtype != expected.dtype:
+            raise ValueError(
+                f"official/native dtype mismatch at {name}: {actual.dtype} versus {expected.dtype}"
+            )
+        if list(actual.shape) != [1, 24, NATIVE_BOUNDARY_WIDTHS[name]]:
+            raise ValueError(f"official trace boundary {name} has unexpected shape {list(actual.shape)}")
+        metric = _metrics(actual, expected, query_axis=1, row_regions=row_regions)
+        stages[name] = metric
+        if first_divergent_stage is None and metric["exact_mismatches"]:
+            first_divergent_stage = name
+        if metric["exact_mismatches"] == 0:
+            exact_prefix.append(name)
+        else:
+            # Preserve later exact boundaries in stage data but do not describe
+            # them as an exact prefix across a divergence.
+            pass
+    return {
+        "stage_order": list(NATIVE_BOUNDARY_ORDER),
+        "first_divergent_stage": first_divergent_stage,
+        "exact_prefix_before_divergence": (
+            exact_prefix
+            if first_divergent_stage is None
+            else list(NATIVE_BOUNDARY_ORDER[: NATIVE_BOUNDARY_ORDER.index(first_divergent_stage)])
+        ),
+        "stages": stages,
+    }
+
+
 def _run_trace(
     model: Any,
     tensors: dict[str, Any],
@@ -340,10 +614,21 @@ def _run_trace(
     captured: dict[str, Any] = {}
     handles = []
 
+    def first_tensor(value: Any) -> Any | None:
+        if isinstance(value, torch.Tensor):
+            return value
+        if isinstance(value, (tuple, list)):
+            for item in value:
+                tensor = first_tensor(item)
+                if tensor is not None:
+                    return tensor
+        return None
+
     def tensor_hook(name: str):
         def hook(_module: Any, _inputs: Any, output: Any) -> None:
-            if isinstance(output, torch.Tensor):
-                captured[name] = _snapshot(_first_two(output))
+            tensor = first_tensor(output)
+            if tensor is not None:
+                captured[name] = _snapshot(tensor)
         return hook
 
     modules = dict(language_model.named_modules())
@@ -355,7 +640,7 @@ def _run_trace(
 
     def capture_layer0_input(_module: Any, inputs: Any) -> None:
         if inputs and isinstance(inputs[0], torch.Tensor):
-            captured["layer0_input"] = _snapshot(_first_two(inputs[0]))
+            captured["layer0_input"] = _snapshot(inputs[0])
 
     handles.append(language_model.layers[0].register_forward_pre_hook(capture_layer0_input))
 
@@ -364,10 +649,10 @@ def _run_trace(
         position_embeddings = kwargs.get("position_embeddings", args[1] if len(args) > 1 else None)
         mask = kwargs.get("attention_mask", args[2] if len(args) > 2 else None)
         if hidden is not None:
-            captured["attention_input"] = _snapshot(_first_two(hidden))
+            captured["attention_input"] = _snapshot(hidden)
         if position_embeddings is not None:
-            captured["position_cos"] = _snapshot(_first_two(position_embeddings[0], sequence_axis=1))
-            captured["position_sin"] = _snapshot(_first_two(position_embeddings[1], sequence_axis=1))
+            captured["position_cos"] = _snapshot(position_embeddings[0])
+            captured["position_sin"] = _snapshot(position_embeddings[1])
         if mask is not None:
             captured["attention_mask_2x2"] = _snapshot(mask[..., :2, :2])
         else:
@@ -375,6 +660,12 @@ def _run_trace(
         captured["attention_is_causal"] = bool(getattr(attention, "is_causal", False))
 
     handles.append(attention.register_forward_pre_hook(capture_attention_call, with_kwargs=True))
+
+    def capture_attended(_module: Any, inputs: Any) -> None:
+        if inputs and isinstance(inputs[0], torch.Tensor):
+            captured["attended"] = _snapshot(inputs[0])
+
+    handles.append(attention.o_proj.register_forward_pre_hook(capture_attended))
 
     def capture_attention_result(_module: Any, _inputs: Any, output: Any) -> None:
         if isinstance(output, (tuple, list)):
@@ -410,9 +701,9 @@ def _run_trace(
     hidden_states = getattr(outputs, "hidden_states", None)
     if hidden_states is None or len(hidden_states) < 2:
         raise RuntimeError("the text encoder did not return the first decoder-layer hidden state")
-    captured["encoder_hidden_state_000"] = _snapshot(_first_two(hidden_states[0]))
-    captured["encoder_hidden_state_001"] = _snapshot(_first_two(hidden_states[1]))
-    captured["encoder_last_hidden_state"] = _snapshot(_first_two(outputs.hidden_states[-1]))
+    captured["encoder_hidden_state_000"] = _snapshot(hidden_states[0])
+    captured["encoder_hidden_state_001"] = _snapshot(hidden_states[1])
+    captured["encoder_last_hidden_state"] = _snapshot(outputs.hidden_states[-1])
     captured["encoder_hidden_state_count"] = len(hidden_states)
     if token_count > drop_idx and "final_norm_input_full" in captured:
         visible = tensors["attention_mask"][:, :token_count].to(device="cpu").bool()[0]
@@ -422,9 +713,9 @@ def _run_trace(
             torch.equal(captured["final_norm_input_full"], captured["final_norm_output_full"])
         )
 
-    # Reconstruct the first two rows of the exact eager attention scores from
-    # the hooked BF16 projections and positional embeddings. The same Q/K/V
-    # tensors feed both the SDPA and eager module calls.
+    # Reconstruct the official rotary Q/K boundaries from the hooked BF16
+    # projections and positional embeddings, then keep the existing compact
+    # two-row attention score diagnostic.
     q_norm = captured["layers.0.self_attn.q_norm"]
     k_norm = captured["layers.0.self_attn.k_norm"]
     v_proj = captured["layers.0.self_attn.v_proj"]
@@ -433,10 +724,13 @@ def _run_trace(
     query = q_norm.transpose(1, 2)
     key = k_norm.transpose(1, 2)
     query, key = modeling_qwen3_vl.apply_rotary_pos_emb(query, key, cos, sin)
-    key_states = modeling_qwen3_vl.repeat_kv(key, attention.num_key_value_groups)
-    value_states = v_proj.reshape(v_proj.shape[0], v_proj.shape[1], -1, attention.head_dim).transpose(1, 2)
+    captured["post_rope_q"] = _snapshot(query.transpose(1, 2))
+    captured["post_rope_k"] = _snapshot(key.transpose(1, 2))
+    query_first_two = query[..., :2, :]
+    key_states = modeling_qwen3_vl.repeat_kv(key[..., :2, :], attention.num_key_value_groups)
+    value_states = v_proj[:, :2].reshape(v_proj.shape[0], 2, -1, attention.head_dim).transpose(1, 2)
     value_states = modeling_qwen3_vl.repeat_kv(value_states, attention.num_key_value_groups)
-    scores = torch.matmul(query, key_states.transpose(2, 3)) * attention.scaling
+    scores = torch.matmul(query_first_two, key_states.transpose(2, 3)) * attention.scaling
     mask_2x2 = captured["attention_mask_2x2"]
     if mask_2x2 is not None:
         scores = scores + mask_2x2
@@ -484,18 +778,31 @@ def _summarize_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
-def _compare_snapshots(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+def _compare_snapshots(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    *,
+    row_regions: list[str] | None = None,
+) -> dict[str, Any]:
     comparisons: dict[str, Any] = {}
     for name in sorted(left.keys() & right.keys()):
         a, b = left[name], right[name]
         if hasattr(a, "shape") and hasattr(b, "shape"):
-            query_axis = 2 if name in (
-                "attention_probabilities",
-                "reconstructed_attention_scores",
-                "reconstructed_attention_probabilities",
-                "reconstructed_attention_head_output",
-            ) else 1
-            comparisons[name] = _metrics(a, b, query_axis=query_axis)
+            query_axis = _sequence_axis(name)
+            a, b, compared_rows = _align_sequence_rows(name, a, b)
+            metric = _metrics(
+                a,
+                b,
+                query_axis=query_axis,
+                row_regions=(
+                    _snapshot_row_regions(name, row_regions, a.shape[query_axis])
+                    if row_regions is not None and a.ndim > query_axis
+                    else None
+                ),
+            )
+            if compared_rows is not None:
+                metric["compared_sequence_rows"] = compared_rows
+            comparisons[name] = metric
         elif hasattr(a, "shape") or hasattr(b, "shape"):
             comparisons[name] = {
                 "left": _summarize_snapshot({name: a})[name] if hasattr(a, "shape") else a,
@@ -511,6 +818,11 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model-dir", type=Path)
     parser.add_argument("--fixture-dir", type=Path)
+    parser.add_argument(
+        "--native-trace-dir",
+        type=Path,
+        help="compare the default full-prompt official layer-0 hooks with validated native BF16 stage sidecars",
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--overwrite", action="store_true", help="replace an existing output or BF16 sidecar")
     parser.add_argument(
@@ -522,6 +834,11 @@ def _parse_args() -> argparse.Namespace:
         "--prefix2-only",
         action="store_true",
         help="run only the default-attention two-token trace instead of the default four-run comparison",
+    )
+    parser.add_argument(
+        "--full24-only",
+        action="store_true",
+        help="run only the default-attention full 24-token trace (for bounded native-boundary comparison)",
     )
     parser.add_argument(
         "--dump-intermediates-bf16",
@@ -538,6 +855,12 @@ def _parse_args() -> argparse.Namespace:
         parser.error("provide --model-dir or QWEN3VL_TEXT_ENCODER_DIR")
     if args.fixture_dir is None:
         parser.error("provide --fixture-dir or QWEN3VL_TEXT_REFERENCE_DIR")
+    if args.prefix2_only and args.full24_only:
+        parser.error("--prefix2-only and --full24-only are mutually exclusive")
+    if args.native_trace_dir is not None and args.prefix2_only:
+        parser.error("--native-trace-dir requires the full 24-token trace")
+    if args.native_trace_dir is not None and not args.full24_only:
+        parser.error("--native-trace-dir requires --full24-only to keep the official probe bounded")
     if args.output.exists() and not args.overwrite:
         parser.error(f"output already exists (pass --overwrite to replace it): {args.output}")
     return args
@@ -556,6 +879,19 @@ def main() -> int:
         raise ValueError("fixture hidden size does not match this diagnostic")
     if not torch.all(fixture["attention_mask"][:, :2] == 1):
         raise ValueError("fixture first two tokens must both be attended")
+    drop_idx = int(manifest["sequence"]["drop_idx"])
+    row_regions = _sequence_regions(fixture["attention_mask"], drop_idx=drop_idx)
+    if len(row_regions) != fixture["input_ids"].shape[1]:
+        raise ValueError("fixture attention mask length does not match input token count")
+
+    native_tensors: dict[str, Any] | None = None
+    native_metadata: dict[str, Any] | None = None
+    if args.native_trace_dir is not None:
+        native_tensors, native_metadata = _load_native_trace(
+            args.native_trace_dir,
+            torch=torch,
+            fixture_payload_sha256=_sha256(payload),
+        )
 
     model = Qwen3VLForConditionalGeneration.from_pretrained(
         str(args.model_dir),
@@ -572,11 +908,14 @@ def main() -> int:
     if not isinstance(default_implementation, str):
         raise RuntimeError(f"could not read actual layer0 _attn_implementation: {original_implementations}")
 
-    fixture_layer0 = fixture["hidden_state_001"][:, :2].to(device="cpu")
+    fixture_layer0 = fixture["hidden_state_001"].to(device="cpu")
+    fixture_layer0_input = fixture["hidden_state_000"].to(device="cpu")
     run_records: dict[str, dict[str, Any]] = {}
     run_tensors: dict[str, dict[str, Any]] = {}
     if args.prefix2_only:
         run_plan = [("default_prefix2", default_implementation, 2)]
+    elif args.full24_only:
+        run_plan = [("default_full", default_implementation, fixture["input_ids"].shape[1])]
     else:
         run_plan = [
             ("default_full", default_implementation, fixture["input_ids"].shape[1]),
@@ -621,10 +960,13 @@ def main() -> int:
             model,
             fixture,
             token_count=token_count,
-            drop_idx=int(manifest["sequence"]["drop_idx"]),
+            drop_idx=drop_idx,
             device=args.device,
         )
         run_tensors[name] = tensors
+        expected_layer0 = fixture_layer0[:, :token_count]
+        expected_layer0_input = fixture_layer0_input[:, :token_count]
+        run_regions = row_regions[:token_count]
         run_records[name] = {
             "requested_implementation": implementation,
             "actual_implementations": actual_implementations,
@@ -632,9 +974,14 @@ def main() -> int:
             "first_two_input_ids": fixture["input_ids"][0, :2].tolist(),
             "first_two_attention_mask": fixture["attention_mask"][0, :2].tolist(),
             "first_two_mm_token_type_ids": fixture["mm_token_type_ids"][0, :2].tolist(),
-            "fixture_layer0_metrics": _metrics(tensors["layers.0"], fixture_layer0, query_axis=1),
+            "fixture_layer0_input_metrics": _metrics(
+                tensors["layer0_input"], expected_layer0_input, query_axis=1, row_regions=run_regions
+            ),
+            "fixture_layer0_metrics": _metrics(
+                tensors["layers.0"], expected_layer0, query_axis=1, row_regions=run_regions
+            ),
             "fixture_hidden_state_001_metrics": _metrics(
-                tensors["encoder_hidden_state_001"], fixture_layer0, query_axis=1
+                tensors["encoder_hidden_state_001"], expected_layer0, query_axis=1, row_regions=run_regions
             ),
             "pre_final_prompt_metrics": (
                 _metrics(
@@ -663,7 +1010,17 @@ def main() -> int:
         ("default_prefix2", "eager_prefix2"),
     ):
         if left in run_tensors and right in run_tensors:
-            comparisons[f"{left}_vs_{right}"] = _compare_snapshots(run_tensors[left], run_tensors[right])
+            comparisons[f"{left}_vs_{right}"] = _compare_snapshots(
+                run_tensors[left], run_tensors[right], row_regions=row_regions
+            )
+
+    native_comparison = None
+    if native_tensors is not None:
+        if "default_full" not in run_tensors:
+            raise RuntimeError("native trace comparison requires the default full-prompt official run")
+        native_comparison = _compare_native_stages(
+            run_tensors["default_full"], native_tensors, row_regions=row_regions
+        )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     intermediate_sidecar: dict[str, Any] | None = None
@@ -677,6 +1034,7 @@ def main() -> int:
             tensor = snapshot.get(module_name)
             if tensor is None:
                 raise RuntimeError(f"selected run {run_name} did not capture required module output {module_name!r}")
+            tensor = _slice_sequence(tensor, module_name, 2)
             chunk = _bf16_le_bytes(tensor)
             tensor_manifest[module_name] = {
                 "dtype": "bfloat16-le",
@@ -701,7 +1059,7 @@ def main() -> int:
         }
     if args.dump_layer0_bf16:
         for name, snapshot in run_tensors.items():
-            tensor = snapshot["layers.0"]
+            tensor = _slice_sequence(snapshot["layers.0"], "layers.0", 2)
             sidecar = args.output.with_name(f"{args.output.stem}.{name}.layer0_first2.bf16le")
             if sidecar.exists() and not args.overwrite:
                 raise FileExistsError(f"BF16 sidecar already exists: {sidecar}")
@@ -716,7 +1074,7 @@ def main() -> int:
 
     result = {
         "schema": "qwen3vl-text-layer-trace",
-        "schema_version": 1,
+        "schema_version": 2,
         "model_dir": str(args.model_dir),
         "fixture_dir": str(args.fixture_dir),
         "fixture": {
@@ -726,7 +1084,9 @@ def main() -> int:
             "raw_input_shape": manifest["sequence"]["raw_input_shape"],
             "fixture_hidden_state_001_shape": manifest["tensors"]["hidden_state_001"]["shape"],
             "fixture_hidden_state_001_sha256": manifest["tensors"]["hidden_state_001"]["sha256"],
-            "hidden_state_001_first_two_sha256": _tensor_sha256(fixture_layer0),
+            "hidden_state_001_first_two_sha256": _tensor_sha256(fixture_layer0[:, :2]),
+            "drop_idx": drop_idx,
+            "row_regions": row_regions,
         },
         "runtime": {
             "python_version": platform.python_version(),
@@ -740,6 +1100,8 @@ def main() -> int:
         },
         "runs": run_records,
         "comparisons": comparisons,
+        "native_trace": native_metadata,
+        "native_comparison": native_comparison,
         "intermediate_sidecar": intermediate_sidecar,
         "interpretation": {
             "hidden_state_001_mapping": (
