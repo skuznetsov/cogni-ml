@@ -246,7 +246,7 @@ sensitivity, but the exact PyTorch/BLAS reduction tree is not established. A
 candidate 32-lane reduction is not yet a native correctness contract.
 
 The backend discriminator is reproducible with the local, pinned BF16 artifacts
-and CPU PyTorch 2.6.0 / Transformers 5.17.0:
+and CPU PyTorch 2.6.0 / Transformers 4.57.3:
 
 ```sh
 python scripts/qwen3vl_text_layer_trace.py \
@@ -294,8 +294,97 @@ crystal run scripts/qwen3vl_text_layer_sweep.cr \
   --reference-dir=/path/to/reference
 ```
 
-Use `--layers=36` to reproduce the single-run final-row diagnostic; it does
-not run the full 24-token prompt.
+The default sweep still uses only the first two tokens. Use `--layers=36` to
+reproduce that prefix diagnostic; add `--full-prompt --composed-only` for all
+24 raw tokens without redundant isolated-block passes.
+For a single full-prompt layer-0 boundary trace, add
+`--layers=1 --full-prompt --composed-only --layer0-trace-dir=/path/to/new-dir`.
+The new directory contains 16 BF16 stage files and a shape- and SHA-indexed
+`trace.json`; an existing directory is never overwritten.
+Compare that directory with one official full-prompt CPU pass:
+
+```sh
+python3 -B scripts/qwen3vl_text_layer_trace.py \
+  --model-dir /path/to/text_encoder \
+  --fixture-dir /path/to/reference \
+  --full24-only --native-trace-dir /path/to/new-dir \
+  --output /private/tmp/qwen3vl-full24-native-comparison.json
+```
+
+The comparison requires the pinned prompt, fixture SHA, model revision, stage
+shapes, and stage hashes; it reports the first divergent BF16 boundary and
+separates raw prefix rows from retained rows.
+
+## Full-prompt native conditioning discriminator (2026-09-24)
+
+With the pinned `red cube` CPU/BF16 reference, the 24-token native `SdpaF32`
+layer-0 run differs at 19,098/98,304 BF16 values across all raw rows. The
+ten retained rows (raw rows 14–23) differ at 10,827/40,960 values, with
+relative RMS error 0.001554. The first two raw rows still have the same
+93 and 28 mismatches as the separate two-token probe, guarding the causal
+prefix comparison.
+
+The official full-prompt layer-0 pass matches the pinned fixture at
+0/98,304 BF16 values, including its input. The native input is also exact.
+The first native divergence is `layers.0.input_layernorm`: 39/98,304
+BF16 values, all in raw row 22 (one of the retained rows), with maximum
+absolute error 0.000244. `q_proj` then differs at 912/98,304 values
+(23 in dropped prefix rows and 889 in retained rows). Of the 912 `q_proj`
+differences, 866 are in row 22; 46 remain on rows whose RMSNorm input to
+that projection is BF16-exact, so RMSNorm drift alone cannot explain the
+projection mismatch. The post-attention `o_proj` differs at 6,352/98,304.
+These stage counts separate the earliest RMSNorm difference from later
+projection and attention differences; by themselves, they do not establish
+a specific arithmetic root cause or an acceptable image-level tolerance.
+
+A bounded row-22 replay with the pinned layer-0 norm weight narrows that
+first difference further: PyTorch's F32 `pow(2).mean()` produces variance
+`0.0005493450444`, while the current scalar, sequential F32 accumulation
+produces `0.0005493425415`. Holding the BF16 casts and reciprocal-square-root
+path fixed, the latter reproduces all 39 native mismatches; replacing only
+the variance with the Torch value removes all 39. An F64-accurate mean also
+matches the official BF16 RMSNorm output on all 24 rows in this one fixture.
+This is a concrete reduction-order falsifier, not a general guarantee for
+other prompts or a fix for the 46 `q_proj` differences on RMSNorm-exact rows.
+
+The composed 36-layer, 24-token run differs from the official
+pre-final-RMSNorm retained embeddings at 37,364/40,960 BF16 values across all ten
+retained rows (maximum absolute error 28, relative RMS error 0.03114). Its
+fixture guard confirms that the official `hidden_state_036` retained rows
+equal the official pre-final-RMSNorm embeddings at 0/40,960 BF16 mismatches.
+The composed CPU diagnostic took 247.76 s wall time on this host; it is not
+a Metal inference benchmark. The difference is too large to promote native
+conditioning or infer image-quality parity.
+
+The optional `--retained-bf16-out=/path/to/native.bf16le` exports only this
+full-prompt, 36-layer result, plus a checksummed JSON sidecar. It is an
+experimental discriminator, not a production model artifact. A separate
+tool clones a pinned CPU/BF16 conditioning bundle and replaces only its
+retained embeddings with those native BF16 values expanded to F32:
+
+```sh
+python3 -B scripts/qwen_image21_conditioning_ab.py \
+  --baseline-bundle /path/to/red-cube-cpu-bf16-bundle \
+  --native-manifest /path/to/native.bf16le.json \
+  --output-dir /path/to/new-native-ab-bundle
+```
+
+The A/B preparation requires the baseline's ten retained embedding rows to
+match the pinned official text fixture's BF16 SHA-256; the 2026-09-24 local
+baseline had 0/40,960 BF16 differences from that fixture. The new bundle's
+embeddings are exactly the native sidecar expanded
+to F32; text masks, image masks, and seed-7 initial latents are byte-identical
+to the baseline. Payload hashes and the unchanged manifest fields were
+checked separately; both real bundles passed the native conditioning loader's
+optional A/B spec. These checks establish an isolated conditioning input
+comparison, **not** a generated-image comparison: the full DiT GGUF and VAE
+were not available in the local artifact set. A same-seed image A/B and an
+explicit quality/tolerance gate remain required before replacing the hybrid
+CPU text-encoder route.
+
+The fixture's whole-payload SHA, its retained-embedding tensor SHA, and each
+conditioning bundle's payload SHA identify different byte streams; the A/B
+manifest records them separately.
 
 ## Goal
 
