@@ -711,6 +711,81 @@ one-tensor A/B control. The PNGs and manifests currently live under
 processor/Diffusers, GGUF, VAE, or runner changes also invalidate this
 evidence until the experiment is repeated.
 
+### Portrait resolution and latency probe (2026-09-24)
+
+The daylight prompt above was also run through the unchanged hybrid path on
+an Apple M2 Max, with pinned official CPU/BF16 text conditioning, the
+Q4-labeled GGUF DiT on Metal, seed 7, and offline CPU/FP32 VAE decode.
+The 512-, 768-, and 1024-pixel conditioning bundles retained identical text
+embeddings and masks;
+their initial-noise shapes necessarily differed. The immutable Metal runner
+SHA-256 was
+`39aa3ca65937b101033bd7bbce8fc2efe17649abd523b06e66824779110438f7`.
+The source revision was `3782f406a0db5f0f4ee461a354ec7989b735ff3c`;
+the GGUF and VAE SHA-256 values were
+`51998ad7c068ce7d68e233237537900ffe874ab4d5c72e20758f5f18ceb15b8a`
+and `a07a1b7c4ee2966a1b3bdc37de9b4f983d56937e46619f709a80b6e490675417`.
+The 768-pixel conditioning payload SHA-256 was
+`14f1c790d0edeb86e007ee61a43e8495d3eec02b83a08fd43e9faef34edcb86b`.
+
+| Image size | Target latent tokens | Steps / path | DiT denoise time | Result |
+| --- | ---: | --- | ---: | --- |
+| 512x512 | 1,024 | 2, ordinary | 18.077 s | Latent payload emitted; timing probe only |
+| 768x768 | 2,304 | 2, ordinary | 58.364 s | Latent payload emitted; timing probe only |
+| 768x768 | 2,304 | 2, phase-split diagnostic | 113.856 s | Latents byte-identical to ordinary path |
+| 768x768 | 2,304 | 40, ordinary | 2,006.751 s | Complete latent payload and decoded PNG |
+| 1024x1024 | 4,096 | 2, ordinary, first attempt | Not available | A native command-buffer wait exceeded the 120 s watchdog; no latent output |
+| 1024x1024 | 4,096 | 2, phase-split diagnostic | 131.021 s | Finite latent payload; no decoded PNG |
+| 1024x1024 | 4,096 | 2, ordinary, one retry | 126.964 s | Finite latent payload, byte-identical to phase-split |
+
+The 768x768 ordinary 40-step runner exited successfully after 2,006.94 s
+wall time (33 min 27 s). Conditioning preparation took 23.75 s, and the
+separate VAE decode took 53.58 s, for about 34 min 44 s from existing weights
+to PNG, excluding downloads and environment setup. The PNG is 768x768 RGBA
+with SHA-256
+`306348ec73e07264d3edc263ecb6b86cf354f35feac98b493e860ae3c03b1926`;
+the 589,824-byte float32 latent payload has SHA-256
+`3f0005070d50de6240f59dd6bd93f9ac8bf8f6c17490a48250a150901ac400f6`.
+All 147,456 latent values are finite. The portrait is visually photographic,
+but its composition differs from the 512x512 output; this is not a controlled
+causal proof of quality improvement from resolution alone.
+
+The 768x768 two-step phase-split run tested the diagnostic path with the
+default watchdog and produced exactly the same 147,456 float32 values as the
+ordinary two-step run (`max_abs=0`), at 1.95x its denoise time. This phase
+mode changes command-buffer boundaries and the projection route, so its
+latency must not be reported as the ordinary path's speed. The ordinary
+1024x1024 first-attempt failure hit the repository's per-command-buffer safety
+watchdog, not an official Qwen-Image resolution cap or a proven out-of-memory
+condition. A subsequent two-step phase-split diagnostic completed at 1024x1024
+without changing that watchdog (131.157 s process wall time), emitting a
+1,048,576-byte payload with all 262,144 float32 values finite, SHA-256
+`8bee97ed578ab3ea628d7fda6d836188f6f6a76892ca24cdd18305cf8904c602`.
+One ordinary-path retry then succeeded with the same unchanged watchdog:
+126.964 s denoise, 127.103 s process wall, and a byte-identical finite latent
+payload (`max_abs=0`). The first failure therefore did not reproduce under
+this retry; its underlying cause remains unknown. Both successful runs are
+execution-capability probes, not completed 1024-pixel images or sustained-run
+latency measurements. Their total denoise times exceed 120 s because the guard
+applies to each native command-buffer wait, not the entire run.
+
+The current input validators accept dimensions divisible by 32 from 32 to
+4096 pixels per side, but that is a syntactic limit, not a measured runnable
+maximum. The [official Qwen-Image-2.1 model card](https://huggingface.co/Qwen/Qwen-Image-2.1)
+shows a 2048x2048, 40-step example and presets near 4.2 megapixels; it does
+not declare those dimensions an absolute maximum. Our highest completed
+prompt-to-PNG result here is 768x768; the highest successful two-step latent
+probe is 1024x1024. The current attention kernel scans keys for each query,
+so its image-token work grows quadratically. Accordingly,
+the observed 512-to-768 two-step denoise increase is 3.23x for 2.25x as many
+pixels; the successful 768-to-1024 two-step comparison is 2.18x for 1.78x as
+many pixels. The 768 two-step time extrapolates poorly to 40 steps:
+58.364 s x 20 would predict 19 min 27 s, while the measured run took
+33 min 27 s. Do not project full-image latency from a two-step probe without
+sustained-run timing. These artifacts live under
+`/private/tmp/qwen21-resolution-probe-20260924-r1` and are ephemeral; model,
+conditioning, runner, driver, or host-pressure changes invalidate the timings.
+
 ## Goal
 
 Admit Qwen-Image 2.1 weights into the native Metal engine without treating a
