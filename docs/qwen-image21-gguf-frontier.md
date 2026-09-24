@@ -646,6 +646,71 @@ length and typography while preserving this same one-tensor A/B control.
 The temporary images and manifests can disappear independently of this source
 revision, in addition to the model/processor/runner decay triggers above.
 
+### Photorealistic portrait A/B diagnostic (2026-09-24)
+
+The same opt-in, one-tensor native-conditioning comparison was repeated on two
+fictional adult portraits. This did not change the packaged hybrid default.
+The prompts were fixed verbatim:
+
+1. `Photorealistic editorial head-and-shoulders portrait of a fictional adult woman with medium-brown skin, short natural curls and faint freckles, sitting by a window in a quiet apartment, looking directly at the camera with a relaxed expression. Soft overcast daylight, natural skin pores and fine lines, realistic eyes and individual hair strands, shallow depth of field, 85mm portrait lens, neutral color, no heavy retouching, no illustration, no text or watermark.`
+2. `Photorealistic environmental head-and-shoulders portrait of a fictional elderly man with silver hair and a weathered face, wearing a dark wool coat on a city street after rain at blue hour, looking slightly away from the camera. Warm storefront light on one side of his face, cool evening light and softly blurred wet reflections behind him, natural wrinkles and skin texture, realistic eyes and hair, 50mm portrait lens, no heavy retouching, no illustration, no text or watermark.`
+
+Both used the pinned model revision, Q4 GGUF DiT, and VAE identified above,
+512x512 output, seed 7, 40 Metal denoising steps, and offline CPU/FP32 VAE
+decode. The official CPU/BF16 Qwen3-VL text output was the baseline. The
+native arm64 36-layer Accelerate sweep replaced only
+`encoder_hidden_states`; independent byte checks confirmed that both masks and
+the initial latents remained identical within each pair. The initial noise was
+also identical across prompts (SHA-256
+`d03158064c86fd691927cf93258b00fac2fc8d09e14a578d0f28b4fe8358932c`).
+An independent offline call to the pinned local processor reproduced each
+official reference's complete token IDs and attention mask byte-for-byte:
+119 raw/105 retained tokens for daylight, 121 raw/107 retained for rainy.
+The native sweep was built from the current source with Apple's linker after
+Crystal's default `ld64.lld` rejected this SDK's `arm64e.x1` `.tbd` entries;
+the sweep binary SHA-256 was
+`74cdb9db89657db64fb4757f344b6622fbaefcb2d0c5113c893dcdfb6f39ab73`.
+The immutable Metal latent runner SHA-256 was
+`39aa3ca65937b101033bd7bbce8fc2efe17649abd523b06e66824779110438f7`.
+
+| Portrait | Official reference payload | Native BF16 sidecar | Baseline / native conditioning payloads |
+| --- | --- | --- | --- |
+| Daylight | `1f73114e45ccce4acc742794f1dcfa09d6e7e8508339e4951f3ff100461d68fd` | `7cb7ed8ce1e9ee541a98c8c14d6551f4a14ec5f505f1b0a2006b3d03fec65d80` | `9fca4e6ebc57d573b28612def1482a4931e4108e05ccb345479ed6f900c4bc58` / `83afba7717b44de8c6cbd1556a94e9431a7e331cd0d2bfbd002ae232564cf252` |
+| Rainy | `aaa1f52035cf5990affab9216a7edf1b35b17a21c5a466202d570e779c6f6e49` | `2217ee0c89b1b2570b94608c211e9ce747d52a2e8972d9e7a564aad5e80afc1a` | `36afb59f8f2f087da2681bdb32f9dc493d24c7c2ecfd35ef5944db6fc827007f` / `febb6ecce97cb9739f60ec2fc9b468ef9a93c076f35b99e98f122e87da3af49e` |
+
+All four Metal runs and CPU/FP32 VAE decodes exited successfully. Their
+latent manifests bound the exact prompt, revision, seed, dimensions, 40 steps,
+and corresponding conditioning payload SHA-256. The baseline/native decoded
+512x512 PNG SHA-256 pairs were:
+
+- Daylight: `8fc566c291bf575587928dfad9b7b8a605d3c77b031da23c008dfb5cb75534e0` / `8388263efbefdb0e5a0a5787fa7f42e89784d9e480dcc64cac65b11fedc3ec3d`.
+- Rainy: `1912246788a8e866cb3c1578c6d99baf7b2ce2f738a2349395d5386e0e91b4c4` / `42a7c5b1e4d5817d27666391c27b7c9f9cf3f0ff35dd09bd185e1a2449db43ba`.
+
+The baseline portraits are visibly photographic and on prompt: the daylight
+frame has a direct gaze, curls, and soft window light; the rainy frame has a
+silver-haired subject, warm storefront light, cool street light, and wet
+reflections. Both native frames preserve face structure, eyes, hair,
+composition, and lighting at normal 512px display scale. The baseline images
+already smooth away some requested freckles, pores, and fine skin lines; this
+cannot be attributed to the native path. The native/baseline RGB mean absolute
+differences were 0.398/255 (daylight) and 0.238/255 (rainy); latent relative
+RMS differences were 0.00963 and 0.00648. These are descriptive A/B distances,
+not perceptual-quality or speed scores. Native retained BF16 text outputs were
+not exact matches to the official reference (relative RMS 0.02071 and 0.02049;
+most BF16 elements differ), so the result does not establish encoder parity.
+The two concurrent GPU runs in each stage also preclude a controlled speed
+comparison.
+
+This verifies only two prompt/seed-7 image comparisons, not broad portrait
+fidelity, skin-texture quality, exact embedding equivalence, or readiness to
+promote native conditioning to the default. A next falsifier should vary
+seeds, resolution, face angle, and fine-texture demands while keeping the
+one-tensor A/B control. The PNGs and manifests currently live under
+`/private/tmp/qwen21-portrait-daylight-20260924-p1` and
+`/private/tmp/qwen21-portrait-rainy-20260924` and are ephemeral. Checkpoint,
+processor/Diffusers, GGUF, VAE, or runner changes also invalidate this
+evidence until the experiment is repeated.
+
 ## Goal
 
 Admit Qwen-Image 2.1 weights into the native Metal engine without treating a
