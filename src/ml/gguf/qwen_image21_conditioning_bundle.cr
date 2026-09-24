@@ -13,6 +13,7 @@ module ML::GGUF
     getter prompt : String
     getter seed : Int64
     getter model_revision : String
+    getter conditioning_payload_sha256 : String
     getter image_width : Int32
     getter image_height : Int32
     getter latent_width : Int32
@@ -24,7 +25,7 @@ module ML::GGUF
     getter initial_target_latents : Array(Float32)
 
     def initialize(
-      @prompt, @seed, @model_revision, @image_width, @image_height,
+      @prompt, @seed, @model_revision, @conditioning_payload_sha256, @image_width, @image_height,
       @latent_width, @latent_height, @img_shapes, @encoder_hidden_states,
       @encoder_hidden_states_mask, @encoder_img_mask, @initial_target_latents,
     )
@@ -69,7 +70,8 @@ module ML::GGUF
       tensors = manifest["tensors"]
       expect(manifest["payload_file"].as_s == PAYLOAD_FILE, "conditioning payload file mismatch")
       expect(manifest["payload_nbytes"].as_i == payload.size, "conditioning payload length mismatch")
-      expect(manifest["payload_sha256"].as_s == Digest::SHA256.hexdigest(payload), "conditioning payload checksum mismatch")
+      payload_sha256 = Digest::SHA256.hexdigest(payload)
+      expect(manifest["payload_sha256"].as_s == payload_sha256, "conditioning payload checksum mismatch")
       state_descriptor = tensors["encoder_hidden_states"]
       state_shape = state_descriptor["shape"].as_a.map(&.as_i)
       expect(state_shape.size == 2 && state_shape[1] == CONTEXT_DIM, "Qwen3-VL context width mismatch")
@@ -95,7 +97,7 @@ module ML::GGUF
       expect(valid.any?, "conditioning has no valid text tokens")
       expect(image_mask.none?, "text-to-image conditioning contains image placeholders")
       latents = read_floats(payload[state_bytes + valid_bytes + image_bytes, latent_bytes])
-      new(prompt, seed, revision, width, height, latent_width, latent_height,
+      new(prompt, seed, revision, payload_sha256, width, height, latent_width, latent_height,
         [StaticArray[1, latent_height, latent_width]], hidden, valid, image_mask, latents)
     end
 

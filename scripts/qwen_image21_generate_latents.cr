@@ -44,6 +44,7 @@ private def write_latent_bundle(
       json.field "payload", "qwen_image21_latents.bin"
       json.field "payload_bytes", latents.size * sizeof(Float32)
       json.field "model_revision", conditioning.model_revision
+      json.field "conditioning_payload_sha256", conditioning.conditioning_payload_sha256
       json.field "seed", conditioning.seed
       json.field "prompt", conditioning.prompt
       json.field "denoising_steps", steps

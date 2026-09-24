@@ -39,6 +39,13 @@ private def qwen_image21_test_conditioning : {String, Bytes}
 end
 
 describe ML::GGUF::QwenImage21ConditioningBundle do
+  it "retains the validated conditioning payload SHA-256" do
+    manifest, payload = qwen_image21_test_conditioning
+    bundle = ML::GGUF::QwenImage21ConditioningBundle.parse(manifest, payload)
+
+    bundle.conditioning_payload_sha256.should eq(Digest::SHA256.hexdigest(payload))
+  end
+
   it "loads the official unpatched 64-channel text-to-image tensor layout" do
     manifest, payload = qwen_image21_test_conditioning
     bundle = ML::GGUF::QwenImage21ConditioningBundle.parse(manifest, payload)

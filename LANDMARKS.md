@@ -6,6 +6,22 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-QWENIMAGE21-NATIVE-TEXT-AB-2026-09-24] One image smoke pass; native text not default
+
+- Pinned `red cube`, 256x256, seed 7, 40 steps: official CPU/BF16 versus
+  native Qwen3-VL conditioning, with identical masks/noise and one Metal Q4
+  DiT plus official CPU/FP32 VAE. Baseline PNG reproduced its prior SHA-256;
+  native PNG differs numerically but retains the same visual composition.
+- Fresh output manifests record distinct validated conditioning payload SHA-256
+  values; each branch's latents and PNG are byte-identical to its pre-field run.
+  Real A/B bundle spec 5/5; package and VAE decoder tests 14/14 and 8 pass
+  with one expected skip. Review ROBUST for this narrow, non-attested scope.
+- Do not promote native text encoding from one easy prompt. Next: fixed
+  multi-prompt/multi-seed visual quality gate before speed work. Package
+  validation does not yet enforce the new provenance field. Evidence and hashes:
+  docs/qwen-image21-gguf-frontier.md, same-seed A/B section. Refresh after
+  checkpoint, GGUF, VAE, Diffusers, source/driver, schema, or artifact drift.
+
 ### [LM-QWEN35-SG4-REPLAY-STATS-2026-09-15] One replay exposes 40 temporary registers; spills unknown
 
 - User explicitly authorized one model-free GUI replay outside automatic runner

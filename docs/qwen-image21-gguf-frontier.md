@@ -444,14 +444,89 @@ to F32; text masks, image masks, and seed-7 initial latents are byte-identical
 to the baseline. Payload hashes and the unchanged manifest fields were
 checked separately; both real bundles passed the native conditioning loader's
 optional A/B spec. These checks establish an isolated conditioning input
-comparison, **not** a generated-image comparison: the full DiT GGUF and VAE
-were not available in the local artifact set. A same-seed image A/B and an
-explicit quality/tolerance gate remain required before replacing the hybrid
-CPU text-encoder route.
+comparison, **not** a generated-image comparison by themselves. At that
+stage, the full DiT GGUF and VAE were not available locally; the same-seed
+image A/B below resolves that particular gap. An explicit multi-prompt
+quality/tolerance gate still remains before replacing the hybrid CPU
+text-encoder route.
 
 The fixture's whole-payload SHA, its retained-embedding tensor SHA, and each
 conditioning bundle's payload SHA identify different byte streams; the A/B
 manifest records them separately.
+
+### Same-seed native-conditioning image A/B (2026-09-24)
+
+The previously blocked image-level discriminator ran at source revision
+`c883965d24e908e9e31189d95a6a0d9830883df6` on an Apple M2 Max. The
+unchanged pinned `red cube` 256x256/seed-7 conditioning bundles passed the
+optional Crystal A/B spec (4 examples, 0 failures). Their prompt, model
+revision, masks, image shape, and initial latents match; only the retained
+text-embedding tensor differs. The baseline/native conditioning payload SHA-256
+values are `56bfb2e98e22d193242a66a1bf2ea905482aecbc6e1ee6ad877775d66238bade`
+and `602b6fb2daa2c01cf0feb582632346b0c1071682b6402532f4b7b4fd73c49202`.
+
+Both bundles ran for 40 steps through the same freshly built native Metal
+denoiser, with the pinned community Q4 DiT GGUF (5,959,127,264 bytes, SHA-256
+`51998ad7c068ce7d68e233237537900ffe874ab4d5c72e20758f5f18ceb15b8a`).
+Both final latents were decoded by the same CPU/FP32 official Qwen-Image 2.1
+VAE (`790c92633540aa0cb11d9abf19eb46d861714758`; safetensors SHA-256
+`a07a1b7c4ee2966a1b3bdc37de9b4f983d56937e46619f709a80b6e490675417`).
+The baseline PNG reproduced the earlier pinned PNG **byte-for-byte** (SHA-256
+`396ee177a3689ca7d9a035ab4d26ecd58a065215017df56ee64fb1d7084fd841`).
+The native-conditioning PNG SHA-256 is
+`3916250a9a1d72129812e0a97e70fe48a2ab15972430431e24be4af819b60ed7`.
+
+The native conditioning changes all 16,384 final F32 latent values relative
+to baseline, with relative RMS difference `0.003412` and maximum absolute
+difference `0.0909724`. The decoded RGBA images differ in 43,097/262,144
+channel values across 32,888/65,536 pixels, but their mean absolute channel
+difference is only `0.1793` levels on a 0–255 scale (RMSE `0.5272` levels,
+maximum `28` levels); alpha differs at 131 pixels, by at most one level.
+Visual inspection found the same
+red-cube composition and no obvious defect. The 62.75 s versus 51.90 s
+denoising times were sequential cold/warm observations, **not** a throughput
+A/B or evidence that native text encoding is faster.
+
+The source and temporary artifacts for this check are
+`/private/tmp/qwen21-ab-{baseline,native}-red-cube-20260924*`,
+`/private/tmp/qwen21-ab-{baseline,native}-latents-20260924`, and
+`/private/tmp/qwen21-ab-{baseline,native}-20260924.png`. The native bundle
+uses a `-v3` suffix. Re-run the optional A/B spec with both manifest paths,
+then run `scripts/qwen_image21_generate_latents.cr` on each bundle with the
+same GGUF and 40 steps, and decode each output with
+`scripts/qwen_image21_vae_decode.py --device cpu --dtype float32`. The native
+runner needs Metal access; the ordinary sandbox hid the device, while the
+permitted Metal run saw the M2 Max. These `/private/tmp` paths are ephemeral.
+
+The first-run latent manifests did **not** contain the consumed conditioning
+payload SHA-256, so those saved output artifacts alone could not independently
+prove their input binding. An additive provenance slice now retains the digest
+of the exact payload bytes validated by the native conditioning reader and
+writes `conditioning_payload_sha256` to each latent manifest. Its focused spec
+passed 5/5 examples, including the optional real A/B bundles; the existing
+corrupted-payload case still rejects a checksum mismatch. Fresh 40-step
+Metal runs wrote the expected baseline/native digests above into distinct
+manifests under `/private/tmp/qwen21-ab-{baseline,native}-latents-bound-20260924`.
+Their latent payload SHA-256 values, respectively
+`d835709261d2d36870ebd564cfb55d3d4db8a1173f1f8e8d511684c8eb7fa844`
+and `9fd301aa3d74d17fb996b9a639420653d0abd24f23fd34f63e4781dfbdcc8d08`,
+match the first-run payloads byte-for-byte. The CPU/FP32 VAE accepted both
+extended manifests and reproduced both PNG hashes above. This closes the
+conditioning-payload provenance gap for these outputs; a source/executable
+attestation is outside this slice, so a manifest is not proof of the runner
+binary's identity or honesty. The package validator accepts the additive
+field but does not yet enforce it against its input bundle; this A/B checked
+the two hashes directly. These `/private/tmp` artifacts are ephemeral.
+
+**Decision:** this one simple prompt passes a narrow same-seed image smoke
+comparison, but it does not establish perceptual parity or acceptable native
+conditioning across prompts, typography, composition, resolutions, or seeds.
+Keep the hybrid CPU text-encoder route as the default. The next discriminator
+is a small, fixed multi-prompt/multi-seed image set with explicit visual
+failure criteria, followed by a performance comparison only if that quality
+gate passes. Refresh this evidence after checkpoint, GGUF, VAE, Diffusers,
+Metal source/driver, or conditioning-schema changes, or if the temporary
+artifacts disappear.
 
 ## Goal
 
