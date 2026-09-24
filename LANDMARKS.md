@@ -6,6 +6,233 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-QWENIMAGE21-NATIVE-TEXT-AB-2026-09-24] One image smoke pass; native text not default
+
+- Pinned `red cube`, 256x256, seed 7, 40 steps: official CPU/BF16 versus
+  native Qwen3-VL conditioning, with identical masks/noise and one Metal Q4
+  DiT plus official CPU/FP32 VAE. Baseline PNG reproduced its prior SHA-256;
+  native PNG differs numerically but retains the same visual composition.
+- Fresh output manifests record distinct validated conditioning payload SHA-256
+  values; each branch's latents and PNG are byte-identical to its pre-field run.
+  Real A/B bundle spec 5/5; package and VAE decoder tests 14/14 and 8 pass
+  with one expected skip. Review ROBUST for this narrow, non-attested scope.
+- Do not promote native text encoding from one easy prompt. Next: fixed
+  multi-prompt/multi-seed visual quality gate before speed work. Package
+  validation does not yet enforce the new provenance field. Evidence and hashes:
+  docs/qwen-image21-gguf-frontier.md, same-seed A/B section. Refresh after
+  checkpoint, GGUF, VAE, Diffusers, source/driver, schema, or artifact drift.
+
+### [LM-QWEN35-SG4-REPLAY-STATS-2026-09-15] One replay exposes 40 temporary registers; spills unknown
+
+- User explicitly authorized one model-free GUI replay outside automatic runner
+  limits, Profile OFF/no repeats/unrelated process control. Exception consumed;
+  free-memory snapshots 73% before and 70% after are not peak/continuous guards.
+- Xcode reaches Debugging GPU Workload on saved M2 Max/macOS26.6.2 trace;
+  Summary confirms 1 command buffer/1 compute encoder/1 dispatch, grid 24x16x1,
+  threads 128x1x1. No Profile/new capture/model load or production edit.
+- Compute Function Statistics shows temporary registers 40, instructions 554,
+  device load/store 11/8 and threadgroup load/store 9/2. No explicit spill count.
+  Register count alone proves neither zero spills nor occupancy/speed benefit;
+  unprofiled 0.00 ns and descriptor zeros are not measured runtime properties.
+- Displayed pregate function name is shared by the macro variant; identity
+  relies on capture lineage, not the label. Shader/probe/metadata hashes match
+  prior evidence. Replay does not rerun the CPU oracle; no new parity claim.
+- ROBUST for UI replay/static fields only; candidate remains diagnostic-only.
+  Next useful compiler comparison needs matched baseline evidence, not repeated
+  noisy timing; no further execution is covered by the consumed exception.
+- Details: docs/qwen-prefill-command-trace.md current frontier. Refresh after
+  source/options/compiler/driver/device drift or temporary artifact loss.
+
+### [LM-QWEN35-SG4-STATS-GATE-2026-09-15] Historical gate: offline diagnostics silent
+
+- One guarded offline translation with three advertised diagnostic flags exits0
+  but emits no stdout/stderr statistics. Not a zero-spill result; no GPU run.
+- run_safe tracks process groups, not arbitrary launchd/XPC services. Wrapping
+  another Xcode does not establish replay containment. No supported standalone
+  replay CLI found in bounded inventory; Xcode's ReplayCapture is a GUI action.
+- At this earlier gate, next required a single-GUI-replay exception to runner guards
+  (Profile OFF, no retries/unrelated process control), or park the diagnostic.
+  Do not replace this decision with private-service reverse engineering.
+- Superseded by LM-QWEN35-SG4-REPLAY-STATS-2026-09-15 for the one authorized
+  replay; the underlying automatic-containment limitation remains unchanged.
+- Commands, hashes and scope: docs/qwen-prefill-command-trace.md follow-up;
+  /private/tmp/qwen-sg4-compiler-stats.19GGMy. Refresh on tooling/runner changes.
+
+### [LM-QWEN35-SG4-CAPTURE-2026-09-15] Trace saved; compiler statistics still open
+
+- One guarded model-free register-candidate64-row command passes CPU oracle
+  (max1.064646237225464e-6), future/canary guards and terminal status0. Queue-only
+  MTLCaptureManager trace saved (~77MiB); metadata reports one captured frame,
+  not independently decoded command count or register/spill values.
+- Private wrapper/build only, same shader and three-pipeline compilation order;
+  no production edit, model load or replay. Capture timing is not a benchmark.
+  Guards35%/24GiB/300s, lease, quiet wait OFF under standing authority; free72%.
+- User completed Xcode onboarding. Xcode recognizes the trace's M2 Max origin
+  and offers Replay with Profile after replay unchecked. No replay performed:
+  it runs outside the existing runner and needs a separate containment gate.
+  gpucapture/gpudebug were not found by xcrun or PATH.
+- Parent and correlated Luna checks ROBUST for capture success only; no replay
+  certification or compiler-statistics claim. Inspect this trace after bounding
+  replay, rather than repeating capture/timing.
+- Evidence/commands/hashes: docs/qwen-prefill-command-trace.md current section,
+  /private/tmp/qwen-sg4-capture.Bwt7d7. Register/spills/speed remain unknown;
+  refresh after artifact loss or source/compiler/driver/device changes.
+
+### [LM-QWEN35-SG4-OFFLINE-2026-09-15] Native compile available, spills unknown
+
+- User resolved license and installed Metal Toolchain32023.921. Earlier
+  license/toolchain blocker is historical; direct installed air-nt/air-objdump
+  work although xcrun cannot resolve the Metal-named tools.
+- air-arch identifies M2 Max as applegpu_g14s. Safe-math baseline and register
+  macro shaders compile to native GPU archives with explicit pipeline script,
+  platform macos26.0/SDK27.0 and one compiler thread; no compute/model load.
+- Reflection confirms shared bytes4608/8704/4608, not spill counts. Native
+  disassembly rejects g14s-b0; no register/spill values obtained. Offline
+  translation is not proven identical to runtime compilation; no speed promotion.
+- ROBUST for bounded compile/tool inspection only. Reopen via M2-compatible
+  compiler-statistics capture or genuinely new method, not noisy timing reruns.
+  Commands/hashes/limitations: docs/qwen-prefill-command-trace.md current section;
+  temporary evidence /private/tmp/qwen-sg4-offline.TGRulx. Refresh on compiler,
+  driver, descriptor, source/device drift or artifact loss.
+
+### [LM-QWEN35-SG4-TELEMETRY-2026-09-15] Park register candidate pending evidence
+
+- Read-only tooling/API check: CLT cannot find metal/metal-objdump; Xcode's
+  metal resolution exits69 on unaccepted license. No license/toolchain change,
+  compilation, GPU submission or model load. Inspected pipeline/reflection and
+  four companion SDK headers expose no register/spill getter; this is not a
+  claim about every possible tool or private API.
+- Apple documents spill statistics in GPU profiling, not our current getters;
+  M3/A17 Shader Cost Graph is not an M2 Max certificate. Keep register/spill
+  values unknown, candidate diagnostic-only and prior noisy timing unpromoted.
+- Existing hash-pinned compare_stages.py rerun passes195 matched layer keys;
+  attention2385.079ms/2715.734ms over15 suffix full layers remains the measured
+  target (host waits, not full-request fraction or a new benchmark).
+- Details, official links and refresh boundaries: top of
+  docs/qwen-prefill-command-trace.md. Reopen after tooling/license/SDK/device
+  changes or a genuinely different discriminating method, not identical reruns.
+
+### [LM-QWEN35-SG4-TAIL-PAIR-2026-09-15] Tail pass, no repeatable speed win
+
+- Diagnostic-only extension; no shader or production routing change. Register
+  candidate passes 1+2+3+58-row commands at base7839/fixture193/F32/D256,
+  with nonzero Q/gate/output offsets, exact previous prefix, future/canary
+  guards and CPU-oracle max1.064646237225464e-6.
+- Eight fresh processes ABBA BAAB compile identical direct/pregate/register
+  pipelines; selected64 rows all pass, distinct PIDs, no retries/errors.
+  Block1 GPU direct59.0623/register74.3978ms, block2 70.0888/62.9705ms:
+  opposing signs, no repeatable speed promotion; keep all samples.
+- Source contract red then15 specs green; CPU/Metal builds/self-tests pass.
+  Six mutated-log controls reject. Guards35%/24GiB/300s, lease; quiet wait OFF
+  under standing authority. No model loaded; shared build/WIP untouched.
+- Parent and correlated Luna adversary: ROBUST for the bounded diagnostic
+  contract only; source assertions/log checker do not prove live failure paths.
+- Next: read-only compiler/resource diagnostics if available; otherwise park
+  this candidate for a different measured bottleneck, not favorable reruns.
+  No production/model-state/stability/bitwise pair claim. Earlier interactivity
+  failure and register/spill behavior remain unresolved.
+- Commands, raw times and hashes: docs/qwen-prefill-command-trace.md top gate;
+  /private/tmp/qwen-sg4-tail-pair.SWABsJ/ temporary artifacts. Refresh on source,
+  compiler/device/driver/shape drift or loss of evidence.
+
+### [LM-QWEN35-SG4-REGISTER-2026-09-15] Thread-local gate bounded pass
+
+- Diagnostic-only `QWEN35_SG4_REGISTER_GATE=1` moves eight gate values per lane
+  out of shared storage. M2 Max compiled static bytes4,608 versus pregate8,704;
+  SIMD32/max1,024 unchanged. Thread-local does not mean proven register-only.
+- Exactly one F32 candidate command, base7839/fixture193/selected64 rows,
+  passes CPU oracle max1.064646237225464e-6 and future/canary guards. GPU55.5052ms,
+  host58.1411ms; exit0/free78%, no retries. No speed/stability promotion.
+- Default/0/2 preprocessed pregate equals prior HEAD0ba87a39; no production
+  switch added. New test red before patch;14 specs and CPU/Metal builds green.
+- Correlated Luna audit ROBUST for fixedD256 lane ownership/isolation only;
+  no in-kernel D<=256 guard, so no arbitrary-shape admission.
+- Prior interactivity failure remains open. Next: bounded tail/offset checks,
+  then equal-compilation-set balanced timing; register/spill behavior unknown.
+- Evidence/hashes: docs/qwen-prefill-command-trace.md active section and
+  /private/tmp/qwen-sg4-register.Md08Ji/ (temporary). Refresh on source/compiler/
+  device/driver/shape drift or evidence loss.
+
+### [LM-QWEN35-SG4-RESOURCES-2026-09-15] Compiled static allocation confirmed
+
+- Compile-only `--pipeline-info`, same F32 source/options and direct/pregate
+  order: Apple M2 Max reports 4,608/8,704 static threadgroup bytes; both SIMD32,
+  max1,024 threads. No tensor fixture or compute submission. Driver compilation
+  and device/queue initialization still occur; no occupancy or speed claim.
+- Extra4KiB gate staging survives compilation. Prior fresh-process callback
+  below remains unresolved; metadata is not causal evidence. Next candidate:
+  remove shared gate staging, check register tradeoff and numerical parity.
+- CPU/Metal builds/self-tests,13 source/stage-split specs pass; new branch
+  guard red before implementation. One guarded metadata run exits0, free78%,
+  unchanged35%/24GiB/300s safety limits, no retry or production shader change.
+- Evidence/hashes: docs/qwen-prefill-command-trace.md active section and
+  /private/tmp/qwen-sg4-metadata.AJb8qV/pipeline-info.log (temporary). Refresh
+  on source/build/device/driver drift or evidence loss.
+
+### [LM-QWEN35-SG4-SINGLE-2026-09-14] Fresh-process first-command failure
+
+- Supersedes the slice entry below. Model-free F32 single-command BAAB:
+  pregate/direct/direct PASS, then pregate fails on its first/only dispatch
+  in a fourth fresh process. Thus prior dispatches in the failing process are
+  not required; driver/host history and kernel resource sensitivity remain open.
+- Same prefix7839/fixture193, selected64 rows/start0; both pipelines compile
+  in fixed order before one selected command. Successful prefixes have oracle
+  max1.06465e-6 and129 future rows/trailing canaries intact. Failure is the
+  same Impacting Interactivity callback. No fourth result, no GPU retry.
+- Free76%, unchanged35%/24GiB/300s guards, zero warmup/cooldown; source/binary
+  manifests unchanged. CPU/Metal builds, selector/slice/output self-tests,
+  12 specs and capture controls pass. Luna: ROBUST for instrument only.
+- Measured-red, not a speed or production certificate. Fresh process reset and
+  smaller row counts are not sufficient fixes. Next: read-only kernel/resource
+  boundary audit before any further workload; do not infer deterministic
+  pregate failure from this mixed result.
+- Evidence: docs/qwen-prefill-command-trace.md, "Fresh-process single-command
+  discriminator"; /private/tmp/qwen-sg4-single.uIaps6/ (temporary). Refresh on
+  source/build/device/driver/input/scheduling drift or evidence loss.
+
+### [LM-QWEN35-SG4-SLICES-2026-09-14] 64-row slicing does not prevent the callback
+
+- Current frontier supersedes the operator entry below: model-free F32
+  `--slice-check` is measured-red, not a production fix or speed result.
+- Direct prefix7839/rows193 passes64+64+64+1 query rows, oracle max1.08081e-6,
+  exact earlier-prefix and future/trailing canaries. First pregate64-row
+  command fails with Impacting Interactivity, start0/base7839/offset0, now
+  identified by a flushed pre-submit event. No pair or finalPASS; no GPU retry.
+- Free78%,35%/24GiB/300s guards retained, no cooldown. Initial sandbox launch
+  aborted containment because ps was denied; authorized guarded launch then
+  produced the GPU evidence. Source/build manifest unchanged throughout.
+- Instrument checks: CPU/Metal builds,16 slice plans, four slice mutation
+  controls plus seven existing controls,12 source specs; incomplete capture
+  rejected. GPU coverage is one direct kernel, not pregate/all six shapes.
+- Decision: slicing64 alone is insufficient. The failing command requires
+  neither nonzero offset nor partial tail, but kernel identity is confounded
+  with command order/host history. Next proposed: fresh-process single-command
+  order discriminator; no further slicing tweaks or production threshold edit.
+- Source and evidence: bin/qwen35_sg4_tail_probe.cr; docs/qwen-prefill-command-trace.md,
+  "Query-row slicing diagnostic"; /private/tmp/qwen-sg4-slices.XIoCjM/ (temporary).
+  Refresh on source/build/device/driver/input/scheduling drift or evidence loss.
+
+### [LM-QWEN35-SG4-OPERATOR-2026-09-14] Model-free benchmark reproduces interactivity failure
+
+- Current frontier: measured-red standalone F32 SG4 operator experiment;
+  supersedes trace-only selection in LM-1060. No production routing change.
+- Prefix7839/rows193: direct/pregate oracle error1.0808095e-6, pair0,
+  canaries intact, six timed samples then Impacting Interactivity/exit1.
+  Next pregate command inferred from loop order, not a pre-submit event.
+- One guarded attempt; preflight free77%,35%/24GiB/300s retained, no retry.
+  Two compiled pipelines, one shape, no model/provider; explicit GPU buffers
+  statically76.414MiB, not driver memory telemetry. Same callback does not
+  establish the same root cause as provider failures or a kernel-speed ranking.
+- Diagnostic runner checks pass: Metal/CPU-only builds, seven negative
+  self-controls,12specs, unchanged manifests; correlated review ROBUST for
+  runner only. Full72-sample benchmark incomplete and checker rejects it.
+- Next proposed: prove <=64-query-row slicing with F32/causal/offset invariants,
+  then separate bounded safety experiment. No global direct-gate threshold
+  change, precision conversion, automatic retry or lowered resource guards.
+- Evidence/commands/hashes: docs/qwen-prefill-command-trace.md, "Bounded F32
+  SG4 operator experiment"; /private/tmp/qwen-sg4-operator.wYIRes/. Refresh
+  after source/build/device/driver/input/scheduling drift or evidence loss.
+
 ### [LM-QWEN35-FULL-LAYER-TRACE-2026-09-11] Ordinary full-layer failure attribution reaches the real replay
 
 - Added default-off `qwen35_prefill_layer` call records around only the ordinary
