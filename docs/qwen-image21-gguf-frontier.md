@@ -337,6 +337,14 @@ These stage counts separate the earliest RMSNorm difference from later
 projection and attention differences; by themselves, they do not establish
 a specific arithmetic root cause or an acceptable image-level tolerance.
 
+An independent replay of `q_proj` on the 23 rows with BF16-exact normalized
+inputs attributes those 46 differences to reduction order: PyTorch 2.6 CPU
+`nn.Linear` reproduces the mismatch count and its per-row distribution, while
+serial F32 dot products reproduce the native `q_proj` sidecar bit-for-bit.
+The BF16 checkpoint payload, `[out, in]` shape, and loader indexing agree, so
+changing the weight orientation would attack the wrong cause. This conclusion
+is limited to those 23 input-exact rows; row 22 has an upstream norm difference.
+
 A bounded row-22 replay with the pinned layer-0 norm weight narrows that
 first difference further: PyTorch's F32 `pow(2).mean()` produces variance
 `0.0005493450444`, while the current scalar, sequential F32 accumulation
@@ -355,6 +363,29 @@ equal the official pre-final-RMSNorm embeddings at 0/40,960 BF16 mismatches.
 The composed CPU diagnostic took 247.76 s wall time on this host; it is not
 a Metal inference benchmark. The difference is too large to promote native
 conditioning or infer image-quality parity.
+
+Two bounded RMSNorm reduction experiments tested whether removing the first
+39 BF16 differences helps the composed output. Both made the full-prompt
+layer-0 input RMSNorm BF16-exact (0/98,304) and reduced layer-0 output
+differences to 17,456/98,304, but neither improved the ten final retained
+rows. All values below compare against the same pinned CPU/BF16 fixture:
+
+| Variance reduction | Layer-0 output BF16 differences | Final retained BF16 differences | Final retained relative RMS |
+| --- | ---: | ---: | ---: |
+| Serial F32 (current source) | 19,098/98,304 | 37,364/40,960 | 0.031138 |
+| F64 sum, rounded to F32 | 17,456/98,304 | 37,454/40,960 | 0.031968 |
+| Adjacent-pair F32 tree | 17,456/98,304 | 37,474/40,960 | 0.032575 |
+
+The F64 method also disagrees with a 16-value PyTorch CPU BF16 RMSNorm
+counterexample; a separate 16-value counterexample distinguishes serial F32
+from the pairwise method. The pairwise tree is a useful local oracle match,
+not proof of PyTorch's general reduction order. Both alternatives were
+rejected and the source kept its serial F32 reduction: local layer-0 parity
+does not compose into a better final embedding proxy here. The final metrics
+are not image-quality measurements, and one prompt cannot settle broader
+tolerances. The next targeted arithmetic question is PyTorch GEMM reduction
+order in `q_proj`, followed by a same-seed image A/B when full DiT/VAE
+artifacts are available.
 
 The optional `--retained-bf16-out=/path/to/native.bf16le` exports only this
 full-prompt, 36-layer result, plus a checksummed JSON sidecar. It is an
