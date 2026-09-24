@@ -1,12 +1,13 @@
 require "json"
 require "set"
 require "./safetensors"
+require "./qwen3vl_text_block"
 
 module ML::GGUF
   # Validated metadata and bounded embedding access for the expected Qwen-Image
-  # 2.1 Qwen3-VL text encoder. Shard mappings are used only while validating
-  # metadata; embedding reads copy selected rows from the source file, so no
-  # returned bytes can outlive a mapping or loader.
+  # 2.1 Qwen3-VL text encoder. Shard metadata is validated before reads;
+  # embedding rows and bounded block tensors are copied from their source
+  # files, so returned values do not depend on an open shard mapping.
   class Qwen3VLTextWeights
     # Expected checkpoint identity for this package revision; the local
     # safetensors files do not carry independently verifiable HF cache metadata.
@@ -29,6 +30,7 @@ module ML::GGUF
 
     @embedding_io : File?
     @embedding_data_offset : Int64
+    @tensor_sources : Hash(String, NamedTuple(path: String, data_offset: Int64, byte_size: Int64))
     @closed : Bool
     @mutex : Mutex
 
@@ -82,6 +84,7 @@ module ML::GGUF
       @hidden_size = HIDDEN_SIZE
       @embedding_io = nil
       @embedding_data_offset = -1_i64
+      @tensor_sources = {} of String => NamedTuple(path: String, data_offset: Int64, byte_size: Int64)
       @closed = false
       @mutex = Mutex.new
 
@@ -118,6 +121,42 @@ module ML::GGUF
 
     def embedding_rows_f32(token_ids : Array(Int64)) : Array(Float32)
       decode_bf16_rows(embedding_rows_raw(token_ids))
+    end
+
+    # Read one named tensor from decoder layer 0, converted from BF16 to F32.
+    # The name must be one of the validated tensors in the layer inventory.
+    def layer0_tensor_f32(name : String) : Array(Float32)
+      @mutex.synchronize do
+        raise ArgumentError.new("qwen3vl text weights: loader is closed") if @closed
+        read_layer_tensor_f32_unlocked(name, 0)
+      end
+    end
+
+    # Load one decoder block's weights in the order consumed by
+    # Qwen3VLTextBlock. This expands the pinned block to roughly 0.72 GiB of
+    # Float32 arrays, so it is intended for bounded CPU parity probes.
+    def block_weights(layer_index : Int32) : Qwen3VLTextBlockWeights
+      unless 0 <= layer_index < NUM_LAYERS
+        raise ArgumentError.new("qwen3vl text weights: layer index #{layer_index} outside 0...#{NUM_LAYERS}")
+      end
+
+      @mutex.synchronize do
+        raise ArgumentError.new("qwen3vl text weights: loader is closed") if @closed
+        prefix = "model.language_model.layers.#{layer_index}."
+        Qwen3VLTextBlockWeights.new(
+          input_layernorm: read_layer_tensor_f32_unlocked(prefix + "input_layernorm.weight", layer_index),
+          q_proj: read_layer_tensor_f32_unlocked(prefix + "self_attn.q_proj.weight", layer_index),
+          k_proj: read_layer_tensor_f32_unlocked(prefix + "self_attn.k_proj.weight", layer_index),
+          v_proj: read_layer_tensor_f32_unlocked(prefix + "self_attn.v_proj.weight", layer_index),
+          q_norm: read_layer_tensor_f32_unlocked(prefix + "self_attn.q_norm.weight", layer_index),
+          k_norm: read_layer_tensor_f32_unlocked(prefix + "self_attn.k_norm.weight", layer_index),
+          o_proj: read_layer_tensor_f32_unlocked(prefix + "self_attn.o_proj.weight", layer_index),
+          post_attention_layernorm: read_layer_tensor_f32_unlocked(prefix + "post_attention_layernorm.weight", layer_index),
+          gate_proj: read_layer_tensor_f32_unlocked(prefix + "mlp.gate_proj.weight", layer_index),
+          up_proj: read_layer_tensor_f32_unlocked(prefix + "mlp.up_proj.weight", layer_index),
+          down_proj: read_layer_tensor_f32_unlocked(prefix + "mlp.down_proj.weight", layer_index),
+        )
+      end
     end
 
     # Returned embedding rows are copies, so closing only stops future reads.
@@ -169,6 +208,43 @@ module ML::GGUF
         hi = raw[index * 2 + 1].to_u32
         ((hi << 24) | (lo << 16)).unsafe_as(Float32)
       end
+    end
+
+    private def read_layer_tensor_f32_unlocked(name : String, layer_index : Int32) : Array(Float32)
+      prefix = "model.language_model.layers.#{layer_index}."
+      expected_shape = self.class.required_tensor_shapes[name]?
+      unless name.starts_with?(prefix) && expected_shape
+        raise ArgumentError.new("qwen3vl text weights: requested tensor #{name.inspect} is not a required layer-#{layer_index} tensor")
+      end
+
+      expected_bytes = expected_shape.reduce(1_i64) { |count, dimension| count * dimension } * 2_i64
+      if expected_bytes > Int32::MAX
+        raise ArgumentError.new("qwen3vl text weights: tensor #{name} exceeds addressable slice size")
+      end
+
+      source = @tensor_sources[name]?
+      raise ArgumentError.new("qwen3vl text weights: validated source for #{name} is unavailable") unless source
+      unless source[:byte_size] == expected_bytes
+        raise ArgumentError.new("qwen3vl text weights: tensor #{name} source size differs from its validated shape")
+      end
+
+      source_path = File.realpath(source[:path])
+      root_prefix = @text_encoder_dir.ends_with?(File::SEPARATOR) ? @text_encoder_dir : "#{@text_encoder_dir}#{File::SEPARATOR}"
+      unless source_path == source[:path] && source_path.starts_with?(root_prefix)
+        raise ArgumentError.new("qwen3vl text weights: tensor #{name} shard path escapes text_encoder directory")
+      end
+
+      raw = Bytes.new(expected_bytes.to_i)
+      File.open(source_path, "rb") do |io|
+        file_size = io.size
+        data_offset = source[:data_offset]
+        unless data_offset >= 0 && data_offset <= file_size && expected_bytes <= file_size - data_offset
+          raise ArgumentError.new("qwen3vl text weights: tensor #{name} source outside shard bounds")
+        end
+        io.seek(data_offset)
+        io.read_fully(raw)
+      end
+      decode_bf16_rows(raw)
     end
 
     private def validate_config! : Nil
@@ -301,6 +377,11 @@ module ML::GGUF
             if info.name == EMBEDDING_NAME
               @embedding_data_offset = reader.data_offset + info.data_start
             end
+            @tensor_sources[info.name] = {
+              path:        path,
+              data_offset: reader.data_offset + info.data_start,
+              byte_size:   info.data_bytes,
+            }
             seen << info.name
           end
         rescue ex
