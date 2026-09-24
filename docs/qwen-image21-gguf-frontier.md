@@ -345,6 +345,42 @@ The BF16 checkpoint payload, `[out, in]` shape, and loader indexing agree, so
 changing the weight orientation would attack the wrong cause. This conclusion
 is limited to those 23 input-exact rows; row 22 has an upstream norm difference.
 
+The opt-in equal-input operator replay makes the operator-local comparison
+repeatable with the pinned 24-row native trace. It feeds each official
+PyTorch operator its **native** BF16 input sidecar, then compares the result
+with the native output sidecar. The stage comparison instead compares the two
+already composed paths, so it includes upstream differences:
+
+| Layer-0 boundary | Composed official-vs-native BF16 differences | Equal-native-input operator differences |
+| --- | ---: | ---: |
+| `q_proj` | 912/98,304 | 47/98,304 |
+| Causal attention (`attended`) | 2,287/98,304 | 61/98,304 |
+| `o_proj` | 6,352/98,304 | 47/98,304 |
+
+The equal-input `q_proj` count includes one difference on raw row 22; the
+other 46 are on the 23 rows whose normalized inputs were already BF16-exact
+in the composed comparison. Attention uses 32 Q heads, 8 KV heads repeated
+four times, the PyTorch 2.6 CPU SDPA MATH backend, and a causal/no-explicit-mask
+call. The probe rejects a non-all-visible input mask, because this fixture's
+24 raw tokens are all attended. Every native stage is shape-checked and its
+SHA-256 is checked against the native trace manifest, which names the pinned
+fixture payload SHA. This detects accidental sidecar drift, not coordinated
+edits to a sidecar and its manifest. The probe also does not authenticate the
+local checkpoint's weight files; it assumes the trusted official snapshot.
+
+```sh
+python3 -B scripts/qwen3vl_text_layer_trace.py \
+  --model-dir /path/to/text_encoder \
+  --fixture-dir /path/to/reference \
+  --full24-only --native-trace-dir /path/to/native-layer0-full24 \
+  --equal-input-ops --output /private/tmp/qwen3vl-equal-input-ops.json
+```
+
+This isolates three local arithmetic differences on one CPU/BF16 fixture; it
+does not prove exactness of the other operators, bound 36-layer amplification,
+or establish image-quality tolerance. A smaller operator-local mismatch count
+is not itself a reason to change the native reduction tree.
+
 A bounded row-22 replay with the pinned layer-0 norm weight narrows that
 first difference further: PyTorch's F32 `pow(2).mean()` produces variance
 `0.0005493450444`, while the current scalar, sequential F32 accumulation
@@ -383,9 +419,9 @@ not proof of PyTorch's general reduction order. Both alternatives were
 rejected and the source kept its serial F32 reduction: local layer-0 parity
 does not compose into a better final embedding proxy here. The final metrics
 are not image-quality measurements, and one prompt cannot settle broader
-tolerances. The next targeted arithmetic question is PyTorch GEMM reduction
-order in `q_proj`, followed by a same-seed image A/B when full DiT/VAE
-artifacts are available.
+tolerances. The next promotion gate is a same-seed image A/B when full DiT/VAE
+artifacts are available. Until then, PyTorch GEMM reduction order in `q_proj`
+remains a bounded diagnostic question, not a promoted native change.
 
 The optional `--retained-bf16-out=/path/to/native.bf16le` exports only this
 full-prompt, 36-layer result, plus a checksummed JSON sidecar. It is an
