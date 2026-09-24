@@ -40,6 +40,30 @@ private def qwen3vl_text_block_spec_hidden : Array(Float32)
   ]
 end
 
+private def qwen3vl_text_block_spec_wide_weights : ML::GGUF::Qwen3VLTextBlockWeights
+  ML::GGUF::Qwen3VLTextBlockWeights.new(
+    input_layernorm: [0.75_f32, 1.0_f32, 0.5_f32, 1.25_f32, 0.875_f32, 1.125_f32],
+    q_proj: qwen3vl_text_block_spec_weight(6, 6, 11),
+    k_proj: qwen3vl_text_block_spec_weight(2, 6, 12),
+    v_proj: qwen3vl_text_block_spec_weight(2, 6, 13),
+    q_norm: [1.0_f32, 0.75_f32],
+    k_norm: [0.8_f32, 1.2_f32],
+    o_proj: qwen3vl_text_block_spec_weight(6, 6, 14),
+    post_attention_layernorm: [0.9_f32, 1.1_f32, 0.75_f32, 1.2_f32, 0.625_f32, 1.375_f32],
+    gate_proj: qwen3vl_text_block_spec_weight(5, 6, 15),
+    up_proj: qwen3vl_text_block_spec_weight(5, 6, 16),
+    down_proj: qwen3vl_text_block_spec_weight(6, 5, 17),
+  )
+end
+
+private def qwen3vl_text_block_spec_wide_hidden : Array(Float32)
+  [
+    0.25_f32, -0.5_f32, 1.0_f32, 0.75_f32, -1.25_f32, 0.125_f32,
+    1.5_f32, 0.25_f32, -0.75_f32, 1.0_f32, 0.5_f32, -0.25_f32,
+    -0.875_f32, 1.25_f32, 0.375_f32, -0.625_f32, 0.875_f32, 1.125_f32,
+  ]
+end
+
 describe ML::GGUF::Qwen3VLTextBlock do
   config = ML::GGUF::Qwen3VLTextBlockConfig.new(
     hidden_dim: 4,
@@ -120,6 +144,80 @@ describe ML::GGUF::Qwen3VLTextBlock do
     actual.should eq(expected)
     actual.should_not eq(eager)
   end
+
+  {% if flag?(:darwin) %}
+    it "uses row-major Accelerate projections for non-square multi-token blocks within BF16 tolerance" do
+      wide_weights = qwen3vl_text_block_spec_wide_weights
+      hidden = qwen3vl_text_block_spec_wide_hidden
+      scalar_config = ML::GGUF::Qwen3VLTextBlockConfig.new(
+        hidden_dim: 6,
+        heads: 3,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate_dim: 5,
+      )
+      accelerated_config = ML::GGUF::Qwen3VLTextBlockConfig.new(
+        hidden_dim: 6,
+        heads: 3,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate_dim: 5,
+        projection_backend: ML::GGUF::Qwen3VLTextBlockConfig::ProjectionBackend::Accelerate,
+      )
+      scalar_trace = Hash(String, Array(Float32)).new
+      accelerated_trace = Hash(String, Array(Float32)).new
+      scalar = ML::GGUF::Qwen3VLTextBlock.forward(
+        hidden, [true, false, true], wide_weights, scalar_config, trace: scalar_trace)
+      accelerated = ML::GGUF::Qwen3VLTextBlock.forward(
+        hidden, [true, false, true], wide_weights, accelerated_config, trace: accelerated_trace)
+
+      # This fixture has three input rows and rectangular 5x6 / 6x5 SwiGLU
+      # projections. A transposed-weight or column-major interpretation cannot
+      # preserve these ordered module boundaries. The scale-aware BF16 tolerance
+      # accommodates a different Float32 reduction tree while rejecting layout
+      # mistakes; low 16-bit checks independently require BF16-rounded outputs.
+      projection_boundaries = [
+        "layers.0.self_attn.q_proj",
+        "layers.0.self_attn.k_proj",
+        "layers.0.self_attn.v_proj",
+        "layers.0.self_attn.o_proj",
+        "layers.0.mlp.gate_proj",
+        "layers.0.mlp.up_proj",
+        "layers.0.mlp.down_proj",
+        "layers.0",
+      ]
+      projection_boundaries.each do |name|
+        scalar_trace[name].size.should eq(accelerated_trace[name].size)
+        scalar_trace[name].zip(accelerated_trace[name]).each do |expected, actual|
+          tolerance = Math.max(0.015625_f32, expected.abs * 0.015625_f32)
+          actual.should be_close(expected, tolerance)
+          (actual.unsafe_as(UInt32) & 0x0000_ffff_u32).should eq(0_u32)
+        end
+      end
+      scalar.size.should eq(18)
+      accelerated.size.should eq(18)
+    end
+  {% else %}
+    it "fails closed when Accelerate projections are explicitly requested off macOS" do
+      config = ML::GGUF::Qwen3VLTextBlockConfig.new(
+        hidden_dim: 6,
+        heads: 3,
+        kv_heads: 1,
+        head_dim: 2,
+        intermediate_dim: 5,
+        projection_backend: ML::GGUF::Qwen3VLTextBlockConfig::ProjectionBackend::Accelerate,
+      )
+
+      expect_raises(ArgumentError, /Accelerate projection backend requires macOS/) do
+        ML::GGUF::Qwen3VLTextBlock.forward(
+          qwen3vl_text_block_spec_wide_hidden,
+          [true, false, true],
+          qwen3vl_text_block_spec_wide_weights,
+          config,
+        )
+      end
+    end
+  {% end %}
 
   it "captures copied BF16 module boundaries when a trace sink is supplied" do
     expected_sizes = {
