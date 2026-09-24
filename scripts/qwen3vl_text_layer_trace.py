@@ -4,7 +4,8 @@
 The model is loaded only from a local checkpoint. The trace compares the full
 fixture sequence with its first two tokens under the checkpoint's default
 attention implementation and eager attention, without changing repository
-parity thresholds.
+parity thresholds. The optional full-prompt native trace replays selected
+operators on equal BF16 inputs to separate local arithmetic from propagation.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -20,6 +22,9 @@ from typing import Any
 
 
 HIDDEN_SIZE = 4096
+QUERY_HEADS = 32
+KEY_VALUE_HEADS = 8
+HEAD_DIM = 128
 EXPECTED_FIXTURE = {
     "schema": "qwen-image21-text-reference",
     "schema_version": 1,
@@ -598,6 +603,241 @@ def _compare_native_stages(
     }
 
 
+def _validate_equal_input_stage(name: str, tensor: Any, expected_shape: tuple[int, ...], *, torch: Any) -> Any:
+    if not isinstance(tensor, torch.Tensor):
+        raise ValueError(f"equal-input stage {name} is not a tensor")
+    if tuple(tensor.shape) != tuple(expected_shape):
+        raise ValueError(
+            f"equal-input stage {name} has unexpected shape {list(tensor.shape)}; "
+            f"expected {list(expected_shape)}"
+        )
+    if tensor.dtype != torch.bfloat16:
+        raise ValueError(f"equal-input stage {name} must be bfloat16; got {tensor.dtype}")
+    if not torch.isfinite(tensor).all().item():
+        raise ValueError(f"equal-input stage {name} contains non-finite values")
+    return tensor
+
+
+def _compare_equal_input_operator(
+    name: str,
+    actual: Any,
+    expected: Any,
+    *,
+    row_regions: list[str],
+) -> dict[str, Any]:
+    import torch
+
+    if not isinstance(expected, torch.Tensor):
+        raise ValueError(f"equal-input native output {name} is not a tensor")
+    expected_shape = tuple(expected.shape)
+    if len(expected_shape) != 3 or expected_shape[0] != 1:
+        raise ValueError(f"equal-input native output {name} must have shape [1, sequence, width]")
+    _validate_equal_input_stage(f"{name} actual output", actual, expected_shape, torch=torch)
+    _validate_equal_input_stage(f"{name} native output", expected, expected_shape, torch=torch)
+    if len(row_regions) != expected_shape[1]:
+        raise ValueError(
+            f"equal-input operator {name} has {expected_shape[1]} rows but "
+            f"{len(row_regions)} row-region labels"
+        )
+    return _metrics(actual, expected, query_axis=1, row_regions=row_regions)
+
+
+def _attention_head_geometry(attention: Any) -> tuple[int, int, int]:
+    head_dim = getattr(attention, "head_dim", None)
+    q_proj = getattr(attention, "q_proj", None)
+    k_proj = getattr(attention, "k_proj", None)
+    if type(head_dim) is not int or head_dim < 1:
+        raise ValueError(f"equal-input attention has invalid head_dim: {head_dim!r}")
+    if q_proj is None or k_proj is None:
+        raise ValueError("equal-input attention is missing q_proj or k_proj for head geometry")
+    query_width = getattr(q_proj, "out_features", None)
+    key_value_width = getattr(k_proj, "out_features", None)
+    if (
+        type(query_width) is not int
+        or query_width < 1
+        or query_width % head_dim
+        or type(key_value_width) is not int
+        or key_value_width < 1
+        or key_value_width % head_dim
+    ):
+        raise ValueError("equal-input q_proj and k_proj widths must be positive multiples of head_dim")
+    query_heads = query_width // head_dim
+    key_value_heads = key_value_width // head_dim
+    config = getattr(attention, "config", None)
+    for field, inferred in (
+        ("num_attention_heads", query_heads),
+        ("num_key_value_heads", key_value_heads),
+    ):
+        configured = getattr(config, field, inferred)
+        if type(configured) is not int or configured != inferred:
+            raise ValueError(
+                f"equal-input {field} config disagrees with projection geometry: "
+                f"{configured!r} versus {inferred}"
+            )
+    if query_heads % key_value_heads:
+        raise ValueError("equal-input attention query heads must be divisible by key/value heads")
+    return query_heads, key_value_heads, head_dim
+
+
+def _equal_input_operator_replay(
+    attention: Any,
+    native: dict[str, Any],
+    *,
+    attention_mask: Any,
+    row_regions: list[str],
+    torch: Any,
+) -> dict[str, Any]:
+    """Replay three layer-0 operators from validated native BF16 sidecar inputs."""
+    if not isinstance(attention_mask, torch.Tensor) or attention_mask.ndim != 2:
+        raise ValueError("equal-input attention mask must be a [1, sequence] tensor")
+    if attention_mask.shape[0] != 1 or attention_mask.shape[1] < 1:
+        raise ValueError("equal-input attention mask must contain one non-empty sequence")
+    sequence_length = int(attention_mask.shape[1])
+    visible_mask = attention_mask.detach().to(device="cpu")
+    if not torch.all(visible_mask == 1).item():
+        raise ValueError(
+            "equal-input SDPA replay requires an all-visible attention mask because it uses "
+            "is_causal=True with attn_mask=None"
+        )
+    if len(row_regions) != sequence_length:
+        raise ValueError("equal-input row-region labels do not match the attention-mask sequence length")
+
+    query_heads, key_value_heads, head_dim = _attention_head_geometry(attention)
+    hidden_size = query_heads * head_dim
+    key_value_width = key_value_heads * head_dim
+
+    q_proj = getattr(attention, "q_proj", None)
+    k_proj = getattr(attention, "k_proj", None)
+    v_proj = getattr(attention, "v_proj", None)
+    o_proj = getattr(attention, "o_proj", None)
+    if k_proj is None or v_proj is None:
+        raise ValueError("equal-input attention is missing k_proj or v_proj")
+    for name, projection, input_width, output_width in (
+        ("q_proj", q_proj, hidden_size, hidden_size),
+        ("k_proj", k_proj, hidden_size, key_value_width),
+        ("v_proj", v_proj, hidden_size, key_value_width),
+        ("o_proj", o_proj, hidden_size, hidden_size),
+    ):
+        if projection is None or not hasattr(projection, "weight"):
+            raise ValueError(f"equal-input attention is missing {name}")
+        if getattr(projection, "in_features", None) != input_width or getattr(
+            projection, "out_features", None
+        ) != output_width:
+            raise ValueError(f"equal-input {name} dimensions do not match the attention head geometry")
+        if projection.weight.dtype != torch.bfloat16:
+            raise ValueError(f"equal-input {name} weights must be bfloat16; got {projection.weight.dtype}")
+    if q_proj.weight.device != o_proj.weight.device:
+        raise ValueError("equal-input q_proj and o_proj must be on the same device")
+
+    expected_shapes = {
+        "layers.0.input_layernorm": (1, sequence_length, hidden_size),
+        "layers.0.self_attn.q_proj": (1, sequence_length, hidden_size),
+        "post_rope_q": (1, sequence_length, hidden_size),
+        "post_rope_k": (1, sequence_length, key_value_width),
+        "layers.0.self_attn.v_proj": (1, sequence_length, key_value_width),
+        "attended": (1, sequence_length, hidden_size),
+        "layers.0.self_attn.o_proj": (1, sequence_length, hidden_size),
+    }
+    for name, expected_shape in expected_shapes.items():
+        if name not in native:
+            raise ValueError(f"equal-input native trace is missing stage {name!r}")
+        _validate_equal_input_stage(name, native[name], expected_shape, torch=torch)
+
+    expected_scale = 1.0 / math.sqrt(head_dim)
+    scale = getattr(attention, "scaling", expected_scale)
+    if not isinstance(scale, (int, float)) or not math.isclose(
+        float(scale), expected_scale, rel_tol=1e-6, abs_tol=1e-8
+    ):
+        raise ValueError(
+            f"equal-input SDPA default scale does not match official attention scaling: "
+            f"{scale!r} versus {expected_scale}"
+        )
+
+    device = q_proj.weight.device
+    native_input = native["layers.0.input_layernorm"].to(device=device)
+    native_query = native["post_rope_q"].to(device=device)
+    native_key = native["post_rope_k"].to(device=device)
+    native_value = native["layers.0.self_attn.v_proj"].to(device=device)
+    native_attended = native["attended"].to(device=device)
+    with torch.no_grad():
+        replayed_q_proj = q_proj(native_input)
+        query = native_query.reshape(1, sequence_length, query_heads, head_dim).transpose(1, 2)
+        key = native_key.reshape(1, sequence_length, key_value_heads, head_dim).transpose(1, 2)
+        value = native_value.reshape(1, sequence_length, key_value_heads, head_dim).transpose(1, 2)
+        kv_repeat = query_heads // key_value_heads
+        key = key.repeat_interleave(kv_repeat, dim=1)
+        value = value.repeat_interleave(kv_repeat, dim=1)
+        with torch.nn.attention.sdpa_kernel(torch.nn.attention.SDPBackend.MATH):
+            attended_heads = torch.nn.functional.scaled_dot_product_attention(
+                query,
+                key,
+                value,
+                attn_mask=None,
+                dropout_p=0.0,
+                is_causal=True,
+            )
+        replayed_attended = attended_heads.transpose(1, 2).contiguous().reshape(
+            1, sequence_length, hidden_size
+        )
+        replayed_o_proj = o_proj(native_attended)
+
+    return {
+        "scope": "operator-local equal-input replay",
+        "interpretation": (
+            "This replays q_proj, causal SDPA attention, and o_proj independently from their exact native "
+            "BF16 sidecar inputs. It is not full-chain parity or image quality."
+        ),
+        "full_chain_parity": False,
+        "image_quality": False,
+        "sequence_rows": sequence_length,
+        "row_regions": list(row_regions),
+        "attention": {
+            "query_heads": query_heads,
+            "key_value_heads": key_value_heads,
+            "head_dim": head_dim,
+            "kv_repeat_interleave": kv_repeat,
+            "backend": "MATH",
+            "is_causal": True,
+            "attn_mask": None,
+            "attention_mask_guard": "requires all-visible (all-ones) fixture mask",
+            "scale": expected_scale,
+        },
+        "operators": {
+            "q_proj": {
+                "input_sidecar": "layers.0.input_layernorm",
+                "native_output_sidecar": "layers.0.self_attn.q_proj",
+                "metrics": _compare_equal_input_operator(
+                    "q_proj",
+                    replayed_q_proj,
+                    native["layers.0.self_attn.q_proj"],
+                    row_regions=row_regions,
+                ),
+            },
+            "sdpa_attention": {
+                "input_sidecars": [
+                    "post_rope_q",
+                    "post_rope_k",
+                    "layers.0.self_attn.v_proj",
+                ],
+                "native_output_sidecar": "attended",
+                "metrics": _compare_equal_input_operator(
+                    "sdpa_attention", replayed_attended, native["attended"], row_regions=row_regions
+                ),
+            },
+            "o_proj": {
+                "input_sidecar": "attended",
+                "native_output_sidecar": "layers.0.self_attn.o_proj",
+                "metrics": _compare_equal_input_operator(
+                    "o_proj",
+                    replayed_o_proj,
+                    native["layers.0.self_attn.o_proj"],
+                    row_regions=row_regions,
+                ),
+            },
+        },
+    }
+
+
 def _run_trace(
     model: Any,
     tensors: dict[str, Any],
@@ -841,6 +1081,14 @@ def _parse_args() -> argparse.Namespace:
         help="run only the default-attention full 24-token trace (for bounded native-boundary comparison)",
     )
     parser.add_argument(
+        "--equal-input-ops",
+        action="store_true",
+        help=(
+            "replay layer-0 q_proj, causal SDPA MATH attention, and o_proj from exact native BF16 sidecar inputs; "
+            "requires --full24-only and --native-trace-dir"
+        ),
+    )
+    parser.add_argument(
         "--dump-intermediates-bf16",
         action="store_true",
         help="write selected first-two-token BF16 module outputs from the default-attention run",
@@ -861,6 +1109,10 @@ def _parse_args() -> argparse.Namespace:
         parser.error("--native-trace-dir requires the full 24-token trace")
     if args.native_trace_dir is not None and not args.full24_only:
         parser.error("--native-trace-dir requires --full24-only to keep the official probe bounded")
+    if args.equal_input_ops and not args.full24_only:
+        parser.error("--equal-input-ops requires --full24-only")
+    if args.equal_input_ops and args.native_trace_dir is None:
+        parser.error("--equal-input-ops requires --native-trace-dir")
     if args.output.exists() and not args.overwrite:
         parser.error(f"output already exists (pass --overwrite to replace it): {args.output}")
     return args
@@ -883,6 +1135,14 @@ def main() -> int:
     row_regions = _sequence_regions(fixture["attention_mask"], drop_idx=drop_idx)
     if len(row_regions) != fixture["input_ids"].shape[1]:
         raise ValueError("fixture attention mask length does not match input token count")
+    if args.equal_input_ops:
+        if fixture["attention_mask"].shape != (1, 24):
+            raise ValueError("equal-input operator replay requires the pinned 24-row fixture attention mask")
+        if not torch.all(fixture["attention_mask"] == 1).item():
+            raise ValueError(
+                "equal-input SDPA replay requires an all-visible attention mask because it uses "
+                "is_causal=True with attn_mask=None"
+            )
 
     native_tensors: dict[str, Any] | None = None
     native_metadata: dict[str, Any] | None = None
@@ -903,6 +1163,14 @@ def main() -> int:
     model.eval()
     language_model = model.model.language_model
     attention = language_model.layers[0].self_attn
+    if args.equal_input_ops:
+        actual_geometry = _attention_head_geometry(attention)
+        expected_geometry = (QUERY_HEADS, KEY_VALUE_HEADS, HEAD_DIM)
+        if actual_geometry != expected_geometry:
+            raise RuntimeError(
+                f"equal-input replay expected Qwen3-VL attention geometry {expected_geometry}, "
+                f"got {actual_geometry}"
+            )
     original_implementations = _config_implementations(model, language_model, attention)
     default_implementation = original_implementations["layer0_attention_config"]
     if not isinstance(default_implementation, str):
@@ -1022,6 +1290,18 @@ def main() -> int:
             run_tensors["default_full"], native_tensors, row_regions=row_regions
         )
 
+    equal_input_operator_replay = None
+    if args.equal_input_ops:
+        if native_tensors is None:
+            raise RuntimeError("equal-input operator replay requires validated native trace sidecars")
+        equal_input_operator_replay = _equal_input_operator_replay(
+            attention,
+            native_tensors,
+            attention_mask=fixture["attention_mask"],
+            row_regions=row_regions,
+            torch=torch,
+        )
+
     args.output.parent.mkdir(parents=True, exist_ok=True)
     intermediate_sidecar: dict[str, Any] | None = None
     if args.dump_intermediates_bf16:
@@ -1102,6 +1382,7 @@ def main() -> int:
         "comparisons": comparisons,
         "native_trace": native_metadata,
         "native_comparison": native_comparison,
+        "equal_input_operator_replay": equal_input_operator_replay,
         "intermediate_sidecar": intermediate_sidecar,
         "interpretation": {
             "hidden_state_001_mapping": (
@@ -1114,6 +1395,11 @@ def main() -> int:
                 "using Transformers eager score operations. "
                 "For eager runs it also checks the returned attention probabilities against the reconstruction; "
                 "SDPA itself does not return its internal probabilities."
+            ),
+            "equal_input_operator_replay": (
+                "When present, this measures q_proj, causal SDPA MATH attention, and o_proj independently from "
+                "their exact native BF16 sidecar inputs; it is operator-local equal-input replay, not full-chain "
+                "parity or image quality. The SDPA no-mask form is admitted only for the all-visible fixture mask."
             ),
         },
     }
@@ -1131,6 +1417,14 @@ def main() -> int:
             f"relative_rms={metrics['relative_rms']:.9g} "
             f"hook_is_hidden_state_001={record['layer0_hook_equals_encoder_hidden_state_001']}"
         )
+    if equal_input_operator_replay is not None:
+        for name, operator in equal_input_operator_replay["operators"].items():
+            metrics = operator["metrics"]
+            print(
+                f"equal-input {name}: mismatches={metrics['exact_mismatches']}/{metrics['elements']} "
+                f"max_abs={metrics['max_abs_error']:.9g} rmse={metrics['rmse']:.9g} "
+                f"relative_rms={metrics['relative_rms']:.9g}"
+            )
     return 0
 
 

@@ -6,6 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 import torch
@@ -138,6 +139,131 @@ class SequenceMetricSpec(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "failed its length or SHA-256 check"):
                 TRACE._load_native_trace(root, torch=torch, fixture_payload_sha256=fixture_sha)
+
+    def test_equal_input_operator_comparison_reports_zero_and_one_mismatch_by_region(self) -> None:
+        expected = torch.zeros((1, 24, 4), dtype=torch.bfloat16)
+        regions = ["prefix"] * 14 + ["retained"] * 10
+
+        exact = TRACE._compare_equal_input_operator(
+            "q_proj", expected.clone(), expected, row_regions=regions
+        )
+        self.assertEqual(0, exact["exact_mismatches"])
+        self.assertEqual(14, exact["region_totals"]["prefix"]["rows"])
+        self.assertEqual(10, exact["region_totals"]["retained"]["rows"])
+
+        actual = expected.clone()
+        actual[0, 17, 2] = 1
+        one_mismatch = TRACE._compare_equal_input_operator(
+            "q_proj", actual, expected, row_regions=regions
+        )
+        self.assertEqual(1, one_mismatch["exact_mismatches"])
+        self.assertEqual(1, one_mismatch["by_row"][17]["exact_mismatches"])
+        self.assertEqual("retained", one_mismatch["by_row"][17]["region"])
+        self.assertEqual(1, one_mismatch["region_totals"]["retained"]["exact_mismatches"])
+        self.assertEqual(0, one_mismatch["region_totals"]["prefix"]["exact_mismatches"])
+
+    def test_equal_input_stage_validation_rejects_shape_and_dtype_drift(self) -> None:
+        correct = torch.zeros((1, 24, 4), dtype=torch.bfloat16)
+        TRACE._validate_equal_input_stage("input", correct, (1, 24, 4), torch=torch)
+
+        with self.assertRaisesRegex(ValueError, "unexpected shape"):
+            TRACE._validate_equal_input_stage(
+                "input", torch.zeros((1, 23, 4), dtype=torch.bfloat16), (1, 24, 4), torch=torch
+            )
+        with self.assertRaisesRegex(ValueError, "must be bfloat16"):
+            TRACE._validate_equal_input_stage(
+                "input", torch.zeros((1, 24, 4), dtype=torch.float32), (1, 24, 4), torch=torch
+            )
+
+    def test_equal_input_replay_uses_gqa_causal_sdpa_math_from_native_inputs(self) -> None:
+        q_proj = torch.nn.Linear(8, 8, bias=False, dtype=torch.bfloat16)
+        k_proj = torch.nn.Linear(8, 4, bias=False, dtype=torch.bfloat16)
+        v_proj = torch.nn.Linear(8, 4, bias=False, dtype=torch.bfloat16)
+        o_proj = torch.nn.Linear(8, 8, bias=False, dtype=torch.bfloat16)
+        with torch.no_grad():
+            q_proj.weight.copy_(torch.eye(8, dtype=torch.bfloat16))
+            o_proj.weight.copy_(torch.eye(8, dtype=torch.bfloat16))
+        attention = SimpleNamespace(
+            num_heads=4,
+            num_key_value_heads=2,
+            head_dim=2,
+            scaling=2**-0.5,
+            q_proj=q_proj,
+            k_proj=k_proj,
+            v_proj=v_proj,
+            o_proj=o_proj,
+        )
+        native = {
+            "layers.0.input_layernorm": torch.tensor(
+                [[list(range(1, 9)), list(range(9, 17))]], dtype=torch.bfloat16
+            ),
+            "layers.0.self_attn.q_proj": torch.tensor(
+                [[list(range(1, 9)), list(range(9, 17))]], dtype=torch.bfloat16
+            ),
+            "post_rope_q": torch.zeros((1, 2, 8), dtype=torch.bfloat16),
+            "post_rope_k": torch.zeros((1, 2, 4), dtype=torch.bfloat16),
+            "layers.0.self_attn.v_proj": torch.tensor(
+                [[[1, 0, 0, 2], [0, 1, 2, 0]]], dtype=torch.bfloat16
+            ),
+            # Zero Q/K makes causal row 0 select V0 and row 1 average V0,V1.
+            # Query heads 0/1 share KV head 0; heads 2/3 share KV head 1.
+            "attended": torch.tensor(
+                [[[1, 0, 1, 0, 0, 2, 0, 2], [0.5, 0.5, 0.5, 0.5, 1, 1, 1, 1]]],
+                dtype=torch.bfloat16,
+            ),
+            "layers.0.self_attn.o_proj": torch.tensor(
+                [[[1, 0, 1, 0, 0, 2, 0, 2], [0.5, 0.5, 0.5, 0.5, 1, 1, 1, 1]]],
+                dtype=torch.bfloat16,
+            ),
+        }
+
+        replay = TRACE._equal_input_operator_replay(
+            attention,
+            native,
+            attention_mask=torch.ones((1, 2), dtype=torch.int64),
+            row_regions=["prefix", "retained"],
+            torch=torch,
+        )
+
+        self.assertEqual("operator-local equal-input replay", replay["scope"])
+        self.assertFalse(replay["full_chain_parity"])
+        self.assertFalse(replay["image_quality"])
+        self.assertEqual(4, replay["attention"]["query_heads"])
+        self.assertEqual(2, replay["attention"]["key_value_heads"])
+        self.assertEqual(2, replay["attention"]["kv_repeat_interleave"])
+        self.assertEqual("MATH", replay["attention"]["backend"])
+        self.assertIsNone(replay["attention"]["attn_mask"])
+        self.assertEqual(
+            {name: 0 for name in replay["operators"]},
+            {
+                name: operator["metrics"]["exact_mismatches"]
+                for name, operator in replay["operators"].items()
+            },
+        )
+
+        changed_native = {name: tensor.clone() for name, tensor in native.items()}
+        changed_native["layers.0.self_attn.q_proj"][0, 1, 0] = 17
+        one_mismatch = TRACE._equal_input_operator_replay(
+            attention,
+            changed_native,
+            attention_mask=torch.ones((1, 2), dtype=torch.int64),
+            row_regions=["prefix", "retained"],
+            torch=torch,
+        )
+        self.assertEqual(1, one_mismatch["operators"]["q_proj"]["metrics"]["exact_mismatches"])
+        self.assertEqual(
+            "retained",
+            one_mismatch["operators"]["q_proj"]["metrics"]["by_row"][1]["region"],
+        )
+
+        with self.assertRaisesRegex(ValueError, "all-visible attention mask"):
+            TRACE._equal_input_operator_replay(
+                attention,
+                native,
+                attention_mask=torch.tensor([[1, 0]], dtype=torch.int64),
+                row_regions=["prefix", "retained"],
+                torch=torch,
+            )
 
 
 if __name__ == "__main__":
