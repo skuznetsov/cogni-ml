@@ -115,18 +115,30 @@ end
 
 # A valid metadata layout backed by a sparse file: the full model's logical
 # offsets are exercised without allocating or checking in its multi-GB weights.
-private def write_qwen3vl_sparse_complete_shard(path : String) : {Bytes, Bytes}
+private def write_qwen3vl_sparse_complete_shard(
+  path : String,
+  *,
+  skip_tensor_names : Array(String) = [] of String,
+  malformed_shape_tensor : String? = nil,
+) : {Bytes, Bytes}
   offset = 0_i64
   embedding_offset = -1_i64
   header = JSON.build do |json|
     json.object do
       ML::GGUF::Qwen3VLTextWeights.required_tensor_shapes.each do |name, shape|
-        bytes = shape.reduce(1_i64) { |count, dimension| count * dimension } * 2_i64
+        next if skip_tensor_names.includes?(name)
+
+        stored_shape = if name == malformed_shape_tensor
+                         shape.dup.tap { |dims| dims[0] -= 1 }
+                       else
+                         shape
+                       end
+        bytes = stored_shape.reduce(1_i64) { |count, dimension| count * dimension } * 2_i64
         embedding_offset = offset if name == ML::GGUF::Qwen3VLTextWeights::EMBEDDING_NAME
         json.field name do
           json.object do
             json.field "dtype", "BF16"
-            json.field "shape", shape
+            json.field "shape", stored_shape
             json.field "data_offsets", [offset, offset + bytes]
           end
         end
@@ -154,6 +166,39 @@ private def write_qwen3vl_sparse_complete_shard(path : String) : {Bytes, Bytes}
     io.write(last_row)
   end
   {first_row, last_row}
+end
+
+private def write_qwen3vl_sparse_tensor_shard(path : String, name : String,
+                                              shape : Array(Int64), marker : Bytes) : Nil
+  tensor_bytes = shape.reduce(1_i64) { |count, dimension| count * dimension } * 2_i64
+  header = JSON.build do |json|
+    json.object do
+      json.field name do
+        json.object do
+          json.field "dtype", "BF16"
+          json.field "shape", shape
+          json.field "data_offsets", [0, tensor_bytes]
+        end
+      end
+    end
+  end
+  File.open(path, "wb") do |io|
+    io.write_bytes(header.bytesize.to_u64, IO::ByteFormat::LittleEndian)
+    io << header
+    payload_start = 8_i64 + header.bytesize
+    io.seek(payload_start + tensor_bytes - 1)
+    io.write_byte(0_u8)
+    io.seek(payload_start)
+    io.write(marker)
+  end
+end
+
+private def write_qwen3vl_empty_safetensors_shard(path : String) : Nil
+  header = "{}"
+  File.open(path, "wb") do |io|
+    io.write_bytes(header.bytesize.to_u64, IO::ByteFormat::LittleEndian)
+    io << header
+  end
 end
 
 describe ML::GGUF::Qwen3VLTextWeights do
@@ -300,6 +345,111 @@ describe ML::GGUF::Qwen3VLTextWeights do
       end
       expect_raises(ArgumentError, /loader is closed/) do
         weights.embedding_rows_raw([] of Int64)
+      end
+    end
+  end
+
+  it "reads a named layer-0 BF16 tensor from its indexed shard and rejects stale bounds" do
+    with_qwen3vl_weights_dir do |dir|
+      tensor_name = "model.language_model.layers.0.input_layernorm.weight"
+      base_shard = "base.safetensors"
+      layer_shard = "layer0.safetensors"
+      weight_map = ML::GGUF::Qwen3VLTextWeights.required_tensor_names.to_h do |name|
+        {name, name == tensor_name ? layer_shard : base_shard}
+      end
+      write_qwen3vl_weights_metadata(dir,
+        config: qwen3vl_weights_config_json(rope_theta: 5_000_000_f64),
+        weight_map: weight_map)
+      write_qwen3vl_sparse_complete_shard(
+        File.join(dir, base_shard), skip_tensor_names: [tensor_name])
+      write_qwen3vl_sparse_tensor_shard(
+        File.join(dir, layer_shard),
+        tensor_name,
+        ML::GGUF::Qwen3VLTextWeights.required_tensor_shapes[tensor_name],
+        Bytes[0x80_u8, 0x3f_u8, 0x00_u8, 0xc0_u8],
+      )
+
+      weights = ML::GGUF::Qwen3VLTextWeights.from_directory(dir)
+      begin
+        values = weights.layer0_tensor_f32(tensor_name)
+        values.size.should eq(ML::GGUF::Qwen3VLTextWeights::HIDDEN_SIZE)
+        values[0].should eq(1.0_f32)
+        values[1].should eq(-2.0_f32)
+        values[2].should eq(0.0_f32)
+
+        expect_raises(ArgumentError, /layer-0 tensor/) do
+          weights.layer0_tensor_f32("model.language_model.layers.1.input_layernorm.weight")
+        end
+        expect_raises(ArgumentError, /layer index/) { weights.block_weights(-1_i32) }
+        expect_raises(ArgumentError, /layer index/) { weights.block_weights(36_i32) }
+
+        # Seed a post-validation truncation to prove reads re-check current
+        # source bounds instead of trusting offsets captured at construction.
+        File.write(File.join(dir, layer_shard), "")
+        expect_raises(ArgumentError, /shard bounds/) do
+          weights.layer0_tensor_f32(tensor_name)
+        end
+        weights.close
+        expect_raises(ArgumentError, /loader is closed/) do
+          weights.layer0_tensor_f32(tensor_name)
+        end
+      ensure
+        weights.close
+      end
+    end
+  end
+
+  it "rejects an incorrectly mapped layer-0 tensor shard" do
+    with_qwen3vl_weights_dir do |dir|
+      tensor_name = "model.language_model.layers.0.self_attn.q_norm.weight"
+      base_shard = "base.safetensors"
+      wrong_shard = "wrong.safetensors"
+      weight_map = ML::GGUF::Qwen3VLTextWeights.required_tensor_names.to_h do |name|
+        {name, name == tensor_name ? wrong_shard : base_shard}
+      end
+      write_qwen3vl_weights_metadata(dir,
+        config: qwen3vl_weights_config_json(rope_theta: 5_000_000_f64),
+        weight_map: weight_map)
+      write_qwen3vl_sparse_complete_shard(File.join(dir, base_shard))
+      write_qwen3vl_empty_safetensors_shard(File.join(dir, wrong_shard))
+
+      expect_raises(ArgumentError, /index shard mapping disagrees/) do
+        ML::GGUF::Qwen3VLTextWeights.from_directory(dir)
+      end
+    end
+  end
+
+  it "rejects a layer-0 tensor with the wrong exact shape" do
+    with_qwen3vl_weights_dir do |dir|
+      shard_name = "wrong-layer0-shape.safetensors"
+      tensor_name = "model.language_model.layers.0.input_layernorm.weight"
+      weight_map = ML::GGUF::Qwen3VLTextWeights.required_tensor_names.to_h do |name|
+        {name, shard_name}
+      end
+      write_qwen3vl_weights_metadata(dir,
+        config: qwen3vl_weights_config_json(rope_theta: 5_000_000_f64),
+        weight_map: weight_map)
+      write_qwen3vl_sparse_complete_shard(
+        File.join(dir, shard_name), malformed_shape_tensor: tensor_name)
+
+      expect_raises(ArgumentError, /shape/) do
+        ML::GGUF::Qwen3VLTextWeights.from_directory(dir)
+      end
+    end
+  end
+end
+
+if ENV["QWEN3VL_TEXT_ENCODER_DIR"]?
+  describe "optional real Qwen3-VL layer-0 weight smoke" do
+    it "loads only the first layer input norm vector as finite F32 values" do
+      encoder_dir = ENV["QWEN3VL_TEXT_ENCODER_DIR"].not_nil!
+      weights = ML::GGUF::Qwen3VLTextWeights.from_directory(encoder_dir)
+      begin
+        values = weights.layer0_tensor_f32("model.language_model.layers.0.input_layernorm.weight")
+        values.size.should eq(ML::GGUF::Qwen3VLTextWeights::HIDDEN_SIZE)
+        values.all?(&.finite?).should be_true
+      ensure
+        weights.close
       end
     end
   end

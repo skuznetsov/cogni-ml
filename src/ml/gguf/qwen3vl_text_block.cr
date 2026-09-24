@@ -4,12 +4,23 @@
 # arrays use PyTorch [out, in] layout; hidden states are flattened [1, tokens,
 # hidden]. This deliberately covers the text-only path only: positions are the
 # raw sequence arange, RoPE axes are identical, and no visual embeddings or KV
-# cache are admitted here. Attention follows the eager CPU equations; this is
-# not yet a parity claim for the official checkpoint, whose dispatched attention
-# backend is absent from the captured fixture metadata.
+# cache are admitted here. Attention defaults to eager CPU equations, with an
+# optional F32-intermediate SDPA-like mode for matching the PyTorch CPU math
+# backend's BF16 attention arithmetic. This remains a single-block reference,
+# not a full-model checkpoint parity claim.
 
 module ML::GGUF
   struct Qwen3VLTextBlockConfig
+    enum AttentionArithmetic
+      # Preserve the explicit BF16 materialization boundaries of the eager
+      # reference path.
+      Eager
+
+      # Use the F32 intermediates of the PyTorch SDPA math backend for scores,
+      # softmax, and the weighted value sum; the attention output remains BF16.
+      SdpaF32
+    end
+
     getter hidden_dim : Int32
     getter heads : Int32
     getter kv_heads : Int32
@@ -17,10 +28,12 @@ module ML::GGUF
     getter intermediate_dim : Int32
     getter eps : Float32
     getter rope_theta : Float32
+    getter attention_arithmetic : AttentionArithmetic
 
     def initialize(@hidden_dim : Int32, @heads : Int32, @kv_heads : Int32,
                    @head_dim : Int32, @intermediate_dim : Int32,
-                   @eps : Float32 = 1e-6_f32, @rope_theta : Float32 = 5_000_000.0_f32)
+                   @eps : Float32 = 1e-6_f32, @rope_theta : Float32 = 5_000_000.0_f32,
+                   @attention_arithmetic : AttentionArithmetic = AttentionArithmetic::Eager)
       raise ArgumentError.new("hidden_dim must be positive") unless @hidden_dim > 0
       raise ArgumentError.new("heads and head_dim must be positive") unless @heads > 0 && @head_dim > 0
       raise ArgumentError.new("heads * head_dim must equal hidden_dim") unless @heads * @head_dim == @hidden_dim
@@ -76,6 +89,8 @@ module ML::GGUF
       attention_mask : Array(Bool),
       weights : Qwen3VLTextBlockWeights,
       config : Qwen3VLTextBlockConfig,
+      *,
+      trace : Hash(String, Array(Float32))? = nil,
     ) : Array(Float32)
       hidden_dim = config.hidden_dim
       unless hidden_states.size > 0 && hidden_states.size.divisible_by?(hidden_dim)
@@ -90,29 +105,43 @@ module ML::GGUF
       # The text encoder's hidden states, linear outputs, RMSNorm outputs, and
       # residuals are BF16 module values. Decode-to-F32 inputs are rounded here.
       residual = quantize_bf16(hidden_states)
+      trace_boundary(trace, "layer0_input", residual)
       normalized = rms_norm_rows(residual, token_count, hidden_dim, weights.input_layernorm, config.eps)
+      trace_boundary(trace, "layers.0.input_layernorm", normalized)
 
       q = linear(normalized, token_count, hidden_dim, config.heads * config.head_dim, weights.q_proj)
+      trace_boundary(trace, "layers.0.self_attn.q_proj", q)
       k = linear(normalized, token_count, hidden_dim, config.kv_heads * config.head_dim, weights.k_proj)
+      trace_boundary(trace, "layers.0.self_attn.k_proj", k)
       v = linear(normalized, token_count, hidden_dim, config.kv_heads * config.head_dim, weights.v_proj)
+      trace_boundary(trace, "layers.0.self_attn.v_proj", v)
       q = rms_norm_heads(q, token_count, config.heads, config.head_dim, weights.q_norm, config.eps)
+      trace_boundary(trace, "layers.0.self_attn.q_norm", q)
       k = rms_norm_heads(k, token_count, config.kv_heads, config.head_dim, weights.k_norm, config.eps)
+      trace_boundary(trace, "layers.0.self_attn.k_norm", k)
 
       positions = text_only_position_ids(token_count)
       q = apply_text_rope(q, token_count, config.heads, config.head_dim, positions, config.rope_theta)
+      trace_boundary(trace, "post_rope_q", q)
       k = apply_text_rope(k, token_count, config.kv_heads, config.head_dim, positions, config.rope_theta)
+      trace_boundary(trace, "post_rope_k", k)
       attended = causal_gqa_attention(q, k, v, attention_mask, token_count, config)
+      trace_boundary(trace, "attended", attended)
       attention_branch = linear(
         attended, token_count, config.hidden_dim, hidden_dim, weights.o_proj
       )
+      trace_boundary(trace, "layers.0.self_attn.o_proj", attention_branch)
       after_attention = residual_add(residual, attention_branch)
 
       residual = after_attention
       normalized = rms_norm_rows(
         residual, token_count, hidden_dim, weights.post_attention_layernorm, config.eps
       )
+      trace_boundary(trace, "layers.0.post_attention_layernorm", normalized)
       gate = linear(normalized, token_count, hidden_dim, config.intermediate_dim, weights.gate_proj)
+      trace_boundary(trace, "layers.0.mlp.gate_proj", gate)
       up = linear(normalized, token_count, hidden_dim, config.intermediate_dim, weights.up_proj)
+      trace_boundary(trace, "layers.0.mlp.up_proj", up)
       activated = Array(Float32).new(gate.size, 0.0_f32)
       gate.size.times do |index|
         silu = silu_bf16(gate[index])
@@ -121,7 +150,20 @@ module ML::GGUF
       mlp_branch = linear(
         activated, token_count, config.intermediate_dim, hidden_dim, weights.down_proj
       )
-      residual_add(residual, mlp_branch)
+      trace_boundary(trace, "layers.0.mlp.down_proj", mlp_branch)
+      output = residual_add(residual, mlp_branch)
+      trace_boundary(trace, "layers.0", output)
+      output
+    end
+
+    # Diagnostic consumers receive snapshots, never aliases to arrays used by
+    # the forward path. The nil default performs no array copy.
+    private def self.trace_boundary(trace : Hash(String, Array(Float32))?,
+                                    name : String, values : Array(Float32)) : Nil
+      if sink = trace
+        sink[name] = values.dup
+      end
+      nil
     end
 
     private def self.validate_weights!(weights : Qwen3VLTextBlockWeights,
@@ -242,6 +284,20 @@ module ML::GGUF
                                           v : Array(Float32), attention_mask : Array(Bool),
                                           tokens : Int32,
                                           config : Qwen3VLTextBlockConfig) : Array(Float32)
+      case config.attention_arithmetic
+      when .eager?
+        eager_causal_gqa_attention(q, k, v, attention_mask, tokens, config)
+      when .sdpa_f32?
+        sdpa_f32_causal_gqa_attention(q, k, v, attention_mask, tokens, config)
+      else
+        raise ArgumentError.new("unsupported Qwen3VL attention arithmetic")
+      end
+    end
+
+    private def self.eager_causal_gqa_attention(q : Array(Float32), k : Array(Float32),
+                                                v : Array(Float32), attention_mask : Array(Bool),
+                                                tokens : Int32,
+                                                config : Qwen3VLTextBlockConfig) : Array(Float32)
       hidden_dim = config.hidden_dim
       heads = config.heads
       kv_heads = config.kv_heads
@@ -277,6 +333,59 @@ module ML::GGUF
           attended = Array(Float32).new(head_dim, 0.0_f32)
           visible_keys.each_with_index do |key_index, score_index|
             probability = bf16(exponentials[score_index] / denominator)
+            value_offset = (key_index * kv_heads + kv_head) * head_dim
+            head_dim.times do |column|
+              attended[column] += probability * v[value_offset + column]
+            end
+          end
+          head_dim.times do |column|
+            output[query_index * hidden_dim + head * head_dim + column] = bf16(attended[column])
+          end
+        end
+      end
+      output
+    end
+
+    # Mirrors the CPU SDPA math path for BF16 Q/K/V: Q/K dot products, scaled
+    # scores, softmax, and the weighted V sum stay Float32. Inputs and the
+    # materialized attention result remain BF16 module values.
+    private def self.sdpa_f32_causal_gqa_attention(q : Array(Float32), k : Array(Float32),
+                                                   v : Array(Float32), attention_mask : Array(Bool),
+                                                   tokens : Int32,
+                                                   config : Qwen3VLTextBlockConfig) : Array(Float32)
+      hidden_dim = config.hidden_dim
+      heads = config.heads
+      kv_heads = config.kv_heads
+      head_dim = config.head_dim
+      groups = heads // kv_heads
+      output = Array(Float32).new(tokens * hidden_dim, 0.0_f32)
+      scale = 1.0_f32 / Math.sqrt(head_dim.to_f64).to_f32
+
+      tokens.times do |query_index|
+        heads.times do |head|
+          kv_head = head // groups
+          query_offset = (query_index * heads + head) * head_dim
+          visible_keys = [] of Int32
+          scores = [] of Float32
+          (query_index + 1).times do |key_index|
+            next unless attention_mask[key_index]
+            key_offset = (key_index * kv_heads + kv_head) * head_dim
+            dot = 0.0_f32
+            head_dim.times do |column|
+              dot += q[query_offset + column] * k[key_offset + column]
+            end
+            scores << dot * scale
+            visible_keys << key_index
+          end
+
+          next if visible_keys.empty?
+          maximum = scores.max
+          exponentials = scores.map { |score| Math.exp((score - maximum).to_f64).to_f32 }
+          denominator = 0.0_f32
+          exponentials.each { |value| denominator += value }
+          attended = Array(Float32).new(head_dim, 0.0_f32)
+          visible_keys.each_with_index do |key_index, score_index|
+            probability = exponentials[score_index] / denominator
             value_offset = (key_index * kv_heads + kv_head) * head_dim
             head_dim.times do |column|
               attended[column] += probability * v[value_offset + column]

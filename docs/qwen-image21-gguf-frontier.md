@@ -121,6 +121,10 @@ LM head are outside this slice.
   Only after that may the package select a native text path. Reuse generic
   matmul/norm/Metal infrastructure where its numerical contract matches; the
   Qwen3.5 layer topology itself is not an assumed drop-in implementation.
+  The existing `qi21_bf16_batch_matmul` Metal kernel is a candidate projection
+  primitive, but it emits F32 and uses a different reduction order. Qwen3-VL
+  still needs validated BF16 module boundaries, text RoPE, GQA, masks, and
+  residual arithmetic around that primitive.
 - **Rejected:** claiming a full native Qwen3-VL encoder from a loader-only or
   single-layer smoke; using a quantized encoder as the sole parity reference;
   enabling QBit or fusion on this path before the BF16 reference discrepancy
@@ -136,10 +140,12 @@ LM head are outside this slice.
 
 The scaffold DoD is synthetic corruption and shape guards for the reader and
 weight loader, plus an independently calculated tiny BF16 decoder-block case.
-The next **model-backed admission gate** is an actual pinned-fixture read and
+The first **model-backed admission gate** is an actual pinned-fixture read and
 an exact BF16-bit embedding lookup check against the official safetensors
-shard. Neither gate promotes the full text encoder. Later layer parity must
-report both maximum absolute error and a
+shard. That gate is now observed at the current loader source: all 24 raw token
+rows (98,304 BF16 scalars) matched `hidden_state_000` byte-for-byte. It does
+not promote the full text encoder. Layer parity must report both maximum
+absolute error and a
 scale-aware error over the whole `[1, raw_tokens, 4096]` state, not just a
 matching sample or a visually plausible PNG. Evidence decays when model
 revision, Transformers implementation, processor template, fixture format, or
@@ -161,30 +167,135 @@ default and remove only the new opt-in native modules if falsified):
    compare `hidden_state_001` against the pinned reference. Do not report
    text-encoder completion from a single block or synthetic-only tests.
 
-The focused scaffold DoD command on the current host passed 19 examples,
-including a positive embedding read from a complete sparse synthetic shard:
+The original focused scaffold DoD command passed 19 examples, including a
+positive embedding read from a complete sparse synthetic shard:
 
 ```sh
 crystal spec spec/qwen3vl_text_reference_spec.cr spec/qwen3vl_text_weights_spec.cr \
   spec/qwen3vl_text_block_spec.cr --link-flags '-fuse-ld=/usr/bin/ld'
 ```
 
-The model-backed run must also set both environment paths above and report the
-fixture-recorded revision, compared scalar count, and mismatch count. The
-strongest pre-mortem is a wrong shard/layout mapping that passes shape checks but
-silently changes embeddings; the all-token BF16-bit comparison is its guard.
+With both real-artifact environment paths set at the current source state,
+that focused command now passes 27 examples, including exact 24-row embedding
+parity and a real layer-0 norm-vector read. The separate strict first-layer
+parity spec remains red by design while backend arithmetic is investigated.
+
+The model-backed embedding run sets both environment paths above and reports
+the fixture-recorded revision, compared scalar count, and mismatch count. The
+strongest pre-mortem is a wrong shard/layout mapping that passes shape checks
+but silently changes embeddings; the all-token BF16-bit comparison is its
+guard. The checkpoint and fixture are currently restored under
+`/private/tmp/qwen3vl-artifact-UO3bIW`; this scratch location is not durable.
+The local safetensors do not prove their own Hub revision: the restored shard
+hashes were checked separately against the pinned Hub objects, while the
+runtime loader validates tensor inventory and bounds rather than hashing all
+17.5 GB on every read. A changed local shard invalidates the numerical
+measurements until its identity is checked again.
 
 The current implementation contains a guarded schema reader, an exact-shape
 398-tensor BF16 inventory and bounded embedding-row loader, and a synthetic
 CPU evaluator for one text decoder block. These are scaffolding, not a native
 prompt-conditioning path. The synthetic block fixture checks Qwen3-VL-style
 GQA, RoPE, masking, RMSNorm, and SwiGLU against a tiny independent PyTorch BF16
-case; it does not establish parity for the official checkpoint. The local
-model and real-reference directories under `/private/tmp` disappeared during
-this slice. An earlier 24-row embedding comparison found zero mismatched BF16
-bytes, but it preceded the loader's final direct-read implementation and is
-**not** verification of the current source. Restore or recapture the pinned
-bundle and rerun that comparison before advancing to real first-layer parity.
+case; it does not establish parity for the official checkpoint. The current
+model-backed loader reads the 11 decoder-block tensors as validated BF16 and
+decodes them to F32 for a CPU probe. In a two-token causal layer-0 comparison
+against the pinned full-prompt `red cube` reference, the experimental block
+currently differs at 2,479 of 8,192 BF16 scalars: 93 in token 0 and 2,386
+in token 1. The maximum absolute error is 0.0625 and relative RMS error is
+0.00304. This is a **failed exact-bit gate**, not evidence of accepted layer
+parity. An official CPU rerun resolved the checkpoint's attention backend to
+`sdpa`: both the full 24-token run and the two-token prefix reproduced the
+fixture's first two layer-0 output rows exactly. Forcing `eager` changed 2,388
+of 8,192 values, all in token 1. The native eager-style block differs from
+official eager at only 100 values (93 in token 0, seven in token 1; maximum
+absolute error 0.001953125 and relative RMS error 0.000170). Thus backend
+arithmetic, not sequence truncation or tensor loading, explains most of the
+observed discrepancy. After all 36 layers, the official SDPA rerun also
+reproduced all 40,960 post-drop, pre-final-RMSNorm prompt embedding values
+exactly. Forcing eager on the same official model changed 38,113 values, with
+relative RMS error 0.0812 against the SDPA fixture. This is a consequential
+numeric backend distinction, not just bit-level noise at layer 0. The
+experimental `SdpaF32` attention mode keeps score, softmax, and value-reduction
+intermediates in F32 before materializing its BF16 output. It passes a tiny
+PyTorch 2.6 CPU SDPA oracle while leaving the eager default unchanged. With
+the real checkpoint, it reduces the first-two-token layer-0 discrepancy to
+121/8,192 BF16 values (93 in token 0 and 28 in token 1), maximum absolute
+error 0.001953125, relative RMS error 0.000211. **Exact-bit parity remains
+red.** The next gate is to locate those residual boundary differences before
+full-layer and final-conditioning parity. No native conditioning path is
+enabled.
+
+The exact-bit spec is an arithmetic discriminator, not by itself the future
+release threshold for a Metal implementation. A justified tolerance must be
+set against full retained-token embeddings, masks, same-seed generated images,
+and quality regressions; lowering this spec to an arbitrary layer-0 threshold
+would not establish that result.
+
+A two-token BF16 boundary trace further narrows that gap. The block input and
+input RMSNorm are exact; `q_proj` differs at 2 values, while `k_proj` and
+`v_proj` remain exact. The attention output projection differs at 4 values,
+but the post-attention RMSNorm is exact again. MLP `gate_proj` and `up_proj`
+each differ at 7 values, `down_proj` at 232, and the final residual at 121.
+This localizes the remaining discrepancy to low-level arithmetic around dense
+projections and their composition; it does not prove a particular BLAS reduction
+order or establish whole-encoder parity.
+
+The one-ULP projection differences are consistent with F32 accumulation-order
+sensitivity, but the exact PyTorch/BLAS reduction tree is not established. A
+candidate 32-lane reduction is not yet a native correctness contract.
+
+The backend discriminator is reproducible with the local, pinned BF16 artifacts
+and CPU PyTorch 2.6.0 / Transformers 5.17.0:
+
+```sh
+python scripts/qwen3vl_text_layer_trace.py \
+  --model-dir /path/to/text_encoder \
+  --fixture-dir /path/to/reference \
+  --output /private/tmp/qwen3vl-text-layer-trace.json \
+  --dump-layer0-bf16
+```
+
+This diagnostic runs the full prompt and a two-token prefix through both the
+checkpoint default attention backend and eager. Its JSON records the selected
+backend, fixture hashes, layer-0 metrics, and the post-drop pre-final-norm
+conditioning comparison; the optional BF16 sidecars allow byte-level checks
+against the native block. It is an expensive CPU reference probe, not a native
+inference path or a quality benchmark.
+
+The bounded native layer sweep separates each block's own arithmetic error
+from accumulated input drift. With the pinned fixture and `SdpaF32`, the first
+two tokens give the following results. Layers 0–3 were independently repeated;
+layer 35 comes from one bounded 36-layer run:
+
+| Decoder layer | Isolated BF16 mismatches | Composed BF16 mismatches | Composed relative RMS error |
+| --- | ---: | ---: | ---: |
+| 0 | 121/8,192 | 121/8,192 | 0.000211 |
+| 1 | 3/8,192 | 1,325/8,192 | 0.000560 |
+| 2 | 549/8,192 | 2,921/8,192 | 0.001004 |
+| 3 | 207/8,192 | 3,890/8,192 | 0.001284 |
+| 35 | 1,278/8,192 | 7,879/8,192 | 0.035759 |
+
+The composed result is the relevant warning for a future full encoder;
+isolated near-parity does not certify the stack. These are two-token,
+single-prompt diagnostics, not a prompt-conditioning or image-quality gate.
+Both probed tokens belong to the 14-token template prefix that the pipeline
+later drops. Their states can affect later tokens through causal attention,
+but the measured rows are not themselves the returned conditioning. A full
+raw-prompt run must compare the ten retained rows before any native handoff.
+The 36-layer probe took 11 minutes 13 seconds on this CPU host while streaming
+one F32-expanded block at a time; that is a diagnostic cost, not an inference
+performance measurement.
+
+```sh
+crystal run scripts/qwen3vl_text_layer_sweep.cr \
+  --link-flags '-fuse-ld=/usr/bin/ld' -- \
+  --layers=2 --text-encoder-dir=/path/to/text_encoder \
+  --reference-dir=/path/to/reference
+```
+
+Use `--layers=36` to reproduce the single-run final-row diagnostic; it does
+not run the full 24-token prompt.
 
 ## Goal
 

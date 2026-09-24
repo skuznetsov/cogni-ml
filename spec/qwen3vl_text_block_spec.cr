@@ -80,6 +80,91 @@ describe ML::GGUF::Qwen3VLTextBlock do
     actual.should eq(expected)
   end
 
+  it "distinguishes the PyTorch SDPA F32-intermediate arithmetic from eager BF16" do
+    # Oracle provenance: PyTorch 2.6.0 CPU BF16 for the block operations, using
+    # the existing block's BF16 Q/K/V projection, normalization, and RoPE
+    # materialization boundaries, followed by F.scaled_dot_product_attention
+    # under SDPBackend.MATH with repeated GQA KV and a boolean causal/key mask.
+    # SDPA keeps scores, softmax probabilities, and the weighted V sum in F32
+    # before returning BF16. The existing RoPE boundary is intentionally held
+    # fixed here; this isolates the attention arithmetic mode.
+    expected = [
+      0.92578125_f32, -1.28125_f32, 0.72265625_f32, 0.46484375_f32,
+      1.5546875_f32, -0.478515625_f32, -0.796875_f32, 1.375_f32,
+      -1.40625_f32, 0.99609375_f32, 0.7734375_f32, -0.447265625_f32,
+    ]
+
+    sdpa_config = ML::GGUF::Qwen3VLTextBlockConfig.new(
+      hidden_dim: 4,
+      heads: 2,
+      kv_heads: 1,
+      head_dim: 2,
+      intermediate_dim: 3,
+      eps: 1e-6_f32,
+      rope_theta: 10_000.0_f32,
+      attention_arithmetic: ML::GGUF::Qwen3VLTextBlockConfig::AttentionArithmetic::SdpaF32,
+    )
+    eager = ML::GGUF::Qwen3VLTextBlock.forward(
+      qwen3vl_text_block_spec_hidden,
+      [true, false, true],
+      qwen3vl_text_block_spec_weights,
+      config,
+    )
+    actual = ML::GGUF::Qwen3VLTextBlock.forward(
+      qwen3vl_text_block_spec_hidden,
+      [true, false, true],
+      qwen3vl_text_block_spec_weights,
+      sdpa_config,
+    )
+
+    actual.should eq(expected)
+    actual.should_not eq(eager)
+  end
+
+  it "captures copied BF16 module boundaries when a trace sink is supplied" do
+    expected_sizes = {
+      "layer0_input"                      => 12,
+      "layers.0.input_layernorm"          => 12,
+      "layers.0.self_attn.q_proj"         => 12,
+      "layers.0.self_attn.k_proj"         => 6,
+      "layers.0.self_attn.v_proj"         => 6,
+      "layers.0.self_attn.q_norm"         => 12,
+      "layers.0.self_attn.k_norm"         => 6,
+      "post_rope_q"                       => 12,
+      "post_rope_k"                       => 6,
+      "attended"                          => 12,
+      "layers.0.self_attn.o_proj"         => 12,
+      "layers.0.post_attention_layernorm" => 12,
+      "layers.0.mlp.gate_proj"            => 9,
+      "layers.0.mlp.up_proj"              => 9,
+      "layers.0.mlp.down_proj"            => 12,
+      "layers.0"                          => 12,
+    }
+    trace = Hash(String, Array(Float32)).new
+    untraced = ML::GGUF::Qwen3VLTextBlock.forward(
+      qwen3vl_text_block_spec_hidden,
+      [true, false, true],
+      qwen3vl_text_block_spec_weights,
+      config,
+    )
+    traced = ML::GGUF::Qwen3VLTextBlock.forward(
+      qwen3vl_text_block_spec_hidden,
+      [true, false, true],
+      qwen3vl_text_block_spec_weights,
+      config,
+      trace: trace,
+    )
+
+    traced.should eq(untraced)
+    trace.keys.sort.should eq(expected_sizes.keys.sort)
+    expected_sizes.each do |name, size|
+      trace[name].size.should eq(size)
+    end
+    trace["layers.0"].should eq(traced)
+    trace["layers.0"][0] = -99.0_f32
+    traced.should eq(untraced)
+  end
+
   it "does not let a masked key row affect a later visible query" do
     hidden = qwen3vl_text_block_spec_hidden
     baseline = ML::GGUF::Qwen3VLTextBlock.forward(
