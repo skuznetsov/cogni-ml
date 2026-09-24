@@ -99,6 +99,93 @@ fixture remains outside the repository; no weights or generated tensors are
 committed. This establishes a parity target, not a native Qwen3-VL inference
 implementation.
 
+## Native text-only Qwen3-VL frontier (2026-09-23)
+
+Status: **native encoder not admitted**. The pinned CPU BF16 bundle above is
+the oracle for the next backend, not evidence that the backend exists. The
+local official `text_encoder/config.json` describes 36 decoder layers with
+4096 hidden units, 32 query heads, 8 KV heads, 128 head dimensions, 12288
+SwiGLU intermediate units, and interleaved multimodal RoPE. Text-only prompt
+conditioning must retain the official processor's token IDs and left-padding
+semantics, then return the attended hidden state **before** the model's final
+RMSNorm and after the pipeline's 14-token prefix drop. The vision tower and
+LM head are outside this slice.
+
+- **Admitted already:** the pinned reference capture and hybrid Python encoder
+  remain the package's production path. No native encoder result may enter the
+  package yet.
+- **Guard-only implementation sequence:** validate the fixture and sharded
+  safetensors metadata; establish exact embedding lookup parity; establish
+  per-layer parity for a real prompt with explicit precision tolerances; then
+  validate all 36 layers and the final pre-norm, post-drop embedding handoff.
+  Only after that may the package select a native text path. Reuse generic
+  matmul/norm/Metal infrastructure where its numerical contract matches; the
+  Qwen3.5 layer topology itself is not an assumed drop-in implementation.
+- **Rejected:** claiming a full native Qwen3-VL encoder from a loader-only or
+  single-layer smoke; using a quantized encoder as the sole parity reference;
+  enabling QBit or fusion on this path before the BF16 reference discrepancy
+  has been measured; invoking the vision branch for text-only prompts.
+- **Falsifiers:** invalid fixture hashes/offsets, incorrect safetensors shard
+  mapping or tensor shapes, any embedding lookup mismatch, divergent first
+  layer, or final embeddings that fail the declared accuracy gate. A small
+  clean prompt alone does not cover padding, multimodal IDs, or longer
+  sequences; those become separate gates before broad native admission.
+- **Rollback:** leave `scripts/qwen_image21_prepare_conditioning.py` as the
+  default conditioning route. Any native experiment must be opt-in until the
+  package's exact prompt-to-PNG regression and parity gates pass.
+
+The scaffold DoD is synthetic corruption and shape guards for the reader and
+weight loader, plus an independently calculated tiny BF16 decoder-block case.
+The next **model-backed admission gate** is an actual pinned-fixture read and
+an exact BF16-bit embedding lookup check against the official safetensors
+shard. Neither gate promotes the full text encoder. Later layer parity must
+report both maximum absolute error and a
+scale-aware error over the whole `[1, raw_tokens, 4096]` state, not just a
+matching sample or a visually plausible PNG. Evidence decays when model
+revision, Transformers implementation, processor template, fixture format, or
+weight conversion changes.
+
+Implementation plan for this CAUTION slice (rollback: keep the hybrid encoder
+default and remove only the new opt-in native modules if falsified):
+
+1. `src/ml/gguf/qwen3vl_text_reference.cr` plus its focused spec: reject
+   corrupted or inconsistent fixture metadata/payload before exposing any
+   token or hidden-state values. Real-fixture read is gated by
+   `QWEN3VL_TEXT_REFERENCE_DIR`.
+2. `src/ml/gguf/qwen3vl_text_weights.cr` plus its focused spec: validate the
+   pinned text tensor inventory and shard bounds before reading selected rows;
+   compare all 24 input embedding rows bit-for-bit with `hidden_state_000`.
+   The real-weight run is gated by `QWEN3VL_TEXT_ENCODER_DIR`.
+3. `src/ml/gguf/qwen3vl_text_block.cr` plus its focused spec: establish a
+   synthetic first-block arithmetic check, then, after the model-backed gate,
+   compare `hidden_state_001` against the pinned reference. Do not report
+   text-encoder completion from a single block or synthetic-only tests.
+
+The focused scaffold DoD command on the current host passed 19 examples,
+including a positive embedding read from a complete sparse synthetic shard:
+
+```sh
+crystal spec spec/qwen3vl_text_reference_spec.cr spec/qwen3vl_text_weights_spec.cr \
+  spec/qwen3vl_text_block_spec.cr --link-flags '-fuse-ld=/usr/bin/ld'
+```
+
+The model-backed run must also set both environment paths above and report the
+fixture-recorded revision, compared scalar count, and mismatch count. The
+strongest pre-mortem is a wrong shard/layout mapping that passes shape checks but
+silently changes embeddings; the all-token BF16-bit comparison is its guard.
+
+The current implementation contains a guarded schema reader, an exact-shape
+398-tensor BF16 inventory and bounded embedding-row loader, and a synthetic
+CPU evaluator for one text decoder block. These are scaffolding, not a native
+prompt-conditioning path. The synthetic block fixture checks Qwen3-VL-style
+GQA, RoPE, masking, RMSNorm, and SwiGLU against a tiny independent PyTorch BF16
+case; it does not establish parity for the official checkpoint. The local
+model and real-reference directories under `/private/tmp` disappeared during
+this slice. An earlier 24-row embedding comparison found zero mismatched BF16
+bytes, but it preceded the loader's final direct-read implementation and is
+**not** verification of the current source. Restore or recapture the pinned
+bundle and rerun that comparison before advancing to real first-layer parity.
+
 ## Goal
 
 Admit Qwen-Image 2.1 weights into the native Metal engine without treating a
