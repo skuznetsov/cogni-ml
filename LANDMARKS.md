@@ -28669,3 +28669,25 @@ Refresh after source/toolchain/device/model/workload changes.
   40-step PNG pairs for generalization. Refresh on kernel/compiler, GGUF,
   conditioning/schedule, VAE, device/OS, or runner drift; scratch artifacts
   are ephemeral. Roll back with `QWEN_IMAGE21_ATTENTION_TILE=0`.
+
+### Continuation 2026-09-25 — Actual attention-route trace
+
+- An opt-in `QWEN_IMAGE21_ATTENTION_ROUTE_TRACE=1` diagnostic now aggregates
+  the kernel name and shape after the actual Metal attention dispatch site;
+  default execution only takes a disabled branch. It changes no shader,
+  attention arithmetic, or GPU command boundary.
+- On the same pinned 768px conditioning, guarded two-step legacy and tiled
+  runs exited successfully. The trace counted 32 legacy dispatches on the
+  2409-query prefix build and 32 on the 2304-query hit with `ATTENTION_TILE=0`;
+  with `=1`, both counts were 32 tiled dispatches. Both post-Euler hashes and
+  final latent bytes matched, SHA-256
+  `d1384af943ceb45547cdd8a5a76e9c347d2ca6e3df3b5b79bedd19a880901988`.
+  Focused CPU-only spec: 11 examples, zero failures/errors, eight expected
+  Metal-dependent pending cases. See `docs/qwen-image21-gguf-frontier.md` and
+  `/private/tmp/qwen21-route-trace.72JwfT` for the ephemeral logs.
+- This trace is not retroactive evidence of the selected pipeline in the
+  earlier 40-step pair. Trace-on adds host-side locking/hash updates per
+  attention dispatch: bracket future quiet-host, trace-off AB/BA timing with
+  trace-on route controls. Speed/default promotion and multi-prompt/seed
+  quality remain open. Refresh on source, compiler, GGUF, conditioning,
+  device/OS, or runner changes.

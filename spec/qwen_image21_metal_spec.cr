@@ -4,6 +4,39 @@ require "../src/ml/gguf/qwen_image21_metal"
 require "../src/ml/gguf/qwen_image21_flow_match"
 require "../src/ml/gguf/qwen_image21_conditioning_bundle"
 
+describe ML::GGUF::QwenImage21MetalAttentionRouteTrace do
+  it "aggregates the kernel name supplied by the actual dispatch site" do
+    trace = ML::GGUF::QwenImage21MetalAttentionRouteTrace.new(enabled: true)
+    trace.record_selected("qi21_block_causal_attention_tiled", 128, 768, 768)
+    trace.record_selected("qi21_block_causal_attention_tiled", 128, 768, 768)
+
+    trace.summary_lines.should eq([
+      "qwen_image21_attention_dispatch kernel=qi21_block_causal_attention_tiled head_dim=128 total_tokens=768 query_tokens=768 dispatches=2",
+    ])
+  end
+
+  it "leaves no dispatch records when disabled" do
+    trace = ML::GGUF::QwenImage21MetalAttentionRouteTrace.new(enabled: false)
+    trace.record_selected("qi21_block_causal_attention", 128, 768, 768)
+
+    trace.summary_lines.should be_empty
+  end
+
+  it "records only after the selected kernel is encoded for dispatch" do
+    source = File.read(File.expand_path("../src/ml/gguf/qwen_image21_metal.cr", __DIR__))
+    start = source.index("private def self.encode_attention(").not_nil!
+    finish = source.index("private def self.encode_copy_f32(", start).not_nil!
+    encoder = source[start...finish]
+
+    selected = encoder.index("encoder.set_pipeline(pipeline(kernel_name))").not_nil!
+    dispatched = encoder.index("encoder.dispatch_threadgroups({groups, 1, 1}, {threads, 1, 1})").not_nil!
+    observed = encoder.index("QwenImage21MetalAttentionRouteDiagnostics.record_selected(").not_nil!
+    selected.should be < dispatched
+    dispatched.should be < observed
+    encoder[observed..].should contain("kernel_name, config.head_dim, total_tokens, query_tokens")
+  end
+end
+
 private def qwen_image21_metal_bf16_weight(values : Array(Float32), out_dim : Int32, in_dim : Int32)
   raw = Bytes.new(values.size * 2)
   values.each_with_index do |value, index|

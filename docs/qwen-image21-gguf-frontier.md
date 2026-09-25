@@ -1493,6 +1493,28 @@ either arm. It does not establish parity or quality across prompts/seeds or
 justify default selection. Refresh the certificate after kernel/compiler,
 model, conditioning, schedule, VAE, device/OS, or runner changes.
 
+For future runs, `QWEN_IMAGE21_ATTENTION_ROUTE_TRACE=1` now records the
+selected kernel after the actual Metal attention dispatch call and prints
+aggregated `(kernel, head_dim, total_tokens, query_tokens, dispatches)` rows
+after generation. It is opt-in and does not change the kernel or command
+boundaries. A separately rebuilt, guarded two-step run on the same pinned
+768px conditioning emitted 32 legacy dispatches on the 2409-query prefix
+build and 32 on the 2304-query cache hit with `ATTENTION_TILE=0`; with
+`ATTENTION_TILE=1`, it emitted 32 tiled dispatches on each route. Both runs
+used one command buffer per step, matched both post-Euler hashes and final
+latent bytes exactly (SHA-256
+`d1384af943ceb45547cdd8a5a76e9c347d2ca6e3df3b5b79bedd19a880901988`).
+The CPU-only Metal-spec invocation reported 11 examples, zero failures/errors,
+and eight expected Metal-dependent pending cases; the direct
+model-backed two-step runs both exited successfully with Metal access.
+Scratch logs are under `/private/tmp/qwen21-route-trace.72JwfT`. This new
+instrumentation cannot retroactively supply selected-kernel records for the
+earlier 40-step pair. Enabled tracing adds host-side locking/hash updates per
+attention dispatch, so its denoising times are not uninstrumented speed
+measurements; the noisy two-step timing is not a speed certificate. For a
+future latency gate, bracket trace-off measurements with trace-on route
+controls at the same model, shapes, source, and settings.
+
 Admitted behavior remains the legacy default and the experimental opt-in
 `QWEN_IMAGE21_ATTENTION_TILE=1` path. A quiet-host alternating AB/BA replication
 and more paired 40-step conditioning-to-PNG checks across prompts/seeds are needed

@@ -156,6 +156,7 @@ begin
          "denoise_ms=#{(denoised_at - loaded_at).total_milliseconds.round(3)} " \
          "bundle_write_ms=#{(written_at - denoised_at).total_milliseconds.round(3)}"
   end
+  ML::GGUF::QwenImage21MetalAttentionRouteDiagnostics.write_summary
 ensure
   stack.close
   model.close

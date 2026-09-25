@@ -767,6 +767,61 @@ module ML::GGUF
     end
   end
 
+  # Aggregates the kernel names observed at the Metal dispatch site. The
+  # singleton caches its opt-in flag so disabled tracing is one branch per
+  # attention dispatch and performs no allocation or I/O on that path.
+  class QwenImage21MetalAttentionRouteTrace
+    alias Dispatch = NamedTuple(
+      kernel: String, head_dim: Int32, total_tokens: Int32, query_tokens: Int32)
+
+    def initialize(@enabled : Bool)
+      @dispatches = Hash(Dispatch, Int64).new(0_i64)
+      @mutex = Mutex.new
+    end
+
+    def record_selected(
+      kernel_name : String, head_dim : Int32, total_tokens : Int32,
+      query_tokens : Int32,
+    ) : Nil
+      return unless @enabled
+
+      dispatch = {
+        kernel: kernel_name, head_dim: head_dim,
+        total_tokens: total_tokens, query_tokens: query_tokens,
+      }
+      @mutex.synchronize { @dispatches[dispatch] += 1_i64 }
+    end
+
+    def summary_lines : Array(String)
+      return [] of String unless @enabled
+
+      @mutex.synchronize do
+        @dispatches.map do |dispatch, count|
+          "qwen_image21_attention_dispatch kernel=#{dispatch[:kernel]} " \
+          "head_dim=#{dispatch[:head_dim]} total_tokens=#{dispatch[:total_tokens]} " \
+          "query_tokens=#{dispatch[:query_tokens]} dispatches=#{count}"
+        end.sort
+      end
+    end
+  end
+
+  module QwenImage21MetalAttentionRouteDiagnostics
+    TRACE = QwenImage21MetalAttentionRouteTrace.new(
+      ENV["QWEN_IMAGE21_ATTENTION_ROUTE_TRACE"]? == "1"
+    )
+
+    def self.record_selected(
+      kernel_name : String, head_dim : Int32, total_tokens : Int32,
+      query_tokens : Int32,
+    ) : Nil
+      TRACE.record_selected(kernel_name, head_dim, total_tokens, query_tokens)
+    end
+
+    def self.write_summary(io : IO = STDOUT) : Nil
+      TRACE.summary_lines.each { |line| io.puts(line) }
+    end
+  end
+
   # Exact single-command-buffer block-stack path. All normalization, Q/K RoPE,
   # segmented block-causal attention, projections, SwiGLU, and residual
   # updates remain in Metal buffers; only the final hidden state is read back.
@@ -1939,6 +1994,9 @@ module ML::GGUF
                    query_tokens * config.heads
                  end
         encoder.dispatch_threadgroups({groups, 1, 1}, {threads, 1, 1})
+        QwenImage21MetalAttentionRouteDiagnostics.record_selected(
+          kernel_name, config.head_dim, total_tokens, query_tokens,
+        )
       end
 
       private def self.encode_copy_f32(
