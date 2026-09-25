@@ -1462,12 +1462,44 @@ not a speedup claim. The 768px one-pair forward ratios were 0.706 build,
 also with `noise_observed=true`. These are correctness checks and a pilot,
 not a statistically reliable latency result.
 
+The subsequent full-resolution pilot used source revision `05430b52`, the
+same pinned 768x768 portrait conditioning (seed 7, payload SHA-256
+`14f1c790d0edeb86e007ee61a43e8495d3eec02b83a08fd43e9faef34edcb86b`),
+GGUF, 40-step schedule, and guarded generator for sequential legacy (`=0`)
+and SIMD-local tiled (`=1`) runs. Both exited successfully with 40 post-Euler
+step hashes, one causal-prefix build and 39 hits, one command buffer per
+step, 198 projection dispatches per step, and no intermediate readbacks.
+The operator reported launch settings `QWEN_IMAGE21_ATTENTION_TILE=0` and `=1`;
+the generator does not log selected pipeline names, so route attribution
+follows the source policy at head dimension 128 and these logged token shapes,
+not a per-step selected-kernel counter.
+All 40 `(index, timestep, SHA-256)` records matched exactly. The final F32
+latent binaries and JSON manifests were byte-identical (latent SHA-256
+`37bc64dc8933dc97c07fdb4c8dd7de3aece7be16fbcd9ee830bc3abe1a523a84`).
+Separate decodes through the same local CPU/FP32 Qwen-Image 2.1 VAE yielded
+byte-identical 768x768 RGBA PNGs and pixels (PNG SHA-256
+`c5682ea31fb5e544ff585d780d25a03cd2afa7cf9306e86cea2c7c49ffbd6a5a`).
+The outputs and logs are under `/private/tmp/qwen21-simd-full768.CvZJti`;
+these scratch artifacts are ephemeral.
+
+Generator-reported DiT denoising took 1,294.247 s legacy and 997.297 s tiled.
+This is one sequential correctness pilot, **not** a 22.9% kernel or
+end-to-end speedup certificate: host load varied during the runs and the
+post-run quiet-host gate was still false. The safety wrapper's approximate
+elapsed display is not the denoising timer. The result establishes exact
+conditioning-to-PNG parity for this model, pinned conditioning, seed,
+schedule, resolution, and runtime; the Qwen3-VL encoder was not rerun in
+either arm. It does not establish parity or quality across prompts/seeds or
+justify default selection. Refresh the certificate after kernel/compiler,
+model, conditioning, schedule, VAE, device/OS, or runner changes.
+
 Admitted behavior remains the legacy default and the experimental opt-in
 `QWEN_IMAGE21_ATTENTION_TILE=1` path. A quiet-host alternating AB/BA replication
-and paired 768px 40-step prompt-to-PNG check are needed before a stronger
-performance or image-quality claim. Isolated kernel or forward latency alone
-cannot promote the path. Rejected claims include an exact cross-step activation
-cache, an LTP/WBA certificate, and a general device-wide speedup.
+and more paired 40-step conditioning-to-PNG checks across prompts/seeds are needed
+before a stronger performance or image-quality claim. Isolated kernel or
+forward latency alone cannot promote the path. Rejected claims include an
+exact cross-step activation cache, an LTP/WBA certificate, and a general
+device-wide speedup.
 `QWEN_IMAGE21_ATTENTION_TILE=0` remains the immediate rollback.
 
 ```bash

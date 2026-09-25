@@ -28645,3 +28645,27 @@ Refresh after source/toolchain/device/model/workload changes.
   `docs/qwen-image21-gguf-frontier.md`. Refresh on kernel/compiler, model,
   conditioning, device/OS, or runner drift; rollback with
   `QWEN_IMAGE21_ATTENTION_TILE=0`.
+
+### Continuation 2026-09-25 — 768px full denoise/PNG tile parity
+
+- At source `05430b52`, guarded sequential legacy (`=0`) and SIMD-local tile
+  (`=1`) runs used the same pinned 768px portrait conditioning, seed 7, GGUF,
+  and 40-step schedule. Both completed 40/40 steps, one prefix build and 39
+  hits, one command buffer and 198 projections per step, with no intermediate
+  readback. All 40 post-Euler hashes and final F32 latent bytes were exact;
+  latent SHA-256 `37bc64dc8933dc97c07fdb4c8dd7de3aece7be16fbcd9ee830bc3abe1a523a84`.
+  The operator reported the `=0`/`=1` launch settings, but the generator does
+  not log the selected attention pipeline; route attribution uses source policy.
+- The same CPU/FP32 VAE decoded both bundles to byte- and pixel-identical
+  768x768 RGBA PNGs, SHA-256
+  `c5682ea31fb5e544ff585d780d25a03cd2afa7cf9306e86cea2c7c49ffbd6a5a`.
+  Generator DiT times were 1,294.247 s legacy / 997.297 s tile, but this
+  single sequential pair ran under variable host load; the post-run quiet
+  gate was false. Correctness on this trajectory is ROBUST; a speedup or
+  broader image-quality/default claim remains VULNERABLE. No foreign process
+  was stopped. Scratch evidence: `/private/tmp/qwen21-simd-full768.CvZJti`;
+  detailed scope in `docs/qwen-image21-gguf-frontier.md`.
+- Next: quiet-host alternating AB/BA for latency and other prompt/seed
+  40-step PNG pairs for generalization. Refresh on kernel/compiler, GGUF,
+  conditioning/schedule, VAE, device/OS, or runner drift; scratch artifacts
+  are ephemeral. Roll back with `QWEN_IMAGE21_ATTENTION_TILE=0`.
