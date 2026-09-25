@@ -1570,6 +1570,15 @@ The instrumented 512px/5 run reported one 9.066 s prefix build and four
 6.747–6.791 s cache-hit steps, each with one command buffer, 198 projection
 dispatches, and no intermediate readbacks. That narrow trace does not explain
 the slower per-step averages of the separate 10- and 16-step runs.
+An instrumented repeat of 512px/10 took 85.044 s versus the first 90.909 s;
+both produced the same F32 latent SHA-256
+`96487a1fadad8ee3ab4c2e4b8ca29bddecf50263973ff06d53747992c018fb2e`.
+Its cache-hit GPU-command time rose from 7.624 s at step 1 to 9.139 s at
+step 9 despite the same 1024 active tokens, 198 projection dispatches, and
+one command buffer. Source inspection found no step-count- or timestep-driven
+shape/dispatch change on this route. Device throughput drift is a hypothesis,
+not an attribution; replaying a fixed latent/timestep through the same
+cache-hit forward is the cheapest next discriminator.
 
 A next algorithmic falsifier is opt-in variable-step Adams-Bashforth-2 on the
 actual FlowMatch sigma grid, with Euler on the first interval. It still costs
