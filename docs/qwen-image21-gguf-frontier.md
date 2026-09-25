@@ -1532,6 +1532,55 @@ SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk \
 /tmp/qwen_image21_attention_ab MODEL.gguf CONDITIONING.json --pairs=6
 ```
 
+## Same-prompt low-step preview probe (2026-09-25)
+
+The local Metal generator with `QWEN_IMAGE21_ATTENTION_TILE=1` and the same
+Q4 GGUF produced additional seed-7 portrait latents. The 512px baseline
+conditioning payload is SHA-256
+`9fca4e6ebc57d573b28612def1482a4931e4108e05ccb345479ed6f900c4bc58`;
+its 105 text embedding rows and masks are byte-identical to the 768px
+conditioning payload above. The initial noise shape changes with resolution,
+and FlowMatch also changes its resolution-dependent shift. Each step count
+builds a new sigma grid; these are distinct generated images, not checkpoints
+on one 40-step trajectory. All decoded outputs below used the same local
+CPU/FP32 Qwen-Image 2.1 VAE.
+
+| Resolution | Steps | One-run DiT time | Decoded PNG |
+| ---: | ---: | ---: | --- |
+| 768px | 5 | 139.224 s | `/private/tmp/qwen21-preview-20260925-r1/5/portrait.png` |
+| 768px | 10 | 408.813 s | `/private/tmp/qwen21-preview-20260925-r1/10/portrait.png` |
+| 768px | 16 | 390.859 s | `/private/tmp/qwen21-preview-20260925-r1/16/portrait.png` |
+| 768px | 40 | 997.297 s | `/private/tmp/qwen21-simd-full768.CvZJti/tile.png` |
+| 512px | 5 | 36.120 s | `/private/tmp/qwen21-preview-512-20260925-r1/5/portrait.png` |
+| 512px | 10 | 90.909 s | `/private/tmp/qwen21-preview-512-20260925-r1/10/portrait.png` |
+| 512px | 16 | 213.635 s | `/private/tmp/qwen21-preview-512-20260925-r1/16/portrait.png` |
+
+On visual inspection, the 512px 5-step image is recognizable but visibly
+soft and changes clothing/face relative to the 10-step output. The 10-step
+image already has a coherent face, window scene, and clothing; 16 steps
+change details but retain much of its
+composition. Both differ materially in person, crop, and clothing from the
+768px 40-step output. Thus 512px/10 is a promising *scene preview* for this
+one prompt and seed, not a faithful preview of the final portrait identity.
+The 768px 10-step run took longer than 16 steps, while the 512px 16-step
+per-step average exceeded that of 10 steps. These unpaired, single-run timings
+do not establish a stable latency curve or isolate a kernel speedup. They omit
+text conditioning and VAE time; scratch PNGs may disappear.
+The instrumented 512px/5 run reported one 9.066 s prefix build and four
+6.747–6.791 s cache-hit steps, each with one command buffer, 198 projection
+dispatches, and no intermediate readbacks. That narrow trace does not explain
+the slower per-step averages of the separate 10- and 16-step runs.
+
+A next algorithmic falsifier is opt-in variable-step Adams-Bashforth-2 on the
+actual FlowMatch sigma grid, with Euler on the first interval. It still costs
+one DiT evaluation per step; only maintaining image quality with fewer steps
+would accelerate generation. Compare fixed-model/prompt/seed Euler-10 against
+AB2 at fewer evaluations over several scenes, including anatomy and text,
+using full prompt-to-PNG time and blind image-quality review. Reject if a
+lower evaluation count loses scene fidelity, even if latent error shrinks.
+Neither this proposed solver nor ordinary attention tiling is an LTP/WBA
+certificate.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder
