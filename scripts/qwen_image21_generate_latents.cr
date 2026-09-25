@@ -66,6 +66,7 @@ abort "Metal backend unavailable" unless ML::GGUF::QwenImage21MetalProjectionBac
 conditioning = ML::GGUF::QwenImage21ConditioningBundle.load(conditioning_path)
 timing = ENV["QWEN_IMAGE21_TIMING"]? == "1"
 step_timing = ENV["QWEN_IMAGE21_STEP_TIMING"]? == "1"
+step_hashes = ENV["QWEN_IMAGE21_STEP_HASHES"]? == "1"
 if step_timing && ENV["QWEN_IMAGE21_PROFILE"]?.nil?
   # Profile the existing single-command route so the per-step report can
   # include device elapsed time without enabling diagnostic phase splits.
@@ -81,6 +82,14 @@ begin
   puts "denoising prompt=#{conditioning.prompt.inspect} image=#{conditioning.image_width}x#{conditioning.image_height} seed=#{conditioning.seed} steps=#{steps}"
   previous_cache_builds = 0
   previous_cache_hits = 0
+  step_latent_hash_observer = if step_hashes
+                                ->(index : Int32, timestep : Float32, sha256 : String) {
+                                  puts "denoising_step_hash index=#{index} timestep=#{timestep} sha256=#{sha256}"
+                                  nil
+                                }
+                              else
+                                nil
+                              end
   step_observer = if step_timing
                     ->(index : Int32, sigma : Float32, timestep : Float32, elapsed : Time::Span) {
                       cache_builds = stack.prefix_cache_builds
@@ -136,6 +145,7 @@ begin
     backend: ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: true),
     layer_stack_backend: stack,
     step_observer: step_observer,
+    step_latent_hash_observer: step_latent_hash_observer,
   )
   denoised_at = Time.instant
   raise "wrong number of transformer evaluations" unless result.transformer_evaluations == steps

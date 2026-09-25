@@ -1387,9 +1387,10 @@ explicit `=0` retain the legacy kernel. Four query SIMDgroups share an
 eight-key K/V tile (8 KiB of threadgroup K/V storage), keep the ordered four
 partial dot products and online-softmax recurrence, and preserve the
 absolute-offset block-causal/image/invalid-key mask. This is cross-query K/V
-reuse, not LTP/WBA. The current kernel still has two threadgroup barriers per
-key plus the tile staging barrier; the speed result must come from measured
-full forwards, not an assumption that per-key barriers disappeared.
+reuse, not LTP/WBA. The first tile implementation retained two threadgroup
+barriers per key; the later SIMD-local recurrence below removes them while
+retaining a barrier at each K/V tile boundary. The speed result must come
+from measured full forwards, not the barrier count alone.
 
 The direct Metal falsifier used head dimension 128, five local queries at
 absolute offset six, mixed image IDs and invalid keys, an 8+3 key tail, and
@@ -1435,6 +1436,39 @@ opt-in pending a quiet-host replication and a multi-prompt/seed 40-step
 decoded-image quality check; `QWEN_IMAGE21_ATTENTION_TILE=0` is the immediate
 rollback. The A/B runner reports performance without a speed hard gate, but
 fails closed on pin, route, finite-output, and numerical-parity violations.
+
+### SIMD-local recurrence: implemented, opt-in, not speed-promoted
+
+The experiment removes the two *per-key* threadgroup barriers used
+to publish and consume each query's softmax probability/correction. Each query
+is already owned by one SIMDgroup, so the candidate broadcasts those two
+lane-zero scalars within that SIMDgroup. K/V remain shared across query
+SIMDgroups: an unconditional barrier is required after every key tile, before
+any SIMDgroup overwrites the staged K/V for the next tile. Inactive query
+SIMDgroups and partial final tiles must take the same barrier path.
+
+The mask/tail/multi-head direct Metal spec passed (two cases, `max_abs=0`).
+The pinned real 768px 32-layer build/hit/uncached warmup and one measured pair
+each produced exact candidate-versus-legacy full and target outputs, and exact
+hit-versus-uncached outputs within each mode. One paired 256px, seed-7,
+40-step denoise produced identical post-Euler SHA-256 hashes at all 40 steps,
+identical final latent bytes, and an identical CPU-decoded RGBA PNG. The
+model-backed resident Metal suite passed 23/23 cases, the flow-match suite
+passed 8/8, and the combined Qwen-Image 2.1 suite passed 62 examples with
+zero failures, errors, or pending cases. The one 256px pair measured 83.10 s
+legacy versus 77.77 s tiled for denoising, but the host was noisy; this is
+not a speedup claim. The 768px one-pair forward ratios were 0.706 build,
+0.838 hit, and 0.823 uncached,
+also with `noise_observed=true`. These are correctness checks and a pilot,
+not a statistically reliable latency result.
+
+Admitted behavior remains the legacy default and the experimental opt-in
+`QWEN_IMAGE21_ATTENTION_TILE=1` path. A quiet-host alternating AB/BA replication
+and paired 768px 40-step prompt-to-PNG check are needed before a stronger
+performance or image-quality claim. Isolated kernel or forward latency alone
+cannot promote the path. Rejected claims include an exact cross-step activation
+cache, an LTP/WBA certificate, and a general device-wide speedup.
+`QWEN_IMAGE21_ATTENTION_TILE=0` remains the immediate rollback.
 
 ```bash
 SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk \

@@ -28604,8 +28604,9 @@ Refresh after source/toolchain/device/model/workload changes.
 - `QWEN_IMAGE21_ATTENTION_TILE=1` selects a four-query/eight-key K/V-sharing
   Metal attention kernel only for head dimension 128 and the admitted shape;
   default and `=0` preserve legacy. The one-SIMDgroup replacement rejected
-  earlier is not reused. This tile still has two barriers per key and is not
-  an LTP/WBA claim.
+  earlier is not reused. At this first stage, the tile retained two barriers
+  per key; the later SIMD-local recurrence below removes them. Neither stage
+  is an LTP/WBA claim.
 - A direct mixed-mask/offset/tail Metal test gave exact legacy parity for
   one and three heads, including large dot products; the
   candidate-enabled model-backed suite passed 46 examples with zero failures,
@@ -28623,3 +28624,24 @@ Refresh after source/toolchain/device/model/workload changes.
   `docs/qwen-image21-gguf-frontier.md` and `scripts/qwen_image21_attention_ab.cr`.
   Refresh after model, conditioning, compiler, kernel, device/OS, or runner
   changes; rollback immediately with `QWEN_IMAGE21_ATTENTION_TILE=0`.
+
+### Continuation 2026-09-25 — Qwen-Image 2.1 SIMD-local tile recurrence
+
+- The opt-in four-query attention tile now broadcasts the lane-zero online
+  softmax probability, correction, and inverse sum within each query SIMDgroup.
+  This removes two threadgroup barriers per key while retaining unconditional
+  K/V staging and end-of-tile barriers. Legacy remains default; this is not
+  an LTP/WBA certificate or a device-wide speed claim.
+- Direct mixed-mask/tail/multi-head Metal parity stayed exact (`max_abs=0`).
+  The combined model-backed Qwen-Image 2.1 suite passed 62/62. A pinned
+  real 768px 32-layer build/hit/uncached warmup and one pair had exact full
+  and target outputs; a paired 256px seed-7 40-step run matched all 40
+  post-Euler hashes, final latent bytes, and decoded PNG pixels exactly.
+- Single-pair 256px denoising was 83.10 s legacy / 77.77 s tile; one-pair
+  768px forward tile/legacy ratios were 0.706 build, 0.838 hit, 0.823
+  uncached. Host-load noise was observed, so speed remains inconclusive.
+  Next: quiet-host alternating 768px AB/BA and full 40-step prompt-to-PNG
+  parity across prompts/seeds before considering promotion. See
+  `docs/qwen-image21-gguf-frontier.md`. Refresh on kernel/compiler, model,
+  conditioning, device/OS, or runner drift; rollback with
+  `QWEN_IMAGE21_ATTENTION_TILE=0`.

@@ -6,6 +6,7 @@
 # variants from the generic Diffusers scheduler are intentionally out of scope.
 
 require "./qwen_image21_transformer"
+require "digest/sha256"
 
 module ML::GGUF
   struct QwenImage21FlowMatchConfig
@@ -126,6 +127,7 @@ module ML::GGUF
       initial_latents : Array(Float32),
       schedule : QwenImage21FlowMatchSchedule,
       step_observer : Proc(Int32, Float32, Float32, Time::Span, Nil)? = nil,
+      step_latent_hash_observer : Proc(Int32, Float32, String, Nil)? = nil,
       &predictor : Array(Float32), Float32, Int32 -> Array(Float32)
     ) : Array(Float32)
       latents = initial_latents.dup
@@ -146,8 +148,20 @@ module ML::GGUF
             Time.instant - step_started_at.not_nil!,
           )
         end
+        if observer = step_latent_hash_observer
+          observer.call(
+            index, schedule.timesteps[index], float32_latents_sha256(latents),
+          )
+        end
       end
       latents
+    end
+
+    private def self.float32_latents_sha256(latents : Array(Float32)) : String
+      # Hash the portable latent payload representation, not host-native memory.
+      bytes = IO::Memory.new(latents.size * sizeof(Float32))
+      latents.each { |value| bytes.write_bytes(value, IO::ByteFormat::LittleEndian) }
+      Digest::SHA256.hexdigest(bytes.to_slice)
     end
   end
 
@@ -178,6 +192,7 @@ module ML::GGUF
       backend : ComputeBackend = F32Backend.new,
       layer_stack_backend : QwenImage21LayerStackBackend? = nil,
       step_observer : Proc(Int32, Float32, Float32, Time::Span, Nil)? = nil,
+      step_latent_hash_observer : Proc(Int32, Float32, String, Nil)? = nil,
     ) : QwenImage21DenoisingResult
       raise ArgumentError.new("img_shapes must contain a target image") if img_shapes.empty?
       unless config.input_dim == config.output_dim
@@ -211,7 +226,9 @@ module ML::GGUF
       )
       evaluations = 0
       latents = QwenImage21FlowMatch.denoise(
-        initial_target_latents, schedule, step_observer: step_observer,
+        initial_target_latents, schedule,
+        step_observer: step_observer,
+        step_latent_hash_observer: step_latent_hash_observer,
       ) do |target_latents, timestep, _index|
         result = QwenImage21TransformerCPU.forward(
           condition_latents + target_latents,

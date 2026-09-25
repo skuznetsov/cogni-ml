@@ -1,5 +1,6 @@
 require "./spec_helper"
 require "json"
+require "digest/sha256"
 require "../src/ml/gguf/qwen_image21_flow_match"
 
 describe ML::GGUF::QwenImage21FlowMatch do
@@ -107,6 +108,39 @@ describe ML::GGUF::QwenImage21FlowMatch do
     observations.map(&.[1]).should eq(schedule.sigmas.first(2))
     observations.map(&.[2]).should eq(schedule.timesteps)
     observations.all? { |_, _, _, elapsed_ms| elapsed_ms >= 0.0 }.should be_true
+  end
+
+  it "reports hashes of each post-Euler latent state when requested" do
+    schedule = ML::GGUF::QwenImage21FlowMatch.schedule(3, 256)
+    initial = [0.25_f32, -0.5_f32, 1.25_f32]
+    prediction = [1.0_f32, 2.0_f32, 3.0_f32]
+    expected_latents = initial.dup
+    expected_hashes = [] of String
+    schedule.step_count.times do |index|
+      dt = schedule.sigmas[index + 1] - schedule.sigmas[index]
+      expected_latents = Array(Float32).new(expected_latents.size) do |latent_index|
+        expected_latents[latent_index] + dt * prediction[latent_index]
+      end
+      bytes = IO::Memory.new
+      expected_latents.each { |value| bytes.write_bytes(value, IO::ByteFormat::LittleEndian) }
+      expected_hashes << Digest::SHA256.hexdigest(bytes.to_slice)
+    end
+
+    observations = [] of Tuple(Int32, Float32, String)
+    result = ML::GGUF::QwenImage21FlowMatch.denoise(
+      initial, schedule,
+      step_latent_hash_observer: ->(index : Int32, timestep : Float32, sha256 : String) {
+        observations << {index, timestep, sha256}
+        nil
+      },
+    ) do |_latents, _timestep, _index|
+      prediction
+    end
+
+    observations.map(&.[0]).should eq([0, 1, 2])
+    observations.map(&.[1]).should eq(schedule.timesteps)
+    observations.map(&.[2]).should eq(expected_hashes)
+    result.should eq(expected_latents)
   end
 
   it "rejects schedules too short for terminal stretching" do

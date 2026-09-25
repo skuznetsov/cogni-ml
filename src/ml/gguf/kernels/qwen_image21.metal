@@ -448,9 +448,6 @@ kernel void qi21_block_causal_attention_tiled(
 
     threadgroup float staged_k[QI21_ATTENTION_TILE_KEYS * QI21_ATTENTION_TILE_DIM];
     threadgroup float staged_v[QI21_ATTENTION_TILE_KEYS * QI21_ATTENTION_TILE_DIM];
-    threadgroup float probabilities[4];
-    threadgroup float corrections[4];
-    threadgroup float inverse_sums[4];
 
     const uint d0 = lane;
     const uint d1 = lane + 32;
@@ -509,6 +506,8 @@ kernel void qi21_block_causal_attention_tiled(
             const float p2 = simd_sum(allowed ? q2 * staged_k[tile_base + d2] : 0.0f);
             const float p3 = simd_sum(allowed ? q3 * staged_k[tile_base + d3] : 0.0f);
 
+            float probability = 0.0f;
+            float correction = 0.0f;
             if (lane == 0) {
                 float dot = 0.0f;
                 dot += p0;
@@ -517,31 +516,29 @@ kernel void qi21_block_causal_attention_tiled(
                 dot += p3;
                 const float score = allowed ? dot * scale : -INFINITY;
                 const float next_max = max(running_max, score);
-                const float correction = isinf(running_max) ? 0.0f : exp(running_max - next_max);
-                const float probability = allowed ? exp(score - next_max) : 0.0f;
+                correction = isinf(running_max) ? 0.0f : exp(running_max - next_max);
+                probability = allowed ? exp(score - next_max) : 0.0f;
                 running_sum = running_sum * correction + probability;
                 running_max = next_max;
-                probabilities[simdgroup] = probability;
-                corrections[simdgroup] = correction;
+                // Only this SIMDgroup consumes the recurrence values, so
+                // broadcast lane 0 locally instead of synchronizing the
+                // threadgroup for every key.
             }
-            threadgroup_barrier(mem_flags::mem_threadgroup);
-
-            const float probability = probabilities[simdgroup];
-            const float correction = corrections[simdgroup];
+            probability = simd_broadcast_first(probability);
+            correction = simd_broadcast_first(correction);
             accum0 = accum0 * correction + probability * staged_v[tile_base + d0];
             accum1 = accum1 * correction + probability * staged_v[tile_base + d1];
             accum2 = accum2 * correction + probability * staged_v[tile_base + d2];
             accum3 = accum3 * correction + probability * staged_v[tile_base + d3];
-            // Prevent a fast SIMDgroup from overwriting shared probabilities
-            // while another SIMDgroup is still consuming this key.
-            threadgroup_barrier(mem_flags::mem_threadgroup);
         }
+        // All SIMDgroups must finish consuming this tile before any of them
+        // overwrite its staged K/V values, including padded query groups.
+        threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
-    if (lane == 0) inverse_sums[simdgroup] = 1.0f / running_sum;
-    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float inverse_sum = lane == 0 ? 1.0f / running_sum : 0.0f;
+    inverse_sum = simd_broadcast_first(inverse_sum);
     if (query_active) {
-        const float inverse_sum = inverse_sums[simdgroup];
         output[qbase + d0] = accum0 * inverse_sum;
         output[qbase + d1] = accum1 * inverse_sum;
         output[qbase + d2] = accum2 * inverse_sum;
