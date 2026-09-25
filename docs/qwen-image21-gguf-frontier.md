@@ -1256,11 +1256,13 @@ portrait. Neither scene similarity nor pixel distance establishes facial
 identity or image quality, and the 40-step output is a comparator, not ground
 truth. The fixed seed and conditioning preserve the starting input, but each
 step count constructs a different sigma grid. This observation alone cannot
-separate normal trajectory sensitivity from a scheduler or port defect; an
-official-versus-local 20/24/40-step schedule comparison at 2304 target tokens
-has not yet been run. The 20-step run overlaps a brief unrelated Python import
-probe; none of these timings is a quiet-host, repeated, paired A/B. The 24-step
-run's 22:41 DiT time is disproportionately longer than the 20-step run's
+separate normal trajectory sensitivity from a scheduler or port defect. The
+pinned 20/24/40-step schedule comparison below now excludes a material
+schedule-grid mismatch in the corrected source, but it does not validate the
+earlier portraits against that source or establish their quality. The 20-step
+run overlaps a brief unrelated Python import probe; none of these timings is a
+quiet-host, repeated, paired A/B. The 24-step run's 22:41 DiT time is
+disproportionately longer than the 20-step run's
 17:05; do not infer a constant seconds-per-step rate or a universal quality
 ranking. Host snapshots recorded no memory throttling or new swap-outs.
 
@@ -1296,10 +1298,11 @@ numerical and prefix-hit latency gates; it is not a fallback. Require full
 at a real 768px token shape for both prefix build and hit before promotion.
 Reducing the number of steps is an explicit quality/latency trade, not an
 exact-preserving kernel speedup. Do not promote 20 steps as a portrait mode or
-default from this single sample; first check scheduler parity and then assess
-facial details across multiple prompts and seeds. A PyTorch MPS VAE decode-only
-trial is a separate bounded follow-up: compare the same latent against CPU/FP32
-with fallback disabled, explicit MPS synchronization, and raw/pixel parity.
+default from this single sample. The schedule parity gate below is checked;
+facial details across multiple prompts and seeds are not. A PyTorch MPS VAE
+decode-only trial is a separate bounded follow-up: compare the same latent
+against CPU/FP32 with fallback disabled, explicit MPS synchronization, and
+raw/pixel parity.
 VAE is called once, while DiT dominates the measured 768px path.
 
 These `/private/tmp` artifacts are ephemeral. The input hashes, output paths,
@@ -1308,6 +1311,72 @@ removed or the model/runtime changes. The initial sandboxed 20/24 preflights
 could not enumerate a Metal device; the successful runs used the same runner
 with Metal device access outside that sandbox. This was an environment
 permission boundary, not evidence of a model or numeric failure.
+
+## Pinned 768px scheduler and causal-prefix parity gate (2026-09-24)
+
+The portrait's model revision `790c92633540aa0cb11d9abf19eb46d861714758`
+resolves to a `scheduler_config.json` with SHA-256
+`5895f3a167c14a967fe9ac70c64924ae5acc79799e0679fd12907e594a713cd1`.
+The reference runtime is Diffusers commit
+`8b3c707ebd3ec4881f4190cf42931da07eaf3b65`, the commit recorded in the
+conditioning bundle. `spec/support/qwen_image21_flow_match_reference.py`
+requires those pins, checks the installed scheduler and pipeline source hashes,
+and emits the checked-in `spec/fixtures/qwen_image21_flow_match_diffusers.json`.
+The fixture uses the official Qwen-Image 2.1 pipeline's linear input sigmas and
+resolution shift, then the real `FlowMatchEulerDiscreteScheduler` at 2304
+target tokens. The Crystal spec compares every Float32 sigma and timestep at
+20, 24, and 40 steps, not just the endpoints. It also checks the actual
+transformer input against the pipeline's Float32 `timestep / 1000` operation.
+
+The pre-fix exact-array spec failed. An isolated calculation of the old
+Float64 formula found 12/20, 13/24, and 21/40 preterminal sigmas different
+from the pinned reference, with a maximum absolute difference of `1.19e-7`.
+The local schedule used Float64 shift/stretch intermediates where the
+reference operates on Float32 arrays. Keeping those elementwise operations
+in Float32 makes all three complete sigma and timestep arrays exactly equal
+to the fixture. A further falsifier found one Float32-ULP model-input gap at
+40 steps, index 26: reading raw sigma gave `0.48297691345214844`, while the
+pipeline's `timestep / 1000` gives `0.4829769432544708`. `model_timestep`
+now follows that division; the focused spec passed (7 examples, no failures or
+pending cases). The model-backed Metal regression suite below passed 44
+examples without failures, errors, or pending cases on the same M2 Max.
+This is schedule parity, not an explanation for the visible 20/24/40-step
+portrait differences. The earlier PNGs were generated before this numeric
+correction and have not been regenerated or quality-ranked against it.
+
+The real 768px, seed-7 conditioning bundle has 105 text tokens and 2304 target
+tokens. `scripts/qwen_image21_cache_parity.cr` loads the full 32-layer GGUF,
+builds a prefix on denoising step 0, advances the target latents by one Euler
+step, then compares the step-1 cached hit against the same Metal stack's
+uncached full resident-input route at identical latents and timestep. On an
+Apple M2 Max, both the full 2409-token output and the target suffix had
+`max_abs=0`, `RMS=0`, and cosine `1.0`. The cache hit processed 2304 active
+tokens versus 2409 for the uncached forward; each evaluation used one command
+buffer, zero intermediate readbacks, and one final readback. The probe was
+rebuilt and rerun after both numerical corrections with the same parity result.
+This rules out a cache-vs-full-output discrepancy for that one real transition;
+it does not prove parity at later steps or other prompts, image quality, or a
+latency gain. The one-command tiled-attention A/B gate remains the next
+performance falsifier, not a promoted optimization.
+
+Reproduce with the pinned model config and Diffusers environment described
+above, then run the focused spec. The GPU probe needs the local GGUF and
+conditioning bundle plus Metal device access:
+
+```bash
+python spec/support/qwen_image21_flow_match_reference.py \
+  --config /path/to/pinned/scheduler_config.json | \
+  diff -u spec/fixtures/qwen_image21_flow_match_diffusers.json -
+SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk make build/bridge.o
+SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk \
+  crystal spec spec/qwen_image21_flow_match_spec.cr \
+  --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++"
+SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk \
+  crystal build scripts/qwen_image21_cache_parity.cr \
+  -o /tmp/qwen_image21_cache_parity \
+  --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++"
+/tmp/qwen_image21_cache_parity MODEL.gguf CONDITIONING.json 40
+```
 
 ## Not admitted by this slice
 

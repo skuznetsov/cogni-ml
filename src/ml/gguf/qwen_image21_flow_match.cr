@@ -49,11 +49,11 @@ module ML::GGUF
       @timesteps.size
     end
 
-    # The transformer consumes scheduler timestep / num_train_timesteps, which
-    # is the shifted sigma at this step.
+    # The pinned pipeline sends the Float32 scheduler timestep / 1000 to the
+    # transformer. This can differ from raw sigma by one Float32 ULP.
     def model_timestep(index : Int32) : Float32
       check_index(index)
-      @sigmas[index]
+      @timesteps[index] / 1000.0_f32
     end
 
     def step(sample : Array(Float32), model_output : Array(Float32), index : Int32) : Array(Float32)
@@ -101,15 +101,20 @@ module ML::GGUF
         (1.0_f64 + fraction * (1.0_f64 / num_inference_steps - 1.0_f64)).to_f32
       end
 
-      exponential = Math.exp(mu.to_f64)
+      # Diffusers passes float32 sigmas into NumPy's scheduler path. Keep the
+      # elementwise shift operations in float32 as NumPy does with those arrays.
+      exponential = Math.exp(mu.to_f64).to_f32
       sigmas.map! do |sigma|
-        (exponential / (exponential + (1.0_f64 / sigma - 1.0_f64))).to_f32
+        reciprocal = 1.0_f32 / sigma
+        exponential / (exponential + (reciprocal - 1.0_f32))
       end
 
       one_minus_last = 1.0_f64 - sigmas.last
       terminal_scale = one_minus_last / (1.0_f64 - config.shift_terminal)
+      terminal_scale_f32 = terminal_scale.to_f32
       sigmas.map! do |sigma|
-        (1.0_f64 - (1.0_f64 - sigma) / terminal_scale).to_f32
+        remaining = (1.0_f32 - sigma) / terminal_scale_f32
+        1.0_f32 - remaining
       end
 
       timesteps = sigmas.map { |sigma| sigma * config.num_train_timesteps }
@@ -126,8 +131,8 @@ module ML::GGUF
       latents = initial_latents.dup
       schedule.step_count.times do |index|
         step_started_at = Time.instant if step_observer
-        sigma = schedule.model_timestep(index)
-        model_output = yield latents, sigma, index
+        model_timestep = schedule.model_timestep(index)
+        model_output = yield latents, model_timestep, index
         unless model_output.all?(&.finite?)
           raise ArgumentError.new("transformer produced non-finite output at denoising step #{index}")
         end
@@ -137,7 +142,7 @@ module ML::GGUF
         end
         if observer = step_observer
           observer.call(
-            index, sigma, schedule.timesteps[index],
+            index, schedule.sigmas[index], schedule.timesteps[index],
             Time.instant - step_started_at.not_nil!,
           )
         end

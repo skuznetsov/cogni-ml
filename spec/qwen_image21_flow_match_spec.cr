@@ -1,12 +1,11 @@
 require "./spec_helper"
+require "json"
 require "../src/ml/gguf/qwen_image21_flow_match"
 
 describe ML::GGUF::QwenImage21FlowMatch do
   it "matches the model scheduler's dynamic four-step sigma schedule" do
     schedule = ML::GGUF::QwenImage21FlowMatch.schedule(4, 256)
 
-    # Golden values are produced by
-    # spec/support/qwen_image21_flow_match_reference.py.
     schedule.mu.should be_close(0.5_f32, 1e-7_f32)
     schedule.sigmas.zip([
       1.0_f32,
@@ -24,6 +23,38 @@ describe ML::GGUF::QwenImage21FlowMatch do
       19.999981_f32,
     ]).each do |actual, expected|
       actual.should be_close(expected, 2e-4_f32)
+    end
+  end
+
+  it "matches pinned Diffusers sigma and timestep arrays at 2304 target tokens" do
+    reference = JSON.parse(File.read(
+      File.join(__DIR__, "fixtures", "qwen_image21_flow_match_diffusers.json")
+    )).as_h
+    provenance = reference["provenance"].as_h
+    provenance["model_revision"].as_s.should eq("790c92633540aa0cb11d9abf19eb46d861714758")
+    provenance["scheduler_config_sha256"].as_s.should eq(
+      "5895f3a167c14a967fe9ac70c64924ae5acc79799e0679fd12907e594a713cd1"
+    )
+    provenance["diffusers_commit"].as_s.should eq("8b3c707ebd3ec4881f4190cf42931da07eaf3b65")
+
+    cases = reference["schedules"].as_a.select do |entry|
+      entry["image_seq_len"].as_i == 2304
+    end
+    cases.map { |entry| entry["steps"].as_i }.should eq([20, 24, 40])
+
+    cases.each do |entry|
+      steps = entry["steps"].as_i
+      schedule = ML::GGUF::QwenImage21FlowMatch.schedule(
+        steps, entry["image_seq_len"].as_i
+      )
+      schedule.mu.should eq(entry["mu"].as_f32)
+      schedule.sigmas.should eq(entry["sigmas"].as_a.map(&.as_f32))
+      reference_timesteps = entry["timesteps"].as_a.map(&.as_f32)
+      schedule.timesteps.should eq(reference_timesteps)
+      # The pinned pipeline sends t.to(latents.dtype) / 1000, not raw sigma.
+      reference_timesteps.each_with_index do |timestep, index|
+        schedule.model_timestep(index).should eq(timestep / 1000.0_f32)
+      end
     end
   end
 
