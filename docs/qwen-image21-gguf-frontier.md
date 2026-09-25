@@ -1249,10 +1249,16 @@ literal Q4 despite its filename. The VAE safetensors SHA-256 is
 | 40 | 2,006.751 s | 53.58 s | `/private/tmp/qwen21-resolution-probe-20260924-r1/768/full40/portrait.png` |
 
 The 20- and 24-step latent bundles passed shape and finite-value checks
-(48x48x64 Float32). Their decoded PNGs are 768x768 RGBA; the 20- and 24-step
-results are visually close and photographic on this one prompt. The 40-step
-result has a different pose and tighter crop, so pixel distance is not an
-image-quality score. The 20-step run overlaps a brief unrelated Python import
+(48x48x64 Float32). Their decoded PNGs are 768x768 RGBA. Although the 20- and
+24-step results share a rough composition, the eyes and ear lobes visibly
+change; the 40-step result changes pose and crop enough to read as a different
+portrait. Neither scene similarity nor pixel distance establishes facial
+identity or image quality, and the 40-step output is a comparator, not ground
+truth. The fixed seed and conditioning preserve the starting input, but each
+step count constructs a different sigma grid. This observation alone cannot
+separate normal trajectory sensitivity from a scheduler or port defect; an
+official-versus-local 20/24/40-step schedule comparison at 2304 target tokens
+has not yet been run. The 20-step run overlaps a brief unrelated Python import
 probe; none of these timings is a quiet-host, repeated, paired A/B. The 24-step
 run's 22:41 DiT time is disproportionately longer than the 20-step run's
 17:05; do not infer a constant seconds-per-step rate or a universal quality
@@ -1289,11 +1295,12 @@ numerical and prefix-hit latency gates; it is not a fallback. Require full
 32-layer output parity and alternating-order, one-command-buffer paired A/B
 at a real 768px token shape for both prefix build and hit before promotion.
 Reducing the number of steps is an explicit quality/latency trade, not an
-exact-preserving kernel speedup. Recheck multiple prompts and seeds before
-making 20 steps the default. A PyTorch MPS VAE decode-only trial is a separate
-bounded follow-up: compare the same latent against CPU/FP32 with fallback
-disabled, explicit MPS synchronization, and raw/pixel parity; VAE is called
-once, while DiT dominates the measured 768px path.
+exact-preserving kernel speedup. Do not promote 20 steps as a portrait mode or
+default from this single sample; first check scheduler parity and then assess
+facial details across multiple prompts and seeds. A PyTorch MPS VAE decode-only
+trial is a separate bounded follow-up: compare the same latent against CPU/FP32
+with fallback disabled, explicit MPS synchronization, and raw/pixel parity.
+VAE is called once, while DiT dominates the measured 768px path.
 
 These `/private/tmp` artifacts are ephemeral. The input hashes, output paths,
 runner logs, and exact source revision must be refreshed if the files are
