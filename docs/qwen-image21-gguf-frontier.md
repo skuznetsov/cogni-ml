@@ -1229,6 +1229,79 @@ establish image quality or gains on another device, quantization policy, or
 resolution. The unchanged latent bytes preserve the previous reference-VAE
 decode input, but no new PNG was decoded in this optimization run.
 
+## 768px portrait step-count and DiT timing probe (2026-09-24)
+
+The same 768x768 photorealistic portrait conditioning (seed 7, Qwen model
+revision `790c92633540aa0cb11d9abf19eb46d861714758`, conditioning payload
+SHA-256 `14f1c790d0edeb86e007ee61a43e8495d3eec02b83a08fd43e9faef34edcb86b`)
+was run through the native Metal DiT with 20 and 24 FlowMatch steps, then
+decoded by the local CPU/FP32 Qwen-Image 2.1 VAE. The earlier 40-step run is
+the reference. All three use the same GGUF (SHA-256
+`51998ad7c068ce7d68e233237537900ffe874ab4d5c72e20758f5f18ceb15b8a`),
+whose actual tensor types are `BF16:8,F32:65,Q8_0:96,Q6_K:64,Q5_K:32`, not
+literal Q4 despite its filename. The VAE safetensors SHA-256 is
+`a07a1b7c4ee2966a1b3bdc37de9b4f983d56937e46619f709a80b6e490675417`.
+
+| Steps | Native DiT denoise | CPU/FP32 VAE decode | Output |
+| ---: | ---: | ---: | --- |
+| 20 | 1,024.582 s | 32.08 s | `/private/tmp/qwen21-step-quality-20260924-r1/20-metal/portrait.png` |
+| 24 | 1,361.133 s | 24.22 s | `/private/tmp/qwen21-step-quality-20260924-r1/24-metal/portrait.png` |
+| 40 | 2,006.751 s | 53.58 s | `/private/tmp/qwen21-resolution-probe-20260924-r1/768/full40/portrait.png` |
+
+The 20- and 24-step latent bundles passed shape and finite-value checks
+(48x48x64 Float32). Their decoded PNGs are 768x768 RGBA; the 20- and 24-step
+results are visually close and photographic on this one prompt. The 40-step
+result has a different pose and tighter crop, so pixel distance is not an
+image-quality score. The 20-step run overlaps a brief unrelated Python import
+probe; none of these timings is a quiet-host, repeated, paired A/B. The 24-step
+run's 22:41 DiT time is disproportionately longer than the 20-step run's
+17:05; do not infer a constant seconds-per-step rate or a universal quality
+ranking. Host snapshots recorded no memory throttling or new swap-outs.
+
+Opt-in per-step logging is now available with `QWEN_IMAGE21_STEP_TIMING=1`;
+`QWEN_IMAGE21_TIMING=1` retains aggregate-only behavior. The per-step flag
+also enables the existing one-command GPU elapsed-time profiler unless a
+profile mode was already selected. A real 256px, two-step red-cube run produced
+byte-identical latent payloads with and without per-step logging (both SHA-256
+`02beea7d8d6688047f245742625a45179b41b540bb3e1c3d69d418417d9822c7`).
+Its first pass built the causal prefix and the second hit it; each used one
+command buffer and no intermediate readback. This establishes parity for that
+model/input/step count, not every possible input. The focused FlowMatch spec
+passed `6 examples, 0 failures`; the real-GGUF, real-conditioning Metal suite
+passed `43 examples, 0 failures, 0 pending` with the new timer source. A run
+without Metal device access only reported pending Metal cases and is not
+counted as a passed model-backed suite.
+
+An eight-step trace on the same 768px portrait reported GPU-command times
+of `31.08, 30.61, 33.67, 38.71, 51.41, 64.16, 77.04, 63.42` seconds.
+Every step used one command buffer and 198 projection dispatches. The first
+step built the prefix; the other seven hit it, with 2304 active target tokens
+on each hit. Wall step times tracked GPU-command time closely while rising
+from roughly 31 to 77 seconds and then falling. This locates the variance
+inside GPU execution, but does not identify thermal throttling, frequency
+changes, or competing GPU activity as the cause. The eight-step latent bundle
+is under `/private/tmp/qwen21-step-instrumentation-ab-20260924/trace768x8`.
+
+The first DiT optimization candidate is a tiled attention kernel that reuses
+K/V loads across multiple queries while preserving block-causal masks and
+online-softmax behavior. The earlier one-SIMD-group candidate failed both
+numerical and prefix-hit latency gates; it is not a fallback. Require full
+32-layer output parity and alternating-order, one-command-buffer paired A/B
+at a real 768px token shape for both prefix build and hit before promotion.
+Reducing the number of steps is an explicit quality/latency trade, not an
+exact-preserving kernel speedup. Recheck multiple prompts and seeds before
+making 20 steps the default. A PyTorch MPS VAE decode-only trial is a separate
+bounded follow-up: compare the same latent against CPU/FP32 with fallback
+disabled, explicit MPS synchronization, and raw/pixel parity; VAE is called
+once, while DiT dominates the measured 768px path.
+
+These `/private/tmp` artifacts are ephemeral. The input hashes, output paths,
+runner logs, and exact source revision must be refreshed if the files are
+removed or the model/runtime changes. The initial sandboxed 20/24 preflights
+could not enumerate a Metal device; the successful runs used the same runner
+with Metal device access outside that sandbox. This was an environment
+permission boundary, not evidence of a model or numeric failure.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder
@@ -1280,6 +1353,7 @@ The model-backed checks are:
 
 ```bash
 QWEN_IMAGE21_GGUF=/path/to/Qwen-Image-2.1-Q4.gguf \
+  QWEN_IMAGE21_CONDITIONING=/path/to/qwen_image21_conditioning.json \
   SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk \
   crystal spec spec/qwen_image21_flow_match_spec.cr \
     spec/qwen_image21_transformer_spec.cr \

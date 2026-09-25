@@ -65,6 +65,13 @@ abort "Metal backend unavailable" unless ML::GGUF::QwenImage21MetalProjectionBac
 
 conditioning = ML::GGUF::QwenImage21ConditioningBundle.load(conditioning_path)
 timing = ENV["QWEN_IMAGE21_TIMING"]? == "1"
+step_timing = ENV["QWEN_IMAGE21_STEP_TIMING"]? == "1"
+if step_timing && ENV["QWEN_IMAGE21_PROFILE"]?.nil?
+  # Profile the existing single-command route so the per-step report can
+  # include device elapsed time without enabling diagnostic phase splits.
+  ENV["QWEN_IMAGE21_PROFILE"] = "1"
+end
+profile_mode = ENV["QWEN_IMAGE21_PROFILE"]?
 load_started = Time.instant
 model = ML::GGUF::QwenImage21Weights.from_gguf(gguf_path)
 stack = ML::GGUF::QwenImage21MetalLayerStackBackend.new
@@ -72,6 +79,50 @@ loaded_at = Time.instant
 begin
   config = model.transformer_config
   puts "denoising prompt=#{conditioning.prompt.inspect} image=#{conditioning.image_width}x#{conditioning.image_height} seed=#{conditioning.seed} steps=#{steps}"
+  previous_cache_builds = 0
+  previous_cache_hits = 0
+  step_observer = if step_timing
+                    ->(index : Int32, sigma : Float32, timestep : Float32, elapsed : Time::Span) {
+                      cache_builds = stack.prefix_cache_builds
+                      cache_hits = stack.prefix_cache_hits
+                      cache_mode = if cache_builds > previous_cache_builds
+                                     "build"
+                                   elsif cache_hits > previous_cache_hits
+                                     "hit"
+                                   else
+                                     "none"
+                                   end
+                      previous_cache_builds = cache_builds
+                      previous_cache_hits = cache_hits
+                      stats = stack.last_stats
+                      layer_fields = if stats
+                                       " layer_stack_invocations=#{stack.invocations}" \
+                                       " active_tokens=#{stats.active_tokens}" \
+                                       " image_projection_rows=#{stats.image_projection_rows}" \
+                                       " command_buffers=#{stats.command_buffers}" \
+                                       " projection_dispatches=#{stats.projection_dispatches}" \
+                                       " intermediate_readbacks=#{stats.intermediate_readbacks}" \
+                                       " final_readbacks=#{stats.final_readbacks}" \
+                                       " buffer_prepare_ms=#{stats.buffer_prepare_ms.try(&.round(3)) || "unavailable"}" \
+                                       " readback_ms=#{stats.readback_ms.try(&.round(3)) || "unavailable"}"
+                                     else
+                                       " layer_stats=unavailable"
+                                     end
+                      gpu_ms = stats.try(&.gpu_command_ms)
+                      gpu_field = if profile_mode == "phases"
+                                    " gpu_phase_split_sum_ms=#{gpu_ms.try(&.round(3)) || "unavailable"}"
+                                  else
+                                    " gpu_command_ms=#{gpu_ms.try(&.round(3)) || "unavailable"}"
+                                  end
+                      puts "denoising_step index=#{index} sigma=#{sigma} timestep=#{timestep}" \
+                           " elapsed_ms=#{elapsed.total_milliseconds.round(3)}" \
+                           " cache=#{cache_mode} cache_builds=#{cache_builds} cache_hits=#{cache_hits}" \
+                           "#{layer_fields}#{gpu_field}"
+                      nil
+                    }
+                  else
+                    nil
+                  end
   result = ML::GGUF::QwenImage21LatentDenoiser.run(
     conditioning.initial_target_latents,
     [] of Float32,
@@ -84,11 +135,12 @@ begin
     encoder_hidden_states_mask: conditioning.encoder_hidden_states_mask,
     backend: ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: true),
     layer_stack_backend: stack,
+    step_observer: step_observer,
   )
   denoised_at = Time.instant
   raise "wrong number of transformer evaluations" unless result.transformer_evaluations == steps
   write_latent_bundle(output_dir, conditioning, result.latents, steps, gguf_path)
-  if timing
+  if timing || step_timing
     written_at = Time.instant
     puts "timing model_load_ms=#{(loaded_at - load_started).total_milliseconds.round(3)} " \
          "denoise_ms=#{(denoised_at - loaded_at).total_milliseconds.round(3)} " \

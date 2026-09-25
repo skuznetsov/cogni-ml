@@ -50,6 +50,34 @@ describe ML::GGUF::QwenImage21FlowMatch do
     end
   end
 
+  it "reports opt-in per-step elapsed time without changing the trajectory" do
+    schedule = ML::GGUF::QwenImage21FlowMatch.schedule(2, 256)
+    predictor = ->(latents : Array(Float32), timestep : Float32, index : Int32) {
+      latents.map { |value| value * 0.25_f32 + timestep * (index + 1) }
+    }
+    baseline = ML::GGUF::QwenImage21FlowMatch.denoise(
+      [0.25_f32, -0.5_f32, 1.25_f32], schedule,
+    ) do |latents, timestep, index|
+      predictor.call(latents, timestep, index)
+    end
+    observations = [] of Tuple(Int32, Float32, Float32, Float64)
+    instrumented = ML::GGUF::QwenImage21FlowMatch.denoise(
+      [0.25_f32, -0.5_f32, 1.25_f32], schedule,
+      step_observer: ->(index : Int32, sigma : Float32, timestep : Float32, elapsed : Time::Span) {
+        observations << {index, sigma, timestep, elapsed.total_milliseconds}
+        nil
+      },
+    ) do |latents, timestep, index|
+      predictor.call(latents, timestep, index)
+    end
+
+    instrumented.should eq(baseline)
+    observations.map(&.[0]).should eq([0, 1])
+    observations.map(&.[1]).should eq(schedule.sigmas.first(2))
+    observations.map(&.[2]).should eq(schedule.timesteps)
+    observations.all? { |_, _, _, elapsed_ms| elapsed_ms >= 0.0 }.should be_true
+  end
+
   it "rejects schedules too short for terminal stretching" do
     expect_raises(ArgumentError, "num_inference_steps must be at least two") do
       ML::GGUF::QwenImage21FlowMatch.schedule(0, 256)

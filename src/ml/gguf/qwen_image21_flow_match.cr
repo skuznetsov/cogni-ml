@@ -120,17 +120,26 @@ module ML::GGUF
     def self.denoise(
       initial_latents : Array(Float32),
       schedule : QwenImage21FlowMatchSchedule,
+      step_observer : Proc(Int32, Float32, Float32, Time::Span, Nil)? = nil,
       &predictor : Array(Float32), Float32, Int32 -> Array(Float32)
     ) : Array(Float32)
       latents = initial_latents.dup
       schedule.step_count.times do |index|
-        model_output = yield latents, schedule.model_timestep(index), index
+        step_started_at = Time.instant if step_observer
+        sigma = schedule.model_timestep(index)
+        model_output = yield latents, sigma, index
         unless model_output.all?(&.finite?)
           raise ArgumentError.new("transformer produced non-finite output at denoising step #{index}")
         end
         latents = schedule.step(latents, model_output, index)
         unless latents.all?(&.finite?)
           raise ArgumentError.new("non-finite latents after denoising step #{index}")
+        end
+        if observer = step_observer
+          observer.call(
+            index, sigma, schedule.timesteps[index],
+            Time.instant - step_started_at.not_nil!,
+          )
         end
       end
       latents
@@ -163,6 +172,7 @@ module ML::GGUF
       scheduler_config : QwenImage21FlowMatchConfig = QwenImage21FlowMatchConfig.new,
       backend : ComputeBackend = F32Backend.new,
       layer_stack_backend : QwenImage21LayerStackBackend? = nil,
+      step_observer : Proc(Int32, Float32, Float32, Time::Span, Nil)? = nil,
     ) : QwenImage21DenoisingResult
       raise ArgumentError.new("img_shapes must contain a target image") if img_shapes.empty?
       unless config.input_dim == config.output_dim
@@ -196,7 +206,7 @@ module ML::GGUF
       )
       evaluations = 0
       latents = QwenImage21FlowMatch.denoise(
-        initial_target_latents, schedule
+        initial_target_latents, schedule, step_observer: step_observer,
       ) do |target_latents, timestep, _index|
         result = QwenImage21TransformerCPU.forward(
           condition_latents + target_latents,
