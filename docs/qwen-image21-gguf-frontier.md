@@ -1290,12 +1290,14 @@ inside GPU execution, but does not identify thermal throttling, frequency
 changes, or competing GPU activity as the cause. The eight-step latent bundle
 is under `/private/tmp/qwen21-step-instrumentation-ab-20260924/trace768x8`.
 
-The first DiT optimization candidate is a tiled attention kernel that reuses
-K/V loads across multiple queries while preserving block-causal masks and
-online-softmax behavior. The earlier one-SIMD-group candidate failed both
-numerical and prefix-hit latency gates; it is not a fallback. Require full
-32-layer output parity and alternating-order, one-command-buffer paired A/B
-at a real 768px token shape for both prefix build and hit before promotion.
+The first DiT optimization candidate is now an opt-in tiled attention kernel
+that reuses K/V loads across multiple queries while preserving block-causal
+masks and online-softmax behavior. The earlier one-SIMD-group candidate failed
+both numerical and prefix-hit latency gates; it is not a fallback. The full
+32-layer output-parity and alternating-order, one-command-buffer paired A/B
+gate at a real 768px token shape passed in the bounded run below, but noisy
+host conditions and the missing multi-prompt decoded-image check still block
+default promotion.
 Reducing the number of steps is an explicit quality/latency trade, not an
 exact-preserving kernel speedup. Do not promote 20 steps as a portrait mode or
 default from this single sample. The schedule parity gate below is checked;
@@ -1356,8 +1358,7 @@ buffer, zero intermediate readbacks, and one final readback. The probe was
 rebuilt and rerun after both numerical corrections with the same parity result.
 This rules out a cache-vs-full-output discrepancy for that one real transition;
 it does not prove parity at later steps or other prompts, image quality, or a
-latency gain. The one-command tiled-attention A/B gate remains the next
-performance falsifier, not a promoted optimization.
+latency gain. The subsequent tiled-attention A/B is reported below.
 
 Reproduce with the pinned model config and Diffusers environment described
 above, then run the focused spec. The GPU probe needs the local GGUF and
@@ -1376,6 +1377,71 @@ SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk \
   -o /tmp/qwen_image21_cache_parity \
   --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++"
 /tmp/qwen_image21_cache_parity MODEL.gguf CONDITIONING.json 40
+```
+
+## Opt-in tiled-attention candidate (2026-09-25)
+
+`QWEN_IMAGE21_ATTENTION_TILE=1` selects an experimental head-dimension-128
+kernel when there are at least eight keys and four queries. The default and
+explicit `=0` retain the legacy kernel. Four query SIMDgroups share an
+eight-key K/V tile (8 KiB of threadgroup K/V storage), keep the ordered four
+partial dot products and online-softmax recurrence, and preserve the
+absolute-offset block-causal/image/invalid-key mask. This is cross-query K/V
+reuse, not LTP/WBA. The current kernel still has two threadgroup barriers per
+key plus the tile staging barrier; the speed result must come from measured
+full forwards, not an assumption that per-key barriers disappeared.
+
+The direct Metal falsifier used head dimension 128, five local queries at
+absolute offset six, mixed image IDs and invalid keys, an 8+3 key tail, and
+three inactive SIMDgroups in the final query tile. It covered both one head
+with ordinary scores and three heads with much larger dot products.
+Candidate and legacy outputs were finite and exactly equal (`max_abs=0`) in
+both cases. With the candidate enabled, the full model-backed Metal regression
+suite passed **46 examples, 0 failures, errors, or pending cases**. A
+separately rebuilt real 768px prefix probe found
+`max_abs=0`, RMS `0`, and cosine `1.0` between candidate cached hit and
+candidate uncached output on the same step-1 input.
+
+`scripts/qwen_image21_attention_ab.cr` pins the inspected GGUF SHA-256
+`51998ad7c068ce7d68e233237537900ffe874ab4d5c72e20758f5f18ceb15b8a`
+and seed-7 conditioning payload SHA-256
+`14f1c790d0edeb86e007ee61a43e8495d3eec02b83a08fd43e9faef34edcb86b`.
+It checks that both full and cache-hit query shapes select the intended
+kernel, derives step-1 latents once from the baseline step-0 Euler output,
+then holds those latents and timestep fixed across both attention modes. Each
+mode executes a 32-layer prefix build, cached hit, and uncached resident-input
+forward at the real 105-text + 2304-image = 2409-token layout. Every route
+used one Metal command buffer, no intermediate readback, and one final
+readback; the hit processed 2304 active tokens and build/uncached 2409.
+In one warmup and all six alternating AB/BA measured pairs, candidate versus
+legacy full and target outputs were exactly equal (`max_abs=0`, RMS `0`,
+cosine `1.0`) on all three routes. Within each mode, hit and uncached outputs
+were also exactly equal.
+
+| 32-layer route | Legacy median wall | Tiled median wall | Tiled/legacy wall | Tiled/legacy GPU-command |
+| --- | ---: | ---: | ---: | ---: |
+| Prefix build | 30.784 s | 24.735 s | 0.804 | 0.803 |
+| Prefix hit | 29.174 s | 23.030 s | 0.789 | 0.788 |
+| Uncached | 31.706 s | 24.657 s | 0.778 | 0.778 |
+
+All six paired ratios were below one for every route, including both
+measurement orders. These are bounded observations on Apple M2 Max for this
+one GGUF, conditioning bundle, timestep pair, and token shape; they are not a
+40-step-image runtime or image-quality result. The host-load observer
+reported `noise_observed=true` throughout much of the series, so do not
+attribute the exact percentage to the kernel in isolation or promote it as a
+general device default. No unrelated processes were stopped. The route stays
+opt-in pending a quiet-host replication and a multi-prompt/seed 40-step
+decoded-image quality check; `QWEN_IMAGE21_ATTENTION_TILE=0` is the immediate
+rollback. The A/B runner reports performance without a speed hard gate, but
+fails closed on pin, route, finite-output, and numerical-parity violations.
+
+```bash
+SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk \
+  crystal build scripts/qwen_image21_attention_ab.cr \
+  -o /tmp/qwen_image21_attention_ab \
+  --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++"
+/tmp/qwen_image21_attention_ab MODEL.gguf CONDITIONING.json --pairs=6
 ```
 
 ## Not admitted by this slice

@@ -28598,3 +28598,28 @@ Refresh after source/toolchain/device/model/workload changes.
   `docs/qwen-image21-gguf-frontier.md`. Reprofile before widening to another
   device, batch, GGUF policy, or resolution. Evidence decays on model/GGUF,
   prompt, kernel/compiler, device/OS, Python component, or harness changes.
+
+### Continuation 2026-09-25 — Qwen-Image 2.1 opt-in tiled attention
+
+- `QWEN_IMAGE21_ATTENTION_TILE=1` selects a four-query/eight-key K/V-sharing
+  Metal attention kernel only for head dimension 128 and the admitted shape;
+  default and `=0` preserve legacy. The one-SIMDgroup replacement rejected
+  earlier is not reused. This tile still has two barriers per key and is not
+  an LTP/WBA claim.
+- A direct mixed-mask/offset/tail Metal test gave exact legacy parity for
+  one and three heads, including large dot products; the
+  candidate-enabled model-backed suite passed 46 examples with zero failures,
+  errors, or pending cases. At real seed-7 768px conditioning, one warmup and
+  six alternating AB/BA pairs gave exact full and target transformer outputs
+  for build, hit, and uncached routes (`max_abs=0`, RMS=0, cosine=1). Every
+  route used one command buffer, zero intermediate and one final readback.
+- All 6/6 measured pairs favored the tile on every route. Median tiled/legacy
+  wall ratios on M2 Max were 0.804 build, 0.789 hit, 0.778 uncached; GPU-command
+  ratios were 0.803, 0.788, 0.778. The host was noisy (`noise_observed=true`),
+  so this is a bounded opt-in speed observation, not a device-wide default or
+  40-step decoded-image quality/latency certificate. No foreign processes
+  were stopped. Next: quiet-host replication and later-step/multi-seed image
+  parity before considering default selection. See
+  `docs/qwen-image21-gguf-frontier.md` and `scripts/qwen_image21_attention_ab.cr`.
+  Refresh after model, conditioning, compiler, kernel, device/OS, or runner
+  changes; rollback immediately with `QWEN_IMAGE21_ATTENTION_TILE=0`.

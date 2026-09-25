@@ -2,6 +2,8 @@
 using namespace metal;
 
 constant uint QI21_MAX_SIMDGROUPS = 32;
+constant uint QI21_ATTENTION_TILE_KEYS = 8;
+constant uint QI21_ATTENTION_TILE_DIM = 128;
 
 static inline float qi21_bf16_to_f32(ushort value) {
     return as_type<float>(((uint)value) << 16);
@@ -413,6 +415,138 @@ kernel void qi21_block_causal_attention(
     if (tid == 0) inverse_sum = 1.0f / running_sum;
     threadgroup_barrier(mem_flags::mem_threadgroup);
     if (tid < head_dim) output[qbase + tid] = accumulator * inverse_sum;
+}
+
+// Experimental 128-wide path. Four SIMDgroups own four consecutive queries
+// at one head. Each 8-key K/V tile is staged once for the whole threadgroup;
+// each query SIMDgroup keeps the legacy four 32-lane dot partials and their
+// ordered accumulation before applying the same online-softmax recurrence.
+kernel void qi21_block_causal_attention_tiled(
+    device const float* q [[buffer(0)]],
+    device const float* k [[buffer(1)]],
+    device const float* v [[buffer(2)]],
+    device const int* image_ids [[buffer(3)]],
+    device const uchar* key_valid [[buffer(4)]],
+    device float* output [[buffer(5)]],
+    constant uint& total_tokens [[buffer(6)]],
+    constant uint& query_tokens [[buffer(7)]],
+    constant uint& query_offset [[buffer(8)]],
+    constant uint& heads [[buffer(9)]],
+    constant uint& head_dim [[buffer(10)]],
+    constant float& scale [[buffer(11)]],
+    uint group [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]],
+    uint simdgroup [[simdgroup_index_in_threadgroup]],
+    uint threads [[threads_per_threadgroup]]) {
+    const uint query_group = group / heads;
+    const uint head = group - query_group * heads;
+    const uint query_local = query_group * 4 + simdgroup;
+    const bool query_active = query_local < query_tokens;
+    const uint query_token = query_offset + query_local;
+    const uint qbase = (query_local * heads + head) * head_dim;
+
+    threadgroup float staged_k[QI21_ATTENTION_TILE_KEYS * QI21_ATTENTION_TILE_DIM];
+    threadgroup float staged_v[QI21_ATTENTION_TILE_KEYS * QI21_ATTENTION_TILE_DIM];
+    threadgroup float probabilities[4];
+    threadgroup float corrections[4];
+    threadgroup float inverse_sums[4];
+
+    const uint d0 = lane;
+    const uint d1 = lane + 32;
+    const uint d2 = lane + 64;
+    const uint d3 = lane + 96;
+    float q0 = 0.0f;
+    float q1 = 0.0f;
+    float q2 = 0.0f;
+    float q3 = 0.0f;
+    if (query_active) {
+        q0 = q[qbase + d0];
+        q1 = q[qbase + d1];
+        q2 = q[qbase + d2];
+        q3 = q[qbase + d3];
+    }
+
+    float accum0 = 0.0f;
+    float accum1 = 0.0f;
+    float accum2 = 0.0f;
+    float accum3 = 0.0f;
+    float running_max = -INFINITY;
+    float running_sum = 0.0f;
+
+    for (uint tile_start = 0; tile_start < total_tokens; tile_start += QI21_ATTENTION_TILE_KEYS) {
+        for (uint index = tid;
+             index < QI21_ATTENTION_TILE_KEYS * QI21_ATTENTION_TILE_DIM;
+             index += threads) {
+            const uint tile_token = tile_start + index / QI21_ATTENTION_TILE_DIM;
+            const uint dimension = index - (index / QI21_ATTENTION_TILE_DIM) * QI21_ATTENTION_TILE_DIM;
+            if (tile_token < total_tokens) {
+                const uint kvbase = (tile_token * heads + head) * head_dim;
+                staged_k[index] = k[kvbase + dimension];
+                staged_v[index] = v[kvbase + dimension];
+            } else {
+                staged_k[index] = 0.0f;
+                staged_v[index] = 0.0f;
+            }
+        }
+        // Every SIMDgroup, including padded query groups, reaches this barrier.
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (uint tile_key = 0; tile_key < QI21_ATTENTION_TILE_KEYS; ++tile_key) {
+            const uint key_token = tile_start + tile_key;
+            const bool key_in_range = key_token < total_tokens;
+            bool allowed = false;
+            if (query_active && key_in_range) {
+                const int query_image = image_ids[query_token];
+                const int key_image = image_ids[key_token];
+                const bool same_image = query_image >= 0 && query_image == key_image;
+                allowed = key_valid[key_token] != 0 && (query_token >= key_token || same_image);
+            }
+
+            const uint tile_base = tile_key * QI21_ATTENTION_TILE_DIM;
+            const float p0 = simd_sum(allowed ? q0 * staged_k[tile_base + d0] : 0.0f);
+            const float p1 = simd_sum(allowed ? q1 * staged_k[tile_base + d1] : 0.0f);
+            const float p2 = simd_sum(allowed ? q2 * staged_k[tile_base + d2] : 0.0f);
+            const float p3 = simd_sum(allowed ? q3 * staged_k[tile_base + d3] : 0.0f);
+
+            if (lane == 0) {
+                float dot = 0.0f;
+                dot += p0;
+                dot += p1;
+                dot += p2;
+                dot += p3;
+                const float score = allowed ? dot * scale : -INFINITY;
+                const float next_max = max(running_max, score);
+                const float correction = isinf(running_max) ? 0.0f : exp(running_max - next_max);
+                const float probability = allowed ? exp(score - next_max) : 0.0f;
+                running_sum = running_sum * correction + probability;
+                running_max = next_max;
+                probabilities[simdgroup] = probability;
+                corrections[simdgroup] = correction;
+            }
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+
+            const float probability = probabilities[simdgroup];
+            const float correction = corrections[simdgroup];
+            accum0 = accum0 * correction + probability * staged_v[tile_base + d0];
+            accum1 = accum1 * correction + probability * staged_v[tile_base + d1];
+            accum2 = accum2 * correction + probability * staged_v[tile_base + d2];
+            accum3 = accum3 * correction + probability * staged_v[tile_base + d3];
+            // Prevent a fast SIMDgroup from overwriting shared probabilities
+            // while another SIMDgroup is still consuming this key.
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+    }
+
+    if (lane == 0) inverse_sums[simdgroup] = 1.0f / running_sum;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (query_active) {
+        const float inverse_sum = inverse_sums[simdgroup];
+        output[qbase + d0] = accum0 * inverse_sum;
+        output[qbase + d1] = accum1 * inverse_sum;
+        output[qbase + d2] = accum2 * inverse_sum;
+        output[qbase + d3] = accum3 * inverse_sum;
+    }
 }
 
 kernel void qi21_copy_f32(

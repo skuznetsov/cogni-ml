@@ -750,6 +750,23 @@ module ML::GGUF
     end
   end
 
+  # Opt-in route policy for the experimental query/KV-tiled attention kernel.
+  # Its 8-key tile and 4-query mapping are admitted only for the measured
+  # implementation shape; all other shapes retain the legacy kernel.
+  module QwenImage21MetalAttentionPolicy
+    LEGACY_KERNEL = "qi21_block_causal_attention"
+    TILED_KERNEL  = "qi21_block_causal_attention_tiled"
+
+    def self.kernel_name(
+      head_dim : Int32, total_tokens : Int32, query_tokens : Int32,
+      setting : String? = ENV["QWEN_IMAGE21_ATTENTION_TILE"]?,
+    ) : String
+      return LEGACY_KERNEL unless setting == "1"
+      return LEGACY_KERNEL unless head_dim == 128 && total_tokens >= 8 && query_tokens >= 4
+      TILED_KERNEL
+    end
+  end
+
   # Exact single-command-buffer block-stack path. All normalization, Q/K RoPE,
   # segmented block-causal attention, projections, SwiGLU, and residual
   # updates remain in Metal buffers; only the final hidden state is read back.
@@ -1898,8 +1915,12 @@ module ML::GGUF
         query_tokens : Int32, query_offset : Int32,
         config : QwenImage21BlockConfig,
       ) : Nil
-        threads = head_threads(config.head_dim)
-        encoder.set_pipeline(pipeline("qi21_block_causal_attention"))
+        kernel_name = QwenImage21MetalAttentionPolicy.kernel_name(
+          config.head_dim, total_tokens, query_tokens,
+        )
+        tiled = kernel_name == QwenImage21MetalAttentionPolicy::TILED_KERNEL
+        threads = tiled ? 128 : head_threads(config.head_dim)
+        encoder.set_pipeline(pipeline(kernel_name))
         encoder.set_buffer(q, 0)
         encoder.set_buffer(k, 1)
         encoder.set_buffer(v, 2)
@@ -1912,7 +1933,12 @@ module ML::GGUF
         encoder.set_value(config.heads.to_u32, 9)
         encoder.set_value(config.head_dim.to_u32, 10)
         encoder.set_value((1.0_f64 / Math.sqrt(config.head_dim)).to_f32, 11)
-        encoder.dispatch_threadgroups({query_tokens * config.heads, 1, 1}, {threads, 1, 1})
+        groups = if tiled
+                   ((query_tokens + 3) // 4) * config.heads
+                 else
+                   query_tokens * config.heads
+                 end
+        encoder.dispatch_threadgroups({groups, 1, 1}, {threads, 1, 1})
       end
 
       private def self.encode_copy_f32(
