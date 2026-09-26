@@ -41,12 +41,7 @@ SHARD_SHA256 = {
     "diffusion_pytorch_model-00002-of-00002.safetensors": "3aaf234dcbe128530479735854a346b5e3e66283b7c11db56f836bbd1c13ebaa",
 }
 GIB = 1024**3
-EXPECTED_TENSOR_SHAPES = {
-    "encoder_hidden_states": (10, 4096),
-    "encoder_hidden_states_mask": (10,),
-    "encoder_img_mask": (10,),
-    "initial_target_latents": (256, 64),
-}
+MAX_TEXT_TOKENS = 4096
 EXPECTED_TENSOR_DTYPES = {
     "encoder_hidden_states": "float32-le",
     "encoder_hidden_states_mask": "uint8",
@@ -201,11 +196,28 @@ def load_conditioning_bundle(
         raise ValueError("conditioning payload does not match the pinned bundle SHA256")
 
     descriptors = manifest.get("tensors", {})
-    if set(descriptors) != set(EXPECTED_TENSOR_SHAPES):
+    if not isinstance(descriptors, dict) or set(descriptors) != set(EXPECTED_TENSOR_DTYPES):
         raise ValueError("conditioning manifest tensor set is incomplete or unexpected")
+    hidden_descriptor = descriptors["encoder_hidden_states"]
+    hidden_shape = hidden_descriptor.get("shape") if isinstance(hidden_descriptor, dict) else None
+    if (
+        not isinstance(hidden_shape, list)
+        or len(hidden_shape) != 2
+        or isinstance(hidden_shape[0], bool)
+        or not isinstance(hidden_shape[0], int)
+        or not 1 <= hidden_shape[0] <= MAX_TEXT_TOKENS
+    ):
+        raise ValueError(f"conditioning text token count must be in [1, {MAX_TEXT_TOKENS}]")
+    text_tokens = hidden_shape[0]
+    expected_shapes = {
+        "encoder_hidden_states": (text_tokens, 4096),
+        "encoder_hidden_states_mask": (text_tokens,),
+        "encoder_img_mask": (text_tokens,),
+        "initial_target_latents": (256, 64),
+    }
     arrays = {}
     expected_offset = 0
-    for name, shape in EXPECTED_TENSOR_SHAPES.items():
+    for name, shape in expected_shapes.items():
         descriptor = descriptors[name]
         dtype_name = EXPECTED_TENSOR_DTYPES[name]
         expected_bytes = math.prod(shape) * (4 if dtype_name == "float32-le" else 1)
@@ -313,8 +325,6 @@ def _forward_velocity(
     device: Any,
     model_dtype: Any,
 ):
-    import torch
-
     kwargs = build_forward_kwargs(
         bundle,
         state,

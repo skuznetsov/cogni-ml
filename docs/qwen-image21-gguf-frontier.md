@@ -1772,6 +1772,57 @@ control; the present AB2 pilot does not test that hypothesis.
   512x512 prompts cannot be substituted directly: this pilot's pinned 4-step
   FlowMatch fixture is for image sequence length 256, not 1024.
 
+### Held-out prompt and adapter-export frontier (bounded control)
+
+- **Admitted held-out evaluation:** prepare a separate official CPU/BF16
+  256x256 conditioning bundle for the previously used elven-castle prompt,
+  keeping source revision `790c92633540aa0cb11d9abf19eb46d861714758`
+  and CPU noise seed 7. Check its manifest and payload hash, prompt identity,
+  256-token image geometry, and source revision before the run. The frozen
+  two-substep teacher target is computed independently for that bundle. Report
+  both training-prompt and held-out endpoint MSE before/after the same two
+  optimizer steps, with each pair evaluated under the same `no_grad` context.
+  The held-out target and activations must never enter backward or AdamW.
+- **Stop/falsify:** reject the held-out claim if the bundle duplicates the
+  training prompt or payload, source/geometry/schedule differ, the held-out
+  pass changes adapter weights or gradients, or either evaluation is nonfinite.
+  A rising held-out loss is a negative generalization signal for this one
+  sample, not a reason to relabel it as an image-quality gain. One prompt and
+  one coarse interval cannot establish a useful 3-5-step student.
+- **Adapter-export gate:** a small opt-in checkpoint may be emitted only with
+  exact LoRA tensor names, rank, scale, source/bundle/schedule hashes and
+  integrity metadata. Reloaded reference-Diffusers inference must reproduce
+  the trained endpoint on both prompts before claiming reference portability.
+  Native quantized-GGUF use needs a separate tensor-orientation/scaling contract
+  and paired numerical checks; export alone does not establish native parity.
+  Rollback is to omit the opt-in checkpoint and continue using unchanged
+  Euler/AB2 inference. No source model, GGUF, or existing conditioning bundle
+  is modified by this slice.
+- **Observed on 2026-09-26:** the separate 256x256 elven-castle bundle has
+  manifest SHA256 `17a57ee3b07a64c0bf0f9a559ea1e721d75e4ebea95f3930abe21314fea1c01f`
+  and payload SHA256 `921cdc9a14685877887733ab0f032cc8cfb2b258d421edfdb38e00e8497f4ea6`.
+  With the same frozen BF16 teacher, two AdamW steps, and shared no-grad
+  evaluator, the red-cube training endpoint MSE was `0.0270249955` before and
+  `0.0268501583` after; the castle held-out endpoint MSE was `0.0439844504`
+  before and `0.0439081527` after. The opt-in rank-4 FP32 checkpoint was
+  emitted with manifest SHA256 `266572b3d0f21b70b83c57e1ee80a8b9d5cb3d30fa62ce722e8ed9f2c0bce7f3`
+  and payload SHA256 `e124404bce8842d056242f216ff89a83db8fd4b63193affea19a6d12c6101f41`.
+  These small endpoint-loss reductions are a one-sample control observation,
+  not a decoded-image quality result or a 3-5-step inference claim.
+- **Reference reload check:** `scripts/qwen_image21_lora_adapter_replay.py` checks
+  the official snapshot and runtime, captures both frozen teacher endpoints
+  before LoRA injection, and measures the seeded initial adapter and reloaded
+  saved adapter on two sequential fresh BF16/MPS models. The 2026-09-26 run
+  with an explicit checkpoint-manifest SHA256 pin reproduced all four endpoint
+  MSE values above with observed numeric delta `0.0` for each. The declared
+  comparison envelope is `1e-6` absolute or `1e-4` relative, whichever is
+  larger; the combined held-out allowance was `8.7893e-6`, below the recorded
+  held-out improvement `7.6298e-5`. This is same-snapshot reference replay,
+  not a general bitwise guarantee, decoded-image validation, or parity with the
+  quantized native GGUF path. The low-level adapter injection requires a base
+  created by the verified snapshot loader; callers must not modify its weights
+  between verification and injection.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder

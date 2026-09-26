@@ -115,6 +115,39 @@ class QwenImage21LoraGradProbeSpec(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "payload.*(size|SHA256)"):
                 MODULE.load_conditioning_bundle(manifest, verify_pinned_bundle=False)
 
+    def test_unpinned_loader_accepts_structurally_valid_variable_text_length(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = self._write_bundle(Path(directory), text_tokens=37)
+            bundle = MODULE.load_conditioning_bundle(manifest, verify_pinned_bundle=False)
+            self.assertEqual((1, 37, 4096), tuple(bundle.encoder_hidden_states.shape))
+            self.assertEqual((1, 37), tuple(bundle.encoder_hidden_states_mask.shape))
+            kwargs = MODULE.build_forward_kwargs(
+                bundle,
+                bundle.initial_target_latents,
+                scheduler_timestep=1000.0,
+                device=torch.device("cpu"),
+                model_dtype=torch.bfloat16,
+            )
+            self.assertEqual((1, 101), tuple(kwargs["img_mask"].shape))
+
+    def test_variable_text_length_rejects_mismatched_mask_descriptor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = self._write_bundle(Path(directory), text_tokens=37)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["tensors"]["encoder_hidden_states_mask"]["shape"] = [36]
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "tensor descriptor is invalid"):
+                MODULE.load_conditioning_bundle(manifest_path, verify_pinned_bundle=False)
+
+    def test_variable_text_length_rejects_zero_tokens(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = self._write_bundle(Path(directory), text_tokens=10)
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["tensors"]["encoder_hidden_states"]["shape"] = [0, 4096]
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "text token count"):
+                MODULE.load_conditioning_bundle(manifest_path, verify_pinned_bundle=False)
+
     def test_rank4_probe_backpropagates_only_into_one_lora_projection(self):
         with tempfile.TemporaryDirectory() as directory:
             bundle = MODULE.load_conditioning_bundle(
@@ -317,14 +350,14 @@ class QwenImage21LoraGradProbeSpec(unittest.TestCase):
                     adapter_dtype=torch.float32,
                 )
 
-    def _write_bundle(self, root: Path) -> Path:
+    def _write_bundle(self, root: Path, *, text_tokens: int = 10) -> Path:
         import hashlib
         import numpy as np
 
         tensors = {
-            "encoder_hidden_states": np.zeros((10, 4096), dtype="<f4"),
-            "encoder_hidden_states_mask": np.ones((10,), dtype=np.uint8),
-            "encoder_img_mask": np.zeros((10,), dtype=np.uint8),
+            "encoder_hidden_states": np.zeros((text_tokens, 4096), dtype="<f4"),
+            "encoder_hidden_states_mask": np.ones((text_tokens,), dtype=np.uint8),
+            "encoder_img_mask": np.zeros((text_tokens,), dtype=np.uint8),
             "initial_target_latents": np.linspace(-1, 1, 256 * 64, dtype="<f4").reshape(256, 64),
         }
         payload = bytearray()
