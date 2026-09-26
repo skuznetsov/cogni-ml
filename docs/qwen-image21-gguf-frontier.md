@@ -769,6 +769,48 @@ one-tensor A/B control. The PNGs and manifests currently live under
 processor/Diffusers, GGUF, VAE, or runner changes also invalidate this
 evidence until the experiment is repeated.
 
+### Long Russian scene and Cyrillic sign A/B (2026-09-26)
+
+A longer compositional text-only probe used this exact Russian prompt as test
+data:
+
+> Фотореалистичная сцена ранним утром в маленьком книжном магазине Санкт-Петербурга. Пожилая продавщица в синем фартуке передаёт пакет с апельсинами молодому курьеру в жёлтой куртке, который придерживает стеклянную дверь. Рыжий кот спит на стопке газет перед прилавком; за окном видны трамвайные рельсы и два велосипедиста. Над прилавком деревянная вывеска с единственной чёткой надписью кириллицей: «ЧИТАЛЬНЯ № 7», без других букв. Тёплый янтарный свет внутри контрастирует с холодным синим снегом снаружи; средний план, естественные лица, широкая композиция.
+
+The pinned official processor produced 244 raw tokens and 230 retained text
+rows after the 14-token prefix drop, within the native probe's 256-raw-token
+guard.
+
+The official CPU/BF16 text reference payload SHA-256 was
+`c5487a29449bd7335fd781e02c8372496873ba264749fa1f32a1b8735d5258d6`.
+The native 36-layer Accelerate retained-BF16 sidecar SHA-256 was
+`827a5bcf65abc67589448f883899d429cf0d816acb79ab203f41e9209c95b0ba`;
+its relative RMS error against the official retained embeddings was
+`0.01884813`, not exact parity. The guarded A/B bridge replaced only the
+float32 `encoder_hidden_states`; an independent byte comparison confirmed
+that both masks and all seed-7 initial latents were identical. Official and
+native conditioning payload SHA-256s were respectively
+`007ad14a01440a9f786ae874e78cb4aef3a3729d2768fec1a503363bf66114ab`
+and `5dc709f954210e2283268ce6c7ceace4efd6e6cef58cc74e20f9369891fc9705`.
+
+Both arms completed 512x512, seed-7, Euler-10 Metal DiT runs with model
+revision `790c92633540aa0cb11d9abf19eb46d861714758`, Q4 GGUF SHA-256
+`51998ad7c068ce7d68e233237537900ffe874ab4d5c72e20758f5f18ceb15b8a`,
+and the same CPU/FP32 VAE decode. Their DiT times were 87.615 s
+(official) and 85.924 s (native), sequential single runs that do not
+establish a speed difference. Decoded official/native PNG SHA-256s were
+`9c113cf0da630c7f576eeef47032afaa4873b879404ec6f42ed87594f14c015f`
+and `f96a7fa5cf3627e00e3f6753a5789331040cbbbbe2ebc846b4804a407c5212d0`.
+Visual inspection found nearly the same composition, subjects, doorway,
+books, cat, and warm/cold lighting. The final latent cosine similarity was
+`0.998954`; RGB mean absolute channel difference was `1.60/255`. These are
+descriptive deltas, not quality scores. The sign is broadly recognizable, but
+individual glyphs and `№ 7` are not dependable as exact typography in either
+arm. This supports narrow scene-level native-text compatibility on one long
+prompt, not exact encoder parity,
+typography fidelity, or general prompt/seed quality. The scratch images and
+manifests may disappear; processor, checkpoint, GGUF, VAE, and runner changes
+invalidate the comparison.
+
 ### Portrait resolution and latency probe (2026-09-24)
 
 The daylight prompt above was also run through the unchanged hybrid path on
