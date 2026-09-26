@@ -1580,15 +1580,58 @@ shape/dispatch change on this route. Device throughput drift is a hypothesis,
 not an attribution; replaying a fixed latent/timestep through the same
 cache-hit forward is the cheapest next discriminator.
 
-A next algorithmic falsifier is opt-in variable-step Adams-Bashforth-2 on the
-actual FlowMatch sigma grid, with Euler on the first interval. It still costs
-one DiT evaluation per step; only maintaining image quality with fewer steps
-would accelerate generation. Compare fixed-model/prompt/seed Euler-10 against
-AB2 at fewer evaluations over several scenes, including anatomy and text,
-using full prompt-to-PNG time and blind image-quality review. Reject if a
-lower evaluation count loses scene fidelity, even if latent error shrinks.
-Neither this proposed solver nor ordinary attention tiling is an LTP/WBA
-certificate.
+The next algorithmic falsifier was an opt-in variable-step Adams-Bashforth-2
+solver on the actual FlowMatch sigma grid, with Euler on the first interval.
+It still costs one DiT evaluation per step; only maintaining image quality
+with fewer steps would accelerate generation. Neither this solver nor
+ordinary attention tiling is an LTP/WBA certificate.
+
+### Experimental solver frontier (design-sealed; not quality-promoted)
+
+- **Admitted default:** the official-compatible shifted FlowMatch sigma grid,
+  model timestep, and first-order Euler update remain unchanged.
+- **Guard-only opt-in:** variable-step AB2 may reuse the previous DiT velocity
+  on that same grid, with Euler on the first interval and one model evaluation
+  per interval. It must not silently select itself or change the default
+  trajectory. Its first intended use is a preview-quality experiment.
+- **Rejected claims:** matching Euler latents, preserving portrait identity,
+  reducing latency at a fixed evaluation count, or promoting a universal
+  preview mode from one prompt/seed.
+- **Falsifiers:** nonuniform-step analytic ODE and constant-field unit cases;
+  default Euler byte parity; finite latents and valid schedule bounds; pinned
+  Metal generation and VAE decode at fewer evaluations across distinct
+  scenes/seeds; and paired prompt-to-PNG latency with visual quality review.
+  A numerical error improvement alone cannot promote the mode.
+
+The first pinned 512x512, seed-7 Q4 pilot decoded the following images with
+the same conditioning bundle for each scene. DiT times are isolated single
+runs, not paired end-to-end measurements; the separate Euler-10 portrait run
+from the new binary took 166.099 s versus 85.044-90.909 s in earlier runs,
+so throughput drift is unresolved.
+
+| Scene | Solver and DiT evaluations | DiT time | Observation against Euler-10 |
+| --- | --- | ---: | --- |
+| Portrait | Euler-8 | 101.611 s | Coherent face, but different pose/details. |
+| Portrait | AB2-8 | 100.907 s | Coherent face, visually closer to Euler-10 than Euler-8 in this sample; latent RMSE 0.1685 versus Euler-8's 0.2005. |
+| Portrait | AB2-5 | 58.730 s | Rough scene preview; pose, clothing, and identity still differ materially. Latent RMSE 0.3942 versus Euler-5's 0.4054. |
+| Castle | AB2-8 | 85.216 s | Castle/forest/bridge composition visually close to Euler-10. |
+| City | AB2-8 | 82.118 s | Train/station composition close; sign lettering differs and is not reliable. |
+
+The default Euler-10 latent SHA-256 from the new binary exactly matched the
+pre-change binary (`96487a1fadad8ee3ab4c2e4b8ca29bddecf50263973ff06d53747992c018fb2e`).
+AB2-8 and Euler-8 had similar measured DiT time on the portrait: AB2 does
+not accelerate a fixed evaluation count. Reducing 10 to 8 evaluations saves
+two DiT calls by construction, but no general quality or wall-time claim is
+admitted from these single-seed samples. The 3-step lower bound, blind image
+review, more seeds, and paired prompt-to-PNG timing remain open.
+
+The shelved CogniFusion experiment's adjacent-layer coherence loss and
+adjacent-step consistency loss are **training** regularizers, not inference
+updates for frozen GGUF weights. Its historical logs show backward NaN and
+overflow-skipped updates, but do not establish that either regularizer caused
+the instability. A 3-5-evaluation student would require a separate trainable
+distillation path with explicit finite-gradient guards and a distillation-only
+control; the present AB2 pilot does not test that hypothesis.
 
 ## Not admitted by this slice
 

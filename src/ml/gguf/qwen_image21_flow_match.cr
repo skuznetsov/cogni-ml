@@ -9,6 +9,26 @@ require "./qwen_image21_transformer"
 require "digest/sha256"
 
 module ML::GGUF
+  enum QwenImage21FlowMatchSolver
+    Euler
+    AdamsBashforth2
+
+    def self.parse(name : String) : QwenImage21FlowMatchSolver
+      case name.downcase
+      when "euler"
+        Euler
+      when "ab2"
+        AdamsBashforth2
+      else
+        raise ArgumentError.new("solver must be euler or ab2")
+      end
+    end
+
+    def label : String
+      self == Euler ? "euler" : "ab2"
+    end
+  end
+
   struct QwenImage21FlowMatchConfig
     getter num_train_timesteps : Int32
     getter base_image_seq_len : Int32
@@ -65,6 +85,38 @@ module ML::GGUF
       dt = @sigmas[index + 1] - @sigmas[index]
       Array(Float32).new(sample.size) do |value_index|
         sample[value_index] + dt * model_output[value_index]
+      end
+    end
+
+    # Variable-step Adams-Bashforth 2 using h_i / h_(i-1), where h is the
+    # signed sigma interval. The first denoising step must use Euler because
+    # there is no previous model output.
+    def step_ab2(
+      sample : Array(Float32),
+      model_output : Array(Float32),
+      previous_model_output : Array(Float32),
+      index : Int32,
+    ) : Array(Float32)
+      check_index(index)
+      raise ArgumentError.new("AB2 requires a previous denoising step") if index == 0
+      unless sample.size == model_output.size && sample.size == previous_model_output.size
+        raise ArgumentError.new("sample and model output sizes differ")
+      end
+
+      dt = @sigmas[index + 1] - @sigmas[index]
+      previous_dt = @sigmas[index] - @sigmas[index - 1]
+      unless dt.finite? && previous_dt.finite? && dt != 0.0_f32 && previous_dt != 0.0_f32
+        raise ArgumentError.new("AB2 requires finite nonzero sigma intervals")
+      end
+      ratio = dt / previous_dt
+      raise ArgumentError.new("AB2 step ratio must be finite") unless ratio.finite?
+
+      previous_weight = ratio / 2.0_f32
+      current_weight = 1.0_f32 + previous_weight
+      Array(Float32).new(sample.size) do |value_index|
+        derivative = current_weight * model_output[value_index] -
+                     previous_weight * previous_model_output[value_index]
+        sample[value_index] + dt * derivative
       end
     end
 
@@ -128,9 +180,11 @@ module ML::GGUF
       schedule : QwenImage21FlowMatchSchedule,
       step_observer : Proc(Int32, Float32, Float32, Time::Span, Nil)? = nil,
       step_latent_hash_observer : Proc(Int32, Float32, String, Nil)? = nil,
+      solver : QwenImage21FlowMatchSolver = QwenImage21FlowMatchSolver::Euler,
       &predictor : Array(Float32), Float32, Int32 -> Array(Float32)
     ) : Array(Float32)
       latents = initial_latents.dup
+      previous_model_output : Array(Float32)? = nil
       schedule.step_count.times do |index|
         step_started_at = Time.instant if step_observer
         model_timestep = schedule.model_timestep(index)
@@ -138,7 +192,20 @@ module ML::GGUF
         unless model_output.all?(&.finite?)
           raise ArgumentError.new("transformer produced non-finite output at denoising step #{index}")
         end
-        latents = schedule.step(latents, model_output, index)
+        if solver == QwenImage21FlowMatchSolver::AdamsBashforth2
+          if index > 0
+            latents = schedule.step_ab2(
+              latents, model_output, previous_model_output.not_nil!, index,
+            )
+          else
+            # AB2 has no history on the first step, so start with Euler.
+            latents = schedule.step(latents, model_output, index)
+          end
+          previous_model_output = model_output.dup
+        else
+          # Keep the default Euler path and its operation ordering unchanged.
+          latents = schedule.step(latents, model_output, index)
+        end
         unless latents.all?(&.finite?)
           raise ArgumentError.new("non-finite latents after denoising step #{index}")
         end
@@ -193,6 +260,7 @@ module ML::GGUF
       layer_stack_backend : QwenImage21LayerStackBackend? = nil,
       step_observer : Proc(Int32, Float32, Float32, Time::Span, Nil)? = nil,
       step_latent_hash_observer : Proc(Int32, Float32, String, Nil)? = nil,
+      solver : QwenImage21FlowMatchSolver = QwenImage21FlowMatchSolver::Euler,
     ) : QwenImage21DenoisingResult
       raise ArgumentError.new("img_shapes must contain a target image") if img_shapes.empty?
       unless config.input_dim == config.output_dim
@@ -229,6 +297,7 @@ module ML::GGUF
         initial_target_latents, schedule,
         step_observer: step_observer,
         step_latent_hash_observer: step_latent_hash_observer,
+        solver: solver,
       ) do |target_latents, timestep, _index|
         result = QwenImage21TransformerCPU.forward(
           condition_latents + target_latents,

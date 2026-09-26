@@ -13,6 +13,7 @@ private def write_latent_bundle(
   conditioning : ML::GGUF::QwenImage21ConditioningBundle,
   latents : Array(Float32),
   steps : Int32,
+  solver : ML::GGUF::QwenImage21FlowMatchSolver,
   gguf_path : String,
 ) : Nil
   expected = conditioning.latent_height * conditioning.latent_width * 64
@@ -48,6 +49,7 @@ private def write_latent_bundle(
       json.field "seed", conditioning.seed
       json.field "prompt", conditioning.prompt
       json.field "denoising_steps", steps
+      json.field "flow_match_solver", solver.label
       json.field "dit_gguf", File.expand_path(gguf_path)
     end
   end
@@ -60,6 +62,11 @@ conditioning_path = ARGV[1]? || abort "missing CONDITIONING.json"
 output_dir = ARGV[2]? || abort "missing OUTPUT_DIR"
 steps = ARGV[3]?.try(&.to_i) || 40
 abort "steps must be in 2..100" unless steps >= 2 && steps <= 100
+solver = begin
+  ML::GGUF::QwenImage21FlowMatchSolver.parse(ENV["QWEN_IMAGE21_SOLVER"]? || "euler")
+rescue error : ArgumentError
+  abort "invalid QWEN_IMAGE21_SOLVER: #{error.message}"
+end
 abort "GGUF file not found: #{gguf_path}" unless File.file?(gguf_path)
 abort "Metal backend unavailable" unless ML::GGUF::QwenImage21MetalProjectionBackend.available?
 
@@ -79,7 +86,7 @@ stack = ML::GGUF::QwenImage21MetalLayerStackBackend.new
 loaded_at = Time.instant
 begin
   config = model.transformer_config
-  puts "denoising prompt=#{conditioning.prompt.inspect} image=#{conditioning.image_width}x#{conditioning.image_height} seed=#{conditioning.seed} steps=#{steps}"
+  puts "denoising prompt=#{conditioning.prompt.inspect} image=#{conditioning.image_width}x#{conditioning.image_height} seed=#{conditioning.seed} steps=#{steps} solver=#{solver.label}"
   previous_cache_builds = 0
   previous_cache_hits = 0
   step_latent_hash_observer = if step_hashes
@@ -146,10 +153,11 @@ begin
     layer_stack_backend: stack,
     step_observer: step_observer,
     step_latent_hash_observer: step_latent_hash_observer,
+    solver: solver,
   )
   denoised_at = Time.instant
   raise "wrong number of transformer evaluations" unless result.transformer_evaluations == steps
-  write_latent_bundle(output_dir, conditioning, result.latents, steps, gguf_path)
+  write_latent_bundle(output_dir, conditioning, result.latents, steps, solver, gguf_path)
   if timing || step_timing
     written_at = Time.instant
     puts "timing model_load_ms=#{(loaded_at - load_started).total_milliseconds.round(3)} " \

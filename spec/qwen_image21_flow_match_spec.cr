@@ -82,6 +82,98 @@ describe ML::GGUF::QwenImage21FlowMatch do
     end
   end
 
+  it "keeps the default solver identical to explicitly selected Euler" do
+    schedule = ML::GGUF::QwenImage21FlowMatch.schedule(4, 256)
+    initial = [0.25_f32, -0.5_f32, 1.25_f32]
+    predictor = ->(latents : Array(Float32), _timestep : Float32, _index : Int32) {
+      latents.map { |value| value * 0.25_f32 }
+    }
+    default_result = ML::GGUF::QwenImage21FlowMatch.denoise(initial, schedule) do |latents, timestep, index|
+      predictor.call(latents, timestep, index)
+    end
+    explicit_euler_result = ML::GGUF::QwenImage21FlowMatch.denoise(
+      initial, schedule,
+      solver: ML::GGUF::QwenImage21FlowMatchSolver::Euler,
+    ) do |latents, timestep, index|
+      predictor.call(latents, timestep, index)
+    end
+
+    default_result.should eq(explicit_euler_result)
+  end
+
+  it "uses nonuniform Adams-Bashforth 2 steps to improve the analytic exponential ODE" do
+    schedule = ML::GGUF::QwenImage21FlowMatch.schedule(5, 256)
+    first_interval = schedule.sigmas[1] - schedule.sigmas[0]
+    second_interval = schedule.sigmas[2] - schedule.sigmas[1]
+    first_interval.should_not eq(second_interval)
+
+    euler = ML::GGUF::QwenImage21FlowMatch.denoise([1.0_f32], schedule) do |latents, _timestep, _index|
+      latents
+    end
+    ab2 = ML::GGUF::QwenImage21FlowMatch.denoise(
+      [1.0_f32], schedule,
+      solver: ML::GGUF::QwenImage21FlowMatchSolver::AdamsBashforth2,
+    ) do |latents, _timestep, _index|
+      latents
+    end
+
+    exact = Math.exp(-1.0).to_f32
+    (ab2[0] - exact).abs.should be < (euler[0] - exact).abs
+  end
+
+  it "integrates a constant field exactly under variable-step Adams-Bashforth 2" do
+    schedule = ML::GGUF::QwenImage21FlowMatch.schedule(5, 256)
+    initial = [0.25_f32, -0.5_f32, 1.25_f32]
+    field = [2.0_f32, -3.0_f32, 0.5_f32]
+
+    result = ML::GGUF::QwenImage21FlowMatch.denoise(
+      initial, schedule,
+      solver: ML::GGUF::QwenImage21FlowMatchSolver::AdamsBashforth2,
+    ) do |_latents, _timestep, _index|
+      field
+    end
+
+    total_interval = schedule.sigmas.last - schedule.sigmas.first
+    result.zip(initial.zip(field).map { |value, derivative| value + total_interval * derivative }).each do |actual, expected|
+      actual.should be_close(expected, 2e-6_f32)
+    end
+  end
+
+  it "uses each nonuniform h_i / h_(i-1) ratio in Adams-Bashforth 2" do
+    schedule = ML::GGUF::QwenImage21FlowMatchSchedule.new(
+      [1.0_f32, 0.8_f32, 0.3_f32, 0.0_f32],
+      [1000.0_f32, 800.0_f32, 300.0_f32],
+      0.5_f32,
+    )
+    result = ML::GGUF::QwenImage21FlowMatch.denoise(
+      [1.0_f32], schedule,
+      solver: ML::GGUF::QwenImage21FlowMatchSolver::AdamsBashforth2,
+    ) do |latents, _timestep, _index|
+      latents
+    end
+
+    # Euler startup gives y_1=0.8. The next step has h_1/h_0=2.5,
+    # then h_2/h_1=0.6, yielding y_3=0.39225.
+    result[0].should be_close(0.39225_f32, 1e-7_f32)
+  end
+
+  it "rejects a zero previous sigma interval in Adams-Bashforth 2" do
+    schedule = ML::GGUF::QwenImage21FlowMatchSchedule.new(
+      [1.0_f32, 1.0_f32, 0.5_f32],
+      [1000.0_f32, 1000.0_f32],
+      0.5_f32,
+    )
+    expect_raises(ArgumentError, "AB2 requires finite nonzero sigma intervals") do
+      schedule.step_ab2([1.0_f32], [1.0_f32], [1.0_f32], 1)
+    end
+  end
+
+  it "rejects unsupported solver names used by the opt-in environment setting" do
+    expect_raises(ArgumentError, "solver must be euler or ab2") do
+      ML::GGUF::QwenImage21FlowMatchSolver.parse("rk4")
+    end
+  end
+
   it "reports opt-in per-step elapsed time without changing the trajectory" do
     schedule = ML::GGUF::QwenImage21FlowMatch.schedule(2, 256)
     predictor = ->(latents : Array(Float32), timestep : Float32, index : Int32) {
@@ -157,6 +249,31 @@ describe ML::GGUF::QwenImage21FlowMatch do
     expect_raises(ArgumentError, "transformer produced non-finite output at denoising step 0") do
       ML::GGUF::QwenImage21FlowMatch.denoise([0.0_f32], schedule) do |_latents, _timestep, _index|
         [Float32::NAN]
+      end
+    end
+
+    expect_raises(ArgumentError, "transformer produced non-finite output at denoising step 0") do
+      ML::GGUF::QwenImage21FlowMatch.denoise(
+        [0.0_f32], schedule,
+        solver: ML::GGUF::QwenImage21FlowMatchSolver::AdamsBashforth2,
+      ) do |_latents, _timestep, _index|
+        [Float32::NAN]
+      end
+    end
+  end
+
+  it "fails when an Adams-Bashforth update produces non-finite latents" do
+    schedule = ML::GGUF::QwenImage21FlowMatchSchedule.new(
+      [1.0_f32, 0.5_f32, 0.0_f32],
+      [1000.0_f32, 500.0_f32],
+      0.5_f32,
+    )
+    expect_raises(ArgumentError, "non-finite latents after denoising step 1") do
+      ML::GGUF::QwenImage21FlowMatch.denoise(
+        [Float32::MAX], schedule,
+        solver: ML::GGUF::QwenImage21FlowMatchSolver::AdamsBashforth2,
+      ) do |_latents, _timestep, index|
+        [index == 0 ? Float32::MAX : 3.0e38_f32]
       end
     end
   end
