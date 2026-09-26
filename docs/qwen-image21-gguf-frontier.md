@@ -1823,6 +1823,49 @@ control; the present AB2 pilot does not test that hypothesis.
   created by the verified snapshot loader; callers must not modify its weights
   between verification and injection.
 
+### Decoded-image control for the two-step LoRA checkpoint
+
+- **Method and scope (2026-09-26):**
+  `scripts/qwen_image21_lora_visual_compare.py` ran the pinned BF16/MPS
+  reference transformer on the saved red-cube and held-out elven-castle
+  256x256 conditioning bundles (seed 7). For each prompt it compared (1) four
+  frozen-base Euler evaluations, (2) three evaluations with the seeded zero-B
+  rank-4 adapter on only the first coarse `sigma[0] -> sigma[2]` interval and
+  the base model on the last two intervals, and (3) the same hybrid route with
+  the saved two-optimizer-step adapter. The adapter was disabled for both tail
+  evaluations. All arms shared the same bundle, initial noise, schedule,
+  explicit FP32 Euler recurrence, and one pinned CPU/FP32 VAE decode path.
+  This is a matched custom evaluator, not bitwise parity with the standard
+  Diffusers pipeline or native GGUF inference. The seeded first-interval
+  enabled/disabled velocity and endpoint differences were exactly zero for
+  both prompts.
+- **Observed distances from the four-step base:** final-latent RMSE changed
+  from `0.320405` (seeded hybrid) to `0.319890` (trained hybrid) for red cube,
+  and from `0.325135` to `0.324810` for castle. RGBA MAE on the raw 0-255
+  channel scale changed from `18.1143` to `18.1667` for red cube (worse), and
+  from `9.0860` to `9.0849` for castle (effectively unchanged). Trained versus
+  seeded hybrid RGBA MAE was `0.2503` and `0.3080`, respectively. These are
+  descriptive distances, not perceptual quality scores.
+- **Visual verdict:** the four-step red-cube image has distinct cube forms,
+  while both three-step variants are mostly a diffuse red blob. The four-step
+  castle has a discernible castle-like central structure; both three-step
+  variants are darker, repetitive vertical forms with little recognizable
+  castle structure. The trained and seeded variants look nearly identical at
+  this resolution. Thus the small teacher-endpoint MSE reduction did **not**
+  yield a useful three-step preview in these examples. The relevant next
+  research move is a materially stronger distillation objective, broader
+  adapter capacity/placement, or a separate short-step model—not presenting
+  this checkpoint as a quality-preserving speedup.
+- **Evidence and decay:** six decoded PNGs plus a content-hashed manifest were
+  written outside the repository to
+  `/private/tmp/qwen21-lora-visual-compare-20260926`; manifest SHA256
+  `b012d2ac3d34277fdf70908862526072f63a390b90e4d5f5a41ff18aee2e0bd5`.
+  The manifest records every input/source/image hash and the exact route.
+  The focused LoRA Python suite passed 64 tests. This one-seed, two-prompt
+  observation does not establish a general quality ranking or measured
+  latency gain; refresh it after model, conditioning, checkpoint, schedule,
+  decoder, or evaluator changes.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder
