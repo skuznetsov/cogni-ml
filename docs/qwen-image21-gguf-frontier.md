@@ -1633,6 +1633,90 @@ the instability. A 3-5-evaluation student would require a separate trainable
 distillation path with explicit finite-gradient guards and a distillation-only
 control; the present AB2 pilot does not test that hypothesis.
 
+### Coarse-step student frontier (gradient feasibility only)
+
+- **Admitted experiment:** load the official Qwen-Image 2.1 DiT from the pinned
+  `790c92633540aa0cb11d9abf19eb46d861714758` transformer snapshot outside
+  the repository. Freeze the base transformer and attach a small, explicitly
+  enumerated LoRA adapter. Reuse a pinned, checksummed text-conditioning bundle
+  and the model's own latent geometry; do not reload or train Qwen3-VL or VAE.
+  The first real-weight probe uses two frozen teacher forwards and one LoRA
+  student forward/backward at batch one and 256x256 resolution, with **zero
+  optimizer steps** and no weight artifact.
+  Source preflight on 2026-09-25 matched both shard SHA-256 values in the
+  snapshot metadata (`9e6bc2d641e67bf277895ea8777141044a38f3edb7101bc469b2961dd7c36b4b`,
+  `3aaf234dcbe128530479735854a346b5e3e66283b7c11db56f836bbd1c13ebaa`);
+  all 297 indexed tensors were present and BF16. Recheck after replacing the
+  local snapshot.
+- **Gradient gate:** fail closed unless the loss, outputs, and every trainable
+  gradient are finite; at least one LoRA gradient must be nonzero; no base
+  parameter may receive a gradient. Record model revision, source and bundle
+  hashes, device/dtype, shapes, preflight memory budget, observed post-backward
+  device allocation, and the exact loss tested. A
+  tiny randomly initialized model test checks wiring, not real-weight
+  feasibility or image quality.
+- **Pinned numerical semantics:** the 4-step FlowMatch fixture supplies nested
+  nodes for the two-substep teacher and one coarse student step. The official
+  BF16 pipeline casts the raw scheduler timestep to the latent dtype *before*
+  dividing by 1000; reversing that order changes the second teacher time
+  embedding (`0.7421875` versus `0.74609375` at raw `744.611389...`). The
+  probe and its regression test preserve the pipeline order. Endpoint loss is
+  computed in FP32 for the gradient check, not presented as byte-for-byte
+  pipeline output. LoRA initialization uses a fixed, reported seed `20260925`
+  while restoring the caller's RNG state; the seed does not make MPS execution
+  globally deterministic.
+- **Current observation (2026-09-25):** eleven focused wiring/guard tests
+  passed, including an actual Diffusers adapter-injection path with a tiny
+  model. The first MPS attempt stopped at the host-memory preflight (65%
+  pressure-free memory). After host memory was freed, a full attempt completed
+  the frozen teacher forwards but stopped before LoRA injection: the shared
+  Python environment exposed PEFT 0.15.1, below the pinned Diffusers adapter
+  API's 0.17.0 minimum. An isolated, SHA-256-verified PEFT 0.21.0 wheel overlay
+  then allowed the same pinned real-weight probe to complete on MPS with BF16
+  base weights and FP32 LoRA weights. With fixed adapter seed `20260925`, two
+  consecutive full MPS probes returned the same endpoint MSE
+  (`0.02703850343823433`) and finite, nonzero LoRA gradient norm
+  (`0.0012787174136338632`). Both selected LoRA parameters had finite
+  gradient tensors, and no frozen base parameter received one. Post-backward
+  MPS allocation was 14.25 GB (current) and 15.11 GB (driver); these are
+  observations after the probe, **not measured peak memory**.
+  No optimizer step or weight write occurred. This establishes one real-weight
+  gradient-plumbing/stability point, not multi-step training stability or image
+  quality. Reproduction requires compatible PEFT on `PYTHONPATH` (or in the
+  environment) and the guarded command `python
+  scripts/qwen_image21_lora_grad_probe.py --model-dir
+  <pinned-transformer-dir> --conditioning <pinned-conditioning-manifest>
+  --device mps --dtype bfloat16 --mps-memory-fraction 0.70`; the input paths
+  may move, but their pinned contents must not change.
+- **Native cogni-ml training boundary:** the generic F32 autograd/Adam stack is
+  not yet wired to the Qwen-Image quantized/Metal forward path. Its generic
+  matmul backward copies to CPU, the Qwen-Image kernels are forward-only, and
+  the current transformer API does not expose an intermediate activation and
+  modulation/layout bundle for a trainable suffix. Because the adapter is in
+  block 31, blocks 0–30 can mathematically remain detached; the smallest
+  hybrid candidate is a native frozen prefix plus a PyTorch-autograd final
+  block/output head. This requires an explicit activation boundary, matching
+  weight/numerical semantics, and gradient/update parity before replacing the
+  working full-PyTorch probe. Porting the last-block VJP to Metal is a later,
+  separately measured step, not a prerequisite for the first distillation
+  control.
+- **Next admitted comparison, only after that gate:** train a distillation-only
+  control against a frozen teacher's integrated endpoint over a *coarse sigma
+  interval*. Compare the student update with the teacher endpoint on the exact
+  shifted FlowMatch grid; an instantaneous velocity at a different sigma is
+  not an endpoint target. Add horizontal adjacent-step or vertical
+  adjacent-layer losses one at a time only after a stable baseline, each with
+  independent gradient and held-out image checks.
+- **Rejected promotion:** an untested 3-5-step quality claim, conversion of the
+  training loss into a frozen-GGUF inference heuristic, or calling a lower
+  training loss an image-quality improvement. Any learned adapter remains
+  experimental and opt-in; the current Euler/AB2 inference paths are unchanged.
+- **Falsifiers and rollback:** reject the route on nonfinite/zero LoRA gradients,
+  base-gradient leakage, unsupported training operators, memory pressure beyond
+  the host guard, or a worse held-out quality/latency tradeoff than equal-cost
+  controls. Stop before an optimizer step if the gradient gate fails. Reverting
+  the opt-in training script leaves inference and model files untouched.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder
