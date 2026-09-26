@@ -1680,8 +1680,35 @@ pre-change binary (`96487a1fadad8ee3ab4c2e4b8ca29bddecf50263973ff06d53747992c018
 AB2-8 and Euler-8 had similar measured DiT time on the portrait: AB2 does
 not accelerate a fixed evaluation count. Reducing 10 to 8 evaluations saves
 two DiT calls by construction, but no general quality or wall-time claim is
-admitted from these single-seed samples. The 3-step lower bound, blind image
-review, more seeds, and paired prompt-to-PNG timing remain open.
+admitted from these single-seed samples.
+
+A subsequent paired two-seed portrait probe (2026-09-26) used the same pinned
+Q4 GGUF, 512x512 official CPU/BF16 conditioning, Metal DiT, and CPU/FP32 VAE
+for Euler-10, AB2-8, and Euler-8. Each seed's three arms consumed the same
+conditioning bundle; seed 7 payload SHA-256 was
+`9fca4e6ebc57d573b28612def1482a4931e4108e05ccb345479ed6f900c4bc58`
+and seed 11 was
+`8f78b243a902b5565175ef0b5313aadf9e6b2a9681188c2fa92badb61c259a2a`.
+These are single-run times, not a latency distribution:
+
+| Seed | Euler-10 DiT / bundle-to-PNG | AB2-8 DiT / bundle-to-PNG | Euler-8 DiT / bundle-to-PNG |
+| ---: | ---: | ---: | ---: |
+| 7 | 68.890 / 84.84 s | 55.020 / 67.85 s | 55.111 / 67.29 s |
+| 11 | 70.949 / 84.99 s | 55.525 / 68.37 s | 55.292 / 67.59 s |
+
+The seed-11 conditioner was timed separately at 22.69 s and shared by the
+three arms; seed 7 reused an existing bundle. Thus the table does not claim
+independently measured package-level prompt-to-PNG throughput. AB2-8 saved
+two DiT evaluations and about 20-22% of denoising time against Euler-10 in
+these two runs, but was within 0.23 s of Euler-8 at the same call count.
+All six decoded PNGs are coherent portraits; expressions and facial details
+differ, and neither seed gives AB2 a clear visual win over Euler-8. The two
+sigma grids are different trajectories, so this is scene preview evidence,
+not portrait-identity preservation. Artifacts are under
+`/private/tmp/qwen21-ab-paired-20260926-r1/` and
+`/private/tmp/qwen21-ab-seed11-20260926-r1/`; they may disappear. The
+3-step lower bound, blind quality review, broader prompts/seeds, and paired
+full-package end-to-end timing remain open before any preview-mode promotion.
 
 The shelved CogniFusion experiment's adjacent-layer coherence loss and
 adjacent-step consistency loss are **training** regularizers, not inference
