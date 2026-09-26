@@ -1717,6 +1717,61 @@ control; the present AB2 pilot does not test that hypothesis.
   controls. Stop before an optimizer step if the gradient gate fails. Reverting
   the opt-in training script leaves inference and model files untouched.
 
+### Distillation-only optimizer control (bounded real-weight slice)
+
+- **Admitted surface:** on the same pinned 256x256 bundle and official BF16 DiT,
+  calculate the frozen two-substep teacher endpoint once. Optimize only the
+  rank-4 FP32 LoRA on the last block's attention Q projection so one coarse
+  student update approaches that fixed endpoint. Bound the first control to
+  1-8 optimizer steps with explicit learning rate and gradient clipping. Log
+  pre-clipping gradient norm, post-step loss, adapter finiteness, and memory.
+- **Stop rule:** no optimizer step when loss or a selected gradient is missing,
+  zero in aggregate, or nonfinite; when a base parameter has a gradient; or
+  when the host/GPU memory preflight fails. After a step, roll back the current
+  adapter update if its weights or freshly evaluated endpoint loss are
+  nonfinite. The adapter, not the base transformer, is the optimizer's
+  parameter set; an independent trainer check requires the exact final-block
+  LoRA A/B names and every other parameter frozen before constructing AdamW.
+  Keep the existing inference path untouched.
+- **Falsifiers:** tiny-model tests must show a fixed teacher target, parameter
+  isolation, a loss-reducing control case, and a deliberately broken gradient
+  that prevents the step. The real-weight run must show finite per-step state;
+  improvement on this one pinned sample is a training-plumbing signal only.
+- **Observed control (2026-09-25):** the new
+  `scripts/qwen_image21_lora_distill_control.py` passed 10 focused tests (21
+  together with the existing gradient-probe tests). On the pinned `red cube`
+  256x256 bundle, two independent MPS BF16 runs with the same LoRA seed,
+  AdamW learning rate `0.001`, zero weight decay, and two optimizer steps
+  returned identical FP32 `no_grad` evaluation losses:
+  `0.027024995535612106` before training and `0.026850158348679543` after
+  step two (final minus initial `-0.00017483718693256378`, about `-0.65%`).
+  Both updates had finite adapter weights and nonzero finite gradients; no
+  frozen base parameter received a gradient. Post-step MPS allocation was
+  about 14.25 GB current and 15.11 GB driver, not a measured peak. The
+  gradient-enabled loss immediately before a step is **not** interchangeable
+  with the `no_grad` evaluation loss at the same weights on this MPS run:
+  after step one they differed by about `1.3e-5`. The shared `no_grad`
+  evaluator supplies the comparable initial/final observation. The control
+  wrote no adapter checkpoint, changed no native/GGUF inference code, and
+  demonstrates only local endpoint-loss reduction on one prompt and one
+  coarse sigma interval. The evidence decays if the pinned model, bundle,
+  schedule, runtime kernels, or evaluation context changes. Reproduce the
+  bounded run with a compatible PEFT overlay using
+  `python scripts/qwen_image21_lora_distill_control.py --model-dir
+  <pinned-transformer-dir> --conditioning <pinned-conditioning-manifest>
+  --device mps --dtype bfloat16 --mps-memory-fraction 0.70 --steps 2
+  --learning-rate 0.001 --grad-clip-norm 1.0`.
+- **Rejected/guard-only:** no claim about 3-5-step image quality, other prompts,
+  stability over a long run, native Metal backward, or trained-adapter parity
+  with quantized GGUF inference. No adapter checkpoint or runtime integration
+  is admitted in this first optimizer slice; those require a separate format,
+  source-revision, and parity gate after training is stable. The local artifact
+  inventory on 2026-09-25 had no distinct-prompt 256x256 conditioning bundle;
+  the available 256x256 copies are all the red-cube prompt. Re-inventory or
+  create a separately pinned bundle before any held-out-prompt claim. Existing
+  512x512 prompts cannot be substituted directly: this pilot's pinned 4-step
+  FlowMatch fixture is for image sequence length 256, not 1024.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder
