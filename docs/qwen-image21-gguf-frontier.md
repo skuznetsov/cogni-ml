@@ -99,6 +99,64 @@ fixture remains outside the repository; no weights or generated tensors are
 committed. This establishes a parity target, not a native Qwen3-VL inference
 implementation.
 
+## In-process multi-seed conditioning frontier (2026-09-26)
+
+Status: **implemented and parity-checked for two seeds; not a general
+speed or image-quality promotion**. The current text-to-image
+conditioner loads the official CPU Qwen3-VL pipeline and encodes the same
+prompt on every separate invocation, even when only the seed changes. The
+pinned pipeline encodes `prompt, image=None, device` before it prepares latents
+from image dimensions and a seeded CPU generator. Existing 768px and 1024px
+bundles for the same prompt have byte-identical text embeddings and masks;
+their latent shapes differ. This supports a narrow in-process reuse probe,
+not a persistent cache or an end-to-end speed claim.
+
+- **Admitted default:** the existing single-request CLI, payload schema v1,
+  seeded initial-noise semantics, and package `generate` path remain unchanged.
+- **Guard-only opt-in:** one text-to-image prompt and one image size may request
+  several distinct seeds in one conditioner process. Load the official pipeline
+  and encode the prompt once; create a fresh CPU generator and standard v1
+  bundle for each seed in a new `seed-<n>` subdirectory. Validate all seeds and
+  output collisions before loading weights. Batch bundle files use exclusive
+  leaf creation and best-effort rollback of owned files on failure; this is
+  not a security boundary against a hostile same-UID process with access to
+  output paths.
+- **Rejected in this slice:** disk-persistent embedding cache, image-edit
+  conditioning reuse, mixed prompts or image sizes, multi-output package
+  publication, and any claim that AB2 or batch conditioning reduces DiT work.
+- **Falsifiers:** duplicate/invalid seeds and pre-existing outputs must fail
+  before model load without clobbering data; a counting test must see one model
+  load, one encode, and one independent `prepare_latents` call per seed; each
+  bundle must retain the v1 shape, seed, and checksums. Refresh real pinned
+  batch-versus-single byte parity when the model or runtime changes. Measure
+  full conditioning time per image before claiming a wall-time win.
+
+Rollback is the existing single-request conditioner. This evidence decays if
+the official prompt encoder, latent-preparation semantics, model revision, or
+processor/runtime changes. Prompt-embedding equality is not image-quality
+evidence, and text reuse cannot stabilize portraits across different sigma
+grids.
+
+The opt-in `--seeds 7 11` path passed 11 batch-specific CPU tests plus the
+unchanged conditioner, conditioning A/B, and package tests (49 Python tests
+total) in the pinned environment. With model revision
+`790c92633540aa0cb11d9abf19eb46d861714758`, Diffusers commit
+`8b3c707ebd3ec4881f4190cf42931da07eaf3b65`, and CPU/BF16 Qwen3-VL,
+the 512px portrait batch wrote both bundles in 21.23 s
+on its first run and 13.43 s on a subsequent warm run. A single seed-7 run
+between them took 14.19 s; the separately prepared seed-11 input took
+22.69 s. Both batch seeds' manifests and payloads were byte-identical to
+their single-request counterparts (payload SHA-256s
+`9fca4e6ebc57d573b28612def1482a4931e4108e05ccb345479ed6f900c4bc58`
+and `8f78b243a902b5565175ef0b5313aadf9e6b2a9681188c2fa92badb61c259a2a`).
+After adding exclusive leaf-file creation, a repeat batch run took 23.43 s
+and both seeds' manifest and payload bytes still matched their earlier
+single-request outputs. This is a small sequential observation
+with cache/host-order effects, not a throughput distribution. It shows the
+conditioning process can amortize model load and prompt encoding across
+seeds without changing those two outputs; it does not accelerate a DiT call,
+VAE decode, or the current single-output package `generate` command.
+
 ## Native text-only Qwen3-VL frontier (2026-09-23)
 
 Status: **native encoder not admitted**. The pinned CPU BF16 bundle above is
