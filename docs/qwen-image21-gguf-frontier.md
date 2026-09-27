@@ -811,6 +811,49 @@ typography fidelity, or general prompt/seed quality. The scratch images and
 manifests may disappear; processor, checkpoint, GGUF, VAE, and runner changes
 invalidate the comparison.
 
+Project-owner inspection of enlarged 10-step crops found a narrower exception:
+the native rendering's adjacent `ЬН` avoids an extra glyph-like stroke visible
+in the official rendering. Other letters remain imperfect, and the supplied
+bookseller face crop shows small defects. This local observation does not make
+the whole sign or face more reliable across seeds.
+
+The same two conditioning bundles were then reused for independent 512x512,
+seed-7, Euler-20 and Euler-40 Metal DiT runs, all decoded with the same local
+CPU/FP32 VAE. The 20- and 40-step sigma schedules differ; these are not
+checkpoints along one trajectory. The runner SHA-256 was
+`7a39e4c304ac0697c44dbbb7f361c57c1b638aa14144ca5ad430c598cb27c7b7`;
+the VAE weights SHA-256 was
+`a07a1b7c4ee2966a1b3bdc37de9b4f983d56937e46619f709a80b6e490675417`.
+The Q4-labeled GGUF and conditioning hashes are pinned above. Both masks and
+the initial target latents remained byte-identical across the arms; only
+`encoder_hidden_states` differed. The final four runner executions and four
+CPU VAE decodes exited successfully after an initial sandboxed Metal attempt
+and a system-Python decode attempt failed before producing outputs:
+
+| Steps | Text conditioning | Metal DiT denoise | CPU VAE decode | PNG SHA-256 |
+| --- | --- | ---: | ---: | --- |
+| 20 | Official Qwen3VL (precomputed) | 328.289 s | 21.31 s | `bfb47bcf29deb82418c9508a4e7a28e195336d101176fe223f2763ddd4fa5b2a` |
+| 20 | Native Qwen3VL (precomputed) | 368.979 s | 17.97 s | `08404cf8df78672895433beb8abe3de7527fc546b5fb09f8a309481aa9ad5d64` |
+| 40 | Official Qwen3VL (precomputed) | 637.755 s | 17.62 s | `d87d5933dd0e32584ea5e3ec2d704277438fb0ea6cea6c2acab80496fab85d66` |
+| 40 | Native Qwen3VL (precomputed) | 788.051 s | 18.42 s | `24c8b67228544368c5a4e16575832fee54ccc6da868a6fe29f5052ebace4f5cd` |
+
+Within each step-count pair, the composition is very close and both signs
+look approximately like `ЧИТАЛЬНЯ № 7`; inspection at the full 512px scale
+found no defensible `ЬН` or bookseller-face winner. In this seed the 40-step
+scene has a larger sign that appears more legible, but also a substantially
+different arrangement of the people than the 20-step scene. It cannot be
+described as a simple cleanup of the 20-step image. The owner's 10-step
+face-crop concern is not disproven by the small faces in these full-frame
+comparisons. These are single-seed visual observations, not a general
+typography or portrait-quality result. The timing rows are sequential single
+runs with precomputed conditioning, not a speed
+comparison of the two encoders. There were no same-arm repeat runs or GPU
+clock/thermal measurements, so the unequal DiT times cannot be attributed to
+the embedding source either. Exact per-arm commands, environment, and
+ephemeral PNGs live under
+`/private/tmp/qwen21-russian-steps-ab-20260926-r1`; refresh the comparison
+after processor, checkpoint, GGUF, VAE, runner, or Metal-route changes.
+
 ### Portrait resolution and latency probe (2026-09-24)
 
 The daylight prompt above was also run through the unchanged hybrid path on
