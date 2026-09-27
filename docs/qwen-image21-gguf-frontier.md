@@ -907,6 +907,23 @@ final latent norms were 280.286/279.935; their ratio stayed within about 0.13%
 of one across the trajectory. That argues against a gross amplitude
 explosion, not against an off-manifold displacement.
 
+The absolute cross-arm distance grows from `0.05153` after step 0 to `31.295`
+after step 39 (607-fold), but the final difference is nearly orthogonal to
+the initial difference (cosine `0.0169`). It is therefore not a scalar
+amplification of the first-step error. Each of the 39 subsequent cross-arm
+Euler-update differences has a positive dot product with the preceding
+cross-arm difference (median cosine `0.888`), but these saved trajectories
+cannot separate propagation of an existing state difference from a new
+conditioning effect on every step. At the final step, the top 10% of latent
+tokens account for 70.7% of squared cross-arm error (effective support
+about 101 of 1,024 tokens). A post-hoc selected `4x4`-token hotspot at
+rows 20:24, columns 4:8 accounts for 27.2% of final squared error (39.1%
+at step 15); this is latent-space concentration, not a pixel-accurate face
+or sign map. A causal next probe would evaluate the same DiT at saved
+timesteps with all four crossed pairs
+`(official/native latent) x (official/native conditioning)`, holding the
+other argument fixed in each contrast.
+
 A separate CPU/float32 VAE probe re-decoded both saved endpoints to exactly
 their existing PNG pixels. Decoding latent interpolants at alpha 0, 0.25,
 0.5, 0.75, and 1 changed the selected face smoothly, without an observed
@@ -921,18 +938,73 @@ Qwen3VL `hidden_state_000` for all 244 raw tokens (0/999,424 BF16
 mismatches). A one-block native Accelerate sweep starting from that official
 input differed from official `hidden_state_001` in 315,527/999,424 BF16
 values, with relative RMS 0.2000%; all 244 rows had mismatches. Thus the
-first **observed** text-path difference is within transformer block 0,
-before the first image-latent step. This endpoint test does not identify the
-first divergent operation. An earlier red-cube per-op trace suggests
-`input_layernorm` as the next falsifier, but it used another prompt and
-backend; a matching Russian per-op official trace is still needed.
+text-path difference is present before the first image-latent step.
 
-The causal claim is deliberately narrow: different Qwen3VL outputs produce
-a small step-0 latent difference that accumulates under the same native
-Q4-labeled mixed-quant GGUF/Metal DiT. This experiment does **not** compare
-that DiT to the official BF16 DiT, prove a DiT implementation bug, or prove
-the native latent is outside the VAE's training distribution. The local
-text-encoder shards also lack independent content attestation in this probe.
+### Matched Russian layer-0 operation trace (2026-09-27)
+
+A subsequent 244-token, CPU/BF16 per-operation comparison used the same
+Russian reference payload SHA-256
+`c5487a29449bd7335fd781e02c8372496873ba264749fa1f32a1b8735d5258d6`
+and local text checkpoint on both sides. The native side used the Accelerate
+projection backend; the official side used PyTorch 2.6.0, Transformers
+5.17.0, and SDPA attention. The official trace was gated against the pinned
+`hidden_state_000` and `hidden_state_001` at 0/999,424 BF16 mismatches at
+each endpoint. The native trace started with the same input exactly and
+reproduced the one-block endpoint above. All 16 stage sidecars were checked
+for shape, byte count, and SHA-256 before comparison.
+
+| Layer-0 boundary | Official/native BF16 mismatches | Relative RMS difference |
+| --- | ---: | ---: |
+| Input token embeddings | 0/999,424 | 0 |
+| `input_layernorm` | 321/999,424 | 0.0119% |
+| `q_proj` | 7,586/999,424 | 0.0201% |
+| Attention output | 57,848/999,424 | 0.0618% |
+| Block output | 315,527/999,424 | 0.2000% |
+
+The first divergent operation is `layers.0.input_layernorm`. Its 321 small
+BF16 differences occur in 12 of the 244 raw rows, all among the 230 rows
+retained for image conditioning; maximum absolute error
+is `0.000244140625`. An equal-input replay loaded the same exact BF16 input,
+the checkpoint's BF16 norm weight, and `eps=1e-6`: the native serial-F32
+reduction and BF16 rounding reproduced the native sidecar exactly, while the
+official PyTorch module reproduced the official sidecar exactly. PyTorch's
+mean-square and the serial-F32 mean-square had different F32 bits on all 244
+rows (largest absolute difference `4.13e-9`). Substituting PyTorch's
+mean-square into the native-style normalization and rounding removed all
+321 output mismatches. This identifies reduction order as the first local
+arithmetic cause on this fixture; the native per-row variance was reproduced
+from source, not captured directly from the running Crystal process.
+
+It is **not** the only arithmetic difference: on the 232 rows where the
+normalized inputs still match exactly, `q_proj`, `k_proj`, and `v_proj`
+already differ by 284, 85, and 73 BF16 values respectively. Those cannot
+be downstream of this layer's RMSNorm mismatch. An equal-input PyTorch
+`nn.Linear` replay with the exact checkpoint BF16 Q/K/V weights reproduced
+all three official projection sidecars exactly on all 244 rows; the
+284/85/73 native differences remained on the 232 input-exact rows.
+Spot-checking three rows and four channels per projection with row-major
+scalar F32 dots reproduced the native output in all 12 selected elements
+for each projection. This supports, but does not prove for the full matrices,
+an arithmetic reduction-order explanation rather than a weight-layout error.
+The old red-cube fixture likewise showed that two RMSNorm reduction
+changes improved layer-0 parity but *worsened* the final 36-layer embedding;
+therefore no native arithmetic change is promoted from this local result.
+Any candidate needs a full-text-encoder and same-seed image A/B gate.
+
+The matched official trace and norm replay live under
+`/private/tmp/qwen21-russian-official-block0-iYwyqW/`; the native trace is
+under `/private/tmp/qwen21-russian-native-block0-0VaL0X/trace/`. These
+scratch artifacts may expire. Re-run after changes to the checkpoint,
+Transformers/PyTorch version, projection backend, or norm implementation.
+
+The downstream causal claim remains deliberately narrow: different Qwen3VL
+outputs produce a small step-0 latent difference that accumulates under the
+same native Q4-labeled mixed-quant GGUF/Metal DiT. This experiment does
+**not** compare that DiT to the official BF16 DiT, prove a DiT implementation
+bug, or prove the native latent is outside the VAE's training distribution.
+The local text-encoder shards also lack independent content attestation in
+this probe.
+
 Scratch logs and all per-step tensors live under
 `/private/tmp/qwen21-latent-drift-20260926.2s838A/`; the VAE sensitivity
 report is under `/private/tmp/qwen21-face-vae-probe-20260926-r1/`, and the

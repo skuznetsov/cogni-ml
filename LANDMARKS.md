@@ -28691,3 +28691,26 @@ Refresh after source/toolchain/device/model/workload changes.
   trace-on route controls. Speed/default promotion and multi-prompt/seed
   quality remain open. Refresh on source, compiler, GGUF, conditioning,
   device/OS, or runner changes.
+
+### Continuation 2026-09-27 — Russian Qwen3VL and image-latent drift
+
+- On the pinned 244-token Russian sign fixture, native Accelerate and official
+  CPU/BF16 Qwen3VL have identical block-0 input. The first divergent boundary
+  is `layers.0.input_layernorm` (321/999,424 BF16 values on 12 retained rows).
+  Equal-input replay reproduces both sides exactly; substituting PyTorch's
+  mean-square reduction removes all 321 differences. Native serial-F32
+  variance was emulated from source, not captured in the process.
+- This is not the only difference. On 232 rows with exact normalized input,
+  native Q/K/V projections still differ from the official BF16 outputs by
+  284/85/73 values; exact-weight PyTorch replays reproduce the official side.
+  Do not promote an isolated RMSNorm fix: on the prior red-cube fixture, two
+  locally better norm reductions worsened the final 36-layer embedding.
+- Under the matched 40-step native DiT, differing Qwen3VL conditioning moves
+  the image latent from 0.0207% relative L2 at step 0 to 11.1655% at step 39.
+  The endpoint difference is not scalar amplification of the first difference
+  (cosine 0.0169); saved post-Euler states cannot divide recurrent conditioning
+  forcing from state propagation. Next causal probe: crossed single-step DiT
+  evaluations on both saved latent states and both conditioning payloads.
+  This does not establish a native DiT bug, VAE-manifold departure, or an
+  image-quality gain from changing text arithmetic. Evidence and refresh
+  conditions: `docs/qwen-image21-gguf-frontier.md`; scratch traces may expire.
