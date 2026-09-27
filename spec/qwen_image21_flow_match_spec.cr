@@ -54,8 +54,83 @@ describe ML::GGUF::QwenImage21FlowMatch do
       schedule.timesteps.should eq(reference_timesteps)
       # The pinned pipeline sends t.to(latents.dtype) / 1000, not raw sigma.
       reference_timesteps.each_with_index do |timestep, index|
-        schedule.model_timestep(index).should eq(timestep / 1000.0_f32)
+        expected_float32_time = timestep / 1000.0_f32
+        schedule.model_timestep(index).should eq(expected_float32_time)
+        schedule.model_timestep(
+          index,
+          ML::GGUF::QwenImage21ModelTimestepPrecision::Float32,
+        ).should eq(expected_float32_time)
       end
+    end
+  end
+
+  it "matches the pinned official BF16 timestep path for the 1024-token Russian run" do
+    schedule = ML::GGUF::QwenImage21FlowMatch.schedule(40, 1024)
+    {
+      {20, 0x441bc0d7_u32},
+      {21, 0x4415b8e1_u32},
+    }.each do |index, expected_bits|
+      schedule.timesteps[index].unsafe_as(UInt32).should eq(expected_bits)
+    end
+
+    official_bf16_time_bits = [
+      0x3f80_u16, 0x3f7c_u16, 0x3f78_u16, 0x3f74_u16, 0x3f70_u16,
+      0x3f6c_u16, 0x3f67_u16, 0x3f63_u16, 0x3f5e_u16, 0x3f5a_u16,
+      0x3f55_u16, 0x3f51_u16, 0x3f4c_u16, 0x3f47_u16, 0x3f42_u16,
+      0x3f3c_u16, 0x3f36_u16, 0x3f31_u16, 0x3f2b_u16, 0x3f26_u16,
+      0x3f20_u16, 0x3f1a_u16, 0x3f13_u16, 0x3f0c_u16, 0x3f06_u16,
+      0x3efe_u16, 0x3ef0_u16, 0x3ee1_u16, 0x3ed2_u16, 0x3ec3_u16,
+      0x3eb2_u16, 0x3ea2_u16, 0x3e91_u16, 0x3e80_u16, 0x3e5b_u16,
+      0x3e36_u16, 0x3e10_u16, 0x3dd1_u16, 0x3d7c_u16, 0x3ca4_u16,
+    ]
+
+    schedule.step_count.should eq(40)
+    official_bf16_time_bits.each_with_index do |expected_bits, index|
+      schedule.model_timestep(
+        index,
+        ML::GGUF::QwenImage21ModelTimestepPrecision::BFloat16,
+      ).unsafe_as(UInt32).should eq(
+        expected_bits.to_u32 << 16
+      )
+    end
+  end
+
+  it "uses ties-to-even when rounding BF16 model timesteps" do
+    precision = ML::GGUF::QwenImage21ModelTimestepPrecision::BFloat16
+    halfway_above_even_lower = ML::GGUF::QwenImage21FlowMatchSchedule.new(
+      [1.0_f32, 0.0_f32], [1.00390625_f32], 0.0_f32
+    )
+    halfway_above_odd_lower = ML::GGUF::QwenImage21FlowMatchSchedule.new(
+      [1.0_f32, 0.0_f32], [1.01171875_f32], 0.0_f32
+    )
+
+    # Both expectations include the official BF16 cast of t, division by 1000,
+    # and the BF16 output cast, widened back to Float32 for the native backend.
+    halfway_above_even_lower.model_timestep(0, precision).unsafe_as(UInt32).should eq(0x3a830000_u32)
+    halfway_above_odd_lower.model_timestep(0, precision).unsafe_as(UInt32).should eq(0x3a850000_u32)
+  end
+
+  it "passes the selected timestep precision through the denoising callback" do
+    schedule = ML::GGUF::QwenImage21FlowMatch.schedule(40, 1024)
+    observed = [] of Tuple(Int32, UInt32)
+
+    ML::GGUF::QwenImage21FlowMatch.denoise(
+      [0.0_f32], schedule,
+      timestep_precision: ML::GGUF::QwenImage21ModelTimestepPrecision::BFloat16,
+    ) do |_latents, timestep, index|
+      observed << {index, timestep.unsafe_as(UInt32)}
+      [0.0_f32]
+    end
+
+    observed.size.should eq(40)
+    observed[20].should eq({20, 0x3f20_u32 << 16})
+  end
+
+  it "parses and labels model timestep precision modes" do
+    ML::GGUF::QwenImage21ModelTimestepPrecision.parse("float32").label.should eq("float32")
+    ML::GGUF::QwenImage21ModelTimestepPrecision.parse("bfloat16").label.should eq("bfloat16")
+    expect_raises(ArgumentError, "timestep precision must be float32 or bfloat16") do
+      ML::GGUF::QwenImage21ModelTimestepPrecision.parse("float16")
     end
   end
 

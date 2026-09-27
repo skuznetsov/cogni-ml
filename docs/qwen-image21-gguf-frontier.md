@@ -1047,6 +1047,87 @@ The reference and native decoder endpoints still differ in the face pixels
 (12.36/255 mean absolute channel difference in the selected 60x69 pixel
 crop, versus 4.37/255 over the full frame).
 
+### Selectable BF16-effective DiT time (2026-09-27)
+
+The pinned Diffusers BF16 pipeline casts the raw scheduler timestep to the
+latent dtype *before* dividing by 1000. The native FlowMatch path now exposes
+`QWEN_IMAGE21_TIMESTEP_PRECISION=bfloat16` to reproduce that scalar input:
+round raw `t` to BF16 (round-to-nearest-even), divide by 1000, round the
+quotient to BF16, then widen to Float32 for the native DiT. `float32` remains
+the default because the native latent state is Float32; this option does not
+make the state, weights, or full DiT computation BF16. The latent manifest
+records `model_timestep_precision`. The existing per-step log's `timestep`
+field continues to report the *raw scheduler timestep*, not the selected
+model-time scalar.
+
+The focused flow-match suite passed 20/20 cases, including all 40 pinned
+BF16 model-time words for 1024 target tokens, raw Float32 timestep bits at
+indices 20 and 21, ties-to-even, mode parsing, and callback forwarding:
+`crystal spec spec/qwen_image21_flow_match_spec.cr --link-flags
+'-fuse-ld=ld'`. An invalid CLI mode failed before model loading. A fresh
+runner (SHA-256
+`3163b2875fa31851201a16af803ad1e332247c63bf61a8e260523fcf47b26a26`)
+was built from this source with the absolute `build/bridge.o` path and the
+system linker. Its no-flag, two-step Float32 control reproduced the prior
+final latent SHA-256 exactly:
+`807537b77bb0731e9e71f8d73dc6e5035fbe12c187f0ed55bf616c7b2afd24b4`.
+The BF16 two-step smoke also completed and wrote a distinct final hash
+`947093960823750ee5bf0e73fc02ca3f38e38659ab655cc9eee866e7ee36e905`.
+
+For the full comparison, both saved Float32-time 40-step trajectories were
+replayed with the new BF16-time option, using the same pinned Q4 GGUF
+(`51998ad7c068ce7d68e233237537900ffe874ab4d5c72e20758f5f18ceb15b8a`),
+precomputed official/native Qwen3VL conditioning payloads, seed 7, 512x512
+geometry, and Euler solver. Here “official” names **only the Qwen3VL text
+conditioning**; all four trajectories use the native GGUF/Metal DiT. Each
+new arm produced 40 finite 262,144-byte post-Euler snapshots and a final
+snapshot byte-identical to its bundle. The first BF16-vs-Float32 difference
+occurs at step 1 in both arms; step 0 is bit-identical within each arm.
+Measured denoise times were 627.613 s (official text) and 613.462 s (native
+text), sequential observations, not a performance comparison.
+
+The table reports relative L2 percentages of *matched post-update latent*
+differences. “Time effect” compares BF16 vs Float32 time with text fixed;
+“text effect” compares native vs official text with time mode fixed.
+
+| Step | Time effect, official text | Time effect, native text | Text effect, Float32 time | Text effect, BF16 time |
+| ---: | ---: | ---: | ---: | ---: |
+| 0 | 0.000% | 0.000% | 0.0207% | 0.0207% |
+| 10 | 0.313% | 0.285% | 0.577% | 0.306% |
+| 20 | 1.803% | 1.031% | 4.516% | 3.624% |
+| 30 | 4.471% | 2.178% | 9.093% | 7.580% |
+| 39 | 6.077% | 3.094% | 11.165% | 9.329% |
+
+The BF16-time final latent SHA-256 values were
+`979fb31de351594140a21bbbd0c2c8b25fbf599c873bf6c0f0033f150e8a357b`
+(official text) and
+`1489585ba0897346e04b0729a604a1218435fb9b21f7e5b17a8a47aaf8bbf2ea`
+(native text). In the same previously selected 60x69-pixel face ROI, the
+cross-text RGB MAE decreased from 12.36/255 with Float32 time to 3.64/255
+with BF16 time; full-frame cross-text MAE decreased from 4.37/255 to
+3.31/255. The BF16-vs-Float32 pixel MAE was 11.74/255 in that face ROI for
+official text but only 1.06/255 for native text. These are descriptive
+same-seed differences, not ground-truth image-quality scores. Visual
+inspection found the composition and broad sign preserved but some clothing
+and face shading changed; no defensible improvement in eye or glyph fidelity
+was established. The VAE was held fixed and decoded both outputs successfully,
+so these changes originate before VAE; neither an off-manifold latent nor a
+VAE defect is demonstrated.
+
+The replay inputs, compiled runner, four endpoint bundles, two new PNGs,
+per-step snapshots, and comparison script are under
+`/private/tmp/qwen21-bf16-time-russian-20260927.nKrSo3/` and may expire.
+The comparison script checks manifest identity, finite snapshots, final
+snapshot/bundle equality, and first divergence; its spatial ROIs are only
+approximate latent regions, not VAE-exact pixel maps. The next discriminating
+reference is a **full official BF16 DiT trajectory** on the same conditioning
+and initial latents: the current four native trajectories cannot establish
+that BF16 time moves us closer to the official image. Native Float32 latent
+states, the Float64 intermediate trig in native timestep embedding, mixed
+GGUF quantization, and the Qwen3VL projection mismatches remain separate
+candidate sources. Recheck after source, compiler, GGUF, conditioning, VAE,
+Torch/Diffusers, device/OS, or Metal-route changes.
+
 Upstream, the native token embedding lookup exactly reproduced official
 Qwen3VL `hidden_state_000` for all 244 raw tokens (0/999,424 BF16
 mismatches). A one-block native Accelerate sweep starting from that official

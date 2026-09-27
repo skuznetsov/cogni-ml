@@ -29,6 +29,26 @@ module ML::GGUF
     end
   end
 
+  enum QwenImage21ModelTimestepPrecision
+    Float32
+    BFloat16
+
+    def self.parse(name : String) : QwenImage21ModelTimestepPrecision
+      case name.strip.downcase
+      when "float32"
+        Float32
+      when "bfloat16"
+        BFloat16
+      else
+        raise ArgumentError.new("timestep precision must be float32 or bfloat16")
+      end
+    end
+
+    def label : String
+      self == Float32 ? "float32" : "bfloat16"
+    end
+  end
+
   struct QwenImage21FlowMatchConfig
     getter num_train_timesteps : Int32
     getter base_image_seq_len : Int32
@@ -70,12 +90,24 @@ module ML::GGUF
       @timesteps.size
     end
 
-    # Native DiT time uses Float32 division. The pinned BF16 pipeline instead
-    # rounds the scheduler timestep to BF16 before dividing by 1000 in BF16;
-    # model-time parity is therefore not exact even when sigma and dt match.
-    def model_timestep(index : Int32) : Float32
+    # Native F32 latents use Float32 time by default. To match the pinned BF16
+    # pipeline, select BFloat16: it rounds raw t to BF16, divides by 1000, then
+    # rounds the quotient to BF16 before widening it for the native backend.
+    def model_timestep(
+      index : Int32,
+      precision : QwenImage21ModelTimestepPrecision = QwenImage21ModelTimestepPrecision::Float32,
+    ) : Float32
       check_index(index)
-      @timesteps[index] / 1000.0_f32
+      timestep = @timesteps[index]
+      case precision
+      when .float32?
+        timestep / 1000.0_f32
+      when .b_float16?
+        rounded_timestep = round_to_bfloat16(timestep)
+        round_to_bfloat16(rounded_timestep / 1000.0_f32)
+      else
+        raise ArgumentError.new("unsupported model timestep precision")
+      end
     end
 
     def step(sample : Array(Float32), model_output : Array(Float32), index : Int32) : Array(Float32)
@@ -125,6 +157,18 @@ module ML::GGUF
       unless index >= 0 && index < step_count
         raise IndexError.new("flow step #{index} is outside 0...#{step_count}")
       end
+    end
+
+    private def round_to_bfloat16(value : Float32) : Float32
+      # Scheduler times are finite; reject specials rather than letting an NaN
+      # payload round into an infinity or relying on backend-specific behavior.
+      raise ArgumentError.new("BF16 timestep conversion requires a finite value") unless value.finite?
+
+      bits = value.unsafe_as(UInt32)
+      least_significant_bit = (bits >> 16) & 1_u32
+      rounding_bias = 0x7fff_u32 &+ least_significant_bit
+      rounded_bits = (bits &+ rounding_bias) & 0xffff0000_u32
+      rounded_bits.unsafe_as(Float32)
     end
   end
 
@@ -183,13 +227,14 @@ module ML::GGUF
       step_latent_hash_observer : Proc(Int32, Float32, String, Nil)? = nil,
       step_latent_snapshot_observer : Proc(Int32, Float32, Array(Float32), Nil)? = nil,
       solver : QwenImage21FlowMatchSolver = QwenImage21FlowMatchSolver::Euler,
+      timestep_precision : QwenImage21ModelTimestepPrecision = QwenImage21ModelTimestepPrecision::Float32,
       &predictor : Array(Float32), Float32, Int32 -> Array(Float32)
     ) : Array(Float32)
       latents = initial_latents.dup
       previous_model_output : Array(Float32)? = nil
       schedule.step_count.times do |index|
         step_started_at = Time.instant if step_observer
-        model_timestep = schedule.model_timestep(index)
+        model_timestep = schedule.model_timestep(index, timestep_precision)
         model_output = yield latents, model_timestep, index
         unless model_output.all?(&.finite?)
           raise ArgumentError.new("transformer produced non-finite output at denoising step #{index}")
@@ -267,6 +312,7 @@ module ML::GGUF
       step_latent_hash_observer : Proc(Int32, Float32, String, Nil)? = nil,
       step_latent_snapshot_observer : Proc(Int32, Float32, Array(Float32), Nil)? = nil,
       solver : QwenImage21FlowMatchSolver = QwenImage21FlowMatchSolver::Euler,
+      timestep_precision : QwenImage21ModelTimestepPrecision = QwenImage21ModelTimestepPrecision::Float32,
     ) : QwenImage21DenoisingResult
       raise ArgumentError.new("img_shapes must contain a target image") if img_shapes.empty?
       unless config.input_dim == config.output_dim
@@ -305,6 +351,7 @@ module ML::GGUF
         step_latent_hash_observer: step_latent_hash_observer,
         step_latent_snapshot_observer: step_latent_snapshot_observer,
         solver: solver,
+        timestep_precision: timestep_precision,
       ) do |target_latents, timestep, _index|
         result = QwenImage21TransformerCPU.forward(
           condition_latents + target_latents,

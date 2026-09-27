@@ -28761,3 +28761,27 @@ Refresh after source/toolchain/device/model/workload changes.
   `/private/tmp/qwen21_spatial_drift_audit.md`, may expire. Recheck on
   source, GGUF, Qwen3VL payload, scheduler, precision path, Metal route,
   saved-state, or official Diffusers revision changes.
+
+### Continuation 2026-09-27 — Selectable BF16-effective DiT time
+
+- `QWEN_IMAGE21_TIMESTEP_PRECISION=bfloat16` now reproduces the pinned BF16
+  pipeline's scalar time cast/divide order, while Float32 remains the default
+  for native Float32 latents. Focused spec: 20/20; all 40 official BF16 time
+  words at 1024 target tokens matched. A fresh no-flag two-step Metal control
+  reproduced the prior Float32 final SHA-256 `807537b77bb073...` exactly.
+- Matched seed-7, 512x512, Euler-40 native GGUF/Metal runs with official and
+  native Qwen3VL text conditioning each produced 40 finite post-Euler
+  snapshots, with final snapshot/bundle byte equality. BF16-vs-Float32 time
+  first diverged at step 1; final latent relative L2 was 6.077% (official
+  text) and 3.094% (native text). The cross-text final gap decreased from
+  11.165% to 9.329%; the preselected face-pixel ROI cross-text MAE decreased
+  from 12.36 to 3.64/255. These are parity/sensitivity observations, **not**
+  evidence of improved eye, glyph, or overall image quality. VAE decoded
+  both outputs; no VAE cliff or off-manifold claim is established.
+- Next falsifier: capture a full official BF16 DiT trajectory with the same
+  initial latents and conditioning, then compare native first-step and
+  recurrent states. Native Float32 latent storage, Float64 intermediate
+  timestep trig, quantization/provenance, and text-projection differences
+  remain. Detailed evidence and refresh conditions are in
+  `docs/qwen-image21-gguf-frontier.md`; ephemeral A/B artifacts live under
+  `/private/tmp/qwen21-bf16-time-russian-20260927.nKrSo3/`.
