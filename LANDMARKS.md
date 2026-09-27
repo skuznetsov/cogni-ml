@@ -28778,10 +28778,58 @@ Refresh after source/toolchain/device/model/workload changes.
   from 12.36 to 3.64/255. These are parity/sensitivity observations, **not**
   evidence of improved eye, glyph, or overall image quality. VAE decoded
   both outputs; no VAE cliff or off-manifold claim is established.
-- Next falsifier: capture a full official BF16 DiT trajectory with the same
-  initial latents and conditioning, then compare native first-step and
-  recurrent states. Native Float32 latent storage, Float64 intermediate
+- The planned full official BF16 DiT trajectory has now been captured and
+  compared below. Native Float32 latent storage, Float64 intermediate
   timestep trig, quantization/provenance, and text-projection differences
-  remain. Detailed evidence and refresh conditions are in
+  remain. Detailed BF16-time evidence and refresh conditions are in
   `docs/qwen-image21-gguf-frontier.md`; ephemeral A/B artifacts live under
   `/private/tmp/qwen21-bf16-time-russian-20260927.nKrSo3/`.
+
+### Continuation 2026-09-27 — Matched official DiT latent drift
+
+- The pinned full HF BF16/MPS DiT used the same official-Qwen3VL conditioning
+  payload and BF16-exact x0 as the native official-text runs (x0 SHA-256
+  `d0315806...8358932c`). A first-step native same-input velocity plus
+  Float32 Euler update reproduced the saved native step-0 state bit-for-bit.
+  An apparent x0 mismatch was withdrawn: a final latent bundle had been
+  mistaken for the initial state. Official BF16 Euler replay also reproduced
+  official step 0 bit-for-bit.
+- Native BF16-time post-state distance from the official BF16 trajectory
+  grew from 0.1805% at step 1 to 2.3936% at 10, 9.5513% at 20, and
+  22.7345% at 40 (official-state relative L2). The old matched F32-time
+  trace ended at 23.6411%. This is a numerical proxy, not face/text quality.
+- Teacher-forced equal-input native-vs-official DiT velocity relative L2 was
+  2.7252% at index 0, 1.3638% at 20, and 4.6690% at 39. At index 20,
+  switching only the native DiT input from official state to its own native
+  state moved native velocity by 20.5430% relative L2; feedback dominates
+  the realized local vector difference, but its earlier causes include the
+  DiT/weight/precision and solver paths. No isolated quantization or VAE
+  manifold claim follows. Next intervention: opt-in BF16 latent-state
+  arithmetic, paired against the same official reference and decoded image.
+- Evidence and decay: `docs/qwen-image21-gguf-frontier.md` and ephemeral
+  `/private/tmp/qwen21-official-trajectory-20260927/`,
+  `/private/tmp/qwen21-native-matched-forward-20260927/`. Refresh after
+  model/GGUF, conditioning, schedule, cache, Torch/MPS, Metal, or VAE changes.
+
+### Continuation 2026-09-27 — BF16 state A/B narrows latent drift
+
+- An opt-in `QWEN_IMAGE21_LATENT_STATE_PRECISION=bfloat16` Euler route keeps
+  the former Float32 route as default. The BF16 route matches the observed
+  official MPS post-state formula (Float32 `dt`, BF16 velocity/product/state)
+  rather than Torch CPU scalar promotion. BF16 state plus AB2 is rejected.
+  Focused spec: 29/29; two-step Metal smoke and full 40-step run completed.
+- On identical official text, x0, schedule, GGUF, and BF16-effective time,
+  BF16 state was closer to official latent state at all 40 steps. Relative
+  L2 at steps 1/10/20/40 changed from 0.1805/2.3936/9.5513/22.7345% to
+  0.1569/2.3570/9.1774/21.2774%. At index 20, native velocity evaluated
+  at its new state was 19.0101% from the official teacher velocity versus
+  20.5982% at its old state; identical-input native-vs-official velocity
+  differed by 1.3638%. This implicates state-feedback amplification, not
+  a single established root cause.
+- The fixed VAE decoded both. Full-frame RGB RMSE against official fell
+  21.63 to 20.57/255; a fixed face rectangle slightly worsened 26.65 to
+  26.79/255. No eye/face-quality fix is claimed. Next falsifier: compare
+  official versus native tensors before DiT block 0 and after block 0 on
+  identical x0/text/time, then split projection versus block internals.
+  Evidence and decay details are in `docs/qwen-image21-gguf-frontier.md`;
+  ephemeral artifacts are under `/private/tmp/qwen21-bf16-state-20260927.b6UNJF/`.

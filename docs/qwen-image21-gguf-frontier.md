@@ -1119,14 +1119,144 @@ per-step snapshots, and comparison script are under
 `/private/tmp/qwen21-bf16-time-russian-20260927.nKrSo3/` and may expire.
 The comparison script checks manifest identity, finite snapshots, final
 snapshot/bundle equality, and first divergence; its spatial ROIs are only
-approximate latent regions, not VAE-exact pixel maps. The next discriminating
-reference is a **full official BF16 DiT trajectory** on the same conditioning
-and initial latents: the current four native trajectories cannot establish
-that BF16 time moves us closer to the official image. Native Float32 latent
-states, the Float64 intermediate trig in native timestep embedding, mixed
-GGUF quantization, and the Qwen3VL projection mismatches remain separate
-candidate sources. Recheck after source, compiler, GGUF, conditioning, VAE,
-Torch/Diffusers, device/OS, or Metal-route changes.
+approximate latent regions, not VAE-exact pixel maps. A full official BF16
+DiT trajectory on the same conditioning and initial latents was subsequently
+captured below. Native Float32 latent states, the Float64 intermediate trig
+in native timestep embedding, mixed GGUF quantization, and the Qwen3VL
+projection mismatches remain separate candidate sources. Recheck after
+source, compiler, GGUF, conditioning, VAE, Torch/Diffusers, device/OS, or
+Metal-route changes.
+
+### Matched official BF16 DiT latent trajectory (2026-09-27)
+
+The pinned Hugging Face BF16/MPS DiT was run for all 40 steps with the
+pipeline-default KV cache, the exact official-Qwen3VL conditioning payload
+SHA-256 `007ad14a01440a9f786ae874e78cb4aef3a3729d2768fec1a503363bf66114ab`,
+and the same BF16-exact initial target latent SHA-256
+`d03158064c86fd691927cf93258b00fac2fc8d09e14a578d0f28b4fe8358932c`
+consumed by the native runs. The source
+checkpoint revision was `790c92633540aa0cb11d9abf19eb46d861714758`;
+the compared native GGUF SHA-256 was
+`51998ad7c068ce7d68e233237537900ffe874ab4d5c72e20758f5f18ceb15b8a`.
+Each of the 40 official BF16 post-step states was widened to Float32 for
+comparison.
+The initial latent was byte-identical; independently, the same-input native
+step-0 velocity and Float32 Euler update reconstructed the saved native
+step-0 state bit-for-bit (65,536 values). An initial apparent noise mismatch
+was an audit error: a *final* native latent bundle had been mistaken for x0.
+
+| Completed steps | 1 | 10 | 20 | 40 |
+| ---: | ---: | ---: | ---: | ---: |
+| Native BF16-time post-state relative L2 to official BF16 state | 0.1805% | 2.3936% | 9.5513% | 22.7345% |
+
+The denominator is the official state norm. This is a progressively growing
+trajectory difference, not a measured VAE failure or a perceptual quality
+score. At step 40, the older matched-input Float32-time native trace was
+23.6411% from the official state, versus 22.7345% for native BF16 time;
+the improvement in this numerical proxy does not establish better faces or
+text. Both traces used the *official* text payload. The separate native-text
+trace has a different conditioning SHA and was not used for this comparison.
+
+Independent teacher-forced DiT forwards held the BF16-exact latent, text,
+mask, shapes, and effective timestep fixed. Native mixed-Q4 GGUF/Metal versus
+official BF16/MPS target-velocity relative L2 was 2.7252% at index 0,
+1.3638% at index 20, and 4.6690% at index 39 (official velocity norm as
+denominator). These include quantization, kernel, arithmetic, and provenance
+differences; they do not isolate any one operation. The saved official MPS
+post-states at indices 0, 1, 19, 20, and 39 were reconstructed bit-for-bit
+(65,536 values each) with Float32 `dt` times BF16 velocity, a BF16-rounded
+product, Float32 addition, and a BF16-rounded state. Pinned Torch CPU scalar
+promotion instead pre-rounds `dt` to BF16 and misses 270 post-step values
+already at index 0. The MPS trace checked its manual formula against the
+scheduler at every step; it did not save the intermediate product, so exact
+product behavior is inferred from the post-state rather than observed
+separately. With the same teacher velocity but the native Float32 solver,
+the first post-state was still 0.1671% away from official; the actual native
+post-state was 0.1805% away. These counterfactual distances are not additive
+causal shares.
+
+At index 20, the native and official input states had already separated by
+9.5513%. Holding the *native* DiT fixed while switching only its input from
+the official state to the native state changed its velocity by 20.5430%
+(denominator: native velocity at the official state). This is much larger
+than the 1.3638% same-state native-versus-official velocity contrast, so
+feedback through the evolving state dominates the realized local discrepancy
+at this point. The state difference itself arose from earlier DiT and solver
+differences; this is not an exoneration of DiT or proof that the state dtype
+alone is the cause. A fixed CPU/Float32 VAE decoded the endpoints; its prior
+local interpolation probe showed no decoder cliff, but did not prove that
+the trajectories occupy the same learned manifold.
+
+The official scratch source is under
+`/private/tmp/qwen21-official-trajectory-20260927/`; its 40 snapshots,
+manifest, and decoded image are under `official40-cache-default/`;
+the native equal-input forwards and split report are under
+`/private/tmp/qwen21-native-matched-forward-20260927/`. These are ephemeral
+local artifacts. Refresh the comparison after source model, GGUF,
+conditioning, scheduler, cache semantics, Torch/MPS, Metal kernel, or VAE
+changes. The next controlled intervention is an opt-in BF16 latent-state
+update, retaining the current Float32 path as rollback. Its matched 40-step
+and decoded-image comparison follows below.
+
+### Opt-in BF16 latent-state update and 40-step A/B (2026-09-27)
+
+`QWEN_IMAGE21_LATENT_STATE_PRECISION=bfloat16` now selects BF16-exact Euler
+states independently of `QWEN_IMAGE21_TIMESTEP_PRECISION`. It rounds the
+initial state, each DiT target velocity, each Float32-`dt` product, and each
+updated state to BF16 with round-to-nearest-even; stored snapshots remain
+Float32 containers of BF16-exact values. This follows the observed official
+MPS post-state arithmetic, not the pinned Torch CPU scalar-promotion path.
+The default remains `float32` with its previous operation ordering; BF16
+state with Adams-Bashforth 2 is rejected rather than implying unverified
+official semantics. The output manifest records `latent_state_precision`.
+The mode does not change GGUF weights or Metal transformer arithmetic.
+
+The focused flow-match suite passed 29/29, including an official MPS
+coordinate that distinguishes Float32 from BF16-pre-rounded `dt`, a 16-word
+official first-step slice, finite/overflow guards, callback states, and
+default-path parity. An opt-in two-step Metal smoke emitted finite BF16-exact
+states and a final snapshot equal to its bundle. A no-flag two-step Metal
+smoke on the final runner reproduced the prior Float32 bundle SHA-256
+`807537b77bb0731e9e71f8d73dc6e5035fbe12c187f0ed55bf616c7b2afd24b4`.
+The matched 40-step run
+used the same source revision, GGUF, official-Qwen3VL payload, seed 7,
+initial state, Euler schedule, BF16-effective model times, and fixed
+CPU/Float32 VAE as the BF16-time-only control above. All 40 BF16-state
+snapshots were finite and BF16-exact, and the final snapshot matched the
+bundle. Its final bundle SHA-256 was
+`4fb1a867d0772f93190f4e7e7aa4a6925d9465f4ea7cdbf086a388953e17fdb1`.
+
+| Completed steps | 1 | 10 | 20 | 40 |
+| ---: | ---: | ---: | ---: | ---: |
+| BF16-time, Float32-state relative L2 to official | 0.1805% | 2.3936% | 9.5513% | 22.7345% |
+| BF16-time, BF16-state relative L2 to official | 0.1569% | 2.3570% | 9.1774% | 21.2774% |
+
+The BF16-state trace was closer to the official *latent* state at all 40
+steps, but the final 21.28% residual is large. A separate native forward at
+index 20, holding the DiT implementation and text fixed but supplying the
+new native step-19 state, reduced native velocity distance to the official
+teacher velocity from 20.5982% to 19.0101%. For comparison, the same-input
+native-vs-official DiT difference was 1.3638%. Thus matching the scheduler
+state arithmetic reduces a feedback-amplified discrepancy; it does not
+identify the first divergent internal DiT operation or isolate quantization.
+
+The same decoder produced a 512x512 PNG for each endpoint. Whole-frame RGB
+RMSE to the official image moved from 21.63 to 20.57/255, while a fixed
+80x105 face rectangle moved from 26.65 to 26.79/255. The latter is slightly
+*worse*, and these pixel distances are alignment-sensitive proxies, not
+perceptual quality or evidence that the eye defects are fixed. Visually the
+new and old native images remain similar and both differ from the official
+vendor's clothing and face. The safe conclusion is better numerical
+trajectory agreement, with face quality unresolved. Next discriminate the
+first internal DiT boundary on identical x0/text/time: compare official and
+native image/text projections before block 0, then block-0 output; only if
+the pre-block tensor agrees should mixed-Q4 block weights and Metal kernels
+be isolated with equal activation inputs.
+
+The opt-in run, 40 snapshots, numeric comparison script, new-state index-20
+forward, and decoded image are under
+`/private/tmp/qwen21-bf16-state-20260927.b6UNJF/` and may expire. Refresh
+after model/GGUF, conditioning, schedule, Torch/MPS, Metal, or VAE changes.
 
 Upstream, the native token embedding lookup exactly reproduced official
 Qwen3VL `hidden_state_000` for all 244 raw tokens (0/999,424 BF16

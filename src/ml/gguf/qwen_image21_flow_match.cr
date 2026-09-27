@@ -49,6 +49,39 @@ module ML::GGUF
     end
   end
 
+  enum QwenImage21LatentStatePrecision
+    Float32
+    BFloat16
+
+    def self.parse(name : String) : QwenImage21LatentStatePrecision
+      case name.strip.downcase
+      when "float32"
+        Float32
+      when "bfloat16"
+        BFloat16
+      else
+        raise ArgumentError.new("latent state precision must be float32 or bfloat16")
+      end
+    end
+
+    def label : String
+      self == Float32 ? "float32" : "bfloat16"
+    end
+  end
+
+  module QwenImage21BFloat16
+    def self.round(value : Float32, kind : String) : Float32
+      raise ArgumentError.new("BF16 #{kind} conversion requires a finite value") unless value.finite?
+
+      bits = value.unsafe_as(UInt32)
+      least_significant_bit = (bits >> 16) & 1_u32
+      rounding_bias = 0x7fff_u32 &+ least_significant_bit
+      rounded = ((bits &+ rounding_bias) & 0xffff0000_u32).unsafe_as(Float32)
+      raise ArgumentError.new("BF16 #{kind} conversion produced a non-finite value") unless rounded.finite?
+      rounded
+    end
+  end
+
   struct QwenImage21FlowMatchConfig
     getter num_train_timesteps : Int32
     getter base_image_seq_len : Int32
@@ -121,6 +154,24 @@ module ML::GGUF
       end
     end
 
+    # Official MPS semantics for BF16 model values and state: preserve the
+    # Float32 scheduler interval through multiplication by BF16 model output,
+    # round that product to BF16, add to the widened sample in Float32, then
+    # round the updated state to BF16. CPU scalar promotion can pre-round dt
+    # and is not equivalent for all coordinates.
+    def step_bfloat16(sample : Array(Float32), model_output : Array(Float32), index : Int32) : Array(Float32)
+      check_index(index)
+      unless sample.size == model_output.size
+        raise ArgumentError.new("sample and model output sizes differ")
+      end
+      dt = @sigmas[index + 1] - @sigmas[index]
+      Array(Float32).new(sample.size) do |value_index|
+        bf16_model_output = QwenImage21BFloat16.round(model_output[value_index], "latent")
+        bf16_product = QwenImage21BFloat16.round(dt * bf16_model_output, "latent")
+        QwenImage21BFloat16.round(sample[value_index] + bf16_product, "latent")
+      end
+    end
+
     # Variable-step Adams-Bashforth 2 using h_i / h_(i-1), where h is the
     # signed sigma interval. The first denoising step must use Euler because
     # there is no previous model output.
@@ -160,15 +211,7 @@ module ML::GGUF
     end
 
     private def round_to_bfloat16(value : Float32) : Float32
-      # Scheduler times are finite; reject specials rather than letting an NaN
-      # payload round into an infinity or relying on backend-specific behavior.
-      raise ArgumentError.new("BF16 timestep conversion requires a finite value") unless value.finite?
-
-      bits = value.unsafe_as(UInt32)
-      least_significant_bit = (bits >> 16) & 1_u32
-      rounding_bias = 0x7fff_u32 &+ least_significant_bit
-      rounded_bits = (bits &+ rounding_bias) & 0xffff0000_u32
-      rounded_bits.unsafe_as(Float32)
+      QwenImage21BFloat16.round(value, "timestep")
     end
   end
 
@@ -228,9 +271,19 @@ module ML::GGUF
       step_latent_snapshot_observer : Proc(Int32, Float32, Array(Float32), Nil)? = nil,
       solver : QwenImage21FlowMatchSolver = QwenImage21FlowMatchSolver::Euler,
       timestep_precision : QwenImage21ModelTimestepPrecision = QwenImage21ModelTimestepPrecision::Float32,
+      latent_state_precision : QwenImage21LatentStatePrecision = QwenImage21LatentStatePrecision::Float32,
       &predictor : Array(Float32), Float32, Int32 -> Array(Float32)
     ) : Array(Float32)
-      latents = initial_latents.dup
+      if solver == QwenImage21FlowMatchSolver::AdamsBashforth2 &&
+         latent_state_precision == QwenImage21LatentStatePrecision::BFloat16
+        raise ArgumentError.new("bfloat16 latent state precision requires the euler solver")
+      end
+
+      latents = if latent_state_precision == QwenImage21LatentStatePrecision::BFloat16
+                  initial_latents.map { |value| QwenImage21BFloat16.round(value, "latent") }
+                else
+                  initial_latents.dup
+                end
       previous_model_output : Array(Float32)? = nil
       schedule.step_count.times do |index|
         step_started_at = Time.instant if step_observer
@@ -251,7 +304,11 @@ module ML::GGUF
           previous_model_output = model_output.dup
         else
           # Keep the default Euler path and its operation ordering unchanged.
-          latents = schedule.step(latents, model_output, index)
+          latents = if latent_state_precision == QwenImage21LatentStatePrecision::BFloat16
+                      schedule.step_bfloat16(latents, model_output, index)
+                    else
+                      schedule.step(latents, model_output, index)
+                    end
         end
         unless latents.all?(&.finite?)
           raise ArgumentError.new("non-finite latents after denoising step #{index}")
@@ -313,6 +370,7 @@ module ML::GGUF
       step_latent_snapshot_observer : Proc(Int32, Float32, Array(Float32), Nil)? = nil,
       solver : QwenImage21FlowMatchSolver = QwenImage21FlowMatchSolver::Euler,
       timestep_precision : QwenImage21ModelTimestepPrecision = QwenImage21ModelTimestepPrecision::Float32,
+      latent_state_precision : QwenImage21LatentStatePrecision = QwenImage21LatentStatePrecision::Float32,
     ) : QwenImage21DenoisingResult
       raise ArgumentError.new("img_shapes must contain a target image") if img_shapes.empty?
       unless config.input_dim == config.output_dim
@@ -352,6 +410,7 @@ module ML::GGUF
         step_latent_snapshot_observer: step_latent_snapshot_observer,
         solver: solver,
         timestep_precision: timestep_precision,
+        latent_state_precision: latent_state_precision,
       ) do |target_latents, timestep, _index|
         result = QwenImage21TransformerCPU.forward(
           condition_latents + target_latents,

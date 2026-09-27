@@ -134,6 +134,204 @@ describe ML::GGUF::QwenImage21FlowMatch do
     end
   end
 
+  it "parses and labels latent state precision independently of model timestep precision" do
+    ML::GGUF::QwenImage21LatentStatePrecision.parse("float32").label.should eq("float32")
+    ML::GGUF::QwenImage21LatentStatePrecision.parse("bfloat16").label.should eq("bfloat16")
+    expect_raises(ArgumentError, "latent state precision must be float32 or bfloat16") do
+      ML::GGUF::QwenImage21LatentStatePrecision.parse("float16")
+    end
+  end
+
+  it "matches the official MPS BF16 Euler product micro-fixture" do
+    # The pinned MPS step keeps the FP32 dt through multiplication by the
+    # BF16-rounded model output, rounds the product to BF16, adds to the
+    # widened BF16 sample in Float32, then rounds the state back to BF16.
+    # In particular, dt=-0.009999990463256836 is not first rounded to
+    # -0.010009765625. The product is +/-0.0191650390625 and the final pair
+    # is +/-0.10205078125. Torch CPU's 0-D scalar promotion pre-rounds dt and
+    # instead yields +/-0.1015625 here; that backend path is not the target.
+    schedule = ML::GGUF::QwenImage21FlowMatchSchedule.new(
+      [1.0_f32, 0.99_f32], [1000.0_f32], 0.5_f32,
+    )
+    observed_inputs = [] of Array(Float32)
+    result = ML::GGUF::QwenImage21FlowMatch.denoise(
+      [1.00390625_f32, -1.00390625_f32, -0.12109375_f32, 0.12109375_f32], schedule,
+      latent_state_precision: ML::GGUF::QwenImage21LatentStatePrecision::BFloat16,
+    ) do |latents, _timestep, _index|
+      observed_inputs << latents.dup
+      [0.0_f32, 0.0_f32, -1.91796875_f32, 1.91796875_f32]
+    end
+
+    observed_inputs.should eq([[1.0_f32, -1.0_f32, -0.12109375_f32, 0.12109375_f32]])
+    result.map(&.unsafe_as(UInt32)).should eq([
+      0x3f800000_u32, 0xbf800000_u32, 0xbdd10000_u32, 0x3dd10000_u32,
+    ])
+    result.all? { |value| value.unsafe_as(UInt32) & 0x0000ffff_u32 == 0 }.should be_true
+  end
+
+  it "keeps positive and negative FP32 intervals until BF16 product rounding" do
+    precision = ML::GGUF::QwenImage21LatentStatePrecision::BFloat16
+    positive_schedule = ML::GGUF::QwenImage21FlowMatchSchedule.new(
+      [0.0_f32, 0.009999990463256836_f32], [1000.0_f32], 0.5_f32,
+    )
+    positive_result = ML::GGUF::QwenImage21FlowMatch.denoise(
+      [0.58984375_f32], positive_schedule, latent_state_precision: precision,
+    ) do |_latents, _timestep, _index|
+      [-1.75_f32]
+    end
+
+    negative_schedule = ML::GGUF::QwenImage21FlowMatchSchedule.new(
+      [0.0_f32, -0.009999990463256836_f32], [1000.0_f32], 0.5_f32,
+    )
+    negative_result = ML::GGUF::QwenImage21FlowMatch.denoise(
+      [0.58984375_f32], negative_schedule, latent_state_precision: precision,
+    ) do |_latents, _timestep, _index|
+      [-1.75_f32]
+    end
+
+    # Rounding dt to BF16 first would give 0x3f12 and 0x3f1c instead.
+    positive_result.map(&.unsafe_as(UInt32)).should eq([0x3f130000_u32])
+    negative_result.map(&.unsafe_as(UInt32)).should eq([0x3f1b0000_u32])
+  end
+
+  it "matches an official MPS full-step coordinate that distinguishes dt rounding" do
+    # Coordinate 158 of the cached official BF16 MPS step-0 capture:
+    # sample=0x3ea7, model_output=0xbf57, post_step=0x3eae, dt=-0.015080928802490234.
+    # Keeping dt FP32 yields BF16 product 0x3c50 and post-state 0x3eae;
+    # pre-rounding dt to BF16 yields product 0x3c4f and post-state 0x3ead.
+    schedule = ML::GGUF::QwenImage21FlowMatchSchedule.new(
+      [1.0_f32, 0.9849190711975098_f32], [1000.0_f32], 0.5_f32,
+    )
+    result = ML::GGUF::QwenImage21FlowMatch.denoise(
+      [0.326171875_f32], schedule,
+      latent_state_precision: ML::GGUF::QwenImage21LatentStatePrecision::BFloat16,
+    ) do |_latents, _timestep, _index|
+      [-0.83984375_f32]
+    end
+
+    result.map(&.unsafe_as(UInt32)).should eq([0x3eae0000_u32])
+  end
+
+  it "replays the official BF16 first-step latent slice bitwise" do
+    x0_words = [
+      0xbf79_u16, 0xbfa5_u16, 0xbff4_u16, 0xbfce_u16,
+      0xbf7f_u16, 0x3f15_u16, 0x3f1a_u16, 0x3f0e_u16,
+      0xbf75_u16, 0xbed8_u16, 0x3fd4_u16, 0x3e16_u16,
+      0x3fea_u16, 0xbe78_u16, 0x3f41_u16, 0x3fc9_u16,
+    ]
+    model_output_words = [
+      0xbd42_u16, 0xbfb1_u16, 0xbf92_u16, 0xbf27_u16,
+      0xbee6_u16, 0xbe81_u16, 0x3e29_u16, 0x3fd5_u16,
+      0xbf5f_u16, 0xbef1_u16, 0x3f21_u16, 0xbea6_u16,
+      0x3ef0_u16, 0xbe24_u16, 0x3f50_u16, 0x4034_u16,
+    ]
+    expected_words = [
+      0xbf79_u16, 0xbfa2_u16, 0xbff2_u16, 0xbfcd_u16,
+      0xbf7d_u16, 0x3f16_u16, 0x3f19_u16, 0x3f08_u16,
+      0xbf72_u16, 0xbed4_u16, 0x3fd3_u16, 0x3e1b_u16,
+      0x3fe9_u16, 0xbe76_u16, 0x3f3e_u16, 0x3fc4_u16,
+    ]
+    dt = -0.015080928802490234_f32
+    schedule = ML::GGUF::QwenImage21FlowMatchSchedule.new(
+      [1.0_f32, 1.0_f32 + dt], [1000.0_f32], 0.5_f32,
+    )
+    widen_bfloat16 = ->(words : Array(UInt16)) {
+      words.map { |word| (word.to_u32 << 16).unsafe_as(Float32) }
+    }
+    initial_latents = widen_bfloat16.call(x0_words)
+    model_output = widen_bfloat16.call(model_output_words)
+    observed_inputs = [] of Array(Float32)
+
+    result = ML::GGUF::QwenImage21FlowMatch.denoise(
+      initial_latents, schedule,
+      latent_state_precision: ML::GGUF::QwenImage21LatentStatePrecision::BFloat16,
+    ) do |latents, _timestep, _index|
+      observed_inputs << latents.dup
+      model_output
+    end
+
+    observed_inputs.should eq([initial_latents])
+    result.map(&.unsafe_as(UInt32)).should eq(
+      expected_words.map { |word| word.to_u32 << 16 }
+    )
+  end
+
+  it "keeps every observed and returned latent BF16-exact across Euler steps" do
+    schedule = ML::GGUF::QwenImage21FlowMatch.schedule(4, 256)
+    observed_inputs = [] of Array(Float32)
+    observed_states = [] of Array(Float32)
+    result = ML::GGUF::QwenImage21FlowMatch.denoise(
+      [0.123456_f32, -0.987654_f32], schedule,
+      latent_state_precision: ML::GGUF::QwenImage21LatentStatePrecision::BFloat16,
+      step_latent_snapshot_observer: ->(_index : Int32, _timestep : Float32, latents : Array(Float32)) {
+        observed_states << latents.dup
+        nil
+      },
+    ) do |latents, _timestep, _index|
+      observed_inputs << latents.dup
+      [0.234567_f32, -0.345678_f32]
+    end
+
+    bf16_exact = ->(latents : Array(Float32)) {
+      latents.all? { |value| value.finite? && (value.unsafe_as(UInt32) & 0x0000ffff_u32) == 0 }
+    }
+    observed_inputs.all? { |latents| bf16_exact.call(latents) }.should be_true
+    observed_states.size.should eq(schedule.step_count)
+    observed_states.all? { |latents| bf16_exact.call(latents) }.should be_true
+    bf16_exact.call(result).should be_true
+  end
+
+  it "rejects BF16 latent state with Adams-Bashforth 2" do
+    schedule = ML::GGUF::QwenImage21FlowMatch.schedule(3, 256)
+    expect_raises(ArgumentError, "bfloat16 latent state precision requires the euler solver") do
+      ML::GGUF::QwenImage21FlowMatch.denoise(
+        [0.0_f32], schedule,
+        solver: ML::GGUF::QwenImage21FlowMatchSolver::AdamsBashforth2,
+        latent_state_precision: ML::GGUF::QwenImage21LatentStatePrecision::BFloat16,
+      ) do |_latents, _timestep, _index|
+        [0.0_f32]
+      end
+    end
+  end
+
+  it "keeps default Float32 latent-state behavior identical to explicit selection" do
+    schedule = ML::GGUF::QwenImage21FlowMatch.schedule(4, 256)
+    initial = [0.25_f32, -0.5_f32, 1.25_f32]
+    predictor = ->(latents : Array(Float32), timestep : Float32, index : Int32) {
+      latents.map { |value| value * 0.25_f32 + timestep * (index + 1) }
+    }
+    default_result = ML::GGUF::QwenImage21FlowMatch.denoise(initial, schedule) do |latents, timestep, index|
+      predictor.call(latents, timestep, index)
+    end
+    explicit_f32_result = ML::GGUF::QwenImage21FlowMatch.denoise(
+      initial, schedule,
+      latent_state_precision: ML::GGUF::QwenImage21LatentStatePrecision::Float32,
+    ) do |latents, timestep, index|
+      predictor.call(latents, timestep, index)
+    end
+
+    explicit_f32_result.should eq(default_result)
+  end
+
+  it "rejects non-finite and overflowing BF16 latent state conversions" do
+    schedule = ML::GGUF::QwenImage21FlowMatch.schedule(2, 256)
+    precision = ML::GGUF::QwenImage21LatentStatePrecision::BFloat16
+    expect_raises(ArgumentError, "BF16 latent conversion requires a finite value") do
+      ML::GGUF::QwenImage21FlowMatch.denoise(
+        [Float32::INFINITY], schedule, latent_state_precision: precision,
+      ) do |_latents, _timestep, _index|
+        [0.0_f32]
+      end
+    end
+    expect_raises(ArgumentError, "BF16 latent conversion produced a non-finite value") do
+      ML::GGUF::QwenImage21FlowMatch.denoise(
+        [0.0_f32], schedule, latent_state_precision: precision,
+      ) do |_latents, _timestep, _index|
+        [Float32::MAX]
+      end
+    end
+  end
+
   it "uses the exact Qwen-Image 2.1 resolution shift endpoints" do
     ML::GGUF::QwenImage21FlowMatch.calculate_mu(256).should be_close(0.5_f32, 1e-7_f32)
     ML::GGUF::QwenImage21FlowMatch.calculate_mu(8192).should be_close(0.9_f32, 1e-7_f32)

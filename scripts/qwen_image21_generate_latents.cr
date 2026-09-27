@@ -16,6 +16,7 @@ private def write_latent_bundle(
   steps : Int32,
   solver : ML::GGUF::QwenImage21FlowMatchSolver,
   timestep_precision : ML::GGUF::QwenImage21ModelTimestepPrecision,
+  latent_state_precision : ML::GGUF::QwenImage21LatentStatePrecision,
   gguf_path : String,
 ) : Nil
   expected = conditioning.latent_height * conditioning.latent_width * 64
@@ -53,6 +54,7 @@ private def write_latent_bundle(
       json.field "denoising_steps", steps
       json.field "flow_match_solver", solver.label
       json.field "model_timestep_precision", timestep_precision.label
+      json.field "latent_state_precision", latent_state_precision.label
       json.field "dit_gguf", File.expand_path(gguf_path)
     end
   end
@@ -127,6 +129,13 @@ timestep_precision = begin
 rescue error : ArgumentError
   abort "invalid QWEN_IMAGE21_TIMESTEP_PRECISION: #{error.message}"
 end
+latent_state_precision = begin
+  ML::GGUF::QwenImage21LatentStatePrecision.parse(
+    ENV["QWEN_IMAGE21_LATENT_STATE_PRECISION"]? || "float32"
+  )
+rescue error : ArgumentError
+  abort "invalid QWEN_IMAGE21_LATENT_STATE_PRECISION: #{error.message}"
+end
 abort "GGUF file not found: #{gguf_path}" unless File.file?(gguf_path)
 abort "Metal backend unavailable" unless ML::GGUF::QwenImage21MetalProjectionBackend.available?
 
@@ -153,7 +162,7 @@ stack = ML::GGUF::QwenImage21MetalLayerStackBackend.new
 loaded_at = Time.instant
 begin
   config = model.transformer_config
-  puts "denoising prompt=#{conditioning.prompt.inspect} image=#{conditioning.image_width}x#{conditioning.image_height} seed=#{conditioning.seed} steps=#{steps} solver=#{solver.label} model_timestep_precision=#{timestep_precision.label}"
+  puts "denoising prompt=#{conditioning.prompt.inspect} image=#{conditioning.image_width}x#{conditioning.image_height} seed=#{conditioning.seed} steps=#{steps} solver=#{solver.label} model_timestep_precision=#{timestep_precision.label} latent_state_precision=#{latent_state_precision.label}"
   previous_cache_builds = 0
   previous_cache_hits = 0
   step_latent_hash_observer = if step_hashes
@@ -230,12 +239,13 @@ begin
     step_latent_snapshot_observer: step_latent_snapshot_observer,
     solver: solver,
     timestep_precision: timestep_precision,
+    latent_state_precision: latent_state_precision,
   )
   denoised_at = Time.instant
   raise "wrong number of transformer evaluations" unless result.transformer_evaluations == steps
   write_latent_bundle(
     output_dir, conditioning, result.latents, steps, solver,
-    timestep_precision, gguf_path,
+    timestep_precision, latent_state_precision, gguf_path,
   )
   if timing || step_timing
     written_at = Time.instant
