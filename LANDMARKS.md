@@ -28915,3 +28915,25 @@ Refresh after source/toolchain/device/model/workload changes.
   face-localized *excess* latent discrepancy. It cannot decide perceptual
   face quality or VAE off-manifold behavior; see the spatial-check section
   and ephemeral trajectory artifacts in the frontier document.
+- An independently recomputed, SHA-gated all-40-step BF16-state trajectory
+  showed native-to-official post-Euler latent relative L2 and absolute RMSE
+  rising at every step: 0.1569% after step 1 to 21.2774% after step 40.
+  There is no isolated failed step in this one run; the matched scheduler
+  update was already validated, but a full per-step causal DiT split is not
+  available. Final 64-channel spatial scale ratios span 0.9523–1.0741
+  (median 1.0045), so gross channel-scale escape is not observed; this is
+  not a VAE-manifold or facial-quality test.
+- A guarded, equal-input DiT block replay separated mixed-GGUF projection
+  dispatch (A), the same dequantized GGUF weights through Float32 Metal GEMV
+  (B), and official BF16 projection weights widened to Float32 through that
+  same GEMV route (C). Target hidden-state error to the official output at
+  block 13 was 0.8695%, 0.8693%, 0.4154% relative L2; at block 30 it was
+  2.0084%, 2.0089%, 0.5785%. A's hashes matched the prior fixed-input
+  canaries; a second run saved six raw outputs and root independently
+  recomputed every target metric from their matching hashes. The local
+  GGUF-weight payload effect dominates the quantized-versus-F32 dispatch
+  contrast in these two blocks, but all six projections changed together,
+  C retains native F32/MPS arithmetic differences, and no 40-step visual
+  benefit is established. Reports and raw replay are ephemeral under
+  `/private/tmp/qwen21-quant-vs-metal-20260927/`; exact methods, source
+  identities, and decay triggers are in `docs/qwen-image21-gguf-frontier.md`.

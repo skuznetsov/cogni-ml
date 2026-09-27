@@ -1231,6 +1231,20 @@ bundle. Its final bundle SHA-256 was
 | BF16-time, Float32-state relative L2 to official | 0.1805% | 2.3936% | 9.5513% | 22.7345% |
 | BF16-time, BF16-state relative L2 to official | 0.1569% | 2.3570% | 9.1774% | 21.2774% |
 
+An independent read-only recomputation of all 40 paired post-Euler snapshots
+found strictly increasing relative L2 **and** absolute RMSE at every completed
+step. The BF16-state trace first exceeded 1% at step 7, 5% at step 15, 10%
+at step 21, and 20% at step 35. The largest single relative-L2 increase was
+0.8608 percentage points into step 23; the largest absolute-RMSE increase was
+0.01142 into step 39. There is no isolated failed denoising step in this
+trace: a nonzero first-step discrepancy grows under repeated DiT/Euler
+feedback. This monotonicity does not assign a causal share to quantization,
+Metal arithmetic, or the solver. All 40 official step files matched their
+per-step hashes, and all 40 native BF16-state files matched the run log and
+were finite and BF16-exact. The existing scratch comparison script cited
+below checks source/payload/solver manifests, all steps, and endpoint hashes;
+the all-step recomputation uses the same files and Float64 metric arithmetic.
+
 The BF16-state trace was closer to the official *latent* state at all 40
 steps, but the final 21.28% residual is large. A separate native forward at
 index 20, holding the DiT implementation and text fixed but supplying the
@@ -1541,15 +1555,68 @@ on the official hidden input moved the block-30 target output by only
 
 This locates numerical divergence inside the DiT, before the VAE, and
 rejects block 30 as the sole origin of the 13.12% cumulative difference.
-It does **not** distinguish mixed-GGUF weight quantization from Metal
-arithmetic inside that ~2% local gap, establish which earlier block is the
-dominant source, or predict facial quality from hidden-state L2 alone.
-The next discriminator is a same-input block-kernel/weight control at the
-largest earlier growth regions, then a matched trajectory/decoded-image
-check before promoting any accuracy treatment. The guarded report and raw
-outputs are under `/private/tmp/qwen21-block-fixedinput-20260927/` and may
-expire. Refresh after model/GGUF, inputs, official runtime, Metal code, or
-time/modulation semantics change.
+It does **not** establish which earlier block is the dominant source or
+predict facial quality from hidden-state L2 alone. The guarded report and
+raw outputs are under `/private/tmp/qwen21-block-fixedinput-20260927/` and
+may expire. Refresh after model/GGUF, inputs, official runtime, Metal code,
+or time/modulation semantics change. The controlled weight/route split below
+further narrows the local gap.
+
+### Equal-input DiT weight-versus-route split (2026-09-27)
+
+A scratch-only three-arm replay held the official input and modulation fixed
+at blocks 13 and 30, with the same prefix/target layout and Metal block
+implementation. Arm A used the existing mixed-GGUF projection weights and
+quantized kernels. Arm B dequantized the **same** six GGUF projections to
+Float32 and used a common Float32 Metal GEMV route. Arm C used the official
+BF16 projection weights widened exactly to Float32 on that **same** route.
+The six projections were Q, K, V, attention output, fused gate/up, and MLP
+output; Q/K norm weights remained native and matched the official widened
+weights exactly. The official gate/proj order was checked against the pinned
+Diffusers source and the native SwiGLU interpretation. A's two full-output
+hashes matched the preceding fixed-input replay byte-for-byte. A second
+run saved all six full Float32 outputs, whose hashes matched the first run;
+their target metrics below were independently recomputed against the
+SHA-gated official BF16 outputs widened to Float32.
+
+| Block, target hidden state | A: mixed GGUF | B: same GGUF weights, F32 route | C: official BF16 weights, F32 route |
+| --- | ---: | ---: | ---: |
+| 13 relative L2 to official | 0.8695% | 0.8693% | 0.4154% |
+| 30 relative L2 to official | 2.0084% | 2.0089% | 0.5785% |
+| 13 absolute RMSE | 0.04725 | 0.04724 | 0.02257 |
+| 30 absolute RMSE | 0.11390 | 0.11393 | 0.03281 |
+
+At block 30, A and B differ by only 0.0289% of the official target-state
+L2 norm, while B and C differ by 1.9214% of that same norm; at block 13
+the corresponding distances are 0.0132% and 0.7715%. These distances are
+not additive shares of the teacher error. They were recomputed from raw
+outputs with the **official teacher** norm; the report's pairwise fields
+instead use the right-hand arm's norm. Under the controlled F32 route,
+the GGUF-versus-official weight payload accounts for much more of these
+two *local* output differences than quantized-versus-F32 projection
+dispatch does. The largest static weight error is the Q5_K fused gate/up
+projection (about 3.74% relative L2 in block 13 and 3.79% in block 30);
+V and MLP output are Q6_K (about 1.8–2.1%), while Q/K/attention output
+are Q8_0 (about 0.5–0.6%). Static matrix error alone does **not** establish
+which projection dominates the block-output error; a selective swap is
+needed. An attempted selective-swap scratch harness stopped in CPU preflight
+before any GPU forward because its shard-size guard serialized a 4.26 GB
+file size as Int32; it produced no group-swap measurement.
+
+Arm C's nonzero residual is not a pure Metal-arithmetic measurement:
+the official BF16 weights are widened, but the block still executes via
+native F32 Metal operations rather than official BF16 MPS operations.
+This single-input, two-block experiment does not prove that a different
+quantization policy improves the 40-step trajectory, facial detail, text,
+or final images. The reports do not self-bind the scratch runner source or
+native Git revision, so their method lineage must be refreshed for a later
+audit; independent raw-output recomputation and the prior A canaries are
+the available controls here. The first-run report and raw-output replay
+manifests are
+`/private/tmp/qwen21-quant-vs-metal-20260927/gpu_run.json` (SHA-256
+`12a2e094...a5c7816`) and `gpu_replay.json` (SHA-256
+`1b7d7e4b...839c30`); these scratch artifacts may expire. Refresh after
+GGUF/model, source checkpoint, input/modulation, or Metal route changes.
 
 ### Spatial check of the final denoising latent (2026-09-27)
 
@@ -1570,6 +1637,15 @@ spatial correspondence; VAE receptive fields cross crop boundaries.
 | Whole latent | 21.2774% | 0.23186 | 100% |
 | Approximate face ROI | 16.7089% | 0.17639 | 1.1304% |
 | Remaining tokens | 21.3535% | 0.23283 | 98.8696% |
+
+The same SHA-gated endpoint pair shows no gross per-channel scale drift:
+across the 64 latent channels, native/official spatial standard-deviation
+ratios range from 0.9523 to 1.0741 (median 1.0045), and the largest
+channel-mean shift is 0.0973 official-channel standard deviations. The
+median paired residual RMS is still 0.2504 official-channel standard
+deviations. These are descriptive statistics from one image, **not** a
+learned-manifold test: correlations, spatial structure, and the VAE's
+nonlinear response could differ despite similar channel moments.
 
 The face crop occupies 1.9531% of tokens but carries only 1.1304% of
 the total squared latent discrepancy. Thus this one seed does **not** show
