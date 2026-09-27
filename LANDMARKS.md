@@ -28833,3 +28833,85 @@ Refresh after source/toolchain/device/model/workload changes.
   identical x0/text/time, then split projection versus block internals.
   Evidence and decay details are in `docs/qwen-image21-gguf-frontier.md`;
   ephemeral artifacts are under `/private/tmp/qwen21-bf16-state-20260927.b6UNJF/`.
+
+### Continuation 2026-09-27 — Equal-input DiT internal drift
+
+- On pinned official Qwen3VL conditioning, x0, and model time 1.0, the
+  official BF16/MPS and native GGUF/Metal first-step velocities reproduced
+  their prior SHA-256 values. Native pre-block-0 image tokens nearly matched
+  official after BF16 rounding (4,194,139/4,194,304 exact; 0.000788%
+  relative L2), while text tokens remained 0.1208% apart after rounding.
+  Block-0 target output differed by 0.4398%. These scoped captures locate
+  drift before VAE; they do not prove latent manifold departure.
+- Text normalization matched all 942,080 official BF16 values after native
+  rounding. The first text linear output did not (0.159681% relative L2);
+  rounding only its input reduced this to 0.004931% but changed full DiT
+  velocity distance only 2.725202% to 2.702657%. Rounding all text-stage
+  boundaries improved final text projection agreement, yet full velocity
+  slightly worsened to 2.725973%. GELU is a separate arithmetic boundary:
+  the captured BF16 input reproduced official GELU exactly on Torch/MPS,
+  while Torch/CPU BF16 matched 678,640/942,080 values.
+- Selected text/image input and time/modulation GGUF weight payloads match
+  the pinned official checkpoint values. Block-0 Q/K/V are mixed Q8_0/Q8_0/
+  Q6_K; dequantized weight relative L2 to official BF16 is 0.57575%/
+  0.57448%/1.83678%. These static errors cannot explain pre-QKV drift.
+  Official Torch/MPS Fourier features matched CPU BF16 in all 512 values;
+  replacing only native time features in one guarded 32-block forward moved
+  target-velocity distance 2.725202% to 2.720172%, while block-0 gate
+  stayed at 0.2561% and modulated attention input slightly worsened. The
+  time-feature mismatch is minor, not the main cause. A paired timechain
+  replay using the exact official BF16 features made the first native time
+  linear BF16-identical (8,192/8,192). Native SiLU on its unrounded Float32
+  output matched only 6,124/8,192 official BF16 values; feeding the BF16-
+  rounded linear output to the same Metal SiLU matched all 8,192. The next
+  linear then matched 8,183/8,192. After rounding all remaining timechain
+  boundaries, modulation differed in 6/32,768 values and the selected gate
+  in 1,254/5,136,384 (two repeated coefficients). This isolates a missing
+  BF16 boundary before the first time SiLU, not its final-image impact.
+  A guarded full-DiT A/B of that single boundary preserved
+  x0/model/conditioning/time-feature hashes and
+  byte-identical image/text projections, but worsened first-step target
+  velocity relative L2 2.720172% to 2.736765%, post-tanh gate 0.256120%
+  to 0.256490%, and modulated attention input 0.377958% to 0.378126%.
+  All-six-boundaries BF16 rounding improved the gate to 0.169585% and
+  attention input to 0.348730%, but worsened final target velocity to
+  2.868087%; native treatment versus baseline velocity was 0.886629%.
+  A separate root repeat reproduced the all-six-boundaries target-velocity
+  SHA-256 exactly. Local BF16 parity is not a full-DiT quality fix.
+  Details, artifact paths, source identities, and refresh conditions are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A matched, SHA-gated index-0 capture of every post-block state, using
+  official MPS BF16 Fourier features in the native route, reproduced all
+  six earlier checkpoint hashes on both routes. Image-token hidden-state
+  error grows from 0.4403% relative L2 after block 0 to 5.1100% after
+  block 14 and 13.1201% after block 30. The largest adjacent error-vector
+  change is block 29 to 30 (RMSE 0.52692). Block 31's relative error drops
+  to 3.7403% only while the official state norm jumps 11,615 to 46,293;
+  absolute error RMSE still rises 0.74408 to 0.84547. These are cumulative
+  differences, not isolated block causes. The raw all-32 artifacts are ephemeral under
+  `/private/tmp/qwen21-block-drift-all32-20260927/`.
+- A scratch-only fixed-input Metal replay passed a byte-exact resident
+  block-30 canary before comparing official BF16 hidden/modulation inputs.
+  On official inputs, native block-13 target output differed 0.8695% rel-L2
+  (0.04725 RMSE), block 30 2.0084% (0.11390). At block 30, holding native
+  modulation fixed gives an exact error-vector decomposition: observed
+  13.1201% / 0.74408 RMSE = same-input block term 2.0145% / 0.11425 plus
+  transported input-drift term 12.9649% / 0.73528; these are vector terms,
+  **not** additive scalar shares. Native block 30 maps the pre-block-30
+  target discrepancy of 0.52874 RMSE to 0.73528 (1.39x) on this input.
+  Thus it amplifies a pre-existing difference, rather than originating the
+  entire observed 13.12% gap. A local ~2% gap remains, not yet attributed
+  to quantization versus kernel arithmetic; earlier growth also remains to
+  isolate. The first sandboxed attempt lacked a Metal device, but one
+  authorized GPU-access retry completed and its raw result was independently
+  recomputed. Guarded scratch artifacts are under
+  `/private/tmp/qwen21-block-fixedinput-20260927/`; detail and decay
+  conditions are in `docs/qwen-image21-gguf-frontier.md`.
+- In matched 40-step official-versus-native BF16-state final latents,
+  the documented approximate face ROI (20/1,024 spatial tokens) had
+  16.7089% relative L2 and 0.17639 absolute RMSE versus 21.3535% and
+  0.23283 outside it; it held 1.1304% of squared error despite covering
+  1.9531% of tokens. This one-seed comparison does not support a
+  face-localized *excess* latent discrepancy. It cannot decide perceptual
+  face quality or VAE off-manifold behavior; see the spatial-check section
+  and ephemeral trajectory artifacts in the frontier document.
