@@ -3,6 +3,7 @@
 # Run the native GGUF Metal DiT on a real Qwen3-VL prompt-conditioning bundle.
 # The companion reference-side scripts prepare the bundle and decode this
 # output. Diffusers never executes the transformer in this path.
+require "digest/sha256"
 require "../src/ml/gguf/qwen_image21_conditioning_bundle"
 require "../src/ml/gguf/qwen_image21_metal"
 require "../src/ml/gguf/qwen_image21_weights"
@@ -57,11 +58,61 @@ private def write_latent_bundle(
   puts "latent_bundle=#{manifest_path} tokens=#{conditioning.latent_height * conditioning.latent_width} steps=#{steps}"
 end
 
+private def resolve_new_step_latent_directory(path : String?, output_dir : String) : String?
+  return nil unless path
+  abort "QWEN_IMAGE21_STEP_LATENT_DIR must not be empty" if path.empty?
+
+  expanded = File.expand_path(path)
+  output_path = File.expand_path(output_dir)
+  abort "step latent directory must differ from output directory" if expanded == output_path
+  if File.exists?(expanded) || Dir.exists?(expanded) || File.symlink?(expanded)
+    abort "step latent directory already exists: #{expanded}"
+  end
+
+  parent = File.dirname(expanded)
+  abort "step latent directory parent does not exist: #{parent}" unless Dir.exists?(parent)
+  expanded
+end
+
+private def create_step_latent_directory(path : String?) : Nil
+  return unless path
+
+  begin
+    Dir.mkdir(path)
+  rescue error : File::Error
+    abort "could not create new step latent directory #{path}: #{error.message}"
+  end
+end
+
+private def write_step_latent_snapshot(
+  directory : String,
+  index : Int32,
+  timestep : Float32,
+  latents : Array(Float32),
+) : Nil
+  filename = "step-#{index.to_s.rjust(3, '0')}.bin"
+  path = File.join(directory, filename)
+  if File.exists?(path) || Dir.exists?(path) || File.symlink?(path)
+    raise ArgumentError.new("step latent snapshot already exists: #{path}")
+  end
+
+  bytes = IO::Memory.new(latents.size * sizeof(Float32))
+  latents.each { |value| bytes.write_bytes(value, IO::ByteFormat::LittleEndian) }
+  payload = bytes.to_slice
+  File.open(path, "w") { |file| file.write(payload) }
+  sha256 = Digest::SHA256.hexdigest(payload)
+  puts "denoising_step_latent index=#{index} timestep=#{timestep} " \
+       "sha256=#{sha256} bytes=#{payload.size} file=#{path}"
+end
+
 gguf_path = ARGV[0]? || abort "usage: crystal run scripts/qwen_image21_generate_latents.cr -- MODEL.gguf CONDITIONING.json OUTPUT_DIR [STEPS=40]"
 conditioning_path = ARGV[1]? || abort "missing CONDITIONING.json"
 output_dir = ARGV[2]? || abort "missing OUTPUT_DIR"
 steps = ARGV[3]?.try(&.to_i) || 40
 abort "steps must be in 2..100" unless steps >= 2 && steps <= 100
+step_latent_dir = resolve_new_step_latent_directory(
+  ENV["QWEN_IMAGE21_STEP_LATENT_DIR"]?, output_dir,
+)
 solver = begin
   ML::GGUF::QwenImage21FlowMatchSolver.parse(ENV["QWEN_IMAGE21_SOLVER"]? || "euler")
 rescue error : ArgumentError
@@ -71,6 +122,13 @@ abort "GGUF file not found: #{gguf_path}" unless File.file?(gguf_path)
 abort "Metal backend unavailable" unless ML::GGUF::QwenImage21MetalProjectionBackend.available?
 
 conditioning = ML::GGUF::QwenImage21ConditioningBundle.load(conditioning_path)
+create_step_latent_directory(step_latent_dir)
+if directory = step_latent_dir
+  puts "step_latent_snapshot_format directory=#{directory} layout=tokens_hwc " \
+       "channels=64 latent_height=#{conditioning.latent_height} " \
+       "latent_width=#{conditioning.latent_width} dtype=float32-le " \
+       "scaling=diffusers_normalized"
+end
 timing = ENV["QWEN_IMAGE21_TIMING"]? == "1"
 step_timing = ENV["QWEN_IMAGE21_STEP_TIMING"]? == "1"
 step_hashes = ENV["QWEN_IMAGE21_STEP_HASHES"]? == "1"
@@ -97,6 +155,13 @@ begin
                               else
                                 nil
                               end
+  step_latent_snapshot_observer = if directory = step_latent_dir
+                                    ->(index : Int32, timestep : Float32, latents : Array(Float32)) {
+                                      write_step_latent_snapshot(directory, index, timestep, latents)
+                                    }
+                                  else
+                                    nil
+                                  end
   step_observer = if step_timing
                     ->(index : Int32, sigma : Float32, timestep : Float32, elapsed : Time::Span) {
                       cache_builds = stack.prefix_cache_builds
@@ -153,6 +218,7 @@ begin
     layer_stack_backend: stack,
     step_observer: step_observer,
     step_latent_hash_observer: step_latent_hash_observer,
+    step_latent_snapshot_observer: step_latent_snapshot_observer,
     solver: solver,
   )
   denoised_at = Time.instant

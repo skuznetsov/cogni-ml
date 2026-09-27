@@ -235,6 +235,36 @@ describe ML::GGUF::QwenImage21FlowMatch do
     result.should eq(expected_latents)
   end
 
+  it "reports post-update latent snapshots without exposing the live trajectory" do
+    schedule = ML::GGUF::QwenImage21FlowMatch.schedule(3, 256)
+    initial = [0.25_f32, -0.5_f32]
+    prediction = [1.0_f32, -2.0_f32]
+    expected_states = [] of Array(Float32)
+    expected_state = initial.dup
+    schedule.step_count.times do |index|
+      expected_state = schedule.step(expected_state, prediction, index)
+      expected_states << expected_state
+    end
+
+    observations = [] of Tuple(Int32, Float32, Array(Float32))
+    result = ML::GGUF::QwenImage21FlowMatch.denoise(
+      initial, schedule,
+      step_latent_snapshot_observer: ->(index : Int32, timestep : Float32, latents : Array(Float32)) {
+        observations << {index, timestep, latents.dup}
+        latents.fill(99.0_f32)
+        nil
+      },
+    ) do |_latents, _timestep, _index|
+      prediction
+    end
+
+    observations.map(&.[0]).should eq([0, 1, 2])
+    observations.map(&.[1]).should eq(schedule.timesteps)
+    observations.map(&.[2]).should eq(expected_states)
+    result.should eq(expected_state)
+    initial.should eq([0.25_f32, -0.5_f32])
+  end
+
   it "rejects schedules too short for terminal stretching" do
     expect_raises(ArgumentError, "num_inference_steps must be at least two") do
       ML::GGUF::QwenImage21FlowMatch.schedule(0, 256)

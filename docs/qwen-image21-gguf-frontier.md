@@ -854,6 +854,93 @@ ephemeral PNGs live under
 `/private/tmp/qwen21-russian-steps-ab-20260926-r1`; refresh the comparison
 after processor, checkpoint, GGUF, VAE, runner, or Metal-route changes.
 
+### Where the Russian A/B latents diverge (2026-09-26)
+
+An opt-in `QWEN_IMAGE21_STEP_LATENT_DIR` now records a copy of the
+post-update target latents after each solver step as `step-000.bin` through
+`step-039.bin` (`32x32x64`, tokens-HWC, normalized float32 little-endian).
+The directory must be new, and the observer receives a copied array so it
+cannot modify the live trajectory. The focused flow-matching spec passed
+16/16 examples, including an observer-mutation check. A matched two-step
+official-conditioning smoke produced exactly the same final latent SHA-256
+with and without snapshots:
+`807537b77bb0731e9e71f8d73dc6e5035fbe12c187f0ed55bf616c7b2afd24b4`.
+
+Both independent 40-step runs reused the conditioning, GGUF, seed, mask,
+initial target latents, solver, and Metal path from the preceding A/B. Only
+the Qwen3VL `encoder_hidden_states` differed. The instrumented runner SHA-256
+was `98bc33d563a8b5ca26a57be1437ee43345357f6ea8658f11336ab3092a0e58d5`.
+Each arm emitted 40 finite 262,144-byte snapshots; its final snapshot matched
+its saved bundle byte-for-byte and reproduced the pre-instrumentation final
+SHA-256 (`d3c20f...` official, `a94192...` native; full hashes in the run
+logs). The runs were sequential, not concurrent. A sandboxed Metal attempt
+failed before running; the bounded device-enabled runs succeeded.
+
+At the first DiT evaluation, the starting image latent is identical in both
+arms, so the step-0 difference is a direct response to the different text
+conditioning. Later differences include both ongoing conditioning and
+feedback from the already diverged latent. The table uses
+`||native - official||_2 / ||official||_2` at the same post-update step;
+the two approximate spatial ROIs are a `5x4`-token face crop (rows 9:14,
+columns 20:24) and a `5x14`-token sign crop (rows 0:5, columns 18:32).
+
+| Euler step, zero-based | Whole latent | Selected face ROI | Selected sign ROI |
+| ---: | ---: | ---: | ---: |
+| 0 | 0.0207% | 0.0197% | 0.0123% |
+| 5 | 0.1475% | 0.1391% | 0.0719% |
+| 10 | 0.5769% | 0.4791% | 0.1961% |
+| 15 | 2.2918% | 1.9256% | 0.3899% |
+| 20 | 4.5160% | 3.9610% | 0.7134% |
+| 25 | 6.9656% | 6.5157% | 1.1037% |
+| 30 | 9.0935% | 9.3082% | 1.5282% |
+| 35 | 10.5552% | 11.6381% | 2.0472% |
+| 39 | 11.1655% | 13.0016% | 2.5439% |
+
+The whole-latent relative difference increased at every measured step; there
+was no single late discontinuity. The selected tight face crop stayed above
+the whole-latent difference from step 29 onward, but this is ROI-sensitive:
+shifting that crop by one latent token yielded final differences from 9.67%
+to 13.30%, and a broader `7x6`-token crop ended at 11.05%. These ROIs are
+not a precise inverse mapping of VAE pixels to latent tokens, and neither
+relative L2 nor a face crop is a perceptual-quality score. Official/native
+final latent norms were 280.286/279.935; their ratio stayed within about 0.13%
+of one across the trajectory. That argues against a gross amplitude
+explosion, not against an off-manifold displacement.
+
+A separate CPU/float32 VAE probe re-decoded both saved endpoints to exactly
+their existing PNG pixels. Decoding latent interpolants at alpha 0, 0.25,
+0.5, 0.75, and 1 changed the selected face smoothly, without an observed
+decoder cliff. This probes local VAE sensitivity only: the interpolants are
+not valid diffusion trajectories and need not lie on the training manifold.
+The reference and native decoder endpoints still differ in the face pixels
+(12.36/255 mean absolute channel difference in the selected 60x69 pixel
+crop, versus 4.37/255 over the full frame).
+
+Upstream, the native token embedding lookup exactly reproduced official
+Qwen3VL `hidden_state_000` for all 244 raw tokens (0/999,424 BF16
+mismatches). A one-block native Accelerate sweep starting from that official
+input differed from official `hidden_state_001` in 315,527/999,424 BF16
+values, with relative RMS 0.2000%; all 244 rows had mismatches. Thus the
+first **observed** text-path difference is within transformer block 0,
+before the first image-latent step. This endpoint test does not identify the
+first divergent operation. An earlier red-cube per-op trace suggests
+`input_layernorm` as the next falsifier, but it used another prompt and
+backend; a matching Russian per-op official trace is still needed.
+
+The causal claim is deliberately narrow: different Qwen3VL outputs produce
+a small step-0 latent difference that accumulates under the same native
+Q4-labeled mixed-quant GGUF/Metal DiT. This experiment does **not** compare
+that DiT to the official BF16 DiT, prove a DiT implementation bug, or prove
+the native latent is outside the VAE's training distribution. The local
+text-encoder shards also lack independent content attestation in this probe.
+Scratch logs and all per-step tensors live under
+`/private/tmp/qwen21-latent-drift-20260926.2s838A/`; the VAE sensitivity
+report is under `/private/tmp/qwen21-face-vae-probe-20260926-r1/`, and the
+one-layer text probe under
+`/private/tmp/qwen21-russian-text-layer-probe-20260926-r1/`. Those files
+may expire. Re-run after changes to the processor, text checkpoint,
+GGUF/Metal path, scheduler, or VAE.
+
 ### Portrait resolution and latency probe (2026-09-24)
 
 The daylight prompt above was also run through the unchanged hybrid path on

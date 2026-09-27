@@ -180,6 +180,7 @@ module ML::GGUF
       schedule : QwenImage21FlowMatchSchedule,
       step_observer : Proc(Int32, Float32, Float32, Time::Span, Nil)? = nil,
       step_latent_hash_observer : Proc(Int32, Float32, String, Nil)? = nil,
+      step_latent_snapshot_observer : Proc(Int32, Float32, Array(Float32), Nil)? = nil,
       solver : QwenImage21FlowMatchSolver = QwenImage21FlowMatchSolver::Euler,
       &predictor : Array(Float32), Float32, Int32 -> Array(Float32)
     ) : Array(Float32)
@@ -219,6 +220,9 @@ module ML::GGUF
           observer.call(
             index, schedule.timesteps[index], float32_latents_sha256(latents),
           )
+        end
+        if observer = step_latent_snapshot_observer
+          observer.call(index, schedule.timesteps[index], latents.dup)
         end
       end
       latents
@@ -260,6 +264,7 @@ module ML::GGUF
       layer_stack_backend : QwenImage21LayerStackBackend? = nil,
       step_observer : Proc(Int32, Float32, Float32, Time::Span, Nil)? = nil,
       step_latent_hash_observer : Proc(Int32, Float32, String, Nil)? = nil,
+      step_latent_snapshot_observer : Proc(Int32, Float32, Array(Float32), Nil)? = nil,
       solver : QwenImage21FlowMatchSolver = QwenImage21FlowMatchSolver::Euler,
     ) : QwenImage21DenoisingResult
       raise ArgumentError.new("img_shapes must contain a target image") if img_shapes.empty?
@@ -297,6 +302,7 @@ module ML::GGUF
         initial_target_latents, schedule,
         step_observer: step_observer,
         step_latent_hash_observer: step_latent_hash_observer,
+        step_latent_snapshot_observer: step_latent_snapshot_observer,
         solver: solver,
       ) do |target_latents, timestep, _index|
         result = QwenImage21TransformerCPU.forward(
