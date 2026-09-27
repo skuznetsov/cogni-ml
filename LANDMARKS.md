@@ -28937,3 +28937,22 @@ Refresh after source/toolchain/device/model/workload changes.
   benefit is established. Reports and raw replay are ephemeral under
   `/private/tmp/qwen21-quant-vs-metal-20260927/`; exact methods, source
   identities, and decay triggers are in `docs/qwen-image21-gguf-frontier.md`.
+- A fixed-input block-30 family-swap probe replayed the prior all-GGUF-F32
+  and all-official-F32 controls byte-for-byte, then substituted one official
+  BF16-widened projection family at a time through the same Metal route.
+  Target error to the official output was 2.008916% relative L2 for all-GGUF,
+  1.209111% with only fused gate/up replaced, 1.818562% with only MLP output,
+  1.917261% with only V, 1.992175% with Q/K/attention output, and 0.578489%
+  for all-official. Root independently SHA-checked all six raw Float32
+  outputs and recomputed every target metric. Thus the Q5_K gate/up payload
+  is the largest tested local family in this one block; its substitution
+  closes 55.9% of the B-to-C relative-L2 metric gap, not an additive causal
+  share or a proved image-quality gain. The scratch report lost C/swap weight
+  metadata through mutable-hash clearing, while output hashes and metrics
+  remained intact; strict donor tensor checks are required before repacking.
+  Report SHA-256 `757d2a8ea37d179add54a01ff7e423ea2b091418fd5f533cd8195c2ccaf550cf`
+  and raw outputs are ephemeral under
+  `/private/tmp/qwen21-quant-vs-metal-20260927/`. Refresh after model,
+  checkpoint, input/modulation, Metal route, compiler, or hardware changes;
+  the next discriminator is higher-precision gate/up at earlier blocks and
+  through the full denoising trajectory.

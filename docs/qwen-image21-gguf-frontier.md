@@ -1599,9 +1599,9 @@ projection (about 3.74% relative L2 in block 13 and 3.79% in block 30);
 V and MLP output are Q6_K (about 1.8–2.1%), while Q/K/attention output
 are Q8_0 (about 0.5–0.6%). Static matrix error alone does **not** establish
 which projection dominates the block-output error; a selective swap is
-needed. An attempted selective-swap scratch harness stopped in CPU preflight
+needed. An initial selective-swap scratch harness stopped in CPU preflight
 before any GPU forward because its shard-size guard serialized a 4.26 GB
-file size as Int32; it produced no group-swap measurement.
+file size as Int32; the corrected measurement is recorded below.
 
 Arm C's nonzero residual is not a pure Metal-arithmetic measurement:
 the official BF16 weights are widened, but the block still executes via
@@ -1617,6 +1617,55 @@ manifests are
 `12a2e094...a5c7816`) and `gpu_replay.json` (SHA-256
 `1b7d7e4b...839c30`); these scratch artifacts may expire. Refresh after
 GGUF/model, source checkpoint, input/modulation, or Metal route changes.
+
+### Fixed-input block-30 projection-family swaps (2026-09-27)
+
+The follow-up scratch runner retained the same official pre-block-30 hidden
+state, modulation, teacher output, and Float32 Metal projection route as arm B
+above. It independently re-created B and C byte-for-byte before replacing one
+projection family at a time with official BF16 weights widened to Float32;
+native Q/K norm weights stayed fixed. The two control output SHA-256 values were
+`55780d42...306e31a` (B) and `63610d86...2bed38` (C), identical to the prior
+raw-output replay. CPU preflight pinned the official checkpoint shard, GGUF,
+inputs, source SHA-256 `2c135852...d421833d2`, and compiled binary SHA-256
+`cdc39bbf...138b1d29`. The sandboxed launch had no Metal device; one
+device-enabled launch on Apple M2 Max completed all arms without changing those
+inputs or the runner.
+
+| Block-30 target output on identical input | Relative L2 to official | Absolute RMSE |
+| --- | ---: | ---: |
+| B: all six GGUF projections dequantized to Float32 | 2.008916% | 0.11393194 |
+| Only fused gate/up from official | 1.209111% | 0.06857250 |
+| Only MLP output from official | 1.818562% | 0.10313637 |
+| Only V from official | 1.917261% | 0.10873390 |
+| Q, K, and attention output from official | 1.992175% | 0.11298249 |
+| C: all six projections from official | 0.578489% | 0.03280793 |
+
+Root independently checked the SHA-256 and 20,545,536-byte size of all six
+raw Float32 outputs and the teacher, verified finite values, and recomputed
+every target relative L2 and RMSE in Float64. The fused Q5_K gate/up payload
+is therefore the largest *single tested family* in this fixed-input local
+block discrepancy: replacing it alone closes 55.9% of the B-to-C
+relative-L2 **metric gap**. This is not an additive causal share or a proof
+that gate/up dominates other blocks or the 40-step image. The four individual
+output deltas nearly sum to C minus B on this input (interaction residual
+0.0346% of teacher L2 norm), but this does not license global linearization.
+
+The report has a metadata defect: its C and swap-arm
+`weight_sources_and_f32_sha256` objects are empty because the scratch runner
+cleared their mutable hashes before JSON serialization. This does **not**
+change the saved raw outputs or their independently checked metrics; the
+compiled source specifies each swap and the B/C exact-output controls anchor
+the route. It does weaken standalone provenance of the per-arm weight hashes,
+so a repack decision must recheck tensor inventories and raw donor bytes.
+`block30_group_swap_report.json` has SHA-256
+`757d2a8ea37d179add54a01ff7e423ea2b091418fd5f533cd8195c2ccaf550cf`
+under `/private/tmp/qwen21-quant-vs-metal-20260927/`, alongside the preflight,
+runner, and raw outputs; all are ephemeral. Refresh after model/GGUF,
+checkpoint, input/modulation, Metal route, compiler, or hardware changes.
+Next test a higher-precision gate/up donor with strict per-tensor inventory,
+then repeat at earlier blocks and across the full denoising trajectory before
+claiming improvement in facial detail or text.
 
 ### Spatial check of the final denoising latent (2026-09-27)
 
