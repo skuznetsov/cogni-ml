@@ -28714,3 +28714,50 @@ Refresh after source/toolchain/device/model/workload changes.
   This does not establish a native DiT bug, VAE-manifold departure, or an
   image-quality gain from changing text arithmetic. Evidence and refresh
   conditions: `docs/qwen-image21-gguf-frontier.md`; scratch traces may expire.
+
+### Continuation 2026-09-27 — Crossed DiT state/conditioning probes
+
+- On the same pinned 40-step Russian-sign trajectory, four-corner native
+  GGUF/Metal DiT probes at steps 10, 20, and 39 crossed both saved latent
+  states with both Qwen3VL conditioning payloads. Both diagonal Euler
+  reconstructions were bit-exact at each step; paired-update errors were
+  at most `2.38e-7`. At those transitions, symmetric state effects had
+  `27.75x`, `58.62x`, and `235.22x` the L2 of contemporaneous symmetric
+  conditioning effects. The latter's signed projection changed sign.
+  These are local state-feedback contrasts, not a global cause or visual
+  quality score; the initial state divergence came from conditioning.
+- A spatial audit of all 80 snapshots found that the top 10% of tokens
+  carried 70.74% of final squared cross-arm error, but the strongest
+  final `4x4`-token region was not a stable hotspot from step 0. The
+  approximate face ROI carried 2.55% of final squared error, so global
+  latent error concentration is not a face-quality metric or pixel map.
+- Independently, the pinned official BF16 pipeline casts raw scheduler
+  timestep to BF16 before dividing by 1000, whereas native DiT uses
+  Float32 division. Raw timestep, sigma, and Euler `dt` agree at all 40
+  steps, but the DiT-time input differs at 39/40. It was not the differing
+  input between the matched native-DiT conditioning arms, because both
+  used the same native time path; it may still affect propagation. A
+  fixed-state/conditioning native j20 intervention
+  changed only DiT time from `0.62301314` to official-effective `0.625`;
+  Euler-scaled output L2 changed by `0.02615`/`0.03846` on the two saved
+  arms, exceeding the same-step symmetric conditioning contrast `0.01585`.
+  This is local sensitivity, not a demonstrated 40-step quality gain.
+- A same-value index-20 BF16/MPS official DiT versus mixed-GGUF/Metal
+  single-forward check used one BF16-rounded saved state, BF16-exact
+  official conditioning, matching masks/shapes and `t=0.625`. Corrected
+  velocity agreement was relative L2 `0.014126` and cosine `0.999902`;
+  the Euler-scaled difference was L2 `0.121686`. This combines model
+  implementation, quantization, precision, and GGUF provenance, so it
+  does not identify which produces the remaining gap or predict final
+  face quality. The first apparent large gap was *invalid*: direct MPS
+  BF16 sliced-view to CPU Float32 transfer mishandled the 230-row offset,
+  shifting by 115 Float32 rows. Full-BF16 transfer/CPU widening and an
+  independent zero-offset BF16 clone agreed exactly; never use the
+  invalid first metric.
+- Evidence, scope, and refresh triggers: `docs/qwen-image21-gguf-frontier.md`;
+  scratch harnesses/logs under `/private/tmp/qwen21-crossed-dit-20260927/`
+  `/private/tmp/qwen21-timestep-counterfactual-20260927/`, and
+  `/private/tmp/qwen21-matched-oracle-20260927/`, plus
+  `/private/tmp/qwen21_spatial_drift_audit.md`, may expire. Recheck on
+  source, GGUF, Qwen3VL payload, scheduler, precision path, Metal route,
+  saved-state, or official Diffusers revision changes.

@@ -919,10 +919,124 @@ tokens account for 70.7% of squared cross-arm error (effective support
 about 101 of 1,024 tokens). A post-hoc selected `4x4`-token hotspot at
 rows 20:24, columns 4:8 accounts for 27.2% of final squared error (39.1%
 at step 15); this is latent-space concentration, not a pixel-accurate face
-or sign map. A causal next probe would evaluate the same DiT at saved
-timesteps with all four crossed pairs
-`(official/native latent) x (official/native conditioning)`, holding the
-other argument fixed in each contrast.
+or sign map. A crossed-pair DiT intervention below tests three saved
+transitions while holding latent state or conditioning fixed.
+
+A per-step spatial audit of all 80 finite snapshots verified both final
+snapshot/bundle pairs byte-for-byte. The top 10% of tokens carried 29.12%
+of squared cross-arm error at step 0, 66.00% at step 10, 80.48% at step 15,
+and 70.74% at step 39. The selected rows 20:24, columns 4:8 carried 4.22%,
+30.45%, 39.10%, and 27.16% at those same steps. Its absolute squared error
+first reached 10% of its own final value at step 20 and 50% at step 32;
+relative share and absolute magnitude answer different questions. The
+approximate `5x4` face and `5x14` sign token ROIs from the table above
+accounted for only 2.55% and 0.32% of final global squared error,
+respectively. Their visual salience therefore cannot be inferred from the
+whole-latent error ranking. The top-16 error-token sets at steps 0 and 39
+overlap in only one token
+(Jaccard 0.032), whereas adjacent top-decile sets have median Jaccard
+0.962. Together with the first/final signed-difference cosine 0.0169, this
+rejects a fixed error vector or fixed earliest hotspot across the entire
+trajectory, while allowing stable localization later. These are token-space
+statistics, not evidence that the selected region maps to the observed face
+defect or that it has a direct perceptual-quality score. The read-only
+analyzer and report are under `/private/tmp/qwen21_spatial_drift_audit.py`
+and `/private/tmp/qwen21_spatial_drift_audit.md`; rerun the analyzer on the
+same 80 saved tensors after any input-identity or layout change.
+
+Equal-input four-corner native DiT probes at transition indices 10, 20,
+and 39 evaluated each arm's saved pre-step state against both encoder
+payloads, holding the other argument fixed in each contrast. Fresh layer
+stacks built a separate prefix cache for every forward. At all three
+indices, both diagonal predictions reconstructed their saved post-step
+latents exactly (`65,536/65,536` Float32 values each); the predicted
+paired update difference agreed with observed snapshots to max absolute
+error `2.38e-7` (Float64 comparison after Float32 Euler rounding). Without
+these controls, the crossed contrasts would be invalid.
+
+For `v_ij = DiT(x_i, c_j, t)` with `i,j` official or native, define the
+symmetric conditioning contrast
+`C = ((v_ON-v_OO) + (v_NN-v_NO))/2` and state contrast
+`S = ((v_NO-v_OO) + (v_NN-v_ON))/2`. The identity
+`C+S = v_NN-v_OO` held exactly at each sample. The nonadditive interaction
+is `I = v_NN-v_NO-v_ON+v_OO`; it is not a third additive part of the paired
+diagonal difference. All norms below include each transition's own Euler
+`|dt|`, and projections are signed along its pre-step native-minus-official
+drift direction.
+
+| Transition | Pre- to post-step drift L2 | `||dt*C||_2` | `||dt*S||_2` | `||dt*I||_2` | State/conditioning | `dt*C` projection |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 10 | 0.83737 to 1.23178 | 0.01711 | 0.47478 | 0.02061 | 27.75x | -0.001484 |
+| 20 | 7.71887 to 8.58743 | 0.01585 | 0.92897 | 0.02653 | 58.62x | +0.000133 |
+| 39 | 30.56281 to 31.29533 | 0.00400 | 0.94170 | 0.00505 | 235.22x | +0.000020 |
+
+At these local transitions, feedback from the already different image
+state dominates the *contemporaneous* conditioning contrast by norm. The
+paired update difference is still only about 56%, 12%, and 3% of the
+pre-existing drift at indices 10, 20, and 39. Conditioning's signed
+projection changes sign and is not a consistently positive drift driver;
+its interaction with state exceeds its symmetric main effect at each
+sample. The original state difference was itself initiated by different
+conditioning. These observations do not exonerate Qwen3VL, establish a
+DiT implementation bug, show a VAE-manifold departure, or score visual
+quality.
+The opt-in scratch harness and full run log are under
+`/private/tmp/qwen21-crossed-dit-20260927/`; their SHA-256 values are
+`397b9658042308533c285d58bfd1d0e013d027f09e40791781c7ad62838562a9`
+and `613ea6ca1d071172616bdbf6d0c7c9b4ba764996dc1014ba71ff1c35b85e43d4`.
+Re-evaluate after source, GGUF, conditioning, scheduler, Metal route, or
+saved-state changes; other timesteps, seeds, and prompts remain open.
+
+A separate scheduler-parity audit found a DiT-time input mismatch relative
+to the pinned official BF16 pipeline. All 40 raw scheduler timesteps,
+sigmas, and Euler `dt` values are bit-identical between the reference and
+native schedules. The official pipeline first casts raw `t` to the BF16
+latent dtype, then divides by 1000 in BF16; the native schedule divides
+raw `t` by 1000 in Float32. Consequently the DiT time value differs at
+39/40 indices. At index 20, both start from raw `623.0131226`, but the
+official DiT receives `0.625` and native receives `0.62301314`; the
+largest absolute discrepancy is `0.002673745` at index 21. This is a
+real implementation-parity gap, but it was not the *differing input*
+between the two saved conditioning arms: both used the same native time
+path. It may still affect how their conditioning difference propagates.
+A bounded same-state, same-conditioning native DiT
+intervention at index 20 then changed only `t=0.62301314` to the official
+BF16-effective `t=0.625`. Its Euler-scaled output difference had L2
+`0.02615` on the official-conditioning arm's saved state and `0.03846`
+on the native-conditioning arm's saved state, versus the four-corner
+conditioning contrast `0.01585` and state contrast `0.92897` at that step.
+Both original-time diagonal Euler reconstructions were bit-exact. This
+demonstrates a nonzero local DiT sensitivity, not the direction of image
+quality or the accumulated effect of changing the time path for all 40
+steps. The scratch harness and log are under
+`/private/tmp/qwen21-timestep-counterfactual-20260927/`. Refresh after
+Diffusers pipeline, latent dtype, native scheduler, GGUF, or Metal changes.
+
+An independent same-value index-20 DiT oracle then used the pinned official
+BF16/MPS checkpoint and native mixed-quant GGUF/Metal path. The saved
+post-step-19 official-conditioning state was rounded once to BF16 and
+supplied numerically identically to both models; all 230 conditioning rows
+were already BF16-exact. Both received the same masks, shapes, and
+`t=0.625`. With output shapes `1x1024x64`, the corrected native-minus-BF16
+velocity difference had relative L2 `0.014126`, cosine `0.999902`, RMS
+`0.019704`, and max absolute value `0.168639`; the index-20 Euler-scaled
+L2 difference was `0.121686`. This is a *single-forward combined*
+implementation/mixed-quant/precision/provenance contrast, not an isolated
+quantization error, 40-step error bound, or perceptual score. It supports
+close local vector-field agreement at this tested input while leaving
+trajectory-level amplification and localized face quality open.
+
+The first oracle readout was invalid: a direct MPS BF16 sliced-view to CPU
+Float32 conversion mishandled the 230-row storage offset, shifting the
+corrected output by exactly 115 Float32 rows and corrupting the tail.
+The corrected readout transferred the full BF16 tensor to CPU before
+slicing and widening; an independent zero-offset BF16 clone agreed for
+all `65,536` output values, each BF16-exact. The original direct-view
+transfer differed at `65,472/65,536` entries, so its apparent relative
+L2 `1.3613` must not be used as DiT evidence. The pinned scratch oracle
+scripts, guarded input/output reports, and comparison are under
+`/private/tmp/qwen21-matched-oracle-20260927/`; re-run after checkpoint,
+GGUF, Diffusers, Torch/MPS, masks, conditioning, or native kernel changes.
 
 A separate CPU/float32 VAE probe re-decoded both saved endpoints to exactly
 their existing PNG pixels. Decoding latent interpolants at alpha 0, 0.25,

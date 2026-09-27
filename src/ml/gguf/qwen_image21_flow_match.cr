@@ -70,8 +70,9 @@ module ML::GGUF
       @timesteps.size
     end
 
-    # The pinned pipeline sends the Float32 scheduler timestep / 1000 to the
-    # transformer. This can differ from raw sigma by one Float32 ULP.
+    # Native DiT time uses Float32 division. The pinned BF16 pipeline instead
+    # rounds the scheduler timestep to BF16 before dividing by 1000 in BF16;
+    # model-time parity is therefore not exact even when sigma and dt match.
     def model_timestep(index : Int32) : Float32
       check_index(index)
       @timesteps[index] / 1000.0_f32
