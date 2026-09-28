@@ -4439,16 +4439,12 @@ same-input divergence inside the DiT, beginning at or before its first block
 and growing through the block stack; they reject a VAE-only origin for this
 trajectory. They do **not** prove that the face defects are caused by a
 particular block, that the final latent is outside the VAE's training support,
-or that a Metal kernel is wrong. Q8 weight substitution, BF16-versus-F32
-arithmetic, and the official cached-prefix versus native full-joint text
-recomputation remain confounded. Earlier full-versus-cache target-output
-identity at other steps reduces but does not eliminate the call-10 route
-question. A matched-input replay cannot use the current target-only official
-capture: it also needs official per-block text-prefix/KV and modulation, or
-a non-cached full-joint official call-10 capture. The next discriminating
-experiment is to establish cached-versus-full official parity at call 10,
-then replay blocks 0 and 29-31 from identical *consumed* inputs before
-attributing growth to a specific operator or changing a quality policy.
+or that a Metal kernel is wrong. Q8 weight substitution and BF16-versus-F32
+arithmetic remain confounded. The cached-prefix versus full-joint text route
+was unresolved in this capture; the follow-on experiment below tests it at
+call 10 and replays selected blocks from identical *consumed* inputs. The
+target-only official capture in this paragraph cannot by itself provide the
+full-joint predecessor states or modulation needed for that replay.
 
 The scratch analyzer and report are
 `/private/tmp/qwen21-call10-all32-20260928/analysis/analyze_call10_all32.py`
@@ -4465,6 +4461,85 @@ and `c02db824aaf432d09029ad32a8addedcdf1f7d6def79e3585d4aabff8c7ff033`.
 Refresh after source/weights, conditioner, BF16 or Metal runtime, schedule,
 saved artifacts, or diagnostic source changes; no end-to-end trajectory or
 image-quality claim is promoted by this block trace.
+
+### Call-10 full-joint route control and equal-input block replay (2026-09-28)
+
+The official BF16/MPS DiT was rerun at zero-based call 10 without its prefix
+cache, holding the saved official latent, conditioning, timestep, weights, and
+output readback fixed. Its target velocity matched both the cached forward
+and an unhooked noncached control **byte-for-byte** (65,536/65,536 BF16
+values). A second, observational full-joint capture retained the 230 text
+rows and 1,024 target-image rows before block 0 and after every block, plus
+the exact BF16-widened time and modulation tensors. The target suffix matched
+the earlier cached capture at **all 33 boundaries**: 138,412,032/138,412,032
+BF16 values. Thus the official cached/full route is closed as an explanation
+for the measured *target-state* gap at this call. This is not a claim that the
+text-prefix states or other calls are identical. A direct offset-view-to-F32
+MPS readback gave incorrect values; transferring the complete BF16 tensor to
+CPU before slicing passed an offset-zero control and was used for every
+admitted capture. The first hook-helper attempt produced no block output;
+only the corrected, validated `retry1` capture is used here.
+
+A scratch native full-Q8 Metal replay then fed each selected block its exact
+official BF16 predecessor **full-joint** state, widened to F32, and the
+official modulation. It did not feed a previous Q8 block's output to the
+next selected block. The full-Q8 donor was SHA-checked and all 32 layers'
+six projection families were asserted Q8_0. The block-0 repeat was bit-exact.
+Root independently rehashed all six saved 20,545,536-byte native outputs and
+recomputed the text, image, and joint metrics from the raw tensors. For image
+rows, the matched-input local gap is much smaller than the gap in the ordinary
+native full-stack forward:
+
+| After block | Cumulative image rel-L2 | Equal-input local image rel-L2 | Prior-state/setup term rel-L2 | Equal-input local image RMSE |
+| --- | ---: | ---: | ---: | ---: |
+| 0 | 0.355676% | 0.343305% | 0.114539% | 0.024153 |
+| 1 | 0.388854% | 0.226088% | 0.309607% | 0.017307 |
+| 12 | 2.250187% | 0.431016% | 2.209737% | 0.026790 |
+| 29 | 5.553507% | 0.491089% | 5.526691% | 0.027898 |
+| 30 | 4.712782% | 0.488420% | 4.681694% | 0.040322 |
+| 31 | 2.004610% | 0.373535% | 1.966848% | 0.082396 |
+
+The third numeric column is the norm of the exact vector difference between
+the ordinary native block output and the equal-input native block output,
+divided by the same official output norm. The terms add as vectors, **not**
+as the displayed L2 magnitudes. It includes preceding hidden-state drift
+*and* the difference
+between the native and injected-official modulation/setup routes; it is not
+a pure input-Jacobian or causal attribution. At block 29, however, the
+5.553507% cumulative gap versus 0.491089% local gap rules out treating that
+block's equal-input discrepancy as the whole observed error. The direct
+local image error remains below 0.5% relative L2 at all six selected blocks,
+while its absolute RMSE rises to 0.082396 at block 31. Rounding only native
+block outputs to BF16 does not close any of the six local gaps; their
+relative-L2 values become 0.374467%, 0.268110%, 0.461605%, 0.516358%,
+0.513701%, and 0.407863%, respectively.
+
+This locates substantial within-stack accumulation by call 10 in addition to
+the already measured between-diffusion-step feedback. It does **not** isolate
+Q8 weight error from native F32-versus-official BF16 arithmetic, identify a
+bad kernel, or prove which latent feature causes an eye defect. The same
+pinned CPU/FP32 VAE still decodes different final latents differently;
+neither this replay nor pixel differences measure whether a final latent is
+outside the VAE training distribution. A useful next discriminator is a
+matched-input *operator* tap at an early and a late block (Q/K/V, attention,
+MLP, and residual/modulation boundaries), separating Q8 weight substitution
+from arithmetic before any quality-policy or fusion change.
+
+The official full-joint manifest SHA-256 is
+`49370980cd2826b713b2f08fe5bcaeb2ca06ad1c76831e5dbab776addee6a58b`;
+the native replay report SHA-256 is
+`6ebcf6b90a8916fe9c467dcdc642a732ea59f7008fd4af9e0f553e9a9e6b3b65`.
+The scratch runner/source and executed binary SHA-256 values are
+`398eec0bea53504b49c6a4439613f85a2ac9a6cc3d50f7ed5773d3bea0627247`
+and `6f94a271cef9b6ae17266a6dc6891f177926ea4fe8ac482e0bad6a97e4af10ab`.
+Artifacts are under `/private/tmp/qwen21-call10-all32-20260928/official-full-joint/`
+and `/private/tmp/qwen21-call10-matched-block-replay-20260928/`. A 60-second
+quiet-host prelaunch guard exited 75 without launching the GPU; the one
+successful correctness run exited zero under a 300-second, 32-GiB
+process-tree guard and a 50% system-free-memory floor, with only the
+benchmark-noise quiet requirement disabled. Refresh after changes to model
+or conditioning payloads, Diffusers/native source, scheduler input, BF16 or
+Metal semantics, or any saved scratch capture.
 
 ## Not admitted by this slice
 
