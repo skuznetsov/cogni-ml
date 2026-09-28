@@ -4593,13 +4593,71 @@ include inherited upstream error, Q8 weight substitution, and BF16/F32
 arithmetic. In particular, the 0.994056% attention-output ratio has a small
 0.001962 absolute RMSE and does not by itself establish attention as the main
 cause of the final latent or face defect. This is one zero-based diffusion
-call (10), one block, one pinned prompt/seed and 512px trajectory. The next
-discriminator is an equal-input native block replay that injects the saved
-official modulated attention input, with a no-op control, then compares the
-block output and eventually the terminal velocity. Only an improved causal
-intervention and end-to-end image A/B would justify a production precision
-change or an eye-quality claim. Recheck after changing the donor, conditioning,
-Diffusers/native source, BF16/Metal runtime, or any saved tap artifact.
+call (10), one block, one pinned prompt/seed and 512px trajectory. The
+equal-input, no-op-controlled block intervention is reported below; the
+terminal-velocity and decoded-image consequences remain open. Recheck after
+changing the donor, conditioning, Diffusers/native source, BF16/Metal runtime,
+or any saved tap artifact.
+
+### Call-10 block-0 modulated-input intervention (2026-09-28)
+
+A scratch-only full-Q8 Metal replay now performs that first causal test at the
+same official call-10 full-joint input. Immediately after the native fused
+LayerNorm-1/modulation kernel and before Q/K/V, it copies the **exact official
+BF16-to-F32-widened** 1,254-by-4,096 modulated attention input into the native
+attention-input buffer. It does not replace the native gate-1 buffer, Q8
+weights, attention/MLP operators, or any later block. The source was limited
+to a one-block replay and did not change repository production code.
+
+The donor, 33 teacher states, official injection file, and pre-block state
+passed shape, finite-value, byte-count, and SHA-256 preflight. The current
+native baseline reproduced the previously pinned block output SHA-256
+`cb6279ab6576458c7d67727bafc809d784f50dc1b966c1587b6c799b2c8683b2`;
+injecting its own saved input was bit-exact to that
+baseline; the official injected attention-input tap matched the teacher F32
+file SHA-256
+`3c5e57474287de70a1732c7a9567db01bde28049621a56cd5762cfec0f881222`
+exactly;
+and the injected block output repeated bit-for-bit. All 14 injected operator
+taps were finite. The initial sandboxed attempt could not create a Metal
+device and produced no block result; the separately pinned device-enabled
+retry completed on the M2 Max.
+
+| Matched target-image boundary | Native baseline relative L2 | Official-input injection relative L2 |
+| --- | ---: | ---: |
+| Raw Q, before RoPE | 0.245395% | 0.217448% |
+| Raw K, before RoPE | 0.257086% | 0.224119% |
+| Raw V | 0.377128% | 0.333655% |
+| Attention output before projection | 0.994056% | 0.967274% |
+| Attention output after projection | 0.199159% | 0.187117% |
+| Modulated MLP input | 0.690595% | 0.671047% |
+| MLP output | 0.381326% | 0.380913% |
+| Block-0 output | 0.343305% | 0.312606% |
+
+Root independently recomputed the table from SHA-checked raw arrays. The
+target-image block-output RMSE fell from 0.024153 to 0.021993, or **17.085%
+less squared error** at this boundary; the text-prefix output changed much
+less (0.255690% to 0.255090% relative L2). Therefore the modulated attention
+input contributes causally to the local image-row block-0 discrepancy, but
+does not account for the remaining 0.312606% output gap. The smaller
+downstream MLP-output response does not uniquely assign that residual to
+weights, gate-1, MLP, or backend arithmetic. Percentages at different
+boundaries have different denominators and are not additive causal shares.
+No full-DiT velocity, accumulated latent, VAE-support, eye-quality, or final
+image improvement follows from this one-block replay. The next discriminator
+is a no-op-controlled full-DiT call-10 velocity replay with this *same*
+block-0 intervention; a production precision change still requires a paired
+trajectory and decoded-image A/B.
+
+The completed retry report SHA-256 is
+`3c435b7fe71b39dc9ac133f100312bfa111632fdb8debfd6393f6916c258f7e0`;
+its CPU preflight and runner SHA-256 values are
+`38585b076f544975cad62fb26fe77125b0eefbb5ac494ba1fd100a5e945c482b`
+and `01e4e8ea66acb6b7350ca7c9e68db49f0dbb04aae783e3260610fedf17000fc4`.
+All files are under
+`/private/tmp/qwen21-call10-modulation-injection-20260928/retry1/`.
+Refresh after changes to the donor, conditioning, official/native captures,
+Diffusers/native source, BF16/Metal runtime, or scratch runner.
 
 ## Not admitted by this slice
 

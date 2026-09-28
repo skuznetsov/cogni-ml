@@ -29322,8 +29322,23 @@ Refresh after source/toolchain/device/model/workload changes.
   and `4c2bc63ed8b73c9be08fc7faa1b08366d7077d79494becf0e0e161d2ebba4989`.
   Parent independently checked all 15 official exact BF16 widenings, all
   14 native tap hashes/finite values, and all nine text/image comparison
-  rows. Next falsifier: inject official modulated attention input into a
-  no-op-controlled native block replay and measure block/velocity response;
-  details and artifact paths are in `docs/qwen-image21-gguf-frontier.md`.
+  rows. The next bullet tests the official modulated attention input with a
+  no-op-controlled native block replay; terminal velocity remains open.
+  Details and artifact paths are in `docs/qwen-image21-gguf-frontier.md`.
   Refresh after weights, conditioning, source, BF16/Metal runtime, or saved
   tap changes.
+- A no-op-controlled, same-input full-Q8 Metal block-0 replay at call 10
+  injected the exact official BF16-widened modulated attention input after
+  native LayerNorm-1/modulation. Baseline and native-own-value no-op outputs
+  were bit-exact; the injected tap matched the official tensor SHA-256 and
+  the injected output repeated bit-for-bit. Target-image block-output
+  relative L2 fell from 0.343305% to 0.312606% (17.085% less squared
+  error); raw pre-RoPE Q/K/V gaps improved, while the MLP-output gap barely
+  moved. Root independently recomputed the results from SHA-checked arrays.
+  This proves a local causal contribution, not a dominant cause of terminal
+  velocity, latent drift, eyes, or VAE behavior. Native gate-1 and Q8 weights
+  remained in place. The retry report SHA-256 is
+  `3c435b7fe71b39dc9ac133f100312bfa111632fdb8debfd6393f6916c258f7e0`;
+  full pins and refresh conditions are in `docs/qwen-image21-gguf-frontier.md`.
+  Next: no-op-controlled full-DiT call-10 velocity response before any
+  production precision change.
