@@ -29130,3 +29130,21 @@ Refresh after source/toolchain/device/model/workload changes.
   `ef20fafa05a2b2eaf49b10c818be58d5a064470dd483eefe6b3ff08e0f5323a4` /
   `15079bcb137ca14de91ee5ee499e35a9835fab0b0c3131169cf1b691e7d7ed69`;
   full provenance and decay conditions are in the frontier document.
+- A fixed-input block-0/call-0 gate/up probe on four text and four image rows
+  (all 24,576 output channels) found 2.229709% relative L2 error for the base
+  Q5_K projection against official BF16/MPS, versus 0.371032% for Q8_0.
+  Official-weight CPU BF16-rounded output was within 0.007648% of the official
+  capture. Separately, the native hybrid baseline MLP input was 3.255375%
+  from the official input, and holding Q8 weights fixed shifted its projection by
+  1.593681%. These are non-additive local vector comparisons, not full DiT
+  causal shares or eye/glyph quality. Native packed Q8 Metal on the clamped
+  official input matched CPU Q8 to 0.0000232% and rejected a `+0.01`
+  corruption; no arithmetic defect is shown at that boundary. The pinned
+  official V weight re-quantized to Q6_K did not byte-match base V (4,920 of
+  13,762,560 bytes differ), but their dequantized relative L2 gap was only
+  0.065186%, versus ~1.8368% from official BF16 for either Q6 version. The
+  same official source re-quantized to Q8_0 matched donor V byte-for-byte.
+  This is consistent with a quantizer/recipe difference but does not prove
+  base source identity. Report hashes, scope and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`; next discriminator is matched late
+  block inputs/full trajectories and multi-seed decoded quality.

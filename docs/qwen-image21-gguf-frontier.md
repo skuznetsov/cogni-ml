@@ -3741,6 +3741,66 @@ artifacts change. Before a production quality policy, verify Q6_K base
 provenance and compare matched full trajectories and decoded eyes/glyphs
 across more prompts and seeds, with paired latency and an explicit rollback.
 
+### Fixed-input gate/up and Q6_K V source-candidate checks (2026-09-28)
+
+Two CPU-only probes further separate the block-0/call-0 numerical discrepancy.
+They use the same pinned official BF16 source and local GGUF artifacts as the
+preceding section; neither establishes the historical converter recipe or
+attributes a decoded facial defect.
+
+For `attn.to_v`, exact widening of the official BF16 weight followed by the
+tested local no-imatrix Q6_K quantizer did **not** reproduce the base GGUF
+payload: 4,920 of 13,762,560 bytes differ, spanning 657 of 65,536 Q6 blocks.
+The base and locally generated Q6 weights differ by only 0.065186% relative
+L2 after dequantization, whereas their respective gaps to the official BF16
+weight are 1.836780% and 1.836776%. A BF16-to-F16 pre-cast produced the same
+locally generated Q6 payload, so that tested variant does not explain the
+byte mismatch. As a source/layout positive control, quantizing the same
+official V weight to Q8_0 reproduced the donor payload byte-for-byte across
+17,825,792 bytes. The small Q6-versus-Q6 discrepancy is consistent with a
+converter or recipe difference, but a different historical source checkpoint
+cannot be excluded. The GGUF header does not record that provenance.
+
+For gate/up, the probe selected four text-prefix and four image-suffix rows
+`[0,57,115,229,230,571,912,1253]` and retained all 24,576 output
+channels. The official BF16-widened MLP input and the native clamped input
+are byte-identical (SHA-256
+`1c6e92b512e74ba86e67837b514e2befd4e1a4498aca29c224c86224edc7713a`).
+On this **same** official input, the base GGUF Q5_K gate/up projection has
+2.229709% relative L2 error against the official BF16/MPS output; the Q8_0
+donor has 0.371032%. An official-weight CPU matmul rounded to BF16 at output
+is within 0.007648% of that capture (61 of 196,608 values differ). A local
+no-imatrix Q5_K re-quantization changes the base Q5_K projection by only
+0.042195% relative L2 on these rows. This supports weight precision as a
+substantial source of the sampled base projection error, without proving
+the original Q5_K conversion lineage.
+
+There is also a distinct upstream-state effect: the native hybrid baseline MLP
+input differs from the official input by 3.255375% relative L2 on these
+rows. Holding Q8 weights fixed while changing only that input shifts the
+projection by 1.593681%. These vector magnitudes are not additive shares
+of trajectory error. The native packed Q8 Metal projection on the clamped
+official input agrees with the CPU Q8 calculation to 0.0000232% relative
+L2 (maximum absolute difference `7.15e-7`); a `+0.01` corruption was rejected
+by the numerical matcher. Thus this probe finds no packed-Metal arithmetic
+defect at this boundary. It does not determine where the earlier MLP-input
+drift arose, nor whether either error controls eye or glyph quality.
+
+The corrected, hash-gated Q6 provenance and dequantized-error reports are
+`/private/tmp/qwen21-q6-provenance-20260928/q6_provenance_report_r3.json`
+(SHA-256 `16f5f2ea72ac2a7cb4a3522535ce0dd5ce769a6b34fe1cf07b93ef3309375faa`)
+and `q6_dequant_error_stats_r3.json` (SHA-256
+`b57d3ba3e93504de0368f4b0081a6e7a60945c291b2a55d086245af103cec092`).
+The gate/up script and report are
+`/private/tmp/qwen21-gateup-precision-20260928/gateup_fixed_input_probe.py`
+(SHA-256 `6072ccdcd7c54744e8f6ae63473b275c4fd0a9908d583d5b06410f4ba29e96d8`)
+and `gateup_fixed_input_probe.json` (SHA-256
+`b02e249523782ad6f32dd8ff34e7e665570f26a2dd81b99adfa0890d144ad931`).
+Refresh these scoped results if the source or GGUF tensors, quantizer build,
+row selection, model/Metal implementation, captures, or ephemeral scratch
+artifacts change. Later-block matched MLP inputs and decoded multi-seed
+comparisons remain necessary before selecting a precision policy.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder
