@@ -4318,9 +4318,9 @@ Q8-weight substitution plus BF16 output-format difference, while the native
 Q8 Metal projection arithmetic adds very little *on these rows*. This does
 not prove the donor Q/K/V were quantized from the pinned BF16 matrices, a
 full-tensor or later-step attribution, or a causal link to eyes, hotspot, or
-VAE support. The next discriminating experiment is a matched-input,
-matched-weight intervention at the call-10/11 onset, followed by a complete
-trajectory and decoded-image A/B if it changes the velocity.
+VAE support. The call-10/11 matched-input intervention below tests whether
+replacing only block-0 Q/K/V has a material terminal effect at the measured
+onset; it does not run a complete trajectory or decoded-image A/B.
 
 The CPU comparator, report, and sampled vectors are under
 `/private/tmp/qwen21-block0-weight-vs-arithmetic-20260928/`; script SHA-256
@@ -4334,6 +4334,54 @@ post-run RSS threshold (observed ~1.00 GB). Wrong-hash and
 wrong-orientation negative controls passed. Refresh if either model payload,
 saved taps or input, mask/order,
 modulation override, runtime arithmetic, or scratch artifact changes.
+
+### Matched-input block-0 Q/K/V intervention at calls 10 and 11 (2026-09-28)
+
+A scratch-only, one-forward Metal probe held the saved official BF16 latent,
+official Qwen3-VL conditioning, schedule, and full-Q8 donor fixed at each
+zero-based call. The Q8 no-op controls reproduced the earlier native velocity
+files **bit-for-bit**: SHA-256 `cf040964...0bdc3d` at call 10 and
+`5176ff28...cc959` at call 11. The probe captured the same block-0 modulated
+attention input in each arm (identical 20,545,536-byte Float32 file and hash)
+and rebuilt the prefix cache in a fresh process per arm. The treatment
+replaced only block-0 Q/K/V with official BF16 weight values widened exactly
+to Float32; all other block-0 weights were identity-checked. The earlier
+call-0 sampled projection test supports the weight orientation, but there is
+no official raw-Q/K/V teacher tap at calls 10/11.
+
+| Call | Raw Q / K / V treatment-minus-Q8 rel-L2, normalized by Q8 tap | Q8 velocity rel-L2 to official | Treatment velocity rel-L2 to official | Q8 direct next-latent gap | Treatment direct next-latent gap |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 10 | 0.143420% / 0.155463% / 0.293004% | 1.255609% | 1.254056% | 0.116878% | 0.116337% |
+| 11 | 0.139149% / 0.153263% / 0.292894% | 0.951932% | 0.961180% | 0.107540% | 0.107928% |
+
+The direct next-latent gaps apply the same BF16-rounding native Euler formula
+to each arm's velocity at the *official* incoming state, then compare with
+the saved official next state. Root independently recomputed those gaps and
+the velocity/vector metrics from the raw files. At call 10, the treatment
+reduces velocity squared error by only 0.2473%; at call 11 it increases it
+by 1.9524%, with a treatment-delta cosine of -0.20954 toward the official
+velocity. Therefore this particular block-0 Q/K/V intervention does not
+explain the main same-input DiT velocity discrepancy at the measured onset.
+It cannot rule out other block-0 operations, later blocks, Qwen3-VL drift,
+or a spatially sensitive decoded-image effect. The 20-token face proxy and
+post-hoc hotspot are not eye-quality or causal metrics.
+
+This is deliberately a **mixed weight-and-execution-route** intervention:
+the treatment's Float32 weights use Qwen35Metal F32 GEMV while the baseline
+uses native Q8_0 projections. The small, non-monotone terminal response is
+not a clean weight-only effect. The first default-sandbox launch could not
+create a Metal device and produced no model output; the unchanged binary's
+device-enabled retry passed the exact Q8 control before any treatment.
+Each device-enabled forward ran under the 300-second, 32-GiB process-tree
+guard. The probe binary/source/instrumented-Metal SHA-256 values are
+`c479e58b...7e297` / `c47d12df...05459a` /
+`cad06b88...8941`; the paired call-10/11 metric-report SHA-256 values are
+`4e25caf8...15abf5d` / `eadcdb58...4b4fd0`. Scratch artifacts are under
+`/private/tmp/qwen21-call10-matched-weight-20260928/`. Refresh after model,
+conditioning, scheduler, source, compiler, Metal device/runtime, or saved
+input/tap changes. The next useful discriminator is matched-state blockwise
+capture/replay at this onset, followed by a complete trajectory and decoded
+images only if a correction materially improves the terminal velocity.
 
 ## Not admitted by this slice
 
