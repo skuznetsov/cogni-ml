@@ -29000,3 +29000,22 @@ Refresh after source/toolchain/device/model/workload changes.
   decomposition residual. VAE out-of-support and eye/text quality remain
   unproven. Complete pins, report SHA, scratch paths, and decay conditions
   are in `docs/qwen-image21-gguf-frontier.md`.
+- A guarded call-0 all-32 DiT capture compared the selective-Q8 gate/up
+  hybrid with the prior Q4 and official BF16/MPS states at identical official
+  conditioning, x0, and injected official time features. Q8 and Q4 native
+  pre-block-0 hidden states were byte-identical; that shared input already
+  differed from official text/image projections by 0.183084%/0.165677%
+  relative L2. Q8 reduced official-relative image hidden-state error at
+  every post-block checkpoint (block 0: 0.440317% -> 0.424135%; block 13:
+  4.589565% -> 3.868095%; block 30: 13.120123% -> 9.838294%), and call-0
+  velocity error from 2.720172% to 1.764384% on this injected-time route.
+  The residual is distributed and cumulative, not a unique bad block; the
+  final relative-L2 drop at block 31 is a norm-denominator effect. Root
+  independently recalculated all 32 raw-state distances and key hashes.
+  The scratch report has stale inherited build/launch command strings, so
+  use the separately pinned runner source/binary and raw output hashes in
+  `docs/qwen-image21-gguf-frontier.md`; do not use those strings as a Q8
+  reproduction recipe. The capture is an ephemeral call-0 diagnostic, not
+  the default-time trajectory or a warmed-cache call-1 test. Next: a
+  shared-x0 conditioner-by-DiT first-call contrast, then fixed-input Q8
+  block or warmed-cache trace to separate residual local error from transport.

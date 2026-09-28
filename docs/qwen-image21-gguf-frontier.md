@@ -3152,6 +3152,111 @@ needs a separately calibrated reference distribution. These measurements
 expire if the weights, conditioning, schedule, BF16 arithmetic, native
 runtime, decoder, or scratch evidence change.
 
+### Call-0 DiT hidden-state drift with Q8 gate/up (2026-09-27)
+
+An observational 32-block capture tested where the targeted Q8 gate/up
+replacement changes the *first* DiT forward. It reused the pinned official
+BF16/MPS block outputs and the prior Q4 Metal capture at the same official
+Qwen3-VL conditioning (`007ad14a...66114ab`), initial latent
+(`d0315806...8358932c`), and official-MPS BF16 Fourier time features
+(`661d6707...0cb85`, widened to Float32). The Q8 model was the previously
+verified hybrid (`d9f6449a...d8a4914ff`); only its 32 image-MLP gate/up
+tensor payloads differ from Q4, while `general.file_type` metadata also
+differs as recorded above. This is an **injected-time call-0 diagnostic**,
+not the ordinary native-time-feature Q8 path or a warmed prefix-cache hit.
+The scratch Metal change only copied the joint hidden buffer immediately
+before block 0 into a separate buffer on the same command buffer; all 32
+post-block copies were read only after the complete forward. Its pre-block-0
+joint state was reconstructed independently from the prior Q4 text and image
+projection captures and matched the new Q8 capture byte-for-byte (SHA-256
+`459974c11a29688749f9a2e3c6624c9042ef6e40cf53d6d912ff5aa31cfcf007`).
+Against official pre-block projections, that common input already differs by
+0.183084% relative L2 on text rows and 0.165677% on image rows. Therefore
+gate/up precision cannot be the source of the *earliest* pre-block difference.
+
+The table reports image-token hidden-state relative L2 to the official
+post-block state, with each row normalized by that block's official norm.
+Root independently recalculated all 32 rows from the raw Float32 captures,
+including finiteness and the Q4 control values. Q8 was lower at all 32
+post-block checkpoints, but the residual still grows through the network:
+
+| Post-block | Q4 with official time features | Q8 gate/up with official time features |
+| ---: | ---: | ---: |
+| 0 | 0.440317% | 0.424135% |
+| 8 | 1.645803% | 1.325617% |
+| 13 | 4.589565% | 3.868095% |
+| 30 | 13.120123% | 9.838294% |
+| 31 | 3.740302% | 2.785633% |
+
+This is deliberately an **image-token** metric: over the combined text-plus-
+image stream, Q8 is slightly farther from official at blocks 0 and 5-9.
+Therefore the table does not establish a universal hidden-state improvement.
+The apparent percentage recovery at block 31 is again a denominator effect:
+Q8's image-token absolute RMSE rises from 0.557961 after block 30 to
+0.629670 after block 31. The largest Q8 adjacent error-vector change is
+29->30 (RMSE 0.385908), but this cumulative map does not isolate that block's
+own error from incoming state drift. The Q8 versus Q4 post-block-0 outputs
+already differ by 0.064884% of the official block-0 norm on exactly the
+same native pre-block input. At the final call-0 velocity, relative L2 to
+the official raw BF16 teacher is 2.720172% for the Q4 injected-time control
+and 1.764384% for the Q8 injected-time capture. The Q8 output SHA-256 is
+`42fc2aad86fac13eab7fc6c3b4b53f7de67095294f8c61832b3564c603bab9c7`.
+These local hidden-state and velocity improvements agree in direction with
+the separate default-time Q8 40-step trajectory, but are not an eye/text
+quality verdict or a causal share of its final latent distance. The capture
+is observational in source, but this Q8 injected-time output did not have a
+separate uncaptured, same-time-feature byte-parity forward; its scope is the
+captured route, not an asserted exact parity certificate for an unobserved
+route.
+
+The saved default-time, BF16-state trajectory confirms that image-latent
+distance starts after the first Euler update, rather than appearing suddenly
+late: Q8 relative L2 exceeds 1%, 5%, and 10% after completed steps 13, 23,
+and 34, versus steps 7, 15, and 21 for Q4. Late velocity discrepancies are
+already dominated by state transport in the sampled crossed-state probes
+above. These observations locate an early, distributed DiT/model-path
+discrepancy and its accumulation, **not** a unique bad layer or VAE
+out-of-support event. Qwen3-VL conditioning has a separate measured effect;
+its Float32-state trajectory percentages cannot be added to the BF16-state
+Q8-versus-official percentages. The next low-cost independent discriminator
+is a shared-x0 conditioner-by-DiT first-call contrast, then fixed-input Q8
+block replays or a warmed-cache call-1 trace if the residual must be localized
+further.
+
+The Q8 scratch runner, capture, and report are under
+`/private/tmp/qwen21-earliest-dit-probe-20260927/`. The runner source and
+binary SHA-256 values are `b276d6718bdb9ff32a20734eefd43351120f95674aa4c54df644a855b4d0c9c9`
+and `5c414d5a6f2db0d5ee640331ed1e146cf977d3fbc77bc824a30c839c77e25744`;
+the report SHA-256 is
+`ac5b08f3ff00eeaccbeeaa0c734e03bd8f3d01b509f2b277eb11a5d5fd5fad6c`.
+The independent all-32 comparator under the same scratch root has source
+SHA-256 `c196bb74bc1a1251c0d366c4aae6bc9e26b155b63ea94432568cebb4e2876604`
+and reproducible report SHA-256
+`bda3dd813124e9e7a7c10a044204aa9f9e874e01c56e65ad7cbb598d99ed3a43`;
+root reran it successfully and separately recomputed its selected metrics.
+Model, conditioning, x0, time-feature, tensor-shape, finiteness, and source
+hash gates passed before/after the single Metal forward. The sandboxed
+first attempt created no Metal device and no model output; one device-enabled
+retry completed. The report's embedded `launch_command` and `build_command`
+strings were inherited from the earlier Q4 harness and incorrectly name its
+binary/source and Q4 expected output; they are **stale provenance text**, not
+the executed command or a valid Q8 output gate. The actual device-enabled
+invocation, with input validation performed by the runner, was:
+
+```sh
+QWEN_IMAGE21_INJECT_OFFICIAL_TIME_FEATURES_MPS=1 \
+  /private/tmp/qwen21-earliest-dit-probe-20260927/native_q8_early_call0 \
+  --index 0 \
+  --latent /private/tmp/qwen21-official-trajectory-20260927/official40-cache-default/initial_latents_f32le.bin \
+  --output /private/tmp/qwen21-earliest-dit-probe-20260927/q8-official-mps-timefeatures-all-blocks/native_velocity_step-000_f32.bin \
+  --report /private/tmp/qwen21-earliest-dit-probe-20260927/q8-official-mps-timefeatures-all-blocks/native_report_step-000.json \
+  --expect-latent-sha256 d03158064c86fd691927cf93258b00fac2fc8d09e14a578d0f28b4fe8358932c
+```
+
+Refresh all claims after
+checkpoint/GGUF, conditioning, schedule, BF16 arithmetic, official runtime,
+Metal source/compiler, or scratch-artifact changes.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder
