@@ -1789,6 +1789,51 @@ one-layer text probe under
 may expire. Re-run after changes to the processor, text checkpoint,
 GGUF/Metal path, scheduler, or VAE.
 
+### Russian layer-0 attention replay on saved inputs (2026-09-28)
+
+A CPU-only, SHA-gated PyTorch 2.6.0 SDPA MATH replay separated the native
+attention operator from the already-different post-RoPE Q/K and V inputs in
+the pinned 244-token Russian Qwen3-VL trace. It used the official all-visible
+mask with causal attention, 32 query and eight KV heads of width 128, and
+four-way `repeat_interleave` for GQA. No model/checkpoint, Transformers, or
+GPU was loaded. Replaying the *official* saved Q/K/V reproduced its attended
+BF16 output exactly (0/999,424 mismatches), establishing a layout and
+backend positive control. Noncausal attention and group-major KV repetition
+were large negative controls (47.203% and 118.181% relative RMS to the
+correct native-input replay).
+
+| Saved-input comparison | BF16 mismatches / 999,424 | Relative RMS |
+| --- | ---: | ---: |
+| Official-input SDPA vs official attended | 0 | 0% |
+| Native-input SDPA vs native attended | 727 | 0.004291% |
+| Native-input SDPA vs official attended | 57,683 | 0.061854% |
+| Captured native attended vs official attended | 57,848 | 0.061796% |
+
+Thus the native attention arithmetic has a small but nonzero same-input gap
+on this fixture. Feeding the already-diverged native Q/K/V through official
+SDPA yields nearly the entire observed attended-output gap, so attention
+arithmetic alone is not a plausible dominant explanation for this layer's
+composed error. These norms are not additive causal shares: upstream
+normalization, projections, and RoPE remain mixed in the native inputs.
+This does not establish 36-layer text-encoder parity or image-quality impact.
+In the current full-Q8 DiT parity trajectory the conditioning is the
+*official* Qwen3-VL output, so this native-encoder gap cannot explain that
+trajectory's same-input DiT latent drift.
+
+The scratch replay script and report are
+`/private/tmp/qwen21-russian-attention-replay-20260928/replay.py` (SHA-256
+`3d4a01d81be3fc0577d2d574e3f3267da8752efa1cb36cd0babc902c58e7b453`)
+and `report.json` (SHA-256
+`f0f86a827adb03675ab04e49dc0a312348a7d213579d713dae8a39afd36bbf6b`).
+The original replay was pinned to source HEAD
+`7aa36d9c202ec10eb007944b7ba6dd798c5fefb0`. Root re-executed its
+`build_report` under the later docs-only HEAD
+`cec39845ef213a6aa9191c86c2752fc8bc026a27`, changing only the expected
+HEAD guard in memory; all pinned code and sidecar hashes passed, and every
+comparison and replay-output hash matched the report. Scratch sidecars may
+expire. Refresh after changing model/prompt, native attention source,
+PyTorch SDPA backend, head/mask layout, or saved traces.
+
 ### Portrait resolution and latency probe (2026-09-24)
 
 The daylight prompt above was also run through the unchanged hybrid path on

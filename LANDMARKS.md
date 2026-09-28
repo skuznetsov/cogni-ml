@@ -29423,3 +29423,23 @@ Refresh after source/toolchain/device/model/workload changes.
   `c67d75a32d0bf908e198adf24be33718d7f4ed84ca74b14f8efb4978b7178d82`.
   Scratch may expire; full pins, caveats, and decay triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A 2026-09-28 CPU-only SDPA MATH replay of the pinned 244-token Russian
+  Qwen3-VL layer-0 trace reproduced the official attended BF16 output
+  exactly from official saved Q/K/V (0/999,424 mismatches). On the *same*
+  native saved Q/K/V, official SDPA differed from native attended in only
+  727 values (0.004291% relative RMS), whereas replayed native inputs versus
+  official attended differed in 57,683 values (0.061854%), close to the
+  captured native-versus-official 57,848 (0.061796%). Causal/GQA negative
+  controls failed strongly. This identifies a small local native attention
+  arithmetic gap, while the larger composed layer output gap is already
+  present when official attention consumes native Q/K/V. It does not assign
+  the upstream error among norm/projections/RoPE or establish 36-layer or
+  image-quality effects. Current full-Q8 DiT parity runs use official
+  Qwen3-VL conditioning, so this native-encoder difference is not their
+  same-input DiT latent-drift cause. Root independently re-executed the
+  replay after a docs-only commit with only the HEAD guard updated in memory;
+  all comparisons and output hashes matched. Scratch report SHA-256:
+  `f0f86a827adb03675ab04e49dc0a312348a7d213579d713dae8a39afd36bbf6b`;
+  script SHA-256:
+  `3d4a01d81be3fc0577d2d574e3f3267da8752efa1cb36cd0babc902c58e7b453`.
+  Refresh conditions and full scope are in `docs/qwen-image21-gguf-frontier.md`.
