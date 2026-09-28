@@ -29045,11 +29045,58 @@ Refresh after source/toolchain/device/model/workload changes.
   same-binary isolated modulation contrast. Independently recomputed raw
   tensors and an 18-hash gate support these scoped measurements; they do
   not identify a unique kernel or justify a local correction. The official
-  internal attention/MLP/head captures are missing, and a planned VAE
-  interpolation could not run because the formerly pinned environment lost
-  importable `diffusers`. Existing same-decoder endpoints do not establish
-  decoder cliffs or training-support departure. See
+  internal attention/MLP/head capture and VAE interpolation were pending at
+  that checkpoint; both have since been performed as recorded below. See
   `docs/qwen-image21-gguf-frontier.md` for source/artifact pins and decay
-  triggers. Next: equal-input DiT sublayer replay with fresh official
-  captures, plus a restored pinned VAE runtime for actual final-latent
-  interpolation and multi-seed eye/glyph checks.
+  triggers.
+- The exact pinned Diffusers source was recovered into a scratch checkout,
+  without altering repository dependencies or downloading weights. A
+  CPU/FP32 VAE probe reproduced the official, Q4, and Q8 endpoint PNGs
+  byte-for-byte before decoding nine points on each actual final-latent
+  interpolation path. Fixed face-ROI adjacent-step RGB RMSE stayed within
+  3.15-3.52 (official-to-Q4) and 1.92-2.07 (official-to-Q8), without a broad
+  abrupt collapse on the sampled paths. This weakens a sharp decoder-cliff
+  hypothesis for this scene; it does not prove latent training-support
+  membership or rule out narrower/other-scene failures. The hash-gated
+  report is `/private/tmp/qwen21-vae-interpolation-20260928/report.json`.
+- A hooked official BF16/MPS call-0 forward preserved the canonical final
+  velocity SHA and prior block-0 boundary hashes. Equal-input native Metal
+  control/taps also produced byte-identical final velocity outputs. With
+  official pre-block hidden state, modulated attention input, and tanh(gate1)
+  injected, native-vs-official relative L2 is 0.280020% at attention `to_out`,
+  0.225712% after the attention residual, and 0.331287% after block 0.
+  Additional raw projected Q/K/V taps show 0.243992%/0.237986%/0.985289%
+  discrepancy before RMSNorm/RoPE (native types Q8_0/Q8_0/Q6_K), so a
+  measurable difference starts within DiT projection, upstream of VAE.
+  The larger V difference is a precision lead, not causal proof of eye/glyph
+  defects; BF16-vs-F32 arithmetic and Q4-base provenance remain confounded.
+  CPU-derived official post-RoPE Q/K is not exact MPS post-RoPE evidence.
+  Full source/report pins, buffer accounting, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- The block-0 Q8_0 donor V payload was reconstructed byte-for-byte from the
+  pinned official BF16 source via the pinned `gguf` quantizer. In a scratch
+  same-binary OFF/ON call-0 test changing only that loaded V weight, raw V
+  teacher error fell 0.985289% to 0.337856% and `to_out` fell 0.280020% to
+  0.234882%, yet the full block-0 target-row error rose 0.351888% to
+  0.373995%. Final target-velocity error fell only 1.793929% to 1.759205%;
+  source-exact first BF16 Euler latent error fell 0.128879% to 0.128073%.
+  Q8_0 versus Q6_K also changes Metal dispatch and the base Q6_K source
+  recipe remains unproven. This is a V contribution, not a precision-only
+  attribution or an eye/glyph quality result. The downstream norm2/MLP
+  discriminator follows; full-trajectory multi-seed decoded comparisons
+  remain necessary before promoting a weight or kernel policy.
+- A same-binary scratch 2x2 clamped the official BF16-widened block-0
+  modulated MLP input and/or tanh(gate2), with Q6_K V and identical native
+  post-attention residual across all arms. OFF reproduced the prior output
+  byte-for-byte. Post-block-0 all-row error was 0.331287% (OFF), 0.284376%
+  (input only), 0.346051% (gate2 only), and 0.280046% (both); final velocity
+  error was 1.793929%, 1.790202%, 1.780770%, and 1.788628%, respectively.
+  Source-exact first BF16 Euler latent error was 0.128879%, 0.128611%,
+  0.128305%, and 0.128699%. Local block accuracy and final velocity rank
+  differently, so the visible defects cannot be assigned to one MLP buffer
+  or fixed by promoting this intervention. The official MLP clamp leaves
+  native post-attention state and quantized MLP weights in place; this is a
+  one-call boundary experiment, not full official parity or image quality.
+  Full controls and decay conditions are in `docs/qwen-image21-gguf-frontier.md`.
+  Next: matched full-trajectory and multi-seed decoded eye/glyph tests before
+  any production precision/kernel decision.

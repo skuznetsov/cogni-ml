@@ -3410,12 +3410,236 @@ official capture, or scratch artifact. The next DiT discriminator needs
 official attention/MLP intermediate captures or equal-input sublayer
 replays, then multiple prompts/seeds and decoded eye/glyph evaluation.
 
-A planned CPU-only VAE interpolation along the *actual* official-to-Q4/Q8
-final-latent paths did **not** run: the formerly pinned Python environment
-now lacks importable `diffusers` (the older report recorded version
-`0.41.0.dev0`). No dependency was installed or substituted. Existing
-same-decoder endpoint comparisons remain evidence for those endpoints, but
-this adds no evidence about decoder cliffs or latent training support.
+At the preceding checkpoint, a planned CPU-only VAE interpolation along the
+*actual* official-to-Q4/Q8 final-latent paths could not run because the old
+Python environment had lost importable `diffusers`. The exact Diffusers
+commit `8b3c707ebd3ec4881f4190cf42931da07eaf3b65` was recovered into a
+scratch source checkout; its Qwen-Image 2.1 VAE source SHA-256 is
+`afb341db5e9d081e568ae4703119d1141d124aaf2fa9c061b3d4eb80ce73c15b`.
+A separate scratch checkout of Hugging Face Hub 1.32.0 supplied the API absent
+from the host's Hub 0.36.0. Neither checkout changed repository dependencies
+or existing Python environments, and no model weights were downloaded.
+
+The CPU/FP32 decoder then reproduced all three independently saved official,
+Q4, and Q8 endpoint PNGs byte-for-byte (RGBA pixels and PNG SHA-256). Only
+after that gate did it decode nine points at `alpha = 0, 0.125, ..., 1` along
+each normalized-F32 latent segment. The fixed face ROI is
+`x=[320,380), y=[150,219)` in the 512x512 image. RGB RMSE versus the official
+decode at `alpha = 0.25/0.5/0.75/1.0` was, respectively, `6.19/12.00/17.59/23.05`
+for Q4 and `3.77/7.33/10.85/14.23` for Q8 in that ROI; full-frame RMSE was
+`5.57/10.79/15.78/20.57` and `3.25/6.38/9.65/13.12`. Adjacent 0.125-step
+face-ROI RMSE remained within `3.15-3.52` (Q4) and `1.92-2.07` (Q8), with no
+isolated spike on this sampled path. Visual face crops changed progressively
+rather than showing an abrupt broad collapse. This weakens a *sharp decoder
+cliff on these two straight-line paths* as the explanation for this one
+scene's eye/face differences; it does not establish VAE training-support
+membership, rule out a narrower excursion between samples, or settle other
+prompts, seeds, and text regions. The oracle-gated report, probe, endpoint
+hashes, and full/face montages are under
+`/private/tmp/qwen21-vae-interpolation-20260928/`; `report.json` is the
+machine-readable source, and `interpolation_probe.py` SHA-256 is
+`5952ef5e787742906e4822693ebb6a9038a77ced9abf363d08db197e6c105179`.
+Refresh after a change to latent payloads, decoder source/weights,
+normalization, ROI, or scratch artifact availability.
+
+An equal-input **call-0 block-0 sublayer** comparison now narrows the first
+measured DiT difference. The official BF16/MPS hooked forward used the same
+model revision and pinned Diffusers commit above; its final velocity SHA-256
+`f35c27adee76539f7dbe2771213c3122402618d553fadf915cf31e99a7300401`
+was byte-identical to both the no-hooks canary and the earlier official
+capture. All six earlier official boundary hashes re-matched; 37 saved
+captures passed file-integrity and exact BF16-to-F32-widening checks, with
+35 explicitly shape-checked. The official manifest is
+`/private/tmp/qwen21-official-sublayers-20260928/hooked/block0_sublayer_capture_manifest.json`
+(instrumentation script SHA-256
+`6e2f6e380341434ae7ec5728fe9e19db47e21519fdb2a2ab37e3a4f8cfbad75d`).
+The native Metal control and nine-sublayer-tap runs used the *same* official
+pre-block-0 hidden state, official block-0 modulated attention input, and
+official `tanh(gate1)` as interventions. They produced byte-identical final
+velocity outputs with SHA-256
+`97f2f2a8bc4a27809490d16c2e6503029e6dcafb465f4a19c3cf5c2f8c80917c`.
+Their corrected reports are respectively under
+`/private/tmp/qwen21-native-sublayers-20260928/control-accounted-block0-only-preblock_and_block0_modgate_override_official/`
+and
+`/private/tmp/qwen21-native-sublayers-20260928/sublayers-accounted-block0-only-preblock_and_block0_modgate_override_official/`.
+Actual Metal snapshot allocation is 4 buffers/82,182,144 bytes in control
+and 13 buffers/410,910,720 bytes with taps; the earlier scratch reports'
+2/11-buffer counts were stale. These are correctness runs, not timing evidence.
+
+Comparing the official tensors *as exact BF16 widenings* with native F32
+tensors gives relative L2 error across all 1,254 rows of 0% at the injected
+pre-block input, 0.280020% at attention `to_out` before gate1, 0.225712% after
+the attention residual, 2.736642% at the norm2/modulated MLP input, and
+0.331287% at the block-0 output. The official `to_out` pre/post-dropout
+hashes are identical (dropout 0). The 230 non-target/text rows and 1,024
+target rows were derived from the saved target/key-valid masks. On the
+*native shadow computation before override*, modulated attention input differs
+by 0.353862% overall, with one text row at 6.28%; it cannot cause the
+measured attention `to_out` difference in this injected run. The first
+matched exercised difference is therefore at or before attention `to_out`,
+not a demonstrated single faulty kernel. Q/K/V, BF16-vs-F32 arithmetic,
+weight quantization, and downstream cancellation remain confounded. A large
+relative difference in normalized MLP input is not by itself amplification
+of final error; block-0 output error is smaller.
+
+A third, scratch-only native pass added raw Q/K/V taps immediately after the
+block-0 projections and before the in-place fused QK RMSNorm+RoPE kernel, plus
+post-fused Q/K taps. Its final output was byte-identical to the prior native
+control and sublayer-tap outputs; the SHA-256 remains
+`97f2f2a8bc4a27809490d16c2e6503029e6dcafb465f4a19c3cf5c2f8c80917c`.
+The report is
+`/private/tmp/qwen21-native-sublayers-20260928/sublayers-accounted-block0-only-preblock_and_block0_modgate_override_official_qkv_stage_taps/native_report_step-000.json`
+(report SHA-256
+`9eb1136b0d9efe4973efc833b4c2a3f8c50ed4c0e3cee6cc0041c2c2e1850f88`;
+instrumented Metal source SHA-256
+`e89bdd402961abc75888f7c710f53dd4100196cb665a96bc1ae04e57c84a1e63`).
+The five new snapshots raise the active Metal capture allocation to 18
+buffers/513,638,400 bytes (1,027,276,800 bytes of copy plus readback).
+Against the official raw BF16 projections widened to F32, the native raw
+Q/K/V F32 projections differ by **0.243992% / 0.237986% / 0.985289%**
+relative L2, respectively. Their resident weight types are Q8_0, Q8_0, and
+Q6_K. Thus drift is already measurable at the projection boundary, before
+RMSNorm, RoPE, attention weighting, later DiT blocks, or VAE decode. V is
+the largest of these three discrepancies; a weight-precision contribution is
+plausible but not isolated from BF16-vs-F32 arithmetic or unproven Q4-base
+provenance. This does not yet show that improving V will improve the final
+image.
+
+The official capture has Q/K after RMSNorm but not after RoPE. Applying the
+pinned Diffusers RoPE function on CPU to those hash-gated BF16 Q/K tensors
+and saved complex64 frequencies yielded a *CPU-derived*, not MPS-observed,
+teacher comparison: native post-fused Q/K relative L2 is 0.39689%/0.40185%.
+It combines already different projections with norm/RoPE and arithmetic
+differences, so it cannot identify a RoPE defect. The source- and input-gated
+CPU report is
+`/private/tmp/qwen21-official-sublayers-20260928/cpu-postrope/cpu_postrope_report.json`
+(SHA-256
+`db5b88c2650bc4ef8a922589efd16445510b0313cfc9280e9fe9e523e957f73d`).
+Static GGUF inspection found `transformer_blocks.0.attn.to_v.weight` in the
+existing Q8 donor at type Q8_0, 17,825,792 payload bytes, SHA-256
+`4ed437ce77c64ff1c1b4692c6195e7e57b7070ce6d356f8df4b0460287c98dd0`.
+The current hybrid retains the Q4-base Q6_K V payload, 13,762,560 bytes,
+SHA-256
+`a5c9192eb6c5348bd8d369b5f256c94c116ab508fe60168b2b0baf2b83dc05fb`.
+The Q8 payload is 4,063,232 bytes larger and would overlap the next tensor
+if overwritten in place. A read-only source check instead reopened the pinned
+official BF16 safetensors shard (index SHA-256
+`17987f6623b1c814d0ef55a137d99142b7b3b040eb1bf241b5575dd35af803a2`,
+shard-1 SHA-256
+`9e6bc2d641e67bf277895ea8777141044a38f3edb7101bc469b2961dd7c36b4b`)
+and Q8_0-quantized its `transformer_blocks.0.attn.to_v.weight` F32
+widening. The resulting 17,825,792 bytes matched the donor V payload
+byte-for-byte. This establishes that *donor V* source identity for the pinned
+quantizer; it does not establish the Q6_K base V provenance or recipe.
+
+A scratch-only, same-binary call-0 intervention then replaced only block-0
+`to_v` in the loaded hybrid weight object, keeping all other block-0 weight
+references and the 31 later layer objects unchanged. The Q8 donor was read
+without mapping its full 7.69-GB model; no GGUF or repository code was
+modified. OFF and ON used the same official pre-block state, official
+block-0 modulated attention input and `tanh(gate1)`, official MPS temporal
+features, BF16-exact initial latent, and 40-step scheduler's first model
+call. The executable SHA-256 was
+`bd073f8625a932985cf18d4ec5544e1cd6106d1ea142456ebbf246b7c55b3ce6`.
+OFF reproduced the prior native final velocity byte-for-byte
+(`97f2f2a8bc4a27809490d16c2e6503029e6dcafb465f4a19c3cf5c2f8c80917c`);
+ON produced
+`72eb70d3afd93f1f23924330660cab9b3b04a61972f749e6c77e437e3d603dda`.
+The two hash-gated reports are under
+`/private/tmp/qwen21-native-sublayers-20260928/` in the
+`sublayers-accounted-block0-only-preblock_and_block0_modgate_override_official_qkv_stage_taps_block0_v_q8_off/`
+and corresponding `_on/` directories (report SHA-256 values
+`f5868ad7220c9c842b6102d9f14140e9023c6243104bda2fc3ee0e99ea8fb5d3`
+and `1cc2b39fb7cdb8b70aa8f0c83890ec8e2f53f1e7d5fc39b7b56498c673b44c6f`).
+The scoped comparison report is
+`/private/tmp/qwen21-native-sublayers-20260928/v_q8_override_comparison_report.md`
+(SHA-256
+`6aa837d761ca3a77f4aebed42d63c03431275f7f4733d8adbfbca0b32ed97efe`).
+Its official-source-match annotation is based on a separate read-only
+reconstruction; the Crystal runner did not re-quantize official BF16 weights
+during inference. Raw and post-RoPE Q/K, pre-block state, and captured
+modulation inputs were byte-identical across arms.
+
+Against the official BF16 tensors widened exactly to F32, the raw V
+projection error fell from **0.985289% to 0.337856%** relative L2, and
+attention `to_out` error fell from **0.280020% to 0.234882%**. Yet the
+block-0 output error rose from **0.331287% to 0.337489%** overall: its
+230 text rows improved 0.320078% to 0.316898%, while the 1,024 target
+rows worsened 0.351888% to 0.373995%. The final target-velocity error
+fell only from **1.793929% to 1.759205%**. The native
+`step_bfloat16` scheduler first rounds model output to BF16, then rounds
+the product and sum. With
+`BF16_RNE(x0 + BF16_RNE(dt * BF16_RNE(velocity)))` and
+`dt = -0.015080928802490234`, the independently recomputed official
+first Euler state matched its saved 65,536/65,536 BF16 elements, while
+the native first post-Euler latent error was **0.128879% OFF versus
+0.128073% ON**. Omitting the initial native-velocity rounding yields the
+distinct 0.128842%/0.127765% diagnostic, not the source-exact scheduler
+result. This is a modest first-step
+improvement with non-monotonic intermediate effects, not evidence of better
+eyes, lettering, or a full 40-step image. ON also selects the specialized
+Q8_0 batch kernel where OFF's Q6_K V uses generic quantized dispatch, so
+the intervention is *V payload/type plus its dispatch*, not a pure
+quantization-precision effect. The downstream norm2/MLP boundary test follows;
+validate any promising policy on matched full trajectories,
+multiple seeds, and decoded eye/glyph regions. Refresh after official or
+native payload, input, kernel, capture, source, or scratch-artifact changes.
+
+A further scratch-only **block-0 MLP boundary 2x2** used the base Q6_K V arm
+and the same official pre-block state, modulated attention input,
+`tanh(gate1)`, and MPS time features. At the exact native boundary after the
+post-attention residual and norm2/modulation kernels, it copied the official
+BF16-widened modulated MLP input, the official BF16-widened `tanh(gate2)`,
+neither, or both into the buffers subsequently consumed by gate/up and the
+MLP residual. The four arms ran sequentially with the same executable
+SHA-256 `bddcac9ba1fccfe49aadc49f97f8949cb91f437c60a2222e2a4185c3be29c075`;
+the OFF arm reproduced the prior velocity SHA
+`97f2f2a8bc4a27809490d16c2e6503029e6dcafb465f4a19c3cf5c2f8c80917c`.
+All four captured post-attention residuals are byte-identical (SHA-256
+`53b1fe9c7dd786250717a6151e8dc15d165fed0c8c4a0d30e07249a22b174a27`),
+as are the captured attention projections. The injected MLP input and gate2
+captures exactly match their independently captured official F32-widening
+hashes when selected. This is a controlled *native clamp effect*, not a
+comparison of independent native and official MLP kernels at identical
+upstream states: the residual state still contains native attention error.
+
+Against official BF16 tensors widened to F32, the control's modulated MLP
+input, `tanh(gate2)`, and down-projected MLP output differ by 2.736642%,
+0.140559%, and 0.848225% relative L2, respectively. Injecting the official
+MLP input reduced the down-projection mismatch to 0.311511%, identically
+with or without the gate2 clamp; gate2 acts after this projection. The 2x2
+effects are:
+
+| Block-0 clamp | Post-block all rows | Post-block text rows | Post-block target rows | Final target velocity | First post-Euler target latent |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Neither | 0.331287% | 0.320078% | 0.351888% | 1.793929% | 0.128879% |
+| Official MLP input | 0.284376% | 0.257019% | 0.330784% | 1.790202% | 0.128611% |
+| Official gate2 | 0.346051% | 0.343868% | 0.350220% | 1.780770% | 0.128305% |
+| Both | 0.280046% | 0.250599% | 0.329463% | 1.788628% | 0.128699% |
+
+The first post-Euler column uses the source-exact BF16 roundings
+`BF16_RNE(x0 + BF16_RNE(dt * BF16_RNE(velocity)))`; recomputing the official
+state matched all 65,536 BF16 values and SHA-256
+`fd01f30fd1891b0d9bc44f297ebb8996a1126df350b3237f36c152a0b0fb82e7`.
+The best local post-block result is the both-clamps arm, but gate2-only is
+closest at the final velocity and first latent step; local error reductions
+are not monotone through later blocks. The large modulated-input discrepancy
+does not by itself diagnose the norm2 kernel, since its native residual input
+already differs from the official state. No arm was carried through a
+40-step image trajectory, and no face/text quality improvement is claimed.
+The per-arm captures and hash-gated JSON reports are under
+`/private/tmp/qwen21-native-sublayers-20260928/` in the four directories
+ending `_block0_v_q8_off_block0_mlp_{none,mlp_input,gate2,both}`. Their
+CPU-only comparison is
+`/private/tmp/qwen21-native-sublayers-20260928/block0_mlp_intervention_comparison.json`
+(SHA-256 `1af28f750471ddedab7b6ba8ff7e6302222329dca16a5dbbec03bcd3fd897663`);
+its fail-closed comparator script SHA-256 is
+`9ece2b237921dcc760be3980b61fa54dcf25a62e7a59807a6265269b0ee136b6`.
+Refresh
+after a change to source tensors, model/Metal code, scheduler arithmetic,
+input layout, or scratch-artifact availability; text-prefix/target-suffix
+row accounting applies to this pinned fixture, not arbitrary interleaved
+conditioning layouts.
 
 ## Not admitted by this slice
 
