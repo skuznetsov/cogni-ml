@@ -29100,3 +29100,33 @@ Refresh after source/toolchain/device/model/workload changes.
   Full controls and decay conditions are in `docs/qwen-image21-gguf-frontier.md`.
   Next: matched full-trajectory and multi-seed decoded eye/glyph tests before
   any production precision/kernel decision.
+- A SHA-gated spatial audit of all 40 matched official-versus-selective-Q8
+  BF16-state latent snapshots found distributed, growing error rather than a
+  face-localized excess. The whole latent reaches 11.341% relative L2 after
+  step 40; the documented 20-token face region has 7.696% locally normalized
+  error and 0.654x the rest-of-image RMSE. An approximate two-token eye-line
+  has 4.787% locally normalized error and 0.470x the rest RMSE; its tiny
+  step-2 excess is gone by step 4. This is one prompt/seed and an approximate
+  eye ROI, not perceptual-quality or VAE-manifold evidence. Root independently
+  reproduced the final whole/face/eye metrics. Report SHA-256
+  `57d3f29dc4bff22edeeb71711696a2a879accd3c41ccb8f9636c6217f56df2d9`;
+  complete paths, ROI and decay conditions are in the frontier document.
+- Eight matched call-0/block-0 Q/K/V rows split the earliest observed raw
+  projection difference into a GGUF-payload-versus-official-BF16-weight term,
+  output-rounding term, and native-versus-CPU-GGUF term. Sampled native versus
+  official relative L2 was 0.236714% Q, 0.234419% K, 0.997847% V;
+  corresponding same-CPU-F32 GGUF-versus-official-weight gaps were
+  0.171539%, 0.168556%, 0.984928%. CPU official-weight F32 matmul with BF16
+  output rounding matched all 32,768 selected official MPS values per head.
+  CPU Q6_K V with F16-rounded input/weights, F32 accumulation, and F16 output
+  rounding matched all 32,768 native V values sampled; the full captured V
+  output was F16-exact. The Q/K native-versus-CPU-GGUF residuals were only
+  about 0.0001% relative L2. Root reran the hash-gated comparator, which
+  includes a known-positive corruption check. This locates early numerical
+  difference in weight representation/source and precision boundaries, not
+  a demonstrated defective Metal kernel or eye-specific latent cliff. Q6_K
+  base provenance, effective V dispatch env, all-row/full-trajectory impact,
+  and multi-seed decoded quality remain open. Comparator/result SHA-256s are
+  `ef20fafa05a2b2eaf49b10c818be58d5a064470dd483eefe6b3ff08e0f5323a4` /
+  `15079bcb137ca14de91ee5ee499e35a9835fab0b0c3131169cf1b691e7d7ed69`;
+  full provenance and decay conditions are in the frontier document.

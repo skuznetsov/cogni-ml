@@ -3641,6 +3641,106 @@ input layout, or scratch-artifact availability; text-prefix/target-suffix
 row accounting applies to this pinned fixture, not arbitrary interleaved
 conditioning layouts.
 
+### Spatial localization of the matched Q8 latent drift (2026-09-28)
+
+A read-only audit independently hashed all 80 official/Q8 post-Euler state
+snapshots from the pinned Russian-sign/portrait prompt, seed 7, at 512x512 and
+40 BF16-state steps. Every file matched its recorded SHA-256, had 65,536
+finite BF16-exact Float32 values, and the final snapshots matched the saved
+bundles. The 40 sigma/timestep records matched within log precision. The
+whole-latent relative L2 grows from 0.129% after step 1 to 11.341% after
+step 40; there is no late, isolated onset in these snapshots.
+
+The documented face crop `x=[320,380), y=[150,219)` maps coarsely to 20 of
+1,024 latent tokens at the 16-pixel stride. An approximate eye-line window
+estimated from the official PNG maps to only two tokens; VAE receptive fields
+cross these cell boundaries, so this is not an exact eye attribution. At the
+final step, the face's absolute RMSE is 0.08124 versus 0.12428 outside it,
+and its *locally normalized* relative L2 is 7.696% versus 11.398% outside.
+For the two-token eye estimate, RMSE is 0.05816 versus 0.12368 outside, and
+local relative L2 is 4.787% versus 11.353% outside. A 12-token eye
+neighborhood is also below its complement. The strongest contrary signal is
+small and early: the estimated two-token eye RMSE is 1.045x its complement
+at step 2, then falls below it by step 4. Thus this run does **not** show a
+face- or eye-localized *excess* latent discrepancy, even after avoiding a
+misleading whole-image denominator. It does not establish perceptual eye
+quality or membership in the VAE's training support; fine facial features may
+be sensitive to a distributed latent shift.
+
+The SHA-gated report is
+`/private/tmp/qwen21-latent-spatial-20260928/report.json` (SHA-256
+`57d3f29dc4bff22edeeb71711696a2a879accd3c41ccb8f9636c6217f56df2d9`),
+with a per-step CSV and analyzer in the same scratch directory (analyzer
+SHA-256 `fc2212b12ac891c4ee073d93a47b065492843226bce84d332f0faf44c361cf2c`).
+An independent final-step calculation reproduced the official and Q8 latent
+file hashes, whole/face/eye RMSE, and local relative L2. Refresh the result
+after any model, GGUF, conditioning, schedule, latent layout, decoder, ROI, or
+ephemeral scratch-artifact change; it is one prompt/seed, not a general facial
+quality verdict.
+
+### Fixed-input block-0 Q/K/V discrepancy decomposition (2026-09-28)
+
+The next CPU-only discriminator used eight deterministic rows (four text and
+four target, source indices `0,76,152,229,230,571,912,1253`) from the same
+call-0 official modulated attention input. The native report's *post-copy*
+norm1 override hashes equal the official BF16 and exact-F32-widening input
+hashes; the earlier `block0_native_attention_input_modulated` side-tap is
+pre-override and must not be treated as the matmul input. Official Q/K/V are
+bias-free BF16/MPS linear outputs; native Q/K/V are Q8_0/Q8_0/Q6_K raw
+projections copied before Q/K RMSNorm and RoPE. The GGUF Q/K/V payloads,
+official shards, captures, row mask, and input were hash-gated. Empirical
+direct-versus-transposed comparisons reject a weight-layout transpose despite
+the square 4096x4096 shapes.
+
+For each projection, the exact sampled-vector identity is
+`native - official = (native - CPU_GGUF_F32) +
+(CPU_GGUF_F32 - CPU_BF16_weights_F32) +
+(CPU_BF16_weights_F32 - official)`.
+The entries below are relative L2 **percentages** normalized to the sampled
+official output. They are magnitudes of different vectors, not additive
+causal shares:
+
+| Block-0 projection | Native vs official | GGUF payload vs official BF16 weights, same CPU F32 matmul | Native vs CPU GGUF F32 matmul |
+| --- | ---: | ---: | ---: |
+| Q (Q8_0) | 0.236714% | 0.171539% | 0.000099% |
+| K (Q8_0) | 0.234419% | 0.168556% | 0.000095% |
+| V (Q6_K) | 0.997847% | 0.984928% | 0.023769% |
+
+The CPU F32 matmul with official BF16 weights, **BF16-rounded at output**,
+matched the official MPS BF16 output exactly on all 32,768 selected values
+for each head. This reproduces the observed output contract on these rows;
+it does not prove MPS's internal reduction order in general. Without output
+rounding, the CPU-full-to-official gap is about 0.163-0.166%, making it
+unsafe to label that term a Metal error. The native V raw capture is exactly
+F16-representable at all 5,136,384 values, unlike Q/K (~0.04%). Rounding the
+matched input and dequantized Q6_K V weights to F16, doing CPU F32 matmul,
+then F16-rounding and widening the result reproduced native V **exactly on
+all 32,768 selected values**. This strongly supports the source's Q6 batch
+GEMM F16-boundary route; the runner did not log or guard its route-affecting
+environment variables or effective kernel, so the kernel identity is not an
+independent runtime certificate. The V weight-payload term dominates this
+one sampled raw projection, but its Q6_K base provenance is still unproved:
+this is **not** a proof that quantization alone caused the difference, nor
+that V dominates the final image error. Earlier Q8 gate/up trajectory tests
+show broader distributed accumulation.
+
+The independently rerun comparator, including a one-value corruption
+positive control, is
+`/private/tmp/qwen21-projection-decompose-20260928/projection_decompose.py`
+(SHA-256 `ef20fafa05a2b2eaf49b10c818be58d5a064470dd483eefe6b3ff08e0f5323a4`);
+its result JSON SHA-256 is
+`15079bcb137ca14de91ee5ee499e35a9835fab0b0c3131169cf1b691e7d7ed69`.
+The captured binary SHA-256 is
+`bddcac9ba1fccfe49aadc49f97f8949cb91f437c60a2222e2a4185c3be29c075`.
+It reports source commit `4821bc5d`; the intervening diff to the current
+`c0540ca5` contains only this frontier document and `LANDMARKS.md`, not
+math code. This certificate is limited to eight rows, call 0, block 0, and
+the pinned GGUF/model/captures. Refresh it if the source/weights, capture
+intervention, selected rows, compiler/device/dispatch, or ephemeral scratch
+artifacts change. Before a production quality policy, verify Q6_K base
+provenance and compare matched full trajectories and decoded eyes/glyphs
+across more prompts and seeds, with paired latency and an explicit rollback.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder
