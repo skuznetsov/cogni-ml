@@ -4541,6 +4541,66 @@ benchmark-noise quiet requirement disabled. Refresh after changes to model
 or conditioning payloads, Diffusers/native source, scheduler input, BF16 or
 Metal semantics, or any saved scratch capture.
 
+### Call-10 block-0 operator frontier on equal full-joint input (2026-09-28)
+
+The first-block operator split used the same saved official BF16 input state
+(widened exactly to F32 for native Metal), official modulation, full 230-row
+text prefix and 1,024-row target image suffix, and the pinned full-Q8 donor.
+The official noncached BF16/MPS forward retained its previous block-0 output
+and terminal velocity **byte-for-byte** with passive hooks. The native Q8/Metal
+block-0 output was bit-exact with and without its copy-only taps and on a
+third repeat. The official and native reports have SHA-256 values
+`cb2dce2d30fc140bdc66da036435d1e385e643c3d2768fea552ddea0274b883f`
+and `4c2bc63ed8b73c9be08fc7faa1b08366d7077d79494becf0e0e161d2ebba4989`.
+They are under `/private/tmp/qwen21-call10-op-tap-official-20260928/tap_run1/`
+and `/private/tmp/qwen21-call10-op-tap-native-20260928/`, respectively.
+These controls establish that the following comparisons observe the existing
+routes rather than a changed attention processor or tap-dependent output.
+
+| Matched block-0 boundary | Text relative L2 | Target-image relative L2 | Target-image RMSE |
+| --- | ---: | ---: | ---: |
+| LayerNorm-1 + modulation output / attention input | 0.312677% | 0.307104% | 0.002097 |
+| Raw Q projection | 0.275226% | 0.245395% | 0.020098 |
+| Raw K projection | 0.309767% | 0.257086% | 0.020021 |
+| Raw V projection | 0.414948% | 0.377128% | 0.012031 |
+| Attention output before projection | 0.924588% | 0.994056% | 0.001962 |
+| Attention output after projection | 0.341333% | 0.199159% | 0.012997 |
+| Modulated MLP input | 0.615365% | 0.690595% | 0.000193 |
+| MLP output | 0.251810% | 0.381326% | 0.002104 |
+| Block output | 0.255690% | 0.343305% | 0.024153 |
+
+All percentages divide by the official tensor norm at their **own** boundary;
+they cannot be added or compared as causal contributions. The earliest matched
+nonzero output in this equal-input block is the fused native LayerNorm-1 plus
+modulation result, before Q/K/V projections. A CPU F32 recomputation of
+LayerNorm-1 plus scale from the exact teacher block input and modulation
+matches the native Metal output within **0.00000664%** relative L2 on target
+rows. The official modulated output is reconstructed **exactly at all
+4,194,304 target elements** from its observed BF16 LayerNorm output by BF16
+round-to-nearest-even of `1 + scale`, then BF16 rounding of the product.
+Starting from the CPU/native F32 formula, successive hybrids using the
+observed official LayerNorm output, then BF16-rounded scale, then BF16-rounded
+product have target relative-L2 gaps to the official output of 0.307104%,
+0.244607%, 0.165229%, and 0%. These are *non-additive vector magnitudes*;
+the official MPS LayerNorm output also differs from an independent CPU BF16
+LayerNorm at about 0.197395% relative L2. This localizes the first discrepancy
+to precision/backend staging at normalization and modulation, not to a
+demonstrated error in the native fused kernel formula.
+
+The native post-RoPE Q/K taps are **not** compared with the official pre-RoPE
+Q/K taps; those are different boundaries. The attention and MLP differences
+include inherited upstream error, Q8 weight substitution, and BF16/F32
+arithmetic. In particular, the 0.994056% attention-output ratio has a small
+0.001962 absolute RMSE and does not by itself establish attention as the main
+cause of the final latent or face defect. This is one zero-based diffusion
+call (10), one block, one pinned prompt/seed and 512px trajectory. The next
+discriminator is an equal-input native block replay that injects the saved
+official modulated attention input, with a no-op control, then compares the
+block output and eventually the terminal velocity. Only an improved causal
+intervention and end-to-end image A/B would justify a production precision
+change or an eye-quality claim. Recheck after changing the donor, conditioning,
+Diffusers/native source, BF16/Metal runtime, or any saved tap artifact.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder

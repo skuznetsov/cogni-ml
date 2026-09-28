@@ -29305,3 +29305,25 @@ Refresh after source/toolchain/device/model/workload changes.
   Next: matched-weight intervention near calls 10/11, then trajectory and
   decoded-image A/B if velocity changes. Full pins, caveats, and decay
   triggers are in `docs/qwen-image21-gguf-frontier.md`.
+- At zero-based call 10, an equal-input full-joint block-0 operator split
+  locates the first matched native Q8/Metal versus official BF16/MPS
+  discrepancy at the LayerNorm-1 plus modulation output, before Q/K/V:
+  target-image relative L2 0.307104%. The output of that native fused
+  operation agrees with independent CPU F32 LayerNorm plus scale to
+  0.00000664% relative L2. The official output reconstructs byte-exactly
+  from observed BF16 LayerNorm output with BF16 rounding after `1 + scale`
+  and multiplication. Raw Q/K/V target gaps are 0.245395% / 0.257086% /
+  0.377128%; the block output gap is 0.343305%. Passive official taps
+  retained the saved block and terminal bytes, while native no-tap/tapped
+  and repeated outputs were bit-exact. This is evidence for a precision/
+  backend staging difference, not a wrong Metal formula or an established
+  causal explanation of eyes, VAE support, or final-image quality. The
+  official/native report SHA-256 values are `cb2dce2d30fc140bdc66da036435d1e385e643c3d2768fea552ddea0274b883f`
+  and `4c2bc63ed8b73c9be08fc7faa1b08366d7077d79494becf0e0e161d2ebba4989`.
+  Parent independently checked all 15 official exact BF16 widenings, all
+  14 native tap hashes/finite values, and all nine text/image comparison
+  rows. Next falsifier: inject official modulated attention input into a
+  no-op-controlled native block replay and measure block/velocity response;
+  details and artifact paths are in `docs/qwen-image21-gguf-frontier.md`.
+  Refresh after weights, conditioning, source, BF16/Metal runtime, or saved
+  tap changes.
