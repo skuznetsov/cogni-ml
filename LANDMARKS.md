@@ -29216,3 +29216,24 @@ Refresh after source/toolchain/device/model/workload changes.
   Next: operator-level matched-input split at strongest image-error blocks
   and final head, using matched BF16 weights if available. Full pins, scope,
   and decay triggers are in `docs/qwen-image21-gguf-frontier.md`.
+- A SHA-gated 40-step spatial audit of the pinned official-versus-full-Q8
+  trajectory found a post-hoc non-face 20-token hotspot whose share of
+  squared latent error jumps from 4.594% after step 10 to 10.520% after
+  step 11 and 21.706% after step 12, while global latent relative L2 rises
+  0.476661% to 0.549960% to 0.702207%. Same-binary native full-Q8 forwards
+  on both official and native incoming BF16 states at calls 10/11 reproduced
+  saved native Euler next states exactly (65,536/65,536 each). The call-11
+  one-step gap splits algebraically into 0.107540% direct same-input and
+  0.699382% state-transport terms relative to official next-state norm;
+  transport amplifies the already-different hotspot 1.806x. Separate call-20
+  and call-39 *velocity* decompositions also find state transport larger than
+  direct same-input DiT error (9.568% vs 0.831%; 16.237% vs 1.974%). This
+  supports denoising feedback, not a VAE-only origin, but does not identify
+  the initial Q8/arithmetic/cache discrepancy, VAE support membership, or
+  an eye/glyph-specific cause. Both arms used saved official Qwen3-VL
+  conditioning; native encoder quality is outside this test. The hotspot was
+  selected after seeing the trajectory. Guarded onset report SHA-256 is
+  `6b2309f524155de5599f1a69142ec384a5c988487bdd4b99683062ea8211fe44`;
+  full artifact pins, other report hashes, caveats, and decay triggers are
+  in `docs/qwen-image21-gguf-frontier.md`. Next: observational block-0
+  operator split and paired native-versus-official conditioning trajectories.

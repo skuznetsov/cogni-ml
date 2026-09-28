@@ -4063,6 +4063,102 @@ discriminator is an operator-level matched-input split of the strongest
 image-error blocks and the output head, ideally with matched BF16 weights to
 separate quantization from implementation arithmetic.
 
+### Full-Q8 latent-drift onset and state transport (2026-09-28)
+
+A separate SHA-gated spatial audit compared every one of the 40 saved
+official and full-Q8 post-Euler latent states on the same prompt, seed,
+schedule, and **saved official Qwen3-VL conditioning**. The full 32x32x64
+latent relative L2 gap rises from 0.107892% after step 1 to 0.476661% after
+step 10, 3.268054% after step 20, and 9.881818% after step 40. A fixed
+20-token approximate face region (rows `[9,14)`, columns `[20,24)`) reaches
+3.810557% locally normalized L2 at step 40. This is not an eye-anatomy
+metric. A separate **post-hoc selected**, non-face 20-token hotspot (rows
+`[18,23)`, columns `[5,9)`) contains 4.594% of cumulative squared error at
+step 10, 10.520% at step 11, 21.706% at step 12, and 46.672% at step 20;
+its area is 1.953% of image tokens. The post-hoc choice makes this a
+description of where the error concentrates, not an unbiased detector or
+proof of its cause. The squared *new error increment* within that same
+region is 10.786% at completed step 10, 24.217% at step 11, and 35.867%
+at step 12; the sharp local growth is around calls 10–12, not the first
+appearance of a latent mismatch. Same-official-state full-Q8-versus-official
+DiT velocity error is *not* concentrated there at the earlier sampled calls 0/20/39
+(3.826%/1.744%/1.540% of squared velocity error), so the large latent
+hotspot must not be read as an equally localized one-call operator error.
+
+To discriminate local DiT output mismatch from propagation of an already
+different input, a new same-binary full-Q8 Metal forward was run at both
+official and native saved incoming BF16 states for calls 10 and 11. The
+binary/input preflight checked the exact 65,536 BF16 values, and the reports
+recorded the full-Q8 donor identity, official conditioning, and scheduler.
+An independent CPU hash of the currently referenced 7.2-GB donor matches
+the expected SHA; the capture itself did not assert model-byte rehash at
+forward time. With the official FP32 sigma delta and BF16 round-to-nearest-even
+at velocity, delta, and state-update boundaries, the counterfactual native
+Euler update replayed the saved native post-step state **65,536/65,536
+bitwise** at each call. The resulting
+identity splits `native_next - official_next` into
+`native_update(official_input) - official_next` and
+`native_update(native_input) - native_update(official_input)`.
+These are one-step state-vector terms, not a linearized derivative or a
+unique causal allocation.
+
+| Incoming call / completed step | Direct same-input one-step gap | Input-state transport term | Full next-state gap | Transport gain in post-hoc hotspot |
+| --- | ---: | ---: | ---: | ---: |
+| 10 / 11 | 0.116878% | 0.537981% | 0.549960% | 1.615x |
+| 11 / 12 | 0.107540% | 0.699382% | 0.702207% | 1.806x |
+
+The three gaps above are L2 norms relative to the official *next latent*,
+so their scalar magnitudes do not add. Direct and transport vectors have
+cosines -0.0050 and -0.0506. At call 11 the transport term contains 21.874%
+of its squared energy in the hotspot, while the direct term contains 1.385%;
+outside the hotspot, transport gain is still 1.170x, so this is local
+amplification within broader drift, not an exclusively local failure. At
+call 20, a separate exact native-state replay decomposes the **velocity**
+gap into 0.830599% direct same-official-input and 9.568147% state-transport
+terms relative to the official velocity norm (total 9.550403%); at call
+39 these are 1.974060% and 16.237064% (total 16.317905%). Thus a
+same-input DiT discrepancy exists early, and the propagated state difference
+dominates by the measured calls. The strongest supported diagnosis is
+positive feedback in the denoising trajectory, not a VAE-only failure.
+Official raw velocities for calls 10/11 were not captured, so the direct
+one-step term there also includes any official/native scheduler-rounding
+difference; it must not be labeled a pure DiT-velocity error.
+
+This experiment does **not** establish the initial source of the mismatch:
+Q8 weight representation, a Metal/MPS arithmetic boundary, block operator
+ordering, and official cached-versus-native fresh-prefix behavior remain
+separable hypotheses. The fixed official conditioner deliberately excludes
+native Qwen3-VL accuracy from this A/B; it does not clear that encoder for
+end-to-end use. A byte-exact CPU/FP32 VAE re-decode rejects a VAE-only
+origin, but neither these norms nor spatial energy prove that the VAE was
+fed an out-of-support latent or that this hotspot caused the visible eye or
+glyph defects. The most useful next discriminator is an observationally
+controlled operator-level split on official block-0 inputs, then a paired
+official-versus-native conditioning trajectory and multi-seed perceptual
+evaluation before any quality-policy change.
+
+The spatial auditor and report SHA-256 values are
+`238dd4fede0e29ea6fe40795c6d9a263432269e30c1145a6efb40ad7a7d0d718`
+and `2836f90a843e0c047b8d5045fc373bc12f4e4bc3650f55d6a5f9626e5e4efe47`;
+the guarded onset auditor/report values are
+`4efa0acb8218783b237a3dcf44ae26bc3e14eb37be0c1e65b31046333b486dac`
+and `6b2309f524155de5599f1a69142ec384a5c988487bdd4b99683062ea8211fe44`.
+The onset full-Q8 binary SHA-256 is
+`9446461e14fe2c5ae2a8a9175a3415b0c2f145789fdb7d999100e740192fe0e5`;
+call-20/call-39 decomposition reports have SHA-256
+`1d3b6109909bcd4c5157f0a445e92ffc7fac328a733a0c8a2857ddcb52086e9c`
+and `d06c468fff311bdeba6f70792ac603d4ea8d9ed1a2c399bb0e1d01df74a6a70d`.
+Scratch reports and source are under `/private/tmp/qwen21-spatial-drift-20260928/`,
+`/private/tmp/qwen21-onset-20260928/`, and
+`/private/tmp/qwen21-state-decomp-20260928/`. The reused onset binary's
+free-text interpretation incorrectly calls native-input runs official, and
+an input-subreport says `model_sha256_verified=false`; the auditor checks
+input/output hashes and the reported model/conditioning identities, while
+the independent donor rehash checks the current file, not bytes at capture
+time. Refresh after source/compiler/device, quantized model, conditioner,
+scheduler, trajectory captures, or scratch evidence changes, and before
+generalizing to other prompts, seeds, resolutions, or precision policies.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder
