@@ -28974,6 +28974,29 @@ Refresh after source/toolchain/device/model/workload changes.
   The 7.167 GB hybrid also logged about 1,235 s denoising versus 647 s for
   the 5.959 GB Q4 in single, uncontrolled runs, so it is not promoted as
   default. Full hashes, controls, evidence paths, and decay triggers are in
-  `docs/qwen-image21-gguf-frontier.md`. Next discriminator: exact-revision
-  donor/provenance plus multi-prompt/seed precision and latency sweep; keep
+  `docs/qwen-image21-gguf-frontier.md`. Next discriminator: Q4-base target
+  provenance plus multi-prompt/seed precision and latency sweep; keep
   eye/text quality separate from whole-latent distance.
+- Follow-up full streaming provenance matched all 64 targeted official BF16
+  `gate_layer`/`proj` tensors after local Q8_0 encoding to the Q8 donor's
+  fused gate/up payloads byte-for-byte: 3,422,552,064 compared bytes, zero
+  mismatches. The two source shard SHA256 values matched their cached ETags
+  for revision `790c92633540aa0cb11d9abf19eb46d861714758`; the donor
+  full-file SHA matched its pin. This closes the donor's *target-payload*
+  source identity, not the donor's other tensors or the Q4 base's origin.
+  A bounded Q5_K sample of the Q4 base differed by 400/5,767,168 bytes
+  from the installed no-imatrix reference quantizer (26/64 slices exact),
+  rejecting that exact conversion recipe but not establishing a different
+  source checkpoint.
+  A crossed-state probe then separated Q8 same-official-state local velocity
+  error from the same-Q8-model input-state transport at exact official calls
+  0/20/39. L2 norms (local / transport / total) were 7.334/0/7.334,
+  3.494/38.585/38.755, and 6.482/51.479/51.729, respectively. The late
+  gap is primarily associated with the already-shifted state at these two
+  calls, not a newly huge same-state local DiT error; vector norms are not
+  additive causal shares and do not identify the originating early call.
+  The two new Q8 forwards used only its own saved BF16 prestates; all six
+  official/Q8 Euler poststate canaries were byte-exact, with zero vector
+  decomposition residual. VAE out-of-support and eye/text quality remain
+  unproven. Complete pins, report SHA, scratch paths, and decay conditions
+  are in `docs/qwen-image21-gguf-frontier.md`.

@@ -2985,9 +2985,25 @@ control; the present AB2 pilot does not test that hypothesis.
   Base Q4 SHA256: `51998ad7c068ce7d68e233237537900ffe874ab4d5c72e20758f5f18ceb15b8a`;
   Q8 donor SHA256: `c3ef62b2b7b53bf92418cbd77fbc24b43a26c8305a1f001c4a9a9a99b1373c03`;
   hybrid SHA256: `d9f6449ac9d75fa8cd1fdabfe89ec660fa5290b82640388a32cd05cd8a4914ff`.
-  The donor's exact underlying source-checkpoint identity relative to the
-  official reference is not independently proven. No GGUF or generated image
-  is committed to the repository.
+  A subsequent full streaming check encoded all 64 official BF16
+  `gate_layer`/`proj` source tensors into Q8_0 and matched every corresponding
+  donor gate/up half byte-for-byte: 3,422,552,064 Q8 bytes, zero mismatches.
+  Both source safetensors shard SHA256 values matched their cached 64-hex ETags
+  at revision `790c92633540aa0cb11d9abf19eb46d861714758`; the donor's
+  full-file SHA256 matched the pin above. A one-bit in-memory mutation was
+  detected. This establishes the targeted donor payloads as an exact local
+  Q8_0 encoding of the pinned official BF16 tensors, not the provenance of
+  the donor's non-target payloads or of the Q4 base. No GGUF or generated
+  image is committed to the repository.
+  A separate bounded Q4-base falsifier compared 32 selected rows from each
+  of the 64 official BF16 gate/proj tensors after the installed ggml
+  no-imatrix `quantize_row_q5_K_ref` recipe against the fused Q5_K payloads
+  in the Q4 base. Of 5,767,168 sampled bytes, 400 differed and only 26/64
+  slices were byte-exact. The first mismatch was a one-byte block-scale
+  difference in layer-0 `proj`. This rejects *that exact quantizer recipe*
+  for the base; it does not establish a different checkpoint because the
+  original converter version, importance matrix, and policy are unpinned.
+  The full Q5 scan was deliberately not run after the sample falsifier.
 - **Matched 40-step controls:** official BF16/MPS, native Q4, and native
   Q4-plus-Q8-gate/up used the same official Qwen3-VL
   conditioning payload SHA256
@@ -3023,8 +3039,10 @@ control; the present AB2 pilot does not test that hypothesis.
   4.251594%. The output differences are therefore present **inside DiT
   before Euler accumulation or VAE**. This isolates a local effect of the
   pinned GGUF variant at those states; it does not quantify the separate
-  feedback/transport contribution along the other 37 steps or prove that
-  quantization alone, rather than donor checkpoint differences, caused it.
+  feedback/transport contribution along the other 37 steps. The targeted
+  Q8 donor payloads are now source-matched, but this alone does not prove
+  that the Q4 base gate/up payloads came from the same official revision or
+  isolate quantization from every native-versus-official arithmetic difference.
 - **Decoded-image check:** all three final latents were independently decoded
   through the same pinned CPU/FP32 VAE. On raw RGB 0-255 pixels, official-vs-Q4
   MAE was 9.78498 globally and 15.98519 in the fixed face crop
@@ -3041,9 +3059,10 @@ control; the present AB2 pilot does not test that hypothesis.
   quiet-host throughput estimate. Do not promote Q8 gate/up as the default
   yet. These controls reject a **VAE-only** explanation for the observed
   drift but do not establish a VAE off-manifold failure: the VAE may simply
-  decode different, imperfect latents. A stronger next discriminator is an
-  exact-revision, multi-prompt/seed precision sweep with matched same-state
-  forwards and decoded-face/text evaluation, followed by a throughput gate.
+  decode different, imperfect latents. Stronger next discriminators are a
+  Q4-base target-payload provenance check and an exact-revision,
+  multi-prompt/seed precision sweep with matched same-state forwards and
+  decoded-face/text evaluation, followed by a throughput gate.
 - **Evidence and decay:** trajectory files are under
   `/private/tmp/qwen21-q8-gateup-40-20260927`, official and Q4 BF16-state
   controls under `/private/tmp/qwen21-official-trajectory-20260927` and
@@ -3051,12 +3070,87 @@ control; the present AB2 pilot does not test that hypothesis.
   outputs/report under `/private/tmp/qwen21-q8-teacher-forced-20260927`.
   Teacher-forced report SHA256:
   `7cf6b34b359bb5d61a6358caf45e7796c7d643c2b987dbd4469c91bea1d08d81`.
+  The complete donor gate/up byte comparison is under
+  `/private/tmp/qwen21-exact-gateup-provenance-20260927` in
+  `full_compare_report.json`; its `full_compare.py` SHA256 is
+  `11480d0b751259331e22f37a0ffb4b3f5680c06e3d29c11cb2fffd07deabaee5`.
+  The bounded Q5 falsifier and its sample report are in that same scratch
+  directory as `q5_base_compare.py` (SHA256
+  `b6ece86e4245e687cb40bfcd7663b33b98a5ec480cdbe426e320c59cb346c764`)
+  and `q5_base_compare_report.json` (SHA256
+  `21341623178880d12c31f83df9c23dd4e4d1db6c30a38067208cf5f9b98ffb6d`).
+  Its exit 2 deliberately stops at the non-exact sample; it is not an
+  infrastructure or model-inference failure.
   The scratch comparators and tests are under
   `/private/tmp/qwen21-q8-trajectory-compare-20260928` and
   `/private/tmp/qwen21-q8-image-compare-20260927`. The controls expire on a
   changed model/donor, conditioning, schedule, state arithmetic, Metal route,
   VAE, decoder, or comparator; ephemeral `/private/tmp` evidence must be
   regenerated if removed.
+
+### Crossed-state DiT probe: local output error versus trajectory feedback (2026-09-27)
+
+The Q8-gate/up trajectory already differs from the official trajectory at
+the first DiT call. A new probe separated the *velocity* gap at calls 0, 20,
+and 39 without reconstructing unavailable official velocities at other calls.
+For Q8 DiT velocity `N`, official BF16 velocity `T`, official pre-Euler state
+`x_ref`, and the hybrid's own pre-Euler state `x_q8`, the exact vector identity
+is `N(x_q8)-T(x_ref) = [N(x_q8)-N(x_ref)] + [N(x_ref)-T(x_ref)]`. The first
+bracket is the same-Q8-model state-transport term; the second is its
+same-official-state local discrepancy. At call 0 both states are the same.
+All values below are raw-velocity L2 norms across 65,536 elements, **not**
+additive causal shares or image-quality scores:
+
+| DiT call | Input-state gap | Q8 local velocity gap | Q8 state transport | Total velocity gap |
+| ---: | ---: | ---: | ---: | ---: |
+| 0 | 0 | 7.334246 | 0 | 7.334246 |
+| 20 | 7.151546 | 3.494177 | 38.585152 | 38.755341 |
+| 39 | 30.866094 | 6.482357 | 51.478731 | 51.728717 |
+
+At calls 20 and 39, the two velocity components are nearly orthogonal
+(cosines 0.0035 and -0.0243), so the total norm is close to the larger
+transport norm in this sample; no scalar percentage attribution is implied.
+Relative to official teacher-velocity norm, the Q8 local discrepancy is
+0.9823% and 2.2661%, versus 10.8472% and 17.9958% for the state-transport
+term. The local discrepancy is not a pure quantization term: even its exact
+subdivision into Q8-minus-Q4 at `x_ref` and Q4-minus-official at `x_ref`
+does not separate Q4 weights from native/official arithmetic. The larger
+late transport term shows that by those calls the already-shifted latent is
+a major driver of the instantaneous DiT output difference. It does not
+identify which earlier call originated that state shift.
+
+Controls: the Qwen3-VL conditioning payload, seed, Euler schedule, effective
+BF16 timestep, source revision, and hybrid GGUF are pinned to the preceding
+section. Exact official raw BF16 velocities exist at calls 0, 20, and 39.
+Six existing same-official-state native outputs were reused; only two new
+Q8 forwards were run at its own pre-Euler states (`step-019` and `step-038`).
+The first sandbox attempt could not create a Metal device and produced no
+velocity files. One retry under `scripts/run_safe.sh` (600 s, 16 GiB RSS,
+35% free-memory floor) completed. All six BF16 Euler poststate canaries
+(official and Q8 at each selected call) reconstructed the saved states
+byte-for-byte, and both forms of the vector decomposition had zero residual
+at all selected calls. Root independently rechecked output SHA256 values,
+raw-vector norms, prestate gaps, and the vector identity with Float64 NumPy.
+Six CPU unit tests and the full SHA-gated preflight passed. The new Q8
+velocity SHA256 values are
+`8e780decf780404fc75625f2a431b88230297b66a792a6b40eda15db321dab6f`
+(call 20) and
+`2f2994055c4e2229e8a127892f7d011889e54361f38b7306754db8a312cafaf5`
+(call 39); the analysis-report SHA256 is
+`4975403f20b9283f3b3f249d458e5a5817db2f571926e38dc9ac732b3b5be88d`.
+Scratch inputs, guards, outputs, and report are under
+`/private/tmp/qwen21-crossed-state-20260927`.
+
+The 40 saved post-Euler snapshots still show monotonic whole-latent error
+growth rather than one bad step; the final Q8 gap is 11.341314% relative
+L2. The approximate face-token ROI is less divergent (7.6959%) than the
+whole latent, which neither rules out perceptually sensitive eye errors nor
+establishes that the VAE is outside its training distribution. The strongest
+next discriminator is a controlled earlier-call/layer precision sweep with
+matched trajectories and eye/text-specific evaluation; VAE out-of-support
+needs a separately calibrated reference distribution. These measurements
+expire if the weights, conditioning, schedule, BF16 arithmetic, native
+runtime, decoder, or scratch evidence change.
 
 ## Not admitted by this slice
 
