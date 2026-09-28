@@ -29512,3 +29512,26 @@ Refresh after source/toolchain/device/model/workload changes.
   `b9bee62a2e146e0540b6e3b7a157adf7b1ff2a51d230312ad18d90c51a3632a6`.
   Scratch may expire; pins and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A fixed-input full-Q8 call-10 block-29 gate/up replay held the 1,254-row
+  native MLP input constant after seeding the block with the exact official
+  post-block-28 state. The official BF16 gate/up payload exactly re-encodes
+  to the donor Q8_0 bytes. Against an original-BF16-weight F32 GEMM, the
+  Q8-dequant F32 gate/up output differed by 0.337199% relative L2 in the
+  20-token face core; production Metal Q8 versus the same Q8-dequant F32
+  route differed by only 0.000024900%. Root independently recomputed both
+  face comparisons from raw taps and weights; no-tap/tap block outputs were
+  byte-exact. A subsequent no-op-guarded splice of the original-BF16-weight
+  F32 output at the same tap removed 6.931958% of squared face-core
+  block-output error versus official MPS (6.700072% image-wide, 3.119477%
+  joint); root recomputed those fractions and exact no-op from saved states.
+  This identifies a bounded gate/up weight/precision contribution, not the
+  whole block, final velocity, 40-step trajectory, or eye defect. The
+  original-weight F32 arm is not an official MPS BF16 operator output.
+  Fixed-input report SHA-256:
+  `e17521e5c51ddab47f2a533339453d0c60759ac331a9c4af937904c3d82f8e19`;
+  splice report SHA-256:
+  `d68fc63eaba7df8cf54b424b85c64e3eecd6bf69787ded058d8e1fff92019ab2`;
+  current analysis/emitter script SHA-256:
+  `ab0956a4bb0346a3f2ff141a8e7f9d5b4e50979922b4192808e39c9b2123378a`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.

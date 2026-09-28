@@ -5162,6 +5162,74 @@ saved artifact, or ROI changes. The next discriminator is the pinned
 equal-input DiT operator route, followed by a full-trajectory intervention
 before any quality claim.
 
+### Call-10 block-29 gate/up fixed-input discriminator (2026-09-28)
+
+An instrumented, no-op-checked native replay began block 29 at the exact
+official post-block-28 call-10 state widened from BF16 to F32. It captured
+the native block-29 MLP input after native attention, residual,
+normalization, and modulation, and the production Metal Q8_0 gate/up
+projection output. This MLP input is **not** an official MPS tap. The
+instrumented and uninstrumented block outputs were byte-identical.
+
+The exact official BF16 gate and up weight payloads re-encoded byte-for-byte
+to the fused Q8_0 donor tensor, including each half separately. On the same
+frozen native MLP input, full 1,254-row single-thread F32 GEMMs compared
+(a) official BF16 weights widened to F32, (b) the donor Q8_0 weights
+dequantized to F32, and (c) the captured production Metal Q8 output.
+Only after each full GEMM were image and face rows selected for metrics.
+
+| Gate/up comparison | Joint relative L2 | Face-20 relative L2 |
+| --- | ---: | ---: |
+| Q8-dequant F32 versus original BF16-weight F32 | 0.363279% | 0.337199% |
+| Production Metal Q8 versus Q8-dequant F32 | 0.000026527% | 0.000024900% |
+
+Root independently recomputed both face-row comparisons from the saved
+native tap and original/Q8 weights. BF16-rounding the captured input before
+the original-weight GEMM changes the face output by 0.097090% relative L2;
+BF16-rounding the production output changes it by 0.165611%. These are
+separate controls, not additive error terms. The official MPS BF16 gate/up
+accumulation was **not** captured, so the original-weight F32 arm is not an
+official operator-output oracle. The separate full block-29 image-output
+gap versus official MPS was 0.491089% relative L2; this operator-only test
+does not assign that gap, the final velocity, the 40-step trajectory, or
+decoded face quality to gate/up quantization. A no-op-guarded gate/up
+intervention tested its effect at the block output.
+
+The no-op-guarded scratch-only splice then replaced **only** this gate/up
+projection output with the full 1,254-row original-BF16-weight F32 GEMM
+result on the same native MLP input; the rest of block 29 stayed native.
+The unspliced baseline reproduced the preceding replay, the live input
+and Q8 gate/up taps were identical in every arm, and writing back the live
+native gate/up result was byte-exact at the block output. Relative L2 to
+the official MPS block-29 output changed from 0.491089% to 0.474352%
+across image rows and from 0.467986% to 0.451475% in the face core.
+This removed 6.700072% and 6.931958% of the respective *squared block-output
+errors* (3.119477% over all joint rows). Root independently recomputed
+all three fractions and the no-op from raw saved states. Thus a selective
+gate/up weight/precision correction contributes to the local block-output gap
+in this fixture, but most of that gap remains. The substitute was a CPU
+F32 GEMM using original BF16 payloads, **not** an official MPS BF16 gate/up
+capture. No terminal DiT velocity, scheduler step, complete 40-step
+trajectory, decoded eye, or VAE-manifold effect was measured.
+
+The fixed-input report, splice report, analysis/emitter script, and pinned
+CPU reference are under `/private/tmp/qwen21-dit-operator-cause-20260928/`.
+Fixed-input report SHA-256:
+`e17521e5c51ddab47f2a533339453d0c60759ac331a9c4af937904c3d82f8e19`;
+splice report SHA-256:
+`d68fc63eaba7df8cf54b424b85c64e3eecd6bf69787ded058d8e1fff92019ab2`;
+current analysis/emitter script SHA-256:
+`ab0956a4bb0346a3f2ff141a8e7f9d5b4e50979922b4192808e39c9b2123378a`;
+CPU reference SHA-256:
+`85cc7b4af41e99755c063a891b18c76624865276e77f2510b401ed634d7eed47`.
+The reports separately hash native taps, runner/source, model payloads,
+official teacher captures, and saved block outputs. Scratch may expire;
+refresh after model payload, quantizer, source/kernel, device,
+call-10 official capture, or MLP input changes. The next discriminator
+must test whether a selective higher-precision path also lowers final
+velocity, next latent, and decoded face error on matched full trajectories
+before a production precision/performance change.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder
