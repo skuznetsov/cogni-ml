@@ -29340,5 +29340,23 @@ Refresh after source/toolchain/device/model/workload changes.
   remained in place. The retry report SHA-256 is
   `3c435b7fe71b39dc9ac133f100312bfa111632fdb8debfd6393f6916c258f7e0`;
   full pins and refresh conditions are in `docs/qwen-image21-gguf-frontier.md`.
-  Next: no-op-controlled full-DiT call-10 velocity response before any
-  production precision change.
+  The next bullet records the no-op-controlled full-DiT call-10 response;
+  production precision remains gated on trajectory and image evidence.
+- The call-10 full-Q8 suffix A/B continued those two saved block-0 states
+  through the same 31 later blocks and final head. The repo-only suffix
+  source and embedded Metal kernels were hash-pinned; the block-0 seeds retain
+  their earlier instrumentation-overlay lineage. Baseline A/A full and target
+  outputs were bit-exact. Against official BF16 velocity, target relative L2
+  fell only 1.004713% to 1.001539% (0.630735% less squared error), far less
+  than the local block-0 improvement. An independently reconstructed official
+  BF16 Euler step matched all 65,536 saved next-latent values; applying it to
+  A/B gave 0.108470% versus 0.108480% next-state relative L2, a tiny
+  0.018343% *increase* in squared error for B. Independent raw-array recount
+  agreed. The report's inherited `scope` string is stale, but complete raw
+  outputs and A/A hashes anchor the result. One injected run, reconstructed
+  shared final scales, and one fixed call10 fixture do not establish an eye,
+  full-trajectory, or VAE claim. Reject promotion of this isolated precision
+  intervention; test larger downstream projection-family errors with an
+  equal-input/next-latent falsifier. Run report SHA-256:
+  `dc61f028c69720b11ba6472deda8f4dfa2e02d907946d67932e202156225b39e`;
+  full pins and decay conditions are in `docs/qwen-image21-gguf-frontier.md`.
