@@ -4159,6 +4159,67 @@ time. Refresh after source/compiler/device, quantized model, conditioner,
 scheduler, trajectory captures, or scratch evidence changes, and before
 generalizing to other prompts, seeds, resolutions, or precision policies.
 
+### Full-Q8 first-block operator frontier (2026-09-28)
+
+A guarded call-0 full-Q8 Metal comparison now narrows the earliest *matched*
+DiT operator difference. The official BF16/MPS hooked capture retained exact
+terminal-velocity parity with its no-hooks control. The native no-taps and
+18-tap runs used one compiled binary and produced exactly the same terminal
+velocity SHA-256
+`f5fa49331995205540a67caa718a97d14c7399df82a33deaeeb2f726863ce2fe`.
+All 32 layers' six projection families were validated as Q8_0. Both arms
+used the same initial latent, saved official Qwen3-VL conditioning, official
+time features, and an exact official BF16-widened pre-block-0 state. For
+this diagnostic only, block 0 also *consumed* the exact official modulated
+attention input and `tanh(gate1)` through explicit overrides. The saved
+native norm1/gate1 values were copied **before** these overrides: they are
+shadow observations, not the inputs to the measured Q/K/V projections or
+attention residual. Their respective all-row relative L2 gaps were
+0.353862% and 0.269771%, so the unclamped native path has an additional
+upstream discrepancy that this intervention does not assign causally.
+
+Under the matched consumed attention input, the first directly comparable
+nonzero outputs are the parallel raw Q/K/V projections, before Q/K RMSNorm,
+RoPE, attention weighting, later blocks, or VAE. Exact official BF16 captures
+were widened to F32 for comparison with native F32 taps:
+
+| Block-0 boundary | All-row relative L2 | Image-row relative L2 |
+| --- | ---: | ---: |
+| Injected pre-block state | 0% | 0% |
+| Raw Q / K / V projections | 0.243992% / 0.237986% / 0.337856% | 0.244129% / 0.235977% / 0.335852% |
+| Attention `to_out`, before gate1 | 0.234882% | 0.203929% |
+| Post-attention residual | 0.238281% | 0.329206% |
+| Norm2-modulated MLP input | 2.710809% | 2.833675% |
+| MLP gate / up projections | 1.387420% / 1.496385% | 1.622878% / 1.931347% |
+| SwiGLU / down projection | 1.454428% / 0.825618% | 2.348028% / 0.747446% |
+| Post-block state | 0.331731% | 0.372024% |
+
+The norm2 and later MLP gaps inherit an already-different attention
+residual; none isolates a faulty norm2 or MLP kernel. A comparator initially
+swapped the gate/up slices and falsely reported a 129.8% gate gap. The
+corrected mapping follows the native shader's gate-first/up-second layout;
+the packed buffer independently reconstructs its saved SwiGLU output at
+5.81e-8 relative L2. Gate/up cosine checks also reject the swapped mapping.
+The official post-RoPE Q/K reference remains CPU-derived, not directly
+observed on MPS, and there is no official attention-context tap immediately
+before `to_out`. This locates an operator *frontier*, not a unique kernel
+or weight cause: Q8 representation, BF16-versus-F32 arithmetic, and backend
+matmul behavior remain confounded. Nor does a call-0 block-0 discrepancy
+establish which component caused the call-10-to-12 spatial hotspot or face
+defects. Raw official DiT velocities at those calls, exact scheduler replay,
+and then matched-weight projection tests are the next discriminators.
+
+The hash-gated comparator is
+`/private/tmp/qwen21-block30-split-20260928/full-q8-block0/compare_full_q8_block0_official.py`
+(SHA-256 `30f15ea66f5dedfe519011a8d1e2c0882d306e263057e1f0a2447b3862ba0dd0`);
+its report is `operator_split_report.json` in the same directory (SHA-256
+`2aa42c861628e70dd8dfb1b207e19c976e19489f7562618ff99337370eaaa7f7`).
+The guarded runs exited zero with the 35% free-RAM floor, 24,576-MiB
+process-tree RSS cap, timeout, and process-group containment intact.
+Reproduce the CPU comparison with `python3` on the comparator path above;
+refresh this evidence after official/native captures, model payload, Metal
+source, BF16 runtime, conditioning, or scratch availability change.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder

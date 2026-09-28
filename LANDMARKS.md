@@ -29237,3 +29237,25 @@ Refresh after source/toolchain/device/model/workload changes.
   full artifact pins, other report hashes, caveats, and decay triggers are
   in `docs/qwen-image21-gguf-frontier.md`. Next: observational block-0
   operator split and paired native-versus-official conditioning trajectories.
+- A guarded full-Q8 call-0 operator split used exact official pre-block-0,
+  modulated attention, and `tanh(gate1)` inputs. Native no-taps and 18-tap
+  forwards produced identical final velocity SHA-256
+  `f5fa49331995205540a67caa718a97d14c7399df82a33deaeeb2f726863ce2fe`.
+  The first directly matched nonzero block-0 outputs are parallel raw Q/K/V
+  projections (all-row relative L2 0.243992% / 0.237986% / 0.337856%).
+  The native norm1/gate1 captures differ too, but were pre-override shadows
+  and did not feed the Q/K/V or attention residual measurements. Subsequent
+  attention `to_out` and block-0 output gaps are 0.234882% and 0.331731%; a
+  2.710809% norm2-modulated MLP-input gap inherits an already-different
+  residual. A gate/up comparator slice error initially manufactured a 129.8%
+  gate gap; corrected gate/up gaps are 1.387420% / 1.496385%, and packed
+  gate-first/up-second data reproduce captured SwiGLU at 5.81e-8 relative
+  L2. Thus the operator frontier is before Q/K RMSNorm/RoPE, but Q8 weights,
+  BF16/F32 arithmetic, and backend behavior remain confounded; call-0 block-0
+  error is not yet tied to the call-10-to-12 hotspot or face defects. The
+  SHA-gated comparator and report are under
+  `/private/tmp/qwen21-block30-split-20260928/full-q8-block0/`; report SHA-256
+  `2aa42c861628e70dd8dfb1b207e19c976e19489f7562618ff99337370eaaa7f7`.
+  Refresh after model/conditioning, official/native capture, Metal/runtime,
+  or scratch-artifact changes. Next: exact official raw velocities and BF16
+  Euler replay around calls 9-12, then a matched-weight projection split.
