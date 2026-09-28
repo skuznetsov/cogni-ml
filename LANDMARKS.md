@@ -29282,3 +29282,26 @@ Refresh after source/toolchain/device/model/workload changes.
   and `e39d06f234b48e7d3ac0c51dcd67e05881faab4d01adcd340cde7db87b5ffb43`.
   Full pins and decay conditions are in `docs/qwen-image21-gguf-frontier.md`.
   Next: matched-weight projection test before precision changes.
+- A guarded CPU-only, same-input block-0 Q/K/V probe now separates the
+  first direct projection discrepancy on seven fixed joint-token rows
+  (three text, four image; image rows start after 230 text rows). The official
+  BF16-weight CPU F32 matmul, rounded to BF16 at output, exactly reproduces
+  all sampled official MPS raw projections. CPU dequantized-Q8 F32 matmul
+  differs from native full-Q8 Metal taps by only ~0.0001% relative L2 on
+  these rows; wrong matrix orientations differ by >100%. Against the
+  official-tap norm, the Q8-weight substitution delta is 0.175611% /
+  0.176577% / 0.309233% for Q/K/V, versus the official output-rounding
+  delta 0.159989% / 0.163396% / 0.165307%. Their vector sum with the tiny
+  CPU-to-Metal residual exactly reconstructs the observed 0.239672% /
+  0.241529% / 0.350058% native-versus-official gaps; these norms are not
+  additive causal shares. Full Q8 GGUF and official shard hashes, saved
+  modulated-input consumption, taps, layout, and negative controls passed;
+  report SHA-256 is
+  `b066ef7328589812e54b8ef55267205d847cfcc0761c10310e11e5b98e937f78`.
+  This narrows the sampled call-0 projection gap to Q8-weight substitution
+  plus official BF16 output rounding, with little Q8 Metal execution
+  residual on sampled rows; it does not prove Q/K/V donor conversion
+  provenance, full-tensor or later-step attribution, or eye/VAE causality.
+  Next: matched-weight intervention near calls 10/11, then trajectory and
+  decoded-image A/B if velocity changes. Full pins, caveats, and decay
+  triggers are in `docs/qwen-image21-gguf-frontier.md`.

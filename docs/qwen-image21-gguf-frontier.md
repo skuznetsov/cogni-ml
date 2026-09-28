@@ -4284,6 +4284,57 @@ Controls expire if source weights, conditioning, schedule, BF16 runtime,
 native Metal route, or saved scratch artifacts change. Neither a full
 trajectory nor a decoded-image A/B was rerun in this slice.
 
+### Sparse block-0 Q/K/V weight-versus-execution split (2026-09-28)
+
+A CPU-only probe used the exact official BF16-widened modulated attention
+input consumed by the native full-Q8 block-0 Q/K/V route. It selected seven
+fixed joint-token rows: text 0/114/229 and image 230/758/811/1253. The
+image positions include a center *proxy* and one post-hoc hotspot token;
+image indices are offset by the 230 leading text tokens. Source BF16 shard,
+full Q8 GGUF, official/native taps, mask, override-consumption proof, and
+matrix layout are hash- or negative-control-gated. Both official and Q8
+weights were multiplied by the *same* F32 input on the *same* CPU backend.
+The wrong matrix orientation differs from the relevant captured tap by more
+than 100% relative L2, whereas the selected dequantized-Q8 CPU output and
+native Metal Q8 tap agree within about 0.0001% relative L2.
+
+| Projection | CPU Q8-weight substitution vs CPU BF16-weight F32 output | CPU BF16-weight F32 vs official BF16/MPS tap | CPU dequant-Q8 F32 vs native Metal Q8 tap | Observed native Q8 vs official BF16/MPS tap |
+| --- | ---: | ---: | ---: | ---: |
+| Q | 0.175611% | 0.159989% | 0.000099% | 0.239672% |
+| K | 0.176577% | 0.163396% | 0.000095% | 0.241529% |
+| V | 0.309233% | 0.165307% | 0.000104% | 0.350058% |
+
+Each cell is a vector relative-L2 on **these seven rows**, normalized by
+the official MPS tap for a common scale. The official-weight CPU F32 result
+becomes **bit-identical** to all sampled official MPS outputs after BF16 output
+rounding; this is an observed sample property, not a general BF16-MPS GEMM
+equivalence. Rounding the CPU Q8 output to BF16 does not close the gap:
+Q/K/V remain 0.249424% / 0.252814% / 0.369436% from the official taps.
+The three delta vectors (Q8-weight substitution, official output rounding,
+CPU-to-Metal Q8 residual) exactly reconstruct the observed native-minus-
+official delta on the sample; their norms are **not additive causal shares**.
+Thus the sampled raw projection discrepancy is consistent with a substantial
+Q8-weight substitution plus BF16 output-format difference, while the native
+Q8 Metal projection arithmetic adds very little *on these rows*. This does
+not prove the donor Q/K/V were quantized from the pinned BF16 matrices, a
+full-tensor or later-step attribution, or a causal link to eyes, hotspot, or
+VAE support. The next discriminating experiment is a matched-input,
+matched-weight intervention at the call-10/11 onset, followed by a complete
+trajectory and decoded-image A/B if it changes the velocity.
+
+The CPU comparator, report, and sampled vectors are under
+`/private/tmp/qwen21-block0-weight-vs-arithmetic-20260928/`; script SHA-256
+`521d256dd0bb4ce6f09be348cd1327774be3a92de4f185eab461850eb841a6de`,
+report SHA-256
+`b066ef7328589812e54b8ef55267205d847cfcc0761c10310e11e5b98e937f78`,
+and NPZ SHA-256
+`1be326bf1a767c2147469c2969c2305721f7a36a23d55ff661421617f652de66`.
+The guarded CPU-only, single-thread run exited zero below its 1.5-GB
+post-run RSS threshold (observed ~1.00 GB). Wrong-hash and
+wrong-orientation negative controls passed. Refresh if either model payload,
+saved taps or input, mask/order,
+modulation override, runtime arithmetic, or scratch artifact changes.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder
