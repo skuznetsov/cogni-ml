@@ -4801,8 +4801,9 @@ runner SHA-256 values are
 `20f5a6c2bce117daf35f532ab7c11179b8adc6458d9978c0c7a6f3d05bb9cece`
 and `157ccc5cacfd0e46c1df90d28a76e31691d6be83031922e52dbc12d740eb1b84`.
 
-The saved native full-joint post-block-30 state is absent, so the upstream
-rescue still lacks an exact native split/no-op topology control. A separate
+At this stage the saved native full-joint post-block-30 state was absent, so
+the upstream rescue lacked an exact native split/no-op topology control;
+the follow-up below closes that confound on the pinned call. A separate
 exact-input native tap was run with the **production
 `qi21_final_layernorm_scale` kernel** and launch geometry on exact official
 post-block-31 BF16 hidden state and exact selected BF16 scale, both widened
@@ -4851,6 +4852,69 @@ Scratch inputs and outputs are under
 `/private/tmp/qwen21-call10-head-tap-20260928/`. They may expire. Recheck
 after model, source, official capture, BF16/Metal, scheduler, or scratch-runner
 changes.
+
+### Call-10 split-topology control and post-block-30 text/image state split (2026-09-28)
+
+A scratch-only, SHA-gated full-Q8 Metal replay closed the previous rescue's
+call-topology confound on the same fixed official call-10 latent, full-joint
+pre-block state, conditioning, modulation, and captured BF16 final scales.
+It first ran native blocks 0–31 plus the head twice, then ran blocks 0–30
+without the head, serialized their full 1,254-by-4,096 Float32 hidden state,
+reloaded it bit-exactly, and ran block 31 plus the same head. The two
+unsplit outputs, the split output, and the preceding rescue baseline all
+have the identical target-velocity SHA-256
+`0344ba596ca42d40c22183e2ac8d7ed645ba5ab05c56e2bcb8ee11843b68a51e`.
+The official-post-30 substitution also reproduced the preceding rescue
+velocity SHA-256
+`6603936b9371485e2529188db6f6eadd48737234833e0b15b83c9710747e64d4`.
+The native post-30 checkpoint SHA-256 is
+`6a6e8aab42e8884885c1dc2d8375a99bf16084fdcdd16d291e2e5f26c6b0fc10`.
+Thus splitting and host save/reload do not account for the observed rescue
+on this pinned fixture.
+
+With that no-op established, a 2-by-2 intervention supplied native or
+official post-block-30 rows separately for the 230 text tokens and 1,024
+target-image tokens. Every arm ran the same native Q8 block 31 and head;
+the shared official BF16 Euler update generated the next-state comparisons.
+
+| Post-30 text rows | Post-30 image rows | Velocity rel-L2 to official | Next BF16 latent rel-L2 to official |
+| --- | --- | ---: | ---: |
+| Native | Native | 1.004713% | 0.108470% |
+| Official | Native | 1.002718% | 0.108322% |
+| Native | Official | 0.310462% | 0.056765% |
+| Official | Official | 0.308901% | 0.056747% |
+
+Root independently rehashed all six velocity and six next-latent files and
+recomputed each relative L2 from the raw arrays against the captured official
+BF16 velocity and saved next latent. Replacing only the image rows removes
+90.452% of baseline velocity squared error on this one call, nearly the
+90.547% removed by replacing both row groups; replacing only text rows
+removes 0.397%. These are **conditional intervention results**, not additive
+causal shares. The image-row state gap after block 30 is 4.442% relative to
+the official image rows, versus 1.573% for text rows; the denominators differ.
+The experiment establishes that most of this measured terminal discrepancy
+is transported through the target-image hidden state at the post-30 boundary,
+not an artifact of splitting the native call or a dominant text-row effect
+at that boundary. It does not identify which earlier block, weight family,
+or arithmetic boundary created the image-state drift, nor establish an
+eye-specific, VAE-support, full-trajectory, or decoded-quality benefit.
+
+The completed Metal report and scratch runner are
+`/private/tmp/qwen21-call10-split-control-20260928/main_results_retry2.json`
+(SHA-256
+`63b87ad72ae0257cf27d5fc3d8e95f03672f4d413da6f75c166756a6b37be4de`)
+and `split_control.cr` (SHA-256
+`c67d75a32d0bf908e198adf24be33718d7f4ed84ca74b14f8efb4978b7178d82`).
+CPU preflight checked the pinned source/kernel/bridge, donor, official
+states and BF16 widenings, conditioning, scales, and prior rescue outputs.
+The default-sandbox attempt stopped before model output because it could
+not create a Metal device; the unchanged bounded retry on Apple M2 Max
+completed. Scratch artifacts may expire. Refresh this result after source,
+compiler/device/runtime, donor, conditioning, scheduler, saved input/tap,
+or diagnostic-runner changes. A next discriminating probe should inject
+official image rows at selected earlier block boundaries under a matched
+split/no-op control, then require a full 40-step decoded A/B before a
+production precision change.
 
 ## Not admitted by this slice
 

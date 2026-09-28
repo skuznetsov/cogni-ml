@@ -29373,8 +29373,9 @@ Refresh after source/toolchain/device/model/workload changes.
   while the output projection alone is small under exact official input. This
   does not assign
   error to individual earlier blocks, prove VAE support/eye quality, or
-  validate a 40-step rescue. A native-state split/no-op remains useful before
-  claiming a stronger upstream causal share. An
+  validate a 40-step rescue. The native-state split/no-op in the next bullet
+  closes this topology confound on the pinned call, but not earlier-block
+  attribution. An
   independent spatial audit found the approximate face boxes contain 4.554%
   of baseline next-latent squared error on 4.395% of tokens, with rescue
   benefit at only the 61st percentile among same-shape non-face control
@@ -29401,4 +29402,24 @@ Refresh after source/toolchain/device/model/workload changes.
   from changing precision. Scratch manifest SHA-256:
   `e973085a2879c8407a7c929804c3a04b863c85c1a5d98f7ba220c0b331811677`.
   Full pins, caveats, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A follow-up full-Q8 call-10 Metal control reproduced the unsplit A/A and
+  the split-after-block-30 native-state replay byte-for-byte, including an
+  exact Float32 host checkpoint round trip; all three velocity SHA-256 values
+  are `0344ba596ca42d40c22183e2ac8d7ed645ba5ab05c56e2bcb8ee11843b68a51e`.
+  The official-post-30 rescue also reproduced its prior raw velocity hash.
+  In a same-suffix 2-by-2 row-source intervention, replacing only the 1,024
+  target-image rows reduced teacher-relative velocity L2 from 1.004713% to
+  0.310462% and next-BF16-latent L2 from 0.108470% to 0.056765%; replacing
+  only the 230 text rows gave 1.002718% and 0.108322%. Both row groups
+  replaced gave 0.308901% and 0.056747%. Root independently rehashed and
+  recalculated all raw arms. At this post-30 boundary, the measured terminal
+  error is therefore transported predominantly through image hidden state,
+  not a split-call artifact or dominant text-row error. This conditional
+  intervention does not identify an earlier responsible block or prove
+  40-step/eye/VAE quality. Report SHA-256:
+  `63b87ad72ae0257cf27d5fc3d8e95f03672f4d413da6f75c166756a6b37be4de`;
+  runner SHA-256:
+  `c67d75a32d0bf908e198adf24be33718d7f4ed84ca74b14f8efb4978b7178d82`.
+  Scratch may expire; full pins, caveats, and decay triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
