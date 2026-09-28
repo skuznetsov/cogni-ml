@@ -29360,3 +29360,45 @@ Refresh after source/toolchain/device/model/workload changes.
   equal-input/next-latent falsifier. Run report SHA-256:
   `dc61f028c69720b11ba6472deda8f4dfa2e02d907946d67932e202156225b39e`;
   full pins and decay conditions are in `docs/qwen-image21-gguf-frontier.md`.
+- A SHA-gated, same-input call-10 Metal rescue now uses the captured *exact*
+  official MPS BF16 final scales for all arms. Baseline official-preblock-0
+  -> native Q8 blocks 0–31 is A/A byte-repeatable. Substituting only the
+  official post-block-30 state before native block 31 cuts terminal velocity
+  relative L2 from 1.004713% to 0.308901%, and next BF16 latent relative
+  L2 from 0.108470% to 0.056747%; respective squared-error reductions are
+  90.547% and 72.630% on this fixed call. A separate exact-official-prehead
+  native BF16 `proj_out` probe matches 65,513/65,536 official BF16 velocity
+  values, with 0.006001% relative L2. This strongly suggests substantial
+  call-10 error is already in the DiT hidden state before the final block,
+  while the output projection alone is small under exact official input. This
+  does not assign
+  error to individual earlier blocks, prove VAE support/eye quality, or
+  validate a 40-step rescue. A native-state split/no-op remains useful before
+  claiming a stronger upstream causal share. An
+  independent spatial audit found the approximate face boxes contain 4.554%
+  of baseline next-latent squared error on 4.395% of tokens, with rescue
+  benefit at only the 61st percentile among same-shape non-face control
+  boxes; eye-specific
+  causality is not established. Rescue report SHA-256:
+  `c486b913d53239fc374873b8cfcd92c0ba12453416e0c978562ed8ba0cab3d50`;
+  head-probe manifest SHA-256:
+  `47a89ae2ce3811515f8ce46c2db41bc8065d3f04b218ba9a5cd59ef789748e92`.
+  CPU-derived final-norm candidates projected through the same native BF16
+  head twice each are A/A bit-exact: F32-unfused versus BF16-staged yields
+  0.223499% versus 0.191439% velocity relative L2 and 0.038683% versus
+  0.035144% next-latent relative L2. The official MPS final-norm formula
+  replays its pre-head capture byte-exactly, but CPU LayerNorm reduction is
+  not the native Metal kernel, so these candidate results do not justify a
+  production precision change. Candidate-probe manifest SHA-256:
+  `20f5a6c2bce117daf35f532ab7c11179b8adc6458d9978c0c7a6f3d05bb9cece`.
+  A subsequent exact-input run of the production Metal final-norm kernel on
+  official post-block-31 BF16 state/scale is A/A byte-repeatable and closely
+  matches the CPU F32-fused candidate. With the same native BF16 projection,
+  its terminal BF16 velocity gap is 0.223499% and next-latent gap 0.038683%,
+  versus 0.006001% and 0.003659% when the projection consumes the exact
+  official pre-head BF16 tensor. This locates a same-state head-parity gap at
+  final norm arithmetic/staging, but does not prove a decoded-quality gain
+  from changing precision. Scratch manifest SHA-256:
+  `e973085a2879c8407a7c929804c3a04b863c85c1a5d98f7ba220c0b331811677`.
+  Full pins, caveats, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.

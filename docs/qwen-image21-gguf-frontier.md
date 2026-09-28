@@ -4716,6 +4716,142 @@ before changing production precision. Refresh this evidence after donor,
 conditioning, official captures, source, BF16 scheduler/Metal runtime, or
 scratch-runner changes.
 
+### Call-10 upstream-state rescue and exact-input output-head probe (2026-09-28)
+
+The prior block-0 intervention did not improve the next BF16 latent. A new
+scratch-only, SHA-gated Metal experiment instead asks whether the terminal
+call-10 discrepancy is already carried in the 31-block input to the final
+block. It uses the same official full-joint pre-block-0 BF16 state, saved
+official conditioning, Q8 donor, token layout, modulation, and *captured exact
+official MPS BF16* final norm scale rows for every arm. The reference Euler
+calculation matches all 65,536 saved official next-latent BF16 values. Arm A
+runs native Q8 blocks 0–31; A/A repeats that route bit-for-bit; the rescue arm
+replaces only the input to native block 31 with the official post-block-30
+BF16 state, then uses the same native block 31 and output head. This is a
+controlled state-boundary substitution, not a candidate runtime fix.
+
+| Target-image call-10 boundary | A: native blocks 0–31 | Official post-30 state + native block 31 |
+| --- | ---: | ---: |
+| Velocity relative L2 to official | 1.004713% | 0.308901% |
+| Velocity RMSE | 0.01410030 | 0.00433517 |
+| Next BF16 latent relative L2 to official | 0.108470% | 0.056747% |
+| Next BF16 latent RMSE | 0.000904603 | 0.000473251 |
+
+An independent recount checked the report's raw output hashes and error ratios.
+The rescue removes 90.547% of A's velocity squared error and 72.630% of its
+next-state squared error on this fixed input. The A/A velocity and next-state
+files are byte-identical. This strongly suggests that a substantial sampled
+terminal error is already transported in the DiT hidden state *before* block
+31; the observed latent gap itself exists before VAE decoding and is not
+created solely by the final output projection. This does not
+allocate error to particular preceding blocks or prove the rescue improves a
+40-step trajectory or decoded face. The upstream 0–30 run and isolated
+block-31 run have different call topology; a native-state split/no-op control
+is still desirable before a stronger causal share claim.
+
+An independent scratch Metal probe feeds the **exact official MPS BF16
+pre-`proj_out` tensor**, widened without numerical change to the native F32
+API, through the native BF16 `proj_out` weights twice. The repeats match
+bit-for-bit. Against the official BF16 terminal velocity, 65,513 of 65,536
+target values match after BF16-RNE; the target relative L2 gap is 0.006001%
+(23 unequal values). Thus the output projection has a small nonzero
+exact-input backend gap on this fixture, not a demonstrated 0.309% residual
+by itself. The final norm is isolated below; block 31 still needs a native
+split/no-op control for stronger attribution.
+The head-only comparison does not bound the head's behavior under a drifted
+input.
+
+A CPU-only final-norm audit used exact official post-block-31 BF16 hidden
+state and the exact selected BF16 per-token scales. On target tokens, the
+native-style F32 fused LayerNorm/scale formula rounded only at output differs
+from the official BF16 `pre_proj_out` tensor by 0.309656% relative L2;
+rounding at the official BF16 LayerNorm and `1 + scale` stage boundaries
+reduces that comparison to 0.182975%. These percentages are for the 4,194,304
+pre-projection hidden values, **not** the 65,536 terminal velocity values.
+CPU LayerNorm reductions need not match MPS or Metal bit-for-bit. This makes
+final-norm staging a plausible remaining source. On the exact official
+pre-head input, the native projection changes only one of the 65,536 BF16
+next-latent values after the pinned Euler step. As a positive control, a
+separate MPS BF16 replay of the pinned
+`LayerNorm(hidden, eps=1e-6) * (1 + selected_scale)` from the exact official
+post-block-31 state reproduces the official `pre_proj_out` capture **all
+5,136,384 BF16 values byte-for-byte** (including all 4,194,304 target-row
+values). Thus the selected scale/layout and captured official boundary are
+consistent; the CPU BF16 residual is a backend reduction difference, not a
+teacher-capture discrepancy. The standalone MPS replay manifest and script
+SHA-256 values are
+`1546e28c94b8755f9b501c5206a4d0818194b3b047ce019fba2e31e835896007`
+and `cbe28130d033f7fd81784d3aa6aa3895e544e9fe1586c0c8f6aec094c3b44bba`.
+
+The two CPU-derived final-norm candidates were then fed, without rerunning
+any transformer block, to the same native Metal BF16 `proj_out` twice per
+arm; each A/A pair was bit-exact. Against official call-10 BF16 velocity,
+the F32-unfused candidate has 0.223499% relative L2 (RMSE 0.00313662;
+21,845/65,536 unequal BF16 values), while BF16-staged has 0.191439%
+(RMSE 0.00268669; 16,006 unequal). After the *exact* saved BF16 Euler step,
+their next-latent gaps are 0.038683% (1,409 unequal values) and 0.035144%
+(938 unequal), respectively; the official velocity reconstructs the saved
+next latent byte-for-byte. These candidates are closer than the rescued
+native-block-31 result (0.308901% velocity, 0.056747% next latent), but do
+not isolate a production fix: CPU LayerNorm reduction differs from the
+byte-exact MPS replay, and neither candidate runs the actual native Metal
+final-norm kernel. The exact official pre-head input remains the relevant
+projection-only floor on this fixture. The candidate-probe manifest and
+runner SHA-256 values are
+`20f5a6c2bce117daf35f532ab7c11179b8adc6458d9978c0c7a6f3d05bb9cece`
+and `157ccc5cacfd0e46c1df90d28a76e31691d6be83031922e52dbc12d740eb1b84`.
+
+The saved native full-joint post-block-30 state is absent, so the upstream
+rescue still lacks an exact native split/no-op topology control. A separate
+exact-input native tap was run with the **production
+`qi21_final_layernorm_scale` kernel** and launch geometry on exact official
+post-block-31 BF16 hidden state and exact selected BF16 scale, both widened
+to F32. It reruns neither DiT blocks nor VAE. Two kernel repeats and two
+native BF16 `proj_out` repeats are byte-identical. The native pre-projection
+F32 result is within 0.00000655% relative L2 of the independent CPU F32
+fused calculation, but differs from the official pre-projection BF16-widened
+target tensor by 0.270371% relative L2 (0.309656% after BF16-RNE). On that
+exact official post-block-31 state, the native norm plus native projection
+produces a BF16 terminal velocity gap of **0.223499%** (21,846 unequal
+values), and its exact BF16 Euler next latent differs by **0.038683%**
+(1,409 unequal values). By contrast, changing only the pre-projection input
+to exact official BF16 values while keeping the same native projection gives
+0.006001% velocity and 0.003659% next-latent gaps (23 and one unequal
+values). The BF16 velocity difference *between those two native-head inputs*
+is 0.223467% relative L2, so final-norm arithmetic/staging is a measured
+same-state head-parity source, not merely a CPU hypothesis. It does not prove
+that official BF16 staging improves decoded quality: no native precision
+change or full denoising trajectory was tested. The scratch tap separates
+norm and projection with a readback between command buffers, rather than
+reproducing the fused production command buffer. Its runner and manifest
+SHA-256 values are
+`8a7de366da3faee2e4b5f9c03988e0351634ba47743f3567384d088fa7ce1585`
+and `e973085a2879c8407a7c929804c3a04b863c85c1a5d98f7ba220c0b331811677`.
+
+An independent SHA-checked spatial recount mapped the 32x32x64 row-major
+latent to the 512x512 official decode. The two approximate face boxes cover
+45/1,024 tokens (4.395%). They contain 4.554% of A's next-latent squared
+error and 4.697% of the rescue's net squared-error reduction; 41 of the 45
+tokens improve. The per-token reduction is only 1.072 times the non-face
+rate, and the face-box result ranks at the 61.1 percentile among 392,721
+same-shape disjoint non-face control-box pairs. The ten largest A next-state
+token errors all lie outside those face boxes. This one-step rescue therefore
+does not show persuasive face-specific latent concentration and cannot prove
+the cause of visible eye defects. The selected boxes are approximate and
+do not segment actual eyes; a multi-call segmentation-controlled audit would
+be needed to revisit that question.
+
+The rescue report SHA-256 is
+`c486b913d53239fc374873b8cfcd92c0ba12453416e0c978562ed8ba0cab3d50`;
+the head-only manifest and runner SHA-256 values are
+`47a89ae2ce3811515f8ce46c2db41bc8065d3f04b218ba9a5cd59ef789748e92`
+and `8b0530ddf12b87d1da275f3397dabc7b8bb9b2f751f7a3a8e661ca71c646693b`.
+Scratch inputs and outputs are under
+`/private/tmp/qwen21-call10-boundary-rescue-20260928/` and
+`/private/tmp/qwen21-call10-head-tap-20260928/`. They may expire. Recheck
+after model, source, official capture, BF16/Metal, scheduler, or scratch-runner
+changes.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder
