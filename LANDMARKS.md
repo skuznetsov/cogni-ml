@@ -29496,3 +29496,19 @@ Refresh after source/toolchain/device/model/workload changes.
   `96d29321fc76bfa8c6fb93d531f69f48d10c7c6ef84b35aba0e7c9da1b66b48c`.
   Scratch may expire; pins and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A CPU-only saved-artifact call-10 face-token replay used the exact same
+  official BF16 input on the official and native full-Q8 routes. Before
+  Euler, the native-versus-official DiT velocity differed by 1.447204%
+  relative L2 in the 20-token face core (1.004713% globally); the next
+  BF16 latent differed by 0.111110% there (0.108470% globally). Root
+  independently reproduced these metrics and both official/native next
+  BF16 latents byte-for-byte from the saved velocities under pinned
+  Euler/BF16 staging. A/A and split/no-op controls were exact. This
+  locates the same-input face-core drift upstream of the scheduler on this
+  call, not its DiT operator or decoded-eye effect; the actual full-Q8
+  trajectory enters call 10 with prior drift. Report SHA-256:
+  `4cc9137d1be3a91ed16dae03e47c46d0f36d1ece44d620ab80623151c0c7640c`;
+  runner SHA-256:
+  `b9bee62a2e146e0540b6e3b7a157adf7b1ff2a51d230312ad18d90c51a3632a6`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.

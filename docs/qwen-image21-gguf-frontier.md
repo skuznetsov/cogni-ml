@@ -5113,6 +5113,55 @@ The next causal question is which DiT operator/precision boundary introduces
 the local final-latent error, followed by a matched full-trajectory decoded
 intervention before any production change.
 
+### Call-10 face-token DiT velocity versus BF16 Euler (2026-09-28)
+
+A CPU-only saved-artifact replay narrowed one generated-latent boundary
+without another GPU run. At zero-based call 10, both paths start from the
+*same official* BF16 input latent; the native full-Q8 DiT velocity is
+compared with the saved official BF16 velocity before either is consumed by
+the pinned Euler/BF16 scheduler. The 20-token face core is
+`x=[20,24), y=[9,14)` (1,280 channel values). Official 40-step snapshots
+`step-009` and `step-010` exactly match the separately saved call-10 input
+and teacher next latent. Native A/A velocity and next-state controls, and
+the native post-block-30 split/no-op, are byte-exact.
+
+| Same official call-10 input | Face-core relative L2 to official | Global relative L2 to official |
+| --- | ---: | ---: |
+| DiT velocity before Euler, native F32 vs official BF16-widened | 1.447204% | 1.004713% |
+| Next latent after pinned Euler and BF16 staging | 0.111110% | 0.108470% |
+
+The face core holds 3.982457% of the global squared *velocity* residual at
+this call, compared with 1.953125% of the latent-grid tokens. The saved
+next-latent face core has 236/1,280 BF16 mismatches. Root independently
+recomputed both rows of metrics from the raw files and separately replayed
+BF16 rounding of velocity, timestep product, and next state: the predicted
+official and native next-latent bytes matched their saved outputs exactly
+at all 65,536 values, including hashes
+`7287f0254b1fd3e95ddcd947c332e4d931aae936c775015e370a7049dacbc058`
+and `2d9c23fc05e9960d4d937efda72b622b207cfe657ed69e74adce1724f2865594`.
+Using an F32 timestep product and only final BF16 rounding misses 2,650
+official and 2,899 native values; BF16-product staging is needed to
+reproduce these saved outputs. The generic pinned Diffusers Euler expression
+does not independently certify the MPS intermediate dtype, and this exact
+replay does not establish a unique internal implementation.
+Thus the local next-latent drift is already present in the DiT velocity on
+this exact same-input call; an additional scheduler or serialization error
+is not required to explain it. This is not the actual full-Q8 step-11
+trajectory state, whose call-10 input already contains preceding drift, and
+it does not identify an operator or quantify decoded eye quality.
+
+The pinned CPU analysis and report are under
+`/private/tmp/qwen21-face-step-boundary-20260928/`, runner SHA-256
+`b9bee62a2e146e0540b6e3b7a157adf7b1ff2a51d230312ad18d90c51a3632a6`,
+report SHA-256
+`4cc9137d1be3a91ed16dae03e47c46d0f36d1ece44d620ab80623151c0c7640c`.
+The report records file and source hashes, BF16/Euler semantics, the exact
+face-token mask, and the saved call-10/trajectory alignment. Scratch may
+expire; refresh after model/conditioning/scheduler/code/BF16 semantics,
+saved artifact, or ROI changes. The next discriminator is the pinned
+equal-input DiT operator route, followed by a full-trajectory intervention
+before any quality claim.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder
