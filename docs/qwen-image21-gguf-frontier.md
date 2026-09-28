@@ -4120,9 +4120,10 @@ terms relative to the official velocity norm (total 9.550403%); at call
 same-input DiT discrepancy exists early, and the propagated state difference
 dominates by the measured calls. The strongest supported diagnosis is
 positive feedback in the denoising trajectory, not a VAE-only failure.
-Official raw velocities for calls 10/11 were not captured, so the direct
-one-step term there also includes any official/native scheduler-rounding
-difference; it must not be labeled a pure DiT-velocity error.
+This initial decomposition had no official raw velocities for calls 10/11,
+so its table alone cannot label the direct one-step term a DiT-velocity
+error. The subsequent official-velocity capture below closes that scheduler
+confound for these two calls under the pinned native BF16 Euler formula.
 
 This experiment does **not** establish the initial source of the mismatch:
 Q8 weight representation, a Metal/MPS arithmetic boundary, block operator
@@ -4206,8 +4207,9 @@ before `to_out`. This locates an operator *frontier*, not a unique kernel
 or weight cause: Q8 representation, BF16-versus-F32 arithmetic, and backend
 matmul behavior remain confounded. Nor does a call-0 block-0 discrepancy
 establish which component caused the call-10-to-12 spatial hotspot or face
-defects. Raw official DiT velocities at those calls, exact scheduler replay,
-and then matched-weight projection tests are the next discriminators.
+defects. The subsequent official raw-velocity capture and exact scheduler
+replay resolve the call-10/11 direct term; matched-weight projection tests
+remain the next discriminator between representation and execution paths.
 
 The hash-gated comparator is
 `/private/tmp/qwen21-block30-split-20260928/full-q8-block0/compare_full_q8_block0_official.py`
@@ -4219,6 +4221,68 @@ process-tree RSS cap, timeout, and process-group containment intact.
 Reproduce the CPU comparison with `python3` on the comparator path above;
 refresh this evidence after official/native captures, model payload, Metal
 source, BF16 runtime, conditioning, or scratch availability change.
+
+### Official onset velocities: separating DiT from Euler (2026-09-28)
+
+The pinned official BF16/MPS DiT was reloaded once, with the original
+seed-7, 512px Qwen3-VL conditioning payload, 40-step schedule, and saved
+incoming BF16 states. A call-0 `extract` prefill built the condition KV cache;
+its raw velocity matched the saved official call-0 SHA-256 exactly. Two
+`cached` forwards then measured **zero-based** calls 10 and 11 (saved
+step-009 to step-010 and step-010 to step-011, respectively). The prior
+section's notation means call 10 completes step 11 and call 11 completes
+step 12: the saved files use zero-based filenames. Each official MPS
+scheduler replay, with the appropriate isolated scheduler begin index,
+matched its saved next latent **65,536/65,536 BF16 values**. The selected
+velocity readback transfers the full BF16 transformer output to CPU before
+slicing; an offset-view F32 readback disagreed at 65,454 elements in the
+call-0 prefill and is not used as an oracle.
+
+An independent hash-gated CPU comparison applied the native BF16
+round-to-nearest-even Euler formula to the *captured official velocity* at
+the same official input. At both calls it reproduced the saved official next
+latent bit-for-bit. Swapping only the model's emitted velocity for the
+captured native full-Q8/Metal F32 velocity, rounded to BF16 at the native
+Euler boundary, then reproduced the full direct one-step term from the prior
+decomposition. Only 7/65,536 and 5/65,536 native F32 velocity values at
+calls 10/11 were already BF16-exact; retaining native F32 through the
+product instead would yield 0.116888% / 0.108709% one-step gaps, not the
+saved-native-path 0.116878% / 0.107540%. Thus the measured direct state
+gap at these calls is due to a different emitted DiT velocity, **not** a
+scheduler-only gap for these exact inputs. This does not establish why the
+DiT emits a different velocity.
+
+| Zero-based DiT call / completed step | Native-vs-official raw velocity relative L2, official velocity norm | Scheduler-only state gap | Velocity-swap state gap, official next-state norm | Post-hoc hotspot share of raw velocity squared error |
+| --- | ---: | ---: | ---: | ---: |
+| 10 / 11 | 1.255609% | 0% (bitwise) | 0.116878% | 13.076% |
+| 11 / 12 | 0.951932% | 0% (bitwise) | 0.107540% | 1.494% |
+
+The hotspot is the *post-hoc*, non-face 20-token region covering 1.953% of
+image tokens. Its direct one-step squared-error shares are only 5.175% and
+1.385% at these two calls. By contrast, at call 11 the earlier
+state-transport term places 21.874% of its squared energy there and is
+0.699382% of the next-state norm versus the 0.107540% direct DiT term.
+This sharpens the finding: local DiT error is real, but the large
+call-10-to-12 latent drift is predominantly propagation/amplification of
+an already-shifted latent in this one trajectory. It is **not** an
+eye-anatomy measurement or proof that the VAE received an out-of-support
+input. Saved official conditioning means native Qwen3-VL quality is outside
+this comparison. The full-Q8 block-0 Q/K/V split identifies an earlier
+operator frontier, but connecting that specific boundary to the later
+hotspot, and separating Q8 representation from BF16/F32 arithmetic and
+backend implementation, still requires matched-weight interventions.
+
+The guarded official capture script and report are under
+`/private/tmp/qwen21-official-onset-velocities-20260928/` (SHA-256
+`800dc5c2273ce218b6fd04b86fd52bddbf8856cb9a45b5d698073def8df51a00`
+and `a7c5620622babb1fcf5c543d4800fe1134c258c26857dd29cbfe6f23034d4027`).
+The independent comparator and report are under
+`/private/tmp/qwen21-onset-20260928/` (SHA-256
+`8239649d3d01f7c231b2b072dce457ec4d0d162e715fde3fcc549969ebe776a8`
+and `e39d06f234b48e7d3ac0c51dcd67e05881faab4d01adcd340cde7db87b5ffb43`).
+Controls expire if source weights, conditioning, schedule, BF16 runtime,
+native Metal route, or saved scratch artifacts change. Neither a full
+trajectory nor a decoded-image A/B was rerun in this slice.
 
 ## Not admitted by this slice
 

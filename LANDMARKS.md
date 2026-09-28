@@ -29257,5 +29257,28 @@ Refresh after source/toolchain/device/model/workload changes.
   `/private/tmp/qwen21-block30-split-20260928/full-q8-block0/`; report SHA-256
   `2aa42c861628e70dd8dfb1b207e19c976e19489f7562618ff99337370eaaa7f7`.
   Refresh after model/conditioning, official/native capture, Metal/runtime,
-  or scratch-artifact changes. Next: exact official raw velocities and BF16
-  Euler replay around calls 9-12, then a matched-weight projection split.
+  or scratch-artifact changes. The next bullet closes the scheduler ambiguity
+  at calls 10/11; matched-weight projection comparison remains open.
+- Official BF16/MPS raw DiT velocities were captured at zero-based calls
+  10/11 on the exact saved incoming states, after a call-0 cached-prefix
+  prefill whose velocity SHA matched the original. Both official MPS Euler
+  replays reproduce saved next latents 65,536/65,536 BF16 values. An
+  independent hash-gated comparison finds same-input native full-Q8 versus
+  official raw-velocity relative L2 1.255609% / 0.951932%; applying the
+  native BF16 Euler formula to each official velocity gives the official
+  next state bit-for-bit, so scheduler-only gaps are zero **at these two
+  calls**. Swapping to the native F32 velocity, rounded to BF16 at the
+  scheduler boundary as in the saved native path, yields exactly the
+  previously measured 0.116878% / 0.107540% direct one-step gaps. The
+  post-hoc non-face hotspot holds 13.076% / 1.494% of raw velocity squared
+  error at the two calls. The dominant call-11 state-transport term holds
+  21.874% of its squared energy there. Therefore these direct gaps are
+  emitted-DiT differences, while the steep trajectory drift is mainly
+  feedback from an already-shifted state. This does not identify Q8 weights
+  versus execution
+  arithmetic, connect block-0 Q/K/V to the hotspot, or prove a face/VAE
+  mechanism. Capture and independent comparison report SHA-256 values are
+  `a7c5620622babb1fcf5c543d4800fe1134c258c26857dd29cbfe6f23034d4027`
+  and `e39d06f234b48e7d3ac0c51dcd67e05881faab4d01adcd340cde7db87b5ffb43`.
+  Full pins and decay conditions are in `docs/qwen-image21-gguf-frontier.md`.
+  Next: matched-weight projection test before precision changes.
