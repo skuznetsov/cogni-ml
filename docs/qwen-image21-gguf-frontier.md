@@ -4383,6 +4383,89 @@ input/tap changes. The next useful discriminator is matched-state blockwise
 capture/replay at this onset, followed by a complete trajectory and decoded
 images only if a correction materially improves the terminal velocity.
 
+### Call-10 full-Q8 latent-drift localization across all DiT blocks (2026-09-28)
+
+At the measured onset (zero-based call 10), a pinned official BF16/MPS
+`cached` forward and a full-Q8 native Metal forward consumed the same saved
+official latent and Qwen3-VL conditioning. The official capture retained the
+target-image hidden state immediately before block 0 and after each of the 32
+blocks; the native capture copied the corresponding 1,024 target-token rows
+within the same command buffer, without feeding observations back into the
+forward. The official velocity matched the earlier capture and its Euler
+replay matched the saved next latent 65,536/65,536 BF16 values. The native
+baseline velocity matched its earlier no-tap control byte-for-byte. All
+official BF16 dumps were checked as exact F32 widenings; all native dumps
+were SHA-checked, finite, and full-Q8_0 across all six projection families
+in every block.
+
+The native pre-block target state differs from the official BF16-widened
+state by 0.167342% relative L2, but this is almost entirely the output
+representation boundary: after rounding the native F32 values once to BF16
+round-to-nearest-even and widening, 4,194,190/4,194,304 values match the
+official tensor exactly, leaving only 0.001177% relative L2. The first
+material observed hidden-state discrepancy is **after block 0**. The following
+values compare native F32 with the corresponding official BF16-widened state;
+relative L2 uses the official state norm at each boundary, while RMSE keeps
+the same elementwise scale across boundaries.
+
+| Target-image boundary | Relative L2 gap | Absolute RMSE |
+| --- | ---: | ---: |
+| Before block 0 | 0.167342% | 0.001111 |
+| After block 0 | 0.355676% | 0.025023 |
+| After block 12 | 2.250187% | 0.139864 |
+| After block 29 | 5.553507% | 0.315484 |
+| After block 30 | 4.712782% | 0.389066 |
+| After block 31 | 2.004610% | 0.442185 |
+
+The relative percentage falls after block 29 because the official state RMS
+grows from 5.681 at block 29 to 22.058 at block 31; the absolute error still
+increases. The adjacent *error-vector* change is largest at blocks 30, 31,
+and 29 (L2 480.12, 434.39, and 374.82 respectively), but these blocks
+consume already-diverged inputs, so this does **not** rank their intrinsic
+operator error. Rounding only each native block output to BF16 does not close
+the gap: block-0 and block-29 relative L2 become 0.387136% and 5.555455%.
+The terminal same-input DiT velocity gap is 1.255609% relative L2.
+
+A separate single-variable intervention supplied the exact official
+BF16-widened temporal features to the native forward. Its pre-block target
+state was byte-identical to baseline, and its terminal velocity gap was
+1.260615%, slightly *worse* than baseline; the squared velocity error rose
+0.799%. Thus mismatched input Fourier timestep features are not the main
+explanation for this call-10 velocity error. This is a bounded intervention,
+not a general statement about timestep handling at other steps or prompts.
+
+Together with the exact scheduler replay, these captures locate an observed
+same-input divergence inside the DiT, beginning at or before its first block
+and growing through the block stack; they reject a VAE-only origin for this
+trajectory. They do **not** prove that the face defects are caused by a
+particular block, that the final latent is outside the VAE's training support,
+or that a Metal kernel is wrong. Q8 weight substitution, BF16-versus-F32
+arithmetic, and the official cached-prefix versus native full-joint text
+recomputation remain confounded. Earlier full-versus-cache target-output
+identity at other steps reduces but does not eliminate the call-10 route
+question. A matched-input replay cannot use the current target-only official
+capture: it also needs official per-block text-prefix/KV and modulation, or
+a non-cached full-joint official call-10 capture. The next discriminating
+experiment is to establish cached-versus-full official parity at call 10,
+then replay blocks 0 and 29-31 from identical *consumed* inputs before
+attributing growth to a specific operator or changing a quality policy.
+
+The scratch analyzer and report are
+`/private/tmp/qwen21-call10-all32-20260928/analysis/analyze_call10_all32.py`
+(SHA-256
+`57f22877fa9a6ba1a284af04a5026cc1369f09fcca5ac28d77bbb675c7163246`)
+and `call10_paired_analysis_rne_counts.json` (SHA-256
+`3d07ec72a35f170a9fb355a4e80a78c532d931875d11402c7021c15ce706fc66`).
+Its synthetic positive/BF16 tie-to-even and tampered-SHA negative tests
+passed; the real run checked all 34 official and 33/34 native capture records.
+The official, baseline, and time-intervention manifest SHA-256 values are
+`957330fa0658bfe208b5919f6ac9356eeb7fbb92535a96e7d0ea79a5692abecb`,
+`3ea0e25c4148bf293dda32e349c5058e0e52812b20798c271dc1917f05fa50ac`,
+and `c02db824aaf432d09029ad32a8addedcdf1f7d6def79e3585d4aabff8c7ff033`.
+Refresh after source/weights, conditioner, BF16 or Metal runtime, schedule,
+saved artifacts, or diagnostic source changes; no end-to-end trajectory or
+image-quality claim is promoted by this block trace.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder
