@@ -29036,3 +29036,20 @@ Refresh after source/toolchain/device/model/workload changes.
   hashes, limitations, ephemeral scratch evidence, and decay triggers are in
   `docs/qwen-image21-gguf-frontier.md`. Next: fixed-input Q8 block-0
   attention/MLP/modulation boundary replay, then multi-seed eye/text checks.
+- A same-binary selective-Q8 call-0 no-op reproduced the earlier native
+  velocity byte-for-byte. Injecting official pre-block-0 state plus official
+  block-0 post-modulation attention input and gate lowered post-block-0
+  teacher-relative error from 0.395586% to 0.331287%, but raised final
+  velocity error from 1.764384% to 1.793929%. The earlier pre-block-only
+  result (0.364727% block-0, 1.739396% velocity) is cross-scratch, not a
+  same-binary isolated modulation contrast. Independently recomputed raw
+  tensors and an 18-hash gate support these scoped measurements; they do
+  not identify a unique kernel or justify a local correction. The official
+  internal attention/MLP/head captures are missing, and a planned VAE
+  interpolation could not run because the formerly pinned environment lost
+  importable `diffusers`. Existing same-decoder endpoints do not establish
+  decoder cliffs or training-support departure. See
+  `docs/qwen-image21-gguf-frontier.md` for source/artifact pins and decay
+  triggers. Next: equal-input DiT sublayer replay with fresh official
+  captures, plus a restored pinned VAE runtime for actual final-latent
+  interpolation and multi-seed eye/glyph checks.

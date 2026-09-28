@@ -3354,6 +3354,69 @@ is an equal-input, block-0 Q8-versus-official boundary replay (attention,
 MLP, modulation, output head separated), followed by multiple prompts/seeds
 and visual eye/glyph checks before promoting a precision policy.
 
+### Call-0 block-0 modulation boundary (2026-09-28)
+
+A scratch-only selective-Q8 runner tested the next available boundary with
+the same official conditioning, BF16-exact x0, and injected official MPS
+time features as above. Its new binary first ran a full 32-block **no-op**
+and reproduced the prior native velocity SHA-256 byte-for-byte
+(`42fc2aad...bab9c7`). The intervention then injected the exact official
+BF16-widened joint pre-block-0 state (`45ca4101...dccfefff`), post-modulation
+attention input (`24264a20...05cddec2`), and `tanh(gate1)`
+(`b4db133d...44cb3d1e`) before the native Q/K/V projections; all inputs
+passed their raw-BF16/widened-F32 representation and SHA gates. The native
+post-modulation values were captured **before** replacement, and differed
+from official by 0.353862% (attention input) and 0.269771% (gate), relative
+L2. Only block 0 received those two modulation overrides; subsequent
+blocks and the head ran on the native Q8/Metal path.
+
+| Q8 call-0 intervention | Post-block-0 joint state relative L2 | Final velocity relative L2 |
+| --- | ---: | ---: |
+| Same-binary native-preblock no-op | 0.395586% | 1.764384% |
+| Official pre-block only, earlier scratch binary | 0.364727% | 1.739396% |
+| Official pre-block plus block-0 modulated input/gate | 0.331287% | 1.793929% |
+
+Independent reanalysis recomputed these errors from the pinned raw tensors
+and reran the 18-hash-gate analyzer. The combined intervention improved the
+immediate block-0 boundary by 16.25% of the same-binary no-op error, yet
+**increased** final teacher-relative velocity error from 1.764384% to
+1.793929%. Versus the prior official-preblock-only run, the block-0 error
+fell by 9.17% while final error rose by 3.14%; this latter contrast is
+cross-scratch (same repository source, different instrumented binaries),
+not a same-binary isolated modulation effect. The new final velocity moved
+by 0.395532% of teacher norm relative to the same-binary no-op, or
+0.346121% relative to the earlier pre-block-only run. Local boundary
+accuracy and final output accuracy are non-monotone here; error cancellation
+or later amplification is plausible. This rejects promoting a block-0
+modulation-only correction from this sample, but does not assign the
+remaining error uniquely to attention, MLP, quantization, later blocks, or
+the output head. Official internal attention/MLP/head outputs were not
+captured, and the original Diffusers source path recorded in the official
+capture manifest has since disappeared.
+
+The scratch runner, both reports, captured tensors, and CPU analyzer are
+under `/private/tmp/qwen21-block0-boundary-replay-20260928/`. Its runner,
+binary, and analyzer SHA-256 values are respectively
+`adb363d4...75041cc3`, `41f44c2f...2d46156e`, and
+`95c6e37e...fd6fdee0f`; the intervention velocity and post-block-0 state
+SHA-256 values are `97f2f2a8...8c80917c` and
+`d0a00a18...d6b288f36`. The wrapper's first sandboxed attempt failed
+closed because process inspection was denied; a scoped retry passed both
+input-only preflights and the two bounded forwards. No timing claim follows.
+Unlisted old post-block capture files in the scratch directory are not part
+of this run's five-tensor report inventory and must not be used. Refresh
+after a change to any pinned source/model/input, Metal compiler/kernel,
+official capture, or scratch artifact. The next DiT discriminator needs
+official attention/MLP intermediate captures or equal-input sublayer
+replays, then multiple prompts/seeds and decoded eye/glyph evaluation.
+
+A planned CPU-only VAE interpolation along the *actual* official-to-Q4/Q8
+final-latent paths did **not** run: the formerly pinned Python environment
+now lacks importable `diffusers` (the older report recorded version
+`0.41.0.dev0`). No dependency was installed or substituted. Existing
+same-decoder endpoint comparisons remain evidence for those endpoints, but
+this adds no evidence about decoder cliffs or latent training support.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder
