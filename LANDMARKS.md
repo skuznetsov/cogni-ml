@@ -29463,6 +29463,23 @@ Refresh after source/toolchain/device/model/workload changes.
   `1a49d430250200d9497bf9b1d13e2800e95ba087712850b707f935f932cbf328`.
   Scratch may expire; pins and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A full-matrix, CPU-only Qwen3-VL layer-0 Q/K/V projection replay separated
+  same-BF16-input projection arithmetic from norm, checkpoint-weight, and
+  channel-layout confounders. PyTorch `F.linear` reproduced all three
+  official 244-row captures byte-for-byte; source-matched Accelerate SGEMM
+  reproduced all three native captures byte-for-byte. On the 232 exactly
+  equal norm-output rows, native/official Q/K/V still differ by 284/85/73
+  BF16 values (relative RMS 0.010825%/0.002591%/0.004931%). Root
+  independently checked replay hashes and raw row/mismatch counts. This
+  localizes the small difference to the CPU projection paths on this
+  fixture, not the exact FMA/reduction mechanism or final image impact.
+  Full-Q8 DiT parity used official conditioning, so this text-route gap
+  cannot explain its latent drift. Report SHA-256:
+  `6eeda4b1107ca1bbcf7a832a44a927170b99b1de91fe09805c40acd960b30bbc`;
+  runner SHA-256:
+  `4195148c674e002feb2f3e13f7a4d2f5d7ee4ef12b6fa232dadc270423255407`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
 - A CPU/Float32 fixed-VAE masked-final-latent counterfactual used the same
   official/full-Q8 40-step endpoints and exact decoder-oracle controls. The
   20-token face core carried only 0.272560% of global squared latent

@@ -1789,6 +1789,48 @@ one-layer text probe under
 may expire. Re-run after changes to the processor, text checkpoint,
 GGUF/Metal path, scheduler, or VAE.
 
+### Full-matrix equal-input Qwen3-VL layer-0 projection replay (2026-09-28)
+
+A CPU-only follow-up removed the weight and layout confound left by the
+earlier scalar spot checks. It loaded only the three exact BF16 layer-0
+Q/K/V tensors from the local text checkpoint and replayed the pinned
+244-row stage sidecars with PyTorch 2.6.0 `F.linear` and the source-matched
+Accelerate `cblas_sgemm` row-major/transpose call, each rounded to BF16.
+The official replay reproduced all three official captures byte-for-byte;
+the Accelerate replay separately reproduced all three native captures
+byte-for-byte. Source/sidecar/tensor hashes, shape, output-channel-order
+negative controls, and a second deterministic run gated this result.
+
+| Projection on the 232 BF16-identical norm-output rows | Native/official BF16 mismatches | Relative RMS | Maximum absolute delta |
+| --- | ---: | ---: | ---: |
+| Q | 284/950,272 | 0.010825% | 0.001953125 |
+| K | 85/237,568 | 0.002591% | 0.00048828125 |
+| V | 73/237,568 | 0.004931% | 0.00048828125 |
+
+Root independently checked the six replay-output hashes against the
+captured sidecars, the current source hashes, and the equal-input row mask
+and mismatch counts directly from raw BF16 files. The same input and weight
+bytes, exact per-backend capture replay, and strong channel-order negative
+controls localize these small discrepancies to the **CPU projection
+arithmetic path** on this fixture. They do not determine the micro-level
+FMA/reduction explanation, quantify the downstream RoPE/attention effect,
+or predict final 36-layer text-conditioning or image quality. The text path
+remains distinct from the full-Q8 DiT parity trajectory above, which used
+official Qwen3-VL conditioning; this result cannot explain that DiT drift.
+
+The two-run report is
+`/private/tmp/qwen21-vl-block0-cause-20260928/report.json` (SHA-256
+`6eeda4b1107ca1bbcf7a832a44a927170b99b1de91fe09805c40acd960b30bbc`);
+runner SHA-256:
+`4195148c674e002feb2f3e13f7a4d2f5d7ee4ef12b6fa232dadc270423255407`.
+It was executed at source HEAD `6b749860f784f68092df6de5115c02ec19fbffbe`;
+later documentation-only commits leave the two pinned source-file hashes
+unchanged. The replay hashes the selected local weight tensors, but does
+not independently attest the upstream checkpoint shard provenance. Scratch
+may expire; refresh after source, local checkpoint, captured inputs,
+PyTorch/Accelerate, BF16 conversion, or shape changes. An arithmetic
+change would require a full-encoder and same-seed image A/B gate.
+
 ### Russian layer-0 attention replay on saved inputs (2026-09-28)
 
 A CPU-only, SHA-gated PyTorch 2.6.0 SDPA MATH replay separated the native
