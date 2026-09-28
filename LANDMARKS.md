@@ -29463,3 +29463,19 @@ Refresh after source/toolchain/device/model/workload changes.
   `1a49d430250200d9497bf9b1d13e2800e95ba087712850b707f935f932cbf328`.
   Scratch may expire; pins and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A CPU/Float32 fixed-VAE masked-final-latent counterfactual used the same
+  official/full-Q8 40-step endpoints and exact decoder-oracle controls. The
+  20-token face core carried only 0.272560% of global squared latent
+  residual, yet transplanting it alone produced face-ROI RGB RMSE 6.262167
+  against official, versus 6.391382 for all full-Q8 tokens and 1.837282 for
+  the complementary outside-core arm. A 42-token halo yielded 6.349274
+  versus 0.624513 outside halo. Root independently recomputed PNG metrics,
+  token masks, and residual-energy fractions. Thus the local final-latent
+  error suffices for most of this fixture's face-ROI pixel difference under
+  a fixed VAE; neither off-manifold behavior, eye-specific cause, nor the
+  DiT operator origin is established. Report SHA-256:
+  `8ae6fe2f355b658618f1ca3290c6502c4cefb624576bb999c97f5851b514d5af`;
+  runner SHA-256:
+  `96d29321fc76bfa8c6fb93d531f69f48d10c7c6ef84b35aba0e7c9da1b66b48c`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.

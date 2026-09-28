@@ -5013,6 +5013,64 @@ early and a middle block that separately changes Q8 weights and precision
 staging, followed by a complete trajectory and decoded A/B before
 production promotion.
 
+### Fixed-VAE face-region latent counterfactual (2026-09-28)
+
+To test whether the matched final-latent difference actually drives the
+visible face difference, a CPU/Float32 replay held the pinned Qwen-Image 2.1
+VAE, its normalization, and decoding code fixed. The two endpoints were the
+same official and full-Q8 40-step latents and independently saved decoder
+images used above. The 512x512 face pixel ROI was `[320,150,380,219)`;
+its coarse 32x32 latent-grid cover was `x=[20,24), y=[9,14)` (20 tokens).
+A one-token halo was `x=[19,25), y=[8,15)` (42 tokens). Each treatment
+started with official latents and copied full-Q8 values either inside or
+outside one mask. The official/full-Q8 decoder endpoints were pixel-exact
+against saved oracles, and all-off/all-on latent-mask controls were exact.
+
+| Full-Q8 final-latent residual supplied to the fixed VAE | Face RGB RMSE versus official (0–255) |
+| --- | ---: |
+| All tokens | 6.391382 |
+| Face core only (20 tokens) | 6.262167 |
+| Outside face core only | 1.837282 |
+| Face halo only (42 tokens) | 6.349274 |
+| Outside face halo only | 0.624513 |
+
+The core and halo contain just 0.272560% and 0.782783%, respectively, of
+the *global squared final-latent residual*, yet their separate transplants
+produce nearly the full face-ROI pixel RMSE. This establishes that spatially
+local final-latent drift is sufficient to produce most of this measured face
+difference through an unchanged VAE on this single fixture. It does **not**
+prove that the VAE is off its training manifold, that it is unusually
+sensitive, that the eyes specifically account for the ROI metric, or that
+these artificial hybrid latents are valid diffusion trajectories. RMSE arms
+are not additive through the nonlinear decoder. The mask is a coarse
+pixel-to-latent mapping, not a receptive-field proof; one prompt/seed and
+one ROI cannot establish general image-quality behavior.
+
+The already-pinned full-Q8 trajectory report shows that the same core's
+latent-space residual begins after the **first** DiT/Euler step, rather than
+appearing abruptly at decode: its local relative L2 to the same-step
+official latent is 0.108206% at step 1, 0.394316% at step 10, 1.052098% at
+step 20, and 3.810557% at step 40. Both this local relative L2 and the
+local absolute RMSE increase at every saved step (checked across all 40
+entries). That locates onset and accumulation in the generated latent
+trajectory; it still does not assign the drift to a particular DiT operator,
+nor turn intermediate latent distance into an eye-quality score.
+
+The completed report and six decoded PNGs are under
+`/private/tmp/qwen21-vae-face-attribution-20260928/`. Report SHA-256:
+`8ae6fe2f355b658618f1ca3290c6502c4cefb624576bb999c97f5851b514d5af`;
+runner SHA-256:
+`96d29321fc76bfa8c6fb93d531f69f48d10c7c6ef84b35aba0e7c9da1b66b48c`.
+The report pins latent manifests/payloads, VAE config/weights, Diffusers
+source commit `8b3c707ebd3ec4881f4190cf42931da07eaf3b65`, exact oracle
+PNGs, and CPU/Float32 runtime. Root independently recomputed the face RGB
+metrics from raw PNGs, checked output hashes, mask coordinates/complements,
+and latent residual-energy fractions. Scratch may expire; refresh after
+latent trajectory, decoder/model/source/runtime, ROI/mask, or metric changes.
+The next causal question is which DiT operator/precision boundary introduces
+the local final-latent error, followed by a matched full-trajectory decoded
+intervention before any production change.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder
