@@ -28959,9 +28959,11 @@ Refresh after source/toolchain/device/model/workload changes.
 - A selective-Q8 gate/up GGUF probe completed the next discriminator for one
   512x512 Russian-sign/portrait prompt, seed 7. Root verified that exactly
   32 image-MLP gate/up payloads came from the Q8 donor, all 233 other tensor
-  payloads matched the Q4 base byte-for-byte, and `general.file_type` was the
-  only metadata exception. Independently recomputed post-Euler latent error
-  versus official BF16/MPS was lower for the hybrid on all 40/40 steps;
+  payloads matched the Q4 base byte-for-byte. A later pinned-file re-read
+  corrected the metadata attribution: Q4 and hybrid metadata are byte-identical
+  (`general.file_type=15`); type 7 was the Q8 donor's allowed compatibility
+  exception, not a hybrid output change. Independently recomputed post-Euler
+  latent error versus official BF16/MPS was lower for the hybrid on all 40/40 steps;
   final relative L2 fell from 21.277440% (Q4) to 11.341314% (hybrid), with
   both curves increasing at every step. Same-official-state DiT forwards at
   calls 0/20/39 reduced official-velocity error from 2.7252/1.3638/4.6690%
@@ -29148,3 +29150,69 @@ Refresh after source/toolchain/device/model/workload changes.
   base source identity. Report hashes, scope and decay triggers are in
   `docs/qwen-image21-gguf-frontier.md`; next discriminator is matched late
   block inputs/full trajectories and multi-seed decoded quality.
+- A separate same-official-state native forward finally tested the **full**
+  Q8 donor, not the earlier selective gate/up hybrid. On official call-0
+  BF16 state/time/conditioning, DiT velocity relative L2 versus official
+  BF16/MPS was 2.725202% for Q4, 1.760615% for the hybrid, and 1.350547%
+  for full Q8. At calls 20/39 it was 1.363841/0.982294/0.830599% and
+  4.669017/2.266090/1.974060%, respectively, but official uses warm cache
+  there while each native one-forward builds a fresh prefix. Full Q8 and the
+  hybrid share all 201 same-qtype payloads byte-for-byte; only 32 V and 32
+  MLP-output qtypes/payloads differ, plus forward-unused `general.file_type`.
+  This is a combined artifact/dispatch contrast, not isolated quantization
+  causality. Call-0 max absolute error increases slightly from hybrid
+  0.266531 to full Q8 0.276533 despite lower global L2. The residual
+  appears before Euler/VAE but is not yet assigned to a DiT operation or a
+  visible eye/glyph defect. Native cache-route parity is recorded next;
+  the full-Q8 trajectory and equal-input block replay are recorded below.
+  Full pins and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A full-Q8 native cache-route probe at the exact official incoming states and
+  BF16-effective times for calls 20 and 39 found byte-identical DiT outputs
+  among historical call-0-seeded prefix hit, fresh target prefix build, and
+  forced uncached resident-input routes. Cache counters/active-token counts
+  confirmed that distinct routes ran; each target suffix also matched the
+  earlier standalone full-Q8 one-forward output SHA. Thus the **native**
+  cache-route choice does not explain the residual at these two inputs. The
+  probe does not compare upstream Hugging Face/MPS cached-prefix tensors, so
+  cross-runtime cache equivalence remains open. One seed counter is printed
+  after the target hit and is mislabeled as after the seed, while the immediate
+  seed assertion and per-route snapshots are correct. Exact artifacts, hashes,
+  scope, and decay triggers are in `docs/qwen-image21-gguf-frontier.md`.
+- A guarded full-Q8 donor run completed all 40 matched BF16-effective Euler
+  steps with the pinned official Qwen3-VL conditioning, seed, and schedule.
+  Root independently recomputed all four 40-step latent series: final global
+  relative L2 to official is 21.277440% Q4, 11.341314% selective gate/up Q8,
+  and 9.881818% full Q8. Every series increases at each step; full Q8 beats
+  the selective hybrid at all 40. Approximate final face-token relative L2 is
+  16.708862%/7.695944%/3.810557% respectively, not an eye-quality score.
+  The same pinned CPU/FP32 VAE re-decode passed exact RGBA baseline canaries;
+  official-versus-Q4/hybrid/full-Q8 RGB MAE is
+  9.784980/5.683842/4.073781 full-frame and
+  15.985185/8.876973/4.409179 in a fixed face crop. This one-prompt/seed
+  result is closer to the official image but still differs in face detail;
+  it rejects a VAE-only origin, not local decoder sensitivity or off-manifold
+  hypotheses. The residual begins in same-state DiT and accumulates through
+  Euler; the equal-input full-Q8 block replay below narrows the local
+  discrepancy but not its operator-level or visual cause. Full artifact
+  pins, caveats, and decay triggers are in `docs/qwen-image21-gguf-frontier.md`.
+- A guarded full-Q8 Metal replay independently evaluated each of 32 DiT
+  blocks against the official call-0 BF16 output on that block's exact
+  official BF16 input widened to F32, with official modulation; no native
+  state was fed into the next block. All 33 teacher state hashes/widenings and
+  model/conditioning pins passed, six projection families per block were
+  Q8_0, and block-0 exact repetition was bit-identical. Every block had a
+  nonzero local discrepancy. Image relative L2 ranged 0.225779–0.740903%,
+  highest at block 30; block 31 had the highest image absolute RMSE 0.120285,
+  but its official image-output norm was ~4x block 30's. Text relative L2
+  peaked at block 5 (0.358750%). Rounding native outputs only at the final
+  block boundary to BF16 increased image RMSE on all 32 blocks, rejecting a
+  final-format-only explanation. This isolates local block mismatch from
+  cumulative state transport, but not Q8 weight error versus internal
+  Metal/MPS arithmetic or a block's causal share in face/glyph defects; the
+  final head remains untested. Guarded wrapper exit 0, 32/32 report status
+  complete, report SHA-256
+  `f0550ba5fb25a14063118eeb65e361cbb061b5fdf985a06193ea8a45cfc5267e`.
+  Next: operator-level matched-input split at strongest image-error blocks
+  and final head, using matched BF16 weights if available. Full pins, scope,
+  and decay triggers are in `docs/qwen-image21-gguf-frontier.md`.

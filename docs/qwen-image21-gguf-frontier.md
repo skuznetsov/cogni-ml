@@ -2980,11 +2980,25 @@ control; the present AB2 pilot does not test that hypothesis.
   GGUF (Q5_K for this family) with Q8_0 payloads from a separate community
   donor. Root independently checked all 32 target raw payloads against the
   donor and all 233 non-target raw payloads against the base; tensor order and
-  shapes stayed fixed. The metadata exception is `general.file_type` 15 -> 7,
-  so this is **not** literally a tensor-only, metadata-identical artifact.
+  shapes stayed fixed. A later re-read of the pinned GGUF files corrected the
+  artifact attribution: base and hybrid metadata are byte-identical, both with
+  `general.file_type=15`. The `15 -> 7` exception belongs to the donor
+  compatibility check; the donor itself has type 7. The hybrid is therefore a
+  tensor-payload-only intervention relative to the base (its tensor directory
+  and offsets necessarily change). The earlier scratch policy/report text that
+  describes `15 -> 7` as a hybrid metadata change is incorrect.
   Base Q4 SHA256: `51998ad7c068ce7d68e233237537900ffe874ab4d5c72e20758f5f18ceb15b8a`;
   Q8 donor SHA256: `c3ef62b2b7b53bf92418cbd77fbc24b43a26c8305a1f001c4a9a9a99b1373c03`;
   hybrid SHA256: `d9f6449ac9d75fa8cd1fdabfe89ec660fa5290b82640388a32cd05cd8a4914ff`.
+  The correction used the pinned `repack.py` GGUF parser on all three files:
+  the raw base/hybrid metadata blocks compared equal and their file types
+  were 15/15, versus donor type 7. A streaming hybrid/donor comparison found
+  byte equality for all 201 same-type tensor payloads (5,405,458,432 bytes);
+  only 64 tensor types differ, exactly the 32 `attn.to_v.weight` and 32
+  `img_mlp.out.weight` matrices. The current Qwen-Image loader records
+  `general.file_type` but the DiT forward source does not consume that getter.
+  This is an artifact comparison, not proof that the two changed projection
+  families are individually responsible for any image defect.
   A subsequent full streaming check encoded all 64 official BF16
   `gate_layer`/`proj` source tensors into Q8_0 and matched every corresponding
   donor gate/up half byte-for-byte: 3,422,552,064 Q8 bytes, zero mismatches.
@@ -3161,8 +3175,9 @@ Qwen3-VL conditioning (`007ad14a...66114ab`), initial latent
 (`d0315806...8358932c`), and official-MPS BF16 Fourier time features
 (`661d6707...0cb85`, widened to Float32). The Q8 model was the previously
 verified hybrid (`d9f6449a...d8a4914ff`); only its 32 image-MLP gate/up
-tensor payloads differ from Q4, while `general.file_type` metadata also
-differs as recorded above. This is an **injected-time call-0 diagnostic**,
+tensor payloads differ from Q4. Its metadata, including `general.file_type`,
+is byte-identical to Q4 as corrected above. This is an **injected-time call-0
+diagnostic**,
 not the ordinary native-time-feature Q8 path or a warmed prefix-cache hit.
 The scratch Metal change only copied the joint hidden buffer immediately
 before block 0 into a separate buffer on the same command buffer; all 32
@@ -3800,6 +3815,253 @@ Refresh these scoped results if the source or GGUF tensors, quantizer build,
 row selection, model/Metal implementation, captures, or ephemeral scratch
 artifacts change. Later-block matched MLP inputs and decoded multi-seed
 comparisons remain necessary before selecting a precision policy.
+
+### Same-state full-Q8 donor DiT discriminator (2026-09-28)
+
+The earlier "Q8" trajectory and teacher-forced comparisons used the selective
+gate/up hybrid, **not** the unmodified full-Q8 donor. A separate guarded
+one-forward native Metal run loaded the full donor GGUF (SHA-256
+`c3ef62b2b7b53bf92418cbd77fbc24b43a26c8305a1f001c4a9a9a99b1373c03`)
+at official call indices 0, 20, and 39. All three variants used the same
+official BF16-exact 65,536-value state, official Qwen3-VL conditioning payload
+`007ad14a...66114ab`, and BF16-effective model time at each index. Root
+independently re-read the raw official BF16 teacher and all nine native F32
+outputs and recomputed the finite-value metrics in Float64:
+
+| Official call | Q4 velocity error | Selective-Q8 velocity error | Full-Q8 velocity error |
+| ---: | ---: | ---: | ---: |
+| 0 | 2.725202% | 1.760615% | 1.350547% |
+| 20 | 1.363841% | 0.982294% | 0.830599% |
+| 39 | 4.669017% | 2.266090% | 1.974060% |
+
+Each value is `||native velocity - official BF16 velocity||₂` divided by the
+official velocity norm at that **same incoming state**, not a final-latent or
+visual-quality score. At call 0 the official route extracts its prefix and the
+native route builds it, making this the primary matched-state teacher contrast.
+At calls 20/39 the official route uses a warmed cache while each native
+one-forward run builds a fresh prefix; those teacher contrasts retain a
+cache-route confound. Within the native runtime, the full donor differs from
+the hybrid only in the 32 V and 32 MLP-output tensor qtypes/payloads plus
+`general.file_type` metadata (unused by the forward source); the other 201
+same-type tensor payloads were byte-identical in the streaming audit above.
+The V/MLP-output contrast changes weight payloads and dispatch together, and
+their complete source provenance is not established, so this is not a pure
+quantization-error attribution.
+
+The full donor lowers aggregate velocity relative L2 at all three sampled
+states, yet its call-0 maximum absolute element error is **0.276533**, above
+the hybrid's **0.266531**. Thus a better global norm does not certify every
+feature, eye, or glyph. The remaining 1.350547% call-0 velocity discrepancy
+occurs before Euler integration and VAE decoding, but this whole-forward
+measurement does not localize the residual to a particular DiT block or
+operation. The native cache-route and full-Q8 trajectory discriminators
+follow below, followed by a 32-block equal-official-input replay. The earlier
+selective-Q8 trajectory and cumulative block trace do not substitute for that
+full-Q8 local replay.
+
+The scratch comparator checks exact model/output hashes, official state and
+teacher bytes, conditioning, time, shape, finiteness, and nonzero native
+artifact contrasts. A deliberately altered byte string was rejected by its
+output-hash guard. The comparator SHA-256 is
+`009747a6c5b4dff659fec5fc89a58cff9f19586743dba25dbb2c8c0cfca94235`;
+the resulting report SHA-256 is
+`11d6f978732428af3d00973cb3c3231570616a6682f5f243c6f7ed4c0ca4a46c`
+under `/private/tmp/qwen21-full-q8-teacher-20260928/`. Its source runner
+inherits a misleading `model_sha256_verified=false` flag from the
+inputs-only preflight even though the recorded full model SHA matches the
+pre-pinned donor and root independently streamed the donor hash. The
+comparator checks that actual SHA equality rather than trusting the flag.
+Refresh this certificate after source, compiler/device/dispatch, model,
+conditioning, schedule, cache route, or ephemeral scratch-artifact changes.
+
+### Native full-Q8 prefix-cache route discriminator (2026-09-28)
+
+A separate guarded Metal probe replayed the pinned official BF16 incoming
+states at DiT calls 20 and 39 with the full-Q8 donor. For each call it compared
+three **native, same-weight** routes: a prefix cached by the call-0 forward and
+reused at the target call, a fresh stack that builds the prefix at the target
+call, and a forced full resident-input path that bypasses prefix caching. The
+call-0 seed was also checked against the pinned standalone full-Q8 output.
+Each target route returned the full 1,254-token joint output, not merely an
+unverified target slice. Its counters confirmed different execution routes:
+cached hit `builds=1, hits=1, active_tokens=1024`; fresh build `1, 0, 1254`;
+forced uncached `0, 0, 1254`. Each call had one Metal command buffer, zero
+intermediate readbacks, one final readback, and 1,024 image-projection rows.
+
+At **both** calls, all three full-output SHA-256 values were byte-identical,
+as were all target-suffix values: call 20 full
+`ab49da337b2603188b45247a1f6dbaffadf5ad0f1e0ffcccd8e0e0975dc0f0bb`
+and target `e83a6a6d1941f3c733b518d145f22771a99cdf5e6aa799acacd5b5510a5bc71d`;
+call 39 full
+`4c791e2a5ea5a386b025588c35686a91531c2e97d7001eab80fe6e3c327059e3`
+and target `9a2b652402204d25c0dd8588e53be8b6198ec0aa4794197b2ec5bed5e6c481f1`.
+Pairwise maximum absolute difference and relative L2 were exactly zero. The
+target hashes independently match the earlier fresh one-forward outputs, so
+the test did not silently compare a different target state or timestep. This
+removes **our native cache-route choice** as an explanation of the residual at
+these two fixed inputs. It does not reproduce Hugging Face/MPS cached-prefix
+values or prove that its cache arithmetic matches ours; the cross-runtime
+official residual remains broader than this native route test.
+
+The first isolated-agent launch could not create a Metal device and produced
+no parity result; root reran both guarded indices with Apple M2 Max access.
+The report has one non-computational bookkeeping error: its
+`warm_seed.stats.prefix_cache_hits_after_call=1` is read after the target hit,
+even though the runner asserted `hits=0` immediately after the call-0 seed.
+The per-target route counters are snapshotted at the correct boundaries; this
+delayed seed counter does not affect the output comparison. Source/binary
+SHA-256: `ea575da6377e265a510d56d1f499e72bf584aff6be4dc0170a1178deb7160b0e` /
+`1e17e778205c1e55bd86c994a5e6edf3825e1e02123ab999378b55dd75b48006`.
+The reports under `/private/tmp/qwen21-cache-route-parity-20260928/results/`
+have SHA-256 `0beb160bba1a0f0961a292e749f10d9a427d6d159ff0a81270d972f68ed80799`
+(call 20) and
+`efacde8bf7e0b891ab88a60b4c613b40d84eac176d9ef549e1564d0a35759009`
+(call 39). Refresh after source, binary, GGUF, conditioning, schedule,
+device/driver, or scratch evidence changes; an upstream cache comparison
+would need separately pinned Hugging Face internal tensors.
+
+### Full-Q8 donor 40-step latent trajectory (2026-09-28)
+
+A guarded native Metal run completed all 40 Euler steps with the **full**
+Q8 donor, the same official Qwen3-VL conditioning, seed 7, 512x512 latent
+shape, pinned schedule, and BF16-effective timestep/post-step state semantics
+used by the official, Q4, and selective-Q8 controls. The runner exited zero;
+its independent comparison reported `COMPARISON_COMPLETE`, validated 40
+candidate and reference snapshots, and checked the initial latent,
+conditioning, model revision, scheduler config/sequence, and final bundle.
+Root independently re-read all four sets of 40 F32-widened BF16 state files
+and recomputed relative L2 in Float64:
+
+| Completed step | Native Q4 | Selective Q8 gate/up | Full Q8 donor |
+| ---: | ---: | ---: | ---: |
+| 1 | 0.156901% | 0.129089% | 0.107892% |
+| 10 | 2.357001% | 0.666186% | 0.476661% |
+| 20 | 9.177365% | 3.744071% | 3.268054% |
+| 30 | 17.335191% | 8.525851% | 7.437417% |
+| 40 | 21.277440% | 11.341314% | 9.881818% |
+
+Each entry divides the candidate-minus-official norm by the **same-step
+official** latent norm. All three global error series increased at every
+completed step; full Q8 was closer than the selective hybrid on all 40.
+There is no isolated late-step cliff in this metric. At step 40, the
+approximately mapped 20-token face ROI has 16.708862%/7.695944%/3.810557%
+relative L2 for Q4/hybrid/full Q8, respectively; the approximate 70-token
+sign ROI has 9.346851%/3.056520%/1.800065%. These are token-space distance
+measurements, not pixel-aligned eye or glyph fidelity scores, and their local
+denominators differ from the global denominator. The full-Q8 residual remains
+large enough that better aggregate precision cannot be equated with a correct
+rendered face. The same-state call-0 DiT residual above establishes an error
+before Euler and VAE; the steadily growing trajectory is consistent with
+feedback amplification but does not identify its exact source. Matched VAE
+decoding and an independent-input replay of all 32 full-Q8 blocks follow below.
+
+The run log, final bundle, and trajectory report live under
+`/private/tmp/qwen21-full-q8-40-20260928/`. SHA-256 values: `run.log`
+`cee9b3ce166c07ec832afb8d65899cfe32bb0fa4ba9b449f2a623160df0f3f92`,
+final manifest `5db5f4695742fb6eb15cade80bb030d3eab7f7f749accaeb5e599f8043b22668`,
+final payload (also `step-039.bin`)
+`25745f532985948aa2837de7798624b4e17e460594f1e8e836196f4ec88521e9`,
+and comparison report
+`569f1bf660af378744a665c01ce963ba2367310c8cd5ec4f41fe87bfe7b1aa8f`.
+The guarded driver SHA-256 is
+`995bb94b6469438b484de8e600b0e5c7bd46d6b68936b13c85a43f18fcda3f28`.
+Refresh after any model/conditioning/source/driver/scheduler/BF16 semantics,
+Metal device or route, or ephemeral scratch evidence changes.
+
+### Matched full-Q8 CPU/FP32 VAE decode (2026-09-28)
+
+The full-Q8 final latent was decoded through the same pinned CPU/FP32 VAE
+as the official, Q4, and selective-Q8 endpoints. Before candidate decoding,
+the runner independently re-decoded those three baselines and required exact
+RGBA pixel equality with their pinned oracle PNGs; all passed. A synthetic
+one-pixel RGB defect in the fixed face crop and a one-byte hash mutation were
+detected by the guards. Root independently recomputed RGB pixel differences
+from all four PNGs:
+
+| Candidate versus official | Full-frame RGB MAE (0–255) | Fixed face RGB MAE (0–255) |
+| --- | ---: | ---: |
+| Native Q4 | 9.784980 | 15.985185 |
+| Selective Q8 gate/up | 5.683842 | 8.876973 |
+| Full Q8 donor | 4.073781 | 4.409179 |
+
+The fixed face crop is `x=[320,380), y=[150,219)` in the 512x512 image.
+The full-Q8 face crop has RGB RMSE 6.391382 and maximum absolute RGB channel
+delta 50 versus official. The VAE emits RGBA, and alpha arrays differ
+slightly between *different* latents; RGB metrics explicitly exclude alpha.
+The full-Q8 decode is visibly closer to the official scene and face on this
+one prompt/seed, but small face details still differ. Pixel MAE does not
+measure eye anatomy, lettering correctness, perceptual quality, or VAE
+training-support membership. Exact baseline re-decode plus the earlier
+same-state DiT error rejects a **VAE-only origin** for the drift, not the
+possibility that VAE decoding magnifies some local latent differences.
+
+The reviewed output under
+`/private/tmp/qwen21-full-q8-visual-20260928/decoded-final-reviewed/`
+is `full-q8-final-cpu-fp32.png` (SHA-256
+`dd7b0187749d0cac4253038a285d65c023d0855f8a02f321219d7608c0d2bee7`)
+and `report.json` (SHA-256
+`d906df9512be133d0600891d1a3f168b1b7a2c1c71881a3030956c7c3cbf82da`).
+The scratch driver SHA-256 is
+`58ee64d9a90fc360513cf049f89abaa9b420f56407023402c9c9b7faf892bde5`.
+Refresh after source/decoder/VAE/asset/baseline/candidate changes, or if
+ephemeral scratch evidence is removed. Multi-prompt/seed perceptual and
+eye/glyph evaluations remain open before any precision policy is promoted.
+
+### Full-Q8 equal-official-input DiT block replay (2026-09-28)
+
+A guarded Apple M2 Max Metal run independently invoked each of the 32 full-Q8
+DiT blocks at official call 0. Block `i` received the **official BF16 output
+of block `i-1` widened exactly to F32** (block 0 received the official
+pre-block state), plus the captured official modulation. Each native output
+was compared with that block's official BF16 output; no native block output
+was passed to the next block. The runner validated all 33 official BF16
+state hashes and every widening, the conditioning/layout and model pins, and
+all six projection qtypes in each block as Q8_0. It completed 32/32 blocks,
+and an exact second invocation of block 0 produced a bit-identical output.
+
+| Block | Text relative L2 | Image relative L2 | Image absolute RMSE |
+| ---: | ---: | ---: | ---: |
+| 0 | 0.255690% | 0.346766% | 0.022596 |
+| 5 | 0.358750% | 0.239864% | 0.018540 |
+| 14 | 0.185531% | 0.480790% | 0.025555 |
+| 30 | 0.203435% | **0.740903%** | 0.042019 |
+| 31 | 0.325699% | 0.532138% | **0.120285** |
+
+Every block has a nonzero local discrepancy: image relative L2 ranges from
+0.225779% to 0.740903%, text from 0.165547% to 0.358750%. Block 30 has the
+largest **relative** image discrepancy on its own official input; block 31
+has the largest **absolute** image RMSE, but its official image-output norm
+rises from 11,614.85 at block 30 to 46,293.41 at block 31. Thus its larger
+raw RMSE does not by itself identify a new kernel failure or its contribution
+to the final face. Rounding only each native output once to BF16
+round-to-nearest-even increased image RMSE on all 32 blocks, so a final
+output-format mismatch alone does not explain these block-level residuals.
+The test cannot separate Q8 weight quantization/provenance from internal
+Metal-vs-MPS arithmetic or implementation differences. It excludes the final
+normalization/output head and does not measure how each local error propagates
+through later blocks or Euler steps. Earlier selective-Q8 cumulative block
+captures and this full-Q8 equal-input replay answer different questions; no
+particular block is yet proven to cause the visible eye or glyph differences.
+
+The guarded wrapper exited 0 after about 122 seconds with a 3,600-second,
+24,576-MB process-tree and 35% system-free-memory stop guard; the runner
+separately required at least 50% free memory before loading and observed 79%.
+The report is
+`/private/tmp/qwen21-full-q8-block-replay-20260928/gpu_replay_report.json`
+(SHA-256
+`f0550ba5fb25a14063118eeb65e361cbb061b5fdf985a06193ea8a45cfc5267e`);
+the scratch runner and binary SHA-256 values are
+`6ee848c25e65bbd1632e9b8b997b1b299a421283ddf8c8ae0d268307f6f2cdca`
+and `0cad665e0c4e92f134e79a622bd6803608c42e8a45b88f7fd2b2ffc18cf164ce`.
+The CPU preflight report SHA-256 is
+`33d2bcba8562027699c8ec31acc9fd92e870e845443f23a814e59608faf718d5`;
+its wrong-hash negative control, block-0 cross-capture identity, BF16
+tie-to-even control, and metric known-answer control passed. Refresh this
+certificate after source/compiler/device, model/conditioning, official
+capture, modulation/layout, or scratch-artifact changes. The next causal
+discriminator is an operator-level matched-input split of the strongest
+image-error blocks and the output head, ideally with matched BF16 weights to
+separate quantization from implementation arithmetic.
 
 ## Not admitted by this slice
 
