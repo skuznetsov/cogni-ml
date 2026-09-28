@@ -29019,3 +29019,20 @@ Refresh after source/toolchain/device/model/workload changes.
   the default-time trajectory or a warmed-cache call-1 test. Next: a
   shared-x0 conditioner-by-DiT first-call contrast, then fixed-input Q8
   block or warmed-cache trace to separate residual local error from transport.
+- The matched call-0 conditioner x DiT-precision contrast used identical
+  BF16-exact x0 and injected official MPS time features. Velocity error to
+  official BF16/MPS was 2.720172%/2.624811% for Q4 with official/native
+  embeddings, and 1.764384%/1.727515% for selective-Q8 with those same
+  embeddings. Native embeddings slightly reduced local teacher distance,
+  plausibly by error cancellation; this is not a semantic or visual-quality
+  win. First BF16 Euler replay matched the teacher at all 65,536 elements.
+  An exact official pre-block-0 hidden-state injection into Q8 moved its
+  output but reduced teacher-relative call-0 velocity error only from
+  1.764384% to 1.739396%; most discrepancy survives downstream of that
+  boundary with native modulation and kernels retained. The Q4/native
+  output was salvaged after a post-forward report failure, so its source
+  provenance is weaker than a clean run. This locates an early DiT residual,
+  not a proven VAE out-of-support cause or a unique defective block. Full
+  hashes, limitations, ephemeral scratch evidence, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`. Next: fixed-input Q8 block-0
+  attention/MLP/modulation boundary replay, then multi-seed eye/text checks.

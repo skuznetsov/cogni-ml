@@ -3257,6 +3257,103 @@ Refresh all claims after
 checkpoint/GGUF, conditioning, schedule, BF16 arithmetic, official runtime,
 Metal source/compiler, or scratch-artifact changes.
 
+### Call-0 conditioning x DiT precision and pre-block intervention (2026-09-28)
+
+Two matched first-call probes tested whether the observed image-latent drift
+is mainly entering through Qwen3-VL conditioning, the DiT input projection,
+or later DiT computation. They used the same Russian-sign/portrait prompt,
+seed 7, BF16-exact initial latent (`d0315806...8932c`), 40-step Euler
+schedule, pinned official BF16/MPS teacher, and *injected official MPS BF16
+Fourier time features* (`661d6707...94dcb8fa90cb85`, widened to Float32
+`310f9984...72e047`). The Q4-labeled mixed-quant GGUF is
+`51998ad7...8ceb15b8a`; the selective-Q8-gate/up GGUF is
+`d9f6449a...8a4914ff`. The two Qwen3-VL
+conditioning payloads differ only in their 230x4096 embedding prefix;
+the mask and latent suffix are byte-identical (SHA-256
+`5ef9e503...1029997`). This is a captured, matched **call-0** comparison,
+not a full 40-step cross-product or a default-time native route.
+
+| Native DiT variant | Qwen3-VL embeddings | Call-0 velocity relative L2 to official BF16 teacher | First BF16 Euler latent relative L2 |
+| --- | --- | ---: | ---: |
+| Q4 | Official | 2.720172% | 0.156638% |
+| Q4 | Native | 2.624811% | 0.153856% |
+| Selective Q8 gate/up | Official | 1.764384% | 0.129104% |
+| Selective Q8 gate/up | Native | 1.727515% | 0.124881% |
+
+Independent reanalysis re-read all four 65,536-element Float32 velocity files,
+checked their SHA-256 and finiteness, and recomputed the table in Float64.
+The official teacher's first Euler state was reproduced exactly at
+65,536/65,536 elements using `BF16_RNE(x0 + BF16_RNE(dt * velocity))`, with
+`dt=-0.015080928802490234`; a plain Float32 product then BF16 cast was
+**not** byte-equivalent. Within Q4 and Q8, switching only the saved
+conditioning embeddings moves the velocity by 0.812495% and 0.900159% of
+the teacher norm, respectively. The difference of those two *vectors* is
+0.573518% of that norm (effect cosine 0.780388), so conditioning and the
+GGUF variant interact at this point. The slightly lower teacher error with
+native embeddings is compatible with error cancellation; it does not show
+that native Qwen3-VL is semantically better or will improve a 40-step image.
+The larger controlled first-call reduction here is from the targeted Q8
+gate/up variant, without assigning an additive causal percentage to it.
+
+The next probe copied a saved tensor directly over the **joint DiT hidden
+state immediately before block 0**, after native image/text input assembly,
+on the same Metal command encoder. It held Q8 weights, official Qwen3-VL
+conditioning, x0, and the official MPS time-feature input fixed; the time
+modulation chain was not replaced. A no-op injection of the native pre-block
+tensor reproduced the baseline velocity byte-for-byte (SHA-256
+`42fc2aad...bab9c7`) and captured the expected native input SHA-256
+`459974c1...31cfcf007`. The official BF16 pre-block tensor
+(`96582cb4...e751207e`) was independently widened byte-for-byte to the
+injected Float32 tensor (`45ca4101...dccfefff`), and that exact digest was
+captured before block 0. Against official, the original native pre-block
+state differed by 0.182926% relative L2 overall: 0.183084% on its first
+230 text rows and 0.165677% on the remaining 1,024 image rows.
+
+Replacing this entire pre-block state moved the final call-0 target velocity
+by 0.147016% of the teacher norm. Its teacher-relative error fell only from
+1.764384% to 1.739396% (1.42% of the prior *error magnitude*), and the
+first post-Euler latent error fell from 0.129104% to 0.128126%. The first
+block's combined-stream error remained nonzero after injection
+(0.395589% -> 0.364730%). Thus the pre-block mismatch has a causal effect,
+but **most of this Q8 call-0 output discrepancy survives exact official
+pre-block input**. The residual is downstream of that boundary *in this
+hybrid intervention*; it may involve native modulation, block arithmetic,
+other GGUF quantized weights, and the output head, not one proven defective
+block. The earlier full 40-step Q8 latent gap and face defects are not
+explained by these single-call percentages alone. No new VAE
+out-of-support claim follows: the decoder receives different latents, but
+these probes do not calibrate the VAE's training support or perceptual quality.
+
+The 2x2 report and analyzer are under
+`/private/tmp/qwen21-conditioning-dit-2x2-20260927/`. Both independent
+reruns of `analyze_2x2.py` passed all raw tensor/hash gates and agreed on
+the displayed metrics. Their full JSON SHA-256 values differ between
+Python 3.12.2/NumPy 1.26.4 (`a24440d244675b9a6494f15a41902c35b8ebe22bae48dd497a29c10ec0dbc232`)
+and Python 3.14.6/NumPy 2.5.2 (`da4b15e15520d2c068e80563136ec1e21cd7ff928e2adc0198b3db94b4eeef08`)
+because their Float64 reduction results differ in the last decimal places;
+neither JSON digest is a cross-runtime canonical reproduction gate. Use
+the separately checked raw input/output SHA-256 values instead.
+The native-Q4 cell is a **salvaged post-forward output**: the full model
+forward and captures completed, but runner JSON assembly failed while
+hashing an absent scratch source path. Its raw velocity SHA-256 is
+`22985700...eb423e`; the native-Q8 cell completed with report and raw
+velocity SHA-256 `73644a92...093e4778`. The reused official-conditioning
+reports carry stale build/launch metadata as noted above; this analysis
+uses their checked raw vectors, input hashes, and actual new-run controls,
+not the stale command strings. Neither newly captured arm has an uncaptured
+byte-parity forward. The pre-block probe's scratch runner, reports, and raw
+captures are under `/private/tmp/qwen21-preblock-attribution-20260927/`;
+no-op and official-injection report SHA-256 values are
+`bfc0d430...6b516413` and `413cf072...77a724e8`. Their inherited
+`run_history_note` incorrectly describes a time-only intervention; the
+per-arm override mode, input/capture hashes, and output digests establish
+the actual scope. All scratch evidence is ephemeral. Re-run after a change
+to checkpoint/GGUF, embeddings, schedule/BF16 arithmetic, time-feature
+source, Metal kernels/compiler, or reference runtime. The next discriminator
+is an equal-input, block-0 Q8-versus-official boundary replay (attention,
+MLP, modulation, output head separated), followed by multiple prompts/seeds
+and visual eye/glyph checks before promoting a precision policy.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder
