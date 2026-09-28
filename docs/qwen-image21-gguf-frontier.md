@@ -4961,6 +4961,58 @@ official image rows at selected earlier block boundaries under a matched
 split/no-op control, then require a full 40-step decoded A/B before a
 production precision change.
 
+### Call-10 image-state drift across selected DiT boundaries (2026-09-28)
+
+A follow-up scratch-only full-Q8 Metal replay used the same official
+full-joint pre-block-0 input, conditioning, modulation, final scales, and
+call-10 teacher output as the split control above. The official MPS capture
+contains full 230-text/1,024-image post-block states at all 32 boundaries;
+this bounded probe selected blocks 0, 12, and 29. For each, the native prefix
+produced a Float32 checkpoint that survived a bit-exact host round trip.
+The native suffix from the unchanged checkpoint reproduced the unsplit
+baseline velocity and next latent *byte-for-byte* at all three boundaries;
+the unsplit A/A was also exact. Only then did the treatment replace the
+target-image rows with the exact BF16-widened official state, leave native
+text rows in place, and run the same native suffix and head.
+
+| Image-row source at boundary | Velocity rel-L2 to official | Next BF16 latent rel-L2 | Baseline velocity squared error removed |
+| --- | ---: | ---: | ---: |
+| Native throughout | 1.004713% | 0.108470% | 0% |
+| Official after block 0 | 0.942125% | 0.104182% | 12.071% |
+| Official after block 12 | 0.666389% | 0.084176% | 56.008% |
+| Official after block 29 | 0.324285% | 0.058132% | 89.582% |
+| Official after block 30 (preceding control) | 0.310462% | 0.056765% | 90.452% |
+
+The native-versus-official image-state relative L2 at the three newly
+sampled boundaries was 0.343305%, 2.227963%, and 5.325171%, respectively;
+these compare states produced by this matched full-joint replay. Root
+independently rehashed and recomputed every saved velocity/next-latent arm,
+the three native checkpoints, and the text/image state gaps from raw arrays;
+all matched the report, and every native split no-op was byte-exact.
+The first-block image-state discrepancy is measurable, but replacing it
+alone recovers little of the terminal velocity error. A later replacement
+has much more leverage because it removes the *accumulated* difference by
+that boundary. It cannot distinguish new error created by blocks 1–29 from
+amplification or transformation of earlier errors, nor assign a faulty
+block, Q8 weight family, Metal kernel, or BF16/F32 boundary. The three
+selected points do not imply monotonic behavior at unsampled boundaries.
+No 40-step or decoded-eye improvement was tested.
+
+The bounded run took 246.83 seconds on Apple M2 Max after the default
+sandbox stopped before model output at Metal device creation. The completed
+report, preflight, and runner are under
+`/private/tmp/qwen21-call10-drift-source-20260928/`, with SHA-256 values
+`e444672b16962f9088786fc9d10d335eaf1a8669737105a73a310e9dced7f886`,
+`cfdb9366a46d4d0771a826ba79236f4f19523d9e60c606adb62a282f7e5604ce`,
+and `1a49d430250200d9497bf9b1d13e2800e95ba087712850b707f935f932cbf328`.
+The report records exact source/kernel/bridge/model/input/tap pins and the
+launch command. Scratch may expire; refresh after source, compiler/device,
+Q8 donor, official capture, conditioning, BF16 scheduler, or runner changes.
+A useful next discriminator is an equal-input operator-level replay in an
+early and a middle block that separately changes Q8 weights and precision
+staging, followed by a complete trajectory and decoded A/B before
+production promotion.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder

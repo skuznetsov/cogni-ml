@@ -29443,3 +29443,23 @@ Refresh after source/toolchain/device/model/workload changes.
   script SHA-256:
   `3d4a01d81be3fc0577d2d574e3f3267da8752efa1cb36cd0babc902c58e7b453`.
   Refresh conditions and full scope are in `docs/qwen-image21-gguf-frontier.md`.
+- A bounded call-10 full-Q8 Metal image-row intervention sampled post-block
+  boundaries 0, 12, and 29 on the same official full-joint input. Unsplit A/A
+  and all three native-prefix/checkpoint/native-suffix no-ops were byte-exact
+  to the prior baseline. With native text rows retained and the native suffix
+  fixed, substituting official image rows lowered teacher-relative velocity
+  L2 from 1.004713% to 0.942125%, 0.666389%, and 0.324285%; corresponding
+  next-BF16-latent L2 was 0.104182%, 0.084176%, and 0.058132% (baseline
+  0.108470%). At those boundaries the image-state gap itself was 0.343305%,
+  2.227963%, and 5.325171%. Root independently checked raw hashes, all
+  velocity/next-state L2 values, three checkpoints, and text/image gaps.
+  The increasingly effective late intervention localizes accumulated
+  terminal-relevant drift to the image hidden-state route, but does not
+  separate error newly created in blocks 1–29 from amplification of an
+  earlier difference or identify an intrinsic culprit. No full-trajectory
+  or decoded-eye benefit follows. Report SHA-256:
+  `e444672b16962f9088786fc9d10d335eaf1a8669737105a73a310e9dced7f886`;
+  runner SHA-256:
+  `1a49d430250200d9497bf9b1d13e2800e95ba087712850b707f935f932cbf328`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
