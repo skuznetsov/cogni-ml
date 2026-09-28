@@ -2971,6 +2971,93 @@ control; the present AB2 pilot does not test that hypothesis.
   latency gain; refresh it after model, conditioning, checkpoint, schedule,
   decoder, or evaluator changes.
 
+### Where the 40-step latents diverge: selective Q8 gate/up probe (2026-09-27)
+
+- **Question and intervention:** the earlier fixed-input block-30 replay identified
+  fused image-MLP gate/up weights as the largest tested local projection-family
+  difference. A scratch repacker replaced exactly the 32
+  `transformer_blocks.<0..31>.img_mlp.gate_up.weight` payloads in the native Q4
+  GGUF (Q5_K for this family) with Q8_0 payloads from a separate community
+  donor. Root independently checked all 32 target raw payloads against the
+  donor and all 233 non-target raw payloads against the base; tensor order and
+  shapes stayed fixed. The metadata exception is `general.file_type` 15 -> 7,
+  so this is **not** literally a tensor-only, metadata-identical artifact.
+  Base Q4 SHA256: `51998ad7c068ce7d68e233237537900ffe874ab4d5c72e20758f5f18ceb15b8a`;
+  Q8 donor SHA256: `c3ef62b2b7b53bf92418cbd77fbc24b43a26c8305a1f001c4a9a9a99b1373c03`;
+  hybrid SHA256: `d9f6449ac9d75fa8cd1fdabfe89ec660fa5290b82640388a32cd05cd8a4914ff`.
+  The donor's exact underlying source-checkpoint identity relative to the
+  official reference is not independently proven. No GGUF or generated image
+  is committed to the repository.
+- **Matched 40-step controls:** official BF16/MPS, native Q4, and native
+  Q4-plus-Q8-gate/up used the same official Qwen3-VL
+  conditioning payload SHA256
+  `007ad14a01440a9f786ae874e78cb4aef3a3729d2768fec1a503363bf66114ab`,
+  prompt, seed 7, 512x512 image, 1024x64 latent layout, 40-step Euler
+  schedule, and BF16-effective timestep/state semantics. Independent read of
+  all 120 finite snapshots confirmed 65,536 BF16-exact stored values per
+  snapshot and the final bundle matching `step-039.bin` in each run. Global
+  post-Euler latent relative L2 to the official state (Float64 recomputation,
+  denominator = official L2):
+
+  | Completed step | Native Q4 | Hybrid Q8 gate/up |
+  | ---: | ---: | ---: |
+  | 1 | 0.156901% | 0.129089% |
+  | 10 | 2.357001% | 0.666186% |
+  | 20 | 9.177365% | 3.744071% |
+  | 30 | 17.335191% | 8.525851% |
+  | 40 | 21.277440% | 11.341314% |
+
+  Hybrid Q8 was closer in all 40/40 matched steps, but both error curves
+  increased at every step. This is accumulated **whole-latent** distance, not
+  a perceptual score or a unique bad-step detector. The hybrid still has an
+  11.34% final residual. The earlier approximate face-token ROI did not show
+  excess Q4 error relative to the rest of the image; it cannot localize eye
+  defects within a decoded face.
+- **Same-state DiT discriminator:** separate guarded native forwards fed both
+  GGUF artifacts the *same official BF16 latent state*, conditioning, and
+  effective time at model-call indices 0, 20, and 39. Native velocity
+  relative L2 to the official teacher output was respectively 2.725202%,
+  1.363841%, and 4.669017% for Q4; with Q8 gate/up it was 1.760615%,
+  0.982294%, and 2.266090%. Direct Q8-minus-Q4 relative L2 at those
+  identical inputs, normalized to Q4 output, was 2.001418%, 0.955071%, and
+  4.251594%. The output differences are therefore present **inside DiT
+  before Euler accumulation or VAE**. This isolates a local effect of the
+  pinned GGUF variant at those states; it does not quantify the separate
+  feedback/transport contribution along the other 37 steps or prove that
+  quantization alone, rather than donor checkpoint differences, caused it.
+- **Decoded-image check:** all three final latents were independently decoded
+  through the same pinned CPU/FP32 VAE. On raw RGB 0-255 pixels, official-vs-Q4
+  MAE was 9.78498 globally and 15.98519 in the fixed face crop
+  `x=320..379, y=150..218`; official-vs-hybrid-Q8 MAE was 5.68384 globally
+  and 8.87697 in that crop. The hybrid is visually closer for this one prompt
+  and seed, including the face, but pixel MAE does not prove perceptual
+  superiority or text/eye fidelity in general. The first image-comparator
+  manifest accidentally pointed at an F32-state Q4 run; re-decoding the
+  matched BF16-state Q4 manifest reproduced the prior PNG byte-for-byte, and
+  the corrected comparator now fails closed on all three control identities.
+- **Performance and decision:** the hybrid file is 7,167,086,816 bytes versus
+  5,959,127,264 bytes for Q4. The single native runs logged approximately
+  1,235 s hybrid versus 647 s Q4 denoising; this is a warning, not a
+  quiet-host throughput estimate. Do not promote Q8 gate/up as the default
+  yet. These controls reject a **VAE-only** explanation for the observed
+  drift but do not establish a VAE off-manifold failure: the VAE may simply
+  decode different, imperfect latents. A stronger next discriminator is an
+  exact-revision, multi-prompt/seed precision sweep with matched same-state
+  forwards and decoded-face/text evaluation, followed by a throughput gate.
+- **Evidence and decay:** trajectory files are under
+  `/private/tmp/qwen21-q8-gateup-40-20260927`, official and Q4 BF16-state
+  controls under `/private/tmp/qwen21-official-trajectory-20260927` and
+  `/private/tmp/qwen21-bf16-state-20260927.b6UNJF`, and teacher-forced raw
+  outputs/report under `/private/tmp/qwen21-q8-teacher-forced-20260927`.
+  Teacher-forced report SHA256:
+  `7cf6b34b359bb5d61a6358caf45e7796c7d643c2b987dbd4469c91bea1d08d81`.
+  The scratch comparators and tests are under
+  `/private/tmp/qwen21-q8-trajectory-compare-20260928` and
+  `/private/tmp/qwen21-q8-image-compare-20260927`. The controls expire on a
+  changed model/donor, conditioning, schedule, state arithmetic, Metal route,
+  VAE, decoder, or comparator; ephemeral `/private/tmp` evidence must be
+  regenerated if removed.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder

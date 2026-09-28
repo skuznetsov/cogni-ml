@@ -28956,3 +28956,24 @@ Refresh after source/toolchain/device/model/workload changes.
   checkpoint, input/modulation, Metal route, compiler, or hardware changes;
   the next discriminator is higher-precision gate/up at earlier blocks and
   through the full denoising trajectory.
+- A selective-Q8 gate/up GGUF probe completed the next discriminator for one
+  512x512 Russian-sign/portrait prompt, seed 7. Root verified that exactly
+  32 image-MLP gate/up payloads came from the Q8 donor, all 233 other tensor
+  payloads matched the Q4 base byte-for-byte, and `general.file_type` was the
+  only metadata exception. Independently recomputed post-Euler latent error
+  versus official BF16/MPS was lower for the hybrid on all 40/40 steps;
+  final relative L2 fell from 21.277440% (Q4) to 11.341314% (hybrid), with
+  both curves increasing at every step. Same-official-state DiT forwards at
+  calls 0/20/39 reduced official-velocity error from 2.7252/1.3638/4.6690%
+  to 1.7606/0.9823/2.2661%, respectively. Thus a direct GGUF-variant
+  difference exists inside DiT before trajectory feedback and VAE; a
+  VAE-only explanation is rejected, but a VAE off-manifold failure and pure
+  quantization causality are not proven. With the same CPU/FP32 VAE, the
+  hybrid image was closer to the official image on global RGB MAE (9.7850
+  to 5.6838) and a fixed face crop (15.9852 to 8.8770), one seed only.
+  The 7.167 GB hybrid also logged about 1,235 s denoising versus 647 s for
+  the 5.959 GB Q4 in single, uncontrolled runs, so it is not promoted as
+  default. Full hashes, controls, evidence paths, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`. Next discriminator: exact-revision
+  donor/provenance plus multi-prompt/seed precision and latency sweep; keep
+  eye/text quality separate from whole-latent distance.
