@@ -29907,3 +29907,14 @@ Refresh after source/toolchain/device/model/workload changes.
   `809088cff39ab881f39426a2486f0fbff5b3fac9a8e7feb33184cc239b6378e9`.
   Scratch may expire; source pins and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- An opt-in, Q/K/V-only Qwen3-VL text projection selector now emulates the
+  pinned PyTorch 2.6 arm64 CPU BF16 reduction without changing the default
+  route or O/MLP projections. On the saved official block-0 normalized input
+  and local hash-pinned weights, the previously red 301/87/76 Q/K/V BF16
+  mismatches became 0/0/0 across the full outputs; root reran the real-sidecar
+  spec (1/1) and default block spec (8/8). This is arithmetic parity for one
+  source/fixture, not full-encoder or image-quality parity. The scalar Crystal
+  path is diagnostic, not a throughput promotion. Next compare Q/K/V-only
+  isolated and composed block/layer outputs, then a matched DiT/image A/B.
+  Exact inputs, scope, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.

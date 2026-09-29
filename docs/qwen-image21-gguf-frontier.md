@@ -2369,6 +2369,39 @@ DiT trajectory and decoded-image A/B. Refresh after prompt/fixture, model
 weights, projection or attention backend, BF16 staging, source, or scratch
 artifact changes; scratch evidence may expire.
 
+### Opt-in Qwen3-VL Q/K/V BF16 projection parity (2026-09-29)
+
+The Q/K/V-only `Torch26Arm64Bf16` selector emulates the measured PyTorch 2.6
+arm64 CPU no-BFDOT BF16 reduction with 32 F32 fused-multiply-add lanes, its
+fixed reduction tree, and BF16 round-to-nearest-even output. It is pure
+Crystal, opt-in through `Qwen3VLTextBlockConfig#qkv_projection_backend`, and
+leaves the default projection route and all O/MLP projections unchanged. It
+rejects input widths not divisible by 32; no tail arithmetic is inferred.
+
+The previously red same-input layer-0 sidecar test reported Q/K/V BF16
+mismatch counts `301/87/76` for both the Accelerate and scalar routes. With
+the new selector, the test reports `0/0/0` across the full
+`999,424/249,856/249,856` outputs. It pins the official normalized input,
+each official output, and selected local weight hashes independently of trace
+metadata. A one-bit output mutation is detected. Root independently reran the
+test (`1 example, 0 failures`) and the existing text-block spec (`8 examples,
+0 failures`); the formatter and whitespace checks passed. The test used the
+saved official CPU/BF16 fixture under
+`/private/tmp/qwen21-russian-official-block0-iYwyqW` and the local encoder
+snapshot under `/private/tmp/qwen21-current-russian-full-encoder-20260929`.
+Both scratch locations may expire.
+
+An independent single-thread C++/NEON scratch reproduction also matched all
+three official BF16 sidecars byte-for-byte. Its measured 0.46-second Q/K/V
+total is a separate implementation measurement, not a speed claim for the
+pure-Crystal selector or the full text encoder. The selector establishes
+projection arithmetic parity only for the pinned input, weights, Torch CPU
+version, and arm64 dispatch. It does not establish later projection, complete
+block/36-layer, DiT, VAE, glyph, or face parity. Re-run after any relevant
+checkpoint, trace, compiler, host arithmetic, or PyTorch dispatch change.
+Next run a controlled Q/K/V-only block/layer sweep with the same official
+inputs, then a composed encoder comparison before any image-quality claim.
+
 ### Russian layer-0 attention replay on saved inputs (2026-09-28)
 
 A CPU-only, SHA-gated PyTorch 2.6.0 SDPA MATH replay separated the native

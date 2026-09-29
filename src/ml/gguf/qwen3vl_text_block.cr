@@ -29,6 +29,12 @@ module ML::GGUF
       Accelerate
     end
 
+    enum QKVProjectionBackend
+      # Emulate the no-BFDOT PyTorch 2.6 arm64 CPU BF16 GEMM reduction using
+      # F32 fused multiply-adds and its fixed 8x4 reduction tree.
+      Torch26Arm64Bf16
+    end
+
     getter hidden_dim : Int32
     getter heads : Int32
     getter kv_heads : Int32
@@ -38,12 +44,14 @@ module ML::GGUF
     getter rope_theta : Float32
     getter attention_arithmetic : AttentionArithmetic
     getter projection_backend : ProjectionBackend
+    getter qkv_projection_backend : QKVProjectionBackend?
 
     def initialize(@hidden_dim : Int32, @heads : Int32, @kv_heads : Int32,
                    @head_dim : Int32, @intermediate_dim : Int32,
                    @eps : Float32 = 1e-6_f32, @rope_theta : Float32 = 5_000_000.0_f32,
                    @attention_arithmetic : AttentionArithmetic = AttentionArithmetic::Eager,
-                   @projection_backend : ProjectionBackend = ProjectionBackend::Scalar)
+                   @projection_backend : ProjectionBackend = ProjectionBackend::Scalar,
+                   @qkv_projection_backend : QKVProjectionBackend? = nil)
       raise ArgumentError.new("hidden_dim must be positive") unless @hidden_dim > 0
       raise ArgumentError.new("heads and head_dim must be positive") unless @heads > 0 && @head_dim > 0
       raise ArgumentError.new("heads * head_dim must equal hidden_dim") unless @heads * @head_dim == @hidden_dim
@@ -130,20 +138,12 @@ module ML::GGUF
       normalized = rms_norm_rows(residual, token_count, hidden_dim, weights.input_layernorm, config.eps)
       trace_boundary(trace, "layers.0.input_layernorm", normalized)
 
-      q = linear(
-        normalized, token_count, hidden_dim, config.heads * config.head_dim,
-        weights.q_proj, config.projection_backend,
-      )
+      qkv = project_qkv(normalized, token_count, weights, config)
+      q = qkv[:q]
       trace_boundary(trace, "layers.0.self_attn.q_proj", q)
-      k = linear(
-        normalized, token_count, hidden_dim, config.kv_heads * config.head_dim,
-        weights.k_proj, config.projection_backend,
-      )
+      k = qkv[:k]
       trace_boundary(trace, "layers.0.self_attn.k_proj", k)
-      v = linear(
-        normalized, token_count, hidden_dim, config.kv_heads * config.head_dim,
-        weights.v_proj, config.projection_backend,
-      )
+      v = qkv[:v]
       trace_boundary(trace, "layers.0.self_attn.v_proj", v)
       q = rms_norm_heads(q, token_count, config.heads, config.head_dim, weights.q_norm, config.eps)
       trace_boundary(trace, "layers.0.self_attn.q_norm", q)
@@ -192,6 +192,37 @@ module ML::GGUF
       output = residual_add(residual, mlp_branch)
       trace_boundary(trace, "layers.0", output)
       output
+    end
+
+    # Project already-normalized BF16-decoded hidden rows to Q/K/V. This is a
+    # public arithmetic diagnostic as well as the path called by `forward`, so
+    # a sidecar probe exercises the same QKV-only selector as production.
+    def self.project_qkv(normalized : Array(Float32), token_count : Int32,
+                         weights : Qwen3VLTextBlockWeights,
+                         config : Qwen3VLTextBlockConfig) : NamedTuple(q: Array(Float32), k: Array(Float32), v: Array(Float32))
+      hidden_dim = config.hidden_dim
+      raise ArgumentError.new("token_count must be positive") unless token_count > 0
+      raise ArgumentError.new("normalized input shape mismatch") unless normalized.size == token_count * hidden_dim
+
+      query_dim = config.heads * config.head_dim
+      kv_dim = config.kv_heads * config.head_dim
+      validate_matrix!(weights.q_proj, query_dim, hidden_dim, "q_proj")
+      validate_matrix!(weights.k_proj, kv_dim, hidden_dim, "k_proj")
+      validate_matrix!(weights.v_proj, kv_dim, hidden_dim, "v_proj")
+
+      if config.qkv_projection_backend == Qwen3VLTextBlockConfig::QKVProjectionBackend::Torch26Arm64Bf16
+        {
+          q: linear_torch26_arm64_bf16(normalized, token_count, hidden_dim, query_dim, weights.q_proj),
+          k: linear_torch26_arm64_bf16(normalized, token_count, hidden_dim, kv_dim, weights.k_proj),
+          v: linear_torch26_arm64_bf16(normalized, token_count, hidden_dim, kv_dim, weights.v_proj),
+        }
+      else
+        {
+          q: linear(normalized, token_count, hidden_dim, query_dim, weights.q_proj, config.projection_backend),
+          k: linear(normalized, token_count, hidden_dim, kv_dim, weights.k_proj, config.projection_backend),
+          v: linear(normalized, token_count, hidden_dim, kv_dim, weights.v_proj, config.projection_backend),
+        }
+      end
     end
 
     # Diagnostic consumers receive snapshots, never aliases to arrays used by
@@ -301,6 +332,56 @@ module ML::GGUF
         0.0_f32, output.to_unsafe, output_dim,
       )
       output.size.times { |index| output[index] = bf16(output[index]) }
+      output
+    end
+
+    # Portable scalar emulation of the measured PyTorch 2.6 arm64 CPU BF16
+    # no-BFDOT path. Each scalar accumulator represents one lane of its eight
+    # F32x4 accumulators; Math.fma preserves the NEON fused operation exactly.
+    # The route deliberately rejects non-32-aligned K rather than guessing at
+    # a tail reduction that the pinned Qwen3-VL projection shape does not use.
+    private def self.linear_torch26_arm64_bf16(input : Array(Float32), rows : Int32,
+                                               input_dim : Int32, output_dim : Int32,
+                                               weight : Array(Float32)) : Array(Float32)
+      unless input_dim > 0 && input_dim.divisible_by?(32)
+        raise ArgumentError.new("Torch 2.6 arm64 BF16 projection requires K divisible by 32")
+      end
+
+      output = Array(Float32).new(rows * output_dim, 0.0_f32)
+      rows.times do |row|
+        input_offset = row * input_dim
+        output_dim.times do |out_index|
+          weight_offset = out_index * input_dim
+          sums = StaticArray(Float32, 32).new(0.0_f32)
+          block = 0_i32
+          while block < input_dim
+            lane = 0_i32
+            while lane < 32
+              index = block + lane
+              x = bf16(input[input_offset + index])
+              w = bf16(weight[weight_offset + index])
+              sums[lane] = Math.fma(x, w, sums[lane])
+              lane += 1
+            end
+            block += 32
+          end
+
+          # Match vaddq_f32 over register groups at offsets 4, 2, then 1.
+          16.times do |index|
+            sums[index] = sums[index] + sums[index + 16]
+          end
+          8.times do |index|
+            sums[index] = sums[index] + sums[index + 8]
+          end
+          4.times do |index|
+            sums[index] = sums[index] + sums[index + 4]
+          end
+
+          # AArch64 vaddvq_f32 lowers to adjacent pair adds, then adds the pair sums.
+          horizontal = (sums[0] + sums[1]) + (sums[2] + sums[3])
+          output[row * output_dim + out_index] = bf16(horizontal)
+        end
+      end
       output
     end
 
