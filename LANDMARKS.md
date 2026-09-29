@@ -29815,3 +29815,19 @@ Refresh after source/toolchain/device/model/workload changes.
   `30769269df00a310825c7c52ffb5dd8368ed30fb622c559c6e79345f6b964ce1`.
   Scratch may expire; pins and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A no-op-guarded scratch Metal call-10 block-29 cut inserted all three
+  exact official BF16-widened post-RoPE Q/K/V operands immediately before
+  native attention, holding the same official input, modulation, Q8 weights,
+  and joint layout. Distinct-Q8 no-op matched all taps and output bitwise;
+  each donor tap matched the official operand exactly. On image rows,
+  attention-context relative L2 fell from 0.014374 to 0.010331 and
+  block-output relative L2 from 0.004911 to 0.004330 (22.271% less squared
+  block-output error). Context maximum absolute error worsened and a
+  1.033085% relative L2 context residual remains, so Q/K/V discrepancy
+  contributes locally but no unique attention/backend cause or full-image
+  quality benefit is established. Next: same-operand attention-backend
+  discriminator, then full same-seed trajectory and decoded-image A/B.
+  Report SHA-256:
+  `6040a54ecd666c4f4827044522ff82d8d0354130d368203b5a7cee2b518132ef`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.

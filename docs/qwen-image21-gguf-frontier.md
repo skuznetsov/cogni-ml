@@ -6026,6 +6026,58 @@ required before a quality claim. Stop if no-op, source-mapping, or memory
 guards fail. Refresh after GGUF/official weights, quantizer, resident
 dispatch, Metal kernel, input fixture, or scratch evidence changes.
 
+### Call-10 block-29 exact post-RoPE Q/K/V donor cut (2026-09-29)
+
+A separate guarded, scratch-instrumented Metal replay held the same pinned
+official block-29 input, modulation, joint layout, masks, all native weights,
+and Q8_0 projection route fixed. It crossed three arms: Q8 baseline,
+distinct-Q8 no-op, and the baseline with all three official BF16 post-RoPE
+Q/K/V operands widened to F32 and inserted immediately before native
+attention. The baseline and no-op outputs and all eight taps were bytewise
+identical. The injected Q, K, and V taps each matched their selected official
+BF16-widened donor byte-for-byte; all arms retained identical input,
+modulation, and layout hashes. This is a diagnostic intervention, not a
+production code or model change.
+
+| Image rows 230–1253 versus official BF16 | Q8 baseline | Exact post-RoPE Q/K/V donor |
+| --- | ---: | ---: |
+| Attention-context relative L2 | 0.014374 | 0.010331 |
+| Attention-context RMSE | 0.015819 | 0.011370 |
+| Block-output relative L2 | 0.004911 | 0.004330 |
+| Block-output RMSE | 0.027898 | 0.024596 |
+
+Root independently recomputed the raw-tensor metrics. The image-row
+attention-context relative L2 fell 28.127%, and block-output squared error
+fell 22.271% at this one fixed block/input. The context maximum absolute
+error instead rose from `0.624260` to `0.635010`, so the cut does not
+uniformly improve all elements or metrics. Exact post-RoPE operands leave a
+1.033085% image-context relative L2 gap: this residual combines native
+attention arithmetic/rounding with any backend-route semantic difference
+and cannot yet be assigned to a particular operator. Later native `to_out`,
+residual, and MLP paths contribute to the measured block output. This cut
+and the earlier BF16-weight or context splices are overlapping
+interventions, **not additive error shares**. No full velocity trajectory,
+decoded image, eye/glyph quality, or VAE benefit is established. Next
+discriminate the remaining attention-application/backend gap on the same
+Q/K/V, then require a full same-seed trajectory and decoded-image A/B for
+any promoted correction.
+
+The completed report is
+`/private/tmp/qwen21-block29-postrope-cut-20260929-r2/output/all_qkv_report.json`
+(SHA-256 `6040a54ecd666c4f4827044522ff82d8d0354130d368203b5a7cee2b518132ef`);
+the preflight report SHA-256 is
+`dd692344c44e5b5284ea6b6b62267d4a2bfc5127374be40a9591510a7d0d2e24`.
+The scratch runner binary SHA-256 is
+`25d8e56efc1f0de7be4bd9c69c9d3bfe50535a0ad7d246c1191d8650334c70d7`.
+The run used production source HEAD `1f786c1d4455ff114c99213470f0865088c4576e`
+and a corrected scratch-only route whitelist; the first scratch attempt
+failed that whitelist before producing an intervention result. The successful
+run exited zero under `run_safe.sh` with a 1200-second bound, 16-GiB RSS
+limit, at least 50% free system memory, and a quiet-host gate. Refresh
+after official model/MPS route, GGUF or native Metal source/kernel, input
+and mask fixture, scratch instrumentation, or report changes. Scratch
+evidence may expire.
+
 ### Same-latent CPU/F32 VAE path and residual-direction control (2026-09-29)
 
 Status: **endpoint-gated diagnostic complete; VAE off-manifold claim not
