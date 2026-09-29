@@ -5287,11 +5287,72 @@ passive mode, so its recorded hash is retained in its report but that exact
 source file is not currently preserved; the no-hook raw output and
 byte-exact teacher comparison remain independently verifiable. Scratch may
 expire; refresh after model/weights, Diffusers/Hub/PyTorch/MPS route,
-masks/RoPE, native source, input fixture, or tap boundaries change. The next
-causal cut is a no-op-guarded transplant of the official MLP input into the
-native block suffix, followed by narrower prefix probes. The existing
-gate/up-only splice cannot perform this cut without a new instrumentation
+masks/RoPE, native source, input fixture, or tap boundaries change. The
+no-op-guarded MLP-input transplant is reported below; the existing
+gate/up-only splice could not perform that cut without a new instrumentation
 stage.
+
+### Call-10 block-29 MLP-input causal splice (2026-09-28)
+
+A scratch-only resident Metal replay seeded block 29 with the same exact
+official call-10 post-block-28 BF16 state widened to F32 and the same
+modulation in every arm. It froze the native `norm2_buf` after the native
+attention, first residual, norm-2, and modulation prefix, then substituted
+only the gate/up input before the native Q8_0 MLP suffix. `state_buf` and
+`gate2_buf` remained native; therefore this intervention does **not** repair
+the whole upstream prefix. The official donor is the BF16-widened
+`img_mlp` prehook, not the unmodulated `norm2_output` hook. All arms retained
+the full 1,254-row joint state, not an image-only cached state.
+
+The native no-op splice and the earlier unspliced replay had the identical
+full-output SHA-256
+`82ff90f724520104cde4c970c1abbd97421f6399042643557679b4dc768bd6cf`.
+The installed official donor matched its expected F32 SHA-256
+`00a9a952d9c0d29cd2feaf8fcf61b7dece03c81c6159c5c255aeae20ec7d4ff0`
+bitwise and changed the native Q8 gate/up tap. Root independently recomputed
+the following squared L2 errors from the saved F32 arm outputs and the
+official MPS BF16-widened block output (SHA-256
+`edcc6e85a57b3b6e2ba68089b7c04ab1e3538ac998af1e176c2c6c45bc252c52`):
+
+| Block-29 output versus official | Baseline squared error | Official-input splice squared error | Error removed |
+| --- | ---: | ---: | ---: |
+| Full joint state | 10,190.543619 | 9,677.000684 | 5.039407% |
+| Image rows | 3,264.385298 | 2,885.289470 | 11.613085% |
+| Predeclared face-20 rows | 60.821958 | 54.077347 | 11.089104% |
+
+A control that merely BF16-rounds the *native* MLP input before native Q8
+gate/up instead increased squared error by 0.338512% joint, 0.637715%
+image-wide, and 0.952501% in the face-20 rows. This separates the
+official-input intervention from a generic BF16 boundary cast. It is a
+bounded causal effect on one block's hidden-state output, not the intrinsic
+fraction of prefix error: the residual and second gate bypass the splice,
+and the earlier gate/up-weight treatment may overlap it. The pre-MLP input
+error was not face-concentrated relative to the image rows. Neither a
+velocity change, a 40-step trajectory improvement, a decoded-image gain,
+nor an eye-specific mechanism is established. The next causal split is
+within the pre-MLP prefix, with no-op guards at a boundary between the
+attention output/first residual and norm-2/modulation.
+
+As a secondary same-artifact check, root independently widened the saved
+official MPS BF16 gate and up preactivations and compared them with the native
+Q8 F32 `[gate | up]` tap. With the donor MLP input, squared gate/up error
+versus MPS dropped by 69.684881%/75.925718% on image rows and
+65.554271%/72.537825% in the face-20 rows relative to the native-input
+baseline. These composed comparisons include both input drift and Q8-versus-
+MPS weight/arithmetic differences; they do not measure the intrinsic Q8
+error or add to the block-output improvement.
+
+The guarded replay status was `complete` on source commit `aff2a86c` with
+all 32 runtime projection sets confirmed Q8_0. The scratch replay report is
+`/private/tmp/qwen21-dit-operator-cause-20260928/mlp_input_splice_20260928/operator_splice/splice_report.json`
+(SHA-256 `1eaa54c8ace6f08fd1c84c059e6702bd746e2d32d2c66197fd74768a4b13ddfd`);
+runner SHA-256 is
+`104474ac9ee0ee456952a1f42bd9c3c8c58c96fbbeceb8d4bf0fb5ddd8da343c`;
+scratch-instrumented Metal-dispatch source SHA-256 is
+`5082fe024e2f61768dfde5eb9e98d719ece33af24a4c574e8abc213fe724b90f`.
+No production source was modified. Scratch can expire. Refresh this result
+after model/weight, official framework/MPS, native source/kernel, fixture,
+or tap/splice-boundary changes.
 
 ## Not admitted by this slice
 

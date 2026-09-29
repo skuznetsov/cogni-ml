@@ -29547,12 +29547,33 @@ Refresh after source/toolchain/device/model/workload changes.
   and 0.826535%. Root and a separate CPU comparator checked raw face values.
   Thus a discrepancy exists before gate/up and survives the boundary BF16
   cast. The operator within that prefix and its causal share of final
-  block/velocity/image error are not established. A no-op-guarded official
-  MLP-input splice into the native block suffix is the next causal cut;
-  the existing gate/up-only splice cannot perform it. No-hook/passive report
+  block/velocity/image error are not established. The no-op-guarded official
+  MLP-input splice into the native block suffix is reported below; the
+  existing gate/up-only splice could not perform it. No-hook/passive report
   SHA-256: `d4c7384b40f9e5aa0385e64205758feda03ed1c99833cccea07cc05570073212`/
   `8187b131543bd80d111153d92e9774e3609e2d6c825e4370e904145db0414ce1`.
   The original no-hook runner hash is recorded but its exact source version
   was not retained after adding passive mode; raw output parity remains
   checkable. Scratch may expire; pinning, tap hashes, and refresh triggers
   are in `docs/qwen-image21-gguf-frontier.md`.
+- A scratch-only, no-op-guarded native Metal block-29 splice installed the
+  official BF16-widened modulated MLP input after the native prefix and before
+  Q8 gate/up on the same exact official call-10 block input. It preserved
+  native `state_buf` and `gate2_buf`. Baseline and native no-op outputs were
+  byte-identical to the prior pinned replay (SHA-256
+  `82ff90f724520104cde4c970c1abbd97421f6399042643557679b4dc768bd6cf`).
+  Root independently recomputed from raw F32 outputs that the official-input
+  arm removed 5.039407% of squared full-joint block-output error versus
+  official MPS, 11.613085% image-wide, and 11.089104% in the predeclared
+  face-20 rows. A native-input BF16-rounding control slightly worsened all
+  three errors. This is a causal effect at the block-29 hidden-state output,
+  not an intrinsic attribution of the whole upstream prefix, a final
+  velocity/trajectory/image benefit, or an eye-specific result. The prior
+  gate/up-weight result may overlap and must not be added to these fractions.
+  Report SHA-256:
+  `1eaa54c8ace6f08fd1c84c059e6702bd746e2d32d2c66197fd74768a4b13ddfd`;
+  runner SHA-256:
+  `104474ac9ee0ee456952a1f42bd9c3c8c58c96fbbeceb8d4bf0fb5ddd8da343c`.
+  Next: split the attention/first-residual prefix from norm-2/modulation with
+  another no-op-guarded same-input probe. Scratch and refresh conditions are
+  in `docs/qwen-image21-gguf-frontier.md`.
