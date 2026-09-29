@@ -2006,6 +2006,54 @@ HEAD `4af5669bc72b5f7d02539bf803b344c15b1775a2`; refresh after
 checkpoint, trace, source/backend, BF16, fixture, or row-selection changes.
 Scratch files may expire.
 
+### Russian layer-0 attention output-projection crossover (2026-09-29)
+
+A CPU-only, hash-gated 2×2 cut replayed the pinned Russian layer-0
+`self_attn.o_proj` with both saved BF16 `attended` inputs and both
+source-matched operator routes: PyTorch BF16 `F.linear` and Accelerate CBLAS
+F32-to-BF16. Each route reproduced its own captured `o_proj` output
+byte-for-byte (0/999,424 BF16 mismatches). The checkpoint BF16
+`o_proj.weight`, common model/payload, both manifests and input/output
+sidecars, and production-source hashes passed their gates. Zero/no-bias,
+repeat, and reversed-channel negative controls passed. Root independently
+reran the final runner to an identical report SHA-256.
+
+| Layer-0 comparison, all 244 rows | BF16 mismatches / 999,424 | Squared error | Relative RMS |
+| --- | ---: | ---: | ---: |
+| Native versus official saved `attended` input | 57,848 | 0.000125138 | 0.061796% |
+| Captured native versus official `o_proj` output | 161,871 | 0.002361587 | 0.082659% |
+| Native projection route on **official** `attended` versus official capture | 480 | 0.000021552 | 0.007896% |
+| Official projection route on **native** `attended` versus official capture | 161,871 | 0.002220906 | 0.080160% |
+
+On retained rows 14–243, the observed `o_proj` output difference is 160,470
+mismatches with squared error 0.002356449; native projection on the official
+input leaves only 443 mismatches and squared error 0.000021447. Thus
+substituting the official context into the unchanged native projection
+removes 99.087413% of the *operator-output squared error* on this fixture.
+The same-input backend gap is not zero (435 mismatches on native input,
+480 on official input), but the dominant observed output difference is
+inherited from the attention-context input. Both vector decompositions
+close exactly and have negative cross-terms, so the component squared norms
+are not additive causal shares. The saved traces do not independently log
+the active runtime kernel identity; byte-exact route replay qualifies this
+captured fixture only. The earlier saved-Q/K/V attention replay also found
+the native attention-operator gap small relative to its input drift, but
+Q/K/V projection, normalization, and RoPE contributions are not resolved
+by this cut. Nothing here establishes full 36-layer conditioning parity,
+DiT trajectory, decoded-image, eyes, or VAE benefit. The next text cut
+should isolate Q/K/V normalization and RoPE under fixed inputs, then test
+full-encoder and same-seed images before a production correction.
+
+The scratch runner is
+`/private/tmp/qwen21-qwen3vl-oproj-cut-20260928/oproj_cut.py`
+(SHA-256 `5f03c3e9b3e8011122ff07e0c0c99a416ae8c51f52801bb732267fffef41ef33`);
+its report is `/private/tmp/qwen21-qwen3vl-oproj-cut-20260928/report.json`
+(SHA-256 `4d75f4634b99b40418086f4f3367b21701cfa54a000f759ea5b897524693b74d`).
+The replay ran at docs-only HEAD `90051a795fca967632ee305bdc5d5b53dfe531ed`;
+production-source hashes were unchanged. Refresh after checkpoint/model,
+text trace/fixture, PyTorch/Accelerate/CBLAS backend, BF16 staging, or
+operator-boundary changes. Scratch may expire.
+
 ### Russian layer-0 attention replay on saved inputs (2026-09-28)
 
 A CPU-only, SHA-gated PyTorch 2.6.0 SDPA MATH replay separated the native

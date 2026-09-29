@@ -29494,6 +29494,27 @@ Refresh after source/toolchain/device/model/workload changes.
   `c1b1dbea798d15df9f1f096f2c00b3797998b12b73814600e28649eeb0a622a8`.
   Scratch may expire; pins, controls, and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A CPU-only, hash-gated 2x2 Qwen3-VL Russian layer-0 `o_proj` cut replayed
+  official PyTorch BF16 and native Accelerate CBLAS F32-to-BF16 routes on
+  both captured `attended` inputs. Both own-route outputs were bit-exact
+  (0/999,424 mismatches); root reran the final runner to the same report
+  SHA. The observed outputs differ at 161,871 values (squared error
+  0.002361587), while native projection on the official `attended` input
+  leaves only 480 mismatches (squared error 0.000021552), removing
+  99.087413% of this *operator-output squared error*. The official
+  projection on native context leaves squared error 0.002220906. The
+  context inputs differ at 57,848 values. Negative, zero/no-bias, and
+  repeat controls pass; the exact vector decompositions have negative
+  cross-terms, so no additive causal shares follow. The dominant local
+  output gap is inherited from attention context, not `o_proj` arithmetic;
+  Q/K/V, norm, and RoPE origin, full encoder, image, eyes, and VAE effects
+  remain open. Next: fixed-input Q/K/V normalization/RoPE cut, then full
+  encoder and same-seed image A/B before production changes. Report SHA-256:
+  `4d75f4634b99b40418086f4f3367b21701cfa54a000f759ea5b897524693b74d`;
+  runner SHA-256:
+  `5f03c3e9b3e8011122ff07e0c0c99a416ae8c51f52801bb732267fffef41ef33`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
 - A full-matrix, CPU-only Qwen3-VL layer-0 Q/K/V projection replay separated
   same-BF16-input projection arithmetic from norm, checkpoint-weight, and
   channel-layout confounders. PyTorch `F.linear` reproduced all three
