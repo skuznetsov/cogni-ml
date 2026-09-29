@@ -30041,3 +30041,12 @@ Refresh after source/toolchain/device/model/workload changes.
   interrupted scratch run had no final report; the clean report, pins,
   assumptions, and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A guarded, twice-repeated 244-token Qwen3-VL block-0 donor crossover held
+  official BF16 Q/K/V projection inputs and all native downstream operators
+  fixed, substituting only the official `attended` tensor for production
+  attention output. The intervention reduced block-output mismatches from
+  117,358 to 32,960/999,424 and relative RMS from 0.108526% to 0.053889%;
+  32,960 residual mismatches refute attention-only full-block parity. This is
+  a fixed-input intervention, not native-QKV, 36-layer, image, face, or VAE
+  parity. No production attention route changed. Runner hashes, guards, and
+  refresh triggers are in `docs/qwen-image21-gguf-frontier.md`.

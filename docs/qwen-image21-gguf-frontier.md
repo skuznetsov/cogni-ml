@@ -2676,6 +2676,51 @@ and `c197a62beb21ef4ce6778159ddfbea6a490deec1859c138227ef27c14d6e9334`.
 Refresh after the official trace, operands, attention source, Torch backend,
 compiler, or scratch artifacts change.
 
+### Qwen3-VL block-0 official-attended donor crossover (2026-09-29)
+
+To test whether fixing the 741 attention-output mismatches would matter after
+the attention boundary, a scratch-only replay started from the same pinned
+official BF16 Q/K/V projection donors as the composed Q/K-norm replay above.
+It used production Q/K normalization, RoPE, and the unchanged native
+Accelerate O projection, post-attention norm, and MLP. The intervention
+replaced only `attended` with the hash-checked official BF16 sidecar; the
+control computed `attended` through the production attention route. The
+official trace, model/weight, fixture, source, and donor gates passed at HEAD
+`506bc5cbac8107115e49fc7a62d09733aab43fdb`. The control reproduced
+the earlier 741 attention and 117,358 block-output mismatches. Two guarded
+CPU executions returned the same stage metrics; peak sampled RSS was 2,088
+and 1,842 MiB, and minimum system-free memory was 71% and 74%.
+
+| Stage versus official BF16 sidecar | Production-attention mismatches | Official-attended donor mismatches | Production-attention relative RMS | Official-attended donor relative RMS |
+| --- | ---: | ---: | ---: | ---: |
+| `attended` | 741 | 0 | 0.004256% | 0 |
+| O projection | 13,159 | 480 | 0.017598% | 0.007896% |
+| Post-attention norm | 4,353 | 262 | 0.032243% | 0.009636% |
+| MLP down projection | 172,885 | 55,993 | 0.116457% | 0.057292% |
+| Block output | 117,358 | 32,960 | 0.108526% | 0.053889% |
+
+The controlled substitution removes 84,398 block-output BF16 mismatches
+(71.915%) and 75.343% of squared block-output error on this fixture. These
+are *intervention effects*, not additive causal shares: the downstream
+nonlinearities and BF16 rounding change the propagation. The remaining 32,960
+mismatches also refute attention-only full-block parity. Because the run
+begins after the Q/K/V projection boundary, it says nothing about native
+Q/K/V projection accuracy, full 36-layer conditioning, DiT trajectory,
+decoded text/face quality, or the VAE. The next production-oriented cut is
+an exact Torch-2.6-MATH-compatible attention route, followed by this same
+composed-block gate and then full-encoder/image A/B.
+
+The bounded runner is
+`/private/tmp/qwen21-block0-attended-donor-20260929/qwen21_block0_attended_donor_replay.cr`
+(SHA-256 `c76fe569c5fe52c8a591285eac312a68ac24c4d430b8eeca5e45a0a5086da782`);
+the compiled binary SHA-256 is
+`20e2994b4b487811a1bf941c8ab5f2d8ea1f40ec82e87438d1ec7025943a846a`.
+Run `python3 /private/tmp/qwen21-block0-attended-donor-20260929/guard_replay.py`
+from the worktree; the guard script SHA-256 is
+`7fcc3d7d2288aadc2bb3c172af967e05f74186ad4f018cf3ddda9a946de1d11a`.
+Refresh after any official sidecar, fixture, weight, attention/downstream
+source, compiler, or scratch-artifact change.
+
 ### Qwen3-VL QKV-selector same-seed image preview (2026-09-29)
 
 The pre-RoPE-correction full-encoder default and exact-QKV-selector BF16
