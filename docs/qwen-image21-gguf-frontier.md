@@ -7117,6 +7117,44 @@ face, or repeatable speedup was measured. Refresh after source/kernel,
 official captures, modulation, GGUF/weights, layout, device, compiler, or
 scratch artifacts change.
 
+### Isolated norm1 arithmetic and BF16 staging at DiT call 10/block 29 (2026-09-29)
+
+On the same hash-pinned `1254x4096` official BF16 block input, an isolated
+Torch 2.6 MPS `layer_norm(eps=1e-6)` reproduced all 5,136,384 official
+pre-modulation `norm1` BF16 words exactly, twice. Changing only `eps` to
+`1e-2` changed 164,399 words. Thus the saved official norm1 tap has an
+independently repeatable operation-level oracle; this does not reproduce the
+whole block. The MPS script is
+`/private/tmp/qwen21-mps-norm1-replay-LxXYE6/replay.py` (SHA-256
+`58dafb9b30d842f55975f4c1f955a59e3296fab855ff037dbbc3df31275b443a`).
+It exited zero under `run_safe.sh` with a 120-second/2-GiB RSS/50%-free
+guard; preflight observed 75% free memory.
+
+A separate hash-gated CPU-only factorial on the same exact input used the
+captured BF16 modulation rows and reproduced the official modulated QKV
+input at **zero** BF16 mismatches when it combined official MPS norm1 with
+Torch BF16-staged modulation. Swapping the text/image modulation rows gave
+920,184 and 4,096,918 mismatches respectively. The native Metal fused F32
+norm/modulation output almost equals the Torch CPU F32-fused formula
+(`6.67e-8` relative L2; 77 BF16-rounded mismatches), making a gross
+formula/layout error unlikely on this fixture. Relative L2 to the official
+modulated QKV input was `0.307254%` for native F32 fusion, `0.247943%`
+for official MPS norm1 followed by F32-fused modulation, and `0.198771%`
+for CPU BF16 norm1 followed by BF16-staged modulation. CPU BF16 norm1 alone
+still differs from official MPS norm1 in 671,987 BF16 words. These are
+interacting counterfactuals, not additive error shares; the lower input
+error is **not** a demonstrated block, trajectory, image, or speed gain.
+
+The read-only CPU script is
+`/private/tmp/qwen21-norm-stage-root-ckqVw2/audit_norm_stage.py` (SHA-256
+`eb8384ec39669aa069ef20de7953049e1e50c67b21d5d79292af7cf886f9237d`),
+run with `/opt/homebrew/Caskroom/miniconda/base/bin/python3` (Torch 2.6.0).
+Both scripts hash-check the captured operands; refresh after official taps,
+native norm output, source/kernel, modulation semantics, Torch/MPS backend,
+or device changes. The next discriminator remains the matched block-29
+norm1-input-by-QKV-route crossover, followed by full-trajectory decoded-image
+A/B before promotion.
+
 ### Same-latent CPU/F32 VAE path and residual-direction control (2026-09-29)
 
 Status: **endpoint-gated diagnostic complete; VAE off-manifold claim not

@@ -30082,3 +30082,15 @@ Refresh after source/toolchain/device/model/workload changes.
   quality nor speed improved by this one-block evidence. Next cross official
   norm1 input with both QKV routes; report, pins, and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- The captured DiT call-10/block-29 BF16 `norm1` is exactly reproducible by
+  isolated Torch 2.6 MPS LayerNorm on its hash-pinned input (0/5,136,384
+  mismatches, repeated); a wrong-epsilon control changed 164,399 words.
+  Official MPS norm1 plus BF16-staged modulation also reproduced the saved
+  QKV input exactly. Native Metal F32-fused norm/modulation nearly equals the
+  Torch CPU F32 formula (`6.67e-8` relative L2), while CPU BF16-staged
+  norm/modulation reduced input-level relative L2 to official from 0.307254%
+  to 0.198771%. The MPS-versus-CPU norm arithmetic still differs, so this
+  does not identify a single standalone fix or prove block/image improvement.
+  Keep the norm1-input-by-QKV block crossover as the next quality discriminator;
+  scripts, pins, guards, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
