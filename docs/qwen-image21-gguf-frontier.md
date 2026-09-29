@@ -2216,6 +2216,49 @@ input, gamma, epsilon, output, controls, and production source digest.
 Refresh after source, checkpoint/config, BF16 staging, trace provenance, or
 fixture changes; scratch evidence may expire.
 
+### Current-source Russian layer-0 Q/K/V projection replay (2026-09-29)
+
+The next CPU-only, clean-state direct-production replay fed the exact
+official `input_layernorm` BF16 output above into current
+`Qwen3VLTextBlock.linear` with `ProjectionBackend::Accelerate` and the
+selected local BF16 layer-0 Q/K/V weights. The loaded weights, re-encoded
+to BF16, matched their pinned tensor hashes. No full block, model inference,
+GPU, or Torch was used in this native replay. Unlike the historical trace,
+this comparison has **no norm-input difference** at the projection entry.
+
+| All 244 rows versus saved official BF16 projection | Q / 999,424 | K / 249,856 | V / 249,856 |
+| --- | ---: | ---: | ---: |
+| Current-source output mismatches | 301 | 87 | 76 |
+| Rows with a mismatch | 177 | 69 | 65 |
+| Maximum absolute difference | 0.001953125 | 0.00048828125 | 0.00048828125 |
+| Distinct no-op clone mismatches | 0 | 0 | 0 |
+| One-row input-roll negative-control mismatches | 997,688 | 249,440 | 249,655 |
+
+Root independently recomputed BF16 mismatches, changed rows, maximum
+absolute differences, and no-op equality from the raw sidecars. Among the
+230 rows retained for image conditioning, mismatches were 278 Q, 85 K, and
+73 V. These small same-input projection differences survive with the
+current exact norm output, but the replay does not identify their precise
+arithmetic cause, establish full-block/encoder parity, or measure a final
+image effect. The selected local safetensor bytes are hash-gated against
+the prior projection replay; their upstream Hub provenance is not
+independently attested in this scratch run. Next capture a fresh current
+block-0 per-operation trace and compare it with the pinned official
+`hidden_state_001`, then run full-encoder and same-seed decoded-image A/B
+for any candidate correction.
+
+The clean-state manifest is
+`/private/tmp/qwen21-l0norm-falsifier-20260929.OCETdN/current_qkv_projection/manifest.json`
+(SHA-256 `0d683449ae1e2493d1c5b9930072c6a430a6e5d5c6d2ccab3f94d86d7dc44dbf`);
+the binary SHA-256 is
+`b21620ff1b833a52e5c874f70b484839985c81f305e65865ec8271e9af4e9dbf`.
+The replay exited zero at clean docs-only HEAD
+`a7dfe8449979f3eb76900fa01a8208038d6fb856`; source, input, weights,
+official sidecars, controls, and output digests are pinned in the manifest.
+The prior staged-doc run was rejected by its clean-state guard and is not
+used for this claim. Refresh after source/backend, checkpoint, prompt or
+trace sidecars, or BF16 staging changes; scratch evidence may expire.
+
 ### Russian layer-0 attention replay on saved inputs (2026-09-28)
 
 A CPU-only, SHA-gated PyTorch 2.6.0 SDPA MATH replay separated the native

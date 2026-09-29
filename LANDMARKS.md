@@ -29831,3 +29831,18 @@ Refresh after source/toolchain/device/model/workload changes.
   `6040a54ecd666c4f4827044522ff82d8d0354130d368203b5a7cee2b518132ef`.
   Scratch may expire; pins and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A clean-state CPU-only direct call to current Qwen3-VL layer-0
+  `Qwen3VLTextBlock.linear` (Accelerate) used the exact saved official
+  `input_layernorm` BF16 output and selected hash-matched local Q/K/V
+  weights. Compared with the saved official projections, Q/K/V differed in
+  301/87/76 of 999,424/249,856/249,856 BF16 values, with 278/85/73
+  mismatches on the 230 retained image-conditioning rows. No-op output
+  clones matched exactly, while row-roll negatives discriminated. Root
+  recomputed counts from raw sidecars. Thus a small current same-input
+  projection residual remains; its exact arithmetic cause, fresh full-block
+  effect, and final-image impact are not established. Next: fresh current
+  block-0 per-operation trace, then full encoder and same-seed image A/B.
+  Manifest SHA-256:
+  `0d683449ae1e2493d1c5b9930072c6a430a6e5d5c6d2ccab3f94d86d7dc44dbf`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
