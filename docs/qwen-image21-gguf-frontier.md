@@ -2081,13 +2081,12 @@ The same pattern holds on retained rows 14–243. On this fixed fixture,
 the Q/K norm-output drift is predominantly inherited from different
 projection inputs; intrinsic norm arithmetic leaves a small but nonzero
 same-input BF16 remainder. These squared errors are comparisons to one
-official endpoint, **not additive causal shares**. The saved post-RoPE
-Q/K outputs cannot separate RoPE arithmetic from its already-different
-inputs: neither trace persisted the actual position IDs and consumed
-cos/sin tensors. The next text discriminator is a route-exact RoPE replay
-after capturing those runtime inputs, followed by a full-encoder and
-same-seed image A/B before any production correction. This cut alone says
-nothing about other layers, conditioning quality, DiT, eyes, or VAE.
+official endpoint, **not additive causal shares**. At the time of this cut,
+the saved post-RoPE Q/K outputs could not separate RoPE arithmetic from its
+already-different inputs: neither trace persisted the actual position IDs
+and consumed cos/sin tensors. The reconstructed fixture replay below narrows
+this gap without claiming runtime-input capture. This cut alone says nothing
+about other layers, conditioning quality, DiT, eyes, or VAE.
 
 The frozen scratch runner is
 `/private/tmp/qwen21-qwen3vl-qknorm-cut-20260928/qknorm_cut.py`
@@ -2098,6 +2097,47 @@ The replay ran at docs-only HEAD `bbbe68952f529c40ab91a21be23a5f344b745146`;
 scratch may expire. Refresh after model/checkpoint or payload, trace
 sidecars, Q/K norm source, PyTorch/NumPy/BF16 behavior, head layout, or
 the missing RoPE-input capture changes.
+
+### Russian layer-0 reconstructed RoPE input/formula cut (2026-09-29)
+
+A CPU-only, hash-gated replay reconstructed the effective text-only position
+sequence `0..243`, theta `5,000,000`, and split-half RoPE from the saved
+244-row Qwen3-VL Q/K norm and post-RoPE BF16 sidecars. It ran no model or GPU.
+All four own-route replays (official/native Q and K) reproduced the captured
+post-RoPE bytes exactly, both on all 244 rows and retained rows 14–243.
+Changing every position by `+1` or using adjacent-pair rotation broke each
+own-route match. The official `[3,1,244]` and native `[244]` position shapes
+and cos/sin tables are **reconstructed**; the Qwen mRoPE sections are
+`[24,20,20]`. The runtime-consumed position IDs and cos/sin tensors were
+not captured.
+Equal text-only position axes also cannot distinguish the three mRoPE
+sections. Exact reproduction therefore anchors the effective transform on
+these fixture inputs, not unique runtime provenance or all-input parity.
+
+| Retained rows 14–243, versus official post-RoPE capture | Q BF16 mismatches / 942,080 | Q RMSE | K BF16 mismatches / 235,520 | K RMSE |
+| --- | ---: | ---: | ---: | ---: |
+| Native formula on the **same official** Q/K norm inputs | 85 | 0.000114593 | 20 | 0.000112265 |
+| Official formula on the **native** Q/K norm inputs | 6,693 | 0.000566108 | 1,619 | 0.003615607 |
+| Captured native post-RoPE output | 6,778 | 0.000577590 | 1,639 | 0.003617349 |
+
+On this fixture, the larger observed post-RoPE gap follows the already
+different norm inputs; intrinsic formula/rounding differences on matched
+inputs are nonzero but much smaller. These are endpoint comparisons, not
+additive causal shares. The next discriminating text experiment is a
+Q/K/V or projection-input donor crossover, then full-encoder conditioning
+and same-seed image A/B before any production correction. Nothing here
+establishes DiT trajectory, decoded-face quality, or VAE behavior.
+
+The scratch replay is
+`/private/tmp/qwen21-qwen3vl-rope-20260928.6IjXx1/rope_replay.py`
+(SHA-256 `908d15e44a4100ec1b9e9d72584614a712b41f3e1a2e50830cc8b3b45d7ca6a0`);
+its report is
+`/private/tmp/qwen21-qwen3vl-rope-20260928.6IjXx1/report_v2.json`
+(SHA-256 `04e6cd5cf3225516d4481946c6c1552e9e433dd9611911ecffae751110683a5c`).
+Root independently replayed it to an identical report; source HEAD was
+`531e1feaffe12ce9d728e0173b7a1d68b2d8a023`. Refresh after model,
+prompt/trace sidecars, RoPE or Q/K norm source, BF16 math, or runtime
+position handling changes. Scratch evidence may expire.
 
 ### Russian layer-0 attention replay on saved inputs (2026-09-28)
 
