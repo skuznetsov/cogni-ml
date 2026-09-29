@@ -2139,6 +2139,46 @@ Root independently replayed it to an identical report; source HEAD was
 prompt/trace sidecars, RoPE or Q/K norm source, BF16 math, or runtime
 position handling changes. Scratch evidence may expire.
 
+### Russian layer-0 Q/K/V projection-input donor cut (2026-09-29)
+
+A CPU-only, hash-gated 2x2 crossover used the saved official/native BF16
+`input_layernorm` outputs and the selected official BF16 layer-0 Q/K/V weights
+on the same 244-row fixture. Official PyTorch `F.linear` and source-matched
+native Accelerate SGEMM each reproduced its own captured Q, K, and V outputs
+byte-for-byte before donor comparisons. The saved layer-0 inputs were
+byte-identical, but the operands *after* `input_layernorm` differed in 321
+BF16 values across 12 of 244 rows; all 12 are in retained rows 14–243.
+Root independently reran the frozen runner and recomputed these counts and
+the observed projection-output mismatches from raw BF16 sidecars.
+
+| Retained rows 14–243 | Q / 942,080 values | K / 235,520 values | V / 235,520 values |
+| --- | ---: | ---: | ---: |
+| Captured native versus official projection output mismatches | 7,563 | 1,838 | 2,278 |
+| Same-input formula mismatches on 218 exactly equal operand rows | 261 | 83 | 70 |
+| Official formula, native versus official operand on 12 changed rows | 7,303 | 1,754 | 2,207 |
+
+Thus the first measured difference at this layer is the `input_layernorm`
+output, before Q/K/V projection. The small same-operand projection remainder
+is real, while the changed operand rows explain a much larger comparison on
+this fixed fixture. Counts in the table are **not additive causal shares**:
+BF16 rounding and crossed formulas interact. Row-shifted and raw-block-input
+negative controls failed to reproduce the captures; a malformed width was
+rejected. The next falsifier must pin native and official
+`input_layernorm.weight`, epsilon, and accumulation/rounding behavior, then
+replay both norms from the shared, byte-identical layer-0 input. This cut
+does not establish a full-encoder conditioning or decoded-image improvement.
+
+The scratch runner is
+`/private/tmp/qwen21-qwen3vl-projcut-20260929.WGMGgt/projection_donor_crossover.py`
+(SHA-256 `f55aa34c02614f24de691d3cac1e82a046b1e8112531d529b415ea7d83d02350`);
+its report is
+`/private/tmp/qwen21-qwen3vl-projcut-20260929.WGMGgt/report.json`
+(SHA-256 `fd5b39a9349ab3a4d56178785c35bc3ef8dc29c7ffc4b659f6f0946c77d88249`).
+The replay used clean docs-only HEAD `a086663f14b329c3991944de4c01a26500ffa56b`;
+refresh after model/weight provenance, prompt or trace sidecars,
+`input_layernorm` or projection source, PyTorch/Accelerate behavior, or BF16
+staging changes. Scratch evidence may expire.
+
 ### Russian layer-0 attention replay on saved inputs (2026-09-28)
 
 A CPU-only, SHA-gated PyTorch 2.6.0 SDPA MATH replay separated the native
