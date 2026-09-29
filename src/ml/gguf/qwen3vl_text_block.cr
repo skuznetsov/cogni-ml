@@ -309,13 +309,16 @@ module ML::GGUF
       output = Array(Float32).new(input.size, 0.0_f32)
       rows.times do |row|
         offset = row * dim
-        mean_square = 0.0_f32
+        # Accumulate BF16-decoded inputs in F64 before returning the mean to
+        # F32. Sequential F32 accumulation drifts enough to cross BF16 output
+        # rounding boundaries on the Qwen3-VL hidden width.
+        mean_square = 0.0_f64
         dim.times do |column|
-          value = input[offset + column]
+          value = input[offset + column].to_f64
           mean_square += value * value
         end
-        variance = mean_square / dim.to_f32
-        inverse_rms = (1.0_f32 / Math.sqrt((variance + eps).to_f64)).to_f32
+        variance = (mean_square / dim.to_f64).to_f32
+        inverse_rms = (1.0_f32 / Math.sqrt(variance + eps)).to_f32
         dim.times do |column|
           normalized = bf16(input[offset + column] * inverse_rms)
           output[offset + column] = bf16(normalized * bf16(weight[column]))

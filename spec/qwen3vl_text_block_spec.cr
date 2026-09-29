@@ -64,7 +64,77 @@ private def qwen3vl_text_block_spec_wide_hidden : Array(Float32)
   ]
 end
 
+private def qwen3vl_text_block_spec_reduction_input : Array(Float32)
+  # Compact BF16 discriminator first captured from local PyTorch 2.5.1 CPU and
+  # independently reproduced with pinned local PyTorch 2.6.0 CPU. Values are
+  # raw BF16 bits decoded as the production text-block entry point expects.
+  bits = [
+    0x3ffa_u16, 0xbf2b_u16, 0x3f37_u16, 0xbf45_u16, 0xbfc9_u16, 0xbfd0_u16, 0xbe7f_u16, 0x401c_u16,
+    0xbf31_u16, 0x3d65_u16, 0x3f26_u16, 0xbf6d_u16, 0x3f9e_u16, 0xbf39_u16, 0x3f36_u16, 0xbe96_u16,
+    0xbf87_u16, 0xbd90_u16, 0x3fa4_u16, 0x4002_u16, 0xbfae_u16, 0x3f32_u16, 0x3def_u16, 0xbf05_u16,
+    0xbfe9_u16, 0x3f34_u16, 0x3f75_u16, 0x3ef5_u16, 0xbe0b_u16, 0xbe97_u16, 0xbf12_u16, 0xbf83_u16,
+    0x4001_u16, 0xbf14_u16, 0x3eb5_u16, 0xbecb_u16, 0x3f56_u16, 0xc01e_u16, 0x4027_u16, 0x3f0b_u16,
+    0xbcfc_u16, 0xbf99_u16, 0xbebd_u16, 0x3f52_u16, 0xbff6_u16, 0xbf8a_u16, 0xbf6d_u16, 0x3f57_u16,
+    0x3ed0_u16, 0xbf93_u16, 0x3ff9_u16, 0xbfc2_u16, 0x3f57_u16, 0xbf9b_u16, 0x3ee7_u16, 0x3f08_u16,
+    0x3e32_u16, 0x4034_u16, 0x3fec_u16, 0xbedd_u16, 0xbf8f_u16, 0xbfe2_u16, 0xbff3_u16, 0x3e80_u16,
+  ]
+  bits.map { |value| (value.to_u32 << 16).unsafe_as(Float32) }
+end
+
+private def qwen3vl_text_block_spec_reduction_weights : ML::GGUF::Qwen3VLTextBlockWeights
+  width = 64
+  norm = Array(Float32).new(width, 0.0_f32)
+  [12, 13, 37].each { |index| norm[index] = 1.0_f32 }
+  square = Array(Float32).new(width * width, 0.0_f32)
+  vector = Array(Float32).new(width, 0.0_f32)
+  ML::GGUF::Qwen3VLTextBlockWeights.new(
+    input_layernorm: norm,
+    q_proj: square.dup,
+    k_proj: square.dup,
+    v_proj: square.dup,
+    q_norm: vector.dup,
+    k_norm: vector.dup,
+    o_proj: square.dup,
+    post_attention_layernorm: vector.dup,
+    gate_proj: vector.dup,
+    up_proj: vector.dup,
+    down_proj: vector.dup,
+  )
+end
+
 describe ML::GGUF::Qwen3VLTextBlock do
+  it "matches the PyTorch CPU BF16 RMSNorm reduction discriminator through forward" do
+    # The selected oracle outputs were checked with both local PyTorch 2.5.1
+    # and pinned PyTorch 2.6.0 CPU BF16 using the Qwen RMSNorm stages:
+    # `xf=x.float(); (xf * rsqrt((xf*xf).mean(-1) + eps)).to(bf16) * weight`.
+    # This is a compact formula fixture, not a full Qwen checkpoint trace.
+    config = ML::GGUF::Qwen3VLTextBlockConfig.new(
+      hidden_dim: 64,
+      heads: 1,
+      kv_heads: 1,
+      head_dim: 64,
+      intermediate_dim: 1,
+      eps: 1e-6_f32,
+    )
+    trace = Hash(String, Array(Float32)).new
+    ML::GGUF::Qwen3VLTextBlock.forward(
+      qwen3vl_text_block_spec_reduction_input,
+      [true],
+      qwen3vl_text_block_spec_reduction_weights,
+      config,
+      trace: trace,
+    )
+    normalized = trace["layers.0.input_layernorm"]
+    bf16_bits = [12, 13, 37].map do |index|
+      (normalized[index].unsafe_as(UInt32) >> 16).to_u16
+    end
+
+    # Channel 13 is a neighboring control that already agrees on the current
+    # implementation; channels 12 and 37 discriminate the reduction result.
+    bf16_bits[1].should eq(0xbf19_u16)
+    bf16_bits.should eq([0x3f82_u16, 0xbf19_u16, 0xc002_u16])
+  end
+
   config = ML::GGUF::Qwen3VLTextBlockConfig.new(
     hidden_dim: 4,
     heads: 2,
