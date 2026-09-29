@@ -29961,17 +29961,24 @@ Refresh after source/toolchain/device/model/workload changes.
   detail is in `docs/qwen-image21-gguf-frontier.md`.
 - Post-RoPE-fix Qwen3-VL parity remains a scoped diagnostic, not a native
   conditioning or image-quality promotion. A pinned Torch 2.6 CPU replay
-  reproduced official block-0 Q/K norm sidecars exactly; all five remaining
-  native Q-norm mismatches share a one-ULP FP32 variance change at a BF16
-  midpoint. No production norm fix was made. Two guarded 36-layer sweeps and
+  reproduced official block-0 Q/K norm sidecars exactly; all five saved
+  pre-fix native Q-norm mismatches share a one-ULP FP32 variance change at a
+  BF16 midpoint. The opt-in `Torch26Arm64Bf16` production Q/K norm now uses
+  the pinned 128-wide ARM64 reduction; a hash-gated direct operation test
+  matched the full official Q/K norm sidecars at 0/999,424 and 0/249,856
+  BF16 mismatches in both ordinary and release builds. The generic profile
+  retained exactly five Q mismatches and no K mismatch; 35 relevant specs
+  passed. This does not establish composed encoder or image parity. Two
+  guarded 36-layer sweeps and
   six fixed-input L34 crossover arms showed the selector's retained relative
   RMS is lower at `h034` (0.009004 versus 0.011929) but higher at `h035`
   (0.017800 versus 0.013000). Changing L34 QKV backend on a fixed native
   input changed the output error only around 0.000001-0.000003; incoming
   residual direction is the stronger discriminator. This does not assign a
   specific L34 operator or prove decoded-image quality. The next cut is a
-  red exact-variance norm test and an L34 matched-input sensitivity probe,
-  then same-seed image A/B. Hashes, controls, and refresh triggers are in
+  bounded composed-layer norm/hidden-state probe and an L34 matched-input
+  sensitivity probe, then same-seed image A/B. Hashes, controls, and refresh
+  triggers are in
   `docs/qwen-image21-gguf-frontier.md`; scratch may expire.
 - On exact official Q/K/V at DiT call 10/block 29, scratch BF16 stage rounding
   reduced attention-context relative L2 to the saved official MPS output from

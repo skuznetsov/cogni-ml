@@ -2551,8 +2551,8 @@ inverse-frequency expression without enabling native conditioning.
 
 A scratch-only replay of the saved block-0 Q/K projection donors with the
 pinned PyTorch 2.6.0 CPU primitives reproduced the official Q-norm and K-norm
-sidecars exactly (0/999,424 and 0/249,856 BF16 mismatches). The native Q-norm
-sidecar still differs at five coordinates: tokens 2, 13, 16, 240, and 243,
+sidecars exactly (0/999,424 and 0/249,856 BF16 mismatches). The saved pre-fix
+native Q-norm sidecar differs at five coordinates: tokens 2, 13, 16, 240, and 243,
 all at head 13, feature 105; native K-norm is exact. At each coordinate,
 PyTorch's FP32 variance is `0x3b772726` versus native's `0x3b772725`.
 This one-ULP difference moves the normalized FP32 value from the exact BF16
@@ -2562,14 +2562,41 @@ weight multiply. Holding variance fixed, Torch `rsqrt` and the native inverse
 route produce the same bits at these coordinates; variance reduction is the
 discriminator, not a post-hoc output-ULP adjustment.
 
-This establishes the five-coordinate rounding mechanism, not a whole-tensor
-native arithmetic emulator: the scratch native mirror has two unrelated Q
-and two K residual mismatches. The exact PyTorch reduction topology still
-needs a red regression test before changing production code. No such fix was
-made. The hash-gated report is
+The original scratch cut established the five-coordinate rounding mechanism,
+not a whole-tensor native arithmetic emulator: its independent native mirror
+had two unrelated Q and two K residual mismatches. A red production regression
+subsequently reproduced the `0x3f84` native versus `0x3f83` official Q output
+on all five donor coordinates. The production `Torch26Arm64Bf16` profile now
+uses the pinned PyTorch 2.6 non-SVE ARM64 FP32 reduction topology for 128-wide
+Q/K norm rows; the default profile, non-128 rows, and 4096-wide input/post
+norms retain their prior reduction. `forward` and the direct diagnostic both
+call the same `normalize_qk` operation.
+
+The hash-gated direct production-operation test fed all 244 official BF16
+Q/K projection rows through `normalize_qk` with only the pinned two norm-weight
+tensors loaded. In both ordinary and release Crystal builds, the profiled
+output matched the complete official Q norm sidecar at `0/999,424` BF16
+mismatches and K at `0/249,856`. The default-profile negative control retained
+exactly five Q mismatches and zero K mismatches. The five-coordinate focused
+test and a non-128 profile-isolation control passed; the broader relevant
+Qwen3-VL spec batch passed `35 examples, 0 failures`. The earlier full QKV
+sidecar attempt timed out after 180 seconds while executing a roughly
+6.14-billion-FMA scalar projection path; that projection test does not cover
+Q-norm, so the timeout is inconclusive here. This new direct test
+establishes exact output for the isolated norm operation on these saved
+projection donors, **not** native projection parity, the composed 36-layer
+encoder, DiT trajectory, eyes, glyphs, or image quality. The next falsifier is
+a bounded composed-layer check that avoids repeating the scalar projection
+cost, followed by same-seed decoded-image A/B before quality promotion.
+
+The original hash-gated scratch report is
 `/private/tmp/qwen21-qnorm-five-20260929/torch260-report.md` (SHA-256
 `02ad56d15069dec4bd064fdbb8a05271733fdf660461b694d041a9e6b4fec434`).
-Refresh after the saved donors, weights, sidecars, Torch runtime, or native
+The production sidecar test is `spec/qwen3vl_qnorm_sidecar_spec.cr`, gated by
+`QWEN3VL_QNORM_FIXTURE_DIR` and `QWEN3VL_QNORM_TEXT_ENCODER_DIR`; its saved
+trace, four sidecar hashes, and two weight hashes are checked before the
+comparison. Refresh after
+the saved donors, weights, sidecars, Torch/runtime/compiler profile, or native
 norm implementation change; scratch may expire.
 
 ### Qwen3-VL QKV-selector same-seed image preview (2026-09-29)

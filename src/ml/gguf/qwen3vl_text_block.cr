@@ -31,7 +31,9 @@ module ML::GGUF
 
     enum QKVProjectionBackend
       # Emulate the no-BFDOT PyTorch 2.6 arm64 CPU BF16 GEMM reduction using
-      # F32 fused multiply-adds and its fixed 8x4 reduction tree.
+      # F32 fused multiply-adds and its fixed 8x4 reduction tree. This also
+      # selects the captured PyTorch 2.6 arm64 FP32 mean reduction for 128-wide
+      # Q/K RMSNorm rows.
       Torch26Arm64Bf16
     end
 
@@ -145,9 +147,10 @@ module ML::GGUF
       trace_boundary(trace, "layers.0.self_attn.k_proj", k)
       v = qkv[:v]
       trace_boundary(trace, "layers.0.self_attn.v_proj", v)
-      q = rms_norm_heads(q, token_count, config.heads, config.head_dim, weights.q_norm, config.eps)
+      normalized_qk = normalize_qk(q, k, token_count, weights.q_norm, weights.k_norm, config)
+      q = normalized_qk[:q]
       trace_boundary(trace, "layers.0.self_attn.q_norm", q)
-      k = rms_norm_heads(k, token_count, config.kv_heads, config.head_dim, weights.k_norm, config.eps)
+      k = normalized_qk[:k]
       trace_boundary(trace, "layers.0.self_attn.k_norm", k)
 
       positions = text_only_position_ids(token_count)
@@ -223,6 +226,30 @@ module ML::GGUF
           v: linear(normalized, token_count, hidden_dim, kv_dim, weights.v_proj, config.projection_backend),
         }
       end
+    end
+
+    # Apply the production Q/K RMSNorm stage to already projected rows. This
+    # diagnostic surface lets fixture tests isolate norm arithmetic from the
+    # much more expensive projection GEMM; `forward` calls the same method.
+    def self.normalize_qk(q : Array(Float32), k : Array(Float32), token_count : Int32,
+                          q_norm : Array(Float32), k_norm : Array(Float32),
+                          config : Qwen3VLTextBlockConfig) : NamedTuple(q: Array(Float32), k: Array(Float32))
+      raise ArgumentError.new("token_count must be positive") unless token_count > 0
+      expected_q = token_count * config.heads * config.head_dim
+      expected_k = token_count * config.kv_heads * config.head_dim
+      raise ArgumentError.new("Q projection shape mismatch") unless q.size == expected_q
+      raise ArgumentError.new("K projection shape mismatch") unless k.size == expected_k
+      raise ArgumentError.new("Q norm weight shape mismatch") unless q_norm.size == config.head_dim
+      raise ArgumentError.new("K norm weight shape mismatch") unless k_norm.size == config.head_dim
+
+      torch26_arm64_profile = config.qkv_projection_backend ==
+                              Qwen3VLTextBlockConfig::QKVProjectionBackend::Torch26Arm64Bf16
+      {
+        q: rms_norm_heads(q, token_count, config.heads, config.head_dim, q_norm, config.eps,
+          torch26_arm64_profile),
+        k: rms_norm_heads(k, token_count, config.kv_heads, config.head_dim, k_norm, config.eps,
+          torch26_arm64_profile),
+      }
     end
 
     # Diagnostic consumers receive snapshots, never aliases to arrays used by
@@ -385,20 +412,61 @@ module ML::GGUF
       output
     end
 
+    # Matches the captured PyTorch v2.6.0 CPU `float32.pow(2).mean(-1)` path
+    # for one contiguous, 128-element row on non-SVE AArch64. SumKernel.cpp's
+    # vectorized_inner_sum uses row_sum with ILP=4; vec_base.h's 16-byte
+    # Vectorized<float> gives four lanes, and the resulting eight 16-value
+    # groups are accumulated and combined in this order. Every intermediate
+    # remains Float32. The caller additionally requires the explicit
+    # Torch26Arm64Bf16 numerical profile and head_dim=128; no other row norm
+    # opts into this backend.
+    private def self.torch260_arm64_mean_square_128(input : Array(Float32), offset : Int32) : Float32
+      partials = StaticArray(Float32, 16).new(0.0_f32)
+      8.times do |group|
+        4.times do |ilp|
+          4.times do |lane|
+            column = group * 16 + ilp * 4 + lane
+            value = input[offset + column]
+            square = (value * value).to_f32
+            partial_index = ilp * 4 + lane
+            partials[partial_index] = (partials[partial_index] + square).to_f32
+          end
+        end
+      end
+
+      vector_sum = StaticArray(Float32, 4).new(0.0_f32)
+      4.times do |lane|
+        sum = partials[lane]
+        sum = (sum + partials[4 + lane]).to_f32
+        sum = (sum + partials[8 + lane]).to_f32
+        vector_sum[lane] = (sum + partials[12 + lane]).to_f32
+      end
+
+      sum = 0.0_f32
+      4.times do |lane|
+        sum = (sum + vector_sum[lane]).to_f32
+      end
+      (sum / 128.0_f32).to_f32
+    end
+
     private def self.rms_norm_rows(input : Array(Float32), rows : Int32, dim : Int32,
-                                   weight : Array(Float32), eps : Float32) : Array(Float32)
+                                   weight : Array(Float32), eps : Float32,
+                                   torch26_arm64_head128 : Bool = false) : Array(Float32)
       output = Array(Float32).new(input.size, 0.0_f32)
       rows.times do |row|
         offset = row * dim
-        # Accumulate BF16-decoded inputs in F64 before returning the mean to
-        # F32. Sequential F32 accumulation drifts enough to cross BF16 output
-        # rounding boundaries on the Qwen3-VL hidden width.
-        mean_square = 0.0_f64
-        dim.times do |column|
-          value = input[offset + column].to_f64
-          mean_square += value * value
+        if torch26_arm64_head128 && dim == 128
+          variance = torch260_arm64_mean_square_128(input, offset)
+        else
+          # Preserve the established generic reduction for input/post norms,
+          # non-128 heads, and profiles without a pinned reduction topology.
+          mean_square = 0.0_f64
+          dim.times do |column|
+            value = input[offset + column].to_f64
+            mean_square += value * value
+          end
+          variance = (mean_square / dim.to_f64).to_f32
         end
-        variance = (mean_square / dim.to_f64).to_f32
         inverse_rms = (1.0_f32 / Math.sqrt(variance + eps)).to_f32
         dim.times do |column|
           normalized = bf16(input[offset + column] * inverse_rms)
@@ -410,9 +478,11 @@ module ML::GGUF
 
     private def self.rms_norm_heads(input : Array(Float32), tokens : Int32, heads : Int32,
                                     head_dim : Int32, weight : Array(Float32),
-                                    eps : Float32) : Array(Float32)
+                                    eps : Float32,
+                                    torch26_arm64_profile : Bool = false) : Array(Float32)
       rows = tokens * heads
-      rms_norm_rows(input, rows, head_dim, weight, eps)
+      rms_norm_rows(input, rows, head_dim, weight, eps,
+        torch26_arm64_head128: torch26_arm64_profile)
     end
 
     private def self.apply_text_rope(input : Array(Float32), tokens : Int32, heads : Int32,
