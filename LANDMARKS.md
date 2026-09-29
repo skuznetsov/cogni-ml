@@ -29515,6 +29515,27 @@ Refresh after source/toolchain/device/model/workload changes.
   `5f03c3e9b3e8011122ff07e0c0c99a416ae8c51f52801bb732267fffef41ef33`.
   Scratch may expire; pins and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A CPU-only, hash-gated Qwen3-VL Russian layer-0 Q/K RMSNorm 2x2 cut
+  replayed official and native formulas on both saved BF16 projection
+  inputs. All four own-route Q/K replays were byte-exact across 244 rows
+  and retained rows 14–243; root independently repeated the frozen runner
+  to the same report SHA and recomputed observed raw-sidecar errors. The
+  observed native-versus-official norm outputs differed at 7,324 Q and
+  1,741 K values (squared errors 0.267914916 and 3.069707751). Applying
+  native norm to the official Q/K inputs left only 16 Q and 3 K mismatches
+  (squared errors 0.000530243 and 0.000068665), while official norm on
+  native inputs retained 7,308 Q and 1,738 K mismatches. Thus most of
+  this fixed-fixture norm-output gap arrives in the projection inputs;
+  the same-input formula remainder is nonzero, and no additive error
+  share or full-encoder/image effect follows. Actual RoPE position/cos/sin
+  inputs are absent from both traces, so its arithmetic remains unresolved.
+  Next: capture those inputs and route-exactly replay RoPE before a
+  full-encoder and same-seed image A/B. Report SHA-256:
+  `128173c5d307441e1ec637dec0be7870f8071c2fcb384963d87cf6d4655cb0d2`;
+  runner SHA-256:
+  `0a3ebbaa8865902e41bd58a370135ed5d2e21b9ce025f52494b967ceaa2930cb`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
 - A full-matrix, CPU-only Qwen3-VL layer-0 Q/K/V projection replay separated
   same-BF16-input projection arithmetic from norm, checkpoint-weight, and
   channel-layout confounders. PyTorch `F.linear` reproduced all three

@@ -2054,6 +2054,51 @@ production-source hashes were unchanged. Refresh after checkpoint/model,
 text trace/fixture, PyTorch/Accelerate/CBLAS backend, BF16 staging, or
 operator-boundary changes. Scratch may expire.
 
+### Russian layer-0 Q/K RMSNorm input/backend cut (2026-09-29)
+
+A CPU-only, hash-gated 2x2 replay held the pinned 244-row Russian fixture,
+the exact BF16 `q_norm.weight` and `k_norm.weight`, and each saved Q/K
+projection input fixed while crossing the official PyTorch and native
+source-matched RMSNorm formulas. Both formulas first reproduced their own
+captured Q and K norm outputs **byte-for-byte** on all 244 rows and the
+retained rows 14–243 (four zero-mismatch route checks). The official and
+native layer-0 block inputs are identical. Model revision, prompt payload,
+both trace manifests, every consumed BF16 sidecar, the two selected weight
+tensors, and current production/trace source hashes passed their gates.
+Zero/no-bias and deliberately wrong head-layout controls passed. Root reran
+the frozen runner to the identical report SHA-256 and independently
+recomputed the observed Q/K norm-output mismatch counts and squared errors
+from raw BF16 sidecars.
+
+| All 244 rows versus official norm capture | Q mismatches / 999,424 | Q squared error | K mismatches / 249,856 | K squared error |
+| --- | ---: | ---: | ---: | ---: |
+| Captured native output / native formula on native projection input | 7,324 | 0.267914916 | 1,741 | 3.069707751 |
+| Native formula on **official** projection input | 16 | 0.000530243 | 3 | 0.000068665 |
+| Official formula on **native** projection input | 7,308 | 0.267384673 | 1,738 | 3.069639087 |
+| Official formula on official projection input | 0 | 0 | 0 | 0 |
+
+The same pattern holds on retained rows 14–243. On this fixed fixture,
+the Q/K norm-output drift is predominantly inherited from different
+projection inputs; intrinsic norm arithmetic leaves a small but nonzero
+same-input BF16 remainder. These squared errors are comparisons to one
+official endpoint, **not additive causal shares**. The saved post-RoPE
+Q/K outputs cannot separate RoPE arithmetic from its already-different
+inputs: neither trace persisted the actual position IDs and consumed
+cos/sin tensors. The next text discriminator is a route-exact RoPE replay
+after capturing those runtime inputs, followed by a full-encoder and
+same-seed image A/B before any production correction. This cut alone says
+nothing about other layers, conditioning quality, DiT, eyes, or VAE.
+
+The frozen scratch runner is
+`/private/tmp/qwen21-qwen3vl-qknorm-cut-20260928/qknorm_cut.py`
+(SHA-256 `0a3ebbaa8865902e41bd58a370135ed5d2e21b9ce025f52494b967ceaa2930cb`);
+its report is `/private/tmp/qwen21-qwen3vl-qknorm-cut-20260928/report.json`
+(SHA-256 `128173c5d307441e1ec637dec0be7870f8071c2fcb384963d87cf6d4655cb0d2`).
+The replay ran at docs-only HEAD `bbbe68952f529c40ab91a21be23a5f344b745146`;
+scratch may expire. Refresh after model/checkpoint or payload, trace
+sidecars, Q/K norm source, PyTorch/NumPy/BF16 behavior, head layout, or
+the missing RoPE-input capture changes.
+
 ### Russian layer-0 attention replay on saved inputs (2026-09-28)
 
 A CPU-only, SHA-gated PyTorch 2.6.0 SDPA MATH replay separated the native
