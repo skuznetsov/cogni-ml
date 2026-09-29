@@ -2950,6 +2950,72 @@ CPU architecture, or scratch artifacts change. Next seek a fast exact
 projection implementation and then test all 36 layers and matched images;
 do not substitute this one-block certificate for full-pipeline parity.
 
+### Qwen3-VL exact-order SIMD block-0 partial certificate (2026-09-29)
+
+At HEAD `cc84ab78206996d2e04374257972ed3d0d22053b`, a fresh scratch
+adapter replaced all seven scalar projection calls with four-output-channel
+ARM64 NEON SIMD. It preserves the 32 partial sums, ascending K traversal,
+explicit +16/+8/+4/pair reduction, and BF16 round-to-nearest-even policy;
+vector lanes represent different outputs rather than reassociating a single
+output's reduction. Attention, norm, RoPE, residual, and SiLU arithmetic
+remain the qualified donor-free composed block-0 path above. This is a
+scratch CPU implementation, not a production Metal change or LTP/WBA claim.
+
+The guarded attempt scheduled two full 244-token SIMD passes followed by
+one same-build scalar pass. Both SIMD passes completed and froze all 16
+stages. `run_safe` then exited 1 with
+`[KILL] System memory pressure: free 50% <= 50% after ~89s`, before the
+scalar stages froze. The process-tree cap was 3,072 MiB, timeout 900 s,
+system-free floor 50%, and wrapper launch sample 66%. The guard was not
+widened and no retry was made. No RSS-cap violation was reported; this
+system-memory stop does not establish its cause or a continuous peak RSS.
+The original triplet and paired scalar/SIMD benchmark remain **IN_PROGRESS**.
+The start lock and incomplete artifacts are preserved.
+
+A separate partial candidate manifest was pinned before root opened the
+official stage bytes. Root independently verified sizes, hashes, and raw
+bytes using at most 65,536-byte chunks: all 32 completed candidate files
+(16 stages per repeat, 33,980,416 BF16 words in total) match both the saved
+official stages and the prior scalar candidate with **zero mismatches**.
+Each block endpoint matches all 999,424 BF16 words. The comparison helper's
+one-word mutation control passed; the saved four-token row-rotation report
+also agrees with the manifest (16,373/16,384 changed words), but root did not
+rerun that model control. Analytic cancellation, odd-output tail/canary, and
+invalid-K guard probes had independently passed on this exact fresh dylib
+before the full attempt.
+
+Recorded SIMD block timers were 24.453 and 24.961 s, including projection
+packing in 24.375 and 24.885 s respectively. The earlier scalar oracle took
+99.556559 s in a separate run, and the existing explicit parity-config
+Accelerate route was faster still. These are diagnostic observations, not
+a paired speedup estimate or evidence of production acceleration. The
+preparation note is a historical prelaunch record; the partial manifest
+supersedes its unlaunched status.
+
+Scratch evidence:
+`/private/tmp/qwen21-block0-composed-simd-20260929-BcMoRF/partial_candidate_manifest.json`
+(SHA-256 `b95f6574065aba3cbc35bbf660d526c7d3eaa665eecc9b99f82d4aabd0e5a378`);
+runner source SHA-256
+`1016b46b8f6351d9824b8c6c406bd84d8fa9f40c94d733fd927ba59ee9893cd8`;
+binary SHA-256
+`16718eed9f27a39d751638650048fea5e19d2ffd8d47dbabd6a1616a4bde256b`;
+shim source SHA-256
+`0eebd6494f63e0e637a14cf66c1a8cda3ea03e2eb12192188c7e7759f8afb1a1`;
+fresh dylib SHA-256
+`53edca89e596a956dc5b77cb1fff1e26703c8732bec1ce5c87b1a331eff6fbe9`.
+DoD command: `ruby <scratch>/root_stream_verify.rb` (script SHA-256
+`4fa2b0bfdbb8c0c9d3893c3e70f1a9b5a56b1c5d61ecaf54fdb44d93210a2044`),
+observed exit 0 and `PASS_TWO_SIMD_REPEATS_ONLY_TRIPLET_IN_PROGRESS`;
+`root_stream_verification_summary.json` records that bounded result
+(SHA-256 `130cad3c2d2d2589e23952ba49ac227c571066a04d1640a2de97afa6ead586b3`).
+Adversary verdict: **ROBUST for the saved one-block/two-repeat raw parity
+only**. Same-build scalar pairing, other 35 layers, full conditioning,
+decoded images, and production speed remain unverified. Refresh after any
+input, mask/positions, weight, arithmetic, compiler/CPU, linked-library, or
+artifact change. Next model/build admission requires a fresh >=55%-free
+launch sample and the unchanged 50% runtime floor; preserve this aborted
+attempt rather than overwrite it.
+
 ### Qwen3-VL QKV-selector same-seed image preview (2026-09-29)
 
 The pre-RoPE-correction full-encoder default and exact-QKV-selector BF16

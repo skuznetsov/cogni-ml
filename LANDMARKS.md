@@ -30160,3 +30160,15 @@ Refresh after source/toolchain/device/model/workload changes.
   weight-value intervention and matched trajectory/decode gate next. The
   bounded command, evidence pins, resource scope, and refresh triggers are
   in `docs/qwen-image21-gguf-frontier.md`.
+- Two completed 244-token Qwen3-VL block-0 scratch NEON output-channel SIMD
+  repeats preserve the qualified scalar reduction/rounding policy and match
+  all 16 saved official and prior scalar BF16 stages. Root independently
+  checked all 32 raw files (33,980,416 words) with zero mismatches and a
+  comparator mutation control. This is a one-block CPU accuracy certificate,
+  not full-encoder, image-quality, Metal, or production-speed verification.
+  The same-build scalar arm was aborted before freezing by the unchanged
+  50%-free system-memory guard; the original triplet remains IN_PROGRESS and
+  no paired speedup is available. SIMD block timers were 24.453/24.961 s.
+  Preserve the partial manifest/start lock; admit no new heavy run without a
+  fresh >=55%-free launch gate. Source/evidence pins, decay triggers, and the
+  root streaming DoD are in `docs/qwen-image21-gguf-frontier.md`.
