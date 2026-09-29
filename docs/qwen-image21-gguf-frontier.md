@@ -2547,6 +2547,65 @@ Refresh after the source, compiler arithmetic, official fixture/checkpoint,
 selected QKV backend, or scratch artifacts change; rollback is the former
 inverse-frequency expression without enabling native conditioning.
 
+### Qwen3-VL QKV-selector same-seed image preview (2026-09-29)
+
+The pre-RoPE-correction full-encoder default and exact-QKV-selector BF16
+sidecars were compared through the **same** pinned Metal Q4 DiT runner and
+CPU/F32 VAE. This experiment therefore does **not** test the RoPE correction
+above. The 512x512 Russian-sign prompt, seed 7, initial latents, both masks,
+10 Euler steps, GGUF, VAE weights, and decode runtime were held fixed. The
+earlier default PNG was reused only after its conditioning payload and
+runner/model/source hashes matched; the selector arm ran once under the same
+32,768-MiB process-tree cap and 12% system-free floor, then decoded to PNG.
+
+The selector final-latent relative L2 was `0.04053974` versus default and
+`0.06128801` versus the official-conditioning arm; the existing default arm
+was `0.06345343` versus official. These are distances, not perceptual scores.
+Root independently checked the latent lengths and distances, image/latent
+hashes, and both 512x512 PNGs. Composition is very similar, while neither
+preview makes the requested Cyrillic sign reliably legible. The small face
+region at this size/step count does not support an eye-anatomy verdict. The
+selector-only DiT call reported 101.26 seconds versus the historical default
+arm's 85.76 seconds; sequential, unpaired host conditions prohibit a speed
+claim. Its hash-pinned scratch report is
+`/private/tmp/qwen21-qkv-image-ab-20260929/REPORT.md` (SHA-256
+`4c5fd1ccf2054de7706428598eeac9c9f22fe1385b579b11ea6e9219941ddb0a`).
+The opt-in selector remains diagnostic, not a quality promotion; refresh after
+conditioning sidecars, runner, GGUF, VAE, solver, seed, or scratch outputs
+change, and use multiple prompts/seeds for any broader quality claim.
+
+### Qwen3-VL isolated layer-34 input discriminator (2026-09-29)
+
+A scratch-only current-source probe fed the **official** 244-row
+`hidden_state_034` into layer 34 with fixed local BF16 weights, F32 SDPA,
+Accelerate non-QKV projections, and either default or exact-QKV projection.
+It compared each output to official `hidden_state_035`. Both single-mode runs
+passed the same 1,800-MiB process-tree cap and 12% system-free floor. An
+initial combined-mode run exceeded that cap; the runner was split into two
+processes without widening the guard.
+
+| Retained layer-34 output on official input | Default QKV | Exact-QKV selector |
+| --- | ---: | ---: |
+| Relative RMS versus official | 0.00102114 | 0.00075602 |
+| BF16 mismatches / 942,080 | 126,496 | 63,748 |
+| Maximum absolute error | 4 | 4 |
+
+The selector is locally closer on this *clean official input*, so the older
+composed layer-34 RMS jump (`0.01325` default versus `0.02071` selector) is
+not explained by a large isolated clean-input regression. Incoming-state
+drift amplification or an input/backend interaction is plausible, **not
+established**: the actual native composed `hidden_state_034` was not saved.
+The scratch runner used block source SHA-256
+`b75e63a639cf47927389669a114d4cbc2665c1d67ad0bf72904fe127a91ae277`
+and recorded fixture, binary, weight, guard, and output pins in
+`/private/tmp/qwen21-layer34-discriminator-20260929/report.md` (SHA-256
+`041b1090a4cbf024f58f3f8f4558ff177e11fbaf830157fb929c3dbc805f9d8e`).
+Root inspected its source and both run captures; the probe was not
+independently rerun. Its result is bounded to this isolated input and decays
+with source, fixture, weights, backend, or scratch artifacts. The next
+discriminator needs the actual current-source composed layer-33 output as
+the layer-34 input, with the official input as a paired control.
+
 ### Russian layer-0 attention replay on saved inputs (2026-09-28)
 
 A CPU-only, SHA-gated PyTorch 2.6.0 SDPA MATH replay separated the native
