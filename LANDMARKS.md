@@ -29668,3 +29668,24 @@ Refresh after source/toolchain/device/model/workload changes.
   `91a8e3330b884e3e61666a3f99cd68d7f63de253e19ad613a76ba1416ee47ce8`.
   Scratch may expire; pins and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A no-op-guarded scratch Metal splice on the same exact official call-10
+  full-joint block-29 input replaced only the fused residual/helper's
+  post-attention projected-buffer argument, after native QKV, attention,
+  and Q8_0 `to_out` had run. Baseline/no-op outputs and taps matched
+  bitwise; donor buffer installation was bitwise, while native projection,
+  gate-1, gate-2, and hidden input stayed unchanged. Root independently
+  recomputed raw-output squared errors: the official BF16-widened
+  projection donor removed 19.417857% joint, 51.137684% image-wide,
+  and 44.114833% in the predeclared face-20 rows. Merely BF16-rounding
+  the native projection worsened all three. This supports a material
+  discrepancy at or before post-attention/`to_out` on this one block and
+  input; it does not isolate attention-context versus projection arithmetic,
+  nor prove full-trajectory, image, eye, or VAE benefit. Earlier
+  first-residual and MLP-input splice effects overlap and are not additive.
+  Next: matched-input pre-`to_out` attention-context split with official
+  passive tap and no-op guards. Report SHA-256:
+  `4a438e49dbc1878f3d8c0ba8e594911895e551b8925fc13f0d43284d1610b226`;
+  runner SHA-256:
+  `fc04b0ccd17e90f8820aead6b057816b9f52d31dd5d3bcad3869fc32d93744b3`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.

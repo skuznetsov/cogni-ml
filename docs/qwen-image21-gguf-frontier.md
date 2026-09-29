@@ -5583,6 +5583,64 @@ preserved separately, not used as model evidence. Scratch may expire;
 refresh after official framework/MPS or model, GGUF/native kernel, input
 fixture, or splice/tap-boundary changes.
 
+### Call-10 block-29 attention-projection input splice (2026-09-29)
+
+A scratch-only resident Metal replay held the exact official BF16-widened
+call-10 post-block-28 full-joint state, modulation, and native block-29
+execution fixed. After native QKV, attention, and Q8_0 `to_out` ran, it
+substituted only the projected-buffer argument to the fused
+residual/LayerNorm/modulation helper. Four arms used the native projection,
+an identical native no-op donor, the official MPS BF16-widened post-`to_out`
+donor, or the native projection rounded through BF16. All 1,254 rows were
+retained. The native projection, gate-1, gate-2, and hidden-input taps were
+bitwise identical across arms; the installed donor buffers were checked
+bitwise. Baseline and no-op outputs and all their taps matched bitwise,
+including the pinned prior baseline output SHA-256
+`82ff90f724520104cde4c970c1abbd97421f6399042643557679b4dc768bd6cf`.
+There were no nonfinite projection values. The single guarded GPU run
+completed with 78% free host memory at launch; production sources were
+unchanged.
+
+Root independently recomputed squared F32 L2 errors from all four saved
+full-joint outputs against the exact official post-block-29 reference. The
+face-20 rows are the same predeclared region used in earlier block probes.
+
+| Block-29 output versus official MPS | Native/no-op baseline | Official projection donor | Error removed | Native BF16-round control |
+| --- | ---: | ---: | ---: | ---: |
+| Full joint, 1,254 rows | 10,190.543619 | 8,211.758448 | 19.417857% | 10,218.755032 |
+| Image target, 1,024 rows | 3,264.385298 | 1,595.054262 | 51.137684% | 3,288.989055 |
+| Face-20 rows | 60.821958 | 33.990453 | 44.114833% | 61.887517 |
+
+On image rows, the first-residual relative L2 gap to the official tap fell
+from 0.340660% to 0.176191%, and the modulated MLP-input gap fell from
+0.914917% to 0.368888%; the face-20 MLP-input gap fell from 0.810215% to
+0.36965%. Generic BF16 rounding of the native projection slightly worsened
+all three block-output squared errors. Thus a discrepancy at or before the
+post-attention/`to_out` projection boundary materially affects this one
+block's image and face-region hidden-state outputs. It does **not**
+distinguish attention-context drift from `to_out` weight/quantization or
+arithmetic error. The projection-donor effect and the earlier
+first-residual-donor effect are nonlinear, overlapping interventions, not
+additive error shares. Nothing here proves a full velocity or 40-step
+trajectory gain, decoded face/eye improvement, or a VAE-manifold mechanism.
+The next DiT discriminator is a matched-input split at the pre-`to_out`
+attention-context boundary, with passive official taps and exact no-op
+guards if that boundary has not already been saved.
+
+The completed report is
+`/private/tmp/qwen21-dit-operator-cause-20260928/attention_projection_splice_20260929/attention_projection_splice/attention_projection_splice_report.json`
+(SHA-256 `4a438e49dbc1878f3d8c0ba8e594911895e551b8925fc13f0d43284d1610b226`);
+its CPU preflight report SHA-256 is
+`dbd715bc344d5ed532ef84a23b8038b3c0cb869bccd658e3523d2dec5dc34928`.
+The scratch runner source SHA-256 is
+`fc04b0ccd17e90f8820aead6b057816b9f52d31dd5d3bcad3869fc32d93744b3`;
+the official BF16 donor and its exact F32 widening have SHA-256 values
+`fe57479cc658caa6d4974d578728173c0853e5c2a43b85014777f0b005cfca85`
+and `87d3de388160dce3d26dac93de3f5282717e4a42eac927845369be23aaf6fc42`.
+The probe ran at HEAD `4af5669bc72b5f7d02539bf803b344c15b1775a2`;
+refresh after official framework/model/MPS, GGUF/native source/kernel,
+input fixture, or splice/tap-boundary changes. Scratch may expire.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder
