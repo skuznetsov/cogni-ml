@@ -2299,6 +2299,76 @@ operator control, then capture the full encoder and run a same-seed decoded
 image A/B before considering a quality correction. Scratch evidence may
 expire.
 
+### Current Russian Qwen3-VL projection arithmetic and 36-layer drift (2026-09-29)
+
+A CPU-only, same-input block-0 replay used the exact official BF16
+`input_layernorm` output (`[244,4096]`, SHA-256
+`39f0dbf28df1975ddb924698b8fb2adc639a56ad440aa691b5d793ebf6573bb5`)
+and the selected local BF16 Q/K/V weights. Their tensor hashes matched the
+earlier native replay. PyTorch 2.6 BF16 `F.linear` reproduced all three saved
+official projection sidecars bitwise. PyTorch F32 `F.linear` followed by one
+BF16 cast instead reproduced the current production Accelerate sidecars
+bitwise:
+
+| Block-0 projection | Torch BF16 versus official | F32 then BF16 versus official | F32 then BF16 versus native |
+| --- | ---: | ---: | ---: |
+| Q / 999,424 elements | 0 | 301 | 0 |
+| K / 249,856 elements | 0 | 87 | 0 |
+| V / 249,856 elements | 0 | 76 | 0 |
+
+The same-input clone had zero mismatches; rolling input rows changed
+997,689/999,424 Q values. Root independently checked all seven raw output
+digests and the production F32 SGEMM/BF16-output code. This localizes the
+*first observed* current-versus-official difference to projection
+arithmetic/rounding, not the already-matched norm, a Q/K/V layout error, or
+the selected local weight bytes. It does **not** independently attest the
+official raw weight revision or establish that emulating BF16 improves an
+image. Post-RoPE Q/K already differ by 398/86 BF16 values, respectively.
+
+A freshly built current-source 36-layer CPU sweep then compared every layer
+both with its official input (**isolated**) and with the previous native
+output (**composed**). The official fixture, 244-token mask, 230 retained
+conditioning rows, and Accelerate projection route were pinned. The BF16
+comparator detected a one-element mutation and its exact self-comparison
+returned zero mismatches. Selected retained-row relative L2 values are:
+
+| Layer | Isolated | Composed |
+| ---: | ---: | ---: |
+| 0 | 0.001710 | 0.001710 |
+| 1 | 0.001401 | 0.003563 |
+| 8 | 0.001628 | 0.009299 |
+| 16 | 0.000177 | 0.006933 |
+| 34 | 0.001059 | 0.013250 |
+| 35 | 0.001701 | 0.020084 |
+
+The first block already differs; the final retained tensor has
+836,322/942,080 BF16 mismatches in the composed run versus 136,607/942,080
+for layer 35 on official input. The largest adjacent increase in composed
+retained relative L2 is 34→35 (`0.006834`), but the sequence is not
+monotonic. This shows material propagation of prior hidden-state differences,
+not that layer 35 alone, Q/K/V alone, or any particular MLP operation causes
+the final gap. The local encoder snapshot has no independently verified
+whole-shard Hub revision correspondence. No DiT trajectory or decoded-image
+quality improvement was tested in these two diagnostics.
+
+The projection report is
+`/private/tmp/qwen21-qkv-projection-cut-20260929/projection_operator_report_v2.json`
+(SHA-256 `6ec010274043e767e3ae673e7bcd1c24a5092d303654d1bbc3c683eba0671395`);
+its runner SHA-256 is
+`264563f1cb873a2df935ee9917b25623daa9da9230002b0554a80924510c008e`.
+The full layer report is
+`/private/tmp/qwen21-qwen3vl-layer-drift-20260929/report.json`
+(SHA-256 `809088cff39ab881f39426a2486f0fbff5b3fac9a8e7feb33184cc239b6378e9`);
+the full isolated/composed stdout SHA-256 is
+`3e7f6f3512879e7a0db1b770a8d4c6621a6d3b12670c108a819df3e549405d8e`.
+Both use clean source HEAD `b71ac4d0d1567b46bd4979e5dbc9fe68733d8eea`;
+the layer sweep exited zero under a 30,000-MiB RSS cap and 12% free-memory
+floor. The next falsifier is a Q/K/V-only native arithmetic override with
+fixed-sidecar tests, then a full-encoder comparison, and only then a matched
+DiT trajectory and decoded-image A/B. Refresh after prompt/fixture, model
+weights, projection or attention backend, BF16 staging, source, or scratch
+artifact changes; scratch evidence may expire.
+
 ### Russian layer-0 attention replay on saved inputs (2026-09-28)
 
 A CPU-only, SHA-gated PyTorch 2.6.0 SDPA MATH replay separated the native

@@ -29888,3 +29888,22 @@ Refresh after source/toolchain/device/model/workload changes.
   `9f2eb1a7c9d78bf5a9dba659c5ee31b74a0dd3fe48102f8dc1067d16d2dd9164`.
   Scratch may expire; pins and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A same-input CPU replay of current Qwen3-VL block-0 Q/K/V with selected
+  hash-matched BF16 weights found that Torch BF16 `F.linear` reproduced all
+  official BF16 projection sidecars bitwise; Torch F32 plus one BF16 cast
+  reproduced the native Accelerate sidecars bitwise. The latter differs from
+  official in 301/87/76 Q/K/V elements. A changed-input row-roll and exact
+  no-op control discriminated. This localizes the first observed current
+  divergence to projection arithmetic/rounding, not the matched norm; it
+  does not prove a decoded-image gain or independently attest the official
+  raw weight revision. A guarded 36-layer current-source sweep found final
+  retained relative L2 0.020084 with composed inputs versus 0.001701 for
+  isolated layer 35 on official input: prior-state propagation matters, but
+  no individual later operator is thereby assigned the final error. Next
+  test a Q/K/V-only native arithmetic intervention, full encoder, then a
+  matched DiT trajectory and decoded image A/B. Projection report SHA-256:
+  `6ec010274043e767e3ae673e7bcd1c24a5092d303654d1bbc3c683eba0671395`;
+  layer report SHA-256:
+  `809088cff39ab881f39426a2486f0fbff5b3fac9a8e7feb33184cc239b6378e9`.
+  Scratch may expire; source pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
