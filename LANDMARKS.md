@@ -29606,6 +29606,27 @@ Refresh after source/toolchain/device/model/workload changes.
   `1ad6e53e02be5d13e9f14373a6b154ae607603367dfd5a13c1c8f59b01ee04ff`.
   Scratch may expire; pins and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A CPU-only, pinned Qwen3-VL layer-0 equal-input cut reproduced both
+  official PyTorch BF16 and native Accelerate F32-to-BF16 `gate_proj` and
+  `up_proj` route captures byte-for-byte from their respective saved
+  `post_attention_layernorm` outputs. Substituting only the official norm
+  output into the unchanged native backend reduced gate output error from
+  781,510 to 874 BF16 mismatches (99.931712% of squared output error
+  removed) and up output error from 806,323 to 946 mismatches (99.899044%
+  removed) across all 244 rows. Retained-230 removal was 99.935253% and
+  99.906664%, respectively. Root reran the scratch replay to the same report
+  SHA and independently recomputed observed raw-BF16 errors. Exact route
+  replay, 16 sidecars per route, weight/model/payload/source pins, zero/no-bias,
+  and reversed-channel negative controls passed. The large projection drift
+  is inherited from different norm-output inputs on this fixed fixture; this
+  does not locate the cause of that input drift or prove a full-encoder/image
+  gain. Next: matched-input cut across the post-attention residual and norm,
+  then full-encoder and same-seed image A/B before any promotion. Report SHA:
+  `3912f19dbe6af5f6073a8ebd8a93d45430c938ff15085c4ed5500527f7d79a4f`;
+  runner SHA:
+  `3636b22aa3acd1ef72adb3afcbb1e2fb589539b8f1f71dc12c9ab3975305bbfd`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
 - A no-op-guarded scratch Metal splice on the exact official call-10
   full-joint block-29 input replaced only the native first-residual
   `state_buf` with the official BF16-widened donor before the fused

@@ -1900,14 +1900,58 @@ differ, while same-input SwiGLU is bit-exact, so the activation discrepancy
 is inherited from upstream gate/up values rather than intrinsic BF16
 activation staging. This does not yet separate post-attention norm input
 drift from gate/up projection arithmetic, nor establish a full-layer,
-36-layer conditioning, DiT, VAE, or image-quality gain. The next text cut
-should hold the gate/up projection input fixed and compare its two backends.
+36-layer conditioning, DiT, VAE, or image-quality gain. The equal-input
+gate/up cut immediately below tests that remaining projection boundary.
 
 The scratch runner is
 `/private/tmp/qwen21-qwen3vl-downproj-cut-20260929/downproj_same_input.py`
 (SHA-256 `1ad6e53e02be5d13e9f14373a6b154ae607603367dfd5a13c1c8f59b01ee04ff`);
 its report is `/private/tmp/qwen21-qwen3vl-downproj-cut-20260929/report.json`
 (SHA-256 `7ae74a775f7671196886a2b4dd8fd9c191d437622206c390eaa4d17488238380`).
+Refresh after checkpoint, source/backend, PyTorch/Accelerate, fixture, or
+sidecar-boundary changes; scratch files may expire.
+
+### Russian layer-0 gate/up equal-input projection cut (2026-09-29)
+
+A CPU-only replay used the same pinned 244-row Russian block-0 fixture,
+including 14 dropped prefix rows and 230 retained rows, and the exact BF16
+checkpoint `gate_proj` and `up_proj` weights. The official PyTorch 2.6.0
+BF16 `F.linear` on the official captured `post_attention_layernorm` output
+reproduced both official projection sidecars byte-for-byte. The native
+Accelerate F32 SGEMM followed by BF16 rounding on the native captured norm
+output likewise reproduced both native sidecars byte-for-byte. All 16
+sidecars per route, model revision, payload, source fingerprints, weight
+hashes, zero-input/no-bias control, and a deliberately reversed-channel
+negative control passed. Root reran the scratch replay with the same report
+SHA-256 and independently recomputed the observed errors from raw BF16
+sidecars.
+
+Holding the exact native projection backend and weight fixed while replacing
+only its input with the official norm output gave:
+
+| Projection versus official capture, all 244 rows | Native observed mismatches | Official-input/native-backend mismatches | Native observed squared error | Official-input/native-backend squared error | Squared error removed |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `gate_proj`, 2,998,272 outputs | 781,510 | 874 | 0.398803834 | 0.000272334 | 99.931712% |
+| `up_proj`, 2,998,272 outputs | 806,323 | 946 | 0.311308664 | 0.000314286 | 99.899044% |
+
+On the retained 230 rows, the same counterfactual removes 99.935253% of
+`gate_proj` and 99.906664% of `up_proj` squared output error. The captured
+norm outputs themselves differ in 85,872 of 999,424 BF16 values across all
+rows (85,300 on retained rows), with squared error 0.011901554. Using the
+same PyTorch backend on native versus official norm input preserves nearly
+the full observed projection error. Thus the large gate/up output gap on
+this fixed fixture is inherited from their differing norm-output inputs;
+the residual same-input backend arithmetic is small. This does **not**
+identify why the norm outputs differ, prove a full block or encoder repair,
+or establish an image-quality gain. The next text discriminator must split
+the `post_attention_layernorm` input/residual path from the norm operator
+under a matched block input, with a route-exact no-op guard.
+
+The scratch runner is
+`/private/tmp/qwen21-qwen3vl-gateup-cut-20260929/gateup_cut.py`
+(SHA-256 `3636b22aa3acd1ef72adb3afcbb1e2fb589539b8f1f71dc12c9ab3975305bbfd`);
+its report is `/private/tmp/qwen21-qwen3vl-gateup-cut-20260929/report.json`
+(SHA-256 `3912f19dbe6af5f6073a8ebd8a93d45430c938ff15085c4ed5500527f7d79a4f`).
 Refresh after checkpoint, source/backend, PyTorch/Accelerate, fixture, or
 sidecar-boundary changes; scratch files may expire.
 
