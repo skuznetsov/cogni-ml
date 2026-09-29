@@ -5878,6 +5878,47 @@ later documentation-only commits did not change the runtime. Scratch may
 expire; refresh after official framework/model/MPS, GGUF/native source or
 kernel, input fixture, or splice/tap-boundary changes.
 
+### Call-10 block-29 official post-RoPE Q/K/V attention boundary (2026-09-29)
+
+An isolated official BF16/MPS block-29 replay at the pinned post-block-28
+input passively saved the exact Q/K/V returned by
+`_qwenimage21_prepare_qkv` and consumed by `QwenImage21AttnProcessor`.
+The observer was identity-only and fired once. With no intervention, the
+block output matched the saved official teacher byte-for-byte (SHA-256
+`7df76603d10ecab8cc1b5ef99ab8bf945d40c62056365c0dd1a5be2306109582`),
+also matching the earlier hookless and passive-tap runs. One corrected,
+guarded GPU retry completed at clean source HEAD
+`a086663f14b329c3991944de4c01a26500ffa56b`; the earlier attempt failed
+on a scratch metric-shape bug after forward and was not interpreted.
+
+A same-process MPS replay fed those exact consumed Q/K/V to the pinned
+`dispatch_attention_fn` route: causal 230-token text prefix, full 1,024-token
+image attention, explicit all-true joint key-valid mask, and no extra attention
+mask. Its pre-`to_out` context matched the passive official context **byte for
+byte** (SHA-256
+`e9a3f71fbb8d0f835d119fa3937e63d62cc1014046a98c886ef9afc2378b5c48`):
+zero BF16 mismatches and zero relative L2 on joint, prefix, image, and
+face-20 scopes. Root independently checked the equal context hashes and
+guarded-run exit zero. A CPU surrogate had failed its predeclared 0.10%
+own-route tolerance, so it is not used for attribution.
+
+This anchors the **official** consumed-operand and same-backend attention
+boundary, not the native cause of the measured 1.437384% image-context gap.
+The saved native block-29 route has an attention-context tap but no consumed
+post-RoPE Q/K/V taps. The next discriminating probe is a scratch-only native
+capture of those operands, followed by an official-Q/K/V donor at the native
+attention entry with exact mask/segment, baseline, and no-op controls. Any
+remaining BF16/MPS versus F32/Metal difference is a combined route residual
+until separately crossed; no trajectory, decoded-face, or VAE claim follows.
+
+The official capture report is
+`/private/tmp/qwen21-dit-attn-internal-ZfGzhH/official_block29_postrope_capture/isolated_block29_passive_taps_report.json`
+(SHA-256 `c308085b6322f005ec9379df231674b272924bedbf9bbc377d7dea96333075fc`);
+the same-process attention replay report has SHA-256
+`704ff3ce3b924b5da4b02d126596942a6443148f2d20f0b55e550a0049803bef`.
+Refresh after official model/Diffusers/MPS, input fixture, QKV boundary,
+mask/segment route, or native attention changes. Scratch evidence may expire.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder
