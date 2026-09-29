@@ -29753,3 +29753,18 @@ Refresh after source/toolchain/device/model/workload changes.
   `177fde6aa1132fbc427d6ea73ac4b7b81e09bf02a6fafe732d61a04481977e1a`.
   Scratch may expire; pins and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A guarded Q8_0 lineage probe widened the pinned official block-29 BF16
+  Q/K/V weights to F32 and quantized each with the pinned `llama-quantize`
+  recipe. Each generated 17,825,792-byte Q8_0 payload matched the donor
+  exactly. Block-0 positive, one-byte mutation, and Q/K-swap controls
+  discriminated. This establishes reproducibility for three tensor payloads,
+  not historical conversion provenance or image quality. Report SHA-256:
+  `f5c5f8f680612848efd63c8a77c8b7c6e58b9375aa19de47e85f68f8e4588633`;
+  harness SHA-256:
+  `07bcc4bbb11ddfcb1264f8760ccf22efd28b9e4d5c173ad9e61f0b1fd7af3dbf`.
+  The resident Metal Q/K/V route now accepts a mixed BF16/Q8 triplet on
+  synthetic inputs; the full resident spec passed 25 examples with eight
+  model-backed examples still pending. Next: fixed-input block-29 BF16-Q/K/V
+  weight A/B with no-op/route/tap controls, then same-seed full-trajectory
+  and decoded-image A/B before a quality claim. Scope, source pins, and
+  refresh triggers are in `docs/qwen-image21-gguf-frontier.md`.

@@ -977,15 +977,28 @@ module ML::GGUF
         Qwen35Metal.encode_matmul_to_buffer(encoder, weight, input, output, batch)
       end
 
+      private def self.encode_qkv_projection(
+        encoder : ML::Metal::ComputeEncoder, weight : QuantWeight,
+        input : ML::MetalBuffer, output : ML::MetalBuffer, batch : Int32,
+      ) : Bool
+        if weight.type.bf16?
+          return QwenImage21MetalBF16.encode_matmul_to_buffer(
+            encoder, weight, input, output, batch,
+          )
+        end
+        encode_quant_projection(encoder, weight, input, output, batch)
+      end
+
       private def self.encode_qkv(
         encoder : ML::Metal::ComputeEncoder, weights : QwenImage21BlockWeights,
         input : ML::MetalBuffer, q : ML::MetalBuffer, k : ML::MetalBuffer,
         v : ML::MetalBuffer, batch : Int32,
       ) : Bool
-        if q8_batch_enabled?(batch)
-          return encode_quant_projection(encoder, weights.to_q, input, q, batch) &&
-                 encode_quant_projection(encoder, weights.to_k, input, k, batch) &&
-                 encode_quant_projection(encoder, weights.to_v, input, v, batch)
+        has_bf16 = weights.to_q.type.bf16? || weights.to_k.type.bf16? || weights.to_v.type.bf16?
+        if has_bf16 || q8_batch_enabled?(batch)
+          return encode_qkv_projection(encoder, weights.to_q, input, q, batch) &&
+                 encode_qkv_projection(encoder, weights.to_k, input, k, batch) &&
+                 encode_qkv_projection(encoder, weights.to_v, input, v, batch)
         end
         Qwen35Metal.encode_matmul_many_to_buffers(
           encoder, [weights.to_q, weights.to_k, weights.to_v], input, [q, k, v], batch,
@@ -1324,7 +1337,7 @@ module ML::GGUF
               { {weights.to_q, q_buf, "q_projection"},
                 {weights.to_k, active_k_buf, "k_projection"},
                 {weights.to_v, active_v_buf, "v_projection"} }.each do |weight, output, phase|
-                unless encode_quant_projection(encoder, weight, norm1_buf, output, active_tokens)
+                unless encode_qkv_projection(encoder, weight, norm1_buf, output, active_tokens)
                   raise ArgumentError.new("no resident Metal route for #{phase}")
                 end
                 command, encoder = phase_boundary(probe, command, encoder, phase)
@@ -1544,7 +1557,7 @@ module ML::GGUF
               { {weights.to_q, q_buf, "q_projection"},
                 {weights.to_k, k_buf, "k_projection"},
                 {weights.to_v, v_buf, "v_projection"} }.each do |weight, output, phase|
-                unless encode_quant_projection(encoder, weight, norm1_buf, output, token_count)
+                unless encode_qkv_projection(encoder, weight, norm1_buf, output, token_count)
                   raise ArgumentError.new("no resident Metal route for #{phase}")
                 end
                 command, encoder = phase_boundary(probe, command, encoder, phase)

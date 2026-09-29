@@ -80,6 +80,37 @@ private def qwen_image21_resident_fixture
   {config, weights}
 end
 
+private def qwen_image21_resident_mixed_qkv_fixture(bf16_slots : Array(Int32) = [0, 2])
+  config = ML::GGUF::QwenImage21BlockConfig.new(
+    hidden_dim: 32,
+    heads: 1,
+    head_dim: 32,
+    intermediate_dim: 5,
+    axes_dims: StaticArray[12, 10, 10],
+  )
+  weights = ML::GGUF::QwenImage21BlockWeights.new(
+    bf16_slots.includes?(0) ?
+      qwen_image21_resident_bf16_weight(qwen_image21_resident_matrix(32, 32, 1), 32, 32) :
+      qwen_image21_resident_q8_weight(32, 32),
+    bf16_slots.includes?(1) ?
+      qwen_image21_resident_bf16_weight(qwen_image21_resident_matrix(32, 32, 2), 32, 32) :
+      qwen_image21_resident_q8_weight(32, 32),
+    bf16_slots.includes?(2) ?
+      qwen_image21_resident_bf16_weight(qwen_image21_resident_matrix(32, 32, 3), 32, 32) :
+      qwen_image21_resident_q8_weight(32, 32),
+    qwen_image21_resident_f32_weight(qwen_image21_resident_matrix(32, 32, 4), 32, 32),
+    Array(Float32).new(32) { |index| 0.8_f32 + index.to_f32 / 160.0_f32 },
+    Array(Float32).new(32) { |index| 0.9_f32 + index.to_f32 / 180.0_f32 },
+    qwen_image21_resident_f32_weight(qwen_image21_resident_matrix(10, 32, 5), 10, 32),
+    qwen_image21_resident_f32_weight(qwen_image21_resident_matrix(32, 5, 6), 32, 5),
+  )
+  {config, weights}
+end
+
+private def qwen_image21_resident_q8_qkv_fixture
+  qwen_image21_resident_mixed_qkv_fixture([] of Int32)
+end
+
 {% unless flag?(:cpu_only) %}
   private def qwen_image21_attention_kernel_output(
     kernel_name : String,
@@ -353,6 +384,103 @@ describe ML::GGUF::QwenImage21MetalBlock do
       time_weight, time_weight, weights.text_norm, [block],
     )
     certificate.compatible?(image, encoder, input, layout, changed_weights, 5).should be_false
+  end
+
+  it "dispatches mixed BF16/Q8 QKV projections in resident mode with Q8 batching on or off" do
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
+
+    identity = qwen_image21_resident_bf16_weight(
+      [1.0_f32, 0.0_f32, 0.0_f32, 1.0_f32], 2, 2,
+    )
+    ML::GGUF::QwenImage21MetalBF16.matmul(
+      identity, [2.0_f32, -3.0_f32, 4.0_f32, 5.0_f32], 2,
+    ).should eq([2.0_f32, -3.0_f32, 4.0_f32, 5.0_f32])
+
+    config, _ = qwen_image21_resident_mixed_qkv_fixture
+    token_count = 16
+    hidden = Array(Float32).new(token_count * config.hidden_dim) do |index|
+      (((index * 11) % 37) - 18).to_f32 / 53.0_f32
+    end
+    modulation = Array(Float32).new(token_count * 4 * config.hidden_dim) do |index|
+      (((index * 7) % 41) - 20).to_f32 / 127.0_f32
+    end
+    positions = Array(StaticArray(Int32, 3)).new(token_count) do |index|
+      StaticArray[0, index, index // 2]
+    end
+    image_ids = Array(Int32).new(token_count, 0)
+    key_valid = Array(Bool).new(token_count, true)
+
+    prior_route = ENV["QWEN_IMAGE21_Q8_BATCH"]?
+    begin
+      {[0], [1], [2], [0, 2]}.each do |bf16_slots|
+        config, weights = qwen_image21_resident_mixed_qkv_fixture(bf16_slots)
+        reference = ML::GGUF::QwenImage21BlockCPU.forward(
+          hidden, token_count, modulation, positions, image_ids, weights, config,
+          key_valid: key_valid,
+          backend: ML::GGUF::QwenImage21MetalProjectionBackend.new(strict: true),
+        )
+
+        {"0", "1"}.each do |route|
+          ENV["QWEN_IMAGE21_Q8_BATCH"] = route
+          actual = ML::GGUF::QwenImage21MetalBlock.forward(
+            hidden, token_count, modulation, positions, image_ids, weights, config,
+            key_valid: key_valid,
+          )
+          actual.hidden.zip(reference).each do |value, expected|
+            value.should be_close(expected, 8e-4_f32)
+          end
+          actual.stats.command_buffers.should eq(1)
+          actual.stats.intermediate_readbacks.should eq(0)
+          actual.stats.final_readbacks.should eq(1)
+        end
+      end
+    ensure
+      if prior_route
+        ENV["QWEN_IMAGE21_Q8_BATCH"] = prior_route
+      else
+        ENV.delete("QWEN_IMAGE21_Q8_BATCH")
+      end
+    end
+  end
+
+  it "keeps the all-Q8 resident QKV outputs bitwise identical across batch routing" do
+    pending!("Metal is unavailable") unless ML::GGUF::QwenImage21MetalBlock.available?
+
+    config, weights = qwen_image21_resident_q8_qkv_fixture
+    token_count = 16
+    hidden = Array(Float32).new(token_count * config.hidden_dim) do |index|
+      (((index * 11) % 37) - 18).to_f32 / 53.0_f32
+    end
+    modulation = Array(Float32).new(token_count * 4 * config.hidden_dim) do |index|
+      (((index * 7) % 41) - 20).to_f32 / 127.0_f32
+    end
+    positions = Array(StaticArray(Int32, 3)).new(token_count) do |index|
+      StaticArray[0, index, index // 2]
+    end
+    image_ids = Array(Int32).new(token_count, 0)
+    key_valid = Array(Bool).new(token_count, true)
+    prior_route = ENV["QWEN_IMAGE21_Q8_BATCH"]?
+    begin
+      ENV["QWEN_IMAGE21_Q8_BATCH"] = "0"
+      reference = ML::GGUF::QwenImage21MetalBlock.forward(
+        hidden, token_count, modulation, positions, image_ids, weights, config,
+        key_valid: key_valid,
+      )
+      ENV["QWEN_IMAGE21_Q8_BATCH"] = "1"
+      actual = ML::GGUF::QwenImage21MetalBlock.forward(
+        hidden, token_count, modulation, positions, image_ids, weights, config,
+        key_valid: key_valid,
+      )
+      actual.hidden.should eq(reference.hidden)
+      actual.stats.command_buffers.should eq(1)
+      actual.stats.intermediate_readbacks.should eq(0)
+    ensure
+      if prior_route
+        ENV["QWEN_IMAGE21_Q8_BATCH"] = prior_route
+      else
+        ENV.delete("QWEN_IMAGE21_Q8_BATCH")
+      end
+    end
   end
 
   it "keeps every intermediate resident while matching the exact block" do

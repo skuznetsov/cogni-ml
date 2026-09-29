@@ -5919,6 +5919,48 @@ the same-process attention replay report has SHA-256
 Refresh after official model/Diffusers/MPS, input fixture, QKV boundary,
 mask/segment route, or native attention changes. Scratch evidence may expire.
 
+### Selective BF16 Q/K/V weight frontier (2026-09-29)
+
+Status: **synthetic resident dispatch admitted; model-backed quality guard-only**.
+The GGUF reader retains each tensor's type independently. Resident DiT Q/K/V
+now dispatch BF16 weights to the existing BF16 Metal projection kernel and use
+sequential encoding whenever the triplet contains BF16. All-quantized routing
+is unchanged and remains the immediate rollback. A selected block can replace
+only its Q/K/V weights while keeping every other weight, conditioning tensor,
+input latent, and scheduler operation fixed; this model-backed intervention
+has not yet been executed.
+The one-block BF16 triplet costs approximately 96 MiB of weight payloads; this
+is a budget estimate, not a measured peak-residency claim.
+
+The pre-change mixed BF16/Q8 test failed with `no resident Metal route for Q/K/V
+projections`. On Apple M2 Max, the same test now passes its strict-reference
+outputs with Q8 batching both on and off, and the all-Q8 routing control is
+bitwise identical. The full resident spec passed 25 examples with zero failures
+or errors; eight model-backed examples remain pending. This checks routing and
+small synthetic arithmetic only, not 4096-wide throughput or image quality.
+
+The pinned official BF16 block-29 Q/K/V tensors, widened to F32 then converted
+with the pinned `llama-quantize --pure --tensor-type ...=Q8_0` recipe, reproduce
+the three donor Q8_0 payloads byte-for-byte: each comparison has 0 differing
+bytes out of 17,825,792. A block-0 positive control matches; one-byte mutation
+and Q/K swap controls fail as expected. This closes the tested Q8 conversion
+recipe/source-content confound for these three tensors only, not historical
+provenance or final-image quality. The guarded report is
+`/private/tmp/qwen21-block29-qkv-lineage-20260929/qkv_lineage_report_r2.json`
+(SHA-256 `f5c5f8f680612848efd63c8a77c8b7c6e58b9375aa19de47e85f68f8e4588633`);
+the harness SHA-256 is
+`07bcc4bbb11ddfcb1264f8760ccf22efd28b9e4d5c173ad9e61f0b1fd7af3dbf`.
+
+The next falsifier holds a pinned official block input and reference fixed,
+installs only exact-hash BF16 Q/K/V in the resident native block, and reports
+route, no-op identity, Q/K/V taps, attention context, and image-row block
+output. A local block-error reduction would not establish a full denoising
+trajectory or decoded-image benefit. Promote a quality claim only after a
+same-seed, same-conditioning full-trajectory and decoded-image A/B; stop if
+controls, memory guards, or official-source mapping checks fail. Refresh this
+evidence after GGUF/official-weight, quantizer, resident-dispatch, kernel, or
+input-fixture changes; scratch reports may expire.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder
