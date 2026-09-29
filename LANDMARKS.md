@@ -29588,3 +29588,21 @@ Refresh after source/toolchain/device/model/workload changes.
   Next: split the attention/first-residual prefix from norm-2/modulation with
   another no-op-guarded same-input probe. Scratch and refresh conditions are
   in `docs/qwen-image21-gguf-frontier.md`.
+- A pinned, CPU-only Qwen3-VL layer-0 down-projection replay on the 244-row
+  Russian fixture reproduced the official PyTorch and native Accelerate
+  captured outputs byte-for-byte from their respective BF16 SwiGLU inputs.
+  Supplying the official activation to the unchanged native Accelerate
+  `down_proj` reduced its error against the official output from 393,091 to
+  732 BF16 mismatches and removed 99.898609% of squared operator-output
+  error (99.898660% on the retained 230 rows). Root re-ran the scratch
+  replay with the same report SHA-256. Same-input SwiGLU was already
+  bit-exact, while gate/up sidecars differ; this localizes the large
+  `down_proj` discrepancy to its upstream activation, but does not separate
+  gate/up input drift from projection arithmetic or establish an image
+  improvement. Next: fixed-input gate/up projection/backend cut, then
+  full-encoder and same-seed image A/B before promotion. Report SHA-256:
+  `7ae74a775f7671196886a2b4dd8fd9c191d437622206c390eaa4d17488238380`;
+  runner SHA-256:
+  `1ad6e53e02be5d13e9f14373a6b154ae607603367dfd5a13c1c8f59b01ee04ff`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.

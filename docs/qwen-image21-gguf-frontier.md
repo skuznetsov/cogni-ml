@@ -1866,6 +1866,51 @@ may expire; refresh after source, local checkpoint, captured inputs,
 PyTorch/Accelerate, BF16 conversion, or shape changes. An arithmetic
 change would require a full-encoder and same-seed image A/B gate.
 
+### Same-input Qwen3-VL layer-0 down-projection cut (2026-09-29)
+
+On the pinned 244-row Russian fixture, a CPU-only replay reconstructed each
+route's BF16 SwiGLU activation from its saved gate/up sidecars. Both
+activation hashes matched the independent Crystal/PyTorch falsifier above.
+The replay used the same checkpoint BF16 `down_proj` weight (SHA-256
+`b02a7008533f273efc0aac03c494a4109ee0c907fe69e404bbc1d93fb838af06`)
+with PyTorch 2.6.0 BF16 `F.linear` and the native route's Accelerate F32
+SGEMM followed by BF16 rounding. Official-input/PyTorch reproduced the
+captured official `down_proj` byte-for-byte, and native-input/Accelerate
+reproduced the captured native `down_proj` byte-for-byte. All 16 sidecars
+per route, identical block input/model/fixture pins, 244/14/230 row
+accounting, and a zero-input/no-bias control passed. Root re-ran the
+scratch replay and obtained the same report SHA-256.
+
+Holding the native Accelerate backend and exact weight fixed while replacing
+only its activation with the official-route BF16 activation gave:
+
+| `down_proj` versus official capture | Native observed | Native backend, official activation |
+| --- | ---: | ---: |
+| BF16 mismatches, all 999,424 outputs | 393,091 | 732 |
+| Relative RMS, all 244 rows | 0.212298% | 0.006760% |
+| Squared output error, all 244 rows | 0.103897214 | 0.000105342 |
+| Squared output error, retained 230 rows | 0.102498025 | 0.000103872 |
+
+The intervention removes 99.898609% of this **operator-output squared
+error** on all rows and 99.898660% on retained rows. The small remainder
+matches the measured same-input PyTorch-versus-Accelerate projection
+arithmetic gap (732 BF16 values on official activation); native activation
+gives 781 backend mismatches. Native and official gate/up sidecars already
+differ, while same-input SwiGLU is bit-exact, so the activation discrepancy
+is inherited from upstream gate/up values rather than intrinsic BF16
+activation staging. This does not yet separate post-attention norm input
+drift from gate/up projection arithmetic, nor establish a full-layer,
+36-layer conditioning, DiT, VAE, or image-quality gain. The next text cut
+should hold the gate/up projection input fixed and compare its two backends.
+
+The scratch runner is
+`/private/tmp/qwen21-qwen3vl-downproj-cut-20260929/downproj_same_input.py`
+(SHA-256 `1ad6e53e02be5d13e9f14373a6b154ae607603367dfd5a13c1c8f59b01ee04ff`);
+its report is `/private/tmp/qwen21-qwen3vl-downproj-cut-20260929/report.json`
+(SHA-256 `7ae74a775f7671196886a2b4dd8fd9c191d437622206c390eaa4d17488238380`).
+Refresh after checkpoint, source/backend, PyTorch/Accelerate, fixture, or
+sidecar-boundary changes; scratch files may expire.
+
 ### Russian layer-0 attention replay on saved inputs (2026-09-28)
 
 A CPU-only, SHA-gated PyTorch 2.6.0 SDPA MATH replay separated the native
