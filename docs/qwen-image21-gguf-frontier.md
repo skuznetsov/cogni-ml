@@ -2259,6 +2259,46 @@ The prior staged-doc run was rejected by its clean-state guard and is not
 used for this claim. Refresh after source/backend, checkpoint, prompt or
 trace sidecars, or BF16 staging changes; scratch evidence may expire.
 
+### Fresh current-source Russian Qwen3-VL block-0 trace (2026-09-29)
+
+A clean-state, CPU-only production `Qwen3VLTextBlock.forward` replay used the
+same pinned official `[244,4096]` BF16 input, all-visible mask, layer-0
+weights, and epsilon as the direct checks above. It captured every block-0
+operator boundary with Accelerate projections and F32 SDPA. The input and
+`input_layernorm` matched the official sidecars bitwise (0/999,424 BF16
+mismatches each). The first observed mismatch is `self_attn.q_proj`:
+
+| Boundary versus official BF16 | Mismatches / elements | Relative RMS |
+| --- | ---: | ---: |
+| Q / K / V projections | 301 / 999,424; 87 / 249,856; 76 / 249,856 | 0.0001081 / 0.0000253 / 0.0000490 |
+| Attended context | 11,705 / 999,424 | 0.0002860 |
+| Block-0 output | 242,284 / 999,424 | 0.0016507 |
+
+Root independently counted raw BF16 sidecar mismatches. On retained
+conditioning rows 14–243, the block output has 234,013 mismatches and
+relative RMS `0.0017097`. The no-op control reproduced **every** stage
+bitwise; a one-row input-roll negative changed the final output in
+998,392/999,424 BF16 values versus official. These controls make the fresh
+trace interpretable and supersede the historical claim of a current
+`input_layernorm` mismatch. They do **not** prove that Q projection alone
+causes the downstream block difference: K/V, attention arithmetic, BF16
+rounding thresholds, and later MLP operations can contribute. Nor does a
+single block establish full-encoder or image-quality impact.
+
+The control manifest is
+`/private/tmp/qwen21-block0-fulltrace-20260929.3VxMw8/manifest.json`
+(SHA-256 `f26acd7d355af6bf57665d08b71c51827a5aa7ed0fe4239d36ba545a40d26eea`);
+the primary capture is `capture.json` in the same directory (SHA-256
+`ee016afd17a1f13f1e7bd23fda92e28b58eca27d8fed8e749c1527af39cc7144`).
+The manifest pins clean source HEAD `89a96853d93a23fefd2d5c5eb99a9eb8aa72c1d5`,
+runtime source and selected weight digests, the official fixture and trace,
+both scratch builds, commands, and controls. Refresh after changing the text
+block, projection/attention backend, BF16 staging, checkpoint, fixture, or
+scratch sidecars. Next isolate the projection arithmetic with a same-input
+operator control, then capture the full encoder and run a same-seed decoded
+image A/B before considering a quality correction. Scratch evidence may
+expire.
+
 ### Russian layer-0 attention replay on saved inputs (2026-09-28)
 
 A CPU-only, SHA-gated PyTorch 2.6.0 SDPA MATH replay separated the native
@@ -6173,6 +6213,49 @@ report's metrics and pins; the extension did not change the original
 comparison metrics. Refresh after
 attention source/backend, dtype/staging, mask or
 fixture, official capture, or scratch evidence changes.
+
+### Exact-QKV block-29 sampled FP64 attention controls (2026-09-29)
+
+With the same call-10 block-29 official post-RoPE BF16 Q/K/V, widened exactly
+to F32, a CPU FP64 softmax/matvec reference was evaluated at four selected
+query/head positions. Native Metal F32 and CPU MATH F32 contexts were compared
+with that reference and with the captured official MPS BF16 context. One
+image position (token 1064, head 23) was chosen as the largest **absolute**
+native-official residual before FP64 evaluation; three further controls were
+selected as a median-relative-residual image position, a seeded image
+position, and a fixed causal-prefix position before their FP64 calculations.
+
+| Query/head | Native F32 relative L2 to FP64 | CPU MATH F32 | Official MPS BF16 |
+| --- | ---: | ---: | ---: |
+| Worst absolute image residual, 1064/23 | 0.00000118 | 0.000000445 | 0.03609 |
+| Median image residual, 862/0 | 0.00000262 | 0.000000565 | 0.007337 |
+| Seeded image control, 621/26 | 0.000000909 | 0.000000871 | 0.007198 |
+| Causal-prefix control, 115/16 | 0.000000411 | 0.000000247 | 0.006773 |
+
+Root independently recomputed the worst-residual and median image rows
+directly from raw BF16 Q/K/V and saved outputs. The worst row was deliberately
+selected and its 3.61% official-versus-FP64 error is **not** an estimate of
+the layer-wide error. The three controls support the narrower observation
+that native F32 attention is close to F64 arithmetic at those locations,
+whereas the official MPS BF16 context follows different numerical semantics.
+These context-only probes cannot isolate precision from backend staging,
+characterize the full tensor, or rank image quality. In particular, closeness
+to FP64 is a numerical diagnostic, **not** the target: the protected outcomes
+are decoded face/text fidelity and generation latency. Do not alter the
+production attention route solely to minimize official or FP64 tensor error;
+test any candidate on a same-seed full trajectory and decoded-image A/B.
+
+The one-row report is
+`/private/tmp/qwen21-block29-attention-fp64-20260929/fp64_one_row_head_report.json`
+(SHA-256 `3de565c1c7d4948b8783ebf3ccb951b4950f5d43724c88e05b49f9da90f207b2`);
+the three-control report is `fp64_three_controls_report.json` in the same
+directory (SHA-256
+`9f2eb1a7c9d78bf5a9dba659c5ee31b74a0dd3fe48102f8dc1067d16d2dd9164`).
+Both pin clean source HEAD `89a96853d93a23fefd2d5c5eb99a9eb8aa72c1d5`,
+the official Diffusers source, exact-QKV operands, native Metal source,
+outputs, and prior A/B reports. Refresh after any of those inputs,
+attention/mask implementation, dtype/backend, or scratch artifacts change.
+No full trajectory or GPU model forward was run in these new probes.
 
 ### Same-latent CPU/F32 VAE path and residual-direction control (2026-09-29)
 

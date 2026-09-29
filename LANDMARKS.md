@@ -29860,3 +29860,31 @@ Refresh after source/toolchain/device/model/workload changes.
   `f29356199650192b8695b47f70a11e873c51e63ac54b214fa2b53faaadd35ab8`.
   Scratch may expire; pins and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A fresh, clean-state current-production Qwen3-VL block-0 forward on the
+  pinned 244-token Russian fixture matched official BF16 input and
+  `input_layernorm` exactly (0/999,424 mismatches each). Its first observed
+  mismatch was `self_attn.q_proj` (301/999,424); K/V differed in 87/76
+  values, and the block output differed in 242,284/999,424 (relative RMS
+  `0.0016507`). Root independently counted raw sidecars; all-stage no-op
+  equality and a one-row-roll negative control passed. This supersedes the
+  historical current-norm suspicion, not the full-encoder or image-quality
+  question. Next isolate projection arithmetic, then full encoder and
+  same-seed decoded-image A/B. Manifest SHA-256:
+  `f26acd7d355af6bf57665d08b71c51827a5aa7ed0fe4239d36ba545a40d26eea`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- On the exact call-10 block-29 official post-RoPE Q/K/V, four sampled
+  query/head FP64 attention references put native Metal F32 at relative L2
+  `0.000000411`–`0.00000262` and official MPS BF16 at `0.006773`–`0.03609`.
+  The largest official error came from a preselected worst-absolute-residual
+  row and is not representative; a median image, seeded image, and causal
+  prefix control showed official errors near `0.007`. Root independently
+  recomputed two image-row controls. This supports a bounded numerical-path
+  distinction, not whole-layer or decoded-image quality superiority; FP64
+  closeness is diagnostic rather than the optimization target. Next require
+  a same-seed full trajectory and face/text image A/B before changing
+  production attention semantics. Reports SHA-256:
+  `3de565c1c7d4948b8783ebf3ccb951b4950f5d43724c88e05b49f9da90f207b2`,
+  `9f2eb1a7c9d78bf5a9dba659c5ee31b74a0dd3fe48102f8dc1067d16d2dd9164`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
