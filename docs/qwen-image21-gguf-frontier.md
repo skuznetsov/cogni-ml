@@ -2513,6 +2513,40 @@ replay, and end-to-end evidence; a local bitwise gain is not an image-quality
 proxy. Re-run after source, official trace, input, arithmetic runtime, or
 scratch evidence changes.
 
+### Qwen3-VL text RoPE reciprocal-power correction (2026-09-29)
+
+The opt-in native text block now computes the inverse frequency as FP32
+`1 / theta ** exponent`, matching the pinned CPU/BF16 reference arithmetic
+instead of the former FP64 `exp(-exponent * log(theta))` route. A 141-token
+synthetic block fixture failed before the edit at token 140, Q feature 1
+(`-0.94140625` versus expected `-0.9375`) and passed after it; the adjacent
+text-reference, weights, and block specs passed 27/27. Root reran those specs,
+the formatter, and the corrected model-backed replay at production source SHA
+`b75e63a639cf47927389669a114d4cbc2665c1d67ad0bf72904fe127a91ae277`.
+
+The guarded replay consumed the pinned **raw** 244-row Russian block-0 input,
+not the already-normalized input. With the opt-in exact-QKV projection route,
+Q/K projection outputs matched the official CPU/BF16 sidecars at 0/0
+mismatches. Q/K head norm differed at 5/0 values; post-RoPE Q/K likewise
+differed at 5/0. The pre-edit selector capture had 91/20 post-RoPE mismatches
+on this fixture. Thus the corrected RoPE removes the independently localized
+frequency discrepancy at block 0, while the five Q-norm mismatches remain.
+The earlier double-normalization replay was a harness error and is excluded.
+
+The release replay binary SHA-256 is
+`44d548f4b3658925cca5d7af96305cfe2c151b71bdd4425115eab3d327c795b7`;
+its corrected log is
+`/private/tmp/qwen21-qnorm-rope-20260929/russian-block0-guarded-replay.log`
+(SHA-256 `85a55dd71c9dd203f5a8b5aa580ed0f2a2297797fe3cd09b7196d3a8da5a475c`).
+The process-local guard enforced 2,048 MiB RSS and at least 12% system-free
+memory without rejection; it did not measure peak or process-tree RSS. This
+is a verified **block-0 boundary correction**, not full 36-layer conditioning
+parity, a DiT trajectory gain, a decoded-image improvement, or a VAE-manifold
+result. The hybrid official conditioner remains the production default.
+Refresh after the source, compiler arithmetic, official fixture/checkpoint,
+selected QKV backend, or scratch artifacts change; rollback is the former
+inverse-frequency expression without enabling native conditioning.
+
 ### Russian layer-0 attention replay on saved inputs (2026-09-28)
 
 A CPU-only, SHA-gated PyTorch 2.6.0 SDPA MATH replay separated the native

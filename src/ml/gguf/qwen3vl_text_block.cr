@@ -424,8 +424,8 @@ module ML::GGUF
         heads.times do |head|
           base = (token * heads + head) * head_dim
           half_dim.times do |pair|
-            exponent = (2 * pair).to_f64 / head_dim.to_f64
-            inverse_frequency = Math.exp(-exponent * Math.log(theta.to_f64)).to_f32
+            exponent = (2 * pair).to_f32 / head_dim.to_f32
+            inverse_frequency = 1.0_f32 / (theta ** exponent)
             angle = (positions[token].to_f32 * inverse_frequency).to_f32
             cos = bf16(Math.cos(angle.to_f64).to_f32)
             sin = bf16(Math.sin(angle.to_f64).to_f32)

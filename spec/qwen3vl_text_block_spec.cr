@@ -102,7 +102,61 @@ private def qwen3vl_text_block_spec_reduction_weights : ML::GGUF::Qwen3VLTextBlo
   )
 end
 
+private def qwen3vl_text_block_spec_rope_weights : ML::GGUF::Qwen3VLTextBlockWeights
+  width = 128
+  identity = Array(Float32).new(width * width) do |index|
+    (index // width == index % width) ? 1.0_f32 : 0.0_f32
+  end
+  zero_matrix = Array(Float32).new(width * width, 0.0_f32)
+  zero_vector = Array(Float32).new(width, 0.0_f32)
+  ML::GGUF::Qwen3VLTextBlockWeights.new(
+    input_layernorm: Array(Float32).new(width, 1.0_f32),
+    q_proj: identity,
+    k_proj: zero_matrix.dup,
+    v_proj: zero_matrix.dup,
+    q_norm: Array(Float32).new(width, 1.0_f32),
+    k_norm: Array(Float32).new(width, 1.0_f32),
+    o_proj: zero_matrix.dup,
+    post_attention_layernorm: zero_vector,
+    gate_proj: Array(Float32).new(width, 0.0_f32),
+    up_proj: Array(Float32).new(width, 0.0_f32),
+    down_proj: Array(Float32).new(width, 0.0_f32),
+  )
+end
+
 describe ML::GGUF::Qwen3VLTextBlock do
+  it "uses FP32 reciprocal power for text RoPE frequencies" do
+    # Synthetic BF16 all-one inputs keep the pre-RoPE query exactly one. At
+    # token 140, pair 1, theta=5e6, the current exp/log expression and FP32
+    # reciprocal-power expression land on different BF16 RoPE outputs.
+    # The expected pair is independently evaluated with FP32 pow, reciprocal,
+    # angle, BF16 trig, and the block's BF16 multiply/add boundaries.
+    width = 128
+    token_count = 141
+    config = ML::GGUF::Qwen3VLTextBlockConfig.new(
+      hidden_dim: width,
+      heads: 1,
+      kv_heads: 1,
+      head_dim: width,
+      intermediate_dim: 1,
+      rope_theta: 5_000_000.0_f32,
+    )
+    trace = Hash(String, Array(Float32)).new
+    ML::GGUF::Qwen3VLTextBlock.forward(
+      Array(Float32).new(token_count * width, 1.0_f32),
+      Array(Bool).new(token_count, true),
+      qwen3vl_text_block_spec_rope_weights,
+      config,
+      trace: trace,
+    )
+
+    offset = 140 * width
+    trace["layers.0.self_attn.q_norm"][offset + 1].should eq(1.0_f32)
+    trace["layers.0.self_attn.q_norm"][offset + 65].should eq(1.0_f32)
+    trace["post_rope_q"][offset + 1].should eq(-0.9375_f32)
+    trace["post_rope_q"][offset + 65].should eq(-1.0625_f32)
+  end
+
   it "matches the PyTorch CPU BF16 RMSNorm reduction discriminator through forward" do
     # The selected oracle outputs were checked with both local PyTorch 2.5.1
     # and pinned PyTorch 2.6.0 CPU BF16 using the Qwen RMSNorm stages:
