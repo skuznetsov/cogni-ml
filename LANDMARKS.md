@@ -30124,3 +30124,15 @@ Refresh after source/toolchain/device/model/workload changes.
   than CBLAS and is an attribution oracle only. Native QKV/attention, the
   other 35 layers, and image quality remain unverified. Report pins, guard
   scope, and refresh triggers are in `docs/qwen-image21-gguf-frontier.md`.
+- A scratch call-10/block-29 QKV probe separated weight values from dispatch:
+  on two 32-row native-input samples, Q8 versus resident F32 dispatch of the
+  same Q8 values differed by approximately 6e-8..1e-7 relative L2, whereas
+  official BF16 values versus Q8 values on the same F32 route differed by
+  0.00127..0.00622 in the 20-row geometric ROI. Root checked input selection,
+  pins, old/new first-32 output hashes, and repeat/input-sensitivity controls.
+  This supports local weight-representation attribution only. Batch 32 uses
+  the older batch kernel, not the default M2 Max batch-1254 register-reuse
+  kernel; no attention, full-block, trajectory, or decoded-eye benefit was
+  tested. Preserve the disabled full-block guard and require larger-route
+  controls before promotion. Report pins, metadata caveats, resource scope,
+  and refresh triggers are in `docs/qwen-image21-gguf-frontier.md`.

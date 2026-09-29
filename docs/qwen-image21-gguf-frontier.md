@@ -7297,6 +7297,69 @@ and same-VAE decoded-image A/B of a justified candidate, with face/text
 inspection; do not promote either local intervention from this one-block
 metric alone.
 
+### Block-29 sampled QKV weight-values versus projection-route control (2026-09-29)
+
+At HEAD `a41b2b1ca384f5f33a0eef6723ca4b2f0dc0ddf9`, a guarded
+scratch-only projection probe separated two previously confounded contrasts:
+native Q8_0 dispatch versus the Qwen35 resident F32 dispatch on exactly the
+same dequantized Q8 values, and official BF16 weights widened exactly to F32
+versus those Q8 values on the same F32 dispatch. Both used the pinned
+**native** block-29 norm/mod QKV input, not the official MPS input. This
+does not compare native F32 arithmetic with official BF16 matmul arithmetic.
+
+Two samples each retained batch 32: text-prefix rows 0..31, and a balanced
+selection of 8 prefix rows, 4 image-grid corners, and 20 geometric ROI rows
+(`230 + row*32 + col`, rows 9..13, columns 20..23). Root independently
+reconstructed the selected input bytes and checked their hashes and row IDs.
+The preserved first-32 run and the new run produced identical Q/K/V hashes
+for both Q8 and dequantized-Q8 F32 outputs. All F32 no-op repeats were
+bitwise identical; shifting each selected input row to its next text token
+or wrapped image-grid column changed Q/K/V under the same route and weights.
+
+| Geometric ROI projection | Same Q8 values, Q8 versus F32 route relative L2 | Official versus Q8 values, same F32 route relative L2 |
+| --- | ---: | ---: |
+| Q | 6.160975e-8 | 0.001794972 |
+| K | 5.553417e-8 | 0.001268693 |
+| V | 9.984992e-8 | 0.006220245 |
+
+Both columns use the dequantized-Q8 F32 output as denominator. The weight
+value contrast is substantially larger than the route contrast on these
+sampled linear projections; prefix and corner groups show the same ordering.
+This is a local weight-representation attribution, not an additive error
+budget or proof that replacing weights improves the official-reference
+distance after attention, the block, the denoising trajectory, or VAE decode.
+The ROI indexes latent tokens geometrically; no eye-specific decoder or
+perceptual claim follows.
+
+Batch 32 selects `qi21_q8_0_batch_matmul`. The M2 Max production batch-1254
+route normally selects `qi21_q8_0_register_reuse_matmul`, so its numerical
+contrast remains untested by this sample. Attention, context, block output,
+and image decode were not executed. The compiled probe's full-block `--run`
+mode remains disabled; root executed its rejection check and observed exit 1
+(`preflight explicitly forbids full-block execution`) before weight loading
+or GPU dispatch. Single-dispatch timings are not a benchmark or an
+end-to-end speed prediction.
+
+The child exited 0 under `run_safe.sh` with a 3-GiB process-tree RSS cap,
+50%-free memory floor, and 55%-free launch preflight. Recorded free-memory
+samples were 79% before and at least 78% after dispatches; the largest
+reported runner RSS sample was 2,341,273,600 bytes. These samples are not
+continuous peak/minimum measurements. Report:
+`/private/tmp/qwen21-dit-qkv-weight-route-20260929-uQqqaz/output/qkv_projection_weight_value_slice_probe.json`
+(SHA-256 `f756119cfc532643380d29988bc0b4d9b0bbfdde0c37deb985b868dab9b036db`);
+runner source SHA-256
+`49af674eec56bf2d93b96311a51763e0b1d188bfef96f9c8625995662aa5ee44`;
+binary SHA-256
+`6098e1e0ed1ed54565b5d65cb58de28bdef4173f92283f115a8c023f80ced354`.
+The inherited preflight prose mentions stale HEAD `f5017fa`, all-tap
+reproduction, and a context metric; those statements are not evidence for
+this projection-only run. Its actual source/HEAD/input pins and the new
+report define the admitted scope. Refresh after input/weight bytes,
+dequantization, kernel or buffer dispatch, row/batch selection, compiler,
+device, or scratch artifacts change. Next test the actual full-row dispatch
+and a same-route full-block weight-value contrast before a matched
+trajectory and same-VAE decoded-image promotion gate.
+
 ### Same-latent CPU/F32 VAE path and residual-direction control (2026-09-29)
 
 Status: **endpoint-gated diagnostic complete; VAE off-manifold claim not
