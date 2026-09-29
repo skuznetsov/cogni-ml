@@ -5434,6 +5434,60 @@ No production source was modified. Scratch can expire. Refresh this result
 after model/weight, official framework/MPS, native source/kernel, fixture,
 or tap/splice-boundary changes.
 
+### Call-10 block-29 first-residual causal splice (2026-09-29)
+
+A scratch-only resident Metal replay used the same exact official full-joint
+post-block-28 state and modulation in four arms: unspliced native baseline,
+native helper-input no-op, official BF16-widened first-residual donor, and
+native first-residual BF16-rounding control. The intervention entered the
+fused helper at `state = hidden + gate1 * attention_projection`, immediately
+before LayerNorm and modulation. It passed the donor as helper `hidden` and
+all-positive-zero `gate1`, leaving QKV, attention, and `to_out` computed from
+the original native hidden state. The attention projection and `gate2` taps
+were byte-identical across all arms; the official donor appeared in
+`state_buf` bitwise. The native no-op matched both the prior unspliced block
+output and every new operator tap bitwise. All 32 runtime projection sets
+remained Q8_0, and no production source was modified.
+
+Root independently widened the official BF16 block output and recomputed
+the following squared F32 L2 errors from raw full-joint arm files. The
+predeclared face-20 rows are the same rows used in the earlier block probes.
+
+| Block-29 output versus official MPS | Native baseline | Official first-residual donor | Error removed | Native BF16-round control |
+| --- | ---: | ---: | ---: | ---: |
+| Full joint, 1,254 rows | 10,190.543619 | 4,446.770508 | 56.363756% | 7,645.529518 |
+| Image target, 1,024 rows | 3,264.385298 | 1,094.100850 | 66.483710% | 3,453.418739 |
+| Face-20 rows | 60.821958 | 22.804227 | 62.506589% | 63.853555 |
+
+The same treatment reduced the native modulated MLP-input relative L2 gap
+to the official tap from 0.841881% to 0.303978% joint, from 0.914917%
+to 0.302385% image-wide, and from 0.810215% to 0.303807% in face-20.
+Merely rounding the *native residual state* to BF16 slightly worsened the
+image and face-20 block-output errors (5.790782% and 4.984380%);
+its joint error improved 24.974272%, so it is not a universal null.
+
+This cut establishes that an error already present at the first-residual
+state has a substantial causal effect on this one block's output under the
+fixed call-10 input. It does **not** distinguish native attention/to-out
+error from gate-1 or residual arithmetic, and the donor changes both the
+direct residual path and the downstream norm/MLP input. Therefore neither
+the difference from the earlier MLP-input splice nor these percentages are
+an additive attribution. No full velocity, 40-step trajectory, decoded
+face, or VAE-manifold effect was measured. The next DiT discriminator
+should split the attention projection from gate-1/residual formation using
+the same full-joint input and no-op guard.
+
+The successful guarded retry report is
+`/private/tmp/qwen21-dit-operator-cause-20260928/residual_state_splice_20260928/operator_splice_elevated_retry_01/splice_report.json`
+(SHA-256 `6d003b50ca5a182583d9ed6af0d65e60fba23e56583bdb2fcdf5fdaf019e27dc`);
+runner SHA-256 is
+`91a8e3330b884e3e61666a3f99cd68d7f63de253e19ad613a76ba1416ee47ce8`.
+The first default-sandbox attempt failed before GPU execution because Metal
+device initialization was unavailable there; its partial report was
+preserved separately, not used as model evidence. Scratch may expire;
+refresh after official framework/MPS or model, GGUF/native kernel, input
+fixture, or splice/tap-boundary changes.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder

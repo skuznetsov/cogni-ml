@@ -29606,3 +29606,24 @@ Refresh after source/toolchain/device/model/workload changes.
   `1ad6e53e02be5d13e9f14373a6b154ae607603367dfd5a13c1c8f59b01ee04ff`.
   Scratch may expire; pins and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A no-op-guarded scratch Metal splice on the exact official call-10
+  full-joint block-29 input replaced only the native first-residual
+  `state_buf` with the official BF16-widened donor before the fused
+  LayerNorm/modulation helper. Native QKV/attention/to-out and `gate2`
+  stayed byte-identical; the donor state was installed bitwise, and the
+  native no-op matched all taps and output bitwise. Root independently
+  recomputed squared block-output errors from raw arm files: the donor
+  removed 56.363756% joint, 66.483710% image-wide, and 62.506589% in
+  the predeclared face-20 rows. Native BF16 rounding alone worsened the
+  image and face-20 errors, though it improved the joint aggregate.
+  This locates a consequential pre-MLP residual-state discrepancy at one
+  fixed block/input, not its upstream operator, full trajectory, decoded
+  image, or VAE behavior. The donor also changes both direct residual and
+  downstream norm/MLP paths, so it cannot be subtracted from the earlier
+  MLP-input splice. Next: split attention projection from gate-1/residual
+  formation with a no-op-guarded same-input probe. Report SHA-256:
+  `6d003b50ca5a182583d9ed6af0d65e60fba23e56583bdb2fcdf5fdaf019e27dc`;
+  runner SHA-256:
+  `91a8e3330b884e3e61666a3f99cd68d7f63de253e19ad613a76ba1416ee47ce8`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
