@@ -30136,3 +30136,15 @@ Refresh after source/toolchain/device/model/workload changes.
   tested. Preserve the disabled full-block guard and require larger-route
   controls before promotion. Report pins, metadata caveats, resource scope,
   and refresh triggers are in `docs/qwen-image21-gguf-frontier.md`.
+- A scratch Qwen3-VL block-0 replay now composes the entire pinned 244-token
+  block without official intermediate donors: production norm/RoPE/residual/
+  SiLU, Torch-2.6-compatible QKV/O/MLP projections, and qualified CBLAS/SLEEF
+  attention reproduce all 16 saved official BF16 stages, including all
+  999,424 endpoint words. Root independently compared raw bytes and hashes.
+  Candidate four-token no-op/sensitivity controls and full-fixture explicit
+  parity-config production controls passed. This is a single-block CPU
+  arithmetic certificate, not a fast production route, full 36-layer
+  conditioner, or image-quality result; candidate cost was about 99.56 s.
+  The report, source/runtime pins, guard scope, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`. Next vectorize while preserving the
+  exact reduction/rounding policy, then test the full conditioner.

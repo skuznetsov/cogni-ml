@@ -2895,6 +2895,61 @@ compiler/CPU backend, or scratch-artifact changes. Next seek a fast
 parity-preserving vectorized MLP route, compose all block-0 boundaries, and
 then test the 36-layer conditioner and matched images before promotion.
 
+### Qwen3-VL donor-free composed block-0 arithmetic parity (2026-09-29)
+
+At HEAD `a41b2b1ca384f5f33a0eef6723ca4b2f0dc0ddf9`, a scratch CPU
+adapter recomputed the entire 244-token block 0 from the pinned initial
+hidden state, mask, generated text positions, and BF16 block weights. It
+used the production RMSNorm, QK norm, corrected RoPE, residual, and SiLU
+primitives, the existing Torch-2.6 ARM64 BF16 scalar projection helper for
+Q/K/V/O/gate/up/down, and the previously qualified CBLAS QK/PV plus active
+SLEEF softmax attention policy. No official intermediate tensor supplied a
+candidate computation input. Metadata-only preflight validated the official
+trace schema and hashes without opening its intermediate sidecars.
+
+The candidate wrote all 16 stage sidecars, including the supplied block
+input and final endpoint, and persisted their frozen SHA manifest before
+opening the official intermediate files for comparison. Root independently
+checked the frozen hashes, official hashes, current source pins, and raw
+bytes: **every saved stage is byte-identical to its official BF16 capture**.
+The endpoint matches all 999,424 BF16 words, with zero maximum error, RMSE,
+and relative RMS. This closes the previous fixed-donor gap for this single
+block/fixture: exact local operators also compose into an exact block.
+
+Two four-token candidate repeats matched every stage bit-for-bit; rotating
+those four input rows changed 16,373/16,384 endpoint words. Two full-244
+production-forward repeats also matched, under the explicit diagnostic
+configuration (Torch26 QKV, Accelerate O/MLP, SdpaF32 attention), **not**
+the default configuration. A full-row-rotation input control changed
+998,402/999,424 endpoint words. These controls test repeatability and input
+sensitivity; the exact full-244 candidate itself ran once.
+
+The guarded command used `OMP_NUM_THREADS=1`, `VECLIB_MAXIMUM_THREADS=1`,
+and `OPENBLAS_NUM_THREADS=1`, with `run_safe.sh <scratch>/composed_replay
+900 3072 --run`, a 50%-free memory floor, and a fresh 79%-free launch sample
+above the 55% gate. It exited 0. Successful wrapper output did not provide
+continuous peak RSS or minimum free memory. The candidate timer was
+99.556559 seconds; the explicit parity-config production repeats averaged
+approximately 13.10 seconds. These are diagnostic costs, not a paired
+production benchmark or an acceleration result.
+
+Report:
+`/private/tmp/qwen21-block0-composed-exact-20260929-i8sDMj/composed_replay_report.json`
+(SHA-256 `5b0a56a883b0169dfecf93ca11adbd23a644630206164f5da5d001e16424333e`);
+frozen manifest SHA-256
+`c2266029be1a8831ba73e336adddbe307af675a8febc0be89115f7e1351ed107`;
+runner source SHA-256
+`d4244615df8a19ed1761f50e3914c8cdf0820ab47b4433f2f77cc51cad0d9b96`;
+binary SHA-256
+`bc08dfaa0f208cb6a188745af52911100e38531414516006782df2b420faac2d`.
+The adapter is scratch-only and slower than the existing Accelerate route.
+No production source changed, and no other encoder layer, full conditioning,
+Metal implementation, or decoded image was tested. Refresh after input,
+mask/positions, weights, source arithmetic, CBLAS/SLEEF binaries, compiler,
+CPU architecture, or scratch artifacts change. Next seek a fast exact
+projection implementation and then test all 36 layers and matched images;
+do not substitute this one-block certificate for full-pipeline parity.
+
 ### Qwen3-VL QKV-selector same-seed image preview (2026-09-29)
 
 The pre-RoPE-correction full-encoder default and exact-QKV-selector BF16
