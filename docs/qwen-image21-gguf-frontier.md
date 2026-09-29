@@ -2721,6 +2721,46 @@ from the worktree; the guard script SHA-256 is
 Refresh after any official sidecar, fixture, weight, attention/downstream
 source, compiler, or scratch-artifact change.
 
+### Qwen3-VL block-0 standalone-SLEEF attention arithmetic (2026-09-29)
+
+The pinned 244-token Russian block-0 post-RoPE BF16 Q/K and BF16 V were
+replayed through CBLAS F32 QK and P@V, with the Torch-2.6 CPU MATH split
+Q/K pre-scale and a small arm64 NEON softmax shim. The shim calls
+`Sleef_expf4_u10` from a separately installed SLEEF 3.9.0 dylib, **not**
+from PyTorch. PyTorch 2.6 remains the test oracle, not a linked dependency
+of the candidate shim. The standalone dylib and shim linkage were inspected
+with `otool -L`; the installed SLEEF license is BSL-1.0.
+
+Root independently reran the scratch probe with
+`/opt/homebrew/Caskroom/miniconda/base/bin/python3 standalone_sleef_probe.py`
+from `/private/tmp/qwen21-block0-attention-exact-20260929/`. It exited zero:
+all valid softmax probabilities matched the PyTorch F32 bit words, and all
+999,424 attended BF16 values matched the official sidecar (the candidate
+output SHA-256 was
+`5f15018635c8e62f32ab08ba873dea50f80efd72d2de21457f28a15790dc2845`).
+All 65 adversarial rows across 13 lengths and five input families matched;
+the scalar-softmax negative control differed in 24 attended BF16 values and
+35/65 adversarial rows. A one-ULP score change altered one probability word,
+and the candidate matched the correspondingly changed PyTorch result.
+
+This is a **bounded arithmetic witness**, not a production integration,
+full-block or 36-layer parity result, portable packaging, performance gain,
+or decoded-image improvement. The shim currently resolves SLEEF through a
+Homebrew install name; a distributable single package needs a bundled or
+otherwise portable compatible library with correct install name, rpath,
+license notice, and signing. The shim timing includes 7,808
+Python-to-ctypes row calls and is not an in-process runtime estimate. The
+next gate is an opt-in native attention path, then the same composed-block
+donor crossover, full encoder, and matched image trajectory. The rerun report
+is `/private/tmp/qwen21-block0-attention-exact-20260929/standalone-sleef-3.9.0/sleef_softmax_probe_report.json`
+(SHA-256 `1911316808a15860e59786cb9acb965a2a74a72a0fa000499972be729ab298d2`);
+the shim source SHA-256 is
+`a195bf6e59edebda8c5d6dbefbefde112415e5f1e4b31977ac55f2fb5e27385e`
+and the SLEEF dylib SHA-256 is
+`e0ae0bebd5542b9f88be96947dd6f0f337ea2f6b75bce1d3b428093aa84f7f4f`.
+Refresh after the official sidecar, Torch/Accelerate/SLEEF arithmetic,
+compiler, CPU architecture, Q/K/V operands, or scratch artifacts change.
+
 ### Qwen3-VL QKV-selector same-seed image preview (2026-09-29)
 
 The pre-RoPE-correction full-encoder default and exact-QKV-selector BF16

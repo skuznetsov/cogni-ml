@@ -30050,3 +30050,13 @@ Refresh after source/toolchain/device/model/workload changes.
   a fixed-input intervention, not native-QKV, 36-layer, image, face, or VAE
   parity. No production attention route changed. Runner hashes, guards, and
   refresh triggers are in `docs/qwen-image21-gguf-frontier.md`.
+- A scratch-only CBLAS + arm64 NEON softmax replay using standalone SLEEF
+  3.9.0 (not a Torch-linked symbol) matched all valid PyTorch 2.6 CPU MATH
+  probability F32 words and all 999,424 official Qwen3-VL block-0 attended
+  BF16 values on the pinned 244-token Russian fixture. Root independently
+  reran it; 65/65 adversarial rows matched, while scalar softmax differed
+  in 24 attended BF16 values. This is an arithmetic witness, not a packaged
+  dependency, production path, full encoder, image-quality, or speed claim.
+  Portable SLEEF packaging and composed-block/full-trajectory gates remain.
+  Pins, controls, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
