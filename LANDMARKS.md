@@ -30148,3 +30148,15 @@ Refresh after source/toolchain/device/model/workload changes.
   The report, source/runtime pins, guard scope, and decay triggers are in
   `docs/qwen-image21-gguf-frontier.md`. Next vectorize while preserving the
   exact reduction/rounding policy, then test the full conditioner.
+- A fresh full-1,254-row call-10/block-29 QKV control exercised the default
+  M2 Max register-reuse Q8 kernel against resident F32 on exactly the same
+  dequantized Q8 values. Relative L2 was 5.74e-8..9.96e-8 overall, with the
+  same ordering in prefix/image/ROI groups. Root independently recomputed
+  all subgroup metrics from six raw sidecars, checked source/input/output
+  pins, and found full-row Q8 bytes identical to authoritative linear taps;
+  Q8 repeat and both routes' first-32 cross-batch hashes also matched. This
+  closes the smaller-batch dispatch gap for Q/K/V only, not attention, a
+  full block, denoising, or face quality. Keep a same-route full-block
+  weight-value intervention and matched trajectory/decode gate next. The
+  bounded command, evidence pins, resource scope, and refresh triggers are
+  in `docs/qwen-image21-gguf-frontier.md`.

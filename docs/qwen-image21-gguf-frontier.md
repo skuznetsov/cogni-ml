@@ -7415,6 +7415,79 @@ device, or scratch artifacts change. Next test the actual full-row dispatch
 and a same-route full-block weight-value contrast before a matched
 trajectory and same-VAE decoded-image promotion gate.
 
+### Block-29 full-row QKV same-values dispatch control (2026-09-29)
+
+At HEAD `abc6d4456b782b8c35c04daf0c8df7e60ee2023b`, a fresh guarded
+scratch run tested all 1,254 rows of the same native call-10/block-29
+norm/mod QKV input. It compared production Q8 dispatch with the Qwen35
+resident F32 route on exactly the same production-dequantized Q8 Q/K/V
+weight values. On Apple M2 Max, both `QWEN_IMAGE21_Q8_BATCH` and
+`QWEN_IMAGE21_Q8_REGISTER_REUSE` were unset; the production Q8 selector
+was enabled and the actual batch-1,254 kernel was
+`qi21_q8_0_register_reuse_matmul`. The runner explicitly rejects a disabled
+production selector before its direct Q8 helper call. This closes the
+larger-dispatch gap left by the batch-32 sample above for these projections.
+
+| Rows | Q relative L2 | K relative L2 | V relative L2 |
+| --- | ---: | ---: | ---: |
+| All 1,254 | 6.361581e-8 | 5.743121e-8 | 9.960900e-8 |
+| Text prefix, 230 | 7.923735e-8 | 8.236777e-8 | 1.090383e-7 |
+| Image, 1,024 | 6.174152e-8 | 5.583085e-8 | 9.692169e-8 |
+| Geometric ROI, 20 | 6.160975e-8 | 5.553417e-8 | 9.984992e-8 |
+
+Q8 output is the numerator; same-Q8-dequantized F32 output is the
+denominator. Maximum absolute difference is at most `7.62939453125e-6`.
+Root independently read and hash-checked all six full-row F32 sidecars,
+recomputed all 12 subgroup metrics, verified the input/source/binary pins,
+and compared Q8 bytes with the saved authoritative `linear_q/k/v` taps:
+all three full-row Q8 outputs were byte-identical. Both routes' first-32
+output hashes also matched the preserved batch-32 sample. The same-build
+Q8 repeat/no-op was bitwise identical on Q/K/V. The selective loader still
+changes weight-buffer residency, but the observed full-row Q8 endpoint
+equality validates that change for these three projections, not every tap
+or the complete block.
+
+This is a scoped projection arithmetic result on the native input, not
+official MPS input. No official dense weights, attention, context, full
+block, trajectory, VAE decode, or perceptual quality test ran. Together with
+the preceding sampled same-F32-route weight-value test, it supports the
+observed ordering of local representation and route differences; it does
+not make that ordering an additive error budget, prove a unique source of
+latent drift, or establish that different weights improve decoded faces.
+The strongest next discriminator remains a same-route full-block
+weight-value intervention before a matched trajectory and same-VAE image
+promotion gate. Full-block `--run` was not enabled.
+
+The preflight and probe each exited 0 under `run_safe.sh`, with a
+120-second timeout, 3-GiB process-tree RSS cap, 50%-free memory floor, and
+55%-free launch/entry gate. The probe wrapper reported about 7 seconds;
+recorded free memory was 68% before and 67% after, and the largest reported
+runner RSS sample was 1,537,409,024 bytes. Samples are not continuous
+peak/minimum measurements. Single-dispatch timers are not an end-to-end
+benchmark. Observed probe command:
+
+```text
+run_safe.sh /private/tmp/qwen21-block29-fullrow-route-20260929.GMWRJ3/qwen21_block29_qkv_weight_route_factorial 120 3072 --qkv-fullrow-route-probe
+```
+
+Report:
+`/private/tmp/qwen21-block29-fullrow-route-20260929.GMWRJ3/output/qkv_fullrow_route_probe.json`
+(SHA-256 `4e482d3dc5b56df7b0e613f9e95867387df7f7928c656e64bb15100d4ef68cd2`);
+preflight SHA-256
+`c728f73c4b6bbc44acb3faf856db33e3b2b9099407a29217891957ffdeda4387`;
+runner source SHA-256
+`5b129971c076b4b611a753b963ce2a6f4b7e86bb3ed78710836937969ee9c7be`;
+binary SHA-256
+`be6e5df585917003db46b7d0e352ef3aa65b8a19f82d5781d379f0ad88b95665`.
+The input SHA-256 remains
+`cea62407bfb5cdd9e25d0788a66ca83bfeeb44fd810bfdbf3a58e9fbf0ff8276`.
+The report records raw/dequantized weight, output, and active source hashes;
+root checked the numerical sources against the authoritative checkout.
+Refresh after input/weight bytes, dequantization, kernel or buffer dispatch,
+environment policy, row/batch selection, compiler, device, or scratch
+artifacts change. This is **ROBUST within the declared projection scope**;
+image-quality and full-block claims remain unadmitted.
+
 ### Same-latent CPU/F32 VAE path and residual-direction control (2026-09-29)
 
 Status: **endpoint-gated diagnostic complete; VAE off-manifold claim not
