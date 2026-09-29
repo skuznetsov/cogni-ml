@@ -30060,3 +30060,25 @@ Refresh after source/toolchain/device/model/workload changes.
   Portable SLEEF packaging and composed-block/full-trajectory gates remain.
   Pins, controls, and decay triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A hash-gated Qwen3-VL block-0 donor staircase on the same 244-token fixture
+  reduced final BF16 mismatches from 117,358/999,424 with native attention to
+  32,960 with official attended, 6,739 with official O projection, 4,608 with
+  official MLP gate, 239 with official MLP up, and zero with official MLP down.
+  The repeated attended arm was bitwise stable; a token-row-rotated O donor
+  yielded 997,926 mismatches. These cumulative interventions identify an
+  arithmetic frontier after attention, not additive error shares or a native
+  full-block/full-encoder fix. Next compose exact attention with O/MLP
+  arithmetic and then test full conditioning and same-seed images. Report
+  hashes, controls, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A guarded DiT call-10/block-29 replay held the exact native norm1 output
+  fixed while crossing Q8 versus official BF16 Q/K/V weights/routes. Linear-V
+  relative L2 to official MPS fell from 0.639860% to 0.287049%; image-row
+  block-output L2 fell from 0.491089% to 0.465618%, and predeclared face-20
+  rows from 0.467986% to 0.441722%. The no-op arm was bitwise identical, but
+  the image-row worst absolute error rose. A 0.307398% norm1-input gap is
+  already present and is not explained solely by final BF16 rounding. Weight
+  quantization and matmul route remain confounded, and neither decoded face
+  quality nor speed improved by this one-block evidence. Next cross official
+  norm1 input with both QKV routes; report, pins, and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.

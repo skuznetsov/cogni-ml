@@ -2761,6 +2761,52 @@ and the SLEEF dylib SHA-256 is
 Refresh after the official sidecar, Torch/Accelerate/SLEEF arithmetic,
 compiler, CPU architecture, Q/K/V operands, or scratch artifacts change.
 
+### Qwen3-VL block-0 downstream donor staircase (2026-09-29)
+
+A fresh scratch replay at HEAD `555d109eb1744166e5a1763a75823af72c4d4fd1`
+repeated the same pinned 244-token Russian block-0 official-Q/K/V-input
+crossover, with production Accelerate CBLAS projections and native downstream
+operators. It cumulatively substituted hash-checked official BF16 stage
+outputs; all counts below compare the 999,424-element block output against
+the official BF16 sidecar. The official-attended baseline was repeated with
+all 16 stage hashes identical. A token-row-rotated O-projection donor was the
+negative control.
+
+| Cumulative official donors | Block-output BF16 mismatches |
+| --- | ---: |
+| None: native attention | 117,358 |
+| `attended` | 32,960 |
+| `attended`, O projection | 6,739 |
+| Above plus post-attention norm | 6,739 |
+| Above plus MLP gate | 4,608 |
+| Above plus MLP up | 239 |
+| Above plus MLP down | 0 |
+| Wrong O donor (rotated token rows) | 997,926 |
+
+With official `attended`, native O projection still differs in 480 BF16
+values; injecting its official output makes the produced post-attention norm
+exact and cuts the final mismatch count to 6,739. The final all-donor output
+is byte-identical to the official `layers.0` sidecar (SHA-256
+`b1d65e38a757ef5438f4eb36565dfe30715b0c2271e338a2e8e0910a5df7f814`),
+independently checked with `cmp`. These cumulative intervention effects are
+not additive operator-error shares. They identify O-projection arithmetic
+and then gate/up/down GEMM arithmetic as production-relevant candidates
+*after* exact attention, without proving a portable implementation, native
+Q/K/V parity, whole 36-layer conditioning, or an image-quality gain.
+
+The bounded CPU run took 38.527 seconds, peaked at 1,896.14 MiB RSS, and
+observed 74% free system memory. The report is
+`/private/tmp/qwen21-block0-attention-exact-20260929/donor-staircase/results/qwen21_block0_donor_staircase_report.json`
+(SHA-256 `8fb08c54b88a06725bb9444dbacc30cf529a06d80108b4efeb9330da8c06b944`);
+the runner and guard source SHA-256 values are respectively
+`1a8e962dabc020bffbf782c0de12cf2cb021f2ae462b042ddb7466dd0dc0e83f`
+and `d872c2f23745a912da6d4e571a2920763db70c876d767cfe7429fcaa879afe00`.
+Root checked the report SHA, baseline-repeat bytes, and final-official bytes.
+Refresh after source arithmetic, official trace, fixture, weights, compiler,
+backend, or scratch artifacts change. The next falsifier is an in-process
+exact-attention plus O/MLP arithmetic candidate on this composed block before
+full-encoder and matched-image gates.
+
 ### Qwen3-VL QKV-selector same-seed image preview (2026-09-29)
 
 The pre-RoPE-correction full-encoder default and exact-QKV-selector BF16
@@ -7018,6 +7064,58 @@ matched full-block/trajectory and decoded face/text A/B after upstream Q/K/V
 and attention arithmetic are treated together. Refresh after source, Q/K/V
 captures, official context, masks, device/compiler, or scratch artifacts
 change.
+
+### Native norm1 versus Q8/BF16 QKV at DiT call 10/block 29 (2026-09-29)
+
+A guarded M2 Max one-block replay started from the official call-10 block-29
+input, byte-identical after widening its BF16 capture to F32, and used the
+saved official modulation. It compared native Q8 Q/K/V against official BF16
+Q/K/V weights on the *same captured native norm1 bytes*. A distinct Q8
+weights-object no-op reproduced the baseline block output and every captured
+stage bitwise; route logs verified three Q8 dispatches and three BF16
+dispatches. This changes both weight representation and native matmul route,
+so it does not isolate quantization from kernel arithmetic.
+
+| Stage relative L2 to official MPS BF16 | Q8 QKV | BF16 QKV |
+| --- | ---: | ---: |
+| Native norm1 / QKV input | 0.307398% | 0.307398% |
+| Linear Q | 0.302883% | 0.229735% |
+| Linear K | 0.272032% | 0.228484% |
+| Linear V | 0.639860% | 0.287049% |
+| Post-RoPE Q / K | 0.458622% / 0.427442% | 0.360642% / 0.354316% |
+| Attention context | 1.424002% | 1.219132% |
+| Block output, image rows | 0.491089% | 0.465618% |
+| Block output, predeclared face-20 rows | 0.467986% | 0.441722% |
+
+The first captured local difference is already native `norm1`, despite the
+identical block input. Rounding its F32 output to BF16 still leaves
+1,951,274/5,136,384 BF16 words different from the official norm1 capture;
+the rounded-native versus official relative L2 is 0.349866%. This rules out
+the *final* BF16 rounding of an otherwise identical native norm1 output as
+the sole explanation, but does not separate normalization arithmetic,
+intermediate dtype timing, and modulation semantics. The BF16 QKV route
+reduces the linear-V error substantially, yet the residual context and
+block-output differences remain. The image-row worst absolute block-output
+error also rises from 1.47687 to 1.54913, so aggregate L2 improvement is
+not a per-element or perceptual guarantee. Face-20 is the earlier
+predeclared image-token region (rows `[9,14)`, columns `[20,24)`).
+
+The preflight verified exact official input/tap/weight/model/source hashes,
+the process guard, and 74% free memory. Each arm took 3.58-3.87 seconds in
+this unbenchmarked one-shot run, with 74% free memory afterward and peak
+sampled runner RSS 518,209,536 bytes. The report is
+`/private/tmp/qwen21-block29-native-norm1-qkv-20260929-r1/output/native_norm1_qkv_report.json`
+(SHA-256 `279466687e605abf45b05cbb9b9c0af69a2316f68943be11010600d8ccb77b22`);
+preflight SHA-256 is
+`38df4d74252222cb597776eaba66a34ce5047c9c7238c0731ad70ba73cd09b82`.
+Root independently checked report SHA, baseline/no-op block bytes,
+same-input bytes, route logs, BF16-rounding control, and predeclared
+face-20 metrics. The next discriminator is an official-norm1-input donor
+crossed with Q8/BF16 QKV before deciding whether to adjust the norm kernel,
+weight format, or attention arithmetic. No full denoising, VAE, decoded
+face, or repeatable speedup was measured. Refresh after source/kernel,
+official captures, modulation, GGUF/weights, layout, device, compiler, or
+scratch artifacts change.
 
 ### Same-latent CPU/F32 VAE path and residual-direction control (2026-09-29)
 
