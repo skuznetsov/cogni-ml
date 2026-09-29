@@ -30113,3 +30113,14 @@ Refresh after source/toolchain/device/model/workload changes.
   Keep image promotion gated on a full matched trajectory and same-VAE
   decode. Report, controls, pins, and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A guarded, fixed-context Qwen3-VL block-0 MLP factorial held the pinned
+  official QKV/attended and exact-O context, independently reconstructed the
+  residual/postnorm exactly, and crossed CBLAS versus Torch-2.6-compatible
+  gate/up/down projection arithmetic. Root checked the raw sidecars: all
+  three exact projections and the final block endpoint match official BF16
+  byte-for-byte. Endpoint mismatches fall from 6,739/999,424 with native MLP
+  to 239 with exact gate+up and native down, then zero with all three exact;
+  a rotated-input control yields 998,068. The scalar helper is far slower
+  than CBLAS and is an attribution oracle only. Native QKV/attention, the
+  other 35 layers, and image quality remain unverified. Report pins, guard
+  scope, and refresh triggers are in `docs/qwen-image21-gguf-frontier.md`.

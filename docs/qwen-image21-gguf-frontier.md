@@ -2842,6 +2842,59 @@ CBLAS arithmetic, compiler, CPU architecture, or scratch artifacts change.
 Next isolate MLP arithmetic on this composed fixture before a full-encoder
 conditioning and matched-image promotion gate.
 
+### Qwen3-VL block-0 fixed-context MLP arithmetic factorial (2026-09-29)
+
+At HEAD `f5017fa0d41270370d870231d33158e48d01ca2a`, a scratch-only,
+hash-gated CPU replay held the official 244-token block input and O projection
+fixed. The earlier exact-O replay had matched the official O sidecar; this
+runner reconstructed the attention residual and post-attention norm from the
+pinned inputs, matching all 999,424 official norm BF16 words. It then crossed
+production Accelerate CBLAS and the existing Torch-2.6-compatible arm64 BF16
+scalar helper independently for MLP gate, up, and down projections. The
+activation, residual addition, weights, and fixed input were shared across
+arms. Root independently compared the exact gate, up, down, and endpoint raw
+sidecars with the official captures using `cmp`.
+
+| Exact MLP projections switched from CBLAS | Block-end BF16 mismatches / 999,424 |
+| --- | ---: |
+| None | 6,739 |
+| Gate only | 4,608 |
+| Up only | 2,830 |
+| Down only | 6,690 |
+| Gate and up, native down | 239 |
+| Gate, up, and down | **0** |
+
+The all-exact arm also matched every official gate and up BF16 word
+(2,998,272 values each), every official down word (999,424 values), and the
+complete official block endpoint byte-for-byte. Repeating each native
+projection was bitwise stable; the baseline reproduced the prior exact-O
+6,739-mismatch result. Rotating the postnorm donor by one token row produced
+998,068 endpoint mismatches. Pairwise and third-order endpoint interaction
+vectors were nonzero, so the individual switch effects are conditional and
+must not be added as independent error shares.
+
+This establishes an exact *local fixed-context arithmetic oracle*, not a
+production route. The scalar helper took approximately 17–21 seconds per
+MLP projection versus 0.06–0.09 seconds for CBLAS in this one guarded run;
+an unrelated concurrent Crystal workload confounds benchmark use. The runner
+did **not** recompute native Q/K/V, attention, O, or the other 35 encoder
+layers, and it did not generate or decode an image. It does not establish
+native conditioning parity, a face/text improvement, or a VAE-support claim.
+
+The guarded child exited 0 with a 3-GiB process-tree RSS cap, 50% sampled
+free-memory floor, and 900-second timeout; the wrapper did not emit a peak
+RSS or minimum-free measurement on successful exit. The factorial report is
+`/private/tmp/qwen21-block0-mlp-exact-20260929-A1hncX/mlp_factorial_report.json`
+(SHA-256 `4295e7063aba8c87ad45ba4e191eaf85d05395bc8867a304b59ebfb9647af577`);
+runner source SHA-256 is
+`31e500055925ee644d5a0db3e6d5fdd26eaacf184f1a8918e18d19112a824480`;
+guard record SHA-256 is
+`9f9598bfd7d971a65c49e3aa61e58b35928ac7c9a40ed3f74932d0e7a9908bbd`.
+Refresh after fixture, official sidecars, BF16 weights, source arithmetic,
+compiler/CPU backend, or scratch-artifact changes. Next seek a fast
+parity-preserving vectorized MLP route, compose all block-0 boundaries, and
+then test the 36-layer conditioner and matched images before promotion.
+
 ### Qwen3-VL QKV-selector same-seed image preview (2026-09-29)
 
 The pre-RoPE-correction full-encoder default and exact-QKV-selector BF16
