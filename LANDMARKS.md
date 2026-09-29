@@ -29802,3 +29802,16 @@ Refresh after source/toolchain/device/model/workload changes.
   `acea75ebf6fb70d7f06fe94ce1e2dc0db1ad19a6b4bce098629cd9147889718e`.
   Scratch may expire; source pins and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A fresh CPU-only call to current production Qwen3-VL layer-0
+  `rms_norm_rows` on the same pinned `[244,4096]` BF16 input, checkpoint
+  gamma, and F32 `eps=1e-6` matched the saved official norm output exactly:
+  0/999,424 BF16 mismatches. It differed from the older native trace in
+  the historical 321 values across 12 rows. No-op and wrong-epsilon,
+  reversed-gamma, row-roll, and shape controls discriminated. Thus the
+  older norm divergence is not reproduced by the current direct production
+  function; the old trace's executable/config provenance and fresh full-block
+  parity remain unknown. Next: same-input current Q/K/V projection replay,
+  then fresh full encoder and same-seed image A/B. Manifest SHA-256:
+  `30769269df00a310825c7c52ffb5dd8368ed30fb622c559c6e79345f6b964ce1`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.

@@ -2179,6 +2179,43 @@ refresh after model/weight provenance, prompt or trace sidecars,
 `input_layernorm` or projection source, PyTorch/Accelerate behavior, or BF16
 staging changes. Scratch evidence may expire.
 
+### Current-source Russian layer-0 input RMSNorm replay (2026-09-29)
+
+The historical 321/999,424 BF16 `input_layernorm` discrepancy above is a
+property of the saved native trace, **not a reproduced defect in the current
+production implementation**. A fresh CPU-only harness called the current
+`Qwen3VLTextBlock#rms_norm_rows` directly on the same byte-identical official
+and native `[244,4096]` BF16 block input. It loaded the selected checkpoint
+`layers.0.input_layernorm.weight` and used the pinned F32 `eps=1e-6`. The
+fresh current-source output matched the saved official BF16 output exactly:
+**0/999,424 mismatches**, 0 changed rows, and equal SHA-256
+`39f0dbf28df1975ddb924698b8fb2adc639a56ad440aa691b5d793ebf6573bb5`.
+It differed from the historical native sidecar in the original 321 values
+across 12 rows, with maximum absolute difference `0.000244140625`.
+
+A distinct no-op output clone was exact. Wrong epsilon (`1e-5`), reversed
+gamma, and one-row-rolled input produced 941,874, 979,708, and 998,333
+BF16 mismatches respectively; a truncated input failed the shape gate.
+Root checked the production source and binary hashes, output bytes, and
+historical mismatch count independently. The direct call excludes a
+current-source arithmetic mismatch at this one saved norm boundary. It does
+**not** establish which source/build/config produced the old native trace,
+that a full current encoder follows this direct call identically, or where
+the first current-source full-block difference lies. The next same-input
+falsifier is the production Q/K/V projection route from this confirmed norm
+output, followed by a fresh block and full-encoder comparison before any
+decoded-image quality claim.
+
+The replay manifest is
+`/private/tmp/qwen21-l0norm-falsifier-20260929.OCETdN/current_replay/manifest.json`
+(SHA-256 `30769269df00a310825c7c52ffb5dd8368ed30fb622c559c6e79345f6b964ce1`);
+the current-source scratch binary SHA-256 is
+`13a99e7928daa7ebf3a2050a0afd9b0323c627fc3e8a3837b5b01d9ade6c90dd`.
+The manifest pins source HEAD `1f786c1d4455ff114c99213470f0865088c4576e`,
+input, gamma, epsilon, output, controls, and production source digest.
+Refresh after source, checkpoint/config, BF16 staging, trace provenance, or
+fixture changes; scratch evidence may expire.
+
 ### Russian layer-0 attention replay on saved inputs (2026-09-28)
 
 A CPU-only, SHA-gated PyTorch 2.6.0 SDPA MATH replay separated the native
