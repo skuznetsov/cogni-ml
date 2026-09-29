@@ -6747,25 +6747,71 @@ mask each yielded the staged kernel's all-NaN sentinel. The run exited with
 the conditional runtime test and unrelated Metal/model-backed cases. This
 establishes production MSL compilation, one-row dispatch, and these guards,
 **not** full-grid numerical parity for the production kernel: the full-grid
-context result above still comes from the separate scratch runner. A matched
-same-input full-block replay is the next discriminator.
+context result above still comes from the separate scratch runner. The
+matched same-input full-block replay is reported below.
 An already-built package denoiser does not acquire this source change; a
 same-seed package-level A/B must rebuild and hash-pin its binary before the
 environment flag can select the new route.
 
 Current frontier: **guard-only exact-shape candidate**, not the default
-attention route. The small GPU path and full-grid context are evidenced;
-full DiT block output, denoising trajectory, decoded face/text quality, and
-repeatable latency are not. The candidate uses a serial thread-0 softmax
+attention route. The small GPU path and exact-official-QKV full-grid context
+are evidenced; native-QKV full-block output is reported below. Denoising
+trajectory, decoded face/text quality, and repeatable latency are not. The
+candidate uses a serial thread-0 softmax
 and may be slow. The scratch BF16 helper is not NaN-preserving; the production
 helper preserves non-finite values and the runtime smoke checks a NaN input,
 but numerical parity is still admitted only for captured finite operands.
-Only a finite-input, `head_dim=128,total_tokens=1254` opt-in is admissible
-for the next block falsifier; other shapes and the default retain the legacy
-route. A matched full-trajectory and decoded-image A/B is required before
-quality promotion.
+Only a finite-input, `head_dim=128,total_tokens=1254` opt-in is admitted for
+experiments; other shapes and the default retain the legacy route. A matched
+full-trajectory and decoded-image A/B is required before quality promotion.
 Refresh after source, donors, masks, arithmetic backend, device/compiler, or
 scratch artifacts change.
+
+### Native-QKV full-block BF16-staging crossover (2026-09-29)
+
+A bounded M2 Max replay started call-10 block 29 from the same official
+post-block-28 state, modulation, layout, masks, and native Q8_0 weights in
+three arms: unset/default legacy, invalid setting `true`, and the production
+`QWEN_IMAGE21_ATTENTION_BF16_STAGES=1` route. The production dispatch trace
+recorded two legacy selections and one staged selection at
+`head_dim=128,total_tokens=1254,query_tokens=1254`. The `true` control was
+bitwise identical to default in both attention context and block output.
+The legacy context/output SHA-256 values, `fa4bb5ef...25544` and
+`82ff90f7...b6cf`, reproduced earlier independent same-input runs exactly.
+
+| Relative L2 to official MPS BF16 | Legacy native QKV | Staged native QKV |
+| --- | ---: | ---: |
+| Attention context, all rows | 1.424002% | 1.597752% |
+| Attention context, image rows | 1.437384% | 1.604751% |
+| Block output, all rows | 0.215828% | 0.220974% |
+| Block output, image rows | 0.491089% | 0.520984% |
+| Block output, predeclared face-20 rows | 0.467986% | 0.493035% |
+
+Root independently recomputed the raw-output metrics and found the squared
+block-output error increased by 4.825% jointly, 12.545% on image rows, and
+10.992% in the face-20 region. Thus the dramatic fixed-*official-QKV*
+context improvement above did **not** transfer when the same arithmetic ran
+on the production native Q/K/V; on this fixture, staged arithmetic alone
+is a measured regression, not an image-quality correction. This does not
+show that the staged arithmetic is intrinsically wrong: upstream QKV errors
+and their interaction with attention rounding remain unresolved. The next
+discriminator crosses native versus exact official post-RoPE Q/K/V with
+legacy versus staged attention on one matched block input, including a
+bitwise native-writeback control. Do not promote the opt-in to default or
+claim decoded eye/text improvement from these block metrics.
+
+The one-shot arm wall times, 5.155 s legacy, 3.439 s invalid-setting
+control, and 3.607 s staged, are confounded by order and warmup and are not
+a speedup result. The guarded 120-second/2-GiB/50%-free run exited zero;
+preflight reported 76% free memory. The raw artifacts, matched-input hashes,
+route trace, and per-region metrics are indexed by
+`/private/tmp/qwen21-block29-attention-stage-ab-20260929/output/attention_stage_ab_report.json`
+(SHA-256 `1ab72031d1c0d9d0bc05ddd3408078a5ce5cdfff129a6adad8466b708c71cccc`);
+preflight SHA-256 is
+`bef30631ba8d3a82b669ffa9dcbb1bb0b03db6c96f916c6feb21c8e46ab9d670`.
+Refresh after source/kernel, GGUF, official capture, mask/layout, device,
+compiler, or scratch artifact changes. No full trajectory, PNG, or repeatable
+performance result was measured.
 
 ### Same-latent CPU/F32 VAE path and residual-direction control (2026-09-29)
 

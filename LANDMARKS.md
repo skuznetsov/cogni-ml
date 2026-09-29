@@ -29998,3 +29998,15 @@ Refresh after source/toolchain/device/model/workload changes.
   only finite captured Q/K/V. The serial softmax also needs a latency check
   before promotion. Sources, scope, and decay triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- The matched call-10/block-29 production-path crossover **refuted BF16
+  staging as a standalone native-QKV quality improvement on this fixture**:
+  official-MPS block-output relative L2 rose from 0.491089% to 0.520984%
+  on image rows and 0.467986% to 0.493035% in the predeclared face-20
+  region. Attention-context error also rose. Default and invalid-`true`
+  controls were bitwise identical, and the default reproduced the prior
+  block-output/context hashes. Keep legacy as default and the staged route
+  guard-only; next cross exact official versus native post-RoPE Q/K/V with
+  legacy versus staged attention. This single-block result neither measures
+  decoded image quality nor refutes the exact-official-QKV context gain.
+  Report, hashes, assumptions, and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
