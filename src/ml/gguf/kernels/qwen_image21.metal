@@ -9,6 +9,16 @@ static inline float qi21_bf16_to_f32(ushort value) {
     return as_type<float>(((uint)value) << 16);
 }
 
+// Round finite F32 values to BF16 using round-to-nearest-even, then widen
+// back to F32 for the existing F32-backed attention buffers. Preserve NaN
+// and infinities so invalid staged distributions remain visibly non-finite.
+static inline float qi21_round_f32_to_bf16(float value) {
+    if (!isfinite(value)) return value;
+    uint bits = as_type<uint>(value);
+    bits += 0x7fffu + ((bits >> 16) & 1u);
+    return as_type<float>(bits & 0xffff0000u);
+}
+
 // One simdgroup owns one output channel and reuses each Q8_0 weight block
 // across eight adjacent input rows. The output remains row-major [batch, out].
 struct qi21_q8_0_block {
@@ -415,6 +425,110 @@ kernel void qi21_block_causal_attention(
     if (tid == 0) inverse_sum = 1.0f / running_sum;
     threadgroup_barrier(mem_flags::mem_threadgroup);
     if (tid < head_dim) output[qbase + tid] = accumulator * inverse_sum;
+}
+
+// Guarded experiment for the official 1,254-token, 128-wide Qwen-Image
+// attention shape. Its donor scope is the captured finite official Q/K/V;
+// this is not a general non-finite-input path. Scores and probabilities are
+// rounded to BF16 around the F32 softmax and value accumulation. The host route
+// validates every row has an allowed key; a non-finite score or empty
+// distribution emits NaNs rather than silently becoming a finite result.
+constant uint QI21_BF16_STAGED_ATTENTION_TOKENS = 1254;
+kernel void qi21_block_causal_attention_bf16_staged(
+    device const float* q [[buffer(0)]],
+    device const float* k [[buffer(1)]],
+    device const float* v [[buffer(2)]],
+    device const int* image_ids [[buffer(3)]],
+    device const uchar* key_valid [[buffer(4)]],
+    device float* output [[buffer(5)]],
+    constant uint& total_tokens [[buffer(6)]],
+    constant uint& query_tokens [[buffer(7)]],
+    constant uint& query_offset [[buffer(8)]],
+    constant uint& heads [[buffer(9)]],
+    constant uint& head_dim [[buffer(10)]],
+    constant float& scale [[buffer(11)]],
+    uint group [[threadgroup_position_in_grid]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]],
+    uint simdgroup [[simdgroup_index_in_threadgroup]],
+    uint threads [[threads_per_threadgroup]]) {
+    const uint query_local = group / heads;
+    const uint head = group - query_local * heads;
+    if (query_local >= query_tokens || total_tokens != QI21_BF16_STAGED_ATTENTION_TOKENS ||
+        head_dim != 128 || threads != 128 || query_tokens == 0 ||
+        query_tokens > total_tokens || query_offset > total_tokens - query_tokens) return;
+
+    const uint query_token = query_offset + query_local;
+    const uint qbase = (query_local * heads + head) * head_dim;
+    const float qv = tid < head_dim ? q[qbase + tid] : 0.0f;
+    threadgroup float partials[QI21_MAX_SIMDGROUPS];
+    threadgroup float weights[QI21_BF16_STAGED_ATTENTION_TOKENS];
+    threadgroup uint attention_stages_valid;
+    if (tid == 0) attention_stages_valid = 1;
+
+    for (uint key_token = 0; key_token < total_tokens; ++key_token) {
+        const bool same_image = image_ids[query_token] >= 0 &&
+                                image_ids[query_token] == image_ids[key_token];
+        const bool allowed = key_valid[key_token] != 0 &&
+                             (query_token >= key_token || same_image);
+        const uint kbase = (key_token * heads + head) * head_dim;
+        const float product = allowed && tid < head_dim ? qv * k[kbase + tid] : 0.0f;
+        const float subgroup_sum = simd_sum(product);
+        if (lane == 0) partials[simdgroup] = subgroup_sum;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (tid == 0) {
+            float dot = 0.0f;
+            const uint simdgroups = (threads + 31) / 32;
+            for (uint i = 0; i < simdgroups; ++i) dot += partials[i];
+            const float score = allowed ? qi21_round_f32_to_bf16(dot * scale) : -INFINITY;
+            if (allowed && !isfinite(score)) attention_stages_valid = 0;
+            weights[key_token] = score;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    if (tid == 0) {
+        float maximum = -INFINITY;
+        bool has_allowed_key = false;
+        for (uint key_token = 0; key_token < total_tokens; ++key_token) {
+            const bool same_image = image_ids[query_token] >= 0 &&
+                                    image_ids[query_token] == image_ids[key_token];
+            const bool allowed = key_valid[key_token] != 0 &&
+                                 (query_token >= key_token || same_image);
+            has_allowed_key = has_allowed_key || allowed;
+            maximum = max(maximum, weights[key_token]);
+        }
+        float denominator = 0.0f;
+        for (uint key_token = 0; key_token < total_tokens; ++key_token) {
+            const float exponential = isinf(weights[key_token])
+                ? 0.0f : exp(weights[key_token] - maximum);
+            weights[key_token] = exponential;
+            denominator += exponential;
+        }
+        const bool valid_distribution = attention_stages_valid != 0 && has_allowed_key &&
+                                        isfinite(maximum) && isfinite(denominator) &&
+                                        denominator > 0.0f;
+        if (valid_distribution) {
+            for (uint key_token = 0; key_token < total_tokens; ++key_token) {
+                weights[key_token] = qi21_round_f32_to_bf16(weights[key_token] / denominator);
+            }
+        } else {
+            const float invalid = as_type<float>(0x7fc00000u);
+            for (uint key_token = 0; key_token < total_tokens; ++key_token) {
+                weights[key_token] = invalid;
+            }
+        }
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (tid < head_dim) {
+        float accumulator = 0.0f;
+        for (uint key_token = 0; key_token < total_tokens; ++key_token) {
+            const uint vbase = (key_token * heads + head) * head_dim;
+            accumulator += weights[key_token] * v[vbase + tid];
+        }
+        output[qbase + tid] = qi21_round_f32_to_bf16(accumulator);
+    }
 }
 
 // Experimental 128-wide path. Four SIMDgroups own four consecutive queries

@@ -754,16 +754,37 @@ module ML::GGUF
   # Its 8-key tile and 4-query mapping are admitted only for the measured
   # implementation shape; all other shapes retain the legacy kernel.
   module QwenImage21MetalAttentionPolicy
-    LEGACY_KERNEL = "qi21_block_causal_attention"
-    TILED_KERNEL  = "qi21_block_causal_attention_tiled"
+    LEGACY_KERNEL      = "qi21_block_causal_attention"
+    TILED_KERNEL       = "qi21_block_causal_attention_tiled"
+    BF16_STAGED_KERNEL = "qi21_block_causal_attention_bf16_staged"
+    BF16_STAGED_TOKENS = 1254
 
     def self.kernel_name(
       head_dim : Int32, total_tokens : Int32, query_tokens : Int32,
       setting : String? = ENV["QWEN_IMAGE21_ATTENTION_TILE"]?,
+      bf16_stages_setting : String? = ENV["QWEN_IMAGE21_ATTENTION_BF16_STAGES"]?,
+      query_offset : Int32 = 0,
     ) : String
+      staged_shape = head_dim == 128 && total_tokens == BF16_STAGED_TOKENS &&
+                     query_tokens > 0 && query_tokens <= total_tokens &&
+                     query_offset >= 0 && query_offset <= total_tokens - query_tokens
+      return BF16_STAGED_KERNEL if bf16_stages_setting == "1" && staged_shape
       return LEGACY_KERNEL unless setting == "1"
       return LEGACY_KERNEL unless head_dim == 128 && total_tokens >= 8 && query_tokens >= 4
       TILED_KERNEL
+    end
+
+    # Match the block-causal predicate used by both attention Metal kernels.
+    # Empty or length-mismatched masks are rejected rather than admitted as a
+    # vacuously valid set of rows.
+    def self.valid_rows?(image_ids : Array(Int32), key_valid : Array(Bool)) : Bool
+      return false if image_ids.empty? || image_ids.size != key_valid.size
+
+      image_ids.each_index.all? do |query|
+        image_ids.each_index.any? do |key|
+          key_valid[key] && (query >= key || (image_ids[query] >= 0 && image_ids[query] == image_ids[key]))
+        end
+      end
     end
   end
 
@@ -1894,11 +1915,8 @@ module ML::GGUF
       end
 
       private def self.validate_attention_rows(image_ids : Array(Int32), key_valid : Array(Bool)) : Nil
-        image_ids.each_index do |query|
-          valid = image_ids.each_index.any? do |key|
-            key_valid[key] && (query >= key || (image_ids[query] >= 0 && image_ids[query] == image_ids[key]))
-          end
-          raise ArgumentError.new("attention row has no valid keys") unless valid
+        unless QwenImage21MetalAttentionPolicy.valid_rows?(image_ids, key_valid)
+          raise ArgumentError.new("attention row has no valid keys")
         end
       end
 
@@ -1985,9 +2003,11 @@ module ML::GGUF
       ) : Nil
         kernel_name = QwenImage21MetalAttentionPolicy.kernel_name(
           config.head_dim, total_tokens, query_tokens,
+          query_offset: query_offset,
         )
         tiled = kernel_name == QwenImage21MetalAttentionPolicy::TILED_KERNEL
-        threads = tiled ? 128 : head_threads(config.head_dim)
+        staged = kernel_name == QwenImage21MetalAttentionPolicy::BF16_STAGED_KERNEL
+        threads = tiled || staged ? 128 : head_threads(config.head_dim)
         encoder.set_pipeline(pipeline(kernel_name))
         encoder.set_buffer(q, 0)
         encoder.set_buffer(k, 1)

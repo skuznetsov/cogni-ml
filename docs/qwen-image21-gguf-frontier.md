@@ -6712,14 +6712,60 @@ The first runtime attempt could not obtain a Metal device inside the sandbox;
 the same small test under device-enabled execution passed the bitwise repeat,
 mask reference/negative control, 1,253-token shape no-op, and 25 finite BF16
 rounding boundaries. It used five tiny dispatches, no model weights or full
-DiT forward, and about 17.8 MB maximum RSS. This validates the small GPU
-path only. The candidate uses a serial thread-0 softmax and may be slow;
-its BF16 helper is not NaN-preserving. Keep it scratch-only until a guarded
-full 1,254x32 exact-QKV block crossover checks context, block output,
-latency, and finite-input scope, followed by a matched full trajectory and
-decoded-image A/B before any production promotion. Refresh after source,
-donors, masks, arithmetic backend, device/compiler, or scratch artifacts
-change.
+DiT forward, and about 17.8 MB maximum RSS.
+
+The subsequent guarded full-grid crossover used all 1,254 queries, 32 heads,
+and the same hash-pinned official post-RoPE BF16 Q/K/V and MPS context on an
+M2 Max. Both routes produced 5,136,384 finite context values. Relative L2
+to the saved MPS BF16 context was `0.0101423` for the legacy F32 online
+softmax and `0.000312717` for BF16-staged attention; the latter matched
+5,130,976 values exactly at BF16, versus 1,208,846 after BF16-rounding the
+legacy output. Prefix/image relative L2 was `0.000623764/0.000241817` for
+staged and `0.00861808/0.0103308` for legacy. One un-warmed dispatch took
+`127.969` versus `91.7269` GPU ms, so this is an accuracy result and a
+latency warning, not a speedup claim. The full-grid run exited zero, with
+77% free host memory before dispatch and 210 MB measured peak RSS. Its
+scratch runner source/binary SHA-256 are `0ace96ca832750fbea84be0d5db75cdbe43e5c9090f4a899708d247e56ec5bad`
+and `9b04b159f35c9d36cc060bf1b5d89701b67591e1d951e6ab40b1472aaa5e8536`;
+the guarded invocation is
+`bash /private/tmp/qwen21-staged-attention-20260929/metal_preflight/run_capture_qkv_full_pilot.sh`.
+The wrapper hash-checks the four official operands/context, Metal source and
+metallib, and runner source/binary; its first attempt rejected a mistyped
+expected V hash before GPU execution, which was corrected against the
+official capture report before the successful run.
+
+The exact-shape production route is now opt-in with
+`QWEN_IMAGE21_ATTENTION_BF16_STAGES=1`; the unset default remains the legacy
+attention kernel. A bounded device-enabled spec on Apple M2 Max compiled the
+production Metal source through `newLibraryWithSource` and dispatched one
+offset-230 image query against all 1,254 visible keys. The zero-Q/K finite
+smoke agreed with the legacy output within `1e-2`; a NaN Q and an empty key
+mask each yielded the staged kernel's all-NaN sentinel. The run exited with
+`1 example, 0 failures, 0 errors, 0 pending` under a 120-second, 2-GiB RSS,
+50%-free-memory guard. The same spec file's sandboxed non-device checks had
+`17 examples, 0 failures, 0 errors, 9 pending`; the pending cases include
+the conditional runtime test and unrelated Metal/model-backed cases. This
+establishes production MSL compilation, one-row dispatch, and these guards,
+**not** full-grid numerical parity for the production kernel: the full-grid
+context result above still comes from the separate scratch runner. A matched
+same-input full-block replay is the next discriminator.
+An already-built package denoiser does not acquire this source change; a
+same-seed package-level A/B must rebuild and hash-pin its binary before the
+environment flag can select the new route.
+
+Current frontier: **guard-only exact-shape candidate**, not the default
+attention route. The small GPU path and full-grid context are evidenced;
+full DiT block output, denoising trajectory, decoded face/text quality, and
+repeatable latency are not. The candidate uses a serial thread-0 softmax
+and may be slow. The scratch BF16 helper is not NaN-preserving; the production
+helper preserves non-finite values and the runtime smoke checks a NaN input,
+but numerical parity is still admitted only for captured finite operands.
+Only a finite-input, `head_dim=128,total_tokens=1254` opt-in is admissible
+for the next block falsifier; other shapes and the default retain the legacy
+route. A matched full-trajectory and decoded-image A/B is required before
+quality promotion.
+Refresh after source, donors, masks, arithmetic backend, device/compiler, or
+scratch artifacts change.
 
 ### Same-latent CPU/F32 VAE path and residual-direction control (2026-09-29)
 

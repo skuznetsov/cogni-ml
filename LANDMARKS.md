@@ -29980,13 +29980,21 @@ Refresh after source/toolchain/device/model/workload changes.
   sensitivity probe, then same-seed image A/B. Hashes, controls, and refresh
   triggers are in
   `docs/qwen-image21-gguf-frontier.md`; scratch may expire.
-- On exact official Q/K/V at DiT call 10/block 29, scratch BF16 stage rounding
-  reduced attention-context relative L2 to the saved official MPS output from
-  about 0.01014 (F32 math) to 0.0000469. This is a fixed-context candidate,
-  not a full-block or image result. A one-query/one-head, 1,254-key Metal smoke
-  passed five tiny dispatches under device-enabled execution; its serial
-  softmax may be slow and its BF16 helper is not NaN-preserving. Keep the
-  candidate out of production until a guarded full 1,254x32 exact-QKV block
-  crossover, latency check, matched trajectory, and decoded-image A/B pass.
-  Scope, report hash, and decay triggers are in
+- On exact official Q/K/V at DiT call 10/block 29, a guarded scratch M2 Max
+  full-grid 1,254-query/32-head crossover reduced attention-context relative
+  L2 to saved official MPS BF16 from 0.0101423 (legacy F32 online softmax)
+  to 0.000312717 (BF16 staged); 5,130,976/5,136,384 staged values matched
+  BF16 exactly. One un-warmed GPU dispatch took 127.969 versus 91.7269 ms,
+  so this is a fixed-context accuracy gain with a latency warning, not a
+  speedup. All outputs were finite; mask negative controls and hash gates
+  passed. A mistyped expected V hash was caught before dispatch and corrected
+  against the official capture report. The production exact-shape opt-in
+  compiled and passed a bounded one-query Metal dispatch, including NaN and
+  empty-mask sentinels; the unset default remains legacy. That smoke does not
+  establish production full-grid parity. Keep the candidate guard-only until
+  full DiT block output, matched trajectory, and decoded-image face/text A/B
+  are measured. The scratch BF16 helper mishandles some NaNs; the production
+  helper preserves non-finite values, but the numerical parity claim covers
+  only finite captured Q/K/V. The serial softmax also needs a latency check
+  before promotion. Sources, scope, and decay triggers are in
   `docs/qwen-image21-gguf-frontier.md`.

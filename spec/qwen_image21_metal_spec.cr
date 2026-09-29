@@ -34,6 +34,174 @@ describe ML::GGUF::QwenImage21MetalAttentionRouteTrace do
     selected.should be < dispatched
     dispatched.should be < observed
     encoder[observed..].should contain("kernel_name, config.head_dim, total_tokens, query_tokens")
+    encoder.should contain("threads = tiled || staged ? 128 : head_threads(config.head_dim)")
+    encoder.should contain("query_tokens * config.heads")
+    encoder.should contain("query_offset: query_offset")
+  end
+end
+
+describe ML::GGUF::QwenImage21MetalAttentionPolicy do
+  it "keeps BF16 stages disabled by default and opts in only for the exact admitted shape" do
+    policy = ML::GGUF::QwenImage21MetalAttentionPolicy
+
+    # The focused spec command unsets this env var; this call exercises the
+    # production default rather than only an explicit nil override.
+    policy.kernel_name(128, 1254, 1254, setting: nil)
+      .should eq(ML::GGUF::QwenImage21MetalAttentionPolicy::LEGACY_KERNEL)
+    policy.kernel_name(128, 1254, 1254, setting: nil, bf16_stages_setting: nil)
+      .should eq(ML::GGUF::QwenImage21MetalAttentionPolicy::LEGACY_KERNEL)
+    policy.kernel_name(128, 1254, 1254, setting: nil, bf16_stages_setting: "1")
+      .should eq(ML::GGUF::QwenImage21MetalAttentionPolicy::BF16_STAGED_KERNEL)
+    policy.kernel_name(128, 1254, 1254, setting: nil, bf16_stages_setting: "true")
+      .should eq(ML::GGUF::QwenImage21MetalAttentionPolicy::LEGACY_KERNEL)
+    policy.kernel_name(128, 1254, 1024, setting: nil,
+      bf16_stages_setting: "1", query_offset: 230)
+      .should eq(ML::GGUF::QwenImage21MetalAttentionPolicy::BF16_STAGED_KERNEL)
+  end
+
+  it "does not widen BF16 staging to nearby shapes or invalid query ranges" do
+    policy = ML::GGUF::QwenImage21MetalAttentionPolicy
+    stage = "1"
+
+    policy.kernel_name(127, 1254, 1254, setting: nil, bf16_stages_setting: stage)
+      .should eq(ML::GGUF::QwenImage21MetalAttentionPolicy::LEGACY_KERNEL)
+    policy.kernel_name(128, 1253, 1253, setting: nil, bf16_stages_setting: stage)
+      .should eq(ML::GGUF::QwenImage21MetalAttentionPolicy::LEGACY_KERNEL)
+    policy.kernel_name(128, 1254, 0, setting: nil, bf16_stages_setting: stage)
+      .should eq(ML::GGUF::QwenImage21MetalAttentionPolicy::LEGACY_KERNEL)
+    policy.kernel_name(128, 1254, 1255, setting: nil, bf16_stages_setting: stage)
+      .should eq(ML::GGUF::QwenImage21MetalAttentionPolicy::LEGACY_KERNEL)
+    policy.kernel_name(128, 1254, 1024, setting: nil,
+      bf16_stages_setting: stage, query_offset: -1)
+      .should eq(ML::GGUF::QwenImage21MetalAttentionPolicy::LEGACY_KERNEL)
+    policy.kernel_name(128, 1254, 1024, setting: nil,
+      bf16_stages_setting: stage, query_offset: 231)
+      .should eq(ML::GGUF::QwenImage21MetalAttentionPolicy::LEGACY_KERNEL)
+  end
+
+  it "preserves the fourth positional tile selector and uses the tile route outside the staged shape" do
+    policy = ML::GGUF::QwenImage21MetalAttentionPolicy
+
+    policy.kernel_name(128, 768, 768, "1")
+      .should eq(ML::GGUF::QwenImage21MetalAttentionPolicy::TILED_KERNEL)
+    policy.kernel_name(128, 1253, 1253, "1", "1")
+      .should eq(ML::GGUF::QwenImage21MetalAttentionPolicy::TILED_KERNEL)
+    policy.kernel_name(128, 1254, 1254, "1", "1")
+      .should eq(ML::GGUF::QwenImage21MetalAttentionPolicy::BF16_STAGED_KERNEL)
+  end
+
+  it "rejects all-masked rows before any attention kernel dispatch" do
+    policy = ML::GGUF::QwenImage21MetalAttentionPolicy
+
+    policy.valid_rows?([-1, -1, 0, 0], [true, true, true, true]).should be_true
+    policy.valid_rows?([-1, 0], [false, true]).should be_false
+    policy.valid_rows?([-1, 0], [false, false]).should be_false
+    policy.valid_rows?([-1, 0], [true]).should be_false
+  end
+
+  it "preserves NaN and infinity in the staged kernel's BF16 conversion guard" do
+    source = File.read(File.expand_path("../src/ml/gguf/kernels/qwen_image21.metal", __DIR__))
+
+    source.should contain("if (!isfinite(value)) return value;")
+    source.should contain("attention_stages_valid")
+  end
+end
+
+private def qwen_image21_attention_stage_runtime_output(
+  pipeline : ML::Metal::ComputePipeline,
+  q : Array(Float32), k : Array(Float32), v : Array(Float32),
+  image_ids : Array(Int32), key_valid : Array(UInt8), query_offset : Int32,
+) : Array(Float32)
+  total_tokens = 1254
+  query_tokens = 1
+  heads = 1
+  head_dim = 128
+  buffers = [] of ML::MetalBuffer
+  begin
+    q_buffer = ML::MetalBuffer.from_array(q)
+    buffers << q_buffer
+    k_buffer = ML::MetalBuffer.from_array(k)
+    buffers << k_buffer
+    v_buffer = ML::MetalBuffer.from_array(v)
+    buffers << v_buffer
+    image_ids_buffer = ML::MetalBuffer.new(image_ids.size.to_i64 * sizeof(Int32))
+    buffers << image_ids_buffer
+    image_ids_buffer.write_bytes(image_ids.to_unsafe.as(Pointer(UInt8)), image_ids.size * sizeof(Int32))
+    key_valid_buffer = ML::MetalBuffer.new(key_valid.size.to_i64)
+    buffers << key_valid_buffer
+    key_valid_buffer.write_bytes(key_valid.to_unsafe, key_valid.size)
+    output_buffer = ML::MetalBuffer.new(query_tokens.to_i64 * heads * head_dim * sizeof(Float32))
+    buffers << output_buffer
+
+    command = ML::Metal::CommandBuffer.new
+    encoder = ML::Metal::ComputeEncoder.new(command)
+    encoder.set_pipeline(pipeline)
+    encoder.set_buffer(q_buffer, 0)
+    encoder.set_buffer(k_buffer, 1)
+    encoder.set_buffer(v_buffer, 2)
+    encoder.set_buffer(image_ids_buffer, 3)
+    encoder.set_buffer(key_valid_buffer, 4)
+    encoder.set_buffer(output_buffer, 5, ML::Metal::BufferAccess::Write)
+    encoder.set_value(total_tokens.to_u32, 6)
+    encoder.set_value(query_tokens.to_u32, 7)
+    encoder.set_value(query_offset.to_u32, 8)
+    encoder.set_value(heads.to_u32, 9)
+    encoder.set_value(head_dim.to_u32, 10)
+    encoder.set_value((1.0_f64 / Math.sqrt(head_dim)).to_f32, 11)
+    encoder.dispatch_threadgroups({1, 1, 1}, {128, 1, 1})
+    encoder.end_encoding
+    command.commit_and_wait
+    output_buffer.read(query_tokens * heads * head_dim)
+  ensure
+    buffers.each(&.release)
+  end
+end
+
+describe "QwenImage21MetalAttentionBF16StagesRuntime" do
+  it "compiles production MSL and smoke-checks one-row finite, non-finite, and empty-mask behavior" do
+    pending!("set QWEN_IMAGE21_STAGE_RUNTIME=1 to compile and dispatch the tiny Metal probe") unless ENV["QWEN_IMAGE21_STAGE_RUNTIME"]? == "1"
+    pending!("Metal is unavailable") unless ML::Metal::Device.init!
+
+    source = File.read(File.expand_path("../src/ml/gguf/kernels/qwen_image21.metal", __DIR__))
+    staged_name = ML::GGUF::QwenImage21MetalAttentionPolicy.kernel_name(
+      128, 1254, 1, setting: nil, bf16_stages_setting: "1", query_offset: 230)
+    staged_name.should eq(ML::GGUF::QwenImage21MetalAttentionPolicy::BF16_STAGED_KERNEL)
+    staged = ML::Metal::ComputePipeline.new(staged_name, source)
+    legacy = ML::Metal::ComputePipeline.new(
+      ML::GGUF::QwenImage21MetalAttentionPolicy::LEGACY_KERNEL, source,
+    )
+
+    total_tokens = 1254
+    q = Array(Float32).new(128, 0.0_f32)
+    k = Array(Float32).new(total_tokens * 128, 0.0_f32)
+    v = Array(Float32).new(total_tokens * 128) do |index|
+      (((index * 13) % 47) - 23).to_f32 / 37.0_f32
+    end
+    image_ids = Array(Int32).new(total_tokens, -1)
+    (230...total_tokens).each { |index| image_ids[index] = 0 }
+    valid_mask = Array(UInt8).new(total_tokens, 1_u8)
+    staged_output = qwen_image21_attention_stage_runtime_output(
+      staged, q, k, v, image_ids, valid_mask, 230,
+    )
+    legacy_output = qwen_image21_attention_stage_runtime_output(
+      legacy, q, k, v, image_ids, valid_mask, 230,
+    )
+    staged_output.all?(&.finite?).should be_true
+    legacy_output.all?(&.finite?).should be_true
+    staged_output.zip(legacy_output).max_of { |value, reference| (value - reference).abs }
+      .should be < 1e-2_f32
+
+    q[0] = Float32::NAN
+    nonfinite_output = qwen_image21_attention_stage_runtime_output(
+      staged, q, k, v, image_ids, valid_mask, 230,
+    )
+    nonfinite_output.all?(&.nan?).should be_true
+
+    empty_mask_output = qwen_image21_attention_stage_runtime_output(
+      staged, Array(Float32).new(128, 0.0_f32), k, v,
+      image_ids, Array(UInt8).new(total_tokens, 0_u8), 230,
+    )
+    empty_mask_output.all?(&.nan?).should be_true
   end
 end
 
