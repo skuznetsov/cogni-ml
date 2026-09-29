@@ -30015,3 +30015,29 @@ Refresh after source/toolchain/device/model/workload changes.
   decoded image quality nor refutes the exact-official-QKV context gain.
   Report, hashes, assumptions, and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- On the pinned 244-token Qwen3-VL block-0 official post-RoPE Q/K and V,
+  production-equivalent causal attention reproduces 741/999,424 BF16
+  `attended` mismatches. Forced PyTorch 2.6 CPU MATH SDPA and explicit
+  full-shape batched F32 attention each reproduce the official sidecar
+  exactly; unforced CPU SDPA differs in 657,017 values. A scratch-only
+  split-Q/K-pre-scale scalar candidate reduces 741 mismatches to 262 but
+  fixes 600 while introducing 121 new ones, so it is not an exact repair.
+  Twenty selected query/head controls first diverge at the QK score, which
+  does not assign every full-output mismatch. No production route changed;
+  next test a production-compatible MATH arithmetic path, composed encoder,
+  then same-seed decoded images. Pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A fresh guarded attention-only 2x2 Metal factorial at DiT call 10/block 29
+  crossed native/official post-RoPE Q/K/V with legacy/BF16-staged attention.
+  Against official MPS BF16 context, all-row relative L2 was 1.424002%
+  native-legacy, 1.597752% native-staged, 1.014233% donor-legacy, and
+  0.031269% donor-staged; image and predeclared face-20 rows gave the same
+  direction. Existing native/donor hashes, a Q/K/V shadow no-op, invalid
+  setting fallback, route counts, and resource guards passed. This verifies
+  a QKV-source-by-attention-policy interaction in this fixed context, not a
+  general BF16 gain or decoded-face fix. The default stays legacy and the
+  staged route guard-only. Next diagnose upstream Q/K/V together with
+  attention arithmetic before full trajectory and image A/B. The earlier
+  interrupted scratch run had no final report; the clean report, pins,
+  assumptions, and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.

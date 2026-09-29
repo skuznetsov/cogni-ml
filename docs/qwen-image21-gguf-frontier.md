@@ -2641,6 +2641,41 @@ that guard script's SHA-256 is
 Refresh after source/runtime arithmetic, pinned model or fixture, official
 trace, donor sidecars, or scratch artifacts change.
 
+### Qwen3-VL block-0 attention arithmetic cut (2026-09-29)
+
+On the same pinned 244-token official post-RoPE Q/K and V, a direct replay of
+the production causal GQA attention reproduced the 741/999,424 BF16
+`attended` mismatches. Forcing PyTorch 2.6 CPU `SDPBackend.MATH` reproduced
+the official sidecar exactly (0 mismatches); the unforced CPU SDPA backend
+instead differed in 657,017 values. An explicit full-shape F32 batched
+Q@K, softmax, and P@V replay also matched the official sidecar exactly.
+Thus backend selection is part of this oracle's arithmetic contract; a
+generic "CPU SDPA" comparison is not a valid substitute.
+
+A scratch-only scalar candidate split the attention scale between Q and K
+before each product, leaving the scalar reduction, softmax, and V accumulation
+otherwise unchanged. Across the full output it reduced mismatches from 741
+to 262: 600 old mismatches disappeared, 121 new ones appeared, and 141
+remained. Root independently recomputed these counts from all three pinned
+BF16 sidecars. In 19 preselected mismatching query/head groups plus a
+one-key exact control, the first observed production-versus-MATH divergence
+was the QK score. This localizes those selected cases only; the full-output
+count falsifies split pre-scaling as an exact or ready-to-ship repair. The
+remaining differences may include reduction topology and later arithmetic.
+
+No repository attention code or default route changed. This is a block-0
+attention-output diagnostic, not a composed-encoder, latent-trajectory, face,
+text, or VAE improvement. Next reproduce the MATH arithmetic with a bounded
+production-compatible kernel and test the composed block/full encoder before
+any same-seed decoded-image claim. The scratch report is
+`/private/tmp/qwen21-block0-attention-arithmetic-20260929/attention_arithmetic_report.json`
+(SHA-256 `6eb15e55cbd0192fc8b820df8312596a3e6e54212c14d6aa63cb49867709c8bb`);
+the production and candidate output SHA-256 values are respectively
+`01f81b8aa75f2b3380046c227db7ff60911342ca185b68b8bbcdaec264382579`
+and `c197a62beb21ef4ce6778159ddfbea6a490deec1859c138227ef27c14d6e9334`.
+Refresh after the official trace, operands, attention source, Torch backend,
+compiler, or scratch artifacts change.
+
 ### Qwen3-VL QKV-selector same-seed image preview (2026-09-29)
 
 The pre-RoPE-correction full-encoder default and exact-QKV-selector BF16
@@ -6854,6 +6889,50 @@ preflight SHA-256 is
 Refresh after source/kernel, GGUF, official capture, mask/layout, device,
 compiler, or scratch artifact changes. No full trajectory, PNG, or repeatable
 performance result was measured.
+
+### Native/official-QKV attention-policy factorial (2026-09-29)
+
+A fresh guarded attention-only M2 Max replay crossed native versus official
+post-RoPE Q/K/V with legacy versus BF16-staged production attention at the
+same call-10/block-29 layout (1,254 queries, 32 heads, 128 dimensions). The
+scratch copy changed only host-method visibility; its Metal kernel is
+byte-identical to production. No model weights or full DiT block ran. The
+four raw F32 context hashes matched an independent audit; native legacy,
+native staged, and official-donor legacy also reproduced their earlier pinned
+hashes. A native Q/K/V read-write no-op and invalid-setting fallback were
+bitwise exact; route tracing recorded four legacy and two staged dispatches.
+
+| Q/K/V source and attention route | All-row context relative L2 to official MPS BF16 | Image-row relative L2 | Predeclared face-20 relative L2 |
+| --- | ---: | ---: | ---: |
+| Native Q/K/V, legacy | 1.424002% | 1.437384% | 1.452636% |
+| Native Q/K/V, staged | 1.597752% | 1.604751% | 1.631958% |
+| Official Q/K/V, legacy | 1.014233% | 1.033085% | 1.024371% |
+| Official Q/K/V, staged | 0.031269% | 0.024192% | 0.005927% |
+
+The staged-minus-legacy squared context error is positive on native Q/K/V
+and negative on official Q/K/V in all three regions. The all-row vector
+difference-in-differences RMS is `0.0132028`. Therefore the fixed-donor
+staging gain depends strongly on its Q/K/V source; applying staging alone to
+current native Q/K/V is a measured regression, consistent with the full-block
+crossover above. This supports an upstream-QKV/arithmetic interaction, not a
+unique defective operator, VAE-manifold claim, or decoded-eye improvement.
+The opt-in remains guard-only and the default stays legacy. One-shot staged
+GPU dispatches were slower here (about 141-142 ms versus 88-95 ms legacy),
+but order and warmup prevent a stable performance claim.
+
+The single controlled run exited zero under a 120-second, 2-GiB RSS,
+50%-free-memory guard (observed minimum 73% free and 913,473,536-byte
+sampled maximum RSS). Its report is
+`/private/tmp/qwen21-block29-attn-factorial-20260929-r2/output/attention_factorial_report.json`
+(SHA-256 `6eeab93637036995e04cd2e292f74cb9cd6d0d01960ed1cde283f0f368bfd3a3`);
+preflight SHA-256 is
+`bb88039220ad6f9b56d277894400464edc90becdd2fcd5869e4e69a58f62d404`.
+An earlier concurrent attempt left four independently audited raw contexts
+but no final report and remains diagnostic-only. The next quality gate is a
+matched full-block/trajectory and decoded face/text A/B after upstream Q/K/V
+and attention arithmetic are treated together. Refresh after source, Q/K/V
+captures, official context, masks, device/compiler, or scratch artifacts
+change.
 
 ### Same-latent CPU/F32 VAE path and residual-direction control (2026-09-29)
 
