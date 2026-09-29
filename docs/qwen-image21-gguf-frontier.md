@@ -1773,6 +1773,41 @@ under `/private/tmp/qwen21-russian-native-block0-0VaL0X/trace/`. These
 scratch artifacts may expire. Re-run after changes to the checkpoint,
 Transformers/PyTorch version, projection backend, or norm implementation.
 
+### Same-input Qwen3VL layer-0 BF16 SwiGLU falsifier (2026-09-28)
+
+The 244-row Russian fixture has BF16 gate/up sidecars on both the native
+Accelerate and official CPU/PyTorch routes. For each route separately, a
+scratch Crystal harness reopened the production `Qwen3VLTextBlock` module
+and called its actual private `silu_bf16` and `bf16` methods on the saved
+gate/up pairs. A PyTorch 2.6.0 CPU replay computed `F.silu(gate) * up` from
+the **same** BF16 inputs. The output BF16 bytes matched exactly for all
+2,998,272 elements per route, including the 14 dropped and 230 retained
+rows. The native-input output SHA-256 was
+`5e6383217c334b6a25e53f511901dfed9093357e927a17878fcfc7e755c0318e`;
+the official-input output SHA-256 was
+`11e7644cafa39b7711db42b1c51c96b048dbc27ace4d5a791149b1969dd33b9c`
+on both Crystal and PyTorch. A separate source-matched NumPy BF16-RNE replay
+also had zero per-element mismatches against PyTorch on both inputs.
+Native gate/up input SHA-256s were
+`8252377427b6e7070a3c235c2ceeaa1c68f5d382903d028b49ca378545fcd497`/
+`f467f8b0e1c1afb344348c93b4ed53829857112a63f5e58fd4cebd73c68801ae`;
+official gate/up input SHA-256s were
+`ca093d46b747bad6d61fdf2364fbfdc7ca79fcea400dff50f74f23c52e96ef54`/
+`63252d9500ca29f4630aa789eeb90d2434b9889e70580fc92fb6710ca234e75d`.
+
+This rejects a standalone BF16 SiLU/product-staging mismatch on these saved
+inputs; it does **not** erase upstream gate/up projection differences,
+measure `down_proj`, establish a full-layer/full-encoder parity fix, or
+predict image quality. The harness is
+`/private/tmp/qwen3vl_bf16_activation_audit_20260928.cr` (SHA-256
+`74cccfc79882084138fdc13e9728a0f05c0bbeab4935e3248a206cec3297e2c4`)
+against production module SHA-256
+`412daaf2fcde2bb13f35a91035909eb00995aa162147ea8bc15cd7fd4d97944a`.
+No model checkpoint or full inference was run. Scratch may expire; refresh
+after input sidecars, Crystal activation source, or PyTorch CPU arithmetic
+change. The next Qwen3VL accuracy discriminator should target a same-input
+projection/reduction or `down_proj` boundary, not this activation alone.
+
 The downstream causal claim remains deliberately narrow: different Qwen3VL
 outputs produce a small step-0 latent difference that accumulates under the
 same native Q4-labeled mixed-quant GGUF/Metal DiT. This experiment does

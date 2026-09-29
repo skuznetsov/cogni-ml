@@ -28705,6 +28705,17 @@ Refresh after source/toolchain/device/model/workload changes.
   284/85/73 values; exact-weight PyTorch replays reproduce the official side.
   Do not promote an isolated RMSNorm fix: on the prior red-cube fixture, two
   locally better norm reductions worsened the final 36-layer embedding.
+- On each saved 244-row layer-0 gate/up BF16 input separately, the actual
+  Crystal `silu_bf16`/`bf16` methods and PyTorch 2.6.0 CPU
+  `F.silu(gate) * up` produced identical 2,998,272-element BF16 outputs,
+  including dropped and retained rows. This falsifies a standalone
+  same-input BF16 SwiGLU activation-staging mismatch on this fixture, not
+  the upstream projection difference, `down_proj`, or full Qwen3VL/image
+  parity. Native/official input-route output SHAs were respectively
+  `5e6383217c334b6a25e53f511901dfed9093357e927a17878fcfc7e755c0318e`/
+  `11e7644cafa39b7711db42b1c51c96b048dbc27ace4d5a791149b1969dd33b9c`.
+  Harness/source pins and refresh conditions are in
+  `docs/qwen-image21-gguf-frontier.md`.
 - Under the matched 40-step native DiT, differing Qwen3VL conditioning moves
   the image latent from 0.0207% relative L2 at step 0 to 11.1655% at step 39.
   The endpoint difference is not scalar amplification of the first difference
