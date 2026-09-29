@@ -2547,6 +2547,31 @@ Refresh after the source, compiler arithmetic, official fixture/checkpoint,
 selected QKV backend, or scratch artifacts change; rollback is the former
 inverse-frequency expression without enabling native conditioning.
 
+### Five residual Q-norm mismatches: BF16 midpoint (2026-09-29)
+
+A scratch-only replay of the saved block-0 Q/K projection donors with the
+pinned PyTorch 2.6.0 CPU primitives reproduced the official Q-norm and K-norm
+sidecars exactly (0/999,424 and 0/249,856 BF16 mismatches). The native Q-norm
+sidecar still differs at five coordinates: tokens 2, 13, 16, 240, and 243,
+all at head 13, feature 105; native K-norm is exact. At each coordinate,
+PyTorch's FP32 variance is `0x3b772726` versus native's `0x3b772725`.
+This one-ULP difference moves the normalized FP32 value from the exact BF16
+midpoint `0.564453125` (rounds to `0x3f10`) to just above it (rounds to
+`0x3f11`), yielding official `0x3f83` versus native `0x3f84` after the BF16
+weight multiply. Holding variance fixed, Torch `rsqrt` and the native inverse
+route produce the same bits at these coordinates; variance reduction is the
+discriminator, not a post-hoc output-ULP adjustment.
+
+This establishes the five-coordinate rounding mechanism, not a whole-tensor
+native arithmetic emulator: the scratch native mirror has two unrelated Q
+and two K residual mismatches. The exact PyTorch reduction topology still
+needs a red regression test before changing production code. No such fix was
+made. The hash-gated report is
+`/private/tmp/qwen21-qnorm-five-20260929/torch260-report.md` (SHA-256
+`02ad56d15069dec4bd064fdbb8a05271733fdf660461b694d041a9e6b4fec434`).
+Refresh after the saved donors, weights, sidecars, Torch runtime, or native
+norm implementation change; scratch may expire.
+
 ### Qwen3-VL QKV-selector same-seed image preview (2026-09-29)
 
 The pre-RoPE-correction full-encoder default and exact-QKV-selector BF16
@@ -2605,6 +2630,38 @@ independently rerun. Its result is bounded to this isolated input and decays
 with source, fixture, weights, backend, or scratch artifacts. The next
 discriminator needs the actual current-source composed layer-33 output as
 the layer-34 input, with the official input as a paired control.
+
+### Composed layer-34 input/backend crossover (2026-09-29)
+
+The post-RoPE-fix 36-layer sweeps saved both actual native `h034` inputs,
+then a 2x2 crossover held each input fixed while varying only L34's QKV
+backend. Official `h034` through both backends was the positive control.
+The first 2-GiB guarded sweep was stopped after layer 1 by the memory cap,
+not by a parity failure. Both subsequent sweeps and six isolated arms passed
+sequential 8-GiB/1800-second/12%-free guards, with unchanged fixture,
+weights, mask, and non-QKV backend.
+
+| L34 input | Default QKV retained rel-RMS | Selector QKV retained rel-RMS |
+| --- | ---: | ---: |
+| Native default `h034` | 0.013000210 | 0.012999178 |
+| Native selector `h034` | 0.017802965 | 0.017799970 |
+| Official `h034` | 0.001021139 | 0.000756018 |
+
+The local backend change is tiny on either fixed native input, whereas
+swapping the two native inputs changes output error by about 0.0048. Yet
+*before* L34 the selector input is closer to official `h034`: retained
+rel-RMS 0.009003876 versus default 0.011928596. Their ordering reverses
+at `h035`: selector 0.017799970 versus default 0.013000210. This is
+input-direction/L34-path sensitivity, not a larger scalar input error or
+proof that one named operation caused it. On the final retained `h036`,
+default is 0.018764452 and selector 0.020345479; neither is a decoded-image
+quality score. The report and raw captures are under
+`/private/tmp/qwen21-composed-l34-20260929/` (`report.md` SHA-256
+`455766d6c1a1f192ecf348c92117634c8016dc54d5170af01efdc6d51c16cedc`).
+The next causal cut should test the L34 sensitivity to the two residual
+directions on matched input; a same-seed DiT/VAE image A/B is still needed
+before quality promotion. Refresh after source, fixture, weights, backend,
+or scratch artifacts change.
 
 ### Russian layer-0 attention replay on saved inputs (2026-09-28)
 
@@ -6607,6 +6664,35 @@ the official Diffusers source, exact-QKV operands, native Metal source,
 outputs, and prior A/B reports. Refresh after any of those inputs,
 attention/mask implementation, dtype/backend, or scratch artifacts change.
 No full trajectory or GPU model forward was run in these new probes.
+
+### Exact-QKV BF16 attention staging candidate (2026-09-29)
+
+On the saved call-10/block-29 official post-RoPE BF16 Q/K/V, a PyTorch 2.6
+CPU replay varied only attention rounding stages. Relative L2 to the saved
+official MPS BF16 context (joint/prefix/image) was
+`0.010140/0.008617/0.010329` for F32 math,
+`0.001953/0.001934/0.001956` after BF16 scaled-logit rounding,
+`0.001656/0.001638/0.001659` after additionally rounding probabilities,
+and `0.0000469/0.0000295/0.0000488` with BF16 P@V operands/output.
+A bitwise repeat passed; a wrong noncausal-prefix mask changed prefix output
+substantially. This is a strong *fixed-context arithmetic candidate*, not
+an MPS emulator, full-block attribution, or face/text quality result. The
+report is `/private/tmp/qwen21-staged-attention-20260929/staged_attention_report.json`
+(SHA-256 `acbff02b27f83736c109ed0c56c33690ee23028f534c885c03b8278dabdee10d`).
+
+A scratch-only Metal kernel and one-query/one-head, 1,254-key smoke compiled.
+The first runtime attempt could not obtain a Metal device inside the sandbox;
+the same small test under device-enabled execution passed the bitwise repeat,
+mask reference/negative control, 1,253-token shape no-op, and 25 finite BF16
+rounding boundaries. It used five tiny dispatches, no model weights or full
+DiT forward, and about 17.8 MB maximum RSS. This validates the small GPU
+path only. The candidate uses a serial thread-0 softmax and may be slow;
+its BF16 helper is not NaN-preserving. Keep it scratch-only until a guarded
+full 1,254x32 exact-QKV block crossover checks context, block output,
+latency, and finite-input scope, followed by a matched full trajectory and
+decoded-image A/B before any production promotion. Refresh after source,
+donors, masks, arithmetic backend, device/compiler, or scratch artifacts
+change.
 
 ### Same-latent CPU/F32 VAE path and residual-direction control (2026-09-29)
 

@@ -29959,3 +29959,27 @@ Refresh after source/toolchain/device/model/workload changes.
   `4ed70ddc5f0a4a6b867c694dd247fd086e27577f3ebbbd7b7dda4a732fa1f982`.
   Source, fixture, backend, and scratch changes invalidate the evidence;
   detail is in `docs/qwen-image21-gguf-frontier.md`.
+- Post-RoPE-fix Qwen3-VL parity remains a scoped diagnostic, not a native
+  conditioning or image-quality promotion. A pinned Torch 2.6 CPU replay
+  reproduced official block-0 Q/K norm sidecars exactly; all five remaining
+  native Q-norm mismatches share a one-ULP FP32 variance change at a BF16
+  midpoint. No production norm fix was made. Two guarded 36-layer sweeps and
+  six fixed-input L34 crossover arms showed the selector's retained relative
+  RMS is lower at `h034` (0.009004 versus 0.011929) but higher at `h035`
+  (0.017800 versus 0.013000). Changing L34 QKV backend on a fixed native
+  input changed the output error only around 0.000001-0.000003; incoming
+  residual direction is the stronger discriminator. This does not assign a
+  specific L34 operator or prove decoded-image quality. The next cut is a
+  red exact-variance norm test and an L34 matched-input sensitivity probe,
+  then same-seed image A/B. Hashes, controls, and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`; scratch may expire.
+- On exact official Q/K/V at DiT call 10/block 29, scratch BF16 stage rounding
+  reduced attention-context relative L2 to the saved official MPS output from
+  about 0.01014 (F32 math) to 0.0000469. This is a fixed-context candidate,
+  not a full-block or image result. A one-query/one-head, 1,254-key Metal smoke
+  passed five tiny dispatches under device-enabled execution; its serial
+  softmax may be slow and its BF16 helper is not NaN-preserving. Keep the
+  candidate out of production until a guarded full 1,254x32 exact-QKV block
+  crossover, latency check, matched trajectory, and decoded-image A/B pass.
+  Scope, report hash, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
