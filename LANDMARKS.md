@@ -29968,7 +29968,12 @@ Refresh after source/toolchain/device/model/workload changes.
   matched the full official Q/K norm sidecars at 0/999,424 and 0/249,856
   BF16 mismatches in both ordinary and release builds. The generic profile
   retained exactly five Q mismatches and no K mismatch; 35 relevant specs
-  passed. This does not establish composed encoder or image parity. Two
+  passed. An independently repeated guarded block-0 replay, feeding exact
+  official Q/K/V projection donors into production operations, kept Q/K norm
+  and post-RoPE Q/K at zero mismatches; the first observed divergence was
+  attention output (741 BF16 mismatches), followed by 117,358 block-output
+  mismatches. The pinned official trace was Torch 2.6 CPU SDPA. This bypasses
+  native Q/K/V GEMMs and does not establish full-encoder or image parity. Two
   guarded 36-layer sweeps and
   six fixed-input L34 crossover arms showed the selector's retained relative
   RMS is lower at `h034` (0.009004 versus 0.011929) but higher at `h035`
@@ -29976,8 +29981,8 @@ Refresh after source/toolchain/device/model/workload changes.
   input changed the output error only around 0.000001-0.000003; incoming
   residual direction is the stronger discriminator. This does not assign a
   specific L34 operator or prove decoded-image quality. The next cut is a
-  bounded composed-layer norm/hidden-state probe and an L34 matched-input
-  sensitivity probe, then same-seed image A/B. Hashes, controls, and refresh
+  same-input attention-arithmetic discriminator at block 0 and an L34
+  matched-input sensitivity probe, then same-seed image A/B. Hashes, controls, and refresh
   triggers are in
   `docs/qwen-image21-gguf-frontier.md`; scratch may expire.
 - On exact official Q/K/V at DiT call 10/block 29, a guarded scratch M2 Max

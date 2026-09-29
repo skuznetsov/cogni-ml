@@ -2599,6 +2599,48 @@ comparison. Refresh after
 the saved donors, weights, sidecars, Torch/runtime/compiler profile, or native
 norm implementation change; scratch may expire.
 
+### Qwen3-VL block-0 composed donor replay after Q/K norm fix (2026-09-29)
+
+A bounded 244-token replay fed the hash-pinned official BF16 Q/K/V projection
+sidecars into the production block immediately before `normalize_qk`, bypassing
+the three native projection GEMMs. It then used production Q/K normalization,
+RoPE, causal attention, O projection, post-attention norm, and MLP. The pinned
+official trace reports PyTorch 2.6 CPU `sdpa`, **not** MPS. Model/source,
+fixture, donor, weight, and trace hashes passed. The generic-profile negative
+control retained five Q-norm mismatches; an identical profiled replay was
+F32-bitwise repeatable at every captured stage. Root independently reran the
+guarded binary with exit 0, 1.916 s wall time, 1,554.59 MiB sampled peak RSS,
+and 71% minimum system-free memory (180 s / 3 GiB / 50% guard).
+
+| Stage versus official BF16 sidecar | BF16 mismatches | Relative RMS |
+| --- | ---: | ---: |
+| Q norm, K norm, post-RoPE Q, post-RoPE K | 0 each | 0 each |
+| Attention output (`attended`) | 741 | 0.004256% |
+| O projection | 13,159 | 0.017598% |
+| MLP down projection | 172,885 | 0.116457% |
+| Block output | 117,358 | 0.108526% |
+
+The first **observed** divergence after the exact donor boundary is attention
+output. Later differences include both propagated input error and native
+operator arithmetic; these counts do not assign causal shares. This verifies
+the Q/K norm and RoPE boundary only for this pinned donor replay, not native
+Q/K/V projection, full-encoder conditioning, image quality, or VAE behavior.
+The next discriminator compares the exact post-RoPE inputs at selected
+attention query/head positions against PyTorch 2.6 CPU SDPA score, softmax,
+weighted-sum, and output-cast behavior before changing production code.
+
+The scratch runner is
+`/private/tmp/qwen21-block0-proj-donor-20260929/qwen21_block0_qk_fixed_replay.cr`
+(SHA-256 `33ad48cf8e5c340bce2d4c764b4d68449cc09bf8c7958215aa31e71e6807f0d0`),
+and the binary SHA-256 is
+`91d19b49faf82a55e0a104bed0a935b78fa384f73845d20c96b125bcd70526c4`.
+The replay command is
+`python3 /private/tmp/qwen21-block0-proj-donor-20260929/guard_debug_replay.py`;
+that guard script's SHA-256 is
+`06d86f50ec734fcb8949790e249b1997e629a8c34a900ced8ce5f692b4c2e1e7`.
+Refresh after source/runtime arithmetic, pinned model or fixture, official
+trace, donor sidecars, or scratch artifacts change.
+
 ### Qwen3-VL QKV-selector same-seed image preview (2026-09-29)
 
 The pre-RoPE-correction full-encoder default and exact-QKV-selector BF16
