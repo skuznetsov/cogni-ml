@@ -5230,6 +5230,69 @@ must test whether a selective higher-precision path also lowers final
 velocity, next latent, and decoded face error on matched full trajectories
 before a production precision/performance change.
 
+### Call-10 block-29 official operator taps and MLP-input boundary (2026-09-28)
+
+An isolated official MPS/BF16 block-29 replay loaded only its nine weight
+tensors (436,208,128 bytes), the saved exact post-block-28 joint state and
+modulation, and the pinned Diffusers RoPE/mask/segment route. The explicit
+all-true joint key-valid mask was retained; replacing it with `None` would
+select a different attention route. With no hooks, the entire
+`[1,1254,4096]` BF16 block output matched the saved official call-10
+post-block-29 tensor byte-for-byte (SHA-256
+`7df76603d10ecab8cc1b5ef99ab8bf945d40c62056365c0dd1a5be2306109582`).
+A second replay with 23 passive hooks produced the same exact output. Root
+independently compared both raw outputs with the saved teacher. The hooked
+report verified tap shapes, BF16/MPS provenance, finiteness, and raw hashes.
+The run did not load the whole transformer or execute a diffusion trajectory.
+
+The official hook on `img_mlp` captures the modulated norm-2 output just
+before gate/up. The native operator tap captures the resident Metal `norm2_buf`
+at the same boundary, with both blocks seeded from the same exact official
+post-block-28 state. Comparing the native F32 values to the official BF16
+values widened to F32 yields:
+
+| Matched block-29 MLP input | Joint | Image rows | Face-20 rows |
+| --- | ---: | ---: | ---: |
+| Relative L2, native F32 versus official BF16-widened | 0.841881% | 0.914917% | 0.810215% |
+| Relative L2 after rounding native F32 to BF16 RNE | 0.858045% | 0.929769% | 0.826535% |
+
+Root and a separate CPU comparator independently reproduced the face values
+from raw taps; the comparator reproduced the joint and image values too.
+The face-only native rounding term is 0.165261% relative L2 against the
+unrounded native input, so a final BF16 cast at this boundary does not erase
+the discrepancy. This establishes a same-input drift **before** gate/up in
+this one block. It does not distinguish Q8 attention projections, Q/K norm,
+RoPE/attention, residual, LayerNorm/modulation, or BF16 staging inside that
+prefix, and it does not assign a fraction of the final block-output error to
+the prefix. The earlier gate/up splice remains a separate, bounded causal
+result. The official gate/up taps and native production gate/up tap are on
+*different* MLP inputs and must not be interpreted as a fixed-input
+quantization comparison.
+
+The no-hook report SHA-256 is
+`d4c7384b40f9e5aa0385e64205758feda03ed1c99833cccea07cc05570073212`;
+the passive-tap report SHA-256 is
+`8187b131543bd80d111153d92e9774e3609e2d6c825e4370e904145db0414ce1`;
+the pinned native MLP-input tap SHA-256 is
+`83f55b3704fccd33f3d0cf632a41ad7668732381f90a1c564b542da004822f2a`;
+the official MLP-input tap SHA-256 is
+`6e9e9611febf73ee822e26b3f2b0cdbd56d959cb406a4c36df31d91e272c59e4`.
+The current dual-mode isolated-block harness and CPU comparator are under
+`/private/tmp/qwen21-dit-operator-cause-20260928/`; the passive runner
+SHA-256 is `dc5bdaaae2a5a177658e3018dc964f96caf8051e35cd9324b4afad2db7ad56fd`
+and the CPU comparator SHA-256 is
+`b559068e98be8b8e843b22393e1d92e5b8915fb531219a8d26585109a6bb29e8`.
+The original no-hook runner version was subsequently changed to add the
+passive mode, so its recorded hash is retained in its report but that exact
+source file is not currently preserved; the no-hook raw output and
+byte-exact teacher comparison remain independently verifiable. Scratch may
+expire; refresh after model/weights, Diffusers/Hub/PyTorch/MPS route,
+masks/RoPE, native source, input fixture, or tap boundaries change. The next
+causal cut is a no-op-guarded transplant of the official MLP input into the
+native block suffix, followed by narrower prefix probes. The existing
+gate/up-only splice cannot perform this cut without a new instrumentation
+stage.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder

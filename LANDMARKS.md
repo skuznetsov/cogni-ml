@@ -29535,3 +29535,24 @@ Refresh after source/toolchain/device/model/workload changes.
   `ab0956a4bb0346a3f2ff141a8e7f9d5b4e50979922b4192808e39c9b2123378a`.
   Scratch may expire; pins and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- An isolated official MPS/BF16 call-10 block-29 replay loaded only its nine
+  weights and exact saved post-block-28 state. Both no-hook and 23-passive-tap
+  runs matched the saved official `[1,1254,4096]` post-block-29 output
+  byte-for-byte (SHA-256 `7df76603d10ecab8cc1b5ef99ab8bf945d40c62056365c0dd1a5be2306109582`);
+  root independently compared raw outputs. The native resident Metal
+  `norm2_buf` and official modulated norm-2 output are the same pre-gate/up
+  boundary on the same block input. Native F32 versus official BF16-widened
+  relative L2 is 0.841881% joint, 0.914917% image, and 0.810215% in the
+  face-20 rows; BF16-rounding native first leaves 0.858045%, 0.929769%,
+  and 0.826535%. Root and a separate CPU comparator checked raw face values.
+  Thus a discrepancy exists before gate/up and survives the boundary BF16
+  cast. The operator within that prefix and its causal share of final
+  block/velocity/image error are not established. A no-op-guarded official
+  MLP-input splice into the native block suffix is the next causal cut;
+  the existing gate/up-only splice cannot perform it. No-hook/passive report
+  SHA-256: `d4c7384b40f9e5aa0385e64205758feda03ed1c99833cccea07cc05570073212`/
+  `8187b131543bd80d111153d92e9774e3609e2d6c825e4370e904145db0414ce1`.
+  The original no-hook runner hash is recorded but its exact source version
+  was not retained after adding passive mode; raw output parity remains
+  checkable. Scratch may expire; pinning, tap hashes, and refresh triggers
+  are in `docs/qwen-image21-gguf-frontier.md`.
