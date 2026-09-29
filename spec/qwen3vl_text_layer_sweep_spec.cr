@@ -3,7 +3,7 @@ require "digest/sha256"
 require "json"
 
 private QWEN3VL_SWEEP_REVISION = "790c92633540aa0cb11d9abf19eb46d861714758"
-private QWEN3VL_SWEEP_PROMPT = "a tiny lighthouse above a quiet harbor"
+private QWEN3VL_SWEEP_PROMPT   = "a tiny lighthouse above a quiet harbor"
 
 private def qwen3vl_sweep_reference_bundle(directory : String) : String
   raw_tokens = 18
@@ -141,6 +141,7 @@ describe "qwen3vl text-layer sweep reference binding" do
       stdout.to_s.should contain("reference_validation=passed model_revision=#{QWEN3VL_SWEEP_REVISION}")
       stdout.to_s.should contain("prompt=#{QWEN3VL_SWEEP_PROMPT.inspect}")
       stdout.to_s.should contain("projection_backend=scalar")
+      stdout.to_s.should contain("qkv_projection_backend=none")
       stdout.to_s.should contain("manifest_sha256=#{Digest::SHA256.hexdigest(File.read(File.join(reference_dir, "qwen_image21_text_reference.json")))}")
       stdout.to_s.should contain("raw_tokens=18 retained_tokens=4 drop_idx=14")
       stdout.to_s.should contain("tokens=18")
@@ -163,14 +164,40 @@ describe "qwen3vl text-layer sweep reference binding" do
       accelerate_status.exit_code.should_not eq(0), "stdout=#{accelerate_stdout} stderr=#{accelerate_stderr}"
       accelerate_stdout.to_s.should contain("projection_backend=accelerate")
 
+      qkv_args = args.dup
+      qkv_args << "--qkv-projection-backend=torch26-arm64-bf16"
+      qkv_stdout = IO::Memory.new
+      qkv_stderr = IO::Memory.new
+      qkv_status = Process.run("crystal", qkv_args, output: qkv_stdout, error: qkv_stderr)
+      qkv_status.exit_code.should_not eq(0), "stdout=#{qkv_stdout} stderr=#{qkv_stderr}"
+      qkv_stdout.to_s.should contain("qkv_projection_backend=torch26-arm64-bf16")
+
       script_source = File.read(script)
       script_source.should contain("json.field \"fixture_manifest_sha256\"")
       script_source.should contain("projection_backend: projection_backend")
+      script_source.should contain("json.field \"qkv_projection_backend\"")
+      script_source.should contain("qkv_projection_backend: qkv_projection_backend")
     ensure
       Dir.glob(File.join(reference_dir, "*")).each { |path| File.delete(path) }
       Dir.delete(reference_dir)
       Dir.delete(encoder_dir)
       Dir.delete(root)
     end
+  end
+
+  it "rejects unsupported QKV projection backends before loading model inputs" do
+    script = File.expand_path("../scripts/qwen3vl_text_layer_sweep.cr", __DIR__)
+    stdout = IO::Memory.new
+    stderr = IO::Memory.new
+    status = Process.run("crystal", [
+      "run", script,
+      "--link-flags", "-fuse-ld=/usr/bin/ld",
+      "--",
+      "--qkv-projection-backend=unsupported",
+    ], output: stdout, error: stderr)
+
+    status.exit_code.should eq(1)
+    stderr.to_s.should contain("--qkv-projection-backend must be torch26-arm64-bf16")
+    stderr.to_s.should_not contain("provide --text-encoder-dir")
   end
 end
