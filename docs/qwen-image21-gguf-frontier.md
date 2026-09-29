@@ -2399,8 +2399,119 @@ projection arithmetic parity only for the pinned input, weights, Torch CPU
 version, and arm64 dispatch. It does not establish later projection, complete
 block/36-layer, DiT, VAE, glyph, or face parity. Re-run after any relevant
 checkpoint, trace, compiler, host arithmetic, or PyTorch dispatch change.
-Next run a controlled Q/K/V-only block/layer sweep with the same official
-inputs, then a composed encoder comparison before any image-quality claim.
+The controlled one-block ablation below now tests propagation beyond Q/K/V.
+The composed encoder and image-quality comparisons remain open.
+
+### Qwen3-VL block-0 Q/K/V-only ablation (2026-09-29)
+
+At clean HEAD `1831bcc57808ceab22c2be022514a451ef840eae`, three CPU-only
+production block-0 forwards used the same pinned 244-token Russian official
+input, all-visible mask, local BF16 weights, Accelerate backend for non-QKV
+projections, and F32 SDPA: default, an identical default repeat, and the
+`Torch26Arm64Bf16` Q/K/V-only selector. The same compiled binary served all
+three captures. All 16 saved stages in the default repeat were byte-identical;
+a synthetic one-bit Q-projection sidecar mutation was counted as exactly one
+changed element in one row. The mutation tests the comparator, not a perturbed
+model forward. Root independently recomputed the selected stage counts and
+relative RMS values from the raw BF16 sidecars.
+
+| Boundary versus official BF16 | Default mismatches | QKV selector mismatches | Default / selector relative RMS |
+| --- | ---: | ---: | ---: |
+| Q / K / V projections | 301 / 87 / 76 | 0 / 0 / 0 | 0.0001081 / 0; 0.0000253 / 0; 0.0000490 / 0 |
+| Q / K head norm | 412 / 81 | 5 / 0 | 0.0000962 / 0.0000106; 0.00000432 / 0 |
+| Post-RoPE Q / K | 398 / 86 | 91 / 20 | 0.0001219 / 0.0000685; 0.00000985 / 0.00000745 |
+| Attended context | 11,705 | 6,709 | 0.0002860 / 0.0002202 |
+| Block-0 output | 242,284 | 192,841 | 0.00165071 / 0.00141599 |
+
+The selector removes the first observed projection mismatch and improves the
+local block output, but the first remaining mismatch occurs at Q head norm and
+the final block remains far from bitwise parity. This is a causal local A/B
+for the selector toggle on this one input and checkpoint, **not** evidence of
+36-layer conditioning, DiT trajectory, glyph, eye, or decoded-image benefit.
+The pure-Crystal selector took 13.34 seconds versus 2.10 seconds for the
+default block in these single runs; cache/order effects and the whole-block
+scope make this a warning about likely cost, not a throughput benchmark. Peak
+RSS was 1.71 GB or less for each forward under a 2,048-MiB process-tree cap
+and 12% system-free floor; process-group isolation was observed.
+
+The curated scratch report is
+`/private/tmp/qwen21-qkv-ablation-20260929/final-report-v2/ablation-report.json`
+(SHA-256 `7aa373a47b55d8de8594c9a5a1ea821c1d9bd588ad8ea65a9754589f9307ebb0`).
+It pins the source, binary, input, mask, weights, three captures, controls,
+and run measurements. This evidence expires if the source, model snapshot,
+fixture, official sidecars, compiler arithmetic, or scratch outputs change;
+scratch files may also disappear. The composed 36-layer comparison below
+supersedes the proposed next measurement; a matched DiT trajectory and paired
+decoded images remain necessary before any image-quality claim.
+
+### Qwen3-VL composed 36-layer Q/K/V-selector A/B (2026-09-29)
+
+At the same source HEAD `1831bcc57808ceab22c2be022514a451ef840eae`,
+one compiled binary, official Russian fixture (244 raw / 230 retained tokens),
+local weight files, and Accelerate non-QKV backend, two **sequential CPU-only**
+composed forwards differed only in the opt-in Q/K/V projection selector. The
+fixture guard mapped attended `hidden_state_036` rows to the official
+pre-final-RMSNorm embedding with 0/942,080 BF16 mismatches. Both 36-layer
+arms exited zero under a 30,000-MiB process-tree cap, 12% system-free floor,
+and 1,800-second timeout. The first default attempt at a 2,048-MiB cap was
+stopped by the RSS guard before output; one wider sequential retry was
+authorized. Large weight shards were identified by path, size, mtime, and
+inode before and after both arms, not content-hashed against the cited Hub
+revision.
+
+| Retained encoder boundary versus official BF16 | Default | Q/K/V selector |
+| --- | ---: | ---: |
+| Layer 0 relative RMS | 0.00170974 | 0.00146352 |
+| Layer 33 relative RMS | 0.01000112 | 0.00989607 |
+| Layer 34 relative RMS | 0.01324951 | 0.02071418 |
+| Final layer 35 relative RMS | 0.02008401 | 0.02171580 |
+| Final exact BF16 mismatches | 836,322 / 942,080 | 835,202 / 942,080 |
+| Final maximum absolute error | 68 | 112 |
+
+All 230 retained rows differ from official in both final outputs. The selector
+removes 1,120 exact BF16 mismatches but **raises** final relative RMS by
+8.13% and maximum absolute error by 44. Its local block-0 gain therefore does
+not compose into a clear final encoder parity gain. The sharp layer-34 change
+is an observed localization for the next controlled cut, not proof that layer
+34 alone causes the image defects. Root independently decoded and compared
+both raw retained BF16 sidecars against the embedded official tensor; the
+SHA-256 values and metrics matched the runner's output. The default and
+selector output hashes are `68258e036ad03fb94840e83bfe9a1cb9c4db548c9160ee0ff83005bd428d7146`
+and `f35b0d27b17659c928f0893ee9db0924d8b3975ed5cf9d44ce35c20dd180ba4e`.
+
+This is a single-prompt encoder-boundary A/B, with no repeated full-sweep A/A,
+DiT forward, VAE decode, or perceptual assessment. The selector is diagnostic,
+not promoted: `/usr/bin/time -lp` observed 22.15 seconds default versus
+450.01 seconds selector, while the run-safe wrapper recorded different elapsed
+durations; neither single run is a throughput benchmark. The hash-gated
+scratch report is `/private/tmp/qwen21-qkv-full-encoder-20260929/report.md`
+(SHA-256 `2eefdabd664abdbf20720d395ee18bd80b7813fef8bfe84c732c35c0da68c88e`),
+with structured pins in `summary.json` (SHA-256
+`77f92601aabb8536b6e7cfabf9a967f397a9a0fb4d8df41caef0a67a7277eb46`).
+Source, fixture, weight files, compiler arithmetic, and scratch artifacts are
+decay triggers. Next distinguish the layer-34 local operator from accumulated
+input drift, then use a matched DiT/decoded-image A/B before assigning the
+visible eye or glyph defects to text conditioning.
+
+### Qwen3-VL block-0 head norm and RoPE localization (2026-09-29)
+
+With the Q/K projection outputs byte-identical to official in the opt-in
+block-0 capture, saved native `q_norm` differs at 5/999,424 BF16 values while
+`k_norm` is exact. Post-RoPE Q/K differ at 91/20 values. A bounded CPU NumPy
+replay of the checked-in RoPE arithmetic exactly reproduced the saved native
+post-RoPE sidecars; when fed official norm inputs it still differed at 86/20
+values. This separates a RoPE arithmetic mismatch from the five Q-norm
+mismatches. An FP32 reciprocal-power inverse-frequency candidate matched all
+official post-RoPE Q/K values **only in this replay with official norm inputs**;
+with native norm inputs, five Q mismatches remain. The exact arithmetic source
+of those five norm values remains unresolved. No production source, full
+encoder, DiT, or image was changed or tested by this replay. Its report is
+`/private/tmp/qwen21-qnorm-rope-20260929/arithmetic-replay-report-v3.json`
+(SHA-256 `9e0caba1306cde82c862bdd971ddfae68d5203374249dc9b0fc7d4952200c79c`).
+Production promotion requires a failing fixture test, a same-source runtime
+replay, and end-to-end evidence; a local bitwise gain is not an image-quality
+proxy. Re-run after source, official trace, input, arithmetic runtime, or
+scratch evidence changes.
 
 ### Russian layer-0 attention replay on saved inputs (2026-09-28)
 
@@ -6316,6 +6427,50 @@ report's metrics and pins; the extension did not change the original
 comparison metrics. Refresh after
 attention source/backend, dtype/staging, mask or
 fixture, official capture, or scratch evidence changes.
+
+### Call-10 block-29 native-QKV CPU/Metal attention crossover (2026-09-29)
+
+The previous exact-QKV discriminator used official donor Q/K/V. A separate
+CPU-only PyTorch 2.6 MATH/F32 replay now uses the **saved native** post-RoPE
+Q/K/V from the no-op block-29 baseline, with the same 230-row causal text
+prefix and 1,024 image rows attending all 1,254 valid keys. It compares the
+result with the saved native Metal F32 attention context; an official-QKV CPU
+arm and a deliberately wrong image-causal mask are controls. It runs no model
+forward, GPU kernel, trajectory, or decoder.
+
+| Relative L2 by context rows | Joint | Prefix | Image |
+| --- | ---: | ---: | ---: |
+| Native-QKV CPU F32 versus native Metal F32 | 0.000001416 | 0.000000848 | 0.000001476 |
+| Native-QKV CPU F32 versus official MPS BF16 | 0.014239 | 0.013206 | 0.014373 |
+| Official-QKV CPU F32 versus official MPS BF16 | 0.010140 | 0.008617 | 0.010329 |
+
+The wrong image-causal mask changes the image context by relative L2
+`0.573541` against the correct native-QKV CPU route. The native-QKV own-route
+comparison is far below the proposed `0.001` discriminator, while switching
+only to official Q/K/V on the same CPU arithmetic moves toward the official
+context in all three scopes. The threshold is a *candidate probe criterion*,
+not a calibrated runtime tolerance. Root checked the replay's mask, dtype,
+input-identity gates and report hash, and independently recomputed the native
+Metal versus official image-context distance from raw tensors. This supports
+matched native CPU/Metal attention semantics for this one fixed context; it
+does not uniquely attribute the official gap, establish whole-block or image
+parity, or show that a numerically closer route makes better pictures.
+
+The first scratch preflight correctly rejected a mistakenly selected Q4 GGUF.
+The source cut runner and lineage records both pin the Q8 donor; its actual
+SHA-256 matched their recorded `c3ef62b2...` digest before the one replay.
+The corrected hash-gated `run_safe.sh` invocation exited zero, with a
+600-second timeout, 8-GiB process-tree RSS cap, and 12% minimum free-memory
+floor (78% at preflight). The successful log did not record actual peak RSS.
+The report is
+`/private/tmp/qwen21-dit-attention-crossover-20260929/cpu_attention_crossover_report.json`
+(SHA-256 `4ed70ddc5f0a4a6b867c694dd247fd086e27577f3ebbbd7b7dda4a732fa1f982`).
+It pins the active HEAD `1831bcc57808ceab22c2be022514a451ef840eae`,
+doc-only dirty state, unchanged production Metal wrapper/kernel/bridge,
+native and official sidecars, model lineage, and replay route. Re-run after
+any of those inputs, source, attention backend, fixture, or scratch outputs
+change. The next quality discriminator remains a same-seed full trajectory
+and decoded-image A/B, not attention-distance promotion alone.
 
 ### Exact-QKV block-29 sampled FP64 attention controls (2026-09-29)
 

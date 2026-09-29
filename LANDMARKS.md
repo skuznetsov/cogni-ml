@@ -29918,3 +29918,44 @@ Refresh after source/toolchain/device/model/workload changes.
   isolated and composed block/layer outputs, then a matched DiT/image A/B.
   Exact inputs, scope, and decay triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A same-input CPU-only Qwen3-VL block-0 A/B on the pinned 244-token Russian
+  official input held the binary, weights, mask, and non-QKV backend fixed.
+  The opt-in QKV selector reduced Q/K/V mismatches from 301/87/76 to 0/0/0;
+  block-output BF16 mismatches fell from 242,284 to 192,841 of 999,424 and
+  relative RMS from 0.00165071 to 0.00141599. A default repeat was exact at
+  all 16 stages; a one-bit comparator control was detected. The selector's
+  one-block CPU time was 13.34 s versus 2.10 s default, so this is an accuracy
+  diagnostic, not a performance promotion. Next compare composed 36-layer
+  retained conditioning, then matched DiT/images. Report SHA-256:
+  `7aa373a47b55d8de8594c9a5a1ea821c1d9bd588ad8ea65a9754589f9307ebb0`.
+  Scope, source pins, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`; scratch may expire.
+- A same-binary, same-fixture CPU-only 36-layer Qwen3-VL A/B on the 244-token
+  Russian prompt refuted promotion of the exact-QKV selector from its local
+  block-0 gain alone. Final retained 230x4096 BF16 mismatch counts decreased
+  836,322 to 835,202, but relative RMS versus official increased 0.02008401
+  to 0.02171580 (+8.13%) and maximum absolute error increased 68 to 112.
+  Selector error was slightly lower through layer 33, then sharply higher at
+  layer 34. Both guarded arms exited zero; no DiT/image A/B was run. A separate
+  saved-sidecar replay found five Q-norm and independent RoPE arithmetic
+  mismatches after exact Q/K projections; its FP32 reciprocal-power candidate
+  is not production-verified. Next isolate layer-34 local versus incoming
+  drift, test the RoPE candidate in runtime, then compare same-seed images.
+  Full-sweep report SHA-256:
+  `2eefdabd664abdbf20720d395ee18bd80b7813fef8bfe84c732c35c0da68c88e`;
+  RoPE replay report SHA-256:
+  `9e0caba1306cde82c862bdd971ddfae68d5203374249dc9b0fc7d4952200c79c`.
+  Source/fixture/weight/runtime/scratch changes invalidate the scoped
+  evidence; full pins are in `docs/qwen-image21-gguf-frontier.md`.
+- A fixed call-10/block-29 CPU PyTorch MATH/F32 attention replay of **native**
+  post-RoPE Q/K/V matched saved native Metal F32 context to relative L2
+  0.000001476 on image rows. On the same CPU route, official Q/K/V versus
+  official MPS BF16 context differed by 0.010329, while native Q/K/V versus
+  official differed by 0.014373; a wrong image-causal mask changed context by
+  0.573541. The original Q8 GGUF pin was reverified after a scratch path
+  selection error stopped preflight; one guarded CPU replay then exited zero.
+  This supports matched native attention semantics for that context, not
+  full-block, trajectory, image, or VAE parity. Report SHA-256:
+  `4ed70ddc5f0a4a6b867c694dd247fd086e27577f3ebbbd7b7dda4a732fa1f982`.
+  Source, fixture, backend, and scratch changes invalidate the evidence;
+  detail is in `docs/qwen-image21-gguf-frontier.md`.
