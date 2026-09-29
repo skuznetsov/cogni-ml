@@ -3830,6 +3830,10 @@ A separate scratch checkout of Hugging Face Hub 1.32.0 supplied the API absent
 from the host's Hub 0.36.0. Neither checkout changed repository dependencies
 or existing Python environments, and no model weights were downloaded.
 
+Here `Q8` names the selective Q8 gate/up trajectory recorded in the probe
+manifest, **not** the later full-Q8 trajectory. The interpolation result
+therefore cannot rule out a sharp decoder response on the full-Q8 path.
+
 The CPU/FP32 decoder then reproduced all three independently saved official,
 Q4, and Q8 endpoint PNGs byte-for-byte (RGBA pixels and PNG SHA-256). Only
 after that gate did it decode nine points at `alpha = 0, 0.125, ..., 1` along
