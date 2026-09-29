@@ -29786,3 +29786,19 @@ Refresh after source/toolchain/device/model/workload changes.
   same-seed full-trajectory and decoded-image A/B before promoting quality.
   Scratch evidence may expire; pins and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- The same official final latent decoded pixel-identically through the
+  packaged CPU/F32 renderer and pinned Diffusers pipeline-style VAE path;
+  both official and full-Q8 endpoints reproduced their saved RGBA PNG
+  oracles exactly. An equal-per-token-norm, same-support signed-channel
+  residual control had face-crop RMSE 6.762500 versus official, while the
+  actual full-Q8 residual had 6.391382; full-image RMSE ordering reversed
+  (6.785575 control versus 8.576012 actual). This does not support a
+  face-specific VAE decoder cliff under this one control, nor prove or
+  disprove VAE manifold membership or eye-specific causality. The official
+  endpoint has no packaged-renderer versus pinned-pipeline CPU/F32 mismatch;
+  the full-Q8 pipeline decode separately matches its saved oracle. Continue
+  upstream Qwen3-VL/DiT isolation. Report SHA-256:
+  `b6274bf87f49959ffd281d75bc50ee31c5b9e69a`; runner SHA-256:
+  `acea75ebf6fb70d7f06fe94ce1e2dc0db1ad19a6b4bce098629cd9147889718e`.
+  Scratch may expire; source pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.

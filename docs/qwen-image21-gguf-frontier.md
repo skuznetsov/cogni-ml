@@ -5989,6 +5989,54 @@ required before a quality claim. Stop if no-op, source-mapping, or memory
 guards fail. Refresh after GGUF/official weights, quantizer, resident
 dispatch, Metal kernel, input fixture, or scratch evidence changes.
 
+### Same-latent CPU/F32 VAE path and residual-direction control (2026-09-29)
+
+Status: **endpoint-gated diagnostic complete; VAE off-manifold claim not
+admitted**. The saved official and full-Q8 final latents have the same model
+revision, prompt, conditioning, seed 7, 40-step Euler schedule, and
+`32x32x64` normalized layout. A hash-gated scratch run used the pinned
+Diffusers `AutoencoderKLQwenImage21`, config, weights, and CPU/F32 placement
+for both endpoints. On the *same official latent*, the packaged renderer and
+the pinned pipeline-style VAE decode produced pixel-identical RGBA images;
+each endpoint also reproduced its saved PNG oracle pixel-for-pixel. This
+tests the CPU/F32 decode route and its source pins, not a native Metal VAE or
+whether the final latent is on the VAE training manifold.
+
+An additional single-seed control applied a signed channel permutation to
+the full-Q8-minus-official residual in VAE-input space. It preserved every
+latent token's residual L2 and zero/nonzero support (maximum token-norm
+error `3.55e-15`), preserved global L2 (`101.528842`), and changed direction
+(actual/control cosine `-0.010108`). The predeclared face crop was pixels
+`x=[320,380), y=[150,219)`; it is **not** an eye-only mask.
+
+| RGB difference versus official decode | Actual full-Q8 residual | Equal-norm directional control |
+| --- | ---: | ---: |
+| Face-crop MAE (0-255) | 4.409179 | 4.740741 |
+| Face-crop RMSE (0-255) | 6.391382 | 6.762500 |
+| Full-image RMSE (0-255) | 8.576012 | 6.785575 |
+
+By MAE and RMSE, the actual residual was not more damaging than this control
+in the face crop, while the full-image RMSE ordering reversed. The result
+therefore does not support a face-specific decoder cliff for the actual
+residual under this one equal-norm discriminator. Direction plainly matters
+to decoded pixels, but one artificial off-trajectory direction cannot
+establish VAE manifold membership, refute every decoder sensitivity,
+explain eye defects, or locate the upstream drift. The packaged renderer
+and pinned pipeline show no CPU/F32 decoder-path mismatch on the official
+endpoint; the full-Q8 pipeline decode matches its separately saved oracle.
+Continue isolating
+Qwen3-VL/DiT sources and require a full same-seed trajectory plus decoded
+image A/B before promoting a quality change.
+
+Scratch report:
+`/private/tmp/qwen21-vae-same-latent-pjiJbs/report.json` (SHA-256
+`b6274bf87f49959ffd281d75bc50ee31c5b9e69a`); runner SHA-256
+`acea75ebf6fb70d7f06fe94ce1e2dc0db1ad19a6b4bce098629cd9147889718e`.
+The run exited 0 under `run_safe.sh` with a 1200-second limit, 16-GiB RSS
+limit, at least 50% free system memory, and a quiet-host gate. Refresh this
+evidence if the latent bundles, crop, VAE source/config/weights, CPU library
+overlay, renderer, or scratch artifacts change.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder
