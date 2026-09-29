@@ -29474,6 +29474,26 @@ Refresh after source/toolchain/device/model/workload changes.
   `1a49d430250200d9497bf9b1d13e2800e95ba087712850b707f935f932cbf328`.
   Scratch may expire; pins and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A CPU-only Qwen3-VL Russian layer-0 cut reconstructed each route's
+  post-attention residual from the same BF16 block input and its own
+  `o_proj` capture, then replayed each route's RMSNorm. Both official and
+  native norm captures were reproduced bitwise (0/999,424 mismatches),
+  including BF16-add staging controls. On the same official residual,
+  native versus official norm arithmetic differed at only 53 values
+  (squared error 0.000013663), versus 85,872 observed norm-output
+  mismatches (squared error 0.011901554). Applying official norm to the
+  native residual retained 85,945 mismatches. The dominant bounded source
+  of this norm-output gap is upstream residual-input drift, not norm
+  arithmetic. Root reran the scratch runner to the same report SHA and
+  independently checked raw BF16 observed error. This does not identify
+  the attention-branch operator, a full-encoder or image gain, or VAE
+  behavior. Next: matched-input attention-branch cut, then full-encoder
+  and same-seed image A/B before production changes. Final report SHA-256:
+  `b1b759d45f7cd15a1cf11c300320da084754ec3e647e92bc1bc8508f0b4ea6dc`;
+  runner SHA-256:
+  `c1b1dbea798d15df9f1f096f2c00b3797998b12b73814600e28649eeb0a622a8`.
+  Scratch may expire; pins, controls, and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
 - A full-matrix, CPU-only Qwen3-VL layer-0 Q/K/V projection replay separated
   same-BF16-input projection arithmetic from norm, checkpoint-weight, and
   channel-layout confounders. PyTorch `F.linear` reproduced all three

@@ -1955,6 +1955,57 @@ its report is `/private/tmp/qwen21-qwen3vl-gateup-cut-20260929/report.json`
 Refresh after checkpoint, source/backend, PyTorch/Accelerate, fixture, or
 sidecar-boundary changes; scratch files may expire.
 
+### Russian layer-0 post-attention residual/RMSNorm cut (2026-09-29)
+
+A CPU-only replay used the same pinned 244-row Russian Qwen3-VL fixture and
+BF16 checkpoint `post_attention_layernorm` weight. It reconstructed each
+route's post-attention residual from the identical saved block input and
+its own saved `self_attn.o_proj` output, then replayed that route's
+RMSNorm arithmetic. Both the official and native replay matched their
+captured norm output byte-for-byte: **0/999,424 BF16 mismatches** each.
+The two BF16-add formulations also agreed for each route's operands.
+Weight/model/payload/source hashes, all six consumed sidecars, a zero-input
+no-bias control, and a reversed-channel negative control passed. Root
+independently reran the final runner to the same report SHA-256 and
+recomputed the observed norm-output squared error from the raw BF16 files.
+
+| Comparison, all 244 rows | BF16 mismatches / 999,424 | Squared output error | Relative RMS |
+| --- | ---: | ---: | ---: |
+| Captured native norm vs captured official norm | 85,872 | 0.011901554 | 0.129916% |
+| Native vs official norm arithmetic on the **same official residual** | 53 | 0.000013663 | 0.004402% |
+| Official norm arithmetic on the **native residual** vs official capture | 85,945 | 0.011937540 | 0.130112% |
+
+The reconstructed native and official residual inputs themselves differ at
+83,784 BF16 values (squared error 0.003124782, relative RMS 0.085686%).
+On the retained 230 rows, observed norm-output error is 85,300 mismatches
+and squared error 0.011854107; same-official-residual arithmetic differs
+at 53 values with squared error 0.000013663. Thus the large norm-output
+gap on this fixture is inherited overwhelmingly from the post-attention
+residual input, not the RMSNorm arithmetic. The same-input arithmetic
+remainder is nonzero; these nonlinear counterfactuals are not additive
+causal shares. The input drift originates upstream of this norm boundary,
+but this cut does not distinguish the attention projection from its Q/K/V,
+RoPE, or attention inputs, nor establish 36-layer conditioning, DiT,
+decoded-image, or eye-quality benefit. The next text discriminator is a
+matched-input cut within that attention branch, followed by full-encoder
+and same-seed image A/B before any production arithmetic change.
+
+The route formulas match the visible Transformers v5.17.0
+`Qwen3VLTextRMSNorm.forward` and decoder residual expression. That norm
+class is decorated with `use_kernel_forward_from_hub("RMSNorm")`, so source
+text alone does not identify the active runtime kernel; the byte-exact
+route replays certify this captured fixture, not universal backend
+equivalence. The final scratch runner is
+`/private/tmp/qwen21-qwen3vl-postattn-ln-cut-20260929/postattn_ln_cut.py`
+(SHA-256 `c1b1dbea798d15df9f1f096f2c00b3797998b12b73814600e28649eeb0a622a8`);
+the final report is
+`/private/tmp/qwen21-qwen3vl-postattn-ln-cut-20260929/report_corrected.json`
+(SHA-256 `b1b759d45f7cd15a1cf11c300320da084754ec3e647e92bc1bc8508f0b4ea6dc`).
+The earlier `report.json` is superseded. These results were obtained at
+HEAD `4af5669bc72b5f7d02539bf803b344c15b1775a2`; refresh after
+checkpoint, trace, source/backend, BF16, fixture, or row-selection changes.
+Scratch files may expire.
+
 ### Russian layer-0 attention replay on saved inputs (2026-09-28)
 
 A CPU-only, SHA-gated PyTorch 2.6.0 SDPA MATH replay separated the native
