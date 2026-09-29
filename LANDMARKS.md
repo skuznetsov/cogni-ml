@@ -30091,6 +30091,25 @@ Refresh after source/toolchain/device/model/workload changes.
   norm/modulation reduced input-level relative L2 to official from 0.307254%
   to 0.198771%. The MPS-versus-CPU norm arithmetic still differs, so this
   does not identify a single standalone fix or prove block/image improvement.
-  Keep the norm1-input-by-QKV block crossover as the next quality discriminator;
-  scripts, pins, guards, and decay triggers are in
+  The subsequent norm/modulated-input-by-QKV block crossover is recorded
+  below; scripts, pins, guards, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
+- A fixed-attended Qwen3-VL block-0 CPU A/B switched only O-projection
+  arithmetic: the existing Torch-2.6-compatible helper matched all 999,424
+  official BF16 O values, reducing block-end mismatches from 32,960 to 6,739
+  versus CBLAS; gate/up/down still differed. Root checked the raw sidecars.
+  The exact helper took 9.339 seconds versus 0.444 for CBLAS in one
+  unbenchmarked block replay, so this is an arithmetic oracle, not a fast
+  production path or image-quality claim. The report, controls, pins, and
+  refresh triggers are in `docs/qwen-image21-gguf-frontier.md`.
+- A guarded call-10/block-29 factorial crossed native versus official
+  modulated QKV input with Q8_0 versus BF16 Q/K/V projection packages. The
+  selective GGUF loader first reproduced the old whole-mmap Q8 baseline
+  output and all taps bit-for-bit; root independently checked the tap files.
+  Image-row block-output L2 to official was 0.491089% (native+Q8), 0.488738%
+  (official-input+Q8), 0.465618% (native+BF16), and 0.462611% (both). The
+  BF16 package has the larger local effect, but also changes matmul route;
+  a substantial residual remains and no decoded-face benefit is established.
+  Keep image promotion gated on a full matched trajectory and same-VAE
+  decode. Report, controls, pins, and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.

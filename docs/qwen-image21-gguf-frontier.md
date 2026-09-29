@@ -2803,9 +2803,44 @@ the runner and guard source SHA-256 values are respectively
 and `d872c2f23745a912da6d4e571a2920763db70c876d767cfe7429fcaa879afe00`.
 Root checked the report SHA, baseline-repeat bytes, and final-official bytes.
 Refresh after source arithmetic, official trace, fixture, weights, compiler,
-backend, or scratch artifacts change. The next falsifier is an in-process
-exact-attention plus O/MLP arithmetic candidate on this composed block before
-full-encoder and matched-image gates.
+backend, or scratch artifacts change. An in-process exact-O arithmetic
+crossover is reported below; exact-MLP composition and full-encoder/image
+gates remain open.
+
+### Qwen3-VL block-0 exact O-projection composed replay (2026-09-29)
+
+At HEAD `46555196e9317f6d773d28e2c9260968e533c39f`, a scratch-only CPU
+replay held the official 244-token Q/K/V and `attended` BF16 sidecars fixed.
+It switched only the O-projection calculation between production Accelerate
+CBLAS and the existing private Torch-2.6-compatible arm64 BF16 helper; all
+post-O operators and weights stayed on the same native path. Root checked the
+runner's switch, report SHA, and all four O/block BF16 output sidecars
+directly against the official files (999,424 elements each).
+
+| Fixed-attended replay | O-projection BF16 mismatches | Block-output BF16 mismatches | Block relative RMS |
+| --- | ---: | ---: | ---: |
+| CBLAS O projection | 480 | 32,960 | 0.053889% |
+| Torch-2.6-compatible O helper | 0 | 6,739 | 0.023449% |
+
+The exact-O result also makes the post-attention norm exact. Remaining
+gate/up/down projection mismatches are respectively 874/946/15,747, so O
+arithmetic is a causal local contributor but not full-block parity. A CBLAS
+repeat was byte-identical at every stage; rotating the attended donor by one
+token row gave 997,926 block-output mismatches. One unbenchmarked full-block
+CPU replay took 9.339 seconds with the exact helper versus 0.444 seconds for
+repeated CBLAS (~21x); this helper is an arithmetic oracle, not a production
+speed candidate. No native-Q/K/V, 36-layer encoder, DiT trajectory, decoded
+image, or face-quality improvement is claimed. The guarded child exited 0,
+peaked at 2,610.52 MiB RSS below its 3-GiB cap, and observed at least 66%
+free system memory.
+
+Report: `/private/tmp/qwen21-block0-oproj-composed-20260929/composed_guard_report.json`
+(SHA-256 `28986269b86999af245a3a76ea6ff321abbb7ec5d6d0b235223ec97750bd0df3`);
+runner source SHA-256 `f8b3df306172b1805d9672b7e90fc78b6c5c12a13a8847abe3c4e55558bc9a8f`.
+Refresh after official sidecars, fixture/weight bytes, production helper or
+CBLAS arithmetic, compiler, CPU architecture, or scratch artifacts change.
+Next isolate MLP arithmetic on this composed fixture before a full-encoder
+conditioning and matched-image promotion gate.
 
 ### Qwen3-VL QKV-selector same-seed image preview (2026-09-29)
 
@@ -7151,9 +7186,63 @@ The read-only CPU script is
 run with `/opt/homebrew/Caskroom/miniconda/base/bin/python3` (Torch 2.6.0).
 Both scripts hash-check the captured operands; refresh after official taps,
 native norm output, source/kernel, modulation semantics, Torch/MPS backend,
-or device changes. The next discriminator remains the matched block-29
-norm1-input-by-QKV-route crossover, followed by full-trajectory decoded-image
-A/B before promotion.
+or device changes. The matched block-29 QKV-input-by-projection-package
+crossover is reported below; full-trajectory decoded-image A/B remains the
+promotion gate.
+
+### Block-29 QKV-input by projection-package factorial (2026-09-29)
+
+A guarded M2 Max scratch run at HEAD
+`46555196e9317f6d773d28e2c9260968e533c39f` completed the previously
+specified call-10/block-29 crossover. The input is the same official block
+input and modulation used above. The two QKV inputs are the captured native
+F32-fused norm/mod output and the official MPS BF16 norm plus BF16-staged
+modulation output, widened to F32 without changing its values. Each is crossed
+with native Q8_0 and official BF16 Q/K/V projection packages; all other
+weights, layout, masks, QK norm, RoPE, attention, and downstream native
+operators are fixed. The official MPS outputs are comparison oracles, not a
+matched backend for these four native arms.
+
+| Native block arm | Linear V image-row L2 to official | Attention-context image-row L2 | Block-output image-row L2 | Block-output face-20 L2 |
+| --- | ---: | ---: | ---: | ---: |
+| Native input + Q8_0 QKV | 0.639529% | 1.437384% | 0.491089% | 0.467986% |
+| Official modulated input + Q8_0 QKV | 0.598245% | 1.419486% | 0.488738% | 0.466101% |
+| Native input + BF16 QKV | 0.279052% | 1.228253% | 0.465618% | 0.441722% |
+| Official modulated input + BF16 QKV | 0.165878% | 1.206630% | 0.462611% | 0.438619% |
+
+On this fixed block, changing the QKV projection package moves the block
+metric more than changing its input donor, though the combined arm is the
+closest of the four by these aggregate metrics. Interactions are not additive
+error shares. A 0.462611% image-row block residual remains with both
+interventions, so neither is a complete DiT fix. Q8_0 versus BF16 changes
+weight representation **and** native matmul route; it cannot be labeled a
+pure quantization error. These latent-token aggregates do not establish
+better decoded eyes, text, or image quality.
+
+The first whole-model GGUF loader attempt was stopped by the 50%-free-memory
+watchdog before any factorial report. The completed run used a scratch
+selective block-29 loader: GGUF stayed read-only mmap-backed, but only its
+selected block was uploaded as per-weight Metal buffers. Before admitting
+contrasts, its first Q8_0 arm reproduced the previous whole-mmap baseline
+block output, every saved tap, and normalized route audit bit-for-bit; root
+independently compared all baseline tap files. A separate Q8 no-op arm was
+also bitwise identical. A one-token-row-shifted official input changed the
+output strongly (15.415% image-row relative L2 to official versus 0.489%
+for the correct-donor Q8 arm). The completed run exited 0 under
+`run_safe.sh` with a 1,200-second timeout, 16-GiB RSS cap, and 50%-free
+memory floor; the last arm recorded 57% free, and a later post-exit check
+recorded 75%.
+
+Report: `/private/tmp/qwen21-block29-qkv-input-weight-factorial-selective-20260929-r1/output/qkv_input_weight_factorial_report.json`
+(SHA-256 `ac9cecd79adf870c54d4b2d308ed59d9ac98db7e47f3b65228ecbbefa40178dc`);
+runner SHA-256 `44460cacf8a2ab274df90061456c01796381cccb70704dd685ac7a9d2cef4971`;
+preflight SHA-256 `60b71fa7858cc7d956234b01d31e703688ca96979ea925ea729fe96e919e854a`.
+Refresh after input/official taps, weights or GGUF bytes, source/kernel,
+Metal buffer or matmul route, masks/layout, compiler/device, or scratch
+artifacts change. The next quality discriminator is a matched full-trajectory
+and same-VAE decoded-image A/B of a justified candidate, with face/text
+inspection; do not promote either local intervention from this one-block
+metric alone.
 
 ### Same-latent CPU/F32 VAE path and residual-direction control (2026-09-29)
 
