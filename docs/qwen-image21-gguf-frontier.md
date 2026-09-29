@@ -6121,6 +6121,59 @@ after official model/MPS route, GGUF or native Metal source/kernel, input
 and mask fixture, scratch instrumentation, or report changes. Scratch
 evidence may expire.
 
+### Call-10 block-29 exact-QKV attention-backend discriminator (2026-09-29)
+
+A CPU-only PyTorch 2.6 `SDPBackend.MATH` replay consumed the same saved
+official post-RoPE Q/K/V, widened exactly from BF16 to F32, as the native
+Metal donor cut above. It used 230 causal text queries, 1,024 image queries
+attending all 1,254 valid keys, 32 heads of width 128, and the pinned
+official segmented-attention contract. The earlier same-process official
+BF16/MPS exact-QKV replay matched the captured official attention context
+byte-for-byte. No block/model forward, DiT trajectory, or GPU was run in
+this new discriminator.
+
+| Image-row attention-context relative L2 | Value |
+| --- | ---: |
+| CPU MATH F32 versus native Metal F32 | 0.0000014623 |
+| CPU MATH F32 versus official MPS BF16 | 0.010328515 |
+| Native Metal F32 versus official MPS BF16 | 0.010328527 |
+| CPU MATH BF16 output versus official MPS BF16 | 0.010456727 |
+| Native Metal F32 output rounded to BF16 versus official MPS BF16 | 0.010456855 |
+| CPU and native F32 outputs each rounded to BF16 | 0.0000749001 |
+| Deliberately wrong causal-image mask versus correct CPU F32 | 0.573335 |
+
+Root reran the hash-gated CPU probe at the same runtime source before these
+docs-only edits and confirmed the metrics. A separate read-only raw-tensor check BF16-rounded
+the native F32 context before comparison; image-row relative L2 versus
+official increased from `0.010331` to `0.010462`. Therefore a final-output
+BF16 cast alone does not explain the official/native gap. The separate
+output-cast replay confirms that CPU and native rounded outputs remain close
+to each other, yet both move slightly farther from the official result.
+The near identity
+of independent CPU F32 and Metal F32 attention on the same exact operands,
+alongside a large wrong-mask negative control, supports a backend/dtype
+arithmetic difference over a gross native mask or layout error at this
+boundary. It does **not** isolate the specific official MPS rounding stage,
+exclude every semantic difference, establish which route produces better
+images, or imply that forcing BF16 parity would improve quality. The next
+candidate must be evaluated by a same-seed full-trajectory and decoded-image
+A/B, not just an official-tensor distance proxy.
+
+The current report is
+`/private/tmp/qwen21-block29-attention-residual-20260929/cpu_exact_qkv_attention_output_cast_report.json`
+(SHA-256 `f29356199650192b8695b47f70a11e873c51e63ac54b214fa2b53faaadd35ab8`);
+the probe script SHA-256 is
+`5a6c758d14bb0e9fd7716a3260045cb40d6ea3e86cb071d6ffaba5c49b57b45e`.
+The report pins HEAD `ff9ab702ac7ad091007beea127b901685921fc52` with
+only the present concurrent documentation edits,
+unchanged production Metal source/kernel, official Diffusers route, donor
+Q/K/V, and native context digests. Root reran the original arithmetic probe
+before the output-cast extension and independently checked the extended
+report's metrics and pins; the extension did not change the original
+comparison metrics. Refresh after
+attention source/backend, dtype/staging, mask or
+fixture, official capture, or scratch evidence changes.
+
 ### Same-latent CPU/F32 VAE path and residual-direction control (2026-09-29)
 
 Status: **endpoint-gated diagnostic complete; VAE off-manifold claim not

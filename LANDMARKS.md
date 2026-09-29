@@ -29846,3 +29846,17 @@ Refresh after source/toolchain/device/model/workload changes.
   `0d683449ae1e2493d1c5b9930072c6a430a6e5d5c6d2ccab3f94d86d7dc44dbf`.
   Scratch may expire; pins and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A CPU-only, exact-post-RoPE-Q/K/V block-29 attention replay using
+  PyTorch 2.6 MATH F32 matched the native Metal F32 image-row context to
+  relative L2 `0.0000014623`, while each F32 route differed from official
+  BF16/MPS by about `0.010329`; a deliberately wrong causal image mask
+  differed by `0.573335`. Merely BF16-rounding the native F32 output
+  worsened its official-relative L2; CPU and native BF16-rounded outputs
+  still agree to relative L2 `0.0000749`. This supports a backend/dtype
+  arithmetic gap over a gross native mask/layout error for this fixed
+  attention boundary, not a unique rounding-stage explanation or a
+  decoded-image quality claim. Next: same-seed full trajectory and image
+  A/B before considering any official-parity correction. Report SHA-256:
+  `f29356199650192b8695b47f70a11e873c51e63ac54b214fa2b53faaadd35ab8`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
