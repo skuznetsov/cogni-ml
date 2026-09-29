@@ -5734,6 +5734,66 @@ The probe ran at HEAD `4af5669bc72b5f7d02539bf803b344c15b1775a2`;
 refresh after official framework/model/MPS, GGUF/native source/kernel,
 input fixture, or splice/tap-boundary changes. Scratch may expire.
 
+### Call-10 block-29 pre-`to_out` attention-context splice (2026-09-29)
+
+A scratch-only resident Metal replay held the exact official BF16-widened
+call-10 post-block-28 full-joint input and modulation fixed. Native QKV and
+attention ran in every arm. Only the context buffer supplied to unchanged
+native Q8_0 `to_out` was selected: native baseline, an identical native
+no-op donor, the official MPS BF16 context widened exactly to F32, or native
+context rounded through BF16. The native projected output then followed the
+ordinary residual/normalization/MLP path. The official donor was checked
+bitwise at the actual `to_out` input; the passive `attention_context` tap
+records the unchanged native context *before* donor selection. Native hidden
+input, gate-1, native QKV/attention, and gate-2 remained unchanged. Baseline
+and no-op outputs and all taps matched bitwise, including the prior pinned
+baseline SHA-256
+`82ff90f724520104cde4c970c1abbd97421f6399042643557679b4dc768bd6cf`.
+All context, projection, and block-output values were finite. One guarded
+GPU run completed with 77% free host memory at launch; production sources
+were unchanged.
+
+Root independently recomputed squared F32 L2 errors from the four raw
+full-joint outputs against the exact official MPS post-block-29 reference.
+The face-20 rows are the same predeclared region used in earlier probes.
+
+| Block-29 output versus official MPS | Native/no-op baseline | Official context donor | Error removed | Native BF16-round control |
+| --- | ---: | ---: | ---: | ---: |
+| Full joint, 1,254 rows | 10,190.543619 | 8,380.101267 | 17.765906% | 10,208.837087 |
+| Image target, 1,024 rows | 3,264.385298 | 1,734.578563 | 46.863547% | 3,278.248257 |
+| Face-20 rows | 60.821958 | 36.416240 | 40.126492% | 60.859092 |
+
+The native-versus-official pre-`to_out` context relative L2 gap was
+1.424002% joint, 1.437384% image-wide, and 1.452636% on face-20.
+Supplying the *same official context* to native Q8_0 `to_out` and official
+MPS `to_out` left a 0.457004% joint, 0.453716% image, and 0.447997%
+face-20 projected-output relative L2 gap. Root independently recomputed
+these comparisons from the raw tap files and verified their SHA-256 values.
+The same-input gap combines weight quantization, kernel arithmetic, and
+precision-route differences; it does not separate them. Merely BF16-rounding
+native context slightly worsened all three block-output errors. The
+official-context intervention materially affects this one matched-input
+block, but neither its result nor the earlier post-`to_out` and residual
+splices can be added as independent error shares. No full velocity,
+trajectory, decoded image, eye-quality, or VAE-manifold effect was measured.
+Next split QKV/projection, Q/K normalization/RoPE, and attention application
+within this context boundary, then test the promoted change with a
+same-seed full-trajectory and decoded-image A/B.
+
+The completed report is
+`/private/tmp/qwen21-dit-operator-cause-20260928/attention_context_splice_20260929/attention_context_splice/attention_context_splice_report.json`
+(SHA-256 `3eba0be3a7287cc00588a5dd0a71fbfdaea9fbfb8b198ae99227cc74332c29b9`);
+the preflight report SHA-256 is
+`88c4ad5b015a9ad1b18eb1a2375edd125b02902ccfba029d600585c50359b78a`.
+The scratch runner SHA-256 is
+`177fde6aa1132fbc427d6ea73ac4b7b81e09bf02a6fafe732d61a04481977e1a`,
+and instrumented scratch source SHA-256 is
+`e4d39f08729232e1759f48c15e8e5adeb30248d7bcd905dd699479199deaaeab`.
+The GPU run used source HEAD `bbbe68952f529c40ab91a21be23a5f344b745146`;
+later documentation-only commits did not change the runtime. Scratch may
+expire; refresh after official framework/model/MPS, GGUF/native source or
+kernel, input fixture, or splice/tap-boundary changes.
+
 ## Not admitted by this slice
 
 - A production-scale, end-to-end resident Metal pipeline or native text encoder

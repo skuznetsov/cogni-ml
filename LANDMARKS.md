@@ -29731,3 +29731,25 @@ Refresh after source/toolchain/device/model/workload changes.
   `fc04b0ccd17e90f8820aead6b057816b9f52d31dd5d3bcad3869fc32d93744b3`.
   Scratch may expire; pins and refresh triggers are in
   `docs/qwen-image21-gguf-frontier.md`.
+- A no-op-guarded scratch Metal splice on the same exact official call-10
+  full-joint block-29 input supplied the official BF16-widened pre-`to_out`
+  attention context to the unchanged native Q8_0 `to_out` path. Native
+  QKV/attention, hidden input, and gate-1 stayed fixed; the donor was
+  installed bitwise at the actual projection input. Baseline/no-op outputs
+  and taps matched bitwise. Root independently recomputed raw-output squared
+  errors: the official-context donor removed 17.765906% joint, 46.863547%
+  image-wide, and 40.126492% in the predeclared face-20 rows. BF16-rounding
+  native context worsened all three. Native-versus-official context relative
+  L2 was 1.424002% joint; same official input to native Q8_0 versus
+  official MPS `to_out` still differed by 0.457004% joint. The latter is a
+  combined quantization/kernel/precision-route gap, not an isolated cause.
+  These are overlapping one-block interventions, not additive shares or
+  proof of a full-trajectory, decoded-face, eye, or VAE gain. Next: split
+  QKV, Q/K norm/RoPE, and attention application within the context
+  boundary, then run same-seed end-to-end A/B for any promoted fix. Report
+  SHA-256:
+  `3eba0be3a7287cc00588a5dd0a71fbfdaea9fbfb8b198ae99227cc74332c29b9`;
+  runner SHA-256:
+  `177fde6aa1132fbc427d6ea73ac4b7b81e09bf02a6fafe732d61a04481977e1a`.
+  Scratch may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.
