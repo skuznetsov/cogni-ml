@@ -29768,3 +29768,21 @@ Refresh after source/toolchain/device/model/workload changes.
   weight A/B with no-op/route/tap controls, then same-seed full-trajectory
   and decoded-image A/B before a quality claim. Scope, source pins, and
   refresh triggers are in `docs/qwen-image21-gguf-frontier.md`.
+- A guarded same-input call-10 block-29 native Metal A/B changed only the
+  resident Q/K/V weights from donor Q8_0 to exact-hash official BF16. The
+  official BF16-widened and native F32 block inputs were byte-identical;
+  BF16 Q/K/V dispatch was observed, and a distinct-Q8 no-op matched all taps
+  and output bitwise. Image-row relative L2 versus official fell from
+  0.014374 to 0.012283 at attention context and from 0.004911 to 0.004656
+  at block output (10.104347% less squared block-output error). Thus Q8
+  Q/K/V contributes to this local drift, but residual error remains; block
+  output maximum absolute error worsened, and there is no full-trajectory,
+  decoded-face, eye, or glyph benefit yet. BF16 weights used the native
+  F32-accumulating Metal route, not official MPS arithmetic. Report SHA-256:
+  `b55af9885bea460781cff10ad001703d3991fec31674feabfe7e7bda5c518c59`;
+  runner SHA-256:
+  `900de862b1c96f94605a77fb61331454a71823f20792c9127bd80c68f9f485da`.
+  Next: isolate the post-RoPE Q/K/V-to-context boundary, then require a
+  same-seed full-trajectory and decoded-image A/B before promoting quality.
+  Scratch evidence may expire; pins and refresh triggers are in
+  `docs/qwen-image21-gguf-frontier.md`.

@@ -5921,14 +5921,15 @@ mask/segment route, or native attention changes. Scratch evidence may expire.
 
 ### Selective BF16 Q/K/V weight frontier (2026-09-29)
 
-Status: **synthetic resident dispatch admitted; model-backed quality guard-only**.
+Status: **synthetic resident dispatch admitted; one model-backed block A/B
+observed; decoded-image quality guard-only**.
 The GGUF reader retains each tensor's type independently. Resident DiT Q/K/V
 now dispatch BF16 weights to the existing BF16 Metal projection kernel and use
 sequential encoding whenever the triplet contains BF16. All-quantized routing
 is unchanged and remains the immediate rollback. A selected block can replace
 only its Q/K/V weights while keeping every other weight, conditioning tensor,
-input latent, and scheduler operation fixed; this model-backed intervention
-has not yet been executed.
+input latent, and scheduler operation fixed. The pinned block-29 intervention
+below exercises this route but does not establish full-image quality.
 The one-block BF16 triplet costs approximately 96 MiB of weight payloads; this
 is a budget estimate, not a measured peak-residency claim.
 
@@ -5951,15 +5952,42 @@ provenance or final-image quality. The guarded report is
 the harness SHA-256 is
 `07bcc4bbb11ddfcb1264f8760ccf22efd28b9e4d5c173ad9e61f0b1fd7af3dbf`.
 
-The next falsifier holds a pinned official block input and reference fixed,
-installs only exact-hash BF16 Q/K/V in the resident native block, and reports
-route, no-op identity, Q/K/V taps, attention context, and image-row block
-output. A local block-error reduction would not establish a full denoising
-trajectory or decoded-image benefit. Promote a quality claim only after a
-same-seed, same-conditioning full-trajectory and decoded-image A/B; stop if
-controls, memory guards, or official-source mapping checks fail. Refresh this
-evidence after GGUF/official-weight, quantizer, resident-dispatch, kernel, or
-input-fixture changes; scratch reports may expire.
+A guarded Apple M2 Max replay then held the pinned official call-10 block-29
+input, conditioning, reference taps, and all non-Q/K/V weights fixed. Only
+exact-hash official BF16 Q/K/V weights replaced the resident Q8_0 triplet.
+The official BF16 input widened to F32 and the baseline native block input
+were byte-identical. All three projections dispatched through the resident
+BF16 Metal kernel. A distinct-Q8 no-op arm matched the Q8 baseline output and
+all eight taps bitwise.
+
+| Image-row relative L2 versus official | Q8 baseline | BF16 Q/K/V |
+| --- | ---: | ---: |
+| Linear Q / K / V | 0.002930 / 0.002633 / 0.006395 | 0.002272 / 0.002264 / 0.002791 |
+| Post-RoPE Q / K / V | 0.004388 / 0.004035 / 0.006395 | 0.003528 / 0.003445 / 0.002791 |
+| Attention context | 0.014374 | 0.012283 |
+| Block output | 0.004911 | 0.004656 |
+
+Root independently recomputed a 10.104347% reduction in image-row squared
+block-output error from the raw taps. Q8 Q/K/V quantization is therefore a
+contributor to this one-block same-input drift, not its complete explanation.
+The block-output maximum absolute error worsened from 1.476868 to 1.549133,
+so even this local intervention does not uniformly improve every metric.
+BF16 weights still execute through the native F32-accumulating/output Metal
+kernel rather than the official MPS BF16 route; this experiment does not
+isolate backend arithmetic parity, full-trajectory quality, eyes, glyphs, or
+VAE behavior. The one-run arm timings are not a performance comparison.
+
+The report is
+`/private/tmp/qwen21-block29-bf16-weight-ab-20260929/output_guardfix/bf16_weight_ab_report.json`
+(SHA-256 `b55af9885bea460781cff10ad001703d3991fec31674feabfe7e7bda5c518c59`);
+the guarded scratch runner SHA-256 is
+`900de862b1c96f94605a77fb61331454a71823f20792c9127bd80c68f9f485da`.
+Next, splice the official post-RoPE Q/K/V at the native attention boundary to
+separate upstream projection/norm/RoPE error from attention application. A
+same-seed, same-conditioning full-trajectory and decoded-image A/B remains
+required before a quality claim. Stop if no-op, source-mapping, or memory
+guards fail. Refresh after GGUF/official weights, quantizer, resident
+dispatch, Metal kernel, input fixture, or scratch evidence changes.
 
 ## Not admitted by this slice
 
