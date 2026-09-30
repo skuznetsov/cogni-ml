@@ -30186,3 +30186,54 @@ Refresh after source/toolchain/device/model/workload changes.
   test upstream QKV rounding and attention together before trajectory/VAE
   promotion. Pins, DoD, resource scope, and decay triggers are in
   `docs/qwen-image21-gguf-frontier.md`; production code/defaults are unchanged.
+
+### Continuation 2026-09-30 — Qwen3-VL composed four-block accuracy frontier
+
+- Active goal remains end-to-end Qwen3-VL/DiT/VAE accuracy, then performance;
+  this CPU diagnostic does not close native conditioning or image quality.
+  Source state was clean `0df8f95bea4a00c9da09b968802ee18a2cc9848a`.
+- One frozen, donor-free-intermediate forward used native embedding lookup,
+  all seven exact-order SIMD projections per block, and qualified CBLAS/SLEEF
+  attention for blocks 0..3 of the pinned 244-token Russian fixture. Only the
+  3,904-byte token-ID/mask slices were read before candidate freeze; official
+  intermediate payloads were opened afterward by separate comparators.
+- Root independently checked all 64 sidecars (135,921,664 bytes): hashes,
+  sizes, and finite BF16 values passed. All 16 block-0 official taps match
+  bitwise. Embedding and post-block-0 endpoints have zero mismatches; after
+  blocks 1/2/3 the counts are 2,007/138,022/399,176 out of 999,424 words each.
+  Relative L2 is respectively 0.0002304651/0.0010191808/0.0026801615, not a
+  perceptual quality score. Exact block-0 arithmetic does not establish
+  composition across later blocks. First divergent operation is still open.
+- DoD executed, exit 0:
+  `/usr/bin/python3 -B /private/tmp/qwen21-fourlayer-root-compare-20260930.py`;
+  comparator SHA-256 is
+  `5be0b248e12e16ee16e20e500db9fe290ce7cd90770dbb64c49ce77793567f17`.
+  The one-word comparator mutation control detects exactly one difference.
+  Scope-limited adversary verdict is ROBUST for the saved comparisons only;
+  full-encoder parity is not verified. Candidate timer was 94.852 s, not a
+  paired speed benchmark; the wrapper's reported counter undercounts wall.
+- Evidence root: `/private/tmp/qwen21-fourlayer-composed-simd-20260929-K5kws2`.
+  Frozen `candidate_manifest.json` SHA-256:
+  `1cf6a3bc7f7997ba072a4570fe464dc4c0ce8633ace24c31ece861f0bad41313`.
+  `root_audit_report.json` SHA-256:
+  `afc786164039d5b17eb091f941fd38b39718a458c66335dc1a9ebd463e82e6ec`.
+  Runner source SHA-256:
+  `9802c25f466300e478cbb886330404f439388d3bb218d0791355a859e11c2dba`.
+- Next falsifier: replay official block-1 input RMSNorm on frozen block-0
+  output (already equal to official hidden001), then capture all block-1 taps
+  if needed. A full teacher replay must match official hidden002 before its
+  per-operation comparisons can localize native drift. Scratch preparation:
+  `/private/tmp/qwen21-block1-official-probe-20260930-DXK9ZN`; no teacher model
+  run has been admitted yet. Do not change production norms speculatively.
+- Keep this separate from the three-face photo A/B: that pair shares official
+  conditioning and the same VAE; its differences arise between Q8/native and
+  BF16/official DiT routes, with representation and arithmetic confounded.
+  No Qwen3-VL-specific or VAE-specific fault follows from those images.
+- Standing resource boundary: alternate heavy windows with thread
+  `01a0ba62-98aa-7813-b466-cfed8d20037f`; it owns the slot after our explicit
+  03:47 UTC release. Reacquire before any model/build, require fresh >=55%
+  free memory and preserve the 50% runtime floor/3 GiB cap for the proposed
+  one-thread CPU probe. Do not overwrite the frozen candidate/start lock.
+  Torch's dynamically loaded SLEEF helper remains a diagnostic dependency,
+  not standalone native packaging. Refresh evidence if source, weights,
+  fixture, arithmetic policy, runtime changes, or scratch files disappear.
