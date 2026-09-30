@@ -3,6 +3,102 @@
 Status: active implementation frontier; prompt-to-PNG path admitted, with
 optimization candidates gated by real-prompt parity and paired latency checks
 
+## Matched all-weight native/official F32 block-0 replay (2026-09-30)
+
+The previously open matched endpoint has now executed: the production public
+native block, with all nine original BF16 donor parameters widened exactly to
+F32, is compared with the pinned official F32 block on the same original F32
+hidden/modulation frame. Capture producer is
+`0a3d7be5d7a962afd1400c0bc8cbb67a144921a7`; native consumer is clean
+`4103c3e55e2da293eb79cd3fd0c3458e6f6db20d`. This is evaluation zero,
+block zero, 140 prefix plus 1024 image rows, width 4096, on Apple M2 Max.
+It is not a replay of an upstream official transformer input frame.
+
+Native primary and separate repeat have bit-identical full and image-target
+outputs and the same recorded 12-pipeline sequence, including six
+`simd_mv_f32_f32` projections. The native forward is
+`QwenImage21MetalBlock.forward_layers`, not a reimplementation of its
+equations. The pipeline wrapper only records calls to the existing encoder.
+These are repeated traced runs; no untraced/no-op control was added here.
+Both runs verify the five consumed frame values, exact selected donor
+raw/widened hashes and gate-layer-then-proj concatenation.
+
+Root's independent no-Torch byte/arithmetic audit recomputes the selected
+nine donor payload hashes and widening, gate-up bytes, full-to-target slices,
+repeat equality and F64 metrics. With official F32 output L2 as denominator:
+
+| Rows | Relative L2 | Max absolute difference | Changed F32 words |
+| --- | ---: | ---: | ---: |
+| All | 1.5850071278480055e-6 | 0.004638671875 | 4512878 / 4767744 |
+| Text | 5.588183969831574e-7 | 0.004638671875 | 549177 / 573440 |
+| Image | 2.5465473352029342e-6 | 0.001739501953125 | 3963701 / 4194304 |
+
+Image relative L2 is approximately 0.000254655 percent; image nearest-rank
+p99 absolute difference is 4.3315812945365906e-6. The small norm does not
+establish bitwise native/official parity, spatial-detail parity or bounded
+error accumulation. In particular, it cannot close the human-observed
+middle-face, collar and jamb-shadow differences in the full photo pair.
+The photo pair shares conditioning and CPU F32 VAE, so its controlled
+endpoint difference is upstream of that decoder; VAE manifold failure is
+not established.
+
+Evidence root: `/private/tmp/qwen21-dit-block0-f32-stream-uZKGsb`.
+Driver SHA `d561aae8f3a2b649b14ec36b6fcf5a95433dbe1e0e6c5568b6c0c1b65ac356cc`;
+binary `984dd30e2431b7ed8f0af6baeb72a805b815d2fbd7ea4b39f8497d1fa58c28a2`;
+bridge `fe88275acf5d46acc6406eec4d74198b341c15f87656e9c2df0b0bec044e79c1`.
+Primary/repeat arm manifest SHAs are
+`47c23ddefaf5b635b3c8314cdceed4bdf24a784691ff8f7e871226135ca0ef28` /
+`494aa72764127375045ea1f3a54e76c97c450cba2ee27cdf7b9b28b34f1c6891`.
+Full output SHA is
+`3a3f09c84b0fe300b0e9f0dd77ac1124d1945de4af850f2c083dd5c266f6ff66`;
+target output `e1a37cdc4f48a01262856fc05d2489f864359a493ef4e2695ad84d423b228b61`.
+Capture and official manifests retain the pins in the following sections.
+
+Comparator root `/private/tmp/qwen21-allweight-block0-compare-fix-TVdPfq`:
+source SHA `ad9384471534861aa4a3e5065aea7428f43e0f284d81a37c42b3ff47b2ba11f4`;
+tests `6461684243e7bdf45ea409ba039e261816ee1dd9a37094f4e53430e8be20416a`.
+`root-comparison-r1.json` SHA is
+`de476554718a3a8fb78d5c1c2ded962cb6c60230cef7903fbc5242df2fddd79a`.
+Independent audit source at
+`/private/tmp/qwen21-dit-block0-f32-replay-aHDpCO7g/root_audit_allweight.py`
+SHA `bd2680040ce3838a29b692989e469b75b3e60e0687851f2f1b8f575a5a1ed7b5`;
+`root-audit-r1.json` SHA
+`dca6c6797e03d57e99c19f9802196887e3ed8ac146b5eb7b73d91a0fd0aa9250`.
+Audit scope is local bytes/arithmetic, not independent model replication,
+fresh whole-shard hashing, Hub authentication or trusted storage.
+
+Executed DoD: root built the scratch driver with Crystal 1.21 and the Apple
+linker; guarded loader self-test and metadata preflight passed, and a wrong
+external capture SHA rejected before donor/Metal work. Primary and repeat
+commands ran the scratch binary under unchanged 300s/3072-MiB tree-RSS
+guards and 50 percent free-memory floor, both exit zero. Comparator command
+`compare_allweight_f32.py` with external frame/official/native/source/build
+pins and audit command `root_audit_allweight.py` with external primary,
+repeat and report pins both exited zero under 60s/1024-MiB guards. Root ran
+`test_compare_allweight_f32.py`: 11 tests passed, including rejection of
+self-consistently altered repeat bytes and a misplaced official input file.
+Comparison/audit use Miniconda Python 3.12.2 and NumPy 1.26.4, no Torch.
+Fresh free memory was 76 percent; these are not peak-RSS or latency results.
+
+The first loader attempt in the preserved `...f32-replay-aHDpCO7g` root
+was stopped by the 3072-MiB guard (sampled tree RSS 3215920 KiB), with no
+output. Its exact stop stage is unknown. The new loader streams bounded
+BF16/F32 chunks into final matrix storage without duplicate large Float32
+arrays; the cap was not raised. Abort receipt SHA is
+`706f619a3ffa13160205d3dce3f4710637f14a39ecb12e367aa835d17213aaed`.
+The initial comparator rejected the real nested official-input layout
+before writing a report; a fresh scratch correction and negative fixture
+fixed the reader, not the model or output data. Original artifacts remain.
+
+Scoped adversary verdict: ROBUST for the stated frozen-input, all-weight F32
+endpoint metrics and repeat/byte controls; VULNERABLE for global DiT parity
+or photo-quality closure, which is not claimed. Next falsifier: separate
+once-rounded inputs from operator rounding, then matched later/composed
+blocks and trajectory/shared-VAE ROI checks. No production code, weights or
+image output changed. Overall goal remains IN_PROGRESS. Refresh on source,
+runtime, device, weights, frame, layout, schedule or artifact changes. This
+docs-only successor does not rebind the frozen consumer or authorize reruns.
+
 ## Official frozen photo block-0 replay controls (2026-09-30)
 
 The direct official block adapter has now executed twice, superseding the

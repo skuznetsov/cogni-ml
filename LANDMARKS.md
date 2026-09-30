@@ -30648,3 +30648,36 @@ Refresh after source/toolchain/device/model/workload changes.
   are not rebound by documentation commits. Refresh on source/runtime/device/
   weights/frame/layout/schedule/artifact drift. No production change or push;
   outgoing neighbor coordination remains unapproved, resource checks read-only.
+
+### Continuation 2026-09-30 — matched all-weight F32 block-0 endpoint
+
+- Supersedes the preceding missing-native-endpoint frontier. Root executed the
+  actual public native block twice on the immutable eval-0 frame with all nine
+  original BF16 donor values widened to F32. Capture producer `0a3d7be5`,
+  clean consumer `4103c3e5`; native outputs and recorded F32 routes repeat
+  exactly. Versus the official F32 output, relative L2 is
+  `1.5850071278480055e-6` all / `2.5465473352029342e-6` image, using
+  official reference norms. This is not bitwise official parity or a photo fix.
+- Root independently rechecks donor raw/widened bytes, gate-up order, frozen
+  inputs, build/source pins, finite outputs, slices, repeats and F64 metrics.
+  Both model runs, the 11-test comparator suite, real comparator and separate
+  no-Torch audit exited zero under unchanged guards. Evidence root
+  `/private/tmp/qwen21-dit-block0-f32-stream-uZKGsb`; comparison SHA
+  `de476554718a3a8fb78d5c1c2ded962cb6c60230cef7903fbc5242df2fddd79a`;
+  audit `dca6c6797e03d57e99c19f9802196887e3ed8ac146b5eb7b73d91a0fd0aa9250`.
+  Full pins, DoD and scoped ROBUST verdict are in the matched all-weight
+  section of `docs/qwen-image21-gguf-frontier.md`.
+- Preserved first loader abort exceeded the unchanged 3072-MiB sampled
+  tree-RSS guard; exact stage unknown, no output. The new bounded streaming
+  loader avoids duplicate large float arrays without relaxing the cap.
+  Comparator's initial nested-input reader mismatch was corrected in a fresh
+  scratch root with a negative fixture; no model artifact was modified.
+- Return pointer: isolate input rounding from operator rounding, then matched
+  later/composed blocks and denoising trajectory. Global norms do not certify
+  middle-face/collar/jamb-shadow ROI quality. The frozen photo pair shares
+  conditioning and CPU F32 VAE; decoder/manifold fault remains unproven.
+  No production fix or weight promotion; goal active. Refresh on source,
+  runtime/device/weights/frame/layout/schedule drift or missing scratch.
+  Any new run needs current source/build binding; a docs-only commit does not
+  rebind frozen outputs. Local verified commits allowed, push unauthorized;
+  outgoing neighbor messages unapproved, read-only resource checks retained.
