@@ -30237,3 +30237,72 @@ Refresh after source/toolchain/device/model/workload changes.
   Torch's dynamically loaded SLEEF helper remains a diagnostic dependency,
   not standalone native packaging. Refresh evidence if source, weights,
   fixture, arithmetic policy, runtime changes, or scratch files disappear.
+
+### Continuation 2026-09-30 — Qwen3-VL block-1 post-attention norm frontier
+
+- Source state is `a172f807caf7172dd1b7e4219d1c04bbae44ad96`; numerical
+  sources still match the four-block candidate at `0df8f95`. No production
+  arithmetic was changed. The goal remains open for all 36 encoder blocks,
+  DiT representation/backend parity, VAE, and matched performance checks.
+- The fixed-input input-RMSNorm route is refuted for this input: official
+  norm-only replay and root's raw-word comparison agree on all 999,424 BF16
+  words. Output SHA-256 is
+  `c44c5ad3401ba520ae4583e4081132a8b6a7c34f064a402cc0833d17427b76f0`.
+  This does not establish all RMSNorm inputs or layers as exact.
+- The isolated official block-1 replay froze 16 taps before reading official
+  hidden002. Its endpoint self-qualified bitwise against hidden002, SHA-256
+  `8c6c005fede303627c3f6af40ab21ab3720b021ae5e2eb6e72755d6d8009543f`.
+  It loaded only 11 block-1 weights (385,892,864 bytes), not the whole encoder.
+  Candidate hidden001 was the compute input; only the authorized 1,952-byte
+  attention-mask slice was read from the fixture before teacher freeze.
+- Root independently checked all 32 teacher/candidate sidecars for hashes,
+  sizes and finite values, then self-qualified the endpoint and compared raw
+  BF16 words. The 11 saved boundaries through attention o_proj are exact.
+  First divergence is post_attention_layernorm: 51 words, all in token row 50.
+  Subsequent gate/up/down projections differ in 484/2,255/2,978 words, and the
+  endpoint differs in 2,007, also confined to row 50. This localizes the
+  residual-add -> post-attention RMSNorm interval, not the exact operation.
+- DoD executed, exit 0: `/usr/bin/python3 -B
+  /private/tmp/qwen21-block1-root-audit-20260930.py`. Comparator SHA-256:
+  `839aaec97866d2d9cf15cb0b6147f49e28b570620d4ce6509cf4f3bbf41663c9`.
+  One in-memory BF16 word mutation produced exactly one difference. Adversary
+  verdict is ROBUST for this saved-tap localization; full encoder and image
+  quality remain unverified. No ordinary batching/fusion is called LTP/WBA.
+- Evidence root: `/private/tmp/qwen21-block1-official-probe-20260930-DXK9ZN`.
+  V2 runner SHA-256:
+  `31edc9977443ca4ce2623ad1e0f7d28b1a6a945cd91df3a6a1517ab5c7f4a01d`;
+  frozen teacher manifest:
+  `41ef73b39cb13c12fb5d4db1295b0d36dacd2c563f926955ee9de6840cb42a8f`;
+  separate comparison:
+  `b6bd770bb5366f95fc82d551ccc623e0e34bcd6b5891ba245ac31466aa1ff36c`;
+  root audit report:
+  `87fd4656973d7a07e222f0052f9ebaeabf6f9731db4d8b2a24b145e30924fdf7`.
+  V1 was never run: root found wrong strict state-dict keys lacking `.weight`;
+  the corrected V2 preserves V1 and uses a fresh lock/output namespace.
+- Next falsifier: qualify a fixed-input residual-add/post-norm replay against
+  the saved full teacher norm, then separate variance reduction from inverse-
+  RMS policy. Generic native F64 variance versus official F32 reduction and
+  `1/sqrt` versus `rsqrt` are hypotheses; do not patch either speculatively.
+  The V3 probe remains static preparation, with no runtime grant. Preparation
+  refreshed the saved V2 norm hash; this is not observer-blind validation.
+  Computation must use only frozen candidate operands and pinned weights,
+  with reference-value comparison separated after new output freeze.
+- Reject the fused nn.LayerNorm/Welford source route for this probe: pinned
+  Qwen3VLTextRMSNorm.forward instead uses F32 `pow(2).mean()` and tensor
+  `rsqrt`, then BF16 normalization and weight multiplication. The formulas
+  and dispatch paths are not interchangeable merely because both are norms.
+- The human photo assessment identifies slight middle-face/collar changes
+  and a softer door-jamb shadow, with the other faces stable. It is separate
+  from native Qwen3-VL drift: that photo pair shares official conditioning
+  and VAE, while Q8/native versus BF16/official DiT remains confounded.
+  DiT profile V2 static checks pass, including 11 malformed-log controls;
+  no profile model run is admitted yet. Two steps are a new schedule, not a
+  prefix of the saved 40-step run, and cannot establish quality or speed.
+- Heavy teacher run exited 0 and the slot was explicitly released before
+  04:29 UTC. Alternate with thread `01a0ba62-98aa-7813-b466-cfed8d20037f`;
+  its subsequent verification run also released the slot at 04:44 UTC; root
+  holds no new window. Reacquire before any model/build. Preserve the fresh >=55%
+  launch gate / 50% runtime floor. Refresh this evidence after source, model,
+  fixture, arithmetic/runtime changes, or missing scratch artifacts. Preserve
+  frozen locks; after this docs-only commit, refresh V3's HEAD pin before its
+  preflight without changing prior frozen probe metadata.
