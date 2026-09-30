@@ -30479,3 +30479,77 @@ Refresh after source/toolchain/device/model/workload changes.
   and compare candidate artifacts only after freezing. Do not enable native
   conditioning automatically or infer image-quality/DiT improvements. A new
   heavy slot must be explicitly acquired with unchanged memory guards first.
+
+### Continuation 2026-09-30 — four-layer hidden-W4 composition qualified
+
+- Numerical source is local commit `75aca5c176d797768c81a5a402960a343e794056`
+  on `codex/qwen-image21-metal`; no push. The opt-in norm change passed both
+  38-example ordinary/release gates before that atomic commit. Existing
+  prefill landmarks and the dirty primary checkout were preserved.
+- A fresh runner calls the actual checked hidden-norm seam in both places
+  through text blocks 0..3 on the pinned 244-token fixture. Its seven projections
+  are the qualified SIMD diagnostic route; attention remains CBLAS F32 plus
+  the libtorch-SLEEF-dependent shim. It is not the entire production `forward`
+  route, full encoder, Metal engine, or dependency-free packaging.
+- Candidate inputs are only the two authenticated 1952-byte ID/mask slices;
+  embedding lookup is native. No teacher hidden-state bytes enter computation.
+  Each block is loaded/hashes checked/forwarded/frozen, then trace references
+  are cleared and GC requested. All old frozen namespaces remain intact.
+- Release build 52929 and metadata preflight 52480 were terminal exit 0.
+  W4 candidate 42280, W4 repeat 34026 and generic control 19716 were terminal
+  exit 0; each had fresh 75% free memory (>=55% independent admission),
+  unchanged 180s/3 GiB, 50% runtime floor and single-thread libraries.
+  Serial slot was yielded after the first candidate and after the final
+  repeat/control terminal. There is no pending heavy launch or model process.
+- Root separately authenticated all 64 sidecars per candidate (67,960,832
+  finite BF16 words/run), source/binary/manifest hashes and connected layer
+  boundaries before teacher comparison. Post-freeze comparator checks all
+  192 candidates plus all 64 old generic sidecars before teacher payloads.
+  W4 repeats match all 64 stages; new generic matches all 64 old stages.
+- Five official endpoint comparisons show generic mismatches
+  `0, 0, 2007, 138022, 399176` at hidden states 000..004; W4 is
+  `0, 0, 0, 0, 0` in both runs (999,424 BF16 words/endpoint).
+  All 16 official block-0 taps match both modes. Root's independent native
+  integer-array comparator reproduces all available teacher counts and
+  clean/seeded controls 0/1. Four-token row rotation changes 16,373 words;
+  its generic-vs-W4 control is nondiscriminating, not negative evidence.
+  ROBUST within this pinned four-layer diagnostic boundary only. Layers 1..3
+  have endpoint teacher references but no internal teacher stage taps.
+- Evidence root: `/private/tmp/qwen21-fourlayer-hiddenw4-20260930-alv3qL5f`.
+  Runner SHA `40545ab381de5ad22eb6cce6e358a287c1fb173530a3027f46a18d218bb1376b`;
+  binary `c00a1111fd51f2eebffb0779d94f6647bb71ea0f869df9a4e9f7c0ef600dbaa6`;
+  preflight `0a789fb4e70bba125637340df52d4c0f4237365a84b7d6a182acac521afe0e43`.
+  Frozen manifests repeat0 / repeat1 / generic respectively:
+  `7cadb26b97a9259887640b1569504a724e8f29580b1bb6558cec272f00e6b9b4`,
+  `21b30d2341271c0d56f58d8c9be3ec65bec49d1842d49e2430383798ea555d32`,
+  `0dbf2892a3f3b75c7cbb2d72065e4b72db17d9e17b1e07687c1b0143f4e71520`.
+- Comparison script SHA `75561ccdfdc76670bc4afaa0355dd2d41c4fbb7985478f7b0e889941e58bdad8`;
+  report `bac9a2f9a6b2c065601c764f6b690577ce38b49a1ea66bd144eeea0263843eeb`.
+  Independent root teacher auditor source
+  `a99a5d766f49941c90826037dde16e3d47d22b317bb646b24b0a3c5f16228de7`;
+  report `bcfcdc91ceea1636c4fcee082f1cf93268146b8a46007ea03e00484681f6cca1`.
+  Root candidate auditor source `48df752c2392ff0dfb613c3476cfbee5fdbf7984001a200b902d9ab43f2fd780`;
+  repeat0 / repeat1 / generic reports:
+  `a7d658f1fa6f5b486623c7d7d0aecb9027c792a4c5804f6edbcde457400690b0`,
+  `a63f53931113da52494283462471a2cb8c2737a161ec8e6050a70b7824ed57bb`,
+  `baaef6e0d1464e92fccd12b931b664f977a85ccce59a2a47fb20bf1d351af773`.
+- DoD commands and claim boundary are in the hidden-width RMSNorm section of
+  `docs/qwen-image21-gguf-frontier.md`. All numerical/source pins stayed unchanged
+  across build and three runs; metadata-only evidence-label and formatting
+  corrections were completed before build. The initial Python syntax check
+  failed only on an unwritable system bytecode cache; the scratch-cache retry
+  exited 0, and no comparator/model ran during that failure.
+- Next text falsifier is beyond four layers, with fresh source/build binding,
+  unchanged fixture/weights and separately admitted resource bounds. Keep raw
+  last-block output distinct from final-normalized hidden state. Native
+  conditioning stays default-off; this does not close full 36-layer parity.
+- Photo return pointer: shared official conditioning + shared CPU F32 VAE;
+  middle face/collar/jamb-edge changes still confound native Q8 weights with
+  official BF16 weights and arithmetic. Do not attribute those differences
+  to the now-qualified text norm or infer size-dependent VAE failure. First
+  separate weight values and projection arithmetic on one frozen DiT input;
+  the two-step V2 route/timing profiler alone cannot do that. Overall goal
+  remains IN_PROGRESS. Refresh on source/compiler/runtime/fixture/weights/
+  artifacts changing or missing scratch evidence; do not silently reuse the
+  released heavy slot. Standing authority remains scoped local goal work,
+  serial resource coordination and atomic verified local commits, not push.

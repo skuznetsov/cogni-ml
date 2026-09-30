@@ -2601,7 +2601,8 @@ norm implementation change; scratch may expire.
 
 ### Qwen3-VL hidden-width RMSNorm reduction frontier (2026-09-30)
 
-Status: admitted isolated opt-in profile; composed-layer parity pending.
+Status: admitted isolated opt-in profile; the pinned four-layer diagnostic
+replay below is qualified. Full-encoder and production-pipeline parity remain open.
 The qualified fixed-input
 layer-1 post-attention replay attributes 51 saved BF16 differences in token row
 50 to the sequential-F64 versus official-F32 mean-square policy. A separately
@@ -2664,9 +2665,77 @@ loaded. Slot was explicitly released to the other goal after terminal results.
 Rejected: automatic native-conditioning enablement, full 36-layer parity,
 image-quality or latency claims, and attribution of the shared-conditioning
 photo pair's middle-face/collar/shadow changes to this norm. A fresh composed
-layer replay is the next wider falsifier after isolated norm admission. Rollback
+layer replay was subsequently qualified within the four-layer boundary below. Rollback
 is the absent hidden-norm selector. Refresh after source, compiler arithmetic,
 runtime profile, donor/weight/output changes, or missing scratch evidence.
+
+#### Four-layer composed hidden-norm replay (2026-09-30)
+
+At numerical source commit `75aca5c176d797768c81a5a402960a343e794056`,
+the new scratch runner uses the actual public `normalize_hidden_rows` seam
+for both hidden norms in blocks 0..3. All seven projections use the previously
+qualified output-channel SIMD diagnostic shim; attention uses the pinned
+CBLAS F32 QK/PV and softmax shim. This is not an invocation of the complete
+production block `forward`, a Metal implementation, or a standalone dependency-free
+encoder: the softmax diagnostic still resolves the pinned libtorch SLEEF symbol.
+
+The candidate reads only 3904 input-ID/mask bytes from the fixture bundle,
+performs native embedding lookup, loads/hashes one weight block at a time,
+and freezes 64 BF16 stages without opening official intermediate outputs.
+Three separate runs use one source/binary: `w4-repeat0`, `w4-repeat1` and
+`generic-full`. Root independently authenticated all 192 new sidecars, their
+finite BF16 words, manifests and connected layer boundaries before comparison.
+The comparator additionally authenticates all 64 prior generic-baseline sidecars.
+
+| Endpoint | Generic mismatches / 999,424 words | W4 mismatches / 999,424 words |
+| --- | ---: | ---: |
+| `hidden_state_000` (native embeddings) | 0 | 0 |
+| `hidden_state_001` (after block 0) | 0 | 0 |
+| `hidden_state_002` (after block 1) | 2,007 | 0 |
+| `hidden_state_003` (after block 2) | 138,022 | 0 |
+| `hidden_state_004` (after block 3) | 399,176 | 0 |
+
+Both W4 runs match all five official endpoint slices and the 16 qualified
+block-0 teacher taps exactly. All 64 W4 stages repeat exactly; all 64 new
+generic stages match the previous generic run exactly. An independent root
+integer-array word comparator reproduces endpoint and block-0 counts.
+Clean/seeded one-word controls yield 0/1. A four-token row rotation changes
+16,373 endpoint words; its generic-vs-W4 comparison is explicitly nondiscriminating.
+ROBUST within this pinned four-layer diagnostic boundary. There are no
+official internal stage taps for layers 1..3; candidate repeat equality does
+not establish teacher equality for those internal stages.
+
+Evidence namespace: `/private/tmp/qwen21-fourlayer-hiddenw4-20260930-alv3qL5f`.
+Runner SHA `40545ab381de5ad22eb6cce6e358a287c1fb173530a3027f46a18d218bb1376b`;
+binary SHA `c00a1111fd51f2eebffb0779d94f6647bb71ea0f869df9a4e9f7c0ef600dbaa6`.
+Release build 52929, metadata preflight 52480 and candidate handles
+42280 / 34026 / 19716 all exited 0. Each launch independently observed
+75% free memory against a >=55% launch gate, with unchanged 180s/3 GiB
+bounds, 50% runtime pressure floor and single-thread library settings.
+The heavy slot was released between the first candidate and the repeat/control
+batch, and immediately after the final terminal result. Recorded candidate
+wall times (~74.5..74.7s) are not a matched performance benchmark.
+
+Executed DoD: release-build the pinned scratch runner; execute `--preflight`;
+then separately execute `--run-candidate` with `QWEN_HIDDEN_NORM_RUN_LABEL`
+set to each of the three labels and `QWEN_FOURLAYER_BINARY` set to the freshly
+hashed binary. Only after all sets are frozen, run
+`compare_hiddenw4_frozen.py`, then `root_teacher_word_audit.py` with Python 3.
+Both exited 0. Comparison report SHA
+`bac9a2f9a6b2c065601c764f6b690577ce38b49a1ea66bd144eeea0263843eeb`;
+independent root report SHA
+`bcfcdc91ceea1636c4fcee082f1cf93268146b8a46007ea03e00484681f6cca1`.
+The root fallback audit verifies raw candidate/teacher hashes and counts
+using a separately constructed native-integer-array comparator.
+
+The wider falsifier is beyond four layers with unchanged inputs/weights,
+fresh source/build binding and separately admitted resource bounds. Distinguish
+raw decoder-block outputs from final-normalized hidden states before widening.
+Do not enable native conditioning automatically. No full 36-layer, image-quality,
+VAE-manifold, or latency conclusion follows; the shared-conditioning photo
+pair remains an independent DiT weight/arithmetic question. Refresh on
+numerical source, compiler/runtime, input/weight/artifact changes or missing
+scratch evidence. Default-off rollback and the hybrid conditioner remain unchanged.
 
 ### Qwen3-VL block-0 composed donor replay after Q/K norm fix (2026-09-29)
 
