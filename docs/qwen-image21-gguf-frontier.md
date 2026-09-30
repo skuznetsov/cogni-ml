@@ -2599,6 +2599,75 @@ comparison. Refresh after
 the saved donors, weights, sidecars, Torch/runtime/compiler profile, or native
 norm implementation change; scratch may expire.
 
+### Qwen3-VL hidden-width RMSNorm reduction frontier (2026-09-30)
+
+Status: admitted isolated opt-in profile; composed-layer parity pending.
+The qualified fixed-input
+layer-1 post-attention replay attributes 51 saved BF16 differences in token row
+50 to the sequential-F64 versus official-F32 mean-square policy. A separately
+frozen conditional four-lane, ILP-4 cascade matches all 244 captured official
+F32 means and scales, and all 999,424 BF16 norm words. The eight-lane hypothesis
+does not. This identifies a compatible arithmetic policy for this fixture,
+not the active compiled dispatch or a general Torch backend equivalence.
+
+Implementation: the independent `HiddenNormBackend::Torch26Arm64W4` selector,
+defaulting to absent, opts 4096-wide input/post-attention norms into the measured
+four-lane policy. Both `forward` norm calls and the direct diagnostic use the
+checked `normalize_hidden_rows` operation. Its shape product uses Int64 and
+rejects invalid dimensions before allocation. Non-4096 rows retain generic arithmetic;
+QKV projection and 128-wide Q/K norm selection remain unchanged. The hybrid
+official conditioner remains the production pipeline default.
+
+Falsifiers before admission: reproduce the real row-50 arithmetic failure in
+the current production helper (not a missing-API compile failure); match a
+hash-pinned real donor and the full 244-row norm sidecar in ordinary and release
+builds; retain a failing generic-profile negative control; detect a seeded
+one-word comparator defect; preserve default, non-4096, and existing Q/K
+behavior in the focused/broader specs. An opt-in regression or a diagnostic-only
+fix that bypasses either `forward` norm call rejects promotion.
+
+The pre-change production helper reproduced the 51-word row-50 arithmetic
+failure (guarded handle 47932, intentional exit 1). Root then ran the focused
+norm, explicitly enabled full-sidecar, existing Q/K, text-block, text-reference
+and text-weight specs in ordinary and release builds. Each passed 38 examples
+with no failures, errors or pending examples (handles 21309 and 54670, exit 0).
+The profiled output matches all 999,424 pinned BF16 words and the complete
+teacher hash; the generic output retains its exact saved hash and 51-word
+negative control. Seeded comparator, non-4096 fallback, selector independence,
+Q/K controls, malformed shapes and Int32::MAX token-count rejection pass.
+Root also verified that existing projection, Q/K and RoPE method bodies were
+unchanged and that both actual `forward` call sites consume the checked seam.
+The initial formatter and two test-only API compile failures reached no
+numerical examples and are not arithmetic evidence. ROBUST only within this
+fixed-input isolated norm boundary, not full-encoder equivalence.
+
+DoD (set `CRYSTAL_PATH` to this checkout's `src` plus the Crystal 1.21 stdlib,
+`SDKROOT` to the local macOS SDK and a scratch `CRYSTAL_CACHE_DIR`; repeat with
+`--release`):
+
+```bash
+QWEN3VL_HIDDEN_NORM_FIXTURE_DIR=/private/tmp/qwen21-block1-official-probe-20260930-DXK9ZN/block1_postattention_norm_frozen_v4 \
+  COGNI_RUN_SAFE_MIN_FREE_PCT=50 COGNI_SPEC_MIN_FREE_PCT=50 \
+  COGNI_SPEC_MAX_RSS_MB=3072 \
+  scripts/run_safe.sh /opt/homebrew/bin/crystal 180 3072 spec \
+    spec/qwen3vl_hidden_norm_reduction_spec.cr \
+    spec/qwen3vl_hidden_norm_sidecar_spec.cr \
+    spec/qwen3vl_qnorm_reduction_spec.cr spec/qwen3vl_text_block_spec.cr \
+    spec/qwen3vl_text_reference_spec.cr spec/qwen3vl_text_weights_spec.cr \
+    --error-trace
+```
+
+Both launches had fresh 74% system-free memory against the independent >=55%
+launch gate and unchanged 50% runtime floor; no model or full weight shard was
+loaded. Slot was explicitly released to the other goal after terminal results.
+
+Rejected: automatic native-conditioning enablement, full 36-layer parity,
+image-quality or latency claims, and attribution of the shared-conditioning
+photo pair's middle-face/collar/shadow changes to this norm. A fresh composed
+layer replay is the next wider falsifier after isolated norm admission. Rollback
+is the absent hidden-norm selector. Refresh after source, compiler arithmetic,
+runtime profile, donor/weight/output changes, or missing scratch evidence.
+
 ### Qwen3-VL block-0 composed donor replay after Q/K norm fix (2026-09-29)
 
 A bounded 244-token replay fed the hash-pinned official BF16 Q/K/V projection

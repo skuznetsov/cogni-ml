@@ -30375,3 +30375,107 @@ Refresh after source/toolchain/device/model/workload changes.
   model/build; preserve >=55% launch gate and the 50% runtime floor.
   Refresh after numerical source, weights, fixture, runtime/profile changes
   or missing scratch artifacts. Do not overwrite any frozen metadata/locks.
+
+### Continuation 2026-09-30 — captured 4096-wide RMSNorm reduction policy
+
+- At source `56633e0ab616d0997a139c76710a69ec5170ee9c`, V7 captured the
+  actual official F32 pow, mean, epsilon add, rsqrt, precast multiply, and
+  two BF16 materialization boundaries on the qualified V4 fixed residual.
+  The actual norm agrees with the prior full-block-qualified replay at
+  0/999,424 BF16 mismatches. No full model or decoder block was loaded.
+- The conditional four-lane ILP-4 cascade matches all 244 captured F32 means
+  and inverse scales and all 999,424 BF16 norm words. The eight-lane policy
+  differs at 133 means, 72 scales, and 51 norm words (token row 50). This is
+  a compatible measured arithmetic policy, not identification of active
+  compiled dispatch, a general Torch backend emulator, or a production fix.
+- Root froze a differently constructed scalar chunk/stream reduction before
+  opening any new captured statistic. Its W4/W8 sums and means match the
+  worker's source-shaped simulation exactly. A separate root audit rebuilds
+  all powers, epsilon adds, precast multiplies, BF16 RNE conversions and
+  weighted norm outputs. The native F32 sqrt/reciprocal yields the same
+  captured scales and W4 norm output on this fixed input. Clean/seeded word
+  controls return 0/1. ROBUST within the fixed 244x4096 norm boundary only.
+- V5 failed before producing statistics because its dispatch hook omitted
+  `return result`; no model conclusion follows. V6 was rejected statically:
+  its package-root guard misplaced Torch/NumPy in the Transformers scratch
+  dependency directory. Preserve both namespaces and locks. V7 adds a bound
+  hooked/unhooked synthetic self-test, required-op counts, missing-op rejection,
+  exact runtime module admission, and self-test-to-capture binding. Both V7
+  instrument qualification and real capture passed; comparisons ran only
+  after output freeze and authentication.
+- V7 evidence root: `/private/tmp/qwen21-block1-norm-reduction-v7-yusAb2`.
+  Runner SHA-256 `20aae125543e2522aa26319babf89fd6dcb87d98889ea6d8df3928119543fc60`;
+  self-test `4d631f2733891a664cb4475f368ed1a1f10e93bb860d928f6001eb0dd2498b4e`;
+  frozen manifest `d2c097abb3f76b322403c18bdfb3d1a383268a8134c468a167b39c6fdb3c37e1`;
+  comparison `1fe132af16d1ddb38655f9bb58e96defcbb3edcd86a654607c87f7ce43765acd`;
+  independent root audit `8417cfed69d89b82e550008726ebbdd3eda406d9fb95d2c4671d21b03c540012`.
+  Root candidate freeze manifest is
+  `251c8edd02b7c4be8be8646073510ad3a143f419db2e6457fcd5d35927ab9a4e`.
+  Executed modes were `--self-test`, `--run`, then `--compare-frozen`;
+  root ran the separate audit with the frozen capture directory and runner
+  SHA argument. V7 self-test handle 50439 and capture 87337 were terminal exit 0; the heavy
+  slot was explicitly released before the small post-freeze comparisons.
+- The native arithmetic red was subsequently observed before editing the
+  production helper: `/private/tmp/qwen21-hiddennorm-native-wk3pJa/row50_red_runner.cr`
+  (SHA `e7a7796346f79066e5473f6eb7950ad8b3cc770fde6e794e144893fefec25f03`)
+  called the current private helper on one pinned 4096-value residual row and
+  the selected 8 KiB gamma payload. It reported exactly 51 BF16 differences;
+  comparator clean/seeded controls were 0/1. Candidate row SHA
+  `c08973ab32dd7096efb8a51c665526bea6ee210b974a1d668caf58fa6836344b`
+  independently agrees with the prior frozen native-emulation row. The teacher
+  row was read after candidate computation. `crystal run` under `run_safe.sh`
+  (180s, 3 GiB, fresh 76% launch / 50% runtime floor) reached intentional
+  arithmetic-red exit 1, handle 47932; slot released immediately. Earlier
+  sandbox handle 92200 exited 75 because process-group isolation was unavailable
+  and supplies no arithmetic evidence. The guarded retry isolated only its own
+  child group. No full shard, model or decoder block was materialized.
+- Root admitted the independent opt-in 4096-wide hidden-norm policy after
+  ordinary and release tests, with unchanged default, non-4096, QKV and Q/K
+  behavior. Both actual `forward` norms use the checked public seam; the shape
+  product uses Int64 and rejects Int32::MAX token-count input without a large allocation.
+  Its bounded contract and DoD command are recorded in
+  `docs/qwen-image21-gguf-frontier.md`. Composed-layer parity and
+  image quality remain open. The shared-conditioning/shared-VAE photo pair's
+  middle-face/collar/shadow differences remain a separate, confounded DiT
+  question. Overall goal IN_PROGRESS. Refresh on numerical source, compiler,
+  runtime, input/weight/output changes or missing scratch evidence.
+- Post-change DoD: with `QWEN3VL_HIDDEN_NORM_FIXTURE_DIR` explicitly pointing
+  at the qualified V4 frozen directory, root ran the new focused and full-sidecar
+  specs plus existing Q/K, text-block, text-reference and text-weight specs under
+  `scripts/run_safe.sh /opt/homebrew/bin/crystal 180 3072 spec ... --error-trace`,
+  then repeated with `--release`. Ordinary handle 21309 was terminal exit 0:
+  38 examples, 0 failures/errors/pending, 913.39 ms test runtime (~2s wrapper).
+  Release handle 54670 was terminal exit 0 with the same 38/0/0/0 result,
+  420.29 ms test runtime (~7s wrapper). These are correctness gates, not a
+  matched performance benchmark. Both launches independently observed 74%
+  free memory (>=55% gate), with wrapper/spec 50% pressure floors and 3 GiB
+  RSS limits. No model was loaded. Slot was released immediately; NEXT yielded
+  to `01a0ba62-98aa-7813-b466-cfed8d20037f` for its queued Tuple oracles.
+- Every profiled BF16 word and full output hash matches the frozen teacher
+  (0/999,424); the generic output retains its saved hash and exactly 51
+  differences. Clean/seeded comparator results are 0/1. Default/non-4096/QKV
+  independence, Q/K and malformed-input controls pass in both builds. Root's
+  static counterexample check found all nine existing projection/QK/RoPE helper
+  bodies unchanged and both production hidden-norm consumers using the new
+  checked seam. Verdict ROBUST only for this isolated pinned norm boundary.
+- Verified file SHA-256 identities: production text block
+  `2fdaf3ad62b58fcc8961eab594bc86fa2090fa0e9b136f17720a022e34ff4049`;
+  fixture support `9ad16a416305c224087e5b61aefd753f343e7c1ee9a0cd30998b405d50c1d057`;
+  focused spec `d0d56801e9f105711a1ff4d0211377a984434c9eb7f0ec3dd96e94f7cb15aa24`;
+  full-sidecar spec `973aa2ea0a85d155dbdfc02d95ee1dbad531b8431815aedabfb6013cd64c004c`;
+  embedded row fixture `796952d4f883df30fe2f0e9f815ab15ee871674f9bdd59ecc2e90f6a3c23eefa`.
+  Root independently authenticated all three 8192-byte embedded sections and
+  all three 1,998,848-byte sidecars before runtime. Source stayed unchanged
+  while root mechanically formatted tests and corrected Hash lookup / module
+  constant syntax. Formatter-only exit 1 and compiler handles 11494 / 17912
+  exited before numerical examples; they supply no arithmetic evidence.
+- User's visual assessment of the shared-conditioning/shared-VAE photographs:
+  near/far faces are visually alike, the middle face changes slightly; the
+  near person's collar and the jamb shadow edge differ. This is not pixelwise
+  identity or proof of a VAE defect. The far face is blurred in both images,
+  so this pair does not establish error as a function of face pixel size.
+- Next wider falsifier: a fresh, newly source-pinned composed-layer replay using
+  the actual checked hidden-norm seam at both stages; preserve old frozen runs
+  and compare candidate artifacts only after freezing. Do not enable native
+  conditioning automatically or infer image-quality/DiT improvements. A new
+  heavy slot must be explicitly acquired with unchanged memory guards first.

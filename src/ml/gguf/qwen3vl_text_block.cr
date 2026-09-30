@@ -37,6 +37,14 @@ module ML::GGUF
       Torch26Arm64Bf16
     end
 
+    enum HiddenNormBackend
+      # Source-shaped 4096-wide RMSNorm reduction profile matching the
+      # measured PyTorch 2.6 arm64 width-4 cascade for the pinned fixture.
+      # This is an explicit arithmetic emulation, not a claim about the
+      # active vector width selected by an installed PyTorch runtime.
+      Torch26Arm64W4
+    end
+
     getter hidden_dim : Int32
     getter heads : Int32
     getter kv_heads : Int32
@@ -47,13 +55,15 @@ module ML::GGUF
     getter attention_arithmetic : AttentionArithmetic
     getter projection_backend : ProjectionBackend
     getter qkv_projection_backend : QKVProjectionBackend?
+    getter hidden_norm_backend : HiddenNormBackend?
 
     def initialize(@hidden_dim : Int32, @heads : Int32, @kv_heads : Int32,
                    @head_dim : Int32, @intermediate_dim : Int32,
                    @eps : Float32 = 1e-6_f32, @rope_theta : Float32 = 5_000_000.0_f32,
                    @attention_arithmetic : AttentionArithmetic = AttentionArithmetic::Eager,
                    @projection_backend : ProjectionBackend = ProjectionBackend::Scalar,
-                   @qkv_projection_backend : QKVProjectionBackend? = nil)
+                   @qkv_projection_backend : QKVProjectionBackend? = nil,
+                   @hidden_norm_backend : HiddenNormBackend? = nil)
       raise ArgumentError.new("hidden_dim must be positive") unless @hidden_dim > 0
       raise ArgumentError.new("heads and head_dim must be positive") unless @heads > 0 && @head_dim > 0
       raise ArgumentError.new("heads * head_dim must equal hidden_dim") unless @heads * @head_dim == @hidden_dim
@@ -137,7 +147,9 @@ module ML::GGUF
       # residuals are BF16 module values. Decode-to-F32 inputs are rounded here.
       residual = quantize_bf16(hidden_states)
       trace_boundary(trace, "layer0_input", residual)
-      normalized = rms_norm_rows(residual, token_count, hidden_dim, weights.input_layernorm, config.eps)
+      normalized = normalize_hidden_rows(
+        residual, token_count, weights.input_layernorm, config
+      )
       trace_boundary(trace, "layers.0.input_layernorm", normalized)
 
       qkv = project_qkv(normalized, token_count, weights, config)
@@ -168,8 +180,8 @@ module ML::GGUF
       after_attention = residual_add(residual, attention_branch)
 
       residual = after_attention
-      normalized = rms_norm_rows(
-        residual, token_count, hidden_dim, weights.post_attention_layernorm, config.eps
+      normalized = normalize_hidden_rows(
+        residual, token_count, weights.post_attention_layernorm, config
       )
       trace_boundary(trace, "layers.0.post_attention_layernorm", normalized)
       gate = linear(
@@ -250,6 +262,23 @@ module ML::GGUF
         k: rms_norm_heads(k, token_count, config.kv_heads, config.head_dim, k_norm, config.eps,
           torch26_arm64_profile),
       }
+    end
+
+    # Apply the hidden-state RMSNorm profile to BF16-decoded rows. This is
+    # deliberately independent of the QKV projection selector; both hidden
+    # RMSNorm call sites in `forward` use this same checked entry point.
+    def self.normalize_hidden_rows(input : Array(Float32), token_count : Int32,
+                                   weight : Array(Float32),
+                                   config : Qwen3VLTextBlockConfig) : Array(Float32)
+      raise ArgumentError.new("token_count must be positive") unless token_count > 0
+      expected = token_count.to_i64 * config.hidden_dim.to_i64
+      raise ArgumentError.new("hidden norm input shape mismatch") unless input.size.to_i64 == expected
+      raise ArgumentError.new("hidden norm weight shape mismatch") unless weight.size == config.hidden_dim
+
+      rms_norm_rows(
+        input, token_count, config.hidden_dim, weight, config.eps,
+        hidden_norm_backend: config.hidden_norm_backend,
+      )
     end
 
     # Diagnostic consumers receive snapshots, never aliases to arrays used by
@@ -449,14 +478,70 @@ module ML::GGUF
       (sum / 128.0_f32).to_f32
     end
 
+    # Source-shaped PyTorch 2.6 contiguous-inner W=4 reduction for one
+    # 4096-element Float32 row of squared BF16-decoded hidden values. The
+    # ordered 16-value chunk accumulation, 16-chunk level-1 accumulation,
+    # level-2 carry, four ILP streams, and ascending horizontal lane fold are
+    # kept explicit; no active PyTorch dispatch-width claim is implied.
+    private def self.torch260_arm64_mean_square_4096_w4(input : Array(Float32), offset : Int32) : Float32
+      level1 = StaticArray(Float32, 16).new(0.0_f32)
+
+      16.times do |chunk|
+        chunk_sum = StaticArray(Float32, 16).new(0.0_f32)
+        16.times do |step|
+          4.times do |ilp|
+            4.times do |lane|
+              column = chunk * 256 + step * 16 + ilp * 4 + lane
+              value = input[offset + column]
+              square = (value * value).to_f32
+              index = ilp * 4 + lane
+              chunk_sum[index] = (chunk_sum[index] + square).to_f32
+            end
+          end
+        end
+
+        16.times do |index|
+          level1[index] = (level1[index] + chunk_sum[index]).to_f32
+        end
+      end
+
+      # multi_row_sum finishes with acc[0] += acc[1], then acc[2], then
+      # acc[3]. W=4 and size=256 leaves only level 2 nonzero.
+      level2 = StaticArray(Float32, 16).new(0.0_f32)
+      16.times do |index|
+        sum = 0.0_f32
+        sum = (sum + 0.0_f32).to_f32
+        sum = (sum + level1[index]).to_f32
+        level2[index] = (sum + 0.0_f32).to_f32
+      end
+
+      vector_sum = StaticArray(Float32, 4).new(0.0_f32)
+      4.times do |lane|
+        sum = (level2[lane] + level2[4 + lane]).to_f32
+        sum = (sum + level2[8 + lane]).to_f32
+        vector_sum[lane] = (sum + level2[12 + lane]).to_f32
+      end
+
+      sum = 0.0_f32
+      4.times do |lane|
+        sum = (sum + vector_sum[lane]).to_f32
+      end
+      # cascade_sum zero-fills then accumulates this single callback result.
+      sum = (0.0_f32 + sum).to_f32
+      (sum / 4096.0_f32).to_f32
+    end
+
     private def self.rms_norm_rows(input : Array(Float32), rows : Int32, dim : Int32,
                                    weight : Array(Float32), eps : Float32,
-                                   torch26_arm64_head128 : Bool = false) : Array(Float32)
+                                   torch26_arm64_head128 : Bool = false,
+                                   hidden_norm_backend : Qwen3VLTextBlockConfig::HiddenNormBackend? = nil) : Array(Float32)
       output = Array(Float32).new(input.size, 0.0_f32)
       rows.times do |row|
         offset = row * dim
         if torch26_arm64_head128 && dim == 128
           variance = torch260_arm64_mean_square_128(input, offset)
+        elsif hidden_norm_backend == Qwen3VLTextBlockConfig::HiddenNormBackend::Torch26Arm64W4 && dim == 4096
+          variance = torch260_arm64_mean_square_4096_w4(input, offset)
         else
           # Preserve the established generic reduction for input/post norms,
           # non-128 heads, and profiles without a pinned reduction topology.
