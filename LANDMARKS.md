@@ -30306,3 +30306,72 @@ Refresh after source/toolchain/device/model/workload changes.
   fixture, arithmetic/runtime changes, or missing scratch artifacts. Preserve
   frozen locks; after this docs-only commit, refresh V3's HEAD pin before its
   preflight without changing prior frozen probe metadata.
+
+### Continuation 2026-09-30 — qualified fixed-input RMSNorm reduction cause
+
+- Source state is `b38ac259f0ca9f32ed434dcaec1dc5b8e47caff4`; this change
+  records evidence only. The four native numerical source hashes remain
+  unchanged from candidate `0df8f95`. No production arithmetic fix, encoder
+  parity promotion, image-quality improvement, or performance claim follows.
+- The new V4 replay consumed only frozen candidate hidden001 and exact
+  attention o_proj operands plus the pinned 8,192-byte layer-1 post-attention
+  norm weight. It read no official fixture payload or teacher intermediate
+  as a compute input. `USE_HUB_KERNELS=0`, offline resolution and one CPU
+  thread were explicit. It captures inputs to a norm-only replay, not a new
+  full-decoder residual hook. Preserve the existing V3 runner and preflight.
+- All three attribution gates pass over 999,424 BF16 words: official replay
+  norm equals the saved full-block teacher norm; Torch BF16 addition equals
+  F32 addition followed by BF16 RNE; source-shaped sequential-F64 native
+  RMSNorm equals the frozen candidate norm. Changing only variance formation
+  to official F32 `pow(2).mean(-1)` makes the norm output exact against the
+  teacher. Both tested inverse-root policies give the same BF16 output for
+  each tested variance policy. Thus sequential-F64 versus official-F32
+  variance formation explains these 51 saved norm differences, all in token
+  row 50. This is reference-arithmetic parity, not proof that F32 is a more
+  mathematically accurate reduction or that every norm/layer is now exact.
+- Root's separate stdlib audit verified all eight frozen sidecars, hashes,
+  lengths and finite words; independently rebuilt all 999,424 native F32-add
+  residuals; and rebuilt all 4,096 norm outputs in row 50 with explicit scalar
+  Float32 rounding and BF16 RNE. It read only the safetensors JSON header
+  (49,792 bytes) and the pinned 8 KiB norm weight for that scalar check.
+  A one-word in-memory mutation was detected as exactly one mismatch, while
+  the identical control stayed at zero. ROBUST within this fixed-input
+  residual/RMSNorm boundary; not a full-decoder residual capture or engine fix.
+- Executed DoD, exit 0: reviewed V4 `--run-probe` under `scripts/run_safe.sh`
+  (120 seconds, 3 GiB process-tree cap, unchanged 50% free-memory floor,
+  fresh independent 75% >=55% launch gate; wrapper observed 74%), followed
+  by separate `--compare-frozen` and `/usr/bin/python3 -B
+  /private/tmp/qwen21-postnorm-root-audit-20260930.py`. Run handle 80318 was
+  terminal exit 0 (~4 seconds), then explicitly RELEASED before comparison.
+  Comparison 90744 and independent audit 64894 also reached terminal exit 0.
+  Norm-call timing is not an encoder or image-generation benchmark.
+- Evidence root remains `/private/tmp/qwen21-block1-official-probe-20260930-DXK9ZN`.
+  V4 runner SHA-256:
+  `08bfb75a765ac52dd224f33ea1703c9991dafc1b527d1b7a84d58b8f27a5d11f`;
+  static preflight:
+  `9a1c4a03c8e04b81081854a49949fe03e214ceaafac06430145ce343933ef6ef`;
+  frozen manifest:
+  `486be8149a6f4b688b82925147ef8706113bd2a7614aa7d74844fbaefa7de32a`;
+  separate comparison:
+  `345fc2d15be559c3621b7457ea300206d1b8569c7509db936254167d979d9bb1`;
+  independent audit source:
+  `1e8c9076f366489d05abfedcf8a97af955d79ea644bc75ec454e572ce174e255`;
+  independent audit report:
+  `05a08e76c071c07efdda020d21e632fb16d9eb524ed04e3f8fc7847cab7937b4`.
+- Next falsifier: freeze actual official F32 mean-square and inverse scales,
+  then compare source-shaped 4-lane/8-lane cascade reductions on the same
+  frozen residual. Source-only dispatch inference is insufficient. Before
+  any production change, obtain a failing 4096-wide regression and preserve
+  generic/default/non-4096 behavior. V5 is static preparation only; after
+  this docs-only commit use a new HEAD pin/preflight, not rewritten evidence.
+- The shared-conditioning/shared-VAE photo pair remains a separate DiT
+  question with Q8/native versus BF16/official representation and arithmetic
+  confounded. These Qwen3-VL findings do not explain the face, collar or
+  door-jamb defects in that pair. The overall goal remains IN_PROGRESS.
+  The evidence-packet skill's template/validator are absent in both checkout
+  and installed skill; this compact source-linked ledger is the fallback.
+  Thread `01a0ba62-98aa-7813-b466-cfed8d20037f` has the next serial heavy slot
+  after explicit Qwen release. Root holds no window. Reacquire before any
+  model/build; preserve >=55% launch gate and the 50% runtime floor.
+  Refresh after numerical source, weights, fixture, runtime/profile changes
+  or missing scratch artifacts. Do not overwrite any frozen metadata/locks.
