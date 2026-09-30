@@ -3,6 +3,103 @@
 Status: active implementation frontier; prompt-to-PNG path admitted, with
 optimization candidates gated by real-prompt parity and paired latency checks
 
+## Photo block-0 QKV weight/dispatch discriminator (2026-09-30)
+
+The shared-conditioning/shared-CPU-F32-VAE three-face photo pair has subtle
+middle-face, near-person collar and jamb-shadow differences. The near/far
+faces are visually alike, not certified pixel-identical. This does not establish
+a face-size-dependent VAE defect. A new selective native reconstruction now
+separates QKV dispatch from weight values at evaluation zero, block zero;
+it does not reproduce the unrecorded historical `native-r2` executable.
+
+The numerical source is clean commit
+`92fca21217e5c8424b75739ecf570962d71a4c80`. The real outer transformer and
+block norm/modulation produce frozen native F32 input `[1,1164,4096]`:
+140 text rows followed by 1024 image rows, with SHA-256
+`7eddf20f0b0ccdce938938f9a99b62e0de9a679a098606036c8a5bea37339cc1`.
+The 40-step schedule is retained, but the runner stops before block attention,
+MLP or the first scheduler update. Its selective loader retains canonical
+GGUF names, shapes, raw bytes and route tags. `resident_input: false` explicitly
+skips the redundant speculative outer-input path; this is not an unchanged
+full-generator execution trace.
+
+Three separately frozen arms consume exactly that input:
+
+- A: original Q8 weights and the observed M2 Max
+  `qi21_q8_0_register_reuse_matmul` pipeline.
+- B: exactly the same Q8 values, decoded to F32, using `simd_mv_f32_f32`.
+- C: pinned BF16 Q/K/V weights, exactly widened to F32, using that same F32
+  pipeline. C is not official BF16 inference or an official input context.
+
+All-row relative L2 distances are:
+
+| Projection | A versus B, denominator L2(B) | B versus C, denominator L2(C) |
+| --- | ---: | ---: |
+| Q | 5.57686117e-8 | 0.00179041063 |
+| K | 5.80048666e-8 | 0.00168473276 |
+| V | 7.37779253e-8 | 0.00292274453 |
+
+Thus the local weight-value contrast is much larger than the Q8/F32 dispatch
+contrast. B-versus-C is 0.16847..0.29227% overall; text and image groups retain
+the same ordering. No verified conversion-source revision ties this Q8 GGUF
+to the BF16 snapshot, so this is **not quantization-only attribution**.
+The experiment does not test BF16 input/output rounding, normalization,
+attention, a full block, later denoising steps, face/collar/shadow quality,
+or a VAE error. Neither common-route agreement nor aggregate relative L2 is
+an image-quality certificate.
+
+Executed controls passed: capture QKV equals fresh A, A repeat, B repeat,
+and deterministic B row permutation followed by output inverse permutation,
+all exact bytes. Root separately authenticated finite input/capture sidecars
+and all A/repeat raw bytes. A bounded independent stream verified the complete
+9,968,332,504-byte BF16 shard against SHA-256
+`9e6bc2d641e67bf277895ea8777141044a38f3edb7101bc469b2961dd7c36b4b`,
+unchanged device/inode/size/mtime/ctime, header bounds, and raw/widened QKV
+hashes. C's header and all six raw/widened hashes agree with that verifier.
+This authenticates the local bytes against the prior pin, not a Hub revision
+or the unknown Q8 conversion source.
+
+Evidence root: `/private/tmp/qwen21-dit-qkv-factorial-XSQDbN`.
+Driver SHA `02b17bba0686918898199321e92c39ef24e50e49d9b6f0b605c0ca994bd47934`;
+binary `a233332b0e8411fd5ce4658811fb5ba902a4118891751b0029fd17bdf01ae1ef`;
+bridge `48bb1469e2a473d30a94ab102df91268d549a4dd3710b076a0e59d137691005a`.
+Frozen comparison `comparison-r1.json` SHA
+`dd2aa4a11a3d554f144ee422c0060d85eb212f6c257ac8d03d3f4ceaff6ee181`;
+independent NumPy-F64 report `root_frozen_metrics_audit_r1.json` SHA
+`7465a0ea015479723284273802e3f795c7c0fc856f5e23038f6268350fa66718`.
+Its independently implemented reductions reproduce all 18 projection/group
+contrasts within `1e-10` relative / `1e-15` absolute tolerance; analytical
+and zero-denominator/nonfinite rejection controls pass. The root donor
+identity report SHA is
+`207e9266e00f91cf7fe21ea2174e48c61942a05c18068ff83bccad257a8ec008`.
+These temporary artifacts are an evidence index, not durable raw storage.
+
+Executed DoD: `qkv_probe --preflight`, `--capture-input` and all six
+`--run-arm` modes passed; `python3 -m unittest -v test_compare_frozen.py`
+passed 10 tests; `compare_frozen.py --self-test` and `--compare` passed;
+`root_verify_bf16_donor.py` and `root_audit_frozen_metrics.py` exited zero.
+Capture handle 49881 and arms 83425/44953/32265/78454/42923/98243 were terminal
+exit zero, with fresh 76% free memory, scoped 300s/3-GiB guards and 50% floor.
+Donor 11317 and independent CPU audit 35143 were terminal exit zero under
+120s/1-GiB guards; CPU comparison 35076 used 180s/1-GiB. No guard fired;
+neither peak RSS nor model latency was measured. Compiler-only API/type failures occurred
+before this final frozen build and supply no numerical evidence. The static
+scratch plan's original NOT-RUN banner is stale; use these executed results.
+
+Adversary verdict: ROBUST for the pinned local dispatch/weight-value contrast
+only. The source-author review is correlated, not independent replication;
+root's separate raw-byte/hash and NumPy arithmetic checks supply the additional
+verification. No broader arithmetic or image claim is admitted.
+
+Next discriminator: same-input full-block A/B/C, with a native no-op control,
+the same F32 route for B/C, and matched official endpoints before any trajectory
+or decoded-image claim. Do not deploy replacement weights from this QKV result.
+Refresh after numerical source, compiler/device/runtime, weights, input/layout,
+schedule or scratch evidence changes/disappears. Any new execution needs fresh
+source/build binding and resource admission; this docs-only successor does not
+silently rebind the old driver's pinned HEAD. Production behavior is unchanged;
+rollback is to the existing native route. Overall goal remains IN_PROGRESS.
+
 ## Local package frontier (2026-09-23)
 
 Current frontier: one local directory and one text-to-image entry point may

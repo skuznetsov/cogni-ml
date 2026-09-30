@@ -30553,3 +30553,37 @@ Refresh after source/toolchain/device/model/workload changes.
   artifacts changing or missing scratch evidence; do not silently reuse the
   released heavy slot. Standing authority remains scoped local goal work,
   serial resource coordination and atomic verified local commits, not push.
+
+### Continuation 2026-09-30 — photo block-0 QKV dispatch/weight contrast
+
+- At clean numerical source `92fca21217e5c8424b75739ecf570962d71a4c80`,
+  a selective real-path eval-0/block-0 capture freezes native norm/modulated
+  input `[1,1164,4096]`, 140 text plus 1024 image rows. Original Q8 A and
+  decoded-same-Q8-values F32 B differ by Q/K/V relative L2
+  `5.57686117e-8 / 5.80048666e-8 / 7.37779253e-8`; B versus BF16-weight-values
+  widened to F32 C on the same route differs by
+  `0.00179041063 / 0.00168473276 / 0.00292274453`. Denominators are B/C
+  respectively. Actual M2 Max Q8 register-reuse and F32 pipelines are recorded.
+- Capture/fresh-A, A-repeat, B-repeat and inverse-row-permuted B are exact.
+  Root independently checks raw controls, complete BF16 shard identity,
+  header/raw/widened C weight hashes and all 18 F64 metrics. Model/capture and
+  guarded donor/comparison/audit processes exited zero with fresh 76%;
+  ROBUST within this local dispatch/weight-value boundary only, not independent
+  model replication. Scoped resource guards stayed unchanged;
+  queue released, no pending model process, no peak/latency claim.
+- This supports a local QKV weight-value contrast, not quantization-only,
+  official BF16 arithmetic, historical-photo binary reproduction, full-block,
+  trajectory, face/collar/jamb-shadow or VAE causality. Keep BF16 rounding and
+  non-QKV operators open. The photo pair shares official conditioning and CPU
+  F32 VAE; the human's subtle differences must not be turned into pixel parity.
+- Source/build pins, executed DoD and evidence digests are in
+  `docs/qwen-image21-gguf-frontier.md`, Photo block-0 QKV section. Scratch root
+  `/private/tmp/qwen21-dit-qkv-factorial-XSQDbN`; comparison/auditor report SHA
+  `dd2aa4a11a3d554f144ee422c0060d85eb212f6c257ac8d03d3f4ceaff6ee181` /
+  `7465a0ea015479723284273802e3f795c7c0fc856f5e23038f6268350fa66718`.
+- Next falsifier: frozen same-input full-block weight-value A/B/C with no-op
+  and common B/C route, then matched official endpoints before trajectory or
+  image intervention. Do not promote replacement weights yet. Refresh on
+  source/compiler/runtime/device/weights/input/schedule drift or missing
+  scratch; a docs-only successor still needs a newly bound runner for any
+  rerun. Overall goal active; local commits permitted, push not authorized.
