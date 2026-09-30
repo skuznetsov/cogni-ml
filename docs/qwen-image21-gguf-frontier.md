@@ -3,6 +3,83 @@
 Status: active implementation frontier; prompt-to-PNG path admitted, with
 optimization candidates gated by real-prompt parity and paired latency checks
 
+## Official frozen photo block-0 replay controls (2026-09-30)
+
+The direct official block adapter has now executed twice, superseding the
+earlier continuation that said it had not run a model. Both fresh processes
+replay the immutable eval-0 native frame from source `0a3d7be5`, not an
+upstream official transformer frame. The consumer checkout is docs-only
+successor `38ba4769`; numerical source pins still match. Exact position,
+image-ID, key-mask and shared-modulation checks admit 140 prefix text tokens
+and 1024 target tokens. All nine block-0 parameters, including output/MLP
+projections and Q/K norm weights, come from the pinned BF16 donor.
+
+Two modes remain deliberately distinct: `official-bf16-values-f32-compute`
+uses original F32 hidden/modulation and BF16 weight values widened exactly to
+F32, with F32 operators; `official-bf16-operators-bf16-once` rounds those
+inputs once to BF16 and uses BF16 parameters/operators. Neither mode is a
+matched native comparison yet. The latter is not a pure operator-precision
+intervention because its input values also differ.
+
+Evidence root: `/private/tmp/qwen21-official-block0-adapter-iFCjtk`.
+Adapter SHA `cbff82680061acb62adeaf742f0ebe36bc45fde922697230cb6d95ffaf4af06d`;
+mapping source `6f72cd01e8f33143d461696f1634ae6fe776d0b761ed9949666d80eb4057af4f`;
+test source `4c04baa98ed0b1c581dced0f0f74562cb32507f918e0eb3422602094f6fd521f`.
+`root-run-r1` and `root-run-r2` share manifest SHA
+`dba7920d45b91ecdb31c14065e9d31ca13ba3d598d2850c109cd684716b6e42c`
+and input-mapping SHA
+`caf07ef627c65bb7c2415ea1fca64e9d3d42892b11d2c77a6ce3080d3a6babc6`.
+Their complete saved trees are byte-identical (`diff -qr` exit zero).
+F32 full output SHA is
+`9a30d402a940eec48ec5070d8930d30611ef6d04c3cdeacf2ecc21bcd1eb5a84`;
+BF16 full output SHA is
+`c223a20b660dbb6524fcaa9e46e8fd388040af3bf740bc81464ffa6ecfc9eeaa`.
+
+Root's separate no-Torch audit reads selected donor payloads directly,
+reproduces all nine BF16 raw and widened-F32 hashes by integer bit shifts,
+checks finite outputs, exact full-base/target slices and BF16 widening, and
+checks canonical input rounding by independent integer round-to-nearest-even.
+Audit source SHA
+`81bd5593c1f920d6cbcd70d3cb2c7c9af64f63c0e0eae04464fb3d5c3f93732d`;
+`root-audit-r1.json` SHA
+`6fb485a91710d786dc4de3aa0084f2ed4ac56fa07726541240df1a05c729e468`.
+This is artifact arithmetic, not an independent model implementation or Hub
+revision authentication. Whole-shard identity still uses the prior receipt;
+the whole 9.97-GB shard was not rehashed in these replay runs.
+These local byte checks assume no adversarial concurrent filesystem mutation;
+they do not establish a trusted execution or immutable-storage boundary.
+
+Executed DoD: `/usr/bin/python3` passed five stdlib tests and header-only
+preflight; a wrong external mapping pin stopped with exit 2 before output
+creation. The corrected constructor selects parameter dtype on meta before
+materialization. Tiny real Torch F32/BF16 Linear forwards passed on CPU and
+MPS. Both actual block runs and the no-Torch audit exited zero under guards;
+block runs used 180s/3-GiB tree-RSS caps and a 50% free-memory floor (77% at
+launch). No guard fired. Runtime is the prior Miniconda Python 3.12.2,
+Torch 2.6.0, NumPy 1.26.4 and pinned Diffusers `8b3c707`. An initial tiny
+qualification mistakenly imported user-site Torch 2.1.2 and stopped before
+Qwen payload loading; no packages were changed. A nonfatal CPU-only
+bitsandbytes optimizer warning also appeared in both actual runs; no such
+optimizer or quantization path is used in this block. These are not latency
+or quiet-host measurements.
+
+The combined official input/operator precision contrast has block-output
+relative L2 `0.0028851582335076864` all, `0.0026926193207341275` text and
+`0.0032036593750892433` image, with the F32 output norm as denominator.
+Image max absolute difference is `1.71728515625`. This is evidence that the
+precision regime matters locally, not native-kernel, Q8-weight or VAE fault
+attribution; it must not be generalized to image quality or later blocks.
+
+Scoped adversary verdict: ROBUST for frozen-frame replay byte/provenance and
+repeat checks; VULNERABLE for an implementation-parity or image-quality claim,
+which is not made. Next falsifier remains the native F32 public block with
+the same original frame and all nine exact widened donor weight values.
+If that agrees, separate once-rounded inputs from per-operator rounding
+before testing a same-seed trajectory and the shared-VAE photo crops.
+Production behavior is unchanged. Overall goal remains IN_PROGRESS.
+Refresh on source/runtime/device/weights/frame/layout/schedule changes or
+missing scratch artifacts. This docs-only entry does not rebind frozen runs.
+
 ## Photo block-0 full-block QKV factorial (2026-09-30)
 
 The successor probe measures the actual public

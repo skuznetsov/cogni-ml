@@ -30618,3 +30618,33 @@ Refresh after source/toolchain/device/model/workload changes.
   execution requires source/build rebinding. Frozen numerical probes are not
   rebound by this docs-only commit. Local commits allowed, push not authorized;
   outgoing neighbor messages remain unapproved, and resource checks are read-only.
+
+### Continuation 2026-09-30 — official frozen block-0 replay qualified
+
+- Supersedes the preceding 'adapter has not run a model' frontier: two fresh
+  direct pinned official block-0 processes passed on the native-produced
+  eval-0 frame, all nine BF16 donor weight values, separately qualified F32
+  and once-rounded-BF16 input/operator modes. Their saved trees are exact
+  repeats. No matched native all-weight result or photo fix exists yet.
+- Evidence root `/private/tmp/qwen21-official-block0-adapter-iFCjtk`;
+  both run manifests SHA
+  `dba7920d45b91ecdb31c14065e9d31ca13ba3d598d2850c109cd684716b6e42c`;
+  root independent no-Torch audit
+  `6fb485a91710d786dc4de3aa0084f2ed4ac56fa07726541240df1a05c729e468`.
+  Exact adapter/mapping/output pins, DoD and scoped verdict are in the
+  official replay section of `docs/qwen-image21-gguf-frontier.md`.
+- Prior photo runtime selectors are Miniconda base Python, Torch 2.6.0,
+  NumPy 1.26.4 and the photo dependency overlay plus pinned Diffusers src.
+  Default `/usr/bin/python3` instead imports older user-site Torch; do not
+  change user packages. The BF16 constructor casts on meta before allocation.
+- Combined input/operator precision contrast is image-output relative L2
+  `0.0032036593750892433` versus official F32. This is not pure operator
+  attribution, native fault, Q8-only effect or evidence about face quality.
+- Active goal/return pointer: matched native F32 full block on the same
+  original frame and all nine exact widened donor values; then isolate input
+  rounding from operator rounding and test trajectory/shared-VAE photo crops.
+  Capture producer `0a3d7be5` differs from docs-only consumer `38ba4769`.
+  Fresh native execution needs a current source/build binding; frozen runs
+  are not rebound by documentation commits. Refresh on source/runtime/device/
+  weights/frame/layout/schedule/artifact drift. No production change or push;
+  outgoing neighbor coordination remains unapproved, resource checks read-only.
