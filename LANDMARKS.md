@@ -30587,3 +30587,34 @@ Refresh after source/toolchain/device/model/workload changes.
   source/compiler/runtime/device/weights/input/schedule drift or missing
   scratch; a docs-only successor still needs a newly bound runner for any
   rerun. Overall goal active; local commits permitted, push not authorized.
+
+### Continuation 2026-09-30 — photo block-0 full-block QKV factorial
+
+- Clean source `0a3d7be5d7a962afd1400c0bc8cbb67a144921a7`: actual public
+  one-block replay on frozen eval-0 photo frame `[1,1164,4096]`, with only Q/K/V
+  varied and fourteen non-QKV identities/operators fixed. Capture X/QKV,
+  tapped/untapped output, fresh-constructor no-op, Q8/F32 repeats and all
+  public-output/tap controls are exact; seven guarded arms exited zero.
+- Same-Q8-values dispatch output relative L2 is `4.41296844e-8` all /
+  `5.70821459e-8` image; common-F32-route Q8-value versus BF16-widened-value
+  output contrast is `0.000155231239` all / `0.000227356738` image. Attention
+  context contrasts are `3.63036928e-7` / `0.00456849356` all. Root separately
+  authenticates externally frozen arm manifests, all sidecars and exact
+  controls, and recomputes all 78 stage/subgroup metric sets. No image fix,
+  quantization-only attribution, official BF16 parity or global drift claim.
+- Evidence: `/private/tmp/qwen21-dit-block0-factorial-FRyOlS6A`, comparison SHA
+  `6e9ad896ecd66128cacfe999b98ecac3cc52c351185e99b9a705ed06496413d3`,
+  root audit `0196f0ec997a99fd97807b8dcdcfe7d60ed0a79ce391e2f06ea688a06c7bbf53`.
+  DoD/source/build pins and scoped ROBUST verdict are in the full-block photo
+  section of `docs/qwen-image21-gguf-frontier.md`. Thirteen synthetic comparator
+  tests pass, including internally rehashed changed-repeat rejection. C waited
+  for a newly observed neighbor build to stop; no quiet-host or timing claim.
+- Active goal remains full Qwen3-VL/DiT/VAE accuracy then performance. Next
+  falsifier: matched direct official/native full-block endpoints with all weight
+  values and input/precision semantics held equal, then trajectory/same-VAE
+  image checks for the middle face/collar/jamb edge. A scratch official adapter
+  is being prepared; it has not run a model. Do not promote replacement weights.
+  Refresh on source/runtime/device/weights/frame/schedule/artifact drift; new
+  execution requires source/build rebinding. Frozen numerical probes are not
+  rebound by this docs-only commit. Local commits allowed, push not authorized;
+  outgoing neighbor messages remain unapproved, and resource checks are read-only.

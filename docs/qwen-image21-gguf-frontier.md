@@ -3,6 +3,115 @@
 Status: active implementation frontier; prompt-to-PNG path admitted, with
 optimization candidates gated by real-prompt parity and paired latency checks
 
+## Photo block-0 full-block QKV factorial (2026-09-30)
+
+The successor probe measures the actual public
+`QwenImage21MetalBlock.forward_layers` through one complete block, not just
+three projections. It reconstructs evaluation zero of the same 512x512,
+seed-7, 40-step photo fixture at clean source
+`0a3d7be5d7a962afd1400c0bc8cbb67a144921a7`. Only the two documentation
+files changed since the preceding projection source. The frozen frame contains
+hidden state, modulation, positions, image IDs, key-valid mask and
+`target_start=140`; 1164 rows have width 4096. Norm1 X and original Q8 Q/K/V
+reproduce the preceding frozen projection bytes exactly. This is not the
+unrecorded historical photo executable.
+
+Seven separately executed arms are `q8-untapped`, `q8`, `q8-noop`,
+`q8-repeat`, `q8-dequant-f32`, `q8-dequant-f32-repeat`, and
+`official-bf16-f32`. A/B differ only in Q/K/V dispatch on identical
+Q8-decoded values. B/C differ only in those three weight-value arrays, with
+the same observed F32 route. Fourteen non-QKV tensor identities, all remaining
+operators, input frame and configuration are fixed. The cache wrapper, output
+head and scheduler update are outside this replay.
+
+Relative L2 distances, with the named reference-arm norm as denominator:
+
+| Stage | A/B all, L2(B) | A/B image, L2(B) | B/C all, L2(C) | B/C image, L2(C) |
+| --- | ---: | ---: | ---: | ---: |
+| Q raw | 5.57686117e-8 | 5.56757672e-8 | 0.00179041063 | 0.00179111243 |
+| K raw | 5.80048666e-8 | 5.79063511e-8 | 0.00168473276 | 0.00167868413 |
+| V raw | 7.37779253e-8 | 7.36787079e-8 | 0.00292274453 | 0.00291939585 |
+| Attention context | 3.63036928e-7 | 3.82392225e-7 | 0.00456849356 | 0.00519814651 |
+| Residual state | 3.91165656e-8 | 5.64508339e-8 | 0.000198826252 | 0.000289324474 |
+| Block output | 4.41296844e-8 | 5.70821459e-8 | 0.000155231239 | 0.000227356738 |
+
+Norm1 and both gates are exact across contrasts. All 13 taps are finite;
+text/image/all metrics are retained. Different stage denominators preclude
+inferring global amplification or descent from this table. For this input and
+block, the dispatch-route change produces much smaller output drift than the
+tested value-source change, but neither contrast is bitwise parity. B/C is
+not quantization-only attribution: prior recipe compatibility covers block-0
+V, not Q/K. C is BF16 values widened to F32, not official BF16 arithmetic;
+non-QKV weights remain Q8. Aggregate error does not certify face/collar/edge
+quality or rule out later-step sensitivity, other weights, kernels or rounding.
+
+Executed exact-byte controls passed: tapped versus untapped public output;
+fresh same-raw/type/tag Q8 constructors versus original Q8 at every tap/output;
+Q8 repeat; F32 repeat; public output versus separately copied final tap; norm1
+X and Q8/B/C raw QKV versus prior sidecars. Actual ordered pipelines were
+recorded: B/C share every non-copy route, and other arms preserve non-QKV
+routes. QKV uses `qi21_q8_0_register_reuse_matmul` or `simd_mv_f32_f32`;
+attention remains `qi21_block_causal_attention`.
+
+Root observed successful subprocess exits, froze each new manifest hash
+outside the runner, rechecked required earlier hashes before each successor
+and all six immediately before C, then independently checked C's consumed
+`control_reference` against those pins. This assumes no adversarial filesystem
+mutation between check and read; self-declared hashes alone do not authenticate
+execution. Source/binary/bridge/capture pins are externally supplied. Selected
+tensor hashes are current checks, while full-file donor/Q8 identities reuse
+earlier authentication receipts. The comparator opens no donor weight payload.
+
+Evidence root: `/private/tmp/qwen21-dit-block0-factorial-FRyOlS6A`.
+Driver SHA `ec9814e60a1e5755e04bdbfda972afef4c9c4716c154b73b2190fac9df5981bc`;
+binary `1cbeb25a303b39432afbc7182eabd94153c9e7d22c6f9d662734af8179ba1eee`;
+bridge `fe88275acf5d46acc6406eec4d74198b341c15f87656e9c2df0b0bec044e79c1`.
+Capture `capture-r1/capture.json` SHA
+`036e7991ce4beeea352d910e5f4624d6178d181ef16618f0d3bbd327bb1921f5`;
+comparison `block-comparison-r1.json` SHA
+`6e9ad896ecd66128cacfe999b98ecac3cc52c351185e99b9a705ed06496413d3`;
+root audit `root-audit-r1.json` SHA
+`0196f0ec997a99fd97807b8dcdcfe7d60ed0a79ce391e2f06ea688a06c7bbf53`.
+Comparator/test source SHAs:
+`61706d2ed13420e2c221a91899449d78d7c4ec39cd0c86bddac7170042af3092` /
+`54d036c01b2c10ca5745221682012f11753ab0dd7b8dd038d9a300559301ae88`.
+Root audit source SHA
+`d8dc8e1742755251f1e733cc4275f4afd358534dba967899fadc6f87af688726`.
+Separate 97-row dot-product/F64 reductions with `math.fsum` reproduce all 78
+stage/subgroup metric sets within `2e-11` relative / `1e-15` absolute tolerance
+and exact integer counts. Root also hashes all arm sidecars and checks every
+no-op/repeat/public-output control and external manifest pin. This is independent
+artifact arithmetic, not independent model replication. Temporary artifacts
+are an evidence index, not durable raw storage.
+
+Executed DoD: guarded `test_compare_block_frozen.py -v` passed 13 tests,
+including seven-arm integration and consistently rehashed changed-repeat
+rejection; Crystal 1.21.0 compiled the driver with the Apple linker;
+`block_probe-r3 --preflight`, `--capture-input`, all seven `--run-arm` modes,
+`compare_block_frozen.py` and `audit_block_report.py` exited zero. Model probes
+used 300s/3-GiB tree-RSS caps and a 50% free-memory floor, with launch guards
+reporting 71..76% free memory; CPU comparison/audit used 120s/1-GiB caps. No
+guard fired. A neighbor's heavy Crystal build became visible after the F32
+repeat; C was deferred until that process stopped. Earlier overlap is not
+excluded, and there is no quiet-host, peak-RSS or performance certification.
+Pre-final-build compiler/linker/fixture failures are not model evidence.
+
+Adversary verdict: ROBUST for this single frozen block comparison, VULNERABLE
+to broader generalization. Source-author review is correlated; root supplies
+separate artifact arithmetic, not a second model implementation.
+
+Next discriminator: a direct pinned official block versus native controls on
+the same full frame and **all** block weight values, first F32, then separately
+qualified BF16-round-once input/operator semantics. An all-BF16 official block
+versus this QKV-only C is not clean implementation attribution. A quantization-
+only claim additionally needs Q8 derived directly from the exact pinned donor.
+Only after matched endpoints should a same-seed trajectory and same-VAE image
+intervention test the middle face, collar and jamb-shadow observation. Production
+behavior is unchanged; replacement weights are not promoted. Refresh on
+source/compiler/runtime/device/weight/input/layout/schedule drift or missing
+artifacts. This docs-only successor does not rebind the frozen runner's HEAD.
+Overall goal remains IN_PROGRESS.
+
 ## Photo block-0 QKV weight/dispatch discriminator (2026-09-30)
 
 The shared-conditioning/shared-CPU-F32-VAE three-face photo pair has subtle
