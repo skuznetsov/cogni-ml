@@ -7554,6 +7554,98 @@ environment policy, row/batch selection, compiler, device, or scratch
 artifacts change. This is **ROBUST within the declared projection scope**;
 image-quality and full-block claims remain unadmitted.
 
+### Block-29 full-block same-route QKV weight-value intervention (2026-09-29)
+
+At HEAD `7f3aff28363ca4798883340dba79957ca570fdc7`, four separate
+guarded scratch processes ran call-10 block 29 on the saved official
+post-block-28 input, official modulation, and fixed layout/masks. The native
+norm/mod QKV input was recomputed in every arm and matched
+`cea62407bfb5cdd9e25d0788a66ca83bfeeb44fd810bfdbf3a58e9fbf0ff8276`.
+This is an isolated fixed-input block intervention, not a composed native
+trajectory or a donor-free DiT certificate. Only Q/K/V weights changed;
+output/MLP projections and norm vectors retained their original block objects.
+
+The original Q8 arm and a distinct-wrapper Q8 no-op both reproduced the
+prior complete block output byte-for-byte (SHA-256 `82ff90f7...b6cf`).
+Their route TSVs also matched exactly. On Apple M2 Max, batch 1,254 and
+both Q8 policy environment variables unset, they used
+`qi21_q8_0_register_reuse_matmul`. The two dense arms used
+`Qwen35Metal.encode_matmul_to_buffer` / `simd_mv_f32_f32`, once on exact
+production-dequantized Q8 values and once on exact BF16-to-F32 widening of
+official Q/K/V values. Each audit verifies exactly Q/K/V, dimensions,
+batch, device, weight type, route, and actual weight-byte digests. Root
+independently matched those dense digests to the earlier pinned weight-value
+probe. The scratch instrumentation only records dispatches and a post-wait
+input hash; the production numerical source and kernel remain unchanged.
+
+| Block-output comparison | All rows relative L2 | Image rows relative L2 | Geometric ROI-20 relative L2 |
+| --- | ---: | ---: | ---: |
+| Same Q8 values: F32 route versus Q8 route | 4.524549e-8 | 1.622304e-7 | 1.511709e-7 |
+| Same F32 route: official values versus Q8 values | 3.980936e-4 | 1.505249e-3 | 1.416235e-3 |
+| Q8 route/values versus official block output | 2.158283e-3 | 4.910894e-3 | 4.679862e-3 |
+| F32 route/Q8 values versus official block output | 2.158282e-3 | 4.910891e-3 | 4.679862e-3 |
+| F32 route/official QKV values versus official block output | 2.118409e-3 | 4.656181e-3 | 4.417217e-3 |
+
+The first comparison uses Q8 output as denominator; the second uses
+Q8-values/F32-route output. The final three use the saved official MPS
+BF16 block output exactly widened to F32. Weight-value differences exceed
+the same-values route differences on this fixture, including after the
+complete block. Nevertheless, replacing only Q/K/V reduces image-row L2
+error by about 5.2%, not an additive percentage attribution of total drift.
+Image-row maximum absolute error increases from `1.47686767578125` to
+`1.54913330078125`; L2 improvement is not uniform elementwise improvement.
+The official-values/F32-route output is also byte-identical to the prior
+native BF16-kernel arm (SHA-256 `47e6f1e9...8f54`), resolving that older
+QKV package's route-versus-value ambiguity within this tested block.
+
+Root froze all four candidate reports/outputs before opening official output
+bytes, then independently streamed all comparisons with 65,536-byte chunks.
+The original Q8 metrics reproduced the prior report in all four groups
+within `1e-12`. Synthetic known-answer metrics, exact-repeat, short-stream,
+and non-finite rejection controls passed. Root also used `cmp` for baseline,
+no-op, and prior BF16 output equality. A missing execution-gate binary test
+rejected before any arm output; the unchanged safety wrapper's isolation
+probe passed outside the sandbox, where `ps` is permitted. The initial
+sandbox isolation stop and shell/constructor compile errors produced no
+model arm and were resolved without weakening guards or changing arithmetic.
+
+All four arm wrappers exited 0 with 900-second timeouts, 3,072-MiB
+process-tree RSS caps, single-thread host settings, fresh >=55%-free launch
+gates, and unchanged 50% runtime floors. Launch samples were 73/70/70/69%;
+post-arm samples were 72/68/68/67%. The largest post-arm RSS sample was
+1,486,815,232 bytes. Tracked MetalBuffer payload-counter peaks were
+765,941,574 bytes for Q8/no-op and 913,790,790 bytes for dense arms; neither
+counter nor post-arm RSS is a continuous total/unified-memory peak.
+
+Scratch root:
+`/private/tmp/qwen21-block29-sequential-ab-20260929.qWobRG`.
+Metadata preflight SHA-256
+`9b2b044328c889b7b69b8de420262bfe443bda488196b0019ee6fc694549a487`;
+runner source SHA-256
+`c666acc2deb103ac9f7b21b93e01617932b9346b7caaad553f310b797bb67c77`;
+binary SHA-256
+`435c0bd04c540a3e1be6a8c4b425ac9c2e0eb99b2c126ae02307e3484d98575d`;
+instrumented source SHA-256
+`b7bbd430e8751c358bc39d9b3dbeffa1da66ab308f1d2f5ce165a0b99254ddad`.
+The frozen `output/complete_arm_manifest.json` pins each full arm report
+and raw output (SHA-256
+`de7927ed7767994e6944ff1523765341445907abc92230e1a4cf8ecf948ac51d`).
+DoD: `ruby <scratch>/root_compare_outputs.rb <frozen-manifest-sha256>`;
+observed exit 0 and `status=passed`. Helper SHA-256
+`4c11ecb4ef634cb7f9673f0d51cf235ade6e784c2faf1ca679b3c8ea4c1a34f1`;
+generated `output/root_output_comparisons.json` SHA-256
+`504abede0ea848d1b78ea60c45c10e05e97a2f4e72b60a34305dfb9d2f064c9d`.
+
+Adversary verdict: **ROBUST for this fixed-input QKV intervention only**.
+It neither identifies a unique cause of trajectory drift nor establishes
+decoded face/text improvement, full-model BF16 parity, or a speedup. Do not
+promote BF16 attention staging alone: the earlier native-QKV regression
+still stands. The next discriminating gate should treat upstream QKV
+rounding and attention arithmetic together on this same fixture, before
+any matched trajectory and same-VAE quality promotion. Refresh after any
+input/modulation/layout, weight, arithmetic/dispatch, environment, compiler,
+device, or scratch artifact change. No production code or default changed.
+
 ### Same-latent CPU/F32 VAE path and residual-direction control (2026-09-29)
 
 Status: **endpoint-gated diagnostic complete; VAE off-manifold claim not

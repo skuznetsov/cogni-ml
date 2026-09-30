@@ -30172,3 +30172,17 @@ Refresh after source/toolchain/device/model/workload changes.
   Preserve the partial manifest/start lock; admit no new heavy run without a
   fresh >=55%-free launch gate. Source/evidence pins, decay triggers, and the
   root streaming DoD are in `docs/qwen-image21-gguf-frontier.md`.
+- A guarded four-arm call-10/block-29 intervention now separates complete
+  block QKV weight values from dispatch: original Q8/no-op reproduce the
+  baseline exactly; same Q8 values on F32 differ by image-row L2 1.62e-7;
+  official BF16 values on that same F32 route reduce error versus official
+  output from 0.491089% to 0.465618%, while image maximum absolute error
+  increases. Official-values/F32 output also equals the prior BF16-kernel
+  arm byte-for-byte. Root froze all candidate outputs before reference
+  comparison and independently streamed metrics, audited actual raw weight
+  hashes, and ran negative/calibration controls. This is ROBUST for one
+  fixed official-input block, not an additive drift attribution or decoded
+  eye/face fix. Keep the prior native-QKV attention-staging regression;
+  test upstream QKV rounding and attention together before trajectory/VAE
+  promotion. Pins, DoD, resource scope, and decay triggers are in
+  `docs/qwen-image21-gguf-frontier.md`; production code/defaults are unchanged.
