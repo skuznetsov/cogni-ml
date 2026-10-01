@@ -6,6 +6,36 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-QWENIMAGE21-CONTINUATION-4-7-INPUTS-2026-09-30] CPU prerequisites checked; no later-block execution
+
+- After qualified 0..3 replay, root authenticated each arm's own block-3 full
+  input: native/A F32LE, C raw BF16LE, [1,1164,4096], parent3 -> proposed4..7.
+  Complete frozen capture/report/manifest/worker/parent links and payload
+  hashes remain bound to their original producer/consumer, not this docs commit.
+- Scratch `/private/tmp/qwen21-continuation4-7-IF7SAQfL`; real handoff-r2 SHA
+  `89894fcf58723ef8c4fafa990113a0a124725d290159e3fef7d80e215b9a55aa`.
+  Source `361bec08...97ef25` checks C initial/modulation RNE and all raw/F32
+  output widenings. Root separately reconstructed captured modulation bytes
+  into exact A/C target-prefix rows; the general handoff tool only authenticates
+  the frozen mapping. Per-arm config hashes are not interchangeable contexts.
+- Root selected block-4..7 donor audit reads 36 BF16 tensors, 1,744,832,512
+  raw bytes, finite/exact widening, unchanged pinned shard fingerprints;
+  receipt SHA `2d25face3d5515c3257c0ec500edc7e69f96be20fc1ca5e0f7f5722a4e2ee7a1`.
+  No whole-shard/Hub authenticity claim; old 0..3 receipt is not reused for 4..7.
+- Final 29 stdlib tests and actual CPU tools exit0 under unchanged 60s/1024-MiB/
+  50%-free guards. Seeded bad pin exits2 without output; hash-coherent wrong
+  rounding/widening reject. Root exhaustive finite-word and boundary oracles
+  caught an unaligned finite scanner; test macOS aliases were canonicalized
+  without weakening output guards. Scoped bytes/lineage adversary ROBUST,
+  not independent model replication. No model/build/GPU/dependency mutation.
+- Next frontier supersedes older next-action order: fresh range-specific
+  runtime consumers, fresh input/donor/source pins, exact raw C CPU-to-MPS
+  restoration, bounded unchanged runtime guards. Current measured model
+  composition remains 4/32; no 4..7, full-stack, quality/capacity/speed seal.
+  Full goal stays active IN_PROGRESS. Paths/pins/DoD/decay limits:
+  docs/qwen-image21-gguf-frontier.md, current CPU-prerequisite section.
+  Revalidate before consumption; temporary artifact loss invalidates reuse.
+
 ### [LM-QWENIMAGE21-COMPOSED-FOUR-BLOCKS-2026-09-30] Matched replay qualified; full stack remains open
 
 - One frozen native eval-0 frame, [1,1164,4096], 140 text plus 1024 image

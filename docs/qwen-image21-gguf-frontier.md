@@ -3,6 +3,115 @@
 Status: active implementation frontier; prompt-to-PNG path admitted, with
 optimization candidates gated by real-prompt parity and paired latency checks
 
+## DiT blocks 4-7: CPU prerequisites checked, runtime remains open (2026-09-30)
+
+Current frontier: the next selected weights and three separate block-3
+continuation inputs are checked. Measured model composition still covers only
+blocks 0-3 of 32. This supersedes the older next-action ordering below; it
+does not promote a resident graph, blocks 4-7 runtime or the full image stack.
+No model, ML import, build, GPU command, dependency change, weight change or
+guard change was made in this CPU slice. Repository HEAD before this note was
+`e3dafb6d1890bc744815b41f0db2d389bb31d77c`; `git diff --exit-code
+71e5f9dc1c9dc8075845a45c07ee8698b872d3af HEAD -- src scripts/run_safe.sh`
+returned zero. The frozen producer/consumer identities below remain unchanged.
+
+Scratch root: `/private/tmp/qwen21-continuation4-7-IF7SAQfL`.
+
+- `root-selected-headers-4-7-r1.json`, SHA
+  `eec8ab3c18549ad702fafac94ced06be770965c184f867fb7740de5bac54abcf`:
+  pinned two-shard headers/sizes checked, 36 selected descriptors, zero payload
+  bytes read in header-only mode.
+- `root-selected-weights-4-7-r1.json`, SHA
+  `2d25face3d5515c3257c0ec500edc7e69f96be20fc1ca5e0f7f5722a4e2ee7a1`:
+  all 36 selected block-4..7 BF16 tensors streamed, 1,744,832,512 raw bytes,
+  finite values and exact integer-word F32 widening, raw/widened SHA-256s,
+  unchanged before/after donor fingerprints. This is local selected-payload
+  identity, not whole-shard rehashing or Hugging Face authenticity.
+- `root-checked-handoff-4-7-r2.json`, SHA
+  `89894fcf58723ef8c4fafa990113a0a124725d290159e3fef7d80e215b9a55aa`:
+  checked against the qualified report SHA
+  `261d7423adf4b8191d47558d0bd3454aefc1c4d6a6a0ebae30669ae8262fa9ae`,
+  its capture/primary-manifest pins and actual input/output payloads. Complete
+  0-3 parent links, geometry, source/arm/dtype, workers and official mappings
+  are retained. Proposed next range is [4,7], parent index 3, full shape
+  [1,1164,4096]. The handoff retains the old 0-3 selected receipt; the new 4-7
+  receipt is separate and is not implicitly qualified by that old receipt.
+
+Exact continuation inputs, each from its own block-3 full output:
+
+| Arm | Input dtype / bytes | SHA-256 |
+| --- | --- | --- |
+| Native | F32LE / 19070976 | `2adea6b438e299abddea616a64c7b778324e8f57006cf7592584115f1dc34f7d` |
+| Official A | F32LE / 19070976 | `80d1be35080ebeda2e4d77a53354d07838e95f28b6696e56b707fd29ea257141` |
+| Official C | BF16LE / 9535488 | `ba23b81bfc871ea0cfda13cd983d68f2b2e40926115502c09faf461923bc444d` |
+
+C's input is raw `block-03/full.bf16le`, never the widened F32 observation.
+The validator checks C initial hidden and runtime modulation against F32 by
+round-to-nearest-even and checks every C full/target raw output through block
+3 against its exact F32-word widening. It authenticates the frozen official
+modulation mapping but does not itself derive that mapping from capture.
+Root separately streamed all 1164 captured modulation rows, checked each
+prefix/target group is bit-identical and reconstructed [target,prefix] bytes
+exactly for both A and C. `root-modulation-reconstruction-r1.json` SHA is
+`406f2f8175b8450416e1f35e45385877d6680e400e3d45544afc2930a9d0ae26`.
+Its seeded non-shared-row control rejects. This extra check is one-frame
+evidence, not a general validator claim. Per-arm config hashes are retained,
+not cross-compared across different serialization contexts.
+
+Reviewed sources/tests in the scratch root, SHA-256:
+
+- `prepare_continuation.py`:
+  `361bec0818e95a5388c40151fdf107687ccadf0a9e0ca422da82184f5e97ef25`;
+  `test_prepare_continuation.py`:
+  `4de716130517d2a8bf2709c33487346c10f0096e2940ac4263d07b2a687d4c48`.
+- `pin_selected_weights_4_7.py`:
+  `2c4ac56c9e316c03e8ae8f4d21cf8eff6e6405c7b3b46d9cfebd307814728e1d`;
+  `test_pin_selected_weights_4_7.py`:
+  `8dc3a1798f11a3247f794d75e52071076d99de36b47a94daae1fddeca3238623`.
+- Independent root controls `root_widening_controls.py`:
+  `952f0dcf9ed91c21f57d420e73435ee2964d94846c225e5fb6dfc0fdcf604fdd`;
+  `root_continuation_word_controls.py`:
+  `e9dd85ff5203819a7629bd853719ed29f500c7eba8203bdaededb041959c40d8`;
+  `root_reconstruct_modulation.py`:
+  `2a0cee690c784d9411792be3d5c2623ba067a9d167e7629e49bac5039e14f9f6`.
+
+Observed DoD: from the scratch root, root ran `python -m unittest
+test_prepare_continuation root_continuation_word_controls
+test_pin_selected_weights_4_7 root_widening_controls` under the unchanged
+`run_safe.sh` 60s/1024-MiB process-tree RSS / 50%-free guard; 29 tests passed,
+exit0. Independent word oracles cover all 65536 BF16 words, finite-word
+adjacencies, and five rounding-boundary remainders for every finite BF16
+prefix whose rounded result is finite. Hash-coherent wrong RNE and both
+nonzero-low-word/wrong-high-word widenings reject. Root also executed
+`pin_selected_weights_4_7.py --header-only --out root-selected-headers-4-7-r1.json`,
+`pin_selected_weights_4_7.py --out root-selected-weights-4-7-r1.json`, the real
+`prepare_continuation.py` CLI with all frozen report/capture/three parent paths
+and `--output root-checked-handoff-4-7-r2.json`, and
+`root_reconstruct_modulation.py --out root-modulation-reconstruction-r1.json`;
+all exited zero under the same CPU guard. Actual wrong external report pin
+exited 2 before producing output; `test ! -e` returned zero. Root's separate
+`jq -e`, `shasum` and `cmp` checks passed for pins, shapes/dtypes, parent3->4,
+36 selected weights, byte total and unchanged r1/r2 handoff bytes. Source pins
+and invocations are recorded here because reports do not embed tool hashes.
+
+Review found and corrected an unaligned finite-value scan that could reject
+legal adjacent words. The independent exhaustive oracle passes the corrected
+scan. Synthetic fixture failures from the macOS `/var` alias were corrected
+by canonicalizing test paths, not weakening production output guards.
+Scoped adversary verdict: ROBUST for checked local bytes/lineage/conversions;
+same-lineage review is not independent model replication.
+
+Next: fresh range-specific native/official runtime consumers of this handoff
+and 4-7 receipt, with current hashes rechecked before consumption and raw C
+BF16 CPU-to-MPS word-preservation checked before block 4. Existing consumers
+remain fixed to 0-3; no continuation execution is admitted by this receipt.
+Use a new bounded runtime plan and unchanged model/build resource guards;
+do not multiply the old four-block budget into a 32-block batch. Full-stack
+accuracy/performance remains IN_PROGRESS, including quantized photo/face,
+Qwen3-VL, VAE, trajectories and video. Refresh after source/input/donor/runtime
+drift or temporary artifact loss; these CPU results do not qualify capacity,
+perceptual quality, VAE-manifold membership or speed.
+
 ## Matched DiT blocks 0-3: qualified composed replay (2026-09-30)
 
 Current frontier: four of 32 composed blocks are measured on one frozen
