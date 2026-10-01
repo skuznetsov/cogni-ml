@@ -30681,3 +30681,41 @@ Refresh after source/toolchain/device/model/workload changes.
   Any new run needs current source/build binding; a docs-only commit does not
   rebind frozen outputs. Local verified commits allowed, push unauthorized;
   outgoing neighbor messages unapproved, read-only resource checks retained.
+
+### Continuation 2026-09-30 — block-0 input rounding separated from dtype path
+
+- Two fresh official B-arm processes passed: hidden and mapped modulation
+  round CPU F32 to BF16 once, widen exactly to F32, and enter the same F32
+  block as A with all nine identical widened official donor weights. B's
+  canonical BF16 input bytes equal C's; full B run trees repeat exactly.
+  Frozen native frame producer remains `0a3d7be5`; checkout `7d24ab41` is
+  context only. No new native build or production change was made.
+- Root independent image-output relative L2: B-A/A-norm
+  `0.0008911621733418225`; C-B/B-norm `0.003472243559069559`;
+  combined C-A/A-norm `0.0032036593750870224`. The combined absolute
+  difference is smaller than C-B: vector effects partly cancel, norms are
+  not additive causal shares. C-B is a compute/activation-dtype path contrast,
+  not isolated kernel error. This remains one eval-0/block-0 result only.
+- Evidence root `/private/tmp/qwen21-official-block0-inputbf16-f32-cjemkH`;
+  both manifests `12340fb84c54e9908c25065fff163586fdee18fa60a20fd5da761ffc18a3009f`;
+  comparison `23f39051ed590f8408547057bc72011e6418d54d4addb0ae1ceab18f5dfc0e00`;
+  root audit `329e5872db25dca2497c274234c8aebd81774974305842938c48db3ffd708c49`.
+  All source/input/output/runtime pins, DoD and limits are in the new first
+  section of `docs/qwen-image21-gguf-frontier.md`.
+- Executed controls: 13 adapter tests, 12 real-Torch known rounding/transfer
+  values, header-only preflight, wrong-baseline external pin rejection,
+  separate primary/repeat under unchanged 180s/3072-MiB/50%-free guards,
+  root nine-test comparator suite, actual comparator and independent no-Torch
+  selected-donor/integer-RNE/F64 audit; all positive commands exit zero.
+  Root checks signed word semantics, finite outputs and target slices;
+  self-consistently rehashed changed repeat rejects. ROBUST within this
+  frozen-block byte/metric scope; not full-model or image-quality closure.
+- Return pointer: matched later/composed blocks, then trajectory with shared
+  VAE and fixed middle-face/collar/jamb-shadow ROIs. Neither F32 nor BF16
+  reference norm is image-quality ground truth; VAE manifold fault remains
+  unproven. Future text-embedding perturbations are distinct from internal
+  DiT states and were not executed here. Refresh on source/runtime/device/
+  weights/frame/layout/schedule/artifact drift; documentation does not rebind
+  frozen runs. App goal snapshot is `blocked`, not resumed/completed by this
+  bounded update. Local verified commits allowed; push and outgoing neighbor
+  messages remain unauthorized. All preceding prefill landmarks are preserved.

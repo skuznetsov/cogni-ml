@@ -3,6 +3,113 @@
 Status: active implementation frontier; prompt-to-PNG path admitted, with
 optimization candidates gated by real-prompt parity and paired latency checks
 
+## Official block-0 input-rounding discriminator (2026-09-30)
+
+The missing third arm has executed twice in separate processes. This
+supersedes the next-input-rounding probe in the historical sections below.
+It preserves the frozen native eval-0/block-0 frame, all nine official donor
+weight values, mapped target-then-prefix modulation, segmented attention,
+RoPE and runtime. Capture producer remains `0a3d7be5`; checkout `7d24ab41`
+is documentation context only, not a new frame producer or native rebuild.
+
+The three official arms now distinguish:
+
+- A: original F32 hidden/modulation, original BF16 weights widened to F32,
+  F32 computation.
+- B: CPU hidden and already mapped modulation rounded F32 to BF16 once,
+  widened exactly back to F32 before MPS transfer; the same widened weights
+  and F32 computation as A.
+- C: the same once-rounded BF16 input values, with the BF16 computation and
+  activation path; output widened exactly to F32 for comparison.
+
+Root's independent F64 audit gives the following relative L2 contrasts.
+Each denominator belongs to that contrast, not a shared scalar error budget:
+
+| Contrast | Denominator | All rows | Text prefix | Image target |
+| --- | --- | ---: | ---: | ---: |
+| B minus A: input values | A norm | 0.001226324195274378 | 0.001377275529237315 | 0.0008911621733418225 |
+| C minus B: compute/activation dtype path | B norm | 0.0027351766052022036 | 0.002223534538652308 | 0.003472243559069559 |
+| C minus A: combined | A norm | 0.0028851582335018048 | 0.0026926193207342194 | 0.0032036593750870224 |
+
+The image contrasts are approximately 0.0891162, 0.3472244 and 0.3203659
+percent respectively. Their absolute L2 differences are 11.680862933094842,
+45.544106776766974 and 41.991802574369416. The combined image difference is
+smaller than the compute-path contrast: input and compute-path differences
+partly cancel in vector space. Do not add norms, assign scalar causal shares,
+or describe C minus B as a single-kernel error. For this frozen block only,
+the dtype-path intervention produces the larger image-output contrast than
+input rounding alone. Neither arm is an image-quality ground truth.
+
+The input round-trip changes hidden relative L2 by 0.001581482705324395 and
+mapped modulation by 0.0015341094454665567. B's canonical BF16 inputs match
+C's saved inputs exactly; independent integer round-to-nearest-even and
+BF16-word-to-F32 widening reproduce every serialized input word. Both B
+run trees, including manifests and full/target outputs, repeat exactly.
+
+Evidence root: `/private/tmp/qwen21-official-block0-inputbf16-f32-cjemkH`.
+Adapter SHA `63e230f76cbcad3654f1279305b8a32c8c86a32fe1fa41d09b7dbdb281ee80ce`;
+unchanged mapping source
+`6f72cd01e8f33143d461696f1634ae6fe776d0b761ed9949666d80eb4057af4f`;
+13-test source `b47eb9b0ec76e6439cfe8056a145d5fc9f961e1f77cb5bed7bfea782d47e1c39`.
+Both B manifests SHA
+`12340fb84c54e9908c25065fff163586fdee18fa60a20fd5da761ffc18a3009f`;
+both input mappings
+`e6f8b69a0abbedaf99af1a0a69b61272e14d234fb42a3fc2024f2bf7dc300c7c`.
+Full F32 output `16e56290e3a50e8bc581bef59864c94d8adfca07e76002fdee19b17bb8a62cc2`;
+target `94429d74fa3f460204598cc7b491467fa2031bdfc8a0db33de2c0cd9142e7f96`.
+The A/C manifest and input-mapping pins remain those in the official replay
+section below; all nine raw/widened weight identities are unchanged.
+
+Comparator root `/private/tmp/qwen21-official-input-rounding-compare-Rbvtb4`:
+source `a99f598537f0d757d1804d33a4e26517aa27364e6f674e2075f0fc69a8f0972e`;
+tests `30be2a47b65d8e7af9a871bb14e9b9bf203965fc8c48d2aed7de33cb2309d136`;
+`root-comparison-r1.json`
+`23f39051ed590f8408547057bc72011e6418d54d4addb0ae1ceab18f5dfc0e00`.
+Root audit source `root_audit_input_rounding.py`
+`4d4588cd91e33577ed8afc8061b1d9bc47b019cd047f63b45317ba0b52316834`;
+`root-audit-r1.json`
+`329e5872db25dca2497c274234c8aebd81774974305842938c48db3ffd708c49`.
+Tiny real-Torch conversion/transfer qualifier source
+`941b345d43a2ef778ca208408974dbe7877fbf4992bd78080ed23093f545780b`;
+its report `816db285af0e15eff2416dd597a7a1940b120543b2c2c9559d646facb1fd9f1a`.
+
+Executed DoD: the adapter's 13 stdlib tests passed; real Torch 2.6.0
+F32/BF16 rounding and F32 MPS transfer passed 12 known-value cases, including
+signed zero, subnormals and halfway ties. Header-only `--preflight` passed;
+a wrong external baseline hash rejected with exit 2 before output creation
+or model imports. Two fresh `run_official_block0.py` commands with external
+source/frame/donor/Diffusers/baseline pins passed under unchanged
+180s/3072-MiB tree-RSS and 50-percent-free guards. Root's nine-test comparator
+suite, actual pinned `compare_input_rounding.py` invocation, and separate
+`root_audit_input_rounding.py` invocation passed under 60s/1024-MiB guards.
+`diff -qr root-run-r1 root-run-r2` returned zero. Runtime remains Miniconda
+Python 3.12.2/Torch 2.6.0/NumPy 1.26.4 with the offline photo dependency
+overlay and pinned Diffusers source. No packages changed. An existing
+bitsandbytes optimizer warning appeared on both successful runs; this
+experiment does not use its optimizer/quantization path. Launch free memory
+was 73/74 percent; these are accuracy controls, not latency/peak-RSS claims.
+
+Adversary verdict: ROBUST for this frozen block's serialized input, nine
+weight identities, finite outputs, slices, exact repeats and measured
+contrasts. Root independently rehashed the nine selected donor payloads and
+their widening, and recomputed metrics with 97-row F64 dot products plus
+`math.fsum`, without Torch or comparator imports. The synthetic suite rejects
+a self-consistently rehashed changed repeat, wrong dtype policy, changed frame
+identity, corrupted widening and symlink/path escapes. This is not independent
+model replication, live forward-tensor instrumentation, whole-shard or Hub
+authentication, or proof about later blocks, denoising trajectories and faces.
+
+Next falsifier: matched later/composed blocks with value/dtype semantics
+preserved, followed by shared-VAE trajectory and fixed middle-face/collar/
+jamb-shadow ROI checks. No production code, weights, quantization policy or
+generated image was changed. Text conditioning perturbations remain a separate
+future hypothesis; this experiment changes internal DiT states, not Qwen3-VL
+embeddings. Refresh on source/runtime/device/weight/frame/layout/schedule or
+artifact drift; frozen artifacts are not rebound by documentation commits.
+The overall capability is incomplete. App `/goal` was observed as `blocked`;
+this bounded evidence update does not resume or complete it. Local commits
+remain authorized, push and outgoing neighbor messages do not.
+
 ## Matched all-weight native/official F32 block-0 replay (2026-09-30)
 
 The previously open matched endpoint has now executed: the production public
