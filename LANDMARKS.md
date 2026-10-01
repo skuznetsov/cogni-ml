@@ -6,6 +6,40 @@ Rich landmarks include full State/Relations/Evidence structure.
 
 ## Active Landmarks
 
+### [LM-QWENIMAGE21-COMPOSED-FOUR-BLOCKS-2026-09-30] Matched replay qualified; full stack remains open
+
+- One frozen native eval-0 frame, [1,1164,4096], 140 text plus 1024 image
+  rows: composed blocks 0..3 compare native all-weight F32 against official
+  A F32 and C BF16. Each arm carries its own output forward; C carries live
+  GPU BF16 state, native uses exact process-isolated F32LE handoffs.
+- Capture producer `0a3d7be5`; native consumer `71e5f9dc`, not this docs
+  commit. Six guarded model runs exit0 and each primary/repeat whole tree is
+  byte-identical. Root refreshed all 36 selected donor payload/widening hashes.
+- Root v4 qualified report SHA
+  `261d7423adf4b8191d47558d0bd3454aefc1c4d6a6a0ebae30669ae8262fa9ae`:
+  18 comparator tests plus actual 192 independent metric-field checks pass.
+  Relative tolerance remains 1e-12, max independent gap 3.1397107136399427e-13;
+  exact max/p99/count checks, no tolerance/model-value changes. v4's global
+  elementwise F64-square `math.fsum` resolves a measured reduction-roundoff
+  disagreement; v2/v3 failures and resident guard-stop artifacts are preserved.
+- Image-row relative L2 native/A: 2.54655e-6 -> 1.20220e-6; C/A:
+  0.00320366 -> 0.00468896. Native p99 rises despite falling relative L2.
+  Width-4096 internal states are not 64-channel VAE latents; official F32
+  is not perceptual ground truth. No full32, quantized-photo, Qwen3-VL,
+  VAE-manifold, face-quality, bitwise cross-backend or performance seal.
+- ROBUST for scoped local bytes/provenance/composition/arithmetic only;
+  root fallback arithmetic is independent of comparator implementation,
+  not independent model replication. Full app goal observed active, still
+  IN_PROGRESS, superseding historical blocked status without discarding history.
+- Next: scratch resident cleanup-order falsifier under unchanged guards and
+  exact isolated hashes; cause of earlier RSS stop remains unknown. Then
+  bounded later-block continuation, projections/trajectory/shared-VAE fixed
+  ROIs. No production code/weights/images changed; no push authorization.
+- Complete paths, pins, executed DoD and limitations:
+  docs/qwen-image21-gguf-frontier.md, current four-block section. Refresh after
+  source/build/runtime/device/donor/frame/layout/schedule drift or temporary
+  artifact loss. Documentation commits never rebind the frozen artifacts.
+
 ### [LM-QWENIMAGE21-NATIVE-TEXT-AB-2026-09-24] One image smoke pass; native text not default
 
 - Pinned `red cube`, 256x256, seed 7, 40 steps: official CPU/BF16 versus

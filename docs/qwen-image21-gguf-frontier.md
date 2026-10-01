@@ -3,6 +3,163 @@
 Status: active implementation frontier; prompt-to-PNG path admitted, with
 optimization candidates gated by real-prompt parity and paired latency checks
 
+## Matched DiT blocks 0-3: qualified composed replay (2026-09-30)
+
+Current frontier: four of 32 composed blocks are measured on one frozen
+native eval-0 input. The overall Qwen3-VL -> DiT -> VAE accuracy/performance
+goal remains IN_PROGRESS; app `/goal` was observed active. This supersedes
+the historical blocked-goal and next-composed-block notes below, without
+changing their frozen producers or promoting the full image pipeline.
+
+The frame producer is `0a3d7be5d7a962afd1400c0bc8cbb67a144921a7`;
+native consumer is `71e5f9dc1c9dc8075845a45c07ee8698b872d3af`.
+Shape is [1,1164,4096], with 140 text-prefix and 1024 image rows. This is
+not an upstream official transformer input. Each arm feeds its own block
+output into the next block while preserving common modulation, positions,
+mask, configuration and all 36 selected original donor parameter values.
+
+- Native: production `QwenImage21MetalBlock.forward_layers`, original BF16
+  donor parameters widened exactly to F32, six F32 projection routes.
+  Four process-isolated workers hand off exact full F32LE outputs. This
+  tests composition, not a resident graph or its capacity/performance.
+- Official A: original F32 hidden/modulation, the same BF16 donor values
+  widened to F32, F32 computation and state.
+- Official C: hidden and mapped modulation rounded once to BF16 with
+  round-to-nearest-even; BF16 weights, computation and state. Live GPU
+  BF16 output, not its CPU sidecar reconstruction, feeds the next block.
+  Saved F32 outputs are exact widenings of the raw BF16 words.
+
+The qualified comparator gives image-row relative L2 ratios below, each
+using the same-block official A image norm as denominator, not percentages:
+
+| Block | Native F32 minus A | Official C BF16 minus A |
+| --- | ---: | ---: |
+| 0 | 2.5465473352029524e-6 | 0.0032036593750874504 |
+| 1 | 1.5213539329682545e-6 | 0.0035216835540134127 |
+| 2 | 1.2714707964360976e-6 | 0.00402834470141152 |
+| 3 | 1.2021961180638396e-6 | 0.0046889597872184895 |
+
+At block 3 these are approximately 0.000120220% and 0.468896%.
+Native image nearest-rank p99 absolute difference rises from
+4.3315812945365906e-6 to 1.4543533325195312e-5, while max absolute
+difference falls from 0.001739501953125 to 0.0010986328125. Changed F32
+words rise from 3963701 to 4085206 of 4194304. Falling relative L2 is
+therefore not a claim that every error measure decreases or that errors
+cannot accumulate. C minus A combines initial input rounding and the
+computation/state dtype intervention; it is not a single-kernel causal share.
+
+These are width-4096 internal DiT hidden activations, not the 64-channel
+VAE-input latents. Original-weight F32 diagnostic replay does not validate
+the default quantized photo path. Neither official dtype is perceptual
+ground truth. Remaining 28 blocks, input/output projections, complete
+denoising trajectories, Qwen3-VL conditioning, VAE detail fidelity, face/
+collar/shadow ROIs, other prompts/seeds/resolutions and video remain open.
+No speed, quiet-host, cross-backend bitwise parity or VAE-manifold claim
+is admitted by this experiment.
+
+Evidence locations and pins:
+
+- Native primary/repeat:
+  `/private/tmp/qwen21-native-chain-jIAblw/isolated-r2/root-isolated-{primary,repeat}-r2`;
+  both chain manifests SHA
+  `4215b1a6bd467fa78b206c9f64c55352f1fca703a2ceb75ec16a906e5c3b8578`.
+  Worker source `2c041bcaf2075cbeff8451cbf1a0ad50f32a1ad95e9071279fc7216c60f97fdc`;
+  binary `c1d8646320c4e4381322b25a04992f55902b1d10d22347f60345b99a62ed8c45`.
+  The separately root-pinned parent `isolated_chain.py` SHA is
+  `b5290e171acaf052ddbdcae32d2ee72a1942b415b05da2b3d09bcc67ece06bd1`;
+  it is not a worker-recorded source pin.
+- Official runs: `/private/tmp/qwen21-official-chain-LPgsaR/v2/runs`,
+  `root-A-{primary,repeat}-r2` manifests
+  `fec0994957e7598b0adf2c6c3728b0af108c5e218298c75734087e396f9f3563`,
+  `root-C-{primary,repeat}-r2` manifests
+  `aac5ec6859391f99d0d7b5a079a78c51a4c5776a0fe92a24670f2887c7855ec6`.
+  Probe source `88e9a75001ec16b0913a6e9ade08071aed0a4a8cd01aafe98952ffb3e5f18c57`;
+  mapping `6f72cd01e8f33143d461696f1634ae6fe776d0b761ed9949666d80eb4057af4f`.
+- Frame: `/private/tmp/qwen21-dit-block0-factorial-FRyOlS6A/capture-r1/capture.json`,
+  SHA `036e7991ce4beeea352d910e5f4624d6178d181ef16618f0d3bbd327bb1921f5`.
+  Selected-weight receipt `/private/tmp/qwen21-chain-root-audit-TTnpJY/selected-weights.json`,
+  SHA `85792e000a1bb153d3f8e2b3a305bdb1f6146c647dcc0eff9f352ad8497c951f`.
+  Root refreshed all 36 selected raw/widened payload identities into
+  `/private/tmp/qwen21-chain-metrics-r2-xuziG1qt/selected-weights-refresh-r2.json`;
+  receipt bytes remain identical. This is not whole-shard/Hub authentication.
+- Pinned Diffusers revision `8b3c707ebd3ec4881f4190cf42931da07eaf3b65`,
+  transformer source SHA
+  `0eb0555e21ca93195e1fe9389113cafbf0e8822f6454c3001cebb3d21521ebd7`.
+  Runtime remains Python 3.12.2/Torch 2.6.0/NumPy 1.26.4, the offline
+  dependency overlay and M2 Max; no packages were changed.
+- Comparator `/private/tmp/qwen21-chain-compare-v4-lRfH0h/v4/compare_chain.py`,
+  SHA `f970ec9640b241fd8db434812d5daa6b95ab596df4a7c501f4b4d40dbda32253`;
+  18-test source `1ff76134b33dc5ec4d6440874bf1bf3308997843c292d4fe66ee39d6044d9802`;
+  guarded test runner `f96af0dff215043e440882b16946023a1e9e284be1f929a9f64d03eefc455066`.
+- Root independent arithmetic source
+  `/private/tmp/qwen21-chain-root-audit-TTnpJY/measure_pair.py`,
+  SHA `c74997e9a369e63a22f76c3b3f8746955d8abb89750eb97fa57e9fb6e7b0ca00`.
+  Its eight `native/C-vs-A-block-0N.json` reports are externally pinned by
+  `qualify_and_record_chain_v4.py` in the same audit directory, SHA
+  `24d0979a7c419af8873b276fbef7c027b89ad9af983f7c4351b52068eb260fff`.
+- Qualified report:
+  `/private/tmp/qwen21-chain-metrics-r2-xuziG1qt/root-qualified-chain-comparison-v4.json`,
+  SHA `261d7423adf4b8191d47558d0bd3454aefc1c4d6a6a0ebae30669ae8262fa9ae`.
+  It records frame, selected-weight, six manifest and consumed source pins.
+
+Executed DoD: all six model commands exited zero under unchanged
+180s/3072-MiB process-tree RSS and 50%-free guards. All three primary/repeat
+whole-directory `diff -qr` checks returned zero. Native wrong-input-shape
+and official wrong-source-pin controls rejected before weights/GPU/output;
+native loader/input/parent tests and 12 official stdlib tests passed.
+Root executed the 18 comparator tests, the independent arithmetic controls,
+eight actual metric reports, and the v4 wrapper's seeded-field/tolerance/
+nonfinite self-test. The actual `qualify_and_record_chain_v4.py --out ...`
+command exited zero with 192 metric-field comparisons under 60s/1024-MiB
+CPU guards, an additional 50%-physical-available preflight, unchanged
+relative tolerance 1e-12 and zero absolute tolerance. Maximum independent
+relative gap was 3.1397107136399427e-13; max/p99/word counts are exact.
+Preflight memory failures were retained and not bypassed. Timings printed
+by the resource wrapper are not latency benchmarks.
+
+The preserved v2 comparator rejected the real two-shard audit receipt because
+all selected block-0..3 payloads happen to be in shard 1. v3 correctly checks
+the entire receipt fingerprint/audit shard set and selected-source subset;
+header/size/fingerprint and selected-payload checks remain enforced. Its
+actual provenance pass was then rejected by root's arithmetic crosscheck:
+F64 dense-dot reductions differed from the independent chunked-dot/`fsum`
+calculation by up to 3.00204e-12 relatively. Root's elementwise-square audit
+isolated measurement reduction roundoff on the same bytes. v4 uses one
+global `math.fsum` over elementwise F64 squares and records that contract;
+an ill-scaled chunk-boundary regression qualifies it. No tolerance, model
+output, kernel or donor value was changed to obtain the v4 pass. Earlier
+failed candidates and the resident RSS-stop artifacts remain untouched.
+
+Scoped adversary verdict: ROBUST for these local frozen-frame byte,
+composition, finite-value, provenance and numerical comparisons. Root's
+independently constructed arithmetic and fresh selected-donor audit support
+the comparator; Luna review is correlated, not independent model replication.
+The synthetic suite rejects altered repeats, wrong block/dtype/parent/source
+identity, malformed inputs, corrupt widening and path/symlink escapes.
+This is not live internal-tensor instrumentation or an end-to-end fidelity seal.
+
+Next falsifier: the earlier resident runner stopped at sampled tree RSS
+3820384 KiB against the unchanged 3072-MiB cap, after a block-0 marker.
+Source inspection found existing fallback-upload cleanup and a marker before
+GC; a leak/root cause is not established. A new scratch-only candidate may
+release uploads after synchronized forward and collect before the marker,
+then compare resident blocks 0..3 exactly against the isolated artifacts under
+the same guard. Preparation is not a passing resident run or production fix.
+Later-block chunk continuation remains guard-only: it needs actual ordered
+indices, exact prior full-output/manifest lineage, common frame/source/dtype
+identity and newly audited selected weights. A 32-block batch must have an
+explicit bounded execution plan; separate commands cannot silently extend
+the operation's time/memory authority. After the composed chain, validate
+projections and trajectory latents, then shared-VAE fixed-ROI image endpoints.
+
+No production source, weights, quantization policy or images changed here.
+Local documentation commits do not rebind frozen producer/consumer identities.
+Refresh on source/build/runtime/device/donor/frame/layout/schedule drift or
+temporary artifact loss; if required bytes disappear, historical hashes alone
+cannot refresh this certificate. Push and outgoing neighbor messages remain
+outside the current authority. The full accuracy/performance/video goal stays
+active and incomplete.
+
 ## Official block-0 input-rounding discriminator (2026-09-30)
 
 The missing third arm has executed twice in separate processes. This
