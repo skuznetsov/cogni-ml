@@ -28802,3 +28802,50 @@ Refresh after source/toolchain/device/model/workload changes.
   sufficient headroom and explicit cache-state controls. Refresh numerical,
   ownership, residency and timing evidence on source/reference, assets,
   precision, compiler, input, device/OS or artifact-availability drift.
+
+### Continuation 2026-10-14 — DRAMA-3 controlled mapping gate
+
+- Keep MAP_PRIVATE as default (`DRAMA3_MMAP_SHARED=0`); shared remains opt-in
+  (`1`). New Darwin-only harness: `scripts/drama3_mapping_benchmark.py`.
+  Same-binary private/shared AB/BA pairs, graph depths 0/2, model-scoped
+  read-only cache invalidation, exact zero/all-resident mincore admission,
+  immutable file-stat/source/binary checks, and separate preparation/process
+  timing. No foreign process changes, global purge, activation readback, or
+  LTP/WBA transformation. The user authorized the 15% sampled reserve; the
+  global run_safe default is unchanged. Ten CPU controls and a 1 MiB fixture
+  self-test passed, including owned-child abort, final reserve invalidation,
+  prelaunch partial-cache rejection, cleanup, and the two-pass repair bound.
+- Preserve attempts a/b/c/d separately. Initial 30%-reserve attempt a stopped
+  its first private arm; b completed three pairs before a warm-preparation
+  failure. Holding all six maps through full reads let c complete eight pairs,
+  but still lost resident pages while mapped. A cache-only missing-page probe
+  converged once; this did not certify repeatable conditioning.
+- Final d completed nine pairs / eighteen arms before warm/depth-two/private
+  preparation failed after both permitted missing-page repair passes. Median
+  paired shared/private process ratios were 0.730317/0.786786 for zero-resident
+  depths 0/2, and 0.638089/0.611097 for all-resident depths 0/2; counts were
+  2/2/3/2 rather than the required four each. All completed pairs favored shared,
+  but none of these cells may promote. Every completed arm reproduced exact
+  baseline WAV/prompt/codes/EOS, 152 control / 140,012 terminal read bytes, and
+  zero pending/retained graph resources. A separate artifact recheck agreed.
+  Minimum sampled inference headroom was 26%. Failed preparation had 71–78%
+  free but only 1,456,273/1,578,824 resident pages after cleanup. This refutes
+  reliable bounded read/repair conditioning on this host, not the speedup.
+- Harness adversary: ROBUST in the executed guard scope; default-promotion
+  claim: VULNERABLE / IN_PROGRESS. No production code or default changed.
+  Canonical evidence: `.landmark/evidence/drama3-mapping-controlled.json` and
+  `docs/drama3-native-frontier.md`. Earlier upstream intermediate replays are
+  unchanged-source lineage, not rerun by this harness.
+- Next mapping falsifier needs a changed cache-conditioning premise or a
+  controlled host, not more identical retries. For further acceleration,
+  attribute fixed-input sampler/projection groups with existing whole-command
+  GPU timestamps and one final drain; current component profiling adds waits.
+  Actual sampled vectors are 4097/4096, not the 252288 text vocabulary. Other
+  hypotheses are shared-input backbone projections, ordered tower gathers,
+  and DAC convolution/Snake work; no kernel speedup is established from source.
+  The bounded external sampler probe stopped after two build-command errors
+  (`-I`, then `--path` unsupported); no compile, GPU run, or timing resulted.
+  Source/latest log/curated diagnostic are indexed in the mapping packet;
+  correct the build command before reopening this operator-magnitude probe.
+  Refresh on source/reference/assets/precision/compiler/input/device/OS/evidence
+  drift; performance additionally decays with host/cache state.

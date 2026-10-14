@@ -8,7 +8,214 @@ Goal: one short, single-speaker text prompt to a mono 44.1 kHz WAV, with all
 inference computations in Crystal/native libraries. Python/MLX/PyTorch are
 reference and fixture tools only, never the native inference implementation.
 
-## Active first-submit slice
+## Active mapping-promotion experiment
+
+Status: IN_PROGRESS / default promotion withheld. The final controlled attempt
+completed nine of sixteen required pairs, then failed warm-cache preparation
+after both allowed repair passes. All eighteen completed arms passed exact
+baseline WAV/prompt/codes/EOS/readbacks and graph-drain checks; the lowest
+sampled inference headroom was 26%, above the authorized 15% reserve. The
+blocker is repeatable cache conditioning, not an observed correctness failure
+or the memory floor. Default and rollback remain `DRAMA3_MMAP_SHARED=0`.
+
+The private default remains admitted until this experiment passes. Compare the
+same release binary with mapping modes 0/1 at graph depths 0/2, separating
+verified cold and warm OS file-cache states. Residency is measured with
+`mincore`; read-only, model-scoped `msync(MS_SYNC | MS_INVALIDATE)` is eligible
+only after a known-content fixture proves eviction without byte/stat changes.
+This does not control SSD/controller caches. No global purge or interference
+with unrelated processes is admitted.
+
+Risk: CAUTION. Rollback is mapping mode 0. Each completed run must reproduce
+the baseline prompt/codes/EOS/WAV/readback ledger and drain all graph leases.
+Cold preparation requires zero resident model pages; warm preparation requires
+all model pages resident immediately before launch. Record preparation time
+separately from complete process time and retain both. The user explicitly
+authorized a 15% system-free-memory reserve for this experiment after the
+initial 30% reserve blocked its first arm. Require 60% before cache preparation
+and cold launch, using the observed at-least-45-point drop plus the 15% reserve
+as an admission estimate. Warm launch requires 20%, because cache preparation
+has already made the model pages resident; it leaves a five-point margin above
+the sampled reserve. Monitor preparation and inference; both the parent and
+the owned `run_safe` wrapper stop at or below 15%, recording an invalid sample.
+This is sampled pressure control, not a proof of a continuous physical-memory
+bound, and resident file pages are not equivalent to permanently pinned RAM.
+A post-warm high-headroom requirement was rejected because it could exclude the intended
+cache state itself. Interrupted or cache/headroom-invalid pairs cannot promote
+the default and remain visible in the evidence.
+
+Predeclared promotion gate: at least four complete alternating-order pairs in
+each cache/depth cell; shared/private process-time median at most 0.95 in every
+cell, no pair above 1.05, no correctness/ownership/readback regression, and no
+memory-guard or reserve violation. This is a local workload/device gate, not a
+general model-performance guarantee. A failed cell keeps private as default
+and redirects work to attribution. The strongest counterexample is that the
+previous improvement disappears when initial file-cache residency is equal.
+
+The first controlled attempt (`shared-controlled-20261014-a`) normalized all
+1,578,824 model pages to zero residency and launched private/depth-zero at 75%
+free. It reached the then-active 30% reserve at 14.912 seconds; the owned
+workload was stopped and reaped. Zero pairs completed, so the interruption is
+not a speed or parity result. Source/binary identities and model file stats
+remained unchanged. The new 15% policy is a separate experiment; it does not
+retroactively validate this arm. Fresh private and shared fixture mappings
+must also see warm pages before invalidation, preventing an always-zero
+fresh-map residency observation from qualifying the cache control.
+
+The first 15%-reserve attempt (`shared-controlled-20261014-b`) completed three
+exact-parity pairs before rejecting a partially resident preparation for
+resident/depth-two/private. Its private/shared process times were 26.53/19.70 s
+(nonresident/depth zero), 22.95/18.46 s (nonresident/depth two), and 15.62/9.77 s
+(resident/depth zero). Its lowest sampled inference headroom was 21%; cache
+conditioning, rather than the reserve, blocked this attempt. These three pairs
+do not satisfy the matrix gate. That harness discarded the failed preparation's
+cache snapshot before recording its exception; a later query is only a later
+observation and cannot reconstruct that failed snapshot.
+
+Unmapping each shard immediately after reading it allowed earlier shards to
+be reclaimed during later reads. A cache-only discriminator kept all six
+read-only mappings alive through the complete touch, then released them all:
+fresh queries observed all 1,578,824 pages resident both while helpers existed
+and after their release. The revised preparation creates all helper mappings
+before touching any, releases all on normal/error/reserve exits, and requires
+fresh all-resident mincore after cleanup and again immediately before launch.
+No helper mapping or open model descriptor survives into the timed child.
+The same conditioning applies to both mapping modes; preparation time remains
+outside process time. A partial state fails closed with its per-file snapshot
+retained. This is cache conditioning, not page pinning or an inference change.
+
+Keeping mappings alive alone was insufficient: attempt
+`shared-controlled-20261014-c` completed eight exact-parity pairs, then rejected
+resident/depth-zero/private preparation at 1,501,733/1,578,824 resident pages.
+The held and post-cleanup snapshots agreed: 77,091 pages had already been
+reclaimed from the first model shard while all helpers were mapped. Preparation
+headroom was 64–74%; the lowest completed-inference sample was 24%. This is a
+cache-conditioning failure, not a reserve violation. Its eight pairs remain
+separate and cannot promote the default.
+
+A cache-only probe from a retained partial state restored all pages with one
+missing-page pass and observed full residency after helper cleanup. The next
+matrix starts from scratch. Warm conditioning now performs the same full read
+for both modes, followed by at most two mincore-directed missing-range reads
+while all six helpers remain mapped. It records the ranges, bytes, duration,
+and before/after snapshots for each repair. Two passes are a fixed bound; a
+partial post-cleanup or prelaunch state still rejects the arm and stops the
+matrix. Repaired pages are newer than retained pages: exact mincore occupancy
+and alternating order do not establish identical cache ages.
+
+Final attempt `shared-controlled-20261014-d` stopped before launching
+resident/depth-two/private pair two. Its full read left 1,447,197 pages resident;
+repair one read 2,420,670,464 bytes and reached 1,487,301 pages; repair two read
+3,728,264,286 bytes but fell to 1,462,154 pages. After helper cleanup only
+1,456,273/1,578,824 pages (92.24%) remained resident. Preparation took 63.105 s
+with sampled free-memory readings of 71–78%. More repair passes, weaker cache
+criteria, and pooling earlier partial matrices are not admitted by this gate.
+This refutes reliable full-residency conditioning by the bounded read/repair
+procedure on the current host; it does not refute shared mapping's speedup.
+
+The completed pairs are encouraging but insufficient for promotion:
+
+| Initial file cache | Graph depth | Complete pairs | Median paired shared/private process time |
+| --- | ---: | ---: | ---: |
+| Zero resident pages | 0 | 2 | 0.730317 |
+| Zero resident pages | 2 | 2 | 0.786786 |
+| All resident pages | 0 | 3 | 0.638089 |
+| All resident pages | 2 | 2 | 0.611097 |
+
+Every completed pair favored shared mapping. A separate artifact recheck read
+all eighteen WAVs and reports, recomputed the four cell summaries, checked
+cache snapshots, readback/drain ledgers, and sampled reserves, and agreed that
+the matrix cannot promote. This is same-lineage verification, not independent
+replication. The harness/guard claim is ROBUST within the executed controls;
+the speed/default-promotion claim remains VULNERABLE because no cell has the
+required four pairs. The next mapping discriminator requires a changed cache
+conditioning premise or a controlled host, rather than another identical retry.
+
+Canonical identities, failed attempts, prior unchanged-source upstream lineage,
+and refresh boundaries are in
+[the controlled mapping packet](../.landmark/evidence/drama3-mapping-controlled.json).
+
+Reproduce the guard checks and the full matrix from this worktree:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 COGNI_RUN_SAFE_MIN_FREE_PCT=15 \
+  scripts/run_safe.sh python3 120 1024 \
+  -m unittest spec/drama3_mapping_benchmark_spec.py
+PYTHONDONTWRITEBYTECODE=1 COGNI_RUN_SAFE_MIN_FREE_PCT=15 \
+  scripts/run_safe.sh python3 60 512 scripts/drama3_mapping_benchmark.py \
+  --model /Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50 --self-test
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/drama3_mapping_benchmark.py \
+  --model /Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50 \
+  --binary /tmp/drama3_shared_final_generate \
+  --baseline-wav /Users/sergey/.cache/cogni-ml/drama3-runs/hello-speed-baseline.wav \
+  --output-dir /Users/sergey/.cache/cogni-ml/drama3-runs/shared-controlled-new
+```
+
+The output directory must be new. Existing output is never overwritten; each
+arm and any interrupted attempt remain in `progress.json`. `--self-test` uses
+only a 1 MiB fixture on the model volume and pure gate/report controls; the
+five Darwin guard specs use real owned CPU children with injected pressure or
+cache readings, including rejection before child launch. Five additional
+controls cover post-cleanup rejection, all-helper cleanup after preparation
+failure, missing-range clipping, repair convergence, and the two-pass bound.
+Neither check establishes model speed or upstream numerical parity.
+
+The next optimization discriminator is GPU stage attribution inside the
+backbone, without adding completion waits. Existing command timelines assign
+about 6.67 seconds of GPU execution to the combined prefill/generation commands
+and 1.75 seconds to DAC. These are command-group sums, not individual operator
+times. Depth two reduces command completions from 90 to 73 while leaving those
+GPU sums essentially unchanged; it is not evidence that deeper queuing will
+reduce compute time. The current component profiler deliberately calls
+`Context#finish` in `BackboneResident#step`, so its wall spans cannot identify
+the next asynchronous kernel bottleneck. Attribute a measured operator before
+changing kernels; require the existing intermediate upstream gates and matched
+complete-process timings for any resulting optimization. The main-token EOS
+control read remains an explicit boundary, with only 152 control bytes in the
+current smoke; generated frames already pass directly between GPU operations.
+The existing bridge exposes GPU start/end timestamps for whole command buffers,
+not individual dispatches. A bounded fixed-input sampler/projection probe can
+submit isolated groups at depth two and drain once, using the existing timeline
+without adding per-operation completion waits. Such synthetic group timing
+does not attribute the complete generation path by itself.
+
+A bounded external sampler probe was drafted but produced no measurements:
+both allowed build attempts exited on unsupported Crystal include-path flags
+(`-I`, then `--path`) before compilation. No GPU workload ran. Its source,
+latest build log, and a curated two-attempt diagnostic are retained outside
+the repository and indexed by the mapping packet. The operator hypotheses
+below remain unmeasured; a renewed probe first needs a corrected build command.
+
+Source-level follow-up candidates, pending operator attribution and matched
+measurements:
+
+- `dr3_sample` runs top-k insertion and the full-logit exponential denominator
+  in one GPU thread. The actual main head has 4,097 EOS/semantic candidates,
+  and the nine residual tower heads have 4,096 each; this is not the 252,288
+  text vocabulary. The 17-frame/EOS smoke executes 36 main/retry and 153 tower
+  samples at top-k 30. Time batches matching these 189 calls with fixed logits
+  and draw slots. Parallel top-k may help, but a reassociated Float32
+  denominator can change top-p cutoffs; retain tie order, threshold rules,
+  ordered draw subtraction, and both main/retry draws. Existing Qwen top-2
+  reductions are a structural reference, not a resident sampler replacement.
+- `BackboneResident#linear_attention` dispatches `qkv`, `z`, `b`, and `a`
+  projections from the same input. Test a combined projection dispatch on the
+  actual shapes, preserving each output's accumulation order; fewer launches
+  alone do not establish a full-process improvement.
+- `TowerResident#codebook_sum` allocates a scalar row, embedding, and sum for
+  every codebook. Test one gather-and-ordered-sum kernel, preserving code
+  clipping, masking, and accumulation order, against the existing tower trace.
+- DAC's convolution kernels and separate Snake materialization warrant
+  attribution within the measured 1.75-second phase. A naive fusion that
+  recomputes Snake for every convolution multiply may make it slower; require
+  actual-shape GPU timings before choosing fusion or convolution tiling.
+
+These are hypotheses, not measured speedups. Each candidate needs a fixed-input
+baseline/candidate replay with one final drain, followed by the unchanged
+intermediate upstream and complete-WAV gates. The command-phase reanalysis and
+original timeline identities are retained with the mapping experiment evidence.
+
+## Prior first-submit slice
 
 Status: read-only shared checkpoint mapping implemented as opt-in;
 performance/default promotion remains provisional. Set `DRAMA3_MMAP_SHARED=1`
