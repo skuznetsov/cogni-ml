@@ -42,6 +42,13 @@ Qwen-Image 2.1 weights are governed by the
 [upstream Qwen Research License](https://huggingface.co/Qwen/Qwen-Image-2.1/blob/main/LICENSE);
 consult it before redistribution or commercial use.
 
+## DRAMA-3 Native Audio
+
+The initial native CPU path generates a mono 44.1 kHz WAV from a short text
+prompt using the pinned MLX-converted Q4 checkpoint. Build/run instructions,
+upstream intermediate comparisons, measured CPU limits, and licensing are in
+[the DRAMA-3 frontier](docs/drama3-native-frontier.md).
+
 ## Qwen 3.5 Native Metal
 
 The native Qwen path targets `Qwen3.5-9B-Q4_K_M.gguf` on Apple Silicon. The code supports:
