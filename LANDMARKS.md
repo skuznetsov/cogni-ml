@@ -28849,3 +28849,46 @@ Refresh after source/toolchain/device/model/workload changes.
   correct the build command before reopening this operator-magnitude probe.
   Refresh on source/reference/assets/precision/compiler/input/device/OS/evidence
   drift; performance additionally decays with host/cache state.
+
+### Continuation 2026-10-14 — DRAMA-3 sampler cost measured without intermediate waits
+
+- The earlier `-I`/`--path` compile blocker is superseded by the repository
+  example `examples/drama3_sampler_benchmark.cr`: relative require, release
+  Metal build, unchanged `Context.sample` and finite guard. Diagnostic only;
+  inference kernels/defaults and MAP_PRIVATE promotion decision are unchanged.
+- Final invocation `80ab95a36d308772874d86d58da91914`: seven profiles, two
+  warmup plus seven alternating-order measured pairs each, main 36 calls
+  (18 normal, 18 retry), tower 153 calls. Each pair submits two command buffers
+  at graph depth two and drains once after both. Zero intervening Context
+  waits/readbacks; 126 total submitted/completed/waits, final pending/retained
+  zero, 11,907 exact scalar-FP32-oracle IDs. Wrong-ID and depth-one controls
+  fail. Nine parser controls include invocation mixing, global profile order,
+  missing/reused/shifted timestamps, invalid duration and drain failures.
+- Retained tower rows with explicitly synthetic main/EOS proxies measure
+  median 413.687–441.401 ms per 189 calls (main 78.760–83.665 ms, tower
+  334.678–357.682 ms). Synthetic ascending costs 4407.456 ms versus descending
+  354.414 ms. Timings include finite guards; they are hot fixed-input
+  command-group GPU spans, not per-dispatch or production attribution.
+- Fresh CPU audit executes pinned Fish-Speech sampler revision
+  `541566932abbaebcb0a40e562a1f846738383f38`. Non-tie normal support matches
+  10/10 role-cases (probability max error 5.96e-8), retry 5/5 (7.45e-9).
+  Flat/cutoff ties diverge because native prefers lower IDs and upstream CPU
+  unstable sort reorders them. Uniform versus exponential-race RNG also
+  prevents same-seed parity claims. No actual main logits were retained.
+- Adversary ROBUST for the bounded probe with executed negative controls;
+  correlated source review is not independent numerical evidence. Universal
+  sampler equivalence and any full-model speedup remain unsupported. Earlier
+  backbone/tower/DAC/WAV gates are unchanged-source lineage, not fresh runs.
+- Next attribution experiment: actual-shape shared-input backbone `qkv/z/b/a`
+  projection groups, with no additional completion waits, before proposing
+  fusion. Earlier combined prefill/generation 6.67 s and DAC 1.75 s are
+  different boundaries and cannot rank individual operators. Strongest
+  counterexample is a mixed production sampler distribution costing much
+  more than the three retained rows; retain that uncertainty. Kernel changes
+  require relevant pinned upstream intermediates and full-WAV replay.
+- Canonical evidence: `.landmark/evidence/drama3-sampler-cost.json` and
+  `docs/drama3-native-frontier.md`; local raw artifacts in
+  `~/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/`. Refresh on source,
+  reference, assets, precision, compiler, input, device/OS or artifact drift;
+  timings additionally decay with host state. Keep the 15% sampled reserve
+  and never modify unrelated workloads to obtain a quiet host.

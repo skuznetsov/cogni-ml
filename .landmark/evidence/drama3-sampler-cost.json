@@ -1,0 +1,780 @@
+{
+  "format": "landmark-evidence/v1",
+  "recorded_at_utc": "2026-10-14T23:44:38.049554+00:00",
+  "claim": {
+    "level": "VERIFIED",
+    "summary": "Release sampler probe builds; bounded fixed-input GPU timings and exact native-scalar outputs pass without intermediate Context waits/readbacks.",
+    "scope": "Seven hot fixed-input profiles on this M2 Max; command-buffer GPU elapsed time including finite guard. Main trace cases are proxies. No full-model attribution, speedup or universal upstream sampler equivalence."
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "examples/drama3_sampler_benchmark.cr",
+      "scripts/drama3_sampler_reference.py",
+      "scripts/drama3_sampler_report.py",
+      "spec/drama3_sampler_report_spec.py",
+      "docs/drama3-native-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/drama3-sampler-cost.json"
+    ],
+    "changed_paths": [
+      "examples/drama3_sampler_benchmark.cr",
+      "scripts/drama3_sampler_reference.py",
+      "scripts/drama3_sampler_report.py",
+      "spec/drama3_sampler_report_spec.py",
+      "docs/drama3-native-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/drama3-sampler-cost.json"
+    ],
+    "base_revision": "fefe7bd1875df6b58c7a3e53d640960a20436cce",
+    "risk": "CAUTION",
+    "rollback": "Remove diagnostic tools/docs or revert this commit; inference source and defaults are unchanged.",
+    "invariants": [
+      "Both role groups submit before one final pair drain; no Context completion waits or reads between operations/groups.",
+      "Logit/draw upload precedes timing; all output verification follows drain.",
+      "Depth2 queue drains pending/retained resources; sampled runner memory reserve15%.",
+      "No foreign processes, dependency changes, full-model load or kernel changes."
+    ],
+    "excluded": [
+      "LTP/WBA claim",
+      "Production sampler fraction or end-to-end speedup",
+      "RNG-identical upstream output",
+      "Universal tie-order agreement",
+      "Authenticated log provenance"
+    ]
+  },
+  "source_identities": {
+    "examples/drama3_sampler_benchmark.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_sampler_benchmark.cr",
+      "bytes": 9704,
+      "sha256": "bdf0fb8f6ab6ea8e817da1882a16e10ccdb50f9ac13ac626f87bf20e7f06b5ad",
+      "availability": "repository source"
+    },
+    "scripts/drama3_sampler_reference.py": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3_sampler_reference.py",
+      "bytes": 33618,
+      "sha256": "f95a0e7c7f1d36ff36496654a23c574c64d94214121757affd333d5a7ec4e005",
+      "availability": "repository source"
+    },
+    "scripts/drama3_sampler_report.py": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3_sampler_report.py",
+      "bytes": 7559,
+      "sha256": "601797ce79d14b689697656749fc6b0a5dfb912e9a04b6cf081bb51e4c6f0473",
+      "availability": "repository source"
+    },
+    "spec/drama3_sampler_report_spec.py": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/spec/drama3_sampler_report_spec.py",
+      "bytes": 6173,
+      "sha256": "25de120d36bf2be88bd682b4499323ed6866e502a10ee55930e8e1d269e6b9ce",
+      "availability": "repository source"
+    },
+    "docs/drama3-native-frontier.md": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/docs/drama3-native-frontier.md",
+      "bytes": 63007,
+      "sha256": "61538a5ceb37e98394244150e7b40370bb3eb74646f291ac333268c5f0134550",
+      "availability": "repository source"
+    },
+    "LANDMARKS.md": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/LANDMARKS.md",
+      "bytes": 4210172,
+      "sha256": "72771cfe5725734c470156a34f0393b732c3b3216b86ea2e304d260e52ba8db2",
+      "availability": "repository source"
+    },
+    "src/ml/audio/drama3/profile.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/profile.cr",
+      "bytes": 4575,
+      "sha256": "2576c069a25521489c6facd75756a60a02ee06df4bb9b73d6b30916f71470c35",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/audio/drama3/backbone.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/backbone.cr",
+      "bytes": 13095,
+      "sha256": "0f63b23715e512ca1e7dc0180a6f8e6abac738f943b5eef58d195e6367146848",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/audio/drama3/resident.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/resident.cr",
+      "bytes": 19401,
+      "sha256": "9e4866d52e65d3630dc77d55cc93dfcbc9dd85b719609676f7d71837495fe187",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/audio/drama3/native.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/native.cr",
+      "bytes": 15120,
+      "sha256": "fa51b01174ae7d2f83f6d9fe868faaaa09891888d990690aeac6ba400cc36b11",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/audio/drama3/tower_resident.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/tower_resident.cr",
+      "bytes": 25989,
+      "sha256": "e41089e564c41ced168511ebd71c1557c34a942b402b9280760b4dc1f8fddd06",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/audio/drama3/codec_metal.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/codec_metal.cr",
+      "bytes": 10270,
+      "sha256": "a5d8fb9a9f47bf271e54b78b25523e3f4bbb697d6ea40798dbfc1cb7fa60dbb2",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/audio/drama3/generator_resident.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/generator_resident.cr",
+      "bytes": 10435,
+      "sha256": "bdc660571ff883e03abd0076f09fc00134ad841da2ae433b8e3551012bfdf3a6",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/audio/drama3/codec.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/codec.cr",
+      "bytes": 29450,
+      "sha256": "262689719fb7b65bac97fb140715f555832f6600b27827538df6d3508d2e97c9",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/audio/drama3/prompt.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/prompt.cr",
+      "bytes": 3479,
+      "sha256": "ccb1597d316c8a92a4c7dda54c437293f3ff4078c7d78119dee962e764ab080b",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/audio/drama3/metal.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/metal.cr",
+      "bytes": 11189,
+      "sha256": "7e0257b1e17abc8aa2a05174f6e2bf2ffb31d7090efea5887485bf72fa080b89",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/audio/drama3/codec_resident.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/codec_resident.cr",
+      "bytes": 22187,
+      "sha256": "f80f860a7739f7cfb858ce6dbe10e7d6c25b5b0ae66c09325fd99990147d0612",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/audio/drama3/generator.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/generator.cr",
+      "bytes": 6570,
+      "sha256": "05be3b6d262b7ddec2e7811aa8ccde3b062c878e94fbea2beeb8f1a15817de01",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/audio/drama3/tower.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/tower.cr",
+      "bytes": 32371,
+      "sha256": "d68e39fc8a7791a12a94b1b3659aa7a956db7054fbfb9e48f0dcef60174a083c",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/audio/drama3/backbone_resident.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/backbone_resident.cr",
+      "bytes": 9871,
+      "sha256": "fe8c377d90f6bdae3ae97f4d5a349c67ecb53d2bf38904c5d474d0e0fad42148",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/audio/drama3/wav.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/wav.cr",
+      "bytes": 1402,
+      "sha256": "44eca9e727af422f3f22cc9ca89593832752168bf8d2a976d66273cc36c0b128",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/audio/drama3/kernels/resident.metal": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/resident.metal",
+      "bytes": 9002,
+      "sha256": "35d4daf0c05e2e1076927d48e39d946b241404f31881498c0205de2c3d0773f7",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/audio/drama3/kernels/backbone_resident.metal": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/backbone_resident.metal",
+      "bytes": 6029,
+      "sha256": "048657d9b2b6a28785bc32e7c34f807a93c0777d06b16a9d37a47d928873adc8",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/audio/drama3/kernels/codec_resident.metal": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/codec_resident.metal",
+      "bytes": 12738,
+      "sha256": "894210cb13b4a870e9b75b30fb8925a94f49a22d58a9030324e620b25470dd51",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/audio/drama3/kernels/affine.metal": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/affine.metal",
+      "bytes": 2638,
+      "sha256": "90c22070b8221beb612bb187550115d209b9576518c12eae449fe16369f68d89",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/audio/drama3/kernels/generator_resident.metal": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/generator_resident.metal",
+      "bytes": 1963,
+      "sha256": "8904270eeca18cc9b22c028b3b57473eb7250fcf2d88411b2fd88f32a8d88577",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/audio/drama3/kernels/codec.metal": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/codec.metal",
+      "bytes": 3639,
+      "sha256": "c94be9bc6a75b94d7ca22515ac7d07cf9a616cefef964a9eff91b0db04a21e42",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/audio/drama3/kernels/tower_resident.metal": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/tower_resident.metal",
+      "bytes": 8273,
+      "sha256": "cbcac583b8bd805db4c0d93621e58a0dffcca345bbe0bb0e49f887832b567b8b",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/metal/compute_graph.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/metal/compute_graph.cr",
+      "bytes": 26283,
+      "sha256": "8d5d308fac91629a502de1ed085786047c5b6f0f530253ae265c7f95098cb970",
+      "availability": "unchanged repository inference source"
+    },
+    "src/ml/metal/bridge.mm": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/metal/bridge.mm",
+      "bytes": 42217,
+      "sha256": "150b5f46181312b2a78aa59dc29767fe5902f75cc442ddd5c5c11a093e774663",
+      "availability": "unchanged repository inference source"
+    }
+  },
+  "binary_identities": {
+    "probe": {
+      "path": "/private/tmp/drama3_sampler_benchmark_r3",
+      "bytes": 828312,
+      "sha256": "b150bc62aa14cefbe4adffffcbcf0626e4c3247492ce1d936415340a3b834153",
+      "availability": "local temporary binary"
+    },
+    "bridge": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o",
+      "bytes": 153016,
+      "sha256": "a77b9bd12977fdb31d60a26cdc489cbf836ef037a1231c0ac5f6241ccc0a6207",
+      "availability": "local build object"
+    }
+  },
+  "environment": {
+    "device": "Apple M2 Max",
+    "os": "macOS26.6.2",
+    "crystal": "1.21.0 / LLVM22.1.8",
+    "python": {
+      "python_executable": "/opt/homebrew/Caskroom/miniconda/base/bin/python3",
+      "python_version": "3.12.2",
+      "torch_version": "2.6.0",
+      "execution": "CPU only; no GPU/model execution"
+    },
+    "quiet_host_gate": false,
+    "runner_minimum_free_percent": 15,
+    "gpu_timeout_seconds": 120,
+    "gpu_process_rss_limit_mib": 4096,
+    "memory_scope": "Sampled runner guard passed, not a continuous bound; final GPU run preflight80%."
+  },
+  "verification": {
+    "workdir": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml",
+    "build": {
+      "env": {
+        "COGNI_RUN_SAFE_MIN_FREE_PCT": "15"
+      },
+      "argv": [
+        "scripts/run_safe.sh",
+        "/opt/homebrew/bin/crystal",
+        "180",
+        "8192",
+        "build",
+        "--release",
+        "-Ddrama3_metal",
+        "examples/drama3_sampler_benchmark.cr",
+        "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+        "-o",
+        "/private/tmp/drama3_sampler_benchmark_r3"
+      ],
+      "log": "root-build-r3.log",
+      "observed": "exit0"
+    },
+    "gpu": {
+      "env": {
+        "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+        "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+        "RUN_SAFE_PASSTHROUGH_STDIO": "1"
+      },
+      "argv": [
+        "scripts/run_safe.sh",
+        "/private/tmp/drama3_sampler_benchmark_r3",
+        "120",
+        "4096",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/oracle-fixture.json",
+        "--pairs=7"
+      ],
+      "stdout": "root-measured-r3.stdout",
+      "stderr": "root-measured-r3.stderr",
+      "observed": "exit0;11907 exact native scalar IDs;126 complete GPU timestamps"
+    },
+    "analysis": {
+      "argv": [
+        "python3",
+        "scripts/drama3_sampler_report.py",
+        "--stdout",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/root-measured-r3.stdout",
+        "--stderr",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/root-measured-r3.stderr",
+        "--output",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/root-qualified-final.json"
+      ],
+      "observed": "Qualified126 commands /11907 outputs; report refuses overwrite."
+    },
+    "controls": {
+      "env": {
+        "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "argv": [
+        "scripts/run_safe.sh",
+        "python3",
+        "120",
+        "1024",
+        "-m",
+        "unittest",
+        "spec/drama3_sampler_report_spec.py"
+      ],
+      "log": "root-report-tests-final.log",
+      "observed": "9 tests pass; extra waits/readbacks, bad wall/GPU durations, timestamp loss/reuse/shift, cross-run identity, wrong profile order, partial verification and resource leaks rejected."
+    },
+    "gpu_negative_controls": {
+      "binary": "same r3 probe",
+      "wrong_expected_id": "exit1 with sample mismatch",
+      "depth_one": "exit1 with completion wait before final drain",
+      "scope": "one final-source execution of each; not performance samples"
+    },
+    "oracle": {
+      "env": {
+        "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "argv": [
+        "scripts/run_safe.sh",
+        "/opt/homebrew/Caskroom/miniconda/base/bin/python3",
+        "120",
+        "1024",
+        "scripts/drama3_sampler_reference.py",
+        "--verify-fixture",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/oracle-fixture.json"
+      ],
+      "log": "root-oracle-verify-final.log",
+      "observed": "exit0;14 cases/7 profiles; all expected IDs recomputed;5/5 non-tie retry supports equal."
+    },
+    "reference_generation": {
+      "original_fixture_source_state": "Generator before input/output hardening; preserved fixture/report are byte-identical after hardening. Final script was executed in verification mode, not used to overwrite artifacts.",
+      "reproduction": "Use a new --reference-out and --run-out with the pinned existing Torch CPU environment; both destinations are checked before any output write.",
+      "hardening_checks": [
+        "unknown-role",
+        "non-finite-logit",
+        "non-finite-draw",
+        "unsupported-temperature",
+        "unsupported-top-k",
+        "unsupported-top-p"
+      ],
+      "collision_refusal_cases": 4
+    }
+  },
+  "measurement": {
+    "invocation_id": "80ab95a36d308772874d86d58da91914",
+    "profiles": {
+      "tower_trace_decode_head0_plus_eos_proxy": {
+        "pairs": 7,
+        "main_gpu_seconds": {
+          "median": 0.08206904167309403,
+          "min": 0.08185008354485035,
+          "max": 0.08314320864155889
+        },
+        "tower_gpu_seconds": {
+          "median": 0.34944862499833107,
+          "min": 0.3471660832874477,
+          "max": 0.35021812515333295
+        },
+        "total_gpu_seconds": {
+          "median": 0.43156829196959734,
+          "min": 0.4301133332774043,
+          "max": 0.43215258326381445
+        },
+        "pair_wall_seconds": {
+          "median": 0.432926167,
+          "min": 0.430590917,
+          "max": 0.433667625
+        },
+        "main_gpu_seconds_per_call": 0.00227969560203039,
+        "tower_gpu_seconds_per_call": 0.0022839779411655626
+      },
+      "tower_trace_prefill_head0_plus_eos_proxy": {
+        "pairs": 7,
+        "main_gpu_seconds": {
+          "median": 0.0836646668612957,
+          "min": 0.08352329162880778,
+          "max": 0.08463508356362581
+        },
+        "tower_gpu_seconds": {
+          "median": 0.3576823752373457,
+          "min": 0.35571204172447324,
+          "max": 0.35860337503254414
+        },
+        "total_gpu_seconds": {
+          "median": 0.44140058383345604,
+          "min": 0.44034712528809905,
+          "max": 0.4421266666613519
+        },
+        "pair_wall_seconds": {
+          "median": 0.442492084,
+          "min": 0.440961209,
+          "max": 0.443263708
+        },
+        "main_gpu_seconds_per_call": 0.0023240185239248807,
+        "tower_gpu_seconds_per_call": 0.002337793302204874
+      },
+      "tower_trace_decode_head8_plus_eos_proxy": {
+        "pairs": 7,
+        "main_gpu_seconds": {
+          "median": 0.07876025000587106,
+          "min": 0.07843312481418252,
+          "max": 0.07964787492528558
+        },
+        "tower_gpu_seconds": {
+          "median": 0.3346779583953321,
+          "min": 0.3335571251809597,
+          "max": 0.33582712477073073
+        },
+        "total_gpu_seconds": {
+          "median": 0.4136866251938045,
+          "min": 0.4129304997622967,
+          "max": 0.4147603749297559
+        },
+        "pair_wall_seconds": {
+          "median": 0.414760625,
+          "min": 0.413397625,
+          "max": 0.422596917
+        },
+        "main_gpu_seconds_per_call": 0.0021877847223853073,
+        "tower_gpu_seconds_per_call": 0.0021874376365707982
+      },
+      "synthetic_ascending_insertion_worst": {
+        "pairs": 7,
+        "main_gpu_seconds": {
+          "median": 0.8395035001449287,
+          "min": 0.8382874163798988,
+          "max": 0.8406257079914212
+        },
+        "tower_gpu_seconds": {
+          "median": 3.569095749873668,
+          "min": 3.5638842498883605,
+          "max": 3.580324958078563
+        },
+        "total_gpu_seconds": {
+          "median": 4.407456499990076,
+          "min": 4.404509957879782,
+          "max": 4.419828458223492
+        },
+        "pair_wall_seconds": {
+          "median": 4.408863042,
+          "min": 4.4050445,
+          "max": 4.420304959
+        },
+        "main_gpu_seconds_per_call": 0.023319541670692463,
+        "tower_gpu_seconds_per_call": 0.02332742320178868
+      },
+      "synthetic_descending_insertion_low": {
+        "pairs": 7,
+        "main_gpu_seconds": {
+          "median": 0.06785099999979138,
+          "min": 0.06732366653159261,
+          "max": 0.06810554163530469
+        },
+        "tower_gpu_seconds": {
+          "median": 0.28645112505182624,
+          "min": 0.2859672913327813,
+          "max": 0.2880823751911521
+        },
+        "total_gpu_seconds": {
+          "median": 0.35441429167985916,
+          "min": 0.3539522495120764,
+          "max": 0.3555361251346767
+        },
+        "pair_wall_seconds": {
+          "median": 0.356177709,
+          "min": 0.354404959,
+          "max": 0.362243917
+        },
+        "main_gpu_seconds_per_call": 0.001884749999994205,
+        "tower_gpu_seconds_per_call": 0.0018722295755021323
+      },
+      "synthetic_flat_ties": {
+        "pairs": 7,
+        "main_gpu_seconds": {
+          "median": 0.07160387514159083,
+          "min": 0.07111699972301722,
+          "max": 0.07216187473386526
+        },
+        "tower_gpu_seconds": {
+          "median": 0.30484400037676096,
+          "min": 0.30346187483519316,
+          "max": 0.30533937457948923
+        },
+        "total_gpu_seconds": {
+          "median": 0.37643983354792,
+          "min": 0.3752978751435876,
+          "max": 0.376955624204129
+        },
+        "pair_wall_seconds": {
+          "median": 0.378416542,
+          "min": 0.376727667,
+          "max": 0.379886334
+        },
+        "main_gpu_seconds_per_call": 0.0019889965317108566,
+        "tower_gpu_seconds_per_call": 0.0019924444469069345
+      },
+      "synthetic_k_cutoff_ties": {
+        "pairs": 7,
+        "main_gpu_seconds": {
+          "median": 0.06746837496757507,
+          "min": 0.06716129137203097,
+          "max": 0.06835987512022257
+        },
+        "tower_gpu_seconds": {
+          "median": 0.28803862538188696,
+          "min": 0.2858292916789651,
+          "max": 0.28938025003299117
+        },
+        "total_gpu_seconds": {
+          "median": 0.35556070832535625,
+          "min": 0.3536435831338167,
+          "max": 0.35654154140502214
+        },
+        "pair_wall_seconds": {
+          "median": 0.356969959,
+          "min": 0.35485775,
+          "max": 0.361126375
+        },
+        "main_gpu_seconds_per_call": 0.0018741215268770854,
+        "tower_gpu_seconds_per_call": 0.0018826053946528558
+      }
+    },
+    "warmups_per_profile": 2,
+    "measured_pairs_per_profile": 7,
+    "main_calls": 36,
+    "main_normal_calls": 18,
+    "main_retry_calls": 18,
+    "tower_calls": 153,
+    "top_k": 30,
+    "normal_temperature_top_p": [
+      0.8,
+      0.9
+    ],
+    "retry_temperature_top_p": [
+      1.0,
+      0.95
+    ],
+    "total_verified_ids": 11907,
+    "timed_command_buffers": 126,
+    "graph": {
+      "depth": 2,
+      "submitted": 126,
+      "completed": 126,
+      "pending": 0,
+      "max_pending": 2,
+      "completion_waits": 126,
+      "retained_bytes": 0,
+      "max_retained_bytes": 247092
+    },
+    "readbacks": {
+      "control": 47628,
+      "terminal": 47628
+    },
+    "no_wait_or_readback_before_pair_drain": true,
+    "timer_scope": "Whole Metal command-buffer GPUStartTime->GPUEndTime after warmup; per-call metrics are amortized group times.",
+    "pair_wall_scope": "Encoding/submission/drain, excluding post-drain verification.",
+    "id_validation_scope": "Exact finite Float32 token IDs against native scalar oracle, not upstream RNG equality."
+  },
+  "upstream": {
+    "pinned": {
+      "repository": "https://github.com/fishaudio/fish-speech",
+      "revision": "541566932abbaebcb0a40e562a1f846738383f38",
+      "source_path": "fish_speech/models/text2semantic/fish_omni/tower.py",
+      "source_sha256": "71f47e85bcc51c1b644fd29d863598bf87208dbd86d479791d699629b7b92d8c",
+      "function_sha256": "ddd9ca8f0bdf0748d269ad294584506e2b0a009709b3212b9b19023eb8ff56d5",
+      "torch_version": "2.6.0",
+      "function_executed_on": "CPU only",
+      "forced_noise_interception": "patched Tensor.exponential_ temporarily so each in-support scalar target wins the upstream probability/noise argmax; method restored in finally"
+    },
+    "fixture_sha256": "5dc00e005e93f14a779c94697c3cfd1ea50dd95cec949ae6a26a72bb541d72cc",
+    "trace_provenance": {
+      "native_trace_sha256": "310d002c0aa6c9dc8748fcd25e7b6b7ea1fd82926c0268e8663fdb3029da0db8",
+      "upstream_torch_trace_sha256": "784057f0d440401183b8db66c1ab07d34e262525a358c7944207558b5e2debaa",
+      "native_trace_rows": 726,
+      "upstream_trace_rows": 726,
+      "retained_tower_head_logit_rows": 18,
+      "retained_main_head_logit_rows": 0,
+      "native_upstream_pair_checks": [
+        {
+          "name": "tower.decode.row0.head_logits.0",
+          "native_vs_upstream_torch_max_abs_logit_delta": 3.814697265625e-06,
+          "native_vs_upstream_torch_nonzero_delta_count": 4095
+        },
+        {
+          "name": "tower.prefill.row0.head_logits.0",
+          "native_vs_upstream_torch_max_abs_logit_delta": 3.814697265625e-06,
+          "native_vs_upstream_torch_nonzero_delta_count": 4095
+        },
+        {
+          "name": "tower.decode.row0.head_logits.8",
+          "native_vs_upstream_torch_max_abs_logit_delta": 1.1205673217773438e-05,
+          "native_vs_upstream_torch_nonzero_delta_count": 3997
+        }
+      ]
+    },
+    "normal_non_tie_cases": 10,
+    "normal_non_tie_support_equal": 10,
+    "normal_non_tie_probability_max_abs_error": 5.960464477539063e-08,
+    "retry_non_tie_cases": 5,
+    "retry_non_tie_support_equal": 5,
+    "retry_non_tie_probability_max_abs_error": 7.450580596923828e-09,
+    "normal_tie_cases_disagree": 4,
+    "retry_tie_cases_disagree": 2,
+    "limits": {
+      "native_oracle": "FP32 rounding after division, exp, addition, multiply, and subtraction; top-k ties favor lower token ID; uniform inverse-CDF selection mirrors dr3_sample",
+      "exp_approximation": "Python math.exp rounded to FP32; Metal exp implementation may differ by ULPs",
+      "reduction_order": "denominator is serial FP32 in native oracle as in dr3_sample; upstream torch softmax uses its own CPU reduction/cumsum order",
+      "upstream_comparison": "support and conditional probabilities are computed by the exact pinned sampler preprocessing operators on CPU; this is not CUDA kernel arithmetic",
+      "rng": "fixture draws are uniforms; upstream source samples exponential noise; no same-seed ID parity claim",
+      "ties": "native scalar tie rule is lower token ID; upstream torch.sort is run on CPU and does not promise a stable tie order unless requested, so CPU tie output is diagnostic only",
+      "margins": "each case audit records top-k scaled-logit gap, top-p CDF decision margin, and draw-transition distance; zero margins mean exact ties or boundary cases, while positive margins do not bound Metal exp/reduction ULP error"
+    },
+    "actual_main_logits_retained": false,
+    "new_model_inference_replay_executed": false
+  },
+  "prior_numerical_lineage": {
+    "startup_packet": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/.landmark/evidence/drama3-startup.json",
+      "bytes": 75514,
+      "sha256": "654d5aac223054a9c9eaeb6e9de2f53ca60b4980aaea476e8b730e26a2b3fad3",
+      "availability": "repository historical evidence"
+    },
+    "graph_packet": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/docs/drama3-cognigraph-evidence.json",
+      "bytes": 40101,
+      "sha256": "fba295ea0b0de2183b1c4370180de7ae98ad80b05ec912f59a0caa41560bcfc1",
+      "availability": "repository historical evidence"
+    },
+    "inference_source_unchanged_from_base": true,
+    "bridge_hash_matches_startup_packet": true,
+    "scope": "Existing backbone/tower/DAC/WAV replay results are inherited unchanged-source lineage; they were not rerun by this sampler probe."
+  },
+  "adversary": {
+    "verdict": "ROBUST",
+    "scope": "Current diagnostic build, counters, output checks and timing qualification only.",
+    "review": "Correlated same-lineage source review plus parent-executed GPU/CPU falsifiers; not model agreement as proof.",
+    "refuted_routes": [
+      "Whole-model sampler attribution from one repeated fixed row",
+      "Universal upstream sort/tie or same-seed sampler parity",
+      "Qualifying stdout/stderr by numeric command indices alone"
+    ],
+    "guard_fixes": [
+      "Matching invocation stamps in both streams and summary",
+      "Exact zero-based timeline bijection and global alternating schedule",
+      "Finite positive GPU and wall durations"
+    ],
+    "strongest_remaining_counterexample": "Mixed production logits may cost materially more than retained fixed rows; ascending control shows a large tail. Flight counters are not a universal audit of arbitrary native sync APIs."
+  },
+  "decision": {
+    "next": "Measure actual-shape backbone qkv/z/b/a shared-input projection groups without adding completion waits, before fusion.",
+    "why": "Earlier whole-command combined prefill/generation is a large6.67s budget vs DAC1.75s; current sampler trace-based proxy0.414\u20130.441s gives one bounded operator magnitude. These boundaries cannot rank operators or establish a bottleneck.",
+    "fallback": "Retain baseline kernels if projection timing/parity does not improve; reconsider mixed-row sampler/parallel top-k while preserving denominator semantics.",
+    "next_falsifier": "Baseline/candidate actual-shape projection GPU group timing plus unchanged accumulation-order/upstream intermediate comparisons, followed by full-WAV and matched process checks for any kernel promotion.",
+    "mapping_default": "DRAMA3_MMAP_SHARED=0 unchanged; promotion gate remains incomplete."
+  },
+  "validation": {
+    "scope": "Curated index only; hashes/shape do not execute or authenticate the GPU/reference evidence.",
+    "repository_landmark_validator": "scripts/validate-landmark-graph.sh and the packet template are absent in this checkout; local JSON/path/hash and actual parser requalification used instead."
+  },
+  "refresh": {
+    "triggers": [
+      "source/reference/assets/precision/compiler/input/device/OS drift",
+      "artifact loss or modification",
+      "host state drift for timing"
+    ],
+    "failure_policy": "Reopen affected numerical or performance claims; preserve diagnostic-only status until rerun."
+  },
+  "artifacts": {
+    "root-build-r3.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/root-build-r3.log",
+      "bytes": 91,
+      "sha256": "a7ce7e60e412a3c036b31e910dccbb4e64c7016a3fb23bbb57589dac5320c856",
+      "availability": "local cache; may be removed"
+    },
+    "oracle-fixture.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/oracle-fixture.json",
+      "bytes": 885734,
+      "sha256": "5dc00e005e93f14a779c94697c3cfd1ea50dd95cec949ae6a26a72bb541d72cc",
+      "availability": "local cache; may be removed"
+    },
+    "oracle-report.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/oracle-report.json",
+      "bytes": 104269,
+      "sha256": "ec29082108331330f760efce7108db5ded7b2b1a6be299bfb2d95c1129825f45",
+      "availability": "local cache; may be removed"
+    },
+    "sampler-oracle-hardening-verification-20261014.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/sampler-oracle-hardening-verification-20261014.json",
+      "bytes": 5447,
+      "sha256": "5dc176b0a791aced293267175df7df5e0459ee5ad21db6f73af2b5e7439705b1",
+      "availability": "local cache; may be removed"
+    },
+    "root-measured-r3.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/root-measured-r3.stdout",
+      "bytes": 53692,
+      "sha256": "278f45489b0b1a8dd721047f1f2cbf63298a29ebafac41f7ddfad03d492adee1",
+      "availability": "local cache; may be removed"
+    },
+    "root-measured-r3.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/root-measured-r3.stderr",
+      "bytes": 9960,
+      "sha256": "56051c94e457b7b402785d6a6aeffa7ca7e01a3204a7e15157089ce5a3d3222c",
+      "availability": "local cache; may be removed"
+    },
+    "root-qualified-final.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/root-qualified-final.json",
+      "bytes": 22237,
+      "sha256": "6f8aadcbb824e229cb843fd81fe3961b35b7351f31977c401be6a9ae4ae15976",
+      "availability": "local cache; may be removed"
+    },
+    "root-report-tests-final.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/root-report-tests-final.log",
+      "bytes": 198,
+      "sha256": "9e7b8911283384d2b9fdf1183ebcf768b6a6c565ad65ed240aeaafb64d770fba",
+      "availability": "local cache; may be removed"
+    },
+    "root-oracle-verify-final.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/root-oracle-verify-final.log",
+      "bytes": 2020,
+      "sha256": "d64f0f863030da9da396f84f1587e2daea938e9b2c47ecfd3653876df0787637",
+      "availability": "local cache; may be removed"
+    },
+    "root-bad-expected-r3.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/root-bad-expected-r3.stdout",
+      "bytes": 81,
+      "sha256": "4f741ae65e222cf7c8bd86a87300f921cdbcfbf7306807adc91a01b6a418075c",
+      "availability": "local cache; may be removed"
+    },
+    "root-bad-expected-r3.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/root-bad-expected-r3.stderr",
+      "bytes": 938,
+      "sha256": "3ca6f177cea6b506b12c1e8e3d5eff589834047e3730501035bf7465d9afb767",
+      "availability": "local cache; may be removed"
+    },
+    "root-depth-one-r3.stdout": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/root-depth-one-r3.stdout",
+      "bytes": 81,
+      "sha256": "ef0205f07389f5ca34d7bd4571222d09cb9d898967dcff1e3c3b299e768516ef",
+      "availability": "local cache; may be removed"
+    },
+    "root-depth-one-r3.stderr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/root-depth-one-r3.stderr",
+      "bytes": 949,
+      "sha256": "d7d5dde52cde28cf24c0f6cc9f9d22296c38c4e30af2460bfadf720461d9386d",
+      "availability": "local cache; may be removed"
+    },
+    "root-smoke-fixture.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/root-smoke-fixture.json",
+      "bytes": 57967,
+      "sha256": "9ba333e6f842769905fc708c3b397e8199138056f16526e052ea0983df89fb41",
+      "availability": "local cache; may be removed"
+    },
+    "root-bad-expected-fixture.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/root-bad-expected-fixture.json",
+      "bytes": 57952,
+      "sha256": "c8558dc744b86e56cff1b3db748201df258d6e5391ccdf7b0a4a873df8259a70",
+      "availability": "local cache; may be removed"
+    }
+  }
+}

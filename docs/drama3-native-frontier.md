@@ -8,6 +8,103 @@ Goal: one short, single-speaker text prompt to a mono 44.1 kHz WAV, with all
 inference computations in Crystal/native libraries. Python/MLX/PyTorch are
 reference and fixture tools only, never the native inference implementation.
 
+## Sampler GPU cost and next target — 2026-10-14
+
+Status: VERIFIED for the bounded diagnostic below; full-inference sampler
+attribution remains open. `examples/drama3_sampler_benchmark.cr` builds with a
+relative `require` and the normal Metal link flags, resolving the earlier
+unsupported `-I` / `--path` attempts. No inference kernel or default changed.
+Risk is CAUTION for measurement interpretation and queue lifetimes; rollback
+is removal of the diagnostic and its analysis tools.
+
+The release probe calls unchanged resident `Context#sample`, including its
+finite-input guard. Each pair encodes 36 main-head calls (18 normal at
+temperature 0.8 / top-p 0.9, 18 retry at 1.0 / 0.95) and 153 tower-head calls
+(0.8 / 0.9), all at top-k 30, in two command buffers. Logits and uniform draws
+are uploaded before timing. Graph depth two admits both submissions before
+one final drain. Both operation groups have zero intermediate completion
+waits and readbacks. Per-output checks run only after that drain and must add
+no GPU waits/submissions. Warmups exercise both submission orders; seven
+measured pairs per profile alternate main/tower order and reverse profile
+order. GPU durations are `GPUEndTime - GPUStartTime` for whole command buffers,
+not CPU encode wall time or per-dispatch timestamps.
+
+Final run `root-measured-r3`, invocation
+`80ab95a36d308772874d86d58da91914`, on M2 Max/macOS 26.6.2:
+
+| Fixed-input profile | Main/retry 36 calls, median ms | Tower 153 calls, median ms | Pair GPU median ms | Pair min–max ms |
+| --- | ---: | ---: | ---: | ---: |
+| Retained decode head 0 / main proxy | 82.069 | 349.449 | 431.568 | 430.113–432.153 |
+| Retained prefill head 0 / main proxy | 83.665 | 357.682 | 441.401 | 440.347–442.127 |
+| Retained decode head 8 / main proxy | 78.760 | 334.678 | 413.687 | 412.930–414.760 |
+| Synthetic ascending logits | 839.504 | 3569.096 | 4407.456 | 4404.510–4419.828 |
+| Synthetic descending logits | 67.851 | 286.451 | 354.414 | 353.952–355.536 |
+| Synthetic flat ties | 71.604 | 304.844 | 376.440 | 375.298–376.956 |
+| Synthetic top-k cutoff ties | 67.468 | 288.039 | 355.561 | 353.644–356.542 |
+
+Each column has its own median; component medians need not sum to the median
+of paired sums. The three trace-based profiles cost about 2.19–2.34 ms/call
+amortized over each command group, not measured isolated-call latency.
+Only the tower rows are retained checkpoint logits; main rows prepend a
+synthetic EOS logit to a tower row because no actual main-head logits were
+retained. Reusing one row per group is a hot-input microbenchmark, not replay
+of all 189 production distributions. Ascending input increases insertion
+comparisons about 29.9 times and measured pair time about 12.4 times versus
+descending. This confirms data-dependent cost, not an observed production
+worst case. Host quiet gating was off; the runner's 15% sampled reserve passed.
+
+All 11,907 outputs (2 warmup + 7 measured pairs, 7 profiles) match a scalar
+FP32 oracle, including main retries. There are 126 submitted/completed command
+buffers and final completion waits, maximum pending two, final pending and
+retained bytes zero, and exactly 47,628 control plus 47,628 terminal read bytes
+for post-drain verification. Deliberately wrong expected IDs and depth one
+both fail. Nine Python analysis controls pass, including cross-run stream
+mixing, shifted/missing/duplicate timestamps, invalid durations, extra waits,
+readbacks, partial output verification and retained resources. Matching random
+invocation stamps and zero-based command indices reject accidental mixed-run
+logs; they are not authentication against edited logs. Global profile order
+is also checked against the executable's alternating schedule.
+
+`scripts/drama3_sampler_reference.py` extracts and executes the exact pinned
+Fish-Speech sampler on CPU at revision
+`541566932abbaebcb0a40e562a1f846738383f38`; no model import or new dependency is
+needed beyond the existing Torch reference environment. All ten non-tie normal
+role-cases have matching retained support, with conditional probability
+max absolute error at most 5.96e-8. Main retry support matches in all five
+non-tie cases, with max probability error 7.45e-9; its other two cases have
+the same deliberate tie discrepancy. The four deliberate flat/cutoff tie cases
+disagree: native ties prefer lower token IDs, while upstream CPU
+`torch.sort(stable=False)` reorders equal logits. Uniform inverse-CDF draws
+and upstream exponential-race draws also have different RNG contracts.
+Injected exponential noise verifies in-support target selection only; it
+does not prove RNG or general sampler parity. Expected GPU IDs come from the
+scalar native oracle, whose host `exp` rounded to FP32 can differ from Metal
+near a decision boundary. Prior backbone/tower/DAC intermediate and WAV gates
+remain unchanged-source evidence, not freshly rerun inference in this probe.
+
+Next attribution experiment: actual-shape backbone shared-input projections,
+starting with `qkv/z/b/a` in `BackboneResident#linear_attention`. No projection
+bottleneck has been established. Earlier command sums
+place about 6.67 s in combined prefill/generation versus 1.75 s in DAC, while
+this bounded sampler costs 0.414–0.441 s on trace-based profiles. These are
+different measurement boundaries; do not subtract them or infer a production
+speedup. First measure the projection groups with the same asynchronous
+method. Reject fusion if actual-shape timing or intermediate replay regresses;
+preserve each output's accumulation order. Sampler parallelization remains a
+candidate, especially for the ascending tail, but changing denominator
+reduction order risks top-p boundaries and is not justified by insertion
+comparison counts alone. Any kernel change must rerun its relevant pinned
+upstream intermediate replay and full-WAV check before promotion.
+
+DoD commands, source/binary identities, the qualified report and reference
+audit are indexed in `.landmark/evidence/drama3-sampler-cost.json`. Raw local
+artifacts are under
+`~/.cache/cogni-ml/drama3-runs/sampler-cost-20261014-r2/`; early runs remain
+historical diagnostics, and only `root-measured-r3` supplies the table above.
+Refresh on source/reference/assets/precision/compiler/input/device/OS or
+artifact drift; timing additionally decays with host state. The mapping gate
+below remains incomplete and default-off.
+
 ## Active mapping-promotion experiment
 
 Status: IN_PROGRESS / default promotion withheld. The final controlled attempt
@@ -179,12 +276,13 @@ submit isolated groups at depth two and drain once, using the existing timeline
 without adding per-operation completion waits. Such synthetic group timing
 does not attribute the complete generation path by itself.
 
-A bounded external sampler probe was drafted but produced no measurements:
+A bounded external sampler probe was initially drafted but produced no measurements:
 both allowed build attempts exited on unsupported Crystal include-path flags
 (`-I`, then `--path`) before compilation. No GPU workload ran. Its source,
 latest build log, and a curated two-attempt diagnostic are retained outside
 the repository and indexed by the mapping packet. The operator hypotheses
-below remain unmeasured; a renewed probe first needs a corrected build command.
+below were unmeasured at that point. The sampler-cost section above supersedes
+that build blocker and records the subsequent bounded measurements.
 
 Source-level follow-up candidates, pending operator attribution and matched
 measurements:
@@ -645,7 +743,10 @@ readback bytes by purpose, and submission count.
   are zero; the DAC consumes device codes even though the sidecar also reads
   a terminal copy.
 
-The sampler follows upstream ranking/tie/top-p rules in FP32. A precision
+The sampler implements descending ranking, lower-ID ties and the upstream
+top-p crossing rule in FP32. The later sampler audit above finds that upstream
+CPU unstable-sort tie membership differs; universal upstream tie equivalence
+is not supported. A precision
 falsifier deliberately sets top_p=0.99999999 on equal logits: it rounds to 1
 on GPU and can retain a candidate that CPU Float64 excludes. Reject universal
 seeded CPU equivalence; do not hide the difference by widening trace gates.
