@@ -8,7 +8,92 @@ Goal: one short, single-speaker text prompt to a mono 44.1 kHz WAV, with all
 inference computations in Crystal/native libraries. Python/MLX/PyTorch are
 reference and fixture tools only, never the native inference implementation.
 
-## Active CogniGraph handoff slice
+## Active first-submit slice
+
+Status: read-only shared checkpoint mapping implemented as opt-in;
+performance/default promotion remains provisional. Set `DRAMA3_MMAP_SHARED=1`
+to use `MAP_SHARED`; default and rollback are `0` (`MAP_PRIVATE`). Both modes
+keep `PROT_READ`, existing mmap owners, whole-shard no-copy Metal views, Shared
+storage, tracked hazards, kernels, and serial queue ordering. This adds no CPU
+activation handoff. Checkpoint files must remain stable and immutable until all
+referencing contexts are terminal; shader `const` inputs provide the current
+in-tree GPU read-only constraint. Raw public pointers/native bindings are unsafe
+plumbing, not an enforcement boundary. Reset/unload before every referencing
+context drains remains unsupported.
+
+The predecessor binary reproduced 14.310 seconds from commit to GPU start,
+followed by 0.173 seconds of GPU execution. The final diagnostic's four fresh
+processes used one identical tiny kernel and five identical dispatches per
+command: first waits were 0.881/0.817 ms for a 16 KiB view versus 518.645/
+519.265 ms for the same file's 5.50 GB shard view. All terminal words matched;
+GPU intervals were about 24–25 microseconds. File-cache state was uncontrolled.
+This reproduces a large extent-associated delay without the backbone, tower,
+or DAC; it does not assign the entire model delay to a particular driver
+pinning, page-in, or deferred-compilation mechanism.
+
+Two complete same-binary shared/private AB/BA pairs at graph depth two measured
+11.00/20.97 seconds and 18.60/25.20 seconds with `/usr/bin/time` (process launch,
+loading, preparation, generation, WAV/report output, and cleanup included).
+These pairs used the earlier timed binary; the final build differs only in
+formatter whitespace and was separately replayed below. Full-run cache and host
+state were uncontrolled. Both pairs favor shared mapping, with ratios 0.524559
+and 0.738095. The additional unpaired shared run took 9.89 seconds. All five
+completed runs reproduced the same 17 frames, EOS, and exact WAV bytes, plus
+152 control / 140,012 terminal
+readback bytes; graph leases drained. Per-process peak footprint was
+1.709 GB shared versus 1.709–1.778 GB private. This counter excludes or differently
+charges some file-backed/Metal residency; it is not a complete physical-memory
+budget. No RAM saving or stable speedup is established from these samples.
+
+Three later full attempts were terminated by the unchanged 25% system-free
+memory guard: one private, one shared, and the final shared graph-depth-two
+smoke. They remain recorded as incomplete attempts and contribute no successful
+timing/parity result. The host had unrelated active workloads; their processes
+were not modified. The final owned-binary synchronous shared route at graph
+depth zero completed with exact WAV/readback parity (11.08 seconds application
+time). A separate profiled owned-binary run measured 2.079 seconds
+commit-to-GPU-start and 0.159
+seconds GPU execution, with 12.16 seconds full-process time. This is a separate
+cache/host state from the predecessor 14.310-second observation; the pair is
+not an isolated causal estimate. Fresh upstream replays passed 243 backbone /
+497,664 values, 726 tower / 2,042,880 values, 20 strict-head / 77,824 values,
+29 DAC internal stages, and 4,096 waveform values at the unchanged gates below.
+All component traces are bitwise equal to the preceding native route. Metal
+passed 63 examples at each of depths zero and two; CPU passed 20, Python
+contracts six.
+The new mapping guard covers both modes, invalid configuration/ranges, queued
+weight consumption through GC, terminal drain, and unchanged fixture-file bytes.
+
+Rejected experiments: CPU page touching took 24.02 seconds of setup plus
+5.74 seconds of first wait, worsening the measured full probe. Per-tensor views
+had full-process view/default ratios 1.029940, 1.045088, 0.887771, and 1.025412
+(median 1.027676); three of four pairs regressed despite exact WAV/ledger parity.
+The tensor-view code was removed. Its lower retained-byte counter was backing
+extent bookkeeping, not measured physical RAM. A single MADV_RANDOM scratch
+probe did not improve the preceding uncontrolled-cache probe; no inference
+madvise change was retained.
+
+Risk: CAUTION (file sharing and resource preparation). Capability DoD is the
+executed mapped-input guards, pinned upstream replays, and exact native full
+WAV/readback checks. Performance promotion additionally requires repeated
+same-binary full-process AB/BA runs with sufficient host headroom and no guard
+terminations, at graph depths zero and two. The strongest failure is an
+unintended mapped weight write or owner release before completion. Current
+read-only shaders, GC/drain guards, and exact file/output checks cover the
+in-tree serial route; external mutation/concurrency remain outside admission.
+Ordinary mmap selection is not an LTP/WBA transformation. No Collapse or default
+speed promotion follows from the small timing sample; global memory admission
+and repeatable complete-wall descent remain open.
+
+Evidence, source identities, exact commands, aborted attempts, and refresh
+rules: [startup evidence](../.landmark/evidence/drama3-startup.json).
+Diagnostic source: [startup extent probe](../examples/drama3_startup_probe.cr).
+Next falsifier: repeat matched full-process pairs after host headroom recovers,
+separating file-cache state from mapping mode and recording the first-submit
+interval alongside the complete timer. Refresh on source/reference, checkpoint,
+precision, compiler, input, device/OS, or artifact-availability drift.
+
+## Admitted CogniGraph handoff slice
 
 Status: bounded CogniGraph route admitted as opt-in; speed promotion withheld.
 `DRAMA3_COGNIGRAPH_MAX_INFLIGHT` defaults to `0` (legacy synchronous route);
@@ -82,10 +167,10 @@ coordinate, not global potential descent. The transport corridor is one FIFO
 Metal queue; the Ladder move submits fresh/persistent owners, passes resident
 outputs to dependent work, waits at control/terminal boundaries, then releases
 only completed leases. Failed work drains/cancels and poisons the context; it is
-not retried against mutated state. Depth zero is the dual frame. The next
-falsifier is whether profiling can attribute the roughly 11-second
-first-command pre-GPU interval; it remains separate from the admitted
-correctness and wait-count result.
+not retried against mutated state. Depth zero is the dual frame. The first-submit
+extent probe and opt-in shared-mapping results are recorded
+in the active slice above; stable performance and global memory admission
+remain separate from the admitted correctness and wait-count result.
 
 Evidence and exact run inputs: [CogniGraph evidence](drama3-cognigraph-evidence.json).
 Source anchors: [resident ownership/queue](../src/ml/audio/drama3/resident.cr),

@@ -1,0 +1,1724 @@
+{
+  "format": "cogni-ml-landmark-evidence-v1",
+  "recorded_at_utc": "2026-10-14T21:57:32.384898+00:00",
+  "claim": {
+    "level": "COMPLETED",
+    "summary": "Opt-in read-only MAP_SHARED checkpoint loading preserves tested native/upstream parity and ownership; repeated general performance/default promotion remains open.",
+    "narrow_adversary_verdict": "ROBUST within stable immutable checkpoint and drained-context contract",
+    "performance_promotion_verdict": "VULNERABLE: small cache-uncontrolled sample and memory-guard interruptions"
+  },
+  "boundaries": {
+    "allowed_paths": [
+      "src/ml/audio/drama3/native.cr",
+      "spec/drama3_mapping_spec.cr",
+      "examples/drama3_startup_probe.cr",
+      "docs/drama3-native-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/drama3-startup.json"
+    ],
+    "changed_paths": [
+      "src/ml/audio/drama3/native.cr",
+      "spec/drama3_mapping_spec.cr",
+      "examples/drama3_startup_probe.cr",
+      "docs/drama3-native-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/drama3-startup.json"
+    ],
+    "base_revision": "0f62797e7e7f653dab54d0b0e5e267e6ab07d7d6",
+    "risk": "CAUTION",
+    "default": "DRAMA3_MMAP_SHARED=0 / MAP_PRIVATE",
+    "opt_in": "DRAMA3_MMAP_SHARED=1 / MAP_SHARED",
+    "rollback": "Unset DRAMA3_MMAP_SHARED or set 0; revert this atomic commit if needed.",
+    "invariants": [
+      "Both mappings PROT_READ on rb file descriptors.",
+      "Unchanged whole-shard no-copy GPU weight views, owner lifetime, Shared Metal storage, tracked hazards, kernels and serial queue.",
+      "No added CPU activation handoff. Existing small control reads and terminal output remain.",
+      "Checkpoint files remain stable and immutable; reset/unload only after every referencing context is terminal.",
+      "Raw pointers/native handles are unsafe plumbing; shader const inputs constrain current in-tree consumers."
+    ],
+    "excluded": [
+      "External checkpoint mutation/truncation",
+      "Concurrent mapping-mode mutation or early global backend reset",
+      "Stable general speedup or physical RAM saving",
+      "Default promotion",
+      "LTP/WBA transformation or Collapse"
+    ]
+  },
+  "source_identities": {
+    "src/ml/audio/drama3/native.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/native.cr",
+      "bytes": 15120,
+      "sha256": "fa51b01174ae7d2f83f6d9fe868faaaa09891888d990690aeac6ba400cc36b11"
+    },
+    "spec/drama3_mapping_spec.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/spec/drama3_mapping_spec.cr",
+      "bytes": 3398,
+      "sha256": "0959a4de7cc54a603446f7457637116760a7fea62d79e925076ff3c1f11f0033"
+    },
+    "examples/drama3_startup_probe.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_startup_probe.cr",
+      "bytes": 8996,
+      "sha256": "5533fd57b296e88caee78b0d449030e7c8cee0fdbb2da52bf159e4e9d223c476"
+    },
+    "src/ml/audio/drama3/metal.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/metal.cr",
+      "bytes": 11189,
+      "sha256": "7e0257b1e17abc8aa2a05174f6e2bf2ffb31d7090efea5887485bf72fa080b89"
+    },
+    "src/ml/audio/drama3/resident.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/resident.cr",
+      "bytes": 19401,
+      "sha256": "9e4866d52e65d3630dc77d55cc93dfcbc9dd85b719609676f7d71837495fe187"
+    },
+    "src/ml/metal/compute_graph.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/metal/compute_graph.cr",
+      "bytes": 26283,
+      "sha256": "8d5d308fac91629a502de1ed085786047c5b6f0f530253ae265c7f95098cb970"
+    },
+    "scripts/run_safe.sh": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/run_safe.sh",
+      "bytes": 11567,
+      "sha256": "ca3d326eac90731c4915883158d394e72dde766786fadf95a4241acd7f627ea4"
+    },
+    "spec/support/drama3/reference_compare.py": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/spec/support/drama3/reference_compare.py",
+      "bytes": 6322,
+      "sha256": "4ad251be6a3703e1feab8c3bf010abc5ef222dfc5b1b45634417cf11c3205870"
+    },
+    "examples/drama3_generate.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_generate.cr",
+      "bytes": 7018,
+      "sha256": "c3db9853063ea31631f086c0da141ea0ffba76f33919ce232159f7684ae9d503"
+    },
+    "examples/drama3_resident_trace.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_resident_trace.cr",
+      "bytes": 1341,
+      "sha256": "fee02ecddf0bc8c88531fba7e860d473ed5bdce8fcdebf94190a0bafabbb72fe"
+    },
+    "examples/drama3_tower_resident_trace.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_tower_resident_trace.cr",
+      "bytes": 3885,
+      "sha256": "c6c7ac48e3d04c9d4f5200a2e018ba97fb33a63b42009a1135282a8e42548296"
+    },
+    "examples/drama3_codec_resident_trace.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_codec_resident_trace.cr",
+      "bytes": 5798,
+      "sha256": "9a4ef1d16c938536dc011c12c6b7d4a0f300cd558dde6e3dab5bc05d36374e97"
+    }
+  },
+  "binary_identities": {
+    "timed_prototype": {
+      "path": "/tmp/drama3_shared_mapping_generate",
+      "bytes": 1404384,
+      "sha256": "4e53c1367e081677a90e5f4609154de7273586647ba64c6bb71138e4c0065d88"
+    },
+    "final": {
+      "generate": {
+        "path": "/tmp/drama3_shared_final_generate",
+        "bytes": 1404384,
+        "sha256": "03a276ed884a2f6ecf36c9c6c2db7c532726601c312bc06ea5a34ca61de98a2f"
+      },
+      "backbone_trace": {
+        "path": "/tmp/drama3_shared_final_backbone_trace",
+        "bytes": 868288,
+        "sha256": "89f927a25eec13a7901f01398177ace484e3e351b1b6484663c1dcf4286d72d8"
+      },
+      "tower_trace": {
+        "path": "/tmp/drama3_shared_final_tower_trace",
+        "bytes": 905536,
+        "sha256": "afe65316c1e6917c091491d5ceca09a0947bb63ef037f063a0a5fed043a59758"
+      },
+      "codec_trace": {
+        "path": "/tmp/drama3_shared_final_codec_trace",
+        "bytes": 904800,
+        "sha256": "a658fb15f2f31d00cf19603f0c467cc201ecab5c14c6771cc0034efc6b7f09c8"
+      },
+      "startup_probe": {
+        "path": "/tmp/drama3_shared_final_startup_probe",
+        "bytes": 655120,
+        "sha256": "404f8f0d1e56ced82e6b0fd2c05b9fe7d3527511e05efd639b0e0fa4880d3bc1"
+      }
+    },
+    "bridge": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o",
+      "bytes": 153016,
+      "sha256": "a77b9bd12977fdb31d60a26cdc489cbf836ef037a1231c0ac5f6241ccc0a6207"
+    },
+    "timed_to_final_delta": "Only Crystal formatter whitespace alignment in mapping-mode case expression; final binaries separately passed fresh traces and synchronous full WAV."
+  },
+  "environment": {
+    "device": "Apple M2 Max",
+    "physical_memory_bytes": 68719476736,
+    "os": "macOS 26.6.2",
+    "crystal": "1.21.0",
+    "model_path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+    "cache_state": "Uncontrolled; fresh process is not OS-cache cold.",
+    "foreign_workloads": "Present and left untouched; cause of headroom drop not isolated.",
+    "memory_guard": {
+      "minimum_system_free_percent": 25,
+      "process_rss_limit_mib": 40960,
+      "threshold_lowered": false
+    }
+  },
+  "pinned_sources": {
+    "mlx_audio": {
+      "repository": "https://github.com/cguldogan/mlx-audio",
+      "revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+      "checkout_clean_observed": true
+    },
+    "fish_speech": {
+      "repository": "https://github.com/fishaudio/fish-speech",
+      "revision": "541566932abbaebcb0a40e562a1f846738383f38",
+      "checkout_clean_observed": true
+    },
+    "official_model": {
+      "repository": "fishaudio/drama-3",
+      "revision": "e0a9218aa48888270f06ef1ed9ea67622c0e17d2"
+    },
+    "converted_model": {
+      "repository": "cguldogan/drama-3-mlx-q4",
+      "revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8"
+    }
+  },
+  "asset_verification": {
+    "manifest": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-assets-verified.json",
+    "status": "All nine converted-model file sizes and SHA256 digests match pinned manifest after experiments.",
+    "pinned_manifest": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/docs/drama3-native-evidence.json",
+      "bytes": 32865,
+      "sha256": "f9c000401eccabb18c38338dddf908270ea9a61a11a57bf3b1b884157bcc8956"
+    },
+    "reference_checkouts": "Both local reference checkout HEADs rechecked at pinned revisions with empty git status."
+  },
+  "verification": {
+    "unit_checks": [
+      {
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-metal-depth0.log",
+        "examples": 63,
+        "failures": 0,
+        "errors": 0
+      },
+      {
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-metal-depth2.log",
+        "examples": 63,
+        "failures": 0,
+        "errors": 0
+      },
+      {
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-cpu.log",
+        "examples": 20,
+        "failures": 0,
+        "errors": 0
+      },
+      {
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-python.log",
+        "tests": 6,
+        "status": "OK"
+      }
+    ],
+    "numerical_replays": {
+      "tower": {
+        "status": "match",
+        "trace_count": 726,
+        "value_count": 2042880,
+        "atol": 0.0006,
+        "rtol": 0.0003,
+        "prefixes": [],
+        "max_abs_error": 0.0048828125,
+        "max_relative_error_at_max_abs": 1.383655500220866e-06,
+        "worst_trace": "tower.prefill.row0.residual_layers.1.feed_forward.product",
+        "worst_flat_index": 1320
+      },
+      "strict_tower": {
+        "status": "match",
+        "trace_count": 20,
+        "value_count": 77824,
+        "atol": 3e-05,
+        "rtol": 0.0003,
+        "prefixes": [
+          "tower.prefill.row0.head_logits.",
+          "tower.prefill.row0.hidden_output",
+          "tower.decode.row0.head_logits.",
+          "tower.decode.row0.hidden_output"
+        ],
+        "max_abs_error": 1.049041748046875e-05,
+        "max_relative_error_at_max_abs": 1.09544939367374e-06,
+        "worst_trace": "tower.decode.row0.head_logits.1",
+        "worst_flat_index": 1008
+      },
+      "codec_stages": 29,
+      "waveform_values": 4096,
+      "backbone": {
+        "status": "match",
+        "trace_count": 243,
+        "value_count": 497664,
+        "atol": 6e-05,
+        "rtol": 0.0003,
+        "prefixes": [],
+        "max_abs_error": 0.0010986328125,
+        "max_relative_error_at_max_abs": 6.418351579042856e-07,
+        "worst_trace": "backbone.row0.layers.37.hidden",
+        "worst_flat_index": 1269
+      },
+      "backbone_bitwise_previous": true,
+      "tower_bitwise_previous": true,
+      "codec_bitwise_previous": true,
+      "summary_artifact": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-numerical-progress.json",
+      "rechecked_summary_artifact": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-numerical-rechecked.json",
+      "recheck_script": "/private/tmp/cogni-drama3-reference/check_shared_numerics.py",
+      "reference_artifacts": [
+        "/private/tmp/cogni-drama3-reference/actual_inputs.json",
+        "/private/tmp/cogni-drama3-reference/native_actual_tower_inputs.json",
+        "/private/tmp/cogni-drama3-reference/mlx_actual_backbone.json",
+        "/private/tmp/cogni-drama3-reference/torch_actual_tower_traces.json",
+        "/private/tmp/cogni-drama3-reference/codec_resident_2frame_reference.json"
+      ],
+      "actual_artifacts": [
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-backbone-traces.json",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-tower-traces.json",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-codec-traces.json"
+      ],
+      "previous_native_artifacts": [
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-owned-backbone-traces.json",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-owned-tower-traces.json",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-owned-codec-traces.json"
+      ],
+      "codec_gate": {
+        "internal_stages": 29,
+        "max_abs": 0.001,
+        "rms": 0.0002,
+        "normalized_rms": 0.0002,
+        "waveform_values": 4096,
+        "waveform_bound": "abs(error) <= max(5e-5, abs(reference)*1e-3), Float32 arithmetic",
+        "executed_by": "examples/drama3_codec_resident_trace.cr"
+      }
+    },
+    "baseline_artifacts": [
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-speed-baseline.wav",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-speed-baseline.wav.json"
+    ],
+    "final_binary_full_runs": [
+      {
+        "stem": "shared-owned-final-0",
+        "app_seconds": 11.0842775,
+        "process_seconds": 11.32,
+        "peak_memory_footprint_bytes": 1626194904,
+        "maximum_resident_set_bytes": 145719296,
+        "exact_baseline_wav_prompt_codes_eos_and_readbacks": true,
+        "frames": 17,
+        "readbacks": {
+          "control": 152,
+          "terminal": 140012
+        },
+        "graph": {
+          "depth": 0,
+          "submitted": 90,
+          "completed": 90,
+          "pending": 0,
+          "max_pending": 0,
+          "completion_waits": 90,
+          "retained_bytes": 0,
+          "max_retained_bytes": 0
+        },
+        "artifacts": [
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-final-0.wav",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-final-0.wav.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-final-0.stderr.log"
+        ]
+      },
+      {
+        "stem": "shared-owned-timeline-0",
+        "app_seconds": 11.90730075,
+        "process_seconds": 12.16,
+        "peak_memory_footprint_bytes": 1576338344,
+        "maximum_resident_set_bytes": 145473536,
+        "exact_baseline_wav_prompt_codes_eos_and_readbacks": true,
+        "frames": 17,
+        "readbacks": {
+          "control": 152,
+          "terminal": 140012
+        },
+        "graph": {
+          "depth": 0,
+          "submitted": 90,
+          "completed": 90,
+          "pending": 0,
+          "max_pending": 0,
+          "completion_waits": 90,
+          "retained_bytes": 0,
+          "max_retained_bytes": 0
+        },
+        "artifacts": [
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-timeline-0.wav",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-timeline-0.wav.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-timeline-0.stderr.log"
+        ],
+        "first_submit": {
+          "commit_to_gpu_start_seconds": 2.0791476666927338,
+          "gpu_seconds": 0.15876975003629923,
+          "commit_to_wait_seconds": 2.2380691249854863
+        }
+      }
+    ],
+    "definition_of_done": "Executed mapped-input guards + upstream replays at unchanged tolerances + exact completed native full WAV/control/terminal/drain checks. Final graph2 full generation was interrupted; graph2 full parity is from the format-equivalent timed binary.",
+    "commands": {
+      "metal_specs": {
+        "cwd": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml",
+        "env": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MMAP_SHARED": "1",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DELTA_TRANSPOSE": "1",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "25",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "0 or 2, executed separately"
+        },
+        "argv": [
+          "scripts/run_safe.sh",
+          "crystal",
+          "180",
+          "40960",
+          "spec",
+          "--release",
+          "-Ddrama3_metal",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -lc++ -fuse-ld=/usr/bin/ld",
+          "spec/drama3_resident_spec.cr",
+          "spec/drama3_tower_resident_spec.cr",
+          "spec/drama3_generator_resident_spec.cr",
+          "spec/drama3_codec_resident_spec.cr",
+          "spec/drama3_native_spec.cr",
+          "spec/drama3_backbone_spec.cr",
+          "spec/drama3_tower_spec.cr",
+          "spec/drama3_codec_spec.cr",
+          "spec/drama3_generation_spec.cr",
+          "spec/drama3_profile_spec.cr",
+          "spec/drama3_metal_spec.cr",
+          "spec/drama3_metal_codec_spec.cr",
+          "spec/drama3_graph_resident_spec.cr",
+          "spec/drama3_graph_generator_spec.cr",
+          "spec/graph_submission_queue_spec.cr",
+          "spec/drama3_mapping_spec.cr"
+        ]
+      },
+      "cpu_specs": {
+        "cwd": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml",
+        "env": {
+          "DRAMA3_MMAP_SHARED": "1",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "25",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1"
+        },
+        "argv": [
+          "scripts/run_safe.sh",
+          "crystal",
+          "180",
+          "40960",
+          "spec",
+          "--release",
+          "-Dcpu_only",
+          "--link-flags=-fuse-ld=/usr/bin/ld",
+          "spec/drama3_native_spec.cr",
+          "spec/drama3_backbone_spec.cr",
+          "spec/drama3_tower_spec.cr",
+          "spec/drama3_codec_spec.cr",
+          "spec/drama3_generation_spec.cr",
+          "spec/drama3_profile_spec.cr",
+          "spec/drama3_metal_spec.cr",
+          "spec/drama3_metal_codec_spec.cr",
+          "spec/drama3_mapping_spec.cr"
+        ]
+      },
+      "python_contracts": {
+        "cwd": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml",
+        "env": {
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "argv": [
+          "python3",
+          "-m",
+          "unittest",
+          "spec/drama3_reference_spec.py"
+        ]
+      },
+      "final_builds": [
+        {
+          "cwd": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml",
+          "argv": [
+            "scripts/run_safe.sh",
+            "crystal",
+            "180",
+            "40960",
+            "build",
+            "--release",
+            "-Ddrama3_metal",
+            "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -lc++ -fuse-ld=/usr/bin/ld",
+            "examples/drama3_generate.cr",
+            "-o",
+            "/tmp/drama3_shared_final_generate"
+          ],
+          "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-final-build-generate.log"
+        },
+        {
+          "cwd": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml",
+          "argv": [
+            "scripts/run_safe.sh",
+            "crystal",
+            "180",
+            "40960",
+            "build",
+            "--release",
+            "-Ddrama3_metal",
+            "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -lc++ -fuse-ld=/usr/bin/ld",
+            "examples/drama3_resident_trace.cr",
+            "-o",
+            "/tmp/drama3_shared_final_backbone_trace"
+          ],
+          "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-final-build-backbone_trace.log"
+        },
+        {
+          "cwd": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml",
+          "argv": [
+            "scripts/run_safe.sh",
+            "crystal",
+            "180",
+            "40960",
+            "build",
+            "--release",
+            "-Ddrama3_metal",
+            "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -lc++ -fuse-ld=/usr/bin/ld",
+            "examples/drama3_tower_resident_trace.cr",
+            "-o",
+            "/tmp/drama3_shared_final_tower_trace"
+          ],
+          "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-final-build-tower_trace.log"
+        },
+        {
+          "cwd": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml",
+          "argv": [
+            "scripts/run_safe.sh",
+            "crystal",
+            "180",
+            "40960",
+            "build",
+            "--release",
+            "-Ddrama3_metal",
+            "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -lc++ -fuse-ld=/usr/bin/ld",
+            "examples/drama3_codec_resident_trace.cr",
+            "-o",
+            "/tmp/drama3_shared_final_codec_trace"
+          ],
+          "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-final-build-codec_trace.log"
+        },
+        {
+          "cwd": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml",
+          "argv": [
+            "scripts/run_safe.sh",
+            "crystal",
+            "180",
+            "40960",
+            "build",
+            "--release",
+            "-Ddrama3_metal",
+            "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -lc++ -fuse-ld=/usr/bin/ld",
+            "examples/drama3_startup_probe.cr",
+            "-o",
+            "/tmp/drama3_shared_final_startup_probe"
+          ],
+          "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-final-build-startup_probe.log"
+        }
+      ],
+      "final_generation": {
+        "cwd": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml",
+        "env": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MMAP_SHARED": "1",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DELTA_TRANSPOSE": "1",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "25",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "0"
+        },
+        "argv": [
+          "scripts/run_safe.sh",
+          "/usr/bin/time",
+          "300",
+          "40960",
+          "-l",
+          "/tmp/drama3_shared_final_generate",
+          "--model",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--text",
+          "Hello.",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-final-0.wav",
+          "--max-frames",
+          "128",
+          "--seed",
+          "0"
+        ],
+        "profile_variant": "shared-owned-timeline-0 uses DRAMA3_METAL_TIMELINE=1 and COGNI_METAL_SUBMIT_PROFILE=1"
+      },
+      "fresh_trace_replays": [
+        {
+          "cwd": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml",
+          "env": {
+            "DRAMA3_BACKEND": "metal",
+            "DRAMA3_MMAP_SHARED": "1",
+            "DRAMA3_MOE_BATCH": "1",
+            "DRAMA3_DELTA_TRANSPOSE": "1",
+            "COGNI_RUN_SAFE_MIN_FREE_PCT": "25",
+            "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+            "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2"
+          },
+          "argv": [
+            "scripts/run_safe.sh",
+            "/tmp/drama3_shared_final_backbone_trace",
+            "300",
+            "40960",
+            "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+            "/private/tmp/cogni-drama3-reference/actual_inputs.json",
+            "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-backbone-traces.json"
+          ]
+        },
+        {
+          "cwd": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml",
+          "env": {
+            "DRAMA3_BACKEND": "metal",
+            "DRAMA3_MMAP_SHARED": "1",
+            "DRAMA3_MOE_BATCH": "1",
+            "DRAMA3_DELTA_TRANSPOSE": "1",
+            "COGNI_RUN_SAFE_MIN_FREE_PCT": "25",
+            "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+            "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2"
+          },
+          "argv": [
+            "scripts/run_safe.sh",
+            "/tmp/drama3_shared_final_tower_trace",
+            "300",
+            "40960",
+            "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+            "/private/tmp/cogni-drama3-reference/native_actual_tower_inputs.json",
+            "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-tower-traces.json"
+          ]
+        },
+        {
+          "cwd": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml",
+          "env": {
+            "DRAMA3_BACKEND": "metal",
+            "DRAMA3_MMAP_SHARED": "1",
+            "DRAMA3_MOE_BATCH": "1",
+            "DRAMA3_DELTA_TRANSPOSE": "1",
+            "COGNI_RUN_SAFE_MIN_FREE_PCT": "25",
+            "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+            "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2"
+          },
+          "argv": [
+            "scripts/run_safe.sh",
+            "/tmp/drama3_shared_final_codec_trace",
+            "300",
+            "40960",
+            "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+            "/private/tmp/cogni-drama3-reference/codec_resident_2frame_reference.json",
+            "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-codec-traces.json",
+            "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-codec-traces.wav"
+          ]
+        }
+      ],
+      "paired_full_generation": {
+        "script": "/private/tmp/cogni-drama3-reference/benchmark_shared_mapping.py",
+        "argv": [
+          "python3",
+          "/private/tmp/cogni-drama3-reference/benchmark_shared_mapping.py"
+        ],
+        "env": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MMAP_SHARED": "1",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DELTA_TRANSPOSE": "1",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "25",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1"
+        },
+        "note": "Script sets arm0/1, graph2, unsets profiling, alternates AB/BA and checks exact WAV/report/drain. Pair2 continuation is recorded separately as unpaired and aborted."
+      },
+      "extent_probe": {
+        "cwd": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml",
+        "env": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DELTA_TRANSPOSE": "1",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "25",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1"
+        },
+        "argv_template": [
+          "scripts/run_safe.sh",
+          "/usr/bin/time",
+          "180",
+          "8192",
+          "-l",
+          "/tmp/drama3_shared_final_startup_probe",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50/model-00001-of-00005.safetensors",
+          "--extent=EXTENT"
+        ],
+        "executed_extent_order": [
+          "window",
+          "shard",
+          "shard",
+          "window"
+        ]
+      },
+      "numeric_comparison": {
+        "recheck_argv": [
+          "scripts/run_safe.sh",
+          "python3",
+          "180",
+          "8192",
+          "/private/tmp/cogni-drama3-reference/check_shared_numerics.py"
+        ],
+        "recheck_env": {
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "25",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "backbone": "spec.support.drama3.reference_compare.compare_bundles(reference, actual, atol=6e-5, rtol=3e-4)",
+        "tower": "compare_bundles(reference, actual, atol=6e-4, rtol=3e-4)",
+        "strict_tower": "compare_bundles(reference, actual, atol=3e-5, rtol=3e-4, prefixes=the four recorded prefixes)",
+        "codec": "Final codec_trace executable enforces gates before writing output; all samples also checked with Float32 arithmetic. Previous native trace names, lengths and Float32-packed values compared bitwise."
+      }
+    }
+  },
+  "startup_diagnostic": {
+    "runs": [
+      {
+        "setup": {
+          "event": "setup",
+          "extent": "window",
+          "shard_bytes": 5498947446,
+          "buffer_bytes": 16384,
+          "page_bytes": 16384,
+          "dispatches_per_command": 5,
+          "commands_planned": 3,
+          "mmap_shared": false,
+          "cpu_prefault": false,
+          "prefault_checksum": null,
+          "madvise_random": false,
+          "pipeline_seconds": 0.003532709,
+          "mapping_seconds": 0.01376625,
+          "madvise_seconds": 0.0,
+          "prefault_seconds": 0.0,
+          "input_buffer_seconds": 3.5084e-05,
+          "output_buffer_seconds": 1.05e-05,
+          "setup_seconds": 0.01381675,
+          "full_elapsed_seconds": 0.060686167
+        },
+        "commands": [
+          {
+            "event": "command",
+            "extent": "window",
+            "iteration": 0,
+            "encode_seconds": 0.000231,
+            "wait_seconds": 0.000880834,
+            "readback_seconds": 2.208e-06,
+            "gpu_seconds": 2.3916363716125488e-05,
+            "input_first_word": 29550,
+            "output_value": 29550.0,
+            "full_elapsed_seconds": 0.0618655
+          },
+          {
+            "event": "command",
+            "extent": "window",
+            "iteration": 1,
+            "encode_seconds": 2.4208e-05,
+            "wait_seconds": 0.000285042,
+            "readback_seconds": 1.583e-06,
+            "gpu_seconds": 2.0499806851148605e-05,
+            "input_first_word": 29550,
+            "output_value": 29550.0,
+            "full_elapsed_seconds": 0.062189959
+          },
+          {
+            "event": "command",
+            "extent": "window",
+            "iteration": 2,
+            "encode_seconds": 6.3542e-05,
+            "wait_seconds": 0.000363375,
+            "readback_seconds": 5.42e-07,
+            "gpu_seconds": 2.0999927073717117e-05,
+            "input_first_word": 29550,
+            "output_value": 29550.0,
+            "full_elapsed_seconds": 0.062634375
+          }
+        ],
+        "process_seconds": 0.25,
+        "peak_memory_footprint_bytes": 8733320,
+        "maximum_resident_set_bytes": 17760256,
+        "artifacts": [
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-0-window.stdout.log",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-0-window.stderr.log"
+        ]
+      },
+      {
+        "setup": {
+          "event": "setup",
+          "extent": "shard",
+          "shard_bytes": 5498947446,
+          "buffer_bytes": 5498961920,
+          "page_bytes": 16384,
+          "dispatches_per_command": 5,
+          "commands_planned": 3,
+          "mmap_shared": false,
+          "cpu_prefault": false,
+          "prefault_checksum": null,
+          "madvise_random": false,
+          "pipeline_seconds": 0.001664709,
+          "mapping_seconds": 0.014976042,
+          "madvise_seconds": 0.0,
+          "prefault_seconds": 0.0,
+          "input_buffer_seconds": 0.000201041,
+          "output_buffer_seconds": 9.291e-06,
+          "setup_seconds": 0.015195959,
+          "full_elapsed_seconds": 0.054831292
+        },
+        "commands": [
+          {
+            "event": "command",
+            "extent": "shard",
+            "iteration": 0,
+            "encode_seconds": 0.000239916,
+            "wait_seconds": 0.518645292,
+            "readback_seconds": 3.291e-06,
+            "gpu_seconds": 2.5250017642974854e-05,
+            "input_first_word": 29550,
+            "output_value": 29550.0,
+            "full_elapsed_seconds": 0.573782625
+          },
+          {
+            "event": "command",
+            "extent": "shard",
+            "iteration": 1,
+            "encode_seconds": 3.5958e-05,
+            "wait_seconds": 0.000300875,
+            "readback_seconds": 2.25e-06,
+            "gpu_seconds": 2.074986696243286e-05,
+            "input_first_word": 29550,
+            "output_value": 29550.0,
+            "full_elapsed_seconds": 0.574134542
+          },
+          {
+            "event": "command",
+            "extent": "shard",
+            "iteration": 2,
+            "encode_seconds": 2.2541e-05,
+            "wait_seconds": 0.000250459,
+            "readback_seconds": 8.75e-07,
+            "gpu_seconds": 2.150004729628563e-05,
+            "input_first_word": 29550,
+            "output_value": 29550.0,
+            "full_elapsed_seconds": 0.574419125
+          }
+        ],
+        "process_seconds": 0.58,
+        "peak_memory_footprint_bytes": 8929928,
+        "maximum_resident_set_bytes": 17956864,
+        "artifacts": [
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-1-shard.stdout.log",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-1-shard.stderr.log"
+        ]
+      },
+      {
+        "setup": {
+          "event": "setup",
+          "extent": "shard",
+          "shard_bytes": 5498947446,
+          "buffer_bytes": 5498961920,
+          "page_bytes": 16384,
+          "dispatches_per_command": 5,
+          "commands_planned": 3,
+          "mmap_shared": false,
+          "cpu_prefault": false,
+          "prefault_checksum": null,
+          "madvise_random": false,
+          "pipeline_seconds": 0.001806,
+          "mapping_seconds": 0.01304875,
+          "madvise_seconds": 0.0,
+          "prefault_seconds": 0.0,
+          "input_buffer_seconds": 0.000206166,
+          "output_buffer_seconds": 1.0042e-05,
+          "setup_seconds": 0.013268541,
+          "full_elapsed_seconds": 0.060805125
+        },
+        "commands": [
+          {
+            "event": "command",
+            "extent": "shard",
+            "iteration": 0,
+            "encode_seconds": 0.000229292,
+            "wait_seconds": 0.519265458,
+            "readback_seconds": 5.083e-06,
+            "gpu_seconds": 2.4499837309122086e-05,
+            "input_first_word": 29550,
+            "output_value": 29550.0,
+            "full_elapsed_seconds": 0.58035725
+          },
+          {
+            "event": "command",
+            "extent": "shard",
+            "iteration": 1,
+            "encode_seconds": 3.75e-05,
+            "wait_seconds": 0.012606792,
+            "readback_seconds": 1.958e-06,
+            "gpu_seconds": 2.4166889488697052e-05,
+            "input_first_word": 29550,
+            "output_value": 29550.0,
+            "full_elapsed_seconds": 0.593019792
+          },
+          {
+            "event": "command",
+            "extent": "shard",
+            "iteration": 2,
+            "encode_seconds": 2.2917e-05,
+            "wait_seconds": 0.00073025,
+            "readback_seconds": 3.125e-06,
+            "gpu_seconds": 2.4124979972839355e-05,
+            "input_first_word": 29550,
+            "output_value": 29550.0,
+            "full_elapsed_seconds": 0.593789958
+          }
+        ],
+        "process_seconds": 0.6,
+        "peak_memory_footprint_bytes": 8831648,
+        "maximum_resident_set_bytes": 17842176,
+        "artifacts": [
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-2-shard.stdout.log",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-2-shard.stderr.log"
+        ]
+      },
+      {
+        "setup": {
+          "event": "setup",
+          "extent": "window",
+          "shard_bytes": 5498947446,
+          "buffer_bytes": 16384,
+          "page_bytes": 16384,
+          "dispatches_per_command": 5,
+          "commands_planned": 3,
+          "mmap_shared": false,
+          "cpu_prefault": false,
+          "prefault_checksum": null,
+          "madvise_random": false,
+          "pipeline_seconds": 0.002000666,
+          "mapping_seconds": 0.014958834,
+          "madvise_seconds": 0.0,
+          "prefault_seconds": 0.0,
+          "input_buffer_seconds": 3.7375e-05,
+          "output_buffer_seconds": 7.417e-06,
+          "setup_seconds": 0.015008541,
+          "full_elapsed_seconds": 0.057188167
+        },
+        "commands": [
+          {
+            "event": "command",
+            "extent": "window",
+            "iteration": 0,
+            "encode_seconds": 0.000246834,
+            "wait_seconds": 0.00081725,
+            "readback_seconds": 1.542e-06,
+            "gpu_seconds": 2.3749656975269318e-05,
+            "input_first_word": 29550,
+            "output_value": 29550.0,
+            "full_elapsed_seconds": 0.058326792
+          },
+          {
+            "event": "command",
+            "extent": "window",
+            "iteration": 1,
+            "encode_seconds": 1.5375e-05,
+            "wait_seconds": 0.000239667,
+            "readback_seconds": 4.17e-07,
+            "gpu_seconds": 2.0625069737434387e-05,
+            "input_first_word": 29550,
+            "output_value": 29550.0,
+            "full_elapsed_seconds": 0.058591
+          },
+          {
+            "event": "command",
+            "extent": "window",
+            "iteration": 2,
+            "encode_seconds": 1.1375e-05,
+            "wait_seconds": 0.000290625,
+            "readback_seconds": 6.25e-07,
+            "gpu_seconds": 2.1374784409999847e-05,
+            "input_first_word": 29550,
+            "output_value": 29550.0,
+            "full_elapsed_seconds": 0.058898958
+          }
+        ],
+        "process_seconds": 0.06,
+        "peak_memory_footprint_bytes": 8733344,
+        "maximum_resident_set_bytes": 17743872,
+        "artifacts": [
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-3-window.stdout.log",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-3-window.stderr.log"
+        ]
+      }
+    ],
+    "options_and_cli": "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-options.json",
+    "options_status": "Shared mapping + prefault + MADV_RANDOM on tiny fixture passed three commands; three malformed/duplicate option cases rejected.",
+    "interpretation": "A buffer-extent-associated first wait is reproduced without model compute. It does not isolate driver pinning, page faults, deferred compilation, or all model startup delay.",
+    "internal_timer_scope": "Starts after CLI/path/environment validation, before backend initialization; omits process launch, last JSON emission and cleanup. Outer process time covers those."
+  },
+  "performance": {
+    "completed_runs": [
+      {
+        "pair": 0,
+        "shared": 1,
+        "app_seconds": 10.53856275,
+        "process_seconds": 11.0,
+        "wrapper_seconds": 11.961844292003661,
+        "peak_memory_footprint_bytes": 1708950488,
+        "maximum_resident_set_bytes": 146440192,
+        "graph": {
+          "depth": 2,
+          "submitted": 73,
+          "completed": 73,
+          "pending": 0,
+          "max_pending": 2,
+          "completion_waits": 73,
+          "retained_bytes": 0,
+          "max_retained_bytes": 31903032324
+        },
+        "verification": {
+          "stem": "shared-mapping-paired-0-1",
+          "app_seconds": 10.53856275,
+          "process_seconds": 11.0,
+          "peak_memory_footprint_bytes": 1708950488,
+          "maximum_resident_set_bytes": 146440192,
+          "exact_baseline_wav_prompt_codes_eos_and_readbacks": true,
+          "frames": 17,
+          "readbacks": {
+            "control": 152,
+            "terminal": 140012
+          },
+          "graph": {
+            "depth": 2,
+            "submitted": 73,
+            "completed": 73,
+            "pending": 0,
+            "max_pending": 2,
+            "completion_waits": 73,
+            "retained_bytes": 0,
+            "max_retained_bytes": 31903032324
+          },
+          "artifacts": [
+            "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-0-1.wav",
+            "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-0-1.wav.json",
+            "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-0-1.stderr.log"
+          ]
+        }
+      },
+      {
+        "pair": 0,
+        "shared": 0,
+        "app_seconds": 20.521915875,
+        "process_seconds": 20.97,
+        "wrapper_seconds": 21.73439779225737,
+        "peak_memory_footprint_bytes": 1709409264,
+        "maximum_resident_set_bytes": 140804096,
+        "graph": {
+          "depth": 2,
+          "submitted": 73,
+          "completed": 73,
+          "pending": 0,
+          "max_pending": 2,
+          "completion_waits": 73,
+          "retained_bytes": 0,
+          "max_retained_bytes": 31903032324
+        },
+        "verification": {
+          "stem": "shared-mapping-paired-0-0",
+          "app_seconds": 20.521915875,
+          "process_seconds": 20.97,
+          "peak_memory_footprint_bytes": 1709409264,
+          "maximum_resident_set_bytes": 140804096,
+          "exact_baseline_wav_prompt_codes_eos_and_readbacks": true,
+          "frames": 17,
+          "readbacks": {
+            "control": 152,
+            "terminal": 140012
+          },
+          "graph": {
+            "depth": 2,
+            "submitted": 73,
+            "completed": 73,
+            "pending": 0,
+            "max_pending": 2,
+            "completion_waits": 73,
+            "retained_bytes": 0,
+            "max_retained_bytes": 31903032324
+          },
+          "artifacts": [
+            "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-0-0.wav",
+            "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-0-0.wav.json",
+            "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-0-0.stderr.log"
+          ]
+        }
+      },
+      {
+        "pair": 1,
+        "shared": 0,
+        "app_seconds": 24.832105166,
+        "process_seconds": 25.2,
+        "wrapper_seconds": 25.465004042256624,
+        "peak_memory_footprint_bytes": 1777878000,
+        "maximum_resident_set_bytes": 140820480,
+        "graph": {
+          "depth": 2,
+          "submitted": 73,
+          "completed": 73,
+          "pending": 0,
+          "max_pending": 2,
+          "completion_waits": 73,
+          "retained_bytes": 0,
+          "max_retained_bytes": 31903032324
+        },
+        "verification": {
+          "stem": "shared-mapping-paired-1-0",
+          "app_seconds": 24.832105166,
+          "process_seconds": 25.2,
+          "peak_memory_footprint_bytes": 1777878000,
+          "maximum_resident_set_bytes": 140820480,
+          "exact_baseline_wav_prompt_codes_eos_and_readbacks": true,
+          "frames": 17,
+          "readbacks": {
+            "control": 152,
+            "terminal": 140012
+          },
+          "graph": {
+            "depth": 2,
+            "submitted": 73,
+            "completed": 73,
+            "pending": 0,
+            "max_pending": 2,
+            "completion_waits": 73,
+            "retained_bytes": 0,
+            "max_retained_bytes": 31903032324
+          },
+          "artifacts": [
+            "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-1-0.wav",
+            "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-1-0.wav.json",
+            "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-1-0.stderr.log"
+          ]
+        }
+      },
+      {
+        "pair": 1,
+        "shared": 1,
+        "app_seconds": 18.23095625,
+        "process_seconds": 18.6,
+        "wrapper_seconds": 18.740926832892,
+        "peak_memory_footprint_bytes": 1708868568,
+        "maximum_resident_set_bytes": 146309120,
+        "graph": {
+          "depth": 2,
+          "submitted": 73,
+          "completed": 73,
+          "pending": 0,
+          "max_pending": 2,
+          "completion_waits": 73,
+          "retained_bytes": 0,
+          "max_retained_bytes": 31903032324
+        },
+        "verification": {
+          "stem": "shared-mapping-paired-1-1",
+          "app_seconds": 18.23095625,
+          "process_seconds": 18.6,
+          "peak_memory_footprint_bytes": 1708868568,
+          "maximum_resident_set_bytes": 146309120,
+          "exact_baseline_wav_prompt_codes_eos_and_readbacks": true,
+          "frames": 17,
+          "readbacks": {
+            "control": 152,
+            "terminal": 140012
+          },
+          "graph": {
+            "depth": 2,
+            "submitted": 73,
+            "completed": 73,
+            "pending": 0,
+            "max_pending": 2,
+            "completion_waits": 73,
+            "retained_bytes": 0,
+            "max_retained_bytes": 31903032324
+          },
+          "artifacts": [
+            "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-1-1.wav",
+            "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-1-1.wav.json",
+            "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-1-1.stderr.log"
+          ]
+        }
+      },
+      {
+        "pair": 2,
+        "shared": 1,
+        "app_seconds": 9.632827166,
+        "process_seconds": 9.89,
+        "wrapper_seconds": 10.734469832852483,
+        "peak_memory_footprint_bytes": 1708884952,
+        "maximum_resident_set_bytes": 146358272,
+        "graph": {
+          "depth": 2,
+          "submitted": 73,
+          "completed": 73,
+          "pending": 0,
+          "max_pending": 2,
+          "completion_waits": 73,
+          "retained_bytes": 0,
+          "max_retained_bytes": 31903032324
+        },
+        "verification": {
+          "stem": "shared-mapping-paired-2-1",
+          "app_seconds": 9.632827166,
+          "process_seconds": 9.89,
+          "peak_memory_footprint_bytes": 1708884952,
+          "maximum_resident_set_bytes": 146358272,
+          "exact_baseline_wav_prompt_codes_eos_and_readbacks": true,
+          "frames": 17,
+          "readbacks": {
+            "control": 152,
+            "terminal": 140012
+          },
+          "graph": {
+            "depth": 2,
+            "submitted": 73,
+            "completed": 73,
+            "pending": 0,
+            "max_pending": 2,
+            "completion_waits": 73,
+            "retained_bytes": 0,
+            "max_retained_bytes": 31903032324
+          },
+          "artifacts": [
+            "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-2-1.wav",
+            "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-2-1.wav.json",
+            "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-2-1.stderr.log"
+          ]
+        }
+      }
+    ],
+    "process_shared_over_private_ratios": [
+      0.5245588936576061,
+      0.7380952380952381
+    ],
+    "paired_sample_count": 2,
+    "unpaired_shared_pair2_included_in_ratios": false,
+    "aborted_attempts": [
+      {
+        "stem": "shared-mapping-paired-2-0",
+        "mapping_shared": 0,
+        "graph_depth": 2,
+        "status": "incomplete: unchanged memory guard terminated process",
+        "successful_timing_or_parity_evidence": false,
+        "stderr": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-2-0.stderr.log"
+      },
+      {
+        "stem": "shared-mapping-retry-paired-2-1",
+        "mapping_shared": 1,
+        "graph_depth": 2,
+        "status": "incomplete: unchanged memory guard terminated process",
+        "successful_timing_or_parity_evidence": false,
+        "stderr": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-retry-paired-2-1.stderr.log"
+      },
+      {
+        "stem": "shared-owned-final-2",
+        "mapping_shared": 1,
+        "graph_depth": 2,
+        "status": "incomplete: unchanged memory guard terminated process",
+        "successful_timing_or_parity_evidence": false,
+        "stderr": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-final-2.stderr.log"
+      }
+    ],
+    "promotion": "withheld",
+    "artifact": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-benchmark-progress.json",
+    "memory_interpretation": "Per-process footprint and retained-byte bookkeeping do not measure complete physical/file-backed/Metal residency.",
+    "next_falsifier": "Repeated completed same-binary AB/BA full-process pairs at graph depths0/2 with sufficient headroom, explicit file-cache controls and first-submit intervals."
+  },
+  "rejected_routes": [
+    {
+      "route": "Per-tensor no-copy weight views",
+      "process_view_over_default_ratios": [
+        1.029940119760479,
+        1.0450878025628856,
+        0.8877708978328174,
+        1.0254117647058822
+      ],
+      "decision": "Removed candidate: three of four completed pairs regressed despite exact WAV/ledger parity. Retained-byte reduction was extent bookkeeping, not RAM evidence.",
+      "artifacts": [
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/weight-views-benchmark-progress.json",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/rejected-weight-views.patch",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/rejected-weight-views-spec.cr"
+      ]
+    },
+    {
+      "route": "CPU prefault all shards",
+      "setup_seconds": 24.0218925,
+      "first_wait_seconds": 5.7412343,
+      "decision": "Not retained; preparation counted inside full probe and worsened measured corridor.",
+      "artifacts": [
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-probe-v3-all-prefault-0.stdout.log",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-probe-v3-all-prefault-0.stderr.log"
+      ]
+    },
+    {
+      "route": "MADV_RANDOM inference",
+      "decision": "One cache-uncontrolled scratch probe did not improve preceding probe; no inference madvise change retained. Diagnostic option remains explicit.",
+      "artifacts": [
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-probe-v4-random-0.stdout.log",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-probe-v4-random-0.stderr.log"
+      ]
+    }
+  ],
+  "adversary": {
+    "review_lineage": "Same-lineage source review is correlated, not independent replication.",
+    "highest_risk": "Mapped GPU write or owner release before queued completion.",
+    "discriminators": [
+      "Current mapped tensor shader arguments are const; outputs separately allocated.",
+      "Both-mode queued use through GC, exact result, pending/retained zero and unchanged fixture bytes.",
+      "All nine pinned asset hashes match after runs."
+    ],
+    "residual": "Exposed mutable pointers/handles can bypass convention; source review and executed guards do not enforce arbitrary future callers.",
+    "dual_frame": "Private read-only mapping and synchronous graph depth0.",
+    "ltp_wba": "Ordinary mmap choice, not an LTP/WBA move. No recomputed global-potential descent or Collapse certificate admitted.",
+    "potential_order": [
+      "semantic or ownership error",
+      "undrained lease",
+      "memory-guard breach",
+      "full-process wall time",
+      "avoidable waits"
+    ]
+  },
+  "validation": {
+    "project_template_present": false,
+    "project_validator_present": false,
+    "fallback": "JSON parse, required scope checks and actual source/artifact digest dereference. This checks recorded identities/availability and selected assertions; it is not schema certification, proof of command execution or independent replication."
+  },
+  "refresh": {
+    "assumptions": [
+      "Pinned immutable model/reference",
+      "Current numerical precision and serial queue/owner contract",
+      "Recorded source/binary identities",
+      "Current diagnostic workload/device/toolchain"
+    ],
+    "decay_trigger": "Source/reference/assets/precision/compiler/input/device/OS changes or evidence artifact loss. Timing also decays with host/cache state.",
+    "operation": "Rebuild, rerun ownership/residency tests, upstream traces and exact full WAV; repeat matched full-process comparisons for any speed promotion.",
+    "failure_policy": "Reopen dependent claims and keep private default; preserve failed attempts without counting them as successful timings."
+  },
+  "artifacts": {
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-0-window.stdout.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-0-window.stdout.log",
+      "bytes": 1225,
+      "sha256": "1ff70b205860eff5bb6c4bb6febf21005d69793e5605241cc35f4cd9990f39c1",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-0-window.stderr.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-0-window.stderr.log",
+      "bytes": 2208,
+      "sha256": "a106aa4bf55f9f4278c7f52efafa39b3c93bff43e2ee8405c0726679b88c71f7",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-1-shard.stdout.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-1-shard.stdout.log",
+      "bytes": 1233,
+      "sha256": "0856051fe1c346949b7a2aa39b1c37e8de3344a7820090f7195216d21bbf8ef2",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-1-shard.stderr.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-1-shard.stderr.log",
+      "bytes": 2210,
+      "sha256": "854e32d755d8b1315d548b1e27775e5e99fe55f4fee84cb19b197b510f03e28e",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-2-shard.stdout.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-2-shard.stdout.log",
+      "bytes": 1230,
+      "sha256": "ecfc46df5afb7761fef4e7cc3cec4ebef4b6ab29188a516443f5beed971d3392",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-2-shard.stderr.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-2-shard.stderr.log",
+      "bytes": 2211,
+      "sha256": "5c2faf8a4c19701fcb7518059eb5fceb95e812aac8bda1b5b73c57d47ece06a7",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-3-window.stdout.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-3-window.stdout.log",
+      "bytes": 1228,
+      "sha256": "a44ad69e81a9b12006fcf1ba351f27139ca2afafe4f51000869910725fb575d6",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-3-window.stderr.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-3-window.stderr.log",
+      "bytes": 2208,
+      "sha256": "3fb7a785202bd23835a13e446a9804ca7a498a8b9ad2776244f815e1982505c6",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-0-1.wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-0-1.wav",
+      "bytes": 69676,
+      "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-0-1.wav.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-0-1.wav.json",
+      "bytes": 3335,
+      "sha256": "83fdb6b4dcb5872dc678b0e8e67f32af59eeceb5e4130b42eb2b4809425e6883",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-0-1.stderr.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-0-1.stderr.log",
+      "bytes": 2248,
+      "sha256": "3b9e67f342d57f099b7ed04b4bb998be5be94d50473cd7e5e516065a504c1bdd",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-0-0.wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-0-0.wav",
+      "bytes": 69676,
+      "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-0-0.wav.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-0-0.wav.json",
+      "bytes": 3336,
+      "sha256": "25ede25281b7e84006596fd11c45f2a24ed94c2d57a96459212f91bc4da77421",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-0-0.stderr.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-0-0.stderr.log",
+      "bytes": 2284,
+      "sha256": "a855adcf03815ce58cca3d56f2e144021d54708d8d069802d1c3b701283704a8",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-1-0.wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-1-0.wav",
+      "bytes": 69676,
+      "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-1-0.wav.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-1-0.wav.json",
+      "bytes": 3336,
+      "sha256": "d3285ae682e1a48414ab1b141082c9b8fb207963ef40a7035b0380f326ce266f",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-1-0.stderr.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-1-0.stderr.log",
+      "bytes": 2287,
+      "sha256": "6fbe3ed2189f05d87095c8e0b1522f9145a1681e08a0a5406172ca6c1227ef39",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-1-1.wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-1-1.wav",
+      "bytes": 69676,
+      "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-1-1.wav.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-1-1.wav.json",
+      "bytes": 3335,
+      "sha256": "1d4677189485d3e0b37748adf39339be23eb0d7cd0d50acf4cc09a2fd9ba96b3",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-1-1.stderr.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-1-1.stderr.log",
+      "bytes": 2285,
+      "sha256": "bd8a99cb97355c02e9f62149eb2a4d201cc3c5686d65b34864e0da0859cc7882",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-2-1.wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-2-1.wav",
+      "bytes": 69676,
+      "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-2-1.wav.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-2-1.wav.json",
+      "bytes": 3335,
+      "sha256": "99304b5bbf25d7deffa79dd56c5fb9950a866c171d7537155ec23ca1888cc7cf",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-2-1.stderr.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-2-1.stderr.log",
+      "bytes": 2249,
+      "sha256": "78009895c7b790a0c2287a252d5f16181a44f0b93c7b89f8fed690fe65a902d6",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-final-0.wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-final-0.wav",
+      "bytes": 69676,
+      "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-final-0.wav.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-final-0.wav.json",
+      "bytes": 3324,
+      "sha256": "2c22ef268ca68a6aaae7036af2eb0d9a65c108344d40f42198a78a522f8be9b4",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-final-0.stderr.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-final-0.stderr.log",
+      "bytes": 2244,
+      "sha256": "14ccf69353937a566a2add4456023152132e737d7fb5e746ac2d4750d9f0f866",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-timeline-0.wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-timeline-0.wav",
+      "bytes": 69676,
+      "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-timeline-0.wav.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-timeline-0.wav.json",
+      "bytes": 3325,
+      "sha256": "31e5060a53df393246d0ac0cef1e78a95c1786a67187c307204c9f78bf4d51b0",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-timeline-0.stderr.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-timeline-0.stderr.log",
+      "bytes": 41535,
+      "sha256": "4f5b4f20524c2768143d3f42747b90962a1f2f39ace502941d2a3d9b6a358ef7",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-2-0.stderr.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-paired-2-0.stderr.log",
+      "bytes": 1536,
+      "sha256": "a9a7fd1c17e2248a7eb1cf4f6723d0afb114fbd63164a977483ff7799ab5cddf",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-retry-paired-2-1.stderr.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-retry-paired-2-1.stderr.log",
+      "bytes": 1189,
+      "sha256": "499b19c222eca575555b6a500422d53a77f31b0a19f77f31398c83049fd461b5",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-final-2.stderr.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-final-2.stderr.log",
+      "bytes": 5854,
+      "sha256": "30ae16bff829e34646ba984f72673a03486cf44f7c6d55b702312dee7540f779",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-metal-depth0.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-metal-depth0.log",
+      "bytes": 539,
+      "sha256": "5685fb57200902672d1efffd7ce01de47eee4b750f2340fa4c38985cb638fd9b",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-metal-depth2.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-metal-depth2.log",
+      "bytes": 540,
+      "sha256": "4a26be2736eeaec9d6d60b30a325015d493df27326e3e78c88daf19dbfd294d4",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-cpu.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-cpu.log",
+      "bytes": 158,
+      "sha256": "321b71b4216f788f1a106a8918580067fd3fea2c2aa7c2040939ef8a7338a7e8",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-python.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-python.log",
+      "bytes": 104,
+      "sha256": "ec5c7a14d020c8e93eee133ecd150e04f42663449263b4b674806c0ee47247b9",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-numerical-progress.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-numerical-progress.json",
+      "bytes": 1358,
+      "sha256": "262c4765bd596d1da9a8be4eac68f788e740a3f707e1e241bc26ae92d8eeb736",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-numerical-rechecked.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-numerical-rechecked.json",
+      "bytes": 1358,
+      "sha256": "cf16595f7fe9aaa1102df303935b88adcc024cb96155575247813d849f3e55a0",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/private/tmp/cogni-drama3-reference/check_shared_numerics.py": {
+      "path": "/private/tmp/cogni-drama3-reference/check_shared_numerics.py",
+      "bytes": 2556,
+      "sha256": "59cf57c4d9fc722f7618b6396a8994b39716596991bb14a7b3115a11ff7693ba",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/private/tmp/cogni-drama3-reference/actual_inputs.json": {
+      "path": "/private/tmp/cogni-drama3-reference/actual_inputs.json",
+      "bytes": 92119,
+      "sha256": "4936da6d65d264ab6251d5451d022686b884eed2797094832d44015cfb2774de",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/private/tmp/cogni-drama3-reference/native_actual_tower_inputs.json": {
+      "path": "/private/tmp/cogni-drama3-reference/native_actual_tower_inputs.json",
+      "bytes": 49887,
+      "sha256": "a6eb8809a66e2c95ebdcdd9fb9fccd442dbdcf0a123c0993775304a69c9db514",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/private/tmp/cogni-drama3-reference/mlx_actual_backbone.json": {
+      "path": "/private/tmp/cogni-drama3-reference/mlx_actual_backbone.json",
+      "bytes": 9841119,
+      "sha256": "1c5d92f82368d1850cd67c65c368eafb9466f7cf60b0ddac357714e71c1b8127",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/private/tmp/cogni-drama3-reference/torch_actual_tower_traces.json": {
+      "path": "/private/tmp/cogni-drama3-reference/torch_actual_tower_traces.json",
+      "bytes": 39542597,
+      "sha256": "784057f0d440401183b8db66c1ab07d34e262525a358c7944207558b5e2debaa",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/private/tmp/cogni-drama3-reference/codec_resident_2frame_reference.json": {
+      "path": "/private/tmp/cogni-drama3-reference/codec_resident_2frame_reference.json",
+      "bytes": 103267653,
+      "sha256": "b514a7f002ead6653ddc4990f1be8b05e88bd3c730d175ed8a537892f9186b9f",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-backbone-traces.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-backbone-traces.json",
+      "bytes": 5502130,
+      "sha256": "aa9a9a5aa4e4253f77b5625beb557ed95e22f640915ffa22653734b17fe6d90a",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-tower-traces.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-tower-traces.json",
+      "bytes": 39540929,
+      "sha256": "8d1f8b35ec10c106cdc7a62b99f1946716c7ba8016b3d51ef4c9aec0c2dc2614",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-codec-traces.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-owned-codec-traces.json",
+      "bytes": 103273557,
+      "sha256": "c3fa63eb0bdeb8e5cbff5c8d564eb3b26c79de49b7dd8652cbfe79f4c75b0adc",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-owned-backbone-traces.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-owned-backbone-traces.json",
+      "bytes": 5502130,
+      "sha256": "aa9a9a5aa4e4253f77b5625beb557ed95e22f640915ffa22653734b17fe6d90a",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-owned-tower-traces.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-owned-tower-traces.json",
+      "bytes": 39540929,
+      "sha256": "8d1f8b35ec10c106cdc7a62b99f1946716c7ba8016b3d51ef4c9aec0c2dc2614",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-owned-codec-traces.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-owned-codec-traces.json",
+      "bytes": 103273550,
+      "sha256": "929fe893de4fcc115305a66f4622af7c7b32755be98ca1d35ff00d406705b044",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-final-build-generate.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-final-build-generate.log",
+      "bytes": 61,
+      "sha256": "204e16526c2bcf79a53f60bf1f71067e91ec9e841d8b4a03d8bd0b370a6bf790",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-final-build-backbone_trace.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-final-build-backbone_trace.log",
+      "bytes": 61,
+      "sha256": "9f8b95324a2173ff1e340383295b7f74bc77536fb77fa863d42da8ad1a1e37d4",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-final-build-tower_trace.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-final-build-tower_trace.log",
+      "bytes": 61,
+      "sha256": "d54118b0b4057b7d90734b35eed559c9a7740ad644f39fc157e4dc2d436dd850",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-final-build-codec_trace.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-final-build-codec_trace.log",
+      "bytes": 61,
+      "sha256": "9f8b95324a2173ff1e340383295b7f74bc77536fb77fa863d42da8ad1a1e37d4",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-final-build-startup_probe.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-final-build-startup_probe.log",
+      "bytes": 61,
+      "sha256": "ce4c670f309f0310ed5009bafbb46d943caa01603aa7c89b7e5ea705333df3e8",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/private/tmp/cogni-drama3-reference/benchmark_shared_mapping.py": {
+      "path": "/private/tmp/cogni-drama3-reference/benchmark_shared_mapping.py",
+      "bytes": 2344,
+      "sha256": "bb81a4c83c7e212e499b420cc50b1ea6d078eb73400f6ef1f174e85a6ba7e595",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-assets-verified.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-assets-verified.json",
+      "bytes": 2039,
+      "sha256": "5c9a47a41f1af07ba076b357885800ad938488762a32efaf9769e846c0faffbe",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-speed-baseline.wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-speed-baseline.wav",
+      "bytes": 69676,
+      "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-speed-baseline.wav.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/hello-speed-baseline.wav.json",
+      "bytes": 3121,
+      "sha256": "85511b7b46695acc804137e87a5fc0c8b3836c9561f1059acd87234635ef50df",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-options.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-owned-options.json",
+      "bytes": 1712,
+      "sha256": "e30d6589e37f5a24190078f9db50429fa8163f0885f4a681ea8eded5eec000a5",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-benchmark-progress.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/shared-mapping-benchmark-progress.json",
+      "bytes": 2317,
+      "sha256": "7eb9d766e3e7cb6c90e6ec30dc5a7c68c329b075fa24be9f8be8a0a5af7da366",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/weight-views-benchmark-progress.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/weight-views-benchmark-progress.json",
+      "bytes": 3711,
+      "sha256": "217314c4f0c7b747f6c707856ee32354807f8196388789bf79ab545e0fd90e7a",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/rejected-weight-views.patch": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/rejected-weight-views.patch",
+      "bytes": 4553,
+      "sha256": "4bea2506eb1b42586ebaf4a1653aa47b4b2af113fe25719342e68770fc03c1ae",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/rejected-weight-views-spec.cr": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/rejected-weight-views-spec.cr",
+      "bytes": 6814,
+      "sha256": "9f612ca5cdb61d210842013a57dbe5da55a69d5273fecf4982a303415e030751",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-probe-v3-all-prefault-0.stdout.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-probe-v3-all-prefault-0.stdout.log",
+      "bytes": 1458,
+      "sha256": "e014e09b70a4bd903fc675e705a84fe5a6c3cb1584aab12000324135fede352d",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-probe-v3-all-prefault-0.stderr.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-probe-v3-all-prefault-0.stderr.log",
+      "bytes": 3178,
+      "sha256": "f5db5153432ef0e7df11cb21f9741691f3522b180e865a8b1895092bb17a736d",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-probe-v4-random-0.stdout.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-probe-v4-random-0.stdout.log",
+      "bytes": 741,
+      "sha256": "075a451b1e2617d72b3146fe32d25ea8032c64712145fadcd24ee89eec411fec",
+      "availability": "local cache or temporary artifact; not committed"
+    },
+    "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-probe-v4-random-0.stderr.log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/startup-probe-v4-random-0.stderr.log",
+      "bytes": 3175,
+      "sha256": "1a897231738c6b7c9986a277f45c70cdd2bb10a653b42a5a55de2b7406d331ea",
+      "availability": "local cache or temporary artifact; not committed"
+    }
+  }
+}

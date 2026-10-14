@@ -28760,3 +28760,45 @@ Refresh after source/toolchain/device/model/workload changes.
 - Next falsifier: attribute the roughly 11-second first-command pre-GPU
   interval. Refresh matched timings and memory bounds on source, weights,
   compiler, input, device/OS, or evidence drift.
+
+### Continuation 2026-10-14 — DRAMA-3 first-submit extent and shared mapping
+
+- Base `0f62797e`. The old binary reproduced 14.310 s before first GPU start
+  versus 0.173 s GPU execution. A new bounded diagnostic repeats five identical
+  dispatches per command: same-file 16 KiB / 5.50 GB views yield first waits
+  0.881/0.817 ms versus 518.645/519.265 ms in four fresh processes. This
+  reproduces an extent-associated delay without model compute; it does not
+  isolate driver pinning, page faults, deferred compilation, or cold caches.
+- Keep opt-in `DRAMA3_MMAP_SHARED=1`; default/rollback `0` stays MAP_PRIVATE.
+  Both modes use PROT_READ and unchanged owners/whole-shard no-copy GPU views,
+  kernels, Shared storage, tracked hazards, and queue ordering. Stable immutable
+  checkpoints and reset only after every referencing context drains remain
+  caller requirements; exposed raw handles/pointers are unsafe plumbing.
+- Two same-binary full-process AB/BA shared/private pairs measured 11.00/20.97 s
+  and 18.60/25.20 s, using the earlier timed binary (formatter-only delta to
+  final); cache/host state was uncontrolled. An unpaired shared run took 9.89 s.
+  All completed graph runs preserved exact 17 frames/EOS/WAV, 152 control /
+  140,012 terminal read bytes and drained leases. Three later full attempts
+  (private and shared)
+  hit the unchanged 25% system-free-memory guard; retain them as incomplete,
+  not successful timings. Foreign workloads were untouched. No stable speed,
+  physical-RAM, default-promotion or LTP/WBA Collapse claim.
+- Fresh final-binary synchronous shared generation at graph depth zero passed
+  exact WAV/readbacks; application time 11.084 s. A separate profiled final run
+  measured pre-GPU 2.079 s, GPU 0.159 s, complete process 12.16 s;
+  host/cache state differs from
+  the predecessor. Pinned replays passed 243 backbone / 726 tower / 20 strict
+  head traces, 29 DAC stages and 4,096 waveform values at unchanged tolerances;
+  all traces bitwise match prior native. Metal 63 examples at each depth 0/2,
+  CPU 20, Python six passed. Mapping guards include queued GC/owner lifetime,
+  unchanged fixture bytes, malformed flags and byte-range rejection.
+- Reject the CPU prefault route in the measured probe (24.02 s setup + 5.74 s
+  wait). Tensor-view code was removed after four full-process view/default
+  ratios 1.029940/1.045088/0.887771/1.025412; smaller backing-extent bookkeeping
+  was not RAM evidence. No inference madvise change was retained.
+- Canonical scope, source/binary/artifact identities, DoD and failed attempts:
+  [.landmark/evidence/drama3-startup.json](.landmark/evidence/drama3-startup.json).
+  Next falsifier: repeated complete same-binary AB/BA pairs at depths 0/2 with
+  sufficient headroom and explicit cache-state controls. Refresh numerical,
+  ownership, residency and timing evidence on source/reference, assets,
+  precision, compiler, input, device/OS or artifact-availability drift.

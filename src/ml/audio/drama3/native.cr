@@ -25,7 +25,14 @@ module ML::Audio::Drama3
       @size = File.size(path)
       raise ArgumentError.new("empty safetensors file") if @size < 10
       @pointer = File.open(path, "rb") do |file|
-        p = LibC.mmap(Pointer(Void).null, @size.to_u64, LibC::PROT_READ, LibC::MAP_PRIVATE, file.fd, 0)
+        # Both mappings are read-only. The shared experiment requires stable,
+        # immutable checkpoint files, just like every no-copy GPU weight view.
+        flags = case ENV["DRAMA3_MMAP_SHARED"]? || "0"
+                when "0" then LibC::MAP_PRIVATE
+                when "1" then LibC::MAP_SHARED
+                else          raise ArgumentError.new("DRAMA3_MMAP_SHARED must be 0 or 1")
+                end
+        p = LibC.mmap(Pointer(Void).null, @size.to_u64, LibC::PROT_READ, flags, file.fd, 0)
         raise "mmap failed: #{path}" if p == LibC::MAP_FAILED
         p.as(UInt8*)
       end
