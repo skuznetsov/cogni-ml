@@ -28720,3 +28720,43 @@ Refresh after source/toolchain/device/model/workload changes.
   claims on source/reference, precision, asset, compiler, input, device/OS or
   artifact-availability changes. No broad realtime, concurrent/reset, quality,
   stock BF16 or cross-device guarantee. Primary dirty Qwen checkout untouched.
+
+### Continuation 2026-10-14 — DRAMA-3 CogniGraph bounded handoff
+
+- Scope and rollback: opt-in `DRAMA3_COGNIGRAPH_MAX_INFLIGHT=1|2`; default and
+  rollback are depth zero. `Resident::Context` wraps CogniGraph's FIFO queue on
+  one Metal queue; context owner identity follows buffer slices, rejecting
+  ordinary foreign views. This is not a security boundary: internal backing
+  handles/reconstruction or raw external writes can bypass tags. Scope the safe
+  claim to the serial single-context CLI without external mutation, rebinding,
+  or concurrency. Leases retain temporary bindings; directly bound persistent
+  caches and mapped weights remain model/backend-rooted until completion. Keep
+  model and Context owners alive until drained. Scratch is fresh, with no pool.
+- Eight same-binary runs across four graph/legacy pairs reproduced 17 frames,
+  EOS and WAV bytes exactly. Commands and completion waits each fell 90→73;
+  readbacks stayed 152 control / 140,012 terminal bytes, with no activation or
+  diagnostic reads. Evidence: [CogniGraph run packet](docs/drama3-cognigraph-evidence.json).
+- Graph/legacy full-wall ratios: 0.870419, 1.048293, 0.980546, 0.974302;
+  median 0.977424. One pair regressed 4.8%. `/usr/bin/time` per-process peak
+  footprint rose from 1.576–1.639 GB to 1.709–1.765 GB. The
+  31,903,032,324-byte retained counter is conservative whole-backing
+  accounting, can double-count, omits directly
+  bound packed weights, and is not RAM usage. The 40,960 MB process-tree RSS
+  cap and 25% free-memory floor are separate run guards.
+- Final owned-binary depth-0/2 replays passed with exact WAV bytes; all three
+  upstream trace sets match and intermediate values are bitwise equal to the
+  previous native path. Pinned gates are 243 backbone traces / 497,664 values,
+  726 tower traces / 2,042,880 values, 20 strict-head traces / 77,824 values,
+  29 codec internal stages (max absolute 1e-3, RMS 2e-4, normalized RMS 2e-4),
+  and a per-sample waveform absolute-error bound `max(5e-5, abs(reference) *
+  1e-3)` over 4,096 values. Final ownership guards passed; Metal depth 0 and
+  depth 2 each passed 60 examples, CPU passed 18, and Python passed six tests.
+  See [the frontier](docs/drama3-native-frontier.md) and [evidence
+  packet](docs/drama3-cognigraph-evidence.json).
+- MiniQuad/LTP disposition: Spike exposed redundant row waits; the bounded
+  Ladder queue passed lifecycle/parity replays. Collapse and speed promotion
+  remain withheld: full-run timing is inconsistent and measured peak footprint
+  increased. Fewer waits do not certify global potential descent.
+- Next falsifier: attribute the roughly 11-second first-command pre-GPU
+  interval. Refresh matched timings and memory bounds on source, weights,
+  compiler, input, device/OS, or evidence drift.

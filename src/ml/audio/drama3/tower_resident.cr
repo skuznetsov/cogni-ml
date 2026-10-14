@@ -207,9 +207,10 @@ module ML::Audio::Drama3
     # differ from the CPU Float64 sampler.
     def sample_frame(main : Resident::Buffer, hidden : Resident::Buffer, previous_frame : Resident::Buffer,
                      trace : TowerTraceCallback? = nil, trace_prefix : String = "tower.decode.row0",
+                     output_frame : Resident::Buffer? = nil,
                      &sample : Resident::Buffer -> Resident::Buffer) : Resident::Buffer
       Profile.measure("tower.sample_frame", category: "tower") do
-        result = sample_frame_impl(main, hidden, previous_frame, trace, trace_prefix) do |logits|
+        result = sample_frame_impl(main, hidden, previous_frame, output_frame, trace, trace_prefix) do |logits|
           yield logits
         end
         # Component profiling includes GPU completion. Normal inference can
@@ -220,14 +221,20 @@ module ML::Audio::Drama3
     end
 
     private def sample_frame_impl(main : Resident::Buffer, hidden : Resident::Buffer, previous_frame : Resident::Buffer,
-                                  trace : TowerTraceCallback?, trace_prefix : String,
+                                  output_frame : Resident::Buffer?, trace : TowerTraceCallback?, trace_prefix : String,
                                   &sample : Resident::Buffer -> Resident::Buffer) : Resident::Buffer
       validate_buffer_width!(main, 1, "main token")
       validate_call!(hidden, previous_frame)
       ensure_capacity!
+      if frame = output_frame
+        validate_frame_buffer!(frame, "output_frame")
+        validate_disjoint!(frame, main, "output_frame", "main token")
+        validate_disjoint!(frame, hidden, "output_frame", "hidden")
+        validate_disjoint!(frame, previous_frame, "output_frame", "previous_frame")
+      end
       trace_value(trace, "#{trace_prefix}.hidden_input", [1_i32, 1_i32, @config.dim], hidden)
 
-      frame = @context.alloc(@config.num_codebooks + 1)
+      frame = output_frame || @context.alloc(@config.num_codebooks + 1)
       @context.dispatch(
         "drama3_tower_initial_frame",
         RESIDENT_TOWER_SOURCE,
@@ -258,7 +265,9 @@ module ML::Audio::Drama3
         trace_value(trace, "#{trace_prefix}.head_logits.#{index}", [1_i32, @config.vocab_size], logits)
         sampled_code = yield logits
         validate_buffer_width!(sampled_code, 1, "sampled code")
-        @context.copy(sampled_code, frame.slice(index + 2, 1))
+        output_code = frame.slice(index + 2, 1)
+        validate_disjoint!(frame, sampled_code, "output_frame", "sampled code")
+        @context.copy(sampled_code, output_code)
         cache_index += 1
       end
 
@@ -448,6 +457,19 @@ module ML::Audio::Drama3
 
     private def validate_buffer_width!(buffer : Resident::Buffer, expected : Int32, name : String) : Nil
       raise ArgumentError.new("#{name} has width #{buffer.count}; expected #{expected}") unless buffer.count == expected
+    end
+
+    private def validate_disjoint!(destination : Resident::Buffer, source : Resident::Buffer,
+                                   destination_name : String, source_name : String) : Nil
+      return unless destination.buffer.handle.address == source.buffer.handle.address
+
+      destination_start = destination.offset
+      destination_end = destination_start + destination.count.to_i64 * 4_i64
+      source_start = source.offset
+      source_end = source_start + source.count.to_i64 * 4_i64
+      if destination_start < source_end && source_start < destination_end
+        raise ArgumentError.new("#{destination_name} overlaps #{source_name}")
+      end
     end
 
     private def validate_frame!(frame : Array(Int32), name : String) : Nil

@@ -37,6 +37,13 @@ module ML::Audio::Drama3
       Profile.measure("codec_resident.decode", category: "codec") do
         decode_impl(codes, frames, codebook_major)
       end
+    rescue ex
+      begin
+        @context.abort
+      rescue
+        # Keep the original inference failure if error-path draining fails.
+      end
+      raise ex
     end
 
     private def decode_impl(codes : Resident::Buffer, frames : Int32,
@@ -52,17 +59,17 @@ module ML::Audio::Drama3
       latent = post_transformer(latent)
       trace_activation("quantizer.post_module", latent)
       @context.guard(latent.data)
-      @context.finish
+      @context.submit
 
       @config.quantizer_upsample_rates.reverse.each_with_index do |rate, stage|
         prefix = "quantizer.upsample.#{stage}"
         latent = conv_transpose1d(latent, "#{prefix}.0.conv", rate, rate, false)
         trace_activation("#{prefix}.deconv", latent)
-        @context.finish
+        @context.submit
         latent = convnext(latent, "#{prefix}.1")
         trace_activation("#{prefix}.convnext", latent)
         @context.guard(latent.data)
-        @context.finish
+        @context.submit
       end
 
       waveform = decode_waveform(latent)
@@ -101,7 +108,7 @@ module ML::Audio::Drama3
           "#{prefix}.out_proj", 1, 1, 1, 1, true)
         latent = Activation.new(frames, channels, @context.add(latent.data, projected.data))
       end
-      @context.finish
+      @context.submit
       latent
     end
 
@@ -112,7 +119,7 @@ module ML::Audio::Drama3
         hidden = transformer_layer(hidden, prefix)
         trace_activation("#{prefix}", hidden)
         @context.guard(hidden.data)
-        @context.finish
+        @context.submit
       end
       weight = tensor("quantizer.post_module.norm.weight")
       validate_shape!(weight, [input.channels], "quantizer.post_module.norm.weight")
@@ -213,7 +220,7 @@ module ML::Audio::Drama3
     private def decode_waveform(input : Activation) : Activation
       x = conv1d(input, "decoder.model.0", 7, 1, 1, 1, true)
       trace_activation("decoder.model.0", x)
-      @context.finish
+      @context.submit
       channels = @config.decoder_channels
       @config.decoder_rates.each_with_index do |rate, stage|
         output_dim = channels >> (stage + 1)
@@ -222,12 +229,12 @@ module ML::Audio::Drama3
         trace_activation("decoder.model.#{stage + 1}.block.0", x)
         x = conv_transpose1d(x, "#{prefix}.1", rate * 2, rate, true)
         trace_activation("decoder.model.#{stage + 1}.block.1", x)
-        @context.finish
+        @context.submit
         3.times do |unit_index|
           unit_prefix = "#{prefix}.#{unit_index + 2}.block"
           x = residual_unit(x, unit_prefix, output_dim, [1, 3, 9][unit_index])
           trace_activation("decoder.model.#{stage + 1}.block.#{unit_index + 2}", x)
-          @context.finish
+          @context.submit
         end
         raise ArgumentError.new("decoder stage output width mismatch") unless x.channels == output_dim
       end

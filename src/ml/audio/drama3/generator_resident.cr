@@ -62,6 +62,13 @@ module ML::Audio::Drama3
       Profile.measure("generator_resident.generate", category: "generation") do
         generate_impl(prompt, max_frames, seed, temperature, top_k, top_p)
       end
+    rescue ex
+      begin
+        @ctx.abort
+      rescue
+        # Keep the inference failure as the reported error if draining also fails.
+      end
+      raise ex
     end
 
     private def generate_impl(prompt : Array(Array(Int32)), max_frames : Int32, seed : UInt64,
@@ -92,7 +99,7 @@ module ML::Audio::Drama3
             end
             # Bound live temporary allocations while persistent KV/recurrent
             # state remains owned by the resident model objects.
-            @ctx.finish
+            @ctx.submit
           end
           @progress.try(&.call("prefill #{index + 1}/#{frames_on_device.size}"))
         end
@@ -127,22 +134,24 @@ module ML::Audio::Drama3
 
           frame = Profile.measure("generator_resident.device_frame", category: "generation.frame") do
             sampled_codes = 0
-            resident_frame = @tower.sample_frame(main, hidden, previous_frame) do |code_logits|
+            output_frame = @ctx.graph_enabled? ? device_frames.slice(step * frame_width, frame_width) : nil
+            resident_frame = @tower.sample_frame(main, hidden, previous_frame, output_frame: output_frame) do |code_logits|
               draw_index = draw_offset + 2 + sampled_codes
               sampled_codes += 1
               @ctx.sample(code_logits, draw_buffer.slice(draw_index, 1), temperature, top_k, top_p)
             end
             raise "resident tower sampled #{sampled_codes} residual codes; expected #{@tower.config.num_codebooks - 1}" unless sampled_codes == @tower.config.num_codebooks - 1
 
-            @ctx.copy(resident_frame, device_frames.slice(step * frame_width, frame_width))
+            @ctx.copy(resident_frame, device_frames.slice(step * frame_width, frame_width)) unless output_frame
             if step + 1 < max_frames
               token_embedding = @backbone.embedding(main)
               hidden = @backbone.step(@tower.embed_backbone(resident_frame, token_embedding))
             end
             # Submit the complete tower/backbone chain for this generated row.
-            # This keeps scratch bounded and makes the enclosing profile span
-            # include actual GPU execution time.
-            @ctx.finish
+            # In graph mode, the next main-token control read submits and
+            # drains this chain together with that sample. The terminal read
+            # drains the last generated row. Legacy mode remains synchronous.
+            @ctx.finish unless @ctx.graph_enabled?
             resident_frame
           end
 

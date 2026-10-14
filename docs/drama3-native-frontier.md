@@ -8,6 +8,93 @@ Goal: one short, single-speaker text prompt to a mono 44.1 kHz WAV, with all
 inference computations in Crystal/native libraries. Python/MLX/PyTorch are
 reference and fixture tools only, never the native inference implementation.
 
+## Active CogniGraph handoff slice
+
+Status: bounded CogniGraph route admitted as opt-in; speed promotion withheld.
+`DRAMA3_COGNIGRAPH_MAX_INFLIGHT` defaults to `0` (legacy synchronous route);
+`1` or `2` enables the bounded graph queue. DRAMA's `Resident::Context` wraps
+CogniGraph's `GraphSubmissionQueue` over one explicit Metal queue. Buffer owner
+identity is scoped to the context and inherited by slices; cross-context reads,
+dispatches, and native bindings reject ordinary foreign views. This is not a
+security boundary: code that reconstructs a `Buffer` from its exposed backing
+handle/owner or performs raw external writes can bypass the tag. Treat the
+constructor/backing handle as internal unsafe plumbing. The scoped safe route is
+the serial single-context native CLI without external mutation, rebinding, or
+concurrent context use. Leases retain temporary bindings through checked
+completion. Directly bound persistent attention caches and mapped weights stay
+rooted in the resident model and MetalBackend until completion; callers must
+keep these owners and the Context alive until drained. Scratch allocations are
+fresh; there is no recycling pool.
+
+Graph mode submits prefill rows without immediate waits and carries each
+request-owned generated-frame view directly from tower output into the next
+backbone step and DAC. The next main-token read remains a CPU control boundary;
+terminal codes and PCM are read once at the output boundary. EOS-first exits
+before a generated row. The output view is range-checked against main, hidden,
+and previous-frame inputs before dispatch; sampled codes must not alias the
+frame destination. Finite checks, explicit diagnostic reads, synchronous
+component profiling, and single-use model semantics remain. An encoding/GPU
+failure drains or cancels known leases and poisons the context; this does not
+undo model state already mutated by completed commands. Reset/unload is legal
+only after every resident context is terminal. Depth bounds live leases, not
+bytes per lease, and is not long-form memory admission.
+
+Measured scope: same kernels and eight complete runs across four same-binary
+depth-0/graph pairs produced exactly 17 frames, EOS, and WAV bytes in every run.
+Ordinary command submissions and completion waits each fell from 90 to 73.
+Readback ledgers stayed at 152 control bytes and 140,012 terminal bytes, with no
+activation or diagnostic readbacks. Graph/legacy complete-wall-time ratios
+were 0.870419, 1.048293, 0.980546, and 0.974302 (median 0.977424); one pair
+was 4.8% slower. `/usr/bin/time` per-process peak footprint rose from
+1.576–1.639 GB at depth zero to 1.709–1.765 GB with graph mode. These
+observations do not establish a reliable whole-run speedup, and depth zero
+remains the default.
+
+Numerical replays pass at the pinned inputs: 243 backbone traces / 497,664
+values (gates 6e-5 / 3e-4); 726 tower traces / 2,042,880 values (6e-4 / 3e-4);
+and 20 strict-head traces / 77,824 values (3e-5 / 3e-4). Codec gates cover 29
+internal stages (max absolute error 1e-3, RMS 2e-4, normalized RMS 2e-4);
+4,096 waveform values use the per-sample absolute-error gate
+`abs(error) <= max(5e-5, abs(reference) * 1e-3)`. The final owned-binary
+depth-0/2 replays passed with exact WAV bytes; all three upstream trace sets
+match and intermediate values are bitwise equal to the previous native path.
+The full Metal suite passed at depths zero and two (60 examples each, no
+failures, errors, or pending examples); the CPU suite passed 18 examples and
+the Python contract suite passed six tests. These results are recorded in the
+evidence packet below.
+
+The retained-byte high-water of 31,903,032,324 is a conservative sum of whole
+backing allocations per live lease: mapped dense shards and shared allocations
+can be counted more than once, packed weights bound directly by native methods
+are omitted, and the number is not RAM usage. The per-process peak ranges above
+are `/usr/bin/time` observations; the 40,960 MB process-tree RSS limit and 25%
+minimum-free-memory floor are separate run guards.
+
+Risk: CAUTION (submission ordering, ownership, and memory). Rollback is
+`DRAMA3_COGNIGRAPH_MAX_INFLIGHT=0`; context failure is terminal. The local
+mechanism evidence is bounded: a Spike found and removed redundant row waits;
+the Ladder queue passed lifecycle/parity replays. LTP/WBA Collapse and default
+speed promotion remain withheld because whole-run ratios are inconsistent and
+measured peak footprint increased. The audit coordinates are ordered as
+`(semantic/ownership error, undrained lease, memory-guard breach, full-corridor
+wall time, avoidable waits)`; these measurements establish a lower final
+coordinate, not global potential descent. The transport corridor is one FIFO
+Metal queue; the Ladder move submits fresh/persistent owners, passes resident
+outputs to dependent work, waits at control/terminal boundaries, then releases
+only completed leases. Failed work drains/cancels and poisons the context; it is
+not retried against mutated state. Depth zero is the dual frame. The next
+falsifier is whether profiling can attribute the roughly 11-second
+first-command pre-GPU interval; it remains separate from the admitted
+correctness and wait-count result.
+
+Evidence and exact run inputs: [CogniGraph evidence](drama3-cognigraph-evidence.json).
+Source anchors: [resident ownership/queue](../src/ml/audio/drama3/resident.cr),
+[generator handoff](../src/ml/audio/drama3/generator_resident.cr),
+[tower output view](../src/ml/audio/drama3/tower_resident.cr), and
+[CogniGraph queue](../src/ml/metal/compute_graph.cr). Refresh parity, ownership,
+readback, and matched timing claims on source/reference, precision, asset,
+compiler, input, device/OS, or evidence-availability drift.
+
 ## Source identity and boundary
 
 - MLX reference: cguldogan/mlx-audio, branch drama3-mlx, commit

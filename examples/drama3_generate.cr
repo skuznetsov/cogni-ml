@@ -48,6 +48,7 @@ started = Time.instant
 progress = ->(message : String) { STDERR.puts "#{message} elapsed=#{(Time.instant - started).total_seconds.round(2)}s"; nil }
 resident_readbacks = {} of String => Int64
 resident_submissions = 0_i64
+resident_graph = {} of String => Int64
 resident = false
 generation, samples = {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
                         if metal
@@ -66,6 +67,7 @@ generation, samples = {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cp
                           end
                           resident_readbacks = context.readbacks
                           resident_submissions = context.submissions
+                          resident_graph = context.graph_stats
                           {result.generation, waveform}
                         else
                           generator = ML::Audio::Drama3::Generator.new(config, store)
@@ -92,6 +94,7 @@ end
 report = {
   backend: resident ? "metal_resident" : "cpu",
   resident_readbacks: resident_readbacks, resident_submissions: resident_submissions,
+  resident_graph: resident_graph,
   model_path: model_path, text: text, seed: seed, temperature: temperature, top_k: top_k, top_p: top_p,
   prompt_rows: prompt.size, prompt_ids: prompt.map(&.[0]), frames: generation.frames,
   stopped_on_eos: generation.stopped, truncated: !generation.stopped,

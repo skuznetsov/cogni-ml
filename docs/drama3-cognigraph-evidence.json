@@ -1,0 +1,887 @@
+{
+  "format": "cogni-drama3-cognigraph-evidence-v1",
+  "measured_at_utc": "2026-10-14T20:59:54.303114+00:00",
+  "base_commit": "258f348f",
+  "environment": {
+    "crystal": "Crystal 1.21.0 (2026-07-16)\n\nLLVM: 22.1.8\nDefault target: aarch64-apple-darwin25.6.0",
+    "macos": "ProductName:\t\tmacOS\nProductVersion:\t\t26.6.2\nBuildVersion:\t\t25G83",
+    "device": "Apple M2 Max; unified memory",
+    "bridge": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o",
+      "bytes": 153016,
+      "sha256": "a77b9bd12977fdb31d60a26cdc489cbf836ef037a1231c0ac5f6241ccc0a6207"
+    }
+  },
+  "status": "VERIFIED bounded opt-in correctness and 90-to-73 completion waits; provisional latency, default remains synchronous",
+  "default_depth": 0,
+  "opt_in": "DRAMA3_COGNIGRAPH_MAX_INFLIGHT=2",
+  "rollback": "Set depth=0; revert this atomic commit to remove the adapter. No remote or Qwen changes.",
+  "source_sha256": {
+    "examples/drama3_generate.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_generate.cr",
+      "bytes": 7018,
+      "sha256": "c3db9853063ea31631f086c0da141ea0ffba76f33919ce232159f7684ae9d503"
+    },
+    "spec/drama3_codec_resident_spec.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/spec/drama3_codec_resident_spec.cr",
+      "bytes": 9898,
+      "sha256": "c26fafacb26e678ede39adfa69eeedc5ff2fa4e93b573660c07279d3a5a3f721"
+    },
+    "spec/drama3_generator_resident_spec.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/spec/drama3_generator_resident_spec.cr",
+      "bytes": 5535,
+      "sha256": "438f4b7ed12d64d859c983376e2078e2964f00d635a1edc679a0382d10cde08c"
+    },
+    "spec/drama3_graph_generator_spec.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/spec/drama3_graph_generator_spec.cr",
+      "bytes": 11400,
+      "sha256": "7248bf76abb85229dd58e04b1ff6be1a68133599d9102d45865d4b7d7e772bee"
+    },
+    "spec/drama3_graph_resident_spec.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/spec/drama3_graph_resident_spec.cr",
+      "bytes": 5900,
+      "sha256": "55db603dc65a39506ec37eaeae59fb1f93008eddbef4af6d4d1c54f556dbc66e"
+    },
+    "spec/drama3_resident_spec.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/spec/drama3_resident_spec.cr",
+      "bytes": 10398,
+      "sha256": "ccaab515ee88ad32543ad2adbf28ccbffbb8775a64004e2419d964080776353d"
+    },
+    "spec/drama3_tower_resident_spec.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/spec/drama3_tower_resident_spec.cr",
+      "bytes": 8552,
+      "sha256": "45abc70628ea340fda577e6aa20ee8424d5ef85f13de4fa6be9f96b56fe6104e"
+    },
+    "spec/graph_submission_queue_spec.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/spec/graph_submission_queue_spec.cr",
+      "bytes": 8510,
+      "sha256": "7ab38c6a6dd1b8e344c229d3d2698945c6d5034c3fde3d1d45b3a3de497a4184"
+    },
+    "src/ml/audio/drama3/backbone_resident.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/backbone_resident.cr",
+      "bytes": 9871,
+      "sha256": "fe8c377d90f6bdae3ae97f4d5a349c67ecb53d2bf38904c5d474d0e0fad42148"
+    },
+    "src/ml/audio/drama3/codec_resident.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/codec_resident.cr",
+      "bytes": 22187,
+      "sha256": "f80f860a7739f7cfb858ce6dbe10e7d6c25b5b0ae66c09325fd99990147d0612"
+    },
+    "src/ml/audio/drama3/generator_resident.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/generator_resident.cr",
+      "bytes": 10435,
+      "sha256": "bdc660571ff883e03abd0076f09fc00134ad841da2ae433b8e3551012bfdf3a6"
+    },
+    "src/ml/audio/drama3/kernels/backbone_resident.metal": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/backbone_resident.metal",
+      "bytes": 6029,
+      "sha256": "048657d9b2b6a28785bc32e7c34f807a93c0777d06b16a9d37a47d928873adc8"
+    },
+    "src/ml/audio/drama3/kernels/codec_resident.metal": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/codec_resident.metal",
+      "bytes": 12738,
+      "sha256": "894210cb13b4a870e9b75b30fb8925a94f49a22d58a9030324e620b25470dd51"
+    },
+    "src/ml/audio/drama3/kernels/generator_resident.metal": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/generator_resident.metal",
+      "bytes": 1963,
+      "sha256": "8904270eeca18cc9b22c028b3b57473eb7250fcf2d88411b2fd88f32a8d88577"
+    },
+    "src/ml/audio/drama3/kernels/resident.metal": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/resident.metal",
+      "bytes": 9002,
+      "sha256": "35d4daf0c05e2e1076927d48e39d946b241404f31881498c0205de2c3d0773f7"
+    },
+    "src/ml/audio/drama3/kernels/tower_resident.metal": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/kernels/tower_resident.metal",
+      "bytes": 8273,
+      "sha256": "cbcac583b8bd805db4c0d93621e58a0dffcca345bbe0bb0e49f887832b567b8b"
+    },
+    "src/ml/audio/drama3/metal.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/metal.cr",
+      "bytes": 11189,
+      "sha256": "7e0257b1e17abc8aa2a05174f6e2bf2ffb31d7090efea5887485bf72fa080b89"
+    },
+    "src/ml/audio/drama3/resident.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/resident.cr",
+      "bytes": 19401,
+      "sha256": "9e4866d52e65d3630dc77d55cc93dfcbc9dd85b719609676f7d71837495fe187"
+    },
+    "src/ml/audio/drama3/tower_resident.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/tower_resident.cr",
+      "bytes": 25989,
+      "sha256": "e41089e564c41ced168511ebd71c1557c34a942b402b9280760b4dc1f8fddd06"
+    },
+    "src/ml/metal/compute_graph.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/metal/compute_graph.cr",
+      "bytes": 26283,
+      "sha256": "8d5d308fac91629a502de1ed085786047c5b6f0f530253ae265c7f95098cb970"
+    },
+    "src/ml/metal/device.cr": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/metal/device.cr",
+      "bytes": 20264,
+      "sha256": "ecc5d96332833a8a94d9a55914d515b5e34efe001f762d65aaa7c919b907c934"
+    }
+  },
+  "binary": {
+    "path": "/tmp/drama3_graph_owned_generate",
+    "bytes": 1404376,
+    "sha256": "9b2e7da992d1201000a037db95ffa7821c760f4f775245e831be89178084009e"
+  },
+  "measured_predecessor": {
+    "manifest": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-benchmark-build-source.json",
+      "bytes": 2263,
+      "sha256": "3105b10981f6b6b60b98b23e691b52f93e0e1b738efa09da833379a19984b425"
+    },
+    "binary": {
+      "path": "/tmp/drama3_graph_generate",
+      "bytes": 1404376,
+      "sha256": "bf501b9a96f8f63748f9f6181b83ef5bd488d15796a85242d05721f02894cbf3"
+    },
+    "difference": "Four pairs were measured before defensive output-alias rejection, stronger codec rescue, Context owner tags, and explanatory comments. Normal workload does not trigger those guards. Final-source timeline pair independently rechecks exact output and waits; it is not pooled into the four-pair median."
+  },
+  "trace_binaries": {
+    "backbone": {
+      "path": "/tmp/drama3_graph_owned_backbone_trace",
+      "bytes": 868288,
+      "sha256": "346d0ed5979623692cc81f531839d1b0e501f10f8c7ee99914b062d906e0bbb9"
+    },
+    "tower": {
+      "path": "/tmp/drama3_graph_owned_tower_trace",
+      "bytes": 905536,
+      "sha256": "7ecb053abba06b8e759927a442a40e974c4bf885a275fb99647464cac0f0016d"
+    },
+    "codec": {
+      "path": "/tmp/drama3_graph_owned_codec_trace",
+      "bytes": 904800,
+      "sha256": "b7f236dd95a3dce3210b4beb4e189794d7e5df0eb92a7923da344bffe1a575f4"
+    }
+  },
+  "lineage": {
+    "previous_speed": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/docs/drama3-resident-speed-evidence.json",
+      "bytes": 42442,
+      "sha256": "402105216c6e4c03cbf07a94d3776433f8fc2e23a898a2755066e0141b77c821"
+    },
+    "resident": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/docs/drama3-resident-evidence.json",
+      "bytes": 28324,
+      "sha256": "41e20f6ebf1b25fd6d2c09a313d1fabbebf1c5e611ebc50c7d8d67160428ec19"
+    },
+    "native": {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/docs/drama3-native-evidence.json",
+      "bytes": 32865,
+      "sha256": "f9c000401eccabb18c38338dddf908270ea9a61a11a57bf3b1b884157bcc8956"
+    },
+    "pinned_sources": {
+      "mlx_audio": {
+        "repository": "https://github.com/cguldogan/mlx-audio",
+        "revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+        "checkout_clean_observed": true
+      },
+      "fish_speech": {
+        "repository": "https://github.com/fishaudio/fish-speech",
+        "revision": "541566932abbaebcb0a40e562a1f846738383f38",
+        "checkout_clean_observed": true
+      },
+      "official_model": {
+        "repository": "fishaudio/drama-3",
+        "revision": "e0a9218aa48888270f06ef1ed9ea67622c0e17d2"
+      },
+      "converted_model": {
+        "repository": "cguldogan/drama-3-mlx-q4",
+        "revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+        "files": {
+          "config.json": {
+            "sha256": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+            "bytes": 17453
+          },
+          "model.safetensors.index.json": {
+            "sha256": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855",
+            "bytes": 106861
+          },
+          "tokenizer.json": {
+            "sha256": "0e9b9db76b2f0389b04b6ef057a2ac3b89100b7e96f2dd7034d19580a09654d6",
+            "bytes": 20791070
+          },
+          "codec.safetensors": {
+            "sha256": "543445a2ebc5224d2af5956d422f88c2cd21f4018c1a26d81b51ec231bb630f2",
+            "bytes": 1874070622
+          },
+          "model-00001-of-00005.safetensors": {
+            "sha256": "bcb7e680d4f07ea21404070a407ab327572cb7d7b577d73e145871b2456b5012",
+            "bytes": 5498947446
+          },
+          "model-00002-of-00005.safetensors": {
+            "sha256": "67ca8709ee770c21fb09b68d08fc50faf3102451f150745dcb6971dbf8e5894a",
+            "bytes": 5390036166
+          },
+          "model-00003-of-00005.safetensors": {
+            "sha256": "0c0e1055b617bbf7e507ab9ac611d290124b985f63cbdb52cb5275d558202e76",
+            "bytes": 5402946528
+          },
+          "model-00004-of-00005.safetensors": {
+            "sha256": "116f376cf435fc7f2dfc09ffa985e5d1c908fd9580877b3fcb9df37e9be029f2",
+            "bytes": 5423590660
+          },
+          "model-00005-of-00005.safetensors": {
+            "sha256": "e20c3406557e2b1e44f446f2e1af8e7832ef545047f8c146c9e704a692a63b2d",
+            "bytes": 2277811252
+          }
+        }
+      }
+    },
+    "asset_refresh": "Reference revisions and clean trees, all asset lengths and JSON SHA256 rechecked. Large shard/codec hashes inherited from pinned native manifest.",
+    "benchmark_runner": {
+      "path": "/private/tmp/cogni-drama3-reference/benchmark_graph.py",
+      "bytes": 2672,
+      "sha256": "21036061ab795895a9af2596b207dab3aa1eafbace8c32802a155b29d4bbbd92"
+    },
+    "final_runner": {
+      "path": "/private/tmp/cogni-drama3-reference/verify_graph_owned.py",
+      "bytes": 2700,
+      "sha256": "a8823f5da4a8d4443bef5ecdef3124d23e013d25ca8945780203cf44989e5e59"
+    },
+    "builder": {
+      "path": "/private/tmp/cogni-drama3-reference/build_graph_evidence.py",
+      "bytes": 17193,
+      "sha256": "d09eeb0efa8aa5998fcd8bfb6a9f2aca24f9c327bc3d0a06e01179e96b14290a"
+    }
+  },
+  "workload": {
+    "text": "Hello.",
+    "seed": 0,
+    "temperature": 0.8,
+    "top_k": 30,
+    "top_p": 0.9,
+    "prompt_rows": 23,
+    "sample_rate": 44100,
+    "samples": 34816,
+    "seconds": 0.7894784580498866
+  },
+  "timing_boundary": "Release binary, fresh processes, serialized AB/BA, no component profiler/timeline in four pairs. Sidecar timer starts before generator initialization, includes mapping/conversion/preparation/generation/DAC/WAV writing, excludes tokenizer/WeightStore/process startup. No work moved outside timer. Host not controlled; unrelated processes untouched.",
+  "paired_runs": [
+    {
+      "pair": 0,
+      "order": [
+        "legacy",
+        "graph"
+      ],
+      "legacy": {
+        "report": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-0-legacy.wav.json",
+          "bytes": 3326,
+          "sha256": "6effd9ae1afe4c0ddfcb16830ef367b985f0eeef17837592899f6c7529d6ee2d"
+        },
+        "wav": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-0-legacy.wav",
+          "bytes": 69676,
+          "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+        },
+        "log": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-0-legacy.stderr.log",
+          "bytes": 2272,
+          "sha256": "7f0841c554dd2d0a8cc63173c392dd360bceab07dd8d3cd4449aa2e09888c0ca"
+        },
+        "elapsed_seconds": 25.811874709,
+        "graph": {
+          "depth": 0,
+          "submitted": 90,
+          "completed": 90,
+          "pending": 0,
+          "max_pending": 0,
+          "completion_waits": 90,
+          "retained_bytes": 0,
+          "max_retained_bytes": 0
+        },
+        "readbacks": {
+          "control": 152,
+          "terminal": 140012
+        },
+        "maximum_resident_set_bytes": 140083200,
+        "peak_memory_footprint_bytes": 1638728616
+      },
+      "graph": {
+        "report": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-0-graph.wav.json",
+          "bytes": 3335,
+          "sha256": "321e51525807b9b71f405e1a8dccc0f15be15da6d318271c812ee4046f6056b3"
+        },
+        "wav": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-0-graph.wav",
+          "bytes": 69676,
+          "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+        },
+        "log": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-0-graph.stderr.log",
+          "bytes": 2271,
+          "sha256": "36967d1a6eeba08aac7935905028289061941d632dc73f7be588d9bc4970e64f"
+        },
+        "elapsed_seconds": 22.46714375,
+        "graph": {
+          "depth": 2,
+          "submitted": 73,
+          "completed": 73,
+          "pending": 0,
+          "max_pending": 2,
+          "completion_waits": 73,
+          "retained_bytes": 0,
+          "max_retained_bytes": 31903032324
+        },
+        "readbacks": {
+          "control": 152,
+          "terminal": 140012
+        },
+        "maximum_resident_set_bytes": 146096128,
+        "peak_memory_footprint_bytes": 1732264896
+      },
+      "graph_over_legacy": 0.8704189061543147
+    },
+    {
+      "pair": 1,
+      "order": [
+        "graph",
+        "legacy"
+      ],
+      "legacy": {
+        "report": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-1-legacy.wav.json",
+          "bytes": 3326,
+          "sha256": "8acd95fe9fb812bc1ceae078047dbb2a88f7756b7bfa9181db522f3500ff631d"
+        },
+        "wav": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-1-legacy.wav",
+          "bytes": 69676,
+          "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+        },
+        "log": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-1-legacy.stderr.log",
+          "bytes": 2273,
+          "sha256": "6dcedcd7b660c8990f75d840294dda95be41798f0b275858c247cc9ab08da3b5"
+        },
+        "elapsed_seconds": 22.225642292,
+        "graph": {
+          "depth": 0,
+          "submitted": 90,
+          "completed": 90,
+          "pending": 0,
+          "max_pending": 0,
+          "completion_waits": 90,
+          "retained_bytes": 0,
+          "max_retained_bytes": 0
+        },
+        "readbacks": {
+          "control": 152,
+          "terminal": 140012
+        },
+        "maximum_resident_set_bytes": 145014784,
+        "peak_memory_footprint_bytes": 1576387496
+      },
+      "graph": {
+        "report": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-1-graph.wav.json",
+          "bytes": 3336,
+          "sha256": "6b66ef8af4ea6129e01aa7dd89cf98eda4529800f41f0ac853f82c929e2d2abf"
+        },
+        "wav": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-1-graph.wav",
+          "bytes": 69676,
+          "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+        },
+        "log": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-1-graph.stderr.log",
+          "bytes": 2271,
+          "sha256": "6dfc64332839f6525eba3f65f9d5d7249af2dc44b7c04078d980d97e8b650879"
+        },
+        "elapsed_seconds": 23.298978916,
+        "graph": {
+          "depth": 2,
+          "submitted": 73,
+          "completed": 73,
+          "pending": 0,
+          "max_pending": 2,
+          "completion_waits": 73,
+          "retained_bytes": 0,
+          "max_retained_bytes": 31903032324
+        },
+        "readbacks": {
+          "control": 152,
+          "terminal": 140012
+        },
+        "maximum_resident_set_bytes": 146325504,
+        "peak_memory_footprint_bytes": 1709081584
+      },
+      "graph_over_legacy": 1.0482927156794177
+    },
+    {
+      "pair": 2,
+      "order": [
+        "legacy",
+        "graph"
+      ],
+      "legacy": {
+        "report": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-2-legacy.wav.json",
+          "bytes": 3326,
+          "sha256": "1ea2671db116e7f0261694da91fffcd206ac6b8fa64f7d8917c0f87326ad6b55"
+        },
+        "wav": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-2-legacy.wav",
+          "bytes": 69676,
+          "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+        },
+        "log": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-2-legacy.stderr.log",
+          "bytes": 2271,
+          "sha256": "419036faa3982d74bd7879db171a9894d1617c3869df7103ccd394f5d68b2020"
+        },
+        "elapsed_seconds": 22.128119542,
+        "graph": {
+          "depth": 0,
+          "submitted": 90,
+          "completed": 90,
+          "pending": 0,
+          "max_pending": 0,
+          "completion_waits": 90,
+          "retained_bytes": 0,
+          "max_retained_bytes": 0
+        },
+        "readbacks": {
+          "control": 152,
+          "terminal": 140012
+        },
+        "maximum_resident_set_bytes": 145063936,
+        "peak_memory_footprint_bytes": 1638728592
+      },
+      "graph": {
+        "report": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-2-graph.wav.json",
+          "bytes": 3336,
+          "sha256": "c81adcb7ff242d8da9c6b6c63784a2040bb3161e54ddc781774cd3de680832ed"
+        },
+        "wav": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-2-graph.wav",
+          "bytes": 69676,
+          "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+        },
+        "log": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-2-graph.stderr.log",
+          "bytes": 2268,
+          "sha256": "4c81e40360ce2cb981a08017aab3e121a109ee70d273333feebdb8baf0afe349"
+        },
+        "elapsed_seconds": 21.697635667,
+        "graph": {
+          "depth": 2,
+          "submitted": 73,
+          "completed": 73,
+          "pending": 0,
+          "max_pending": 2,
+          "completion_waits": 73,
+          "retained_bytes": 0,
+          "max_retained_bytes": 31903032324
+        },
+        "readbacks": {
+          "control": 152,
+          "terminal": 140012
+        },
+        "maximum_resident_set_bytes": 146538496,
+        "peak_memory_footprint_bytes": 1732215768
+      },
+      "graph_over_legacy": 0.9805458446578379
+    },
+    {
+      "pair": 3,
+      "order": [
+        "graph",
+        "legacy"
+      ],
+      "legacy": {
+        "report": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-3-legacy.wav.json",
+          "bytes": 3325,
+          "sha256": "c7ef37282e2a7da42fd92a6f98c9a7c877030bbd0b13f190c4d2f5d98e616b01"
+        },
+        "wav": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-3-legacy.wav",
+          "bytes": 69676,
+          "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+        },
+        "log": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-3-legacy.stderr.log",
+          "bytes": 2274,
+          "sha256": "11afb7355b201ec56f7557e0a61bc1048542324d7b878c89f0a403090bc4fcf9"
+        },
+        "elapsed_seconds": 21.58069075,
+        "graph": {
+          "depth": 0,
+          "submitted": 90,
+          "completed": 90,
+          "pending": 0,
+          "max_pending": 0,
+          "completion_waits": 90,
+          "retained_bytes": 0,
+          "max_retained_bytes": 0
+        },
+        "readbacks": {
+          "control": 152,
+          "terminal": 140012
+        },
+        "maximum_resident_set_bytes": 145063936,
+        "peak_memory_footprint_bytes": 1638679440
+      },
+      "graph": {
+        "report": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-3-graph.wav.json",
+          "bytes": 3336,
+          "sha256": "44e1a644c266826769a5651efa5ece5b7e08753fe56f4960192948c799033dbe"
+        },
+        "wav": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-3-graph.wav",
+          "bytes": 69676,
+          "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+        },
+        "log": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-paired-3-graph.stderr.log",
+          "bytes": 2268,
+          "sha256": "52ea54a853557f0bf039d2260fe4eb0e79a999d040a3606dc41dd0cb34dd8b56"
+        },
+        "elapsed_seconds": 21.026116042,
+        "graph": {
+          "depth": 2,
+          "submitted": 73,
+          "completed": 73,
+          "pending": 0,
+          "max_pending": 2,
+          "completion_waits": 73,
+          "retained_bytes": 0,
+          "max_retained_bytes": 31903032324
+        },
+        "readbacks": {
+          "control": 152,
+          "terminal": 140012
+        },
+        "maximum_resident_set_bytes": 146554880,
+        "peak_memory_footprint_bytes": 1765426064
+      },
+      "graph_over_legacy": 0.9743022725998705
+    }
+  ],
+  "median_paired_graph_over_legacy": 0.9774240586288542,
+  "timing_verdict": "No reliable whole-inference latency promotion: one of four pairs regresses; median is a bounded noisy observation, and footprint rises. Default stays depth0.",
+  "final_source_timeline_pair": {
+    "2": {
+      "report": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-owned-final-2.wav.json",
+        "bytes": 3335,
+        "sha256": "b37736342507c84a5050e5a20f3e77c94e91ad2e26e89aaa6721054a64760265"
+      },
+      "wav": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-owned-final-2.wav",
+        "bytes": 69676,
+        "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+      },
+      "log": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-owned-final-2.stderr.log",
+        "bytes": 7813,
+        "sha256": "f62a6cf1cfaf717b3bcab48d6322613f20eb0829f6c4aca29d7ec5068e8561d2"
+      },
+      "elapsed_seconds": 19.29589675,
+      "graph": {
+        "depth": 2,
+        "submitted": 73,
+        "completed": 73,
+        "pending": 0,
+        "max_pending": 2,
+        "completion_waits": 73,
+        "retained_bytes": 0,
+        "max_retained_bytes": 31903032324
+      },
+      "readbacks": {
+        "control": 152,
+        "terminal": 140012
+      },
+      "maximum_resident_set_bytes": 146079744,
+      "peak_memory_footprint_bytes": 1758151616,
+      "gpu_seconds": 8.429120620712638
+    },
+    "0": {
+      "report": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-owned-final-0.wav.json",
+        "bytes": 3326,
+        "sha256": "d16c5ee291fe57db0983d349bac4e1fffb0d34963944df384972aa37bcbac4e2"
+      },
+      "wav": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-owned-final-0.wav",
+        "bytes": 69676,
+        "sha256": "3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49"
+      },
+      "log": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-owned-final-0.stderr.log",
+        "bytes": 9135,
+        "sha256": "255aeca11a2f3773c61d7f19d2b6357348f2ab7e9844f8a46d39caafd2c39696"
+      },
+      "elapsed_seconds": 21.882080541,
+      "graph": {
+        "depth": 0,
+        "submitted": 90,
+        "completed": 90,
+        "pending": 0,
+        "max_pending": 0,
+        "completion_waits": 90,
+        "retained_bytes": 0,
+        "max_retained_bytes": 0
+      },
+      "readbacks": {
+        "control": 152,
+        "terminal": 140012
+      },
+      "maximum_resident_set_bytes": 145080320,
+      "peak_memory_footprint_bytes": 1599718288,
+      "gpu_seconds": 8.441080753225833
+    }
+  },
+  "memory": {
+    "guard": {
+      "process_tree_rss_mb": 40960,
+      "minimum_free_percent": 25,
+      "all_runs_passed": true
+    },
+    "qualification": "Queue depth bounds lease count, not bytes per command. /usr/bin/time RSS and peak footprint are observations, not total GPU allocation accounting. max_retained_bytes counts full backing allocations including mapped dense shards, can double-count shared allocations, and excludes directly bound packed weights; it is not physical RAM or scratch usage.",
+    "graph_peak_lease_backing_bytes": 31903032324,
+    "long_form_admission": false
+  },
+  "residency": {
+    "control_bytes": 152,
+    "terminal_bytes": 140012,
+    "activation_bytes": 0,
+    "diagnostic_bytes": 0,
+    "contract": "One 8-byte EOS/finite control read per attempted frame, terminal codes and PCM. GPU frame is written into request output slot and consumed directly by next backbone/DAC; no activation read/upload handoff. CPU still encodes/schedules kernels and controls EOS."
+  },
+  "parity": {
+    "backbone": {
+      "status": "match",
+      "trace_count": 243,
+      "value_count": 497664,
+      "atol": 6e-05,
+      "rtol": 0.0003,
+      "prefixes": [],
+      "max_abs_error": 0.0010986328125,
+      "max_relative_error_at_max_abs": 6.418351579042856e-07,
+      "worst_trace": "backbone.row0.layers.37.hidden",
+      "worst_flat_index": 1269
+    },
+    "tower": {
+      "status": "match",
+      "trace_count": 726,
+      "value_count": 2042880,
+      "atol": 0.0006,
+      "rtol": 0.0003,
+      "prefixes": [],
+      "max_abs_error": 0.0048828125,
+      "max_relative_error_at_max_abs": 1.383655500220866e-06,
+      "worst_trace": "tower.prefill.row0.residual_layers.1.feed_forward.product",
+      "worst_flat_index": 1320
+    },
+    "strict_tower_outputs": {
+      "status": "match",
+      "trace_count": 20,
+      "value_count": 77824,
+      "atol": 3e-05,
+      "rtol": 0.0003,
+      "prefixes": [
+        "tower.prefill.row0.head_logits.",
+        "tower.prefill.row0.hidden_output",
+        "tower.decode.row0.head_logits.",
+        "tower.decode.row0.hidden_output"
+      ],
+      "max_abs_error": 1.049041748046875e-05,
+      "max_relative_error_at_max_abs": 1.09544939367374e-06,
+      "worst_trace": "tower.decode.row0.head_logits.1",
+      "worst_flat_index": 1008
+    },
+    "all_intermediate_traces_bitwise_previous_native": true,
+    "codec": {
+      "traces": 30,
+      "internal_stages": 29,
+      "waveform_values": 4096,
+      "unchanged_gates": {
+        "max_abs": 0.001,
+        "rms": 0.0002,
+        "normalized_rms": 0.0002,
+        "waveform": "abs(error)<=max(5e-5,abs(reference)*1e-3)"
+      },
+      "max_internal_errors": {
+        "max_abs": 0.0007963180541992188,
+        "rms": 0.0001249241900420104,
+        "normalized_rms": 4.4881608185494106e-05
+      }
+    },
+    "codes_prompt_eos_and_wav_bytes_exact_all_ten_runs": true,
+    "trace_artifacts": {
+      "backbone": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-owned-backbone-traces.json",
+        "bytes": 5502130,
+        "sha256": "aa9a9a5aa4e4253f77b5625beb557ed95e22f640915ffa22653734b17fe6d90a"
+      },
+      "tower": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-owned-tower-traces.json",
+        "bytes": 39540929,
+        "sha256": "8d1f8b35ec10c106cdc7a62b99f1946716c7ba8016b3d51ef4c9aec0c2dc2614"
+      },
+      "codec": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-owned-codec-traces.json",
+        "bytes": 103273550,
+        "sha256": "929fe893de4fcc115305a66f4622af7c7b32755be98ca1d35ff00d406705b044"
+      }
+    },
+    "reference_inputs": {
+      "actual_inputs.json": {
+        "path": "/private/tmp/cogni-drama3-reference/actual_inputs.json",
+        "bytes": 92119,
+        "sha256": "4936da6d65d264ab6251d5451d022686b884eed2797094832d44015cfb2774de"
+      },
+      "mlx_actual_backbone.json": {
+        "path": "/private/tmp/cogni-drama3-reference/mlx_actual_backbone.json",
+        "bytes": 9841119,
+        "sha256": "1c5d92f82368d1850cd67c65c368eafb9466f7cf60b0ddac357714e71c1b8127"
+      },
+      "native_actual_tower_inputs.json": {
+        "path": "/private/tmp/cogni-drama3-reference/native_actual_tower_inputs.json",
+        "bytes": 49887,
+        "sha256": "a6eb8809a66e2c95ebdcdd9fb9fccd442dbdcf0a123c0993775304a69c9db514"
+      },
+      "torch_actual_tower_traces.json": {
+        "path": "/private/tmp/cogni-drama3-reference/torch_actual_tower_traces.json",
+        "bytes": 39542597,
+        "sha256": "784057f0d440401183b8db66c1ab07d34e262525a358c7944207558b5e2debaa"
+      },
+      "codec_resident_2frame_reference.json": {
+        "path": "/private/tmp/cogni-drama3-reference/codec_resident_2frame_reference.json",
+        "bytes": 103267653,
+        "sha256": "b514a7f002ead6653ddc4990f1be8b05e88bd3c730d175ed8a537892f9186b9f"
+      }
+    }
+  },
+  "checks": {
+    "artifacts": {
+      "depth0": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-final-spec-depth0.log",
+        "bytes": 467,
+        "sha256": "8470e729290e2f13269170278388dbf1277b1b712a2c302e21e6907610fb6559"
+      },
+      "depth2": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-final-spec-depth2.log",
+        "bytes": 460,
+        "sha256": "78af99c5e38dd6c1f49fe2d8ffed6bff8da92b632d2195d8d208db2f7041f6b5"
+      },
+      "cpu": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-final-spec-cpu.log",
+        "bytes": 95,
+        "sha256": "d55e6caa8f500290e1ce6ff1809816c80c7f07c224d5859b4efc67b9ca17513b"
+      }
+    },
+    "metal_depth0": "60 examples, 0 failures/errors/pending",
+    "metal_depth2": "60 examples, 0 failures/errors/pending",
+    "cpu": "18 examples, 0 failures/errors/pending",
+    "python": "6 tests, OK",
+    "guards": [
+      "GC across queued offset views, checked FIFO ordering and released lease refs",
+      "EOS-first and bounded two-frame depth0/1/2 exact frames/cache positions/ledgers",
+      "Direct frame output vs independent allocation and sentinel neighbors",
+      "Destination overlaps main/previous frame and callback output reject",
+      "Queued prefill and open generated-row callback failure preserve error and drain/abort",
+      "Ordinary foreign Context views rejected before host reads, dispatch and native matrix bindings",
+      "Malformed public codec input drains prior submitted work",
+      "Sticky finite error survives later finite queued command",
+      "Generic queue fake submit/wait/discard/factory errors and native queue ordering"
+    ]
+  },
+  "ltp_wba": {
+    "trigger": "A resident row/stage is completed before the dependent successor can be encoded.",
+    "transport_corridor": "Single explicit tracked Metal command queue + existing CogniGraph depth1/2 FIFO leases retaining fresh allocations.",
+    "legal_moves": [
+      "Spike: remove the redundant generated-row completion barrier before the following main-sample control boundary.",
+      "Ladder: bounded async prefill/DAC submissions; successor reads resident producer output."
+    ],
+    "boundary_invariant": "Serial single-Context use without external raw mutation/rebinding; exact prefix/EOS/cache/finite behavior; request-owned non-overlapping destination; no mutable allocation recycling before checked completion.",
+    "potential": [
+      "semantic_or_ownership_failure",
+      "undrained_work",
+      "memory_limit_violation",
+      "complete_inference_wall_time",
+      "avoidable_completion_waits"
+    ],
+    "recompute_safety": "Caller keeps Context, resident model/cache and mapped-weight owners alive until terminal completion. Leases retain tracked temporary bindings; some persistent native cache bindings remain model-rooted. All known submitted commands terminal before lease release; open command cancelled on error; context poisoned, no retry/reset/unload while pending. GPU writes are not rolled back.",
+    "dual_frame": "Same binary depth0 synchronous route with identical kernels/inputs/preparation.",
+    "local_certificate": "Executed lifecycle + alias + EOS + callback probes, unchanged upstream gates, exact complete outputs/readback ledger and four pairs plus final-source replay.",
+    "collapse": "WITHHELD for default/performance: one measured pair regresses and memory footprint grows. Safe experimental adapter retained; first-command pre-GPU preparation remains a separate falsifier target."
+  },
+  "adversary": {
+    "verdict": "ROBUST for stated bounded opt-in correctness; VULNERABLE as a general latency/default-promotion claim",
+    "corrected": "Read-only source adversary found output/input aliasing in the new API; range guards and executed regressions now reject it. It also found ordinary cross-Context use could miss a producer queue; owner-tag checks now reject it. The exposed internal backing API remains explicitly unsafe for deliberate rebinding or external mutation. Final source adversary found no normal CLI blocker and returned ROBUST for the scoped route; the parent executed the checks. Review is correlated and is supported by executed independent comparisons.",
+    "residual": [
+      "Internal Buffer constructors, backing handles and owner tags are trusted plumbing: deliberate forged wrappers or external live writes are outside the contract",
+      "No mutable scratch pooling or automatic model cache ownership inference",
+      "Persistent attention caches directly bound by native encoding remain model-rooted rather than re-retained on each lease; keep Context and model owners alive until terminal completion",
+      "All contexts must be terminal before MetalBackend.reset!/unload; single-producer serialized inference only",
+      "No guarded autonomous GPU loop after EOS; CPU control read remains",
+      "No long-form, concurrent/reset, subjective quality, stock BF16, realtime or cross-device guarantee",
+      "Existing ~11-second first-command pre-GPU mechanism remains unattributed"
+    ]
+  },
+  "commands": {
+    "build": "crystal build --release -Ddrama3_metal --link-flags='/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -lc++ -fuse-ld=/usr/bin/ld' examples/drama3_generate.cr -o /tmp/drama3_graph_owned_generate",
+    "metal_depth0": "DRAMA3_COGNIGRAPH_MAX_INFLIGHT=0 DRAMA3_BACKEND=metal crystal spec --release -Ddrama3_metal --link-flags='/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -lc++ -fuse-ld=/usr/bin/ld' spec/drama3_resident_spec.cr spec/drama3_tower_resident_spec.cr spec/drama3_generator_resident_spec.cr spec/drama3_codec_resident_spec.cr spec/drama3_native_spec.cr spec/drama3_backbone_spec.cr spec/drama3_tower_spec.cr spec/drama3_codec_spec.cr spec/drama3_generation_spec.cr spec/drama3_profile_spec.cr spec/drama3_metal_spec.cr spec/drama3_metal_codec_spec.cr spec/drama3_graph_resident_spec.cr spec/drama3_graph_generator_spec.cr spec/graph_submission_queue_spec.cr",
+    "metal_depth2": "DRAMA3_COGNIGRAPH_MAX_INFLIGHT=2 DRAMA3_BACKEND=metal crystal spec --release -Ddrama3_metal --link-flags='/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -lc++ -fuse-ld=/usr/bin/ld' spec/drama3_resident_spec.cr spec/drama3_tower_resident_spec.cr spec/drama3_generator_resident_spec.cr spec/drama3_codec_resident_spec.cr spec/drama3_native_spec.cr spec/drama3_backbone_spec.cr spec/drama3_tower_spec.cr spec/drama3_codec_spec.cr spec/drama3_generation_spec.cr spec/drama3_profile_spec.cr spec/drama3_metal_spec.cr spec/drama3_metal_codec_spec.cr spec/drama3_graph_resident_spec.cr spec/drama3_graph_generator_spec.cr spec/graph_submission_queue_spec.cr",
+    "cpu": "crystal spec --release -Dcpu_only --link-flags='-fuse-ld=/usr/bin/ld' spec/drama3_native_spec.cr spec/drama3_backbone_spec.cr spec/drama3_tower_spec.cr spec/drama3_codec_spec.cr spec/drama3_generation_spec.cr spec/drama3_profile_spec.cr spec/drama3_metal_spec.cr spec/drama3_metal_codec_spec.cr",
+    "python": "PYTHONDONTWRITEBYTECODE=1 python3 -m unittest spec/drama3_reference_spec.py",
+    "paired_runner": "/private/tmp/cogni-drama3-reference/benchmark_graph.py",
+    "final_runner": "/private/tmp/cogni-drama3-reference/verify_graph_owned.py",
+    "trace_build": "crystal build --release -Ddrama3_metal --link-flags='/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -lc++ -fuse-ld=/usr/bin/ld' examples/drama3_<component>_resident_trace.cr -o /tmp/drama3_graph_owned_<component>_trace (backbone: drama3_resident_trace.cr)",
+    "trace_runs": {
+      "backbone": [
+        "DRAMA3_BACKEND=metal",
+        "DRAMA3_COGNIGRAPH_MAX_INFLIGHT=2",
+        "COGNI_RUN_SAFE_MIN_FREE_PCT=25",
+        "RUN_SAFE_PASSTHROUGH_STDIO=1",
+        "scripts/run_safe.sh",
+        "/tmp/drama3_graph_owned_backbone_trace",
+        "300",
+        "40960",
+        "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+        "/private/tmp/cogni-drama3-reference/actual_inputs.json",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-owned-backbone-traces.json"
+      ],
+      "tower": [
+        "DRAMA3_BACKEND=metal",
+        "DRAMA3_COGNIGRAPH_MAX_INFLIGHT=2",
+        "COGNI_RUN_SAFE_MIN_FREE_PCT=25",
+        "RUN_SAFE_PASSTHROUGH_STDIO=1",
+        "scripts/run_safe.sh",
+        "/tmp/drama3_graph_owned_tower_trace",
+        "300",
+        "40960",
+        "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+        "/private/tmp/cogni-drama3-reference/native_actual_tower_inputs.json",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-owned-tower-traces.json"
+      ],
+      "codec": [
+        "DRAMA3_BACKEND=metal",
+        "DRAMA3_COGNIGRAPH_MAX_INFLIGHT=2",
+        "COGNI_RUN_SAFE_MIN_FREE_PCT=25",
+        "RUN_SAFE_PASSTHROUGH_STDIO=1",
+        "scripts/run_safe.sh",
+        "/tmp/drama3_graph_owned_codec_trace",
+        "300",
+        "40960",
+        "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+        "/private/tmp/cogni-drama3-reference/codec_resident_2frame_reference.json",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-owned-codec-traces.json",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/graph-owned-codec-traces.wav"
+      ]
+    },
+    "compare": "/private/tmp/cogni-drama3-reference/build_graph_evidence.py"
+  },
+  "refresh": "Invalidate on changed native/reference source, model/precision/compiler/device/OS/workload or unavailable artifacts; rerun upstream and exact native gates, lifecycle/alias/EOS/drain probes, residency and serialized full-corridor time/memory. Hash/JSON structure alone is not proof."
+}
