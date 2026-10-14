@@ -159,13 +159,15 @@ remains recorded in the historical section below. CPU remains the default
 backend and explicit rollback. No existing Qwen admission path is changed.
 
 Risk: CAUTION (GPU reductions, dynamic routing, cache ownership, and sampling
-precision). Rollback: `DRAMA3_BACKEND=cpu`, or the preceding `9622936a` commit.
+precision). Rollback: `DRAMA3_BACKEND=cpu`, or the preceding resident `b91ad1e7`.
 The highest-risk failure is altered routing/cache arithmetic hidden by a
 plausible waveform. DoD: focused primitive/cache/failure tests, actual
 backbone/tower/DAC gates at their existing tolerances, complete text-to-WAV,
 call-site audit plus readback accounting, and matched component/total timing.
 The executed evidence is indexed in
-[drama3-resident-evidence.json](drama3-resident-evidence.json).
+[drama3-resident-evidence.json](drama3-resident-evidence.json), with the current
+latency changes in
+[drama3-resident-speed-evidence.json](drama3-resident-speed-evidence.json).
 
 ### Device/host contract
 
@@ -235,7 +237,7 @@ readback bytes by purpose, and submission count.
 
 ### Observed upstream and adversary gates
 
-- 39 focused Metal examples pass; 18 CPU examples and six Python contracts
+- 42 focused Metal examples pass; 18 CPU examples and six Python contracts
   also pass. They include eight recurrent/cache rows
   across convolution-ring wrap, capacity overflow, immediate EOS/empty prefix,
   invalid GPU expert ID/rank, non-finite intermediates hidden behind a finite
@@ -278,7 +280,7 @@ residency/ownership path; executed upstream replays supply the numerical
 support. The stronger exact-sampler, concurrent/reset, long-form, subjective
 speech-quality, and general performance claims remain outside the evidence.
 
-### Measured M2 Max latency
+### Measured M2 Max latency at resident baseline `b91ad1e7`
 
 The final resident profile for `Hello.`, seed 0, 23 prompt rows and 17 frames
 through EOS takes 19.9842 s: backbone 15.0293 s (40 rows), tower 2.0170 s
@@ -316,6 +318,84 @@ Refresh fixed-input gates, matched generation, readback audit/accounting,
 and timings after changes to source, precision, assets, compiler, device/OS,
 workload, or evidence availability. A failed gate reopens the affected claim;
 an earlier WAV or a structurally valid evidence JSON does not close it.
+
+### Packed rank batching and coalesced Delta state
+
+The current resident backbone batches independent selected expert ranks into
+one dispatch per packed projection. Gate/up share the input vector; down reads
+a separate intermediate per rank. Quantized weights remain packed, router IDs
+remain on GPU, and affine-group arithmetic retains its original order. A final
+kernel adds ranks in their original order, then the existing shared expert is
+added. This reduces the rank-dependent dispatches from 49 to 6 per MoE layer.
+Dense fixture matrices retain the scalar expert route.
+
+The private Delta state now stores `[value_head,key,value]`, making neighboring
+value lanes contiguous. Each lane still processes keys in exactly the same
+order. The state starts at zero and has no external layout contract. Both
+choices are frozen at backbone initialization; setting `DRAMA3_MOE_BATCH=0`
+and `DRAMA3_DELTA_TRANSPOSE=0` restores the previous kernels in the same binary.
+Both default to 1 and reject values other than 0 or 1.
+
+Risk: CAUTION (performance and recurrent layout). The baseline is `b91ad1e7`;
+the rollback flags above or CPU restore the earlier routes. The strongest
+falsifier is a kernel-only gain that disappears in complete text-to-WAV or
+changes routing, cache continuation, codes, or the readback boundary. Promotion
+requires the existing upstream gates, exact previous-native replay, focused
+failure/cache checks and matched completed inference timing. Heavy probes run
+serially under `scripts/run_safe.sh`; other processes are preserved.
+
+Four same-binary fresh-process AB/BA pairs on M2 Max, `Hello.`, seed 0,
+23 prompt rows and 17 generated frames through EOS, give:
+
+| Completed interval | Median optimized / previous ratio | Time reduction |
+| --- | ---: | ---: |
+| Autoregressive backbone, 17 rows | 0.8812 | 11.9% |
+| All GPU command intervals | 0.9438 | 5.6% |
+| Complete inference through WAV writing | 0.9611 | 3.9% |
+
+These are medians of four paired ratios, not ratios of aggregate medians.
+Previous complete runs took 22.3971–23.6972 s; optimized runs took
+21.5529–21.7429 s, with every pair improving. Both arms use identical synchronous
+profiling and GPU-timeline flags (129 commands). Preparation and completion
+remain inside the original sidecar timer. One extra ordinary unprofiled pair
+(90 commands) took 23.8942 s previous / 19.3659 s optimized, with identical
+output; this single pair does not establish a general 19% gain. Host load was
+not controlled, and these are bounded local observations.
+
+The isolated actual-shape Delta benchmark uses two warmups and seven AB/BA
+pairs of 30 dispatches. Its median GPU ratio is 0.6969 (30.3% less kernel time),
+with every final state/output bit equal. This is a small part of backbone
+runtime, not a 30% whole-model speedup. Reproduce it with
+`examples/drama3_delta_benchmark.cr` and the normal Metal build flags.
+
+All 243 backbone traces, 726 tower traces (including 20 strict terminal gates)
+and 30 DAC stage/waveform traces pass the unchanged upstream tolerances and
+match the previous native values bitwise. Every full run has the same prompt,
+codes, EOS and WAV bytes (SHA-256
+`3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49`).
+The normal readback ledger remains 152 control / 140,012 terminal bytes, with
+no activation/diagnostic reads. Full MLX PCM replay remains within one count.
+New regressions compare Q4/Q8 shared/per-rank projections at unaligned offsets,
+duplicate ranks, group tails, invalid IDs/widths, rank-sum cancellation, and
+every Delta state/output bit across varied recurrent rows. The focused suite
+passes 42 Metal / 18 CPU examples and six Python contracts.
+
+The first submission remains the dominant open latency target. One instrumented
+baseline command spends 10.9795 s before GPU start and 0.1348 s on GPU; all
+library/function/pipeline API calls together account for about 13 ms. These
+timestamps do not distinguish deferred driver work, resource preparation,
+pinning, or page faults. No weight-view, hazard-tracking, scheduling or timer
+hoisting change is promoted. Optional `DRAMA3_METAL_TIMELINE=1` emits GPU command
+intervals; `COGNI_METAL_SUBMIT_PROFILE=1` adds the existing bridge timestamps.
+First attribute this pre-GPU interval before choosing another startup change.
+
+Correlated source adversary review is ROBUST within the validated matrix,
+layout and arithmetic bounds; executed replay supplies numerical evidence.
+The source/binary/input identities, per-pair observations and refresh policy
+are in [drama3-resident-speed-evidence.json](drama3-resident-speed-evidence.json).
+Refresh on the source, precision, assets, compiler, input, device/OS or artifact
+availability changes listed above. Long-form, concurrent/reset, stock BF16,
+subjective quality, realtime and general cross-device speed remain unclaimed.
 
 ## Historical hybrid Metal slice (`9622936a`)
 

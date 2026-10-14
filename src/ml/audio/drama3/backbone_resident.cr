@@ -13,10 +13,20 @@ module ML::Audio::Drama3
     @values : Array(Resident::Buffer?)
     @conv : Array(Resident::Buffer?)
     @delta : Array(Resident::Buffer?)
+    @delta_kernel : String
+    @batch_experts : Bool
 
     def initialize(@config : BackboneConfig, @store : WeightStore, @ctx : Resident::Context, @capacity : Int32)
       raise ArgumentError.new("resident backbone capacity must be 1..1024") unless @capacity.in?(1..1024)
       raise ArgumentError.new("resident router supports at most 512 experts") unless @config.experts <= 512
+      layout = ENV["DRAMA3_DELTA_TRANSPOSE"]? || "1"
+      raise ArgumentError.new("DRAMA3_DELTA_TRANSPOSE must be 0 or 1") unless layout.in?("0", "1")
+      # Freeze the layout for the entire recurrent state lifetime. The legacy
+      # route is retained for matched performance/parity probes and rollback.
+      @delta_kernel = layout == "1" ? "dr3_delta_step_transposed" : "dr3_delta_step"
+      batch = ENV["DRAMA3_MOE_BATCH"]? || "1"
+      raise ArgumentError.new("DRAMA3_MOE_BATCH must be 0 or 1") unless batch.in?("0", "1")
+      @batch_experts = batch == "1"
       @keys = Array(Resident::Buffer?).new(@config.layers, nil)
       @values = Array(Resident::Buffer?).new(@config.layers, nil)
       @conv = Array(Resident::Buffer?).new(@config.layers, nil)
@@ -96,13 +106,26 @@ module ML::Audio::Drama3
         routing = @ctx.alloc(@config.top_k * 2)
         @ctx.dispatch("dr3_route", SOURCE, [scores, routing], [scores.count.to_u64, @config.top_k.to_u64, @config.norm_topk ? 1_u64 : 0_u64], 1)
         ids = routing.slice(0, @config.top_k)
-        result = @ctx.zeros(@config.hidden)
-        @config.top_k.times do |rank|
-          gate = @ctx.expert(@store.matrix(prefix + ".switch_mlp.gate_proj.weight", 0), x, ids, rank)
-          up = @ctx.expert(@store.matrix(prefix + ".switch_mlp.up_proj.weight", 0), x, ids, rank)
-          down = @ctx.expert(@store.matrix(prefix + ".switch_mlp.down_proj.weight", 0), @ctx.mul(@ctx.silu(gate), up), ids, rank)
-          @ctx.dispatch("dr3_weighted_add", SOURCE, [result, down, routing.slice(@config.top_k + rank, 1)], [result.count.to_u64, 0_u64], result.count)
-        end
+        gate_matrix = @store.matrix(prefix + ".switch_mlp.gate_proj.weight", 0)
+        up_matrix = @store.matrix(prefix + ".switch_mlp.up_proj.weight", 0)
+        down_matrix = @store.matrix(prefix + ".switch_mlp.down_proj.weight", 0)
+        result = if @batch_experts && gate_matrix.scales && up_matrix.scales && down_matrix.scales
+                   gate = @ctx.experts(gate_matrix, x, ids)
+                   up = @ctx.experts(up_matrix, x, ids)
+                   down = @ctx.experts(down_matrix, @ctx.mul(@ctx.silu(gate), up), ids, per_rank_input: true)
+                   combined = @ctx.alloc(@config.hidden)
+                   @ctx.dispatch("dr3_expert_sum", SOURCE, [down, routing, combined], [combined.count.to_u64, @config.top_k.to_u64], combined.count)
+                   combined
+                 else
+                   combined = @ctx.zeros(@config.hidden)
+                   @config.top_k.times do |rank|
+                     gate = @ctx.expert(gate_matrix, x, ids, rank)
+                     up = @ctx.expert(up_matrix, x, ids, rank)
+                     down = @ctx.expert(down_matrix, @ctx.mul(@ctx.silu(gate), up), ids, rank)
+                     @ctx.dispatch("dr3_weighted_add", SOURCE, [combined, down, routing.slice(@config.top_k + rank, 1)], [combined.count.to_u64, 0_u64], combined.count)
+                   end
+                   combined
+                 end
         shared = mlp(x, prefix + ".shared_expert")
         shared_gate = project(prefix + ".shared_expert_gate", x)
         @ctx.dispatch("dr3_weighted_add", SOURCE, [result, shared, shared_gate], [result.count.to_u64, 1_u64], result.count)
@@ -150,7 +173,7 @@ module ML::Audio::Drama3
       @ctx.dispatch("dr3_delta_scale", SOURCE, [q, k], [kw.to_u64, c.key_dim.to_u64], kw)
       v = convolved.slice(2 * kw, c.value_heads * c.value_dim)
       output = @ctx.alloc(v.count)
-      @ctx.dispatch("dr3_delta_step", SOURCE, [q, k, v, a, b, weight(prefix + ".A_log"), weight(prefix + ".dt_bias"), @delta[layer].not_nil!, output], [c.value_heads.to_u64, c.value_dim.to_u64, c.key_heads.to_u64, c.key_dim.to_u64], v.count)
+      @ctx.dispatch(@delta_kernel, SOURCE, [q, k, v, a, b, weight(prefix + ".A_log"), weight(prefix + ".dt_bias"), @delta[layer].not_nil!, output], [c.value_heads.to_u64, c.value_dim.to_u64, c.key_heads.to_u64, c.key_dim.to_u64], v.count)
       normalized = @ctx.rms(output, weight(prefix + ".norm.weight"), c.eps, heads: c.value_heads)
       project(prefix + ".out_proj", @ctx.mul(normalized, @ctx.silu(z)))
     end

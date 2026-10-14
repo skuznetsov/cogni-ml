@@ -29,9 +29,11 @@ module ML::Audio::Drama3::Resident
     @pending = [] of Buffer
     @weights = {} of UInt64 => Buffer
     @status : Buffer?
+    @timeline : Bool
 
     def initialize
       raise "resident Metal requires enabled backend" unless MetalBackend.enabled?
+      @timeline = ENV["DRAMA3_METAL_TIMELINE"]? == "1"
     end
 
     def encoder : ML::Metal::ComputeEncoder
@@ -48,7 +50,14 @@ module ML::Audio::Drama3::Resident
         enc.end_encoding
         command = @command.not_nil!
         @command = nil
-        Profile.measure("resident.submit_wait", category: "synchronization") { command.commit_and_wait }
+        Profile.measure("resident.submit_wait", category: "synchronization") do
+          if @timeline
+            gpu_seconds = command.commit_and_wait_gpu_elapsed_seconds
+            STDERR.puts({event: "drama3_gpu_command", index: @submissions, gpu_seconds: gpu_seconds}.to_json)
+          else
+            command.commit_and_wait
+          end
+        end
         @submissions += 1
         @pending.clear
       end
@@ -230,6 +239,35 @@ module ML::Audio::Drama3::Resident
         raw = Buffer.new(w.buffer, (w.buffer.size // 4).clamp(1_i64, Int32::MAX.to_i64).to_i32)
         dispatch("dr3_embedding", SOURCE, [raw, token, output], [matrix.rows.to_u64, matrix.cols.to_u64, w.offset.to_u64, encoding(matrix.tensor)], matrix.cols)
       end
+      output
+    end
+
+    # Independent ranks share one dispatch, retaining the scalar affine-group
+    # arithmetic of #expert. Down projections read a different input per rank.
+    def experts(matrix : Matrix, x : Buffer, ids : Buffer, per_rank_input : Bool = false) : Buffer
+      raise ArgumentError.new("resident batched experts require affine weights") unless matrix.scales && matrix.biases
+      expected = matrix.cols.to_i64 * (per_rank_input ? ids.count : 1)
+      raise ArgumentError.new("resident batched expert input width") unless x.count == expected
+      raise ArgumentError.new("resident affine groups") if matrix.cols // matrix.group_size > 8192
+      count = matrix.rows.to_i64 * ids.count
+      raise ArgumentError.new("resident batched expert output too large") if count > Int32::MAX
+      weight = MetalBackend.tensor_buffer(matrix.tensor, true)
+      st, bt = matrix.scales.not_nil!, matrix.biases.not_nil!
+      scales, biases = MetalBackend.tensor_buffer(st, true), MetalBackend.tensor_buffer(bt, true)
+      output = alloc(count.to_i32)
+      p = [matrix.rows.to_u64, matrix.cols.to_u64, matrix.bits.to_u64, matrix.group_size.to_u64,
+           weight.offset.to_u64, scales.offset.to_u64, biases.offset.to_u64, encoding(st), encoding(bt),
+           (matrix.tensor.shape.size == 3 ? matrix.tensor.shape[0] : 1).to_u64, per_rank_input ? 1_u64 : 0_u64]
+      enc = encoder
+      enc.set_pipeline(ML::Metal::PipelineCache.get_or_compile("dr3_experts", SOURCE))
+      enc.set_buffer(weight.buffer, 0)
+      enc.set_buffer(scales.buffer, 1)
+      enc.set_buffer(biases.buffer, 2)
+      [x, output, ids].each_with_index { |v, i| enc.set_buffer(v.buffer, i + 3, offset: v.offset) }
+      enc.set_bytes(p.to_unsafe.as(Void*), (p.size * 8).to_i32, 6)
+      enc.set_threadgroup_memory(matrix.cols // matrix.group_size * 4, 0)
+      enc.dispatch_threadgroups({matrix.rows, ids.count, 1}, {64, 1, 1})
+      @pending.concat([x, output, ids])
       output
     end
 

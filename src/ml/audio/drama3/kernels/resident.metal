@@ -41,6 +41,41 @@ kernel void dr3_expert(device const uchar* w [[buffer(0)]],device const uchar* s
     threadgroup_barrier(mem_flags::mem_threadgroup);if(lane==0){float sum=0;for(uint g=0;g<groups;g++)sum+=parts[g];y[r]=sum;}
 }
 kernel void dr3_embedding(device const uchar* w [[buffer(0)]],device const float* token [[buffer(1)]],device float* y [[buffer(2)]],constant ulong* p [[buffer(3)]],uint i [[thread_position_in_grid]]) { if(i<p[1]){int r=int(token[0]);y[i]=r>=0 && r<int(p[0])?dr3_float(w,p[2],ulong(r)*p[1]+i,p[3]):NAN;} }
+kernel void dr3_experts(
+    device const uchar* w [[buffer(0)]], device const uchar* s [[buffer(1)]],
+    device const uchar* b [[buffer(2)]], device const float* x [[buffer(3)]],
+    device float* y [[buffer(4)]], device const float* ids [[buffer(5)]],
+    constant ulong* p [[buffer(6)]], threadgroup float* parts [[threadgroup(0)]],
+    uint2 pos [[threadgroup_position_in_grid]], uint lane [[thread_index_in_threadgroup]]) {
+    uint r = pos.x, rank = pos.y, rows = uint(p[0]), cols = uint(p[1]);
+    float selected = ids[rank];
+    if (!isfinite(selected) || selected < 0 || selected >= float(p[9]) || floor(selected) != selected) {
+        if (lane == 0) y[rank * rows + r] = NAN;
+        return;
+    }
+    uint bits = uint(p[2]), group = uint(p[3]), row = uint(selected) * rows + r;
+    uint groups = cols / group, per = 32 / bits, mask = (1u << bits) - 1;
+    uint input = p[10] ? rank * cols : 0;
+    for (uint g = lane; g < groups; g += 64) {
+        uint ix = row * groups + g;
+        float scale = dr3_float(s, p[5], ix, p[7]), bias = dr3_float(b, p[6], ix, p[8]), part = 0;
+        for (uint j = 0; j < group / per; j++) {
+            uint col = g * group + j * per;
+            uint word = dr3_u32(w, p[4] + (ulong(row) * (cols / per) + col / per) * 4);
+            for (uint k = 0; k < per; k++) {
+                float weight = scale * float((word >> (k * bits)) & mask) + bias;
+                part += weight * x[input + col + k];
+            }
+        }
+        parts[g] = part;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (lane == 0) {
+        float sum = 0;
+        for (uint g = 0; g < groups; g++) sum += parts[g];
+        y[rank * rows + r] = sum;
+    }
+}
 kernel void dr3_embedding_quant(device const uchar* w [[buffer(0)]],device const uchar* s [[buffer(1)]],device const uchar* b [[buffer(2)]],device const float* token [[buffer(3)]],device float* y [[buffer(4)]],constant ulong* p [[buffer(5)]],uint i [[thread_position_in_grid]]) {
     if(i>=p[1])return;int r=int(token[0]);if(r<0||r>=int(p[0])){y[i]=NAN;return;}uint bits=uint(p[2]),per=32/bits,group=uint(p[3]);ulong ix=ulong(r)*(p[1]/group)+i/group;
     uint word=dr3_u32(w,p[4]+(ulong(r)*(p[1]/per)+i/per)*4);y[i]=dr3_float(s,p[5],ix,p[7])*float((word>>((i%per)*bits))&((1u<<bits)-1))+dr3_float(b,p[6],ix,p[8]);

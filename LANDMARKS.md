@@ -28678,3 +28678,45 @@ Refresh after source/toolchain/device/model/workload changes.
   separate mapping/conversion/pipeline preparation from compute before another
   optimization. Refresh gates, readback audit and matched timing on source,
   precision, asset, compiler, input, device/OS or evidence-availability drift.
+
+### Continuation 2026-10-14 — DRAMA-3 resident rank batching and Delta layout
+
+- Baseline is `b91ad1e7`. Packed top-8 expert projections now batch ranks in
+  three GPU dispatches, retaining original affine-group and final rank order
+  (49 rank-dependent dispatches per layer become 6). Private Delta state uses
+  `[head,key,value]` so neighboring value lanes are contiguous; each lane's
+  key-order recurrence stays unchanged. The per-model frozen rollback flags
+  `DRAMA3_MOE_BATCH=0 DRAMA3_DELTA_TRANSPOSE=0` restore the previous routes.
+- Four same-binary AB/BA fresh-process Hello./seed-0 pairs on M2 Max give median
+  optimized/previous ratios 0.8812 autoregressive backbone, 0.9438 GPU interval
+  sum and 0.9611 complete inference. Every pair improves; full profiled runs
+  are 22.3971–23.6972 s previous versus 21.5529–21.7429 s optimized. Preparation
+  remains inside the timer. Host not controlled; this is a bounded observation.
+  One normal-path pair is 23.8942/19.3659 s, not a general 19 percent claim.
+- Seven matched actual-shape Delta microbenchmark pairs give GPU ratio 0.6969;
+  all final state/output bits agree. Reject interpreting this kernel result as
+  a 30 percent whole-model improvement. Source: examples/drama3_delta_benchmark.cr.
+- Fresh 243 backbone / 726 tower / strict 20 terminal / 30 DAC upstream gates
+  pass at unchanged tolerances. All traces are bitwise identical to preceding
+  native values; full prompt/codes/EOS/WAV bytes match in all measured runs.
+  Normal reads remain 152 control / 140,012 terminal bytes. Focused suites pass
+  42 Metal / 18 CPU examples and six Python contracts, including rank-order
+  cancellation, unaligned Q4/Q8 shared/per-rank projection tails, and every
+  recurrent-state bit at asymmetric/actual shapes. Correlated source adversary
+  found no bounded indexing, lifetime or arithmetic-order blocker.
+- GPU residency does not imply autonomous GPU control. Ordinary inference
+  still submits 90 CPU-managed command buffers with row/control/DAC-stage
+  completion waits; profiling adds component waits (129 commands). EOS/finite
+  control is 8 bytes per attempted frame; terminal code/PCM reads remain.
+  Intermediate tensors are not read back. Reducing these waits must preserve
+  bounded scratch ownership and EOS/finite handling.
+- First-command timestamps show 10.9795 s before GPU start and 0.1348 s of GPU
+  execution; synchronous library/function/pipeline APIs total about 13 ms.
+  Deferred driver work, resource preparation, pinning and page faults remain
+  indistinguishable in this probe. No driver/resource/timer-hoisting change
+  promoted. Next: attribute this startup interval and unnecessary host waits.
+- Evidence and reproduction: docs/drama3-resident-speed-evidence.json and
+  docs/drama3-native-frontier.md. Refresh numerical, residency and performance
+  claims on source/reference, precision, asset, compiler, input, device/OS or
+  artifact-availability changes. No broad realtime, concurrent/reset, quality,
+  stock BF16 or cross-device guarantee. Primary dirty Qwen checkout untouched.
