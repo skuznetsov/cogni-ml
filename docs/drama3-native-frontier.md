@@ -1,6 +1,7 @@
 # DRAMA-3 native text-to-WAV frontier
 
-Status: native CPU text-to-WAV smoke observed on the pinned Q4 checkpoint.
+Status: native CPU and opt-in Metal text-to-WAV smoke observed on the pinned
+Q4 checkpoint. Measured Metal scope and replay evidence are recorded below.
 Goal: one short, single-speaker text prompt to a mono 44.1 kHz WAV, with all
 inference computations in Crystal/native libraries. Python/MLX/PyTorch are
 reference and fixture tools only, never the native inference implementation.
@@ -18,9 +19,10 @@ reference and fixture tools only, never the native inference implementation.
   tokenizer, configuration, and index have SHA-256 identities in the evidence
   report linked below.
 - Existing Qwen runtime and dirty primary checkout remain untouched.
-- First runtime is an offline CPU correctness path. Metal optimization,
-  streaming, cloning, speaker switching, and performance promises are outside
-  this initial slice. Unsupported configuration must fail explicitly.
+- The initial runtime is an offline CPU correctness path. The subsequent Metal
+  slice accelerates packed expert projections and DAC convolutions. Streaming,
+  cloning, and speaker switching remain outside this slice. Unsupported
+  configuration must fail explicitly.
 
 ## Design laws
 
@@ -63,8 +65,8 @@ regenerating fixed-input intermediate traces and comparing before generation.
 
 The model directory must contain the pinned MLX-converted snapshot, including
 all indexed safetensors shards, `config.json`, `tokenizer.json`, and
-`codec.safetensors`. Inference uses Crystal and native CPU libraries only;
-reference Python environments are optional and separate.
+`codec.safetensors`. Inference uses Crystal and native libraries; reference
+Python environments are optional and separate.
 
 ```sh
 crystal build --release -Dcpu_only examples/drama3_generate.cr \
@@ -137,7 +139,7 @@ floating-point reductions mean stochastic sequences need not match upstream.
 ## Remaining boundaries
 
 Only short, single-speaker text generation is admitted by this smoke. Voice
-cloning, reference-audio encoding, streaming, speaker switching, Metal kernels,
+cloning, reference-audio encoding, streaming, speaker switching,
 long-form stability, broad intelligibility/quality evaluation, and real-time
 performance remain untested or unimplemented. No subjective listening claim
 is made. Source and weight licensing are recorded separately in
@@ -146,3 +148,135 @@ is made. Source and weight licensing are recorded separately in
 Refresh the evidence after a weight/tokenizer/config change, a source or
 precision change, or a backend change. A failure reopens the affected parity
 claim; retaining a WAV from an earlier run does not close it.
+
+## Metal performance slice
+
+This slice profiles the existing CPU execution before choosing kernels.
+Risk: CAUTION (parallel reductions and CPU/GPU ownership). Rollback is the
+explicit CPU backend and the preceding native implementation commit.
+
+- Measure backbone prefill/decode, tower teacher forcing/sampling, and DAC
+  separately, including per-operation inclusive/exclusive host time. Record
+  loading/setup separately from inference. Synchronous Metal timings must
+  include transfer and command completion; kernel-only time is supplemental.
+- First candidate: packed MLX affine projections and/or DAC convolutions,
+  selected by measured cost. Preserve Float32 weights/activations and the
+  existing cache and sampling semantics. No full-model dense expansion.
+- The strongest failure mode is accumulated numerical drift that changes MoE
+  routing or audio codes despite a plausible final waveform. Retain the
+  upstream intermediate traces as gates at their existing scoped tolerances;
+  do not widen them to make an optimization pass.
+- DoD: profile all three components on the pinned checkpoint; accelerate a
+  measured bottleneck with a selectable Metal backend; pass the synthetic and
+  real-weight intermediate gates and the bounded native text-to-WAV smoke;
+  report measured component and total latency including synchronization.
+- Mini-Quadrumvirate at each key transition: predict the bottleneck/failure,
+  test the discriminating assumption, implement the bounded move, and attack
+  both parity and performance. A failed parity gate rejects that kernel path.
+
+Performance evidence is local to this M2 Max, input, source, backend, and host
+load. It expires after changes to kernels, dispatch, precision, weights, or
+workload shape. CPU and Metal runs use the same bounded inputs; speed does not
+substitute for correctness or establish subjective speech quality.
+
+### Build and profiling
+
+```sh
+make build/bridge.o
+crystal build --release -Ddrama3_metal examples/drama3_generate.cr \
+  --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++ -fuse-ld=/usr/bin/ld" \
+  -o /tmp/drama3_generate_metal
+DRAMA3_BACKEND=metal DRAMA3_PROFILE=/tmp/drama3-metal-profile.json \
+  COGNI_RUN_SAFE_MIN_FREE_PCT=25 RUN_SAFE_PASSTHROUGH_STDIO=1 \
+  scripts/run_safe.sh /tmp/drama3_generate_metal 300 40960 \
+  --model "$MODEL_DIR" --text 'Hello.' \
+  --output /tmp/hello-metal.wav --max-frames 128 --seed 0
+```
+
+`DRAMA3_BACKEND=cpu` is the default, including in a Metal-capable binary. An
+explicit Metal request fails if the binary/device cannot support it; it does
+not silently fall back. Metal requires Darwin, unified memory, and a device
+whose maximum buffer length can cover each mapped shard. All arithmetic in
+this slice remains FP32, with packed Q4/Q8 weights and raw F32/BF16/F16 affine
+scales/biases. Dense projections, attention, routing, gating, and sampling
+continue on the CPU/Accelerate path.
+
+`DRAMA3_PROFILE` enables nested synchronous host spans. JSON records each
+scope path, category, call count, inclusive nanoseconds, and exclusive
+nanoseconds. Sum disjoint component scopes; summing parent and child inclusive
+times double-counts work. Metal spans include binding, submission, completion,
+and readback; first-use mapping and pipeline compilation are included in
+their enclosing spans. `weights.load` and `generator.initialize` are separate
+setup spans. The WAV sidecar's `elapsed_seconds` starts after setup and ends
+after WAV writing; it is inference latency, not process cold-start latency.
+Profiling is disabled when the variable is absent.
+
+`examples/drama3_trace.cr` and `spec/support/drama3/native_tower_trace.cr` accept
+the same backend/profile variables. `examples/drama3_codec_trace.cr` accepts
+`MODEL_DIR CODES_JSON TRACE_JSON [WAV_OUTPUT]` to decode fixed generated frames;
+use `-` for `TRACE_JSON` to omit the potentially large trace bundle.
+
+### Implementation and guards
+
+The packed affine kernel computes each group's subtotal in CPU order, then
+adds groups in ascending order. Contraction/fast math is disabled. Independent
+gate/up projections share one command buffer; the down projections share the
+next. CPU routing and final expert accumulation retain their original order.
+Mapped weights remain packed and retain their mmap owners. Byte loads and
+64-bit offsets support the actual checkpoint's unaligned U32 tensor starts
+and scale offsets beyond 4 GiB. A real-weight replay rejected the initial
+alignment assumption before this correction; focused tests cover odd byte
+offsets, mmap tails, 65 groups, expert selection, reset, and F16 subnormals.
+
+DAC Conv1d uses one output owner and the CPU accumulation order. Transposed
+convolution gathers contributions in the original input-time/channel order,
+with the same causal crop and bias placement. No atomics or reordered
+reductions are used. Weight normalization remains on the CPU. Codec weight
+buffers have a 128 MiB / 128-entry cache with value-change detection. Shared
+scratch is serialized from host write through GPU completion and readback.
+When unloading a model in a library host, call `CodecMetal.clear!` and
+`MetalBackend.reset!` between inferences to release retained device views.
+
+### Observed M2 Max result
+
+The final matched pair uses the same release binary, pinned Q4 checkpoint,
+`Hello.`, seed 0, 23 prompt rows, and all 17 generated frames through EOS.
+Times below are disjoint component scopes and inference wall time in seconds:
+
+| Scope | CPU | Metal enabled |
+| --- | ---: | ---: |
+| Backbone, 40 steps | 101.54 | 35.36 |
+| Tower, 22 teacher-forced + 17 sampled frames | 7.84 | 11.27 |
+| DAC | 141.07 | 4.91 |
+| Generation + DAC + WAV write | 250.55 | 51.61 |
+
+This pair observes 4.86x total acceleration and 28.72x DAC acceleration. Tower
+arithmetic remains on CPU; these measurements do not establish a tower gain.
+The host had unrelated CPU work and Spotlight activity, which were preserved.
+There is no quiet-host or statistical performance claim. The earlier batched
+Metal run took 48.54 s; the individual-submission Metal stage took 62.82 s.
+Expert batching reduces 38,400 waits to 3,200, plus 44 DAC commands. It bypasses
+`Matrix#matvec`, so compare `metal.affine_batch` and enclosing MoE counts,
+rather than expecting Metal's `matvec.quant` call count to match the CPU's.
+
+Both final backends reproduce the same prompt IDs, every code frame, EOS,
+and WAV bytes. All 243 backbone traces and 726 tower traces equal the prior
+CPU results exactly, then pass their existing upstream gates. Real two-frame
+MLX DAC gates and the synthetic unequal-upsampling probe pass. Full 17-frame
+MLX DAC PCM comparison retains the previous maximum one-count PCM16 error.
+Final checks: 25 Metal examples including real codec parity, 18 CPU examples,
+four focused synthetic codec examples, and six Python contract checks; no
+failures, errors, or pending Crystal examples.
+
+First-use preparation is substantial: the final Metal run's first prefill row
+takes 23.48 s; later rows take about 0.38 s. Dense CPU projections and tower,
+and bounded per-expert GPU weight views, are the next candidates. Separate
+mapping/page preparation from lazy floating conversion before attributing
+startup cost. This slice does not establish real-time generation.
+
+The measured CPU baseline and both Metal stages, exact-output checks, source
+hashes, commands, and remaining bottlenecks are in
+[drama3-metal-evidence.json](drama3-metal-evidence.json). Existing upstream
+tolerances above remain unchanged. A correlated read-only adversary review
+found no in-scope indexing, ownership, or expert-ordering blocker; numerical
+and timing claims rely on the executed replays, not that review alone.

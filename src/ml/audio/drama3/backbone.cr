@@ -68,6 +68,10 @@ module ML::Audio::Drama3
     end
 
     def step(input : Vector) : Vector
+      Profile.measure("backbone.step", category: "backbone") { step_impl(input) }
+    end
+
+    private def step_impl(input : Vector) : Vector
       raise ArgumentError.new("backbone input width mismatch") unless input.size == @config.hidden
       hidden = input
       @config.layers.times do |i|
@@ -91,6 +95,10 @@ module ML::Audio::Drama3
     end
 
     def mlp(x : Vector, prefix : String) : Vector
+      Profile.measure("backbone.mlp", category: "backbone") { mlp_impl(x, prefix) }
+    end
+
+    private def mlp_impl(x : Vector, prefix : String) : Vector
       gate = @store.matrix(prefix + ".gate_proj.weight").matvec(x)
       up = @store.matrix(prefix + ".up_proj.weight").matvec(x)
       gated = Array(Float32).new(gate.size) { |i| gate[i] * Ops.sigmoid(gate[i]) * up[i] }
@@ -98,15 +106,17 @@ module ML::Audio::Drama3
     end
 
     def moe(x : Vector, prefix : String) : Vector
+      Profile.measure("backbone.moe", category: "moe") { moe_impl(x, prefix) }
+    end
+
+    private def moe_impl(x : Vector, prefix : String) : Vector
       scores = Ops.softmax(@store.matrix(prefix + ".gate.weight").matvec(x))
       ids = (0...scores.size).to_a.sort_by { |i| {-scores[i], i} }.first(@config.top_k)
       denominator = @config.norm_topk ? ids.sum { |i| scores[i] } : 1_f32
       result = Array(Float32).new(@config.hidden, 0_f32)
-      ids.each do |e|
-        gate = @store.matrix(prefix + ".switch_mlp.gate_proj.weight", e).matvec(x)
-        up = @store.matrix(prefix + ".switch_mlp.up_proj.weight", e).matvec(x)
-        act = Array(Float32).new(gate.size) { |j| gate[j] * Ops.sigmoid(gate[j]) * up[j] }
-        result_vector = @store.matrix(prefix + ".switch_mlp.down_proj.weight", e).matvec(act)
+      projections = expert_projections(x, prefix, ids)
+      ids.each_with_index do |e, index|
+        result_vector = projections[index]
         weight = scores[e] / denominator
         result.size.times { |j| result[j] += result_vector[j] * weight }
       end
@@ -116,7 +126,40 @@ module ML::Audio::Drama3
       result
     end
 
+    private def expert_projections(x : Vector, prefix : String, ids : Array(Int32)) : Array(Vector)
+      {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
+        if MetalBackend.enabled?
+          matrices = ids.flat_map do |e|
+            [@store.matrix(prefix + ".switch_mlp.gate_proj.weight", e),
+             @store.matrix(prefix + ".switch_mlp.up_proj.weight", e)]
+          end
+          down = ids.map { |e| @store.matrix(prefix + ".switch_mlp.down_proj.weight", e) }
+          if matrices.all?(&.scales) && down.all?(&.scales)
+            # Gate/up projections are independent. Down projections depend only
+            # on their own gated activations. Keep routing and final expert
+            # accumulation on the CPU in their original order.
+            projected = MetalBackend.affine_batch(matrices, Array(Vector).new(matrices.size) { x })
+            activations = Array(Vector).new(ids.size) do |index|
+              gate, up = projected[index * 2], projected[index * 2 + 1]
+              Array(Float32).new(gate.size) { |j| gate[j] * Ops.sigmoid(gate[j]) * up[j] }
+            end
+            return MetalBackend.affine_batch(down, activations)
+          end
+        end
+      {% end %}
+      ids.map do |e|
+        gate = @store.matrix(prefix + ".switch_mlp.gate_proj.weight", e).matvec(x)
+        up = @store.matrix(prefix + ".switch_mlp.up_proj.weight", e).matvec(x)
+        act = Array(Float32).new(gate.size) { |j| gate[j] * Ops.sigmoid(gate[j]) * up[j] }
+        @store.matrix(prefix + ".switch_mlp.down_proj.weight", e).matvec(act)
+      end
+    end
+
     private def full_attention(x : Vector, prefix : String, cache : BackboneState) : Vector
+      Profile.measure("backbone.attention.full", category: "attention") { full_attention_impl(x, prefix, cache) }
+    end
+
+    private def full_attention_impl(x : Vector, prefix : String, cache : BackboneState) : Vector
       c = @config
       projected = @store.matrix(prefix + ".q_proj.weight").matvec(x)
       q = [] of Float32
@@ -154,6 +197,10 @@ module ML::Audio::Drama3
     end
 
     private def linear_attention(x : Vector, prefix : String, cache : BackboneState) : Vector
+      Profile.measure("backbone.attention.linear", category: "attention") { linear_attention_impl(x, prefix, cache) }
+    end
+
+    private def linear_attention_impl(x : Vector, prefix : String, cache : BackboneState) : Vector
       c = @config
       qkv = @store.matrix(prefix + ".in_proj_qkv.weight").matvec(x)
       z = @store.matrix(prefix + ".in_proj_z.weight").matvec(x)

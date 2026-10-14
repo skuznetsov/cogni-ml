@@ -3,7 +3,7 @@ require "../src/ml/audio/drama3/generator"
 require "../src/ml/audio/drama3/codec"
 require "../src/ml/audio/drama3/wav"
 
-# Offline native CPU correctness entry point. MLX/Python are never called.
+# Offline native inference entry point. MLX/Python are reference tools only.
 model_path = ""
 text = ""
 output = "drama3.wav"
@@ -27,6 +27,8 @@ end
 abort "--model and --text are required" if model_path.empty? || text.strip.empty?
 abort "max-frames must be in 1..512" unless max_frames.in?(1..512)
 abort "output already exists: #{output}" if File.exists?(output) || File.exists?(output + ".json")
+ML::Audio::Drama3::Profile.configure_from_env!
+metal = ML::Audio::Drama3::MetalBackend.enabled?
 config = JSON.parse(File.read(File.join(model_path, "config.json")))
 abort "only fish_omni at 44100 Hz is supported" unless config["model_type"].as_s == "fish_omni" && config["sample_rate"].as_i == 44100
 abort "codec.safetensors is required" unless File.file?(File.join(model_path, "codec.safetensors"))
@@ -51,8 +53,11 @@ samples = codec.decode(generation.codebooks)
 peak = samples.max_of(&.abs)
 rms = Math.sqrt(samples.sum { |v| v.to_f64 * v } / samples.size)
 abort "waveform is silent" unless peak > 1e-6 && rms > 1e-7
-ML::Audio::Drama3::Wav.write(output, samples)
+ML::Audio::Drama3::Profile.measure("wav.write", category: "io") do
+  ML::Audio::Drama3::Wav.write(output, samples)
+end
 report = {
+  backend: metal ? "metal" : "cpu",
   model_path: model_path, text: text, seed: seed, temperature: temperature, top_k: top_k, top_p: top_p,
   prompt_rows: prompt.size, prompt_ids: prompt.map(&.[0]), frames: generation.frames,
   stopped_on_eos: generation.stopped, truncated: !generation.stopped,
@@ -60,5 +65,6 @@ report = {
   peak: peak, rms: rms, elapsed_seconds: (Time.instant - started).total_seconds,
 }
 File.write(output + ".json", report.to_pretty_json)
+ML::Audio::Drama3::Profile.write_from_env
 STDERR.puts "frame bound reached; WAV is a truncated prefix" unless generation.stopped
 puts({output: output, frames: generation.frames.size, stopped_on_eos: generation.stopped, samples: samples.size, peak: peak, rms: rms}.to_json)

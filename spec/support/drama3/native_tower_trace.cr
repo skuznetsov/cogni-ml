@@ -8,6 +8,8 @@ abort "usage: native_tower_trace MODEL_DIR INPUTS_JSON OUTPUT_JSON" unless ARGV.
 model_dir = File.expand_path(ARGV[0])
 inputs = JSON.parse(File.read(ARGV[1])).as_h
 output_path = File.expand_path(ARGV[2])
+Profile.configure_from_env!
+MetalBackend.enabled?
 
 def json_vector(value : JSON::Any, name : String) : Vector
   value.as_a.map do |item|
@@ -112,3 +114,4 @@ output = JSON.build do |json|
   end
 end
 File.write(output_path, output)
+Profile.write_from_env

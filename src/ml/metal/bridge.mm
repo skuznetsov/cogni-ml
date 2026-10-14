@@ -237,6 +237,11 @@ static int32_t ensure_device() {
     return init_device_impl();
 }
 
+extern "C" int64_t gs_max_buffer_length() {
+    if (ensure_device() != 0) return 0;
+    return (int64_t)gs_device.maxBufferLength;
+}
+
 // ============================================================================
 // Device Management
 // ============================================================================

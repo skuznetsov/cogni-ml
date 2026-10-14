@@ -1,6 +1,7 @@
 require "json"
 require "c/sys/mman"
 require "../../../ml/gguf/dequant"
+require "./profile"
 
 # Native CPU correctness primitives for the MLX-converted DRAMA-3 checkpoint.
 # MLX affine quantization is stored as low-bit-first UInt32 words; it is not GGUF.
@@ -44,6 +45,7 @@ module ML::Audio::Drama3
     getter shape : Array(Int32)
     getter dtype : String
     getter count : Int64
+    getter owner : MappedFile?
     @values : Vector?
     @raw : Bytes?
     @owner : MappedFile?
@@ -95,6 +97,10 @@ module ML::Audio::Drama3
       IO::ByteFormat::LittleEndian.decode(UInt32, @raw.not_nil![index * 4, 4])
     end
 
+    def raw_bytes : Bytes?
+      @raw
+    end
+
     def values : Vector
       @values ||= values_slice(0, count.to_i32)
     end
@@ -108,6 +114,8 @@ module ML::Audio::Drama3
   class Matrix
     getter rows : Int32
     getter cols : Int32
+    getter tensor : Tensor, scales : Tensor?, biases : Tensor?
+    getter bits : Int32, group_size : Int32, expert : Int32
     @tensor : Tensor
     @scales : Tensor?
     @biases : Tensor?
@@ -176,7 +184,15 @@ module ML::Audio::Drama3
     end
 
     def matvec(x : Vector) : Vector
+      span = @scales ? "matvec.quant" : "matvec.dense"
+      Profile.measure(span, category: "matvec") { matvec_impl(x) }
+    end
+
+    private def matvec_impl(x : Vector) : Vector
       raise ArgumentError.new("matrix input width #{x.size} != #{@cols}") unless x.size == @cols
+      {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
+        return MetalBackend.affine(self, x) if @scales && MetalBackend.enabled?
+      {% end %}
       y = Array(Float32).new(@rows, 0_f32)
       unless @scales
         dense = @dense ||= @tensor.values_slice(@expert * @rows * @cols, @rows * @cols)
@@ -230,24 +246,30 @@ module ML::Audio::Drama3
     def initialize(path : String)
       @tensors = {} of String => Tensor
       @quantization = nil
-      if File.file?(File.join(path, "config.json"))
-        @quantization = JSON.parse(File.read(File.join(path, "config.json")))["quantization"]?
+      Profile.measure("weights.load", category: "loading") do
+        if File.file?(File.join(path, "config.json"))
+          @quantization = JSON.parse(File.read(File.join(path, "config.json")))["quantization"]?
+        end
+        files = if File.file?(File.join(path, "model.safetensors.index.json"))
+                  index = JSON.parse(File.read(File.join(path, "model.safetensors.index.json")))
+                  index["weight_map"].as_h.values.map(&.as_s).uniq
+                else
+                  ["model.safetensors"]
+                end
+        files.each do |name|
+          raise ArgumentError.new("invalid shard path") unless File.basename(name) == name
+          load_file(File.join(path, name))
+        end
+        codec = File.join(path, "codec.safetensors")
+        load_file(codec, "codec.") if File.file?(codec)
       end
-      files = if File.file?(File.join(path, "model.safetensors.index.json"))
-                index = JSON.parse(File.read(File.join(path, "model.safetensors.index.json")))
-                index["weight_map"].as_h.values.map(&.as_s).uniq
-              else
-                ["model.safetensors"]
-              end
-      files.each do |name|
-        raise ArgumentError.new("invalid shard path") unless File.basename(name) == name
-        load_file(File.join(path, name))
-      end
-      codec = File.join(path, "codec.safetensors")
-      load_file(codec, "codec.") if File.file?(codec)
     end
 
     private def load_file(path : String, prefix = "")
+      Profile.measure("weights.file", category: "loading") { load_file_impl(path, prefix) }
+    end
+
+    private def load_file_impl(path : String, prefix : String) : Nil
       owner = MappedFile.new(path)
       n = IO::ByteFormat::LittleEndian.decode(UInt64, owner.slice(0_i64, 8_i64)).to_i64
       raise ArgumentError.new("invalid safetensors header size") unless n > 1 && n <= 64 * 1024 * 1024 && n <= owner.size - 8
@@ -350,3 +372,5 @@ module ML::Audio::Drama3
     end
   end
 end
+
+require "./metal"

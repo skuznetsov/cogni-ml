@@ -28598,3 +28598,37 @@ Refresh after source/toolchain/device/model/workload changes.
   `docs/qwen-image21-gguf-frontier.md`. Reprofile before widening to another
   device, batch, GGUF policy, or resolution. Evidence decays on model/GGUF,
   prompt, kernel/compiler, device/OS, Python component, or harness changes.
+
+### Continuation 2026-10-14 — DRAMA-3 native Metal profile and exact-order kernels
+
+- Pinned native text-to-WAV base is `e1065a75`; source/model/reference identities
+  and unchanged numerical gates are in `docs/drama3-native-frontier.md` and
+  `docs/drama3-metal-evidence.json`. Metal is opt-in with `-Ddrama3_metal` plus
+  `DRAMA3_BACKEND=metal`; CPU remains the default rollback.
+- Initial CPU profile selected packed Q4/Q8 expert matvec (87.40 s) and DAC
+  (141.45 s). Metal preserves scalar FP32 group order and convolution
+  accumulation order. Batched gate/up and down expert dispatches reduce
+  38,400 expert waits to 3,200; the DAC adds 44 commands. Dense projections,
+  tower, routing, gating, and sampling still use CPU/Accelerate.
+- Reject typed/aligned shard-offset assumptions: actual U32 data starts at
+  byte 1,032,369,718 (2 mod 4); BF16 scales can begin beyond 4 GiB. Use 64-bit
+  byte offsets/LE loads, raw scalar conversion, retained mmap owners, bounded
+  codec cache, and scratch ownership through GPU completion/readback.
+- Same final binary, `Hello.`, seed 0, 17 frames through EOS on M2 Max:
+  CPU 250.55 s / Metal 51.61 s inference (4.86x); backbone 101.54/35.36 s,
+  tower 7.84/11.27 s, DAC 141.07/4.91 s. Earlier batched Metal was 48.54 s.
+  Host was not quiet; this is a local observation, not a universal latency
+  bound or cold-start measurement. First-use pipeline/mapping costs occurring
+  during inference are included; initial setup is excluded.
+- Prompt IDs, all codes, EOS, and WAV bytes agree exactly with CPU. The
+  243 backbone/726 tower trace values agree exactly with prior CPU and pass
+  existing upstream gates. Fresh real/synthetic MLX DAC gates pass; complete
+  17-frame MLX PCM replay remains within one PCM16 count. Final suites passed
+  25 Metal, 18 CPU, four synthetic codec examples and six Python contracts.
+  Correlated read-only adversary found no scoped ownership/index/order blocker.
+- Next: dense CPU/tower and first-use preparation. Per-expert mapped GPU
+  views are a candidate, not an established fix. Refresh fixed-input parity
+  and matched generation after source, precision, weights, compiler, device/OS,
+  workload or artifact drift. No stock BF16, long-form, quality, concurrency,
+  or real-time claim. Library model unload must clear CodecMetal and reset
+  MetalBackend; CLI exit releases retained globals.

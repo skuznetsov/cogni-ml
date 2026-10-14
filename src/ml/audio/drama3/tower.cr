@@ -257,6 +257,12 @@ module ML
         # Process one known previous/current frame pair. `previous_frame` and
         # `next_frame` are [main, c0, ..., cN-1]; each layer appends one KV row.
         def teacher_force(hidden : Vector, previous_frame : Array(Int32), next_frame : Array(Int32), caches : Array(TowerCache), trace : TowerTraceCallback? = nil, trace_prefix : String = "tower.teacher_force.row0") : TowerOutput
+          Profile.measure("tower.teacher_force", category: "tower") do
+            teacher_force_impl(hidden, previous_frame, next_frame, caches, trace, trace_prefix)
+          end
+        end
+
+        private def teacher_force_impl(hidden : Vector, previous_frame : Array(Int32), next_frame : Array(Int32), caches : Array(TowerCache), trace : TowerTraceCallback?, trace_prefix : String) : TowerOutput
           validate_vector!(hidden, @config.dim, "hidden")
           validate_frame!(previous_frame, "previous_frame")
           validate_frame!(next_frame, "next_frame")
@@ -313,6 +319,12 @@ module ML
         # code in the following codebook layer. `previous_frame` supplies the
         # unseen code embeddings from the preceding backbone frame.
         def sample_frame(main : Int32, hidden : Vector, previous_frame : Array(Int32), caches : Array(TowerCache), trace : TowerTraceCallback? = nil, trace_prefix : String = "tower.decode.row0", &sample : Vector -> Int32) : TowerSample
+          Profile.measure("tower.sample_frame", category: "tower") do
+            sample_frame_impl(main, hidden, previous_frame, caches, trace, trace_prefix) { |logits| yield logits }
+          end
+        end
+
+        private def sample_frame_impl(main : Int32, hidden : Vector, previous_frame : Array(Int32), caches : Array(TowerCache), trace : TowerTraceCallback?, trace_prefix : String, &sample : Vector -> Int32) : TowerSample
           validate_vector!(hidden, @config.dim, "hidden")
           validate_frame!(previous_frame, "previous_frame")
           validate_caches!(caches)
@@ -435,6 +447,12 @@ module ML
         end
 
         private def run_layer(layer : TowerLayerWeights, hidden : Vector, embedding : Vector, cache : TowerCache, trace : TowerTraceCallback?, trace_prefix : String) : Vector
+          Profile.measure("tower.layer", category: "tower") do
+            run_layer_impl(layer, hidden, embedding, cache, trace, trace_prefix)
+          end
+        end
+
+        private def run_layer_impl(layer : TowerLayerWeights, hidden : Vector, embedding : Vector, cache : TowerCache, trace : TowerTraceCallback?, trace_prefix : String) : Vector
           trace_value(trace, "#{trace_prefix}.embedding", [1_i32, 1_i32, @config.dim], embedding)
           normalized_embedding = Ops.rms_norm(embedding, layer.enorm, @config.norm_eps, true)
           normalized_hidden = Ops.rms_norm(hidden, layer.hnorm, @config.norm_eps, true)
@@ -461,6 +479,12 @@ module ML
         end
 
         private def attention(layer : TowerLayerWeights, input : Vector, cache : TowerCache, trace : TowerTraceCallback?, trace_prefix : String) : Vector
+          Profile.measure("tower.attention", category: "attention") do
+            attention_impl(layer, input, cache, trace, trace_prefix)
+          end
+        end
+
+        private def attention_impl(layer : TowerLayerWeights, input : Vector, cache : TowerCache, trace : TowerTraceCallback?, trace_prefix : String) : Vector
           q_width = @config.n_head * @config.head_dim
           kv_width = @config.n_local_heads * @config.head_dim
           projected = Ops.linear(input, layer.wqkv)
@@ -527,6 +551,12 @@ module ML
         end
 
         private def feed_forward(layer : TowerLayerWeights, input : Vector, trace : TowerTraceCallback?, trace_prefix : String) : Vector
+          Profile.measure("tower.feed_forward", category: "tower") do
+            feed_forward_impl(layer, input, trace, trace_prefix)
+          end
+        end
+
+        private def feed_forward_impl(layer : TowerLayerWeights, input : Vector, trace : TowerTraceCallback?, trace_prefix : String) : Vector
           up = Ops.linear(input, layer.w1)
           gate = Ops.linear(input, layer.w3)
           activated = Ops.silu(up)

@@ -1,4 +1,5 @@
 require "./native"
+require "./codec_metal"
 
 # Native decoder ported from mlx-audio fish_s1_dac.py at
 # e7488935ec2ebfafd38ef2b58e290d79f3d05dc7 (MIT).
@@ -77,6 +78,10 @@ module ML
         end
 
         def decode(codebooks : Array(Array(Int32))) : Vector
+          Profile.measure("codec.decode", category: "codec") { decode_impl(codebooks) }
+        end
+
+        private def decode_impl(codebooks : Array(Array(Int32))) : Vector
           latent = decode_codebooks(codebooks)
           trace_matrix("quantizer.codebook_sum", latent)
           latent = post_transformer(latent)
@@ -100,6 +105,10 @@ module ML
         end
 
         private def decode_codebooks(codebooks : Array(Array(Int32))) : Matrix
+          Profile.measure("codec.decode_codebooks", category: "codec") { decode_codebooks_impl(codebooks) }
+        end
+
+        private def decode_codebooks_impl(codebooks : Array(Array(Int32))) : Matrix
           raise ArgumentError.new("at least the semantic codebook is required") if codebooks.empty?
           raise ArgumentError.new("too many codebooks for configured decoder") if codebooks.size > @config.residual_codebooks + 1
 
@@ -147,6 +156,10 @@ module ML
         end
 
         private def post_transformer(input : Matrix) : Matrix
+          Profile.measure("codec.post_transformer", category: "codec.transformer") { post_transformer_impl(input) }
+        end
+
+        private def post_transformer_impl(input : Matrix) : Matrix
           hidden = input
           @config.post_layers.times do |layer_index|
             prefix = "quantizer.post_module.layers.#{layer_index}"
@@ -156,6 +169,12 @@ module ML
         end
 
         private def transformer_layer(input : Matrix, prefix : String, _layer_index : Int32) : Matrix
+          Profile.measure("codec.transformer_layer", category: "codec.transformer") do
+            transformer_layer_impl(input, prefix, _layer_index)
+          end
+        end
+
+        private def transformer_layer_impl(input : Matrix, prefix : String, _layer_index : Int32) : Matrix
           time = input.rows
           channels = input.cols
           heads = @config.transformer_heads
@@ -260,6 +279,10 @@ module ML
         end
 
         private def decode_waveform(input : Matrix) : Array(Float32)
+          Profile.measure("codec.decode_waveform", category: "codec") { decode_waveform_impl(input) }
+        end
+
+        private def decode_waveform_impl(input : Matrix) : Array(Float32)
           x = conv1d(input, "decoder.model.0", 7, 1, 1, 1, true)
           trace_matrix("decoder.model.0", x)
           channels = @config.decoder_channels
@@ -293,6 +316,12 @@ module ML
         end
 
         private def residual_unit(input : Matrix, prefix : String, channels : Int32, dilation : Int32) : Matrix
+          Profile.measure("codec.residual_unit", category: "codec") do
+            residual_unit_impl(input, prefix, channels, dilation)
+          end
+        end
+
+        private def residual_unit_impl(input : Matrix, prefix : String, channels : Int32, dilation : Int32) : Matrix
           raise ArgumentError.new("residual unit input width mismatch") unless input.cols == channels
           y = snake(input, "#{prefix}.0.alpha")
           y = conv1d(y, "#{prefix}.1", 7, 1, 1, dilation, true)
@@ -304,6 +333,10 @@ module ML
         end
 
         private def convnext(input : Matrix, prefix : String) : Matrix
+          Profile.measure("codec.convnext", category: "codec") { convnext_impl(input, prefix) }
+        end
+
+        private def convnext_impl(input : Matrix, prefix : String) : Matrix
           channels = input.cols
           x = conv1d(input, "#{prefix}.dwconv.conv", 7, 1, channels, 1, false)
           normalized = Array(Float32).new(x.values.size, 0.0_f32)
@@ -358,6 +391,20 @@ module ML
           dilation : Int32,
           weight_normalized : Bool,
         ) : Matrix
+          Profile.measure("codec.conv1d", category: "dac.conv1d") do
+            conv1d_impl(input, prefix, kernel, stride, groups, dilation, weight_normalized)
+          end
+        end
+
+        private def conv1d_impl(
+          input : Matrix,
+          prefix : String,
+          kernel : Int32,
+          stride : Int32,
+          groups : Int32,
+          dilation : Int32,
+          weight_normalized : Bool,
+        ) : Matrix
           in_channels = input.cols
           weight_name = weight_normalized ? "#{prefix}.weight_v" : "#{prefix}.weight"
           weight = tensor(weight_name)
@@ -392,6 +439,9 @@ module ML
 
           bias = vector("#{prefix}.bias")
           raise ArgumentError.new("Conv1d bias width mismatch") unless bias.size == out_channels
+          {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
+            return CodecMetal.conv(input, effective, bias, kernel, stride, groups, dilation, prefix) if MetalBackend.enabled?
+          {% end %}
           output_values = Array(Float32).new(input.rows * out_channels, 0.0_f32)
           left_pad = (kernel - 1) * dilation
           out_per_group = out_channels // groups
@@ -415,6 +465,12 @@ module ML
         end
 
         private def conv_transpose1d(input : Matrix, prefix : String, kernel : Int32, stride : Int32, weight_normalized : Bool = false) : Matrix
+          Profile.measure("codec.conv_transpose1d", category: "dac.conv_transpose1d") do
+            conv_transpose1d_impl(input, prefix, kernel, stride, weight_normalized)
+          end
+        end
+
+        private def conv_transpose1d_impl(input : Matrix, prefix : String, kernel : Int32, stride : Int32, weight_normalized : Bool) : Matrix
           weight_name = weight_normalized ? "#{prefix}.weight_v" : "#{prefix}.weight"
           weight = tensor(weight_name)
           in_channels = input.cols
@@ -439,6 +495,9 @@ module ML
           end
           bias = vector("#{prefix}.bias")
           raise ArgumentError.new("ConvTranspose1d bias width mismatch") unless bias.size == out_channels
+          {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
+            return CodecMetal.transpose(input, effective, bias, kernel, stride, prefix) if MetalBackend.enabled?
+          {% end %}
           frames = input.rows * stride
           output_values = Array(Float32).new(frames * out_channels, 0.0_f32)
           input.rows.times do |t|
@@ -460,6 +519,10 @@ module ML
         end
 
         private def snake(input : Matrix, alpha_name : String) : Matrix
+          Profile.measure("codec.snake", category: "dac.snake") { snake_impl(input, alpha_name) }
+        end
+
+        private def snake_impl(input : Matrix, alpha_name : String) : Matrix
           alpha = tensor(alpha_name)
           raise ArgumentError.new("Snake alpha width mismatch") unless alpha.values.size == input.cols
           output_values = Array(Float32).new(input.values.size, 0.0_f32)
