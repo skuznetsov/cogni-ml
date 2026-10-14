@@ -2,6 +2,8 @@ require "option_parser"
 require "../src/ml/audio/drama3/generator"
 require "../src/ml/audio/drama3/codec"
 require "../src/ml/audio/drama3/wav"
+require "../src/ml/audio/drama3/generator_resident"
+require "../src/ml/audio/drama3/codec_resident"
 
 # Offline native inference entry point. MLX/Python are reference tools only.
 model_path = ""
@@ -42,14 +44,45 @@ tokenizer = ML::Audio::Drama3::Tokenizer.new(File.join(model_path, "tokenizer.js
 end
 prompt = ML::Audio::Drama3::Prompt.build(text, tokenizer, tower_config.num_codebooks)
 store = ML::Audio::Drama3::WeightStore.new(model_path)
-generator = ML::Audio::Drama3::Generator.new(config, store)
 started = Time.instant
-generator.progress = ->(message : String) { STDERR.puts "#{message} elapsed=#{(Time.instant - started).total_seconds.round(2)}s"; nil }
-generation = generator.generate(prompt, max_frames, seed, temperature, top_k, top_p)
-abort "model produced EOS before any audio frame" if generation.frames.empty?
-STDERR.puts "decoding #{generation.frames.size} frames with native DAC"
-codec = ML::Audio::Drama3::Codec.new(store)
-samples = codec.decode(generation.codebooks)
+progress = ->(message : String) { STDERR.puts "#{message} elapsed=#{(Time.instant - started).total_seconds.round(2)}s"; nil }
+resident_readbacks = {} of String => Int64
+resident_submissions = 0_i64
+resident = false
+generation, samples = {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
+                        if metal
+                          resident = true
+                          context = ML::Audio::Drama3::Resident::Context.new
+                          generator = ML::Audio::Drama3::ResidentGenerator.new(config, store, context, prompt.size + max_frames - 1)
+                          generator.progress = progress
+                          result = generator.generate(prompt, max_frames, seed, temperature, top_k, top_p)
+                          abort "model produced EOS before any audio frame" if result.generation.frames.empty?
+                          STDERR.puts "decoding #{result.generation.frames.size} frames with resident Metal DAC"
+                          waveform = ML::Audio::Drama3::Profile.measure("codec.decode", category: "codec") do
+                            codec = ML::Audio::Drama3::CodecResident.new(store, context)
+                            frame_count = result.generation.frames.size
+                            output_buffer = codec.decode(result.deviceframes.slice(0, frame_count * (tower_config.num_codebooks + 1)), frame_count)
+                            context.read(output_buffer, "terminal")
+                          end
+                          resident_readbacks = context.readbacks
+                          resident_submissions = context.submissions
+                          {result.generation, waveform}
+                        else
+                          generator = ML::Audio::Drama3::Generator.new(config, store)
+                          generator.progress = progress
+                          generated = generator.generate(prompt, max_frames, seed, temperature, top_k, top_p)
+                          abort "model produced EOS before any audio frame" if generated.frames.empty?
+                          STDERR.puts "decoding #{generated.frames.size} frames with native DAC"
+                          {generated, ML::Audio::Drama3::Codec.new(store).decode(generated.codebooks)}
+                        end
+                      {% else %}
+                        generator = ML::Audio::Drama3::Generator.new(config, store)
+                        generator.progress = progress
+                        generated = generator.generate(prompt, max_frames, seed, temperature, top_k, top_p)
+                        abort "model produced EOS before any audio frame" if generated.frames.empty?
+                        STDERR.puts "decoding #{generated.frames.size} frames with native DAC"
+                        {generated, ML::Audio::Drama3::Codec.new(store).decode(generated.codebooks)}
+                      {% end %}
 peak = samples.max_of(&.abs)
 rms = Math.sqrt(samples.sum { |v| v.to_f64 * v } / samples.size)
 abort "waveform is silent" unless peak > 1e-6 && rms > 1e-7
@@ -57,7 +90,8 @@ ML::Audio::Drama3::Profile.measure("wav.write", category: "io") do
   ML::Audio::Drama3::Wav.write(output, samples)
 end
 report = {
-  backend: metal ? "metal" : "cpu",
+  backend: resident ? "metal_resident" : "cpu",
+  resident_readbacks: resident_readbacks, resident_submissions: resident_submissions,
   model_path: model_path, text: text, seed: seed, temperature: temperature, top_k: top_k, top_p: top_p,
   prompt_rows: prompt.size, prompt_ids: prompt.map(&.[0]), frames: generation.frames,
   stopped_on_eos: generation.stopped, truncated: !generation.stopped,

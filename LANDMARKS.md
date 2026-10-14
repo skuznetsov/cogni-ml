@@ -28632,3 +28632,49 @@ Refresh after source/toolchain/device/model/workload changes.
   workload or artifact drift. No stock BF16, long-form, quality, concurrency,
   or real-time claim. Library model unload must clear CodecMetal and reset
   MetalBackend; CLI exit releases retained globals.
+
+
+### Continuation 2026-10-14 — DRAMA-3 resident Metal graph
+
+- The opt-in Metal CLI now uses ResidentGenerator and CodecResident. Backbone,
+  tower, routing, FP32 sampling, recurrent/KV state, generated codes, and DAC
+  execute on GPU. The original frame allocation feeds both later backbone
+  rows and DAC; the sidecar's terminal code read does not cause re-upload.
+  CPU remains the default rollback; no Qwen runtime changes.
+- Ordinary Hello./seed-0 inference reads 152 control bytes (18 attempts of
+  4-byte EOS plus 4-byte finite status, then two 4-byte terminal status checks)
+  and 140,012 terminal bytes (codes and F32 PCM). No activation or diagnostic
+  reads were observed; call-site audit supports the ledger. Tokenizer, input
+  preparation, scheduling, EOS branch and terminal I/O remain on the host.
+- Final fixed-input upstream gates pass unchanged: 243 backbone traces,
+  726 tower traces plus strict final-hidden/head-logit gates, 29 DAC internal
+  stages and 4096 waveform values. Full 17-frame pinned MLX DAC replay differs
+  by at most one PCM16 count. Correlated review is source evidence only;
+  executed upstream comparisons establish the declared numerical support.
+- Reject universal exact CPU seeded sampling: the GPU uses FP32 probabilities
+  and rounded uniforms, whereas CPU uses Float64. An equal-logit cutoff probe
+  at top_p=0.99999999 deliberately retains a different candidate on GPU.
+  Also reject the initial main-candidate endpoint bound: EOS adds a head row,
+  so candidate vocab_size must map to semantic_end. Its failing regression
+  now passes for direct/retry selection and still rejects one-past-end.
+- Same corrected binary, Hello./seed-0, M2 Max: CPU 244.1005 s / resident
+  19.9842 s (12.21x observed). Backbone 96.4977/15.0293 s, tower 8.2569/2.0170 s,
+  DAC 139.2602/2.7622 s. Prompt IDs, 17 frames and EOS agree; PCM differs by at
+  most one count. The sidecar timer includes generator initialization through
+  WAV writing but excludes tokenizer/WeightStore/process startup. Earlier
+  resident runs were 22.18/23.92 s; host not quiet, no statistical speed bound.
+- Focused checks pass 39 Metal / 18 CPU examples and six Python contracts.
+  They cover finite faults hidden behind finite outputs, GPU expert bounds,
+  eight-row ring/cache continuation, empty EOS prefix, DAC frame layouts,
+  poisoned main token, and raw singleton alpha/weight_g shapes.
+- Resident buffers and pending views retain ownership through checked command
+  completion; mapped weight globals retain mmap owners. Use one serialized
+  inference and finish before cache reset/unload. Frame/count guards do not
+  establish an aggregate RAM budget or long-form admission. No concurrent,
+  subjective-quality, stock BF16, real-time or broad speed guarantee.
+- Results, source/binary/input hashes, commands and readback formulas live in
+  docs/drama3-native-frontier.md and docs/drama3-resident-evidence.json. The
+  first row (9.34 s in the final GPU run) remains the next profiling target:
+  separate mapping/conversion/pipeline preparation from compute before another
+  optimization. Refresh gates, readback audit and matched timing on source,
+  precision, asset, compiler, input, device/OS or evidence-availability drift.

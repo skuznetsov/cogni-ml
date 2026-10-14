@@ -1,7 +1,9 @@
 # DRAMA-3 native text-to-WAV frontier
 
-Status: native CPU and opt-in Metal text-to-WAV smoke observed on the pinned
-Q4 checkpoint. Measured Metal scope and replay evidence are recorded below.
+Status: native CPU and opt-in resident Metal text-to-WAV smoke observed on
+the pinned Q4 checkpoint. Resident inference keeps model computations,
+activations, logits, routing, code selection, temporal state, and DAC on GPU.
+The exact control/terminal read boundaries and measured scope are below.
 Goal: one short, single-speaker text prompt to a mono 44.1 kHz WAV, with all
 inference computations in Crystal/native libraries. Python/MLX/PyTorch are
 reference and fixture tools only, never the native inference implementation.
@@ -19,10 +21,10 @@ reference and fixture tools only, never the native inference implementation.
   tokenizer, configuration, and index have SHA-256 identities in the evidence
   report linked below.
 - Existing Qwen runtime and dirty primary checkout remain untouched.
-- The initial runtime is an offline CPU correctness path. The subsequent Metal
-  slice accelerates packed expert projections and DAC convolutions. Streaming,
-  cloning, and speaker switching remain outside this slice. Unsupported
-  configuration must fail explicitly.
+- The initial runtime is an offline CPU correctness path. Metal now has a
+  resident model graph; the earlier packed-expert/DAC hybrid is historical.
+  Streaming, cloning, and speaker switching remain outside this slice.
+  Unsupported configuration must fail explicitly.
 
 ## Design laws
 
@@ -86,7 +88,7 @@ is explicitly reported as truncated. The runtime API lives under
 `ML::Audio::Drama3`; the example directly composes `Tokenizer`, `Prompt`,
 `Generator`, `Codec`, and `Wav` in one process.
 
-## Observed verification
+## Native CPU verification baseline
 
 The measured source/asset identities and compact numerical results are in
 [drama3-native-evidence.json](drama3-native-evidence.json). Reference replay
@@ -149,7 +151,177 @@ Refresh the evidence after a weight/tokenizer/config change, a source or
 precision change, or a backend change. A failure reopens the affected parity
 claim; retaining a WAV from an earlier run does not close it.
 
-## Metal performance slice
+## Resident Metal execution
+
+`DRAMA3_BACKEND=metal` in the current Metal-capable CLI selects
+`ResidentGenerator` and `CodecResident`. The preceding hybrid implementation
+remains recorded in the historical section below. CPU remains the default
+backend and explicit rollback. No existing Qwen admission path is changed.
+
+Risk: CAUTION (GPU reductions, dynamic routing, cache ownership, and sampling
+precision). Rollback: `DRAMA3_BACKEND=cpu`, or the preceding `9622936a` commit.
+The highest-risk failure is altered routing/cache arithmetic hidden by a
+plausible waveform. DoD: focused primitive/cache/failure tests, actual
+backbone/tower/DAC gates at their existing tolerances, complete text-to-WAV,
+call-site audit plus readback accounting, and matched component/total timing.
+The executed evidence is indexed in
+[drama3-resident-evidence.json](drama3-resident-evidence.json).
+
+### Device/host contract
+
+- Backbone: dense and packed projections, embeddings, norms, MoE top-k and
+  shared-expert gating, both RoPE layouts, full attention, convolution ring,
+  and Delta state updates execute in Metal. Packed experts stay packed.
+- Tower: teacher forcing, temporal KV caches, enrichment/residual layers,
+  logits, FP32 top-k/top-p selection, repeat fallback, and generated frames
+  remain resident. The next backbone step consumes the original device frame.
+- DAC: codebook reconstruction, raw-weight conversion and normalization,
+  transformer, ConvNeXt, convolutions, Snake, GELU, and waveform run on GPU.
+  Frame layout is `[main,c0,c1,...,c9]`; the decoder ignores main, uses c0 as
+  semantic, and c1..c9 as residual codes. It consumes the valid prefix of the
+  generator's original device allocation without a CPU code re-upload.
+- Host work is tokenizer/config/shape validation, input and seeded-uniform
+  preparation/upload, scheduling, EOS branching, terminal statistics and
+  WAV/JSON I/O. A chosen main token (4 bytes) and a sticky finite-status word
+  (4 bytes) are read per attempted frame. Completed codes are read once for
+  the sidecar and PCM once for WAV; each terminal read checks 4 status bytes.
+  Literal zero host reads is not claimed.
+- Trace callbacks are diagnostic opt-ins. The normal CLI leaves them unset.
+  `Context#read` rejects an `activation` purpose, and records explicit control,
+  terminal, or diagnostic reads. Caller-supplied labels alone do not prove
+  residency: the actual default call sites were also audited.
+
+A serial command encoder retains temporary allocations and bound views until
+checked GPU completion. Views retain their allocations; model/global mapped
+weight caches retain mmap owners. Weight loads use 64-bit byte offsets and
+unaligned-safe scalar decoding. Row/stage completion bounds live scratch.
+GPU finite guards cover layer/component boundaries and sampling inputs; a
+sticky fault rejects the next read even if the terminal tensor is finite.
+This does not assert a finite check after every primitive.
+
+Runtime objects are for one serialized inference. Do not reset global mapped
+weight caches while a resident command/context is active. Finish all work
+before `CodecMetal.clear!` and `MetalBackend.reset!` when unloading a model.
+Concurrent inference/reset is outside the tested contract. Backbone cache
+capacity is 1..1024; sampling top-k is 1..1024. CLI frame bounds do not guarantee
+an aggregate RAM budget: long DAC tensors can be large. The executed admission
+is the short 17-frame smoke, protected by run_safe, not long-form stability.
+
+### Build and profile
+
+```sh
+make build/bridge.o
+crystal build --release -Ddrama3_metal examples/drama3_generate.cr \
+  --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -lc++ -fuse-ld=/usr/bin/ld" \
+  -o /tmp/drama3_generate_resident
+DRAMA3_BACKEND=metal DRAMA3_PROFILE=/tmp/drama3-resident-profile.json \
+  COGNI_RUN_SAFE_MIN_FREE_PCT=25 RUN_SAFE_PASSTHROUGH_STDIO=1 \
+  scripts/run_safe.sh /tmp/drama3_generate_resident 300 40960 \
+  --model "$MODEL_DIR" --text 'Hello.' \
+  --output /tmp/hello-resident.wav --max-frames 128 --seed 0
+```
+
+Omit `DRAMA3_PROFILE` for ordinary inference. Profiling synchronizes component
+boundaries, so enclosing backbone, tower, and DAC spans include actual GPU
+completion; inner MoE/dispatch spans can be enqueue time and are not kernel
+measurements. Sum disjoint component spans only. Normal execution composes
+adjacent component commands and synchronizes at row/control/stage boundaries.
+First-use mapping, conversion, and pipeline compilation occurring during
+inference are included. The current sidecar timer starts before generator
+initialization and ends after WAV writing; it excludes tokenizer/config and
+`WeightStore` construction, process startup, and compilation of the executable.
+It is not a process cold-start metric. The JSON sidecar also records backend,
+readback bytes by purpose, and submission count.
+
+### Observed upstream and adversary gates
+
+- 39 focused Metal examples pass; 18 CPU examples and six Python contracts
+  also pass. They include eight recurrent/cache rows
+  across convolution-ring wrap, capacity overflow, immediate EOS/empty prefix,
+  invalid GPU expert ID/rank, non-finite intermediates hidden behind a finite
+  terminal, tie order, top-p crossing, both codec layouts, poisoned main token,
+  checkpoint singleton shapes `[1,C,1]` / `[C,1,1]`, and the highest semantic
+  candidate in both primary and repeat-fallback selections. The last case
+  failed before correcting an EOS-plus-vocabulary off-by-one bound.
+- Final-source actual backbone: 243 traces / 497,664 values pass unchanged
+  `atol=6e-5, rtol=3e-4`; max absolute error 0.0010986328125 at a large residual
+  (relative error there 6.42e-7).
+- Final-source actual tower: 726 traces / 2,042,880 values pass unchanged
+  internal `atol=6e-4, rtol=3e-4`. Its final hidden states and 18 head logits
+  separately pass the strict `3e-5, 3e-4` envelope: 20 traces / 77,824 values,
+  max absolute error 1.04904e-5.
+- Final-source DAC: all 29 internal stages pass `max_abs<=1e-3`, `RMS<=2e-4`,
+  `normalized_RMS<=2e-4`. Worst observed values are 0.0007963181,
+  0.0001249242, and 0.0000448816, respectively. All 4096 waveform values pass
+  the per-sample `max(5e-5, abs(reference)*1e-3)` gate; max error 2.84016e-5.
+- Full 17-frame DAC replay in pinned MLX: 34,359/34,816 PCM16 samples agree
+  exactly, maximum error one PCM16 count, RMS error 0.1145694 counts. No
+  normalization is used. Native CPU/GPU codes and prompt IDs match for this
+  smoke; GPU/CPU PCM differs by at most one count.
+- The normal smoke reads exactly 152 control bytes (18 attempts * 8 plus
+  two terminal status checks * 4), and 140,012 terminal bytes (748 code bytes
+  plus 139,264 F32 PCM bytes). Diagnostic and intermediate activation reads
+  are zero; the DAC consumes device codes even though the sidecar also reads
+  a terminal copy.
+
+The sampler follows upstream ranking/tie/top-p rules in FP32. A precision
+falsifier deliberately sets top_p=0.99999999 on equal logits: it rounds to 1
+on GPU and can retain a candidate that CPU Float64 excludes. Reject universal
+seeded CPU equivalence; do not hide the difference by widening trace gates.
+Seed uniforms are prepared in the CPU RNG sequence and uploaded once, with
+Float32 rounding. Real checkpoint comparisons continue to promote floating
+weights to FP32 and preserve quantized weights; stock upstream BF16 equality
+is outside this scope.
+
+Correlated source adversary review is ROBUST for the default single-inference
+residency/ownership path; executed upstream replays supply the numerical
+support. The stronger exact-sampler, concurrent/reset, long-form, subjective
+speech-quality, and general performance claims remain outside the evidence.
+
+### Measured M2 Max latency
+
+The final resident profile for `Hello.`, seed 0, 23 prompt rows and 17 frames
+through EOS takes 19.9842 s: backbone 15.0293 s (40 rows), tower 2.0170 s
+(22 teacher-forced plus 17 sampled frames), DAC 2.7622 s. It uses 129
+submissions with profiling enabled. Earlier profiled runs took 22.1805 and
+23.9230 s; an unprofiled run took 22.7126 s with 90 submissions. Those runs
+preceded the final shape-metadata cleanup and/or highest-candidate guard fix;
+their selected codes and WAV bytes are identical to the corrected build.
+These repeats show local variability, not a statistical performance bound.
+
+The same corrected binary takes 244.1005 s with `DRAMA3_BACKEND=cpu`, versus
+19.9842 s resident Metal: 12.21x for this measured workload. Disjoint completed
+component spans are:
+
+| Component | CPU seconds | Resident Metal seconds |
+| --- | ---: | ---: |
+| Backbone | 96.4977 | 15.0293 |
+| Tower | 8.2569 | 2.0170 |
+| DAC | 139.2602 | 2.7622 |
+
+Prompt IDs, all 17 generated code frames and EOS agree; 34,741/34,816 PCM16
+samples agree exactly, with maximum difference one count. The earlier hybrid
+run was 51.6059 s (2.58x slower than this resident run), but used the preceding
+source and excluded generator initialization from its timer. Treat that as a
+historical comparison, not the matched same-binary benchmark.
+
+The first final-run prefill row takes 9.34 s, later rows about 0.19 s, and
+generated rows about 0.21 s. Initial preparation versus execution is the next
+discriminating profiling question; no attribution to a specific driver,
+mapping, or compilation mechanism is established here. Host load was not
+controlled and other processes were preserved. The result is a local M2 Max
+observation, not a real-time, cross-device, or cold-start guarantee.
+
+Refresh fixed-input gates, matched generation, readback audit/accounting,
+and timings after changes to source, precision, assets, compiler, device/OS,
+workload, or evidence availability. A failed gate reopens the affected claim;
+an earlier WAV or a structurally valid evidence JSON does not close it.
+
+## Historical hybrid Metal slice (`9622936a`)
+
+The following records the preceding hybrid source state. Its implementation
+and timing-boundary statements apply to that commit, not the current resident
+CLI. Its preserved evidence is [drama3-metal-evidence.json](drama3-metal-evidence.json).
 
 This slice profiles the existing CPU execution before choosing kernels.
 Risk: CAUTION (parallel reductions and CPU/GPU ownership). Rollback is the
