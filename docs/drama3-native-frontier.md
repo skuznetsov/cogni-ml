@@ -10,6 +10,188 @@ reference and fixture tools only, never the native inference implementation.
 The pinned MLX upstream is a community port; its source-path controls below
 do not establish agreement with the original Fish Audio implementation.
 
+## Shared-uniform sampling and bilingual listening — 2026-10-15
+
+At base `3fc3de68`, the new diagnostic compares production Metal sampling
+with the pinned MLX filters on the same F32 logits. It captures both input
+arms, top-k order, full-vocabulary softmax/CDF, retained probabilities, exact
+sample IDs, and rank-indexed common Gumbel noise. Generation controls upload
+a common F32 uniform tape once, using the native Crystal RNG order: main,
+unconditional repetition retry, then nine residual heads. MLX uses an explicit
+inverse-CDF shadow for these controls. This isolates common-variate behavior;
+it does not establish stock seeded MLX RNG parity. The reference keeps the
+existing F32-promoted core and packed Q4 tensors, with checkpoint-dtype DAC.
+These matched controls call the one-prompt `generate_codes` path. They do not
+reproduce the default long-text orchestration of `Model.generate`.
+
+The original thirty-word native clip and the matched reference have identical
+prompt IDs and **448 complete 11-code frames**, about 20.8 seconds. Both have
+the near-silent suffix from roughly 9.5 seconds. Their first emitted-code
+difference is frame 448, after the quiet transition. A denser teacher-forced
+onset replay captures steps 0/1/2/4/8/16/32/64 and every step 96–223:
+6,127,752 actual-generation values pass unchanged `atol=6e-5, rtol=3e-4`.
+The terminal prediction at step 224 is reported separately as counterfactual.
+This excludes native/reference code divergence as a necessary cause of the
+original quiet onset under the common-uniform control. It does not identify
+why the checkpoint/reference trajectory enters the quiet region.
+
+Actual random draws and main-token history explain persistence of the
+repeated token. At frame 198, token 250598 is new to the 16-frame window and
+the retry is unused. At 199, the first and retry samples both select 250598.
+At 208, both ordinary and retry filters retain only that candidate. Upstream
+repetition-aware sampling makes one retry and accepts its result even when
+it repeats; it is not an exclusion mask. All nine captured RAS decisions
+match the native generation report. The repeated run starts after the signal
+activity transition, so this explains persistence, not the onset of silence.
+
+Three native randomized variants use the exact requested text:
+
+> Я живу в Голливуде, Флорида, США. I live in Holliwood, Florida, USA.
+
+The user hears both languages in seeds 1 and 2, and only Russian in seed 3.
+This is direct human content feedback, not an energy-based transcript or a
+controlled speaker-identity comparison. Seed 3 and the matched MLX shadow
+have identical prompt IDs, all 179 emitted frames, and EOS at the same point.
+Missing English therefore also occurs on a shared trajectory without style
+cues; whisper is not necessary for the listener-reported omission in this
+scope. Random seeds do not guarantee distinct, reproducible speaker identities.
+
+| Prompt / seed | Native / MLX frames | Identical complete prefix | Termination |
+| --- | --- | --- | --- |
+| Original whisper + laughter / 1 | 489 / 513 | 448 | EOS / EOS |
+| Plain bilingual / 1 | 197 / 197 | 197, entire output | EOS / EOS |
+| Plain bilingual / 2 | 148 / 321 | 12 | EOS / EOS |
+| Plain bilingual / 3 | 179 / 179 | 179, entire output | EOS / EOS |
+| Bilingual whisper wrapper / 1 | 384 / 213 | 26 | cap / EOS |
+| Bilingual laughter cue / 1 | 384 / 384 | 198 | cap / cap |
+| Bilingual whisper + laughter / 1 | 287 / 287 | 287, entire output | EOS / EOS |
+| Original thirty words, both cues removed / 1 | 768 / 768 | 768, entire output | cap / cap |
+
+Removing both cues from the original thirty-word text also produces a quiet
+suffix: every half-second window from 5.5 seconds onward peaks at one PCM16
+unit in both outputs. All 768 frames agree, and both hit the configured cap.
+This is a prompt ablation, not a speech-content or termination pass. Native
+wrapper time is 279.029 s and MLX 101.881 s on the shared host; this is not a
+matched performance experiment. Full-text listening for this pair is pending.
+
+Source inspection identifies an API-path difference for the long prompts:
+the styled original is 360 UTF-8 bytes and the no-cue variant is 332, while
+the pinned high-level `Model.generate` defaults to 300-byte text chunks with
+generated-code history. Its first chunk contains the first three sentences
+(265/237 bytes respectively), followed by the 94-byte final sentence. The
+matched one-prompt controls bypass this split. The plain bilingual input is
+only 93 bytes, so this difference does not explain its seed-3 omission.
+
+Two additional controls now call official `Model.generate` with its default
+splitter/history policy, preserving the same F32 core, Q4 weights, row-prefill,
+sampling settings and common uniform prefix. The no-cue prompt emits 515 + 89
+frames (23.917 + 4.133 seconds); the styled prompt emits 741 + 78 frames
+(34.412 + 3.622 seconds). All four chunks terminate by EOS. In the no-cue
+first chunk, every half-second from 7 seconds onward peaks at at most five
+PCM16 units; the styled first chunk has peaks of 37–51 from 12 seconds onward.
+Thus this high-level orchestration does not eliminate the long quiet suffix
+inside the first chunk in these runs. The second chunks have active signal,
+but signal activity does not establish word delivery. Listening remains pending.
+The within-text comparison changes prompt splitting, history and DAC segment
+boundaries together; the styled and no-cue arms do not isolate chunking from
+markup. The 768-frame cap is per chunk versus per prompt, so total termination
+budgets are not matched. Wrapper times of 121.732 / 162.294 seconds are shared-host observations,
+not a performance comparison or promotion.
+
+The opt-in `--chunk-text` reference adapter uses the official host prompt
+builder with zero-code history placeholders, then replaces only guarded audio
+spans using GPU MLX operations. Actual history-code values remain on GPU during
+generation. After terminal evaluation, all four prompt tensors match the
+restored official `build_chunk_prompt` byte-for-byte. A single uploaded tape
+is consumed across the chunks; `--max-frames` is per chunk and capture-step
+indices are global. The native first styled chunk has the same text, 71 prompt
+IDs, model path, seed, settings and initial F32 variates as reference chunk 0.
+It emits 427 frames versus 741, sharing 111 complete frames before columns 9/10
+diverge at frame 111. That new fork is not numerically localized or a parity
+pass. Native stops before residual sampling on terminal EOS, while MLX samples
+all residual heads before its EOS check. The tape has an 11-slot stride;
+native uses 11 slots on non-EOS frames and two on EOS, versus 11 on MLX EOS.
+No native second-chunk or cross-chunk draw-consumption parity is claimed.
+This control tests pinned high-level text orchestration, with a sampler shadow
+and custom GPU history adapter; it is not stock full-program execution.
+
+The short whisper control isolates another failure mode. All 1,216,539
+captured actual-generation intermediate values through step 26 pass the
+existing tolerance, yet residual codebook 4 diverges at step 26. Candidates
+135 and 764 reverse rank by only 1.9–3.8e-6 in temperature-scaled logits.
+The shared draw 0.33058440685272217 selects rank 6, away from a CDF boundary.
+Both GPU samplers choose 135 on the native vector and 764 on the MLX vector.
+The trajectory fork is explained by a near-tie input ranking change; this
+does not localize the arithmetic operation that produced it. No tie band,
+precision, tolerance, or production filter was changed.
+
+The fixed-logit onset probe executes 199 cases, including one synthetic top-k
+boundary tie and both native/reference vectors at nine steps. Exact selected
+IDs, top-k order, kept masks/counts and common-noise IDs agree in those cases.
+The strict gate nevertheless fails: two upstream full CDFs decrease by one
+F32 ULP in their discarded tails. The invariant remains `1e-7`; violations
+are recorded rather than silently relaxed or allowed to abort the remaining
+diagnostics. Malformed/nonfinite data and gross arithmetic corruption still
+reject. Agreement of selected IDs is narrower than full sampler parity.
+The separate whisper fixed-logit probe passes all 67 cases, including 3
+actual RAS decisions, with no CDF invariant failure.
+
+The verifier independently enforces canonical normal/retry settings and
+reopens both source traces by path and SHA-256. It re-derives the captured
+vectors and input comparison statistics, rejecting unbound trace cases or
+edited vectors even when their probe outputs agree. Twenty sampler CPU tests
+and nine generation-control tests pass, including these negative mutations,
+history-span guards and per-chunk/global capture-budget checks;
+Python ASTs, Crystal formatting and `git diff --check` pass. A correlated
+source adversary verdict is ROBUST for consistency with the retained local
+artifacts. Strict sampler parity and a unique causal explanation remain
+unsupported. Trace metadata alone does not authenticate all weight shards
+or attest execution; the external receipts and checkpoint manifest retain
+their stated local provenance limits.
+
+Same-code full WAV comparisons retain the failed one-LSB DAC gate:
+plain seed 1 maximum/RMS delta 16/0.618570 PCM16 units, seed 3 10/0.464103,
+and whisper + laughter 10/0.228216. Lengths and declared 44.1 kHz clocks agree.
+The full thirty-word no-cue pair has maximum/RMS delta 3/0.182296, also failing
+the one-LSB gate.
+These bounds do not establish general codec, pitch, or voice-identity parity.
+Energy analysis is never used to certify delivery of either language.
+
+The new native sampler probe queues all cases and production sample calls on
+GPU, with zero pre-drain reads or completion waits, one submission and one
+final drain. Terminal serialization adds no submission or completion wait.
+The existing scalar EOS/status boundary in generation remains; the new tape
+and captures add no per-step host reads. MLX retains its official row-prefill
+evaluation, frame-EOS evaluation/read and per-chunk decoder-length scalar read.
+The history adapter adds no in-loop code-value readback by source inspection.
+Prompt/provenance preparation
+and terminal reports/WAV serialization run on CPU.
+
+Risk is CAUTION, limited to diagnostic examples, reference helpers and tests.
+Production arithmetic, defaults, graph scheduling, MAP_SHARED and precision
+are unchanged. Rollback is to revert this diagnostic commit. Local artifacts
+and command receipts are in `sampler-voices-20261015/`; the curated index is
+`.landmark/evidence/drama3-sampler-voices.json`. All nine local checkpoint
+files are SHA-bound; remote model revision identity is a label, not an
+authenticated-byte claim. Refresh on source, input, checkpoint, reference,
+precision, runtime, compiler, device/OS or artifact drift. Full text delivery,
+the unique silence cause, strict sampler/DAC parity and the prior MoE39
+hidden[33] gate remain open. No performance or LTP/WBA promotion is claimed.
+
+To reproduce the sampler diagnostic, use `compare_sampler_common.py prepare`
+with native and MLX replay traces, a native-order random tape and selected
+`--step` values. Run `examples/drama3_sampler_compare.cr` on the resulting
+fixture, merge the pinned GPU reference with `sampler_common_reference.py`,
+then run `compare_sampler_common.py compare`. The CLI help documents the
+exact input/output flags. The tape is generated by
+`Random.new(seed)` and `Array(Float32).new(frame_cap * 11) { random.rand.to_f32 }`,
+with no skipped retry draw. The `uniforms` JSON array is uploaded once by
+`generate_mlx_control.py --random-tape`; omit that option for stock MLX
+sampling. Add `--chunk-text` for the bounded official text orchestration control
+and budget the tape for `max_frames * chunk_count * 11` values. Source/build
+receipts are part of the evidence index: shader
+hashes inside a probe report alone do not attest the Crystal harness build.
+
 ## Listening feedback and decoder clock — 2026-10-15
 
 After listening to `generate-native-seed1.wav` and `generate-f32-control.wav`,

@@ -29169,3 +29169,84 @@ Refresh after source/toolchain/device/model/workload changes.
   diagnostics with equal precision and aligned sampling inputs. Original MoE39
   hidden[33] return frontier remains unchanged. See docs/drama3-native-frontier.md.
   Refresh on artifact drift; no tolerance/default/precision/performance promotion.
+
+### Continuation 2026-10-15 — DRAMA-3 common uniforms and bilingual omissions
+
+- At base `3fc3de68`, add diagnostic-only fixed-logit GPU sampling and a pinned
+  MLX generation control using one uploaded F32 uniform tape in native call
+  order: main, unconditional retry, nine residual heads. This is an explicit
+  inverse-CDF shadow, not stock seeded MLX RNG parity. F32 core/Q4 integers and
+  checkpoint-dtype DAC follow the existing reference contract.
+- Original thirty-word outputs share448 full11-code frames (~20.8s), while
+  both become near-silent from9.5s. First emitted difference448 is too late
+  to explain that onset. Denser onset teacher forcing captures sparse0..64
+  and every96..223:6127752 values pass unchanged atol6e-5/rtol3e-4; terminal224
+  is separate/counterfactual. The unique checkpoint/reference cause stays open.
+- Actual tape/history replay matches9/9 RAS decisions. Main250598 is new at198;
+  at199 first/retry both accept it; at208 both filters retain only candidate2500.
+  Upstream retries once and may accept a repeat. This explains persistence,
+  not the earlier quiet transition. Do not change RAS to hide this negative gate.
+- Exact bilingual text preserves `Holliwood`. User hears RU+EN for native
+  seeds1/2, Russian only for3. Seed3 and matched MLX have all179 emitted frames
+  and EOS equal; seed1 all197 equal. Seed2 diverges at12, column8. Randomized
+  variants are not controlled speaker identities. PCM/EOS cannot certify words.
+- Style ablations: whisper-only first diverges26; laughter-only198; both cues
+  all287 equal. Removing both cues from original30words yields768 identical
+  frames in both, at cap, with half-second peaks<=1 PCM16 from5.5s onward.
+  Whisper is unnecessary for these observed quiet/missing-continuation cases.
+  No-cue full-text listening remains pending; do not infer transcript from RMS.
+- New discriminator: long styled/no-cue texts are360/332 UTF-8 bytes, exceeding
+  the high-level MLX default300-byte threshold. Existing controls deliberately
+  call one-prompt generate_codes, bypassing default chunk/history orchestration.
+  Official splits are265+94 /237+94 bytes. Two controls now use official
+  Model.generate split/history policy with F32/Q4,prefill1 and common uniforms.
+  No-cue emits515+89frames (23.917+4.133s); styled741+78 (34.412+3.622s), allEOS.
+  No-cue chunk0 half-second peaks<=5PCM16 from7s onward; styled chunk0 peaks
+  37–51 from12s onward. High-level orchestration retains a long quiet suffix.
+  Chunk1 signal is active; word delivery still requires listening. Within-text
+  controls change split/history/DAC segmentation together; across-markup
+  differences do not isolate chunking. Cap768 is per chunk versus per prompt,
+  not a matched total termination budget. Plain bilingual93bytes is unaffected.
+- New opt-in --chunk-text adapter builds official zero-code history prompts,
+  replaces guarded audio spans onGPU, then terminal-byte-compares all4prompts
+  against restored official build_chunk_prompt: all equal. One tape upload,
+  per-chunk frame caps/global capture indices. No in-loop actual history-code
+  readback by source inspection; official row-prefill/frame-EOS/DAC syncs stay.
+  Native styled chunk0 shares exacttext/71promptIDs/model/settings/initial
+  variates;427vs741frames,111fullframes equal, then columns9/10 differ at111.
+  This new fork is unlocalized, not a numerical parity pass. Native consumes
+  only main/retry on EOS versus all11slots inMLX; no native chunk1 or
+  cross-chunk draw-consumption parity. This is a custom sampler-shadow/GPU
+  history control of pinned text orchestration, not full stock execution.
+- Short-whisper replay all0..26 passes1216539 actual values. At26 residual
+  codebook4, candidates135/764 reverse rank by1.9–3.8e-6 scaled-logit units.
+  SharedU0.33058440685 selects rank6 away from a CDF boundary; both samplers
+  agree per fixed arm. This localizes the sampled fork to input rank sensitivity,
+  not the original arithmetic operation. No tolerance/precision/tie-band change.
+- Fixed-logit onset199cases agree on IDs/order/masks/common-noise IDs, but
+  strict parity FAILS on two one-ULP upstream discarded-tail CDF decreases at
+  unchanged1e-7 monotonic guard. Whisper67cases PASS, including3 RAS checks.
+  Native probes assert0 pre-drain reads/waits,1 queued batch/final wait;
+  terminal reads add no submission/wait. Existing generation EOS/status and
+  official MLX scalar controls remain. No new per-step activation readback.
+- Same-code PCM max/RMS: plain1=16/0.618570, plain3=10/0.464103,
+  whisper+laughter=10/0.228216, original-no-cues=3/0.182296. All retain failed
+  one-LSB DAC gate. Equal lengths/44100Hz headers do not establish F0 parity.
+- Evidence index: `.landmark/evidence/drama3-sampler-voices.json`; raw artifacts
+  `sampler-voices-20261015/`; details/next probes in `docs/drama3-native-frontier.md`.
+  Source/build/run receipts bind the observed harness externally; report shader
+  hashes alone are not execution attestation. All9 local checkpoint files are
+  SHA-bound with post-run metadata recheck; remote revision label unauthenticated.
+- Final tooling DoD: 20 sampler and 9 generation-control CPU tests pass;
+  AST/Crystal format/diff checks pass. Guards reject changed role parameters,
+  missing trace provenance, edited source bytes and vectors rebound to matching
+  outputs. Final retained comparisons reproduce onset FAIL (exactly two CDF
+  invariants) and whisper PASS; no ID/RAS mismatch. Correlated adversary ROBUST
+  for local artifact consistency, not strict parity or unique causation.
+- No production/default/performance/LTP-WBA promotion. Speech delivery, unique
+  silence cause, strict sampler/DAC parity remain IN_PROGRESS. Prior numerical
+  return frontier: MoE39 row1 hidden[33], see `drama3-native-mlx-q4.json`.
+  Rollback: revert diagnostic commit. Refresh on source/model/input/random tape/
+  reference/precision/runtime/compiler/device/OS/artifact drift. Standing scope:
+  sequential run_safe runs, sampled reserve15%, profiling unset, unrelated
+  processes untouched, local commit only and no push.
