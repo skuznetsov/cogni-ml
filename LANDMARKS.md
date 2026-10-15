@@ -29367,3 +29367,35 @@ Refresh after source/toolchain/device/model/workload changes.
   runtime/device/OS/gate/layout or bound listening-evidence drift. Sequential
   run_safe, reserve15%, unrelated processes untouched, local commit/no push.
   Rollback is this atomic diagnostic commit; production kernels are unchanged.
+
+### Continuation 2026-10-15 — emotion placement and voice-control audit
+
+- Base51789b83: eight WAVs complete for RU/EN emotion-with-whisper-last and
+  matching no-cue bodies, seed1,512-frame cap, shared F32 uniform prefix.
+  Prompt IDs exact4/4. EN-end512, RU-plain463, EN-plain239 code frames exact
+  native/MLX; RU-end forks262 and lengths512/494. All inference arithmetic
+  stays GPU; existing EOS/status/drain reads remain. No precision/gate change.
+- User hears final phrase only in native RU-end, not EN-end. Both EN-end
+  decoders have matching peak9–22PCM16 half-second windows6.5–23.777s and no
+  EOS before cap. Code divergence is not necessary for this English result.
+  RU-plain also contains2–2.5s low intervals at peak2 in both decoders, so
+  tags are not necessary for those intervals. Signal windows are not words
+  or sentence alignment; no unique whisper/exit/language cause established.
+- Original Fish/MLX/native controls pass style cues as learned text, without
+  a whisper-state/reset parser. EOS/cap controls length; no energy stop or
+  scheduled inter-sentence gap. One-shot RAS checks prior16main IDs, not audio
+  silence; retry may repeat. Speaker0 is a participant token, not fixed voice.
+  Upstream cloning conditions on reference audio codes plus transcript;
+  native currently lacks reference prompt input/encoder. All8 omit references.
+- Report `docs/drama3-emotion-placement.md`; curated index
+  `.landmark/evidence/drama3-emotion-placement.json`; raw receipts/analyzer/
+  source-tokenizer audit/human bindings in `emotion-whisper-end-20261015/`.
+  Analysis/structural provenance checks pass; exact-code results do not close
+  floating-point parity. Correlated review only; silence cause IN_PROGRESS.
+- Next causal falsifier: same body with only whisper-position changed;
+  separately same plain text/draws with one fixed reference. Return numeric
+  frontier: loaded RoPE coefficients, then code-fork111/MoE39. Refresh on
+  source/model/tokenizer/sampler/conditioning/artifact/runtime/device/OS/gate
+  or bound listening-evidence drift. Authority: sequential run_safe, reserve15%,
+  unrelated processes untouched, local commit/no push. Revert docs/index for
+  rollback; no production behavior changed.

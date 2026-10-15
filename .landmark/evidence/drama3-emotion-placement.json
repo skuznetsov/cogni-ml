@@ -1,0 +1,468 @@
+{
+  "format": "landmark-evidence-v1",
+  "id": "drama3-emotion-placement",
+  "created_at_utc": "2026-10-15T18:36:24.319220+00:00",
+  "base_revision": "51789b8310812a0ebe4b681556bbc468fb15420a",
+  "claim": {
+    "overall": "IN_PROGRESS: unique cause of silent continuation and excessive pauses remains open.",
+    "established_scope": "Eight exploratory WAVs, four exact prompt-ID pairs, completed GPU code/PCM metrics and CPU source/tokenizer audit.",
+    "excluded": [
+      "Causal whisper-exit or language-prevalence claim",
+      "All-word or emotion-delivery certification",
+      "Intermediate floating-point parity",
+      "Original Fish full text generation",
+      "Native reference-voice implementation",
+      "Performance promotion"
+    ]
+  },
+  "risk_and_rollback": {
+    "tier": "SAFE: diagnostic documentation and evidence index only",
+    "reason": "Preserve completed controls and source distinctions before choosing the next causal probe",
+    "rollback": "Revert this report/index commit; no production code or defaults changed",
+    "main_failure_mode": "Treating exact sampled codes or low PCM as proof of words, numerical parity or a unique cause",
+    "guard": "Separate human listening, terminal metrics, source facts and unexecuted interventions"
+  },
+  "source_revisions": {
+    "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml": "51789b8310812a0ebe4b681556bbc468fb15420a",
+    "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/mlx-audio": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+    "/Users/sergey/.cache/cogni-ml/drama3-fish-reference-20261015/fish-speech": "541566932abbaebcb0a40e562a1f846738383f38"
+  },
+  "checkpoint": {
+    "converted_revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+    "local_path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+    "manifest": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/checkpoint-manifest.json",
+      "bytes": 2197,
+      "sha256": "65f43f1449eaef7dd470cf0ee518f7ab5d8f87b2c9a5fae7ca83fc88a4ba2206"
+    },
+    "scope": "Nine cached checkpoint files freshly hashed before generation; terminal size/mtime checked, not a fresh remote attestation"
+  },
+  "control": {
+    "seed": 1,
+    "temperature": 0.8,
+    "top_k": 30,
+    "top_p": 0.9,
+    "max_frames": 512,
+    "reference_audio_or_codes": false,
+    "chunking": false,
+    "native_graph_depth": 2,
+    "mmap_shared": false,
+    "uniforms_compared": 5632,
+    "draws_per_frame": 11,
+    "mlx_rng": "Shared-uniform inverse-CDF shadow; not stock RNG",
+    "precision": "Established F32-core MLX control, packed integer weights preserved, DAC checkpoint dtype; unchanged gates"
+  },
+  "results": [
+    {
+      "engine": "native",
+      "case": "ru-end",
+      "frames": 512,
+      "samples": 1048576,
+      "duration_s": 23.777233560090703,
+      "eos": false,
+      "truncated": true,
+      "tail_peak_le64_start_s": null,
+      "wav": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/native-ru-end.wav",
+      "wav_sha256": "41931c725a397e8102da0872c6fec57e9fdcf666967093ee8da7a9304ea0976c",
+      "report": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/native-ru-end.wav.json",
+      "report_sha256": "0bf65752f94626c6d87469df433bb347410c882a595c1501932bc55c808ffc83"
+    },
+    {
+      "engine": "mlx",
+      "case": "ru-end",
+      "frames": 494,
+      "samples": 1011712,
+      "duration_s": 22.941315192743765,
+      "eos": true,
+      "truncated": false,
+      "tail_peak_le64_start_s": null,
+      "wav": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/mlx-ru-end.wav",
+      "wav_sha256": "9d44aa5a28d1c3c807600c70e6665b2b77910f6daad8eb676f92c5156675566e",
+      "report": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/mlx-ru-end.json",
+      "report_sha256": "a1b5ca3d3de5ee861944192c41c02be57e535e5196ec7e38170579461954c7e8"
+    },
+    {
+      "engine": "native",
+      "case": "en-end",
+      "frames": 512,
+      "samples": 1048576,
+      "duration_s": 23.777233560090703,
+      "eos": false,
+      "truncated": true,
+      "tail_peak_le64_start_s": 6.5,
+      "wav": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/native-en-end.wav",
+      "wav_sha256": "8fe55894d5bdab7e2032cb7934f35ade575ae77a9de5dcbfcdf5bbbf8d094968",
+      "report": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/native-en-end.wav.json",
+      "report_sha256": "955254c246819f2961755745fadcd109f3632034de961bf46d151a1339ff3b5f"
+    },
+    {
+      "engine": "mlx",
+      "case": "en-end",
+      "frames": 512,
+      "samples": 1048576,
+      "duration_s": 23.777233560090703,
+      "eos": false,
+      "truncated": true,
+      "tail_peak_le64_start_s": 6.5,
+      "wav": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/mlx-en-end.wav",
+      "wav_sha256": "cd86e7df434eafb8dc8e419330ef0fc88fa6ab4a989348e49340285fb84fbe91",
+      "report": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/mlx-en-end.json",
+      "report_sha256": "f00a1c69d9b3389c5f9298a1a314948c53017018eddfaf979e24a8822deed16f"
+    },
+    {
+      "engine": "native",
+      "case": "ru-plain",
+      "frames": 463,
+      "samples": 948224,
+      "duration_s": 21.501678004535147,
+      "eos": true,
+      "truncated": false,
+      "tail_peak_le64_start_s": 21.5,
+      "wav": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/native-ru-plain.wav",
+      "wav_sha256": "235fb9477efe998e91ed30f31ab2c9f73b438d1d7b0d40a92b425b87a4da368f",
+      "report": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/native-ru-plain.wav.json",
+      "report_sha256": "d7dec1bb72ebb2cea602cf0d05d1b260e97d2f6f0fe5ec027e0c0fd3e806af94"
+    },
+    {
+      "engine": "mlx",
+      "case": "ru-plain",
+      "frames": 463,
+      "samples": 948224,
+      "duration_s": 21.501678004535147,
+      "eos": true,
+      "truncated": false,
+      "tail_peak_le64_start_s": 21.5,
+      "wav": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/mlx-ru-plain.wav",
+      "wav_sha256": "1c796cd1cfc0675baef3c1a81313ca08b0a41f72537cf1d6382141d8ae205daa",
+      "report": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/mlx-ru-plain.json",
+      "report_sha256": "21623655faa7aaa2636a777d0a156234df6cf50e85e4111784ac28dd2f125b89"
+    },
+    {
+      "engine": "native",
+      "case": "en-plain",
+      "frames": 239,
+      "samples": 489472,
+      "duration_s": 11.099138321995465,
+      "eos": true,
+      "truncated": false,
+      "tail_peak_le64_start_s": null,
+      "wav": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/native-en-plain.wav",
+      "wav_sha256": "2fa36e91c9b032a2a0575c5b23b996d33002cd7d96302c60501df50e18d75802",
+      "report": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/native-en-plain.wav.json",
+      "report_sha256": "e681302b70f7ae5f5b5fbaa45c00187089c2b0f88d08438846a17ec3b154406d"
+    },
+    {
+      "engine": "mlx",
+      "case": "en-plain",
+      "frames": 239,
+      "samples": 489472,
+      "duration_s": 11.099138321995465,
+      "eos": true,
+      "truncated": false,
+      "tail_peak_le64_start_s": null,
+      "wav": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/mlx-en-plain.wav",
+      "wav_sha256": "1e6c9aec2f2798e580785c8d3d8ef1aff2d7370f1b9628d822bc7d28a0223ede",
+      "report": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/mlx-en-plain.json",
+      "report_sha256": "b63521d88cc24d1d1fc556f85268fd06856bb601e71e1b012e66e4b909e718e6"
+    }
+  ],
+  "code_comparisons": [
+    {
+      "case": "ru-end",
+      "prompt_ids_exact": true,
+      "compared_frames": 494,
+      "native_frames": 512,
+      "mlx_frames": 494,
+      "lengths_equal": false,
+      "first_different_common_frame": 262,
+      "length_divergence_frame": 494,
+      "first_difference_frame": 262,
+      "equal_frame_count": 262,
+      "trajectory_parity_claimed": false
+    },
+    {
+      "case": "en-end",
+      "prompt_ids_exact": true,
+      "compared_frames": 512,
+      "native_frames": 512,
+      "mlx_frames": 512,
+      "lengths_equal": true,
+      "first_different_common_frame": null,
+      "length_divergence_frame": null,
+      "first_difference_frame": null,
+      "equal_frame_count": 512,
+      "trajectory_parity_claimed": false
+    },
+    {
+      "case": "ru-plain",
+      "prompt_ids_exact": true,
+      "compared_frames": 463,
+      "native_frames": 463,
+      "mlx_frames": 463,
+      "lengths_equal": true,
+      "first_different_common_frame": null,
+      "length_divergence_frame": null,
+      "first_difference_frame": null,
+      "equal_frame_count": 463,
+      "trajectory_parity_claimed": false
+    },
+    {
+      "case": "en-plain",
+      "prompt_ids_exact": true,
+      "compared_frames": 239,
+      "native_frames": 239,
+      "mlx_frames": 239,
+      "lengths_equal": true,
+      "first_different_common_frame": null,
+      "length_divergence_frame": null,
+      "first_difference_frame": null,
+      "equal_frame_count": 239,
+      "trajectory_parity_claimed": false
+    }
+  ],
+  "human_observations": {
+    "recorded_at_utc": "2026-10-15T18:23:22.517010+00:00",
+    "source": "Direct user listening reply in this conversation",
+    "question": "Are the final phrases audible in the two new native end-whisper files?",
+    "answer_verbatim": "Слышна только в русском",
+    "observations": [
+      {
+        "case": "ru-end",
+        "engine": "native",
+        "phrase": "Только никому не говори наш секрет",
+        "final_phrase_audible_reported": true,
+        "wav": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/native-ru-end.wav",
+        "wav_sha256": "41931c725a397e8102da0872c6fec57e9fdcf666967093ee8da7a9304ea0976c"
+      },
+      {
+        "case": "en-end",
+        "engine": "native",
+        "phrase": "Just don't tell anyone our secret",
+        "final_phrase_audible_reported": false,
+        "wav": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/native-en-end.wav",
+        "wav_sha256": "8fe55894d5bdab7e2032cb7934f35ade575ae77a9de5dcbfcdf5bbbf8d094968"
+      }
+    ],
+    "limits": "Human report covers the native final phrases only; it does not certify all words, emotion delivery, MLX listening, unique cause, or general language dependence."
+  },
+  "code_control_findings": [
+    "Original Fish and MLX tokenize emotion cues as text; native has no whisper mode/reset parser.",
+    "[whisper] encodes as four ordinary BPE IDs; speaker:0 is one special token.",
+    "Generation stops on main EOS or cap, without energy/silence stopping or scheduled sentence gaps.",
+    "Native/MLX one-shot retry tests the first semantic main against the last 16 IDs; retry can repeat. This is not a silence detector.",
+    "Speaker tags identify roles. Reference transcripts and audio codes condition identity; MLX ignores generic voice argument.",
+    "Current native CLI/prompt is text-only speaker0 without reference input; native cloning remains unimplemented."
+  ],
+  "contained_low_signal_intervals": [
+    {
+      "case": "ru-plain",
+      "engine": "native",
+      "start_s": 3,
+      "end_s": 5,
+      "complete_windows": 4,
+      "each_window_peak_pcm16": 2
+    },
+    {
+      "case": "ru-plain",
+      "engine": "native",
+      "start_s": 7,
+      "end_s": 9,
+      "complete_windows": 4,
+      "each_window_peak_pcm16": 2
+    },
+    {
+      "case": "ru-plain",
+      "engine": "native",
+      "start_s": 11.5,
+      "end_s": 13.5,
+      "complete_windows": 4,
+      "each_window_peak_pcm16": 2
+    },
+    {
+      "case": "ru-plain",
+      "engine": "native",
+      "start_s": 15.5,
+      "end_s": 18,
+      "complete_windows": 5,
+      "each_window_peak_pcm16": 2
+    },
+    {
+      "case": "ru-plain",
+      "engine": "mlx",
+      "start_s": 3,
+      "end_s": 5,
+      "complete_windows": 4,
+      "each_window_peak_pcm16": 2
+    },
+    {
+      "case": "ru-plain",
+      "engine": "mlx",
+      "start_s": 7,
+      "end_s": 9,
+      "complete_windows": 4,
+      "each_window_peak_pcm16": 2
+    },
+    {
+      "case": "ru-plain",
+      "engine": "mlx",
+      "start_s": 11.5,
+      "end_s": 13.5,
+      "complete_windows": 4,
+      "each_window_peak_pcm16": 2
+    },
+    {
+      "case": "ru-plain",
+      "engine": "mlx",
+      "start_s": 15.5,
+      "end_s": 18,
+      "complete_windows": 5,
+      "each_window_peak_pcm16": 2
+    }
+  ],
+  "raw_evidence": {
+    "plan.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/plan.json",
+      "bytes": 4357,
+      "sha256": "f41b0158486614ea40b41634e098a8f2369e0583c2fba9de2cd3406aa643184b"
+    },
+    "run.py": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/run.py",
+      "bytes": 4644,
+      "sha256": "535f08edfdb5aca0c10ab84fb0f67cfc69ce356d142f0a595bfe51f7f3fc4f5d"
+    },
+    "checkpoint-manifest.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/checkpoint-manifest.json",
+      "bytes": 2197,
+      "sha256": "65f43f1449eaef7dd470cf0ee518f7ab5d8f87b2c9a5fae7ca83fc88a4ba2206"
+    },
+    "random-tape-prefix-verification.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/random-tape-prefix-verification.json",
+      "bytes": 803,
+      "sha256": "cb50bcbbe2833792f87e5a405bb992bcdef740b524eb1e19d25d87303821d218"
+    },
+    "commands.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/commands.json",
+      "bytes": 86128,
+      "sha256": "aad3cd0213dd889773904746d51e1abe548fd0aaae659c4841ec07c1baa5303e"
+    },
+    "analyze.py": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/analyze.py",
+      "bytes": 7160,
+      "sha256": "48d26b404e0d47a974b9dea590f0a33df85e97f3e46d4ec56d220ca5cb93a038"
+    },
+    "summary.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/summary.json",
+      "bytes": 64962,
+      "sha256": "02d6cb33809b5682ee12476293ab8cf3bc7c327725cd6996835b1546d661305b"
+    },
+    "validate.py": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/validate.py",
+      "bytes": 3425,
+      "sha256": "657e3266e89946ec2014962e350aae5951ed591c417a700c40dcf65ea1606e2d"
+    },
+    "validation.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/validation.json",
+      "bytes": 677,
+      "sha256": "38b08a28d15196fca710e0ef8cad1e207073b5646ec2de5c906c495086836a1c"
+    },
+    "human-listening.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/human-listening.json",
+      "bytes": 1217,
+      "sha256": "77c92172dfda59cf674039aac0b3ce605448fa06691652459eb9a07c303b9046"
+    },
+    "audit_controls.py": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/audit_controls.py",
+      "bytes": 4654,
+      "sha256": "53b958d39c436722c5a5fa662ebff33015708f89820aae9fb714a36d59e06ef4"
+    },
+    "code-control-audit.json": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/code-control-audit.json",
+      "bytes": 8597,
+      "sha256": "d6b8def29bc78fca0be977b6e993328008d659a9e05855ef321687af131c2d04"
+    }
+  },
+  "verification": {
+    "gpu_analysis": {
+      "argv": [
+        "scripts/run_safe.sh",
+        "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+        "240",
+        "2048",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/analyze.py",
+        "ru-end",
+        "en-end",
+        "ru-plain",
+        "en-plain"
+      ],
+      "exit_code": 0,
+      "signal": "Eight PCM window reports and four code/prompt comparisons"
+    },
+    "generation_binding_validation": {
+      "status": "PASS",
+      "cases": [
+        "ru-end",
+        "en-end",
+        "ru-plain",
+        "en-plain"
+      ],
+      "audio_files": 8,
+      "prompt_id_pairs_exact": 4,
+      "input_and_receipt_binding": "Source/command/output hashes and full checkpoint-hash receipt with unchanged terminal size/mtime checked.",
+      "limits": "Binding and structural checks do not verify words, emotions, audibility, parity, causal origin, or runtime operations beyond the executed diagnostics.",
+      "summary_sha256": "02d6cb33809b5682ee12476293ab8cf3bc7c327725cd6996835b1546d661305b",
+      "checkpoint_manifest_sha256": "65f43f1449eaef7dd470cf0ee518f7ab5d8f87b2c9a5fae7ca83fc88a4ba2206",
+      "validated_command_count": 11
+    },
+    "code_control_audit": {
+      "argv": [
+        "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+        "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/audit_controls.py"
+      ],
+      "exit_code": 0,
+      "signal": "11 tokenizer probes, 19 source hashes, eight contained-interval assertions passed"
+    },
+    "final_binding_check": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/report-validation-v2.json",
+    "limits": "Binding/structural validation does not prove runtime semantics, word delivery or causality",
+    "final_binding_check_argv": [
+      "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/validate_report.py"
+    ],
+    "final_binding_check_script_sha256": "65624463099650cff8efe44ca4810a02e5aa126967ed3d78b9b8c98b8d962c4b"
+  },
+  "gpu_boundary": "Model arithmetic on Metal/MLX GPU; existing EOS/status/drain and terminal serialization boundaries retained. No new per-step activation read. Completed outputs upload once for GPU diagnostics. Source/tokenizer indexing is CPU preparation, not inference.",
+  "adversary": {
+    "verdict": "ROBUST within the single-seed code/signal/source scope",
+    "lineage": "Correlated same-lineage read-only mini-Quadrumvirate review, not independent runtime proof",
+    "strong_counterexamples": [
+      "RU no-cue has the same long low intervals in both decoders",
+      "EN-end code equality does not prove words or intermediate parity",
+      "No post-whisper continuation exists in a whisper-last arm",
+      "Two native final-phrase listening reports do not certify all words or MLX audio"
+    ],
+    "rejected_counterexample": "List-order speaker auto-tagging at Fish inference.py:699-718 is S2 code. DRAMA-3 branches and returns at 664-677; 901-913 uses build_drama3_prompt with speaker0 default. Review candidate withdrawn after route check."
+  },
+  "unexecuted": [
+    "ru-early",
+    "en-early",
+    "Isolated whisper-only position ablation",
+    "Fixed-reference paired control",
+    "Original Fish full text generation"
+  ],
+  "next_falsifiers": [
+    "One body with no other styles: no whisper vs early whisper plus untagged continuation vs whisper only last",
+    "Separately add one fixed pre-encoded reference to identical plain text and matched draws",
+    "Numeric return: exact loaded DAC RoPE-coefficient replay, then generation code-fork111/MoE39"
+  ],
+  "refresh_on": [
+    "source/checkpoint/tokenizer/sampler",
+    "prompt/reference/history/chunking",
+    "raw artifact or bound listening-evidence drift",
+    "runtime/device/OS",
+    "precision/layout/gate"
+  ],
+  "continuation_authority": "Sequential run_safe jobs, authorized 15% reserve, unrelated processes untouched, local atomic commit, no push",
+  "storage": "Raw cache is local and outside Git; this curated index is not a substitute for execution evidence",
+  "additional_source_sha256": {
+    "/Users/sergey/.cache/cogni-ml/drama3-fish-reference-20261015/fish-speech/fish_speech/models/text2semantic/inference.py": "73f07e13f59cf88b33862ad579b71467deb8a67f9ba89e5abb9c89c2f87d55dd"
+  }
+}

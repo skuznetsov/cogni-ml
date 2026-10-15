@@ -10,6 +10,45 @@ reference and fixture tools only, never the native inference implementation.
 The pinned MLX upstream is a community port. Original Fish DAC controls below
 cover four saved code streams, not the original text-generation pipeline.
 
+## Emotion placement, pauses and voice controls — 2026-10-15
+
+At base `51789b83`, four one-prompt cases run through native resident Metal
+and the pinned MLX shared-uniform control: Russian/English with five emotion
+cues and whisper last, and the same spoken bodies without cues. The native
+Russian final phrase is heard by the user; the English one is not. All512
+English end-whisper frames match native/MLX exactly, with no EOS and a quiet
+tail from6.5s through the23.777s frame cap (peak9–22PCM16 per half-second
+window). The native/MLX code fork is not necessary for this English result;
+original Fish text generation and unique cause remain untested.
+
+Russian no-cue463 and English no-cue239-frame trajectories also match exactly.
+The Russian no-cue pair still has contained2–2.5s low intervals at peak2PCM16
+per half-second window. These are not word/sentence alignments. Emotion tags
+are not necessary for those intervals. Russian end-whisper diverges at
+zero-based frame262 and finishes512/494frames native/MLX. One seed and these
+two final-phrase reports do not establish language prevalence or full delivery.
+
+Source/tokenizer audit: original Fish and MLX pass emotion cues as text;
+`[whisper]` is four ordinary BPE tokens, with no explicit whisper-state reset.
+The loops emit codes until EOS/cap, with no timed-pause or energy-based stop.
+Their one-shot repetition retry checks the previous16 main IDs, not silence,
+and does not guarantee a non-repeated retry. Offline WAV writing adds no gaps.
+Speaker tags name participants; a specific voice is conditioned by reference
+audio codes plus transcript. MLX ignores its generic `voice` argument. All
+eight controls omit references; native currently has text-only speaker0 and
+no reference-input/encoder interface. Native cloning is not implemented.
+
+See `docs/drama3-emotion-placement.md` and
+`.landmark/evidence/drama3-emotion-placement.json` for exact prompts, source
+anchors, input/output hashes, completed diagnostics and correlated review.
+Raw `emotion-whisper-end-20261015/` stays outside Git. No arithmetic, precision,
+tolerance, defaults or read boundaries changed; timings are not benchmarks.
+Next causal controls: isolate only whisper position, then separately add one
+fixed reference to the same plain prompt/draws. Larger frame bounds alone
+cannot certify restored words. Keep loaded-RoPE replay, code-fork111 and
+MoE39 frontiers open. Refresh on source/model/tokenizer/conditioning/sampler/
+artifact/runtime/device/OS/gate or bound listening-evidence drift.
+
 ## Original Fish full-stream GPU DAC control — 2026-10-15
 
 At base `c259151d`, the original Fish `DAC.from_indices` independently decodes
