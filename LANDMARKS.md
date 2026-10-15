@@ -29080,3 +29080,68 @@ Refresh after source/toolchain/device/model/workload changes.
   precision/compiler/device/OS/artifact drift. Standing authority: sequential
   run_safe runs, sampled reserve 15%, profiling unset, no unrelated process
   manipulation and no push.
+
+### Continuation 2026-10-15 — DRAMA-3 thirty-word timing and silent suffix
+
+- At base `a21ee640`, native Metal seed1/temperature0.8/topk30/topp0.9,
+  graph depth2, native expert down/tree dense/MAP_SHARED off generates 489
+  frames with EOS in 186.776 s wrapper time: generation133.147 s and
+  DAC52.538 s, WAV22.709 s. This is a shared-host, uncontrolled-cache
+  measurement, not a speedup or steady-state claim. Phase clocks add no GPU
+  operation/read/wait; initialization means resident object construction.
+- Full 30-word delivery fails: user hears excellent whisper but no remaining
+  speech. Every half-second from9.5 s onward peaks at only1–2 PCM16 units.
+  Official DAC with identical codes is equally quiet. Whole-clip DAC error
+  max7/RMS0.168956 PCM16 fails the unchanged one-LSB gate; second-half max1.
+  A repeated main token spans frames198–262, but its causal role is unproved.
+  EOS/global RMS cannot certify word delivery; do not count silence as speech.
+- GPU teacher-forced common-prefix capture compares 140 steps, 1670 stages,
+  6269068 F32 values per arm, with F32-promoted upstream floating tensors and
+  packed integers preserved. Steps0/1/2/4/8/16/32/64/128/192/256 and every
+  361–489 are captured. Both down selectors first fail at447; all captured
+  through446 pass at atol6e-5/rtol3e-4. Native failures1051036/max0.861520767;
+  opt-in failures1051066/max0.861519337. Top1 differs448/463, top30 overlap
+  minimum28/30. Late observed drift cannot explain earlier silence. Sparse/
+  dense overlap146 stages/546829 F32 values matches bitwise in both paths;
+  this controls capture perturbation only on those overlaps.
+- Independently sampled low-level official controls use the same87 prompt IDs
+  and settings, rowwise prefill1 and different RNG. Canonical BF16/Q4 core
+  reaches768 cap with weak activity after1 s; F32 core returns384 frames with
+  near-silence after10.5 s. Neither verifies the requested speech. Initial
+  canonical load hit sampled free13% and was stopped by reserve15%; cache0
+  retries complete. Official EOS/DAC scalar reads remain. These controls
+  bypass public high-level chunking and do not establish a unique cause.
+- The public `Model.generate` F32 control returns both expected chunks with
+  default300-byte chunking/prefill128 in108.865 s wrapper time. Chunk0 has
+  534frames/24.799 s, with near-silence from8 s to its end (half-second peaks
+  20–28 PCM16); history-conditioned chunk1 has114frames/5.294 s and activity
+  through4.5 s followed by a quiet tail. Neither reaches its cap; exact stop
+  reason is unavailable. Public chunking does not remove chunk0's silent
+  tail. Changed chunking/prefill/RNG prevents a single-cause inference; no
+  speech-content or full-delivery pass is claimed.
+- Public F32 prompt ablation removes only the whisper wrapper, preserving all
+  words, laughter cue, settings and two chunk boundaries. It returns451/104
+  frames (20.944/4.830 s) in129.996 s wrapper time. Chunk0 half-second peaks
+  remain1–4 PCM16 from7 s onward. Removing the wrapper does not remove the
+  quiet suffix in this run; its contribution to the original trajectory is
+  still open. The port documents laughter cues but merely passes paired tags
+  through tokenization; that source behavior is not a learned-semantics proof.
+- Observed guards:18 Crystal examples and15 Python tests pass,87 prompt IDs
+  match, real CLI invalid range/cache bounds reject. Frame cap permits1–1024
+  with existing1024-row resident-cache guard; default160 and arithmetic stay.
+  Native selected control/terminal reads3928/4027404 bytes; replay pre-drain
+  reads0 and terminal serialization adds no submission/completion wait.
+- Mini-Quadrumvirate: ROBUST for bounded timings, capture fidelity and negative
+  gates; speech delivery/parity/root cause remain IN_PROGRESS. Evidence:
+  `.landmark/evidence/drama3-whisper30.json`, `docs/drama3-native-frontier.md`;
+  local raw artifacts `whisper30-20261015/`. All9 cached files are SHA-bound,
+  with post-run metadata recheck; not authenticated remote identity.
+- Generation next falsifier: equal reference precision, aligned random draws
+  and boundaries around first trajectory divergence/silence onset. Original
+  return frontier remains MoE39 row1 hidden[33], with common
+  normalized-input GPU substitutions described in `drama3-native-mlx-q4.json`.
+  No precision/tolerance/default/performance/LTP-WBA promotion. Rollback:
+  revert this measurement/probe commit. Refresh on source/model/input/reference/
+  precision/runtime/compiler/device/OS/artifact drift. Standing authority:
+  sequential run_safe runs, sampled reserve15%, profiling unset, unrelated
+  processes untouched, no push.

@@ -7,6 +7,168 @@ The exact control/terminal read boundaries and measured scope are below.
 Goal: one short, single-speaker text prompt to a mono 44.1 kHz WAV, with all
 inference computations in Crystal/native libraries. Python/MLX/PyTorch are
 reference and fixture tools only, never the native inference implementation.
+The pinned MLX upstream is a community port; its source-path controls below
+do not establish agreement with the original Fish Audio implementation.
+
+## Thirty-word whisper/laughter measurement — 2026-10-15
+
+At base `a21ee640`, the native resident path was timed on Apple M2 Max / 64 GiB,
+macOS 26.6.2, Crystal 1.21.0 and the same pinned Q4 checkpoint. The input has
+30 whitespace-delimited spoken words, excluding the `<whisper>` tags and
+`[laughs]` cue:
+
+> <whisper>Тише, кажется, за дверью снова шорох. Давай подождём немного и послушаем, что происходит.</whisper> [laughs] Ах, это всего лишь наш кот уронил коробку! Ну и напугал же он нас сегодня, маленький проказник.
+
+Settings: temperature 0.8, top-k 30, top-p 0.9, dense `tree`, expert down
+`native`, MAP_SHARED off and graph depth 2. The official prompt builder and
+native report have identical 87 prompt IDs. This is a single-prompt native
+smoke; upstream's high-level API normally splits at 300 UTF-8 bytes, whereas
+this input has 360 bytes. Tags are ordinary model input, not an implemented
+native style controller. The user reports that the whisper sounds excellent
+but the rest of the requested speech is absent.
+
+| Seed / frame cap | Result | WAV length | Whole wrapper wall time | Native generation / DAC phase |
+| --- | --- | --- | --- | --- |
+| 0 / 512 | 512 frames, capped | 23.777 s | 192.047 s | 135.092 / 56.013 s |
+| 0 / 768 | 768 frames, capped | 35.666 s | 269.553 s | 188.797 / 79.596 s |
+| 1 / 768 | 489 frames, EOS | 22.709 s | 186.776 s | 133.147 / 52.538 s |
+
+The selected seed1 run takes 185.727 s inside the native timer. The wrapper
+includes process/preflight overhead; the native timer starts after WeightStore
+construction and prompt preparation. Phase timers use CPU monotonic clocks and
+add no GPU operation, read or wait. The reported initialization phase is
+resident object construction, not complete eager model loading; first-use work
+can occur in generation. These are individual shared-host runs with uncontrolled
+cache state, not a matched speedup or steady-state latency result. The two
+seed0 runs have an identical 512-frame prefix.
+
+**Full-text delivery failed.** EOS is not evidence that all 30 words were
+spoken. From 9.5 s to the end, every half-second window peaks at only 1–2
+PCM16 units. Official MLX DAC decoding of the same 489 code frames is equally
+quiet there. Across the entire 1,001,472-sample clip the DAC difference is
+maximum 7 PCM16 units, RMS 0.168956; the existing one-LSB gate fails. The
+second half has maximum DAC delta 1 unit and RMS delta 0.046976. This localizes
+the gross silence to the code stream, without claiming full codec parity or
+identifying why the generator chose those codes. A 65-frame repeated main
+token run begins at frame 198 (nominal 9.195 s); it is an observation, not a
+proved cause. PCM activity is not speech recognition or word alignment.
+
+The new common-prefix probes consume all 489 native frame rows on GPU and
+compare backbone hidden/main logits and tower hidden/nine codebook heads.
+They capture steps 0/1/2/4/8/16/32/64/128/192/256 plus every step 361–489:
+140 steps, 1,670 stages and 6,269,068 F32 values per arm. The pinned official
+MLX architecture uses rowwise prefill and F32-promoted floating checkpoint
+tensors, with packed integers preserved. This is the existing numerical
+reference precision, not stock BF16 upstream generation. The native frame
+prefix is teacher-forced in both implementations; sampling is disabled in
+these replays.
+
+At unchanged `atol=6e-5, rtol=3e-4`, both native down and opt-in `mlx_q4` first
+fail at step 447; all captured steps through 446 pass. Native has 1,051,036
+failing values and maximum absolute error 0.861520767 at step 455 main logits;
+the opt-in has 1,051,066 and 0.861519337. Main-logit top1 differs at steps 448
+and 463 in both arms; minimum top30 set overlap is 28/30. These ranks describe
+forced-prefix predictions, not newly sampled output. Dense-tail capture
+reproduces all 146 overlapping sparse stages / 546,829 values bitwise in both
+the native and upstream runs, controlling for capture perturbation on those
+overlaps. The observed late failure around 20.8 s cannot explain the earlier
+onset of silence; unsampled earlier boundaries and sampler behavior remain
+open. It does not isolate a router, reduction or unique rounding operation.
+
+A separate low-level official `generate_codes` control uses the same prompt
+IDs and settings without forced codes. Its core parameters retain canonical
+BF16/Q4 dtypes, with F32 DAC, and prefill is one row per chunk instead of the
+official default 128. This bypasses high-level text chunking. The initial
+official-loader attempt was stopped by run_safe at sampled free memory 13%,
+below the authorized 15% reserve, without a behavioral result. Disabling the
+MLX allocator's free-buffer cache let the retry complete in 46.820 s wrapper
+time: 768 frames / 35.666 s, at the frame cap. After the initial second,
+half-second PCM peaks range from 42 to 90 units. This does not establish
+successful requested speech. Different RNGs and reference precision prevent
+an exact native trajectory or silence-cause inference. The official loop
+retains its per-frame EOS evaluation/read and DAC-length scalar read; this
+control is not synchronization-free. Decode-call and terminal-evaluation
+timings split lazy execution and are not comparable native phase latencies.
+
+A second independently sampled control promotes core floating tensors to F32
+using the replay's shardwise loader, preserving packed integers and the official
+sampler/DAC. It returns 384 frames / 17.833 s before the cap in 72.111 s wrapper
+time (40.215 s loading, 27.677 s generation). Its waveform has activity through
+10.5 s, followed by half-second peaks of only 5–10 PCM16 units to the end.
+There is also a quiet interval at 4–6 s. This is another incomplete behavioral
+control, not a speech-content pass or a matched-RNG native comparison. The
+official API does not expose its termination reason in this report. F32 alone
+does not establish recovery of the requested text.
+
+A third control uses the pinned public `Model.generate` path with the same
+custom F32 core loader, default 300-byte text chunking and 128-row prefill.
+It returns both expected chunks in 108.865 s wrapper time, including 45.113 s
+loading and 61.867 s in the official iterator. The first chunk includes the
+whisper, laughter cue and the sentence ending with "коробку!": 71 prompt rows,
+534 frames / 24.799 s. Every half-second from 8 s to that chunk's end peaks
+at only 20–28 PCM16 units. The history-conditioned second chunk has 633 prompt
+rows and 114 frames / 5.294 s; it has active PCM through 4.5 s, followed by
+a quiet tail. Neither chunk reaches its frame cap; the API does not report
+the precise termination reason. Public chunking therefore does not remove
+the long quiet tail inside the first chunk. This is a public-path control,
+not a single-cause experiment: chunking, prefill and independent RNG change
+the trajectory. PCM activity does not establish which words or styles were
+delivered. Full speech delivery and the unique silence cause remain open.
+
+The pinned port documents `[laughs]` as an inline cue. Its generic splitter
+protects paired tags such as `<whisper>...</whisper>`, while the prompt builder
+passes their text to the tokenizer unchanged; this is not an explicit style
+controller or a source-backed guarantee of the model's learned tag semantics.
+A fourth public-path F32 control removes only that wrapper, retaining every
+spoken word, `[laughs]`, seed/settings and the two chunk boundaries. It returns
+451 + 104 frames in 129.996 s wrapper time. The first chunk is 20.944 s, with
+half-second peaks of only 1–4 PCM16 units from 7 s to its end; the second is
+4.830 s, with activity through 4 s and a quiet tail. Both expected chunks
+return before the cap. Removing the wrapper does not remove the quiet suffix
+in this sampled control. The wrapper is therefore not necessary to reproduce
+this symptom under these conditions; its possible contribution to the original
+trajectory remains open. This single prompt ablation neither establishes
+word delivery nor identifies the generator's silence or stop cause.
+
+Native inference computations and state remain on GPU. The selected generation
+records 3,928 control-read bytes and 4,027,404 terminal-read bytes; graph depth 2
+drains with no pending work or retained bytes. Native diagnostic replays assert
+zero pre-drain readbacks and no additional submissions/completion waits during
+terminal serialization. MLX uses official per-row cache evaluation; its
+internal backend submissions/waits are not instrumented. CPU performs prompt,
+checkpoint, terminal WAV and report work.
+
+Risk: CAUTION, bounded diagnostic and example CLI change. The CLI frame limit
+now permits 1–1024 and rejects a resident prompt/frame bound exceeding the
+existing 1024-row cache. Defaults and kernel arithmetic are unchanged. Rollback:
+revert this measurement/probe commit. The important falsifier is a silent
+suffix despite a non-silent global waveform and EOS, so neither global RMS nor
+EOS is treated as a successful text-delivery gate. The strict comparator rejects
+incomplete/malformed capture schedules, mismatched inputs/config/index, invalid
+F32 data and widened tolerances. A native schedule bug that included checkpoints
+above the frame count was caught before its GPU run and corrected.
+The comparator checks capture contents and identity fields; it does not itself
+attest source files or checkpoint shards. Exact trace hashes, primary-source
+execution receipts and local checkpoint hashes are bound externally in the
+evidence index. The older external control/activity helpers self-report hashes
+matched to their final files; these are not independent launch-time receipts.
+Observed guards: 18 focused Crystal generation/graph examples and 15 Python
+capture/comparator tests pass; real CLI bounds and all 87 prompt IDs pass.
+Mini-Quadrumvirate verdict: ROBUST for these bounded measurements and negative
+gates; VULNERABLE for full-text delivery, which remains open. Correlated review
+does not replace the executed controls.
+
+Raw WAVs/traces and command logs remain local in
+`~/.cache/cogni-ml/drama3-runs/whisper30-20261015/`; the curated index is
+`.landmark/evidence/drama3-whisper30.json`. All actual cached checkpoint files
+were hashed, with unchanged file metadata checked after the measurements;
+this binds local bytes, not authenticated remote revision identity. Refresh
+on source/checkpoint/input/reference/precision/runtime/compiler/device/OS or
+artifact drift. Independent upstream sampling and speech-content verification
+are separate from the common-prefix numerical gate. The next generation
+discriminator needs equal reference precision, aligned random draws and
+captures around the first trajectory divergence / silence onset. The original MoE39
+hidden[33] gate and its next substitution probe below remain the return frontier.
 
 ## Native MLX Q4 arithmetic and full gate — 2026-10-15
 
