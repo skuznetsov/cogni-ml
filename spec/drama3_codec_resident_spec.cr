@@ -168,6 +168,27 @@ include ML::Audio::Drama3
         actual_major = context.read(second, "terminal")
         actual_major.zip(expected).each { |a, b| (a - b).abs.should be < 5.0e-4_f32 }
         context.readbacks.should eq({"control" => 8_i64, "terminal" => expected.size.to_i64 * 8})
+
+        # A device observer retains the actual buffers, rather than invoking
+        # the legacy CPU trace callback. Enabling it must preserve all output
+        # bits and leave the readback ledger empty until the terminal read.
+        traced_context = Resident::Context.new
+        traced_decoder = CodecResident.new(store, traced_context, config)
+        captures = {} of String => Tuple(Resident::Buffer, Int32, Int32)
+        traced_decoder.device_trace = ->(name : String, buffer : Resident::Buffer, rows : Int32, channels : Int32) {
+          traced_context.readbacks.empty?.should be_true
+          buffer.count.should eq(rows * channels)
+          captures[name] = {buffer, rows, channels}
+          nil
+        }
+        traced_output = traced_decoder.decode(traced_context.upload(codebook_major), frames, true)
+        traced_context.readbacks.empty?.should be_true
+        traced_context.read(traced_output, "terminal").should eq(actual_major)
+        captures["quantizer.book.0.embedding"][1..2].should eq({frames, config.codebook_dim})
+        captures["quantizer.book.9.projection"][1..2].should eq({frames, config.latent_channels})
+        captures.has_key?("quantizer.post_module.layers.0").should be_true
+        captures["waveform"][0].should be(traced_output)
+        traced_context.readbacks.should eq({"control" => 4_i64, "terminal" => expected.size.to_i64 * 4})
       ensure
         if previous
           ENV["DRAMA3_BACKEND"] = previous

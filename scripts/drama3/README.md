@@ -99,3 +99,56 @@ This reports PCM count errors and waveform-unit errors using the fixed
 PCM16 scale, with no peak or RMS renormalization. A code replay validates the
 decoder; it does not establish identical upstream stochastic generation or
 subjective speech quality.
+
+## Full-stream GPU DAC cross comparison
+
+`codec_cross_reference.py` decodes a complete saved stream through the pinned
+upstream `DAC.decode` API. It accepts native `[main,c0,...,c9]` frame reports,
+MLX `output.frames`/book-major codes, and an explicit `--chunk-index` for a
+chunked report. The main token is excluded; exactly ten valid, equally long
+DAC codebooks are required. The codec checksum and clean upstream revision
+are checked before model import. F32 checkpoint weights are not converted.
+
+```sh
+python scripts/drama3/codec_cross_reference.py \
+  --codec "$MODEL_DIR/codec.safetensors" --mlx-root "$MLX_ROOT" \
+  --codes-json /tmp/utterance.wav.json --output-dir "$OUT/codec-reference"
+
+crystal build --release -Ddrama3_metal examples/drama3_codec_cross_compare.cr \
+  --link-flags="$(pwd)/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld" \
+  -o "$OUT/codec-cross"
+"$OUT/codec-cross" --self-test
+"$OUT/codec-cross" "$MODEL_DIR" "$OUT/codec-reference/reference.json" \
+  "$OUT/codec-comparison.json" "$OUT/codec-native.wav"
+PYTHONDONTWRITEBYTECODE=1 python -m unittest spec/drama3_codec_cross_reference_spec.py
+```
+
+Use the project's guarded runner for long model jobs. Reference output
+directories and native output files must be new. The native probe supports
+1–1024 complete frames at CogniGraph depth 2. It requires all 58 named
+boundaries: each codebook embedding/projection, their sum, eight post-transformer
+layers, post-module output, upsampling, decoder blocks, and waveform. Layouts
+are checked at every boundary; reference F32 files are hashed before use.
+
+The MLX observer retains actual upstream outputs and must reproduce an
+unobserved official decode exactly. Export happens after full GPU evaluation.
+The native device observer enqueues GPU comparisons without intermediate host
+reads or extra submissions. It reads reduced diagnostics and the completed
+waveform after the existing terminal drain; graph counters must stay unchanged
+across those reads. Timings include diagnostics and are not performance
+benchmarks. The probe does not select new model arithmetic.
+
+The stage limits remain max absolute `1e-3`, RMS `2e-4`, normalized RMS `2e-4`;
+the waveform limit remains `max(5e-5, abs(reference)*1e-3)` per sample. The
+one-PCM16-LSB limit is a separate finite-waveform gate. `full_gate_passes`
+requires both numerical gates and the existing nonzero-waveform sanity check.
+A valid measurement exits zero even when parity gates fail: consume the
+explicit gate fields, not process success, as the parity result. The GPU
+reducer self-test covers equality, deliberately corrupted values across a
+reduction boundary, nonfinite input, zero reference, large indices and window
+statistics against a small independent F64 oracle.
+
+Both WAVs use the native writer's F32 scale and ties-to-even PCM rounding.
+Older `generate_mlx_control.py` artifacts use half-away rounding and can differ
+by one PCM unit at ties. Half-second GPU RMS/peak diagnostics describe signal
+activity; they do not certify words, voice identity or speech delivery.

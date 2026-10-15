@@ -19,6 +19,9 @@ module ML::Audio::Drama3
 
     getter config : CodecConfig
     property trace : Proc(String, Vector, Nil)?
+    # Diagnostic observers can enqueue comparisons or retain immutable device
+    # activations without introducing a host read or completion barrier.
+    property device_trace : Proc(String, Resident::Buffer, Int32, Int32, Nil)?
 
     @store : WeightStore
     @context : Resident::Context
@@ -27,6 +30,7 @@ module ML::Audio::Drama3
     def initialize(@store : WeightStore, @context : Resident::Context,
                    @config : CodecConfig = CodecConfig.default, @prefix : String = "codec.")
       @trace = nil
+      @device_trace = nil
     end
 
     # `codes` is either frame-major [frames,main,c0,...,cN] or, when
@@ -104,8 +108,14 @@ module ML::Audio::Drama3
           [frames.to_u64, input_width.to_u64, book.to_u64, vocab.to_u64,
            @config.codebook_dim.to_u64, codebook_major ? 1_u64 : 0_u64], embedded.count,
         )
+        if callback = @device_trace
+          callback.call("quantizer.book.#{book}.embedding", embedded, frames, @config.codebook_dim)
+        end
         projected = conv1d(Activation.new(frames, @config.codebook_dim, embedded),
           "#{prefix}.out_proj", 1, 1, 1, 1, true)
+        if callback = @device_trace
+          callback.call("quantizer.book.#{book}.projection", projected.data, frames, channels)
+        end
         latent = Activation.new(frames, channels, @context.add(latent.data, projected.data))
       end
       @context.submit
@@ -404,6 +414,7 @@ module ML::Audio::Drama3
     end
 
     private def trace_activation(name : String, activation : Activation) : Nil
+      @device_trace.try(&.call(name, activation.data, activation.rows, activation.channels))
       if callback = @trace
         callback.call(name, @context.read(activation.data, "diagnostic"))
       end

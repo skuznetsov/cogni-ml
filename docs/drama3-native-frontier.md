@@ -10,6 +10,111 @@ reference and fixture tools only, never the native inference implementation.
 The pinned MLX upstream is a community port; its source-path controls below
 do not establish agreement with the original Fish Audio implementation.
 
+## Full-stream same-code GPU DAC comparison — 2026-10-15
+
+At base `1898cc55`, four complete saved streams are decoded independently by
+native resident Metal and the pinned official MLX `DAC.decode`: the audible
+bilingual seed-1 positive, both independently generated styled first chunks,
+and the common no-cue stream. Each arm receives exactly the same ten DAC
+codebooks; the main token is excluded. No frame truncation, code clipping,
+resampling, gain normalization, precision or production kernel change.
+
+The new optional native device observer captures actual buffers at 58
+boundaries: ten embeddings/projections, the combined latent sum, eight
+post-transformer layers, post-module output, both upsampling stages, all
+decoder blocks and waveform. Comparisons, compensated reductions and
+half-second waveform statistics run on GPU. There are no activation host
+reads during native decode. All four runs retain the existing 32 submitted
+and completed command buffers at CogniGraph depth 2; terminal reduced-metric
+and completed-waveform reads add no submission or completion wait.
+This preserves existing drain boundaries, not a claim of zero GPU waits.
+
+The reference observer retains actual upstream module outputs on MLX GPU.
+For every case its full waveform is elementwise identical to a separate
+unobserved official decode. Only after complete evaluation are reference
+fixtures exported; native uploads them once before its decode. These fixture
+and final diagnostic/WAV serialization boundaries are outside model arithmetic.
+
+| Complete code stream | Frames | Duration | First failed stage | Max PCM16 delta |
+| --- | ---: | ---: | --- | ---: |
+| Bilingual seed 1, audible positive | 197 | 9.149 s | post-transformer layer 0 | 16 |
+| Native styled first chunk | 427 | 19.830 s | post-transformer layer 0 | 4 |
+| MLX styled first chunk | 741 | 34.412 s | post-transformer layer 0 | 13 |
+| Common original text without cues | 768 | 35.666 s | post-transformer layer 0 | 3 |
+
+All ten embedding outputs are bit-exact in all four cases. Every book
+projection and combined latent sum passes the existing stage limits. The
+first violated limit is max absolute error at
+`quantizer.post_module.layers.0`: 0.0249863 / 0.0291367 / 0.0316620 / 0.0228043
+in table order. This names the earliest failed observed boundary, not the
+first nonzero numerical error or a particular arithmetic primitive.
+The limits remain max absolute `1e-3`, RMS `2e-4`, normalized RMS `2e-4`;
+waveform remains `max(5e-5, abs(reference)*1e-3)` per sample, plus the separate
+finite one-PCM16-LSB gate and nonzero-waveform sanity check. Every full parity
+gate fails. A successful probe process means a valid measurement, not parity.
+
+The measured quiet continuation survives both decoders over the entire saved
+stream, including the two first chunks whose codes diverge after frame 111.
+For native-generated codes from 4.0–19.830 s, every half-second window peaks
+at 36–57 PCM16 units; for MLX-generated codes from 12.0–34.412 s, 37–51 units.
+For the no-cue codes from 5.5–35.666 s, every window peaks at one unit.
+Native/reference window peaks agree in every window of these regions.
+These are low residual signals, not literal digital zeros or a transcript.
+The earlier user listening report remains the source for missing words in
+the two named first chunks. No new agent listening or ASR accuracy claim.
+
+The three reproduced native WAVs are byte-identical to their archived
+generation outputs. For all three available archived MLX controls, terminal
+F32 output reproduces their PCM exactly with the legacy half-away rounding.
+The new cross-comparison WAVs instead use native ties-to-even rounding in both
+arms. This separates a terminal one-unit serialization difference from model
+arithmetic; it does not erase any failed gate.
+
+This refutes a native-DAC-only explanation for the gross quiet continuation
+in the tested streams: substituting MLX does not restore it. It does not
+establish why the codes/reference enter that region, correctness of the
+codes as speech, original Fish parity, or absence of a shared codec/checkpoint/
+representation defect. Numeric DAC parity remains open independently.
+Source inspection matches the 128-token inclusive causal window, RMS
+epsilon `1e-5`, RoPE formula and block equations. Different reduction/fused
+attention paths and precomputed versus recomputed RoPE remain hypotheses,
+not localized causes.
+
+A separate lazy-GPU metadata/binding audit closes the `strict=False` missing
+independent-weight hypothesis for this checkpoint. All 541 sanitized tensor
+names/shapes match the independent model slots, and official loading binds
+all 541 to the supplied checkpoint arrays. A naive strict load rejects 120
+extra nested convolution slots in 60 modules. These are runtime weight/bias
+destinations: the pinned causal weight-normalization wrapper overwrites them
+from loaded `weight_g`, `weight_v` and bias before every call/step. The audit
+matches every missing slot to exactly those destinations and checks their
+lazy replacement; no decode or tensor evaluation is required. It does not
+certify checkpoint semantics or original Fish agreement.
+
+The GPU reducer self-test passes against a small independent F64 fixture
+oracle, including corruption across a reduction partition, equality,
+nonfinite input, zero-reference normalization, large indices and waveform
+windows. The resident spec passes two examples, including observer-on/off
+bitwise equality and both input layouts. Ten reference-input CPU specs,
+Crystal formatting and diff checks pass. Raw activations remain outside Git.
+Diagnostic timings include retention/reductions/I/O and are not benchmarks.
+A correlated source/report adversary finds the measured substitution claim
+ROBUST within these four streams, while preserving every failed parity gate.
+The observer callback receives a mutable buffer; its read-only behavior is
+checked for this probe, not guaranteed by the public callback type.
+
+Index: `.landmark/evidence/drama3-codec-cross.json`; raw source/build/run and
+fixture receipts: `codec-cross-20261015/`. Tools and commands are documented
+in `scripts/drama3/README.md`. The existing generation/MoE39 return frontiers
+remain open. Next silence discriminator: the same complete codes/checkpoint
+through the original Fish codec, or independently validated speech codes, to
+challenge shared-reference failure. Next numeric discriminator: layer-0
+attention norm/QKV/RoPE/attention/residual/FFN boundaries on matched input,
+with GPU reductions and terminal-only reads. Refresh on source, compiler,
+checkpoint, input/artifact, upstream, runtime/device/OS, precision/layout/
+gate or directly bound listening-evidence drift. Rollback is the atomic
+diagnostic commit; the production observer defaults to nil.
+
 ## Listening follow-up and local ASR limits — 2026-10-15
 
 At base `3156210b`, the user confirms that neither

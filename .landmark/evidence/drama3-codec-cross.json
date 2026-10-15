@@ -1,0 +1,669 @@
+{
+  "format": "landmark-evidence-v1",
+  "id": "drama3-codec-cross-20261015",
+  "created_at_utc": "2026-10-15T16:16:27.082220+00:00",
+  "base_revision": "1898cc55baa8a507b5af06a6456cd79ae0f587f2",
+  "boundaries": {
+    "allowed_paths": [
+      "src/ml/audio/drama3/codec_resident.cr",
+      "spec/drama3_codec_resident_spec.cr",
+      "examples/drama3_codec_cross_compare.cr",
+      "examples/support/drama3_codec_compare.metal",
+      "scripts/drama3/codec_cross_reference.py",
+      "spec/drama3_codec_cross_reference_spec.py",
+      "scripts/drama3/README.md",
+      "docs/drama3-native-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/drama3-codec-cross.json"
+    ],
+    "changed_paths": [
+      "src/ml/audio/drama3/codec_resident.cr",
+      "spec/drama3_codec_resident_spec.cr",
+      "examples/drama3_codec_cross_compare.cr",
+      "examples/support/drama3_codec_compare.metal",
+      "scripts/drama3/codec_cross_reference.py",
+      "spec/drama3_codec_cross_reference_spec.py",
+      "scripts/drama3/README.md",
+      "docs/drama3-native-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/drama3-codec-cross.json"
+    ],
+    "raw_artifacts": "External local cache only; no generated F32 tensors, audio, binaries or checkpoints committed. Local availability is not a remote durability guarantee."
+  },
+  "claim": {
+    "level": "IN_PROGRESS",
+    "scope": "Completed four full-stream same-code GPU DAC comparisons, with 58 actual intermediate boundaries each. Strict parity fails; replacing native DAC with the pinned MLX decoder does not restore the measured quiet continuation.",
+    "native_dac_only_silence_explanation_refuted_for_tested_streams": true,
+    "strict_dac_parity": "FAIL",
+    "unique_silence_cause_established": false,
+    "speech_fixed": false,
+    "production_arithmetic_precision_tolerances_defaults_changed": false,
+    "performance_or_ltp_wba_promotion": false
+  },
+  "design": {
+    "risk": "CAUTION diagnostic observer and GPU comparison; production arithmetic unchanged",
+    "reason": "Shared-prefix agreement did not cover the two diverging styled continuations. Test every saved code, rather than regenerate a different stochastic stream.",
+    "input_contract": "Exactly ten complete codebooks [10,T], semantic vocab4096 followed by nine residual vocab1024; main token excluded; no clipping, frame truncation, resampling or gain normalization.",
+    "native_execution": "Optional device observer only enqueues Metal reductions. No activation host reads before full decode completion. Existing CogniGraph depth2 drain retained; terminal diagnostics/waveform reads add no submissions or completion waits.",
+    "reference_execution": "Actual official DAC.decode module outputs retained on MLX GPU. Separate unobserved official decode compared elementwise on GPU; terminal export only after complete evaluation.",
+    "cross_process_boundary": "Reference fixtures are exported once after full upstream decode and uploaded once before native decode. Host JSON/weights/input I/O and final diagnostic/WAV serialization are outside model arithmetic.",
+    "strongest_failure_guard": "Positive audible source, strict layout/range guards, observer exactness, GPU reducer corruption/nonfinite tests, unchanged native archive bytes and separate finite PCM/full gates.",
+    "observer_authority": "The public device callback receives a mutable Buffer. This probe only reads actual buffers; passivity is established by source/specs and observer equality, not enforced by the callback type."
+  },
+  "upstream": {
+    "repository": "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/mlx-audio",
+    "revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+    "worktree_clean": true,
+    "source_file": "mlx_audio/codec/models/fish_s1_dac/fish_s1_dac.py",
+    "source_sha256": "365bd3384b07c8da019edbcb5aeac7b7aee560e4ed4821dbe3fff29a68c802d1"
+  },
+  "codec": {
+    "path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50/codec.safetensors",
+    "sha256": "543445a2ebc5224d2af5956d422f88c2cd21f4018c1a26d81b51ec231bb630f2",
+    "checkpoint_floating_dtype": "float32 (loaded without conversion)",
+    "checkpoint_tensor_dtype_counts": {
+      "float32": 538,
+      "bool": 3
+    },
+    "official_build_ae_and_sanitize_load": true
+  },
+  "weight_binding_audit": {
+    "receipt": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/weight-coverage-audited.json",
+      "bytes": 94928,
+      "sha256": "97810698a003a62ea3703c00a943de21c1ebc2dd38ad18eec2d2ce0331fea261"
+    },
+    "passes": true,
+    "serialized_parameters": 541,
+    "all_serialized_names_and_shapes_match": true,
+    "loaded_objects_identical_to_supplied_checkpoint_arrays": 541,
+    "runtime_aliases": 120,
+    "runtime_modules": 60,
+    "all_missing_slots_exactly_runtime_aliases": true,
+    "all_runtime_weight_aliases_replaced_and_bias_rebound": true,
+    "no_eval_or_decode_executed": true,
+    "refuted_formulation": "Requiring every fresh model.parameters() slot in the checkpoint rejects120 runtime nested conv aliases. They are overwritten from serialized weight_g/weight_v/bias before every call/step, and are not120 missing independent weights. The initial failed strict audit is retained.",
+    "scope": "Covers independent serialized parameter names/shapes and object binding in this pinned official loader; not checkpoint semantic correctness or original Fish parity."
+  },
+  "runtime": {
+    "python": "Python 3.12.2",
+    "mlx": "0.31.1",
+    "mlx_metal": "0.31.1",
+    "numpy": "1.26.4",
+    "macos": "26.6.2",
+    "device": "Apple M2 Max, 64 GiB unified memory",
+    "crystal": "Crystal 1.21.0 (2026-07-16)\n\nLLVM: 22.1.8\nDefault target: aarch64-apple-darwin25.6.0"
+  },
+  "gates_unchanged": {
+    "stage_max_abs": 0.001,
+    "stage_rms": 0.0002,
+    "stage_normalized_rms": 0.0002,
+    "waveform_rule": "abs(actual-reference) <= max(5e-5, abs(reference)*1e-3)",
+    "pcm_max_lsb": 1,
+    "full_gate": "Every stage gate AND finite waveform PCM max<=1 AND actual/reference nonzero peak>1e-7",
+    "process_exit_contract": "Exit0 means a valid measurement, not a parity PASS. All four retained full_gate_passes are false."
+  },
+  "results": [
+    {
+      "case": "positive",
+      "frames": 197,
+      "samples": 403456,
+      "duration_seconds": 9.148662131519274,
+      "source_report": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/voice-native-1.wav.json",
+        "bytes": 28401,
+        "sha256": "3057c28c83803ada8fd2ab54d54eaf9ebac5207798b90ec94730e27fab337f72"
+      },
+      "chunk_index": null,
+      "source_codes_exactly_equal_reference_input": true,
+      "reference_manifest": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/reference-positive/reference.json",
+        "bytes": 39391,
+        "sha256": "dae7b5ac31490fcd0c8765780db38ffe35697ae378aa19b4101209470f6ca824"
+      },
+      "native_report": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/native-positive-final.json",
+        "bytes": 28259,
+        "sha256": "b839bc01932bd5fac4a3bca826639a2dbdaad30ac9e00fbaf867fa97fe3ef759"
+      },
+      "passing_stages": 23,
+      "exact_codebook_embeddings": true,
+      "all_book_projection_gates_pass": true,
+      "stage_gate_passes": false,
+      "one_lsb_gate_passes": false,
+      "full_gate_passes": false,
+      "codebook_sum_max_abs": 1.9073486e-06,
+      "first_failed_stage": {
+        "name": "quantizer.post_module.layers.0",
+        "max_abs": 0.024986267,
+        "rms": 0.00019256225,
+        "normalized_rms": 4.5427754e-05,
+        "worst_index": 99014
+      },
+      "waveform": {
+        "max_abs": 0.0004857462,
+        "rms": 1.6526066e-05,
+        "normalized_rms": 0.00016262525,
+        "point_failures": 2194,
+        "max_abs_pcm_error": 16,
+        "rms_pcm_error": 0.61847603,
+        "exact_pcm_samples": 314725,
+        "nonfinite": 0
+      },
+      "official_observer_elementwise_exact": true,
+      "quiet_region": null,
+      "native_wav_bitwise_equals_archive": true,
+      "reference_reconstructs_archive_half_away_pcm_exactly": true,
+      "graph_before_terminal_reads": {
+        "depth": 2,
+        "submitted": 32,
+        "completed": 32,
+        "pending": 0,
+        "max_pending": 2,
+        "completion_waits": 32,
+        "retained_bytes": 0,
+        "max_retained_bytes": 5926114416
+      },
+      "graph_unchanged_by_terminal_reads": true,
+      "native_log": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/native-positive-final.log",
+        "bytes": 512,
+        "sha256": "81a50b47a2af066bceb584765a026d79806efef3ee62556a23b23eca7f8425d1"
+      },
+      "reference_log": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/ref-positive.log",
+        "bytes": 275,
+        "sha256": "ced393fad8d0acf628e975511c31bd93cebf86ee6f401d4fac78cefa11f5123c"
+      }
+    },
+    {
+      "case": "native-first",
+      "frames": 427,
+      "samples": 874496,
+      "duration_seconds": 19.82984126984127,
+      "source_report": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/native-original-first-chunk.wav.json",
+        "bytes": 60239,
+        "sha256": "96a8df79ee88b13defa29f4f01a8a87a9155ced11794825036869db6f3fcc184"
+      },
+      "chunk_index": null,
+      "source_codes_exactly_equal_reference_input": true,
+      "reference_manifest": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/reference-native-first/reference.json",
+        "bytes": 64853,
+        "sha256": "b40eb675601ba03fef4538641bb924cfc94abbe5d570a286aa3ad002a1c40a86"
+      },
+      "native_report": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/native-native-first-final.json",
+        "bytes": 32526,
+        "sha256": "c144d236e41d3b8c780f151b1f5fb41d8b76ce1595fa45a12ee44f1268ff2108"
+      },
+      "passing_stages": 22,
+      "exact_codebook_embeddings": true,
+      "all_book_projection_gates_pass": true,
+      "stage_gate_passes": false,
+      "one_lsb_gate_passes": false,
+      "full_gate_passes": false,
+      "codebook_sum_max_abs": 2.861023e-06,
+      "first_failed_stage": {
+        "name": "quantizer.post_module.layers.0",
+        "max_abs": 0.029136658,
+        "rms": 0.00017826568,
+        "normalized_rms": 4.0932722e-05,
+        "worst_index": 197318
+      },
+      "waveform": {
+        "max_abs": 0.0001099736,
+        "rms": 1.974879e-06,
+        "normalized_rms": 0.0007025526,
+        "point_failures": 240,
+        "max_abs_pcm_error": 4,
+        "rms_pcm_error": 0.10760157,
+        "exact_pcm_samples": 865736,
+        "nonfinite": 0
+      },
+      "official_observer_elementwise_exact": true,
+      "quiet_region": {
+        "start_seconds": 4.0,
+        "end_seconds": 19.82984126984127,
+        "window_seconds": 0.5,
+        "windows": 32,
+        "actual_pcm_peak_range": [
+          36,
+          57
+        ],
+        "reference_pcm_peak_range": [
+          36,
+          57
+        ],
+        "actual_rms_max": 0.0007999916,
+        "reference_rms_max": 0.0007999648,
+        "all_window_pcm_peaks_equal": true,
+        "scope": "Signal activity only. Not a transcript, an audibility threshold or proof of absent words."
+      },
+      "native_wav_bitwise_equals_archive": true,
+      "reference_reconstructs_archive_half_away_pcm_exactly": null,
+      "graph_before_terminal_reads": {
+        "depth": 2,
+        "submitted": 32,
+        "completed": 32,
+        "pending": 0,
+        "max_pending": 2,
+        "completion_waits": 32,
+        "retained_bytes": 0,
+        "max_retained_bytes": 8463371376
+      },
+      "graph_unchanged_by_terminal_reads": true,
+      "native_log": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/native-native-first-final.log",
+        "bytes": 511,
+        "sha256": "2c6eec03a6e06422bb96d6b395d140edc1ad5260e3cfe74d4118b9475965f7a1"
+      },
+      "reference_log": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/ref-native-first.log",
+        "bytes": 279,
+        "sha256": "a970ba104cc2cbf94eada78bf63d64d270904aa16667c951cff7eaa677772682"
+      }
+    },
+    {
+      "case": "mlx-first",
+      "frames": 741,
+      "samples": 1517568,
+      "duration_seconds": 34.411972789115644,
+      "source_report": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/mlx-official-chunks-styled.json",
+        "bytes": 203094,
+        "sha256": "376cd2f30f50be7e5c6f658d4df97bfde37a778308b40c780d35e081ff155a98"
+      },
+      "chunk_index": 0,
+      "source_codes_exactly_equal_reference_input": true,
+      "reference_manifest": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/reference-mlx-first/reference.json",
+        "bytes": 99448,
+        "sha256": "053062228d38bc28d97822853de954713256102ac14177b15d4c3283242be23b"
+      },
+      "native_report": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/native-mlx-first-final.json",
+        "bytes": 38276,
+        "sha256": "83abe4b46d1ea6266b835e262f2c33957e8aa17d64bf260a49f4030f16a39329"
+      },
+      "passing_stages": 22,
+      "exact_codebook_embeddings": true,
+      "all_book_projection_gates_pass": true,
+      "stage_gate_passes": false,
+      "one_lsb_gate_passes": false,
+      "full_gate_passes": false,
+      "codebook_sum_max_abs": 3.8146973e-06,
+      "first_failed_stage": {
+        "name": "quantizer.post_module.layers.0",
+        "max_abs": 0.031661987,
+        "rms": 0.00019452749,
+        "normalized_rms": 4.4820667e-05,
+        "worst_index": 287430
+      },
+      "waveform": {
+        "max_abs": 0.0003939974,
+        "rms": 3.9701013e-06,
+        "normalized_rms": 0.0011395329,
+        "point_failures": 1527,
+        "max_abs_pcm_error": 13,
+        "rms_pcm_error": 0.16231686,
+        "exact_pcm_samples": 1495877,
+        "nonfinite": 0
+      },
+      "official_observer_elementwise_exact": true,
+      "quiet_region": {
+        "start_seconds": 12.0,
+        "end_seconds": 34.411972789115644,
+        "window_seconds": 0.5,
+        "windows": 45,
+        "actual_pcm_peak_range": [
+          37,
+          51
+        ],
+        "reference_pcm_peak_range": [
+          37,
+          51
+        ],
+        "actual_rms_max": 0.0008046284,
+        "reference_rms_max": 0.00080460747,
+        "all_window_pcm_peaks_equal": true,
+        "scope": "Signal activity only. Not a transcript, an audibility threshold or proof of absent words."
+      },
+      "native_wav_bitwise_equals_archive": null,
+      "reference_reconstructs_archive_half_away_pcm_exactly": true,
+      "graph_before_terminal_reads": {
+        "depth": 2,
+        "submitted": 32,
+        "completed": 32,
+        "pending": 0,
+        "max_pending": 2,
+        "completion_waits": 32,
+        "retained_bytes": 0,
+        "max_retained_bytes": 11927278704
+      },
+      "graph_unchanged_by_terminal_reads": true,
+      "native_log": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/native-mlx-first-final.log",
+        "bytes": 513,
+        "sha256": "4d9ef0194b721b2fcfd8f2fda986c30c2c4d8904598c2c2208e1cf1d0a2d675a"
+      },
+      "reference_log": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/ref-mlx-first.log",
+        "bytes": 276,
+        "sha256": "07e211894e2213572f121253fb52597bce0f84d7d6b0bacb24c3010fdfce2399"
+      }
+    },
+    {
+      "case": "nocues",
+      "frames": 768,
+      "samples": 1572864,
+      "duration_seconds": 35.66585034013605,
+      "source_report": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/native-original-no-cues.wav.json",
+        "bytes": 107219,
+        "sha256": "a856d21d9d3374c6f450d11f298d27a0b0b6b3926bfc62999366ff8c3087114c"
+      },
+      "chunk_index": null,
+      "source_codes_exactly_equal_reference_input": true,
+      "reference_manifest": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/reference-nocues/reference.json",
+        "bytes": 102842,
+        "sha256": "60a4c79f770f7f281e04684f73c8177a48819ecd0713431489f79a2e452bfb56"
+      },
+      "native_report": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/native-nocues-final.json",
+        "bytes": 38711,
+        "sha256": "06039026921319a2e9bfc26152ea0e569b549d93001a32d22dc4b0cb090782b6"
+      },
+      "passing_stages": 28,
+      "exact_codebook_embeddings": true,
+      "all_book_projection_gates_pass": true,
+      "stage_gate_passes": false,
+      "one_lsb_gate_passes": false,
+      "full_gate_passes": false,
+      "codebook_sum_max_abs": 2.861023e-06,
+      "first_failed_stage": {
+        "name": "quantizer.post_module.layers.0",
+        "max_abs": 0.02280426,
+        "rms": 0.00017299765,
+        "normalized_rms": 4.5259614e-05,
+        "worst_index": 49862
+      },
+      "waveform": {
+        "max_abs": 0.000112892594,
+        "rms": 3.4026866e-06,
+        "normalized_rms": 0.00010944489,
+        "point_failures": 35,
+        "max_abs_pcm_error": 3,
+        "rms_pcm_error": 0.18228702,
+        "exact_pcm_samples": 1522854,
+        "nonfinite": 0
+      },
+      "official_observer_elementwise_exact": true,
+      "quiet_region": {
+        "start_seconds": 5.5,
+        "end_seconds": 35.66585034013605,
+        "window_seconds": 0.5,
+        "windows": 61,
+        "actual_pcm_peak_range": [
+          1,
+          1
+        ],
+        "reference_pcm_peak_range": [
+          1,
+          1
+        ],
+        "actual_rms_max": 1.5271231e-05,
+        "reference_rms_max": 1.5250114e-05,
+        "all_window_pcm_peaks_equal": true,
+        "scope": "Signal activity only. Not a transcript, an audibility threshold or proof of absent words."
+      },
+      "native_wav_bitwise_equals_archive": true,
+      "reference_reconstructs_archive_half_away_pcm_exactly": true,
+      "graph_before_terminal_reads": {
+        "depth": 2,
+        "submitted": 32,
+        "completed": 32,
+        "pending": 0,
+        "max_pending": 2,
+        "completion_waits": 32,
+        "retained_bytes": 0,
+        "max_retained_bytes": 12225130608
+      },
+      "graph_unchanged_by_terminal_reads": true,
+      "native_log": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/native-nocues-final.log",
+        "bytes": 510,
+        "sha256": "ca1bdd1d6f1f472b1c951e3856f8294e0e643b12bdc75b1bba0287412ed22a96"
+      },
+      "reference_log": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/ref-nocues.log",
+        "bytes": 273,
+        "sha256": "e1a8a2223ac0699e27b4dbc46b4eac9f39a32209f63d4d235fb10408c5aff165"
+      }
+    }
+  ],
+  "source_receipts": [
+    {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/codec_resident.cr",
+      "bytes": 22827,
+      "sha256": "b3587db142ce551c2d2b758177397de75cd0990c0a55fd90ccc9a0daa85040c5"
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/spec/drama3_codec_resident_spec.cr",
+      "bytes": 11286,
+      "sha256": "b4a8463c4237cf1d14b993a9b0e30916d764b620fada922b7ebe6057524c171b"
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/drama3_codec_cross_compare.cr",
+      "bytes": 14353,
+      "sha256": "8e6c9d11fda604c478065a29d200acbd01d18d74dc25bfd78f03f552dc0a0632"
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/support/drama3_codec_compare.metal",
+      "bytes": 5691,
+      "sha256": "659a9ec18a5efcf40d4d28b0e1a1b7fd05088f30709f9da9f79d30320017b5da"
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/codec_cross_reference.py",
+      "bytes": 25651,
+      "sha256": "662f0db8ffb2b80f2aba0bfc8eeadc2c8f990c753d74452161369f1fc7f547ce"
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/spec/drama3_codec_cross_reference_spec.py",
+      "bytes": 6177,
+      "sha256": "dd80cad3badc0205e9aedc8abf74c3e3919a6651d96c6b62ca2a0c91b64e3de3"
+    }
+  ],
+  "artifact_index": [
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/summary.json",
+      "bytes": 25063,
+      "sha256": "af58803eaeff0c0cb50cf45ceb52011c175baf87cbebb9a4c65d770616fb838b"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/commands.json",
+      "bytes": 151640,
+      "sha256": "4bb062adc384c0a9ee138ed21a5f3d8677549a5cf7cbd9eab3e32862166afd60"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/run.py",
+      "bytes": 4575,
+      "sha256": "ecdc17af3a3a1091ee0d97f95d77fbce8a77df25a6f07f049815ede8ae027f37"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/summarize.py",
+      "bytes": 7666,
+      "sha256": "caf85eb5d28621252e3ed3831f81c2ba2436dc320027d32934a1caee255120aa"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/write_evidence.py",
+      "bytes": 13300,
+      "sha256": "9586da3eccb5caacafd08b569dbb2a9adc08748380c229633a2ad0c8167e7109"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/audit_weights.py",
+      "bytes": 4079,
+      "sha256": "89746792e67299b6ec52289ec97dff9c066f9d49f1ce66a03e8b7f4b774796e7"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/audit_weights_initial.py",
+      "bytes": 2034,
+      "sha256": "77d023496cc9b2fd32ae5ed1dfc1f5cca69fe57ec1e123b2b88913f94cede7be"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/weight-coverage.json",
+      "bytes": 94566,
+      "sha256": "e4af8e14157057196cc7762cff93d9cc16b3bc8dffc3f904a2ec39d0faeb047f"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/weight-coverage-audited.json",
+      "bytes": 94928,
+      "sha256": "97810698a003a62ea3703c00a943de21c1ebc2dd38ad18eec2d2ce0331fea261"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/codec-cross",
+      "bytes": 956632,
+      "sha256": "e67e525dc9b39ad27cda126fb4aced6f5895948163dd732b3b16c14d8456f106"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/codec-spec",
+      "bytes": 1434248,
+      "sha256": "73f193ebe2ede6d2d7e3667468e1525ccc8bdaca7257648976e25a31ab2414b9"
+    }
+  ],
+  "verification": {
+    "observed_dod": "4 complete saved streams x58 actual stages; observer exactness4/4; known-audible positive not all-zero; all10 embeddings exact4/4; all10 projections and sum within old gates4/4; no mid-decode host reads; terminal graph counters unchanged; strict parity failures preserved.",
+    "commands": [
+      {
+        "name": "build-probe-4",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/crystal",
+          "300",
+          "8192",
+          "build",
+          "--release",
+          "-Ddrama3_metal",
+          "examples/drama3_codec_cross_compare.cr",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "-o",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/codec-cross"
+        ],
+        "exit_code": 0,
+        "wrapper_seconds": 7.290134374983609,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/build-probe-4.log",
+        "log_sha256": "822774b7e18214d10e7da6f6d8d855d1911daa738e47615d8d1fcad223bbb9e8"
+      },
+      {
+        "name": "build-spec",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/crystal",
+          "300",
+          "8192",
+          "build",
+          "--release",
+          "-Ddrama3_metal",
+          "spec/drama3_codec_resident_spec.cr",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "-o",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/codec-spec"
+        ],
+        "exit_code": 0,
+        "wrapper_seconds": 8.378896166104823,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/build-spec.log",
+        "log_sha256": "bbce4be150725b57e4b58566fdbf35293eb0de840c400f221d032d9abe14b1b2"
+      },
+      {
+        "name": "test-resident",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/codec-spec",
+          "300",
+          "8192"
+        ],
+        "exit_code": 0,
+        "wrapper_seconds": 0.7226401660591364,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/test-resident.log",
+        "log_sha256": "607d115995fd7c23882c9d6b718c77c51e39eed8e5b81137fd334eeb31b7fa72"
+      },
+      {
+        "name": "test-compare-3",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/codec-cross",
+          "300",
+          "8192",
+          "--self-test"
+        ],
+        "exit_code": 0,
+        "wrapper_seconds": 0.7270169579423964,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/test-compare-3.log",
+        "log_sha256": "7a5680069e0c8c469a109daaf01b3d80a061dfa4546fe156dd797699738392e5"
+      },
+      {
+        "name": "test-input-3",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "60",
+          "1024",
+          "-m",
+          "unittest",
+          "spec/drama3_codec_cross_reference_spec.py"
+        ],
+        "exit_code": 0,
+        "wrapper_seconds": 0.7281131250783801,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/test-input-3.log",
+        "log_sha256": "4a7663cf0c31443e5fb1f2f9daf54bf787179e1b7aeba0d35d91b52970bc33d8"
+      },
+      {
+        "name": "audit-weights-2",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "120",
+          "8192",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/audit_weights.py"
+        ],
+        "exit_code": 0,
+        "wrapper_seconds": 1.5020804582163692,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/audit-weights-2.log",
+        "log_sha256": "84c3e81f89bf1cd3ecf3a38610b8109107d272e6323c563111ca05218655a35b"
+      }
+    ],
+    "format_and_diff": "crystal tool format --check on the three changed Crystal files and git diff --check pass",
+    "packet_structure": "Local JSON/path/hash assertions only. The skill-referenced validate-landmark-graph.sh and packet template are absent from this checkout and installed skill; no graph-validator execution or evidence authentication is claimed.",
+    "resolved_setup_failures": [
+      "Initial diagnostic Metal compile used reserved identifier thread; renamed tid and GPU reducer self-tests pass.",
+      "Initial unittest namespace import collided with an installed scripts package; explicit module-file import resolves it and all10 specs pass."
+    ],
+    "adversary_verdict": "ROBUST within the stated same-code substitution and unchanged-gate scope",
+    "adversary_scope": "Correlated source/report review only. Does not certify words, unique cause, original Fish implementation parity or performance."
+  },
+  "interpretation": {
+    "supported": "The entire quiet continuation survives both decoder implementations, including independently generated native427/MLX741 styled streams and the common768 no-cue stream. A native-DAC-only fault cannot account for its absence in these controlled replays.",
+    "not_supported": "No proof that the generated codes are correct speech, that the original Fish implementation agrees, or that a shared checkpoint/representation/reference defect is absent. RMS/peaks are signal measurements, not a transcript.",
+    "numeric_frontier": "First failed absolute stage limit is quantizer.post_module.layers.0 in all4 cases. Earlier projections/sum are non-bit-exact but within unchanged limits. Whole-block error does not identify attention/RoPE/RMS/dense arithmetic as the root cause.",
+    "pcm_serialization": "New WAVs use native ties-even rounding. Legacy MLX artifacts use half-away; reconstructing that serialization exactly separates it from model arithmetic.",
+    "timing": "Diagnostic retention/reductions/fixture I/O included. No matched performance inference."
+  },
+  "rollback": "Revert the atomic diagnostic commit; optional observer defaults nil and production model kernels/defaults remain unchanged.",
+  "next_falsifiers": [
+    "Silence: compare the same full code stream and checkpoint against the original Fish codec implementation, or use independently validated speech codes. Pinned MLX alone cannot exclude a shared codec/representation defect.",
+    "Numeric DAC: capture layer0 attention_norm, QKV, post-RoPE Q/K, attention/residual and FFN branches on one matched input; reduce comparisons on GPU and read only at terminal drain.",
+    "Return generation frontier: native/MLX styled code fork at111 and MoE39 row1 hidden[33]; do not attribute missing speech to these without an onset discriminator."
+  ],
+  "refresh_on": [
+    "source or compiler bytes",
+    "codec/checkpoint bytes",
+    "codes/source report or artifact bytes",
+    "upstream revision",
+    "runtime/device/OS",
+    "precision/gates/layout",
+    "new directly bound listening evidence"
+  ],
+  "continuation_authority": "Local reversible diagnostics; sequential run_safe GPU jobs; sampled free reserve15%; profiling unset; unrelated processes untouched; local commit only, no push."
+}

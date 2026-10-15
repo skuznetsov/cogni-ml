@@ -29278,3 +29278,53 @@ Refresh after source/toolchain/device/model/workload changes.
   saved first-chunk codes, with an audible positive stream. Do not extend
   shared-prefix decoder agreement to the diverging continuation. Refresh on
   source/model/audio/preprocessing/options/runtime/listening-evidence drift.
+
+### Continuation 2026-10-15 — full-stream GPU DAC cross decode
+
+- Base `1898cc55`: four full saved streams (197 bilingual positive, native427
+  and MLX741 styled first chunks, common768 no-cue) decoded by native Metal
+  and pinned official MLX DAC on identical ten-book inputs, main excluded.
+  All58 actual boundaries compared on GPU; observer MLX output matches an
+  unobserved official decode elementwise4/4. Native observer-on/off spec
+  preserves output bits. No production arithmetic/precision/default changes.
+- Every embedding exact; all ten projections and combined sum within old
+  gates4/4. First failed observed boundary is post-transformer layer0 in all4;
+  max errors for first3 are0.0249863/0.0291367/0.0316620. Whole-block mismatch
+  does not locate the arithmetic primitive. All waveform and one-LSB parity
+  gates FAIL; PCM max16/4/13/3. No tolerance widening or parity promotion.
+- Lazy-GPU loader audit: independent541 sanitized tensor names/shapes exactly
+  match, all541 bind to supplied checkpoint array objects. Naive strictload
+  rejects120 nestedconv runtimealiases in60modules; all are overwritten from
+  loaded g/v/bias before every call/step. Alias-aware guard passes without
+  evaluation/decode. No missing independent weight found; this does not
+  certify checkpoint semantics or exclude a shared reference/codec defect.
+- Native427 quiet region4–19.830s peaks36–57PCM16; MLX741 region12–34.412s
+  peaks37–51; no-cue768 region5.5–35.666s peaks1. Each half-second peak equals
+  the cross decoder's. Quiet is low residual signal, not literal digitalzero
+  or a transcript. Native archived WAVs match bytewise3/3; legacy MLX PCM
+  reconstructed exactly3/3 after its half-away rounding. New WAVs use native
+  ties-even policy in both arms. The pinned MLX substitution does not restore
+  the quiet continuation: native-DAC-only explanation refuted for these codes.
+  Unique generation/shared-codec cause and speech delivery remain unresolved.
+- No native activation host reads before completed decode; depth2 retains32
+  submitted/completed buffers and terminal reads add no submissions/waits4/4.
+  Reference fixtures export only after full MLX evaluation and upload once
+  before native decode. Input/fixture/final serialization are outside inference.
+  No claim of zero existing GPU waits; timings include diagnostics, not perf.
+- DoD: GPU reducer corruption/F64-oracle/finite/index/window checks pass;
+  resident2 examples pass including passive hook/layouts; reference-input10
+  tests pass; Crystal format and diff checks pass. Source/run/fixture index
+  `.landmark/evidence/drama3-codec-cross.json`, raw `codec-cross-20261015/`.
+  Correlated adversary ROBUST for scoped substitution result, no parity or
+  unique-cause promotion. Device callback's buffer is mutable; read-only
+  behavior is checked for this probe rather than guaranteed by the API type.
+- Next silence falsifier: same full codes through original Fish codec or
+  independently validated speech codes; MLX alone cannot exclude shared
+  codec/checkpoint/representation error. Numeric frontier: capture layer0
+  attention_norm/QKV/postRoPE/attention/residual/FFN on matched input, allGPU
+  terminal comparisons. Return pointer: styled code fork111 and MoE39 row1
+  hidden[33]; no attribution without onset discriminator. Refresh on source/
+  compiler/model/input/reference/artifact/runtime/device/OS/gate/layout or
+  bound listening-evidence drift. Standing authority unchanged: sequential
+  run_safe, reserve15%, profilesunset, unrelated processes untouched, local
+  atomic commit and no push. Rollback: revert diagnostic commit, hookdefaultsnil.
