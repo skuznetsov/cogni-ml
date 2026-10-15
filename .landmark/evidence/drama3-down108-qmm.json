@@ -1,0 +1,970 @@
+{
+  "format": "landmark-evidence/v1",
+  "recorded_at_utc": "2026-10-15T02:35:34.182179+00:00",
+  "claim": {
+    "level": "VERIFIED",
+    "summary": "On identical expert108 Q4 bytes and upstream activation, MLX quantized matmul reproduces upstream bitwise; decoded F32 matmul differs at unchanged tolerance and agrees with retained native down within that tolerance.",
+    "scope": "One row1/layer39/expert108 activation on M2 Max with pinned F32-promoted MLX reference. Path-level numerical discrimination only.",
+    "not_established": [
+      "A unique FMA/reduction subcause",
+      "An accuracy oracle",
+      "A production parity correction",
+      "A speedup",
+      "Observed MLX internal wait or GPU kernel counts"
+    ]
+  },
+  "boundaries": {
+    "risk": "CAUTION",
+    "base_revision": "4e76054bf6e0d68338eda67f600845e7c813c3ff",
+    "changed_paths": [
+      "scripts/drama3/probe_mlx_expert_down.py",
+      "spec/drama3_mlx_expert_down_spec.py",
+      "docs/drama3-native-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/drama3-down108-qmm.json"
+    ],
+    "reason": "Discriminate fused quantized dot arithmetic from decoded-weight F32 matmul before changing native down.",
+    "rollback": "Revert this atomic diagnostic commit; native arithmetic and defaults are unchanged.",
+    "assumptions": [
+      "Checkpoint and source files stay immutable within each run.",
+      "Local cached traces are evidence, not authenticated remote attestations."
+    ],
+    "gpu_boundary": "All projection, decode and weight metrics on GPU. CPU checkpoint loading/provenance and fixture setup precede inference; result analysis follows the final eval.",
+    "completion_boundary": {
+      "explicit_terminal_mx_eval_calls": 1,
+      "guarded_host_readback_calls": 6,
+      "host_readback_names": [
+        "full8_gather_qmm",
+        "single_expert_gather_qmm",
+        "direct_quantized_matmul",
+        "dequantized_float32_matmul",
+        "decoded_weight_equal_count",
+        "decoded_weight_max_abs"
+      ],
+      "host_reads_before_terminal_eval": false,
+      "explicit_synchronize_api_calls_in_probe_source": "none",
+      "backend_internal_synchronization": "not_instrumented",
+      "all_gpu_metric_nodes_built_before_terminal_eval": true
+    },
+    "standing_authority": "In-scope local probes/tests/docs and exact-path commit; sequential heavy runs, sampled memory floor15%, no unrelated process manipulation or push."
+  },
+  "dod": {
+    "expected": "Official-shape top8 gather reproduces upstream bitwise; four output arms and GPU weight-bit control recorded at fixed tolerance; provenance/readback negative guards and adjacent Python tests pass.",
+    "observed": "Two qualified GPU runs exit0; final32 Python tests pass; source-hash negative guard first fails then passes after implementation;22528 projection values repeat bitwise.",
+    "commands": [
+      {
+        "name": "focused-python",
+        "argv": [
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "-m",
+          "unittest",
+          "spec.drama3_mlx_expert_down_spec",
+          "spec.drama3_moe_compare_spec",
+          "spec.drama3_mlx_moe_capture_spec",
+          "-v"
+        ],
+        "started_at_utc": "2026-10-15T02:26:25.722156+00:00",
+        "finished_at_utc": "2026-10-15T02:26:34.276508+00:00",
+        "exit_code": 0,
+        "expected_exit": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/focused-python.log"
+      },
+      {
+        "name": "gpu-probe",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "180",
+          "8192",
+          "scripts/drama3/probe_mlx_expert_down.py",
+          "--mlx-root",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/mlx-audio",
+          "--model-dir",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--upstream-trace",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/mlx-moe-full.json",
+          "--native-ablation",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/moe-ablation.json",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/probe.json"
+        ],
+        "started_at_utc": "2026-10-15T02:26:34.276998+00:00",
+        "finished_at_utc": "2026-10-15T02:26:37.238164+00:00",
+        "exit_code": 0,
+        "expected_exit": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/gpu-probe.log"
+      },
+      {
+        "name": "terminal-analysis",
+        "argv": [
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/analyze_probe.py"
+        ],
+        "started_at_utc": "2026-10-15T02:26:37.238623+00:00",
+        "finished_at_utc": "2026-10-15T02:26:37.405437+00:00",
+        "exit_code": 0,
+        "expected_exit": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/terminal-analysis.log"
+      },
+      {
+        "name": "terminal-analysis-canonical",
+        "argv": [
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/analyze_probe.py"
+        ],
+        "started_at_utc": "2026-10-15T02:28:16.054018+00:00",
+        "finished_at_utc": "2026-10-15T02:28:16.207344+00:00",
+        "exit_code": 0,
+        "expected_exit": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/terminal-analysis-canonical.log"
+      },
+      {
+        "name": "replay-source-guard-red",
+        "argv": [
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "-m",
+          "unittest",
+          "spec.drama3_mlx_expert_down_spec.ExpertDownProbeContract.test_model_source_validator_binds_native_replay_scripts_to_local_bytes",
+          "-v"
+        ],
+        "started_at_utc": "2026-10-15T02:29:56.608514+00:00",
+        "finished_at_utc": "2026-10-15T02:29:56.852943+00:00",
+        "exit_code": 1,
+        "expected_exit": 1,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/replay-source-guard-red.log"
+      },
+      {
+        "name": "focused-python-final",
+        "argv": [
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "-m",
+          "unittest",
+          "spec.drama3_mlx_expert_down_spec",
+          "spec.drama3_moe_compare_spec",
+          "spec.drama3_mlx_moe_capture_spec",
+          "-v"
+        ],
+        "started_at_utc": "2026-10-15T02:30:46.395662+00:00",
+        "finished_at_utc": "2026-10-15T02:30:55.016067+00:00",
+        "exit_code": 0,
+        "expected_exit": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/focused-python-final.log"
+      },
+      {
+        "name": "gpu-probe-final",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "180",
+          "8192",
+          "scripts/drama3/probe_mlx_expert_down.py",
+          "--mlx-root",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/mlx-audio",
+          "--model-dir",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--upstream-trace",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/mlx-moe-full.json",
+          "--native-ablation",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/moe-ablation.json",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/probe.final.json"
+        ],
+        "started_at_utc": "2026-10-15T02:30:55.016593+00:00",
+        "finished_at_utc": "2026-10-15T02:30:57.183855+00:00",
+        "exit_code": 0,
+        "expected_exit": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/gpu-probe-final.log"
+      },
+      {
+        "name": "terminal-analysis-final",
+        "argv": [
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/analyze_probe.py",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/probe.final.json"
+        ],
+        "started_at_utc": "2026-10-15T02:30:57.184356+00:00",
+        "finished_at_utc": "2026-10-15T02:30:57.435999+00:00",
+        "exit_code": 0,
+        "expected_exit": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/terminal-analysis-final.log"
+      },
+      {
+        "name": "runtime-info",
+        "argv": [
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "-c",
+          "import importlib.metadata as m,json,platform; print(json.dumps({\"python\":platform.python_version(),\"platform\":platform.platform(),\"packages\":{n:m.version(n) for n in (\"mlx\",\"numpy\",\"torch\",\"safetensors\")}},indent=2))"
+        ],
+        "started_at_utc": "2026-10-15T02:32:37.345956+00:00",
+        "finished_at_utc": "2026-10-15T02:32:37.438442+00:00",
+        "exit_code": 0,
+        "expected_exit": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/runtime-info.log"
+      }
+    ],
+    "environment": {
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+      "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+      "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+      "MLX_ENABLE_TF32": "0"
+    },
+    "unset_environment": [
+      "DRAMA3_PROFILE"
+    ],
+    "fallback_check": "Full8 official capture and single-gather/direct-QMM controls agree bitwise, with actual shape/dtype assertions and separately hashed expert activation."
+  },
+  "pins": {
+    "model": {
+      "repository": "cguldogan/drama-3-mlx-q4",
+      "revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8"
+    },
+    "upstream": {
+      "repository": "https://github.com/cguldogan/mlx-audio",
+      "revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7"
+    },
+    "runtime": {
+      "python": "3.12.2",
+      "platform": "macOS-26.6.2-arm64-arm-64bit",
+      "packages": {
+        "mlx": "0.31.1",
+        "numpy": "1.26.4",
+        "torch": "2.6.0",
+        "safetensors": "0.5.3"
+      }
+    },
+    "device": "Device(gpu, 0)",
+    "precision_environment": {
+      "MLX_ENABLE_TF32_before_import": "0",
+      "MLX_ENABLE_TF32_effective_environment": "0",
+      "note": "Environment recorded; pinned M=1 gather-qmv arms use the low-M path. Environment does not prove a compile-time MLX TF32 setting."
+    },
+    "normalized_input": {
+      "format": "drama3-moe-input-v1",
+      "path": "mlx-moe-input.json",
+      "sha256": "f37d6f3fba2f4d661c293612d408867e233c3d0be33826a2200d15862d37bad9",
+      "activation_sha256": "625d01eba26f0338a1ea2fd0938c23abc57f05ba739b2d565db791c937279e61",
+      "activation_name": "post_attention_layernorm",
+      "shape": [
+        2048
+      ],
+      "dtype": "float32"
+    },
+    "expert_activation": {
+      "source_stage": "expert_activation_outputs",
+      "capture_kind": "upstream_swiglu_return",
+      "shape": [
+        8,
+        512
+      ],
+      "dtype": "float32",
+      "sha256": "8b9086fd8e4a2ab31549429513dbe482d8abb289fae70a3be4289318bfd77244",
+      "expert_ids": [
+        159,
+        194,
+        245,
+        154,
+        230,
+        191,
+        171,
+        108
+      ],
+      "expert_rank_to_id": [
+        {
+          "rank": 0,
+          "expert_id": 159
+        },
+        {
+          "rank": 1,
+          "expert_id": 194
+        },
+        {
+          "rank": 2,
+          "expert_id": 245
+        },
+        {
+          "rank": 3,
+          "expert_id": 154
+        },
+        {
+          "rank": 4,
+          "expert_id": 230
+        },
+        {
+          "rank": 5,
+          "expert_id": 191
+        },
+        {
+          "rank": 6,
+          "expert_id": 171
+        },
+        {
+          "rank": 7,
+          "expert_id": 108
+        }
+      ],
+      "target_expert_id": 108,
+      "target_expert_rank": 7,
+      "target_expert_activation_sha256": "a6774218bfc4c0b417d6e3048f6db5e4d149312e7e27ae93bd04f5369dd98ce6"
+    },
+    "weight_and_source_provenance": {
+      "model_path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+      "target_moe_weights_sha256_actual": "648d4c736dd60b6c077c032565aa647b6e90f6fd96d2ee957f22cbcd69a889dc",
+      "target_moe_tensor_count": 14,
+      "down_tensor_sha256_actual": "0201b7842c2d00682071cf42e3dcab5b5f05dd0667a9e01522c93ff078c61b6b",
+      "down_tensor_count": 3,
+      "down_tensor_names": [
+        "backbone.layers.39.mlp.switch_mlp.down_proj.biases",
+        "backbone.layers.39.mlp.switch_mlp.down_proj.scales",
+        "backbone.layers.39.mlp.switch_mlp.down_proj.weight"
+      ],
+      "down_tensor_dtypes": {
+        "backbone.layers.39.mlp.switch_mlp.down_proj.biases": "bfloat16",
+        "backbone.layers.39.mlp.switch_mlp.down_proj.scales": "bfloat16",
+        "backbone.layers.39.mlp.switch_mlp.down_proj.weight": "uint32"
+      },
+      "down_tensor_shapes": {
+        "backbone.layers.39.mlp.switch_mlp.down_proj.biases": [
+          256,
+          2048,
+          8
+        ],
+        "backbone.layers.39.mlp.switch_mlp.down_proj.scales": [
+          256,
+          2048,
+          8
+        ],
+        "backbone.layers.39.mlp.switch_mlp.down_proj.weight": [
+          256,
+          2048,
+          64
+        ]
+      },
+      "verified_before_gpu": true,
+      "model_source_checks": {
+        "config_sha256": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+        "index_sha256": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855",
+        "upstream_git_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+        "upstream_source_sha256": {
+          "mlx_audio/lm/models/qwen3_5.py": "295ea421f22f7cde5fe675a89460755f49cb0059524722003555c403490969e1",
+          "mlx_audio/lm/models/switch_layers.py": "aa9ee805cd397f60996e254bd75cd97454770a34f748bc7bc97035f12857825e",
+          "mlx_audio/utils.py": "a9a6e2c29962949ce0e278d4b923394d81529586feec4599616af292ce64de42"
+        },
+        "local_replay_source_sha256": {
+          "scripts/drama3/replay_mlx_backbone.py": "8e705bc34a1e9db1a712f1d3ef45f30911892844a4a063619b070f1286c73d4d",
+          "scripts/drama3/replay_mlx_moe.py": "ecad91d92ee63d8018a09bd5fb43ae28bbde1b31826625ae17d4eac451ca97ca"
+        }
+      },
+      "script_sha256": {
+        "probe_mlx_expert_down.py": "51d234ebbb07af12772cd1298c3018ffbb58421d73be5d0f3eb39935efeca5a6",
+        "replay_mlx_moe.py": "ecad91d92ee63d8018a09bd5fb43ae28bbde1b31826625ae17d4eac451ca97ca",
+        "replay_mlx_backbone.py": "8e705bc34a1e9db1a712f1d3ef45f30911892844a4a063619b070f1286c73d4d"
+      },
+      "upstream_source_hashes": {
+        "config.json": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+        "model.safetensors.index.json": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855",
+        "mlx_audio/lm/models/qwen3_5.py": "295ea421f22f7cde5fe675a89460755f49cb0059524722003555c403490969e1",
+        "mlx_audio/lm/models/switch_layers.py": "aa9ee805cd397f60996e254bd75cd97454770a34f748bc7bc97035f12857825e",
+        "mlx_audio/utils.py": "a9a6e2c29962949ce0e278d4b923394d81529586feec4599616af292ce64de42",
+        "scripts/drama3/replay_mlx_backbone.py": "8e705bc34a1e9db1a712f1d3ef45f30911892844a4a063619b070f1286c73d4d",
+        "scripts/drama3/replay_mlx_moe.py": "ecad91d92ee63d8018a09bd5fb43ae28bbde1b31826625ae17d4eac451ca97ca",
+        "input_bundle": "1fea4a810ba88680ea031c9496c982ad7b8bf32ac23c05e18964c1bf80a1a6f3",
+        "target_moe_weights": "648d4c736dd60b6c077c032565aa647b6e90f6fd96d2ee957f22cbcd69a889dc"
+      },
+      "upstream_trace_sha256": "d3e6e455dd4ab0c987a500cb0d3c807db23003e383725f4b4f6c49fecb64030f",
+      "native_trace_sha256": "38b9338c7ad231f81cffdde18b2623f49735ebdc16c00d7807d6abf3bd67de4f"
+    },
+    "actual_tensor_metadata": {
+      "x_full": {
+        "shape": [
+          1,
+          1,
+          8,
+          1,
+          512
+        ],
+        "dtype": "mlx.core.float32"
+      },
+      "x_single": {
+        "shape": [
+          1,
+          1,
+          1,
+          1,
+          512
+        ],
+        "dtype": "mlx.core.float32"
+      },
+      "x108": {
+        "shape": [
+          1,
+          512
+        ],
+        "dtype": "mlx.core.float32"
+      },
+      "w_all": {
+        "shape": [
+          256,
+          2048,
+          64
+        ],
+        "dtype": "mlx.core.uint32"
+      },
+      "s_all": {
+        "shape": [
+          256,
+          2048,
+          8
+        ],
+        "dtype": "mlx.core.float32"
+      },
+      "b_all": {
+        "shape": [
+          256,
+          2048,
+          8
+        ],
+        "dtype": "mlx.core.float32"
+      },
+      "w108": {
+        "shape": [
+          2048,
+          64
+        ],
+        "dtype": "mlx.core.uint32"
+      },
+      "s108": {
+        "shape": [
+          2048,
+          8
+        ],
+        "dtype": "mlx.core.float32"
+      },
+      "b108": {
+        "shape": [
+          2048,
+          8
+        ],
+        "dtype": "mlx.core.float32"
+      },
+      "full_raw": {
+        "shape": [
+          1,
+          1,
+          8,
+          1,
+          2048
+        ],
+        "dtype": "mlx.core.float32"
+      },
+      "single_raw": {
+        "shape": [
+          1,
+          1,
+          1,
+          1,
+          2048
+        ],
+        "dtype": "mlx.core.float32"
+      },
+      "direct_raw": {
+        "shape": [
+          1,
+          2048
+        ],
+        "dtype": "mlx.core.float32"
+      },
+      "dequantized": {
+        "shape": [
+          2048,
+          512
+        ],
+        "dtype": "mlx.core.float32"
+      },
+      "f32_raw": {
+        "shape": [
+          1,
+          2048
+        ],
+        "dtype": "mlx.core.float32"
+      }
+    }
+  },
+  "observations": {
+    "full8_capture": {
+      "passed": true,
+      "criterion": "full8_gather_qmm output is bitwise equal to all eight upstream expert_down_outputs vectors",
+      "value_count": 16384,
+      "mismatch_count": 0,
+      "comparison": {
+        "count": 16384,
+        "bitwise_equal": true,
+        "max_abs_error": 0.0,
+        "max_rel_error": 0.0,
+        "atol": 6e-05,
+        "rtol": 0.0003,
+        "tolerance_passed": true,
+        "failure_count": 0,
+        "failure_indices": [],
+        "worst_index": 0,
+        "actual_at_worst": -7.078133583068848,
+        "expected_at_worst": -7.078133583068848
+      }
+    },
+    "comparisons": {
+      "full8_gather_qmm_vs_upstream_all": {
+        "count": 16384,
+        "bitwise_equal": true,
+        "max_abs_error": 0.0,
+        "max_rel_error": 0.0,
+        "atol": 6e-05,
+        "rtol": 0.0003,
+        "tolerance_passed": true,
+        "failure_count": 0,
+        "failure_indices": [],
+        "worst_index": 0,
+        "actual_at_worst": -7.078133583068848,
+        "expected_at_worst": -7.078133583068848
+      },
+      "full8_gather_qmm_expert108_vs_upstream": {
+        "count": 2048,
+        "bitwise_equal": true,
+        "max_abs_error": 0.0,
+        "max_rel_error": 0.0,
+        "atol": 6e-05,
+        "rtol": 0.0003,
+        "tolerance_passed": true,
+        "failure_count": 0,
+        "failure_indices": [],
+        "worst_index": 0,
+        "actual_at_worst": -2151.327880859375,
+        "expected_at_worst": -2151.327880859375
+      },
+      "single_expert_gather_qmm_vs_upstream": {
+        "count": 2048,
+        "bitwise_equal": true,
+        "max_abs_error": 0.0,
+        "max_rel_error": 0.0,
+        "atol": 6e-05,
+        "rtol": 0.0003,
+        "tolerance_passed": true,
+        "failure_count": 0,
+        "failure_indices": [],
+        "worst_index": 0,
+        "actual_at_worst": -2151.327880859375,
+        "expected_at_worst": -2151.327880859375
+      },
+      "direct_quantized_matmul_vs_upstream": {
+        "count": 2048,
+        "bitwise_equal": true,
+        "max_abs_error": 0.0,
+        "max_rel_error": 0.0,
+        "atol": 6e-05,
+        "rtol": 0.0003,
+        "tolerance_passed": true,
+        "failure_count": 0,
+        "failure_indices": [],
+        "worst_index": 0,
+        "actual_at_worst": -2151.327880859375,
+        "expected_at_worst": -2151.327880859375
+      },
+      "dequantized_float32_matmul_vs_upstream": {
+        "count": 2048,
+        "bitwise_equal": false,
+        "max_abs_error": 0.00390625,
+        "max_rel_error": 0.0006302613414898224,
+        "atol": 6e-05,
+        "rtol": 0.0003,
+        "tolerance_passed": false,
+        "failure_count": 2,
+        "failure_indices": [
+          469,
+          766
+        ],
+        "worst_index": 682,
+        "actual_at_worst": 23228.8046875,
+        "expected_at_worst": 23228.80078125
+      },
+      "single_gather_vs_full8_expert108": {
+        "count": 2048,
+        "bitwise_equal": true,
+        "max_abs_error": 0.0,
+        "max_rel_error": 0.0,
+        "atol": 6e-05,
+        "rtol": 0.0003,
+        "tolerance_passed": true,
+        "failure_count": 0,
+        "failure_indices": [],
+        "worst_index": 0,
+        "actual_at_worst": -2151.327880859375,
+        "expected_at_worst": -2151.327880859375
+      },
+      "direct_qmm_vs_single_gather": {
+        "count": 2048,
+        "bitwise_equal": true,
+        "max_abs_error": 0.0,
+        "max_rel_error": 0.0,
+        "atol": 6e-05,
+        "rtol": 0.0003,
+        "tolerance_passed": true,
+        "failure_count": 0,
+        "failure_indices": [],
+        "worst_index": 0,
+        "actual_at_worst": -2151.327880859375,
+        "expected_at_worst": -2151.327880859375
+      },
+      "f32_matmul_vs_single_gather": {
+        "count": 2048,
+        "bitwise_equal": false,
+        "max_abs_error": 0.00390625,
+        "max_rel_error": 0.0006302613414898224,
+        "atol": 6e-05,
+        "rtol": 0.0003,
+        "tolerance_passed": false,
+        "failure_count": 2,
+        "failure_indices": [
+          469,
+          766
+        ],
+        "worst_index": 682,
+        "actual_at_worst": 23228.8046875,
+        "expected_at_worst": 23228.80078125
+      }
+    },
+    "decoded_weight_control": {
+      "capture_kind": "diagnostic_gpu_uint4_decode_vs_mx_dequantize",
+      "weight_count": 1048576,
+      "bitwise_differing_count": 0,
+      "max_abs_error": 0.0,
+      "values_read_back": 0
+    },
+    "retained_native_vs_each_arm": {
+      "official_full8_gather_expert108": {
+        "count": 2048,
+        "bitwise_equal": false,
+        "max_abs_error": 0.00439453125,
+        "max_rel_error": 0.0006310226288436553,
+        "atol": 6e-05,
+        "rtol": 0.0003,
+        "tolerance_passed": false,
+        "failure_count": 3,
+        "failure_indices": [
+          469,
+          766,
+          1555
+        ],
+        "worst_index": 1662,
+        "actual_at_worst": -4665.35498046875,
+        "expected_at_worst": -4665.359375
+      },
+      "single_expert_gather_qmm": {
+        "count": 2048,
+        "bitwise_equal": false,
+        "max_abs_error": 0.00439453125,
+        "max_rel_error": 0.0006310226288436553,
+        "atol": 6e-05,
+        "rtol": 0.0003,
+        "tolerance_passed": false,
+        "failure_count": 3,
+        "failure_indices": [
+          469,
+          766,
+          1555
+        ],
+        "worst_index": 1662,
+        "actual_at_worst": -4665.35498046875,
+        "expected_at_worst": -4665.359375
+      },
+      "direct_quantized_matmul": {
+        "count": 2048,
+        "bitwise_equal": false,
+        "max_abs_error": 0.00439453125,
+        "max_rel_error": 0.0006310226288436553,
+        "atol": 6e-05,
+        "rtol": 0.0003,
+        "tolerance_passed": false,
+        "failure_count": 3,
+        "failure_indices": [
+          469,
+          766,
+          1555
+        ],
+        "worst_index": 1662,
+        "actual_at_worst": -4665.35498046875,
+        "expected_at_worst": -4665.359375
+      },
+      "dequantized_float32_matmul": {
+        "count": 2048,
+        "bitwise_equal": false,
+        "max_abs_error": 0.00390625,
+        "max_rel_error": 5.9988422467881684e-05,
+        "atol": 6e-05,
+        "rtol": 0.0003,
+        "tolerance_passed": true,
+        "failure_count": 0,
+        "failure_indices": [],
+        "worst_index": 682,
+        "actual_at_worst": 23228.80078125,
+        "expected_at_worst": 23228.8046875
+      }
+    },
+    "coordinate_values": {
+      "33": {
+        "native_on_upstream_activation": -9.041943550109863,
+        "official_full8_gather_expert108": -9.041109085083008,
+        "single_expert_gather_qmm": -9.041109085083008,
+        "direct_quantized_matmul": -9.041109085083008,
+        "dequantized_float32_matmul": -9.04194164276123
+      },
+      "469": {
+        "native_on_upstream_activation": 1.961013913154602,
+        "official_full8_gather_expert108": 1.960231065750122,
+        "single_expert_gather_qmm": 1.960231065750122,
+        "direct_quantized_matmul": 1.960231065750122,
+        "dequantized_float32_matmul": 1.9610127210617065
+      },
+      "766": {
+        "native_on_upstream_activation": -0.7042062282562256,
+        "official_full8_gather_expert108": -0.70465087890625,
+        "single_expert_gather_qmm": -0.70465087890625,
+        "direct_quantized_matmul": -0.70465087890625,
+        "dequantized_float32_matmul": -0.7042067646980286
+      },
+      "1555": {
+        "native_on_upstream_activation": 4.085938453674316,
+        "official_full8_gather_expert108": 4.084475517272949,
+        "single_expert_gather_qmm": 4.084475517272949,
+        "direct_quantized_matmul": 4.084475517272949,
+        "dequantized_float32_matmul": 4.085693359375
+      }
+    },
+    "repeatability": {
+      "format": "drama3-expert-down-repeatability-v1",
+      "first": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/probe.json",
+        "sha256": "b95e5fa5fb8fb43b27df5d832c430058515f9aad4030a5836c519ea964fe6a58"
+      },
+      "final": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/probe.final.json",
+        "sha256": "2c49c3e7b878755cc42b64d6792ba78c316eb4be98308cbac1ac1da3d0162109"
+      },
+      "guard_only_change": "Bind current replay source files to captured hashes before GPU work.",
+      "arms": {
+        "full8_gather_qmm": {
+          "count": 16384,
+          "bitwise_equal": true
+        },
+        "single_expert_gather_qmm": {
+          "count": 2048,
+          "bitwise_equal": true
+        },
+        "direct_quantized_matmul": {
+          "count": 2048,
+          "bitwise_equal": true
+        },
+        "dequantized_float32_matmul": {
+          "count": 2048,
+          "bitwise_equal": true
+        }
+      },
+      "decoded_weight_control_equal": true,
+      "final_probe_script_hash_current": true
+    },
+    "source_interpretation": "Pinned fast Q4 source factors scale/bias outside packed partial dots and reduces SIMD lanes. With equal decoded weights this motivates affine regrouping/reduction tests; a unique FMA cause is unproved. Source dispatch is not runtime profiling.",
+    "primary_source_references": [
+      {
+        "url": "https://raw.githubusercontent.com/ml-explore/mlx/v0.31.1/mlx/backend/metal/quantized.cpp",
+        "sha256": "2c33ba7baffcc891a7e1171f88b511cd423dd8cfa20b79bbd0b252e857a13281",
+        "local_source": null,
+        "references": [
+          "QuantizedMatmul::eval_gpu: physical source lines 1293-1353; M and vector_limit at 1311-1318, transpose small-M dispatch_qmv at 1336-1340.",
+          "GatherQMM::eval_gpu: physical source lines 1355-1443; M, B, and vector_limit at 1371-1376; for transpose and M < vector_limit it calls gather_qmv at 1425-1442.",
+          "gather_qmv: physical source lines 864-921; fast selection predicate N%8==0 and K%512==0 at 890, kernel dispatch at 900-910."
+        ]
+      },
+      {
+        "url": "https://raw.githubusercontent.com/ml-explore/mlx/v0.31.1/mlx/backend/metal/kernels/quantized.h",
+        "sha256": "344780f5b159669219f993f9705b5f28504196d3fd2c7ab8756119c72e4e267f",
+        "local_source": "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/lib/python3.12/site-packages/mlx/include/mlx/backend/metal/kernels/quantized.h",
+        "references": [
+          "load_vector q4 input decode preparation: physical lines 62-69.",
+          "qdot q4 packed-dot terms: physical lines 192-243, with the bits==4 packed branch at 235-243; affine return scale*accum + sum*bias at 289.",
+          "qmv_fast_impl: physical lines 750-814; U=float at 772, pack_factor/values_per_thread/block_size/scale_step at 761-768, simd_sum at 809. affine_gather_qmv_fast enters this helper at lines 1826-1880, call at 1874."
+        ]
+      },
+      {
+        "url": "https://raw.githubusercontent.com/ml-explore/mlx/v0.31.1/mlx/backend/metal/matmul.cpp",
+        "sha256": "4bef524645dce8feb94300766dec1586caf93c0167fe9757409fb452c15b1361",
+        "local_source": null,
+        "references": [
+          "Matmul::eval_gpu: physical source lines 1215-1285; M/N/K at 1238-1240 and min(M,N)==1 GEMV route at 1270-1285.",
+          "gemv_axbpy and gemv: physical source lines 1032-1170 and 1172-1209; this GEMV path contains no NAX/TF32 dispatch gate.",
+          "steel_matmul_regular_axpby NAX eligibility: physical source lines 341-368, predicate at 366-367; reached only after GEMV specialization is bypassed."
+        ]
+      },
+      {
+        "url": "https://raw.githubusercontent.com/ml-explore/mlx/v0.31.1/mlx/utils.h",
+        "sha256": "352624041e0eeb02ddff4f4038cf631a96c6bf92a7ac627b1655b17c61cf8ff8",
+        "local_source": "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/lib/python3.12/site-packages/mlx/include/mlx/utils.h",
+        "references": [
+          "env::enable_tf32: physical source lines 163-166; reads MLX_ENABLE_TF32 with default 1 into a function-local static."
+        ]
+      }
+    ]
+  },
+  "mini_quadrumvirate": {
+    "prediction": "A wrong expert/input or changed dispatch could mimic a numerical cause; require official full8 bitwise control and M=1/F32 assertions.",
+    "question": "Does matched decoded-weight arithmetic still differ from the official quantized operation on identical activation?",
+    "move": "Four GPU projection arms, explicit GPU packed-weight bit comparison, terminal-only results; no native change.",
+    "attack": "Expert mapping, dtype, tolerance widening, stale source bytes, ULP drift and premature readback falsifiers. Reusable replay-source guard gap was found and closed before final run.",
+    "review": {
+      "verdict": "ROBUST",
+      "scope": "Exact row1/layer39/expert108 path-level differential only; pinned GPU M=1/F32-promoted reference and retained native exact-input output.",
+      "reviewer": "dense_upstream agent plus parent source/artifact checks; same-lineage review is correlated",
+      "observed": [
+        "Full8 official shape reproduces16384 upstream down values bitwise; target single gather and direct QMM reproduce2048 each.",
+        "Decoded F32 matmul versus upstream fails469/766; retained native versus decoded F32 passes2048 unchanged-tolerance checks without bitwise equality; native versus upstream fails469/766/1555.",
+        "Explicit GPU uint4 decoding and mx.dequantize have0 bit differences among1048576 F32 weights.",
+        "Current replay script-byte guard closes source-hash drift; negative test observed failing before fix, final32 tests pass.",
+        "Second qualified GPU run repeats22528 projection outputs bitwise; final source SHA is current.",
+        "Actual M=1 shapes and dtypes are asserted before one explicit terminal mx.eval. Backend internal submissions/waits are not instrumented."
+      ],
+      "rejected_claims": [
+        "Decoded F32 matmul passes the upstream tolerance gate",
+        "Exact FMA versus reduction subcause has been identified",
+        "Bitwise native equivalence or greater mathematical accuracy",
+        "Full-backbone parity correction, speedup or default promotion",
+        "One explicit eval proves one backend command buffer or no internal wait"
+      ],
+      "source_audit_sha256": "18e2a52f7b4d9ed24b8f9f6a164c2f186672bbd6b3574a1c4bcb5181c8bdf67d",
+      "next_falsifier": "Opt-in native GPU packed Q4 affine grouping/reduction diagnostic, then exact-input down and original full upstream gate.",
+      "decay_trigger": "Source/assets/input/reference/runtime/precision/device/OS/artifact drift or mutable checkpoint during a run."
+    },
+    "correlation": "Same-lineage agent review is correlated; the numerical controls, executed tests and parent artifact checks support the bounded result."
+  },
+  "production_frontier": {
+    "level": "IN_PROGRESS",
+    "original_full_gate": "Retained prior gate still has one failure among497664 values at row1/layer39 hidden[33]; not rerun for this diagnostic-only change.",
+    "full_upstream_gate_passes": false,
+    "fixed_tolerances": {
+      "atol": 6e-05,
+      "rtol": 0.0003
+    },
+    "defaults": {
+      "dense": "tree",
+      "simd": "opt-in",
+      "MAP_SHARED": false
+    },
+    "next_falsifier": "Opt-in GPU reproduction of pinned low-M Q4 affine grouping/reduction; qualify exact-input down, then original full upstream gate and adjacent guards before production adoption.",
+    "no_ltp_wba_or_performance_promotion": true
+  },
+  "lineage": {
+    "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/.landmark/evidence/drama3-moe39-diagnostic.json",
+    "sha256": "1b21db36403d41b1c0833dba53b8e6e0f3ffae6697723a0dda4de48fc69eeae0",
+    "bytes": 27610,
+    "role": "Prior committed localization; retained native/official inputs and controls"
+  },
+  "source_sha256": {
+    "scripts/drama3/probe_mlx_expert_down.py": "51d234ebbb07af12772cd1298c3018ffbb58421d73be5d0f3eb39935efeca5a6",
+    "spec/drama3_mlx_expert_down_spec.py": "0c411ad473a57954cf225a9d52f34b4f1a0125c2e78a5c8baaea2267e4b3c4ac",
+    "docs/drama3-native-frontier.md": "823b831bf5d6192bf21c95e8451276858b54d58f3ffd092f02facafbdf5d94e1",
+    "LANDMARKS.md": "fd8d44243465257222fc092c451f1afa36a6846320fd9eb342a76ce3053d1ac7"
+  },
+  "artifacts": [
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/probe.final.json",
+      "sha256": "2c49c3e7b878755cc42b64d6792ba78c316eb4be98308cbac1ac1da3d0162109",
+      "bytes": 427820,
+      "role": "Final GPU results; raw per-arm vectors and controls"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/analysis.json",
+      "sha256": "c6e6cc8e0beb90185d37cf8920509249560c9408a63dea1ff88d987e95087050",
+      "bytes": 3778,
+      "role": "Terminal comparison to retained native down"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/probe.json",
+      "sha256": "b95e5fa5fb8fb43b27df5d832c430058515f9aad4030a5836c519ea964fe6a58",
+      "bytes": 427580,
+      "role": "First GPU results before fail-closed replay-source guard"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/repeatability.json",
+      "sha256": "1e8d860efa4c8ec65c205bcc7d017a723bfa5cc12af482fe88927cd87d8231dd",
+      "bytes": 976,
+      "role": "All four projection arms equal across two runs"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/source-audit.json",
+      "sha256": "18e2a52f7b4d9ed24b8f9f6a164c2f186672bbd6b3574a1c4bcb5181c8bdf67d",
+      "bytes": 6857,
+      "role": "Pinned primary-source dispatch/arithmetic audit"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/adversary-review.json",
+      "sha256": "00bee141b50e2d4a261858bc716b10c32dde99ccd7a956fe544307dc74f31a9b",
+      "bytes": 1842,
+      "role": "Final scoped adversary outcome"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/verification.json",
+      "sha256": "5b9f32f728419ad7ab377c27823cf402a0571729936516d05a14ef1391d656c3",
+      "bytes": 6602,
+      "role": "Actual command/exit/environment ledger"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/focused-python-final.log",
+      "sha256": "759ab18313904054451e9542c7820740c97c777a8fc6ba7569060bcafa08658c",
+      "bytes": 5758,
+      "role": "Final32 executed Python tests"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/replay-source-guard-red.log",
+      "sha256": "fde08ec2e1d181a617b680d881d3500cff165f3a5fe17f08d93cdd1a97e38c6d",
+      "bytes": 2224,
+      "role": "Pre-fix negative replay-source guard failure"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/gpu-probe-final.log",
+      "sha256": "2ed0a3d6536e04a8c0c3d69b75fca114169691f0b17b3be1886e4a16400a0b32",
+      "bytes": 61,
+      "role": "run_safe preflight and exit"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/analyze_probe.py",
+      "sha256": "c0d9b2386b0656fb0edff741f9ba363c42d65c0bd4eed2172705161c6cc09427",
+      "bytes": 2325,
+      "role": "Terminal report analysis source"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/finalize_verification.py",
+      "sha256": "b77114cc8a6afdeae6da65935561934383b3ddf742c5d366d4a67dcb58d6112c",
+      "bytes": 2547,
+      "role": "Sequential final command and repeatability controller"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/mlx-moe-full.json",
+      "sha256": "d3e6e455dd4ab0c987a500cb0d3c807db23003e383725f4b4f6c49fecb64030f",
+      "bytes": 1563628,
+      "role": "Retained official actual-return activation and down rows"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/moe-ablation.json",
+      "sha256": "096605ab158ff7a3104f6393e3dc7317a3122f9c7f31e75a4d464c06acd22173",
+      "bytes": 277156,
+      "role": "Retained native down on exact upstream activation"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/mlx-moe-input.json",
+      "sha256": "f37d6f3fba2f4d661c293612d408867e233c3d0be33826a2200d15862d37bad9",
+      "bytes": 41859,
+      "role": "Retained normalized input fixture"
+    }
+  ],
+  "refresh": {
+    "decay_trigger": "Source/checkpoint/input/reference/runtime/precision/device/OS or artifact changes; immutable-run assumption violated.",
+    "operation": "Recheck pins and hashes, run the focused Python suite and real GPU probe, requalify full8 capture and compare all outputs.",
+    "failure_policy": "Reject diagnostic evidence on provenance/control drift; do not widen tolerance or promote defaults. Reopen dependent claims."
+  }
+}

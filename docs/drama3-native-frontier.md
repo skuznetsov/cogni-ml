@@ -8,6 +8,84 @@ Goal: one short, single-speaker text prompt to a mono 44.1 kHz WAV, with all
 inference computations in Crystal/native libraries. Python/MLX/PyTorch are
 reference and fixture tools only, never the native inference implementation.
 
+## Expert-108 quantized versus decoded F32 down — 2026-10-15
+
+The common-input GPU experiment reproduces the upstream quantized down return
+bitwise, while `mx.dequantize` followed by F32 `mx.matmul` differs at the
+unchanged tolerance `atol=6e-5, rtol=3e-4`. This comparison resolves the next
+falsifier from the MoE investigation below; it does not fix production parity.
+No native arithmetic, precision, default or scheduling changes are included.
+
+`scripts/drama3/probe_mlx_expert_down.py` loads the retained row1/layer39
+SwiGLU return, preserves all eight explicit expert IDs and selects expert 108
+at rank 7. It verifies the actual 14 target-MoE raw tensors and config/index
+against the prior trace before importing MLX. The three down tensors retain
+packed uint32 Q4 weights and BF16 scales/biases promoted to F32 exactly as in
+the pinned reference. Actual lazy-array shape/dtype assertions pin direct
+matmul input to `[1,512]`, decoded weights to `[2048,512]`, and outputs to F32.
+The normalized-input fixture and actual expert activation have separate hashes.
+
+| GPU arm or control | Observed comparison |
+| --- | --- |
+| Official-shape eight-expert `gather_qmm` | All 16,384 down values bitwise equal to retained upstream |
+| Single-expert `gather_qmm` and `quantized_matmul` | Each bitwise equal to upstream expert 108, all 2,048 values |
+| `dequantize → F32 matmul` versus upstream | Two tolerance failures: 469 and 766; maximum absolute difference 0.00390625 |
+| Retained native down on exact upstream activation versus decoded F32 matmul | All 2,048 values pass unchanged tolerance; not bitwise equal |
+| Retained native down versus quantized arm | Three failures: 469, 766 and 1555, reproducing the prior result |
+| Explicit GPU uint4 `scale*q+bias` decode versus `mx.dequantize` | All 1,048,576 F32 weight bit patterns equal; zero maximum error |
+
+At coordinate 33, upstream/quantized gives -9.041109085083008, decoded F32
+matmul gives -9.04194164276123, and retained native gives
+-9.041943550109863. Native and decoded F32 differ by only 1.9073486e-6 here.
+The maximum absolute error in the table occurs on a large output and is not
+the tolerance-failure criterion; every output is checked separately.
+
+This rejects a mismatch between the two tested decode formulas and demonstrates
+a difference between fused quantized dot arithmetic and decoded-weight F32
+matmul on these exact bytes. It does not identify a unique rounding operation,
+establish which result is more accurate, or prove a complete full-backbone
+counterfactual. The explicit decode control implements the native-style
+formula in MLX; it is not a capture of the native Metal decoder itself.
+
+The pinned MLX v0.31.1 source (commit
+`ce45c52505c8158ea48d2a54e8caae05efd86bfe`) factors group scale/bias outside
+partial packed dots and uses SIMD reduction in its fast Q4 QMV path, whereas
+the native kernel multiplies individually decoded weights and sums group
+partials. This makes affine regrouping and reduction order the next target.
+FMA remains unisolated. Source dispatch predicts ordinary QMV/GEMV for the
+actual M=1 shapes, with no NAX/TF32 route; the run also sets
+`MLX_ENABLE_TF32=0` before importing MLX. Kernel names and internal backend
+wait counts were not profiled. Primary source/hash references are in the
+local `source-audit.json` indexed by the evidence packet.
+
+All projection, decode and weight-comparison arithmetic runs on GPU. Six
+terminal result/metric reads follow one explicit `mx.eval`; no intermediate
+GPU-to-host activation read or explicit synchronize call occurs in the probe.
+This source/API audit does not measure MLX's internal submissions or waits.
+CPU work is checkpoint loading/provenance, fixture setup and terminal analysis.
+The original 497,664-value full gate remains open at hidden[33]; no full-model
+run or latency claim is added by this diagnostic.
+
+Risk: CAUTION, bounded reference probe only. Rollback is revert this diagnostic
+commit. DoD: execute the real probe through `scripts/run_safe.sh` with the 15%
+sampled reserve, reproduce the official full-eight capture bitwise, record all
+2,048 target values for each arm, then run the negative provenance/tolerance/
+readback guards and adjacent comparator/capture tests. Observed: probe exit 0,
+32 Python tests pass, and all decoded-weight bits match. A second GPU run after
+closing a replay-source hash guard reproduces all 22,528 projection values
+bitwise across the four arms. Numeric differences
+between diagnostic arms are report data, not an exit-0 assertion of parity.
+Mini-Quadrumvirate verdict: ROBUST for this bounded discriminator, with the
+full-backbone parity gate still open. Review and exact commands/source/artifact hashes are indexed
+in `.landmark/evidence/drama3-down108-qmm.json`; raw artifacts remain local in
+`~/.cache/cogni-ml/drama3-runs/down108-20261015/`. Refresh on source, checkpoint,
+activation, reference/runtime, precision, device/OS or artifact drift.
+
+Next falsifier: reproduce the pinned low-M packed Q4 dot's affine grouping and
+reduction in an opt-in GPU diagnostic, preserving Q4 storage, F32 arithmetic
+and one terminal drain. Qualify exact-input down first, then rerun the original
+full upstream gate and adjacent guards before considering production adoption.
+
 ## Layer-39 MoE discrepancy investigation — 2026-10-15
 
 Status: diagnostic localization observed; the production parity correction is
@@ -95,11 +173,10 @@ single-drain counters, compare exact-input stages by ID, then intervene on
 down input and summation order. The observed first failing boundary is the
 expert down projection. The mini-Quadrumvirate adversary verdict is ROBUST for
 that bounded localization. Exact Q4 decode/product/reduction cause and the
-production parity fix remain open. The next falsifier is expert 108 on the
-same activation and raw weights: compare official MLX quantized matmul with
-MLX dequantize plus F32 matmul before changing native arithmetic. The local
-reference installation does not expose the MLX core Metal kernel source, so
-an FMA or reduction-order explanation is still a hypothesis.
+production parity fix remain open. The down-path experiment above tests the
+next falsifier on the same activation and raw weights. The subsequent pinned
+MLX core source audit strengthens the affine-grouping/reduction hypothesis;
+the exact rounding suboperation still needs a controlled GPU intervention.
 
 Reproduction tools: `scripts/drama3/replay_mlx_moe.py` (full/isolated upstream),
 `examples/drama3_moe_trace.cr`, `examples/drama3_moe_ablation.cr`, and

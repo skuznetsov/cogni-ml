@@ -28993,3 +28993,46 @@ Refresh after source/toolchain/device/model/workload changes.
   model, reference/runtime, input, precision, compiler, device/OS or artifact
   drift. Continue through `scripts/run_safe.sh` with sampled reserve 15%,
   `DRAMA3_PROFILE` unset, no unrelated process manipulation and no push.
+
+### Continuation 2026-10-15 — expert-108 quantized/F32 down discriminator
+
+- At base `4e76054b`, compare the exact stored upstream row1/layer39 SwiGLU
+  activation and raw Q4 down weights on GPU. Full-eight `gather_qmm` reproduces
+  all 16,384 official upstream down values bitwise; single-expert gather and
+  direct `quantized_matmul` reproduce expert108's 2,048 values bitwise too.
+- `mx.dequantize` plus F32 M=1 `mx.matmul` fails the unchanged atol6e-5/rtol3e-4
+  against upstream at 469/766, maximum absolute error 0.00390625. Against the
+  retained native down on exact upstream activation, it passes all 2,048
+  values, without bitwise equality. Native versus quantized retains failures
+  469/766/1555. At33: quantized -9.041109085083008; decoded F32
+  -9.04194164276123; native -9.041943550109863. No accuracy-oracle claim.
+- Explicit GPU uint4 `scale*q+bias` decoding equals `mx.dequantize` across all
+  1,048,576 weight bit patterns. This is a native-style formula control in MLX,
+  not a capture of native Metal decoding. Together with matched input/weights,
+  the experiment isolates a quantized-dot versus decoded-F32 arithmetic-path
+  difference. Exact affine grouping/reduction/FMA subcause remains open.
+- Pinned MLX v0.31.1 source at `ce45c52505c8158ea48d2a54e8caae05efd86bfe`
+  shows group-affine regrouping plus SIMD reduction. Actual M=1 shapes/dtypes
+  are asserted before eval; source predicts QMV/GEMV without NAX/TF32, and the
+  run sets MLX_ENABLE_TF32=0. Runtime GPU kernel names are not profiled.
+- Probe arithmetic/metrics stay on GPU; one explicit terminal mx.eval precedes
+  six result/metric read calls. No intermediate host activation read or explicit
+  synchronize API; internal backend submissions/waits are not instrumented.
+  CPU handles loading/provenance, fixture setup and terminal report analysis.
+- Mini-Quadrumvirate found and closed a missing current-replay-source hash
+  check: negative test fails before the guard, final 32 Python tests pass.
+  Second qualified GPU run reproduces all 22,528 projection values bitwise
+  across four arms. Actual target-MoE/down bytes and separate normalized-input/
+  expert-activation hashes bind the evidence before GPU array construction.
+- Next falsifier: opt-in GPU reproduction of MLX low-M Q4 affine grouping and
+  reduction, then exact-input down and the original full upstream gate. No
+  production arithmetic/default/scheduling change; original hidden[33] gate
+  remains open. Dense default tree/SIMD opt-in and MAP_SHARED off remain.
+  No performance or LTP/WBA promotion claim. Rollback: revert this probe commit.
+- Evidence: `.landmark/evidence/drama3-down108-qmm.json`,
+  `docs/drama3-native-frontier.md`; local `down108-20261015/`. Same pinned model
+  and MLX-audio revisions as the preceding investigation. Refresh on source,
+  model, input, runtime/reference, precision, device/OS or artifact drift.
+  Adversary ROBUST for the bounded differential, not production parity.
+  Continue sequential heavy runs through run_safe with sampled reserve15%,
+  profiling unset and unrelated processes untouched; no push.
