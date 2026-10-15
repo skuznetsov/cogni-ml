@@ -14,6 +14,8 @@ require "../src/ml/audio/drama3/wav"
     SOURCE = {{ read_file("#{__DIR__}/support/drama3_codec_compare.metal") }}
     CODEC_SHA256 = "543445a2ebc5224d2af5956d422f88c2cd21f4018c1a26d81b51ec231bb630f2"
     UPSTREAM_REVISION = "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7"
+    FISH_CODEC_SHA256 = "74fc41c5a7151c6f350af8bd7e5d6e3accfcc7f3dfbfac23afd35af07052bb2f"
+    FISH_REVISION     = "541566932abbaebcb0a40e562a1f846738383f38"
     METRICS = 14
 
     record Stage, name : String, rows : Int32, channels : Int32, reference : Buffer
@@ -84,6 +86,124 @@ require "../src/ml/audio/drama3/wav"
       output
     end
 
+    def self.load_reference(path : String)
+      input = JSON.parse(File.read(path))
+      revision, codec_sha = case input["format"].as_s
+                            when "drama3-codec-cross-reference-v1"
+                              {UPSTREAM_REVISION, CODEC_SHA256}
+                            when "drama3-fish-codec-cross-reference-v1"
+                              {FISH_REVISION, FISH_CODEC_SHA256}
+                            else
+                              raise "reference format"
+                            end
+      raise "upstream identity" unless input["upstream"]["revision"].as_s == revision && input["upstream"]["worktree_clean"].as_bool
+      raise "reference observer changed official DAC output" unless input["decode"]["official_decode_comparison"]["elementwise_exact"].as_bool && input["decode"]["official_decode_comparison"]["status"].as_s == "PASS"
+      raise "reference codec identity" unless input["codec"]["sha256"].as_s == codec_sha
+      frames = input["frames"].as_i
+      raise "frame count" unless frames.in?(1..1024)
+      codes = input["codes"].as_a.map { |book| book.as_a.map(&.as_i) }
+      raise "ten complete DAC codebooks required" unless codes.size == 10 && codes.all? { |book| book.size == frames }
+      codes.each_with_index do |book, index|
+        vocab = index == 0 ? 4096 : 1024
+        raise "codebook id range #{index}" unless book.all? { |value| value >= 0 && value < vocab }
+      end
+      raise "complete stage set required" unless input["stages"].as_a.map { |item| item["name"].as_s }.sort == expected_names.sort
+      {input, frames, codes}
+    end
+
+    # Fixture transfers precede all GPU comparisons. This generic mode compares
+    # completed decodes (or an identity control) without replaying either one.
+    def self.compare_fixtures(actual_path : String, reference_path : String, output_path : String) : Nil
+      raise "output already exists" if File.exists?(output_path)
+      actual_input, frames, codes = load_reference(actual_path)
+      reference_input, reference_frames, reference_codes = load_reference(reference_path)
+      raise "fixtures must contain identical complete codes" unless frames == reference_frames && codes == reference_codes
+      context = Context.new
+      actual_stages = {} of String => Stage
+      reference_stages = {} of String => Stage
+      actual_input["stages"].as_a.each do |item|
+        stage = load_stage(context, File.dirname(actual_path), item)
+        actual_stages[stage.name] = stage
+      end
+      reference_input["stages"].as_a.each do |item|
+        stage = load_stage(context, File.dirname(reference_path), item)
+        reference_stages[stage.name] = stage
+      end
+      diagnostics = {} of String => Buffer
+      expected_names.each do |name|
+        a, r = actual_stages[name], reference_stages[name]
+        raise "fixture stage shape #{name}" unless a.rows == r.rows && a.channels == r.channels
+        diagnostics[name] = compare(context, a.reference, r.reference, name == "waveform")
+      end
+      a, r = actual_stages["waveform"], reference_stages["waveform"]
+      raise "waveform shape" unless a.rows == frames * 2048 && a.channels == 1
+      windows = (a.rows + 22049) // 22050
+      window_buffer = context.alloc(windows * 6)
+      context.dispatch("dr3_codec_wave_windows", SOURCE, [a.reference, r.reference, window_buffer], [a.rows.to_u64], windows)
+      context.finish
+      raise "comparison introduced intermediate host reads" unless context.readbacks.empty?
+      before_reads = context.graph_stats
+      results = expected_names.map do |name|
+        stage_result(actual_stages[name], context.read(diagnostics[name], "diagnostic"))
+      end
+      window_values = context.read(window_buffer, "diagnostic")
+      after_reads = context.graph_stats
+      raise "terminal diagnostics added GPU work or waits" unless before_reads == after_reads
+      wave = results.last
+      report = {
+        format: "drama3-codec-fixture-comparison-v1", actual_json: actual_path, reference_json: reference_path,
+        actual_sha256: file_sha(actual_path), reference_sha256: file_sha(reference_path),
+        actual_format: actual_input["format"].as_s, reference_format: reference_input["format"].as_s,
+        actual_source_revision: actual_input["upstream"]["revision"].as_s, reference_source_revision: reference_input["upstream"]["revision"].as_s,
+        actual_codec_sha256: actual_input["codec"]["sha256"].as_s, reference_codec_sha256: reference_input["codec"]["sha256"].as_s,
+        frames: frames, samples: frames * 2048, sample_rate: 44100, stages: results,
+        stage_gate_passes: results.all?(&.[:passes]), first_failed_stage: results.find { |item| !item[:passes] }.try(&.[:name]),
+        one_lsb_gate_passes: wave[:within_one_pcm_lsb],
+        full_gate_passes: results.all?(&.[:passes]) && wave[:within_one_pcm_lsb] == true && wave[:actual_peak] > 1e-7 && wave[:reference_peak] > 1e-7,
+        gates: gates,
+        waveform_windows: window_results(window_values, frames * 2048),
+        execution: {backend: "resident-metal", comparison_reduction: "GPU F32 compensated sums",
+                    activation_readback_before_completion: false, graph_before_terminal_reads: before_reads, graph_after_terminal_reads: after_reads,
+                    resident_readbacks: context.readbacks},
+      }
+      File.write(output_path, report.to_json)
+      puts({frames: frames, stages: results.size, first_failed_stage: report[:first_failed_stage], full_gate_passes: report[:full_gate_passes], max_pcm_error: wave[:max_abs_pcm_error]}.to_json)
+    end
+
+    def self.gates
+      {stage_max_abs: 1e-3, stage_rms: 2e-4, stage_normalized_rms: 2e-4,
+       waveform_atol: 5e-5, waveform_rtol: 1e-3, waveform_rule: "max(atol, abs(reference)*rtol)", pcm_max_lsb: 1}
+    end
+
+    def self.stage_result(stage : Stage, values : Array(Float32))
+      name = stage.name
+      norm = values[13]
+      finite = values[7] == 0
+      passes = if name == "waveform"
+                 finite && values[6] == 0
+               else
+                 finite && values[0] <= 1e-3_f32 && values[1] <= 2e-4_f32 && norm >= 0 && norm <= 2e-4_f32
+               end
+      {name: name, rows: stage.rows, channels: stage.channels,
+       max_abs: values[0], rms: values[1], reference_rms: values[2], actual_rms: values[3],
+       reference_peak: values[4], actual_peak: values[5], point_failures: values[6].to_i64,
+       nonfinite: values[7].to_i64, normalized_rms: norm >= 0 ? norm : nil,
+       worst_index: (values[8].to_i64 << 16) | values[9].to_i64,
+       max_abs_pcm_error: name == "waveform" ? values[10].to_i32 : nil,
+       rms_pcm_error: name == "waveform" ? values[11] : nil,
+       exact_pcm_samples: name == "waveform" ? values[12].to_i64 : nil,
+       within_one_pcm_lsb: name == "waveform" ? finite && values[10] <= 1 : nil,
+       passes: passes}
+    end
+
+    def self.window_results(values : Array(Float32), samples : Int32)
+      values.each_slice(6).with_index.map { |item, index|
+        {start_seconds: index * 0.5, end_seconds: Math.min((index + 1) * 0.5, samples / 44100.0),
+         actual_rms: item[0], reference_rms: item[1], actual_peak: item[2], reference_peak: item[3],
+         actual_pcm_peak: item[4].to_i32, reference_pcm_peak: item[5].to_i32}
+      }.to_a
+    end
+
     # A deliberately incorrect value must fail the diagnostic. These small
     # fixtures validate the GPU reducer against a host F64 oracle; the host
     # oracle is never used for model activations.
@@ -133,23 +253,16 @@ require "../src/ml/audio/drama3/wav"
         self_test
         return
       end
+      if ARGV.size == 4 && ARGV[0] == "--compare-fixtures"
+        actual, reference, output = ARGV[1..].map { |path| File.expand_path(path) }
+        compare_fixtures(actual, reference, output)
+        return
+      end
       raise "usage: drama3_codec_cross_compare MODEL_DIR REFERENCE.json OUTPUT.json OUTPUT.wav" unless ARGV.size == 4
       model_dir, reference_path, output_path, wav_path = ARGV.map { |path| File.expand_path(path) }
       raise "output already exists" if File.exists?(output_path) || File.exists?(wav_path)
-      input = JSON.parse(File.read(reference_path))
-      raise "reference format" unless input["format"].as_s == "drama3-codec-cross-reference-v1"
-      raise "upstream identity" unless input["upstream"]["revision"].as_s == UPSTREAM_REVISION && input["upstream"]["worktree_clean"].as_bool
-      raise "reference observer changed official DAC output" unless input["decode"]["official_decode_comparison"]["elementwise_exact"].as_bool && input["decode"]["official_decode_comparison"]["status"].as_s == "PASS"
-      raise "reference codec identity" unless input["codec"]["sha256"].as_s == CODEC_SHA256
+      input, frames, codes = load_reference(reference_path)
       raise "local codec identity" unless file_sha(File.join(model_dir, "codec.safetensors")) == CODEC_SHA256
-      frames = input["frames"].as_i
-      raise "frame count" unless frames.in?(1..1024)
-      codes = input["codes"].as_a.map { |book| book.as_a.map(&.as_i) }
-      raise "ten complete DAC codebooks required" unless codes.size == 10 && codes.all? { |book| book.size == frames }
-      codes.each_with_index do |book, index|
-        vocab = index == 0 ? 4096 : 1024
-        raise "codebook id range #{index}" unless book.all? { |value| value >= 0 && value < vocab }
-      end
       items = input["stages"].as_a
       names = items.map { |item| item["name"].as_s }
       raise "complete stage set required" unless names.sort == expected_names.sort
@@ -196,25 +309,7 @@ require "../src/ml/audio/drama3/wav"
       before_reads = context.graph_stats
       raise "decode left GPU work pending" unless before_reads["pending"] == 0
       results = observed_order.map do |name|
-        stage = stages[name]
-        values = context.read(diagnostics[name], "diagnostic")
-        norm = values[13]
-        finite = values[7] == 0
-        passes = if name == "waveform"
-                   finite && values[6] == 0
-                 else
-                   finite && values[0] <= 1e-3_f32 && values[1] <= 2e-4_f32 && norm >= 0 && norm <= 2e-4_f32
-                 end
-        {name: name, rows: stage.rows, channels: stage.channels,
-         max_abs: values[0], rms: values[1], reference_rms: values[2], actual_rms: values[3],
-         reference_peak: values[4], actual_peak: values[5], point_failures: values[6].to_i64,
-         nonfinite: values[7].to_i64, normalized_rms: norm >= 0 ? norm : nil,
-         worst_index: (values[8].to_i64 << 16) | values[9].to_i64,
-         max_abs_pcm_error: name == "waveform" ? values[10].to_i32 : nil,
-         rms_pcm_error: name == "waveform" ? values[11] : nil,
-         exact_pcm_samples: name == "waveform" ? values[12].to_i64 : nil,
-         within_one_pcm_lsb: name == "waveform" ? finite && values[10] <= 1 : nil,
-         passes: passes}
+        stage_result(stages[name], context.read(diagnostics[name], "diagnostic"))
       end
       window_values = context.read(waveform_windows.not_nil!, "diagnostic")
       samples = context.read(output, "terminal")
@@ -226,18 +321,14 @@ require "../src/ml/audio/drama3/wav"
       report = {
         format: "drama3-codec-cross-comparison-v1", reference_json: reference_path,
         reference_sha256: file_sha(reference_path), codec_sha256: CODEC_SHA256,
+        reference_codec_sha256: input["codec"]["sha256"].as_s,
         frames: frames, samples: samples.size, sample_rate: 44100, stages: results,
         stage_gate_passes: results.all?(&.[:passes]), first_failed_stage: results.find { |item| !item[:passes] }.try(&.[:name]),
         one_lsb_gate_passes: wave[:within_one_pcm_lsb],
         full_gate_passes: results.all?(&.[:passes]) && wave[:within_one_pcm_lsb] == true && wave[:actual_peak] > 1e-7 && wave[:reference_peak] > 1e-7,
         nonzero_waveform: {actual: wave[:actual_peak] > 1e-7, reference: wave[:reference_peak] > 1e-7},
-        gates: {stage_max_abs: 1e-3, stage_rms: 2e-4, stage_normalized_rms: 2e-4,
-                waveform_atol: 5e-5, waveform_rtol: 1e-3, waveform_rule: "max(atol, abs(reference)*rtol)", pcm_max_lsb: 1},
-        waveform_windows: window_values.each_slice(6).with_index.map { |values, index|
-          {start_seconds: index * 0.5, end_seconds: Math.min((index + 1) * 0.5, samples.size / 44100.0),
-           actual_rms: values[0], reference_rms: values[1], actual_peak: values[2], reference_peak: values[3],
-           actual_pcm_peak: values[4].to_i32, reference_pcm_peak: values[5].to_i32}
-        }.to_a,
+        gates: gates,
+        waveform_windows: window_results(window_values, samples.size),
         execution: {backend: "resident-metal", precision: "F32", decode_seconds: decode_seconds,
                     reference_upload_bytes: stages.values.sum { |stage| stage.reference.count.to_i64 * 4 },
                     activation_readback_before_decode_completion: false, comparison_reduction: "GPU F32 compensated sums",

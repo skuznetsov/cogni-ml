@@ -138,6 +138,62 @@ waveform after the existing terminal drain; graph counters must stay unchanged
 across those reads. Timings include diagnostics and are not performance
 benchmarks. The probe does not select new model arithmetic.
 
+### Original Fish DAC control
+
+`fish_codec_reference.py` adds the original Fish `DAC.from_indices` control
+using `fishaudio/drama-3@e0a9218aa48888270f06ef1ed9ea67622c0e17d2`'s
+`codec.pth` (SHA-256
+`74fc41c5a7151c6f350af8bd7e5d6e3accfcc7f3dfbfac23afd35af07052bb2f`).
+It requires the clean Fish source revision above, PyTorch/torchaudio 2.8.0,
+`descript-audio-codec==1.0.0`, `descript-audiotools==0.7.2`, Hydra and
+OmegaConf. Use a separate Python environment; the measured MLX fixtures use
+MLX/MLX-Metal 0.31.1. Runtime package/source hashes accompany the evidence.
+
+The loader follows the original direct DAC CLI's F32 checkpoint path. It
+preserves parametrized weight norm, all 535 F32 parameters, and the three
+constructed BF16 RoPE buffers; it does not cast the model. This is a decoder
+control, not a test of Fish's complete text-to-speech serving path, whose
+loader can fold weight norm and cast the model to BF16. Independent state
+keys/shapes must match exactly; original nonpersistent caches/masks are
+excluded from the state load as in the official model.
+
+```sh
+PYTORCH_ENABLE_MPS_FALLBACK=0 PYTORCH_MPS_FAST_MATH=0 \
+python scripts/drama3/fish_codec_reference.py \
+  --fish-root "$FISH_ROOT" --codec "$FISH_CODEC" \
+  --codes-json /tmp/utterance.wav.json --output-dir "$OUT/fish-reference"
+
+# Native Metal versus original Fish, on exactly the same complete codes.
+DRAMA3_COGNIGRAPH_MAX_INFLIGHT=2 "$OUT/codec-cross" "$MODEL_DIR" \
+  "$OUT/fish-reference/reference.json" \
+  "$OUT/native-fish-comparison.json" "$OUT/native-fish.wav"
+
+# Completed original Fish decode versus completed MLX decode, on GPU.
+"$OUT/codec-cross" --compare-fixtures \
+  "$OUT/fish-reference/reference.json" "$OUT/codec-reference/reference.json" \
+  "$OUT/fish-mlx-comparison.json"
+
+PYTHONDONTWRITEBYTECODE=1 python -m unittest \
+  spec/drama3_codec_cross_reference_spec.py spec/drama3_fish_codec_reference_spec.py
+```
+
+Both original Fish decodes (unobserved and observed) run on MPS under a
+dispatch guard that rejects host tensors and scalar extraction. The observer
+captures actual module results, including per-instance codebook embeddings,
+and must match the unobserved full decode elementwise before export. CPU
+fallback is disabled. Factory-created causal masks are allocated on the
+selected GPU. Weights/codes are uploaded before model execution; completed
+fixtures and final diagnostics/WAVs are serialized after execution.
+
+`--compare-fixtures ACTUAL.json REFERENCE.json OUTPUT.json` is generic and
+also supports identity controls. The four retained cross-backend runs use
+Fish as actual and MLX as reference; reports record both formats, source
+revisions, checkpoint hashes and manifest hashes. It rejects different full
+code arrays, wrong pins, missing stages, shape/layout errors and stale raw
+file hashes. Each fixture uploads once before GPU reductions. No model is
+rerun in this mode, and terminal metric reads must add no graph work or waits.
+All gates below are shared with the native comparison and remain unchanged.
+
 The stage limits remain max absolute `1e-3`, RMS `2e-4`, normalized RMS `2e-4`;
 the waveform limit remains `max(5e-5, abs(reference)*1e-3)` per sample. The
 one-PCM16-LSB limit is a separate finite-waveform gate. `full_gate_passes`

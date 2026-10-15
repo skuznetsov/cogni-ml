@@ -29328,3 +29328,42 @@ Refresh after source/toolchain/device/model/workload changes.
   bound listening-evidence drift. Standing authority unchanged: sequential
   run_safe, reserve15%, profilesunset, unrelated processes untouched, local
   atomic commit and no push. Rollback: revert diagnostic commit, hookdefaultsnil.
+
+### Continuation 2026-10-15 — original Fish full-stream DAC control
+
+- Base `c259151d`: original Fish source54156693 and original codec74fc41c5
+  decode the same complete197/427/741/768-frame ten-book streams. Direct DAC
+  CLI F32 loader semantics preserve535F32 parameters, parametrized weight norm
+  and3BF16 RoPE buffers; complete Fish BF16 serving/text generation is untested.
+  All58 actual boundaries captured on MPS. Both full model calls have host-
+  tensor/scalar-extraction guards and CPU fallback disabled. Observed original
+  waveform equals separate unobserved full decode elementwise4/4.
+- Fish actual versus MLX reference: waveform pointwise and one-PCM-LSB gates
+  pass4/4, strict full-stage parity only2/4. Native427 fails8 stages, first
+  upsample1convnext; common768 fails postlayer7 alone. All gates unchanged.
+  Native versus Fish fails4/4 first at postlayer0; PCMmax16/4/13/3. Native WAVs
+  byte-match prior cross-decodes4/4; new MLX-reference regression reproduces
+  all58 stage metrics and WAV exactly. No production arithmetic/default change.
+- All3 decoders give identical half-second PCM peaks in measured quiet tails:
+  native427 at4–19.830s36–57, MLX741 at12–34.412s37–51, common768 at5.5–35.666s1.
+  Original Fish substitution does not restore the quiet continuation for
+  these saved codes. This rejects a decoder-port-only account, not shared
+  checkpoint/representation defects or generation/conditioning failures.
+  Peaks are not transcripts; prior human listening remains the content source.
+- CPU byte/source audit: all541 original tensors equal MLX after the exact
+  converter's BF16 promotion. Original535F32/3BF16/3bool; converted538F32/3bool.
+  MLX loads the serialized RoPE caches over its F32 constructor values; loaded
+  coefficients equal Fish BF16 values expanded to F32. Native recomputes
+  F32cos/sin. Concrete path difference, not measured cause. Next numeric
+  falsifier: replay exact loaded coefficients on GPU before block-level gates.
+- Original model/manifest/source/runtime/run hashes and measured DoD indexed
+  in `.landmark/evidence/drama3-fish-codec-cross.json`; raw full stages/WAVs
+  in `fish-codec-cross-20261015/`, not Git. Terminal diagnostics add no native
+  graph work/waits; existing depth2 drain remains32 completions. No performance
+  promotion or zero-existing-waits claim. Overall silence-cause frontier open.
+- Return frontier: generation quiet onset with matched conditioning/sampler
+  inputs; prior code fork111 and MoE39 row1hidden[33] remain distinct until a
+  discriminator connects them. Refresh on source/compiler/model/input/artifact/
+  runtime/device/OS/gate/layout or bound listening-evidence drift. Sequential
+  run_safe, reserve15%, unrelated processes untouched, local commit/no push.
+  Rollback is this atomic diagnostic commit; production kernels are unchanged.

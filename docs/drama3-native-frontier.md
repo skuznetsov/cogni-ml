@@ -7,8 +7,89 @@ The exact control/terminal read boundaries and measured scope are below.
 Goal: one short, single-speaker text prompt to a mono 44.1 kHz WAV, with all
 inference computations in Crystal/native libraries. Python/MLX/PyTorch are
 reference and fixture tools only, never the native inference implementation.
-The pinned MLX upstream is a community port; its source-path controls below
-do not establish agreement with the original Fish Audio implementation.
+The pinned MLX upstream is a community port. Original Fish DAC controls below
+cover four saved code streams, not the original text-generation pipeline.
+
+## Original Fish full-stream GPU DAC control — 2026-10-15
+
+At base `c259151d`, the original Fish `DAC.from_indices` independently decodes
+the same four complete ten-book streams used below. Source revision is
+`541566932abbaebcb0a40e562a1f846738383f38`; the original DRAMA-3 model revision
+is `e0a9218aa48888270f06ef1ed9ea67622c0e17d2`, with `codec.pth` SHA-256
+`74fc41c5a7151c6f350af8bd7e5d6e3accfcc7f3dfbfac23afd35af07052bb2f`.
+This follows the original direct DAC CLI's checkpoint F32 loader semantics:
+535 F32 parameters, preserved parametrized weight norm, three constructed
+BF16 RoPE buffers and three boolean masks. It does not test the complete
+Fish text-to-speech serving loader's BF16/folded-weight-norm configuration.
+
+Both the unobserved and observed original decodes run on PyTorch 2.8.0 MPS,
+with CPU fallback disabled and a dispatch guard rejecting host tensors and
+scalar extraction during each full model call. A GPU default-device context
+also keeps factory-created causal masks on MPS. The observer captures 58
+actual intermediate boundaries and matches the separate unobserved full
+waveform elementwise in all four cases. Reference export occurs afterwards.
+Completed Fish/MLX fixtures upload once and are compared on native Metal;
+native-vs-Fish comparisons observe actual native buffers during decode.
+No model activation is read on CPU before completed decoding. Native depth-2
+CogniGraph still submits/completes/waits for 32 command buffers; terminal
+reads add no graph work or waits. Existing control boundaries remain.
+
+| Saved codes | Frames | Fish vs MLX first failed observed stage | Fish/MLX max PCM16 delta | Native/Fish max PCM16 delta |
+| --- | ---: | --- | ---: | ---: |
+| Audible bilingual seed 1 | 197 | none; full gate PASS | 1 | 16 |
+| Native styled first chunk | 427 | quantizer.upsample.1.convnext | 1 | 4 |
+| MLX styled first chunk | 741 | none; full gate PASS | 1 | 13 |
+| Common original text without cues | 768 | quantizer.post_module.layers.7 | 1 | 3 |
+
+Fish/MLX waveform pointwise and one-LSB gates pass in all four cases, but
+strict full parity passes only two: the 427-frame case fails eight stage
+gates and the 768-frame case fails one. No gate or reference precision is
+relaxed. Native/Fish fails every full gate, first at
+`quantizer.post_module.layers.0`, as native/MLX did. The new native WAVs are byte-identical to the four prior
+native cross-decodes; the MLX-reference regression also reproduces its prior
+58 stage metrics and WAV exactly. Numerical DAC parity remains open.
+
+The original Fish decoder preserves the same quiet continuation. Every
+half-second PCM peak agrees among all three decoders in the measured regions:
+36–57 units from 4.0–19.830 s for native styled codes, 37–51 from
+12.0–34.412 s for MLX styled codes, and one unit from 5.5–35.666 s without
+cues. These are signal measurements, not transcripts or an audibility test.
+The existing human listening reports identify the missing cat sentence in
+the two styled first chunks. Substituting the original Fish DAC does not
+restore signal in their quiet continuation. This rejects a decoder-port-only
+explanation for these saved streams, but does not establish the unique cause:
+conditioning/generation, code representation and a shared checkpoint defect
+still need discriminating evidence. Original Fish text generation was not run.
+
+A separate CPU serialized-weight audit finds all 541 original tensors match
+the MLX checkpoint exactly after the pinned converter's BF16-to-F32 promotion;
+the other types, names, shapes and values are preserved. Original counts are
+535 F32 / 3 BF16 / 3 bool; converted counts are 538 F32 / 3 bool. Runtime
+sanitization renames 180 keys without collisions. This is a byte/source audit,
+not CPU inference or proof of checkpoint semantic correctness.
+
+The audit resolves an important RoPE distinction: MLX's F32 constructor cache
+is overwritten by the serialized caches. Every loaded F32 coefficient is
+exactly the original BF16-rounded value expanded to F32. Our resident Metal
+path instead recomputes frequency/angle/cos/sin in F32 and does not consume
+those caches. This is a concrete numerical-path difference, not yet the
+measured cause of the layer-0 discrepancy or silence. Next numeric falsifier:
+use the exact loaded RoPE coefficients on GPU with matched activations and
+compare the first failing block without widening tolerances. Next silence
+falsifier: locate when generation enters the quiet-code continuation with
+matched conditioning and sampler inputs; keep the code-fork111/MoE39 return
+frontiers distinct until an onset discriminator connects them.
+
+The measured diagnostic DoD, guard negative controls, unchanged-path
+regression, source/runtime/command hashes and correlated mini-Quadrumvirate
+review are indexed in `.landmark/evidence/drama3-fish-codec-cross.json`.
+Raw receipts, full stages and WAVs remain under `fish-codec-cross-20261015/`
+outside Git. Diagnostic timings are not performance benchmarks. Overall
+silence-cause investigation remains IN_PROGRESS; the scoped decoder
+substitution result is established for these four inputs. Refresh on source,
+checkpoint, input/artifact, upstream, runtime/device/OS, precision/layout/gate
+or directly bound listening-evidence drift. Reverting this diagnostic commit
+removes the new tools; production arithmetic/defaults are unchanged.
 
 ## Full-stream same-code GPU DAC comparison — 2026-10-15
 
