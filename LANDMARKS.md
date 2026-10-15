@@ -28939,3 +28939,57 @@ Refresh after source/toolchain/device/model/workload changes.
   checkpoint revision 5331ab509359c0e4a7e353a19e255ddf3e8152a8. Refresh on
   source/assets/reference/runtime/compiler/input/device/OS/artifact drift;
   timings also decay with host/cache state. MAP_SHARED remains default-off.
+
+### Continuation 2026-10-15 — DRAMA-3 layer-39 MoE localization
+
+- Active goal: resolve the full-backbone row1/layer39 hidden[33] mismatch
+  without widening atol 6e-5 / rtol 3e-4, changing precision or adding ordinary
+  inference GPU/CPU boundaries. Base `7bf40df8`; original gate remains one
+  failure in 497,664 values (0.921100616 vs 0.921916962). Dense stays `tree`,
+  SIMD opt-in; MAP_SHARED default-off. No arithmetic/kernel fix in this step.
+- Exact upstream normalized-input replay passes router logits, expert weights
+  by ID, gate/up and activation at fixed tolerance. Raw selected orders differ:
+  upstream 159,194,245,154,230,191,171,108; native
+  108,171,191,230,154,245,194,159. First failing boundary is expert down output
+  (expert 108 coordinates 469/766). Tolerance equality is not bitwise equality.
+- Causal GPU probe feeds exact stored upstream activation to native affine-Q4
+  down: expert108[33] remains -9.0419435501 vs -9.0411090851, delta
+  -0.0008344650. Native down replay from its own activation is bitwise equal
+  to captured down (16,384 values); its reduction reproduces captured native
+  sum bitwise (2,048). Native reduction of upstream terms/weights in upstream
+  order reproduces upstream official sum bitwise across all 2,048 values.
+- Order-only interventions reorder both rows and weights by explicit ID.
+  Neither changes coordinate33; other-coordinate bit differences pass fixed
+  tolerance. Router weight drift changes sum[33] by only 9.54e-7. This rejects
+  routing/order as the dominant cause at this coordinate, not universally.
+  Native full-input drift (max 1.907e-6) and small residual/shared deltas remain;
+  the down projection is the dominant contribution, not a complete proof of
+  all full-pass errors. Exact Q4 suboperation responsible is still unknown.
+- Capture fidelity: upstream detailed/no-capture full arrays (243) and common
+  full/isolated MoE stages match bitwise. Native detailed/no-detailed captures
+  match 8,192 output values; three final outputs plus target residual/hidden
+  match retained native baseline. Actual returns and diagnostic auxiliary
+  prefix/weighted records have distinct authority labels. Inference/probe
+  arithmetic stays on GPU; serialization/report analysis follows one final
+  drain. Actual graphs show zero pre-drain submissions/waits, one final each,
+  and no serialization-induced submission/wait. Default-nil hooks add no GPU
+  diagnostic allocation, dispatch, readback or completion boundary.
+- Actual loaded `WeightStore` bytes for 14 target-MoE tensors, config and index
+  are hashed before GPU context creation in both diagnostic examples. Target
+  digest matches upstream `648d4c736dd60b6c077c032565aa647b6e90f6fd96d2ee957f22cbcd69a889dc`.
+  The checkpoint must remain immutable during a run. Final checks: 21 Crystal
+  examples, 20 comparator tests and one upstream capture regression pass;
+  real trace/ablation exit 0. The numeric comparator still exits 1 as expected.
+- Mini-Quadrumvirate adversary: ROBUST for bounded common-input/down-boundary
+  localization; original production parity correction remains IN_PROGRESS.
+  Next falsifier: expert108 official MLX quantized matmul versus MLX dequantize
+  plus F32 matmul on identical activation/packed weights. Do not infer MLX
+  internal FMA/reduction from unavailable core kernel source. A production
+  correction needs the original full gate passing plus adjacent guards.
+- Evidence: `.landmark/evidence/drama3-moe39-diagnostic.json`,
+  `docs/drama3-native-frontier.md`; local raw artifacts `moe39-20261015/`.
+  Checkpoint revision 5331ab509359c0e4a7e353a19e255ddf3e8152a8, MLX-audio
+  e7488935ec2ebfafd38ef2b58e290d79f3d05dc7, MLX 0.31.1. Refresh on source,
+  model, reference/runtime, input, precision, compiler, device/OS or artifact
+  drift. Continue through `scripts/run_safe.sh` with sampled reserve 15%,
+  `DRAMA3_PROFILE` unset, no unrelated process manipulation and no push.

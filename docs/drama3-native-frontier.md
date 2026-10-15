@@ -8,6 +8,111 @@ Goal: one short, single-speaker text prompt to a mono 44.1 kHz WAV, with all
 inference computations in Crystal/native libraries. Python/MLX/PyTorch are
 reference and fixture tools only, never the native inference implementation.
 
+## Layer-39 MoE discrepancy investigation — 2026-10-15
+
+Status: diagnostic localization observed; the production parity correction is
+IN_PROGRESS. The retained full-backbone gate at base `7bf40df8` still fails at
+exactly one of 497,664 values: row1/layer39 hidden[33], native
+0.9211006164550781 versus upstream 0.9219169616699219. Absolute error is
+0.00081634521484375; the unchanged allowance is 0.00033657508850097655.
+Dense tree/SIMD arms are identical. Neither dense nor MAP_SHARED defaults are
+promoted. No production arithmetic or Metal kernel changes in this diagnosis.
+
+The probes retain actual GPU inputs, router logits, selected weights, expert
+gate/up/activation/down returns, official routed/MoE returns and residual
+boundaries. Expert rows are compared by explicit ID while retaining raw rank
+order. Weighted terms and prefix sums computed by separate diagnostic kernels
+are labelled auxiliary; they do not substitute for official return values.
+The pinned MLX model runs with floating checkpoint tensors promoted to F32,
+as in the previous reference; this is not stock BF16 execution parity.
+
+| Boundary on exact upstream normalized input | Observation |
+| --- | --- |
+| Router logits | Maximum absolute difference 7.153e-7; passes fixed tolerance |
+| Selected experts | Same eight IDs; upstream raw order 159,194,245,154,230,191,171,108; native order 108,171,191,230,154,245,194,159 |
+| Selected weights by ID | Maximum absolute difference 5.960e-8; passes |
+| Expert gate/up and activation | All pass; equality is tolerance based, not bitwise |
+| Expert down returns | First failing stage; expert 108 fails at coordinates 469 and 766 |
+| Official routed sum | Fails at coordinates 469,766,791 |
+| Official MoE return | Fails at coordinates 1012,1111,1191,1640 |
+
+The strongest intervention bypasses gate/up/SwiGLU: replay the **exact stored
+upstream activation** through the existing native affine-Q4 down kernel. For
+expert 108 at coordinate 33, native is -9.041943550109863 versus upstream
+-9.041109085083008, delta -0.0008344650268554688. That delta survives identical
+activation bytes. The same native down kernel replaying its own captured
+activation reproduces all 16,384 captured down values bitwise.
+
+Five GPU reduction arms separately hold terms, weights and order fixed.
+Native reduction of upstream down rows and weights in upstream order matches
+the actual upstream routed sum **bitwise across all 2,048 values**. Reordering
+fixed terms with their paired weights changes bits at other coordinates but
+causes no tolerance failures and no change at coordinate 33. Native terms
+with upstream weights/order retain a -0.000834465 coordinate-33 sum delta;
+native weights change that by only +0.000000954. Native terms/weights in
+native order reproduce the captured native sum bitwise. These are bounded
+interventions on this workload, not a universal claim about MLX reduction.
+
+Full-native normalized input differs in 1,936/2,048 F32 bit patterns (maximum
+1.90735e-6), so its stages are not qualified as an exact-input comparison.
+At original coordinate 33, native-minus-upstream deltas are +0.000015259 for
+the attention residual, -0.000831604 for MoE, and -0.000816345 for hidden.
+Residual cancellation around 13.28 + (-12.36) exposes the final violation.
+Replacing full-native input with upstream input changes native MoE[33] by
+only about 1.907e-6. This supports the down projection as the dominant
+contribution; it does not prove a complete counterfactual explanation of
+every full-pass difference.
+
+Capture controls: all 243 upstream full-backbone arrays match the retained
+no-capture reference bitwise; detailed upstream full and isolated MoE stages
+match bitwise. Native detailed/no-detailed captures match four output vectors
+(8,192 values) bitwise, and three final rows plus the selected residual/hidden
+match the retained native baseline bitwise. In the real trace and ablation,
+graph submissions/waits are zero before the final drain and one afterward,
+unchanged by serialization. Guard/status and diagnostic readbacks occur only
+after that drain. No ordinary-inference diagnostic allocations, dispatches,
+readbacks or completion boundaries are added when hooks are unset. Diagnostic
+calculations and reference inference stay on GPU; CPU code handles checkpoint
+loading/provenance, fixture indexing and terminal report analysis.
+
+Both native examples hash the actual 14 target-MoE mapped tensor payloads from
+their loaded `WeightStore`, plus config/index bytes, before GPU context
+creation. Their target digest matches upstream:
+`648d4c736dd60b6c077c032565aa647b6e90f6fd96d2ee957f22cbcd69a889dc`.
+Checkpoint files must remain immutable during a run. This binds the selected
+layer's weights, not every checkpoint shard or authenticated remote contents.
+Final release checks pass 21 Crystal examples and 21 Python tests (20 report
+guards plus one upstream capture regression); both real GPU examples exit 0.
+
+Risk: CAUTION. Rollback is unset diagnostic callbacks or revert this diagnostic
+commit. Tolerances remain `atol=6e-5, rtol=3e-4`; Q4 weights, floating precision
+and ordinary inference scheduling are unchanged. Runs use the 15% sampled
+reserve and do not modify unrelated processes. `DRAMA3_PROFILE` must be unset
+(a value of `0` still enables profiling).
+
+Diagnostic DoD: reproduce the original failure, qualify capture fidelity and
+single-drain counters, compare exact-input stages by ID, then intervene on
+down input and summation order. The observed first failing boundary is the
+expert down projection. The mini-Quadrumvirate adversary verdict is ROBUST for
+that bounded localization. Exact Q4 decode/product/reduction cause and the
+production parity fix remain open. The next falsifier is expert 108 on the
+same activation and raw weights: compare official MLX quantized matmul with
+MLX dequantize plus F32 matmul before changing native arithmetic. The local
+reference installation does not expose the MLX core Metal kernel source, so
+an FMA or reduction-order explanation is still a hypothesis.
+
+Reproduction tools: `scripts/drama3/replay_mlx_moe.py` (full/isolated upstream),
+`examples/drama3_moe_trace.cr`, `examples/drama3_moe_ablation.cr`, and
+`scripts/drama3/moe_compare.py`. The comparator's exit 1 is the expected
+preserved numerical mismatch; malformed pins, shapes, capture provenance,
+expert maps or graph/readback controls are rejected separately. Run native
+examples with `--release -Ddrama3_metal`, `DRAMA3_BACKEND=metal`, graph depth 2
+and profiling unset through `scripts/run_safe.sh`. The exact commands,
+test signals, source/artifact hashes and remaining frontier are indexed in
+`.landmark/evidence/drama3-moe39-diagnostic.json`. Raw artifacts remain local
+under `~/.cache/cogni-ml/drama3-runs/moe39-20261015/`; refresh on source, model,
+reference/runtime, input, precision, compiler, device/OS or artifact drift.
+
 ## Dense backbone projection experiment — 2026-10-14
 
 Status: opt-in candidate implemented; default promotion withheld. Measure the

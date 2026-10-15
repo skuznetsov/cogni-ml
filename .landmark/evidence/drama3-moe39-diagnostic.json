@@ -1,0 +1,669 @@
+{
+  "format": "landmark-evidence/v1",
+  "recorded_at_utc": "2026-10-15T01:56:22.717679+00:00",
+  "claim": {
+    "level": "VERIFIED",
+    "summary": "GPU exact-input interventions localize the dominant layer39 coordinate33 discrepancy to expert108 affine-Q4 down projection; qualified diagnostic capture and report tools are implemented.",
+    "scope": "One row/layer on M2 Max, macOS 26.6.2, pinned F32-promoted MLX reference/Q4 checkpoint. Localization and capture fidelity only; production parity remains open."
+  },
+  "production_parity": {
+    "level": "IN_PROGRESS",
+    "fixed_tolerances": {
+      "atol": 6e-05,
+      "rtol": 0.0003
+    },
+    "original_failure": {
+      "absolute_error": 0.00081634521484375,
+      "actual": 0.9211006164550781,
+      "allowed_error": 0.00033657508850097655,
+      "coordinate": 33,
+      "reference": 0.9219169616699219,
+      "trace": "backbone.row1.layers.39.hidden"
+    },
+    "full_upstream_gate_passes": false,
+    "default_promotion": false,
+    "dense_default": "tree",
+    "simd": "opt-in",
+    "MAP_SHARED_default": false
+  },
+  "boundaries": {
+    "base_revision": "7bf40df81ff81e5b866f2d61ec8621e728c0a71f",
+    "risk": "CAUTION",
+    "allowed_paths": [
+      "src/ml/audio/drama3/backbone_resident.cr",
+      "examples/drama3_moe_trace.cr",
+      "examples/drama3_moe_ablation.cr",
+      "examples/support/drama3_moe_provenance.cr",
+      "scripts/drama3/replay_mlx_moe.py",
+      "scripts/drama3/moe_compare.py",
+      "spec/drama3_moe_trace_spec.cr",
+      "spec/drama3_moe_provenance_spec.cr",
+      "spec/drama3_mlx_moe_capture_spec.py",
+      "spec/drama3_moe_compare_spec.py",
+      "docs/drama3-native-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/drama3-moe39-diagnostic.json"
+    ],
+    "changed_paths": [
+      "src/ml/audio/drama3/backbone_resident.cr",
+      "examples/drama3_moe_trace.cr",
+      "examples/drama3_moe_ablation.cr",
+      "examples/support/drama3_moe_provenance.cr",
+      "scripts/drama3/replay_mlx_moe.py",
+      "scripts/drama3/moe_compare.py",
+      "spec/drama3_moe_trace_spec.cr",
+      "spec/drama3_moe_provenance_spec.cr",
+      "spec/drama3_mlx_moe_capture_spec.py",
+      "spec/drama3_moe_compare_spec.py",
+      "docs/drama3-native-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/drama3-moe39-diagnostic.json"
+    ],
+    "rollback": "Unset diagnostic callbacks or revert this atomic diagnostic commit; ordinary GPU arithmetic/kernels are unchanged.",
+    "assumptions": [
+      "Checkpoint files and source remain immutable throughout each run.",
+      "Local cached artifacts are not authenticated remote attestations."
+    ],
+    "invariants": [
+      "No widened tolerance, changed Q4 weights or arithmetic precision.",
+      "Native/reference inference and diagnostic arithmetic execute on GPU.",
+      "CPU checkpoint loading/provenance, fixture indexing and terminal analysis are outside inference.",
+      "No diagnostic GPU allocations/dispatches/readbacks/completion boundaries on default-nil ordinary path.",
+      "Diagnostic graph has zero pre-final reads/submits/waits and one final drain; serialization adds no submits/waits.",
+      "Sampled memory floor 15 percent; unrelated processes untouched."
+    ],
+    "excluded": [
+      "Production arithmetic correction",
+      "Universal order irrelevance",
+      "Exact MLX core kernel/FMA/reduction cause",
+      "Full BF16-stock upstream parity",
+      "Timing/speedup claims",
+      "LTP/WBA acceleration claims"
+    ]
+  },
+  "pins": {
+    "model": {
+      "repository": "cguldogan/drama-3-mlx-q4",
+      "revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8"
+    },
+    "upstream": {
+      "repository": "https://github.com/cguldogan/mlx-audio",
+      "revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7"
+    },
+    "runtime": {
+      "python": "3.12.2",
+      "platform": "macOS-26.6.2-arm64-arm-64bit",
+      "mlx": "0.31.1",
+      "device": "Device(gpu, 0)",
+      "numpy": "1.26.4",
+      "torch": "2.6.0",
+      "safetensors": "0.5.3"
+    },
+    "native_weight_provenance": {
+      "target_layer": 39,
+      "target_moe_weights_sha256": "648d4c736dd60b6c077c032565aa647b6e90f6fd96d2ee957f22cbcd69a889dc",
+      "tensor_count": 14,
+      "model_path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+      "config_sha256": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+      "index_sha256": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855",
+      "verified_before_gpu": true
+    }
+  },
+  "observations": {
+    "router_logits_max_abs_error": 7.152557373046875e-07,
+    "selected_weights_max_abs_error": 5.960464477539063e-08,
+    "orders": {
+      "upstream_order": [
+        159,
+        194,
+        245,
+        154,
+        230,
+        191,
+        171,
+        108
+      ],
+      "native_order": [
+        108,
+        171,
+        191,
+        230,
+        154,
+        245,
+        194,
+        159
+      ]
+    },
+    "first_failing_stage": "expert_down_outputs",
+    "expert108_exact_upstream_activation": {
+      "count": 2048,
+      "bitwise_mismatches": 1922,
+      "max_abs_error": 0.00439453125,
+      "tolerance_failure_count": 3,
+      "failure_indices": [
+        469,
+        766,
+        1555
+      ],
+      "coordinate_33": {
+        "reference": -9.041109085083008,
+        "actual": -9.041943550109863,
+        "delta": -0.0008344650268554688
+      }
+    },
+    "order_only": {
+      "reference_terms": {
+        "count": 2048,
+        "bitwise_mismatches": 1084,
+        "max_abs_error": 0.001953125,
+        "tolerance_failure_count": 0,
+        "failure_indices": [],
+        "coordinate_33": {
+          "reference": -8.989151954650879,
+          "actual": -8.989151954650879,
+          "delta": 0.0
+        }
+      },
+      "native_terms": {
+        "count": 2048,
+        "bitwise_mismatches": 1082,
+        "max_abs_error": 0.001953125,
+        "tolerance_failure_count": 0,
+        "failure_indices": [],
+        "coordinate_33": {
+          "reference": -8.989985466003418,
+          "actual": -8.989985466003418,
+          "delta": 0.0
+        }
+      }
+    },
+    "reference_terms_reference_order_vs_upstream": {
+      "count": 2048,
+      "bitwise_mismatches": 0,
+      "max_abs_error": 0.0,
+      "tolerance_failure_count": 0,
+      "failure_indices": [],
+      "coordinate_33": {
+        "reference": -8.989151954650879,
+        "actual": -8.989151954650879,
+        "delta": 0.0
+      }
+    },
+    "original_coordinate33_decomposition": {
+      "attention_residual_delta": 1.52587890625e-05,
+      "moe_delta": -0.00083160400390625,
+      "hidden_delta": -0.00081634521484375
+    },
+    "native_capture_control": {
+      "passed": true,
+      "comparison": "Float32 bitwise equality",
+      "count": 4,
+      "compared_values": 8192,
+      "mismatches": []
+    },
+    "ablation_self_control": {
+      "passed": true,
+      "count": 18432,
+      "mismatch_count": 0,
+      "mismatches": []
+    },
+    "upstream_capture_control": {
+      "passed": true,
+      "comparison": "float32 byte equality",
+      "reference_path": "mlx-backbone-no-capture.json",
+      "reference_sha256": "b83a511d4b91c5930b9e2eed8be0ce541f8296045f9ee8e75e4719566e9f8e79",
+      "reference_manifest_sha256": "a82b5940c42ffa92eb3f405b0b79dd91c83fab14ab1d8c5fbf7b115eba035686",
+      "input_bundle_sha256": "1fea4a810ba88680ea031c9496c982ad7b8bf32ac23c05e18964c1bf80a1a6f3",
+      "expected_trace_count": 243,
+      "observed_trace_count": 243,
+      "mismatches": []
+    },
+    "upstream_full_isolated_bitwise": true,
+    "graphs": {
+      "trace": {
+        "graph_before_drain": {
+          "depth": 2,
+          "submitted": 0,
+          "completed": 0,
+          "pending": 0,
+          "max_pending": 0,
+          "completion_waits": 0,
+          "retained_bytes": 0,
+          "max_retained_bytes": 0
+        },
+        "graph_after_drain": {
+          "depth": 2,
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "max_pending": 1,
+          "completion_waits": 1,
+          "retained_bytes": 0,
+          "max_retained_bytes": 21937956360
+        },
+        "graph_after_serialization": {
+          "depth": 2,
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "max_pending": 1,
+          "completion_waits": 1,
+          "retained_bytes": 0,
+          "max_retained_bytes": 21937956360
+        },
+        "readbacks": {
+          "control": 900,
+          "terminal": 1190024
+        }
+      },
+      "ablation": {
+        "graph_before_drain": {
+          "depth": 2,
+          "submitted": 0,
+          "completed": 0,
+          "pending": 0,
+          "max_pending": 0,
+          "completion_waits": 0,
+          "retained_bytes": 0,
+          "max_retained_bytes": 0
+        },
+        "graph_after_drain": {
+          "depth": 2,
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "max_pending": 1,
+          "completion_waits": 1,
+          "retained_bytes": 0,
+          "max_retained_bytes": 532864
+        },
+        "graph_after_serialization": {
+          "depth": 2,
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "max_pending": 1,
+          "completion_waits": 1,
+          "retained_bytes": 0,
+          "max_retained_bytes": 532864
+        },
+        "readbacks": {
+          "terminal": 180224
+        }
+      }
+    }
+  },
+  "verification": {
+    "DoD": "Reproduce original failure, qualify capture fidelity/metadata, compare exact-input stages by expert ID, intervene on down activation and term/weight/order boundaries.",
+    "commands": [
+      {
+        "name": "trace-build-final",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/crystal",
+          "180",
+          "8192",
+          "build",
+          "--release",
+          "-Ddrama3_metal",
+          "examples/drama3_moe_trace.cr",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "-o",
+          "/private/tmp/drama3_moe_trace"
+        ],
+        "expected_exit": 0,
+        "started_utc": "2026-10-15T01:49:40.004235+00:00",
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/trace-build-final.log",
+        "exit_code": 0,
+        "ended_utc": "2026-10-15T01:49:47.993798+00:00"
+      },
+      {
+        "name": "ablation-build-final",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/crystal",
+          "180",
+          "8192",
+          "build",
+          "--release",
+          "-Ddrama3_metal",
+          "examples/drama3_moe_ablation.cr",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "-o",
+          "/private/tmp/drama3_moe_ablation"
+        ],
+        "expected_exit": 0,
+        "started_utc": "2026-10-15T01:49:47.994166+00:00",
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/ablation-build-final.log",
+        "exit_code": 0,
+        "ended_utc": "2026-10-15T01:49:55.424993+00:00"
+      },
+      {
+        "name": "crystal-tests-final",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/crystal",
+          "180",
+          "8192",
+          "spec",
+          "--release",
+          "-Ddrama3_metal",
+          "spec/drama3_dense_spec.cr",
+          "spec/drama3_resident_spec.cr",
+          "spec/drama3_graph_resident_spec.cr",
+          "spec/drama3_moe_trace_spec.cr",
+          "spec/drama3_moe_provenance_spec.cr",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld"
+        ],
+        "expected_exit": 0,
+        "started_utc": "2026-10-15T01:49:55.425305+00:00",
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/crystal-tests-final.log",
+        "exit_code": 0,
+        "ended_utc": "2026-10-15T01:50:07.495099+00:00"
+      },
+      {
+        "name": "native-run-final",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/private/tmp/drama3_moe_trace",
+          "180",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/inputs.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/mlx-moe-input.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/native-moe.json"
+        ],
+        "expected_exit": 0,
+        "started_utc": "2026-10-15T01:50:07.495491+00:00",
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/native-run-final.log",
+        "exit_code": 0,
+        "ended_utc": "2026-10-15T01:50:20.383301+00:00"
+      },
+      {
+        "name": "ablation-run-final",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/private/tmp/drama3_moe_ablation",
+          "180",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/mlx-moe-full.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/native-moe.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/moe-ablation.json"
+        ],
+        "expected_exit": 0,
+        "started_utc": "2026-10-15T01:50:20.385081+00:00",
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/ablation-run-final.log",
+        "exit_code": 0,
+        "ended_utc": "2026-10-15T01:50:21.985512+00:00"
+      },
+      {
+        "name": "moe-comparison",
+        "argv": [
+          "/opt/homebrew/bin/python3",
+          "scripts/drama3/moe_compare.py",
+          "--upstream",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/mlx-moe-full.json",
+          "--native",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/native-moe.json",
+          "--upstream-isolated",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/mlx-moe-isolated.json"
+        ],
+        "expected_exit": 1,
+        "started_utc": "2026-10-15T01:50:21.986104+00:00",
+        "stdout": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/moe-comparison.json",
+        "stderr": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/moe-comparison.err",
+        "exit_code": 1,
+        "ended_utc": "2026-10-15T01:50:22.458348+00:00"
+      },
+      {
+        "name": "python-tests-final",
+        "argv": [
+          "/opt/homebrew/bin/python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "spec",
+          "-p",
+          "drama3_moe_compare_spec.py",
+          "-v"
+        ],
+        "expected_exit": 0,
+        "started_utc": "2026-10-15T01:50:22.458769+00:00",
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/python-tests-final.log",
+        "exit_code": 0,
+        "ended_utc": "2026-10-15T01:50:29.544775+00:00"
+      },
+      {
+        "name": "capture-python-test-final",
+        "argv": [
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "spec/drama3_mlx_moe_capture_spec.py"
+        ],
+        "expected_exit": 0,
+        "started_utc": "2026-10-15T01:50:29.545250+00:00",
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/capture-python-test-final.log",
+        "exit_code": 0,
+        "ended_utc": "2026-10-15T01:50:30.813867+00:00"
+      },
+      {
+        "name": "ablation-analysis-final",
+        "argv": [
+          "/opt/homebrew/bin/python3",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/analyze_moe_ablation.py"
+        ],
+        "expected_exit": 0,
+        "started_utc": "2026-10-15T01:50:30.814302+00:00",
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/ablation-analysis-final.log",
+        "exit_code": 0,
+        "ended_utc": "2026-10-15T01:50:30.929822+00:00"
+      },
+      {
+        "name": "baseline-final",
+        "argv": [
+          "/opt/homebrew/bin/python3",
+          "scripts/drama3/compare_traces.py",
+          "--reference",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/mlx-backbone-no-capture.json",
+          "--actual",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/native-backbone-tree.json",
+          "--atol",
+          "6e-5",
+          "--rtol",
+          "3e-4"
+        ],
+        "expected_exit": 1,
+        "started_utc": "2026-10-15T01:50:30.930283+00:00",
+        "stdout": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/baseline-final.json",
+        "stderr": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/baseline-final.err",
+        "exit_code": 1,
+        "ended_utc": "2026-10-15T01:50:31.420916+00:00"
+      }
+    ],
+    "executed_signals": {
+      "crystal_release_examples_passed": 21,
+      "comparator_python_tests_passed": 20,
+      "upstream_capture_python_regressions_passed": 1,
+      "native_trace_exit": 0,
+      "native_ablation_exit": 0,
+      "expected_numeric_comparator_exit": 1,
+      "original_gate_still_fails": true
+    },
+    "upstream_collection": "Executed full and isolated pinned replay_mlx_moe.py captures; full mode includes 243-array no-capture byte-equality control. Logs/source hashes indexed below.",
+    "adversary": {
+      "verdict": "ROBUST",
+      "scope": "Bounded exact-input/down-boundary localization and pre-GPU mapped weight provenance.",
+      "review_lineage": "Same-lineage mini-Quadrumvirate source review is correlated; confidence comes from executed interventions, bitwise controls and seeded negative tests."
+    },
+    "packet_validation": "Local JSON parse, allowed/changed-path equality and referenced file digest/size checks; repository protocol validator is absent. These checks do not establish numeric truth."
+  },
+  "next_falsifier": "Expert108 official MLX quantized matmul versus MLX dequantize plus F32 matmul on the same stored activation/packed weights, before any native arithmetic change. A correction must subsequently pass the original full-backbone gate.",
+  "residual_risk": [
+    "Full-native normalized input differs by up to 1.90735e-6; smaller shared/attention deltas remain.",
+    "The exact Q4 decode/product/accumulation suboperation is not established.",
+    "No fresh full text-to-WAV regression in this diagnostic-only change; retained outputs/control are backbone scoped."
+  ],
+  "source_hashes": {
+    "src/ml/audio/drama3/backbone_resident.cr": "66e99363994c501b5cb2e4fb32677f90a6545259ce7f5430eb69b807105f508f",
+    "examples/drama3_moe_trace.cr": "29a511bb0398e586295f58a60cc2679d57ef2ad7ccf79ae73106a39f01af3abf",
+    "examples/drama3_moe_ablation.cr": "e45074f4fdb8b043d0d3f27067fe58baf29c479f0277aebe0d10b4689a538e3f",
+    "examples/support/drama3_moe_provenance.cr": "067b673d0ffaadcab6cb472a1b97d5d5eba063aa104f87c918bd57b96393c1de",
+    "scripts/drama3/replay_mlx_moe.py": "ecad91d92ee63d8018a09bd5fb43ae28bbde1b31826625ae17d4eac451ca97ca",
+    "scripts/drama3/moe_compare.py": "24f89687d7669db43a9ab832f23b12299671a7c2f6d3d61bea832243fba530a8",
+    "spec/drama3_moe_trace_spec.cr": "f340588bd1d11fab2f692b1667b7336f2e8487ed3287b0975fa92ba50050bc44",
+    "spec/drama3_moe_provenance_spec.cr": "325f90eec6218fc6910463656a34310dcd29ab5b4dccf915c273d51f58a673da",
+    "spec/drama3_mlx_moe_capture_spec.py": "6be56695cff9728cde5ef2a2015c4f5737b11816f807527796bb91ca5085bbab",
+    "spec/drama3_moe_compare_spec.py": "cf1c5e4f7c14793d495b9e104320cd685e2f93a8c781f99e478cf4e776c7dfb2",
+    "docs/drama3-native-frontier.md": "b1d0e7f1ecec404dd546ff639a5a0deadc71a0510117685261fbdc83c24d659f",
+    "LANDMARKS.md": "a2758076c463a759f9b601c4a00ce83690830c90c24269f4dc74b2fa1a826b86",
+    "src/ml/audio/drama3/native.cr": "fa51b01174ae7d2f83f6d9fe868faaaa09891888d990690aeac6ba400cc36b11",
+    "src/ml/audio/drama3/resident.cr": "bbed3fad5648f77a21fd05d07b515e62070ec5cc0d362ab1a4a01988029a2ce4",
+    "src/ml/audio/drama3/kernels/resident.metal": "85c73b17de6832787497d88112b1ae00422af4e3287170009d9dac36c55a2395",
+    "src/ml/audio/drama3/kernels/backbone_resident.metal": "048657d9b2b6a28785bc32e7c34f807a93c0777d06b16a9d37a47d928873adc8",
+    "scripts/drama3/replay_mlx_backbone.py": "8e705bc34a1e9db1a712f1d3ef45f30911892844a4a063619b070f1286c73d4d"
+  },
+  "artifacts": {
+    "availability": "Local cache only, until removed; raw arrays/logs are not committed.",
+    "files": {
+      "mlx-moe-full.json": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/mlx-moe-full.json",
+        "bytes": 1563628,
+        "sha256": "d3e6e455dd4ab0c987a500cb0d3c807db23003e383725f4b4f6c49fecb64030f"
+      },
+      "mlx-moe-isolated.json": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/mlx-moe-isolated.json",
+        "bytes": 1448299,
+        "sha256": "f4c80c5f0ee17b2c8ffd34a4a0dc84a10d8c3a7fe6351e1832ba5b15c725b40d"
+      },
+      "mlx-moe-input.json": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/mlx-moe-input.json",
+        "bytes": 41859,
+        "sha256": "f37d6f3fba2f4d661c293612d408867e233c3d0be33826a2200d15862d37bad9"
+      },
+      "native-moe.json": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/native-moe.json",
+        "bytes": 3077980,
+        "sha256": "38b9338c7ad231f81cffdde18b2623f49735ebdc16c00d7807d6abf3bd67de4f"
+      },
+      "moe-comparison.json": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/moe-comparison.json",
+        "bytes": 39707,
+        "sha256": "6ad3374153130743db3b193e5b673afb33ec152baf92bbff3e51baeecb94192c"
+      },
+      "moe-comparison.err": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/moe-comparison.err",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "moe-ablation.json": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/moe-ablation.json",
+        "bytes": 277156,
+        "sha256": "096605ab158ff7a3104f6393e3dc7317a3122f9c7f31e75a4d464c06acd22173"
+      },
+      "moe-ablation-analysis.json": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/moe-ablation-analysis.json",
+        "bytes": 17070,
+        "sha256": "4da94fb60f965821033164784d08e11a0fb11d7256956475e3ad10677ce253a4"
+      },
+      "moe-numeric-ledger.json": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/moe-numeric-ledger.json",
+        "bytes": 68032,
+        "sha256": "8f2782edfecb0fcaf323309b80e8c403fb43b2de890ce14383a6558149557675"
+      },
+      "baseline-gate.json": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/baseline-gate.json",
+        "bytes": 638,
+        "sha256": "fbe998a90e7df823f4c16e17c5ef4a9aee0c53efc66393fc4c3cdb7fc8f4af79"
+      },
+      "baseline-final.json": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/baseline-final.json",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "baseline-final.err": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/baseline-final.err",
+        "bytes": 152,
+        "sha256": "5d1736c9ab88cf611514c5090cd8002e56af048f7d3da0076fc813cc6c3fffd3"
+      },
+      "final-verification.json": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/final-verification.json",
+        "bytes": 7642,
+        "sha256": "98bb68497a7df294e5d0fb17e003b561fd2c06a0a9cc0436ae97499b75614b51"
+      },
+      "final_verify.py": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/final_verify.py",
+        "bytes": 4155,
+        "sha256": "1d0b35102baf2fa25a3965edd747d0ab87de07b6b400551f690b4b2a1f7d3b6e"
+      },
+      "analyze_moe_ablation.py": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/analyze_moe_ablation.py",
+        "bytes": 4665,
+        "sha256": "4c02b1018ef76da1baaf5a968d3e56f2fb8777b707d00b03eb842785654b6005"
+      },
+      "refresh_moe_numeric_ledger.py": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/refresh_moe_numeric_ledger.py",
+        "bytes": 16043,
+        "sha256": "406e2cd83aafd349d605ebdb0e14018106a4227ba04edc59201ee65f2e49b1af"
+      },
+      "ledger-refresh.log": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/ledger-refresh.log",
+        "bytes": 493,
+        "sha256": "c53d5452548dfd882cc4642394395dbdc4404206d5cf6a65c90cfff6b291b981"
+      },
+      "upstream-full.log": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/upstream-full.log",
+        "bytes": 537,
+        "sha256": "0808492e90860c0ec2ff974a871655184ee8e1cc92643bad8f8add21d2c0cad9"
+      },
+      "upstream-isolated.log": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/upstream-isolated.log",
+        "bytes": 548,
+        "sha256": "487fa8c39b11ff894be7a3653a198681135cd724ac0bdd53f8af514614adf907"
+      },
+      "trace-build-final.log": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/trace-build-final.log",
+        "bytes": 61,
+        "sha256": "f24030fc095df1c926ec42b76d19c063c685352513dcef7916876fe8fdc01674"
+      },
+      "ablation-build-final.log": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/ablation-build-final.log",
+        "bytes": 61,
+        "sha256": "d7b7c24ff4f30df3d04cc75dc9294ec29b12b6e4aa8606c6ba3effba6d369fed"
+      },
+      "crystal-tests-final.log": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/crystal-tests-final.log",
+        "bytes": 428,
+        "sha256": "dc2deb3dabd58b17193305614a538557d7fd85658629b5143955d60caa0be75f"
+      },
+      "native-run-final.log": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/native-run-final.log",
+        "bytes": 563,
+        "sha256": "ce4a39f9da0ec89ff0f5c54e169f6e1a00c62cb99d120b136dc4cb0e6521fbc4"
+      },
+      "ablation-run-final.log": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/ablation-run-final.log",
+        "bytes": 2710,
+        "sha256": "f7cef81f910a3a02e741564b79080ae18d92778e24ae4733beb78ad2ba717222"
+      },
+      "python-tests-final.log": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/python-tests-final.log",
+        "bytes": 3437,
+        "sha256": "caa020fe07c2fda068d5e59e43153ac58fc8d0a8149372abccfbbbdabdb06648"
+      },
+      "capture-python-test-final.log": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/capture-python-test-final.log",
+        "bytes": 98,
+        "sha256": "fb184ea57734512b1f088f9181209901b9cd46df3eb7eaa2500ea9e48dde20b5"
+      }
+    }
+  },
+  "refresh": {
+    "decay_triggers": [
+      "source/model/reference/runtime/precision/compiler/input/device/OS/artifact drift",
+      "checkpoint mutation during a run"
+    ],
+    "operation": "Rebuild and rerun the recorded diagnostic/capture/negative-control commands; reproduce original full gate after a correction.",
+    "failure_policy": "Reopen dependent localization/parity claims, preserve failed traces, keep defaults unchanged."
+  }
+}

@@ -9,13 +9,21 @@ module ML::Audio::Drama3
     SOURCE = {{ read_file("#{__DIR__}/kernels/backbone_resident.metal") }}
     getter config : BackboneConfig, position = 0
     property trace : Proc(String, Vector, Nil)?
+    # Device-only diagnostic observers. They are nil on the ordinary inference
+    # path; the detailed MoE callback is additionally restricted to one layer.
+    property moe_trace : Proc(String, Resident::Buffer, Nil)?
+    property layer_buffer_trace : Proc(String, Resident::Buffer, Nil)?
+    property moe_trace_auxiliary = false
+    getter diagnostic_layer : Int32?
     @keys : Array(Resident::Buffer?)
     @values : Array(Resident::Buffer?)
     @conv : Array(Resident::Buffer?)
     @delta : Array(Resident::Buffer?)
     @delta_kernel : String
     @batch_experts : Bool
+    getter last_moe_batched = false
     getter dense_reduction : String
+    getter batch_experts : Bool
 
     def initialize(@config : BackboneConfig, @store : WeightStore, @ctx : Resident::Context, @capacity : Int32)
       raise ArgumentError.new("resident backbone capacity must be 1..1024") unless @capacity.in?(1..1024)
@@ -37,6 +45,10 @@ module ML::Audio::Drama3
       @conv = Array(Resident::Buffer?).new(@config.layers, nil)
       @delta = Array(Resident::Buffer?).new(@config.layers, nil)
       @trace = nil
+      @moe_trace = nil
+      @layer_buffer_trace = nil
+      @moe_trace_auxiliary = false
+      @diagnostic_layer = nil
       @ones = @ctx.upload(Array(Float32).new(@config.key_dim, 1_f32))
       @config.layers.times do |i|
         if (i + 1) % @config.full_interval == 0
@@ -48,6 +60,13 @@ module ML::Audio::Drama3
           @delta[i] = @ctx.zeros(@config.value_heads * @config.value_dim * @config.key_dim)
         end
       end
+    end
+
+    def diagnostic_layer=(layer : Int32?) : Int32?
+      if value = layer
+        raise ArgumentError.new("resident diagnostic layer") unless value >= 0 && value < @config.layers
+      end
+      @diagnostic_layer = layer
     end
 
     def embedding(token : Resident::Buffer) : Resident::Buffer
@@ -69,15 +88,20 @@ module ML::Audio::Drama3
                       end
           hidden = @ctx.add(hidden, attention)
           trace_value("backbone.layers.#{i}.attention_residual", hidden)
+          trace_layer_buffer(i, "attention_residual", hidden)
           x = @ctx.rms(hidden, weight(prefix + ".post_attention_layernorm.weight"), @config.eps)
-          hidden = @ctx.add(hidden, moe(x, prefix + ".mlp"))
+          hidden = @ctx.add(hidden, moe(x, prefix + ".mlp", i))
           @ctx.guard(hidden)
           trace_value("backbone.layers.#{i}.hidden", hidden)
+          trace_layer_buffer(i, "hidden_output", hidden)
         end
         @position += 1
         result = @ctx.rms(hidden, weight("backbone.norm.weight"), @config.eps)
         @ctx.guard(result)
         trace_value("backbone.hidden", result)
+        if layer = @diagnostic_layer
+          @layer_buffer_trace.try(&.call("backbone_output", result))
+        end
         # Component profiling includes GPU completion. Normal inference can
         # compose the next tower operation in the same serial command buffer.
         @ctx.finish if Profile.enabled?
@@ -99,41 +123,126 @@ module ML::Audio::Drama3
       end
     end
 
+    private def trace_layer_buffer(layer : Int32, name : String, value : Resident::Buffer) : Nil
+      if @diagnostic_layer == layer
+        @layer_buffer_trace.try(&.call(name, value))
+      end
+    end
+
+    private def trace_moe_buffer(callback : Proc(String, Resident::Buffer, Nil)?, name : String, value : Resident::Buffer, snapshot : Bool = false) : Nil
+      if trace = callback
+        if snapshot
+          stable = @ctx.alloc(value.count)
+          @ctx.copy(value, stable)
+          trace.call(name, stable)
+        else
+          trace.call(name, value)
+        end
+      end
+    end
+
+    # Replay one already-normalized activation through the selected MoE layer.
+    # This does not advance the recurrent attention position or mutate caches.
+    def diagnose_moe(input : Resident::Buffer, layer : Int32) : Resident::Buffer
+      raise ArgumentError.new("resident diagnostic layer") unless layer >= 0 && layer < @config.layers
+      raise ArgumentError.new("resident diagnostic width") unless input.count == @config.hidden
+      raise ArgumentError.new("resident diagnostic layer must be selected") unless @diagnostic_layer == layer
+      moe(input, "backbone.layers.#{layer}.mlp", layer)
+    end
+
     private def mlp(x : Resident::Buffer, prefix : String) : Resident::Buffer
       gate = project(prefix + ".gate_proj", x)
       up = project(prefix + ".up_proj", x)
       project(prefix + ".down_proj", @ctx.mul(@ctx.silu(gate), up))
     end
 
-    private def moe(x : Resident::Buffer, prefix : String) : Resident::Buffer
+    private def moe(x : Resident::Buffer, prefix : String, layer : Int32) : Resident::Buffer
       Profile.measure("backbone.moe", category: "moe") do
+        callback = @diagnostic_layer == layer ? @moe_trace : nil
+        trace_moe_buffer(callback, "normalized_input", x)
         scores = project(prefix + ".gate", x)
+        trace_moe_buffer(callback, "router_logits", scores)
         routing = @ctx.alloc(@config.top_k * 2)
         @ctx.dispatch("dr3_route", SOURCE, [scores, routing], [scores.count.to_u64, @config.top_k.to_u64, @config.norm_topk ? 1_u64 : 0_u64], 1)
         ids = routing.slice(0, @config.top_k)
+        trace_moe_buffer(callback, "expert_ids_argpartition_order", ids)
+        trace_moe_buffer(callback, "selected_weights", routing.slice(@config.top_k, @config.top_k))
         gate_matrix = @store.matrix(prefix + ".switch_mlp.gate_proj.weight", 0)
         up_matrix = @store.matrix(prefix + ".switch_mlp.up_proj.weight", 0)
         down_matrix = @store.matrix(prefix + ".switch_mlp.down_proj.weight", 0)
-        result = if @batch_experts && gate_matrix.scales && up_matrix.scales && down_matrix.scales
+        batched = @batch_experts && !!gate_matrix.scales && !!up_matrix.scales && !!down_matrix.scales
+        @last_moe_batched = batched if callback
+        result = if batched
                    gate = @ctx.experts(gate_matrix, x, ids)
                    up = @ctx.experts(up_matrix, x, ids)
-                   down = @ctx.experts(down_matrix, @ctx.mul(@ctx.silu(gate), up), ids, per_rank_input: true)
+                   activation = @ctx.mul(@ctx.silu(gate), up)
+                   down = @ctx.experts(down_matrix, activation, ids, per_rank_input: true)
+                   if callback
+                     @config.top_k.times do |rank|
+                       trace_moe_buffer(callback, "expert_gate_outputs.rank_#{rank}", gate.slice(rank * gate_matrix.rows, gate_matrix.rows))
+                       trace_moe_buffer(callback, "expert_up_outputs.rank_#{rank}", up.slice(rank * up_matrix.rows, up_matrix.rows))
+                       trace_moe_buffer(callback, "expert_activation_outputs.rank_#{rank}", activation.slice(rank * down_matrix.cols, down_matrix.cols))
+                       trace_moe_buffer(callback, "expert_down_outputs.rank_#{rank}", down.slice(rank * down_matrix.rows, down_matrix.rows))
+                     end
+                   end
                    combined = @ctx.alloc(@config.hidden)
                    @ctx.dispatch("dr3_expert_sum", SOURCE, [down, routing, combined], [combined.count.to_u64, @config.top_k.to_u64], combined.count)
+                   if callback
+                     trace_moe_buffer(callback, "routed_sum_official", combined, snapshot: true)
+                     if @moe_trace_auxiliary
+                       auxiliary_prefix = @ctx.zeros(@config.hidden)
+                       @config.top_k.times do |rank|
+                         rank_down = down.slice(rank * down_matrix.rows, down_matrix.rows)
+                         rank_weight = routing.slice(@config.top_k + rank, 1)
+                         weighted = @ctx.zeros(@config.hidden)
+                         @ctx.dispatch("dr3_weighted_add", SOURCE, [weighted, rank_down, rank_weight], [@config.hidden.to_u64, 0_u64], @config.hidden)
+                         trace_moe_buffer(callback, "expert_weighted_outputs.rank_#{rank}", weighted)
+                         @ctx.dispatch("dr3_weighted_add", SOURCE, [auxiliary_prefix, rank_down, rank_weight], [@config.hidden.to_u64, 0_u64], @config.hidden)
+                         snapshot = @ctx.alloc(@config.hidden)
+                         @ctx.copy(auxiliary_prefix, snapshot)
+                         trace_moe_buffer(callback, "diagnostic_prefix_sums_argpartition_order.rank_#{rank}", snapshot)
+                       end
+                     end
+                   end
                    combined
                  else
                    combined = @ctx.zeros(@config.hidden)
                    @config.top_k.times do |rank|
                      gate = @ctx.expert(gate_matrix, x, ids, rank)
                      up = @ctx.expert(up_matrix, x, ids, rank)
-                     down = @ctx.expert(down_matrix, @ctx.mul(@ctx.silu(gate), up), ids, rank)
+                     activation = @ctx.mul(@ctx.silu(gate), up)
+                     down = @ctx.expert(down_matrix, activation, ids, rank)
+                     if callback
+                       trace_moe_buffer(callback, "expert_gate_outputs.rank_#{rank}", gate)
+                       trace_moe_buffer(callback, "expert_up_outputs.rank_#{rank}", up)
+                       trace_moe_buffer(callback, "expert_activation_outputs.rank_#{rank}", activation)
+                       trace_moe_buffer(callback, "expert_down_outputs.rank_#{rank}", down)
+                       if @moe_trace_auxiliary
+                         weighted = @ctx.zeros(@config.hidden)
+                         rank_weight = routing.slice(@config.top_k + rank, 1)
+                         @ctx.dispatch("dr3_weighted_add", SOURCE, [weighted, down, rank_weight], [@config.hidden.to_u64, 0_u64], @config.hidden)
+                         trace_moe_buffer(callback, "expert_weighted_outputs.rank_#{rank}", weighted)
+                       end
+                     end
                      @ctx.dispatch("dr3_weighted_add", SOURCE, [combined, down, routing.slice(@config.top_k + rank, 1)], [combined.count.to_u64, 0_u64], combined.count)
+                     if callback
+                       trace_moe_buffer(callback, "routed_prefix_sums_argpartition_order.rank_#{rank}", combined, snapshot: true)
+                     end
                    end
+                   trace_moe_buffer(callback, "routed_sum_official", combined, snapshot: true)
                    combined
                  end
         shared = mlp(x, prefix + ".shared_expert")
+        trace_moe_buffer(callback, "shared_expert_output", shared)
         shared_gate = project(prefix + ".shared_expert_gate", x)
+        trace_moe_buffer(callback, "shared_gate_logits", shared_gate)
+        if callback && @moe_trace_auxiliary
+          shared_weighted = @ctx.zeros(@config.hidden)
+          @ctx.dispatch("dr3_weighted_add", SOURCE, [shared_weighted, shared, shared_gate], [@config.hidden.to_u64, 1_u64], @config.hidden)
+          trace_moe_buffer(callback, "shared_weighted_output", shared_weighted)
+        end
         @ctx.dispatch("dr3_weighted_add", SOURCE, [result, shared, shared_gate], [result.count.to_u64, 1_u64], result.count)
+        trace_moe_buffer(callback, "moe_output_official", result)
         result
       end
     end
