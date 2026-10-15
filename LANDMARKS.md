@@ -29036,3 +29036,47 @@ Refresh after source/toolchain/device/model/workload changes.
   Adversary ROBUST for the bounded differential, not production parity.
   Continue sequential heavy runs through run_safe with sampled reserve15%,
   profiling unset and unrelated processes untouched; no push.
+
+### Continuation 2026-10-15 — native MLX Q4 down arithmetic
+
+- At base `31920e41`, add an opt-in native affine Q4/group64 GPU path using
+  MLX0.31.1 packed lane expressions and SIMD reduction. On the exact upstream
+  row1/layer39 SwiGLU activation and verified target-MoE bytes, all 16,384
+  eight-expert outputs and expert108's 2,048 scalar outputs match upstream
+  bitwise. Repeat and scalar/batched controls match bitwise. The default
+  native arm reproduces failures 469/766/1555; no tolerance/precision change.
+- The original full gate was actually rerun: 243 boundaries, 497,664 values,
+  one remaining failure at row1/layer39.hidden[33]. Candidate absolute error
+  0.00034999847412109375 exceeds allowance 0.00033657508850097655; prior native
+  error 0.00081634521484375. Default-native capture equals its retained trace
+  bitwise on all 497,664 values. This is capture fidelity, not upstream parity.
+- GPU probe and full capture each have zero pre-drain reads/submissions/waits,
+  one final submission/wait, and unchanged counters during terminal reads.
+  A passive device-buffer callback replaces host boundary reads for the full
+  diagnostic. CPU handles checkpoint/fixture provenance and terminal analysis.
+- Exact normalized-input MoE replay at graph depth 2 passes every compared
+  intermediate/down/routed/shared stage at fixed tolerance, but final official
+  MoE output fails 1012/1111. Own gate/up activations are not bitwise upstream;
+  the full native input differs and is unqualified for exact-input localization.
+  Depth 0 comparator attempt was invalid (exit 2); depth 2 rerun is valid
+  (exit 1). Capture control matches 8,192 values bitwise; no added wait.
+- Observed guards: 24 Crystal examples and 32 Python tests pass. Distinct
+  K=1024 blocks, odd raw affine offsets, mixed F32/BF16/F16 metadata and shuffled
+  GPU IDs test indexing with exactly representable fixtures; they do not prove
+  general rounding equivalence. Actual 14 target-MoE tensors are byte-pinned.
+  Historical full reference lacks all-shard hashes; retain that provenance
+  limit and the immutable-checkpoint assumption.
+- Mini-Quadrumvirate verdict ROBUST for local down reproduction and measured
+  negative full gate; full production parity IN_PROGRESS. Selector
+  DRAMA3_EXPERT_DOWN_REDUCTION=mlx_q4 is frozen per backbone and remains opt-in;
+  native default, dense tree and MAP_SHARED off remain. No speed or LTP/WBA
+  promotion. Rollback: disable the selector or revert the atomic change.
+- Next falsifier: GPU substitutions of upstream gate/up-derived activation and
+  shared output on common normalized input, then the official final MoE sum;
+  retain full hidden[33] gate before promotion. Return pointer:
+  docs/drama3-native-frontier.md and .landmark/evidence/drama3-native-mlx-q4.json;
+  local raw artifacts mlx-q4-20261015/. Same pinned model/MLX-audio/MLX revisions
+  as prior discriminator. Refresh on source/model/input/reference/runtime/
+  precision/compiler/device/OS/artifact drift. Standing authority: sequential
+  run_safe runs, sampled reserve 15%, profiling unset, no unrelated process
+  manipulation and no push.

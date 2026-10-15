@@ -1,0 +1,1332 @@
+{
+  "format": "landmark-evidence/v1",
+  "recorded_at_utc": "2026-10-15T03:15:01.209550+00:00",
+  "claim": {
+    "level": "VERIFIED",
+    "summary": "Opt-in native MLX-style Q4 down is bitwise upstream on the exact retained eight-expert activation; the executed original full gate still fails one value at unchanged tolerance.",
+    "scope": "Row1/layer39 expert108 and all eight routed down projections, pinned M2 Max/macOS/MLX0.31.1 F32 reference; measured negative full-backbone gate.",
+    "not_established": [
+      "Full production parity",
+      "General bitwise equivalence on arbitrary inputs/devices/compiler modes",
+      "A unique compiler contraction or hardware reduction-tree cause",
+      "A speedup or default promotion",
+      "Cryptographic identity of every historical full-backbone weight shard"
+    ]
+  },
+  "boundaries": {
+    "risk": "CAUTION",
+    "base_revision": "31920e410bb283ff0d5f5baf8c091f23c1a335e0",
+    "changed_paths": [
+      "src/ml/audio/drama3/kernels/mlx_q4.metal",
+      "src/ml/audio/drama3/kernels/mlx_q4.LICENSE",
+      "src/ml/audio/drama3/resident.cr",
+      "src/ml/audio/drama3/backbone_resident.cr",
+      "examples/drama3_mlx_q4_probe.cr",
+      "examples/drama3_backbone_gpu_trace.cr",
+      "spec/drama3_mlx_q4_spec.cr",
+      "docs/drama3-native-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/drama3-native-mlx-q4.json"
+    ],
+    "allowed_paths": [
+      "src/ml/audio/drama3/kernels/mlx_q4.metal",
+      "src/ml/audio/drama3/kernels/mlx_q4.LICENSE",
+      "src/ml/audio/drama3/resident.cr",
+      "src/ml/audio/drama3/backbone_resident.cr",
+      "examples/drama3_mlx_q4_probe.cr",
+      "examples/drama3_backbone_gpu_trace.cr",
+      "spec/drama3_mlx_q4_spec.cr",
+      "docs/drama3-native-frontier.md",
+      "LANDMARKS.md",
+      ".landmark/evidence/drama3-native-mlx-q4.json"
+    ],
+    "reason": "Reproduce affine grouping and SIMD reduction before promoting the down correction.",
+    "rollback": "Disable DRAMA3_EXPERT_DOWN_REDUCTION=mlx_q4 or revert this atomic change.",
+    "gpu_boundary": "All inference/projection/routing arithmetic stays on GPU; CPU checkpoint/provenance/fixture work precedes inference and reporting follows the single final drain.",
+    "assumptions": [
+      "Checkpoint immutable within a run",
+      "Local cached reference captures are evidence, not authenticated remote attestations",
+      "Compiler/runtime/device/source pins remain unchanged"
+    ],
+    "standing_authority": "Sequential local run_safe probes/builds/tests at sampled reserve15%, profile unset, exact-path atomic commit; no unrelated process manipulation or push."
+  },
+  "dod": {
+    "expected": "Execute exact-input down, native controls, unchanged full upstream comparator and adjacent guards; preserve any negative gate instead of widening tolerance.",
+    "observed": "Actual-checkpoint down bitwise upstream; full gate exits1 with one failure; 24 Crystal examples and32 Python tests pass; final cross-process repeat is bitwise over53248 outputs.",
+    "commands": [
+      {
+        "name": "build-probe",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/crystal",
+          "180",
+          "8192",
+          "build",
+          "--release",
+          "-Ddrama3_metal",
+          "examples/drama3_mlx_q4_probe.cr",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "-o",
+          "/private/tmp/drama3_mlx_q4_probe"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "0",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:10:26.515096+00:00",
+        "finished_at_utc": "2026-10-15T03:10:27.951875+00:00",
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/build-probe.log",
+        "log_sha256": "0ecf7d912da7fc23914ee6ff82d952737254c7f3563f89c62fa61029ba24c32d"
+      },
+      {
+        "name": "probe-repeat",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/private/tmp/drama3_mlx_q4_probe",
+          "180",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/mlx-moe-full.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/probe-repeat.json"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "0",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:10:55.246913+00:00",
+        "finished_at_utc": "2026-10-15T03:10:57.491535+00:00",
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/probe-repeat.log",
+        "log_sha256": "77619069c7091643f56fc58a95bf953d78b4e08c4c194c2947a7cfe188c72f2c"
+      },
+      {
+        "name": "build-trace",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/crystal",
+          "180",
+          "8192",
+          "build",
+          "--release",
+          "-Ddrama3_metal",
+          "examples/drama3_backbone_gpu_trace.cr",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "-o",
+          "/private/tmp/drama3_backbone_gpu_trace"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "0",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T02:58:07.040827+00:00",
+        "finished_at_utc": "2026-10-15T02:58:14.062952+00:00",
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/build-trace.log",
+        "log_sha256": "f62c6deacc595c182111356160c97c135f146aaf59c3b9c0fcba6996fe690100"
+      },
+      {
+        "name": "trace-native",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/private/tmp/drama3_backbone_gpu_trace",
+          "180",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/inputs.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/trace-native.json"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "0",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T02:59:23.016686+00:00",
+        "finished_at_utc": "2026-10-15T02:59:30.664640+00:00",
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/trace-native.log",
+        "log_sha256": "c36354f2063b71aad1e840c100e2cf8a3387ebe18de8a2a2decd581f701cecb9"
+      },
+      {
+        "name": "trace-mlx",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/private/tmp/drama3_backbone_gpu_trace",
+          "180",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/inputs.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/trace-mlx.json"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "mlx_q4",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "0",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T02:58:50.618312+00:00",
+        "finished_at_utc": "2026-10-15T02:59:02.938252+00:00",
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/trace-mlx.log",
+        "log_sha256": "4d996a856db42e495483495a88dfab407f6e78e47a3cb08e18dfc4bc3bdf5f62"
+      },
+      {
+        "name": "gate-native",
+        "argv": [
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "scripts/drama3/compare_traces.py",
+          "--reference",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/mlx-backbone-no-capture.json",
+          "--actual",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/trace-native.json",
+          "--atol",
+          "6e-5",
+          "--rtol",
+          "3e-4"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "0",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:00:06.238237+00:00",
+        "finished_at_utc": "2026-10-15T03:00:06.741109+00:00",
+        "exit_code": 1,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/gate-native.log",
+        "log_sha256": "5d1736c9ab88cf611514c5090cd8002e56af048f7d3da0076fc813cc6c3fffd3"
+      },
+      {
+        "name": "gate-mlx",
+        "argv": [
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "scripts/drama3/compare_traces.py",
+          "--reference",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/mlx-backbone-no-capture.json",
+          "--actual",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/trace-mlx.json",
+          "--atol",
+          "6e-5",
+          "--rtol",
+          "3e-4"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "0",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T02:59:06.897074+00:00",
+        "finished_at_utc": "2026-10-15T02:59:07.411333+00:00",
+        "exit_code": 1,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/gate-mlx.log",
+        "log_sha256": "d883fb2108c55959a451c13c7cb4f3c04b3e17e82474d7cb1fa89cf2f62e49b5"
+      },
+      {
+        "name": "build-moe",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/crystal",
+          "180",
+          "8192",
+          "build",
+          "--release",
+          "-Ddrama3_metal",
+          "examples/drama3_moe_trace.cr",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "-o",
+          "/private/tmp/drama3_moe_trace_mlx_q4"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "0",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:01:29.485791+00:00",
+        "finished_at_utc": "2026-10-15T03:01:40.497098+00:00",
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/build-moe.log",
+        "log_sha256": "7081b2bffaa31d37c87b9f3576783e581644b61ab5b13081b16f3cd938979c08"
+      },
+      {
+        "name": "moe-mlx",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/private/tmp/drama3_moe_trace_mlx_q4",
+          "180",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/inputs.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/mlx-moe-input.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/moe-mlx.json"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "mlx_q4",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "0",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:02:04.488537+00:00",
+        "finished_at_utc": "2026-10-15T03:02:15.428522+00:00",
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/moe-mlx.log",
+        "log_sha256": "df5ec16f48d56453c72c45f4afb460d44c9d3817d9eada2ff68a3f109687c062"
+      },
+      {
+        "name": "compare-moe",
+        "argv": [
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "scripts/drama3/moe_compare.py",
+          "--upstream",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/mlx-moe-full.json",
+          "--native",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/moe-mlx.json",
+          "--upstream-isolated",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/mlx-moe-isolated.json",
+          "--atol",
+          "6e-5",
+          "--rtol",
+          "3e-4"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "0",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:02:53.729613+00:00",
+        "finished_at_utc": "2026-10-15T03:02:54.029485+00:00",
+        "exit_code": 2,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/compare-moe.log",
+        "log_sha256": "c531fe673b8c7637f04ec7f96c5ac8953bd06e743ede14d007ff94fad54a3b1b"
+      },
+      {
+        "name": "moe-mlx-depth2",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/private/tmp/drama3_moe_trace_mlx_q4",
+          "180",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/inputs.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/mlx-moe-input.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/moe-mlx-depth2.json"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "mlx_q4",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:04:28.298551+00:00",
+        "finished_at_utc": "2026-10-15T03:04:40.337717+00:00",
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/moe-mlx-depth2.log",
+        "log_sha256": "c6c38f4ac18cc5d73c498c49f21790d8b4c0c591b7fbd174acc1bc741fa9e36f"
+      },
+      {
+        "name": "compare-moe-depth2",
+        "argv": [
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "scripts/drama3/moe_compare.py",
+          "--upstream",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/mlx-moe-full.json",
+          "--native",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/moe-mlx-depth2.json",
+          "--upstream-isolated",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/mlx-moe-isolated.json",
+          "--atol",
+          "6e-5",
+          "--rtol",
+          "3e-4"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "0",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:06:50.319244+00:00",
+        "finished_at_utc": "2026-10-15T03:06:50.724711+00:00",
+        "exit_code": 1,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/compare-moe-depth2.log",
+        "log_sha256": "64d7ce85845d6653e955a865f4363687f9891d5056a467d22d46d726ebd9b802"
+      },
+      {
+        "name": "spec",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/crystal",
+          "180",
+          "8192",
+          "spec",
+          "--release",
+          "-Ddrama3_metal",
+          "spec/drama3_mlx_q4_spec.cr",
+          "spec/drama3_dense_spec.cr",
+          "spec/drama3_resident_spec.cr",
+          "spec/drama3_graph_resident_spec.cr",
+          "spec/drama3_moe_trace_spec.cr",
+          "spec/drama3_moe_provenance_spec.cr",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "0",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:07:13.326348+00:00",
+        "finished_at_utc": "2026-10-15T03:07:28.185029+00:00",
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/spec.log",
+        "log_sha256": "c44b6afdb7fa28edbe88469256a91d1863601dcc79b2542f1545132fee38787e"
+      },
+      {
+        "name": "python",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "180",
+          "8192",
+          "-m",
+          "unittest",
+          "spec.drama3_mlx_expert_down_spec",
+          "spec.drama3_moe_compare_spec",
+          "spec.drama3_mlx_moe_capture_spec",
+          "-v"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "0",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0"
+        },
+        "unset_environment": [
+          "DRAMA3_PROFILE",
+          "DRAMA3_METAL_TIMELINE"
+        ],
+        "started_at_utc": "2026-10-15T03:08:02.049714+00:00",
+        "finished_at_utc": "2026-10-15T03:08:11.296830+00:00",
+        "exit_code": 0,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/python.log",
+        "log_sha256": "d686cbd7fb7b8f43b96c9376316816691a777b90aedbed7f2b2e13e799028267"
+      }
+    ],
+    "fallback_check": "Unchanged default-native full capture matches retained497664 values bitwise; scalar/batch and repeat controls; distinct K1024 block indexing fixture."
+  },
+  "pins": {
+    "model": {
+      "repository": "cguldogan/drama-3-mlx-q4",
+      "revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8"
+    },
+    "upstream": {
+      "repository": "https://github.com/cguldogan/mlx-audio",
+      "revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7"
+    },
+    "mlx": {
+      "version": "0.31.1",
+      "revision": "ce45c52505c8158ea48d2a54e8caae05efd86bfe",
+      "quantized_header_sha256": "344780f5b159669219f993f9705b5f28504196d3fd2c7ab8756119c72e4e267f"
+    },
+    "device": "Apple M2 Max,64GB unified memory",
+    "os": "macOS-26.6.2-arm64-arm-64bit",
+    "python": "3.12.2",
+    "target_loaded_weights": {
+      "target_layer": 39,
+      "target_moe_weights_sha256": "648d4c736dd60b6c077c032565aa647b6e90f6fd96d2ee957f22cbcd69a889dc",
+      "tensor_count": 14,
+      "model_path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+      "config_sha256": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+      "index_sha256": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855",
+      "verified_before_gpu": true
+    },
+    "activation_sha256": "8b9086fd8e4a2ab31549429513dbe482d8abb289fae70a3be4289318bfd77244",
+    "expert108_activation_sha256": "a6774218bfc4c0b417d6e3048f6db5e4d149312e7e27ae93bd04f5369dd98ce6",
+    "full_reference_provenance_limit": "Historical full manifest binds reference/input/source/config/index, but does not hash every weight shard. Full trace has external source/executable/input/config/index bindings, not an internal all-model-byte attestation."
+  },
+  "results": {
+    "probe": {
+      "cross_run": {
+        "native_all": {
+          "count": 16384,
+          "bitwise_mismatches": 0,
+          "tolerance_failures": 0,
+          "max_abs": 0.0,
+          "witnesses": []
+        },
+        "mlx_all": {
+          "count": 16384,
+          "bitwise_mismatches": 0,
+          "tolerance_failures": 0,
+          "max_abs": 0.0,
+          "witnesses": []
+        },
+        "mlx_repeat": {
+          "count": 16384,
+          "bitwise_mismatches": 0,
+          "tolerance_failures": 0,
+          "max_abs": 0.0,
+          "witnesses": []
+        },
+        "native_108": {
+          "count": 2048,
+          "bitwise_mismatches": 0,
+          "tolerance_failures": 0,
+          "max_abs": 0.0,
+          "witnesses": []
+        },
+        "mlx_108": {
+          "count": 2048,
+          "bitwise_mismatches": 0,
+          "tolerance_failures": 0,
+          "max_abs": 0.0,
+          "witnesses": []
+        }
+      },
+      "against_upstream": {
+        "native_all": {
+          "count": 16384,
+          "bitwise_mismatches": 14567,
+          "tolerance_failures": 3,
+          "max_abs": 0.00439453125,
+          "witnesses": [
+            {
+              "index": 14805,
+              "actual": 1.961013913154602,
+              "upstream": 1.960231065750122,
+              "abs": 0.0007828474044799805,
+              "allowed": 0.0006480693197250366
+            },
+            {
+              "index": 15102,
+              "actual": -0.7042062282562256,
+              "upstream": -0.70465087890625,
+              "abs": 0.00044465065002441406,
+              "allowed": 0.000271395263671875
+            },
+            {
+              "index": 15891,
+              "actual": 4.085938453674316,
+              "upstream": 4.084475517272949,
+              "abs": 0.0014629364013671875,
+              "allowed": 0.0012853426551818845
+            }
+          ]
+        },
+        "mlx_all": {
+          "count": 16384,
+          "bitwise_mismatches": 0,
+          "tolerance_failures": 0,
+          "max_abs": 0.0,
+          "witnesses": []
+        },
+        "mlx_repeat": {
+          "count": 16384,
+          "bitwise_mismatches": 0,
+          "tolerance_failures": 0,
+          "max_abs": 0.0,
+          "witnesses": []
+        },
+        "native_108": {
+          "count": 2048,
+          "bitwise_mismatches": 1922,
+          "tolerance_failures": 3,
+          "max_abs": 0.00439453125,
+          "witnesses": [
+            {
+              "index": 469,
+              "actual": 1.961013913154602,
+              "upstream": 1.960231065750122,
+              "abs": 0.0007828474044799805,
+              "allowed": 0.0006480693197250366
+            },
+            {
+              "index": 766,
+              "actual": -0.7042062282562256,
+              "upstream": -0.70465087890625,
+              "abs": 0.00044465065002441406,
+              "allowed": 0.000271395263671875
+            },
+            {
+              "index": 1555,
+              "actual": 4.085938453674316,
+              "upstream": 4.084475517272949,
+              "abs": 0.0014629364013671875,
+              "allowed": 0.0012853426551818845
+            }
+          ]
+        },
+        "mlx_108": {
+          "count": 2048,
+          "bitwise_mismatches": 0,
+          "tolerance_failures": 0,
+          "max_abs": 0.0,
+          "witnesses": []
+        }
+      },
+      "total_repeated_values": 53248
+    },
+    "full_gate": {
+      "native": {
+        "trace_count": 243,
+        "value_count": 497664,
+        "tolerance_failures": 1,
+        "max_abs": 0.01953125,
+        "failures": [
+          {
+            "name": "backbone.row1.layers.39.hidden",
+            "count": 2048,
+            "bitwise_mismatches": 2017,
+            "tolerance_failures": 1,
+            "max_abs": 0.01953125,
+            "witnesses": [
+              {
+                "index": 33,
+                "actual": 0.9211006164550781,
+                "upstream": 0.9219169616699219,
+                "abs": 0.00081634521484375,
+                "allowed": 0.00033657508850097655
+              }
+            ]
+          }
+        ],
+        "execution": {
+          "expert_down_reduction": "native",
+          "dense_reduction": "tree",
+          "batch_experts": true
+        },
+        "graph_before_drain": {
+          "depth": 0,
+          "submitted": 0,
+          "completed": 0,
+          "pending": 0,
+          "max_pending": 0,
+          "completion_waits": 0,
+          "retained_bytes": 0,
+          "max_retained_bytes": 0
+        },
+        "graph_after_drain": {
+          "depth": 0,
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "max_pending": 0,
+          "completion_waits": 1,
+          "retained_bytes": 0,
+          "max_retained_bytes": 0
+        },
+        "graph_after_reads": {
+          "depth": 0,
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "max_pending": 0,
+          "completion_waits": 1,
+          "retained_bytes": 0,
+          "max_retained_bytes": 0
+        },
+        "readbacks": {
+          "control": 972,
+          "terminal": 1990656
+        },
+        "hidden33_actual": 0.9211006
+      },
+      "mlx": {
+        "trace_count": 243,
+        "value_count": 497664,
+        "tolerance_failures": 1,
+        "max_abs": 0.01953125,
+        "failures": [
+          {
+            "name": "backbone.row1.layers.39.hidden",
+            "count": 2048,
+            "bitwise_mismatches": 2040,
+            "tolerance_failures": 1,
+            "max_abs": 0.01953125,
+            "witnesses": [
+              {
+                "index": 33,
+                "actual": 0.9215669631958008,
+                "upstream": 0.9219169616699219,
+                "abs": 0.00034999847412109375,
+                "allowed": 0.00033657508850097655
+              }
+            ]
+          }
+        ],
+        "execution": {
+          "expert_down_reduction": "mlx_q4",
+          "dense_reduction": "tree",
+          "batch_experts": true
+        },
+        "graph_before_drain": {
+          "depth": 0,
+          "submitted": 0,
+          "completed": 0,
+          "pending": 0,
+          "max_pending": 0,
+          "completion_waits": 0,
+          "retained_bytes": 0,
+          "max_retained_bytes": 0
+        },
+        "graph_after_drain": {
+          "depth": 0,
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "max_pending": 0,
+          "completion_waits": 1,
+          "retained_bytes": 0,
+          "max_retained_bytes": 0
+        },
+        "graph_after_reads": {
+          "depth": 0,
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "max_pending": 0,
+          "completion_waits": 1,
+          "retained_bytes": 0,
+          "max_retained_bytes": 0
+        },
+        "readbacks": {
+          "control": 972,
+          "terminal": 1990656
+        },
+        "hidden33_actual": 0.92156696
+      }
+    },
+    "native_full_capture_vs_retained": {
+      "count": 497664,
+      "bitwise_mismatches": 0
+    },
+    "moe": {
+      "scope": "Exact upstream normalized input; own native gate/up/SwiGLU are not bitwise upstream.",
+      "first_failing_stage": "moe_output_official",
+      "final_moe": {
+        "count": 2048,
+        "bitwise_mismatches": 1939,
+        "tolerance_failures": 2,
+        "max_abs": 0.005859375,
+        "witnesses": [
+          {
+            "index": 1012,
+            "actual": 0.5020532608032227,
+            "upstream": 0.5025739669799805,
+            "abs": 0.0005207061767578125,
+            "allowed": 0.00021077219009399411
+          },
+          {
+            "index": 1111,
+            "actual": 0.17144298553466797,
+            "upstream": 0.1716928482055664,
+            "abs": 0.0002498626708984375,
+            "allowed": 0.00011150785446166992
+          }
+        ]
+      },
+      "stages": {
+        "attention_residual": {
+          "status": "unavailable"
+        },
+        "expert_activation_outputs": {
+          "authority": "captured_stage",
+          "count": 4096,
+          "failures": 0,
+          "max_absolute_error": 0.005859375,
+          "status": "match"
+        },
+        "expert_down_outputs": {
+          "authority": "captured_stage",
+          "count": 16384,
+          "failures": 0,
+          "max_absolute_error": 0.00390625,
+          "status": "match"
+        },
+        "expert_gate_outputs": {
+          "authority": "captured_stage",
+          "count": 4096,
+          "failures": 0,
+          "max_absolute_error": 1.52587890625e-05,
+          "status": "match"
+        },
+        "expert_ids_argpartition_order": {
+          "authority": "routing",
+          "status": "match"
+        },
+        "expert_up_outputs": {
+          "authority": "captured_stage",
+          "count": 4096,
+          "failures": 0,
+          "max_absolute_error": 1.52587890625e-05,
+          "status": "match"
+        },
+        "expert_weighted_outputs": {
+          "authority": "auxiliary",
+          "count": 16384,
+          "failures": 0,
+          "max_absolute_error": 0.005859375,
+          "status": "match"
+        },
+        "hidden_output": {
+          "status": "unavailable"
+        },
+        "moe_output_official": {
+          "authority": "official",
+          "count": 2048,
+          "failures": 2,
+          "max_absolute_error": 0.005859375,
+          "status": "mismatch"
+        },
+        "routed_sum_official": {
+          "authority": "official",
+          "count": 2048,
+          "failures": 0,
+          "max_absolute_error": 0.005859375,
+          "status": "match"
+        },
+        "router_logits": {
+          "authority": "captured_stage",
+          "count": 256,
+          "failures": 0,
+          "max_absolute_error": 7.152557373046875e-07,
+          "status": "match"
+        },
+        "selected_weights_by_expert_id": {
+          "authority": "captured_stage",
+          "count": 8,
+          "failures": 0,
+          "max_absolute_error": 5.960464477539063e-08,
+          "status": "match"
+        },
+        "shared_expert_output": {
+          "authority": "captured_stage",
+          "count": 2048,
+          "failures": 0,
+          "max_absolute_error": 0.000244140625,
+          "status": "match"
+        },
+        "shared_gate_logits": {
+          "authority": "captured_stage",
+          "count": 1,
+          "failures": 0,
+          "max_absolute_error": 0.0,
+          "status": "match"
+        },
+        "shared_weighted_output": {
+          "authority": "auxiliary",
+          "count": 2048,
+          "failures": 0,
+          "max_absolute_error": 0.000244140625,
+          "status": "match"
+        }
+      },
+      "full_native": {
+        "input_bitwise_equal": false,
+        "reason": "normalized Float32 activations differ; numeric stages not compared",
+        "stages_compared": {},
+        "status": "different_input"
+      },
+      "capture_control": {
+        "passed": true,
+        "comparison": "Float32 bitwise equality",
+        "count": 4,
+        "compared_values": 8192,
+        "mismatches": []
+      },
+      "graph": {
+        "graph_before_drain": {
+          "depth": 2,
+          "submitted": 0,
+          "completed": 0,
+          "pending": 0,
+          "max_pending": 0,
+          "completion_waits": 0,
+          "retained_bytes": 0,
+          "max_retained_bytes": 0
+        },
+        "graph_after_drain": {
+          "depth": 2,
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "max_pending": 1,
+          "completion_waits": 1,
+          "retained_bytes": 0,
+          "max_retained_bytes": 21937956360
+        },
+        "graph_after_serialization": {
+          "depth": 2,
+          "submitted": 1,
+          "completed": 1,
+          "pending": 0,
+          "max_pending": 1,
+          "completion_waits": 1,
+          "retained_bytes": 0,
+          "max_retained_bytes": 21937956360
+        },
+        "readbacks": {
+          "control": 900,
+          "terminal": 1190024
+        }
+      }
+    },
+    "gpu_probe": {
+      "graph_before_drain": {
+        "depth": 0,
+        "submitted": 0,
+        "completed": 0,
+        "pending": 0,
+        "max_pending": 0,
+        "completion_waits": 0,
+        "retained_bytes": 0,
+        "max_retained_bytes": 0
+      },
+      "graph_after_drain": {
+        "depth": 0,
+        "submitted": 1,
+        "completed": 1,
+        "pending": 0,
+        "max_pending": 0,
+        "completion_waits": 1,
+        "retained_bytes": 0,
+        "max_retained_bytes": 0
+      },
+      "graph_after_reads": {
+        "depth": 0,
+        "submitted": 1,
+        "completed": 1,
+        "pending": 0,
+        "max_pending": 0,
+        "completion_waits": 1,
+        "retained_bytes": 0,
+        "max_retained_bytes": 0
+      },
+      "readbacks": {
+        "terminal": 212992
+      }
+    },
+    "tolerances": {
+      "atol": 6e-05,
+      "rtol": 0.0003,
+      "widened": false
+    }
+  },
+  "mini_quadrumvirate": {
+    "prediction": "A wrong packed K stride, affine grouping, row/rank dispatch, or compiler mode could imitate a local match; a local pass could hide final-sum cancellation.",
+    "question": "Does reproducing MLX lane arithmetic remove the down discrepancy on exactly the same activation and weights, and does the full gate then pass?",
+    "move": "Separate opt-in native Metal kernel; exact-input native/candidate/repeat/scalar arms, passive full GPU trace, original comparator and bounded MoE replay.",
+    "attack": "Audit found k/8 versus k/2 byte stride before GPU execution; fixed. Synthetic periodic fixture and affine-offset assertions strengthened before tests. Real full gate retained as falsifier.",
+    "refuted_routes": [
+      {
+        "route": "Down arithmetic reproduction alone establishes full-backbone parity",
+        "falsifier": "Original full comparator exits1 at hidden[33]"
+      },
+      {
+        "route": "Depth0 MoE capture qualifies for existing strict comparator",
+        "falsifier": "Comparator exits2 requiring depth2",
+        "pivot": "Change harness depth only; depth2 exits1 for two actual final-MoE failures"
+      }
+    ],
+    "verdict": "ROBUST",
+    "scope": "Measured local down reproduction and bounded negative full gate; a full-parity claim is VULNERABLE and rejected.",
+    "reviewer": "dense_kernel, dense_probe and read-only dense_upstream source/adversary roles plus parent executed checks; same-lineage review is correlated",
+    "limitations": "Exactly representable synthetic fixtures establish indexing/offsets, not general rounding equivalence. Source expressions/simd_sum are not a disassembly or hardware-tree proof."
+  },
+  "production_frontier": {
+    "level": "IN_PROGRESS",
+    "full_upstream_gate_passes": false,
+    "defaults": {
+      "expert_down": "native",
+      "dense": "tree",
+      "MAP_SHARED": false
+    },
+    "selector": "DRAMA3_EXPERT_DOWN_REDUCTION=mlx_q4; frozen per backbone; routed down only",
+    "next_falsifier": "At common normalized input, independently substitute upstream gate/up-derived activation and shared output on GPU; inspect official final sum and retain full hidden[33] gate before promotion.",
+    "no_performance_or_ltp_wba_promotion": true
+  },
+  "lineage": {
+    "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/.landmark/evidence/drama3-down108-qmm.json",
+    "sha256": "154eb2ae99a1afe425964ca24b4b2db33be2f9c015bfbf04645ed5649980b33e",
+    "bytes": 38721,
+    "role": "Prior committed quantized-versus-decoded-F32 discriminator"
+  },
+  "source_sha256": {
+    "src/ml/audio/drama3/kernels/mlx_q4.metal": "3017406c0157459d015df887e37a861c628e5292f2434f5babc99bef1e476bb0",
+    "src/ml/audio/drama3/kernels/mlx_q4.LICENSE": "99fc2fd67c89fbc891b0645e64d47b38cd2412ea95a8afd4f74ae43a38e6f15e",
+    "src/ml/audio/drama3/resident.cr": "ebaf0b544334f6a0c14276efe8a3fca10273725dfd887037425af33f1ec27f24",
+    "src/ml/audio/drama3/backbone_resident.cr": "b701d14617261a5c72f3deff25ed0728d8abbb4c609dd375e4668bb3779fc3dc",
+    "examples/drama3_mlx_q4_probe.cr": "a6309b36ff63cae7b745f8ae81f68c7c43c923ae1f6b17d90f7c162db35cab52",
+    "examples/drama3_backbone_gpu_trace.cr": "26460d555c3f504c33984e63ae1ae7447de0872e97ac866764b2f5f65f9c36ce",
+    "spec/drama3_mlx_q4_spec.cr": "38ce363868b0b6e01bcbee620c334b6e3506c21e40596dd3be50dd8d3d730dd2",
+    "docs/drama3-native-frontier.md": "628f7ccfe04c066102a3241a016e1ca1f8a71a52213c7053181e7641b45baccd",
+    "LANDMARKS.md": "60812a6d67e4d6c263250489bd0328bab116e8746995cc119058f4cff895d281"
+  },
+  "unchanged_dependency_sha256": {
+    "examples/drama3_moe_trace.cr": "29a511bb0398e586295f58a60cc2679d57ef2ad7ccf79ae73106a39f01af3abf",
+    "examples/support/drama3_moe_provenance.cr": "067b673d0ffaadcab6cb472a1b97d5d5eba063aa104f87c918bd57b96393c1de",
+    "scripts/drama3/compare_traces.py": "d925b1f1c5af4527652ade973d4cbc14931326d83d6f8ccf632471d1f97933e4",
+    "scripts/drama3/moe_compare.py": "24f89687d7669db43a9ab832f23b12299671a7c2f6d3d61bea832243fba530a8",
+    "scripts/run_safe.sh": "ca3d326eac90731c4915883158d394e72dde766786fadf95a4241acd7f627ea4"
+  },
+  "artifacts": [
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/probe-repeat.json",
+      "sha256": "f04f31a5c8351b27b5c6d4696c5b6ee4f65f57f80990e1908d097b7680549f3d",
+      "bytes": 544410,
+      "role": "Final formatted-source GPU probe; five arms, terminal counters and loaded target tensor digest"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/probe.json",
+      "sha256": "f04f31a5c8351b27b5c6d4696c5b6ee4f65f57f80990e1908d097b7680549f3d",
+      "bytes": 544410,
+      "role": "First GPU probe; five-arm repeat baseline"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/repeat-analysis.json",
+      "sha256": "e1be5fb8cad605f44b5c40a88294dda9d31a0aa9d08de7ab5a980f81431c72a2",
+      "bytes": 2918,
+      "role": "All 53248 projection outputs repeat bitwise across processes"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/trace-mlx.json",
+      "sha256": "3769213ee8d181f3bc3af0cf31c81041c8611bd7e72bb26fa9e1aa372f7e5885",
+      "bytes": 5369373,
+      "role": "All 243 candidate backbone boundaries after one final GPU drain"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/trace-native.json",
+      "sha256": "6af2b9a825e9f7317246a2bf7f8cad2e2f83a5bdf26ea8b7c6e0cd90842ce533",
+      "bytes": 5369546,
+      "role": "All 243 default-native boundaries; retained-native capture fidelity control"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/analysis.json",
+      "sha256": "19f785919722dcf2e27055abfcaf39775f2a6e163817b9190e6064d109eddc09",
+      "bytes": 6594,
+      "role": "Every full-gate value checked; exact failing witness and native capture equivalence"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/moe-mlx-depth2.json",
+      "sha256": "ff32e53b48e7641110a2b00daf63eb212ec66497fcbbb15727e7a7fb3d544401",
+      "bytes": 3077883,
+      "role": "Qualified depth2 exact-input and full-input MoE stages; capture control"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/moe-summary.json",
+      "sha256": "f366c2c93b31bcf0bd04976ee068af7617c92db16921b9e6561e305b9aadf87d",
+      "bytes": 4283,
+      "role": "Bounded MoE comparison and official final-sum failures"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/moe-mlx.json",
+      "sha256": "b441a703711f3cb38530e2ed69f55aa67ebf1992d255db9903e6a12bb4241d6b",
+      "bytes": 3077863,
+      "role": "Depth0 MoE capture; excluded from strict depth2 comparator qualification"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/provenance.json",
+      "sha256": "0646d1854f6c606d2bda15e77d65c1c2517bd93eb0278e4fa9d9a866787daffa",
+      "bytes": 1075,
+      "role": "Current reference/input/config/index/upstream/header checks"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/commands.json",
+      "sha256": "ab1a5ec76c122937f2b35aec04b2ad6f82174be53424e81ba14e6ea7ea940cbf",
+      "bytes": 34460,
+      "role": "Execution receipts; latest log per repeated command name is bound here"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/run.py",
+      "sha256": "bd1d44fc08e36ec0b72168cfe3c6910b916c626fe31903a51696918b7839776e",
+      "bytes": 5062,
+      "role": "Sequential safe-run controller; original log names may be overwritten by repeated build names"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/analyze.py",
+      "sha256": "92b4a109bcec9c98a0a0fb2ac60c8332a0de165baa33b07c80686cac3d67480c",
+      "bytes": 3858,
+      "role": "Terminal-only full-gate and baseline comparison"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/finalize.py",
+      "sha256": "e38645176e534174593e5ba0fa2545a57e1348b7b80a6367e84b8f131ae2a3bb",
+      "bytes": 16981,
+      "role": "Terminal-only repeat/MoE analysis and evidence binding"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/mlx-backbone-no-capture.json",
+      "sha256": "b83a511d4b91c5930b9e2eed8be0ce541f8296045f9ee8e75e4719566e9f8e79",
+      "bytes": 9707208,
+      "role": "Historical full upstream reference"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/mlx-backbone-no-capture.json.manifest.json",
+      "sha256": "a82b5940c42ffa92eb3f405b0b79dd91c83fab14ab1d8c5fbf7b115eba035686",
+      "bytes": 12331,
+      "role": "Full-reference source/config/index manifest; no all-shard digest"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/inputs.json",
+      "sha256": "1fea4a810ba88680ea031c9496c982ad7b8bf32ac23c05e18964c1bf80a1a6f3",
+      "bytes": 116872,
+      "role": "Full-gate embedding input bundle"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/dense-20261014/native-backbone-tree.json",
+      "sha256": "1823790bc1ae4f0119196e3c0cac356f9b54cf26e06ea77c0bcb83f5ef275752",
+      "bytes": 5368919,
+      "role": "Retained default-native full trace"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/mlx-moe-full.json",
+      "sha256": "d3e6e455dd4ab0c987a500cb0d3c807db23003e383725f4b4f6c49fecb64030f",
+      "bytes": 1563628,
+      "role": "Pinned exact upstream SwiGLU/down and official MoE stages"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/mlx-moe-isolated.json",
+      "sha256": "f4c80c5f0ee17b2c8ffd34a4a0dc84a10d8c3a7fe6351e1832ba5b15c725b40d",
+      "bytes": 1448299,
+      "role": "Upstream full/isolated bitwise capture control"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/mlx-moe-input.json",
+      "sha256": "f37d6f3fba2f4d661c293612d408867e233c3d0be33826a2200d15862d37bad9",
+      "bytes": 41859,
+      "role": "Exact normalized-input fixture"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/moe39-20261015/moe-ablation.json",
+      "sha256": "096605ab158ff7a3104f6393e3dc7317a3122f9c7f31e75a4d464c06acd22173",
+      "bytes": 277156,
+      "role": "Prior native down on exact upstream activation"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/probe.final.json",
+      "sha256": "2c49c3e7b878755cc42b64d6792ba78c316eb4be98308cbac1ac1da3d0162109",
+      "bytes": 427820,
+      "role": "Prior decoded-F32 negative control"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/down108-20261015/source-audit.json",
+      "sha256": "18e2a52f7b4d9ed24b8f9f6a164c2f186672bbd6b3574a1c4bcb5181c8bdf67d",
+      "bytes": 6857,
+      "role": "Pinned MLX source expressions and dispatch assumptions"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50/config.json",
+      "sha256": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+      "bytes": 17453,
+      "role": "Current checkpoint configuration"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50/model.safetensors.index.json",
+      "sha256": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855",
+      "bytes": 106861,
+      "role": "Current checkpoint tensor index"
+    },
+    {
+      "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o",
+      "sha256": "a77b9bd12977fdb31d60a26cdc489cbf836ef037a1231c0ac5f6241ccc0a6207",
+      "bytes": 153016,
+      "role": "Unchanged native bridge linked into probes"
+    },
+    {
+      "path": "/private/tmp/drama3_mlx_q4_probe",
+      "sha256": "ae8296f6f5640c77db976fa75bdd41ae520fa711efb34a234717e92a8de60340",
+      "bytes": 907120,
+      "role": "Final expert-down executable"
+    },
+    {
+      "path": "/private/tmp/drama3_backbone_gpu_trace",
+      "sha256": "450c5c85bd55a2992ec9a7955ce213fc15c7108752c2fff61f3350fc9aacc9bb",
+      "bytes": 888456,
+      "role": "Backbone capture executable"
+    },
+    {
+      "path": "/private/tmp/drama3_moe_trace_mlx_q4",
+      "sha256": "144dc2e5117f83ec849d786d25442c5d5be7fe01c616d27836682e49709df121",
+      "bytes": 983464,
+      "role": "MoE capture executable"
+    }
+  ],
+  "refresh": {
+    "decay_trigger": "Source/model/input/reference/runtime/precision/compiler/device/OS/artifact drift or mutable checkpoint within a run.",
+    "operation": "Recheck pins/bytes; rebuild probes; run exact-input, full fixed-tolerance gate and adjacent guards; verify terminal-only GPU boundaries.",
+    "failure_policy": "Reject stale provenance/control results, reopen dependent claims, keep opt-in/default native and unchanged tolerances."
+  }
+}

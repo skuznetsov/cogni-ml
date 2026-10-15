@@ -5,6 +5,7 @@ require "../../metal/compute_graph"
 
 module ML::Audio::Drama3::Resident
   SOURCE = {{ read_file("#{__DIR__}/kernels/resident.metal") }}
+  MLX_Q4_SOURCE = {{ read_file("#{__DIR__}/kernels/mlx_q4.metal") }}
 
   private class BufferOwner
   end
@@ -287,6 +288,47 @@ module ML::Audio::Drama3::Resident
       value
     end
 
+    private def validate_expert_reduction(value : String) : String
+      raise ArgumentError.new("expert reduction must be native or mlx_q4") unless value.in?("native", "mlx_q4")
+      value
+    end
+
+    private def validate_mlx_q4!(matrix : Matrix) : Nil
+      raise ArgumentError.new("MLX Q4 reduction requires affine scales and biases") unless matrix.scales && matrix.biases
+      raise ArgumentError.new("MLX Q4 reduction requires 4-bit weights") unless matrix.bits == 4
+      raise ArgumentError.new("MLX Q4 reduction requires group size 64") unless matrix.group_size == 64
+      raise ArgumentError.new("MLX Q4 reduction requires K divisible by 512") unless matrix.cols % 512 == 0
+      raise ArgumentError.new("MLX Q4 reduction requires N divisible by 8") unless matrix.rows % 8 == 0
+    end
+
+    private def dispatch_mlx_q4(matrix : Matrix, x : Buffer, output : Buffer, ids : Buffer?, rank : Int32,
+                                batched : Bool, per_rank_input : Bool) : Nil
+      weight = MetalBackend.tensor_buffer(matrix.tensor, true)
+      scales_tensor, biases_tensor = matrix.scales.not_nil!, matrix.biases.not_nil!
+      scales = MetalBackend.tensor_buffer(scales_tensor, true)
+      biases = MetalBackend.tensor_buffer(biases_tensor, true)
+      selection = ids || x
+      experts = matrix.tensor.shape.size == 3 ? matrix.tensor.shape[0] : 1
+      params = [matrix.rows.to_u64, matrix.cols.to_u64, experts.to_u64,
+                weight.offset.to_u64, scales.offset.to_u64, biases.offset.to_u64,
+                encoding(scales_tensor), encoding(biases_tensor), ids ? 1_u64 : 0_u64,
+                rank.to_u64, matrix.expert.to_u64, batched ? 1_u64 : 0_u64,
+                per_rank_input ? 1_u64 : 0_u64]
+
+      enc = encoder
+      enc.set_pipeline(ML::Metal::PipelineCache.get_or_compile("dr3_expert_mlx_q4", MLX_Q4_SOURCE))
+      enc.set_buffer(weight.buffer, 0)
+      enc.set_buffer(scales.buffer, 1)
+      enc.set_buffer(biases.buffer, 2)
+      enc.set_buffer(x.buffer, 3, offset: x.offset)
+      enc.set_buffer(output.buffer, 4, offset: output.offset)
+      enc.set_buffer(selection.buffer, 5, offset: selection.offset)
+      enc.set_bytes(params.to_unsafe.as(Void*), (params.size * 8).to_i32, 6)
+      ranks = batched ? ids.not_nil!.count : 1
+      enc.dispatch_threadgroups({matrix.rows // 8, ranks, 1}, {64, 1, 1})
+      @pending.concat([x, output, selection])
+    end
+
     def add(a : Buffer, b : Buffer) : Buffer
       binary(a, b, 0)
     end
@@ -340,10 +382,12 @@ module ML::Audio::Drama3::Resident
       y
     end
 
-    def expert(matrix : Matrix, x : Buffer, ids : Buffer? = nil, rank : Int32 = 0) : Buffer
+    def expert(matrix : Matrix, x : Buffer, ids : Buffer? = nil, rank : Int32 = 0, reduction : String = "native") : Buffer
       check_owner!(x)
       check_owner!(ids) if ids
       raise ArgumentError.new("resident expert rank") unless rank >= 0 && (!ids || rank < ids.count)
+      selected_reduction = validate_expert_reduction(reduction)
+      validate_mlx_q4!(matrix) if selected_reduction == "mlx_q4"
       unless matrix.scales
         return matvec(matrix, x) unless ids
         raise ArgumentError.new("resident expert rank") unless rank >= 0 && rank < ids.count && x.count == matrix.cols
@@ -355,6 +399,11 @@ module ML::Audio::Drama3::Resident
         return output
       end
       raise ArgumentError.new("resident affine requires packed weights") unless matrix.scales && matrix.biases && x.count == matrix.cols
+      if selected_reduction == "mlx_q4"
+        output = alloc(matrix.rows)
+        dispatch_mlx_q4(matrix, x, output, ids, rank, false, false)
+        return output
+      end
       raise ArgumentError.new("resident affine groups") if matrix.cols // matrix.group_size > 8192
       weight = MetalBackend.tensor_buffer(matrix.tensor, true)
       st, bt = matrix.scales.not_nil!, matrix.biases.not_nil!
@@ -404,15 +453,22 @@ module ML::Audio::Drama3::Resident
 
     # Independent ranks share one dispatch, retaining the scalar affine-group
     # arithmetic of #expert. Down projections read a different input per rank.
-    def experts(matrix : Matrix, x : Buffer, ids : Buffer, per_rank_input : Bool = false) : Buffer
+    def experts(matrix : Matrix, x : Buffer, ids : Buffer, per_rank_input : Bool = false, reduction : String = "native") : Buffer
       check_owner!(x)
       check_owner!(ids)
+      selected_reduction = validate_expert_reduction(reduction)
       raise ArgumentError.new("resident batched experts require affine weights") unless matrix.scales && matrix.biases
       expected = matrix.cols.to_i64 * (per_rank_input ? ids.count : 1)
       raise ArgumentError.new("resident batched expert input width") unless x.count == expected
+      validate_mlx_q4!(matrix) if selected_reduction == "mlx_q4"
       raise ArgumentError.new("resident affine groups") if matrix.cols // matrix.group_size > 8192
       count = matrix.rows.to_i64 * ids.count
       raise ArgumentError.new("resident batched expert output too large") if count > Int32::MAX
+      if selected_reduction == "mlx_q4"
+        output = alloc(count.to_i32)
+        dispatch_mlx_q4(matrix, x, output, ids, 0, true, per_rank_input)
+        return output
+      end
       weight = MetalBackend.tensor_buffer(matrix.tensor, true)
       st, bt = matrix.scales.not_nil!, matrix.biases.not_nil!
       scales, biases = MetalBackend.tensor_buffer(st, true), MetalBackend.tensor_buffer(bt, true)

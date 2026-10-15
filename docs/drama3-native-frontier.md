@@ -8,6 +8,92 @@ Goal: one short, single-speaker text prompt to a mono 44.1 kHz WAV, with all
 inference computations in Crystal/native libraries. Python/MLX/PyTorch are
 reference and fixture tools only, never the native inference implementation.
 
+## Native MLX Q4 arithmetic and full gate — 2026-10-15
+
+At base `31920e41`, the opt-in native Metal down projection reproduces the
+pinned MLX0.31.1 result bitwise on the retained row1/layer39 SwiGLU activation
+and identical mapped packed weights. The original full-backbone gate still
+fails one value at unchanged `atol=6e-5, rtol=3e-4`. This section supersedes
+the older gate measurements below; production parity remains IN_PROGRESS.
+
+`kernels/mlx_q4.metal` reproduces the fast Q4/group64 path: 16 activation
+values per lane, packed-nibble input rescaling, `scale*dot + sum*bias` per
+lane/group, 512-column block accumulation and `simd_sum`. It uses F32
+arithmetic and GPU expert IDs; no dequantized weight expansion is introduced.
+The separate source preserves the existing kernels' contraction settings.
+The native two-dimensional dispatch permutes independent row/rank axes;
+scalar and batched results are checked on the actual checkpoint. Source
+expressions and `simd_sum` are not a disassembly proof of compiler contraction
+or the hardware reduction tree. Upstream attribution is in
+`kernels/mlx_q4.LICENSE`.
+
+`DRAMA3_EXPERT_DOWN_REDUCTION=mlx_q4` selects only routed-expert down
+projections; the value is captured when constructing the backbone. The default
+remains `native`, with dense `tree` and MAP_SHARED off. Unsupported bit width,
+group size, K tails or N tails reject before encoding. The admitted shape
+requires affine Q4/group64, K divisible by 512 and N divisible by 8.
+
+| Executed check | Observed result |
+| --- | --- |
+| Exact upstream activation, native MLX-style down | All 16,384 values across eight experts bitwise upstream; expert108 scalar and batched 2,048 values bitwise upstream |
+| Repeat and retained-native controls | Candidate repeat bitwise; native down reproduces the previous three tolerance failures at expert108 469/766/1555 |
+| Full upstream gate, candidate | 243 boundaries / 497,664 values; exactly one failure, row1/layer39.hidden[33] |
+| Full upstream gate, default native | Same one failure as before; all 497,664 captured native values bitwise equal to the retained native trace |
+| Synthetic native guards | 24 Crystal examples pass, including distinct K=1024 blocks, odd scale/bias offsets, F32/BF16/F16 metadata, GPU IDs, scalar/batch and frozen selector |
+| Adjacent reference/capture guards | 32 Python tests pass at unchanged tolerance |
+
+At hidden[33], upstream is `0.9219169616699219`; the candidate gives
+`0.9215669631958008`, absolute error `0.00034999847412109375` against allowance
+`0.00033657508850097655`. The earlier native error was
+`0.00081634521484375`. The candidate is still outside the gate; neither the
+smaller error nor synthetic exactly representable fixtures establish general
+MLX bitwise equivalence or a complete correction.
+
+All inference stays on GPU. `examples/drama3_mlx_q4_probe.cr` enqueues native,
+candidate, repeat and scalar arms before one final drain. There are zero
+pre-drain readbacks/submissions/waits, one final submission/wait and no added
+wait during terminal serialization (212,992 terminal bytes). The passive
+buffer callback in `examples/drama3_backbone_gpu_trace.cr` captures all three
+rows in one GPU command buffer, then reads 1,990,656 terminal bytes and 972
+finite-flag control bytes after that drain. It replaces the per-boundary host
+callback for this diagnostic. CPU checkpoint/provenance preparation and
+post-drain report analysis are outside inference.
+
+A bounded follow-up uses the existing MoE trace on the exact upstream
+normalized input. Gate/up, SwiGLU, candidate down, routed sum and shared stages
+all pass fixed tolerance, but are not generally bitwise upstream. The first
+failing official boundary is final `moe_output_official`, coordinates 1012 and
+1111. The full run has a different normalized input and is explicitly
+unqualified as an exact-input comparison. An initial depth0 MoE comparison
+exited 2 because that comparator requires depth2; the depth2 rerun is valid
+and exits 1 for those two numeric failures. Capture/no-capture control matches
+8,192 values bitwise, with one final wait and no intermediate readback.
+
+Risk: CAUTION. Rollback is disable the opt-in or revert this atomic change.
+DoD was the real exact-input probe, original full comparator and adjacent
+guards through `scripts/run_safe.sh` at sampled reserve 15%, with profiling
+unset. The expected failure mode was wrong affine grouping, stride, mapping,
+contraction or a misleading local pass; actual checkpoint controls, independent
+synthetic indexing fixtures and the unchanged full gate discriminate these.
+Mini-Quadrumvirate verdict: ROBUST for measured local down reproduction and
+the bounded negative full-gate result; a production parity claim is VULNERABLE.
+No latency, default or LTP/WBA promotion is claimed.
+
+Exact commands, source/artifact hashes, runtime and next signal are indexed by
+`.landmark/evidence/drama3-native-mlx-q4.json`; raw artifacts remain local in
+`~/.cache/cogni-ml/drama3-runs/mlx-q4-20261015/`. Actual 14 target-MoE tensor
+bytes match the pinned upstream digest before the probe. The historical full
+reference manifest binds reference/input/source/config/index, but does not
+hash every backbone weight shard; it is not an authenticated all-weight
+certificate. Refresh on source, checkpoint, input, runtime/reference,
+precision, compiler, device/OS or artifact drift.
+
+Next falsifier: on common normalized input, substitute upstream gate/up-derived
+activations and shared output independently on GPU, then compare the official
+final MoE sum. Passing separate relative-tolerance stages does not guarantee
+passing their sum near cancellation. Keep the original hidden[33] full gate
+as the admission check before promoting any correction.
+
 ## Expert-108 quantized versus decoded F32 down — 2026-10-15
 
 The common-input GPU experiment reproduces the upstream quantized down return

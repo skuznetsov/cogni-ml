@@ -9,6 +9,7 @@ module ML::Audio::Drama3
     SOURCE = {{ read_file("#{__DIR__}/kernels/backbone_resident.metal") }}
     getter config : BackboneConfig, position = 0
     property trace : Proc(String, Vector, Nil)?
+    property buffer_trace : Proc(String, Resident::Buffer, Nil)?
     # Device-only diagnostic observers. They are nil on the ordinary inference
     # path; the detailed MoE callback is additionally restricted to one layer.
     property moe_trace : Proc(String, Resident::Buffer, Nil)?
@@ -23,6 +24,7 @@ module ML::Audio::Drama3
     @batch_experts : Bool
     getter last_moe_batched = false
     getter dense_reduction : String
+    getter expert_down_reduction : String
     getter batch_experts : Bool
 
     def initialize(@config : BackboneConfig, @store : WeightStore, @ctx : Resident::Context, @capacity : Int32)
@@ -40,11 +42,16 @@ module ML::Audio::Drama3
       unless @dense_reduction.in?("tree", "simd")
         raise ArgumentError.new("DRAMA3_BACKBONE_DENSE_REDUCTION must be tree or simd")
       end
+      @expert_down_reduction = ENV["DRAMA3_EXPERT_DOWN_REDUCTION"]? || "native"
+      unless @expert_down_reduction.in?("native", "mlx_q4")
+        raise ArgumentError.new("DRAMA3_EXPERT_DOWN_REDUCTION must be native or mlx_q4")
+      end
       @keys = Array(Resident::Buffer?).new(@config.layers, nil)
       @values = Array(Resident::Buffer?).new(@config.layers, nil)
       @conv = Array(Resident::Buffer?).new(@config.layers, nil)
       @delta = Array(Resident::Buffer?).new(@config.layers, nil)
       @trace = nil
+      @buffer_trace = nil
       @moe_trace = nil
       @layer_buffer_trace = nil
       @moe_trace_auxiliary = false
@@ -118,6 +125,7 @@ module ML::Audio::Drama3
     end
 
     private def trace_value(name : String, x : Resident::Buffer) : Nil
+      @buffer_trace.try(&.call(name, x))
       if callback = @trace
         callback.call(name, @ctx.read(x, "diagnostic"))
       end
@@ -176,7 +184,7 @@ module ML::Audio::Drama3
                    gate = @ctx.experts(gate_matrix, x, ids)
                    up = @ctx.experts(up_matrix, x, ids)
                    activation = @ctx.mul(@ctx.silu(gate), up)
-                   down = @ctx.experts(down_matrix, activation, ids, per_rank_input: true)
+                   down = @ctx.experts(down_matrix, activation, ids, per_rank_input: true, reduction: @expert_down_reduction)
                    if callback
                      @config.top_k.times do |rank|
                        trace_moe_buffer(callback, "expert_gate_outputs.rank_#{rank}", gate.slice(rank * gate_matrix.rows, gate_matrix.rows))
@@ -211,7 +219,7 @@ module ML::Audio::Drama3
                      gate = @ctx.expert(gate_matrix, x, ids, rank)
                      up = @ctx.expert(up_matrix, x, ids, rank)
                      activation = @ctx.mul(@ctx.silu(gate), up)
-                     down = @ctx.expert(down_matrix, activation, ids, rank)
+                     down = @ctx.expert(down_matrix, activation, ids, rank, reduction: @expert_down_reduction)
                      if callback
                        trace_moe_buffer(callback, "expert_gate_outputs.rank_#{rank}", gate)
                        trace_moe_buffer(callback, "expert_up_outputs.rank_#{rank}", up)
