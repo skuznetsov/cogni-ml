@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import io
 import json
 import struct
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 
 
@@ -28,8 +30,7 @@ TAPE_PREFIX_BYTES = b"".join(struct.pack("<f", 0.25) for _ in range(TAPE_PREFIX_
 TAPE_PREFIX_SHA = _sha(TAPE_PREFIX_BYTES)
 
 
-def _report_pair() -> tuple[dict, dict, dict, dict]:
-    target = "Привет! Это тест."
+def _report_pair(target: str = "Привет! Это тест.") -> tuple[dict, dict, dict, dict]:
     target_sha = _sha(target.encode("utf-8"))
     transcript = "We asked over twenty different people."
     transcript_sha = _sha(transcript.encode("utf-8"))
@@ -178,6 +179,26 @@ def _report_pair() -> tuple[dict, dict, dict, dict]:
     return native_ref, native_no_ref, mlx_ref, mlx_no_ref
 
 
+def _mlx_cap_report(
+    status: str, *, iterations: int = 512, returned: int = 512,
+    eos_detected: bool = False, frame_cap_reached: bool = True,
+) -> dict:
+    report = json.loads(json.dumps(_report_pair()[3]))
+    report["termination"].update({
+        "status": status,
+        "eos_detected": eos_detected,
+        "generation_iterations": iterations,
+        "returned_frames": returned,
+        "frame_cap_reached": frame_cap_reached,
+    })
+    report["settings"]["random_tape"]["used_uniform_count"] = iterations * pauses.DRAW_STRIDE
+    frame = report["output"]["frames"][0]
+    report["output"]["frames"] = [frame[:] for _ in range(returned)]
+    report["output"]["frame_shape"] = [returned, 11]
+    report["output"]["samples"] = returned * 2048
+    return report
+
+
 class QuietWindowMergeSpec(unittest.TestCase):
     def test_only_full_quiet_windows_form_internal_pause_runs(self) -> None:
         peaks = [100, 64, 0, 100, 64, 64, 0]
@@ -246,6 +267,84 @@ class QuietWindowMergeSpec(unittest.TestCase):
 
 
 class ReferencePauseSchemaSpec(unittest.TestCase):
+    def test_mlx_report_accepts_current_and_legacy_frame_cap_statuses(self) -> None:
+        for status in ("max_frames", "frame_cap"):
+            with self.subTest(status=status):
+                checked = pauses._mlx_report(_mlx_cap_report(status), "mlx-test")
+                self.assertEqual(checked["status"], status)
+                self.assertEqual(checked["iterations"], pauses.FRAME_LIMIT)
+                self.assertEqual(checked["returned_frames"], pauses.FRAME_LIMIT)
+
+    def test_mlx_report_rejects_inconsistent_cap_and_eos_geometry(self) -> None:
+        malformed_reports = (
+            _mlx_cap_report("max_frames", frame_cap_reached=False),
+            _mlx_cap_report("frame_cap", iterations=511, returned=511),
+            _mlx_cap_report("eos", eos_detected=True, frame_cap_reached=False),
+            _mlx_cap_report("returned_before_cap_unknown", eos_detected=False, frame_cap_reached=False),
+        )
+        for report in malformed_reports:
+            with self.subTest(status=report["termination"]["status"],
+                              iterations=report["termination"]["generation_iterations"]):
+                with self.assertRaises(ValueError):
+                    pauses._mlx_report(report, "mlx-test")
+
+    def test_report_paths_select_english_and_default_to_russian(self) -> None:
+        run_dir = Path("/runs/drama3")
+        self.assertEqual(
+            pauses.report_paths(run_dir, "en"),
+            {
+                "native-en-reference": run_dir / "native-en-reference.wav.json",
+                "native-en-no-reference": run_dir / "native-en-no-reference.wav.json",
+                "mlx-en-reference": run_dir / "mlx-en-reference.json",
+                "mlx-en-no-reference": run_dir / "mlx-en-no-reference.json",
+            },
+        )
+        self.assertEqual(
+            pauses.report_paths(run_dir),
+            {
+                "native-ru-reference": run_dir / "native-ru-reference.wav.json",
+                "native-ru-no-reference": run_dir / "native-ru-no-reference.wav.json",
+                "mlx-ru-reference": run_dir / "mlx-ru-reference.json",
+                "mlx-ru-no-reference": run_dir / "mlx-ru-no-reference.json",
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "expected ru or en"):
+            pauses.report_paths(run_dir, "fr")
+
+    def test_cli_default_uses_ru_paths_and_rejects_unknown_language(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = [
+                "--run-dir", str(root),
+                "--random-tape", str(root / "tape.json"),
+                "--tape-proof", str(root / "proof.json"),
+                "--output", str(root / "out.json"),
+            ]
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                self.assertEqual(pauses.main(args), 2)
+            self.assertIn("native-ru-reference.wav.json", stderr.getvalue())
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                self.assertEqual(pauses.main([*args, "--language", "en"]), 2)
+            self.assertIn("native-en-reference.wav.json", stderr.getvalue())
+
+            stderr = io.StringIO()
+            with redirect_stderr(stderr), self.assertRaises(SystemExit) as error:
+                pauses.main([*args, "--language", "fr"])
+            self.assertEqual(error.exception.code, 2)
+            self.assertIn("invalid choice", stderr.getvalue())
+
+    def test_english_names_reject_mixed_russian_report_set(self) -> None:
+        russian_reports = dict(zip(pauses.REPORT_NAMES, ({}, {}, {}, {}), strict=True))
+        with self.assertRaisesRegex(ValueError, "all four reference/no-reference reports"):
+            pauses.validate_report_contract(
+                russian_reports,
+                tape={}, tape_sha256="d" * 64, tape_path=Path("/tmp/tape.json"),
+                tape_proof={}, fixture_manifest={}, native_encoder_report={}, language="en",
+            )
+
     def test_reports_validate_shared_text_settings_and_reference_prompt(self) -> None:
         reports = dict(zip(
             ("native-ru-reference", "native-ru-no-reference", "mlx-ru-reference", "mlx-ru-no-reference"),
@@ -327,6 +426,28 @@ class ReferencePauseSchemaSpec(unittest.TestCase):
         self.assertFalse(checked["native_encoder_gate"]["full_numeric_stage_gate_passes"])
         self.assertEqual(checked["native_encoder_gate"]["first_failed_stage"],
                          "quantizer.downsample.1.convnext")
+
+        english_target = "Hello, this is a test."
+        english_target_sha = _sha(english_target.encode("utf-8"))
+        english_reports = dict(zip(
+            pauses.report_names("en"), _report_pair(english_target), strict=True,
+        ))
+        english_manifest = json.loads(json.dumps(manifest))
+        english_manifest["input"]["target_text_utf8_sha256"] = english_target_sha
+        english_manifest["prompt"]["target_text_utf8_sha256"] = english_target_sha
+        english_encoder_report = dict(encoder_report, text_sha256=english_target_sha)
+        english_checked = pauses.validate_report_contract(
+            english_reports,
+            tape=tape,
+            tape_sha256=tape_sha,
+            tape_path=Path("/tmp/tape.json"),
+            tape_proof=proof,
+            fixture_manifest=english_manifest,
+            native_encoder_report=english_encoder_report,
+            language="en",
+        )
+        self.assertEqual(english_checked["target_text_utf8_sha256"], english_target_sha)
+        self.assertEqual(set(english_checked["reports"]), set(pauses.report_names("en")))
 
     def test_rejects_wrong_format_text_tape_use_and_unverified_prompt(self) -> None:
         cases = ("format", "text", "used", "prompt", "upstream")

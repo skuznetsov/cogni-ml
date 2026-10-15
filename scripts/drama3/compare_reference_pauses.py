@@ -32,6 +32,7 @@ FRAME_LIMIT = 512
 DRAW_STRIDE = 11
 TAPE_PREFIX_COUNT = FRAME_LIMIT * DRAW_STRIDE
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+LANGUAGES = ("ru", "en")
 REPORT_NAMES = (
     "native-ru-reference",
     "native-ru-no-reference",
@@ -43,6 +44,25 @@ REPORT_NAMES = (
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
+
+
+def report_names(language: str = "ru") -> tuple[str, str, str, str]:
+    """Return report names for the explicitly selected filename namespace."""
+    _require(language in LANGUAGES, "language: expected ru or en")
+    return (
+        f"native-{language}-reference",
+        f"native-{language}-no-reference",
+        f"mlx-{language}-reference",
+        f"mlx-{language}-no-reference",
+    )
+
+
+def report_paths(run_dir: Path, language: str = "ru") -> dict[str, Path]:
+    """Return the required report file paths for the selected language namespace."""
+    return {
+        name: run_dir / (f"{name}.wav.json" if name.startswith("native-") else f"{name}.json")
+        for name in report_names(language)
+    }
 
 
 def _obj(value: Any, where: str) -> dict[str, Any]:
@@ -240,15 +260,18 @@ def _mlx_report(report: Any, where: str) -> dict[str, Any]:
     _require(iterations <= FRAME_LIMIT, f"{where}.termination: iterations exceed frame cap")
     _require(used_count == iterations * DRAW_STRIDE,
              f"{where}.settings.random_tape.used_uniform_count: must equal iterations * {DRAW_STRIDE}")
-    _require(returned == iterations - 1 if termination.get("status") == "eos" else returned == iterations,
-             f"{where}.termination: returned frame count conflicts with status")
     status = termination.get("status")
-    _require(status in ("eos", "frame_cap"), f"{where}.termination.status: expected eos or frame_cap")
+    is_eos = status == "eos"
+    is_frame_cap = status in ("frame_cap", "max_frames")
+    _require(is_eos or is_frame_cap,
+             f"{where}.termination.status: expected eos, frame_cap, or max_frames")
+    _require(returned == iterations - 1 if is_eos else returned == iterations,
+             f"{where}.termination: returned frame count conflicts with status")
     eos_detected = termination.get("eos_detected")
     cap_reached = termination.get("frame_cap_reached")
     _require(isinstance(eos_detected, bool) and isinstance(cap_reached, bool),
              f"{where}.termination: expected boolean EOS and cap flags")
-    _require(eos_detected == (status == "eos") and cap_reached == (status == "frame_cap"),
+    _require(eos_detected == is_eos and cap_reached == is_frame_cap,
              f"{where}.termination: status and termination flags disagree")
     _require(_int(termination.get("max_frames"), f"{where}.termination.max_frames") == FRAME_LIMIT,
              f"{where}.termination.max_frames: expected {FRAME_LIMIT}")
@@ -260,7 +283,7 @@ def _mlx_report(report: Any, where: str) -> dict[str, Any]:
     _require(len(frames) == returned, f"{where}.output: frame count disagrees with termination")
     _validate_generation_termination(
         frames=len(frames), max_frames=termination.get("max_frames"),
-        stopped_on_eos=(status == "eos"), truncated=(status == "frame_cap"), where=where,
+        stopped_on_eos=is_eos, truncated=is_frame_cap, where=where,
     )
     _require(_int(output.get("samples"), f"{where}.output.samples") == len(frames) * 2048,
              f"{where}.output.samples: expected frames * 2048")
@@ -335,13 +358,16 @@ def validate_report_contract(
     reports: dict[str, Any], *, tape: Any, tape_sha256: str,
     tape_path: Path, tape_proof: Any, fixture_manifest: Any,
     native_encoder_report: Any,
+    language: str = "ru",
 ) -> dict[str, Any]:
     """Validate four reports, shared settings, tape lineage, and reference gates."""
-    _require(set(reports) == set(REPORT_NAMES), "reports: expected all four reference/no-reference reports")
-    native_ref = _native_report(reports["native-ru-reference"], "native-ru-reference")
-    native_plain = _native_report(reports["native-ru-no-reference"], "native-ru-no-reference")
-    mlx_ref = _mlx_report(reports["mlx-ru-reference"], "mlx-ru-reference")
-    mlx_plain = _mlx_report(reports["mlx-ru-no-reference"], "mlx-ru-no-reference")
+    names = report_names(language)
+    native_ref_name, native_plain_name, mlx_ref_name, mlx_plain_name = names
+    _require(set(reports) == set(names), "reports: expected all four reference/no-reference reports")
+    native_ref = _native_report(reports[native_ref_name], native_ref_name)
+    native_plain = _native_report(reports[native_plain_name], native_plain_name)
+    mlx_ref = _mlx_report(reports[mlx_ref_name], mlx_ref_name)
+    mlx_plain = _mlx_report(reports[mlx_plain_name], mlx_plain_name)
 
     texts = [native_ref["raw"]["text"], native_plain["raw"]["text"],
              mlx_ref["raw"]["input"]["text"], mlx_plain["raw"]["input"]["text"]]
@@ -349,10 +375,10 @@ def validate_report_contract(
     target_text_sha = _hash_bytes(texts[0].encode("utf-8"))
     _require(mlx_ref["text_sha256"] == mlx_plain["text_sha256"] == target_text_sha,
              "MLX reports: target text UTF-8 hash mismatch")
-    mlx_upstream = _obj(mlx_ref["raw"].get("upstream"), "mlx-ru-reference.upstream")
-    plain_upstream = _obj(mlx_plain["raw"].get("upstream"), "mlx-ru-no-reference.upstream")
-    for where, upstream in (("mlx-ru-reference.upstream", mlx_upstream),
-                            ("mlx-ru-no-reference.upstream", plain_upstream)):
+    mlx_upstream = _obj(mlx_ref["raw"].get("upstream"), f"{mlx_ref_name}.upstream")
+    plain_upstream = _obj(mlx_plain["raw"].get("upstream"), f"{mlx_plain_name}.upstream")
+    for where, upstream in ((f"{mlx_ref_name}.upstream", mlx_upstream),
+                            (f"{mlx_plain_name}.upstream", plain_upstream)):
         _require(isinstance(upstream.get("repository"), str) and upstream["repository"],
                  f"{where}.repository: expected non-empty path")
         _require(isinstance(upstream.get("revision"), str) and upstream["revision"],
@@ -361,8 +387,8 @@ def validate_report_contract(
                  f"{where}.worktree_clean: expected true")
     _require(mlx_upstream == plain_upstream,
              "MLX reports: pinned upstream source differs between reference conditions")
-    mlx_model = _obj(mlx_ref["raw"].get("model"), "mlx-ru-reference.model")
-    plain_model = _obj(mlx_plain["raw"].get("model"), "mlx-ru-no-reference.model")
+    mlx_model = _obj(mlx_ref["raw"].get("model"), f"{mlx_ref_name}.model")
+    plain_model = _obj(mlx_plain["raw"].get("model"), f"{mlx_plain_name}.model")
     _require(mlx_model == plain_model,
              "MLX reports: model identity differs between reference conditions")
     for key in ("repository", "revision", "config_sha256", "index_sha256"):
@@ -373,15 +399,15 @@ def validate_report_contract(
     _require(_int(mlx_model.get("num_codebooks"), "mlx model.num_codebooks") == 10 and
              _int(mlx_model.get("codebook_size"), "mlx model.codebook_size") == 4096,
              "mlx model: expected ten codebooks with 4096 entries")
-    for name, checked in (("mlx-ru-reference", mlx_ref), ("mlx-ru-no-reference", mlx_plain)):
+    for name, checked in ((mlx_ref_name, mlx_ref), (mlx_plain_name, mlx_plain)):
         _require(checked["tape"]["sha256"] == tape_sha256, f"{name}: random tape SHA-256 mismatch")
         _require(checked["tape"]["uniform_count"] == len(_array(_obj(tape, "tape").get("uniforms"), "tape.uniforms")),
                  f"{name}: random tape length differs from tape file")
         _require(checked["tape"]["uniform_count"] >= TAPE_PREFIX_COUNT,
                  f"{name}: random tape is shorter than the proved 512-frame prefix")
     proof_summary = validate_tape_proof(tape, tape_sha256, tape_proof)
-    for name, checked in (("native-ru-reference", native_ref),
-                          ("native-ru-no-reference", native_plain)):
+    for name, checked in ((native_ref_name, native_ref),
+                          (native_plain_name, native_plain)):
         _require(
             checked["sampler_inputs_sha256"] == proof_summary["prefix_f32_sha256"],
             f"{name}.sampler_inputs.sha256: does not match the proved first {TAPE_PREFIX_COUNT} GPU tape uniforms",
@@ -456,10 +482,10 @@ def validate_report_contract(
         _require(isinstance(first_failed_stage, str) and first_failed_stage,
                  "native encoder report.first_failed_stage: required when numeric gate fails")
 
-    mlx_voice = _obj(mlx_ref["raw"].get("reference_voice"), "mlx-ru-reference.reference_voice")
+    mlx_voice = _obj(mlx_ref["raw"].get("reference_voice"), f"{mlx_ref_name}.reference_voice")
     _require(mlx_voice.get("supplied") is True and mlx_voice.get("complete_conditioning") is True,
-             "mlx-ru-reference: reference voice was not fully supplied")
-    audio = _obj(mlx_voice.get("audio"), "mlx-ru-reference.reference_voice.audio")
+             f"{mlx_ref_name}: reference voice was not fully supplied")
+    audio = _obj(mlx_voice.get("audio"), f"{mlx_ref_name}.reference_voice.audio")
     _require(_sha(audio.get("wav_sha256"), "MLX reference WAV SHA") == fixture_wav_sha,
              "MLX reference WAV hash differs from fixture")
     _require(_sha(audio.get("pcm_sha256"), "MLX reference PCM SHA") ==
@@ -540,12 +566,7 @@ def validate_report_contract(
                 "numeric intermediate-stage gate is reported separately"
             ),
         },
-        "reports": {
-            "native-ru-reference": native_ref,
-            "native-ru-no-reference": native_plain,
-            "mlx-ru-reference": mlx_ref,
-            "mlx-ru-no-reference": mlx_plain,
-        },
+        "reports": dict(zip(names, (native_ref, native_plain, mlx_ref, mlx_plain), strict=True)),
     }
 
 
@@ -724,7 +745,9 @@ def _gpu_frame_comparison(native_frames: list[list[int]], mlx_frames: list[list[
     }
 
 
-def _prompt_file_check(manifest_path: Path, manifest: dict[str, Any], checked: dict[str, Any]) -> dict[str, Any]:
+def _prompt_file_check(
+    manifest_path: Path, manifest: dict[str, Any], checked: dict[str, Any], *, language: str = "ru",
+) -> dict[str, Any]:
     _require(isinstance(manifest.get("stage_files"), str) and manifest["stage_files"],
              "fixture manifest.stage_files: expected format description")
     stages = _array(manifest.get("stages"), "fixture manifest.stages")
@@ -762,7 +785,8 @@ def _prompt_file_check(manifest_path: Path, manifest: dict[str, Any], checked: d
     _require(_hash_file(prompt_path) == expected_sha, "fixture prompt file SHA-256 mismatch")
     _require(prompt_path.stat().st_size == prompt_meta["shape"][0] * prompt_meta["shape"][1] * 4,
              "fixture prompt file byte length differs from declared F32 shape")
-    actual_meta = checked["reports"]["mlx-ru-reference"]["raw"]["reference_voice"]["prompt_rows"]
+    mlx_ref_name = report_names(language)[2]
+    actual_meta = checked["reports"][mlx_ref_name]["raw"]["reference_voice"]["prompt_rows"]
     actual_path = Path(actual_meta["path"]).resolve()
     _require(actual_path.is_file(), f"MLX prompt export is missing: {actual_path}")
     actual_sha = _hash_file(actual_path)
@@ -785,14 +809,13 @@ def _prompt_file_check(manifest_path: Path, manifest: dict[str, Any], checked: d
 def _load_all_contracts(
     run_dir: Path, tape_path: Path, proof_path: Path,
     encoder_report_path: Path | None = None,
+    *, language: str = "ru",
 ) -> tuple[dict[str, Any], dict[str, Path], dict[str, str]]:
     reports: dict[str, Any] = {}
-    report_paths: dict[str, Path] = {}
+    paths = report_paths(run_dir, language)
     hashes: dict[str, str] = {}
-    for name in REPORT_NAMES:
-        report_path = run_dir / (f"{name}.wav.json" if name.startswith("native-") else f"{name}.json")
+    for name, report_path in paths.items():
         reports[name] = _load_json(report_path, name)
-        report_paths[name] = report_path
         hashes[str(report_path)] = _hash_file(report_path)
 
     fixture_path = run_dir / "mlx-encoder" / "manifest.json"
@@ -811,7 +834,7 @@ def _load_all_contracts(
     checked = validate_report_contract(
         reports, tape=tape, tape_sha256=tape_sha, tape_path=tape_path,
         tape_proof=proof, fixture_manifest=fixture_manifest,
-        native_encoder_report=native_encoder_report,
+        native_encoder_report=native_encoder_report, language=language,
     )
     manifest_sha = _hash_file(fixture_path)
     _require(_sha(native_encoder_report.get("manifest_sha256"),
@@ -837,29 +860,31 @@ def _load_all_contracts(
     _require(reference_pcm_sha == expected_pcm_sha,
              "reference input PCM payload SHA-256 differs from fixture")
     checked["reference_audio_file"] = reference_wav_meta
-    prompt_gate = _prompt_file_check(fixture_path, fixture_manifest, checked)
+    prompt_gate = _prompt_file_check(fixture_path, fixture_manifest, checked, language=language)
     checked["prompt_gate"] = prompt_gate
     hashes[str(source_path)] = checked["tape_production_source"]["sha256"]
     hashes[str(reference_wav_path.resolve())] = reference_wav_meta["wav_sha256"]
     hashes[prompt_gate["fixture_path"]] = prompt_gate["sha256"]
     hashes[prompt_gate["actual_mlx_prompt_path"]] = prompt_gate["sha256"]
-    return checked, report_paths, hashes
+    return checked, paths, hashes
 
 
 def build_report(run_dir: Path, random_tape: Path, tape_proof: Path, *, output: Path,
-                 encoder_report_path: Path | None = None) -> dict[str, Any]:
+                 encoder_report_path: Path | None = None, language: str = "ru") -> dict[str, Any]:
     run_dir = run_dir.resolve()
     random_tape = random_tape.resolve()
     tape_proof = tape_proof.resolve()
+    names = report_names(language)
+    native_ref_name, native_plain_name, mlx_ref_name, mlx_plain_name = names
     checked, report_paths, hashes = _load_all_contracts(
-        run_dir, random_tape, tape_proof, encoder_report_path
+        run_dir, random_tape, tape_proof, encoder_report_path, language=language
     )
-    report_docs = {name: checked["reports"][name]["raw"] for name in REPORT_NAMES}
+    report_docs = {name: checked["reports"][name]["raw"] for name in names}
 
-    wav_paths = {name: run_dir / f"{name}.wav" for name in REPORT_NAMES}
+    wav_paths = {name: run_dir / f"{name}.wav" for name in names}
     wav_meta: dict[str, dict[str, Any]] = {}
     pcm_data: dict[str, bytes] = {}
-    for name in REPORT_NAMES:
+    for name in names:
         if name.startswith("native"):
             report_info = checked["reports"][name]["raw"]
             expected_samples = report_info["samples"]
@@ -887,7 +912,7 @@ def build_report(run_dir: Path, random_tape: Path, tape_proof: Path, *, output: 
     _require("gpu" in str(device).lower(), f"expected MLX GPU device, found {device}")
 
     waveform_summary: dict[str, Any] = {}
-    for name in REPORT_NAMES:
+    for name in names:
         metrics = _gpu_waveform_metrics(pcm_data[name], wav_meta[name]["samples"], mx, np)
         metrics["quiet_windows"] = summarize_quiet_runs(
             metrics["window_peaks_pcm16"], metrics["window_rms_pcm16"],
@@ -896,10 +921,10 @@ def build_report(run_dir: Path, random_tape: Path, tape_proof: Path, *, output: 
         metrics["wav"] = wav_meta[name]
         waveform_summary[name] = metrics
 
-    native_ref = checked["reports"]["native-ru-reference"]
-    native_plain = checked["reports"]["native-ru-no-reference"]
-    mlx_ref = checked["reports"]["mlx-ru-reference"]
-    mlx_plain = checked["reports"]["mlx-ru-no-reference"]
+    native_ref = checked["reports"][native_ref_name]
+    native_plain = checked["reports"][native_plain_name]
+    mlx_ref = checked["reports"][mlx_ref_name]
+    mlx_plain = checked["reports"][mlx_plain_name]
     pair_comparisons = {
         "reference": _gpu_frame_comparison(native_ref["frames"], mlx_ref["frames"], mx, np),
         "no_reference": _gpu_frame_comparison(native_plain["frames"], mlx_plain["frames"], mx, np),
@@ -907,15 +932,15 @@ def build_report(run_dir: Path, random_tape: Path, tape_proof: Path, *, output: 
     prompt_ids_match = native_plain["prompt_ids"] == mlx_plain["prompt_ids"]
 
     read_ledger = {
-        "native_reference": report_docs["native-ru-reference"].get("resident_readbacks"),
-        "native_no_reference": report_docs["native-ru-no-reference"].get("resident_readbacks"),
-        "mlx_reference": report_docs["mlx-ru-reference"].get("runtime", {}).get("host_readback_scope"),
-        "mlx_no_reference": report_docs["mlx-ru-no-reference"].get("runtime", {}).get("host_readback_scope"),
+        "native_reference": report_docs[native_ref_name].get("resident_readbacks"),
+        "native_no_reference": report_docs[native_plain_name].get("resident_readbacks"),
+        "mlx_reference": report_docs[mlx_ref_name].get("runtime", {}).get("host_readback_scope"),
+        "mlx_no_reference": report_docs[mlx_plain_name].get("runtime", {}).get("host_readback_scope"),
     }
     phases = {
         name: report_docs[name].get("phase_seconds") if name.startswith("native")
         else report_docs[name].get("timings_seconds")
-        for name in REPORT_NAMES
+        for name in names
     }
     output_report = {
         "format": REPORT_FORMAT,
@@ -1004,6 +1029,10 @@ def build_report(run_dir: Path, random_tape: Path, tape_proof: Path, *, output: 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--language", choices=LANGUAGES, default="ru",
+        help="select the report filename namespace (default: ru)",
+    )
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--random-tape", type=Path, required=True)
     parser.add_argument("--tape-proof", type=Path, required=True)
@@ -1014,7 +1043,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = build_report(
             args.run_dir, args.random_tape, args.tape_proof,
-            output=args.output, encoder_report_path=args.encoder_report,
+            output=args.output, encoder_report_path=args.encoder_report, language=args.language,
         )
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

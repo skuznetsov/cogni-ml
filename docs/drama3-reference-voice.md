@@ -22,6 +22,27 @@ Unsupported layouts/rates, malformed RIFF chunks, a partial reference pair,
 and prompt/cache overflow fail before weight loading. The CLI does not resample.
 The existing no-reference invocation remains available.
 
+## Using your own voice
+
+Record a short, clean excerpt of your normal speaking voice, without music,
+overlapping speakers or effects. Export it within the input boundary above:
+mono PCM16 WAV at 44.1 kHz, up to ten seconds. Supply the exact words spoken in
+that excerpt as `--reference-text`; `--text` contains the new utterance to
+generate. The example command above applies directly to a personal recording.
+
+This path conditions the model in context using reference audio codes and their
+transcript. It does not train weights or save a standalone speaker embedding.
+Reuse the same reference pair for subsequent requests. Voice resemblance and
+style consistency require listening evaluation; exact encoder/prompt parity
+alone does not establish them. The experiment below uses a public reference,
+not a recording of the user.
+
+The subsequent [bilingual whisper-continuation experiment](drama3-whisper-reference.md)
+reuses this public reference with matched sampler inputs. The Russian reference
+condition has no quiet run of at least one second and ASR includes the requested
+continuation; English quiet tails remain. These are bounded measurements,
+without a general silence-fix claim.
+
 ## Device boundary
 
 The host reads one bounded WAV snapshot, hashes that snapshot, widens exact

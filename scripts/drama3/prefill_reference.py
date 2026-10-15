@@ -207,6 +207,67 @@ def _model_paths(checkpoint):
     return model_dir, records, config, sorted(shards)
 
 
+def _validate_generation_termination(report, config):
+    termination = _object(report.get("termination"), "report termination")
+    status = termination.get("status")
+    eos_detected = termination.get("eos_detected")
+    frame_cap_reached = termination.get("frame_cap_reached")
+
+    if status == "eos":
+        if eos_detected is not True or frame_cap_reached is not False:
+            _fail("EOS termination status and flags are inconsistent")
+        return termination, "eos_terminated"
+
+    if status != "max_frames":
+        _fail("report termination status must be eos or max_frames")
+    if eos_detected is not False or frame_cap_reached is not True:
+        _fail("frame-cap termination status and flags are inconsistent")
+
+    iterations = _integer(termination.get("generation_iterations"),
+                          "termination generation_iterations")
+    returned_frames = _integer(termination.get("returned_frames"),
+                               "termination returned_frames")
+    max_frames = _integer(termination.get("max_frames"), "termination max_frames")
+    if min(iterations, returned_frames, max_frames) < 1:
+        _fail("frame-cap counts must be positive integers")
+    if iterations != max_frames or returned_frames != max_frames:
+        _fail("frame-cap iterations, returned frames, and cap must agree exactly")
+
+    settings = _object(report.get("settings"), "report settings")
+    settings_cap = _integer(settings.get("max_frames"), "settings max_frames")
+    if settings_cap != max_frames:
+        _fail("settings max_frames does not match the termination cap")
+
+    last_main = _integer(termination.get("last_sampled_main_token"),
+                         "termination last_sampled_main_token")
+    if last_main == config.get("eos_token_id"):
+        _fail("frame-cap termination cannot report EOS as the last sampled main token")
+
+    output = _object(report.get("output"), "report output")
+    expected_codes_shape = [10, returned_frames]
+    expected_frames_shape = [returned_frames, 11]
+    for key, expected in (("codes_shape", expected_codes_shape),
+                          ("frame_shape", expected_frames_shape)):
+        shape = output.get(key)
+        if (not isinstance(shape, list) or any(type(dim) is not int for dim in shape)
+                or shape != expected):
+            _fail(f"output {key} does not match the frame-cap counts")
+
+    frames = output.get("frames")
+    if (not isinstance(frames, list) or len(frames) != returned_frames
+            or any(not isinstance(row, list) or len(row) != 11 for row in frames)):
+        _fail("output frames do not match the frame-cap geometry")
+    codes = output.get("codes")
+    if (not isinstance(codes, list) or len(codes) != 10
+            or any(not isinstance(book, list) or len(book) != returned_frames for book in codes)):
+        _fail("output codes do not match the frame-cap geometry")
+    samples = _integer(output.get("samples"), "output samples")
+    if samples != returned_frames * 2048:
+        _fail("output sample count does not match the frame-cap geometry")
+
+    return termination, "incomplete_at_frame_cap"
+
+
 def _validate_report(report, report_path, model_dir, records, config, shards):
     if report.get("format") != "drama3-mlx-control-v1":
         _fail("report format is not drama3-mlx-control-v1")
@@ -295,10 +356,7 @@ def _validate_report(report, report_path, model_dir, records, config, shards):
     if voice.get("transcript_utf8_sha256") != transcript_hash:
         _fail("report transcript UTF-8 hash does not match its text")
 
-    termination = _object(report.get("termination"), "report termination")
-    if (termination.get("status") != "eos" or termination.get("eos_detected") is not True
-            or termination.get("frame_cap_reached") is not False):
-        _fail("report must show an EOS-completed run below the frame cap")
+    termination, source_completeness = _validate_generation_termination(report, config)
 
     settings = _object(report.get("settings"), "report settings")
     capture_steps = settings.get("capture_steps")
@@ -356,6 +414,8 @@ def _validate_report(report, report_path, model_dir, records, config, shards):
         "transcript_sha256": transcript_hash,
         "capture_path": capture_path,
         "capture_sha256": capture_digest,
+        "termination": termination,
+        "source_utterance_completeness": source_completeness,
         "source_identity": {
             "repository": upstream_repository,
             "revision": UPSTREAM_REVISION,
@@ -442,6 +502,8 @@ def export_prefill_reference(report, checkpoint_manifest, output_dir):
         "text_sha256": identity["text_sha256"],
         "wav_sha256": identity["wav_sha256"],
         "transcript_sha256": identity["transcript_sha256"],
+        "termination": identity["termination"],
+        "source_utterance_completeness": identity["source_utterance_completeness"],
         "model_files": [records[name] for name in sorted(records)],
         "checkpoint_manifest": str(checkpoint_path),
         "checkpoint_manifest_sha256": checkpoint_digest,
@@ -458,7 +520,10 @@ def export_prefill_reference(report, checkpoint_manifest, output_dir):
         "capture": str(identity["capture_path"]),
         "capture_sha256": identity["capture_sha256"],
         "stages": stage_entries,
-        "scope": "Repacked terminal upstream prefill diagnostic arrays; no native activations read",
+        "scope": (
+            "Repacked terminal upstream prefill diagnostic arrays; no native activations read. "
+            "A frame-capped source remains an incomplete utterance, not an EOS-terminated run."
+        ),
     }
 
     created_files = []

@@ -172,6 +172,26 @@ class PrefillReferenceSpec(unittest.TestCase):
     def _write_report(self):
         self.report_path.write_text(json.dumps(self.report), encoding="utf-8")
 
+    def _set_consistent_frame_cap_report(self):
+        self.report["settings"]["max_frames"] = 2
+        self.report["termination"] = {
+            "status": "max_frames",
+            "eos_detected": False,
+            "last_sampled_main_token": 248436,
+            "generation_iterations": 2,
+            "returned_frames": 2,
+            "max_frames": 2,
+            "frame_cap_reached": True,
+            "reason_source": "terminal scalar from final sample_main result",
+        }
+        self.report["output"] = {
+            "codes": [[0, 1] for _ in range(10)],
+            "codes_shape": [10, 2],
+            "frames": [[248100, *([0] * 10)], [248101, *([1] * 10)]],
+            "frame_shape": [2, 11],
+            "samples": 4096,
+        }
+
     def _export(self):
         return prefill_reference.export_prefill_reference(
             self.report_path, self.checkpoint_path, self.output_dir
@@ -195,6 +215,8 @@ class PrefillReferenceSpec(unittest.TestCase):
             [stage["name"] for stage in manifest["stages"]],
             ["prompt.backbone.hidden", "prompt.main_logits"],
         )
+        self.assertEqual(manifest["termination"], self.report["termination"])
+        self.assertEqual(manifest["source_utterance_completeness"], "eos_terminated")
         for stage, values in zip(manifest["stages"], [self.hidden, self.main]):
             raw = (self.output_dir / stage["file"]).read_bytes()
             expected = np.asarray(values, dtype="<f4", order="C").tobytes(order="C")
@@ -203,6 +225,49 @@ class PrefillReferenceSpec(unittest.TestCase):
             self.assertEqual(stage["capture_key"],
                              "step_00000_prompt_backbone_hidden" if values.shape[1] == 2048
                              else "step_00000_main")
+
+    def test_exports_consistent_frame_capped_run_as_incomplete_utterance(self):
+        self._set_consistent_frame_cap_report()
+        self._write_report()
+
+        manifest_path = self._export()
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["termination"], self.report["termination"])
+        self.assertEqual(manifest["source_utterance_completeness"], "incomplete_at_frame_cap")
+
+    def test_rejects_inconsistent_eos_termination_flags(self):
+        for key, value in (("eos_detected", False), ("frame_cap_reached", True)):
+            with self.subTest(key=key):
+                self.report["termination"][key] = value
+                self._write_report()
+                with self.assertRaises(prefill_reference.ExportError):
+                    self._export()
+                self.assertFalse(self.output_dir.exists())
+                self.report = self._report()
+
+    def test_rejects_inconsistent_or_noninteger_frame_cap_metadata(self):
+        mutations = (
+            ("status", lambda report: report["termination"].update(status="eos")),
+            ("eos flag", lambda report: report["termination"].update(eos_detected=True)),
+            ("cap flag", lambda report: report["termination"].update(frame_cap_reached=False)),
+            ("generation iterations type", lambda report: report["termination"].update(generation_iterations=2.0)),
+            ("generation count", lambda report: report["termination"].update(generation_iterations=1)),
+            ("returned count", lambda report: report["termination"].update(returned_frames=1)),
+            ("cap type", lambda report: report["termination"].update(max_frames=True)),
+            ("settings cap", lambda report: report["settings"].update(max_frames=3)),
+            ("shape type", lambda report: report["output"].update(codes_shape=[10, True])),
+            ("frame rows", lambda report: report["output"].update(frames=report["output"]["frames"][:1])),
+            ("sample count", lambda report: report["output"].update(samples=4095)),
+            ("terminal EOS token", lambda report: report["termination"].update(last_sampled_main_token=248046)),
+        )
+        for label, mutate in mutations:
+            with self.subTest(case=label):
+                self._set_consistent_frame_cap_report()
+                mutate(self.report)
+                self._write_report()
+                with self.assertRaises(prefill_reference.ExportError):
+                    self._export()
+                self.assertFalse(self.output_dir.exists())
 
     def test_cli_accepts_explicit_report_checkpoint_and_output_flags(self):
         result = subprocess.run(

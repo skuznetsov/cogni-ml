@@ -29399,3 +29399,48 @@ Refresh after source/toolchain/device/model/workload changes.
   or bound listening-evidence drift. Authority: sequential run_safe, reserve15%,
   unrelated processes untouched, local commit/no push. Revert docs/index for
   rollback; no production behavior changed.
+
+### Continuation 2026-10-15 — bilingual whisper with native reference input
+
+- Base `7ad03c3c`: native reference audio/transcript support is now present;
+  the older voice-control audit's missing-native-reference statement is
+  historical. Four native and four pinned MLX WAVs repeat the exact historical
+  RU whisper/laugh text and a new EN translation, fixed public 3.904s reference
+  pair versus none, seed1/cap512. Actual 5632-F32 sampler input digests match
+  the native producer probe and common MLX prefix, not merely seed equality.
+- RU-reference all347 frames/11IDs exact, both EOS, no >=1s quiet run; GPU ASR
+  recognizes the requested continuation in both. RU-no-reference quiet from
+  9.5s, first code fork448 after quiet onset; native489EOS versus MLX512cap.
+  EN-no-reference all390 frames exact/bothEOS, quiet7–18s; EN-reference first
+  codebook fork28/main30, both512cap, quiet7.5–23.5s. Full-window ranges exclude
+  qualifying partial final windows. Reference-as-universal-remedy refuted;
+  native token divergence unnecessary for these quiet onsets. No language-only,
+  audio-only, unique-cause, laughter-delivery or voice-identity claim.
+- Fresh102 encoder/VQ boundaries, exact850 reference IDs/full prompt and
+  first-prefill pointwise gates pass for each language at depths0/2; metrics
+  identical cross-depth. Largest encoder maxAbs0.00062561035; all old tolerances
+  unchanged. Reused binaries freshly source/shader/checkpoint-bound, not rebuilt.
+  No intermediate activation/code host handoff or added drain; existing EOS/
+  control reads, CogniGraph waits, initial uploads and terminal diagnostics remain.
+- Unprompted GPU Whisper on8 full WAVs plus source-positive and exact-zero
+  negative: EN recognizes only pre-close text; RU-no-ref adds unrequested words
+  with an out-of-clip timestamp. Digitalzero says "Thank you." ASR/segment times
+  are fallible observations, not word/speech certification. GPU normalization/
+  resampling, no source-waveform CPU DSP;5 synthetic GPU resampler oracle cases
+  pass fixed2e-5/2e-6. Initial reserved-Metal-identifier compile failure retained
+  and narrowly resolved by exact-source-hash-checked rename; no threshold change.
+- Analyzer adds EN filename namespace and accepts actual max_frames status
+  with strict EOS/cap/count/tape/geometry checks. Step0 exporter admits strictly
+  validated capped captures while preserving raw termination and marking them
+  incomplete.51 CPU contracts pass. Report `docs/drama3-whisper-reference.md`,
+  curated `.landmark/evidence/drama3-whisper-reference.json`, raw receipts/WAVs
+  in local `whisper-reference-20261015/`. Correlated mini-Quad ROBUST for narrow
+  measurements; full generation/decoder numeric parity and silence cause open.
+- Next discriminator: replay common EN-reference prefix and compare tower/
+  codebook decision28 on identical uniforms, then main30. Separate causal probe:
+  vary only whisper-cue placement/syntax on fixed conditioning. Return to
+  MoE39/DAC frontiers without attributing silence absent a connecting test.
+  Refresh on source/checkpoint/input/tape/reference/artifact/runtime/device/OS/
+  gate or bound listening-evidence drift. Authority: serial run_safe, reserve15%,
+  unrelated processes untouched, local atomic commit/no push. Rollback tooling/
+  report commit; no production inference arithmetic changed.
