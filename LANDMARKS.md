@@ -29145,3 +29145,27 @@ Refresh after source/toolchain/device/model/workload changes.
   precision/runtime/compiler/device/OS/artifact drift. Standing authority:
   sequential run_safe runs, sampled reserve15%, profiling unset, unrelated
   processes untouched, no push.
+
+### Continuation 2026-10-15 — DRAMA-3 listening feedback and decoder clock
+
+- At base `f908862d`, the user confirms that both selected native seed1 and
+  F32 MLX clips lose all speech after the whispered phrase. The native whisper
+  sounds faster and higher to the user; no fundamental-frequency measurement
+  or word alignment is claimed. Other reference clips remain unlistened.
+- Read-only PCM analysis finds last RMS>32 windows ending at9.02 s native and
+  10.36 s F32 MLX, using20 ms windows. All three selected/same-code WAVs are
+  mono PCM16/44100 Hz with2048 samples per code frame. Same-code lengths match
+  exactly and PCM delta max7/RMS0.168956, excluding a substantial decoder-clock
+  shift for this pair while retaining the failed one-LSB codec gate.
+- The independent runs diverge at main token0 (250521 vs248764), with no
+  identical frame prefix. Text/87 prompt IDs/explicit settings match; RNGs
+  differ, so this comparison cannot isolate numerical error or explain pitch.
+- A NumPy activity probe through run_safe reserve15% and a separate stdlib
+  calculation agree on all three activity counts/endpoints and input hashes.
+  Local report: `listening-feedback-20261015/analysis.json`, SHA256
+  44f78b93d5cb1884595e5a48ce85040c5a5f8bafc8333e462794b9b224470751.
+  Scope is existing artifacts, not a fresh model run or speech/pitch proof.
+- Root cause remains open; generation next needs common-prefix GPU sampling
+  diagnostics with equal precision and aligned sampling inputs. Original MoE39
+  hidden[33] return frontier remains unchanged. See docs/drama3-native-frontier.md.
+  Refresh on artifact drift; no tolerance/default/precision/performance promotion.

@@ -10,6 +10,48 @@ reference and fixture tools only, never the native inference implementation.
 The pinned MLX upstream is a community port; its source-path controls below
 do not establish agreement with the original Fish Audio implementation.
 
+## Listening feedback and decoder clock — 2026-10-15
+
+After listening to `generate-native-seed1.wav` and `generate-f32-control.wav`,
+the user reports that **both stop delivering speech after the whispered
+phrase**. The user also hears the native whisper as faster and higher. This
+closes the earlier listening question for these two files as a negative
+full-text-delivery result; the other reference controls have not received
+the same listening check. Pitch remains a perceptual observation, not a
+measured fundamental-frequency difference.
+
+Read-only analysis at base `f908862d` finds that all three saved WAVs, including
+`upstream-codec.wav` decoded from the native codes, are mono PCM16 at 44,100 Hz
+with exactly 2,048 samples per code frame. The same-code pair has identical
+1,001,472-sample lengths and maximum/RMS differences of 7/0.168956 PCM16 units.
+This excludes a substantial decoder or declared WAV clock change for that
+pair, while retaining the failed one-LSB codec gate. It does not establish
+general codec parity or rule out a separate playback-device issue.
+
+With 20 ms windows and RMS above 32 PCM16 units, the last active window ends
+at 9.02 s in native and 10.36 s in the independently sampled F32 MLX clip.
+The roughly 1.34 s difference measures signal activity, not word timestamps,
+uniform time scaling, or speech rate. Native and MLX choose different main
+tokens in frame 0: 250521 versus 248764. There is no identical generated
+frame prefix. Text, all 87 prompt IDs and explicit seed/temperature/top-k/top-p
+match, but RNG implementations differ and per-step draws were neither
+aligned nor captured. These files cannot isolate numerical error as the
+cause of the perceived voice or timing difference.
+
+The analysis and hash-bound input/WAV identities are local in
+`~/.cache/cogni-ml/drama3-runs/listening-feedback-20261015/analysis.json`
+(SHA-256 `44f78b93d5cb1884595e5a48ce85040c5a5f8bafc8333e462794b9b224470751`).
+The NumPy probe ran through `scripts/run_safe.sh` with a 15% reserve; a
+separate standard-library PCM calculation reproduced the three RMS-window
+counts and endpoints, and checked hashes, prompt IDs and settings. A direct
+check also matches all ten codebook columns in the saved MLX codec input to
+the 489 native frames, and checks the two WAV headers for equality. This
+inspection reuses the earlier generated artifacts; it is not a new model run.
+The missing continuation and its root cause remain open. Refresh these
+file-specific findings on artifact drift. The next generation discriminator
+still needs a common prefix, equal reference precision and explicitly aligned
+sampling inputs, rather than equal integer seeds alone.
+
 ## Thirty-word whisper/laughter measurement — 2026-10-15
 
 At base `a21ee640`, the native resident path was timed on Apple M2 Max / 64 GiB,
