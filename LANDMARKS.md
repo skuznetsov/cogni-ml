@@ -28892,3 +28892,50 @@ Refresh after source/toolchain/device/model/workload changes.
   reference, assets, precision, compiler, input, device/OS or artifact drift;
   timings additionally decay with host state. Keep the 15% sampled reserve
   and never modify unrelated workloads to obtain a quiet host.
+
+### Continuation 2026-10-14 — opt-in DRAMA-3 dense backbone kernels
+
+- `DRAMA3_BACKBONE_DENSE_REDUCTION=simd` applies only to qkv/z/b/a in the
+  30 linear-attention blocks. Default/rollback stays `tree`; generic dense
+  selection independently defaults to `tree`. The checkpoint's 120 affected
+  tensors are BF16 (1,517,813,760 bytes), all at even mapped offsets. The
+  candidate uses aligned ushort loads plus a guarded 32-lane SIMD shuffle
+  tree. FP32 product/add order, tensor decoding, device allocations, mapped
+  owners and queue scheduling are preserved. Non-32-lane fallback is reviewed
+  in source but unexercised on this M2 Max.
+- Three real normalized upstream inputs, seven AB/BA pairs each: paired median
+  speedups qkv 1.068–1.083x, z 1.095–1.109x, b 1.587–1.635x,
+  a 1.578–1.611x. Tree/tree control medians 0.994–1.002x. Each invocation
+  verifies 1,474,560 elements bitwise, queues two buffers before final drain,
+  has zero intervening waits/reads and drains all leases. Shuffle-only was
+  rejected for negligible large-projection and whole-generation benefit.
+- Standalone layer-0 projections pass pinned MLX-audio F32 replay at unchanged
+  atol 6e-5 / rtol 3e-4: 37,056 values, max abs error 3.815e-6. Full native
+  tree/SIMD traces are bitwise identical (243 tensors / 497,664 F32 values).
+  All 14 full-generation runs retain identical WAV/codes/EOS/prompt and
+  readback counts (152 control / 140,012 terminal bytes), with per-depth
+  submissions/waits 73 at depth2 and 90 at depth0. Final release specs:
+  15 examples, no failures/pending; 14 Python tests pass.
+- Full GPU command sums improve 0.76% at depth2 (four pairs) and 2.91% at
+  depth0 (two pairs). Process medians are +2.4% and -9.6% respectively on a
+  shared host; general latency improvement is unproven. A warm-driver
+  diagnostic finds only 0.263 ms setup for the extra SIMD pipeline, not a
+  cold-start guarantee. Keep the sampled memory reserve 15%; no foreign
+  process manipulation or cache-control claim.
+- Default-promotion frontier remains open: both native arms fail the refreshed
+  full MLX tolerance gate at exactly row1/layer39 hidden[33], 0.921100616 vs
+  0.921916962 (abs 8.16345e-4; allowed 3.36575e-4). Upstream without dense
+  instrumentation is bitwise identical to the captured reference. The first
+  failing boundary is the final MoE/residual, not an altered dense output.
+  Different expert order/reduction is a hypothesis only. Next falsifier:
+  capture exact router logits, expert IDs/order, weighted outputs and partial
+  sums for row1/layer39 on the same normalized input; preserve tolerances and
+  native precision. Do not promote the default from local kernel speed alone.
+- Adversary ROBUST for the bounded opt-in change and measurements; VULNERABLE
+  for default promotion/full upstream parity and general process speedup.
+  Canonical evidence: `.landmark/evidence/drama3-dense-backbone.json` and
+  `docs/drama3-native-frontier.md`; local runs `dense-20261014/`. Reference
+  MLX-audio revision e7488935ec2ebfafd38ef2b58e290d79f3d05dc7, MLX 0.31.1,
+  checkpoint revision 5331ab509359c0e4a7e353a19e255ddf3e8152a8. Refresh on
+  source/assets/reference/runtime/compiler/input/device/OS/artifact drift;
+  timings also decay with host/cache state. MAP_SHARED remains default-off.

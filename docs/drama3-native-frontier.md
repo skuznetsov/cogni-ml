@@ -8,6 +8,159 @@ Goal: one short, single-speaker text prompt to a mono 44.1 kHz WAV, with all
 inference computations in Crystal/native libraries. Python/MLX/PyTorch are
 reference and fixture tools only, never the native inference implementation.
 
+## Dense backbone projection experiment — 2026-10-14
+
+Status: opt-in candidate implemented; default promotion withheld. Measure the
+actual checkpoint shapes of the shared-input `qkv/z/b/a` projections before
+promoting an optimization. The baseline dense
+kernel uses 64 lanes, lane-strided FP32 accumulation and a fixed binary tree
+with seven threadgroup barriers. Candidate reductions must preserve every
+lane's product/add order and that tree, raw BF16/F16/F32 decoding, GPU input
+and output allocations, mapped-weight ownership, and command scheduling.
+
+Risk: CAUTION. The strongest failure is a SIMD reduction that changes the
+addition tree or assumes a SIMD width without a guard. First require bitwise
+baseline/candidate equality on cancellation, tails, unaligned offsets and real
+checkpoint shapes. Measure paired AB/BA GPU command intervals with preuploaded
+inputs, depth two and only the final pair drain; reject additional submissions,
+waits or reads. Retain the baseline selector for rollback. Promotion requires
+repeatable projection improvement, unchanged full-generation WAV/codes/EOS and
+readback/graph ledger, and refreshed pinned upstream intermediate comparisons.
+The missing temporary reference was reconstructed from pinned MLX-audio
+revision `e7488935ec2ebfafd38ef2b58e290d79f3d05dc7`, with MLX 0.31.1.
+No new quantization or precision path is admitted. MAP_SHARED remains
+default-off and outside this experiment.
+
+DoD: release-build and run `examples/drama3_dense_benchmark.cr`, qualify its
+paired timeline/counter/output records, execute the focused dense and resident
+graph specs, replay backbone intermediates against pinned MLX-audio and compare
+matched baseline/candidate full generation. Expected signal: bitwise native
+outputs, unchanged upstream tolerances, zero intermediate waits/readbacks, and
+a measured improvement without a material full-pipeline regression. If the
+candidate fails, keep the baseline and pivot using the measured discriminator.
+
+The shuffle-only candidate did not improve whole-generation GPU time. The
+bounded follow-up uses an aligned BF16 `ushort` load in the candidate only,
+guarded by dtype and even byte offset; odd offsets and other dtypes retain the
+original decoder. Before the final full-generation matrix, the admission rule
+is: all three real input rows must show a paired median kernel speedup above
+1.03 for each projection, native bitwise/upstream gates must pass, and matched
+full-generation GPU median candidate/baseline ratios must be at most 1.01 at
+depths zero and two. Host wall time remains descriptive on this shared host.
+
+The checkpoint header audit finds all 120 projections across 30 linear blocks
+are dense BF16, have even mapped byte offsets, and occupy 1,517,813,760 bytes.
+The layer-0 shapes are `qkv=[8192,2048]`, `z=[4096,2048]`, and
+`b/a=[32,2048]`. The candidate keeps FP32 products/accumulation and the exact
+64-lane summation tree. With 32-lane SIMD groups, one threadgroup barrier
+publishes partials and shuffle instructions implement the remaining tree.
+Other SIMD widths retain the shared-memory tree. Only aligned BF16 uses the
+16-bit load; other dtypes and odd byte offsets retain the original decoder.
+The non-32-lane branch is source-reviewed, not exercised on this M2 Max.
+
+Three successive real prompt embeddings (token IDs `248045,8678,198`) were
+replayed through upstream layer-0 normalization to obtain the timed inputs.
+Each input has two warmups and seven alternating AB/BA measured pairs per
+projection. Each arm repeats `qkv/z` eight times and `b/a` 1024 times in one
+command buffer. Both buffers submit at graph depth two before one final pair
+drain. GPU times are command-buffer timestamps, amortized over calls, not
+isolated dispatch latency. These are hot, repeated-input microbenchmarks.
+
+| Projection | Row 0 paired median speedup | Row 1 | Row 2 |
+| --- | ---: | ---: | ---: |
+| qkv | 1.083x | 1.082x | 1.068x |
+| z | 1.101x | 1.095x | 1.109x |
+| b | 1.591x | 1.587x | 1.635x |
+| a | 1.581x | 1.611x | 1.578x |
+
+Every measured pair improves in this bounded sample. A separate tree/tree
+control gives paired medians 0.994, 0.997, 0.998 and 1.002 respectively. All
+1,474,560 output elements per invocation match bitwise after drain. Each
+invocation has 72 command buffers, maximum pending two, final pending/retained
+zero, zero intermediate waits/readbacks, and 11,796,480 terminal verification
+bytes. There are no new production submissions, completion boundaries,
+readbacks, copies, scratch allocations or cache ownership rules.
+
+The standalone upstream comparison passes all 37,056 values across three rows
+and four projections at the unchanged `atol=6e-5, rtol=3e-4`. Maximum absolute
+errors are `qkv=3.815e-6`, `z=2.027e-6`, `b/a=9.537e-7`; tree/SIMD match
+bitwise. The reference promotes checkpoint floating tensors exactly to F32,
+preserving packed integers, and executes the pinned MLX model. This is not a
+claim of bitwise equality with stock BF16 execution. Fixtures bind input bytes,
+source/checkpoint revisions, selected tensor hash and shape/dtype metadata;
+they do not authenticate edited logs or hash the entire checkpoint.
+
+Full native backbone traces also match bitwise: 243 tensors, 497,664 F32
+values. However, the refreshed full upstream comparison fails for **both**
+tree and SIMD at `backbone.row1.layers.39.hidden[33]`: MLX `0.921916962`,
+native `0.921100616`, absolute error `8.164e-4`, allowed `3.366e-4`.
+This is the sole out-of-tolerance coordinate. A fresh upstream run without
+dense capture reproduces all 243 reference tensors exactly, excluding the
+capture instrumentation as the cause. The discrepancy is downstream of the
+last attention residual, in the existing MoE/residual path. Different expert
+ordering/reduction is a source-supported hypothesis, not an established root
+cause. Next discriminator: exact row1/layer39 router logits, expert IDs/order,
+weighted expert outputs and partial sums. Do not widen the tolerance.
+
+`DRAMA3_BACKBONE_DENSE_REDUCTION=simd` selects the candidate only for these
+four projections in all linear blocks; rollback/default is `tree`. Generic
+`DRAMA3_DENSE_REDUCTION` independently defaults to `tree`. The generation JSON
+records the frozen, actual selectors, preventing a vacuous two-baseline timing
+comparison. Default promotion remains blocked by the full upstream gate even
+if the isolated performance and native bitwise gates pass. The existing
+mapping-promotion frontier remains separate and default-off.
+
+Matched release full generation (`Hello.`, seed zero, max 128 frames,
+MAP_PRIVATE, profiling off, GPU timeline on) completed two warmups, four
+AB/BA pairs at depth two and two at depth zero. Median paired
+candidate/baseline ratios are:
+
+| Graph depth | Pairs | GPU command sum | Inference elapsed | Whole process |
+| --- | ---: | ---: | ---: | ---: |
+| 2 | 4 | 0.99239 | 1.01218 | 1.02404 |
+| 0 | 2 | 0.97089 | 0.88189 | 0.90373 |
+
+The GPU non-regression gate passes, but these whole-process samples do not
+establish a general latency improvement: depth two is 2.4% slower in process
+time on the shared host. Host interference and pipeline setup have not been
+separated. Do not equate an isolated 1.6x tiny-projection speedup with a
+comparable whole-model gain. Earlier shuffle-only depth-two GPU ratios had
+median 1.00402 and did not justify promotion.
+
+All 14 wide-candidate runs reproduce the same 23 prompt IDs, 17 frame/code
+rows, EOS stop, 34,816 waveform samples and WAV SHA-256
+`3bcc331bd234ba6a3950d2122215bdc663aa4f7427a112e8f8df108085908a49`.
+Both arms retain 152 control and 140,012 terminal readback bytes. Depth two
+uses 73 submissions/completions/waits and maximum pending two; depth zero uses
+90 and maximum pending zero. Every run drains pending/retained resources.
+The initial harness incorrectly required equal submission counts across
+depths; that rejected depth-zero run was excluded and the corrected matrix
+checks the established per-depth counts and the actual selectors.
+
+The final release GPU suite passes 15 examples covering dense BF16/F16/F32,
+32 mapped dtype/width/offset fixtures, sliced input, strong cancellation,
+selector/context ownership, resident operations and graph resource lifetimes.
+Fourteen Python tests include negative controls for timing/counter/stream mutations,
+stale fixtures, wrong model/revision/weight metadata, wrong candidate bits,
+both native arms exceeding upstream tolerance, and attempted tolerance
+widening. Adversary: ROBUST for bounded opt-in arithmetic, device ownership
+and measured results; VULNERABLE for default promotion and general process
+speedup. Correlated agent source reviews support, but do not replace, the
+executed GPU and pinned-reference checks.
+
+A separate warm-driver pipeline diagnostic records 0.263 ms total library,
+function and pipeline creation for `dr3_dense_simd`; this small warm setup cost
+does not explain the observed process-time difference. It is not a cold-driver
+startup measurement. The diagnostic uses the existing host pipeline profiler
+and adds no GPU synchronization.
+
+Canonical evidence and executable commands are indexed in
+`.landmark/evidence/drama3-dense-backbone.json`; raw local artifacts are in
+`~/.cache/cogni-ml/drama3-runs/dense-20261014/`. Refresh on source, assets,
+reference/runtime, precision, compiler, input, device/OS or artifact drift;
+performance also decays with host/cache state. The sampled free-memory floor
+was 15%, quiet-host gating was off, and unrelated processes were untouched.
+
 ## Sampler GPU cost and next target — 2026-10-14
 
 Status: VERIFIED for the bounded diagnostic below; full-inference sampler

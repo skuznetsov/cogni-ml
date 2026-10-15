@@ -49,12 +49,16 @@ progress = ->(message : String) { STDERR.puts "#{message} elapsed=#{(Time.instan
 resident_readbacks = {} of String => Int64
 resident_submissions = 0_i64
 resident_graph = {} of String => Int64
+resident_dense_reduction : String? = nil
+resident_backbone_dense_reduction : String? = nil
 resident = false
 generation, samples = {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
                         if metal
                           resident = true
                           context = ML::Audio::Drama3::Resident::Context.new
                           generator = ML::Audio::Drama3::ResidentGenerator.new(config, store, context, prompt.size + max_frames - 1)
+                          resident_dense_reduction = context.dense_reduction
+                          resident_backbone_dense_reduction = generator.backbone.dense_reduction
                           generator.progress = progress
                           result = generator.generate(prompt, max_frames, seed, temperature, top_k, top_p)
                           abort "model produced EOS before any audio frame" if result.generation.frames.empty?
@@ -95,6 +99,8 @@ report = {
   backend: resident ? "metal_resident" : "cpu",
   resident_readbacks: resident_readbacks, resident_submissions: resident_submissions,
   resident_graph: resident_graph,
+  resident_dense_reduction: resident_dense_reduction,
+  resident_backbone_dense_reduction: resident_backbone_dense_reduction,
   model_path: model_path, text: text, seed: seed, temperature: temperature, top_k: top_k, top_p: top_p,
   prompt_rows: prompt.size, prompt_ids: prompt.map(&.[0]), frames: generation.frames,
   stopped_on_eos: generation.stopped, truncated: !generation.stopped,

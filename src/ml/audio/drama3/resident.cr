@@ -72,6 +72,7 @@ module ML::Audio::Drama3::Resident
   class Context
     getter readbacks = Hash(String, Int64).new(0_i64)
     getter submissions = 0_i64
+    getter dense_reduction : String
     @command : ML::Metal::CommandBuffer?
     @encoder : ML::Metal::ComputeEncoder?
     @pending = [] of Buffer
@@ -88,6 +89,7 @@ module ML::Audio::Drama3::Resident
 
     def initialize
       raise "resident Metal requires enabled backend" unless MetalBackend.enabled?
+      @dense_reduction = validate_dense_reduction(ENV["DRAMA3_DENSE_REDUCTION"]? || "tree")
       @timeline = ENV["DRAMA3_METAL_TIMELINE"]? == "1"
       depth = ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"]? || "0"
       raise ArgumentError.new("DRAMA3_COGNIGRAPH_MAX_INFLIGHT must be 0, 1, or 2") unless depth.in?("0", "1", "2")
@@ -280,6 +282,11 @@ module ML::Audio::Drama3::Resident
       dispatch("dr3_copy", SOURCE, [source, target], [source.count.to_u64], source.count)
     end
 
+    private def validate_dense_reduction(value : String) : String
+      raise ArgumentError.new("DRAMA3_DENSE_REDUCTION must be tree or simd") unless value.in?("tree", "simd")
+      value
+    end
+
     def add(a : Buffer, b : Buffer) : Buffer
       binary(a, b, 0)
     end
@@ -313,14 +320,16 @@ module ML::Audio::Drama3::Resident
       dispatch("dr3_rope", SOURCE, [x], [heads.to_u64, dim.to_u64, rotary.to_u64, pos.to_u64, base.to_f32.unsafe_as(UInt32).to_u64, interleaved ? 1_u64 : 0_u64], heads * rotary // 2)
     end
 
-    def matvec(matrix : Matrix, x : Buffer) : Buffer
+    def matvec(matrix : Matrix, x : Buffer, dense_reduction : String? = nil) : Buffer
       check_owner!(x)
       raise ArgumentError.new("resident matvec width") unless matrix.cols == x.count
       return expert(matrix, x) if matrix.scales
+      reduction = dense_reduction ? validate_dense_reduction(dense_reduction) : @dense_reduction
       w = MetalBackend.tensor_buffer(matrix.tensor, true)
       y = alloc(matrix.rows)
       enc = encoder
-      enc.set_pipeline(ML::Metal::PipelineCache.get_or_compile("dr3_dense", SOURCE))
+      pipeline = reduction == "simd" ? "dr3_dense_simd" : "dr3_dense"
+      enc.set_pipeline(ML::Metal::PipelineCache.get_or_compile(pipeline, SOURCE))
       enc.set_buffer(w.buffer, 0)
       enc.set_buffer(x.buffer, 1, offset: x.offset)
       enc.set_buffer(y.buffer, 2, offset: y.offset)

@@ -7,6 +7,11 @@ inline float dr3_float(device const uchar* b, ulong o, ulong i, ulong t) {
     o+=i*2; ushort v=ushort(b[o])|ushort(b[o+1])<<8;
     return t==1 ? as_type<float>(uint(v)<<16) : float(as_type<half>(v));
 }
+// Used only when the mapped BF16 tensor starts on a two-byte boundary.
+inline float dr3_bf16_aligned(device const uchar* b, ulong o, ulong i) {
+    ushort v=*(device const ushort*)(b+o+i*2);
+    return as_type<float>(uint(v)<<16);
+}
 inline float dr3_sigmoid(float v) { return v>=0 ? 1.0f/(1.0f+exp(-v)) : exp(v)/(1.0f+exp(v)); }
 kernel void dr3_finite(device const float* x [[buffer(0)]],device atomic_uint* status [[buffer(1)]],constant ulong* p [[buffer(2)]],uint i [[thread_position_in_grid]]) {if(i<p[0]&&!isfinite(x[i]))atomic_store_explicit(status,1u,memory_order_relaxed);}
 kernel void dr3_fill(device float* y [[buffer(0)]],constant ulong* p [[buffer(1)]],uint i [[thread_position_in_grid]]) { if(i<p[0]) y[i]=as_type<float>(uint(p[1])); }
@@ -29,6 +34,19 @@ kernel void dr3_dense(device const uchar* w [[buffer(0)]],device const float* x 
     threadgroup float parts[64];uint cols=uint(p[1]);float s=0;ulong row=p[4]*p[0]+r;
     for(uint j=lane;j<cols;j+=64)s+=dr3_float(w,p[2],row*cols+j,p[3])*x[j];parts[lane]=s;threadgroup_barrier(mem_flags::mem_threadgroup);
     for(uint d=32;d>0;d/=2){if(lane<d)parts[lane]+=parts[lane+d];threadgroup_barrier(mem_flags::mem_threadgroup);}if(lane==0)y[r]=parts[0];
+}
+kernel void dr3_dense_simd(device const uchar* w [[buffer(0)]],device const float* x [[buffer(1)]],device float* y [[buffer(2)]],constant ulong* p [[buffer(3)]],uint r [[threadgroup_position_in_grid]],uint lane [[thread_index_in_threadgroup]],uint simd_lane [[thread_index_in_simdgroup]],uint simdgroup [[simdgroup_index_in_threadgroup]],uint simd_width [[threads_per_simdgroup]]) {
+    threadgroup float parts[64];uint cols=uint(p[1]);float s=0;ulong row=p[4]*p[0]+r;
+    if(p[3]==1&&(p[2]&1)==0){for(uint j=lane;j<cols;j+=64)s+=dr3_bf16_aligned(w,p[2],row*cols+j)*x[j];}
+    else{for(uint j=lane;j<cols;j+=64)s+=dr3_float(w,p[2],row*cols+j,p[3])*x[j];}
+    parts[lane]=s;threadgroup_barrier(mem_flags::mem_threadgroup);
+    if(simd_width!=32){
+        for(uint d=32;d>0;d/=2){if(lane<d)parts[lane]+=parts[lane+d];threadgroup_barrier(mem_flags::mem_threadgroup);}if(lane==0)y[r]=parts[0];
+    }else if(simdgroup==0){
+        float sum=parts[simd_lane]+parts[simd_lane+32];
+        for(uint d=16;d>0;d/=2){float peer=simd_shuffle_down(sum,ushort(d));if(simd_lane<d)sum+=peer;}
+        if(simd_lane==0)y[r]=sum;
+    }
 }
 kernel void dr3_expert(device const uchar* w [[buffer(0)]],device const uchar* s [[buffer(1)]],device const uchar* b [[buffer(2)]],device const float* x [[buffer(3)]],device float* y [[buffer(4)]],device const float* ids [[buffer(5)]],constant ulong* p [[buffer(6)]],threadgroup float* parts [[threadgroup(0)]],uint r [[threadgroup_position_in_grid]],uint lane [[thread_index_in_threadgroup]]) {
     float selected=p[10]?ids[p[11]]:float(p[4]);if(!isfinite(selected)||selected<0||selected>=float(p[12])||floor(selected)!=selected){if(lane==0)y[r]=NAN;return;}

@@ -15,6 +15,7 @@ module ML::Audio::Drama3
     @delta : Array(Resident::Buffer?)
     @delta_kernel : String
     @batch_experts : Bool
+    getter dense_reduction : String
 
     def initialize(@config : BackboneConfig, @store : WeightStore, @ctx : Resident::Context, @capacity : Int32)
       raise ArgumentError.new("resident backbone capacity must be 1..1024") unless @capacity.in?(1..1024)
@@ -27,6 +28,10 @@ module ML::Audio::Drama3
       batch = ENV["DRAMA3_MOE_BATCH"]? || "1"
       raise ArgumentError.new("DRAMA3_MOE_BATCH must be 0 or 1") unless batch.in?("0", "1")
       @batch_experts = batch == "1"
+      @dense_reduction = ENV["DRAMA3_BACKBONE_DENSE_REDUCTION"]? || "tree"
+      unless @dense_reduction.in?("tree", "simd")
+        raise ArgumentError.new("DRAMA3_BACKBONE_DENSE_REDUCTION must be tree or simd")
+      end
       @keys = Array(Resident::Buffer?).new(@config.layers, nil)
       @values = Array(Resident::Buffer?).new(@config.layers, nil)
       @conv = Array(Resident::Buffer?).new(@config.layers, nil)
@@ -159,10 +164,12 @@ module ML::Audio::Drama3
 
     private def linear_attention(x : Resident::Buffer, prefix : String, layer : Int32) : Resident::Buffer
       c = @config
-      qkv = project(prefix + ".in_proj_qkv", x)
-      z = project(prefix + ".in_proj_z", x)
-      b = project(prefix + ".in_proj_b", x)
-      a = project(prefix + ".in_proj_a", x)
+      # Keep the reduction choice local to this measured shared-input group.
+      # The returned device allocations feed the existing temporal/gating path.
+      qkv = @ctx.matvec(@store.matrix(prefix + ".in_proj_qkv.weight"), x, dense_reduction: @dense_reduction)
+      z = @ctx.matvec(@store.matrix(prefix + ".in_proj_z.weight"), x, dense_reduction: @dense_reduction)
+      b = @ctx.matvec(@store.matrix(prefix + ".in_proj_b.weight"), x, dense_reduction: @dense_reduction)
+      a = @ctx.matvec(@store.matrix(prefix + ".in_proj_a.weight"), x, dense_reduction: @dense_reduction)
       history = @conv[layer].not_nil!
       @ctx.copy(qkv, history.slice((@position % c.conv_kernel) * qkv.count, qkv.count))
       convolved = @ctx.alloc(qkv.count)
