@@ -29187,13 +29187,15 @@ Refresh after source/toolchain/device/model/workload changes.
   Upstream retries once and may accept a repeat. This explains persistence,
   not the earlier quiet transition. Do not change RAS to hide this negative gate.
 - Exact bilingual text preserves `Holliwood`. User hears RU+EN for native
-  seeds1/2, Russian only for3. Seed3 and matched MLX have all179 emitted frames
-  and EOS equal; seed1 all197 equal. Seed2 diverges at12, column8. Randomized
-  variants are not controlled speaker identities. PCM/EOS cannot certify words.
+  seeds1/2, Russian only for3. Later blind ASR conflicts with the seed3 content
+  report; treat English omission as unresolved (see follow-up below). Seed3
+  and matched MLX retain all179 emitted frames and EOS equal; seed1 all197
+  equal. Seed2 diverges at12, column8. Randomized variants are not controlled
+  speaker identities. PCM/EOS cannot certify words.
 - Style ablations: whisper-only first diverges26; laughter-only198; both cues
   all287 equal. Removing both cues from original30words yields768 identical
   frames in both, at cap, with half-second peaks<=1 PCM16 from5.5s onward.
-  Whisper is unnecessary for these observed quiet/missing-continuation cases.
+  Whisper is unnecessary for the observed near-silent suffix.
   No-cue full-text listening remains pending; do not infer transcript from RMS.
 - New discriminator: long styled/no-cue texts are360/332 UTF-8 bytes, exceeding
   the high-level MLX default300-byte threshold. Existing controls deliberately
@@ -29250,3 +29252,29 @@ Refresh after source/toolchain/device/model/workload changes.
   reference/precision/runtime/compiler/device/OS/artifact drift. Standing scope:
   sequential run_safe runs, sampled reserve15%, profiling unset, unrelated
   processes untouched, local commit only and no push.
+
+
+### Continuation 2026-10-15 — listening feedback and ASR falsifier
+
+- Base `3156210b`: user confirms no cat sentence in either named native/MLX
+  styled first chunk. Delayed “шорох / происходит” reply has ambiguous file
+  identity; do not assign it to both no-cue WAVs.
+- Direct audio input was rejected by this session. No model listening claim.
+  Pinned local Whisper turbo FP16 on MLX GPU ran 10 full/negative and 7 isolated
+  controls without target text, hotwords or transcript conditioning. ASR and
+  resampling host control are separate from unchanged DRAMA inference.
+- The empty-silence guard FAILS: both digital zero and actual quiet tail yield
+  “Thank you.” Full no-cue controls also append “Продолжение следует...”. ASR
+  outputs remain candidates, never proof of speech presence/absence.
+- Full seed3 and its isolated post-4s crop yield English, contradicting earlier
+  human Russian-only feedback. All three sequence segments byte-match their
+  seed WAVs, including3 and zero gaps. Reopen the English-omission inference;
+  preserve human report and ASR conflict. All179 matching codes/EOS still hold.
+- No cat sentence in either first-chunk ASR candidate; both last chunks yield
+  the requested final sentence as an ASR candidate. No full-delivery pass.
+  Original shared-code quiet onset remains measured; unique cause open.
+- Index `.landmark/evidence/drama3-listening-asr.json`; details in
+  `docs/drama3-native-frontier.md`. Next falsifier: full-stream cross-decode of
+  saved first-chunk codes, with an audible positive stream. Do not extend
+  shared-prefix decoder agreement to the diverging continuation. Refresh on
+  source/model/audio/preprocessing/options/runtime/listening-evidence drift.

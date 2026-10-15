@@ -10,6 +10,71 @@ reference and fixture tools only, never the native inference implementation.
 The pinned MLX upstream is a community port; its source-path controls below
 do not establish agreement with the original Fish Audio implementation.
 
+## Listening follow-up and local ASR limits — 2026-10-15
+
+At base `3156210b`, the user confirms that neither
+`native-original-first-chunk.wav` nor
+`mlx-official-chunks-styled.chunk-001.wav` delivers the sentence about the cat.
+This closes the listening question for those two named clips as a negative
+content result. A separate delayed reply describes a first clip ending at
+“шорох” and a second whispered clip ending at “происходит”. Its question was
+labelled “without tags”, which conflicts with that description. Preserve the
+reply without assigning it to both no-cue WAVs; their per-file listening
+identity remains unresolved.
+
+Direct audio forwarding was attempted, but this session returned
+`audio content omitted because you do not support audio input`. No agent
+listening claim follows from a local path or an audio player rendering.
+Instead, a blind local ASR control uses the pinned
+`mlx-community/whisper-large-v3-turbo-asr-fp16` checkpoint at
+`624c19c9af5603fa73b83bce14d4aeea96156d18`, through the existing clean MLX-audio
+revision. All twelve model files are SHA-bound, with available Hub LFS digests
+checked. ASR model inference selects MLX GPU with FP16 weights; audio
+resampling and ASR decoding control include host work, separate from DRAMA
+inference. No DRAMA precision, tolerances or generation boundary changes.
+
+Ten full-file/negative controls and seven isolated controls run with automatic
+language detection, temperature zero, no initial prompt or hotwords, and no
+conditioning on earlier transcript text. The expected transcript is never
+supplied to the recognizer. The observed limits are material:
+
+- Digital zero and a quiet ten-second no-cue suffix both produce the invented
+  text “Thank you.” The recognizer therefore fails the empty-silence content
+  guard. It cannot certify that a word was actually spoken or absent.
+- Both full no-cue WAVs yield the first sentence through “шорох”, followed by
+  “Продолжение следует...”, which is absent from the requested text. Native
+  styled chunk 0 also yields only that first sentence; the MLX styled first
+  chunk yields the whispered continuation through “происходит”. Neither ASR
+  output contains the cat sentence. These are candidate transcripts, not an
+  additional listening confirmation or proof of missing speech.
+- Both MLX final chunks yield “Ну и напугал же он нас сегодня, маленький
+  проказник.” This supports a candidate delivered final sentence, not a
+  full-text pass for the preceding chunk.
+- Seed 1 and seed 3 both yield the Russian and English sentences. Independent
+  crops from four seconds onward also yield the English sentence, with auto
+  language `en`; their first four seconds yield Russian. Seed-3 crop RMS is
+  0.109728 on normalized F32 PCM. This conflicts with the earlier human
+  Russian-only report. A byte-exact check binds every seed source to its
+  complete segment in the listening sequence, including seed 3 and both
+  half-second zero gaps. The content disagreement is unresolved; neither
+  source is silently promoted over the other.
+
+Consequently, the earlier interpretation of seed 3 as an established English
+omission is reopened. Its 179 equal code frames and EOS remain measured facts;
+content is contested. The original long quiet-onset result remains unchanged:
+its common native/MLX code prefix extends well past the measured quiet onset.
+No unique silence cause, speech fix, strict sampler/DAC pass, or ASR transcript
+accuracy is claimed. A full-stream matched-code cross-decode is the next
+causal discriminator for the new diverging first-chunk pair; shared-prefix
+PCM agreement alone does not establish decoder parity for their continuation.
+
+Artifacts and source/run bindings are indexed in
+`.landmark/evidence/drama3-listening-asr.json`; raw controls are under
+`sampler-voices-20261015/asr/`. The earlier sampler packet remains a historical
+snapshot at its source state. This follow-up supersedes its seed-3 content
+interpretation, not its code/EOS measurements. Refresh on source, checkpoint,
+file identity, preprocessing, ASR options, runtime or listening-evidence drift.
+
 ## Shared-uniform sampling and bilingual listening — 2026-10-15
 
 At base `3fc3de68`, the new diagnostic compares production Metal sampling
@@ -52,9 +117,10 @@ The user hears both languages in seeds 1 and 2, and only Russian in seed 3.
 This is direct human content feedback, not an energy-based transcript or a
 controlled speaker-identity comparison. Seed 3 and the matched MLX shadow
 have identical prompt IDs, all 179 emitted frames, and EOS at the same point.
-Missing English therefore also occurs on a shared trajectory without style
-cues; whisper is not necessary for the listener-reported omission in this
-scope. Random seeds do not guarantee distinct, reproducible speaker identities.
+The local ASR follow-up above conflicts with the Russian-only interpretation;
+English omission is not established for this file. Code equality and EOS do
+not resolve content. Random seeds do not guarantee distinct, reproducible
+speaker identities.
 
 | Prompt / seed | Native / MLX frames | Identical complete prefix | Termination |
 | --- | --- | --- | --- |
@@ -91,8 +157,9 @@ first chunk, every half-second from 7 seconds onward peaks at at most five
 PCM16 units; the styled first chunk has peaks of 37–51 from 12 seconds onward.
 Thus this high-level orchestration does not eliminate the long quiet suffix
 inside the first chunk in these runs. The second chunks have active signal,
-but signal activity does not establish word delivery. Listening remains pending.
-The within-text comparison changes prompt splitting, history and DAC segment
+but signal activity does not establish word delivery. The user confirms that
+styled chunk 0 omits the cat sentence; listening for the remaining chunks is
+not independently resolved. The within-text comparison changes prompt splitting, history and DAC segment
 boundaries together; the styled and no-cue arms do not isolate chunking from
 markup. The 768-frame cap is per chunk versus per prompt, so total termination
 budgets are not matched. Wrapper times of 121.732 / 162.294 seconds are shared-host observations,
