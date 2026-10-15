@@ -1,8 +1,10 @@
 require "json"
+require "digest/sha256"
 require "./generator"
 require "./resident"
 require "./backbone_resident"
 require "./tower_resident"
+require "./prompt_resident"
 
 {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
 module ML::Audio::Drama3
@@ -32,7 +34,11 @@ module ML::Audio::Drama3
     getter tower : TowerResident
     getter ctx : Resident::Context
     getter capacity : Int32
+    getter sampler_inputs : NamedTuple(dtype: String, uniform_count: Int32, sha256: String, provenance: String)?
     property progress : Proc(String, Nil)?
+    # Optional device-only diagnostic handoff. Callbacks enqueue comparisons;
+    # normal generation has no additional work or readbacks when nil.
+    property device_trace : Proc(String, Resident::Buffer, Nil)?
 
     @head : Matrix
     @eos : Int32
@@ -52,6 +58,8 @@ module ML::Audio::Drama3
       @head = @store.matrix("lm_head.weight")
       raise ArgumentError.new("invalid main head dimensions") unless @head.cols == backbone_config.hidden && @head.rows == 1 + @semantic_end - @semantic_begin + 1
       @progress = nil
+      @device_trace = nil
+      @sampler_inputs = nil
     end
 
     # A resident model owns temporal caches and is deliberately single-use.
@@ -61,6 +69,22 @@ module ML::Audio::Drama3
                  temperature : Float64 = 0.8, top_k : Int32 = 30, top_p : Float64 = 0.9) : ResidentGeneration
       Profile.measure("generator_resident.generate", category: "generation") do
         generate_impl(prompt, max_frames, seed, temperature, top_k, top_p)
+      end
+    rescue ex
+      begin
+        @ctx.abort
+      rescue
+        # Keep the inference failure as the reported error if draining also fails.
+      end
+      raise ex
+    end
+
+    # GPU-resident prompt path used when reference encoder codes are already in
+    # this context. The flat prompt rows flow directly into backbone prefill.
+    def generate(prompt : ResidentPrompt, max_frames : Int32 = 160, seed : UInt64 = 0_u64,
+                 temperature : Float64 = 0.8, top_k : Int32 = 30, top_p : Float64 = 0.9) : ResidentGeneration
+      Profile.measure("generator_resident.generate", category: "generation") do
+        generate_resident_impl(prompt, max_frames, seed, temperature, top_k, top_p)
       end
     rescue ex
       begin
@@ -105,6 +129,10 @@ module ML::Audio::Drama3
         end
       end
 
+      if trace = @device_trace
+        trace.call("prompt.backbone.hidden", hidden)
+      end
+
       window_values = prompt.last(MAX_REPEAT_WINDOW).map { |row| row[0].to_f32 }
       window = @ctx.upload(window_values)
       window_size = window_values.size
@@ -116,6 +144,9 @@ module ML::Audio::Drama3
       Profile.measure("generator_resident.autoregressive", category: "generation.decode") do
         max_frames.times do |step|
           logits = @ctx.matvec(@head, hidden)
+          if step == 0
+            @device_trace.try(&.call("prompt.main_logits", logits))
+          end
           draw_offset = step * draw_stride
           first = @ctx.sample(logits, draw_buffer.slice(draw_offset, 1), temperature, top_k, top_p)
           retry = @ctx.sample(logits, draw_buffer.slice(draw_offset + 1, 1), 1.0, 30, 0.95)
@@ -172,6 +203,122 @@ module ML::Audio::Drama3
       ResidentGeneration.new(generation, device_frames)
     end
 
+    private def generate_resident_impl(prompt : ResidentPrompt, max_frames : Int32, seed : UInt64,
+                                       temperature : Float64, top_k : Int32, top_p : Float64) : ResidentGeneration
+      raise ArgumentError.new("generator is single-use") unless @backbone.position == 0 && @tower.offset == 0
+      raise ArgumentError.new("empty prompt or non-positive frame bound") if prompt.row_count < 1 || max_frames < 1
+      raise ArgumentError.new("invalid prompt width") unless prompt.row_width == @tower.config.num_codebooks + 1
+      raise ArgumentError.new("reference codebook count does not match model") unless prompt.codebooks == @tower.config.num_codebooks
+      raise ArgumentError.new("reference codebook size does not match model") unless prompt.codebook_size == @tower.config.vocab_size
+      raise ArgumentError.new("reference semantic token band does not match model") unless prompt.semantic_begin == @semantic_begin
+      raise ArgumentError.new("prompt belongs to a different resident context") unless prompt.context.same?(@ctx)
+      raise ArgumentError.new("sampling top_k exceeds resident sampler limit 1024") unless top_k.in?(1..1024)
+      raise ArgumentError.new("resident cache capacity exceeded") unless prompt.row_count.to_i64 + max_frames - 1 <= @capacity
+
+      # Validate all host-controlled inputs before model work, matching the
+      # original resident API's boundary.
+      Sampler.new(seed).candidates([0_f32], temperature, top_k, top_p)
+      frame_width = @tower.config.num_codebooks + 1
+      frame_values = max_frames.to_i64 * frame_width
+      raise ArgumentError.new("resident output frame buffer is too large") if frame_values > Int32::MAX
+      device_frames = @ctx.alloc(frame_values.to_i32)
+      draw_stride = 2 + @tower.config.num_codebooks - 1
+      draws = sampling_draws(seed, max_frames, draw_stride)
+      draw_buffer = @ctx.upload(draws)
+      frames_on_device = Array(Resident::Buffer).new(prompt.row_count) { |index| prompt.row(index) }
+
+      hidden = @ctx.alloc(@backbone.config.hidden)
+      Profile.measure("generator_resident.prefill", category: "generation.prefill") do
+        frames_on_device.each_with_index do |frame, index|
+          Profile.measure("generator_resident.prefill_row", category: "generation.prefill.row") do
+            token_embedding = @backbone.embedding(frame.slice(0, 1))
+            hidden = @backbone.step(@tower.embed_backbone(frame, token_embedding))
+            if index + 1 < frames_on_device.size
+              @tower.teacher_force(hidden, frame, frames_on_device[index + 1])
+            end
+            @ctx.submit
+          end
+          @progress.try(&.call("prefill #{index + 1}/#{frames_on_device.size}"))
+        end
+      end
+
+      if trace = @device_trace
+        trace.call("prompt.backbone.hidden", hidden)
+      end
+
+      window_size = Math.min(MAX_REPEAT_WINDOW, prompt.row_count)
+      window = @ctx.alloc(window_size)
+      @ctx.dispatch(
+        "dr3_prompt_main_window",
+        RESIDENT_PROMPT_SOURCE,
+        [prompt.rows, window],
+        [prompt.row_count.to_u64, prompt.row_width.to_u64, window_size.to_u64],
+        window_size,
+      )
+      window_cursor = 0
+      previous_frame = frames_on_device.last
+      generated_count = 0
+      stopped = false
+
+      Profile.measure("generator_resident.autoregressive", category: "generation.decode") do
+        max_frames.times do |step|
+          logits = @ctx.matvec(@head, hidden)
+          if step == 0
+            @device_trace.try(&.call("prompt.main_logits", logits))
+          end
+          draw_offset = step * draw_stride
+          first = @ctx.sample(logits, draw_buffer.slice(draw_offset, 1), temperature, top_k, top_p)
+          retry = @ctx.sample(logits, draw_buffer.slice(draw_offset + 1, 1), 1.0, 30, 0.95)
+          main = choose_main(first, retry, window, window_size, window_cursor)
+
+          # This scalar is the existing explicit EOS control boundary. Invalid
+          # reference IDs poison Context's finite status and fail here without
+          # ever reading any codebook values to the CPU.
+          main_token = @ctx.read(main, "control")[0].to_i32
+          unless main_token == @eos || main_token.in?(@semantic_begin..@semantic_end)
+            raise "resident main-token selector produced out-of-band token #{main_token}"
+          end
+          if main_token == @eos
+            stopped = true
+            break
+          end
+
+          frame = Profile.measure("generator_resident.device_frame", category: "generation.frame") do
+            sampled_codes = 0
+            output_frame = @ctx.graph_enabled? ? device_frames.slice(step * frame_width, frame_width) : nil
+            resident_frame = @tower.sample_frame(main, hidden, previous_frame, output_frame: output_frame) do |code_logits|
+              draw_index = draw_offset + 2 + sampled_codes
+              sampled_codes += 1
+              @ctx.sample(code_logits, draw_buffer.slice(draw_index, 1), temperature, top_k, top_p)
+            end
+            raise "resident tower sampled #{sampled_codes} residual codes; expected #{@tower.config.num_codebooks - 1}" unless sampled_codes == @tower.config.num_codebooks - 1
+
+            @ctx.copy(resident_frame, device_frames.slice(step * frame_width, frame_width)) unless output_frame
+            if step + 1 < max_frames
+              token_embedding = @backbone.embedding(main)
+              hidden = @backbone.step(@tower.embed_backbone(resident_frame, token_embedding))
+            end
+            @ctx.finish unless @ctx.graph_enabled?
+            resident_frame
+          end
+
+          generated_count += 1
+          @progress.try(&.call("frame #{generated_count}/#{max_frames}"))
+          window_cursor = (window_cursor + 1) % window_size
+          previous_frame = frame
+        end
+      end
+
+      terminal_values = if generated_count == 0
+                          [] of Float32
+                        else
+                          @ctx.read(device_frames.slice(0, generated_count * frame_width), "terminal")
+                        end
+      terminal_frames = decode_terminal_frames(terminal_values, generated_count, frame_width)
+      generation = Generation.new(terminal_frames, stopped, prompt.row_count)
+      ResidentGeneration.new(generation, device_frames)
+    end
+
     private def choose_main(first : Resident::Buffer, retry : Resident::Buffer, window : Resident::Buffer,
                             window_size : Int32, window_cursor : Int32) : Resident::Buffer
       selected = @ctx.alloc(1)
@@ -188,7 +335,15 @@ module ML::Audio::Drama3
 
     private def sampling_draws(seed : UInt64, max_frames : Int32, draw_stride : Int32) : Array(Float32)
       random = Random.new(seed)
-      Array(Float32).new(max_frames * draw_stride) { random.rand.to_f32 }
+      draws = Array(Float32).new(max_frames * draw_stride) { random.rand.to_f32 }
+      # Hash the actual host input array returned to the single GPU upload.
+      # This is sampler-input provenance, never a model-activation readback.
+      bytes = IO::Memory.new
+      draws.each { |draw| bytes.write_bytes(draw, IO::ByteFormat::LittleEndian) }
+      @sampler_inputs = {dtype: "float32-le", uniform_count: draws.size,
+                         sha256: Digest::SHA256.hexdigest(bytes.to_slice),
+                         provenance: "host input tape uploaded once"}
+      draws
     end
 
     private def decode_terminal_frames(values : Vector, frame_count : Int32, frame_width : Int32) : Array(Array(Int32))

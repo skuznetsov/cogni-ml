@@ -9,6 +9,13 @@ require "../src/ml/audio/drama3/generator_resident"
     end
   end
 
+  private def drama3_resident_reference_plan(frames : Int32 = 1) : ML::Audio::Drama3::Prompt::ReferencePlan
+    width = 5
+    ML::Audio::Drama3::Prompt::ReferencePlan.new(
+      [[1, 0, 0, 0, 0]], [[1, 0, 0, 0, 0]], frames, width, 4, 20, 4,
+    )
+  end
+
   describe ML::Audio::Drama3::ResidentGenerator do
     it "stops on immediate EOS without reading activations or empty frame storage" do
       path = File.join(__DIR__, "support/drama3/reference_fixture")
@@ -16,12 +23,116 @@ require "../src/ml/audio/drama3/generator_resident"
       config.as_h["eos_token_id"] = JSON::Any.new(2_i64)
       context = ML::Audio::Drama3::Resident::Context.new
       generator = ML::Audio::Drama3::ResidentGenerator.new(config, Drama3ResidentEosStore.new(path), context, 3)
+      generator.sampler_inputs.should be_nil
       result = generator.generate([[1, 0, 0, 0, 0]], 3, 0_u64, top_k: 1)
+      input_bytes = IO::Memory.new
+      random = Random.new(0_u64)
+      15.times { input_bytes.write_bytes(random.rand.to_f32, IO::ByteFormat::LittleEndian) }
+      generator.sampler_inputs.should eq({dtype: "float32-le", uniform_count: 15,
+                                          sha256: Digest::SHA256.hexdigest(input_bytes.to_slice),
+                                          provenance: "host input tape uploaded once"})
       result.generation.stopped.should be_true
       result.generation.frames.should be_empty
       result.deviceframes.count.should eq(15)
       context.readbacks.should eq({"control" => 8_i64})
       expect_raises(ArgumentError, /single-use/) { generator.generate([[1, 0, 0, 0, 0]]) }
+    end
+
+    it "inserts codebook-major reference codes on device and validates host shape/context" do
+      context = ML::Audio::Drama3::Resident::Context.new
+      # [books,frames] = [[1,2],[3,0],[2,1],[0,3]]. No code IDs are read
+      # during the prompt handoff; the explicit terminal read below is only
+      # the test's device-placement oracle.
+      codes = context.upload([1_f32, 2_f32, 3_f32, 0_f32, 2_f32, 1_f32, 0_f32, 3_f32])
+      prompt = ML::Audio::Drama3::PromptResident.build(drama3_resident_reference_plan(2), codes, context)
+      prompt.row_count.should eq(4)
+      prompt.row_width.should eq(5)
+      prompt.audio_row_start.should eq(1)
+      prompt.audio_row_count.should eq(2)
+      context.readbacks.should be_empty
+
+      rows = context.read(prompt.rows, "terminal").map(&.to_i32).each_slice(5).map(&.to_a).to_a
+      rows.should eq([
+        [1, 0, 0, 0, 0],
+        [21, 1, 3, 2, 0],
+        [22, 2, 0, 1, 3],
+        [1, 0, 0, 0, 0],
+      ])
+
+      expect_raises(ArgumentError, /shape mismatch/) do
+        ML::Audio::Drama3::PromptResident.build(drama3_resident_reference_plan(2),
+          context.upload(Array(Float32).new(7, 0_f32)), context)
+      end
+      other = ML::Audio::Drama3::Resident::Context.new
+      expect_raises(ArgumentError, /different resident context/) do
+        ML::Audio::Drama3::PromptResident.build(drama3_resident_reference_plan(2), codes, other)
+      end
+    end
+
+    it "poisons invalid device codes at the existing control boundary without reading codes" do
+      path = File.join(__DIR__, "support/drama3/reference_fixture")
+      config = JSON.parse(File.read(File.join(path, "config.json")))
+      config.as_h["eos_token_id"] = JSON::Any.new(2_i64)
+      context = ML::Audio::Drama3::Resident::Context.new
+      codes = context.upload([Float32::NAN, 4_f32, -1_f32, 1.5_f32])
+      prompt = ML::Audio::Drama3::PromptResident.build(drama3_resident_reference_plan, codes, context)
+      generator = ML::Audio::Drama3::ResidentGenerator.new(config, Drama3ResidentEosStore.new(path), context, 6)
+
+      expect_raises(ArgumentError, /non-finite resident intermediate/) do
+        generator.generate(prompt, 3, 0_u64, top_k: 1)
+      end
+      context.readbacks["control"].should eq(4_i64)
+      context.readbacks["terminal"].should eq(0_i64)
+      context.readbacks["diagnostic"].should eq(0_i64)
+    end
+
+    it "hands reference rows through prefill at graph depths zero and two" do
+      previous_backend = ENV["DRAMA3_BACKEND"]?
+      previous_depth = ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"]?
+      ENV["DRAMA3_BACKEND"] = "metal"
+      begin
+        [0, 2].each do |depth|
+          ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"] = depth.to_s
+          path = File.join(__DIR__, "support/drama3/reference_fixture")
+          config = JSON.parse(File.read(File.join(path, "config.json")))
+          config.as_h["eos_token_id"] = JSON::Any.new(2_i64)
+          context = ML::Audio::Drama3::Resident::Context.new
+          codes = context.upload([0_f32, 0_f32, 0_f32, 0_f32])
+          prompt = ML::Audio::Drama3::PromptResident.build(drama3_resident_reference_plan, codes, context)
+          generator = ML::Audio::Drama3::ResidentGenerator.new(config, Drama3ResidentEosStore.new(path), context, 6)
+          trace_names = [] of String
+          generator.device_trace = ->(name : String, _buffer : ML::Audio::Drama3::Resident::Buffer) { trace_names << name; nil }
+
+          generator.sampler_inputs.should be_nil
+          result = generator.generate(prompt, 3, 0_u64, top_k: 1)
+          input_bytes = IO::Memory.new
+          random = Random.new(0_u64)
+          15.times { input_bytes.write_bytes(random.rand.to_f32, IO::ByteFormat::LittleEndian) }
+          generator.sampler_inputs.not_nil![:sha256].should eq(Digest::SHA256.hexdigest(input_bytes.to_slice))
+          generator.sampler_inputs.not_nil![:uniform_count].should eq(15)
+          result.generation.stopped.should be_true
+          result.generation.frames.should be_empty
+          result.generation.prompt_rows.should eq(prompt.row_count)
+          context.readbacks.should eq({"control" => 8_i64})
+          context.graph_stats["depth"].should eq(depth.to_i64)
+          context.graph_stats["submitted"].should eq(context.graph_stats["completed"])
+          context.graph_stats["pending"].should eq(0_i64)
+          trace_names.should eq(["prompt.backbone.hidden", "prompt.main_logits"])
+          ML::Audio::Drama3::MetalBackend.reset!
+        end
+      ensure
+        if previous_backend
+          ENV["DRAMA3_BACKEND"] = previous_backend
+        else
+          ENV.delete("DRAMA3_BACKEND")
+        end
+        if previous_depth
+          ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"] = previous_depth
+        else
+          ENV.delete("DRAMA3_COGNIGRAPH_MAX_INFLIGHT")
+        end
+        ML::Audio::Drama3::MetalBackend.reset!
+      end
     end
 
     it "maps candidate ids and applies the semantic repeat fallback on device" do

@@ -5,6 +5,15 @@ Fish-Speech code. The checked-in fixture is deterministic, synthetic, and does
 not contain released checkpoint weights. See [THIRD_PARTY_DRAMA3.md](../../THIRD_PARTY_DRAMA3.md)
 for source and model attribution.
 
+For native reference-voice inference, the 102-stage encoder/prompt and prefill
+gates, and paired pause controls with shared sampler inputs, see
+[Native DRAMA-3 reference voice](../../docs/drama3-reference-voice.md).
+`reference_voice_reference.py` exports official encoder/prompt fixtures,
+`prefill_reference.py` exports captured prefill boundaries, and
+`compare_reference_pauses.py` validates the four completed generation reports
+and measures tokens/quiet windows on GPU. These are reference tools; native
+inference uses the resident Crystal/Metal encoder directly.
+
 Use Python 3.12 with `mlx`, `torch`, `numpy`, and `safetensors`, plus Crystal.
 The pinned source checkouts are imported directly. Check them out at the
 revisions below; replay scripts reject a different source `HEAD`.

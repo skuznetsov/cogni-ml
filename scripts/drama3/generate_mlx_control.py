@@ -117,6 +117,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Use official Model.generate text splitting and cross-chunk history (300-byte chunks)",
     )
+    parser.add_argument(
+        "--reference-audio",
+        type=Path,
+        help="One mono PCM16 44.1 kHz WAV whose voice and transcript condition generation",
+    )
+    parser.add_argument(
+        "--reference-text",
+        help="Exact transcript matching --reference-audio",
+    )
     args = parser.parse_args(argv)
     if args.max_frames < 1:
         parser.error("--max-frames must be at least 1")
@@ -126,6 +135,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--seed must be non-negative")
     if not args.chunk_text and any(step >= args.max_frames for step in args.capture_steps):
         parser.error("every --capture-steps value must be less than --max-frames")
+    if (args.reference_audio is None) != (args.reference_text is None):
+        parser.error("--reference-audio and --reference-text must be supplied together")
+    if args.reference_audio is not None and args.chunk_text:
+        parser.error("reference audio is not supported with --chunk-text")
+    if args.reference_audio is not None and args.speaker_id not in (None, 0):
+        parser.error("reference voice conditioning currently supports speaker 0 only")
+    if args.reference_text is not None and not args.reference_text.strip():
+        parser.error("--reference-text must be non-empty")
     return args
 
 
@@ -322,6 +339,113 @@ def replace_history_audio_rows(
     return pieces[0] if len(pieces) == 1 else mx.concatenate(pieces, axis=0)
 
 
+def build_reference_prompt_gpu(
+    mx: Any,
+    np: Any,
+    official_build_prompt: Any,
+    *,
+    text: str,
+    tokenizer: Any,
+    codebook_size: int,
+    semantic_begin: int,
+    reference_text: str,
+    reference_codes: Any,
+) -> tuple[Any, Any, list[tuple[int, int]]]:
+    """Build the official prompt skeleton and splice reference codes while on GPU."""
+    shape = tuple(reference_codes.shape)
+    if len(shape) != 2 or shape[0] != NUM_CODEBOOKS or shape[1] < 1:
+        raise ValueError(f"reference codes must have shape [10,frames>=1], got {shape}")
+    frame_count = int(shape[1])
+    skeleton_codes = np.zeros((NUM_CODEBOOKS, frame_count), dtype=np.int64)
+    skeleton = official_build_prompt(
+        text,
+        tokenizer,
+        num_codebooks=NUM_CODEBOOKS,
+        codebook_size=codebook_size,
+        semantic_start=semantic_begin,
+        prompt_texts=[reference_text],
+        prompt_tokens=[skeleton_codes],
+    )
+    spans = find_zero_history_spans(skeleton, [frame_count], semantic_begin)
+    prompt = replace_history_audio_rows(
+        mx,
+        skeleton,
+        spans,
+        [reference_codes],
+        semantic_begin,
+    )
+    return prompt, skeleton, spans
+
+
+def verify_reference_prompt(
+    np: Any,
+    official_build_prompt: Any,
+    *,
+    actual_prompt: Any,
+    text: str,
+    tokenizer: Any,
+    codebook_size: int,
+    semantic_begin: int,
+    reference_text: str,
+    reference_codes: Any,
+) -> Any:
+    """Rebuild the full official prompt at terminal readback and compare rows."""
+    official_prompt = official_build_prompt(
+        text,
+        tokenizer,
+        num_codebooks=NUM_CODEBOOKS,
+        codebook_size=codebook_size,
+        semantic_start=semantic_begin,
+        prompt_texts=[reference_text],
+        prompt_tokens=[np.asarray(reference_codes, dtype=np.int64)],
+    )
+    actual = np.asarray(actual_prompt)
+    expected = np.asarray(official_prompt)
+    if (
+        actual.dtype != expected.dtype
+        or actual.shape != expected.shape
+        or actual.tobytes(order="C") != expected.tobytes(order="C")
+    ):
+        raise ValueError("GPU reference prompt differs from official builder with encoded reference codes")
+    return official_prompt
+
+
+def read_reference_pcm16_wav(path: Path) -> dict[str, Any]:
+    """Validate a single 44.1 kHz mono PCM16 reference before loading MLX."""
+    import wave
+    try:
+        with wave.open(str(path), "rb") as source:
+            channels = source.getnchannels()
+            sample_width = source.getsampwidth()
+            sample_rate = source.getframerate()
+            samples = source.getnframes()
+            compression = source.getcomptype()
+            pcm_bytes = source.readframes(samples)
+    except (OSError, wave.Error) as error:
+        raise ValueError(f"cannot read reference WAV: {error}") from error
+    if compression != "NONE":
+        raise ValueError("reference WAV must use uncompressed PCM")
+    if channels != 1:
+        raise ValueError(f"reference WAV must be mono, got {channels} channels")
+    if sample_width != 2:
+        raise ValueError(f"reference WAV must be PCM 16-bit, got {sample_width * 8}-bit")
+    if sample_rate != SAMPLE_RATE:
+        raise ValueError(f"reference WAV sample rate must be 44100 Hz, got {sample_rate}")
+    if samples < 1 or not pcm_bytes:
+        raise ValueError("reference WAV must contain non-empty audio")
+    if samples > SAMPLE_RATE * 10:
+        raise ValueError("reference WAV must be no longer than 10 seconds")
+    if len(pcm_bytes) != samples * 2:
+        raise ValueError("reference WAV PCM byte count does not match its frame count")
+    return {
+        "path": path.resolve(),
+        "samples": samples,
+        "pcm_bytes": pcm_bytes,
+        "wav_sha256": sha256_file(path),
+        "pcm_sha256": sha256_bytes(pcm_bytes),
+    }
+
+
 def pcm16_bytes(audio: Any, np: Any) -> bytes:
     samples = np.asarray(audio)
     if samples.ndim != 1 or samples.dtype != np.dtype("float32"):
@@ -387,6 +511,7 @@ class SamplerControl:
         self.frame_count = 0
         self.last_main = None
         self.capture_refs: list[tuple[int, str, Any]] = []
+        self.hidden_capture_refs: list[tuple[int, Any]] = []
 
     def _label(self, slot: int) -> str:
         if slot == 0:
@@ -437,6 +562,10 @@ class SamplerControl:
         self.last_main = result
         self.frame_count += 1
         return result
+
+    def capture_main_hidden(self, step: int, hidden: Any) -> None:
+        if step in self.capture_steps:
+            self.hidden_capture_refs.append((step, hidden))
 
 
 class ChunkPromptAdapter:
@@ -1031,17 +1160,32 @@ def main(argv: list[str] | None = None) -> int:
     model_dir = args.model_dir.expanduser().resolve()
     replay_path = args.replay_script.expanduser().resolve()
     capture_path = report_path.with_suffix(report_path.suffix + ".sampler_logits.npz")
-    if output_path == report_path or output_path == capture_path or report_path == capture_path:
+    prompt_capture_path = report_path.with_suffix(report_path.suffix + ".prompt_rows.f32")
+    if (
+        output_path == report_path
+        or output_path == capture_path
+        or report_path == capture_path
+        or (args.reference_audio is not None and prompt_capture_path in (output_path, report_path, capture_path))
+    ):
         raise SystemExit("--output, --report, and generated capture path must differ")
     for path in (output_path, report_path):
         if path.exists():
             raise SystemExit(f"refusing to overwrite existing output: {path}")
     if args.capture_steps and capture_path.exists():
         raise SystemExit(f"refusing to overwrite existing capture output: {capture_path}")
+    if args.reference_audio is not None and prompt_capture_path.exists():
+        raise SystemExit(f"refusing to overwrite existing prompt capture output: {prompt_capture_path}")
     if not mlx_root.is_dir() or not model_dir.is_dir() or not replay_path.is_file():
         raise SystemExit("--mlx-root, --model-dir, and --replay-script must exist")
     if not args.text:
         raise SystemExit("--text must not be empty")
+    reference_wav = None
+    if args.reference_audio is not None:
+        reference_path = args.reference_audio.expanduser().resolve()
+        try:
+            reference_wav = read_reference_pcm16_wav(reference_path)
+        except ValueError as error:
+            raise SystemExit(str(error)) from error
 
     upstream = git_metadata(mlx_root)
     if not upstream["worktree_clean"]:
@@ -1113,13 +1257,19 @@ def main(argv: list[str] | None = None) -> int:
     import mlx_audio.tts.models.fish_omni.fish_omni as fish_omni
     import mlx_audio.tts.models.fish_omni.tower as tower_module
     from mlx_audio.tts.models.fish_omni.config import ModelConfig
-    from mlx_audio.tts.models.fish_omni.prompt import build_prompt
+    from mlx_audio.tts.models.fish_omni.prompt import build_prompt, validate_text
 
     generation_text = (
         f"<|speaker:{args.speaker_id}|> {args.text}"
         if args.speaker_id is not None
         else args.text
     )
+    try:
+        validate_text(generation_text, "text")
+        if args.reference_text is not None:
+            validate_text(args.reference_text, "reference 1")
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
     chunk_texts: list[str] = []
     if args.chunk_text:
         chunk_texts = fish_omni.split_text(
@@ -1146,6 +1296,8 @@ def main(argv: list[str] | None = None) -> int:
         planned_paths = [output_path, report_path, *chunk_output_paths]
         if args.capture_steps:
             planned_paths.append(capture_path)
+        if args.reference_audio is not None:
+            planned_paths.append(prompt_capture_path)
         if len(set(planned_paths)) != len(planned_paths):
             raise SystemExit("chunk WAV, combined WAV, report, and capture paths must differ")
         for path in planned_paths:
@@ -1195,6 +1347,35 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("loaded model type or sample rate differs from the checked checkpoint")
     if model.config.audio_decoder_config.num_codebooks != NUM_CODEBOOKS:
         raise SystemExit("loaded model does not have ten audio codebooks")
+    reference_codes_gpu = None
+    reference_lengths_gpu = None
+    reference_encode_seconds = 0.0
+    if reference_wav is not None:
+        if model.codec is None:
+            raise SystemExit("reference audio requires the checkpoint's loaded Fish S1 DAC codec")
+        pcm_i16 = np.frombuffer(reference_wav["pcm_bytes"], dtype=np.dtype("<i2"))
+        pcm_f32 = pcm_i16.astype(np.float32, copy=False)
+        reference_audio_gpu = (
+            mx.array(pcm_f32[None, None, :], dtype=mx.float32) / 32768.0
+        )
+        expected_reference_frames = math.ceil(reference_wav["samples"] / FRAME_SAMPLES)
+        reference_encode_started = time.perf_counter()
+        encoded_reference, reference_lengths_gpu = model.codec.encode(reference_audio_gpu)
+        if (
+            len(encoded_reference.shape) != 3
+            or tuple(encoded_reference.shape[:2]) != (1, NUM_CODEBOOKS)
+            or int(encoded_reference.shape[2]) != expected_reference_frames
+        ):
+            raise SystemExit(
+                "reference DAC returned invalid code geometry: "
+                f"{tuple(encoded_reference.shape)}, expected [1,{NUM_CODEBOOKS},{expected_reference_frames}]"
+            )
+        if tuple(reference_lengths_gpu.shape) != (1,):
+            raise SystemExit(
+                f"reference DAC returned invalid feature lengths shape {tuple(reference_lengths_gpu.shape)}"
+            )
+        reference_codes_gpu = encoded_reference[0, :, :expected_reference_frames]
+        reference_encode_seconds = time.perf_counter() - reference_encode_started
     if args.chunk_text:
         sampler = SamplerControl(mx, uniforms, set(args.capture_steps))
         load_timings = {
@@ -1240,16 +1421,33 @@ def main(argv: list[str] | None = None) -> int:
             fish_omni.PREFILL_CHUNK_SIZE = old_prefill_chunk_size
 
     prompt_started = time.perf_counter()
-    prompt = build_prompt(
-        generation_text,
-        model.tokenizer,
-        num_codebooks=NUM_CODEBOOKS,
-        codebook_size=int(model.config.audio_decoder_config.vocab_size),
-        semantic_start=int(model.semantic_begin),
-    )
-    prompt_ids = [int(value) for value in prompt[:, 0].tolist()]
+    reference_prompt_spans: list[tuple[int, int]] = []
+    if reference_codes_gpu is None:
+        # Preserve the original no-reference prompt path and its exact host builder.
+        prompt = build_prompt(
+            generation_text,
+            model.tokenizer,
+            num_codebooks=NUM_CODEBOOKS,
+            codebook_size=int(model.config.audio_decoder_config.vocab_size),
+            semantic_start=int(model.semantic_begin),
+        )
+        prompt_ids = [int(value) for value in prompt[:, 0].tolist()]
+    else:
+        prompt, _skeleton, reference_prompt_spans = build_reference_prompt_gpu(
+            mx,
+            np,
+            build_prompt,
+            text=generation_text,
+            tokenizer=model.tokenizer,
+            codebook_size=int(model.config.audio_decoder_config.vocab_size),
+            semantic_begin=int(model.semantic_begin),
+            reference_text=args.reference_text,
+            reference_codes=reference_codes_gpu,
+        )
+        # The prompt and encoded reference stay on GPU until generation completes.
+        prompt_ids = None
     prompt_seconds = time.perf_counter() - prompt_started
-    if not prompt_ids:
+    if prompt_ids is not None and not prompt_ids:
         raise SystemExit("prompt builder produced no token rows")
 
     sampler = SamplerControl(mx, uniforms, set(args.capture_steps))
@@ -1264,6 +1462,8 @@ def main(argv: list[str] | None = None) -> int:
         return sampler.sample(original_tower_sampler, logits, temperature, top_k, top_p)
 
     def tracked_sample_main(*call_args: Any, **call_kwargs: Any) -> Any:
+        if call_args and sampler.frame_count == 0 and 0 in sampler.capture_steps:
+            sampler.capture_main_hidden(sampler.frame_count, call_args[0])
         return sampler.track_main(original_sample_main, *call_args, **call_kwargs)
 
     fish_omni.sample_top_k_top_p = controlled_fish_sampler
@@ -1299,6 +1499,9 @@ def main(argv: list[str] | None = None) -> int:
     terminal_eval_started = time.perf_counter()
     eval_values = [value for value in (codes, audio, sampler.last_main) if value is not None]
     eval_values.extend(entry[2] for entry in sampler.capture_refs)
+    eval_values.extend(hidden for _step, hidden in sampler.hidden_capture_refs)
+    if reference_codes_gpu is not None:
+        eval_values.extend((reference_codes_gpu, reference_lengths_gpu, prompt))
     if eval_values:
         mx.eval(*eval_values)
     terminal_eval_seconds = time.perf_counter() - terminal_eval_started
@@ -1314,6 +1517,64 @@ def main(argv: list[str] | None = None) -> int:
         audio_dtype = str(audio.dtype)
         codes_np = np.asarray(codes)
         audio_np = np.asarray(audio)
+    prompt_np = None
+    reference_codes_np = None
+    reference_codes_sha = None
+    reference_lengths = None
+    reference_prompt_verified = None
+    prompt_capture_bytes = None
+    prompt_capture_sha = None
+    prompt_rows_sha = None
+    if reference_codes_gpu is not None:
+        if reference_lengths_gpu is None:
+            raise SystemExit("reference encoder did not return feature lengths")
+        reference_codes_np = np.asarray(reference_codes_gpu)
+        if reference_codes_np.shape != (NUM_CODEBOOKS, math.ceil(reference_wav["samples"] / FRAME_SAMPLES)):
+            raise SystemExit(f"terminal reference code shape is invalid: {reference_codes_np.shape}")
+        if not np.issubdtype(reference_codes_np.dtype, np.integer):
+            raise SystemExit(f"terminal reference codes are not integer: {reference_codes_np.dtype}")
+        reference_lengths_np = np.asarray(reference_lengths_gpu)
+        if not np.issubdtype(reference_lengths_np.dtype, np.integer):
+            raise SystemExit(f"terminal reference feature lengths are not integer: {reference_lengths_np.dtype}")
+        reference_lengths = [int(value) for value in reference_lengths_np.reshape(-1).tolist()]
+        expected_reference_frames = math.ceil(reference_wav["samples"] / FRAME_SAMPLES)
+        if reference_lengths != [expected_reference_frames]:
+            raise SystemExit(
+                f"terminal reference feature lengths {reference_lengths} do not match "
+                f"PCM frame count {expected_reference_frames}"
+            )
+        for book_index, limit in enumerate((4096,) + (1024,) * 9):
+            row = reference_codes_np[book_index]
+            if row.size and (int(row.min()) < 0 or int(row.max()) >= limit):
+                raise SystemExit(f"reference code IDs for book {book_index} are out of range")
+        reference_codes_np = np.asarray(reference_codes_np, dtype=np.dtype("<i4"), order="C")
+        reference_codes_sha = sha256_bytes(reference_codes_np.tobytes(order="C"))
+        prompt_np = np.asarray(prompt)
+        official_prompt = verify_reference_prompt(
+            np,
+            build_prompt,
+            actual_prompt=prompt_np,
+            text=generation_text,
+            tokenizer=model.tokenizer,
+            codebook_size=int(model.config.audio_decoder_config.vocab_size),
+            semantic_begin=int(model.semantic_begin),
+            reference_text=args.reference_text,
+            reference_codes=reference_codes_np,
+        )
+        reference_prompt_verified = True
+        if prompt_np.ndim != 2 or prompt_np.shape[1] != NUM_CODEBOOKS + 1:
+            raise SystemExit(f"terminal reference prompt has invalid shape {prompt_np.shape}")
+        prompt_ids = [int(value) for value in prompt_np[:, 0].tolist()]
+        prompt_capture_values = np.asarray(prompt_np, dtype=np.dtype("<f4"), order="C")
+        if not np.isfinite(prompt_capture_values).all() or not np.array_equal(
+            prompt_capture_values, np.rint(prompt_capture_values)
+        ):
+            raise SystemExit("terminal reference prompt rows must be finite exact integer values")
+        prompt_capture_bytes = prompt_capture_values.tobytes(order="C")
+        prompt_capture_sha = sha256_bytes(prompt_capture_bytes)
+        prompt_rows_sha = sha256_bytes(prompt_capture_bytes)
+        if prompt_np.shape != official_prompt.shape:
+            raise SystemExit("verified official reference prompt unexpectedly changed shape")
     last_main = int(np.asarray(sampler.last_main).reshape(-1)[0]) if sampler.last_main is not None else None
     capture_arrays: dict[str, Any] = {}
     capture_manifest: list[dict[str, Any]] = []
@@ -1325,6 +1586,22 @@ def main(argv: list[str] | None = None) -> int:
         capture_arrays[key] = values
         capture_manifest.append({"key": key, "step": capture_step, "sampler": label,
                                  "shape": list(values.shape), "dtype": "float32"})
+    for capture_step, hidden in sampler.hidden_capture_refs:
+        key = f"step_{capture_step:05d}_prompt_backbone_hidden"
+        values = np.asarray(hidden, dtype=np.float32)
+        if values.ndim != 3 or values.shape[:2] != (1, 1) or not np.isfinite(values).all():
+            raise SystemExit(
+                f"captured prompt backbone hidden {key} has invalid values or shape {values.shape}"
+            )
+        values = values[:, 0, :]
+        capture_arrays[key] = values
+        capture_manifest.append({
+            "key": key,
+            "step": capture_step,
+            "kind": "prompt.backbone.hidden",
+            "shape": list(values.shape),
+            "dtype": "float32",
+        })
     terminal_readback_seconds = time.perf_counter() - terminal_readback_started
 
     if codes_np.ndim != 2 or codes_np.shape[0] != NUM_CODEBOOKS:
@@ -1363,6 +1640,9 @@ def main(argv: list[str] | None = None) -> int:
         atomic_create(capture_path, capture_bytes)
         capture_file_sha = sha256_bytes(capture_bytes)
 
+    if prompt_capture_bytes is not None:
+        atomic_create(prompt_capture_path, prompt_capture_bytes)
+
     if wav_bytes:
         atomic_create(output_path, wav_bytes)
     try:
@@ -1392,7 +1672,17 @@ def main(argv: list[str] | None = None) -> int:
             "allocator_cache_limit_bytes": 0,
             "previous_allocator_cache_limit_bytes": previous_cache_limit,
             "prefill_chunk_size": 1,
-            "host_readback_scope": "official Fish Omni per-frame scalar EOS check, official DAC decoded-length scalar, one terminal sampled-main scalar for EOS classification, and terminal output/logit conversion after mx.eval; no per-token activation readback",
+            "host_readback_scope": (
+                "official Fish Omni per-frame scalar EOS check, official DAC decoded-length scalar, "
+                "one terminal sampled-main scalar for EOS classification, and terminal output/logit "
+                "conversion after mx.eval; reference codes and the complete GPU-built prompt are read "
+                "only after generation for hash and exact official-builder verification; no per-token "
+                "activation readback"
+                if reference_wav is not None
+                else "official Fish Omni per-frame scalar EOS check, official DAC decoded-length scalar, "
+                "one terminal sampled-main scalar for EOS classification, and terminal output/logit "
+                "conversion after mx.eval; no per-token activation readback"
+            ),
         },
         "model": {
             "repository": MODEL_REPOSITORY,
@@ -1425,7 +1715,12 @@ def main(argv: list[str] | None = None) -> int:
             "speaker_id": args.speaker_id if args.speaker_id is not None else 0,
             "speaker_tag": f"<|speaker:{args.speaker_id if args.speaker_id is not None else 0}|>",
             "speaker_tag_injected_by_cli": args.speaker_id is not None,
-            "prompt_schedule": "official prompt builder; one-row prefill chunks",
+            "prompt_schedule": (
+                "official prompt builder creates a zero-code reference skeleton; MLX reference code "
+                "rows are spliced before GPU prefill; one-row prefill chunks"
+                if reference_wav is not None
+                else "official prompt builder; one-row prefill chunks"
+            ),
         },
         "settings": {
             "seed": args.seed,
@@ -1460,6 +1755,7 @@ def main(argv: list[str] | None = None) -> int:
             "prompt_build": prompt_seconds,
             "generation": generation_seconds,
             "decode_codes": decode_seconds,
+            "reference_encode": reference_encode_seconds,
             "terminal_eval": terminal_eval_seconds,
             "terminal_readback_and_capture_conversion": terminal_readback_seconds,
         },
@@ -1492,6 +1788,42 @@ def main(argv: list[str] | None = None) -> int:
             "trajectory_scope": "captures follow this run's autoregressive trajectory; cross-run logit comparison is common-prefix evidence only through equal prior frames, otherwise use teacher-forced common-prefix replay",
             "readback_policy": "captured input-logit arrays are retained as MLX arrays and converted only after terminal mx.eval; they are not inspected during generation",
         },
+        "reference_voice": None if reference_wav is None else {
+            "supplied": True,
+            "audio": {
+                "path": str(reference_wav["path"]),
+                "wav_sha256": reference_wav["wav_sha256"],
+                "pcm_sha256": reference_wav["pcm_sha256"],
+                "sample_rate": SAMPLE_RATE,
+                "channels": 1,
+                "sample_width_bits": 16,
+                "samples": reference_wav["samples"],
+                "normalization": "upload signed PCM16 values as F32; divide by 32768.0 on MLX GPU",
+            },
+            "transcript": args.reference_text,
+            "transcript_utf8_sha256": sha256_bytes(args.reference_text.encode("utf-8")),
+            "encoder": "pinned Fish S1 DAC.encode; codec weights retained at checkpoint F32",
+            "codes": {
+                "shape": list(reference_codes_np.shape),
+                "layout": "codebook-major",
+                "dtype": "int32-le",
+                "sha256": reference_codes_sha,
+                "feature_lengths": reference_lengths,
+                "encoder_seconds": reference_encode_seconds,
+            },
+            "prompt_rows": {
+                "path": str(prompt_capture_path),
+                "shape": list(prompt_np.shape),
+                "row_axis": "prompt_row",
+                "channel_axis": "main_plus_10_codebooks",
+                "dtype": "float32-le",
+                "file_sha256": prompt_capture_sha,
+                "rows_sha256": prompt_rows_sha,
+                "reference_placeholder_spans": [list(span) for span in reference_prompt_spans],
+                "official_builder_byte_equal_after_generation": reference_prompt_verified,
+            },
+            "complete_conditioning": True,
+        },
         "voice_support": {
             "official_generate_voice_argument": "accepted but discarded by pinned Fish Omni Model.generate",
             "speaker_tags": "prompt syntax supports <|speaker:0|> through <|speaker:15|>; tags identify segments but do not provide reference voice identity by themselves",
@@ -1500,8 +1832,12 @@ def main(argv: list[str] | None = None) -> int:
                 "speaker_id": args.speaker_id if args.speaker_id is not None else 0,
                 "speaker_tag_in_prompt": True,
                 "speaker_tag_injected_by_cli": args.speaker_id is not None,
-                "reference_voice_supplied": False,
-                "interpretation": "the prompt builder defaults to speaker 0; an explicit --speaker-id changes prompt structure only. Neither a tag nor a changed seed promises a distinct or stable speaker identity",
+                "reference_voice_supplied": reference_wav is not None,
+                "interpretation": (
+                    "reference audio and its matching transcript are included in speaker-0 prompt conditioning"
+                    if reference_wav is not None
+                    else "the prompt builder defaults to speaker 0; an explicit --speaker-id changes prompt structure only. Neither a tag nor a changed seed promises a distinct or stable speaker identity"
+                ),
             },
         },
         "report_path": str(report_path),

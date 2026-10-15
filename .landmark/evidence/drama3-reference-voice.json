@@ -1,0 +1,1059 @@
+{
+  "format": "landmark-evidence-v1",
+  "id": "drama3-reference-voice",
+  "created_at_utc": "2026-10-15T22:01:07.160776+00:00",
+  "base_revision": "04b254dd0d6344e58cec9a285f72c0cbfb7dba36",
+  "claim": {
+    "status": "VERIFIED",
+    "scope": "One native reference WAV plus matching speaker-0 transcript on resident Metal; pinned encoder/prompt/first-prefill gates at graph depths 0 and 2; paired plain-Russian-text quiet-window comparison with exact shared sampler inputs and complete native/MLX sampled-token parity.",
+    "excluded": [
+      "All-word or speaker-identity certification",
+      "Universal pause cure or unique generation-cause claim",
+      "Original Fish full text generation",
+      "Full decoder intermediate floating-point parity",
+      "All references, voices, languages, devices or seeds",
+      "Zero host control reads or zero CogniGraph waits",
+      "Performance promotion or LTP/WBA certificate"
+    ]
+  },
+  "risk_and_rollback": {
+    "tier": "CAUTION",
+    "reason": "A padding, reduction, rotary or code-order error can silently condition different audio while still producing a valid WAV.",
+    "main_failure_mode": "Treating a plausible waveform, matching seed, or a separate unbound encoder probe as evidence of matched conditioning and sampler inputs.",
+    "guard": "102 actual encoder boundaries with unchanged gates, exact 850 code IDs and full prompt rows, first-prefill pointwise gate, graph-depth parity, same-production-source build/execution binding, run-side exact F32 input-tape digests, negative validators and unchanged-path regression.",
+    "rollback": "Revert the single isolated feature commit; omit reference flags to retain the existing no-reference API."
+  },
+  "runtime": {
+    "device": "Apple M2 Max",
+    "unified_memory": true,
+    "os": "macOS 26.6.2 arm64",
+    "crystal": "1.21",
+    "mlx": "0.31.1",
+    "ml_source_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+    "native_graph_depths": [
+      0,
+      2
+    ],
+    "generation_graph_depth": 2,
+    "mmap_shared": false,
+    "minimum_free_memory_percent": 15,
+    "quiet_host_required": false,
+    "timing_scope": "Wall-clock phase values are exploratory on a shared host; waveform duration is not inference latency."
+  },
+  "checkpoint": {
+    "repository": "cguldogan/drama-3-mlx-q4",
+    "revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+    "local_path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+    "model_files": {
+      "codec.safetensors": "543445a2ebc5224d2af5956d422f88c2cd21f4018c1a26d81b51ec231bb630f2",
+      "config.json": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+      "model-00001-of-00005.safetensors": "bcb7e680d4f07ea21404070a407ab327572cb7d7b577d73e145871b2456b5012",
+      "model-00002-of-00005.safetensors": "67ca8709ee770c21fb09b68d08fc50faf3102451f150745dcb6971dbf8e5894a",
+      "model-00003-of-00005.safetensors": "0c0e1055b617bbf7e507ab9ac611d290124b985f63cbdb52cb5275d558202e76",
+      "model-00004-of-00005.safetensors": "116f376cf435fc7f2dfc09ffa985e5d1c908fd9580877b3fcb9df37e9be029f2",
+      "model-00005-of-00005.safetensors": "e20c3406557e2b1e44f446f2e1af8e7832ef545047f8c146c9e704a692a63b2d",
+      "model.safetensors.index.json": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855",
+      "tokenizer.json": "0e9b9db76b2f0389b04b6ef057a2ac3b89100b7e96f2dd7034d19580a09654d6"
+    },
+    "scope": "Fresh local full-file hashes match the captured MLX checkpoint manifest; clean pinned upstream source. Trusted local compiler/checkpoint assumptions; no fresh remote attestation."
+  },
+  "configuration": {
+    "target_text_utf8_sha256": "a0ca57a527d989881a1fa0ff2b3fdf9eba90d8a8963b6f6dbfe21fd458427719",
+    "seed": 1,
+    "temperature": 0.8,
+    "top_k": 30,
+    "top_p": 0.9,
+    "max_frames": 512,
+    "random_tape": {
+      "seed": 1,
+      "frames": 512,
+      "stride": 11,
+      "compared_uniforms": 5632,
+      "tape_uniform_count": 8448,
+      "tape_sha256": "ddc31bee6c0ffcd12c2ba781207747cad5eab9cbcb02faa074658caac8e16341",
+      "prefix_f32_sha256": "63e955c00512b965c17303e4c2517ed4eeb093193af6c881542045c0c7ece7a1",
+      "producer": "ResidentGenerator#sampling_draws called through a probe wrapper",
+      "production_source": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/src/ml/audio/drama3/generator_resident.cr",
+      "production_source_sha256": "bcfddbbb41415711ac423b454acff6427491624827caf02732be816209dc7718"
+    },
+    "reference_voice": {
+      "wav_sha256": "a24ee1bf75c1a2bbe414e4ee9d41151b1e13bdff663c35434e8f86baa9b0a0c3",
+      "pcm_sha256": "05f9f5e6a82903efbdceff49f6078c4879d8df43e1264d5d52db4406b85ec760",
+      "transcript_utf8_sha256": "f3a56fcba4097b4832e16bd574ab108e72720802c272c9e3f3ca563851a7a872",
+      "samples": 172167,
+      "codes_sha256": "54014f5e6dfdc759bf8c67834cd9cefd56d89059aa3c4677fae4e5c8e98c983c",
+      "prompt_fixture_and_actual_mlx_sha256": "ac62fef0df138cb701ba09126a878e1e8a014c7f76409dbdcb1f37e250ca898a",
+      "prompt_shape": [
+        168,
+        11
+      ],
+      "prompt_gate": {
+        "fixture_path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/mlx-encoder/stage_102_prompt_rows.f32",
+        "actual_mlx_prompt_path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/mlx-ru-reference.json.prompt_rows.f32",
+        "shape": [
+          168,
+          11
+        ],
+        "dtype": "float32-le",
+        "sha256": "ac62fef0df138cb701ba09126a878e1e8a014c7f76409dbdcb1f37e250ca898a",
+        "file_bytes": 7392,
+        "byte_equal": true,
+        "official_builder_byte_equal_after_generation": true,
+        "encoder_stage_manifest_entries": 102
+      },
+      "upstream": {
+        "repository": "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/mlx-audio",
+        "revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+        "worktree_clean": true,
+        "model_repository": "cguldogan/drama-3-mlx-q4",
+        "model_revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+        "model_config_sha256": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+        "model_index_sha256": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855",
+        "codec_sha256": "543445a2ebc5224d2af5956d422f88c2cd21f4018c1a26d81b51ec231bb630f2"
+      },
+      "native_encoder_numeric_gate": {
+        "code_ids_exact": true,
+        "prompt_exact": true,
+        "full_numeric_stage_gate_passes": true,
+        "first_failed_stage": null,
+        "interpretation": "a separate native encoder probe matched the fixture's terminal code IDs and prompt rows; the generation report's reference metadata is validated independently, and the full encoder numeric intermediate-stage gate is reported separately"
+      }
+    }
+  },
+  "input_preparation": {
+    "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/input/preparation.json",
+    "bytes": 1201,
+    "sha256": "a51c9fd5cc8fcfd7688f3acd2af17bb376d36df71f70016754de1efeeb07c8c8"
+  },
+  "encoder_and_prefill": {
+    "gates": {
+      "max_abs": 0.001,
+      "rms": 0.0002,
+      "normalized_rms": 0.0002,
+      "code_ids": "elementwise exact",
+      "prompt_rows": "elementwise exact"
+    },
+    "stages": 102,
+    "reference_frames": 85,
+    "code_values_exact": 850,
+    "prompt_shape": [
+      168,
+      11
+    ],
+    "graph_depth_metrics_elementwise_equal": true,
+    "largest_absolute_error_stage": {
+      "name": "quantizer.pre_module.layer.5",
+      "shape": [
+        85,
+        1024
+      ],
+      "max_abs": 0.00062561035,
+      "rms": 3.1685708e-05,
+      "reference_rms": 87.00208,
+      "actual_rms": 87.00208,
+      "reference_peak": 589.80426,
+      "actual_peak": 589.8044,
+      "nonfinite": 0,
+      "normalized_rms": 3.6419482e-07,
+      "worst_index": 61168,
+      "exact_required": false,
+      "elementwise_exact": false,
+      "passes": true
+    },
+    "prefill_stages": [
+      {
+        "name": "prompt.backbone.hidden",
+        "shape": [
+          1,
+          2048
+        ],
+        "max_abs": 5.722046e-06,
+        "rms": 7.1109463e-07,
+        "reference_rms": 0.41564053,
+        "actual_rms": 0.4156406,
+        "reference_peak": 10.018741,
+        "actual_peak": 10.018746,
+        "normalized_rms": 1.7108405e-06,
+        "worst_index": 682,
+        "exact_required": false,
+        "elementwise_exact": false,
+        "passes": true,
+        "pointwise_failures": 0,
+        "nonfinite": 0,
+        "worst_error_to_allowance": 0.0506183,
+        "atol": 3e-05,
+        "rtol": 0.0003
+      },
+      {
+        "name": "prompt.main_logits",
+        "shape": [
+          1,
+          4097
+        ],
+        "max_abs": 2.193451e-05,
+        "rms": 6.8435756e-06,
+        "reference_rms": 8.085154,
+        "actual_rms": 8.085158,
+        "reference_peak": 17.689602,
+        "actual_peak": 17.689604,
+        "normalized_rms": 8.4643733e-07,
+        "worst_index": 2396,
+        "exact_required": false,
+        "elementwise_exact": false,
+        "passes": true,
+        "pointwise_failures": 0,
+        "nonfinite": 0,
+        "worst_error_to_allowance": 0.089973174,
+        "atol": 3e-05,
+        "rtol": 0.0003
+      }
+    ],
+    "reports": [
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/native-reference-depth0-final-v2.json",
+        "bytes": 51333,
+        "sha256": "8779e35135d57a2697b05f29c6adc83db6838b11d3742a92b68173b0ca7ce572"
+      },
+      {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/native-reference-depth2-final-v2.json",
+        "bytes": 51353,
+        "sha256": "7e2fff328f00c702fb3553f7e6d52d9c3f83f94be89fb44113b3d79056d76731"
+      }
+    ],
+    "encoder_fixture": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/mlx-encoder/manifest.json",
+      "bytes": 37820,
+      "sha256": "9862d05c87a9dfcba58617d41efdc009d5dfdc0384aa769c99deae82eda23792"
+    },
+    "prefill_fixture": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/mlx-prefill-reference-v1-export/manifest.json",
+      "bytes": 6624,
+      "sha256": "084b29b98473ed9b4ad8f04ed1a2b821d96e47bf423b8eb0807ae832ecb883fa"
+    },
+    "scope": "Exact IDs/prompt are independently measured by the same-production-source probe. Native generation does not read intermediate reference codes for a run-specific hash."
+  },
+  "generation_token_comparison": {
+    "reference": {
+      "native_frames": 218,
+      "mlx_frames": 218,
+      "native_stopped_on_eos": true,
+      "mlx_status": "eos",
+      "mlx_iterations": 219,
+      "mlx_returned_frames": 218,
+      "main_token_comparison": {
+        "common_prefix_frames": 218,
+        "common_prefix_fraction_of_shorter": 1.0,
+        "common_prefix_exact": true,
+        "all_frames_exact": true,
+        "first_mismatch_frame": null,
+        "comparison": "exact elementwise integer equality on MLX GPU"
+      },
+      "codebook_comparison": {
+        "common_prefix_frames": 218,
+        "common_prefix_fraction_of_shorter": 1.0,
+        "common_prefix_exact": true,
+        "all_frames_exact": true,
+        "first_mismatch_frame": null,
+        "comparison": "exact elementwise integer equality on MLX GPU"
+      },
+      "all_token_comparison": {
+        "common_prefix_frames": 218,
+        "common_prefix_fraction_of_shorter": 1.0,
+        "common_prefix_exact": true,
+        "all_frames_exact": true,
+        "first_mismatch_frame": null,
+        "comparison": "exact elementwise integer equality on MLX GPU"
+      }
+    },
+    "no_reference": {
+      "native_frames": 463,
+      "mlx_frames": 463,
+      "native_stopped_on_eos": true,
+      "mlx_status": "eos",
+      "mlx_iterations": 464,
+      "mlx_returned_frames": 463,
+      "main_token_comparison": {
+        "common_prefix_frames": 463,
+        "common_prefix_fraction_of_shorter": 1.0,
+        "common_prefix_exact": true,
+        "all_frames_exact": true,
+        "first_mismatch_frame": null,
+        "comparison": "exact elementwise integer equality on MLX GPU"
+      },
+      "codebook_comparison": {
+        "common_prefix_frames": 463,
+        "common_prefix_fraction_of_shorter": 1.0,
+        "common_prefix_exact": true,
+        "all_frames_exact": true,
+        "first_mismatch_frame": null,
+        "comparison": "exact elementwise integer equality on MLX GPU"
+      },
+      "all_token_comparison": {
+        "common_prefix_frames": 463,
+        "common_prefix_fraction_of_shorter": 1.0,
+        "common_prefix_exact": true,
+        "all_frames_exact": true,
+        "first_mismatch_frame": null,
+        "comparison": "exact elementwise integer equality on MLX GPU"
+      },
+      "prompt_ids_exact": true,
+      "prompt_rows": 48
+    }
+  },
+  "waveform_results": [
+    {
+      "name": "native-ru-reference",
+      "wav": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/final-v2/native-ru-reference.wav",
+        "bytes": 892972,
+        "sha256": "af510dbcd1e384e2ae1a6c08106130f7728307cadaec0f8b69b0335edab88e3d"
+      },
+      "samples": 446464,
+      "duration_seconds": 10.12390022675737,
+      "internal_quiet_runs": [],
+      "time_in_internal_quiet_runs_seconds": 0,
+      "quiet_full_windows": 0
+    },
+    {
+      "name": "native-ru-no-reference",
+      "wav": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/final-v2/native-ru-no-reference.wav",
+        "bytes": 1896492,
+        "sha256": "235fb9477efe998e91ed30f31ab2c9f73b438d1d7b0d40a92b425b87a4da368f"
+      },
+      "samples": 948224,
+      "duration_seconds": 21.501678004535147,
+      "internal_quiet_runs": [
+        {
+          "start_window": 6,
+          "end_window_exclusive": 10,
+          "start_seconds": 3.0,
+          "end_seconds": 5.0,
+          "duration_seconds": 2.0,
+          "window_count": 4
+        },
+        {
+          "start_window": 14,
+          "end_window_exclusive": 18,
+          "start_seconds": 7.0,
+          "end_seconds": 9.0,
+          "duration_seconds": 2.0,
+          "window_count": 4
+        },
+        {
+          "start_window": 23,
+          "end_window_exclusive": 27,
+          "start_seconds": 11.5,
+          "end_seconds": 13.5,
+          "duration_seconds": 2.0,
+          "window_count": 4
+        },
+        {
+          "start_window": 31,
+          "end_window_exclusive": 36,
+          "start_seconds": 15.5,
+          "end_seconds": 18.0,
+          "duration_seconds": 2.5,
+          "window_count": 5
+        }
+      ],
+      "time_in_internal_quiet_runs_seconds": 8.5,
+      "quiet_full_windows": 18
+    },
+    {
+      "name": "mlx-ru-reference",
+      "wav": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/final-v2/mlx-ru-reference.wav",
+        "bytes": 892972,
+        "sha256": "c0aee513fb7e98b20cc2dee473eed20c15c9d7c9460436c5e33bedd3f2654277"
+      },
+      "samples": 446464,
+      "duration_seconds": 10.12390022675737,
+      "internal_quiet_runs": [],
+      "time_in_internal_quiet_runs_seconds": 0,
+      "quiet_full_windows": 0
+    },
+    {
+      "name": "mlx-ru-no-reference",
+      "wav": {
+        "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/final-v2/mlx-ru-no-reference.wav",
+        "bytes": 1896492,
+        "sha256": "1c796cd1cfc0675baef3c1a81313ca08b0a41f72537cf1d6382141d8ae205daa"
+      },
+      "samples": 948224,
+      "duration_seconds": 21.501678004535147,
+      "internal_quiet_runs": [
+        {
+          "start_window": 6,
+          "end_window_exclusive": 10,
+          "start_seconds": 3.0,
+          "end_seconds": 5.0,
+          "duration_seconds": 2.0,
+          "window_count": 4
+        },
+        {
+          "start_window": 14,
+          "end_window_exclusive": 18,
+          "start_seconds": 7.0,
+          "end_seconds": 9.0,
+          "duration_seconds": 2.0,
+          "window_count": 4
+        },
+        {
+          "start_window": 23,
+          "end_window_exclusive": 27,
+          "start_seconds": 11.5,
+          "end_seconds": 13.5,
+          "duration_seconds": 2.0,
+          "window_count": 4
+        },
+        {
+          "start_window": 31,
+          "end_window_exclusive": 36,
+          "start_seconds": 15.5,
+          "end_seconds": 18.0,
+          "duration_seconds": 2.5,
+          "window_count": 5
+        }
+      ],
+      "time_in_internal_quiet_runs_seconds": 8.5,
+      "quiet_full_windows": 18
+    }
+  ],
+  "no_reference_regression": {
+    "historical_wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/emotion-whisper-end-20261015/native-ru-plain.wav",
+      "bytes": 1896492,
+      "sha256": "235fb9477efe998e91ed30f31ab2c9f73b438d1d7b0d40a92b425b87a4da368f"
+    },
+    "fresh_wav": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/final-v2/native-ru-no-reference.wav",
+      "bytes": 1896492,
+      "sha256": "235fb9477efe998e91ed30f31ab2c9f73b438d1d7b0d40a92b425b87a4da368f"
+    },
+    "byte_identical": true
+  },
+  "device_boundary": {
+    "host_input_work": "Bounded single-snapshot WAV parsing and SHA; exact int16-to-F32 widening; tokenizer/text rows and initial random input tape.",
+    "resident_path": "PCM16 normalization, DAC encoder, VQ, prompt audio rows, prefill, backbone/tower generation and DAC.",
+    "intermediate_activation_readback": false,
+    "code_read_before_prefill": false,
+    "extra_encoder_prompt_prefill_handoff_drain": false,
+    "existing_reads": "EOS/finite control and terminal frame/waveform reads remain; CogniGraph performs bounded completion waits.",
+    "production_readback_ledger": {
+      "native_reference": {
+        "control": 1760,
+        "terminal": 1795448
+      },
+      "native_no_reference": {
+        "control": 3720,
+        "terminal": 3813268
+      },
+      "mlx_reference": "official Fish Omni per-frame scalar EOS check, official DAC decoded-length scalar, one terminal sampled-main scalar for EOS classification, and terminal output/logit conversion after mx.eval; reference codes and the complete GPU-built prompt are read only after generation for hash and exact official-builder verification; no per-token activation readback",
+      "mlx_no_reference": "official Fish Omni per-frame scalar EOS check, official DAC decoded-length scalar, one terminal sampled-main scalar for EOS classification, and terminal output/logit conversion after mx.eval; no per-token activation readback"
+    },
+    "probe_graph_ledger": [
+      {
+        "depth": 0,
+        "before_terminal_reads": {
+          "depth": 0,
+          "submitted": 215,
+          "completed": 215,
+          "pending": 0,
+          "max_pending": 0,
+          "completion_waits": 215,
+          "retained_bytes": 0,
+          "max_retained_bytes": 0
+        },
+        "after_terminal_reads": {
+          "depth": 0,
+          "submitted": 215,
+          "completed": 215,
+          "pending": 0,
+          "max_pending": 0,
+          "completion_waits": 215,
+          "retained_bytes": 0,
+          "max_retained_bytes": 0
+        }
+      },
+      {
+        "depth": 2,
+        "before_terminal_reads": {
+          "depth": 2,
+          "submitted": 215,
+          "completed": 215,
+          "pending": 0,
+          "max_pending": 2,
+          "completion_waits": 215,
+          "retained_bytes": 0,
+          "max_retained_bytes": 31906437284
+        },
+        "after_terminal_reads": {
+          "depth": 2,
+          "submitted": 215,
+          "completed": 215,
+          "pending": 0,
+          "max_pending": 2,
+          "completion_waits": 215,
+          "retained_bytes": 0,
+          "max_retained_bytes": 31906437284
+        }
+      }
+    ]
+  },
+  "local_build_binding": {
+    "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/final-v2/source-binding.json",
+    "bytes": 6159,
+    "sha256": "bb36b957670ab007b3cb4d070602f811f6c3829f8abe3e998a72f0a0d8449164"
+  },
+  "sampler_producer_proof": {
+    "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/random-tape-prefix-final-v2.json",
+    "bytes": 578,
+    "sha256": "54ed442f741ad9115a80baf181b7aac081155ac5882c90f7a5aab485c12ee04d"
+  },
+  "pause_analysis": {
+    "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/final-v2/pause-comparison.json",
+    "bytes": 26320,
+    "sha256": "38ba01edb7f68e389af6a69b786e9ab6b12556c3da85afff73e586f5c980b5b1"
+  },
+  "generation_reports": [
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/final-v2/native-ru-reference.wav.json",
+      "bytes": 31778,
+      "sha256": "bf7929a6fba3350ee0b8bd67c0fa98182cac4d177a1d60ab9db419527d159d41"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/final-v2/native-ru-no-reference.wav.json",
+      "bytes": 64723,
+      "sha256": "67154d4e7c396afd81828dc2a35187caf8a9ed2b2ab9ec3cd852c89e6a59f822"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/final-v2/mlx-ru-reference.json",
+      "bytes": 80277,
+      "sha256": "606987e21b81e0c306c8df69566a6af8d330c5b5da9b6b2ae03fdd4a9cf945a1"
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/final-v2/mlx-ru-no-reference.json",
+      "bytes": 147671,
+      "sha256": "3a97bfc5c435558b4072a67b2f83d9272900e39d2b3916bcbf2b100566a74af6"
+    }
+  ],
+  "verification": {
+    "command_ledger": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/commands.json",
+      "bytes": 1080596,
+      "sha256": "62e4e857646b945b27db2b6c4553c021df5ba4a78e1a07385d690f69620c0a6a"
+    },
+    "selected_commands": [
+      {
+        "name": "build-reference-compare-final-v2",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/crystal",
+          "900",
+          "40960",
+          "build",
+          "examples/drama3_reference_compare.cr",
+          "-Ddrama3_metal",
+          "--release",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "-o",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/reference_compare_final_v2"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "HF_HUB_DISABLE_TELEMETRY": "1"
+        },
+        "exit_code": 0,
+        "log": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/build-reference-compare-final-v2.log",
+          "bytes": 61,
+          "sha256": "1949c9fa64f1d6cf6b5bc82fdd55a1dcbad6a042d24f80b96f4d9edb2e1101bc"
+        }
+      },
+      {
+        "name": "build-native-reference-cli-final-v2",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/crystal",
+          "900",
+          "40960",
+          "build",
+          "examples/drama3_generate.cr",
+          "-Ddrama3_metal",
+          "--release",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "-o",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/drama3_generate_final_v2"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "HF_HUB_DISABLE_TELEMETRY": "1"
+        },
+        "exit_code": 0,
+        "log": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/build-native-reference-cli-final-v2.log",
+          "bytes": 61,
+          "sha256": "1949c9fa64f1d6cf6b5bc82fdd55a1dcbad6a042d24f80b96f4d9edb2e1101bc"
+        }
+      },
+      {
+        "name": "prove-native-sampling-tape-final-v2",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/crystal",
+          "900",
+          "40960",
+          "run",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/prove_tape.cr",
+          "-Ddrama3_metal",
+          "--release",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "--",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/random-tape-1.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/random-tape-prefix-final-v2.json"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "HF_HUB_DISABLE_TELEMETRY": "1"
+        },
+        "exit_code": 0,
+        "log": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/prove-native-sampling-tape-final-v2.log",
+          "bytes": 599,
+          "sha256": "6ff55ed299f6629c77f36b6dd877d3c441248dcf9b46360dc76230d21bb00cfa"
+        }
+      },
+      {
+        "name": "native-reference-depth0-final-v2",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/reference_compare_final_v2",
+          "900",
+          "40960",
+          "--model",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--manifest",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/mlx-encoder/manifest.json",
+          "--wav",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/input/en0-44100-pcm16.wav",
+          "--reference-text",
+          "We asked over twenty different people, and they all said it was his.",
+          "--text",
+          "Ура, ты вернулся! Почему молчал? Я боялась тебя потерять. Теперь всё хорошо! Только никому не говори наш секрет.",
+          "--prefill-reference",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/mlx-prefill-reference-v1-export/manifest.json",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/native-reference-depth0-final-v2.json"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "0",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "HF_HUB_DISABLE_TELEMETRY": "1"
+        },
+        "exit_code": 0,
+        "log": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/native-reference-depth0-final-v2.log",
+          "bytes": 481,
+          "sha256": "a6d0c490c7cb3dc1316a4a1163989ecfbec9b47c8345a9ea31dcce984e657ebf"
+        }
+      },
+      {
+        "name": "native-reference-depth2-final-v2",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/reference_compare_final_v2",
+          "900",
+          "40960",
+          "--model",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--manifest",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/mlx-encoder/manifest.json",
+          "--wav",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/input/en0-44100-pcm16.wav",
+          "--reference-text",
+          "We asked over twenty different people, and they all said it was his.",
+          "--text",
+          "Ура, ты вернулся! Почему молчал? Я боялась тебя потерять. Теперь всё хорошо! Только никому не говори наш секрет.",
+          "--prefill-reference",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/mlx-prefill-reference-v1-export/manifest.json",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/native-reference-depth2-final-v2.json"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "HF_HUB_DISABLE_TELEMETRY": "1"
+        },
+        "exit_code": 0,
+        "log": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/native-reference-depth2-final-v2.log",
+          "bytes": 483,
+          "sha256": "6962f24c413a66f9990e3a04477ee7ecbd35741fc2d42fc2562a4bfd4f341469"
+        }
+      },
+      {
+        "name": "native-ru-reference-final-v2",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/drama3_generate_final_v2",
+          "900",
+          "40960",
+          "--model",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--text",
+          "Ура, ты вернулся! Почему молчал? Я боялась тебя потерять. Теперь всё хорошо! Только никому не говори наш секрет.",
+          "--seed",
+          "1",
+          "--max-frames",
+          "512",
+          "--reference-audio",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/input/en0-44100-pcm16.wav",
+          "--reference-text",
+          "We asked over twenty different people, and they all said it was his.",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/final-v2/native-ru-reference.wav"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "HF_HUB_DISABLE_TELEMETRY": "1"
+        },
+        "exit_code": 0,
+        "log": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/native-ru-reference-final-v2.log",
+          "bytes": 11869,
+          "sha256": "45baa4c88e8a7c8a40f66ca416b5b2fecf21698b857edf4232b29266da25caae"
+        }
+      },
+      {
+        "name": "native-ru-no-reference-final-v2",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/drama3_generate_final_v2",
+          "900",
+          "40960",
+          "--model",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--text",
+          "Ура, ты вернулся! Почему молчал? Я боялась тебя потерять. Теперь всё хорошо! Только никому не говори наш секрет.",
+          "--seed",
+          "1",
+          "--max-frames",
+          "512",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/final-v2/native-ru-no-reference.wav"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "HF_HUB_DISABLE_TELEMETRY": "1"
+        },
+        "exit_code": 0,
+        "log": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/native-ru-no-reference-final-v2.log",
+          "bytes": 15292,
+          "sha256": "ca4b5065274437bbd3eeafef9ffc62496876d9892edafe740652bb1fe4c1012c"
+        }
+      },
+      {
+        "name": "compare-reference-pauses-final-v2",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "900",
+          "40960",
+          "scripts/drama3/compare_reference_pauses.py",
+          "--run-dir",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/final-v2",
+          "--random-tape",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/random-tape-1.json",
+          "--tape-proof",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/random-tape-prefix-final-v2.json",
+          "--encoder-report",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/native-reference-depth2-final-v2.json",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/final-v2/pause-comparison.json"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "HF_HUB_DISABLE_TELEMETRY": "1"
+        },
+        "exit_code": 0,
+        "log": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/compare-reference-pauses-final-v2.log",
+          "bytes": 332,
+          "sha256": "1e05a88f2bfcf11453220ed10283f417b5072afb7b39ffff25a4f726c5f6915f"
+        }
+      },
+      {
+        "name": "reference-compare-self-test-final-v2",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/reference_compare_final_v2",
+          "900",
+          "40960",
+          "--self-test"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "HF_HUB_DISABLE_TELEMETRY": "1"
+        },
+        "exit_code": 0,
+        "log": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/reference-compare-self-test-final-v2.log",
+          "bytes": 422,
+          "sha256": "89ea0497451ddf48a1308c2901a25ff7a290e7e1e6c279c08e68fd355a774e1a"
+        }
+      },
+      {
+        "name": "gpu-reference-suite-final-v2",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/opt/homebrew/bin/crystal",
+          "900",
+          "40960",
+          "spec",
+          "spec/drama3_reference_audio_spec.cr",
+          "spec/drama3_reference_prompt_spec.cr",
+          "spec/drama3_generator_resident_spec.cr",
+          "spec/drama3_generation_spec.cr",
+          "spec/drama3_codec_encoder_resident_spec.cr",
+          "spec/drama3_encoder_attention_spec.cr",
+          "-Ddrama3_metal",
+          "--link-flags=/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/build/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld"
+        ],
+        "environment": {
+          "DRAMA3_BACKEND": "metal",
+          "DRAMA3_MOE_BATCH": "1",
+          "DRAMA3_DENSE_REDUCTION": "tree",
+          "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+          "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+          "DRAMA3_MMAP_SHARED": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+          "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+          "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+          "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "MLX_ENABLE_TF32": "0",
+          "HF_HUB_OFFLINE": "1",
+          "TRANSFORMERS_OFFLINE": "1",
+          "HF_HUB_DISABLE_TELEMETRY": "1"
+        },
+        "exit_code": 0,
+        "log": {
+          "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/gpu-reference-suite-final-v2.log",
+          "bytes": 433,
+          "sha256": "030c71c8234783cdc6d259fe0ddc0258ddf7d796ce12b0828c3643da44c74527"
+        }
+      }
+    ],
+    "resident_gpu_tests": 27,
+    "cpu_contract_tests": 43,
+    "cpu_command": [
+      "PYTHONDONTWRITEBYTECODE=1",
+      "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+      "-m",
+      "unittest",
+      "spec/drama3_voice_control_spec.py",
+      "spec/drama3_reference_voice_spec.py",
+      "spec/drama3_prefill_reference_spec.py",
+      "spec/drama3_reference_pauses_spec.py"
+    ],
+    "cpu_log": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/cpu-python-final-v2.log",
+      "bytes": 142,
+      "sha256": "d017c02955a8681705941303362b21444514281669d50734728680b8c7250224"
+    },
+    "cli_boundary_cases": 5,
+    "cli_boundary_report": {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/final-v2/cli-boundaries.json",
+      "bytes": 5373,
+      "sha256": "4e58ad2308107622da4a40d991979cbe8f3207f643568057757af070bf71b974"
+    }
+  },
+  "mini_quadrumvirate": {
+    "method": "Predict failure, challenge reference/tape assumptions, implement the smallest measured correction, attack the result. Agent static reviews are correlated hypotheses; root independently built and executed GPU/CPU checks.",
+    "refuted_routes": [
+      "A matching seed alone certifies identical sampler inputs: rejected; actual uploaded host F32 arrays now have run-specific digests.",
+      "A separately passing encoder fixture alone binds generation conditioning: insufficient; fresh build/source/binary binding added, while retaining no intermediate readback.",
+      "A fully masked initial BK32 attention tile necessarily corrupts the output: reviewer withdrew after the first valid tile was shown to zero the previous online contribution; independent causal-window tail oracle passes."
+    ],
+    "adversary": {
+      "verdict": "ROBUST",
+      "reviewed_at_utc": "2026-10-15T21:59:54.364645+00:00",
+      "reviewer": "/root/reference_upstream",
+      "review_type": "Correlated read-only static adversary review, followed by root resolution of two documentation issues; not an independent model lineage.",
+      "root_verification": "Root independently built and executed the encoder/prompt/prefill depth-0/2 gates, full shared-tape pair and GPU/CPU/CLI checks; reviewed all source/binary and artifact bindings.",
+      "scoped_verdicts": {
+        "native_reference": "ROBUST for one mono PCM16 44.1 kHz WAV up to ten seconds plus matching speaker-0 transcript. Exact codes and prompt are from a separate same-production-source probe, not a generation-side intermediate readback.",
+        "sampler_inputs": "ROBUST for the actual 5632-value F32 input arrays in both native reports, the producer proof and the shared MLX tape prefix.",
+        "encoder_prompt_prefill": "ROBUST for all 102 unchanged numeric stage gates, exact 850 code IDs and 168 by 11 prompt elements, and the unchanged first-prefill pointwise gates at depths zero and two.",
+        "generated_tokens": "ROBUST for all 11 IDs in all 218 reference and 463 no-reference frames; both paths terminate at EOS. PCM is not bit-identical.",
+        "quiet_runs": "ROBUST as a bounded amplitude measurement: four internal quiet runs totaling 8.5 seconds without reference and none with reference, for native and MLX. No recognized-word, identity, unique-cause or generality claim."
+      },
+      "resolved_findings": [
+        {
+          "finding": "The reproduction guide overstated the pause analyzer: identity pins and the full numeric encoder gate are not enforced by it.",
+          "resolution": "The guide now distinguishes report-identity consistency and exact code/prompt checks from separately required pinned-source/checkpoint verification and passing numeric gates. No analyzer capability is claimed beyond its executed checks."
+        },
+        {
+          "finding": "Captured MLX reports retain stronger identity wording and an earlier helper hash.",
+          "resolution": "Raw reports and their hashes are preserved. The guide qualifies the interpretation as structural prompt conditioning, and a one-string reconstruction reproduces the exact captured helper hash."
+        }
+      ],
+      "reference_helper_lineage": {
+        "path": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/scripts/drama3/generate_mlx_control.py",
+        "executed_sha256": "9daf11b09e81cf387c6414656da1acd1abf27f7e0c6b517063443b08262ca950",
+        "current_sha256": "6da10f4be3fe38d2e90f5cc178802533ee7b7e7a7c7c5424720e55aa8779dd0a",
+        "reconstructed_executed_sha256_matches_both_command_records": true,
+        "only_difference": {
+          "executed_interpretation": "speaker 0 identity is conditioned by the supplied reference audio and matching transcript",
+          "current_interpretation": "reference audio and its matching transcript are included in speaker-0 prompt conditioning"
+        },
+        "raw_reports_preserved": true,
+        "arithmetic_or_sampling_difference": false
+      },
+      "assumptions": [
+        "Trusted local command ledger, compiler, checkpoint files and reports; source binding is reproducibility evidence, not remote attestation.",
+        "All reviewed claims are bounded to the recorded source, checkpoint, device/runtime, reference, target, settings and tape."
+      ],
+      "excluded": [
+        "Recognized words or voice identity similarity",
+        "Universal pause remedy or original Fish full text generation",
+        "Full decoder intermediate floating-point parity",
+        "Zero CPU control reads or zero CogniGraph waits",
+        "Performance or LTP/WBA promotion"
+      ],
+      "post_resolution_review": {
+        "reviewer": "/root/reference_upstream",
+        "mode": "Read-only; no edits or GPU, build or model jobs.",
+        "verdict": "ROBUST",
+        "result": "The guide, review and evidence consistently scope the recorded reference, text and seed, distinguish analyzer checks from identity pins and numeric gates, preserve raw helper lineage, and avoid voice-similarity claims. No remaining actionable inconsistency."
+      }
+    }
+  },
+  "continuity": {
+    "assumptions": [
+      "Pinned local weights/upstream and prepared input remain unchanged during each bounded run.",
+      "Local build commands/compiler and recorded file hashes are trusted reproducibility evidence.",
+      "This checkpoint uses specialized encoder attention with 64-wide heads; no all-device/all-shape claim."
+    ],
+    "decay_trigger": "Changes to production/reference source, checkpoint, reference waveform/transcript, target, sampler/tape, gates, runtime/device/OS, or loss/mutation of a linked artifact.",
+    "refresh": "Rebuild, rerun unchanged-gate encoder/prompt/prefill probes at depths 0/2 and the bound shared-tape pair; rehash artifacts and repeat scoped adversary review.",
+    "failure_policy": "Reopen affected claims; preserve existing no-reference API and original gates; do not promote a failed or missing-evidence refresh."
+  }
+}

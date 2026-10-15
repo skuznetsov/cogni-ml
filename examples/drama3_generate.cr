@@ -1,9 +1,12 @@
 require "option_parser"
+require "digest/sha256"
 require "../src/ml/audio/drama3/generator"
 require "../src/ml/audio/drama3/codec"
 require "../src/ml/audio/drama3/wav"
 require "../src/ml/audio/drama3/generator_resident"
 require "../src/ml/audio/drama3/codec_resident"
+require "../src/ml/audio/drama3/codec_encoder_resident"
+require "../src/ml/audio/drama3/reference_audio"
 
 # Offline native inference entry point. MLX/Python are reference tools only.
 model_path = ""
@@ -14,10 +17,14 @@ seed = 0_u64
 temperature = 0.8
 top_k = 30
 top_p = 0.9
+reference_audio = ""
+reference_text = ""
 OptionParser.parse do |parser|
   parser.banner = "usage: drama3_generate --model DIR --text TEXT [--output FILE.wav]"
   parser.on("--model DIR", "Pinned MLX-converted model directory") { |v| model_path = File.expand_path(v) }
   parser.on("--text TEXT", "Short single-speaker text") { |v| text = v }
+  parser.on("--reference-audio FILE", "Mono PCM16 44.1 kHz reference WAV, at most 10 seconds (Metal)") { |v| reference_audio = File.expand_path(v) }
+  parser.on("--reference-text TEXT", "Exact transcript of the reference WAV, speaker 0") { |v| reference_text = v }
   parser.on("--output FILE", "PCM16 mono WAV destination") { |v| output = File.expand_path(v) }
   parser.on("--max-frames N", "Bound generation (default 160)") { |v| max_frames = v.to_i }
   parser.on("--seed N", "Native sampling seed") { |v| seed = v.to_u64 }
@@ -27,10 +34,15 @@ OptionParser.parse do |parser|
   parser.on("-h", "--help", "Show usage") { puts parser; exit }
 end
 abort "--model and --text are required" if model_path.empty? || text.strip.empty?
+abort "--reference-audio and --reference-text are required together" if reference_audio.empty? != reference_text.empty?
 abort "max-frames must be in 1..1024" unless max_frames.in?(1..1024)
 abort "output already exists: #{output}" if File.exists?(output) || File.exists?(output + ".json")
 ML::Audio::Drama3::Profile.configure_from_env!
 metal = ML::Audio::Drama3::MetalBackend.enabled?
+has_reference = !reference_audio.empty?
+abort "reference audio requires resident Metal" if has_reference && !metal
+reference_input = has_reference ? ML::Audio::Drama3::Wav.read_reference(reference_audio) : nil
+reference_sha256 = reference_input.try(&.sha256)
 config = JSON.parse(File.read(File.join(model_path, "config.json")))
 abort "only fish_omni at 44100 Hz is supported" unless config["model_type"].as_s == "fish_omni" && config["sample_rate"].as_i == 44100
 abort "codec.safetensors is required" unless File.file?(File.join(model_path, "codec.safetensors"))
@@ -42,33 +54,55 @@ tokenizer = ML::Audio::Drama3::Tokenizer.new(File.join(model_path, "tokenizer.js
  "<|im_end|>"                                  => config["eos_token_id"].as_i}.each do |piece, id|
   abort "tokenizer/config mismatch for #{piece}" unless tokenizer.token_id(piece) == id
 end
-prompt = ML::Audio::Drama3::Prompt.build(text, tokenizer, tower_config.num_codebooks)
-abort "prompt plus frame bound exceeds the 1024-row resident cache" if metal && prompt.size + max_frames - 1 > 1024
+reference_plan = if input = reference_input
+                   ML::Audio::Drama3::Prompt.reference_plan(text, reference_text, input.frames, tokenizer,
+                     tower_config.num_codebooks, config["semantic_start_token_id"].as_i, tower_config.vocab_size)
+                 end
+prompt = reference_plan ? [] of Array(Int32) : ML::Audio::Drama3::Prompt.build(text, tokenizer, tower_config.num_codebooks)
+prompt_rows = reference_plan.try(&.row_count) || prompt.size
+abort "prompt plus frame bound exceeds the 1024-row resident cache" if metal && prompt_rows + max_frames - 1 > 1024
 store = ML::Audio::Drama3::WeightStore.new(model_path)
 started = Time.instant
 progress = ->(message : String) { STDERR.puts "#{message} elapsed=#{(Time.instant - started).total_seconds.round(2)}s"; nil }
 resident_readbacks = {} of String => Int64
 resident_submissions = 0_i64
 resident_graph = {} of String => Int64
+resident_sampler_inputs : NamedTuple(dtype: String, uniform_count: Int32, sha256: String, provenance: String)? = nil
 resident_dense_reduction : String? = nil
 resident_backbone_dense_reduction : String? = nil
 resident_expert_down_reduction : String? = nil
 initialize_seconds = 0.0
 generation_seconds = 0.0
 codec_seconds = 0.0
+reference_enqueue_seconds = 0.0
 resident = false
 generation, samples = {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
                         if metal
                           resident = true
                           context = ML::Audio::Drama3::Resident::Context.new
-                          generator = ML::Audio::Drama3::ResidentGenerator.new(config, store, context, prompt.size + max_frames - 1)
+                          generator = ML::Audio::Drama3::ResidentGenerator.new(config, store, context, prompt_rows + max_frames - 1)
                           resident_dense_reduction = context.dense_reduction
                           resident_backbone_dense_reduction = generator.backbone.dense_reduction
                           resident_expert_down_reduction = generator.backbone.expert_down_reduction
                           generator.progress = progress
                           generation_started = Time.instant
                           initialize_seconds = (generation_started - started).total_seconds
-                          result = generator.generate(prompt, max_frames, seed, temperature, top_k, top_p)
+                          result = if plan = reference_plan
+                                     reference_started = Time.instant
+                                     audio = ML::Audio::Drama3::ReferenceAudio.upload(reference_input.not_nil!, context)
+                                     encoder = ML::Audio::Drama3::CodecEncoderResident.new(store, context)
+                                     encoded = encoder.encode(audio, reference_input.not_nil!.samples)
+                                     abort "reference encoder frame count changed" unless encoded.frames == plan.audio_row_count
+                                     device_prompt = ML::Audio::Drama3::PromptResident.build(plan, encoded.codes, context)
+                                     # No fence or code read between encoding and prefill. This
+                                     # duration measures host enqueue time; execution also falls
+                                     # within the surrounding generation wall-clock interval.
+                                     reference_enqueue_seconds = (Time.instant - reference_started).total_seconds
+                                     raise "reference handoff introduced a host read" unless context.readbacks.empty?
+                                     generator.generate(device_prompt, max_frames, seed, temperature, top_k, top_p)
+                                   else
+                                     generator.generate(prompt, max_frames, seed, temperature, top_k, top_p)
+                                   end
                           generation_seconds = (Time.instant - generation_started).total_seconds
                           abort "model produced EOS before any audio frame" if result.generation.frames.empty?
                           STDERR.puts "decoding #{result.generation.frames.size} frames with resident Metal DAC"
@@ -83,6 +117,7 @@ generation, samples = {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cp
                           resident_readbacks = context.readbacks
                           resident_submissions = context.submissions
                           resident_graph = context.graph_stats
+                          resident_sampler_inputs = generator.sampler_inputs
                           {result.generation, waveform}
                         else
                           generator = ML::Audio::Drama3::Generator.new(config, store)
@@ -123,16 +158,23 @@ wav_seconds = (Time.instant - wav_started).total_seconds
 report = {
   backend: resident ? "metal_resident" : "cpu",
   resident_readbacks: resident_readbacks, resident_submissions: resident_submissions,
-  resident_graph: resident_graph,
+  resident_graph: resident_graph, sampler_inputs: resident_sampler_inputs,
   resident_dense_reduction: resident_dense_reduction,
   resident_backbone_dense_reduction: resident_backbone_dense_reduction,
   resident_expert_down_reduction: resident_expert_down_reduction,
-  model_path: model_path, text: text, seed: seed, temperature: temperature, top_k: top_k, top_p: top_p,
-  prompt_rows: prompt.size, prompt_ids: prompt.map(&.[0]), frames: generation.frames,
+  model_path: model_path, text: text, seed: seed, max_frames: max_frames, temperature: temperature, top_k: top_k, top_p: top_p,
+  reference: has_reference ? {audio: reference_audio, audio_sha256: reference_sha256,
+                              text: reference_text, text_sha256: Digest::SHA256.hexdigest(reference_text),
+                              sample_rate: reference_input.not_nil!.sample_rate, samples: reference_input.not_nil!.samples,
+                              frames: reference_input.not_nil!.frames, conditioning: "resident GPU DAC encoder and prompt",
+                              audio_row_start: reference_plan.not_nil!.audio_row_start,
+                              host_code_read_before_prefill: false} : nil,
+  prompt_rows: prompt_rows, prompt_ids: has_reference ? nil : prompt.map(&.[0]), frames: generation.frames,
   stopped_on_eos: generation.stopped, truncated: !generation.stopped,
   sample_rate: 44100, samples: samples.size, seconds: samples.size / 44100.0,
   peak: peak, rms: rms, elapsed_seconds: (Time.instant - started).total_seconds,
-  phase_seconds: {model_initialize: initialize_seconds, generation: generation_seconds, codec: codec_seconds, wav_write: wav_seconds},
+  phase_seconds: {model_initialize: initialize_seconds, generation: generation_seconds,
+                  reference_host_enqueue: reference_enqueue_seconds, codec: codec_seconds, wav_write: wav_seconds},
 }
 File.write(output + ".json", report.to_pretty_json)
 ML::Audio::Drama3::Profile.write_from_env

@@ -7,6 +7,7 @@ import importlib.util
 import io
 import tempfile
 import unittest
+import wave
 from pathlib import Path
 
 import numpy as np
@@ -85,6 +86,46 @@ class FakeMx:
     @staticmethod
     def concatenate(values: list[np.ndarray], axis: int = 0) -> np.ndarray:
         return np.concatenate(values, axis=axis)
+
+
+class DeviceArray:
+    """NumPy-backed stand-in that fails if code tries a host array conversion."""
+
+    def __init__(self, values: np.ndarray):
+        self.values = np.asarray(values)
+        self.readbacks = 0
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        return self.values.shape
+
+    @property
+    def T(self) -> "DeviceArray":
+        return DeviceArray(self.values.T)
+
+    def __getitem__(self, item: object) -> "DeviceArray":
+        return DeviceArray(self.values[item])
+
+    def __add__(self, other: object) -> "DeviceArray":
+        return DeviceArray(self.values + other)
+
+    def astype(self, dtype: object) -> "DeviceArray":
+        return DeviceArray(self.values.astype(dtype))
+
+    def __array__(self, dtype: object = None) -> np.ndarray:
+        self.readbacks += 1
+        raise AssertionError("GPU reference codes were read back during prompt construction")
+
+
+class FakePromptMx(FakeMx):
+    int32 = np.int32
+
+    @staticmethod
+    def concatenate(values: list[object], axis: int = 0) -> DeviceArray:
+        return DeviceArray(np.concatenate([
+            value.values if isinstance(value, DeviceArray) else value
+            for value in values
+        ], axis=axis))
 
 
 class MlxControlSamplerSpec(unittest.TestCase):
@@ -226,6 +267,127 @@ class OfficialChunkControlSpec(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "prompt rows"):
             control.find_zero_history_spans(np.zeros((2, 3), dtype=np.int32), [1], semantic_begin)
+
+
+class ReferenceVoiceControlSpec(unittest.TestCase):
+    @staticmethod
+    def base_args() -> list[str]:
+        return [
+            "--text", "Target sentence.", "--seed", "1", "--max-frames", "2",
+            "--output", "out.wav", "--report", "out.json",
+            "--model-dir", "model", "--mlx-root", "mlx-audio",
+        ]
+
+    def test_reference_audio_and_transcript_must_be_paired_and_bounded(self) -> None:
+        args = self.base_args()
+        self.assertIsNone(control.parse_args(args).reference_audio)
+        self.assertEqual(
+            control.parse_args([*args, "--reference-audio", "ref.wav", "--reference-text", "Reference."])
+            .reference_text,
+            "Reference.",
+        )
+        for extra, message in (
+            (["--reference-audio", "ref.wav"], "supplied together"),
+            (["--reference-text", "Reference."], "supplied together"),
+            (["--reference-audio", "ref.wav", "--reference-text", "Reference.", "--chunk-text"], "chunk-text"),
+            (["--reference-audio", "ref.wav", "--reference-text", "Reference.", "--speaker-id", "1"], "speaker 0"),
+            (["--reference-audio", "ref.wav", "--reference-text", "   "], "non-empty"),
+        ):
+            with self.subTest(extra=extra):
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+                    control.parse_args([*args, *extra])
+                self.assertRegex(stderr.getvalue(), message)
+
+    def test_reference_wav_loader_preserves_pcm_bytes_and_rejects_bad_geometry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "reference.wav"
+            pcm = np.array([-32768, -1, 0, 1, 32767], dtype="<i2").tobytes()
+            with wave.open(str(path), "wb") as output:
+                output.setnchannels(1)
+                output.setsampwidth(2)
+                output.setframerate(44_100)
+                output.writeframes(pcm)
+            loaded = control.read_reference_pcm16_wav(path)
+            self.assertEqual(loaded["pcm_bytes"], pcm)
+            self.assertEqual(loaded["samples"], 5)
+            self.assertEqual(loaded["pcm_sha256"], control.sha256_bytes(pcm))
+
+            bad_path = Path(temporary) / "stereo.wav"
+            with wave.open(str(bad_path), "wb") as output:
+                output.setnchannels(2)
+                output.setsampwidth(2)
+                output.setframerate(44_100)
+                output.writeframes(pcm)
+            with self.assertRaisesRegex(ValueError, "mono"):
+                control.read_reference_pcm16_wav(bad_path)
+
+    def test_reference_prompt_splices_gpu_codes_and_matches_official_builder(self) -> None:
+        semantic_begin = 1000
+        reference_codes = DeviceArray(np.arange(20, dtype=np.int32).reshape(10, 2))
+        builder_calls: list[np.ndarray] = []
+
+        def official_builder(
+            text: str,
+            tokenizer: object,
+            *,
+            num_codebooks: int,
+            codebook_size: int,
+            semantic_start: int,
+            prompt_texts: list[str],
+            prompt_tokens: list[np.ndarray],
+        ) -> np.ndarray:
+            del text, tokenizer, codebook_size
+            self.assertEqual(num_codebooks, control.NUM_CODEBOOKS)
+            self.assertEqual(prompt_texts, ["Reference."])
+            codes = np.asarray(prompt_tokens[0])
+            builder_calls.append(codes.copy())
+            audio = np.column_stack([codes[0] + semantic_start, codes.T])
+            prefix = np.r_[[111], np.zeros(control.NUM_CODEBOOKS, dtype=np.int32)][None, :]
+            suffix = np.r_[[222], np.zeros(control.NUM_CODEBOOKS, dtype=np.int32)][None, :]
+            return np.concatenate([prefix, audio, suffix]).astype(np.int32)
+
+        mx = FakePromptMx()
+        actual_gpu_prompt, _skeleton, spans = control.build_reference_prompt_gpu(
+            mx,
+            np,
+            official_builder,
+            text="Target.",
+            tokenizer=object(),
+            codebook_size=4096,
+            semantic_begin=semantic_begin,
+            reference_text="Reference.",
+            reference_codes=reference_codes,
+        )
+        self.assertEqual(spans, [(1, 3)])
+        self.assertEqual(len(builder_calls), 1)
+        np.testing.assert_array_equal(builder_calls[0], np.zeros((10, 2), dtype=np.int64))
+        self.assertEqual(reference_codes.readbacks, 0)
+
+        terminal_prompt = actual_gpu_prompt.values
+        official = control.verify_reference_prompt(
+            np,
+            official_builder,
+            actual_prompt=terminal_prompt,
+            text="Target.",
+            tokenizer=object(),
+            codebook_size=4096,
+            semantic_begin=semantic_begin,
+            reference_text="Reference.",
+            reference_codes=reference_codes.values,
+        )
+        np.testing.assert_array_equal(terminal_prompt, official)
+        self.assertEqual(reference_codes.readbacks, 0)
+
+
+class SamplerHiddenCaptureSpec(unittest.TestCase):
+    def test_prompt_hidden_is_retained_only_when_its_step_is_requested(self) -> None:
+        hidden = object()
+        sampler = control.SamplerControl(FakeMx(), None, {1})
+        sampler.capture_main_hidden(0, hidden)
+        self.assertEqual(sampler.hidden_capture_refs, [])
+        sampler.capture_main_hidden(1, hidden)
+        self.assertEqual(sampler.hidden_capture_refs, [(1, hidden)])
 
 
 if __name__ == "__main__":

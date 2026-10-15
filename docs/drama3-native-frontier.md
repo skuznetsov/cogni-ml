@@ -1,7 +1,7 @@
 # DRAMA-3 native text-to-WAV frontier
 
-Status: native CPU and opt-in resident Metal text-to-WAV smoke observed on
-the pinned Q4 checkpoint. Resident inference keeps model computations,
+Status: native CPU text-to-WAV and opt-in resident Metal text/reference-to-WAV
+observed on the pinned Q4 checkpoint. Resident inference keeps model computations,
 activations, logits, routing, code selection, temporal state, and DAC on GPU.
 The exact control/terminal read boundaries and measured scope are below.
 Goal: one short, single-speaker text prompt to a mono 44.1 kHz WAV, with all
@@ -9,6 +9,62 @@ inference computations in Crystal/native libraries. Python/MLX/PyTorch are
 reference and fixture tools only, never the native inference implementation.
 The pinned MLX upstream is a community port. Original Fish DAC controls below
 cover four saved code streams, not the original text-generation pipeline.
+
+## Active slice: GPU reference voice — 2026-10-15
+
+Status: VERIFIED within the one-reference slice on Apple M2 Max, from base
+`04b254dd`. The native Metal CLI accepts one reference WAV and its non-empty
+speaker-0 transcript in the existing single-prompt path. File parsing and text tokenization are host
+input preparation; audio normalization, DAC encoding, vector-quantizer code
+selection, audio-row construction, prefill and generation stay on GPU. Codes
+must pass directly from encoder buffers to prefill. Do not substitute an
+external encoder in native inference or add intermediate activation readbacks.
+The no-reference API and its arithmetic remain supported unchanged.
+
+The first file boundary is uncompressed mono PCM16 WAV at 44.1 kHz, at most
+10 seconds; reject
+other rates/layouts rather than silently resampling. Broader audio loading,
+multiple references/speakers, history and streaming are outside this slice.
+The reference encoder uses the pinned checkpoint's F32 weights and loaded
+rotary coefficients. Existing decoder numeric frontiers remain separate.
+
+Falsifiers/DoD: malformed/partial reference arguments and WAVs fail before
+model work; prompt segment IDs and all audio rows match the pinned MLX prompt
+builder; native encoder intermediate comparisons use the existing codec
+stage gates (max absolute 1e-3, RMS and normalized RMS 2e-4), with exact code
+IDs required independently. GPU handoff tests must show no new model-activation
+readbacks and preserve graph-depth 0/2 behavior. Run no-reference regression,
+then native/MLX reference/no-reference pairs on the same plain text and exact
+F32 sampler tape. Terminal waveform windows measure quiet intervals, not words
+or sentence alignment; frame caps and numerical failures remain explicit.
+No gate, precision or sampling setting may be relaxed to admit this slice.
+
+Observed DoD: all 102 encoder/VQ stages pass those unchanged gates at graph
+depths 0 and 2; all 850 code IDs and 168 by 11 prompt elements are exact.
+First prefill hidden/logits pass `3e-5 + 3e-4 * abs(reference)` with zero
+pointwise failures. All stage/prompt/prefill metrics agree between depths;
+terminal diagnostics add no graph work. The 27 resident GPU tests, 43 CPU
+contract tests and five CLI rejection controls pass on the final source.
+
+The fresh paired Russian plain-text run uses identical actual 5,632-element
+F32 sampler inputs, verified by run-side hashes and a producer/tape proof.
+Native and pinned MLX agree on all 11 IDs in every generated frame: 463
+without reference, 218 with reference, both ending at EOS. Waveform duration
+changes from 21.502 to 10.124 seconds; internal quiet runs of at least one
+second change from four (8.5 seconds total) to zero. Native and MLX quiet
+windows agree. This measures one reference/transcript, text and seed; it
+does not certify words, identity, a unique cause or a universal pause remedy.
+See `docs/drama3-reference-voice.md` and
+`.landmark/evidence/drama3-reference-voice.json` for source-bound raw evidence,
+controls, graph/read boundaries and the scoped correlated Adversary review.
+
+Risk: CAUTION, because incorrect causal padding, residual order or near-tie
+code selection can condition a different voice while still producing audio.
+The strongest guard is a full exact-code comparison plus stage-local metrics
+on the same waveform and checkpoint, followed by unchanged-path regression.
+Rollback is the isolated feature commit; existing text-only inference remains
+available without reference flags. Refresh all evidence on source, checkpoint,
+waveform/transcript, sampler, runtime/device or gate changes.
 
 ## Emotion placement, pauses and voice controls — 2026-10-15
 
@@ -35,8 +91,9 @@ Their one-shot repetition retry checks the previous16 main IDs, not silence,
 and does not guarantee a non-repeated retry. Offline WAV writing adds no gaps.
 Speaker tags name participants; a specific voice is conditioned by reference
 audio codes plus transcript. MLX ignores its generic `voice` argument. All
-eight controls omit references; native currently has text-only speaker0 and
-no reference-input/encoder interface. Native cloning is not implemented.
+eight controls omit references; at that snapshot native had text-only
+speaker0 and no reference-input/encoder interface. The later reference slice
+above implements one native reference waveform plus matching transcript.
 
 See `docs/drama3-emotion-placement.md` and
 `.landmark/evidence/drama3-emotion-placement.json` for exact prompts, source
