@@ -288,11 +288,18 @@ module ML::Audio::Drama3
       q = @ctx.rms(q, weight(prefix + ".q_norm.weight"), c.eps, heads: c.heads)
       k = @ctx.rms(project(prefix + ".k_proj", x), weight(prefix + ".k_norm.weight"), c.eps, heads: c.kv_heads)
       v = project(prefix + ".v_proj", x)
-      @ctx.rope!(q, c.heads, c.head_dim, c.rotary_dim, @position, c.rope_base, false)
-      @ctx.rope!(k, c.kv_heads, c.head_dim, c.rotary_dim, @position, c.rope_base, false)
+      project(prefix + ".o_proj", full_attention_ready(q, k, v, gate, layer, @position))
+    end
+
+    # Shared temporal kernel path for scalar decode and layer-major prefill.
+    private def full_attention_ready(q : Resident::Buffer, k : Resident::Buffer, v : Resident::Buffer,
+                                     gate : Resident::Buffer, layer : Int32, position : Int32) : Resident::Buffer
+      c = @config
+      @ctx.rope!(q, c.heads, c.head_dim, c.rotary_dim, position, c.rope_base, false)
+      @ctx.rope!(k, c.kv_heads, c.head_dim, c.rotary_dim, position, c.rope_base, false)
       keys, values = @keys[layer].not_nil!, @values[layer].not_nil!
-      @ctx.copy(k, keys.slice(@position * k.count, k.count))
-      @ctx.copy(v, values.slice(@position * v.count, v.count))
+      @ctx.copy(k, keys.slice(position * k.count, k.count))
+      @ctx.copy(v, values.slice(position * v.count, v.count))
       output = @ctx.alloc(q.count)
       enc = @ctx.encoder
       wide = @capacity > 1024
@@ -302,14 +309,14 @@ module ML::Audio::Drama3
       if wide
         scores = @full_attention_scores.not_nil!
         enc.set_buffer(scores.buffer, 5, offset: scores.offset)
-        p = [c.heads.to_u64, c.kv_heads.to_u64, c.head_dim.to_u64, (@position + 1).to_u64, @capacity.to_u64]
+        p = [c.heads.to_u64, c.kv_heads.to_u64, c.head_dim.to_u64, (position + 1).to_u64, @capacity.to_u64]
         enc.set_bytes(p.to_unsafe.as(Void*), (p.size * 8).to_i32, 6)
       else
-        p = [c.heads.to_u64, c.kv_heads.to_u64, c.head_dim.to_u64, (@position + 1).to_u64]
+        p = [c.heads.to_u64, c.kv_heads.to_u64, c.head_dim.to_u64, (position + 1).to_u64]
         enc.set_bytes(p.to_unsafe.as(Void*), (p.size * 8).to_i32, 5)
       end
       enc.dispatch_threadgroups({c.heads, 1, 1}, {64, 1, 1})
-      project(prefix + ".o_proj", output)
+      output
     end
 
     private def linear_attention(x : Resident::Buffer, prefix : String, layer : Int32) : Resident::Buffer
@@ -320,10 +327,16 @@ module ML::Audio::Drama3
       z = @ctx.matvec(@store.matrix(prefix + ".in_proj_z.weight"), x, dense_reduction: @dense_reduction)
       b = @ctx.matvec(@store.matrix(prefix + ".in_proj_b.weight"), x, dense_reduction: @dense_reduction)
       a = @ctx.matvec(@store.matrix(prefix + ".in_proj_a.weight"), x, dense_reduction: @dense_reduction)
+      project(prefix + ".out_proj", linear_attention_ready(qkv, z, b, a, prefix, layer, @position))
+    end
+
+    private def linear_attention_ready(qkv : Resident::Buffer, z : Resident::Buffer, b : Resident::Buffer,
+                                       a : Resident::Buffer, prefix : String, layer : Int32, position : Int32) : Resident::Buffer
+      c = @config
       history = @conv[layer].not_nil!
-      @ctx.copy(qkv, history.slice((@position % c.conv_kernel) * qkv.count, qkv.count))
+      @ctx.copy(qkv, history.slice((position % c.conv_kernel) * qkv.count, qkv.count))
       convolved = @ctx.alloc(qkv.count)
-      @ctx.dispatch("dr3_delta_conv", SOURCE, [history, weight(prefix + ".conv1d.weight"), convolved], [qkv.count.to_u64, c.conv_kernel.to_u64, @position.to_u64], qkv.count)
+      @ctx.dispatch("dr3_delta_conv", SOURCE, [history, weight(prefix + ".conv1d.weight"), convolved], [qkv.count.to_u64, c.conv_kernel.to_u64, position.to_u64], qkv.count)
       kw = c.key_heads * c.key_dim
       q = @ctx.rms(convolved.slice(0, kw), @ones, 1e-6, heads: c.key_heads)
       k = @ctx.rms(convolved.slice(kw, kw), @ones, 1e-6, heads: c.key_heads)
@@ -332,7 +345,7 @@ module ML::Audio::Drama3
       output = @ctx.alloc(v.count)
       @ctx.dispatch(@delta_kernel, SOURCE, [q, k, v, a, b, weight(prefix + ".A_log"), weight(prefix + ".dt_bias"), @delta[layer].not_nil!, output], [c.value_heads.to_u64, c.value_dim.to_u64, c.key_heads.to_u64, c.key_dim.to_u64], v.count)
       normalized = @ctx.rms(output, weight(prefix + ".norm.weight"), c.eps, heads: c.value_heads)
-      project(prefix + ".out_proj", @ctx.mul(normalized, @ctx.silu(z)))
+      @ctx.mul(normalized, @ctx.silu(z))
     end
   end
 end

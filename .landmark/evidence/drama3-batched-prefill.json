@@ -1,0 +1,683 @@
+{
+  "format": "landmark-evidence-v1",
+  "id": "drama3-batched-prefill-20261016",
+  "created_at_utc": "2026-10-16T22:04:41.939404+00:00",
+  "base_revision": "a15d425366f8cff4ad1b287a347da766aa8b46f2",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Opt-in genuine layer-major native prefill, bounded native scalar/batch fidelity and descriptive warm performance on the fixed workload.",
+    "result": "Native intermediates are bitwise exact at graph depths 0/2; all twelve bounded requests have exact codes/WAV/tape/read boundaries. Chunk remains default 1 because strict upstream intermediates fail equally for both native paths.",
+    "exclusions": [
+      "No full upstream compatibility or default-promotion claim.",
+      "No quiet-host, observer-free, isolated shader-time, causal or general speedup claim.",
+      "No completed-utterance, long-speech, prosody/voice/whisper or steady-state audio RTF claim.",
+      "No full weight-shard hashing, fresh bridge build, reproducible-build attestation or independent model replication."
+    ]
+  },
+  "boundaries": {
+    "changed_paths": [
+      ".landmark/evidence/drama3-batched-prefill.json",
+      "LANDMARKS.md",
+      "docs/drama3-batched-prefill.md",
+      "docs/drama3-native-frontier.md",
+      "examples/drama3_prefill_benchmark.cr",
+      "examples/drama3_prefill_worker.cr",
+      "examples/support/drama3_prefill_compare.metal",
+      "scripts/drama3/analyze_prefill_benchmark.py",
+      "scripts/drama3/measure_prefill_requests.py",
+      "scripts/drama3/prefill_intermediates.py",
+      "spec/drama3_batch_primitives_spec.cr",
+      "spec/drama3_prefill_benchmark_spec.py",
+      "spec/drama3_prefill_generator_spec.cr",
+      "spec/drama3_prefill_intermediates_spec.py",
+      "spec/drama3_prefill_requests_spec.py",
+      "spec/drama3_prefill_spec.cr",
+      "src/ml/audio/drama3/backbone_prefill.cr",
+      "src/ml/audio/drama3/backbone_resident.cr",
+      "src/ml/audio/drama3/generator_resident.cr",
+      "src/ml/audio/drama3/kernels/resident_batch.metal",
+      "src/ml/audio/drama3/resident_batch.cr"
+    ],
+    "default": "DRAMA3_PREFILL_CHUNK=1",
+    "experimental": "DRAMA3_PREFILL_CHUNK=16; accepted range 1..32"
+  },
+  "risk_and_recovery": {
+    "tier": "CAUTION",
+    "failure_mode": "Future KV exposure, changed recurrent order, overwritten borrowed hidden row, changed expert/rank reduction or missing teacher-force prompt pair.",
+    "guards": "Explicit base+row causal prefix and ring positions, N=2/5 state/continuation tests at graph0/2, separate scratch, host/resident prompt guards, shape/owner/capacity validation, real 158-row GPU bitwise comparison and fixed codes/WAV/tape/queue controls.",
+    "rollback": "Set chunk 1 or revert this isolated commit.",
+    "execution": "Serial run_safe, 15 percent free-memory floor, quiet-host off, unrelated processes untouched; external scratch and local model weights."
+  },
+  "definition_of_done": {
+    "commands_receipt": "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/commands.json",
+    "required_executed_commands": [
+      {
+        "name": "red-primitives-api",
+        "exit_code": 1,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/red-primitives-api.log",
+        "log_sha256": "a87628b7cdc6659ccf4c183224c2512abdc78252b9bf5d61d0edf9e0178f8a37"
+      },
+      {
+        "name": "capture-upstream",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/capture-upstream.log",
+        "log_sha256": "16a88f6f15d717f39b873348972b7a1bedad619be3d31d92a6f7d717fd0e4cf2"
+      },
+      {
+        "name": "build-prefill-final-gates",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/build-prefill-final-gates.log",
+        "log_sha256": "565962ada6a998ba4abc9e2f3514b7ad9c33bfb30a7c41832f1168e041e222e2"
+      },
+      {
+        "name": "build-prefill-worker-final",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/build-prefill-worker-final.log",
+        "log_sha256": "e31ec92cd6b5efa9a6d136588aaf89d332bc4c924bc194a80296b9dee2682313"
+      },
+      {
+        "name": "metal-suite-final",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/metal-suite-final.log",
+        "log_sha256": "104452b74221ba6be582459700368e62153b0f847ab58701ca0ec484b5393751"
+      },
+      {
+        "name": "offline-final",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/offline-final.log",
+        "log_sha256": "3f581c53cacd7695ee62c24807a0735a4403e56e8a74431aeff4c7287242804c"
+      },
+      {
+        "name": "parity-final-depth0",
+        "exit_code": 1,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/parity-final-depth0.log",
+        "log_sha256": "0c26429342268c730ef62910c275a1d6513e22e66b4eb26b7cccafff158c0fe9"
+      },
+      {
+        "name": "parity-final-depth2",
+        "exit_code": 1,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/parity-final-depth2.log",
+        "log_sha256": "0cd89d3ca81bc1f2c305ab682375a76a44972b7eff0deb147081062e76459849"
+      },
+      {
+        "name": "warm-benchmark-depth0",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/warm-benchmark-depth0.log",
+        "log_sha256": "c51921e99a1085361aff8f5834aa6e8edb2c2b2386aa361909c1eb3f4e4dd190"
+      },
+      {
+        "name": "warm-benchmark-depth2",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/warm-benchmark-depth2.log",
+        "log_sha256": "8a4eb07f7d45cb4d1294f68c269e8d8abb036414e1b2e416e0336cfefdda7910"
+      },
+      {
+        "name": "analyze-warm-depth0",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/analyze-warm-depth0.log",
+        "log_sha256": "b6d6b4cfd308cbb338d283c725d0c05f85fbc763861a01106d04a5a6cd90a175"
+      },
+      {
+        "name": "analyze-warm-depth2",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/analyze-warm-depth2.log",
+        "log_sha256": "e31113acdac39e2c50c3002834e1db7e0f476537b0e71261305a194b60023a57"
+      },
+      {
+        "name": "requests-depth0",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/requests-depth0.log",
+        "log_sha256": "9b56893d1300296244e931db97f4174398bfae76bc5b3ef7841ca8399c03d279"
+      },
+      {
+        "name": "requests-depth2",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/requests-depth2.log",
+        "log_sha256": "41497602827a12e14879510b7b7ff2f28b00e511e25b67b5bf1d4586d6b71d2a"
+      },
+      {
+        "name": "verify-final",
+        "exit_code": 0,
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/verify-final.log",
+        "log_sha256": "cc213a098a256dc9605414218e00318cb1f9ea10efc185a3c66363649498b104"
+      }
+    ],
+    "observed": "86 Metal examples and 29 offline tests pass; 932 native bitwise and 2 saved-MLX terminal checks per depth pass; upstream failure is preserved and causes CLI exit 1; qualified warm isolated and bounded-request matrices complete.",
+    "fallback": "Unchanged scalar default, saved MLX endpoints and fresh pinned scalar/sequence reference capture at unchanged tolerances."
+  },
+  "numerical": {
+    "rows": 158,
+    "layers": 40,
+    "chunk": 16,
+    "graph_depths": [
+      0,
+      2
+    ],
+    "intermediate_tolerance": {
+      "atol": 6e-05,
+      "rtol": 0.0003
+    },
+    "terminal_tolerance": {
+      "atol": 3e-05,
+      "rtol": 0.0003
+    },
+    "native_bitwise_checks_per_depth": 932,
+    "saved_terminal_checks_per_depth": 2,
+    "upstream_stage_checks_per_native_arm": 93,
+    "upstream_scalar": {
+      "failed_elements_per_native_arm": 100,
+      "failing_stages": 8
+    },
+    "upstream_sequence": {
+      "failed_elements_per_native_arm": 222,
+      "failing_stages": 11
+    },
+    "upstream_gate": "OPEN; both native arms have identical metrics, and metrics are identical across graph depths. A passing endpoint does not repair intermediate failures.",
+    "route_restore": "219 raw reference tensors hashed; reconstructed SwitchGLU canonical route IDs equal canonical IDs in both actual upstream arms. Loader does not require the duplicate reconstructed table as a universal guard.",
+    "comparator_attack": "GPU finite and NaN poison: 2 bit differences, 1 tolerance failure, 1 nonfinite.",
+    "requests": {
+      "count": 12,
+      "frames_per_request": 60,
+      "codes_per_frame": 11,
+      "samples": 122880,
+      "wav_sha256": "bc4c5b258c08f25828c727c69c1033691da651dc936ab30583ade88a0994ff31",
+      "truncated": true,
+      "submitted_and_waited": {
+        "depth0": {
+          "scalar": 310,
+          "batch": 309
+        },
+        "depth2": {
+          "scalar": 251,
+          "batch": 250
+        }
+      },
+      "readbacks_bytes": {
+        "control": 488,
+        "terminal": 494160
+      },
+      "queue_difference": "Exactly one empty final-row elision for a multirow tail; no added production wait/read/submit."
+    }
+  },
+  "measurement": {
+    "isolated_schedule": "One excluded prime per arm/component, then ABBA+BAAB; four scored observations per arm.",
+    "request_schedule": "One excluded prime per arm, then ABBA; two scored observations per arm, one persistent Engine per depth.",
+    "scope": "MoE39 uses the same 158 normalized rows. Backbone excludes embeddings/tower. Complete bounded request includes all prefill, 60-frame generation, DAC, WAV/report work, own-job terminal GC and passive telemetry.",
+    "observer_limit": "Wall includes command-count-scaled timeline serialization and driver event/pipe logging. GPU intervals can overlap and their sum is not isolated shader service time; depth0 has no absolute span.",
+    "timings": {
+      "0": {
+        "isolated": {
+          "moe": {
+            "arms": {
+              "scalar": {
+                "samples": 4,
+                "wall_seconds": {
+                  "median": 0.291786125,
+                  "min": 0.289435417,
+                  "max": 0.297139125,
+                  "range": [
+                    0.289435417,
+                    0.297139125
+                  ]
+                },
+                "completed_gpu_interval_sum_seconds": {
+                  "median": 0.24066760623827577,
+                  "min": 0.23901446303352714,
+                  "max": 0.24447046080604196,
+                  "range": [
+                    0.23901446303352714,
+                    0.24447046080604196
+                  ]
+                },
+                "gpu_span_seconds": null
+              },
+              "batched": {
+                "samples": 4,
+                "wall_seconds": {
+                  "median": 0.1331114585,
+                  "min": 0.131329792,
+                  "max": 0.135050959,
+                  "range": [
+                    0.131329792,
+                    0.135050959
+                  ]
+                },
+                "completed_gpu_interval_sum_seconds": {
+                  "median": 0.1274300836957991,
+                  "min": 0.12552950205281377,
+                  "max": 0.12893166625872254,
+                  "range": [
+                    0.12552950205281377,
+                    0.12893166625872254
+                  ]
+                },
+                "gpu_span_seconds": null
+              }
+            },
+            "speedup": {
+              "wall_scalar_over_batched": 2.1920436323669312,
+              "completed_gpu_interval_scalar_over_batched": 1.888624720774704
+            }
+          },
+          "backbone": {
+            "arms": {
+              "scalar": {
+                "samples": 4,
+                "wall_seconds": {
+                  "median": 20.296114541999998,
+                  "min": 20.270914667,
+                  "max": 20.490129292,
+                  "range": [
+                    20.270914667,
+                    20.490129292
+                  ]
+                },
+                "completed_gpu_interval_sum_seconds": {
+                  "median": 18.668015107745305,
+                  "min": 18.66638753982261,
+                  "max": 18.814570168033242,
+                  "range": [
+                    18.66638753982261,
+                    18.814570168033242
+                  ]
+                },
+                "gpu_span_seconds": null
+              },
+              "batched": {
+                "samples": 4,
+                "wall_seconds": {
+                  "median": 8.7475242085,
+                  "min": 8.714103917,
+                  "max": 8.762635292,
+                  "range": [
+                    8.714103917,
+                    8.762635292
+                  ]
+                },
+                "completed_gpu_interval_sum_seconds": {
+                  "median": 8.030887166736647,
+                  "min": 8.029717165976763,
+                  "max": 8.038754750974476,
+                  "range": [
+                    8.029717165976763,
+                    8.038754750974476
+                  ]
+                },
+                "gpu_span_seconds": null
+              }
+            },
+            "speedup": {
+              "wall_scalar_over_batched": 2.3202124462002853,
+              "completed_gpu_interval_scalar_over_batched": 2.324527131331999
+            }
+          }
+        },
+        "bounded_request": {
+          "arms": {
+            "batched": {
+              "completed_gpu_interval_sum_seconds": {
+                "max": 31.583070628345013,
+                "median": 31.559584960108623,
+                "min": 31.536099291872233,
+                "range": [
+                  31.536099291872233,
+                  31.583070628345013
+                ]
+              },
+              "gpu_span_seconds": null,
+              "request_wall_seconds": {
+                "max": 41.08355562482029,
+                "median": 38.82671468728222,
+                "min": 36.56987374974415,
+                "range": [
+                  36.56987374974415,
+                  41.08355562482029
+                ]
+              },
+              "samples": 2
+            },
+            "scalar": {
+              "completed_gpu_interval_sum_seconds": {
+                "max": 43.68835420999676,
+                "median": 42.97682920843363,
+                "min": 42.265304206870496,
+                "range": [
+                  42.265304206870496,
+                  43.68835420999676
+                ]
+              },
+              "gpu_span_seconds": null,
+              "request_wall_seconds": {
+                "max": 49.879313291981816,
+                "median": 47.26383022964001,
+                "min": 44.6483471672982,
+                "range": [
+                  44.6483471672982,
+                  49.879313291981816
+                ]
+              },
+              "samples": 2
+            }
+          },
+          "descriptive_scalar_over_batched": {
+            "completed_gpu_interval_sum": 1.361767883283523,
+            "request_wall": 1.2173018142356862
+          }
+        },
+        "request_timeline": {
+          "completed_commands": 1857,
+          "graph_depth": 0,
+          "requests": 6,
+          "timing_mode": "checked_duration_only",
+          "unscoped_commands": 0
+        }
+      },
+      "2": {
+        "isolated": {
+          "moe": {
+            "arms": {
+              "scalar": {
+                "samples": 4,
+                "wall_seconds": {
+                  "median": 0.15685052100000002,
+                  "min": 0.154753292,
+                  "max": 0.163962125,
+                  "range": [
+                    0.154753292,
+                    0.163962125
+                  ]
+                },
+                "completed_gpu_interval_sum_seconds": {
+                  "median": 0.27138497633859515,
+                  "min": 0.2693092948757112,
+                  "max": 0.28556553879752755,
+                  "range": [
+                    0.2693092948757112,
+                    0.28556553879752755
+                  ]
+                },
+                "gpu_span_seconds": {
+                  "median": 0.15652702073566616,
+                  "min": 0.15448366664350033,
+                  "max": 0.1635950836353004,
+                  "range": [
+                    0.15448366664350033,
+                    0.1635950836353004
+                  ]
+                }
+              },
+              "batched": {
+                "samples": 4,
+                "wall_seconds": {
+                  "median": 0.1156187705,
+                  "min": 0.115097542,
+                  "max": 0.120086583,
+                  "range": [
+                    0.115097542,
+                    0.120086583
+                  ]
+                },
+                "completed_gpu_interval_sum_seconds": {
+                  "median": 0.22602627100422978,
+                  "min": 0.22511270688846707,
+                  "max": 0.227013916708529,
+                  "range": [
+                    0.22511270688846707,
+                    0.227013916708529
+                  ]
+                },
+                "gpu_span_seconds": {
+                  "median": 0.11510547902435064,
+                  "min": 0.1145841246470809,
+                  "max": 0.11947483336552978,
+                  "range": [
+                    0.1145841246470809,
+                    0.11947483336552978
+                  ]
+                }
+              }
+            },
+            "speedup": {
+              "wall_scalar_over_batched": 1.356618136671848,
+              "completed_gpu_interval_scalar_over_batched": 1.2006789083978497
+            }
+          },
+          "backbone": {
+            "arms": {
+              "scalar": {
+                "samples": 4,
+                "wall_seconds": {
+                  "median": 18.9125271665,
+                  "min": 18.659579375,
+                  "max": 19.341649292,
+                  "range": [
+                    18.659579375,
+                    19.341649292
+                  ]
+                },
+                "completed_gpu_interval_sum_seconds": {
+                  "median": 18.789585144026205,
+                  "min": 18.65203654067591,
+                  "max": 19.1576766660437,
+                  "range": [
+                    18.65203654067591,
+                    19.1576766660437
+                  ]
+                },
+                "gpu_span_seconds": {
+                  "median": 18.904966874746606,
+                  "min": 18.65213262522593,
+                  "max": 19.331595041323453,
+                  "range": [
+                    18.65213262522593,
+                    19.331595041323453
+                  ]
+                }
+              },
+              "batched": {
+                "samples": 4,
+                "wall_seconds": {
+                  "median": 8.031173917,
+                  "min": 8.027690667,
+                  "max": 8.233569209,
+                  "range": [
+                    8.027690667,
+                    8.233569209
+                  ]
+                },
+                "completed_gpu_interval_sum_seconds": {
+                  "median": 7.984777645440772,
+                  "min": 7.984118583612144,
+                  "max": 8.188228833023459,
+                  "range": [
+                    7.984118583612144,
+                    8.188228833023459
+                  ]
+                },
+                "gpu_span_seconds": {
+                  "median": 7.984783353982493,
+                  "min": 7.984124083537608,
+                  "max": 8.188235333189368,
+                  "range": [
+                    7.984124083537608,
+                    8.188235333189368
+                  ]
+                }
+              }
+            },
+            "speedup": {
+              "wall_scalar_over_batched": 2.354889504567555,
+              "completed_gpu_interval_scalar_over_batched": 2.353175752458789
+            }
+          }
+        },
+        "bounded_request": {
+          "arms": {
+            "batched": {
+              "completed_gpu_interval_sum_seconds": {
+                "max": 31.577506832312793,
+                "median": 31.566566268913448,
+                "min": 31.555625705514103,
+                "range": [
+                  31.555625705514103,
+                  31.577506832312793
+                ]
+              },
+              "gpu_span_seconds": {
+                "max": 31.784941166639328,
+                "median": 31.75956281251274,
+                "min": 31.734184458386153,
+                "range": [
+                  31.734184458386153,
+                  31.784941166639328
+                ]
+              },
+              "request_wall_seconds": {
+                "max": 34.08837441680953,
+                "median": 33.1154453959316,
+                "min": 32.142516375053674,
+                "range": [
+                  32.142516375053674,
+                  34.08837441680953
+                ]
+              },
+              "samples": 2
+            },
+            "scalar": {
+              "completed_gpu_interval_sum_seconds": {
+                "max": 42.38546062679961,
+                "median": 42.29556829133071,
+                "min": 42.20567595586181,
+                "range": [
+                  42.20567595586181,
+                  42.38546062679961
+                ]
+              },
+              "gpu_span_seconds": {
+                "max": 42.75266487477347,
+                "median": 42.54700000002049,
+                "min": 42.341335125267506,
+                "range": [
+                  42.341335125267506,
+                  42.75266487477347
+                ]
+              },
+              "request_wall_seconds": {
+                "max": 47.79860308300704,
+                "median": 45.24734131246805,
+                "min": 42.696079541929066,
+                "range": [
+                  42.696079541929066,
+                  47.79860308300704
+                ]
+              },
+              "samples": 2
+            }
+          },
+          "descriptive_scalar_over_batched": {
+            "completed_gpu_interval_sum": 1.3398849887890123,
+            "request_wall": 1.3663515852342096
+          }
+        },
+        "request_timeline": {
+          "completed_commands": 1503,
+          "graph_depth": 2,
+          "requests": 6,
+          "timing_mode": "absolute_valid_intervals",
+          "unscoped_commands": 0
+        }
+      }
+    }
+  },
+  "lineage": {
+    "checkpoint": {
+      "repository": "cguldogan/drama-3-mlx-q4",
+      "revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8"
+    },
+    "checkpoint_metadata": {
+      "config_sha256": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+      "index_sha256": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855",
+      "model_dir": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+      "selected_backbone_shards": [
+        "model-00001-of-00005.safetensors",
+        "model-00002-of-00005.safetensors",
+        "model-00003-of-00005.safetensors",
+        "model-00004-of-00005.safetensors"
+      ],
+      "selected_backbone_tensor_count": 974,
+      "shard_sha256_recorded": false
+    },
+    "upstream": {
+      "repository": "https://github.com/cguldogan/mlx-audio",
+      "revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+      "source_root": "/Volumes/Nata's Data/MLData/cogni-ml/drama3-reference-20261014/mlx-audio"
+    },
+    "reference_runtime": {
+      "device": "Device(gpu, 0)",
+      "mlx": "0.31.1",
+      "numpy": "1.26.4",
+      "platform": "macOS-26.6.2-arm64-arm-64bit",
+      "python": "3.12.2",
+      "safetensors": "0.5.3",
+      "torch": "2.6.0"
+    },
+    "input_sha256": "ebb4d8b91d069fd4070d756e73137152cb7e42ea65cf0097a741754a611b2f56",
+    "fixture_sha256": "cf31d5199aa6290e05b65e6f958bb3d6e1b760cde5d670da7679cf13c2f7ea66",
+    "changed_code_sha256": {
+      "examples/drama3_prefill_benchmark.cr": "924cc8c8808a86fb69b738890a1f5dfd27004aa1a85b4d7ece6dac1c92ddedce",
+      "examples/drama3_prefill_worker.cr": "6be42f499fb16a09e95724543b6eaf1d8ccb382761ffd3f46dc832903825728d",
+      "examples/support/drama3_prefill_compare.metal": "1a03999b6e7fc9857273c82964b1a3bebf9adfdbeaaea32197e9913726c67521",
+      "scripts/drama3/analyze_prefill_benchmark.py": "1c6b23f5ae96ec193f5f035ca0665fb0e2e63a8f616eae15616ec9eca13d83a6",
+      "scripts/drama3/measure_prefill_requests.py": "7401e65901a445d310f810e1d81443572897a52b85c9b6ff752c645e10586530",
+      "scripts/drama3/prefill_intermediates.py": "7ed59f77a732ae551ebef2e653fe5bfd744ee985e400ee63ea8ffea2d8b266b8",
+      "spec/drama3_batch_primitives_spec.cr": "e1079e503abb52caee9680b91693f6554946c629a2a06792aa9ab1d156758265",
+      "spec/drama3_prefill_benchmark_spec.py": "e489cfdd51d8da7089f8fbccd65fba749518dba0cd46214fc3711ce2f41b05a0",
+      "spec/drama3_prefill_generator_spec.cr": "51d8b1840ed910d8d308e3c7551d5d71243392673e12b6db02cff49911a76010",
+      "spec/drama3_prefill_intermediates_spec.py": "f311a09074e4bc8d62ae924ade5d65e6f2d556f79aed9ffee83758606afa4399",
+      "spec/drama3_prefill_requests_spec.py": "e019a56c756dad26ff53293b98e7afb0a0b160bd497a84d8819ef7eaa44bb795",
+      "spec/drama3_prefill_spec.cr": "c1c3542b83fcd75f642fd2cf5231088a3e1bd98ffacf7a4f9506fa625178956d",
+      "src/ml/audio/drama3/backbone_prefill.cr": "0bcb2430f694f4ce2e39b47b469904ce0b9e1dde92807f7fbee31437a3a28ff3",
+      "src/ml/audio/drama3/backbone_resident.cr": "7615ba1a914c543ee96c1a761a384d4359632181d3f076bc086f7f65d117ef82",
+      "src/ml/audio/drama3/generator_resident.cr": "19d1cc67c12fb8300f3e614361ec057e3ce2bf34fdfb652d67f6a984c487ea88",
+      "src/ml/audio/drama3/kernels/resident_batch.metal": "4747afb25871af991aa8f5c4ec2f0796af0f1aa1b61ee636d2eb41c4a248869b",
+      "src/ml/audio/drama3/resident_batch.cr": "6c55edbb1a6eb1d288926b76a6e3fe815ec752593275f527dea60a2080d13c4a"
+    },
+    "binaries_sha256": {
+      "prefill-benchmark-gates": "72fae322bcba25d04fde13c4d9f3d1b92b3be38e6d3c1abb034c32f393b417f5",
+      "prefill-worker-final": "a3b7eafe4c414df310df105dabda7bbf52bf30456931de4751ba27165062d94c"
+    },
+    "bridge_sha256": "4e76b260561c8f79442c273397148720ff67ce1b31ff87029c4034ee54898d49",
+    "raw_artifacts": {
+      "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/commands.json": "87f6a61b9eb9c0fcc117780c145b0638989b1f5834698b8578f73be85f98c434",
+      "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/final-verification.json": "ced40bd63eca91cc1c0ecdf3d7a5caf91b1833189e5af53a7cd2df97efc1c553",
+      "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/verify_final.py": "b31f6e99e357fcea113215ec5a24554a088e0e6a11962e69d098269057813375",
+      "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/upstream-prefill-intermediates/manifest.json": "0cec7e1a8322e27b50023f66f24fcc44c15638f6dc38804130e2f68a98d1e596",
+      "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/warm-depth0/analysis.json": "046313231acca13db1fa0aa6ded879c04515da37a57a7958173fe8e6ac88d0ab",
+      "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/warm-depth0/benchmark-chunk16-depth0.json": "acc0030790b84d1733c8b3544ee57c60f2189d188c7922611f11fe1578025698",
+      "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/parity-final-depth0/parity-chunk16-depth0-upstream.json": "717615c38eb751d1e281bf1158aeb9fbb39119f1a08a85acfce57e6ac194a51a",
+      "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/requests-depth0/run.json": "32cbf84a63e67187a863833c0cfffc61cd559f90ac2a4090dace1775fc859d19",
+      "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/warm-depth2/analysis.json": "4ce9ab3d41f68099a9171f1c2261755e95e5c02f685a426645286cee2475dac3",
+      "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/warm-depth2/benchmark-chunk16-depth2.json": "762b0e6d594c82f272fbb33f0152e6f2c373127682bd23a1744ea1e91873db6a",
+      "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/parity-final-depth2/parity-chunk16-depth2-upstream.json": "71d77e5b30d0a7eee02616af0b0904d042700b1b3ce96aeca0f3a88a914ffff4",
+      "/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/requests-depth2/run.json": "942995cf652d1ec3417c80740eccd5ba8a1ea5fa77233b43283972a3177d6817"
+    },
+    "depth0_binary_note": "Warm depth0 used pre-gate benchmark binary; all production sources except unused generator indentation match final. Depth2/final parity and worker builds match final production sources."
+  },
+  "rejected_or_repaired": [
+    "Initial syntax/API setup failures are not missing numerical-behavior proof; red-primitives-api is the genuine missing matvec_rows witness.",
+    "Early tiny-fixture expectations/EOS configuration repaired without production tolerance changes; final Metal suite passes.",
+    "Fresh-Context benchmark pilot aborted and rejected for warm performance because it repeatedly registers weights.",
+    "Earlier parity capture exited zero despite red upstream fields; final CLI now exits one and is the authoritative compatibility receipt."
+  ],
+  "adversary": {
+    "execution_and_native_regression": "ROBUST within executed fixed-workload scope",
+    "upstream_compatibility_and_promotion": "VULNERABLE: strict intermediate gate remains open",
+    "method": "Correlated same-lineage mini-Quad source/guard reviews plus root-executed GPU comparisons, poison test, schedule/timeline qualification and cross-artifact replay."
+  },
+  "continuation": {
+    "next_falsifier": "Locate earliest late upstream residual mismatch by row/channel and distinguish down-projection reduction from shared-expert/residual accumulation on matched inputs; do not widen tolerances or attribute every failure to historical expert108.",
+    "performance_candidate": "After fidelity work, test direct token-row addressing in expert kernels to remove GPU input expansion; this is unmeasured, not a speedup claim.",
+    "refresh": "Source/model/input/tape/fixture/tolerance/queue/workspace/observer/device/OS/storage changes, contradiction or raw-artifact eviction reopen dependent claims.",
+    "standing_authority": "Serial local guarded work, 15 percent floor, unrelated processes untouched, external scratch/local weights, exact-path atomic commit and no push."
+  }
+}

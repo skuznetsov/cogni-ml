@@ -10,7 +10,69 @@ reference and fixture tools only, never the native inference implementation.
 The pinned MLX upstream is a community port. Original Fish DAC controls below
 cover four saved code streams, not the original text-generation pipeline.
 
-## Active slice: mapped weight resource extents — 2026-10-16
+## Active slice: native sequence prefill — 2026-10-16
+
+From `a15d4253`, produce multi-row GPU activations through the entire backbone
+in layer order, then batch MoE projections across token/rank pairs. The current
+path batches selected ranks for only one token. Preserve each token's dense
+and quantized reduction order, routing tie order, shared-expert contribution,
+causal full-attention prefix and sequential convolution/delta updates.
+Teacher-force exactly the existing N-1 prompt pairs in temporal order.
+
+Risk: CAUTION. Begin behind a default-off prompt chunk-size switch, with the
+existing rowwise path as rollback. Bound scratch by chunk size; reject invalid
+width/capacity before encoding. No precision changes, inference activation
+readbacks, extra submits or completion waits are admitted. Component profiling
+that drains the GPU is excluded from inference timing. Same-lineage mini-Quad
+review is correlated review, not independent replication.
+
+DoD: a genuine missing multi-row API witness, followed by scalar/batch GPU
+intermediate and continuation checks at N=2 and N=5, semantic/nonsemantic prompt
+rows, graph depths 0/2, recurrent wrap, causal isolation and invalid shapes.
+Compare real full-prompt intermediates with the pinned MLX source at existing
+6e-5/3e-4 tolerances, and terminal hidden/logits at 3e-5/3e-4. Report native
+scalar/batch and both upstream comparisons separately: the known MoE39 mismatch
+is open and a passing endpoint cannot close it. Use identical sampler inputs
+for end-to-end codes/WAV and queue/read ledgers. Counterbalanced warm completed
+GPU measurements must distinguish MoE, backbone prefill and complete requests.
+Any newly failing numerical/state/queue guard blocks default promotion.
+
+The cheapest falsifier is a five-row tiny fixture crossing convolution wrap
+and a full-attention layer, followed by one ordinary decode step. A query
+seeing a future K/V, reordered delta update, lost tower pair or changed expert
+sum rejects the implementation. Strong fallback: unchanged scalar path plus
+saved upstream fixtures. Standing authority remains serial run_safe, 15% floor,
+unrelated processes untouched, external scratch/local weights, exact-path
+atomic local commit after observed checks; no push.
+
+Observed: 86 relevant Metal and 29 offline examples pass. For the real 158-row
+prompt, all 932 scalar/batch GPU checks per depth (0/2), saved MLX terminal
+hidden/logits and all twelve bounded 60-frame request codes/WAV/tape/read
+ledgers pass. Normal prefill adds no read/wait/submit. One empty final-row
+submission is elided for the multirow tail: request counters are 310/309 at
+depth 0 and 251/250 at depth 2, with complete drainage.
+
+Warm scalar/chunk-16 backbone medians are 20.296115/8.747524s (depth0)
+and 18.912527/8.031174s (depth2). MoE39 wall ratios are 2.192x/1.357x; full
+bounded-request ratios are 1.217x/1.366x. GPU completion intervals accompany
+these active-host descriptive measurements; observer overhead and the fixed
+60-frame truncation limit extrapolation.
+
+The strict upstream intermediate gate stays OPEN: per native arm, scalar MLX
+has 100 failing elements across eight stages and sequence MLX 222 across eleven.
+Both native arms have identical metrics, also identical across graph depths.
+The final CLI writes all 1307 checks then exits 1 on this red gate. No tolerance
+is widened and default remains chunk 1. Correlated mini-Quad verdict ROBUST
+for bounded native mechanics/regression and VULNERABLE for upstream promotion.
+Report `docs/drama3-batched-prefill.md`, index
+`.landmark/evidence/drama3-batched-prefill.json`. Next numerical falsifier:
+locate the earliest late residual failure on identical inputs and distinguish
+expert-down from shared/residual accumulation; not every coordinate is proven
+to be the historical expert108 case. Direct GPU token-row expert addressing is
+an unmeasured performance candidate. Refresh on source/model/input/tape/fixture/
+tolerance/queue/workspace/observer/device/OS/storage drift or artifact loss.
+
+## Prior slice: mapped weight resource extents — 2026-10-16
 
 From `30833811`, test the net warm-layout effect of page-rounded per-Tensor
 no-copy resources against whole-shard resources in one Engine. This reopens

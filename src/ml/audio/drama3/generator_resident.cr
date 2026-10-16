@@ -2,7 +2,7 @@ require "json"
 require "digest/sha256"
 require "./generator"
 require "./resident"
-require "./backbone_resident"
+require "./backbone_prefill"
 require "./tower_resident"
 require "./prompt_resident"
 
@@ -34,6 +34,7 @@ module ML::Audio::Drama3
     getter tower : TowerResident
     getter ctx : Resident::Context
     getter capacity : Int32
+    getter prefill_chunk : Int32
     getter sampler_inputs : NamedTuple(dtype: String, uniform_count: Int32, sha256: String, provenance: String)?
     property progress : Proc(String, Nil)?
     # Optional device-only diagnostic handoff. Callbacks enqueue comparisons;
@@ -62,6 +63,9 @@ module ML::Audio::Drama3
       @progress = nil
       @device_trace = nil
       @sampler_inputs = nil
+      chunk = ENV["DRAMA3_PREFILL_CHUNK"]? || "1"
+      @prefill_chunk = chunk.to_i?
+        .try { |value| value.in?(1..32) ? value : nil } || raise ArgumentError.new("DRAMA3_PREFILL_CHUNK must be 1..32")
       @generation_scratch = case ENV["DRAMA3_GENERATION_SCRATCH"]? || "0"
                             when "0" then false
                             when "1" then true
@@ -126,17 +130,21 @@ module ML::Audio::Drama3
       frames_on_device = prompt.map { |frame| @tower.upload_frame(frame) }
       hidden = @ctx.alloc(@backbone.config.hidden)
       Profile.measure("generator_resident.prefill", category: "generation.prefill") do
-        frames_on_device.each_with_index do |frame, index|
-          Profile.measure("generator_resident.prefill_row", category: "generation.prefill.row") do
-            hidden = backbone_step(frame, frame.slice(0, 1))
-            if index + 1 < frames_on_device.size
-              with_workspace("tower.prefill") { @tower.teacher_force(hidden, frame, frames_on_device[index + 1]) }
+        if @prefill_chunk > 1
+          hidden = prefill_frames(frames_on_device)
+        else
+          frames_on_device.each_with_index do |frame, index|
+            Profile.measure("generator_resident.prefill_row", category: "generation.prefill.row") do
+              hidden = backbone_step(frame, frame.slice(0, 1))
+              if index + 1 < frames_on_device.size
+                with_workspace("tower.prefill") { @tower.teacher_force(hidden, frame, frames_on_device[index + 1]) }
+              end
+              # Bound live temporary allocations while persistent KV/recurrent
+              # state remains owned by the resident model objects.
+              @ctx.submit
             end
-            # Bound live temporary allocations while persistent KV/recurrent
-            # state remains owned by the resident model objects.
-            @ctx.submit
+            @progress.try(&.call("prefill #{index + 1}/#{frames_on_device.size}"))
           end
-          @progress.try(&.call("prefill #{index + 1}/#{frames_on_device.size}"))
         end
       end
 
@@ -248,15 +256,19 @@ module ML::Audio::Drama3
 
       hidden = @ctx.alloc(@backbone.config.hidden)
       Profile.measure("generator_resident.prefill", category: "generation.prefill") do
-        frames_on_device.each_with_index do |frame, index|
-          Profile.measure("generator_resident.prefill_row", category: "generation.prefill.row") do
-            hidden = backbone_step(frame, frame.slice(0, 1))
-            if index + 1 < frames_on_device.size
-              with_workspace("tower.prefill") { @tower.teacher_force(hidden, frame, frames_on_device[index + 1]) }
+        if @prefill_chunk > 1
+          hidden = prefill_frames(frames_on_device)
+        else
+          frames_on_device.each_with_index do |frame, index|
+            Profile.measure("generator_resident.prefill_row", category: "generation.prefill.row") do
+              hidden = backbone_step(frame, frame.slice(0, 1))
+              if index + 1 < frames_on_device.size
+                with_workspace("tower.prefill") { @tower.teacher_force(hidden, frame, frames_on_device[index + 1]) }
+              end
+              @ctx.submit
             end
-            @ctx.submit
+            @progress.try(&.call("prefill #{index + 1}/#{frames_on_device.size}"))
           end
-          @progress.try(&.call("prefill #{index + 1}/#{frames_on_device.size}"))
         end
       end
 
@@ -349,14 +361,14 @@ module ML::Audio::Drama3
     end
 
     private def diagnostic_traces? : Bool
-      !!(@device_trace || @backbone.trace || @backbone.buffer_trace || @backbone.moe_trace || @backbone.layer_buffer_trace)
+      !!(@device_trace || @backbone.trace || @backbone.buffer_trace || @backbone.moe_trace || @backbone.layer_buffer_trace || @backbone.prefill_trace)
     end
 
     private def prepare_workspaces : Nil
       # Diagnostic APIs may retain any intermediate. Preserve their original
       # fresh-output lifetime instead of returning borrowed workspace storage.
       return unless @generation_scratch && !diagnostic_traces?
-      ["backbone", "tower.prefill", "tower.sample", "main"].each do |name|
+      ["backbone", "backbone.prefill", "tower.prefill", "tower.sample", "main"].each do |name|
         @workspaces[name] = @ctx.new_workspace
       end
     end
@@ -379,6 +391,37 @@ module ML::Audio::Drama3
         token_embedding = @backbone.embedding(token)
         @backbone.step(@tower.embed_backbone(frame, token_embedding))
       end
+    end
+
+    private def prefill_frames(frames : Array(Resident::Buffer)) : Resident::Buffer
+      hidden = @ctx.alloc(@backbone.config.hidden)
+      base = 0
+      while base < frames.size
+        rows = Math.min(@prefill_chunk, frames.size - base)
+        table = with_workspace("backbone.prefill") do
+          inputs = @ctx.alloc(rows * @backbone.config.hidden)
+          rows.times do |row|
+            frame = frames[base + row]
+            embedding = @backbone.embedding(frame.slice(0, 1))
+            mixed = @tower.embed_backbone(frame, embedding)
+            @ctx.copy(mixed, inputs.slice(row * @backbone.config.hidden, @backbone.config.hidden))
+          end
+          @backbone.prefill(inputs, rows)
+        end
+        rows.times do |row|
+          index = base + row
+          hidden = table.slice(row * @backbone.config.hidden, @backbone.config.hidden)
+          if index + 1 < frames.size
+            with_workspace("tower.prefill") { @tower.teacher_force(hidden, frames[index], frames[index + 1]) }
+          end
+          # Existing prompt submission boundaries only. The first includes
+          # this chunk's backbone; subsequent ones contain teacher forcing.
+          @ctx.submit
+          @progress.try(&.call("prefill #{index + 1}/#{frames.size}"))
+        end
+        base += rows
+      end
+      hidden
     end
 
     private def release_workspaces : Nil

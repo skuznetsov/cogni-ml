@@ -29900,3 +29900,57 @@ Refresh after source/toolchain/device/model/workload changes.
   Standing authority: serial run_safe, 15% floor, unrelated processes untouched,
   external scratch/local weights, exact-path local atomic commit/no push.
   Rollback by omitting diagnostic enabling or reverting this isolated slice.
+
+
+### Continuation 2026-10-16 — genuine native batched prefill
+
+- Base `a15d4253`: opt-in layer-major backbone prefill batches dense and affine
+  expert projections across token/rank pairs. Temporal attention/conv/delta
+  updates preserve explicit causal base+row order; routing ties, reductions,
+  dtype and quantization are unchanged. Host and ResidentPrompt generators
+  teacher-force the original N-1 pairs, with separate prefill scratch and
+  borrowed-output lifetime guards. `DRAMA3_PREFILL_CHUNK=1..32`, default 1;
+  measured candidate 16. Normal execution adds no activation read/wait/submit.
+- Genuine missing matvec_rows RED witness, 86 Metal and 29 offline cases pass.
+  At graph0/2 the 158-row prompt has 932 native bitwise checks per depth, exact
+  following decode/head and saved-MLX terminal hidden/logits at unchanged
+  3e-5/3e-4. Twelve bounded 60-frame requests preserve all codes/WAV/tape/read
+  ledgers; WAV SHA256 bc4c5b258c08f25828c727c69c1033691da651dc936ab30583ade88a0994ff31.
+  Submitted/completed/waited counts are 310/309 at depth0 and 251/250 at depth2,
+  scalar/batch, pending zero. Exactly one empty multirow-tail command is elided.
+- Fresh pinned MLX scalar/sequence captures contain 109/110 tensors, all hashed;
+  canonical route IDs match independently reconstructed SwitchGLU IDs. The
+  unchanged intermediate 6e-5/3e-4 gate remains OPEN: per native arm scalar MLX
+  fails 100 elements across eight stages, sequence 222 across eleven. Native
+  scalar/batch metrics are identical, also across graph depths. Failures include
+  late residuals, expert down and routed/shared/output sums; not every coordinate
+  is proven to be the historical expert108 discrepancy. Passing endpoints do
+  not close this gap. Final parity writes 1307 checks and exits 1 as intended.
+- Isolated warm scalar/batch medians: backbone 20.296115/8.747524s at depth0,
+  18.912527/8.031174s at depth2 (2.320x/2.355x). MoE39 on the same 158 normalized
+  rows gives 2.192x/1.357x wall and 1.889x/1.201x GPU-interval-sum ratios.
+  Bounded-request wall medians are 47.263830/38.826715s and
+  45.247341/33.115445s (1.217x/1.366x); GPU-sum ratios 1.362x/1.340x.
+  Isolated ABBA+BAAB has four scored observations per arm; requests ABBA two.
+  Primes excluded, persistent weights/context, fixed seed/tape/input. These are
+  active-host descriptive observations with command-count-scaled telemetry,
+  not causal shader timings. GPU intervals may overlap; depth0 lacks spans.
+  The frame cap truncates output at 2.786395s, so no long-speech RTF follows.
+- Rejected fresh-Context timing pilot is retained. Early parity capture exit0
+  on a red JSON gate is superseded by final fail-closed CLI. `verify-final`
+  replays raw qualification, checks reference/source/log/build hashes and the
+  cross-depth numerical/output/queue scope: PASS_WITH_UPSTREAM_GATE_OPEN.
+  Correlated mini-Quad verdict ROBUST for bounded native mechanics/regression,
+  VULNERABLE for upstream compatibility/promotion. Default remains chunk1.
+  Report `docs/drama3-batched-prefill.md`, index
+  `.landmark/evidence/drama3-batched-prefill.json`, raw root
+  `/opt/mldata_ssd/cogni-ml/drama3-batched-prefill-20261016/`.
+- Next numerical falsifier: earliest late upstream failed row/channel on matched
+  inputs, separating expert-down reduction from shared/residual accumulation.
+  Direct token-row addressing to avoid GPU expert-input expansion is an
+  unmeasured performance candidate. Return numeric frontier also retains DAC
+  post-module fidelity. Refresh on source/model/input/tape/fixture/tolerance/
+  queue/workspace/observer/device/OS/storage drift, contradiction or artifact
+  eviction. Standing authority: serial run_safe, 15% floor, unrelated processes
+  untouched, external scratch/local weights, exact-path atomic commit/no push.
+  Rollback by selecting chunk1 or reverting this isolated slice.
