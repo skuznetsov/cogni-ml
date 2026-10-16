@@ -29768,3 +29768,42 @@ Refresh after source/toolchain/device/model/workload changes.
   Standing authority: serial run_safe,15% floor, unrelated processes untouched,
   exact-path local atomic commit/no push. Disable diagnostics or revert the
   isolated commit to roll back; no residency/lifetime rewrite is admitted yet.
+
+
+### Continuation 2026-10-16 — mapped weight wrapper lifetime
+
+- Base `99a4f447`: an opt-in, single-Context raw-weight bank compares persistent
+  no-copy Metal buffers with whole-bank release/recreation over the same mmap
+  owners, addresses, extents and offsets. Rotation requires an already terminal
+  queue, rejects active/aborted boundaries without a drain, and quarantines owners
+  on failure. Ordinary inference keeps its global cache through a nil-bank branch;
+  no shader, precision, inference wait/read or default policy changes.
+- Eighteen requests (two new-worker primes, sixteen warm) yield eight balanced
+  adjacent P/R pairs. Six mappings declare 25867452416 bytes; this is not physical
+  residency. Warm prepare medians 2.646us/1.087167ms, paired request R-minus-P
+  median -0.000816s, range -5.439325..+6.644850s, four wins each. Both modes retain
+  seconds-long first-driver spread. No speed/default promotion or equivalence
+  follows. Actual factory calls and backing identity are qualified; internal
+  driver registration reuse is unobserved. Quiet host is off.
+- Refresh also clears raw tensor-view objects, while converted GPU F32 weights
+  stay cached. Not every refreshed shard reaches the first warm command. This
+  is a combined wrapper/view-cache intervention, not pure Metal identity cost.
+  Warm first-command process page-ins/reads are zero; request-wide reads need
+  not be zero and process windows overlap. Zero counters do not prove residency.
+- All 18 full 60x11 codes/WAV/tape and 122-wait/read ledgers remain exact. Final 67
+  Metal cases, two saved-control MLX-GPU full-code checks and final hidden/logits
+  after 158-row prefill pass unchanged 3e-5/3e-4 gates. Prefill rotates five model
+  shards and also enables tested workspaces in arm 2; it is a combined numerical
+  guard, not per-row/layer parity or a performance contrast. MoE39 remains open.
+- Correlated mini-Quad verdict ROBUST within that scope; exact-run shard/cycle
+  objections are resolved by receipt/artifact qualification. Report
+  `docs/drama3-weight-wrappers.md`, index
+  `.landmark/evidence/drama3-weight-wrappers.json`, external raw root
+  `/opt/mldata_ssd/cogni-ml/drama3-weight-wrappers-20261016/`.
+- Next falsifier: view-only sham preserving Metal handles, balanced against P/R
+  on one Engine, plus passive per-shard first-command binding counts. Return
+  numeric frontier: MoE39/common-prefix and DAC post-module stage. Refresh on
+  source/model/layout/queue/input/tape/observer/host/OS drift, contradiction or
+  evidence eviction. Standing authority: serial run_safe,15% floor, unrelated
+  processes untouched, exact-path local atomic commit/no push. Rollback by
+  omitting the diagnostic enable or reverting this isolated commit.

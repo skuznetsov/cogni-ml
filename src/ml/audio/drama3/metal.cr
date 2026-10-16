@@ -34,10 +34,11 @@ module ML::Audio::Drama3
 
       AFFINE_SOURCE = {{ read_file("#{__DIR__}/kernels/affine.metal") }}
 
-      # Retain the tensor (and its mmap owner) for the entire GPU view lifetime.
-      # Commands are synchronous, so callers may safely reuse host activations.
+      # Retain the mmap owner for the entire GPU view lifetime. Resident callers
+      # must keep the wrapper alive until their existing terminal boundary.
       class MappedBuffer
         getter buffer : ML::MetalBuffer
+        getter owner : MappedFile
 
         def initialize(@owner : MappedFile)
           page = Platform.getpagesize.to_i64
@@ -61,12 +62,13 @@ module ML::Audio::Drama3
         getter offset : Int64
         @owns_buffer : Bool
 
-        def initialize(@owner : Tensor, raw_view : Bool)
+        def initialize(@owner : Tensor, raw_view : Bool, mapped : MappedBuffer? = nil)
           if raw_view && (raw = @owner.raw_bytes) && (mapping = @owner.owner)
             @owns_buffer = false
             @offset = (raw.to_unsafe.address - mapping.pointer.address).to_i64
             raise ArgumentError.new("tensor outside mapping") unless @offset >= 0 && raw.size <= mapping.size - @offset
-            @buffer = MetalBackend.mapped_buffer(mapping).buffer
+            raise ArgumentError.new("mapped buffer owner differs") if mapped && !mapped.owner.same?(mapping)
+            @buffer = (mapped || MetalBackend.mapped_buffer(mapping)).buffer
           else
             @owns_buffer = true
             @offset = 0_i64
@@ -106,6 +108,75 @@ module ML::Audio::Drama3
 
       def tensor_buffer(tensor : Tensor, raw_view = false) : TensorBuffer
         @@tensors[{tensor.object_id, raw_view}] ||= TensorBuffer.new(tensor, raw_view)
+      end
+
+      # Diagnostic bank for a single Resident context. Normal inference keeps
+      # the existing global caches. Only Context's checked idle boundary may
+      # call prepare: releasing raw packed bindings while in flight is unsafe.
+      class WeightBufferBank
+        @mappings = {} of UInt64 => MappedBuffer
+        @tensors = {} of UInt64 => TensorBuffer
+        @generation = 0_i64
+        @factory_calls = 0_i64
+
+        def tensor_buffer(tensor : Tensor) : TensorBuffer
+          if tensor.raw_bytes && (owner = tensor.owner)
+            @tensors[tensor.object_id] ||= begin
+              mapping = @mappings[owner.object_id] ||= create(owner)
+              TensorBuffer.new(tensor, true, mapping)
+            end
+          else
+            MetalBackend.tensor_buffer(tensor, true)
+          end
+        end
+
+        private def create(owner : MappedFile) : MappedBuffer
+          mapping = MappedBuffer.new(owner)
+          @factory_calls += 1
+          mapping
+        end
+
+        # Recreate exactly one buffer per previously used shard. Keep old
+        # Crystal objects/owners for the qualification, but release ALL Metal
+        # handles before constructing any replacement: no overlapping aliases.
+        # Objective-C addresses may be recycled and are not resource IDs.
+        def prepare(refresh : Bool) : Hash(String, Int64)
+          retired = constructed = same_backing = address_reuses = 0_i64
+          retire_ns = construct_ns = 0_i64
+          views_cleared = 0_i64
+          if refresh
+            old = @mappings.values.map do |mapping|
+              buffer = mapping.buffer
+              {mapping, buffer.contents, buffer.size, buffer.storage_mode, buffer.handle.address}
+            end
+            views_cleared = @tensors.size.to_i64
+            @tensors.clear
+            started = Time.instant
+            old.each { |item| item[0].buffer.release; retired += 1 }
+            retire_ns = (Time.instant - started).total_nanoseconds.to_i64
+            @mappings.clear
+            old.each do |item|
+              previous, pointer, size, mode, address = item
+              raise "old weight wrapper still valid" if previous.buffer.valid?
+              started = Time.instant
+              fresh = create(previous.owner)
+              construct_ns += (Time.instant - started).total_nanoseconds.to_i64
+              @mappings[previous.owner.object_id] = fresh
+              buffer = fresh.buffer
+              raise "weight backing changed" unless buffer.valid? && buffer.contents == pointer && buffer.size == size && buffer.storage_mode == mode
+              raise "weight wrapper object reused" if buffer.same?(previous.buffer)
+              same_backing += 1
+              address_reuses += 1 if buffer.handle.address == address
+              constructed += 1
+            end
+            @generation += 1
+          end
+          {"generation" => @generation, "mappings" => @mappings.size.to_i64,
+           "mapped_bytes" => @mappings.values.sum(0_i64) { |m| m.buffer.size },
+           "factory_calls" => @factory_calls, "retired" => retired, "constructed" => constructed,
+           "same_backing" => same_backing, "handle_address_reuses" => address_reuses,
+           "tensor_views_cleared" => views_cleared, "retire_ns" => retire_ns, "construct_ns" => construct_ns}
+        end
       end
 
       private def float_encoding(tensor : Tensor) : UInt64

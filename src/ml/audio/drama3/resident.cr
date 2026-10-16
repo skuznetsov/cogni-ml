@@ -215,6 +215,7 @@ module ML::Audio::Drama3::Resident
     # Failed drains do not establish that the GPU has stopped using storage.
     # As with DAC scratch, retain failed workspaces for the process lifetime.
     @@workspace_quarantine = [] of Workspace
+    @@weight_bank_quarantine = [] of MetalBackend::WeightBufferBank
     @@workspace_quarantine_mutex = Mutex.new
     getter readbacks = Hash(String, Int64).new(0_i64)
     getter submissions = 0_i64
@@ -243,6 +244,7 @@ module ML::Audio::Drama3::Resident
     @max_buffer_length : Int64
     @workspace : Workspace?
     @workspaces = [] of Workspace
+    @weight_wrapper_bank : MetalBackend::WeightBufferBank?
 
     def initialize
       raise "resident Metal requires enabled backend" unless MetalBackend.enabled?
@@ -267,6 +269,41 @@ module ML::Audio::Drama3::Resident
 
     def graph_enabled? : Bool
       !!@graph
+    end
+
+    # Explicit diagnostics only. Enable before any dispatch/allocation so no
+    # global raw-weight aliases are introduced by this context beforehand.
+    def enable_weight_wrapper_probe! : Nil
+      raise ArgumentError.new("weight wrapper probe must be enabled before context use") if @weight_wrapper_bank || @submissions > 0 || @allocations > 0 || !@weights.empty?
+      check_weight_wrapper_boundary!
+      @weight_wrapper_bank = MetalBackend::WeightBufferBank.new
+    end
+
+    def prepare_weight_wrappers(refresh : Bool) : Hash(String, Int64)
+      bank = @weight_wrapper_bank
+      raise ArgumentError.new("weight wrapper probe is not enabled") unless bank
+      check_weight_wrapper_boundary!
+      begin
+        bank.prepare(refresh)
+      rescue ex
+        abort
+        raise ex
+      end
+    end
+
+    private def check_weight_wrapper_boundary! : Nil
+      raise ArgumentError.new("resident context aborted") if @aborted
+      if @workspace || @encoder || @command || @lease || !@pending.empty? || (@graph.try(&.pending_count) || 0) > 0
+        raise ArgumentError.new("weight wrapper preparation requires a terminal queue")
+      end
+    end
+
+    private def weight_buffer(value : Tensor) : MetalBackend::TensorBuffer
+      if bank = @weight_wrapper_bank
+        bank.tensor_buffer(value)
+      else
+        MetalBackend.tensor_buffer(value, true)
+      end
     end
 
     def host_profile : HostProfile
@@ -417,6 +454,8 @@ module ML::Audio::Drama3::Resident
     def abort : Nil
       unless @aborted
         @@workspace_quarantine_mutex.synchronize do
+          # A failed drain is not a lifetime certificate for packed weights.
+          @weight_wrapper_bank.try { |bank| @@weight_bank_quarantine << bank }
           @workspaces.each do |workspace|
             workspace.quarantine
             @@workspace_quarantine << workspace
@@ -534,7 +573,7 @@ module ML::Audio::Drama3::Resident
 
     def tensor(value : Tensor) : Buffer
       @weights[value.object_id] ||= begin
-        source = MetalBackend.tensor_buffer(value, true)
+        source = weight_buffer(value)
         raw = @owner.view(source.buffer, (source.buffer.size // 4).clamp(1_i64, Int32::MAX.to_i64).to_i32)
         result = alloc_fresh(value.shape.reduce(1) { |a, b| a * b })
         dispatch("dr3_convert", SOURCE, [raw, result], [result.count.to_u64, source.offset.to_u64, encoding(value)], result.count)
@@ -576,10 +615,10 @@ module ML::Audio::Drama3::Resident
 
     private def dispatch_mlx_q4(matrix : Matrix, x : Buffer, output : Buffer, ids : Buffer?, rank : Int32,
                                 batched : Bool, per_rank_input : Bool) : Nil
-      weight = MetalBackend.tensor_buffer(matrix.tensor, true)
+      weight = weight_buffer(matrix.tensor)
       scales_tensor, biases_tensor = matrix.scales.not_nil!, matrix.biases.not_nil!
-      scales = MetalBackend.tensor_buffer(scales_tensor, true)
-      biases = MetalBackend.tensor_buffer(biases_tensor, true)
+      scales = weight_buffer(scales_tensor)
+      biases = weight_buffer(biases_tensor)
       selection = ids || x
       experts = matrix.tensor.shape.size == 3 ? matrix.tensor.shape[0] : 1
       params = [matrix.rows.to_u64, matrix.cols.to_u64, experts.to_u64,
@@ -640,7 +679,7 @@ module ML::Audio::Drama3::Resident
       raise ArgumentError.new("resident matvec width") unless matrix.cols == x.count
       return expert(matrix, x) if matrix.scales
       reduction = dense_reduction ? validate_dense_reduction(dense_reduction) : @dense_reduction
-      w = MetalBackend.tensor_buffer(matrix.tensor, true)
+      w = weight_buffer(matrix.tensor)
       y = alloc(matrix.rows)
       threadgroup_width = 64
       selected_pipeline = if reduction == "simd32"
@@ -676,7 +715,7 @@ module ML::Audio::Drama3::Resident
       unless matrix.scales
         return matvec(matrix, x) unless ids
         raise ArgumentError.new("resident expert rank") unless rank >= 0 && rank < ids.count && x.count == matrix.cols
-        w = MetalBackend.tensor_buffer(matrix.tensor, true)
+        w = weight_buffer(matrix.tensor)
         raw = @owner.view(w.buffer, (w.buffer.size // 4).clamp(1_i64, Int32::MAX.to_i64).to_i32)
         output = alloc(matrix.rows)
         experts = matrix.tensor.shape.size == 3 ? matrix.tensor.shape[0] : 1
@@ -690,9 +729,9 @@ module ML::Audio::Drama3::Resident
         return output
       end
       raise ArgumentError.new("resident affine groups") if matrix.cols // matrix.group_size > 8192
-      weight = MetalBackend.tensor_buffer(matrix.tensor, true)
+      weight = weight_buffer(matrix.tensor)
       st, bt = matrix.scales.not_nil!, matrix.biases.not_nil!
-      scales, biases = MetalBackend.tensor_buffer(st, true), MetalBackend.tensor_buffer(bt, true)
+      scales, biases = weight_buffer(st), weight_buffer(bt)
       output = alloc(matrix.rows)
       selection = ids || zeros(1)
       p = [matrix.rows.to_u64, matrix.cols.to_u64, matrix.bits.to_u64, matrix.group_size.to_u64, matrix.expert.to_u64,
@@ -757,7 +796,7 @@ module ML::Audio::Drama3::Resident
     private def fused_codebook_sum(matrix : Matrix, frame : Buffer, first_codebook : Int32, end_codebook : Int32,
                                    vocab_size : Int32, semantic_begin : Int32, semantic_end : Int32,
                                    source : String) : Buffer
-      weight = MetalBackend.tensor_buffer(matrix.tensor, true)
+      weight = weight_buffer(matrix.tensor)
       # Retain the mapped backing handle with the command lease. `count` is
       # only a checked view size here; the kernel uses the tensor's byte offset.
       retained_weight = @owner.view(weight.buffer,
@@ -781,10 +820,10 @@ module ML::Audio::Drama3::Resident
       check_owner!(token)
       raise ArgumentError.new("resident embedding scalar") unless token.count == 1
       output = alloc(matrix.cols)
-      w = MetalBackend.tensor_buffer(matrix.tensor, true)
+      w = weight_buffer(matrix.tensor)
       if matrix.scales
         st, bt = matrix.scales.not_nil!, matrix.biases.not_nil!
-        s, b = MetalBackend.tensor_buffer(st, true), MetalBackend.tensor_buffer(bt, true)
+        s, b = weight_buffer(st), weight_buffer(bt)
         enc = encoder
         enc.set_pipeline(pipeline("dr3_embedding_quant", SOURCE))
         enc.set_buffer(w.buffer, 0); enc.set_buffer(s.buffer, 1); enc.set_buffer(b.buffer, 2)
@@ -818,9 +857,9 @@ module ML::Audio::Drama3::Resident
         dispatch_mlx_q4(matrix, x, output, ids, 0, true, per_rank_input)
         return output
       end
-      weight = MetalBackend.tensor_buffer(matrix.tensor, true)
+      weight = weight_buffer(matrix.tensor)
       st, bt = matrix.scales.not_nil!, matrix.biases.not_nil!
-      scales, biases = MetalBackend.tensor_buffer(st, true), MetalBackend.tensor_buffer(bt, true)
+      scales, biases = weight_buffer(st), weight_buffer(bt)
       output = alloc(count.to_i32)
       p = [matrix.rows.to_u64, matrix.cols.to_u64, matrix.bits.to_u64, matrix.group_size.to_u64,
            weight.offset.to_u64, scales.offset.to_u64, biases.offset.to_u64, encoding(st), encoding(bt),

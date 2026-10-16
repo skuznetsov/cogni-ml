@@ -10,6 +10,51 @@ reference and fixture tools only, never the native inference implementation.
 The pinned MLX upstream is a community port. Original Fish DAC controls below
 cover four saved code streams, not the original text-generation pipeline.
 
+## Active slice: mapped weight wrapper lifetime — 2026-10-16
+
+From `99a4f447`, compare persistent raw mapped buffers with recreated host Metal
+wrappers over the same mmap owners/pages. A faster warm request alone cannot
+identify driver registration cost. Risk: CAUTION; the diagnostic bank is opt-in
+on a new Context, rotates only at an already terminal boundary, retains mmap
+owners and abort-quarantines them after failure. Active encoding, workspace,
+pending commands and aborted contexts reject rotation without a wait/drain.
+All raw bindings use the bank when enabled; ordinary inference retains the
+existing global cache through an optional-bank branch. No shader, arithmetic,
+precision, queue or inference read/wait policy changes. Rollback is omitting
+diagnostic enabling or reverting this isolated slice.
+
+DoD: exact backing/offset and GPU packed/dense/conversion witnesses at graph
+0/2; terminal boundary counterexamples; counterbalanced same-worker pairs with
+separate cold primes; unchanged saved MLX full-code and final hidden/logits
+gates after a 158-row prefill.
+
+The completed matrix has 18 requests: two cold primes and 16 warm jobs, with
+P/R/R/P twice and R/P/P/R twice inside two workers. Every fresh job retires and
+recreates six whole-shard wrappers over the same 25867452416 declared bytes;
+converted GPU F32 weights remain cached. Warm preparation medians are 2.646 us
+persistent / 1.087167 ms recreated. The paired request-to-result difference has
+median -0.000816 s and range -5.439325 to +6.644850 s, with four pairs favoring
+each arm. First-driver intervals still span 0.311–7.686 s in the persistent
+arm and 0.312–7.229 s after recreation. No end-to-end gain or default promotion
+is admitted. Host wrapper creation alone cannot explain the seconds-long
+spread; internal registration reuse and work below submission remain unknown.
+
+All full 60x11 codes, WAV, sampler and graph/read ledgers are exact: 122 existing
+submissions/waits per request, 496 control and 494160 terminal bytes, no new
+inference synchronization or activation read. The 67 relevant Metal tests,
+both saved-MLX full-code GPU comparisons and final hidden/logits gate after a
+158-row prefill pass unchanged 3e-5/3e-4 tolerances. This does not compare every
+row/layer or close the existing MoE39 failure. Warm first-command windows have
+zero process page-ins/disk-read bytes; whole-request reads are not always zero, and zero
+counters do not certify residency. Converted-cache and lazy view-rebuild
+asymmetry, overlapping counter windows and quiet-host-off noise limit inference.
+See [Mapped weight wrapper comparison](drama3-weight-wrappers.md) for exact
+pairing, scope, receipts and lineage. Next discriminator: a view-only sham
+that rebuilds raw tensor views but preserves Metal handles, plus passive binding
+counts. Driver validation granularity remains a later hypothesis requiring its
+own ownership/numerical probes. Keep MoE39/common-prefix and DAC post-module as
+the open numerical return frontier.
+
 ## Active slice: first-prefill startup attribution — 2026-10-16
 
 From `ccb0d178`, separate host preparation, process page activity, Metal driver
@@ -56,10 +101,11 @@ full-code and 158-row prefill gates pass without widening tolerances. The
 known MoE39 full intermediate failure remains open. See
 [First-prefill startup attribution](drama3-prefill-startup.md) for exact samples,
 lineage, observer cost and the interrupted-wrapper limitation. No startup
-optimization or default change is promoted. Next discriminator: establish which
-resources are revalidated in that submission path, then compare stable resource
-identity/registration with fresh wrappers over the same mappings while retaining
-this numeric/queue contract.
+optimization or default change is promoted. The subsequent
+[mapped wrapper comparison](drama3-weight-wrappers.md) executes that contrast:
+recreation costs about 1 ms, while multi-second warm scheduling
+spread survives both modes. Driver resource validation remains an unresolved
+hypothesis; wrapper caching alone has no measured end-to-end promotion.
 
 ## Active slice: GPU kernel attribution — 2026-10-16
 
