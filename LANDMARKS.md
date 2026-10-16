@@ -29850,3 +29850,53 @@ Refresh after source/toolchain/device/model/workload changes.
   authority: serial run_safe, 15% floor, unrelated processes untouched, external
   scratch/local weights, exact-path local atomic commit/no push. Rollback by
   omitting the diagnostic enable or reverting this isolated slice.
+
+
+### Continuation 2026-10-16 — mapped weight resource extents
+
+- Base `30833811`: Context-mediated diagnostic transitions whole-shard to
+  page-rounded full-Tensor no-copy resources at the existing terminal boundary.
+  Release all old handles before construction; retain immutable mmap owners,
+  rebase/guard full raw intervals and all dynamically selectable experts. Exact
+  envelopes deduplicate; read-only overlaps report sum and union separately.
+  Replacement/legacy refresh discard stale first-command receipts, while a
+  same-layout view clear preserves them. No shader/arithmetic/precision or
+  inference submit/wait/readback changes; ordinary defaults remain whole-shard.
+- One Engine completes S/N/N/S blocks, each excluded prime then P/V/V/P:
+  twenty requests, sixteen scored. N-minus-S block medians favor N for P
+  (-3.477684/-5.359322s) but S for V (+9.493018/+2.230206s). No uniform layout
+  gain, equivalence, internal-driver explanation or default promotion follows.
+  First-driver intervals still span 0.316–9.421s. Active-host CPU/scheduling
+  variability, layout-by-view interaction and carryover remain confounds.
+- Mappings rise from 6 to 1310, first-command active resources from 5 to 853.
+  Warm raw binds remain 862; bound interval union falls only 0.0768%, about 24 GB still
+  exposed. All-resource sum/union are 24752242688/24732073984B for N, versus
+  25867452416B for S. These are API intervals, not RAM/residency or bytes read.
+  All 566 converted-cache host identities stay fixed; scored mapped-resource
+  construction/retirement is zero. Cold histogram differs and is excluded.
+- All 20 full 60x11 codes/WAV/tape and 122-submit/wait/read ledgers are exact.
+  76 relevant Metal and 7 new/14 existing offline cases, four saved-MLX GPU code
+  checks and final 158-row hidden/logit gate pass unchanged 3e-5/3e-4. The latter
+  also enables existing workspaces and is a combined numerical guard. Known
+  MoE39 full-intermediate and DAC post-module frontiers remain open.
+- Two analysis-only failures are preserved: baseline list-length assumption,
+  then cold-versus-warm histogram scope. V3 and cross-artifact/source verification
+  pass without rerunning/excluding any matrix requests. Report
+  `docs/drama3-weight-extents.md`, index
+  `.landmark/evidence/drama3-weight-extents.json`, external raw root
+  `/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/`.
+  Correlated mini-Quad verdict ROBUST for the Context-mediated diagnostic,
+  fixed numerical/queue contract and descriptive conclusion; no independent
+  replication or causal timing claim follows.
+- Nomic comparison: GPU route and selected-rank projection batching already
+  exist in DRAMA (MoE dispatches 49 to 6). Nomic's historical cross-token batched
+  workload gain is not a DRAMA prediction: current prompt prefill/decode are
+  row-by-row, and transfer first needs a real multi-token backbone path. Do not
+  import its different quantized/FP16 arithmetic as a precision-preserving move.
+  Return numeric frontier remains MoE39/common-prefix and DAC post-module.
+- Reopen extent timing only with a new discriminator for host scheduling and
+  layout/view interaction. Refresh on source/model/input/tape/fixture/tolerance/
+  queue/observer/device/OS/storage drift, contradiction or raw artifact eviction.
+  Standing authority: serial run_safe, 15% floor, unrelated processes untouched,
+  external scratch/local weights, exact-path local atomic commit/no push.
+  Rollback by omitting diagnostic enabling or reverting this isolated slice.

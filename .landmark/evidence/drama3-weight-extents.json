@@ -1,0 +1,680 @@
+{
+  "format": "landmark-evidence-v1",
+  "id": "drama3-weight-extents-20261016",
+  "created_at_utc": "2026-10-16T21:11:49.351365+00:00",
+  "base_revision": "308338117ed75f2a50005efd38320aef922deff4",
+  "claim": {
+    "level": "VERIFIED",
+    "scope": "Context-mediated terminal-only mapped weight resource extent diagnostic, executed fixed-workload numerical/queue contract and descriptive one-Engine S/N/P/V observations.",
+    "result": "Tensor extents favor N in both persistent-view contrasts but favor S in both view-reset contrasts. No uniform/stable layout gain is established; whole-shard defaults remain unchanged.",
+    "exclusions": [
+      "No causal extent-only, internal-driver registration, shader-read, physical-residency, performance-equivalence or general speed claim.",
+      "No concurrent/public-bank safety, writable alias generalization, native bind/submit fault injection, GPU cache-content checksum or zero observer overhead claim.",
+      "No new stock-MLX RNG/generation, every-layer/general voice/prosody/whisper/long-speech parity. Known MoE39 full-intermediate and DAC post-module numerical frontiers remain open.",
+      "No full weight-shard byte hash, fresh bridge build or reproducible-build attestation. Nomic history is inspected, not rerun or a DRAMA forecast."
+    ]
+  },
+  "boundaries": {
+    "allowed_paths": [
+      ".landmark/evidence/drama3-weight-extents.json",
+      "LANDMARKS.md",
+      "docs/drama3-native-frontier.md",
+      "docs/drama3-weight-extents.md",
+      "docs/drama3-weight-views.md",
+      "examples/drama3_weight_wrappers.cr",
+      "scripts/drama3/measure_weight_extents.py",
+      "spec/drama3_weight_extents_driver_spec.py",
+      "spec/drama3_weight_extents_spec.cr",
+      "src/ml/audio/drama3/metal.cr",
+      "src/ml/audio/drama3/resident.cr"
+    ],
+    "changed_paths": [
+      ".landmark/evidence/drama3-weight-extents.json",
+      "LANDMARKS.md",
+      "docs/drama3-native-frontier.md",
+      "docs/drama3-weight-extents.md",
+      "docs/drama3-weight-views.md",
+      "examples/drama3_weight_wrappers.cr",
+      "scripts/drama3/measure_weight_extents.py",
+      "spec/drama3_weight_extents_driver_spec.py",
+      "spec/drama3_weight_extents_spec.cr",
+      "src/ml/audio/drama3/metal.cr",
+      "src/ml/audio/drama3/resident.cr"
+    ]
+  },
+  "risk_and_recovery": {
+    "tier": "CAUTION",
+    "failure_mode": "Use of stale or out-of-range weight views, released Metal handles referenced by queued work, or stale binding receipts published against replacement resources.",
+    "guards": "Existing Context idle/terminal/no-encoder/no-workspace/no-pending/no-lease/not-aborted check; never drain. Full owner/range/page checks, complete GPU-selected expert banks, release all handles before rebuild, discard receipts on replacement, quarantine owners on abort. Direct bank calls do not enforce this boundary.",
+    "rollback": "Omit diagnostic enabling or revert this isolated slice; ordinary persistent whole-shard resources remain default.",
+    "execution": "Serial run_safe; 15 percent free-memory floor; quiet-host off; unrelated processes untouched. Weights on local SSD, temporary/build/raw/reference scratch on external SSD."
+  },
+  "definition_of_done": {
+    "commands_receipt": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/commands.json",
+    "expected": "76 relevant Metal cases and 7 new/14 existing offline cases pass; 20 qualified requests preserve full codes/WAV/tape/read/queue contract; four saved-MLX GPU integer gates and final-source 158-row hidden/logit gate pass unchanged tolerances; source/log/input hashes agree.",
+    "observed": "PASS: 12 required exit-zero receipts plus executed verify-gates cross-check. Genuine missing range API and stale-receipt RED witnesses precede their fixes.",
+    "required_executed_commands": [
+      {
+        "name": "metal-suite-final",
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/metal-suite-final.log",
+        "log_sha256": "7ccf32972e10e828147af33e369fcd0414ae7b2b045cd846fb384bf450e69b7c",
+        "exit_code": 0,
+        "signal": "76 examples, 0 failures, 0 errors"
+      },
+      {
+        "name": "driver-offline",
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/driver-offline.log",
+        "log_sha256": "d73ed46d3ef3abc5d64ff4181b7f2b9121c43fae1cde9e09316c988f12ea7989",
+        "exit_code": 0,
+        "signal": "Ran 7 tests"
+      },
+      {
+        "name": "prior-driver-offline",
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/prior-driver-offline.log",
+        "log_sha256": "2153ff9f41e1a94e6666d9ce36575d1048c6aa27869dfd49bddd0e44d70e0168",
+        "exit_code": 0,
+        "signal": "Ran 14 tests"
+      },
+      {
+        "name": "build-worker-final",
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/build-worker-final.log",
+        "log_sha256": "c4c77495c80b1176bd36f11a0b7a7579c666df3980d6654c7a8ff99093ce0e19",
+        "exit_code": 0,
+        "signal": null
+      },
+      {
+        "name": "build-prefill-final",
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/build-prefill-final.log",
+        "log_sha256": "82583a7ae7cb4df377311c32de4dad416964b225702477629bcf091e1d12d2b5",
+        "exit_code": 0,
+        "signal": null
+      },
+      {
+        "name": "prefill-tensor-final",
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/prefill-tensor-final.log",
+        "log_sha256": "8d5f305d862a32004dc168a6d9fd6ccefccd30479157a2e466439ba2e29af6c7",
+        "exit_code": 0,
+        "signal": null
+      },
+      {
+        "name": "matrix",
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/matrix.log",
+        "log_sha256": "a36485e3c804502916ec61c4aa33a170a63b8493fd84a029b71e0da11d6c8d16",
+        "exit_code": 0,
+        "signal": null
+      },
+      {
+        "name": "mlx-shard-p",
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/mlx-shard-p.log",
+        "log_sha256": "63ba671c79ca5d5b531f881365b9bc0f895bb3d5a530cda27be0421a918ca542",
+        "exit_code": 0,
+        "signal": null
+      },
+      {
+        "name": "mlx-shard-v",
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/mlx-shard-v.log",
+        "log_sha256": "8d82068be10236852b2123c6360f27844829e35760e1e5057c19cc72ac94186e",
+        "exit_code": 0,
+        "signal": null
+      },
+      {
+        "name": "mlx-tensor-p",
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/mlx-tensor-p.log",
+        "log_sha256": "8d82068be10236852b2123c6360f27844829e35760e1e5057c19cc72ac94186e",
+        "exit_code": 0,
+        "signal": null
+      },
+      {
+        "name": "mlx-tensor-v",
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/mlx-tensor-v.log",
+        "log_sha256": "8d82068be10236852b2123c6360f27844829e35760e1e5057c19cc72ac94186e",
+        "exit_code": 0,
+        "signal": null
+      },
+      {
+        "name": "analyze-extents-v3",
+        "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/analyze-extents-v3.log",
+        "log_sha256": "f96d88c77db59c44e987914f14841d9be6d909929b7847ddf7b9bca2c964e53a",
+        "exit_code": 0,
+        "signal": null
+      }
+    ],
+    "fallback": "Rebased scalar/packed and GPU-selected expert witnesses at graph0/2, native endpoint bitwise comparisons and saved-MLX pointwise endpoint metrics. Structural metadata checks are not execution proof."
+  },
+  "lineage": {
+    "checkpoint": {
+      "repository": "cguldogan/drama-3-mlx-q4",
+      "revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+      "model_path": "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+      "config_sha256": "9d52aa7960ba723efcfe47d2ec03f52c5e22e84a6c2a7d773a845db1bf48563c",
+      "index_sha256": "da812cc5b08188ccef048b9074e4cf70c8a1896859c5b492f374d7833e63b855",
+      "tokenizer_sha256": "0e9b9db76b2f0389b04b6ef057a2ac3b89100b7e96f2dd7034d19580a09654d6",
+      "files": [
+        {
+          "file_bytes": 5498947446,
+          "name": "model-00001-of-00005.safetensors",
+          "page_rounded_bytes": 5498961920
+        },
+        {
+          "file_bytes": 5390036166,
+          "name": "model-00002-of-00005.safetensors",
+          "page_rounded_bytes": 5390041088
+        },
+        {
+          "file_bytes": 5402946528,
+          "name": "model-00003-of-00005.safetensors",
+          "page_rounded_bytes": 5402951680
+        },
+        {
+          "file_bytes": 5423590660,
+          "name": "model-00004-of-00005.safetensors",
+          "page_rounded_bytes": 5423595520
+        },
+        {
+          "file_bytes": 2277811252,
+          "name": "model-00005-of-00005.safetensors",
+          "page_rounded_bytes": 2277818368
+        },
+        {
+          "file_bytes": 1874070622,
+          "name": "codec.safetensors",
+          "page_rounded_bytes": 1874083840
+        }
+      ],
+      "qualification_limit": "Indexed set, sizes, metadata hashes and unchanged same-worker mmap backing; no full-shard hash."
+    },
+    "mlx_audio_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+    "measured_source_sha256": {
+      "examples/drama3_weight_wrappers.cr": "c2f11ec24212f8fd0554c93053c0794d286ea165973b6b8662e34c1a2c4e7ccd",
+      "scripts/drama3/measure_host_pairs.py": "e9316fcee23948678ac6120dbace3ff66c366e40af98670413c9238591e642fb",
+      "scripts/drama3/measure_weight_extents.py": "7025473f4b790dbc4f480283ac57298d54773ddf44e7129835fc80977af1d325",
+      "scripts/drama3/measure_weight_wrappers.py": "b7c2742a079a7ccc57a00c7e996f0f4ae8d1404d45f4d9f85c02b2a3522e88c0",
+      "spec/drama3_weight_extents_driver_spec.py": "5d433fd8977863814dcad9ab31846893937c6279fb339cd1e67768bcb439451a",
+      "spec/drama3_weight_extents_spec.cr": "808c2afbd297841c1462a1aedccfae5a90b19795046407d8b3797e14a2fe4e79",
+      "src/ml/audio/drama3/metal.cr": "68ffc22f962955c036e4eabc7d0b2edcdade5c572feb544d8fa4bd4891ea25cf",
+      "src/ml/audio/drama3/resident.cr": "38c9330a6efe344c12cd992b07dd94557597a60e2eda13e406221d6061a1a598",
+      "src/ml/audio/drama3/resident_host_encoder.cr": "2666ee5345c0b38e5b2767af99c62df7be102d0c63096dbc0593aab7b83197cf",
+      "src/ml/audio/drama3/studio/engine.cr": "d86e2daca5cbc2047d7cdc1ee5da60c42a4ab81aa3a8f7eae168459b44877cee"
+    },
+    "source_receipt_coverage": {
+      "allowed_gap_scope": [
+        "scripts/drama3/measure_host_pairs.py",
+        "scripts/drama3/measure_weight_wrappers.py"
+      ],
+      "manifest_only_gaps": [
+        "scripts/drama3/measure_weight_wrappers.py",
+        "scripts/drama3/measure_host_pairs.py"
+      ],
+      "verified": [
+        "scripts/drama3/measure_weight_extents.py",
+        "spec/drama3_weight_extents_driver_spec.py",
+        "spec/drama3_weight_extents_spec.cr",
+        "examples/drama3_weight_wrappers.cr",
+        "src/ml/audio/drama3/resident.cr",
+        "src/ml/audio/drama3/resident_host_encoder.cr",
+        "src/ml/audio/drama3/metal.cr",
+        "src/ml/audio/drama3/studio/engine.cr"
+      ]
+    },
+    "retrospective_timeline_helper": {
+      "path": "scripts/drama3/analyze_command_timeline.py",
+      "sha256": "c71d83261f94b37db71af162edf485988f28b6b8692a0face12c1b3c6c579524",
+      "matches_base_source": true,
+      "limit": "Not pinned by an execution receipt."
+    },
+    "saved_input_sha256": {
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/mlx-control.json": "08626d6d91fa01765dbf4019f9d0ca93069c3bd76982f654f999bfd0b6232289",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/gpu-kernels-20261016/compare_worker_upstream.py": "6f4bc0445bc93860934ee93df52da0ce8e43ad0808e1494921a449ca07b5b78b",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/compare_reference_pauses.py": "418cfc9a4103d5e91b73201c0f4766982717e23f77130bb9875a39c45d4329da",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/random-tape-1.json": "ddc31bee6c0ffcd12c2ba781207747cad5eab9cbcb02faa074658caac8e16341",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/allocation-reuse-20261016/baseline-worker.json": "3d8bfa03e4377f3a5a7f907c3c89431c3055ae6137fbd22c72d87bcec6514398",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/prefill-fixture.json": "cf31d5199aa6290e05b65e6f958bb3d6e1b760cde5d670da7679cf13c2f7ea66",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/mlx.json": "bdfdbf0662eed42a6ad5e8eb073e036cb90c26ade83852552cb26a3640cecf19",
+      "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/mlx.json.sampler_logits.npz": "5577c320dbbcb5d7e5f1892b2eca2a49a5b9438355c5bf9632b476fcd59b6686"
+    },
+    "bridge_object_sha256": "4e76b260561c8f79442c273397148720ff67ce1b31ff87029c4034ee54898d49",
+    "bridge_limit": "Unchanged reused bridge object; not a fresh bridge build or reproducible-build attestation.",
+    "worker_binary_sha256": "42fcb6427e60ebcc740c52706cfa442d9584c2eccba677e551e554b4c5e68393"
+  },
+  "experiment": {
+    "P": "retain raw mapped TensorBuffer views and Metal wrappers",
+    "V": "clear/rebuild raw TensorBuffer views while retaining Metal wrappers",
+    "causal_scope": "descriptive within-one-Engine contrasts; no IID inference",
+    "layout_blocks": [
+      "shard",
+      "tensor",
+      "tensor",
+      "shard"
+    ],
+    "layout_claim_scope": "net shard-vs-tensor resource-layout effect",
+    "name": "single-engine-weight-extents",
+    "per_block_schedule": [
+      "excluded persistent prime",
+      "P",
+      "V",
+      "V",
+      "P"
+    ],
+    "prime_count": 4,
+    "request_count": 20,
+    "resource_count_scope": "resource count changes with layout and is a co-varying part of the tested layout",
+    "scored_count": 16,
+    "scored_per_layout_mode": 4,
+    "workers": 1
+  },
+  "observations": {
+    "request_wall_directional_contrasts_seconds": {
+      "persistent": [
+        {
+          "contrast": "tensor_block1_minus_shard_block0",
+          "shard_median": 28.3024945827201,
+          "tensor_median": 24.824810270918533,
+          "tensor_minus_shard": -3.4776843118015677
+        },
+        {
+          "contrast": "tensor_block2_minus_shard_block3",
+          "shard_median": 31.754992416128516,
+          "tensor_median": 26.39567018765956,
+          "tensor_minus_shard": -5.359322228468955
+        }
+      ],
+      "views": [
+        {
+          "contrast": "tensor_block1_minus_shard_block0",
+          "shard_median": 23.44803460384719,
+          "tensor_median": 32.9410529374145,
+          "tensor_minus_shard": 9.493018333567306
+        },
+        {
+          "contrast": "tensor_block2_minus_shard_block3",
+          "shard_median": 26.50139487441629,
+          "tensor_median": 28.731601312523708,
+          "tensor_minus_shard": 2.230206438107416
+        }
+      ]
+    },
+    "resource_layouts": {
+      "shard": {
+        "active_bound_mapped_bytes": 23993368576,
+        "active_bound_overlapping_bytes": 0,
+        "active_bound_resource_count": 5,
+        "active_bound_unique_mapped_bytes": 23993368576,
+        "first_command_histogram_signature_sha256": "bc47d4073b6a8a0d500aa929dcc3a273bcb1dab343dc40058a86f6979e07124c",
+        "histogram_invariant_across_warm_requests": true,
+        "mapped_bytes": 25867452416,
+        "mapping_count": 6,
+        "overlapping_bytes": 0,
+        "unique_mapped_bytes": 25867452416,
+        "warm_histogram_request_count": 9
+      },
+      "tensor": {
+        "active_bound_mapped_bytes": 23987830784,
+        "active_bound_overlapping_bytes": 12877824,
+        "active_bound_resource_count": 853,
+        "active_bound_unique_mapped_bytes": 23974952960,
+        "first_command_histogram_signature_sha256": "76af855b03c48023d05bc7e00f83e7985aa2f320ce8612090d95bfce659af1b7",
+        "histogram_invariant_across_warm_requests": true,
+        "mapped_bytes": 24752242688,
+        "mapping_count": 1310,
+        "overlapping_bytes": 20168704,
+        "unique_mapped_bytes": 24732073984,
+        "warm_histogram_request_count": 10
+      }
+    },
+    "geometry_scope": "API interval sums and per-mmap unions, not RAM, residency or bytes read. Complete expert banks keep approximately24GB bound; bound union drops0.0768 percent while object count rises6 to1310.",
+    "numerical": {
+      "requests_exact": 20,
+      "code_shape": [
+        60,
+        11
+      ],
+      "wav_sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d",
+      "samples": 122880,
+      "sample_rate": 44100,
+      "sampler_f32_inputs": 704,
+      "sampler_prefix_sha256": "e13a73aa1f41d156e7c2f811bb941c1b63993aa97989b267a14b65a5665a545b",
+      "per_request_submits_completions_waits": 122,
+      "graph_depth": 2,
+      "max_pending": 2,
+      "terminal_pending_and_retained": 0,
+      "readback_bytes": {
+        "control": 496,
+        "terminal": 494160
+      },
+      "activation_cpu_readbacks": 0,
+      "prefill": {
+        "prompt_rows": 158,
+        "stages": [
+          {
+            "name": "prompt.backbone.hidden",
+            "shape": [
+              1,
+              2048
+            ],
+            "fresh_vs_reuse_bitwise_mismatches": 0,
+            "exact_element_count": 2048,
+            "reused_vs_mlx_pointwise_failures": 0,
+            "nonfinite": 0,
+            "worst_error_to_allowance": 0.05126616,
+            "passes": true
+          },
+          {
+            "name": "prompt.main_logits",
+            "shape": [
+              1,
+              4097
+            ],
+            "fresh_vs_reuse_bitwise_mismatches": 0,
+            "exact_element_count": 4097,
+            "reused_vs_mlx_pointwise_failures": 0,
+            "nonfinite": 0,
+            "worst_error_to_allowance": 0.0079710195,
+            "passes": true
+          }
+        ],
+        "tolerances": {
+          "rule": "abs(actual-reference) <= atol + rtol*abs(reference)",
+          "atol": 3e-05,
+          "rtol": 0.0003,
+          "pointwise_kernel": "/Users/sergey/.codex/worktrees/drama3-native/cogni-ml/examples/support/drama3_reference_compare.metal"
+        },
+        "graph": {
+          "fresh_arm": {
+            "submitted": 159,
+            "completed": 159,
+            "completion_waits": 159,
+            "pending": 0,
+            "max_pending": 2
+          },
+          "workspace_arm": {
+            "submitted": 159,
+            "completed": 159,
+            "completion_waits": 159,
+            "pending": 0,
+            "max_pending": 2
+          },
+          "submits_and_waits_equal": true,
+          "before_metric_reads": {
+            "depth": 2,
+            "submitted": 319,
+            "completed": 319,
+            "pending": 0,
+            "max_pending": 2,
+            "completion_waits": 319,
+            "retained_bytes": 0,
+            "max_retained_bytes": 32565096380
+          },
+          "after_metric_reads": {
+            "depth": 2,
+            "submitted": 319,
+            "completed": 319,
+            "pending": 0,
+            "max_pending": 2,
+            "completion_waits": 319,
+            "retained_bytes": 0,
+            "max_retained_bytes": 32565096380
+          }
+        },
+        "readbacks": {
+          "control": 16,
+          "diagnostic": 40
+        },
+        "scope": "Combined extent/workspace numerical endpoint guard; not per-layer or extent-only timing."
+      },
+      "upstream": {
+        "shard-p": {
+          "path": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/mlx-shard-p.json",
+          "sha256": "ba50fbb395f3b8393b620feca2c215e4ff1a8417b622da87c535ac07c7af1a45",
+          "passes": true
+        },
+        "shard-v": {
+          "path": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/mlx-shard-v.json",
+          "sha256": "ba50fbb395f3b8393b620feca2c215e4ff1a8417b622da87c535ac07c7af1a45",
+          "passes": true
+        },
+        "tensor-p": {
+          "path": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/mlx-tensor-p.json",
+          "sha256": "ba50fbb395f3b8393b620feca2c215e4ff1a8417b622da87c535ac07c7af1a45",
+          "passes": true
+        },
+        "tensor-v": {
+          "path": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/mlx-tensor-v.json",
+          "sha256": "ba50fbb395f3b8393b620feca2c215e4ff1a8417b622da87c535ac07c7af1a45",
+          "passes": true
+        }
+      }
+    },
+    "warm_capture": "All19warm requests (9S/10N) preserve5442total/862raw first-command binds; cold discovery prime differs and is excluded. All566 converted GPU cache host identities fixed; not a GPU-content checksum.",
+    "counter_scope": "Scored mapped-resource construction/retirement zero. All scored pageins zero and request disk reads0-64KiB. CPU/driver outliers co-occur; windows overlap and are nonadditive.",
+    "timing_scope": "Quiet-host off, only2samples/mode/block, contiguous blocks, layout/view interaction and carryover. Driver interval is kernelEnd-kernelStart, not GPU execution. No cross-clock subtraction. No attribution to internal driver behavior."
+  },
+  "quadrumvirate": {
+    "prediction": "If whole-shard declared extents dominate, a narrower layout should improve both P/V treatment contrasts in both time directions.",
+    "question": "Do reduced extents preserve the full GPU-selected expert address range and unchanged numerical/queue contracts?",
+    "move": "Terminal-only full-Tensor resources, full-bank guards, per-resource passive capture and one-Engine S/N/N/S with P/V/V/P sham.",
+    "attack": "Negative range/lifetime/stale-receipt tests, actual raw-vs-doc review, root raw recomputation and unchanged MLX endpoint/full-code gates.",
+    "falsifier": "Timing advantage confined to persistent-view treatment; the view-reset sham favors the opposite layout in both directions.",
+    "verdict": "ROBUST",
+    "scope": "Bounded diagnostic, fixed executed numerical/queue contract and descriptive no-uniform-gain conclusion.",
+    "review_kind": "Correlated same-lineage source and experiment review plus root executed checks, not independent replication."
+  },
+  "artifacts": {
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/commands.json": "e0353f5f428a6be76724cc48222e6dc34cf435af6fca7601c1d330526c850f72",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/run.py": "bd0ff06276eb00307c3b5d92b618d0336cfe5401e84c774992c8e1493d8addbf",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/analysis.json": "b34edb027db7661c5f5f59647c0ae361332f285213f11eed326e47522e74e911",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/analyze.py": "9c8e9190a0ab12fb41d43c16f4fcf201857180558a8e36cb71f25f505c9af219",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/static_checks.json": "fbe97bd5994120b56d70c483a2297f87d4c99de7a34eb1f93cb35565951a1a79",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/verify_gates.py": "876d4497eb457c87a761268f7f9f13918a107eb3864b9ca219474deef7108850",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/matrix/weight-extents-worker.json": "7695b910c39b7bffab8c4da1318cb2273a6ed018704f8d02aa41878369abca83",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/matrix/weight-extents-worker.stderr": "4a9a01ec5e12c79282c4ba098ce82e8d73b4ac01c6548cc8e4c6ef5aa236c1fc",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/prefill_extents.cr": "836bb22359d420b7fbcb432eff80a9900fb8f42b5e303921d48d04eaabbff0be",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/prefill-extents-final": "f05188639b2a315d649da99535f44ef6469330521f2b38752a09e1d2e28adcce",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/prefill-tensor-final.json": "8a276262375ae815e6029c21e2609d3825b7082116709b03c22af1be104757ec",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/weight-extents-final": "42fcb6427e60ebcc740c52706cfa442d9584c2eccba677e551e554b4c5e68393",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/bridge.o": "4e76b260561c8f79442c273397148720ff67ce1b31ff87029c4034ee54898d49",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/mlx-shard-p.json": "ba50fbb395f3b8393b620feca2c215e4ff1a8417b622da87c535ac07c7af1a45",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/mlx-shard-v.json": "ba50fbb395f3b8393b620feca2c215e4ff1a8417b622da87c535ac07c7af1a45",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/mlx-tensor-p.json": "ba50fbb395f3b8393b620feca2c215e4ff1a8417b622da87c535ac07c7af1a45",
+    "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/mlx-tensor-v.json": "ba50fbb395f3b8393b620feca2c215e4ff1a8417b622da87c535ac07c7af1a45"
+  },
+  "execution_receipts": [
+    {
+      "name": "red-extents",
+      "exit_code": 1,
+      "wrapper_seconds": 0.725016999989748,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/red-extents.log",
+      "log_sha256": "f1a3675aaddd63de1695dc320eab048cab4356d8ca1dd0f60fab0e91c9bed1a8"
+    },
+    {
+      "name": "red-extents-api",
+      "exit_code": 1,
+      "wrapper_seconds": 0.729176000226289,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/red-extents-api.log",
+      "log_sha256": "0d216b608a13d891042ada446b1a33190d34a18647224bb7db00eef54245b2bf"
+    },
+    {
+      "name": "green-extents",
+      "exit_code": 1,
+      "wrapper_seconds": 0.7278234167024493,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/green-extents.log",
+      "log_sha256": "c52b986e216a2d7e4e305edfb1cfeb3141870b7adb6969283c8ea02f5ebfe46a"
+    },
+    {
+      "name": "green-extents-v2",
+      "exit_code": 0,
+      "wrapper_seconds": 2.9827765417285264,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/green-extents-v2.log",
+      "log_sha256": "7213621261ace98efe4d30c417836644715f33d5beab5943c89e67bc5b35605d"
+    },
+    {
+      "name": "metal-regression",
+      "exit_code": 1,
+      "wrapper_seconds": 0.7166901659220457,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/metal-regression.log",
+      "log_sha256": "4892f8c17c14c723d148277f4fafe28e0d1272ad35461668a6c901197fdd9255"
+    },
+    {
+      "name": "metal-suite",
+      "exit_code": 0,
+      "wrapper_seconds": 10.098951667081565,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/metal-suite.log",
+      "log_sha256": "bed029b5a88bdb064880d53cecb0ca0acd026d5d6473cc7afab8a7e7ff9b553e"
+    },
+    {
+      "name": "build-worker",
+      "exit_code": 0,
+      "wrapper_seconds": 12.029122417327017,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/build-worker.log",
+      "log_sha256": "f51dd33fba561b539afd9b64e214cb47995b85b5b365fb6423dc1a741ad4cf2b"
+    },
+    {
+      "name": "build-prefill",
+      "exit_code": 0,
+      "wrapper_seconds": 9.919987333007157,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/build-prefill.log",
+      "log_sha256": "42e87a122dcd7dfb86f4bf1e79e98cb123510e31034ff2306ac16e69d0cc675e"
+    },
+    {
+      "name": "prefill-tensor",
+      "exit_code": 0,
+      "wrapper_seconds": 66.23615533299744,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/prefill-tensor.log",
+      "log_sha256": "74b8940715a2c8139cf6faed54b4ea691c7175a718e7328ebc27f3928996978f"
+    },
+    {
+      "name": "red-stale-receipt",
+      "exit_code": 1,
+      "wrapper_seconds": 3.218346167355776,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/red-stale-receipt.log",
+      "log_sha256": "a7231cdbde73bd2aa8327451ac48e4f67e96835437b0aa29d93132c923bcbbbd"
+    },
+    {
+      "name": "metal-suite-final",
+      "exit_code": 0,
+      "wrapper_seconds": 7.691808125004172,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/metal-suite-final.log",
+      "log_sha256": "7ccf32972e10e828147af33e369fcd0414ae7b2b045cd846fb384bf450e69b7c"
+    },
+    {
+      "name": "build-worker-final",
+      "exit_code": 0,
+      "wrapper_seconds": 12.108415292110294,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/build-worker-final.log",
+      "log_sha256": "c4c77495c80b1176bd36f11a0b7a7579c666df3980d6654c7a8ff99093ce0e19"
+    },
+    {
+      "name": "driver-offline",
+      "exit_code": 0,
+      "wrapper_seconds": 0.7388997082598507,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/driver-offline.log",
+      "log_sha256": "d73ed46d3ef3abc5d64ff4181b7f2b9121c43fae1cde9e09316c988f12ea7989"
+    },
+    {
+      "name": "prior-driver-offline",
+      "exit_code": 0,
+      "wrapper_seconds": 0.8421755419112742,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/prior-driver-offline.log",
+      "log_sha256": "2153ff9f41e1a94e6666d9ce36575d1048c6aa27869dfd49bddd0e44d70e0168"
+    },
+    {
+      "name": "matrix",
+      "exit_code": 0,
+      "wrapper_seconds": 565.7644339157268,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/matrix.log",
+      "log_sha256": "a36485e3c804502916ec61c4aa33a170a63b8493fd84a029b71e0da11d6c8d16"
+    },
+    {
+      "name": "analyze-extents",
+      "exit_code": 1,
+      "wrapper_seconds": 0.723488749936223,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/analyze-extents.log",
+      "log_sha256": "21a55feb57ef13c6c20270865fcf2f8d4ee5a53c6a153195fcb399f1c5e8cbcd"
+    },
+    {
+      "name": "build-prefill-final",
+      "exit_code": 0,
+      "wrapper_seconds": 10.889637416694313,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/build-prefill-final.log",
+      "log_sha256": "82583a7ae7cb4df377311c32de4dad416964b225702477629bcf091e1d12d2b5"
+    },
+    {
+      "name": "prefill-tensor-final",
+      "exit_code": 0,
+      "wrapper_seconds": 67.39810070907697,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/prefill-tensor-final.log",
+      "log_sha256": "8d5f305d862a32004dc168a6d9fd6ccefccd30479157a2e466439ba2e29af6c7"
+    },
+    {
+      "name": "mlx-shard-p",
+      "exit_code": 0,
+      "wrapper_seconds": 1.2748197498731315,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/mlx-shard-p.log",
+      "log_sha256": "63ba671c79ca5d5b531f881365b9bc0f895bb3d5a530cda27be0421a918ca542"
+    },
+    {
+      "name": "mlx-shard-v",
+      "exit_code": 0,
+      "wrapper_seconds": 0.9576159580610693,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/mlx-shard-v.log",
+      "log_sha256": "8d82068be10236852b2123c6360f27844829e35760e1e5057c19cc72ac94186e"
+    },
+    {
+      "name": "mlx-tensor-p",
+      "exit_code": 0,
+      "wrapper_seconds": 1.0809860830195248,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/mlx-tensor-p.log",
+      "log_sha256": "8d82068be10236852b2123c6360f27844829e35760e1e5057c19cc72ac94186e"
+    },
+    {
+      "name": "mlx-tensor-v",
+      "exit_code": 0,
+      "wrapper_seconds": 1.111325291916728,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/mlx-tensor-v.log",
+      "log_sha256": "8d82068be10236852b2123c6360f27844829e35760e1e5057c19cc72ac94186e"
+    },
+    {
+      "name": "analyze-extents-v2",
+      "exit_code": 1,
+      "wrapper_seconds": 0.9860609173774719,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/analyze-extents-v2.log",
+      "log_sha256": "70b6a7f9ef05c20c0a247e8923337f1916c68b75f6ff53ff3fd64752a02f93c4"
+    },
+    {
+      "name": "analyze-extents-v3",
+      "exit_code": 0,
+      "wrapper_seconds": 0.7381552918814123,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/analyze-extents-v3.log",
+      "log_sha256": "f96d88c77db59c44e987914f14841d9be6d909929b7847ddf7b9bca2c964e53a"
+    },
+    {
+      "name": "verify-gates",
+      "exit_code": 0,
+      "wrapper_seconds": 0.7424859157763422,
+      "log": "/opt/mldata_ssd/cogni-ml/drama3-weight-extents-20261016/verify-gates.log",
+      "log_sha256": "330d65afefe5742e6698980974e9e2a74e47ede78f7ab426b077e4094c469ca2"
+    }
+  ],
+  "prior_failures": {
+    "genuine_RED": [
+      "red-extents-api: absent range API",
+      "red-stale-receipt: old receipt remained publishable after resource replacement"
+    ],
+    "corrected_harness_or_analysis": [
+      "red-extents: invalid spec syntax",
+      "green-extents: constructor initialization compile error",
+      "metal-regression: mistyped suite path",
+      "analyze-extents: baseline three-row format assumed singleton",
+      "analyze-extents-v2: cold discovery histogram incorrectly required to equal warm"
+    ],
+    "recovery": "Final source and analyzer v3 pass. No matrix request rerun, dropped or relabeled."
+  },
+  "continuation": {
+    "decision": "Retain whole-shard defaults; deprioritize extent timing without a new host/scheduling and layout/view discriminator.",
+    "nomic_hypothesis": "DRAMA already has GPU routing/selected-rank batching (historical dispatch49-to6). Current prefill/decode are row-by-row; cross-token batching first requires a real multi-token producer. Nomic commit23f775a5 records8.807ms/text vs~12.422 scalar for a different embedding/quantization workload; inspected, not rerun.",
+    "next_falsifier": "For a separate concurrency proposal, first demonstrate a real simultaneous token producer and unchanged-arithmetic selected-rank batching gain on GPU; lack of either rejects a direct transfer.",
+    "return_frontier": "MoE39/common-prefix and DAC post-module numerical investigation.",
+    "decay": "Source/shader/model/layout/input/tape/fixture/tolerance/queue/observer/device/OS/storage drift, contradiction or raw artifact eviction.",
+    "refresh": "Re-execute affected numerical/lifetime/source/input gates and matched matrix before promotion.",
+    "failure_policy": "Downgrade dependent claims; omit diagnostic or revert isolated slice. Do not drain to make unsafe transitions legal."
+  }
+}

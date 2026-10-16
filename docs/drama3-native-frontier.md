@@ -10,7 +10,66 @@ reference and fixture tools only, never the native inference implementation.
 The pinned MLX upstream is a community port. Original Fish DAC controls below
 cover four saved code streams, not the original text-generation pipeline.
 
-## Active slice: raw weight views and binding exposure — 2026-10-16
+## Active slice: mapped weight resource extents — 2026-10-16
+
+From `30833811`, test the net warm-layout effect of page-rounded per-Tensor
+no-copy resources against whole-shard resources in one Engine. This reopens
+the previously rejected per-tensor route only with an excluded prime per
+layout block, retained converted GPU caches, a views-only sham in both layouts,
+and measured resource intervals/binding exposure. It does not isolate length
+from resource count or establish internal driver registration cost.
+
+Risk: CAUTION. Only the explicitly enabled diagnostic bank may change layout,
+at the existing terminal boundary. Retire all old wrappers before creating any
+replacement; retain immutable mmap owners. Rebase byte offsets and guard the
+entire raw Tensor interval, including all dynamically selectable experts.
+Page envelopes may overlap for read-only inputs: report their union separately
+from summed resource lengths. Reject writable-resource generalization.
+No shader, arithmetic, precision, inference submit/wait/readback or ordinary
+inference default change is admitted. Rollback is omitting diagnostic enabling
+or reverting this slice.
+
+DoD: a genuine failing range/rebase witness, then focused graph-0/2 GPU checks
+for dense/packed/conversion and terminal-boundary rejection without draining;
+offline schedule and receipt mutation tests; S/N/N/S blocks with P/V/V/P jobs
+and an excluded prime per block; exact full codes/WAV, sampler and queue/read
+ledgers; unchanged saved-MLX full-code and 158-row final hidden/logit gates at
+atol 3e-5 / rtol 3e-4. Falsifiers include a tensor outside its buffer, partial
+expert coverage, a live retired wrapper, lazy construction in scored jobs,
+changed converted-cache identity or numerical/queue drift. Active-host results
+are descriptive and do not certify residency or an extent-only speedup.
+
+Observed DoD: 76 relevant Metal examples and 7 new/14 existing offline tests
+pass. All 20 full-code/WAV/tape and 122-submit/wait/read ledgers are exact;
+four saved-control MLX GPU full-code comparisons and the final-source 158-row
+final hidden/logit gate pass at unchanged 3e-5/3e-4 tolerances. The prefill
+candidate also enables existing workspaces, so it is a combined numerical
+guard. It does not close every intermediate or the known MoE39 discrepancy.
+
+S/N/N/S block medians (P,V seconds) are (28.302495,23.448035),
+(24.824810,32.941053), (26.395670,28.731601), (31.754992,26.501395).
+N-minus-S favors N in P (-3.477684/-5.359322s) but favors S in V
+(+9.493018/+2.230206s). No uniform layout gain or default promotion follows.
+Warm first-command raw bindings stay 862; active resources rise 5 to 853,
+while the active-bound interval union falls only 0.0768% (about 24 GB remains).
+All resources rise 6 to 1310; their summed lengths are not physical residency.
+Scored construction/retirement is zero; all 566 converted-cache host identities
+stay fixed. First-driver ranges remain 0.316–9.421s across arms; process CPU
+outliers/carryover remain competing explanations. The view sham falsifies a
+uniform layout-speed claim, not all possible benefits of narrower resources.
+
+Report [Mapped weight resource extents](drama3-weight-extents.md), evidence
+`.landmark/evidence/drama3-weight-extents.json`. Keep ordinary whole-shard
+resources. Reopen this layout route only with a new discriminator for the
+layout-by-view interaction and host scheduling. Next bounded kernel question:
+which Nomic MoE batching ideas remain applicable beyond DRAMA's existing
+GPU route/top-8 projection batching? A real multi-token activation producer
+must exist before promoting cross-token batching. Return numeric frontier:
+MoE39/common-prefix and DAC post-module. Standing authority remains serial
+run_safe, 15% floor, unrelated processes untouched, external scratch/local
+weights, exact-path local atomic commit/no push.
+
+## Prior slice: raw weight views and binding exposure — 2026-10-16
 
 Completed bounded contrast from `c37f4d91`: one Engine and a separate persistent
 prime, followed by all six permutations of persistent / views-only / fresh

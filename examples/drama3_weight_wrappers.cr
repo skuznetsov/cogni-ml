@@ -16,6 +16,10 @@ require "../src/ml/audio/drama3/studio/engine"
         @context.begin_weight_wrapper_job!
       end
 
+      def prepare_weight_extents(narrow : Bool, clear_views : Bool = false) : Hash(String, Int64)
+        @context.prepare_weight_extents(narrow, clear_views)
+      end
+
       def weight_wrapper_first_command_bindings
         @context.weight_wrapper_first_command_bindings
       end
@@ -37,10 +41,19 @@ require "../src/ml/audio/drama3/studio/engine"
       input = JSON.parse(line)
       mode = input["wrappers"].as_s
       raise "wrappers must be persistent, views or fresh" unless mode.in?("persistent", "views", "fresh")
+      layout = input["layout"]?.try(&.as_s)
+      if layout
+        raise "layout must be shard or tensor" unless layout.in?("shard", "tensor")
+        raise "extent layout supports persistent or views" if mode == "fresh"
+      end
       converted_before = engine.converted_weight_cache_signature
       resources_before = ML::Audio::Drama3::HostResourceSnapshot.capture
       started = Time.instant
-      preparation = engine.prepare_weight_wrappers(mode == "fresh", clear_views: mode == "views")
+      preparation = if layout
+                      engine.prepare_weight_extents(layout == "tensor", clear_views: mode == "views")
+                    else
+                      engine.prepare_weight_wrappers(mode == "fresh", clear_views: mode == "views")
+                    end
       preparation_seconds = (Time.instant - started).total_seconds
       resources_after = ML::Audio::Drama3::HostResourceSnapshot.capture
       engine.begin_weight_wrapper_job!
@@ -60,7 +73,7 @@ require "../src/ml/audio/drama3/studio/engine"
       gc_seconds = (Time.instant - gc_started).total_seconds
       gc_after = ML::Audio::Drama3::HostProfile.gc_snapshot
       STDOUT.puts({event: "result", report: report,
-                   weight_wrappers: {mode: mode, preparation: preparation, after_job: after_job,
+                   weight_wrappers: {mode: mode, layout: layout || "shard", preparation: preparation, after_job: after_job,
                                      first_command_bindings: bindings,
                                      converted_cache: {before_count: converted_before.size, after_count: converted_after.size,
                                                        unchanged: converted_unchanged},

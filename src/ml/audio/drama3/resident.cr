@@ -298,6 +298,18 @@ module ML::Audio::Drama3::Resident
       bank.start_first_command(@submissions)
     end
 
+    def prepare_weight_extents(narrow : Bool, clear_views : Bool = false) : Hash(String, Int64)
+      bank = @weight_wrapper_bank
+      raise ArgumentError.new("weight wrapper probe is not enabled") unless bank
+      check_weight_wrapper_boundary!
+      begin
+        bank.prepare_extents(narrow, clear_views)
+      rescue ex
+        abort
+        raise ex
+      end
+    end
+
     def weight_wrapper_first_command_bindings
       bank = @weight_wrapper_bank
       raise ArgumentError.new("weight wrapper probe is not enabled") unless bank

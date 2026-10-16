@@ -225,7 +225,10 @@ the entire resource. An earlier per-tensor-view probe failed to establish an
 end-to-end gain; a new contrast must address its cache/order confounds using
 the now-qualified view sham and measured exposure, while preserving mmap
 ownership, alignment/range guards, identical codes and the same queue ledger.
-This is a hypothesis for a future slice, not an optimization implemented here.
+This was a hypothesis for the follow-up slice; the completed
+[mapped resource extent contrast](drama3-weight-extents.md) retains the view
+sham and finds no uniform layout gain. It keeps whole-shard resources as the
+ordinary default and does not infer driver internals from binding exposure.
 
 Rollback: omit diagnostic enabling or revert this isolated slice. Source,
 model/layout/input/tape/observer/queue/device/OS drift, contradictions or raw
