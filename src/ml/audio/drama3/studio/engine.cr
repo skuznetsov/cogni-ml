@@ -68,6 +68,7 @@ require "../wav"
           nil
         end
         generation_started = Time.instant
+        generation_alloc = @context.allocation_stats
         result = if reference && plan
                    progress.call("Кодирование референса")
                    audio = ReferenceAudio.upload(reference, @context)
@@ -80,6 +81,7 @@ require "../wav"
                    generator.generate(prompt, max_frames, seed, temperature, top_k, top_p)
                  end
         generation_seconds = (Time.instant - generation_started).total_seconds
+        codec_alloc = @context.allocation_stats
         count = result.generation.frames.size
         raise ArgumentError.new("model produced EOS without audio") if count == 0
         progress.call("Декодирование #{count} кадров")
@@ -106,8 +108,20 @@ require "../wav"
                              sampler_inputs: generator.sampler_inputs, resident_readbacks: reads,
                              resident_graph: graph.transform_values { |value, key| key.in?("submitted", "completed", "completion_waits") ? value - before_graph[key] : value },
                              resident_allocation_stats: {allocations: allocation[:allocations] - before_alloc[:allocations],
-                                                         requested_bytes: allocation[:requested_bytes] - before_alloc[:requested_bytes]},
+                                                         requested_bytes: allocation[:requested_bytes] - before_alloc[:requested_bytes],
+                                                         allocation_profile: allocation[:allocation_profile],
+                                                         allocation_ns: allocation[:allocation_ns] - before_alloc[:allocation_ns]},
+                             allocation_phases: {initialize: {allocations: generation_alloc[:allocations] - before_alloc[:allocations],
+                                                              requested_bytes: generation_alloc[:requested_bytes] - before_alloc[:requested_bytes],
+                                                              allocation_ns: generation_alloc[:allocation_ns] - before_alloc[:allocation_ns]},
+                                                 generation: {allocations: codec_alloc[:allocations] - generation_alloc[:allocations],
+                                                              requested_bytes: codec_alloc[:requested_bytes] - generation_alloc[:requested_bytes],
+                                                              allocation_ns: codec_alloc[:allocation_ns] - generation_alloc[:allocation_ns]},
+                                                 codec: {allocations: allocation[:allocations] - codec_alloc[:allocations],
+                                                         requested_bytes: allocation[:requested_bytes] - codec_alloc[:requested_bytes],
+                                                         allocation_ns: allocation[:allocation_ns] - codec_alloc[:allocation_ns]}},
                              resident_dac_scratch: codec.dac_scratch_stats,
+                             resident_generation_scratch: generator.workspace_stats,
                              elapsed_seconds: (Time.instant - started).total_seconds,
                              phase_seconds: {initialize: (generation_started - started).total_seconds,
                                              generation: generation_seconds, codec: codec_seconds},

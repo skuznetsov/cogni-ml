@@ -63,11 +63,12 @@ metadata or host output construction. Reusing the arena between separate
 decodes is outside this slice.
 
 Backbone recurrent state and backbone/tower KV caches already have persistent
-allocations. Their dense, normalization, attention and feed-forward temporary
-outputs still go through `Context#alloc`. Extending explicit scratch ownership
-to those paths requires a live-buffer plan that preserves residual inputs,
-in-flight submissions and retained diagnostics. Disabling GC globally would
-leave these existing allocations unreclaimed rather than establish reuse.
+allocations. The later opt-in generation workspaces now reuse the dense,
+normalization, attention and feed-forward `Context#alloc` temporaries across
+steps while preserving residual inputs, pending submissions and diagnostics;
+see [drama3-allocation-reuse.md](drama3-allocation-reuse.md). That flag remains
+off by default. Disabling GC globally still does not establish safe reuse for
+other allocations or across separate jobs.
 
 The current input and residual skip are excluded by backing Metal handle, so
 views cannot conceal an alias. Traces use fresh storage because observers may

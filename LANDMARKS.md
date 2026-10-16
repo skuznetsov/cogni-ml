@@ -29601,3 +29601,48 @@ Refresh after source/toolchain/device/model/workload changes.
   tape/runtime/device/graph/precision drift. Standing authority: serial run_safe,
   reserve15%, own children only, local commits/no push. Rollback studio commit;
   preserve local data and use standalone generator.
+
+### Continuation 2026-10-16 — generation workspace allocation reuse
+
+- Base `ce592825`: optional `DRAMA3_GENERATION_SCRATCH=1` gives backbone,
+  tower.prefill, tower.sample and main one GPU backing per call ordinal. Slots
+  allocate on first use, remain ordered on the same tracked queue, then release
+  after the existing terminal boundary. Uploads/static conversions/finite status
+  stay fresh; escaping frames stay persistent; traces bypass reuse and late
+  enablement rejects. Growth retains replaced backings; abort quarantines them.
+- Short warm worker generation drops 135139->1894 backing allocations and
+  1596632160->22125244 requested bytes; four plans total 22110080 bytes and end
+  with zero live slots/bytes. V1 host construction clocks819–892->7.15–9.37ms
+  measure only MetalBuffer.new. Per-job plans, wrappers/metadata/GC and codec
+  allocations remain; this is ordinary reuse, not an LTP/WBA certificate.
+- All18 paired full jobs (6 timer-on,8 timer-off v1,4 timer-off final source)
+  retain all60frames/11IDs, WAV bytes and sampler/readback/graph ledgers:
+  122 submits/waits, maxpending2, control496bytes, terminal494160bytes. Final
+  source includes retired-backing and fresh-only capacity guard fixes; old
+  timing receipts are not promoted to final-source measurements.
+- Warm v1 request medians28.588s fresh/29.546s reuse; final-source one-per-mode
+  warm27.618s/31.935s. No stable request-to-WAV speedup; default scratch0 remains.
+  Next discriminator: host encoding/bookkeeping/GC versus DAC host-time variation
+  using paired jobs and existing GPU timestamps, not allocation count as value.
+- Final native full60-frame GPU comparison matches the saved pinned MLX F32-core
+  control on shared effective tape draws. Actual reused158-row prefill at2205
+  capacity gives zero fresh/reuse hidden/logit bit mismatches and zero failures
+  under unchanged3e-5+3e-4abs(ref). Post-first backbone/tower.prefill scopes create
+  no new backing allocations; both arms retain159 existing submits/waits.
+- Final49 Metal and29 CPU examples plus release build pass. Depths0/2, two pending
+  commands+GC, actual slot growth/retired storage, status/zeros, ownership, retained
+  traces, late-enable rejection, generated-frame handoff and reference guards
+  covered. Native wait source establishes terminal Metal completion before
+  status errors; generic foreign-queue/hardware-loss recovery remains untested.
+- Report `docs/drama3-allocation-reuse.md`, curated
+  `.landmark/evidence/drama3-allocation-reuse.json`; raw local
+  `drama3-runs/allocation-reuse-20261016/`. Correlated mini-Quad ROBUST within
+  bounded storage/numeric checks; no overall performance promotion. The first
+  external prefill helper failed on config nesting before inference; corrected
+  native TowerConfig helper passes and both receipts remain.
+- Return numeric frontier: MoE39/common-prefix forks and DAC post-module stage;
+  no long-speech/identity/prosody, stock-RNG, cross-job pool or whole-GC claim.
+  Refresh on source/shader/checkpoint/input/tape/fixture/precision/gate/graph/
+  runtime/device/OS drift. Authority: serial run_safe,15% floor, unrelated
+  processes untouched, local atomic commit/no push. Rollback flag0 or feature
+  commit. Paired host noise/uncertified speed is an explicit default blocker.

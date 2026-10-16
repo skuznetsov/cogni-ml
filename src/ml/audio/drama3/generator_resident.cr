@@ -44,6 +44,8 @@ module ML::Audio::Drama3
     @eos : Int32
     @semantic_begin : Int32
     @semantic_end : Int32
+    @generation_scratch : Bool
+    @workspaces = {} of String => Resident::Workspace
 
     def initialize(config : JSON::Any, @store : WeightStore, @ctx : Resident::Context, @capacity : Int32)
       backbone_config = BackboneConfig.new(config)
@@ -60,6 +62,11 @@ module ML::Audio::Drama3
       @progress = nil
       @device_trace = nil
       @sampler_inputs = nil
+      @generation_scratch = case ENV["DRAMA3_GENERATION_SCRATCH"]? || "0"
+                            when "0" then false
+                            when "1" then true
+                            else raise ArgumentError.new("DRAMA3_GENERATION_SCRATCH must be 0 or 1")
+                            end
     end
 
     # A resident model owns temporal caches and is deliberately single-use.
@@ -68,7 +75,9 @@ module ML::Audio::Drama3
     def generate(prompt : Array(Array(Int32)), max_frames : Int32 = 160, seed : UInt64 = 0_u64,
                  temperature : Float64 = 0.8, top_k : Int32 = 30, top_p : Float64 = 0.9) : ResidentGeneration
       Profile.measure("generator_resident.generate", category: "generation") do
-        generate_impl(prompt, max_frames, seed, temperature, top_k, top_p)
+        result = generate_impl(prompt, max_frames, seed, temperature, top_k, top_p)
+        release_workspaces
+        result
       end
     rescue ex
       begin
@@ -84,7 +93,9 @@ module ML::Audio::Drama3
     def generate(prompt : ResidentPrompt, max_frames : Int32 = 160, seed : UInt64 = 0_u64,
                  temperature : Float64 = 0.8, top_k : Int32 = 30, top_p : Float64 = 0.9) : ResidentGeneration
       Profile.measure("generator_resident.generate", category: "generation") do
-        generate_resident_impl(prompt, max_frames, seed, temperature, top_k, top_p)
+        result = generate_resident_impl(prompt, max_frames, seed, temperature, top_k, top_p)
+        release_workspaces
+        result
       end
     rescue ex
       begin
@@ -105,6 +116,7 @@ module ML::Audio::Drama3
 
       # Preserve the CPU path's parameter validation before any model work.
       Sampler.new(seed).candidates([0_f32], temperature, top_k, top_p)
+      prepare_workspaces
       frame_width = @tower.config.num_codebooks + 1
       device_frames = @ctx.alloc(max_frames * frame_width)
       draw_stride = 2 + @tower.config.num_codebooks - 1
@@ -116,10 +128,9 @@ module ML::Audio::Drama3
       Profile.measure("generator_resident.prefill", category: "generation.prefill") do
         frames_on_device.each_with_index do |frame, index|
           Profile.measure("generator_resident.prefill_row", category: "generation.prefill.row") do
-            token_embedding = @backbone.embedding(frame.slice(0, 1))
-            hidden = @backbone.step(@tower.embed_backbone(frame, token_embedding))
+            hidden = backbone_step(frame, frame.slice(0, 1))
             if index + 1 < frames_on_device.size
-              @tower.teacher_force(hidden, frame, frames_on_device[index + 1])
+              with_workspace("tower.prefill") { @tower.teacher_force(hidden, frame, frames_on_device[index + 1]) }
             end
             # Bound live temporary allocations while persistent KV/recurrent
             # state remains owned by the resident model objects.
@@ -130,6 +141,7 @@ module ML::Audio::Drama3
       end
 
       if trace = @device_trace
+        check_workspace_traces!
         trace.call("prompt.backbone.hidden", hidden)
       end
 
@@ -143,14 +155,16 @@ module ML::Audio::Drama3
 
       Profile.measure("generator_resident.autoregressive", category: "generation.decode") do
         max_frames.times do |step|
-          logits = @ctx.matvec(@head, hidden)
-          if step == 0
-            @device_trace.try(&.call("prompt.main_logits", logits))
-          end
           draw_offset = step * draw_stride
-          first = @ctx.sample(logits, draw_buffer.slice(draw_offset, 1), temperature, top_k, top_p)
-          retry = @ctx.sample(logits, draw_buffer.slice(draw_offset + 1, 1), 1.0, 30, 0.95)
-          main = choose_main(first, retry, window, window_size, window_cursor)
+          main = with_workspace("main") do
+            logits = @ctx.matvec(@head, hidden)
+            if step == 0
+              @device_trace.try(&.call("prompt.main_logits", logits))
+            end
+            first = @ctx.sample(logits, draw_buffer.slice(draw_offset, 1), temperature, top_k, top_p)
+            retry = @ctx.sample(logits, draw_buffer.slice(draw_offset + 1, 1), 1.0, 30, 0.95)
+            choose_main(first, retry, window, window_size, window_cursor)
+          end
 
           # This scalar is the explicit EOS control boundary. `main` remains a
           # device buffer and is passed directly into tower frame generation.
@@ -164,19 +178,23 @@ module ML::Audio::Drama3
           end
 
           frame = Profile.measure("generator_resident.device_frame", category: "generation.frame") do
-            sampled_codes = 0
-            output_frame = @ctx.graph_enabled? ? device_frames.slice(step * frame_width, frame_width) : nil
-            resident_frame = @tower.sample_frame(main, hidden, previous_frame, output_frame: output_frame) do |code_logits|
-              draw_index = draw_offset + 2 + sampled_codes
-              sampled_codes += 1
-              @ctx.sample(code_logits, draw_buffer.slice(draw_index, 1), temperature, top_k, top_p)
+            # A generated frame escapes into previous_frame and the terminal
+            # code array, so its backing is outside the reusable tower plan.
+            output_frame = (@ctx.graph_enabled? || !@workspaces.empty?) ? device_frames.slice(step * frame_width, frame_width) : nil
+            resident_frame = with_workspace("tower.sample") do
+              sampled_codes = 0
+              sampled = @tower.sample_frame(main, hidden, previous_frame, output_frame: output_frame) do |code_logits|
+                draw_index = draw_offset + 2 + sampled_codes
+                sampled_codes += 1
+                @ctx.sample(code_logits, draw_buffer.slice(draw_index, 1), temperature, top_k, top_p)
+              end
+              raise "resident tower sampled #{sampled_codes} residual codes; expected #{@tower.config.num_codebooks - 1}" unless sampled_codes == @tower.config.num_codebooks - 1
+              sampled
             end
-            raise "resident tower sampled #{sampled_codes} residual codes; expected #{@tower.config.num_codebooks - 1}" unless sampled_codes == @tower.config.num_codebooks - 1
 
             @ctx.copy(resident_frame, device_frames.slice(step * frame_width, frame_width)) unless output_frame
             if step + 1 < max_frames
-              token_embedding = @backbone.embedding(main)
-              hidden = @backbone.step(@tower.embed_backbone(resident_frame, token_embedding))
+              hidden = backbone_step(resident_frame, main)
             end
             # Submit the complete tower/backbone chain for this generated row.
             # In graph mode, the next main-token control read submits and
@@ -218,6 +236,7 @@ module ML::Audio::Drama3
       # Validate all host-controlled inputs before model work, matching the
       # original resident API's boundary.
       Sampler.new(seed).candidates([0_f32], temperature, top_k, top_p)
+      prepare_workspaces
       frame_width = @tower.config.num_codebooks + 1
       frame_values = max_frames.to_i64 * frame_width
       raise ArgumentError.new("resident output frame buffer is too large") if frame_values > Int32::MAX
@@ -231,10 +250,9 @@ module ML::Audio::Drama3
       Profile.measure("generator_resident.prefill", category: "generation.prefill") do
         frames_on_device.each_with_index do |frame, index|
           Profile.measure("generator_resident.prefill_row", category: "generation.prefill.row") do
-            token_embedding = @backbone.embedding(frame.slice(0, 1))
-            hidden = @backbone.step(@tower.embed_backbone(frame, token_embedding))
+            hidden = backbone_step(frame, frame.slice(0, 1))
             if index + 1 < frames_on_device.size
-              @tower.teacher_force(hidden, frame, frames_on_device[index + 1])
+              with_workspace("tower.prefill") { @tower.teacher_force(hidden, frame, frames_on_device[index + 1]) }
             end
             @ctx.submit
           end
@@ -243,6 +261,7 @@ module ML::Audio::Drama3
       end
 
       if trace = @device_trace
+        check_workspace_traces!
         trace.call("prompt.backbone.hidden", hidden)
       end
 
@@ -262,14 +281,16 @@ module ML::Audio::Drama3
 
       Profile.measure("generator_resident.autoregressive", category: "generation.decode") do
         max_frames.times do |step|
-          logits = @ctx.matvec(@head, hidden)
-          if step == 0
-            @device_trace.try(&.call("prompt.main_logits", logits))
-          end
           draw_offset = step * draw_stride
-          first = @ctx.sample(logits, draw_buffer.slice(draw_offset, 1), temperature, top_k, top_p)
-          retry = @ctx.sample(logits, draw_buffer.slice(draw_offset + 1, 1), 1.0, 30, 0.95)
-          main = choose_main(first, retry, window, window_size, window_cursor)
+          main = with_workspace("main") do
+            logits = @ctx.matvec(@head, hidden)
+            if step == 0
+              @device_trace.try(&.call("prompt.main_logits", logits))
+            end
+            first = @ctx.sample(logits, draw_buffer.slice(draw_offset, 1), temperature, top_k, top_p)
+            retry = @ctx.sample(logits, draw_buffer.slice(draw_offset + 1, 1), 1.0, 30, 0.95)
+            choose_main(first, retry, window, window_size, window_cursor)
+          end
 
           # This scalar is the existing explicit EOS control boundary. Invalid
           # reference IDs poison Context's finite status and fail here without
@@ -284,19 +305,23 @@ module ML::Audio::Drama3
           end
 
           frame = Profile.measure("generator_resident.device_frame", category: "generation.frame") do
-            sampled_codes = 0
-            output_frame = @ctx.graph_enabled? ? device_frames.slice(step * frame_width, frame_width) : nil
-            resident_frame = @tower.sample_frame(main, hidden, previous_frame, output_frame: output_frame) do |code_logits|
-              draw_index = draw_offset + 2 + sampled_codes
-              sampled_codes += 1
-              @ctx.sample(code_logits, draw_buffer.slice(draw_index, 1), temperature, top_k, top_p)
+            # A generated frame escapes into previous_frame and the terminal
+            # code array, so its backing is outside the reusable tower plan.
+            output_frame = (@ctx.graph_enabled? || !@workspaces.empty?) ? device_frames.slice(step * frame_width, frame_width) : nil
+            resident_frame = with_workspace("tower.sample") do
+              sampled_codes = 0
+              sampled = @tower.sample_frame(main, hidden, previous_frame, output_frame: output_frame) do |code_logits|
+                draw_index = draw_offset + 2 + sampled_codes
+                sampled_codes += 1
+                @ctx.sample(code_logits, draw_buffer.slice(draw_index, 1), temperature, top_k, top_p)
+              end
+              raise "resident tower sampled #{sampled_codes} residual codes; expected #{@tower.config.num_codebooks - 1}" unless sampled_codes == @tower.config.num_codebooks - 1
+              sampled
             end
-            raise "resident tower sampled #{sampled_codes} residual codes; expected #{@tower.config.num_codebooks - 1}" unless sampled_codes == @tower.config.num_codebooks - 1
 
             @ctx.copy(resident_frame, device_frames.slice(step * frame_width, frame_width)) unless output_frame
             if step + 1 < max_frames
-              token_embedding = @backbone.embedding(main)
-              hidden = @backbone.step(@tower.embed_backbone(resident_frame, token_embedding))
+              hidden = backbone_step(resident_frame, main)
             end
             @ctx.finish unless @ctx.graph_enabled?
             resident_frame
@@ -317,6 +342,49 @@ module ML::Audio::Drama3
       terminal_frames = decode_terminal_frames(terminal_values, generated_count, frame_width)
       generation = Generation.new(terminal_frames, stopped, prompt.row_count)
       ResidentGeneration.new(generation, device_frames)
+    end
+
+    def workspace_stats
+      {enabled: !@workspaces.empty?, workspaces: @workspaces.transform_values(&.stats)}
+    end
+
+    private def diagnostic_traces? : Bool
+      !!(@device_trace || @backbone.trace || @backbone.buffer_trace || @backbone.moe_trace || @backbone.layer_buffer_trace)
+    end
+
+    private def prepare_workspaces : Nil
+      # Diagnostic APIs may retain any intermediate. Preserve their original
+      # fresh-output lifetime instead of returning borrowed workspace storage.
+      return unless @generation_scratch && !diagnostic_traces?
+      ["backbone", "tower.prefill", "tower.sample", "main"].each do |name|
+        @workspaces[name] = @ctx.new_workspace
+      end
+    end
+
+    private def check_workspace_traces! : Nil
+      raise ArgumentError.new("cannot enable resident traces during workspace generation") if !@workspaces.empty? && diagnostic_traces?
+    end
+
+    private def with_workspace(name : String, &)
+      check_workspace_traces!
+      if workspace = @workspaces[name]?
+        @ctx.with_workspace(workspace) { yield }
+      else
+        yield
+      end
+    end
+
+    private def backbone_step(frame : Resident::Buffer, token : Resident::Buffer) : Resident::Buffer
+      with_workspace("backbone") do
+        token_embedding = @backbone.embedding(token)
+        @backbone.step(@tower.embed_backbone(frame, token_embedding))
+      end
+    end
+
+    private def release_workspaces : Nil
+      # The existing final control/terminal read has already drained the queue.
+      # No extra finish or wait is introduced to retire these GPU backings.
+      @workspaces.each_value { |workspace| @ctx.release_workspace(workspace) }
     end
 
     private def choose_main(first : Resident::Buffer, retry : Resident::Buffer, window : Resident::Buffer,

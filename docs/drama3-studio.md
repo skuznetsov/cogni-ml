@@ -92,6 +92,16 @@ and are not closed by unchanged output versus the previous native path.
 The measured paired results and next performance probe are in
 [drama3-tower-embedding.md](drama3-tower-embedding.md).
 
+`DRAMA3_GENERATION_SCRATCH=1` enables per-generation GPU buffer reuse in
+backbone, teacher-force tower, sampled tower and main sampling. Slots allocate
+on first use and release after the existing terminal boundary. The default
+remains 0 because paired request-to-WAV timings do not show a stable speedup.
+`DRAMA3_ALLOCATION_PROFILE=1` measures actual GPU backing construction with
+host clocks; leave it off for timing comparisons. Job reports expose
+`allocation_phases` and `resident_generation_scratch`. Read
+[drama3-allocation-reuse.md](drama3-allocation-reuse.md) for the measured count
+reduction, unchanged upstream gates and remaining allocation/GC boundaries.
+
 ## Observed validation
 
 The 2026-10-16 run passed 18 CPU examples for store, HTTP, media and worker

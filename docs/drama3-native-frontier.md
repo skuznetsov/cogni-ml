@@ -10,6 +10,32 @@ reference and fixture tools only, never the native inference implementation.
 The pinned MLX upstream is a community port. Original Fish DAC controls below
 cover four saved code streams, not the original text-generation pipeline.
 
+## Generation buffer reuse — 2026-10-16
+
+From base `ce592825`, `DRAMA3_GENERATION_SCRATCH=1` enables four bounded
+GPU workspaces with per-call ordinal slots, persistent escaping frames and
+explicit terminal release. Uploads, converted weights, finite status and
+retained diagnostics remain outside reused storage. Replaced backings survive
+until terminal release or abort quarantine. No new wait, readback, arithmetic
+or tolerance change is admitted; default scratch remains 0.
+
+Observed on the pinned short-text trajectory: warm generation backing
+allocations 135,139 -> 1,894, requested bytes 1,596,632,160 -> 22,125,244;
+construction clocks 819–892 -> 7.15–9.37 ms in the v1 timer-on experiment.
+All 18 paired native jobs preserve full code/WAV bytes and graph/readback
+ledgers; four use final source after two lifetime/validation guard fixes.
+The final native 60-frame trajectory matches the saved pinned MLX F32 control
+on shared draws. Actual reused 158-row prefill hidden/logits are bitwise equal
+to fresh and pass the unchanged MLX pointwise gate. All 49 focused Metal and
+29 CPU examples pass, with a successful final release build.
+
+Request-to-WAV timing is not consistently faster, including the final-source
+warm comparison. No default speed promotion is made. Whole-pipeline GC removal,
+cross-job pooling and older numerical/voice-quality frontiers remain open.
+Details, tested source scope, commands and refresh/rollback bounds are in
+[drama3-allocation-reuse.md](drama3-allocation-reuse.md) and
+`.landmark/evidence/drama3-allocation-reuse.json`.
+
 ## Active slice: GPU reference voice — 2026-10-15
 
 Status: VERIFIED within the one-reference slice on Apple M2 Max, from base

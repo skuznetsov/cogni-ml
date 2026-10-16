@@ -347,7 +347,9 @@ module ML::Audio::Drama3
       trace_cache(trace, "#{prefix}.key_cache", cache.keys, length)
       trace_cache(trace, "#{prefix}.value_cache", cache.values, length)
 
-      scores = @context.alloc(@config.n_head * length)
+      score_count = checked_score_count(length)
+      score_capacity = @context.workspace_active? ? checked_score_count(@capacity) : score_count
+      scores = @context.alloc(score_count, reserve_count: score_capacity)
       scale = (1.0_f64 / Math.sqrt(@config.head_dim.to_f64)).to_f32
       @context.dispatch(
         "drama3_tower_attention_scores", RESIDENT_TOWER_SOURCE,
@@ -355,7 +357,7 @@ module ML::Audio::Drama3
         [@config.n_head.to_u64, @config.n_local_heads.to_u64, @config.head_dim.to_u64,
          (@config.n_head // @config.n_local_heads).to_u64, length.to_u64, @capacity.to_u64,
          scale.unsafe_as(UInt32).to_u64],
-        @config.n_head * length,
+        score_count,
       )
       context = @context.alloc(q_width)
       @context.dispatch(
@@ -431,6 +433,23 @@ module ML::Audio::Drama3
 
     private def ensure_capacity! : Nil
       raise ArgumentError.new("tower resident cache capacity #{@capacity} exceeded at offset #{@offset}") if @offset >= @capacity
+    end
+
+    private def checked_score_count(length : Int32) : Int32
+      heads = @config.n_head
+      unless heads > 0 && length > 0
+        raise ArgumentError.new("resident tower attention score shape must be positive")
+      end
+
+      count = heads.to_i64 * length.to_i64
+      raise ArgumentError.new("resident tower attention scores exceed Int32 element capacity") if count > Int32::MAX
+
+      bytes = count * sizeof(Float32).to_i64
+      limit = MetalBackend.max_buffer_length
+      unless limit > 0 && bytes <= limit
+        raise ArgumentError.new("resident tower attention scores require #{bytes} Metal bytes; device limit is #{limit}")
+      end
+      count.to_i32
     end
 
     private def validate_call!(hidden : Resident::Buffer, previous_frame : Resident::Buffer) : Nil

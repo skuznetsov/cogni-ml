@@ -26,6 +26,86 @@ module ML::Audio::Drama3::Resident
     end
   end
 
+  # A fixed call sequence has one backing allocation per ordinal, never one
+  # shared slot for simultaneously live residuals. Only the owning generator
+  # may use these views: a result must be consumed before the next call starts.
+  # GPU writes are ordered on Context's serial queue, including across flights.
+  class Workspace
+    getter owner : BufferOwner
+    @slots = [] of Buffer
+    @retired = [] of Buffer
+    @cursor = 0
+    @uses = 0_i64
+    @reuses = 0_i64
+    @bytes = 0_i64
+    @peak_bytes = 0_i64
+    @active = false
+    @released = false
+    @quarantined = false
+
+    def initialize(@owner : BufferOwner)
+    end
+
+    def enter : Nil
+      raise ArgumentError.new("resident workspace is released or quarantined") if @released || @quarantined
+      raise ArgumentError.new("resident workspace is already active") if @active
+      @active = true
+      @cursor = 0
+      @uses += 1
+    end
+
+    def leave : Nil
+      @active = false
+    end
+
+    def alloc(count : Int32, reserve_count : Int32, &fresh : Int32 -> Buffer) : Buffer
+      raise ArgumentError.new("resident workspace is not active") unless @active
+      index = @cursor
+      slot = @slots[index]?
+      if slot && slot.count >= reserve_count
+        @reuses += 1
+      else
+        replacement = fresh.call(reserve_count)
+        if slot
+          # Keep replaced backings until a checked terminal boundary as well.
+          # A failed queue drain may clear its lease without proving completion;
+          # the workspace quarantine must still retain every earlier backing.
+          @retired << slot
+          @slots[index] = replacement
+        else
+          @slots << replacement
+        end
+        slot = replacement
+        @bytes += slot.buffer.size
+        @peak_bytes = Math.max(@peak_bytes, @bytes)
+      end
+      @cursor += 1
+      slot.count == count ? slot : slot.slice(0, count)
+    end
+
+    def release : Nil
+      raise ArgumentError.new("resident workspace is active or quarantined") if @active || @quarantined
+      @slots.each { |slot| slot.buffer.release }
+      @retired.each { |slot| slot.buffer.release }
+      @slots.clear
+      @retired.clear
+      @bytes = 0_i64
+      @released = true
+    end
+
+    def quarantine : Nil
+      @quarantined = true unless @released
+    end
+
+    def stats : Hash(String, Int64)
+      {"slots" => @slots.size.to_i64, "retired_slots" => @retired.size.to_i64,
+       "bytes" => @bytes, "peak_bytes" => @peak_bytes,
+       "uses" => @uses, "reuses" => @reuses,
+       "released" => @released ? 1_i64 : 0_i64,
+       "quarantined" => @quarantined ? 1_i64 : 0_i64}
+    end
+  end
+
   # CogniGraph owns this command until checked terminal completion. The wrapper
   # keeps timing/counters on the same wait path, including error-path drains.
   private class Flight
@@ -71,6 +151,10 @@ module ML::Audio::Drama3::Resident
   # until checked command completion. Only explicit input/terminal boundaries
   # touch host memory. Diagnostic reads are intentionally visible in the ledger.
   class Context
+    # Failed drains do not establish that the GPU has stopped using storage.
+    # As with DAC scratch, retain failed workspaces for the process lifetime.
+    @@workspace_quarantine = [] of Workspace
+    @@workspace_quarantine_mutex = Mutex.new
     getter readbacks = Hash(String, Int64).new(0_i64)
     getter submissions = 0_i64
     getter dense_reduction : String
@@ -91,9 +175,15 @@ module ML::Audio::Drama3::Resident
     @allocations = 0_i64
     @requested_bytes = 0_i64
     @peak_metal_allocated_bytes = 0_i64
+    @allocation_profile : Bool = ENV["DRAMA3_ALLOCATION_PROFILE"]? == "1"
+    @allocation_ns = 0_i64
+    @max_buffer_length : Int64
+    @workspace : Workspace?
+    @workspaces = [] of Workspace
 
     def initialize
       raise "resident Metal requires enabled backend" unless MetalBackend.enabled?
+      @max_buffer_length = MetalBackend.max_buffer_length
       @dense_reduction = validate_dense_reduction(ENV["DRAMA3_DENSE_REDUCTION"]? || "tree")
       @timeline = ENV["DRAMA3_METAL_TIMELINE"]? == "1"
       depth = ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"]? || "0"
@@ -110,8 +200,49 @@ module ML::Audio::Drama3::Resident
       !!@graph
     end
 
+    def new_workspace : Workspace
+      raise ArgumentError.new("resident context aborted") if @aborted
+      workspace = Workspace.new(@owner)
+      @workspaces << workspace
+      workspace
+    end
+
+    def workspace_active? : Bool
+      !!@workspace
+    end
+
+    # No submit, wait, host write or read occurs at either scope boundary.
+    # Nesting is rejected because it would reset an overlapping ordinal plan.
+    def with_workspace(workspace : Workspace, &)
+      raise ArgumentError.new("resident context aborted") if @aborted
+      raise ArgumentError.new("resident workspace belongs to a different context") unless workspace.owner.same?(@owner)
+      raise ArgumentError.new("nested resident workspace") if @workspace
+      workspace.enter
+      @workspace = workspace
+      begin
+        yield
+      rescue ex
+        abort
+        raise ex
+      ensure
+        @workspace = nil
+        workspace.leave
+      end
+    end
+
+    # Caller uses an existing terminal boundary, never an implicit new drain.
+    # Releasing invalidates all workspace views, so escaped results are illegal.
+    def release_workspace(workspace : Workspace) : Nil
+      raise ArgumentError.new("resident context aborted") if @aborted
+      raise ArgumentError.new("resident workspace belongs to a different context") unless workspace.owner.same?(@owner)
+      raise ArgumentError.new("resident workspace release requires a terminal queue") if @workspace || @encoder || (@graph.try(&.pending_count) || 0) > 0
+      workspace.release
+      @workspaces.delete(workspace)
+    end
+
     def allocation_stats
       {allocations: @allocations, requested_bytes: @requested_bytes,
+       allocation_ns: @allocation_ns, allocation_profile: @allocation_profile,
        peak_metal_allocated_bytes: @memory_profile ? @peak_metal_allocated_bytes : nil,
        memory_profile: @memory_profile}
     end
@@ -200,6 +331,14 @@ module ML::Audio::Drama3::Resident
     # A failed inference cannot be resumed: earlier GPU writes are not undone.
     # Preserve the original exception while making every known command terminal.
     def abort : Nil
+      unless @aborted
+        @@workspace_quarantine_mutex.synchronize do
+          @workspaces.each do |workspace|
+            workspace.quarantine
+            @@workspace_quarantine << workspace
+          end
+        end
+      end
       @aborted = true
       if enc = @encoder
         begin
@@ -221,9 +360,32 @@ module ML::Audio::Drama3::Resident
       @pending.clear
     end
 
-    def alloc(count : Int32) : Buffer
+    def alloc(count : Int32, *, reserve_count : Int32 = count) : Buffer
       raise ArgumentError.new("resident context aborted") if @aborted
-      result = Buffer.new(ML::MetalBuffer.new(count.to_i64 * 4), count, @owner)
+      raise ArgumentError.new("resident allocation count/capacity") unless count > 0 && reserve_count >= count
+      raise ArgumentError.new("resident allocation exceeds device buffer limit") if @max_buffer_length > 0 && reserve_count.to_i64 * 4 > @max_buffer_length
+      if workspace = @workspace
+        result = workspace.alloc(count, reserve_count) { |capacity| alloc_fresh(capacity) }
+        # Direct encoder paths also need an owning reference in every flight.
+        @pending << result
+        result
+      else
+        alloc_fresh(count)
+      end
+    end
+
+    private def alloc_fresh(count : Int32) : Buffer
+      raise ArgumentError.new("resident context aborted") if @aborted
+      raise ArgumentError.new("resident allocation count must be positive") unless count > 0
+      storage = if @allocation_profile
+                  started = Time.instant
+                  allocated = ML::MetalBuffer.new(count.to_i64 * 4)
+                  @allocation_ns += (Time.instant - started).total_nanoseconds.to_i64
+                  allocated
+                else
+                  ML::MetalBuffer.new(count.to_i64 * 4)
+                end
+      result = Buffer.new(storage, count, @owner)
       @pending << result
       @allocations += 1
       @requested_bytes += count.to_i64 * 4
@@ -234,7 +396,9 @@ module ML::Audio::Drama3::Resident
     end
 
     def upload(values : Vector) : Buffer
-      result = alloc(values.size)
+      # Host writes and persistent weight conversions must never reuse a slot
+      # that an earlier command may still read on the GPU.
+      result = alloc_fresh(values.size)
       result.buffer.write(values)
       result
     end
@@ -261,7 +425,11 @@ module ML::Audio::Drama3::Resident
     end
 
     def guard(x : Buffer) : Nil
-      status = @status ||= zeros(1)
+      status = @status ||= begin
+        value = alloc_fresh(1)
+        dispatch("dr3_fill", SOURCE, [value], [1_u64, 0_u64], 1)
+        value
+      end
       dispatch("dr3_finite", SOURCE, [x, status], [x.count.to_u64], x.count)
     end
 
@@ -279,7 +447,7 @@ module ML::Audio::Drama3::Resident
       @weights[value.object_id] ||= begin
         source = MetalBackend.tensor_buffer(value, true)
         raw = Buffer.new(source.buffer, (source.buffer.size // 4).clamp(1_i64, Int32::MAX.to_i64).to_i32, @owner)
-        result = alloc(value.shape.reduce(1) { |a, b| a * b })
+        result = alloc_fresh(value.shape.reduce(1) { |a, b| a * b })
         dispatch("dr3_convert", SOURCE, [raw, result], [result.count.to_u64, source.offset.to_u64, encoding(value)], result.count)
         result
       end
