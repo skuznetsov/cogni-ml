@@ -10,6 +10,48 @@ reference and fixture tools only, never the native inference implementation.
 The pinned MLX upstream is a community port. Original Fish DAC controls below
 cover four saved code streams, not the original text-generation pipeline.
 
+## Host cost of buffer reuse — 2026-10-16
+
+From `b3144c85`, investigate the inconsistent request-to-WAV result before
+promoting generation scratch. Competing explanations are host encoding and
+resource-retention work, managed allocation/GC, and shared-host/order variation.
+Admit optional per-context host timers/counters and phase GC snapshots only;
+they must not submit, wait, read activations, force inference-time collections,
+or change arithmetic, precision, sampler inputs or existing gates.
+
+DoD: focused timer/nesting/disabled-path and resident depth-0/2 checks pass;
+counterbalanced fresh/reuse jobs with profiling off and on preserve complete
+codes, WAV bytes and graph/readback ledgers. Compare against the pinned shared-
+input MLX control and unchanged prefill gate. Report cold and warm jobs
+separately, profiler overhead, phase host/GPU/GC scopes and seconds per audio
+second. Nested wall timers overlap device execution; they are not GPU time or
+CPU utilization. Managed allocated bytes are not a typed object census.
+
+Risk: CAUTION. The main falsifier is measurement overhead or a hidden wait
+misattributed to command encoding. Use leaf encoding timers, separately time
+existing waits, and test a nested/exception case. Disabling `DRAMA3_HOST_PROFILE`
+removes fine clocks/counters; revert the isolated commit to remove the facade
+and coarse GC snapshots as well. Scratch
+remains opt-in until paired end-to-end evidence supports a speed claim.
+
+Observed: 24 primary jobs, 12 legacy/current controls and eight existing-
+timestamp controls preserve complete codes/WAV bytes and sampler/read/wait
+ledgers. Warm generation median backing construction 770.3->8.2 ms and full-GC
+delta 1222.5->20.5 ms; encoder API 54.6/46.3 ms and retention 16.9/19.7 ms
+(fresh/reuse). Full-GC deltas overlap other scopes. Timeline-off request
+medians are 26.853/28.466 s for 2.786 s audio, approximately 9.6/10.2 request
+seconds per audio second, excluding model load. Paired deltas vary by seconds;
+timestamp command sums stay near 15.5 s generation and 6.0 s DAC. A unique cause
+of the earlier slowdown and zero profiler overhead are not established.
+
+Final 33 CPU and 51 Metal examples pass. Complete 60-frame codes match the
+saved MLX shared-input F32-core control; 158-row fresh/reused prefill is bitwise
+equal and passes the unchanged MLX pointwise gate, without added read/wait
+boundaries. No default promotion or arithmetic change. Details and source-
+bound raw receipts: [drama3-host-attribution.md](drama3-host-attribution.md),
+`.landmark/evidence/drama3-host-attribution.json`. Next discriminator: GPU
+kernel attribution and command-wait variation, with DAC measured separately.
+
 ## Generation buffer reuse — 2026-10-16
 
 From base `ce592825`, `DRAMA3_GENERATION_SCRATCH=1` enables four bounded

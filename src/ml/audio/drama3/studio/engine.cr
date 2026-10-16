@@ -34,6 +34,7 @@ require "../wav"
       # for the next job instead of resuming potentially partial GPU state.
       def generate(input : JSON::Any, output : String, &progress : String -> Nil) : JSON::Any
         started = Time.instant
+        host_before = @context.host_profile.snapshot
         raise ArgumentError.new("output already exists") if File.exists?(output) || File.exists?(output + ".json")
         text = input["text"].as_s
         max_frames = input["max_frames"].as_i
@@ -69,6 +70,7 @@ require "../wav"
         end
         generation_started = Time.instant
         generation_alloc = @context.allocation_stats
+        host_generation = @context.host_profile.snapshot
         result = if reference && plan
                    progress.call("Кодирование референса")
                    audio = ReferenceAudio.upload(reference, @context)
@@ -81,6 +83,7 @@ require "../wav"
                    generator.generate(prompt, max_frames, seed, temperature, top_k, top_p)
                  end
         generation_seconds = (Time.instant - generation_started).total_seconds
+        host_codec = @context.host_profile.snapshot
         codec_alloc = @context.allocation_stats
         count = result.generation.frames.size
         raise ArgumentError.new("model produced EOS without audio") if count == 0
@@ -90,10 +93,12 @@ require "../wav"
         waveform = codec.decode(result.deviceframes.slice(0, count * (@tower_config.num_codebooks + 1)), count)
         samples = @context.read(waveform, "terminal")
         codec_seconds = (Time.instant - codec_started).total_seconds
+        host_after_codec = @context.host_profile.snapshot
         peak = samples.max_of(&.abs)
         rms = Math.sqrt(samples.sum { |value| value.to_f64 * value } / samples.size)
         raise ArgumentError.new("waveform is silent") unless peak > 1e-6 && rms > 1e-7
         Wav.write(output, samples)
+        host_after_wav = @context.host_profile.snapshot
         graph = @context.graph_stats
         raise "unfinished GPU job" unless graph["pending"] == 0 && graph["completed"] == graph["submitted"]
         reads = @context.readbacks.transform_values { |value, key| value - (before_reads[key]? || 0_i64) }
@@ -122,6 +127,12 @@ require "../wav"
                                                          allocation_ns: allocation[:allocation_ns] - codec_alloc[:allocation_ns]}},
                              resident_dac_scratch: codec.dac_scratch_stats,
                              resident_generation_scratch: generator.workspace_stats,
+                             host_profile: {enabled: @context.host_profile.enabled?,
+                                            initialize: HostProfile.delta(host_before, host_generation),
+                                            generation: HostProfile.delta(host_generation, host_codec),
+                                            codec: HostProfile.delta(host_codec, host_after_codec),
+                                            postprocess: HostProfile.delta(host_after_codec, host_after_wav),
+                                            through_wav: HostProfile.delta(host_before, host_after_wav)},
                              elapsed_seconds: (Time.instant - started).total_seconds,
                              phase_seconds: {initialize: (generation_started - started).total_seconds,
                                              generation: generation_seconds, codec: codec_seconds},

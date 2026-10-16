@@ -297,7 +297,7 @@ module ML::Audio::Drama3
       enc = @ctx.encoder
       wide = @capacity > 1024
       kernel = wide ? "dr3_full_attention_wide" : "dr3_full_attention"
-      enc.set_pipeline(ML::Metal::PipelineCache.get_or_compile(kernel, SOURCE))
+      enc.set_pipeline(@ctx.pipeline(kernel, SOURCE))
       [q, keys, values, gate, output].each_with_index { |b, i| enc.set_buffer(b.buffer, i, offset: b.offset) }
       if wide
         scores = @full_attention_scores.not_nil!

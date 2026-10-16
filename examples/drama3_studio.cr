@@ -35,8 +35,14 @@ if worker
           STDOUT.flush
         end
         # Only between completed jobs. Inference kernels never wait for GC.
+        gc_before = ML::Audio::Drama3::HostProfile.gc_snapshot
+        gc_started = Time.instant
         GC.collect
-        STDOUT.puts({event: "result", report: report}.to_json)
+        gc_seconds = (Time.instant - gc_started).total_seconds
+        gc_after = ML::Audio::Drama3::HostProfile.gc_snapshot
+        STDOUT.puts({event: "result", report: report,
+                     worker_gc: {wall_seconds: gc_seconds,
+                                 stats: ML::Audio::Drama3::HostProfile.gc_delta(gc_before, gc_after)}}.to_json)
         STDOUT.flush
       end
     rescue ex

@@ -1,4 +1,6 @@
 require "./native"
+require "./host_profile"
+require "./resident_host_encoder"
 
 {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
 require "../../metal/compute_graph"
@@ -8,6 +10,11 @@ module ML::Audio::Drama3::Resident
   MLX_Q4_SOURCE = {{ read_file("#{__DIR__}/kernels/mlx_q4.metal") }}
 
   private class BufferOwner
+    getter host_profile = HostProfile.new(ENV["DRAMA3_HOST_PROFILE"]? == "1")
+
+    def view(storage : ML::MetalBuffer, count : Int32, offset : Int64 = 0_i64) : Buffer
+      @host_profile.measure(HostEvent::BufferView) { Buffer.new(storage, count, self, offset) }
+    end
   end
 
   # Views retain both allocation and queue-owner identity. The backing Metal
@@ -22,7 +29,7 @@ module ML::Audio::Drama3::Resident
 
     def slice(start : Int32, count : Int32) : Buffer
       raise ArgumentError.new("resident slice range") unless start >= 0 && count > 0 && start.to_i64 + count <= @count
-      Buffer.new(@buffer, count, @owner, @offset + start.to_i64 * 4)
+      @owner.view(@buffer, count, @offset + start.to_i64 * 4)
     end
   end
 
@@ -59,28 +66,30 @@ module ML::Audio::Drama3::Resident
     end
 
     def alloc(count : Int32, reserve_count : Int32, &fresh : Int32 -> Buffer) : Buffer
-      raise ArgumentError.new("resident workspace is not active") unless @active
-      index = @cursor
-      slot = @slots[index]?
-      if slot && slot.count >= reserve_count
-        @reuses += 1
-      else
-        replacement = fresh.call(reserve_count)
-        if slot
-          # Keep replaced backings until a checked terminal boundary as well.
-          # A failed queue drain may clear its lease without proving completion;
-          # the workspace quarantine must still retain every earlier backing.
-          @retired << slot
-          @slots[index] = replacement
+      @owner.host_profile.measure(HostEvent::Workspace) do
+        raise ArgumentError.new("resident workspace is not active") unless @active
+        index = @cursor
+        slot = @slots[index]?
+        if slot && slot.count >= reserve_count
+          @reuses += 1
         else
-          @slots << replacement
+          replacement = fresh.call(reserve_count)
+          if slot
+            # Keep replaced backings until a checked terminal boundary as well.
+            # A failed queue drain may clear its lease without proving completion;
+            # the workspace quarantine must still retain every earlier backing.
+            @retired << slot
+            @slots[index] = replacement
+          else
+            @slots << replacement
+          end
+          slot = replacement
+          @bytes += slot.buffer.size
+          @peak_bytes = Math.max(@peak_bytes, @bytes)
         end
-        slot = replacement
-        @bytes += slot.buffer.size
-        @peak_bytes = Math.max(@peak_bytes, @bytes)
+        @cursor += 1
+        slot.count == count ? slot : slot.slice(0, count)
       end
-      @cursor += 1
-      slot.count == count ? slot : slot.slice(0, count)
     end
 
     def release : Nil
@@ -112,7 +121,7 @@ module ML::Audio::Drama3::Resident
     getter command : ML::Metal::CommandBuffer
     @waited = false
 
-    def initialize(@command : ML::Metal::CommandBuffer, @index : UInt64, @timeline : Bool, &@on_wait : -> Nil)
+    def initialize(@command : ML::Metal::CommandBuffer, @index : UInt64, @timeline : Bool, @host_profile : HostProfile, &@on_wait : -> Nil)
     end
 
     def enqueue : Nil
@@ -132,16 +141,18 @@ module ML::Audio::Drama3::Resident
         @waited = true
         @on_wait.call
       end
-      Profile.measure("resident.submit_wait", category: "synchronization") do
-        if @timeline
-          elapsed = @command.wait_gpu_elapsed_seconds?
-          # Completion is authoritative; optional telemetry must not poison a
-          # successful inference when the driver omits execution timestamps.
-          if elapsed
-            STDERR.puts({event: "drama3_gpu_command", index: @index, gpu_seconds: elapsed}.to_json)
+      @host_profile.measure(HostEvent::CompletionWait) do
+        Profile.measure("resident.submit_wait", category: "synchronization") do
+          if @timeline
+            elapsed = @command.wait_gpu_elapsed_seconds?
+            # Completion is authoritative; optional telemetry must not poison a
+            # successful inference when the driver omits execution timestamps.
+            if elapsed
+              STDERR.puts({event: "drama3_gpu_command", index: @index, gpu_seconds: elapsed}.to_json)
+            end
+          else
+            @command.wait
           end
-        else
-          @command.wait
         end
       end
     end
@@ -159,7 +170,7 @@ module ML::Audio::Drama3::Resident
     getter submissions = 0_i64
     getter dense_reduction : String
     @command : ML::Metal::CommandBuffer?
-    @encoder : ML::Metal::ComputeEncoder?
+    @encoder : HostEncoder?
     @pending = [] of Buffer
     @weights = {} of UInt64 => Buffer
     @status : Buffer?
@@ -191,13 +202,22 @@ module ML::Audio::Drama3::Resident
       unless depth == "0"
         queue = ML::Metal::CommandQueue.new
         @graph = ML::Metal::GraphSubmissionQueue(Flight, Buffer).new(depth.to_i) do |slot, sequence|
-          Flight.new(ML::Metal::CommandBuffer.new(queue: queue), sequence, @timeline) { @completion_waits += 1; nil }
+          command = host_profile.measure(HostEvent::CommandCreate) { ML::Metal::CommandBuffer.new(queue: queue) }
+          Flight.new(command, sequence, @timeline, host_profile) { @completion_waits += 1; nil }
         end
       end
     end
 
     def graph_enabled? : Bool
       !!@graph
+    end
+
+    def host_profile : HostProfile
+      @owner.host_profile
+    end
+
+    def pipeline(name : String, source : String) : ML::Metal::ComputePipeline
+      host_profile.measure(HostEvent::Pipeline) { ML::Metal::PipelineCache.get_or_compile(name, source) }
     end
 
     def new_workspace : Workspace
@@ -261,18 +281,18 @@ module ML::Audio::Drama3::Resident
        "max_retained_bytes" => @max_retained_bytes}
     end
 
-    def encoder : ML::Metal::ComputeEncoder
+    def encoder : HostEncoder
       raise ArgumentError.new("resident context aborted") if @aborted
-      @encoder ||= begin
+      @encoder ||= host_profile.measure(HostEvent::EncoderAcquire) do
         command = if graph = @graph
                     lease = graph.begin_submission
                     @lease = lease
                     lease.command.command
                   else
-                    ML::Metal::CommandBuffer.new
+                    host_profile.measure(HostEvent::CommandCreate) { ML::Metal::CommandBuffer.new }
                   end
         @command = command
-        ML::Metal::ComputeEncoder.new(command)
+        HostEncoder.new(command, host_profile)
       end
     rescue ex
       abort
@@ -291,22 +311,29 @@ module ML::Audio::Drama3::Resident
         command = @command.not_nil!
         if graph = @graph
           lease = @lease.not_nil!
-          unique = {} of UInt64 => Buffer
-          @pending.each { |buffer| unique[buffer.buffer.handle.address.to_u64] ||= buffer }
-          unique.each_value do |buffer|
-            @retained_bytes += buffer.buffer.size
-            lease.retain(buffer) { |resource| @retained_bytes -= resource.buffer.size; nil }
+          host_profile.measure(HostEvent::Retention) do
+            host_profile.add(HostCounter::PendingEntries, @pending.size.to_i64)
+            unique = {} of UInt64 => Buffer
+            @pending.each { |buffer| unique[buffer.buffer.handle.address.to_u64] ||= buffer }
+            host_profile.add(HostCounter::UniqueRetained, unique.size.to_i64)
+            host_profile.add(HostCounter::RetainCallbacks, unique.size.to_i64)
+            unique.each_value do |buffer|
+              @retained_bytes += buffer.buffer.size
+              lease.retain(buffer) { |resource| @retained_bytes -= resource.buffer.size; nil }
+            end
+            @max_retained_bytes = Math.max(@max_retained_bytes, @retained_bytes)
           end
-          @max_retained_bytes = Math.max(@max_retained_bytes, @retained_bytes)
-          graph.submit(lease)
+          host_profile.measure(HostEvent::CommandSubmit) { graph.submit(lease) }
         else
           @completion_waits += 1
-          Profile.measure("resident.submit_wait", category: "synchronization") do
-            if @timeline
-              gpu_seconds = command.commit_and_wait_gpu_elapsed_seconds
-              STDERR.puts({event: "drama3_gpu_command", index: @submissions, gpu_seconds: gpu_seconds}.to_json)
-            else
-              command.commit_and_wait
+          host_profile.measure(HostEvent::CompletionWait) do
+            Profile.measure("resident.submit_wait", category: "synchronization") do
+              if @timeline
+                gpu_seconds = command.commit_and_wait_gpu_elapsed_seconds
+                STDERR.puts({event: "drama3_gpu_command", index: @submissions, gpu_seconds: gpu_seconds}.to_json)
+              else
+                command.commit_and_wait
+              end
             end
           end
         end
@@ -377,15 +404,17 @@ module ML::Audio::Drama3::Resident
     private def alloc_fresh(count : Int32) : Buffer
       raise ArgumentError.new("resident context aborted") if @aborted
       raise ArgumentError.new("resident allocation count must be positive") unless count > 0
-      storage = if @allocation_profile
-                  started = Time.instant
-                  allocated = ML::MetalBuffer.new(count.to_i64 * 4)
-                  @allocation_ns += (Time.instant - started).total_nanoseconds.to_i64
-                  allocated
-                else
-                  ML::MetalBuffer.new(count.to_i64 * 4)
-                end
-      result = Buffer.new(storage, count, @owner)
+      storage = host_profile.measure(HostEvent::Backing) do
+        if @allocation_profile
+          started = Time.instant
+          allocated = ML::MetalBuffer.new(count.to_i64 * 4)
+          @allocation_ns += (Time.instant - started).total_nanoseconds.to_i64
+          allocated
+        else
+          ML::MetalBuffer.new(count.to_i64 * 4)
+        end
+      end
+      result = @owner.view(storage, count)
       @pending << result
       @allocations += 1
       @requested_bytes += count.to_i64 * 4
@@ -435,9 +464,12 @@ module ML::Audio::Drama3::Resident
 
     def dispatch(name : String, source : String, bindings : Array(Buffer), params : Array(UInt64), count : Int32, group : Int32 = 64) : Nil
       raise ArgumentError.new("invalid resident dispatch") unless count > 0 && group > 0
+      host_profile.add(HostCounter::GenericDispatches)
+      host_profile.add(HostCounter::BindingEntries, bindings.size.to_i64)
+      host_profile.add(HostCounter::ParameterElements, params.size.to_i64)
       bindings.each { |binding| check_owner!(binding) }
       enc = encoder
-      enc.set_pipeline(ML::Metal::PipelineCache.get_or_compile(name, source))
+      enc.set_pipeline(pipeline(name, source))
       bindings.each_with_index { |b, i| enc.set_buffer(b.buffer, i, offset: b.offset); @pending << b }
       enc.set_bytes(params.to_unsafe.as(Void*), (params.size * 8).to_i32, bindings.size) unless params.empty?
       enc.dispatch_1d(count, group)
@@ -446,7 +478,7 @@ module ML::Audio::Drama3::Resident
     def tensor(value : Tensor) : Buffer
       @weights[value.object_id] ||= begin
         source = MetalBackend.tensor_buffer(value, true)
-        raw = Buffer.new(source.buffer, (source.buffer.size // 4).clamp(1_i64, Int32::MAX.to_i64).to_i32, @owner)
+        raw = @owner.view(source.buffer, (source.buffer.size // 4).clamp(1_i64, Int32::MAX.to_i64).to_i32)
         result = alloc_fresh(value.shape.reduce(1) { |a, b| a * b })
         dispatch("dr3_convert", SOURCE, [raw, result], [result.count.to_u64, source.offset.to_u64, encoding(value)], result.count)
         result
@@ -500,7 +532,7 @@ module ML::Audio::Drama3::Resident
                 per_rank_input ? 1_u64 : 0_u64]
 
       enc = encoder
-      enc.set_pipeline(ML::Metal::PipelineCache.get_or_compile("dr3_expert_mlx_q4", MLX_Q4_SOURCE))
+      enc.set_pipeline(pipeline("dr3_expert_mlx_q4", MLX_Q4_SOURCE))
       enc.set_buffer(weight.buffer, 0)
       enc.set_buffer(scales.buffer, 1)
       enc.set_buffer(biases.buffer, 2)
@@ -555,7 +587,7 @@ module ML::Audio::Drama3::Resident
       y = alloc(matrix.rows)
       enc = encoder
       pipeline = reduction == "simd" ? "dr3_dense_simd" : "dr3_dense"
-      enc.set_pipeline(ML::Metal::PipelineCache.get_or_compile(pipeline, SOURCE))
+      enc.set_pipeline(self.pipeline(pipeline, SOURCE))
       enc.set_buffer(w.buffer, 0)
       enc.set_buffer(x.buffer, 1, offset: x.offset)
       enc.set_buffer(y.buffer, 2, offset: y.offset)
@@ -576,7 +608,7 @@ module ML::Audio::Drama3::Resident
         return matvec(matrix, x) unless ids
         raise ArgumentError.new("resident expert rank") unless rank >= 0 && rank < ids.count && x.count == matrix.cols
         w = MetalBackend.tensor_buffer(matrix.tensor, true)
-        raw = Buffer.new(w.buffer, (w.buffer.size // 4).clamp(1_i64, Int32::MAX.to_i64).to_i32, @owner)
+        raw = @owner.view(w.buffer, (w.buffer.size // 4).clamp(1_i64, Int32::MAX.to_i64).to_i32)
         output = alloc(matrix.rows)
         experts = matrix.tensor.shape.size == 3 ? matrix.tensor.shape[0] : 1
         dispatch("dr3_dense_selected", SOURCE, [raw, x, ids, output], [matrix.rows.to_u64, matrix.cols.to_u64, w.offset.to_u64, encoding(matrix.tensor), rank.to_u64, experts.to_u64], matrix.rows)
@@ -598,7 +630,7 @@ module ML::Audio::Drama3::Resident
            weight.offset.to_u64, scales.offset.to_u64, biases.offset.to_u64, encoding(st), encoding(bt),
            ids ? 1_u64 : 0_u64, rank.to_u64, (matrix.tensor.shape.size == 3 ? matrix.tensor.shape[0] : 1).to_u64]
       enc = encoder
-      enc.set_pipeline(ML::Metal::PipelineCache.get_or_compile("dr3_expert", SOURCE))
+      enc.set_pipeline(pipeline("dr3_expert", SOURCE))
       enc.set_buffer(weight.buffer, 0)
       enc.set_buffer(scales.buffer, 1)
       enc.set_buffer(biases.buffer, 2)
@@ -659,11 +691,11 @@ module ML::Audio::Drama3::Resident
       weight = MetalBackend.tensor_buffer(matrix.tensor, true)
       # Retain the mapped backing handle with the command lease. `count` is
       # only a checked view size here; the kernel uses the tensor's byte offset.
-      retained_weight = Buffer.new(weight.buffer,
-        (weight.buffer.size // 4).clamp(1_i64, Int32::MAX.to_i64).to_i32, @owner)
+      retained_weight = @owner.view(weight.buffer,
+        (weight.buffer.size // 4).clamp(1_i64, Int32::MAX.to_i64).to_i32)
       output = alloc(matrix.cols)
       enc = encoder
-      enc.set_pipeline(ML::Metal::PipelineCache.get_or_compile("drama3_tower_unseen_embedding", source))
+      enc.set_pipeline(pipeline("drama3_tower_unseen_embedding", source))
       enc.set_buffer(weight.buffer, 0)
       enc.set_buffer(frame.buffer, 1, offset: frame.offset)
       enc.set_buffer(output.buffer, 2, offset: output.offset)
@@ -685,7 +717,7 @@ module ML::Audio::Drama3::Resident
         st, bt = matrix.scales.not_nil!, matrix.biases.not_nil!
         s, b = MetalBackend.tensor_buffer(st, true), MetalBackend.tensor_buffer(bt, true)
         enc = encoder
-        enc.set_pipeline(ML::Metal::PipelineCache.get_or_compile("dr3_embedding_quant", SOURCE))
+        enc.set_pipeline(pipeline("dr3_embedding_quant", SOURCE))
         enc.set_buffer(w.buffer, 0); enc.set_buffer(s.buffer, 1); enc.set_buffer(b.buffer, 2)
         enc.set_buffer(token.buffer, 3, offset: token.offset); enc.set_buffer(output.buffer, 4)
         p = [matrix.rows.to_u64, matrix.cols.to_u64, matrix.bits.to_u64, matrix.group_size.to_u64, w.offset.to_u64, s.offset.to_u64, b.offset.to_u64, encoding(st), encoding(bt)]
@@ -693,7 +725,7 @@ module ML::Audio::Drama3::Resident
         enc.dispatch_1d(matrix.cols)
         @pending.concat([token, output])
       else
-        raw = Buffer.new(w.buffer, (w.buffer.size // 4).clamp(1_i64, Int32::MAX.to_i64).to_i32, @owner)
+        raw = @owner.view(w.buffer, (w.buffer.size // 4).clamp(1_i64, Int32::MAX.to_i64).to_i32)
         dispatch("dr3_embedding", SOURCE, [raw, token, output], [matrix.rows.to_u64, matrix.cols.to_u64, w.offset.to_u64, encoding(matrix.tensor)], matrix.cols)
       end
       output
@@ -725,7 +757,7 @@ module ML::Audio::Drama3::Resident
            weight.offset.to_u64, scales.offset.to_u64, biases.offset.to_u64, encoding(st), encoding(bt),
            (matrix.tensor.shape.size == 3 ? matrix.tensor.shape[0] : 1).to_u64, per_rank_input ? 1_u64 : 0_u64]
       enc = encoder
-      enc.set_pipeline(ML::Metal::PipelineCache.get_or_compile("dr3_experts", SOURCE))
+      enc.set_pipeline(pipeline("dr3_experts", SOURCE))
       enc.set_buffer(weight.buffer, 0)
       enc.set_buffer(scales.buffer, 1)
       enc.set_buffer(biases.buffer, 2)

@@ -29646,3 +29646,40 @@ Refresh after source/toolchain/device/model/workload changes.
   runtime/device/OS drift. Authority: serial run_safe,15% floor, unrelated
   processes untouched, local atomic commit/no push. Rollback flag0 or feature
   commit. Paired host noise/uncertified speed is an explicit default blocker.
+
+### Continuation 2026-10-16 — host command and GC attribution
+
+- Base `b3144c85`: optional `DRAMA3_HOST_PROFILE=1` uses fixed timer/counter
+  arrays for backings/views, workspace, pipeline, encoder API, retention and
+  command creation/submission. Separate existing waits from encoder acquisition;
+  nested wall timers overlap GPU work. Coarse managed-GC snapshots and the
+  existing between-job GC are explicit. No shader/arithmetic/precision/tape or
+  GPU submit/wait/read boundary change. Disabling fine clocks leaves the facade
+  and coarse snapshots; reverting this commit removes all instrumentation.
+- All44 worker jobs (24 primary,12 old/current,8 existing-timestamp controls)
+  retain full60-frame/11-ID codes, WAV bytes, sampler and queue/read ledgers.
+  Warm profiled generation medians: backing770.3->8.2ms, full-GC1222.5->20.5ms,
+  encoder API54.6/46.3ms, retention16.9/19.7ms fresh/reuse. GC overlaps timers;
+  counters/managed bytes are not a typed object census or CPU-time budget.
+- Timeline-off warm request medians26.853s fresh/28.466s reuse for2.786s audio:
+  9.6/10.2 request seconds per audio second, including WAV/report/post-job GC,
+  excluding model loading. Paired deltas and same-mode repeats vary by seconds.
+  Existing timestamps stay near15.5s generation-command sum/6.0s DAC; waits vary.
+  Unique slowdown cause, zero instrumentation overhead and general speedup are
+  unproven. Scratch remains opt-in; no broad host-object rewrite is justified.
+- Final33 CPU/51 Metal examples, release build, saved MLX shared-tape full-code
+  comparison and158-row prefill pass unchanged gates. Prefill fresh/reuse is
+  bitwise equal; graph depths0/2 transparency and terminal reduced metrics keep
+  existing boundaries. No fresh MLX audio, stock-RNG, long-speech or general
+  MoE39/DAC numerical/voice-quality claim. Final mini-Quad review is ROBUST
+  within this diagnostic scope; same-lineage review is correlated.
+- Report `docs/drama3-host-attribution.md`, curated
+  `.landmark/evidence/drama3-host-attribution.json`; raw local
+  `drama3-runs/host-attribution-20261016/`. Source seal binds42 production files
+  across8 commands and the same current binary; old binary matches its prior
+  hash and committed per-file source. Refresh on source/shader/checkpoint/input/
+  tape/gate/precision/graph/runtime/device/OS drift or contradictory results.
+- Next falsifier: attribute generation GPU kernels and command-wait variation,
+  keeping DAC separate; return numeric frontier remains MoE39/common-prefix and
+  DAC post-module stage. Authority: serial run_safe,15% floor, own children only,
+  unrelated processes untouched, atomic local commit/no push. No LTP/WBA claim.

@@ -14,6 +14,36 @@ gates, and paired pause controls with shared sampler inputs, see
 and measures tokens/quiet windows on GPU. These are reference tools; native
 inference uses the resident Crystal/Metal encoder directly.
 
+For counterbalanced native allocation-reuse measurements, use
+`measure_host_pairs.py` with a release studio binary, checkpoint directory,
+new output directory and a saved worker baseline (a JSON array whose first
+entry contains `report` and `wav_sha256`). Each worker runs one excluded cold
+job, then two warm jobs. The mirrored default order covers fresh/reuse with
+`DRAMA3_HOST_PROFILE=0/1`; it holds timeline and the older allocation profiler
+off. The driver checks complete codes, WAV bytes, sampler inputs and existing
+graph/read ledgers after timing each request. See
+[Host attribution](../../docs/drama3-host-attribution.md) for measurement scope.
+
+```sh
+COGNI_RUN_SAFE_MIN_FREE_PCT=15 COGNI_RUN_SAFE_REQUIRE_QUIET=0 \
+  scripts/run_safe.sh python3 2400 40960 scripts/drama3/measure_host_pairs.py \
+  --binary "$STUDIO_BINARY" --model "$MODEL_DIR" \
+  --output "$NEW_OUTPUT_DIR" --baseline "$WORKER_BASELINE"
+```
+
+To bound the fixed disabled-profiler cost, add
+`--legacy-binary "$OLD_STUDIO_BINARY" --prefix legacy`. This runs
+legacy/current/current/legacy with scratch and fine profiling off, one cold
+and two warm requests per worker. Keep the binary comparison separate from
+the scratch comparison. The old binary must support the same worker input,
+checkpoint, controls and output/queue/read contract as the current binary.
+
+For a separate GPU timestamp control, add `--timeline --prefix timeline` and
+an explicit short schedule, e.g. `--schedule 0:1,1:1,1:1,0:1 --warm-repeats 1`.
+This reads execution timestamps at existing command completion; it adds no
+wait. Keep timestamp/logging-on results separate from the primary timing
+matrix. These durations do not measure occupancy or pure kernel arithmetic.
+
 Use Python 3.12 with `mlx`, `torch`, `numpy`, and `safetensors`, plus Crystal.
 The pinned source checkouts are imported directly. Check them out at the
 revisions below; replay scripts reject a different source `HEAD`.
