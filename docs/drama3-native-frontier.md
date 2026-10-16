@@ -10,6 +10,117 @@ reference and fixture tools only, never the native inference implementation.
 The pinned MLX upstream is a community port. Original Fish DAC controls below
 cover four saved code streams, not the original text-generation pipeline.
 
+## Active slice: GPU kernel attribution — 2026-10-16
+
+From `22c99628`, profile backbone/tower dispatches and distinguish command
+execution from commit-to-start and completion-wait variation before selecting
+one optimization. Existing command-duration sums do not identify kernel cost
+or the cause of wait variance. Start with an external Metal System Trace of
+the unchanged binary; keep traced and ordinary paired timings separate.
+
+Risk: CAUTION. Profiling can perturb dispatch pacing or report only an
+aggregate interval. A kernel optimization must preserve each row's arithmetic
+order and precision, finite/status guards, dynamic expert order, ownership,
+queue depth and the existing control/terminal read boundaries. No new waits,
+GPU/CPU activation transfers, or widened tolerances are admitted. Reject a
+profiling route that requires per-kernel completion waits on the normal path.
+
+DoD: qualify the profiler against named kernels, capture a warm fixed-input
+trajectory, and identify a measured optimization candidate. If the installed
+profiler cannot supply additive per-family cost, preserve that limit and use
+homogeneous actual-weight probes instead of ranking sampled row counts.
+Compare baseline/candidate
+in counterbalanced pairs, including profiler-off request-to-WAV measurements;
+retain full codes/WAV/sampler/read/wait identity and the unchanged saved MLX
+shared-input and prefill gates. Use focused synthetic boundary tests for the
+selected kernel. A local GPU speedup alone does not promote an end-to-end
+speed claim. Roll back through the isolated feature commit or its diagnostic
+flag; generation scratch remains opt-in.
+
+The bounded Instruments export qualifies shader coverage but has overlapping
+sample intervals and no additive family weight. The native timeline instead
+localizes a 6.52 s warm-request spread mainly to before-GPU wait. The first
+prefill command shows the dominant pre-start delay; its cause remains
+unresolved. This is not evidence that its arithmetic became slower. The generic
+64-lane SIMD dense route is bitwise equal in 12 full requests but has no stable
+request-to-WAV advantage in the counterbalanced experiment.
+
+An opt-in 32-lane dense kernel gives each lane the two original
+64-lane partial accumulators, combines them in the original tree order, and
+removes the cross-SIMD-group barrier. It must match the original kernel bitwise
+for dtype/offset/tail/cancellation witnesses and real tower weights. Keep the
+default `tree` until profiler-off full-request pairs and unchanged upstream
+controls admit a promotion. Unsupported SIMD width must retain the original
+64-lane tree path. All 12 full-request jobs remain exact, but pooled warm
+medians are 34.2330 / 34.9154 s for tree/simd32; no default promotion is
+admitted. This is an ordinary launch/reduction implementation change, not an
+LTP/WBA claim.
+
+The affine MoE candidate compares the existing expert kernel with 32- and
+64-thread launches on the captured upstream layer-39 normalized input and
+per-rank down-projection activations. The shader's fixed `g += 64` partition
+allows 32 threads only when group count is at most 32; group 33 must retain
+64 threads. Require bitwise native baseline/candidate parity and no added
+intermediate reads or waits. A launch comparison does not establish native
+expert output parity with upstream or close the known MoE39 failure.
+The captured-input probe gives a median paired GPU duration ratio of
+1.04383 (repeat 1.06120) for 64/32 threads, with 32 faster in all seven measured
+pairs per capture and 1769472 values per arm bitwise equal across all pairs. Admit an opt-in
+`DRAMA3_EXPERT_THREADS=32` and independent Q4/Q8 group-32/33 boundary witnesses;
+all 12 profiler-off full requests preserve the complete codes/WAV/sampler and
+graph/readback contract. Pooled warm medians are 29.7862 / 30.5885 s for 64/32
+threads, so the default remains 64. Final 62 Metal and 10 offline tests,
+saved-MLX full-code comparison, and combined simd32/expert32 prefill pass.
+The known MoE39 intermediate numerical failure remains open. Details and
+lineage limits are in `drama3-gpu-kernels.md`.
+
+Next performance discriminator: separate pre-start residency/resource work
+from competing GPU/driver work, or test a guarded aligned Q4 packed-word load
+against the current byte loader on captured inputs. Neither is yet a measured
+optimization. Keep the numerical return pointer at MoE39/common-prefix and
+the DAC post-module frontier. Temporary/reference/run data now live on
+`/opt/mldata_ssd/cogni-ml`; the DRAMA checkpoint remains on the local SSD.
+
+Streaming is a source-backed design branch only in this slice. It must name
+DAC lookahead/state, ownership of a PCM chunk through playback, backpressure
+and cancellation before runtime admission. No low-latency or uninterrupted
+playback claim follows from an offline chunk experiment or short-text speed.
+
+### Future continuous audio output
+
+The resident DAC is structurally causal: Conv1d uses left history and the
+post-transformer attention reads only past positions (a 128-position window
+by default). This supports an incremental design, but calling the current
+whole-file `decode` independently for each code chunk resets required state.
+Keep the rolling per-layer K/V, absolute RoPE position, depthwise/residual
+convolution history, and each transposed convolution's overlapping tail.
+Preserve accumulation order and apply bias once when finalizing an overlap.
+Source: `kernels/codec_resident.metal:58-96,185-245` and
+`codec_resident.cr:211-233,347-418,453-477`.
+
+The first discriminator is GPU whole-stream versus stateful chunked DAC on
+identical saved codes, including one-frame and irregular chunk boundaries.
+Use the existing pointwise tolerances; do not substitute signal level or
+audible plausibility for numerical parity. Establish which PCM prefix is
+final before allowing a consumer to play it.
+
+Keep finalized PCM in a bounded GPU output ring outside scratch workspaces.
+An output slot needs both checked GPU completion and transport/playback
+consumption before reuse. A queue lease alone cannot establish that the audio
+consumer has finished. Backpressure must pause production without overwriting
+live audio; cancellation must drain or quarantine live slots. Model state,
+sampling and DAC remain on GPU. Copying finalized PCM to an audio device or
+network is an output boundary, not an activation round trip.
+
+Studio currently generates all codes, decodes all PCM and writes a complete
+WAV before its file endpoint serves it (`studio/engine.cr`, `studio/server.cr`,
+`studio/assets/app.js`). A future live endpoint and WebAudio consumer can consume
+the output ring while the next codes/PCM are being generated. Sentence-sized
+independent jobs are an earlier playback option, but require separate tests
+for voice/prosody continuity and boundary artifacts. Streaming reduces time
+to first sound; uninterrupted playback also requires generation to keep up
+with consumption or sufficient initial buffering.
+
 ## Host cost of buffer reuse — 2026-10-16
 
 From `b3144c85`, investigate the inconsistent request-to-WAV result before

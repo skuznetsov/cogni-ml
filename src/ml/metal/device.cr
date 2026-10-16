@@ -1,3 +1,38 @@
+module ML
+  module Metal
+    # Best-effort host and GPU timestamps captured at the existing asynchronous
+    # command commit and completion wait boundaries.
+    struct CommandTimeline
+      getter completion_status : Int32
+      getter host_before_commit_s : Float64
+      getter host_after_commit_s : Float64
+      getter host_before_wait_s : Float64
+      getter host_after_wait_s : Float64
+      getter gpu_start_s : Float64
+      getter gpu_end_s : Float64
+      getter gpu_timing_valid : Bool
+
+      def initialize(
+        @completion_status : Int32,
+        @host_before_commit_s : Float64,
+        @host_after_commit_s : Float64,
+        @host_before_wait_s : Float64,
+        @host_after_wait_s : Float64,
+        @gpu_start_s : Float64,
+        @gpu_end_s : Float64,
+        @gpu_timing_valid : Bool,
+      )
+      end
+
+      def gpu_seconds? : Float64?
+        return unless @gpu_timing_valid
+        seconds = @gpu_end_s - @gpu_start_s
+        seconds if seconds.finite? && seconds > 0.0
+      end
+    end
+  end
+end
+
 {% if flag?(:cpu_only) %}
   # CPU-only stubs (Metal disabled)
   module ML
@@ -82,6 +117,14 @@
         end
 
         def wait_gpu_elapsed_seconds? : Float64?
+          raise "Metal disabled (cpu_only)"
+        end
+
+        def commit_with_timeline : Tuple(Float64, Float64)
+          raise "Metal disabled (cpu_only)"
+        end
+
+        def wait_with_timeline(&on_completion : CommandTimeline -> Nil) : Nil
           raise "Metal disabled (cpu_only)"
         end
 
@@ -300,6 +343,8 @@ module ML
       @completed : Bool = false
       @completion_status : Int32? = nil
       @gpu_elapsed_seconds : Float64? = nil
+      @mach_before_commit_s = 0.0_f64
+      @mach_after_commit_s = 0.0_f64
 
       def initialize(fast : Bool = false, queue : CommandQueue? = nil)
         raise "Metal not available" unless Device.available?
@@ -376,6 +421,56 @@ module ML
           @gpu_elapsed_seconds = elapsed_seconds
         end
         @gpu_elapsed_seconds
+      end
+
+      # Commit once and retain the same Mach-clock bounds for the later
+      # asynchronous completion record. No wait or queue operation is added.
+      def commit_with_timeline : Tuple(Float64, Float64)
+        unless @committed
+          MetalDeviceFFI.commit_command_buffer_timeline(
+            @handle, pointerof(@mach_before_commit_s), pointerof(@mach_after_commit_s),
+          )
+          @committed = true
+        end
+        {@mach_before_commit_s, @mach_after_commit_s}
+      end
+
+      # The best-effort callback runs after the existing wait so diagnostics
+      # can include failed work; callback errors never mask completion status.
+      def wait_with_timeline(&on_completion : CommandTimeline -> Nil) : Nil
+        return verify_completion! if @completed
+        raise ArgumentError.new("cannot timeline an uncommitted Metal command buffer") unless @committed
+
+        host_before_wait_s = 0.0_f64
+        host_after_wait_s = 0.0_f64
+        gpu_start_s = 0.0_f64
+        gpu_end_s = 0.0_f64
+        gpu_timing_valid = 0
+        @completion_status = MetalDeviceFFI.wait_command_buffer_status_timeline(
+          @handle,
+          @mach_before_commit_s,
+          pointerof(host_before_wait_s),
+          pointerof(host_after_wait_s),
+          pointerof(gpu_start_s),
+          pointerof(gpu_end_s),
+          pointerof(gpu_timing_valid),
+        )
+        @completed = true
+        begin
+          on_completion.call(CommandTimeline.new(
+            @completion_status.not_nil!,
+            @mach_before_commit_s,
+            @mach_after_commit_s,
+            host_before_wait_s,
+            host_after_wait_s,
+            gpu_start_s,
+            gpu_end_s,
+            gpu_timing_valid == 1,
+          ))
+        rescue
+          # Optional telemetry must not mask the authoritative completion status.
+        end
+        verify_completion!
       end
 
       # Commit without waiting (async GPU execution)
@@ -536,9 +631,11 @@ lib MetalDeviceFFI
   fun create_command_buffer_fast_on_queue = gs_create_command_buffer_fast_on_queue(queue : Pointer(Void)) : Pointer(Void)
   fun enqueue_command_buffer = gs_enqueue_command_buffer(cmd : Pointer(Void)) : Void
   fun commit_command_buffer = gs_commit_command_buffer(cmd : Pointer(Void)) : Void
+  fun commit_command_buffer_timeline = gs_commit_command_buffer_timeline(cmd : Pointer(Void), mach_before_commit : Pointer(Float64), mach_after_commit : Pointer(Float64)) : Void
   fun wait_command_buffer = gs_wait_command_buffer(cmd : Pointer(Void)) : Void
   fun wait_command_buffer_status = gs_wait_command_buffer_status(cmd : Pointer(Void)) : Int32
   fun wait_command_buffer_status_gpu_elapsed = gs_wait_command_buffer_status_gpu_elapsed(cmd : Pointer(Void), elapsed_seconds : Pointer(Float64)) : Int32
+  fun wait_command_buffer_status_timeline = gs_wait_command_buffer_status_timeline(cmd : Pointer(Void), mach_before_commit : Float64, mach_before_wait : Pointer(Float64), mach_after_wait : Pointer(Float64), gpu_start : Pointer(Float64), gpu_end : Pointer(Float64), gpu_timing_valid : Pointer(Int32)) : Int32
   fun commit_and_wait = gs_commit_and_wait(cmd_buffer : Pointer(Void)) : Void
   fun commit_and_wait_status = gs_commit_and_wait_status(cmd_buffer : Pointer(Void)) : Int32
   fun commit_and_wait_status_gpu_elapsed = gs_commit_and_wait_status_gpu_elapsed(cmd_buffer : Pointer(Void), elapsed_seconds : Pointer(Float64)) : Int32
@@ -573,9 +670,11 @@ lib MetalDeviceFFI
   fun create_command_buffer_fast_on_queue = gs_create_command_buffer_fast_on_queue(queue : Pointer(Void)) : Pointer(Void)
   fun enqueue_command_buffer = gs_enqueue_command_buffer(cmd : Pointer(Void)) : Void
   fun commit_command_buffer = gs_commit_command_buffer(cmd : Pointer(Void)) : Void
+  fun commit_command_buffer_timeline = gs_commit_command_buffer_timeline(cmd : Pointer(Void), mach_before_commit : Pointer(Float64), mach_after_commit : Pointer(Float64)) : Void
   fun wait_command_buffer = gs_wait_command_buffer(cmd : Pointer(Void)) : Void
   fun wait_command_buffer_status = gs_wait_command_buffer_status(cmd : Pointer(Void)) : Int32
   fun wait_command_buffer_status_gpu_elapsed = gs_wait_command_buffer_status_gpu_elapsed(cmd : Pointer(Void), elapsed_seconds : Pointer(Float64)) : Int32
+  fun wait_command_buffer_status_timeline = gs_wait_command_buffer_status_timeline(cmd : Pointer(Void), mach_before_commit : Float64, mach_before_wait : Pointer(Float64), mach_after_wait : Pointer(Float64), gpu_start : Pointer(Float64), gpu_end : Pointer(Float64), gpu_timing_valid : Pointer(Int32)) : Int32
   fun commit_and_wait = gs_commit_and_wait(cmd_buffer : Pointer(Void)) : Void
   fun commit_and_wait_status = gs_commit_and_wait_status(cmd_buffer : Pointer(Void)) : Int32
   fun commit_and_wait_status_gpu_elapsed = gs_commit_and_wait_status_gpu_elapsed(cmd_buffer : Pointer(Void), elapsed_seconds : Pointer(Float64)) : Int32

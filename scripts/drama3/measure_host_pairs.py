@@ -21,6 +21,7 @@ CONTROLS = {
     "DRAMA3_ALLOCATION_PROFILE": "0",
     "DRAMA3_METAL_TIMELINE": "0",
     "DRAMA3_MOE_BATCH": "1",
+    "DRAMA3_EXPERT_THREADS": "64",
     "DRAMA3_DENSE_REDUCTION": "tree",
     "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
     "DRAMA3_DELTA_TRANSPOSE": "1",
@@ -59,37 +60,56 @@ def validate(report, wav_sha, baseline):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True, type=Path)
-    parser.add_argument("--legacy-binary", type=Path,
-                        help="Compare legacy/current/current/legacy with scratch and profiling off")
+    schedules = parser.add_mutually_exclusive_group()
+    schedules.add_argument("--legacy-binary", type=Path,
+                           help="Compare legacy/current/current/legacy with scratch and profiling off")
     parser.add_argument("--model", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--baseline", required=True, type=Path)
     parser.add_argument("--prefix", default="paired")
-    parser.add_argument("--schedule", help="Comma-separated scratch:profile conditions")
+    schedules.add_argument("--schedule", help="Comma-separated scratch:profile conditions")
+    schedules.add_argument("--dense-schedule", help="Comma-separated tree/simd/simd32 modes; scratch and host profiling stay off")
+    schedules.add_argument("--expert-threads-schedule", help="Comma-separated 32/64 thread requests; dense stays tree, scratch and profiling off")
     parser.add_argument("--warm-repeats", type=int, default=2)
     parser.add_argument("--timeline", action="store_true",
                         help="Read existing completion timestamps; does not introduce waits")
     args = parser.parse_args()
-    if args.legacy_binary:
-        assert args.schedule is None, "legacy comparison has a fixed ABBA schedule"
-        schedule = [("0", "0", binary) for binary in
+    if args.dense_schedule is not None:
+        modes = [mode.strip() for mode in args.dense_schedule.split(",")]
+        assert modes and all(mode in ("tree", "simd", "simd32") for mode in modes), "dense schedule modes must be tree, simd, or simd32"
+        schedule = [("0", "0", args.binary, mode, "64") for mode in modes]
+    elif args.expert_threads_schedule is not None:
+        widths = [width.strip() for width in args.expert_threads_schedule.split(",")]
+        assert widths and all(width in ("32", "64") for width in widths), "expert thread schedule must contain 32 or 64"
+        schedule = [("0", "0", args.binary, "tree", width) for width in widths]
+    elif args.legacy_binary:
+        schedule = [("0", "0", binary, "tree", "64") for binary in
                     (args.legacy_binary, args.binary, args.binary, args.legacy_binary)]
     else:
         conditions = args.schedule or "0:0,1:0,1:1,0:1,0:1,1:1,1:0,0:0"
         conditions = [tuple(item.split(":")) for item in conditions.split(",")]
         assert all(len(item) == 2 and all(x in ("0", "1") for x in item) for item in conditions)
-        schedule = [(scratch, profile, args.binary) for scratch, profile in conditions]
+        schedule = [(scratch, profile, args.binary, "tree", "64") for scratch, profile in conditions]
     assert args.warm_repeats > 0
     args.output.mkdir(parents=True, exist_ok=True)
     manifest = args.output / (args.prefix + "-worker.json")
     assert not manifest.exists(), "refusing existing run"
     baseline = json.loads(args.baseline.read_text())[0]
     records = []
-    for arm, (scratch, profile, binary) in enumerate(schedule):
+    for arm, (scratch, profile, binary, dense_reduction, expert_threads) in enumerate(schedule):
         binary_sha = sha(binary)
         env = {k: v for k, v in os.environ.items() if not k.startswith("DRAMA3_")}
         env.pop("QWEN35_NATIVE_TOKENIZER_OFF", None)
-        controls = dict(CONTROLS, DRAMA3_GENERATION_SCRATCH=scratch, DRAMA3_HOST_PROFILE=profile)
+        if args.dense_schedule is not None:
+            scratch, profile = "0", "0"
+        controls = dict(
+            CONTROLS,
+            DRAMA3_GENERATION_SCRATCH=scratch,
+            DRAMA3_HOST_PROFILE=profile,
+            DRAMA3_DENSE_REDUCTION=dense_reduction,
+            DRAMA3_EXPERT_THREADS=expert_threads,
+            DRAMA3_BACKBONE_DENSE_REDUCTION="tree",
+        )
         if args.timeline:
             controls["DRAMA3_METAL_TIMELINE"] = "1"
         env.update(controls)
@@ -128,6 +148,8 @@ def main():
                     item = {
                         "binary": str(binary), "binary_sha256": binary_sha,
                         "arm": arm, "scratch": scratch, "profile": profile, "repeat": repeat,
+                        "dense_reduction": dense_reduction,
+                        "expert_threads": expert_threads,
                         "warm": repeat > 0, "effective_controls": controls,
                         "load_wall_seconds": load_wall, "request_wall_seconds": wall,
                         "worker_gc": event.get("worker_gc"),
@@ -140,7 +162,8 @@ def main():
                     records.append(item)
                     manifest.write_text(json.dumps(records, indent=2) + "\n")
                     print(json.dumps({k: item[k] for k in (
-                        "arm", "scratch", "profile", "repeat", "request_wall_seconds", "wav_sha256",
+                        "arm", "scratch", "profile", "dense_reduction", "expert_threads", "repeat",
+                        "effective_controls", "request_wall_seconds", "wav_sha256",
                     )}), flush=True)
             finally:
                 process.stdin.close()

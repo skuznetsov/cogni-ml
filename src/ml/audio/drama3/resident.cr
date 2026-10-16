@@ -120,6 +120,9 @@ module ML::Audio::Drama3::Resident
   private class Flight
     getter command : ML::Metal::CommandBuffer
     @waited = false
+    @timeline_emitted = false
+    @host_before_commit_s = 0.0_f64
+    @host_after_commit_s = 0.0_f64
 
     def initialize(@command : ML::Metal::CommandBuffer, @index : UInt64, @timeline : Bool, @host_profile : HostProfile, &@on_wait : -> Nil)
     end
@@ -129,7 +132,13 @@ module ML::Audio::Drama3::Resident
     end
 
     def commit : Nil
-      @command.commit
+      if @timeline
+        commit_times = @command.commit_with_timeline
+        @host_before_commit_s = commit_times[0]
+        @host_after_commit_s = commit_times[1]
+      else
+        @command.commit
+      end
     end
 
     def discard : Nil
@@ -141,19 +150,47 @@ module ML::Audio::Drama3::Resident
         @waited = true
         @on_wait.call
       end
-      @host_profile.measure(HostEvent::CompletionWait) do
-        Profile.measure("resident.submit_wait", category: "synchronization") do
-          if @timeline
-            elapsed = @command.wait_gpu_elapsed_seconds?
-            # Completion is authoritative; optional telemetry must not poison a
-            # successful inference when the driver omits execution timestamps.
-            if elapsed
-              STDERR.puts({event: "drama3_gpu_command", index: @index, gpu_seconds: elapsed}.to_json)
+      timeline = nil.as(ML::Metal::CommandTimeline?)
+      begin
+        @host_profile.measure(HostEvent::CompletionWait) do
+          Profile.measure("resident.submit_wait", category: "synchronization") do
+            if @timeline
+              @command.wait_with_timeline do |completion|
+                timeline = completion
+                nil
+              end
+            else
+              @command.wait
             end
-          else
-            @command.wait
           end
         end
+      ensure
+        if completion = timeline
+          emit_timeline(completion)
+        end
+      end
+    end
+
+    private def emit_timeline(timeline : ML::Metal::CommandTimeline) : Nil
+      return if @timeline_emitted
+      @timeline_emitted = true
+      begin
+        STDERR.puts({
+          event: "drama3_gpu_command",
+          index: @index,
+          completion_status: timeline.completion_status,
+          gpu_seconds: timeline.gpu_seconds?,
+          gpu_timing_valid: timeline.gpu_timing_valid,
+          host_before_commit_s: @host_before_commit_s,
+          host_after_commit_s: @host_after_commit_s,
+          host_before_wait_s: timeline.host_before_wait_s,
+          host_after_wait_s: timeline.host_after_wait_s,
+          gpu_start_s: timeline.gpu_timing_valid ? timeline.gpu_start_s : nil,
+          gpu_end_s: timeline.gpu_timing_valid ? timeline.gpu_end_s : nil,
+        }.to_json)
+      rescue
+        # Telemetry serialization and output must never change inference result.
+        nil
       end
     end
   end
@@ -169,6 +206,7 @@ module ML::Audio::Drama3::Resident
     getter readbacks = Hash(String, Int64).new(0_i64)
     getter submissions = 0_i64
     getter dense_reduction : String
+    getter expert_threads : Int32
     @command : ML::Metal::CommandBuffer?
     @encoder : HostEncoder?
     @pending = [] of Buffer
@@ -196,6 +234,9 @@ module ML::Audio::Drama3::Resident
       raise "resident Metal requires enabled backend" unless MetalBackend.enabled?
       @max_buffer_length = MetalBackend.max_buffer_length
       @dense_reduction = validate_dense_reduction(ENV["DRAMA3_DENSE_REDUCTION"]? || "tree")
+      expert_threads = ENV["DRAMA3_EXPERT_THREADS"]? || "64"
+      raise ArgumentError.new("DRAMA3_EXPERT_THREADS must be 32 or 64") unless expert_threads.in?("32", "64")
+      @expert_threads = expert_threads.to_i
       @timeline = ENV["DRAMA3_METAL_TIMELINE"]? == "1"
       depth = ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"]? || "0"
       raise ArgumentError.new("DRAMA3_COGNIGRAPH_MAX_INFLIGHT must be 0, 1, or 2") unless depth.in?("0", "1", "2")
@@ -500,7 +541,7 @@ module ML::Audio::Drama3::Resident
     end
 
     private def validate_dense_reduction(value : String) : String
-      raise ArgumentError.new("DRAMA3_DENSE_REDUCTION must be tree or simd") unless value.in?("tree", "simd")
+      raise ArgumentError.new("DRAMA3_DENSE_REDUCTION must be tree, simd, or simd32") unless value.in?("tree", "simd", "simd32")
       value
     end
 
@@ -585,15 +626,27 @@ module ML::Audio::Drama3::Resident
       reduction = dense_reduction ? validate_dense_reduction(dense_reduction) : @dense_reduction
       w = MetalBackend.tensor_buffer(matrix.tensor, true)
       y = alloc(matrix.rows)
+      threadgroup_width = 64
+      selected_pipeline = if reduction == "simd32"
+                            candidate = self.pipeline("dr3_dense_simd32", SOURCE)
+                            if candidate.thread_execution_width == 32
+                              threadgroup_width = 32
+                              candidate
+                            else
+                              self.pipeline("dr3_dense", SOURCE)
+                            end
+                          else
+                            name = reduction == "simd" ? "dr3_dense_simd" : "dr3_dense"
+                            self.pipeline(name, SOURCE)
+                          end
       enc = encoder
-      pipeline = reduction == "simd" ? "dr3_dense_simd" : "dr3_dense"
-      enc.set_pipeline(self.pipeline(pipeline, SOURCE))
+      enc.set_pipeline(selected_pipeline)
       enc.set_buffer(w.buffer, 0)
       enc.set_buffer(x.buffer, 1, offset: x.offset)
       enc.set_buffer(y.buffer, 2, offset: y.offset)
       p = [matrix.rows.to_u64, matrix.cols.to_u64, w.offset.to_u64, encoding(matrix.tensor), matrix.expert.to_u64]
       enc.set_bytes(p.to_unsafe.as(Void*), (p.size * 8).to_i32, 3)
-      enc.dispatch_threadgroups({matrix.rows, 1, 1}, {64, 1, 1})
+      enc.dispatch_threadgroups({matrix.rows, 1, 1}, {threadgroup_width, 1, 1})
       @pending.concat([x, y])
       y
     end
@@ -639,7 +692,7 @@ module ML::Audio::Drama3::Resident
       enc.set_buffer(selection.buffer, 5, offset: selection.offset)
       enc.set_bytes(p.to_unsafe.as(Void*), (p.size * 8).to_i32, 6)
       enc.set_threadgroup_memory(matrix.cols // matrix.group_size * 4, 0)
-      enc.dispatch_threadgroups({matrix.rows, 1, 1}, {64, 1, 1})
+      enc.dispatch_threadgroups({matrix.rows, 1, 1}, {native_expert_threads(matrix), 1, 1})
       @pending.concat([x, output, selection])
       output
     end
@@ -764,9 +817,16 @@ module ML::Audio::Drama3::Resident
       [x, output, ids].each_with_index { |v, i| enc.set_buffer(v.buffer, i + 3, offset: v.offset) }
       enc.set_bytes(p.to_unsafe.as(Void*), (p.size * 8).to_i32, 6)
       enc.set_threadgroup_memory(matrix.cols // matrix.group_size * 4, 0)
-      enc.dispatch_threadgroups({matrix.rows, ids.count, 1}, {64, 1, 1})
+      enc.dispatch_threadgroups({matrix.rows, ids.count, 1}, {native_expert_threads(matrix), 1, 1})
       @pending.concat([x, output, ids])
       output
+    end
+
+    private def native_expert_threads(matrix : Matrix) : Int32
+      # Both affine shaders partition groups with g += 64. Fewer lanes are
+      # complete only when every group fits in the first 32; group 33 must
+      # retain the original launch and scalar group-sum order.
+      @expert_threads == 32 && matrix.cols // matrix.group_size <= 32 ? 32 : 64
     end
 
     def argmax(x : Buffer) : Buffer

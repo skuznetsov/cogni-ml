@@ -14,6 +14,8 @@
 @property CFTimeInterval GPUEndTime;
 @property CFTimeInterval kernelStartTime;
 @property CFTimeInterval kernelEndTime;
+@property BOOL useMachTimeline;
+@property BOOL expectsRegisteredCommit;
 - (void)commit;
 - (void)waitUntilCompleted;
 - (NSError*)error;
@@ -21,7 +23,7 @@
 
 @implementation SubmitProfileFake
 - (void)commit {
-    assert(gs_command_waits.size() == 1);
+    assert(gs_command_waits.size() == (self.expectsRegisteredCommit ? 1 : 0));
     self.commits += 1;
     if (self.commitDelay) usleep(self.commitDelay);
 }
@@ -30,6 +32,11 @@
     assert(self.commits == 1);
     self.waits += 1;
     if (self.waitDelay) usleep(self.waitDelay);
+    if (self.useMachTimeline) {
+        double now = command_mach_seconds();
+        self.GPUStartTime = now - 0.0002;
+        self.GPUEndTime = now - 0.0001;
+    }
 }
 - (NSError*)error { return nil; }
 @end
@@ -43,6 +50,7 @@ static SubmitProfileFake* fake(useconds_t commit, useconds_t wait) {
     cmd.GPUEndTime = 1.001;
     cmd.kernelStartTime = 10.0;
     cmd.kernelEndTime = 17.5;
+    cmd.expectsRegisteredCommit = YES;
     return cmd;
 }
 
@@ -100,6 +108,61 @@ int main() {
         already.commits = 1;
         wait_for_command_completion((id<MTLCommandBuffer>)already, false);
         assert(already.commits == 1 && already.waits == 1 && gs_command_waits.empty());
+
+        // Async timeline captures the existing commit and wait boundaries,
+        // with exactly one commit and one completion wait.
+        SubmitProfileFake* timed = fake(0, 0);
+        timed.useMachTimeline = YES;
+        timed.expectsRegisteredCommit = NO;
+        double before_commit = 0.0, after_commit = 0.0;
+        void* timed_handle = (__bridge_retained void*)timed;
+        gs_commit_command_buffer_timeline(timed_handle, &before_commit, &after_commit);
+        assert(timed.commits == 1 && timed.waits == 0);
+        assert(before_commit > 0.0 && after_commit >= before_commit);
+        double before_wait = 0.0, after_wait = 0.0;
+        double gpu_start = 0.0, gpu_end = 0.0;
+        int32_t gpu_valid = 0;
+        int32_t timeline_status = gs_wait_command_buffer_status_timeline(
+            timed_handle, before_commit, &before_wait, &after_wait,
+            &gpu_start, &gpu_end, &gpu_valid);
+        assert(timeline_status == 0 && timed.commits == 1 && timed.waits == 1);
+        assert(before_wait > 0.0 && after_wait >= before_wait);
+        assert(gpu_valid == 1 && gpu_end > gpu_start);
+        assert(gs_command_waits.empty());
+
+        // Missing timestamps are represented as unavailable metrics, not a
+        // failed completion or an additional synchronization operation.
+        SubmitProfileFake* unavailable = fake(0, 0);
+        unavailable.expectsRegisteredCommit = NO;
+        unavailable.GPUStartTime = 0.0;
+        unavailable.GPUEndTime = 0.0;
+        before_commit = after_commit = before_wait = after_wait = 0.0;
+        gpu_start = gpu_end = 0.0;
+        gpu_valid = 1;
+        void* unavailable_handle = (__bridge_retained void*)unavailable;
+        gs_commit_command_buffer_timeline(unavailable_handle, &before_commit, &after_commit);
+        timeline_status = gs_wait_command_buffer_status_timeline(
+            unavailable_handle, before_commit, &before_wait, &after_wait,
+            &gpu_start, &gpu_end, &gpu_valid);
+        assert(timeline_status == 0 && unavailable.commits == 1 && unavailable.waits == 1);
+        assert(gpu_valid == 0);
+        assert(gs_command_waits.empty());
+
+        // Failed completion remains failed, but the timeline path still waits
+        // exactly once and marks optional metrics invalid.
+        SubmitProfileFake* failed_timeline = fake(0, 0);
+        failed_timeline.expectsRegisteredCommit = NO;
+        failed_timeline.status = MTLCommandBufferStatusError;
+        before_commit = after_commit = before_wait = after_wait = 0.0;
+        gpu_valid = 1;
+        void* failed_handle = (__bridge_retained void*)failed_timeline;
+        gs_commit_command_buffer_timeline(failed_handle, &before_commit, &after_commit);
+        timeline_status = gs_wait_command_buffer_status_timeline(
+            failed_handle, before_commit, &before_wait, &after_wait,
+            &gpu_start, &gpu_end, &gpu_valid);
+        assert(timeline_status == -6 && failed_timeline.commits == 1 && failed_timeline.waits == 1);
+        assert(gpu_valid == 0);
+        assert(gs_command_waits.empty());
 
         double gpu_seconds = -1.0;
         SubmitProfileFake* good = fake(0, 0);

@@ -105,9 +105,12 @@ require "../src/ml/audio/drama3/resident"
                 ML::Audio::Drama3::MetalBackend.tensor_buffer(tensor, true).offset.should eq(weight_offset.to_i64)
                 baseline = context.matvec(matrix, input)
                 candidate = context.matvec(matrix, input, dense_reduction: "simd")
+                candidate32 = context.matvec(matrix, input, dense_reduction: "simd32")
                 expected = context.read(baseline, "terminal")
                 actual = context.read(candidate, "terminal")
+                actual32 = context.read(candidate32, "terminal")
                 actual.map(&.unsafe_as(UInt32)).should eq(expected.map(&.unsafe_as(UInt32)))
+                actual32.map(&.unsafe_as(UInt32)).should eq(expected.map(&.unsafe_as(UInt32)))
 
                 if cols >= 33
                   expected[1].should eq(0.25_f32)
@@ -134,6 +137,93 @@ require "../src/ml/audio/drama3/resident"
       end
     end
 
+    it "uses the Context's environment-selected simd reductions by default" do
+      previous_reduction = ENV["DRAMA3_DENSE_REDUCTION"]?
+      begin
+        drama3_dense_with_device do
+          rows, cols = 3, 65
+          matrix = ML::Audio::Drama3::Matrix.new(rows, cols, drama3_dense_values(rows, cols))
+          input_values = drama3_dense_input(cols)
+
+          ENV["DRAMA3_DENSE_REDUCTION"] = "tree"
+          tree_context = ML::Audio::Drama3::Resident::Context.new
+          ENV["DRAMA3_DENSE_REDUCTION"] = "simd"
+          simd_context = ML::Audio::Drama3::Resident::Context.new
+          simd_context.dense_reduction.should eq("simd")
+          ENV["DRAMA3_DENSE_REDUCTION"] = "simd32"
+          simd32_context = ML::Audio::Drama3::Resident::Context.new
+          simd32_context.dense_reduction.should eq("simd32")
+          ENV["DRAMA3_DENSE_REDUCTION"] = "tree"
+
+          baseline = tree_context.matvec(matrix, tree_context.upload(input_values))
+          candidate = simd_context.matvec(matrix, simd_context.upload(input_values))
+          candidate32 = simd32_context.matvec(matrix, simd32_context.upload(input_values))
+          expected = tree_context.read(baseline, "terminal")
+          actual = simd_context.read(candidate, "terminal")
+          actual32 = simd32_context.read(candidate32, "terminal")
+          actual.map(&.unsafe_as(UInt32)).should eq(expected.map(&.unsafe_as(UInt32)))
+          actual32.map(&.unsafe_as(UInt32)).should eq(expected.map(&.unsafe_as(UInt32)))
+          actual[1].should eq(0.25_f32)
+        ensure
+          ML::Audio::Drama3::MetalBackend.reset!
+        end
+      ensure
+        if previous_reduction
+          ENV["DRAMA3_DENSE_REDUCTION"] = previous_reduction
+        else
+          ENV.delete("DRAMA3_DENSE_REDUCTION")
+        end
+      end
+    end
+
+    it "preserves bitwise parity for a nonzero expert row offset in a dense rank-3 matrix" do
+      previous_reduction = ENV["DRAMA3_DENSE_REDUCTION"]?
+      path = File.tempname("drama3-dense-expert", ".bin")
+      begin
+        drama3_dense_with_device do
+          rows, cols, weight_offset = 3, 65, 22
+          values = Array(Float32).new(rows * cols, -37_f32)
+          values.concat(drama3_dense_values(rows, cols))
+          io = IO::Memory.new
+          io.write(Bytes.new(weight_offset, 0_u8))
+          values.each { |value| drama3_dense_write_value(io, "F32", value) }
+          File.write(path, io.to_slice)
+
+          owner = ML::Audio::Drama3::MappedFile.new(path)
+          byte_count = (values.size * 4).to_i64
+          tensor = ML::Audio::Drama3::Tensor.new(
+            [2, rows, cols], "F32", owner.slice(weight_offset.to_i64, byte_count), owner,
+          )
+          matrix = ML::Audio::Drama3::Matrix.new(tensor, expert: 1)
+          matrix.expert.should eq(1)
+          ML::Audio::Drama3::MetalBackend.tensor_buffer(tensor, true).offset.should eq(weight_offset.to_i64)
+
+          ENV["DRAMA3_DENSE_REDUCTION"] = "tree"
+          context = ML::Audio::Drama3::Resident::Context.new
+          input_values = drama3_dense_input(cols)
+          input = context.upload(input_values)
+          baseline = context.matvec(matrix, input)
+          candidate = context.matvec(matrix, input, dense_reduction: "simd")
+          candidate32 = context.matvec(matrix, input, dense_reduction: "simd32")
+          expected = context.read(baseline, "terminal")
+          actual = context.read(candidate, "terminal")
+          actual32 = context.read(candidate32, "terminal")
+          actual.map(&.unsafe_as(UInt32)).should eq(expected.map(&.unsafe_as(UInt32)))
+          actual32.map(&.unsafe_as(UInt32)).should eq(expected.map(&.unsafe_as(UInt32)))
+          actual[1].should eq(0.25_f32)
+        ensure
+          ML::Audio::Drama3::MetalBackend.reset!
+        end
+      ensure
+        if previous_reduction
+          ENV["DRAMA3_DENSE_REDUCTION"] = previous_reduction
+        else
+          ENV.delete("DRAMA3_DENSE_REDUCTION")
+        end
+        File.delete(path) if File.exists?(path)
+      end
+    end
+
     it "rejects invalid reduction selectors and buffers owned by another context" do
       previous_reduction = ENV["DRAMA3_DENSE_REDUCTION"]?
       begin
@@ -144,7 +234,7 @@ require "../src/ml/audio/drama3/resident"
           matrix = ML::Audio::Drama3::Matrix.new(1, 1, [1_f32])
           input = context.upload([1_f32])
 
-          expect_raises(ArgumentError, /DRAMA3_DENSE_REDUCTION must be tree or simd/) do
+          expect_raises(ArgumentError, /DRAMA3_DENSE_REDUCTION must be tree, simd, or simd32/) do
             context.matvec(matrix, input, dense_reduction: "shuffle")
           end
           expect_raises(ArgumentError, /buffer belongs to a different resident context/) do

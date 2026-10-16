@@ -29683,3 +29683,48 @@ Refresh after source/toolchain/device/model/workload changes.
   keeping DAC separate; return numeric frontier remains MoE39/common-prefix and
   DAC post-module stage. Authority: serial run_safe,15% floor, own children only,
   unrelated processes untouched, atomic local commit/no push. No LTP/WBA claim.
+
+### Continuation 2026-10-16 — GPU kernels and command-start variance
+
+- Base `22c99628`: optional native timeline surrounds the existing commit/wait,
+  preserves authoritative status when timestamps/callbacks fail, and logs after
+  the measured wait. All six full requests retain codes/WAV/tape/ledgers; 732
+  command timestamps are valid. A 6.5175s warm wall spread has +6.5398s before-GPU
+  wait and -0.2943s GPU duration sum. First prefill contributes 6.2344s of the
+  before-GPU increase; residency/resource/driver/competing-work cause remains
+  unresolved.
+- Bounded Instruments capture qualifies 54508 shader samples/44 labels but has
+  overlapping intervals and no additive family weighting. M2 Max rejects
+  dispatch-boundary counters. No dominant-kernel ranking follows. Raw traces
+  were removed; capture harness now uses an explicit environment allowlist.
+- Opt-in `simd32` dense preserves the original 64-lane partial-sum tree, with
+  original-kernel fallback outside SIMD width32. Native affine expert32 uses
+  unchanged group order only at <=32 groups; group33 retains64. Independent
+  Q4/Q8 scalar/shared/per-rank constants cover that boundary. Defaults stay
+  dense tree/expert64; no LTP/WBA or zero-instrumentation-overhead claim.
+- Actual-weight tower probes are bitwise equal and locally faster. Captured
+  upstream-input expert32/64 probes give paired GPU ratios1.04383 and1.06120,
+  seven faster32 pairs per capture. Three full ABBA matrices,12 jobs each,
+  retain complete outputs/ledgers but establish no request-to-WAV gain. Latest
+  expert64/32 warm medians29.7862/30.5885s for2.7864s audio, RTF10.690/10.978.
+- Final62 Metal/10 offline tests, same-tape saved-MLX60-frame/full11-ID GPU
+  comparison and combined simd32/expert32 reused158-row prefill pass. Native
+  fresh/reuse is bitwise equal; upstream remains within unchanged3e-5/3e-4.
+  Source seal binds43 production files across11 final commands. Older dense/
+  timeline evidence retains capture-time lineage; saved-baseline differing
+  source bytes remain unavailable. General MoE39 numerical failure stays open.
+  Final correlated mini-Quad review is ROBUST within this bounded scope.
+- Report `docs/drama3-gpu-kernels.md`, curated
+  `.landmark/evidence/drama3-gpu-kernels.json`. Stable reference/run files moved
+  to `/opt/mldata_ssd/cogni-ml`:25067 files/52095286973bytes SHA-verified, original
+  paths remain compatibility symlinks. All6 DRAMA weight shards stay local;
+  active browser log retains its local inode. Cold timings cannot span the move.
+- Next falsifier: separate pre-start resource/residency from other GPU/driver
+  work, or compare guarded aligned Q4 loads with existing byte loads on captured
+  inputs. Return numeric frontier: MoE39/common-prefix and DAC post-module stage.
+  Streaming is design only; first check stateful chunked DAC against whole
+  decode, then prove PCM ownership/backpressure/cancel behavior. No latency claim.
+- Refresh on source/shader/model/input/tape/fixture/tolerance/graph/storage/
+  runtime/device/OS drift or contradictory evidence. Standing authority: serial
+  run_safe,15% floor, unrelated processes untouched, exact-path local atomic
+  commit/no push. Rollback flags/defaults or this isolated feature commit.

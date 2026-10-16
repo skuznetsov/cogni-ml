@@ -220,7 +220,9 @@ static bool command_submit_profile_enabled() {
 }
 
 static void wait_for_command_completion(id<MTLCommandBuffer> cmd, bool commit,
-                                        GSCommandSubmitProfile* profile = nullptr) {
+                                        GSCommandSubmitProfile* profile = nullptr,
+                                        double* mach_before_wait = nullptr,
+                                        double* mach_after_wait = nullptr) {
     uint64_t entered = profile ? monotonic_time_ns() : 0;
     int64_t timeout_ms = command_timeout_ms();
     GSCommandWaitRecord record;
@@ -229,7 +231,9 @@ static void wait_for_command_completion(id<MTLCommandBuffer> cmd, bool commit,
     if (profile) profile->mach_before_commit = command_mach_seconds();
     if (commit) [cmd commit];
     uint64_t committed = profile ? monotonic_time_ns() : 0;
+    if (mach_before_wait != nullptr) *mach_before_wait = command_mach_seconds();
     [cmd waitUntilCompleted];
+    if (mach_after_wait != nullptr) *mach_after_wait = command_mach_seconds();
     if (profile) profile->mach_after_wait = command_mach_seconds();
     uint64_t completed = profile ? monotonic_time_ns() : 0;
     if (timeout_ms > 0) unregister_command_wait(&record);
@@ -584,6 +588,22 @@ extern "C" void gs_commit_command_buffer(void* cmd_handle) {
     [cmd commit];
 }
 
+// Commit once and return host-clock bounds around the existing commit call.
+// This is optional telemetry only; it does not wait or alter queue semantics.
+extern "C" void gs_commit_command_buffer_timeline(
+    void* cmd_handle,
+    double* mach_before_commit,
+    double* mach_after_commit
+) {
+    if (mach_before_commit != nullptr) *mach_before_commit = 0.0;
+    if (mach_after_commit != nullptr) *mach_after_commit = 0.0;
+    if (cmd_handle == nullptr) return;
+    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)cmd_handle;
+    if (mach_before_commit != nullptr) *mach_before_commit = command_mach_seconds();
+    [cmd commit];
+    if (mach_after_commit != nullptr) *mach_after_commit = command_mach_seconds();
+}
+
 // Submit two command buffers: commit first immediately, commit second after callback
 // The first buffer starts executing on GPU while second is still being encoded
 extern "C" void gs_submit_pipeline(void* cmd1, void* cmd2) {
@@ -629,6 +649,40 @@ extern "C" int32_t gs_wait_command_buffer_status_gpu_elapsed(
     if (status != 0) return status;
     command_gpu_elapsed(cmd, elapsed_seconds);
     return 0;
+}
+
+// Wait once on an already committed command and return best-effort command,
+// wait-boundary, and GPU timestamps. Missing or invalid GPU timing is reported
+// through its validity flag and never changes completion status.
+extern "C" int32_t gs_wait_command_buffer_status_timeline(
+    void* cmd_handle,
+    double mach_before_commit,
+    double* mach_before_wait,
+    double* mach_after_wait,
+    double* gpu_start,
+    double* gpu_end,
+    int32_t* gpu_timing_valid
+) {
+    if (mach_before_wait != nullptr) *mach_before_wait = 0.0;
+    if (mach_after_wait != nullptr) *mach_after_wait = 0.0;
+    if (gpu_start != nullptr) *gpu_start = 0.0;
+    if (gpu_end != nullptr) *gpu_end = 0.0;
+    if (gpu_timing_valid != nullptr) *gpu_timing_valid = 0;
+    if (cmd_handle == nullptr) return -1;
+
+    id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)cmd_handle;
+    wait_for_command_completion(cmd, false, nullptr, mach_before_wait, mach_after_wait);
+    int32_t status = command_completion_status(cmd);
+    const double start = cmd.GPUStartTime;
+    const double end = cmd.GPUEndTime;
+    if (gpu_start != nullptr) *gpu_start = start;
+    if (gpu_end != nullptr) *gpu_end = end;
+
+    const double after_wait = mach_after_wait == nullptr ? 0.0 : *mach_after_wait;
+    const bool gpu_valid = status == 0 && command_timeline_valid(
+        mach_before_commit, start, end, after_wait);
+    if (gpu_timing_valid != nullptr) *gpu_timing_valid = gpu_valid ? 1 : 0;
+    return status;
 }
 
 extern "C" void commit_and_wait_impl(void* cmd_handle) {

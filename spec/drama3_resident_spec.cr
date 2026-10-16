@@ -110,7 +110,7 @@ require "../src/ml/audio/drama3/backbone_resident"
                 actual = ctx.read(batched.slice(rank * rows, rows), "terminal")
                 actual.map(&.unsafe_as(UInt32)).should eq(expected.map(&.unsafe_as(UInt32)))
               end
-              bad = ctx.experts(matrix, input, ctx.upload([0_f32, 3_f32, 0.5_f32]), per_rank)
+              bad = ctx.experts(matrix, input, ctx.upload([-1_f32, 3_f32, 0.5_f32]), per_rank)
               expect_raises(ArgumentError, /non-finite resident terminal/) { ctx.read(bad, "terminal") }
               expect_raises(ArgumentError, /input width/) { ctx.experts(matrix, ctx.upload([1_f32]), ids, per_rank) }
             end
@@ -121,6 +121,74 @@ require "../src/ml/audio/drama3/backbone_resident"
         end
       ensure
         ML::Audio::Drama3::MetalBackend.reset!
+        File.delete(path) if File.exists?(path)
+      end
+    end
+
+    it "keeps native affine expert group 32/33 boundaries exact for either selector" do
+      previous_threads = ENV["DRAMA3_EXPERT_THREADS"]?
+      path = File.tempname("drama3-resident-expert-width", ".bin")
+      begin
+        ["32", "64"].each do |requested_threads|
+          ENV["DRAMA3_EXPERT_THREADS"] = requested_threads
+          [4, 8].each do |bits|
+            [32, 33].each do |groups|
+              rows, experts, group = 1, 2, 64
+              cols, per = groups * group, 32 // bits
+              words = Array(UInt32).new(experts * rows * cols // per, 0_u32)
+              scale_values = Array(Float32).new(experts * rows * groups, 0_f32)
+              experts.times do |expert|
+                word_index = expert * rows * (cols // per) + (groups - 1) * (group // per)
+                words[word_index] = 1_u32
+                scale_values[expert * groups + groups - 1] = expert == 0 ? 2_f32 : 4_f32
+              end
+
+              io = IO::Memory.new
+              io.write(Bytes.new(22, 0_u8))
+              words.each { |word| io.write_bytes(word, IO::ByteFormat::LittleEndian) }
+              File.write(path, io.to_slice)
+              owner = ML::Audio::Drama3::MappedFile.new(path)
+              packed = ML::Audio::Drama3::Tensor.new([experts, rows, cols // per], "U32",
+                owner.slice(22_i64, words.size.to_i64 * 4_i64), owner)
+              scales = ML::Audio::Drama3::Tensor.new([experts, rows, groups], scale_values)
+              biases = ML::Audio::Drama3::Tensor.new([experts, rows, groups], Array(Float32).new(scale_values.size, 0_f32))
+              matrix = ML::Audio::Drama3::Matrix.new(packed, scales, biases, bits, group)
+
+              ctx = ML::Audio::Drama3::Resident::Context.new
+              ctx.expert_threads.should eq(requested_threads.to_i)
+              ids = ctx.upload([1_f32, 0_f32])
+              last_col = (groups - 1) * group
+
+              shared_values = Array(Float32).new(cols, 0_f32)
+              shared_values[last_col] = 3_f32
+              shared = ctx.upload(shared_values)
+              shared_batch = ctx.experts(matrix, shared, ids)
+              shared_scalar = ctx.expert(matrix, shared, ids, 0)
+              ctx.read(shared_scalar, "terminal").map(&.unsafe_as(UInt32)).should eq([12_f32].map(&.unsafe_as(UInt32)))
+              ctx.read(shared_batch, "terminal").map(&.unsafe_as(UInt32)).should eq([12_f32, 6_f32].map(&.unsafe_as(UInt32)))
+
+              per_rank_values = Array(Float32).new(cols * 2, 0_f32)
+              per_rank_values[last_col] = 3_f32
+              per_rank_values[cols + last_col] = 5_f32
+              per_rank = ctx.upload(per_rank_values)
+              per_rank_batch = ctx.experts(matrix, per_rank, ids, true)
+              per_rank_scalar_input = ctx.upload(Array(Float32).new(cols) { |index| per_rank_values[index] })
+              per_rank_scalar = ctx.expert(matrix, per_rank_scalar_input, ids, 0)
+              ctx.read(per_rank_scalar, "terminal").map(&.unsafe_as(UInt32)).should eq([12_f32].map(&.unsafe_as(UInt32)))
+              ctx.read(per_rank_batch, "terminal").map(&.unsafe_as(UInt32)).should eq([12_f32, 10_f32].map(&.unsafe_as(UInt32)))
+
+              # Complete GPU use before rewriting the mapped fixture for the next case.
+              ML::Audio::Drama3::MetalBackend.reset!
+            end
+          end
+        end
+      ensure
+        ML::Audio::Drama3::MetalBackend.reset!
+        if previous_threads
+          ENV["DRAMA3_EXPERT_THREADS"] = previous_threads
+        else
+          ENV.delete("DRAMA3_EXPERT_THREADS")
+        end
         File.delete(path) if File.exists?(path)
       end
     end

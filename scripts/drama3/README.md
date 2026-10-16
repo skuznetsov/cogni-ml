@@ -44,6 +44,58 @@ This reads execution timestamps at existing command completion; it adds no
 wait. Keep timestamp/logging-on results separate from the primary timing
 matrix. These durations do not measure occupancy or pure kernel arithmetic.
 
+For a generic dense reduction comparison, use
+`--dense-schedule tree,simd,simd,tree --prefix dense`. This is mutually exclusive
+with `--schedule` and `--legacy-binary`, fixes scratch and host profiling off,
+and keeps the separate backbone qkv/z/b/a selector at `tree`. Other backbone
+and tower projections use the generic selector. Bind the saved baseline to the
+same checkpoint, input, sampler and original controls externally: the driver's
+exactness check establishes equality to the supplied first baseline row, not
+independent upstream parity.
+
+`simd32` is a second opt-in candidate: use
+`--dense-schedule tree,simd32,simd32,tree --prefix dense32`. It preserves the
+original 64-lane partial-sum tree using two accumulators per SIMD lane, and
+falls back to the original kernel when the pipeline execution width is not 32.
+The default stays `tree`. The standalone
+`examples/drama3_tower_dense_benchmark.cr` accepts
+`MODEL_DIR --candidate=simd32 --pairs=7 --large-repeats=8` after a normal Metal
+build. It compares the actual mapped BF16 layer-0 FFN weights on deterministic
+inputs, queues both arms before their final drain, and checks every output
+bitwise. Its command intervals can overlap; they do not measure additive tower
+cost or full-request speed. Metadata names the requested pipeline, so fallback
+hardware needs separate effective-pipeline qualification.
+
+`examples/drama3_expert_launch_benchmark.cr` compares 32/64-thread launches
+of the unchanged affine-Q4 expert shader. After a normal Metal build, pass
+`MODEL_DIR PINNED_FULL_MOE_TRACE --repeats=8`. It checks the pinned layer-39
+full-run trace, uses its normalized input for gate/up and its per-rank SwiGLU
+output for down, uploads each input once, and compares both native arms after
+their paired drain. The 32-thread diagnostic arm rejects more than 32 groups.
+This is launch parity on captured upstream inputs, not a claim that the native
+expert output matches upstream.
+
+`DRAMA3_EXPERT_THREADS=32` requests the smaller launch for native scalar and
+batched affine experts only when there are at most 32 quantization groups.
+Larger matrices retain 64 threads because the unchanged shader partitions
+groups in strides of 64. The default is 64; the alternate `mlx_q4` reduction
+does not use this selector. For a profiler-off full-request control use
+`--expert-threads-schedule 64,32,32,64 --prefix expert32`. This is mutually
+exclusive with the other schedules, fixes both dense selectors at `tree`, and
+keeps scratch and profiling off. The driver retains exact full-output and
+read/wait checks; speed promotion requires the full-request measurement.
+
+The extended native timeline records host commit/wait bounds and optional GPU
+start/end timestamps without adding a wait. Analyze one selected request's
+JSONL with `analyze_command_timeline.py --input "$SELECTED_STDERR"`, optionally
+adding inclusive `--phase prefill=0:28 --phase decode=30:89`. Indices continue
+across requests in one worker; offset these ranges using that request's actual
+indices and command counts. The example ranges apply only to the documented
+60-frame probe. Invalid/missing GPU timestamps leave wait unpartitioned;
+malformed bounds and duplicate indices fail closed. See
+[GPU execution and wait attribution](../../docs/drama3-gpu-kernels.md) for the
+observed boundaries and the limits of interpreting these intervals.
+
 Use Python 3.12 with `mlx`, `torch`, `numpy`, and `safetensors`, plus Crystal.
 The pinned source checkouts are imported directly. Check them out at the
 revisions below; replay scripts reject a different source `HEAD`.

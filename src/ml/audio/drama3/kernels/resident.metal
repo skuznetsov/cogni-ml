@@ -48,6 +48,20 @@ kernel void dr3_dense_simd(device const uchar* w [[buffer(0)]],device const floa
         if(simd_lane==0)y[r]=sum;
     }
 }
+kernel void dr3_dense_simd32(device const uchar* w [[buffer(0)]],device const float* x [[buffer(1)]],device float* y [[buffer(2)]],constant ulong* p [[buffer(3)]],uint r [[threadgroup_position_in_grid]],uint simd_lane [[thread_index_in_simdgroup]],uint simd_width [[threads_per_simdgroup]]) {
+    if(simd_width!=32)return;
+    uint cols=uint(p[1]);ulong row=p[4]*p[0]+r;float lo=0,hi=0;
+    if(p[3]==1&&(p[2]&1)==0){
+        for(uint j=simd_lane;j<cols;j+=64)lo+=dr3_bf16_aligned(w,p[2],row*cols+j)*x[j];
+        for(uint j=simd_lane+32;j<cols;j+=64)hi+=dr3_bf16_aligned(w,p[2],row*cols+j)*x[j];
+    }else{
+        for(uint j=simd_lane;j<cols;j+=64)lo+=dr3_float(w,p[2],row*cols+j,p[3])*x[j];
+        for(uint j=simd_lane+32;j<cols;j+=64)hi+=dr3_float(w,p[2],row*cols+j,p[3])*x[j];
+    }
+    float sum=lo+hi;
+    for(uint d=16;d>0;d/=2){float peer=simd_shuffle_down(sum,ushort(d));if(simd_lane<d)sum+=peer;}
+    if(simd_lane==0)y[r]=sum;
+}
 kernel void dr3_expert(device const uchar* w [[buffer(0)]],device const uchar* s [[buffer(1)]],device const uchar* b [[buffer(2)]],device const float* x [[buffer(3)]],device float* y [[buffer(4)]],device const float* ids [[buffer(5)]],constant ulong* p [[buffer(6)]],threadgroup float* parts [[threadgroup(0)]],uint r [[threadgroup_position_in_grid]],uint lane [[thread_index_in_threadgroup]]) {
     float selected=p[10]?ids[p[11]]:float(p[4]);if(!isfinite(selected)||selected<0||selected>=float(p[12])||floor(selected)!=selected){if(lane==0)y[r]=NAN;return;}
     uint rows=uint(p[0]),cols=uint(p[1]),bits=uint(p[2]),group=uint(p[3]),e=uint(selected),row=e*rows+r;
