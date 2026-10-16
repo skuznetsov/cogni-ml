@@ -36,6 +36,8 @@
         double now = command_mach_seconds();
         self.GPUStartTime = now - 0.0002;
         self.GPUEndTime = now - 0.0001;
+        self.kernelStartTime = now - 0.0004;
+        self.kernelEndTime = now - 0.0003;
     }
 }
 - (NSError*)error { return nil; }
@@ -122,12 +124,15 @@ int main() {
         double before_wait = 0.0, after_wait = 0.0;
         double gpu_start = 0.0, gpu_end = 0.0;
         int32_t gpu_valid = 0;
+        double kernel_start = 0.0, kernel_end = 0.0;
+        int32_t kernel_valid = 0;
         int32_t timeline_status = gs_wait_command_buffer_status_timeline(
             timed_handle, before_commit, &before_wait, &after_wait,
-            &gpu_start, &gpu_end, &gpu_valid);
+            &gpu_start, &gpu_end, &gpu_valid, &kernel_start, &kernel_end, &kernel_valid);
         assert(timeline_status == 0 && timed.commits == 1 && timed.waits == 1);
         assert(before_wait > 0.0 && after_wait >= before_wait);
         assert(gpu_valid == 1 && gpu_end > gpu_start);
+        assert(kernel_valid == 1 && kernel_end > kernel_start);
         assert(gs_command_waits.empty());
 
         // Missing timestamps are represented as unavailable metrics, not a
@@ -136,6 +141,8 @@ int main() {
         unavailable.expectsRegisteredCommit = NO;
         unavailable.GPUStartTime = 0.0;
         unavailable.GPUEndTime = 0.0;
+        unavailable.kernelStartTime = 0.0;
+        unavailable.kernelEndTime = 0.0;
         before_commit = after_commit = before_wait = after_wait = 0.0;
         gpu_start = gpu_end = 0.0;
         gpu_valid = 1;
@@ -143,9 +150,9 @@ int main() {
         gs_commit_command_buffer_timeline(unavailable_handle, &before_commit, &after_commit);
         timeline_status = gs_wait_command_buffer_status_timeline(
             unavailable_handle, before_commit, &before_wait, &after_wait,
-            &gpu_start, &gpu_end, &gpu_valid);
+            &gpu_start, &gpu_end, &gpu_valid, &kernel_start, &kernel_end, &kernel_valid);
         assert(timeline_status == 0 && unavailable.commits == 1 && unavailable.waits == 1);
-        assert(gpu_valid == 0);
+        assert(gpu_valid == 0 && kernel_valid == 0);
         assert(gs_command_waits.empty());
 
         // Failed completion remains failed, but the timeline path still waits
@@ -159,9 +166,9 @@ int main() {
         gs_commit_command_buffer_timeline(failed_handle, &before_commit, &after_commit);
         timeline_status = gs_wait_command_buffer_status_timeline(
             failed_handle, before_commit, &before_wait, &after_wait,
-            &gpu_start, &gpu_end, &gpu_valid);
+            &gpu_start, &gpu_end, &gpu_valid, &kernel_start, &kernel_end, &kernel_valid);
         assert(timeline_status == -6 && failed_timeline.commits == 1 && failed_timeline.waits == 1);
-        assert(gpu_valid == 0);
+        assert(gpu_valid == 0 && kernel_valid == 0);
         assert(gs_command_waits.empty());
 
         double gpu_seconds = -1.0;
@@ -173,6 +180,13 @@ int main() {
         assert(gs_commit_and_wait_status_gpu_elapsed((__bridge_retained void*)bad, &gpu_seconds) == -6);
         assert(gpu_seconds == 0 && bad.commits == 1 && bad.waits == 1);
         assert(gs_command_waits.empty());
+        // Resource observers never initialize Metal or wait for GPU work.
+        uint64_t resources[8] = {};
+        double sample_begin = 0, sample_end = 0;
+        int32_t resource_valid = gs_drama3_process_resources(resources, &sample_begin, &sample_end);
+        assert((resource_valid & 1) != 0 && (resource_valid & 2) != 0);
+        assert(sample_begin > 0 && sample_end >= sample_begin);
+        assert(gs_drama3_process_resources(nullptr, &sample_begin, &sample_end) == 0);
         assert(gs_device == nil); // No Metal device was requested by this test.
         puts("native submit profile tests PASS (no GPU)");
     }

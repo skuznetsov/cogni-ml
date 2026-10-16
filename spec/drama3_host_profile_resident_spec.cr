@@ -62,3 +62,44 @@ require "../src/ml/audio/drama3/resident"
     end
   end
 {% end %}
+
+{% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
+  describe "DRAMA-3 resource observer transparency" do
+    it "preserves reads and completion ledgers at supported graph depths" do
+      previous = {"DRAMA3_METAL_RESOURCES"         => ENV["DRAMA3_METAL_RESOURCES"]?,
+                  "DRAMA3_COGNIGRAPH_MAX_INFLIGHT" => ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"]?}
+      begin
+        ["1", "2"].each do |depth|
+          ledgers = [] of Hash(String, Int64)
+          ["0", "1"].each do |enabled|
+            ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"] = depth
+            ENV["DRAMA3_METAL_RESOURCES"] = enabled
+            context = ML::Audio::Drama3::Resident::Context.new
+            context.resources_enabled.should eq(enabled == "1")
+            input = context.upload([1_f32, 2_f32, 3_f32])
+            output = context.add(input, input)
+            context.submit
+            doubled = context.add(output, output)
+            context.submit
+            context.read(doubled, "terminal").should eq([4_f32, 8_f32, 12_f32])
+            context.readbacks.should eq({"terminal" => 12_i64})
+            context.graph_stats["completion_waits"].should eq(2)
+            ledgers << context.graph_stats
+          end
+          ledgers[0].should eq(ledgers[1])
+        end
+        ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"] = "0"
+        ENV["DRAMA3_METAL_RESOURCES"] = "1"
+        expect_raises(ArgumentError, /requires CogniGraph/) { ML::Audio::Drama3::Resident::Context.new }
+      ensure
+        previous.each do |key, value|
+          if value
+            ENV[key] = value
+          else
+            ENV.delete(key)
+          end
+        end
+      end
+    end
+  end
+{% end %}

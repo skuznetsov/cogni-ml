@@ -17,9 +17,24 @@ from typing import Iterable, Sequence
 
 
 EVENT_NAME = "drama3_gpu_command"
-FORMAT_NAME = "drama3-command-timeline-analysis-v1"
+FORMAT_NAME = "drama3-command-timeline-analysis-v2"
 GPU_BOUND_TOLERANCE_SECONDS = 0.001
 PARTITION_TOLERANCE_SECONDS = 1e-9
+RESOURCE_WINDOWS = (
+    ("encoding_to_before_commit", "encoding_begin", "before_commit"),
+    ("before_commit_to_after_commit", "before_commit", "after_commit"),
+    ("after_commit_to_after_wait", "after_commit", "after_wait"),
+)
+RESOURCE_COUNTERS = (
+    "user_ns",
+    "system_ns",
+    "pageins",
+    "disk_read_bytes",
+    "faults",
+    "cow_faults",
+)
+TASK_EVENT_COUNTERS = ("pageins", "faults", "cow_faults")
+RESOURCE_GAUGES = ("resident_bytes", "footprint_bytes")
 
 
 class TimelineError(ValueError):
@@ -34,6 +49,146 @@ def _finite_number(row: dict, key: str, index: int) -> float:
     if not math.isfinite(result):
         raise TimelineError(f"command {index}: {key} must be a finite number")
     return result
+
+
+def _kernel_schedule(row: dict, index: int) -> tuple[bool, float | None]:
+    flag = row.get("kernel_timing_valid")
+    if flag is not None and not isinstance(flag, bool):
+        raise TimelineError(f"command {index}: kernel_timing_valid must be boolean or null")
+
+    start_value = row.get("kernel_start_s")
+    end_value = row.get("kernel_end_s")
+    if flag is not True:
+        if start_value is not None or end_value is not None:
+            if flag is False:
+                raise TimelineError(f"command {index}: unavailable kernel timing has timestamp values")
+            raise TimelineError(f"command {index}: kernel timestamps are present without a valid flag")
+        return False, None
+
+    start = _finite_number(row, "kernel_start_s", index)
+    end = _finite_number(row, "kernel_end_s", index)
+    if start <= 0 or end < start:
+        raise TimelineError(f"command {index}: kernel scheduling timestamp pair is invalid")
+    return True, end - start
+
+
+def _snapshot_timing(snapshot: object, label: str, index: int) -> tuple[float, float] | str:
+    if not isinstance(snapshot, dict):
+        return f"snapshot_missing:{label}"
+    try:
+        begin = _finite_number(snapshot, "sample_begin_s", index)
+        end = _finite_number(snapshot, "sample_end_s", index)
+    except TimelineError:
+        return f"invalid_sample_timing:{label}"
+    if begin <= 0 or end < begin:
+        return f"invalid_sample_timing:{label}"
+    return begin, end
+
+
+def _resource_value(snapshot: dict, name: str) -> tuple[int | None, str | None]:
+    value = snapshot.get(name)
+    if value is None:
+        return None, "unavailable"
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return None, "invalid_value"
+    return value, None
+
+
+def _counter_delta(before: dict, after: dict, name: str) -> dict:
+    old, old_error = _resource_value(before, name)
+    new, new_error = _resource_value(after, name)
+    if old_error or new_error:
+        return {"delta": None, "status": old_error or new_error}
+    if new < old:
+        return {"delta": None, "status": "counter_reset"}
+    return {"delta": new - old, "status": "valid"}
+
+
+def _gauge_change(before: dict, after: dict, name: str) -> dict:
+    old, old_error = _resource_value(before, name)
+    new, new_error = _resource_value(after, name)
+    if old_error or new_error:
+        return {"change": None, "status": old_error or new_error}
+    return {"change": new - old, "status": "valid"}
+
+
+def _resource_window(
+    snapshots: object,
+    before_name: str,
+    after_name: str,
+    index: int,
+) -> dict:
+    result = {
+        "from": before_name,
+        "to": after_name,
+        "valid": False,
+        "invalid_reason": None,
+        "sample_window_seconds": None,
+        "counters": {},
+        "gauges": {},
+    }
+    if not isinstance(snapshots, dict):
+        reason = "resource_object_invalid"
+        before = after = {}
+        before_timing = after_timing = reason
+    else:
+        before = snapshots.get(before_name)
+        after = snapshots.get(after_name)
+        before_timing = _snapshot_timing(before, before_name, index)
+        after_timing = _snapshot_timing(after, after_name, index)
+
+    if isinstance(before_timing, str):
+        reason = before_timing
+    elif isinstance(after_timing, str):
+        reason = after_timing
+    elif after_timing[0] < before_timing[1]:
+        reason = "sample_intervals_overlap_or_are_out_of_order"
+    else:
+        reason = None
+
+    if reason is not None:
+        result["invalid_reason"] = reason
+        result["counters"] = {
+            field: {"delta": None, "status": "invalid_window"} for field in RESOURCE_COUNTERS
+        }
+        result["gauges"] = {
+            field: {"change": None, "status": "invalid_window"} for field in RESOURCE_GAUGES
+        }
+        return result
+
+    result["valid"] = True
+    result["sample_window_seconds"] = {
+        "lower": after_timing[0] - before_timing[1],
+        "upper": after_timing[1] - before_timing[0],
+    }
+    task_events_unavailable = any(
+        isinstance(snapshot.get(field), int)
+        and not isinstance(snapshot.get(field), bool)
+        and snapshot[field] < 0
+        for snapshot in (before, after)
+        for field in TASK_EVENT_COUNTERS
+    )
+    result["counters"] = {
+        field: (
+            {"delta": None, "status": "unavailable"}
+            if task_events_unavailable and field in TASK_EVENT_COUNTERS
+            else _counter_delta(before, after, field)
+        )
+        for field in RESOURCE_COUNTERS
+    }
+    result["gauges"] = {
+        field: _gauge_change(before, after, field) for field in RESOURCE_GAUGES
+    }
+    return result
+
+
+def _resource_windows(value: object, index: int) -> dict | None:
+    if value is None:
+        return None
+    return {
+        name: _resource_window(value, before, after, index)
+        for name, before, after in RESOURCE_WINDOWS
+    }
 
 
 def _phase_ranges(phases: Sequence[tuple[str, int, int]]) -> list[dict]:
@@ -122,6 +277,9 @@ def _parse_event(row: dict, phases: Sequence[dict]) -> dict:
         ):
             raise TimelineError(f"command {index}: gpu_seconds disagrees with GPU timestamp bounds")
 
+    driver_scheduling_valid, driver_scheduling_seconds = _kernel_schedule(row, index)
+    resource_windows = _resource_windows(row.get("resources"), index)
+
     commit_duration = host["host_after_commit_s"] - host["host_before_commit_s"]
     wait_duration = host["host_after_wait_s"] - host["host_before_wait_s"]
     gpu_duration = None
@@ -168,6 +326,11 @@ def _parse_event(row: dict, phases: Sequence[dict]) -> dict:
         "gpu_timing_valid": gpu_valid_flag is True,
         "gpu_timing_missing": gpu_valid_flag is None,
         "gpu_bounds_missing": gpu_bounds_missing,
+        "driver_scheduling_seconds": driver_scheduling_seconds,
+        "driver_scheduling_valid": driver_scheduling_valid,
+        "driver_scheduling_missing": not driver_scheduling_valid,
+        "resource_snapshots_missing": "resources" not in row or row.get("resources") is None,
+        "resource_windows": resource_windows,
     }
 
 
@@ -184,6 +347,62 @@ def _bound_summary(commands: Sequence[dict]) -> dict:
     return result
 
 
+def _distribution(values: Sequence[int | float]) -> dict | None:
+    if not values:
+        return None
+    return {"min": min(values), "mean": math.fsum(values) / len(values), "max": max(values)}
+
+
+def _resource_window_summary(commands: Sequence[dict]) -> dict:
+    result = {}
+    for name, _, _ in RESOURCE_WINDOWS:
+        windows = [
+            row["resource_windows"][name]
+            for row in commands
+            if row["resource_windows"] is not None
+        ]
+        valid_windows = [window for window in windows if window["valid"]]
+        timing = {
+            "scope": "nonadditive process windows; in-flight commands can overlap",
+            "window_count": len(windows),
+            "valid_window_count": len(valid_windows),
+            "invalid_window_count": len(windows) - len(valid_windows),
+            "sample_window_seconds": None,
+        }
+        if valid_windows:
+            timing["sample_window_seconds"] = {
+                key: _distribution([window["sample_window_seconds"][key] for window in valid_windows])
+                for key in ("lower", "upper")
+            }
+
+        counters = {}
+        for field in RESOURCE_COUNTERS:
+            values = [window["counters"][field] for window in windows]
+            valid_values = [value["delta"] for value in values if value["status"] == "valid"]
+            counters[field] = {
+                "delta_distribution": _distribution(valid_values),
+                "valid_count": len(valid_values),
+                "unavailable_count": sum(value["status"] == "unavailable" for value in values),
+                "counter_reset_count": sum(value["status"] == "counter_reset" for value in values),
+                "invalid_value_count": sum(value["status"] == "invalid_value" for value in values),
+                "invalid_window_count": sum(value["status"] == "invalid_window" for value in values),
+            }
+
+        gauges = {}
+        for field in RESOURCE_GAUGES:
+            values = [window["gauges"][field] for window in windows]
+            valid_values = [value["change"] for value in values if value["status"] == "valid"]
+            gauges[field] = {
+                "change_distribution": _distribution(valid_values),
+                "valid_count": len(valid_values),
+                "unavailable_count": sum(value["status"] == "unavailable" for value in values),
+                "invalid_value_count": sum(value["status"] == "invalid_value" for value in values),
+                "invalid_window_count": sum(value["status"] == "invalid_window" for value in values),
+            }
+        result[name] = {**timing, "counters": counters, "gauges": gauges}
+    return result
+
+
 def _aggregate(commands: Sequence[dict]) -> dict:
     valid = [row for row in commands if row["gpu_timing_valid"]]
     invalid_count = sum(not row["gpu_timing_valid"] and not row["gpu_timing_missing"] for row in commands)
@@ -195,6 +414,7 @@ def _aggregate(commands: Sequence[dict]) -> dict:
         "partitioned_wait": math.fsum(row["wait_duration_seconds"] for row in valid),
         "unpartitioned_wait": math.fsum(row["unpartitioned_wait_seconds"] for row in commands),
     }
+    driver_timing = [row["driver_scheduling_seconds"] for row in commands if row["driver_scheduling_valid"]]
     return {
         "command_count": len(commands),
         "gpu_timing_valid_commands": len(valid),
@@ -206,6 +426,11 @@ def _aggregate(commands: Sequence[dict]) -> dict:
         "wait_duration_seconds": math.fsum(row["wait_duration_seconds"] for row in commands),
         "wait_partition_seconds": partition,
         "gpu_execution_seconds_sum": math.fsum(row["gpu_execution_seconds"] for row in valid),
+        "driver_scheduling_valid_commands": len(driver_timing),
+        "driver_scheduling_missing_commands": sum(row["driver_scheduling_missing"] for row in commands),
+        "driver_scheduling_seconds_sum": math.fsum(driver_timing),
+        "resource_snapshot_missing_commands": sum(row["resource_snapshots_missing"] for row in commands),
+        "resource_counter_windows": _resource_window_summary(commands),
     }
 
 
@@ -256,11 +481,20 @@ def analyze_events(
             "gpu_timing_invalid_commands": counts["gpu_timing_invalid_commands"],
             "gpu_timing_missing_commands": counts["gpu_timing_missing_commands"],
             "gpu_bounds_missing_commands": counts["gpu_bounds_missing_commands"],
+            "driver_scheduling_valid_commands": counts["driver_scheduling_valid_commands"],
+            "driver_scheduling_missing_commands": counts["driver_scheduling_missing_commands"],
+            "resource_snapshot_missing_commands": counts["resource_snapshot_missing_commands"],
         },
         "interpretation": {
             "commit_to_gpu_start_bounds": "interval bounds from host commit boundaries; not pure queue time",
             "wait_partition": "intersection of the existing host wait interval with GPU execution; post-GPU tail is not proof of CPU scheduling delay",
             "gpu_execution_seconds_sum": "command durations can overlap across in-flight commands and are not request wall time",
+            "driver_scheduling_seconds": "kernelEndTime minus kernelStartTime is CPU-side driver scheduling duration, not GPU execution or one shader's duration",
+            "driver_scheduling_seconds_sum": "scheduling intervals can overlap across in-flight commands; their sum is not request wall time or total process CPU time",
+            "resource_counter_windows": "process deltas bracket named snapshot intervals and include all process activity; windows of in-flight commands can overlap, so distributions are nonadditive; use request boundary snapshots for request totals",
+            "task_event_counters": "a negative TASK_EVENTS_INFO value makes pageins, faults, and cow_faults unavailable for that window",
+            "pageins_and_disk_reads": "counter changes do not prove page-in caused a delay and are not converted into time",
+            "cross_clock_timing": "no kernel scheduling to GPU start subtraction is reported because Apple documents the GPU clock as mach-relative but does not state the kernel timestamp epoch",
             "request_wall_time": "not measured by this analyzer",
         },
         "totals": counts,

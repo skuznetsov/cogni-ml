@@ -73,6 +73,10 @@ describe ML::Metal::CommandBuffer do
     timeline.host_after_commit_s.should be >= timeline.host_before_commit_s
     timeline.host_before_wait_s.should be > 0.0_f64
     timeline.host_after_wait_s.should be >= timeline.host_before_wait_s
+    if timeline.kernel_timing_valid
+      timeline.kernel_start_s.should be > 0.0_f64
+      timeline.kernel_end_s.should be >= timeline.kernel_start_s
+    end
     if seconds = timeline.gpu_seconds?
       seconds.should be > 0.0_f64
     end

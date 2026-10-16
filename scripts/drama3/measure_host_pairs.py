@@ -20,6 +20,7 @@ CONTROLS = {
     "DRAMA3_MEMORY_PROFILE": "0",
     "DRAMA3_ALLOCATION_PROFILE": "0",
     "DRAMA3_METAL_TIMELINE": "0",
+    "DRAMA3_METAL_RESOURCES": "0",
     "DRAMA3_MOE_BATCH": "1",
     "DRAMA3_EXPERT_THREADS": "64",
     "DRAMA3_DENSE_REDUCTION": "tree",
@@ -69,12 +70,18 @@ def main():
     parser.add_argument("--prefix", default="paired")
     schedules.add_argument("--schedule", help="Comma-separated scratch:profile conditions")
     schedules.add_argument("--dense-schedule", help="Comma-separated tree/simd/simd32 modes; scratch and host profiling stay off")
+    schedules.add_argument("--resource-schedule", help="Comma-separated 0/1 resource observers; timeline and host profiling stay on")
     schedules.add_argument("--expert-threads-schedule", help="Comma-separated 32/64 thread requests; dense stays tree, scratch and profiling off")
     parser.add_argument("--warm-repeats", type=int, default=2)
     parser.add_argument("--timeline", action="store_true",
                         help="Read existing completion timestamps; does not introduce waits")
     args = parser.parse_args()
-    if args.dense_schedule is not None:
+    resource_modes = None
+    if args.resource_schedule is not None:
+        resource_modes = [mode.strip() for mode in args.resource_schedule.split(",")]
+        assert resource_modes and all(mode in ("0", "1") for mode in resource_modes), "resource schedule must contain 0 or 1"
+        schedule = [("0", "1", args.binary, "tree", "64") for mode in resource_modes]
+    elif args.dense_schedule is not None:
         modes = [mode.strip() for mode in args.dense_schedule.split(",")]
         assert modes and all(mode in ("tree", "simd", "simd32") for mode in modes), "dense schedule modes must be tree, simd, or simd32"
         schedule = [("0", "0", args.binary, mode, "64") for mode in modes]
@@ -110,7 +117,8 @@ def main():
             DRAMA3_EXPERT_THREADS=expert_threads,
             DRAMA3_BACKBONE_DENSE_REDUCTION="tree",
         )
-        if args.timeline:
+        controls["DRAMA3_METAL_RESOURCES"] = resource_modes[arm] if resource_modes is not None else "0"
+        if args.timeline or resource_modes is not None:
             controls["DRAMA3_METAL_TIMELINE"] = "1"
         env.update(controls)
         stderr_path = args.output / f"{args.prefix}-arm{arm}.stderr"

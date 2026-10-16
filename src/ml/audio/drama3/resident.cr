@@ -123,8 +123,12 @@ module ML::Audio::Drama3::Resident
     @timeline_emitted = false
     @host_before_commit_s = 0.0_f64
     @host_after_commit_s = 0.0_f64
+    @encoding_resources : HostResourceSnapshot?
+    @before_commit_resources : HostResourceSnapshot?
+    @after_commit_resources : HostResourceSnapshot?
 
-    def initialize(@command : ML::Metal::CommandBuffer, @index : UInt64, @timeline : Bool, @host_profile : HostProfile, &@on_wait : -> Nil)
+    def initialize(@command : ML::Metal::CommandBuffer, @index : UInt64, @timeline : Bool, @host_profile : HostProfile, @resources : Bool, &@on_wait : -> Nil)
+      @encoding_resources = HostResourceSnapshot.capture if @resources
     end
 
     def enqueue : Nil
@@ -133,9 +137,11 @@ module ML::Audio::Drama3::Resident
 
     def commit : Nil
       if @timeline
+        @before_commit_resources = HostResourceSnapshot.capture if @resources
         commit_times = @command.commit_with_timeline
         @host_before_commit_s = commit_times[0]
         @host_after_commit_s = commit_times[1]
+        @after_commit_resources = HostResourceSnapshot.capture if @resources
       else
         @command.commit
       end
@@ -187,6 +193,13 @@ module ML::Audio::Drama3::Resident
           host_after_wait_s: timeline.host_after_wait_s,
           gpu_start_s: timeline.gpu_timing_valid ? timeline.gpu_start_s : nil,
           gpu_end_s: timeline.gpu_timing_valid ? timeline.gpu_end_s : nil,
+          kernel_start_s: timeline.kernel_timing_valid ? timeline.kernel_start_s : nil,
+          kernel_end_s: timeline.kernel_timing_valid ? timeline.kernel_end_s : nil,
+          kernel_timing_valid: timeline.kernel_timing_valid,
+          resources: @resources ? {encoding_begin: @encoding_resources,
+                                   before_commit: @before_commit_resources,
+                                   after_commit: @after_commit_resources,
+                                   after_wait: HostResourceSnapshot.capture} : nil,
         }.to_json)
       rescue
         # Telemetry serialization and output must never change inference result.
@@ -213,6 +226,7 @@ module ML::Audio::Drama3::Resident
     @weights = {} of UInt64 => Buffer
     @status : Buffer?
     @timeline : Bool
+    getter resources_enabled : Bool
     @graph : ML::Metal::GraphSubmissionQueue(Flight, Buffer)?
     @lease : ML::Metal::GraphSubmissionLease(Flight, Buffer)?
     @completion_waits = 0_i64
@@ -237,14 +251,16 @@ module ML::Audio::Drama3::Resident
       expert_threads = ENV["DRAMA3_EXPERT_THREADS"]? || "64"
       raise ArgumentError.new("DRAMA3_EXPERT_THREADS must be 32 or 64") unless expert_threads.in?("32", "64")
       @expert_threads = expert_threads.to_i
-      @timeline = ENV["DRAMA3_METAL_TIMELINE"]? == "1"
+      @resources_enabled = ENV["DRAMA3_METAL_RESOURCES"]? == "1"
+      @timeline = ENV["DRAMA3_METAL_TIMELINE"]? == "1" || @resources_enabled
       depth = ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"]? || "0"
       raise ArgumentError.new("DRAMA3_COGNIGRAPH_MAX_INFLIGHT must be 0, 1, or 2") unless depth.in?("0", "1", "2")
+      raise ArgumentError.new("DRAMA3_METAL_RESOURCES requires CogniGraph depth 1 or 2") if @resources_enabled && depth == "0"
       unless depth == "0"
         queue = ML::Metal::CommandQueue.new
         @graph = ML::Metal::GraphSubmissionQueue(Flight, Buffer).new(depth.to_i) do |slot, sequence|
           command = host_profile.measure(HostEvent::CommandCreate) { ML::Metal::CommandBuffer.new(queue: queue) }
-          Flight.new(command, sequence, @timeline, host_profile) { @completion_waits += 1; nil }
+          Flight.new(command, sequence, @timeline, host_profile, @resources_enabled) { @completion_waits += 1; nil }
         end
       end
     end

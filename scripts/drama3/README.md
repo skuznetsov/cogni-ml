@@ -96,6 +96,26 @@ malformed bounds and duplicate indices fail closed. See
 [GPU execution and wait attribution](../../docs/drama3-gpu-kernels.md) for the
 observed boundaries and the limits of interpreting these intervals.
 
+For first-prefill startup diagnosis, `DRAMA3_METAL_RESOURCES=1` enables the
+existing timeline plus process CPU, task page-in/fault and process disk-read
+snapshots. It requires CogniGraph depth 1 or 2 and is disabled by default.
+Capture counterbalanced workers with `--resource-schedule 0,1,1,0 --prefix
+resources`; host profiling and timeline stay enabled in both arms, while only
+resource snapshots vary. New-process jobs and warm repeats are separate; this
+does not purge or certify the filesystem cache. See
+[First-prefill startup attribution](../../docs/drama3-prefill-startup.md).
+
+The analyzer reports `kernelEndTime - kernelStartTime` as the CPU-side driver
+scheduling duration independently of GPU execution; it does not align the two
+clock epochs or report a pure GPU-queue residual. Resource windows have explicit
+sampling bounds and per-field availability. Counters that decrease are
+unavailable for that window. Process windows of different in-flight commands
+can overlap: their summaries are distributions, never additive process totals.
+Use the studio report's `host_resources` request boundaries for request totals.
+Zero task page-ins or disk reads do not certify GPU/driver page residency.
+Snapshot syscalls and JSON logging have observer cost; keep timing-on data
+separate from profiler-off throughput measurements.
+
 Use Python 3.12 with `mlx`, `torch`, `numpy`, and `safetensors`, plus Crystal.
 The pinned source checkouts are imported directly. Check them out at the
 revisions below; replay scripts reject a different source `HEAD`.

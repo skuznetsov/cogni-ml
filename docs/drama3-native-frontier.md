@@ -10,6 +10,57 @@ reference and fixture tools only, never the native inference implementation.
 The pinned MLX upstream is a community port. Original Fish DAC controls below
 cover four saved code streams, not the original text-generation pipeline.
 
+## Active slice: first-prefill startup attribution — 2026-10-16
+
+From `ccb0d178`, separate host preparation, process page activity, Metal driver
+scheduling and GPU execution before changing the startup path. The existing
+before-GPU wait is an observation, not proof of GPU contention or page-in.
+Competing predictions: CPU preparation appears before commit; driver work
+appears in the command buffer kernel scheduling duration. Do not infer a
+scheduling-to-GPU residual without a certified shared clock epoch.
+Process page-in/fault and disk-read deltas can support residency activity but
+cannot assign its duration or exclude kernel-managed/other-process activity.
+
+Risk: CAUTION. Admit default-off boundary resource snapshots and passive Metal
+scheduling timestamps only. Preserve arithmetic, precision, queue ownership,
+existing completion waits and control/terminal reads. Do not insert callbacks,
+waitUntilScheduled, warm-up commands, page purges or CPU activation reads.
+Rollback is disabling diagnostics or reverting the isolated slice commit.
+
+DoD: fake native command tests preserve one commit/wait and authoritative
+failure status even with unavailable metrics; offline tests reject malformed
+or reset counters and invalid scheduling order without inventing cost. Run
+counterbalanced diagnostic-off/on cold-plus-warm fixed-input workers and retain
+exact full codes, WAV, sampler, graph/read ledgers. Execute the unchanged pinned
+MLX full-code control and 158-row prefill pointwise gate. Attribute only the
+intervals and counter windows observed; leave unresolved residual causes open.
+
+The 12-request observer-off/on/on/off matrix preserves the complete codes,
+WAV, sampler and graph/read ledgers. In the six resource-observed requests,
+request entry to first commit is 10.7–24.7 ms, compared with 0.35–11.96 s of
+first-command driver scheduling and 0.163–0.195 s GPU execution. Both new
+processes register about 24 GB of process disk-read accounting and 1464429
+page-ins after commit. Warm requests retain 0.35–4.83 s of scheduling, with
+0.35–4.82 s process system CPU and zero registered page-ins/disk reads in that
+window. This rejects page-in as the sole explanation for the warm spread; it
+does not time page-in or prove a physical-disk cache state. Separate own-worker
+CPU samples observe the Metal dispatch thread in
+`IOGPUCommandQueueSubmitCommandBuffers -> iokit_user_client_trap`, while the
+main thread uses the existing completion wait. Work below that trap remains
+unresolved. Sample counts are not CPU time. Overlapping command resource
+windows are explicitly nonadditive.
+
+Native fake-command and 63 Metal cases preserve the existing wait/read and
+status behavior; 23 offline and 6 CPU cases pass. The saved MLX shared-tape
+full-code and 158-row prefill gates pass without widening tolerances. The
+known MoE39 full intermediate failure remains open. See
+[First-prefill startup attribution](drama3-prefill-startup.md) for exact samples,
+lineage, observer cost and the interrupted-wrapper limitation. No startup
+optimization or default change is promoted. Next discriminator: establish which
+resources are revalidated in that submission path, then compare stable resource
+identity/registration with fresh wrappers over the same mappings while retaining
+this numeric/queue contract.
+
 ## Active slice: GPU kernel attribution — 2026-10-16
 
 From `22c99628`, profile backbone/tower dispatches and distinguish command

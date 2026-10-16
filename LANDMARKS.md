@@ -29728,3 +29728,43 @@ Refresh after source/toolchain/device/model/workload changes.
   runtime/device/OS drift or contradictory evidence. Standing authority: serial
   run_safe,15% floor, unrelated processes untouched, exact-path local atomic
   commit/no push. Rollback flags/defaults or this isolated feature commit.
+
+### Continuation 2026-10-16 — first-prefill startup attribution
+
+- Base `ccb0d178`: default-off `DRAMA3_METAL_RESOURCES=1` observes process
+  user/system CPU, task page-ins/faults and process disk-read/resident/footprint
+  counters. Requires graph depth1/2 and implies timeline. Passive Metal kernel
+  scheduling timestamps are read after the existing completion wait. No shader,
+  precision, inference synchronization, GPU activation read or default change.
+- Twelve off/on/on/off requests retain full60x11 codes, WAV, sampler and
+  122-wait/read ledgers. Six observer-on first commands show10.7–24.7ms before
+  commit,11.38–11.96s cold or0.35–4.83s warm driver scheduling, and0.163–0.195s
+  GPU execution. Cold after-commit process counters add1,464,429 page-ins and
+  about24GB reads; warm has zero registered page-ins/reads and0.35–4.82s system
+  CPU. Cold means new process/mappings, not purged filesystem cache. Page-in is
+  insufficient to explain warm spread; its duration and pure GPU queue delay
+  remain unidentified. Kernel timestamp epoch is not assumed mach-relative.
+- Separate own-worker warm CPU samples locate Metal submission in
+  `IOGPUCommandQueueSubmitCommandBuffers -> iokit_user_client_trap`; main thread
+  waits at the existing completion boundary. Three additional outputs remain
+  exact. Samples do not identify work below the trap or turn stack counts into
+  CPU time. Overlapping resource windows are distributions, never request sums;
+  mini-Quad rejected and corrected the initial additive interpretation.
+- Native observer test,63 Metal/6 CPU/23 offline cases, same-tape saved MLX full
+  codes and158-row prefill pass unchanged3e-5/3e-4 gates. Known MoE39 full
+  intermediate failure stays open. Pair-wrapper interruption is disclosed:
+  child driver PASS and12 manifests establish completion, no wrapper exit or
+  uninterrupted memory guard is claimed. No performance gain is promoted.
+  Final correlated mini-Quad verdict is ROBUST for the bounded diagnostic and
+  attribution scope; work below the driver kernel trap remains unresolved.
+- Report `docs/drama3-prefill-startup.md`, curated
+  `.landmark/evidence/drama3-prefill-startup.json`; raw local external SSD
+  `drama3-prefill-start-20261016/`. Next falsifier: establish resource
+  revalidation in the submission corridor; compare stable resource identity
+  with fresh wrappers over the same mappings, preserving queue/numeric gates.
+  Return numeric frontier: MoE39/common-prefix and DAC post-module stage.
+- Refresh on source/shader/model/input/tape/fixture/tolerance/graph/storage/
+  runtime/device/OS changes, contradictory results or evidence eviction.
+  Standing authority: serial run_safe,15% floor, unrelated processes untouched,
+  exact-path local atomic commit/no push. Disable diagnostics or revert the
+  isolated commit to roll back; no residency/lifetime rewrite is admitted yet.

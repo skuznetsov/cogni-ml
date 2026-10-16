@@ -78,3 +78,28 @@ describe "DRAMA-3 fixed host profile" do
     end
   {% end %}
 end
+
+# Independent API groups remain optional; unknown process metrics are not zero.
+describe ML::Audio::Drama3::HostResourceSnapshot do
+  it "keeps unavailable resource groups null" do
+    values = StaticArray(UInt64, 8).new { |index| index.to_u64 + 1_u64 }
+    snapshot = ML::Audio::Drama3::HostResourceSnapshot.new(1.0, 2.0, values, 1)
+    snapshot.user_ns.should eq(1_u64)
+    snapshot.system_ns.should eq(2_u64)
+    snapshot.pageins.should be_nil
+    snapshot.disk_read_bytes.should be_nil
+    JSON.parse(snapshot.to_json)["pageins"].raw.should be_nil
+  end
+
+  it "preserves task and process observations as separate fields" do
+    values = StaticArray(UInt64, 8).new { |index| index.to_u64 + 1_u64 }
+    snapshot = ML::Audio::Drama3::HostResourceSnapshot.new(1.0, 2.0, values, 6)
+    snapshot.user_ns.should be_nil
+    snapshot.pageins.should eq(3_u64)
+    snapshot.faults.should eq(4_u64)
+    snapshot.cow_faults.should eq(5_u64)
+    snapshot.disk_read_bytes.should eq(6_u64)
+    snapshot.resident_bytes.should eq(7_u64)
+    snapshot.footprint_bytes.should eq(8_u64)
+  end
+end

@@ -34,6 +34,7 @@ require "../wav"
       # for the next job instead of resuming potentially partial GPU state.
       def generate(input : JSON::Any, output : String, &progress : String -> Nil) : JSON::Any
         started = Time.instant
+        resources_before = HostResourceSnapshot.capture if @context.resources_enabled
         host_before = @context.host_profile.snapshot
         raise ArgumentError.new("output already exists") if File.exists?(output) || File.exists?(output + ".json")
         text = input["text"].as_s
@@ -71,6 +72,7 @@ require "../wav"
         generation_started = Time.instant
         generation_alloc = @context.allocation_stats
         host_generation = @context.host_profile.snapshot
+        resources_generation = HostResourceSnapshot.capture if @context.resources_enabled
         result = if reference && plan
                    progress.call("Кодирование референса")
                    audio = ReferenceAudio.upload(reference, @context)
@@ -84,6 +86,7 @@ require "../wav"
                  end
         generation_seconds = (Time.instant - generation_started).total_seconds
         host_codec = @context.host_profile.snapshot
+        resources_codec = HostResourceSnapshot.capture if @context.resources_enabled
         codec_alloc = @context.allocation_stats
         count = result.generation.frames.size
         raise ArgumentError.new("model produced EOS without audio") if count == 0
@@ -99,6 +102,7 @@ require "../wav"
         raise ArgumentError.new("waveform is silent") unless peak > 1e-6 && rms > 1e-7
         Wav.write(output, samples)
         host_after_wav = @context.host_profile.snapshot
+        resources_after_wav = HostResourceSnapshot.capture if @context.resources_enabled
         graph = @context.graph_stats
         raise "unfinished GPU job" unless graph["pending"] == 0 && graph["completed"] == graph["submitted"]
         reads = @context.readbacks.transform_values { |value, key| value - (before_reads[key]? || 0_i64) }
@@ -127,6 +131,10 @@ require "../wav"
                                                          allocation_ns: allocation[:allocation_ns] - codec_alloc[:allocation_ns]}},
                              resident_dac_scratch: codec.dac_scratch_stats,
                              resident_generation_scratch: generator.workspace_stats,
+                             host_resources: @context.resources_enabled ? {request_begin: resources_before,
+                                                                           generation_begin: resources_generation,
+                                                                           generation_end: resources_codec,
+                                                                           wav_end: resources_after_wav} : nil,
                              host_profile: {enabled: @context.host_profile.enabled?,
                                             initialize: HostProfile.delta(host_before, host_generation),
                                             generation: HostProfile.delta(host_generation, host_codec),

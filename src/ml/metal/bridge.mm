@@ -170,6 +170,46 @@ static double command_mach_seconds() {
     return (double)mach_absolute_time() * seconds_per_tick;
 }
 
+// Process/task observations only. These counters do not certify Metal page
+// residency and never submit, synchronize, touch mapped weights or read buffers.
+// values: user ns, system ns, task pageins/faults/COW faults, process disk-read
+// bytes/resident bytes/physical footprint. Bits certify independent API groups.
+extern "C" int32_t gs_drama3_process_resources(uint64_t* values,
+                                               double* sample_begin,
+                                               double* sample_end) {
+    if (!values || !sample_begin || !sample_end) return 0;
+    std::fill(values, values + 8, 0);
+    *sample_begin = command_mach_seconds();
+    int32_t valid = 0;
+    rusage cpu = {};
+    if (getrusage(RUSAGE_SELF, &cpu) == 0) {
+        values[0] = uint64_t(cpu.ru_utime.tv_sec) * 1000000000ULL + uint64_t(cpu.ru_utime.tv_usec) * 1000ULL;
+        values[1] = uint64_t(cpu.ru_stime.tv_sec) * 1000000000ULL + uint64_t(cpu.ru_stime.tv_usec) * 1000ULL;
+        valid |= 1;
+    }
+    task_events_info_data_t events = {};
+    mach_msg_type_number_t count = TASK_EVENTS_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_EVENTS_INFO,
+                  reinterpret_cast<task_info_t>(&events), &count) == KERN_SUCCESS &&
+            count == TASK_EVENTS_INFO_COUNT && events.pageins >= 0 &&
+            events.faults >= 0 && events.cow_faults >= 0) {
+        values[2] = events.pageins;
+        values[3] = events.faults;
+        values[4] = events.cow_faults;
+        valid |= 2;
+    }
+    rusage_info_v4 usage = {};
+    if (proc_pid_rusage(getpid(), RUSAGE_INFO_V4,
+            reinterpret_cast<rusage_info_t*>(&usage)) == 0) {
+        values[5] = usage.ri_diskio_bytesread;
+        values[6] = usage.ri_resident_size;
+        values[7] = usage.ri_phys_footprint;
+        valid |= 4;
+    }
+    *sample_end = command_mach_seconds();
+    return valid;
+}
+
 static bool pipeline_profile_enabled() {
     const char* raw = std::getenv("COGNI_METAL_PIPELINE_PROFILE");
     return raw != nullptr && raw[0] == '1' && raw[1] == '\0';
@@ -661,13 +701,19 @@ extern "C" int32_t gs_wait_command_buffer_status_timeline(
     double* mach_after_wait,
     double* gpu_start,
     double* gpu_end,
-    int32_t* gpu_timing_valid
+    int32_t* gpu_timing_valid,
+    double* kernel_start = nullptr,
+    double* kernel_end = nullptr,
+    int32_t* kernel_timing_valid = nullptr
 ) {
     if (mach_before_wait != nullptr) *mach_before_wait = 0.0;
     if (mach_after_wait != nullptr) *mach_after_wait = 0.0;
     if (gpu_start != nullptr) *gpu_start = 0.0;
     if (gpu_end != nullptr) *gpu_end = 0.0;
     if (gpu_timing_valid != nullptr) *gpu_timing_valid = 0;
+    if (kernel_start != nullptr) *kernel_start = 0.0;
+    if (kernel_end != nullptr) *kernel_end = 0.0;
+    if (kernel_timing_valid != nullptr) *kernel_timing_valid = 0;
     if (cmd_handle == nullptr) return -1;
 
     id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)cmd_handle;
@@ -682,6 +728,15 @@ extern "C" int32_t gs_wait_command_buffer_status_timeline(
     const bool gpu_valid = status == 0 && command_timeline_valid(
         mach_before_commit, start, end, after_wait);
     if (gpu_timing_valid != nullptr) *gpu_timing_valid = gpu_valid ? 1 : 0;
+    // Passive CPU driver scheduling timestamps; only read after the same wait.
+    // A long interval is not a page-in-duration or a pure GPU-queue certificate.
+    const double kstart = cmd.kernelStartTime;
+    const double kend = cmd.kernelEndTime;
+    if (kernel_start != nullptr) *kernel_start = kstart;
+    if (kernel_end != nullptr) *kernel_end = kend;
+    if (kernel_timing_valid != nullptr) {
+        *kernel_timing_valid = status == 0 && command_schedule_valid(kstart, kend) ? 1 : 0;
+    }
     return status;
 }
 

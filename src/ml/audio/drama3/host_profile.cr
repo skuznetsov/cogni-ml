@@ -9,7 +9,53 @@ require "json"
   end
 {% end %}
 
+{% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
+  lib LibDrama3HostResources
+    fun capture = gs_drama3_process_resources(values : UInt64*, sample_begin : Float64*, sample_end : Float64*) : Int32
+  end
+{% end %}
+
 module ML::Audio::Drama3
+  # Optional, process-wide observations. Missing fields are unavailable, not
+  # zero cost. The task counters do not establish GPU/driver page residency.
+  @[JSON::Serializable::Options(emit_nulls: true)]
+  struct HostResourceSnapshot
+    include JSON::Serializable
+
+    getter sample_begin_s : Float64
+    getter sample_end_s : Float64
+    getter user_ns : UInt64?
+    getter system_ns : UInt64?
+    getter pageins : UInt64?
+    getter faults : UInt64?
+    getter cow_faults : UInt64?
+    getter disk_read_bytes : UInt64?
+    getter resident_bytes : UInt64?
+    getter footprint_bytes : UInt64?
+
+    def initialize(@sample_begin_s : Float64, @sample_end_s : Float64,
+                   values : StaticArray(UInt64, 8), valid : Int32)
+      @user_ns = values[0] if valid & 1 != 0
+      @system_ns = values[1] if valid & 1 != 0
+      @pageins = values[2] if valid & 2 != 0
+      @faults = values[3] if valid & 2 != 0
+      @cow_faults = values[4] if valid & 2 != 0
+      @disk_read_bytes = values[5] if valid & 4 != 0
+      @resident_bytes = values[6] if valid & 4 != 0
+      @footprint_bytes = values[7] if valid & 4 != 0
+    end
+
+    def self.capture : HostResourceSnapshot
+      values = StaticArray(UInt64, 8).new(0_u64)
+      before = after = 0.0_f64
+      valid = 0
+      {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
+        valid = LibDrama3HostResources.capture(values.to_unsafe, pointerof(before), pointerof(after))
+      {% end %}
+      new(before, after, values, valid)
+    end
+  end
+
   # Keep the enum order stable: it is also the index order for the fixed-size
   # profile arrays below.
   enum HostEvent
