@@ -1,0 +1,428 @@
+{
+  "format": "landmark-evidence-v1",
+  "id": "drama3-studio",
+  "created_at_utc": "2026-10-16T04:27:09.325571+00:00",
+  "base_revision": "37ee7fdd49d44416d58f8acaf9140285812ab466",
+  "allowed_paths": [
+    "Makefile",
+    "README.md",
+    "examples/drama3_studio.cr",
+    "src/ml/audio/drama3/studio/assets/app.js",
+    "src/ml/audio/drama3/studio/assets/index.html",
+    "src/ml/audio/drama3/studio/assets/style.css",
+    "src/ml/audio/drama3/studio/backend.cr",
+    "src/ml/audio/drama3/studio/engine.cr",
+    "src/ml/audio/drama3/studio/media.cr",
+    "src/ml/audio/drama3/studio/server.cr",
+    "src/ml/audio/drama3/studio/store.cr",
+    "spec/drama3_studio_http_spec.cr",
+    "spec/drama3_studio_media_spec.cr",
+    "spec/drama3_studio_store_spec.cr",
+    "spec/drama3_studio_worker_spec.cr",
+    "docs/drama3-studio.md",
+    "docs/drama3-studio-frontier.md",
+    "LANDMARKS.md",
+    ".landmark/evidence/drama3-studio.json"
+  ],
+  "claim": {
+    "status": "VERIFIED",
+    "scope": "Local loopback persistent voice/session/take studio, serial native Metal worker and ordered WAV/MP3/Opus exports within tested bounds.",
+    "excluded": [
+      "Listening/voice identity, natural prosody or silence repair",
+      "General upstream MoE/DAC parity",
+      "Multi-user or network hosting",
+      "Hard-crash all-or-nothing/fsync durability or orphan sweep",
+      "Whole-pipeline GPU-only I/O, no GC/allocations or end-to-end speedup"
+    ]
+  },
+  "risk_and_rollback": {
+    "tier": "CAUTION",
+    "strongest_failure": "Late jobs overwrite edited revisions, repeated jobs leak recurrent state, file and manifest diverge, or a hung child blocks the queue.",
+    "guards": "Immutable job snapshots and revision-aware selection, fresh KV/recurrent state, static-only tensor caching, metadata rollback/tombstones, restart recovery, retrying persistence faults, bounded worker quiet timeout and ffmpeg TERM/KILL/reap.",
+    "rollback": "Revert studio commit and use standalone generator; preserve local data directory for recovery. No remote deployment or model change."
+  },
+  "runtime": {
+    "device": "Apple M2 Max",
+    "physical_bytes": 68719476736,
+    "os": "macOS 26.6.2 (25G83)",
+    "crystal": "1.22.0",
+    "mlx": "0.31.1",
+    "upstream_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+    "upstream_worktree_clean": true,
+    "model": "cguldogan/drama-3-mlx-q4",
+    "model_revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+    "codec_sha256": "543445a2ebc5224d2af5956d422f88c2cd21f4018c1a26d81b51ec231bb630f2",
+    "execution": "Serial run_safe, 15 percent physical free-memory floor, quiet-host check off; unrelated processes untouched.",
+    "native_options": {
+      "backend": "metal",
+      "graph_depth": 2,
+      "mmap_shared": false,
+      "dac_scratch": false,
+      "memory_profile": false,
+      "tower_embedding_fusion": false
+    },
+    "http": "127.0.0.1:8787",
+    "data_directory": "/Users/sergey/.local/share/cogni-ml/drama3-studio"
+  },
+  "features": [
+    "Reference import <=10s mono44100 PCM16 with transcript",
+    "Separate persistent editing sessions; rename/archive/restore",
+    "Per-segment text/settings/reference edits and regeneration",
+    "Immutable take history and selected-take switching",
+    "Serialized jobs and warm static model worker; fresh per-job state",
+    "Audio library playback/download/deletion dependency guards",
+    "Ordered selected-take WAV/MP3/Opus export without added silence",
+    "Loopback Host/Origin checks, bounded uploads/JSON and validated IDs"
+  ],
+  "results": {
+    "cpu_examples": 18,
+    "cpu_failures": 0,
+    "focused_metal_examples": 4,
+    "focused_metal_failures": 0,
+    "actual_browser_generation_jobs": 3,
+    "actual_browser_exports": 3,
+    "reference_conditioned_jobs": 2,
+    "warm_jobs": 2,
+    "ordered_WAV_PCM_exact": true,
+    "native_no_reference_WAV_equals_repeated_probe": true,
+    "browser_management": {
+      "rename_archive_restore_pass": true,
+      "earlier_take_selected_then_restored": true,
+      "download_exact": true,
+      "download_sha256": "3123bae1074d03cf2af5b2df4afb893878ac922cd7aef89cf9b1ddeed77f204e",
+      "download_bytes": 59150
+    },
+    "final_ui": {
+      "passed": true,
+      "scope": "Real persisted state after restart; mocked API responses only for UI dependency/fault/progress transitions, never generation evidence",
+      "checks": [
+        "empty session copy",
+        "voice choices update",
+        "queued/running/complete disables and reenables generate",
+        "per-frame progress does not rebuild editor",
+        "dirty draft retained",
+        "focus and caret retained",
+        "settings/history remain open",
+        "export format retained",
+        "queue warning recovery",
+        "unsaved test text not persisted",
+        "short duration decimal",
+        "desktop/mobile no horizontal overflow",
+        "no JS or console errors during final probe"
+      ],
+      "source_sha256": "9385bee2e19359230f05e6361b5884a0c8daa464256b844cde0c7ff06116292f",
+      "exit_code": 0,
+      "log_sha256": "a272a72e99790f264296bdd7661ea55e808c9f2e4fb78bf202956bc417ce4323",
+      "created_at_utc": "2026-10-16T04:23:50.135148+00:00"
+    },
+    "playback": {
+      "passed": true,
+      "players": 9,
+      "scope": "Muted Chromium decode/playhead smoke for actual local WAV, MP3 and Opus assets; not listening or voice quality"
+    },
+    "embedded_assets": {
+      "assets": [
+        {
+          "asset": "app.js",
+          "served_bytes_equal_source": true,
+          "sha256": "af3e17911608ea37844d80d357dcc313d30025b33d0114d20b4153e798e0f2fd"
+        },
+        {
+          "asset": "style.css",
+          "served_bytes_equal_source": true,
+          "sha256": "2c4848aac1abdcfa9e2f2197dbeed86d2ffac99a5c46fc3d7f4cdb9b2d3575bc"
+        },
+        {
+          "asset": "index.html",
+          "served_bytes_equal_source": true,
+          "sha256": "969abc50e77127519cfc8e314e97a4337c268ab8bd91e7b206e585dcb8f0d3fd"
+        }
+      ],
+      "binary_sha256": "7021c144d8b3f44712462c30ba80a81280238ce7ccefb7ca0cd8cd2893354456",
+      "binary_bytes": 2475040,
+      "created_at_utc": "2026-10-16T04:25:11.460510+00:00",
+      "scope": "Final v4 compiled and served assets match current source; active server uses this binary."
+    },
+    "upstream_shared_tape_all_60_frames_exact": true,
+    "prefill_unchanged_gate_passes": true,
+    "ordered_WAV_validation": {
+      "passed": true,
+      "ordered_PCM_exact": true,
+      "sample_rate": 44100,
+      "PCM_bytes": 294912,
+      "PCM_sha256": "7c7fe5d217faa4f3c2223c6a0e8517a8fb6d09d2bd0b57d0ce7057ed73cd0d47",
+      "input_asset_ids": [
+        "b66f624a-5dd9-4a4b-8675-2f133b705e97",
+        "da34e7a0-7f3c-4a0e-9764-85ddc619adab"
+      ],
+      "input_files": [
+        {
+          "path": "/Users/sergey/.local/share/cogni-ml/drama3-studio/assets/generate-7caeeef7-540b-4dbc-a55b-763df2410f6f.wav",
+          "sha256": "38f2530ed1c90f0caba45e222432909ac5d92cc3633e4c34a21fbe39d693e07d"
+        },
+        {
+          "path": "/Users/sergey/.local/share/cogni-ml/drama3-studio/assets/generate-89dc30db-f7ba-4198-b7c9-ee5840707c0c.wav",
+          "sha256": "05b2ac7c8cc38b7527f895713113b977ce7f941d1be942092cdd5e841fd5537e"
+        }
+      ],
+      "export": {
+        "path": "/Users/sergey/.local/share/cogni-ml/drama3-studio/assets/export-9467a24a-9566-4371-88d7-215c1874c581.wav",
+        "sha256": "ec45f8629e520d3053ed1a94690690f579b2f5435aeba766d536ff845cad4216"
+      },
+      "all_three_generation_and_export_file_hashes_unchanged": true,
+      "created_at_utc": "2026-10-16T04:28:31.635309+00:00"
+    }
+  },
+  "dod_commands": [
+    {
+      "name": "studio-cpu-v7",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/opt/homebrew/bin/crystal",
+        "900",
+        "40960",
+        "spec",
+        "-Dcpu_only",
+        "spec/drama3_studio_store_spec.cr",
+        "spec/drama3_studio_media_spec.cr",
+        "spec/drama3_studio_http_spec.cr",
+        "spec/drama3_studio_worker_spec.cr"
+      ],
+      "started_at_utc": "2026-10-16T04:11:26.703751+00:00",
+      "finished_at_utc": "2026-10-16T04:11:38.061432+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 11.288126125000417,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/studio-cpu-v7.log",
+      "log_sha256": "455d175c02d4e22dc964e8501153894570842ab2614c4cdf0207b989232b56cc"
+    },
+    {
+      "name": "studio-metal-build-v3",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/usr/bin/make",
+        "900",
+        "40960",
+        "drama3_studio",
+        "CRYSTAL=/opt/homebrew/bin/crystal",
+        "BUILD_DIR=/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015",
+        "BRIDGE_OBJ=/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/bridge.o"
+      ],
+      "started_at_utc": "2026-10-16T04:11:43.365706+00:00",
+      "finished_at_utc": "2026-10-16T04:12:13.507220+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 30.07882845820859,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/studio-metal-build-v3.log",
+      "log_sha256": "2a994aa7d261b0c7c05491cd5466fdf2539f33fd34c3c02427e60f4b3ccc5ec7"
+    },
+    {
+      "name": "studio-metal-build-v4",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/usr/bin/make",
+        "900",
+        "40960",
+        "drama3_studio",
+        "CRYSTAL=/opt/homebrew/bin/crystal",
+        "BUILD_DIR=/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015",
+        "BRIDGE_OBJ=/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/bridge.o"
+      ],
+      "started_at_utc": "2026-10-16T04:20:28.750940+00:00",
+      "finished_at_utc": "2026-10-16T04:20:44.526810+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 15.746605250053108,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/studio-metal-build-v4.log",
+      "log_sha256": "66b8c2c6cc19864641b952106f96dc7c266efcd25d7a69b222ff9fd09f36db92"
+    },
+    {
+      "name": "final-format-v1",
+      "argv": [
+        "scripts/run_safe.sh",
+        "/opt/homebrew/bin/crystal",
+        "900",
+        "40960",
+        "tool",
+        "format",
+        "--check",
+        "examples/drama3_embedding_benchmark.cr",
+        "examples/drama3_studio.cr",
+        "spec/drama3_tower_resident_spec.cr",
+        "spec/drama3_studio_store_spec.cr",
+        "spec/drama3_studio_media_spec.cr",
+        "spec/drama3_studio_http_spec.cr",
+        "spec/drama3_studio_worker_spec.cr",
+        "src/ml/audio/drama3/resident.cr",
+        "src/ml/audio/drama3/tower_resident.cr",
+        "src/ml/audio/drama3/studio/engine.cr",
+        "src/ml/audio/drama3/studio/backend.cr",
+        "src/ml/audio/drama3/studio/media.cr",
+        "src/ml/audio/drama3/studio/server.cr",
+        "src/ml/audio/drama3/studio/store.cr"
+      ],
+      "started_at_utc": "2026-10-16T04:24:03.358503+00:00",
+      "finished_at_utc": "2026-10-16T04:24:04.109117+00:00",
+      "exit_code": 0,
+      "wrapper_seconds": 0.715765833389014,
+      "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/final-format-v1.log",
+      "log_sha256": "ddfee695197485f051866064662a594dec91453d088b1a535b446592abab238b"
+    }
+  ],
+  "failure_probes": [
+    "Stale revisions and late completion retained without selecting",
+    "Invalid IDs/settings/origin/Host/body/range requests",
+    "Selected/active/export-dependent assets cannot be deleted",
+    "Injected manifest write failures roll back and consumer retries",
+    "Idle queue claim performs no manifest write",
+    "Interrupted jobs fail on startup; pending deletions restored/cleaned",
+    "Ready-then-hung worker is killed/reaped and next job respawns",
+    "Hung ffmpeg ignoring TERM with flooded stderr is killed, bounded, partial output removed",
+    "Closed backend cannot respawn; same data root locked; inherited CPU backend rejected"
+  ],
+  "adversary": {
+    "verdict": "ROBUST",
+    "scope": "Bounded local workflows and failure behavior supported by executed tests and real GPU/browser/files. Correlated mini-Quadrumvirate review.",
+    "residual_limits": [
+      "Hard crash between output write and registration can leave an unregistered WAV/sidecar; no fsync guarantee.",
+      "Each segment is independently generated; matching voice, seamless transitions, complete spoken text and acting quality are not certified.",
+      "Existing MoE39/expert108 and DAC first post-module/full gates remain open.",
+      "Dirty browser drafts are not persisted until saved; generation snapshots saved text."
+    ],
+    "next_falsifier": "Longer reference-conditioned multi-segment session with listening and unchanged upstream numeric probes; separate backend profiling before more workspace reuse."
+  },
+  "lineage": {
+    "source_sha256": {
+      "Makefile": "7ea378c60610c35da939e55c75cf6cb3b6b2355fb793ba8b6af38a499256fd5d",
+      "README.md": "7d140a26948a54b277b0488c6170b630236f1f4d95bda837117cb7465ceca71a",
+      "examples/drama3_studio.cr": "567d0f9d11707297edeba734bc9793967fcee4eb1452fbd542c5881af47919a5",
+      "src/ml/audio/drama3/studio/assets/app.js": "af3e17911608ea37844d80d357dcc313d30025b33d0114d20b4153e798e0f2fd",
+      "src/ml/audio/drama3/studio/assets/index.html": "969abc50e77127519cfc8e314e97a4337c268ab8bd91e7b206e585dcb8f0d3fd",
+      "src/ml/audio/drama3/studio/assets/style.css": "2c4848aac1abdcfa9e2f2197dbeed86d2ffac99a5c46fc3d7f4cdb9b2d3575bc",
+      "src/ml/audio/drama3/studio/backend.cr": "6859826a22c8744d2169fd72e2e5fbf072a28f4eb2889e05b1925b50b4824a59",
+      "src/ml/audio/drama3/studio/engine.cr": "799055e3aaca701e81dd878f93deed5672a884b3850e2e0c5114ade1a7a4d93a",
+      "src/ml/audio/drama3/studio/media.cr": "534ede6b3dd196d0c60f5c8f59714039cd28a9a227fd7fe2b2bb9903443b59d6",
+      "src/ml/audio/drama3/studio/server.cr": "644a3f119a1571f36d786bfaad71a724218d319f1d5094c2161b50615af32b01",
+      "src/ml/audio/drama3/studio/store.cr": "256ca84e613e1f2eb0dbd747039f8f1ada87dd55c0559b30ca7dc8bed497c919",
+      "spec/drama3_studio_http_spec.cr": "22039df119f04f63e4f78b5333726118098c2f074531c35c29beaeec40de81db",
+      "spec/drama3_studio_media_spec.cr": "240c0a90ba59497a96cc72590d6ff65f9875f3e4b9c0362406f5614a58019055",
+      "spec/drama3_studio_store_spec.cr": "e87b48aaa373b101a27c26652f47da54ecb01b8226841896dfc572cc2247ccaf",
+      "spec/drama3_studio_worker_spec.cr": "a0a1553ca7c96d3713e716cbe0deb14b44f1d8da835702ab7dd9721015dfab76",
+      "docs/drama3-studio.md": "8f2fd71247a2c1082f5555795e6ca8aafa1e074cb6c14f34f0fc4c8432bdd316",
+      "docs/drama3-studio-frontier.md": "56b44bc08d58c999ed9e6082db8e28760fff5d8faeb410c17b2a7cf02f73ce8e"
+    },
+    "bindings": [
+      {
+        "command": "studio-cpu-v7",
+        "current_source_matches": true,
+        "source_count": 10,
+        "path_list_sha256": "5f69c1f52a51130a437ecd29817ff4730e63dbbbee168027d74bca286eab6c76"
+      },
+      {
+        "command": "studio-metal-build-v3",
+        "current_source_matches": true,
+        "source_count": 10,
+        "path_list_sha256": "5f69c1f52a51130a437ecd29817ff4730e63dbbbee168027d74bca286eab6c76"
+      },
+      {
+        "command": "studio-metal-build-v4",
+        "current_source_matches": true,
+        "source_count": 10,
+        "path_list_sha256": "5f69c1f52a51130a437ecd29817ff4730e63dbbbee168027d74bca286eab6c76"
+      }
+    ],
+    "native_core_matches_repeated_probe": true,
+    "binding_scope": "Actual generation/exports use build-v3. All Crystal sources match final build-v4; only embedded UI assets changed, then were checked against served bytes and browser regressions. UI fault/progress tests mock API responses and do not count as generation evidence.",
+    "decay_trigger": "Source/assets/checkpoint/input/tape/runtime/device/OS/graph/schema/precision/tolerance changes; rerun relevant store/media/worker/browser/upstream gates.",
+    "native_core_dependency_commit": "daa4e1678e65459af3c3cc0534f3c4f35443a9b4"
+  },
+  "artifacts": [
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/commands.json",
+      "sha256": "c95487fe6ddb7b1e4be6087a850a81c77cab645c3ff344da721af503ec4e6cf7",
+      "bytes": 475156
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/run.py",
+      "sha256": "1511d1e5e7dc18223aa2dc8c58ee39a5725eff187f71aecc1bfab272a3c17164",
+      "bytes": 3385
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/browser-functional.json",
+      "sha256": "b6de71b2a42192373cc804ae28780f4e4a9df895a89b0776e3670b17fd8db38f",
+      "bytes": 5343
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/browser-management.json",
+      "sha256": "4660512a7785a4d9dbda09b2bc7e23ff665b7973ffc4ddacb2d7aaa02ccf2d2f",
+      "bytes": 231
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/browser-ui-final.json",
+      "sha256": "963fa7f2f9d72fa433ddc2d68ca578d6136e8bfd2483b8383cae0139fa5b3c00",
+      "bytes": 919
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/browser-ui-final.js",
+      "sha256": "0ab404ef0e602d42021ff3f7001dbcf28941cb225fdc9cce17c85c5f29126c06",
+      "bytes": 5330
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/browser_ui_probe.py",
+      "sha256": "96c61f62e17ce39beed4c3f76aaaa46e01efee54f5d13826c49ee5f18f1cd633",
+      "bytes": 6785
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/browser-ui-final.log",
+      "sha256": "a272a72e99790f264296bdd7661ea55e808c9f2e4fb78bf202956bc417ce4323",
+      "bytes": 5379
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/browser-playback.json",
+      "sha256": "4565dd930cebffd3f13f00b8f95dd91032e369bc6e3f280525cd2598b7046980",
+      "bytes": 2278
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/browser-playback.log",
+      "sha256": "0d3279baaba00522117ac97e81d34c107c534ef02fb22623707377111783ae07",
+      "bytes": 2157
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/embedded-assets.json",
+      "sha256": "592a1ccbad3eeba93ab78809ed1b3d53a932562a3e0fca98c43b619a1775c019",
+      "bytes": 788
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/cli-guards.json",
+      "sha256": "a2b6eaaf11c3c8bcfb80c57fc5513aabdb6ecea50e1809c0816f081271d7f09c",
+      "bytes": 1137
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/drama3_studio",
+      "sha256": "7021c144d8b3f44712462c30ba80a81280238ce7ccefb7ca0cd8cd2893354456",
+      "bytes": 2475040
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/output/playwright/studio-desktop-final.png",
+      "sha256": "78c77620eeea044d689d68d86b90b51009bf9fb3bcad282688f1304ccc9c4d53",
+      "bytes": 231208
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/output/playwright/studio-mobile-final.png",
+      "sha256": "980cbd27cf465fcb4c10312888ec559e2e1cf8cde804a2144f91760955970009",
+      "bytes": 190193
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/curate_evidence.py",
+      "sha256": "339fc45556a1f62e70825527cd8f0214a138ab5474ea249c75a6f820dbcb0c10",
+      "bytes": 13580
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/audio-validation.json",
+      "sha256": "0d9ba1bb5b330e674b6b411747c71c586d81a3e24d45e864e7a57db573e08862",
+      "bytes": 1100
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/studio-20261015/validate_audio.py",
+      "sha256": "e768d5efacfae5a68ff7f8b12715c10e8d2471af7e107920ba6544f2ea64f1f2",
+      "bytes": 1572
+    }
+  ]
+}

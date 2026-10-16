@@ -26,7 +26,7 @@ BRIDGE_OBJ := $(BUILD_DIR)/bridge.o
 
 LINK_FLAGS := -framework Metal -framework Foundation -lc++
 
-.PHONY: all spec build spec_cpu build_cpu llama llama_env profile_nomic profile_nomic_layers profile_nomic_vs_llama benchmark_qwen_prefill_vs_llama_same_token benchmark_qwen_decode_vs_llama_same_token q4k_ref clean help
+.PHONY: all spec build spec_cpu build_cpu drama3_studio llama llama_env profile_nomic profile_nomic_layers profile_nomic_vs_llama benchmark_qwen_prefill_vs_llama_same_token benchmark_qwen_decode_vs_llama_same_token q4k_ref clean help
 
 all: spec
 
@@ -45,6 +45,12 @@ spec: $(BRIDGE_OBJ)
 build: $(BRIDGE_OBJ)
 	$(CRYSTAL) build src/ml.cr \
 		--link-flags="$(shell pwd)/$(BRIDGE_OBJ) $(LINK_FLAGS)"
+
+drama3_studio: $(BRIDGE_OBJ) | $(BUILD_SENTINEL)
+	@test "$(IS_DARWIN)" = Darwin || (echo "DRAMA Studio requires macOS Metal"; exit 1)
+	$(CRYSTAL) build examples/drama3_studio.cr --release -Ddrama3_metal \
+		-o $(BUILD_DIR)/drama3_studio \
+		--link-flags="$(abspath $(BRIDGE_OBJ)) $(LINK_FLAGS) -framework MetalPerformanceShaders -fuse-ld=/usr/bin/ld"
 
 profile_nomic: $(BRIDGE_OBJ)
 	$(CRYSTAL) run bin/profile_nomic_stages.cr \
@@ -141,6 +147,7 @@ help:
 	@echo "Targets:"
 	@echo "  spec  - run specs with Metal bridge linked"
 	@echo "  build - compile library entrypoint"
+	@echo "  drama3_studio - build the local native Metal voice studio"
 	@echo "  spec_cpu  - run specs in CPU-only mode"
 	@echo "  build_cpu - build in CPU-only mode"
 	@echo "  profile_nomic - run native Metal stage profiler for nomic GGUF"

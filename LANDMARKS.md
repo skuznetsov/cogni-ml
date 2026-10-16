@@ -29561,3 +29561,43 @@ Refresh after source/toolchain/device/model/workload changes.
 - Refresh on source/shader/model/input/tape/runtime/device/OS/graph/precision/
   tolerance drift. Authority remains serial run_safe,15% reserve, unrelated
   processes untouched, local commits/no push. Rollback flag0 or this commit.
+
+### Continuation 2026-10-16 — local native voice studio
+
+- A loopback Crystal HTTP app now owns persistent editing sessions, reference
+  voices, segment revisions, immutable takes, serialized generation/export jobs
+  and local WAV/MP3/Opus files. Build with `make drama3_studio`; usage and bounds
+  in `docs/drama3-studio.md`, admitted frontier in `drama3-studio-frontier.md`.
+- One lazy native Metal worker reuses static model mappings/tensors/pipelines;
+  every job receives fresh KV/recurrent state. Reference encoding, generation
+  and DAC remain resident. Existing EOS/terminal reads and waits remain; host
+  media I/O and between-job GC are explicit. No GC-free or total-speed claim.
+- Revision snapshots keep late results in history without selecting over newer
+  edits. Exports snapshot selected takes in order. Selected/active/export-source
+  assets have deletion guards; metadata failures roll back and pause/retry the
+  consumer. Startup fails interrupted jobs and recovers deletion tombstones.
+  Worker quiet timeout5min and ffmpeg timeout30s kill/reap owned hung children.
+- Final18 CPU examples pass, including stale revisions, persistence faults,
+  invalid HTTP/ranges, ordered PCM/codecs and hung-child recovery. Release Metal
+  Makefile build passes. All final Crystal sources match the tested source;
+  served embedded assets match source bytes. UI polls retain drafts, focus/caret,
+  disclosures and export format; frame/detail progress does not rebuild editor.
+- Real browser flow: two sessions across restart; one public reference import;
+  three GPU jobs (one no-reference/two reference, two warm); take selection,
+  rename/archive/restore; three exports and byte-exact Opus download. WAV PCM
+  exactly equals ordered selected-source PCM. Chromium decodes/advances all three
+  formats. Desktop/mobile have no horizontal overflow or JS errors in final
+  bounded probe. Mocked UI progress/fault transitions are not GPU evidence.
+- No-reference browser WAV equals the eight-job repeated probe; pinned MLX
+  shared-tape60-frame/full11ID check and old prefill gates pass. No general
+  MoE/DAC, silence/prosody, seamless segment or voice-identity certificate.
+  Hard crashes may leave unregistered output/report files; no orphan sweep or
+  fsync durability guarantee. Keep service local; no multi-user boundary.
+- Curated `.landmark/evidence/drama3-studio.json`, raw local
+  `drama3-runs/studio-20261015/`; correlated mini-Quad ROBUST for bounded workflow.
+  Next falsifier: longer reference-conditioned sessions plus listening and
+  unchanged upstream gates. Return numeric frontier remains MoE39/common-prefix
+  and DAC first post-module stage. Refresh after source/assets/schema/model/input/
+  tape/runtime/device/graph/precision drift. Standing authority: serial run_safe,
+  reserve15%, own children only, local commits/no push. Rollback studio commit;
+  preserve local data and use standalone generator.

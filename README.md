@@ -49,6 +49,10 @@ prompt using the pinned MLX-converted Q4 checkpoint. Build/run instructions,
 upstream intermediate comparisons, measured CPU limits, and licensing are in
 [the DRAMA-3 frontier](docs/drama3-native-frontier.md).
 
+[Local DRAMA Studio](docs/drama3-studio.md) adds a browser interface for native
+Metal generation, voice references, editable sessions, take history and
+WAV/MP3/Opus export (`make drama3_studio`).
+
 ## Qwen 3.5 Native Metal
 
 The native Qwen path targets `Qwen3.5-9B-Q4_K_M.gguf` on Apple Silicon. The code supports:

@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#151918">
+    <title>DRAMA · аудиостудия</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E%3Crect width=%2264%22 height=%2264%22 rx=%2214%22 fill=%22%23151918%22/%3E%3Ctext x=%2232%22 y=%2246%22 text-anchor=%22middle%22 font-family=%22sans-serif%22 font-size=%2244%22 font-weight=%22700%22 fill=%22%238bd8c2%22%3ED%3C/text%3E%3C/svg%3E">
+    <link rel="stylesheet" href="/assets/style.css">
+    <script src="/assets/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="DRAMA, главная">
+          <span class="brand-mark" aria-hidden="true">D</span>
+          <span class="brand-copy"><strong>DRAMA</strong><small>аудиостудия</small></span>
+        </a>
+        <div class="topbar-status">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="connection-status" role="status">Подключение…</span>
+        </div>
+        <button class="icon-button refresh-button" id="refresh-button" type="button" aria-label="Обновить библиотеку" title="Обновить библиотеку">
+          <span aria-hidden="true">↻</span>
+        </button>
+      </header>
+
+      <main class="workspace-grid">
+        <aside class="panel sessions-panel" aria-label="Сессии">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Рабочее пространство</p>
+              <h2>Сессии</h2>
+            </div>
+            <span class="count-badge" id="session-count">0</span>
+          </div>
+
+          <form class="new-session-form" id="new-session-form">
+            <label class="sr-only" for="new-session-name">Название новой сессии</label>
+            <input id="new-session-name" name="name" type="text" maxlength="120" placeholder="Название проекта" autocomplete="off">
+            <button class="square-add" type="submit" aria-label="Создать сессию" title="Создать сессию">+</button>
+          </form>
+
+          <button class="text-button archive-toggle" id="archive-toggle" type="button" aria-pressed="false">Показать архив</button>
+          <nav class="session-list" aria-label="Список сессий">
+            <ul id="sessions-list"></ul>
+            <p class="empty-state compact-empty" id="sessions-empty" hidden>Здесь пока нет сессий. Создайте первую, чтобы начать.</p>
+          </nav>
+          <div class="sidebar-note">
+            <span class="note-mark" aria-hidden="true">i</span>
+            <p>Каждый фрагмент создаётся отдельно. Для похожего звучания назначьте ему голос-референс.</p>
+          </div>
+        </aside>
+
+        <section class="panel editor-panel" aria-label="Редактор сессии">
+          <div class="session-toolbar" id="session-toolbar"></div>
+          <div class="notice" id="notice" role="status" aria-live="polite" hidden></div>
+          <div class="notice is-error queue-paused-warning" id="queue-paused-warning" role="alert" aria-live="assertive" hidden>
+            <strong>Очередь задач приостановлена.</strong>
+            <span>Не удалось сохранить состояние студии. Сервер повторяет попытку; новые задачи пока не запускаются.</span>
+          </div>
+          <section class="jobs-region" id="jobs-region" aria-label="Очередь задач" aria-live="polite"></section>
+          <section class="composer-card" aria-labelledby="composer-title" id="composer-card">
+            <div class="composer-copy">
+              <p class="eyebrow">Новый фрагмент</p>
+              <h2 id="composer-title">Добавьте текст для озвучивания</h2>
+            </div>
+            <form id="new-segment-form">
+              <label class="sr-only" for="new-segment-text">Текст нового фрагмента</label>
+              <textarea id="new-segment-text" name="text" rows="3" maxlength="12000" placeholder="Введите или вставьте текст…" required></textarea>
+              <div class="composer-footer">
+                <span class="field-hint">Новый фрагмент появится в конце сессии.</span>
+                <button class="button button-primary" type="submit"><span aria-hidden="true">＋</span> Добавить фрагмент</button>
+              </div>
+            </form>
+          </section>
+          <div class="segment-list" id="segment-list" aria-live="polite"></div>
+          <div class="editor-empty" id="editor-empty" hidden>
+            <div class="empty-orbit" aria-hidden="true"><span></span></div>
+            <p class="eyebrow">Начало сессии</p>
+            <h2>Здесь будет ваша история</h2>
+            <p>Добавьте текст выше — затем выберите голос и создайте первый аудиофрагмент.</p>
+          </div>
+        </section>
+
+        <aside class="panel library-panel" aria-label="Библиотека">
+          <div class="panel-heading library-heading">
+            <div>
+              <p class="eyebrow">Материалы</p>
+              <h2>Библиотека</h2>
+            </div>
+          </div>
+          <div class="tab-list" role="tablist" aria-label="Разделы библиотеки">
+            <button class="tab-button is-active" id="voices-tab" type="button" role="tab" aria-selected="true" aria-controls="voices-panel" data-library-tab="voices">Голоса</button>
+            <button class="tab-button" id="audio-tab" type="button" role="tab" aria-selected="false" aria-controls="audio-panel" data-library-tab="audio">Аудио</button>
+          </div>
+          <section id="voices-panel" class="library-content" role="tabpanel" aria-labelledby="voices-tab">
+            <form class="voice-upload" id="voice-upload-form">
+              <div class="voice-upload-heading">
+                <h3>Добавить голос</h3>
+                <span class="micro-badge">до 10 сек</span>
+              </div>
+              <label class="file-drop" for="voice-file">
+                <span class="upload-icon" aria-hidden="true">↑</span>
+                <span id="voice-file-label">Выберите аудиофайл</span>
+                <small>WAV, MP3 или другой поддерживаемый формат · до 20 МБ</small>
+              </label>
+              <input class="sr-only" id="voice-file" name="file" type="file" accept="audio/*">
+              <label class="field-label" for="voice-name">Название</label>
+              <input id="voice-name" name="name" type="text" maxlength="120" placeholder="Например, Тихий рассказчик" required>
+              <label class="field-label" for="voice-transcript">Что произнесено в записи</label>
+              <textarea id="voice-transcript" name="transcript" rows="2" maxlength="2000" placeholder="Точная расшифровка помогает сопоставить голос"></textarea>
+              <button class="button button-secondary button-wide" type="submit">Загрузить голос</button>
+            </form>
+            <div class="library-section-title"><h3>Сохранённые голоса</h3><span id="voice-count">0</span></div>
+            <div class="voice-list" id="voice-list"></div>
+            <p class="empty-state" id="voices-empty" hidden>Добавьте короткую запись, чтобы использовать её как референс.</p>
+          </section>
+          <section id="audio-panel" class="library-content" role="tabpanel" aria-labelledby="audio-tab" hidden>
+            <div class="asset-filter-row">
+              <label class="sr-only" for="asset-filter">Фильтр аудио</label>
+              <select id="asset-filter">
+                <option value="current">Эта сессия</option>
+                <option value="all">Все сессии</option>
+              </select>
+              <span id="asset-count" class="count-badge">0</span>
+            </div>
+            <div class="asset-list" id="asset-list"></div>
+            <p class="empty-state" id="assets-empty" hidden>Сохранённые аудио появятся здесь после генерации или экспорта.</p>
+          </section>
+          <div class="library-footer" id="capability-note"></div>
+        </aside>
+      </main>
+    </div>
+  </body>
+</html>
