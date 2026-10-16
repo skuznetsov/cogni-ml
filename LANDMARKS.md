@@ -29954,3 +29954,44 @@ Refresh after source/toolchain/device/model/workload changes.
   eviction. Standing authority: serial run_safe, 15% floor, unrelated processes
   untouched, external scratch/local weights, exact-path atomic commit/no push.
   Rollback by selecting chunk1 or reverting this isolated slice.
+### Continuation 2026-10-16 — late-layer matched-input fidelity
+
+- Base `d05bc45d`, diagnostics only. Original MLX scalar/sequence returns on
+  the same 158-row F32 input; selected exact operands at layers34–39. All219
+  overlapping prior arrays are bitwise unchanged. Config/index/all5 shards
+  hashed; stat identities unchanged through final verification. New shared
+  internal captures lack a prior no-hook control.
+- First bit difference is layer0 attention residual. First strict sequence
+  boundary is layer35.hidden row154/channel1277 (7.4863434e-5 error against
+  6.1382445e-5 allowance); scalar layer37.hidden row154/channel1557
+  (6.592274e-5 against6.5157314e-5). No widened tolerance. All162 boundary
+  metrics per depth reproduce the prior saved strict full-prompt gate.
+- Matched shared operations pass; exact routed+weighted-shared and exact
+  residual+upstream-MoE additions are bitwise through layers34–39. Native down
+  fails locally only at39 (7 scalar/1 sequence); first witnesses expert108.
+  Existing mlx_q4 down is scalar-bitwise on15,532,032 values but fails7
+  sequence39 values. Whole native MoE/residual replay failures are also39-only.
+  This cannot explain the earlier35/37 crossing; accumulated input drift and
+  local39 error are separate findings, and the former cause remains open.
+- All318 groups have identical metrics/witnesses at graph0/2, no nonfinites.
+  One66144-byte terminal receipt plus existing4-byte finite status; comparisons,
+  maxima, first64-bit coordinate and expert witness stay GPU. No intermediate
+  finish/read. Eleven submissions/completions/waits per depth; depth2 max2
+  pending and22,928,410,032 retained bytes, not physical residency. Both full
+  native CLIs retain exit1 for the red strict boundary gate. Production source
+  and defaults unchanged. One Metal oracle/16 offline tests and final source/
+  binary/weight/prior-gate crosschecks pass.
+- Correlated mini-Quad ROBUST for bounded observations; VULNERABLE for full
+  upstream compatibility or a single-cause explanation. Report
+  `docs/drama3-late-matched.md`, evidence
+  `.landmark/evidence/drama3-late-matched.json`, raw
+  `/opt/mldata_ssd/cogni-ml/drama3-late-matched-20261016/`.
+- Active speed target is sustained RTF0.8–0.9 and separate first-audio latency.
+  Next performance discriminator: aligned packed-word expert loads preserving
+  exact arithmetic, then full trajectory timing if local output/timing passes.
+  Next numerical discriminator: sequence upstream quantized down on identical
+  operands, followed by earlier cumulative-coordinate decomposition. Refresh on
+  source/model/input/reference/tolerance/queue/device/OS drift or evidence loss.
+  Standing authority: serial run_safe,15% floor, unrelated processes untouched,
+  external scratch/local weights, exact-path local atomic commit/no push.
+

@@ -10,7 +10,86 @@ reference and fixture tools only, never the native inference implementation.
 The pinned MLX upstream is a community port. Original Fish DAC controls below
 cover four saved code streams, not the original text-generation pipeline.
 
-## Active slice: native sequence prefill — 2026-10-16
+## Active slice: precision-preserving decode acceleration — 2026-10-16
+
+Target sustained generation below real time, preferably RTF 0.8–0.9, with
+first-audio latency measured separately. A 2048-sample frame at 44.1 kHz gives
+46.440 ms of audio and a 37.152–41.796 ms compute budget at that target.
+Earlier saved timeline controls have about 196 ms GPU decode per frame plus
+separate DAC work; they are a bounded baseline, not a current steady-state
+guarantee. Prefill batching alone does not close that gap.
+
+First discriminator: paired native affine expert projections with the same
+captured operands, replacing byte-assembled packed-word loads with guarded
+aligned loads while preserving every F32 product, group subtotal and ascending
+group sum. Risk CAUTION: incorrect alignment, changed compiler arithmetic or
+a microbenchmark win without request benefit. Use a standalone probe first;
+guard aligned and odd offsets, per-rank input, bitwise output and GPU timing.
+No production precision, synchronization or default change is admitted by a
+local timing win. Require full fixed-trajectory request comparison before
+promotion. Rollback is omitting the probe or retaining the current loader.
+Keep serial run_safe, 15% floor, external scratch/local weights and existing
+upstream tolerances. Numerical return pointer is the late-layer slice below.
+
+## Prior slice: late-layer matched-input fidelity — 2026-10-16
+
+From `d05bc45d`, locate the first tolerance violation in execution boundaries
+against pinned MLX scalar and sequence arms, then distinguish accumulated
+input drift from local expert-down, shared-expert and residual arithmetic.
+The prior full 158-row gate first exceeds tolerance at sequence layer 35 hidden
+and scalar layer 37 hidden; bit differences begin earlier and are a separate
+question. These observations do not establish a local operator defect.
+
+Risk: CAUTION for diagnostic evidence and attribution; production arithmetic,
+defaults and synchronization boundaries remain unchanged. Use immutable,
+hashed upstream operands and original operator return values. Native replay,
+route restoration, comparison and first-coordinate selection stay on GPU.
+Only compact metrics and witness coordinates/values cross the existing
+terminal diagnostic boundary. Upstream raw fixture serialization is an offline
+terminal operation, not an inference path. Scratch stays external; run heavy
+work serially with the standing 15% memory floor and unrelated processes untouched.
+
+DoD: GPU comparator positive/negative controls distinguish first bit difference,
+first tolerance violation and nonfinite; compare all decoder boundaries to
+locate the earliest failing layer/row/channel; replay expert down, shared
+projections/activation/gating and residual add separately from exactly the same
+upstream operands. Preserve native/upstream arm identity, route order, weights,
+source hashes and the unchanged 6e-5/3e-4 intermediate tolerance. Check graph
+0/2 and zero pre-terminal activation readbacks. Targeted diagnostic tests plus
+the original full-prompt intermediate gate are the fallback guards. Report an
+open root cause if matched-input observations cannot separate hypotheses.
+Rollback is omitting the new diagnostics or reverting this isolated slice.
+
+Observed: one Metal negative-oracle example and sixteen offline tests pass.
+Both graph depths produce all 318 comparisons with identical metrics and
+witnesses, no nonfinites, one 66144-byte terminal metrics read and the existing
+4-byte finite status. No activation read or intermediate finish is added.
+All 162 full-boundary metrics per depth reproduce the prior strict gate.
+First strict sequence failure is layer35.hidden row154/channel1277
+(7.4863434e-5 > 6.1382445e-5); scalar is layer37.hidden row154/channel1557
+(6.592274e-5 > 6.5157314e-5). Bit differences begin at layer0 instead.
+
+At exact upstream operands, tested shared operations remain within tolerance;
+two-term MoE sum and residual add are bitwise exact throughout layers34–39.
+Native down has layer39-only local failures (7 scalar / 1 sequence), with
+first witnesses at expert108. Existing mlx_q4 down is bitwise exact on all
+15,532,032 scalar values, but has 7 sequence layer39 failures. Whole native
+MoE and its residual also fail locally only at39. These findings separate
+local39 error from earlier accumulated drift; they do not causally explain
+the earlier35/37 crossing. Strict full CLI exits1 after writing both reports.
+No tolerance/default/production arithmetic is changed.
+
+Correlated mini-Quad: ROBUST for bounded earliest-boundary and matched-replay
+observations; VULNERABLE for a single root cause or upstream promotion.
+Report `docs/drama3-late-matched.md`, index
+`.landmark/evidence/drama3-late-matched.json`. Next numerical falsifier:
+compare the upstream sequence quantized down reduction on these exact inputs,
+then decompose the earlier failing cumulative coordinates on identical inputs.
+Refresh on source/model/input/reference/tolerance/queue/device/OS drift or raw
+artifact loss. Depth2's retained high-water count is 22.93 GB, not physical
+residency; numerical equality does not establish a memory/performance benefit.
+
+## Prior slice: native sequence prefill — 2026-10-16
 
 From `a15d4253`, produce multi-row GPU activations through the entire backbone
 in layer order, then batch MoE projections across token/rank pairs. The current
