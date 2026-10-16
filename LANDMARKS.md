@@ -29484,3 +29484,52 @@ Refresh after source/toolchain/device/model/workload changes.
   device/OS/gate or bound listening-evidence drift. Authority: serial run_safe,
   reserve15%, unrelated processes untouched, local atomic commit/no push.
   Rollback this report/index/landmark commit; keep raw evidence outside Git.
+
+### Continuation 2026-10-15 — wider Metal window and explicit DAC scratch
+
+- Base `f74318bf`: Metal resident allocation accepts up to 4096 total positions
+  (`prompt_rows+frame_bound-1`); <=1024 retains the legacy attention kernel.
+  Wider allocation uses persistent device score scratch with unchanged scalar
+  reduction order. CPU remains 1024; default generation remains 160 frames.
+- Three DAC scratch slabs are allocated once per decode, reused by backing-handle
+  liveness exclusion, then explicitly released after the existing finish. Traces
+  bypass scratch; uncertain error drains quarantine. Other temporary buffers,
+  wrappers and host outputs still use GC. No whole-pipeline GC-free claim.
+- Same actual 768 codes, serial private-mmap pairs at depths 0/2: all four F32
+  digests exact; 32 submissions/waits, 4 control bytes and 6,291,456 terminal bytes
+  unchanged. Requests 27.004->3.549GiB; sampled peak Metal 21.855/25.030->5.276GiB.
+  Arena timings 108.817/106.528s versus fresh 82.531/87.173s are slower on shared
+  host, so `DRAMA3_DAC_SCRATCH=0` remains default; no speed promotion.
+- Actual 2048-frame DAC cyclic replay completes in 237.252s, 95.109s output, 4.5GiB
+  total scratch, sampled peak Metal 9.639GiB; 32 existing waits, no terminal-read
+  graph work. This is saved-code allocation evidence, not 2048 LM steps.
+- Final 17 CPU/18 GPU specs pass, including wide attention lengths 1025/2048/4096
+  at depths 0/2, exact legacy 1024 output, alias/trace/error/quarantine guards.
+  Valid per-buffer red tests found conv-history and doubled-q-projection
+  omissions; checked byte maxima repaired. CPU and Metal CLIs compile.
+- Pinned upstream first-prefill gates pass at capacity 2205 (2048-frame budget),
+  hidden/logit maxAbs 4.7683716e-6/1.4305115e-5, unchanged 3e-5+3e-4abs(ref), zero
+  failures/nonfinite. Fresh 58-stage DAC metrics equal the earlier control;
+  quantizer.post_module.layers.0/full/one-LSB failures remain, maxPCMerror 16.
+- Full native news bound 1100 allocates 1257 resident rows, stops EOS at 773 before
+  old execution ceiling. All 768 prior native frames/11IDs exact on GPU; pinned
+  MLX fork remains 704. Actual 12,100-F32 sampler upload hash bound to producer;
+  first 8448 uniforms exactly equal prior native/upstream tape. No 1100-step,
+  full upstream trajectory, silence repair or acting-quality claim.
+- Experimental auto budget keeps 15% physical reserve+1GiB margin, checks mapped
+  inventory/static copies/caches/decoder/temporaries and maxBufferLength. First
+  live plan refuses under pressure; final-source plan admits 687 frames/844 rows
+  after headroom increases. Plan-only outcomes, not auto-sized generation or
+  physical reservation: host GC/driver retention remains uncertified.
+- Report `docs/drama3-window-memory.md`, curated
+  `.landmark/evidence/drama3-window-memory.json`; raw receipts/hashes/WAVs in
+  local `window-scratch-20261015/`. Correlated mini-Quad ROBUST for narrow
+  results, VULNERABLE for speedup/physical guarantees; neither promoted.
+- Next performance discriminator: interleaved fresh/arena GPU timeline versus
+  host encoding time; broader backbone/tower workspace remains separate.
+  Native 773 run records 1,419,434 Context.alloc calls, not allocation time.
+  Return numeric frontier: MoE39/common-prefix forks and prior DAC stage, with
+  old gates intact. Refresh on source/model/input/tape/fixture/runtime/device/OS/
+  precision/gate/graph-policy drift. Authority: serial run_safe, reserve 15%,
+  unrelated processes untouched, local atomic commit/no push. Rollback disable
+  arena/auto and use <=1024 positions, or revert the feature commit.

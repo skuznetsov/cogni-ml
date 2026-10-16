@@ -17,6 +17,61 @@ module ML::Audio::Drama3
       end
     end
 
+    # Decoder-only scratch storage. All writes are queued on Context's single
+    # tracked command queue; callers exclude every input whose contents remain
+    # live (including the residual skip) before choosing an output slot.
+    private class DacActivationScratch
+      SLOT_COUNT = 3
+
+      getter bytes : Int64
+      getter reuses : Int64
+
+      @buffers = [] of Resident::Buffer
+      @slot_uses = [] of Int32
+      @released = false
+      @capacity : Int32
+
+      def initialize(context : Resident::Context, capacity : Int32)
+        @capacity = capacity
+        @bytes = capacity.to_i64 * sizeof(Float32) * SLOT_COUNT
+        @reuses = 0_i64
+        begin
+          SLOT_COUNT.times do
+            @buffers << context.alloc(capacity)
+            @slot_uses << 0
+          end
+        rescue ex
+          release
+          raise ex
+        end
+      end
+
+      def output(count : Int32, excluding : Array(Resident::Buffer)) : Resident::Buffer
+        raise ArgumentError.new("DAC scratch request exceeds arena capacity") unless count > 0 && count <= @capacity
+        raise ArgumentError.new("DAC scratch arena already released") if @released
+        slot = @buffers.index do |candidate|
+          excluding.none? { |input| input.buffer.handle.address == candidate.buffer.handle.address }
+        end
+        raise ArgumentError.new("DAC scratch has no non-aliasing output slot") unless slot
+        @reuses += 1 if @slot_uses[slot] > 0
+        @slot_uses[slot] += 1
+        @buffers[slot].slice(0, count)
+      end
+
+      def release : Nil
+        return if @released
+        @released = true
+        @buffers.each { |buffer| buffer.buffer.release }
+        @buffers.clear
+        @slot_uses.clear
+      end
+    end
+
+    # Intentionally process-lifetime retention: if an error-path drain cannot
+    # prove that GPU use ended, keep the backing buffers alive until exit.
+    @@dac_scratch_quarantine = [] of DacActivationScratch
+    @@dac_scratch_quarantine_mutex = Mutex.new
+
     getter config : CodecConfig
     property trace : Proc(String, Vector, Nil)?
     # Diagnostic observers can enqueue comparisons or retain immutable device
@@ -26,6 +81,11 @@ module ML::Audio::Drama3
     @store : WeightStore
     @context : Resident::Context
     @prefix : String
+    @dac_scratch_enabled = false
+    @dac_scratch_bytes = 0_i64
+    @dac_scratch_reuses = 0_i64
+    @dac_scratch_released = false
+    @dac_scratch_quarantined = false
 
     def initialize(@store : WeightStore, @context : Resident::Context,
                    @config : CodecConfig = CodecConfig.default, @prefix : String = "codec.")
@@ -33,31 +93,114 @@ module ML::Audio::Drama3
       @device_trace = nil
     end
 
+    def dac_scratch_stats : NamedTuple(enabled: Bool, bytes: Int64, reuses: Int64,
+                                       released: Bool, quarantined: Bool)
+      {enabled: @dac_scratch_enabled, bytes: @dac_scratch_bytes, reuses: @dac_scratch_reuses,
+       released: @dac_scratch_released, quarantined: @dac_scratch_quarantined}
+    end
+
     # `codes` is either frame-major [frames,main,c0,...,cN] or, when
     # codebook_major is true, [c0,c1,...,cN,frames]. The native Generator's
     # codebooks method consumes c0 as semantic and c1..cN as residual codes;
     # the main token is outside the codec codebooks.
     def decode(codes : Resident::Buffer, frames : Int32, codebook_major : Bool = false) : Resident::Buffer
-      Profile.measure("codec_resident.decode", category: "codec") do
-        decode_impl(codes, frames, codebook_major)
-      end
-    rescue ex
+      scratch = nil.as(DacActivationScratch?)
+      quiesced = false
+      @dac_scratch_enabled = false
+      @dac_scratch_bytes = 0_i64
+      @dac_scratch_reuses = 0_i64
+      @dac_scratch_released = false
+      @dac_scratch_quarantined = false
       begin
-        @context.abort
-      rescue
-        # Keep the original inference failure if error-path draining fails.
+        Profile.measure("codec_resident.decode", category: "codec") do
+          validate_decode_input!(codes, frames, codebook_major)
+          scratch = build_dac_scratch(frames)
+          result = decode_impl(codes, frames, codebook_major, scratch)
+          quiesced = true # decode_impl finishes the context before returning.
+          result
+        end
+      rescue ex
+        begin
+          @context.abort
+          # Depth zero synthesizes completed=submitted in graph_stats; those
+          # counters do not report whether abort's best-effort wait succeeded.
+          # Only the graph queue's explicit completion ledger can prove drain.
+          if @context.graph_enabled?
+            graph = @context.graph_stats
+            quiesced = graph["pending"] == 0_i64 && graph["completed"] == graph["submitted"]
+          end
+        rescue
+          # Keep the original inference failure if error-path draining fails.
+        end
+        raise ex
+      ensure
+        if arena = scratch
+          @dac_scratch_reuses = arena.reuses
+          if quiesced
+            arena.release
+            @dac_scratch_released = true
+          else
+            # Preserve backing storage globally if the queue could not be
+            # proven idle, even if this decoder instance is discarded.
+            @@dac_scratch_quarantine_mutex.synchronize do
+              @@dac_scratch_quarantine << arena
+            end
+            @dac_scratch_quarantined = true
+          end
+        end
       end
-      raise ex
     end
 
-    private def decode_impl(codes : Resident::Buffer, frames : Int32,
-                            codebook_major : Bool) : Resident::Buffer
+    private def validate_decode_input!(codes : Resident::Buffer, frames : Int32,
+                                       codebook_major : Bool) : Nil
       raise ArgumentError.new("codec input must contain at least one frame") unless frames > 0
       books = @config.residual_codebooks + 1
       input_width = codebook_major ? books : books + 1
       expected_codes = checked_count(frames, input_width)
       raise ArgumentError.new("codec token buffer shape mismatch") unless codes.count == expected_codes
+    end
 
+    private def build_dac_scratch(frames : Int32) : DacActivationScratch?
+      setting = ENV["DRAMA3_DAC_SCRATCH"]? || "0"
+      raise ArgumentError.new("DRAMA3_DAC_SCRATCH must be 0 or 1") unless setting.in?("0", "1")
+      return nil unless setting == "1"
+      # Observers are allowed to retain activation buffers. Keep their existing
+      # immutable-capture behavior by using fresh allocations whenever tracing.
+      return nil if @trace || @device_trace
+
+      capacity = max_dac_activation_count(frames)
+      arena = DacActivationScratch.new(@context, capacity)
+      @dac_scratch_enabled = true
+      @dac_scratch_bytes = arena.bytes
+      arena
+    end
+
+    private def max_dac_activation_count(frames : Int32) : Int32
+      rows = frames
+      @config.quantizer_upsample_rates.each { |rate| rows = checked_count(rows, rate) }
+      channels = @config.decoder_channels
+      maximum = checked_count(rows, channels)
+      @config.decoder_rates.each do |rate|
+        rows = checked_count(rows, rate)
+        channels >>= 1
+        maximum = Math.max(maximum, checked_count(rows, channels))
+      end
+      maximum
+    end
+
+    private def activation_output(count : Int32, scratch : DacActivationScratch?,
+                                  excluding : Array(Resident::Buffer)) : Resident::Buffer
+      if arena = scratch
+        arena.output(count, excluding)
+      else
+        @context.alloc(count)
+      end
+    end
+
+    private def decode_impl(codes : Resident::Buffer, frames : Int32,
+                            codebook_major : Bool, scratch : DacActivationScratch?) : Resident::Buffer
+      books = @config.residual_codebooks + 1
+      input_width = codebook_major ? books : books + 1
       latent = decode_codebooks(codes, frames, input_width, codebook_major)
       trace_activation("quantizer.codebook_sum", latent)
       latent = post_transformer(latent)
@@ -76,7 +219,7 @@ module ML::Audio::Drama3
         @context.submit
       end
 
-      waveform = decode_waveform(latent)
+      waveform = decode_waveform(latent, scratch)
       expected_frames = frames
       @config.quantizer_upsample_rates.each { |rate| expected_frames = checked_count(expected_frames, rate) }
       @config.decoder_rates.each { |rate| expected_frames = checked_count(expected_frames, rate) }
@@ -227,22 +370,22 @@ module ML::Audio::Drama3
       Activation.new(x.rows, channels, @context.add(input.data, residual))
     end
 
-    private def decode_waveform(input : Activation) : Activation
-      x = conv1d(input, "decoder.model.0", 7, 1, 1, 1, true)
+    private def decode_waveform(input : Activation, scratch : DacActivationScratch?) : Activation
+      x = conv1d(input, "decoder.model.0", 7, 1, 1, 1, true, scratch)
       trace_activation("decoder.model.0", x)
       @context.submit
       channels = @config.decoder_channels
       @config.decoder_rates.each_with_index do |rate, stage|
         output_dim = channels >> (stage + 1)
         prefix = "decoder.model.#{stage + 1}.block"
-        x = snake(x, "#{prefix}.0.alpha")
+        x = snake(x, "#{prefix}.0.alpha", scratch)
         trace_activation("decoder.model.#{stage + 1}.block.0", x)
-        x = conv_transpose1d(x, "#{prefix}.1", rate * 2, rate, true)
+        x = conv_transpose1d(x, "#{prefix}.1", rate * 2, rate, true, scratch)
         trace_activation("decoder.model.#{stage + 1}.block.1", x)
         @context.submit
         3.times do |unit_index|
           unit_prefix = "#{prefix}.#{unit_index + 2}.block"
-          x = residual_unit(x, unit_prefix, output_dim, [1, 3, 9][unit_index])
+          x = residual_unit(x, unit_prefix, output_dim, [1, 3, 9][unit_index], scratch)
           trace_activation("decoder.model.#{stage + 1}.block.#{unit_index + 2}", x)
           @context.submit
         end
@@ -250,26 +393,37 @@ module ML::Audio::Drama3
       end
 
       final_index = @config.decoder_rates.size + 1
-      x = snake(x, "decoder.model.#{final_index}.alpha")
+      x = snake(x, "decoder.model.#{final_index}.alpha", scratch)
       trace_activation("decoder.model.#{final_index}", x)
-      x = conv1d(x, "decoder.model.#{final_index + 1}", 7, 1, 1, 1, true)
+      x = conv1d(x, "decoder.model.#{final_index + 1}", 7, 1, 1, 1, true, scratch)
       trace_activation("decoder.model.#{final_index + 1}", x)
       mono = @context.alloc(x.rows)
       @context.dispatch("dr3c_tanh_mono", SOURCE, [x.data, mono], [x.rows.to_u64, x.channels.to_u64], x.rows)
       Activation.new(x.rows, 1, mono)
     end
 
-    private def residual_unit(input : Activation, prefix : String, channels : Int32, dilation : Int32) : Activation
+    private def residual_unit(input : Activation, prefix : String, channels : Int32, dilation : Int32,
+                              scratch : DacActivationScratch?) : Activation
       raise ArgumentError.new("residual unit input width mismatch") unless input.channels == channels
-      y = snake(input, "#{prefix}.0.alpha")
-      y = conv1d(y, "#{prefix}.1", 7, 1, 1, dilation, true)
-      y = snake(y, "#{prefix}.2.alpha")
-      y = conv1d(y, "#{prefix}.3", 1, 1, 1, 1, true)
-      Activation.new(input.rows, input.channels, @context.add(input.data, y.data))
+      y = snake(input, "#{prefix}.0.alpha", scratch, [input.data])
+      y = conv1d(y, "#{prefix}.1", 7, 1, 1, dilation, true, scratch, [input.data])
+      y = snake(y, "#{prefix}.2.alpha", scratch, [input.data])
+      y = conv1d(y, "#{prefix}.3", 1, 1, 1, 1, true, scratch, [input.data])
+      output = if scratch
+                 reusable = activation_output(input.data.count, scratch, [input.data, y.data])
+                 @context.dispatch("dr3_binary", Resident::SOURCE, [input.data, y.data, reusable],
+                   [input.data.count.to_u64, 0_u64], input.data.count)
+                 reusable
+               else
+                 @context.add(input.data, y.data)
+               end
+      Activation.new(input.rows, input.channels, output)
     end
 
     private def conv1d(input : Activation, prefix : String, kernel : Int32, stride : Int32,
-                       groups : Int32, dilation : Int32, weight_normalized : Bool) : Activation
+                       groups : Int32, dilation : Int32, weight_normalized : Bool,
+                       scratch : DacActivationScratch? = nil,
+                       additional_exclusions : Array(Resident::Buffer) = [] of Resident::Buffer) : Activation
       raise ArgumentError.new("invalid Conv1d parameters") unless kernel > 0 && stride > 0 && dilation > 0 && groups > 0 && input.channels % groups == 0
       weight_name = weight_normalized ? "#{prefix}.weight_v" : "#{prefix}.weight"
       weight = tensor(weight_name)
@@ -287,7 +441,8 @@ module ML::Audio::Drama3
         resident_weight = effective_weight(resident_weight, @context.tensor(gain), out_channels,
           checked_count(in_per_group, kernel))
       end
-      output = @context.alloc(checked_count(input.rows, out_channels))
+      output = activation_output(checked_count(input.rows, out_channels), scratch,
+        [input.data] + additional_exclusions)
       @context.dispatch("dr3c_conv1d", SOURCE,
         [input.data, resident_weight, @context.tensor(bias_tensor), output],
         [input.rows.to_u64, input.channels.to_u64, out_channels.to_u64, kernel.to_u64,
@@ -296,7 +451,8 @@ module ML::Audio::Drama3
     end
 
     private def conv_transpose1d(input : Activation, prefix : String, kernel : Int32,
-                                 stride : Int32, weight_normalized : Bool) : Activation
+                                 stride : Int32, weight_normalized : Bool,
+                                 scratch : DacActivationScratch? = nil) : Activation
       raise ArgumentError.new("invalid ConvTranspose1d parameters") unless kernel > 0 && stride > 0
       weight_name = weight_normalized ? "#{prefix}.weight_v" : "#{prefix}.weight"
       weight = tensor(weight_name)
@@ -313,7 +469,7 @@ module ML::Audio::Drama3
           checked_count(out_channels, kernel))
       end
       rows = checked_count(input.rows, stride)
-      output = @context.alloc(checked_count(rows, out_channels))
+      output = activation_output(checked_count(rows, out_channels), scratch, [input.data])
       @context.dispatch("dr3c_conv_transpose1d", SOURCE,
         [input.data, resident_weight, @context.tensor(bias_tensor), output],
         [input.rows.to_u64, input.channels.to_u64, out_channels.to_u64, kernel.to_u64, stride.to_u64], output.count)
@@ -332,10 +488,12 @@ module ML::Audio::Drama3
       effective
     end
 
-    private def snake(input : Activation, alpha_name : String) : Activation
+    private def snake(input : Activation, alpha_name : String,
+                      scratch : DacActivationScratch? = nil,
+                      additional_exclusions : Array(Resident::Buffer) = [] of Resident::Buffer) : Activation
       alpha = tensor(alpha_name)
       validate_shape!(alpha, [input.channels], alpha_name)
-      output = @context.alloc(input.data.count)
+      output = activation_output(input.data.count, scratch, [input.data] + additional_exclusions)
       @context.dispatch("dr3c_snake", SOURCE, [input.data, @context.tensor(alpha), output],
         [input.rows.to_u64, input.channels.to_u64], output.count)
       Activation.new(input.rows, input.channels, output)

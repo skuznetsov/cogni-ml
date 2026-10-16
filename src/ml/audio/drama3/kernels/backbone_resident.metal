@@ -27,6 +27,46 @@ kernel void dr3_full_attention(device const float* q [[buffer(0)]],device const 
  if(lane==0){float maximum=-INFINITY;for(uint t=0;t<len;t++)maximum=max(maximum,scores[t]);float sum=0;for(uint t=0;t<len;t++){scores[t]=exp(scores[t]-maximum);sum+=scores[t];}denom=sum;}threadgroup_barrier(mem_flags::mem_threadgroup);
  for(uint d=lane;d<dim;d+=64){float sum=0;for(uint t=0;t<len;t++)sum+=(scores[t]/denom)*v[t*stride+kh*dim+d];out[h*dim+d]=sum*drb_sigmoid(gate[h*dim+d]);}
 }
+// Wider cache capacities use a persistent per-backbone score slab. The
+// reduction order and scalar operations intentionally match the legacy path.
+kernel void dr3_full_attention_wide(
+    device const float* q [[buffer(0)]], device const float* k [[buffer(1)]],
+    device const float* v [[buffer(2)]], device const float* gate [[buffer(3)]],
+    device float* out [[buffer(4)]], device float* scores [[buffer(5)]],
+    constant ulong* p [[buffer(6)]], uint h [[threadgroup_position_in_grid]],
+    uint lane [[thread_index_in_threadgroup]]) {
+    uint heads = uint(p[0]), kv_heads = uint(p[1]);
+    uint dim = uint(p[2]), len = uint(p[3]), capacity = uint(p[4]);
+    if (len > capacity || h >= heads) return;
+    threadgroup float denom;
+    uint kh = h / (heads / kv_heads), stride = kv_heads * dim;
+    uint score_base = h * capacity;
+    for (uint t = lane; t < len; t += 64) {
+        float dot = 0;
+        for (uint j = 0; j < dim; j++)
+            dot += q[h * dim + j] * k[t * stride + kh * dim + j];
+        scores[score_base + t] = dot / sqrt(float(dim));
+    }
+    threadgroup_barrier(mem_flags::mem_device);
+    if (lane == 0) {
+        float maximum = -INFINITY;
+        for (uint t = 0; t < len; t++)
+            maximum = max(maximum, scores[score_base + t]);
+        float sum = 0;
+        for (uint t = 0; t < len; t++) {
+            scores[score_base + t] = exp(scores[score_base + t] - maximum);
+            sum += scores[score_base + t];
+        }
+        denom = sum;
+    }
+    threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup);
+    for (uint d = lane; d < dim; d += 64) {
+        float sum = 0;
+        for (uint t = 0; t < len; t++)
+            sum += (scores[score_base + t] / denom) * v[t * stride + kh * dim + d];
+        out[h * dim + d] = sum * drb_sigmoid(gate[h * dim + d]);
+    }
+}
 kernel void dr3_delta_conv(device const float* history [[buffer(0)]],device const float* w [[buffer(1)]],device float* out [[buffer(2)]],constant ulong* p [[buffer(3)]],uint d [[thread_position_in_grid]]) {
  uint width=uint(p[0]),taps=uint(p[1]),pos=uint(p[2]);if(d>=width)return;uint len=min(pos+1,taps),first=pos+1-len;float sum=0;
  for(uint t=0;t<len;t++)sum+=history[((first+t)%taps)*width+d]*w[d*taps+taps-len+t];out[d]=sum*drb_sigmoid(sum);

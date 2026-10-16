@@ -1,0 +1,1155 @@
+{
+  "format": "landmark-evidence-v1",
+  "id": "drama3-window-memory",
+  "created_at_utc": "2026-10-16T03:33:28.582376+00:00",
+  "base_revision": "f74318bfd11959918c2cb27e0fec39887efc8f36",
+  "allowed_paths": [
+    "examples/drama3_generate.cr",
+    "examples/drama3_window_probe.cr",
+    "spec/drama3_codec_resident_spec.cr",
+    "spec/drama3_mapping_spec.cr",
+    "spec/drama3_resident_spec.cr",
+    "spec/drama3_window_budget_spec.cr",
+    "src/ml/audio/drama3/backbone_resident.cr",
+    "src/ml/audio/drama3/codec_resident.cr",
+    "src/ml/audio/drama3/kernels/backbone_resident.metal",
+    "src/ml/audio/drama3/metal.cr",
+    "src/ml/audio/drama3/native.cr",
+    "src/ml/audio/drama3/resident.cr",
+    "src/ml/audio/drama3/window_budget.cr",
+    "src/ml/audio/drama3/window_memory.cr",
+    "src/ml/metal/bridge.mm",
+    "docs/drama3-window-memory.md",
+    "LANDMARKS.md",
+    ".landmark/evidence/drama3-window-memory.json"
+  ],
+  "changed_paths": [
+    "examples/drama3_generate.cr",
+    "examples/drama3_window_probe.cr",
+    "spec/drama3_codec_resident_spec.cr",
+    "spec/drama3_mapping_spec.cr",
+    "spec/drama3_resident_spec.cr",
+    "spec/drama3_window_budget_spec.cr",
+    "src/ml/audio/drama3/backbone_resident.cr",
+    "src/ml/audio/drama3/codec_resident.cr",
+    "src/ml/audio/drama3/kernels/backbone_resident.metal",
+    "src/ml/audio/drama3/metal.cr",
+    "src/ml/audio/drama3/native.cr",
+    "src/ml/audio/drama3/resident.cr",
+    "src/ml/audio/drama3/window_budget.cr",
+    "src/ml/audio/drama3/window_memory.cr",
+    "src/ml/metal/bridge.mm",
+    "docs/drama3-window-memory.md",
+    "LANDMARKS.md",
+    ".landmark/evidence/drama3-window-memory.json"
+  ],
+  "claim": {
+    "status": "VERIFIED",
+    "scope": "Bounded Metal attention through 4096 positions, advisory frame-budget arithmetic and live plan-only admission/rejection, explicitly managed DAC scratch with observed output/resource regressions, unchanged upstream frontier and stable shared-uniform native prefix.",
+    "excluded": [
+      "Whole-pipeline GC elimination or GC.disable",
+      "Arena speedup or default promotion",
+      "Physical-memory reservation, peak bound or OOM guarantee",
+      "Automatic-sized generation execution",
+      "1100/2048 full model-generation steps or upstream trajectory parity",
+      "Full DAC numeric parity or silence/acting/voice quality repair",
+      "No existing host control reads, initial uploads or completion waits",
+      "LTP/WBA certificate or unrelated Qwen changes"
+    ]
+  },
+  "risk_and_rollback": {
+    "tier": "CAUTION",
+    "strongest_failure": "Overwriting a live residual/diagnostic alias or releasing resources before GPU completion; optimistic advisory sizing under GC retention and changing host load.",
+    "guards": "Backing-handle exclusions, serial tracked queue, immutable trace bypass, existing completion drain before release, uncertain-drain quarantine, depth0/2 exact probes, checked byte products and per-buffer limits.",
+    "rollback": "DRAMA3_DAC_SCRATCH=0 and manual <=1024 total positions; omit experimental auto flags or revert this feature commit."
+  },
+  "runtime": {
+    "device": "Apple M2 Max",
+    "physical_bytes": 68719476736,
+    "mlx": "0.31.1",
+    "upstream_revision": "e7488935ec2ebfafd38ef2b58e290d79f3d05dc7",
+    "model": "cguldogan/drama-3-mlx-q4",
+    "model_revision": "5331ab509359c0e4a7e353a19e255ddf3e8152a8",
+    "codec_sha256": "543445a2ebc5224d2af5956d422f88c2cd21f4018c1a26d81b51ec231bb630f2",
+    "graph_depths": [
+      0,
+      2
+    ],
+    "minimum_free_memory_percent": 15,
+    "quiet_host_required": false,
+    "execution": "Serial run_safe, private mmap, unchanged reduction flags, allocation profiling enabled in both paired variants. Shared-host timings are exploratory.",
+    "common_environment": {
+      "DRAMA3_BACKEND": "metal",
+      "DRAMA3_DAC_SCRATCH": "1",
+      "DRAMA3_MEMORY_PROFILE": "1",
+      "DRAMA3_MOE_BATCH": "1",
+      "DRAMA3_DENSE_REDUCTION": "tree",
+      "DRAMA3_BACKBONE_DENSE_REDUCTION": "tree",
+      "DRAMA3_EXPERT_DOWN_REDUCTION": "native",
+      "DRAMA3_MMAP_SHARED": "0",
+      "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "2",
+      "COGNI_RUN_SAFE_MIN_FREE_PCT": "15",
+      "COGNI_RUN_SAFE_REQUIRE_QUIET": "0",
+      "RUN_SAFE_PASSTHROUGH_STDIO": "1",
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "MLX_ENABLE_TF32": "0",
+      "HF_HUB_OFFLINE": "1",
+      "TRANSFORMERS_OFFLINE": "1",
+      "HF_HUB_DISABLE_TELEMETRY": "1"
+    }
+  },
+  "defaults": {
+    "max_frames": 160,
+    "dac_scratch": false,
+    "automatic_budget": false,
+    "metal_total_position_ceiling": 4096,
+    "cpu_ceiling_unchanged": 1024
+  },
+  "allocation_contract": {
+    "slabs": 3,
+    "scope": "Once per decode; reuse across decoder layers only. Final mono and traced activations use separate storage.",
+    "successful_release": "Explicit after existing finish; uncertain error drain quarantines for process lifetime.",
+    "existing_persistent": "Backbone recurrent state and backbone/tower caches.",
+    "remaining_gc": "Other Context.alloc buffers, wrappers, metadata and host output construction.",
+    "new_activation_handoffs": false,
+    "new_completion_waits": false
+  },
+  "results": {
+    "format": "drama3-window-result-validation-v1",
+    "paired_exact": true,
+    "paired": [
+      {
+        "path": "dac768-fresh-depth0.json",
+        "seconds": 82.53134925,
+        "allocations": 600,
+        "requested_bytes": 28995608592,
+        "peak_metal_allocated_bytes": 23466819584,
+        "memory_profile": true
+      },
+      {
+        "path": "dac768-arena-depth0.json",
+        "seconds": 108.817373542,
+        "allocations": 532,
+        "requested_bytes": 3810910224,
+        "peak_metal_allocated_bytes": 5664915456,
+        "memory_profile": true
+      },
+      {
+        "path": "dac768-arena-depth2.json",
+        "seconds": 106.528479417,
+        "allocations": 532,
+        "requested_bytes": 3810910224,
+        "peak_metal_allocated_bytes": 5664915456,
+        "memory_profile": true
+      },
+      {
+        "path": "dac768-fresh-depth2.json",
+        "seconds": 87.173229167,
+        "allocations": 600,
+        "requested_bytes": 28995608592,
+        "peak_metal_allocated_bytes": 26876002304,
+        "memory_profile": true
+      }
+    ],
+    "decoder_2048_allocation": true,
+    "prefill_pointwise_gates": true,
+    "prior_58_codec_stage_metrics_unchanged": true,
+    "full_codec_parity": false,
+    "native_generated_frames": 773,
+    "native_requested_frames": 1100,
+    "native_exercised_more_than_1024_positions": false,
+    "native_actual_sampler_prefix_exact": true,
+    "old_native_common_prefix_exact": true,
+    "upstream_first_fork_unchanged": 704,
+    "live_auto_plan_rejection_and_admission": true,
+    "live_auto_plan_selected_frames": 687,
+    "auto_sized_generation_executed": false,
+    "cpu_examples": 17,
+    "gpu_examples": 18,
+    "scope": "Observed regression and resource results; not a speedup, physical-memory guarantee, silence repair or full upstream parity certificate."
+  },
+  "native_generation": {
+    "requested_frames": 1100,
+    "prompt_rows": 158,
+    "allocated_resident_capacity": 1257,
+    "actual_frames": 773,
+    "eos": true,
+    "truncated": false,
+    "audio_seconds": 35.898049886621315,
+    "phase_seconds": {
+      "model_initialize": 0.01045525,
+      "generation": 202.875909916,
+      "reference_host_enqueue": 0.0,
+      "codec": 81.038027375,
+      "wav_write": 0.009127875
+    },
+    "allocation_stats": {
+      "allocations": 1419434,
+      "requested_bytes": 21088041600,
+      "peak_metal_allocated_bytes": 29915136000,
+      "memory_profile": true
+    },
+    "readbacks": {
+      "control": 6200,
+      "terminal": 6366428
+    },
+    "graph": {
+      "depth": 2,
+      "submitted": 964,
+      "completed": 964,
+      "pending": 0,
+      "max_pending": 2,
+      "completion_waits": 964,
+      "retained_bytes": 0,
+      "max_retained_bytes": 32111780760
+    },
+    "scope": "EOS before the old 1024-position execution boundary. Wide allocation/path exercised; actual long lengths are separately covered by synthetic GPU tests."
+  },
+  "prefix_comparison": {
+    "format": "drama3-wide-generation-prefix-v1",
+    "device": "Device(gpu, 0)",
+    "native_sha256": "c72cd121639d390e0070a9dfe151ebd5ee89bfe9fe12262a8509261c16c4e218",
+    "old_native_sha256": "e3d59134164385374937d105e27a1d55f757f495a663156d9b2a1625e4614469",
+    "old_mlx_sha256": "bdfdbf0662eed42a6ad5e8eb073e036cb90c26ade83852552cb26a3640cecf19",
+    "comparator_source_sha256": "418cfc9a4103d5e91b73201c0f4766982717e23f77130bb9875a39c45d4329da",
+    "proof_sha256": "b77849942bf5429997157c49ec945aa0b9a83f852cc8041f8fbe216752ed10ce",
+    "same_backend": {
+      "native_frames": 773,
+      "mlx_frames": 768,
+      "main_token": {
+        "common_prefix_frames": 768,
+        "common_prefix_fraction_of_shorter": 1.0,
+        "common_prefix_exact": true,
+        "all_frames_exact": false,
+        "first_mismatch_frame": null,
+        "comparison": "exact elementwise integer equality on MLX GPU"
+      },
+      "codebooks": {
+        "common_prefix_frames": 768,
+        "common_prefix_fraction_of_shorter": 1.0,
+        "common_prefix_exact": true,
+        "all_frames_exact": false,
+        "first_mismatch_frame": null,
+        "comparison": "exact elementwise integer equality on MLX GPU"
+      },
+      "all_tokens": {
+        "common_prefix_frames": 768,
+        "common_prefix_fraction_of_shorter": 1.0,
+        "common_prefix_exact": true,
+        "all_frames_exact": false,
+        "first_mismatch_frame": null,
+        "comparison": "exact elementwise integer equality on MLX GPU"
+      }
+    },
+    "upstream": {
+      "native_frames": 768,
+      "mlx_frames": 741,
+      "main_token": {
+        "common_prefix_frames": 704,
+        "common_prefix_fraction_of_shorter": 0.9500674763832658,
+        "common_prefix_exact": false,
+        "all_frames_exact": false,
+        "first_mismatch_frame": 704,
+        "comparison": "exact elementwise integer equality on MLX GPU"
+      },
+      "codebooks": {
+        "common_prefix_frames": 704,
+        "common_prefix_fraction_of_shorter": 0.9500674763832658,
+        "common_prefix_exact": false,
+        "all_frames_exact": false,
+        "first_mismatch_frame": 704,
+        "comparison": "exact elementwise integer equality on MLX GPU"
+      },
+      "all_tokens": {
+        "common_prefix_frames": 704,
+        "common_prefix_fraction_of_shorter": 0.9500674763832658,
+        "common_prefix_exact": false,
+        "all_frames_exact": false,
+        "first_mismatch_frame": 704,
+        "comparison": "exact elementwise integer equality on MLX GPU"
+      }
+    },
+    "scope": "Exact terminal ID equality on GPU for the previously shared-uniform prefix. No new upstream generation, waveform or full trajectory parity claim."
+  },
+  "upstream_codec": {
+    "stage_count": 58,
+    "all_stage_metrics_equal_prior_baseline": true,
+    "gates_unchanged": true,
+    "first_failed_stage": "quantizer.post_module.layers.0",
+    "stage_gate_passes": false,
+    "full_gate_passes": false,
+    "one_lsb_gate_passes": false,
+    "max_pcm_error": 16,
+    "trace_bypasses_scratch": true
+  },
+  "automatic_plan": {
+    "first_live_probe": {
+      "mode": "experimental_auto",
+      "admitted": false,
+      "failure": "InsufficientBudget",
+      "inventory": {
+        "mapped_bytes": 25867452416,
+        "largest_checkpoint_mapped_buffer_bytes": 5498961920,
+        "converted_static_bytes": 1577211912,
+        "largest_converted_buffer_bytes": 75497472
+      },
+      "memory": {
+        "valid": true,
+        "physical_bytes": 68719476736,
+        "free_reclaimable_bytes": 37682446336,
+        "process_footprint_bytes": 119096112,
+        "process_peak_footprint_bytes": 119096112,
+        "metal_allocated_bytes": 393216,
+        "metal_recommended_bytes": 55662788608,
+        "tracked_buffers": {
+          "live_buffers": 0,
+          "live_bytes": 0,
+          "peak_bytes": 0
+        }
+      },
+      "reserved_percent": 15,
+      "scope": "Advisory estimate; no memory was reserved and no model inference ran."
+    },
+    "final_live_probe": {
+      "mode": "experimental_auto",
+      "admitted": true,
+      "plan": {
+        "generated_frames": 687,
+        "total_positions": 844,
+        "effective_frame_cap": 2048,
+        "estimated_bytes": 29552624044,
+        "budget_bytes": 29553662361,
+        "host_budget_bytes": 29553662361,
+        "metal_budget_bytes": 55662395392,
+        "host_reserved_bytes": 10307921511,
+        "additional_margin_bytes": 1073741824,
+        "max_buffer_length": 41747087360,
+        "breakdown": {
+          "checkpoint_mapped_bytes": 25867452416,
+          "converted_static_bytes": 1577211912,
+          "backbone_cache_bytes": 34570240,
+          "tower_cache_bytes": 44941312,
+          "recurrent_state_bytes": 66846720,
+          "generation_buffers_bytes": 106404,
+          "decoder_scratch_bytes": 1620836352,
+          "codec_weightnorm_temporaries_included_bytes": 151019520,
+          "codec_temporaries_bytes": 270139392,
+          "generation_temporaries_bytes": 70519296,
+          "reference_encoder_peak_bytes": 0,
+          "estimated_total_bytes": 29552624044,
+          "largest_buffer_bytes": 5498961920
+        },
+        "advisory_only": true,
+        "host_gc_retention_certified": false
+      },
+      "memory": {
+        "valid": true,
+        "physical_bytes": 68719476736,
+        "free_reclaimable_bytes": 40935325696,
+        "process_footprint_bytes": 118965016,
+        "process_peak_footprint_bytes": 118965016,
+        "metal_allocated_bytes": 393216,
+        "metal_recommended_bytes": 55662788608,
+        "tracked_buffers": {
+          "live_buffers": 0,
+          "live_bytes": 0,
+          "peak_bytes": 0
+        }
+      },
+      "scope": "Advisory allocation estimate; shared-host load and GC retention can change the actual peak."
+    },
+    "generation_executed": false,
+    "advisory_only": true,
+    "host_gc_retention_certified": false
+  },
+  "verification": {
+    "cpu_examples": 17,
+    "gpu_examples": 18,
+    "cpu_and_metal_cli_builds": true,
+    "format_check": true,
+    "comparison_oracle_negatives": true,
+    "pre_fix_per_buffer_falsifier": "10 valid examples, 2 failures, 0 errors for omitted convolution history and doubled full-attention q projection; final 17-example CPU suite passes.",
+    "discarded_inconclusive_runs": [
+      "First per-buffer fixture had invalid tower geometry; its errors are not a falsifier.",
+      "Initial external sampler proof failed to compile because Slice#first returned Array(UInt8); bounded slicing fixed the probe only."
+    ],
+    "receipts": [
+      {
+        "name": "old-1025-rejection",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/reference-voice-20261015/drama3_generate_final_v2",
+          "900",
+          "40960",
+          "--model",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--text",
+          "Hello.",
+          "--max-frames",
+          "1025",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/old-must-not-exist.wav"
+        ],
+        "started_at_utc": "2026-10-16T02:43:23.720966+00:00",
+        "finished_at_utc": "2026-10-16T02:43:24.482219+00:00",
+        "exit_code": 1,
+        "wrapper_seconds": 0.7290977500379086,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/old-1025-rejection.log",
+        "log_sha256": "f94d75f5e27b13f1e44991c2e36b44dd26a90158ef6f279412f7766031d0f667",
+        "environment_delta": {}
+      },
+      {
+        "name": "budget-history-qproj-falsifier-v2",
+        "argv": [
+          "scripts/run_safe.sh",
+          "crystal",
+          "900",
+          "40960",
+          "spec",
+          "spec/drama3_window_budget_spec.cr"
+        ],
+        "started_at_utc": "2026-10-16T03:17:04.000097+00:00",
+        "finished_at_utc": "2026-10-16T03:17:06.398464+00:00",
+        "exit_code": 1,
+        "wrapper_seconds": 2.390502624679357,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/budget-history-qproj-falsifier-v2.log",
+        "log_sha256": "25de929a0ab12a7b28d1a162612090f64222623895b68512f32df7094b2d3e2f",
+        "environment_delta": {}
+      },
+      {
+        "name": "focused-cpu-adversary",
+        "argv": [
+          "scripts/run_safe.sh",
+          "crystal",
+          "900",
+          "40960",
+          "spec",
+          "spec/drama3_window_budget_spec.cr",
+          "spec/drama3_mapping_spec.cr",
+          "spec/drama3_native_spec.cr"
+        ],
+        "started_at_utc": "2026-10-16T03:20:01.360780+00:00",
+        "finished_at_utc": "2026-10-16T03:20:03.756651+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 2.3801789581775665,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/focused-cpu-adversary.log",
+        "log_sha256": "8cd19a258a818d7834dc0e02785f9c6c6bd189ce9cd3d1ba65dd832763a16296",
+        "environment_delta": {}
+      },
+      {
+        "name": "focused-gpu-adversary",
+        "argv": [
+          "scripts/run_safe.sh",
+          "crystal",
+          "900",
+          "40960",
+          "spec",
+          "spec/drama3_resident_spec.cr",
+          "spec/drama3_codec_resident_spec.cr",
+          "spec/drama3_mapping_spec.cr",
+          "--release",
+          "-Ddrama3_metal",
+          "--link-flags=/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld"
+        ],
+        "started_at_utc": "2026-10-16T03:21:09.035994+00:00",
+        "finished_at_utc": "2026-10-16T03:21:21.817461+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 12.712558582890779,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/focused-gpu-adversary.log",
+        "log_sha256": "b63ae5d1e28dcccb388fb4ccfc2b45dd803aac60e7ab40c8f62cf0f9206b2d10",
+        "environment_delta": {}
+      },
+      {
+        "name": "build-bridge",
+        "argv": [
+          "scripts/run_safe.sh",
+          "clang++",
+          "900",
+          "40960",
+          "-std=c++17",
+          "-fobjc-arc",
+          "-O2",
+          "-c",
+          "src/ml/metal/bridge.mm",
+          "-o",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/bridge.o"
+        ],
+        "started_at_utc": "2026-10-16T02:43:37.300865+00:00",
+        "finished_at_utc": "2026-10-16T02:43:40.179244+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 2.870876417029649,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/build-bridge.log",
+        "log_sha256": "e4da9c0796bff84f4fd2482fca0e8e825ac37b467dbf81a7bf42d9b795a2932a",
+        "environment_delta": {}
+      },
+      {
+        "name": "build-dac-probe",
+        "argv": [
+          "scripts/run_safe.sh",
+          "crystal",
+          "900",
+          "40960",
+          "build",
+          "examples/drama3_window_probe.cr",
+          "--release",
+          "-Ddrama3_metal",
+          "--link-flags=/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "-o",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/drama3_window_probe"
+        ],
+        "started_at_utc": "2026-10-16T02:58:35.659694+00:00",
+        "finished_at_utc": "2026-10-16T02:58:43.082292+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 7.4139042077586055,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/build-dac-probe.log",
+        "log_sha256": "822774b7e18214d10e7da6f6d8d855d1911daa738e47615d8d1fcad223bbb9e8",
+        "environment_delta": {}
+      },
+      {
+        "name": "build-dac-probe-final",
+        "argv": [
+          "scripts/run_safe.sh",
+          "crystal",
+          "900",
+          "40960",
+          "build",
+          "examples/drama3_window_probe.cr",
+          "--release",
+          "-Ddrama3_metal",
+          "--link-flags=/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "-o",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/drama3_window_probe_final"
+        ],
+        "started_at_utc": "2026-10-16T03:10:11.922724+00:00",
+        "finished_at_utc": "2026-10-16T03:10:19.008278+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 7.077267750166357,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/build-dac-probe-final.log",
+        "log_sha256": "f24030fc095df1c926ec42b76d19c063c685352513dcef7916876fe8fdc01674",
+        "environment_delta": {}
+      },
+      {
+        "name": "build-native-generate-adversary",
+        "argv": [
+          "scripts/run_safe.sh",
+          "crystal",
+          "900",
+          "40960",
+          "build",
+          "examples/drama3_generate.cr",
+          "--release",
+          "-Ddrama3_metal",
+          "--link-flags=/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "-o",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/drama3_generate"
+        ],
+        "started_at_utc": "2026-10-16T03:20:24.992992+00:00",
+        "finished_at_utc": "2026-10-16T03:20:36.595225+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 11.593683999963105,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/build-native-generate-adversary.log",
+        "log_sha256": "b6057a42cd8037f80a6868184391fb2c693391498bac60787f1123b36221927e",
+        "environment_delta": {}
+      },
+      {
+        "name": "build-wide-prefill",
+        "argv": [
+          "scripts/run_safe.sh",
+          "crystal",
+          "900",
+          "40960",
+          "build",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/prefill_probe_2048.cr",
+          "--release",
+          "-Ddrama3_metal",
+          "--link-flags=/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "-o",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/prefill_probe_2048"
+        ],
+        "started_at_utc": "2026-10-16T03:09:53.996240+00:00",
+        "finished_at_utc": "2026-10-16T03:10:04.608048+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 10.597102207597345,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/build-wide-prefill.log",
+        "log_sha256": "e31ec92cd6b5efa9a6d136588aaf89d332bc4c924bc194a80296b9dee2682313",
+        "environment_delta": {}
+      },
+      {
+        "name": "build-codec-cross",
+        "argv": [
+          "scripts/run_safe.sh",
+          "crystal",
+          "900",
+          "40960",
+          "build",
+          "examples/drama3_codec_cross_compare.cr",
+          "--release",
+          "-Ddrama3_metal",
+          "--link-flags=/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "-o",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/codec_cross"
+        ],
+        "started_at_utc": "2026-10-16T03:10:04.622633+00:00",
+        "finished_at_utc": "2026-10-16T03:10:11.904862+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 7.274196083191782,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/build-codec-cross.log",
+        "log_sha256": "f24030fc095df1c926ec42b76d19c063c685352513dcef7916876fe8fdc01674",
+        "environment_delta": {}
+      },
+      {
+        "name": "build-cpu-cli",
+        "argv": [
+          "scripts/run_safe.sh",
+          "crystal",
+          "900",
+          "40960",
+          "build",
+          "examples/drama3_generate.cr",
+          "--release",
+          "-Dcpu_only",
+          "-o",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/drama3_generate_cpu"
+        ],
+        "started_at_utc": "2026-10-16T03:30:34.032704+00:00",
+        "finished_at_utc": "2026-10-16T03:30:42.541445+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 8.501992375124246,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/build-cpu-cli.log",
+        "log_sha256": "394f23521298010dd996648f46f8bea690cdc6a7007e70fccc3561cdbdf50b5e",
+        "environment_delta": {}
+      },
+      {
+        "name": "wide-prefill-oracle",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/prefill_probe_2048",
+          "900",
+          "40960",
+          "--self-test"
+        ],
+        "started_at_utc": "2026-10-16T03:10:43.014092+00:00",
+        "finished_at_utc": "2026-10-16T03:10:43.762241+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 0.7400229587219656,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/wide-prefill-oracle.log",
+        "log_sha256": "593fba563e1406feda235a67380a7c807a6bde0b04d5d0761fbdf6f3fbba4ab7",
+        "environment_delta": {}
+      },
+      {
+        "name": "codec-cross-oracle",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/codec_cross",
+          "900",
+          "40960",
+          "--self-test"
+        ],
+        "started_at_utc": "2026-10-16T03:10:43.777689+00:00",
+        "finished_at_utc": "2026-10-16T03:10:44.521648+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 0.7356327497400343,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/codec-cross-oracle.log",
+        "log_sha256": "525e665fcb807dd201fff0756e8e983d0e1027f1c2788b87c53f25427939d566",
+        "environment_delta": {}
+      },
+      {
+        "name": "dac768-fresh-depth0",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/drama3_window_probe",
+          "900",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/native.wav.json",
+          "768",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/dac768-fresh-depth0.json"
+        ],
+        "started_at_utc": "2026-10-16T02:59:38.512140+00:00",
+        "finished_at_utc": "2026-10-16T03:01:02.814911+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 84.29432054189965,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/dac768-fresh-depth0.log",
+        "log_sha256": "18d6a4afd36faca4c447dafc6aa5883b6815b41134d522208301cac934d2e2cd",
+        "environment_delta": {
+          "DRAMA3_DAC_SCRATCH": "0",
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "0"
+        }
+      },
+      {
+        "name": "dac768-arena-depth0",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/drama3_window_probe",
+          "900",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/native.wav.json",
+          "768",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/dac768-arena-depth0.json"
+        ],
+        "started_at_utc": "2026-10-16T03:01:38.726533+00:00",
+        "finished_at_utc": "2026-10-16T03:03:28.632652+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 109.8415094576776,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/dac768-arena-depth0.log",
+        "log_sha256": "07b379c0aa26895aa0a0226f7afbed325760c963b83d1ec715bb15afc1bf805d",
+        "environment_delta": {
+          "DRAMA3_COGNIGRAPH_MAX_INFLIGHT": "0"
+        }
+      },
+      {
+        "name": "dac768-arena-depth2",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/drama3_window_probe",
+          "900",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/native.wav.json",
+          "768",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/dac768-arena-depth2.json"
+        ],
+        "started_at_utc": "2026-10-16T03:04:17.239737+00:00",
+        "finished_at_utc": "2026-10-16T03:06:04.398299+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 107.14580066595227,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/dac768-arena-depth2.log",
+        "log_sha256": "7950a004f75e204c974e0bbdb4cc000fbf95ca58659ac30cf95b28662ef3e7f9",
+        "environment_delta": {}
+      },
+      {
+        "name": "dac768-fresh-depth2",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/drama3_window_probe",
+          "900",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/native.wav.json",
+          "768",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/dac768-fresh-depth2.json"
+        ],
+        "started_at_utc": "2026-10-16T03:07:44.973376+00:00",
+        "finished_at_utc": "2026-10-16T03:09:14.204077+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 89.20221466710791,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/dac768-fresh-depth2.log",
+        "log_sha256": "46405bae80ffe9eda9c653eefe3b6504ed46f0e12d148d5fe875615df6e46cf4",
+        "environment_delta": {
+          "DRAMA3_DAC_SCRATCH": "0"
+        }
+      },
+      {
+        "name": "dac2048-arena-depth2",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/drama3_window_probe_final",
+          "900",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/native.wav.json",
+          "2048",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/dac2048-arena-depth2.json"
+        ],
+        "started_at_utc": "2026-10-16T03:11:46.371094+00:00",
+        "finished_at_utc": "2026-10-16T03:15:44.386254+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 238.00415625004098,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/dac2048-arena-depth2.log",
+        "log_sha256": "db6c9e6b2266777d907f8814ac5fa66c4b0bcc38efd840a7da715b84c3ef9ce3",
+        "environment_delta": {}
+      },
+      {
+        "name": "wide-prefill-depth2",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/prefill_probe_2048",
+          "900",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/prefill-fixture.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/wide-prefill-depth2.json"
+        ],
+        "started_at_utc": "2026-10-16T03:10:44.539514+00:00",
+        "finished_at_utc": "2026-10-16T03:11:24.306358+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 39.74953274987638,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/wide-prefill-depth2.log",
+        "log_sha256": "78fdd2dbff34b3448d09b49e52aca79730f7d80e5880ba310e80a22313d0975b",
+        "environment_delta": {}
+      },
+      {
+        "name": "codec-upstream-final",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/codec_cross",
+          "900",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/reference-positive/reference.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/codec-upstream-final.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/codec-upstream-final.wav"
+        ],
+        "started_at_utc": "2026-10-16T03:16:21.972081+00:00",
+        "finished_at_utc": "2026-10-16T03:16:52.083525+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 30.079014041926712,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/codec-upstream-final.log",
+        "log_sha256": "7dc7f63a8184774bfb63dd9a5a924c0d6a19d60e6913a238838ef5915d4ca3e6",
+        "environment_delta": {}
+      },
+      {
+        "name": "native-wide-1100",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/drama3_generate",
+          "900",
+          "40960",
+          "--model",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--text",
+          "Direction: One Russian male speaker. Begin as a composed, professional newsreader. At \"\u0410 \u0442\u0435\u043f\u0435\u0440\u044c \u043f\u0440\u0435\u0434\u0441\u0442\u0430\u0432\u044c\u0442\u0435\" switch to an animated, expressive storyteller, with growing wonder and excitement. Keep natural brief sentence pauses. Speak only the Russian line.\nLine: [formal, composed newsreader] \u0414\u043e\u0431\u0440\u044b\u0439 \u0432\u0435\u0447\u0435\u0440. \u0412 \u0433\u043e\u0440\u043e\u0434\u0441\u043a\u043e\u043c \u043f\u0430\u0440\u043a\u0435 \u043e\u0442\u043a\u0440\u044b\u043b\u0430\u0441\u044c \u043d\u043e\u0432\u0430\u044f \u043e\u0431\u0441\u0435\u0440\u0432\u0430\u0442\u043e\u0440\u0438\u044f. \u041f\u0435\u0440\u0432\u044b\u0435 \u043f\u043e\u0441\u0435\u0442\u0438\u0442\u0435\u043b\u0438 \u0443\u0432\u0438\u0434\u0435\u043b\u0438 \u043a\u043e\u043b\u044c\u0446\u0430 \u0421\u0430\u0442\u0443\u0440\u043d\u0430.\n[animated, expressive storytelling with wonder] \u0410 \u0442\u0435\u043f\u0435\u0440\u044c \u043f\u0440\u0435\u0434\u0441\u0442\u0430\u0432\u044c\u0442\u0435: \u044f \u043f\u043e\u0434\u0445\u043e\u0436\u0443 \u043a \u0442\u0435\u043b\u0435\u0441\u043a\u043e\u043f\u0443, \u0437\u0430\u0433\u043b\u044f\u0434\u044b\u0432\u0430\u044e \u0432 \u043e\u043a\u0443\u043b\u044f\u0440 \u2014 \u0438 \u0437\u0430\u043c\u0438\u0440\u0430\u044e. \u041f\u0435\u0440\u0435\u0434\u043e \u043c\u043d\u043e\u0439 \u0446\u0435\u043b\u044b\u0439 \u043c\u0438\u0440! \u0412\u043e\u0442 \u044d\u0442\u043e \u043f\u0440\u0438\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0435!",
+          "--seed",
+          "1",
+          "--max-frames",
+          "1100",
+          "--temperature",
+          "0.8",
+          "--top-k",
+          "30",
+          "--top-p",
+          "0.9",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/native-wide-1100.wav"
+        ],
+        "started_at_utc": "2026-10-16T03:21:47.783956+00:00",
+        "finished_at_utc": "2026-10-16T03:26:32.854641+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 285.04799183271825,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/native-wide-1100.log",
+        "log_sha256": "b38926d1206d00d183b854924b1211fbb69526ff82f26dd0c2da5d4af4b23912",
+        "environment_delta": {}
+      },
+      {
+        "name": "prove-wide-tape-v2",
+        "argv": [
+          "scripts/run_safe.sh",
+          "crystal",
+          "900",
+          "40960",
+          "run",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/prove_wide_tape.cr",
+          "--release",
+          "-Ddrama3_metal",
+          "--link-flags=/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/bridge.o -framework Metal -framework Foundation -framework MetalPerformanceShaders -lc++ -fuse-ld=/usr/bin/ld",
+          "--",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/random-tape-1.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/native-wide-1100.wav.json",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/wide-tape-proof.json"
+        ],
+        "started_at_utc": "2026-10-16T03:29:14.958994+00:00",
+        "finished_at_utc": "2026-10-16T03:29:20.822425+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 5.8557535000145435,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/prove-wide-tape-v2.log",
+        "log_sha256": "8707ff14dc92ffe9e4c6eb999c2d4e95f2913e88ef7ea6d4235bdf7672e16b40",
+        "environment_delta": {}
+      },
+      {
+        "name": "compare-wide-prefix",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-reference-20261014/venv/bin/python",
+          "900",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/compare_wide_prefix.py"
+        ],
+        "started_at_utc": "2026-10-16T03:29:20.839188+00:00",
+        "finished_at_utc": "2026-10-16T03:29:21.589951+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 0.7382100410759449,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/compare-wide-prefix.log",
+        "log_sha256": "97fc93173f1a9f515a197307641cd84b2ea46a66f7fd4515e256ef3bf686df1f",
+        "environment_delta": {}
+      },
+      {
+        "name": "auto-plan-live",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/drama3_generate",
+          "900",
+          "40960",
+          "--model",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--text",
+          "Direction: One Russian male speaker. Begin as a composed, professional newsreader. At \"\u0410 \u0442\u0435\u043f\u0435\u0440\u044c \u043f\u0440\u0435\u0434\u0441\u0442\u0430\u0432\u044c\u0442\u0435\" switch to an animated, expressive storyteller, with growing wonder and excitement. Keep natural brief sentence pauses. Speak only the Russian line.\nLine: [formal, composed newsreader] \u0414\u043e\u0431\u0440\u044b\u0439 \u0432\u0435\u0447\u0435\u0440. \u0412 \u0433\u043e\u0440\u043e\u0434\u0441\u043a\u043e\u043c \u043f\u0430\u0440\u043a\u0435 \u043e\u0442\u043a\u0440\u044b\u043b\u0430\u0441\u044c \u043d\u043e\u0432\u0430\u044f \u043e\u0431\u0441\u0435\u0440\u0432\u0430\u0442\u043e\u0440\u0438\u044f. \u041f\u0435\u0440\u0432\u044b\u0435 \u043f\u043e\u0441\u0435\u0442\u0438\u0442\u0435\u043b\u0438 \u0443\u0432\u0438\u0434\u0435\u043b\u0438 \u043a\u043e\u043b\u044c\u0446\u0430 \u0421\u0430\u0442\u0443\u0440\u043d\u0430.\n[animated, expressive storytelling with wonder] \u0410 \u0442\u0435\u043f\u0435\u0440\u044c \u043f\u0440\u0435\u0434\u0441\u0442\u0430\u0432\u044c\u0442\u0435: \u044f \u043f\u043e\u0434\u0445\u043e\u0436\u0443 \u043a \u0442\u0435\u043b\u0435\u0441\u043a\u043e\u043f\u0443, \u0437\u0430\u0433\u043b\u044f\u0434\u044b\u0432\u0430\u044e \u0432 \u043e\u043a\u0443\u043b\u044f\u0440 \u2014 \u0438 \u0437\u0430\u043c\u0438\u0440\u0430\u044e. \u041f\u0435\u0440\u0435\u0434\u043e \u043c\u043d\u043e\u0439 \u0446\u0435\u043b\u044b\u0439 \u043c\u0438\u0440! \u0412\u043e\u0442 \u044d\u0442\u043e \u043f\u0440\u0438\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0435!",
+          "--max-frames",
+          "auto",
+          "--frame-cap",
+          "2048",
+          "--memory-plan-only",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/plan-unused.wav"
+        ],
+        "started_at_utc": "2026-10-16T03:11:45.581350+00:00",
+        "finished_at_utc": "2026-10-16T03:11:46.356526+00:00",
+        "exit_code": 1,
+        "wrapper_seconds": 0.7446643747389317,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/auto-plan-live.log",
+        "log_sha256": "5f11e5a9aa08caf5464663426167f8338c6be56605e19e702da4dbce5a80b8c5",
+        "environment_delta": {}
+      },
+      {
+        "name": "auto-plan-final",
+        "argv": [
+          "scripts/run_safe.sh",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/drama3_generate",
+          "900",
+          "40960",
+          "--model",
+          "/Users/sergey/.cache/cogni-ml/drama3-mlx-q4-5331ab50",
+          "--text",
+          "Direction: One Russian male speaker. Begin as a composed, professional newsreader. At \"\u0410 \u0442\u0435\u043f\u0435\u0440\u044c \u043f\u0440\u0435\u0434\u0441\u0442\u0430\u0432\u044c\u0442\u0435\" switch to an animated, expressive storyteller, with growing wonder and excitement. Keep natural brief sentence pauses. Speak only the Russian line.\nLine: [formal, composed newsreader] \u0414\u043e\u0431\u0440\u044b\u0439 \u0432\u0435\u0447\u0435\u0440. \u0412 \u0433\u043e\u0440\u043e\u0434\u0441\u043a\u043e\u043c \u043f\u0430\u0440\u043a\u0435 \u043e\u0442\u043a\u0440\u044b\u043b\u0430\u0441\u044c \u043d\u043e\u0432\u0430\u044f \u043e\u0431\u0441\u0435\u0440\u0432\u0430\u0442\u043e\u0440\u0438\u044f. \u041f\u0435\u0440\u0432\u044b\u0435 \u043f\u043e\u0441\u0435\u0442\u0438\u0442\u0435\u043b\u0438 \u0443\u0432\u0438\u0434\u0435\u043b\u0438 \u043a\u043e\u043b\u044c\u0446\u0430 \u0421\u0430\u0442\u0443\u0440\u043d\u0430.\n[animated, expressive storytelling with wonder] \u0410 \u0442\u0435\u043f\u0435\u0440\u044c \u043f\u0440\u0435\u0434\u0441\u0442\u0430\u0432\u044c\u0442\u0435: \u044f \u043f\u043e\u0434\u0445\u043e\u0436\u0443 \u043a \u0442\u0435\u043b\u0435\u0441\u043a\u043e\u043f\u0443, \u0437\u0430\u0433\u043b\u044f\u0434\u044b\u0432\u0430\u044e \u0432 \u043e\u043a\u0443\u043b\u044f\u0440 \u2014 \u0438 \u0437\u0430\u043c\u0438\u0440\u0430\u044e. \u041f\u0435\u0440\u0435\u0434\u043e \u043c\u043d\u043e\u0439 \u0446\u0435\u043b\u044b\u0439 \u043c\u0438\u0440! \u0412\u043e\u0442 \u044d\u0442\u043e \u043f\u0440\u0438\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0435!",
+          "--max-frames",
+          "auto",
+          "--frame-cap",
+          "2048",
+          "--memory-plan-only",
+          "--output",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/auto-plan-final-unused.wav"
+        ],
+        "started_at_utc": "2026-10-16T03:29:21.606079+00:00",
+        "finished_at_utc": "2026-10-16T03:29:22.358901+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 0.7450467497110367,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/auto-plan-final.log",
+        "log_sha256": "1dce4602c87c3aebe99a7be053778d13272016e7195129bb2e491d9e848445cc",
+        "environment_delta": {}
+      },
+      {
+        "name": "validate-results",
+        "argv": [
+          "scripts/run_safe.sh",
+          "python3",
+          "900",
+          "40960",
+          "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/validate_window_results.py"
+        ],
+        "started_at_utc": "2026-10-16T03:30:15.690554+00:00",
+        "finished_at_utc": "2026-10-16T03:30:16.428665+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 0.7308714590035379,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/validate-results.log",
+        "log_sha256": "724dfbd69a70e0395b34e5ef673d02c2336621e4323b64beb70c71146aac79c3",
+        "environment_delta": {}
+      },
+      {
+        "name": "final-format-check",
+        "argv": [
+          "scripts/run_safe.sh",
+          "crystal",
+          "900",
+          "40960",
+          "tool",
+          "format",
+          "--check",
+          "examples/drama3_generate.cr",
+          "examples/drama3_window_probe.cr",
+          "spec/drama3_codec_resident_spec.cr",
+          "spec/drama3_mapping_spec.cr",
+          "spec/drama3_resident_spec.cr",
+          "spec/drama3_window_budget_spec.cr",
+          "src/ml/audio/drama3/backbone_resident.cr",
+          "src/ml/audio/drama3/codec_resident.cr",
+          "src/ml/audio/drama3/metal.cr",
+          "src/ml/audio/drama3/native.cr",
+          "src/ml/audio/drama3/resident.cr",
+          "src/ml/audio/drama3/window_budget.cr",
+          "src/ml/audio/drama3/window_memory.cr"
+        ],
+        "started_at_utc": "2026-10-16T03:31:19.227812+00:00",
+        "finished_at_utc": "2026-10-16T03:31:19.970999+00:00",
+        "exit_code": 0,
+        "wrapper_seconds": 0.7354012499563396,
+        "log": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/final-format-check.log",
+        "log_sha256": "2a2cef139744843e41b43281456c041c2f851227ce163ec2716a476fc9398ca4",
+        "environment_delta": {}
+      }
+    ]
+  },
+  "adversary": {
+    "verdict": "ROBUST",
+    "scope": "Observed narrow regression, lifetime, arithmetic and resource results. Correlated mini-Quadrumvirate plus root-executed tests; not independent model agreement.",
+    "failed_promotions": [
+      "No speedup: both paired arena timings slower by 22-32 percent; shared-host cause remains unknown.",
+      "No physical peak guarantee: GC/driver retention and host load not certified.",
+      "No complete upstream parity: prior DAC stage and generation forks remain."
+    ],
+    "next_discriminator": "Interleaved fresh/arena timing at fixed depth with matched warmups, per-command GPU timing and host encoding timing before optimizing broader workspace ownership."
+  },
+  "lineage": {
+    "source_sha256": {
+      "examples/drama3_generate.cr": "4502385f6f512341700290ce3c8b96f426e2bf4585736afe20329c08179dd037",
+      "examples/drama3_window_probe.cr": "65965d618a245f4f7e617c295d1664b29b0419f752f37c1c5d9d863b670ea24c",
+      "spec/drama3_codec_resident_spec.cr": "aad19210c7125bb276f66c3e05cb04af1c55907b83d6d69de79033ef3c463938",
+      "spec/drama3_mapping_spec.cr": "4e92cfd05c31e4ae3234a4c810f8d36eeebbdfc5dba00d7df869855dcc55d3b5",
+      "spec/drama3_resident_spec.cr": "5cf1c29299b50b5991dbb2ccdfa9e0e53666baebbb89a3a871090351dc2e8fee",
+      "spec/drama3_window_budget_spec.cr": "6600dbcc408b307209c13000bcafb247a5a31ff5b75fda46fda94f31ddfb9f95",
+      "src/ml/audio/drama3/backbone_resident.cr": "cb03be22382b9659c061ed123cc852a37e4f05e1693b3a40f736f4ce1df4525e",
+      "src/ml/audio/drama3/codec_resident.cr": "df8da27a87137eccc9087c3e9e0e54fc74208a8e89d154e905e127a85d3e5485",
+      "src/ml/audio/drama3/kernels/backbone_resident.metal": "57881986c57f10ed425e95f17eb1f5a4ddad3e46a1e43dfacd1f48e2dac0713d",
+      "src/ml/audio/drama3/metal.cr": "254dcfb1b76c7db84c4811945f53386d3171ab9f8aca4a65cfb5a3a567aa6d42",
+      "src/ml/audio/drama3/native.cr": "5b70f4cf69f1c9f02d4e0f1abcb4064ba8c8fdc51f1a5f88e5f57329ec2afd5e",
+      "src/ml/audio/drama3/resident.cr": "e3eb8472f3362c32ac464d15dcddbd8c9e0edb1e813632d85232db8b3626242d",
+      "src/ml/audio/drama3/window_budget.cr": "6dfe46cd9ab2e012ea15a2400d1373f5f4cf37e28f156ec695c6ae5a4ff2b367",
+      "src/ml/audio/drama3/window_memory.cr": "a2d1bce59e3046bb16156e6d215b498dd73818f9841acd0e509c9a518621c8a0",
+      "src/ml/metal/bridge.mm": "9b01e85fd463701a14cce07cda83d9acaa8eb7971db4a708020bb8e0df8e7d80",
+      "docs/drama3-window-memory.md": "67d2922a5a9a3cc3662ebf5cf84f0db0f23810c03ad4d429aeac4725fdd4e7a9"
+    },
+    "binding": "Latest Metal build source hashes and focused spec hashes match current files. Paired decoder/Context/kernel/bridge source hashes match current files; later inventory/budget repairs do not run on the paired DAC path. Raw command manifest carries all build/run input hashes.",
+    "decay_trigger": "Refresh on production source, shader, checkpoint, fixture/tape, runtime/device/OS, graph policy, precision or tolerance change."
+  },
+  "artifacts": [
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/commands.json",
+      "sha256": "99c90973333d998cf52baa2b304ff822274d43f05e2c18bcdfecb0c5f0fe67bb",
+      "bytes": 837378
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/run.py",
+      "sha256": "1511d1e5e7dc18223aa2dc8c58ee39a5725eff187f71aecc1bfab272a3c17164",
+      "bytes": 3385
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/validate_window_results.py",
+      "sha256": "13a9e20c3c6af10851526d5435292792e0e177b9a0f0794af67f25f4e1586cfc",
+      "bytes": 6944
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/result-validation.json",
+      "sha256": "00e6fcc108883f0815edda2460d470b39adee958a20c1d10229b0ae9f2282aee",
+      "bytes": 1733
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/prove_wide_tape.cr",
+      "sha256": "fb2c6fc3bbb978bf8135a60d1ea0eb1c62e12c6a9c840e503756104b3ff865bb",
+      "bytes": 2034
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/compare_wide_prefix.py",
+      "sha256": "f9326ff280c3c297f7d275bf3c330fe4f6f7d94e9bfe408944d26904217870e8",
+      "bytes": 2474
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/wide-tape-proof.json",
+      "sha256": "b77849942bf5429997157c49ec945aa0b9a83f852cc8041f8fbe216752ed10ce",
+      "bytes": 673
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/wide-prefix-comparison.json",
+      "sha256": "b49f4437002807c7789617d9b5f6dbfbdfd8b29bf478af8e39b0c114c262ed4d",
+      "bytes": 2568
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/dac768-fresh-depth0.json",
+      "sha256": "d319940cefa7f6ba10486fea06ef2338440dd9b3abd54b0420b0c81bc05ee7d2",
+      "bytes": 2741
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/dac768-arena-depth0.json",
+      "sha256": "9dd62a4d74c59a909c5aa8b402fddcd6aa7bdf2eb9a98a1c54b8dc03c540edde",
+      "bytes": 2739
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/dac768-arena-depth2.json",
+      "sha256": "28c248720c68c059d4fb11c6d6f545736077d910f78027dfcf2cab4b7b785737",
+      "bytes": 2757
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/dac768-fresh-depth2.json",
+      "sha256": "7846ea1482660bd0a61ec08bf17f1bad9377dfccc513697515990eee7cc32174",
+      "bytes": 2762
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/dac2048-arena-depth2.json",
+      "sha256": "b60d25169ca965235e3b8568d7221ec89549f87d2c8a46125f3162d59354cc5b",
+      "bytes": 2780
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/wide-prefill-depth2.json",
+      "sha256": "9c6d5b61fff4407d9d02a60c662950acf13e6f3f0213e318368173483c2a325e",
+      "bytes": 2422
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/codec-upstream-final.json",
+      "sha256": "bf69d99dfd8c49119fd6eb5c7e23255a6acb3c84b2be421e7896a7bd8f19ee97",
+      "bytes": 28352
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/auto-plan-live.json",
+      "sha256": "705f1509d95800de679508f3980db72e23487af1c6ff6f2a85c882fe35dfba44",
+      "bytes": 789
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/auto-plan-final.json",
+      "sha256": "d625f8d5fe9962b10b2ca513873385373acb6b936d9c8eca40cbc2a3459e5e41",
+      "bytes": 1590
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/native-wide-1100.wav.json",
+      "sha256": "c72cd121639d390e0070a9dfe151ebd5ee89bfe9fe12262a8509261c16c4e218",
+      "bytes": 110102
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/native-wide-1100.wav",
+      "sha256": "043e2d8ad34c8931fbba7bfabae061460cbe20d785b71fd4ec8be1d6ac18da65",
+      "bytes": 3166252
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/bridge.o",
+      "sha256": "a355b555dd78966f34623b3897d0b1176cff8e4bd7059f5c2d84c55283ab2d30",
+      "bytes": 66808
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/drama3_generate",
+      "sha256": "c5639b81abe58be3afb0ed9be3aaa6e7444460a7059eee0fc369c5bb88b2f856",
+      "bytes": 1592496
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/drama3_window_probe",
+      "sha256": "405dcb081929d6b3dd3a660c247f55916db0fd4d9648c87b126bfd921851986c",
+      "bytes": 856256
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/window-scratch-20261015/drama3_window_probe_final",
+      "sha256": "657b98299ff814cd1d38c184dc20e2922f0802b733b1a9c6f982839772f2efcb",
+      "bytes": 856264
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/native.wav.json",
+      "sha256": "e3d59134164385374937d105e27a1d55f757f495a663156d9b2a1625e4614469",
+      "bytes": 107698
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/mlx.json",
+      "sha256": "bdfdbf0662eed42a6ad5e8eb073e036cb90c26ade83852552cb26a3640cecf19",
+      "bytes": 230396
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/directing-roles-wide-20261015/news-story/prefill-fixture.json",
+      "sha256": "cf31d5199aa6290e05b65e6f958bb3d6e1b760cde5d670da7679cf13c2f7ea66",
+      "bytes": 125152
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/sampler-voices-20261015/random-tape-1.json",
+      "sha256": "ddc31bee6c0ffcd12c2ba781207747cad5eab9cbcb02faa074658caac8e16341",
+      "bytes": 89933
+    },
+    {
+      "path": "/Users/sergey/.cache/cogni-ml/drama3-runs/codec-cross-20261015/native-positive-final.json",
+      "sha256": "b839bc01932bd5fac4a3bca826639a2dbdaad30ac9e00fbaf867fa97fe3ef759",
+      "bytes": 28259
+    }
+  ]
+}

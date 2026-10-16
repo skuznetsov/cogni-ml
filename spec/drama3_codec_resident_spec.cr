@@ -17,7 +17,7 @@ include ML::Audio::Drama3
     end
   end
 
-  private def drama3_resident_fixture(config : CodecConfig) : WeightStore
+  private def drama3_resident_fixture(config : CodecConfig, omit_name : String? = nil) : WeightStore
     tensors = {} of String => Tensor
     put = ->(name : String, shape : Array(Int32), scale : Float32) do
       count = shape.reduce(1) { |product, dimension| product * dimension }
@@ -106,6 +106,9 @@ include ML::Audio::Drama3
     put.call("decoder.model.#{final_index + 1}.weight_v", [1, final_channels, 7], 0.003_f32)
     put_special.call("decoder.model.#{final_index + 1}.weight_g", [1, 1, 1], 0.08_f32)
     put.call("decoder.model.#{final_index + 1}.bias", [1], 0.002_f32)
+    if name = omit_name
+      tensors.delete("codec.#{name}")
+    end
     WeightStore.new(tensors)
   end
 
@@ -214,6 +217,245 @@ include ML::Audio::Drama3
           ENV["DRAMA3_BACKEND"] = previous
         else
           ENV.delete("DRAMA3_BACKEND")
+        end
+      end
+    end
+
+    it "reuses decoder scratch bitwise at synchronous and graph depth two" do
+      previous_backend = ENV["DRAMA3_BACKEND"]?
+      previous_depth = ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"]?
+      previous_scratch = ENV["DRAMA3_DAC_SCRATCH"]?
+      begin
+        ENV["DRAMA3_BACKEND"] = "metal"
+        ENV["DRAMA3_DAC_SCRATCH"] = "0"
+        pending!("Metal is unavailable or lacks unified memory") unless ML::Metal::Device.instance.available? && ML::Metal::Device.instance.has_unified_memory?
+
+        config = CodecConfig.new(
+          latent_channels: 8,
+          codebook_dim: 2,
+          semantic_codebook_size: 5,
+          residual_codebooks: 9,
+          residual_codebook_size: 4,
+          post_layers: 1,
+          transformer_heads: 2,
+          transformer_head_dim: 4,
+          transformer_ff_dim: 12,
+          transformer_window: 2,
+          quantizer_upsample_rates: [2],
+          decoder_channels: 8,
+          decoder_rates: [2],
+        )
+        store = drama3_resident_fixture(config)
+        frames = 3
+        codes = Array(Float32).new(frames * 11, 0_f32)
+
+        {"0", "2"}.each do |depth|
+          ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"] = depth
+          context = Resident::Context.new
+          input = context.upload(codes)
+          before_reference_graph = context.graph_stats
+          before_reference_readbacks = context.readbacks.dup
+          reference = CodecResident.new(store, context, config).decode(input, frames)
+          reference_graph = context.graph_stats
+          context.readbacks.should eq(before_reference_readbacks)
+          reference_graph["pending"].should eq(0_i64)
+          reference_graph["completed"].should eq(reference_graph["submitted"])
+          reference_submissions = reference_graph["submitted"] - before_reference_graph["submitted"]
+          reference_waits = reference_graph["completion_waits"] - before_reference_graph["completion_waits"]
+          expected_bits = context.read(reference, "terminal").map(&.unsafe_as(UInt32))
+
+          ENV["DRAMA3_DAC_SCRATCH"] = "1"
+          decoder = CodecResident.new(store, context, config)
+          2.times do
+            before_graph = context.graph_stats
+            before_readbacks = context.readbacks.dup
+            output = decoder.decode(input, frames)
+            after_graph = context.graph_stats
+            context.readbacks.should eq(before_readbacks)
+            after_graph["pending"].should eq(0_i64)
+            after_graph["completed"].should eq(after_graph["submitted"])
+            (after_graph["submitted"] - before_graph["submitted"]).should eq(reference_submissions)
+            (after_graph["completion_waits"] - before_graph["completion_waits"]).should eq(reference_waits)
+            context.read(output, "terminal").map(&.unsafe_as(UInt32)).should eq(expected_bits)
+            context.readbacks["terminal"].should eq(before_readbacks["terminal"] + output.count.to_i64 * 4)
+            context.readbacks["control"].should eq(before_readbacks["control"] + 4_i64)
+            context.readbacks["diagnostic"].should eq(before_readbacks["diagnostic"])
+          end
+          stats = decoder.dac_scratch_stats
+          stats[:enabled].should be_true
+          stats[:bytes].should eq(3_i64 * 48 * sizeof(Float32))
+          stats[:reuses].should be > 0
+          stats[:released].should be_true
+          stats[:quarantined].should be_false
+          ENV["DRAMA3_DAC_SCRATCH"] = "0"
+        end
+      ensure
+        if previous_backend
+          ENV["DRAMA3_BACKEND"] = previous_backend
+        else
+          ENV.delete("DRAMA3_BACKEND")
+        end
+        if previous_depth
+          ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"] = previous_depth
+        else
+          ENV.delete("DRAMA3_COGNIGRAPH_MAX_INFLIGHT")
+        end
+        if previous_scratch
+          ENV["DRAMA3_DAC_SCRATCH"] = previous_scratch
+        else
+          ENV.delete("DRAMA3_DAC_SCRATCH")
+        end
+      end
+    end
+
+    it "drains after a late decoder failure and leaves the aborted context closed" do
+      previous_backend = ENV["DRAMA3_BACKEND"]?
+      previous_depth = ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"]?
+      previous_scratch = ENV["DRAMA3_DAC_SCRATCH"]?
+      begin
+        ENV["DRAMA3_BACKEND"] = "metal"
+        ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"] = "2"
+        ENV["DRAMA3_DAC_SCRATCH"] = "1"
+        pending!("Metal is unavailable or lacks unified memory") unless ML::Metal::Device.instance.available? && ML::Metal::Device.instance.has_unified_memory?
+
+        config = CodecConfig.new(
+          latent_channels: 8,
+          codebook_dim: 2,
+          semantic_codebook_size: 5,
+          residual_codebooks: 9,
+          residual_codebook_size: 4,
+          post_layers: 1,
+          transformer_heads: 2,
+          transformer_head_dim: 4,
+          transformer_ff_dim: 12,
+          transformer_window: 2,
+          quantizer_upsample_rates: [2],
+          decoder_channels: 8,
+          decoder_rates: [2],
+        )
+        frames = 3
+        codes = Array(Float32).new(frames * 11, 0_f32)
+        incomplete = drama3_resident_fixture(config, "decoder.model.3.weight_v")
+        context = Resident::Context.new
+        input = context.upload(codes)
+        decoder = CodecResident.new(incomplete, context, config)
+
+        expect_raises(ArgumentError, /missing codec tensor codec\.decoder\.model\.3\.weight_v/) do
+          decoder.decode(input, frames)
+        end
+
+        scratch = decoder.dac_scratch_stats
+        scratch[:enabled].should be_true
+        scratch[:bytes].should eq(3_i64 * 48 * sizeof(Float32))
+        scratch[:released].should be_true
+        scratch[:quarantined].should be_false
+        failed_graph = context.graph_stats
+        failed_graph["submitted"].should be > 3_i64
+        failed_graph["pending"].should eq(0_i64)
+        failed_graph["completed"].should eq(failed_graph["submitted"])
+        expect_raises(ArgumentError, /resident context aborted/) { decoder.decode(input, frames) }
+
+        # Context abort is terminal. A fresh context remains usable after this
+        # late decoder failure and its queue drain.
+        next_context = Resident::Context.new
+        next_input = next_context.upload(codes)
+        next_decoder = CodecResident.new(drama3_resident_fixture(config), next_context, config)
+        next_output = next_decoder.decode(next_input, frames)
+        next_decoder.dac_scratch_stats[:enabled].should be_true
+        next_context.read(next_output, "terminal").size.should eq(12)
+        next_context.graph_stats["pending"].should eq(0_i64)
+
+        # Depth zero reports completed=submitted synthetically. An error there
+        # must retain scratch because Context#abort cannot certify its wait.
+        ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"] = "0"
+        synchronous_context = Resident::Context.new
+        synchronous_input = synchronous_context.upload(codes)
+        synchronous_decoder = CodecResident.new(incomplete, synchronous_context, config)
+        expect_raises(ArgumentError, /missing codec tensor codec\.decoder\.model\.3\.weight_v/) do
+          synchronous_decoder.decode(synchronous_input, frames)
+        end
+        synchronous_decoder.dac_scratch_stats[:released].should be_false
+        synchronous_decoder.dac_scratch_stats[:quarantined].should be_true
+      ensure
+        if previous_backend
+          ENV["DRAMA3_BACKEND"] = previous_backend
+        else
+          ENV.delete("DRAMA3_BACKEND")
+        end
+        if previous_depth
+          ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"] = previous_depth
+        else
+          ENV.delete("DRAMA3_COGNIGRAPH_MAX_INFLIGHT")
+        end
+        if previous_scratch
+          ENV["DRAMA3_DAC_SCRATCH"] = previous_scratch
+        else
+          ENV.delete("DRAMA3_DAC_SCRATCH")
+        end
+      end
+    end
+
+    it "keeps captured device activations immutable by disabling scratch" do
+      previous_backend = ENV["DRAMA3_BACKEND"]?
+      previous_depth = ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"]?
+      previous_scratch = ENV["DRAMA3_DAC_SCRATCH"]?
+      begin
+        ENV["DRAMA3_BACKEND"] = "metal"
+        ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"] = "2"
+        ENV["DRAMA3_DAC_SCRATCH"] = "1"
+        pending!("Metal is unavailable or lacks unified memory") unless ML::Metal::Device.instance.available? && ML::Metal::Device.instance.has_unified_memory?
+
+        config = CodecConfig.new(
+          latent_channels: 8,
+          codebook_dim: 2,
+          semantic_codebook_size: 5,
+          residual_codebooks: 9,
+          residual_codebook_size: 4,
+          post_layers: 1,
+          transformer_heads: 2,
+          transformer_head_dim: 4,
+          transformer_ff_dim: 12,
+          transformer_window: 2,
+          quantizer_upsample_rates: [2],
+          decoder_channels: 8,
+          decoder_rates: [2],
+        )
+        store = drama3_resident_fixture(config)
+        frames = 3
+        codes = Array(Float32).new(frames * 11, 0_f32)
+        context = Resident::Context.new
+        decoder = CodecResident.new(store, context, config)
+        captures = {} of String => Resident::Buffer
+        decoder.device_trace = ->(name : String, buffer : Resident::Buffer, _rows : Int32, _channels : Int32) {
+          captures[name] = buffer if name == "decoder.model.1.block.2"
+          nil
+        }
+
+        decoder.decode(context.upload(codes), frames)
+        first_capture = captures["decoder.model.1.block.2"]
+        first_bits = context.read(first_capture, "diagnostic").map(&.unsafe_as(UInt32))
+        decoder.dac_scratch_stats[:enabled].should be_false
+        decoder.dac_scratch_stats[:bytes].should eq(0_i64)
+
+        changed_codes = codes.dup
+        changed_codes[1] = 1_f32
+        decoder.decode(context.upload(changed_codes), frames)
+        context.read(first_capture, "diagnostic").map(&.unsafe_as(UInt32)).should eq(first_bits)
+      ensure
+        if previous_backend
+          ENV["DRAMA3_BACKEND"] = previous_backend
+        else
+          ENV.delete("DRAMA3_BACKEND")
+        end
+        if previous_depth
+          ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"] = previous_depth
+        else
+          ENV.delete("DRAMA3_COGNIGRAPH_MAX_INFLIGHT")
+        end
+        if previous_scratch
+          ENV["DRAMA3_DAC_SCRATCH"] = previous_scratch
+        else
+          ENV.delete("DRAMA3_DAC_SCRATCH")
         end
       end
     end

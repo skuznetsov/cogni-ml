@@ -7,12 +7,18 @@ require "../src/ml/audio/drama3/generator_resident"
 require "../src/ml/audio/drama3/codec_resident"
 require "../src/ml/audio/drama3/codec_encoder_resident"
 require "../src/ml/audio/drama3/reference_audio"
+require "../src/ml/audio/drama3/window_budget"
+require "../src/ml/audio/drama3/window_memory"
 
 # Offline native inference entry point. MLX/Python are reference tools only.
 model_path = ""
 text = ""
 output = "drama3.wav"
 max_frames = 160
+auto_frames = false
+frame_cap = 4096
+frame_cap_given = false
+memory_plan_only = false
 seed = 0_u64
 temperature = 0.8
 top_k = 30
@@ -26,7 +32,12 @@ OptionParser.parse do |parser|
   parser.on("--reference-audio FILE", "Mono PCM16 44.1 kHz reference WAV, at most 10 seconds (Metal)") { |v| reference_audio = File.expand_path(v) }
   parser.on("--reference-text TEXT", "Exact transcript of the reference WAV, speaker 0") { |v| reference_text = v }
   parser.on("--output FILE", "PCM16 mono WAV destination") { |v| output = File.expand_path(v) }
-  parser.on("--max-frames N", "Bound generation (default 160)") { |v| max_frames = v.to_i }
+  parser.on("--max-frames N|auto", "Bound generation; auto is experimental (default 160)") do |v|
+    auto_frames = v == "auto"
+    max_frames = v.to_i unless auto_frames
+  end
+  parser.on("--frame-cap N", "Generated-frame ceiling for auto, at most 4096") { |v| frame_cap = v.to_i; frame_cap_given = true }
+  parser.on("--memory-plan-only", "Print the auto budget without running inference") { memory_plan_only = true }
   parser.on("--seed N", "Native sampling seed") { |v| seed = v.to_u64 }
   parser.on("--temperature N", "Sampling temperature (default 0.8)") { |v| temperature = v.to_f64 }
   parser.on("--top-k N", "Sampling top-k (default 30)") { |v| top_k = v.to_i }
@@ -35,12 +46,17 @@ OptionParser.parse do |parser|
 end
 abort "--model and --text are required" if model_path.empty? || text.strip.empty?
 abort "--reference-audio and --reference-text are required together" if reference_audio.empty? != reference_text.empty?
-abort "max-frames must be in 1..1024" unless max_frames.in?(1..1024)
+abort "max-frames must be in 1..4096 or auto" unless auto_frames || max_frames.in?(1..4096)
+abort "frame-cap must be in 1..4096" unless frame_cap.in?(1..4096)
+abort "--frame-cap and --memory-plan-only require --max-frames auto" if !auto_frames && (frame_cap_given || memory_plan_only)
 abort "output already exists: #{output}" if File.exists?(output) || File.exists?(output + ".json")
 ML::Audio::Drama3::Profile.configure_from_env!
 metal = ML::Audio::Drama3::MetalBackend.enabled?
 has_reference = !reference_audio.empty?
 abort "reference audio requires resident Metal" if has_reference && !metal
+abort "automatic frame budgeting requires resident Metal" if auto_frames && !metal
+abort "automatic budgeting for the reference encoder is not yet calibrated" if auto_frames && has_reference
+abort "CPU max-frames must be in 1..1024" if !metal && max_frames > 1024
 reference_input = has_reference ? ML::Audio::Drama3::Wav.read_reference(reference_audio) : nil
 reference_sha256 = reference_input.try(&.sha256)
 config = JSON.parse(File.read(File.join(model_path, "config.json")))
@@ -60,8 +76,58 @@ reference_plan = if input = reference_input
                  end
 prompt = reference_plan ? [] of Array(Int32) : ML::Audio::Drama3::Prompt.build(text, tokenizer, tower_config.num_codebooks)
 prompt_rows = reference_plan.try(&.row_count) || prompt.size
-abort "prompt plus frame bound exceeds the 1024-row resident cache" if metal && prompt_rows + max_frames - 1 > 1024
+abort "prompt plus frame bound exceeds the 4096-row resident cache" if metal && !auto_frames && prompt_rows.to_i64 + max_frames - 1 > 4096
 store = ML::Audio::Drama3::WeightStore.new(model_path)
+window_plan : JSON::Any? = nil
+resident_memory = {} of String => JSON::Any
+resident_allocation_stats : JSON::Any? = nil
+resident_dac_scratch : JSON::Any? = nil
+{% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
+  if metal
+    snapshot = ML::Audio::Drama3::WindowMemory.snapshot
+    resident_memory["before_model"] = JSON.parse(snapshot.to_json)
+    if auto_frames
+      setting = ENV["DRAMA3_DAC_SCRATCH"]?
+      abort "automatic budgeting requires DRAMA3_DAC_SCRATCH=1 (or unset)" if setting && setting != "1"
+      ENV["DRAMA3_DAC_SCRATCH"] = "1"
+      inventory = store.resident_memory_inventory
+      telemetry = ML::Audio::Drama3::Drama3WindowBudget::Telemetry.new(
+        physical_bytes: snapshot[:valid] ? snapshot[:physical_bytes] : nil,
+        free_reclaimable_bytes: snapshot[:valid] ? snapshot[:free_reclaimable_bytes] : nil,
+        metal_recommended_bytes: snapshot[:metal_recommended_bytes],
+        metal_current_allocated_bytes: snapshot[:metal_allocated_bytes],
+        max_buffer_length: ML::Audio::Drama3::MetalBackend.max_buffer_length,
+      )
+      request = ML::Audio::Drama3::Drama3WindowBudget::Request.new(
+        backbone_config: ML::Audio::Drama3::BackboneConfig.new(config["text_config"]),
+        tower_config: tower_config, codec_config: ML::Audio::Drama3::CodecConfig.default,
+        prompt_frames: prompt_rows, min_frames: 1, frame_cap: frame_cap,
+        checkpoint_mapped_bytes: inventory[:mapped_bytes],
+        largest_checkpoint_mapped_buffer_bytes: inventory[:largest_checkpoint_mapped_buffer_bytes],
+        converted_static_bytes: inventory[:converted_static_bytes],
+        largest_converted_buffer_bytes: inventory[:largest_converted_buffer_bytes],
+        additional_margin_bytes: 1024_i64 * 1024 * 1024,
+        moe_intermediate_size: config["text_config"]["moe_intermediate_size"]?.try(&.as_i),
+        shared_expert_intermediate_size: config["text_config"]["shared_expert_intermediate_size"]?.try(&.as_i),
+      )
+      result = ML::Audio::Drama3::Drama3WindowBudget.experimental_plan(request, telemetry)
+      unless plan = result.plan?
+        puts({mode: "experimental_auto", admitted: false, failure: result.failure.to_s,
+              inventory: inventory, memory: snapshot, reserved_percent: 15,
+              scope: "Advisory estimate; no memory was reserved and no model inference ran."}.to_json)
+        abort "automatic frame budget rejected: #{result.failure}"
+      end
+      max_frames = plan.generated_frames
+      window_plan = JSON.parse(plan.to_json)
+      if memory_plan_only
+        puts({mode: "experimental_auto", admitted: true, plan: window_plan, memory: snapshot,
+              scope: "Advisory allocation estimate; shared-host load and GC retention can change the actual peak."}.to_json)
+        exit
+      end
+      STDERR.puts "experimental auto budget: #{max_frames} frames, #{plan.total_positions} positions; allocation estimate, not a reservation"
+    end
+  end
+{% end %}
 started = Time.instant
 progress = ->(message : String) { STDERR.puts "#{message} elapsed=#{(Time.instant - started).total_seconds.round(2)}s"; nil }
 resident_readbacks = {} of String => Int64
@@ -104,6 +170,7 @@ generation, samples = {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cp
                                      generator.generate(prompt, max_frames, seed, temperature, top_k, top_p)
                                    end
                           generation_seconds = (Time.instant - generation_started).total_seconds
+                          resident_memory["after_generation"] = JSON.parse(ML::Audio::Drama3::WindowMemory.snapshot.to_json)
                           abort "model produced EOS before any audio frame" if result.generation.frames.empty?
                           STDERR.puts "decoding #{result.generation.frames.size} frames with resident Metal DAC"
                           codec_started = Time.instant
@@ -111,6 +178,8 @@ generation, samples = {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cp
                             codec = ML::Audio::Drama3::CodecResident.new(store, context)
                             frame_count = result.generation.frames.size
                             output_buffer = codec.decode(result.deviceframes.slice(0, frame_count * (tower_config.num_codebooks + 1)), frame_count)
+                            resident_dac_scratch = JSON.parse(codec.dac_scratch_stats.to_json)
+                            resident_memory["after_decode"] = JSON.parse(ML::Audio::Drama3::WindowMemory.snapshot.to_json)
                             context.read(output_buffer, "terminal")
                           end
                           codec_seconds = (Time.instant - codec_started).total_seconds
@@ -118,6 +187,7 @@ generation, samples = {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cp
                           resident_submissions = context.submissions
                           resident_graph = context.graph_stats
                           resident_sampler_inputs = generator.sampler_inputs
+                          resident_allocation_stats = JSON.parse(context.allocation_stats.to_json)
                           {result.generation, waveform}
                         else
                           generator = ML::Audio::Drama3::Generator.new(config, store)
@@ -162,6 +232,9 @@ report = {
   resident_dense_reduction: resident_dense_reduction,
   resident_backbone_dense_reduction: resident_backbone_dense_reduction,
   resident_expert_down_reduction: resident_expert_down_reduction,
+  window_mode: auto_frames ? "experimental_auto" : "manual", window_plan: window_plan,
+  resident_memory: resident_memory, resident_allocation_stats: resident_allocation_stats,
+  resident_dac_scratch: resident_dac_scratch,
   model_path: model_path, text: text, seed: seed, max_frames: max_frames, temperature: temperature, top_k: top_k, top_p: top_p,
   reference: has_reference ? {audio: reference_audio, audio_sha256: reference_sha256,
                               text: reference_text, text_sha256: Digest::SHA256.hexdigest(reference_text),

@@ -1,5 +1,6 @@
 require "json"
 require "c/sys/mman"
+require "c/unistd"
 require "../../../ml/gguf/dequant"
 require "./profile"
 
@@ -294,6 +295,36 @@ module ML::Audio::Drama3
 
     def tensor(name : String) : Tensor
       @tensors[name]? || raise ArgumentError.new("missing tensor #{name}")
+    end
+
+    # Header-only accounting for the current resident implementation. Mapped
+    # files are counted once, including unused tensors; this is a conservative
+    # working-set allowance, not a measurement of physical residency. Dense and
+    # packed matrices are bound directly. Codec tensors, vectors and backbone
+    # convolution kernels additionally get cached F32 copies in Context#tensor.
+    def resident_memory_inventory
+      mappings = {} of UInt64 => Int64
+      converted = 0_i64
+      largest_converted = 0_i64
+      page = LibC.sysconf(LibC::SC_PAGESIZE).to_i64
+      raise ArgumentError.new("cannot determine checkpoint mapping page size") unless page > 0
+      @tensors.each do |name, tensor|
+        if owner = tensor.owner
+          # Match MappedBuffer's page-rounded Metal resource length, including
+          # its unused tail, for both total and single-buffer admission checks.
+          mappings[owner.object_id] = ((owner.size + page - 1) // page) * page
+        end
+        if name.starts_with?("codec.") || tensor.shape.size == 1 || name.ends_with?(".linear_attn.conv1d.weight")
+          if tensor.dtype.in?("F32", "F16", "BF16")
+            bytes = tensor.count * 4_i64
+            converted += bytes
+            largest_converted = Math.max(largest_converted, bytes)
+          end
+        end
+      end
+      {mapped_bytes: mappings.values.sum(0_i64),
+       largest_checkpoint_mapped_buffer_bytes: mappings.values.max? || 0_i64,
+       converted_static_bytes: converted, largest_converted_buffer_bytes: largest_converted}
     end
 
     def vector(name : String) : Vector

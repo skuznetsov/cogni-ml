@@ -26,6 +26,12 @@ module ML::Audio::Drama3
         fun gs_max_buffer_length : Int64
       end
 
+      # Maximum size of one MTLBuffer on the active device. Callers still need
+      # checked element-count arithmetic before comparing their byte size.
+      def max_buffer_length : Int64
+        Platform.gs_max_buffer_length
+      end
+
       AFFINE_SOURCE = {{ read_file("#{__DIR__}/kernels/affine.metal") }}
 
       # Retain the tensor (and its mmap owner) for the entire GPU view lifetime.

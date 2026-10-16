@@ -3,6 +3,80 @@ require "../src/ml/audio/drama3/resident"
 require "../src/ml/audio/drama3/backbone_resident"
 
 {% if flag?(:drama3_metal) && flag?(:darwin) && !flag?(:cpu_only) %}
+  private def drama3_backbone_attention_values(count : Int32, seed : Int32) : Array(Float32)
+    Array(Float32).new(count) do |index|
+      (((index * 19 + seed * 23 + index // 7 * 11) % 61) - 30).to_f32 / 64_f32
+    end
+  end
+
+  private def drama3_backbone_attention_oracle(q : Array(Float32), k : Array(Float32),
+                                               v : Array(Float32), gate : Array(Float32),
+                                               heads : Int32, kv_heads : Int32, dim : Int32,
+                                               length : Int32) : Array(Float32)
+    stride = kv_heads * dim
+    scale = Math.sqrt(dim.to_f64)
+    output = Array(Float32).new(heads * dim, 0_f32)
+    heads.times do |head|
+      kv_head = head // (heads // kv_heads)
+      scores = Array(Float32).new(length, 0_f32)
+      maximum = -Float32::INFINITY
+      length.times do |time|
+        dot = 0_f32
+        dim.times do |channel|
+          dot += q[head * dim + channel] * k[time * stride + kv_head * dim + channel]
+        end
+        score = dot / scale.to_f32
+        scores[time] = score
+        maximum = score if score > maximum
+      end
+      denominator = 0_f32
+      length.times do |time|
+        scores[time] = Math.exp((scores[time] - maximum).to_f64).to_f32
+        denominator += scores[time]
+      end
+      dim.times do |channel|
+        sum = 0_f32
+        length.times do |time|
+          sum += (scores[time] / denominator) * v[time * stride + kv_head * dim + channel]
+        end
+        value = gate[head * dim + channel]
+        sigmoid = if value >= 0
+                    1_f32 / (1_f32 + Math.exp(-value.to_f64).to_f32)
+                  else
+                    Math.exp(value.to_f64).to_f32 / (1_f32 + Math.exp(value.to_f64).to_f32)
+                  end
+        output[head * dim + channel] = sum * sigmoid
+      end
+    end
+    output
+  end
+
+  private def drama3_backbone_attention_enqueue(context : ML::Audio::Drama3::Resident::Context,
+                                                kernel : String,
+                                                q : ML::Audio::Drama3::Resident::Buffer,
+                                                k : ML::Audio::Drama3::Resident::Buffer,
+                                                v : ML::Audio::Drama3::Resident::Buffer,
+                                                gate : ML::Audio::Drama3::Resident::Buffer,
+                                                scratch : ML::Audio::Drama3::Resident::Buffer?,
+                                                heads : Int32, kv_heads : Int32, dim : Int32,
+                                                length : Int32, capacity : Int32) : ML::Audio::Drama3::Resident::Buffer
+    output = context.alloc(heads * dim)
+    encoder = context.encoder
+    encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(kernel, ML::Audio::Drama3::BackboneResident::SOURCE))
+    [q, k, v, gate, output].each_with_index do |buffer, index|
+      encoder.set_buffer(buffer.buffer, index, offset: buffer.offset)
+    end
+    params = [heads.to_u64, kv_heads.to_u64, dim.to_u64, length.to_u64]
+    if kernel == "dr3_full_attention_wide"
+      score_buffer = scratch.not_nil!
+      encoder.set_buffer(score_buffer.buffer, 5, offset: score_buffer.offset)
+      params << capacity.to_u64
+    end
+    encoder.set_bytes(params.to_unsafe.as(Void*), (params.size * 8).to_i32, params.size == 4 ? 5 : 6)
+    encoder.dispatch_threadgroups({heads, 1, 1}, {64, 1, 1})
+    output
+  end
+
   describe ML::Audio::Drama3::Resident do
     it "batches affine expert ranks exactly with shared or per-rank inputs and unaligned weights" do
       path = File.tempname("drama3-resident-experts", ".bin")
@@ -120,6 +194,101 @@ require "../src/ml/audio/drama3/backbone_resident"
       gpu.position.should eq(8)
       expect_raises(ArgumentError, /capacity exceeded/) { gpu.step(ctx.upload(Array(Float32).new(config.hidden, 0_f32))) }
       ctx.readbacks["diagnostic"].should eq(0_i64)
+    end
+
+    it "preserves the legacy attention path through 1024 and uses bounded scratch through 4096" do
+      previous_backend = ENV["DRAMA3_BACKEND"]?
+      previous_depth = ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"]?
+      begin
+        ENV["DRAMA3_BACKEND"] = "metal"
+        ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"] = "2"
+        pending!("Metal is unavailable or lacks unified memory") unless ML::Metal::Device.instance.available? && ML::Metal::Device.instance.has_unified_memory?
+
+        fixture = File.join(__DIR__, "support/drama3/reference_fixture")
+        config = ML::Audio::Drama3::BackboneConfig.new(JSON.parse(File.read(File.join(fixture, "config.json"))))
+        store = ML::Audio::Drama3::WeightStore.new(fixture)
+        # Constructor admission validates the wide cache and score allocation;
+        # zero and 4097 must fail before allocating any resident buffers.
+        expect_raises(ArgumentError, /capacity must be 1..4096/) do
+          ML::Audio::Drama3::BackboneResident.new(config, store, ML::Audio::Drama3::Resident::Context.new, 0)
+        end
+        ML::Audio::Drama3::BackboneResident.new(config, store, ML::Audio::Drama3::Resident::Context.new, 4096)
+        expect_raises(ArgumentError, /capacity must be 1..4096/) do
+          ML::Audio::Drama3::BackboneResident.new(config, store, ML::Audio::Drama3::Resident::Context.new, 4097)
+        end
+        overflow_json = JSON.parse(File.read(File.join(fixture, "config.json")))
+        overflow_json.as_h["text_config"].as_h["num_attention_heads"] = JSON::Any.new(1_000_000_i64)
+        overflow_config = ML::Audio::Drama3::BackboneConfig.new(overflow_json)
+        expect_raises(ArgumentError, /exceeds Int32 element capacity/) do
+          ML::Audio::Drama3::BackboneResident.new(overflow_config, store, ML::Audio::Drama3::Resident::Context.new, 4096)
+        end
+
+        [0, 2].each do |depth|
+          ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"] = depth.to_s
+          context = ML::Audio::Drama3::Resident::Context.new
+          heads, kv_heads, dim, capacity = 4, 2, 4, 4096
+          [1024, 1025, 2048, 4096].each do |length|
+            q_values = drama3_backbone_attention_values(heads * dim, 1)
+            k_values = drama3_backbone_attention_values(length * kv_heads * dim, 2)
+            v_values = drama3_backbone_attention_values(length * kv_heads * dim, 3)
+            gate_values = drama3_backbone_attention_values(heads * dim, 4)
+            q = context.upload(q_values)
+            k = context.upload(k_values)
+            v = context.upload(v_values)
+            gate = context.upload(gate_values)
+            scratch = context.alloc(heads * capacity)
+            wide = drama3_backbone_attention_enqueue(context, "dr3_full_attention_wide", q, k, v, gate, scratch,
+              heads, kv_heads, dim, length, capacity)
+
+            wide_again = nil.as(ML::Audio::Drama3::Resident::Buffer?)
+            legacy = nil.as(ML::Audio::Drama3::Resident::Buffer?)
+            if length == 1024
+              # Reuse the same score slab in two submissions at each depth;
+              # depth two permits both wide dispatches to remain in flight.
+              context.submit
+              wide_again = drama3_backbone_attention_enqueue(context, "dr3_full_attention_wide", q, k, v, gate, scratch,
+                heads, kv_heads, dim, length, capacity)
+              context.submit
+              expected_pending = depth == 2 ? 2_i64 : 0_i64
+              context.graph_stats["max_pending"].should eq(expected_pending)
+              legacy = drama3_backbone_attention_enqueue(context, "dr3_full_attention", q, k, v, gate, nil,
+                heads, kv_heads, dim, length, capacity)
+              context.submit
+            else
+              context.submit
+            end
+
+            actual_wide = context.read(wide, "terminal")
+            expected = drama3_backbone_attention_oracle(q_values, k_values, v_values, gate_values,
+              heads, kv_heads, dim, length)
+            actual_wide.zip(expected).each do |actual, expected_value|
+              actual.should be_close(expected_value, 3e-5)
+            end
+            if second_output = wide_again
+              actual_second = context.read(second_output, "terminal")
+              actual_second.zip(expected).each do |actual, expected_value|
+                actual.should be_close(expected_value, 3e-5)
+              end
+              actual_wide.map(&.unsafe_as(UInt32)).should eq(actual_second.map(&.unsafe_as(UInt32)))
+            end
+            if legacy_output = legacy
+              actual_legacy = context.read(legacy_output, "terminal")
+              actual_wide.map(&.unsafe_as(UInt32)).should eq(actual_legacy.map(&.unsafe_as(UInt32)))
+            end
+          end
+        end
+      ensure
+        if previous_backend
+          ENV["DRAMA3_BACKEND"] = previous_backend
+        else
+          ENV.delete("DRAMA3_BACKEND")
+        end
+        if previous_depth
+          ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"] = previous_depth
+        else
+          ENV.delete("DRAMA3_COGNIGRAPH_MAX_INFLIGHT")
+        end
+      end
     end
 
     it "matches upstream backbone boundaries across recurrent and full attention cache updates" do

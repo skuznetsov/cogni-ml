@@ -5,6 +5,10 @@
 #import <Foundation/Foundation.h>
 #import <dispatch/dispatch.h>
 #include <mach/mach_time.h>
+#include <mach/mach.h>
+#include <libproc.h>
+#include <sys/resource.h>
+#include <sys/sysctl.h>
 
 #include <algorithm>
 #include <cerrno>
@@ -22,6 +26,38 @@ static id<MTLDevice> gs_device = nil;
 static id<MTLCommandQueue> gs_command_queue = nil;
 static NSMutableDictionary<NSString*, id<MTLLibrary>>* gs_libraries = nil;
 static id<MTLLibrary> gs_default_library = nil;
+
+// Host telemetry only: this does not submit or wait for GPU work. Inactive
+// pages are potentially reclaimable, not reserved for this process. Unknown
+// fields stay zero so admission can fail closed rather than invent headroom.
+extern "C" int32_t gs_drama3_memory_snapshot(uint64_t* physical,
+                                             uint64_t* free_reclaimable,
+                                             uint64_t* footprint,
+                                             uint64_t* peak_footprint) {
+    if (!physical || !free_reclaimable || !footprint || !peak_footprint) return 0;
+    *physical = *free_reclaimable = *footprint = *peak_footprint = 0;
+    size_t length = sizeof(*physical);
+    if (sysctlbyname("hw.memsize", physical, &length, nullptr, 0) != 0) return 0;
+    mach_port_t host = mach_host_self();
+    vm_size_t page_size = 0;
+    vm_statistics64_data_t stats = {};
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    const bool ok = host_page_size(host, &page_size) == KERN_SUCCESS &&
+        host_statistics64(host, HOST_VM_INFO64,
+            reinterpret_cast<host_info64_t>(&stats), &count) == KERN_SUCCESS;
+    mach_port_deallocate(mach_task_self(), host);
+    if (!ok || page_size == 0) return 0;
+    // speculative_count is already included in free_count; purgeable pages
+    // overlap other VM states. Neither is added again.
+    *free_reclaimable = (uint64_t(stats.free_count) + stats.inactive_count) * page_size;
+    rusage_info_v4 usage = {};
+    if (proc_pid_rusage(getpid(), RUSAGE_INFO_V4,
+            reinterpret_cast<rusage_info_t*>(&usage)) == 0) {
+        *footprint = usage.ri_phys_footprint;
+        *peak_footprint = usage.ri_lifetime_max_phys_footprint;
+    }
+    return *physical > 0 && *free_reclaimable <= *physical ? 1 : 0;
+}
 
 // Metal exposes no cancellation API for a submitted command buffer. A
 // process-wide watchdog bounds the native host-side wait; if the deadline is

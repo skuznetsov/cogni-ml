@@ -7,6 +7,7 @@ module ML::Audio::Drama3
   # temporal attention states remain in device allocations between rows.
   class BackboneResident
     SOURCE = {{ read_file("#{__DIR__}/kernels/backbone_resident.metal") }}
+    MAX_CAPACITY = 4096
     getter config : BackboneConfig, position = 0
     property trace : Proc(String, Vector, Nil)?
     property buffer_trace : Proc(String, Resident::Buffer, Nil)?
@@ -18,6 +19,7 @@ module ML::Audio::Drama3
     getter diagnostic_layer : Int32?
     @keys : Array(Resident::Buffer?)
     @values : Array(Resident::Buffer?)
+    @full_attention_scores : Resident::Buffer?
     @conv : Array(Resident::Buffer?)
     @delta : Array(Resident::Buffer?)
     @delta_kernel : String
@@ -28,7 +30,7 @@ module ML::Audio::Drama3
     getter batch_experts : Bool
 
     def initialize(@config : BackboneConfig, @store : WeightStore, @ctx : Resident::Context, @capacity : Int32)
-      raise ArgumentError.new("resident backbone capacity must be 1..1024") unless @capacity.in?(1..1024)
+      raise ArgumentError.new("resident backbone capacity must be 1..#{MAX_CAPACITY}") unless @capacity.in?(1..MAX_CAPACITY)
       raise ArgumentError.new("resident router supports at most 512 experts") unless @config.experts <= 512
       layout = ENV["DRAMA3_DELTA_TRANSPOSE"]? || "1"
       raise ArgumentError.new("DRAMA3_DELTA_TRANSPOSE must be 0 or 1") unless layout.in?("0", "1")
@@ -48,6 +50,7 @@ module ML::Audio::Drama3
       end
       @keys = Array(Resident::Buffer?).new(@config.layers, nil)
       @values = Array(Resident::Buffer?).new(@config.layers, nil)
+      @full_attention_scores = nil
       @conv = Array(Resident::Buffer?).new(@config.layers, nil)
       @delta = Array(Resident::Buffer?).new(@config.layers, nil)
       @trace = nil
@@ -57,10 +60,15 @@ module ML::Audio::Drama3
       @moe_trace_auxiliary = false
       @diagnostic_layer = nil
       @ones = @ctx.upload(Array(Float32).new(@config.key_dim, 1_f32))
+      if @capacity > 1024 && @config.layers >= @config.full_interval
+        score_count = checked_buffer_count("full-attention score scratch", [@capacity, @config.heads])
+        @full_attention_scores = @ctx.alloc(score_count)
+      end
       @config.layers.times do |i|
         if (i + 1) % @config.full_interval == 0
-          @keys[i] = @ctx.alloc(@capacity * @config.kv_heads * @config.head_dim)
-          @values[i] = @ctx.alloc(@capacity * @config.kv_heads * @config.head_dim)
+          cache_count = checked_buffer_count("full-attention KV cache", [@capacity, @config.kv_heads, @config.head_dim])
+          @keys[i] = @ctx.alloc(cache_count)
+          @values[i] = @ctx.alloc(cache_count)
         else
           width = 2 * @config.key_heads * @config.key_dim + @config.value_heads * @config.value_dim
           @conv[i] = @ctx.zeros(width * @config.conv_kernel)
@@ -118,6 +126,22 @@ module ML::Audio::Drama3
 
     private def weight(name : String) : Resident::Buffer
       @ctx.tensor(@store.tensor(name))
+    end
+
+    private def checked_buffer_count(name : String, factors : Array(Int32)) : Int32
+      count = 1_i64
+      factors.each do |factor|
+        unless factor > 0 && count <= Int32::MAX.to_i64 // factor.to_i64
+          raise ArgumentError.new("resident #{name} exceeds Int32 element capacity")
+        end
+        count *= factor.to_i64
+      end
+      bytes = count * sizeof(Float32).to_i64
+      limit = MetalBackend.max_buffer_length
+      unless limit > 0 && bytes <= limit
+        raise ArgumentError.new("resident #{name} requires #{bytes} Metal bytes; device limit is #{limit}")
+      end
+      count.to_i32
     end
 
     private def project(name : String, x : Resident::Buffer) : Resident::Buffer
@@ -271,10 +295,19 @@ module ML::Audio::Drama3
       @ctx.copy(v, values.slice(@position * v.count, v.count))
       output = @ctx.alloc(q.count)
       enc = @ctx.encoder
-      enc.set_pipeline(ML::Metal::PipelineCache.get_or_compile("dr3_full_attention", SOURCE))
+      wide = @capacity > 1024
+      kernel = wide ? "dr3_full_attention_wide" : "dr3_full_attention"
+      enc.set_pipeline(ML::Metal::PipelineCache.get_or_compile(kernel, SOURCE))
       [q, keys, values, gate, output].each_with_index { |b, i| enc.set_buffer(b.buffer, i, offset: b.offset) }
-      p = [c.heads.to_u64, c.kv_heads.to_u64, c.head_dim.to_u64, (@position + 1).to_u64]
-      enc.set_bytes(p.to_unsafe.as(Void*), (p.size * 8).to_i32, 5)
+      if wide
+        scores = @full_attention_scores.not_nil!
+        enc.set_buffer(scores.buffer, 5, offset: scores.offset)
+        p = [c.heads.to_u64, c.kv_heads.to_u64, c.head_dim.to_u64, (@position + 1).to_u64, @capacity.to_u64]
+        enc.set_bytes(p.to_unsafe.as(Void*), (p.size * 8).to_i32, 6)
+      else
+        p = [c.heads.to_u64, c.kv_heads.to_u64, c.head_dim.to_u64, (@position + 1).to_u64]
+        enc.set_bytes(p.to_unsafe.as(Void*), (p.size * 8).to_i32, 5)
+      end
       enc.dispatch_threadgroups({c.heads, 1, 1}, {64, 1, 1})
       project(prefix + ".o_proj", output)
     end

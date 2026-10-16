@@ -17,6 +17,29 @@ private def drama3_mapping_tensor(path : String) : Tensor
 end
 
 describe "DRAMA-3 read-only checkpoint mapping" do
+  it "counts shared mapping pages once and only cached F32 conversions separately" do
+    file = drama3_mapping_fixture
+    begin
+      owner = MappedFile.new(file.path)
+      matrix = Tensor.new([2, 2], "F32", owner.slice(0, 16), owner)
+      tensors = {
+        "backbone.proj.weight"                        => matrix,
+        "codec.proj.weight"                           => matrix,
+        "backbone.norm.weight"                        => Tensor.new([2], "F32", owner.slice(0, 8), owner),
+        "backbone.layers.0.linear_attn.conv1d.weight" => Tensor.new([1, 2, 2], "F32", owner.slice(0, 16), owner),
+        "packed.weight"                               => Tensor.new([2, 2], "U32", owner.slice(0, 16), owner),
+      }
+      inventory = WeightStore.new(tensors).resident_memory_inventory
+      page = LibC.sysconf(LibC::SC_PAGESIZE).to_i64
+      inventory[:mapped_bytes].should eq(page)
+      inventory[:largest_checkpoint_mapped_buffer_bytes].should eq(page)
+      inventory[:converted_static_bytes].should eq(40_i64)
+      inventory[:largest_converted_buffer_bytes].should eq(16_i64)
+    ensure
+      file.delete
+    end
+  end
+
   it "preserves mapped values and rejects escaping ranges in both modes" do
     previous = ENV["DRAMA3_MMAP_SHARED"]?
     file = drama3_mapping_fixture

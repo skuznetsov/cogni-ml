@@ -87,6 +87,10 @@ module ML::Audio::Drama3::Resident
     @max_retained_bytes = 0_i64
     @aborted = false
     @owner = BufferOwner.new
+    @memory_profile : Bool = ENV["DRAMA3_MEMORY_PROFILE"]? == "1"
+    @allocations = 0_i64
+    @requested_bytes = 0_i64
+    @peak_metal_allocated_bytes = 0_i64
 
     def initialize
       raise "resident Metal requires enabled backend" unless MetalBackend.enabled?
@@ -104,6 +108,12 @@ module ML::Audio::Drama3::Resident
 
     def graph_enabled? : Bool
       !!@graph
+    end
+
+    def allocation_stats
+      {allocations: @allocations, requested_bytes: @requested_bytes,
+       peak_metal_allocated_bytes: @memory_profile ? @peak_metal_allocated_bytes : nil,
+       memory_profile: @memory_profile}
     end
 
     def graph_stats : Hash(String, Int64)
@@ -139,8 +149,9 @@ module ML::Audio::Drama3::Resident
     end
 
     # Submit without a CPU completion barrier when CogniGraph is enabled.
-    # Every binding owns fresh storage or a persistent owner; none is recycled
-    # by lease slot. GPU-only cross-command writes use one tracked Metal queue.
+    # Bindings own fresh storage, persistent state or explicitly managed DAC
+    # scratch. GPU-only cross-command writes use one tracked Metal queue;
+    # scratch reuse never introduces host writes into an in-flight resource.
     def submit : Nil
       raise ArgumentError.new("resident context aborted") if @aborted
       if enc = @encoder
@@ -214,6 +225,11 @@ module ML::Audio::Drama3::Resident
       raise ArgumentError.new("resident context aborted") if @aborted
       result = Buffer.new(ML::MetalBuffer.new(count.to_i64 * 4), count, @owner)
       @pending << result
+      @allocations += 1
+      @requested_bytes += count.to_i64 * 4
+      if @memory_profile
+        @peak_metal_allocated_bytes = Math.max(@peak_metal_allocated_bytes, ML::Metal::Device.instance.current_allocated_size)
+      end
       result
     end
 
