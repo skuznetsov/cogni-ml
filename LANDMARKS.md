@@ -30029,3 +30029,33 @@ Refresh after source/toolchain/device/model/workload changes.
   retaining native F32 subtotal/final-sum order. Numerical return pointer is
   the late-layer slice above; neither strict backbone nor DAC gate is closed.
 
+### Continuation 2026-10-16 — guarded expert row-packing experiment
+
+- From `3a83aadb`, optional batched native Q4/Q8 group64 expert dispatch packs
+  several output rows per64-thread group for supported shapes. Byte loads,
+  F32 subtotal/final reduction order, allocations and command count stay the
+  same. `DRAMA3_EXPERT_PACKED_ROWS=0` is the frozen default and rollback;
+  scalar, MLX-Q4, requested32 and unsupported groups keep existing paths.
+- Two local captured-layer39 probes preserve7,077,888 values bitwise each,
+  with zero nonfinites and rejecting bit/NaN controls. Final paired native/
+  candidate ratios1.02022 gate,1.02347 up,1.29316 down; all7 pairs per family
+  favor the candidate. Timings are overlapping command intervals, not additive
+  family cost. All13 production Metal examples pass, including odd tails,
+  invalid IDs, fallbacks, branch-cache checks and env flips before dispatch.
+- Full12-request ABBA preserves codes,WAV,sampler tape,reads/waits, but
+  mirrored request ratios0.853759/1.018696 do not establish request benefit.
+  Keep default off. Fixed DAC timing also varies; no isolated causal expert
+  regression follows. DAC coalesced default and its prior qualification stand.
+- With packing enabled, the complete matched-input MLX report is identical
+  to native-depth2:162 boundaries+156 replays, same reads and11 waits. The
+  known strict gate remains false; neither backbone nor DAC parity is closed.
+  Correlated source mini-Quad review plus root execution support bounded
+  native parity, not independent replication or realtime performance.
+- Evidence `.landmark/evidence/drama3-expert-packed-rows.json`, details
+  `docs/drama3-expert-packed-rows.md`, immutable raw command subset
+  `/opt/mldata_ssd/cogni-ml/drama3-realtime-20261016/expert-packed-commands.json`.
+  Refresh on source/compiler/model/input/reference/queue/device/OS/host-load
+  drift or artifact loss. Next distinct hypothesis is shared-input qkv/z/b/a
+  multi-output dispatch with exact original row reductions; current additive
+  dominance is unproven. Require local GPU parity/timing then full requests.
+

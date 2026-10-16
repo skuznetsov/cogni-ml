@@ -73,13 +73,19 @@ def main():
     schedules.add_argument("--resource-schedule", help="Comma-separated 0/1 resource observers; timeline and host profiling stay on")
     schedules.add_argument("--expert-threads-schedule", help="Comma-separated 32/64 thread requests; dense stays tree, scratch and profiling off")
     schedules.add_argument("--dac-layout-schedule", help="Comma-separated native/coalesced DAC layouts; scratch and profiling stay off")
+    schedules.add_argument("--expert-packed-rows-schedule", help="Comma-separated 0/1 batched expert row packing; coalesced DAC, scratch and profiling off")
     parser.add_argument("--warm-repeats", type=int, default=2)
     parser.add_argument("--timeline", action="store_true",
                         help="Read existing completion timestamps; does not introduce waits")
     args = parser.parse_args()
     resource_modes = None
     dac_layouts = None
-    if args.dac_layout_schedule is not None:
+    expert_packed_rows = None
+    if args.expert_packed_rows_schedule is not None:
+        expert_packed_rows = [mode.strip() for mode in args.expert_packed_rows_schedule.split(",")]
+        assert expert_packed_rows and all(mode in ("0", "1") for mode in expert_packed_rows), "expert row packing must be 0 or 1"
+        schedule = [("0", "0", args.binary, "tree", "64") for mode in expert_packed_rows]
+    elif args.dac_layout_schedule is not None:
         dac_layouts = [mode.strip() for mode in args.dac_layout_schedule.split(",")]
         assert dac_layouts and all(mode in ("native", "coalesced") for mode in dac_layouts), "DAC layouts must be native or coalesced"
         schedule = [("0", "0", args.binary, "tree", "64") for mode in dac_layouts]
@@ -126,6 +132,9 @@ def main():
         controls["DRAMA3_METAL_RESOURCES"] = resource_modes[arm] if resource_modes is not None else "0"
         if dac_layouts is not None:
             controls["DRAMA3_DAC_CONV_LAYOUT"] = dac_layouts[arm]
+        if expert_packed_rows is not None:
+            controls["DRAMA3_EXPERT_PACKED_ROWS"] = expert_packed_rows[arm]
+            controls["DRAMA3_DAC_CONV_LAYOUT"] = "coalesced"
         if args.timeline or resource_modes is not None:
             controls["DRAMA3_METAL_TIMELINE"] = "1"
         env.update(controls)

@@ -221,6 +221,7 @@ module ML::Audio::Drama3::Resident
     getter submissions = 0_i64
     getter dense_reduction : String
     getter expert_threads : Int32
+    getter expert_packed_rows_enabled : Bool
     @command : ML::Metal::CommandBuffer?
     @encoder : HostEncoder?
     @pending = [] of Buffer
@@ -253,6 +254,9 @@ module ML::Audio::Drama3::Resident
       expert_threads = ENV["DRAMA3_EXPERT_THREADS"]? || "64"
       raise ArgumentError.new("DRAMA3_EXPERT_THREADS must be 32 or 64") unless expert_threads.in?("32", "64")
       @expert_threads = expert_threads.to_i
+      packed_rows = ENV["DRAMA3_EXPERT_PACKED_ROWS"]? || "0"
+      raise ArgumentError.new("DRAMA3_EXPERT_PACKED_ROWS must be 0 or 1") unless packed_rows.in?("0", "1")
+      @expert_packed_rows_enabled = packed_rows == "1"
       @resources_enabled = ENV["DRAMA3_METAL_RESOURCES"]? == "1"
       @timeline = ENV["DRAMA3_METAL_TIMELINE"]? == "1" || @resources_enabled
       depth = ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"]? || "0"
@@ -895,6 +899,9 @@ module ML::Audio::Drama3::Resident
         dispatch_mlx_q4(matrix, x, output, ids, 0, true, per_rank_input)
         return output
       end
+      packed_groups = matrix.cols // matrix.group_size
+      packed_rows = @expert_packed_rows_enabled && matrix.group_size == 64 && matrix.bits.in?(4, 8) &&
+                    native_expert_threads(matrix) == 64 && packed_groups.in?(1..32) && 64 % packed_groups == 0
       weight = weight_buffer(matrix.tensor)
       st, bt = matrix.scales.not_nil!, matrix.biases.not_nil!
       scales, biases = weight_buffer(st), weight_buffer(bt)
@@ -903,14 +910,20 @@ module ML::Audio::Drama3::Resident
            weight.offset.to_u64, scales.offset.to_u64, biases.offset.to_u64, encoding(st), encoding(bt),
            (matrix.tensor.shape.size == 3 ? matrix.tensor.shape[0] : 1).to_u64, per_rank_input ? 1_u64 : 0_u64]
       enc = encoder
-      enc.set_pipeline(pipeline("dr3_experts", SOURCE))
+      enc.set_pipeline(pipeline(packed_rows ? "dr3_experts_packed_rows" : "dr3_experts", SOURCE))
       enc.set_buffer(weight.buffer, 0)
       enc.set_buffer(scales.buffer, 1)
       enc.set_buffer(biases.buffer, 2)
       [x, output, ids].each_with_index { |v, i| enc.set_buffer(v.buffer, i + 3, offset: v.offset) }
       enc.set_bytes(p.to_unsafe.as(Void*), (p.size * 8).to_i32, 6)
-      enc.set_threadgroup_memory(matrix.cols // matrix.group_size * 4, 0)
-      enc.dispatch_threadgroups({matrix.rows, ids.count, 1}, {native_expert_threads(matrix), 1, 1})
+      if packed_rows
+        rows_per_threadgroup = 64 // packed_groups
+        enc.set_threadgroup_memory(64 * 4, 0)
+        enc.dispatch_threadgroups({(matrix.rows + rows_per_threadgroup - 1) // rows_per_threadgroup, ids.count, 1}, {64, 1, 1})
+      else
+        enc.set_threadgroup_memory(matrix.cols // matrix.group_size * 4, 0)
+        enc.dispatch_threadgroups({matrix.rows, ids.count, 1}, {native_expert_threads(matrix), 1, 1})
+      end
       @pending.concat([x, output, ids])
       output
     end

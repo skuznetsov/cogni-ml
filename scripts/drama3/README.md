@@ -96,6 +96,20 @@ the original weight layout; `coalesced` changes only normalized, ungrouped
 Conv1d weight storage and indexing, preserving the F32 accumulation order.
 See [DAC layout qualification](../../docs/drama3-dac-layout.md).
 
+`DRAMA3_EXPERT_PACKED_ROWS=1` is an opt-in batched native affine expert
+experiment; unset/0 remains the frozen Context default. Q4/Q8, group64,
+effective64-thread shapes with1–32 groups dividing64 use several output rows
+per group while preserving native F32 arithmetic. Scalar experts, MLX-Q4,
+requested32 and unsupported shapes retain their existing paths. For a
+profiler-off request comparison use
+`--expert-packed-rows-schedule 0,1,1,0 --prefix packed`; this mutually exclusive
+schedule fixes coalesced DAC and retains all exact output/read/wait checks.
+The standalone `examples/drama3_expert_load_bench.cr` accepts
+`MODEL_DIR FULL_MOE_TRACE --candidate=packed-rows --repeats=32` after a release
+Metal build. Its GPU parity and local timing do not establish upstream
+compatibility or full-request benefit. The measured request pairs did not
+qualify promotion. See [expert row packing](../../docs/drama3-expert-packed-rows.md).
+
 The standalone `examples/drama3_dac_layout_bench.cr` accepts
 `MODEL_DIR --timings=8` after a normal release Metal build. It pins the saved
 60-frame codes and codec hash, primes both layouts, then times ABBA and BAAB

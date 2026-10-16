@@ -108,6 +108,58 @@ kernel void dr3_experts(
         y[rank * rows + r] = sum;
     }
 }
+// Optional batched-only row packing. Each row keeps dr3_experts' packed-word
+// loads, affine dequantization and sequential F32 subtotal. The row leader
+// then adds its group subtotals in the same ascending order as the native
+// kernel. Every lane writes scratch and reaches the barrier, including tail
+// rows in the final threadgroup.
+kernel void dr3_experts_packed_rows(
+    device const uchar* w [[buffer(0)]], device const uchar* s [[buffer(1)]],
+    device const uchar* b [[buffer(2)]], device const float* x [[buffer(3)]],
+    device float* y [[buffer(4)]], device const float* ids [[buffer(5)]],
+    constant ulong* p [[buffer(6)]], threadgroup float* parts [[threadgroup(0)]],
+    uint2 pos [[threadgroup_position_in_grid]], uint lane [[thread_index_in_threadgroup]]) {
+    uint rows = uint(p[0]), cols = uint(p[1]), bits = uint(p[2]), group = uint(p[3]);
+    uint groups = cols / group, rows_per_threadgroup = 64 / groups;
+    uint row_slot = lane / groups, group_index = lane % groups;
+    uint row = pos.x * rows_per_threadgroup + row_slot, rank = pos.y;
+    float selected = ids[rank];
+    bool valid_expert = isfinite(selected) && selected >= 0 && selected < float(p[9]) && floor(selected) == selected;
+    uint per = 32 / bits, mask = (1u << bits) - 1;
+    uint input_offset = p[10] ? rank * cols : 0;
+
+    float partial = 0.0f;
+    if (row < rows && valid_expert) {
+        uint expert_row = uint(selected) * rows + row;
+        uint ix = expert_row * groups + group_index;
+        float scale = dr3_float(s, p[5], ix, p[7]);
+        float bias = dr3_float(b, p[6], ix, p[8]);
+        for (uint word_index = 0; word_index < group / per; word_index++) {
+            uint column = group_index * group + word_index * per;
+            uint word = dr3_u32(w, p[4] + (ulong(expert_row) * (cols / per) + column / per) * 4);
+            for (uint value_index = 0; value_index < per; value_index++) {
+                float weight = scale * float((word >> (value_index * bits)) & mask) + bias;
+                partial += weight * x[input_offset + column + value_index];
+            }
+        }
+    }
+    parts[lane] = partial;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (row < rows && group_index == 0) {
+        if (!valid_expert) {
+            y[rank * rows + row] = NAN;
+        } else {
+            float sum = 0.0f;
+            uint row_base = row_slot * groups;
+            for (uint group_slot = 0; group_slot < groups; group_slot++) {
+                sum += parts[row_base + group_slot];
+            }
+            y[rank * rows + row] = sum;
+        }
+    }
+}
+
 kernel void dr3_embedding_quant(device const uchar* w [[buffer(0)]],device const uchar* s [[buffer(1)]],device const uchar* b [[buffer(2)]],device const float* token [[buffer(3)]],device float* y [[buffer(4)]],constant ulong* p [[buffer(5)]],uint i [[thread_position_in_grid]]) {
     if(i>=p[1])return;int r=int(token[0]);if(r<0||r>=int(p[0])){y[i]=NAN;return;}uint bits=uint(p[2]),per=32/bits,group=uint(p[3]);ulong ix=ulong(r)*(p[1]/group)+i/group;
     uint word=dr3_u32(w,p[4]+(ulong(r)*(p[1]/per)+i/per)*4);y[i]=dr3_float(s,p[5],ix,p[7])*float((word>>((i%per)*bits))&((1u<<bits)-1))+dr3_float(b,p[6],ix,p[8]);

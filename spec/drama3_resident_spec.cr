@@ -77,7 +77,302 @@ require "../src/ml/audio/drama3/backbone_resident"
     output
   end
 
+  private DRAMA3_EXPERT_PACKED_ROWS_RECEIPT_SOURCE = ML::Audio::Drama3::Resident::SOURCE + <<-METAL
+    inline void dr3_resident_packed_rows_record(device atomic_uint* receipt,
+                                                uint bit_slot, uint finite_slot,
+                                                float reference, float actual) {
+        if (as_type<uint>(reference) != as_type<uint>(actual)) {
+            atomic_fetch_add_explicit(&receipt[bit_slot], 1u, memory_order_relaxed);
+        }
+        if (!isfinite(reference) || !isfinite(actual)) {
+            atomic_fetch_add_explicit(&receipt[finite_slot], 1u, memory_order_relaxed);
+        }
+    }
+
+    kernel void dr3_resident_packed_rows_compare(
+        device const float* reference [[buffer(0)]], device const float* actual [[buffer(1)]],
+        device atomic_uint* receipt [[buffer(2)]], constant ulong* params [[buffer(3)]],
+        uint index [[thread_position_in_grid]]) {
+        if (ulong(index) >= params[0]) return;
+        dr3_resident_packed_rows_record(receipt, 0, 1, reference[index], actual[index]);
+    }
+
+    kernel void dr3_resident_packed_rows_negative_control(
+        device atomic_uint* receipt [[buffer(0)]], uint index [[thread_position_in_grid]]) {
+        if (index != 0) return;
+        float one = 1.0f;
+        float one_ulp_up = as_type<float>(as_type<uint>(one) + 1u);
+        dr3_resident_packed_rows_record(receipt, 2, 3, one, one_ulp_up);
+        dr3_resident_packed_rows_record(receipt, 2, 3, NAN, 0.0f);
+    }
+    METAL
+
+  private def drama3_packed_rows_with_device(&block : -> T) : T forall T
+    keys = ["DRAMA3_BACKEND", "DRAMA3_COGNIGRAPH_MAX_INFLIGHT", "DRAMA3_METAL_TIMELINE",
+            "DRAMA3_EXPERT_THREADS", "DRAMA3_EXPERT_PACKED_ROWS", "DRAMA3_PROFILE"]
+    previous = keys.to_h { |key| {key, ENV[key]?} }
+    begin
+      ENV["DRAMA3_BACKEND"] = "metal"
+      ENV["DRAMA3_COGNIGRAPH_MAX_INFLIGHT"] = "0"
+      ENV["DRAMA3_METAL_TIMELINE"] = "0"
+      ENV["DRAMA3_EXPERT_THREADS"] = "64"
+      ENV["DRAMA3_EXPERT_PACKED_ROWS"] = "0"
+      ENV.delete("DRAMA3_PROFILE")
+      ML::Audio::Drama3::Profile.configure_from_env!
+      device = ML::Metal::Device.instance
+      pending!("Metal is unavailable or lacks unified memory") unless device.available? && device.has_unified_memory?
+      yield
+    ensure
+      ML::Audio::Drama3::MetalBackend.reset!
+      keys.each do |key|
+        if value = previous[key]
+          ENV[key] = value.not_nil!
+        else
+          ENV.delete(key)
+        end
+      end
+      ML::Audio::Drama3::Profile.configure_from_env!
+    end
+  end
+
+  private def drama3_packed_rows_fixture(path : String, rows : Int32, groups : Int32, bits : Int32,
+                                         experts : Int32 = 3)
+    group_size = 64
+    cols = groups * group_size
+    values_per_word = 32 // bits
+    words = experts * rows * cols // values_per_word
+    io = IO::Memory.new
+    io.write(Bytes.new(22, 0_u8))
+    words.times do |index|
+      word = 0_u32
+      values_per_word.times do |lane|
+        value = (index * 13 + lane * 7 + index // 11) % (1 << bits)
+        word |= value.to_u32 << (lane * bits)
+      end
+      io.write_bytes(word, IO::ByteFormat::LittleEndian)
+    end
+    File.write(path, io.to_slice)
+
+    owner = ML::Audio::Drama3::MappedFile.new(path)
+    packed = ML::Audio::Drama3::Tensor.new([experts, rows, cols // values_per_word], "U32",
+      owner.slice(22_i64, words.to_i64 * 4_i64), owner)
+    affine_count = experts * rows * groups
+    scales = ML::Audio::Drama3::Tensor.new([experts, rows, groups],
+      Array(Float32).new(affine_count) { |index| ((index % 7 + 1).to_f32 * 0.003_f32) })
+    biases = ML::Audio::Drama3::Tensor.new([experts, rows, groups],
+      Array(Float32).new(affine_count) { |index| ((index % 9 - 4).to_f32 * 0.002_f32) })
+    {matrix: ML::Audio::Drama3::Matrix.new(packed, scales, biases, bits, group_size), owner: owner}
+  end
+
+  private def drama3_packed_rows_input(cols : Int32, ranks : Int32, per_rank : Bool) : Array(Float32)
+    count = cols * (per_rank ? ranks : 1)
+    Array(Float32).new(count) { |index| ((index * 17 + index // 5) % 37 - 18).to_f32 / 23_f32 }
+  end
+
+  private def drama3_packed_rows_receipt_accepts?(bit_mismatches : UInt32, nonfinite : UInt32,
+                                                  expected_nonfinite : UInt32 = 0_u32) : Bool
+    bit_mismatches == 0_u32 && nonfinite == expected_nonfinite
+  end
+
+  # The old and opted-in Contexts have distinct buffer owners. The reference
+  # Context is drained first; this test-only encoder then compares its still-
+  # live Metal output directly with the candidate output, reading only four
+  # compact counters after the candidate's existing terminal drain.
+  private def drama3_packed_rows_gpu_receipt(context : ML::Audio::Drama3::Resident::Context,
+                                             reference : ML::Audio::Drama3::Resident::Buffer,
+                                             actual : ML::Audio::Drama3::Resident::Buffer,
+                                             expected_nonfinite : UInt32 = 0_u32) : Nil
+    reference.count.should eq(actual.count)
+    receipt = context.upload(Array(Float32).new(4, 0_f32))
+    encoder = context.encoder
+    encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(
+      "dr3_resident_packed_rows_compare", DRAMA3_EXPERT_PACKED_ROWS_RECEIPT_SOURCE,
+    ))
+    encoder.set_buffer(reference.buffer, 0, offset: reference.offset)
+    encoder.set_buffer(actual.buffer, 1, offset: actual.offset)
+    encoder.set_buffer(receipt.buffer, 2, offset: receipt.offset)
+    params = [actual.count.to_u64]
+    encoder.set_bytes(params.to_unsafe.as(Void*), 8, 3)
+    encoder.dispatch_1d(actual.count, 256)
+
+    encoder.set_pipeline(ML::Metal::PipelineCache.get_or_compile(
+      "dr3_resident_packed_rows_negative_control", DRAMA3_EXPERT_PACKED_ROWS_RECEIPT_SOURCE,
+    ))
+    encoder.set_buffer(receipt.buffer, 0, offset: receipt.offset)
+    encoder.dispatch_1d(1, 1)
+
+    counts = context.read(receipt, "terminal").map(&.unsafe_as(UInt32))
+    counts.should eq([0_u32, expected_nonfinite, 2_u32, 1_u32])
+    drama3_packed_rows_receipt_accepts?(counts[0], counts[1], expected_nonfinite).should be_true
+    # The injected one-ULP mismatch and NaN must be rejected by the same
+    # compact acceptance predicate used for real old/new result pairs.
+    drama3_packed_rows_receipt_accepts?(counts[2], counts[3]).should be_false
+    context.readbacks.keys.should eq(["terminal"])
+    context.readbacks["terminal"].should eq(16_i64)
+    graph = context.graph_stats
+    graph["submitted"].should eq(1_i64)
+    graph["completed"].should eq(1_i64)
+    graph["completion_waits"].should eq(1_i64)
+    graph["pending"].should eq(0_i64)
+  end
+
+  private def drama3_packed_rows_compare_case(matrix : ML::Audio::Drama3::Matrix,
+                                              inputs : Array(Float32), ids : Array(Float32),
+                                              per_rank_input : Bool, requested_threads : String = "64",
+                                              reduction : String = "native", batched : Bool = true,
+                                              expect_packed_rows : Bool = false,
+                                              expected_nonfinite : UInt32 = 0_u32) : Nil
+    baseline_context : ML::Audio::Drama3::Resident::Context? = nil
+    candidate_context : ML::Audio::Drama3::Resident::Context? = nil
+    begin
+      ENV["DRAMA3_EXPERT_THREADS"] = requested_threads
+      ENV["DRAMA3_EXPERT_PACKED_ROWS"] = "0"
+      baseline_context = ML::Audio::Drama3::Resident::Context.new
+      baseline_context.not_nil!.expert_packed_rows_enabled.should be_false
+      baseline_ids = baseline_context.not_nil!.upload(ids)
+      baseline_input = baseline_context.not_nil!.upload(inputs)
+      baseline_pipeline_count = nil.as(Int32?)
+      if batched && reduction == "native"
+        ML::Metal::PipelineCache.get_or_compile("dr3_experts", ML::Audio::Drama3::Resident::SOURCE)
+        baseline_pipeline_count = ML::Metal::PipelineCache.entry_count
+      end
+      # The Context's selector is frozen at construction, even if the process
+      # environment changes before its first operator dispatch.
+      ENV["DRAMA3_EXPERT_PACKED_ROWS"] = "1"
+      baseline = if batched
+                   baseline_context.not_nil!.experts(matrix, baseline_input, baseline_ids,
+                     per_rank_input: per_rank_input, reduction: reduction)
+                 else
+                   baseline_context.not_nil!.expert(matrix, baseline_input, baseline_ids, 1,
+                     reduction: reduction)
+                 end
+      if count = baseline_pipeline_count
+        ML::Metal::PipelineCache.entry_count.should eq(count)
+      end
+      baseline_context.not_nil!.finish
+      baseline_context.not_nil!.readbacks.should be_empty
+      baseline_context.not_nil!.graph_stats["submitted"].should eq(1_i64)
+      baseline_context.not_nil!.graph_stats["completion_waits"].should eq(1_i64)
+
+      ENV["DRAMA3_EXPERT_PACKED_ROWS"] = "1"
+      candidate_context = ML::Audio::Drama3::Resident::Context.new
+      candidate_context.not_nil!.expert_packed_rows_enabled.should be_true
+      candidate_context.not_nil!.expert_threads.should eq(requested_threads.to_i)
+      candidate_ids = candidate_context.not_nil!.upload(ids)
+      candidate_input = candidate_context.not_nil!.upload(inputs)
+      candidate_pipeline_count = ML::Metal::PipelineCache.entry_count
+      ENV["DRAMA3_EXPERT_PACKED_ROWS"] = "0"
+      candidate = if batched
+                    candidate_context.not_nil!.experts(matrix, candidate_input, candidate_ids,
+                      per_rank_input: per_rank_input, reduction: reduction)
+                  else
+                    candidate_context.not_nil!.expert(matrix, candidate_input, candidate_ids, 1,
+                      reduction: reduction)
+                  end
+      # The baseline has already populated only its selected operator pipeline.
+      # A single new cache entry therefore proves the candidate dispatch chose
+      # the packed kernel; zero proves this case stayed on the existing path.
+      ML::Metal::PipelineCache.entry_count.should eq(candidate_pipeline_count + (expect_packed_rows ? 1 : 0))
+      drama3_packed_rows_gpu_receipt(candidate_context.not_nil!, baseline, candidate, expected_nonfinite)
+    ensure
+      candidate_context.try(&.abort)
+      baseline_context.try(&.abort)
+      ML::Audio::Drama3::MetalBackend.reset!
+    end
+  end
+
+  private def drama3_packed_rows_compare_geometry(rows : Int32, groups : Int32, bits : Int32,
+                                                  per_rank_input : Bool = false,
+                                                  requested_threads : String = "64",
+                                                  reduction : String = "native",
+                                                  batched : Bool = true,
+                                                  expect_packed_rows : Bool = false,
+                                                  invalid_ids : Bool = false) : Nil
+    path = File.tempname("drama3-packed-rows", ".bin")
+    begin
+      # Isolate the selected operator pipeline so the cache delta below tests
+      # dispatch choice, including fallback cases, rather than output alone.
+      ML::Metal::PipelineCache.clear
+      fixture = drama3_packed_rows_fixture(path, rows, groups, bits)
+      cols = groups * 64
+      inputs = drama3_packed_rows_input(cols, 3, per_rank_input)
+      ids = invalid_ids ? [-1_f32, 3_f32, 0.5_f32] : [2_f32, 0_f32, 2_f32]
+      drama3_packed_rows_compare_case(fixture[:matrix], inputs, ids, per_rank_input,
+        requested_threads, reduction, batched, expect_packed_rows, invalid_ids ? 15_u32 : 0_u32)
+    ensure
+      ML::Audio::Drama3::MetalBackend.reset!
+      ML::Metal::PipelineCache.clear
+      File.delete(path) if File.exists?(path)
+    end
+  end
+
   describe ML::Audio::Drama3::Resident do
+    it "freezes and strictly validates the packed-row selector without submitting GPU work" do
+      drama3_packed_rows_with_device do
+        ENV.delete("DRAMA3_EXPERT_PACKED_ROWS")
+        default_context = ML::Audio::Drama3::Resident::Context.new
+        default_context.expert_packed_rows_enabled.should be_false
+        ENV["DRAMA3_EXPERT_PACKED_ROWS"] = "1"
+        default_context.expert_packed_rows_enabled.should be_false
+        default_context.graph_stats["submitted"].should eq(0_i64)
+        default_context.readbacks.should be_empty
+
+        enabled_context = ML::Audio::Drama3::Resident::Context.new
+        enabled_context.expert_packed_rows_enabled.should be_true
+        ENV["DRAMA3_EXPERT_PACKED_ROWS"] = "0"
+        enabled_context.expert_packed_rows_enabled.should be_true
+        enabled_context.graph_stats["submitted"].should eq(0_i64)
+        enabled_context.readbacks.should be_empty
+
+        ["true", ""].each do |invalid|
+          ENV["DRAMA3_EXPERT_PACKED_ROWS"] = invalid
+          expect_raises(ArgumentError, /DRAMA3_EXPERT_PACKED_ROWS must be 0 or 1/) do
+            ML::Audio::Drama3::Resident::Context.new
+          end
+        end
+      end
+    end
+
+    it "matches batched native expert output through packed rows across supported and fallback geometry" do
+      drama3_packed_rows_with_device do
+        # Odd final row slots are exercised for both row packing layouts:
+        # groups=32 shares the input across ranks; groups=8 models down
+        # projection's per-rank input. Both Q4 and Q8 are covered.
+        [4, 8].each do |bits|
+          drama3_packed_rows_compare_geometry(5, 32, bits, expect_packed_rows: true)
+          drama3_packed_rows_compare_geometry(5, 8, bits, per_rank_input: true, expect_packed_rows: true)
+        end
+
+        drama3_packed_rows_compare_geometry(5, 1, 4, expect_packed_rows: true)
+
+        # Every unsupported group boundary has an exact old/new GPU receipt;
+        # Q4/Q8 alternate so both packed encodings traverse the fallback guard.
+        {3 => 4, 33 => 8, 65 => 4}.each do |groups, bits|
+          drama3_packed_rows_compare_geometry(5, groups, bits)
+        end
+
+        # A user-requested 32-thread launch remains on the established native
+        # kernel even when the selector is enabled and groups would otherwise pack.
+        drama3_packed_rows_compare_geometry(5, 32, 8, requested_threads: "32")
+
+        # Invalid routed IDs must remain exact NaNs in the eligible packed
+        # kernel, including the odd final row slots and per-rank input layout.
+        drama3_packed_rows_compare_geometry(5, 8, 4, per_rank_input: true,
+          expect_packed_rows: true, invalid_ids: true)
+      end
+    end
+
+    it "keeps scalar and MLX Q4 expert reductions outside the packed-row dispatch" do
+      drama3_packed_rows_with_device do
+        # Scalar expert is an unchanged control under the opted-in selector.
+        drama3_packed_rows_compare_geometry(5, 32, 4, batched: false)
+
+        # The batched MLX-Q4 early return must precede the native packed-row
+        # selection. Its aligned geometry satisfies the separate MLX kernel.
+        drama3_packed_rows_compare_geometry(8, 8, 4, reduction: "mlx_q4")
+      end
+    end
+
     it "batches affine expert ranks exactly with shared or per-rank inputs and unaligned weights" do
       path = File.tempname("drama3-resident-experts", ".bin")
       begin

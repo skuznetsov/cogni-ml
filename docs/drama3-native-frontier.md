@@ -59,9 +59,28 @@ time is 28.994506/23.131649 s for 2.786395 s audio (RTF 10.406/8.302).
 Generation-phase timing variation is not attributed to DAC. `coalesced` is
 the default; `DRAMA3_DAC_CONV_LAYOUT=native` is rollback. Full upstream DAC
 metrics remain identical and red. Details: `docs/drama3-dac-layout.md`.
-Next generation-kernel discriminator: pack multiple expert output rows into
-the existing 64-thread group without changing native F32 subtotals or group
-sum order; require exact GPU controls before full-request timing.
+The subsequent expert-row experiment packs multiple output rows into the
+existing 64-thread group without changing native F32 subtotals or group-sum
+order. The actual layer-39 probe preserves 7,077,888 values bitwise and shows
+a local down-projection improvement. Production Metal specs cover selection,
+odd tails, Q4/Q8, per-rank input, invalid IDs and fallbacks; all 13 pass.
+The complete matched-input MLX report is identical to the native baseline
+(162 boundaries,156 replays), including its existing failed strict gate.
+No tolerance, production allocation, dispatch, wait or readback is added.
+
+Full-request ABBA gives mirrored native/candidate ratios0.853759/1.018696;
+all12 codes/WAV/tape/read/wait controls pass, but a request speedup is not
+established. `DRAMA3_EXPERT_PACKED_ROWS=1` remains opt-in; unset/0 is the
+frozen default. Fixed DAC timing also varies, so this run does not isolate
+a causal expert-kernel regression. See `docs/drama3-expert-packed-rows.md`.
+
+Next distinct hypothesis: qkv/z/b/a share one decode input and could use a
+multi-output dense dispatch while retaining each row's exact reduction tree.
+No current additive profile establishes this family's dominance. First require
+captured-input GPU bit parity and paired local timing, then complete-request
+qualification. Target RTF0.8–0.9 remains open; the DAC-qualified RTF8.302 still
+needs about9.2–10.4x overall improvement at this fixed workload. Prior blanket
+SIMD trials do not justify another selector retry without a new discriminator.
 
 ## Prior slice: late-layer matched-input fidelity — 2026-10-16
 
